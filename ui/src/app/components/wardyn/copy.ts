@@ -20,7 +20,7 @@ export const RUN_MODE: Record<RunMode, { label: string; blurb: string }> = {
     label: "Interactive",
     // An interactive run execs NO agent at all (internal/types/types.go:
     // "no agent task is exec'd and no completion watcher is started — the
-    // human drives via `wardyn run attach`") — the blurb must not describe
+    // human drives via `wardyn attach`") — the blurb must not describe
     // per-action approval, an autonomous-shaped behavior this mode doesn't
     // have. Matches compose-form.tsx's own Field hint for the same toggle.
     blurb: "Comes up idle — you attach and drive it over a terminal.",
@@ -150,10 +150,11 @@ export {
 export type { CredentialKind } from "./copy/approvals";
 export { credentialKind } from "./copy/approvals";
 export { RUN_COCKPIT } from "./copy/run-cockpit";
-export { RUN_OUTPUT } from "./copy/run-output";
-export { RUN_SSH } from "./copy/run-ssh";
+export { RUN_AGENTS, RUN_OUTPUT } from "./copy/run-output";
+export { RUN_SSH, RUN_CLI } from "./copy/run-ssh";
 export { RUN_SIGN_IN } from "./copy/run-sign-in";
 export { UI_APPS_LANE, UI_APPS_LAUNCHER_MISSING_PREFIX, POLICY_UI_APPS } from "./copy/ui-apps";
+export { DESKTOP_FILES } from "./copy/desktop-files";
 export { MEMBER_GETTING_STARTED, RUNS_MEMBER_EMPTY } from "./copy/getting-started";
 export { EPISODES_COPY, FIRST_RUN_DEMOS_SUBTITLE } from "./copy/episodes";
 export { PEOPLE_STEP, SETUP, SITE } from "./copy/setup-steps";

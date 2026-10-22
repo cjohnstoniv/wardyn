@@ -22,11 +22,15 @@ export const RUN_MODE_REASON = {
   BACKGROUND_ONLY: "run_background_only",
   /** shape does not fit the run's experience, workload or tools. */
   SHAPE_CONFLICT: "run_shape_conflict",
+  /** An application run declares an app that the governance profile (deny_ui_apps or its allowed apps) removes. */
+  UI_APPS_DENIED: "run_application_ui_apps_denied",
   /** The harness set: each body names the harness in `tool` (HttpError.tool). */
   HARNESS_NOT_INSTALLED: "harness_not_installed",
   HARNESS_SET_NO_IMAGE: "harness_set_no_image",
   HARNESS_SET_CUSTOM_IMAGE: "harness_set_custom_image",
   HARNESS_PROVIDERS_CONFLICT: "harness_providers_conflict",
+  /** tools[].task while the server's WARDYN_MULTI_AGENT_TASKS switch is off. */
+  MULTI_AGENT_TASKS_OFF: "multi_agent_tasks_off",
   /** The run's policy writes a disk size that the runner it lands on cannot cap. */
   MAIN_DRIVE_UNENFORCEABLE: "main_drive_unenforceable",
 } as const;

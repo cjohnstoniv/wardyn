@@ -96,6 +96,8 @@ export const RUN_END_REASON_SENTENCE = {
   max_lifetime_reached: "This run reached its maximum lifetime and was ended.",
   end_reached: "This run reached its end time and was ended.",
   queue_timeout: "This run waited too long for a free slot and was not started.",
+  queue_sign_in_timeout: "This run waited for you to sign in to its model provider again, and was not started.",
+  scheduled_runs_off: "Scheduled runs were switched off (WARDYN_SCHEDULED_RUNS) before this run's start time, so it was not started.",
   queue_profile_changed: "Your governance profile changed while this run waited. Start it again.",
   queue_policy_changed: "The policy this run used changed while it waited. Start it again to review it.",
   queue_portal_revoked: "The portal that launched this run was removed while it waited.",
@@ -143,12 +145,17 @@ export const RUN_WAIT = {
   RECORDING_STORE_OFF: () => "Recording is required, and this organisation keeps no session recordings. This run starts when the organisation's recording store is on.",
 } as const;
 
-/** The reason a waiting run carries for each RUN_WAIT sentence. */
-export const RUN_WAIT_REASON: Record<keyof typeof RUN_WAIT, string> = {
+/**
+ * The reason a waiting run carries for each RUN_WAIT sentence, and for the two waits of a scheduled run, whose words
+ * are the scheduled-run canon's (copy/scheduled-runs.ts) and not a pool's.
+ */
+export const RUN_WAIT_REASON: Record<keyof typeof RUN_WAIT | "SCHEDULED" | "OWNER_SIGN_IN", string> = {
   AT_CAPACITY: "runner_pool_at_capacity",
   NO_RUNNER_FREE: "runner_pool_no_runner_free",
   RUNNERS_AT_CAPACITY: "runner_pool_runners_at_capacity",
   RECORDING_STORE_OFF: "runner_pool_recording_store_off",
+  SCHEDULED: "scheduled",
+  OWNER_SIGN_IN: "owner_sign_in",
 };
 
 /** The reason each sentence belongs to; the console matches on these, never on the text. */

@@ -83,7 +83,33 @@ describe("RunnerCredentials — the rows", () => {
     renderTab();
     await screen.findByRole("radiogroup", { name: DELIVERY.CLASS.api_key });
     expect(option("api_key", "refuse")).toBeChecked();
-    expect(screen.getAllByText(DELIVERY.PEOPLE_SEE(DELIVERY.LOCAL_DELIVERY.refuse))).toHaveLength(11);
+    expect(screen.getAllByText(DELIVERY.LOCAL_DELIVERY.refuse)).toHaveLength(11);
+  });
+
+  it("is a table: one header over the options, and People see is quiet at the default and highlighted when it differs", async () => {
+    const user = userEvent.setup();
+    getMock.mockResolvedValue(doc({ git_pat_broker: { mode: "via_org" } }));
+    const { container } = renderTab();
+    await screen.findByRole("radiogroup", { name: DELIVERY.CLASS.api_key });
+    for (const head of [DELIVERY.COL_CREDENTIAL, ...Object.values(DELIVERY.MODE), DELIVERY.COL_PEOPLE_SEE]) {
+      expect(screen.getAllByText(head).length).toBeGreaterThan(0);
+    }
+    expect(container.querySelectorAll('[data-people-see="default"]')).toHaveLength(10);
+    const differs = container.querySelectorAll('[data-people-see="differs"]');
+    expect(differs).toHaveLength(1);
+    expect(differs[0]).toHaveTextContent(DELIVERY.LOCAL_DELIVERY.via_org);
+    await user.click(option("api_key", "runner_resident"));
+    expect(container.querySelectorAll('[data-people-see="differs"]')).toHaveLength(2);
+    await user.click(option("api_key", "refuse"));
+    expect(container.querySelectorAll('[data-people-see="differs"]')).toHaveLength(1);
+  });
+
+  it("an option the credential can't take shows its reason inside its own cell", async () => {
+    renderTab();
+    await screen.findByRole("radiogroup", { name: DELIVERY.CLASS.api_key });
+    const cell = option("env_secret", "via_org").closest("div.flex-col") as HTMLElement;
+    expect(within(cell).getByText(DELIVERY.BOUND_NO_VIA_ORG)).toBeInTheDocument();
+    expect(within(group("github_token")).getByText(DELIVERY.BOUND_NO_RESIDENT_GITHUB)).toBeInTheDocument();
   });
 
   it("a mode outside a class's bounds is a disabled option with its reason, not an absent one", async () => {
@@ -96,6 +122,26 @@ describe("RunnerCredentials — the rows", () => {
     expect(option("api_key", "via_org")).toBeEnabled();
     // #2897: the radio is the label's `peer`, which is what lets peer-disabled dim a bound option's label.
     expect(option("env_secret", "via_org")).toHaveClass("peer");
+  });
+
+  it("a mode the server cannot build is a disabled option labelled Not available yet, read from buildable_modes", async () => {
+    getMock.mockResolvedValue({
+      ...doc(),
+      buildable_modes: { ado_minted_pat: ["runner_resident", "refuse"], api_key: ["via_org", "refuse"] },
+    });
+    renderTab();
+    await screen.findByRole("radiogroup", { name: DELIVERY.CLASS.api_key });
+    const unbuilt = (cls: keyof typeof DELIVERY.CLASS, mode: keyof typeof DELIVERY.MODE) =>
+      within(group(cls)).getByRole("radio", { name: `${DELIVERY.MODE[mode]} — ${DELIVERY.BOUND_NOT_BUILT}` });
+    expect(unbuilt("ado_minted_pat", "via_org")).toBeDisabled();
+    expect(option("ado_minted_pat", "runner_resident")).toBeEnabled();
+    expect(option("ado_minted_pat", "refuse")).toBeEnabled();
+    expect(unbuilt("api_key", "runner_resident")).toBeDisabled();
+    expect(option("api_key", "via_org")).toBeEnabled();
+    // A class the GET lists no modes for is not restricted, and the table's own bound keeps its own reason.
+    expect(option("ssh_key", "runner_resident")).toBeEnabled();
+    expect(option("env_secret", "via_org")).toBeDisabled();
+    expect(screen.getAllByText(DELIVERY.BOUND_NO_VIA_ORG)).toHaveLength(5);
   });
 
   it("an organisation's Azure DevOps tokens can be stored on a runner, with the connection note", async () => {

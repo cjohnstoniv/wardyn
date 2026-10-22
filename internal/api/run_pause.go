@@ -576,6 +576,7 @@ func (s *Server) sweepRunPauses(ctx context.Context) error {
 		idle    []types.AgentRun
 		stop    []types.AgentRun
 		capsErr error
+		signins map[uuid.UUID]bool
 	)
 	freezable := func(class types.ConfinementClass) bool {
 		if freeze == nil && capsErr == nil {
@@ -606,6 +607,9 @@ func (s *Server) sweepRunPauses(ctx context.Context) error {
 				s.resumeClosedRun(ctx, pauser, c)
 			}
 			continue
+		}
+		if s.inDesktopSignin(ctx, &signins, run.ID) {
+			continue // a freeze would stop the person's display (run_desktop_signin.go)
 		}
 		quiet := now.Sub(activeSince(run))
 		switch {

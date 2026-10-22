@@ -18,6 +18,7 @@ import { REAUTH_BAR, REAUTH_DIALOG, REAUTH_EXTRA } from "./lib/reauth-copy";
 import { PROVIDERS_EXTRA } from "./lib/workspace-providers-copy";
 import { SHELL } from "./components/wardyn/copy";
 import { UNSAVED } from "./lib/unsaved-copy";
+import { SESSION_ENDED } from "./lib/session-continuity-copy";
 import { setField } from "../test/set-field";
 import { FakeBroadcastChannel } from "../test/fake-broadcast-channel";
 import { AUTH_CHANNEL, COALESCE_MS, resetAuthSyncForTest } from "./lib/api/auth-sync";
@@ -94,12 +95,19 @@ let heldLogout: Promise<Response> | null = null;
 // Set to hold the shell's mount GET /me open (only the first one), so the
 // identity is still unresolved when the session lapses.
 let heldMe: Promise<Response> | null = null;
+// Set to hold the next session probe (GET /runs?limit=1) open.
+let heldProbe: Promise<Response> | null = null;
 const fetchMock = vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
   const u = String(url);
   calls.push(`${init?.method ?? "GET"} ${u}`);
   if (u.includes("/healthz")) return Promise.resolve(json(200, { status: "ok", sso: daemon.sso, token_login: true }));
   if (u.includes("/readyz")) return Promise.resolve(json(200, { status: "ok" }));
   if (heldLogout && u.includes("/auth/logout")) return heldLogout;
+  if (heldProbe && u.includes("/runs?limit=1")) {
+    const held = heldProbe;
+    heldProbe = null;
+    return held;
+  }
   if (heldMe && u.endsWith("/api/v1/me")) {
     const held = heldMe;
     heldMe = null;
@@ -125,6 +133,7 @@ beforeEach(() => {
   mockState.claim = true;
   heldLogout = null;
   heldMe = null;
+  heldProbe = null;
   calls.length = 0;
   sessionStorage.setItem("wardyn_admin_token", "good-token");
   vi.stubGlobal("fetch", fetchMock);
@@ -505,8 +514,8 @@ describe("App — a deliberate sign-out (#483)", () => {
     expect(screen.queryByText(SESSION_ENDED_REASON)).toBeNull();
   });
 
-  // #2100: signing out ends the Wardyn session only; an SSO person is told to leave the identity provider
-  // too, once the server has confirmed the sign-out.
+  // #2100, M12: signing out ends the Wardyn session only; an SSO person is told, on the sign-in screen,
+  // to leave the work account too, once the server has confirmed the sign-out.
   describe("the identity-provider reminder", () => {
     async function signOut(over: Partial<typeof ME> = {}) {
       daemon.me = { ...ME, ...over };
@@ -524,20 +533,19 @@ describe("App — a deliberate sign-out (#483)", () => {
       await screen.findByText("Admin token", { exact: true });
     }
 
-    it("an SSO sign-out says to sign out of the identity provider too", async () => {
-      const info = vi.spyOn(toast, "info").mockImplementation(() => "id");
+    it("an SSO sign-out says on the sign-in screen to sign out of the work account too", async () => {
       await signOut({ method: "sso" });
-      expect(info).toHaveBeenCalledWith(SHELL.SIGN_OUT_SSO_TITLE, { description: SHELL.SIGN_OUT_SSO_BODY });
+      expect(screen.getByText(SESSION_ENDED.OWN)).toBeInTheDocument();
+      expect(screen.getByText(SESSION_ENDED.OWN_SHARED)).toBeInTheDocument();
     });
 
-    it("an admin-token sign-out says nothing about an identity provider", async () => {
-      const info = vi.spyOn(toast, "info").mockImplementation(() => "id");
+    it("an admin-token sign-out says nothing about a work account", async () => {
       await signOut();
-      expect(info).not.toHaveBeenCalled();
+      expect(screen.queryByText(SESSION_ENDED.OWN)).toBeNull();
+      expect(screen.queryByText(SESSION_ENDED.OWN_SHARED)).toBeNull();
     });
 
     it("an SSO sign-out the server did not confirm shows the failure, not the reminder", async () => {
-      const info = vi.spyOn(toast, "info").mockImplementation(() => "id");
       const error = vi.spyOn(toast, "error").mockImplementation(() => "id");
       daemon.me = { ...ME, method: "sso" };
       render(
@@ -554,7 +562,7 @@ describe("App — a deliberate sign-out (#483)", () => {
       await user.click(within(await screen.findByRole("menu")).getByText("Sign out"));
       await screen.findByText("Admin token", { exact: true });
       expect(error).toHaveBeenCalledWith(SHELL.SIGN_OUT_FAILED_TITLE, expect.anything());
-      expect(info).not.toHaveBeenCalled();
+      expect(screen.queryByText(SESSION_ENDED.OWN)).toBeNull();
     });
   });
 
@@ -623,6 +631,37 @@ describe("App — the other tabs of this browser (DR-0020)", () => {
     await user.click(within(dialog).getByRole("button", { name: "Not now" }));
     await user.click(screen.getByRole("button", { name: "Save note" }));
     expect(count("PUT /api/v1/stub-save")).toBe(0);
+  });
+
+  // M12 (#1995): the sign-in screen names another tab's sign-out; this tab's own stays what it was.
+  async function signOutHere(over: Record<string, unknown> = {}) {
+    daemon.me = { ...ME, ...over };
+    render(
+      <MemoryRouter initialEntries={["/runs"]}>
+        <App />
+      </MemoryRouter>,
+    );
+    await screen.findByLabelText("Note");
+    const headerButtons = within(screen.getByRole("banner")).getAllByRole("button");
+    await user.click(headerButtons[headerButtons.length - 1]);
+    await user.click(within(await screen.findByRole("menu")).getByText("Sign out"));
+    await screen.findByText("Admin token", { exact: true });
+  }
+
+  it("the sign-in screen says so when another tab signs out", async () => {
+    await signOutHere();
+    daemon.dead = true;
+    await fromAnotherTab("signed_out");
+    expect(await screen.findByText(SESSION_ENDED.ELSEWHERE)).toBeInTheDocument();
+  });
+
+  it("neg: another tab's sign-out does not replace this tab's own sign-out notice", async () => {
+    await signOutHere({ method: "sso" });
+    daemon.dead = true;
+    await fromAnotherTab("signed_out");
+    await act(async () => {});
+    expect(screen.getByText(SESSION_ENDED.OWN)).toBeInTheDocument();
+    expect(screen.queryByText(SESSION_ENDED.ELSEWHERE)).toBeNull();
   });
 
   it("a sign-out heard in an earlier lapse is forgotten once that lapse ends", async () => {
@@ -715,6 +754,36 @@ describe("App — the other tabs of this browser (DR-0020)", () => {
     daemon.dead = false;
     await fromAnotherTab("changed");
     expect(await screen.findByLabelText("Note")).toBeInTheDocument();
+  });
+
+  // #3368: a focus probe that is already in flight when another tab announces its sign-in was sent before that
+  // sign-in, so it answers 401. The announcement still has to start its own probe.
+  it("another tab's sign-in is heard while a focus probe is in flight", async () => {
+    sessionStorage.clear();
+    daemon.dead = true;
+    render(
+      <MemoryRouter initialEntries={["/runs"]}>
+        <App />
+      </MemoryRouter>,
+    );
+    await screen.findByText("Admin token", { exact: true });
+    let answerStale!: (r: Response) => void;
+    heldProbe = new Promise<Response>((resolve) => (answerStale = resolve));
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    daemon.dead = false;
+    await fromAnotherTab("changed");
+    expect(await screen.findByLabelText("Note")).toBeInTheDocument();
+    // The probe sent before the other tab signed in answers 401 late. It is nobody's to act on: no "session ended" dialog.
+    answerStale(json(401, { error: "unauthorized" }));
+    for (let i = 0; i < 30; i++) {
+      await act(async () => {
+        await Promise.resolve();
+      });
+    }
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByLabelText("Note")).toBeInTheDocument();
   });
 
   // #2489: the tab that signed out deliberately is a signed-out tab like any other once it shows the gate.

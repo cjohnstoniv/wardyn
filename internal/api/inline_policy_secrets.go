@@ -36,6 +36,9 @@ func runSecretRefsRefusal(prefix string, code int, err error) *runRefusal {
 	if errors.Is(err, errSecretStoreUnavailable) {
 		return runError(code, reasonSinkStoreUnavailable, err.Error())
 	}
+	if gh := (*gitHubOwnTokenRefusal)(nil); errors.As(err, &gh) {
+		return runError(code, gh.reason, gh.body)
+	}
 	return runError(code, reasonInlinePolicyInvalid, prefix+err.Error())
 }
 
@@ -319,9 +322,9 @@ func (s *Server) secretRefsOf(spec types.RunPolicySpec) ([]neededSecret, error) 
 			if nameSinkReservedSecret(keyRef) || nameSinkReservedSecret(khRef) {
 				return nil, errors.New("ssh_key grant references a reserved secret name")
 			}
-			needed = append(needed, neededSecret{keyRef, types.GrantSSHKey, g.OwnerOnly, ""})
+			needed = append(needed, neededSecret{keyRef, types.GrantSSHKey, g.OwnerOnlyFor(keyRef), ""})
 			if khRef != "" {
-				needed = append(needed, neededSecret{khRef, types.GrantSSHKey, g.OwnerOnly, ""})
+				needed = append(needed, neededSecret{khRef, types.GrantSSHKey, g.OwnerOnlyFor(khRef), ""})
 			}
 		case types.GrantFileSecret:
 			// A resident value, so the wider guard, as for git_pat. Collected,
@@ -386,6 +389,10 @@ func (s *Server) validateRunSecretRefs(ctx context.Context, owner, subject strin
 	// drops the grant where the row takes each person's own token instead).
 	needed, code, err := s.adoGitGrants(ctx, subject, needed, spec, credentials)
 	if err != nil {
+		return code, err
+	}
+	// Likewise a github.com git token a GitHub own-token row decides (gh_own_pat_run.go).
+	if needed, code, err = s.gitHubOwnTokenNeeds(ctx, subject, needed, spec, credentials); err != nil {
 		return code, err
 	}
 	for _, n := range needed {

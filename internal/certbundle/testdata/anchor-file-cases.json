@@ -1,0 +1,229 @@
+[
+  {
+    "name": "root_owned_0644_file_loads",
+    "file_mode": "0644",
+    "file_owner": "root",
+    "dir_mode": "0755",
+    "dir_sticky": false,
+    "dir_owner": "self",
+    "via_link_dir_mode": "",
+    "certs": [
+      "valid"
+    ],
+    "expect": "load",
+    "warnings": 0
+  },
+  {
+    "name": "twin_other_owned_0644_file_refuses",
+    "file_mode": "0644",
+    "file_owner": "other",
+    "dir_mode": "0755",
+    "dir_sticky": false,
+    "dir_owner": "self",
+    "via_link_dir_mode": "",
+    "certs": [
+      "valid"
+    ],
+    "expect": "refuse",
+    "warnings": 0
+  },
+  {
+    "name": "group_writable_file_refuses",
+    "file_mode": "0664",
+    "file_owner": "self",
+    "dir_mode": "0700",
+    "dir_sticky": false,
+    "dir_owner": "self",
+    "via_link_dir_mode": "",
+    "certs": [
+      "valid"
+    ],
+    "expect": "refuse",
+    "warnings": 0
+  },
+  {
+    "name": "twin_owner_writable_0644_file_loads",
+    "file_mode": "0644",
+    "file_owner": "self",
+    "dir_mode": "0700",
+    "dir_sticky": false,
+    "dir_owner": "self",
+    "via_link_dir_mode": "",
+    "certs": [
+      "valid"
+    ],
+    "expect": "load",
+    "warnings": 0
+  },
+  {
+    "name": "link_in_group_writable_dir_refuses_though_target_is_fine",
+    "file_mode": "0600",
+    "file_owner": "self",
+    "dir_mode": "0700",
+    "dir_sticky": false,
+    "dir_owner": "self",
+    "via_link_dir_mode": "0775",
+    "certs": [
+      "valid"
+    ],
+    "expect": "refuse",
+    "warnings": 0
+  },
+  {
+    "name": "twin_link_in_private_dir_loads",
+    "file_mode": "0600",
+    "file_owner": "self",
+    "dir_mode": "0700",
+    "dir_sticky": false,
+    "dir_owner": "self",
+    "via_link_dir_mode": "0700",
+    "certs": [
+      "valid"
+    ],
+    "expect": "load",
+    "warnings": 0
+  },
+  {
+    "name": "sticky_root_dir_with_person_owned_file_loads",
+    "file_mode": "0600",
+    "file_owner": "self",
+    "dir_mode": "0777",
+    "dir_sticky": true,
+    "dir_owner": "root",
+    "via_link_dir_mode": "",
+    "certs": [
+      "valid"
+    ],
+    "expect": "load",
+    "warnings": 0
+  },
+  {
+    "name": "twin_sticky_person_owned_dir_refuses",
+    "file_mode": "0600",
+    "file_owner": "self",
+    "dir_mode": "0777",
+    "dir_sticky": true,
+    "dir_owner": "self",
+    "via_link_dir_mode": "",
+    "certs": [
+      "valid"
+    ],
+    "expect": "refuse",
+    "warnings": 0
+  },
+  {
+    "name": "twin_non_sticky_root_owned_writable_dir_refuses",
+    "file_mode": "0600",
+    "file_owner": "self",
+    "dir_mode": "0777",
+    "dir_sticky": false,
+    "dir_owner": "root",
+    "via_link_dir_mode": "",
+    "certs": [
+      "valid"
+    ],
+    "expect": "refuse",
+    "warnings": 0
+  },
+  {
+    "name": "expired_and_valid_loads_one_with_one_warning",
+    "file_mode": "0600",
+    "file_owner": "self",
+    "dir_mode": "0700",
+    "dir_sticky": false,
+    "dir_owner": "self",
+    "via_link_dir_mode": "",
+    "certs": [
+      "expired",
+      "valid"
+    ],
+    "expect": "load",
+    "warnings": 1
+  },
+  {
+    "name": "twin_valid_and_valid_loads_with_no_warning",
+    "file_mode": "0600",
+    "file_owner": "self",
+    "dir_mode": "0700",
+    "dir_sticky": false,
+    "dir_owner": "self",
+    "via_link_dir_mode": "",
+    "certs": [
+      "valid",
+      "valid"
+    ],
+    "expect": "load",
+    "warnings": 0
+  },
+  {
+    "name": "not_yet_valid_and_valid_loads_one_with_one_warning",
+    "file_mode": "0600",
+    "file_owner": "self",
+    "dir_mode": "0700",
+    "dir_sticky": false,
+    "dir_owner": "self",
+    "via_link_dir_mode": "",
+    "certs": [
+      "not_yet_valid",
+      "valid"
+    ],
+    "expect": "load",
+    "warnings": 1
+  },
+  {
+    "name": "not_ca_and_valid_loads_one_with_one_warning",
+    "file_mode": "0600",
+    "file_owner": "self",
+    "dir_mode": "0700",
+    "dir_sticky": false,
+    "dir_owner": "self",
+    "via_link_dir_mode": "",
+    "certs": [
+      "not_ca",
+      "valid"
+    ],
+    "expect": "load",
+    "warnings": 1
+  },
+  {
+    "name": "only_expired_refuses",
+    "file_mode": "0600",
+    "file_owner": "self",
+    "dir_mode": "0700",
+    "dir_sticky": false,
+    "dir_owner": "self",
+    "via_link_dir_mode": "",
+    "certs": [
+      "expired"
+    ],
+    "expect": "refuse",
+    "warnings": 1
+  },
+  {
+    "name": "twin_only_valid_loads",
+    "file_mode": "0600",
+    "file_owner": "self",
+    "dir_mode": "0700",
+    "dir_sticky": false,
+    "dir_owner": "self",
+    "via_link_dir_mode": "",
+    "certs": [
+      "valid"
+    ],
+    "expect": "load",
+    "warnings": 0
+  },
+  {
+    "name": "fifo_refuses_without_blocking",
+    "file_type": "fifo",
+    "file_mode": "0600",
+    "file_owner": "self",
+    "dir_mode": "0700",
+    "dir_sticky": false,
+    "dir_owner": "self",
+    "via_link_dir_mode": "",
+    "certs": [],
+    "expect": "refuse",
+    "warnings": 0
+  }
+]

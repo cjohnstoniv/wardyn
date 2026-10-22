@@ -6,6 +6,8 @@ package api
 import (
 	"context"
 	"log/slog"
+	"maps"
+	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
@@ -68,6 +70,8 @@ type createRunLaunch struct {
 	// mainDrive is the main drive the fold decided (stepMainDrive); dispatch writes its size and
 	// treats it as soft unless the run's policy wrote it.
 	mainDrive *mainDriveDecision
+	// signinImageUngranted is the fold's (runFold.signinImageUngranted).
+	signinImageUngranted bool
 }
 
 // launch is what both doors hand finishCreateRunLaunch for a run the fold admitted: create, and the pool
@@ -81,6 +85,7 @@ func (f *runFold) launch(req createRunRequest, spec types.RunPolicySpec, ceiling
 		wsRefs: f.wsRefs, driveMounts: f.driveMounts, memberDrives: memberDriveOwners(f.drives), ephemeralDirs: f.ephemeralDirs, startFolder: f.startFolder,
 		runToken: runToken, created: created, comps: f.comps, overridden: f.source.overridden(), provenance: f.source.knobs, pushSets: f.pushSets,
 		harnessRules: harnessRules, harnesses: f.harnesses, mainDrive: f.mainDrive.decision(),
+		signinImageUngranted: f.signinImageUngranted,
 	}
 }
 
@@ -115,6 +120,20 @@ func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 			s.failAndRevoke(ctx, runID, from, createRunInternalError)
 		}
 	}()
+
+	drives, memberDrives := l.driveMounts, l.memberDrives
+	if l.req.KeepWorkFolder {
+		mount, id, owner, ok := s.keptWorkFolderMount(ctx, l.created)
+		if !ok {
+			return
+		}
+		drives = append(slices.Clone(drives), mount)
+		memberDrives = maps.Clone(memberDrives)
+		if memberDrives == nil {
+			memberDrives = map[uuid.UUID]string{}
+		}
+		memberDrives[id] = owner
+	}
 
 	// Resolve the sandbox image (BYOI wrap > devcontainer build > workspace
 	// profile > convention image) and persist it for provenance. A failed
@@ -153,8 +172,8 @@ func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 			// Carried rather than re-resolved for the reason the ceiling is:
 			// resolution keys on the caller's OIDC claims, which the run row does
 			// not hold. See user_drives_run.go's own note.
-			Drives:       l.driveMounts,
-			MemberDrives: l.memberDrives,
+			Drives:       drives,
+			MemberDrives: memberDrives,
 			// The zero posture unless this run attaches a MEMBER-OWNED workspace, in
 			// which case the driver re-checks that member's own binds against these
 			// roots immediately before ContainerCreate (userMountPosture,
@@ -167,6 +186,8 @@ func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 			HarnessToolRules: l.harnessRules,
 			Harnesses:        l.harnesses,
 			MainDrive:        l.mainDrive,
+			// SigninImageUngranted keeps a person's own desktop image (desktopSigninDispatch).
+			SigninImageUngranted: l.signinImageUngranted,
 		})
 	}
 }

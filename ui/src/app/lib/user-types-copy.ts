@@ -108,7 +108,11 @@ export const EXPLAIN = {
   ALL_IMAGES: "Images",
   SSH_KEYS: "SSH keys",
   API_TOKENS: "API tokens",
-  SSH_AND_TOKENS: "SSH keys · API tokens",
+  SSH_AND_TOKENS: "SSH keys · API tokens · custom components",
+  // #2243: the other `feature` values, and the `component` kind's `*` row.
+  CUSTOM_COMPONENTS: "Custom components",
+  SELF_HOST_RUNNER: "Self-hosted runners",
+  ALL_COMPONENTS: "All components",
   // FUG-L357 L3: the `service_attach` feature value, the grant a service's sponsor needs to enter its runs.
   SERVICE_ATTACH: "Entering a service's runs",
   // G-3: the `*` row on the seven kinds packet A didn't name.

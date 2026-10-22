@@ -38,6 +38,8 @@ type poolTarget struct {
 	limits *types.RunnerLimits
 	// trust is a registered runner's stored trust class, which its credential plan is judged at.
 	trust types.RunnerTrustClass
+	// ownerKind is a registered runner's owner kind: a person's own runner, or an organization's.
+	ownerKind types.RunnerOwnerKind
 }
 
 // personalPoolDefaults is the signed-in person's own saved defaults: empty for a caller who is no
@@ -279,7 +281,7 @@ func (s *Server) registeredRunnerTargets(ctx context.Context, ids []uuid.UUID, r
 			continue
 		}
 		full := runners[i].MaxRuns > 0 && held[id] >= runners[i].MaxRuns
-		out = append(out, poolTarget{id: id.String(), runnerID: &id, facts: facts, offline: !known || !s.runnerOnline(id), full: full, trust: runners[i].TrustClass})
+		out = append(out, poolTarget{id: id.String(), runnerID: &id, facts: facts, offline: !known || !s.runnerOnline(id), full: full, trust: runners[i].TrustClass, ownerKind: runners[i].OwnerKind})
 	}
 	slices.SortFunc(out, func(a, b poolTarget) int { return cmp.Compare(a.id, b.id) })
 	return out, nil

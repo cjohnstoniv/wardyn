@@ -55,9 +55,16 @@ func testSSHKey(t *testing.T, rsaKey bool) (string, ssh.PublicKey) {
 	return string(pem.EncodeToMemory(block)), signer.PublicKey()
 }
 
+// testHostKey is the host key of the fixture grant's known_hosts line,
+// testKnownHosts.
+var testHostKey, _ = ssh.NewPublicKey(ed25519.NewKeyFromSeed(bytes.Repeat([]byte{7}, 32)).Public())
+
+var testKnownHosts = "forge.test " + strings.TrimSpace(string(ssh.MarshalAuthorizedKey(testHostKey)))
+
 // sshAgentProxy is a proxy whose control plane answers a mint of sshGrant
-// with keyPEM and of any other grant with a git_pat, counting the mints.
-func sshAgentProxy(t *testing.T, sshGrant uuid.UUID, keyPEM string, opts func(*Options)) (*Proxy, *bytes.Buffer, *atomic.Int32) {
+// with keyPEM for SSH host host and of any other grant with a git_pat,
+// counting the mints.
+func sshAgentProxy(t *testing.T, sshGrant uuid.UUID, keyPEM, host string, opts func(*Options)) (*Proxy, *bytes.Buffer, *atomic.Int32) {
 	t.Helper()
 	var mints atomic.Int32
 	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -67,7 +74,7 @@ func sshAgentProxy(t *testing.T, sshGrant uuid.UUID, keyPEM string, opts func(*O
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		if req.GrantID == sshGrant {
-			_ = json.NewEncoder(w).Encode(map[string]string{"kind": "ssh_key", "token": keyPEM, "username": "git", "known_hosts": "forge.test ssh-ed25519 AAAAhostkey"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"kind": "ssh_key", "token": keyPEM, "username": "git", "known_hosts": testKnownHosts, "host": host})
 			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]string{"kind": "git_pat", "token": "pat-value", "username": "pat"})
@@ -135,7 +142,7 @@ func TestSSHAgent_SignsUserauthOnly(t *testing.T) {
 	for _, rsaKey := range []bool{false, true} {
 		grant := uuid.New()
 		keyPEM, pub := testSSHKey(t, rsaKey)
-		p, buf, mints := sshAgentProxy(t, grant, keyPEM, nil)
+		p, buf, mints := sshAgentProxy(t, grant, keyPEM, "dev.azure.com", nil)
 		client := agent.NewClient(&agentConn{t: t, p: p, grant: grant})
 
 		keys, err := client.List()
@@ -158,7 +165,7 @@ func TestSSHAgent_SignsUserauthOnly(t *testing.T) {
 		if d := lastDecision(t, buf); d.Decision != egress.Allow || d.RuleSource != ruleSourceMint {
 			t.Fatalf("sign decision = %+v, want a mint allow", d)
 		}
-		hostbound := userauthData("git", pub, "publickey-hostbound-v00@openssh.com", []byte("hostkey"))
+		hostbound := userauthData("git", pub, "publickey-hostbound-v00@openssh.com", testHostKey.Marshal())
 		if _, err := client.Sign(pub, hostbound); err != nil {
 			t.Fatalf("sign the host-bound sign-in: %v", err)
 		}
@@ -195,13 +202,13 @@ func TestSSHAgent_SignsUserauthOnly(t *testing.T) {
 func TestSSHAgent_KnownHostsAndClose(t *testing.T) {
 	grant := uuid.New()
 	keyPEM, _ := testSSHKey(t, false)
-	p, buf, mints := sshAgentProxy(t, grant, keyPEM, nil)
+	p, buf, mints := sshAgentProxy(t, grant, keyPEM, "github.com", nil)
 	get := func() *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
 		p.ServeHTTP(rec, mustLocalReq(t, http.MethodGet, routeSSHAgent+grant.String()+sshAgentKnownHosts, nil))
 		return rec
 	}
-	if rec := get(); rec.Code != http.StatusOK || rec.Body.String() != "forge.test ssh-ed25519 AAAAhostkey" {
+	if rec := get(); rec.Code != http.StatusOK || rec.Body.String() != testKnownHosts {
 		t.Fatalf("known_hosts: %d %q", rec.Code, rec.Body.String())
 	}
 	rec := httptest.NewRecorder()
@@ -228,7 +235,7 @@ func TestSSHAgent_KnownHostsAndClose(t *testing.T) {
 func TestBrokerMint_SSHKeyAnswerWithheld(t *testing.T) {
 	grant, pat := uuid.New(), uuid.New()
 	keyPEM, _ := testSSHKey(t, false)
-	p, buf, _ := sshAgentProxy(t, grant, keyPEM, nil)
+	p, buf, _ := sshAgentProxy(t, grant, keyPEM, "github.com", nil)
 	rec := residentMintCall(t, p, grant)
 	if rec.Code != http.StatusForbidden || strings.Contains(rec.Body.String(), "PRIVATE KEY") {
 		t.Fatalf("raw ssh_key mint: %d %q, want a 403 with no key", rec.Code, rec.Body.String())
@@ -246,7 +253,7 @@ func TestBrokerMint_SSHKeyAnswerWithheld(t *testing.T) {
 func TestSSHAgent_RefusesOtherGrants(t *testing.T) {
 	sshGrant, other, brokered := uuid.New(), uuid.New(), uuid.New()
 	keyPEM, _ := testSSHKey(t, false)
-	p, _, mints := sshAgentProxy(t, sshGrant, keyPEM, func(o *Options) { o.BrokeredPATGrantIDs = []uuid.UUID{brokered} })
+	p, _, mints := sshAgentProxy(t, sshGrant, keyPEM, "github.com", func(o *Options) { o.BrokeredPATGrantIDs = []uuid.UUID{brokered} })
 	frame := binary.BigEndian.AppendUint32(nil, 1)
 	frame = append(frame, 11) // SSH_AGENTC_REQUEST_IDENTITIES
 	for _, tc := range []struct {
@@ -270,12 +277,12 @@ func TestSSHAgent_ResidentKey(t *testing.T) {
 	var now atomic.Int64
 	now.Store(time.Now().UnixNano())
 	expires := time.Now().Add(time.Hour)
-	p, _, mints := sshAgentProxy(t, uuid.New(), "", func(o *Options) {
+	p, _, mints := sshAgentProxy(t, uuid.New(), "", "", func(o *Options) {
 		o.Now = func() time.Time { return time.Unix(0, now.Load()) }
 	})
 	p.residentMints = residentMintsByGrant([]ResidentMint{
-		{GrantID: grant, Kind: types.GrantSSHKey, Username: "git", Token: keyPEM, ExpiresAt: expires},
-		{GrantID: late, Kind: types.GrantSSHKey, Username: "git", Token: keyPEM, ExpiresAt: expires},
+		{GrantID: grant, Kind: types.GrantSSHKey, Username: "git", Token: keyPEM, ExpiresAt: expires, Host: "dev.azure.com"},
+		{GrantID: late, Kind: types.GrantSSHKey, Username: "git", Token: keyPEM, ExpiresAt: expires, Host: "dev.azure.com"},
 	})
 	data := userauthData("git", pub, "publickey")
 	if sig, err := agent.NewClient(&agentConn{t: t, p: p, grant: grant}).Sign(pub, data); err != nil || pub.Verify(data, sig) != nil {

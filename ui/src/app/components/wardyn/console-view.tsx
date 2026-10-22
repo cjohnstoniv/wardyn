@@ -5,10 +5,14 @@
 
 import * as React from "react";
 import { Navigate, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { MoreHorizontal } from "lucide-react";
 import { Button } from "../ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { health } from "../../lib/api/health";
 import { notifyAuthChange } from "../../lib/api/core";
 import { useRoleResolved } from "./operator-context";
+import { Refusal } from "./refusal";
+import { REFUSAL } from "./copy/refusal";
 import { releaseUnloadGuard } from "../../lib/use-unsaved-guard";
 import { appURL } from "../../lib/base-path";
 import {
@@ -180,15 +184,14 @@ export async function switchView(to: ConsoleView, target: string, noCredential =
  *  fails. The admin token is not a person and has no User view, so it gets
  *  nothing. Stops the click, since the rows it sits in open the run in this
  *  view. */
-export function OpenInUserView({ runId, className }: { runId?: string; className?: string } = {}) {
+function useOpenInUserView(runId?: string) {
   const access = useViewAccess();
   const navigate = useNavigate();
   const { pathname, search, hash } = useLocation();
   const [busy, setBusy] = React.useState(false);
   const [failed, setFailed] = React.useState(false);
-  if (access === "admin-only") return null;
   const target = runId ? `/runs/${encodeURIComponent(runId)}` : viewTarget("user", pathname, `${search}${hash}`);
-  const go = (e: React.MouseEvent) => {
+  const go = (e: { stopPropagation: () => void }) => {
     e.stopPropagation();
     if (access === "url") {
       void navigate(target);
@@ -201,11 +204,46 @@ export function OpenInUserView({ runId, className }: { runId?: string; className
       setFailed(true);
     });
   };
+  return { available: access !== "admin-only", go, busy, failed };
+}
+
+export function OpenInUserView({ runId, className }: { runId?: string; className?: string } = {}) {
+  const { available, go, busy, failed } = useOpenInUserView(runId);
+  if (!available) return null;
   return (
     <>
       <Button size="sm" variant="outline" className={className} disabled={busy} onClick={go}>
         {OPEN_IN_USER_VIEW}
       </Button>
+      {failed && (
+        <span role="alert" className="text-xs text-danger">
+          {CONSOLE_VIEW.SWITCH_FAILED}
+        </span>
+      )}
+    </>
+  );
+}
+
+/** #3039: the Runs list's one place for the same door, in a row's ⋯ menu so the row keeps a single action. */
+export function OpenInUserViewMenu({ runId }: { runId: string }) {
+  const { available, go, busy, failed } = useOpenInUserView(runId);
+  if (!available) return null;
+  return (
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button size="icon" variant="ghost" className="size-7 shrink-0" aria-label={CONSOLE_VIEW.ROW_MENU} onClick={(e) => e.stopPropagation()}>
+            <MoreHorizontal className="size-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        {/* The menu is portalled, but React still bubbles its clicks to the row, which would open the run in this view. */}
+        <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+          <DropdownMenuItem disabled={busy} onSelect={(e) => go(e)} className="flex-col items-start gap-0.5">
+            <span>{OPEN_IN_USER_VIEW}</span>
+            <span className="text-meta text-muted-foreground">{CONSOLE_VIEW.OPEN_IN_USER_HINT}</span>
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
       {failed && (
         <span role="alert" className="text-xs text-danger">
           {CONSOLE_VIEW.SWITCH_FAILED}
@@ -276,11 +314,23 @@ export function ViewGate({ fallback }: { fallback: React.ReactNode }) {
       return <Navigate to={`${verdict.to}${search}${hash}`} replace />;
     case "refuse":
       return (
-        <ViewNotice title={VIEW_REFUSAL.TITLE} body={VIEW_REFUSAL.BODY}>
-          <Button size="sm" onClick={() => navigate("/runs")}>
-            {VIEW_REFUSAL.CTA}
-          </Button>
-        </ViewNotice>
+        <div className="flex min-h-[60vh] items-center justify-center px-6 py-16">
+          <Refusal
+            title={VIEW_REFUSAL.TITLE}
+            chip={VIEW_REFUSAL.CHIP}
+            body={VIEW_REFUSAL.BODY}
+            rows={[
+              { label: REFUSAL.WALL, value: VIEW_REFUSAL.WALL },
+              { label: REFUSAL.SET_BY, value: VIEW_REFUSAL.SET_BY },
+              { label: REFUSAL.ENFORCED, value: VIEW_REFUSAL.ENFORCED },
+              { label: REFUSAL.CAN_CHANGE, value: VIEW_REFUSAL.CAN_CHANGE },
+            ]}
+          >
+            <Button size="sm" onClick={() => navigate("/runs")}>
+              {VIEW_REFUSAL.CTA}
+            </Button>
+          </Refusal>
+        </div>
       );
     case "admin-token":
       return (

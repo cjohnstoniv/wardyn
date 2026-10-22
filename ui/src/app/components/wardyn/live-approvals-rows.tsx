@@ -108,7 +108,7 @@ export function ScopeMenu({
       <PopoverTrigger asChild>
         {/* Deliberately not named "…approve…"/"…deny…" — see the row comment
             above this component's two mount sites. */}
-        <Button size="sm" variant="outline" className={cn("h-7 w-6 p-0", triggerClassName)} aria-label="More options">
+        <Button size="sm" variant={verb === "approve" ? "info" : "outline"} className={cn("h-7 w-6 p-0", triggerClassName)} aria-label="More options">
           <ChevronDown className="size-3.5" />
         </Button>
       </PopoverTrigger>

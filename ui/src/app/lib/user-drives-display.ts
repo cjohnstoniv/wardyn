@@ -32,3 +32,9 @@ export function driveSizeLabel(sizeMib?: number): string | null {
 export function driveModeWord(writable: boolean): string {
   return writable ? DRIVES.MODE_RW_INLINE : DRIVES.MODE_RO_INLINE;
 }
+
+// The server's mounts_from inside a sentence (M10): its first letter lowered,
+// so "Organisation runners and mbp-dev" reads "Mounts from organisation runners and mbp-dev".
+export function mountsFromInSentence(where: string): string {
+  return where.charAt(0).toLowerCase() + where.slice(1);
+}

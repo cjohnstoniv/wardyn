@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -93,6 +94,11 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	}
 	if dl.PortRule != "" {
 		fields["port_rule"] = dl.PortRule
+	}
+	// Whose refusal a deny was ("refusal", egress.Refusal); absent on an unclassified row.
+	dl.Refusal.AuditFields(fields)
+	if dl.MatchedRule != "" {
+		fields["matched_rule"] = dl.MatchedRule // the tool_rules key behind a policy:tool-* row
 	}
 	// A Bedrock data-plane refusal the proxy relayed (bedrock_dataplane_fault.go).
 	if dl.UpstreamFault != "" {
@@ -384,7 +390,7 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 		return
 	}
 	switch body.Kind {
-	case types.ApprovalEgressDomain, types.ApprovalToolCall, types.ApprovalPushContent:
+	case types.ApprovalEgressDomain, types.ApprovalToolCall, types.ApprovalPushContent, types.ApprovalHumanTakeover:
 		// Sidecars may only raise egress/tool/held-push approvals. credential
 		// approvals are created by the broker mint path, never by an untrusted
 		// sidecar.
@@ -432,6 +438,16 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 		writeJSON(w, http.StatusOK, ap)
 		return
 	}
+	if body.Kind == types.ApprovalHumanTakeover {
+		var ok bool
+		if body.RequestedScope, ok = takeoverScopeOf(body.RequestedScope); !ok {
+			writeErrorReason(w, http.StatusBadRequest, reasonInternalApprovalRequestInvalid, "invalid approval request")
+			return
+		}
+		if s.refuseBackgroundTakeoverRaise(w, r, claims.RunID) {
+			return
+		}
+	}
 	if body.Kind == types.ApprovalPushContent {
 		var ok bool
 		if body.RequestedScope, ok = s.admitPushContentRaise(w, r, claims, body.RequestedScope, body.PathList); !ok {
@@ -453,6 +469,7 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 	}
 
 	req := types.ApprovalRequest{
+		ID:             uuid.New(), // a fresh row keeps this id; a dedup or rejoin returns another, and no rule decides it
 		RunID:          claims.RunID,
 		Kind:           body.Kind,
 		RequestedScope: body.RequestedScope,
@@ -464,6 +481,12 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 	}
 	if body.PathList != nil && !s.recordPushPathList(w, r, claims, created, *body.PathList) {
 		return
+	}
+	if created.Kind == types.ApprovalHumanTakeover && created.LastRejoinedAt == nil {
+		s.auditTakeoverRequest(r.Context(), claims.SPIFFEID, created)
+	}
+	if created.ID == req.ID {
+		s.runApprovalRules(created)
 	}
 	writeJSON(w, http.StatusCreated, created)
 }
@@ -521,7 +544,26 @@ func (s *Server) handleInternalGetApproval(w http.ResponseWriter, r *http.Reques
 	// person's new sign-in is the resolution (injection_ado_signin.go).
 	ap = s.reconcileADOReauthOnRead(r.Context(), ap)
 	ap = s.reconcileAzureReauthOnRead(r.Context(), ap)
-	writeJSON(w, http.StatusOK, ap)
+	writeJSON(w, http.StatusOK, sandboxApprovalView(ap))
+}
+
+// sandboxApproval is the approval as the sandbox reads it: only what the sidecar and
+// wardyn-toolgate consume. The stored row also names the deciding human and the note they typed,
+// which an untrusted process must not read.
+type sandboxApproval struct {
+	ID                uuid.UUID           `json:"id"`
+	Kind              types.ApprovalKind  `json:"kind"`
+	State             types.ApprovalState `json:"state"`
+	DecisionScope     types.ApprovalScope `json:"decision_scope,omitempty"`
+	DecisionExpiresAt *time.Time          `json:"decision_expires_at,omitempty"`
+	ExpiresAt         *time.Time          `json:"expires_at,omitempty"`
+	Held              bool                `json:"held,omitempty"`
+	HeldUntil         *time.Time          `json:"held_until,omitempty"`
+}
+
+func sandboxApprovalView(ap types.ApprovalRequest) sandboxApproval {
+	return sandboxApproval{ID: ap.ID, Kind: ap.Kind, State: ap.State, DecisionScope: ap.DecisionScope,
+		DecisionExpiresAt: ap.DecisionExpiresAt, ExpiresAt: ap.ExpiresAt, Held: ap.Held, HeldUntil: ap.HeldUntil}
 }
 
 // handleInternalExpireApproval lets wardyn-toolgate close its OWN tool_call
@@ -558,7 +600,7 @@ func (s *Server) handleInternalExpireApproval(w http.ResponseWriter, r *http.Req
 		writeServerError(w, r, "get approval", err)
 		return
 	}
-	if ap.RunID != claims.RunID || ap.Kind != types.ApprovalToolCall || ap.GrantID != nil {
+	if ap.RunID != claims.RunID || (ap.Kind != types.ApprovalToolCall && ap.Kind != types.ApprovalHumanTakeover) || ap.GrantID != nil {
 		// Do not confirm existence of another run's approval, or of an
 		// approval this route was never meant to touch.
 		writeErrorReason(w, http.StatusNotFound, reasonApprovalNotFound, "approval not found")
@@ -572,7 +614,7 @@ func (s *Server) handleInternalExpireApproval(w http.ResponseWriter, r *http.Req
 		writeServerError(w, r, "get approval", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, ap)
+	writeJSON(w, http.StatusOK, sandboxApprovalView(ap))
 }
 
 // mintRequest is the in-sandbox credential helper's mint body.
@@ -596,4 +638,7 @@ type mintResponse struct {
 	// ssh_key grant (empty otherwise; agent-run falls back to the image-baked
 	// /etc/ssh/ssh_known_hosts). Public host-key data, not a secret.
 	KnownHosts string `json:"known_hosts,omitempty"`
+	// Host is an ssh_key grant's SSH host, which the proxy's ssh agent signs
+	// in to only (empty otherwise).
+	Host string `json:"host,omitempty"`
 }

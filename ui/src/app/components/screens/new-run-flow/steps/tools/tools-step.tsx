@@ -28,6 +28,7 @@ import { stepIssues } from "../../lenses/local-issues";
 import { needsSetup } from "../../lenses/tools-lens";
 import { flowSteps, STEP_HEADING_ID, StepShell } from "../step-shell";
 import { AddTools } from "./catalogue";
+import { githubRepos } from "./tool-access";
 import { AlreadyIncluded } from "./already-included";
 import { HarnessSetup, providerNameFor } from "./harness-setup";
 import { SetupNeeded } from "./setup-needed";
@@ -52,14 +53,14 @@ function useAccess() {
   });
   // While the next answer is out, the last one stays on screen with every host back at Requested.
   // An answer in scope is for this render's draft, so its components are the ones the rows point into.
-  const last = React.useRef<{ access: AccessFacts; harnessSet?: HarnessSetFact; components: RunIntent["components"] } | undefined>(undefined);
+  const last = React.useRef<{ access: AccessFacts; harnessSet?: HarnessSetFact; components: RunIntent["components"]; githubRepos: string[] } | undefined>(undefined);
   const answer = checks.preview.result?.access;
   const current = answer && withoutNamelessHarness(answer);
   // A check refused for rate is not a failure of the run: the step was not checked yet, and says so.
   const rateLimited = !current && checks.preview.error instanceof HttpError && checks.preview.error.status === 429;
-  if (current) last.current = { access: current, harnessSet: checks.preview.result?.harness_set, components: draft.intent.components };
+  if (current) last.current = { access: current, harnessSet: checks.preview.result?.harness_set, components: draft.intent.components, githubRepos: githubRepos(checks.preview.result?.components) };
   return {
-    access: current ?? last.current?.access, harnessSet: last.current?.harnessSet, answeredFor: last.current?.components, answered: checks.preview.current && !!current, recheck: checks.invalidateChecks,
+    access: current ?? last.current?.access, harnessSet: last.current?.harnessSet, answeredFor: last.current?.components, githubRepos: last.current?.githubRepos, answered: checks.preview.current && !!current, recheck: checks.invalidateChecks,
     // The server refused or could not answer this body: the step has nothing true to list, and says so. It stays
     // up while the next check is out, so the button the person pressed is not replaced by an all-clear.
     failure: !current && !rateLimited && checks.preview.error ? checkFailureText(checks.preview.error) : null,
@@ -76,7 +77,7 @@ const FOOTER_ANNOUNCE_MS = 1000;
 
 export function ToolsStep({ go }: NewRunScreenProps) {
   const draft = useNewRunDraft();
-  const { access, harnessSet, answered, answeredFor, recheck, adoCaps, failure, notChecked, asking, retry } = useAccess();
+  const { access, harnessSet, answered, answeredFor, githubRepos: repos, recheck, adoCaps, failure, notChecked, asking, retry } = useAccess();
   const { status } = useShellSetupStatus();
   const door = useModelAccessDoor();
   const ado = useAdoConnect();
@@ -172,7 +173,7 @@ export function ToolsStep({ go }: NewRunScreenProps) {
           <Button type="button" variant="outline" aria-busy={asking || undefined} aria-disabled={asking || undefined} onClick={() => { if (!asking) void retry(); }}>{NR_REVIEW.CHECK_AGAIN}</Button>
         </div>
       )}
-      <AddTools access={access} answered={answered} intent={draft.intent} answeredFor={answeredFor} />
+      <AddTools access={access} answered={answered} intent={draft.intent} answeredFor={answeredFor} githubRepos={repos} />
       {failure === null && (
         <>
           <Totals

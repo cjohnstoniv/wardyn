@@ -37,6 +37,7 @@ import { describe, it, expect } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { CONNECTIONS } from "../../components/wardyn/copy/door";
+import { APP_NAME_RE } from "../../components/screens/new-run-flow/lenses/apps-lens";
 
 function repoRoot(): string {
   let dir = resolve(process.cwd());
@@ -150,10 +151,22 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["SetupSecrets", "secrets"],
     ["SetupAgeKey", "age_key"],
     ["SetupPlatform", "platform"],
+    ["SetupFeatures", "features"],
   ])("%s: full parity with SetupStatus.%s's inline TS type", (goName, member) => {
     const goTags = goJSONTags(setupGo, goName);
     expect(goTags.length).toBeGreaterThan(0);
     expect(new Set(tsInlineKeys(setupTs, "SetupStatus", member))).toEqual(new Set(goTags));
+  });
+
+  it("CLISignInHealthz: every Go tag is on /healthz and in health()'s mirror", () => {
+    const goTags = goJSONTags(readFileSync(join(root, "internal/types/cli_sign_in.go"), "utf8"), "CLISignInHealthz");
+    const healthzGo = readFileSync(join(root, "internal/api/healthz.go"), "utf8");
+    const healthTs = stripComments(readFileSync(join(root, "ui/src/app/lib/api/health.ts"), "utf8"));
+    expect(goTags).toEqual(["cli_sign_in", "cli_paste_sign_in", "cli_sign_in_origin"]);
+    for (const tag of goTags) {
+      expect(healthzGo, tag).toContain(`"${tag}"`);
+      expect(healthTs, tag).toMatch(new RegExp(`\\b${tag}\\?:`));
+    }
   });
 
   it("SetupProviderAccess (`provider_access`): full parity with the TS mirror", () => {
@@ -268,11 +281,15 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     // lifetimes (pat_max_hours, pat_max_days) the console writes.
     ["ADOEntraConfig", "internal/types/workspace_provider.go", "ADOEntraConfig", "ui/src/app/lib/types/site.ts"],
     ["GitProvider", "internal/types/workspace_provider.go", "GitProvider", "ui/src/app/lib/types/site.ts"],
+    // #1991: the keep_main_drive switch the organisation turns on beside member_create.
+    ["MemberDrivePolicy", "internal/types/workspace_provider.go", "MemberDrivePolicy", "ui/src/app/lib/types/site.ts"],
     // #1428: the per-person token console's reads.
     ["adoOrgCheckResult", "internal/api/ado_pat_orgcheck.go", "ADOOrgCheck", "ui/src/app/lib/types/ado-pat.ts"],
     ["adoPATRefusal", "internal/api/ado_pat_refusal.go", "ADOPATRefusal", "ui/src/app/lib/types/ado-pat.ts"],
     ["adoRunToken", "internal/api/ado_pat_console.go", "ADORunToken", "ui/src/app/lib/types/ado-pat.ts"],
     ["ADOPATAccess", "internal/api/ado_pat_console.go", "ADOPATAccess", "ui/src/app/lib/types/ado-pat.ts"],
+    // #1991: the drive catalogue's create block, keep_work_folder and enforcement included.
+    ["MemberDriveCreate", "pkg/client/me_drives.go", "MemberDriveCreate", "ui/src/app/lib/api/me-drives.ts"],
   ])("%s: full parity with the TS mirror", (goName, goFile, tsName, tsFile) => {
     const goTags = goJSONTags(readFileSync(join(root, goFile), "utf8"), goName);
     expect(goTags.length).toBeGreaterThanOrEqual(2); // stale-regex guard (ADOPATAccess has two tags)
@@ -328,6 +345,21 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(goTags.length).toBeGreaterThanOrEqual(7);
     const outTs = readFileSync(join(root, "ui/src/app/lib/types/run-output.ts"), "utf8");
     expect(new Set(tsInterfaceTopKeys(outTs, "RunOutput"))).toEqual(new Set(goTags));
+  });
+
+  // Several agents in one run (WARDYN_MULTI_AGENT_TASKS): each agent's state on the output read, and the switch on setup status.
+  it("runAgentState (GET /runs/{id}/output agents[]): full parity with the TS RunAgentState mirror", () => {
+    const goTags = goJSONTags(readFileSync(join(root, "internal/api/run_multi_agent.go"), "utf8"), "runAgentState");
+    expect(goTags.length).toBeGreaterThanOrEqual(3);
+    const outTs = readFileSync(join(root, "ui/src/app/lib/types/run-output.ts"), "utf8");
+    expect(new Set(tsInterfaceTopKeys(outTs, "RunAgentState"))).toEqual(new Set(goTags));
+  });
+
+  it("SetupFeatures (GET /setup/status features): full parity with the TS SetupStatus.features inline type", () => {
+    const goTags = goJSONTags(readFileSync(join(root, "internal/api/setup.go"), "utf8"), "SetupFeatures");
+    expect(goTags).toContain("multi_agent_tasks");
+    const setupTs = readFileSync(join(root, "ui/src/app/lib/types/setup.ts"), "utf8");
+    expect(new Set(tsInlineKeys(setupTs, "SetupStatus", "features"))).toEqual(new Set(goTags));
   });
 
   // GET /runs/{id}/sign-in: RunSignIn mirrors runSignInResponse.
@@ -425,8 +457,12 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["internal/types/component.go", "Component", "Component"],
     ["internal/types/component.go", "ComponentRef", "ComponentRef"],
     ["internal/types/component.go", "ComponentCLI", "ComponentCLI"],
+    ["internal/types/component.go", "ComponentMCP", "ComponentMCP"],
+    ["internal/types/component_mcp.go", "ComponentMCPLaunch", "ComponentMCPLaunch"],
     ["internal/types/component.go", "CLIAWS", "CLIAWS"],
     ["internal/types/component.go", "CLIAzure", "CLIAzure"],
+    ["internal/types/component.go", "CLIKubectl", "CLIKubectl"],
+    ["internal/types/component.go", "CLIServiceAccount", "CLIServiceAccount"],
     ["pkg/client/components.go", "ComponentRequest", "ComponentRequest"],
     ["pkg/client/components.go", "ComponentRequirement", "ComponentRequirement"],
     ["pkg/client/components.go", "ComponentSecretView", "ComponentSecretView"],
@@ -491,11 +527,39 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["runs_create.go", "DriveAttachment", "types/new-run-contract.ts", "DriveAttachment"],
     ["me_drives.go", "MeDrive", "api/me-drives.ts", "MeDrive"],
     ["me_drives.go", "MeDriveCatalogue", "api/me-drives.ts", "MeDriveCatalogue"],
+    // #1991: the create door now says whether a run may keep its work folder, and what binds a new drive's size.
+    ["me_drives.go", "MemberDriveCreate", "api/me-drives.ts", "MemberDriveCreate"],
   ])("pkg/client/%s %s: full parity with the TS %s mirror", (goFile, goName, tsFile, tsName) => {
     const goTags = goJSONTags(readFileSync(join(root, "pkg/client", goFile), "utf8"), goName);
     expect(goTags.length).toBeGreaterThanOrEqual(2);
     const ts = readFileSync(join(root, "ui/src/app/lib", tsFile), "utf8");
     expect(new Set(tsInterfaceTopKeys(ts, tsName))).toEqual(new Set(goTags));
+  });
+
+  // #1991: the request field that keeps the run's work folder as the caller's drive.
+  it("pkg/client CreateRunRequest carries keep_work_folder, and the TS request twin does too", () => {
+    const goTags = goJSONTags(readFileSync(join(root, "pkg/client/runs_create.go"), "utf8"), "CreateRunRequest");
+    expect(goTags).toContain("keep_work_folder");
+    const ts = readFileSync(join(root, "ui/src/app/lib/types/run-create.ts"), "utf8");
+    expect(tsInterfaceTopKeys(ts, "CreateRunInput")).toContain("keep_work_folder");
+  });
+
+  // Team drives (#1988): each key the console sends or reads is a json tag of the Go struct it
+  // mirrors, and the TS mirror names it.
+  it.each([
+    ["internal/types/user_drive.go", "UserDrive", "team", "api/drives.ts", "UserDrive"],
+    ["internal/types/user_drive.go", "UserDriveGrant", "members_can_write", "api/drives.ts", "UserDriveGrant"],
+    ["internal/types/user_drive.go", "UserDriveListItem", "single_host", "api/drives.ts", "UserDriveListItem"],
+    ["internal/types/workspace_provider.go", "UserDriveProvider", "team_drives", "types/site.ts", "UserDriveProvider"],
+    ["pkg/client/families.go", "DriveRequest", "team", "api/drives.ts", "UserDriveInput"],
+    ["pkg/client/families.go", "DriveGrantRequest", "members_can_write", "api/drives.ts", "UserDriveGrantInput"],
+    ["pkg/client/me_drives.go", "MeDrive", "team", "api/me-drives.ts", "MeDrive"],
+    ["pkg/client/me_drives.go", "MeDrive", "shared_with", "api/me-drives.ts", "MeDrive"],
+  ])("team drives: %s %s.%s is mirrored by %s %s", (goFile, goName, key, tsFile, tsName) => {
+    const goTags = goJSONTags(readFileSync(join(root, goFile), "utf8"), goName);
+    expect(goTags, `${goName} has no ${key} tag`).toContain(key);
+    const ts = readFileSync(join(root, "ui/src/app/lib", tsFile), "utf8");
+    expect(tsInterfaceTopKeys(ts, tsName)).toContain(key);
   });
 
   // The run-mode contract (pkg/client/runs_mode.go).
@@ -755,6 +819,13 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(tsInterfaceBody(govTs, "GovernanceLimits")).toMatch(/deny_placements\?: PlacementValue\[\];/);
   });
 
+  it("UIApp: the Go tags are the TS keys, and the server's application rule is the interactive form the console sends (#1994)", () => {
+    const policyGo = readFileSync(join(root, "internal/types/policy.go"), "utf8");
+    expect(tsInterfaceTopKeys(runsTs, "UIApp").sort()).toEqual(goJSONTags(policyGo, "UIApp").sort());
+    const shapeGo = readFileSync(join(root, "internal/api/run_shape.go"), "utf8");
+    expect(shapeGo).toContain("experience interactive with startup kind command and ui_apps");
+  });
+
   it("SetupItemResidency names every residency the setup checklist emits", () => {
     const goRaw = readFileSync(join(root, "internal/api/compose_setup.go"), "utf8");
     const tsRuns = readFileSync(join(root, "ui/src/app/lib/types/preflight.ts"), "utf8");
@@ -777,6 +848,28 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
 });
 
 
+describe("Wardyn boundary wire (GET/PUT /governance/boundary, POST /governance/dry-run)", () => {
+  it("each boundary DTO's TypeScript keys are exactly its Go json tags", () => {
+    const root = repoRoot();
+    const types = readFileSync(join(root, "internal/types/boundary.go"), "utf8");
+    const api = readFileSync(join(root, "internal/api/boundary.go"), "utf8") + readFileSync(join(root, "internal/api/boundary_meet.go"), "utf8");
+    const ts = readFileSync(join(root, "ui/src/app/lib/api/boundary.ts"), "utf8");
+    const pairs: [string, string, string][] = [
+      [types, "Boundary", "Boundary"],
+      [types, "BoundaryWrite", "BoundaryWrite"],
+      [types, "BoundarySpec", "BoundarySpec"],
+      [types, "BoundaryLimits", "BoundaryLimits"],
+      [api, "boundaryReport", "BoundaryReport"],
+      [api, "boundaryReportRow", "BoundaryReportRow"],
+      [api, "boundaryReportAssign", "BoundaryReportAssign"],
+      [api, "boundaryChange", "BoundaryChange"],
+    ];
+    for (const [go, goName, tsName] of pairs) {
+      expect(tsInterfaceTopKeys(ts, tsName).sort(), tsName).toEqual(goJSONTags(go, goName).sort());
+    }
+  });
+});
+
 describe("SetupProviderAccess cause fields", () => {
   it("keeps the Go and TypeScript optional wire fields in parity", () => {
     const root = repoRoot();
@@ -797,4 +890,11 @@ it("connection re-check sentence matches the server", () => {
   expect(sentence).not.toBeNull();
   expect(JSON.parse(sentence![1])).toBe(CONNECTIONS.STORE_UNREADABLE);
   expect(CONNECTIONS.STORE_UNREADABLE).toContain("Your credential may still be stored");
+});
+
+it("the New Run app-name rule is the server's uiAppNameRE", () => {
+  const src = readFileSync(join(repoRoot(), "internal/api/policy.go"), "utf8");
+  const m = /var uiAppNameRE = regexp\.MustCompile\(`([^`]+)`\)/.exec(src);
+  expect(m).not.toBeNull();
+  expect(APP_NAME_RE.source).toBe(m![1]);
 });

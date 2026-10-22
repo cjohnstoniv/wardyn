@@ -138,6 +138,19 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Policies", exact: true })).toBeVisible();
 });
 
+test("the policy dialog keeps Cancel and Create on screen however tall the form is (#3051)", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 480 });
+  await openCreate(page);
+  const dialog = editorDialog(page);
+  const create = dialog.getByRole("button", { name: "Create policy" });
+  await expect(create).toBeInViewport();
+  // Scrolling the body to its end must not move the footer off screen either.
+  await dialog.getByLabel(SPEC_LABEL).focus();
+  await page.keyboard.press("Control+End");
+  await expect(create).toBeInViewport();
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+});
+
 test("renders the Policies screen header, description and primary action", async ({ page }) => {
   await expect(
     page.getByText(
@@ -655,7 +668,8 @@ test.describe("Policies — stored token narrowing", () => {
       api: true,
     });
 
-    const created = page.waitForResponse((r) => r.url().includes("/api/v1/policies") && r.request().method() === "POST");
+    // The create itself: the safety meter's POST /policies/grade can land first, and answers 200.
+    const created = page.waitForResponse((r) => new URL(r.url()).pathname.endsWith("/api/v1/policies") && r.request().method() === "POST");
     await dialog.getByRole("button", { name: "Create policy" }).click();
     const res = await created;
     expect(res.status()).toBe(201);

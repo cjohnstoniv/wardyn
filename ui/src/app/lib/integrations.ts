@@ -88,6 +88,11 @@ export const T = {
   // Each state also carries a HEADLINE (GATE_HEAD_*) the footer renders bold
   // above the sentence. What is required is the PROOF, not configuration — no
   // rung demands a visit to Egress redirection.
+  // The probe tile's own title and its one-line sentences (the first sentence of
+  // GATE_UNTESTED, and a pass in the tile's words).
+  TILE_TITLE: "Connectivity",
+  TILE_UNTESTED: "One probe, and this step is done — everything after it assumes the network works.",
+  TILE_REACHED: "A throwaway sandbox on this host reached the internet.",
   GATE_UNTESTED:
     "One probe, and this step is done — everything after it assumes the network works. A minute now instead of a fake credential failure two steps later.",
   GATE_HEAD_UNTESTED: "Connectivity isn't proven yet",

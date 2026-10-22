@@ -202,8 +202,9 @@ func (s *Server) advertisedConfinement(ctx context.Context, req createRunRequest
 func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// Marked before any gate runs, refuseAdminViewLaunch included: every audit row
 	// written under this request carries dry_run (audit.DryRunRecorder).
-	r = r.WithContext(audit.WithDryRun(r.Context()))
-	ctx := r.Context()
+	// One listing of the caller's own secrets for the whole request: the policy
+	// resolution's ownership checks and Review's checklist read the same answer.
+	r = r.WithContext(withOwnedSecretMemo(audit.WithDryRun(r.Context())))
 	// First, before the decode and every gate: a limited call costs no work and
 	// writes no row.
 	if s.refusePreflightRate(w, r) {
@@ -212,11 +213,15 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	if s.refuseAdminViewLaunch(w, r) {
 		return
 	}
-	var req createRunRequest
-	if !s.decodeRunRequest(w, r, &req) {
+	r, ok := s.admitBreakGlass(w, r)
+	if !ok {
 		return
 	}
-	canonicalizeRunRepos(&req, s.adoHostsLoader(r.Context()))
+	r, req, ok := s.decodeStampedRunRequest(w, r)
+	if !ok {
+		return
+	}
+	ctx := r.Context()
 	// The order of the five gates below is create's own order, and it is
 	// load-bearing rather than tidy. The structural parity guard
 	// (TestPreflightMirrorsLaunchGates) can see the gate SET but not the
@@ -280,7 +285,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	if _, refusal := runRequestEnums(req); refusal.write(s, w, r) {
 		return
 	}
-	if s.localFolderRefusal(&req).write(s, w, r) {
+	if s.localFolderRefusal(r.Context(), &req).write(s, w, r) {
 		return
 	}
 	// Same free-text field caps + control-character check launch runs over every

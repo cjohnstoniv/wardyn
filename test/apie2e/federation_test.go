@@ -42,6 +42,11 @@ import (
 // 1,000-row page (store.AuditChainPageSize), so neither boundary goes untested.
 const fedRows = 1200
 
+// wantLaptop is what the laptop's table and the organisation's device-origin rows each hold after the
+// test's fedRows writes: those rows plus governance.boundary.seed, the one row db.Migrate appends to a
+// fresh install (internal/db/fresh_seed.go). The seed row federates like any other, so both ends carry it.
+const wantLaptop = fedRows + 1
+
 // fedSkipMarker is internal/store's storeProbeSkipMarker. The rule below is a
 // copy of that package's storeProbeMustNotSkip/storeSkipOrFatal, because Go test
 // helpers cannot cross a package boundary; the words and the derivation are kept
@@ -226,6 +231,19 @@ func laptopChain(t *testing.T, laptop *pgxpool.Pool) []originRow {
 	return out
 }
 
+// seedRows counts the governance.boundary.seed rows on pool, narrowed to one device's origin when deviceID is set.
+func seedRows(t *testing.T, pool *pgxpool.Pool, deviceID string) int {
+	t.Helper()
+	var n int
+	if err := pool.QueryRow(context.Background(), `
+		SELECT count(*) FROM audit_events
+		WHERE action = 'governance.boundary.seed' AND ($1 = '' OR data->'device_origin'->>'device_id' = $1)`,
+		deviceID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
 func requireChainOK(t *testing.T, which string, pool *pgxpool.Pool, wantChecked int64) {
 	t.Helper()
 	st, err := store.NewPG(pool).VerifyAuditChain(context.Background())
@@ -335,8 +353,11 @@ func TestFederation_OneAuditStream(t *testing.T) {
 		}
 
 		want, got := laptopChain(t, laptop), orgOrigins(t, org, cred.DeviceID)
-		if len(want) != fedRows || len(got) != fedRows {
-			t.Fatalf("laptop holds %d rows, organisation holds %d for the device; want %d at both ends", len(want), len(got), fedRows)
+		if len(want) != wantLaptop || len(got) != wantLaptop {
+			t.Fatalf("laptop holds %d rows, organisation holds %d for the device; want %d at both ends", len(want), len(got), wantLaptop)
+		}
+		if l, o := seedRows(t, laptop, ""), seedRows(t, org, cred.DeviceID.String()); l != 1 || o != 1 {
+			t.Fatalf("governance.boundary.seed rows: laptop %d, organisation %d for the device; want exactly 1 at each end", l, o)
 		}
 		for i := range want {
 			if got[i] != want[i] {
@@ -346,8 +367,8 @@ func TestFederation_OneAuditStream(t *testing.T) {
 		if d := orgDevice(t, h, cred.DeviceID); d.LastSeq != head || d.LastRowHash != want[len(want)-1].rowHash {
 			t.Fatalf("organisation's recorded cursor = (%d, %s), want (%d, %s)", d.LastSeq, d.LastRowHash, head, want[len(want)-1].rowHash)
 		}
-		requireChainOK(t, "laptop", laptop, fedRows)
-		requireChainOK(t, "organisation", org, fedRows)
+		requireChainOK(t, "laptop", laptop, wantLaptop)
+		requireChainOK(t, "organisation", org, wantLaptop)
 	}) {
 		return
 	}
@@ -359,13 +380,16 @@ func TestFederation_OneAuditStream(t *testing.T) {
 		forward(t, h.srv.URL, laptop, cred, func(s federation.Status) bool {
 			return s.AckedSeq == head && s.LastError == ""
 		})
-		if n := len(orgOrigins(t, org, cred.DeviceID)); n != fedRows {
-			t.Fatalf("organisation holds %d rows for the device after a full re-send, want %d", n, fedRows)
+		if n := len(orgOrigins(t, org, cred.DeviceID)); n != wantLaptop {
+			t.Fatalf("organisation holds %d rows for the device after a full re-send, want %d", n, wantLaptop)
+		}
+		if n := seedRows(t, org, cred.DeviceID.String()); n != 1 {
+			t.Fatalf("organisation holds %d governance.boundary.seed rows for the device after a full re-send, want 1", n)
 		}
 		if n := orgAuditCount(t, org, "device.chain.reset", cred.DeviceID, "success", ""); n != 0 {
 			t.Fatalf("a re-send recorded %d chain resets", n)
 		}
-		requireChainOK(t, "organisation", org, fedRows)
+		requireChainOK(t, "organisation", org, wantLaptop)
 	}) {
 		return
 	}
@@ -373,7 +397,7 @@ func TestFederation_OneAuditStream(t *testing.T) {
 	if !t.Run("an edited laptop row is refused and the cursor holds", func(t *testing.T) {
 		writeLaptopRows(t, laptop, 10, "tail")
 		// Mid-batch, and by position: seq has gaps (0056 allocates it in the trigger).
-		edited := laptopChain(t, laptop)[fedRows+5].seq
+		edited := laptopChain(t, laptop)[wantLaptop+5].seq
 		asSuperuser(t, laptop, func(tx pgx.Tx) error {
 			tag, err := tx.Exec(ctx, `UPDATE audit_events SET data = '{"i":5,"tag":"rewritten"}' WHERE seq = $1`, edited)
 			if err == nil && tag.RowsAffected() != 1 {
@@ -402,8 +426,8 @@ func TestFederation_OneAuditStream(t *testing.T) {
 		if d := orgDevice(t, h, cred.DeviceID); d.LastSeq != head {
 			t.Fatalf("organisation's recorded cursor moved to %d, want %d", d.LastSeq, head)
 		}
-		if n := len(orgOrigins(t, org, cred.DeviceID)); n != fedRows {
-			t.Fatalf("organisation holds %d rows for the device, want %d: part of the refused batch landed", n, fedRows)
+		if n := len(orgOrigins(t, org, cred.DeviceID)); n != wantLaptop {
+			t.Fatalf("organisation holds %d rows for the device, want %d: part of the refused batch landed", n, wantLaptop)
 		}
 	}) {
 		return
@@ -469,18 +493,18 @@ func TestFederation_OneAuditStream(t *testing.T) {
 		// The recorded head goes too: the trigger links a new row to it (0130), so a bare
 		// TRUNCATE would chain the new rows to the removed head, not start a genesis.
 		purge(t, `TRUNCATE audit_events;
-			UPDATE audit_partition_meta SET hw_seq = 0, hw_row_hash = NULL, hw_recorded_at = cutover`, 5, false, true, 1, fedRows)
+			UPDATE audit_partition_meta SET hw_seq = 0, hw_row_hash = NULL, hw_recorded_at = cutover`, 5, false, true, 1, wantLaptop)
 	}) {
 		return
 	}
 	if !t.Run("a truncate that restarts the laptop's seq is a chain reset, never rows dropped as re-sends", func(t *testing.T) {
-		purge(t, resetLaptopAudit, 5, true, false, 2, fedRows+5)
+		purge(t, resetLaptopAudit, 5, true, false, 2, wantLaptop+5)
 	}) {
 		return
 	}
 	// The cursor is now the fifth post-purge row; eight new rows reach past it.
 	if !t.Run("a truncate that restarts the laptop's seq and refills past the cursor is a chain reset, never a halt", func(t *testing.T) {
-		purge(t, resetLaptopAudit, 8, true, true, 3, fedRows+10)
+		purge(t, resetLaptopAudit, 8, true, true, 3, wantLaptop+10)
 	}) {
 		return
 	}
@@ -512,17 +536,17 @@ func TestFederation_OneAuditStream(t *testing.T) {
 			t.Fatalf("organisation recorded %d chain resets, want the earlier 3 and none for a bare truncate", n)
 		}
 		got := orgOrigins(t, org, cred.DeviceID)
-		if len(got) != fedRows+18+added {
-			t.Fatalf("organisation holds %d rows for the device, want %d", len(got), fedRows+18+added)
+		if len(got) != wantLaptop+18+added {
+			t.Fatalf("organisation holds %d rows for the device, want %d", len(got), wantLaptop+18+added)
 		}
 		for i, w := range want {
-			if got[fedRows+18+i] != w {
-				t.Fatalf("row %d after the bare truncate: organisation holds %+v, laptop chained %+v", i, got[fedRows+18+i], w)
+			if got[wantLaptop+18+i] != w {
+				t.Fatalf("row %d after the bare truncate: organisation holds %+v, laptop chained %+v", i, got[wantLaptop+18+i], w)
 			}
 		}
 		if d := orgDevice(t, h, cred.DeviceID); d.LastSeq != newHead || d.LastRowHash != want[added-1].rowHash {
 			t.Fatalf("organisation's recorded cursor = (%d, %s), want (%d, %s)", d.LastSeq, d.LastRowHash, newHead, want[added-1].rowHash)
 		}
-		requireChainOK(t, "organisation", org, int64(fedRows+18+added))
+		requireChainOK(t, "organisation", org, int64(wantLaptop+18+added))
 	})
 }

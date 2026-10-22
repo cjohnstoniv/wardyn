@@ -13,6 +13,8 @@ package api
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -26,6 +28,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -205,6 +208,42 @@ func TestAttachWS_WriterSeededObserverIgnoresSizeAndFollowsWriter(t *testing.T) 
 	}
 	if v := srv.attachHolderFor(run.ID).view(); v.Cols != 140 || v.Rows != 50 {
 		t.Errorf("the writer's registry geometry = %+v, want 140x50", v)
+	}
+}
+
+// An observer the sandbox cannot serve (a Linux VM has no shared terminal) is a capability refusal,
+// not a fault: the socket closes 1000 with the reason, which the console prints and does not
+// retry, whether the refusal comes from the daemon's own substrate or across a runner's wire.
+func TestAttachWS_ObserveUnsupportedClosesNormallyWithTheReason(t *testing.T) {
+	for name, refusal := range map[string]error{
+		"own substrate": fmt.Errorf("docker: a Linux VM sandbox does not support this: %w", runner.ErrObserveUnsupported),
+		"runner wire":   (&runnerwire.Error{Code: runnerwire.CodeObserveUnsupported, Message: "watching a terminal"}).Err(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			rn := &scriptedRunner{attach: func(_ context.Context, _ int, o runner.AttachOptions) (runner.Session, error) {
+				if o.Observer {
+					return nil, refusal
+				}
+				return newCountingShellSession(), nil
+			}}
+			srv, _, run := scriptedServer(t, rn)
+			ts := httptest.NewServer(panicFails(t, srv.Handler()))
+			defer ts.Close()
+
+			c1 := dialAttach(t, ts, srv, run.ID, holderOwner, "&cols=80&rows=24")
+			readAttachMode(t, c1)
+			c2 := dialAttach(t, ts, srv, run.ID, holderSecond, "&cols=80&rows=24")
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			var err error
+			for err == nil {
+				_, _, err = c2.Read(ctx)
+			}
+			var ce websocket.CloseError
+			if !errors.As(err, &ce) || ce.Code != websocket.StatusNormalClosure || ce.Reason != "this sandbox does not support watching a terminal" {
+				t.Fatalf("observer close = %v, want 1000 with the reason", err)
+			}
+		})
 	}
 }
 

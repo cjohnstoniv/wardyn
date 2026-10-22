@@ -17,4 +17,13 @@ export interface RunOutput {
   /** "run": masked against the run's complete manifest; "globals_only": not. */
   mask_scope?: string;
   captured_at?: string;
+  /** Each agent's state in a background run with several agents; absent otherwise. */
+  agents?: RunAgentState[];
+}
+
+/** One agent of a run with several agents: running, or exited with its code. */
+export interface RunAgentState {
+  agent: string;
+  state: "running" | "exited";
+  exit_code?: number;
 }

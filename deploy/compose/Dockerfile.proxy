@@ -1,6 +1,10 @@
 # wardyn-proxy: the L2 per-workspace egress sidecar. The docker runner launches
 # one of these per run as the agent sandbox's ONLY route off the per-run
 # internal network (L0 structural egress). Pure-Go static build.
+# The image also carries wardyn-vmnet, a desktop VM's network relay, which the
+# docker runner starts from this image with that binary as its entrypoint, so a
+# proxy image pin or mirror covers the relay too. The image's own entrypoint
+# stays wardyn-proxy.
 # Runs on the BUILDER's arch and cross-compiles to $TARGETARCH (pure Go,
 # CGO_ENABLED=0) — a linux/arm64 image needs no QEMU for the compile.
 # Module-download seed: empty unless a build passes `--build-context gomodcache=<dir>`
@@ -54,6 +58,8 @@ COPY go.mod go.sum ./
 # then fetches only what it lacks. go.sum is checked against each module's recorded
 # hash, as with any module cache, and `go mod verify` re-checks the cache when a seed
 # was used.
+# Bounded retry of the module FETCH only (a proxy stream error is transient); go.sum still
+# verifies every module, and no build or test step is ever retried.
 RUN --mount=type=bind,from=gomodcache,target=/gomodcache-seed \
     seed=; \
     if [ -n "$(ls -A /gomodcache-seed)" ]; then \
@@ -61,7 +67,7 @@ RUN --mount=type=bind,from=gomodcache,target=/gomodcache-seed \
         mkdir -p "$(go env GOMODCACHE)/cache/download" && \
         cp -a /gomodcache-seed/. "$(go env GOMODCACHE)/cache/download/"; \
     fi && \
-    go mod download && \
+    for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done && \
     if [ -n "$seed" ]; then go mod verify; fi
 
 COPY . .
@@ -69,6 +75,7 @@ COPY . .
 # builder, and `GOARCH=` empty is how Go spells "use the default".
 ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-proxy ./cmd/wardyn-proxy
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-vmnet ./cmd/wardyn-vmnet
 
 # Runtime stage: $TARGETPLATFORM, COPY-only — no QEMU needed for arm64.
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
@@ -95,6 +102,7 @@ LABEL org.opencontainers.image.title="wardyn-proxy" \
 
 
 COPY --from=builder /out/wardyn-proxy /usr/local/bin/wardyn-proxy
+COPY --from=builder /out/wardyn-vmnet /usr/local/bin/wardyn-vmnet
 
 # Corporate build support, runtime half (see the builder stage above and
 # docs/adoption/corp-image-authoring.md's "Corporate-build convention"): this

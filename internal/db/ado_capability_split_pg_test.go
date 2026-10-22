@@ -188,7 +188,7 @@ func TestPG_ADOCapabilitySplit(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM run_policies WHERE name = 'q' AND NOT spec ? 'azure_devops_capabilities'`).Scan(&untouched); err != nil || untouched != 1 {
 		t.Errorf("a policy with no list gained one (count %d, %v)", untouched, err)
 	}
-	if got, want := list(`SELECT ceiling -> 'azure_devops_capabilities' FROM governance_profiles WHERE id = $1`, seed.governance),
+	if got, want := list(`SELECT ceiling -> 'azure_devops_capabilities' FROM governance_units WHERE id = $1`, seed.governance),
 		[]string{"build_execute", "release_execute", "packaging_write"}; !slices.Equal(got, want) {
 		t.Errorf("governance = %v, want %v", got, want)
 	}
@@ -251,7 +251,7 @@ func TestPG_ADOCapabilitySplit_SecondRunIsANoOp(t *testing.T) {
 		var out string
 		if err := pool.QueryRow(ctx, `SELECT (SELECT config::text FROM site_config)
 			|| (SELECT string_agg(spec::text, '|' ORDER BY name) FROM run_policies)
-			|| (SELECT string_agg(ceiling::text, '|' ORDER BY name) FROM governance_profiles)
+			|| (SELECT string_agg(ceiling::text, '|' ORDER BY name) FROM governance_units)
 			|| (SELECT string_agg(request::text, '|' ORDER BY name) FROM launch_presets)`).Scan(&out); err != nil {
 			t.Fatal(err)
 		}
@@ -261,6 +261,11 @@ func TestPG_ADOCapabilitySplit_SecondRunIsANoOp(t *testing.T) {
 	sql, err := migrationFS.ReadFile("migrations/0101_ado_capability_split.sql")
 	if err != nil {
 		t.Fatal(err)
+	}
+	// 0101 names governance_profiles, which 0201 renamed; a view under the old name stands in for it
+	// (a plain view is updatable), so the file itself runs unchanged.
+	if _, err := pool.Exec(ctx, `CREATE VIEW governance_profiles AS SELECT * FROM governance_units`); err != nil {
+		t.Fatalf("stand-in view: %v", err)
 	}
 	if _, err := pool.Exec(ctx, string(sql)); err != nil {
 		t.Fatalf("second run: %v", err)

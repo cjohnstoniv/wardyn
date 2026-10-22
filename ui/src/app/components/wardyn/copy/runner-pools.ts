@@ -28,6 +28,19 @@ export const RES = {
   /** "8 CPUs · 16 GB memory · 500 GB disk" */
   AMOUNTS: (cpus: number, memGB: number, diskGB: number) => `${cpus} ${cpus === 1 ? "CPU" : "CPUs"} · ${memGB} GB memory · ${diskGB} GB disk`,
   OFFLINE_NOTE: "This runner is offline. Its capacity isn't counted as available until it reconnects.",
+  // Board D2a (owner-approved 2026-10-20): a runner that registered but never connected. Every odd entry is
+  // shown as code; joined, they are the board's sentence character for character.
+  NEVER_CONNECTED_NOTE: [
+    "This runner registered but has never connected to this server. On that computer, check that wardyn-runnerd runs as a service (",
+    "wardyn-runnerd setup",
+    " installs one) and read its log: ",
+    "~/Library/Logs/wardyn/runnerd.log",
+    " on macOS, ",
+    "journalctl --user -u wardyn-runnerd",
+    " on Linux. Behind a proxy, the service needs its own ",
+    "HTTPS_PROXY",
+    ".",
+  ],
   RESOURCES: "Resources",
   RUNS_AT_ONCE: (n: number) => `Runs at once: ${n}`,
   RUNNING_NOW: (active: number, max: number) => `Running now: ${active} of ${max}`,
@@ -55,6 +68,8 @@ export const RUNNER_V6 = {
   LAST_SEEN: (when: string) => `Last seen ${when}`,
   /** What Last seen reads while the runner is online. */
   LAST_SEEN_NOW: "now",
+  // M-ATT-4: the line a runner shows in its first minute, in place of "Last seen now".
+  REGISTERED_JUST_NOW: "Registered just now",
   MACHINE: "Machine",
   OWNER: "Owner",
   POOLS: "Pools",
@@ -84,11 +99,7 @@ export const RUNNER_V6 = {
   AVAILABLE_LISTED: "Only the people, groups and roles an admin listed can add it. Change the list with wardyn runner remote people.",
   AVAILABLE_ON: (name: string) => `${name} is now available to people's pools`,
   AVAILABLE_OFF: (name: string) => `${name} is no longer available to people's pools`,
-  MINT_ONE_PER_COMPUTER: "One runner per computer is enough: it runs several of their runs at the same time, up to its Runs at once.",
-  MINT_START_LEAD: "Then start it:",
-  MINT_VM_DOCKER:
-    "On Docker Desktop, Rancher Desktop (dockerd engine) or another VM-backed engine, wardyn-runnerd finds the relay address itself and checks it at startup; pass --total-disk <GB> to register, since the VM hides the disk.",
-  MINT_ASKS_LIMITS: "It then asks for the runner's limits on that computer, prefilled with what it reports. Its owner can change them later in Your account → My runner.",
+  MINT_ONE_PER_COMPUTER: "One runner per computer is enough: it runs several of their runs at the same time, up to its \"Runs at once\" limit.",
 } as const;
 
 /**
@@ -129,14 +140,14 @@ export const LIMITS_DIALOG = {
   DISK: "Disk (GB)",
   REPORTED: (n: number) => `Reported: ${n}`,
   CALC: (tc: number, tm: number, td: number, n: number, pc: number, pm: number, pd: number) =>
-    `Total ÷ Runs at once: ${tc} ÷ ${n} = ${pc} ${pc === 1 ? "CPU" : "CPUs"} · ${tm} ÷ ${n} = ${pm} GB memory · ${td} ÷ ${n} = ${pd} GB disk. At least 1 CPU and 1 GB.`,
-  CALC_PENDING: "Total ÷ Runs at once is worked out when the numbers above are set.",
-  USE_SHARE: "Use total ÷ Runs at once",
+    `Total ÷ "Runs at once": ${tc} ÷ ${n} = ${pc} ${pc === 1 ? "CPU" : "CPUs"} · ${tm} ÷ ${n} = ${pm} GB memory · ${td} ÷ ${n} = ${pd} GB disk. At least 1 CPU and 1 GB.`,
+  CALC_PENDING: "Total ÷ \"Runs at once\" is worked out when the numbers above are set.",
+  USE_SHARE: "Use total ÷ \"Runs at once\"",
   SAVE_SETUP: "Save limits",
   SAVE: "Save",
   CANCEL: "Cancel",
   SAVED: (name: string) => `Limits for ${name} saved`,
-  ERR_RUNS: "Runs at once is a whole number, 1 or more.",
+  ERR_RUNS: "\"Runs at once\" is a whole number, 1 or more.",
   ERR_ABOVE_ZERO: "Set a number above 0.",
   ERR_PER_RUN: "Per run can't be more than the total.",
   ERR_DISK_WHOLE: "Disk is a whole number of GB.",
@@ -156,7 +167,8 @@ export const POOLS = {
   ORG_DEFAULT_NOTE: "The default seeds each person's New Run when they choose an organization pool. It grants nobody a pool.",
   ORG_NO_DEFAULT: "No organization default. People choose an organization pool each time.",
   ORG_EMPTY_TITLE: "No organization pools yet",
-  ORG_EMPTY_BODY: "Create one on the command line, as above. It then appears here.",
+  ORG_EMPTY_THEN: "It then appears here.",
+  ORG_CLI_COPY: "Copy",
   USER_TITLE: "User pools",
   USER_LEDE:
     "Every person's own pools, read-only. Only the owner can change a pool or choose its runners. A person's pools go when their data is erased. There is no organization default for user pools: people choose their own.",
@@ -333,18 +345,19 @@ export const POOL_FORM = {
   NARROWER: "narrower than its runners, optional",
   RUNS_UNIT: "runs",
   MAX_RUNS_HINT_EDIT: (n: number) => `Its runners allow ${n} runs at once in total. A run launched past this waits for a free slot.`,
-  MAX_RUNS_HINT_NEW: "Its runners' Runs at once add up to the most it can run. A run launched past this waits for a free slot.",
+  MAX_RUNS_HINT_NEW: "Its runners' \"Runs at once\" limits add up to the most it can run. A run launched past this waits for a free slot.",
   CPU: "CPU (CPUs)",
   MEMORY: "Memory (GB)",
   DISK: "Disk (GB)",
   DEFAULT: "Default",
   MAX_PER_RUN: "Maximum per run",
-  RUNNERS_ALLOW: (amount: string) => `Its runners allow up to ${amount} per run. Leave empty to use that.`,
+  QUALIFIER: "Optional. Leave empty to follow its runners, and it can only narrow them.",
+  RUNNERS_ALLOW: (amount: string) => `Its runners allow up to ${amount} per run.`,
   /**
    * pending owner wording: the approved text also said "This is checked against them when you add
    * runners.", which nothing does (a pool limit wider than its runners is accepted and never takes effect).
    */
-  RUNNERS_NOT_CHOSEN: "Its runners aren't chosen yet. Leave empty to follow them.",
+  RUNNERS_NOT_CHOSEN: "Its runners aren't chosen yet.",
   LIFETIME: "Lifetime",
   IDLE: "Idle stop",
   MAXIMUM: "Maximum",
@@ -380,10 +393,6 @@ export const POOL_FORM = {
 
 /** Your account -> My runner -> pools of a runner, and My pools (mock frames B1 to B16). */
 export const MY_POOLS = {
-  NO_RUNNER_NEXT: "Register one, then put it in one of your pools. You can create a pool first.",
-  REGISTER_ONE_PER_COMPUTER: "One runner per computer is enough: it runs several of your runs at the same time, up to its Runs at once.",
-  REGISTER_ASKS_LIMITS:
-    "It then asks for the runner's limits, prefilled with what this computer reports: total CPU, memory and disk across all its runs, the most one run may use, and how many runs at once. You can lower any of them, here later under Your account → My runner → Edit limits, or with wardyn runner set.",
   LIMITS_YOU_SET: "Limits you set",
   LIMITS_TO_SET_UP: "Limits to set up",
   REQUIRED: "Required",
@@ -391,7 +400,7 @@ export const MY_POOLS = {
   SET: "Set",
   LIMITS_NEEDED: "Every runner needs limits before it can run anything: in total, per run, and how many runs at once.",
   SUGGESTED: (total: string, runs: number, perRun: string) =>
-    `Suggested: half of what it reports as the total (${total}), ${runs} runs at once, and each run gets the total ÷ Runs at once (${perRun}).`,
+    `Suggested: half of what it reports as the total (${total}), ${runs} runs at once, and each run gets the total ÷ "Runs at once" (${perRun}).`,
   LIMITS_SUMMARY: (total: string, perRun: string, runs: number) => `Total ${total}, per run ${perRun}, ${runs} runs at once.`,
   SET_LIMITS: "Set limits",
   SET_LIMITS_FOR: (name: string) => `Set limits for ${name}`,

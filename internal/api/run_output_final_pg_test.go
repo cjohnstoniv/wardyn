@@ -287,7 +287,13 @@ func TestRunOutputPG_EraseIsAtomicAndHoldsAcrossARestart(t *testing.T) {
 	if l.count(`SELECT count(*) FROM run_outputs`) != 0 {
 		t.Fatal("a second server's finaliser recreated an erased row")
 	}
-	if c.srv.tailFor(r1.ID) != nil || tail.ring.buf != nil {
+	// C's chunk queue fences the same tail from its own goroutine when its next flush hits the
+	// tombstone: wait for it, then read the ring under the lock the fence writes it under.
+	c.srv.WaitBackground()
+	tail.mw.mu.Lock()
+	ringKept := tail.ring.buf != nil
+	tail.mw.mu.Unlock()
+	if c.srv.tailFor(r1.ID) != nil || ringKept {
 		t.Fatal("the tombstone hit left C's tail in memory")
 	}
 	if _, err := wc.Write([]byte("more\n")); err != nil {

@@ -128,7 +128,19 @@ export const test = base.extend({
       (route) => route.fulfill({ json: SCENARIO_POOLS.member }),
     );
 
+    // The page's console and a renderer crash, with the time each came, for a failed attempt's report. A
+    // page that stopped answering leaves no snapshot or screenshot, so this is what shows it.
+    const started = Date.now();
+    const pageLog: string[] = [];
+    const logLine = (what: string) => pageLog.push(`+${Date.now() - started}ms ${what}`);
+    page.on("console", (msg) => logLine(`console.${msg.type()} ${msg.text()}`));
+    page.on("crash", () => logLine("PAGE CRASHED"));
+
     await use(page);
+
+    if (testInfo.status !== testInfo.expectedStatus) {
+      await testInfo.attach("page-console.txt", { body: pageLog.join("\n") || "(no console output, no crash)", contentType: "text/plain" });
+    }
 
     // A spec's route splice that round-trips through route.fetch() can still be running when the body
     // ends (the shell polls, so a read lands at any moment). Closing the context then disposes that
@@ -160,27 +172,25 @@ export { expect };
 export type NavLabel =
   | "Runs"
   | "Approvals"
-  // 0.8.6 (ppl-p2) — right after Approvals, both admin tiers.
+  // 0.8.6 (ppl-p2) — first under Access (#3056), both admin tiers.
   | "People"
   | "Workspaces"
   | "Policies"
-  // 0.7 — sits between Policies and Permissions (app-shell.tsx's NAV_ITEMS), so
-  // the three read as one narrowing sequence. Never in MEMBER_NAV_PATHS.
+  // 0.7 — under Limits, after Policies (#3056). Never in MEMBER_NAV_PATHS.
   | "Governance"
   | "Permissions"
-  // 0.8 (UT-7a) — both admin tiers, beside Permissions.
+  // 0.8 (UT-7a) — both admin tiers, under Access.
   | "User types"
-  // CS-8 (design F-1) — right after Permissions, both admin tiers too.
+  // CS-8 (design F-1) — under Keys, both admin tiers too.
   | "Credentials"
   | "Secrets"
   | "Audit"
   | "Recordings"
   // A security admin's Admin view only (packet M-A).
-  | "Drives"
-  // #217's slot, under a divider (app-shell.tsx#SidebarNav): Setup and
+  | "User drives"
+  // #217's slot, under a divider (app-shell.tsx#SidebarNav): Getting started and
   // Settings in the Admin view, Getting started and Your account in the User
   // view.
-  | "Setup"
   | "Settings"
   | "Getting started"
   | "Your account";

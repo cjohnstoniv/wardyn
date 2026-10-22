@@ -1,0 +1,18 @@
+# flags, environment and managed preferences
+org_url=f-org (flag --org)
+proxy_image=f-img (flag --proxy-image)
+trusted_ca_file=/f/ca.pem (flag --trusted-ca-file)
+org_ca_file=/f/org.pem (flag --org-ca-file)
+recording_store=fs (flag --recording-store)
+# environment and managed preferences
+org_url=https://m.example (managed preference OrgURL)
+proxy_image=m-img (managed preference ProxyImage)
+trusted_ca_file=/m/ca.pem (managed preference TrustedCAFile)
+org_ca_file=/m/org.pem (managed preference OrgCAFile)
+recording_store=pg (managed preference RecordingStore)
+# environment only
+org_url= (default)
+proxy_image=e-img (environment WARDYN_PROXY_IMAGE)
+trusted_ca_file=/e/ca.pem (environment WARDYN_TRUSTED_CA_FILE)
+org_ca_file=/e/org.pem (environment WARDYN_ORG_CA_FILE)
+recording_store=off (environment WARDYN_RECORDING_STORE)

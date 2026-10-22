@@ -154,22 +154,44 @@ func residentForSandbox(class string) bool {
 	return class == placement.ClassEnvSecret || class == placement.ClassFileSecret
 }
 
+// residentFillOffered reports whether dispatch offers grant's value to the
+// organisation's fill (WARDYN_RUNNER_SECRET_PLACEHOLDERS, fillResident): an
+// env_secret or file_secret grant of a local run whose scope names a host.
+func (s *Server) residentFillOffered(run types.AgentRun, grant types.CredentialGrant) bool {
+	host, err := secretScopeHost(grant.Spec.Scope)
+	return s.cfg.RunnerSecretPlaceholders && run.Placement == types.PlacementLocal &&
+		residentForSandbox(residentClass(grant.Spec.Kind)) && err == nil && host != ""
+}
+
 // readResidentValue reads one runner_resident grant's value for the run's
 // runner from the operator's namespace, the one localGrantOrigin proved for a
 // resident grant, with no owner fallback. The read is marked SiteAudited and
 // recorded here as secret.read with purpose runner-resident, the grant, the
-// runner and its reported posture; the value then joins the run's masking
-// manifest, before dispatch completes it. An error means the value is not to
+// runner and its reported posture, or, for a value offered to the
+// organisation's fill (residentFillOffered), fill via_org in place of the
+// runner and posture: run.secret_placeholder.resolve then says where it went.
+// The value then joins the run's masking manifest, before dispatch completes it. An error means the value is not to
 // be used: the caller skips the grant as it skips any unreadable one.
 func (s *Server) readResidentValue(ctx context.Context, run types.AgentRun, grant types.CredentialGrant, secretName string) (residentValue, error) {
 	class := residentClass(grant.Spec.Kind)
 	if class == "" || grant.Delivery != types.GrantDeliveryResident || grant.RunID != run.ID || run.RunnerID == nil || s.cfg.Secrets == nil {
 		return residentValue{}, errors.New("api: the grant cannot be delivered runner_resident")
 	}
+	// The organisation's row is read here, so a ref bound to a person's own
+	// row is never served (an operator-owned run's own row is that one).
+	if grant.Spec.OwnerOnlyFor(secretName) && !run.OperatorOwned {
+		return residentValue{}, errors.New("api: the grant reads its owner's own secret, which is never delivered runner_resident")
+	}
 	data := map[string]any{"purpose": string(secretstore.PurposeRunnerResident), "grant_id": grant.ID, "runner_id": *run.RunnerID,
 		"delivery": class, "owner": "", "posture_source": types.RunnerPostureSourceRunnerAsserted}
 	if posture, err := s.runnerPosture(ctx, *run.RunnerID); err == nil && posture != nil {
 		data["posture"] = posture
+	}
+	if s.residentFillOffered(run, grant) {
+		delete(data, "runner_id")
+		delete(data, "posture")
+		delete(data, "posture_source")
+		data["fill"] = types.GrantDeliveryViaOrg
 	}
 	rctx, row := secretstore.SiteAudited(ctx)
 	val, err := s.cfg.Secrets.For("").Get(rctx, secretName)

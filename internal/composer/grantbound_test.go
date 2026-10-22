@@ -163,3 +163,33 @@ func TestAPIKeyPairingIncludesRequireTLS(t *testing.T) {
 		t.Error("an absent require_tls must compare as false on both sides — the upgrade pin")
 	}
 }
+
+// DuplicatePairing finds two entries naming one pairing (#2736), and nothing else: another secret,
+// another api_key header, or a kind with no stored secret is not a duplicate.
+func TestDuplicatePairing(t *testing.T) {
+	api := func(scope string, ownerOnly bool) types.GrantSpec {
+		return types.GrantSpec{Kind: types.GrantAPIKey, Scope: json.RawMessage(scope), OwnerOnly: ownerOnly}
+	}
+	gh := types.GrantSpec{Kind: types.GrantGitHubToken}
+	for _, c := range []struct {
+		name   string
+		grants []types.GrantSpec
+		i, j   int
+		ok     bool
+	}{
+		{"same pairing, owner_only differs", []types.GrantSpec{gh,
+			api(`{"host":"api.vendor.example","secret_name":"k"}`, true),
+			api(`{"host":"API.vendor.example.","secret_name":"k","header":"Authorization"}`, false)}, 1, 2, true},
+		{"same ssh_key pairing", []types.GrantSpec{sshKeyGrant(t, "github.com", "k", false, 0), sshKeyGrant(t, "github.com", "k", true, 60)}, 0, 1, true},
+		{"another secret", []types.GrantSpec{api(`{"host":"h.example","secret_name":"a"}`, false), api(`{"host":"h.example","secret_name":"b"}`, false)}, 0, 0, false},
+		{"another header", []types.GrantSpec{api(`{"host":"h.example","secret_name":"a"}`, false), api(`{"host":"h.example","secret_name":"a","header":"X-Key"}`, false)}, 0, 0, false},
+		{"no stored secret", []types.GrantSpec{gh, gh}, 0, 0, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			i, j, ok := DuplicatePairing(c.grants)
+			if i != c.i || j != c.j || ok != c.ok {
+				t.Errorf("DuplicatePairing = %d, %d, %v; want %d, %d, %v", i, j, ok, c.i, c.j, c.ok)
+			}
+		})
+	}
+}

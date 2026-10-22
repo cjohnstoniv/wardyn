@@ -95,7 +95,7 @@ test.describe("Run page — startup progress in the terminal hero (#1419)", () =
     await expect(page.getByText("This run hasn't started yet", { exact: false })).toHaveCount(0);
   });
 
-  test("Building: row, hint and header chip; the same visit then STARTING shows Build done", async ({ page }) => {
+  test("Building: row, hint and header sentence; the same visit then STARTING shows Build done", async ({ page }) => {
     let stage: Splice = { interactive: true, ...BUILDING, ageCreated: 5 * S };
     await spliceRun(page, "e2e fixture 0", () => stage);
     await openRun(page, "e2e fixture 0");
@@ -107,7 +107,7 @@ test.describe("Run page — startup progress in the terminal hero (#1419)", () =
       [RUN_STARTUP.STEP_TERMINAL, "pending"],
     ]);
     await expect(hint(page)).toHaveText(RUN_STARTUP.BUILD_HINT);
-    await expect(page.getByTestId("run-summary-header").getByText(RUN_STARTUP.STEP_BUILD)).toBeVisible();
+    await expect(page.getByTestId("run-summary-header").getByText(RUN_STARTUP.BUILD_HINT)).toBeVisible();
 
     // The build finished and the sandbox is coming up: the server blanks the
     // line for STARTING, and the page remembers it saw the build.

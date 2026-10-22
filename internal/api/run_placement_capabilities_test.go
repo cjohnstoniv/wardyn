@@ -185,7 +185,7 @@ func TestPlacementCapabilities_AnotherPersonsRunnerIsNotFound(t *testing.T) {
 			}
 			pausing := governanceCeiling{Limits: types.GovernanceLimits{RunLimits: types.RunLimits{PauseIdleAfterSec: 300}}}
 			req := createRunRequest{Placement: types.PlacementLocal, RunnerID: id.String()}
-			if ref := s.placementCapabilityRefusal(capsCtx, req, runPlacement{}, pausing); ref == nil || ref.status != http.StatusNotFound || ref.body.Reason != string(placement.ReasonRunnerNotFound) {
+			if ref := s.placementCapabilityRefusal(capsCtx, req, runPlacement{}, pausing, 0); ref == nil || ref.status != http.StatusNotFound || ref.body.Reason != string(placement.ReasonRunnerNotFound) {
 				t.Errorf("capability step = %+v, want 404 runner_not_found", ref)
 			}
 			w := httptest.NewRecorder()
@@ -296,20 +296,20 @@ func TestPlacementCapability_UnsupportedInterfaceRefused(t *testing.T) {
 	local := createRunRequest{Placement: types.PlacementLocal, RunnerID: id.String()}
 	pausing := governanceCeiling{Limits: types.GovernanceLimits{RunLimits: types.RunLimits{PauseIdleAfterSec: 300}}}
 
-	ref := s.placementCapabilityRefusal(capsCtx, local, runPlacement{}, pausing)
+	ref := s.placementCapabilityRefusal(capsCtx, local, runPlacement{}, pausing, 0)
 	if ref == nil || ref.body.Reason != string(placement.ReasonPlacementCapability) || ref.status != http.StatusUnprocessableEntity ||
 		!strings.Contains(ref.body.Error, "pause_idle_after_sec") {
 		t.Fatalf("refusal = %+v, want 422 placement_capability naming pause_idle_after_sec", ref)
 	}
-	if ref := s.placementCapabilityRefusal(capsCtx, local, runPlacement{}, governanceCeiling{}); ref != nil {
+	if ref := s.placementCapabilityRefusal(capsCtx, local, runPlacement{}, governanceCeiling{}, 0); ref != nil {
 		t.Errorf("no demand was made, yet: %+v", ref)
 	}
 	remoteReq := createRunRequest{Placement: types.PlacementRemote}
-	if ref := s.placementCapabilityRefusal(capsCtx, remoteReq, runPlacement{}, pausing); ref != nil {
+	if ref := s.placementCapabilityRefusal(capsCtx, remoteReq, runPlacement{}, pausing, 0); ref != nil {
 		t.Errorf("the deployment's own executor was asked: %+v", ref)
 	}
 	offline := createRunRequest{Placement: types.PlacementLocal, RunnerID: installRunner(t, s, false, laptopCaps(types.CC1)).String()}
-	if ref := s.placementCapabilityRefusal(capsCtx, offline, runPlacement{}, pausing); ref == nil || ref.body.Reason != string(placement.ReasonRunnerOffline) {
+	if ref := s.placementCapabilityRefusal(capsCtx, offline, runPlacement{}, pausing, 0); ref == nil || ref.body.Reason != string(placement.ReasonRunnerOffline) {
 		t.Errorf("an offline runner = %+v, want runner_offline", ref)
 	}
 }
@@ -380,8 +380,8 @@ func TestDenyPlacements_RefusedAtEveryDoor(t *testing.T) {
 				}
 			}
 			audit.mu.Unlock()
-			if rows != len(doors) || !recHasRefusal(audit, authz.ReasonGovernanceProfile, "runs.placement") {
-				t.Errorf("authz.denied{runs.placement} rows = %d, want %d under governance_profile", rows, len(doors))
+			if rows != len(doors) || !recHasRefusal(audit, authz.ReasonGovernanceUnit, "runs.placement") {
+				t.Errorf("authz.denied{runs.placement} rows = %d, want %d under governance_unit", rows, len(doors))
 			}
 			st.mu.Lock()
 			defer st.mu.Unlock()
@@ -431,8 +431,8 @@ func TestDenyPlacements_AbsentMeansPermitted(t *testing.T) {
 
 func TestDenyPlacements_ProfileDenyingBothRefusedAtWrite(t *testing.T) {
 	decode := func(limits string) string {
-		r := httptest.NewRequest(http.MethodPost, "/api/v1/governance/profiles", strings.NewReader(govLimitsBody(limits)))
-		_, msg := decodeGovernanceProfileRequest(httptest.NewRecorder(), r)
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/governance/units", strings.NewReader(govLimitsBody(limits)))
+		_, msg := decodeGovernanceUnitRequest(httptest.NewRecorder(), r)
 		return msg
 	}
 	const frozen = "deny_placements: a profile can't deny every placement — the people it binds could run nothing"
@@ -488,8 +488,8 @@ func TestResolveEnforcedConfinement_PlacementTable(t *testing.T) {
 // the admin token (no person) stays break-glass.
 func TestDenyPlacements_OperatorExemption(t *testing.T) {
 	ceiling := governanceCeiling{
-		Profile: &ResolvedProfile{ID: uuid.New(), Name: "walled"},
-		Limits:  types.GovernanceLimits{DenyPlacements: []types.Placement{types.PlacementRemote}},
+		Unit:   &ResolvedUnit{ID: uuid.New(), Name: "walled"},
+		Limits: types.GovernanceLimits{DenyPlacements: []types.Placement{types.PlacementRemote}},
 	}
 	for _, tc := range []struct {
 		name       string
@@ -552,7 +552,7 @@ func TestDenyPlacements_SourceScanDoor(t *testing.T) {
 		!strings.Contains(w.Body.String(), `walled`) {
 		t.Errorf("handler answer = %d %s, want 403 placement_denied naming walled", w.Code, w.Body.String())
 	}
-	if !recHasRefusal(audit, authz.ReasonGovernanceProfile, "runs.placement") {
+	if !recHasRefusal(audit, authz.ReasonGovernanceUnit, "runs.placement") {
 		t.Error("no authz.denied row for runs.placement")
 	}
 

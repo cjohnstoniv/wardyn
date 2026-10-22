@@ -101,9 +101,12 @@ export function RunnerCard({ f, onOpen, onOpenPool }: { f: FleetRunner; onOpen: 
           {shared && !shared.configured && <Chip tone="warning">{RUNNER_KIND.NOT_CONFIGURED}</Chip>}
           {self && self.state === "claimed" && (online || self.last_seen_at) && (
             <span className="text-xs text-muted-foreground" title={self.last_seen_at ? absoluteTime(self.last_seen_at) : undefined}>
-              {RUNNER_V6.LAST_SEEN(online ? RUNNER_V6.LAST_SEEN_NOW : relativeTime(self.last_seen_at ?? ""))}
+              {online && Date.now() - Date.parse(self.created_at) < 60_000
+                ? RUNNER_V6.REGISTERED_JUST_NOW
+                : RUNNER_V6.LAST_SEEN(online ? RUNNER_V6.LAST_SEEN_NOW : relativeTime(self.last_seen_at ?? ""))}
             </span>
           )}
+          {self && self.state === "claimed" && !online && !self.last_seen_at && <span className="text-xs text-muted-foreground">{RUNNER.NEVER_CONNECTED}</span>}
         </div>
         {waiting && self && (
           <p className="mb-2 text-xs text-muted-foreground">
@@ -123,7 +126,7 @@ export function RunnerCard({ f, onOpen, onOpenPool }: { f: FleetRunner; onOpen: 
       {counts && (
         <div className="min-w-0 px-3.5 pb-3 pt-2.5">
           {res ? <ResourceTable view={res} /> : <p className="text-body text-muted-foreground">{RES.LIMITS_NOT_SET}</p>}
-          {!online && <OfflineNote />}
+          {!online && <OfflineNote neverConnected={self?.state === "claimed" && !self.last_seen_at} />}
         </div>
       )}
     </li>

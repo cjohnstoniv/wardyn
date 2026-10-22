@@ -1,6 +1,8 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
+//go:build !windows
+
 package main
 
 import (
@@ -10,6 +12,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/foldersync"
 	"github.com/pkg/sftp"
 )
 
@@ -45,8 +48,8 @@ func TestSyncConnectionStatusAborts(t *testing.T) {
 		{"permission", &sftp.StatusError{Code: uint32(sftp.ErrSSHFxPermissionDenied)}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := syncAbort(context.Background(), tc.err); got != tc.abort {
-				t.Fatalf("syncAbort(%v) = %v, want %v", tc.err, got, tc.abort)
+			if got := foldersync.Abort(context.Background(), tc.err); got != tc.abort {
+				t.Fatalf("foldersync.Abort(%v) = %v, want %v", tc.err, got, tc.abort)
 			}
 		})
 	}

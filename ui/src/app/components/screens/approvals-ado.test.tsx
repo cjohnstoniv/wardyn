@@ -6,7 +6,7 @@
 // The /approvals list's Azure DevOps integration (plan slice S10): an
 // escalation row (kind tool_call, grant_id set, requested_scope.lane
 // "azure_devops") routes to AdoCapabilityCard instead of the generic
-// PendingCard, an ordinary tool_call row does NOT, and the screen's own
+// ApprovalCard, an ordinary tool_call row does NOT, and the screen's own
 // honesty sentence about tool_call enforcement is corrected. Its own file
 // rather than more cases in approvals.test.tsx — same reason
 // approvals-reauth.test.tsx gives: a different fixture, a different provider

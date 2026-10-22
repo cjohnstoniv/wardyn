@@ -30,3 +30,26 @@ func PGConn(t *testing.T, pool *pgxpool.Pool) *pgx.Conn {
 	})
 	return conn
 }
+
+// SetBoundaryNoLimits puts the Wardyn boundary in no_limits with an empty spec and limits: the
+// posture an upgraded install has. A test about that posture calls it right after db.Migrate; no
+// test writes the boundary row any other way.
+func SetBoundaryNoLimits(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	if _, err := pool.Exec(t.Context(), `
+		INSERT INTO governance_boundary (singleton, mode, spec, limits) VALUES (true, 'no_limits', '{}', '{}')
+		ON CONFLICT (singleton) DO UPDATE SET mode = 'no_limits', spec = '{}', limits = '{}', contact = NULL`); err != nil {
+		t.Fatalf("set the boundary to no_limits: %v", err)
+	}
+}
+
+// MarkSchemaUpgraded creates the migrator's tracking table on a schema no migration has run on, so
+// the next db.Migrate takes it for an upgrade and writes no fresh-install seed: the boundary stays in
+// no_limits and the audit log starts with no rows. For a test about an empty audit log.
+func MarkSchemaUpgraded(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	if _, err := pool.Exec(t.Context(), `CREATE TABLE IF NOT EXISTS schema_migrations (
+		filename TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())`); err != nil {
+		t.Fatalf("mark the schema upgraded: %v", err)
+	}
+}

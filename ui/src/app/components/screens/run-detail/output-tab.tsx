@@ -11,10 +11,13 @@ import { AlertTriangle, Loader2, Logs } from "lucide-react";
 import { HttpError } from "../../../lib/api/core";
 import { runOutput } from "../../../lib/api/run-output";
 import { useRecordingDisabled } from "../../../lib/hooks/use-recording-disabled";
-import type { RunOutput } from "../../../lib/types";
-import { RUN_COCKPIT, RUN_OUTPUT } from "../../wardyn/copy";
+import type { RunDetailAgent, RunOutput } from "../../../lib/types";
+import { RUN_AGENTS, RUN_COCKPIT, RUN_OUTPUT } from "../../wardyn/copy";
 import { CopyButton } from "../../wardyn/copy-button";
+import { Segmented } from "../../wardyn/segmented";
 import { Chip } from "../../wardyn/primitives";
+import { useAgentName } from "../../wardyn/use-agent-name";
+import { AgentsPanel, agentLines } from "./agents-panel";
 import { EmptyState, ErrorState } from "../../wardyn/states";
 
 const POLL_MS = 4000;
@@ -60,6 +63,9 @@ export function OutputTab({
   live,
   state,
   endedAt,
+  agents: declared,
+  runAgent,
+  runTask,
   onGoRecording,
 }: {
   runId: string;
@@ -68,6 +74,10 @@ export function OutputTab({
   /** The run's state: the nothing-kept sentence is only true for runs that did not end through a Wardyn stop. */
   state: string;
   endedAt?: string;
+  /** Every agent of a run with several agents, with its task; the output's own agent states stand in until the run read carries them. The Agents panel and the output filter show for two or more. */
+  agents?: readonly RunDetailAgent[];
+  runAgent?: string;
+  runTask?: string;
   onGoRecording: () => void;
 }) {
   const [out, setOut] = React.useState<RunOutput | null>(null);
@@ -81,6 +91,20 @@ export function OutputTab({
   const [showLoading, setShowLoading] = React.useState(false);
   const recordingOff = useRecordingDisabled() === true;
   const stopped = state === "STOPPED";
+  const agents: readonly RunDetailAgent[] = declared?.length ? declared : (out?.agents ?? []).map(({ agent }) => ({ agent }));
+  const multi = agents.length >= 2;
+  const [filter, setFilter] = React.useState("all");
+  const agentName = useAgentName();
+  // The Agents panel leads whatever the output has to say, a refusal included.
+  const withPanel = (body: React.ReactNode) =>
+    multi ? (
+      <div className="space-y-4">
+        <AgentsPanel agents={agents} states={out?.agents} runAgent={runAgent ?? ""} runTask={runTask ?? ""} live={live} />
+        {body}
+      </div>
+    ) : (
+      body
+    );
 
   React.useEffect(() => {
     if (loaded) {
@@ -144,7 +168,7 @@ export function OutputTab({
   }, [runId, live, stopped, endedAt, attempt]);
 
   if (!loaded) {
-    return (
+    return withPanel(
       <div className="max-w-4xl text-sm text-muted-foreground" aria-busy="true">
         {showLoading && (
           <div role="status" className="flex items-center gap-2">
@@ -152,12 +176,12 @@ export function OutputTab({
             <span>{RUN_OUTPUT.loading}</span>
           </div>
         )}
-      </div>
+      </div>,
     );
   }
 
   if (refusal !== null) {
-    return (
+    return withPanel(
       <div
         className="max-w-4xl rounded-xl border border-border bg-card"
         data-testid="run-output-refusal"
@@ -170,7 +194,7 @@ export function OutputTab({
           setRetrying(true);
           setAttempt((n) => n + 1);
         })}
-      </div>
+      </div>,
     );
   }
 
@@ -187,19 +211,31 @@ export function OutputTab({
   const gapId = `${noticeId}-gap`;
   const describedBy = [recording && recoveredId, o.capture_gap && gapId].filter(Boolean).join(" ") || undefined;
   // Neither a recovery nor a gap establishes that the run printed nothing.
-  const cleanEmpty = o.output === "" && !recording && !o.capture_gap;
-  return (
+  // One agent's lines keep their prefix, so a filtered view still says who printed what.
+  const shown = multi && filter !== "all" ? agentLines(o.output, filter) : o.output;
+  const cleanEmpty = shown === "" && !recording && !o.capture_gap;
+  return withPanel(
     <div className="max-w-4xl space-y-3 rounded-xl border border-border bg-card p-4">
       <div className="flex flex-wrap items-center gap-2">
         <span className="label-eyebrow">{RUN_OUTPUT.eyebrow}</span>
         <Chip>{sourceLabel}</Chip>
         <Chip tone={o.complete ? "neutral" : "info"}>{o.complete ? RUN_OUTPUT.final : RUN_OUTPUT.live}</Chip>
-        <span className="ml-auto flex items-center gap-2">
+        <span className="ml-auto flex flex-wrap items-center gap-2">
+          {multi && (
+            <span role="group" aria-label={RUN_AGENTS.filterLabel}>
+              <Segmented
+                size="compact"
+                value={filter}
+                onChange={setFilter}
+                options={[{ value: "all", label: RUN_AGENTS.filterAll }, ...agents.map((a) => ({ value: a.agent, label: agentName(a.agent) }))]}
+              />
+            </span>
+          )}
           {o.complete && o.captured_at && (
             <span className="text-xs text-muted-foreground">{RUN_OUTPUT.capturedAt(o.captured_at)}</span>
           )}
           <CopyButton
-            text={o.output}
+            text={shown}
             label={RUN_OUTPUT.copyLabel}
             className="gap-1.5 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
           >
@@ -226,13 +262,13 @@ export function OutputTab({
         {cleanEmpty ? (
           <span className="text-muted-foreground">{o.complete ? RUN_OUTPUT.emptyFinal : RUN_OUTPUT.emptyLive}</span>
         ) : (
-          o.output
+          shown
         )}
       </pre>
       <p className="text-xs text-muted-foreground">
         {RUN_OUTPUT.cliHint} <span className="font-mono">wardyn run output {runId}</span>
       </p>
-    </div>
+    </div>,
   );
 }
 

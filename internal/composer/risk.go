@@ -184,11 +184,12 @@ func Grade(run RunInput, spec types.RunPolicySpec) []RiskItem {
 		gradeGrant(add, i, g)
 	}
 
-	// Workspace mounts: read-write host bind = host writes persist.
+	// Workspace mounts: read-write host bind = host writes persist. The value names the target only,
+	// for every reader: a mount's host path is the super admin's to read.
 	for i, m := range spec.WorkspaceMounts {
 		ro := m.ReadOnlyOrDefault()
 		field := fmt.Sprintf("workspace_mounts[%d]", i)
-		val := fmt.Sprintf("%s→%s (%s)", m.Source, m.Target, roLabel(ro))
+		val := fmt.Sprintf("%s (%s)", m.Target, roLabel(ro))
 		if ro {
 			add(field, val, RiskLow, "Read-only host mount; the agent cannot modify host files.", "1")
 		} else {

@@ -13,7 +13,9 @@ import { NR_HARNESSES } from "../../../wardyn/copy/new-run/harnesses";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { NR_RUN } from "../../../wardyn/copy/new-run/run";
 import { NR_SHAPE } from "../../../wardyn/copy/new-run/shape";
+import { NR_TOOLS } from "../../../wardyn/copy/new-run/tools";
 import { NR_TEMPLATES } from "../../../wardyn/copy/new-run/templates";
+import { DRIVE_REFUSAL_REASON } from "../../../../lib/drive-refusals";
 import type { SetupItem } from "../../../../lib/types/preflight";
 import type { TemplateSetupNeed } from "../../../../lib/types/templates";
 import {
@@ -21,9 +23,10 @@ import {
 } from "../draft/field-homes";
 import type { NewRunLocation } from "../draft/new-run-url";
 import type { RunIntent } from "../draft/run-intent";
-import type { StepIssue, StepIssueCode } from "../lenses/step-issues";
+import { APP_PROBLEM_CODES, type AppProblemCode, type StepIssue, type StepIssueCode } from "../lenses/step-issues";
+import { appIssueText } from "../steps/run/app-issue-text";
 
-export type BlockerKind = "local" | "unsupported" | "template_setup" | "template_unread" | "refusal" | "setup_item" | "stale";
+export type BlockerKind = "local" | "gateway_off" | "unsupported" | "template_setup" | "template_unread" | "refusal" | "setup_item" | "stale";
 
 export interface Blocker {
   id: string;
@@ -33,6 +36,8 @@ export interface Blocker {
   to?: NewRunLocation;
   /** The one field it names, when it names one: only that field's Review group shows it. */
   field?: string;
+  /** A second line under the text: what else the person can do. */
+  hint?: string;
 }
 
 /** The screen a field's fix lives on. Review and excluded fields have none to link to. */
@@ -41,18 +46,22 @@ export function locationOfHome(home: FieldHome | undefined): NewRunLocation | un
   return home === "document" ? { screen: "document", format: "yaml" } : { screen: "step", step: home };
 }
 
-/** Every local issue code has a sentence of its own. */
-const ISSUE_TEXT: Record<StepIssueCode, string> = {
+/** Every local issue code has a sentence of its own; a port row's problems name the name or port, so appIssueText builds them. */
+const ISSUE_TEXT: Record<Exclude<StepIssueCode, AppProblemCode>, string> = {
   shape_required: NR_SHAPE.SHAPE_REQUIRED,
   harness_required: NR_HARNESSES.HARNESS_REQUIRED,
   task_required: NR_HARNESSES.TASK_ERROR,
+  agent_task_required: NR_HARNESSES.AGENT_TASK_ERROR,
   command_required: NR_RUN.COMMAND_REQUIRED,
   pool_required: NR_RUN.POOL_HELP,
+  app_required: NR_RUN.PORT_REQUIRED,
   main_drive_size_required: NR_FILES.SIZE_ERROR,
   files_choice_required: NR_FILES.CHOOSE_FILES,
   starts_here_required: NR_FILES.STARTS_HERE_REQUIRED,
   doc_invalid: NR_DOCUMENT.DOC_INVALID,
 };
+
+const isAppProblem = (code: StepIssueCode): code is AppProblemCode => (APP_PROBLEM_CODES as readonly StepIssueCode[]).includes(code);
 
 /** "inline_policy.model_provider" as "Model provider": the field named, not a sentence about it. */
 const fieldLabel = (field: string): string => {
@@ -69,13 +78,23 @@ export function specifies(intent: RunIntent, field: string): boolean {
 
 export interface BlockerInput {
   issues: readonly StepIssue[];
+  /** The draft keeps its work folder as a drive and the person is at their drive limit (#1991). */
+  keepLimit?: { text: string; hint: string };
   unsupported: readonly string[];
+  /** The refusal for harnesses no one declared image carries together (combinationReason), when the draft has them. */
+  combination?: string;
   templateNeeds: readonly TemplateSetupNeed[];
   /** The template's needs are unread or could not be read: fail closed with the stale line. */
   templateUnread?: boolean;
   /** The server's refusal of this draft: its own sentence and reason. */
   refusal: { text: string; reason: string } | null;
   setupItems: readonly SetupItem[];
+  /** A local MCP server on for a harness that cannot apply the rules it is under: the run would be refused. */
+  localMcp?: readonly { harness: string; server: string }[];
+  /** The harness's display name; its id until the roster answers. */
+  harnessLabel?: (id: string) => string;
+  /** An application server is drafted and this server's web app gateway is off, so its ports could never be opened. */
+  gatewayOff?: boolean;
   /** The result for this draft is missing or older than a minute. */
   stale: boolean;
 }
@@ -83,8 +102,10 @@ export interface BlockerInput {
 export function buildBlockers(input: BlockerInput): Blocker[] {
   const out: Blocker[] = [];
   for (const i of input.issues) {
-    out.push({ id: `local:${i.code}`, kind: "local", text: ISSUE_TEXT[i.code], to: locationOfHome(i.home) });
+    out.push({ id: `local:${i.code}`, kind: "local", text: isAppProblem(i.code) ? appIssueText({ ...i, code: i.code }) : ISSUE_TEXT[i.code], to: locationOfHome(i.home) });
   }
+  if (input.combination) out.push({ id: "local:combination", kind: "local", text: input.combination, to: locationOfHome("harnesses") });
+  if (input.keepLimit) out.push({ id: "keep:limit", kind: "local", ...input.keepLimit, to: locationOfHome("files"), field: "keep_work_folder" });
   for (const path of input.unsupported) {
     out.push({ id: `unsupported:${path}`, kind: "unsupported", text: NR_REVIEW.BLOCKER_UNSUPPORTED(path), to: locationOfHome(homeOfPath(path) ?? "document"), field: path });
   }
@@ -92,12 +113,25 @@ export function buildBlockers(input: BlockerInput): Blocker[] {
     out.push({ id: `template:${need.field}`, kind: "template_setup", text: NR_TEMPLATES.NEEDS_SETUP(fieldLabel(need.field)), to: locationOfHome(homeOfPath(need.field)), field: need.field });
   }
   if (input.templateUnread) out.push({ id: "template:unread", kind: "template_unread", text: NR_REVIEW.BLOCKER_STALE });
-  if (input.refusal) {
+  for (const c of input.localMcp ?? []) {
+    const name = input.harnessLabel?.(c.harness) ?? c.harness;
+    out.push({ id: `local_mcp:${c.harness}:${c.server}`, kind: "refusal", text: NR_TOOLS.MCP_REFUSED(name, c.server), to: { screen: "step", step: "tools" } });
+  }
+  // The server's own refusal of the same conflict says it in other words; the blocker above stands for it. The keep
+  // blocker likewise says the member limit.
+  if (
+    input.refusal &&
+    !(input.localMcp?.length && input.refusal.reason === "request_field_unavailable") &&
+    !(input.keepLimit && input.refusal.reason === DRIVE_REFUSAL_REASON.MEMBER_LIMIT_REACHED)
+  ) {
     const field = (FIELD_OF_REASON as Record<string, string | undefined>)[input.refusal.reason];
     out.push({ id: "refusal", kind: "refusal", text: input.refusal.text, to: locationOfHome(homeOfReason(input.refusal.reason)), ...(field && { field }) });
   }
   for (const item of input.setupItems) {
     out.push({ id: `setup:${item.id}`, kind: "setup_item", text: item.detail || item.label, to: { screen: "step", step: "tools" } });
+  }
+  if (input.gatewayOff) {
+    out.push({ id: "gateway_off", kind: "gateway_off", text: NR_REVIEW.BLOCKER_GATEWAY_OFF, to: { screen: "step", step: "run" }, field: "inline_policy.ui_apps" });
   }
   // A stale result only matters when nothing else already holds Launch.
   if (input.stale && out.length === 0) out.push({ id: "stale", kind: "stale", text: NR_REVIEW.BLOCKER_STALE });

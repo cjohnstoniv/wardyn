@@ -145,7 +145,7 @@ func TestPG_PoolLifetimeBoundsTheRunEnd(t *testing.T) {
 func TestPG_PoolEndUnderTighterGovernance(t *testing.T) {
 	e := newPlacementEnv(t)
 	pool := e.lifetimePool("Two hours", `{"default_sec":3600,"max_sec":7200}`)
-	profile, err := e.pg.UpsertGovernanceProfile(context.Background(), types.GovernanceProfile{
+	profile, err := e.pg.UpsertGovernanceUnit(context.Background(), types.GovernanceUnit{
 		Name: "half hour", CreatedBy: "seed", Ceiling: govTestPolicy,
 		Limits: types.GovernanceLimits{RunLimits: types.RunLimits{MaxEndAheadSec: 1800, AllowNoEnd: true, UserChangesLimits: true}},
 	})

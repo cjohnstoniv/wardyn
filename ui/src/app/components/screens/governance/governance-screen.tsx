@@ -34,8 +34,9 @@ import * as React from "react";
 import { AlertTriangle, Loader2, ShieldCheck } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
-import { governance as api, type GovernanceProfile, type GovernanceSnapshot } from "../../../lib/api/governance";
+import { governance as api, type GovernanceUnit, type GovernanceSnapshot } from "../../../lib/api/governance";
 import type { GovernanceChange } from "../../../lib/types";
+import { DEFAULT_GOVERNANCE_UNIT_ID } from "../../../lib/types/governance";
 import { absoluteTime, getErrorMessage, relativeTime } from "../../../lib/format";
 import { BASELINE, CHANGES, DELIVERY, GOVERNANCE as GOV } from "../../../lib/governance-copy";
 import { ACCESS_STATE, PEOPLE } from "../../../lib/people-access-copy";
@@ -51,10 +52,12 @@ import {
 } from "../../ui/alert-dialog";
 import { Button } from "../../ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../ui/table";
-import { Tabs, TabsList, TabsTrigger } from "../../ui/tabs";
+import { PageTabs } from "../../wardyn/page-tabs";
 import { Mono } from "../../wardyn/code-block";
 import { useSecurityOperator } from "../../wardyn/operator-context";
 import { PageHeader } from "../../wardyn/page-header";
+import { PageContainer } from "../../wardyn/page-container";
+import { HowItWorks } from "../../wardyn/how-it-works";
 import { SafetyMeter } from "../../wardyn/safety-meter";
 import { EmptyState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../../wardyn/states";
 import { SECURITY_ONLY_REASON } from "../../wardyn/copy";
@@ -81,8 +84,8 @@ export function GovernanceScreen() {
   // on their tier, not a control plane to retry.
   const [status, setStatus] = React.useState<ScreenStatus>("loading");
   // null = closed; {profile: null} = a new profile; {profile: p} = editing p.
-  const [editing, setEditing] = React.useState<{ profile: GovernanceProfile | null } | null>(null);
-  const [toDelete, setToDelete] = React.useState<GovernanceProfile | null>(null);
+  const [editing, setEditing] = React.useState<{ profile: GovernanceUnit | null } | null>(null);
+  const [toDelete, setToDelete] = React.useState<GovernanceUnit | null>(null);
   const [deleteError, setDeleteError] = React.useState<{ title?: string; message: string } | null>(null);
   const [omission, setOmission] = React.useState<string[]>([]);
   const [busy, setBusy] = React.useState(false);
@@ -116,7 +119,16 @@ export function GovernanceScreen() {
     api
       .getGovernance()
       .then((s) => {
-        setSnap(s);
+        // The console hides the Default unit until the tree screen lands: it is the deployment root, not a
+        // profile. A unit based on it reads as based on the deployment (no parent), as before the tree; the
+        // names keep Default for a membership that points at it.
+        setSnap({
+          ...s,
+          profiles: s.profiles
+            .filter((p) => p.id !== DEFAULT_GOVERNANCE_UNIT_ID)
+            .map((p) => (p.parent_id === DEFAULT_GOVERNANCE_UNIT_ID ? { ...p, parent_id: undefined } : p)),
+          unit_names: Object.fromEntries(s.profiles.map((p) => [p.id, p.name])),
+        });
         setStatus("ready");
       })
       .catch((e) => setStatus(loadFailStatus(e)));
@@ -131,23 +143,23 @@ export function GovernanceScreen() {
   React.useEffect(load, [load]);
 
   const assignedCount = React.useCallback(
-    (p: GovernanceProfile) => snap.assignments.filter((a) => a.profile_id === p.id).length,
+    (p: GovernanceUnit) => snap.assignments.filter((a) => a.unit_id === p.id).length,
     [snap.assignments],
   );
 
-  const openEditor = (profile: GovernanceProfile | null) => {
+  const openEditor = (profile: GovernanceUnit | null) => {
     setOmission([]);
     setSubmitted(false);
     setEditing({ profile });
   };
 
-  const openDelete = (p: GovernanceProfile) => {
+  const openDelete = (p: GovernanceUnit) => {
     setDeleteError(null);
     setSubmitted(false);
     setToDelete(p);
   };
 
-  const del = async (p: GovernanceProfile) => {
+  const del = async (p: GovernanceUnit) => {
     setBusy(true);
     try {
       await api.deleteProfile(p.id);
@@ -192,25 +204,28 @@ export function GovernanceScreen() {
   const [deleteHead, deleteBody] = question(toDelete ? GOV.DELETE_CONFIRM(toDelete.name) : "");
 
   return (
-    <div className="mx-auto max-w-[1120px] px-6 py-6">
+    <PageContainer width="list">
       <PageHeader title={GOV.TITLE} description={GOV.LEAD} />
+      <HowItWorks id="governance" title={GOV.HOW_TITLE} className="-mt-2 mb-4">
+        <p>{GOV.HOW_BODY}</p>
+      </HowItWorks>
 
       {status !== "forbidden" && status !== "error" && (
-        <Tabs
+        <PageTabs
+          className="mt-6"
           value={tab}
           onValueChange={(v) => setSearchParams(v === "profiles" ? {} : { tab: v }, { replace: true })}
-          className="mt-6"
-        >
-          {/* Scrolls inside itself at phone width; justify-start so the first tab is never clipped (#2896). */}
-          <TabsList className="max-w-full justify-start overflow-x-auto">
-            <TabsTrigger value="profiles">{GOV.PROFILES_TITLE}</TabsTrigger>
-            {securityOperator && <TabsTrigger value="runner-credentials">{DELIVERY.TAB}</TabsTrigger>}
-            {securityOperator && <TabsTrigger value="egress-baseline">{BASELINE.TAB}</TabsTrigger>}
-            <TabsTrigger value="changes">
-              {changes.length > 0 ? CHANGES.TAB_COUNT(changes.length) : CHANGES.TAB}
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
+          tabs={[
+            { value: "profiles", label: GOV.PROFILES_TITLE },
+            ...(securityOperator
+              ? [
+                  { value: "runner-credentials", label: DELIVERY.TAB },
+                  { value: "egress-baseline", label: BASELINE.TAB },
+                ]
+              : []),
+            { value: "changes", label: changes.length > 0 ? CHANGES.TAB_COUNT(changes.length) : CHANGES.TAB },
+          ]}
+        />
       )}
 
       {status !== "forbidden" && status !== "error" && deliveryVisited && securityOperator && (
@@ -249,7 +264,7 @@ export function GovernanceScreen() {
       ) : (
         // Hidden, never unmounted, on the Changes tab: an open editor keeps what was typed in it.
         <div hidden={tab !== "profiles"}>
-          <section className="mt-6 overflow-hidden rounded-xl border border-border bg-card">
+          <section className="mt-6 overflow-clip rounded-xl border border-border bg-card">
             <div className="flex flex-wrap items-start justify-between gap-3 px-6 pt-5">
               <div>
                 <h2 className="text-sm font-medium text-foreground">{GOV.PROFILES_TITLE}</h2>
@@ -478,6 +493,6 @@ export function GovernanceScreen() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </PageContainer>
   );
 }

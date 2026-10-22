@@ -4,8 +4,10 @@
 package runner
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os/exec"
 	"slices"
 	"strings"
@@ -257,7 +259,7 @@ func TestBuildProxyConfig_LocalModels(t *testing.T) {
 // TestBuildProxyConfig_Attribution: the attribution round-trips through the
 // sidecar's own strict decoder, and an absent one leaves no key behind.
 func TestBuildProxyConfig_Attribution(t *testing.T) {
-	want := &policyref.Ref{Source: policyref.SourceProfile, Name: "Team A", RequestURL: "https://help.example.com/access"}
+	want := &policyref.Ref{Source: policyref.SourceUnit, Name: "Team A", RequestURL: "https://help.example.com/access"}
 	pc := ProxyConfig{RunToken: "tok", ControlPlaneURL: "http://127.0.0.1:1", Attribution: want}
 	b, err := BuildProxyConfig(uuid.New(), pc, ProxyListenPort)
 	if err != nil {
@@ -339,5 +341,20 @@ func TestBuildProxyConfig_CarriesControlPlaneCA(t *testing.T) {
 	}
 	if cfg.ControlPlaneCAPEM != string(ca.CertPEM) {
 		t.Fatal("control_plane_ca_pem did not reach the sidecar verbatim")
+	}
+}
+
+// A runner answers an end whose AWS cache wipe failed as the successful end it was, since the
+// wire has no code for it; every other answer passes through.
+func TestKeptDespiteAWSCacheWipe(t *testing.T) {
+	ctx := context.Background()
+	if err := KeptDespiteAWSCacheWipe(ctx, "ref", fmt.Errorf("%w: container is paused", ErrAWSCacheWipeFailed)); err != nil {
+		t.Fatalf("a wipe failure answered %v, want nil", err)
+	}
+	if err := KeptDespiteAWSCacheWipe(ctx, "ref", ErrEndUnsupported); !errors.Is(err, ErrEndUnsupported) {
+		t.Fatalf("ErrEndUnsupported answered %v", err)
+	}
+	if err := KeptDespiteAWSCacheWipe(ctx, "ref", nil); err != nil {
+		t.Fatalf("nil answered %v", err)
 	}
 }

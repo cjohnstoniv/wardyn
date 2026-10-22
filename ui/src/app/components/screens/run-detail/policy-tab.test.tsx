@@ -178,7 +178,7 @@ describe("PolicyTab — the source line for each kind (S-3..S-10)", () => {
     ["saved, deleted, no name", { kind: "stored", deleted: true }, "Started from a saved policy that has since been deleted."],
     ["inline", { kind: "inline" }, "Started from a policy written for this run."],
     ["default", { kind: "default" }, "Started from your organization's default policy."],
-    ["profile", { kind: "profile", name: "walled" }, "Started from the walled governance profile."],
+    ["profile", { kind: "unit", name: "walled" }, "Started from the walled governance profile."],
     ["unknown", { kind: "unknown" }, "Wardyn set this policy for this run."],
   ];
   it.each(cases)("%s", async (_n, source, text) => {
@@ -277,8 +277,8 @@ describe("PolicyTab — changes grouped by cause", () => {
     show(
       view({
         changes: [
-          change({ cause: "profile", field: "denied_domains", added: ["corp.example"], profile: "walled" }),
-          change({ cause: "profile", field: "denied_domains", added: ["paste.example"], profile: "strict" }),
+          change({ cause: "unit", field: "denied_domains", added: ["corp.example"], unit: "walled" }),
+          change({ cause: "unit", field: "denied_domains", added: ["paste.example"], unit: "strict" }),
         ],
       }),
     );
@@ -565,9 +565,9 @@ describe("PolicyTab — hidden values", () => {
   it("a member sees Hidden, with the reason on hover, in place of the folder source", async () => {
     show(view({ spec: redactedSpec, redacted: true }));
     await ready();
-    const hidden = within(sectionFor("Files and code")).getByRole("note", { name: "Hidden. Only admins can see this." });
+    const hidden = within(sectionFor("Files and code")).getByRole("note", { name: "Hidden. Only a super admin can see this." });
     expect(hidden).toHaveTextContent("Hidden");
-    expect(hidden).toHaveAttribute("title", "Only admins can see this.");
+    expect(hidden).toHaveAttribute("title", "Only a super admin can see this.");
     expect(sectionFor("Files and code")).not.toHaveTextContent("<redacted>");
     expect(sectionFor("Files and code")).toHaveTextContent("/home/agent/work/shared");
   });

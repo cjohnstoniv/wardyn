@@ -26,15 +26,18 @@ type flakyCeilingStore struct {
 	calls atomic.Int64
 }
 
-func (s *flakyCeilingStore) ResolveGovernanceProfile(context.Context, []string, []string, string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (s *flakyCeilingStore) ResolveGovernanceUnit(context.Context, []string, []string, string) (*types.GovernanceUnit, types.CapabilitySubjectType, error) {
 	if s.calls.Add(1) == 1 {
-		return &types.GovernanceProfile{ID: uuid.New(), Name: "walled", Ceiling: types.RunPolicySpec{
+		return &types.GovernanceUnit{ID: uuid.New(), Name: "walled", Ceiling: types.RunPolicySpec{
 			MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"},
 		}}, types.CapabilitySubjectUser, nil
 	}
 	return nil, "", context.DeadlineExceeded
 }
-func (s *flakyCeilingStore) HasGroupTierAssignments(context.Context) (bool, error) { return false, nil }
+func (s *flakyCeilingStore) HasGroupTierMemberships(context.Context) (bool, error) { return false, nil }
+func (s *flakyCeilingStore) ListGovernanceMemberships(context.Context) ([]types.GovernanceMembership, error) {
+	return nil, nil
+}
 func (s *flakyCeilingStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }
@@ -63,7 +66,7 @@ func (s *flakyCeilingStore) GetSiteConfig(context.Context) (types.SiteConfig, er
 // ceiling reads per create cannot disagree" — given an implementing mechanism.
 //
 // It had none. A member create took THREE independent, uncached, untransacted
-// reads of governance_assignments (denyUserGovernance -> resolveRunPolicy ->
+// reads of governance_memberships (denyUserGovernance -> resolveRunPolicy ->
 // filterUserGrants) and dispatch a fourth, while resolveRunPolicy's own
 // comment asserted "a create must never resolve two different ceilings for one
 // request" and governance.go's called the repetition "PF-13's accepted double
@@ -171,4 +174,8 @@ func TestCeilingRefusalCarriesItsRemedy(t *testing.T) {
 		t.Errorf("list secrets 403 body = %s\nwant it to name the remedy — the refusal is correct, the message was "+
 			"the defect: a human told only \"groups_snapshot_stale\" opens a support ticket", got.Body.String())
 	}
+}
+
+func (s *flakyCeilingStore) ListMembershipsFor(ctx context.Context, users, groups []string, userType string) ([]store.MembershipMatch, error) {
+	return membershipsFromResolve(s.ResolveGovernanceUnit(ctx, users, groups, userType))
 }

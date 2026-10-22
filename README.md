@@ -30,11 +30,12 @@
 **Your own machine** — no SSO; the installer mints an admin token and prints where to read it (`grep WARDYN_ADMIN_TOKEN ~/.wardyn/.env`), rather than into your scrollback:
 
 ```sh
-curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.9.5/install.sh | sh
+curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.9.8/install.sh | sh
 ```
 
 - Cosign-signed, not tip-of-`main` — only the script is pinned; it installs the newest release (`WARDYN_VERSION` overrides).
 - Installs into `~/.wardyn`, prints the console URL (<http://127.0.0.1:8080>) — sign in by pasting the minted admin token (`WARDYN_HOME`, `WARDYN_PORT` override).
+- **Only the CLI**, for an organisation's console: `install-cli.sh` (Windows: `install-cli.ps1`), a release asset ([install paths](docs/runner-registration.md#install-the-cli)).
 - **A managed laptop, one daemon per developer** — desktop profile a′: [`docs/DESKTOP.md`](docs/DESKTOP.md).
 
 ### Multi-user — an admin sets the ceiling, members run inside it
@@ -123,7 +124,7 @@ wardyn setup status   # what's configured + the next command per unmet check
 - **Docker** + `compose` v2 (Postgres rides in the compose file).
   - Fence/CC1 needs nothing more; Wall/CC2 adds gVisor's `runsc`, Vault/CC3 `/dev/kvm` + Kata — `wardyn setup wall|vault` prints the steps for your host.
 - **Go 1.26+**, **Node 22 + pnpm 9** — only to build from source.
-- `go install …/cmd/wardyn@latest` gives the **CLI** only; `wardynd` needs `-tags docker` + a built `ui/dist` — use `make setup` or the image.
+- The **CLI** needs no toolchain: each release publishes `wardyn-<os>-<arch>` ([runner install](docs/runner-registration.md#set-up-a-runner)). `go install …/cmd/wardyn@latest` builds it yourself; `wardynd` needs `-tags docker` + a built `ui/dist` — use `make setup` or the image.
 
 ## What you get
 

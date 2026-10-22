@@ -99,7 +99,7 @@ vi.mock("../../../lib/api/workspaces", () => ({
 }));
 
 // The member's own ceiling, named by GET /policies/default. The default answer
-// carries no governance_profile_name — an UNASSIGNED member, which is what
+// carries no unit_name — an UNASSIGNED member, which is what
 // every case below except the governance ones is.
 const getDefaultPolicyMock = vi.fn();
 vi.mock("../../../lib/api/policies", () => ({
@@ -146,7 +146,7 @@ function renderPage(me: Me = baseMe(), shell: SetupStatus | null = null, search 
           operator={false}
           securityOperator={false}
           userDrive={me.user_drive}
-          userDriveDeniedByProfile={me.user_drive_denied_by_profile}
+          userDriveDeniedByUnit={me.user_drive_denied_by_unit}
           userType={me.user_type ?? null}
         >
           <MemberGettingStarted />
@@ -183,7 +183,7 @@ describe("MemberGettingStarted", () => {
   it("names the assigned governance profile — chip and line together", async () => {
     getDefaultPolicyMock.mockResolvedValue({
       min_confinement_class: "CC1",
-      governance_profile_name: "walled",
+      unit_name: "walled",
     });
     renderPage();
     expect(await screen.findByText(MEMBER.GS_CHIP("walled"))).toBeInTheDocument();
@@ -236,6 +236,15 @@ describe("MemberGettingStarted", () => {
       ).toBeInTheDocument();
     }
     expect(screen.queryByText("Pick your barrier")).not.toBeInTheDocument();
+  });
+
+  // #2845: the core group follows "Your path" (Shape C), so it cannot be called "Start here" on this page.
+  it("labels the core video group 'The basics', after 'Your path'", async () => {
+    renderPage();
+    const path = await screen.findByText("Your path");
+    const basics = await screen.findByText("The basics");
+    expect(screen.queryByText("Start here")).not.toBeInTheDocument();
+    expect(path.compareDocumentPosition(basics) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("never offers a member 'always' on an approval: the server refuses it for a non-admin (#2595)", async () => {
@@ -345,6 +354,18 @@ describe("MemberGettingStarted", () => {
     ).toBeInTheDocument();
   });
 
+  // M10: the server's mounts_from rides beside the chip, in the sentence; a paused drive mounts nowhere.
+  it("says where the drive mounts from beside the chip, and nothing while it is paused", async () => {
+    renderPage(baseMe({ user_drive: baseMeDrive({ mounts_from: "Organisation runners and mbp-dev" }) }));
+    expect(await screen.findByTestId("gs-drive-mounts-from")).toHaveTextContent(/^Mounts from organisation runners and mbp-dev$/);
+  });
+
+  it("says no mounts-from line for a paused drive", async () => {
+    renderPage(baseMe({ user_drive: baseMeDrive({ mounts_from: "Organisation runners", paused: true }) }));
+    expect(await screen.findByText(DM.GS_DRIVE_CHIP_PAUSED("Scratch"))).toBeInTheDocument();
+    expect(screen.queryByTestId("gs-drive-mounts-from")).toBeNull();
+  });
+
   // Paused wins over the size and the mode: an allocation an admin disabled
   // mounts nothing next run, so naming its size would describe storage this
   // member cannot reach.
@@ -366,10 +387,10 @@ describe("MemberGettingStarted", () => {
   it("a shut governance door renders neither the drive chip nor the mount instruction", async () => {
     getDefaultPolicyMock.mockResolvedValue({
       min_confinement_class: "CC1",
-      governance_profile_name: "walled",
+      unit_name: "walled",
     });
     renderPage(
-      baseMe({ user_drive: baseMeDrive(), user_drive_denied_by_profile: "Contractors" }),
+      baseMe({ user_drive: baseMeDrive(), user_drive_denied_by_unit: "Contractors" }),
     );
     // The governance chip settles the async reads, so the two absences below
     // are a resolved state rather than a race with the /me read.
@@ -384,7 +405,7 @@ describe("MemberGettingStarted", () => {
     // state rather than a race with the /me read.
     getDefaultPolicyMock.mockResolvedValue({
       min_confinement_class: "CC1",
-      governance_profile_name: "walled",
+      unit_name: "walled",
     });
     renderPage();
     expect(await screen.findByText(MEMBER.GS_CHIP("walled"))).toBeInTheDocument();

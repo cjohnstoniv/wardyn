@@ -270,7 +270,7 @@ func TestCeilingReassert_DeniedComponentHostLosesInjectionAndInterceptionTogethe
 	var bedrock []string
 	caller := p.Components.MITMHosts
 
-	srv.reassertCeilingDenies(context.Background(), run, &policy, &injections, c, &p, map[string]string{}, &llm, &bedrock, &p.Components.MITMHosts)
+	srv.reassertCeilingDenies(context.Background(), run, &policy, &injections, c, nil, nil, &p, map[string]string{}, &llm, &bedrock, &p.Components.MITMHosts)
 
 	if !slices.Contains(policy.DeniedDomains, "walled.example:443") {
 		t.Errorf("denied domains = %v, want the profile's entry unioned in", policy.DeniedDomains)
@@ -292,7 +292,7 @@ func TestCeilingReassert_DeniedComponentHostLosesInjectionAndInterceptionTogethe
 	// No profile: the phase stays a no-op for components too.
 	q := dispatchParams{Components: componentDispatch{MITMHosts: []string{"walled.example:443"}}}
 	inj := []runner.InjectionGrant{componentRule("walled.example")}
-	srv.reassertCeilingDenies(context.Background(), run, &policy, &inj, dispatchCeiling{resolved: true}, &q, map[string]string{}, &llm, &bedrock, &q.Components.MITMHosts)
+	srv.reassertCeilingDenies(context.Background(), run, &policy, &inj, dispatchCeiling{resolved: true}, nil, nil, &q, map[string]string{}, &llm, &bedrock, &q.Components.MITMHosts)
 	if len(inj) != 1 || len(q.Components.MITMHosts) != 1 {
 		t.Errorf("with no profile the phase changed %+v / %v", inj, q.Components.MITMHosts)
 	}

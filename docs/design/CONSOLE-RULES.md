@@ -73,10 +73,14 @@ Four body rungs. Nothing between them.
 Headings come from `@layer base`, used as-is: `h1` `1.5rem`/600/1.3/`-0.01em` · `h2`
 `1.125rem`/600/1.35/`-0.005em` · `h3` `1rem`/600/1.4 · `h4` `0.875rem`/500/1.4.
 
-- **One display rung, StepHeader only.** `--text-display` (`theme.css`, `@theme inline`) is
-  `clamp(1.75rem, 1.25rem + 1.5vw, 2rem)` at 600 weight and `-0.02em`, for the New Run
-  `StepHeader` `h1` and nothing else. It sits above the four body rungs; every other
-  heading keeps the `@layer base` sizes.
+- **Two title rungs.** They sit above the four body rungs (`theme.css`, `@theme inline`, each token
+  carrying its own weight, leading and tracking). `text-page` (`--text-page`, 28px, 600, `-0.01em`) is the
+  page title: `PageHeader` and every page with a sidebar item, plus Sign in, Setup, Getting started and
+  Workspace detail. `text-display` (`--text-display`, `clamp(1.75rem, 1.25rem + 1.5vw, 2rem)`, 400,
+  `-0.04em`) is the flow title: New Run start and steps, Launched and Onboarding. Every other heading keeps
+  the `@layer base` sizes.
+- **Two page columns.** An admin page sits in `PageContainer` (`page-container.tsx`): `list` (1200px) for
+  tables and boards, `form` (900px) for settings, editors and reading pages, one top padding (`pt-8`).
 - **Weights:** 400 body and inputs, 500 row titles / buttons / labels, 600 headings and
   uppercase meta labels — the three `--font-weight-*` tokens.
 - **Body tracking is `0.01em`.** `theme.css`'s `body` sets it — change
@@ -254,6 +258,10 @@ Bind `disabled` the instant the action fires; reveal the spinner later.
 - **Canonical strings are the app's strings.** `copy.ts` and `cc-meta.ts` own the shared
   vocabulary so a chip and the sentence beside it cannot disagree. A copy change is
   called out as one — tests and demo narration read them.
+- **A waiting decision reads as the boards draw it.** On the Runs list, a row the viewer can clear says
+  "1 decision needs you" in the User view and "Needs you" with its "1 held" count in the Admin view; a row
+  only an admin can clear says "Waiting for an admin". "Needs you" is not a run state, so the run-state
+  badge and the approval badge keep their own words (`wardyn/copy/runs-landing.ts`).
 - **A bulk action names what it skipped.** Approving observed egress skips a model provider's own
   hosts; the toast reads "Approved 3 hosts. Skipped 1 model-provider host: <host>" (`EGRESS.PROMOTED_SKIPPED`
   in the copy module) instead of reporting success for the whole click.

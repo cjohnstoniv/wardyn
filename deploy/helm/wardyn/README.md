@@ -806,7 +806,7 @@ extraObjects:
 - The `networkPolicy.ingress.from` peer list also applies to the console `http` rule, so the gateway namespace can reach the console port too; a `podSelector` for the gateway pods on that peer narrows it.
 - `-verify_hostname %h` is what checks the certificate names the host (`-servername` only sends SNI); add `-CAfile <path>` when the listener's certificate is not publicly trusted.
 - Port 443 is written out because `%p` is the advertised SSH port.
-- Host keys are unaffected, audit source IPs become the gateway's, and the browser terminal and `wardyn run attach` need none of this.
+- Host keys are unaffected, audit source IPs become the gateway's, and the browser terminal and `wardyn attach` need none of this.
 - The full recipe, with the reasons, is in [docs/SSH.md, "SSH on a 443-only estate"](../../../docs/SSH.md#ssh-on-a-443-only-estate).
 
 ## Scraping `/metrics` through the NetworkPolicy
@@ -1018,7 +1018,7 @@ spec:
   - Empty (default) => no ConfigMap, system roots only.
 - `kek.domains`: a map from key-domain name to `transit: {key, role}` or `azurekv: {key, signingKey, clientId}`, rendered to a ConfigMap and mounted read-only as `WARDYN_KEY_DOMAINS_FILE` — see [Key domains](#key-domains) above.
   - Empty (default) => no ConfigMap, every principal key under the credential key.
-- `awsSSOProxyInject`: `"on"`/`"off"`, the Phase B kill switch — see [docs/OPERATIONS.md "Turning the lane off"](../../../docs/OPERATIONS.md#turning-the-lane-off).
+- `awsSSOProxyInject`: `"on"` or empty. `"off"`, `"false"`, `"0"` were removed in 0.10.0 and `wardynd` refuses to start on them — see [docs/OPERATIONS.md "Removed in 0.10.0"](../../../docs/OPERATIONS.md#removed-in-0100).
   - Empty (default) => no named env entry rendered, wardynd's own default (`on`) applies.
 - `readinessProbe.path`: readiness probe path, default `/readyz` (which pings Postgres — liveness and startup stay on `/healthz` regardless).
   - The chart's own default image serves `/readyz` from 0.6.0 on, so leave this alone unless you **pin an `image.tag` at or below `0.5.0`**, which serves none: see [Installation](#installation) for what that failure looks like.

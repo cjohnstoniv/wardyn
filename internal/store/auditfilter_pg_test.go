@@ -21,12 +21,14 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 func TestPG_AuditFilterSQLAgreesWithGo(t *testing.T) {
 	pool := throwawayDatabase(t)
 	ctx := context.Background()
+	testutil.MarkSchemaUpgraded(t, pool) // no seed row: the unfiltered feed is exactly what the test wrote
 	if err := db.Migrate(ctx, pool); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
@@ -157,6 +159,7 @@ func eventIDs(evs []types.AuditEvent) []string {
 func TestPG_AuditFilterDataContainsAgreesWithGo(t *testing.T) {
 	pool := throwawayDatabase(t)
 	ctx := context.Background()
+	testutil.MarkSchemaUpgraded(t, pool) // no seed row: the unfiltered feed is exactly what the test wrote
 	if err := db.Migrate(ctx, pool); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}

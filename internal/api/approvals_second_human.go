@@ -194,6 +194,12 @@ func (s *Server) requireSecondHuman(w http.ResponseWriter, r *http.Request, id u
 	if !on {
 		return "", true // no switch governs this kind, or its switch is off
 	}
+	// An approval rule authored no run, so the creator compare below would pass it: it is never a second human.
+	if _, isPolicy := policyDeciderFrom(r.Context()); isPolicy {
+		s.refuse(w, r, authz.Deny(authz.ReasonSecondHumanRequired, id.String(), sw+
+			" is set: a second human must decide this, and an approval rule is never a second human").OnRun(ap.RunID))
+		return "", false
+	}
 	// The break-glass itself, now that both "does this gate apply" questions are
 	// answered. Still ahead of the local-mode refusal below, so an admin token
 	// remains the way past a switch that mode cannot enforce. Reported, not

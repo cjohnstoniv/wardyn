@@ -87,6 +87,7 @@ var docTierRows = []struct{ route, token string }{
 	{"GET /api/v1/components", "the organisation's components"},
 	{"PUT /api/v1/components/{id}", "the organisation's components"},
 	{"DELETE /api/v1/components/{id}", "the organisation's components"},
+	{"PUT /api/v1/components/{id}/kubectl-token", "the organisation's components"},
 	{"POST /api/v1/access/mappings", "`/access` role-mapping routes"},
 	{"PUT /api/v1/workspaces/{id}/llm-cred", "`llm-cred`"},
 	{"PUT /api/v1/workspaces/{id}/requirements", "`requirements`"},
@@ -144,7 +145,7 @@ var docTierRows = []struct{ route, token string }{
 	{"GET /api/v1/audit/retention", "`GET /audit/retention`"},
 	{"POST /api/v1/audit/retention/drop", "`POST /audit/retention/drop`"},
 	{"GET /api/v1/approval-notify/status", "`GET /approval-notify/status`"},
-	{"POST /api/v1/governance/profiles", "`/governance` profile and assignment routes"},
+	{"POST /api/v1/governance/units", "`/governance` profile and assignment routes"},
 	{"GET /api/v1/access/directory/search", "`GET /access/directory/search`"},
 	// Issue #168 (0.8): the three /drives routes that DON'T name a host path
 	// moved off classAdmin. Each gets its own token — the doc row lists all
@@ -170,7 +171,7 @@ var docTierRows = []struct{ route, token string }{
 	// per route either way, so a route that leaves the family still has to be
 	// re-pointed here. (The other three /drives routes moved to their own
 	// tokens above in #168.)
-	{"GET /api/v1/drives", "`mountUserDriveRoutes`"},
+	{"GET /api/v1/drives", "`GET /drives`"},
 	{"PUT /api/v1/drives/{id}", "`mountUserDriveRoutes`"},
 	{"DELETE /api/v1/drives/{id}", "`mountUserDriveRoutes`"},
 	// The destroy verb gets its OWN token rather than riding the family's:
@@ -193,11 +194,13 @@ var docTierRows = []struct{ route, token string }{
 	{"GET /api/v1/governance/credential-delivery", "`GET /governance/credential-delivery`"},
 	{"PUT /api/v1/governance/credential-delivery", "`PUT /governance/credential-delivery`"},
 	{"GET /api/v1/governance", "`/governance` profile and assignment routes"},
-	{"PUT /api/v1/governance/profiles/{id}", "`/governance` profile and assignment routes"},
-	{"DELETE /api/v1/governance/profiles/{id}", "`/governance` profile and assignment routes"},
-	{"POST /api/v1/governance/assignments", "`/governance` profile and assignment routes"},
-	{"DELETE /api/v1/governance/assignments/{id}", "`/governance` profile and assignment routes"},
-	{"POST /api/v1/governance/preview", "`/governance` profile and assignment routes"},
+	{"PUT /api/v1/governance/units/{id}", "`/governance` profile and assignment routes"},
+	{"DELETE /api/v1/governance/units/{id}", "`/governance` profile and assignment routes"},
+	{"POST /api/v1/governance/memberships", "`/governance` profile and assignment routes"},
+	{"DELETE /api/v1/governance/memberships/{id}", "`/governance` profile and assignment routes"},
+	{"PUT /api/v1/governance/memberships/{id}", "`/governance` profile and assignment routes"},
+	{"POST /api/v1/governance/memberships/{id}/promote", "`/governance` profile and assignment routes"},
+	{"POST /api/v1/governance/check", "`/governance` profile and assignment routes"},
 	{"GET /api/v1/governance/changes", "`/governance` profile and assignment routes"},
 	{"GET /api/v1/governance/changes/{id}", "`/governance` profile and assignment routes"},
 	{"POST /api/v1/governance/changes/{id}/approve", "`/governance` profile and assignment routes"},
@@ -208,6 +211,13 @@ var docTierRows = []struct{ route, token string }{
 	{"DELETE /api/v1/user-types/{id}", "the `/user-types` routes"},
 	{"GET /api/v1/governance/egress-baseline", "the `/governance/egress-baseline` routes"},
 	{"PUT /api/v1/governance/egress-baseline", "the `/governance/egress-baseline` routes"},
+	{"GET /api/v1/governance/boundary", "the `/governance/boundary` routes"},
+	{"PUT /api/v1/governance/boundary", "the `/governance/boundary` routes"},
+	{"POST /api/v1/governance/dry-run", "the `/governance/boundary` routes"},
+	{"GET /api/v1/governance/approval-rules", "the `/governance/approval-rules` routes"},
+	{"POST /api/v1/governance/approval-rules/dry-run", "the `/governance/approval-rules` routes"},
+	{"PUT /api/v1/governance/approval-rules/{name}", "the `/governance/approval-rules` routes"},
+	{"DELETE /api/v1/governance/approval-rules/{name}", "the `/governance/approval-rules` routes"},
 	{"GET /api/v1/key-domains", "the `/key-domains` routes"},
 	{"PUT /api/v1/key-domains/assignments/{subject_type}/{subject}", "the `/key-domains` routes"},
 	{"DELETE /api/v1/key-domains/assignments/{subject_type}/{subject}", "the `/key-domains` routes"},

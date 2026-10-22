@@ -368,8 +368,9 @@ func TestRehearse_AChainBreakFailsWithBrokenSeq(t *testing.T) {
 	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
 		t.Fatal(err)
 	}
+	// The rig's second own row, not min(seq)+1: a fresh schema also holds the governance.boundary.seed row.
 	var seq int64
-	if err := tx.QueryRow(ctx, `UPDATE audit_events SET actor = 'edited' WHERE seq = (SELECT min(seq) + 1 FROM audit_events) RETURNING seq`).Scan(&seq); err != nil {
+	if err := tx.QueryRow(ctx, `UPDATE audit_events SET actor = 'edited' WHERE seq = (SELECT seq FROM audit_events WHERE action = 'test.event' ORDER BY seq OFFSET 1 LIMIT 1) RETURNING seq`).Scan(&seq); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(ctx); err != nil {

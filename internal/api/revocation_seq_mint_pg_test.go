@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // backdatedRevoke revokes sub with a cut stamped an hour in the past: the cut draws a later sequence than
@@ -19,7 +20,7 @@ import (
 func backdatedRevoke(t *testing.T, pool *pgxpool.Pool, sub string) {
 	t.Helper()
 	if err := store.ExecRevocationCut(context.Background(), pool, `INSERT INTO oidc_session_revocations (sub, revoked_at)
-		VALUES ($1, now() - interval '1 hour') ON CONFLICT (sub) DO UPDATE SET revoked_at = EXCLUDED.revoked_at`, sub); err != nil {
+		VALUES ($1, now() - interval '1 hour') ON CONFLICT (sub) DO UPDATE SET revoked_at = EXCLUDED.revoked_at`, sub, types.CLISessionEndRevoked); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -479,3 +479,15 @@ func TestDockerSinkSettlesARunItNoLongerHoldsAsDone(t *testing.T) {
 		t.Fatalf("the driver's settle of a run the sink no longer holds = %v, want nothing to do", err)
 	}
 }
+
+// TestParseDriveRoots: a drive root is an absolute, cleaned folder below /.
+func TestParseDriveRoots(t *testing.T) {
+	if got, err := parseDriveRoots([]string{"/Volumes/team-share", "/srv/x"}); err != nil || len(got) != 2 {
+		t.Fatalf("parseDriveRoots = %v, %v", got, err)
+	}
+	for _, bad := range []string{"Volumes", "/a/../b", "/", "/a/"} {
+		if _, err := parseDriveRoots([]string{bad}); err == nil {
+			t.Errorf("parseDriveRoots(%q) passed", bad)
+		}
+	}
+}

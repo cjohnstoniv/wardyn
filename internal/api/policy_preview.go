@@ -36,11 +36,18 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 	if s.refuseAdminViewLaunch(w, r) {
 		return
 	}
+	r, ok := s.admitBreakGlass(w, r)
+	if !ok {
+		return
+	}
 	var req createRunRequest
 	if !s.decodeRunRequest(w, r, &req) {
 		return
 	}
 	canonicalizeRunRepos(&req, s.adoHostsLoader(r.Context()))
+	if r, ok = s.stampContextChoice(w, r, req); !ok {
+		return
+	}
 	ceiling, reqCC, refusal := s.authorizePreviewRequest(r, req)
 	if refusal.write(s, w, r) {
 		return
@@ -125,7 +132,7 @@ func (s *Server) authorizePreviewRequest(r *http.Request, req createRunRequest) 
 	if refusal != nil {
 		return ceiling, "", refusal
 	}
-	if refusal = s.localFolderRefusal(&req); refusal != nil {
+	if refusal = s.localFolderRefusal(r.Context(), &req); refusal != nil {
 		return ceiling, "", refusal
 	}
 	if refusal = s.runTextFieldsRefusal(req); refusal != nil {
@@ -150,6 +157,13 @@ func unionPreviewWorkspaceEgress(spec *types.RunPolicySpec, workspaces []types.W
 		kept, _ := runCloneEgress(ws, trusted)
 		unionAllowedDomains(spec, kept)
 	}
+}
+
+// previewWorkspaceEgressHosts is what unionPreviewWorkspaceEgress adds to an empty allowlist.
+func previewWorkspaceEgressHosts(workspaces []types.Workspace, trusted []string) []string {
+	var scratch types.RunPolicySpec
+	unionPreviewWorkspaceEgress(&scratch, workspaces, trusted)
+	return scratch.AllowedDomains
 }
 
 func previewPending(req createRunRequest, choice runProviderChoice) []policyPreviewPending {

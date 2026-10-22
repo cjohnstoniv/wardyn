@@ -49,7 +49,7 @@
 import * as React from "react";
 import { Link } from "react-router-dom";
 import { Check, CheckCircle2, ChevronDown, Loader2, X } from "lucide-react";
-import type { AgentRun, ApprovalRequest, DecisionOptions } from "../../lib/types";
+import type { AgentRun, ApprovalRequest, DecisionOptions, RunDetail } from "../../lib/types";
 import {
   canDecideAdoCapability,
   isAdoConsentRequest,
@@ -60,6 +60,7 @@ import { isTerminalRunState } from "../../lib/types";
 import { ADO } from "../../lib/ado-entra-copy";
 import { clockTime } from "../../lib/format";
 import { ADO_CAP_COPY } from "../../lib/workspace-providers-copy";
+import { ADO_CAPABILITIES } from "../../lib/ado-capabilities";
 import { Button } from "../ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { ADO_PAT } from "../../lib/ado-pat-copy";
@@ -100,12 +101,15 @@ const CAP_THING: Record<string, string> = {
   wiki_write: ADO.CAP_THING_WIKI_WRITE,
 };
 
-// Q3 (mock §9): teal Approve / plain Deny on an ordinary card; on the two
-// capabilities that complete a pull request PAST its policies or CHANGE a
-// policy itself, nothing is teal and Deny is destructive. "Same rule, one fewer
-// button" — the ruling was given against the three-button drawing and
-// re-read onto the shipped Approve+caret+Deny control (Q2).
-const DESTRUCTIVE_CAPABILITIES = new Set(["policy_bypass", "policy_admin"]);
+// Q3 (mock §9): teal Approve / plain Deny on an ordinary card; on a capability
+// the catalogue flags high risk (the ones that complete a pull request PAST its
+// policies, CHANGE a policy, or administer an area), nothing is teal and Deny
+// is destructive. "Same rule, one fewer button" — the ruling was given against
+// the three-button drawing and re-read onto the shipped Approve+caret+Deny
+// control (Q2). The owner widened it from the two policy capabilities to every
+// high-risk one (2026-10-21), so the set is derived from ADO_CAPABILITIES, the
+// one catalogue the policy summary's High risk badge reads too.
+const DESTRUCTIVE_CAPABILITIES = new Set(ADO_CAPABILITIES.filter((c) => c.highRisk).map((c) => c.cap));
 
 function capabilityHeading(capability: string): React.ReactNode {
   return ADO_CAP_COPY[capability]?.name ?? <Mono>{capability}</Mono>;
@@ -154,7 +158,7 @@ function relativeAbsolute(iso: string): string {
 // The run this card needs to know about — created_by (who it acts as / owns
 // the decision) and state (has it ended). Every real caller passes a real
 // AgentRun/RunDetail; this Pick is what the two shapes have in common.
-export type AdoCardRun = Pick<AgentRun, "created_by" | "state">;
+export type AdoCardRun = Pick<AgentRun, "created_by" | "state"> & Pick<RunDetail, "agents">;
 
 export function AdoCapabilityCard({
   item,

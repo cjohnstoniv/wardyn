@@ -149,6 +149,13 @@ export const FIELD_HELP = {
     doc: "ui_apps--uiapp",
     snippet: [{ name: "editor", port: 8080 }],
   },
+  desktop: {
+    what: "What may cross the desktop's edge, one rule per direction: the clipboard at the desktop relay, files at the run's Files panel.",
+    values:
+      "paste_in, copy_out, upload, download: each allowed | blocked. Omitted keeps the default: paste in and upload allowed, copy out and download blocked. A member's run can only block more than its ceiling.",
+    doc: "desktop--desktopcontrols",
+    snippet: { copy_out: "allowed" },
+  },
   tool_rules: {
     what: "Per-tool effects for a run whose tool approvals are held — the middle between approving everything and approving nothing.",
     values:
@@ -197,5 +204,12 @@ export const FIELD_HELP = {
       "sandbox_mode: off (workspace-write and read-only are refused: the harness's sandbox cannot start inside Wardyn's). approvals: harness | wardyn | none. Omitted keeps what the harness and lane give.",
     doc: "harness_inner_walls--harnessinnerwalls",
     snippet: { approvals: "wardyn" },
+  },
+  recording: {
+    what: "How much of a run is recorded. A ceiling's level is a minimum: a policy under it may record more, never less. Keystrokes are never recorded.",
+    values:
+      "off | terminal | screen_actions (a desktop's screen and an action log). Omitted: the organisation's level, terminal unless it sets one.",
+    doc: "recording",
+    snippet: "terminal",
   },
 } satisfies Record<keyof RunPolicySpec, FieldHelp>;

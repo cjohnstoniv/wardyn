@@ -82,8 +82,14 @@
 #      a repo-root `COPY . .` cannot layer one into a builder stage or its cache.
 #  23. an agent image that sets npm's proxy keys for an install deletes them again
 #      in the same RUN, so a build proxy URL never stays in the shipped layer.
-#  24. every scripts/*-walk.sh is run by a Makefile recipe or a workflow step (a comment does not count), or is named
-#      in HAND_RUN_WALKS with the reason it cannot run on a hosted runner.
+#  24. every scripts/*-walk.sh is run by a Makefile recipe or a workflow step
+#      (a comment, whole-line or trailing, does not count), or is named in
+#      HAND_RUN_WALKS with the reason it cannot run on a hosted runner.
+#  25. every scripts/test-*.sh that runs `git init`, `git clone` or `git commit` turns
+#      off git's auto-maintenance (maintenance.auto and gc.auto), or its EXIT trap
+#      can lose `rm -rf` to a detached git still writing under .git (#3328).
+#  26. release.yml's CLI build targets (binaries' TARGETS), its cli-<os>-<arch> upload steps and the CLI
+#      names in its release-asset assert are one set, so a target added to one list cannot ship nothing.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -110,7 +116,7 @@ ok()  { echo "ok: $*"; }
 # notify-new-lanes' needs: once it has gone green on a real nightly (same
 # posture PR #1245 used for daemon-proxy-secret-kind).
 # kind-acceptance-walks (#3110): kind-components-walk and kind-run-output-walk had no caller
-# until this job; none of its three legs has run on a hosted runner. Same promotion rule.
+# until this job. Same promotion rule; its date is below.
 # kind-survival-walk (#700), hybrid-walk (#701) and kind-upgrade-walk (#690)
 # are exempt for the SAME reason PR #1245 gave daemon-proxy-secret-kind: none
 # of the three has ever run on a real nightly yet, so watching them from day
@@ -133,6 +139,28 @@ ok()  { echo "ok: $*"; }
 # notify-new-lanes.needs, which guard 13 pins to it); it opens its own issue.
 NIGHTLY=.github/workflows/nightly.yml
 NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check test-e2e-concurrent kind-survival-walk hybrid-walk kind-upgrade-walk k6-kind-conformance kind-acceptance-walks ci-mode-dogfood-model-fake published-image-scan notify-published-image-scan"
+# A job waiting on the promotion rule above carries a date here, job=YYYY-MM-DD, at most 14 days out
+# (the e2e quarantine's rule, #3219). Past it this guard fails until the job joins notify-new-lanes.needs
+# and release.yml's watched=, which needs green-by-tree.sh to match a matrix job's "name (leg)" rows
+# (#3439), or the date is renewed in a reviewed change. k6-kind-conformance and kind-acceptance-walks
+# were green on scheduled runs 39269815742 and 39423832908.
+NOTIFY_EXEMPT_UNTIL="k6-kind-conformance=2026-11-04 kind-acceptance-walks=2026-11-04"
+# notify_exempt_until_problems "<job=date ...>" "<exempt jobs>" <today>: one line per bad entry.
+notify_exempt_until_problems() {
+    local pair job until max
+    max="$(date -u -d "$3 + 14 days" +%F)" || return 1
+    for pair in $1; do
+        job="${pair%%=*}" until="${pair#*=}"
+        case " $2 " in *" $job "*) ;; *) echo "'$job' has a date but is not in NOTIFY_EXEMPT — drop the date"; continue ;; esac
+        if [[ ! "$until" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || [ "$(date -u -d "$until" +%F 2>/dev/null)" != "$until" ]; then
+            echo "'$job' has the invalid date '$until', want YYYY-MM-DD"
+        elif [[ "$until" < "$3" ]]; then
+            echo "'$job' was exempt until $until: the way off is #3439 (green-by-tree.sh matching matrix legs, then notify-new-lanes.needs and release.yml's watched=); until it lands, renew the date in a reviewed change (at most 14 days out)"
+        elif [[ "$until" > "$max" ]]; then
+            echo "'$job' is exempt until $until, more than 14 days from $3 ($max) — an exemption is short"
+        fi
+    done
+}
 jobs="$(awk '/^jobs:/{j=1;next} j && /^  [a-z0-9-]+:$/{gsub(/[ :]/,"");print}' "$NIGHTLY" | tr '\n' ' ')"
 needs="$(awk '/^  notify-new-lanes:$/{n=1;next} n && /^    needs:/{print;exit}' "$NIGHTLY")"
 [ -n "$needs" ] || bad "$NIGHTLY: notify-new-lanes has no needs: line"
@@ -147,7 +175,19 @@ done
 for job in $NOTIFY_EXEMPT; do
     case " $jobs " in *" $job "*) ;; *) bad "$NIGHTLY: NOTIFY_EXEMPT names '$job', which is not a job any more — drop it" ;; esac
 done
-if [ "$fail" = 0 ]; then ok "nightly.yml notification covers every non-exempt lane"; fi
+problems="$(notify_exempt_until_problems "$NOTIFY_EXEMPT_UNTIL" "$NOTIFY_EXEMPT" "$(date -u +%F)")"
+if [ -n "$problems" ]; then
+    while IFS= read -r line; do bad "$NIGHTLY: $line"; done <<<"$problems"
+fi
+# The detector must catch what it exists for: an expired date, a far one, a malformed one, a dated job that is not exempt.
+selftest_fail=0
+exempt_probe="$(notify_exempt_until_problems "a=2026-01-01 b=2026-03-01 c=soon d=2026-02-30 e=2026-01-20" "a b c d" 2026-01-10)"
+for want in "'a' was exempt until 2026-01-01" "#3439" "'b' is exempt until 2026-03-01" "'c' has the invalid date" "'d' has the invalid date" "'e' has a date but is not in NOTIFY_EXEMPT"; do
+    grep -qF -- "$want" <<<"$exempt_probe" || { bad "guard 1 self-test: no problem reported for: $want"; selftest_fail=1; }
+done
+[ -z "$(notify_exempt_until_problems "a=2026-01-20" "a" 2026-01-10)" ] \
+    || { bad "guard 1 self-test: a date 10 days out false-flagged"; selftest_fail=1; }
+if [ "$fail" = 0 ] && [ "$selftest_fail" = 0 ]; then ok "nightly.yml notification covers every non-exempt lane, and no exemption is past its date"; fi
 
 # ── 2. cosign pin parity ─────────────────────────────────────────────────────
 # Every `uses: sigstore/cosign-installer` must be followed by an explicit
@@ -451,7 +491,7 @@ if ! command -v yq >/dev/null 2>&1; then
     fi
 else
     preflight_fail=0
-    PUBLISH_JOBS="images binaries chart images-ui-sandbox release-assets promote"
+    PUBLISH_JOBS="images binaries chart images-ui-sandbox images-ui-sandbox-signin release-assets promote"
     reaches_preflight() {  # $1 = job name, $2 = space-separated jobs already visited (cycle guard)
         local job="$1" seen="$2" needs n
         case " $seen " in *" $job "*) return 1 ;; esac
@@ -500,7 +540,7 @@ else
             preflight_fail=1
         fi
     fi
-    if [ "$preflight_fail" = 0 ]; then ok "images/binaries/chart/images-ui-sandbox/release-assets/promote all depend on preflight-green (no silent-pass escape hatch), and its watched= list matches notify-new-lanes.needs"; fi
+    if [ "$preflight_fail" = 0 ]; then ok "images/binaries/chart/images-ui-sandbox/images-ui-sandbox-signin/release-assets/promote all depend on preflight-green (no silent-pass escape hatch), and its watched= list matches notify-new-lanes.needs"; fi
 fi
 
 # ── 14. demo/live specs keep up with the 0.8 audit action renames (#1020) ────
@@ -558,12 +598,13 @@ else
     [ -n "$published" ] || { bad "$REL: no '- name:' image entries found — guard 16 is pointing at nothing"; stage_fail=1; }
     rel_pairs="$(yq -r '.jobs[].strategy.matrix.include[]? | select(.dockerfile) | .name + " " + .dockerfile' "$REL" | sort -u)"
     staged_pairs="$( { yq -r '.jobs["buildx-smoke"].strategy.matrix.include[] | select(.stage == "true") | .name + " " + .dockerfile' "$NIGHTLY"
-                       yq -r '.jobs["buildx-smoke-ui-sandbox"].strategy.matrix.include[] | .name + " " + .dockerfile' "$NIGHTLY"; } | sort -u)"
+                       yq -r '.jobs["buildx-smoke-ui-sandbox"].strategy.matrix.include[] | .name + " " + .dockerfile' "$NIGHTLY"
+                       yq -r '.jobs["buildx-smoke-ui-sandbox-signin"].strategy.matrix.include[] | .name + " " + .dockerfile' "$NIGHTLY"; } | sort -u)"
     for n in $published; do
         want="$(printf '%s\n' "$rel_pairs" | grep -E "^$n " || true)"
         [ -n "$want" ] || { bad "$REL: published image '$n' has no matrix row with a dockerfile — guard 16 cannot compare it"; stage_fail=1; continue; }
         printf '%s\n' "$staged_pairs" | grep -xF "$want" >/dev/null \
-            || { bad "$NIGHTLY: published image '$n' has no staged row with release.yml's dockerfile ('$want') in buildx-smoke (stage: \"true\") or buildx-smoke-ui-sandbox — a release would have nothing to promote"; stage_fail=1; }
+            || { bad "$NIGHTLY: published image '$n' has no staged row with release.yml's dockerfile ('$want') in buildx-smoke (stage: \"true\"), buildx-smoke-ui-sandbox or buildx-smoke-ui-sandbox-signin — a release would have nothing to promote"; stage_fail=1; }
     done
     for n in $(printf '%s\n' "$staged_pairs" | awk '{print $1}'); do
         printf '%s\n' "$published" | grep -x "$n" >/dev/null \
@@ -581,7 +622,7 @@ else
     # cache-from, cache-to or any other key the other lacks.
     bps='.steps[] | select((.uses // "") | test("^docker/build-push-action@"))'
     with_norm="$bps | .with | del(.push) | del(.tags) | del(.labels) | .[\"build-args\"] |= (. // \"\" | sub(\"\\n+\$\"; \"\")) | sort_keys(.)"
-    for pair in "images buildx-smoke" "images-ui-sandbox buildx-smoke-ui-sandbox"; do
+    for pair in "images buildx-smoke" "images-ui-sandbox buildx-smoke-ui-sandbox" "images-ui-sandbox-signin buildx-smoke-ui-sandbox-signin"; do
         set -- $pair
         rel_job="$1"; ngt_job="$2"
         for jf in "$rel_job $REL" "$ngt_job $NIGHTLY"; do
@@ -599,25 +640,37 @@ else
     [ "$got_args" = "$want_args" ] \
         || { bad "$NIGHTLY: buildx-smoke's build step must take build-args from the matrix row ('$want_args'), not '$got_args' — a hardcoded value would stage wardynd without RELEASE_BUILD=true"; stage_fail=1; }
     want_base='BASE_IMAGE=${{ steps.base.outputs.ref }}'
-    got_base="$(yq -r ".jobs[\"buildx-smoke-ui-sandbox\"] | $bps | .with[\"build-args\"]" "$NIGHTLY")"
-    [ "$got_base" = "$want_base" ] \
-        || { bad "$NIGHTLY: buildx-smoke-ui-sandbox's build-args must be exactly '$want_base' (the staged agent-base digest), not '$got_base'"; stage_fail=1; }
-    base_run="$(yq -r '.jobs["buildx-smoke-ui-sandbox"].steps[] | select(.id == "base") | .run' "$NIGHTLY")"
-    printf '%s' "$base_run" | grep -F '@sha256:[0-9a-f]{64}$' >/dev/null \
-        || { bad "$NIGHTLY: buildx-smoke-ui-sandbox's base step no longer checks the ref is an @sha256 digest"; stage_fail=1; }
+    for ngt_job in buildx-smoke-ui-sandbox buildx-smoke-ui-sandbox-signin; do
+        got_base="$(yq -r ".jobs[\"$ngt_job\"] | $bps | .with[\"build-args\"]" "$NIGHTLY")"
+        [ "$got_base" = "$want_base" ] \
+            || { bad "$NIGHTLY: $ngt_job's build-args must be exactly '$want_base' (the staged base image's digest), not '$got_base'"; stage_fail=1; }
+        base_run="$(yq -r ".jobs[\"$ngt_job\"].steps[] | select(.id == \"base\") | .run" "$NIGHTLY")"
+        printf '%s' "$base_run" | grep -F '@sha256:[0-9a-f]{64}$' >/dev/null \
+            || { bad "$NIGHTLY: $ngt_job's base step no longer checks the ref is an @sha256 digest"; stage_fail=1; }
+    done
     # The promote job copies these digests, so its rows are the build jobs' rows
     # (name, dockerfile, float-latest) and preflight-green's staging step keeps
     # every part of the proof. Once R10 removes the build jobs, the promote rows
     # are the only source and the row comparison has nothing to compare.
-    promote_rows='[.jobs.promote.strategy.matrix.include[] | {"name": .name, "dockerfile": .dockerfile, "float": (.["float-latest"] // "")}] | sort_by(.name)'
-    build_rows='[(.jobs.images.strategy.matrix.include[], .jobs["images-ui-sandbox"].strategy.matrix.include[]) | {"name": .name, "dockerfile": .dockerfile, "float": (.["float-latest"] // "")}] | sort_by(.name)'
-    promote_got="$(yq -o=json -I=0 "$promote_rows" "$REL")"
-    [ "$(yq -r '.jobs.promote.strategy.matrix.include | length' "$REL")" -gt 0 ] \
-        || { bad "$REL: the promote job has no matrix rows — guard 16 is pointing at nothing"; stage_fail=1; }
+    # The promote job is one job, not a matrix: its rows are the YAML text in its
+    # IMAGES env (kept as `- name:` rows so the greps in verify-release.sh,
+    # check-image-pins.sh and gpl-source-offer.sh still read them).
+    promote_rows='[.[] | {"name": .name, "dockerfile": .dockerfile, "float": (.["float-latest"] // "")}] | sort_by(.name)'
+    build_rows='[(.jobs.images.strategy.matrix.include[], .jobs["images-ui-sandbox"].strategy.matrix.include[], .jobs["images-ui-sandbox-signin"].strategy.matrix.include[]) | {"name": .name, "dockerfile": .dockerfile, "float": (.["float-latest"] // "")}] | sort_by(.name)'
+    promote_images="$(yq -r '.jobs.promote.env.IMAGES' "$REL")"
+    promote_got="$(printf '%s\n' "$promote_images" | yq -o=json -I=0 "$promote_rows")"
+    [ "$(printf '%s\n' "$promote_images" | yq 'length')" -gt 0 ] \
+        || { bad "$REL: the promote job has no IMAGES rows — guard 16 is pointing at nothing"; stage_fail=1; }
+    # One Attest build provenance step per row (an action cannot run in a loop), each
+    # on the row's own digest: the set of steps must be exactly the set of rows.
+    prov_got="$(yq -r '.jobs.promote.steps[] | select(.uses // "" | test("^actions/attest-build-provenance@")) | .with["subject-name"] + " " + .with["subject-digest"]' "$REL" | sort)"
+    prov_want="$(printf '%s\n' "$promote_images" | yq -r '.[].name' | awk '{printf "ghcr.io/cjohnstoniv/%s ${{ fromJSON(needs.preflight-green.outputs.digests)[\047%s\047] }}\n", $1, $1}' | sort)"
+    [ "$prov_got" = "$prov_want" ] \
+        || { bad "$REL: the promote job's Attest build provenance steps do not match its IMAGES rows one for one (subject-name and digest) — got: $(echo $prov_got) wanted: $(echo $prov_want)"; stage_fail=1; }
     if [ "$(yq -r '.jobs.images | type' "$REL")" != "!!null" ]; then
         build_got="$(yq -o=json -I=0 "$build_rows" "$REL")"
         [ "$promote_got" = "$build_got" ] \
-            || { bad "$REL: promote's matrix rows differ from images + images-ui-sandbox (name, dockerfile, float-latest) — promote: $promote_got vs build: $build_got. A release must publish the same set on either path."; stage_fail=1; }
+            || { bad "$REL: promote's matrix rows differ from images + images-ui-sandbox + images-ui-sandbox-signin (name, dockerfile, float-latest) — promote: $promote_got vs build: $build_got. A release must publish the same set on either path."; stage_fail=1; }
     fi
     # Whole-line comments are dropped first, so a marker named only in a comment
     # proves nothing; each pattern is anchored to the command it must be.
@@ -631,10 +684,22 @@ else
     # while the image jobs it keeps stay as old as they were.
     printf '%s' "$staging_run" | grep -E -- '--jq \.created_at' >/dev/null && ! printf '%s' "$staging_run" | grep 'updated_at' >/dev/null \
         || { bad "$REL: preflight-green's staging step must read the nightly run's .created_at for its age and never updated_at (a rerun refreshes updated_at, so stale images would pass)"; stage_fail=1; }
-    promote_copy="$(yq -r '.jobs.promote.steps[] | select(.name | test("^Copy the verified digest")) | .run' "$REL" | nocomment)"
+    promote_copy="$(yq -r '.jobs.promote.steps[] | select(.name | test("^Promote, sign and attest each image")) | .run' "$REL" | nocomment)"
     printf '%s' "$promote_copy" | grep -E '^[[:space:]]*cosign copy --force ' >/dev/null \
         && printf '%s' "$promote_copy" | grep -F 'test "$got" = "$DIGEST"' >/dev/null \
         || { bad "$REL: the promote job's copy step must run cosign copy --force (a final tag's :latest already exists, and cosign refuses to move it without) and then check the tag's digest equals \$DIGEST"; stage_fail=1; }
+    for pat in '^[[:space:]]*cosign sign --yes ' '^[[:space:]]*cosign attest --yes --type cyclonedx ' '^[[:space:]]*syft "registry:' 'refusing to attest it' 'set -euo pipefail; promote_one'; do
+        printf '%s' "$promote_copy" | grep -E -- "$pat" >/dev/null \
+            || { bad "$REL: the promote job's loop no longer has a command matching '$pat' — a promoted image would lose its signature, SBOM attestation, or its per-image failure isolation"; stage_fail=1; }
+    done
+    # The loop's verdict: after the FAILED summary the step must exit 1, or a failed image passes the job.
+    printf '%s' "$promote_copy" | grep -A1 -F 'echo "FAILED: ' | grep -E '^[[:space:]]*exit 1$' >/dev/null \
+        || { bad "$REL: the promote job's loop no longer runs \`exit 1\` right after its FAILED summary — a failed image would pass the job"; stage_fail=1; }
+    # One cosign initialize, before the parallel loop, so the shared TUF cache is set up once.
+    init_idx="$(yq -r '.jobs.promote.steps | to_entries[] | select(.value.run // "" | test("^cosign initialize")) | .key' "$REL" | head -1)"
+    loop_idx="$(yq -r '.jobs.promote.steps | to_entries[] | select(.value.name // "" | test("^Promote, sign and attest each image")) | .key' "$REL" | head -1)"
+    { [ -n "$init_idx" ] && [ -n "$loop_idx" ] && [ "$init_idx" -lt "$loop_idx" ]; } \
+        || { bad "$REL: the promote job must run \`cosign initialize\` in a step before the parallel loop (shared TUF cache)"; stage_fail=1; }
     if [ "$stage_fail" = 0 ]; then ok "nightly's staged rows and build steps match release.yml's publish set (names, dockerfiles, build-args, platforms, provenance, no cache), and no local-only image is staged"; fi
 fi
 
@@ -798,11 +863,18 @@ HAND_RUN_WALKS="runner-laptop-walk.sh survival-walk.sh"
 # runner-laptop-walk.sh: needs Docker Desktop and a second engine for the org.
 # survival-walk.sh: restarts the host's Docker daemon, so it needs a spare host
 # (its kind leg, kind-survival-walk.sh, is the nightly's).
-# A line that is only a comment names a script without running it. (No `grep -q` on the pipe: under
-# pipefail it can SIGPIPE git grep and turn a match into a failure.)
-walk_called() {
-    [ -n "$(git grep -hE "(^|[^A-Za-z0-9_-])$1" -- Makefile .github | grep -vE '^[[:space:]]*#' || true)" ]
+# Text after a `#` names a script without running it, whether the comment is the whole line or trails a
+# command. (No `grep -q` on the pipe: under pipefail it can SIGPIPE git grep and turn a match into a failure.)
+walk_runs() {
+    sed -E 's/(^|[[:space:]])#.*$//' | grep -E "(^|[^A-Za-z0-9_-])$1" || true
 }
+walk_called() {
+    [ -n "$(git grep -hE "(^|[^A-Za-z0-9_-])$1" -- Makefile .github | walk_runs "$1")" ]
+}
+if [ -n "$(printf '%s\n' '# a-walk.sh' '	make x  # a-walk.sh' 'run: make x # see a-walk.sh' | walk_runs a-walk.sh)" ] \
+    || [ -z "$(printf '%s\n' '	./scripts/a-walk.sh # note' 'run: scripts/a-walk.sh' | walk_runs a-walk.sh)" ]; then
+    bad "guard 24 self-test: a walk named only in a comment counted as run, or a run with a trailing comment did not"
+fi
 orphan_walks=""
 for f in scripts/*-walk.sh; do
     b="$(basename "$f")"
@@ -819,6 +891,60 @@ if [ -n "$orphan_walks" ]; then
     bad "walk scripts that nothing runs:${orphan_walks} — wire each into the Makefile or a workflow (nightly.yml), or add it to HAND_RUN_WALKS with the reason"
 else
     ok "every scripts/*-walk.sh has a caller or a stated reason it has none"
+fi
+
+# ── 25. throwaway repos start no background git ─────────────────────────────
+# A shell test that commits in a temp repo and removes it in an EXIT trap races
+# git's detached `maintenance run --auto`: rm -rf fails "Directory not empty"
+# (#3328, hosted run 39343470618, test-kind-follow-main.sh). A command-position
+# `git ... init|clone|commit` needs maintenance.auto and gc.auto named in the
+# same file, as a GIT_CONFIG_KEY_n export or a `git config`.
+unsilenced_git() {  # $1 = file -> prints it when it runs git init/clone/commit without the setting
+    grep -vE '^[[:space:]]*#' "$1" \
+        | grep -E '(^|[;&|(][[:space:]]*)git[[:space:]]([^|;&]*[[:space:]])?(init|clone|commit)([[:space:]]|$)' >/dev/null || return 0
+    grep -q 'maintenance\.auto' "$1" && grep -q 'gc\.auto' "$1" || printf '%s\n' "$1"
+}
+planted="$(mktemp -d)"
+printf 'git -C "$d" init -q\ngit -C "$d" commit -q -m x\n' >"$planted/bad.sh"
+printf 'export GIT_CONFIG_KEY_0=maintenance.auto GIT_CONFIG_KEY_1=gc.auto\ngit init -q\n' >"$planted/good.sh"
+printf '# git commit in a comment\necho "grep git clone x"\n' >"$planted/quiet.sh"
+selftest_fail=0
+[ -n "$(unsilenced_git "$planted/bad.sh")" ] \
+    || { bad "guard 25 self-test: a git init/commit with no maintenance setting was not caught"; selftest_fail=1; }
+[ -z "$(unsilenced_git "$planted/good.sh")" ] \
+    || { bad "guard 25 self-test: a script that sets maintenance.auto and gc.auto false-flagged"; selftest_fail=1; }
+[ -z "$(unsilenced_git "$planted/quiet.sh")" ] \
+    || { bad "guard 25 self-test: git named only in a comment or a string false-flagged"; selftest_fail=1; }
+rm -rf "$planted"
+if [ "$selftest_fail" = 0 ]; then ok "guard 25's detector catches an unsilenced git init/commit (self-test)"; fi
+loud=""
+for f in scripts/test-*.sh; do
+    [ "$f" = scripts/test-repo-guards.sh ] && continue
+    hit="$(unsilenced_git "$f")"
+    [ -z "$hit" ] || loud="$loud $hit"
+done
+if [ -n "$loud" ]; then
+    bad "shell tests that run git init/clone/commit without maintenance.auto and gc.auto off:${loud} — export GIT_CONFIG_COUNT/KEY/VALUE for maintenance.auto=false, gc.auto=0 and gc.autoDetach=false (see scripts/test-kind-follow-main.sh)"
+else
+    ok "every scripts/test-*.sh that runs git init/clone/commit turns auto-maintenance off"
+fi
+
+# ── 26. release.yml's CLI targets, upload steps and asserted assets agree ────
+# The binaries job builds every TARGETS entry in one step, but each target has its
+# own fixed upload step and its own line in the release-asset assert. A target in
+# one list and not the others builds a CLI that never ships, or fails only on the
+# tag. Windows ships wardyn-windows-<arch>.exe.
+cli_targets="$(sed -n 's/^ *TARGETS: "\(.*\)"$/\1/p' "$REL" | tr ' ' '\n' | sed '/^$/d; s#/#-#' | sort)"
+cli_uploads="$(sed -n 's/^ *name: cli-\([a-z0-9]*-[a-z0-9]*\)$/\1/p' "$REL" | sort)"
+cli_asserted="$(sed -n '/Assert every required asset actually landed/,/done$/p' "$REL" \
+    | grep -oE 'wardyn-(linux|darwin|windows)-[a-z0-9]+(\.exe)?' | sed 's/^wardyn-//' | sort -u)"
+cli_want_assert="$(printf '%s\n' "$cli_targets" | sed '/^windows-/s/$/.exe/' | sort)"
+if [ -z "$cli_targets" ]; then
+    bad "release.yml: no binaries TARGETS line found — guard 26 checks nothing"
+elif [ "$cli_uploads" != "$cli_targets" ] || [ "$cli_asserted" != "$cli_want_assert" ]; then
+    bad "release.yml: CLI TARGETS ($(echo $cli_targets)) != upload steps cli-* ($(echo $cli_uploads)) or asserted assets ($(echo $cli_asserted)); a target needs its cli-<os>-<arch> upload step and its wardyn-<os>-<arch> (.exe on windows) assert line"
+else
+    ok "release.yml's $(echo "$cli_targets" | wc -l) CLI targets each have an upload step and an asserted release asset"
 fi
 
 if [ "$fail" = 0 ]; then echo "--- test-repo-guards: PASS ---"; else echo "--- test-repo-guards: FAIL ---"; fi

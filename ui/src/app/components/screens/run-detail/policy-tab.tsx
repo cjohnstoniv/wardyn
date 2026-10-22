@@ -115,7 +115,7 @@ function sourceText(s: RunPolicySource): string {
       return POLICY_TAB.sourceInline;
     case "default":
       return POLICY_TAB.sourceDefault;
-    case "profile":
+    case "unit":
       return s.name ? POLICY_TAB.sourceProfile(s.name) : POLICY_TAB.sourceDefault;
     default:
       return POLICY_TAB.sourceUnknown;
@@ -217,8 +217,8 @@ function headingFor(c: RunPolicyChange, ownRun: boolean, person: string): { key:
   switch (c.cause) {
     case "limits":
       return { key: "limits", heading: ownRun ? CHANGE_HEADING.limitsOwn : CHANGE_HEADING.limitsOther(person) };
-    case "profile":
-      if (c.profile) return { key: `profile:${c.profile}`, heading: CHANGE_HEADING.profile(c.profile) };
+    case "unit":
+      if (c.unit) return { key: `profile:${c.unit}`, heading: CHANGE_HEADING.unit(c.unit) };
       break;
     case "restart":
       if (c.at) return { key: `restart:${c.at}`, heading: CHANGE_HEADING.restart(mediumDate(c.at)) };

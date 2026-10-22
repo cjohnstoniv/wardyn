@@ -209,13 +209,15 @@ type ADOEntraConfig struct {
 	// via RESTAPIEnabled, never directly.
 	RESTAPI *bool `json:"rest_api,omitempty"`
 	// RunnerResident opts this connection's minted tokens in to runner_resident
-	// delivery: held in a self-hosted runner's OS keystore for the run and
-	// injected by the runner's own proxy, where the class's delivery policy and
-	// posture requirement allow it. Off by default.
+	// delivery: the self-hosted runner's own proxy fetches the per-run token from
+	// the organisation over the relay, holds it in memory only and injects it,
+	// where the class's delivery policy, trust class and posture requirement
+	// allow it. Off by default.
 	RunnerResident bool `json:"runner_resident,omitempty"`
-	// RunnerResidentSandbox also hands that token into the sandbox, where the
-	// agent can use it past the REST gate and capability holds. Requires
-	// RunnerResident.
+	// RunnerResidentSandbox would also hand that token into the sandbox, where
+	// the agent could use it past the REST gate and capability holds. Requires
+	// RunnerResident. It is stored and listed only: no run reads it, so it has
+	// no effect in this version and the token is not put in the sandbox.
 	RunnerResidentSandbox bool `json:"runner_resident_sandbox,omitempty"`
 }
 
@@ -297,6 +299,10 @@ type UserDriveProvider struct {
 	MaxSizeMiB int  `json:"max_size_mib,omitempty"` // largest drive allowed, refused at admin write boundary and clamped at resolve; 0 = no ceiling
 	// MemberCreate is the switch for people creating their own drives. nil = off.
 	MemberCreate *MemberDrivePolicy `json:"member_create,omitempty"`
+	// TeamDrives lets an admin mark a drive a team drive: one folder shared by
+	// the groups it is allocated to (#1988). false = off, and every drive
+	// resolves per person.
+	TeamDrives bool `json:"team_drives,omitempty"`
 }
 
 // MemberDrivePolicy turns member drive creation on for the organisation (off by
@@ -308,6 +314,9 @@ type MemberDrivePolicy struct {
 	// UserDriveProvider.MaxSizeMiB. A Docker volume has no size limit, so it must be 0 there.
 	SizeMiB      int    `json:"size_mib,omitempty"`
 	StorageClass string `json:"storage_class,omitempty"` // k8s only; "" = the cluster default
+	// KeepMainDrive lets a run keep its work folder as its person's own drive
+	// (CreateRunRequest.KeepWorkFolder). Off by default; has no effect unless Enabled.
+	KeepMainDrive bool `json:"keep_main_drive,omitempty"`
 }
 
 // MaxMemberDrivesPerPerson is the ceiling on MemberDrivePolicy.MaxPerPerson.

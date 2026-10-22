@@ -18,10 +18,10 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/contentscan"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/filelock"
 	"github.com/cjohnstoniv/wardyn/internal/runneractivity"
 	"github.com/cjohnstoniv/wardyn/internal/runnerspool"
 	"github.com/google/uuid"
-	"golang.org/x/sys/unix"
 )
 
 type spoolTicketKey struct{}
@@ -48,7 +48,7 @@ func newLocalDecisionSink(dir string, id uuid.UUID, out io.Writer) (*decisionSin
 		spool.Close()
 		return nil, errors.New("unsafe proxy spool writer lock")
 	}
-	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+	if err := filelock.TryLock(lock); err != nil {
 		lock.Close()
 		spool.Close()
 		return nil, errors.New("another proxy owns this run spool")
@@ -81,7 +81,7 @@ var errAuditLost = errors.New("runner audit spool unavailable")
 // spoolRecordEnvelope is what a decision record holds beyond its request's own
 // strings: identifiers, times, the rule source, a cause sentence and a scan
 // summary without findings (a skip or bypass).
-const spoolRecordEnvelope = 64 << 10
+const spoolRecordEnvelope = runnerspool.MinRequestReservation
 
 // spoolAdmitTimeout bounds how long a request waits for its audit reservation before it is refused,
 // including the wait for room in a full spool.

@@ -1,22 +1,12 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package api wires Wardyn's control-plane REST surface (the wardynd binary).
-// It contains ZERO target-specific code (the parity rule): it talks to runners
-// only through the runner.Runner interface, and to identity/secrets/broker only
-// through their contract interfaces. Every security decision fails closed.
-//
-// Routes: see routes.go for the table. The authoritative, always-current
-// classification of every one of them — which role gate each sits behind — is
-// authz_test.go's chi.Walk-enumerated matrix, which cannot go stale because it
-// walks the router itself.
 package api
 
 import (
 	"context"
 	"crypto/ed25519"
 	"net"
-	"net/http/httputil"
 	"net/netip"
 	"sync"
 	"sync/atomic"
@@ -148,6 +138,10 @@ type Config struct {
 	// ponytail: process-local. Under WARDYN_HA a replica that does not hold a runner's session
 	// answers offline for a runner attached to another; the upgrade is a shared presence read.
 	RunnerOnline func(id uuid.UUID) bool
+	// AttachLocal (WARDYN_ATTACH_LOCAL=on, off by default) allows a person's CLI on their own runner's
+	// computer to attach to their run there (transport=local, attach_local.go), and tells such runners
+	// so in AUTH_OK. Off, a transport=local attach answers 409 attach_local_unavailable (flag_off).
+	AttachLocal bool
 	// RunnersDisabled runs after runners are switched off (a true→false change), once the write and
 	// its audit row are done and the site-config lock is released. Nil defaults to
 	// Server.RunnersDisabled, which ends every runner session this process holds.
@@ -210,6 +204,11 @@ type Config struct {
 	// the default: a bare allowlist host is open on every port), "dry_run" or
 	// "on" (80/443 plus host:port entries). Desktop VM runs always have it on.
 	EgressPortRule string
+	// DesktopSignins is WARDYN_DESKTOP_SIGNINS=on: a run whose policy declares
+	// the desktop gets the person's sign-in store and the proxy's sign-in lane,
+	// and its owner may sign in to websites there (run_desktop_signin.go).
+	// Off by default.
+	DesktopSignins bool
 	// RunnerTarget records which target a run is dispatched to ("docker"|"k8s"),
 	// or "none" for a headless control plane (-runner none: runs stay PENDING).
 	// Defaults to "docker".
@@ -286,10 +285,10 @@ type Config struct {
 	// sign-in vouches for the email (unverifiedEmailSubject). Default false keeps
 	// the match and logs it. Deny rows match the email either way.
 	CapabilityGrantsVerifiedEmail bool
-	// GovernanceProfilePutExistingOnly is WARDYN_GOVERNANCE_PROFILE_PUT_EXISTING_ONLY:
-	// PUT /governance/profiles/{id} replaces an existing profile only, and a
+	// GovernanceUnitPutExistingOnly is WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY:
+	// PUT /governance/units/{id} replaces an existing profile only, and a
 	// new one is created through POST. Default false keeps create-at-id and logs it.
-	GovernanceProfilePutExistingOnly bool
+	GovernanceUnitPutExistingOnly bool
 	// EgressHostPortGrantsInert is WARDYN_EGRESS_HOST_PORT_GRANTS_INERT: a stored
 	// egress_host ALLOW row whose value carries a ":port" (written before the
 	// write boundary stored the host alone) is inert, marked and never matched.
@@ -371,6 +370,11 @@ type Config struct {
 	// downgrade. See runs_dispatch_sso_inject.go for the default and docs/ENV.md
 	// for the operator-facing contract.
 	AWSSSOProxyInject bool
+	// AWSSigV4AtProxy is WARDYN_AWS_SIGV4_AT_PROXY (ResolveAWSSigV4AtProxy, default off): when
+	// true, an AWS sign-in lane whose hosts the proxy can all re-sign dispatches a placeholder
+	// key pair and the proxy re-signs its requests with role credentials the sandbox never
+	// holds (runs_dispatch_aws_sigv4.go). Read at dispatch; a running sandbox keeps its lane.
+	AWSSigV4AtProxy bool
 	// AWSSSORefresh is the operator's tuning of the AWS SSO renewal; a zero
 	// field keeps its default (AWSSSORefreshTuning, awssso_refresh.go).
 	AWSSSORefresh AWSSSORefreshTuning
@@ -578,9 +582,14 @@ type Config struct {
 	// the broker is off, a resident PAT on an operator's run too; a member's
 	// run is refused it either way (patNarrowingRefusal).
 	RefuseGitPATBrokerOff bool
-	// ScrubProxyResponses (WARDYN_PROXY_RESPONSE_SCRUB) stamps
-	// proxy.Config.ScrubResponses on every new dispatch.
+	// MultiAgentTasks (WARDYN_MULTI_AGENT_TASKS, off by default in 0.10.0): a background task
+	// may run several agents, each on its tools[].task. Off, that is refused multi_agent_tasks_off.
+	MultiAgentTasks bool
+	// ScrubProxyResponses (WARDYN_PROXY_RESPONSE_SCRUB) stamps proxy.Config.ScrubResponses on every new dispatch.
 	ScrubProxyResponses bool
+	// CanonicalPushRepos (WARDYN_PUSH_HOLD_CANONICAL_REPOS; off by default in
+	// 0.10.0) stamps proxy.Config.CanonicalPushRepos on every new dispatch.
+	CanonicalPushRepos bool
 	// EnvSecretPlaceholders / FileSecretPlaceholders (WARDYN_ENV_SECRET_PLACEHOLDERS,
 	// WARDYN_FILE_SECRET_PLACEHOLDERS; off by default in 0.10.0): an env_secret
 	// or file_secret grant whose scope names a host gets a placeholder in the
@@ -588,6 +597,10 @@ type Config struct {
 	// (runs_dispatch_placeholders.go). Off = the value in the sandbox, as before.
 	EnvSecretPlaceholders  bool
 	FileSecretPlaceholders bool
+	// RunnerSecretPlaceholders (WARDYN_RUNNER_SECRET_PLACEHOLDERS; off by default in 0.10.0): a
+	// local run's runner_resident env_secret or file_secret grant keeps its value at the organisation;
+	// the runner gets a placeholder and a via_org route, filled by its egress (placeResidentSecrets).
+	RunnerSecretPlaceholders bool
 	// OIDCRoleMapConfigured reports whether WARDYN_OIDC_ROLE_MAP is non-empty —
 	// the sso_rbac /setup/status check's gate. Only the presence, never the
 	// mapping itself: the API layer has no use for individual entries, only
@@ -673,11 +686,16 @@ type Config struct {
 	// holds a run's agent for the first sync of its local folder, never past
 	// the run's own end (run_local_folder.go). Zero is DefaultLocalFolderSeedWait.
 	LocalFolderSeedWait time.Duration
+	// ComputerFolders is WARDYN_COMPUTER_FOLDERS: a run may take a folder from its creator's own
+	// folder-only runner, which Wardyn seeds itself (run_computer_folder.go). Off by default.
+	ComputerFolders bool
 	// APITokenMaxTTL is WARDYN_API_TOKEN_MAX_TTL: the longest lifetime a newly
 	// minted API token may have. Zero (the default) means no cap. A mint that
 	// asks for no TTL gets this one; a mint that asks for more is clamped to it.
 	// It never touches a token already minted.
 	APITokenMaxTTL time.Duration
+	// CLISignIn is CLI sign-in (wardyn login, cli_sign_in.go); the zero value is off.
+	CLISignIn CLISignInConfig
 	// RoleStampTTL is WARDYN_ROLE_STAMP_TTL: the oldest an API token's role and
 	// group stamp (api_tokens.identity_stamped_at) may be before apiTokenAuth
 	// refuses it until its owner signs in again. Zero, the default, is off: no
@@ -739,6 +757,18 @@ type Config struct {
 	// boundary as TrustedCAPEM above — never a SiteConfig field,
 	// never agent-reachable.
 	DemoVideoBaseURL string
+	// CLIArtifactBase is WARDYN_CLI_ARTIFACT_BASE, validated at boot by
+	// ValidateCLIArtifactBase: an internal mirror that holds the release's
+	// assets under <base>/v<version>/. /healthz publishes it as
+	// cli_artifact_base (the console's install line and `wardyn runner setup`
+	// read it there); empty (the default) publishes nothing.
+	CLIArtifactBase string
+	// OrgCAFingerprints is WARDYN_ORG_CA_FINGERPRINTS, parsed at boot by
+	// ParseOrgCAFingerprints: "sha256:<lowercase hex>" of each CA certificate
+	// the operator publishes for `wardyn ca add` to be compared against.
+	// /healthz publishes it as org_ca_fingerprints; nil (the default)
+	// publishes nothing.
+	OrgCAFingerprints []string
 }
 
 // Server is the control-plane HTTP server. It is safe for concurrent use.
@@ -746,8 +776,7 @@ type Server struct {
 	runnerStreams runnerStreamState
 	cfg           Config
 	router        chi.Router
-	// metrics holds the /metrics scrape counters (see metrics.go). Zero value is
-	// ready to use.
+	// metrics holds the /metrics scrape counters (see metrics.go). Zero value is ready to use.
 	metrics metrics
 	// viaOrg is the organisation's via_org egress state (via_org_streams.go).
 	viaOrg viaOrgState
@@ -757,13 +786,13 @@ type Server struct {
 	revokedEndRetry revokedEndRetry
 	// inventoryHoldAudit spaces one runner's runner.inventory.hold rows (runner_state.go).
 	inventoryHoldAudit inventoryHoldAudit
-	// capRowsScanned counts capability-grant rows compared inside capBatch (see
-	// capabilities.go). It is INSTRUMENTATION, read by nothing on any request
-	// path: the per-request cost of the capability seam is chosen partly by the
-	// member's own request body (spec.AllowedDomains), so "how much work did one
-	// request buy" is a claim that has to be assertable rather than asserted —
-	// capability_batch_test.go's growth law reads it. One atomic add per row
-	// already being compared. Zero value is ready to use.
+	// privIPRefusals caches the private_ip_refusals row's audit read (setup_private_ip_refusals.go).
+	privIPRefusals privateIPRefusalCache
+	// capRowsScanned counts capability-grant rows compared inside capBatch (see capabilities.go). It is
+	// INSTRUMENTATION, read by nothing on any request path: the per-request cost of the capability seam is
+	// chosen partly by the member's own request body (spec.AllowedDomains), so "how much work did one request
+	// buy" is a claim that has to be assertable rather than asserted — capability_batch_test.go's growth law
+	// reads it. One atomic add per row already being compared. Zero value is ready to use.
 	capRowsScanned atomic.Int64
 	// siteConfigSeed is the boot-time WARDYN_SITE_CONFIG_SEED_FILE (nil when
 	// unset), kept for the /setup/status row (site_config_seed.go).
@@ -789,6 +818,10 @@ type Server struct {
 	// on a millisecond clock instead of the real 30s budget.
 	pingEvery     time.Duration
 	authorityTest attachAuthorityTimings // per-server test overrides, the same shape as pingEvery
+	// localAttachSubs replaces a runner's substrate for a local attach (localAttachSubFor), tests only.
+	localAttachSubs func(id uuid.UUID) localAttachSub
+	// localCovered replaces a local promotion's corpus proof (promotionCovered), tests only.
+	localCovered func(runID uuid.UUID) bool
 	// pauseLimit overrides attachWriteTimeout as the bound on an unresumed
 	// output pause for THIS server only (tests).
 	pauseLimit time.Duration
@@ -830,8 +863,7 @@ type Server struct {
 	// sshSyncOpen is the directory and open time of each live wardyn-sync
 	// channel, for GET /runs/{id}'s sync.open. Guarded by sshSessionsMu.
 	sshSyncOpen map[uuid.UUID][]*runSyncOpen
-	// builds tracks per-workspace image builds (the wizard's Build step).
-	// Zero value is ready to use.
+	// builds tracks per-workspace image builds (the wizard's Build step). Zero value is ready to use.
 	builds buildTracker
 	// attachHolders tracks who currently holds each run's SHARED tmux PTY, so a
 	// second client can be admitted read-only instead of silently competing for
@@ -849,24 +881,12 @@ type Server struct {
 	leaseKeeperOnce sync.Once   // starts attachLeaseKeeper (attach_lease.go)
 	runEvents       runEventHub // each run's lifecycle event ring (run_events.go)
 	// execOutputs holds each non-interactive run's output tail (run_output.go).
-	execOutputs execOutputTails
-	// uiConns counts concurrent UI-gateway relay connections per run, enforcing
-	// maxUIConnsPerRun (uigateway.go) — each one is a live socat exec in the
-	// sandbox. uiReady caches the per-(run,app) launcher probe, and uiProxy is
-	// the single shared reverse proxy + exec-lane transport built on first use.
-	// All process-local, like sshSessions and lastTouch above and correct for
-	// the same reason (replicas>1 is refused by construction). Zero values are
-	// ready to use.
-	uiConnsMu sync.Mutex
-	uiConns   map[uuid.UUID]int
-	uiReadyMu sync.Mutex
-	uiReady   map[string]time.Time
-	// uiReassert debounces the relay's REQUEST-path authorization re-check, one
-	// entry per minted session (uiReassertKey) — see uiReassertRelay.
-	uiReassertMu sync.Mutex
-	uiReassert   map[string]time.Time
-	uiProxyOnce  sync.Once
-	uiProxy      *httputil.ReverseProxy
+	execOutputs    execOutputTails
+	uiGatewayState // the UI gateway's process state (server_uigateway.go)
+
+	// desktopRecs are the live desktop recordings and each run's pause (uigateway_record.go).
+	desktopRecs desktopRecordings
+
 	// attachIgnoredSeen holds the sub+person pairs whose sub_known person.attach row this process already
 	// wrote (people.go attachIgnored); ponytail: per process, so a restart or another replica writes it
 	// once more. A durable mark on the person row would need a migration.
@@ -906,6 +926,7 @@ type Server struct {
 	preflightLimiter     *principalLimiter
 	policyPreviewLimiter *principalLimiter
 	deviceRouteState     // the device routes' process state (server_devices.go)
+	cliSignInState       // CLI sign-in's rate limiters (cli_sign_in.go)
 	scimState            // the SCIM routes' rate limiters (scim_auth.go)
 	runLeaseState        // the run lease sweep's process state (run_lease_server.go)
 	// pause is the pause sweep's process-local state (run_pause.go).

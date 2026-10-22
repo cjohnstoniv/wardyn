@@ -27,9 +27,10 @@ type RunPolicyView struct {
 	RecordedAt *time.Time           `json:"recorded_at,omitempty"`
 	Source     RunPolicySource      `json:"source"`
 	Spec       *types.RunPolicySpec `json:"spec,omitempty"`
-	// Redacted is true when the reader is below the security admin tier and the
-	// policy holds mount sources or secret names, which read as "<redacted>" or
-	// are dropped. Such a spec is a starting point, not a policy that validates.
+	// Redacted is true when the reader was shown less than a super admin: mount
+	// sources read as "<redacted>" below the super admin tier, and secret names
+	// are dropped below the security admin tier. Such a spec is a starting
+	// point, not a policy that validates.
 	Redacted bool `json:"redacted"`
 	// Changes is never null.
 	Changes  []RunPolicyChange `json:"changes"`
@@ -83,9 +84,9 @@ type RunPolicyChange struct {
 	Added   []string `json:"added,omitempty"`
 	Removed []string `json:"removed,omitempty"`
 	// Detail is the launch-time narrowing sentences, verbatim (Cause "limits" only).
-	Detail  []string   `json:"detail,omitempty"`
-	Profile string     `json:"profile,omitempty"`
-	At      *time.Time `json:"at,omitempty"` // when the run was restarted (Cause "restart")
+	Detail []string   `json:"detail,omitempty"`
+	Unit   string     `json:"unit,omitempty"`
+	At     *time.Time `json:"at,omitempty"` // when the run was restarted (Cause "restart")
 }
 
 // StoredPolicyNow compares the saved policy a run started from with what it

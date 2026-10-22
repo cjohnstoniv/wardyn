@@ -1,0 +1,82 @@
+{
+  "bindings": [
+    {
+      "harness": "claude-code",
+      "sha256": "<digest>",
+      "servers": [
+        "linear",
+        "public"
+      ]
+    },
+    {
+      "harness": "codex-cli",
+      "sha256": "<digest>",
+      "servers": [
+        "linear"
+      ]
+    }
+  ],
+  "env": {
+    "HTTPS_PROXY": "http://wardyn-proxy:3128",
+    "WARDYN_MCP_SERVERS_JSON": "{\"linear\":\"http://wardyn-proxy:3128/wardyn/mcp/<token>/linear\"}"
+  },
+  "files": {
+    "/etc/claude-code/wardyn-mcp.json": "{\"mcpServers\":{\"linear\":{\"type\":\"http\",\"url\":\"http://wardyn-proxy:3128/wardyn/mcp/<token>/linear\"},\"public\":{\"type\":\"http\",\"url\":\"http://wardyn-proxy:3128/wardyn/mcp/<token>/public\"}}}"
+  },
+  "injections": [],
+  "interactive": false,
+  "servers": [
+    {
+      "key": "linear",
+      "url": "https://mcp.linear.test/mcp",
+      "grant_id": "00000000-0000-4000-8000-000000000001",
+      "ordinal": 0
+    },
+    {
+      "key": "public",
+      "url": "https://mcp.public.test/mcp",
+      "ordinal": 2
+    }
+  ]
+}
+{
+  "bindings": [
+    {
+      "harness": "claude-code",
+      "sha256": "<digest>",
+      "servers": [
+        "linear",
+        "public"
+      ]
+    },
+    {
+      "harness": "codex-cli",
+      "sha256": "<digest>",
+      "servers": [
+        "linear"
+      ]
+    }
+  ],
+  "env": {
+    "HTTPS_PROXY": "http://wardyn-proxy:3128",
+    "WARDYN_MCP_SERVERS_JSON": "{\"linear\":\"http://wardyn-proxy:3128/wardyn/mcp/<token>/linear\"}"
+  },
+  "files": {
+    "/etc/claude-code/managed-mcp.json": "{\"mcpServers\":{\"linear\":{\"type\":\"http\",\"url\":\"http://wardyn-proxy:3128/wardyn/mcp/<token>/linear\"},\"public\":{\"type\":\"http\",\"url\":\"http://wardyn-proxy:3128/wardyn/mcp/<token>/public\"}}}"
+  },
+  "injections": [],
+  "interactive": true,
+  "servers": [
+    {
+      "key": "linear",
+      "url": "https://mcp.linear.test/mcp",
+      "grant_id": "00000000-0000-4000-8000-000000000001",
+      "ordinal": 0
+    },
+    {
+      "key": "public",
+      "url": "https://mcp.public.test/mcp",
+      "ordinal": 2
+    }
+  ]
+}

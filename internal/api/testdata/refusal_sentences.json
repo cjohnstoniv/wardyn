@@ -6,6 +6,11 @@
   },
   {
     "reason": "admin_surface",
+    "target": "\"governance.unit.\" + e.field",
+    "sentence": "e.sentence"
+  },
+  {
+    "reason": "admin_surface",
     "target": "\"workspaces.llm_cred\"",
     "sentence": "\"llm_cred is operator-only — an admin binds a workspace's model/harness credential \" + \"(PUT /workspaces/{id}/llm-cred); create your workspace without it and ask for the binding\""
   },
@@ -33,6 +38,16 @@
     "reason": "admin_view",
     "target": "r.URL.Path",
     "sentence": "userViewLaunchRefusal(typeID)"
+  },
+  {
+    "reason": "attach_ticket_foreign_run",
+    "target": "run.ID.String()",
+    "sentence": "\"approval not found\""
+  },
+  {
+    "reason": "attach_ticket_foreign_run",
+    "target": "run.ID.String()",
+    "sentence": "\"run not found\""
   },
   {
     "reason": "attach_ticket_foreign_run",
@@ -111,6 +126,11 @@
   },
   {
     "reason": "capKinds[capFeature].reason",
+    "target": "\"cli.sessions.refresh\"",
+    "sentence": "apiTokenFeatureRefusal"
+  },
+  {
+    "reason": "capKinds[capFeature].reason",
     "target": "\"me.runners.tokens\"",
     "sentence": "runnerSelfHostRefusal"
   },
@@ -168,6 +188,11 @@
     "reason": "capability_component",
     "target": "\"runs.component\"",
     "sentence": "componentUnavailableRefusal"
+  },
+  {
+    "reason": "capability_egress_host",
+    "target": "id.String()",
+    "sentence": "\"the service identity that created this run is not granted egress host \" + host"
   },
   {
     "reason": "capability_egress_host",
@@ -255,57 +280,57 @@
     "sentence": "u.Error()"
   },
   {
-    "reason": "governance_profile",
+    "reason": "governance_unit",
     "target": "\"drives.member.create\"",
     "sentence": "msg"
   },
   {
-    "reason": "governance_profile",
+    "reason": "governance_unit",
     "target": "\"runs.agent\"",
     "sentence": "fmt.Sprintf(\"codex-cli is not supported under your governance profile %q: its tool rules hold or deny, and codex-cli has no external tool-approval contract. Launch a different agent.\", name)"
   },
   {
-    "reason": "governance_profile",
+    "reason": "governance_unit",
     "target": "\"runs.attach\"",
     "sentence": "fmt.Sprintf(\"attaching is not allowed under the governance profile %q this run was launched under: it denies interactive sessions.\", p.Name)"
   },
   {
-    "reason": "governance_profile",
+    "reason": "governance_unit",
     "target": "\"runs.drive\"",
-    "sentence": "driveDeniedByProfileMsg(profile)"
+    "sentence": "driveDeniedByUnitMsg(profile)"
   },
   {
-    "reason": "governance_profile",
+    "reason": "governance_unit",
     "target": "\"runs.interactive\"",
     "sentence": "fmt.Sprintf(\"interactive runs are not allowed by your governance profile %q, and a request with no task comes up interactive too. Launch with a task, and without `--interactive`.\", name)"
   },
   {
-    "reason": "governance_profile",
+    "reason": "governance_unit",
     "target": "\"runs.interactive_start\"",
     "sentence": "fmt.Sprintf(\"a shell startup command is not allowed by your governance profile %q — with `interactive_start` unset or `shell` the task runs as a shell command at sandbox boot, before anyone attaches, unattended the way exec does. Launch with `interactive_start=agent`, or without a task.\", name)"
   },
   {
-    "reason": "governance_profile",
+    "reason": "governance_unit",
     "target": "\"runs.placement\"",
-    "sentence": "placementDeniedMsg(p, ceiling.Profile.Name)"
+    "sentence": "placementDeniedMsg(p, ceiling.Unit.Name)"
   },
   {
-    "reason": "governance_profile",
+    "reason": "governance_unit",
     "target": "\"runs.seed_auto_tools\"",
     "sentence": "fmt.Sprintf(\"`seed_auto_tools` is not allowed by your governance profile %q: its tool rules hold or deny, and the pre-attach seed runs before any human is at the pane. Launch without it.\", name)"
   },
   {
-    "reason": "governance_profile",
+    "reason": "governance_unit",
     "target": "\"runs.task_mode\"",
     "sentence": "fmt.Sprintf(\"`task_mode=exec` is not allowed by your governance profile %q — an exec run carries no agent and no tool approvals, so nothing supervises it. Launch with an agent instead.\", name)"
   },
   {
-    "reason": "governance_profile",
+    "reason": "governance_unit",
     "target": "\"runs.tools\"",
     "sentence": "fmt.Sprintf(\"A harness your command can start is not allowed under your governance profile %q: its tool rules hold or deny, and nothing can pause a harness a command starts. Remove the harness, or choose an interactive environment.\", name)"
   },
   {
-    "reason": "governance_profile",
+    "reason": "governance_unit",
     "target": "\"runs.ui_apps\"",
     "sentence": "fmt.Sprintf(\"UI apps are not allowed under the governance profile %q this run was launched under.\", p.Name)"
   },
@@ -442,7 +467,7 @@
   {
     "reason": "run_quota",
     "target": "\"runs.quota\"",
-    "sentence": "fmt.Sprintf(\"too many runs at once (max %d) — your governance profile %q caps how many runs you can have going, and %d are still active. Stop one first.\", limit, ceiling.Profile.Name, active)"
+    "sentence": "fmt.Sprintf(\"too many runs at once (max %d) — your governance profile %q caps how many runs you can have going, and %d are still active. Stop one first.\", limit, ceiling.Unit.Name, active)"
   },
   {
     "reason": "second_human_required",
@@ -458,6 +483,11 @@
     "reason": "second_human_required",
     "target": "id.String()",
     "sentence": "sw + \" is set: a second human must decide this — you created this run, so someone else approves or denies its egress\""
+  },
+  {
+    "reason": "second_human_required",
+    "target": "id.String()",
+    "sentence": "sw + \" is set: a second human must decide this, and an approval rule is never a second human\""
   },
   {
     "reason": "second_human_required",
@@ -492,7 +522,7 @@
   {
     "reason": "src.reason",
     "target": "\"runs.agent\"",
-    "sentence": "fmt.Sprintf(\"%s is not supported under %s at this run's posture: it permits autonomy level %s (bound by %s), which routes an \" + \"unattended run's tool calls to a Wardyn approval, and this agent has no external tool-approval contract. Launch a different agent, or launch interactively.\", autonomyAgentLabel(req.Agent), src.phrase, level, bound)"
+    "sentence": "fmt.Sprintf(\"%s is not supported under %s at this run's posture: it permits autonomy level %s (bound by %s), which routes an \" + \"unattended run's tool calls to a Wardyn approval, and this agent has no external tool-approval contract. Launch a different agent, or launch interactively.\", autonomyAgentLabel(agents[i]), src.phrase, level, bound)"
   },
   {
     "reason": "src.reason",

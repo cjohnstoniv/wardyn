@@ -29,6 +29,7 @@
 
 import { PEOPLE } from "./people-access-copy";
 import { SIGNIN_HELP_LINK_LABEL } from "./sign-in-copy";
+import { GROUPS_READ_AT_SIGNIN } from "./groups-copy";
 import {
   AUTONOMY_LEVEL_ORDER,
   AUTONOMY_RUBRIC_ROW_KEYS,
@@ -72,7 +73,7 @@ export { ACCESS_STATE, PEOPLE, PREVIEW } from "./people-access-copy";
 // freezes eleven Go format strings that this module does NOT carry, because
 // the console renders them FROM THE WIRE, verbatim, and a second copy here
 // would be a claim rather than canon:
-//   - the still-assigned delete refusal (409, handleDeleteGovernanceProfile)
+//   - the still-assigned delete refusal (409, handleDeleteGovernanceUnit)
 //     — GOVERNANCE.DELETE_RESTRICT_BODY below is the CLIENT-SIDE PRE-FILL
 //       only; it names a count, which is knowable only client-side. On the
 //       race path the client believed the count was zero, so it renders the
@@ -103,7 +104,10 @@ export const GOVERNANCE = {
   // "Governance profiles" label. Lives in nav-copy.ts (see its own comment)
   // so app-shell's eager sidebar isn't the reason this whole table ships early.
   TITLE: GOVERNANCE_NAV_TITLE,
-  LEAD: "Named ceilings, assigned to people and groups. A profile stands alone or narrows a base. An assigned profile replaces the deployment ceiling for its subjects; anyone with no assignment keeps the deployment ceiling.",
+  LEAD: "Named ceilings, assigned to people and groups.",
+  HOW_TITLE: "How governance works",
+  HOW_BODY:
+    "A profile stands alone or narrows a base. An assigned profile replaces the deployment ceiling for its subjects; anyone with no assignment keeps the deployment ceiling.",
   PROFILES_TITLE: "Profiles",
   PROFILES_LEAD:
     "A profile is one ceiling: the policy every run under it is bounded by, plus the launch modes its subjects may not use at all.",
@@ -163,6 +167,7 @@ export const GOVERNANCE = {
   CEILING_TITLE: "Ceiling",
   CEILING_LEAD:
     "Every run under this profile is bounded by this spec. A member's own policy is clamped to it, and so is a saved policy they pick.",
+  CEILING_MOUNTS_LOCKED: "Only a super admin can see or change a mount's host path. You can keep or remove the mount.",
   LIMITS_TITLE: "Limits",
   LIMITS_LEAD:
     "Some of what a run can do routes around the ceiling entirely. Deny it here instead.",
@@ -220,8 +225,8 @@ export const GOVERNANCE = {
   // PERM.SNAPSHOT_BODY reused: that string ends on the grants rule, which is
   // false here (what lags is a CEILING, and it lags a sign-in, not a request).
   EFFECT_NOTE: "Takes effect on their next run. A run already dispatched keeps the ceiling it started with.",
-  SIGNIN_NOTE:
-    "A change to someone's groups in your identity provider reaches Wardyn only when they next sign in, so they keep their current ceiling until then — or, for an API token, until it is re-minted.",
+  SIGNIN_NOTE: GROUPS_READ_AT_SIGNIN,
+  COMBINE_TITLE: "How assignments combine",
   COL_PROFILE: "Profile",
   COL_PRIORITY: "Priority",
   // The same em dash PEOPLE.ADDED_CHART_NA renders, kept as its OWN key
@@ -260,7 +265,7 @@ export const GOVERNANCE = {
   // assignment", "the everyone assignment" — but its TABLE freezes only the
   // template. They are the assignments table's own vocabulary and there is
   // exactly one correct set, so they are keyed here rather than retyped at the
-  // one call site (governance/assignments.tsx's MATCHED_LABEL). Noted as an
+  // one call site (governance/memberships.tsx's MATCHED_LABEL). Noted as an
   // addition in the campaign report, the same way permissions-copy.ts's
   // ENFORCE_OFF_TITLE was.
   MATCHED_USER: "a user assignment",
@@ -320,7 +325,8 @@ export const DELIVERY = {
     runner_resident: "Stored on your runner",
     refuse: "Not available on your runner",
   },
-  PEOPLE_SEE: (label: string) => `People see: ${label}`,
+  COL_CREDENTIAL: "Credential",
+  COL_PEOPLE_SEE: "People see",
   POSTURE_TITLE: "Require on the runner",
   POSTURE_MDM: "Managed by MDM",
   POSTURE_DISK: "Disk encrypted",
@@ -369,6 +375,7 @@ export const DELIVERY = {
   FIXED_CLOUD_STS: "Never on a runner: needs attestation a laptop sandbox doesn't have.",
   BOUND_NO_VIA_ORG: "Can't stay in the organisation: the run reads it inside the sandbox.",
   BOUND_NO_RESIDENT_GITHUB: "Can't be stored on a runner: it would skip branch rules and push review.",
+  BOUND_NOT_BUILT: "Not available yet",
   SAVE: "Save",
   SAVED: "Saved. New runs use this; runs already going keep what they started with.",
   REFUSED_TITLE: "This can't be saved as written",
@@ -415,8 +422,8 @@ export const CHANGES = {
   COL_EXPIRES: "Expires",
   // By target_kind. A kind this console predates shows its raw name.
   KIND: {
-    governance_profile: "Profile",
-    governance_assignment: "Assignment",
+    governance_unit: "Profile",
+    governance_membership: "Assignment",
     capability_grant: "Capability grant",
     capability_enforcement: "Capability enforcement",
     capability_availability: "Capability availability",
@@ -430,6 +437,7 @@ export const CHANGES = {
     runner_trust: "Runner trust class",
     run_node_record: "Node record",
     local_credential_delivery: DELIVERY.CHANGE_KIND,
+    governance_boundary: "Wardyn boundary",
   } as Record<string, string>,
   // By op. An op this console predates shows its raw name.
   OP: {

@@ -86,8 +86,10 @@ export function isRecording(ws: Workspace): boolean {
 // and SSH hosts, the workspace's own non-GitHub clone hosts, hosts the operator permanently denies, and
 // IP literals. Two categories there (a bound Bedrock integration's regional host, a required
 // integration's own egress) need server-side integration resolution this pure client-side helper has no
-// view of; the server's 422 stays the backstop for those. Keep in step with record.go.
-const BROKER_HOSTS = ["github.com", "api.github.com", "codeload.github.com", "*.githubusercontent.com", "ssh.github.com"];
+// view of; the server's 422 stays the backstop for those. session-helpers-parity.test.ts pins the static lists below to the Go source.
+export const BROKER_HOSTS = ["github.com", "api.github.com", "codeload.github.com", "*.githubusercontent.com", "ssh.github.com"];
+
+export const HARNESS_HOSTS = ["anthropic.com", "*.anthropic.com", "api.openai.com"];
 
 const entryCovers = (entry: string, host: string): boolean => {
   const e = entry.toLowerCase().trim().replace(/:\d+$/, "");
@@ -111,7 +113,7 @@ function cloneHostsOf(ws: Workspace): string[] {
 
 function isPlumbingHost(ws: Workspace, host: string): boolean {
   const h = host.toLowerCase();
-  const skip = [...BROKER_HOSTS, "anthropic.com", "*.anthropic.com", "api.openai.com", ...cloneHostsOf(ws), ...(ws.denied_egress ?? [])];
+  const skip = [...BROKER_HOSTS, ...HARNESS_HOSTS, ...cloneHostsOf(ws), ...(ws.denied_egress ?? [])];
   return isIPLiteral(h) || skip.some((e) => entryCovers(e, h));
 }
 

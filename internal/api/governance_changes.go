@@ -29,6 +29,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -76,7 +77,7 @@ func (s *Server) handleListGovernanceChanges(w http.ResponseWriter, r *http.Requ
 	out := make([]types.GovernanceChange, 0, len(all))
 	for _, ch := range all {
 		if s.canSeeGovernanceChange(r, ch) {
-			out = append(out, ch)
+			out = append(out, s.changeForRead(r, ch))
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -100,7 +101,7 @@ func (s *Server) handleGetGovernanceChange(w http.ResponseWriter, r *http.Reques
 		writeServerError(w, r, "read governance change", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, ch)
+	writeJSON(w, http.StatusOK, s.changeForRead(r, ch))
 }
 
 func (s *Server) handleApproveGovernanceChange(w http.ResponseWriter, r *http.Request) {
@@ -265,6 +266,16 @@ func (s *Server) decideGovernanceChange(w http.ResponseWriter, r *http.Request, 
 		s.denyApprover(kind).write(w, r)
 		return
 	}
+	if approve && head.TargetKind == govKindUnit {
+		// The site-config lock before the decision transaction's graph lock, as writeGovernanceUnit
+		// takes them: applyUnitChange reads governance_max_depth, so a lowering cannot slip between.
+		var unlock func()
+		if r, unlock, ok = s.lockDoor(w, r, db.SiteConfigLockClass); !ok {
+			return
+		}
+		defer unlock()
+		ctx = r.Context()
+	}
 	actorType, principal := actorFromRequest(r)
 	email := oidcEmailFromContext(ctx)
 
@@ -325,7 +336,7 @@ func (s *Server) decideGovernanceChange(w http.ResponseWriter, r *http.Request, 
 		}
 		s.recordAudit(ctx, s.auditEvent(nil, actorType, principal, "governance.change.reject", out.ID.String(), "success", mustJSON(data)))
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, s.changeForRead(r, out))
 }
 
 // answerFailedDecision writes the response for a decision that did not commit as asked, and the audit
@@ -348,7 +359,7 @@ func (s *Server) answerFailedDecision(w http.ResponseWriter, r *http.Request, he
 	}
 	var refusal *govRefusal
 	var notPending *store.ErrGovernanceChangeNotPending
-	var write *profileWriteError
+	var write *unitWriteError
 	switch {
 	case errors.As(err, &refusal):
 		refusal.write(w, r)

@@ -105,28 +105,30 @@ func presetReadView(p types.LaunchPreset) (client.Preset, error) {
 // member reaches. Launch and the write answers keep the unredacted view.
 func (s *Server) presetForRead(r *http.Request, p types.LaunchPreset) (client.Preset, error) {
 	v, err := presetReadView(p)
+	tier := s.specReadTierFor(r.Context())
 	if err == nil && v.Request.InlinePolicy != nil {
-		spec := redactSpecForRead(*v.Request.InlinePolicy, s.isSecurityOperator(r.Context()))
+		spec := redactSpecForRead(*v.Request.InlinePolicy, tier)
 		v.Request.InlinePolicy = &spec
 	}
 	if err == nil {
-		v.Request.PolicyOverlay = redactPresetOverlay(v.Request.PolicyOverlay, s.isSecurityOperator(r.Context()))
+		v.Request.PolicyOverlay = redactPresetOverlay(v.Request.PolicyOverlay, tier)
 	}
 	return v, err
 }
 
-// overlayOperatorKeys are the policy_overlay keys whose values redactSpecForUser strips for a reader
-// who is not a security operator: the same details, by the same code, as in an inline_policy.
+// overlayOperatorKeys are the policy_overlay keys whose values redactSpecForRead strips for a reader
+// below the super admin tier: the same details, by the same code, as in an inline_policy. A security
+// admin loses only the first (a mount's host path); a member loses all three.
 var overlayOperatorKeys = []string{"workspace_mounts", "eligible_grants", "llm_inspection"}
 
-// redactOverlayValue is one overlay value after redactSpecForUser, or nil when it does not decode.
-func redactOverlayValue(key string, raw json.RawMessage) json.RawMessage {
+// redactOverlayValue is one overlay value after redactSpecForRead at tier, or nil when it does not decode.
+func redactOverlayValue(key string, raw json.RawMessage, tier specReadTier) json.RawMessage {
 	var spec types.RunPolicySpec
 	one, err := json.Marshal(map[string]json.RawMessage{key: raw})
 	if err != nil || json.Unmarshal(one, &spec) != nil {
 		return nil
 	}
-	out, err := json.Marshal(redactSpecForUser(spec))
+	out, err := json.Marshal(redactSpecForRead(spec, tier))
 	var redacted map[string]json.RawMessage
 	if err != nil || json.Unmarshal(out, &redacted) != nil {
 		return nil
@@ -134,12 +136,12 @@ func redactOverlayValue(key string, raw json.RawMessage) json.RawMessage {
 	return redacted[key]
 }
 
-// redactPresetOverlay is a stored policy_overlay as a reader may see it. A security operator (the
-// preset's author among them) gets it as stored; anyone else gets the operator-only details of the
-// keys above redacted exactly as an inline_policy's would be. A value that does not decode as its
-// key's type is dropped rather than guessed at.
-func redactPresetOverlay(overlay json.RawMessage, securityOperator bool) json.RawMessage {
-	if securityOperator || len(overlay) == 0 {
+// redactPresetOverlay is a stored policy_overlay as a reader may see it. A super admin (the preset's
+// author) gets it as stored; anyone else gets the details of the keys above that their tier may not
+// read redacted exactly as an inline_policy's would be. A value that does not decode as its key's type
+// is dropped rather than guessed at.
+func redactPresetOverlay(overlay json.RawMessage, tier specReadTier) json.RawMessage {
+	if tier == specReadFull || len(overlay) == 0 {
 		return overlay
 	}
 	var fields map[string]json.RawMessage
@@ -148,10 +150,10 @@ func redactPresetOverlay(overlay json.RawMessage, securityOperator bool) json.Ra
 	}
 	for k, raw := range fields {
 		i := slices.IndexFunc(overlayOperatorKeys, func(o string) bool { return strings.EqualFold(k, o) })
-		if i < 0 {
+		if i < 0 || (tier == specReadSecurity && i != 0) {
 			continue
 		}
-		if v := redactOverlayValue(overlayOperatorKeys[i], raw); v != nil {
+		if v := redactOverlayValue(overlayOperatorKeys[i], raw, tier); v != nil {
 			fields[k] = v
 		} else {
 			delete(fields, k)
@@ -228,7 +230,10 @@ func (s *Server) validatePresetRequest(w http.ResponseWriter, r *http.Request, n
 			"request.%s is set per launch, so a preset cannot carry it", bad[0]))
 		return false
 	}
-	if presetRunModeRefusal(req.Request).write(s, w, r) || s.presetContractRefusal(req.Request).write(s, w, r) {
+	// The overlay is walked here as it is at launch, so a preset the launch would refuse every time
+	// is refused once, at the admin's write.
+	if presetRunModeRefusal(req.Request).write(s, w, r) || s.presetContractRefusal(req.Request).write(s, w, r) ||
+		policyOverlayRefusal(req.Request).write(s, w, r) {
 		return false
 	}
 	if paths := documentAvailabilityRefusal(req.Request); len(paths) > 0 {
@@ -245,7 +250,7 @@ func (s *Server) validatePresetRequest(w http.ResponseWriter, r *http.Request, n
 		return false
 	}
 	if req.Request.InlinePolicy != nil {
-		if err := validatePolicySpec(*req.Request.InlinePolicy); err != nil {
+		if err := validateAuthoredPolicySpec(*req.Request.InlinePolicy); err != nil {
 			writeErrorReason(w, http.StatusBadRequest, specRefusalReason(err, reasonPresetRequestInvalid), "request: invalid inline_policy: "+err.Error())
 			return false
 		}
@@ -350,6 +355,9 @@ func (s *Server) decodeRunRequest(w http.ResponseWriter, r *http.Request, req *c
 	// for the placement gate to refuse.
 	if id, err := uuid.Parse(req.RunnerID); err == nil {
 		req.RunnerID = id.String()
+	}
+	if s.multiAgentTasksOffRefusal(*req).write(s, w, r) {
+		return false
 	}
 	// After the preset, which can bring its own request: a new client's carriers
 	// are refused or projected onto the legacy fields here, before any gate reads them.

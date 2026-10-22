@@ -259,6 +259,12 @@ func (s *Server) runnerProxyImage(rn types.Runner) string {
 	return cmp.Or(s.cfg.ProxyImageByArch[rn.Arch], s.cfg.ProxyImage)
 }
 
+// runnerLocalAttach is AUTH_OK's local_attach for rn: WARDYN_ATTACH_LOCAL is on and rn is a person's
+// runner. An organisation's runner is never told, so it never opens the local socket (C4).
+func (s *Server) runnerLocalAttach(rn types.Runner) bool {
+	return s.cfg.AttachLocal && rn.OwnerKind == types.RunnerOwnerPerson
+}
+
 // runnerHub builds the one Hub lazily. Callbacks not injected are the durable
 // org composition: admitRunner and the asynchronous offline sweep.
 func (s *Server) runnerHub(st store.RunnerStore) *remote.Hub {
@@ -292,6 +298,9 @@ func (s *Server) runnerHub(st store.RunnerStore) *remote.Hub {
 		}
 		if cfg.ProxyImage == nil {
 			cfg.ProxyImage = s.runnerProxyImage
+		}
+		if cfg.LocalAttach == nil {
+			cfg.LocalAttach = s.runnerLocalAttach
 		}
 		// The Hub reports Disconnected only for a session it reported Connected,
 		// and calls both under the runner's session slot, Disconnected even inside

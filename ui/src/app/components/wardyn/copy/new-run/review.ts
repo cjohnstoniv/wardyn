@@ -36,9 +36,12 @@ export const NR_REVIEW = {
   SETUP_AGENT_AUTONOMOUS: "Autonomous agent task",
   SETUP_AGENT_INTERACTIVE: "Interactive agent task",
   SETUP_APPLICATION: "Background automation",
+  SETUP_APPLICATION_SERVER: "Application server",
   SETUP_ENVIRONMENT: "Interactive environment",
   BADGE_ATTENTION: "Needs attention",
   BADGE_COMPLETE: "Complete",
+  /** The chip when only a stale server result is in the way and no group is to blame (#3043). */
+  BADGE_CHECK: "Check needed",
   GROUP_RUN: "Run and timing",
   GROUP_WHERE: "Where it runs",
   GROUP_WORK: "What it works on",
@@ -49,9 +52,19 @@ export const NR_REVIEW = {
   VALUE_APPLICATION: "Application sandbox",
   VALUE_ENVIRONMENT: "Environment sandbox",
   TIMING_APPLICATION: "Background automation · Runs when launched",
+  TIMING_APPLICATION_SERVER: "Application server · Starts when launched",
+  APP_PORT: (port: string | number) => `Port ${port}`,
+  APP_OPENS: (path: string | number) => `${path} · Opens through the web app gateway`,
+  BLOCKER_GATEWAY_OFF:
+    "The web app gateway is off on this server, so this run's apps can't be opened. Ask your admin to turn it on.",
   TIMING_INTERACTIVE: "Interactive · Starts when launched",
   TIMING_NOW: "Autonomous · Run now",
+  TIMING_STARTS: (when: string | number) => `Autonomous · Starts ${when}`,
+  TIMING_CHOOSE: "Autonomous · Choose a start time",
+  TIMING_CHECKED: "Checked again when it starts.",
   WHERE_VALUE: (pool: string | number) => `${pool} pool`,
+  /** The Where row when no pool is chosen: the pool-required blocker points at it (#3043). */
+  WHERE_NONE: "No pool chosen yet",
   WHERE_DETAIL: (kind: string | number, used: string | number, max: string | number) =>
     `${kind} · ${used} of ${max} running`,
   /** pending W-03: the recommended text until the owner answers. */
@@ -67,6 +80,7 @@ export const NR_REVIEW = {
   WORK_ITEMS: (n: string | number) => `${n} items attached`,
   MAIN_DRIVE: (size: string | number) => `Main drive · ${size}`,
   NO_HARNESSES: "No harnesses",
+  TOOLS_START_COMMAND: "Start command · no harness",
   TOOLS_COMMAND_ONE: "Command · 1 optional harness",
   TOOLS_COMMAND: (n: string | number) => `Command · ${n} optional harnesses`,
   TOOLS_NONE: "Optional · none added",
@@ -128,6 +142,9 @@ export const NR_REVIEW = {
   POLICY_AUTOMATIC: "Run automatically",
   /** One harness's default when the included harnesses default differently. */
   POLICY_TOOLS_OF: (harness: string | number, effect: string | number) => `${harness}: ${effect}`,
+  POLICY_IN_SANDBOX: (secret: string | number, server: string | number) => `In the sandbox: ${secret} for ${server}`,
+  POLICY_IN_SANDBOX_UNNAMED: (server: string | number) => `In the sandbox: a secret for ${server}`,
+  POLICY_HARNESS_RULES: (server: string | number) => `${server}: rules applied by the harness`,
   /** The harness's own walls (#2822), on Review's tools row and the run page's policy row. */
   INNER_WALLS: (sandbox: string | number, approvals: string | number) => `Harness walls: ${sandbox}, ${approvals}`,
   INNER_SANDBOX_OFF: "harness sandbox off",

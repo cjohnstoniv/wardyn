@@ -39,7 +39,7 @@ export interface AddSecretDialogProps {
   onClose: () => void;
 }
 
-const FILE_NAME = /^[a-z0-9][a-z0-9_.-]{0,62}$/;
+export const FILE_NAME = /^[a-z0-9][a-z0-9_.-]{0,62}$/;
 
 export function AddSecretDialog({ names, namesFailure, hosts, residentAllowed, mayDefine, residentOffReason, onAdd, onClose }: AddSecretDialogProps) {
   const base = React.useId();

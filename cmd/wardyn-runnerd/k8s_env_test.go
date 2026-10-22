@@ -27,11 +27,15 @@ func TestReadK8sEnv(t *testing.T) {
 		"WARDYN_RUNNERD_HARD_DENY_CIDRS=10.96.0.0/12, 10.244.0.0/16",
 		"WARDYN_CONFINEMENT_MAP=CC2=runsc;CC3=kata-qemu",
 		"WARDYN_RUNNERD_ARCH=arm64",
+		"WARDYN_RUNNER_LINUX_VM=1",
 	))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if e.podIP.String() != "10.244.0.12" || e.relayPort != 8443 || e.sink != 9443 || e.clusterDomain != "cluster.local" ||
+	if off, err := readK8sEnv(k8sEnvFixture()); err != nil || off.linuxVM {
+		t.Fatalf("Linux VMs without the switch: on=%v err=%v, want off", off.linuxVM, err)
+	}
+	if e.podIP.String() != "10.244.0.12" || e.relayPort != 8443 || e.sink != 9443 || e.clusterDomain != "cluster.local" || !e.linuxVM ||
 		len(e.apiserverPeers) != 1 || len(e.hardDenyCIDRs) != 2 || e.podSelector["app.kubernetes.io/name"] != "wardyn-runnerd" || e.confinement["CC3"] != "kata-qemu" {
 		t.Fatalf("env %+v", e)
 	}
@@ -47,6 +51,7 @@ func TestReadK8sEnv(t *testing.T) {
 		{"empty arch", "WARDYN_RUNNERD_ARCH=", "WARDYN_RUNNERD_ARCH"},
 		{"unenforced netpol override", "WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1", "WARDYN_K8S_ALLOW_UNENFORCED_NETPOL is set"},
 		{"unenforced netpol override off", "WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=false", "WARDYN_K8S_ALLOW_UNENFORCED_NETPOL is set"},
+		{"Linux VM switch not 1", "WARDYN_RUNNER_LINUX_VM=true", "WARDYN_RUNNER_LINUX_VM"},
 		{"ambient deny override", "WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=true", "WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY is set"},
 	} {
 		t.Run(bad.name, func(t *testing.T) {
@@ -76,6 +81,18 @@ func TestSubstrateFlagChecks(t *testing.T) {
 	if err := checkSubstrateFlags("podman", changed()); err == nil {
 		t.Fatal("unknown substrate accepted")
 	}
+	// Folder-only mode holds no sandbox: no relay, no network, no cluster flag, and --folder-root is its alone.
+	if err := checkSubstrateFlags("folders", changed("folder-root")); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"relay-listen", "internal-network", "runs-namespace"} {
+		if err := checkSubstrateFlags("folders", changed(f)); err == nil {
+			t.Fatalf("folders took --%s", f)
+		}
+	}
+	if err := checkSubstrateFlags("docker", changed("folder-root")); err == nil {
+		t.Fatal("docker took --folder-root")
+	}
 	if checkArch("amd64") != nil || checkArch("") == nil || checkArch("arm64") != nil || checkArch("x86_64") == nil {
 		t.Fatal("arch check")
 	}
@@ -101,5 +118,19 @@ func TestServeArchEnvRefusedOnDocker(t *testing.T) {
 	cmd.SetArgs([]string{"--org", "https://wardyn.example.com", "--state-dir", t.TempDir()})
 	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), archEnv+" in the environment) applies only to --substrate=k8s") {
 		t.Fatalf("docker serve with %s = %v, want the k8s-only refusal", archEnv, err)
+	}
+}
+
+// TestDriveRootOnlyOnDocker: --drive-root binds drives through the docker driver,
+// so another substrate refuses it rather than ignoring it.
+func TestDriveRootOnlyOnDocker(t *testing.T) {
+	changed := func(name string) bool { return name == "drive-root" }
+	if err := checkSubstrateFlags("docker", changed); err != nil {
+		t.Fatalf("docker refused --drive-root: %v", err)
+	}
+	for _, sub := range []string{"k8s", "folders"} {
+		if err := checkSubstrateFlags(sub, changed); err == nil {
+			t.Errorf("--substrate %s took --drive-root", sub)
+		}
 	}
 }

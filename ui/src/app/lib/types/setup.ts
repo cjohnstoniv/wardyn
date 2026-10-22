@@ -329,6 +329,19 @@ export interface SetupStatus {
    *  TRUSTED_CA_COUNT(n) (F22 — the data has shipped server-side since
    *  before this console read it). */
   trusted_ca_certs?: number;
+  /** The switches that turn console features on (Go SetupFeatures), one
+   *  boolean each. Kept through redaction. Optional for fixture compatibility
+   *  with an older daemon; absent reads as every switch off. */
+  features?: {
+    /** WARDYN_SCHEDULED_RUNS: a run may be scheduled to start later. */
+    scheduled_runs: boolean;
+    /** WARDYN_KUBECTL_CLI: the kubectl component kind is on. Optional for fixtures. */
+    kubectl_cli?: boolean;
+    /** WARDYN_MULTI_AGENT_TASKS: a background agent task may give each agent its own task. */
+    multi_agent_tasks?: boolean;
+    /** WARDYN_MCP_LOCAL_SERVERS: a component may define an MCP server that runs in the run's sandbox. Optional for fixtures. */
+    mcp_local_servers?: boolean;
+  };
   checks: SetupCheck[];
   auth: {
     mode: "local" | "sso" | "token" | "disabled";
@@ -363,6 +376,9 @@ export interface SetupStatus {
     // because `driver` is blanked for them and the Vault remedy differs by
     // substrate. Absent on an older daemon or off Kubernetes.
     kubernetes?: boolean;
+    // WARDYN_COMPUTER_FOLDERS (internal/api/setup.go, SetupRunner.ComputerFolders), kept in a
+    // member's redacted body: off, New Run shows "Your computer" as blocked by the organisation.
+    computer_folders?: boolean;
     // How long a Kubernetes sandbox has to start, and how much longer one that no machine
     // has room for waits (internal/api/setup.go, SetupSandboxStart). Kept in a member's
     // redacted body: the run page's overdue bound follows it. Absent off Kubernetes.

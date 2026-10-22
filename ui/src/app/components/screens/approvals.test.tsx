@@ -164,6 +164,7 @@ vi.mock("../../lib/api/runs", () => ({
 import { ApprovalsScreen } from "./approvals";
 import { OperatorProvider, RoleProvider } from "../wardyn/operator-context";
 import { DENIED } from "../../lib/permissions-copy";
+import { HttpError } from "../../lib/api/core";
 import { APPROVAL, OPERATOR_ONLY_REASON, SECURITY_ONLY_REASON } from "../wardyn/copy";
 
 // Every describe below assumes a LIVE run unless it says otherwise (B4 gates
@@ -383,15 +384,14 @@ describe("ApprovalsScreen — role-aware decide buttons", () => {
   });
 });
 
-// prompt-v2 point 5's exact empty-state string, member-only (admin keeps
-// "You're all caught up" — the two roles see a genuinely different list, so
-// the copy should say so rather than share admin's self-congratulatory tone).
+// #3047 (R6RUN): one noun-phrase title for both roles; the sentence under it is what differs, because the
+// two roles see a genuinely different list.
 describe("ApprovalsScreen — empty-state copy by role", () => {
   beforeEach(() => {
     mockPendingEmpty = true;
   });
 
-  it("member: \"Approvals raised by your runs appear here.\"", async () => {
+  it("member: \"No pending approvals\" over the member sentence", async () => {
     render(
       <RoleProvider role="user">
         <MemoryRouter>
@@ -399,17 +399,22 @@ describe("ApprovalsScreen — empty-state copy by role", () => {
         </MemoryRouter>
       </RoleProvider>,
     );
-    expect(await screen.findByText("Approvals raised by your runs appear here.")).toBeInTheDocument();
+    expect(await screen.findByText("No pending approvals")).toBeInTheDocument();
+    expect(screen.getByText("Requests from your runs appear here.")).toBeInTheDocument();
     expect(screen.queryByText("You're all caught up")).not.toBeInTheDocument();
   });
 
-  it("admin (and the fail-open default): unchanged", async () => {
+  it("admin (and the fail-open default): the same title over the existing body", async () => {
     render(
       <MemoryRouter>
         <ApprovalsScreen />
       </MemoryRouter>,
     );
-    expect(await screen.findByText("You're all caught up")).toBeInTheDocument();
+    expect(await screen.findByText("No pending approvals")).toBeInTheDocument();
+    expect(
+      screen.getByText("New credential, egress, and tool-call requests appear here the moment an agent needs you."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("You're all caught up")).not.toBeInTheDocument();
   });
 });
 
@@ -422,6 +427,7 @@ describe("ApprovalsScreen — egress host not granted (member)", () => {
   beforeEach(() => {
     mockPendingKind = "egress_domain";
     mockPendingEmpty = false;
+    toastError.mockClear();
     denyMock.mockReset();
     approveMock.mockReset();
     mockCaps = { grants: [], enforcement: {}, session_groups: [], groups_snapshot_stale: false, kinds_version: 1 };
@@ -453,6 +459,40 @@ describe("ApprovalsScreen — egress host not granted (member)", () => {
     expect(screen.getByText(DENIED.APPROVE_CHIP)).toBeInTheDocument();
     expect(screen.getByText(DENIED.APPROVE_BODY("api.example.com"))).toBeInTheDocument();
     expect(screen.getByText(DENIED.ALWAYS_STILL_ADMIN)).toBeInTheDocument();
+  });
+
+  // The caps read cannot see a grant an admin withheld, so the server's refusal is what closes the card.
+  async function approveInDialog() {
+    fireEvent.click(await screen.findByRole("button", { name: /^approve$/i }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: /^approve$/i }));
+    await waitFor(() => expect(approveMock).toHaveBeenCalled());
+    await waitFor(() => expect(toastError).toHaveBeenCalled());
+    fireEvent.click(within(dialog).getByRole("button", { name: /cancel/i }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  }
+
+  it("a capability_egress_host refusal turns the card's buttons off and says why", async () => {
+    approveMock.mockRejectedValueOnce(new HttpError(403, "you are not granted egress host api.example.com", "capability_egress_host"));
+    renderMember();
+    await approveInDialog();
+    expect(screen.getByRole("button", { name: /^approve$/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^deny$/i })).toBeDisabled();
+    expect(screen.getByText(DENIED.APPROVE_CHIP)).toBeInTheDocument();
+    expect(screen.getByText(DENIED.APPROVE_BODY("api.example.com"))).toBeInTheDocument();
+  });
+
+  // A 403 with another reason (the Always scope is admin-only) must not read as the host being withheld.
+  it.each([
+    [409, "approval_not_pending"],
+    [403, "security_admin_surface"],
+  ])("a %i %s refusal leaves the buttons live", async (status, reason) => {
+    approveMock.mockRejectedValueOnce(new HttpError(status, "refused", reason));
+    renderMember();
+    await approveInDialog();
+    expect(screen.getByRole("button", { name: /^approve$/i })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: /^deny$/i })).not.toBeDisabled();
+    expect(screen.queryByText(DENIED.APPROVE_CHIP)).not.toBeInTheDocument();
   });
 
   it("enforced + granted by a *.suffix row: the decision is offered again", async () => {

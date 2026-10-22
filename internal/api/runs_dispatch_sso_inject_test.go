@@ -35,7 +35,7 @@ func TestAuthorBedrockSSOInjection_GrantScopeAndMITMEntry(t *testing.T) {
 	s.cfg.Store = vetoGrantStore{}
 	run := types.AgentRun{ID: uuid.New()}
 	llm := llmTransport{bedrock: ssoInjectAuth()}
-	injections, mitmHosts, ok := s.authorBedrockSSOInjection(context.Background(), run, llm,
+	injections, mitmHosts, _, ok := s.authorBedrockSSOInjection(context.Background(), run, llm,
 		awsSSOScope{perUser: true, owner: "member@corp.example"}, nil)
 	if !ok {
 		t.Fatal("authorBedrockSSOInjection failed; want ok")
@@ -68,7 +68,7 @@ func TestAuthorBedrockSSOInjection_ScopeCarriesTheDispatchTimeSnapshot(t *testin
 	captured := &captureGrantStore{}
 	s.cfg.Store = captured
 	llm := llmTransport{bedrock: ssoInjectAuth()}
-	if _, _, ok := s.authorBedrockSSOInjection(context.Background(), types.AgentRun{ID: uuid.New()}, llm,
+	if _, _, _, ok := s.authorBedrockSSOInjection(context.Background(), types.AgentRun{ID: uuid.New()}, llm,
 		awsSSOScope{perUser: true, owner: "member@corp.example"}, nil); !ok {
 		t.Fatal("authorBedrockSSOInjection failed; want ok")
 	}
@@ -117,7 +117,7 @@ func TestAuthorBedrockSSOInjection_EndpointOverrideDropsRequireTLS(t *testing.T)
 	s.cfg.Store = vetoGrantStore{}
 	s.cfg.AWSSSOEndpointOverride = theOverride
 	llm := llmTransport{bedrock: ssoInjectAuth()}
-	injections, mitmHosts, ok := s.authorBedrockSSOInjection(context.Background(), types.AgentRun{ID: uuid.New()}, llm,
+	injections, mitmHosts, _, ok := s.authorBedrockSSOInjection(context.Background(), types.AgentRun{ID: uuid.New()}, llm,
 		awsSSOScope{perUser: true, owner: "m"}, nil)
 	if !ok {
 		t.Fatal("authorBedrockSSOInjection failed; want ok")
@@ -204,7 +204,7 @@ func TestAuthorBedrockSSOInjection_ScopeCarriesThePathPin(t *testing.T) {
 	captured := &captureGrantStore{}
 	s.cfg.Store = captured
 	llm := llmTransport{bedrock: ssoInjectAuth()}
-	if _, _, ok := s.authorBedrockSSOInjection(context.Background(), types.AgentRun{ID: uuid.New()}, llm,
+	if _, _, _, ok := s.authorBedrockSSOInjection(context.Background(), types.AgentRun{ID: uuid.New()}, llm,
 		awsSSOScope{perUser: true, owner: "member@corp.example"}, nil); !ok {
 		t.Fatal("authorBedrockSSOInjection failed; want ok")
 	}

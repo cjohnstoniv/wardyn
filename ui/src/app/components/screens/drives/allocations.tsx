@@ -102,6 +102,7 @@ export function AllocationsBlock({
   grants,
   grantTotal = 0,
   collapsed,
+  teamDrives = false,
   onChanged,
 }: {
   drives: UserDriveListItem[];
@@ -121,12 +122,16 @@ export function AllocationsBlock({
   grantTotal?: number;
   /** The drive editor is open: the add form collapses for exactly that span. */
   collapsed: boolean;
+  /** storage.user_drive.team_drives: an allocation of a team drive carries its write bit. */
+  teamDrives?: boolean;
   onChanged: () => void;
 }) {
   // The tier gate off the context this block already sits inside, not drilled
-  // from the screen — the same read the sibling UserDrivesCard makes. Every
-  // write control below is disabled by it; the server is what refuses.
-  const disabled = !useOperator();
+  // from the screen — the same read the sibling UserDrivesCard makes. A
+  // security admin gets a read-only block: the Remove column and the add form
+  // are not rendered (the server's allocation routes are theirs, but this page
+  // is the read-only one); the preview below stays, it writes nothing.
+  const readOnly = !useOperator();
   const [toRemove, setToRemove] = React.useState<UserDriveGrant | null>(null);
   const [busy, setBusy] = React.useState(false);
   const driveName = (id: string) => drives.find((d) => d.id === id)?.name ?? id;
@@ -183,7 +188,7 @@ export function AllocationsBlock({
                   <TableHead>{GOV.COL_PRIORITY}</TableHead>
                   <TableHead>{DRIVES.COL_OVERRIDES}</TableHead>
                   <TableHead>{PERM.COL_ADDED}</TableHead>
-                  <TableHead className="w-[90px]" />
+                  {!readOnly && <TableHead className="w-[90px]" />}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -205,17 +210,18 @@ export function AllocationsBlock({
                     <TableCell className="whitespace-nowrap text-muted-foreground" title={absoluteTime(g.created_at)}>
                       {relativeTime(g.created_at)}
                     </TableCell>
-                    <TableCell>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={disabled}
-                        onClick={() => setToRemove(g)}
-                        aria-label={`${PERM.REMOVE} ${subjectText(g, typeName)}`}
-                      >
-                        {PERM.REMOVE}
-                      </Button>
-                    </TableCell>
+                    {!readOnly && (
+                      <TableCell>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setToRemove(g)}
+                          aria-label={`${PERM.REMOVE} ${subjectText(g, typeName)}`}
+                        >
+                          {PERM.REMOVE}
+                        </Button>
+                      </TableCell>
+                    )}
                   </TableRow>
                 ))}
               </TableBody>
@@ -223,7 +229,7 @@ export function AllocationsBlock({
           )}
         </div>
 
-        {collapsed ? (
+        {readOnly ? null : collapsed ? (
           <div
             data-testid="drives-add-allocation-collapsed"
             className="mt-4 flex items-center justify-between gap-3 border-t border-border bg-surface-2 px-6 py-4 opacity-60"
@@ -234,7 +240,7 @@ export function AllocationsBlock({
             </Button>
           </div>
         ) : (
-          <AddAllocationForm drives={drives} onChanged={onChanged} />
+          <AddAllocationForm drives={drives} teamDrives={teamDrives} onChanged={onChanged} />
         )}
       </section>
 
@@ -314,7 +320,15 @@ function Overrides({ grant: g }: { grant: UserDriveGrant }) {
 // whole block renders only once a drive exists to allocate (drives-screen.tsx),
 // so the case the teal had to be handed back for — an empty registry, where the
 // drives empty state's New drive carries it — never reaches this form.
-function AddAllocationForm({ drives, onChanged }: { drives: UserDriveListItem[]; onChanged: () => void }) {
+function AddAllocationForm({
+  drives,
+  teamDrives,
+  onChanged,
+}: {
+  drives: UserDriveListItem[];
+  teamDrives: boolean;
+  onChanged: () => void;
+}) {
   const disabled = !useOperator();
   /** The last upsert repointed an existing row (a 200, not a 201). Lives HERE,
    *  with the fields it is a note about: the form unmounts wholesale while the
@@ -346,6 +360,11 @@ function AddAllocationForm({ drives, onChanged }: { drives: UserDriveListItem[];
   const whoHint = SUBJECTS.find((s) => s.value === subjectType)?.hint ?? "";
   const userTier = subjectType === "user";
   const ready = !!driveID && (subjectType === "all" || !!subject.trim());
+  // A team drive's allocation carries the drive's write bit (the editor's one
+  // toggle) and sits beside the group's other drives; the server refuses any
+  // subject but a group, in its own words.
+  const team = teamDrives && !!drives.find((d) => d.id === driveID)?.team;
+  const teamWrite = !!drives.find((d) => d.id === driveID)?.writable;
 
   const submit = async () => {
     setSaving(true);
@@ -363,6 +382,7 @@ function AddAllocationForm({ drives, onChanged }: { drives: UserDriveListItem[];
         // tier, which may not carry one at all — see homeTouched above.
         ...(userTier && homeTouched ? { home_override: homeOverride.trim() } : {}),
         enabled,
+        ...(team ? { additional: true, members_can_write: teamWrite } : {}),
       });
       // F4-F7 (Appendix A V8): only `subject` was reset — sizeOverride/
       // writable/homeOverride/homeTouched/enabled persisted across submits,
@@ -649,6 +669,13 @@ function PreviewResult({ answer: a }: { answer: UserDrivePreview }) {
         </dd>
         <dt>{DRIVES.PREVIEW_ENFORCEMENT_LABEL}</dt>
         <dd className="min-w-0">{enforcementGloss(a.enforcement)}</dd>
+        {/* The server's phrase, as it is (M10). */}
+        {a.mounts_from && (
+          <>
+            <dt>{DRIVES.COL_MOUNTS_FROM}</dt>
+            <dd className="min-w-0">{a.mounts_from}</dd>
+          </>
+        )}
       </dl>
     </Note>
   );

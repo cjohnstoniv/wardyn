@@ -179,14 +179,20 @@ export function ScimCard() {
   React.useEffect(load, [load]);
 
   // Absent while unloaded or failed: ErrorState's own heading already says so once the card is open.
-  const unfinished = status ? new Set(status.pending.map((p) => p.person)).size : 0;
+  // A full page means the server stopped listing, so the distinct people counted here are a floor, not the total.
+  const unfinishedPeople = status ? new Set(status.pending.map((p) => p.person)).size : 0;
+  const unfinished = status && status.pending.length >= SCIM_LIST_CAP ? `${unfinishedPeople}+` : unfinishedPeople;
   // A full page means the server stopped listing, not that this many people are deactivated.
   const deactivated = status && status.deactivated.length >= SCIM_LIST_CAP ? `${SCIM_LIST_CAP}+` : status?.deactivated.length;
   const summary =
     state !== "ready" || !status ? undefined : status.configured ? SCIM.SUMMARY_ON(deactivated ?? 0, unfinished) : SCIM.SUMMARY_OFF;
 
   return (
-    <CollapsibleCard title={SCIM.TITLE} summary={summary} testId="scim-card">
+    <CollapsibleCard
+      title={SCIM.TITLE}
+      summary={summary}
+      testId="scim-card"
+    >
       <p className="text-body leading-snug text-muted-foreground">{SCIM.LEAD}</p>
       <div className="mt-3">
         {state === "loading" && <TableSkeleton rows={2} cols={3} />}

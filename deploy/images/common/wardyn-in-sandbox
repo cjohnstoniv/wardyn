@@ -1,0 +1,13 @@
+#!/bin/sh
+# Copyright 2026 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# /usr/local/bin/wardyn inside a sandbox. The Wardyn CLI itself is not in the image; the one command
+# a run's agent has is `wardyn needs-you <reason>`: ask a person to take over this run's desktop or
+# terminal, and wait until they hand back (cmd/wardyn-toolgate/needs_you.go).
+if [ "${1:-}" = "needs-you" ]; then
+    shift
+    exec wardyn-toolgate needs-you "$@"
+fi
+echo "wardyn: inside a Wardyn sandbox the only command is: wardyn needs-you <reason>" >&2
+exit 2

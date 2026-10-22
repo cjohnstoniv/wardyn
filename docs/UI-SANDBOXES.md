@@ -74,6 +74,72 @@
   each of them bigger, and because the decision to ship it anyway was taken with
   them in view rather than around them.
 
+### Signing in to websites inside the desktop (0.10, off by default)
+
+- With `WARDYN_DESKTOP_SIGNINS=on`, the creator of a run that declares `novnc`
+  can sign in to a website in a browser of their own inside the desktop. The
+  agent is stopped meanwhile, and the person can share one site's login with it.
+- `POST /api/v1/runs/{id}/desktop-signin` stops the agent and starts the
+  person's display; it opens through this gateway as the reserved app
+  `_signin`, offered only to the person who holds the sign-in.
+- `POST .../desktop-signin/shares` with `{"site": "example.com"}` copies that
+  site's cookies into the agent's browser profile (`wardyn-signin browser`,
+  or any browser that reads `~/.wardyn/logins/<site>.json`, which is
+  Playwright `storageState`).
+- `POST .../desktop-signin/end` closes the display and resumes the agent. A
+  sign-in ends by itself after 30 minutes.
+- The person's browser is a different uid in the same sandbox, not a
+  sandbox of its own: [THREAT-MODEL §5.1a](../threatmodel/THREAT-MODEL.md)
+  states what that holds and what it does not. After a share the agent holds
+  that site's login, within its egress, until the run ends.
+- The image is `agent-novnc-signin` (`deploy/images/novnc-signin/`,
+  `make agent-image-novnc-signin`): `agent-novnc` plus the person's browser
+  and display. With the setting on, dispatch runs every desktop run on it,
+  whether or not a sign-in happens (about 670 MB compressed, against
+  `agent-novnc`'s 400 MB); with it off the sign-in image is never pulled.
+- This deployment's own Docker runner only. A run on a self-hosted runner, a
+  pool or Kubernetes starts on `agent-novnc` with no sign-in lane, and a
+  sign-in on it answers `desktop_signin_runner_unsupported`. The console has no
+  button for it yet.
+- `make test-image-novnc-signin` is the sign-in image's own gate.
+
+## The desktop's clipboard
+
+- The relay filters a desktop's clipboard by the run's [`desktop`](POLICIES.md#desktop--desktopcontrols) rules:
+  paste in allowed and copy out blocked unless the policy says otherwise.
+- The desktop is the app declared as `"name": "novnc"`. Every WebSocket of that app is RFB or it closes. The relay
+  follows the RFB stream inside it and drops a blocked `ClientCutText` or `ServerCutText`.
+- Only that app and the sign-in display (`_signin`) are filtered. A member may declare the same desktop server under another name, so a ceiling that
+  blocks copy out should also pin `ui_apps` to the desktop app. An SSH port forward to the VNC port is outside the relay.
+- The desktop page comes from the sandbox, so these rules stop ordinary copy and paste; they are not a boundary against
+  a run built to get data out.
+- The server speaks first in RFB. Browser frames that arrive before the server's first frame are held, up to
+  64 KiB and 5 seconds, then read in order. A desktop whose first frame is not an RFB version is closed, and a
+  `ui.clipboard.transfer` `failure` row records `reason: not_rfb`.
+- It fails closed: a text frame, a WebSocket extension, a security type that encrypts the stream, or a message or
+  encoding it cannot frame closes the socket, and the gateway logs which one.
+- It offers the desktop no WebSocket extension and narrows the browser's encodings to Raw, CopyRect, ZRLE and the
+  pseudo-encodings it frames, so Tight is off on this path.
+- Every other app's sockets relay unfiltered, as before.
+- It filters the clipboard, not the screen: a person can still read what the desktop shows, and a page the
+  sandbox serves can still show text.
+
+## The desktop of a Linux VM run
+
+- A `linux_vm` run's desktop is QEMU's VNC display, reached through the run's runner. Nothing inside the guest serves it.
+- The viewer is Wardyn's own page (`desktop.html` from the console bundle) on the reserved app segment `__desktop`,
+  `/r/<run>/__desktop/`. No `ui_apps` name can take it: an app name starts with a letter or digit.
+- The desktop cookie lasts at most 1 hour, whatever `WARDYN_UI_SANDBOX_SESSION_TTL` allows. The shorter bound applies.
+- **Close** (`POST /r/<run>/__desktop/__close`) ends the session for every copy of the cookie: it clears the cookie,
+  cuts the open stream, and the gateway answers 403 to that cookie after.
+- Close cuts a stream on the same replica at once, and one on another replica within 15 s.
+- A Close holds across restarts and replicas, and open desktops survive a restart.
+- While the database is unreachable, open desktops end and new opens are refused until it is back.
+- The relay filters cut text on this display by the run's `desktop` rules, with the same `ui.clipboard.transfer` rows
+  as the `novnc` app. No clipboard flows today: QEMU's VNC passes cut text only to a guest clipboard agent
+  (`qemu-vdagent`), and the VM has none. The rules take effect once one exists.
+- The filter is not a boundary against a run built to get data out: the run controls what its screen shows.
+
 ## Diagnosing a blocked request
 
 - A relayed editor is the place developers most often meet the egress policy, and
@@ -100,6 +166,7 @@
 | `policy:denied` | it is on the **deny** list | it was refused on purpose; deny always wins |
 | `approval:denied` | a human reviewed this host and said no | stop retrying |
 | `approval:expired` | the host's approval expired, or was cancelled, before anyone decided it | retry: the next request asks again, and a person still has to approve it |
+| `approval:stale` | the host was approved, but the control plane did not answer its re-check, two minutes or more after the last answered one | retry: the next request asks again, and a person has to approve it again |
 | `policy:method` | the host is allowed, the HTTP method is not | |
 | `policy:port` | the host is allowed on ports 80 and 443 only (the port rule) | ask the operator for an allowlist entry that names the port, `host:port` |
 | `builtin:private-ip` | the target resolved to a private address | the SSRF guard; not policy-tunable |
@@ -215,6 +282,26 @@ export WARDYN_AGENT_IMAGES='{"vscode":"wardyn/agent-vscode:local"}'
 
 - Your own image serves an app the same way — see
   [Image contract](#image-contract-byoi).
+
+### Or start the app with the run (an application server)
+
+- Instead of a launcher, an interactive run's startup command can serve the
+  declared port, sent with `shape: application` (0.10, [run documents](sdk.md#run-documents)):
+
+```json
+{
+  "shape": "application",
+  "experience": "interactive",
+  "startup": { "kind": "command", "command": "npm run dev -- --port 3000" },
+  "policy_overlay": { "ui_apps": [{ "name": "web", "port": 3000 }] }
+}
+```
+
+- It is an ordinary interactive run: the gates above, `deny_interactive` and `deny_ui_apps` all apply.
+- Under `deny_ui_apps` the run is refused at create (`422 run_application_ui_apps_denied`), as preflight says too.
+- The command starts once, after the workspace is prepared, in the run's terminal session (attach shows its output); it stops with the run and is not restarted if it exits. A revive starts it again.
+- With no launcher, the gateway waits up to 20s for the port of a run whose startup is a command, before the 502 below. The wait counts from when the app is opened, so an open during a long workspace preparation can still show the error.
+- A harness prompt seed gets the 502 at once.
 
 ## 3. Open an app
 
@@ -431,6 +518,7 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
 | `ui.start` | the launcher was run and the app came up | app, port, launcher path |
 | `ui.open` | a relay connection opened | app, port |
 | `ui.close` | that connection closed | app, port, `duration_sec` |
+| `ui.clipboard.transfer` | a desktop clipboard transfer, relayed or dropped; or a desktop closed for not speaking RFB | app, direction, bytes, sha256 (never the text); or app, reason |
 
 - These are deliberately **not** `session.attach`: there is no PTY and no holder,
   and a relay session must never appear in the run detail page's Recording tab as

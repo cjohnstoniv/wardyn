@@ -25,6 +25,7 @@ import * as React from "react";
 import { setup as setupApi } from "../../../lib/api/setup";
 import type { SetupStatus } from "../../../lib/types";
 import { PageHeader } from "../../wardyn/page-header";
+import { PageContainer } from "../../wardyn/page-container";
 import { YOUR_ACCOUNT } from "../../wardyn/copy/console-view";
 import { useShellSetupStatus } from "../../wardyn/model-access-context";
 import { ModelConnectionsCard } from "./model-connections-card";
@@ -34,6 +35,7 @@ import { MyComponentsCard } from "./my-components-card";
 import { MyRunnerAndPoolsCards } from "./my-pools-card";
 import { InvitationsCard } from "./invitations-card";
 import { ServiceIdentitiesCard } from "./service-identities-card";
+import { SignedInClisCard } from "./signed-in-clis-card";
 import { SshKeysPane } from "../ssh-keys";
 import { ErrorState, TableSkeleton } from "../../wardyn/states";
 
@@ -55,7 +57,7 @@ export function YourAccountScreen() {
   React.useEffect(load, [load]);
 
   return (
-    <div className="mx-auto w-full max-w-[900px] px-6 py-8">
+    <PageContainer width="form" className="pb-8">
       <PageHeader title="Your account" description={YOUR_ACCOUNT.LEDE} />
       {state === "loading" && <TableSkeleton />}
       {state === "error" && <ErrorState onRetry={load} />}
@@ -77,11 +79,14 @@ export function YourAccountScreen() {
               nothing while runners are off. */}
           {!adminView && <MyRunnerAndPoolsCards />}
           <SshKeysPane heading="h3" />
+          {/* ATT-LOGIN-UI: the computers signed in with the Wardyn CLI, each with its own Sign out. Absent where
+              CLI sign-in is not served. */}
+          <SignedInClisCard />
           {/* #1508: the service identities this person sponsors, and their tokens. Renders nothing for a
               person who sponsors none. */}
           <ServiceIdentitiesCard />
         </div>
       )}
-    </div>
+    </PageContainer>
   );
 }

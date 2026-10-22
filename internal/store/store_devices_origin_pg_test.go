@@ -32,7 +32,7 @@ func TestPG_Devices_ForwardedRowNeverReadsAsAnOrgPrincipal(t *testing.T) {
 	ctx := context.Background()
 	st := store.NewPG(pool)
 	d := federationDevice(t, st)
-	action := "governance.profile.update." + uuid.NewString()
+	action := "governance.unit.update." + uuid.NewString()
 	const admin = "admin@org.example"
 
 	ev := types.AuditEvent{ID: uuid.New(), Time: time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond),

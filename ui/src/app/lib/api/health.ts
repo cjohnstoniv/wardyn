@@ -18,7 +18,7 @@ import { appURL } from "../base-path";
 //
 // It carries NO DOOR FIELD, deliberately: the door is a property of the
 // caller's PROFILE, not of the allocation, and rides beside it as
-// Me.user_drive_denied_by_profile. Folding them would make the two states the
+// Me.user_drive_denied_by_unit. Folding them would make the two states the
 // member surfaces exist to tell apart — "denied AND unallocated" vs "simply
 // unallocated" — inexpressible.
 export interface MeUserDrive {
@@ -35,6 +35,10 @@ export interface MeUserDrive {
   home_name?: string;
   /** Allocated, then disabled by an admin. Omitted when false. */
   paused?: boolean;
+  /** A share, which can be reached from more than one place (#113). */
+  placement_eligible?: boolean;
+  /** Where it mounts from, printed as it is (M10): "Organisation runners", and the bound runner when you own it. */
+  mounts_from?: string;
 }
 
 // GET /me — see whoami() below for where each field comes from. One
@@ -74,7 +78,7 @@ export interface Me {
   // open door. Non-empty is the whole bit — and it renders even when
   // user_drive is null, the state where "ask an admin for an allocation" is
   // the wrong advice.
-  user_drive_denied_by_profile?: string;
+  user_drive_denied_by_unit?: string;
   // The user view (0.7.4; renamed in 0.8 from member_mode/"view as member" —
   // docs/OPERATIONS.md's "Renamed in 0.8" appendix): this session is an ADMIN
   // who asked to be treated as a user. Every tier field above is already
@@ -162,8 +166,12 @@ export interface PolicyRef {
   email?: string;
   request_url?: string;
   request_text?: string;
-  // On a refusal: the kind of layer that refused ("deployment" or "profile").
+  // On a refusal: the kind of layer that refused ("deployment" or "unit").
   layer?: string;
+  // The person changed the policy for this run, inside their ceiling.
+  overridden?: boolean;
+  // On a refusal: the knob it is about is locked by the layer that set it (absent until locks exist).
+  locked?: boolean;
 }
 
 // Result of a real throwaway-sandbox probe (test-proxy / test-redirect) —
@@ -379,6 +387,12 @@ export const health = {
     // mirror — token_login already folds it into whether the token form
     // shows. Absent on an older daemon, which must read the same as `false`.
     sso_only?: boolean;
+    // CLI sign-in (internal/types CLISignInHealthz): whether wardyn login can sign in here, whether it can
+    // without a browser, and the origin device proofs are checked against. Wire mirror only; absent on an
+    // older daemon.
+    cli_sign_in?: boolean;
+    cli_paste_sign_in?: boolean;
+    cli_sign_in_origin?: string;
     // SSH gateway discovery (run-detail's "Connect via SSH" pane): absent /
     // undefined on a deployment with the gateway off (WARDYN_SSH_LISTEN
     // unset) or an older daemon — both must read as "no pane", never a
@@ -431,6 +445,11 @@ export const health = {
     // mean "no mirror" — lib/demo-videos.ts's episodeUrl falls back to its
     // own hardcoded GitHub base either way.
     demo_video_base_url?: string;
+    // WARDYN_CLI_ARTIFACT_BASE (internal/api/healthz.go on lane ATT-INSTALL, not on
+    // main yet): the operator's internal mirror of the release assets, already
+    // validated at boot (https, no userinfo/query/fragment). Absent while unset and
+    // on an older daemon. The card's Get the CLI lines fetch from it when present.
+    cli_artifact_base?: string;
   }> {
     try {
       // /healthz is un-prefixed (not under /api/v1), so it is the ONE call
@@ -571,7 +590,7 @@ export const health = {
   // permissions, governance profiles). `operator` deliberately stays
   // super-admin-only — the two are NOT complementary now that role has three
   // values, so gate each control on the one that matches its route.
-  // `user_drive` / `user_drive_denied_by_profile` are the 0.7 member-drive
+  // `user_drive` / `user_drive_denied_by_unit` are the 0.7 member-drive
   // pair — see MeUserDrive above for why the door is a sibling field and not
   // a property of the allocation.
   async whoami(): Promise<Me | null> {

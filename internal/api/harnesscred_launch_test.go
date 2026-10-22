@@ -22,6 +22,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -158,11 +159,11 @@ type ceilingBlipStore struct {
 	hint map[uuid.UUID]string
 }
 
-func (s *ceilingBlipStore) ResolveGovernanceProfile(ctx context.Context, users, groups []string, userType string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (s *ceilingBlipStore) ResolveGovernanceUnit(ctx context.Context, users, groups []string, userType string) (*types.GovernanceUnit, types.CapabilitySubjectType, error) {
 	if s.fail.Load() {
 		return nil, "", errors.New("governance store unavailable")
 	}
-	return s.integStore.ResolveGovernanceProfile(ctx, users, groups, userType)
+	return s.integStore.ResolveGovernanceUnit(ctx, users, groups, userType)
 }
 
 func (s *ceilingBlipStore) SetRunFailureHint(_ context.Context, id uuid.UUID, hint string) error {
@@ -370,4 +371,8 @@ func TestFinishHarnessLoginLaunch_DenyRemoteMemberSignInDispatches(t *testing.T)
 	if rnr.createCalls != 1 {
 		t.Fatalf("CreateSandbox calls = %d, want the sign-in box created", rnr.createCalls)
 	}
+}
+
+func (s *ceilingBlipStore) ListMembershipsFor(ctx context.Context, users, groups []string, userType string) ([]store.MembershipMatch, error) {
+	return membershipsFromResolve(s.ResolveGovernanceUnit(ctx, users, groups, userType))
 }

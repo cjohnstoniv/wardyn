@@ -24,11 +24,23 @@
     "CLIGitHub": [
       "capabilities"
     ],
+    "CLIKubectl": [
+      "server",
+      "ca_pem",
+      "service_account",
+      "namespaces",
+      "access"
+    ],
+    "CLIServiceAccount": [
+      "namespace",
+      "name"
+    ],
     "ComponentCLI": [
       "kind",
       "azure",
       "aws",
-      "github"
+      "github",
+      "kubectl"
     ],
     "ComponentDefinition": [
       "description",
@@ -49,7 +61,12 @@
     ],
     "ComponentMCP": [
       "url",
-      "transport"
+      "transport",
+      "launch"
+    ],
+    "ComponentMCPLaunch": [
+      "command",
+      "args"
     ],
     "ComponentRef": [
       "id",
@@ -65,6 +82,12 @@
       "secret_name",
       "shared",
       "delivery"
+    ],
+    "DesktopControls": [
+      "paste_in",
+      "copy_out",
+      "upload",
+      "download"
     ],
     "DriveAttachment": [
       "drive_id",
@@ -218,9 +241,24 @@
   },
   "nested_excluded": [
     {
+      "path": "GrantSpec.owner_only_refs",
+      "excluded": "origin",
+      "why": "Wardyn sets it at each launch; a template marks the grant owner_only."
+    },
+    {
+      "path": "IncludedTool.task",
+      "excluded": "launch",
+      "why": "An agent's own task in a background run with several agents, given at each launch; templates do not keep it."
+    },
+    {
       "path": "LLMInspectionSpec.workspace_secret_values",
       "excluded": "secret",
       "why": "Secret values are runtime-only: the server resolves them, and a template names secrets instead."
+    },
+    {
+      "path": "RunLocalFolder.direction",
+      "excluded": "launch",
+      "why": "Part of local_folder, which is named at each launch."
     },
     {
       "path": "RunLocalFolder.name",
@@ -228,7 +266,17 @@
       "why": "Part of local_folder, which is named at each launch."
     },
     {
+      "path": "RunLocalFolder.path",
+      "excluded": "launch",
+      "why": "Part of local_folder, which is named at each launch."
+    },
+    {
       "path": "RunLocalFolder.remote_dir",
+      "excluded": "launch",
+      "why": "Part of local_folder, which is named at each launch."
+    },
+    {
+      "path": "RunLocalFolder.runner_id",
       "excluded": "launch",
       "why": "Part of local_folder, which is named at each launch."
     }
@@ -347,6 +395,14 @@
       "section": "run_wide"
     },
     {
+      "name": "desktop",
+      "part": "tools_image",
+      "omitted": "unset_optional",
+      "empty": "same_as_omitted",
+      "meaning": "The desktop keeps its defaults: paste in and upload allowed, copy out and download blocked.",
+      "section": "run_wide"
+    },
+    {
       "name": "resources",
       "part": "resources",
       "omitted": "baseline",
@@ -369,6 +425,14 @@
       "omitted": "unset_optional",
       "empty": "same_as_omitted",
       "meaning": "The harness's own walls are what its lane and autonomy level give.",
+      "section": "run_wide"
+    },
+    {
+      "name": "recording",
+      "part": "access_rules",
+      "omitted": "unset_optional",
+      "empty": "same_as_omitted",
+      "meaning": "The organisation's recording level applies. Keystrokes are never recorded.",
       "section": "run_wide"
     },
     {
@@ -570,6 +634,11 @@
       "keyed_by": "harness"
     },
     {
+      "name": "run_in",
+      "excluded": "launch",
+      "why": "The unit a run runs in is one of the launching person's own, chosen at each launch; a template's runs run in the home unit of whoever uses it."
+    },
+    {
       "name": "drive",
       "part": "drives",
       "omitted": "unset_optional",
@@ -673,9 +742,29 @@
       "why": "A folder on one person's computer is named at each launch; a template cannot know where it is."
     },
     {
+      "name": "machine_kind",
+      "excluded": "launch",
+      "why": "The kind of sandbox is chosen at each launch in this release; a template never prefills a Linux VM."
+    },
+    {
       "name": "max_wait_sec",
       "excluded": "launch",
       "why": "How long a run may wait for a slot in a full pool is chosen at each launch; the default wait suits a template's runs."
+    },
+    {
+      "name": "start_at",
+      "excluded": "launch",
+      "why": "When a run starts is chosen at each launch; a template's runs start when they are launched."
+    },
+    {
+      "name": "start_time_zone",
+      "excluded": "launch",
+      "why": "The time zone only means something beside a start time."
+    },
+    {
+      "name": "keep_work_folder",
+      "excluded": "launch",
+      "why": "Keeping the work folder makes a drive for the person launching, so it is chosen at each launch."
     },
     {
       "name": "no_end",

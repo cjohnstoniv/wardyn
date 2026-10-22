@@ -36,7 +36,9 @@ export function Segmented<T extends string>({
   /** New Run's view and format switches: a padded track with an inset pill per option (the Make design's compact control). */
   size?: "default" | "compact";
 }) {
-  const chip = (o: { value: T; dirty?: boolean }) =>
+  // On the selected default option the warning tint (13%) would show the primary fill through it, so the chip
+  // takes the solid card colour, and its warning text keeps >= 4.5:1 against that in both themes (#2832).
+  const chip = (o: { value: T; dirty?: boolean }, selected = false) =>
     o.dirty && (
       /* aria-hidden: the chip is a VISUAL echo of a fact already
           announced elsewhere (the PageHeader chip, the beside-Save
@@ -44,7 +46,9 @@ export function Segmented<T extends string>({
           would silently break every exact-string `getByRole(...,
           {name: o.label})` lookup the moment the tab it names is dirty. */
       <span aria-hidden="true" data-testid={`tab-dirty-chip-${o.value}`}>
-        <Chip tone="warning">{UNSAVED.DIRTY_CHIP}</Chip>
+        <Chip tone="warning" className={selected ? "border-transparent bg-card" : undefined}>
+          {UNSAVED.DIRTY_CHIP}
+        </Chip>
       </span>
     );
   if (size === "compact") {
@@ -69,6 +73,7 @@ export function Segmented<T extends string>({
       </div>
     );
   }
+  // The selected fill is the primary token: bg-muted sat at ~1.1:1 on the card, so only the bolder label told the options apart (#2832).
   // max-w-full + overflow-x-auto: an over-wide set scrolls inside its card instead of being clipped (#2870).
   return (
     <div className="inline-flex w-fit max-w-full overflow-x-auto rounded-lg border border-border-strong">
@@ -84,12 +89,12 @@ export function Segmented<T extends string>({
             value === o.value
               ? o.value === "deny"
                 ? "bg-danger-subtle font-medium text-danger"
-                : "bg-muted font-medium text-foreground"
+                : "bg-primary font-medium text-primary-foreground"
               : "text-muted-foreground hover:text-foreground",
           )}
         >
           {o.label}
-          {chip(o)}
+          {chip(o, value === o.value)}
         </button>
       ))}
     </div>

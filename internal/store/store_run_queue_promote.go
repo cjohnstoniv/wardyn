@@ -4,10 +4,13 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -136,13 +139,18 @@ func (s PG) queueRoom(ctx context.Context, pass PromotePass) (types.RunnerPool, 
 	return pool, room, nil
 }
 
-// setPoolQueueWait writes detail on every waiting run of poolID whose status_detail says otherwise.
+// setPoolQueueWait writes detail on every waiting run of poolID whose status_detail says otherwise. It
+// takes no pool lock, so it locks the run rows in id order before it writes them: a bulk update locks
+// in whatever order its plan visits the rows, and a writer that takes them in id order could then
+// hold a row this one wants while it waits for one this one holds.
 func (s PG) setPoolQueueWait(ctx context.Context, poolID uuid.UUID, detail string) error {
 	if detail == "" {
 		return nil
 	}
 	if _, err := s.Pool.Exec(ctx, `UPDATE agent_runs SET status_detail = $2
-		WHERE state = $3 AND status_detail <> $2 AND id IN (SELECT run_id FROM run_queue WHERE pool_id = $1)`,
+		WHERE id IN (SELECT id FROM agent_runs
+			WHERE state = $3 AND status_detail <> $2 AND id IN (SELECT run_id FROM run_queue WHERE pool_id = $1)
+			ORDER BY id FOR NO KEY UPDATE)`,
 		poolID, detail, string(types.RunQueued)); err != nil {
 		return fmt.Errorf("store: set pool queue wait: %w", err)
 	}
@@ -217,18 +225,20 @@ func (a admittedRun) keys() []string {
 	return append(out, a.remotes...)
 }
 
-// queuePage is one page of the pool's queue rows, oldest first (queued_at, then run_id), after the given
-// row (nil: from the head). It takes no lock: whether a run is still QUEUED is the promotion CAS's to say.
+// queuePage is one page of the pool's queue rows in line order (runQueueLine, then run_id), after the
+// given row (nil: from the head). A scheduled run whose start time is still ahead is not in the page:
+// nothing judges or promotes it before then. It takes no lock: whether a run is still QUEUED is the
+// promotion CAS's to say.
 func (s PG) queuePage(ctx context.Context, poolID uuid.UUID, after *RunQueueEntry, limit int) ([]RunQueueEntry, error) {
 	if limit <= 0 {
 		limit = 1 << 30
 	}
-	q, args := `SELECT `+runQueueCols+` FROM run_queue WHERE pool_id = $1 ORDER BY queued_at, run_id LIMIT $2`, []any{poolID, limit}
+	q, args := `SELECT `+runQueueCols+` FROM run_queue WHERE pool_id = $1 AND (start_at IS NULL OR start_at <= $3)`, []any{poolID, limit, s.now()}
 	if after != nil {
-		q = `SELECT ` + runQueueCols + ` FROM run_queue WHERE pool_id = $1 AND (queued_at, run_id) > ($3, $4)
-			ORDER BY queued_at, run_id LIMIT $2`
-		args = append(args, after.QueuedAt, after.RunID)
+		q += ` AND (` + runQueueLine + `, run_id) > ($4, $5)`
+		args = append(args, after.lineAt(), after.RunID)
 	}
+	q += ` ORDER BY ` + runQueueLine + `, run_id LIMIT $2`
 	return collect(ctx, s.Pool, "list", "promotable runs", q, args, func(row pgx.Row) (RunQueueEntry, error) { return scanRunQueueEntry(row) })
 }
 
@@ -516,20 +526,20 @@ func (s PG) StalePromotedRuns(ctx context.Context, staleAfter time.Duration) ([]
 // QueueStart is the columns the start of a promoted run writes: everything a QUEUED run left empty
 // (the identity, the end and its cap, the governance capture) and the placement the start settled.
 type QueueStart struct {
-	SPIFFEID            string
-	ConfinementClass    types.ConfinementClass
-	ModelProviderID     string
-	AutonomyLevel       types.AutonomyLevel
-	InnerWalls          *types.HarnessInnerWalls
-	EndsAt              *time.Time
-	WaitBudgetSec       int
-	RunLimits           types.RunLimits
-	GovernanceProfileID *uuid.UUID
-	LifetimeCapAt       *time.Time
-	LifetimeCapSource   types.LimitSource
-	Placement           types.Placement
-	PlacementFilled     bool
-	RunnerID            *uuid.UUID
+	SPIFFEID          string
+	ConfinementClass  types.ConfinementClass
+	ModelProviderID   string
+	AutonomyLevel     types.AutonomyLevel
+	InnerWalls        *types.HarnessInnerWalls
+	EndsAt            *time.Time
+	WaitBudgetSec     int
+	RunLimits         types.RunLimits
+	UnitID            *uuid.UUID
+	LifetimeCapAt     *time.Time
+	LifetimeCapSource types.LimitSource
+	Placement         types.Placement
+	PlacementFilled   bool
+	RunnerID          *uuid.UUID
 	// RunnerFallbacks are the run's other runners, in order: when RunnerID has no room under its lock the
 	// start takes the first of these that has, so a run is never ended for one full runner while another
 	// can take it.
@@ -588,13 +598,13 @@ func startQueuedRun(ctx context.Context, q Querier, id uuid.UUID, st QueueStart,
 	}
 	run, err := scanRun(q.QueryRow(ctx, `
 		UPDATE agent_runs SET spiffe_id=$2, confinement_class=$3, model_provider_id=$4, autonomy_level=$5, ends_at=$6,
-			wait_budget_sec=$7, run_limits=$8, governance_profile_id=$9, lifetime_cap_at=$10, lifetime_cap_source=$11,
+			wait_budget_sec=$7, run_limits=$8, unit_id=$9, lifetime_cap_at=$10, lifetime_cap_source=$11,
 			placement=$12, placement_filled=$13, runner_id=$14, evidence_source=$15, runner_pool_executor=$16, updated_at=now(),
 			reserved_cpu_millis=$18, reserved_memory_mib=$19, reserved_disk_mib=$20, inner_walls=$21
 		WHERE id=$1 AND state=$17 AND admitted_at IS NOT NULL AND sandbox_ref = ''
 		RETURNING `+runCols,
 		id, st.SPIFFEID, string(st.ConfinementClass), st.ModelProviderID, string(st.AutonomyLevel), st.EndsAt,
-		st.WaitBudgetSec, limits, st.GovernanceProfileID, st.LifetimeCapAt, string(st.LifetimeCapSource),
+		st.WaitBudgetSec, limits, st.UnitID, st.LifetimeCapAt, string(st.LifetimeCapSource),
 		string(st.Placement), st.PlacementFilled, st.RunnerID, string(st.EvidenceSource), st.RunnerPoolExecutor,
 		string(types.RunPending), st.Reserved.CPUMillis, st.Reserved.MemoryMiB, st.Reserved.DiskMiB, walls))
 	if errors.Is(err, ErrNotFound) {
@@ -617,6 +627,30 @@ func (s PG) SetPromotedStatusDetail(ctx context.Context, id uuid.UUID, detail st
 	return nil
 }
 
+// RequeuePromotedRun puts a promoted run whose start has not dispatched back in its pool's queue, with
+// the queue row it was promoted with (e: its owner, authority snapshot, launch, deadline and start time,
+// unchanged) and detail as its status_detail. Guarded: only a run still PENDING with admitted_at set and
+// no sandbox moves, so a kill or another end that moved it first keeps its outcome, and a kill after it
+// meets a QUEUED run. Its binding and size stay the promotion's; the next promotion sets them again.
+// false means the run had moved.
+func (s PG) RequeuePromotedRun(ctx context.Context, e RunQueueEntry, detail string) (bool, error) {
+	var moved int
+	if err := s.Pool.QueryRow(ctx, `
+		WITH moved AS (
+			UPDATE agent_runs SET state=$2, updated_at=now(), admitted_at=NULL, status_detail=$3
+			WHERE id=$1 AND state=$4 AND admitted_at IS NOT NULL AND sandbox_ref = '' RETURNING id),
+		back AS (
+			INSERT INTO run_queue (`+runQueueCols+`)
+			SELECT id, $5::uuid, $6::text, $7::timestamptz, $8::timestamptz, $9::jsonb, $10::jsonb, $11::jsonb, $12::timestamptz
+			FROM moved RETURNING run_id)
+		SELECT count(*) FROM back`,
+		e.RunID, string(types.RunQueued), detail, string(types.RunPending), e.PoolID, e.Owner, e.QueuedAt, e.DeadlineAt,
+		jsonOrEmpty(e.PolicyRef), jsonOrEmpty(e.Authority), jsonOrEmpty(e.Launch), e.StartAt).Scan(&moved); err != nil {
+		return false, fmt.Errorf("store: requeue promoted run: %w", err)
+	}
+	return moved > 0, nil
+}
+
 // SetQueueWait records why a waiting run keeps its place: its "queue: <token>" status_detail, written
 // only when it differs from what the run carries and only while the run is still QUEUED.
 func (s PG) SetQueueWait(ctx context.Context, id uuid.UUID, detail string) error {
@@ -625,6 +659,46 @@ func (s PG) SetQueueWait(ctx context.Context, id uuid.UUID, detail string) error
 		return fmt.Errorf("store: set queue wait: %w", err)
 	}
 	return nil
+}
+
+// SetHeldQueueWaits records, in one transaction, why each run a pass held keeps its place (details: run
+// id to its "queue: <token>" status_detail), unless the pool is at its cap by now. A full pool outranks
+// every other reason: a pass judges with no lock, so by the time it writes, a launch or a concurrent pass
+// may have filled the pool and written runner_pool_at_capacity, and a held reason written after it would
+// bring back a reason the pool's own cap has already replaced. Reading the pool under FOR SHARE keeps
+// the writers that fill a capped pool (promotion and revive, both FOR NO KEY UPDATE on the pool row) from
+// filling it between the count and the writes. Two passes on one pool hold FOR SHARE together, so the run
+// rows are written in id order, as every multi-row lock in this package is: two passes then queue on the
+// lowest id instead of each holding a row the other wants.
+func (s PG) SetHeldQueueWaits(ctx context.Context, poolID uuid.UUID, details map[uuid.UUID]string) error {
+	if len(details) == 0 {
+		return nil
+	}
+	return s.inTx(ctx, func(q Querier) error {
+		pool, err := scanRunnerPool(q.QueryRow(ctx, `SELECT `+runnerPoolCols+` FROM runner_pools WHERE id = $1 FOR SHARE`, poolID))
+		if errors.Is(err, ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		running, err := countPoolSlotHolders(ctx, q, poolID)
+		if err != nil {
+			return err
+		}
+		if runnerpool.AtCapacity(pool, running) != nil {
+			return nil
+		}
+		ids := slices.SortedFunc(maps.Keys(details), func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
+		for _, id := range ids {
+			detail := details[id]
+			if _, err := q.Exec(ctx, `UPDATE agent_runs SET status_detail=$2 WHERE id=$1 AND state=$3 AND status_detail <> $2`,
+				id, detail, string(types.RunQueued)); err != nil {
+				return fmt.Errorf("store: set held queue wait: %w", err)
+			}
+		}
+		return nil
+	})
 }
 
 // ExitQueuedRun moves a QUEUED run to a terminal state through LeaveRunQueue and, in the same

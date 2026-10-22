@@ -167,6 +167,10 @@ spec:
             - name: WARDYN_CONFINEMENT_MAP
               value: {{ join ";" $rtc | quote }}
             {{- end }}
+            {{- if .Values.k8s.linuxVM }}
+            - name: WARDYN_RUNNER_LINUX_VM
+              value: "1"
+            {{- end }}
           ports:
             - name: relay
               containerPort: {{ .Values.relay.targetPort }}

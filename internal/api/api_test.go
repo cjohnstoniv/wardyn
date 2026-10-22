@@ -300,7 +300,11 @@ type cancelCall struct {
 // by internal handlers that compare run ownership, not the not-found mapping).
 var errStoreNotFound = errors.New("store: not found")
 
+// fakeBroker is shared by every request a harness serves, and concurrent
+// creates each revoke their own run, so its writes hold mu (the real broker
+// keeps no state between calls).
 type fakeBroker struct {
+	mu       sync.Mutex
 	minted   broker.Minted
 	mintErr  error
 	revoked  []uuid.UUID
@@ -308,6 +312,8 @@ type fakeBroker struct {
 }
 
 func (b *fakeBroker) MintForGrant(_ context.Context, caller *identity.Claims, _ uuid.UUID) (broker.Minted, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.lastCall = caller
 	if b.mintErr != nil {
 		return broker.Minted{}, b.mintErr
@@ -316,6 +322,8 @@ func (b *fakeBroker) MintForGrant(_ context.Context, caller *identity.Claims, _ 
 }
 
 func (b *fakeBroker) RevokeRun(_ context.Context, runID uuid.UUID) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.revoked = append(b.revoked, runID)
 	return nil
 }
@@ -953,6 +961,24 @@ func TestInternalMintForGrant(t *testing.T) {
 	// The broker must have been called with the run claims from the token.
 	if h.broker.lastCall == nil || h.broker.lastCall.RunID != runID {
 		t.Errorf("broker caller claims not bound from token")
+	}
+}
+
+// An ssh_key mint names its grant's SSH host, which the proxy's ssh agent
+// signs in to only; another kind's answer names none.
+func TestInternalMintSSHKeyNamesItsHost(t *testing.T) {
+	h := newHarness(t)
+	tok := h.mintRunToken(t, uuid.New())
+	for _, tc := range []struct {
+		kind types.GrantKind
+		want string
+	}{{types.GrantSSHKey, "github.com"}, {types.GrantGitPAT, ""}} {
+		h.broker.minted = broker.Minted{Kind: tc.kind, JTI: "jti-1", Token: "value", Metadata: map[string]string{"host": "github.com"}}
+		w := do(t, h.srv, http.MethodPost, "/api/v1/internal/credentials/mint", tok, `{"grant_id":"`+uuid.New().String()+`"}`)
+		var resp mintResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || w.Code != http.StatusOK || resp.Host != tc.want {
+			t.Errorf("%s mint: %d %+v (%v), want host %q", tc.kind, w.Code, resp, err, tc.want)
+		}
 	}
 }
 

@@ -9,6 +9,7 @@ import {
   AlertTriangle,
   ArrowRight,
   DoorOpen,
+  Info,
   KeyRound,
   Loader2,
   Moon,
@@ -32,7 +33,8 @@ import { SIGNIN } from "../../lib/sign-in-copy";
 import { SIGNIN_HELP_REFUSALS } from "../../lib/sign-in-copy";
 import { SignInHelp } from "../wardyn/sign-in-help";
 import { usePoll } from "../../lib/use-poll";
-import { signInURL } from "../../lib/base-path";
+import { routerPath, signInURL } from "../../lib/base-path";
+import { returnRunOf, SESSION_ENDED, type NoticeTone, type NoticeView } from "../../lib/session-continuity-copy";
 import { BrandSlot } from "../wardyn/branding-context";
 
 // How often the gate re-asks /healthz for `sso` (R4/F027). Slower than the
@@ -50,6 +52,15 @@ export const SSO_SIGN_IN = "Sign in with SSO";
 
 // The signed-out warning and the error box: one shape, two tones.
 const NOTE_BOX = "flex items-start gap-2 rounded-md border px-3 py-2 text-xs";
+
+// The signed-out notice, one tone per kind of ending (M12): a session that ran out is a warning, an
+// access that was turned off is a danger, and something the person did (a sign-out) is not a fault.
+const NOTICE_TONE: Record<NoticeTone, { box: string; Icon: typeof Info }> = {
+  warning: { box: "border-warning/30 bg-warning-subtle text-warning", Icon: AlertTriangle },
+  danger: { box: "border-danger/30 bg-danger-subtle text-danger", Icon: AlertCircle },
+  info: { box: "border-info/25 bg-info-subtle text-info", Icon: Info },
+  neutral: { box: "border-border bg-surface-2 text-muted-foreground", Icon: Info },
+};
 
 // The OIDC callback (internal/auth/oidc/oidc.go's CallbackHandler)
 // redirects a user-actionable login denial to "/?auth_error=<code>" instead
@@ -93,13 +104,13 @@ function authErrorMessage(code: string): string {
 
 export function SignIn({
   onSignIn,
-  // #483: a session this browser held was refused on load — an amber
-  // warning (it is news, not a failure of anything typed here), never the
-  // error box below. Undefined on a first visit and after a sign-out.
-  reason,
+  // #483: a session this browser held was refused on load — a notice (it is news, not a
+  // failure of anything typed here), never the error box below. M12: it says why, by reason.
+  // Undefined on a first visit and after a sign-out the person made on an install without SSO.
+  notice,
 }: {
   onSignIn: () => void;
-  reason?: string;
+  notice?: NoticeView;
 }) {
   const { theme, toggle } = useTheme();
   const [token, setTokenValue] = React.useState("");
@@ -232,6 +243,10 @@ export function SignIn({
   // #457: the OR divider (and the SSO door itself) only makes sense once
   // checking is done — see the `checking` guard on both below.
   const showSso = !checking && sso;
+  // The SSO sign-in carries the page the person is on (base-path.ts signInURL), so say where it lands:
+  // only a run's page is drawn (M12), and the token form signs in to the Runs list instead.
+  const returnRun = showSso ? returnRunOf(routerPath()) : null;
+  const quietSignIn = notice?.quietSignIn ? "opacity-70" : "";
   const showDivider = !checking && showTokenForm && showSso;
 
   return (
@@ -278,7 +293,7 @@ export function SignIn({
               <div className="flex size-12 items-center justify-center rounded-full border border-primary/25 bg-primary/12">
                 <ShieldCheck className="size-6 text-primary" />
               </div>
-              <h1 className="text-xl font-semibold tracking-tight text-foreground">
+              <h1 className="text-page text-foreground">
                 Wardyn
               </h1>
               {/* No trust-domain / identity-provider chips here. Someone at a sign-in
@@ -296,13 +311,14 @@ export function SignIn({
             <p className="mt-1 text-sm text-muted-foreground">{SIGNIN.LEAD}</p>
           </div>
 
-          {reason && (
-            <div
-              role="status"
-              className={`mb-4 ${NOTE_BOX} border-warning/30 bg-warning-subtle text-warning`}
-            >
-              <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-              <span>{reason}</span>
+          {notice && (
+            <div role="status" className={`mb-4 ${NOTE_BOX} ${NOTICE_TONE[notice.tone].box}`}>
+              {React.createElement(NOTICE_TONE[notice.tone].Icon, { className: "mt-0.5 size-4 shrink-0" })}
+              <div className="space-y-1">
+                {notice.lines.map((line) => (
+                  <p key={line}>{line}</p>
+                ))}
+              </div>
             </div>
           )}
 
@@ -333,7 +349,7 @@ export function SignIn({
               <Button
                 asChild
                 variant="outline"
-                className="h-[41px] w-full border-[#8c8c8c] bg-[#ffffff] text-[#5e5e5e] hover:bg-[#f2f2f2] hover:text-[#5e5e5e] dark:border-0 dark:bg-[#2f2f2f] dark:text-[#ffffff] dark:hover:bg-[#3b3b3b] dark:hover:text-[#ffffff]"
+                className={`h-[41px] w-full ${quietSignIn} border-[#8c8c8c] bg-[#ffffff] text-[#5e5e5e] hover:bg-[#f2f2f2] hover:text-[#5e5e5e] dark:border-0 dark:bg-[#2f2f2f] dark:text-[#ffffff] dark:hover:bg-[#3b3b3b] dark:hover:text-[#ffffff]`}
               >
                 <a href={signInURL()} aria-describedby="sso-hint">
                   <DoorOpen className="size-4" aria-hidden="true" />
@@ -349,13 +365,18 @@ export function SignIn({
             </>
           ) : (
             showSso && (
-              <Button asChild variant="outline" className="w-full">
+              <Button asChild variant="outline" className={`w-full ${quietSignIn}`}>
                 <a href={signInURL()}>
                   <DoorOpen className="size-4" aria-hidden="true" />
                   {SSO_SIGN_IN}
                 </a>
               </Button>
             )
+          )}
+          {returnRun && (
+            <p className="mt-2 text-center text-xs text-muted-foreground" data-testid="signin-return-line">
+              {SESSION_ENDED.RETURN(returnRun)}
+            </p>
           )}
 
           {showDivider && (

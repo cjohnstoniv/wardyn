@@ -18,6 +18,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	clienttesting "k8s.io/client-go/testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -401,5 +402,40 @@ func TestWaitingReason_FallsBackToScheduleCondition(t *testing.T) {
 	}}
 	if got := waitingReason(scheduled); got != "pod: Pending" {
 		t.Errorf("waitingReason = %q, want %q", got, "pod: Pending")
+	}
+}
+
+// Kubernetes cannot keep an ended sandbox: every terminal path deletes the agent pod, and the AWS
+// credential caches in its container file system go with it (the Docker driver wipes them before
+// its kept end instead). A kept end added here would need that wipe too.
+func TestDriver_HasNoKeptEnd(t *testing.T) {
+	d, _ := newTestDriver(t, Config{})
+	if _, ok := any(d).(runner.SandboxEnder); ok {
+		t.Fatal("the k8s driver keeps an ended sandbox now: wipe the AWS credential caches before that end, as the Docker driver does")
+	}
+}
+
+// TestTeardownWaitBound pins how long teardown waits for the kubelet to confirm the pods gone. A
+// kill (grace 0, lifted to 1 s) used to wait 16 s, and a slow node's runtime took 16.4 s once, so
+// the kill reported a containment failure for a delete that completed (#3182). It now waits past
+// that. In server mode that still ends inside the 30 s kill cascade (internal/api killCascadeTimeout);
+// runner mode waits pod after pod and was already over 30 s. A stop keeps its bounds.
+func TestTeardownWaitBound(t *testing.T) {
+	zero, ten := int64(0), int64(10)
+	for _, c := range []struct {
+		name  string
+		grace *int64
+		want  time.Duration
+	}{
+		{"kill (grace 0)", &zero, 25 * time.Second},
+		{"stop with the pod's own grace", nil, 45 * time.Second},
+		{"stop with an explicit 10 s grace", &ten, 25 * time.Second},
+	} {
+		if got := teardownWaitBound(c.grace); got != c.want {
+			t.Errorf("%s: teardownWaitBound = %v, want %v", c.name, got, c.want)
+		}
+	}
+	if got := teardownWaitBound(&zero); got <= 17*time.Second || got >= 30*time.Second {
+		t.Errorf("a kill's wait %v must outlast the 16.4 s that failed and end inside the 30 s kill cascade", got)
 	}
 }

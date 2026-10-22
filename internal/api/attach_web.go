@@ -12,6 +12,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -37,11 +38,15 @@ type webAttach struct {
 	holder        *attachHolder
 	modeMu        sync.Mutex
 	failed        atomic.Bool // the exec could not be opened or replaced
+	// fields ride on every session row this socket writes: transport and runner_id on a local one
+	// (attach_local.go), nothing on the relay.
+	fields map[string]any
 }
 
 // fail ends a connection whose exec could not be opened or replaced: the
 // outcome is audited and the socket closed with a status the console can tell
-// from a dropped link.
+// from a dropped link. A capability the sandbox lacks is no fault: it closes
+// normally with the reason, which the console prints and does not retry.
 func (wa *webAttach) fail(err error, promotion bool) {
 	wa.failed.Store(true)
 	data := map[string]any{"state": "attaching", "error": err.Error()}
@@ -51,14 +56,34 @@ func (wa *webAttach) fail(err error, promotion bool) {
 	wa.audit("failure", data)
 	// The close frame first, then the cancel: cancelling first would have the
 	// library tear the connection down without one.
-	_ = wa.c.Close(websocket.StatusInternalError, "attach failed")
+	if errors.Is(err, runner.ErrObserveUnsupported) {
+		_ = wa.c.Close(websocket.StatusNormalClosure, "this sandbox does not support watching a terminal")
+	} else {
+		_ = wa.c.Close(websocket.StatusInternalError, "attach failed")
+	}
 	wa.cancel()
 }
 
 func (wa *webAttach) audit(outcome string, data map[string]any) {
 	id := wa.run.ID
+	data = wa.with(data)
 	wa.s.recordStreamAudit(wa.finishCtx, wa.run.SandboxRef, wa.s.auditEvent(&id, wa.principalType, wa.principal, "session.attach",
 		id.String(), outcome, mustJSON(withSponsorEntry(wa.run, data))))
+}
+
+// sendMode writes the attach-mode frame under modeMu (see webAttach).
+func (wa *webAttach) sendMode(ctx context.Context, readOnly bool) {
+	wa.modeMu.Lock()
+	_ = writeAttachMode(ctx, wa.c, readOnly, wa.s.attachHolderFor(wa.run.ID))
+	wa.modeMu.Unlock()
+}
+
+// with adds this socket's fields to a session row's data.
+func (wa *webAttach) with(data map[string]any) map[string]any {
+	for k, v := range wa.fields {
+		data[k] = v
+	}
+	return data
 }
 
 // open opens the exec and writes the second session.attach row, the outcome,

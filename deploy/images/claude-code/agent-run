@@ -21,7 +21,7 @@
 #   CALLER-AUTH GATE: before any git runs, provision_git_helper_secret writes a
 #   per-run secret to a 0400 agent-owned file and exports WARDYN_GIT_HELPER_SECRET
 #   for THIS process tree only (the clone + the exec'd agent inherit it; a
-#   separate `wardyn run attach` exec / non-descendant process does not).  The
+#   separate `wardyn attach` exec / non-descendant process does not).  The
 #   credential helper requires that presented secret to match the file before it
 #   emits a token, so a stray in-sandbox process cannot exfiltrate a GitHub token
 #   merely by speaking git's credential protocol.  Residual: code running AS the
@@ -174,13 +174,16 @@ apply_anthropic_mode() {
 # WARDYN_SSH_GRANTS is a JSON object {host: grant_id} (non-secret grant ids), set
 # by dispatch.
 
-# ssh_endpoint maps a supported SCM host to its SSH-over-443 "hostname port".
+# ssh_endpoint maps a supported SCM host to its SSH-over-443 "hostname port" and
+# its ssh PubkeyAuthentication: host-bound for GitHub, whose server offers the
+# host-bound sign-in (OpenSSH >= 8.9; the image ships 10) and whose grant the
+# proxy's agent signs no other way; Azure DevOps offers only the plain one.
 # Returns non-zero for an unsupported host (only GitHub + Azure DevOps publish an
 # :443 SSH endpoint; a custom host would need port-22 egress, out of scope).
 ssh_endpoint() {  # $1=host
     case "$(printf '%s' "$1" | tr 'A-Z' 'a-z')" in
-        github.com|ssh.github.com)        echo "ssh.github.com 443" ;;
-        dev.azure.com|ssh.dev.azure.com)  echo "ssh.dev.azure.com 443" ;;
+        github.com|ssh.github.com)        echo "ssh.github.com 443 host-bound" ;;
+        dev.azure.com|ssh.dev.azure.com)  echo "ssh.dev.azure.com 443 yes" ;;
         *) return 1 ;;
     esac
 }
@@ -211,14 +214,14 @@ provision_ssh_grants() {
     mkdir -p "$ssh_dir"; chmod 0700 "$ssh_dir"
     : > "$cfg"; chmod 0600 "$cfg"
 
-    local host gid eps ep_host ep_port slug agents=()
+    local host gid eps ep_host ep_port ep_auth slug agents=()
     while IFS=$'\t' read -r host gid; do
         [[ -n "$host" && -n "$gid" ]] || continue
         if ! eps="$(ssh_endpoint "$host")"; then
             echo "agent-run: WARNING SSH host ${host} is not a supported SSH-over-443 provider; skipping" >&2
             continue
         fi
-        read -r ep_host ep_port <<< "$eps"
+        read -r ep_host ep_port ep_auth <<< "$eps"
         slug="$(printf '%s' "$host" | tr -c 'a-zA-Z0-9' '_')"
         agents+=(--agent "${slug}=${gid}")
         printf '%s\n' \
@@ -226,6 +229,7 @@ provision_ssh_grants() {
           "    HostName ${ep_host}" \
           "    Port ${ep_port}" \
           "    User git" \
+          "    PubkeyAuthentication ${ep_auth}" \
           "    IdentityAgent \${WARDYN_SSH_AGENT_DIR}/${slug}.sock" \
           "    StrictHostKeyChecking yes" \
           "    UserKnownHostsFile /dev/null" \
@@ -418,6 +422,10 @@ start_boot_session() {
 # attach does not start a second claude, and removed again if tmux refused both.
 start_revive_session() {
     revive_markers
+    # An application run (WARDYN_APPLICATION_RUN, set by dispatch) is its startup
+    # command: start it again, the same boot session a first boot makes. Any other
+    # seed has already run and is never replayed.
+    if [[ "${WARDYN_APPLICATION_RUN:-}" == "1" ]]; then start_boot_session; return 0; fi
     [[ "${WARDYN_INTERACTIVE_START:-}" == "agent" ]] || return 0
     if ! command -v tmux >/dev/null 2>&1; then
         echo "agent-run: WARNING no tmux in this image; the conversation cannot continue on its own (attach still works)" >&2
@@ -444,6 +452,7 @@ if [[ "${1:-}" == "--prepare-only" ]]; then
     materialize_managed_claude_config
     materialize_aws_sso_config
     materialize_azure_cli_config
+    materialize_kubectl_config
     exit 0
 fi
 
@@ -456,7 +465,7 @@ fi
 # The interactive counterpart to task mode: prepare the workspace EXACTLY as task
 # mode does — install the MITM CA, artifact config, git-helper caller-auth secret,
 # SSH lane, and CLONE the run's repo(s) into ~/work — then hold the container open
-# for `wardyn run attach`. Without this, an interactive run came up with an EMPTY ~/work
+# for `wardyn attach`. Without this, an interactive run came up with an EMPTY ~/work
 # (the human attached to a bare shell with no repo). The human then drives claude in
 # the attach shell; the repo is already there.
 if [[ "${1:-}" == "--idle" || "${1:-}" == "--revive" ]]; then
@@ -470,6 +479,7 @@ if [[ "${1:-}" == "--idle" || "${1:-}" == "--revive" ]]; then
     install_artifact_config
     materialize_aws_sso_config
     materialize_azure_cli_config
+    materialize_kubectl_config
     provision_git_helper_secret
     provision_ssh_grants
     trap wipe_ssh_grants EXIT
@@ -650,6 +660,7 @@ materialize_managed_claude_config
 install_artifact_config
 materialize_aws_sso_config
 materialize_azure_cli_config
+materialize_kubectl_config
 
 # Provision the git credential helper caller-auth secret BEFORE any git runs
 # (the clone below and the agent's own git both need it).  Called directly so the

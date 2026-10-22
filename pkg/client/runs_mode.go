@@ -88,6 +88,12 @@ type IncludedTool struct {
 	// evaluates the rules of the harness that raised the call.
 	ToolRules     []types.ToolRule `json:"tool_rules,omitempty"`
 	DefaultEffect types.ToolEffect `json:"default_effect,omitempty"`
+	// Task is this harness's own prompt in a background agent task that runs
+	// several agents side by side (WARDYN_MULTI_AGENT_TASKS): every included
+	// harness but workload.agent, whose prompt is workload.task, carries one.
+	// The sandbox then holds every agent's rules met (strictest wins), and the
+	// run ends when the last agent exits, failed if any failed.
+	Task string `json:"task,omitempty"`
 }
 
 // StartupKind is the one discriminator of what starts automatically.

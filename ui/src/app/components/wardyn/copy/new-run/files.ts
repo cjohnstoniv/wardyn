@@ -82,7 +82,6 @@ export const NR_FILES = {
   LOCKED_TIP: "Set by your admin",
   NOT_IN_POOL: "Not available in this pool's runners.",
   CREATE_USER_DRIVE: "+ Create user drive",
-  CREATE_SHARED_DRIVE: "+ Create shared drive",
   MANAGE_DRIVES: "Manage drives →",
   /** pending W-17: the recommended text until the owner answers. */
   CREATE_DISABLED: "Your organisation doesn't let people create drives. Ask an admin.",
@@ -108,7 +107,41 @@ export const NR_FILES = {
   DRIVE_CREATED: (name: string | number) => `${name} created and added to this run.`,
   COMPUTER_TITLE: "Your computer",
   COMPUTER_BODY: "Folders on your laptop, desktop or VDI.",
-  COMPUTER_SOON: "A sandbox can't use folders on your computer yet.",
+  // M4 (#2982, owner-approved 2026-10-19): a folder on your computer, through your own runner.
+  COMPUTER_BLOCKED: "Your organisation doesn't allow folders from personal computers.",
+  COMPUTER_NO_RUNNER: "No runner on your computer yet.",
+  COMPUTER_NO_RUNNER_BODY:
+    "A runner connects out to Wardyn and shares only the folders you pick. Nothing connects in to your computer.",
+  COMPUTER_SET_UP: "Set up a runner",
+  COMPUTER_NOT_NOW: "Not now",
+  COMPUTER_OFFLINE: "Runner offline",
+  COMPUTER_LAST_SEEN: (name: string | number, when: string | number) => `${name} · last seen ${when}`,
+  COMPUTER_OFFLINE_BODY: (name: string | number) =>
+    `Start the runner on ${name}, then try again. A run that uses this folder can't start until it is back.`,
+  COMPUTER_LABEL: "Computer",
+  COMPUTER_OPEN: (name: string | number) => `Open ${name}`,
+  COMPUTER_COL_NAME: "Name",
+  COMPUTER_COL_FILES: "Files",
+  COMPUTER_COL_SIZE: "Size",
+  COMPUTER_WILL_SEE: "The sandbox will see",
+  COMPUTER_GITIGNORE: "Leave out what .gitignore lists",
+  COMPUTER_BROWSE_NOTE: "Only folder names and sizes reach Wardyn while you browse. No file is sent until the run starts.",
+  COMPUTER_NEXT: "Next",
+  COMPUTER_FROM: "From",
+  COMPUTER_ON: (name: string | number) => `on ${name}`,
+  COMPUTER_ONLINE: "Runner online",
+  COMPUTER_CHANGES: "Changes",
+  COMPUTER_BOTH: "Both ways",
+  COMPUTER_COPY_IN: "Copy in only",
+  COMPUTER_BOTH_BODY: "Edits in the sandbox come back to your computer when the run ends.",
+  COMPUTER_COPY_IN_BODY: "A copy from your computer. Changes stay in the sandbox.",
+  COMPUTER_SEES: "The sandbox sees",
+  COMPUTER_COUNT: (files: string | number, size: string | number) => `${files} files · ${size}`,
+  COMPUTER_LEFT_OUT: "Left out",
+  COMPUTER_IGNORED: (count: string | number) => `${count} paths in .gitignore`,
+  COMPUTER_CHANGE: "Change",
+  COMPUTER_FIRST_SYNC: "First sync",
+  COMPUTER_FIRST_SYNC_BODY: "Starts when you launch. The run waits until it finishes.",
   NO_EXTRA: "No extra files — only the main drive",
   NO_EXTRA_DELETED: "Only the main drive. Nothing from this run is kept.",
   /** pending W-12: the recommended text until the owner answers. */
@@ -134,6 +167,27 @@ export const NR_FILES = {
   SUMMARY_NO_END: "the main drive is kept until you end the run",
   SUMMARY_NO_EXTRA: (size: string | number, life: string | number) =>
     `Main drive ${size} · no extra files · ${life}.`,
+  // Keep the work folder as a drive (F2KEEP-1..3, #1991).
+  KEEP_WHAT:
+    "Keeps the work folder, /home/agent/work, as your own drive named after this run. Your home folder, harness settings and /tmp are not kept.",
+  KEEP_WARNING:
+    "Anything an agent leaves in the folder comes back in the next run that uses it, including files you didn't ask for. Check it before you reuse it.",
+  KEEP_COUNTS: (n: string | number, limit: string | number) =>
+    `Counts toward your drives. You have ${n} of ${limit} drives. Kept until you delete it.`,
+  KEEP_UNENFORCED: "On this runner its size is not enforced.",
+  KEEP_LIFE: "The work folder is kept as a drive. The rest is deleted when the run ends.",
+  KEEP_SUMMARY: "the work folder is kept as a drive after the run",
+  KEEP_STARTS_MAIN: "the main drive",
+  KEEP_LIMIT: (n: string | number, limit: string | number) =>
+    `You have ${n} of ${limit} drives. Delete one to keep this run's work folder.`,
+  /** The server's own sentence (keepWorkFolderDisabledMsg), for a rerun that asks to keep while the keep switch is off. */
+  KEEP_DISABLED: "Your organisation doesn't let runs keep their work folder as a drive. Ask an admin.",
+  KEEP_LIMIT_HINT: "Or untick “Reuse it across runs” to launch without keeping it.",
+  DRIVE_KEPT_FROM: (run: string | number) => `From run ${run} · Kept until you delete it.`,
+  /** Not on the boards: the run's title is gone or empty, so the line names no run. */
+  DRIVE_KEPT_FROM_UNTITLED: "From an earlier run · Kept until you delete it.",
+  DRIVE_SIZE_NOT_ENFORCED: "Size not enforced",
+  DRIVE_SIZE_NOT_ENFORCED_TIP: "A Docker volume has no size cap.",
   // Owner-approved Files prototype (2026-10-13): one list of cards, the Add / Edit dialog and the starting folder.
   ATTACH_TITLE: "Repositories, drives and folders",
   ATTACH_BODY: "Each one appears in the sandbox at its mount path.",
@@ -156,6 +210,10 @@ export const NR_FILES = {
   DIALOG_TITLE: "Add to this run",
   ADD_REPO_TITLE: "Add repository",
   ADD_USER_DRIVE_TITLE: "Add user drive",
+  /** A team drive's groups: "Shared with: platform-team". */
+  SHARED_WITH: (groups: string) => `Shared with: ${groups}`,
+  /** Under a writable team drive: what the others in the group will see. */
+  TEAM_OTHERS_SEE: "Others in this group see what your runs write here.",
   ADD_SHARED_DRIVE_TITLE: "Add shared drive",
   ADD_FOLDER_TITLE: "Add folder",
   STEPS_ARIA: "Steps",

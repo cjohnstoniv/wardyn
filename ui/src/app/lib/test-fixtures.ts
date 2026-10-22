@@ -115,7 +115,7 @@ export function baseMe(overrides: Partial<Me> = {}): Me {
     role: "user",
     email: "alice@corp.example",
     user_drive: null,
-    user_drive_denied_by_profile: "",
+    user_drive_denied_by_unit: "",
     ...overrides,
   };
 }

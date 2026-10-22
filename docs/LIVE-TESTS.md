@@ -239,7 +239,7 @@ go test -tags live -count=1 -v -timeout 10m -run TestLiveADOPATMintProbe ./inter
 
 ### Autonomy L0 (LL5)
 
-- The member needs a governance profile assignment whose `AutonomyRubric` resolves this run's posture to L0 (an admin authors this once through `POST /api/v1/governance/profiles` and `/governance/assignments` —
+- The member needs a governance profile assignment whose `AutonomyRubric` resolves this run's posture to L0 (an admin authors this once through `POST /api/v1/governance/units` and `/governance/memberships` —
   - the suite does not author one itself, the same way LL2's Azure DevOps project is a fixture the suite assumes rather than creates).
 - Set `WARDYN_LIVE_AUTONOMY_MODEL_PROVIDER` to a working model provider for that member, so the request reaches the autonomy gate instead of failing earlier on an unrelated missing-model-credential refusal.
 

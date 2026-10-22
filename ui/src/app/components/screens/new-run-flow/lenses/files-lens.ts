@@ -230,7 +230,11 @@ export function setStartSubpath(intent: RunIntent, subpath: string | undefined):
 export const filesIssues: StepValidator = (intent) => {
   const out: StepIssue[] = [];
   const attached = attachmentCount(intent);
-  if (!attached && intent.no_repositories_or_drives !== true) out.push(issue("files", "files_choice_required"));
+  // A folder from the person's computer (local_folder) is a choice too: it lands on the main drive.
+  if (!attached && !intent.local_folder && intent.no_repositories_or_drives !== true) out.push(issue("files", "files_choice_required"));
   if (attached && !intent.start_folder) out.push(issue("files", "starts_here_required"));
   return out;
 };
+
+/** Keeps the run's work folder as the person's own drive (#1991). Unticked is absent, not false: the request carries it only when asked. */
+export const setKeepWorkFolder = (intent: RunIntent, on: boolean): RunIntent => withKeys(intent, { keep_work_folder: on ? true : undefined });

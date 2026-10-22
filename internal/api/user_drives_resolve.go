@@ -333,7 +333,7 @@ func isDisplayRead(ctx context.Context) bool {
 // the enforcement path above and by the preview endpoint below so the two
 // cannot answer differently for the same claims.
 //
-// Order matters, and it is the same rule ceilingFromProfile states: the
+// Order matters, and it is the same rule ceilingFromUnit states: the
 // REAL-ERROR check runs FIRST, ahead of the nil-row one, because a failed
 // resolve also returns nil rows — checking nil first would turn every store
 // failure into "no grant matched" and mount nothing, which is the fail-quiet
@@ -383,6 +383,9 @@ func (s *Server) resolveUserDriveFor(ctx context.Context, users, groups []string
 type driveSizeCeiling struct {
 	DeploymentMiB int
 	ProfileMiB    int
+	// TeamDrives is storage.user_drive.team_drives, read in the same site-config
+	// read: off, a team drive resolves per person.
+	TeamDrives bool
 }
 
 // bound is the ONE expression both ceilings meet: the smaller of the two, with a
@@ -403,7 +406,7 @@ func (c driveSizeCeiling) bound() (int, string) {
 		// The profile wins a TIE, deliberately: the number is the same either
 		// way, and the per-principal half is the one an admin can change for this
 		// one member.
-		return bound, driveBoundByProfile
+		return bound, driveBoundByUnit
 	default:
 		return bound, driveBoundByDeployment
 	}
@@ -412,7 +415,7 @@ func (c driveSizeCeiling) bound() (int, string) {
 // The two values driveSizeCeiling.bound names, and the two the clamp's log line
 // carries — an operator filtering on `bound_by` is asking which ceiling to edit.
 const (
-	driveBoundByProfile    = "governance_profile"
+	driveBoundByUnit       = "governance_unit"
 	driveBoundByDeployment = "deployment"
 )
 
@@ -440,7 +443,7 @@ func (s *Server) driveSizeCeilingFor(ctx context.Context, profileMaxMiB int) (dr
 	if provider.Disabled {
 		return driveSizeCeiling{}, errDrivesDisabled
 	}
-	return driveSizeCeiling{DeploymentMiB: provider.MaxSizeMiB, ProfileMiB: profileMaxMiB}, nil
+	return driveSizeCeiling{DeploymentMiB: provider.MaxSizeMiB, ProfileMiB: profileMaxMiB, TeamDrives: provider.TeamDrives}, nil
 }
 
 // newResolvedDrive folds one winning (drive, grant) pair into everything a
@@ -482,7 +485,7 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 	tier types.CapabilitySubjectType, users []string, ceiling driveSizeCeiling) (*types.ResolvedDrive, error) {
 	// A store answering (nil, nil, "", nil) means the absent-row doctrine
 	// rather than a dereference, so no caller has to have checked on its
-	// behalf — the same guard ceilingFromProfile keeps for a nil profile.
+	// behalf — the same guard ceilingFromUnit keeps for a nil profile.
 	if d == nil || g == nil {
 		return nil, nil
 	}
@@ -504,11 +507,19 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 	if g.WritableOverride != nil {
 		writable = *g.WritableOverride
 	}
+	team := d.Team && ceiling.TeamDrives
+	if team {
+		// A team allocation is read-only unless the admin ticked "members can write",
+		// and never writable on a drive that is itself read-only, whatever the
+		// allocation's writable override says.
+		writable = writable && g.MembersCanWrite && d.Writable
+	}
 	resolved := &types.ResolvedDrive{
 		Drive: *d, Grant: *g, Tier: tier,
 		SizeMiB:     size,
 		Writable:    writable,
 		Enforcement: types.EnforcementFor(d.Backend),
+		Team:        team,
 	}
 	// The size and mode folds run for a paused row too: what the member is
 	// shown is the allocation that is off, and reading the drive's own size
@@ -516,6 +527,9 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 	if !g.Enabled {
 		resolved.Paused = true
 		return resolved, nil
+	}
+	if team {
+		return teamResolvedDrive(resolved, tier)
 	}
 	// The managed non-hash refusal, repeated — and repeated for the same reason
 	// the home-override tier gate below is, on a row written by an older binary
@@ -662,6 +676,23 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 	// never from users[0] again — so the label the driver stamps and the object
 	// it stamps it on were decided by one claim.
 	resolved.SubjectHash = types.DriveSubjectHash(subject)
+	return resolved, nil
+}
+
+// teamResolvedDrive finishes a team drive's resolution: ONE folder derived from
+// the drive (types.DriveTeamHome), the same for every member, and no subject
+// fingerprint, since the object is nobody's own. Only a group allocation
+// reaches it: the write boundary refuses any other (types.ValidateTeamDriveGrant),
+// and a row written around it mounts nothing.
+func teamResolvedDrive(resolved *types.ResolvedDrive, tier types.CapabilitySubjectType) (*types.ResolvedDrive, error) {
+	if err := types.ValidateTeamDriveGrant(resolved.Drive, types.UserDriveGrant{SubjectType: tier, HomeOverride: resolved.Grant.HomeOverride}); err != nil {
+		slog.Warn("wardynd: user drive: a team drive's allocation breaks the team rule and mounts nothing",
+			slog.String("drive", resolved.Drive.Name), slog.String("tier", string(tier)))
+		return nil, fmt.Errorf("%w: drive: this deployment cannot mount drive %s (a team drive is allocated to groups only; ask an admin)",
+			errDriveUnmountable, resolved.Drive.Name)
+	}
+	resolved.HomeName = types.DriveTeamHome(resolved.Drive)
+	resolved.ObjectName = types.DriveObjectName(resolved.Drive, resolved.HomeName)
 	return resolved, nil
 }
 

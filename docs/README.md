@@ -28,6 +28,7 @@
 | Deploy to a Kubernetes cluster (Helm chart, quickstart, k8s runner substrate) | [../deploy/helm/wardyn/README.md](../deploy/helm/wardyn/README.md) |
 | Run a local daemon on each developer's managed laptop (MDM envelope, and its ceiling) | [DESKTOP.md](DESKTOP.md) + [../deploy/desktop/](../deploy/desktop/) |
 | Register a self-hosted runner on a laptop, and what it does while offline | [runner-registration.md](runner-registration.md), [runner-offline.md](runner-offline.md), [operations/hybrid-laptops.md](operations/hybrid-laptops.md) |
+| Offer Linux VM sandboxes (QEMU/KVM) from a Linux runner host: requirements, the `/dev/kvm` step, the guest image contract | [operations/linux-vm-sandboxes.md](operations/linux-vm-sandboxes.md) |
 | Run the organisation's own runner in a Kubernetes cluster (Helm chart, enrolment, claim, trust class, failure modes) | [operations/k8s-runners.md](operations/k8s-runners.md) + [design/0.9/k8s-runnerd.md](design/0.9/k8s-runnerd.md) + the `wardyn-k8s-runner-setup` Claude Code skill |
 | Set up SSO (Entra ID / OIDC) and admin/member RBAC on a cluster install | [operations/who-gets-in.md](operations/who-gets-in.md) + the `wardyn-k8s-setup` Claude Code skill |
 | Give each person their own Azure DevOps access | [AZURE-DEVOPS.md](AZURE-DEVOPS.md) |
@@ -35,6 +36,8 @@
 | Cap what one person or group may do — governance profiles, the security-admin tier, capability grants | [operations/three-roles.md](operations/three-roles.md) + [operations/capabilities.md](operations/capabilities.md) |
 | Narrow what a member's own run may reach — egress, secrets, images, agents, features | [operations/member-runs.md](operations/member-runs.md) + [operations/capabilities.md](operations/capabilities.md) |
 | Turn a governance write into a two-human decision, and work the approval queue | [operations/governance-writes.md](operations/governance-writes.md) |
+| Set the Wardyn boundary, the outermost layer of every run, super admins' included, and use break-glass | [operations/boundary.md](operations/boundary.md) |
+| Let a security admin's rule approve a service identity's held tool calls and first-use hosts | [operations/approval-rules.md](operations/approval-rules.md) |
 | Stop sharing the admin token — a token per person, and tokens for someone who never signs in | [operations/api-tokens.md](operations/api-tokens.md) |
 | Decide where runs go — runner pools, their limits and barriers, and the queue | [operations/runner-pools.md](operations/runner-pools.md) |
 | Give each person persistent storage, and reclaim it when they leave | [operations/user-drives.md](operations/user-drives.md) |

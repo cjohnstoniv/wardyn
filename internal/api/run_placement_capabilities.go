@@ -13,6 +13,8 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -248,16 +250,51 @@ type placementDemands struct {
 	// IdlePause is a profile's pause_idle_after_sec: it needs the Freezer to pause
 	// and the ActivitySampler to see the run go quiet.
 	IdlePause bool
+	// LinuxVM is machine_kind linux_vm: only a registered runner whose caps offer it starts one.
+	LinuxVM bool
+	// VMFolders is a Linux VM run that carries a folder mount: its runner must share it into the
+	// guest (virtiofs), exactly as a container's bind.
+	VMFolders bool
 }
 
-func requestDemands(ceiling governanceCeiling) placementDemands {
-	return placementDemands{IdlePause: ceiling.Limits.PauseIdleAfterSec > 0}
+func requestDemands(req createRunRequest, ceiling governanceCeiling, mounts int) placementDemands {
+	vm := types.MachineKind(req.MachineKind).IsVM()
+	return placementDemands{IdlePause: ceiling.Limits.PauseIdleAfterSec > 0, LinuxVM: vm, VMFolders: vm && mounts > 0}
+}
+
+// linuxVMOnRemote is the refusal of a Linux VM on the deployment's own executor.
+const linuxVMOnRemote = "Linux VM sandboxes run only on a registered runner that offers them"
+
+// linuxVMAgentStart is the refusal of interactive_start: agent on a Linux VM, whose terminal is a
+// plain shell in this release (no shared session to open in the agent CLI or to take over).
+const linuxVMAgentStart = "a Linux VM sandbox's terminal opens a shell, not the agent CLI, in this release: set interactive_start to shell"
+
+// runnerCaps is the runner's own last caps event, which remote.Substrate keeps.
+type runnerCaps interface {
+	Caps() (runnerwire.Caps, bool)
 }
 
 // unsupportedDemand is the placement_capability refusal for a demand the
 // placement's optional interfaces cannot meet, or nil.
 func (c placementCaps) unsupportedDemand(d placementDemands) *placement.Refusal {
-	if c.impl == nil || !d.IdlePause {
+	if c.impl == nil {
+		return nil
+	}
+	if d.LinuxVM {
+		rc, ok := c.impl.(runnerCaps)
+		var caps runnerwire.Caps
+		if ok {
+			caps, ok = rc.Caps()
+		}
+		if !ok || caps.LinuxVM == nil {
+			return &placement.Refusal{Reason: placement.ReasonPlacementCapability, Field: "machine_kind",
+				Detail: "this runner does not offer Linux VM sandboxes: it is older than 0.10, or its operator has not turned them on"}
+		}
+		if d.VMFolders && !caps.LinuxVM.Virtiofs {
+			return &placement.Refusal{Reason: placement.ReasonPlacementCapability, Field: "machine_kind", Detail: remote.VMNoFolderShare}
+		}
+	}
+	if !d.IdlePause {
 		return nil
 	}
 	_, freezes := c.impl.(runner.Freezer)
@@ -273,14 +310,20 @@ func (c placementCaps) unsupportedDemand(d placementDemands) *placement.Refusal 
 // run lands on a runner that cannot answer or cannot meet a demand. A pooled run
 // lands on the placement its pool decided and on one of its eligible runners, so
 // every one of them must meet the demand; an unpooled one on the runner it names.
-func (s *Server) placementCapabilityRefusal(ctx context.Context, req createRunRequest, place runPlacement, ceiling governanceCeiling) *runRefusal {
+func (s *Server) placementCapabilityRefusal(ctx context.Context, req createRunRequest, place runPlacement, ceiling governanceCeiling, mounts int) *runRefusal {
 	runners := []uuid.UUID{requestRunnerID(req)}
 	p := requestPlacement(req)
 	if place.pooled {
 		p, runners = place.placement, place.eligibleRunners()
 	}
-	demands := requestDemands(ceiling)
-	if p != types.PlacementLocal || !demands.IdlePause {
+	demands := requestDemands(req, ceiling, mounts)
+	if demands.LinuxVM && p != types.PlacementLocal {
+		return runError(placement.ReasonPlacementCapability.Status(), string(placement.ReasonPlacementCapability), linuxVMOnRemote)
+	}
+	if demands.LinuxVM && requestIsInteractive(req) && req.InteractiveStart == "agent" {
+		return runError(placement.ReasonPlacementCapability.Status(), string(placement.ReasonPlacementCapability), linuxVMAgentStart)
+	}
+	if p != types.PlacementLocal || (!demands.IdlePause && !demands.LinuxVM) {
 		return nil
 	}
 	for _, id := range runners {

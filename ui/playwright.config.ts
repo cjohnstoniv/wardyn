@@ -43,7 +43,9 @@ export default defineConfig({
   ],
   use: {
     baseURL,
-    trace: "on-first-retry",
+    // CI keeps the trace of every failed attempt, not only of the retry: a flaky test passes on its retry, so
+    // on-first-retry never recorded the attempt that failed. A passing attempt's trace is dropped.
+    trace: process.env.CI ? "retain-on-failure" : "on-first-retry",
     screenshot: "only-on-failure",
     // #469: "retain-on-failure" records EVERY test and discards the passing
     // ones' videos. Not recording (CI, which now runs concurrent lanes) cut

@@ -172,7 +172,7 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 			m.mu.Lock()
 			return runnerwire.ActionResult{}, runner.ErrEndUnsupported
 		}
-		err = end.EndSandbox(ctx, local)
+		err = runner.KeptDespiteAWSCacheWipe(ctx, local, end.EndSandbox(ctx, local))
 	default:
 		m.mu.Lock()
 		return runnerwire.ActionResult{}, errors.New("unknown pending action")

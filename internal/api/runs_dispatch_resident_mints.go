@@ -77,7 +77,7 @@ func (s *Server) authorResidentMints(ctx context.Context, run types.AgentRun, ro
 		mint := proxy.ResidentMint{GrantID: row.ID, Kind: kind, Token: placement.ResidentPlaceholder(row.ID), ExpiresAt: residentNotAfter(run, s.cfg.Now())}
 		if kind == types.GrantSSHKey {
 			_, _, user, _, _ := sshKeyScopeFields(row.Spec.Scope)
-			mint.Username = user
+			mint.Username, mint.Host = user, host
 			if mint.Username == "" {
 				mint.Username = "git" // as the broker answers: github.com and ssh.dev.azure.com both take "git"
 			}
@@ -125,7 +125,7 @@ func grantMapNames(raw string, id uuid.UUID) bool {
 // mint and is not masked; a read that fails skips the grant, as the broker's
 // mint fails without it.
 func (s *Server) readResidentKnownHosts(ctx context.Context, run types.AgentRun, row types.CredentialGrant, name string) (string, bool) {
-	if s.cfg.Secrets == nil || run.RunnerID == nil {
+	if s.cfg.Secrets == nil || run.RunnerID == nil || (row.Spec.OwnerOnlyFor(name) && !run.OperatorOwned) {
 		return "", false
 	}
 	data := map[string]any{"purpose": string(secretstore.PurposeRunnerResident), "grant_id": row.ID, "runner_id": *run.RunnerID,

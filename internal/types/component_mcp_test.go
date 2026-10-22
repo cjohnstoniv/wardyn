@@ -43,7 +43,9 @@ func TestComponentMCP_ValidateHttpsHostInHosts(t *testing.T) {
 		"not a url":         mcpDef("mcp.linear.app/mcp", "mcp.linear.app"),
 		"fragment":          mcpDef("https://mcp.linear.app/mcp#x", "mcp.linear.app"),
 		"control byte":      mcpDef("https://mcp.linear.app/m\ncp", "mcp.linear.app"),
-		"unknown transport": {Hosts: []string{"mcp.linear.app"}, MCP: &types.ComponentMCP{URL: "https://mcp.linear.app/mcp", Transport: "stdio"}},
+		"unknown transport": {Hosts: []string{"mcp.linear.app"}, MCP: &types.ComponentMCP{URL: "https://mcp.linear.app/mcp", Transport: "websocket"}},
+		"launch on http": {Hosts: []string{"mcp.linear.app"}, MCP: &types.ComponentMCP{URL: "https://mcp.linear.app/mcp", Transport: types.ComponentMCPTransportHTTP,
+			Launch: &types.ComponentMCPLaunch{Command: "npx", Args: []string{"@example/mcp@1.0.0"}}}},
 	}
 	for name, d := range bad {
 		if err := d.Validate(proxy.ValidDomainEntry, true); err == nil || !strings.HasPrefix(err.Error(), "mcp.") {
@@ -70,6 +72,67 @@ func TestComponentMCP_ValidateHttpsHostInHosts(t *testing.T) {
 		if err := d.Validate(proxy.ValidDomainEntry, false); err == nil || !strings.Contains(err.Error(), "MCP server's secret") {
 			t.Errorf("%s: want the MCP secret refusal, got %v", name, err)
 		}
+	}
+}
+
+func localMCP(command string, args ...string) types.ComponentDefinition {
+	return types.ComponentDefinition{Hosts: []string{"api.example.com"},
+		MCP: &types.ComponentMCP{Transport: types.ComponentMCPTransportStdio, Launch: &types.ComponentMCPLaunch{Command: command, Args: args}}}
+}
+
+// TestComponentMCP_StdioLaunch: a server that runs in the sandbox has a launch
+// command and no url; the command is npx or an absolute path, and a package
+// npx fetches names one exact version. Its secrets follow every component's
+// rules: env and file enter the sandbox, a header goes to one of its hosts.
+func TestComponentMCP_StdioLaunch(t *testing.T) {
+	ok := map[string]types.ComponentDefinition{
+		"npx -y scoped":    localMCP("npx", "-y", "@example/mcp-server@1.4.2", "--root", "/work"),
+		"npx bare":         localMCP("npx", "mcp-server-x@0.1.0-rc.1"),
+		"absolute program": localMCP("/usr/local/bin/mcp-files", "--read-only"),
+		"absolute no args": localMCP("/opt/mcp/server"),
+	}
+	for name, d := range ok {
+		for _, person := range []bool{false, true} {
+			if err := d.Validate(proxy.ValidDomainEntry, person); err != nil {
+				t.Errorf("%s (person %v): %v", name, person, err)
+			}
+		}
+		if !d.LocalMCP() || d.RemoteMCP() {
+			t.Errorf("%s: LocalMCP %v RemoteMCP %v", name, d.LocalMCP(), d.RemoteMCP())
+		}
+	}
+	withURL := localMCP("npx", "@example/mcp@1.0.0")
+	withURL.MCP.URL = "https://api.example.com/mcp"
+	bad := map[string]types.ComponentDefinition{
+		"url":            withURL,
+		"no launch":      {Hosts: []string{"api.example.com"}, MCP: &types.ComponentMCP{Transport: types.ComponentMCPTransportStdio}},
+		"relative":       localMCP("bin/server"),
+		"bare name":      localMCP("node", "server.js"),
+		"unclean path":   localMCP("/opt/../bin/sh"),
+		"npx unpinned":   localMCP("npx", "-y", "@example/mcp-server"),
+		"npx latest":     localMCP("npx", "@example/mcp-server@latest"),
+		"npx range":      localMCP("npx", "@example/mcp-server@^1.4.2"),
+		"npx no package": localMCP("npx", "-y"),
+		"npx --package":  localMCP("npx", "--package=@example/mcp-server@1.4.2", "mcp-server"),
+		"abs npx":        localMCP("/usr/bin/npx", "@example/mcp-server@1"),
+		"control byte":   localMCP("/opt/mcp/server", "a\nb"),
+		"too many args":  localMCP("/opt/mcp/server", make([]string, types.MaxComponentMCPArgs+1)...),
+	}
+	for name, d := range bad {
+		if err := d.Validate(proxy.ValidDomainEntry, true); err == nil || !strings.HasPrefix(err.Error(), "mcp.") {
+			t.Errorf("%s: want an mcp.* refusal, got %v", name, err)
+		}
+	}
+	d := localMCP("npx", "-y", "@example/mcp-server@1.4.2")
+	d.Secrets = []types.ComponentSecret{
+		{SecretName: "gh-token", Delivery: types.ComponentDelivery{Mode: types.ComponentDeliveryEnv, Var: "GITHUB_TOKEN"}},
+		{SecretName: "api-key", Delivery: types.ComponentDelivery{Mode: types.ComponentDeliveryHeader, Host: "api.example.com"}},
+	}
+	if err := d.Validate(proxy.ValidDomainEntry, true); err != nil {
+		t.Fatalf("env and header secrets on a local server: %v", err)
+	}
+	if remote := mcpDef("https://mcp.linear.app/mcp", "mcp.linear.app"); !remote.RemoteMCP() || remote.LocalMCP() {
+		t.Error("an http server is remote")
 	}
 }
 

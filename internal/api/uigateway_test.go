@@ -19,11 +19,16 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	osexec "os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -358,8 +363,14 @@ func (h *uiHarness) enterPOST(form url.Values) *httptest.ResponseRecorder {
 // openSession runs the whole handoff and returns the relay cookie.
 func (h *uiHarness) openSession() *http.Cookie {
 	h.t.Helper()
+	return h.openAppSession("code")
+}
+
+// openAppSession is openSession for a named app the run's policy declares.
+func (h *uiHarness) openAppSession(app string) *http.Cookie {
+	h.t.Helper()
 	rec := h.enter(url.Values{
-		"run": {h.run.ID.String()}, "app": {"code"},
+		"run": {h.run.ID.String()}, "app": {app},
 		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleUser)},
 	})
 	if rec.Code != http.StatusFound {
@@ -1170,6 +1181,65 @@ func TestUIGateway_MissingLauncherIs502WithTheFrozenMessage(t *testing.T) {
 	}
 }
 
+// TestUIGateway_ApplicationRunNotListeningIs502WithTheStartupCommandMessage: an
+// application run has no launcher to blame (#1994), so when the probe finds
+// nothing listening after its wait (exit 6) the 502 says what the gateway
+// knows: the startup command exited or has not started yet, is not restarted,
+// and its output is in the run's terminal. Byte for byte, like the frozen
+// missing-launcher string above, which a non-application run still gets.
+func TestUIGateway_ApplicationRunNotListeningIs502WithTheStartupCommandMessage(t *testing.T) {
+	h := newUIHarness(t, okBackend())
+	cookie := h.openSession()
+	h.launcher = 6 // no launcher, nothing listening, WARDYN_APPLICATION_RUN=1 in the sandbox
+
+	rec := h.relay("/ide", cookie, nil)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("got %d %s, want 502", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	want := "Nothing is listening on port 8080 yet. If the app's startup command has exited, " +
+		"it isn't restarted; its output is in the run's terminal."
+	if body.Error != want {
+		t.Fatalf("error body:\n got %q\nwant %q", body.Error, want)
+	}
+}
+
+// TestUIGateway_ProbeNamesAnApplicationRun runs the probe under a real sh with a
+// socat that never connects: after the wait, a sandbox whose env says
+// WARDYN_APPLICATION_RUN=1 answers 6 and any other answers the missing-launcher 3.
+func TestUIGateway_ProbeNamesAnApplicationRun(t *testing.T) {
+	sh, err := osexec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh on this host")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "socat"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil { //nolint:gosec // test fixture
+		t.Fatal(err)
+	}
+	run := func(env ...string) int {
+		cmd := osexec.Command(sh, "-c", uiLauncherScript(filepath.Join(dir, "no-launcher"), 3000, 1))
+		cmd.Env = append(append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"), "WARDYN_APPLICATION_RUN="), env...)
+		var ee *osexec.ExitError
+		if err := cmd.Run(); errors.As(err, &ee) {
+			return ee.ExitCode()
+		} else if err != nil {
+			t.Fatalf("run probe: %v", err)
+		}
+		return 0
+	}
+	if got := run("WARDYN_APPLICATION_RUN=1"); got != 6 {
+		t.Fatalf("application run: probe exit %d, want 6", got)
+	}
+	if got := run(); got != 3 {
+		t.Fatalf("other run: probe exit %d, want 3 (the frozen missing-launcher answer)", got)
+	}
+}
+
 // TestUIGateway_LaunchIsAudited: exit 5 means the probe actually STARTED the
 // app (exit 0 means it was already listening), which is the only case that has
 // anything to record — ui.start names an app that was launched, never one that
@@ -1202,7 +1272,7 @@ func TestUIGateway_LauncherTimeoutIs502(t *testing.T) {
 // interprets, and that the probe runs BEFORE any launch (an app already
 // listening must never be started twice).
 func TestUIGateway_LauncherScriptShape(t *testing.T) {
-	script := uiLauncherScript("/usr/local/bin/wardyn-ui-code", 8080)
+	script := uiLauncherScript("/usr/local/bin/wardyn-ui-code", 8080, 0)
 	probeAt := strings.Index(script, "socat")
 	launchAt := strings.Index(script, `"$b" >/dev/null`)
 	if probeAt < 0 || launchAt < 0 || probeAt > launchAt {
@@ -1212,6 +1282,76 @@ func TestUIGateway_LauncherScriptShape(t *testing.T) {
 		if !strings.Contains(script, want) {
 			t.Fatalf("script missing %q:\n%s", want, script)
 		}
+	}
+}
+
+// TestUIGateway_SeededAppIsWaitedFor runs the probe under a real sh with a fake
+// socat on PATH: the port opens on the third probe and the image has no
+// launcher. A seeded run's startup command is bringing its own app up (#1994),
+// so the wait answers 0 (listening, nothing started); with no wait it is the
+// missing-launcher 3 at once, as before.
+func TestUIGateway_SeededAppIsWaitedFor(t *testing.T) {
+	sh, err := osexec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh on this host")
+	}
+	dir := t.TempDir()
+	socat := "#!/bin/sh\nn=$(cat \"" + dir + "/n\" 2>/dev/null || echo 0)\nn=$((n+1))\necho $n >\"" + dir + "/n\"\n[ $n -ge 3 ]\n"
+	if err := os.WriteFile(filepath.Join(dir, "socat"), []byte(socat), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run := func(seedPolls int) int {
+		_ = os.Remove(filepath.Join(dir, "n"))
+		cmd := osexec.Command(sh, "-c", uiLauncherScript(filepath.Join(dir, "no-launcher"), 3000, seedPolls))
+		cmd.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		err := cmd.Run()
+		var ee *osexec.ExitError
+		if errors.As(err, &ee) {
+			return ee.ExitCode()
+		}
+		if err != nil {
+			t.Fatalf("run probe: %v", err)
+		}
+		return 0
+	}
+	if got := run(4); got != 0 {
+		t.Fatalf("seeded probe exit %d, want 0: the app came up on the third probe", got)
+	}
+	if got := run(0); got != 3 {
+		t.Fatalf("unseeded probe exit %d, want 3: no launcher and no wait", got)
+	}
+}
+
+// TestUIGateway_SeedDecidesTheWait: only a run whose boot seed starts something
+// waits for its port; a run with no seed is told about the launcher at once.
+func TestUIGateway_SeedDecidesTheWait(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		seed string
+		want string
+	}{
+		{"startup command", "npm run dev", fmt.Sprintf(`-lt %d ]`, uiEnsureWaitSecs*2)},
+		{"no seed", "", `-lt 0 ]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newUIHarness(t, okBackend())
+			h.run.Interactive, h.run.Task = true, tc.seed
+			h.store.putRun(h.run)
+			var script string
+			next := h.runner.execFn
+			h.runner.execFn = func(spec runner.ExecSpec) (*runner.ExecSession, error) {
+				if spec.Argv[0] == "sh" {
+					script = spec.Argv[2]
+				}
+				return next(spec)
+			}
+			if rec := h.relay("/ide", h.openSession(), nil); rec.Code != http.StatusOK {
+				t.Fatalf("relay: %d %s", rec.Code, rec.Body.String())
+			}
+			if want := "if ! [ -x \"$b\" ]; then\n  [ \"${WARDYN_INTERACTIVE_START:-}\" = agent ] && exit 3\n  i=0\n  while [ \"$i\" " + tc.want; !strings.Contains(script, want) {
+				t.Fatalf("a missing launcher's wait should read %q:\n%s", want, script)
+			}
+		})
 	}
 }
 

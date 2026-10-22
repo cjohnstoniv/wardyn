@@ -4,6 +4,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -31,7 +32,7 @@ const (
 	policyKindStored  = "stored"
 	policyKindInline  = "inline"
 	policyKindDefault = "default"
-	policyKindProfile = "profile"
+	policyKindUnit    = "unit"
 	policyKindUnknown = "unknown"
 )
 
@@ -126,9 +127,9 @@ type runPolicyChange struct {
 	Added   []string `json:"added,omitempty"`
 	Removed []string `json:"removed,omitempty"`
 	// Detail is the clamp_warnings lines, verbatim (cause limits only).
-	Detail  []string   `json:"detail,omitempty"`
-	Profile string     `json:"profile,omitempty"`
-	At      *time.Time `json:"at,omitempty"` // restart time
+	Detail []string   `json:"detail,omitempty"`
+	Unit   string     `json:"unit,omitempty"`
+	At     *time.Time `json:"at,omitempty"` // restart time
 }
 
 type storedPolicyNow struct {
@@ -210,8 +211,8 @@ func (s *Server) handleGetRunPolicy(w http.ResponseWriter, r *http.Request) {
 	resp.Provenance = envelope.Provenance.withContacts(s.runPolicyRef(ctx, run), sc.PolicyHelp)
 	resp.StoredPolicyNow = s.storedPolicyNowOf(ctx, run, create, &resp.Source)
 
-	secOp := s.isSecurityOperator(ctx)
-	out := redactSpecForRead(served, secOp)
+	tier := s.specReadTierFor(ctx)
+	out := redactSpecForRead(served, tier)
 	if out.LLMInspection != nil {
 		li := *out.LLMInspection
 		li.WorkspaceSecretValues = nil // a placeholder count would fail validatePolicySpec's no-raw-values rule
@@ -220,7 +221,8 @@ func (s *Server) handleGetRunPolicy(w http.ResponseWriter, r *http.Request) {
 	if out.AllowedDomains == nil {
 		out.AllowedDomains = []string{}
 	}
-	resp.Redacted = !secOp && !reflect.DeepEqual(specJSON(served), specJSON(redactSpecForUser(served)))
+	// Redacted: this tier was shown less than a super admin is (a mount's host path, a secret name).
+	resp.Redacted = !reflect.DeepEqual(specJSON(redactSpecForRead(served, specReadFull)), specJSON(redactSpecForRead(served, tier)))
 	resp.Spec = &out
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -261,10 +263,10 @@ func (s *Server) runPolicySourceOf(ctx context.Context, run types.AgentRun, c cr
 		}
 	case c.InlinePolicy != nil && *c.InlinePolicy:
 		out.Kind = policyKindInline
-	case c.InlinePolicy != nil && run.GovernanceProfileID != nil:
-		out.Kind = policyKindProfile
+	case c.InlinePolicy != nil && run.UnitID != nil:
+		out.Kind = policyKindUnit
 		// The leaf's own name: a base's never reaches a member's policy view.
-		if name, err := s.profileLeafName(ctx, *run.GovernanceProfileID); err == nil {
+		if name, err := s.unitLeafName(ctx, *run.UnitID); err == nil {
 			out.Name = name
 		}
 	case c.InlinePolicy != nil:
@@ -349,7 +351,7 @@ type evidenceRow struct {
 	Hosts          []string `json:"hosts"`
 	Host           string   `json:"host"`
 	Port           int      `json:"port"`
-	Profile        string   `json:"profile"`
+	Unit           string   `json:"unit"`
 	DeniedAdded    []string `json:"denied_added"`
 	MaxEphemeralMB int      `json:"max_ephemeral_disk_mib"`
 }
@@ -398,7 +400,7 @@ func collectEvidence(events, revives []types.AuditEvent) auditEvidence {
 		case "run.egress.confine":
 			add(ev.confine, row.Hosts...)
 		case "run.ceiling.reassert":
-			ev.profile, ev.profileMaxDisk = row.Profile, row.MaxEphemeralMB
+			ev.profile, ev.profileMaxDisk = cmp.Or(row.Unit, legacyUnitName(e.Data)), row.MaxEphemeralMB
 			add(ev.profileDenied, row.DeniedAdded...)
 		case "run.revive":
 			for _, h := range row.DeniedAdded {

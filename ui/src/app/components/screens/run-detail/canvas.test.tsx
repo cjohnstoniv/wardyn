@@ -56,7 +56,7 @@ vi.mock("sonner", () => ({
 
 import { HttpError } from "../../../lib/api/core";
 import { RUN_COCKPIT } from "../../wardyn/copy";
-import { RunCanvas } from "./canvas";
+import { RunCanvas, canvasRowHeight } from "./canvas";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { GRID_COLS, GRID_ROWS, RUN_WIDGETS, presetLayout, type WidgetContext } from "./widget-registry";
 
@@ -632,5 +632,20 @@ describe("RunCanvas — the fill rule stretches a widget's root card, not a widg
     const card = (await screen.findByRole("heading", { name: "Egress" })).closest("section");
     expect(card).not.toBeNull();
     expect(fillTargets(document.body)).toContain(card);
+  });
+});
+
+// #3372: the canvas measures its own scroll box, so twelve rows plus their gaps and padding must never outgrow a
+// measured pane. Below 466px the 28px row minimum binds and the canvas scrolls instead; that is a tiny window.
+describe("canvasRowHeight", () => {
+  const grid = (rowHeight: number) => 12 * rowHeight + 11 * 10 + 2 * 10;
+  it("twelve rows never outgrow a measured pane, at every height from 470 to 900", () => {
+    for (let pane = 470; pane <= 900; pane++) expect(grid(canvasRowHeight(pane)), `pane ${pane}`).toBeLessThanOrEqual(pane);
+  });
+  it("sizes an unmeasured pane (height 0) as 520px tall", () => {
+    expect(canvasRowHeight(0)).toBe(canvasRowHeight(520));
+  });
+  it("is unchanged for a tall pane", () => {
+    expect(canvasRowHeight(900)).toBe(64);
   });
 });

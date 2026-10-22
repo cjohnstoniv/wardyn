@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // The restore runbook's sequence step (docs/OPERATIONS.md, "Restore them", step 3b), run as written: one
@@ -40,7 +41,7 @@ func TestPG_RestoreRunbookKeepsACutAfterTwoRestoresOfOneDump(t *testing.T) {
 	}
 	cut := func(sub string) {
 		if err := store.ExecRevocationCut(ctx, pool, `INSERT INTO oidc_session_revocations (sub, revoked_at) VALUES ($1, clock_timestamp())
-			ON CONFLICT (sub) DO UPDATE SET revoked_at = EXCLUDED.revoked_at`, sub); err != nil {
+			ON CONFLICT (sub) DO UPDATE SET revoked_at = EXCLUDED.revoked_at`, sub, types.CLISessionEndRevoked); err != nil {
 			t.Fatal(err)
 		}
 	}

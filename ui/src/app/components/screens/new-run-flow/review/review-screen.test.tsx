@@ -4,21 +4,27 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { setField } from "../../../../../test/set-field";
 import { OperatorProvider } from "../../../wardyn/operator-context";
+import { NR_HARNESSES } from "../../../wardyn/copy/new-run/harnesses";
 import { NR_FILES } from "../../../wardyn/copy/new-run/files";
 import { ENDS_NONE } from "../../../wardyn/copy/run-lifetime";
+import { NR_RUN } from "../../../wardyn/copy/new-run/run";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { NR_SAVE } from "../../../wardyn/copy/new-run/save";
 import { NR_SHAPE } from "../../../wardyn/copy/new-run/shape";
 import { NR_TEMPLATES } from "../../../wardyn/copy/new-run/templates";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
+import { health } from "../../../../lib/api/health";
 import { RUN_WAIT } from "../../../../lib/runner-pool-refusals";
 import { SCENARIO_PREFLIGHT } from "../../../../lib/new-run-fixtures/scenarios/preflight";
 import { SCENARIO_ACCESS } from "../../../../lib/new-run-fixtures/scenarios/tools";
+import { CODEX, MCP_LOCAL } from "../../../../lib/new-run-fixtures/scenarios/tools-harness";
+import { NR_TOOLS } from "../../../wardyn/copy/new-run/tools";
+import { mcpLocalRef } from "../steps/tools/catalogue-edits";
 import type { PreflightResult } from "../../../../lib/types/preflight";
 import { intentToWire } from "../draft/intent-to-wire";
 import { PREFLIGHT_FRESH_MS } from "../draft/launch-gate";
@@ -65,6 +71,12 @@ const AGENT: RunIntent = {
   tools: [{ id: "claude-code", kind: "harness" }],
   startup: { kind: "harness", tool: "claude-code", prompt: "Fix the build" },
 };
+// Two agents in an Autonomous run: the first one's task is the workload's, the second one's its own.
+const TWO_AGENTS: RunIntent = {
+  ...AGENT, experience: "background",
+  workload: { kind: "agent_task", agent: "claude-code", task: "Fix the build" },
+  tools: [{ id: "claude-code", kind: "harness" }, { id: "codex-cli", kind: "harness", task: "Write the tests" }],
+};
 const APP: RunIntent = { shape: "application", experience: "background", workload: { kind: "command", command: "make test" }, no_repositories_or_drives: true };
 
 function Probe() {
@@ -85,6 +97,10 @@ interface Open {
   onLaunch?: () => void;
   /** The read of the template's document; a template origin only. */
   templateRead?: () => Promise<Response>;
+  /** GET /setup/status; Review reads the roster from it. Unset: the read fails, which stays silent. */
+  status?: unknown;
+  /** GET /me/drives, read only for a draft that keeps its work folder. */
+  drives?: unknown;
 }
 function open(intent: RunIntent, o: Open = {}) {
   const loaders: SeedLoaders = {
@@ -92,6 +108,8 @@ function open(intent: RunIntent, o: Open = {}) {
     again: async (): Promise<Seed> => ({ origin: { kind: "again", runId: RUN_ID, title: "Nightly" }, intent }),
   };
   wfetchMock.mockImplementation(async (path: string, init?: { method?: string }) => {
+    if (path === "/setup/status" && o.status) return json(o.status);
+    if (path.startsWith("/me/drives")) return json(o.drives ?? { drives: [], pool_checked: true });
     if (path === "/templates" && init?.method === "POST") return json({ id: "t9", kind: "template" });
     if (path === "/templates") return json({ templates: [], publish: { org: false, groups: [], groups_unverified: false } });
     if (path.startsWith("/templates/")) return o.templateRead ? o.templateRead() : json({ document: { needs_setup: o.needs ?? [] } });
@@ -127,6 +145,35 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   wfetchMock.mockReset();
+  vi.restoreAllMocks();
+});
+
+describe("Review: a draft that keeps its work folder at the drive limit (#1991)", () => {
+  const AT_LIMIT = { drives: [], pool_checked: true, create: { allowed: false, reason: "limit_reached", count: 3, limit: 3, keep_work_folder: true } };
+
+  it("holds Launch with the limit sentence, what else to do, and a way back to Files", async () => {
+    open({ ...AGENT, keep_work_folder: true }, { drives: AT_LIMIT });
+    await ready();
+    const link = await within(blockerList()).findByRole("button", { name: NR_FILES.KEEP_LIMIT(3, 3) });
+    expect(blockerList()).toHaveTextContent(NR_FILES.KEEP_LIMIT_HINT);
+    expect(launch()).toBeDisabled();
+    await userEvent.click(link);
+    expect(path()).toContain("step=files");
+  });
+
+  it("says nothing of it for a draft that does not keep the folder, and reads no drives for it", async () => {
+    open(AGENT, { drives: AT_LIMIT });
+    await ready();
+    expect(blockerList()).toBeEmptyDOMElement();
+    expect(wfetchMock.mock.calls.some(([p]) => String(p).startsWith("/me/drives"))).toBe(false);
+  });
+
+  it("says nothing of it while the person is under the limit", async () => {
+    open({ ...AGENT, keep_work_folder: true }, { drives: { ...AT_LIMIT, create: { allowed: true, count: 1, limit: 3, keep_work_folder: true } } });
+    await ready();
+    await waitFor(() => expect(wfetchMock.mock.calls.some(([p]) => String(p).startsWith("/me/drives"))).toBe(true));
+    expect(blockerList()).toBeEmptyDOMElement();
+  });
 });
 
 describe("Review Launch gate (U11)", () => {
@@ -181,6 +228,31 @@ describe("Review Launch gate (U11)", () => {
     });
   });
 
+  describe("a server that runs in the sandbox", () => {
+    const LOCAL = mcpLocalRef("docs-search", "npx -y @example/mcp-server@1.4.2", ["docs.example.com"]);
+    const withRule = (effect: "deny" | "allow"): RunIntent => ({
+      ...AGENT, components: [LOCAL], tools: [{ id: "codex-cli", kind: "harness", tool_rules: [{ tool: "mcp__docs-search__write_page", effect }] }],
+    });
+    const access = { ...SCENARIO_ACCESS.member, harnesses: [CODEX], rows: [MCP_LOCAL] };
+    const previewWith = { result: { spec: {}, source: { name: "Default" }, pending: [], warnings: [], repository_access: [], access }, retry };
+
+    it("holds Launch while Codex CLI is asked to block one of its tools, and links to Tools and access", async () => {
+      checks.current = answered(SCENARIO_PREFLIGHT.member, 1000, { preview: previewWith });
+      open(withRule("deny"));
+      await ready();
+      expect(launch()).toBeDisabled();
+      fireEvent.click(within(blockerList()).getByRole("button", { name: NR_TOOLS.MCP_REFUSED("codex-cli", "docs-search") }));
+      expect(path()).toContain("step=tools");
+    });
+
+    it("leaves Launch open under a rule that only allows", async () => {
+      checks.current = answered(SCENARIO_PREFLIGHT.member, 1000, { preview: previewWith });
+      open(withRule("allow"));
+      await ready();
+      expect(launch()).toBeEnabled();
+    });
+  });
+
   it("leaves Launch open on a model credential refusal, so the launch refusal opens the sign-in door", async () => {
     checks.current = answered(null, 1000, {
       preflightRead: { generation: GENERATION, at: Date.now() - 1000 },
@@ -211,7 +283,11 @@ describe("Review Launch gate (U11)", () => {
     const user = userEvent.setup();
     checks.current = answered(null);
     open(AGENT);
-    await user.click(await screen.findByRole("button", { name: NR_REVIEW.CHECK_AGAIN }));
+    // #3043: the stale result carries its own Check again inside the blocker card; the footer keeps one too.
+    await ready();
+    const inCard = within(blockerList()).getByRole("button", { name: NR_REVIEW.CHECK_AGAIN });
+    expect(screen.getAllByRole("button", { name: NR_REVIEW.CHECK_AGAIN })).toHaveLength(2);
+    await user.click(inCard);
     expect(preflight).toHaveBeenCalledTimes(1);
     expect(retry).toHaveBeenCalledTimes(1);
     checks.current = answered(SCENARIO_PREFLIGHT.member);
@@ -253,12 +329,72 @@ describe("Review blockers", () => {
     expect(group("where").getByText(NR_REVIEW.BADGE_ATTENTION)).toBeInTheDocument();
   });
 
+  it("holds Launch for harnesses no one image carries together, and links to the Harnesses step", async () => {
+    const user = userEvent.setup();
+    const status = {
+      harnesses: [{ id: "claude-code", display: "Claude Code" }, { id: "codex-cli", display: "Codex CLI" }],
+      harness_sets: [["claude-code", "gemini-cli"]],
+    };
+    open(TWO_AGENTS, { status });
+    await ready();
+    const sentence = NR_HARNESSES.NO_COMBINATION("Claude Code", "Codex CLI");
+    await waitFor(() => expect(within(blockerList()).getByRole("button", { name: sentence })).toBeInTheDocument());
+    expect(launch()).toBeDisabled();
+    await user.click(within(blockerList()).getByRole("button", { name: sentence }));
+    await waitFor(() => expect(path()).toContain("step=harnesses"));
+  });
+
+  it("holds nothing when one declared image carries every harness", async () => {
+    open(TWO_AGENTS, { status: { harnesses: [], harness_sets: [["claude-code", "codex-cli"]] } });
+    await ready();
+    await waitFor(() => expect(wfetchMock).toHaveBeenCalledWith("/setup/status", expect.anything()));
+    await act(async () => {});
+    expect(launch()).toBeEnabled();
+  });
+
+  // #3043: the pool-required refusal points at the Where row, which then says there is no pool.
+  it("makes Where it runs read 'No pool chosen yet' when the pool-required refusal points at it", async () => {
+    checks.current = answered({ ...SCENARIO_PREFLIGHT.member, runner_pool: undefined }, 1000, { preflightError: NR_RUN.POOL_HELP, preflightReason: "runner_pool_required" });
+    open({ ...AGENT, runner_pool_id: undefined });
+    await ready();
+    await waitFor(() => expect(within(blockerList()).getAllByRole("listitem")).toHaveLength(1));
+    expect(group("where").getByText(NR_REVIEW.WHERE_NONE)).toBeInTheDocument();
+  });
+
+  // #3044: Review is one card of flat rows whose titles are sentence-case text, not a caps eyebrow.
+  it("draws each group title as a sentence-case heading in one card", async () => {
+    open(AGENT);
+    await ready();
+    const title = screen.getByRole("heading", { name: NR_REVIEW.GROUP_WHERE });
+    expect(title).toHaveTextContent(NR_REVIEW.GROUP_WHERE);
+    expect(title.className).not.toContain("label-eyebrow");
+    expect(document.querySelectorAll("[data-review-group]").length).toBeGreaterThan(1);
+    expect(new Set(Array.from(document.querySelectorAll("[data-review-group]")).map((g) => g.parentElement)).size).toBe(1);
+  });
+
   it("says the setup changed, with Check again, when the only thing wrong is a stale result", async () => {
     checks.current = answered(SCENARIO_PREFLIGHT.member, PREFLIGHT_FRESH_MS + 1);
     open(AGENT);
     await ready();
     expect(blockerList()).toHaveTextContent(NR_REVIEW.BLOCKER_STALE);
     expect(blockerList()).toHaveTextContent(NR_REVIEW.BLOCKERS_ONE);
+    // #3043: nothing specific is to blame, so the chip and the card are amber, every group keeps its tick.
+    expect(screen.getByText("Check needed")).toBeInTheDocument();
+    expect(screen.queryByText(NR_REVIEW.BADGE_ATTENTION)).toBeNull();
+    expect(screen.getByText("Check needed").className).toContain("warning");
+    expect(blockerList().className).toContain("warning");
+    expect(document.querySelector("[data-review-group][data-blocked]")).toBeNull();
+  });
+
+  it("keeps the chip red and reads Needs attention when a blocker names a group", async () => {
+    checks.current = answered(SCENARIO_PREFLIGHT.member, 1000, { preflightError: "Not available on your runner.", preflightReason: "placement_credential" });
+    open(AGENT);
+    await ready();
+    await waitFor(() => expect(within(blockerList()).getAllByRole("listitem")).toHaveLength(1));
+    expect(screen.getByText(NR_REVIEW.BADGE_ATTENTION, { selector: "span.inline-flex" }).className).toContain("danger");
+    expect(screen.queryByText("Check needed")).toBeNull();
+    expect(within(blockerList()).queryByRole("button", { name: NR_REVIEW.CHECK_AGAIN })).toBeNull();
+    expect(blockerList().className).toContain("danger");
   });
 });
 
@@ -274,6 +410,9 @@ describe("Review groups", () => {
     expect(group("where").getByText(NR_REVIEW.WHERE_VALUE("General"))).toBeInTheDocument();
     expect(group("where").getByText(NR_REVIEW.WHERE_DETAIL("Organization pool", 6, 10))).toBeInTheDocument();
     expect(group("where").getByText(NR_REVIEW.PROV_ORG_DEFAULT)).toBeInTheDocument();
+    // #3043: provenance is a caption, not a link-coloured word that goes nowhere.
+    expect(group("where").getByText(NR_REVIEW.PROV_ORG_DEFAULT).className).toContain("text-muted-foreground");
+    expect(group("where").getByText(NR_REVIEW.PROV_ORG_DEFAULT).className).not.toContain("text-primary");
     expect(group("work").getByText(NR_REVIEW.WORK_NONE)).toBeInTheDocument();
     expect(group("tools").getByText(NR_REVIEW.HARNESS_STARTS)).toBeInTheDocument();
     expect(group("tools").getByText("Fix the build")).toBeInTheDocument();
@@ -367,6 +506,116 @@ describe("Review groups", () => {
     await user.click(screen.getByRole("button", { name: `${NR_REVIEW.CHANGE} ${NR_REVIEW.GROUP_TOOLS}` }));
     setField(screen.getByLabelText(NR_REVIEW.COMMAND_LABEL), "make lint");
     expect(intentNow().workload).toEqual({ kind: "command", command: "make lint" });
+  });
+});
+
+describe("Review: an application server (#1994)", () => {
+  const SERVER: RunIntent = {
+    shape: "application", experience: "interactive", no_repositories_or_drives: true, runner_pool_id: "pool-general",
+    startup: { kind: "command", command: "npm run dev" },
+    inline_policy: { ui_apps: [{ name: "web", port: 3000, path: "/" }, { name: "api", port: 8080, path: "/api" }] },
+  };
+  const gatewayIs = (ui_sandbox?: { enabled: boolean }) => vi.spyOn(health, "health").mockResolvedValue({ status: "ok", ...(ui_sandbox && { ui_sandbox }) });
+
+  it("names the server, its start command and each port, and opens Launch with the gateway on", async () => {
+    gatewayIs({ enabled: true });
+    open(SERVER);
+    await ready();
+    await waitFor(() => expect(launch()).toBeEnabled());
+    expect(screen.getByText(NR_REVIEW.SETUP_APPLICATION_SERVER)).toBeInTheDocument();
+    const run = group("run");
+    expect(run.getByText(NR_REVIEW.VALUE_APPLICATION)).toBeInTheDocument();
+    expect(run.getByText(NR_REVIEW.TIMING_APPLICATION_SERVER)).toBeInTheDocument();
+    const rows = Array.from(document.querySelectorAll<HTMLElement>("[data-app]"));
+    expect(rows.map((r) => r.textContent)).toEqual([
+      `web${NR_REVIEW.APP_PORT(3000)}${NR_REVIEW.APP_OPENS("/")}`,
+      `api${NR_REVIEW.APP_PORT(8080)}${NR_REVIEW.APP_OPENS("/api")}`,
+    ]);
+    expect(group("tools").getByText("npm run dev")).toBeInTheDocument();
+    expect(group("tools").getByText(NR_REVIEW.TOOLS_START_COMMAND)).toBeInTheDocument();
+    expect(run.queryByText(NR_REVIEW.DOC_ONLY_CHIP)).not.toBeInTheDocument();
+  });
+
+  it("holds Launch with one blocker, on the Run group, linking to the Run step, when the gateway is off", async () => {
+    gatewayIs();
+    const user = userEvent.setup();
+    open(SERVER);
+    await ready();
+    await waitFor(() => expect(within(blockerList()).getAllByRole("listitem")).toHaveLength(1));
+    expect(blockerList()).toHaveTextContent(NR_REVIEW.BLOCKERS_ONE);
+    expect(within(blockerList()).getByRole("listitem")).toHaveTextContent(NR_REVIEW.BLOCKER_GATEWAY_OFF);
+    expect(launch()).toBeDisabled();
+    const blocked = Array.from(document.querySelectorAll("[data-review-group][data-blocked]")).map((g) => g.getAttribute("data-review-group"));
+    expect(blocked).toEqual(["run"]);
+    await user.click(within(blockerList()).getByRole("button", { name: NR_REVIEW.BLOCKER_GATEWAY_OFF }));
+    await waitFor(() => expect(path()).toContain("step=run"));
+  });
+
+  it("does not call the gateway off before /healthz has answered, and never for a script", async () => {
+    vi.spyOn(health, "health").mockResolvedValue({});
+    open(SERVER);
+    await ready();
+    expect(blockerList()).toBeEmptyDOMElement();
+    cleanup();
+    gatewayIs();
+    open(APP);
+    await ready();
+    expect(blockerList()).toBeEmptyDOMElement();
+  });
+
+  it("shows the server's clamp warning and no port rows when governance strips the apps", async () => {
+    gatewayIs({ enabled: true });
+    const warning = 'dropped 2 ui_app(s) denied by governance profile "Platform team": web:3000,api:8080';
+    checks.current = answered({ ...SCENARIO_PREFLIGHT.member, warnings: [warning] }, 1000, {
+      preview: { result: { spec: {}, source: { name: "Default" }, pending: [], warnings: [], repository_access: [] }, retry },
+    });
+    open(SERVER);
+    await ready();
+    expect(screen.getByText(warning)).toBeInTheDocument();
+    expect(document.querySelector("[data-app]")).toBeNull();
+    expect(screen.queryByText(NR_REVIEW.APP_OPENS("/"))).not.toBeInTheDocument();
+  });
+
+  it("shows the ports the policy preview kept, not the ones asked for", async () => {
+    gatewayIs({ enabled: true });
+    checks.current = answered(SCENARIO_PREFLIGHT.member, 1000, {
+      preview: { result: { spec: { ui_apps: [{ name: "web", port: 3000, path: "/" }] }, source: { name: "Default" }, pending: [], warnings: [], repository_access: [] }, retry },
+    });
+    open(SERVER);
+    await ready();
+    expect(Array.from(document.querySelectorAll("[data-app]")).map((r) => r.getAttribute("data-app"))).toEqual(["web"]);
+  });
+
+  it("edits the start command in place", async () => {
+    gatewayIs({ enabled: true });
+    const user = userEvent.setup();
+    open(SERVER);
+    await ready();
+    await user.click(screen.getByRole("button", { name: `${NR_REVIEW.CHANGE} ${NR_REVIEW.GROUP_TOOLS}` }));
+    setField(screen.getByLabelText(NR_REVIEW.COMMAND_LABEL), "pnpm dev");
+    expect(intentNow().startup).toEqual({ kind: "command", command: "pnpm dev" });
+  });
+
+  it("blocks Launch on a bad port with the Run step's sentence", async () => {
+    gatewayIs({ enabled: true });
+    open({ ...SERVER, inline_policy: { ui_apps: [{ name: "web", port: 70000 }, { name: "api", port: 70000 }] } });
+    await ready();
+    await waitFor(() => expect(within(blockerList()).getAllByRole("listitem")).toHaveLength(1));
+    expect(blockerList()).toHaveTextContent(NR_RUN.PORT_INVALID);
+    expect(launch()).toBeDisabled();
+  });
+
+  it.each([
+    ["a repeated name", [{ name: "web", port: 3000 }, { name: "web", port: 3001 }], "Two applications are named web. Give each its own name."],
+    ["a name the server refuses", [{ name: "Web App", port: 3000 }], "Use lower-case letters, numbers and dashes, up to 32 characters, starting and ending with a letter or number."],
+    ["a path the server refuses", [{ name: "web", port: 3000, path: "//host" }], 'Start the path with a single /, with no host and no "..".'],
+  ])("blocks Launch on %s with the Run step's sentence", async (_what, ui_apps, text) => {
+    gatewayIs({ enabled: true });
+    open({ ...SERVER, inline_policy: { ui_apps } });
+    await ready();
+    await waitFor(() => expect(within(blockerList()).getAllByRole("listitem")).toHaveLength(1));
+    expect(within(blockerList()).getByRole("listitem")).toHaveTextContent(text);
+    expect(launch()).toBeDisabled();
   });
 });
 
@@ -563,6 +812,10 @@ describe("Review Files and Limits detail", () => {
     await ready();
     expect(group("work").getByText(NR_REVIEW.MAIN_DRIVE("20 GiB"))).toBeInTheDocument();
     expect(group("work").getByText(NR_FILES.NOT_ENFORCED)).toBeInTheDocument();
+    // #3043: the main drive is said once, by its sub-card; the Files step's summary sentence is not repeated above it.
+    expect(group("work").getAllByText(/Main drive/)).toHaveLength(1);
+    expect(group("work").queryByText(/the main drive is deleted when the run ends/i)).toBeNull();
+    expect(group("work").queryByText(/starts in/i)).toBeNull();
   });
 
   it("opens the limits editor on what was asked for, not the narrowed amount", async () => {
