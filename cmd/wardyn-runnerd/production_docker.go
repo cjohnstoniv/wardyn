@@ -399,6 +399,33 @@ func runnerKeystore(ks runneragent.Keystore, runnerID string) runneragent.Keysto
 	return runneragent.Keystore{Set: store.Set, Get: store.Get, Delete: store.Delete, DeleteAll: store.DeleteAll, Precheck: store.Precheck}
 }
 
+// hostCaps is the part of the caps report that belongs to the machine and the substrate: what it
+// supports, its name, version and arch, and whether it keeps a sandbox after the run ends.
+func hostCaps(ctx context.Context, sub substrate.Substrate, arch string) (runnerwire.Caps, error) {
+	_, keeps := sub.(runner.SandboxEnder)
+	support, err := sub.Classes(ctx)
+	if err != nil {
+		return runnerwire.Caps{}, err
+	}
+	// A host that cannot say its name reports none, and keeps the machine name it had.
+	machine, _ := os.Hostname()
+	if arch == "" {
+		arch = engineArch(ctx)
+	}
+	return runnerwire.Caps{Support: support, Version: version.String(), MachineName: machine, Arch: arch, EndsUnkept: !keeps}, nil
+}
+
+// checkLapsesAtStartup runs the first lapse check. Run retries transient containment errors, and
+// BeforeReady refuses admission until required containment actually succeeds.
+func checkLapsesAtStartup(ctx context.Context, manager *offline.Manager) {
+	startup, cancel := context.WithTimeout(ctx, 30*time.Second)
+	err := manager.CheckLapses(startup)
+	cancel()
+	if err != nil {
+		slog.WarnContext(ctx, "runner startup containment will retry", "error", err)
+	}
+}
+
 func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, stateDir string, sub substrate.Substrate, ref func(uuid.UUID) string, relay runRelay, capacity func(context.Context) placement.Capacity, extra runtimeExtras) (_ runnerRuntime, retErr error) {
 	streams, err := runnerio.New(sub, identity.RunnerID.String(), stateDir)
 	if err != nil {
@@ -454,30 +481,17 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 	if err != nil {
 		return runnerRuntime{}, err
 	}
-	startup, cancel := context.WithTimeout(ctx, 30*time.Second)
-	err = manager.CheckLapses(startup)
-	cancel()
-	if err != nil {
-		// Run retries transient containment errors. BeforeReady refuses
-		// admission until required containment actually succeeds.
-		slog.WarnContext(ctx, "runner startup containment will retry", "error", err)
-	}
+	checkLapsesAtStartup(ctx, manager)
 	var online atomic.Pointer[runnerwire.Peer]
 	// sendCaps reports the runner's caps on peer; reprobe re-checks the relay first, and always sends
 	// even when nothing in the report is new (a fresh session's caps are required).
 	sendCaps := func(ctx context.Context, peer *runnerwire.Peer, reprobe, always bool) error {
-		_, keeps := sub.(runner.SandboxEnder)
-		support, err := sub.Classes(ctx)
+		caps, err := hostCaps(ctx, sub, extra.arch)
 		if err != nil {
 			return err
 		}
-		// A host that cannot say its name reports none, and keeps the machine name it had.
-		machine, _ := os.Hostname()
-		arch := extra.arch
-		if arch == "" {
-			arch = engineArch(ctx)
-		}
-		caps := runnerwire.Caps{Support: support, Version: version.String(), MachineName: machine, Arch: arch, Capacity: capacity(ctx), BYOISelftest: dispatcher.Selftests(), Retire: true, Resident: dispatcher.Residents(), EndsUnkept: !keeps, LinuxVM: extra.linuxVM, LocalAttach: local != nil}
+		caps.Capacity, caps.BYOISelftest, caps.Retire, caps.Resident = capacity(ctx), dispatcher.Selftests(), true, dispatcher.Residents()
+		caps.LinuxVM, caps.LocalAttach = extra.linuxVM, local != nil
 		if !extra.report.fill(ctx, &caps, reprobe) && !always {
 			return nil
 		}
