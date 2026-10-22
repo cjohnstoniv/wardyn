@@ -239,3 +239,24 @@ func TestBreakGlassRestriction(t *testing.T) {
 func sortedRestrictionIDs(ids []uuid.UUID) []uuid.UUID {
 	return slices.SortedFunc(slices.Values(ids), func(a, b uuid.UUID) int { return strings.Compare(a.String(), b.String()) })
 }
+
+// TestRestrictionPolicyReadNoUnit: a member a restriction alone binds reads the restriction and no
+// unit, no unit path and no contexts (the Default unit it rides on is not one of their units).
+func TestRestrictionPolicyReadNoUnit(t *testing.T) {
+	e := newGovEnvOn(t, throwawayPGPool(t))
+	seedRestriction(t, e, "pr-all", types.RestrictionSpec{DeniedDomains: strs("a.example")}, types.RestrictionLimits{},
+		types.RestrictionMember{SubjectType: types.CapabilitySubjectAll})
+	w := e.call(e.user, http.MethodGet, "/api/v1/policies/default", "")
+	var got map[string]json.RawMessage
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &got) != nil {
+		t.Fatalf("policies/default = %d %s", w.Code, w.Body)
+	}
+	if _, ok := got["restrictions"]; !ok {
+		t.Errorf("the read omits the restriction: %s", w.Body)
+	}
+	for _, k := range []string{"unit_name", "unit_path", "contexts"} {
+		if v, ok := got[k]; ok && string(v) != "null" && string(v) != `""` && string(v) != "[]" {
+			t.Errorf("%s = %s, want absent for a caller only a restriction binds", k, v)
+		}
+	}
+}

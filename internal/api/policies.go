@@ -223,7 +223,7 @@ func (s *Server) handleGetDefaultPolicy(w http.ResponseWriter, r *http.Request) 
 			}
 		}
 	}
-	if !ceiling.Operator && ceiling.Unit != nil && s.cfg.Store != nil {
+	if !ceiling.Operator && ceiling.Unit != nil && !restrictionDefaultUnit(ceiling.Unit) && s.cfg.Store != nil {
 		if resp.Contexts, err = s.callerContexts(r.Context()); err != nil {
 			writeCeilingError(w, r, err)
 			return
