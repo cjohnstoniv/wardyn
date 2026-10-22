@@ -360,7 +360,7 @@ func (s *Server) admitBreakGlass(w http.ResponseWriter, r *http.Request) (*http.
 	reason := strings.TrimSpace(r.Header.Get(breakGlassReasonHeader))
 	if reason == "" || utf8.RuneCountInString(reason) > maxGovernanceRejectReasonLen || !controlCharFree(reason) {
 		writeErrorReason(w, http.StatusBadRequest, reasonBreakGlassReasonRequired,
-			"the Wardyn boundary is in hard_limits and units with their own walls exist: an admin-token run lifts their walls, so it is a break-glass run and needs a reason in the "+breakGlassReasonHeader+
+			"the Wardyn boundary is in hard_limits and units with their own walls or restrictions exist: an admin-token run lifts their walls, so it is a break-glass run and needs a reason in the "+breakGlassReasonHeader+
 				" header (at most 512 characters, no control characters)")
 		return r, false
 	}
@@ -371,15 +371,23 @@ func (s *Server) admitBreakGlass(w http.ResponseWriter, r *http.Request) (*http.
 // hard_limits and at least one unit with its own walls exists, whose walls the admin token stands
 // outside. The Default unit (the deployment default) does not count: the admin token never was held
 // to it; nor does a pass-through unit, which adds nothing. With no such unit there is nothing to
-// lift, so the run is an ordinary one, bound by the boundary, untagged. Restrictions join this test
-// with the RESTRICT-PIN lane.
+// lift, so the run is an ordinary one, bound by the boundary, untagged. A restriction is a wall the
+// admin token stands outside too, so one existing counts like a unit with its own walls.
 func (s *Server) breakGlassLifts(ctx context.Context) (bool, error) {
 	b, err := s.governanceBoundary(ctx)
 	if err != nil || !b.HardLimits() {
 		return false, err
 	}
 	units, err := s.cfg.Store.CountOwnWallsUnits(ctx)
-	return units > 0, err
+	if err != nil || units > 0 {
+		return units > 0, err
+	}
+	rs, ok := s.restrictionStore()
+	if !ok {
+		return false, nil
+	}
+	n, err := rs.CountRestrictions(ctx)
+	return n > 0, err
 }
 
 // stampBreakGlass records a break-glass run on its run.create datum and writes its run.break_glass.open

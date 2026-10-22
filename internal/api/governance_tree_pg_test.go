@@ -616,7 +616,7 @@ func TestBreakGlassUnitsPassThroughOnly(t *testing.T) {
 		t.Errorf("Default and a pass-through child only, no reason: %d %s, want 200", w.Code, w.Body)
 	}
 	e.seedProfile("bg-walls", "pypi.org")
-	if w := post(); w.Code != http.StatusBadRequest || wireReason(t, w) != reasonBreakGlassReasonRequired || !strings.Contains(w.Body.String(), "units with their own walls exist") {
+	if w := post(); w.Code != http.StatusBadRequest || wireReason(t, w) != reasonBreakGlassReasonRequired || !strings.Contains(w.Body.String(), "units with their own walls or restrictions exist") {
 		t.Errorf("with a unit of its own walls, no reason: %d %s, want 400 %s", w.Code, w.Body, reasonBreakGlassReasonRequired)
 	}
 }
