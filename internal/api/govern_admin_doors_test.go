@@ -345,7 +345,7 @@ func TestAuthzMatrixGovernAdminRuns(t *testing.T) {
 	keys := make([]string, 0, len(routeMatrix))
 	for key, rc := range routeMatrix {
 		switch rc.class {
-		case classAdmin, classSecurity, classMember:
+		case classAdmin, classSecurity, classUnit, classMember:
 			keys = append(keys, key)
 		}
 	}

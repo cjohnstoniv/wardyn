@@ -43,7 +43,13 @@ func unwrapped(s string) string { return strings.Join(strings.Fields(s), " ") }
 var docTierGate = map[routeClass]string{
 	classAdmin:    "⛔ admin only",
 	classSecurity: "⛔ admin or `security_admin`",
+	// The unit-admin tier (governance_scope.go): the security tier plus the unit admins, each scoped to
+	// their units. Not a prefix of the security tier's gate, nor it of this.
+	classUnit: "⛔ admin, `security_admin` or a unit admin (scoped)",
 }
+
+// docTierGated reports whether a route class is one the tier table documents.
+func docTierGated(c routeClass) bool { _, ok := docTierGate[c]; return ok }
 
 // docTierRow pairs a route the tier table names with the exact
 // text it is named by. The route key is looked up in routeMatrix — the
@@ -145,7 +151,7 @@ var docTierRows = []struct{ route, token string }{
 	{"GET /api/v1/audit/retention", "`GET /audit/retention`"},
 	{"POST /api/v1/audit/retention/drop", "`POST /audit/retention/drop`"},
 	{"GET /api/v1/approval-notify/status", "`GET /approval-notify/status`"},
-	{"POST /api/v1/governance/units", "`/governance` profile and assignment routes"},
+	{"POST /api/v1/governance/units", "the unit-admin `/governance` routes"},
 	{"GET /api/v1/access/directory/search", "`GET /access/directory/search`"},
 	// Issue #168 (0.8): the three /drives routes that DON'T name a host path
 	// moved off classAdmin. Each gets its own token — the doc row lists all
@@ -193,18 +199,22 @@ var docTierRows = []struct{ route, token string }{
 	{"DELETE /api/v1/tokens/{id}", "`GET`/`DELETE /tokens`"},
 	{"GET /api/v1/governance/credential-delivery", "`GET /governance/credential-delivery`"},
 	{"PUT /api/v1/governance/credential-delivery", "`PUT /governance/credential-delivery`"},
-	{"GET /api/v1/governance", "`/governance` profile and assignment routes"},
-	{"PUT /api/v1/governance/units/{id}", "`/governance` profile and assignment routes"},
-	{"DELETE /api/v1/governance/units/{id}", "`/governance` profile and assignment routes"},
-	{"POST /api/v1/governance/memberships", "`/governance` profile and assignment routes"},
-	{"DELETE /api/v1/governance/memberships/{id}", "`/governance` profile and assignment routes"},
-	{"PUT /api/v1/governance/memberships/{id}", "`/governance` profile and assignment routes"},
-	{"POST /api/v1/governance/memberships/{id}/promote", "`/governance` profile and assignment routes"},
-	{"POST /api/v1/governance/check", "`/governance` profile and assignment routes"},
-	{"GET /api/v1/governance/changes", "`/governance` profile and assignment routes"},
-	{"GET /api/v1/governance/changes/{id}", "`/governance` profile and assignment routes"},
-	{"POST /api/v1/governance/changes/{id}/approve", "`/governance` profile and assignment routes"},
-	{"POST /api/v1/governance/changes/{id}/reject", "`/governance` profile and assignment routes"},
+	// 0.10: the unit-admin tier's routes, one row; the promotion stays the security tier's.
+	{"GET /api/v1/governance", "the unit-admin `/governance` routes"},
+	{"PUT /api/v1/governance/units/{id}", "the unit-admin `/governance` routes"},
+	{"DELETE /api/v1/governance/units/{id}", "the unit-admin `/governance` routes"},
+	{"POST /api/v1/governance/units/{id}/admins", "the unit-admin `/governance` routes"},
+	{"DELETE /api/v1/governance/units/{id}/admins/{admin}", "the unit-admin `/governance` routes"},
+	{"POST /api/v1/governance/memberships", "the unit-admin `/governance` routes"},
+	{"DELETE /api/v1/governance/memberships/{id}", "the unit-admin `/governance` routes"},
+	{"PUT /api/v1/governance/memberships/{id}", "the unit-admin `/governance` routes"},
+	{"POST /api/v1/governance/memberships/{id}/promote", "`POST /governance/memberships/{id}/promote`"},
+	{"POST /api/v1/governance/check", "the unit-admin `/governance` routes"},
+	{"POST /api/v1/governance/dry-run", "the unit-admin `/governance` routes"},
+	{"GET /api/v1/governance/changes", "the unit-admin `/governance` routes"},
+	{"GET /api/v1/governance/changes/{id}", "the unit-admin `/governance` routes"},
+	{"POST /api/v1/governance/changes/{id}/approve", "the unit-admin `/governance` routes"},
+	{"POST /api/v1/governance/changes/{id}/reject", "the unit-admin `/governance` routes"},
 	{"GET /api/v1/user-types", "the `/user-types` routes"},
 	{"POST /api/v1/user-types", "the `/user-types` routes"},
 	{"PUT /api/v1/user-types/{id}", "the `/user-types` routes"},
@@ -213,7 +223,6 @@ var docTierRows = []struct{ route, token string }{
 	{"PUT /api/v1/governance/egress-baseline", "the `/governance/egress-baseline` routes"},
 	{"GET /api/v1/governance/boundary", "the `/governance/boundary` routes"},
 	{"PUT /api/v1/governance/boundary", "the `/governance/boundary` routes"},
-	{"POST /api/v1/governance/dry-run", "the `/governance/boundary` routes"},
 	{"GET /api/v1/key-domains", "the `/key-domains` routes"},
 	{"PUT /api/v1/key-domains/assignments/{subject_type}/{subject}", "the `/key-domains` routes"},
 	{"DELETE /api/v1/key-domains/assignments/{subject_type}/{subject}", "the `/key-domains` routes"},
@@ -313,7 +322,7 @@ func TestOperationsTierTableMatchesRouteMatrix(t *testing.T) {
 		}
 		want, ok := docTierGate[rc.class]
 		if !ok {
-			t.Errorf("route %s is class %q — the tier table documents only the two gated classes", dr.route, rc.class)
+			t.Errorf("route %s is class %q — the tier table documents only the three gated classes", dr.route, rc.class)
 			continue
 		}
 		var got []string
@@ -347,7 +356,7 @@ func TestOperationsTierTableMatchesRouteMatrix(t *testing.T) {
 		covered[dr.route] = true
 	}
 	for route, rc := range routeMatrix {
-		if rc.class != classAdmin && rc.class != classSecurity {
+		if !docTierGated(rc.class) {
 			continue
 		}
 		if covered[route] || docTierUndocumented[route] != "" {
@@ -363,7 +372,7 @@ func TestOperationsTierTableMatchesRouteMatrix(t *testing.T) {
 	// covers, or one the router no longer gates, is a stale licence to omit.
 	for route, why := range docTierUndocumented {
 		rc, ok := routeMatrix[route]
-		if !ok || (rc.class != classAdmin && rc.class != classSecurity) {
+		if !ok || !docTierGated(rc.class) {
 			t.Errorf("docTierUndocumented names %q (%s), which the router no longer gates — drop the entry", route, why)
 			continue
 		}

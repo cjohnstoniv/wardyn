@@ -299,7 +299,7 @@ func TestServiceIdentity_AllowListRouteWalk(t *testing.T) {
 	e := newSvcEnv(t)
 	e.mustCreate(t, svcName, svcSponsor)
 	tok := e.mustMint(t, e.sponsor, svcName)
-	human := map[routeClass]bool{classAdmin: true, classSecurity: true, classMember: true, classOwner: true}
+	human := map[routeClass]bool{classAdmin: true, classSecurity: true, classUnit: true, classMember: true, classOwner: true}
 	seen := map[string]bool{}
 	err := chi.Walk(e.h.srv.router, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
 		key := method + " " + route
