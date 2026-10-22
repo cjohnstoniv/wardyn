@@ -33,6 +33,9 @@ type Server struct {
 	OutDir string
 	// Mount mounts one virtiofs share; nil refuses an Init that names one.
 	Mount func(Mount) error
+	// MarkerDir holds the marker of this boot's Init. In a guest it is /run, a tmpfs: the marker
+	// outlives an agent restart and a reboot clears it.
+	MarkerDir string
 
 	mu      sync.Mutex
 	inited  bool
@@ -70,8 +73,12 @@ func (d *detached) notify() {
 	d.mu.Unlock()
 }
 
-// Handler serves the requests the package doc lists.
-func (s *Server) Handler() http.Handler {
+// Handler serves the requests the package doc lists. It refuses a Server with no MarkerDir, whose
+// marker would land in the working directory, where a reboot does not clear it.
+func (s *Server) Handler() (http.Handler, error) {
+	if s.MarkerDir == "" {
+		return nil, errors.New("the guest agent has no marker directory")
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/ready", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, Ready{Version: s.Version}) })
 	mux.HandleFunc("POST /v1/init", s.handleInit)
@@ -94,7 +101,7 @@ func (s *Server) Handler() http.Handler {
 		}
 		writeJSON(w, d.state())
 	})
-	return mux
+	return mux, nil
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
@@ -120,6 +127,12 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "the sandbox is already initialised", http.StatusConflict)
 		return
 	}
+	marker, err := os.OpenFile(filepath.Join(s.MarkerDir, "wardyn-guest-init"), os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0o600)
+	if err != nil {
+		http.Error(w, "the sandbox is already initialised", http.StatusConflict)
+		return
+	}
+	_ = marker.Close()
 	for _, f := range in.Files {
 		if err := s.writeFile(f); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)

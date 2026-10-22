@@ -119,13 +119,24 @@ type rig struct {
 
 func newRig(t *testing.T) *rig {
 	t.Helper()
+	return newRigAt(t, t.TempDir())
+}
+
+// newRigAt is a fresh agent whose Init marker lives in markerDir: two rigs on one directory are one
+// boot's agent before and after a restart.
+func newRigAt(t *testing.T, markerDir string) *rig {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	r := &rig{port: &fakePort{}, ctx: ctx, srv: &Server{Version: "test", Home: t.TempDir(), OutDir: t.TempDir()}}
+	r := &rig{port: &fakePort{}, ctx: ctx, srv: &Server{Version: "test", Home: t.TempDir(), OutDir: t.TempDir(), MarkerDir: markerDir}}
 	l := newPortListener(ctx, r.port, 5*time.Millisecond)
+	h, err := r.srv.Handler()
+	if err != nil {
+		t.Fatal(err)
+	}
 	var protocols http.Protocols
 	protocols.SetUnencryptedHTTP2(true)
-	hs := &http.Server{Handler: r.srv.Handler(), Protocols: &protocols}
+	hs := &http.Server{Handler: h, Protocols: &protocols}
 	go func() { _ = hs.Serve(l) }()
 	t.Cleanup(func() { _ = hs.Close() })
 	return r
@@ -184,6 +195,38 @@ func TestReadyAndInitOnce(t *testing.T) {
 	out, _ := io.ReadAll(s.Stdout)
 	if code, err := s.Wait(); err != nil || code != 0 || string(out) != "12exec" {
 		t.Fatalf("env exec = %q, %d, %v: init env and secret env reach the exec, the exec's own env wins", out, code, err)
+	}
+}
+
+func TestInitRefusedAfterAnAgentRestart(t *testing.T) {
+	boot := t.TempDir()
+	in := Init{Files: []File{{Path: filepath.Join(t.TempDir(), "managed.json"), Mode: 0o644}}}
+	if err := newRigAt(t, boot).client(t).Init(ctxT(t), in); err != nil {
+		t.Fatalf("first init on an empty marker dir = %v", err)
+	}
+	if err := newRigAt(t, boot).client(t).Init(ctxT(t), in); err == nil || !strings.Contains(err.Error(), `409 Conflict: "the sandbox is already initialised"`) {
+		t.Fatalf("init after a restart = %v, want refused", err)
+	}
+	if st, err := os.Stat(filepath.Join(boot, "wardyn-guest-init")); err != nil || st.Mode().Perm() != 0o600 {
+		t.Fatalf("init marker = %v, %v", st, err)
+	}
+}
+
+func TestPartWayFailedInitStaysRefused(t *testing.T) {
+	boot := t.TempDir()
+	bad := Init{Files: []File{{Path: "relative/managed.json", Mode: 0o644}}}
+	if err := newRigAt(t, boot).client(t).Init(ctxT(t), bad); err == nil || strings.Contains(err.Error(), "already initialised") {
+		t.Fatalf("init with a bad file path = %v, want it to fail after the marker", err)
+	}
+	good := Init{Files: []File{{Path: filepath.Join(t.TempDir(), "managed.json"), Mode: 0o644}}}
+	if err := newRigAt(t, boot).client(t).Init(ctxT(t), good); err == nil || !strings.Contains(err.Error(), `409 Conflict: "the sandbox is already initialised"`) {
+		t.Fatalf("init after a part-way failure = %v, want refused", err)
+	}
+}
+
+func TestHandlerRefusesAnEmptyMarkerDir(t *testing.T) {
+	if _, err := (&Server{Version: "test", Home: t.TempDir(), OutDir: t.TempDir()}).Handler(); err == nil {
+		t.Fatal("a Server with no MarkerDir got a handler")
 	}
 }
 

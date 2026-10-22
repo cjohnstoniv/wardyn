@@ -13,7 +13,7 @@
 | The machine | A versioned q35 machine (for example `pc-q35-10.0`) and a named CPU model, both recorded on the run as `vm_machine` |
 | The disk | The run's image converted once to a read-only ext4 base, plus the run's own copy-on-write overlay |
 | The boot | Direct kernel boot of the image's own kernel and initrd, with `noresume` |
-| The agent | The Wardyn guest agent in the guest starts the harness and serves terminals, as `agent` (uid 1000) |
+| The agent | The Wardyn guest agent in the guest starts the harness and serves terminals, as `agent` (uid 1000). It accepts the run's setup once per boot, even after it restarts |
 | Shared folders | The folders a container on this runner would get, at the same paths and mode, one unprivileged `virtiofsd` container each. No other host folder is shared, and a guest write lands as the runner's user |
 | Synced folders | A folder synced from another computer lands in the guest as in a container: through the guest agent and the image's `sftp-server`, as `agent`. The agent waits for the first sync |
 | Confinement | The VM boundary, which the runner treats as the `CC3` family (hardware virtualisation). The run's recorded `confinement_class` stays the one it asked for |

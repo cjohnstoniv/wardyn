@@ -54,9 +54,13 @@ func run(port, out string) error {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	srv := &guestagent.Server{Version: version.String(), Cred: cred, Home: guestagent.AgentHome, OutDir: out, Mount: guestagent.MountVirtiofs}
+	srv := &guestagent.Server{Version: version.String(), Cred: cred, Home: guestagent.AgentHome, OutDir: out, Mount: guestagent.MountVirtiofs, MarkerDir: "/run"}
+	h, err := srv.Handler()
+	if err != nil {
+		return err
+	}
 	slog.Info("wardyn-guest-agent serving", "port", port, "version", version.String())
-	return guestagent.ServePort(ctx, port, srv.Handler())
+	return guestagent.ServePort(ctx, port, h)
 }
 
 // agentCred is the agent user with its supplementary groups, as a container exec gets them.

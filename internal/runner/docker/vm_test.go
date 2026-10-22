@@ -132,13 +132,16 @@ func (r *vmRig) start(t *testing.T, c *createdContainer) {
 
 func (r *vmRig) serveAgent(t *testing.T, path string) {
 	home := t.TempDir()
-	srv := &guestagent.Server{Version: "test", Home: home, OutDir: t.TempDir(), Mount: func(m guestagent.Mount) error {
+	srv := &guestagent.Server{Version: "test", Home: home, OutDir: t.TempDir(), MarkerDir: t.TempDir(), Mount: func(m guestagent.Mount) error {
 		r.mu.Lock()
 		r.mounts = append(r.mounts, m)
 		r.mu.Unlock()
 		return nil
 	}}
-	h := srv.Handler()
+	h, err := srv.Handler()
+	if err != nil {
+		t.Fatal(err)
+	}
 	spy := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path == "/v1/init" {
 			var in guestagent.Init
