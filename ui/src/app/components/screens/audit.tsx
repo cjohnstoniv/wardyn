@@ -20,8 +20,9 @@ import {
 } from "lucide-react";
 import type { AuditEvent, ActorType, AgentRun } from "../../lib/types";
 import { isNetworkFault, runHeadline } from "../../lib/types";
+import { describeEvent } from "../../lib/audit-copy";
 import { RunRef } from "../wardyn/run-ref";
-import { AUDIT, describeEvent } from "./audit-copy";
+import { AUDIT } from "./audit-copy";
 import { audit as api } from "../../lib/api/audit";
 import { LIST_LIMIT } from "../../lib/api/core";
 import { health as healthApi } from "../../lib/api/health";

@@ -377,36 +377,38 @@ describe("RunDetailScreen — Audit tab row shape", () => {
   });
 });
 
-// #3035: a run's Audit tab speaks the Audit screen's sentences, keeps the raw key in title=, and does not
-// repeat the viewed run's own id on every row.
-describe("RunDetailScreen — Audit tab sentences", () => {
-  it("shows the plain-English action with the raw key in title=, and blanks the viewed run's id", async () => {
-    const ev = (id: string, action: string, target: string) => ({
-      id,
-      time: new Date().toISOString(),
-      actor_type: "system",
-      actor: "wardynd",
-      action,
-      outcome: "success",
-      run_id: "run-1",
-      target,
-    });
-    listAuditMock.mockImplementation((_id: string, action?: unknown) =>
-      Promise.resolve(action ? [] : [ev("e1", "run.create", "run-1"), ev("e2", "egress.allow", "api.example.com")]),
-    );
+// #3035: the run's Audit tab speaks the Audit screen's words; the raw key stays on hover.
+describe("RunDetailScreen — Audit tab wording", () => {
+  const base = { time: new Date().toISOString(), actor_type: "system", actor: "wardynd", outcome: "success", run_id: "run-1" };
+
+  async function openAuditTab(rows: Record<string, unknown>[]) {
+    listAuditMock.mockImplementation((_id: string, action?: unknown) => Promise.resolve(action ? [] : rows));
     renderRun(RUN);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     await user.click(await screen.findByRole("tab", { name: /audit/i }));
+    return screen.findAllByTestId("run-audit-row");
+  }
 
-    const rows = await screen.findAllByTestId("run-audit-row");
-    const created = within(rows[0]).getByTestId("run-audit-action");
-    expect(created).toHaveTextContent("Created the run");
-    expect(created).toHaveAttribute("title", "Created the run (run.create)");
-    expect(within(rows[0]).getByTestId("run-audit-target")).not.toHaveTextContent("run-1");
-    const allowed = within(rows[1]).getByTestId("run-audit-action");
-    expect(allowed).toHaveTextContent(/^Allowed egress$/);
-    expect(allowed).toHaveAttribute("title", "Allowed egress (egress.allow)");
-    expect(within(rows[1]).getByTestId("run-audit-target")).toHaveTextContent("api.example.com");
+  it("shows the sentence with the raw key on hover, and blanks the run's own id", async () => {
+    const [own, other] = await openAuditTab([
+      { ...base, id: "e1", action: "run.create", target: "run-1" },
+      { ...base, id: "e2", action: "egress.allow", target: "pypi.org", actor_type: "proxy" },
+    ]);
+    const action = within(own).getByTestId("run-audit-action");
+    expect(action).toHaveTextContent("Created the run");
+    expect(action).toHaveAttribute("title", "Created the run\nrun.create");
+    expect(within(own).getByTestId("run-audit-target").textContent).toBe("");
+    expect(within(own).getByTestId("run-audit-target").querySelector("[title]")).toBeNull();
+
+    expect(within(other).getByTestId("run-audit-action")).toHaveTextContent("Allowed egress to");
+    expect(within(other).getByTestId("run-audit-action")).toHaveAttribute("title", "Allowed egress to pypi.org\negress.allow");
+    expect(within(other).getByTestId("run-audit-target")).toHaveTextContent("pypi.org");
+  });
+
+  it("reads an egress row with no target as the Audit screen does", async () => {
+    const [row] = await openAuditTab([{ ...base, id: "e3", action: "egress.deny", target: "", actor_type: "proxy", outcome: "deny" }]);
+    expect(within(row).getByTestId("run-audit-action")).toHaveTextContent("Denied egress to");
+    expect(within(row).getByTestId("run-audit-target")).toHaveTextContent("an unknown host");
   });
 });
 
@@ -839,7 +841,7 @@ describe("RunDetailScreen — erased values on the Audit tab (M4 D)", () => {
       "Erased on request. The event and its place in the log remain.",
     );
     expect(screen.queryByText("[erased]")).toBeNull();
-    expect(screen.getByText("Decided an approval request")).toHaveAttribute("title", "Decided an approval request (approval.decide)");
+    expect(screen.getByText("Decided an approval request")).toHaveAttribute("title", "Decided an approval request — Erased\napproval.decide");
   });
 
   it("a row with nothing erased shows no Erased note", async () => {

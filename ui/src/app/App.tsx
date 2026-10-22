@@ -507,7 +507,6 @@ export default function App() {
     let alive = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let attempt = 0;
-    const hadToken = getToken() !== null;
     const stop = () => {
       alive = false;
       clearTimeout(timer);
@@ -556,7 +555,6 @@ export default function App() {
       // Another tab's announcement always asks again: a probe already out was sent before that sign-in and
       // would answer 401 (#3368). It takes over from that probe, whose answer is then dropped.
       if (probingRef.current && !fromOtherTab) return;
-      const hadToken = getToken() !== null;
       const { current, answer } = startProbe();
       void answer.then(({ probe, reason, transient }) => {
         if (!current()) return;

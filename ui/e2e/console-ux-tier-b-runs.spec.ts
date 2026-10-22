@@ -100,6 +100,18 @@ test.describe("Tier B run pages", () => {
       await expect(page.locator("aside").getByRole("link", { name: /^Runs/ })).toHaveAttribute("aria-current", "page");
     });
   }
+
+  // #3035: the run's Audit tab uses the Audit screen's sentence, keeps the raw key on hover, and does not repeat the run's id.
+  test("Run Audit tab: sentence with the key on hover, and no repeated run id", async ({ page }) => {
+    await gotoConsole(page);
+    const id = await seedRun(page);
+    await navToRoute(page, `/runs/${id}`);
+    await page.getByRole("tab", { name: /^Audit/ }).click();
+    const row = page.getByTestId("run-audit-row").filter({ has: page.locator('[data-testid="run-audit-action"][title$="run.create"]') }).first();
+    await expect(row.getByTestId("run-audit-action")).toHaveText("Created the run");
+    await expect(row.getByTestId("run-audit-action")).toHaveAttribute("title", /^Created the run[\s\S]*\nrun\.create$/);
+    await expect(row.getByTestId("run-audit-target")).not.toContainText(id);
+  });
 });
 
 const CAPACITY = {
