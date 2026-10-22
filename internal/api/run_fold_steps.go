@@ -137,7 +137,13 @@ func (s *Server) stepWorkspaces(f *runFold, rec *foldRecorder) bool {
 	if s.cfg.Store != nil {
 		all, _ = s.listWorkspaces(f.r.Context())
 	}
-	carriers := s.launchCarrierRule(f.r, f.seed.attached).index(all)
+	// A member's inline repo keeps the carrier its admission was granted on.
+	rule := s.launchCarrierRule(f.r, f.seed.attached)
+	if err := rule.holdAdmittedRepos(f.r.Context(), s.capBatchFor(f.r.Context()), all, f.spec); err != nil {
+		writeServerError(f.w, f.r, "resolve capability", err)
+		return false
+	}
+	carriers := rule.index(all)
 	f.wsRefs = attachedWorkspaceRefs(f.seed.attached, referencedWorkspacesBy(carriers, f.spec))
 	for _, ws := range f.wsRefs {
 		recordWorkspaceSources(rec, f.spec, ws)

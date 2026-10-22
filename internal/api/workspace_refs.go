@@ -99,12 +99,15 @@ func indexWorkspacesFor(all []types.Workspace, usable func(types.Workspace) bool
 // admits (indexWorkspacesFor), else the last carrier. nil mayLaunch admits
 // every workspace. person is the member the run is for, "" for an operator:
 // their own mount gate runs on a source a workspace of theirs carries, whichever
-// carrier judged it. The zero value is the authoring doors' rule: every
+// carrier judged it. admitted, filled by holdAdmittedRepos, holds a repo several
+// workspaces carry to the carrier admission admitted it by, ahead of mayLaunch
+// and behind attached. The zero value is the authoring doors' rule: every
 // workspace, no person.
 type runCarrierRule struct {
 	attached  []types.Workspace
 	mayLaunch func(types.Workspace) bool
 	person    string
+	admitted  map[string]types.Workspace
 }
 
 // launchCarrierRule is the rule for the caller of r launching with attached.
@@ -116,8 +119,41 @@ func (s *Server) launchCarrierRule(r *http.Request, attached []types.Workspace) 
 	return rule
 }
 
+// holdAdmittedRepos holds each repo of spec that several workspaces carry to
+// the carrier a member's admission judged it by (admittingCarrier, in the same
+// order), so the run's workspaces, requirements and association are that
+// carrier's and never another one the member was not granted. A repo no carrier
+// is granted keeps the index's choice; an operator's rule (no person) is left
+// as it is.
+func (c *runCarrierRule) holdAdmittedRepos(ctx context.Context, cap *capBatch, all []types.Workspace, spec types.RunPolicySpec) error {
+	if c.person == "" {
+		return nil
+	}
+	usable := carrierUsableBy(c.person)
+	idx := indexWorkspacesFor(all, usable)
+	for _, wr := range spec.WorkspaceRepos {
+		if len(idx.repoAll[wr.Repo]) < 2 {
+			continue
+		}
+		ws, ok, err := admittingCarrier(ctx, cap, idx.repo[wr.Repo], idx.repoAll[wr.Repo], usable)
+		if err != nil {
+			return err
+		}
+		if ok {
+			if c.admitted == nil {
+				c.admitted = map[string]types.Workspace{}
+			}
+			c.admitted[wr.Repo] = ws
+		}
+	}
+	return nil
+}
+
 func (c runCarrierRule) index(all []types.Workspace) workspaceSourceIndex {
 	idx := indexWorkspacesFor(all, c.mayLaunch)
+	for repo, ws := range c.admitted {
+		idx.repo[repo] = ws
+	}
 	for _, ws := range c.attached {
 		for _, src := range ws.Sources {
 			switch src.Type {
