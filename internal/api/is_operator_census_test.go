@@ -74,7 +74,6 @@ var isOperatorCensus = map[string]int{
 	"user_drives.go:handleGetUserDrives":            1, // a security admin reads the allow-listed projection
 	"user_drives_preview.go:handlePreviewUserDrive": 1,
 	"user_drives_tier.go:upsertUserDriveGrantAs":    1,
-	"user_drives.go:handleGetUserDrives":            1,
 	// Which runner a drive's second place is bound to is named to an operator and that runner's owner only.
 	"user_drives_second_place.go:boundRunnerName": 1,
 	// Audit rows: host detail stays the super admin's on the feed reads and the partition export.
