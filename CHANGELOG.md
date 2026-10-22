@@ -62,7 +62,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   (`sign_in_required`) it says to use a personal API token in `WARDYN_TOKEN`, not the compose stack's admin token. For
   a token the organisation does not know (`admin_token_not_configured`) it names where the token came from.
 - A service token's `GET /me` answers 503 `roster_unreadable` when the site configuration cannot be read, as
-  `GET /workspaces` does, and fails rather than answering a partial reach.
+  `GET /workspaces` does, and 500 when its presets or workspaces cannot be listed.
 
 ## [0.9.6] — 2026-10-20
 
