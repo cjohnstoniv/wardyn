@@ -698,6 +698,30 @@ func TestAPartialRecordEndsAtTheNextHello(t *testing.T) {
 	}
 }
 
+// A record longer than any a host writes is dropped, whether its 0x00 comes in a later read or in
+// the same read as the rest of it, and the record after it is the session's.
+func TestARecordLongerThanAnyIsDropped(t *testing.T) {
+	ctx := ctxT(t)
+	port := &fakePort{}
+	h := port.connect()
+	l := newPortListener(ctx, port, time.Millisecond)
+	open(ctx, t, h)
+	c, err := l.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	long := appendRecord(nil, recData, bytes.Repeat([]byte("x"), maxBody+1000))
+	if len(long) <= maxRecord {
+		t.Fatalf("a %d-byte record is not over the limit", len(long))
+	}
+	// The agent reads 32 KiB at a time: its first read holds no 0x00 and is under the limit, so the
+	// record's length is known only at its 0x00, which its second read holds with the next record.
+	go func() { _, _ = h.Write(slices.Concat(long, appendData(nil, []byte("after")))) }()
+	if b := readN(ctx, t, c, len("after")); b != "after" {
+		t.Fatalf("the session read %q; want the record after the over-long one", b)
+	}
+}
+
 // nextRecord reads raw records from r up to the first that is not empty, and decodes it.
 func nextRecord(ctx context.Context, t *testing.T, r *bufio.Reader) (byte, []byte) {
 	t.Helper()

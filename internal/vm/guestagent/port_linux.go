@@ -130,14 +130,15 @@ func (l *portListener) scan(s *recordScanner, b []byte) bool {
 			if s.inStep {
 				s.rec = append(s.rec, b...)
 			}
-			if len(s.rec) > maxRecord {
+			if len(s.rec) >= maxRecord {
 				s.rec, s.inStep = nil, false // longer than any record: the scanner has lost its place
 			}
 			return true
 		}
 		rec, inStep := append(s.rec, b[:i]...), s.inStep
 		s.rec, s.inStep, b = nil, true, b[i+1:]
-		if inStep && !l.record(rec) {
+		// A record longer than any is dropped up to its 0x00, here as when that comes in a later read.
+		if inStep && len(rec) < maxRecord && !l.record(rec) {
 			return false
 		}
 	}
@@ -145,7 +146,9 @@ func (l *portListener) scan(s *recordScanner, b []byte) bool {
 }
 
 // record passes on one record: a data record's body to the session, a hello to startSession. Any
-// other is dropped, such as a record a host left unfinished, which the next host's 0x00 ends.
+// other is dropped. So is a record a host left unfinished, which the next host's 0x00 ends, unless
+// it was cut at the end of a COBS group: then it decodes as a data record holding the start of its
+// body, which goes to the session still current, its own host's, so nothing crosses sessions.
 func (l *portListener) record(rec []byte) bool {
 	typ, body, ok := decodeRecord(rec)
 	switch {
