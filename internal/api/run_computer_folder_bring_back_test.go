@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -58,6 +59,9 @@ type agentSandbox struct {
 	stops     int
 	agentDown bool
 	wrote     bool
+	// calls is the order of the calls that matter: "stop" for the agent's stop, "pass" for the first
+	// exec of the pass itself.
+	calls []string
 	// onPID1 runs at the read of PID 1, the bring-back's last check before its compare-and-set.
 	onPID1 func()
 }
@@ -70,6 +74,7 @@ func (r *agentSandbox) ExecStream(ctx context.Context, ref string, spec runner.E
 	}
 	if sess, ok := agentExec(spec, r.pid1, func() (string, int) {
 		r.stops++
+		r.calls = append(r.calls, "stop")
 		if r.stopFails {
 			return "left: 42\n", 3
 		}
@@ -77,6 +82,9 @@ func (r *agentSandbox) ExecStream(ctx context.Context, ref string, spec runner.E
 		return agentStoppedMark + "\n", 0
 	}); ok {
 		return sess, nil
+	}
+	if !slices.Contains(r.calls, "pass") {
+		r.calls = append(r.calls, "pass")
 	}
 	if !r.agentDown && !r.wrote {
 		r.wrote = true
@@ -121,6 +129,9 @@ func bringBackFixture(t *testing.T) (*Server, *computerFolderStore, *recRecorder
 	}
 	cs.dispatchTestStore.mu.Lock()
 	cs.run.CreatedBy, cs.run.SandboxRef = bringBackOwner, "sbx"
+	// A computer-folder run is a run on that computer's runner, which cannot be quiesced.
+	runnerID := cs.runner.ID
+	cs.run.RunnerID = &runnerID
 	run = cs.run
 	cs.dispatchTestStore.mu.Unlock()
 	cs.runner.Owner = bringBackOwner
@@ -279,6 +290,28 @@ func TestBringComputerFolderBack_AWriteAfterTheRequestDoesNotComeBack(t *testing
 	}
 	if _, err := os.Stat(filepath.Join(app, "late.txt")); err == nil || sb.wrote {
 		t.Fatal("a write the agent made after the request came back")
+	}
+	if b, _ := os.ReadFile(filepath.Join(app, "README.md")); string(b) != "edited by the agent" {
+		t.Errorf("README.md = %q: the changes made before the request did not come back", b)
+	}
+}
+
+// A run on a runner cannot be quiesced, so the agent is stopped on its own, and before the pass:
+// the order of the sandbox's calls is the proof, since a pass that ran first copied what the
+// agent was still writing.
+func TestBringComputerFolderBack_ARunnerBackedRunsAgentIsStoppedBeforeThePass(t *testing.T) {
+	s, _, _, run, sb, app := bringBackFixture(t)
+	if res := bringBack(t, s, bringBackOwnerSession(t), run); res.code != http.StatusOK {
+		t.Fatalf("bring-back = %d %s", res.code, res.body)
+	}
+	sb.mu.Lock()
+	calls := slices.Clone(sb.calls)
+	sb.mu.Unlock()
+	if !slices.Equal(calls, []string{"stop", "pass"}) {
+		t.Fatalf("sandbox calls = %v, want the agent's stop before the pass", calls)
+	}
+	if _, err := os.Stat(filepath.Join(app, "late.txt")); err == nil || sb.wrote {
+		t.Error("a write the agent made after the request came back")
 	}
 	if b, _ := os.ReadFile(filepath.Join(app, "README.md")); string(b) != "edited by the agent" {
 		t.Errorf("README.md = %q: the changes made before the request did not come back", b)

@@ -232,6 +232,16 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 	qerr := s.quiesceKeptSandbox(qctx, run, ref)
 	qcancel()
 	var cannot notQuiescable
+	if errors.As(qerr, &cannot) {
+		if _, ok := bringBackBy(ctx); ok {
+			// The person ended the run to bring the folder back: where the sandbox cannot be quiesced
+			// (a runner's), nothing may write during the pass, so the agent is stopped first.
+			if err := s.stopAgentForPass(ctx, ref); err != nil {
+				slog.WarnContext(ctx, "wardynd: stop the agent before a bring-back", slog.String("run_id", runID.String()), slog.Any("err", err))
+				qerr = fmt.Errorf("the agent could not be stopped: %w", err)
+			}
+		}
+	}
 	if qerr != nil && !errors.As(qerr, &cannot) {
 		rctx, cancel = teardownCtx(ctx)
 		defer cancel()
