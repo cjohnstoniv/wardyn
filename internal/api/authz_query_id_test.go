@@ -129,6 +129,7 @@ var queryIDMatrix = map[string]queryIDRoute{
 // function is NOT covered here — it needs its own queryIDMatrix row.
 var queryParamNotAnID = map[string]string{
 	"limit":                     "page window (parseListPage)",
+	"run_in":                    "GET /policies/default: one of the caller's own units to read their ceiling in, by id or exact name; a unit they are not in, another person's or none, is the same 403 unit_not_a_context (TestDefaultPolicyContexts), so it selects no other principal's entity and tells no one which units exist",
 	"agent":                     "GET /runs/{id}/output: a harness id whose lines to keep from the run's own output; the run is the path's, already authorised, and the id names no entity",
 	"purpose":                   "POST /runs/{id}/attach/ticket: ui marks a UI-app ticket, which skips the terminal session cap; the run is the path's, already authorised, and the word names no entity",
 	"runner_pool_id":            "GET /me/drives: an organisation runner pool the caller's own drive catalogue is checked against; a pool the caller may not use answers exactly as one that does not exist (pool_checked false), and no principal's entity is selected",
