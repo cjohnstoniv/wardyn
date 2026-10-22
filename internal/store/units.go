@@ -51,6 +51,15 @@ func (e *ErrProfileHasChildren) Error() string {
 	return "store: governance profile is the base of: " + strings.Join(e.Names, ", ")
 }
 
+// ErrUnitPinned is DeleteGovernanceUnit's refusal when workspaces are pinned to the unit
+// (workspaces.owning_unit_id): Workspaces are their names, sorted. Deleting the unit would drop their
+// walls, so they are unpinned first.
+type ErrUnitPinned struct{ Workspaces []string }
+
+func (e *ErrUnitPinned) Error() string {
+	return "store: governance unit is pinned by workspaces: " + strings.Join(e.Workspaces, ", ")
+}
+
 const governanceMembershipCols = `id, subject_type, subject, unit_id, priority, created_at, created_by, home, legacy`
 
 // UpsertGovernanceUnit writes one profile exactly as given. It is WriteGovernanceUnit with
@@ -340,10 +349,23 @@ func DeleteGovernanceUnitQ(ctx context.Context, q Querier, id uuid.UUID) error {
 	if len(names) > 0 {
 		return &ErrProfileHasChildren{Names: names}
 	}
+	rows, err = q.Query(ctx, `SELECT name FROM workspaces WHERE owning_unit_id = $1 ORDER BY name`, id)
+	if err != nil {
+		return fmt.Errorf("store: list workspaces pinned to a governance unit: %w", err)
+	}
+	if names, err = pgx.CollectRows(rows, pgx.RowTo[string]); err != nil {
+		return fmt.Errorf("store: list workspaces pinned to a governance unit: %w", err)
+	}
+	if len(names) > 0 {
+		return &ErrUnitPinned{Workspaces: names}
+	}
 	tag, err := q.Exec(ctx, `DELETE FROM governance_units WHERE id = $1`, id)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			if pgErr.ConstraintName == "workspaces_owning_unit_id_fkey" {
+				return &ErrUnitPinned{} // pinned since the read above
+			}
 			return ErrConflict
 		}
 		return fmt.Errorf("store: delete governance profile: %w", err)

@@ -41,6 +41,8 @@ const (
 	LayerMember     = "member"
 	LayerOperator   = "operator"
 	LayerBoundary   = "boundary"
+	// LayerRestriction is a restriction (types.Restriction): a deny-only list that follows people.
+	LayerRestriction = "restriction"
 
 	mailtoScheme = "mailto:"
 )

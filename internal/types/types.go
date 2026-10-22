@@ -224,6 +224,8 @@ type AgentRun struct {
 	// RunLimits are the owner's profile limits as they stood at create; later clamps use these captured bounds, never the profile's current ones.
 	RunLimits RunLimits  `json:"run_limits"`
 	UnitID    *uuid.UUID `json:"unit_id,omitempty"`
+	// RestrictionIDs are the restrictions the run was launched under, captured at create and at a queued start; the seal, the doors and the sweep read their current specs. Empty for an ungoverned or break-glass run.
+	RestrictionIDs []uuid.UUID `json:"restriction_ids,omitempty"`
 	// LostAt/LostReason mark a run that lost its sandbox but is kept (no proxy/network, files stay); stays RUNNING until a kill or the ended-run grace.
 	LostAt     *time.Time `json:"lost_at,omitempty"`
 	LostReason LostReason `json:"lost_reason,omitempty"`
