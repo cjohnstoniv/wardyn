@@ -265,7 +265,9 @@ func TestGovernancePreview_NoMatchIsTheDeploymentCeiling(t *testing.T) {
 	// elided by `omitzero`, and the failure this guards against — shipping
 	// "00000000-0000-0000-0000-000000000000" — decodes straight back to the
 	// zero uuid, so the struct comparison above would pass right through it.
-	// An absent key is the whole contract here.
+	// An absent key is the whole contract here. The unit tree's check adds contexts, dormant and
+	// effective to every answer (lane TREE-API brief §8); a person no membership places has the
+	// Default unit as their one, home context (DESIGN-TREE.md: Default's memberships are implicit).
 	body, err := json.Marshal(governancePreviewRequest{UserSubjects: claims, Groups: claims})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -274,12 +276,20 @@ func TestGovernancePreview_NoMatchIsTheDeploymentCeiling(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
-	var keys map[string]any
+	var keys map[string]json.RawMessage
 	if err := json.Unmarshal(w.Body.Bytes(), &keys); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(keys) != 0 {
-		t.Errorf("body = %s, want {} exactly (no unit_id, no zero uuid)", w.Body.String())
+	if len(keys) != 3 || keys["contexts"] == nil || keys["dormant"] == nil || keys["effective"] == nil ||
+		strings.Contains(w.Body.String(), uuid.Nil.String()) {
+		t.Errorf("body = %s, want only contexts, dormant and effective (no unit_id, no zero uuid)", w.Body.String())
+	}
+	var contexts []checkContext
+	if err := json.Unmarshal(keys["contexts"], &contexts); err != nil {
+		t.Fatalf("decode contexts: %v", err)
+	}
+	if len(contexts) != 1 || contexts[0].UnitID != store.DefaultUnitID || !contexts[0].Home {
+		t.Errorf("contexts = %+v, want the Default unit alone, as home", contexts)
 	}
 }
 

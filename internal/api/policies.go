@@ -138,8 +138,10 @@ func (s *Server) handleGetPolicy(w http.ResponseWriter, r *http.Request) {
 // member share.
 //
 // contexts and unit_path are the policy tree's: the caller's own units (omitted for a caller no
-// ceiling binds) and the path of the unit answered, leaf first, names only (absent for the Default
-// unit). ?run_in= answers for another of the caller's units, as POST /runs' run_in does.
+// ceiling binds and for one no unit places, whose body stays today's) and, for a security admin only,
+// the path of the unit answered, leaf first, names only (absent for the Default unit): a member is
+// told the leaf's name and nothing of the units above it. ?run_in= answers for another of the
+// caller's units, as POST /runs' run_in does.
 type defaultPolicyResponse struct {
 	types.RunPolicySpec
 	UnitName string                 `json:"unit_name,omitempty"`
@@ -195,8 +197,9 @@ func (s *Server) handleGetDefaultPolicy(w http.ResponseWriter, r *http.Request) 
 		writeCeilingError(w, r, err)
 		return
 	}
+	operator := s.isSecurityOperator(r.Context())
 	resp := defaultPolicyResponse{
-		RunPolicySpec: redactSpecForRead(ceiling.Spec, s.isSecurityOperator(r.Context())),
+		RunPolicySpec: redactSpecForRead(ceiling.Spec, operator),
 	}
 	if ceiling.Limits.DenyUIApps {
 		// A run under this ceiling gets no UI apps, so the read lists none.
@@ -214,11 +217,13 @@ func (s *Server) handleGetDefaultPolicy(w http.ResponseWriter, r *http.Request) 
 	}
 	if ceiling.Unit != nil && !restrictionDefaultUnit(ceiling.Unit) {
 		resp.UnitName = ceiling.Unit.Name
-		for _, l := range ceiling.Unit.Chain {
-			resp.UnitPath = append(resp.UnitPath, unitPathLink(l))
+		if operator { // the chain is an admin surface (ResolvedUnit.Chain): a member reads the leaf alone
+			for _, l := range ceiling.Unit.Chain {
+				resp.UnitPath = append(resp.UnitPath, unitPathLink(l))
+			}
 		}
 	}
-	if !ceiling.Operator && s.cfg.Store != nil {
+	if !ceiling.Operator && ceiling.Unit != nil && s.cfg.Store != nil {
 		if resp.Contexts, err = s.callerContexts(r.Context()); err != nil {
 			writeCeilingError(w, r, err)
 			return

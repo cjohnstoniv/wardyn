@@ -220,7 +220,7 @@ func (s *Server) checkContexts(ctx context.Context, q contextQuery, home context
 	if err != nil {
 		return nil, nil, err
 	}
-	units, err := s.cfg.Store.ListGovernanceUnits(ctx)
+	units, err := s.unitOutlines(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
