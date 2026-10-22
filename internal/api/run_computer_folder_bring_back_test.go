@@ -401,21 +401,27 @@ func TestBringComputerFolderBack_AProcessTheKillCouldNotEndStopsThePass(t *testi
 	}
 }
 
-// A run on a runner, a linux_vm run among them, is notQuiescable before any exec reaches the sandbox: no
-// kill, no check. Its stop_proxy is a lost run's containment, and a guest could never read as clean
-// under the verify. If a VM run ever reaches the server-Docker path (RunnerID nil), this is where the
-// gate's absence shows.
-func TestQuiesceKeptSandbox_ARunnerBackedRunIsNotQuiescableBeforeAnyExec(t *testing.T) {
-	for name, kind := range map[string]types.MachineKind{"container": types.MachineContainer, "linux_vm": types.MachineLinuxVM} {
+// A linux_vm run, and a run on a runner, is notQuiescable before any exec reaches the sandbox: no kill,
+// no check. A VM guest could never read as clean under the verify, so a VM run that reached the
+// server-Docker path (RunnerID nil) must still be refused here, not fail every pass.
+func TestQuiesceKeptSandbox_AVMOrRunnerBackedRunIsNotQuiescableBeforeAnyExec(t *testing.T) {
+	for name, c := range map[string]struct {
+		kind     types.MachineKind
+		onRunner bool
+	}{
+		"container_on_a_runner": {types.MachineContainer, true},
+		"linux_vm_on_a_runner":  {types.MachineLinuxVM, true},
+		"linux_vm_no_runner":    {types.MachineLinuxVM, false},
+	} {
 		t.Run(name, func(t *testing.T) {
 			s, cs, _, run, sb, _ := bringBackFixture(t)
+			if !c.onRunner {
+				withoutRunner(cs)
+			}
 			cs.dispatchTestStore.mu.Lock()
 			run = cs.run
 			cs.dispatchTestStore.mu.Unlock()
-			if run.RunnerID == nil {
-				t.Fatal("the fixture's run is not runner-backed")
-			}
-			run.MachineKind = kind
+			run.MachineKind = c.kind
 			var cannot notQuiescable
 			if err := s.quiesceKeptSandbox(context.Background(), run, "sbx"); !errors.As(err, &cannot) {
 				t.Fatalf("quiesceKeptSandbox = %v, want notQuiescable", err)
