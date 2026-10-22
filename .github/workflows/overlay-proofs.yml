@@ -1,0 +1,115 @@
+name: Overlay proofs
+
+# Revert proofs on hosted runners, by hand. A proof puts one reverted source file
+# back at an exact sha and demands that `go test` exits 1 with the named
+# `--- FAIL:` line; a green run or a build error is a failed proof. The logic is
+# scripts/overlay-proof.sh (the same script runs locally); see docs/CI.md.
+#
+# Operational rule: never dispatch while a train attempt 1 is queued. Every proof
+# compiles internal/api, and these jobs take runner slots that attempt waits on.
+#
+# Inputs
+#   proofs_ref  the throwaway proofs/<lane>-<sha12> branch holding .proofs/ (a
+#               manifest.json and the reverted files). Never merged to main.
+#   keyed_sha   the 40-hex commit the bundle was made for. It must equal the
+#               manifest's keyed_sha, and it is the tree the proofs run against.
+#
+# The script comes from the ref this workflow was dispatched on, not from the
+# bundle branch or the keyed sha, which may predate it.
+on:
+  workflow_dispatch:
+    inputs:
+      proofs_ref:
+        description: "Branch holding the .proofs/ bundle (proofs/<lane>-<sha12>)"
+        type: string
+        required: true
+      keyed_sha:
+        description: "Full 40-hex sha the bundle is keyed to; the proofs run against this tree"
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+# Every job sets timeout-minutes, at least twice its measured maximum with a
+# ten-minute floor (docs/CI.md). The prove value is computed per group by
+# `overlay-proof.sh plan` from the measurements in that script's header
+# (cold compile 89 s, 72 s per proof, locally); plan and the floor job get 10.
+jobs:
+  # Reads the manifest, refuses a keyed_sha that is not the manifest's, and
+  # groups the proofs by package: one prove job per package, its proofs in turn.
+  plan:
+    name: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          path: tools
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.proofs_ref }}
+          path: bundle
+          persist-credentials: false
+      - id: plan
+        env:
+          KEYED_SHA: ${{ inputs.keyed_sha }}
+        run: |
+          [[ "$KEYED_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "keyed_sha must be 40 lowercase hex" >&2; exit 2; }
+          matrix="$(bash tools/scripts/overlay-proof.sh plan bundle "$KEYED_SHA")"
+          echo "$matrix"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  prove:
+    name: prove (${{ matrix.package }})
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          path: tools
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.keyed_sha }}
+          path: src
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.proofs_ref }}
+          path: bundle
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: src/go.mod
+          cache: false
+      # Restore only, keyed like ci.yml's go (unit) caches: a main push saves
+      # them, these jobs never do, so a proof run cannot poison a later PR.
+      - name: Restore the Go module cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/pkg/mod
+          key: gomod-${{ runner.os }}-${{ hashFiles('src/go.mod', 'src/go.sum') }}
+          restore-keys: gomod-${{ runner.os }}-
+      - name: Restore Go build cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/go-build
+          key: go-unit-${{ runner.os }}-${{ hashFiles('src/go.mod', 'src/go.sum') }}-${{ github.run_id }}
+          restore-keys: |
+            go-unit-${{ runner.os }}-${{ hashFiles('src/go.mod', 'src/go.sum') }}-
+            go-unit-${{ runner.os }}-
+      - name: Run the proofs
+        env:
+          ONLY: ${{ matrix.only }}
+        run: |
+          read -ra names <<< "$ONLY"
+          bash tools/scripts/overlay-proof.sh run bundle src --only "${names[@]}"

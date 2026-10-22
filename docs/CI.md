@@ -301,12 +301,12 @@ These scripts stay out of the per-PR [`ci.yml`](../.github/workflows/ci.yml) **b
 
 ## This repository's own CI
 
-Wardyn's own [`ci.yml`](../.github/workflows/ci.yml) runs on every pull request and push to `main`. Runner slots constrain throughput: with many open pull requests, queueing takes longer than execution. This section therefore measures check counts, runner-minutes and elapsed time.
+Wardyn's own [`ci.yml`](../.github/workflows/ci.yml) runs on every pull request and push to `main`. Runner slots constrain throughput: with many open pull requests, queueing outlasts execution, so this section measures check counts, runner-minutes and elapsed time.
 
-- `pull_request:` carries no `branches:` filter — that field matches the PR's *base*, and the 0.8 working practice stacks lanes on `<kind>/<issue#>-<slug>` branches (#90), not on `main`, so a filtered trigger gave a stacked PR no checks at all.
-- `push:` stays narrow to `main`, `master` and `feature/**`, since every other commit already gets a run from its own PR.
+- `pull_request:` has no `branches:` filter. It matches the PR's *base*, and lanes stacked on `<kind>/<issue#>-<slug>` branches (#90) got no checks under one.
+- `push:` covers only `main`, `master` and `feature/**`; every other commit already runs from its own PR.
 - It has no `release/**`: `release.yml` accepts CI by tree (#1461), and [`release-branch-checks.yml`](../.github/workflows/release-branch-checks.yml) runs only DCO and gitleaks there (#1466).
-- The push-gate DCO exemption for GitHub-made merges needs gpg and GitHub's web-flow key id `B5690EEEBB952194`; if GitHub rotates that key, update the id in the Makefile's `dco` recipe.
+- The push-gate DCO exemption for GitHub-made merges needs gpg and GitHub's web-flow key id `B5690EEEBB952194`; if GitHub rotates it, update the Makefile's `dco` recipe.
 - [`scripts/ci-parity-local.sh`](../scripts/ci-parity-local.sh) runs changed packages under `-race`, then a throwaway Postgres (pool guard, `localhost` DSN).
 - `make candidate-preflight` vets release candidates.
 
@@ -427,15 +427,16 @@ gh run list -R cjohnstoniv/wardyn --workflow ci.yml --status completed --limit 6
 
 ### Nightly scope and release runs
 
-- The 07:00 nightly and a plain dispatch run every lane. A release candidate dispatches it with `-f scope=candidate`, which [`scripts/release-patch.sh`](../scripts/release-patch.sh) does right after pushing the branch and before opening the PR.
+- The 07:00 nightly and a plain dispatch run every lane. A release candidate dispatches it with `-f scope=candidate`, which [`scripts/release-patch.sh`](../scripts/release-patch.sh) does after pushing the branch, before opening the PR.
 - Ten jobs then skip through a job-level `if: inputs.scope != 'candidate'`: `e2e-live`, `ci-mode-dogfood-model-fake`, `test-e2e-concurrent`, `kind-survival-walk`, `k6-kind-conformance`, `kind-acceptance-walks`, `hybrid-walk`, `kind-upgrade-walk`, `migration-merge-check` and `published-image-scan`.
 - That frees about 60 runner-minutes by median and 12 job slots (counted before `k6-kind-conformance`). What remains is `release.yml`'s `watched=` list plus the `multi-arch build` staging jobs.
 - [`scripts/test-repo-guards.sh`](../scripts/test-repo-guards.sh) guard 18 keeps the skip set in step with `notify-new-lanes`. A skipped job reports `skipped`, so that job stays quiet.
 - A dispatched nightly has one concurrency group per ref and scope, so a second dispatch cancels the first. A scheduled run has its own group and is never cancelled.
 - On a same-repo `train/*` or `prep/*` pull request, `train-suites` dispatches the nightly (`scope=candidate`, `publish=false`) on the head and waits; `train-gate` needs that run green. A call would fail on a fork's read-only token, so nothing uses `workflow_call`.
-- The nightly restores the `go-<suite>-` caches `ci.yml` saves and saves none. Only `publish` on (the default) stages and attests images.
+- The nightly restores the `go-<suite>-` caches `ci.yml` saves and saves none. Only `publish` on stages and attests images.
+- [`overlay-proofs.yml`](../.github/workflows/overlay-proofs.yml) runs [`scripts/overlay-proof.sh`](../scripts/overlay-proof.sh) revert proofs at one sha: each must exit 1 with its named `--- FAIL:` line. It saves no cache. Never dispatch it while a train attempt 1 is queued.
 - `release.yml` has one group per ref and cancels nothing, so a dispatch and the tag push cannot publish at once.
-- `release.yml`'s `runner-pkg` job (macOS) builds `wardyn-runnerd.pkg` with [`scripts/build-runner-pkg.sh`](../scripts/build-runner-pkg.sh). Each signing step runs only when its `APPLE_DEVELOPER_ID_*` or `APPLE_NOTARY_*` secrets are set, and logs a skip line otherwise; [`scripts/test-runner-pkg.sh`](../scripts/test-runner-pkg.sh) covers the script on Linux.
+- `release.yml`'s `runner-pkg` job (macOS) builds `wardyn-runnerd.pkg` with [`scripts/build-runner-pkg.sh`](../scripts/build-runner-pkg.sh). Each signing step runs only when its `APPLE_DEVELOPER_ID_*` or `APPLE_NOTARY_*` secrets are set, else logs a skip; [`scripts/test-runner-pkg.sh`](../scripts/test-runner-pkg.sh) covers the script on Linux.
 
 ### Incremental CI
 
