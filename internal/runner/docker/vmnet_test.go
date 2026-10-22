@@ -88,11 +88,12 @@ func TestVMCreateStartsTheNetworkRelay(t *testing.T) {
 	}
 }
 
-// A container run starts no relay, and its proxy config has no vm key: byte for byte what the
-// control plane sent, for this key.
+// A container run starts no relay, and its proxy config has no vm key, even when the control
+// plane sent one: only the driver that starts a relay puts a proxy into VM mode.
 func TestContainerCreateStartsNoRelayAndNoVMKey(t *testing.T) {
 	r := newVMRig(t)
 	spec := testSpec()
+	spec.ProxyConfig.VM = true
 	if _, err := r.d.CreateSandbox(context.Background(), spec); err != nil {
 		t.Fatal(err)
 	}

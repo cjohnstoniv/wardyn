@@ -103,11 +103,15 @@ func (d *Driver) prepareProxy(ctx context.Context, runID uuid.UUID, cfgJSON []by
 		return proxyPrep{}, err
 	}
 	// The port rule on, and the relay's two-stage CONNECT and refusal reports honoured
-	// (proxy.Config.VM): set here, where the relay is known, never by the control plane.
+	// (proxy.Config.VM): set here, where the relay is known, and taken off any other run's
+	// config, so a control plane never puts a container's proxy into VM mode.
 	if vm {
-		if cfgJSON, err = runner.WithProxyConfigKeys(cfgJSON, map[string]any{"vm": true}); err != nil {
-			return proxyPrep{}, err
-		}
+		cfgJSON, err = runner.WithProxyConfigKeys(cfgJSON, map[string]any{"vm": true})
+	} else {
+		cfgJSON, err = withoutProxyConfigKey(cfgJSON, "vm")
+	}
+	if err != nil {
+		return proxyPrep{}, err
 	}
 	if d.cfg.ProxySandboxPeersOnly {
 		subnets, err := d.runSubnets(ctx, runID)
@@ -616,4 +620,17 @@ func validRelayTarget(t string) error {
 		return fmt.Errorf("the relay target %q is not a routable host address (unspecified, multicast or loopback)", t)
 	}
 	return nil
+}
+
+// withoutProxyConfigKey returns the proxy config b without key k, or b itself when it has none.
+func withoutProxyConfigKey(b []byte, k string) ([]byte, error) {
+	var data map[string]json.RawMessage
+	if err := json.Unmarshal(b, &data); err != nil {
+		return nil, err
+	}
+	if _, ok := data[k]; !ok {
+		return b, nil
+	}
+	delete(data, k)
+	return json.Marshal(data)
 }
