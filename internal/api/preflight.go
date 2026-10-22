@@ -217,12 +217,8 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var req createRunRequest
-	if !s.decodeRunRequest(w, r, &req) {
-		return
-	}
-	canonicalizeRunRepos(&req, s.adoHostsLoader(r.Context()))
-	if r, ok = s.stampContextChoice(w, r, req); !ok {
+	r, req, ok := s.decodeStampedRunRequest(w, r)
+	if !ok {
 		return
 	}
 	ctx := r.Context()
