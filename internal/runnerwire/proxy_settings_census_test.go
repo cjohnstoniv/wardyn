@@ -5,6 +5,7 @@ package runnerwire
 
 import (
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -40,11 +41,21 @@ var proxySettingOfField = map[string]string{
 	"PortRule":       ProxySettingPortRule,
 	"LocalModels":    ProxySettingLocalModels,
 	"KubeAPI":        ProxySettingKubeAPI,
+	// Dropped, a held github.com push keys on git's spelling again
+	// (proxy.patPushTarget), so an admin's denial of Owner/Repo.git is asked
+	// again as owner/repo: the one decision the operator turned it on for is lost.
+	"CanonicalPushRepos": ProxySettingCanonicalRepos,
 }
 
 // proxyFieldExemptions maps each post-v0.9.8 field left ungated to why a runner
-// dropping it fails closed. Empty today: every newer field is gated.
-var proxyFieldExemptions = map[string]string{}
+// dropping it fails closed.
+var proxyFieldExemptions = map[string]string{
+	"DesktopSignins": "the org sets it only when signinTarget holds, which is false for a run with a runner or a pool " +
+		"(internal/api run_desktop_signin.go signinTarget; remote.Substrate is no runner.SigninExecer either), so a " +
+		"wardyn-runnerd never receives it set; dropped, " +
+		"BuildProxyConfig writes no signin_listen (internal/runner/sandbox.go) and the proxy opens no sign-in lane " +
+		"(internal/egress/proxy server.go ListenAndServe): the run gets no sign-ins, its one egress lane unchanged",
+}
 
 // proxyFieldCensus names each field of t newer than v0.9.8 that is in neither
 // map or in both, and each map entry that names no field of t.
@@ -136,11 +147,13 @@ func TestProxySettingsCensusFiresOnAPlantedField(t *testing.T) {
 	if len(got) != 1 || !strings.Contains(got[0], "PlantedDoor") || !strings.Contains(got[0], "proxySettingOfField") || !strings.Contains(got[0], "proxyFieldExemptions") {
 		t.Fatalf("planted field: census = %q", got)
 	}
-	both := map[string]string{"KubeAPI": "planted"}
+	both := maps.Clone(proxyFieldExemptions)
+	both["KubeAPI"] = "planted"
 	if got := proxyFieldCensus(base, proxySettingOfField, both); len(got) != 1 || !strings.Contains(got[0], "KubeAPI is in both") {
 		t.Fatalf("doubly classified field: census = %q", got)
 	}
-	stale := map[string]string{"RunToken": "planted", "Gone": "planted"}
+	stale := maps.Clone(proxyFieldExemptions)
+	stale["RunToken"], stale["Gone"] = "planted", "planted"
 	if got := proxyFieldCensus(base, proxySettingOfField, stale); len(got) != 2 {
 		t.Fatalf("stale exemptions: census = %q", got)
 	}

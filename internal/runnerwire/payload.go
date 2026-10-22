@@ -160,17 +160,18 @@ const (
 	ProxySettingPortRule       = "port_rule"
 	ProxySettingLocalModels    = "local_models"
 	ProxySettingKubeAPI        = "kube_api"
+	ProxySettingCanonicalRepos = "canonical_push_repos"
 )
 
 // ProxySettings is every run proxy setting this build's runner carries through to its proxy, in the
 // order ProxySettingsSet tests them.
-var ProxySettings = []string{ProxySettingAWSSigV4, ProxySettingScrubResponses, ProxySettingVM, ProxySettingPortRule, ProxySettingLocalModels, ProxySettingKubeAPI}
+var ProxySettings = []string{ProxySettingAWSSigV4, ProxySettingScrubResponses, ProxySettingVM, ProxySettingPortRule, ProxySettingLocalModels, ProxySettingKubeAPI, ProxySettingCanonicalRepos}
 
 // ProxySettingsSet names each of ProxySettings that pc sets, in that order; none for an unset config.
 // Nothing sets VM yet (the Docker driver will, where the desktop relay starts), so the org leaves it false; its gate stays.
 func ProxySettingsSet(pc runner.ProxyConfig) []string {
 	var out []string
-	for i, on := range []bool{pc.AWSSigV4 != nil, pc.ScrubResponses, pc.VM, pc.PortRule != "", len(pc.LocalModels) != 0, pc.KubeAPI != nil} {
+	for i, on := range []bool{pc.AWSSigV4 != nil, pc.ScrubResponses, pc.VM, pc.PortRule != "", len(pc.LocalModels) != 0, pc.KubeAPI != nil, pc.CanonicalPushRepos} {
 		if on {
 			out = append(out, ProxySettings[i])
 		}
