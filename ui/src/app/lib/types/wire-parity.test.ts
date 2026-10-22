@@ -458,7 +458,7 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["internal/types/component.go", "ComponentRef", "ComponentRef"],
     ["internal/types/component.go", "ComponentCLI", "ComponentCLI"],
     ["internal/types/component.go", "ComponentMCP", "ComponentMCP"],
-    ["internal/types/component.go", "ComponentMCPLaunch", "ComponentMCPLaunch"],
+    ["internal/types/component_mcp.go", "ComponentMCPLaunch", "ComponentMCPLaunch"],
     ["internal/types/component.go", "CLIAWS", "CLIAWS"],
     ["internal/types/component.go", "CLIAzure", "CLIAzure"],
     ["internal/types/component.go", "CLIKubectl", "CLIKubectl"],

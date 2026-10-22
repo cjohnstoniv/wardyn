@@ -591,7 +591,6 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `DEFAULT_HELP_OPERATOR` | pending (W-30) | Ask first holds the call until you or another admin approves it. |
 | `DEFAULT_HELP_ATTENDED` | pending (W-30) | Ask first: Claude Code asks you in the terminal before it runs the tool. |
 | `PROFILE_REQUIRES(profile)` | pending (W-30) | {profile} requires Ask first or stricter for tools with no rule. |
-| `CODEX_HOLD_TIP` | mock | Codex CLI can't pause a tool call for approval. |
 | `CODEX_NOTE` | pending (W-32) | Rules for Codex CLI's MCP tools are enforced by the proxy. |
 | `CODEX_NOTE_REMOTE` | mock | Rules for Codex CLI's remote MCP tools are enforced by the proxy. |
 | `RULES_LABEL` | mock | Tool rules |
