@@ -40,7 +40,7 @@ const (
 	approvalRuleHistoryScan = 1000
 )
 
-// approvalRuleNameRE is migration 0210's CHECK. "dry-run" is refused too: it is the dry-run route's own segment.
+// approvalRuleNameRE is migration 0224's CHECK. "dry-run" is refused too: it is the dry-run route's own segment.
 var approvalRuleNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
 // validateApprovalRule refuses a rule the approver cannot hold, and normalises what it can: an omitted mode is

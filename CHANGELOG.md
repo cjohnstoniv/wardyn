@@ -102,7 +102,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   second human.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on
-  `approval_rules` (migration `0210_approval_rules`). Without it approval rules cannot be listed, written or deleted,
+  `approval_rules` (migration `0224_approval_rules`). Without it approval rules cannot be listed, written or deleted,
   and a raise with `WARDYN_APPROVAL_RULES` set writes an `approval.policy.skip` row instead of matching a rule.
 - **`WARDYN_AWS_SSO_PROXY_INJECT=off` now stops `wardynd` from starting.** That value used to write the AWS sign-in
   token into the sandbox. The token now stays at the proxy and the sandbox holds a placeholder. `off`, `false` and `0`
@@ -153,7 +153,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   run's internal network hands connections to allowed hosts to the run's proxy and refuses raw IP addresses, outside DNS
   resolvers and IPv6. The reference guest image addresses its NIC for the relay. Kubernetes VM pods are unchanged.
 - A Linux VM sandbox gets the same folders a container on its runner would: a member's folder under the runner's roots is shared into the guest over virtiofs at the same path and mode, and a folder synced from another computer arrives through the guest agent. A runner without folder sharing refuses such a run at create (`placement_capability`).
-- Approval rules (migration `0210_approval_rules`, off unless `WARDYN_APPROVAL_RULES` is `dry_run` or `on`): a security
+- Approval rules (migration `0224_approval_rules`, off unless `WARDYN_APPROVAL_RULES` is `dry_run` or `on`): a security
   admin's rule approves a held `tool_call` or first-use `egress_domain` approval on a service identity's run, through the
   same decide path and gates a person's approval meets, audited as `policy:<rule_id>` with the rule's version, digest and
   what matched. `/governance/approval-rules` lists, writes, deletes and dry-runs rules; see
