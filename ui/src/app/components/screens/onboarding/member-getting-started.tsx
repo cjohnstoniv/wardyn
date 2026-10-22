@@ -127,9 +127,10 @@ export function MemberGettingStarted() {
   React.useEffect(() => {
     let active = true;
     // view=user forces owner=me server-side, so an admin sees only their own runs here; includeKilled keeps
-    // a run killed more than a day ago counting as a first run.
+    // a run killed more than a day ago counting as a first run. sponsored=exclude keeps the runs of a service
+    // identity this person sponsors, which the server adds to their own list, from counting as theirs (#2513).
     runsApi
-      .listRunsFiltered({ view: "user", limit: 1, includeKilled: true })
+      .listRunsFiltered({ view: "user", limit: 1, includeKilled: true, sponsored: "exclude" })
       .then((r) => active && setOwnRuns(r.runs))
       .catch(() => {
         /* fail-closed: leave ownRuns null (not done), write no flag */

@@ -101,6 +101,22 @@ describe("runs.listRuns — recording-meta opt-in", () => {
   });
 });
 
+describe("runs.listRunsFiltered — sponsored", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    fetchMock = vi.fn(() => Promise.resolve(new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } })));
+    vi.stubGlobal("fetch", fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("sends sponsored=exclude only when asked (#2513)", async () => {
+    await runs.listRunsFiltered({ view: "user" });
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain("sponsored=");
+    await runs.listRunsFiltered({ view: "user", sponsored: "exclude" });
+    expect(String(fetchMock.mock.calls[1][0])).toContain("sponsored=exclude");
+  });
+});
+
 // #159: opting into BOTH limit and offset switches listRuns() onto explicit
 // server-side paging and widens its return to { runs, truncated } — reading
 // X-Wardyn-Truncated off the response, which unwrapList's bare array return

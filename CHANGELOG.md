@@ -281,6 +281,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Building the wardynd image no longer waits without limit on a stalled npm registry (#3472). Installing pnpm and
   fetching the console's packages each get three tries with a time limit, so an unreachable registry fails the build
   in about ten minutes, and a package fetch that stalls fails it in under twenty. The lockfile is still enforced.
+- Getting started no longer counts a service identity's run as your first run (#2513). `GET /api/v1/runs` takes
+  `sponsored=exclude`, which turns off only the addition of the runs of service identities you sponsor to your own list;
+  the page sends it, and the Runs list still shows those runs.
 
 ### Fixed
 

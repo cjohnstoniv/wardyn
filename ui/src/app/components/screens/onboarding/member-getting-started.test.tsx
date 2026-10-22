@@ -275,7 +275,7 @@ describe("MemberGettingStarted", () => {
     renderPage();
 
     await screen.findByRole("link", { name: "New run" });
-    expect(listRunsMock).toHaveBeenCalledWith({ view: "user", limit: 1, includeKilled: true });
+    expect(listRunsMock).toHaveBeenCalledWith({ view: "user", limit: 1, includeKilled: true, sponsored: "exclude" });
   });
 
   it("a rejecting listRuns() leaves the section not-done", async () => {
