@@ -111,6 +111,21 @@ test.describe("Add workspace dialog", () => {
     await dlg.getByRole("button", { name: "Cancel" }).click();
   });
 
+  // #2490: the source value is shared by every kind, so a typed repository outlived the switch to a kind with no field.
+  test("a member with no local root cannot send a repository typed before picking Local directory", async ({ page }) => {
+    await mockMemberRole(page);
+    const dlg = await openAddWorkspaceDialog(page);
+    const add = dlg.getByRole("button", { name: "Add workspace" });
+    await dlg.getByLabel("Repository URL").fill("acme/payments-service");
+    await expect(add).toBeEnabled();
+
+    await dlg.getByRole("group", { name: "Source" }).getByRole("button", { name: /^Local directory/ }).click();
+    await expect(dlg.getByLabel("Path on this host")).toHaveCount(0);
+    await expect(add).toBeDisabled();
+
+    await dlg.getByRole("button", { name: "Cancel" }).click();
+  });
+
   test("Empty mode needs nothing typed — Add stays enabled, one click", async ({ page }) => {
     const dlg = await openAddWorkspaceDialog(page);
     await dlg.getByRole("button", { name: "Empty" }).click();

@@ -416,8 +416,11 @@ export function DemoRunControls({
 // alongside any real egress decision on the same timeline.
 export function DemoAuditPanel({ runId, section }: { runId: string; section?: Demo["section"] }) {
   const [events, setEvents] = React.useState<AuditEvent[]>([]);
+  // A rejected poll means the rows shown may be old: the live chip claims a feed that is answering.
+  const [stale, setStale] = React.useState(false);
   const refresh = React.useCallback(async () => {
     const list = await audit.listAudit(runId).catch(() => null);
+    setStale(!list);
     if (list) setEvents(list);
   }, [runId]);
   React.useEffect(() => {
@@ -439,9 +442,11 @@ export function DemoAuditPanel({ runId, section }: { runId: string; section?: De
         <span className="text-sm font-medium text-foreground">
           {section === "secrets" ? "Audit — decisions" : "Audit — egress decisions"}
         </span>
-        <Chip tone="success" dot pulse className="ml-auto">
-          live
-        </Chip>
+        {!stale && (
+          <Chip tone="success" dot pulse className="ml-auto">
+            live
+          </Chip>
+        )}
       </div>
       {sorted.length === 0 ? (
         <p className="text-xs text-muted-foreground">

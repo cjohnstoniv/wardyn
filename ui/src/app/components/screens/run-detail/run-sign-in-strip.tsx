@@ -31,8 +31,8 @@ function Opens({ url }: { url: string }) {
 
 // onWaiting runs each time a waiting answer (a device code and its link) is put
 // on screen: the sign-in pane moves its step list on it (#3235).
-export default function RunSignInStrip({ runId, createdAt, onWaiting }: { runId: string; createdAt: string; onWaiting?: () => void }) {
-  const read = useRunSignIn(runId, createdAt, true);
+export default function RunSignInStrip({ runId, onWaiting }: { runId: string; onWaiting?: () => void }) {
+  const read = useRunSignIn(runId, true);
   const w = read.waiting;
   React.useEffect(() => {
     if (w) onWaiting?.();

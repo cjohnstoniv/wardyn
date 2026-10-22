@@ -705,6 +705,10 @@ export default function App() {
     // tab renders the shell (and the model-access strip in it) before the
     // landing read answers, which would show them the last person's.
     setSetupStatus(null);
+    // The nav badges are the previous person's too: an org-wide approvals count must not paint on the
+    // next sign-in's first shell render, before /me/attention answers for them.
+    setPendingApprovals(0);
+    setAttentionCount(0);
   }, [auth, refreshSetupStatus]);
   // …and again every five minutes, because model_access is a per-person
   // credential LIFECYCLE: read once per session, a member who signed in at 09:00
@@ -743,11 +747,14 @@ export default function App() {
         <SignIn
           notice={notice ? noticeView(notice) : undefined}
           onSignIn={() => {
+            // The gate does not mount the Routes, so the URL the person arrived on is still current; after
+            // a deliberate sign-out it is the previous person's last page, so the next one starts at /runs.
+            const returnTo = signedOutHereRef.current ? "/runs" : safeReturnPath(location.pathname + location.search);
             signingOutRef.current = false;
             signedOutHereRef.current = false;
             setNotice(null);
             setAuth("authed");
-            void navigate("/runs", { replace: true });
+            void navigate(returnTo, { replace: true });
           }}
         />
         <Toaster />
