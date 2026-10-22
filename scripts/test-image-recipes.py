@@ -45,7 +45,10 @@ elif name == 'gpg':
 
 def recipe(name):
     text = (ROOT / f"deploy/images/{name}/Dockerfile").read_text()
-    return next(body for _, kind, body in instructions(text) if kind == "RUN" and "curl -fsSL" in body)
+    runs = [body for _, kind, body in instructions(text) if kind == "RUN"]
+    i = next(i for i, body in enumerate(runs) if "curl -fsSL" in body)
+    # claude-code's npm path is the next RUN: check-image-pins keeps the retry loop out of a curl RUN.
+    return runs[i] + "\n" + runs[i + 1] if name == "claude-code" else runs[i]
 
 
 def aws_cli_block(name):
