@@ -679,7 +679,7 @@ start.
 | `raise_failed` | The approval store itself errored while raising a capability, consent, sign-in or re-auth hold. Azure DevOps, AWS SSO. |
 | `preset_unknown` / `preset_field_not_per_launch` / `preset_version_changed` / `preset_version_without_preset` | A `POST /runs` naming a launch preset: no such preset (or not open to the caller's user type, `422`), a field other than `title`/`task` beside `preset` (`400`), a pinned `preset_version` that is no longer current (`409`), or `preset_version` without `preset` (`400`). See OPERATIONS.md's launch presets section. |
 | `not_captured` / `dead_credential` / `consent_required` / `interaction_required` / `unavailable` | `ADOEntraFailure`'s own closed enum ([`internal/api/ado_entra_store.go`](../internal/api/ado_entra_store.go)), carried through unchanged when the redemption classifies a renewal failure. Azure DevOps. |
-| `invalid_approval_state` / `invalid_run_id_param` / `invalid_view_param` / `invalid_owner_param` / `invalid_status_param` / `status_needs_exclusive` / `status_needs_requires_view` / `invalid_ended_within_param` / `invalid_include_killed_param` / `invalid_no_end_param` / `runs_search_query_too_long` / `invalid_limit_param` / `invalid_offset_param` | A `GET /approvals` or `GET /runs` query parameter is malformed or conflicts with another one. `invalid_view_param` is the same reason on both routes (the same shape); `invalid_limit_param`/`invalid_offset_param` are `parseListPage`'s, shared by every paginated list route in `internal/api` (`GET /audit`, `/policies`, `/secrets`, `/user-drives`, `/api-tokens`, `/permissions/grants`, `/setup/integrations`, `/ssh-keys`, `/runs/policy-history`, …). |
+| `invalid_approval_state` / `invalid_run_id_param` / `invalid_view_param` / `invalid_owner_param` / `invalid_status_param` / `status_needs_exclusive` / `status_needs_requires_view` / `invalid_ended_within_param` / `invalid_include_killed_param` / `invalid_sponsored_param` / `invalid_no_end_param` / `runs_search_query_too_long` / `invalid_limit_param` / `invalid_offset_param` | A `GET /approvals` or `GET /runs` query parameter is malformed or conflicts with another one. `invalid_view_param` is the same reason on both routes (the same shape); `invalid_limit_param`/`invalid_offset_param` are `parseListPage`'s, shared by every paginated list route in `internal/api` (`GET /audit`, `/policies`, `/secrets`, `/user-drives`, `/api-tokens`, `/permissions/grants`, `/setup/integrations`, `/ssh-keys`, `/runs/policy-history`, …). |
 | `listing_unscoped_backend` | The store backend cannot scope this listing to the caller's own runs — the SAME missing capability on `GET /approvals`, `GET /runs` and `GET /runs/policy-history`. |
 | `approval_not_found` | The named approval does not exist, or the caller may not see it — `POST /approvals/{id}/{approve,deny}` and every other approval-lookup route, INCLUDING `GET /approvals/{id}/paths`: a foreign approval and a missing one answer byte-identically there, reason and body both, so the reason itself is not an existence oracle. |
 | `approval_run_ended` / `approval_already_decided` / `credential_reauth_not_decidable` / `decision_scope_invalid_for_kind` / `invalid_request_body` | `POST /approvals/{id}/{approve,deny}`'s pre-decision refusals: the run ended first, the approval was already decided, a credential-reauth approval takes a sign-in instead, `decision_scope` was sent on a kind that does not accept one, the body did not decode, or `reason` is over 512 characters. A body over 16 KiB is `413` `request_body_too_large`. |
@@ -1183,22 +1183,23 @@ curl -sN -H 'Authorization: Bearer demo-admin-token' \
   http://localhost:8080/api/v1/runs/<id>/events
 ```
 
-`GET /api/v1/runs` accepts an opt-in, server-side scoping/filtering surface beyond
+`GET /api/v1/runs` accepts an opt-in scoping/filtering surface beyond
 `&limit=&offset=` (#1197 L1a):
 
-- `view` (`user`/`admin`; absent leaves the endpoint's
-  behaviour exactly as above), `owner` (`me`/`all`; `view=user` forces `me` for
+- `view` (`user`/`admin`; absent leaves the endpoint
+  as above), `owner` (`me`/`all`; `view=user` forces `me` for
   every caller, admin tokens included),
 - repeatable `status`
   (`active`/`ended`/`failed`/`killed`/`needs`), `ended_within` (`24h`/`7d`/`30d`/`all`),
 - `include_killed=1` (a KILLED run older than 24h is hidden by default), `no_end=1`
   (only live runs with no end), `workspace`
-  (exact match on the run's repo/workspace-path label) and `q` (a case-insensitive
+  (exact match on the run's repo/workspace-path label) and `q` (case-insensitive
   substring search over title/task/repo/created_by).
+- `sponsored=exclude` drops a sponsor's service runs from their own list; no-op where already left out.
 
-- With any of them present the
+- With any of them the
   response is ordered live runs first, then ended runs by end time, and two headers
-  — `X-Wardyn-Hidden-Older`, `X-Wardyn-Hidden-Killed` — report how many rows the
+  — `X-Wardyn-Hidden-Older`, `X-Wardyn-Hidden-Killed` — count the rows the
   `ended_within` window and the killed-run default hid.
 - `POST /api/v1/workspaces/{id}/record/{task}/promote-egress`
   skips, rather than refuses, a requested host that is a model provider row's own host. It names them in the additive

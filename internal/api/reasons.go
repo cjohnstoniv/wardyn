@@ -254,6 +254,7 @@ const (
 	reasonStatusNeedsRequiresView   = "status_needs_requires_view"   // status=needs requires view=user or view=admin
 	reasonInvalidEndedWithinParam   = "invalid_ended_within_param"   // ?ended_within= is not one of the closed durations
 	reasonInvalidIncludeKilledParam = "invalid_include_killed_param" // ?include_killed= is not "", "0", or "1"
+	reasonInvalidSponsoredParam     = "invalid_sponsored_param"      // ?sponsored= is not "" or "exclude"
 	reasonInvalidNoEndParam         = "invalid_no_end_param"         // ?no_end= is not "", "0", or "1"
 	reasonRunsSearchQueryTooLong    = "runs_search_query_too_long"   // ?q= exceeds the maximum search length
 	reasonInvalidLimitParam         = "invalid_limit_param"          // ?limit= does not parse as a non-negative integer

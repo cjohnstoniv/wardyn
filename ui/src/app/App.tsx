@@ -16,7 +16,7 @@ import { noticeView, type GateNotice } from "./lib/session-continuity-copy";
 import { AppShell } from "./components/screens/app-shell";
 import { RunsScreen } from "./components/screens/runs";
 import { WardynMark } from "./components/wardyn/logo";
-import { getToken, isSessionEnded, listenForOtherTabs, onUnauthorized, probeAuthWithReason, safeReturnPath, setSignedOutHold, setToken } from "./lib/api/core";
+import { getAuthGeneration, getToken, isSessionEnded, listenForOtherTabs, onUnauthorized, probeAuthWithReason, safeReturnPath, setSignedOutHold, setToken } from "./lib/api/core";
 import { listenForInput } from "./lib/api/session-activity";
 import { onRemoteAuthChange } from "./lib/api/auth-sync";
 import { health } from "./lib/api/health";
@@ -441,9 +441,13 @@ export default function App() {
   // NOT the server-side user/admin session split — same distinction
   // GET /runs?view= and GET /approvals?view= already draw.
   const refreshBadges = React.useCallback(() => {
+    // A read that started before a sign-out (or a sign-in) answers for the previous person; it may
+    // neither repaint their counts after the reset nor overwrite the next session's.
+    const generation = getAuthGeneration();
     return attentionApi
       .getMeAttention(viewOfPath(location.pathname))
       .then((counts) => {
+        if (generation !== getAuthGeneration() || authRef.current !== "authed") return;
         setPendingApprovals(counts.pending_approvals);
         setAttentionCount(counts.needs_you);
         /* 401 already routes through onUnauthorized */
