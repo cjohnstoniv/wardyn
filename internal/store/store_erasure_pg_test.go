@@ -585,6 +585,7 @@ func queryStrings(t *testing.T, pool *pgxpool.Pool, q string) []string {
 	}
 	return out
 }
+
 // An agent's own task in a run with several agents is the person's text too: erasure
 // blanks it on that person's runs alone, beside the run's own task.
 func TestPG_PersonErasure_BlanksAgentTasks(t *testing.T) {
