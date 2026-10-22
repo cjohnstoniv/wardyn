@@ -128,6 +128,10 @@ type Decision struct {
 	Detail      map[string]string `json:"detail,omitempty"`
 	Obligations []Obligation      `json:"obligations,omitempty"`
 	Trace       []Step            `json:"trace,omitempty"`
+	// Knob is the provenance record of the one knob a ceiling refusal is attributed to (OnKnob): the
+	// emitter writes Policy attributed to it (policyref.AttributedTo), so a knob a lock fixes says
+	// locked. The zero record for a refusal no one knob explains. Never serialised.
+	Knob policyref.Provenance `json:"-"`
 }
 
 // Deny is the refusal of target for reason, answered with sentence. The effect
@@ -172,6 +176,12 @@ func (d Decision) AsIf(reason Reason) Decision {
 // ref leaves d unchanged.
 func (d Decision) WithPolicy(ref *policyref.Ref) Decision {
 	d.Policy = policyref.Layered(ref)
+	return d
+}
+
+// OnKnob is d attributed to the one knob whose provenance record is p.
+func (d Decision) OnKnob(p policyref.Provenance) Decision {
+	d.Knob = p
 	return d
 }
 

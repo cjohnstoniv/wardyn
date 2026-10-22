@@ -1041,7 +1041,7 @@ applied until a different approver approves it. The SDK never reads that body as
 - `CheckGovernance` (`POST /governance/check`, `wardyn governance check`) takes `RunIn`: it returns `contexts` (each with its `path`), `dormant` memberships and the chosen or home context's `effective` walls with `provenance`.
 - `GovernanceDryRun` (`POST /governance/dry-run`, `wardyn governance dry-run`) takes a `target`: `boundary` (the default), `unit` (a unit body plus `id`) or `membership_move` (`{id, unit_id}`); the last two report `{target, people, live_runs}`.
 - `CreateRunRequest.RunIn` (`run_in`, `wardyn run --run-in`) names one of the caller's units to run in, by id or exact name. `GET /policies/default` takes `?run_in=`, returning `contexts` and `unit_path`.
-- A run's `provenance`, and the check's, marks a knob `locked` when a unit above the run's unit, or the boundary in `hard_limits`, locks it; the record names the nearest locker. No refusal's `policy` sets `locked` yet.
+- A run's `provenance`, and the check's, marks a knob `locked` when a unit above the run's unit, or the boundary in `hard_limits`, locks it; the record names the nearest locker. A ceiling refusal's `policy` carries `locked: true` when a lock fixes the knob it refused on.
 - `GovernanceApplyResult.Steps` lists an apply's writes in order, each `applied`, `pending`
   or `failed`. On a failed write `ApplyGovernanceResult` returns the steps so far with the error.
 - `ApplyDrivesResult` is `ApplyDrives` with the same steps, as `DrivesApplyResult.Steps`; `ApplyDrives`

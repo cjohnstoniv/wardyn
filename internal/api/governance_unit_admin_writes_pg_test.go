@@ -5,13 +5,16 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -220,5 +223,61 @@ func TestUnitLockDerivedLocked(t *testing.T) {
 	}
 	if p := got.Effective.Provenance["allowed_domains"]; p.Locked {
 		t.Errorf("allowed_domains is marked locked: %+v", p)
+	}
+}
+
+// TestUnitLockedRefusalSaysLocked: ua-a denies interactive runs and locks deny_interactive; ua-b denies
+// them unlocked. POST /runs refuses an interactive run for a member of ua-a1 with a policy that says
+// locked, and for a member of ua-b with none; the record launch gate's refusal, as its door writes it,
+// says the same.
+func TestUnitLockedRefusalSaysLocked(t *testing.T) {
+	e := newUnitAdminEnv(t, false)
+	deny := map[string]any{"deny_interactive": true}
+	for _, put := range []struct {
+		u     types.GovernanceUnit
+		extra map[string]any
+	}{
+		{e.a, map[string]any{"overlay_limits": deny, "locked_knobs": []string{"deny_interactive"}}},
+		{e.b, map[string]any{"overlay_limits": deny}},
+	} {
+		if w := e.call(e.alice, http.MethodPut, "/api/v1/governance/units/"+put.u.ID.String(), e.restate(put.u, put.extra)); w.Code != http.StatusOK {
+			t.Fatalf("PUT %s = %d %s", put.u.Name, w.Code, w.Body)
+		}
+	}
+	for _, tc := range []struct {
+		sub    string
+		unit   types.GovernanceUnit
+		locked bool
+	}{{"sub-ua-locked", e.a1, true}, {"sub-ua-open", e.b, false}} {
+		treeMember(t, e.govEnv, tc.unit, types.CapabilitySubjectUser, tc.sub, 1, true)
+		policyOf := func(raw []byte) map[string]any {
+			var b struct {
+				Policy map[string]any `json:"policy"`
+			}
+			if err := json.Unmarshal(raw, &b); err != nil || b.Policy == nil {
+				t.Fatalf("%s: refusal %s names no policy", tc.sub, raw)
+			}
+			return b.Policy
+		}
+		check := func(door string, p map[string]any) {
+			got, has := p["locked"]
+			if p["name"] != tc.unit.Name || (tc.locked && got != true) || (!tc.locked && has) {
+				t.Errorf("%s under %s: %s policy %v, want name %q and locked %v", tc.sub, tc.unit.Name, door, p, tc.unit.Name, tc.locked)
+			}
+		}
+		w := e.call(uaSession(t, tc.sub, []string{}, false), http.MethodPost, "/api/v1/runs", `{"agent":"claude-code"}`)
+		if w.Code != http.StatusForbidden || wireReason(t, w) != string(authz.ReasonGovernanceUnit) {
+			t.Fatalf("%s: POST /runs = %d %s, want 403 governance_unit", tc.sub, w.Code, w.Body)
+		}
+		check("POST /runs", policyOf(w.Body.Bytes()))
+
+		ctx := treeCtx(tc.sub, nil, "")
+		err := e.srv.stepRunCeilingLimits(ctx, tc.sub, recordRunGovernance(treeCeiling(t, e.govEnv, ctx)))
+		if !errors.Is(err, errRecordCeilingLimit) {
+			t.Fatalf("%s: record gate = %v, want the ceiling refusal", tc.sub, err)
+		}
+		rec := httptest.NewRecorder()
+		writeErrorReasonPolicy(rec, http.StatusForbidden, reasonRecordCeilingLimit, err.Error(), recordCeilingRef(err), recordCeilingKnob(err))
+		check("record launch", policyOf(rec.Body.Bytes()))
 	}
 }

@@ -75,6 +75,7 @@ export interface BoundaryReportAssign {
 
 /** boundaryReport: only the rows the drafted boundary would narrow are listed. */
 export interface BoundaryReport {
+  target: "boundary";
   deployment: BoundaryChange[];
   units: BoundaryReportRow[];
   stored_policies: BoundaryReportRow[];
@@ -104,6 +105,6 @@ export const boundary = {
   async dryRun(body: Pick<BoundaryWrite, "spec" | "limits">): Promise<BoundaryReport> {
     const res = await wfetch("/governance/dry-run", { method: "POST", asPerson: true, body: JSON.stringify(body) });
     const r = await asJson<Partial<BoundaryReport>>(res);
-    return { deployment: r.deployment ?? [], units: r.units ?? [], stored_policies: r.stored_policies ?? [], memberships: r.memberships ?? [] };
+    return { target: "boundary", deployment: r.deployment ?? [], units: r.units ?? [], stored_policies: r.stored_policies ?? [], memberships: r.memberships ?? [] };
   },
 };

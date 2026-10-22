@@ -126,30 +126,51 @@ func (c governanceCeiling) provenance() policyref.Provenance {
 	}
 }
 
-// markLocked records, on each knob the boundary (in hard_limits) or a strict ancestor of the run's unit
-// lists in locked_knobs, that it is locked, named for the nearest such locker (DESIGN-TREE §4.3). It
-// is derived at every resolve and never stored on a unit; the locker's contact is added on read
-// (withLockerContacts), as every record's is. A run no ceiling binds has no locks.
-func (k knobProvenance) markLocked(c governanceCeiling) {
-	if k == nil || c.Operator {
-		return
-	}
-	held := map[string]bool{}
-	mark := func(rec policyref.Provenance, knobs []string) {
-		for _, name := range knobs {
-			if _, ok := k[name]; ok && !held[name] {
-				held[name], k[name] = true, rec
+// lockOf is the record of the lock that fixes knob for the runs of unit u: the nearest strict
+// ancestor of u, then the boundary b in hard_limits, that lists knob in locked_knobs, named for that
+// locker (DESIGN-TREE §4.3). The zero record, not locked, when none does. It is derived on every read
+// and never stored on a unit.
+func lockOf(u *ResolvedUnit, b *types.Boundary, knob string) policyref.Provenance {
+	if u != nil && len(u.Chain) > 1 {
+		for _, l := range u.Chain[1:] {
+			if slices.Contains(l.Locked, knob) {
+				return policyref.Provenance{Layer: policyref.LayerUnit, Name: l.Name, Locked: true}
 			}
 		}
 	}
-	if c.Unit != nil && len(c.Unit.Chain) > 1 {
-		for _, l := range c.Unit.Chain[1:] {
-			mark(policyref.Provenance{Layer: policyref.LayerUnit, Name: l.Name, Locked: true}, l.Locked)
+	if b != nil && b.HardLimits() && slices.Contains(b.LockedKnobs, knob) {
+		return policyref.Provenance{Layer: policyref.LayerBoundary, Name: boundaryLocker, Locked: true}
+	}
+	return policyref.Provenance{}
+}
+
+// lockOf is the lock fixing knob for the runs c binds; none for an operator, whom no ceiling binds.
+// A ceiling refusal on knob is attributed to it (authz.Decision.OnKnob, writeErrorReasonPolicy).
+func (c governanceCeiling) lockOf(knob string) policyref.Provenance {
+	if c.Operator {
+		return policyref.Provenance{}
+	}
+	return lockOf(c.Unit, c.boundary, knob)
+}
+
+// markLocked replaces the record of each knob a lock fixes for c's runs with that lock's (lockOf).
+// The locker's contact is added on read (withLockerContacts), as every record's is.
+func (k knobProvenance) markLocked(c governanceCeiling) {
+	for name := range k {
+		if rec := c.lockOf(name); rec.Locked {
+			k[name] = rec
 		}
 	}
-	if c.boundary != nil && c.boundary.HardLimits() {
-		mark(policyref.Provenance{Layer: policyref.LayerBoundary, Name: boundaryLocker, Locked: true}, c.boundary.LockedKnobs)
+}
+
+// runLockOf is lockOf for a live run's door, which reads the run's unit p now: the boundary is
+// read with it, and a failed read leaves the boundary's lock out of a refusal that is answered anyway.
+func (s *Server) runLockOf(ctx context.Context, p *ResolvedUnit, knob string) policyref.Provenance {
+	b, err := s.governanceBoundary(ctx)
+	if err != nil {
+		return lockOf(p, nil, knob)
 	}
+	return lockOf(p, &b, knob)
 }
 
 // fillLockerContacts fills the contact of each locked record of k, a run's provenance as read now: a

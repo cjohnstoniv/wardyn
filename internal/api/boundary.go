@@ -255,8 +255,9 @@ func applyBoundaryChange(_ *Server, r *http.Request, q store.Querier, ch types.G
 
 // boundaryReport is POST /governance/dry-run's answer: every layer and row the boundary as drafted
 // would narrow in hard_limits, knob by knob, computed by boundaryMeet, the function the resolve calls.
-// Rows the boundary leaves as they are are not listed.
+// Rows the boundary leaves as they are are not listed. Target is always "boundary".
 type boundaryReport struct {
+	Target         string                 `json:"target"`
 	Deployment     []boundaryChange       `json:"deployment"`
 	Units          []boundaryReportRow    `json:"units"`
 	StoredPolicies []boundaryReportRow    `json:"stored_policies"`
@@ -314,10 +315,8 @@ func (s *Server) handleBoundaryDryRun(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "Wardyn boundary dry run", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, struct {
-		Target string `json:"target"`
-		boundaryReport
-	}{dryRunTargetBoundary, report})
+	report.Target = dryRunTargetBoundary
+	writeJSON(w, http.StatusOK, report)
 }
 
 // boundaryDryRun meets the deployment default, each profile as it composes, each stored policy and so

@@ -32,7 +32,7 @@ import { BoundaryScreen } from "./boundary-screen";
 const noLimits = { mode: "no_limits", spec: {}, limits: {}, etag: '"b1"' };
 // A boundary already in hard_limits (set through the store): the only way the editor is reachable while gated.
 const hardLimits = { mode: "hard_limits", spec: {}, limits: {}, etag: '"b1"' };
-const emptyReport: BoundaryReport = { deployment: [], units: [], stored_policies: [], memberships: [] };
+const emptyReport: BoundaryReport = { target: "boundary", deployment: [], units: [], stored_policies: [], memberships: [] };
 const GATED = "hard_limits cannot be set yet: the Wardyn boundary does not bound every brokered credential path a run is given, so it stays in no_limits until it does";
 
 function renderScreen(securityOperator = true) {
