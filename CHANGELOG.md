@@ -74,6 +74,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   working. Runs it starts with a reason carry `break_glass: true` and a `run.break_glass.open` audit row holding the
   reason. The boundary still binds them, including its run-length maximum (`limits.max_end_ahead_sec`). Restrictions
   themselves never apply to those runs. Deleting the last restriction (and having no unit with walls) ends this.
+- A person covered by a restriction has their stored policy rows clamped to the ceiling, grants included (unlisted
+  pairings are dropped).
 
 ### Added
 
