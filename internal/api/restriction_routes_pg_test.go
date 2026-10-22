@@ -86,12 +86,6 @@ func TestRestrictionRevive(t *testing.T) {
 	}
 }
 
-func postRestrictionAs(t *testing.T, e *govEnv, cookie *http.Cookie, w types.RestrictionWrite) (int, string) {
-	t.Helper()
-	rec := e.call(cookie, http.MethodPost, "/api/v1/governance/restrictions", restrictionJSON(t, w))
-	return rec.Code, rec.Body.String()
-}
-
 // TestRestrictionWriteFourEyes: with the switch on, adding a deny or a member is direct and removing
 // one, or deleting, is held; with it off every write is direct.
 func TestRestrictionWriteFourEyes(t *testing.T) {
