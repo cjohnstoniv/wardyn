@@ -1183,25 +1183,23 @@ curl -sN -H 'Authorization: Bearer demo-admin-token' \
   http://localhost:8080/api/v1/runs/<id>/events
 ```
 
-`GET /api/v1/runs` accepts an opt-in, server-side scoping/filtering surface beyond
+`GET /api/v1/runs` accepts an opt-in scoping/filtering surface beyond
 `&limit=&offset=` (#1197 L1a):
 
-- `view` (`user`/`admin`; absent leaves the endpoint's
-  behaviour exactly as above), `owner` (`me`/`all`; `view=user` forces `me` for
+- `view` (`user`/`admin`; absent leaves the endpoint
+  as above), `owner` (`me`/`all`; `view=user` forces `me` for
   every caller, admin tokens included),
 - repeatable `status`
   (`active`/`ended`/`failed`/`killed`/`needs`), `ended_within` (`24h`/`7d`/`30d`/`all`),
 - `include_killed=1` (a KILLED run older than 24h is hidden by default), `no_end=1`
   (only live runs with no end), `workspace`
-  (exact match on the run's repo/workspace-path label) and `q` (a case-insensitive
+  (exact match on the run's repo/workspace-path label) and `q` (case-insensitive
   substring search over title/task/repo/created_by).
-- `sponsored=exclude` turns off only the addition of a sponsor's service identities' runs to their own list
-  (`owner=me`), and does nothing where that addition is already off (`owner=all`, or a delegated token). It
-  filters nothing else. Any other value is `400` `invalid_sponsored_param`.
+- `sponsored=exclude` drops a sponsor's service runs from their own list; no-op where already left out.
 
-- With any of them present the
+- With any of them the
   response is ordered live runs first, then ended runs by end time, and two headers
-  — `X-Wardyn-Hidden-Older`, `X-Wardyn-Hidden-Killed` — report how many rows the
+  — `X-Wardyn-Hidden-Older`, `X-Wardyn-Hidden-Killed` — count the rows the
   `ended_within` window and the killed-run default hid.
 - `POST /api/v1/workspaces/{id}/record/{task}/promote-egress`
   skips, rather than refuses, a requested host that is a model provider row's own host. It names them in the additive
