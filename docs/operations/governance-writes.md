@@ -37,6 +37,9 @@ an operator follows to turn one on and run the queue.
 - A unit path is at most `governance_max_depth` deep (site config; 16 unset, max 64; `0` resets, `null` keeps it); Default or a top-level unit is 1.
   - A write past it: `409` `governance_unit_depth`.
   - Lowering it below the deepest path: `400` `site_config_invalid`, naming that path.
+- Unit admins (0.10.0) govern their units and the units below them; [unit admins](unit-admins.md) has the full rule.
+  - A security admin's unit-admin grant follows `WARDYN_GOVERNANCE_SECOND_HUMAN`, so a single-admin install can create unit admins.
+  - A unit admin's widening, a grant of a unit admin below included, is always held, whatever the switch says.
 - `GET /governance` gives units `kind` (`default` for Default), `mode` and `depth`, memberships `home` and `legacy` (pre-0.10.0: only a person's first by precedence is a context), and `max_depth`. `ApplyGovernance` and `PlanGovernance` match memberships by unit name and never write Default or `legacy`.
 - A revive, admin restart or run-end extension (`run.end.set`) is refused `409` `unit_membership_gone` once the owner holds no membership of the run's unit or one above it. The owner's own checks their memberships (audit `arm` `owner_session`). Anyone else's passes while such a unit has a membership the owner could hold: their sub, user type, `all` or any group, never an email row (`arm` `row_can_match`).
 - The Default unit is read-only (`PUT` and `DELETE` are `409` `governance_unit_default_readonly`; its walls are `WARDYN_DEFAULT_POLICY`) and memberless: adding or moving a membership into it is `409` `governance_membership_default_unit`, before any hold.

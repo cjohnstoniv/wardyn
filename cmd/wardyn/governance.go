@@ -67,7 +67,7 @@ func governanceCmd(client clientFn) *cobra.Command {
 			"`wardyn governance changes approve <id>`.",
 	}
 	cmd.AddCommand(governanceGetCmd(client), governancePlanCmd(client), governanceSetCmd(client), governanceChangesCmd(client),
-		governanceCheckCmd(client), governanceDryRunCmd(client))
+		governanceCheckCmd(client), governanceDryRunCmd(client), governanceAdminsCmd(client))
 	return subcommandGroup(cmd)
 }
 
@@ -160,9 +160,12 @@ func printGovernancePlanSummary(w io.Writer, plan sdk.GovernancePlan) {
 		if s.Op != "delete" {
 			continue
 		}
-		if s.Kind == "unit" {
+		switch s.Kind {
+		case "unit":
 			fmt.Fprintf(w, "  profile %q\n", s.Name)
-		} else {
+		case "unit_admin":
+			fmt.Fprintf(w, "  unit admin %s %q on %q\n", s.SubjectType, s.Subject, s.Unit)
+		default:
 			fmt.Fprintf(w, "  assignment %s %q\n", s.SubjectType, s.Subject)
 		}
 	}

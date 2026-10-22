@@ -33,6 +33,8 @@ export interface BoundaryWrite {
   spec: BoundarySpec;
   limits: BoundaryLimits;
   contact?: PolicyContact;
+  // The knobs no unit may change while the boundary is in hard_limits; absent keeps the stored locks.
+  locked_knobs?: string[];
 }
 
 /** types.Boundary. */
@@ -41,6 +43,7 @@ export interface Boundary {
   spec: BoundarySpec;
   limits: BoundaryLimits;
   contact?: PolicyContact;
+  locked_knobs?: string[];
   updated_by?: string;
   updated_at?: string;
 }

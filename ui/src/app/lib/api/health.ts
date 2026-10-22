@@ -151,6 +151,9 @@ export interface Me {
   // binds them. null for an operator and whenever the ceiling could not be
   // resolved; absent on a pre-0.8.6 daemon.
   governance_contact?: PolicyRef | null;
+  // The units this caller administers by a unit-admin grant (internal/api/governance_scope_read.go):
+  // always present, [] for none; absent on a pre-0.10.0 daemon.
+  unit_admin_of?: { unit_id: string; unit_name: string }[];
 }
 
 // internal/policyref.Ref — the member-safe reference a refusal, /me and a run

@@ -24,8 +24,9 @@ import type {
 import type { PlacementValue } from "../types/new-run-contract";
 import type { PolicyProvenance } from "../types/runs";
 import type { Boundary, BoundaryChange } from "./boundary";
+import type { GovernanceChangeApprover } from "../types/governance-change";
 import { USER_TYPE_STANDARD } from "../types/user-types";
-import { asJson, errEnvelope, errText, HttpError, throwIfPending, unwrapList, wfetch } from "./core";
+import { asJson, asNoContent, errEnvelope, errText, HttpError, throwIfPending, unwrapList, wfetch } from "./core";
 
 // types.GovernanceLimits. ALL are `omitempty` on the wire, so an unrestricted
 // profile arrives with the keys absent — optional here for the same reason,
@@ -225,6 +226,29 @@ export interface GovernanceUnit {
   effective?: GovernanceEffective;
   // On GET /governance: the membership subjects in this unit or below it; absent for Default.
   people?: number;
+  // The knobs this unit locks for every unit below it, a narrowing included (0.10.0).
+  locked_knobs?: string[];
+}
+
+// types.GovernanceUnitAdmin — a person or an IdP group that governs a unit and every unit below it.
+export interface GovernanceUnitAdmin {
+  id: string;
+  unit_id: string;
+  subject_type: "user" | "group";
+  subject: string;
+  granted_by: string;
+  approved_by?: string;
+  created_at: string;
+}
+
+// unitParentWalls: for a unit admin, the walls one of their subtrees hangs from, knob by knob with the
+// layer that set it (locked when a lock above fixes it).
+export interface GovernanceParentWalls {
+  unit_id: string;
+  parent_id: string;
+  parent_name: string;
+  effective: GovernanceEffective;
+  provenance?: Record<string, PolicyProvenance>;
 }
 
 // types.GovernanceMembership — one subject bound to one profile.
@@ -248,8 +272,12 @@ export interface GovernanceSnapshot {
   assignments: GovernanceMembership[];
   // The maximum unit depth in force (site_config.governance_max_depth, 16 when unset).
   max_depth?: number;
-  // The Wardyn boundary, as GET /governance/boundary returns it.
+  // The Wardyn boundary, as GET /governance/boundary returns it; absent for a unit admin.
   boundary?: Boundary;
+  // The unit-admin grants (a unit admin sees those on their units).
+  unit_admins?: GovernanceUnitAdmin[];
+  // A unit admin's view only: the walls each of their subtrees hangs from.
+  parent_walls?: GovernanceParentWalls[];
   // Console only, never on the wire: every unit's name by id, Default included, for a membership on a unit the list hides.
   unit_names?: Record<string, string>;
 }
@@ -269,6 +297,8 @@ export interface GovernanceUnitInput {
   overlay_limits?: LimitsOverlay | null;
   // Absent keeps the stored mode on a PUT (own_walls on a POST).
   mode?: "own_walls" | "pass_through";
+  // Absent keeps the stored locks on a PUT; [] clears them.
+  locked_knobs?: string[];
 }
 
 // governanceUnitResponse: the saved row plus the OMISSION warnings the
@@ -392,6 +422,8 @@ export interface TreeDryRunReport {
   target: "unit" | "membership_move";
   people: TreeDryRunPerson[];
   live_runs: string[];
+  // Who could decide the write were it held, the caller left out.
+  approvers: GovernanceChangeApprover[];
 }
 
 // The server composes a grant-bound refusal as "invalid ceiling: " + the
@@ -414,12 +446,41 @@ export const governance = {
   // null, so both halves are coerced and every caller can map over them.
   async getGovernance(): Promise<GovernanceSnapshot> {
     const res = await wfetch("/governance", { method: "GET" });
-    const body = await asJson<{ units?: unknown; memberships?: unknown; max_depth?: number }>(res);
+    const body = await asJson<{
+      units?: unknown;
+      memberships?: unknown;
+      max_depth?: number;
+      unit_admins?: unknown;
+      parent_walls?: unknown;
+    }>(res);
     return {
       profiles: unwrapList<GovernanceUnit>(body.units),
       assignments: unwrapList<GovernanceMembership>(body.memberships),
       max_depth: body.max_depth,
+      unit_admins: unwrapList<GovernanceUnitAdmin>(body.unit_admins),
+      parent_walls: unwrapList<GovernanceParentWalls>(body.parent_walls),
     };
+  },
+
+  // POST /api/v1/governance/units/{id}/admins -> 201 the grant, or PendingChangeError when held
+  // (always, for a unit admin's grant).
+  async grantUnitAdmin(unitId: string, subjectType: "user" | "group", subject: string): Promise<GovernanceUnitAdmin> {
+    const res = await wfetch(`/governance/units/${encodeURIComponent(unitId)}/admins`, {
+      method: "POST",
+      asPerson: true,
+      body: JSON.stringify({ subject_type: subjectType, subject }),
+    });
+    return asJson<GovernanceUnitAdmin>(res);
+  },
+
+  // DELETE /api/v1/governance/units/{id}/admins/{admin} -> 204, or PendingChangeError when held.
+  async revokeUnitAdmin(unitId: string, adminId: string): Promise<void> {
+    const res = await wfetch(`/governance/units/${encodeURIComponent(unitId)}/admins/${encodeURIComponent(adminId)}`, {
+      method: "DELETE",
+      asPerson: true,
+    });
+    await throwIfPending(res);
+    await asNoContent(res);
   },
 
   // POST /api/v1/governance/units -> 201 {profile, warnings}. A 400 whose

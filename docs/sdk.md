@@ -760,6 +760,7 @@ start.
 | `governance_unit_cycle` | `PUT/POST /governance/units` (409): the write would make a profile, through its base, its own base. |
 | `governance_unit_depth` | `PUT/POST /governance/units` (409): the write would put a unit or one below it deeper than `governance_max_depth` (16 unset or `0`; `null` keeps it). |
 | `governance_unit_default_readonly` | `PUT` or `DELETE /governance/units/{id}` on the Default unit, or approving a change held against it (409): its walls are `WARDYN_DEFAULT_POLICY`. |
+| `governance_unit_admin_invalid` / `governance_unit_admin_not_found` | `POST /governance/units/{id}/admins` and `DELETE /governance/units/{id}/admins/{admin}`: the grant names a `subject_type` other than `user` or `group`, or an empty subject (400), or a subject that already administers the unit (409); no such grant on that unit (404). |
 | `governance_membership_default_unit` | Adding or moving a membership into the Default unit, by write, dry run or approval (409). |
 | `unit_not_a_context` | `POST /runs`, preflight and the policy preview (403): the unit asked for is not one of the caller's. |
 | `workspace_unit_not_yours` | `POST /runs`, preflight and the policy preview (403): an attached workspace's unit is on no path of the caller's units; `policy` names it. |
@@ -774,6 +775,7 @@ start.
 | `boundary_invalid` | `PUT /governance/boundary` and `POST /governance/dry-run` (400): the `PUT` names no `mode` or an unknown one, or the document sets `allow_all_egress` beside `allowed_domains`, a `max_end_ahead_sec` below 1, a bad `contact`, or a value a run policy would refuse; `501` on a store that keeps no boundary. |
 | `boundary_stale` | `PUT /governance/boundary` (412): `If-Match` names a boundary that has since changed. |
 | `boundary_hard_limits_gated` | `PUT /governance/boundary` (409): the write names `hard_limits`, which cannot be set until the boundary bounds every brokered credential path a run is given. |
+| `unit_knob_locked` | `POST/PUT /governance/units`, `PUT /governance/boundary`, an approval of either, and `POST /governance/dry-run` (409): the write changes a knob that the boundary or a unit above locks, a narrowing included ("`<knob>` is locked by `<locker>`; ask `<contact>`"). Or it locks a knob that a unit below sets to another value: the body lists those units, and clearing their values would widen them. |
 | `boundary_host` | `POST /approvals/{id}/approve` (403): the Wardyn boundary is in `hard_limits` and denies the egress host, or does not allow it. |
 | `credential_withheld` | `POST /internal/credentials/mint`, `GET /internal/injection/{grantID}` (403): the run's governance profile or the Wardyn boundary now withholds the grant or a host it reaches. |
 | `credential_withheld_unread` | `POST /internal/credentials/mint` (503): the run, its grants, its profile or the Wardyn boundary could not be read to check the grant; retry. |
@@ -1030,12 +1032,16 @@ applied until a different approver approves it. The SDK never reads that body as
   make, as a `GovernancePlan`, and writes nothing: one `GET /api/v1/governance`, no write request.
   Its matching rules are `ApplyGovernance`'s. A plan is a snapshot: the server may change before an apply.
 - `GET /governance` returns every profile and every assignment; a composed profile's own `ceiling` holds only what it stores, so read the resolved one under `effective.ceiling`. Units carry `kind`, `mode` and `depth`, memberships `home` and `legacy`, and the document `max_depth` ([governance writes](operations/governance-writes.md)). `/governance/units` and `/governance/units/{id}` take writes only, so a `GET` on either answers `405`.
-  It also carries `boundary` and, per unit but Default, `people`: the membership subjects in it or below.
+  It also carries `boundary` (security admins only), `unit_admins` and, per unit but Default, `people`: the membership subjects in it or below.
+  A unit admin reads only their subtrees, plus `parent_walls`: the walls each subtree hangs from, with `provenance`.
+- `GrantUnitAdmin` (`POST /governance/units/{id}/admins`) and `RevokeUnitAdmin` (`DELETE …/admins/{admin}`) are `wardyn governance admins add|remove`; a unit admin's are always held ([unit admins](operations/unit-admins.md)).
+  The governance file's `admins`, keyed by unit name, and each unit's `locked_knobs` apply and prune like memberships.
+- A held change and a dry-run report list `approvers`: who could decide it. `GET /me`'s `unit_admin_of` names the caller's granted units.
 - `MoveGovernanceMembership` (`PUT /governance/memberships/{id}`) and `PromoteGovernanceMembership` (`POST …/promote`, a legacy one becomes a context) follow the second-human switch ([governance writes](operations/governance-writes.md)).
 - `CheckGovernance` (`POST /governance/check`, `wardyn governance check`) takes `RunIn`: it returns `contexts` (each with its `path`), `dormant` memberships and the chosen or home context's `effective` walls with `provenance`.
 - `GovernanceDryRun` (`POST /governance/dry-run`, `wardyn governance dry-run`) takes a `target`: `boundary` (the default), `unit` (a unit body plus `id`) or `membership_move` (`{id, unit_id}`); the last two report `{target, people, live_runs}`.
 - `CreateRunRequest.RunIn` (`run_in`, `wardyn run --run-in`) names one of the caller's units to run in, by id or exact name. `GET /policies/default` takes `?run_in=`, returning `contexts` and `unit_path`.
-- A refusal's `policy` may carry `locked: true`; nothing locks a knob yet.
+- A refusal's `policy` may carry `locked: true`, and a run's `provenance` marks a knob `locked`, when a unit above the run's unit, or the boundary in `hard_limits`, locks that knob. The record then names the nearest locker.
 - `GovernanceApplyResult.Steps` lists an apply's writes in order, each `applied`, `pending`
   or `failed`. On a failed write `ApplyGovernanceResult` returns the steps so far with the error.
 - `ApplyDrivesResult` is `ApplyDrives` with the same steps, as `DrivesApplyResult.Steps`; `ApplyDrives`

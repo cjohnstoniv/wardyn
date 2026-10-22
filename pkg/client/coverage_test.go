@@ -125,7 +125,7 @@ func routeFamilies() map[string][]string {
 		"templates":   {"ListTemplates", "GetTemplate", "SaveTemplate", "DeleteTemplate", "CopyTemplate", "ImportTemplate", "ListTemplateGroupAdmins", "GrantTemplateGroupAdmin", "RevokeTemplateGroupAdmin"},
 		"presets":     {"ListPresets", "GetPreset", "PutPreset", "DeletePreset", "ApplyPresets"},
 		"governance": {"GetGovernance", "ApplyGovernance", "ApplyGovernanceResult", "PlanGovernance",
-			"MoveGovernanceMembership", "PromoteGovernanceMembership", "CheckGovernance", "GovernanceDryRun"},
+			"MoveGovernanceMembership", "PromoteGovernanceMembership", "GrantUnitAdmin", "RevokeUnitAdmin", "CheckGovernance", "GovernanceDryRun"},
 		"gov.changes":     {"ListGovernanceChanges", "GetGovernanceChange", "ApproveGovernanceChange", "RejectGovernanceChange"},
 		"setup":           {"SetupStatus"},
 		"identity":        {"Me"},
