@@ -575,7 +575,7 @@ func (d *Driver) startVirtiofsd(ctx context.Context, spec runner.SandboxSpec, n 
 	host.Mounts = []mount.Mount{share, {Type: mount.TypeBind, Source: fsDir, Target: qemu.FSDir}}
 	created, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name: vmfsName(spec.RunID, n),
-		Config: &container.Config{Image: vc.QEMUImage, User: vc.user(), Cmd: qemu.VirtiofsdArgs(n, m.ReadOnly),
+		Config: &container.Config{Image: vc.QEMUImage, User: vc.user(), Cmd: qemu.VirtiofsdArgs(n, m.ReadOnly, vc.UID, vc.GID),
 			Labels: d.labels(spec.RunID, componentVMFS, spec.Labels)},
 		HostConfig: host,
 	})

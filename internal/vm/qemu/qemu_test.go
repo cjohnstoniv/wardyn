@@ -127,8 +127,25 @@ func TestSizing(t *testing.T) {
 }
 
 func TestVirtiofsdReadOnly(t *testing.T) {
-	if !slices.Contains(VirtiofsdArgs(0, true), "--readonly") || slices.Contains(VirtiofsdArgs(1, false), "--readonly") {
+	if !slices.Contains(VirtiofsdArgs(0, true, 1000, 1000), "--readonly") || slices.Contains(VirtiofsdArgs(1, false, 1000, 1000), "--readonly") {
 		t.Fatal("a read-only mount must be served read-only")
+	}
+}
+
+// An unprivileged virtiofsd creates files only as itself: the guest's agent user must map to the
+// runner's user, or every guest write to a writable folder fails with EPERM.
+func TestVirtiofsdMapsTheAgentUserToTheRunner(t *testing.T) {
+	a := VirtiofsdArgs(0, false, 1001, 121)
+	for _, f := range []string{"--translate-uid=map:1000:1001:1", "--translate-uid=forbid-guest:1001:1",
+		"--translate-gid=map:1000:121:1", "--translate-gid=forbid-guest:121:1"} {
+		if !slices.Contains(a, f) {
+			t.Fatalf("args %q lack %s: the agent's uid and gid must map one to one onto the runner's", a, f)
+		}
+	}
+	for _, f := range VirtiofsdArgs(0, false, 1000, 1000) {
+		if strings.HasPrefix(f, "--translate-") {
+			t.Fatalf("an identity map was passed: %q", f)
+		}
 	}
 }
 

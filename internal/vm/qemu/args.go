@@ -12,6 +12,8 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 )
 
 // Paths inside the QEMU container. Each is one part of the run directory (or the image cache),
@@ -138,11 +140,23 @@ func OverlayArgs() []string {
 	return []string{"qemu-img", "create", "-q", "-f", "qcow2", "-F", "raw", "-b", BaseDir + "/" + RootFS, DiskDir + "/" + Overlay}
 }
 
-// VirtiofsdArgs serves share n of the source mounted at /share.
-func VirtiofsdArgs(n int, readOnly bool) []string {
+// VirtiofsdArgs serves share n of the source mounted at /share, running as uid:gid.
+func VirtiofsdArgs(n int, readOnly bool, uid, gid int) []string {
 	a := []string{"/usr/libexec/virtiofsd", "--socket-path=" + FSDir + "/" + ShareSocket(n), "--shared-dir=/share",
 		// The container is the confinement: virtiofsd's own sandbox needs privileges it is not given.
 		"--sandbox=none", "--cache=auto"}
+	// Unprivileged, virtiofsd can create files only as its own user: the guest's agent user maps to
+	// it one to one both ways, so the agent's writes land as uid:gid and it owns uid:gid's files in
+	// the guest. A guest id equal to the runner's is forbidden, so no other guest id lands as it.
+	for _, t := range []struct {
+		flag       string
+		agent, own int
+	}{{"--translate-uid=", guestagent.AgentUID, uid}, {"--translate-gid=", guestagent.AgentGID, gid}} {
+		if t.own != t.agent {
+			a = append(a, t.flag+"map:"+strconv.Itoa(t.agent)+":"+strconv.Itoa(t.own)+":1",
+				t.flag+"forbid-guest:"+strconv.Itoa(t.own)+":1")
+		}
+	}
 	if readOnly {
 		a = append(a, "--readonly")
 	}
