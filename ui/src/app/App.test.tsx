@@ -323,6 +323,73 @@ describe("App — the nav badges across a sign-out (#2492)", () => {
     await waitFor(() => expect(approvals()).toBeInTheDocument());
     expect(approvals()).not.toHaveTextContent("7");
   });
+
+  // A /me/attention read that started under one session may answer under another (#2492): the counts
+  // it carries are the previous person's, whether they land at the gate or on the next sign-in's shell.
+  function stubAttention(answer: (n: number) => Promise<Response>) {
+    const base = mockFetch({}).fetch;
+    let n = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: RequestInfo | URL, init?: RequestInit) => (String(url).includes("/me/attention") ? answer(n++) : base(url, init))),
+    );
+    return () => n;
+  }
+  const approvalsLink = () => screen.getByRole("link", { name: /Approvals/ });
+  const runsLink = () => screen.getByRole("link", { name: /Runs/ });
+  async function signOutAndBackIn() {
+    const user = userEvent.setup();
+    const header = await screen.findByRole("banner");
+    const headerButtons = within(header).getAllByRole("button");
+    await user.click(headerButtons[headerButtons.length - 1]);
+    await user.click(within(await screen.findByRole("menu")).getByText("Sign out"));
+    await screen.findByText("Admin token", { exact: true });
+    return async () => {
+      setField(screen.getByLabelText("Admin token"), "any-token");
+      await user.click(screen.getByRole("button", { name: "Sign in" }));
+      await screen.findByRole("banner");
+    };
+  }
+
+  it("a 200 held open across the sign-out and resolved after it leaves both counts at zero", async () => {
+    const first = deferred<Response>();
+    const asked = stubAttention((n) => (n === 0 ? first.promise : new Promise<Response>(() => {})));
+    renderApp("/admin/settings");
+    await waitFor(() => expect(asked()).toBe(1));
+    const signIn = await signOutAndBackIn();
+    await act(async () => {
+      first.resolve(jsonResponse(200, { pending_approvals: 9, needs_you: 8 }));
+    });
+    await signIn();
+    await waitFor(() => expect(approvalsLink()).toBeInTheDocument());
+    expect(approvalsLink()).not.toHaveTextContent("9");
+    expect(runsLink()).not.toHaveTextContent("8");
+  });
+
+  it("a 200 that resolves after the next sign-in's own answer does not overwrite it", async () => {
+    const first = deferred<Response>();
+    const asked = stubAttention((n) => (n === 0 ? first.promise : Promise.resolve(jsonResponse(200, { pending_approvals: 2, needs_you: 1 }))));
+    renderApp("/admin/settings");
+    await waitFor(() => expect(asked()).toBe(1));
+    const signIn = await signOutAndBackIn();
+    await signIn();
+    await waitFor(() => expect(approvalsLink()).toHaveTextContent("2"));
+    await waitFor(() => expect(runsLink()).toHaveTextContent("1"));
+    await act(async () => {
+      first.resolve(jsonResponse(200, { pending_approvals: 9, needs_you: 8 }));
+    });
+    expect(approvalsLink()).toHaveTextContent("2");
+    expect(approvalsLink()).not.toHaveTextContent("9");
+    expect(runsLink()).toHaveTextContent("1");
+    expect(runsLink()).not.toHaveTextContent("8");
+  });
+
+  it("an answer within the same session still commits both counts", async () => {
+    stubAttention(() => Promise.resolve(jsonResponse(200, { pending_approvals: 7, needs_you: 3 })));
+    renderApp("/admin/settings");
+    await waitFor(() => expect(approvalsLink()).toHaveTextContent("7"));
+    await waitFor(() => expect(runsLink()).toHaveTextContent("3"));
+  });
 });
 
 describe("roleCanReach — pure", () => {
