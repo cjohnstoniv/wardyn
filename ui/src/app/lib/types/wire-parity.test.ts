@@ -169,6 +169,19 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     }
   });
 
+  it("GET /runs ?sponsored=: the TS option is exactly the non-empty values the Go switch accepts (#2513)", () => {
+    const filterGo = readFileSync(join(root, "internal/api/runs_list_filter.go"), "utf8");
+    const sw = filterGo.match(/switch sponsored \{\s*case ([^:]+):/);
+    if (!sw) throw new Error("runs_list_filter.go: no `switch sponsored` found");
+    const goValues = [...sw[1].matchAll(/"([^"]*)"/g)].map((m) => m[1]).filter((v) => v !== "");
+    const runsApiTs = stripComments(readFileSync(join(root, "ui/src/app/lib/api/runs.ts"), "utf8"));
+    const field = runsApiTs.match(/\bsponsored\?:\s*([^;]+);/);
+    if (!field) throw new Error("runs.ts: RunsListFilter has no `sponsored?:` option");
+    const tsValues = [...field[1].matchAll(/"([^"]*)"/g)].map((m) => m[1]);
+    expect(goValues).toEqual(["exclude"]);
+    expect(new Set(tsValues)).toEqual(new Set(goValues));
+  });
+
   it("SetupProviderAccess (`provider_access`): full parity with the TS mirror", () => {
     const providerAccessGo = readFileSync(join(root, "internal/api/provider_access.go"), "utf8");
     const goTags = goJSONTags(providerAccessGo, "SetupProviderAccess");
