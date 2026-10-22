@@ -56,6 +56,8 @@ describe("runners management wire", () => {
     ["internal/types/runner_registration_wire.go", "RunnerRegistration", "RunnerRegistration"],
     ["internal/types/runner_registration_wire.go", "RunnerOrgTokenRequest", "RunnerOrgTokenRequest"],
     ["internal/types/runner_registration_wire.go", "RunnerTrustRequest", "RunnerTrustRequest"],
+    ["internal/types/runner_inventory.go", "RunnerOfflineSummary", "RunnerOfflineSummary"],
+    ["internal/types/runner_inventory.go", "RunnerRelayStatus", "RunnerRelayStatus"],
   ])("%#: %s has full parity with its TS mirror", (file, goName, tsName) => {
     const tags = goJSONTags(read(file), goName);
     expect(tags.length).toBeGreaterThanOrEqual(1);
@@ -67,6 +69,14 @@ describe("runners management wire", () => {
     const m = /export type RunnerState =([^;]+);/.exec(stripComments(ts));
     if (!m) throw new Error("type RunnerState not found");
     expect(new Set([...m[1].matchAll(/"([a-z]+)"/g)].map((x) => x[1]))).toEqual(new Set(go));
+  });
+
+  it("RunnerStage is the Go constants", () => {
+    const go = [...read("internal/types/runner_inventory.go").matchAll(/RunnerStage[A-Za-z]+\s*= "([a-z-]+)"/g)].map((m) => m[1]);
+    const m = /export type RunnerStage =([^;]+);/.exec(stripComments(ts));
+    if (!m) throw new Error("type RunnerStage not found");
+    expect(go.length).toBeGreaterThanOrEqual(8);
+    expect(new Set([...m[1].matchAll(/"([a-z-]+)"/g)].map((x) => x[1]))).toEqual(new Set(go));
   });
 
   it.each([

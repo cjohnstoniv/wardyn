@@ -7,9 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"path"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -597,11 +597,13 @@ func printable(s string) bool {
 	return utf8.ValidString(s) && strings.IndexFunc(s, func(r rune) bool { return !unicode.IsPrint(r) }) < 0
 }
 
-// CLI kinds a component row can carry. gcloud and kubectl are not built.
+// CLI kinds a component row can carry. gcloud is not built, and kubectl is
+// a kind only where EnvKubectlCLI is on.
 const (
-	CLIKindAzure  = "azure"
-	CLIKindAWS    = "aws"
-	CLIKindGitHub = "github"
+	CLIKindAzure   = "azure"
+	CLIKindAWS     = "aws"
+	CLIKindGitHub  = "github"
+	CLIKindKubectl = "kubectl"
 )
 
 // CLISecretPrefix starts every person's CLI sign-in capture:
@@ -612,12 +614,57 @@ const CLISecretPrefix = "wardyn-cli-"
 const MaxCLIAzureSubscriptions = 16
 
 // ComponentCLI is the credential an org row gives a run's command-line tool.
-// Kind names which of the three arms is set, and only that one is.
+// Kind names which of the arms is set, and only that one is.
 type ComponentCLI struct {
-	Kind   string     `json:"kind"` // azure | aws | github
-	Azure  *CLIAzure  `json:"azure,omitempty"`
-	AWS    *CLIAWS    `json:"aws,omitempty"`
-	GitHub *CLIGitHub `json:"github,omitempty"`
+	Kind    string      `json:"kind"` // azure | aws | github | kubectl
+	Azure   *CLIAzure   `json:"azure,omitempty"`
+	AWS     *CLIAWS     `json:"aws,omitempty"`
+	GitHub  *CLIGitHub  `json:"github,omitempty"`
+	Kubectl *CLIKubectl `json:"kubectl,omitempty"`
+}
+
+// MaxCLIKubectlNamespaces bounds the namespaces one kubectl row pins, and
+// MaxCLIKubectlCABytes its CA bundle.
+const (
+	MaxCLIKubectlNamespaces = 16
+	MaxCLIKubectlCABytes    = 64 << 10
+)
+
+// CLIKubectl registers one cluster: its API server, the CA its serving
+// certificate chains to, the one service account the organisation lets runs act
+// as there, the namespaces a run may reach and whether it may change them. The
+// service account's token is not here: an admin stores it through the row's own
+// route, and only the control plane reads it.
+type CLIKubectl struct {
+	Server         string            `json:"server"`           // https://host[:port], no path
+	CAPEM          string            `json:"ca_pem,omitempty"` // PEM; empty trusts the system roots
+	ServiceAccount CLIServiceAccount `json:"service_account"`
+	Namespaces     []string          `json:"namespaces"` // 1..MaxCLIKubectlNamespaces
+	Access         string            `json:"access"`     // read (GET only) | write
+}
+
+// CLIServiceAccount names a Kubernetes service account.
+type CLIServiceAccount struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+}
+
+// HostPort is the API server's host and port (443 when the URL names none),
+// the host lowercased. ok=false when Server is not a URL validate accepts.
+func (k CLIKubectl) HostPort() (host string, port int, ok bool) {
+	u, err := url.Parse(k.Server)
+	if err != nil || u.Hostname() == "" {
+		return "", 0, false
+	}
+	port = 443
+	if p := u.Port(); p != "" {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 1 || n > 65535 {
+			return "", 0, false
+		}
+		port = n
+	}
+	return strings.ToLower(u.Hostname()), port, true
 }
 
 // CLIGitHub scopes the GitHub CLI to the run's repositories by capability.
@@ -683,9 +730,9 @@ func (d ComponentDefinition) validateCLI(personDefined bool) error {
 	if len(d.Secrets) > 0 {
 		return errors.New("cli: a CLI row carries no secrets; its credential is the run's")
 	}
-	arms := map[string]bool{CLIKindAzure: c.Azure != nil, CLIKindAWS: c.AWS != nil, CLIKindGitHub: c.GitHub != nil}
+	arms := map[string]bool{CLIKindAzure: c.Azure != nil, CLIKindAWS: c.AWS != nil, CLIKindGitHub: c.GitHub != nil, CLIKindKubectl: c.Kubectl != nil}
 	have, ok := arms[c.Kind]
-	if !ok {
+	if !ok || c.Kind == CLIKindKubectl && !KubectlCLIOn() {
 		return fmt.Errorf("cli.kind: %q is not azure, aws or github", c.Kind)
 	}
 	if !have {
@@ -701,6 +748,8 @@ func (d ComponentDefinition) validateCLI(personDefined bool) error {
 		return c.Azure.validate()
 	case CLIKindAWS:
 		return c.AWS.validate()
+	case CLIKindKubectl:
+		return c.Kubectl.validate()
 	}
 	return c.GitHub.validate()
 }
@@ -806,118 +855,6 @@ type ComponentMCP struct {
 	Transport string `json:"transport"` // http | stdio
 	// Launch is a local server's command.
 	Launch *ComponentMCPLaunch `json:"launch,omitempty"`
-}
-
-// ComponentMCPLaunch is how a local MCP server starts: Command with Args, no
-// shell. Command is npx or an absolute path to a program in the image; a
-// package npx fetches is pinned to one exact version.
-type ComponentMCPLaunch struct {
-	Command string   `json:"command"`
-	Args    []string `json:"args,omitempty"`
-}
-
-// RemoteMCP reports whether the definition is a remote MCP server, which only
-// the broker reaches. A transport other than stdio counts as remote, as every
-// server did before local ones existed.
-func (d ComponentDefinition) RemoteMCP() bool {
-	return d.MCP != nil && d.MCP.Transport != ComponentMCPTransportStdio
-}
-
-// LocalMCP reports whether the definition is an MCP server its harness starts
-// inside the run's sandbox.
-func (d ComponentDefinition) LocalMCP() bool {
-	return d.MCP != nil && d.MCP.Transport == ComponentMCPTransportStdio
-}
-
-// harnessIDRE is a harness id as tools[].id names one.
-var harnessIDRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
-
-// npmPinnedRE is one npm package at one exact version: name@1.4.2 or
-// @scope/name@1.4.2-rc.1. A range, a tag such as latest, or no version at
-// all would let the package that runs change under the definition.
-var npmPinnedRE = regexp.MustCompile(`^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*@[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$`)
-
-// validateMCP checks the mcp block. A remote server's credential goes to the
-// server and never into the sandbox, so its only secret mode is a header to
-// the server's own host, over TLS. A local server's secrets follow every
-// component's rules.
-func (d ComponentDefinition) validateMCP() error {
-	m := d.MCP
-	if m == nil {
-		return nil
-	}
-	if d.CLI != nil {
-		return errors.New("mcp: a component is an MCP server or a CLI credential, not both")
-	}
-	switch m.Transport {
-	case ComponentMCPTransportHTTP:
-	case ComponentMCPTransportStdio:
-		return m.validateLocal()
-	case "sse":
-		return errors.New("mcp.transport: servers that use SSE are not supported yet; use the server's streamable HTTP address")
-	default:
-		return fmt.Errorf("mcp.transport: %q is not http or stdio", m.Transport)
-	}
-	if m.Launch != nil {
-		return errors.New("mcp.launch: a remote server is reached at its url; only a stdio server has a launch command")
-	}
-	host, err := MCPURLDestination(m.URL)
-	if err != nil {
-		return fmt.Errorf("mcp.url: %w", err)
-	}
-	if !slices.ContainsFunc(d.Hosts, func(h string) bool { return mcpHostAdmits(h, host) }) {
-		return fmt.Errorf("mcp.url: its host %q must be one of this component's hosts", host.String())
-	}
-	for i, s := range d.Secrets {
-		del := s.Delivery
-		switch {
-		case del.Mode != ComponentDeliveryHeader:
-			return fmt.Errorf("secrets[%d].delivery.mode: an MCP server's secret is sent to the server as a header, never into the sandbox", i)
-		case del.Host != host.Host:
-			return fmt.Errorf("secrets[%d].delivery.host: an MCP server's secret goes to the server's host %q", i, host.Host)
-		case del.PlainHTTP:
-			return fmt.Errorf("secrets[%d].delivery.plain_http: an MCP server's secret is only ever sent over TLS", i)
-		}
-	}
-	return nil
-}
-
-// validateLocal checks a stdio server: a launch command and no url.
-func (m ComponentMCP) validateLocal() error {
-	if m.URL != "" {
-		return errors.New("mcp.url: a stdio server runs in the sandbox from its launch command and has no url")
-	}
-	l := m.Launch
-	if l == nil {
-		return errors.New("mcp.launch: a stdio server needs the command that starts it")
-	}
-	c := l.Command
-	if len(c) > MaxComponentMCPArgBytes || !printable(c) || c != "npx" && (!path.IsAbs(c) || path.Clean(c) != c) {
-		return fmt.Errorf("mcp.launch.command: %q must be npx or the absolute path of a program in the image", c)
-	}
-	if len(l.Args) > MaxComponentMCPArgs {
-		return fmt.Errorf("mcp.launch.args: %d entries exceeds the %d-argument limit", len(l.Args), MaxComponentMCPArgs)
-	}
-	for i, a := range l.Args {
-		if len(a) > MaxComponentMCPArgBytes || !printable(a) {
-			return fmt.Errorf("mcp.launch.args[%d]: must be printable text of at most %d bytes", i, MaxComponentMCPArgBytes)
-		}
-	}
-	if path.Base(c) != "npx" {
-		return nil
-	}
-	for i, a := range l.Args {
-		switch {
-		case a == "-y" || a == "--yes":
-		case strings.HasPrefix(a, "-"):
-			return fmt.Errorf("mcp.launch.args[%d]: npx takes only -y before the package here; name the package as its first argument", i)
-		case !npmPinnedRE.MatchString(a):
-			return fmt.Errorf("mcp.launch.args[%d]: %q must pin one exact version, such as @example/mcp-server@1.4.2", i, a)
-		default:
-			return nil
-		}
-	}
-	return errors.New("mcp.launch.args: npx needs the package to run, pinned to one exact version, such as @example/mcp-server@1.4.2")
 }
 
 // MCPURLDestination checks an MCP server URL and returns its host and port as

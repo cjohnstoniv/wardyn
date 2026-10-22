@@ -130,7 +130,7 @@ func TestPolicySource_KindsAndStoredIdentity(t *testing.T) {
 		s.PolicyID == nil || *s.PolicyID != policyID || s.Name != "wide" || s.UpdatedAt == nil {
 		t.Errorf("stored source = %+v, want kind stored, the id, the name at launch and updated_at", s)
 	}
-	if s := resolve(member, &createRunRequest{Agent: "claude-code"}); s.Kind != policyKindProfile || s.Name != "walled" || s.PolicyID != nil {
+	if s := resolve(member, &createRunRequest{Agent: "claude-code"}); s.Kind != policyKindUnit || s.Name != "walled" || s.PolicyID != nil {
 		t.Errorf("no-policy member under a profile = %+v, want kind profile named walled", s)
 	}
 	admin := operatorCtx("sub-admin", "admin@corp.example", oidc.RoleAdmin)

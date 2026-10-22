@@ -260,6 +260,10 @@ func (s *Server) authorAWSSSOGrant(ctx context.Context, run types.AgentRun, sn a
 		"pin_path":  awsSSORoleCredentialsPath,
 		"pin_query": awsSSOPinQuery(sn.SSOAccountID, sn.SSORoleName),
 	})
+	// A re-signed lane's session signs these hosts too, so the live check withholds it with them (grantHosts).
+	if sigv4Hosts != nil {
+		scope = scopeWithSignedHosts(scope, sigv4Hosts)
+	}
 	grantID := uuid.New()
 	if _, gerr := s.createDispatchGrant(ctx, run, types.CredentialGrant{
 		ID: grantID, RunID: run.ID, CreatedAt: time.Now(),
@@ -302,4 +306,19 @@ func awsSSOPinQuery(accountID, roleName string) map[string]string {
 		return nil
 	}
 	return map[string]string{"account_id": accountID, "role_name": roleName}
+}
+
+// scopeWithSignedHosts adds signed_hosts to a grant scope written above. The scope stays a map literal at its
+// write so the audit guard (shared_secret_audit_guard_test.go) still reads it as a grant's scope.
+func scopeWithSignedHosts(scope []byte, hosts []string) []byte {
+	var m map[string]any
+	if err := json.Unmarshal(scope, &m); err != nil {
+		return scope
+	}
+	m["signed_hosts"] = hosts
+	out, err := json.Marshal(m)
+	if err != nil {
+		return scope
+	}
+	return out
 }

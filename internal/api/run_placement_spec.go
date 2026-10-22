@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strconv"
@@ -211,6 +212,7 @@ func (s *Server) localPolicyGrantOrigins(ctx context.Context, owner string, rows
 // provenance and so refuses.
 func (s *Server) localProxyGrantOrigins(ctx context.Context, owner string, byID map[uuid.UUID]types.CredentialGrant, p *placement.LocalPlan) {
 	spec := p.Spec
+	rows := slices.Collect(maps.Values(byID))
 	stamp := func(path string, row types.CredentialGrant) {
 		origin, ref := s.localGrantOrigin(ctx, owner, row.Spec)
 		if ref != nil {
@@ -224,9 +226,18 @@ func (s *Server) localProxyGrantOrigins(ctx context.Context, owner string, byID 
 		if !found || row.Spec.Kind != types.GrantAPIKey {
 			continue
 		}
-		if rule, e := injectionRuleFromScope(row.Spec.Scope); e == nil && reflect.DeepEqual(rule, in.Rule) {
-			stamp(placementCredentialIndex("ProxyConfig.Injection", i), row)
+		rule, e := injectionRuleFromScope(row.Spec.Scope)
+		if e != nil || !reflect.DeepEqual(rule, in.Rule) {
+			continue
 		}
+		// A runner_resident grant's fill is classified as the class it fills,
+		// whose policy and posture admit it (placement.RuleResidentViaOrg).
+		if class, fill := residentFillClass(spec, rows, row); fill {
+			p.Origins[placementCredentialIndex("ProxyConfig.Injection", i)] = placement.CredentialOrigin{
+				Class: placement.ClassOperator, Delivery: class, GrantKind: types.GrantAPIKey, Stored: true}
+			continue
+		}
+		stamp(placementCredentialIndex("ProxyConfig.Injection", i), row)
 	}
 	for host, pat := range spec.ProxyConfig.PATGrants {
 		row, found := byID[pat.GrantID]
@@ -344,6 +355,13 @@ func (s *Server) dispatchTrustRefusal(ctx context.Context, run types.AgentRun, p
 		return nil, err
 	}
 	owner := runIdentitySubject(ctx, run.CreatedBy)
+	// A runner_resident grant's via_org fill is judged as the grant it fills,
+	// which is in rows recorded runner_resident.
+	all := rows
+	rows = slices.DeleteFunc(slices.Clone(all), func(g types.CredentialGrant) bool {
+		_, fill := residentFillClass(p.Spec, all, g)
+		return fill
+	})
 	return grantModesRefusal(p, rows, func(g types.CredentialGrant) (string, bool) {
 		origin, ref := s.localGrantOrigin(ctx, owner, g.Spec)
 		return origin.Delivery, ref == nil

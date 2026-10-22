@@ -510,9 +510,9 @@ func TestWorker_SignedBodyCarriesNoSandboxText(t *testing.T) {
 		sql  string
 		args []any
 	}{
-		{`INSERT INTO governance_profiles (id, name, ceiling) VALUES ($1, 'payments', '{}')`, []any{profileID}},
+		{`INSERT INTO governance_units (id, name, ceiling) VALUES ($1, 'payments', '{}')`, []any{profileID}},
 		{`INSERT INTO people (principal, email, created_by) VALUES ('alice', 'alice@example.com', 'admin')`, nil},
-		{`UPDATE agent_runs SET governance_profile_id = $1 WHERE id = $2`, []any{profileID, runID}},
+		{`UPDATE agent_runs SET unit_id = $1 WHERE id = $2`, []any{profileID, runID}},
 	} {
 		if _, err := h.pool.Exec(context.Background(), q.sql, q.args...); err != nil {
 			t.Fatalf("%s: %v", q.sql, err)
@@ -550,7 +550,7 @@ func TestWorker_SignedBodyCarriesNoSandboxText(t *testing.T) {
 	if err := json.Unmarshal(gotBody, &p); err != nil || p["schema"] != "wardyn.approval.v1" || p["event"] != "raised" {
 		t.Fatalf("body = %s, err %v", gotBody, err)
 	}
-	profile, _ := p["profile"].(map[string]any)
+	profile, _ := p["unit"].(map[string]any)
 	requester, _ := p["requester"].(map[string]any)
 	if profile["id"] != profileID.String() || profile["name"] != "payments" || requester["principal"] != "alice" || requester["email"] != "alice@example.com" {
 		t.Fatalf("profile and requester were not joined in: %s", gotBody)

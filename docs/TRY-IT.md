@@ -225,7 +225,7 @@ subscription` is gone, `wardyn secret set` refuses the model-credential names, a
   - The model is a cross-region *inference-profile* id, or the profile's full ARN — `arn:aws:bedrock:<region>:<acct>:inference-profile/<id>` or `…:application-inference-profile/<id>` — not a bare model id.
   - A `bedrock_sso` run holds that person's short-lived role credentials in its own sandbox (see [`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md) §5.1a).
 
-## Level 2.5 — record a session, rerun it as a governed profile
+## Level 2.5 — record a session, rerun it as a governed unit
 
 - The primary way to onboard your own work: in a workspace, **record** a named interactive session (with model access), then rerun it governed —
   - the New Run dialog's Basics step offers the workspace's recorded sessions as **profiles**;

@@ -19,6 +19,7 @@ import { commitSize, mainDriveMiB, parseSize, setMainDrive, sizeField, type Size
 import type { RunIntent } from "../../draft/run-intent";
 import { useNewRunDispatch, useNewRunDraft } from "../../new-run-route";
 import type { MainDriveFacts, MainDriveView } from "./files-seams";
+import { keepDoor, KeepWorkFolder, type KeepDoor } from "./keep-work-folder";
 import { FilesGroup } from "./kind-visuals";
 import { sizeWords } from "./size-words";
 
@@ -51,8 +52,9 @@ export function lifecycleOf(intent: RunIntent, view: MainDriveView): Lifecycle {
   return { kind: "kept", grace: hoursText(keep.grace_sec), max: view.maxLifetimeSec ? hoursText(view.maxLifetimeSec) : undefined };
 }
 
-export const lifecycleText = (l: Lifecycle): string | undefined =>
-  l.kind === "deleted" ? NR_FILES.LIFE_DELETED
+/** `keepsWork`: the run keeps its work folder as a drive, so only the rest of the deleted main drive is deleted. */
+export const lifecycleText = (l: Lifecycle, keepsWork = false): string | undefined =>
+  l.kind === "deleted" ? (keepsWork ? NR_FILES.KEEP_LIFE : NR_FILES.LIFE_DELETED)
     : l.kind === "noEnd" ? NR_FILES.LIFE_NO_END
       : l.kind === "kept" ? (l.max ? NR_FILES.LIFE_KEPT(l.max, l.grace) : NR_FILES.LIFE_KEPT_UNLIMITED(l.grace))
         : undefined;
@@ -167,12 +169,12 @@ export function useMainDriveSize(view: MainDriveView) {
   };
 }
 
-export function MainDriveSection({ view, size }: { view: MainDriveView; size: ReturnType<typeof useMainDriveSize> }) {
+export function MainDriveSection({ view, size, keep = keepDoor(undefined, false) }: { view: MainDriveView; size: ReturnType<typeof useMainDriveSize>; keep?: KeepDoor }) {
   const draft = useNewRunDraft();
   const [touched, setTouched] = React.useState(false);
   const errorId = React.useId();
   const showError = size.missing && touched;
-  const life = lifecycleText(lifecycleOf(draft.intent, view));
+  const life = lifecycleText(lifecycleOf(draft.intent, view), draft.intent.keep_work_folder === true);
 
   return (
     <FilesGroup titleId="nr-main-title" title={NR_FILES.MAIN_TITLE} body={NR_FILES.MAIN_BODY} marker={NR_SHARED.REQUIRED}>
@@ -213,6 +215,7 @@ export function MainDriveSection({ view, size }: { view: MainDriveView; size: Re
             <strong className="text-sm leading-[1.45] font-semibold">{life}</strong>
           </div>
         )}
+        <KeepWorkFolder door={keep} />
       </div>
     </FilesGroup>
   );

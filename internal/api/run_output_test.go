@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -111,7 +112,7 @@ func TestRunOutput_OwnerReadsCompletedExecRunWithRecordingsOff(t *testing.T) {
 		t.Fatalf("owner: status %d, want 200", code)
 	}
 	want := runOutputResponse{Output: "go test ./...\nok  pkg 0.1s\n", Truncated: false, Complete: true, Source: "stdout"}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("owner: got %+v, want %+v", got, want)
 	}
 }

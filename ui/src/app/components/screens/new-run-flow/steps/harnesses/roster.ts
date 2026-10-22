@@ -15,11 +15,13 @@ export interface Roster {
   harnesses: SetupHarnessTool[];
   /** Each combination of two or more harnesses one image carries, as sorted ids. */
   sets: string[][];
+  /** WARDYN_MULTI_AGENT_TASKS: an Autonomous run may hold several agents. Absent is off. */
+  multiAgent?: boolean;
 }
 
 export async function loadRoster(): Promise<Roster> {
   const status = await setup.getSetupStatus();
-  return { harnesses: status.harnesses ?? [], sets: status.harness_sets ?? [] };
+  return { harnesses: status.harnesses ?? [], sets: status.harness_sets ?? [], multiAgent: status.features?.multi_agent_tasks === true };
 }
 
 export const harnessName = (roster: Roster, id: string): string => roster.harnesses.find((h) => h.id === id)?.display ?? id;
@@ -41,6 +43,16 @@ export function unavailableReason(row: SetupHarnessTool, chosen: readonly string
     return NR_HARNESSES.NO_COMBINATION(chosen.map((id) => harnessName(roster, id)).join(", "), row.display);
   }
   return undefined;
+}
+
+/**
+ * The refusal for the harnesses chosen together, or undefined when one declared image carries them all. It names
+ * this card's harness first, then the others, so each card says it in its own order.
+ */
+export function combinationReason(roster: Roster, ids: readonly string[], id: string): string | undefined {
+  const needs = ids.filter((h) => h !== "none");
+  if (needs.length < 2 || roster.sets.some((s) => carriesAll(s, needs))) return undefined;
+  return NR_HARNESSES.NO_COMBINATION(harnessName(roster, id), ids.filter((h) => h !== id).map((h) => harnessName(roster, h)).join(" and "));
 }
 
 /** The hint under a card's select: why the chosen harness cannot run, else whether it holds tools for approval, else that it is available. */

@@ -33,7 +33,7 @@ func (s *Server) refreshLocalDeploymentConfig(ctx context.Context, run types.Age
 	if !s.cfg.DisableGitPATBroker && slices.ContainsFunc(cfg.ResidentMints, func(m proxy.ResidentMint) bool { return m.Kind == types.GrantGitPAT }) {
 		return &placement.Refusal{Reason: placement.ReasonPlacementCredential, Field: "ProxyConfig.ResidentMints", Detail: residentPATBrokered}
 	}
-	profile, denied := s.ownerProfile(ctx, run)
+	profile, denied := s.ownerUnit(ctx, run)
 	if denied != nil {
 		return fmt.Errorf("owner profile does not admit local revive")
 	}
@@ -60,7 +60,7 @@ func localStoredSpec(c proxy.Config) runner.SandboxSpec {
 		RunToken: c.RunToken, ControlPlaneURL: c.ControlPlaneURL, ControlPlaneCAPEM: c.ControlPlaneCAPEM,
 		Policy: c.Policy, MITMCACertPEM: c.MITMCACertPEM, MITMCAKeyPEM: c.MITMCAKeyPEM,
 		MITMHosts: c.MITMHosts, MITMLLM: c.MITMLLM, GitGrants: c.GitGrants, PATGrants: c.PATGrants,
-		BrokeredPATGrantIDs: c.BrokeredPATGrantIDs, ResidentMints: c.ResidentMints, ADOGrant: c.ADOGrant, AzureGates: c.AzureGates, GitHubAPI: c.GitHubAPI, AzureARM: c.AzureARM, AWSSigV4: c.AWSSigV4,
+		BrokeredPATGrantIDs: c.BrokeredPATGrantIDs, ResidentMints: c.ResidentMints, ADOGrant: c.ADOGrant, AzureGates: c.AzureGates, GitHubAPI: c.GitHubAPI, AzureARM: c.AzureARM, AWSSigV4: c.AWSSigV4, KubeAPI: c.KubeAPI,
 		UpstreamProxyURL: c.UpstreamProxyURL, TrustedCAPEM: c.TrustedCAPEM, InternalHosts: c.InternalHosts,
 		UpstreamProxyNoProxy: c.UpstreamProxyNoProxy, LLMUpstreams: c.LLMUpstreams,
 		LLMChannelHosts: c.LLMChannelHosts, LLMUnavailableDetail: c.LLMUnavailableDetail, LocalModels: c.LocalModels,
@@ -144,7 +144,7 @@ type ownerCeiling struct {
 // A captured profile that no longer exists is refused: its walls cannot be
 // known.
 func (s *Server) reviveCeiling(ctx context.Context, run types.AgentRun) (ownerCeiling, *reviveError) {
-	p, ref := s.ownerProfile(ctx, run)
+	p, ref := s.ownerUnit(ctx, run)
 	switch {
 	case ref != nil:
 		return ownerCeiling{}, reviveRefused(ref.status, ref.reason, ref.msg)

@@ -10,10 +10,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Before you upgrade
 
+- New, off by default: `storage.user_drive.member_create.keep_main_drive` (#1991). Turned on, a run can keep its work
+  folder as its person's own drive; whatever an agent leaves there, a planted script or a harness project file included,
+  comes back in the next run that attaches it.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on
   `aws_sso_refused_tokens` (migration `0194_aws_sso_refused_tokens`). Without it an AWS SSO session whose renewal
-  AWS refused cannot be marked, read or cleared, so replicas do not share that mark.
+  AWS refused cannot be marked, read or cleared, so replicas do not share that mark. Grant it `SELECT, INSERT, UPDATE`
+  on `runner_health` (migration `0206_runner_health`). Without `INSERT` or `UPDATE` a runner's offline summary and
+  relay status are not kept; without `SELECT` every one-runner read (`GET /api/v1/runners/{id}`,
+  `GET /api/v1/me/runners/{id}`) answers 500.
 - **`wardyn run attach` is now `wardyn attach`.** The old spelling is an unknown command, with no alias. A script
   that calls `wardyn run attach <run-id>` changes to `wardyn attach <run-id>`. `wardyn run ssh` is unchanged.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
@@ -21,10 +27,35 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `SELECT, INSERT, UPDATE, DELETE` on `cli_sign_ins` (migration `0199_cli_sign_in`, which also adds `kind` and
   `cli_session_id` to `api_tokens`). Without it every API token read fails, because a token's liveness now reads
   `cli_sessions`.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) that turn on `WARDYN_MULTI_AGENT_TASKS`: grant the app role
+  `SELECT, INSERT, UPDATE` on `run_harnesses` (it holds the first two since `0164_run_harnesses`; migration
+  `0203_run_harness_task` adds `task`, which person erasure blanks, so it needs `UPDATE`). With the switch off,
+  nothing needs the new verb.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE` on
   `governance_boundary` (migration `0200_governance_boundary`). Without it the Wardyn boundary cannot be read or
   written. The same migration's `agent_runs.break_glass` column needs no grant.
+- **Governance profiles are now units, and assignments are now memberships.** The routes are
+  `/governance/units`, `/governance/memberships` and `/governance/check` (was `/governance/preview`), and the keys
+  are `units`, `memberships`, `unit_id` and `parent_id`. The old routes answer 404 or 405 and are not aliased; a
+  script or a `wardyn governance` document that names the old routes or keys changes to the new ones. A 0.9
+  governance document is refused, and the error names the new key. The audit actions are `governance.unit.*` and
+  `governance.membership.*`; rows written before the upgrade keep the old names, so a query over a span that
+  crosses the upgrade matches both.
+- The same rename reaches what a client reads outside the governance body. Reason codes become
+  `governance_unit_*`, `governance_membership_*`, `user_drive_denied_by_unit`, `member_drives_denied_by_unit`,
+  `unit_unreadable`, `unit_gone`, `governance_unit_not_found` and `governance_membership_not_found`. The enum value
+  `profile` becomes `unit` in a policy's `source`, `cause` and `layer`, in managed-settings `locked_by` and in a
+  change's `target_kind`. The fields are `unit_name` and `unit` in the policy envelope, `user_drive_denied_by_unit`
+  in `GET /me`, `denied_by_unit` in the drives catalogue, `unit_id` on a run, and `unit_name` in
+  `GET /policies/default`. The approval-webhook payload carries `unit {id, name}`. The wardynd flag is
+  `-governance-unit-put-existing-only`, and the task is `governance.units.walk`.
+- `WARDYN_GOVERNANCE_PROFILE_PUT_EXISTING_ONLY` is now `WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY`. wardynd refuses
+  to start while the old name is set, and names the new one. A notify route keyed `profiles` is now `units`; the
+  old key is refused when the config is read.
+- Migration `0207_governance_units` renames the governance tables and their columns, keeping every row, grant and
+  foreign key, so a split-role install needs no grant change. A governance change proposed before the upgrade reads
+  as stale once and is proposed again.
 - **`WARDYN_MCP_LOCAL_SERVERS` is off by default.** Turning it on lets an organisation or a person define an MCP
   server that runs inside the run's sandbox. That server runs with the agent's access, and the harness, not
   Wardyn's proxy, applies the run's rules to its tools.
@@ -57,9 +88,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   - Audit actions `cli.sign_in.request`, `cli.sign_in.approve`, `cli.sign_in.deny`, `cli.session.create`,
     `cli.session.revoke`, `cli.session.refresh_refused` and `cli.session.reuse_detected`. `token.create` rows carry
     `kind`; `session.revoke` rows carry `cli_sessions_ended`.
+- The runner's managed-settings lock. A macOS managed profile that sets `lock_security_settings` now outranks a flag for `OrgURL`, `ProxyImage`, `TrustedCAFile`, `OrgCAFile` and `RecordingStore`, and `wardyn-runnerd serve` refuses to start on a flag or environment variable that disagrees, naming the setting. It is off by default, so nothing changes until an administrator sets it.
 - Recording is a level: a policy's `recording` is `off`, `terminal` or `screen_actions`, and
   `site_config.recording` sets the organisation's level and can lock it as a minimum. Nothing set records terminal
   sessions, as before. `WARDYN_RECORDING_STORE=off` still records nothing, and keystrokes are never recorded.
+
+- A runner that could not connect, or could not start, reports why when it next connects: the first and last failure,
+  the stage and a redacted reason. The runner's read shows it as `offline_summary`, and each report writes a
+  `runner.offline_summary.record` audit row. A refusal at start is shown only once a later start connects.
+- A Docker runner checks its relay on every reconnect and every 5 minutes, logs `run relay unreachable` when the relay
+  stops answering, and reports it as `relay_status` on the runner's read.
 
 ### Changed
 

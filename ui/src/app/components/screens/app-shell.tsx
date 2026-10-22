@@ -548,7 +548,7 @@ export function AppShell({
       authGeneration={meta.authGeneration}
       memberLocalDirRoot={meta.memberLocalDirRoot}
       userDrive={meta.userDrive}
-      userDriveDeniedByProfile={meta.userDriveDeniedByProfile}
+      userDriveDeniedByUnit={meta.userDriveDeniedByUnit}
       userDriveUnavailable={meta.userDriveUnavailable}
       userType={meta.userType}
       confinementPosture={confinementPosture}

@@ -53,6 +53,7 @@ export function BlockerList({
                 ) : (
                   <span>{b.text}</span>
                 )}
+                {b.hint && <p className="text-xs text-muted-foreground">{b.hint}</p>}
               </li>
             ))}
           </ul>

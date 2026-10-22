@@ -156,6 +156,10 @@ type Config struct {
 	// AWSSigV4 is the run's AWS SigV4 re-signing grant (aws_sigv4.go, WARDYN_AWS_SIGV4_AT_PROXY).
 	// Nil == off. Omitempty for the reason AzureGates is.
 	AWSSigV4 *AWSSigV4Config `json:"aws_sigv4,omitempty"`
+	// KubeAPI is the run's kubectl grant, which drives the door on its row's
+	// API server (kube_api_door.go). Nil == off. Omitempty for the reason
+	// AzureGates is.
+	KubeAPI *KubeAPIGrant `json:"kube_api,omitempty"`
 	// MITMLLM reports whether TLS-MITM of the BUILT-IN LLM hosts (Anthropic/OpenAI)
 	// is actually intended for this run — i.e. subscription credential injection OR
 	// intercept_tls content inspection. Dispatch also mints the per-run CA for
@@ -661,6 +665,9 @@ func (c *Config) validateTerminatedGates() error {
 		return err
 	}
 	if err := c.validateAWSSigV4(); err != nil {
+		return err
+	}
+	if err := c.validateKubeAPI(); err != nil {
 		return err
 	}
 	return c.validateAzureGates()

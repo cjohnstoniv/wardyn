@@ -32,7 +32,7 @@ import { BoundaryScreen } from "./boundary-screen";
 const noLimits = { mode: "no_limits", spec: {}, limits: {}, etag: '"b1"' };
 // A boundary already in hard_limits (set through the store): the only way the editor is reachable while gated.
 const hardLimits = { mode: "hard_limits", spec: {}, limits: {}, etag: '"b1"' };
-const emptyReport: BoundaryReport = { deployment: [], profiles: [], stored_policies: [], assignments: [] };
+const emptyReport: BoundaryReport = { deployment: [], units: [], stored_policies: [], memberships: [] };
 const GATED = "hard_limits cannot be set yet: the Wardyn boundary does not bound every brokered credential path a run is given, so it stays in no_limits until it does";
 
 function renderScreen(securityOperator = true) {
@@ -119,7 +119,7 @@ describe("BoundaryScreen", () => {
     getMock.mockResolvedValue(hardLimits);
     dryRunMock.mockResolvedValue({
       ...emptyReport,
-      profiles: [{ id: "p1", name: "Platform team", changes: [{ knob: "denied_domains", before: null, after: ["paste.example.org"] }] }],
+      units: [{ id: "p1", name: "Platform team", changes: [{ knob: "denied_domains", before: null, after: ["paste.example.org"] }] }],
     });
     const user = userEvent.setup();
     renderScreen();
@@ -147,7 +147,7 @@ describe("BoundaryScreen", () => {
     const report = await screen.findByTestId("boundary-dry-run");
     await user.click(within(report).getByRole("button", { name: BOUNDARY_DRY_RUN.BACK }));
     await draftHosts("paste.example.org\nother.example.org");
-    late.resolve({ ...emptyReport, profiles: [{ id: "p1", name: "Platform team", changes: [] }] });
+    late.resolve({ ...emptyReport, units: [{ id: "p1", name: "Platform team", changes: [] }] });
     await late.promise;
     await new Promise((r) => setTimeout(r, 0));
     expect(screen.queryByTestId("boundary-dry-run")).toBeNull();
@@ -159,10 +159,10 @@ describe("BoundaryScreen", () => {
     const c = [{ knob: "limits.default_end_sec", before: 3600, after: 1800 }];
     dryRunMock.mockResolvedValue({
       ...emptyReport,
-      profiles: [{ id: "p1", name: "Platform team", changes: c }],
-      assignments: [
-        { id: "a1", subject_type: "user", subject: "jonas@example.org", profile_id: "p1", profile_name: "Platform team", changes: c },
-        { id: "a2", subject_type: "group", subject: "platform-leads", profile_id: "p1", profile_name: "Platform team", changes: c },
+      units: [{ id: "p1", name: "Platform team", changes: c }],
+      memberships: [
+        { id: "a1", subject_type: "user", subject: "jonas@example.org", unit_id: "p1", unit_name: "Platform team", changes: c },
+        { id: "a2", subject_type: "group", subject: "platform-leads", unit_id: "p1", unit_name: "Platform team", changes: c },
       ],
     });
     const user = userEvent.setup();

@@ -63,7 +63,7 @@ func TestRunPolicyProvenanceNamesTheLeafThatNarrowed(t *testing.T) {
 	base, leaf := disclosureGraph()
 	leaf.Contact = &policyref.Contact{Owner: "Team owners", RequestURL: "https://team.example/ask"}
 	cs := assignedStore(&leaf)
-	cs.govGraph = []types.GovernanceProfile{base, leaf}
+	cs.govGraph = []types.GovernanceUnit{base, leaf}
 	srv, st := pvFixture(t, cs)
 	st.profiles = cs.govGraph
 	const owner = "sub-walled"
@@ -73,7 +73,7 @@ func TestRunPolicyProvenanceNamesTheLeafThatNarrowed(t *testing.T) {
 		`"allowed_domains":["api.anthropic.com","off-wall.example"],"min_confinement_class":"CC3","first_use_approval":"always_deny"}}`)
 
 	// The golden wire records.
-	const leafRec = `{"layer":"profile","name":"team","contact":{"owner":"Team owners","request_url":"https://team.example/ask"}}`
+	const leafRec = `{"layer":"unit","name":"team","contact":{"owner":"Team owners","request_url":"https://team.example/ask"}}`
 	const memberRec = `{"layer":"member"}`
 	if got := provenanceJSON(t, raw, "allowed_domains"); got != leafRec {
 		t.Errorf("allowed_domains = %s, want %s", got, leafRec)
@@ -97,7 +97,7 @@ func TestRunPolicyProvenanceNamesTheLeafThatNarrowed(t *testing.T) {
 	if err := json.Unmarshal([]byte(resolve), &datum); err != nil {
 		t.Fatal(err)
 	}
-	if want := (policyref.Provenance{Layer: "profile", Name: "team"}); datum.Provenance["allowed_domains"] != want {
+	if want := (policyref.Provenance{Layer: "unit", Name: "team"}); datum.Provenance["allowed_domains"] != want {
 		t.Errorf("run.policy.resolve allowed_domains = %+v, want %+v", datum.Provenance["allowed_domains"], want)
 	}
 	for _, secret := range []string{"Team owners", "team.example", `"contact"`} {
@@ -159,7 +159,7 @@ func TestRunPolicyProvenanceSplitsAnOverlay(t *testing.T) {
 	srv, st := pvFixture(t, cs)
 	_, _, raw := provenanceRun(t, srv, st, pvReader{govSession(t, "sub-walled", []string{"eng"}, false)},
 		`{"agent":"claude-code","task":"t","policy_overlay":{"denied_domains":["corp.internal","extra.example"],"min_confinement_class":"CC1"}}`)
-	const profileRec, memberRec = `{"layer":"profile","name":"team"}`, `{"layer":"member"}`
+	const profileRec, memberRec = `{"layer":"unit","name":"team"}`, `{"layer":"member"}`
 	for knob, want := range map[string]string{
 		"denied_domains":        memberRec,  // the overlay's, kept: the ceiling's deny was already in it
 		"min_confinement_class": profileRec, // the overlay's CC1, raised back to the profile's CC2

@@ -220,6 +220,10 @@ type toolCallScope struct {
 	Tool string `json:"tool"`
 	Cmd  string `json:"cmd"`
 	Env  string `json:"env,omitempty"`
+	// Harness is the agent that asked, named by its toolgate credential (harnessOf),
+	// never by the body: set only on a run whose agents each hold one (several agents
+	// in one background run), so the approver is told which agent it is deciding for.
+	Harness string `json:"harness,omitempty"`
 }
 
 // handleBrokerCreateApproval forwards POST /wardyn/v1/approvals to the
@@ -257,9 +261,10 @@ func (p *Proxy) handleBrokerCreateApproval(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	scope := toolCallScope{
-		Tool: clampToolField(body.Payload.Tool, maxToolName),
-		Cmd:  clampToolField(body.Payload.Cmd, maxToolCmd),
-		Env:  envNames(body.Payload.Env),
+		Tool:    clampToolField(body.Payload.Tool, maxToolName),
+		Cmd:     clampToolField(body.Payload.Cmd, maxToolCmd),
+		Env:     envNames(body.Payload.Env),
+		Harness: p.harnessOf(r),
 	}
 	// Neither tool nor command asks a human to decide about nothing.
 	if scope.Tool == "" && scope.Cmd == "" {

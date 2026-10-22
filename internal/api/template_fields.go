@@ -202,6 +202,12 @@ var templateRequestRules = []TemplateFieldRule{
 		"A folder on one person's computer is named at each launch; a template cannot know where it is."),
 	excludedField("max_wait_sec", templateExcludeLaunch,
 		"How long a run may wait for a slot in a full pool is chosen at each launch; the default wait suits a template's runs."),
+	excludedField("start_at", templateExcludeLaunch,
+		"When a run starts is chosen at each launch; a template's runs start when they are launched."),
+	excludedField("start_time_zone", templateExcludeLaunch,
+		"The time zone only means something beside a start time."),
+	excludedField("keep_work_folder", templateExcludeLaunch,
+		"Keeping the work folder makes a drive for the person launching, so it is chosen at each launch."),
 	carriedField("no_end", partRunner, templateOmitBaseline, templateEmptySame,
 		"The run takes the default end when the template is used. Asking for no end is checked again at launch against the pool, the deployment and the person's own limits, and is never a permission."),
 	// The run-mode carriers (run_mode.go): what a person is starting. A new client
@@ -289,7 +295,9 @@ var templateNestedCarried = map[string]string{
 	"CLIAWS":              "start_url sso_region account_id role_name region",
 	"CLIAzure":            "subscriptions access",
 	"CLIGitHub":           "capabilities",
-	"ComponentCLI":        "kind azure aws github",
+	"CLIKubectl":          "server ca_pem service_account namespaces access",
+	"CLIServiceAccount":   "namespace name",
+	"ComponentCLI":        "kind azure aws github kubectl",
 	"ComponentDefinition": "description hosts secrets config cli mcp",
 	"ComponentDelivery":   "mode host header format plain_http var file",
 	"ComponentMCP":        "url transport launch",
@@ -324,6 +332,8 @@ var templateNestedCarried = map[string]string{
 }
 
 var templateNestedExcluded = map[string]TemplateFieldRule{
+	"IncludedTool.task": excludedField("task", templateExcludeLaunch,
+		"An agent's own task in a background run with several agents, given at each launch; templates do not keep it."),
 	"GrantSpec.owner_only_refs": excludedField("owner_only_refs", templateExcludeOrigin,
 		"Wardyn sets it at each launch; a template marks the grant owner_only."),
 	"LLMInspectionSpec.workspace_secret_values": excludedField("workspace_secret_values", templateExcludeSecret,

@@ -14,7 +14,7 @@ import (
 // TestDriveGrantGroupSubjectSharesTheSnapshotRule pins the third boundary.
 //
 // group_subject_boundary_test.go pins the rule across the two 0.7 capability
-// tables (validateCapabilityGrant, validateGovernanceAssignment). The drive
+// tables (validateCapabilityGrant, validateGovernanceMembership). The drive
 // allocation is the THIRD table written against a `group` subject and it was
 // still on the old, looser rule — types.ValidateUserDriveGrant's plain
 // strings.ToLower — because internal/types must not import internal/auth/oidc,

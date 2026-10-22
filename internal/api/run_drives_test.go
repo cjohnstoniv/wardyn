@@ -345,7 +345,7 @@ func TestMeDrivesCatalogue(t *testing.T) {
 func TestMeDrivesCatalogue_DoorAndStale(t *testing.T) {
 	ds := newDriveSet()
 	srv, st := multiDriveServer(ds.personal, ds.share)
-	st.profile = &types.GovernanceProfile{Name: "contractors", Limits: types.GovernanceLimits{DenyUserDrive: true}}
+	st.profile = &types.GovernanceUnit{Name: "contractors", Limits: types.GovernanceLimits{DenyUserDrive: true}}
 	get := func(ctx context.Context) client.MeDriveCatalogue {
 		w := httptest.NewRecorder()
 		srv.handleListMeDrives(w, httptest.NewRequest(http.MethodGet, "/api/v1/me/drives", nil).WithContext(ctx))
@@ -355,7 +355,7 @@ func TestMeDrivesCatalogue_DoorAndStale(t *testing.T) {
 		}
 		return out
 	}
-	if got := get(driveMemberCtx(nil, false)); got.DeniedByProfile != "contractors" || len(got.Drives) != 0 {
+	if got := get(driveMemberCtx(nil, false)); got.DeniedByUnit != "contractors" || len(got.Drives) != 0 {
 		t.Errorf("denied = %+v", got)
 	}
 	st.profile = nil
@@ -400,7 +400,7 @@ func TestDriveCreateAudit(t *testing.T) {
 	ds := newDriveSet()
 	data := map[string]any{}
 	stampDriveAudit(data, []runDrive{{resolved: types.ResolvedDrive{Drive: ds.share.Drive, ObjectName: "/srv/share/bob", Writable: true},
-		target: runner.SharedRoot + "/shared-docs", id: ds.share.Drive.ID.String()}})
+		target: runner.SharedRoot + "/shared-docs", id: ds.share.Drive.ID.String()}}, false, uuid.Nil)
 	got := string(mustJSON(data))
 	if strings.Contains(got, "/srv/share") {
 		t.Errorf("run.create drives = %s leaks the host path", got)
@@ -412,9 +412,15 @@ func TestDriveCreateAudit(t *testing.T) {
 	}
 	for _, drives := range [][]runDrive{nil, {{target: runner.DriveTarget, legacy: true}}} {
 		data := map[string]any{}
-		if stampDriveAudit(data, drives); len(data) != 0 {
+		if stampDriveAudit(data, drives, false, uuid.Nil); len(data) != 0 {
 			t.Errorf("drives %+v recorded %v", drives, data)
 		}
+	}
+	runID := uuid.New()
+	data = map[string]any{}
+	stampDriveAudit(data, nil, true, runID)
+	if data["keep_work_folder"] != true || data["kept_drive_id"] != keptWorkFolderDriveID(runID) {
+		t.Errorf("a keep run's run.create = %v, want keep_work_folder true and kept_drive_id %s", data, keptWorkFolderDriveID(runID))
 	}
 }
 

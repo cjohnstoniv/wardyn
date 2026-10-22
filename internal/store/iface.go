@@ -247,30 +247,30 @@ type Store interface {
 	// SECURITY: on the run-creation request path; the fail mode is falling
 	// back to the deployment-wide ceiling, past the floor an admin set.
 	//
-	// UpsertGovernanceProfile keys on the PRIMARY KEY (a fresh id inserts, an existing one updates
+	// UpsertGovernanceUnit keys on the PRIMARY KEY (a fresh id inserts, an existing one updates
 	// in place, rename included) and returns ErrConflict when UNIQUE(name) rejects the write.
-	// DeleteGovernanceProfile returns ErrConflict when the profile is still ASSIGNED — the ON DELETE
+	// DeleteGovernanceUnit returns ErrConflict when the profile is still ASSIGNED — the ON DELETE
 	// RESTRICT, so deleting a profile can never silently widen its members.
-	UpsertGovernanceProfile(ctx context.Context, p types.GovernanceProfile) (types.GovernanceProfile, error)
-	// WriteGovernanceProfile is the graph-aware write: one transaction under the profile-graph
+	UpsertGovernanceUnit(ctx context.Context, p types.GovernanceUnit) (types.GovernanceUnit, error)
+	// WriteGovernanceUnit is the graph-aware write: one transaction under the profile-graph
 	// lock, where build decides the stored row from every profile as that transaction reads them
-	// (migration 0125: a profile may be composed on another). DeleteGovernanceProfile also
+	// (migration 0125: a profile may be composed on another). DeleteGovernanceUnit also
 	// returns *ErrProfileHasChildren when another profile composes on the row.
-	WriteGovernanceProfile(ctx context.Context, id uuid.UUID, build GovernanceProfileBuild) (types.GovernanceProfile, error)
-	DeleteGovernanceProfile(ctx context.Context, id uuid.UUID) error
-	// ListGovernanceProfiles and GetGovernanceProfileChain return RAW rows: a composed row
+	WriteGovernanceUnit(ctx context.Context, id uuid.UUID, build GovernanceUnitBuild) (types.GovernanceUnit, error)
+	DeleteGovernanceUnit(ctx context.Context, id uuid.UUID) error
+	// ListGovernanceUnits and GetGovernanceUnitChain return RAW rows: a composed row
 	// carries no authority of its own. Only internal/api/governance_compose.go calls them for
-	// authority (a source guard fails any other caller); GetGovernanceProfileChain is one
+	// authority (a source guard fails any other caller); GetGovernanceUnitChain is one
 	// statement, leaf first, bounded at depth 3, and ErrNotFound when the leaf is gone.
-	ListGovernanceProfiles(ctx context.Context) ([]types.GovernanceProfile, error)
-	GetGovernanceProfileChain(ctx context.Context, id uuid.UUID) ([]types.GovernanceProfile, error)
-	// UpsertGovernanceAssignment keys on the natural UNIQUE (subject_type,
+	ListGovernanceUnits(ctx context.Context) ([]types.GovernanceUnit, error)
+	GetGovernanceUnitChain(ctx context.Context, id uuid.UUID) ([]types.GovernanceUnit, error)
+	// UpsertGovernanceMembership keys on the natural UNIQUE (subject_type,
 	// subject): re-assigning a subject REPOINTS its one row, returning the
-	// EXISTING row's id on a conflict. ErrNotFound when profile_id names no
+	// EXISTING row's id on a conflict. ErrNotFound when unit_id names no
 	// profile (the FK rejects it).
-	UpsertGovernanceAssignment(ctx context.Context, a types.GovernanceAssignment) (types.GovernanceAssignment, error)
-	DeleteGovernanceAssignment(ctx context.Context, id uuid.UUID) (types.GovernanceAssignment, error)
-	ListGovernanceAssignments(ctx context.Context) ([]types.GovernanceAssignment, error)
+	UpsertGovernanceMembership(ctx context.Context, a types.GovernanceMembership) (types.GovernanceMembership, error)
+	DeleteGovernanceMembership(ctx context.Context, id uuid.UUID) (types.GovernanceMembership, error)
+	ListGovernanceMemberships(ctx context.Context) ([]types.GovernanceMembership, error)
 	// Governance changes (migration 0126): a governance write held for a second human. Part of
 	// this interface, not an optional seam, because a store without them would let a covered write
 	// through unreviewed. See governance_changes.go for each one's contract.
@@ -280,7 +280,7 @@ type Store interface {
 	DecideGovernanceChange(ctx context.Context, id uuid.UUID, d GovernanceDecision, fn GovernanceDecideFunc) (types.GovernanceChange, error)
 	// DryRunGovernance runs fn on a transaction that is always rolled back.
 	DryRunGovernance(ctx context.Context, fn func(q Querier) error) error
-	// ResolveGovernanceProfile returns THE ONE profile that applies to a caller — user > group >
+	// ResolveGovernanceUnit returns THE ONE profile that applies to a caller — user > group >
 	// user_type > all, sub over email within the user tier, then priority DESC and name ASC — as a
 	// single indexed read whose ORDER BY is the whole precedence rule. ErrNotFound means "no
 	// assignment matched", read as the deployment ceiling. userSubjects must arrive in the caller's
@@ -289,13 +289,13 @@ type Store interface {
 	// Also returns WHICH TIER matched, load-bearing not informational: on a
 	// stale/truncated group snapshot the caller must tell a user-tier winner
 	// (serve it) from an all-tier one (refuse), indistinguishable from the
-	// profile alone. HasGroupTierAssignments below is that separate read.
-	ResolveGovernanceProfile(ctx context.Context, userSubjects, groups []string, userType string) (*types.GovernanceProfile, types.CapabilitySubjectType, error)
-	// HasGroupTierAssignments gates the stale/truncated group-snapshot refusal:
+	// profile alone. HasGroupTierMemberships below is that separate read.
+	ResolveGovernanceUnit(ctx context.Context, userSubjects, groups []string, userType string) (*types.GovernanceUnit, types.CapabilitySubjectType, error)
+	// HasGroupTierMemberships gates the stale/truncated group-snapshot refusal:
 	// with no group-tier row there is nothing an unknown group could have
 	// matched, so a nil or truncated snapshot must fall through rather than
 	// refuse (see the implementation).
-	HasGroupTierAssignments(ctx context.Context) (bool, error)
+	HasGroupTierMemberships(ctx context.Context) (bool, error)
 
 	// User drives and their subject grants (migration 0054): admin-registered per-user storage a
 	// member may mount into a run, and the rows allocating one to a user, group, or everyone.
@@ -332,7 +332,7 @@ type Store interface {
 	// de-allocated, and by then it is gone.
 	DeleteUserDriveGrant(ctx context.Context, id uuid.UUID) (types.UserDriveGrant, error)
 	ListUserDriveGrants(ctx context.Context) ([]types.UserDriveGrant, error)
-	// ResolveUserDrive mirrors ResolveGovernanceProfile's precedence and
+	// ResolveUserDrive mirrors ResolveGovernanceUnit's precedence and
 	// stale-snapshot reasoning. DISABLED grants stay IN the query: one that
 	// wins its tier comes back Enabled false, rendered PAUSED rather than
 	// falling through (a pause must never widen a member onto an unchosen

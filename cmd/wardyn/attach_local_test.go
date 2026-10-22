@@ -484,7 +484,7 @@ var parityRows = []struct {
 	{403, "attach_ticket_not_your_run", "this session is no longer authorized"},
 	{403, "ui_gateway_ticket_invalid", "ticket invalid"},
 	{503, "ui_gateway_ticket_invalid", "ticket could not be verified"},
-	{403, "governance_profile", "the governance profile denies interactive sessions"},
+	{403, "governance_unit", "the governance profile denies interactive sessions"},
 	{503, "mask_state_unavailable", "the masking state could not be proved"},
 	{502, "attach_resume_failed", "run is paused and could not be resumed; try again"},
 	{503, "attach_no_runner", "no runner configured"},

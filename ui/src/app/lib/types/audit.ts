@@ -33,6 +33,17 @@ export interface AuditEvent {
   device_id?: string;
 }
 
+// Whose refusal an `egress.deny` audit row records (pkg/client.EgressRefusal), read
+// off the row's `data`. Absent keys mean the row is not classified, which is not
+// the same as by = "unknown". `layer`/`layer_name` ride by = "wardyn" only.
+export type EgressRefusedBy = "wardyn" | "outside" | "unknown";
+export interface EgressRefusal {
+  by: EgressRefusedBy;
+  refusal_reason: string;
+  layer?: string;
+  layer_name?: string;
+}
+
 // A sealed audit field whose person was erased reads this string on the wire
 // (internal/audit/seal.go's ErasedValue), in the feed and in every export.
 export const ERASED_VALUE = "[erased]";

@@ -162,13 +162,13 @@ func TestValidatePolicySpec_ADOCapabilities(t *testing.T) {
 // never reads a narrowed-to-nothing choice as "use the default".
 func TestResolveRunPolicy_MemberADOCapabilitiesReachDispatchAsChosen(t *testing.T) {
 	r, pr, pa := adoscope.CapCodeRead, adoscope.CapPR, adoscope.CapPolicyAdmin
-	profile := func(caps ...adoscope.Capability) *types.GovernanceProfile {
-		return &types.GovernanceProfile{ID: uuid.New(), Name: "ado",
+	profile := func(caps ...adoscope.Capability) *types.GovernanceUnit {
+		return &types.GovernanceUnit{ID: uuid.New(), Name: "ado",
 			Ceiling: types.RunPolicySpec{MinConfinementClass: types.CC2, AzureDevOpsCapabilities: caps}}
 	}
 	for _, tc := range []struct {
 		name     string
-		profile  *types.GovernanceProfile
+		profile  *types.GovernanceUnit
 		operator bool
 		inline   []adoscope.Capability
 	}{
@@ -208,7 +208,7 @@ func TestResolveRunPolicy_MemberADOCapabilitiesReachDispatchAsChosen(t *testing.
 // unasked. Naming only what neither the default nor the list permits refuses
 // the launch instead of falling back to the default.
 func TestMemberADOCapabilities_CeilingListIsNeverInherited(t *testing.T) {
-	prof := &types.GovernanceProfile{ID: uuid.New(), Name: "ado", Ceiling: types.RunPolicySpec{
+	prof := &types.GovernanceUnit{ID: uuid.New(), Name: "ado", Ceiling: types.RunPolicySpec{
 		MinConfinementClass: types.CC2, AzureDevOpsCapabilities: []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapPR}}}
 	inline := func(caps ...adoscope.Capability) *types.RunPolicySpec {
 		return &types.RunPolicySpec{MinConfinementClass: types.CC2, AzureDevOpsCapabilities: caps}
@@ -294,8 +294,8 @@ func TestADOPolicyPastCeiling_NamesEachCapability(t *testing.T) {
 // file, which refuses to boot the daemon rather than load an alias.
 func TestPreSplitReadIsRefusedAtGovernanceAndBoot(t *testing.T) {
 	body := `{"name":"p","ceiling":{"min_confinement_class":"CC2","azure_devops_capabilities":["read"]}}`
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/governance/profiles", strings.NewReader(body))
-	if _, msg := decodeGovernanceProfileRequest(httptest.NewRecorder(), r); !strings.Contains(msg, `"read" is not a grantable Azure DevOps capability`) {
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/governance/units", strings.NewReader(body))
+	if _, msg := decodeGovernanceUnitRequest(httptest.NewRecorder(), r); !strings.Contains(msg, `"read" is not a grantable Azure DevOps capability`) {
 		t.Errorf("governance ceiling naming read: msg = %q, want the unknown-capability refusal", msg)
 	}
 

@@ -212,6 +212,11 @@ func classifyCredential(entries entrySource, path string, origin CredentialOrigi
 				return residentValueRefusal(path, row.Delivery, st == StructGrantKind, leaf)
 			}
 			return refuse(ReasonPlacementCredential, path, notDeliveredDetail(row.Delivery, p.Trust, mode))
+		case RuleResidentViaOrg:
+			if mode := p.Delivery.ForTrust(row.Delivery, p.Trust).Mode; mode != ModeRunnerResident {
+				return refuse(ReasonPlacementCredential, path, notDeliveredDetail(row.Delivery, p.Trust, mode))
+			}
+			return ResidentAdmits(origin, p, path)
 		default:
 			return refuse(ReasonPlacementCredential, path, "credential row has a rule this server does not implement")
 		}
@@ -288,7 +293,7 @@ func residentValueRefusal(path, class string, record bool, leaf reflect.Value) *
 		return nil
 	case !leaf.IsValid():
 		return refuse(ReasonPlacementCredential, path, "runner_resident delivery of this credential is not built yet")
-	case !residentPlaceholderLeaf(leaf):
+	case !residentPlaceholderLeaf(leaf) && !fillPlaceholderLeaf(leaf):
 		return refuse(ReasonPlacementCredential, path, "a runner_resident value is dispatched only as its placeholder, never inline")
 	}
 	return nil
@@ -313,6 +318,22 @@ func residentPlaceholderLeaf(v reflect.Value) bool {
 	case v.Kind() == reflect.Struct && v.Type() == reflect.TypeFor[proxy.ResidentMint]():
 		// A mint the runner answers carries the cap it is refused at.
 		return !v.FieldByName("ExpiresAt").Interface().(time.Time).IsZero() && residentPlaceholderLeaf(v.FieldByName("Token"))
+	}
+	return false
+}
+
+// fillPlaceholderLeaf reports whether v is a fill placeholder
+// (FillPlaceholderPrefix): a string, or a managed file whose Content is one.
+// The value it stands for stays at the organisation, which fills it via_org
+// (RuleResidentViaOrg).
+func fillPlaceholderLeaf(v reflect.Value) bool {
+	switch {
+	case v.Kind() == reflect.String:
+		_, ok := FillGrantID(v.String())
+		return ok
+	case v.Kind() == reflect.Struct && v.Type() == reflect.TypeFor[runner.ManagedFile]():
+		_, ok := FillGrantID(string(v.FieldByName("Content").Bytes()))
+		return ok
 	}
 	return false
 }

@@ -101,7 +101,7 @@ func (s *Server) holdLaneHarnessCredentials(ctx context.Context, run types.Agent
 	if !p.holdLane() {
 		return nil, nil, nil
 	}
-	return s.stampHarnessCredential(ctx, run, p.HarnessToolRules, p.Drives)
+	return s.stampHarnessCredential(ctx, run, p.HarnessToolRules, p.Drives, startedAgents(run, p.Harnesses))
 }
 
 // holdLane is holdLane for this dispatch.

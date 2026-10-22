@@ -75,7 +75,7 @@ func SetAsidePrevious(ctx context.Context, stateDir string, runnerID uuid.UUID, 
 		if err == nil {
 			err = stopper.StopProxy(call, r.Ref)
 		}
-		timedOut := call.Err() != nil && ctx.Err() == nil
+		timedOut := err != nil && call.Err() != nil && ctx.Err() == nil
 		cancel()
 		if timedOut {
 			// The engine did not answer for this container; the rest would wait the same way.

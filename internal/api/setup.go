@@ -40,11 +40,6 @@ const setupRecheckParam = "recheck"
 
 // SetupStatus is the aggregate readiness snapshot for GET /api/v1/setup/status.
 type SetupStatus struct {
-	// Features is which switch-gated features this deployment has on, for every
-	// signed-in caller: the console shows a gated surface only where the API
-	// takes it. Here, not on the anonymous /healthz, since it says which
-	// credential paths are on.
-	Features SetupFeatures `json:"features"`
 	// Ready is server-computed and CONSERVATIVE (false when the runner is nil),
 	// so the wizard opens rather than hiding a half-configured bootstrap.
 	Ready bool `json:"ready"`
@@ -151,6 +146,33 @@ type SetupStatus struct {
 	// pinned account and role appear (SetupProviderAccess's doc). Absent with
 	// no provider block.
 	ProviderAccess []SetupProviderAccess `json:"provider_access,omitempty"`
+	// Features are the switches the console reads to offer what they turn on, for every signed-in caller
+	// (here, not on the anonymous /healthz, since they say which credential paths are on). Kept for members:
+	// redactSetupStatusForUser leaves them alone, so a member's console never reads a switch as off.
+	Features SetupFeatures `json:"features"`
+}
+
+// SetupFeatures holds one boolean per switch, each its env toggle as read now.
+type SetupFeatures struct {
+	// ScheduledRuns is WARDYN_SCHEDULED_RUNS: a run may be scheduled to start later.
+	ScheduledRuns bool `json:"scheduled_runs"`
+	// KubectlCLI is WARDYN_KUBECTL_CLI: the kubectl component kind is on.
+	KubectlCLI bool `json:"kubectl_cli"`
+	// MultiAgentTasks is WARDYN_MULTI_AGENT_TASKS: a background agent task may give
+	// each agent its own task (#1987).
+	MultiAgentTasks bool `json:"multi_agent_tasks"`
+	// MCPLocalServers is WARDYN_MCP_LOCAL_SERVERS: a component may define an
+	// MCP server that runs in the run's sandbox.
+	MCPLocalServers bool `json:"mcp_local_servers"`
+}
+
+func setupFeatures(multiAgentTasks bool) SetupFeatures {
+	return SetupFeatures{
+		ScheduledRuns:   envEnabled(envScheduledRuns),
+		KubectlCLI:      kubectlCLIOn(),
+		MultiAgentTasks: multiAgentTasks,
+		MCPLocalServers: envEnabled(envMCPLocalServers),
+	}
 }
 
 // SetupCheck is defined in setup_checks.go — setup.go is at its allowlisted
@@ -238,13 +260,6 @@ type SetupPlatform struct {
 	// KVM: the host exposes /dev/kvm — lets the UI split Vault's "incompatible
 	// with this hardware" from a fixable "needs setup" (additive; old UIs ignore).
 	KVM bool `json:"kvm"`
-}
-
-// SetupFeatures is SetupStatus.Features.
-type SetupFeatures struct {
-	// MCPLocalServers is WARDYN_MCP_LOCAL_SERVERS: a component may define an
-	// MCP server that runs in the run's sandbox.
-	MCPLocalServers bool `json:"mcp_local_servers"`
 }
 
 // llmPathExists is LLMReady: at least one enabled model provider serves an
@@ -432,7 +447,6 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	ready := s.cfg.Runner != nil && len(rnr.ConfinementClasses) > 0
 
 	resp := SetupStatus{
-		Features:           SetupFeatures{MCPLocalServers: envEnabled(envMCPLocalServers)},
 		Ready:              ready,
 		Checks:             checks,
 		Auth:               SetupAuth{Mode: authMode, LocalLoopback: s.cfg.LocalLoopback, GovernAdminRuns: s.cfg.GovernAdminRuns, GovernAdminRunsExempt: s.cfg.GovernAdminRunsExempt},
@@ -457,6 +471,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		// A count derived from the SAME PEM string TrustedCAPEM's doc comment
 		// describes — no second boot-time field to keep in sync. 0 when unset.
 		TrustedCACerts: strings.Count(s.cfg.TrustedCAPEM, "-----BEGIN CERTIFICATE-----"),
+		Features:       setupFeatures(s.cfg.MultiAgentTasks),
 	}
 	resp.HarnessSets = visibleHarnessSets(s.cfg.AgentImages, resp.Harnesses)
 	// DELIBERATELY isOperator (three-tier doctrine, internal/auth/oidc's

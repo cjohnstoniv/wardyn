@@ -26,7 +26,7 @@ import (
 // when the resolved profile carries no rubric row (nothing to advise on) or the site config cannot be
 // read (an advisory graded on a baseline nobody could read is a guess, and the write itself never
 // depends on it).
-func (s *Server) rubricPostureAdvisory(ctx context.Context, res *ResolvedProfile) string {
+func (s *Server) rubricPostureAdvisory(ctx context.Context, res *ResolvedUnit) string {
 	if res == nil || res.Limits.AutonomyRubric == nil || !setsALevel(*res.Limits.AutonomyRubric) {
 		return ""
 	}

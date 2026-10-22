@@ -267,17 +267,22 @@ type mcpDispatch struct {
 // dispatchMCP is dispatch's MCP half. Each server's header credential moves
 // off injections, which the generic injector reads, onto the server's broker
 // entry; a server whose credential a phase withheld is dropped rather than
-// brokered without it. Each harness a server is on for gets one token and its
+// brokered without it, and so is every server on a host withheld (the ceiling
+// or the Wardyn boundary denies it, or the boundary does not allow it),
+// credentialed or not, with its bindings, as a revive drops one. Each harness a server is on for gets one token and its
 // own configuration: Claude Code a managed file, Codex CLI the env its
 // agent-run writes into config.toml (env, set here into sandboxEnv). A local
 // server takes no token and no broker entry; it joins the same configuration
 // as the command its harness starts.
-func dispatchMCP(servers []componentMCP, injections *[]runner.InjectionGrant, proxyURL string, interactive bool, env map[string]string) mcpDispatch {
+func dispatchMCP(servers []componentMCP, w withholding, injections *[]runner.InjectionGrant, proxyURL string, interactive bool, env map[string]string) mcpDispatch {
 	var out mcpDispatch
 	on := map[string][]string{}
 	local := map[string][]componentMCP{}
 	var order []string
 	for _, m := range servers {
+		if m.Launch == nil && w.withheld(m.Host) {
+			continue
+		}
 		if m.Launch != nil {
 			for _, h := range m.Harnesses {
 				if _, seen := on[h]; !seen && local[h] == nil {
