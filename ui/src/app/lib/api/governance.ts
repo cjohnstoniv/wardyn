@@ -225,6 +225,9 @@ export interface GovernanceUnit {
   effective?: GovernanceEffective;
   // On GET /governance: the membership subjects in this unit or below it; absent for Default.
   people?: number;
+  // On GET /governance: which unit on the path changed each knob (check's path_provenance for a
+  // person homed here); absent when the unit has no effective walls.
+  path_provenance?: Record<string, PolicyProvenance>;
 }
 
 // types.GovernanceMembership — one subject bound to one profile.
@@ -369,7 +372,13 @@ export interface GovernanceDormantMembership {
 export interface GovernanceCheck extends GovernancePreview {
   contexts: GovernanceCheckContext[];
   dormant: GovernanceDormantMembership[];
-  effective: { ceiling: RunPolicySpec; limits: GovernanceLimits; provenance: Record<string, PolicyProvenance> } | null;
+  // provenance: the leaf-level answer a run gets; path_provenance: which unit on the path changed each knob.
+  effective: {
+    ceiling: RunPolicySpec;
+    limits: GovernanceLimits;
+    provenance: Record<string, PolicyProvenance>;
+    path_provenance: Record<string, PolicyProvenance>;
+  } | null;
 }
 
 // POST /governance/dry-run with a unit or membership_move target (governance_dry_run.go). The

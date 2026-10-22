@@ -818,11 +818,13 @@ type GovernanceDormantMembership struct {
 }
 
 // GovernanceEffectiveWalls is one context's resolved walls and which layer set
-// each knob.
+// each knob: Provenance is the leaf-level answer a run gets, PathProvenance
+// which unit on the path changed each value.
 type GovernanceEffectiveWalls struct {
-	Ceiling    types.RunPolicySpec         `json:"ceiling"`
-	Limits     GovernanceLimits            `json:"limits"`
-	Provenance map[string]PolicyProvenance `json:"provenance"`
+	Ceiling        types.RunPolicySpec         `json:"ceiling"`
+	Limits         GovernanceLimits            `json:"limits"`
+	Provenance     map[string]PolicyProvenance `json:"provenance"`
+	PathProvenance map[string]PolicyProvenance `json:"path_provenance"`
 }
 
 // GovernanceCheckResult is POST /api/v1/governance/check's answer: the home

@@ -114,12 +114,23 @@ func (s *Server) handleGetGovernance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	people := unitPeople(resolved, assignments)
+	deployment := governanceCeiling{Spec: s.cfg.DefaultPolicy.Clone(), MemberDefault: s.memberDefaultFor(s.cfg.DefaultPolicy.Resources)}
 	profiles := make([]governanceUnitView, len(resolved))
 	for i, p := range resolved {
 		profiles[i] = newUnitView(p.Row, p.Resolved, p.Err)
 		if p.Row.ID != store.DefaultUnitID {
 			n := len(people[p.Row.ID])
 			profiles[i].People = &n
+		}
+		if p.Err == nil {
+			// The context check resolves for a person homed here: Default is the deployment's ceiling.
+			c := deployment
+			if !(contextPick{unit: p.Row}).isDefault() {
+				c, _ = s.ceilingFromUnit(r.Context(), p.Resolved, nil, deployment)
+			}
+			if walls, err := contextWalls(deployment, c, boundary); err == nil {
+				profiles[i].PathProvenance = walls.PathProvenance
+			}
 		}
 	}
 	writeJSON(w, http.StatusOK, governanceResponse{Units: profiles, Memberships: assignments, MaxDepth: limit, Boundary: boundary})

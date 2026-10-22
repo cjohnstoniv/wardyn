@@ -1032,6 +1032,7 @@ applied until a different approver approves it. The SDK never reads that body as
   It also carries `boundary` and, per unit but Default, `people`: the membership subjects in it or below.
 - `MoveGovernanceMembership` (`PUT /governance/memberships/{id}`) and `PromoteGovernanceMembership` (`POST …/promote`, a legacy one becomes a context) follow the second-human switch ([governance writes](operations/governance-writes.md)).
 - `CheckGovernance` (`POST /governance/check`, `wardyn governance check`) takes `RunIn`: it returns `contexts` (each with its `path`), `dormant` memberships and the chosen or home context's `effective` walls with `provenance`.
+- Two provenances, per knob: `provenance` is the leaf-level answer a run gets (deployment, the leaf unit, or boundary). `path_provenance` names the unit on the path that changed the value, never a pass-through unit. It is admin only: on `effective` and on each `GET /governance` unit.
 - `GovernanceDryRun` (`POST /governance/dry-run`, `wardyn governance dry-run`) takes a `target`: `boundary` (the default), `unit` (a unit body plus `id`) or `membership_move` (`{id, unit_id}`); the last two report `{target, people, live_runs}`.
 - `CreateRunRequest.RunIn` (`run_in`, `wardyn run --run-in`) names one of the caller's units to run in, by id or exact name. `GET /policies/default` takes `?run_in=`, returning `contexts` and `unit_path`.
 - A refusal's `policy` may carry `locked: true`; nothing locks a knob yet.

@@ -84,6 +84,9 @@ type governanceUnitView struct {
 	// People counts, on GET /governance, the membership subjects (a user, a group, a user type or
 	// everyone) in this unit or a unit below it. Absent for the Default unit, whose people hold no rows.
 	People *int `json:"people,omitempty"`
+	// PathProvenance is, on GET /governance, POST /governance/check's path_provenance for a person
+	// homed in this unit (contextWalls). Absent when the unit has no effective walls.
+	PathProvenance knobProvenance `json:"path_provenance,omitempty"`
 }
 
 // governanceEffective is a profile's composed content. Warnings and Error carry base-level detail
