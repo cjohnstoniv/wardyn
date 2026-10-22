@@ -120,6 +120,9 @@ const (
 	// permits. A tie with a governance profile's rubric refuses as
 	// ReasonGovernanceUnit instead.
 	ReasonComponentAutonomy Reason = "component_autonomy"
+	// ReasonUnitScopeDenied: a governance write or read a unit admin may make, asked by a caller who is
+	// neither a security admin nor a unit admin, or by a unit admin about a unit outside their subtree.
+	ReasonUnitScopeDenied Reason = "unit_scope_denied"
 )
 
 // Refusal is one reason's registry row.
@@ -189,6 +192,7 @@ var refusals = map[Reason]Refusal{
 	ReasonAuditRetentionDigestMismatch:   {Effect: EffectConflict, Audit: true},
 	ReasonAuditRetentionActorReserved:    {Effect: EffectDeny, Audit: true},
 	ReasonComponentAutonomy:              {Effect: EffectDeny, Audit: true},
+	ReasonUnitScopeDenied:                {Effect: EffectDeny, Audit: true, Sentence: "this is outside the units you administer"},
 }
 
 // Lookup returns reason's registry row; false for a reason nobody registered,

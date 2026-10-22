@@ -520,6 +520,16 @@
     "sentence": "fmt.Sprintf(\"`task_mode=exec` is not allowed by %s at this run's posture: it permits autonomy level %s (bound by %s), \" + \"and an exec run carries no agent and no tool approvals, so nothing supervises it. Launch with an agent instead.\", src.phrase, level, bound)"
   },
   {
+    "reason": "unit_scope_denied",
+    "target": "\"governance\"",
+    "sentence": "\"this needs a unit admin or a security admin\""
+  },
+  {
+    "reason": "unit_scope_denied",
+    "target": "target",
+    "sentence": "\"this is outside the units you administer\" (registry)"
+  },
+  {
     "reason": "user_type_unknown",
     "target": "\"user_type\"",
     "sentence": "userTypeUnknownMsg"
