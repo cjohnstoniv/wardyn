@@ -253,8 +253,12 @@ Both run `serve --config <path to runnerd.json>` and hold no setting themselves.
 - A computer that is already a runner for another organisation is refused, naming both.
 - On Windows it refuses: run it inside your WSL2 distribution.
 - A failed run leaves nothing to undo: run it again. An unused token expires within the hour; an unclaimed runner lapses after 24 hours.
-- To upgrade, run `wardyn runner setup` again or install the new package. Never copy over the binary.
+- To upgrade, see [Upgrading a runner](#upgrading-a-runner).
 - Org runners keep the operator's `--token-file` path.
+
+### Upgrading a runner
+
+Upgrade the organisation before its runners. A runner installed with `setup` upgrades by running `wardyn runner setup` again, or the new release's `wardyn-runnerd setup` with the same flags: it renames a new file over its own copy and restarts the service. Installing a new `wardyn-runnerd.pkg` upgrades only a runner the package's managed agent runs (one set up with `register`); it stops that agent first. A `setup`-installed runner keeps its own copy, so a new package alone leaves it on the old version. Never copy a new binary over the running one: on macOS the system can stop a process whose binary is overwritten in place.
 
 ## The runner's settings file
 
@@ -364,7 +368,7 @@ The console shows a runner that registered but has not connected as Offline. Rea
 |---|---|
 | `runner's connection to the organisation` | At startup: `route=direct` or `via proxy host:port (HTTPS_PROXY)`. |
 | `runner connection to the organisation failed` | The error, and a `hint` for an untrusted or mismatched certificate (the subject and issuer presented), a proxy that refused (its host and port) or a name that does not resolve. |
-| `runner still offline, retrying` | Once a minute: `offline_for` and `last_error`, the last attempt's error. |
+| `runner still offline, retrying` | Once a minute: `offline_for`, `last_error` and `last_error_age`, the last attempt's error and how long ago it ended, and `waiting_on`, the step the current attempt is on (`dial`, `authenticate`, `org_pending`, `inventory`, `replay`, `before_ready` or `retry_wait`). |
 | `the trusted CA file …` | A certificate in `--trusted-ca-file` that expired or is not a CA, or a file another account can change. The file is still used. |
 
 - Docker, the CA file, the proxy image and the relay are each checked before the first connection. A refusal there appears at the top of the log, and the service restarts and repeats it.
