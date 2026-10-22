@@ -193,7 +193,7 @@ func TestRenameMap(t *testing.T) {
 
 // treeFields are what the unit tree (unit-tree migration) added to the governance surface; this pin
 // covers the rename only, so they and the Default unit's row are left out of the comparison.
-var treeFields = []string{"kind", "mode", "depth", "home", "legacy", "max_depth"}
+var treeFields = []string{"kind", "mode", "depth", "home", "legacy", "max_depth", "path_provenance"}
 
 func withoutTreeFields(v any) any {
 	switch x := v.(type) {

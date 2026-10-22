@@ -77,6 +77,12 @@ var lateAddCensus = map[string]int{
 // unionHelpers are the allowlist and denylist unions; their bodies, and the seal's own, are not sites.
 var unionHelpers = []string{"unionAllowedDomains", "unionDeniedDomains", "unionDomains"}
 
+// clonedSites hold their site on their own clone of a spec and hand it to no policy: canonicalKnobs
+// is setBy's comparison form, and setBy keeps only a provenance map, so reaching it after a seal
+// (composeChain steps it for path_provenance) adds no host. Each is still a census site; a caller
+// that put its result in a policy would be that caller's own site.
+var clonedSites = []string{"canonicalKnobs"}
+
 // sealedPaths is each path that dispatches or revives a run: the ceiling
 // re-assertion that must follow its seal (it withholds credentials against the
 // layers the seal read, #3238), and the variable holding what it seals.
@@ -253,7 +259,7 @@ func runSealCensus(fset *token.FileSet, files map[string]*ast.File) sealCensus {
 		widens[h] = true
 	}
 	for _, a := range c.adds {
-		if _, ok := sealedPaths[a.fn]; !ok { // a sealed path's own sites are placed by position, below
+		if _, ok := sealedPaths[a.fn]; !ok && !slices.Contains(clonedSites, a.fn) { // a sealed path's own sites are placed by position, below
 			widens[a.fn] = true
 		}
 	}

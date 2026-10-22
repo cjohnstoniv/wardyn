@@ -1018,21 +1018,20 @@ applied until a different approver approves it. The SDK never reads that body as
   `BuildWorkspace` and `ScanSource` also answer `202` and decode as before.
 - `ApplyGovernance` keeps its signature. With any write pending it returns the current document
   and a `*client.PendingApprovalError`, so a caller written before 0.8.6 fails loudly.
-- `ApplyGovernanceResult` returns the same outcome as data: the document, the `Pending` changes,
-  the `Deferred` writes and `PruneSkipped`.
+- `ApplyGovernanceResult` returns the same outcome as data: the document, `Pending` changes,
+  `Deferred` writes and `PruneSkipped`.
   - An assignment that names a profile whose write is
     pending is deferred, never sent.
-  - So is a composed profile whose base profile's write is pending
+  - So is a composed profile whose base's write is pending
     (a `Deferred` entry with `Base` set), and in turn its children and their assignments.
   - Prune does not run after a pending write.
 - `PlanGovernance(ctx, doc, prune)` returns the creates, updates and deletes `ApplyGovernance` would
-  make, as a `GovernancePlan`, and writes nothing: one `GET /api/v1/governance`, no write request.
-  Its matching rules are `ApplyGovernance`'s. A plan is a snapshot: the server may change before an apply.
-- `GET /governance` returns every profile and every assignment; a composed profile's own `ceiling` holds only what it stores, so read the resolved one under `effective.ceiling`. Units carry `kind`, `mode` and `depth`, memberships `home` and `legacy`, and the document `max_depth` ([governance writes](operations/governance-writes.md)). `/governance/units` and `/governance/units/{id}` take writes only, so a `GET` on either answers `405`.
-  It also carries `boundary` and, per unit but Default, `people`: the membership subjects in it or below.
+  make, as a `GovernancePlan`, and writes nothing (one `GET /api/v1/governance`).
+  It matches as `ApplyGovernance` does. A plan is a snapshot: the server may change before applying.
+- `GET /governance` returns every profile and assignment; a composed profile's resolved ceiling is `effective.ceiling`, its own `ceiling` only what it stores. Units carry `kind`, `mode` and `depth`, memberships `home` and `legacy`, and the document `max_depth` ([governance writes](operations/governance-writes.md)). `/governance/units` and `/governance/units/{id}` take writes only (`GET` answers `405`).
+  It also carries `boundary` and, per unit but Default, `people` (membership subjects in it or below).
 - `MoveGovernanceMembership` (`PUT /governance/memberships/{id}`) and `PromoteGovernanceMembership` (`POST …/promote`, a legacy one becomes a context) follow the second-human switch ([governance writes](operations/governance-writes.md)).
-- `CheckGovernance` (`POST /governance/check`, `wardyn governance check`) takes `RunIn`: it returns `contexts` (each with its `path`), `dormant` memberships and the chosen or home context's `effective` walls with `provenance`.
-- Two provenances, per knob: `provenance` is the leaf-level answer a run gets (deployment, the leaf unit, or boundary). `path_provenance` names the unit on the path that changed the value, never a pass-through unit. It is admin only: on `effective` and on each `GET /governance` unit.
+- `CheckGovernance` (`POST /governance/check`, `wardyn governance check`) takes `RunIn`; returns `contexts` (with `path`), `dormant` memberships and the chosen or home context's `effective` walls. Per knob: `provenance`, the leaf-level answer a run gets; admin-only `path_provenance` (also per `GET /governance` unit), the path unit that changed it.
 - `GovernanceDryRun` (`POST /governance/dry-run`, `wardyn governance dry-run`) takes a `target`: `boundary` (the default), `unit` (a unit body plus `id`) or `membership_move` (`{id, unit_id}`); the last two report `{target, people, live_runs}`.
 - `CreateRunRequest.RunIn` (`run_in`, `wardyn run --run-in`) names one of the caller's units to run in, by id or exact name. `GET /policies/default` takes `?run_in=`, returning `contexts` and `unit_path`.
 - A refusal's `policy` may carry `locked: true`; nothing locks a knob yet.
