@@ -280,7 +280,7 @@ describe("PermissionsScreen — enforcement confirms", () => {
     await user.click(screen.getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.image.label}` }));
 
     const dialog = await screen.findByRole("alertdialog");
-    expect(within(dialog).queryByText(PERM.ENFORCE_ON_ZERO)).toBeNull();
+    expect(within(dialog).queryByText(PERM.ENFORCE_ZERO_CONFIRM)).toBeNull();
     expect(within(dialog).getByRole("button", { name: PERM.ENFORCE_CONFIRM })).not.toHaveClass("bg-danger");
   });
 
