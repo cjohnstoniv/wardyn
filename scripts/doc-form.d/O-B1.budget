@@ -146,7 +146,8 @@
 # docs/OPERATIONS.md 58850 = ours 58811 + theirs 57729 - base 57690 at the 0.10 W4c merge of ATT-FU a92997f94 onto the train.
 # docs/OPERATIONS.md 58911 = ours 58850 + theirs 57751 - base 57690 at the 0.10 W4c merge of origin/main ba16e8564 (W4b) onto the train.
 # docs/OPERATIONS.md 58911, measured at the 0.10 W4c merge of OFFLINE-VM a359ef27b onto the train (two merge bases, VM-A 47c283334 and main 3cea1aa73, so no single base to subtract).
-docs/OPERATIONS.md=58911
+# docs/OPERATIONS.md 58872 = 58911 - 39 at the revert of the ATT-FU merge 97898fad6 (the 0215 migration line leaves).
+docs/OPERATIONS.md=58872
 # docs/OPERATIONS.md 57751 = ours 57562 + theirs 57690 - base 57501 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/OPERATIONS.md 57722 = ours + theirs - base at the 0.10 HYB-C merge of main onto VM-A, measured.
 # docs/OPERATIONS.md 55840 adds 124 over 55716, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.

@@ -55,7 +55,7 @@ func foldersRunnerHooks(ctx context.Context, _ runneridentity.Identity, stateDir
 		},
 		Replay: func(ctx context.Context, peer *runnerwire.Peer) error {
 			machine, _ := os.Hostname()
-			data, err := runnerwire.Marshal(foldersCaps(machine, opts.status))
+			data, err := runnerwire.Marshal(runnerwire.Caps{Version: version.String(), MachineName: machine, Folders: true})
 			if err != nil {
 				return err
 			}
@@ -73,9 +73,4 @@ func foldersRunnerHooks(ctx context.Context, _ runneridentity.Identity, stateDir
 		cancel()
 		return nil
 	}}, nil
-}
-
-// foldersCaps is what a folders runner reports at each connect: no class or capacity, and its last failure.
-func foldersCaps(machine string, status *statusWriter) runnerwire.Caps {
-	return runnerwire.Caps{Version: version.String(), MachineName: machine, Folders: true, LastFailure: status.failure()}
 }

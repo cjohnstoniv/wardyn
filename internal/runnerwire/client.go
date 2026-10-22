@@ -61,9 +61,8 @@ type ClientConfig struct {
 	Dial             func(context.Context) (Conn, error)
 	Hooks            RunnerHooks
 	// LinkChanged, when set, is told each time a session comes up (reason "") or an attempt ends (reason
-	// is why, "" when it ended without one; stage is where it stopped, "" when it did not fail). It must
-	// not block.
-	LinkChanged func(up bool, reason string, stage Stage)
+	// is why, "" when it ended without one). It must not block.
+	LinkChanged func(up bool, reason string)
 }
 
 // Client owns one runner's reconnect loop. Run must not be called concurrently.
@@ -102,10 +101,10 @@ func (l *linkState) set(up bool, reason string) {
 }
 
 // setLink records the link state and tells ClientConfig.LinkChanged.
-func (c *Client) setLink(up bool, reason string, stage Stage) {
+func (c *Client) setLink(up bool, reason string) {
 	c.link.set(up, reason)
 	if c.cfg.LinkChanged != nil {
-		c.cfg.LinkChanged(up, reason, stage)
+		c.cfg.LinkChanged(up, reason)
 	}
 }
 
@@ -157,10 +156,8 @@ func (c *Client) Run(ctx context.Context) error {
 	for ctx.Err() == nil {
 		started := time.Now()
 		err := c.Connect(ctx)
-		// The runner's own shutdown (ctx done) is not a failure to connect: it leaves no stage to carry
-		// across the restart and report. A Canceled under a live ctx is a peer that failed, and counts.
-		if err != nil && ctx.Err() == nil {
-			c.setLink(false, err.Error(), StageOf(err))
+		if err != nil {
+			c.setLink(false, err.Error())
 		}
 		if errors.Is(err, ErrRevoked) {
 			return errors.Join(err, c.cfg.Hooks.Revoked(ctx))
@@ -223,13 +220,13 @@ func (c *Client) Connect(ctx context.Context) error {
 	}
 	conn, err := dial(ctx)
 	if err != nil {
-		return withStage(dialStage(err), err)
+		return err
 	}
 	defer conn.Close()
 	cfg, resume := c.resume(ctx)
 	ok, err := authenticateOrg(ctx, conn, c.cfg.RunnerID, c.cfg.OrgURL, c.cfg.PrivateKey, resume, c.cfg.Hooks.Clock)
 	if err != nil {
-		return withStage(authStage(err), err)
+		return err
 	}
 	if !ok.Resumed {
 		cfg = PeerConfig{}
@@ -241,8 +238,7 @@ func (c *Client) Connect(ctx context.Context) error {
 		c.cfg.Hooks.LocalAttach(ok.LocalAttach)
 	}
 	c.session, c.ready = ok.SessionID, false
-	err = c.serve(ctx, conn, cfg, ok)
-	return withStage(serveStage(err), err)
+	return c.serve(ctx, conn, cfg, ok)
 }
 
 func (c *Client) resume(ctx context.Context) (PeerConfig, *Resume) {
@@ -267,7 +263,7 @@ func (c *Client) serve(ctx context.Context, conn Conn, cfg PeerConfig, ok AuthOK
 	peer = NewPeer(conn, cfg)
 	c.peer = peer
 	defer func() {
-		c.setLink(false, "", "")
+		c.setLink(false, "")
 		peer.Close()
 		c.ended, c.ready = time.Now(), started && ready.Load()
 		if c.cfg.Hooks.StreamOffline != nil {
@@ -291,7 +287,7 @@ func (c *Client) serve(ctx context.Context, conn Conn, cfg PeerConfig, ok AuthOK
 		}
 	}
 	slog.InfoContext(ctx, "runner connected to the organisation", slog.Bool("resumed", ok.Resumed))
-	c.setLink(true, "", "")
+	c.setLink(true, "")
 	if c.cfg.Hooks.Online != nil {
 		c.cfg.Hooks.Online(peer, ok.Resumed)
 	}
