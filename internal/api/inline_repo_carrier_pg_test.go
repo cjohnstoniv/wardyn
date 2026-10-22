@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -72,19 +73,22 @@ func (fx inlineCarrierFixture) grant(t *testing.T, ws types.Workspace, effect ty
 	}
 }
 
-// launch posts alice's run naming govWorkspaceRepo inline (attaching attach
-// when set) and answers the response, the run row once dispatch has settled,
-// and the allowlist dispatch handed the proxy.
-func (fx inlineCarrierFixture) launch(t *testing.T, attach *uuid.UUID) (int, string, types.AgentRun, []string) {
-	t.Helper()
+// runBody is alice's run naming govWorkspaceRepo inline, attaching attach when set.
+func runBody(attach *uuid.UUID) string {
 	body := `{"agent":"claude-code","task":"t",`
 	if attach != nil {
 		body += `"workspace_id":"` + attach.String() + `",`
 	}
-	body += `"inline_policy":{"min_confinement_class":"CC2","allowed_domains":["api.anthropic.com"],` +
+	return body + `"inline_policy":{"min_confinement_class":"CC2","allowed_domains":["api.anthropic.com"],` +
 		`"workspace_repos":[{"repo":"` + govWorkspaceRepo + `"}]}}`
+}
+
+// launch posts runBody(attach) and answers the response, the run row once
+// dispatch has settled, and the allowlist dispatch handed the proxy.
+func (fx inlineCarrierFixture) launch(t *testing.T, attach *uuid.UUID) (int, string, types.AgentRun, []string) {
+	t.Helper()
 	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
-	w := doSSO(t, fx.h.srv, http.MethodPost, "/api/v1/runs", alice, body)
+	w := doSSO(t, fx.h.srv, http.MethodPost, "/api/v1/runs", alice, runBody(attach))
 	if w.Code != http.StatusCreated {
 		return w.Code, w.Body.String(), types.AgentRun{}, nil
 	}
@@ -142,13 +146,95 @@ func TestPG_InlineRepoCarrier_BothCreationOrders(t *testing.T) {
 }
 
 // TestPG_InlineRepoCarrier_AllowADenyB: enforcement off, an allow on A and a
-// deny on B. The run uses A, never the carrier alice is denied.
+// deny on B. The run uses A in either creation order, never the carrier alice
+// is denied.
 func TestPG_InlineRepoCarrier_AllowADenyB(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		aNewer bool
+	}{{"A newer", true}, {"B newer", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newInlineCarrierFixture(t, tc.aNewer, "")
+			fx.grant(t, fx.a, types.CapabilityAllow)
+			fx.grant(t, fx.b, types.CapabilityDeny)
+			code, body, run, allowed := fx.launch(t, nil)
+			fx.usesA(t, code, body, run, allowed)
+		})
+	}
+}
+
+// TestPG_InlineRepoCarrier_UnenforcedControl: enforcement off and no rows, so
+// both carriers are granted. The run uses the oldest usable carrier (B here),
+// the one the index held before admission's choice was carried: nothing
+// changes where every carrier is granted.
+func TestPG_InlineRepoCarrier_UnenforcedControl(t *testing.T) {
+	fx := newInlineCarrierFixture(t, true, "")
+	code, body, run, allowed := fx.launch(t, nil)
+	if code != http.StatusCreated {
+		t.Fatalf("create run: %d %s, want 201", code, body)
+	}
+	if !slices.Equal(run.WorkspaceIDs, []uuid.UUID{fx.b.ID}) {
+		t.Errorf("run workspace_ids = %v, want the oldest carrier B %s (A is %s)", run.WorkspaceIDs, fx.b.ID, fx.a.ID)
+	}
+	if !slices.Contains(allowed, carrierBHost) || slices.Contains(allowed, carrierAHost) {
+		t.Errorf("dispatched allowlist %v, want B's requirement %s and not A's", allowed, carrierBHost)
+	}
+}
+
+// workspaceRows is the workspace ids a setup checklist names.
+func workspaceRows(items []SetupItem) []uuid.UUID {
+	var out []uuid.UUID
+	for _, it := range items {
+		if id, ok := strings.CutPrefix(it.ID, "workspace:"); ok && it.Kind == "workspace" {
+			out = append(out, uuid.MustParse(id))
+		}
+	}
+	return out
+}
+
+// TestPG_InlineRepoCarrier_PreflightMatchesRun: allow on A, deny on B, A newer.
+// Preflight's checklist names the workspace the run then records, A, and none
+// of B's requirement hosts.
+func TestPG_InlineRepoCarrier_PreflightMatchesRun(t *testing.T) {
 	fx := newInlineCarrierFixture(t, true, "")
 	fx.grant(t, fx.a, types.CapabilityAllow)
 	fx.grant(t, fx.b, types.CapabilityDeny)
-	code, body, run, allowed := fx.launch(t, nil)
-	fx.usesA(t, code, body, run, allowed)
+	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
+	w := doSSO(t, fx.h.srv, http.MethodPost, "/api/v1/runs/preflight", alice, runBody(nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("preflight: %d %s, want 200", w.Code, w.Body.String())
+	}
+	var pre preflightResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &pre); err != nil {
+		t.Fatalf("decode preflight: %v", err)
+	}
+	code, body, run, _ := fx.launch(t, nil)
+	if code != http.StatusCreated {
+		t.Fatalf("create run: %d %s, want 201", code, body)
+	}
+	if got := workspaceRows(pre.SetupItems); !slices.Equal(got, run.WorkspaceIDs) || !slices.Equal(got, []uuid.UUID{fx.a.ID}) {
+		t.Errorf("preflight workspace rows = %v, run workspace_ids = %v, want both only A %s (B is %s)", got, run.WorkspaceIDs, fx.a.ID, fx.b.ID)
+	}
+	if strings.Contains(w.Body.String(), carrierBHost) {
+		t.Errorf("preflight names B's requirement host %s: %s", carrierBHost, w.Body.String())
+	}
+}
+
+// TestPG_InlineRepoCarrier_SetupChecklist: the composer's setup checklist for
+// alice (referencedWorkspaces) names the carrier her run uses, A, not the
+// denied B.
+func TestPG_InlineRepoCarrier_SetupChecklist(t *testing.T) {
+	fx := newInlineCarrierFixture(t, true, "")
+	fx.grant(t, fx.a, types.CapabilityAllow)
+	fx.grant(t, fx.b, types.CapabilityDeny)
+	spec := types.RunPolicySpec{MinConfinementClass: types.CC2, WorkspaceRepos: []types.WorkspaceRepo{{Repo: govWorkspaceRepo}}}
+	items := fx.h.srv.deriveSetupItems(memberCtxFor("alice"), "alice", composer.RunInput{Agent: "claude-code", Repo: "ephemeral"}, spec, nil, nil)
+	if got := workspaceRows(items); !slices.Equal(got, []uuid.UUID{fx.a.ID}) {
+		t.Errorf("checklist workspace rows = %v, want only A %s (B is %s)", got, fx.a.ID, fx.b.ID)
+	}
+	if raw := string(mustJSON(items)); strings.Contains(raw, carrierBHost) {
+		t.Errorf("checklist names B's requirement host %s: %s", carrierBHost, raw)
+	}
 }
 
 // TestPG_InlineRepoCarrier_EnforcedNoGrantOnB: enforced, and B is alice's own

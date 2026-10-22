@@ -329,23 +329,30 @@ func carrierUsableBy(owner string) func(types.Workspace) bool {
 	return func(ws types.Workspace) bool { return ws.OwnedBy == "" || (owner != "" && ws.OwnedBy == owner) }
 }
 
-// admittingCarrier is the carrier a repo is admitted by: the first of the
-// carriers usable admits, in list order, that capWorkspace is granted on or,
-// when held (the carrier the source is held to) is not one of them, held
-// alone, judged as before. ok is false when none is granted. The run then uses
-// that same carrier (runCarrierRule.holdAdmittedRepos).
+// admittingCarrier is the carrier a repo is admitted by: the last, in list
+// order (newest first, so the oldest), of the carriers usable admits that
+// capWorkspace is granted on or, when held (the carrier the source is held to)
+// is not one of them, held alone, judged as before. ok is false when none is
+// granted. Every judged carrier is read, so where all are granted (or the
+// capability is not enforced) this is the carrier the index holds already. The
+// run then uses that same carrier (runCarrierRule.holdAdmittedRepos).
 func admittingCarrier(ctx context.Context, cap *capBatch, held types.Workspace, carriers []types.Workspace, usable func(types.Workspace) bool) (types.Workspace, bool, error) {
 	judged := []types.Workspace{held}
 	if usable(held) {
 		judged = slices.DeleteFunc(slices.Clone(carriers), func(c types.Workspace) bool { return !usable(c) })
 	}
+	var chosen types.Workspace
+	granted := false
 	for _, c := range judged {
 		ok, err := cap.allowed(ctx, capWorkspace, c.ID.String())
-		if err != nil || ok {
-			return c, ok, err
+		if err != nil {
+			return types.Workspace{}, false, err
+		}
+		if ok {
+			chosen, granted = c, true
 		}
 	}
-	return types.Workspace{}, false, nil
+	return chosen, granted, nil
 }
 
 // dropUncoveredPrivateLiterals removes, from the allowlist of a spec a member

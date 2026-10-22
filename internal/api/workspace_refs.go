@@ -120,8 +120,7 @@ func (s *Server) launchCarrierRule(r *http.Request, attached []types.Workspace) 
 }
 
 // holdAdmittedRepos holds each repo of spec that several workspaces carry to
-// the carrier a member's admission judged it by (admittingCarrier, in the same
-// order), so the run's workspaces, requirements and association are that
+// the carrier a member's admission judged it by (admittingCarrier), so the run's workspaces, requirements and association are that
 // carrier's and never another one the member was not granted. A repo no carrier
 // is granted keeps the index's choice; an operator's rule (no person) is left
 // as it is.

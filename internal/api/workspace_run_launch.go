@@ -27,7 +27,9 @@ import (
 // built from EVERY workspace's Sources — not the single-source Kind/Source
 // mirror, which is empty for a multi-source workspace.
 // A source several workspaces carry resolves to one owner may launch (their own
-// or an operator's; every one for owner "", an operator), as at launch.
+// or an operator's; every one for owner "", an operator), and a repo to the
+// carrier owner's admission was granted on, as at launch. A failed capability
+// read references none, as a failed list does.
 func (s *Server) referencedWorkspaces(ctx context.Context, owner string, spec types.RunPolicySpec) []types.Workspace {
 	if s.cfg.Store == nil {
 		return nil
@@ -39,6 +41,10 @@ func (s *Server) referencedWorkspaces(ctx context.Context, owner string, spec ty
 	var rule runCarrierRule
 	if owner != "" {
 		rule.mayLaunch = func(ws types.Workspace) bool { return ws.OwnedBy == "" || ws.OwnedBy == owner }
+		rule.person = owner
+		if rule.holdAdmittedRepos(ctx, s.capBatchFor(ctx), all, spec) != nil {
+			return nil
+		}
 	}
 	return referencedWorkspacesBy(rule.index(all), spec)
 }
