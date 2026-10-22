@@ -8,8 +8,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -53,9 +51,9 @@ func TestRestrictionClampsStoredRow(t *testing.T) {
 	}
 	ctx := memberCtxFor("sub-sr")
 	req := createRunRequest{Agent: "claude-code", Repo: "acme/widgets", PolicyID: &row.ID}
-	spec, id, _, _, ok := e.srv.resolveRunPolicy(ctx, httptest.NewRecorder(), governReq(ctx), &req, true)
-	if !ok || id == nil || *id == uuid.Nil {
-		t.Fatalf("resolve: ok %v id %v", ok, id)
+	spec, _, _, _, ok := e.srv.resolveRunPolicy(ctx, httptest.NewRecorder(), governReq(ctx), &req, true)
+	if !ok {
+		t.Fatal("resolve refused the request")
 	}
 	if spec.MinConfinementClass != types.CC3 {
 		t.Errorf("stored row resolved to %s, want the restriction's CC3", spec.MinConfinementClass)
