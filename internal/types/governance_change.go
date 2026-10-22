@@ -39,6 +39,8 @@ const (
 	GovernanceTargetRunnerTrust            = "runner_trust"
 	GovernanceTargetRunNodeRecord          = "run_node_record"
 	GovernanceTargetBoundary               = "governance_boundary"
+	GovernanceTargetRestriction            = "governance_restriction"
+	GovernanceTargetWorkspaceOwningUnit    = "workspace_owning_unit"
 )
 
 // GovernanceChange is one governance write held for a second human (migration 0126). Payload is the

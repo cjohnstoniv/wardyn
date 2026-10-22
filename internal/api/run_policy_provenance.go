@@ -119,7 +119,7 @@ func (c governanceCeiling) provenance() policyref.Provenance {
 	switch {
 	case c.Operator:
 		return operatorProvenance
-	case c.Unit != nil:
+	case c.Unit != nil && !restrictionDefaultUnit(c.Unit):
 		return policyref.Provenance{Layer: policyref.LayerUnit, Name: c.Unit.Name}
 	default:
 		return deploymentProvenance
@@ -128,9 +128,10 @@ func (c governanceCeiling) provenance() policyref.Provenance {
 
 // withContacts is k with each ceiling record's contact filled from ref, the
 // run's policy now (runPolicyRef): the leaf profile's contact for a profile
-// record of the same name, the site's policy_help for a deployment record. The
+// record of the same name, the site's policy_help for a deployment record, a restriction's own for
+// a restriction record (by name). The
 // map is copied; a record ref does not name keeps no contact.
-func (k knobProvenance) withContacts(ref *policyref.Ref, help *policyref.Contact) knobProvenance {
+func (k knobProvenance) withContacts(ref *policyref.Ref, help *policyref.Contact, restrictions map[string]*policyref.Contact) knobProvenance {
 	if k == nil {
 		return nil
 	}
@@ -157,6 +158,8 @@ func (k knobProvenance) withContacts(ref *policyref.Ref, help *policyref.Contact
 			rec.Contact = leaf
 		case rec.Layer == policyref.LayerDeployment:
 			rec.Contact = site
+		case rec.Layer == policyref.LayerRestriction:
+			rec.Contact = restrictions[rec.Name]
 		default:
 			rec.Contact = nil
 		}

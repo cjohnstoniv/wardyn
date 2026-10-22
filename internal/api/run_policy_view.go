@@ -208,7 +208,7 @@ func (s *Server) handleGetRunPolicy(w http.ResponseWriter, r *http.Request) {
 		slog.WarnContext(ctx, "api: run policy view without the site config", "run_id", run.ID, "err", err)
 	}
 	resp.Changes = explainRunPolicy(base, served, ev, sc, run)
-	resp.Provenance = envelope.Provenance.withContacts(s.runPolicyRef(ctx, run), sc.PolicyHelp)
+	resp.Provenance = envelope.Provenance.withContacts(s.runPolicyRef(ctx, run), sc.PolicyHelp, s.restrictionContacts(ctx, run.RestrictionIDs))
 	resp.StoredPolicyNow = s.storedPolicyNowOf(ctx, run, create, &resp.Source)
 
 	secOp := s.isSecurityOperator(ctx)

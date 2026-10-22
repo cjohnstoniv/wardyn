@@ -27,6 +27,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -82,6 +83,8 @@ type governanceResponse struct {
 	MaxDepth int `json:"max_depth"`
 	// Boundary is the Wardyn boundary as GET /governance/boundary returns it.
 	Boundary types.Boundary `json:"boundary"`
+	// Restrictions are the deny-only lists that follow people, each with how many people it names.
+	Restrictions []restrictionView `json:"restrictions"`
 }
 
 // handleGetGovernance returns the whole governance picture. operatorOnly
@@ -122,7 +125,15 @@ func (s *Server) handleGetGovernance(w http.ResponseWriter, r *http.Request) {
 			profiles[i].People = &n
 		}
 	}
-	writeJSON(w, http.StatusOK, governanceResponse{Units: profiles, Memberships: assignments, MaxDepth: limit, Boundary: boundary})
+	restrictions := []types.Restriction{}
+	if rs, ok := s.restrictionStore(); ok {
+		if restrictions, err = rs.ListRestrictions(r.Context()); err != nil {
+			writeServerError(w, r, "list restrictions", err)
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, governanceResponse{Units: profiles, Memberships: assignments, MaxDepth: limit, Boundary: boundary,
+		Restrictions: restrictionViews(restrictions)})
 }
 
 // unitPeople is, per unit, the membership subjects in it or in a unit below it. The Default unit's
@@ -225,6 +236,10 @@ type governanceCeiling struct {
 	// are the knobs it narrowed here (boundary_meet.go).
 	boundary      *types.Boundary
 	boundaryKnobs []string
+	// RestrictionIDs are the restrictions applied here, in name order (captured on the run);
+	// restrictionKnobs says which restriction narrowed each knob (governance_restrictions.go).
+	RestrictionIDs   []uuid.UUID
+	restrictionKnobs map[string]policyref.Provenance
 }
 
 // errGroupsSnapshotStale is the 403-class resolver failure: this caller's group
