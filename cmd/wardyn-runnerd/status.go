@@ -45,9 +45,9 @@ type statusWriter struct {
 	now    func() time.Time
 	cur    runnerStatus
 	warned bool
-	// refused is set while Stage came from a refusal at start: the process exits on one, so its own
-	// shutdown must not clear what the next start keeps until a connect succeeds.
-	refused bool
+	// refused is the last refusal at start, kept until a connect succeeds: the process exits on one, so
+	// its own shutdown, and a failed connect before it, must not lose what the next start shows.
+	refused *runnerStatus
 }
 
 func newStatusWriter(stateDir string) *statusWriter {
@@ -87,7 +87,7 @@ func (w *statusWriter) linkChanged(up bool, reason string) {
 		w.cur.LastError, w.cur.LastErrorAt = cleanStatusError(reason), &at
 	}
 	if up {
-		w.cur.Stage, w.cur.StageAt, w.refused = "", nil, false
+		w.cur.Stage, w.cur.StageAt, w.refused = "", nil, nil
 		w.set("connected")
 	} else {
 		w.set("offline")
@@ -105,7 +105,10 @@ func (w *statusWriter) failed(stage, reason string, at time.Time, refusal bool) 
 	defer w.mu.Unlock()
 	at = at.UTC()
 	w.cur.LastError, w.cur.LastErrorAt = reason, &at
-	w.cur.Stage, w.cur.StageAt, w.refused = stage, &at, refusal
+	w.cur.Stage, w.cur.StageAt = stage, &at
+	if refusal {
+		w.refused = &runnerStatus{LastError: reason, LastErrorAt: &at, Stage: stage, StageAt: &at}
+	}
 	w.cur.UpdatedAt = w.now()
 	w.write()
 }
@@ -123,12 +126,13 @@ func (w *statusWriter) relayChanged(state string) {
 }
 
 // stopped is written when serve returns. A runner's own shutdown records no stage and clears the
-// one a failed connect left; a refusal at start stays.
+// one a failed connect left; a refusal at start stays, and is what the file shows at rest.
 func (w *statusWriter) stopped() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if !w.refused {
-		w.cur.Stage, w.cur.StageAt = "", nil
+	w.cur.Stage, w.cur.StageAt = "", nil
+	if r := w.refused; r != nil {
+		w.cur.LastError, w.cur.LastErrorAt, w.cur.Stage, w.cur.StageAt = r.LastError, r.LastErrorAt, r.Stage, r.StageAt
 	}
 	w.set("stopped")
 }

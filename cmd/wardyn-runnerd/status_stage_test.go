@@ -131,6 +131,32 @@ func TestStatusStageStartupRefusalKeptAcrossARestart(t *testing.T) {
 	}
 }
 
+// A refusal at start survives a failed connect and a clean stop that follow it: the file at rest still
+// shows the refusal's stage, and only a successful connect clears it.
+func TestStatusStageRefusalKeptThroughAFailedConnectAndStop(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now().UTC().Truncate(time.Second)
+	l := newOfflineLog(dir, nil)
+	l.now = func() time.Time { return now }
+	l.startFailed(atStage(types.RunnerStageEngine, errors.New("engine: no socket")))
+	w, l := stageFixture(t, dir, &now)
+	l.connectFailed(dnsFailure())
+	if st, _ := readStatus(t, dir); st.Stage != types.RunnerStageDNS {
+		t.Fatalf("after the failed connect: %+v", st)
+	}
+	w.stopped()
+	st, _ := readStatus(t, dir)
+	if st.State != "stopped" || st.Stage != types.RunnerStageEngine || !strings.Contains(st.LastError, "no socket") {
+		t.Fatalf("at rest after the stop: %+v, want the refusal's stage", st)
+	}
+	w2, _ := stageFixture(t, dir, &now)
+	w2.linkChanged(true, "")
+	w2.stopped()
+	if st, _ = readStatus(t, dir); st.Stage != "" || st.StageAt != nil {
+		t.Errorf("a successful connect keeps the stage: %+v", st)
+	}
+}
+
 // relayWatch's state change reaches status.json once per transition, not on every probe.
 func TestStatusRelayWrittenOncePerTransition(t *testing.T) {
 	dir := t.TempDir()
