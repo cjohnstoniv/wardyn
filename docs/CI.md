@@ -535,7 +535,7 @@ Three mechanisms (#932), on top of the per-job Go cache (#470) and the single ra
 So:
 
 - `test-pg` (the aggregator over its `test-pg-shard` matrix, which fails unless every shard passed), `conformance`, `conformance-k8s`, `vm`, `helm` and `envbuild-integration` skip on `backend == 'false'`, `notices` on `notices == 'false'`, the nine `trivy (<image>)` jobs on `images == 'false'` or on `image-scope`'s answer for their image.
-- `vm` boots the reference Linux VM guest under QEMU/KVM through the real Docker driver ([`test/conformance/vm/vm_test.go`](../test/conformance/vm/vm_test.go)), after GitHub's documented udev rule opens `/dev/kvm`. It is not a required check.
+- `vm` boots the reference Linux VM guest under QEMU/KVM through the real Docker driver ([`test/conformance/vm/vm_test.go`](../test/conformance/vm/vm_test.go)), after GitHub's documented udev rule opens `/dev/kvm`. Not a required check.
 - `build` needs `go-lint`, `image-scope` and every `go` leg and runs with `if: always()`.
   - Its first step fails unless every leg passed, so the `build` context is green only when all four legs and the union floor are.
   - The union steps carry `if: needs.changes.outputs.backend != 'false'`, so only an explicit docs- or console-only classification skips them.
