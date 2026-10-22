@@ -13,7 +13,7 @@ import (
 // A runner's clock is its own: a failure or relay time more than runnerClockSkew ahead of the organisation's is
 // dropped, so a report cannot pin itself as the newest.
 func TestRunnerHealthDropsATimeFarAhead(t *testing.T) {
-	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	now := time.Now().UTC()
 	sum := func(at time.Time) *types.RunnerOfflineSummary {
 		return &types.RunnerOfflineSummary{Stage: types.RunnerStageDNS, FirstFailureAt: now.Add(-time.Minute), LastFailureAt: at}
 	}
