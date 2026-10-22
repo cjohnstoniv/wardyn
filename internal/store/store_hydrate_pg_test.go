@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -351,7 +352,10 @@ func TestPG_MergeWorkspaceRequirements_AtomicAndCapped(t *testing.T) {
 	// overshoot to 258, which is the bug this pins.
 	big := map[string]types.WorkspaceRequirement{}
 	for i := 0; i < 254; i++ {
-		big["egress:h"+uuid.NewString()[:8]+".example"] = types.WorkspaceRequirement{Level: "optional", Provenance: "operator_set"}
+		big["egress:h"+strconv.Itoa(i)+".example"] = types.WorkspaceRequirement{Level: "optional", Provenance: "operator_set"}
+	}
+	if len(big) != 254 {
+		t.Fatalf("built %d bulk keys, want 254 distinct", len(big))
 	}
 	got, err = s.MergeWorkspaceRequirements(ctx, ws.ID, big)
 	if err != nil {
