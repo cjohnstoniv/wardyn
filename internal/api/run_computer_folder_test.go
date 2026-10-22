@@ -200,6 +200,9 @@ type folderSandboxRunner struct {
 	// a sandbox already stopped, as a lease end's EndSandbox leaves it.
 	killErr           error
 	agentLives, ended bool
+	// proxyEnds is Docker's StopProxy failing closed: it stops the agent's container and still
+	// returns proxyErr.
+	proxyEnds bool
 	// onPass runs as a pass's sftp-server starts in the sandbox's folder.
 	onPass func()
 }
@@ -207,6 +210,7 @@ type folderSandboxRunner struct {
 // StopProxy removes the sandbox's proxy, its agent's only way out.
 func (r *folderSandboxRunner) StopProxy(context.Context, string) error {
 	if r.proxyErr != nil {
+		r.ended = r.ended || r.proxyEnds
 		return r.proxyErr
 	}
 	r.proxyStopped.Store(true)
@@ -726,6 +730,9 @@ func TestFinalizeRunEffects_ASandboxWhoseAgentCannotBeStoppedRunsNoPass(t *testi
 		"its proxy is wedged": {func(_ *localFolderStore, sb *folderSandboxRunner) {
 			sb.proxyErr = errors.New("the proxy is wedged")
 		}, "no pass ran; its agent and egress could not be stopped first: its proxy did not stop: the proxy is wedged"},
+		"its proxy stop fails closed": {func(_ *localFolderStore, sb *folderSandboxRunner) {
+			sb.proxyErr, sb.proxyEnds = errors.New("the proxy is wedged"), true
+		}, "no pass ran; its agent and egress could not be stopped first: its proxy did not stop: the proxy is wedged"},
 		"its agent is the main process": {func(ls *localFolderStore, _ *folderSandboxRunner) {
 			ls.run.AgentExecID = runner.MainProcessExecID
 		}, "no pass ran; its agent and egress could not be stopped first: its agent is the sandbox's main process, which cannot be stopped without stopping the sandbox"},
@@ -735,6 +742,7 @@ func TestFinalizeRunEffects_ASandboxWhoseAgentCannotBeStoppedRunsNoPass(t *testi
 		"its agent outlives the kill": {func(_ *localFolderStore, sb *folderSandboxRunner) {
 			sb.agentLives = true
 		}, "no pass ran; its agent and egress could not be stopped first: its agent still reads as running,"},
+		// A lease end's EndSandbox stopped it: its proxy stop succeeds, and the kill's exec fails.
 		"it had already stopped": {func(_ *localFolderStore, sb *folderSandboxRunner) {
 			sb.ended = true
 		}, "no pass ran; the sandbox had already stopped, with its changes not brought back yet, uncounted"},
@@ -759,6 +767,9 @@ func TestFinalizeRunEffects_ASandboxWhoseAgentCannotBeStoppedRunsNoPass(t *testi
 			}
 			assertFolderBackTornDown(t, cs, audit, run, sb, tc.want)
 			assertFolderBackTornDown(t, cs, audit, run, sb, "its changes not brought back yet, uncounted")
+			if st := cs.folderStatus(); st.Back != nil && sb.proxyErr != nil && strings.Contains(st.Back.Error, "already stopped") {
+				t.Errorf("back record = %q; want the proxy's failure, not an already stopped sandbox", st.Back.Error)
+			}
 		})
 	}
 }

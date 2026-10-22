@@ -270,8 +270,8 @@ What happens:
 - One side edits at a time: the sandbox, while the run is live. With **Both ways**, its changes come back when the run
   ends, before the sandbox is stopped, except as below. A file changed on both sides keeps your computer's copy; nothing there is
   deleted. With **Copy in only**, nothing comes back.
-- Before a pass back, Wardyn stops the agent and cuts its egress. No pass runs in an exec-less (krun) sandbox, or
-  once a lease end under [`WARDYN_ENDED_RUN_GRACE`](../ENV.md#wardyn_ended_run_grace) has stopped the sandbox.
+- Before a pass back, Wardyn stops the agent and cuts its egress. No pass runs once a lease end under
+  [`WARDYN_ENDED_RUN_GRACE`](../ENV.md#wardyn_ended_run_grace) has stopped the sandbox; a krun run is refused at start.
 - Known limit: on a runner-hosted or Kubernetes sandbox, the agent can stay running with its
   network for up to about 2 minutes after the run ends, while the first pass back runs (its timeout).
 - The copy follows the `wardyn sync` rules: `.git` stays on your computer, `.gitignore` and `.wardynignore` apply,

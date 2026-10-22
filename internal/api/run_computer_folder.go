@@ -365,7 +365,9 @@ func (s *Server) quiesceKeptSandbox(ctx context.Context, run types.AgentRun, ref
 	if err := stopper.StopProxy(ctx, ref); errors.Is(err, runner.ErrEndUnsupported) {
 		return notQuiescable("its substrate cannot stop its proxy alone")
 	} else if err != nil {
-		return s.unlessStopped(ctx, ref, fmt.Errorf("its proxy did not stop: %w", err))
+		// Not unlessStopped: Docker's StopProxy fails closed by stopping the agent's container, so
+		// a stopped sandbox here is this failure's own doing, and the record names the proxy.
+		return fmt.Errorf("its proxy did not stop: %w", err)
 	}
 	if run.AgentExecID == runner.MainProcessExecID {
 		// An exec-less sandbox (the container is the agent): its agent ends only with the sandbox.
