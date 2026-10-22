@@ -306,13 +306,16 @@ func (s *Server) narrowUserInlinePolicy(ctx context.Context, owner string, spec 
 		for _, wr := range spec.WorkspaceRepos {
 			ws, onboarded := idx.repo[wr.Repo]
 			if onboarded {
-				_, ok, err := admittingCarrier(ctx, cap, ws, idx.repoAll[wr.Repo], usable)
+				chosen, ok, err := admittingCarrier(ctx, cap, ws, idx.repoAll[wr.Repo], usable)
 				if err != nil {
 					return nil, nil, err
 				}
 				if !ok {
 					// Refused, not dropped (#1259) — see boundUserSpec.
 					return nil, nil, &errUngrantedWorkspaceRepo{repo: wr.Repo, wsID: ws.ID.String()}
+				}
+				if usable(chosen) {
+					recordAdmittedCarrier(ctx, wr.Repo, chosen)
 				}
 			}
 			keptRepos = append(keptRepos, wr)
@@ -334,8 +337,8 @@ func carrierUsableBy(owner string) func(types.Workspace) bool {
 // capWorkspace is granted on or, when held (the carrier the source is held to)
 // is not one of them, held alone, judged as before. ok is false when none is
 // granted. Every judged carrier is read, so where all are granted (or the
-// capability is not enforced) this is the carrier the index holds already. The
-// run then uses that same carrier (runCarrierRule.holdAdmittedRepos).
+// capability is not enforced) this is the carrier the index holds already. A
+// fold records it (recordAdmittedCarrier) and the run uses that record.
 func admittingCarrier(ctx context.Context, cap *capBatch, held types.Workspace, carriers []types.Workspace, usable func(types.Workspace) bool) (types.Workspace, bool, error) {
 	judged := []types.Workspace{held}
 	if usable(held) {

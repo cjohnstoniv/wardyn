@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"sync"
@@ -93,15 +94,54 @@ func indexWorkspacesFor(all []types.Workspace, usable func(types.Workspace) bool
 	return idx
 }
 
+// admittedCarriersKey carries an admittedCarriers on a fold's request context.
+type admittedCarriersKey struct{}
+
+// admittedCarriers is one fold's record of the carrier a member's capability
+// narrowing admitted each repo by (narrowUserInlinePolicy). The workspace step
+// holds those repos, and only those, to it: the record is never recomputed,
+// and a repo no narrowing judged (an operator-authored or default-policy
+// entry) keeps the index's carrier.
+type admittedCarriers struct {
+	mu   sync.Mutex
+	repo map[string]types.Workspace
+}
+
+// recordAdmittedCarrier records ws as the carrier repo was admitted by, when
+// ctx is a fold's.
+func recordAdmittedCarrier(ctx context.Context, repo string, ws types.Workspace) {
+	m, ok := ctx.Value(admittedCarriersKey{}).(*admittedCarriers)
+	if !ok {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.repo == nil {
+		m.repo = map[string]types.Workspace{}
+	}
+	m.repo[repo] = ws
+}
+
+// admittedCarriersIn is the fold's record, nil outside a fold.
+func admittedCarriersIn(ctx context.Context) map[string]types.Workspace {
+	m, ok := ctx.Value(admittedCarriersKey{}).(*admittedCarriers)
+	if !ok {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return maps.Clone(m.repo)
+}
+
 // runCarrierRule is how one launch picks the workspace each source is judged by
 // (index) and whose member mount gate it owes. The carrier is the one the run
 // uses: an attached workspace that carries the source, else one mayLaunch
 // admits (indexWorkspacesFor), else the last carrier. nil mayLaunch admits
 // every workspace. person is the member the run is for, "" for an operator:
 // their own mount gate runs on a source a workspace of theirs carries, whichever
-// carrier judged it. admitted, filled by holdAdmittedRepos, holds a repo several
-// workspaces carry to the carrier admission admitted it by, ahead of mayLaunch
-// and behind attached. The zero value is the authoring doors' rule: every
+// carrier judged it. admitted holds a repo to the carrier a member's admission
+// admitted it by (a fold's admittedCarriers, or holdAdmittedRepos outside one),
+// ahead of mayLaunch and behind attached. The zero value is the authoring doors' rule: every
 // workspace, no person.
 type runCarrierRule struct {
 	attached  []types.Workspace
@@ -119,11 +159,11 @@ func (s *Server) launchCarrierRule(r *http.Request, attached []types.Workspace) 
 	return rule
 }
 
-// holdAdmittedRepos holds each repo of spec that several workspaces carry to
-// the carrier a member's admission judged it by (admittingCarrier), so the run's workspaces, requirements and association are that
-// carrier's and never another one the member was not granted. A repo no carrier
-// is granted keeps the index's choice; an operator's rule (no person) is left
-// as it is.
+// holdAdmittedRepos is admittedCarriers for a caller outside a fold (the setup
+// checklist, referencedWorkspaces): each repo of spec that several workspaces
+// carry is held to the carrier a member's admission would judge it by
+// (admittingCarrier). A repo no carrier is granted keeps the index's choice; an
+// operator's rule (no person) is left as it is.
 func (c *runCarrierRule) holdAdmittedRepos(ctx context.Context, cap *capBatch, all []types.Workspace, spec types.RunPolicySpec) error {
 	if c.person == "" {
 		return nil

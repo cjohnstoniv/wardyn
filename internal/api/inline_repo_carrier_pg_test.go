@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -65,12 +67,14 @@ func (fx inlineCarrierFixture) enforce(t *testing.T) {
 	}
 }
 
-func (fx inlineCarrierFixture) grant(t *testing.T, ws types.Workspace, effect types.CapabilityEffect) {
+func (fx inlineCarrierFixture) grant(t *testing.T, ws types.Workspace, effect types.CapabilityEffect) uuid.UUID {
 	t.Helper()
-	if _, err := fx.h.srv.cfg.Store.UpsertCapabilityGrant(context.Background(), types.CapabilityGrant{ID: uuid.New(),
-		SubjectType: types.CapabilitySubjectUser, Subject: "alice", Capability: capWorkspace, Value: ws.ID.String(), Effect: effect}); err != nil {
+	g, err := fx.h.srv.cfg.Store.UpsertCapabilityGrant(context.Background(), types.CapabilityGrant{ID: uuid.New(),
+		SubjectType: types.CapabilitySubjectUser, Subject: "alice", Capability: capWorkspace, Value: ws.ID.String(), Effect: effect})
+	if err != nil {
 		t.Fatal(err)
 	}
+	return g.ID
 }
 
 // runBody is alice's run naming govWorkspaceRepo inline, attaching attach when set.
@@ -87,8 +91,14 @@ func runBody(attach *uuid.UUID) string {
 // dispatch has settled, and the allowlist dispatch handed the proxy.
 func (fx inlineCarrierFixture) launch(t *testing.T, attach *uuid.UUID) (int, string, types.AgentRun, []string) {
 	t.Helper()
+	return fx.post(t, runBody(attach))
+}
+
+// post creates alice's run from body, as launch does.
+func (fx inlineCarrierFixture) post(t *testing.T, body string) (int, string, types.AgentRun, []string) {
+	t.Helper()
 	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
-	w := doSSO(t, fx.h.srv, http.MethodPost, "/api/v1/runs", alice, runBody(attach))
+	w := doSSO(t, fx.h.srv, http.MethodPost, "/api/v1/runs", alice, body)
 	if w.Code != http.StatusCreated {
 		return w.Code, w.Body.String(), types.AgentRun{}, nil
 	}
@@ -163,18 +173,84 @@ func TestPG_InlineRepoCarrier_AllowADenyB(t *testing.T) {
 	}
 }
 
-// TestPG_InlineRepoCarrier_UnenforcedControl: enforcement off and no rows, so
-// both carriers are granted. The run uses the oldest usable carrier (B here),
-// the one the index held before admission's choice was carried: nothing
-// changes where every carrier is granted.
+// TestPG_InlineRepoCarrier_UnenforcedControl (compatibility control):
+// enforcement off and no rows, so both carriers are granted. In either creation
+// order the run uses the oldest usable carrier, the one the index held before
+// admission's choice was carried: nothing changes where every carrier is
+// granted.
 func TestPG_InlineRepoCarrier_UnenforcedControl(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		aNewer bool
+	}{{"A newer", true}, {"B newer", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newInlineCarrierFixture(t, tc.aNewer, "")
+			oldest, oldestHost, newestHost := fx.b, carrierBHost, carrierAHost
+			if !tc.aNewer {
+				oldest, oldestHost, newestHost = fx.a, carrierAHost, carrierBHost
+			}
+			code, body, run, allowed := fx.launch(t, nil)
+			if code != http.StatusCreated {
+				t.Fatalf("create run: %d %s, want 201", code, body)
+			}
+			if !slices.Equal(run.WorkspaceIDs, []uuid.UUID{oldest.ID}) {
+				t.Errorf("run workspace_ids = %v, want the oldest carrier %s %s", run.WorkspaceIDs, oldest.Name, oldest.ID)
+			}
+			if !slices.Contains(allowed, oldestHost) || slices.Contains(allowed, newestHost) {
+				t.Errorf("dispatched allowlist %v, want %s and not %s", allowed, oldestHost, newestHost)
+			}
+		})
+	}
+}
+
+// TestPG_InlineRepoCarrier_GrantRemovedAfterAdmission: A newer, enforced, the
+// only grant on A. The grant is deleted right after the policy step admitted
+// the repo by A and before the workspaces step runs. The run uses A, the
+// carrier admission recorded, and never the ungranted B.
+func TestPG_InlineRepoCarrier_GrantRemovedAfterAdmission(t *testing.T) {
 	fx := newInlineCarrierFixture(t, true, "")
+	fx.enforce(t)
+	grantA := fx.grant(t, fx.a, types.CapabilityAllow)
+	i := slices.IndexFunc(runFoldSteps, func(st runFoldStep) bool {
+		return strings.HasSuffix(runtime.FuncForPC(reflect.ValueOf(st.run).Pointer()).Name(), ".stepPolicy")
+	})
+	if i < 0 {
+		t.Fatal("stepPolicy is not a fold step")
+	}
+	steps := runFoldSteps
+	revoke := runFoldStep{modes: foldAll, run: func(s *Server, f *runFold, rec *foldRecorder) bool {
+		if _, err := s.cfg.Store.DeleteCapabilityGrant(context.Background(), grantA); err != nil {
+			t.Errorf("delete A's grant: %v", err)
+		}
+		return true
+	}}
+	runFoldSteps = slices.Concat(steps[:i+1], []runFoldStep{revoke}, steps[i+1:])
+	t.Cleanup(func() { runFoldSteps = steps })
 	code, body, run, allowed := fx.launch(t, nil)
+	runFoldSteps = steps
+	if code == http.StatusCreated {
+		fx.usesA(t, code, body, run, allowed)
+	} else if strings.Contains(body, fx.b.ID.String()) {
+		t.Errorf("refused naming B: %d %s", code, body)
+	}
+}
+
+// TestPG_InlineRepoCarrier_DefaultPolicyKeepsOperatorCarrier (compatibility
+// control): the default policy names the repo, the member edits nothing, B is
+// the older carrier and only A is granted. No member narrowing judged the
+// repo, so the run keeps the carrier the index holds, B, with B's requirement,
+// exactly as before.
+func TestPG_InlineRepoCarrier_DefaultPolicyKeepsOperatorCarrier(t *testing.T) {
+	fx := newInlineCarrierFixture(t, true, "")
+	fx.h.srv.cfg.DefaultPolicy.WorkspaceRepos = []types.WorkspaceRepo{{Repo: govWorkspaceRepo}}
+	fx.enforce(t)
+	fx.grant(t, fx.a, types.CapabilityAllow)
+	code, body, run, allowed := fx.post(t, `{"agent":"claude-code","task":"t"}`)
 	if code != http.StatusCreated {
 		t.Fatalf("create run: %d %s, want 201", code, body)
 	}
 	if !slices.Equal(run.WorkspaceIDs, []uuid.UUID{fx.b.ID}) {
-		t.Errorf("run workspace_ids = %v, want the oldest carrier B %s (A is %s)", run.WorkspaceIDs, fx.b.ID, fx.a.ID)
+		t.Errorf("run workspace_ids = %v, want the operator carrier B %s (A is %s)", run.WorkspaceIDs, fx.b.ID, fx.a.ID)
 	}
 	if !slices.Contains(allowed, carrierBHost) || slices.Contains(allowed, carrierAHost) {
 		t.Errorf("dispatched allowlist %v, want B's requirement %s and not A's", allowed, carrierBHost)
