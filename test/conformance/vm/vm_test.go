@@ -303,7 +303,7 @@ func TestLinuxVMSandbox(t *testing.T) {
 	}
 	// The proxy's rows: the port rule refused port 22 (the run's proxy is marked vm, as nothing else
 	// turns that rule on here), the relay reported what only it sees, and every allow is the origin.
-	want := map[string]bool{"policy:port": false, "policy:denied": false, "vmnet:literal-ip": false, "vmnet:udp": false, "vmnet:dropped-frame": false}
+	want := map[string]bool{"policy:port": false, "policy:default-deny": false, "vmnet:literal-ip": false, "vmnet:udp": false, "vmnet:dropped-frame": false}
 	var rows []map[string]any
 	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(time.Second) {
 		rows = decisions(t, cli, spec.RunID)
@@ -327,7 +327,8 @@ func TestLinuxVMSandbox(t *testing.T) {
 		}
 	}
 	for _, r := range rows {
-		host, _ := r["host"].(string)
+		req, _ := r["request"].(map[string]any)
+		host, _ := req["Host"].(string)
 		src, _ := r["rule_source"].(string)
 		flow, _ := r["flow"].(string)
 		switch {
