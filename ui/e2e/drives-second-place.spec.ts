@@ -69,7 +69,7 @@ test.describe("Admin Drives: where a drive mounts from", () => {
     await expect(place.getByRole("heading", { name: DRIVES.SECOND_PLACE_TITLE })).toBeVisible();
     await expect(place.getByText(DRIVES.WHERE_OWN_RUNNER)).toBeVisible();
     await expect(place.getByText(DRIVES.REACH_NOTE)).toBeVisible();
-    await place.getByLabel(DRIVES.FIELD_RUNNER).selectOption({ label: DRIVES.RUNNER_OPTION("mbp-dev") });
+    await place.getByLabel(DRIVES.FIELD_RUNNER, { exact: true }).selectOption({ label: DRIVES.RUNNER_OPTION("mbp-dev") });
     await place.getByLabel(DRIVES.FIELD_ALT_HOST_ROOT).fill("/Volumes/team-share");
     await editor(page).getByRole("button", { name: DRIVES.SAVE_CTA }).click();
     await expect.poll(() => puts.length).toBe(1);
