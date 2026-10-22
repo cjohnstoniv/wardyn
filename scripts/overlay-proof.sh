@@ -48,7 +48,7 @@ die() { echo "overlay-proof.sh: $*" >&2; exit 2; }
 # helper <subcommand> args...: manifest parsing, validation, bundle packing.
 helper() {
 python3 -I - "$@" <<'PYEOF'
-import json, os, re, shutil, sys
+import json, os, posixpath, re, shutil, sys
 
 NAME = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]*$')
 PKG = re.compile(r'^\./[A-Za-z0-9_./-]+$')
@@ -63,7 +63,13 @@ def bad(msg):
 
 
 def safe(p):
-    return p and not p.startswith('/') and '..' not in p.split('/') and '\t' not in p and '\n' not in p
+    """A relative path, already normal: no empty, '.', '..' or '.git' component (a hook in
+    .git or a './.git/config' spelling would run code when git next looks at the tree)."""
+    if not isinstance(p, str) or not p or p.startswith('/') or '\t' in p or '\n' in p or '\\' in p:
+        return False
+    if posixpath.normpath(p) != p:
+        return False
+    return not any(c in ('', '.', '..') or c.lower() == '.git' for c in p.split('/'))
 
 
 def load(bundle):
@@ -96,7 +102,7 @@ def load(bundle):
         if not isinstance(files, dict) or not files:
             bad(f"{name}: no files")
         for repo, b in files.items():
-            if not safe(repo) or not safe(b) or not b.startswith(FILES) or repo.startswith('.git/'):
+            if not safe(repo) or not safe(b) or not b.startswith(FILES):
                 bad(f"{name}: unsafe path {repo!r} -> {b!r}")
             if not os.path.isfile(os.path.join(bundle, b)):
                 bad(f"{name}: bundle file {b} is missing")
@@ -198,12 +204,12 @@ prove_one() {
     local norm wl pl
     norm=$(sed -E -e 's/^[[:space:]]+//' -e 's/ \([0-9.]+s\)$//' "$out")
     wl=$(grep -Fxn -- "$want" <<<"$norm" | head -n 1 | cut -d: -f1 || true)
-    pl=$(grep -n '^panic:' <<<"$norm" | head -n 1 | cut -d: -f1 || true)
+    pl=$(grep -m1 "^panic:" <<<"$norm" || true)
     if grep -Fq '[build failed]' "$out"; then reason="build failed"
     elif grep -Fq '[setup failed]' "$out"; then reason="setup failed"
     elif [ "$rc" = 0 ]; then reason="overlay green"
     elif [ "$rc" != 1 ]; then reason="rc $rc, want 1"
-    elif [ -n "$pl" ] && { [ -z "$wl" ] || [ "$pl" -lt "$wl" ]; }; then reason="panic before the FAIL"
+    elif [ -n "$pl" ]; then reason="panic"
     elif [ -z "$wl" ]; then reason="no output line equals the want_fail"
     fi
     grep -E '^[[:space:]]*(--- FAIL|FAIL|ok|panic:)|\[(build|setup) failed\]' "$out" | head -n 20 | sed 's/^/  | /'

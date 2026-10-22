@@ -15,7 +15,8 @@ name: Overlay proofs
 #               manifest's keyed_sha, and it is the tree the proofs run against.
 #
 # The script comes from the ref this workflow was dispatched on, not from the
-# bundle branch or the keyed sha, which may predate it.
+# bundle branch or the keyed sha, which may predate it. Both jobs run only when
+# that ref is main, so a branch cannot supply its own script.
 on:
   workflow_dispatch:
     inputs:
@@ -40,6 +41,7 @@ jobs:
   # groups the proofs by package: one prove job per package, its proofs in turn.
   plan:
     name: plan
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -66,6 +68,7 @@ jobs:
   prove:
     name: prove (${{ matrix.package }})
     needs: plan
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: ${{ matrix.timeout }}
     strategy:

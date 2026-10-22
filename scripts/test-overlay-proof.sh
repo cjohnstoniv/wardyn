@@ -60,6 +60,7 @@ SHA="$(git -C "$REPO" rev-parse HEAD)"
 addbug() { sed 's/a + b/a - b/' "$REPO/internal/p/p.go"; }
 barbug() { sed 's/a \* 2/a * 3/' "$REPO/internal/p/p.go"; }
 green() { { cat "$REPO/internal/p/p.go"; echo "// a comment, no behaviour change"; }; }
+panics() { sed 's/return a + b/var m map[int]int; m[0] = a; return a + b/' "$REPO/internal/p/p.go"; }
 nobuild() { { cat "$REPO/internal/p/p.go"; echo "func Broken( {"; }; }
 
 # put_file <bundle> <proof> <repo path>   (content on stdin)
@@ -117,6 +118,12 @@ manifest "$B" "$SHA" "$(pj nobuild 'TestAdd' '--- FAIL: TestAdd' internal/p/p.go
 expect "build error FAILs" 1 "result=FAIL reason=build failed" "$SCRIPT" run "$B" "$REPO"
 clean "nobuild"
 
+# The revert panics inside the named test: go prints "--- FAIL: TestAdd" and then "panic:".
+B="$TMP/panic"; put_file "$B" panic internal/p/p.go < <(panics)
+manifest "$B" "$SHA" "$(pj panic 'TestAdd$' '--- FAIL: TestAdd' internal/p/p.go)"
+expect "a panic in the named test FAILs" 1 "result=FAIL reason=panic" "$SCRIPT" run "$B" "$REPO"
+clean "panic"
+
 # TestAddBar fails; "--- FAIL: TestAdd" is only a prefix of that line.
 B="$TMP/substr"; put_file "$B" substr internal/p/p.go < <(barbug)
 manifest "$B" "$SHA" "$(pj substr 'TestAdd' '--- FAIL: TestAdd' internal/p/p.go)"
@@ -134,6 +141,14 @@ clean "list"
 B="$TMP/nodiff"; put_file "$B" nodiff internal/p/p.go < "$REPO/internal/p/p.go"
 manifest "$B" "$SHA" "$(pj nodiff 'TestAdd' '--- FAIL: TestAdd' internal/p/p.go)"
 expect "a no-op revert FAILs" 1 "reason=changed files differ from the manifest" "$SCRIPT" run "$B" "$REPO"
+
+# Manifest paths that name .git, or spell a path another way, are refused before anything is copied.
+for bad in './.git/config' '.git/config' 'internal/p/.git/hooks/x' 'internal/./p/p.go' 'internal/p/../p/p.go' '/etc/passwd' 'internal//p/p.go' '.GIT/config'; do
+  B="$TMP/badpath"; rm -rf "$B"; put_file "$B" bad internal/p/p.go < <(addbug)
+  printf '{"keyed_sha":"%s","proofs":[{"name":"bad","package":"./internal/p","run":"TestAdd","tags":"","files":{"%s":".proofs/files/bad/internal/p/p.go"},"want_fail":"--- FAIL: TestAdd"}]}\n' "$SHA" "$bad" >"$B/.proofs/manifest.json"
+  expect "manifest path $bad is refused" 2 "unsafe path" "$SCRIPT" run "$B" "$REPO"
+  clean "badpath $bad"
+done
 
 # ── 3. sequential, each in a clean tree; --only; the sha key ────────────────
 B="$TMP/seq"
@@ -181,6 +196,8 @@ else
   timeouts="$(grep -cE '^    timeout-minutes:' "$WF" || true)"
   [ "$jobs" -ge 2 ] || fail "workflow: only $jobs jobs"
   [ "$timeouts" = "$jobs" ] || fail "workflow: $jobs jobs but $timeouts timeout-minutes"
+  gated="$(grep -cF "    if: github.ref == 'refs/heads/main'" "$WF" || true)"
+  [ "$gated" = "$jobs" ] || fail "workflow: $gated of $jobs jobs are gated on github.ref == refs/heads/main"
   grep -Fq 'never dispatch while a train attempt 1 is queued' "$WF" || fail "workflow: the throttle comment is missing"
   echo "ok   workflow text checks"
 fi
