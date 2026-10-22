@@ -32,6 +32,7 @@ vi.mock("../../../lib/api/user-types", () => ({ userTypes: { listUserTypes: () =
 
 import type { GovernanceUnit, GovernanceSnapshot } from "../../../lib/api/governance";
 import { GOVERNANCE as GOV } from "../../../lib/governance-copy";
+import { DEFAULT_GOVERNANCE_UNIT_ID } from "../../../lib/types/governance";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { GovernanceScreen } from "./governance-screen";
 import { aheadByHours } from "../../../lib/test-clock";
@@ -101,5 +102,14 @@ describe("GovernanceScreen — assignments say each thing once (#3049)", () => {
     expect(within(combine).getByText(GOV.PRECEDENCE)).toBeInTheDocument();
     const form = screen.getByRole("heading", { name: GOV.ADD_TITLE });
     expect(form.compareDocumentPosition(combine) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});
+
+describe("GovernanceScreen — the Default unit", () => {
+  it("a snapshot holding only the Default unit is the empty state: the console hides Default", async () => {
+    renderScreen({ profiles: [{ ...PLATFORM, id: DEFAULT_GOVERNANCE_UNIT_ID, name: "Default", kind: "default", depth: 1 }], assignments: [] });
+    expect(await screen.findByText(GOV.EMPTY_TITLE)).toBeInTheDocument();
+    expect(screen.queryByText("Default")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: GOV.NEW_CTA })).toBeInTheDocument();
   });
 });
