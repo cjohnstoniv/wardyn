@@ -20,7 +20,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   on `runner_health` (migration `0206_runner_health`). Without `INSERT` or `UPDATE` a runner's offline summary and
   relay status are not kept; without `SELECT` every one-runner read (`GET /api/v1/runners/{id}`,
   `GET /api/v1/me/runners/{id}`) answers 500. Grant it also
-  `SELECT, INSERT, UPDATE` on `launch_preset_version_floor` (migration `0220_launch_preset_version_floor`).
+  `SELECT, INSERT, UPDATE` on `launch_preset_version_floor` (migration `0221_launch_preset_version_floor`).
   Without it, creating or deleting a launch preset fails.
 - **`wardyn run attach` is now `wardyn attach`.** The old spelling is an unknown command, with no alias. A script
   that calls `wardyn run attach <run-id>` changes to `wardyn attach <run-id>`. `wardyn run ssh` is unchanged.
@@ -39,7 +39,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   written. The same migration's `agent_runs.break_glass` column needs no grant.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on
-  `ui_desktop_closed` (migration `0218_ui_desktop_closed`). Without it a desktop Close cannot be stored or read, so
+  `ui_desktop_closed` (migration `0219_ui_desktop_closed`). Without it a desktop Close cannot be stored or read, so
   every desktop session is refused and Close fails.
 - **Copying out of a desktop is now blocked by default.** The UI gateway's relay filters the clipboard of the
   `novnc` desktop app: paste into the desktop stays allowed, copy out of it is dropped and audited as
@@ -47,7 +47,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Other apps are unchanged. To keep copy out, set `desktop.copy_out` to `allowed` on the policy, and on the ceiling of any
   member who should have it ([`desktop`](docs/POLICIES.md#desktop--desktopcontrols)).
 - Split-role installs as above: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `desktop_signins`,
-  `desktop_signin_shares` and `desktop_signin_runs` (migration `0219_desktop_signins`). Without it a desktop run starts
+  `desktop_signin_shares` and `desktop_signin_runs` (migration `0220_desktop_signins`). Without it a desktop run starts
   without sign-ins, a desktop sign-in cannot begin, and the sweep that ends one cannot read it.
 - **Desktop sign-ins are new and off** (`WARDYN_DESKTOP_SIGNINS`, default `off`). Turned on, a run's creator can sign
   in to websites inside the run's desktop while the agent is stopped, and share one site's login with the agent. The
