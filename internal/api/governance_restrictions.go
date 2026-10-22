@@ -242,6 +242,15 @@ func (s *Server) restrictionAttribution(ctx context.Context, run types.AgentRun)
 	return policyref.Project(policyref.SourceUnit, list[0].Name, list[0].Contact) // the wire knows two sources; a restriction reads as a named profile
 }
 
+// admitApprovalBounds is the boundary's bound on an egress approval, then the restrictions'.
+func (s *Server) admitApprovalBounds(w http.ResponseWriter, r *http.Request, ap types.ApprovalRequest, run types.AgentRun, haveRun bool) (types.AgentRun, bool, bool) {
+	run, haveRun, ok := s.boundaryAdmitApproval(w, r, ap, run, haveRun)
+	if !ok {
+		return run, haveRun, false
+	}
+	return s.restrictionAdmitApproval(w, r, ap, run, haveRun)
+}
+
 // restrictionAdmitApproval is the restrictions' bound on an egress approval, beside the boundary's:
 // for any decider, a host a restriction the run captured denies is not admitted. ok=false: the 403 is
 // written and the approval stays pending. It returns the run, read here when the gate before it had not.
