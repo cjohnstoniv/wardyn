@@ -83,7 +83,8 @@ ARG PNPM_VERSION=9.15.4
 RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi; \
     if [ -n "$HTTP_PROXY" ]; then npm config set proxy "$HTTP_PROXY"; fi; \
     if [ -n "$HTTPS_PROXY" ]; then npm config set https-proxy "$HTTPS_PROXY"; fi; \
-    npm install -g "pnpm@${PNPM_VERSION}" && pnpm --version \
+    for i in 1 2 3; do timeout 180 npm install -g "pnpm@${PNPM_VERSION}" && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done; \
+    pnpm --version \
  && npm config delete proxy https-proxy
 
 # JDK 21 (Temurin) + Maven, for jsoup (needs 21) and JVM projects generally.
