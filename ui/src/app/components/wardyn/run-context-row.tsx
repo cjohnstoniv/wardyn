@@ -23,8 +23,11 @@ import { runPath, useConsoleMode } from "./console-view";
 export function RunContextRow({
   runId,
   onRun,
+  askedBy,
 }: {
   runId: string;
+  /** The agent that raised the request, on a run with several agents: its mark leads the row, not the run's own agent. */
+  askedBy?: string;
   /** B4: the fetched run, handed back to the card above. The approval card has
    *  to know whether the run has ENDED — a terminal run's PENDING approvals are
    *  cancelled by the lifecycle cascade, so offering Approve/Deny on one is a
@@ -68,7 +71,7 @@ export function RunContextRow({
         <span className="h-5 w-48 animate-pulse rounded bg-muted" />
       ) : run ? (
         <>
-          <AgentBadge agent={run.agent} withLabel={false} />
+          <AgentBadge agent={askedBy ?? run.agent} withLabel={false} />
           {/* F1-F9: a local third copy of the headline chain that ignored
               run.interactive (a nameless non-interactive run read as
               "Interactive session") — the canonical helper board-groups.ts's

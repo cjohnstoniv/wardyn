@@ -93,10 +93,12 @@ func promotedRunner(ctx context.Context) *uuid.UUID {
 
 // queueEnd is how a start that cannot go on ends the run: the queue reason (the status_detail token,
 // "" for none), the sentence under the FAILED badge, and what the run.queue.start failure row adds.
+// wait, when set, puts the run back in its queue with that reason instead of ending it.
 type queueEnd struct {
 	token string
 	hint  string
 	extra map[string]any
+	wait  runnerpool.WaitReason
 }
 
 // queuedStart is one promoted run's start: the run and its queue row, the owner's identity, and the
@@ -183,6 +185,11 @@ func (st *queuedStart) bind(a queueAuthority) error {
 // the pool and the fold, then the mint and the launch. It returns the end for the first refusal, nil
 // when the run was handed to dispatch or was already taken by a kill.
 func (s *Server) runQueuedStart(st *queuedStart) *queueEnd {
+	// A run booked for later starts only while scheduled runs are on: switching them off binds the runs
+	// already booked, not only new requests.
+	if st.entry.StartAt != nil && !envEnabled(envScheduledRuns) {
+		return &queueEnd{token: string(types.RunEndScheduledRunsOff), hint: types.RunEndScheduledRunsOff.Sentence()}
+	}
 	if end := s.queueOwnerStanding(st); end != nil {
 		return end
 	}
@@ -218,7 +225,7 @@ func (s *Server) runQueuedStart(st *queuedStart) *queueEnd {
 	}
 	if !ok {
 		if f, ok = s.foldRunRequest(st.cw, st.r, foldCreate, &req, ceiling, reqCC); !ok {
-			return st.refusalEnd()
+			return s.signInEnd(st, st.refusalEnd())
 		}
 	}
 	st.f = f
@@ -236,6 +243,8 @@ func (st *queuedStart) request() (createRunRequest, error) {
 		return req, err
 	}
 	req.RunnerPoolID = st.run.RunnerPoolID.String()
+	// A scheduled run's time has come: the replay is a start now.
+	req.StartAt, req.StartTimeZone = "", ""
 	if req.ModelProvider == "" {
 		req.ModelProvider = st.launch.ProviderID
 	}
@@ -271,6 +280,20 @@ func (s *Server) foldRaisedDefault(st *queuedStart, req createRunRequest, ceilin
 	}
 	st.cw, st.classRaised = cw, true
 	return f, raised, true, nil
+}
+
+// signInEnd is end, or for a scheduled run whose start found its owner's model sign-in refused (the
+// renewal at the start needs them to sign in again, llmRefusalAuditReason), the owner_sign_in wait the
+// docs promise: the booking goes back to its queue, within its deadline, for them to sign in again. A
+// policy or any other refusal still ends it, and an unscheduled queued run fails as it always has.
+// It goes back only when the queue would hold it now (queueOwnerSignIn): a refusal the admit's status
+// read cannot see (a spent mark on a pair still stored) would promote it again at once, so that one ends
+// the run as before instead of looping.
+func (s *Server) signInEnd(st *queuedStart, end *queueEnd) *queueEnd {
+	if st.entry.StartAt != nil && end.token == llmRefusalAuditReason && s.queueOwnerSignIn(st.base, st.entry, st.launch) != "" {
+		end.wait = runnerpool.WaitOwnerSignIn
+	}
+	return end
 }
 
 // refusalEnd turns the answer a replayed gate wrote into the run's end: the gate's reason is the token
@@ -335,7 +358,7 @@ func (s *Server) queueGovernance(st *queuedStart, req createRunRequest) (governa
 		ceilingRunRefusal(err).write(s, st.cw, st.r)
 		return governanceCeiling{}, st.refusalEnd()
 	}
-	if !sameProfile(cur, st.launch.ProfileID) {
+	if !sameUnit(cur, st.launch.UnitID) {
 		return governanceCeiling{}, &queueEnd{token: string(types.RunEndQueueProfileChanged), hint: types.RunEndQueueProfileChanged.Sentence()}
 	}
 	ceiling, refusal := s.runRequestGovernance(st.r, req)
@@ -358,12 +381,12 @@ func (s *Server) queueGovernance(st *queuedStart, req createRunRequest) (governa
 	return ceiling, nil
 }
 
-// sameProfile reports whether ceiling resolved to the profile the launch recorded (nil for none).
-func sameProfile(ceiling governanceCeiling, recorded *uuid.UUID) bool {
-	if ceiling.Profile == nil || recorded == nil {
-		return ceiling.Profile == nil && recorded == nil
+// sameUnit reports whether ceiling resolved to the profile the launch recorded (nil for none).
+func sameUnit(ceiling governanceCeiling, recorded *uuid.UUID) bool {
+	if ceiling.Unit == nil || recorded == nil {
+		return ceiling.Unit == nil && recorded == nil
 	}
-	return ceiling.Profile.ID == *recorded
+	return ceiling.Unit.ID == *recorded
 }
 
 // queuePolicyUnchanged is step 5 (Q7-A): the stored policy or launch preset the run was reviewed under
@@ -404,7 +427,7 @@ func (s *Server) queueNarrowOnly(st *queuedStart) *queueEnd {
 func (s *Server) queueLaunch(st *queuedStart, req createRunRequest, ceiling governanceCeiling) *queueEnd {
 	// Create's local_folder refusal again: the deployment may have lost what holds the agent for the
 	// folder (its SSH gateway, a store that keeps the seed) while the run waited.
-	if s.localFolderRefusal(&req).write(s, st.cw, st.r) {
+	if s.localFolderRefusal(st.r.Context(), &req).write(s, st.cw, st.r) {
 		return st.refusalEnd()
 	}
 	f := st.f
@@ -428,7 +451,7 @@ func (s *Server) queueLaunch(st *queuedStart, req createRunRequest, ceiling gove
 	}
 	started, ok, err := qs.StartQueuedRun(st.ctx, run.ID, store.QueueStart{
 		SPIFFEID: id.SPIFFEID, ConfinementClass: f.enforced, ModelProviderID: f.mpChoice.provider.ID, AutonomyLevel: f.autonomy.Level, InnerWalls: f.innerWalls,
-		EndsAt: anchor.EndsAt, WaitBudgetSec: anchor.WaitBudgetSec, RunLimits: anchor.RunLimits, GovernanceProfileID: anchor.GovernanceProfileID,
+		EndsAt: anchor.EndsAt, WaitBudgetSec: anchor.WaitBudgetSec, RunLimits: anchor.RunLimits, UnitID: anchor.UnitID,
 		LifetimeCapAt: anchor.LifetimeCapAt, LifetimeCapSource: anchor.LifetimeCapSource,
 		Placement: placed.Placement, PlacementFilled: placed.PlacementFilled, RunnerID: placed.RunnerID,
 		EvidenceSource: placed.EvidenceSource, RunnerPoolExecutor: placed.RunnerPoolExecutor, RunnerFallbacks: f.place.otherRunners(f.enforced, placed.RunnerID),
@@ -504,6 +527,9 @@ func (s *Server) auditQueueStart(st *queuedStart, started, anchor types.AgentRun
 // failure is audited and the metric counted. The slot it held frees, and casRunState kicks the queue.
 func (s *Server) endPromoted(st *queuedStart, end *queueEnd) {
 	run := st.run
+	if end.wait != "" && s.requeuePromoted(st, end.wait) {
+		return
+	}
 	if end.token != "" {
 		if qs, ok := s.queueStore(); ok {
 			if err := qs.SetPromotedStatusDetail(st.base, run.ID, statusDetailQueuePrefix+end.token); err != nil {
@@ -523,4 +549,24 @@ func (s *Server) endPromoted(st *queuedStart, end *queueEnd) {
 	}
 	s.metrics.queueWait(queueOutcomeRefused, run.AdmittedAt.Sub(st.entry.QueuedAt))
 	s.recordAudit(st.base, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.queue.start", run.ID.String(), "failure", mustJSON(data)))
+}
+
+// requeuePromoted puts a promoted run back in its queue row as it was promoted (owner, authority,
+// provider, deadline), waiting for reason, and kicks the queue for the slot it freed. false when the run
+// had already moved (a kill won, and wrote its own rows) or the store could not do it; the caller then
+// ends it as before, which a moved run ignores.
+func (s *Server) requeuePromoted(st *queuedStart, reason runnerpool.WaitReason) bool {
+	qs, ok := s.queueStore()
+	if !ok {
+		return false
+	}
+	moved, err := qs.RequeuePromotedRun(st.base, st.entry, statusDetailQueuePrefix+string(reason))
+	if err != nil {
+		slog.WarnContext(st.base, queueStartFailedLogName+": return the run to its queue", slog.String("run_id", st.run.ID.String()), slog.Any("err", err))
+		return false
+	}
+	if moved {
+		s.kickQueue()
+	}
+	return moved
 }

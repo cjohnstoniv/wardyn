@@ -46,6 +46,9 @@ type RunnerHooks struct {
 	ProxyImage func(string)
 	// StreamOffline releases per-connection PTY/exec resources, not sandboxes.
 	StreamOffline func(*Peer)
+	// ConnectFailed, when set, is told each error that ended a connection attempt or a session, except
+	// revocation, the organisation's own goaway and the run's own end.
+	ConnectFailed func(error)
 }
 
 // ClientConfig holds the registered identity and the shared HTTP transport.
@@ -57,6 +60,9 @@ type ClientConfig struct {
 	HTTPClient       *http.Client
 	Dial             func(context.Context) (Conn, error)
 	Hooks            RunnerHooks
+	// LinkChanged, when set, is told each time a session comes up (reason "") or an attempt ends (reason
+	// is why, "" when it ended without one). It must not block.
+	LinkChanged func(up bool, reason string)
 }
 
 // Client owns one runner's reconnect loop. Run must not be called concurrently.
@@ -91,6 +97,14 @@ func (l *linkState) set(up bool, reason string) {
 	l.up = up
 	if reason != "" {
 		l.reason = reason
+	}
+}
+
+// setLink records the link state and tells ClientConfig.LinkChanged.
+func (c *Client) setLink(up bool, reason string) {
+	c.link.set(up, reason)
+	if c.cfg.LinkChanged != nil {
+		c.cfg.LinkChanged(up, reason)
 	}
 }
 
@@ -143,10 +157,13 @@ func (c *Client) Run(ctx context.Context) error {
 		started := time.Now()
 		err := c.Connect(ctx)
 		if err != nil {
-			c.link.set(false, err.Error())
+			c.setLink(false, err.Error())
 		}
 		if errors.Is(err, ErrRevoked) {
 			return errors.Join(err, c.cfg.Hooks.Revoked(ctx))
+		}
+		if err != nil && !errors.Is(err, ErrGoaway) && ctx.Err() == nil && c.cfg.Hooks.ConnectFailed != nil {
+			c.cfg.Hooks.ConnectFailed(err)
 		}
 		if errors.Is(err, ErrGoaway) || errors.Is(err, ErrResumeGap) {
 			c.session, c.ready = "", false
@@ -183,7 +200,11 @@ func (l *connectLog) failed(ctx context.Context, err error, retry time.Duration)
 		return
 	}
 	l.last = err.Error()
-	slog.WarnContext(ctx, "runner connection to the organisation failed", slog.Any("err", err), slog.Duration("retry_in", retry))
+	attrs := []any{slog.Any("err", err), slog.Duration("retry_in", retry)}
+	if hint := connectHint(err); hint != "" {
+		attrs = append(attrs, slog.String("hint", hint))
+	}
+	slog.WarnContext(ctx, "runner connection to the organisation failed", attrs...)
 }
 
 func reconnectDelay(attempt int) time.Duration {
@@ -242,7 +263,7 @@ func (c *Client) serve(ctx context.Context, conn Conn, cfg PeerConfig, ok AuthOK
 	peer = NewPeer(conn, cfg)
 	c.peer = peer
 	defer func() {
-		c.link.set(false, "")
+		c.setLink(false, "")
 		peer.Close()
 		c.ended, c.ready = time.Now(), started && ready.Load()
 		if c.cfg.Hooks.StreamOffline != nil {
@@ -266,7 +287,7 @@ func (c *Client) serve(ctx context.Context, conn Conn, cfg PeerConfig, ok AuthOK
 		}
 	}
 	slog.InfoContext(ctx, "runner connected to the organisation", slog.Bool("resumed", ok.Resumed))
-	c.link.set(true, "")
+	c.setLink(true, "")
 	if c.cfg.Hooks.Online != nil {
 		c.cfg.Hooks.Online(peer, ok.Resumed)
 	}

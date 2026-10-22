@@ -55,7 +55,7 @@ type backgroundDoor struct {
 	Enforced bool
 }
 
-// backgroundDoors lists every interactive door. `wardyn run attach` and
+// backgroundDoors lists every interactive door. `wardyn attach` and
 // `wardyn ssh`, the SDK and the console reach the same routes and the same SSH
 // gateway, so a direct API or CLI call needs no door of its own: denying here
 // denies there.

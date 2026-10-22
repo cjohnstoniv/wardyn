@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -51,7 +50,7 @@ type dispatchParams struct {
 	GitPATGrants     map[string]string       // {host: grant_id} for non-GitHub PAT hosts
 	SSHGrants        map[string]string       // {host: grant_id} for SSH clone hosts
 	Injections       []runner.InjectionGrant // proxy-side credential injections
-	Interactive      bool                    // idle box for `wardyn run attach` (no agent exec, no completion watcher)
+	Interactive      bool                    // idle box for `wardyn attach` (no agent exec, no completion watcher)
 	TaskMode         string                  // "exec" for the BYOA/CI plain-command lane; "" for the agent harness
 	InteractiveStart string                  // "agent" opens the attach shell in the image's agent CLI; "" / "shell" = a bare shell. Interactive runs only.
 	SeedAutoTools    bool                    // true lets an interactive run's boot seed use tools before attach (--dangerously-skip-permissions for that pre-attach span). Interactive + agent-started + non-empty seed only.
@@ -163,7 +162,7 @@ type dispatchParams struct {
 // start the completion watcher (there is no agent process to wait on — the
 // watcher would otherwise mark the idle run COMPLETED the moment Wait failed).
 // The sandbox comes up idle (the container holds open via the TERM-aware idle
-// loop, AgentIdleScript / `agent-run --idle`) so a human can `wardyn run attach
+// loop, AgentIdleScript / `agent-run --idle`) so a human can `wardyn attach
 // <id>` and drive it. A non-interactive run is
 // unchanged. Pair an interactive run with a never-reap policy (AutoStopAfterSec
 // < 0) or the idle reaper will stop the idle sandbox.
@@ -171,10 +170,11 @@ type dispatchParams struct {
 // Phase order is the contract: the policy phases below narrow `policy` in
 // sequence, and confineGitBrokerEgress runs LAST of the phases that touch the
 // ALLOWLIST so nothing above it can re-add a broker-managed host;
-// reassertCeilingDenies then runs after it (it only adds denies and only
+// the final seal then meets the result with the outer layers, and
+// reassertCeilingDenies runs after the seal (it only adds denies and only
 // removes credentials, so it cannot un-confine anything, and it has to sit
-// below every WIDENING phase — see its own ordering argument), and the final
-// seal after both meets the result with the outer layers. The ProxyConfig
+// below every WIDENING phase — see its own ordering argument), withholding
+// every credential the ceiling or a sealed layer walls off. The ProxyConfig
 // snapshot then captures that final policy, and the run.policy.resolve audit
 // event discloses it. Keep new phases inside this sequence, in the right place
 // — a phase hoisted into a caller silently loses the ordering guarantee.
@@ -431,7 +431,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 
 	// Governance ceiling re-assertion: union the acting principal's assigned
 	// profile's denies into the policy, drop every injection rule and BROKERED
-	// credential lane that reaches a denied host. Placed here, after
+	// credential lane that reaches a denied host (and, after the seal below, one
+	// the boundary withholds). Placed after
 	// confineGitBrokerEgress and after every widening phase above, because a
 	// create-time deny is defeated by those widenings — the artifact-redirect
 	// phase adds corp hosts AND authors token injections for them mid-dispatch.
@@ -450,11 +451,16 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	s.recordRunDiskCap(ctx, run.ID, policy.Resources)
 	// Record the reservation the driver will apply (best-effort, like the disk cap above).
 	s.recordRunSizing(ctx, run, resourceLimitsToRunner(policy.Resources), len(plan.azure.gates) > 0)
-	s.reassertCeilingDenies(ctx, run, &policy, &injections, ceiling, &p, sandboxEnv, &llm, &plan.bedrockMITMHosts, &p.Components.MITMHosts)
+	// The final seal, after every phase that adds a host: nothing below may widen
+	// policy (run_policy_seal.go). The ceiling's re-assertion follows it and reads
+	// the layers it sealed against, so a credential for a host the Wardyn boundary
+	// denies or does not allow is withheld as one the profile denies is (#3238).
+	layers := s.sealRunPolicy(ctx, run, &policy, p.Provenance)
+	signsBedrock := llm.signsBedrock()
+	grantRows = s.reassertCeilingDenies(ctx, run, &policy, &injections, ceiling, layers, grantRows, &p, sandboxEnv, &llm, &plan.bedrockMITMHosts, &p.Components.MITMHosts)
+	plan.withdrawSigV4(signsBedrock, llm)
 	azureARM := plan.azureCLI.closeWithheld(&policy, injections) // the door, decided once; one the ceiling withheld takes its hosts with it
-	// The final seal, after every phase that adds a host and after the ceiling's
-	// re-assertion: nothing below may widen policy (run_policy_seal.go).
-	s.sealRunPolicy(ctx, run, &policy, p.Provenance)
+	kubeAPI := plan.kubectlCLI.closeWithheld(&policy, injections)
 
 	// Host bind mounts (policy WorkspaceMounts + the host-mode Bedrock ~/.aws
 	// read-only mount) — operator-authored, never agent-chosen; see buildRunMounts.
@@ -486,7 +492,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// started harness's plaintext as a file only its own launch reads, never env.
 	// MCP servers: their credentials move to the broker and each harness's
 	// token goes into its own configuration (run_mcp.go).
-	mcp := dispatchMCP(p.Components.MCP, &injections, proxyURL, p.Interactive, sandboxEnv)
+	mcp := dispatchMCP(p.Components.MCP, withholding{deny: ceiling.deny, layers: layers}, &injections, proxyURL, p.Interactive, sandboxEnv)
 	harnessCreds, credFiles, merr := s.holdLaneHarnessCredentials(ctx, run, p)
 	if merr != nil {
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the run's tool-approval credential could not be made")
@@ -495,6 +501,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// Last of the env writers' credential work, after every injection above is
 	// authored, so its one-credential-per-host check sees them all.
 	placeholderMITM := s.placeEnvSecrets(ctx, run, policy, p, grantRows, secretEnvKeys, sandboxEnv, &injections)
+	resident = s.placeResidentEnvSecrets(ctx, run, policy, p, sandboxEnv, &injections, resident)
 	secretEnv := splitSecretEnv(sandboxEnv, dispatchSecretEnvKeys(secretEnvKeys, llm))
 
 	resources := resourceLimitsToRunner(policy.Resources)
@@ -536,7 +543,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		// these roots — see runner/member_mount.go.
 		UserMountRoots: p.UserMounts.Roots,
 		UserWritable:   p.UserMounts.Writable,
-		// Interactive runs come up idle for `wardyn run attach`; the driver prepares the
+		// Interactive runs come up idle for `wardyn attach`; the driver prepares the
 		// workspace (clones the repo into ~/work) on the idle process so the attach
 		// shell isn't empty. A non-interactive run's task exec does this itself.
 		Interactive: p.Interactive,
@@ -586,6 +593,11 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// The Azure CLI door's grant (runs_dispatch_cli_azure.go): nil without
 			// the row, and nil when a later phase withheld its credential.
 			AzureARM: azureARM,
+			// The re-signed AWS lane's grant (runs_dispatch_aws_sigv4.go): nil while
+			// WARDYN_AWS_SIGV4_AT_PROXY is off and on every lane it does not re-sign.
+			AWSSigV4: plan.awsSigV4,
+			// The kubectl door's grant (cli_kubectl.go), on the same terms.
+			KubeAPI: kubeAPI,
 			// The azure_foundry lane's route gate (provider_azure.go), and the hosts inspected as a model host without being a
 			// brokered upstream: that lane's endpoint and a Claude subscription's route-through host. Empty on every other run.
 			AzureGates:      plan.azure.gates,
@@ -709,7 +721,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	if !s.sandboxCreateAdmitted(ctx, run, ceiling, siteCfg, &spec, orgConfigKeys, llm, p) {
 		return
 	}
-	if !s.applyRunRecording(ctx, &run, &spec) {
+	if !s.applyRunRecording(ctx, &run, &spec, recordingChoice(run, policy, ceiling, siteCfg, siteCfgErr)) {
 		return
 	}
 	spec.ExecOutput = s.openExecOutput(run, p.Interactive)
@@ -745,7 +757,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// that the very next event — `run.create` `failure` — contradicted. Nothing
 	// downstream of here can refuse the drive, so this row is now true when it
 	// is written.
-	s.auditDriveMount(ctx, run.ID, p.Drives)
+	s.auditDriveMount(ctx, run.ID, run.CreatedBy, p.Drives)
 	auditAgentPolicy := func() { s.auditAgentPolicy(ctx, run, agentPolicy, spec) }
 	if !agentPolicy.execLess {
 		auditAgentPolicy()
@@ -798,133 +810,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	s.metrics.sandboxLaunched(s.cfg.Now().Sub(run.CreatedAt))
 
 	// INTERACTIVE vs task exec vs BYOI selftest — see startAgentOrIdle.
-	s.startAgentOrIdle(ctx, run, sb.Ref, p.Image, p.Interactive, execution, auditAgentPolicy)
-}
-
-// startAgentOrIdle is dispatch's final phase, after the run is RUNNING.
-//
-// Interactive mode: skip the agent Exec AND the completion watcher. The
-// sandbox is RUNNING and idle (the container holds open), ready for a human to
-// `wardyn run attach`. There is no agent process, so there is nothing for the
-// watcher to Wait on — starting it would have it observe an immediate Wait
-// failure (no tracked agent exec) and could prematurely terminate the run.
-// BYOI runtime preflight: a wrapped arbitrary base is guaranteed to carry the
-// runner tools (the wrap COPYs them), but may still lack a shell or the harness
-// CLI. Run `agent-run --selftest` and observe its exit — for a batch run, fail
-// CLOSED on nonzero (honest FAILED + audit, never a hang or a silent bad run);
-// for an interactive/login box, warn-only (a login box legitimately lacks repo
-// wiring and the human sees the shell regardless). Keyed off the wardyn-byoi/
-// image tag so convention/devcontainer runs are unaffected. Extracted verbatim
-// from dispatchRun.
-const mainProcessExecID = runner.MainProcessExecID
-
-// onAgentStarted, when non-nil, runs once the agent's Exec has succeeded: on an
-// exec-less runner that is the moment its container — and the managed files
-// delivered into it — first exists.
-func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, image string, interactive bool, execution runnerExecution, onAgentStarted func()) {
-	byoi := strings.HasPrefix(image, "wardyn-byoi/")
-
-	if interactive {
-		if byoi {
-			s.byoiSelftest(ctx, run, ref, execution, false /* warn-only */)
-		}
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.interactive.start",
-			run.ID.String(), "success", mustJSON(map[string]any{
-				"sandbox_ref": ref,
-				"note":        "interactive run: no agent task exec'd; awaiting attach",
-			})))
-		return
-	}
-
-	// When a task is provided, launch the agent process inside the now-running
-	// sandbox. The driver wraps the argv with wardyn-rec (recording) when
-	// configured. Exec failure: audit + stop the sandbox + mark FAILED.
-	if run.Task != "" {
-		// A local folder holds the agent until its first sync lands (run_local_folder.go).
-		if !s.holdForLocalFolder(ctx, run, ref) {
-			return
-		}
-		// BYOI: gate the task exec on a passing selftest (fail closed) — but
-		// refuse UP FRONT, before even attempting the selftest, on an
-		// exec-less (krun) substrate: see byoiExecLessRefused.
-		if byoi {
-			if s.byoiExecLessRefused(ctx, run, ref) {
-				return
-			}
-			if !s.byoiSelftest(ctx, run, ref, execution, true /* fail-closed */) {
-				s.stopSandboxOrAudit(ctx, run.ID, ref, "run.selftest")
-				s.failAndRevoke(ctx, run.ID, types.RunRunning,
-					"the BYOI image failed its agent-run --selftest (missing shell/harness binary, or a nonzero selftest exit)")
-				return
-			}
-		}
-		argv := []string{"/usr/local/bin/agent-run", run.Task}
-		execID, xerr := s.cfg.Runner.Exec(execution.bind(ctx), ref, argv)
-		if xerr == nil {
-			xerr = s.bindRunnerExecution(ctx, execution, execID)
-		}
-		if xerr != nil {
-			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.exec",
-				run.ID.String(), "failure", mustJSON(map[string]any{"error": xerr.Error(), "reason": "agent_start"})))
-			s.stopSandboxOrAudit(ctx, run.ID, ref, "run.exec")
-			// Conditional: a concurrent kill may have moved RUNNING->KILLED; don't
-			// clobber it with FAILED.
-			s.failAndRevoke(ctx, run.ID, types.RunRunning, "the agent process could not be started in the sandbox: "+xerr.Error())
-			return
-		}
-		if onAgentStarted != nil {
-			onAgentStarted()
-		}
-		// Persist the agent exec id so the boot reconciler can observe AGENT liveness
-		// (ExecInspect) across a wardynd restart: an idle-container exec run whose
-		// agent already exited must finalize + revoke, not strand RUNNING.
-		// Best-effort like SetSandboxRef. execID=="" (no error) is the exec-less
-		// substrate (container==agent) — persist the mainProcessExecID sentinel
-		// instead of the bare "" reconcile.go's strand guard reserves for a run
-		// that never got this far (see mainProcessExecID's doc comment).
-		persistExecID := execID
-		if persistExecID == "" {
-			persistExecID = mainProcessExecID
-		}
-		// NOT best-effort, whatever the comment above once said. reconcile.go's
-		// strand guard reserves "" for "SetRunAgentExecID was never called", so a
-		// LOST write leaves a healthy, running agent looking exactly like a run
-		// whose dispatcher died mid-dispatch — the next boot finalizes it FAILED
-		// and tears the sandbox down, while this audit row said the exec
-		// succeeded. One retry (the write is idempotent and the common failure is
-		// a transient connection blip), then fail the run HERE, visibly, rather
-		// than hand the reconciler a lie to misread hours later.
-		xerr = s.cfg.Store.SetRunAgentExecID(ctx, run.ID, persistExecID)
-		if xerr != nil {
-			// One retry: the write is idempotent and the failure this actually
-			// sees is a transient pool/connection blip, not a rejected value.
-			xerr = s.cfg.Store.SetRunAgentExecID(ctx, run.ID, persistExecID)
-		}
-		if xerr != nil {
-			slog.ErrorContext(ctx, "wardynd: could not persist the agent exec id; failing the run",
-				slog.String("run_id", run.ID.String()), slog.Any("err", xerr))
-			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.exec",
-				run.ID.String(), "failure", mustJSON(map[string]any{"argv": argv, "error": xerr.Error()})))
-			// The agent IS running; stop it, the same order the Exec-failure arm
-			// above uses, so a FAILED run never leaves a live agent behind.
-			s.stopSandboxOrAudit(ctx, run.ID, ref, "run.exec")
-			s.failAndRevoke(ctx, run.ID, types.RunRunning,
-				"the agent started but its exec id could not be persisted, so the run could not be tracked")
-			return
-		}
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.exec",
-			run.ID.String(), "success", mustJSON(map[string]any{"argv": argv})))
-
-		// Completion tracking: watch the agent process to exit and propagate its
-		// outcome. The watcher runs on a DETACHED context (NOT ctx — that is the
-		// request context, cancelled when the create-run handler returns, which
-		// would kill the watcher immediately). See startCompletionWatcher. Passed
-		// the RAW execID, not the sentinel: this local value only ever reaches
-		// AgentStatus via reconcileWatch's Wait-error fallback (runs_lifecycle.go),
-		// where "" already means "use container Status" — the sentinel only
-		// matters for a value that gets persisted and re-read after a restart.
-		s.startCompletionWatcher(run.ID, ref, execID)
-	}
+	s.startAgentsOrIdle(ctx, run, p.Harnesses, sb.Ref, p.Image, p.Interactive, execution, auditAgentPolicy)
 }
 
 // auditablePolicy returns a Clone of policy safe to write to the append-only
@@ -949,7 +835,7 @@ func auditablePolicy(policy types.RunPolicySpec) types.RunPolicySpec {
 // lane may dispatch (a non-remote placement create bound to no runner) and a
 // ceiling nobody resolved.
 func (s *Server) dispatchAdmitted(ctx context.Context, run types.AgentRun, ceiling dispatchCeiling) bool {
-	if s.unsupportedLocalDispatch(ctx, run) || s.dispatchPlacementDenied(ctx, run, ceiling) {
+	if s.unsupportedLocalDispatch(ctx, run) || s.dispatchPlacementDenied(ctx, run, ceiling) || s.dispatchBelowBoundaryFloor(ctx, run) {
 		return false
 	}
 	// Fail closed on a ceiling nobody resolved. The compiler already forces a

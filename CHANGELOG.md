@@ -10,10 +10,193 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Before you upgrade
 
+- New, off by default: `storage.user_drive.member_create.keep_main_drive` (#1991). Turned on, a run can keep its work
+  folder as its person's own drive; whatever an agent leaves there, a planted script or a harness project file included,
+  comes back in the next run that attaches it.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on
   `aws_sso_refused_tokens` (migration `0194_aws_sso_refused_tokens`). Without it an AWS SSO session whose renewal
-  AWS refused cannot be marked, read or cleared, so replicas do not share that mark.
+  AWS refused cannot be marked, read or cleared, so replicas do not share that mark. Grant it `SELECT, INSERT, UPDATE`
+  on `runner_health` (migration `0206_runner_health`). Without `INSERT` or `UPDATE` a runner's offline summary and
+  relay status are not kept; without `SELECT` every one-runner read (`GET /api/v1/runners/{id}`,
+  `GET /api/v1/me/runners/{id}`) answers 500.
+- **`wardyn run attach` is now `wardyn attach`.** The old spelling is an unknown command, with no alias. A script
+  that calls `wardyn run attach <run-id>` changes to `wardyn attach <run-id>`. `wardyn run ssh` is unchanged.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
+  `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE` on `cli_sessions` and
+  `SELECT, INSERT, UPDATE, DELETE` on `cli_sign_ins` (migration `0199_cli_sign_in`, which also adds `kind` and
+  `cli_session_id` to `api_tokens`). Without it every API token read fails, because a token's liveness now reads
+  `cli_sessions`.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) that turn on `WARDYN_MULTI_AGENT_TASKS`: grant the app role
+  `SELECT, INSERT, UPDATE` on `run_harnesses` (it holds the first two since `0164_run_harnesses`; migration
+  `0203_run_harness_task` adds `task`, which person erasure blanks, so it needs `UPDATE`). With the switch off,
+  nothing needs the new verb.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
+  `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE` on
+  `governance_boundary` (migration `0200_governance_boundary`). Without it the Wardyn boundary cannot be read or
+  written. The same migration's `agent_runs.break_glass` column needs no grant.
+- **Governance profiles are now units, and assignments are now memberships.** The routes are
+  `/governance/units`, `/governance/memberships` and `/governance/check` (was `/governance/preview`), and the keys
+  are `units`, `memberships`, `unit_id` and `parent_id`. The old routes answer 404 or 405 and are not aliased; a
+  script or a `wardyn governance` document that names the old routes or keys changes to the new ones. A 0.9
+  governance document is refused, and the error names the new key. The audit actions are `governance.unit.*` and
+  `governance.membership.*`; rows written before the upgrade keep the old names, so a query over a span that
+  crosses the upgrade matches both.
+- The same rename reaches what a client reads outside the governance body. Reason codes become
+  `governance_unit_*`, `governance_membership_*`, `user_drive_denied_by_unit`, `member_drives_denied_by_unit`,
+  `unit_unreadable`, `unit_gone`, `governance_unit_not_found` and `governance_membership_not_found`. The enum value
+  `profile` becomes `unit` in a policy's `source`, `cause` and `layer`, in managed-settings `locked_by` and in a
+  change's `target_kind`. The fields are `unit_name` and `unit` in the policy envelope, `user_drive_denied_by_unit`
+  in `GET /me`, `denied_by_unit` in the drives catalogue, `unit_id` on a run, and `unit_name` in
+  `GET /policies/default`. The approval-webhook payload carries `unit {id, name}`. The wardynd flag is
+  `-governance-unit-put-existing-only`, and the task is `governance.units.walk`.
+- `WARDYN_GOVERNANCE_PROFILE_PUT_EXISTING_ONLY` is now `WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY`. wardynd refuses
+  to start while the old name is set, and names the new one. A notify route keyed `profiles` is now `units`; the
+  old key is refused when the config is read.
+- Migration `0207_governance_units` renames the governance tables and their columns, keeping every row, grant and
+  foreign key, so a split-role install needs no grant change. A governance change proposed before the upgrade reads
+  as stale once and is proposed again.
+- **`WARDYN_MCP_LOCAL_SERVERS` is off by default.** Turning it on lets an organisation or a person define an MCP
+  server that runs inside the run's sandbox. That server runs with the agent's access, and the harness, not
+  Wardyn's proxy, applies the run's rules to its tools.
+- **With `WARDYN_MCP_LOCAL_SERVERS` off, a rebooted run whose MCP components were erased is no longer revived.**
+  Starting the agent again admits the run anew, and the erased row keeps only its harnesses, so it is refused in the
+  organisation form ("Ask your admin"). An erased remote server is refused too, which a 0.9 revive accepted. A run
+  that is still running keeps its server until it ends.
+
+### Added
+
+- `wardyn attach <run-id>` keeps the terminal on this computer when the run is on your own runner here and the
+  organisation allows it (`WARDYN_ATTACH_LOCAL`, off by default); otherwise it goes through the organisation, as
+  before. One line on stderr names the path. `--via local|relay|auto` forces a path, and `--take-over` takes the
+  terminal from whoever holds it. On Windows the runner lives in WSL2, so attach goes through the organisation.
+- CLI sign-in, server half (migration `0199_cli_sign_in`), off unless `WARDYN_CLI_SIGN_IN=true` and SSO is set up.
+  `wardyn login` asks for a sign-in, the person approves the computer in the console, and the CLI gets a session
+  secret, bound to an Ed25519 device key, that renews a 1-hour access token. The secret DOES live on the laptop, in
+  the keychain or a file only its owner can read; [THREAT-MODEL.md](threatmodel/THREAT-MODEL.md) says what protects
+  it and what it does not stop.
+  - Sessions last 30 days (`WARDYN_CLI_SESSION_TTL`, up to 90), end after 7 days idle (`WARDYN_CLI_SESSION_IDLE`),
+    and at most 7 days in a file (`WARDYN_CLI_FILE_STORE=false` refuses the file). Paste-back sign-in for a computer
+    with no browser is off unless `WARDYN_CLI_PASTE_SIGN_IN=true`.
+  - Every renewal rotates the secret and re-checks revokes, sessions cuts, deactivation, the role stamp and the
+    `api_token` feature. An old secret presented again ends the session. A revoke, Sign out everywhere, a console
+    sign-out and a per-computer sign-out end it at once, with its tokens.
+  - An admin's CLI acts as role `user`; `wardyn login --admin` gives a 1-hour admin token, never renewed.
+  - Routes: `POST /api/v1/cli/sign-ins`, `POST /api/v1/cli/sign-ins/{id}/token`, `POST /api/v1/cli/sessions/{id}/refresh`,
+    `GET /api/v1/me/cli-sign-ins/{id}` with `/approve` and `/deny`, `GET /api/v1/me/cli-sessions` and
+    `DELETE /api/v1/me/cli-sessions/{id}`. `/healthz` reports `cli_sign_in` and `cli_paste_sign_in`.
+  - Audit actions `cli.sign_in.request`, `cli.sign_in.approve`, `cli.sign_in.deny`, `cli.session.create`,
+    `cli.session.revoke`, `cli.session.refresh_refused` and `cli.session.reuse_detected`. `token.create` rows carry
+    `kind`; `session.revoke` rows carry `cli_sessions_ended`.
+- The runner's managed-settings lock. A macOS managed profile that sets `lock_security_settings` now outranks a flag for `OrgURL`, `ProxyImage`, `TrustedCAFile`, `OrgCAFile` and `RecordingStore`, and `wardyn-runnerd serve` refuses to start on a flag or environment variable that disagrees, naming the setting. It is off by default, so nothing changes until an administrator sets it.
+- Recording is a level: a policy's `recording` is `off`, `terminal` or `screen_actions`, and
+  `site_config.recording` sets the organisation's level and can lock it as a minimum. Nothing set records terminal
+  sessions, as before. `WARDYN_RECORDING_STORE=off` still records nothing, and keystrokes are never recorded.
+
+- A runner that could not connect, or could not start, reports why when it next connects: the first and last failure,
+  the stage and a redacted reason. The runner's read shows it as `offline_summary`, and each report writes a
+  `runner.offline_summary.record` audit row. A refusal at start is shown only once a later start connects.
+- A Docker runner checks its relay on every reconnect and every 5 minutes, logs `run relay unreachable` when the relay
+  stops answering, and reports it as `relay_status` on the runner's read.
+
+### Changed
+
+- The CLI's hint under a `401` follows the answer's reason. On a single-sign-on deployment with no admin token
+  (`sign_in_required`) it says to use a personal API token in `WARDYN_TOKEN`, not the compose stack's admin token. For
+  a token the organisation does not know (`admin_token_not_configured`) it names where the token came from.
+
+## [0.9.8] — 2026-10-21
+
+### Before you upgrade
+
+- A member's local folder mount is now refused when its path is, or sits inside, `.codex`, `.azure`, `.gemini`, `.npmrc`, `.pypirc` or `.config/gcloud` (any letter case), as it already was for `.ssh`, `.aws` and the other credential paths. A folder that only contains one of them is still allowed. To mount that work, use a folder outside those paths. The same list applies to an admin-made `host_path` drive, which is checked at every launch: an existing drive whose `host_root` is, or sits inside, one of those paths stops binding at launch until an admin moves its `host_root` out of that path.
+
+### Added
+
+- `GET /governance/credential-delivery` lists, as `unbuildable`, each stored row (a class, or a class under a trust class) whose mode the server cannot build for it, with the modes it can; the field is absent when there are none. The setup check `credential_delivery` warns and names each, for an operator. Nothing is changed: the document is read, and those rows refuse as before.
+
+### Fixed
+
+- A request refused because its host resolved into private address space that `internal_hosts` can lift now names the remedy: `an operator may lift this guard for <host> with site_config.internal_hosts, scoped to <range>`, with the range block (such as `100.64.0.0/10`) and never the address. The brokered git lanes, a CONNECT, a plain HTTP request and the refusal's audit row all carry it, so a self-hosted runner whose corporate resolver answers a git provider host into CGNAT or RFC1918 no longer fails with no way forward. A new `private_ip_refusals` setup check lists such refusals from the last 7 days. Nothing is lifted by default and no reach changes.
+- A queued run kill is no longer lost when 100 or more stale kills are waiting ahead of it. Before, it was never re-issued and the run kept running.
+- A full runner pool pass no longer fails with a Postgres deadlock when it updates the queue wait of waiting runs while another writer holds some of the same runs (part of #3369).
+- An egress approval that expires or is cancelled with nobody deciding it is no longer remembered as a "no" for the rest of the run. The request that sees it is refused as `approval:expired`, and the next request asks again.
+- The approval poll a sandbox makes no longer returns the approver's name or note (#2434).
+- The AWS CLI's derived role credentials are kept on the sandbox's temporary disk, so a kept Docker sandbox no longer holds them after the run ends.
+- A member's local folder mount that is refused now gets one sentence that does not say whether a host path exists or where a link points (#2273).
+- A sign-in sandbox no longer keeps the new credential until it is stopped: the AWS caches and the pane's history are cleared once the credential is stored, and the Claude paste sandbox is stopped when the capture is stored.
+- A runner no longer hangs at start when the container engine is stuck while it sets aside an earlier registration's runs.
+- An allowlist host written with a port or a trailing dot, such as `github.com:443`, is judged by its host, so it is no longer graded as open egress when the host is on the safe list.
+- Erasing a person now removes their name from launch presets they wrote and reports the token history it deleted (#3009).
+- The docs no longer say a workspace's `byo` base image is used verbatim. `registry`, `custom` and `byo` base images are all wrapped with Wardyn's runner tools by the image builder before a run uses them, and the wrapped image runs on the Docker substrate only.
+- A run on a workspace whose base image needs the image builder, on a control plane with none, is still refused `image_builder_unavailable`. The refusal now names the image and what works instead: an admin wires the builder, or sets the workspace's base image to recommended so a command that needs no model runs on the stock agent image (or the workspace's convention image where a builder is wired).
+- A background command that includes no harness, on a workspace with no base image of its own, now runs, from the stock agent image (or the workspace's convention image where a builder is wired). It was refused `workspace_seed_no_base_image` with advice to pass `--image` or `--agent`, which a run-mode command cannot carry. It evaluates no model provider and gets no model credential.
+
+### Security
+
+- The console's build tooling moves to vite 6.4.4, which carries the fixed launch-editor (GHSA-587h-7wmj-h5pm, GHSA-r825-w8mm-5pxw, GHSA-698v-4r3x-3vcv). Those flaws are in the development server's open-in-editor route; the built console Wardyn ships does not include it.
+
+## [0.9.7] — 2026-10-20
+
+A small release on top of 0.9.6. An Azure DevOps token that the organisation mints for a run can now be delivered to a person's own runner, off by default, and a credential delivery write that the server could not build is refused when it is made. No migration.
+
+### Security
+
+- **Go 1.26.10.** The toolchain pin moves from go1.26.9, fixing a `crypto/x509` certificate verification advisory (GO-2026-6809). `make govulncheck` reports none.
+
+### Added
+
+- An Azure DevOps connection with `token_mode: minted_pat` can now run on a person's own runner. Before, the run was refused at create. It is off by default and needs all three: a delivery policy that sends `ado_minted_pat` as `runner_resident` to the runner's trust class (a security admin's change, held for a second person under `WARDYN_GOVERNANCE_SECOND_HUMAN`), the connection's `entra.runner_resident` opt-in, and a runner of that trust class owned by a person.
+  - The token is held in the memory of the runner's proxy, on the person's own computer, for the run and at most `pat_max_hours`. It is not written to disk or the keystore. Root on that computer can read it.
+  - The sandbox holds only an inert placeholder; the proxy adds the token to requests on the way out, so a host that echoes request headers can return it. `entra.runner_resident_sandbox` has no effect in this version: it is stored and audited, no run reads it, and on or off the sandbox sees the same.
+  - The proxy fetches the token again at most 15 minutes apart, and each fetch is judged against the policy, the runner's owner, trust class and posture, and the opt-in. A delivery policy may add `require_posture` (`mdm_managed`, `disk_encrypted`, `os_min`) for the class; the class has none of its own. A refusal revokes the run's token at Azure DevOps. If the organisation is unreachable, the proxy stops injecting the token at most 30 minutes after its last fetch.
+  - A `bearer` connection and a stored git token for an Azure DevOps host are still refused on a person's own runner.
+
+### Changed
+
+- `PUT /governance/credential-delivery` refuses with `422` and `credential_delivery_invalid` a document that sets a class, or a trust class's override of it, to a mode the server cannot build for that class. The sentence names the class, the mode and the modes it can build. `GET` lists them as `buildable_modes`. A stored document is read back as before, and a save that leaves a stored row as it is is not refused for it.
+- The Runner credentials screen disables a delivery mode the server cannot build, labelled "Not available yet".
+- The refusal of an API-token mint in the user view now says how to switch to Admin view.
+- The Azure DevOps connection editor says what the runner switch does, and that the sandbox switch has no effect in this version. A runner that reports no posture fails every posture requirement, and the refusal says so.
+
+### Before you upgrade
+
+- A credential-delivery write that sets a mode the server can't build is now refused (`credential_delivery_invalid`); a stored document is left as it is.
+
+## [0.9.6] — 2026-10-20
+
+A fix release on top of 0.9.5. A person's own Azure DevOps token now works on their own runner, credential and posture refusals say which policy or field refused, the credential delivery screen lists what each class can be delivered by, runners that cannot reach the server say why, and session recordings no longer store typed input. No migration and no new setting.
+
+### Security
+
+- Session recordings no longer store typed input. Recordings made by earlier versions may contain keystrokes typed into an attached terminal, including at prompts that hide what you type, such as passwords. Treat those recordings as sensitive: restrict who can read them, or delete them.
+
+### Fixed
+
+- An Azure DevOps connection using a person's own token (`own_pat`) now works on that person's own runner. Before, the run failed at dispatch. The token reaches the runner's proxy only; the sandbox holds a placeholder. Organisation-held Azure DevOps tokens (`minted_pat`, `bearer`) are still refused on a person's own runner.
+- The AWS sign-in dialog's step list moves to "Waiting for AWS" as soon as the dialog shows a device code. Before, it could stay on "Starting the sign-in sandbox" while the code and the waiting prompt were already on screen.
+- A brief server error while the console first loads no longer leaves a signed-in person on the sign-in screen.
+- A failed `run.output.finalize` audit row from the recording path now carries `step`, as every other finalize failure row does. No existing key changes.
+
+### Changed
+
+- A refusal of a credential on a person's own runner names the delivery policy that refused it, for example `(delivery policy: refuse)`. A runner of unknown trust class is told it gets organisation delivery only. The reason code and status are unchanged (`placement_credential`, 422).
+- `runner_posture_unmet` names every posture field that is not met, with the requirement. For a runner that has not reported its posture, it says that an unreported posture meets no requirement. The reason code and status are unchanged.
+
+- A runner that registered but has never connected to the server says so in the console, with where to find its log on each system.
+- `wardyn-runnerd` logs the proxy it reaches the server through, by host and port only, and a connection the proxy refuses is reported as a proxy refusal.
+- `wardyn-runnerd setup` warns when proxy variables are set in the shell but will not reach the service it installs. It prints the variable names only.
+- `wardyn-runnerd` warns about certificates in its trusted CA file that are expired or not a CA, and about a file that another user owns or others can write. The file loads as before.
+- On a single sign-on deployment, the CLI's answer to a 401 points at a personal API token.
+- `wardyn-runnerd` warns when its pinned proxy image is a different release than the runner, or the organisation names a different one, since runs may then fail to start.
+
+### Added
+
+- `GET /governance/credential-delivery` returns `buildable_modes` beside the policy: the delivery modes each credential class can use today. The stored policy and `PUT` are unchanged.
+
+### Before you upgrade
+
+- Scripts that match the old refusal text for a local credential refusal, or a single posture field before the colon, must match the new sentences. Reason codes are unchanged.
 
 ## [0.9.5] — 2026-10-19
 

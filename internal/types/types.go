@@ -8,6 +8,7 @@ package types
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -89,13 +90,16 @@ var SlotHoldingRunStates = []RunState{RunPending, RunStarting, RunRunning, RunWa
 
 // RunQueue is what a QUEUED run says about its wait: the pool, when it joined, when its wait ends,
 // how many runs are ahead of it in that pool (a count, never whose) and the wait reason token
-// (runner_pool_at_capacity, runner_pool_no_runner_free, runner_pool_runners_at_capacity or runner_pool_recording_store_off).
+// (runner_pool_at_capacity, runner_pool_no_runner_free, runner_pool_runners_at_capacity, runner_pool_recording_store_off,
+// scheduled or owner_sign_in). A scheduled run also carries its start time and the time zone it was given in.
 type RunQueue struct {
-	PoolID     uuid.UUID `json:"pool_id"`
-	QueuedAt   time.Time `json:"queued_at"`
-	DeadlineAt time.Time `json:"deadline_at"`
-	Position   int       `json:"position"`
-	Reason     string    `json:"reason"`
+	PoolID     uuid.UUID  `json:"pool_id"`
+	QueuedAt   time.Time  `json:"queued_at"`
+	DeadlineAt time.Time  `json:"deadline_at"`
+	Position   int        `json:"position"`
+	Reason     string     `json:"reason"`
+	StartAt    *time.Time `json:"start_at,omitempty"`
+	TimeZone   string     `json:"time_zone,omitempty"`
 }
 
 // PauseReason says why a run's agent is frozen (AgentRun.PausedReason).
@@ -165,6 +169,9 @@ type AgentRun struct {
 	// NotRecorded says why the run has no session recording, decided once at dispatch and kept for
 	// the run's life; empty when the run is recorded (or predates the field).
 	NotRecorded RunNotRecorded `json:"not_recorded,omitempty"`
+	// RecordingLevel is the level the run is recorded at, resolved once at dispatch with NotRecorded
+	// (RecordingChoice); empty for a run dispatched before the level existed, which reads as terminal.
+	RecordingLevel RecordingLevel `json:"recording_level,omitempty"`
 	// RunnerPoolID is the runner pool the run was admitted into, and the next three fields say how
 	// (all written once at create). A pool is a label for a choice and never admission: the run
 	// goes to the exact runner recorded in RunnerID (a self-hosted runner) or RunnerPoolExecutor (a
@@ -215,8 +222,8 @@ type AgentRun struct {
 	LifetimeCapSource LimitSource `json:"-"`
 	WaitBudgetSec     int         `json:"wait_budget_sec,omitempty"` // how long an approval this run raises stays open; 0 = deployment default alone applies
 	// RunLimits are the owner's profile limits as they stood at create; later clamps use these captured bounds, never the profile's current ones.
-	RunLimits           RunLimits  `json:"run_limits"`
-	GovernanceProfileID *uuid.UUID `json:"governance_profile_id,omitempty"`
+	RunLimits RunLimits  `json:"run_limits"`
+	UnitID    *uuid.UUID `json:"unit_id,omitempty"`
 	// LostAt/LostReason mark a run that lost its sandbox but is kept (no proxy/network, files stay); stays RUNNING until a kill or the ended-run grace.
 	LostAt     *time.Time `json:"lost_at,omitempty"`
 	LostReason LostReason `json:"lost_reason,omitempty"`
@@ -236,6 +243,8 @@ type AgentRun struct {
 	Preset          string `json:"preset,omitempty"`    // launch preset this run was expanded from; empty for an explicit-spec run
 	PresetVersion   int    `json:"preset_version,omitempty"`
 	OperatorOwned   bool   `json:"operator_owned,omitempty"` // mirrors identity.Claims.OperatorOwned so dispatch/revive re-mint read what create decided; the console reads it for the no-personal-owner entry carve-out
+	// BreakGlass marks an admin-token break-glass run (migration 0200).
+	BreakGlass bool `json:"break_glass,omitempty"`
 	// CreatedVia is the registered portal this run was launched through on the person's behalf; nil when self-launched. The owner is still the person.
 	CreatedVia *uuid.UUID `json:"created_via,omitempty"`
 	// HasRecording/RecordingBytes/RecordingDurationSec are derived, never stored, projected only with ?include=recording_meta; HasRecording is the only "no recording" signal.
@@ -292,6 +301,17 @@ type GrantSpec struct {
 	// RequiresApproval forces a human approval to mint (vs auto-mint on policy).
 	RequiresApproval bool `json:"requires_approval"`
 	OwnerOnly        bool `json:"owner_only,omitempty"` // stored secret from the run owner's own row only, never the operator's
+	// OwnerOnlyRefs is owner_only for the named stored secrets alone: a grant
+	// with two refs (ssh_key's key and known_hosts) whose refs resolve from
+	// different rows. Set at launch for a ref admitted only because the run's
+	// owner holds a secret of that name.
+	OwnerOnlyRefs []string `json:"owner_only_refs,omitempty"`
+}
+
+// OwnerOnlyFor reports whether the grant reads the stored secret ref from the
+// run owner's own row only.
+func (g GrantSpec) OwnerOnlyFor(ref string) bool {
+	return g.OwnerOnly || slices.Contains(g.OwnerOnlyRefs, ref)
 }
 
 // CredentialGrant records what a run is ELIGIBLE for — not issuance: minting happens only via the
@@ -556,6 +576,12 @@ type APIToken struct {
 	// that existed their order once. 0 only for a token written by a replica that predates it, which a
 	// revocation cutoff orders on CreatedAt. Never on the wire.
 	RevSeq int64 `json:"-"`
+	// Kind is APITokenKindAPI for a personal token, or a CLI kind (cli_sign_in.go). Never on the wire:
+	// the name says which computer a CLI token belongs to.
+	Kind string `json:"-"`
+	// CLISessionID is the CLI session a CLI token belongs to; the token stops authenticating when the
+	// session ends. Nil on a personal token. Never on the wire.
+	CLISessionID *uuid.UUID `json:"-"`
 }
 
 // Person is an identity an admin created or confirmed before its first sign-in, keyed by the
@@ -614,11 +640,48 @@ type PersonList struct {
 // control plane refuses a higher part (413), and the proxy never forwards one.
 const RecordingMaxParts = 2048
 
-// RunLocalFolder is a run's folder on the person's computer, which reaches a remote sandbox only by
-// `wardyn sync`. Name is how the person's computer names it (its base name), for the messages that
+// RunLocalFolder is a run's folder on the person's computer, which reaches a remote sandbox by
+// `wardyn sync` or through their runner. Name is how that computer names it (its base name), for the messages that
 // refer to it; RemoteDir is where in the sandbox it lands. A run that has one does not start its
 // agent until the first sync of that folder into RemoteDir has completed.
+//
+// RunnerID, when set, names the person's own folder-only runner that holds the folder at Path, an
+// absolute path on that computer: Wardyn then seeds the folder through that runner itself, with no
+// `wardyn sync` (run_computer_folder.go). Direction is ComputerFolderBoth (the sandbox's changes come
+// back when the run ends) or ComputerFolderIn (a copy in only).
 type RunLocalFolder struct {
-	Name      string `json:"name"`
-	RemoteDir string `json:"remote_dir,omitempty"`
+	Name      string     `json:"name"`
+	RemoteDir string     `json:"remote_dir,omitempty"`
+	RunnerID  *uuid.UUID `json:"runner_id,omitempty"`
+	Path      string     `json:"path,omitempty"`
+	Direction string     `json:"direction,omitempty"`
+}
+
+// RunLocalFolder.Direction values.
+const (
+	ComputerFolderBoth = "both"
+	ComputerFolderIn   = "in"
+)
+
+// RunLocalFolderStatus is what Wardyn knows of the passes a runner made for a run's computer folder
+// (0198): the first sync in, and the one that brought the sandbox's changes back. Both are nil until
+// that pass ends.
+type RunLocalFolderStatus struct {
+	Seed *FolderPassRecord `json:"seed,omitempty"`
+	Back *FolderPassRecord `json:"back,omitempty"`
+}
+
+// FolderPassRecord is one pass as the runner counted it. Error is set when it did not complete.
+type FolderPassRecord struct {
+	At      time.Time       `json:"at"`
+	Files   int             `json:"files"`
+	Bytes   int64           `json:"bytes"`
+	Refused []FolderRefusal `json:"refused"`
+	Error   string          `json:"error,omitempty"`
+}
+
+// FolderRefusal is one path a pass refused and why.
+type FolderRefusal struct {
+	Path   string `json:"path"`
+	Reason string `json:"reason"`
 }

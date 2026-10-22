@@ -43,7 +43,7 @@ func requestRunnerID(req createRunRequest) uuid.UUID {
 // denies: absent (nil) for a member with no assigned profile, and for a caller
 // whose runs stand outside governance. A deny list, so absent means permitted.
 func (s *Server) deniedPlacements(ctx context.Context, ceiling governanceCeiling) []types.Placement {
-	if ceiling.Profile == nil || s.runUngoverned(ctx) {
+	if ceiling.Unit == nil || s.runUngoverned(ctx) {
 		return nil
 	}
 	return ceiling.Limits.DenyPlacements
@@ -57,7 +57,7 @@ func (s *Server) placementDeniedRefusal(ctx context.Context, p types.Placement, 
 	if !slices.Contains(s.deniedPlacements(ctx, ceiling), p) {
 		return nil
 	}
-	d := authz.Deny(authz.ReasonGovernanceProfile, "runs.placement", placementDeniedMsg(p, ceiling.Profile.Name)).WithPolicy(s.ceilingPolicy(ctx, ceiling))
+	d := authz.Deny(authz.ReasonGovernanceUnit, "runs.placement", placementDeniedMsg(p, ceiling.Unit.Name)).WithPolicy(s.ceilingPolicy(ctx, ceiling))
 	f := runError(placement.ReasonPlacementDenied.Status(), string(placement.ReasonPlacementDenied), d.Sentence)
 	f.decision = &d
 	return f
@@ -86,7 +86,7 @@ func placementDeniedMsg(p types.Placement, profile string) string {
 // admits it is the run's. Dispatch classifies the actual spec again
 // (classifyLocalDispatch) for what late authoring adds. An unpooled local
 // request has no runner to go to and is refused.
-func (s *Server) localPlacementRefusal(r *http.Request, req createRunRequest, pooled bool, trusts []types.RunnerTrustClass,
+func (s *Server) localPlacementRefusal(r *http.Request, req createRunRequest, pooled bool, trusts []types.RunnerTrustClass, owners map[types.RunnerTrustClass]types.RunnerOwnerKind,
 	spec types.RunPolicySpec, ceiling governanceCeiling, comps runComponents,
 	drives []types.DriveMount, workspaces []types.Workspace, baseline composer.Baseline,
 ) (localJudgement, *runRefusal) {
@@ -103,12 +103,15 @@ func (s *Server) localPlacementRefusal(r *http.Request, req createRunRequest, po
 	if trusts == nil {
 		trusts = placement.TrustClassesByRank()
 	}
-	trust, ref := judgeAtTrust(p, trusts)
+	trust, ref := judgeAtTrust(p, trusts, owners)
 	if ref != nil {
 		return localJudgement{}, s.localEligibilityRefusal(r, ceiling, ref)
 	}
 	if pooled {
-		return localJudgement{policy: p.Delivery, trust: trust, floor: p.ConfinementFloor}, nil
+		org := p
+		org.Trust, org.OwnerKind = trust, types.RunnerOwnerOrg
+		_, orgRef := placement.LocalEligibility(org)
+		return localJudgement{policy: p.Delivery, trust: trust, floor: p.ConfinementFloor, personOwned: orgRef != nil}, nil
 	}
 	return localJudgement{}, runError(placement.ReasonPlacementUnavailable.Status(), string(placement.ReasonPlacementUnavailable), localUnpooledMsg)
 }
@@ -154,7 +157,7 @@ func (s *Server) localPlanFacts(ctx context.Context, p *placement.LocalPlan, bas
 	if !rn.TrustClass.Valid() {
 		return fmt.Errorf("runner %s has no known trust class", rn.ID)
 	}
-	p.Trust = rn.TrustClass
+	p.Trust, p.OwnerKind = rn.TrustClass, rn.OwnerKind
 	return nil
 }
 
@@ -185,6 +188,9 @@ func (s *Server) localAdmittedPlan(r *http.Request, req createRunRequest,
 		TrustedOutput:              localTrustedOutputRequest(req),
 	}
 	for _, c := range comps.attached {
+		if !c.snapshot.SelfDefined && c.snapshot.Definition.LocalMCP() {
+			return placement.LocalPlan{}, runError(placement.ReasonPlacementCredential.Status(), string(placement.ReasonPlacementCredential), localMCPOrgServerMsg)
+		}
 		if c.snapshot.SelfDefined {
 			name := c.snapshot.Name
 			if name == "" {
@@ -219,6 +225,11 @@ func (s *Server) localAdmittedPlan(r *http.Request, req createRunRequest,
 // relay, which serves only a grant delivered own (refuseRelayedDelivery); via_org forwards requests
 // whose header the organisation injects, and the broker's tool rules would not run there.
 const localMCPSharedCredentialMsg = "components: an MCP server's credential that your organisation shares can't reach your own runner; use a secret of your own for it, or run this on a remote-hosted runner"
+
+// localMCPOrgServerMsg refuses a local run with an MCP server that runs in the sandbox from a row the
+// organisation defines: its launch command and args are the organisation's, which may hold what its
+// stripped config values would, and they reach the runner unjudged in the harness's MCP configuration.
+const localMCPOrgServerMsg = "components: your organisation's MCP servers that run in the sandbox can't run on your own runner; define one of your own, or run this on a remote-hosted runner"
 
 // mcpHeaderGrant reports whether g is the header credential of one of the run's MCP servers.
 func mcpHeaderGrant(g types.GrantSpec, mcpHosts []string) bool {
@@ -362,6 +373,12 @@ func (s *Server) ownLocalGrantSpecs(r *http.Request, spec types.RunPolicySpec, j
 		origin, ref := s.localGrantOrigin(r.Context(), localRequestOwner(r), g)
 		if ref != nil {
 			return types.RunPolicySpec{}, nil, ref
+		}
+		// A ref bound to its owner's row (owner_only_refs) is never delivered
+		// from the organisation's namespace, which is where an org-held grant
+		// on this path is read from.
+		if len(g.OwnerOnlyRefs) > 0 && origin.Class != placement.ClassOwn {
+			return types.RunPolicySpec{}, nil, runError(placement.ReasonPlacementCredential.Status(), string(placement.ReasonPlacementCredential), fmt.Sprintf("eligible_grants[%d]: credential is not available in its owner's namespace", i))
 		}
 		if placement.ViaOrgGrant(origin, j.policy, j.trust) {
 			out[i] = localGrantDelivery{class: origin.Delivery, mode: placement.ModeViaOrg}

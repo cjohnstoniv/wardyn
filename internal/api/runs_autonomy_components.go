@@ -61,7 +61,7 @@ type autonomySource struct {
 //     custom_component ALONE (the rubric's causes sit at a higher rung and did
 //     not bind), with reason component_autonomy;
 //   - a tie: the rubric's answer with custom_component added, named by the
-//     profile, with reason governance_profile — raising either rung alone
+//     profile, with reason governance_unit — raising either rung alone
 //     would not move the level, so both are named;
 //   - the rubric is lower: the rubric's answer, unchanged.
 //
@@ -89,8 +89,8 @@ func (s *Server) foldComponentCap(ctx context.Context, ceiling governanceCeiling
 		boundBy = append(slices.Clone(boundBy), componentAutonomyCause)
 	}
 	return folded, boundBy, autonomySource{
-		phrase: fmt.Sprintf("your governance profile %q", ceiling.Profile.Name),
-		reason: authz.ReasonGovernanceProfile,
+		phrase: fmt.Sprintf("your governance profile %q", ceiling.Unit.Name),
+		reason: authz.ReasonGovernanceUnit,
 		policy: s.ceilingPolicy(ctx, ceiling),
 	}
 }

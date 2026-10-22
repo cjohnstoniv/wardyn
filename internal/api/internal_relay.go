@@ -315,13 +315,16 @@ func (s *Server) refuseRelayBinding(w http.ResponseWriter, r *http.Request, clai
 // delivered `own` is served through a relay. A via_org grant is used at the
 // org (only its in-process engine is served it) and a runner_resident one
 // already lives on the runner; a grant with no recorded delivery fails closed.
-// Unrelayed requests are unchanged.
-func (s *Server) refuseRelayedDelivery(w http.ResponseWriter, r *http.Request, claims *identity.Claims, grantID uuid.UUID) bool {
+// The one runner_resident grant served is an Azure DevOps minted token's
+// injection (injection true): the runner's proxy fetches it on each request
+// and holds it in memory only (relayedResidentADO). Unrelayed requests are
+// unchanged.
+func (s *Server) refuseRelayedDelivery(w http.ResponseWriter, r *http.Request, claims *identity.Claims, grantID uuid.UUID, injection bool) bool {
 	runner, relayed := relayRunner(r.Context())
 	if !relayed {
 		return false
 	}
-	var delivery types.GrantDelivery
+	var grant types.CredentialGrant
 	if s.cfg.Store != nil {
 		grants, err := s.cfg.Store.ListGrantsByRun(r.Context(), claims.RunID)
 		if err != nil {
@@ -330,10 +333,11 @@ func (s *Server) refuseRelayedDelivery(w http.ResponseWriter, r *http.Request, c
 		}
 		for _, g := range grants {
 			if g.ID == grantID {
-				delivery = g.Delivery
+				grant = g
 			}
 		}
 	}
+	delivery := grant.Delivery
 	// The organisation's own via_org engine (viaOrgTransport) is served a
 	// via_org grant and nothing else; no relayed request can carry its mark.
 	if viaOrgCall(r.Context()) {
@@ -349,9 +353,44 @@ func (s *Server) refuseRelayedDelivery(w http.ResponseWriter, r *http.Request, c
 	case types.GrantDeliveryViaOrg:
 		reason = placement.ReasonDeliveryViaOrg
 	case types.GrantDeliveryResident:
+		if injection && s.relayedResidentADO(r.Context(), claims.RunID, runner, grant) {
+			return false
+		}
 		reason = placement.ReasonDeliveryRunnerResident
 	}
 	return s.denyRelayed(w, r, claims, reason, runner.String())
+}
+
+// relayedResidentADO reports whether grant, recorded runner_resident, is an
+// Azure DevOps minted token runner may be served now: re-judged on every
+// resolve against the delivery policy, the runner's trust class, owner kind and
+// posture and the connection's opt-in as they are now. The proxy resolves at
+// least every residentRejudgeEvery (resolveADORunPAT), so a policy flip, a
+// trust change or a withdrawn opt-in refuses within that interval, and the
+// run's tokens are then revoked at Azure DevOps (reason drift), so a token the
+// proxy still holds is dead at the provider too. Every other resident grant is
+// refused.
+func (s *Server) relayedResidentADO(ctx context.Context, runID, runner uuid.UUID, grant types.CredentialGrant) bool {
+	if grant.RunID != runID || grant.Spec.Kind != types.GrantAPIKey {
+		return false
+	}
+	run, err := s.cfg.Store.GetRun(ctx, runID)
+	if err != nil || run.Placement != types.PlacementLocal || run.RunnerID == nil || *run.RunnerID != runner {
+		return false
+	}
+	origin, ref := s.localGrantOrigin(ctx, runIdentitySubject(ctx, run.CreatedBy), grant.Spec)
+	if ref != nil || !residentADOOrigin(origin) {
+		return false
+	}
+	r, err := s.residentADOAdmits(ctx, run, origin)
+	if err != nil {
+		return false
+	}
+	if r != nil {
+		s.revokeRunPATs(ctx, runID, adoPATRevokeDrift)
+		return false
+	}
+	return true
 }
 
 // denyRelayed writes a relay refusal: authz.denied with runner_id (the

@@ -64,6 +64,7 @@ import { OperatorProvider } from "../../wardyn/operator-context";
 import { RunnersScreen } from "./runners-screen";
 import { setField } from "../../../../test/set-field";
 import { holdExitAnimation } from "../../../../test/exit-animation";
+import { RUNNERS } from "../../wardyn/copy/runners";
 
 const ORG = "https://org.example.com";
 const NOW_ISO = () => aheadByHours(0);
@@ -214,6 +215,23 @@ describe("Admin -> Runners list", () => {
     expect(within(row).queryByRole("table")).toBeNull();
     expect(within(cardOf("laptop-7")).getByText("Last seen now")).toBeInTheDocument();
     expect(within(cardOf("desk-2")).getByText("Last seen 3h ago")).toBeInTheDocument();
+  });
+
+  // Board D2a: "Never connected" sits where Last seen does, and the notice names the service and its log.
+  it("a claimed runner that never connected says so and names its log; a dropped one keeps Last seen and today's notice", async () => {
+    listMock.mockResolvedValue([runner({ id: "r-never", name: "mbp-dev", online: false, last_seen_at: undefined, limits: undefined, usage: usageWith(0), pools: [] }), DESK]);
+    renderScreen();
+    await screen.findByRole("button", { name: "mbp-dev" });
+    const never = cardOf("mbp-dev");
+    expect(within(never).getByText("Never connected")).toBeInTheDocument();
+    expect(within(never).queryByText(/^Last seen/)).toBeNull();
+    const note = never.querySelector("[data-offline-note]") as HTMLElement;
+    expect(note.textContent).toBe("This runner registered but has never connected to this server. On that computer, check that wardyn-runnerd runs as a service (wardyn-runnerd setup installs one) and read its log: ~/Library/Logs/wardyn/runnerd.log on macOS, journalctl --user -u wardyn-runnerd on Linux. Behind a proxy, the service needs its own HTTPS_PROXY.");
+    expect([...note.querySelectorAll("code")].map((c) => c.textContent)).toEqual(["wardyn-runnerd setup", "~/Library/Logs/wardyn/runnerd.log", "journalctl --user -u wardyn-runnerd", "HTTPS_PROXY"]);
+    const desk = cardOf("desk-2");
+    expect(within(desk).getByText("Last seen 3h ago")).toBeInTheDocument();
+    expect(within(desk).queryByText("Never connected")).toBeNull();
+    expect(within(desk).getByText("This runner is offline. Its capacity isn't counted as available until it reconnects.")).toBeInTheDocument();
   });
 
   it("a card names the kind, Machine, owner and pools, and shows Total, Per run, In use and Available", async () => {
@@ -384,6 +402,17 @@ describe("Admin -> Runners tiers", () => {
 });
 
 describe("Admin -> Runners drawer and revoke", () => {
+  it("the drawer of a claimed runner that never connected names the service and its log (D2a)", async () => {
+    listMock.mockResolvedValue([runner({ id: "r-never", name: "mbp-dev", online: false, last_seen_at: undefined, usage: usageWith(0) })]);
+    const user = userEvent.setup();
+    renderScreen();
+    await user.click(await screen.findByRole("button", { name: "mbp-dev" }));
+    const note = (await screen.findByRole("dialog")).querySelector("[data-offline-note]") as HTMLElement;
+    expect(note.textContent).toBe(
+      "This runner registered but has never connected to this server. On that computer, check that wardyn-runnerd runs as a service (wardyn-runnerd setup installs one) and read its log: ~/Library/Logs/wardyn/runnerd.log on macOS, journalctl --user -u wardyn-runnerd on Linux. Behind a proxy, the service needs its own HTTPS_PROXY.",
+    );
+  });
+
   it("shows the reported facts under their label, the whole fingerprint without a copy control, and Revoke", async () => {
     const user = userEvent.setup();
     renderScreen();
@@ -648,19 +677,40 @@ describe("Admin -> Runners remote-hosted runner available to listed people", () 
 });
 
 describe("Admin -> Runners tabs", () => {
-  it("has one tab strip; Pools keeps the page title, changes the lede and drops the token button", async () => {
+  it("has one tab strip; Pools keeps the page title and the one-sentence lede and drops the token button (#3060)", async () => {
     const user = userEvent.setup();
     renderScreen();
     await screen.findByRole("button", { name: "laptop-7" });
-    const strip = screen.getByRole("navigation", { name: "Runners sections" });
-    expect(within(strip).getByRole("button", { name: "Runners" })).toHaveAttribute("aria-current", "page");
-    expect(screen.getByText(/^A runner is what runs sandboxes\./)).toBeInTheDocument();
-    expect(screen.getByText(/^This tab lists every runner:/)).toBeInTheDocument();
-    await user.click(within(strip).getByRole("button", { name: "Pools" }));
+    const strip = screen.getByRole("tablist", { name: "Runners sections" });
+    expect(within(strip).getByRole("tab", { name: "Runners" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("page-header-description")).toHaveTextContent(RUNNERS.PAGE_LEDE);
+    // The longer text moved word for word into a closed How runners work, which holds both tabs' purposes.
+    const how = screen.getByTestId("how-runners");
+    expect(how).not.toHaveAttribute("open");
+    expect(within(how).getByText(RUNNERS.HOW_TITLE)).toBeInTheDocument();
+    expect(within(how).getByText(/^A runner is what runs sandboxes\./)).toBeInTheDocument();
+    expect(within(how).getByText(/This tab lists every runner:/)).toBeInTheDocument();
+    expect(within(how).getByText(/A pool is a named choice for where a run goes\./)).toBeInTheDocument();
+    await user.click(within(strip).getByRole("tab", { name: "Pools" }));
     expect(await screen.findByTestId("pools-tab")).toHaveTextContent("open:none");
-    expect(screen.getByText("A pool is a named choice for where a run goes. Its limits come from its runners, and it can narrow them, never widen them.")).toBeInTheDocument();
+    expect(screen.getByTestId("page-header-description")).toHaveTextContent(RUNNERS.PAGE_LEDE);
     expect(screen.queryByRole("button", { name: "Create a registration token" })).toBeNull();
-    expect(screen.queryByText(/^This tab lists every runner:/)).toBeNull();
+  });
+
+  // #3062: the strip is the shared underline Tabs, so the arrow keys move selection and focus.
+  it("ArrowRight on the Runners tab moves to Pools, and ArrowLeft back", async () => {
+    const user = userEvent.setup();
+    renderScreen();
+    await screen.findByRole("button", { name: "laptop-7" });
+    const runners = screen.getByRole("tab", { name: "Runners" });
+    runners.focus();
+    await user.keyboard("{ArrowRight}");
+    const pools = screen.getByRole("tab", { name: "Pools" });
+    expect(await screen.findByTestId("pools-tab")).toBeInTheDocument();
+    expect(pools).toHaveAttribute("aria-selected", "true");
+    expect(pools).toHaveFocus();
+    await user.keyboard("{ArrowLeft}");
+    await waitFor(() => expect(runners).toHaveAttribute("aria-selected", "true"));
   });
 
   it("a runner's pool link opens that pool on the Pools tab, and a pool's member opens its runner", async () => {

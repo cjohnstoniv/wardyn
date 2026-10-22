@@ -298,6 +298,8 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		AzureGates:           cfg.AzureGates,
 		GitHubAPI:            cfg.GitHubAPI,
 		AzureARM:             cfg.AzureARM,
+		AWSSigV4:             cfg.AWSSigV4,
+		KubeAPI:              cfg.KubeAPI,
 		ControlPlaneURL:      cfg.ControlPlaneURL,
 		RunToken:             ts,
 		Upstream:             up,

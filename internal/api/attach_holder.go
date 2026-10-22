@@ -5,7 +5,7 @@
 //
 // The problem this exists to fix: attach is a SHARED tmux session. handleAttachWS
 // (attach.go) opens a fresh Runner.Attach per client against the same persistent
-// session, so opening the run page while a `wardyn run attach` holds it from a CLI
+// session, so opening the run page while a `wardyn attach` holds it from a CLI
 // means two clients silently compete for one PTY — and neither can observe the
 // other. The Redraw button in ui/src/app/components/attach-terminal.tsx exists
 // only to clean up the tmux clamp that competition leaves behind.
@@ -39,8 +39,9 @@ import (
 // confidently reports "nobody is attached" while somebody is typing is worse
 // than one that reports nothing at all.
 const (
-	attachSourceWeb = "web"
-	attachSourceSSH = "ssh"
+	attachSourceWeb   = "web"
+	attachSourceSSH   = "ssh"
+	attachSourceLocal = "local" // the CLI on the run's own runner (attach_local.go)
 )
 
 // attachTakeoverReasonPrefix is the load-bearing half of the close reason a
@@ -74,11 +75,14 @@ type attachHolder struct {
 	principal  string
 	actorType  types.ActorType
 	since      time.Time
-	source     string // attachSourceWeb | attachSourceSSH
+	source     string // attachSourceWeb | attachSourceSSH | attachSourceLocal
 	// onInput, when set, is told before a writer's keystrokes reach the PTY:
 	// a person typing is presence, and a paused run is thawed first
 	// (run_pause.go). An observer's input is dropped, so it never counts.
 	onInput func()
+	// onDrop, when set, is told how many bytes of a writer's input canWrite refused
+	// (dropInput); the web pump tells its client (attach_pump.go tellDropped).
+	onDrop func(n int)
 	// via is the portal a delegated attach ticket was minted through (#1142),
 	// nil otherwise: a promotion is written long after the attach, on the
 	// daemon's context, so the holder carries it to session.promote (#1234).
@@ -186,6 +190,9 @@ type attachHolder struct {
 	// waitRemote: this observer is queued behind a lease another replica's holder had, so a
 	// free lease goes to it (firstWaiting).
 	waitRemote atomic.Bool
+	// demoted, when set, is signalled (never blocking) when this writer is put back among the
+	// observers, so a local session pushes the change to its runner at once (attach_local.go).
+	demoted chan struct{}
 }
 
 // canWrite reports whether this holder may still drive the PTY: it must hold
@@ -234,7 +241,8 @@ func (h *attachHolder) writeGated(sess runner.Session, p []byte) error {
 	}
 	for len(p) > 0 {
 		if !h.canWrite() {
-			return nil // evicted, or an observer: drop the rest, server-side
+			h.dropInput(len(p))
+			return nil // evicted, an observer or fenced: drop the rest, server-side
 		}
 		n := min(len(p), attachWriteChunk)
 		if _, err := sess.Write(p[:n]); err != nil {
@@ -243,6 +251,16 @@ func (h *attachHolder) writeGated(sess runner.Session, p []byte) error {
 		p = p[n:]
 	}
 	return nil
+}
+
+// dropInput reports n bytes of input canWrite refused. A holder that is the writer here and not
+// evicted was told it drives, so its client is told the input did not land (onDrop): a lease fence
+// check that errors or finds the row lapsed (attachLease.live) refuses input and moves neither.
+// An observer's or a displaced client's input is dropped unannounced, as its client already knows.
+func (h *attachHolder) dropInput(n int) {
+	if h.onDrop != nil && n > 0 && h.writable.Load() && !h.evicted.Load() {
+		h.onDrop(n)
+	}
 }
 
 // promote hands this observer the write slot. The caller holds the registry
@@ -278,7 +296,7 @@ type attachHolderView struct {
 	Since     *time.Time `json:"since,omitempty"`
 	Cols      uint16     `json:"cols,omitempty"`
 	Rows      uint16     `json:"rows,omitempty"`
-	Source    string     `json:"source,omitempty"` // "web" | "ssh"
+	Source    string     `json:"source,omitempty"` // "web" | "ssh" | "local"
 }
 
 func (h *attachHolder) view() attachHolderView {
@@ -299,7 +317,7 @@ func (h *attachHolder) view() attachHolderView {
 	}
 }
 
-// attachModeMsg is the ONE server->client control frame on the attach
+// attachModeMsg is the server->client control frame that carries the mode on the attach
 // WebSocket, sent as a TEXT frame the instant the socket opens — the mirror of
 // the client->server resize frame, using the same split the protocol already
 // has (binary = raw PTY bytes, text = control JSON). The client MUST learn it
@@ -322,12 +340,31 @@ type attachModeMsg struct {
 	Type     string            `json:"type"` // always "attach-mode"
 	ReadOnly bool              `json:"read_only"`
 	Holder   *attachHolderView `json:"holder,omitempty"`
+	// Transport is "local" on every frame of a transport=local socket (attach_local.go), absent on
+	// the relay, so a CLI that asked for local and reads no "local" here runs the socket as a relay.
+	Transport string `json:"transport,omitempty"`
+}
+
+// attachInputDroppedMsg is the server->client control frame that tells a client which believes it
+// drives that input it sent did not reach the shell (attachHolder.dropInput): Bytes is how much since
+// the last such frame. A client that does not know the type ignores it, as it ignores any text frame
+// but attach-mode.
+//
+//	{"type":"input-dropped","bytes":12}
+type attachInputDroppedMsg struct {
+	Type  string `json:"type"` // always "input-dropped"
+	Bytes int64  `json:"bytes"`
 }
 
 // writeAttachMode sends the attach-mode frame. Called from the handler
 // goroutine BEFORE the pump starts, so it never races the pump's own writer.
 func writeAttachMode(ctx context.Context, c *websocket.Conn, readOnly bool, holder *attachHolder) error {
-	msg := attachModeMsg{Type: "attach-mode", ReadOnly: readOnly}
+	return writeAttachModeAs(ctx, c, readOnly, holder, "")
+}
+
+// writeAttachModeAs is writeAttachMode naming the socket's transport ("" for the relay).
+func writeAttachModeAs(ctx context.Context, c *websocket.Conn, readOnly bool, holder *attachHolder, transport string) error {
+	msg := attachModeMsg{Type: "attach-mode", ReadOnly: readOnly, Transport: transport}
 	if holder != nil {
 		v := holder.view()
 		msg.Holder = &v

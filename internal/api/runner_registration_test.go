@@ -40,6 +40,7 @@ type runnerRegistrationFake struct {
 	selfHostRestricted bool
 	people             map[string][]string // PrincipalsNamed's directory: a name to the principals it resolves to
 	selfHostAllow      []types.CapabilityGrant
+	deliveryPolicy     json.RawMessage // GetCredentialDeliveryPolicy's stored document; nil is the empty one
 }
 
 func newRunnerRegistrationServer(t *testing.T) (*Server, *runnerRegistrationFake, *harness) {
@@ -59,6 +60,13 @@ func (f *runnerRegistrationFake) GetSiteConfig(ctx context.Context) (types.SiteC
 		return types.SiteConfig{}, f.configErr
 	}
 	return f.authzStore.GetSiteConfig(ctx)
+}
+
+func (f *runnerRegistrationFake) GetCredentialDeliveryPolicy(context.Context) (types.CredentialDeliveryPolicyDoc, error) {
+	if f.deliveryPolicy == nil {
+		return types.CredentialDeliveryPolicyDoc{Policy: json.RawMessage(`{"classes":{}}`)}, nil
+	}
+	return types.CredentialDeliveryPolicyDoc{Policy: f.deliveryPolicy}, nil
 }
 
 func (f *runnerRegistrationFake) PrincipalsNamed(_ context.Context, name string) ([]string, error) {

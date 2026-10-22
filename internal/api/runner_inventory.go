@@ -21,6 +21,7 @@ import (
 //	DELETE /runners/tokens/{id}                                        security
 //	PUT /runners/settings                                              admin (SUPER)
 //	GET /me/runners, /me/runners/{id}                                  the caller's own runners only
+//	GET /me/runners/{id}/folders                                       a folder-only runner's folders (run_computer_folder.go)
 //	PUT /me/runners/{id}                                               the runner's owner (runner_limits.go)
 func (s *Server) mountRunnerInventoryRoutes(r, operatorOnly, securityOps chi.Router) {
 	securityOps.Get("/runners", s.handleListRunners)
@@ -31,6 +32,7 @@ func (s *Server) mountRunnerInventoryRoutes(r, operatorOnly, securityOps chi.Rou
 	securityOps.Get("/runners/{id}", s.handleGetRunner)
 	r.Get("/me/runners", s.handleListMyRunners)
 	r.Get("/me/runners/{id}", s.handleGetMyRunner)
+	r.Get("/me/runners/{id}/folders", s.handleListMyRunnerFolders)
 	r.Put("/me/runners/{id}", s.handleUpdateMyRunner)
 }
 
@@ -82,8 +84,21 @@ func (s *Server) runnerView(row types.Runner, used types.RunnerTally, admin bool
 	}
 	if row.State == types.RunnerClaimed {
 		v.Capacity, v.Classes, v.AllowedRoots = s.runnerReportedCaps(row.ID)
+		v.Folders = s.runnerSharesFolders(row.ID)
 	}
 	return v
+}
+
+// runnerSharesFolders is the runner's last caps event's folders flag, read like runnerReportedCaps.
+func (s *Server) runnerSharesFolders(id uuid.UUID) bool {
+	s.runnerStreams.subsMu.Lock()
+	ep, ok := s.runnerStreams.subs[id]
+	s.runnerStreams.subsMu.Unlock()
+	if !ok {
+		return false
+	}
+	caps, ok := ep.sub.Caps()
+	return ok && caps.Folders
 }
 
 // runnerReportedCaps is the runner's last caps event as this process holds it. It reads the endpoint
@@ -255,7 +270,8 @@ func (s *Server) handleGetMyRunner(w http.ResponseWriter, r *http.Request) {
 	s.getRunnerView(w, r, owner, false)
 }
 
-// getRunnerView serves one runner. A non-empty owner confines it to that person's own live runners.
+// getRunnerView serves one runner, with its last offline summary and relay status. A non-empty owner
+// confines it to that person's own live runners.
 func (s *Server) getRunnerView(w http.ResponseWriter, r *http.Request, owner string, admin bool) {
 	rs, ok := s.runnerInventoryStore(w)
 	if !ok {
@@ -279,6 +295,13 @@ func (s *Server) getRunnerView(w http.ResponseWriter, r *http.Request, owner str
 	views, ok := s.runnerViews(w, r, rs, []types.Runner{row}, admin)
 	if !ok {
 		return
+	}
+	if hs, ok := s.cfg.Store.(runnerHealthStore); ok {
+		views[0].OfflineSummary, views[0].RelayStatus, err = hs.RunnerHealth(r.Context(), id)
+		if err != nil {
+			writeServerError(w, r, "read runner health", err)
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, views[0])
 }

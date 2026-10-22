@@ -28,6 +28,31 @@ type localJudgement struct {
 	policy placement.DeliveryPolicy
 	trust  types.RunnerTrustClass
 	floor  types.ConfinementClass // the run's blast-radius floor (Q7), which no runner_resident credential meets
+	// personOwned: the plan is admitted on a person's own runner of trust and refused on an
+	// organization's (an Azure DevOps minted token), so the bind keeps only a person's own.
+	personOwned bool
+}
+
+// trustOwners is, per trust class of the run's eligible runners, the owner kind its plan is judged on:
+// person when a runner of that class is a person's own, else the organization's. A class with no
+// registered runner is absent and judged as a person's own (ownerAt).
+func trustOwners(targets []poolTarget) map[types.RunnerTrustClass]types.RunnerOwnerKind {
+	out := map[types.RunnerTrustClass]types.RunnerOwnerKind{}
+	for _, t := range targets {
+		if t.runnerID != nil && out[t.trust] != types.RunnerOwnerPerson {
+			out[t.trust] = t.ownerKind
+		}
+	}
+	return out
+}
+
+// ownerAt is the owner kind a plan is judged on at trust class c (trustOwners): a person's own runner
+// unless every eligible runner of c is an organization's.
+func ownerAt(owners map[types.RunnerTrustClass]types.RunnerOwnerKind, c types.RunnerTrustClass) types.RunnerOwnerKind {
+	if k, ok := owners[c]; ok && k != "" {
+		return k
+	}
+	return types.RunnerOwnerPerson
 }
 
 // candidateTrusts is the distinct trust classes of the run's eligible runners in the order create judges
@@ -59,12 +84,12 @@ func waitingLocalTrusts() []types.RunnerTrustClass {
 	return []types.RunnerTrustClass{types.RunnerTrustManagedDevice, types.RunnerTrustPersonal}
 }
 
-// judgeAtTrust judges p at each class in turn and answers the first that admits it. When none does, the
-// refusal is the first class's, which names that class.
-func judgeAtTrust(p placement.LocalPlan, classes []types.RunnerTrustClass) (types.RunnerTrustClass, *placement.Refusal) {
+// judgeAtTrust judges p at each class in turn, on the owner kind owners gives it (ownerAt), and answers
+// the first that admits it. When none does, the refusal is the first class's, which names that class.
+func judgeAtTrust(p placement.LocalPlan, classes []types.RunnerTrustClass, owners map[types.RunnerTrustClass]types.RunnerOwnerKind) (types.RunnerTrustClass, *placement.Refusal) {
 	var first *placement.Refusal
 	for _, c := range classes {
-		p.Trust = c
+		p.Trust, p.OwnerKind = c, ownerAt(owners, c)
 		_, ref := placement.LocalEligibility(p)
 		if ref == nil {
 			return c, nil
@@ -83,7 +108,17 @@ func judgeAtTrust(p placement.LocalPlan, classes []types.RunnerTrustClass) (type
 // admitted at. Remote-hosted targets are left as they are. Whether every runner left is full is
 // recomputed from the narrowed set.
 func (p *runPlacement) narrowToTrust(c types.RunnerTrustClass) {
-	p.eligible = slices.DeleteFunc(slices.Clone(p.eligible), func(t poolTarget) bool { return t.runnerID != nil && t.trust != c })
+	p.narrow(func(t poolTarget) bool { return t.trust == c })
+}
+
+// narrowToPersonOwned keeps the run's eligible runners that are a person's own (localJudgement.personOwned).
+func (p *runPlacement) narrowToPersonOwned() {
+	p.narrow(func(t poolTarget) bool { return t.ownerKind == types.RunnerOwnerPerson })
+}
+
+// narrow keeps the eligible runners keep admits; remote-hosted targets are left as they are.
+func (p *runPlacement) narrow(keep func(poolTarget) bool) {
+	p.eligible = slices.DeleteFunc(slices.Clone(p.eligible), func(t poolTarget) bool { return t.runnerID != nil && !keep(t) })
 	noRoom := !slices.ContainsFunc(p.eligible, func(t poolTarget) bool { return !t.full })
 	p.runnersFull = p.queues() && len(p.eligible) > 0 && noRoom
 	p.waitsForRoom = p.waitsForRoom && noRoom

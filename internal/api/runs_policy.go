@@ -276,6 +276,12 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		// Sync lists the wardyn-sync sessions open now (sync.open), from the
 		// gateway's live per-run sync budget; always present, empty when none.
 		Sync runSyncView `json:"sync"`
+		// ComputerFolder is the run's folder from the person's computer, held by their runner, and
+		// its passes (run_computer_folder.go); absent on every other run.
+		ComputerFolder *computerFolderRunView `json:"computer_folder,omitempty"`
+		// Agents (#1987) is every agent of a background run with several, the run's own
+		// first, each with its own task; absent on every other run.
+		Agents []runDetailAgent `json:"agents,omitempty"`
 	}{
 		AgentRun: run, UIApps: apps, UserTypeName: s.runUserTypeName(r, run.UserType),
 		ModelProviderName: providerName, ModelProviderDeleted: providerDeleted,
@@ -284,6 +290,8 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		KeptUntil:      s.endedRunKeptUntil(run),
 		Policy:         s.runPolicyRef(r.Context(), run),
 		Sync:           s.runSyncOpenView(run.ID),
+		ComputerFolder: s.computerFolderRunView(r.Context(), run.ID),
+		Agents:         s.runDetailAgents(r.Context(), run),
 	})
 }
 
@@ -423,8 +431,8 @@ func (s *Server) effectiveUIApps(ctx context.Context, runID uuid.UUID) ([]types.
 }
 
 // latestPolicyResolve is the run's last decodable run.policy.resolve envelope
-// and when it was written — last wins, because a re-dispatch supersedes an
-// earlier one. ok=false when there is none, and every caller fails closed on it.
+// and when it was written. dispatchRun writes one per run, behind claimDispatch,
+// so last-wins only keeps the read defined if a second ever lands. ok=false when there is none, and every caller fails closed on it.
 func latestPolicyResolve(events []types.AuditEvent) (envelope effectivePolicyDatum, at time.Time, ok bool) {
 	for _, ev := range events {
 		if canonicalAction(ev.Action) != "run.policy.resolve" || len(ev.Data) == 0 {
@@ -477,8 +485,8 @@ func (s *Server) resolvePolicy(ctx context.Context, policyID *uuid.UUID, ceiling
 			spec.AzureDevOpsCapabilities, spec.GitHubCapabilities = nil, nil
 		}
 		origin := policyOrigin{kind: policyKindDefault}
-		if ceiling.Profile != nil {
-			origin = policyOrigin{kind: policyKindProfile, name: ceiling.Profile.Name}
+		if ceiling.Unit != nil {
+			origin = policyOrigin{kind: policyKindUnit, name: ceiling.Unit.Name}
 		}
 		return spec, nil, origin, nil
 	}

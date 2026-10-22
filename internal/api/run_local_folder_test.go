@@ -168,7 +168,7 @@ func TestLocalFolderRefusal(t *testing.T) {
 	s, _, _, _, _ := localFolderFixture(t)
 	s.cfg.SSHListenAddr = ":2222"
 	ok := createRunRequest{Task: "fix it", LocalFolder: &types.RunLocalFolder{Name: " my-app "}}
-	if r := s.localFolderRefusal(&ok); r != nil {
+	if r := s.localFolderRefusal(context.Background(), &ok); r != nil {
 		t.Fatalf("a task run with a local folder was refused: %+v", r)
 	}
 	if *ok.LocalFolder != (types.RunLocalFolder{Name: "my-app", RemoteDir: "/home/agent/work"}) {
@@ -183,12 +183,12 @@ func TestLocalFolderRefusal(t *testing.T) {
 		"control char":    {Task: "x", LocalFolder: &types.RunLocalFolder{Name: "a\nb"}},
 	}
 	for name, req := range cases {
-		if r := s.localFolderRefusal(&req); r == nil {
+		if r := s.localFolderRefusal(context.Background(), &req); r == nil {
 			t.Errorf("%s: accepted", name)
 		}
 	}
 	s.cfg.SSHListenAddr = ""
-	if r := s.localFolderRefusal(&createRunRequest{Task: "x", LocalFolder: &types.RunLocalFolder{Name: "a"}}); r == nil {
+	if r := s.localFolderRefusal(context.Background(), &createRunRequest{Task: "x", LocalFolder: &types.RunLocalFolder{Name: "a"}}); r == nil {
 		t.Error("a deployment with no SSH gateway accepted a local folder")
 	}
 }

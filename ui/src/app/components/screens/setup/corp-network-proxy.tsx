@@ -247,7 +247,6 @@ export interface ProxyProbeBundle {
   customReject: string | null;
   customDraft: string;
   onCustomDraftChange: (v: string) => void;
-  hideButton: boolean;
 }
 
 export function HostProxyTab({

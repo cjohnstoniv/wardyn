@@ -54,7 +54,7 @@ func TestLocalBedrockSSODispatchAdmittedOnlyUnderProxyInject(t *testing.T) {
 		spec.SecretEnv = splitSecretEnv(env, llm.secretEnvKeys)
 		spec.Env = env
 		if llm.injectBedrockSSO {
-			injections, hosts, ok := f.srv.authorBedrockSSOInjection(ctx, run, llm, llm.providerAWSScope(), nil)
+			injections, hosts, _, ok := f.srv.authorBedrockSSOInjection(ctx, run, llm, llm.providerAWSScope(), nil)
 			if !ok || len(injections) != 1 {
 				t.Fatalf("captured-SSO grant not authored for a local run: ok=%v %+v", ok, injections)
 			}
@@ -140,7 +140,7 @@ func TestLocalSecretEnvKeysHaveCreateTimeIntents(t *testing.T) {
 		envKeys := f.srv.resolveEnvSecretGrants(ctx, run, policy, env)
 		if c.codexMCP {
 			var injections []runner.InjectionGrant
-			dispatchMCP([]componentMCP{{Key: "docs", URL: "https://mcp.example/", Host: "mcp.example", Harnesses: []string{codexHarness}}}, &injections, "http://proxy.invalid", false, env)
+			dispatchMCP([]componentMCP{{Key: "docs", URL: "https://mcp.example/", Host: "mcp.example", Harnesses: []string{codexHarness}}}, withholding{}, &injections, "http://proxy.invalid", false, env)
 		}
 		spec := runner.SandboxSpec{RunID: run.ID, ProxyConfig: runner.ProxyConfig{Policy: policy}}
 		spec.SecretEnv = splitSecretEnv(env, dispatchSecretEnvKeys(envKeys, llm))

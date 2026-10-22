@@ -18,7 +18,7 @@ import (
 // statement about the ARGUMENTS of one store call, and nothing asserted it.
 //
 // The reviewer's counterfactual: thread the truncated `groups` through
-// ceilingWithUnusableGroups into ResolveGovernanceProfile — inverting the
+// ceilingWithUnusableGroups into ResolveGovernanceUnit — inverting the
 // invariant outright — and all of ./internal/api stayed green (47.2s, ok). The
 // api-layer doubles took their subject arguments as `_`, so the call was
 // unobservable from any test in the package; the property could not be seen,

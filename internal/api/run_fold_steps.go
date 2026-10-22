@@ -101,11 +101,20 @@ func (s *Server) stepDrive(f *runFold, rec *foldRecorder) bool {
 			}
 		}
 		f.drives = drives
+	} else {
+		var ok bool
+		if f.drives, f.driveMounts, ok = s.seedRequestDrives(f.w, f.r, *f.req, f.ceiling); !ok {
+			return false
+		}
+	}
+	// keep_work_folder's doors, at every door. A promoted run's start replays them over the drive
+	// its create already made, which is not counted again.
+	if !f.req.KeepWorkFolder {
 		return true
 	}
-	var ok bool
-	f.drives, f.driveMounts, ok = s.seedRequestDrives(f.w, f.r, *f.req, f.ceiling)
-	return ok
+	var refusal *runRefusal
+	f.keep, refusal = s.keepWorkFolderGates(f.r, f.spec, f.promoted)
+	return !refusal.write(s, f.w, f.r)
 }
 
 // stepWorkspaces reads the run's workspaces: the attached ones, then each other
@@ -479,7 +488,7 @@ func (s *Server) stepToolPolicy(f *runFold, rec *foldRecorder) bool {
 	s.applyToolPosture(f.req, &f.spec)
 	recordSpecAdds(rec, before, f.spec, provSource{Kind: provKindPosture})
 	if attendedDefaultRefusal(*f.req, f.autonomy.Level).write(s, f.w, f.r) || attendedToolNamesRefusal(*f.req, f.spec).write(s, f.w, f.r) ||
-		inheritedMCPHoldRefusal(*f.req, f.spec, f.comps).write(s, f.w, f.r) {
+		inheritedMCPHoldRefusal(*f.req, f.spec, f.comps).write(s, f.w, f.r) || localMCPRulesRefusal(*f.req, f.spec, f.comps).write(s, f.w, f.r) {
 		return false
 	}
 	if s.toolRulesWithinPolicyRefusal(*f.req, f.spec).write(s, f.w, f.r) {
@@ -663,7 +672,7 @@ func (s *Server) stepLocalEligibility(f *runFold, rec *foldRecorder) bool {
 		req.Placement = f.place.placement
 	}
 	var refusal *runRefusal
-	f.localDelivery, refusal = s.localPlacementRefusal(f.r, req, f.place.pooled, candidateTrusts(f.place.eligible, promotedRunner(f.r.Context())), f.spec, f.ceiling, f.comps, f.driveMounts, f.wsRefs, f.baseline)
+	f.localDelivery, refusal = s.localPlacementRefusal(f.r, req, f.place.pooled, candidateTrusts(f.place.eligible, promotedRunner(f.r.Context())), trustOwners(f.place.eligible), f.spec, f.ceiling, f.comps, f.driveMounts, f.wsRefs, f.baseline)
 	if f.place.remoteOffered {
 		refusal.addRemoteInstead(f.place.pool.Name)
 	}
@@ -674,13 +683,16 @@ func (s *Server) stepLocalEligibility(f *runFold, rec *foldRecorder) bool {
 	// judged again at its start, the promotion's runner's class first (candidateTrusts).
 	if req.Placement == types.PlacementLocal && f.place.pooled {
 		f.place.narrowToTrust(f.localDelivery.trust)
+		if f.localDelivery.personOwned {
+			f.place.narrowToPersonOwned()
+		}
 	}
 	// A launch that waits on the pool's remote-hosted runners records this step's answer for the person's
 	// own: the queue then never offers it a runner of theirs that frees first, which the start would
 	// refuse here, ending a run that was accepted to wait.
 	if f.queued && f.place.pooled && req.Placement == types.PlacementRemote {
 		req.Placement = types.PlacementLocal
-		_, local := s.localPlacementRefusal(f.r, req, true, waitingLocalTrusts(), f.spec, f.ceiling, f.comps, f.driveMounts, f.wsRefs, f.baseline)
+		_, local := s.localPlacementRefusal(f.r, req, true, waitingLocalTrusts(), nil, f.spec, f.ceiling, f.comps, f.driveMounts, f.wsRefs, f.baseline)
 		// A read that failed answers nothing (a server error carries its error, not a status): the launch
 		// then behaves as one with nothing recorded.
 		failed := local != nil && (local.err != nil || local.status >= http.StatusInternalServerError)
@@ -698,19 +710,32 @@ func (s *Server) stepLocalEligibility(f *runFold, rec *foldRecorder) bool {
 // runner) is refused, named, before anything is sized or minted. A person's own
 // drive is held off such a runner permanently (memberDriveNeverOnPool).
 func (s *Server) stepDriveEligibility(f *runFold, rec *foldRecorder) bool {
-	if len(f.drives) == 0 || !f.place.pooled || f.place.placement != types.PlacementLocal {
+	if !mountsDrives(f.drives, f.keep) || !f.place.pooled || f.place.placement != types.PlacementLocal {
 		return true
 	}
-	msg := driveNotInPoolMsg(f.drives[0].resolved.Drive.Name)
+	name := "keep_work_folder"
+	if len(f.drives) > 0 {
+		name = f.drives[0].resolved.Drive.Name
+	}
+	msg := driveNotInPoolMsg(name)
 	return !driveDenied(authz.Deny(authz.ReasonDriveNotInPool, "runs.drive", msg), msg).write(s, f.w, f.r)
 }
 
 // stepPlacement runs after the components and before the local-eligibility step: the confinement
 // floor it reads is the policy's and the components', and the plan it gates is the one that step judges.
 func (s *Server) stepPlacement(f *runFold, rec *foldRecorder) bool {
+	if !f.promoted {
+		// The run type the queue's wait is read from (queuedCreate.answer).
+		interactive := runTypeForEnd(f.req.Experience) == types.RunnerPoolRunInteractive || (f.req.Experience == "" && f.req.Interactive)
+		sch, refusal := parseRunSchedule(f.req.StartAt, f.req.StartTimeZone, envEnabled(envScheduledRuns), s.cfg.Now(), scheduleLeadWaitSec(interactive))
+		if refusal.write(s, f.w, f.r) {
+			return false
+		}
+		f.schedule = sch
+	}
 	in := placementInput{req: f.req, floor: confinementFloorSpec(f.spec, f.comps), baseline: f.baseline, reqCC: f.reqCC, reqCCOK: true,
 		ceiling: f.ceiling, untouched: resourceBaseline(f.source, f.spec), ask: resourceAsk(f.req.Resources, sourceSize(f.source, f.ceiling)),
-		promoted: f.promoted, drives: len(f.drives) > 0, noLocal: promotedNoLocal(f.r.Context())}
+		promoted: f.promoted, drives: mountsDrives(f.drives, f.keep), noLocal: promotedNoLocal(f.r.Context())}
 	if f.spec.Resources != nil {
 		in.policyDiskMiB = f.spec.Resources.DiskMiB
 	}
@@ -725,10 +750,14 @@ func (s *Server) stepPlacement(f *runFold, rec *foldRecorder) bool {
 		return false
 	}
 	f.place = plan
+	// A scheduled run waits in its pool's queue for its time; with no pool there is no queue to hold it.
+	if f.schedule != nil && !plan.pooled {
+		return !runError(http.StatusUnprocessableEntity, reasonScheduledRunsUnavailable, scheduledRunsUnavailableMsg).write(s, f.w, f.r)
+	}
 	// A run bound for a capped pool waits for a slot instead of failing (the dry doors answer the same).
 	// The queue's own start replays the fold as promoted, and must not queue again.
 	if f.mode != foldPreview {
-		f.queued = plan.queues() && !f.promoted
+		f.queued = (plan.queues() || f.schedule != nil) && !f.promoted
 	}
 	// A launch that waits records the size it gets before any runner bounds it, so the queue sizes it for
 	// each runner that could take it (startSizeOn) instead of holding it to the runner it met first.

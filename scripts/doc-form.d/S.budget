@@ -174,12 +174,60 @@
 # 0.10 W1 train: docs/sdk.md tightened to 19521, measured at the train merge.
 # docs/sdk.md=19378 adds 22 (0.10 HYB-A): local_folder reasons and launch exclusion
 # docs/sdk.md 19635 = ours 19470 + theirs 19543 - base 19378 at the 0.10.0 SEC-1 merge of main; re-measured below if higher.
+# docs/sdk.md 19653 adds 18 (0.9.6 P096B), measured: the runner_posture_unmet detail names every unmet field.
+# docs/sdk.md 19679 adds 26 (0.9.6 P096B), measured: buildable_modes on GET /governance/credential-delivery.
+# docs/sdk.md 19697 adds 18 over 19679 (0.10 MINT-L), measured: delivery_runner_resident names the Azure DevOps minted token it serves.
+# docs/sdk.md 19702 adds 5 over 19697 (0.10 MINT-L round 2), measured: the owner gate and the revoke on a refused relayed fetch.
+# docs/sdk.md 19885 adds 250 over 19635, measured (0.10.0 GHPAT): the GitHub own-token door and launch reasons.
+# 0.10: docs/sdk.md 19659 adds 24, measured: the attach_local_unavailable reason and its detail (ATT-SRV).
 # docs/sdk.md=19309 adds 6 (0.10): identity_principal_in_use names runners and runner tokens.
 # docs/sdk.md=19315 adds 3 (0.10): identity_deactivated names runner registration tokens.
 # docs/sdk.md 19644 = ours 19635 + theirs 19552 - base 19543 at the 0.10 W2 merge of SEC-2c onto the train.
 # #2822: docs/sdk.md 19581 adds 38 over 19543, measured at the main merge: the three harness_inner_walls reasons.
 # docs/sdk.md 19682 = ours 19644 + theirs 19581 - base 19543 at the 0.10 W2 merge of HRN onto the train.
-docs/sdk.md=19682 share=21
+# docs/sdk.md 19726 = 19635 + 91 (0.10 LAY-A), measured after merging main into 0.10 LAY-A.
+# docs/sdk.md 19766 measured (0.10 BOUNDARY): the boundary reasons, boundary_hard_limits_gated added.
+# docs/sdk.md 19770 measured (0.10 BOUNDARY): break_glass_reason_required only when a profile exists.
+# docs/sdk.md 19409 adds 88 over 19321, measured (0.10 LAY-A): the four org walls and break-glass reasons.
+# docs/sdk.md 19481 measured after merging main into 0.10 LAY-A, with the preflight and preview doors on break_glass_reason_required.
+# docs/sdk.md 19817 = ours 19770 + theirs 19682 - base 19635 at the main merge into 0.10 BOUNDARY.
+# docs/sdk.md 19749 = ours 19702 + theirs 19682 - base 19635 at the 0.10 merge of main (W2) into MINT-L.
+# docs/sdk.md 19932 = ours 19885 + theirs 19682 - base 19635 at the 0.10 GHPAT merge of main onto the lane.
+# docs/sdk.md 19999 = ours 19749 + theirs 19932 - base 19682 at the 0.10 W3 merge of GHPAT onto the train.
+# 0.10 HYBB (#2982): docs/sdk.md 19696 adds 61, measured: the computer_folders_off, computer_runner_offline, computer_runner_no_folders and computer_folder_refused reason rows.
+# docs/sdk.md 19743 = ours 19696 + theirs 19682 - base 19635 at the 0.10 merge of main (W2) into HYBB.
+# docs/sdk.md 20060 = ours 19999 + theirs 19743 - base 19682 at the 0.10 W3 merge of HYBB onto the train.
+# docs/sdk.md 19726 = 19635 + 91 (0.10 LAY-A), measured after merging main into 0.10 LAY-A.
+# docs/sdk.md 19766 measured (0.10 BOUNDARY): the boundary reasons, boundary_hard_limits_gated added.
+# docs/sdk.md 19770 measured (0.10 BOUNDARY): break_glass_reason_required only when a profile exists.
+# docs/sdk.md 19409 adds 88 over 19321, measured (0.10 LAY-A): the four org walls and break-glass reasons.
+# docs/sdk.md 19481 measured after merging main into 0.10 LAY-A, with the preflight and preview doors on break_glass_reason_required.
+# docs/sdk.md 19817 = ours 19770 + theirs 19682 - base 19635 at the main merge into 0.10 BOUNDARY.
+# docs/sdk.md 20195 = ours 20060 + theirs 19817 - base 19682 at the 0.10 W4b merge of LAY-A onto the train.
+# docs/sdk.md 19706 = ours 19659 + theirs 19682 - base 19635 at the ATT-SRV merge of main (W2 train).
+# docs/sdk.md 20084 = ours 20060 + theirs 19706 - base 19682 at the 0.10 W4a merge of ATT-SRV onto the train.
+# 0.10 ATT-LOGIN-SRV: docs/sdk.md 19886 adds 204 over 19682: twelve CLI sign-in reasons, measured.
+# docs/sdk.md 20288 = ours 20084 + theirs 19886 - base 19682 at the 0.10 W4a merge of ATT-LOGIN-SRV onto the train.
+# docs/sdk.md 19698 adds 16 over 19682, measured: the revive_ceiling_denies_kubectl_cli reason and the kube_api credential's namespaces and access (#1990).
+# docs/sdk.md 20304 = ours 20288 + theirs 19698 - base 19682 at the 0.10 W4d merge of FEAT-1KUBE onto the train.
+# docs/sdk.md 19731 adds 49 over 19682 (0.10 FEAT-2SCHED): the scheduled-run refusal reasons row.
+# docs/sdk.md 19783 adds 52 over 19731 (0.10 FEAT-2SCHED): the Scheduled runs section (request fields, queue fields, features.scheduled_runs).
+# docs/sdk.md 19825 adds 42 over 19783 (0.10 FEAT-2SCHED review r1 M1/M2): the latest start a run's wait allows, and scheduled_runs_off at the start.
+# docs/sdk.md 20447 = ours 20304 + theirs 19825 - base 19682 at the 0.10 W4d merge of FEAT-2SCHED-UI onto the train.
+# #1987: docs/sdk.md 20113 adds 431 over 19682, measured: the several-agents section (with its setup-status bit and run agents), the multi_agent_tasks_off reason row and the background-task line.
+# docs/sdk.md 20491 = ours 20113 + theirs 20060 - base 19682 at the 0.10 merge of main into FEAT-2MULTI.
+# #1987 review: docs/sdk.md 20508 adds 17 over 20491, measured: the agent prefix and ?agent= are display only.
+# docs/sdk.md 20736 = ours 20508 + theirs 20288 - base 20060 at the 0.10 second merge of main into FEAT-2MULTI.
+# docs/sdk.md 20895 = ours 20447 + theirs 20736 - base 20288 at the 0.10 W4d merge of MULTI-DOC onto the train.
+# docs/sdk.md 20195 adds 135 over 20060, measured: #1991 keep_work_folder (round 1): the keep_work_folder_disabled reason row and the keep_work_folder bullet.
+# docs/sdk.md 20211 adds 16 over 20195, measured: kept_from_run_title on the kept drive row (0.10 FEAT-2KEEP).
+# docs/sdk.md 21046 = ours 20895 + theirs 20211 - base 20060 at the 0.10 W4d merge of FEAT-2KEEP-UI onto the train.
+# docs/sdk.md 20423 = ours 20195 + theirs 20288 - base 20060 at the 0.10 merge of main (W4a) into the W4b train.
+# docs/sdk.md 21181 = ours 21046 + theirs 20423 - base 20288 at the 0.10 W4d merge of W4b-main onto the train.
+# docs/sdk.md 20423 = ours 19817 + theirs 20288 - base 19682 at the 0.10 LANES merge of main onto BOUNDARY.
+# docs/sdk.md 20469 measured: the credential_withheld reasons
+# docs/sdk.md 21227 = ours 21181 + theirs 20469 - lane's pre-LANES value 20423 (the lane stacked LAY-A, which main already carries) at the 0.10 W4d merge of LANES onto the train.
+docs/sdk.md=21224 share=21 # tightened from 21227 to the measured count at the 0.10 W4d merge
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.

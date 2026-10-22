@@ -144,8 +144,8 @@ func (l *attachLease) fail(ctx context.Context, msg string, err error) {
 
 // live reports whether the holder still has the lease, asking Postgres when the last
 // confirmation is older than attachLeaseFenceEvery. It fails closed: a database that does not
-// answer is false for this call, and a lease found gone is false until the holder has taken it
-// back (recoverAttachLease), which runs on its own goroutine.
+// answer is false for this call (logged once per run of failures), and a lease found gone is false
+// until the holder has taken it back (recoverAttachLease), which runs on its own goroutine.
 func (l *attachLease) live() bool {
 	if l == nil {
 		return true
@@ -166,6 +166,7 @@ func (l *attachLease) live() bool {
 	ok, err := l.st.HoldsAttachLease(ctx, l.runID, l.h.id)
 	switch {
 	case err != nil:
+		l.fail(ctx, "wardynd: could not check a run's attach lease; the client's input is discarded until the database answers", err)
 		return false
 	case !ok:
 		if l.at(gen, func() { l.suspect.Store(true) }) {
@@ -280,6 +281,12 @@ func (s *Server) demoteWriter(runID uuid.UUID, h *attachHolder) {
 	h.waitRemote.Store(true)
 	if h.lease != nil {
 		h.lease.drop()
+	}
+	if h.demoted != nil {
+		select {
+		case h.demoted <- struct{}{}:
+		default:
+		}
 	}
 	if ra := reg.attaches[runID]; ra != nil && ra.writer == h {
 		ra.writer = nil

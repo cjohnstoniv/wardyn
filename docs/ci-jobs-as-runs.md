@@ -78,7 +78,7 @@ services:
 
 - Skip this and the token grant if the job needs no secret; a plain build job uses none.
 
-## 2. Bound the CI principal with a governance profile
+## 2. Bound the CI principal with a unit
 
 - The profile is the principal's ceiling.
 - Whatever policy a job asks for is clamped to it, so a compromised launcher can request more and get less.
@@ -87,7 +87,7 @@ services:
 # admin
 cat > ci-governance.json <<EOF
 {
-  "profiles": [
+  "units": [
     {
       "id": "6f0f4f0e-2c6b-4b1e-9d53-0c1c1c1c1c1c",
       "name": "ci-jobs",
@@ -110,11 +110,11 @@ cat > ci-governance.json <<EOF
       }
     }
   ],
-  "assignments": [
+  "memberships": [
     {
       "subject_type": "user",
       "subject": "${CI_USER}",
-      "profile_id": "6f0f4f0e-2c6b-4b1e-9d53-0c1c1c1c1c1c",
+      "unit_id": "6f0f4f0e-2c6b-4b1e-9d53-0c1c1c1c1c1c",
       "priority": 0
     }
   ]
@@ -132,7 +132,7 @@ wardyn governance set ci-governance.json
 | `allowed_domains` | Only the forge. A job's own policy can list fewer, never more. |
 | `first_use_approval: always_deny` | An unlisted host is refused at once. Nothing waits for a reviewer nobody is watching. |
 | `min_confinement_class` | The weakest sandbox a job may run in. A job asking for less is raised to it, and a launch the runner cannot satisfy is refused. Set it to the strongest class your substrate offers. |
-| `deny_interactive` | Refuses an interactive run, including one that omits `--task`, which comes up interactive. It also refuses `wardyn run attach` and the SSH gateway into any run under the profile, the owner's exec runs included. |
+| `deny_interactive` | Refuses an interactive run, including one that omits `--task`, which comes up interactive. It also refuses `wardyn attach` and the SSH gateway into any run under the profile, the owner's exec runs included. |
 | `deny_user_drive` | Refuses a user drive mount, the one storage that outlives a run. |
 | `max_concurrent_runs` | A launch past the cap is refused. |
 

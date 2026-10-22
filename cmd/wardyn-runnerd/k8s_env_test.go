@@ -76,6 +76,18 @@ func TestSubstrateFlagChecks(t *testing.T) {
 	if err := checkSubstrateFlags("podman", changed()); err == nil {
 		t.Fatal("unknown substrate accepted")
 	}
+	// Folder-only mode holds no sandbox: no relay, no network, no cluster flag, and --folder-root is its alone.
+	if err := checkSubstrateFlags("folders", changed("folder-root")); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"relay-listen", "internal-network", "runs-namespace"} {
+		if err := checkSubstrateFlags("folders", changed(f)); err == nil {
+			t.Fatalf("folders took --%s", f)
+		}
+	}
+	if err := checkSubstrateFlags("docker", changed("folder-root")); err == nil {
+		t.Fatal("docker took --folder-root")
+	}
 	if checkArch("amd64") != nil || checkArch("") == nil || checkArch("arm64") != nil || checkArch("x86_64") == nil {
 		t.Fatal("arch check")
 	}

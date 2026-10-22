@@ -4,7 +4,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -26,6 +25,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
+	"github.com/cjohnstoniv/wardyn/internal/foldersync"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -34,8 +34,6 @@ const (
 	syncSubsystem    = "wardyn-sync"
 	syncDialTimeout  = 15 * time.Second
 	syncCloseTimeout = 10 * time.Second
-	// syncStderrCap bounds the gateway's stderr kept for an error message; the rest is read and dropped.
-	syncStderrCap = 64 << 10
 )
 
 // syncHandshakeTimeout bounds the SSH handshake: a gateway that accepts the connection and never speaks
@@ -118,7 +116,7 @@ computer, so it needs --advertised-proxy (same as 'wardyn run ssh').
 	cmd.Flags().IntVar(&f.maxPullDeletes, "max-pull-deletes", 20, "most files --pull-deletes may remove here in one pass; over it, none is removed")
 	cmd.Flags().BoolVar(&f.git, "git", false, "after the first pass, send this computer's current branch and its history to the sandbox as a git bundle")
 	cmd.Flags().BoolVar(&f.pullCommits, "pull-commits", false, "after the first pass, fetch the sandbox's new commits into the branch wardyn/sync-<run> here (never into your working tree)")
-	cmd.Flags().Int64Var(&f.maxPullBytes, "max-pull-bytes", defaultMaxPullBytes, "most bytes one pass may pull from the sandbox (a single file over 256 MiB is always refused)")
+	cmd.Flags().Int64Var(&f.maxPullBytes, "max-pull-bytes", foldersync.DefaultMaxPullBytes, "most bytes one pass may pull from the sandbox (a single file over 256 MiB is always refused)")
 	cmd.Flags().BoolVar(&f.advertisedProxy, "advertised-proxy", false, "connect through the ProxyCommand this deployment advertises (it runs on this computer)")
 	return cmd
 }
@@ -141,18 +139,18 @@ func runSync(cmd *cobra.Command, c *sdk.Client, runID, localDir string, f syncFl
 	if fi, err := os.Stat(root); err != nil || !fi.IsDir() {
 		return fmt.Errorf("sync: %s is not a directory", localDir)
 	}
-	remote, err := syncRemoteDir(f.remoteDir)
+	remote, err := foldersync.RemoteDir(f.remoteDir)
 	if err != nil {
 		return fmt.Errorf("sync: %w", err)
 	}
-	stateFile, err := syncStatePath(runID)
+	stateFile, err := foldersync.StatePath(runID)
 	if err != nil {
 		return err
 	}
-	if err := syncStateOutside(root, stateFile); err != nil {
+	if err := foldersync.StateOutside(root, stateFile); err != nil {
 		return fmt.Errorf("sync: %w", err)
 	}
-	st, err := loadSyncState(stateFile, root, remote)
+	st, err := foldersync.LoadState(stateFile, root, remote)
 	if err != nil {
 		return fmt.Errorf("sync: %w", err)
 	}
@@ -203,14 +201,14 @@ func runSync(cmd *cobra.Command, c *sdk.Client, runID, localDir string, f syncFl
 		return fmt.Errorf("sync: %w", err)
 	}
 	defer lroot.Close()
-	sy := &syncer{c: sess.sftp, meter: sess.meter, root: lroot, st: st, stateFile: stateFile, o: syncOptions{
-		remote: remote, pull: f.pull, maxPullBytes: f.maxPullBytes, orgDeny: rules.Deny,
-		pullDeletes: f.pullDeletes, maxPullDeletes: f.maxPullDeletes, notify: cmd.ErrOrStderr(),
-		trash: filepath.Join(filepath.Dir(stateFile), runID+"-deleted", time.Now().UTC().Format("20060102T150405.000000000Z")),
+	sy := &foldersync.Syncer{Client: sess.sftp, Meter: sess.meter, Root: lroot, State: st, StateFile: stateFile, Opts: foldersync.Options{
+		Remote: remote, Pull: f.pull, MaxPullBytes: f.maxPullBytes, OrgDeny: rules.Deny,
+		PullDeletes: f.pullDeletes, MaxPullDeletes: f.maxPullDeletes, Notify: cmd.ErrOrStderr(),
+		Trash: filepath.Join(filepath.Dir(stateFile), runID+"-deleted", time.Now().UTC().Format("20060102T150405.000000000Z")),
 	}}
 	var gitStep func() error
 	if f.git || f.pullCommits {
-		if err := syncGitCheck(ctx, sy, root); err != nil {
+		if err := foldersync.GitCheck(ctx, sy, root); err != nil {
 			_ = sess.close()
 			return fmt.Errorf("sync: %w", err)
 		}
@@ -220,12 +218,12 @@ func runSync(cmd *cobra.Command, c *sdk.Client, runID, localDir string, f syncFl
 		}
 		gitStep = func() error {
 			if f.git {
-				if err := sendGit(ctx, w, sy, sshc, runID, root); err != nil {
+				if err := foldersync.SendGit(ctx, w, sy, sshc, runID, root); err != nil {
 					return err
 				}
 			}
 			if f.pullCommits {
-				return pullCommits(ctx, w, sy, sshc, runID, root)
+				return foldersync.PullCommits(ctx, w, sy, sshc, runID, root)
 			}
 			return nil
 		}
@@ -260,14 +258,14 @@ func portOr22(port string) string {
 	return port
 }
 
-func runSyncLoop(ctx context.Context, cmd *cobra.Command, sy *syncer, sess *syncSession, f syncFlags, gitStep func() error) error {
+func runSyncLoop(ctx context.Context, cmd *cobra.Command, sy *foldersync.Syncer, sess *syncSession, f syncFlags, gitStep func() error) error {
 	for first := true; ; first = false {
-		rep, err := sy.pass(ctx)
+		rep, err := sy.Pass(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
 				return errors.New("sync: interrupted")
 			}
-			sess.report(syncPassReport{Error: syncShown(err.Error())})
+			sess.report(syncPassReport{Error: foldersync.Shown(err.Error())})
 			return fmt.Errorf("sync: %w", err)
 		}
 		sess.report(syncPassReport{Complete: true, DeletedOnLaptop: len(rep.DeletedLocal)})
@@ -275,7 +273,7 @@ func runSyncLoop(ctx context.Context, cmd *cobra.Command, sy *syncer, sess *sync
 			if err := json.NewEncoder(cmd.OutOrStdout()).Encode(rep); err != nil {
 				return err
 			}
-		} else if first || !rep.empty() {
+		} else if first || !rep.Empty() {
 			printSyncReport(cmd.OutOrStdout(), rep)
 		}
 		if first && gitStep != nil {
@@ -297,22 +295,22 @@ func runSyncLoop(ctx context.Context, cmd *cobra.Command, sy *syncer, sess *sync
 	}
 }
 
-func printSyncReport(w io.Writer, r *syncReport) {
+func printSyncReport(w io.Writer, r *foldersync.Report) {
 	fmt.Fprintf(w, "pushed %d file(s) (%d bytes), pulled %d file(s) (%d bytes)\n", len(r.Pushed), r.BytesOut, len(r.Pulled), r.BytesIn)
 	for _, p := range r.Conflicts {
-		fmt.Fprintf(w, "conflict (changed on both sides; the laptop's copy wins, the sandbox's is not pulled): %s\n", syncShown(p))
+		fmt.Fprintf(w, "conflict (changed on both sides; the laptop's copy wins, the sandbox's is not pulled): %s\n", foldersync.Shown(p))
 	}
 	for _, p := range r.Renamed {
-		fmt.Fprintf(w, "renamed in the sandbox: %s -> %s\n", syncShown(p.From), syncShown(p.To))
+		fmt.Fprintf(w, "renamed in the sandbox: %s -> %s\n", foldersync.Shown(p.From), foldersync.Shown(p.To))
 	}
 	for _, p := range r.DeletedRemote {
-		fmt.Fprintf(w, "deleted in the sandbox (deleted here): %s\n", syncShown(p))
+		fmt.Fprintf(w, "deleted in the sandbox (deleted here): %s\n", foldersync.Shown(p))
 	}
 	for _, p := range r.DeletedLocal {
-		fmt.Fprintf(w, "deleted here (deleted in the sandbox; kept in %s): %s\n", syncShown(r.KeptIn), syncShown(p))
+		fmt.Fprintf(w, "deleted here (deleted in the sandbox; kept in %s): %s\n", foldersync.Shown(r.KeptIn), foldersync.Shown(p))
 	}
 	for _, x := range r.Refused {
-		fmt.Fprintf(w, "refused (%s): %s\n", syncShown(x.Reason), syncShown(x.Path))
+		fmt.Fprintf(w, "refused (%s): %s\n", foldersync.Shown(x.Reason), foldersync.Shown(x.Path))
 	}
 	if r.Ignored > 0 {
 		fmt.Fprintf(w, "left out by ignore files: %d\n", r.Ignored)
@@ -440,25 +438,12 @@ func dialProxyCommand(ctx context.Context, proxy, host, port, user string) (net.
 type syncSession struct {
 	ch      ssh.Channel
 	sftp    *sftp.Client
-	meter   *listMeter
+	meter   *foldersync.ListMeter
 	status  int           // the exit-status, valid once exited is closed; -1 when none came
 	exited  chan struct{} // closed when the channel's requests end
 	errDone chan struct{} // closed when stderr is drained
-	stderr  cappedBuffer
+	stderr  foldersync.CappedBuffer
 }
-
-// cappedBuffer keeps the first syncStderrCap bytes written to it and discards the rest, so the channel
-// still drains and the gateway is never blocked on a full stderr.
-type cappedBuffer struct{ buf bytes.Buffer }
-
-func (c *cappedBuffer) Write(p []byte) (int, error) {
-	if room := syncStderrCap - c.buf.Len(); room > 0 {
-		c.buf.Write(p[:min(room, len(p))])
-	}
-	return len(p), nil
-}
-
-func (c *cappedBuffer) String() string { return c.buf.String() }
 
 // stdinEOF makes the sftp client's Close send EOF on the channel's stdin
 // instead of closing the channel.
@@ -503,7 +488,7 @@ func openSyncSession(c *ssh.Client, dir, direction string) (*syncSession, error)
 		_ = ch.Close()
 		return nil, fmt.Errorf("sync: the gateway refused the %s subsystem: %w", syncSubsystem, err)
 	}
-	s.meter = &listMeter{r: ch}
+	s.meter = foldersync.NewListMeter(ch)
 	s.sftp, err = sftp.NewClientPipe(s.meter, stdinEOF{ch})
 	if err != nil {
 		return nil, fmt.Errorf("sync: %w", s.refusal())
@@ -513,7 +498,7 @@ func openSyncSession(c *ssh.Client, dir, direction string) (*syncSession, error)
 		if err != nil {
 			return nil, fmt.Errorf("sync: ask the sandbox for its start directory: %w", err)
 		}
-		return nil, fmt.Errorf("sync: the sandbox started in %s, not %s; does %s exist in the sandbox?", syncShown(got), syncShown(dir), syncShown(dir))
+		return nil, fmt.Errorf("sync: the sandbox started in %s, not %s; does %s exist in the sandbox?", foldersync.Shown(got), foldersync.Shown(dir), foldersync.Shown(dir))
 	}
 	return s, nil
 }
@@ -567,7 +552,7 @@ func (s *syncSession) finish() bool {
 func (s *syncSession) refusal() error {
 	s.finish()
 	if msg := strings.TrimSpace(s.stderr.String()); msg != "" {
-		return errors.New(syncShown(msg))
+		return errors.New(foldersync.Shown(msg))
 	}
 	return errors.New("the gateway ended the sync channel without a message")
 }
@@ -601,7 +586,7 @@ func syncExitError(status int, stderr string) error {
 	case -1:
 		return errors.New("sync: the channel ended without an exit status from the sandbox's sftp-server")
 	}
-	return fmt.Errorf("sync: the sandbox's sftp-server exited %d: %s", status, syncShown(strings.TrimSpace(stderr)))
+	return fmt.Errorf("sync: the sandbox's sftp-server exited %d: %s", status, foldersync.Shown(strings.TrimSpace(stderr)))
 }
 
 func (f syncFlags) check() error {
@@ -633,7 +618,7 @@ func setLocalFolder(body *sdk.CreateRunRequest, dir, remoteDir string, createJSO
 	if fi, err := os.Stat(abs); err != nil || !fi.IsDir() {
 		return fmt.Errorf("--local-folder: %s is not a directory", dir)
 	}
-	if _, err := syncRemoteDir(remoteDir); err != nil {
+	if _, err := foldersync.RemoteDir(remoteDir); err != nil {
 		return fmt.Errorf("--local-folder-remote-dir: %w", err)
 	}
 	body.LocalFolder = &types.RunLocalFolder{Name: filepath.Base(abs), RemoteDir: remoteDir}
@@ -669,7 +654,7 @@ func seedLocalFolder(cmd *cobra.Command, c *sdk.Client, id uuid.UUID, dir, remot
 		case err != nil:
 			return err
 		case run.State == types.RunRunning:
-			err := runSync(cmd, c, id.String(), dir, syncFlags{remoteDir: remoteDir, maxPullBytes: defaultMaxPullBytes, maxPullDeletes: 20})
+			err := runSync(cmd, c, id.String(), dir, syncFlags{remoteDir: remoteDir, maxPullBytes: foldersync.DefaultMaxPullBytes, maxPullDeletes: 20})
 			if err != nil {
 				return fmt.Errorf("%w\nthe agent of run %s is held for this folder: seed it with 'wardyn sync %s %s' before the run's seed wait ends", err, id, id, dir)
 			}

@@ -208,7 +208,7 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
     expect(omitted).toEqual([]);
   });
 
-  it("RunDetail adds exactly ui_apps, user_type_name, the model provider's name and deleted flag, the launching portal's name, the pool's name, the ended run's kept_until, the run's policy and its open sync sessions over AgentRun — " +
+  it("RunDetail adds exactly ui_apps, user_type_name, the model provider's name and deleted flag, the launching portal's name, the pool's name, the ended run's kept_until, the run's policy, its open sync sessions, its computer folder and its agents over AgentRun — " +
     "the fields only GET /runs/{id} sends (handleGetRun's anonymous wrapper struct, runs_policy.go)", () => {
     const runDetailOwnKeys = tsInterfaceKeys(runsTs, "RunDetail");
     expect(runDetailOwnKeys).toEqual([
@@ -221,7 +221,20 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
       "kept_until",
       "policy",
       "sync",
+      "computer_folder",
+      "agents",
     ]);
+  });
+
+  it("RunDetailAgent's keys are exactly runDetailAgent's json tags (GET /runs/{id} agents, run_multi_agent.go)", () => {
+    const multiGo = readFileSync(join(root, "internal/api/run_multi_agent.go"), "utf8");
+    expect(tsInterfaceKeys(runsTs, "RunDetailAgent").sort()).toEqual(goJSONTags(multiGo, "runDetailAgent").sort());
+  });
+
+  it("RunComputerFolder and RunFolderPass's keys are exactly computerFolderRunView's and types.FolderPassRecord's json tags (GET /runs/{id} computer_folder)", () => {
+    const viewGo = readFileSync(join(root, "internal/api/run_computer_folder.go"), "utf8");
+    expect(tsInterfaceKeys(runsTs, "RunComputerFolder").sort()).toEqual(goJSONTags(viewGo, "computerFolderRunView").sort());
+    expect(tsInterfaceKeys(runsTs, "RunFolderPass").sort()).toEqual(goJSONTags(typesGo, "FolderPassRecord").sort());
   });
 
   it("RunSync and RunSyncOpen's keys are exactly runSyncView's and runSyncOpen's json tags (GET /runs/{id} sync.open, sshgateway_sync.go)", () => {

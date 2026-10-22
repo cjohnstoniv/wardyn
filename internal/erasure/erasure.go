@@ -28,7 +28,7 @@ const (
 	// AuditPersonalFields: the key every sealed audit field of the person is
 	// under, destroyed in every version.
 	AuditPersonalFields Scope = "audit_personal_fields"
-	// RunTasks: the task text of the person's runs.
+	// RunTasks: the task text, title and description of the person's runs.
 	RunTasks Scope = "run_tasks"
 	// RunOutputs: the stored output of the person's runs.
 	RunOutputs Scope = "run_outputs"
@@ -41,7 +41,7 @@ const (
 	Components Scope = "components"
 	// RunSetups: the person's own run templates and their revisions, their
 	// group template-manager grants, and their name as the author of shared
-	// templates, revisions and grants, which stay without it.
+	// templates, revisions, grants and launch presets, which stay without it.
 	RunSetups Scope = "run_setups"
 	// MaskCopies: the masking manifests of the person's runs, after their live
 	// attaches and relays are fenced.

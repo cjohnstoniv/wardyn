@@ -1217,6 +1217,9 @@ func TestResident_BusyAcrossExpiry(t *testing.T) {
 		if g, _ := f.entry(grant); g.State != grantHeld || g.ReportOutcome == runnerwire.ResidentErased {
 			t.Fatalf("entry after the held delete failed = %+v, want unchanged", g)
 		}
+		// Only the held erase above needs the short bound; the sweep's own delete gets the real one, or
+		// a slow runner times it out.
+		shortTimeout(t, 30*time.Second)
 		if err := f.res.EraseExpired(ctx, f.clock.now()); err != nil {
 			t.Fatal(err)
 		}

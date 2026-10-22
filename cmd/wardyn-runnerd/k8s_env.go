@@ -181,7 +181,16 @@ var k8sServeFlags = []string{"runs-namespace", "relay-service", "arch", "max-pod
 
 // checkSubstrateFlags refuses a flag the chosen substrate does not read.
 func checkSubstrateFlags(substrate string, changed func(string) bool) error {
+	if substrate != "folders" && changed("folder-root") {
+		return errors.New("--folder-root applies only to --substrate=folders")
+	}
 	switch substrate {
+	case "folders":
+		for _, f := range append([]string{"relay-listen", "relay-host-target", "internal-network"}, k8sServeFlags...) {
+			if changed(f) {
+				return fmt.Errorf("--%s does not apply to --substrate=folders", f)
+			}
+		}
 	case "docker":
 		for _, f := range k8sServeFlags {
 			if changed(f) {
@@ -198,7 +207,7 @@ func checkSubstrateFlags(substrate string, changed func(string) bool) error {
 			}
 		}
 	default:
-		return fmt.Errorf("--substrate %q: want docker or k8s", substrate)
+		return fmt.Errorf("--substrate %q: want docker, k8s or folders", substrate)
 	}
 	return nil
 }

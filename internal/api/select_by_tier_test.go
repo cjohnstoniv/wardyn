@@ -36,13 +36,13 @@ func (s *tierStore) answer(groups []string) (types.CapabilitySubjectType, error)
 	return s.tier, nil
 }
 
-func (s *tierStore) ResolveGovernanceProfile(_ context.Context, _, groups []string, _ string) (
-	*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (s *tierStore) ResolveGovernanceUnit(_ context.Context, _, groups []string, _ string) (
+	*types.GovernanceUnit, types.CapabilitySubjectType, error) {
 	tier, err := s.answer(groups)
 	if err != nil {
 		return nil, "", err
 	}
-	return &types.GovernanceProfile{Name: "p-" + string(tier)}, tier, nil
+	return &types.GovernanceUnit{Name: "p-" + string(tier)}, tier, nil
 }
 
 func (s *tierStore) ResolveUserDrive(_ context.Context, _, groups []string, _ string) (
@@ -60,7 +60,7 @@ func (s *tierStore) has() (bool, error) {
 	return s.hasGroup, s.hasErr
 }
 
-func (s *tierStore) HasGroupTierAssignments(context.Context) (bool, error) { return s.has() }
+func (s *tierStore) HasGroupTierMemberships(context.Context) (bool, error) { return s.has() }
 func (s *tierStore) HasGroupTierDriveGrants(context.Context) (bool, error) { return s.has() }
 
 // TestSelectByTierOneRuleTwoEntrances pins K3's claim that the ceiling and the
@@ -130,7 +130,7 @@ func TestSelectByTierOneRuleTwoEntrances(t *testing.T) {
 	}{
 		{"governance.ceiling", func(ctx context.Context, srv *Server) (bool, error) {
 			c, err := srv.ceilingWithUnusableGroups(ctx, []string{"sub-bob"}, "contractor", governanceCeiling{})
-			return c.Profile != nil, err
+			return c.Unit != nil, err
 		}},
 		{"runs.drive", func(ctx context.Context, srv *Server) (bool, error) {
 			d, err := srv.driveWithUnusableGroups(ctx, []string{"sub-bob"}, "contractor", driveSizeCeiling{})

@@ -100,7 +100,7 @@ func TestLive_AutonomyL0Enforced(t *testing.T) {
 				t.Fatalf("run %s was admitted: L0 no longer refuses an unattended run. This is the regression "+
 					"T-45 exists to catch — report it, don't adjust the request (docs/LIVE-TESTS.md, LL5)", run.ID)
 			}
-			Fatalf(t, "create run: %v (want a governance_profile 403, not this)", err)
+			Fatalf(t, "create run: %v (want a governance_unit 403, not this)", err)
 		}
 		if apiErr.Status != 403 {
 			Fatalf(t, "create run refused %d, want 403: %s", apiErr.Status, apiErr.Body)

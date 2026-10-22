@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -58,7 +59,10 @@ import (
 // Dropping happens HERE, server-side, and never by asking the client to refrain
 // from sending: the client is the one component we do not control. A read-only
 // client still learns its mode from the attach-mode control frame the handler
-// sent on open, so it can grey out its input rather than type into a void.
+// sent on open, so it can grey out its input rather than type into a void. A
+// writer whose input is refused without a mode change (a lease fence check that
+// errors or finds the row lapsed) is told by an input-dropped frame instead
+// (tellDropped), since its client still shows it driving.
 func (s *Server) attachPump(ctx context.Context, c *websocket.Conn, runID uuid.UUID, holder *attachHolder, castTee io.Writer, attach func() error) string {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -72,14 +76,17 @@ func (s *Server) attachPump(ctx context.Context, c *websocket.Conn, runID uuid.U
 		// Latest-wins, one slot: a burst of resizes never blocks the reader, and
 		// only the most recent size matters (sshgateway_channels.go's
 		// window-change model).
-		resizeC: make(chan resizeMsg, 1),
+		resizeC:  make(chan resizeMsg, 1),
+		droppedC: make(chan struct{}, 1),
 	}
+	holder.onDrop = p.inputDropped
 	defer p.flow.stop()
 	go p.ping()
 	go p.output()
 	go p.read()
 	go p.drain()
 	go p.resizeWorker()
+	go p.tellDropped()
 	// Open the exec now that the reader runs.
 	go func() {
 		if err := attach(); err != nil {
@@ -112,6 +119,9 @@ type attachPumpState struct {
 	queue   *attachInputQueue
 	resizeC chan resizeMsg
 	flow    attachFlow
+	// dropped counts the refused input bytes not yet reported; droppedC (1-slot) wakes tellDropped.
+	dropped  atomic.Int64
+	droppedC chan struct{}
 }
 
 // end records why the pump ended and cancels it.
@@ -232,6 +242,7 @@ func (p *attachPumpState) read() {
 			// discards it). A full queue ends the connection with 1009: the
 			// reader never blocks, and no chunk is dropped without saying so.
 			if !p.holder.canWrite() {
+				p.holder.dropInput(len(data))
 				continue
 			}
 			if !p.queue.push(data) {
@@ -240,6 +251,31 @@ func (p *attachPumpState) read() {
 				return
 			}
 		}
+	}
+}
+
+// inputDropped is the holder's onDrop: it counts n refused bytes and wakes tellDropped.
+func (p *attachPumpState) inputDropped(n int) {
+	p.dropped.Add(int64(n))
+	select {
+	case p.droppedC <- struct{}{}:
+	default:
+	}
+}
+
+// tellDropped sends the client one input-dropped frame per burst of refused input. It is its own
+// goroutine because the reader never blocks on a socket write; a failed write is left to the output
+// goroutine, which ends the pump on the next one.
+func (p *attachPumpState) tellDropped() {
+	for {
+		select {
+		case <-p.ctx.Done():
+			return
+		case <-p.droppedC:
+		}
+		wctx, cancel := context.WithTimeout(p.ctx, attachWriteTimeout)
+		_ = p.c.Write(wctx, websocket.MessageText, mustJSON(attachInputDroppedMsg{Type: "input-dropped", Bytes: p.dropped.Swap(0)}))
+		cancel()
 	}
 }
 

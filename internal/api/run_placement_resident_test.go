@@ -131,7 +131,7 @@ func TestLocalPlanFacts_OneDeliveryPolicyReadPerDoor(t *testing.T) {
 	reads := 0
 	f.srv.cfg.Store = residentFactsStore{localPlanTestStore: localPlanTestStore{f.st}, policy: json.RawMessage(`{"classes":{}}`), reads: &reads}
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(utCtx("user", "", nil))
-	_, _ = f.srv.localPlacementRefusal(r, createRunRequest{Placement: placement.Local}, false, nil, types.RunPolicySpec{}, governanceCeiling{}, runComponents{}, nil, nil, composer.Baseline{})
+	_, _ = f.srv.localPlacementRefusal(r, createRunRequest{Placement: placement.Local}, false, nil, nil, types.RunPolicySpec{}, governanceCeiling{}, runComponents{}, nil, nil, composer.Baseline{})
 	if reads != 1 {
 		t.Errorf("create read the delivery policy %d times, want 1", reads)
 	}

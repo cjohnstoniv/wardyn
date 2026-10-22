@@ -18,6 +18,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	clienttesting "k8s.io/client-go/testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -401,5 +402,15 @@ func TestWaitingReason_FallsBackToScheduleCondition(t *testing.T) {
 	}}
 	if got := waitingReason(scheduled); got != "pod: Pending" {
 		t.Errorf("waitingReason = %q, want %q", got, "pod: Pending")
+	}
+}
+
+// Kubernetes cannot keep an ended sandbox: every terminal path deletes the agent pod, and the AWS
+// credential caches in its container file system go with it (the Docker driver wipes them before
+// its kept end instead). A kept end added here would need that wipe too.
+func TestDriver_HasNoKeptEnd(t *testing.T) {
+	d, _ := newTestDriver(t, Config{})
+	if _, ok := any(d).(runner.SandboxEnder); ok {
+		t.Fatal("the k8s driver keeps an ended sandbox now: wipe the AWS credential caches before that end, as the Docker driver does")
 	}
 }

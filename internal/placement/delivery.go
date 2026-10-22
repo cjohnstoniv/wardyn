@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -22,7 +23,7 @@ type Mode string
 const (
 	ModeOwn            Mode = "own"             // the person's own material, wherever it already lives
 	ModeViaOrg         Mode = "via_org"         // only in the org; used through the org's egress for the run's life
-	ModeRunnerResident Mode = "runner_resident" // in the runner's OS keystore, then the local proxy or sandbox
+	ModeRunnerResident Mode = "runner_resident" // in the runner's OS keystore, then the local proxy or sandbox; an Azure DevOps minted token only in the runner proxy's memory
 	ModeRefuse         Mode = "refuse"          // nowhere; the default for every org-held class
 )
 
@@ -82,6 +83,32 @@ func DeliveryClasses() []string {
 // AllowedModes is the set of modes a class may be delivered under; nil for an unknown class.
 func AllowedModes(class string) []Mode { return slices.Clone(classModes[class]) }
 
+// BuildableModes is the subset of AllowedModes(class) a local run can be
+// delivered under today: via_org only where a via_org-shaped table row names
+// the class, runner_resident only where its delivery is built (residentBuilt).
+// A stored policy may still name the other modes; they refuse at every door.
+func BuildableModes(class string) []Mode {
+	var out []Mode
+	for _, m := range classModes[class] {
+		switch m {
+		case ModeViaOrg:
+			if !slices.ContainsFunc(Table, func(e Entry) bool { return e.ViaOrg && e.Rule != RuleNotConfigured && e.Delivery == class }) {
+				continue
+			}
+		case ModeRunnerResident:
+			if !residentBuilt[class] {
+				continue
+			}
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// Buildable reports whether a local run can be delivered class under mode: the one predicate the write-time
+// check (CheckBuildable) and the read of a stored document (Unbuildable) both use.
+func Buildable(class string, m Mode) bool { return slices.Contains(BuildableModes(class), m) }
+
 // Writable reports whether a policy may configure the class.
 func Writable(class string) bool {
 	_, known := classModes[class]
@@ -97,26 +124,53 @@ type PostureRequirement struct {
 }
 
 // PostureUnmet names the first field of req that p does not meet; "" when p
-// meets it. A runner that never reported posture meets no requirement, and an
-// os_min names every OS a runner may run: an unlisted OS does not meet it.
+// meets it.
 func PostureUnmet(req *PostureRequirement, p *types.RunnerPosture) string {
-	switch {
-	case req == nil:
-		return ""
-	case p == nil:
-		return "posture"
-	case req.MDMManaged && !p.MDMManaged:
-		return "mdm_managed"
-	case req.DiskEncrypted && !p.DiskEncrypted:
-		return "disk_encrypted"
-	}
-	if len(req.OSMin) == 0 {
-		return ""
-	}
-	if min, ok := req.OSMin[p.OS]; !ok || !versionAtLeast(p.OSVersion, min) {
-		return "os_min"
+	if unmet := PostureUnmetAll(req, p); len(unmet) > 0 {
+		return unmet[0]
 	}
 	return ""
+}
+
+// PostureUnmetAll names every field of req that p does not meet, in a fixed
+// order; nil when p meets it. A runner that never reported posture meets no
+// requirement ("posture"), and an os_min names every OS a runner may run: an
+// unlisted OS does not meet it.
+func PostureUnmetAll(req *PostureRequirement, p *types.RunnerPosture) []string {
+	switch {
+	case req == nil:
+		return nil
+	case p == nil:
+		return []string{"posture"}
+	}
+	var out []string
+	if req.MDMManaged && !p.MDMManaged {
+		out = append(out, "mdm_managed")
+	}
+	if req.DiskEncrypted && !p.DiskEncrypted {
+		out = append(out, "disk_encrypted")
+	}
+	if len(req.OSMin) > 0 {
+		if min, ok := req.OSMin[p.OS]; !ok || !versionAtLeast(p.OSVersion, min) {
+			out = append(out, "os_min")
+		}
+	}
+	return out
+}
+
+// requires lists req's fields, as a refusal names the requirement.
+func (req *PostureRequirement) requires() string {
+	var out []string
+	if req.MDMManaged {
+		out = append(out, "mdm_managed")
+	}
+	if req.DiskEncrypted {
+		out = append(out, "disk_encrypted")
+	}
+	for _, name := range slices.Sorted(maps.Keys(req.OSMin)) {
+		out = append(out, "os_min "+name+" "+req.OSMin[name])
+	}
+	return strings.Join(out, ", ")
 }
 
 // versionAtLeast compares dot-separated numeric versions; a part that is not a
@@ -218,6 +272,89 @@ func validateClasses(classes map[string]ClassPolicy, prefix string) error {
 	return nil
 }
 
+// ErrUnbuildablePolicy marks a delivery policy that sets a mode the engine cannot build for a class (a 422).
+var ErrUnbuildablePolicy = errors.New("placement: credential delivery policy sets a mode that is not built")
+
+// unbuildableError is the refusal CheckBuildable returns: its text is the sentence a person reads, without the
+// package sentinel, and errors.Is still finds ErrUnbuildablePolicy.
+type unbuildableError struct{ msg string }
+
+func (e unbuildableError) Error() string        { return e.msg }
+func (e unbuildableError) Is(target error) bool { return target == ErrUnbuildablePolicy }
+
+// CheckBuildable refuses a policy that sets a class, in Classes or in any trust class's overrides, to a mode
+// outside BuildableModes(class). A row that is the same in before, the stored document, is let through: a
+// document stored by an earlier version may hold a mode this one cannot build, and a client that sends it back
+// unchanged is not asking for it. Validate stays the bounds check a stored document is judged on; this is the
+// write-time check only, so a stored document is never rewritten or refused by it.
+func (p DeliveryPolicy) CheckBuildable(before DeliveryPolicy) error {
+	check := func(classes, was map[string]ClassPolicy, prefix string) error {
+		for _, class := range sortedKeys(classes) {
+			m := classes[class]
+			if old, stored := was[class]; stored && reflect.DeepEqual(old, m) {
+				continue
+			}
+			if !Buildable(class, m.Mode) {
+				return unbuildableError{unbuildableSentence(prefix+class, m.Mode, class)}
+			}
+		}
+		return nil
+	}
+	if err := check(p.Classes, before.Classes, ""); err != nil {
+		return err
+	}
+	for _, trust := range slices.Sorted(maps.Keys(p.ByTrust)) {
+		if err := check(p.ByTrust[trust].Classes, before.ByTrust[trust].Classes, "by_trust."+string(trust)+"."); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// UnbuildableRow is one entry of a stored policy that sets a mode outside BuildableModes(Class): TrustClass
+// is empty for a row of Classes and names the trust class for a row of ByTrust. The document is never changed.
+type UnbuildableRow struct {
+	Class          string                 `json:"class"`
+	TrustClass     types.RunnerTrustClass `json:"trust_class,omitempty"`
+	Mode           Mode                   `json:"mode"`
+	BuildableModes []Mode                 `json:"buildable_modes"`
+}
+
+// Path is the row's place in the document, as CheckBuildable's refusal names it.
+func (r UnbuildableRow) Path() string {
+	if r.TrustClass == "" {
+		return r.Class
+	}
+	return "by_trust." + string(r.TrustClass) + "." + r.Class
+}
+
+// String is CheckBuildable's sentence for the row.
+func (r UnbuildableRow) String() string { return unbuildableSentence(r.Path(), r.Mode, r.Class) }
+
+func unbuildableSentence(path string, m Mode, class string) string {
+	return fmt.Sprintf("class %q cannot be delivered as %q yet (the server can build: %s)", path, m, joinModes(BuildableModes(class)))
+}
+
+// Unbuildable lists every row of the policy, in Classes or in a trust class's overrides, whose mode is outside
+// BuildableModes(class): Classes first, then ByTrust, each in sorted order. It judges the whole document
+// with Buildable, as CheckBuildable judges a write, but without the allowance for a row the stored document
+// already holds. Nil when every row is buildable.
+func (p DeliveryPolicy) Unbuildable() []UnbuildableRow {
+	var out []UnbuildableRow
+	add := func(classes map[string]ClassPolicy, trust types.RunnerTrustClass) {
+		for _, class := range sortedKeys(classes) {
+			if m := classes[class].Mode; !Buildable(class, m) {
+				out = append(out, UnbuildableRow{Class: class, TrustClass: trust, Mode: m, BuildableModes: append([]Mode{}, BuildableModes(class)...)})
+			}
+		}
+	}
+	add(p.Classes, "")
+	for _, trust := range slices.Sorted(maps.Keys(p.ByTrust)) {
+		add(p.ByTrust[trust].Classes, trust)
+	}
+	return out
+}
+
 // ForTrust is a class's policy on a runner of trust class trust: the trust class's
 // override when it names the class, else the global row, else refuse. A class the
 // global row delivers via_org is the same on every runner (Validate keeps overrides
@@ -272,6 +409,20 @@ func ResidentPlaceholder(grantID uuid.UUID) string {
 // ResidentGrantID reads a placeholder back; false when v is not one.
 func ResidentGrantID(v string) (uuid.UUID, bool) {
 	rest, ok := strings.CutPrefix(v, residentPlaceholderPrefix)
+	if !ok {
+		return uuid.Nil, false
+	}
+	id, err := uuid.Parse(rest)
+	return id, err == nil
+}
+
+// FillPlaceholderPrefix starts an env or file secret placeholder a proxy fills
+// at egress; the rest is the id of the injection grant that fills it.
+const FillPlaceholderPrefix = "wardyn-placeholder:"
+
+// FillGrantID reads a fill placeholder back; false when v is not one.
+func FillGrantID(v string) (uuid.UUID, bool) {
+	rest, ok := strings.CutPrefix(v, FillPlaceholderPrefix)
 	if !ok {
 		return uuid.Nil, false
 	}

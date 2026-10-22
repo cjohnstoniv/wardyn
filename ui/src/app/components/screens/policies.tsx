@@ -4,6 +4,7 @@
  */
 
 import * as React from "react";
+import { Link, useInRouterContext } from "react-router-dom";
 import {
   UserCog,
   Plus,
@@ -62,10 +63,12 @@ import { specToSource, type PolicySourceFormat } from "../wardyn/policy-document
 import { Mono } from "../wardyn/code-block";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
+import { PageContainer } from "../wardyn/page-container";
 import { CC_META } from "../wardyn/cc-meta";
 import { OPERATOR_ONLY_REASON, POLICY_UI_APPS, RESIDUAL_PREFIX } from "../wardyn/copy";
 import { POLICIES_PAGE, POLICY_DIALOG } from "../wardyn/copy/policy-dialog";
-import { useOperator } from "../wardyn/operator-context";
+import { useOperator, useSecurityOperator } from "../wardyn/operator-context";
+import { BOUNDARY } from "../../lib/boundary-copy";
 import {
   AvailabilityControl,
   AvailabilityDraft,
@@ -88,6 +91,8 @@ const STARTER_SPEC: RunPolicySpec = minimalSpec();
 
 export function PoliciesScreen() {
   const operator = useOperator();
+  const securityOperator = useSecurityOperator();
+  const routed = useInRouterContext();
   const [policies, setPolicies] = React.useState<RunPolicy[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [query, setQuery] = React.useState("");
@@ -122,7 +127,7 @@ export function PoliciesScreen() {
 
 
   return (
-    <div className="mx-auto max-w-[1400px] px-6 py-6">
+    <PageContainer width="list">
       <PageHeader
         title="Policies"
         description="Policies set a run's barrier, egress allowlist, credential grants, and lifecycle. A run names a stored policy or carries its own."
@@ -135,6 +140,19 @@ export function PoliciesScreen() {
           </>
         }
       />
+
+      {/* In the body, not the header: the header keeps one action, so at 390 it stays on the title's row (#2831). */}
+      {securityOperator && routed && (
+        <p className="mb-4 text-sm">
+          <Link
+            to="/admin/policies/boundary"
+            className="inline-flex items-center gap-1 font-medium text-primary hover:underline"
+          >
+            {BOUNDARY.TITLE}
+            <ChevronRight className="size-3.5" aria-hidden />
+          </Link>
+        </p>
+      )}
 
       {/* GET /api/v1/policies/default now exposes the ceiling — a
           run created without a policy_id falls back to it, and it's the same
@@ -355,7 +373,7 @@ export function PoliciesScreen() {
           load();
         }}
       />
-    </div>
+    </PageContainer>
   );
 }
 

@@ -44,6 +44,12 @@ const (
 	// MethodSelftest runs a BYOI image's contract check on a runner that
 	// advertises Caps.BYOISelftest: never an Exec, so it spends no generation.
 	MethodSelftest = "byoi_selftest"
+	// MethodListFolders, MethodSyncFolder and MethodSyncFolderWait are a
+	// folder-only runner's (Caps.Folders): the folders under its roots, and one
+	// `wardyn sync` pass between one of them and a run's sandbox.
+	MethodListFolders    = "list_folders"
+	MethodSyncFolder     = "sync_folder"
+	MethodSyncFolderWait = "sync_folder_wait"
 	// The local attach calls are sent only to a runner that advertises Caps.LocalAttach.
 	// MethodLocalAttach opens a pty_tee stream and answers its id; MethodLocalAttachMode changes the
 	// session's writer/observer mode and is answered once the runner has applied it;
@@ -119,6 +125,83 @@ type AttachArgs struct {
 type StreamResult struct {
 	Stream uint32 `json:"stream"`
 }
+
+// ListFoldersArgs asks for the folders in Path, an absolute path under one of
+// the runner's roots; empty lists the roots themselves. Survey also asks what a
+// pass from Path would send, under the organisation's Deny patterns.
+type ListFoldersArgs struct {
+	Path   string   `json:"path,omitempty"`
+	Survey bool     `json:"survey,omitempty"`
+	Deny   []string `json:"deny,omitempty"`
+}
+
+// FolderList is list_folders' result. Only folder names, counts and sizes
+// cross, and the names Survey.LeftOut lists: never another file name.
+type FolderList struct {
+	Path    string        `json:"path"`
+	Folders []FolderEntry `json:"folders"`
+	Survey  *FolderSurvey `json:"survey,omitempty"`
+}
+
+// FolderEntry is one folder. More says the count stopped at its bound, so
+// Files and Bytes are at least what they say.
+type FolderEntry struct {
+	Name  string `json:"name"`
+	Path  string `json:"path"`
+	Files int    `json:"files"`
+	Bytes int64  `json:"bytes"`
+	More  bool   `json:"more,omitempty"`
+}
+
+// FolderSurvey is what a pass from a folder would send, after every rule:
+// LeftOut names the top-level paths the rules always leave out (.git and the
+// like), and Ignored counts what the ignore files leave out.
+type FolderSurvey struct {
+	Files   int      `json:"files"`
+	Bytes   int64    `json:"bytes"`
+	LeftOut []string `json:"left_out"`
+	Ignored int      `json:"ignored"`
+}
+
+// SyncFolderArgs starts one pass between Path on the runner and RemoteDir in
+// run RunID's sandbox. The runner opens a `folder` stream for the call and
+// speaks sftp over it as the client; the org joins that stream to the
+// sandbox's own sftp-server. Pull also brings the sandbox's changes back,
+// under the `wardyn sync --pull` rules; Deny is the organisation's patterns.
+type SyncFolderArgs struct {
+	RunID     uuid.UUID `json:"run_id"`
+	Path      string    `json:"path"`
+	RemoteDir string    `json:"remote_dir"`
+	Pull      bool      `json:"pull,omitempty"`
+	Deny      []string  `json:"deny,omitempty"`
+}
+
+// SyncFolderWaitArgs waits for the pass on Stream to end.
+type SyncFolderWaitArgs struct {
+	Stream uint32 `json:"stream"`
+}
+
+// FolderPass is one pass's outcome, as the runner counts it. Refused holds at
+// most MaxFolderRefusals paths. Error is set when the pass did not complete.
+type FolderPass struct {
+	Pushed    int             `json:"pushed"`
+	Pulled    int             `json:"pulled"`
+	Conflicts int             `json:"conflicts"`
+	Refused   []FolderRefusal `json:"refused"`
+	Ignored   int             `json:"ignored"`
+	BytesOut  int64           `json:"bytes_out"`
+	BytesIn   int64           `json:"bytes_in"`
+	Error     string          `json:"error,omitempty"`
+}
+
+// FolderRefusal is one path a pass refused and why.
+type FolderRefusal struct {
+	Path   string `json:"path"`
+	Reason string `json:"reason"`
+}
+
+// MaxFolderRefusals bounds FolderPass.Refused.
+const MaxFolderRefusals = 50
 
 type ResizeArgs struct {
 	Stream uint32 `json:"stream"`

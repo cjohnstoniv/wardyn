@@ -27,7 +27,7 @@ const START: RunIntent = {
   shape: "agent_task",
   experience: "background",
   workload: { kind: "agent_task", agent: "claude-code", task: "fix it" },
-  tools: [{ id: "claude-code", kind: "harness" }, { id: "codex-cli", kind: "harness" }],
+  tools: [{ id: "claude-code", kind: "harness" }, { id: "codex-cli", kind: "harness", task: "write tests" }],
   workspaces: [{ workspace_id: "w1" }],
   start_folder: { kind: "attachment", attachment: "w1" },
 };
@@ -70,7 +70,7 @@ describe("lenses keep what they do not own (U4)", () => {
     expect(changed(START, setCpu(START, 1000))).toEqual(["resources"]);
     expect(changed(START, addAllowedHost(START, "h.example"))).toEqual(["overrides"]);
     expect(changed(START, setStartsHere(START, "w1"))).toEqual([]);
-    expect(changed(START, chooseShape(START, "application"))).toEqual(["shape", "workload"]);
+    expect(changed(START, chooseShape(START, "application"))).toEqual(["shape", "tools", "workload"]);
   });
 });
 
@@ -96,10 +96,10 @@ describe("lens edits", () => {
     expect(chooseShape(interactive, "environment").startup).toBeUndefined();
   });
 
-  it("never removes an agent task's last harness, and moves the task to the next one", () => {
+  it("never removes an agent task's last harness, and the next one's own task becomes the run's", () => {
     const one = removeHarness(START, "codex-cli");
     expect(removeHarness(one, "claude-code")).toBe(one);
-    expect(removeHarness(START, "claude-code").workload).toEqual({ kind: "agent_task", agent: "codex-cli", task: "fix it" });
+    expect(removeHarness(START, "claude-code").workload).toEqual({ kind: "agent_task", agent: "codex-cli", task: "write tests" });
   });
 
   it("writes an added host as a run override, never as policy", () => {

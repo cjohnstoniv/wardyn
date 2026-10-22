@@ -59,6 +59,13 @@ test.describe("view routing", () => {
 
     await expect(page.getByRole("heading", { name: VIEW_REFUSAL.TITLE })).toBeVisible();
     await expect(page.getByText(VIEW_REFUSAL.BODY)).toBeVisible();
+    // #3047: the Why can't I? card names the wall, who set it, who enforces it and what can change.
+    const card = page.getByTestId("refusal");
+    await expect(card.getByText(VIEW_REFUSAL.CHIP)).toBeVisible();
+    for (const v of [VIEW_REFUSAL.WALL, VIEW_REFUSAL.SET_BY, VIEW_REFUSAL.ENFORCED, VIEW_REFUSAL.CAN_CHANGE]) {
+      await expect(card.getByText(v, { exact: true })).toBeVisible();
+    }
+    await expect(card.getByRole("button")).toHaveCount(1);
     expect(audit).toEqual([]);
 
     await page.getByRole("button", { name: VIEW_REFUSAL.CTA }).click();

@@ -71,7 +71,7 @@ jobs:
   #
   # Start order. The account runs 20 jobs at once and a change to Go asks for
   # about 35, so some wait, and GitHub picks which among the jobs that became
-  # ready together. The long jobs (go, ui, ui-e2e, helm-install-test, both
+  # ready together. The long jobs (go, go-lint, ui, ui-e2e, helm-install-test, both
   # conformance jobs, envbuild-integration, test-pg-shard) need only this job.
   # The short ones (gates, notices, the trivy scans) also need `diagrams`, a
   # 45-second job that starts with this one: they become ready about half a
@@ -146,36 +146,70 @@ jobs:
           if [ "$images" = true ]; then notices=true; fi
           echo "code=$code backend=$backend ui=$ui images=$images notices=$notices"
           printf 'code=%s\nbackend=%s\nui=%s\nimages=%s\nnotices=%s\n' "$code" "$backend" "$ui" "$images" "$notices" >> "$GITHUB_OUTPUT"
-      # A run that runs everything records the tree it tested, so a release will
-      # accept this run by tree (#1461 R6, scripts/green-by-tree.sh). On a pull_request HEAD
-      # is GitHub's merge commit, so this is the tree actually tested — the run
-      # API's head_commit.tree_id is the PR head's tree, which differs whenever
-      # the base has moved. Every output must be 'true': a run that narrowed any
-      # job did not test everything.
-      - name: Record the tree this run tests (release evidence)
-        id: tree
-        if: >-
-          steps.classify.outputs.code == 'true' && steps.classify.outputs.backend == 'true' &&
-          steps.classify.outputs.ui == 'true' && steps.classify.outputs.images == 'true' &&
-          steps.classify.outputs.notices == 'true'
+
+  # ── image-scope: which of the nine trivy scans does this change need? ──────
+  # `changes` sets images=true for any non-test backend path, which is nearly
+  # every pull request, so all nine images were built and scanned each time.
+  # scripts/image-scope.sh answers per image instead: a changed path reaches an
+  # image when it is the Dockerfile, a path the Dockerfile copies, go.mod/go.sum,
+  # deploy/base-images.txt, .trivyignore, this workflow, or a non-test file of a
+  # Go package in `go list -deps` of the image's binaries (a new import changes
+  # that set, which a path list would miss). cmd/wardynd's image_scope guard
+  # tests plant every such input and fail when the script says "skip".
+  #
+  # Each trivy job still reports its required name: a job-level skip on an
+  # explicit 'false' is reported as skipped, as it is for `images` above. A push,
+  # a train/* pull request and a pull request into release/* scan every image
+  # (the same test as `changes`), as do the nightly and release preflight, which
+  # do not read this job. A missing output also scans: the jobs compare != 'false'.
+  #
+  # It also records the tree this run tested (release evidence, #1461 R6,
+  # scripts/green-by-tree.sh), which `changes` used to: a run that narrowed
+  # anything did not test everything, and the narrowing now includes a trivy
+  # scan, which only this job knows. `build` writes it, after this job.
+  #
+  # It has no `needs`, so it starts with the run like `diagrams`: a job that
+  # needs `changes` would queue behind the long jobs that became ready with it
+  # (see `changes`). Nothing here reads the classification.
+  image-scope:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      wardynd: ${{ steps.scope.outputs.wardynd }}
+      wardynd-fips: ${{ steps.scope.outputs.wardynd-fips }}
+      wardyn-proxy: ${{ steps.scope.outputs.wardyn-proxy }}
+      wardyn-runnerd: ${{ steps.scope.outputs.wardyn-runnerd }}
+      agent-base: ${{ steps.scope.outputs.agent-base }}
+      agent-codex-cli: ${{ steps.scope.outputs.agent-codex-cli }}
+      agent-aws-sso: ${{ steps.scope.outputs.agent-aws-sso }}
+      agent-vscode: ${{ steps.scope.outputs.agent-vscode }}
+      agent-novnc: ${{ steps.scope.outputs.agent-novnc }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # HEAD^1..HEAD is what this PR changes in the tree CI tests, as in `changes`.
+          fetch-depth: 2
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        if: github.event_name == 'pull_request' && !startsWith(github.head_ref, 'train/') && !startsWith(github.base_ref, 'release/')
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Decide which images to scan
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
-          t="$(git rev-parse 'HEAD^{tree}')"; printf '%s\n' "$t" > tested-tree.txt; echo "tree=$t" >> "$GITHUB_OUTPUT"
-      - name: Upload the tested-tree marker
-        id: upload_tree
-        if: steps.tree.outcome == 'success'
-        # Evidence, not a gate: a storage-side error must not fail a REQUIRED job
-        # (#372). The step below says so loudly.
-        continue-on-error: true
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: ci-full-tree-${{ steps.tree.outputs.tree }}
-          path: tested-tree.txt
-          retention-days: 90
-          if-no-files-found: error
-      - name: Say so if ci-full-tree did not upload
-        if: always() && steps.upload_tree.outcome == 'failure'
-        run: echo "::warning title=Release evidence missing::ci-full-tree did not upload; this run's result stands on its tests, but a release cannot accept it by tree."
+          if [ "$EVENT" != pull_request ] || [[ "$HEAD_REF" == train/* ]] || [[ "$BASE_REF" == release/* ]]; then
+            echo "$EVENT${HEAD_REF:+ from $HEAD_REF}: scanning every image"
+            awk '/^ +TRIVY_IMAGE:/ {print $2 "=true"}' .github/workflows/ci.yml >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # An assignment, not `< <(git diff …)`: see `changes`.
+          changed="$(git diff --name-only --no-renames HEAD^1 HEAD)"
+          scripts/image-scope.sh <<< "$changed" >> "$GITHUB_OUTPUT"
 
   # ── Go: build, lint and the three tag-set suites, in parallel (#932) ──────
   # One leg per tag set, plus one for build + tidy + lint, each on its own
@@ -215,13 +249,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # `make lint` = go vet (all three tag sets) + the golangci-lint
-          # function-size/complexity gate (.golangci.yml) + the file-size gate
-          # and the other static gates + the console's ESLint — single-sourced
-          # in the Makefile.
-          # tidy-check: go.mod/go.sum must stay tidy (go mod tidy -diff).
-          - suite: lint
-            target: build tidy-check lint
           - suite: unit
             target: test-report
             tags: ''
@@ -233,7 +260,6 @@ jobs:
             tags: k8s
     steps:
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        if: matrix.suite != 'lint'
         run: |
           command -v dockerd >/dev/null || exit 0
           f=/etc/docker/daemon.json
@@ -272,14 +298,6 @@ jobs:
           path: ~/go/pkg/mod
           key: gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}
           restore-keys: gomod-${{ runner.os }}-
-      # The tools' own module downloads (go-gate-tools saves them), restored by prefix.
-      - name: Restore the gate tools' module downloads
-        if: matrix.suite == 'lint'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/go/pkg/mod/cache/download
-          key: gotools-${{ runner.os }}-restore-only
-          restore-keys: gotools-${{ runner.os }}-
       - name: Restore Go build cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -290,28 +308,8 @@ jobs:
           restore-keys: |
             go-${{ matrix.suite }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-${{ matrix.suite }}-${{ runner.os }}-
-      # The lint leg's `make lint` also runs the console's ESLint
-      # (ui/eslint.config.js), so that leg sets up pnpm and node.
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        if: matrix.suite == 'lint'
-        with:
-          version: 9
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        if: matrix.suite == 'lint'
-        with:
-          node-version: '22'
-          cache: pnpm
-          cache-dependency-path: ui/pnpm-lock.yaml
-      # golangci-lint and actionlint are `go run tool@version` in `make lint`. Fetched here so a
-      # stall fails fast under this name; the measured cold fetch is at most 9.3 s, so 3 min.
-      - name: Fetch lint tools
-        if: matrix.suite == 'lint'
-        timeout-minutes: 3
-        run: scripts/fetch-gate-tools.sh golangci-lint actionlint
-      # ESLint needs no browser; PUPPETEER_SKIP_DOWNLOAD skips the mermaid-cli
-      # chromium download.
       - name: make ${{ matrix.target }}
-        if: matrix.suite == 'lint' || needs.changes.outputs.backend != 'false'
+        if: needs.changes.outputs.backend != 'false'
         run: make ${{ matrix.target }}
         env:
           PUPPETEER_SKIP_DOWNLOAD: '1'
@@ -321,7 +319,7 @@ jobs:
       # the tagless leg), so it may legitimately find none. The tagless leg
       # finding none means the pattern broke, and fails rather than pass empty.
       - name: Docs- or console-only change — the guard packages only (no race, no coverage)
-        if: matrix.suite != 'lint' && needs.changes.outputs.backend == 'false'
+        if: needs.changes.outputs.backend == 'false'
         env:
           TAGS: ${{ matrix.tags }}
         run: |
@@ -348,7 +346,7 @@ jobs:
       # if-no-files-found: error, so a leg that wrote no reports goes red itself
       # rather than leaving `build` to fail later on a missing directory.
       - name: Upload the suite's reports and coverage profile
-        if: always() && matrix.suite != 'lint' && needs.changes.outputs.backend != 'false'
+        if: always() && needs.changes.outputs.backend != 'false'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: go-test-reports-${{ matrix.suite }}
@@ -364,26 +362,133 @@ jobs:
             ~/.cache/golangci-lint
           key: go-${{ matrix.suite }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
 
+  # The lint leg, a job of its own that is still reported as `go (lint)`. In the
+  # `go` matrix its result could not be read before the slowest test leg ended,
+  # and a red lint or guard is exactly when the run should stop early: the
+  # `stop-early-go-lint` job below needs this job alone. `build` needs it too.
+  #
+  # The whole-tree guards run first. They are the Go tests whose file reads the
+  # repository (docs, ui/, .github, a directory walk), in every package; a change
+  # anywhere can break one elsewhere, and a red guard used to show up only after
+  # all three test legs had run to the end of the race suite (five runs in the
+  # 2026-10-20 measurement, about 14 min each). The unit, docker and k8s legs
+  # still run them again inside their full packages.
+  go-lint:
+    name: go (lint)
+    needs: changes
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Full history with tags: the CHANGELOG freeze guard
+          # (cmd/wardynd/changelog_frozen_test.go) compares each released
+          # section against its tag or correcting commit, and skips any it
+          # cannot resolve.
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      # The module cache is one entry shared by every job (go-modules saves it).
+      - name: Restore the Go module cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/pkg/mod
+          key: gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}
+          restore-keys: gomod-${{ runner.os }}-
+      # The tools' own module downloads (go-gate-tools saves them), restored by prefix.
+      - name: Restore the gate tools' module downloads
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/pkg/mod/cache/download
+          key: gotools-${{ runner.os }}-restore-only
+          restore-keys: gotools-${{ runner.os }}-
+      - name: Restore Go build cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+          key: go-lint-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
+          restore-keys: |
+            go-lint-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            go-lint-${{ runner.os }}-
+      # The whole-tree guard list is built by scripts/lib/candidate-tests.py, the
+      # same discovery scripts/lane-preflight.sh --candidate runs, so a guard
+      # added anywhere is picked up with no list to edit. Unraced and uncached,
+      # WARDYN_TEST_PG unset, like the guard-package step of the `go` job. Every
+      # package runs even after one fails, so a push shows all the red guards.
+      - name: Whole-tree guard tests (every Go test that reads the repository)
+        run: |
+          set -euo pipefail
+          out="$(python3 -I scripts/lib/candidate-tests.py guards)"
+          [ -n "$out" ] || { echo "::error::no whole-tree guard test found; the discovery pattern regressed"; exit 1; }
+          rc=0
+          while IFS=$'\t' read -r dir names; do
+            echo "::group::./$dir"
+            WARDYN_TEST_PG='' go test -count=1 -run "^(${names})\$" "./$dir" || rc=1
+            echo "::endgroup::"
+          done <<<"$out"
+          exit "$rc"
+      # `make lint` also runs the console's ESLint (ui/eslint.config.js), so this
+      # job sets up pnpm and node.
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 9
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      # golangci-lint and actionlint are `go run tool@version` in `make lint`. Fetched here so a
+      # stall fails fast under this name; the measured cold fetch is at most 9.3 s, so 3 min.
+      - name: Fetch lint tools
+        timeout-minutes: 3
+        run: scripts/fetch-gate-tools.sh golangci-lint actionlint
+      # `make lint` = go vet (all three tag sets) + the golangci-lint
+      # function-size/complexity gate (.golangci.yml) + the file-size gate
+      # and the other static gates + the console's ESLint — single-sourced
+      # in the Makefile.
+      # tidy-check: go.mod/go.sum must stay tidy (go mod tidy -diff).
+      # ESLint needs no browser; PUPPETEER_SKIP_DOWNLOAD skips the mermaid-cli
+      # chromium download.
+      - name: make build tidy-check lint
+        run: make build tidy-check lint
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: '1'
+      - name: Save Go build cache (push to main only)
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+          key: go-lint-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
+
   # The required check. Branch protection requires a context named `build`, and
   # this is it: green only when every `go` leg passed AND the union of the three
-  # coverage profiles clears the floor. `!cancelled()` so a failed leg still
-  # runs this job, which then fails on the first step; with the default
-  # `success()` it would be SKIPPED, and a skipped required check can read as
-  # passing. On a docs- or console-only change (changes.outputs.backend ==
+  # coverage profiles clears the floor. `always()` so a failed leg, or a run a
+  # stop-early job cancelled, still runs this job, which then fails on the
+  # first step; with the default `success()` it would be SKIPPED, and a skipped
+  # required check can read as passing. On a docs- or console-only change (changes.outputs.backend ==
   # 'false') the legs ran only the guard packages and wrote no profiles, so the
   # union steps skip; any other value, including a missing one, requires the
   # union.
   build:
-    needs: [changes, go]
-    if: ${{ !cancelled() }}
+    needs: [changes, go, go-lint, image-scope]
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Every go leg passed
         env:
           LEGS: ${{ needs.go.result }}
+          LINT: ${{ needs.go-lint.result }}
         run: |
-          [ "$LEGS" = success ] || { echo "::error::a go leg did not pass (result: $LEGS); see the go (…) checks"; exit 1; }
+          [ "$LEGS" = success ] && [ "$LINT" = success ] || { echo "::error::a go leg did not pass (go: $LEGS, go (lint): $LINT); see the go (…) checks"; exit 1; }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: needs.changes.outputs.backend != 'false'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
@@ -395,6 +500,12 @@ jobs:
       - name: Cross-build wardyn-runnerd for macOS
         if: needs.changes.outputs.backend != 'false'
         run: for a in amd64 arm64; do GOOS=darwin GOARCH=$a CGO_ENABLED=0 go build -tags docker -o /dev/null ./cmd/wardyn-runnerd || exit 1; done
+      # The release ships a Windows wardyn; a unix-only symbol in a file with no build tag breaks it silently.
+      - name: Cross-build and vet wardyn for Windows
+        if: needs.changes.outputs.backend != 'false'
+        run: |
+          for a in amd64 arm64; do GOOS=windows GOARCH=$a CGO_ENABLED=0 go build -o /dev/null ./cmd/wardyn || exit 1; done
+          GOOS=windows GOARCH=amd64 go vet ./cmd/wardyn/
       - name: Download the three suites' profiles
         if: needs.changes.outputs.backend != 'false'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -428,6 +539,47 @@ jobs:
       - name: Say so if go-test-reports-union did not upload
         if: always() && steps.upload_go_union_report.outcome == 'failure'
         run: echo "::warning title=Reports missing::go-test-reports-union did not upload; this job's result stands on its tests, but the reports are not attached to this run."
+      # A run that runs everything records the tree it tested, so a release will
+      # accept this run by tree (#1461 R6, scripts/green-by-tree.sh). It sits here, not in
+      # `changes`, because only `image-scope` knows whether a trivy scan was narrowed; the
+      # steps above must have passed, so the checkout ran (backend is 'true'). On a pull_request HEAD
+      # is GitHub's merge commit, so this is the tree actually tested — the run
+      # API's head_commit.tree_id is the PR head's tree, which differs whenever
+      # the base has moved. Every output must be 'true': a run that narrowed any
+      # job did not test everything.
+      - name: Record the tree this run tests (release evidence)
+        id: tree
+        if: >-
+          needs.changes.outputs.code == 'true' && needs.changes.outputs.backend == 'true' &&
+          needs.changes.outputs.ui == 'true' && needs.changes.outputs.images == 'true' &&
+          needs.changes.outputs.notices == 'true' &&
+          needs.image-scope.outputs.wardynd == 'true' &&
+          needs.image-scope.outputs.wardynd-fips == 'true' &&
+          needs.image-scope.outputs.wardyn-proxy == 'true' &&
+          needs.image-scope.outputs.wardyn-runnerd == 'true' &&
+          needs.image-scope.outputs.agent-base == 'true' &&
+          needs.image-scope.outputs.agent-codex-cli == 'true' &&
+          needs.image-scope.outputs.agent-aws-sso == 'true' &&
+          needs.image-scope.outputs.agent-vscode == 'true' &&
+          needs.image-scope.outputs.agent-novnc == 'true'
+        run: |
+          set -euo pipefail
+          t="$(git rev-parse 'HEAD^{tree}')"; printf '%s\n' "$t" > tested-tree.txt; echo "tree=$t" >> "$GITHUB_OUTPUT"
+      - name: Upload the tested-tree marker
+        id: upload_tree
+        if: steps.tree.outcome == 'success'
+        # Evidence, not a gate: a storage-side error must not fail a REQUIRED job
+        # (#372). The step below says so loudly.
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ci-full-tree-${{ steps.tree.outputs.tree }}
+          path: tested-tree.txt
+          retention-days: 90
+          if-no-files-found: error
+      - name: Say so if ci-full-tree did not upload
+        if: always() && steps.upload_tree.outcome == 'failure'
+        run: echo "::warning title=Release evidence missing::ci-full-tree did not upload; this run's result stands on its tests, but a release cannot accept it by tree."
 
   # ── docs: mermaid diagram gate ────────────────────────────────────────────
   # Validate every fenced mermaid diagram in the public docs (syntax + label-
@@ -1670,8 +1822,8 @@ jobs:
           key: go-test-pg-${{ matrix.shard }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
 
   # The required check. Branch protection requires a context named `test-pg`,
-  # and this is it: green only when every shard above passed. `!cancelled()` so
-  # a failed shard still runs this job, which then fails on its one step; with
+  # and this is it: green only when every shard above passed. `always()` so
+  # a failed or cancelled shard still runs this job, which then fails on its one step; with
   # the default `success()` it would be SKIPPED when a shard fails, and a
   # skipped required check can read as passing. Same shape as `build` over the
   # `go` legs. It skips, with the shards, only on an explicit
@@ -1679,7 +1831,7 @@ jobs:
   # ran, and a skipped `test-pg` is what branch protection accepts.
   test-pg:
     needs: [changes, test-pg-shard]
-    if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' }}
+    if: ${{ always() && needs.changes.outputs.backend != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -1727,6 +1879,8 @@ jobs:
   # Go test files only) all eight report as skipped, which branch protection
   # accepts. Those inputs cannot change a scan: the images compile Go from this
   # tree and copy deploy/images/, and none carries the console's npm packages.
+  # On a pull request each job also skips on its own `image-scope` answer
+  # (scripts/image-scope.sh): an image whose inputs did not change is not rebuilt.
   # A skipped MATRIX would not do: GitHub reports it as one check with the
   # name unexpanded, and `trivy (wardynd)` would never report. The check names
   # are the ones branch protection requires; the steps are written once, on the
@@ -1741,8 +1895,8 @@ jobs:
   # rationale (distroless, no OS package surface) was true of two of them.
   trivy-wardynd:
     name: trivy (wardynd)
-    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
-    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
+    needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.wardynd != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
@@ -1845,8 +1999,8 @@ jobs:
   # Dockerfile's own GOFIPS140 check runs on every PR.
   trivy-wardynd-fips:
     name: trivy (wardynd-fips)
-    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
-    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
+    needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.wardynd-fips != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
@@ -1858,8 +2012,8 @@ jobs:
     steps: *trivy_steps
   trivy-wardyn-proxy:
     name: trivy (wardyn-proxy)
-    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
-    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
+    needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.wardyn-proxy != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
@@ -1871,8 +2025,8 @@ jobs:
     steps: *trivy_steps
   trivy-wardyn-runnerd:
     name: trivy (wardyn-runnerd)
-    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
-    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
+    needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.wardyn-runnerd != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
@@ -1884,8 +2038,8 @@ jobs:
     steps: *trivy_steps
   trivy-agent-base:
     name: trivy (agent-base)
-    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
-    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
+    needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.agent-base != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
@@ -1897,8 +2051,8 @@ jobs:
     steps: *trivy_steps
   trivy-agent-codex-cli:
     name: trivy (agent-codex-cli)
-    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
-    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
+    needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.agent-codex-cli != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
@@ -1910,8 +2064,8 @@ jobs:
     steps: *trivy_steps
   trivy-agent-aws-sso:
     name: trivy (agent-aws-sso)
-    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
-    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
+    needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.agent-aws-sso != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
@@ -1923,8 +2077,8 @@ jobs:
     steps: *trivy_steps
   trivy-agent-vscode:
     name: trivy (agent-vscode)
-    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
-    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
+    needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.agent-vscode != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
@@ -1936,8 +2090,8 @@ jobs:
     steps: *trivy_steps
   trivy-agent-novnc:
     name: trivy (agent-novnc)
-    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
-    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
+    needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.agent-novnc != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
@@ -2020,7 +2174,8 @@ jobs:
           restore-keys: |
             go-notices-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-notices-${{ runner.os }}-
-      - run: go mod download
+      # Bounded retry of the module fetch only; go.sum verifies each module.
+      - run: for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done
       - name: Fetch gate tools
         timeout-minutes: 4
         run: scripts/fetch-gate-tools.sh notices
@@ -2151,6 +2306,128 @@ jobs:
               make dco DCO_RANGE="-1 HEAD" DCO_ALLOW_GITHUB_MERGES=1
             fi
           fi
+
+  # ── stop a red pull request run early ─────────────────────────────────────
+  # When a cheap, deterministic gate fails, the heavy jobs of the same run
+  # (about 13 to 16 min each) cannot change the verdict: the run is red whatever
+  # they say, and the author fixes the gate and pushes again. Each job below
+  # needs ONE gate, so it starts the moment that gate fails and not when the
+  # slowest of them ends, and cancels the run through the REST API.
+  #
+  # What it never does:
+  # - It never fires on `ui-e2e`, `test-pg-shard` or any test leg. Those reds
+  #   can be flakes and want the other legs' results. The gates listed here are
+  #   deterministic: lint and the whole-tree guards, `compose`, `gates`,
+  #   `notices`, `diagrams`, `dco`. cmd/wardynd/ci_stop_early_guard_test.go pins
+  #   the list.
+  # - It never fires on push, merge_group, a train/* or prep/* pull request, or
+  #   a pull request from a fork or Dependabot, whose token is read-only. The
+  #   job is then skipped.
+  # - It never changes a required check's name or lets a red run read green.
+  #   The failing gate keeps its `failure` conclusion, which a cancel cannot
+  #   change; every job not yet finished ends `cancelled`, which branch
+  #   protection does not accept, and `build` and `test-pg` (`always()`) still
+  #   run after the cancel and fail on the legs' or shards' result, so neither
+  #   reads as passing. docs/CI.md ("Stop a red run early") has
+  #   the reasoning and the runs it was read from.
+  # - It holds no stored credential. The only token is this workflow's own
+  #   GITHUB_TOKEN with `actions: write`, scoped to these jobs, which check out
+  #   and run nothing from the pull request. A gate job that runs the pull
+  #   request's code (a `make` target) must not hold that permission: checkout
+  #   leaves the token in .git/config.
+
+  stop-early-go-lint:
+    needs: go-lint
+    if: >-
+      ${{ !cancelled() && needs.go-lint.result == 'failure'
+      && github.event_name == 'pull_request'
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && github.actor != 'dependabot[bot]'
+      && !startsWith(github.head_ref, 'train/') && !startsWith(github.head_ref, 'prep/') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+    steps: &stop_early_steps
+      - name: Cancel the run's other jobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          echo "A cheap deterministic gate failed; cancelling the rest of run $RUN_ID."
+          gh api -X POST "repos/$GH_REPO/actions/runs/$RUN_ID/cancel" \
+            || echo "::warning::could not cancel run $RUN_ID; it continues to the end"
+
+  stop-early-compose:
+    needs: compose
+    if: >-
+      ${{ !cancelled() && needs.compose.result == 'failure'
+      && github.event_name == 'pull_request'
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && github.actor != 'dependabot[bot]'
+      && !startsWith(github.head_ref, 'train/') && !startsWith(github.head_ref, 'prep/') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+    steps: *stop_early_steps
+
+  stop-early-gates:
+    needs: gates
+    if: >-
+      ${{ !cancelled() && needs.gates.result == 'failure'
+      && github.event_name == 'pull_request'
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && github.actor != 'dependabot[bot]'
+      && !startsWith(github.head_ref, 'train/') && !startsWith(github.head_ref, 'prep/') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+    steps: *stop_early_steps
+
+  stop-early-notices:
+    needs: notices
+    if: >-
+      ${{ !cancelled() && needs.notices.result == 'failure'
+      && github.event_name == 'pull_request'
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && github.actor != 'dependabot[bot]'
+      && !startsWith(github.head_ref, 'train/') && !startsWith(github.head_ref, 'prep/') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+    steps: *stop_early_steps
+
+  stop-early-diagrams:
+    needs: diagrams
+    if: >-
+      ${{ !cancelled() && needs.diagrams.result == 'failure'
+      && github.event_name == 'pull_request'
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && github.actor != 'dependabot[bot]'
+      && !startsWith(github.head_ref, 'train/') && !startsWith(github.head_ref, 'prep/') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+    steps: *stop_early_steps
+
+  stop-early-dco:
+    needs: dco
+    if: >-
+      ${{ !cancelled() && needs.dco.result == 'failure'
+      && github.event_name == 'pull_request'
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && github.actor != 'dependabot[bot]'
+      && !startsWith(github.head_ref, 'train/') && !startsWith(github.head_ref, 'prep/') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+    steps: *stop_early_steps
 
   # ── ci-ran: this workflow ran on the pull request ──────────────────────────
   # A pull request with a merge conflict gets no pull_request run at all, so its
@@ -2312,7 +2589,9 @@ jobs:
   main-red:
     needs:
       - changes
+      - image-scope
       - go
+      - go-lint
       - build
       - diagrams
       - ui
@@ -2393,7 +2672,8 @@ jobs:
           lookup-only: true
       - name: Download the modules
         if: steps.have.outputs.cache-hit != 'true'
-        run: go mod download && du -sh ~/go/pkg/mod
+        # Bounded retry of the module fetch only; go.sum verifies each module.
+        run: for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done && du -sh ~/go/pkg/mod
       - name: Save the module cache
         id: save
         if: steps.have.outputs.cache-hit != 'true'
@@ -2460,7 +2740,7 @@ jobs:
   # created before this run's. A family this run did not save, because its job
   # failed or its entry already existed, keeps its older entry.
   go-cache-prune:
-    needs: [go-modules, go, ui-e2e, conformance-k8s, conformance, envbuild-integration, test-pg-shard, notices, gates]
+    needs: [go-modules, go, go-lint, ui-e2e, conformance-k8s, conformance, envbuild-integration, test-pg-shard, notices, gates]
     if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10

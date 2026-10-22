@@ -14,16 +14,18 @@ import { Button } from "../../../../ui/button";
 import { Dialog, DialogContent, DialogTitle } from "../../../../ui/dialog";
 import { Input } from "../../../../ui/input";
 import { cn } from "../../../../ui/utils";
+import { InfoTip } from "../../../../wardyn/info-tip";
 import { Chip } from "../../../../wardyn/primitives";
 import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import type { RunIntent } from "../../draft/run-intent";
 import { BranchPicker } from "./branch-picker";
 import { refTextKey } from "./typed-ref";
-import { driveChips, driveKind, fileItems, KIND_ORDER, pathError, saveChoice, choiceKey, type FileItem, type FileKind, type ItemChoice, type ItemSources } from "./file-items";
+import { driveChips, driveKind, driveSharedWith, fileItems, KIND_ORDER, pathError, saveChoice, choiceKey, type FileItem, type FileKind, type ItemChoice, type ItemSources } from "./file-items";
 import { driveReason } from "./file-sources";
 import { KIND_INFO, KIND_LABEL, KindTile, PathText } from "./kind-visuals";
 import { LockedAccess } from "./locked-access";
+import { COMPUTER_DEFAULT_DIR, ComputerChoose, ComputerMount, setLocalFolder, type ComputerChoice } from "./computer-folder";
 
 type Step = 1 | 2 | 3;
 type AttachKind = Exclude<FileKind, "computer">;
@@ -34,8 +36,11 @@ export type DialogOpen = { mode: "add" } | { mode: "edit"; item: FileItem };
 interface State {
   step: Step;
   reached: Step;
-  kind: AttachKind | null;
+  kind: AttachKind | "computer" | null;
   sourceKey: string | null;
+  /** The folder "Your computer" picked, and which way its changes go. */
+  computer: ComputerChoice | null;
+  direction: "both" | "in";
   /** The ref sent for a repository; undefined follows the source's own. */
   branch?: string;
   branchText: string;
@@ -55,15 +60,23 @@ interface PickOption {
   defaultPath?: string;
   locked: boolean;
   reason?: string;
+  /** A kept work folder: the line naming its run, and whether its size is unenforced (a Docker volume). */
+  kept?: { line: string; unenforced: boolean };
   ref?: string;
   workspaceId?: string;
   repo?: string;
+  /** A team drive's groups and whether the others in them see what this run writes. */
+  sharedWith?: string;
+  othersSee?: boolean;
 }
 
 export const DIALOG_PATH_ID = "nr-mount-path";
+/** The key the computer folder's card and announcements go by: a run has at most one. */
+export const COMPUTER_KEY = "computer";
 const EDIT_SAVE_ID = "nr-mount-save";
 
-const ADD_TITLE: Record<AttachKind, string> = {
+const ADD_TITLE: Record<AttachKind | "computer", string> = {
+  computer: NR_FILES.COMPUTER_TITLE,
   repo: NR_FILES.ADD_REPO_TITLE,
   userDrive: NR_FILES.ADD_USER_DRIVE_TITLE,
   sharedDrive: NR_FILES.ADD_SHARED_DRIVE_TITLE,
@@ -85,8 +98,10 @@ export interface AddDialogProps {
   intent: RunIntent;
   src: ItemSources;
   items: readonly FileItem[];
-  /** Folders cannot be opened here: the sentence why (the server runs its sandboxes on Kubernetes). */
+  /** Folders cannot be opened here: the sentence why (the server runs its sandboxes on Kubernetes). The tile is then hidden. */
   folderReason?: string;
+  /** WARDYN_COMPUTER_FOLDERS: false shows "Your computer" as blocked by the organisation; undefined while unknown. */
+  computerAllowed?: boolean;
   /** Why no drive can be attached at all, from the catalogue. */
   driveReason?: string;
   /** The person may manage drives (Manage drives →). */
@@ -112,18 +127,24 @@ function optionsFor(kind: AttachKind, src: ItemSources): PickOption[] {
     return src.folders.map((f) => ({ key: f.key, name: f.name, chips: [NR_FILES.FAMILY_HOST_FOLDER, ...(f.writable ? [] : [NR_FILES.ACCESS_READ])], shownPath: f.hostPath, defaultPath: f.defaultPath, locked: !f.writable, reason: f.unavailable }));
   }
   return (src.catalogue?.drives ?? []).filter((d) => driveKind(d) === kind).map((d) => ({
-    key: d.id, name: d.name, chips: [...driveChips(d), ...(d.writable ? [] : [NR_FILES.ACCESS_READ])], shownPath: d.target, defaultPath: d.target,
-    locked: !d.writable, reason: driveReason(d),
+    key: d.id, name: d.name,
+    // A team drive says its access as a chip, either way; any other says only when it is read-only.
+    chips: d.team ? [NR_FILES.SOURCE_TEAM, d.writable ? NR_FILES.ACCESS_EDIT : NR_FILES.ACCESS_READ] : [...driveChips(d), ...(d.writable ? [] : [NR_FILES.ACCESS_READ])],
+    shownPath: d.target, defaultPath: d.target, locked: !d.writable, reason: driveReason(d),
+    kept: d.kept_from_run ? { line: d.kept_from_run_title ? NR_FILES.DRIVE_KEPT_FROM(d.kept_from_run_title) : NR_FILES.DRIVE_KEPT_FROM_UNTITLED, unenforced: d.enforcement === "none" } : undefined,
+    sharedWith: driveSharedWith(d), othersSee: d.team === true && d.writable,
   }));
 }
 
 function initial(open: DialogOpen, intent: RunIntent): State {
-  if (open.mode === "add") return { step: 1, reached: 1, kind: null, sourceKey: null, branchText: "", path: "", readOnly: false, attempted: false };
+  if (open.mode === "add") {
+    return { step: 1, reached: 1, kind: null, sourceKey: null, computer: null, direction: "both", branchText: "", path: "", readOnly: false, attempted: false };
+  }
   const item = open.item;
   // An edit keeps the draft's own ref, not the source's, until the person picks another.
   const ref = item.kind === "repo" ? intent.workspaces?.find((w) => w.workspace_id === item.workspaceId)?.repos?.find((r) => r.repo === item.repo)?.ref : undefined;
   return {
-    step: 3, reached: 3, kind: item.kind as AttachKind, sourceKey: item.driveId ?? item.key, branch: ref,
+    step: 3, reached: 3, kind: item.kind as AttachKind, sourceKey: item.driveId ?? item.key, computer: null, direction: "both", branch: ref,
     branchText: ref ?? item.branch ?? "", path: item.path ?? "", readOnly: item.readOnly, attempted: false,
   };
 }
@@ -151,22 +172,23 @@ export function AddDialog(props: AddDialogProps) {
   );
 }
 
-function DialogBody({ open, onClose, intent, src, items, folderReason, driveReason: catalogueReason, operator, onSave, createUserDrive, reloadDrives, foldersAdded }: AddDialogProps & { open: DialogOpen }) {
+function DialogBody({ open, onClose, intent, src, items, folderReason, computerAllowed, driveReason: catalogueReason, operator, onSave, createUserDrive, reloadDrives, foldersAdded }: AddDialogProps & { open: DialogOpen }) {
   const [s, setS] = React.useState<State>(() => initial(open, intent));
   const editing = open.mode === "edit" ? open.item : undefined;
   // What an edit started from. It stays a choice even when no list carries it (a drive the catalogue does not
   // name, or the older single-drive switch with no catalogue drive behind it).
   const editedSource = editing ? (editing.driveId ?? editing.key) : undefined;
-  const options = s.kind ? optionsFor(s.kind, src) : [];
+  const attachKind = s.kind === "computer" ? null : s.kind;
+  const options = attachKind ? optionsFor(attachKind, src) : [];
   const source = options.find((o) => o.key === s.sourceKey);
-  const choice: ItemChoice | null = s.kind && s.sourceKey
-    ? { kind: s.kind, sourceKey: s.sourceKey, path: s.path.trim().replace(/\/+$/, ""), defaultPath: source?.defaultPath, branch: s.branch, readOnly: s.readOnly }
+  const choice: ItemChoice | null = attachKind && s.sourceKey
+    ? { kind: attachKind, sourceKey: s.sourceKey, path: s.path.trim().replace(/\/+$/, ""), defaultPath: source?.defaultPath, branch: s.branch, readOnly: s.readOnly }
     : null;
   // What the card would be once saved: whether its path can be placed, and the path the server would give it.
   const preview = choice ? fileItems(saveChoice({ ...choice, path: choice.defaultPath ?? choice.path }, src, editing)(intent), src).find((x) => x.key === choiceKey(choice)) : undefined;
   const editable = preview?.pathEditable ?? false;
   const shownPath = editable ? s.path : preview?.path ?? source?.defaultPath ?? "";
-  const error = editable ? pathError(s.path, items, editing?.key) : "";
+  const error = editable || s.kind === "computer" ? pathError(s.path, items, editing?.key) : "";
   const errorId = React.useId();
 
   const go = (step: Step) => setS((c) => ({ ...c, step, attempted: false }));
@@ -212,6 +234,17 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, driveReas
     setS((c) => ({ ...c, sourceKey: null, branch: undefined, branchText: "", path: "", readOnly: false, attempted: false, step: c.step > 2 ? 2 : c.step, reached: c.reached > 2 ? 2 : c.reached }));
   }, [optionKeys, s.sourceKey, listKnown]);
   const save = () => {
+    if (s.kind === "computer" && s.computer) {
+      if (error) {
+        setS((c) => ({ ...c, attempted: true }));
+        document.getElementById(DIALOG_PATH_ID)?.focus();
+        return;
+      }
+      const c = s.computer;
+      onSave((i) => setLocalFolder(i, { runner_id: c.runnerId, path: c.path, name: c.name, remote_dir: s.path.trim().replace(/\/+$/, ""), direction: s.direction }),
+        { name: c.name, key: COMPUTER_KEY }, "add");
+      return;
+    }
     if (!choice) return;
     if (error) {
       setS((c) => ({ ...c, attempted: true }));
@@ -237,7 +270,7 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, driveReas
             <li key={n} className={cn("flex min-w-0 items-center gap-2", n > 1 && "flex-1 before:h-px before:flex-1 before:bg-border before:content-['']")}>
               <button
                 type="button"
-                disabled={n > s.reached || active || (n === 3 && !source && !editing)}
+                disabled={n > s.reached || active || (n === 3 && !source && !editing && !s.computer)}
                 aria-current={active ? "step" : undefined}
                 aria-label={label}
                 onClick={() => go(n)}
@@ -253,8 +286,9 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, driveReas
 
       {s.step === 1 && (
         <ul className="flex flex-col gap-2.5">
-          {KIND_ORDER.map((kind) => {
-            const reason = kind === "computer" ? NR_FILES.COMPUTER_SOON : kind === "folder" ? folderReason : undefined;
+          {/* On a remote server "Folder on this machine" is hidden rather than refused (M4). */}
+          {KIND_ORDER.filter((kind) => !(kind === "folder" && folderReason)).map((kind) => {
+            const reason = kind === "computer" && computerAllowed === false ? NR_FILES.COMPUTER_BLOCKED : undefined;
             const info = KIND_INFO[kind];
             const reasonId = `nr-kind-reason-${kind}`;
             return (
@@ -263,7 +297,7 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, driveReas
                   type="button"
                   disabled={!!reason}
                   aria-describedby={reason ? reasonId : undefined}
-                  onClick={() => kind !== "computer" && setS((c) => ({
+                  onClick={() => setS((c) => ({
                     ...c, kind, step: 2, reached: c.kind === kind ? c.reached : 2,
                     sourceKey: c.kind === kind ? c.sourceKey : null, path: c.kind === kind ? c.path : "", attempted: false,
                   }))}
@@ -277,7 +311,6 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, driveReas
                   <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                     <span className="flex flex-wrap items-center gap-2">
                       <strong className="text-sm font-semibold">{info.title}</strong>
-                      {kind === "computer" && <Chip>{NR_SHARED.COMING_SOON}</Chip>}
                     </span>
                     <span className="text-[13px] text-muted-foreground">{info.body}</span>
                     {info.sub && <small className="text-xs text-muted-foreground">{info.sub}</small>}
@@ -300,17 +333,38 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, driveReas
         </ul>
       )}
 
-      {s.step === 2 && s.kind && (
+      {s.step === 2 && s.kind === "computer" && (
+        <ComputerChoose
+          value={s.computer}
+          onChange={(computer) => setS((c) => ({ ...c, computer, path: c.path || COMPUTER_DEFAULT_DIR, attempted: false }))}
+          onNotNow={() => go(1)}
+        />
+      )}
+
+      {s.step === 3 && s.kind === "computer" && s.computer && (
+        <ComputerMount
+          choice={s.computer}
+          path={s.path}
+          onPath={(path) => setS((c) => ({ ...c, path }))}
+          direction={s.direction}
+          onDirection={(direction) => setS((c) => ({ ...c, direction }))}
+          error={s.attempted ? error : undefined}
+          errorId={errorId}
+          inputId={DIALOG_PATH_ID}
+        />
+      )}
+
+      {s.step === 2 && attachKind && (
         <div className="flex flex-col">
-          <p className="mb-3 text-sm text-muted-foreground">{KIND_INFO[s.kind].body}</p>
+          <p className="mb-3 text-sm text-muted-foreground">{KIND_INFO[attachKind].body}</p>
           {(s.kind === "userDrive" || s.kind === "sharedDrive") && catalogueReason && (
             <p data-testid="nr-drive-reason" className="mb-3 text-sm text-muted-foreground">{catalogueReason}</p>
           )}
           {s.kind === "folder" && options.length === 0 && <p className="text-sm text-muted-foreground">{NR_FILES.FOLDERS_NONE}</p>}
           {options.length > 0 && (
-            <div role="radiogroup" aria-label={KIND_INFO[s.kind].title} className="grid overflow-hidden rounded-[9px] border border-border">
+            <div role="radiogroup" aria-label={KIND_INFO[attachKind].title} className="grid overflow-hidden rounded-[9px] border border-border">
               {options.map((o) => {
-                const reason = o.reason ?? (taken(choiceKey({ kind: s.kind!, sourceKey: o.key })) ? NR_FILES.ALREADY_ADDED : undefined);
+                const reason = o.reason ?? (taken(choiceKey({ kind: attachKind, sourceKey: o.key })) ? NR_FILES.ALREADY_ADDED : undefined);
                 const selected = s.sourceKey === o.key;
                 return (
                   <label
@@ -326,8 +380,17 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, driveReas
                       <span className="flex flex-wrap items-center gap-1.5">
                         <strong className="font-semibold">{o.name}</strong>
                         {o.chips.map((c) => <Chip key={c}>{c}</Chip>)}
+                        {o.kept?.unenforced && (
+                          <>
+                            <Chip tone="warning">{NR_FILES.DRIVE_SIZE_NOT_ENFORCED}</Chip>
+                            <InfoTip label={NR_FILES.DRIVE_SIZE_NOT_ENFORCED}>{NR_FILES.DRIVE_SIZE_NOT_ENFORCED_TIP}</InfoTip>
+                          </>
+                        )}
                       </span>
+                      {o.kept && <span className="text-xs text-muted-foreground">{o.kept.line}</span>}
                       {o.shownPath && <PathText path={o.shownPath} className="text-muted-foreground" />}
+                      {o.sharedWith && <span className="text-xs">{o.sharedWith}</span>}
+                      {o.othersSee && <span className="text-xs text-warning">{NR_FILES.TEAM_OTHERS_SEE}</span>}
                       {reason && (
                         <span className="flex items-start gap-1.5 text-[13px]">
                           <Lock className="mt-0.5 size-3 flex-none" aria-hidden="true" />
@@ -359,26 +422,18 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, driveReas
           <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
             {s.kind === "repo" && <Link to="/workspaces" className={FILES_LINK}>{NR_FILES.ADD_REPOSITORY}</Link>}
             {s.kind === "userDrive" && createUserDrive?.({ choose: chooseById, reload: reloadDrives })}
-            {s.kind === "sharedDrive" && (
-              <>
-                <span className="inline-flex items-center gap-2">
-                  <button type="button" disabled className="font-semibold text-muted-foreground opacity-70 disabled:cursor-not-allowed">{NR_FILES.CREATE_SHARED_DRIVE}</button>
-                  <Chip>{NR_SHARED.COMING_SOON}</Chip>
-                </span>
-                {operator && <Link to="/admin/drives" className={FILES_LINK}>{NR_FILES.MANAGE_DRIVES}</Link>}
-              </>
-            )}
+            {s.kind === "sharedDrive" && operator && <Link to="/admin/drives" className={FILES_LINK}>{NR_FILES.MANAGE_DRIVES}</Link>}
           </div>
         </div>
       )}
 
-      {s.step === 3 && s.kind && (source || editing) && (
+      {s.step === 3 && attachKind && (source || editing) && (
         <div className="grid gap-4">
           <div className="flex flex-wrap items-center gap-2.5">
-            <KindTile kind={s.kind} />
+            <KindTile kind={attachKind} />
             <strong className="text-[15px] font-semibold">{source?.name ?? editing?.name}</strong>
-            <Chip>{KIND_LABEL[s.kind]}</Chip>
-            {s.kind === "repo" && <code className="font-mono text-[13px] text-muted-foreground">{s.branch ?? source?.ref ?? editing?.branch ?? NR_FILES.BRANCH_PLACEHOLDER}</code>}
+            <Chip>{KIND_LABEL[attachKind]}</Chip>
+            {attachKind === "repo" && <code className="font-mono text-[13px] text-muted-foreground">{s.branch ?? source?.ref ?? editing?.branch ?? NR_FILES.BRANCH_PLACEHOLDER}</code>}
           </div>
           <div className="flex flex-col gap-1.5">
             <label htmlFor={DIALOG_PATH_ID} className={FIELD_LABEL}>{NR_FILES.STEP_MOUNT}</label>
@@ -402,11 +457,11 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, driveReas
               <small id={errorId} className="text-xs text-muted-foreground">{NR_FILES.MOUNT_HINT}</small>
             )}
           </div>
-          {s.kind !== "repo" && (
+          {attachKind !== "repo" && (
             <div className="mt-4 flex flex-col gap-1.5">
               <label htmlFor="nr-mount-access" className={FIELD_LABEL}>{NR_FILES.ACCESS_LABEL}</label>
               {source?.locked ?? editing?.locked ? (
-                s.kind === "folder" ? <span className="flex min-h-[42px] items-center text-sm">{NR_FILES.ACCESS_READ}</span> : <LockedAccess id="nr-dialog" />
+                attachKind === "folder" ? <span className="flex min-h-[42px] items-center text-sm">{NR_FILES.ACCESS_READ}</span> : <LockedAccess id="nr-dialog" />
               ) : (
                 <select id="nr-mount-access" className={SELECT_CLASS} value={s.readOnly ? "read" : "edit"} onChange={(e) => setS((c) => ({ ...c, readOnly: e.target.value === "read" }))}>
                   <option value="edit">{NR_FILES.ACCESS_EDIT}</option>
@@ -422,7 +477,10 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, driveReas
         {s.step > 1 ? <Button type="button" variant="ghost" onClick={() => go((s.step - 1) as Step)}>{NR_SHARED.BACK}</Button> : <span />}
         <div className="flex gap-2">
           <Button type="button" variant="outline" onClick={onClose}>{NR_SHARED.CANCEL}</Button>
-          {s.step === 2 && (
+          {s.step === 2 && s.kind === "computer" && (
+            <Button type="button" disabled={!s.computer} onClick={() => setS((c) => ({ ...c, step: 3, reached: 3 }))}>{NR_FILES.COMPUTER_NEXT}</Button>
+          )}
+          {s.step === 2 && s.kind !== "computer" && (
             <Button type="button" disabled={!source && !(editing && s.sourceKey === editedSource)} onClick={() => setS((c) => ({ ...c, step: 3, reached: 3 }))}>
               {NR_SHARED.CONTINUE} <span aria-hidden="true">→</span>
             </Button>

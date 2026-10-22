@@ -12,15 +12,19 @@ import (
 // residentBuilt are the classes whose runner_resident delivery is built and
 // pinned (design 0.9 §7.4): a dispatch authors the placeholder where the value
 // is read, the org hands the value to the run's runner before the create, and
-// erases it at run end. A grant record of one of them is admitted resident; a
-// record, a placeholder or an intent of any other class keeps the refusal
-// "runner_resident delivery of this credential is not built yet". Each class
-// was added only once every one of its pins passed.
+// erases it at run end. An Azure DevOps minted token carries no value: the
+// runner's proxy fetches the per-run token from the organisation over the relay
+// on each request, as the cluster's does, and holds it in memory only. A grant
+// record of one of them is admitted resident; a record, a placeholder or an
+// intent of any other class keeps the refusal "runner_resident delivery of this
+// credential is not built yet". Each class was added only once every one of its
+// pins passed.
 var residentBuilt = map[string]bool{
 	ClassEnvSecret:    true,
 	ClassFileSecret:   true,
 	ClassSSHKey:       true,
 	ClassGitPATHelper: true,
+	ClassADOMintedPAT: true,
 }
 
 // ResidentGrant reports whether an org-held grant of origin is delivered

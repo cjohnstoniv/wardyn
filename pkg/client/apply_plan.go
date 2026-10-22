@@ -12,7 +12,7 @@ type ApplyStep struct {
 	Name        string                `json:"name,omitempty"`         // profile or drive name
 	SubjectType CapabilitySubjectType `json:"subject_type,omitempty"` // assignment / drive_grant
 	Subject     string                `json:"subject,omitempty"`
-	Profile     string                `json:"profile,omitempty"` // an assignment's profile name; its id when no name is known
+	Unit        string                `json:"unit,omitempty"`    // an assignment's profile name; its id when no name is known
 	ID          *uuid.UUID            `json:"id,omitempty"`      // the existing row an update or delete targets
 	Fields      []string              `json:"fields,omitempty"`  // update: the JSON names of what changes
 	Outcome     string                `json:"outcome,omitempty"` // results only: "applied" | "pending" | "failed"

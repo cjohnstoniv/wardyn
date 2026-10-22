@@ -39,6 +39,8 @@ const (
 	createRunComponentsAbortHint = "the run's components could not be recorded, so it was never started"
 	// createRunHarnessesAbortHint is the same for the run's harness set.
 	createRunHarnessesAbortHint = "the run's harnesses could not be recorded, so it was never started"
+	// createRunKeepAbortHint is the same for the drive keep_work_folder makes.
+	createRunKeepAbortHint = "the drive for the run's work folder could not be made, so it was never started"
 	// devcontainerNoBuilderWarning is the 201 warning for a devcontainer_repo run
 	// on a deployment with no image builder wired: the build silently fell
 	// through to the convention image, which is a different sandbox from the one
@@ -175,10 +177,14 @@ func (s *Server) refuseCreatedRun(w http.ResponseWriter, r *http.Request, runID 
 func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	var asked []byte // the request as asked, for the launch intent (launch_intent.go)
 	r = withAskedRequest(r, &asked)
-	ctx := r.Context()
 	if s.refuseAdminViewLaunch(w, r) {
 		return
 	}
+	r, ok := s.admitBreakGlass(w, r)
+	if !ok {
+		return
+	}
+	ctx := r.Context()
 	req, ceiling, reqCC, taskWarning, ok := s.decodeAndValidateCreateRun(w, r)
 	if !ok {
 		return
@@ -276,6 +282,12 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// keeps the two concerns independent.
 	abort := s.abortHalfBuiltRun(ctx, runID)
 
+	// The kept work folder's drive, counted again at the insert: a race past the
+	// fold's count is refused here and the run is never started.
+	if !s.keepWorkFolderOrAbort(w, r, f.keep, created, abort) {
+		return
+	}
+
 	// The components this run launched with, recorded before anything else is
 	// built on the row: a revive re-checks the doors they needed from this
 	// snapshot, so a run that could not record it must not start.
@@ -344,12 +356,13 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	if len(gw.delivery) > 0 {
 		createData["delivery"] = gw.delivery
 	}
-	stampDriveAudit(createData, f.drives)
+	stampDriveAudit(createData, f.drives, f.keep != nil, runID)
 	intent.stamp(createData, created.LaunchIntent != nil)
 	stampHarnessSet(createData, f.harnesses, f.image)
 	comps.stampRunCreate(createData)
 	maps.Copy(createData, f.place.auditFields(created, s.runnerNameOf(ctx, created)))
 	s.markGovernanceExempt(ctx, createData)
+	s.stampBreakGlass(ctx, runID, createdByType, createdBy, createData)
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
 		runID.String(), "success", mustJSON(withRunUserType(ctx, run.UserType, createData))))
 	s.auditRunComponents(ctx, runID, createdByType, createdBy, comps)
@@ -470,6 +483,7 @@ func newRunRow(ctx context.Context, in runRowInput) types.AgentRun {
 		Preset:          req.Preset,
 		PresetVersion:   req.PresetVersion,
 		OperatorOwned:   operatorOwned,
+		BreakGlass:      breakGlassReason(ctx) != "",
 		CreatedVia:      createdVia(ctx),
 		// The pool binding is the run's own admission record: dispatch routes to exactly this target.
 		Placement: placed.Placement, PlacementFilled: placed.PlacementFilled, RunnerID: placed.RunnerID, EvidenceSource: placed.EvidenceSource,

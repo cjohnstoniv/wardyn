@@ -6,6 +6,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/google/uuid"
@@ -142,4 +143,39 @@ func decodeState(t *testing.T, body []byte) types.ApprovalState {
 		t.Fatalf("decode answer: %v; body=%s", err, body)
 	}
 	return ap.State
+}
+
+// TestInternalApprovalAnswersOmitTheDecider pins #2434: the sandbox's poll and expire answers carry
+// only what the sidecar and wardyn-toolgate read, never the approver's principal or the note they typed.
+func TestInternalApprovalAnswersOmitTheDecider(t *testing.T) {
+	h := newHarness(t)
+	runID := uuid.New()
+	id := seedApproval(h, runID, types.ApprovalToolCall)
+	ap := h.approvals.byID[id]
+	ap.State, ap.DecidedBy, ap.Reason, ap.MintedJTI = types.ApprovalApproved, "approver@example.com", "typed by the approver", "jti-1"
+	h.approvals.byID[id] = ap
+	tok := h.mintRunToken(t, runID)
+
+	allowed := map[string]bool{"id": true, "kind": true, "state": true, "decision_scope": true,
+		"decision_expires_at": true, "expires_at": true, "held": true, "held_until": true}
+	for name, w := range map[string]*httptest.ResponseRecorder{
+		"get":    do(t, h.srv, http.MethodGet, "/api/v1/internal/approvals/"+id.String(), tok, ""),
+		"expire": do(t, h.srv, http.MethodPost, "/api/v1/internal/approvals/"+id.String()+"/expire", tok, ""),
+	} {
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: code = %d; body=%s", name, w.Code, w.Body.String())
+		}
+		var keys map[string]json.RawMessage
+		if err := json.Unmarshal(w.Body.Bytes(), &keys); err != nil {
+			t.Fatalf("%s: decode: %v", name, err)
+		}
+		for k := range keys {
+			if !allowed[k] {
+				t.Errorf("%s: the sandbox's answer carries %q: %s", name, k, w.Body.String())
+			}
+		}
+		if got := decodeState(t, w.Body.Bytes()); got != types.ApprovalApproved {
+			t.Errorf("%s: state = %s, want APPROVED", name, got)
+		}
+	}
 }

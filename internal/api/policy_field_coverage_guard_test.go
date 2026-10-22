@@ -79,6 +79,8 @@ var runPolicySpecCoverage = map[string]policyFieldCoverage{
 		why: "each set field capped at the ceiling's, with the deployment's default size standing in for an unset ceiling; a negative size is refused (validateResources)"},
 	"ToolRules": {validated: true, clamped: true,
 		why: "closed effect enum, name charset/length, count cap; a proposal may narrow the ceiling's rules and never widen them"},
+	"Recording": {validated: true, clamped: true,
+		why: "closed levels (validateRecordingLevel), none of them keystrokes; raised to the ceiling's level (clampRecording), since a ceiling's level is a minimum. The organisation's level and lock apply at dispatch (types.RecordingChoice)"},
 	"HarnessInnerWalls": {validated: true, clamped: true,
 		why: "closed values, the harness's own sandbox modes refused with their own reason (validateHarnessInnerWalls); each axis the ceiling chooses stands over the proposal's (clampInnerWalls). The create door refuses a run whose walls cannot meet the choice, a looser one included (innerWallsFor)"},
 	"GitPushAnyBranch": {validated: false, clamped: true,

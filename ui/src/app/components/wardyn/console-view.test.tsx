@@ -4,7 +4,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { health } from "../../lib/api/health";
@@ -146,6 +146,16 @@ describe("ViewGate", () => {
     mount("/admin/audit", "user-only");
     expect(screen.getByRole("heading", { name: VIEW_REFUSAL.TITLE })).toBeInTheDocument();
     expect(screen.getByText(VIEW_REFUSAL.BODY)).toBeInTheDocument();
+    // #3047: the approved "Why can't I?" card, filled honestly, with its one action.
+    expect(screen.getByText("Refused by role")).toBeInTheDocument();
+    const rows = within(screen.getByTestId("refusal")).getAllByRole("definition");
+    expect(rows.map((r) => r.textContent)).toEqual([
+      "Admin view",
+      "Wardyn admins",
+      "By the server, on every admin page and request",
+      "Not from here. A Wardyn admin can give you admin access.",
+    ]);
+    expect(within(screen.getByTestId("refusal")).getAllByRole("button")).toHaveLength(1);
     expect(screen.queryByText("screen")).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: VIEW_REFUSAL.CTA }));
     expect(screen.getByTestId("where")).toHaveTextContent("/runs");

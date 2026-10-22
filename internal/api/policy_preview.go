@@ -36,6 +36,10 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 	if s.refuseAdminViewLaunch(w, r) {
 		return
 	}
+	r, ok := s.admitBreakGlass(w, r)
+	if !ok {
+		return
+	}
 	var req createRunRequest
 	if !s.decodeRunRequest(w, r, &req) {
 		return
@@ -125,7 +129,7 @@ func (s *Server) authorizePreviewRequest(r *http.Request, req createRunRequest) 
 	if refusal != nil {
 		return ceiling, "", refusal
 	}
-	if refusal = s.localFolderRefusal(&req); refusal != nil {
+	if refusal = s.localFolderRefusal(r.Context(), &req); refusal != nil {
 		return ceiling, "", refusal
 	}
 	if refusal = s.runTextFieldsRefusal(req); refusal != nil {

@@ -14,6 +14,12 @@ import { shortTime } from "../../../lib/format";
 export const VIEWER_APPROVAL_BLOCKS_NOTE =
   "This run is blocked until an admin decides it — you can see the requested scope below, but deciding needs the admin role.";
 
+// The run page's Approvals tab: what needs a decision, apart from what is already decided.
+export const APPROVALS_TAB = {
+  WAITING: "Waiting on you",
+  HISTORY: "History",
+} as const;
+
 // Approval blast-radius banners (D1) — every approval kind gets two lines:
 // what you're approving, and the worst realistic outcome. The scope-specific
 // text is filled by the Approvals screen; these are the fixed labels + intents.
@@ -276,3 +282,11 @@ export function credentialKind(scope: Record<string, unknown>): CredentialKind {
   return "generic";
 }
 
+
+// F2MULTI-4: which agent raised an approval on a run with two or more agents. The card's line is
+// LINE_PRE + the agent's name (bold) + LINE_POST(n); the run page strip's is STRIP(agent).
+export const APPROVAL_ASKED = {
+  LINE_PRE: "Asked by ",
+  LINE_POST: (n: number) => `, one of ${n} agents in this run`,
+  STRIP: (agent: string) => `· Asked by ${agent}`,
+} as const;

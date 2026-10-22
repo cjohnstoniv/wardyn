@@ -6,7 +6,7 @@
 // The Runs screen's first-run experience — what a brand-new operator sees, and
 // what replaced the twelve-step setup funnel. Split out of runs.tsx purely for
 // size (scripts/check-file-size.sh): RunsScreen owns the populated board, this
-// owns the empty one and the no-barrier blocker.
+// owns the empty one.
 
 import * as React from "react";
 import { Link } from "react-router-dom";
@@ -16,15 +16,11 @@ import {
   CircleX,
   Hexagon,
   Plus,
-  RotateCw,
-  ShieldX,
 } from "lucide-react";
 import type { ConfinementClass } from "../../lib/types";
 import { CC_ORDER } from "../../lib/types";
 import type { Readiness } from "../../lib/readiness";
 import { Button } from "../ui/button";
-import { Mono } from "../wardyn/code-block";
-import { CopyButton } from "../wardyn/copy-button";
 import { CC_META } from "../wardyn/cc-meta";
 
 // Lazy on purpose. /runs is EAGER (App.tsx keeps it unlazied), so anything this
@@ -34,48 +30,6 @@ import { CC_META } from "../wardyn/cc-meta";
 // enforces the split; see runs-first-run-demos.tsx's own header. Keep the
 // catalog import THERE, not here.
 const FirstRunDemoGrid = React.lazy(() => import("./runs-first-run-demos"));
-
-// The one hard blocker in the product: no sandbox barrier means no run can
-// start, full stop. Non-dismissible by design — there's nothing to dismiss it
-// TO, every other affordance on this page is dead until this is fixed.
-//
-// R6 F001 (docs/design/ui-batch3-mock.md): this used to offer `sudo wardyn
-// setup fence`, and no alias could have made it true. There is no `fence`
-// subcommand and there cannot be one — `wardyn setup` installs a RUNTIME
-// (wall/vault), and CC1 "Fence" is the baseline tier nothing installs. Nor is a
-// missing tier the trigger: this fires on confinement_classes being EMPTY, which
-// on a reachable daemon means Docker is unreachable / no -tags docker / -runner
-// none. And sudo does nothing — the CLI talks to the daemon with the operator's
-// token, and as root it would read root's config instead. `wardyn setup status`
-// exists, needs no root, and prints this host's checklist with the real next
-// command beside each unmet row.
-export function NoBarrierBanner({ onRecheck }: { onRecheck: () => void }) {
-  const setupCmd = "wardyn setup status";
-  return (
-    <div
-      role="alert"
-      className="mb-5 space-y-2.5 rounded-xl border border-danger/40 bg-danger-subtle px-4 py-3.5 text-sm text-danger"
-    >
-      <div className="flex items-start gap-2">
-        <ShieldX className="mt-0.5 size-4 shrink-0" />
-        <p className="font-medium">No sandbox barrier on this host. Runs cannot start.</p>
-      </div>
-      <div className="flex flex-wrap items-center gap-2 pl-6">
-        <div className="flex items-center gap-1.5 rounded-md border border-danger/30 bg-card px-2 py-1">
-          <Mono className="text-foreground">{setupCmd}</Mono>
-          <CopyButton
-            text={setupCmd}
-            label="Copy setup command"
-            className="rounded p-0.5 text-muted-foreground hover:text-foreground"
-          />
-        </div>
-        <Button size="sm" variant="outline" onClick={onRecheck}>
-          <RotateCw className="size-3.5" /> Re-check
-        </Button>
-      </div>
-    </div>
-  );
-}
 
 // RunsFirstRun — the Runs screen's own first-run experience, replacing the
 // deleted 12-step setup funnel: a hexagon glyph, two DERIVED-FACT checklist

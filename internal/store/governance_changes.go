@@ -139,7 +139,7 @@ func (s PG) ProposeGovernanceChange(ctx context.Context, ch types.GovernanceChan
 // renames a profile to it (its payload name differs from the stored profile's, so a same-name update
 // and an update of a profile that is gone hold nothing). $1 is the target kind, $2 the name.
 const pendingNameHolders = `target_kind = $1 AND state = 'pending' AND payload->>'name' = $2 AND (
-	op = 'create' OR (op = 'update' AND payload->>'name' <> (SELECT p.name FROM governance_profiles p WHERE p.id::text = target_key)))`
+	op = 'create' OR (op = 'update' AND payload->>'name' <> (SELECT p.name FROM governance_units p WHERE p.id::text = target_key)))`
 
 // claimCreateName holds the name a create or a rename takes: a create's target key is the id it mints,
 // so a second create of the same name would otherwise be a second target, and a rename of another
@@ -159,7 +159,7 @@ func claimCreateName(ctx context.Context, tx pgx.Tx, ch types.GovernanceChange) 
 		return nil, err
 	}
 	if ch.Op == "update" {
-		renames, err := renamesProfile(ctx, tx, ch, p.Name)
+		renames, err := renamesUnit(ctx, tx, ch, p.Name)
 		if err != nil || !renames {
 			return nil, err
 		}
@@ -187,13 +187,13 @@ func claimCreateName(ctx context.Context, tx pgx.Tx, ch types.GovernanceChange) 
 	return nil, &ErrGovernanceChangePending{ID: live}
 }
 
-// renamesProfile reports whether an update of a profile carries a name other than the stored one.
-func renamesProfile(ctx context.Context, tx pgx.Tx, ch types.GovernanceChange, name string) (bool, error) {
-	if ch.TargetKind != types.GovernanceTargetProfile {
+// renamesUnit reports whether an update of a profile carries a name other than the stored one.
+func renamesUnit(ctx context.Context, tx pgx.Tx, ch types.GovernanceChange, name string) (bool, error) {
+	if ch.TargetKind != types.GovernanceTargetUnit {
 		return false, nil
 	}
 	var cur string
-	err := tx.QueryRow(ctx, `SELECT name FROM governance_profiles WHERE id::text = $1`, ch.TargetKey).Scan(&cur)
+	err := tx.QueryRow(ctx, `SELECT name FROM governance_units WHERE id::text = $1`, ch.TargetKey).Scan(&cur)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		return false, nil
@@ -315,9 +315,10 @@ func (s PG) DryRunGovernance(ctx context.Context, fn func(q Querier) error) erro
 	return fn(tx)
 }
 
-// EraseGovernanceChangePersonalFields clears the proposer and decider (their emails too, and the
-// reason a decider typed) of every change whose recorded principal is one of principals or whose
-// recorded email is one of emails (case folded), and returns how many rows it touched. A principal is
+// EraseGovernanceChangePersonalFields clears the proposer and decider (their emails too, the reason a
+// decider typed, and the reason a proposer typed into a runner trust change's payload) of every change
+// whose recorded principal is one of principals or whose recorded email is one of emails (case
+// folded), and returns how many rows it touched. A principal is
 // never matched against the email column: that column holds the claim the proposer signed in with,
 // which can spell another person's principal. A pending change whose proposer is erased leaves
 // pending in the same statement (to expired), so a change with no recorded proposer can never be
@@ -336,10 +337,12 @@ func (s PG) EraseGovernanceChangePersonalFields(ctx context.Context, principals,
 			proposed_by_email = CASE WHEN proposed_by = ANY($1) OR lower(proposed_by_email) = ANY($2) THEN '' ELSE proposed_by_email END,
 			decided_by        = CASE WHEN decided_by = ANY($1) OR lower(decided_by_email) = ANY($2) THEN '' ELSE decided_by END,
 			decided_by_email  = CASE WHEN decided_by = ANY($1) OR lower(decided_by_email) = ANY($2) THEN '' ELSE decided_by_email END,
-			reason            = CASE WHEN decided_by = ANY($1) OR lower(decided_by_email) = ANY($2) THEN '' ELSE reason END
+			reason            = CASE WHEN decided_by = ANY($1) OR lower(decided_by_email) = ANY($2) THEN '' ELSE reason END,
+			payload           = CASE WHEN target_kind = $3 AND (proposed_by = ANY($1) OR lower(proposed_by_email) = ANY($2))
+			                         THEN jsonb_set(payload, '{reason}', '""'::jsonb) ELSE payload END
 		WHERE proposed_by = ANY($1) OR lower(proposed_by_email) = ANY($2)
 		   OR decided_by = ANY($1) OR lower(decided_by_email) = ANY($2)`,
-		principals, lowerAll(emails))
+		principals, lowerAll(emails), types.GovernanceTargetRunnerTrust)
 	if err != nil {
 		return 0, fmt.Errorf("store: erase governance change personal fields: %w", err)
 	}

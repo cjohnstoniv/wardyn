@@ -38,17 +38,22 @@ func TestPG_PersonErasure_BlanksOnlyThatPersonsRunTasks(t *testing.T) {
 	ctx := context.Background()
 	a1, a2 := erasureRun(t, st, "alice", "secret one"), erasureRun(t, st, "alice", "secret two")
 	b1 := erasureRun(t, st, "bob", "bob's task")
+	titled := erasureRun(t, st, "alice", "")
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET title = 'Reconcile payroll for a named person', description = 'd' WHERE id = ANY($1)`,
+		[]uuid.UUID{a1, titled, b1}); err != nil {
+		t.Fatal(err)
+	}
 	var before time.Time
 	if err := pool.QueryRow(ctx, `SELECT updated_at FROM agent_runs WHERE id=$1`, a1).Scan(&before); err != nil {
 		t.Fatal(err)
 	}
 
 	ids, err := st.RunIDsCreatedBy(ctx, "alice")
-	if err != nil || len(ids) != 2 || !slices.Contains(ids, a1) || !slices.Contains(ids, a2) {
-		t.Fatalf("RunIDsCreatedBy(alice) = %v, %v, want her two runs", ids, err)
+	if err != nil || len(ids) != 3 || !slices.Contains(ids, a1) || !slices.Contains(ids, a2) || !slices.Contains(ids, titled) {
+		t.Fatalf("RunIDsCreatedBy(alice) = %v, %v, want her three runs", ids, err)
 	}
-	if n, err := st.BlankRunTasks(ctx, "alice"); err != nil || n != 2 {
-		t.Fatalf("BlankRunTasks = %d, %v, want 2", n, err)
+	if n, err := st.BlankRunTasks(ctx, "alice"); err != nil || n != 3 {
+		t.Fatalf("BlankRunTasks = %d, %v, want 3 (a run with only a title included)", n, err)
 	}
 	if n, err := st.BlankRunTasks(ctx, "alice"); err != nil || n != 0 {
 		t.Fatalf("a second BlankRunTasks = %d, %v, want nothing to change", n, err)
@@ -60,6 +65,13 @@ func TestPG_PersonErasure_BlanksOnlyThatPersonsRunTasks(t *testing.T) {
 	}
 	if err := pool.QueryRow(ctx, `SELECT task FROM agent_runs WHERE id=$1`, b1).Scan(&task); err != nil || task != "bob's task" {
 		t.Errorf("bob's task = %q (%v), want it untouched", task, err)
+	}
+	var title, desc string
+	for id, want := range map[uuid.UUID]string{a1: "", titled: "", b1: "Reconcile payroll for a named person"} {
+		if err := pool.QueryRow(ctx, `SELECT title, description FROM agent_runs WHERE id=$1`, id).Scan(&title, &desc); err != nil ||
+			title != want || (want == "") != (desc == "") {
+			t.Errorf("run %s: title %q description %q (%v), want title %q", id, title, desc, err, want)
+		}
 	}
 }
 
@@ -487,5 +499,28 @@ func TestPG_PersonErasure_PrincipalsNamedIgnoresASignInOfAnotherTenant(t *testin
 	}
 	if got, err := st.PrincipalsNamed(ctx, entra); err != nil || !slices.Equal(got, []string{entra}) {
 		t.Errorf("PrincipalsNamed(%q) = %v, %v, want the people row alone", entra, got, err)
+	}
+}
+
+// An agent's own task in a run with several agents is the person's text too: erasure
+// blanks it on that person's runs alone, beside the run's own task.
+func TestPG_PersonErasure_BlanksAgentTasks(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	a, b := erasureRun(t, st, "alice", "write the change"), erasureRun(t, st, "bob", "bob's change")
+	for _, id := range []uuid.UUID{a, b} {
+		if err := st.PutRunHarnesses(ctx, id, []types.RunHarness{{Harness: "claude-code", Starts: true}, {Harness: "codex-cli", Task: "write the tests"}}); err != nil {
+			t.Fatalf("put: %v", err)
+		}
+	}
+	if n, err := st.BlankRunTasks(ctx, "alice"); err != nil || n != 1 {
+		t.Fatalf("BlankRunTasks = %d, %v, want her one run", n, err)
+	}
+	for id, want := range map[uuid.UUID]string{a: "", b: "write the tests"} {
+		rows, err := st.ListRunHarnesses(ctx, id)
+		if err != nil || len(rows) != 2 || rows[1].Task != want {
+			t.Errorf("run %s rows %+v (%v), want codex-cli's task %q", id, rows, err, want)
+		}
 	}
 }

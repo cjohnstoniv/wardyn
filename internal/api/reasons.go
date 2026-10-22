@@ -168,6 +168,8 @@ const (
 	reasonRunModeConflict    = "run_mode_conflict"    // run-mode carriers contradict each other, or an older field that replaced them
 	reasonStartFolderInvalid = "start_folder_invalid" // start_folder is malformed, names an attachment the run lacks, or escapes its mount
 	reasonRunBackgroundOnly  = "run_background_only"  // a background run has no interactive door: attach, exec, SSH, UI gateway, desktop
+	// Several agents in one background run (run_multi_agent.go).
+	reasonMultiAgentTasksOff = "multi_agent_tasks_off" // tools[].task while WARDYN_MULTI_AGENT_TASKS is off
 	// The main drive (run_main_drive.go). The sentence is mainDriveUnenforceableMsg's, with a TypeScript twin.
 	reasonMainDriveUnenforceable = "main_drive_unenforceable" // the run's policy writes a disk size the runner it lands on cannot cap
 	// The run shape (run_shape.go): New Run's choice, checked against the carriers.
@@ -201,6 +203,10 @@ const (
 	reasonTaskModeUnknown                      = "task_mode_unknown"                        // task_mode is not "harness" or "exec"
 	reasonLocalFolderInvalid                   = "local_folder_invalid"                     // local_folder's name or remote_dir is malformed
 	reasonLocalFolderUnsupported               = "local_folder_unsupported"                 // local_folder on a run or deployment that cannot hold the agent for it
+	reasonComputerFoldersOff                   = "computer_folders_off"                     // WARDYN_COMPUTER_FOLDERS is off: no folder from a personal computer
+	reasonComputerRunnerOffline                = "computer_runner_offline"                  // the runner holding the folder is not connected, or did not answer
+	reasonComputerRunnerNoFolders              = "computer_runner_no_folders"               // the runner does not share folders (older than 0.10, or not --substrate folders)
+	reasonComputerFolderRefused                = "computer_folder_refused"                  // the runner refused that path (outside its roots, a symlink, a credential folder)
 	reasonInteractiveStartUnknown              = "interactive_start_unknown"                // interactive_start is not "shell" or "agent"
 	reasonToolApprovalsUnknown                 = "tool_approvals_unknown"                   // tool_approvals is not "auto" or "hold"
 	reasonToolApprovalsHoldUnsupportedAgent    = "tool_approvals_hold_unsupported_agent"    // tool_approvals=hold on an agent with no external tool-approval contract (codex-cli)
@@ -213,6 +219,13 @@ const (
 	reasonRunKillStateChanged                  = "run_kill_state_changed"                   // the run moved to another state between the read and the write
 	reasonRunMaxWaitInvalid                    = "run_max_wait_invalid"                     // max_wait_sec is below 1
 	reasonRunQueued                            = "run_queued"                               // the run is waiting for a slot in its pool: its end is set when it starts
+	// One-time scheduled runs (run_schedule.go): start_at on a create. Kept out of the run-mode block above,
+	// which ui/src/app/lib/run-mode-refusals.test.ts reads as the run-mode set.
+	reasonScheduledRunsOff         = "scheduled_runs_off"         // start_at sent while WARDYN_SCHEDULED_RUNS is off
+	reasonScheduledRunsUnavailable = "scheduled_runs_unavailable" // start_at on a deployment that places no runs, so no queue can hold it
+	reasonStartAtInvalid           = "start_at_invalid"           // start_at or start_time_zone is malformed, or one is sent without the other
+	reasonStartAtPast              = "start_at_past"              // start_at is not in the future
+	reasonStartAtTooFar            = "start_at_too_far"           // start_at is later than 7 days less the run's wait
 
 	// POST /runs/{id}/revive and each run's result in POST /admin/runs/restart
 	// (#1342): the run's substrate cannot replace a proxy in place
@@ -278,8 +291,17 @@ const (
 	reasonEgressBaselineInvalid = "egress_baseline_invalid" // a baseline host is not an exact hostname, or the set is too large
 	reasonEgressBaselineStale   = "egress_baseline_stale"   // If-Match does not match the current baseline ETag
 
+	// GET/PUT /governance/boundary, POST /governance/dry-run, and the boundary's own refusals.
+	reasonBoundaryInvalid          = "boundary_invalid"            // the boundary document has no mode, or names a knob it cannot hold, or a value that knob refuses
+	reasonBoundaryStale            = "boundary_stale"              // If-Match does not match the current boundary ETag
+	reasonBoundaryHost             = "boundary_host"               // an egress approval would admit a host the Wardyn boundary does not allow
+	reasonBoundaryHardLimitsGated  = "boundary_hard_limits_gated"  // a write into hard_limits before the boundary bounds every brokered credential path
+	reasonGrantWithheld            = "credential_withheld"         // a mint or redeem of a grant the run's profile or the Wardyn boundary now withholds
+	reasonGrantWithheldUnread      = "credential_withheld_unread"  // the run, its grants, its profile or the boundary could not be read to check the mint
+	reasonBreakGlassReasonRequired = "break_glass_reason_required" // an admin-token break-glass run without a usable reason
+
 	// PUT /governance/credential-delivery.
-	reasonCredentialDeliveryInvalid     = "credential_delivery_invalid"     // an unknown or fixed class, a mode outside the class's bounds, or require_posture without runner_resident
+	reasonCredentialDeliveryInvalid     = "credential_delivery_invalid"     // an unknown or fixed class, a mode outside the class's bounds or one the server cannot build (422), or require_posture without runner_resident
 	reasonCredentialDeliveryUnavailable = "credential_delivery_unavailable" // the store keeps no delivery policy (not the Postgres store)
 	reasonCredentialDeliveryStale       = "credential_delivery_stale"       // If-Match does not match the current policy ETag
 
@@ -290,21 +312,21 @@ const (
 	reasonEgressRedirectNotFound        = "egress_redirect_not_found"         // no egress_redirects entry matches `from`
 
 	// PUT/POST /governance/{profiles,assignments} and the preview routes.
-	reasonGovernanceProfileRequestInvalid = "governance_profile_request_invalid" // the profile body did not decode
-	reasonGovernanceCeilingInvalid        = "governance_ceiling_invalid"         // the ceiling names a grant outside the deployment's own EligibleGrants
-	reasonGovernanceProfileNameConflict   = "governance_profile_name_conflict"   // a profile by that name already exists
-	reasonGovernanceProfileInUse          = "governance_profile_in_use"          // the profile is still assigned; delete its assignments first
-	reasonGovernanceAssignmentInvalid     = "governance_assignment_invalid"      // the assignment fails validation
+	reasonGovernanceUnitRequestInvalid = "governance_unit_request_invalid" // the profile body did not decode
+	reasonGovernanceCeilingInvalid     = "governance_ceiling_invalid"      // the ceiling names a grant outside the deployment's own EligibleGrants
+	reasonGovernanceUnitNameConflict   = "governance_unit_name_conflict"   // a profile by that name already exists
+	reasonGovernanceUnitInUse          = "governance_unit_in_use"          // the profile is still assigned; delete its assignments first
+	reasonGovernanceMembershipInvalid  = "governance_membership_invalid"   // the assignment fails validation
 	// Composed profiles (migration 0125). The first three are write refusals. The fourth is the SAME
 	// string as authz's registered reason of that name: a 409 at a profile write that would leave a
 	// descendant with a policy nothing satisfies, and the 403 at every launch and live door when a
 	// composition cannot be applied (see adHocReasonLiterals["reasons.go:governance_overlay_unsatisfiable"]
 	// in refusal_test.go, and documentedDuplicateReasonValues).
 	reasonGovernanceOverlayInvalid       = "governance_overlay_invalid"       // the overlay names something its base does not permit, or does not decode
-	reasonGovernanceProfileCycle         = "governance_profile_cycle"         // the write would make a profile its own base
-	reasonGovernanceProfileDepth         = "governance_profile_depth"         // the write would put a profile more than three deep
+	reasonGovernanceUnitCycle            = "governance_unit_cycle"            // the write would make a profile its own base
+	reasonGovernanceUnitDepth            = "governance_unit_depth"            // the write would put a profile more than three deep
 	reasonGovernanceOverlayUnsatisfiable = "governance_overlay_unsatisfiable" // nothing satisfies a profile and its base together
-	// reasonGovernancePreviewClaimsInvalid is shared by GET /governance/preview
+	// reasonGovernancePreviewClaimsInvalid is shared by GET /governance/check
 	// and the user-drive naming preview (user_drives_preview.go): both feed the
 	// same normalizeGovernancePreviewClaims validator over user_subjects/groups.
 	reasonGovernancePreviewClaimsInvalid = "governance_preview_claims_invalid"
@@ -348,8 +370,23 @@ const (
 	reasonAPITokenMemberModeMint     = "api_token_member_mode_mint"     // a member-mode session cannot mint a token that would outlive the view
 	reasonAPITokenNameInvalid        = "api_token_name_invalid"         // name exceeds the length cap or has a control character
 	reasonAPITokenTTLInvalid         = "api_token_ttl_invalid"          // ttl_seconds is negative or implausibly large
-	reasonAPITokenCapReached         = "api_token_cap_reached"          // the principal already holds the maximum number of live tokens
-	reasonSessionsRevokeParamInvalid = "sessions_revoke_param_invalid"  // the body must set exactly one of sub/all
+
+	// CLI sign-in (cli_sign_in.go, cli_sessions.go). cli_sign_in_invalid and cli_session_invalid are one
+	// answer each for every refusal of the token call and of a refresh, so neither is an oracle.
+	reasonCLISignInRateLimited       = "cli_sign_in_rate_limited"      // too many sign-in attempts or refreshes from this address or for this session
+	reasonCLISignInInvalidRequest    = "cli_sign_in_invalid_request"   // the sign-in request body is malformed
+	reasonCLIPasteSignInOff          = "cli_paste_sign_in_off"         // paste-back sign-in while WARDYN_CLI_PASTE_SIGN_IN is off
+	reasonCLIFileStoreOff            = "cli_file_store_off"            // a CLI that reports the file store while WARDYN_CLI_FILE_STORE is off
+	reasonCLISignInPendingCap        = "cli_sign_in_pending_cap"       // too many sign-ins are waiting for approval deployment-wide
+	reasonCLISignInNotFound          = "cli_sign_in_not_found"         // no such sign-in request
+	reasonCLISignInUsed              = "cli_sign_in_used"              // the sign-in link was already approved, denied or redeemed
+	reasonCLISignInExpired           = "cli_sign_in_expired"           // the sign-in link expired
+	reasonCLIAdminNeedsSession       = "cli_admin_needs_session"       // wardyn login --admin without a live CLI sign-in of the approver on that computer
+	reasonCLISignInInvalid           = "cli_sign_in_invalid"           // the token call's code, verifier, proof or request is not valid
+	reasonCLISessionInvalid          = "cli_session_invalid"           // the CLI session cannot refresh: unknown, ended, expired, idle, cut, reused or a bad proof
+	reasonCLISessionNotFound         = "cli_session_not_found"         // no such live CLI session of the caller
+	reasonAPITokenCapReached         = "api_token_cap_reached"         // the principal already holds the maximum number of live tokens
+	reasonSessionsRevokeParamInvalid = "sessions_revoke_param_invalid" // the body must set exactly one of sub/all
 
 	// /api/v1/invitations and /api/v1/me/invitations (#1508).
 	reasonInvitationTargetInvalid    = "invitation_target_invalid"     // the principal is not a subject, or is reserved, or is a service: principal
@@ -436,7 +473,7 @@ const (
 	reasonUserDriveReclaimUnsupported      = "user_drive_reclaim_unsupported"       // this deployment's runner cannot reclaim drive storage
 	reasonUserDriveReclaimConflict         = "user_drive_reclaim_conflict"          // the reclaim was refused at the storage layer
 	reasonUserDrivePreviewNoClaims         = "user_drive_preview_no_claims"         // the naming preview named no user_subjects
-	reasonUserDriveDeniedByProfile         = "user_drive_denied_by_profile"         // the caller's governance profile shuts the drive door
+	reasonUserDriveDeniedByUnit            = "user_drive_denied_by_unit"            // the caller's governance profile shuts the drive door
 
 	reasonUserDriveCeilingUnavailable     = "user_drive_ceiling_unavailable"       // the drive write's deployment ceiling could not be answered: the drive-size ceiling (site config) could not be read, or a host_path share did not answer in time (503)
 	reasonUserDriveRehomeListUnavailable  = "user_drive_rehome_list_unavailable"   // the drive list could not be read to run the re-home guard or the host_path nesting check (500)
@@ -498,7 +535,7 @@ const (
 const (
 	reasonMemberDriveRequiresPerson    = "member_drive_requires_person"    // not a person's session or own token
 	reasonMemberDrivesDisabled         = "member_drives_disabled"          // the organisation switch is off
-	reasonMemberDrivesDeniedByProfile  = "member_drives_denied_by_profile" // the caller's governance profile shuts creating
+	reasonMemberDrivesDeniedByUnit     = "member_drives_denied_by_unit"    // the caller's governance profile shuts creating
 	reasonMemberDriveLimitReached      = "member_drive_limit_reached"      // the person already holds the most drives allowed
 	reasonMemberDriveUnsupported       = "member_drive_unsupported"        // this deployment has no managed backend, or no drive size
 	reasonMemberDriveDeleteUnavailable = "member_drive_delete_unavailable" // the substrate could not delete what it would create
@@ -509,6 +546,7 @@ const (
 	reasonMemberDriveDeleteFailed      = "member_drive_delete_failed"      // the substrate failed; nothing was removed
 	reasonMemberDriveRateLimited       = "member_drive_rate_limited"       // too many creates and deletes in a minute
 	reasonUserDriveMemberOwned         = "user_drive_member_owned"         // an admin drive route named a person's drive
+	reasonKeepWorkFolderDisabled       = "keep_work_folder_disabled"       // member drives or the keep_main_drive switch is off
 )
 
 // git_pat narrowing (runs_dispatch_pat_scope.go): a run is refused when a
@@ -569,3 +607,27 @@ const reasonHostCapacityRefused = "host_capacity_refused"
 // PUT /workspaces/{id}/approved-egress naming a host on the workspace's denied list (handleSetApprovedEgress):
 // deny beats allow, so the approval would change nothing.
 const reasonWorkspaceApprovedEgressDenied = "workspace_approved_egress_denied"
+
+// A person's own GitHub token (gh_own_pat.go): the doors that set and remove it, and the run it is
+// used on (gh_own_pat_run.go).
+const (
+	reasonGitHubOwnPATNoSession        = "github_own_pat_no_session"        // the caller has no browser sign-in to store the token under
+	reasonGitHubOwnPATPreviewBlocked   = "github_own_pat_preview_blocked"   // refused in the user view: the token is stored under the caller's own identity
+	reasonGitHubOwnPATUnknownRow       = "github_own_pat_unknown_row"       // no own-token GitHub row the caller may use has this address
+	reasonGitHubOwnPATTokenInvalid     = "github_own_pat_token_invalid"     // not one fine-grained token (github_pat_…), or too long, or has spaces
+	reasonGitHubOwnPATExpiryInvalid    = "github_own_pat_expiry_invalid"    // expires_on is not a date after today
+	reasonGitHubOwnPATExpiryTooLong    = "github_own_pat_expiry_too_long"   // expires_on is past the 30-day limit
+	reasonGitHubOwnPATRejected         = "github_own_pat_rejected"          // GitHub did not accept the token
+	reasonGitHubOwnPATCheckUnavailable = "github_own_pat_check_unavailable" // GitHub could not be asked; nothing is known
+	reasonGitHubOwnPATAccountMismatch  = "github_own_pat_account_mismatch"  // another GitHub account than the one linked, and no relink
+	reasonGitHubOwnTokenRequired       = "github_own_token_required"        // create: the run's owner has no usable token of their own for the row
+	reasonGitHubOwnTokenExpired        = "github_own_token_expired"         // create: the owner's token has reached the expiry they entered
+	reasonGitHubOwnTokenUndeliverable  = "github_own_token_undeliverable"   // create: the token could not stay out of the sandbox (PAT broker off, a run on a person's runner) or two rows claim the host
+	reasonGitHubOwnTokenResident       = "github_own_token_resident"        // mint: the PAT broker is off, so the token would be handed into the sandbox
+)
+
+// GET /runs/{id}/attach?transport=local (attach_local.go), after every check of the attach door has
+// passed: this run cannot be attached on its runner's own computer, and the CLI attaches through the
+// organisation instead. A transport's answer, not a refusal; errorBody.Detail says why. Declared here
+// because reasons_routes.go is at scripts/check-file-size.sh's limit.
+const reasonAttachLocalUnavailable = "attach_local_unavailable"

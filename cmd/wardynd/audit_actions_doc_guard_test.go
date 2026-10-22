@@ -585,6 +585,10 @@ func TestAuditActionsForwardGuardCoversEveryEmitShape(t *testing.T) {
 // is for the forward guard: an action deliberately outside docs/AUDIT-ACTIONS.md's
 // "Grammar" section, each with the reason it is not renamed.
 var auditActionGrammarAllow = map[string]bool{
+	// CLI sign-in's refusal and reuse rows (0.10 ATT-LOGIN-SRV), named by the attach design
+	// (DESIGN-ATTACH.md section 11.2) before they met this grammar; the CLI and console lanes build on them.
+	"cli.session.refresh_refused": true,
+	"cli.session.reuse_detected":  true,
 	// The run-output retention sweep (0.8.6): recording.retention.sweep's sibling,
 	// named with a fourth segment by its design before it met this grammar.
 	"run.output.retention.sweep": true,

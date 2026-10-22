@@ -64,8 +64,8 @@ func TestDenyUIAppsStripsAtCreate(t *testing.T) {
 		if len(spec.UIApps) != 0 {
 			t.Errorf("run ui_apps = %v, want none under deny_ui_apps", spec.UIApps)
 		}
-		if !recHasRefusal(audit, authz.ReasonGovernanceProfile, "runs.ui_apps") {
-			t.Error("no authz.denied governance_profile row for runs.ui_apps")
+		if !recHasRefusal(audit, authz.ReasonGovernanceUnit, "runs.ui_apps") {
+			t.Error("no authz.denied governance_unit row for runs.ui_apps")
 		}
 	})
 
@@ -128,11 +128,11 @@ func recHasRefusal(r *recRecorder, reason authz.Reason, target string) bool {
 // #1391: deny_ui_apps at the UI gateway
 
 func TestDenyUIAppsRefusesAUIGatewaySession(t *testing.T) {
-	profile := types.GovernanceProfile{ID: uuid.New(), Name: "no-ui", Limits: types.GovernanceLimits{DenyUIApps: true}}
-	setup := func(t *testing.T, p types.GovernanceProfile) *uiHarness {
+	profile := types.GovernanceUnit{ID: uuid.New(), Name: "no-ui", Limits: types.GovernanceLimits{DenyUIApps: true}}
+	setup := func(t *testing.T, p types.GovernanceUnit) *uiHarness {
 		h := newUIHarness(t, okBackend())
-		h.store.profiles = []types.GovernanceProfile{p}
-		h.run.GovernanceProfileID = &p.ID
+		h.store.profiles = []types.GovernanceUnit{p}
+		h.run.UnitID = &p.ID
 		h.store.putRun(h.run)
 		return h
 	}
@@ -149,11 +149,11 @@ func TestDenyUIAppsRefusesAUIGatewaySession(t *testing.T) {
 		var body errorBody
 		_ = json.Unmarshal(rec.Body.Bytes(), &body)
 		const want = `UI apps are not allowed under the governance profile "no-ui" this run was launched under.`
-		if body.Reason != string(authz.ReasonGovernanceProfile) || body.Error != want {
-			t.Errorf("body = %+v, want reason governance_profile and %q", body, want)
+		if body.Reason != string(authz.ReasonGovernanceUnit) || body.Error != want {
+			t.Errorf("body = %+v, want reason governance_unit and %q", body, want)
 		}
-		if !h.audit.hasDataValue("reason", string(authz.ReasonGovernanceProfile)) {
-			t.Errorf("no governance_profile refusal audited; reasons: %s", h.audit.dataReasons())
+		if !h.audit.hasDataValue("reason", string(authz.ReasonGovernanceUnit)) {
+			t.Errorf("no governance_unit refusal audited; reasons: %s", h.audit.dataReasons())
 		}
 	})
 
@@ -176,13 +176,13 @@ func TestDenyUIAppsRefusesAUIGatewaySession(t *testing.T) {
 		if rec := enter(h, h.owner, oidc.RoleSecurityAdmin); rec.Code != http.StatusForbidden {
 			t.Fatalf("security admin enter = %d, want 403: %s", rec.Code, rec.Body.String())
 		}
-		if !h.audit.hasDataValue("reason", string(authz.ReasonGovernanceProfile)) {
-			t.Errorf("no governance_profile refusal audited; reasons: %s", h.audit.dataReasons())
+		if !h.audit.hasDataValue("reason", string(authz.ReasonGovernanceUnit)) {
+			t.Errorf("no governance_unit refusal audited; reasons: %s", h.audit.dataReasons())
 		}
 	})
 
 	t.Run("a profile without the limit is not bound", func(t *testing.T) {
-		h := setup(t, types.GovernanceProfile{ID: uuid.New(), Name: "open"})
+		h := setup(t, types.GovernanceUnit{ID: uuid.New(), Name: "open"})
 		if rec := enter(h, h.owner, oidc.RoleUser); rec.Code != http.StatusFound {
 			t.Fatalf("enter = %d, want 302: %s", rec.Code, rec.Body.String())
 		}
@@ -191,20 +191,20 @@ func TestDenyUIAppsRefusesAUIGatewaySession(t *testing.T) {
 
 // #1392: deny_interactive at the terminal attach
 
-// profileListStore serves ListGovernanceProfiles over authzStore, whose own
+// profileListStore serves ListGovernanceUnits over authzStore, whose own
 // answer is always empty.
 type profileListStore struct {
 	*authzStore
-	profiles []types.GovernanceProfile
+	profiles []types.GovernanceUnit
 	err      error
 }
 
-func (s *profileListStore) ListGovernanceProfiles(context.Context) ([]types.GovernanceProfile, error) {
+func (s *profileListStore) ListGovernanceUnits(context.Context) ([]types.GovernanceUnit, error) {
 	return s.profiles, s.err
 }
 
 func TestDenyInteractiveRefusesTheTerminalAttach(t *testing.T) {
-	profile := types.GovernanceProfile{ID: uuid.New(), Name: "ci", Limits: types.GovernanceLimits{DenyInteractive: true}}
+	profile := types.GovernanceUnit{ID: uuid.New(), Name: "ci", Limits: types.GovernanceLimits{DenyInteractive: true}}
 	setup := func(t *testing.T, run types.AgentRun, st *profileListStore) (*Server, *harness) {
 		h := newHarness(t)
 		st.authzStore = newAuthzStore()
@@ -215,7 +215,7 @@ func TestDenyInteractiveRefusesTheTerminalAttach(t *testing.T) {
 	}
 	execRun := func(profileID *uuid.UUID, task string) types.AgentRun {
 		return types.AgentRun{ID: uuid.New(), CreatedBy: "alice", State: types.RunRunning, SandboxRef: "sbx-1",
-			Task: task, GovernanceProfileID: profileID}
+			Task: task, UnitID: profileID}
 	}
 	operatorOwned := func(r types.AgentRun) types.AgentRun {
 		r.OperatorOwned = true
@@ -231,16 +231,16 @@ func TestDenyInteractiveRefusesTheTerminalAttach(t *testing.T) {
 	refusedByProfile := func(w *httptest.ResponseRecorder) bool {
 		var body errorBody
 		_ = json.Unmarshal(w.Body.Bytes(), &body)
-		return w.Code == http.StatusForbidden && body.Reason == string(authz.ReasonGovernanceProfile)
+		return w.Code == http.StatusForbidden && body.Reason == string(authz.ReasonGovernanceUnit)
 	}
 
 	t.Run("the owner of an exec run under the profile is refused", func(t *testing.T) {
 		run := execRun(&profile.ID, "make test")
-		st := &profileListStore{profiles: []types.GovernanceProfile{profile}}
+		st := &profileListStore{profiles: []types.GovernanceUnit{profile}}
 		srv, h := setup(t, run, st)
 		w := attach(t, srv, st, run, "alice", oidc.RoleUser)
 		if !refusedByProfile(w) {
-			t.Fatalf("attach = %d %s, want 403 governance_profile", w.Code, w.Body.String())
+			t.Fatalf("attach = %d %s, want 403 governance_unit", w.Code, w.Body.String())
 		}
 		var body errorBody
 		_ = json.Unmarshal(w.Body.Bytes(), &body)
@@ -248,8 +248,8 @@ func TestDenyInteractiveRefusesTheTerminalAttach(t *testing.T) {
 		if body.Error != want {
 			t.Errorf("body = %q, want %q", body.Error, want)
 		}
-		if !recHasRefusal(h.audit, authz.ReasonGovernanceProfile, "runs.attach") {
-			t.Error("no authz.denied governance_profile row for runs.attach")
+		if !recHasRefusal(h.audit, authz.ReasonGovernanceUnit, "runs.attach") {
+			t.Error("no authz.denied governance_unit row for runs.attach")
 		}
 	})
 
@@ -258,10 +258,10 @@ func TestDenyInteractiveRefusesTheTerminalAttach(t *testing.T) {
 		// seeding security_admin pins the door's own super-admin test against a
 		// widened predicate rather than tracing the real mint.
 		run := execRun(&profile.ID, "make test")
-		st := &profileListStore{profiles: []types.GovernanceProfile{profile}}
+		st := &profileListStore{profiles: []types.GovernanceUnit{profile}}
 		srv, _ := setup(t, run, st)
 		if w := attach(t, srv, st, run, "alice", oidc.RoleSecurityAdmin); !refusedByProfile(w) {
-			t.Fatalf("attach = %d %s, want 403 governance_profile", w.Code, w.Body.String())
+			t.Fatalf("attach = %d %s, want 403 governance_unit", w.Code, w.Body.String())
 		}
 	})
 
@@ -278,16 +278,16 @@ func TestDenyInteractiveRefusesTheTerminalAttach(t *testing.T) {
 		name            string
 		run             types.AgentRun
 		principal, role string
-		profiles        []types.GovernanceProfile
+		profiles        []types.GovernanceUnit
 	}{
 		// An operator-owned run: the entry rule (#1476) keeps a super admin out of
 		// a person's run before this door is reached.
-		{"a super admin is not bound", operatorOwned(execRun(&profile.ID, "make test")), "root", oidc.RoleAdmin, []types.GovernanceProfile{profile}},
-		{"the harness sign-in run is exempt", execRun(&profile.ID, harnessLoginTask), "alice", oidc.RoleUser, []types.GovernanceProfile{profile}},
+		{"a super admin is not bound", operatorOwned(execRun(&profile.ID, "make test")), "root", oidc.RoleAdmin, []types.GovernanceUnit{profile}},
+		{"the harness sign-in run is exempt", execRun(&profile.ID, harnessLoginTask), "alice", oidc.RoleUser, []types.GovernanceUnit{profile}},
 		{"a run under no profile is not bound", execRun(nil, "make test"), "alice", oidc.RoleUser, nil},
 		{"a deleted profile binds nothing", execRun(&profile.ID, "make test"), "alice", oidc.RoleUser, nil},
 		{"a profile without the limit is not bound", execRun(&profile.ID, "make test"), "alice", oidc.RoleUser,
-			[]types.GovernanceProfile{{ID: profile.ID, Name: "ci"}}},
+			[]types.GovernanceUnit{{ID: profile.ID, Name: "ci"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st := &profileListStore{profiles: tc.profiles}
@@ -308,13 +308,13 @@ func TestDenyInteractiveRefusesTheTerminalAttach(t *testing.T) {
 // #1392: deny_interactive at the SSH gateway
 
 func TestDenyInteractiveRefusesSSH(t *testing.T) {
-	profile := types.GovernanceProfile{ID: uuid.New(), Name: "ci", Limits: types.GovernanceLimits{DenyInteractive: true}}
-	open := types.GovernanceProfile{ID: uuid.New(), Name: "open"}
+	profile := types.GovernanceUnit{ID: uuid.New(), Name: "ci", Limits: types.GovernanceLimits{DenyInteractive: true}}
+	open := types.GovernanceUnit{ID: uuid.New(), Name: "open"}
 	st := newSSHMemStore()
-	st.profiles = []types.GovernanceProfile{profile, open}
+	st.profiles = []types.GovernanceUnit{profile, open}
 	deniedRun, openRun := uuid.New(), uuid.New()
-	st.putRun(types.AgentRun{ID: deniedRun, CreatedBy: "alice@example.com", State: types.RunRunning, SandboxRef: "sbx-1", GovernanceProfileID: &profile.ID})
-	st.putRun(types.AgentRun{ID: openRun, CreatedBy: "alice@example.com", State: types.RunRunning, SandboxRef: "sbx-2", GovernanceProfileID: &open.ID})
+	st.putRun(types.AgentRun{ID: deniedRun, CreatedBy: "alice@example.com", State: types.RunRunning, SandboxRef: "sbx-1", UnitID: &profile.ID})
+	st.putRun(types.AgentRun{ID: openRun, CreatedBy: "alice@example.com", State: types.RunRunning, SandboxRef: "sbx-2", UnitID: &open.ID})
 
 	now := time.Now()
 	alicePriv, alicePub := mustSSHKeypair(t)
@@ -325,9 +325,9 @@ func TestDenyInteractiveRefusesSSH(t *testing.T) {
 		PublicKey: string(ssh.MarshalAuthorizedKey(adminPub)), Role: oidc.RoleAdmin, RoleCheckedAt: &now})
 	secPriv, secPub := mustSSHKeypair(t)
 	adminRun := uuid.New() // operator-owned: the entry rule keeps a super admin out of a person's run
-	st.putRun(types.AgentRun{ID: adminRun, CreatedBy: "alice@example.com", OperatorOwned: true, State: types.RunRunning, SandboxRef: "sbx-4", GovernanceProfileID: &profile.ID})
+	st.putRun(types.AgentRun{ID: adminRun, CreatedBy: "alice@example.com", OperatorOwned: true, State: types.RunRunning, SandboxRef: "sbx-4", UnitID: &profile.ID})
 	secRun := uuid.New() // its own run, so the audit row below can only be this key's
-	st.putRun(types.AgentRun{ID: secRun, CreatedBy: "sec@example.com", State: types.RunRunning, SandboxRef: "sbx-3", GovernanceProfileID: &profile.ID})
+	st.putRun(types.AgentRun{ID: secRun, CreatedBy: "sec@example.com", State: types.RunRunning, SandboxRef: "sbx-3", UnitID: &profile.ID})
 	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(secPub), Principal: "sec@example.com",
 		PublicKey: string(ssh.MarshalAuthorizedKey(secPub)), Role: oidc.RoleSecurityAdmin, RoleCheckedAt: &now})
 	h := newSSHTestHarness(t, st, &sshFakeRunner{})
@@ -379,12 +379,12 @@ func TestDenyInteractiveRefusesSSH(t *testing.T) {
 // cannot be read the dial is refused, not let through, and the audit row says
 // why.
 func TestDenyInteractiveSSHFailsClosedOnAProfileReadError(t *testing.T) {
-	profile := types.GovernanceProfile{ID: uuid.New(), Name: "ci", Limits: types.GovernanceLimits{DenyInteractive: true}}
+	profile := types.GovernanceUnit{ID: uuid.New(), Name: "ci", Limits: types.GovernanceLimits{DenyInteractive: true}}
 	st := newSSHMemStore()
-	st.profiles = []types.GovernanceProfile{profile}
+	st.profiles = []types.GovernanceUnit{profile}
 	st.profilesErr = errors.New("conn closed by peer")
 	runID := uuid.New()
-	st.putRun(types.AgentRun{ID: runID, CreatedBy: "alice@example.com", State: types.RunRunning, SandboxRef: "sbx-1", GovernanceProfileID: &profile.ID})
+	st.putRun(types.AgentRun{ID: runID, CreatedBy: "alice@example.com", State: types.RunRunning, SandboxRef: "sbx-1", UnitID: &profile.ID})
 	priv, pub := mustSSHKeypair(t)
 	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(pub), Principal: "alice@example.com",
 		PublicKey: string(ssh.MarshalAuthorizedKey(pub))})

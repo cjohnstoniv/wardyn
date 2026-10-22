@@ -175,7 +175,7 @@ func TestPG_EnsureApproval_RoutesByTheRunsLeafProfileAndEnqueuesEveryTier(t *tes
 	cfg, err := notify.Parse(`{"channels":[
 		{"id":"hook","type":"webhook","url":"http://127.0.0.1:9/x"},
 		{"id":"mail","type":"webhook","url":"http://127.0.0.1:9/y"}],
-		"routes":[{"kinds":["credential"],"profiles":["` + profileID.String() + `"],"tiers":[
+		"routes":[{"kinds":["credential"],"units":["` + profileID.String() + `"],"tiers":[
 			{"after":"0s","channels":["hook"]},
 			{"after":"45m","channels":["hook","mail"]}]}]}`)
 	if err != nil {
@@ -188,10 +188,10 @@ func TestPG_EnsureApproval_RoutesByTheRunsLeafProfileAndEnqueuesEveryTier(t *tes
 	profiled, plain := uuid.New(), uuid.New()
 	seedRun(ctx, t, pool, profiled)
 	seedRun(ctx, t, pool, plain)
-	if _, err := pool.Exec(ctx, `INSERT INTO governance_profiles (id, name, ceiling) VALUES ($1, $2, '{}')`, profileID, "routed-"+profileID.String()); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO governance_units (id, name, ceiling) VALUES ($1, $2, '{}')`, profileID, "routed-"+profileID.String()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET governance_profile_id = $1 WHERE id = $2`, profileID, profiled); err != nil {
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET unit_id = $1 WHERE id = $2`, profileID, profiled); err != nil {
 		t.Fatal(err)
 	}
 

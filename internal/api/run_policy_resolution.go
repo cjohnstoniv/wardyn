@@ -152,6 +152,12 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 		})
 		// The Background experience the person chose drops the idle stop.
 		source.knobs.step(ceiling.ownProvenance(), &spec, func() { clampWarnings = append(clampWarnings, boundBackgroundIdleStop(*req, &spec)...) })
+		// The Wardyn boundary, last, over whatever the steps above left (boundary_meet.go).
+		wallWarns, refusal := s.boundaryRunStep(ceiling, &spec, &source)
+		if refusal != nil {
+			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
+		}
+		clampWarnings = append(clampWarnings, wallWarns...)
 		if refusal := noRepositoriesResolvedRefusal(*req, spec); refusal != nil {
 			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
 		}
@@ -264,7 +270,7 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 		var warns []string
 		source.knobs.step(ceiling.provenance(), &spec, func() {
 			switch {
-			case policyID != nil && ceiling.Profile != nil:
+			case policyID != nil && ceiling.Unit != nil:
 				spec, warns, refusal = s.boundRunUserSpec(ctx, r, spec, ceiling, "invalid policy: ", dryRun)
 			default:
 				spec, warns, refusal = s.boundOverrideAdds(ctx, r, spec, edits, ceiling, dryRun)
@@ -286,6 +292,13 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 		storedWarns = append(storedWarns, s.boundUIApps(ctx, r, &spec, ceiling, dryRun)...)
 	})
 	source.knobs.step(ceiling.ownProvenance(), &spec, func() { storedWarns = append(storedWarns, boundBackgroundIdleStop(*req, &spec)...) })
+	// The Wardyn boundary, last: the one bound a stored row an unassigned member or an operator
+	// selects meets, and the outer limit on every other spec (boundary_meet.go).
+	wallWarns, refusal := s.boundaryRunStep(ceiling, &spec, &source)
+	if refusal != nil {
+		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
+	}
+	storedWarns = append(storedWarns, wallWarns...)
 	if refusal := noRepositoriesResolvedRefusal(*req, spec); refusal != nil {
 		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
 	}

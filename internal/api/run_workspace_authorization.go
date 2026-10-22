@@ -67,6 +67,16 @@ func (s *Server) workspaceProvidersRefusal(r *http.Request, target string, repos
 	return nil
 }
 
+// workspaceBaseImageNoBuilderMsg refuses a run whose image a workspace's base
+// image chose, on a control plane with no image builder. No kind is used as-is:
+// every run's work starts through agent-run, which only the wrap puts in the image
+// (FinalizeBase). It names what works instead.
+const workspaceBaseImageNoBuilderMsg = "The workspace's base image %s needs Wardyn's runner tools added by the image builder " +
+	"before a run can use it, and this control plane has no image builder wired, so no run was created. " +
+	"An admin wires the builder (Docker substrate only), or sets the workspace's base image to recommended. " +
+	"A command that needs no model then runs on the stock agent image " +
+	"(or the workspace's convention image where a builder is wired) and needs no model provider."
+
 func (s *Server) seedAuthorizedWorkspace(ctx context.Context, r *http.Request, spec *types.RunPolicySpec, req *createRunRequest) (workspaceSeed, *runRefusal) {
 	// First, before a single source is folded: authorize EVERY selection against
 	// the CALLER. Everything below this line reasons about host paths that are
@@ -93,6 +103,9 @@ func (s *Server) seedAuthorizedWorkspace(ctx context.Context, r *http.Request, s
 		return workspaceSeed{}, refusal
 	}
 	if msg, reason := s.validateImageBuildRequest(*req); msg != "" {
+		if reason == reasonImageBuilderUnavailable && seed.imageOpen {
+			msg = fmt.Sprintf(workspaceBaseImageNoBuilderMsg, req.Image)
+		}
 		return workspaceSeed{}, runError(http.StatusBadRequest, reason, msg)
 	}
 	if code, reason, err := s.validateWorkspaceSources(ctx, *spec, s.launchCarrierRule(r, seed.attached)); err != nil {

@@ -234,7 +234,7 @@ func (s *Server) stopLostSandbox(ctx context.Context, run types.AgentRun, now ti
 		}
 		return stopper.StopProxy(ctx, run.SandboxRef)
 	}
-	err := s.endSandbox(ctx, run)
+	_, err := s.endSandbox(ctx, run)
 	if leaser, ok := s.cfg.Store.(store.RunLeaser); ok && err == nil && run.LostReason == types.LostOutage && run.LostAt != nil {
 		// A failed write only leaves the run counted; the lease sweep re-asserts
 		// this stop every pass and retries it.

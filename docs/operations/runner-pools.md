@@ -126,6 +126,19 @@ A launch waits, stored `QUEUED`, when its pool is running its Runs at once or wh
 - One person may have `100` runs waiting for one pool; the next launch is refused `runner_pool_queue_full`. A revive into a pool at its limit, or with others waiting, is refused `runner_pool_full`.
 - A pool with no runner online that can take the run does not queue the launch. It is refused: `runner_offline` in a user pool, `runner_pool_no_eligible_member` in an organization pool.
 
+### Scheduled runs
+
+With [`WARDYN_SCHEDULED_RUNS`](../ENV.md#wardyn_scheduled_runs) set, a run can be scheduled to start once, later. Repeating schedules are not built.
+
+- `start_at` and `start_time_zone` on `POST /api/v1/runs` (`wardyn run --start-at 2026-10-21T02:00 --time-zone Europe/London`): a date and time in an IANA zone, or an RFC 3339 time.
+- It must be in the future and leave the run its wait before the 7-day cap: at most 6 days ahead for a background task, 6 days 23 hours for an interactive environment. Else `start_at_past`, or `start_at_too_far` naming the latest start; switched off, `scheduled_runs_off`.
+- A wall-clock time in a daylight-saving gap or overlap resolves to one instant; the `201` shows that resolved time with its zone.
+- The run waits `QUEUED` with the reason `scheduled` and its `queue.start_at`, holding no credential, until then.
+- At its time it joins its pool's line and starts like any waiting run, after the same checks. Its wait counts from then, held at most 7 days from the request.
+- At the start, Wardyn renews your model sign-in if it can; if it can't, the run waits for you, with the reason `owner_sign_in`, until you sign in again. Still waiting at its deadline, it ends `queue_sign_in_timeout`.
+- Two cases end the run at the start instead: a renewal the provider did not answer (`model_provider_unavailable`), and a stored sign-in Wardyn knows is spent (`model_credential`). For the second, sign in again and book a new run.
+- Cancel it like any waiting run. Switching scheduled runs off also binds runs already booked: at its time such a run ends `FAILED` `scheduled_runs_off`.
+
 ## Your own pools
 
 - You create, edit and delete your user pools, and nobody else sees or uses them; an admin lists them read-only with their owner.

@@ -300,7 +300,11 @@ type cancelCall struct {
 // by internal handlers that compare run ownership, not the not-found mapping).
 var errStoreNotFound = errors.New("store: not found")
 
+// fakeBroker is shared by every request a harness serves, and concurrent
+// creates each revoke their own run, so its writes hold mu (the real broker
+// keeps no state between calls).
 type fakeBroker struct {
+	mu       sync.Mutex
 	minted   broker.Minted
 	mintErr  error
 	revoked  []uuid.UUID
@@ -308,6 +312,8 @@ type fakeBroker struct {
 }
 
 func (b *fakeBroker) MintForGrant(_ context.Context, caller *identity.Claims, _ uuid.UUID) (broker.Minted, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.lastCall = caller
 	if b.mintErr != nil {
 		return broker.Minted{}, b.mintErr
@@ -316,6 +322,8 @@ func (b *fakeBroker) MintForGrant(_ context.Context, caller *identity.Claims, _ 
 }
 
 func (b *fakeBroker) RevokeRun(_ context.Context, runID uuid.UUID) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.revoked = append(b.revoked, runID)
 	return nil
 }

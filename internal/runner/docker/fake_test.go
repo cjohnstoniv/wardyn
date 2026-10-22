@@ -69,6 +69,13 @@ func (r fakePullResponse) Wait(context.Context) error {
 // container joined through NetworkConnect.
 const fakeJoinedNetIP = "172.30.0.9"
 
+// fakeExec records one ExecCreate.
+type fakeExec struct {
+	cmd     []string
+	user    string
+	running bool
+}
+
 // createdContainer records a ContainerCreate call for assertions.
 type createdContainer struct {
 	name string
@@ -152,6 +159,12 @@ type fakeDocker struct {
 	// runDir is the /run entry CopyFromContainer reports (nil: absent, as in
 	// an image that ships no /run).
 	runDir *tar.Header
+	// teamSeedVolume is what CopyFromContainer reports at teamDriveSeedTarget
+	// (nil: one empty directory, as a fresh volume reads).
+	teamSeedVolume []*tar.Header
+	// onCopyFrom, when set, runs at the start of every CopyFromContainer
+	// (outside the lock), so a test can hold concurrent readers at a barrier.
+	onCopyFrom func(id, path string)
 	// imageVolumes is each image's VOLUME declarations: merged into a created
 	// container's Config.Volumes and reported in its Mounts, as the daemon
 	// does when it backs each with an anonymous volume.
@@ -204,6 +217,10 @@ type fakeDocker struct {
 	execGone string
 
 	lastExecCmd []string // argv of the most recent exec
+	// execLog records every exec created, in order, with whether its container was running then.
+	execLog []fakeExec
+	// execCreateErr, when set, is every ExecCreate's answer for a container that exists.
+	execCreateErr error
 	// lastExecOpts records the full ExecCreateOptions of the most recent exec
 	// (lastExecCmd predates this and stays as the narrow, common-case reader),
 	// so a test can also assert TTY/Env were passed through correctly.
@@ -658,6 +675,12 @@ func (f *fakeDocker) ContainerStatPath(ctx context.Context, id string, opts clie
 
 func (f *fakeDocker) CopyFromContainer(ctx context.Context, id string, opts client.CopyFromContainerOptions) (client.CopyFromContainerResult, error) {
 	f.mu.Lock()
+	hook := f.onCopyFrom
+	f.mu.Unlock()
+	if hook != nil {
+		hook(id, opts.SourcePath)
+	}
+	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.containers[id] == nil {
 		return client.CopyFromContainerResult{}, fakeNotFound{msg: "no such container: " + id}
@@ -673,6 +696,14 @@ func (f *fakeDocker) CopyFromContainer(ctx context.Context, id string, opts clie
 		_ = tw.WriteHeader(hdr)
 	case opts.SourcePath == "/run" && f.runDir != nil:
 		_ = tw.WriteHeader(f.runDir)
+	case opts.SourcePath == teamDriveSeedTarget:
+		hdrs := f.teamSeedVolume
+		if hdrs == nil {
+			hdrs = []*tar.Header{{Name: "wardyn-drive-seed/", Typeflag: tar.TypeDir, Mode: 0o755}}
+		}
+		for _, h := range hdrs {
+			_ = tw.WriteHeader(h)
+		}
 	case opts.SourcePath == "/etc/passwd" && f.passwd != "":
 		_ = tw.WriteHeader(&tar.Header{Name: "passwd", Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(f.passwd))})
 		_, _ = tw.Write([]byte(f.passwd))
@@ -957,9 +988,14 @@ func (f *fakeDocker) ContainerWait(ctx context.Context, id string, _ client.Cont
 func (f *fakeDocker) ExecCreate(ctx context.Context, id string, opts client.ExecCreateOptions) (client.ExecCreateResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if c := f.containers[id]; c == nil || c.removed {
+	c := f.containers[id]
+	if c == nil || c.removed {
 		return client.ExecCreateResult{}, fakeNotFound{msg: "no such container: " + id}
 	}
+	if f.execCreateErr != nil {
+		return client.ExecCreateResult{}, f.execCreateErr
+	}
+	f.execLog = append(f.execLog, fakeExec{cmd: opts.Cmd, user: opts.User, running: c.state != nil && c.state.Running})
 	execID := "exec-" + id
 	// stash last exec opts for assertion
 	f.lastExecCmd = opts.Cmd

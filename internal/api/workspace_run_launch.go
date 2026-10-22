@@ -390,10 +390,10 @@ func operatorStepGovernance(ceiling governanceCeiling) stepRunGovernance {
 // itself so the handler keeps answering 500 for it — an outage must not read as
 // a policy decision.
 func (s *Server) stepRunCeilingLimits(ctx context.Context, actor string, gov stepRunGovernance) error {
-	if gov.ceiling.Profile == nil {
+	if gov.ceiling.Unit == nil {
 		return nil
 	}
-	name := gov.ceiling.Profile.Name
+	name := gov.ceiling.Unit.Name
 	ceiling := gov.ceiling
 	// gov.interactive, not requestIsInteractive: whether a step lane opens an
 	// attachable session is STRUCTURAL (a record session always does, a scan
@@ -623,7 +623,10 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	run.Interactive = true
 	run.ModelProviderID = mp.provider.ID
 	// The session's policy, built one function over (recordSessionPolicy).
-	policy := s.recordSessionPolicy(ws, cc, confined, ceiling.Spec.AllowedDomains)
+	policy, merr := boundaryRecordPolicy(ceiling, s.recordSessionPolicy(ws, cc, confined, ceiling.Spec.AllowedDomains))
+	if merr != nil {
+		return types.AgentRun{}, false, abort(merr)
+	}
 	run.AutoStopAfterSec = policy.AutoStopAfterSec // reaper reads the run row
 	cloneURLs, ephemeralDirs, werr := wireWorkspaceSource(&run, &policy, ws)
 	if werr != nil {

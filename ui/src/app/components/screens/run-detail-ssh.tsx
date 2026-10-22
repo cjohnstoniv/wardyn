@@ -11,7 +11,7 @@
 // operator would otherwise see a live terminal in the browser with nothing
 // anywhere saying a real terminal could reach the same session.
 //
-// `wardyn run attach <run-id>` needs no gateway and no operator configuration: it
+// `wardyn attach <run-id>` needs no gateway and no operator configuration: it
 // dials the same WebSocket this page's terminal uses, lands in the SAME tmux
 // session, and works on every deployment. Verified against a live run — a file
 // written from one attach was read back by a second, and by the browser
@@ -217,7 +217,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
   // the CLI's bearer token at whatever else owns the host root.
   const wardynURL = typeof window !== "undefined" ? window.location.origin + basePath() : "";
   const cliEnv = wardynURL && wardynURL !== "http://localhost:8080" ? `WARDYN_URL=${wardynURL} ` : "";
-  const cliCommand = `${cliEnv}wardyn run attach ${run.id}`;
+  const cliCommand = `${cliEnv}wardyn attach ${run.id}`;
   const syncLane = sshOn && run.placement !== "local" && !!run.agent_exec_id;
 
   return (

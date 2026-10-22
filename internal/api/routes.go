@@ -308,6 +308,7 @@ func (s *Server) routes() chi.Router {
 			// its own.
 			r.Get("/me/scm-access", s.handleGetSCMAccess) // #386, scmaccess.go: /me/ssh-keys' self-service shape
 			s.mountADOOwnPATRoutes(r)                     // ado_own_pat.go: the caller's own Azure DevOps token
+			s.mountGitHubOwnPATRoutes(r)                  // gh_own_pat.go: the caller's own GitHub token
 			r.Get("/me/ssh-keys", s.handleListSSHKeys)
 			r.Post("/me/ssh-keys", s.handleAddSSHKey)
 			r.Delete("/me/ssh-keys/{fingerprint}", s.handleDeleteSSHKey)
@@ -601,7 +602,7 @@ func (s *Server) routes() chi.Router {
 			// short-circuit keys on isOperator, so a security admin's own runs
 			// stay bound by whichever profile (or DefaultPolicy) applies to
 			// them. They author the ceiling; they do not stand outside it.
-			// The seventh is POST /governance/preview, the dry run: it takes
+			// The seventh is POST /governance/check, the dry run: it takes
 			// claims and answers with the profile THE RESOLVER picks, so the
 			// console never re-implements the precedence rule in order to show
 			// it.
@@ -665,6 +666,7 @@ func (s *Server) routes() chi.Router {
 		// device routes, each in its own group — see mountDeviceRoutes.
 		s.mountDeviceRoutes(r)
 		s.mountRunnerRegistrationRoutes(r)
+		s.mountCLISignInRoutes(r) // wardyn login: anonymous request, token and refresh; the approve page and Signed-in CLIs
 		s.mountRunnerStreamRoutes(r)
 		s.mountDelegationRoutes(r) // a portal acting for a person (delegation*.go, #1142)
 		s.mountBrandingRoutes(r)   // console branding: anonymous reads, SUPER writes (branding.go)
@@ -820,6 +822,9 @@ func (s *Server) mountPermissionRoutes(securityOps chi.Router) {
 	securityOps.Get("/permissions/explain", s.handleExplainCapabilities)
 	securityOps.Get("/governance/egress-baseline", s.handleGetEgressBaseline)
 	securityOps.Put("/governance/egress-baseline", s.handlePutEgressBaseline)
+	securityOps.Get("/governance/boundary", s.handleGetBoundary)
+	securityOps.Put("/governance/boundary", s.handlePutBoundary)
+	securityOps.Post("/governance/dry-run", s.handleBoundaryDryRun)
 	securityOps.Get("/governance/credential-delivery", s.handleGetCredentialDelivery)
 	securityOps.Put("/governance/credential-delivery", s.handlePutCredentialDelivery)
 }

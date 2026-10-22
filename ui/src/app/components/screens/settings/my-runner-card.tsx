@@ -100,6 +100,7 @@ function ClaimedRow({ r, pools, onRevoke, onEditLimits }: { r: RunnerView; pools
         <KindChip kind="self_hosted" />
         {offline && <span className="text-meta text-muted-foreground">{r.last_seen_at ? MY_RUNNER.LAST_SEEN(relativeTime(r.last_seen_at)) : RUNNER.NEVER_CONNECTED}</span>}
       </div>
+      {offline && !r.last_seen_at && <OfflineNote neverConnected />}
       {r.version && <p className="text-meta text-muted-foreground">{`${RUNNER.VERSION} ${r.version}`}</p>}
       <div>
         <MachineSec r={r} />
@@ -107,7 +108,7 @@ function ClaimedRow({ r, pools, onRevoke, onEditLimits }: { r: RunnerView; pools
           <Sec label={RES.RESOURCES} meta={MY_POOLS.LIMITS_YOU_SET} data-resources>
             <RunsLine max={r.limits.runs_at_once} active={r.usage.in_use.runs} />
             <ResourceTable view={res} />
-            {offline && <OfflineNote />}
+            {offline && r.last_seen_at && <OfflineNote />}
             {r.usage.reported && (
               <Hint data-reported>
                 {RUNNER_V6.REPORTS_YOUR(amountsText(r.usage.reported))} <span>{RUNNER.REPORTED}</span>

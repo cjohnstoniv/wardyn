@@ -129,6 +129,7 @@ var queryIDMatrix = map[string]queryIDRoute{
 // function is NOT covered here — it needs its own queryIDMatrix row.
 var queryParamNotAnID = map[string]string{
 	"limit":                     "page window (parseListPage)",
+	"agent":                     "GET /runs/{id}/output: a harness id whose lines to keep from the run's own output; the run is the path's, already authorised, and the id names no entity",
 	"purpose":                   "POST /runs/{id}/attach/ticket: ui marks a UI-app ticket, which skips the terminal session cap; the run is the path's, already authorised, and the word names no entity",
 	"runner_pool_id":            "GET /me/drives: an organisation runner pool the caller's own drive catalogue is checked against; a pool the caller may not use answers exactly as one that does not exist (pool_checked false), and no principal's entity is selected",
 	"run_type":                  "GET /runner-pools: background or interactive, the kind of run the caller's own pool list is judged for; it names no entity",
@@ -136,6 +137,7 @@ var queryParamNotAnID = map[string]string{
 	"org":                       "DELETE /me/scm/azure-devops/token: the address of Azure DevOps rows on which the caller's own token is removed (adoOwnPATRowFor, and every row on that address for DELETE); it removes the caller's own token only",
 	"organisation":              "the Azure DevOps organisation an admin-only org check runs against; it must be one the row itself serves (rowServesOrganisation)",
 	"offset":                    "page window (parseListPage)",
+	"survey":                    "GET /me/runners/{id}/folders: 1 asks the caller's own runner to count what a run would get from the folder; it names no entity",
 	"cursor":                    "GET /people (security tier): the opaque last-principal marker of the previous page of a listing that tier already reads whole; it picks where the page starts and widens nothing",
 	"uid":                       "GET /model-providers-entra/signin: the azure_foundry provider row the sign-in is for, a deployment record and not a principal's entity; the capture is bound to the caller's own session subject and stored in their own namespace whatever the row, and a uid that is not an azure_foundry row is refused",
 	"component":                 "GET /components-entra/signin: the organisation's Azure CLI component the sign-in is for, a deployment record and not a principal's entity; a row the caller may not attach answers as the run doors answer it, and the capture is bound to the caller's own session subject and stored in their own namespace",
@@ -163,6 +165,8 @@ var queryParamNotAnID = map[string]string{
 	"rows":                      "terminal geometry",
 	"tail":                      "byte count of a run's output tail, read after the path's run is authorized",
 	"cols":                      "terminal geometry",
+	"transport":                 "GET /runs/{id}/attach: relay or local, where the terminal of the path's already-authorized run is served; it names no entity",
+	"local_nonce":               "GET /runs/{id}/attach: a bearer-like single-use secret, the nonce the run's own runner issued on its local socket, passed back to that runner only after admission; it names no entity and is never logged or audited (TestAttachLocalNonceNeverLoggedOrAudited)",
 	"type":                      "directory search kind (security tier route)",
 	"q":                         "free-text search over an already-scoped listing: directory search (security tier route) and #1197's run list (every tier)",
 	"ticket":                    "single-use attach ticket: the credential itself, redeemed against the run it was minted for",

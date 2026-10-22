@@ -1,6 +1,6 @@
 # SSH gateway
 
-`wardynd` can serve native SSH directly into a running sandbox's tmux session — the same one the browser terminal (run detail's "Live terminal" / `wardyn run attach`) shows.
+`wardynd` can serve native SSH directly into a running sandbox's tmux session — the same one the browser terminal (run detail's "Live terminal" / `wardyn attach`) shows.
 
 - It authenticates registered **public keys only** (no passwords) and is **owner-only**: a human may SSH into a run they created.
 - A super admin's key reaches a run only when it has no personal owner (an operator-owned service or local run); it opens no shell in a person's run (`run_owner_only`, #1476). That admin carve-out is a bounded-stale stamp, not a live role check; see [Bounds](#bounds) for the ceiling that comes with it.
@@ -168,7 +168,7 @@ ssh <run-id>@<advertise-host> -p <port>
 - `wardyn run ssh --print <run-id>` emits that command
   instead of running it (for a script or a demo) and `--config` emits the
   `ssh_config` block below — both byte-identical to what the card renders.
-- It is a separate command from `wardyn run attach`, deliberately: `attach` mints a
+- It is a separate command from `wardyn attach`, deliberately: `attach` mints a
   single-use ticket with your configured token (`WARDYN_TOKEN` or
   `WARDYN_ADMIN_TOKEN`) and carries it over a WebSocket.
 - It is the same door the
@@ -208,6 +208,36 @@ Host wardyn-<short-id>
   `ssh-keygen`'s own presentation, nothing custom.
 - A stopped or SSH-disabled run shows no card at all — there is nothing to
   connect to, and no "try anyway" affordance that would just fail.
+
+### Exec, forward and editor from the CLI
+
+- `wardyn run exec <run-id> -- <command> [args...]` runs one command over the gateway and exits with its status.
+  - Each word after `--` reaches the sandbox as one argument.
+  - For a pipe or a redirect, run a shell: `wardyn run exec <run-id> -- sh -c 'make test | tail'`.
+- `wardyn run forward <run-id> [<local-port>:]<sandbox-port>...` is `ssh -L` to the sandbox's loopback ([section 4](#4--l-port-forwarding)), bound to `127.0.0.1` here.
+- `wardyn run editor <run-id>` writes the run's `Host` block to `~/.wardyn/ssh_config`, asks before adding `Include ~/.wardyn/ssh_config` at the top of `~/.ssh/config`, then opens VS Code Remote-SSH.
+  - `--dir` picks the sandbox folder (default `/home/agent/work`).
+  - The setting in [VS Code Remote-SSH](#5-vs-code-remote-ssh) is still required.
+- All three need the gateway on and a key on your account.
+  - With the gateway off they stop with one line saying the operator has not turned SSH on.
+  - With no registered key they stop with one line naming `wardyn ssh-key ensure`. They never create a key.
+  - An advertised ProxyCommand runs only with `--advertised-proxy`, as for `wardyn run ssh`.
+  - `editor` writes that ProxyCommand into `~/.wardyn/ssh_config`, so VS Code and any `ssh wardyn-<short-id>` run it on your computer on every connection until you remove the block.
+- When `~/.wardyn/id_ed25519` (made by `wardyn ssh-key ensure`) exists, `wardyn run ssh`, `exec` and `forward` offer it with `-o IdentitiesOnly=yes` and `editor` writes it into the `Host` block; otherwise ssh offers what your agent holds. `--print` and `--config` never include it.
+
+### Without SSH: `wardyn attach`
+
+`wardyn attach <run-id>` opens the same terminal with no key, no gateway and no ProxyCommand.
+
+- **The path.** One stderr line names it. It is `Attached on this computer (runner <name>)` when the run is on your
+  own runner here and the organisation allows local attach (`WARDYN_ATTACH_LOCAL`, off by default). Otherwise it is
+  `Attached through the organisation (<host>)`.
+- **One admission.** Both paths use the same ticket and the same checks. A refusal is shown as the server gives it,
+  and the CLI never retries it the other way.
+- **`--via auto|local|relay`.** `auto`, the default, goes through the organisation when local is not possible.
+  `local` fails instead. On Windows `local` is refused, because the runner lives in WSL2.
+- **`--take-over`** takes the terminal from whoever holds it, audited as `session.takeover`.
+- Ctrl-C goes to the sandbox; close the window to detach.
 
 ### From a cluster
 
@@ -369,7 +399,7 @@ extraObjects:
   tunnel, so the fingerprint on the card is still the one to verify.
 - **Audit source IPs become the listener's.** The gateway sees the ingress
   gateway pod's address, so `ssh.*` audit rows record that, not the person's.
-- **Nothing else needs it.** The browser terminal and `wardyn run attach`
+- **Nothing else needs it.** The browser terminal and `wardyn attach`
   already ride the console's own 443.
 
 ## 3. sftp
@@ -471,6 +501,17 @@ ssh -L 8080:127.0.0.1:3000 <run-id>@<advertise-host> -p <port>
   tunnel this gateway already provides, which needs nothing from the sandbox's
   egress policy and works identically on every deployment regardless of what
   that policy allows.
+
+### Editors over the gateway
+
+| Editor | What it needs from the gateway | Tested |
+|---|---|---|
+| VS Code Remote-SSH | Exec channels, an sftp transfer of the server it downloaded, and `-L` to the server's port | The gateway side, on one connection ([`sshgateway_remote_ssh_test.go`](../internal/api/sshgateway_remote_ssh_test.go)) |
+| JetBrains Gateway | Exec channels, a file transfer for its backend, and `-L` to the backend's port | Not yet tested |
+| Mutagen | Exec channels and a file transfer for its agent | Not yet tested |
+
+- A folder on your computer can also reach a remote sandbox with no editor and no `wardyn sync`: see
+  [hybrid-laptops.md](operations/hybrid-laptops.md#a-folder-on-your-computer-for-a-remote-sandbox).
 
 ## 6. Other tools over SSH (scripted access)
 

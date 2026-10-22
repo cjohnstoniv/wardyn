@@ -39,7 +39,7 @@ const (
 	providers400EntraHrs  = "git[%d].entra.pat_max_hours: Enter 1 to %d hours."
 	providers400EntraDays = "git[%d].entra.pat_max_days: Enter 1 to %d days."
 	providers400EntraMode = "git[%d].entra.token_mode: %q is not a token mode — want one of: %s"
-	providers400EntraRes  = "git[%d].entra.runner_resident_sandbox: a token goes into the sandbox only from the runner's keystore — turn on runner_resident first"
+	providers400EntraRes  = "git[%d].entra.runner_resident_sandbox: it has no effect in this version, and it needs runner_resident turned on first"
 	providers400EntraOwnR = "git[%d].entra.runner_resident: an own_pat row's token is the person's own — only a token Wardyn creates can be held on a runner"
 	providers400Source    = "git[%d].credential_source: %q is not a credential source — want one of: %s"
 	providers400PerUser   = "git[%d].credential_source: per_user needs the %q lane — no other git lane authorizes a person as themselves"
@@ -71,9 +71,11 @@ func validateProviderEntra(i int, row types.GitProvider) error {
 			return fmt.Errorf(providers400Source, i, string(src),
 				strings.Join(types.ClosedCredentialSourceList(), ", "))
 		}
-		// A Server row has no Entra sign-in: its person-owned lane is pat.
-		adoServerPAT := row.Kind == types.GitProviderAzureDevOps && slices.Contains(row.Lanes, types.GitLanePAT)
-		if src == types.CredentialSourcePerUser && !hasLane && !adoServerPAT {
+		// A Server row and a GitHub row have no Entra sign-in: their person-owned
+		// lane is pat (validateGitHubOwnTokenRow holds a GitHub one to its shape).
+		ownPAT := (row.Kind == types.GitProviderAzureDevOps || row.Kind == types.GitProviderGitHub) &&
+			slices.Contains(row.Lanes, types.GitLanePAT)
+		if src == types.CredentialSourcePerUser && !hasLane && !ownPAT {
 			return fmt.Errorf(providers400PerUser, i, string(types.GitLaneEntra))
 		}
 	}

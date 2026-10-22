@@ -4,11 +4,13 @@
 #
 # build-runner-pkg.sh — build the macOS installer package for the laptop runner (wardyn-runnerd).
 #
-#   scripts/build-runner-pkg.sh --version X.Y.Z[-rc.N] --arm64 <bin> --amd64 <bin> --out <file.pkg>
+#   scripts/build-runner-pkg.sh --version X.Y.Z[-rc.N] --arm64 <runnerd> --amd64 <runnerd> \
+#                               --cli-arm64 <wardyn> --cli-amd64 <wardyn> --out <file.pkg>
 #
 # Needs macOS (lipo, pkgbuild, productbuild; security, codesign, productsign and xcrun when signing),
 # so the release workflow runs it on a macOS runner. The package installs
 #   /usr/local/wardyn/bin/wardyn-runnerd           universal binary (+ /usr/local/bin symlink, by postinstall)
+#   /usr/local/wardyn/bin/wardyn                   the CLI, universal, signed like the runner (+ /usr/local/bin symlink)
 #   /usr/local/wardyn/bin/runnerd-managed-start    what the LaunchAgent runs
 #   /Library/LaunchAgents/com.wardyn.runnerd.managed.plist
 #   /usr/local/wardyn/share/wardyn-runnerd.mobileconfig   the managed-preferences profile template
@@ -28,19 +30,21 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC="${REPO_ROOT}/deploy/runner/macos"
-VERSION="" ARM64="" AMD64="" OUT=""
+VERSION="" ARM64="" AMD64="" CLI_ARM64="" CLI_AMD64="" OUT=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --version) VERSION="${2:?}"; shift 2 ;;
     --arm64) ARM64="${2:?}"; shift 2 ;;
     --amd64) AMD64="${2:?}"; shift 2 ;;
+    --cli-arm64) CLI_ARM64="${2:?}"; shift 2 ;;
+    --cli-amd64) CLI_AMD64="${2:?}"; shift 2 ;;
     --out) OUT="${2:?}"; shift 2 ;;
-    *) echo "usage: $0 --version X.Y.Z[-rc.N] --arm64 <bin> --amd64 <bin> --out <file.pkg>" >&2; exit 2 ;;
+    *) echo "usage: $0 --version X.Y.Z[-rc.N] --arm64 <runnerd> --amd64 <runnerd> --cli-arm64 <wardyn> --cli-amd64 <wardyn> --out <file.pkg>" >&2; exit 2 ;;
   esac
 done
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]] || { echo "build-runner-pkg: --version must be X.Y.Z or X.Y.Z-rc.N" >&2; exit 2; }
-if [ ! -f "$ARM64" ] || [ ! -f "$AMD64" ] || [ -z "$OUT" ]; then
-  echo "build-runner-pkg: --arm64, --amd64 (existing files) and --out are required" >&2
+if [ ! -f "$ARM64" ] || [ ! -f "$AMD64" ] || [ ! -f "$CLI_ARM64" ] || [ ! -f "$CLI_AMD64" ] || [ -z "$OUT" ]; then
+  echo "build-runner-pkg: --arm64, --amd64, --cli-arm64, --cli-amd64 (existing files) and --out are required" >&2
   exit 2
 fi
 PKG_VERSION="${VERSION%%-*}"   # pkgbuild versions are dotted numbers
@@ -80,10 +84,11 @@ ROOT="${WORK}/root"
 BIN="${ROOT}/usr/local/wardyn/bin"
 mkdir -p "$BIN" "${ROOT}/usr/local/wardyn/share" "${ROOT}/Library/LaunchAgents"
 lipo -create -output "${BIN}/wardyn-runnerd" "$ARM64" "$AMD64"
+lipo -create -output "${BIN}/wardyn" "$CLI_ARM64" "$CLI_AMD64"
 install -m 0755 "${SRC}/runnerd-managed-start.sh" "${BIN}/runnerd-managed-start"
 install -m 0644 "${SRC}/com.wardyn.runnerd.managed.plist" "${ROOT}/Library/LaunchAgents/"
 install -m 0644 "${SRC}/wardyn-runnerd.mobileconfig" "${ROOT}/usr/local/wardyn/share/"
-chmod 0755 "${BIN}/wardyn-runnerd"
+chmod 0755 "${BIN}/wardyn-runnerd" "${BIN}/wardyn"
 # The licence and notices travel with the binary, in the images' /usr/share/doc/wardyn/ layout.
 DOC="${ROOT}/usr/local/wardyn/share/doc"
 mkdir -p "${DOC}/licenses"
@@ -93,9 +98,11 @@ cp -R "${REPO_ROOT}/licenses/texts/." "${DOC}/licenses/"
 BIN_SIGNED=0 PKG_SIGNED=0
 if secret_set "${APP_SECRETS[@]}"; then
   import_p12 APPLE_DEVELOPER_ID_APPLICATION_P12_BASE64 APPLE_DEVELOPER_ID_APPLICATION_P12_PASSWORD
-  codesign --force --options runtime --timestamp --sign "$APPLE_DEVELOPER_ID_APPLICATION_IDENTITY" "${BIN}/wardyn-runnerd"
+  for b in wardyn-runnerd wardyn; do
+    codesign --force --options runtime --timestamp --sign "$APPLE_DEVELOPER_ID_APPLICATION_IDENTITY" "${BIN}/${b}"
+  done
   BIN_SIGNED=1
-  echo "build-runner-pkg: signed the wardyn-runnerd binary"
+  echo "build-runner-pkg: signed the wardyn-runnerd and wardyn binaries"
 else
   echo "build-runner-pkg: binary signing skipped: APPLE_DEVELOPER_ID_APPLICATION_* secrets are not all set"
 fi

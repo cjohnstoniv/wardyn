@@ -244,6 +244,8 @@ var routeMatrix = map[string]classifiedRoute{
 	"PUT /api/v1/runners/settings":       {class: classAdmin},
 	"GET /api/v1/me/runners":             {class: classMember},
 	"GET /api/v1/me/runners/{id}":        {class: classMember},
+	// A folder-only runner's folders (run_computer_folder.go), the caller's own runner only.
+	"GET /api/v1/me/runners/{id}/folders": {class: classMember},
 	// The owner's change of their own runner's runs at once (runner_limits.go), scoped to the caller's
 	// own runners inside the handler.
 	"PUT /api/v1/me/runners/{id}": {class: classMember},
@@ -301,6 +303,8 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/components":         {class: classAdmin},
 	"PUT /api/v1/components/{id}":    {class: classAdmin},
 	"DELETE /api/v1/components/{id}": {class: classAdmin},
+	// The kubectl row's service-account token, written into the operator namespace.
+	"PUT /api/v1/components/{id}/kubectl-token": {class: classAdmin},
 
 	// The stored-policy WRITES stay SUPER even though /governance's profile
 	// authoring is classSecurity (§B, decided): a stored run_policy is
@@ -502,6 +506,9 @@ var routeMatrix = map[string]classifiedRoute{
 	// The egress baseline lowers grades, so it is a governance write: security tier, four-eyes covered.
 	"GET /api/v1/governance/egress-baseline": {class: classSecurity},
 	"PUT /api/v1/governance/egress-baseline": {class: classSecurity},
+	"GET /api/v1/governance/boundary":        {class: classSecurity},
+	"PUT /api/v1/governance/boundary":        {class: classSecurity},
+	"POST /api/v1/governance/dry-run":        {class: classSecurity},
 
 	"GET /api/v1/governance/credential-delivery": {class: classSecurity},
 	"PUT /api/v1/governance/credential-delivery": {class: classSecurity},
@@ -537,9 +544,9 @@ var routeMatrix = map[string]classifiedRoute{
 	// self-exemption — effectiveCeiling short-circuits on isOperator, so a
 	// security admin's own runs stay bound by whichever profile applies to them.
 	//
-	// The seventh, POST /governance/preview, was BORN on this tier. It is a
+	// The seventh, POST /governance/check, was BORN on this tier. It is a
 	// READ that answers "which profile would bind these claims" by running
-	// Store.ResolveGovernanceProfile — the enforcement path's own call — and it
+	// Store.ResolveGovernanceUnit — the enforcement path's own call — and it
 	// is classSecurity for the reason the whole family is: the answer discloses
 	// how the org's ceilings are assigned. A member is refused here and reads
 	// their own ceiling from /policies/default instead, exactly as above.
@@ -547,12 +554,12 @@ var routeMatrix = map[string]classifiedRoute{
 	// The two profile writes probe with a COMPOSED body (an overlay on the deployment default): what
 	// the security tier admits is the composition members too, and a member is refused it by the
 	// tier before the body is read.
-	"POST /api/v1/governance/profiles":           {class: classSecurity, body: composedProfileProbeBody},
-	"PUT /api/v1/governance/profiles/{id}":       {class: classSecurity, body: composedProfileProbeBody},
-	"DELETE /api/v1/governance/profiles/{id}":    {class: classSecurity},
-	"POST /api/v1/governance/assignments":        {class: classSecurity},
-	"DELETE /api/v1/governance/assignments/{id}": {class: classSecurity},
-	"POST /api/v1/governance/preview":            {class: classSecurity},
+	"POST /api/v1/governance/units":              {class: classSecurity, body: composedProfileProbeBody},
+	"PUT /api/v1/governance/units/{id}":          {class: classSecurity, body: composedProfileProbeBody},
+	"DELETE /api/v1/governance/units/{id}":       {class: classSecurity},
+	"POST /api/v1/governance/memberships":        {class: classSecurity},
+	"DELETE /api/v1/governance/memberships/{id}": {class: classSecurity},
+	"POST /api/v1/governance/check":              {class: classSecurity},
 	// The four-eyes routes (gov4-b1): the queue, one change, and the two decisions. All security tier
 	// at the door; which kinds of change a caller may see or decide is the approver table's, inside
 	// the handler (governance_changes_pg_test.go).
@@ -648,6 +655,10 @@ var routeMatrix = map[string]classifiedRoute{
 	// The caller's own Azure DevOps token (ado_own_pat.go): own namespace only.
 	"PUT /api/v1/me/scm/azure-devops/token":    {class: classMember},
 	"DELETE /api/v1/me/scm/azure-devops/token": {class: classMember},
+	// The caller's own GitHub token (gh_own_pat.go): own namespace only.
+	"GET /api/v1/me/scm/github/tokens":   {class: classMember},
+	"PUT /api/v1/me/scm/github/token":    {class: classMember},
+	"DELETE /api/v1/me/scm/github/token": {class: classMember},
 	// The per-user Azure DevOps sign-in (ado_entra.go): classMember, and for
 	// the same reason as /me/ssh-keys above — a member signs in FOR
 	// THEMSELVES. Both doors refuse a caller with no identity provider
@@ -1073,6 +1084,8 @@ func newAuthzMatrixServer(t *testing.T, shape ...func(*Config)) (*Server, *authz
 	cfg.RecordingStore = rs
 	cfg.SessionRevocations = fakeAuthzSessionRevocations{}
 	cfg.SCIM = matrixSCIMConfig()
+	// On, so a folder-only runner's folders answer on ownership rather than on the deployment's gate.
+	cfg.ComputerFolders = true
 	ast.siteCfg = authzMatrixSiteConfig()
 	for _, f := range shape {
 		f(&cfg)
@@ -1798,8 +1811,10 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// limits write on the security tier (= 88 SEC).
 	// 0.9.3 K4 adds an organization runner to an organization pool and takes it out, on the SUPER tier (= 72 SUPER).
 	// 0.9.3 adds a held Kubernetes run's node record, POST /runs/{id}/node-record, on the security tier (= 89 SEC).
-	if sec != 89 || super != 72 {
-		t.Errorf("tier split = %d security / %d admin, want 89 / 72 (the node record + the 2 organization pool runner routes + the 4 organization runner routes + the SUPER list and delete of people's drives + the 2 /remote-runners reads and the people-policy pair + the 2 /governance/credential-delivery routes + the token move + the 5 service-identity routes + the 4 invitation routes + the runner revoke + the runners list, detail, token list and revoke and switch read + the 2 /governance/egress-baseline routes + the 3 /key-domains routes + §B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke + the fleet capacity read + GET /people + the audit retention read and drop + the person erasure + the 4 /governance/changes routes + GET /approval-notify/status + the SCIM status read, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes, MINUS #548's retired paste and disconnect, PLUS the identity unbind, runner registration token mint, the runners switch write, 0.9's 6 runner-pool writes and the 3 template-group-admins routes and the 3 /shared-secrets routes and the remote-hosted runner rename)", sec, super)
+	// 0.10 adds the Wardyn boundary read, write and dry run on the security tier (= 92 SEC).
+	// 0.10 FEAT-1KUBE adds PUT /components/{id}/kubectl-token beside the component writes (= 73 SUPER).
+	if sec != 92 || super != 73 {
+		t.Errorf("tier split = %d security / %d admin, want 92 / 73 (the 3 Wardyn boundary routes + the node record + the 2 organization pool runner routes + the 4 organization runner routes + the SUPER list and delete of people's drives + the 2 /remote-runners reads and the people-policy pair + the 2 /governance/credential-delivery routes + the token move + the 5 service-identity routes + the 4 invitation routes + the runner revoke + the runners list, detail, token list and revoke and switch read + the 2 /governance/egress-baseline routes + the 3 /key-domains routes + §B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke + the fleet capacity read + GET /people + the audit retention read and drop + the person erasure + the 4 /governance/changes routes + GET /approval-notify/status + the SCIM status read, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes, MINUS #548's retired paste and disconnect, PLUS the identity unbind, runner registration token mint, the runners switch write, 0.9's 6 runner-pool writes and the 3 template-group-admins routes and the 3 /shared-secrets routes and the remote-hosted runner rename)", sec, super)
 	}
 }
 
@@ -2465,32 +2480,32 @@ func (s *authzStore) DeleteLaunchPreset(context.Context, string) (types.LaunchPr
 // absent-row doctrine behaves byte-for-byte as it did before this feature
 // existed. So every route this matrix walks resolves as it always has, and the
 // only thing under test on the /governance rows is the authorization boundary.
-// ResolveGovernanceProfile returns ErrNotFound for the same reason — "no
+// ResolveGovernanceUnit returns ErrNotFound for the same reason — "no
 // assignment matched", which the resolver reads as the deployment ceiling.
 // The precedence matrix itself is a store-level test against a real Postgres
 // (internal/store/governance_pg_test.go), where rows can actually exist.
-func (s *authzStore) UpsertGovernanceProfile(_ context.Context, p types.GovernanceProfile) (types.GovernanceProfile, error) {
+func (s *authzStore) UpsertGovernanceUnit(_ context.Context, p types.GovernanceUnit) (types.GovernanceUnit, error) {
 	return p, nil
 }
-func (s *authzStore) DeleteGovernanceProfile(context.Context, uuid.UUID) error {
+func (s *authzStore) DeleteGovernanceUnit(context.Context, uuid.UUID) error {
 	return store.ErrNotFound
 }
-func (s *authzStore) ListGovernanceProfiles(context.Context) ([]types.GovernanceProfile, error) {
+func (s *authzStore) ListGovernanceUnits(context.Context) ([]types.GovernanceUnit, error) {
 	return nil, nil
 }
-func (s *authzStore) UpsertGovernanceAssignment(_ context.Context, a types.GovernanceAssignment) (types.GovernanceAssignment, error) {
+func (s *authzStore) UpsertGovernanceMembership(_ context.Context, a types.GovernanceMembership) (types.GovernanceMembership, error) {
 	return a, nil
 }
-func (s *authzStore) DeleteGovernanceAssignment(context.Context, uuid.UUID) (types.GovernanceAssignment, error) {
-	return types.GovernanceAssignment{}, store.ErrNotFound
+func (s *authzStore) DeleteGovernanceMembership(context.Context, uuid.UUID) (types.GovernanceMembership, error) {
+	return types.GovernanceMembership{}, store.ErrNotFound
 }
-func (s *authzStore) ListGovernanceAssignments(context.Context) ([]types.GovernanceAssignment, error) {
+func (s *authzStore) ListGovernanceMemberships(context.Context) ([]types.GovernanceMembership, error) {
 	return nil, nil
 }
-func (s *authzStore) ResolveGovernanceProfile(context.Context, []string, []string, string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (s *authzStore) ResolveGovernanceUnit(context.Context, []string, []string, string) (*types.GovernanceUnit, types.CapabilitySubjectType, error) {
 	return nil, "", store.ErrNotFound
 }
-func (s *authzStore) HasGroupTierAssignments(context.Context) (bool, error) {
+func (s *authzStore) HasGroupTierMemberships(context.Context) (bool, error) {
 	return false, nil
 }
 

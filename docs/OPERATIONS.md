@@ -42,7 +42,7 @@ user, same host](#second-user-same-host)". Deciding who can do what:
 - [Kubernetes: day-2](#kubernetes-day-2)
 - [High availability](#high-availability)
 - [Kubernetes: known gaps](operations/kubernetes-known-gaps.md#kubernetes-known-gaps)
-- Task pages under [`docs/operations/`](operations/): [Managed laptops: client-mode runners](operations/hybrid-laptops.md), [Runner pools](operations/runner-pools.md#runner-pools-where-a-run-goes), [Launch presets](operations/launch-presets.md#launch-presets), [Console branding](operations/console-branding.md#console-branding)
+- Task pages under [`docs/operations/`](operations/): [Managed laptops: client-mode runners](operations/hybrid-laptops.md), [Runner pools](operations/runner-pools.md#runner-pools-where-a-run-goes), [Launch presets](operations/launch-presets.md#launch-presets), [Console branding](operations/console-branding.md#console-branding), [The Wardyn boundary](operations/boundary.md#the-wardyn-boundary-the-outermost-layer-of-every-run)
 
 </details>
 
@@ -1243,9 +1243,9 @@ erases one person's retained records by explicit scope, in one audited act
 | `mask_copies` | the masking manifests of the runs the person created, after their live attaches, SSH shells and relays are fenced |
 | `run_outputs` | the stored output of those runs (404 `run_output_erased` afterwards, on every replica and after a restart) |
 | `recordings` | their session recordings and `source: "recording"` output rows, with durable per-run fences against later writes; direct stdout and pane snapshots retain their independent `run_outputs` scope |
-| `run_tasks` | the task text of the runs the person created, and the launch intents of those runs |
+| `run_tasks` | the task text, title and description of the runs the person created, and the launch intents of those runs |
 | `components` | the components the person saved, the launch intents of their runs, and what each run's snapshot of one they defined says about it; the run keeps a content-free row, which is what a revived run is checked against. A finished run's resolved policy and grants keep the hosts and secret names the run used, as for any other policy, and so do its `run.env_secret.resolve`, `run.file_secret.resolve`, `secret.read` and `run.policy.resolve` rows |
-| `run_setups` | the person's own run templates and every revision of them, the launch intents of their runs, their group template-manager grants, and their name as the author of shared templates, revisions and grants, which stay without it |
+| `run_setups` | the person's own run templates and every revision of them, the launch intents of their runs, their group template-manager grants, and their name as the author of shared templates, revisions, grants and launch presets, which stay without it |
 | `runner_pools` | the person's own user pools, deleted as their own delete would, their name on every pool row of theirs, and their stored preferences (the pool they default to, their last view); their runners stay |
 | `member_drives` | the drives the person created for themselves, each deleted with its files as their own delete would; a drive a run still holds fails the scope, naming the drive |
 | `audit_personal_fields` | the person's audit-seal key, every generation: each sealed audit field of theirs reads `[erased]` everywhere it was copied, and the chain still verifies; the approvals they decided keep their state but lose the person's name and the reason they typed |
@@ -1260,8 +1260,18 @@ erases one person's retained records by explicit scope, in one audited act
 - Erasure is reported complete (`200`, `outcome` success) only when every scope asked for finished.
 - An email address another identity also holds is never used to match, because it cannot prove whose a record is.
   A record found only by that address keeps it.
+- A team drive's files are kept by design: they belong to the drive's groups, so erasing or deprovisioning a person does not remove what their agents wrote to a team drive. See "Team drives".
 - No scope reaches runners, invitations or service identities; a [purge](#what-a-purge-removes) does, but a retired
   service identity keeps its last sponsor.
+- Two tables keep a person's name after every scope, on purpose:
+  - `aws_sso_spent_tokens.owner` names whose AWS sign-in a spent refresh-token fingerprint came from. It holds no
+    credential, and the reaper deletes each row 90 days after it was written.
+  - `ado_signin_ends.owner` counts the ends of a person's Azure DevOps sign-in, so a run token created on another
+    replica across one revokes itself. Deleting it would reset the count to 0 and let such a token stand, as
+    `secret_owner_generations` below would.
+- The `credentials` scope's detail counts the token history it deleted, `pats_deleted` and `delegated_deleted`, and
+  `live_left`, the Azure DevOps token rows still live because Azure DevOps has not confirmed them revoked. Run the
+  erasure again once they expire to delete them.
 
 - **A launch intent (a run's setup, kept for Run again) is erased with every launch whose run insert began before the erase.**
   - A run's insert takes a per-person Postgres lock first, shared and without waiting, and writes the intent in the same transaction.
@@ -1651,7 +1661,7 @@ at tier 0. With `routes` set, the first route that matches an approval chooses i
   {"kinds": ["push_content"],
    "tiers": [{"after": "0s",  "channels": ["sec-hook"]},
              {"after": "30m", "channels": ["sec-hook", "mail"], "notify": ["profile_contact"]}]},
-  {"profiles": ["<governance profile id>"],
+  {"units": ["<governance profile id>"],
    "tiers": [{"after": "0s", "channels": ["mail"], "notify": ["run_owner"]}]},
   {"tiers": [{"after": "0s", "channels": ["sec-hook"]}]}
 ]
@@ -1802,6 +1812,8 @@ Moved to [custom-components.md](operations/custom-components.md#custom-component
 ### Per-user API tokens: stop sharing the admin token
 
 Moved to [api-tokens.md](operations/api-tokens.md#per-user-api-tokens-stop-sharing-the-admin-token).
+
+CLI sign-in: `WARDYN_CLI_SIGN_IN` is off by default and needs SSO. On, `wardyn login` signs a CLI in through the console with a device-bound session that renews a 1-hour token ([api-tokens.md](operations/api-tokens.md#cli-sign-in-wardyn-login)); while it is off, the CLI keeps using `WARDYN_TOKEN`.
 
 ### Tokens for a person who never signs in
 
@@ -2052,6 +2064,7 @@ A workspace is not one unit of configuration. Wardyn splits it into three:
    - A source's own contract is authored by re-`POST`ing an existing identity to `POST /api/v1/sources` with a new requirements body, which APPLIES it (WSPIPE-8); the write-once `handleUpdateSource` that `PUT` used to reach is gone, not stubbed.
 2. **Base image** (tier 2) — a shared catalog row: registry, custom, or BYO.
    - "Recommended" is never a catalog kind — it is a per-workspace DERIVED build, excluded by a database CHECK constraint, not by convention.
+   - None runs as-is: the image builder wraps each with runner tools ([ENVBUILD.md](ENVBUILD.md)); without one the run is refused `image_builder_unavailable`; Kubernetes refuses a wrapped image. `wardyn run --experience background --command '<command>' --workspace <id>` (no model) on a recommended image needs no builder.
    - `GET/POST /api/v1/base-images`, `DELETE /api/v1/base-images/{id}` — there is no `GET` by id (`handleGetBaseImage` went with its route).
 3. **Workspace** (tier 3) — an ordered list of attachments (library sources, or inline ephemeral scratch dirs) plus an optional catalog image.
    - Attachment order is load-bearing: `attachments[0]` is the primary, the same rule a single `sources[0]` carried before the split.
@@ -2587,37 +2600,36 @@ The residuals an operator should plan for:
 ### Internal hosts
 
 - The proxy's unconditional private/loopback/link-local/metadata/CGNAT/NAT64 [IP guard](../threatmodel/THREAT-MODEL.md#42-the-unconditional-ip-guard-and-its-two-admin-authored-exceptions) (`isBlockedIP`/`VetHost`, [`internal/egress/proxy/policy.go`](../internal/egress/proxy/policy.go)) denies a literal or resolved private-range address *regardless of policy* — the SSRF/ DNS-rebinding defense L2 exists for.
-- That also made an in-cluster service name, `registry.corp.internal`, or any genuinely internal hostname on RFC1918/CGNAT space unreachable even when the policy allowlist named it.
+- That also made an in-cluster service name, `registry.corp.internal`, or any internal hostname on RFC1918/CGNAT space unreachable even when the allowlist named it.
 - `internal_hosts` is a list of `{host_suffix, cidrs}` entries on the same `SiteConfig` document.
 - Each declares a hostname (matched by label suffix — `host_suffix` itself, or any host ending in `.`+`host_suffix`) whose resolved/literal address is *lifted* out of the private-IP guard, scoped to `cidrs`.
-- When `cidrs` is empty, the scope is the full RFC1918 + `fc00::/7` + 100.64.0.0/10 liftable range, still bounded by `host_suffix` alone.
+- When `cidrs` is empty, the scope is the full RFC1918 + `fc00::/7` + 100.64.0.0/10 liftable range, bounded by `host_suffix` alone.
 
 > [!IMPORTANT]
 > **Leave `cidrs` empty — that is the default, and it is the right one.**
 
-- `host_suffix` is already the control; a `cidrs` list assembled from what you can see is usually wrong in a way that looks exactly like a correct configuration.
-- A laptop's corporate resolver answers a private-endpoint name into CGNAT space; inside the VPC the SAME name resolves to the interface endpoint's own ENI address, in the VPC's RFC1918 range.
-- A `cidrs` list drawn from what the operator's own machine sees excludes the range the SANDBOX actually resolves into, and the resulting 403 is indistinguishable from never having declared the entry at all.
-- Tighten `cidrs` only once you have evidence of what the sandbox itself resolves, never from what your own machine resolves.
-- The 403 says the same thing to whoever hits it next:
+- A laptop's corporate resolver answers a private-endpoint name into CGNAT space; inside the VPC the SAME name resolves to the endpoint's ENI address, in the VPC's RFC1918 range.
+- A `cidrs` list drawn from the operator's own machine misses the range the SANDBOX resolves into, and the 403 looks like no entry was declared.
+- A refusal that names the range the sandbox's proxy resolved says so (below); one that cannot says the same thing to whoever hits it next:
 
 > Leave `cidrs` empty unless you know the addresses the sandbox resolves. What
 > your own machine sees for a private endpoint is usually not what the
 > cluster sees.
 
 - Loopback, link-local, the metadata address, other reserved ranges, and NAT64-embedded smuggling stay denied unconditionally regardless of `cidrs` — no entry can ever lift those.
-- Every declared CIDR (once you have that evidence) must still lie entirely inside the liftable set; `PUT /site-config` 400s one that doesn't (`0.0.0.0/0`, `169.254.0.0/16`, `127.0.0.0/8` are the obvious mistakes it catches).
+- Every declared CIDR must still lie entirely inside the liftable set; `PUT /site-config` 400s one that doesn't (`0.0.0.0/0`, `169.254.0.0/16`, `127.0.0.0/8` are the obvious mistakes it catches).
 - This lifts ONE thing: the SSRF builtin.
 - The run's own policy allowlist (`allowed_domains`) still has to name the host separately.
-- Two more exclusions apply automatically: an address inside the subnet of one of the proxy's own network interfaces, and the resolved control-plane (`wardynd`) host — the sidecar shares its Docker network with Postgres/Dex/the registry container.
+- Two more exclusions apply automatically: an address on a subnet of the proxy's own interfaces, and the resolved control-plane (`wardynd`) host — the sidecar shares its Docker network with Postgres/Dex/the registry.
 - On Kubernetes the interface's subnet is whatever the CNI's mask makes it, often the pod CIDR, so a pod IP may be excluded. A ClusterIP is off that interface and is not, apart from the resolved `wardynd` address.
-- This IS the case where you, the cluster operator, have real sandbox-side evidence.
-- Use a WORKLOAD-SPECIFIC suffix (one Service's own name, never the bare `svc.cluster.local`, which would reach every Service in the cluster).
+- Here the operator has sandbox-side evidence.
+- Use a WORKLOAD-SPECIFIC suffix (one Service's own name, never the bare `svc.cluster.local`, which reaches every Service).
 - For a ClusterIP Service, set `cidrs` to that Service's ClusterIP as a `/32`, not the whole Service range.
-- ClusterIPs come from ONE cluster-wide range, so a Service-range CIDR lifts the whole cluster, control plane included.
+- ClusterIPs share ONE cluster-wide range, so a Service-range CIDR lifts the whole cluster, control plane included.
 - A pod-range scope fits only a headless Service (its name resolves to pod IPs), and only where the pod CIDR is not on the sidecar's own interface subnet.
 - The lift applies wherever the proxy resolves a hostname for a direct dial — the sandbox's CONNECT/plain-HTTP path, the MITM path, and the `git_pat` PAT-broker lane (its forge host is grant-derived).
 - So a declared suffix covering a self-hosted forge lets the brokered PAT reach it.
+- The guard fires on a brokered git provider's host while the proxy holds its credential. Nothing is lifted by default: an operator lifts it per `host_suffix` and CIDR, and the refusal, its audit row and the `private_ip_refusals` setup check name both — `an operator may lift this guard for <host> with site_config.internal_hosts, scoped to <range>`.
 - A lifted decision's audit `rule_source` reads `site-config:internal-host` instead of the default `policy:allowed`.
 - [Self-hosted runner](operations/hybrid-laptops.md) proxies get them too (0.9.2); a revive drops undeclared ones.
 
@@ -2625,13 +2637,13 @@ The residuals an operator should plan for:
 > **Not every `builtin:private-ip` refusal is liftable, and the 403 now says so.**
 
 - `internal_hosts` lifts exactly one class — RFC1918/ULA/CGNAT private space.
-- A host that resolves to a loopback address, to link-local space (including the `169.254.169.254` metadata address), to multicast or unspecified space, to a NAT64- or IPv4-compatible-embedded blocked address, or to any other reserved range is refused **unconditionally**.
-- No `internal_hosts` entry, no `allowed_domains` entry and no `egress_redirects` target reaches it, and a new run behaves identically.
-- The refusal's body names the class and prescribes nothing, because there is nothing in site config to change.
-- An agent resolving a name into that space is either misconfigured or probing the host's own metadata service.
+- A host resolving to loopback, link-local (including the `169.254.169.254` metadata address), multicast or unspecified space, a NAT64- or IPv4-compatible-embedded blocked address, or any other reserved range is refused **unconditionally**.
+- No `internal_hosts`, `allowed_domains` or `egress_redirects` entry reaches it, in this run or a new one.
+- The refusal's body names the class and prescribes nothing: there is nothing in site config to change.
+- An agent resolving a name into that space is misconfigured or probing the host's metadata service.
 - **The guard's memory of a refusal lasts one run.**
-  - Once a hostname and port have been refused `builtin:private-ip` for a run, that run keeps refusing it for the rest of its life even if the name later resolves to a public address.
-  - The remedy is the same one above (declare it under `internal_hosts`), and a fresh run re-resolves the name from scratch.
+  - Once a hostname and port are refused `builtin:private-ip`, the run keeps refusing them for its life even if the name later resolves to a public address.
+  - The remedy is the same (declare it under `internal_hosts`), and a fresh run re-resolves the name.
 
 ```json
 {
@@ -2641,7 +2653,7 @@ The residuals an operator should plan for:
 }
 ```
 
-- Add `cidrs` only for the Kubernetes in-cluster case above, once you know the addresses the SANDBOX resolves into — and scope the suffix to the one workload, never to the whole cluster:
+- Add `cidrs` only for the Kubernetes in-cluster case above, once you know what the SANDBOX resolves — and scope the suffix to one workload, never the whole cluster:
 
 ```json
 {
@@ -2744,7 +2756,7 @@ The residuals an operator should plan for:
 - **The sandbox signs itself in.**
   - ONE chained command does the whole capture — `aws sso login --sso-session wardyn --no-browser --use-device-code && wardyn-aws-sso` — and both halves matter: `aws sso login` alone leaves the session in `~/.aws/sso/cache`, where it dies with the container, and `wardyn-aws-sso` is what uploads it through the brokered endpoint.
   - Since 0.7.5 the IMAGE runs that command, not the console: `agent-run --idle` creates a `wardyn` tmux session on `signin-pane.sh` BEFORE its own workspace prep, the pane prints *"wardyn: sign-in running — AWS sign-in sandbox. Finish the device-code step in your browser. Nothing else runs here."*, waits up to five minutes for prep, and runs the pair at most ONCE.
-  - Every attach path joins that one session — Wardyn's sign-in pane, `wardyn run attach`, an SSH attach, and **the Runs list** — because attaching is `tmux new-session -A -s wardyn`, attach-or-create.
+  - Every attach path joins that one session — Wardyn's sign-in pane, `wardyn attach`, an SSH attach, and **the Runs list** — because attaching is `tmux new-session -A -s wardyn`, attach-or-create.
   - So the path that used to hand out a bare prompt now shows the sign-in already in progress.
   - If prep never finishes it runs nothing and prints *"wardyn: workspace preparation did not finish — stop this run and start a new sign-in."*
   - If the session could not be started at all (no `tmux` in a derived image), an attach lands on a plain shell that prints *"AWS sign-in sandbox — nothing else runs here. The sign-in did not start on its own; run: `<the chained command>`"*.
@@ -2757,7 +2769,7 @@ The residuals an operator should plan for:
   - If it does NOT, and the person's SSO session reaches more than one account (or more than one role in the chosen account), the helper asks WHICH ONE.
   - It asks in the sign-in terminal.
   - It allows three tries.
-  - Anyone with a WRITABLE attach can answer — the console's sign-in pane, `wardyn run attach`, an SSH attach, or the Runs list when they hold the terminal.
+  - Anyone with a WRITABLE attach can answer — the console's sign-in pane, `wardyn attach`, an SSH attach, or the Runs list when they hold the terminal.
   - A read-only viewer cannot; the prompt itself has no deadline, so it waits until a writable attach answers or the sandbox's own 30-minute idle cap ends the run.
   - Pin the account and the role on the provider and the question never comes up.
   - While the sandbox waits on the answer, the sign-in panel's own copy already narrates the sign-in as done (`CAPTURE_HANDOFF`).
@@ -2805,6 +2817,10 @@ The residuals an operator should plan for:
 > With no pin, the ROLE is whatever the sign-in chose — and so is the account, unless the provider's model is a full ARN, which constrains the account only.
 > The pin is the fix; both halves of it.
 
+- **How long the role credentials a run holds live — set it on the permission set.**
+  - A `bedrock_sso` run and an AWS CLI component both get them from the portal's `GetRoleCredentials`, which takes no duration, so Wardyn cannot request a shorter session ([`internal/api/runs_dispatch_sso_inject.go#awsSSORoleCredentialsPath`](../internal/api/runs_dispatch_sso_inject.go)).
+  - Their lifetime is the IAM Identity Center permission set's session duration. `PT1H`, the shortest AWS allows, bounds what a sandbox holds to one hour.
+  - They stay valid at AWS after the run ends. Revoking the role's active sessions in IAM ends them early.
 - **What the control plane holds.**
   - One age-encrypted blob per person per provider, in that person's own secret namespace under the provider's name.
   - It holds the SSO access token, its refresh token, the client registration, and the account/role the session mints role credentials for.
@@ -3710,7 +3726,7 @@ docker compose -f deploy/compose/docker-compose.yaml up -d wardynd
 - Every image
   under [`deploy/images`](../deploy/images) now pre-creates it owned by `agent` — the ones on a public
   base do it themselves, the ones on a sibling image inherit it.
-- So a fresh
+- A person's fresh
   managed volume takes that ownership through Docker's copy-up.
 - **No pre-0.7 image
   has the directory**: 0.6.6's base image created `/home/agent/work` and nothing
@@ -3720,8 +3736,8 @@ docker compose -f deploy/compose/docker-compose.yaml up -d wardynd
 - Nothing
   else goes wrong — the image builds, the container starts, the mount succeeds.
 - So the only symptom is the agent failing to write to its own drive.
-- And wardynd cannot repair it (fixing that ownership would mean chowning volume state, which
-  the control plane must never do).
+- And wardynd cannot repair it (fixing that ownership would mean re-owning a person's volume, which
+  the control plane never does).
 - Rebuild with `make agent-images-core`, and
   re-pin anything listed in `WARDYN_AGENT_IMAGES` at the rebuilt tag; a **BYOI**
   image is yours to fix, one `mkdir` (see "User drives on Docker" and
@@ -3895,7 +3911,7 @@ image digests in `wardyn.env`, not a re-run of anything
     `approvals.kind` with `credential_reauth`).
   - `0063` adds the
     `agent_runs.status_detail` column, `0065` adds `agent_runs.autonomy_level`, `0072` adds the
-    run-limit columns (`ends_at`, `wait_budget_sec`, `run_limits`, `governance_profile_id`), `0073` the
+    run-limit columns (`ends_at`, `wait_budget_sec`, `run_limits`, `unit_id`), `0073` the
     lease columns (`lost_at`, `lost_reason`, `ending_soon_for`, `ending_soon_sec`).
   - And `0056`, `0057` and `0058` are three successive
     `CREATE OR REPLACE`s of the chain function `0047` created, each re-creating its
@@ -3917,7 +3933,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - So does `0075`, which re-adds the `approvals.kind`
   CHECK (`0001`'s table) with `push_content`, and `0076`, which adds `agent_runs.model_provider_id`.
 - 0.8's user types add three more: `0079` re-adds the subject-type CHECKs on
-  `capability_grants` (`0042`'s table), `governance_assignments` (`0052`'s) and
+  `capability_grants` (`0042`'s table), `governance_memberships` (`0052`'s) and
   `user_drive_grants` (`0054`'s), `0080` adds `agent_runs.user_type`, and `0082` adds
   `api_tokens.user_type` with its CHECK.
 - The long-holds runs add six more on `agent_runs`:
@@ -3936,12 +3952,12 @@ image digests in `wardyn.env`, not a re-run of anything
   `CREATE OR REPLACE` of `0047`'s chain function that the partitions need.
 - `0114` adds `api_tokens.expires_at` (`0045`'s table).
 - `0115` adds `api_tokens.identity_stamped_at` (`0045`'s table), backfilled to `created_at`.
-- `0116` adds `governance_profiles.contact` (`0052`'s table).
+- `0116` adds `governance_units.contact` (`0052`'s table).
 - `0117` (`0117_agent_runs_sizing`) adds the dispatch-time sizing columns on `agent_runs` (`runner_kind`, the agent CPU/memory
   request and limit columns, `proxy_cpu_millis` and `proxy_memory_mib`).
 - At dispatch, before the sandbox
   is created, each run records the values its driver applied, and a run that predates it reads all NULL.
-- `0125` adds `governance_profiles.base_profile_id`, `overlay` and `overlay_limits` with five CHECKs (`0052`'s table).
+- `0125` adds `governance_units.parent_id`, `overlay` and `overlay_limits` with five CHECKs (`0052`'s table).
 - `0127` (`0127_deprovision_jobs`) adds `people.deactivated_at` (`0090`'s table), beside its new `deprovision_jobs` table.
 - `0130` (`0130_audit_chain_head_from_meta`) is a later `CREATE OR REPLACE` of `0047`'s chain function, which
   links each new row to the recorded head.
@@ -3986,6 +4002,16 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0195` (`0195_agent_runs_local_folder`) adds `local_folder`, `local_folder_seeded_at` and `local_folder_seed_error` to `agent_runs` (`0001`'s table): the folder a run holds its agent for, and that folder's first sync.
 - `0196` (`0196_deprovision_event_pin`) adds `audit_event_id` and `audit_event_at` to `deprovision_jobs` (`0127`'s table): the id and time of the audit event an owed row writes, pinned on its first drain and cleared when the row reopens.
 - `0197` (`0197_run_inner_walls`) adds `inner_walls` to `agent_runs` (`0001`'s table): the harness's own walls a run launched with, under its policy's `harness_inner_walls`.
+- `0198` (`0198_agent_runs_local_folder_status`) adds `local_folder_status` to `agent_runs` (`0001`'s table): the passes a person's folder-only runner made for a run's computer folder, in and back.
+- `0199` (`0199_cli_sign_in`) adds `api_tokens.kind` and `api_tokens.cli_session_id` (`0045`'s table), which mark a CLI sign-in's access and admin tokens and tie them to their CLI session, and creates `cli_sessions` and `cli_sign_ins`.
+- `0200` (`0200_governance_boundary`) creates `governance_boundary` and adds `agent_runs.break_glass` (`0001`'s table), a constant-default boolean, so no row is rewritten; a split-role install grants the app role `SELECT, INSERT, UPDATE` on `governance_boundary`.
+- `0201` (`0201_run_recording_level`) adds `recording_level` to `agent_runs` (`0001`'s table) and replaces its `not_recorded` check (`0180`'s column) to admit `policy_off`: the level a run is recorded at, resolved once at dispatch.
+- `0202` (`0202_run_queue_start_at`) adds `start_at` to `run_queue` (`0162`'s table): a scheduled run's start time, before which no promotion judges it; `NULL` for every other waiting run.
+- `0203` (`0203_run_harness_task`) adds `task` to `run_harnesses` (`0164`'s table): a harness's own task in a background run with several agents. Person erasure blanks it; a split-role install that turns `WARDYN_MULTI_AGENT_TASKS` on grants the app role `UPDATE` on `run_harnesses` for that.
+- `0204` (`0204_user_drives_kept_from_run`) adds `kept_from_run` to `user_drives` (`0054`'s table): the run a person's drive was kept from (`keep_work_folder`), NULL on every drive made by hand.
+- `0205` (`0205_user_drives_team`) adds `user_drives.team` (`0054`'s table), with a check keeping it off a person's own drive and off `k8s_pvc`, and `user_drive_grants.members_can_write` (`0054`'s table, false by default): a team drive and its allocations' write bit (`storage.user_drive.team_drives`). A write setting `team` on a `k8s_pvc` or member-owned row now fails.
+- `0206` (`0206_runner_health`) adds `runner_health`, one row per runner (`0139`'s `runners`): the last offline summary a runner reported, when it was stored, and its last relay status, each runner-reported and capped.
+- `0207` (`0207_governance_units`) renames `governance_profiles` to `governance_units` (`base_profile_id` becomes `parent_id`), `governance_assignments` to `governance_memberships` (`profile_id` becomes `unit_id`) and `agent_runs.governance_profile_id` to `unit_id`, and rewrites the `profile_id` key of each queued run's launch and the kind and JSON keys of each `governance_changes` row. No other row is rewritten and a table rename keeps its grants, so a split-role install needs no grant change. A governance change proposed before the upgrade reads as stale once and is proposed again.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
@@ -4674,6 +4700,7 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 | `size_mib` | The claim size on Kubernetes. It must be 0 on Docker, which has no byte cap |
 | `storage_class` | The claim's StorageClass on Kubernetes. Empty is the cluster default |
 | profile `deny_member_drives` | A governance profile refuses creation for its people. A person can still delete a drive they have |
+| `keep_main_drive` | Lets a run keep its work folder as its person's drive (`keep_work_folder` on the run). Off by default |
 
 **What differs by substrate.**
 
@@ -4687,6 +4714,16 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 - Turning on `drives.reclaim.enabled` lets a compromised wardynd delete any claim in the runs namespace.
 - That is already true of the admin reclaim verb. Read the chart's `drives.reclaim` comment first.
 - A person's own runner never mounts a member drive. The volume would sit on that person's laptop, out of the server's reach.
+
+**Keep a run's work folder.**
+
+- With `keep_main_drive: true`, a run that asks for `keep_work_folder` gets a member drive, named after the run, mounted at `/home/agent/work` in place of scratch.
+- Only the work folder is kept. The home folder, agent settings and `/tmp` are not.
+- The drive belongs to the person who launched the run. It counts toward `max_per_person`, is refused at the limit, and stays until that person deletes it.
+- **Whatever an agent leaves in the work folder comes back when a later run attaches the drive**, including a planted script or a token written to a file.
+- On Docker the drive has no byte cap, so the run's disk size no longer bounds the work folder. The catalogue reports `enforcement: none`.
+- Refused with 422 `keep_work_folder_disabled` while member drives or `keep_main_drive` are off. Creation is audited as `drive.member.create` with `from_run`.
+- My drives marks the drive with the run it was kept from (`kept_from_run`).
 
 **List and delete as an admin** (super admin).
 
@@ -4705,6 +4742,7 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 - A SCIM purge **lists** the person's drives, by name, in `person.deprovision`, and `GET /scim/status` shows them. It deletes nothing.
 - Delete each with `DELETE /api/v1/drives/member/{id}`, or erase the person with the `member_drives` scope of `POST /api/v1/people/{principal}/erasure`.
 - The erasure deletes the same way a delete does and fails the scope, naming the drive, if one is in use. Retry once the run ends.
+- A team drive's files are kept by design: they belong to the drive's groups, so erasing or deprovisioning a person does not remove what their agents wrote to a team drive. See "Team drives".
 
 **Orphans.**
 
@@ -4716,6 +4754,42 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 
 - Member drives live in `user_drives` rows with an owner. An older wardynd would list them in `GET /drives` and let a super admin edit or delete the row without the volume.
 - Migrations are forward-only; see "Upgrades".
+
+### Team drives
+
+- A **team drive** is an admin drive that gives the groups it is allocated to **one shared folder**, instead of one folder per person.
+- It is off by default. Turn it on with `storage.user_drive.team_drives: true` in the workspace providers (`PUT /api/v1/workspace-providers`).
+- With the switch off, `team: true` on a drive write answers 422, and a drive already marked team resolves per person, as every drive did before.
+
+**Make one** (super admin).
+
+1. `POST /api/v1/drives` with `team: true` on a `host_path`, `k8s_pvc_static` or `docker_volume` drive. A `k8s_pvc` claim mounts in one pod at a time, so it is refused.
+2. Allocate it to groups with `POST /api/v1/drives/grants`, `subject_type: group`. Any other subject type, and `home_override`, are refused.
+3. An allocation is **read-only** unless it sets `members_can_write: true`, which needs a writable drive. Only a super admin may set it; the security-admin tier allocates read-only.
+
+**What a member's run sees.**
+
+- The folder mounts at `/home/agent/shared/<name-slug>`, read-only unless the allocation says `members_can_write`. A run asking to write a read-only one is refused.
+- Its home segment is `t-` plus 20 hex characters, derived from the drive id: `<host_root>/t-…` on `host_path` (create that directory; Wardyn never creates one on a share) and a claim or volume named `wardyn-drive-<drive-id-hex>-<home>` with that home. `POST /api/v1/drives/preview` for any group member prints it.
+- People outside the allocated groups never get the mount.
+- `GET /api/v1/me/drives` marks the row `team: true` and lists in `shared_with` the caller's own groups that carry the allocation, never anyone else's.
+- Every run's mount writes `run.drive.mount` with `team: true` and `mounted_by`, the person whose run mounted it.
+
+**Before you upgrade.** Turning on `storage.user_drive.team_drives` lets the members of the groups a team drive is allocated to share one folder. One person's agent can read, and if the allocation is writable run, what another person's agent wrote there, which is cross-person injection, and any secret an agent writes there is visible to the whole group. The switch is off by default; a team drive is admin-made and allocated to groups only, read-only unless a super admin sets `members_can_write` on a writable drive, and every mount's audit row names the person who mounted it.
+
+**Security.** One person's agent reads, and with `members_can_write` may run, files another person's agent wrote there. Any secret an agent writes there is visible to the whole group. Keep allocations read-only unless the group needs a shared working area.
+
+**What differs by backend.**
+
+- `docker_volume`: the volume lives on **one Docker host**. Runs on another host see a different, empty folder. `GET /drives` marks such a drive `single_host: true`.
+- `host_path`: one folder on the operator's tree. It is shared across hosts only if the operator's mount is.
+- `k8s_pvc_static`: the claim you pre-create. It is shared across nodes only if its access mode is `ReadWriteMany`.
+
+**Changing and removing.**
+
+- `team` cannot change while the drive is allocated (409). Remove the allocations first.
+- A person's reclaim (`POST /api/v1/drives/{id}/reclaim`, a leaver's cleanup) refuses a team drive (422): a team drive's files belong to its groups and are not reclaimed per person. A person's erasure never touches one either. Remove the folder on the substrate, as for any drive, once the group no longer needs it.
+- A team drive's files are kept by design: they belong to the drive's groups, so erasing or deprovisioning a person does not remove what their agents wrote to a team drive.
 
 ### User drives on Kubernetes
 

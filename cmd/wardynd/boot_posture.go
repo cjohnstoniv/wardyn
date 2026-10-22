@@ -472,7 +472,7 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if err := f.ssoRefresh.validate(); err != nil {
 		return err
 	}
-	if err := f.sessionLife.validate(); err != nil {
+	if err := errors.Join(f.sessionLife.validate(), f.cliSignIn.validate()); err != nil {
 		return err
 	}
 	if *f.oidcIssuer != "" {
@@ -509,6 +509,9 @@ func flagValue(p *string) string {
 // ignored WARDYN_MEMBER_WRITABLE_DENY would silently widen the writable set, so every removed name is
 // refused rather than ignored.
 func refuseRemovedEnv(environ []string) error {
+	if err := refuseRenamedGovernanceEnv(environ); err != nil {
+		return err
+	}
 	left := cliutil.RemovedEnvLeftovers(environ)
 	if len(left) == 0 {
 		return nil

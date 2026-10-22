@@ -126,7 +126,7 @@ func (s *Server) leaseRun(ctx context.Context, leaser store.RunLeaser, run types
 			s.revokeRunBroker(ctx, run.ID)
 		}
 		if ended {
-			err = s.endSandbox(ctx, run)
+			_, err = s.endSandbox(ctx, run)
 		} else {
 			err = s.stopLostSandbox(ctx, run, now)
 		}
@@ -262,7 +262,7 @@ func (s *Server) endRun(ctx context.Context, leaser store.RunLeaser, run types.A
 	run.LostAt, run.LostReason = &now, types.LostEnded
 	data := map[string]any{"ends_at": run.EndsAt}
 	if _, canKeep := s.cfg.Runner.(runner.SandboxEnder); canKeep && s.cfg.EndedRunGrace > 0 && run.SandboxRef != "" {
-		err := s.endSandbox(ctx, run)
+		wipeFailed, err := s.endSandbox(ctx, run)
 		if !errors.Is(err, runner.ErrEndUnsupported) {
 			// Cancel/revoke only once the run is sure to be kept: on
 			// ErrEndUnsupported this falls through to stopKeptRun, whose
@@ -276,6 +276,9 @@ func (s *Server) endRun(ctx context.Context, leaser store.RunLeaser, run types.A
 			if err != nil {
 				data["end_error"], data["containment"], outcome = err.Error(), "unresolved", "failure"
 				s.noteContainmentFailure(ctx, leaser, run.ID, err)
+			}
+			if wipeFailed != "" {
+				data["aws_cache_wipe"], data["aws_cache_wipe_reason"] = "failed", wipeFailed
 			}
 			data["kept"] = true
 			data["kept_until"] = now.Add(s.cfg.EndedRunGrace)
@@ -291,12 +294,18 @@ func (s *Server) endRun(ctx context.Context, leaser store.RunLeaser, run types.A
 
 // endSandbox is the runner half of the end. The caller has checked the runner
 // is a SandboxEnder, or is re-asserting an end that already passed that check.
-func (s *Server) endSandbox(ctx context.Context, run types.AgentRun) error {
+// A kept end whose AWS cache wipe failed (runner.ErrAWSCacheWipeFailed) is a
+// successful end: its reason comes back as wipeFailed, for the run.ended row.
+func (s *Server) endSandbox(ctx context.Context, run types.AgentRun) (wipeFailed string, err error) {
 	ender, ok := s.cfg.Runner.(runner.SandboxEnder)
 	if !ok {
-		return runner.ErrEndUnsupported
+		return "", runner.ErrEndUnsupported
 	}
-	return ender.EndSandbox(ctx, run.SandboxRef)
+	err = ender.EndSandbox(ctx, run.SandboxRef)
+	if errors.Is(err, runner.ErrAWSCacheWipeFailed) {
+		return err.Error(), nil
+	}
+	return "", err
 }
 
 // noteContainmentFailure records that a kept run's stop failed with err

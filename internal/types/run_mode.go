@@ -244,4 +244,8 @@ type RunHarness struct {
 	Harness         string `json:"harness"`
 	ModelProviderID string `json:"model_provider_id,omitempty"`
 	Starts          bool   `json:"starts,omitempty"`
+	// Task is the harness's own prompt in a run with several agents (tools[].task);
+	// empty for the started harness, whose prompt is the run's task, and for a
+	// harness that runs no task.
+	Task string `json:"task,omitempty"`
 }

@@ -49,9 +49,9 @@ describe("probeAuth — a rejected caller, a broken daemon and a dead network ar
   it("a 401 carries the reason the server named, so a session that ended is told apart from no session", async () => {
     const body = (reason: string) => JSON.stringify({ error: "your session expired — sign in again", reason });
     fetchMock.mockResolvedValue(new Response(body("expired_session"), { status: 401 }));
-    expect(await probeAuthWithReason()).toEqual({ probe: "unauthed", reason: "expired_session" });
+    expect(await probeAuthWithReason()).toEqual({ probe: "unauthed", reason: "expired_session", transient: false });
     fetchMock.mockResolvedValue(new Response("", { status: 401 }));
-    expect(await probeAuthWithReason()).toEqual({ probe: "unauthed", reason: "" });
+    expect(await probeAuthWithReason()).toEqual({ probe: "unauthed", reason: "", transient: false });
     expect(["expired_session", "revoked_session", "role_stamp_stale", "invalid_session"].every(isSessionEnded)).toBe(true);
     expect(isSessionEnded("")).toBe(false);
     expect(isSessionEnded("session_revocation_unavailable")).toBe(false);

@@ -438,6 +438,9 @@ func (s PG) SuspendIdentity(ctx context.Context, p SuspendPlan) (SuspendResult, 
 			ON CONFLICT (sub) DO UPDATE SET revoked_at = EXCLUDED.revoked_at`, sub); err != nil {
 			return SuspendResult{}, fmt.Errorf("store: session cutoff: %w", err)
 		}
+		if err = endCLISessionsOf(ctx, tx, sub, types.CLISessionEndRevoked); err != nil {
+			return SuspendResult{}, err
+		}
 	}
 	if err = tx.QueryRow(ctx, `SELECT authority_epoch FROM principal_identities WHERE id = $1`, p.IdentityID).Scan(&res.Epoch); err != nil {
 		return SuspendResult{}, fmt.Errorf("store: read authority epoch: %w", err)

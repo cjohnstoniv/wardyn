@@ -96,7 +96,9 @@ export function RunEndsRow({ run, onChanged }: { run: RunDetail; onChanged: () =
   // `!!limits?.x` agrees with the server on both the reachable case (present,
   // some fields set) and the unreachable one (absent).
   const mayChange = canAct && (operator || !!limits?.user_changes_limits);
-  const allowNoEnd = canAct && (operator || !!limits?.allow_no_end);
+  // #2112: a run with a lifetime cap is never given No end (run_end_wait.go planEnd refuses it for an operator
+  // too), so the choice is not offered rather than refused after the click.
+  const allowNoEnd = canAct && !run.lifetime_cap_at && (operator || !!limits?.allow_no_end);
   const maxDays = limits?.max_end_ahead_sec ? Math.ceil(limits.max_end_ahead_sec / (24 * 3600)) : undefined;
 
   const applyEndsAt = async (endsAt: string | null) => {

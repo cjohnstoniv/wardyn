@@ -13,7 +13,11 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-func productionRunnerHooks(context.Context, runneridentity.Identity, string, serveOptions) (runnerRuntime, error) {
+// productionRunnerHooks serves only --substrate folders, which needs no Docker.
+func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity, stateDir string, opts serveOptions) (runnerRuntime, error) {
+	if opts.substrate == "folders" {
+		return foldersRunnerHooks(ctx, identity, stateDir, opts)
+	}
 	return runnerRuntime{}, errors.New("runner serve requires a build with the docker tag")
 }
 

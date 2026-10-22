@@ -237,10 +237,12 @@ func contextWithPrincipal(ctx context.Context, sess Session) context.Context {
 	ctx = context.WithValue(ctx, groupsTruncatedCtxKey{}, sess.GroupsTruncated)
 	ctx = WithAuthorityEpoch(ctx, sess.AuthorityEpoch)
 	ctx = WithRevocationSeq(ctx, sess.Sub, sess.RevocationSeq)
-	// THE MEMBER-MODE CLAMP — the only place it's applied. This is the sole
-	// read of sess.Role in the product, so clamping here clamps everything
-	// downstream by construction. DOWNWARD ONLY: sess.Role is never
-	// rewritten, so toggling off restores it verbatim.
+	// THE MEMBER-MODE CLAMP — the only place a session's role is clamped. This
+	// is the sole read of sess.Role in the product, so clamping here clamps
+	// everything downstream by construction. DOWNWARD ONLY: sess.Role is never
+	// rewritten, so toggling off restores it verbatim. The one other clamp is a
+	// token's, not a session's: internal/api's apiTokenAuth publishes RoleUser
+	// for a CLI access token (cli_access), the same way and for the same reason.
 	role := sess.Role
 	if sess.MemberMode {
 		role = RoleUser

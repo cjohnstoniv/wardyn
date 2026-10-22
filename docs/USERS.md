@@ -53,7 +53,7 @@ sandboxes inside the ceiling your admin set. There is nothing to install.
 - The agent you picked does not change the level, though at `L1` it can get a
   non-interactive run refused (below).
 - A run whose shape exceeds what your resolved level permits is refused
-  `governance_profile`, the same refusal a denied `task_mode` or interactive flag
+  `governance_unit`, the same refusal a denied `task_mode` or interactive flag
   already gives you — see
   [denials.md § Every denial that isn't a 404](operations/denials.md#every-denial-that-isnt-a-404).
 - A non-interactive claude-code run at `L1` is not refused for lacking
@@ -123,7 +123,7 @@ Three things worth naming here, because they read as bugs otherwise:
 - The last two are **always present**, so a missing key means an older daemon
   rather than "nothing is wrong":
   - `user_drive` — your allocation, or `null`.
-  - `user_drive_denied_by_profile` — the **door**: the name of the governance
+  - `user_drive_denied_by_unit` — the **door**: the name of the governance
     profile that refuses to mount a drive for you, or `""` when none does.
   - `user_drive_unavailable` — `""` when Wardyn could answer. Any other value is
     one of six tokens saying it could **not**, and which remedy that implies:
@@ -301,6 +301,7 @@ resolves your drive the same way, in a dry run too:
   endpoint's answer when it has nothing scoped to show you, not an error.
 - The action vocabulary is [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md).
 - If a run used an organisation component's shared secret, the audit rows and the grant list you read for your own run leave out that secret's name. Administrators and security administrators read the rows as recorded.
+- An admin may replay your runs' session recordings. Each replay writes a `recording.read` row to that run's audit, so you see it here.
 - If your laptop is one your organisation enrolled into a remote control plane,
   this same audit trail is also forwarded upward into the organisation's own table.
 - This is automatic, admin-configured, and nothing you do here changes it.

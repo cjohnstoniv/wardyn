@@ -12,6 +12,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { aheadByHours } from "../../lib/test-clock";
+import { AVAILABILITY } from "../../lib/availability-copy";
 
 const getAvailabilityMock = vi.fn();
 const putAvailabilityMock = vi.fn();
@@ -87,18 +88,18 @@ describe("AvailabilityControl, the org component family", () => {
     getAvailabilityMock.mockResolvedValue(view(false, [DEV]));
     putAvailabilityMock.mockResolvedValue(view(true, [DEV]));
     render(control());
-    await screen.findByText("developer");
+    await screen.findByText("Available to");
     await userEvent.click(screen.getByRole("radio", { name: "Only these" }));
     await waitFor(() => expect(putAvailabilityMock).toHaveBeenCalledWith("component", ID, true));
   });
 
-  it("without nobodyYet the generic control still sends the PUT and shows the server's refusal", async () => {
+  it("without nobodyYet, Only these with nobody listed is held on screen and sends no PUT", async () => {
     getAvailabilityMock.mockResolvedValue(view(false));
-    putAvailabilityMock.mockRejectedValue(new Error(ADD_FIRST));
     render(control(false));
     await screen.findByText("Available to");
     await userEvent.click(screen.getByRole("radio", { name: "Only these" }));
-    await waitFor(() => expect(putAvailabilityMock).toHaveBeenCalledWith("component", ID, true));
+    expect(await screen.findByTestId("availability-pending")).toHaveTextContent(AVAILABILITY.PENDING_NOTE);
+    expect(putAvailabilityMock).not.toHaveBeenCalled();
     expect(screen.queryByTestId("availability-nobody")).toBeNull();
   });
 });

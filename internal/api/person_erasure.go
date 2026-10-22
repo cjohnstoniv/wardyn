@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -65,17 +66,19 @@ func (s *Server) erasureOrchestrator(credRep *secretstore.EraseReport, want *era
 	if s.cfg.Secrets != nil {
 		steps[erasure.Credentials] = func(ctx context.Context, person string) (any, error) {
 			var rep secretstore.EraseReport
+			history := map[string]any{}
 			fenced, err := s.eraseCredentialsScope(ctx, person, want, &rep)
 			if err == nil {
 				err = s.eraseLoginGroups(ctx, person, want)
 			}
 			if err == nil {
-				err = s.eraseTokenHistory(ctx, person, want)
+				err = s.eraseTokenHistory(ctx, person, want, history)
 			}
 			if credRep != nil {
 				*credRep = rep
 			}
 			data := credentialEraseData(rep)
+			maps.Copy(data, history)
 			if s.cfg.MaskManifests != nil {
 				data["runs_fenced"] = fenced
 			}
@@ -212,7 +215,7 @@ func (s *Server) personErasureStore() (store.PersonErasureStore, error) {
 	return nil, fmt.Errorf("%w: the store cannot list a person's runs", erasure.ErrNotAvailable)
 }
 
-// eraseRunTasks blanks the task text of every run the person created. A run of theirs still waiting
+// eraseRunTasks blanks the task text, title and description of every run the person created. A run of theirs still waiting
 // in a pool's queue is cancelled first: its queue row holds the whole request, task and identity
 // snapshot included, and it would start under the very person being erased.
 func (s *Server) eraseRunTasks(ctx context.Context, person string) (any, error) {

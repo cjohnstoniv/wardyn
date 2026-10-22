@@ -5,7 +5,7 @@
 
 import type { ComponentProps } from "react";
 import { describe, it, expect, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SetupLayout } from "./setup-layout";
 import { OPTIONAL_STEPS, STEP_ORDER, type SetupStepId } from "./steps";
@@ -93,7 +93,7 @@ describe("SetupLayout", () => {
       expect(region).toHaveAttribute("aria-live", "polite");
     });
 
-    it("blocked WITH an action: the action button renders IN PLACE of Next and fires its handler", async () => {
+    it("blocked WITH an action: Next stays, disabled, with its reason, and the action is a link beside it that fires its handler", async () => {
       const onAction = vi.fn();
       const onSelect = vi.fn();
       renderLayout({
@@ -101,13 +101,14 @@ describe("SetupLayout", () => {
         onSelect,
         nextGate: {
           blocked: true,
-          head: "Connectivity isn't proven yet",
-          reason: "One probe.",
-          action: { label: "Test connectivity", onClick: onAction },
+          head: "A redirect isn't being enforced",
+          action: { label: "Open Egress redirection", onClick: onAction },
         },
       });
-      expect(screen.queryByRole("button", { name: /^next: people$/i })).not.toBeInTheDocument();
-      await user.click(screen.getByRole("button", { name: /^test connectivity$/i }));
+      const next = screen.getByRole("button", { name: /^next: people$/i });
+      expect(next).toBeDisabled();
+      expect(next).toHaveAccessibleDescription("A redirect isn't being enforced");
+      await user.click(screen.getByRole("button", { name: /^open egress redirection$/i }));
       expect(onAction).toHaveBeenCalled();
       expect(onSelect).not.toHaveBeenCalled();
     });
@@ -124,13 +125,20 @@ describe("SetupLayout", () => {
           blocked: true,
           head: "Connectivity isn't proven yet",
           reason: "One probe.",
-          action: { label: "Test connectivity", onClick: onAction },
+          action: { label: "Open Egress redirection", onClick: onAction },
         },
       });
-      const button = screen.getByRole("button", { name: /^test connectivity$/i });
+      const button = screen.getByRole("button", { name: /^open egress redirection$/i });
       expect(button).toBeDisabled();
       await user.click(button);
       expect(onAction).not.toHaveBeenCalled();
+    });
+
+    it("the footer is Back and Next only, pinned so both stay reachable on a long step", () => {
+      renderLayout({ current: "environment", nextGate: { blocked: true, head: "Connectivity isn't proven yet" } });
+      const footer = screen.getByRole("button", { name: /^back$/i }).closest("footer")!;
+      expect(footer).toHaveClass("sticky", "bottom-0");
+      expect(within(footer).getAllByRole("button").map((b) => b.textContent)).toEqual(["Back", "Next: People"]);
     });
 
     it("an ENABLED gate with a head/reason renders them as a neutral standing note beside a working Next", async () => {

@@ -56,6 +56,7 @@
 | `ui_apps` | `[]UIApp` | `[]` | In-sandbox loopback HTTP apps the UI gateway may relay to a browser. Operator-authored, never agent-chosen, and never a command string. |
 | `tool_rules` | `[]ToolRule` | `[]` | Per-tool effects for an autonomous run's tool calls: `allow`, `hold` or `deny`. A `hold` or `deny` rule routes a background Claude Code run through the tool gate. Operator-authored, evaluated proxy-side. |
 | `harness_inner_walls` | `HarnessInnerWalls` | omitted = what the harness and lane give | The harness's own walls inside Wardyn's: its `sandbox_mode` and where its `approvals` happen. Only adds walls; a looser choice refuses the run. See [below](#harness_inner_walls--harnessinnerwalls). |
+| `recording` | `string` | omitted = the organisation's level (`terminal` unless it sets one) | How much of the run is recorded: `off`, `terminal` or `screen_actions` (a desktop's screen and an action log). A ceiling's level is a minimum. `WARDYN_RECORDING_STORE=off` still records nothing. Keystrokes are never recorded at any level. See [below](#recording). |
 | `git_push_any_branch` | `bool` | `false` | Turns OFF branch-namespace confinement (default **ON**) for this run's brokered pushes on every brokered lane; operator-authored, never agent-settable. See [`git_push_any_branch`](#git_push_any_branch). |
 | `push_rules` | `PushRulesSpec` | omitted = **no content rules** | Content rules for this run's brokered git pushes — WHAT a push may touch, alongside `git_push_any_branch`'s WHERE. Enforced on every brokered git lane, and on the Azure DevOps REST door, before a push is forwarded: see ["`push_rules` — `PushRulesSpec`"](#push_rules--pushrulesspec) below. |
 | `azure_devops_capabilities` | `[]string` | omitted = the provider row's `default_profile` | This run's Azure DevOps capabilities on the per-person (Entra) lane, chosen only within the row's `capability_ceiling`; unknown or unpermitted choices are refused. See [`azure_devops_capabilities`](#azure_devops_capabilities). |
@@ -508,7 +509,7 @@ What the check does and does not settle:
 
 
 - Empty or unrecognised normalises to `always_deny` at runtime (fail closed), but an unrecognised literal is rejected at write time.
-- `wait_for_review`'s one built-in user today is a workspace's confined record replay ([`docs/TRY-IT.md`](TRY-IT.md) "record a session, rerun it as a governed profile"): `launchRecordRun` sets it for exactly that session, never for a learning (open-egress) one.
+- `wait_for_review`'s one built-in user today is a workspace's confined record replay ([`docs/TRY-IT.md`](TRY-IT.md) "record a session, rerun it as a governed unit"): `launchRecordRun` sets it for exactly that session, never for a learning (open-egress) one.
 - Approving a hold there does more than release the parked connection.
 - The decision funnels through the same chokepoint every approval does (`decide`, [`internal/api/approvals.go`](../internal/api/approvals.go)),
   - which — only for an `egress_domain` approval raised during a `workspace record` run — writes a required `egress:<host>` row into that workspace's own requirements contract (`learnVerifyEgress`).
@@ -653,6 +654,7 @@ What the check does and does not settle:
 | `ttl_seconds` | `int` | `3600` | An upper bound Wardyn *requests* for the minted credential's freshness window, honored by no grant kind today; 1h is the default and the maximum, and negative is rejected. See [`ttl_seconds`](#ttl_seconds). |
 | `requires_approval` | `bool` | `false` | Force a human approval before the broker will mint, instead of auto-minting on policy. |
 | `owner_only` | `bool` | `false` | For a grant that names a stored secret, resolves it from the run owner's own row only, never the operator's; refused on `github_token` and `cloud_sts`. See [`owner_only`](#owner_only). |
+| `owner_only_refs` | `[string]` | `[]` | `owner_only` for the named secrets alone. See [`owner_only_refs`](#owner_only_refs). |
 
 | `kind` | `scope` shape | Write-time rules |
 |---|---|---|
@@ -687,6 +689,12 @@ What the check does and does not settle:
   - So a stored grant without the flag keeps the fallback for them even when the deployment default marks the same pairing `owner_only`.
   - Mark it on the stored policy too.
 - Upgrade the proxy image together with wardynd before setting it: an older proxy refuses a policy carrying the key, so such a run fails at proxy start.
+
+### `owner_only_refs`
+
+- `owner_only` per stored secret, for an `ssh_key` grant whose key and `known_hosts` resolve from different rows; Wardyn sets it at launch, and a policy, profile or preset naming it is refused (use `owner_only`).
+- A member's own ref, admitted because they hold it, reads their row alone; a ref their `secret` capability grants reads their row, then the operator's.
+- On a person's own runner such a grant is refused unless every ref is their own.
 
 ### `github_token`
 
@@ -760,6 +768,9 @@ What the check does and does not settle:
   - the value goes into the sandbox as before when `host` is not an exact `allowed_domains` entry, already carries another credential, or the value spans lines (`run.secret_placeholder.resolve` says which);
   - only `Authorization` is filled: a placeholder in another header, inside Basic auth's base64, a URL or a body reaches `host` unchanged, and a plain-HTTP request to `host` is refused.
   - Without `WARDYN_PROXY_RESPONSE_SCRUB`, a host that echoes the request header back returns the value to the sandbox.
+- On a runner, `WARDYN_RUNNER_SECRET_PLACEHOLDERS` (off by default in 0.10.0) does the same for a `runner_resident` grant with a `host`:
+  - the runner gets the placeholder and a `via_org` route instead of the value, and the organisation's egress fills it, so requests to `host` leave from the organisation's network;
+  - the same limits apply, and a grant that misses them is delivered `runner_resident` as before.
 - Puts the stored secret's **value** into the sandbox environment under `name`, resolved at dispatch —
   - there is no mint, so `requires_approval` is **refused** rather than silently ignored, `ttl_seconds` means nothing, and the broker rejects the grant id outright if anything POSTs it at the mint route.
 - `name` must match `[A-Z_][A-Z0-9_]*` and may not start with `WARDYN_` (those configure the sandbox harness itself);
@@ -939,6 +950,15 @@ The match is exact, so it would never fire and would silently read as enforcemen
 | `tool` | `string` | — (required) | The tool name, matched exactly and case-sensitively (`Read`, `Bash`, `WebFetch`, …), or the literal `*` for the unmatched default. Duplicates are refused at write time: two rules for one tool means one of them does nothing. |
 | `effect` | `string` | — (required) | `allow` (run it, no human, still recorded), `hold` (raise an approval and block — the default behaviour), or `deny` (refuse it, no human). A closed enum: an unrecognised effect is a 400, never a silently-ignored rule that reads as enforcement. |
 
+
+## `recording`
+
+- `off` records no terminal or screen; the audit log still shows what happened. `terminal` records terminal sessions only, what every run got before the level existed. `screen_actions` also records a desktop's screen and an action log of what was opened, copied and transferred.
+- Omitted, the organisation's level applies: `site_config.recording.level`, `terminal` when unset. With `site_config.recording.locked`, that level is a minimum no policy, profile or run goes under, an operator's included.
+- A ceiling's level is a minimum: a member's policy under it may record more, never less. A member's own inline policy under a ceiling that sets no level may not go under the organisation's level.
+- A required setting (the organisation's or a runner pool's `recording: required`) records at least `terminal`. With `WARDYN_RECORDING_STORE=off` nothing is recorded at any level.
+- Keystrokes are never recorded. No value names them, and the desktop relay never reads the browser's side of the stream.
+- The level is resolved once at dispatch and kept on the run as `recording_level`; a run resolved to `off` is `not_recorded: policy_off`.
 
 ## `harness_inner_walls` — `HarnessInnerWalls`
 

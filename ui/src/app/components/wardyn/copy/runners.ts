@@ -17,7 +17,13 @@ import { RUNNER_OFFLINE_WORD, RUNNERS_NAV_TITLE, runnerLabel, runOnChip } from "
 
 export const RUNNERS = {
   NAV: RUNNERS_NAV_TITLE,
-  LEAD: "A runner is what runs sandboxes. A self-hosted runner is a computer someone registered; a remote-hosted runner is a Docker host or Kubernetes cluster this server is set up with. Each runs several runs at once, up to its Runs at once, under your policy and audit. What a runner reports about itself is labelled as reported.",
+  // The page's one-sentence lede (#3060), the same on both tabs; LEAD and the tabs' purposes move into
+  // How runners work, word for word.
+  PAGE_LEDE: "The computers and clusters that run sandboxes, and the pools that decide where runs go.",
+  HOW_TITLE: "How runners work",
+  HOW_RUNNERS_TAB: "Runners tab.",
+  HOW_POOLS_TAB: "Pools tab.",
+  LEAD: "A runner is what runs sandboxes. A self-hosted runner is a computer someone registered; a remote-hosted runner is a Docker host or Kubernetes cluster this server is set up with. Each runs several runs at once, up to its \"Runs at once\" limit, under your policy and audit. What a runner reports about itself is labelled as reported.",
   SEARCH: "Search runners",
   FILTER_ACTIVE: "Active",
   FILTER_REVOKED: "Revoked",
@@ -112,7 +118,7 @@ export const RUNNER = {
 
 export const MY_RUNNER = {
   TITLE: "My runner",
-  LEDE: "A computer you registered runs your own runs, several at once up to its Runs at once, under your organization's policy and audit. One runner per computer is enough. While it's offline it runs nothing new.",
+  LEDE: "A computer you registered runs your own runs, several at once up to its \"Runs at once\" limit, under your organization's policy and audit. One runner per computer is enough. While it's offline it runs nothing new.",
   NO_RUNNER: "You haven't registered a runner.",
   SUMMARY_NONE: "Not registered",
   SUMMARY_ONE: (name: string, state: string) => `${name} · ${state}`,
@@ -186,7 +192,33 @@ export const RUN_RECORDING = {
   LABEL: "Recording",
   org_off: "Not recorded; the organization kept no recordings when it started.",
   runner_declined: "Not recorded by the runner; the organization kept recordings when it started.",
+  // Not on the boards: M7-RunStrip state 4 in the Identity card's form.
+  policy_off: "Recording off. Nothing is captured. The audit log still shows what happened.",
 } as const;
+
+// The run's folder from the person's computer (M4, #2982, owner-approved 2026-10-19): its first sync and,
+// for Both ways, the pass that brings changes back when the run ends.
+export const RUN_COMPUTER_FOLDER = {
+  TITLE: "Folders from your computer",
+  SYNCED: "Synced",
+  WAITING: "Waiting to sync",
+  STOPPED: "Sync stopped",
+  ENDED: "Ended",
+  IN_SANDBOX: "In the sandbox",
+  CHANGES: "Changes",
+  BOTH: "Both ways",
+  COPY_IN: "Copy in only",
+  TO_SANDBOX: "To the sandbox",
+  BACK: "Back to you",
+  AT_START: (files: string, size: string) => `${files} files at start · ${size}`,
+  FILES: (files: string) => `${files} files`,
+  WAITING_BODY: "The run starts when this finishes. Nothing has run yet.",
+  NOTHING_RAN: "Nothing ran.",
+  BACK_AT: (time: string, files: string) => `Last changes synced back at ${time}. ${files} files came back to you.`,
+  DELETED: "The sandbox copy was deleted when the run ended.",
+  REFUSED: (n: string) => `${n} paths were not copied.`,
+  BACK_FAILED: (text: string) => `The changes could not come back: ${text}`,
+};
 
 export const RUN_SYNC = {
   LABEL: "Sync",

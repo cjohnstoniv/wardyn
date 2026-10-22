@@ -34,7 +34,11 @@ type reachableDrive struct {
 
 // target is where this drive mounts (runner.DriveTargetFor).
 func (d reachableDrive) target() string {
-	return runner.DriveTargetFor(types.ResolvedDrive{Drive: d.winner.Drive}, d.legacy)
+	rd := types.ResolvedDrive{Drive: d.winner.Drive}
+	if d.resolved != nil {
+		rd = *d.resolved
+	}
+	return runner.DriveTargetFor(rd, d.legacy)
 }
 
 // reachableDrives resolves every drive the caller on ctx reaches, each through
@@ -112,12 +116,12 @@ func (s *Server) reachableDrives(ctx context.Context, profileMaxDriveMiB int) ([
 func (s *Server) handleListMeDrives(w http.ResponseWriter, r *http.Request) {
 	ctx := withDisplayRead(r.Context())
 	out := client.MeDriveCatalogue{Drives: []client.MeDrive{}}
-	name, unresolved := s.userDriveDeniedByProfile(r)
+	name, unresolved := s.userDriveDeniedByUnit(r)
 	switch {
 	case unresolved != "":
 		out.Unavailable = unresolved
 	case name != "":
-		out.DeniedByProfile = name
+		out.DeniedByUnit = name
 	default:
 		out.Drives, out.PoolChecked, out.Unavailable = s.meDrives(ctx, r.URL.Query().Get("runner_pool_id"))
 	}
@@ -141,6 +145,7 @@ func (s *Server) meDrives(ctx context.Context, poolID string) ([]client.MeDrive,
 		return []client.MeDrive{}, false, driveUnavailableReason(err)
 	}
 	pool, checked := s.catalogueDrivePool(ctx, poolID)
+	sharedWith := s.teamSharedWith(ctx, reach)
 	out := make([]client.MeDrive, 0, len(reach))
 	for _, d := range reach {
 		drive := d.winner.Drive
@@ -154,8 +159,14 @@ func (s *Server) meDrives(ctx context.Context, poolID string) ([]client.MeDrive,
 		}
 		if d.resolved != nil {
 			row.Writable, row.SizeMiB, row.Enforcement = d.resolved.Writable, d.resolved.SizeMiB, d.resolved.Enforcement
+			if row.Team = d.resolved.Team; row.Team {
+				// drive.enabled mounts a team drive under /home/agent/shared, never as the person's own.
+				row.SharedWith, row.Legacy = sharedWith[drive.ID], false
+			}
 		}
 		row.UnavailableReason = s.driveUnavailableHere(ctx, d, pool, checked, remoteDenied)
+		row.KeptFromRun = keptFromRunOf(drive)
+		row.KeptFromRunTitle = s.keptFromRunTitle(ctx, drive)
 		out = append(out, row)
 	}
 	return out, checked, ""

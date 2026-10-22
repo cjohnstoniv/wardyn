@@ -32,12 +32,21 @@ import (
 type memberDriveStore struct {
 	*driveCRUDStore
 	winners map[string][]store.UserDriveWinner
-	profile *types.GovernanceProfile
+	profile *types.GovernanceUnit
 	now     time.Time
 	// starting is the owners with a run in STARTING (MemberDriveOwnerStarting).
 	starting map[string]bool
 	// begins counts tombstone writes (BeginMemberDriveDelete, either route).
 	begins int
+	// runs is what GetRun answers; a run not in it is gone.
+	runs map[uuid.UUID]types.AgentRun
+}
+
+func (s *memberDriveStore) GetRun(_ context.Context, id uuid.UUID) (types.AgentRun, error) {
+	if r, ok := s.runs[id]; ok {
+		return r, nil
+	}
+	return types.AgentRun{}, store.ErrNotFound
 }
 
 func newMemberDriveStore() *memberDriveStore {
@@ -76,7 +85,9 @@ func (s *memberDriveStore) CreateMemberDrive(_ context.Context, d types.UserDriv
 			return types.UserDrive{}, store.ErrMemberDriveNameTaken
 		}
 	}
-	d.ID = uuid.New()
+	if d.ID == uuid.Nil { // as the store keeps a caller's id
+		d.ID = uuid.New()
+	}
 	d.HomeTemplate, d.ObjectScheme, d.Writable, d.Reclaim = types.HomeTemplateHash, types.DriveObjectSchemeID, true, types.DriveReclaimDelete
 	s.drives[d.ID] = d
 	return d, nil
@@ -168,7 +179,7 @@ func (s *memberDriveStore) ResolveUserDrives(_ context.Context, users, _ []strin
 	return s.winners[users[0]], nil
 }
 
-func (s *memberDriveStore) ResolveGovernanceProfile(context.Context, []string, []string, string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (s *memberDriveStore) ResolveGovernanceUnit(context.Context, []string, []string, string) (*types.GovernanceUnit, types.CapabilitySubjectType, error) {
 	if s.profile == nil {
 		return nil, "", store.ErrNotFound
 	}
@@ -301,10 +312,10 @@ func TestMemberDriveCreateProfileDoors(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st := newMemberDriveStore()
-			st.profile = &types.GovernanceProfile{ID: uuid.New(), Name: "contractors", Limits: tc.limits}
+			st.profile = &types.GovernanceUnit{ID: uuid.New(), Name: "contractors", Limits: tc.limits}
 			srv, rec := memberDriveServer(st, &memberDriveRunner{}, "docker")
 			w := createMemberDrive(srv, personCtx(aliceSub), "Notes")
-			if body := wantReason(t, w, http.StatusForbidden, reasonMemberDrivesDeniedByProfile); body.Error != memberDrivesDeniedByProfileMsg("contractors") {
+			if body := wantReason(t, w, http.StatusForbidden, reasonMemberDrivesDeniedByUnit); body.Error != memberDrivesDeniedByUnitMsg("contractors") {
 				t.Errorf("body = %s", w.Body.String())
 			}
 			if n := countAction(rec, authz.AuditAction); n != 1 {
@@ -321,9 +332,9 @@ func TestMemberDriveCreateProfileDoors(t *testing.T) {
 	}
 	t.Run("blank-named profile", func(t *testing.T) {
 		st := newMemberDriveStore()
-		st.profile = &types.GovernanceProfile{ID: uuid.New(), Name: "", Limits: types.GovernanceLimits{DenyMemberDrives: true}}
+		st.profile = &types.GovernanceUnit{ID: uuid.New(), Name: "", Limits: types.GovernanceLimits{DenyMemberDrives: true}}
 		srv, _ := memberDriveServer(st, &memberDriveRunner{}, "docker")
-		wantReason(t, createMemberDrive(srv, personCtx(aliceSub), "Notes"), http.StatusForbidden, reasonMemberDrivesDeniedByProfile)
+		wantReason(t, createMemberDrive(srv, personCtx(aliceSub), "Notes"), http.StatusForbidden, reasonMemberDrivesDeniedByUnit)
 		if len(st.owned("")) != 0 {
 			t.Errorf("a blank-named denying profile let a drive through")
 		}
