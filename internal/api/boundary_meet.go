@@ -45,10 +45,11 @@ type boundaryChange struct {
 func boundaryMeet(b types.Boundary, spec types.RunPolicySpec, limits types.GovernanceLimits) (types.RunPolicySpec, types.GovernanceLimits, []boundaryChange, error) {
 	// The boundary holds no deny_placements, so the base's list goes around the meet: the overlay check
 	// re-judges it, and a profile that denies every placement (a row the write door refuses) would answer 500
-	// here instead of the placement_denied it gives without a boundary (#3446).
-	denied := limits.DenyPlacements
-	limits.DenyPlacements = nil
-	base := composer.Authority{Ceiling: spec.Clone(), Limits: limits}
+	// here instead of the placement_denied it gives without a boundary (#3446). Only the meet's own copy
+	// drops it; limits, the caller's, is never written, so every return below hands back the list as it came.
+	meetLimits := limits
+	meetLimits.DenyPlacements = nil
+	base := composer.Authority{Ceiling: spec.Clone(), Limits: meetLimits}
 	if base.Ceiling.AllowAllEgress && b.Spec.AllowedDomains != nil && (b.Spec.AllowAllEgress == nil || !*b.Spec.AllowAllEgress) {
 		base.Ceiling.AllowedDomains = slices.Clone(*b.Spec.AllowedDomains)
 	}
@@ -69,7 +70,7 @@ func boundaryMeet(b types.Boundary, spec types.RunPolicySpec, limits types.Gover
 		}
 		out.Ceiling.EligibleGrants = kept
 	}
-	limits.DenyPlacements, out.Limits.DenyPlacements = denied, denied
+	out.Limits.DenyPlacements = limits.DenyPlacements
 	return out.Ceiling, out.Limits, boundaryChanges(spec, out.Ceiling, limits, out.Limits), nil
 }
 

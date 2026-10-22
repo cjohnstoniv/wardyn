@@ -64,3 +64,28 @@ func TestBoundaryMeetCC1FloorIsNoOp(t *testing.T) {
 		t.Errorf("min_confinement_class = %q, changes %+v: want the seed's CC1 floor left out of the meet", got.MinConfinementClass, changes)
 	}
 }
+
+// TestBoundaryMeetKeepsTheProfilesDenyPlacements: the boundary holds no deny_placements, so the owner
+// profile's list comes out of the meet as it went in on every path: the early return for a boundary
+// that bounds nothing (an empty one, and the fresh-install seed with its CC1 floor) and the full meet
+// of a real hard_limits boundary.
+func TestBoundaryMeetKeepsTheProfilesDenyPlacements(t *testing.T) {
+	cc1, cc2 := types.CC1, types.CC2
+	deny := []types.Placement{types.PlacementRemote}
+	for name, spec := range map[string]types.BoundarySpec{
+		"empty":                {},
+		"seed_bounds_nothing":  {MinConfinementClass: &cc1},
+		"real_hard_limits_cc2": {MinConfinementClass: &cc2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := types.Boundary{Mode: types.BoundaryHardLimits, Spec: spec}
+			_, limits, _, err := boundaryMeet(b, types.RunPolicySpec{}, types.GovernanceLimits{DenyPlacements: deny})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(limits.DenyPlacements, deny) {
+				t.Errorf("deny_placements = %v, want %v: the meet dropped the profile's list", limits.DenyPlacements, deny)
+			}
+		})
+	}
+}
