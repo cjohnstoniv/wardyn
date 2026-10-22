@@ -219,12 +219,29 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 		return false
 	}
 	run.SandboxRef = ref
+	// Every pass back, the first included, runs with the agent stopped and no egress where the
+	// substrate can do that and keep the folder; where that fails, no pass runs. On a sandbox it
+	// cannot quiesce (on a runner, or on Kubernetes) the first pass runs as it is and is never kept.
+	qctx, qcancel := teardownCtx(ctx)
+	qerr := s.quiesceKeptSandbox(qctx, run, ref)
+	qcancel()
+	var cannot notQuiescable
+	if qerr != nil && !errors.As(qerr, &cannot) {
+		rctx, cancel = teardownCtx(ctx)
+		defer cancel()
+		errText := folderBackGivenUp("no pass ran", "its agent and egress could not be stopped first: "+qerr.Error(), 0)
+		s.recordComputerFolderPass(rctx, runID, func(st *types.RunLocalFolderStatus) {
+			st.Resume, st.Back = nil, folderPassRecord(s.cfg.Now(), runnerwire.FolderPass{}, errText, true)
+		})
+		s.auditComputerFolderPass(rctx, runID, *folder, true, runnerwire.FolderPass{}, errText)
+		return false
+	}
 	d := computerFolderBackTimeout
 	if dl, ok := ctx.Deadline(); ok {
 		d = min(d, time.Until(dl)-runTeardownBudget)
 	}
 	res, passErr, cut := s.computerFolderPassWithin(ctx, d, run, *folder, true)
-	next, errText := s.folderBackVerdict(ctx, run, ref, &res, passErr, cut)
+	next, errText := s.folderBackVerdict(ctx, run, &res, passErr, cut, qerr)
 	rctx, cancel = teardownCtx(ctx)
 	defer cancel()
 	recorded := s.recordComputerFolderPass(rctx, runID, func(st *types.RunLocalFolderStatus) {
@@ -240,9 +257,9 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 }
 
 // folderBackVerdict is the resume a pass back leaves (nil: stop the sandbox now) and the error to
-// record for it, read against the resume before it (folderBackResume). A sandbox it keeps is
-// quiesced first (quiesceKeptSandbox); one that cannot be is stopped, and the record says why.
-func (s *Server) folderBackVerdict(ctx context.Context, run types.AgentRun, ref string, res *runnerwire.FolderPass, passErr string, cut bool) (*types.FolderResume, string) {
+// record for it, read against the resume before it (folderBackResume). Only a sandbox quiesced
+// before the pass (qerr nil) is kept; one that was not is stopped, and the record says why.
+func (s *Server) folderBackVerdict(ctx context.Context, run types.AgentRun, res *runnerwire.FolderPass, passErr string, cut bool, qerr error) (*types.FolderResume, string) {
 	if !cut {
 		return nil, passErr
 	}
@@ -260,7 +277,7 @@ func (s *Server) folderBackVerdict(ctx context.Context, run types.AgentRun, ref 
 	if next == nil {
 		return nil, errText
 	}
-	if qerr := s.quiesceKeptSandbox(rctx, run, ref); qerr != nil {
+	if qerr != nil {
 		return nil, folderBackGivenUp(passErr, "it cannot be kept with its agent stopped and no egress: "+qerr.Error(), next.Unsynced)
 	}
 	return next, errText
@@ -298,6 +315,12 @@ func folderBackGivenUp(errText, why string, unsynced int) string {
 	return fmt.Sprintf("%s; %s, so the sandbox was stopped with %s", errText, why, left)
 }
 
+// notQuiescable is quiesceKeptSandbox's answer for a sandbox whose substrate cannot stop its
+// agent and its egress and keep the folder, as opposed to one where that failed.
+type notQuiescable string
+
+func (e notQuiescable) Error() string { return string(e) }
+
 // keptAgentKill kills every process of a kept sandbox that runs as the exec's user, the agent's
 // own, except the sandbox's idle main process: kill -1 never signals PID 1, whose loop
 // (runner.AgentIdleScript) restarts its sleep. That is the agent and everything it started.
@@ -306,22 +329,25 @@ var keptAgentKill = []string{"/bin/sh", "-c", "kill -KILL -1 2>/dev/null; exit 0
 // keptAgentStopWait bounds the wait for a killed agent's exec to read as ended.
 const keptAgentStopWait = 2 * time.Second
 
-// quiesceKeptSandbox makes a sandbox safe to keep past its run's end for the pass back alone. Its
-// proxy is stopped and removed (runner.ProxyStopper, as for a run lost to an outage), so nothing in
-// it has egress, and its agent's processes are killed and seen ended (AgentStatus). The pass back
-// is untouched: it is an exec through the substrate (execSFTPServer), not traffic through the
-// proxy. A run on a runner is not kept: a runner's stop_proxy is a lost run's containment, queued
-// only with its loss, and a Kubernetes runner's deletes the agent pod when it cannot prove the
-// stop. Nor is one whose substrate cannot stop its proxy alone (Kubernetes in server mode).
+// quiesceKeptSandbox leaves a sandbox past its run's end running the pass back alone, before each
+// pass. Its proxy is stopped and removed (runner.ProxyStopper, as for a run lost to an outage), so
+// nothing in it has egress, and its agent's processes are killed and seen ended (AgentStatus). The
+// pass back is untouched: it is an exec through the substrate (execSFTPServer), not traffic
+// through the proxy. It answers notQuiescable for a run on a runner, whose stop_proxy is a lost
+// run's containment, queued only with its loss (a Kubernetes runner's deletes the agent pod when
+// it cannot prove the stop), and for a substrate that cannot stop its proxy alone (Kubernetes in
+// server mode).
 func (s *Server) quiesceKeptSandbox(ctx context.Context, run types.AgentRun, ref string) error {
 	if run.RunnerID != nil {
-		return errors.New("a sandbox on a runner is not kept")
+		return notQuiescable("a sandbox on a runner is not kept")
 	}
 	stopper, ok := s.cfg.Runner.(runner.ProxyStopper)
 	if !ok {
-		return errors.New("this substrate cannot stop its proxy")
+		return notQuiescable("its substrate cannot stop its proxy alone")
 	}
-	if err := stopper.StopProxy(ctx, ref); err != nil {
+	if err := stopper.StopProxy(ctx, ref); errors.Is(err, runner.ErrEndUnsupported) {
+		return notQuiescable("its substrate cannot stop its proxy alone")
+	} else if err != nil {
 		return fmt.Errorf("its proxy did not stop: %w", err)
 	}
 	if run.AgentExecID == "" {

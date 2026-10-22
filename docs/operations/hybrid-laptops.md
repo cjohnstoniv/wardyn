@@ -241,8 +241,8 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 
 ## A folder on your computer for a remote sandbox
 
-A run on another machine can take a folder from your computer. Your runner serves it in a folder-only mode, so there is
-one install, outbound only, the same as a laptop runner today.
+A run on another machine can take a folder from your computer. Your runner serves it in a folder-only mode: one
+install, outbound only.
 
 1. An admin sets `WARDYN_COMPUTER_FOLDERS=true` ([ENV.md](../ENV.md#wardyn_computer_folders)). It is off by default.
 2. On your computer, claim a runner as in [Claiming a runner](#claiming-a-runner), then serve it in folder-only mode:
@@ -251,18 +251,20 @@ one install, outbound only, the same as a laptop runner today.
    wardyn-runnerd serve --substrate folders
    ```
 
-   It holds no sandbox and needs no Docker. It lists folders under your home folder by default. Use
+   It holds no sandbox and needs no Docker. It lists your home folder by default. Use
    `--folder-root <dir>` (repeatable) to narrow that.
 3. In New Run, add "Your computer" under Files, pick the folder, and choose **Both ways** or **Copy in only**.
 
 What happens:
 
-- Wardyn copies the folder into the sandbox before the agent starts, and holds the agent until that first copy lands. A
-  failed copy fails the run, naming the folder. The run detail shows the first copy, the files and bytes, and any
-  refused paths.
+- Wardyn copies the folder in before the agent starts, and holds the agent until that copy lands. A
+  failed copy fails the run, naming the folder. The run detail shows the first copy's files, bytes and refused paths.
 - One side edits at a time. The sandbox edits while the run is live. With **Both ways**, its changes come back when the
-  run ends, before the sandbox is stopped. A file changed on both sides keeps your computer's copy, and nothing on
-  your computer is deleted. With **Copy in only**, nothing comes back.
+  run ends, before the sandbox is stopped. A file changed on both sides keeps your computer's copy; nothing there is
+  deleted. With **Copy in only**, nothing comes back.
+- Before a pass back, Wardyn stops the agent and cuts its egress. Known limit: on a runner-hosted or Kubernetes
+  sandbox, the agent can stay running with its network for up to about 2 minutes after the run ends, while the first
+  pass back runs (its timeout).
 - The copy follows the `wardyn sync` rules: `.git` stays on your computer, `.gitignore` and `.wardynignore` apply,
   symlinks are refused, and `WARDYN_SYNC_DENY` applies to every pass.
 - The runner checks every path itself:
@@ -272,13 +274,13 @@ What happens:
     chose. Any depth and any letter case count: `.ssh`, `.aws`, `.azure`, `.claude`, `.wardyn`, `.gnupg`, `.docker`,
     `.kube`, `.config/gh`, `.config/gcloud`, `.netrc`, `.git-credentials`, `.git/config` and `Library/Keychains`.
     A project's own `.claude` or `.docker` folder is left out too.
-  - Only folder names, file counts and sizes reach Wardyn while you browse. No file is sent until a run starts.
+  - While you browse, only folder names, file counts and sizes reach Wardyn.
 - The runner opens no port and Wardyn never connects in: each pass rides the runner's own outbound session. The
   runner never reaches into a sandbox. Wardyn joins its stream to the sandbox's own `sftp-server`.
 
-Not yet: bringing changes back when you take over a live run, live sync while the run runs, and **Pause sync**.
-For now this needs a single-replica deployment: Wardyn reaches the runner only from the replica it is connected to,
-so with several replicas a runner connected to another one reads as offline.
+Not yet: bringing changes back when you take over a live run, live sync, and **Pause sync**.
+For now this needs a single-replica deployment: with several replicas, a runner connected to another replica reads as
+offline.
 
 ## Offline and revocation
 

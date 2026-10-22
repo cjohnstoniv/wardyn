@@ -53,7 +53,7 @@ type Report struct {
 	BytesOut int64 `json:"bytes_to_sandbox"`
 	BytesIn  int64 `json:"bytes_from_sandbox"`
 	// Unsynced is set on a --pull pass that was cut short: the sandbox's changed files it had not
-	// brought back yet.
+	// brought back yet. The folder runner reports it; `wardyn sync` prints no report for such a pass.
 	Unsynced int `json:"unsynced,omitempty"`
 	seenSet  map[string]bool
 }
