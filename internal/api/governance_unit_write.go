@@ -714,6 +714,11 @@ func (s *Server) writeUnitDeleteError(w http.ResponseWriter, r *http.Request, er
 				"(deleting it would silently widen them back to the deployment ceiling)", strings.Join(children.Names, ", ")))
 		return true
 	}
+	var pinned *store.ErrUnitPinned
+	if errors.As(err, &pinned) {
+		writeErrorReason(w, http.StatusConflict, reasonGovernanceUnitInUse, unitPinnedMsg(pinned))
+		return true
+	}
 	if errors.Is(err, store.ErrConflict) {
 		writeErrorReason(w, http.StatusConflict, reasonGovernanceUnitInUse,
 			"this governance profile is still assigned — delete its assignments first "+
@@ -722,4 +727,13 @@ func (s *Server) writeUnitDeleteError(w http.ResponseWriter, r *http.Request, er
 	}
 	writeServerError(w, r, "delete governance profile", err)
 	return true
+}
+
+// unitPinnedMsg is the 409 a unit delete gets while workspaces name it as their owning unit.
+func unitPinnedMsg(e *store.ErrUnitPinned) string {
+	names := "a workspace"
+	if len(e.Workspaces) > 0 {
+		names = "workspace(s) " + strings.Join(e.Workspaces, ", ")
+	}
+	return "this governance profile is pinned by " + names + "; unpin them first"
 }

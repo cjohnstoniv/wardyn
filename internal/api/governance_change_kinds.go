@@ -371,9 +371,12 @@ func applyUnitDelete(ctx context.Context, q store.Querier, ch types.GovernanceCh
 	}
 	err = store.DeleteGovernanceUnitQ(ctx, q, id)
 	var children *store.ErrProfileHasChildren
+	var pinned *store.ErrUnitPinned
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		return govApplied{}, writeRefusal(http.StatusNotFound, reasonGovernanceUnitNotFoundByID, "governance profile not found")
+	case errors.As(err, &pinned):
+		return govApplied{}, writeRefusal(http.StatusConflict, reasonGovernanceUnitInUse, "%s", unitPinnedMsg(pinned))
 	case errors.As(err, &children):
 		return govApplied{}, writeRefusal(http.StatusConflict, reasonGovernanceUnitInUse,
 			"this governance profile is the base of %s — delete or re-base them first", strings.Join(children.Names, ", "))
