@@ -46,11 +46,17 @@ func (f actionFixture) endedRetirementRun(t *testing.T, capture bool) (types.Age
 // reportRetireCapable is the caps report of a runner that settles retire_run, in its one inventory session.
 func (f actionFixture) reportRetireCapable(t *testing.T) {
 	t.Helper()
-	session := f.rn.ID.String()
-	if err := f.st.BeginRunnerInventory(t.Context(), f.rn.ID, session); err != nil {
+	f.reportRetireCapableFor(t, f.rn.ID)
+}
+
+// reportRetireCapableFor is reportRetireCapable for the claimed runner id.
+func (f actionFixture) reportRetireCapableFor(t *testing.T, id uuid.UUID) {
+	t.Helper()
+	session := id.String()
+	if err := f.st.BeginRunnerInventory(t.Context(), id, session); err != nil {
 		t.Fatal(err)
 	}
-	if current, err := f.st.RecordRunnerCaps(t.Context(), f.rn.ID, session, store.RunnerCapsReport{RetireCapable: true}, time.Now()); err != nil || !current {
+	if current, err := f.st.RecordRunnerCaps(t.Context(), id, session, store.RunnerCapsReport{RetireCapable: true}, time.Now()); err != nil || !current {
 		t.Fatalf("caps report: current = %v, %v", current, err)
 	}
 }
@@ -464,15 +470,11 @@ const oldRetirementCandidatesSQL = `SELECT r.id FROM runner_output_watermarks w
 // retirement state (or none), an empty and a live ref, and every way the runner join can fail.
 func TestPG_RunnerRetirementCandidates_MatchesTheWatermarkDrivenQuery(t *testing.T) {
 	f := newActionFixture(t)
-	if err := f.st.SetRunnerRetireCapable(t.Context(), f.rn.ID, true); err != nil {
-		t.Fatal(err)
-	}
+	f.reportRetireCapable(t)
 	other := claimed(t, f.st, t.Context(), "action-owner-2")
 	revoked := claimed(t, f.st, t.Context(), "action-owner-3")
 	for _, id := range []uuid.UUID{other.ID, revoked.ID} {
-		if err := f.st.SetRunnerRetireCapable(t.Context(), id, true); err != nil {
-			t.Fatal(err)
-		}
+		f.reportRetireCapableFor(t, id)
 	}
 	if _, err := f.pool.Exec(t.Context(), `UPDATE runners SET revoked_at = now() WHERE id = $1`, revoked.ID); err != nil {
 		t.Fatal(err)
