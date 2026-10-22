@@ -388,13 +388,13 @@ func TestUnitDepthLimit(t *testing.T) {
 // must compose byte-identically before and after.
 func TestUnitSaveWithNullParentStaysUnderDefault(t *testing.T) {
 	e := newGovEnvOn(t, throwawayPGPool(t))
-	u := treeChild(t, e, `{"name":"under-default","parent_id":"`+store.DefaultUnitID.String()+`","overlay":{"allowed_domains":["a.example"]},"overlay_limits":{"deny_interactive":true}}`)
+	u := treeChild(t, e, `{"name":"under-default","parent_id":"`+store.DefaultUnitID.String()+`","overlay":{},"overlay_limits":{"deny_interactive":true}}`)
 	before, err := e.srv.resolveUnitByID(context.Background(), u.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	w := e.admin(http.MethodPut, "/api/v1/governance/units/"+u.ID.String(),
-		`{"name":"under-default","parent_id":null,"overlay":{"allowed_domains":["a.example"]},"overlay_limits":{"deny_interactive":true}}`)
+		`{"name":"under-default","parent_id":null,"overlay":{},"overlay_limits":{"deny_interactive":true}}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("no-op save = %d %s, want 200", w.Code, w.Body)
 	}
