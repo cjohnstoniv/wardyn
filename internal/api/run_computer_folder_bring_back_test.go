@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -365,36 +366,73 @@ func TestBringComputerFolderBack_AQuiescableSandboxIsQuiescedNotStoppedTwice(t *
 // user's) survives the kill, so a pass is never run with it alive, on a bring-back or on any other pass back.
 func TestBringComputerFolderBack_AProcessTheKillCouldNotEndStopsThePass(t *testing.T) {
 	for _, byPerson := range []bool{true, false} {
-		s, cs, _, run, sb, app := bringBackFixture(t)
-		withoutRunner(cs)
-		sb.verifyLeft = true
-		if byPerson {
-			if res := bringBack(t, s, bringBackOwnerSession(t), run); res.code != http.StatusOK {
-				t.Fatalf("bring-back = %d %s", res.code, res.body)
+		t.Run(fmt.Sprintf("by_person_%v", byPerson), func(t *testing.T) {
+			s, cs, _, run, sb, app := bringBackFixture(t)
+			withoutRunner(cs)
+			sb.verifyLeft = true
+			if byPerson {
+				if res := bringBack(t, s, bringBackOwnerSession(t), run); res.code != http.StatusOK {
+					t.Fatalf("bring-back = %d %s", res.code, res.body)
+				}
+			} else {
+				if !s.bringComputerFolderBack(context.Background(), run.ID, "sbx") && cs.status.Back == nil {
+					t.Fatal("a pass back that could not quiesce recorded nothing")
+				}
 			}
-		} else {
-			if !s.bringComputerFolderBack(context.Background(), run.ID, "sbx") && cs.status.Back == nil {
-				t.Fatal("a pass back that could not quiesce recorded nothing")
+			sb.mu.Lock()
+			calls := slices.Clone(sb.calls)
+			sb.mu.Unlock()
+			if !slices.Equal(calls, []string{"quiesce", "verify"}) {
+				t.Errorf("sandbox calls = %v, want the quiesce and its check, and no pass", calls)
 			}
-		}
-		sb.mu.Lock()
-		calls := slices.Clone(sb.calls)
-		sb.mu.Unlock()
-		if !slices.Equal(calls, []string{"quiesce", "verify"}) {
-			t.Errorf("by person %v: sandbox calls = %v, want the quiesce and its check, and no pass", byPerson, calls)
-		}
-		if b, _ := os.ReadFile(filepath.Join(app, "README.md")); string(b) != "hello" {
-			t.Errorf("by person %v: README.md = %q: a pass ran with a process left", byPerson, b)
-		}
-		if cs.status.Back == nil || cs.status.Back.Error == "" {
-			t.Fatalf("by person %v: the folder's record = %+v, want the failure", byPerson, cs.status.Back)
-		}
-		if byPerson && cs.status.Back.Error != bringBackAgentRunningMsg {
-			t.Errorf("record error = %q, want %q", cs.status.Back.Error, bringBackAgentRunningMsg)
-		}
-		if !byPerson && !strings.Contains(cs.status.Back.Error, "no pass ran") {
-			t.Errorf("record error = %q, want it to say no pass ran", cs.status.Back.Error)
-		}
+			if b, _ := os.ReadFile(filepath.Join(app, "README.md")); string(b) != "hello" {
+				t.Errorf("README.md = %q: a pass ran with a process left", b)
+			}
+			if cs.status.Back == nil || cs.status.Back.Error == "" {
+				t.Fatalf("the folder's record = %+v, want the failure", cs.status.Back)
+			}
+			if byPerson && cs.status.Back.Error != bringBackAgentRunningMsg {
+				t.Errorf("record error = %q, want %q", cs.status.Back.Error, bringBackAgentRunningMsg)
+			}
+			if !byPerson && !strings.Contains(cs.status.Back.Error, "no pass ran") {
+				t.Errorf("record error = %q, want it to say no pass ran", cs.status.Back.Error)
+			}
+		})
+	}
+}
+
+// A linux_vm run, and a run on a runner, is notQuiescable before any exec reaches the sandbox: no kill,
+// no check. A VM guest could never read as clean under the verify, so a VM run that reached the
+// server-Docker path (RunnerID nil) must still be refused here, not fail every pass.
+func TestQuiesceKeptSandbox_AVMOrRunnerBackedRunIsNotQuiescableBeforeAnyExec(t *testing.T) {
+	for name, c := range map[string]struct {
+		kind     types.MachineKind
+		onRunner bool
+	}{
+		"container_on_a_runner": {types.MachineContainer, true},
+		"linux_vm_on_a_runner":  {types.MachineLinuxVM, true},
+		"linux_vm_no_runner":    {types.MachineLinuxVM, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, cs, _, run, sb, _ := bringBackFixture(t)
+			if !c.onRunner {
+				withoutRunner(cs)
+			}
+			cs.dispatchTestStore.mu.Lock()
+			run = cs.run
+			cs.dispatchTestStore.mu.Unlock()
+			run.MachineKind = c.kind
+			var cannot notQuiescable
+			if err := s.quiesceKeptSandbox(context.Background(), run, "sbx"); !errors.As(err, &cannot) {
+				t.Fatalf("quiesceKeptSandbox = %v, want notQuiescable", err)
+			}
+			sb.mu.Lock()
+			calls := slices.Clone(sb.calls)
+			sb.mu.Unlock()
+			if len(calls) != 0 {
+				t.Errorf("sandbox calls = %v, want none: no quiesce exec and no verify before notQuiescable", calls)
+			}
+		})
 	}
 }
 

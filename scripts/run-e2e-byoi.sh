@@ -75,8 +75,8 @@ WARDYN_SETUP_RUNNER_LIMITS="${WARDYN_SETUP_RUNNER_LIMITS:---max-runs 4 --total-c
 
 # ── pre-pull the bases so the wrap's ensureImage short-circuits ──────────────
 log "pre-pulling test base images"
-docker pull -q ubuntu:24.04 >/dev/null || die "pull ubuntu:24.04"
-docker pull -q node:20 >/dev/null || die "pull node:20"
+retry docker pull -q ubuntu:24.04 >/dev/null || die "pull ubuntu:24.04"
+retry docker pull -q node:20 >/dev/null || die "pull node:20"
 
 # A one-off harness base: node:20 + the claude CLI, arbitrary USER/HOME.
 HARNESS_TAG="wardyn-byoi-test/harness:latest"
