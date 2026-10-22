@@ -80,6 +80,17 @@ func isAdminTokenCaller(r *http.Request) bool {
 	return actorType == types.ActorSystem && principal == adminTokenPrincipal
 }
 
+// unitWriteMode is governanceWriteMode for the routes a unit admin may use (governance_scope.go): a
+// security caller's write follows the switch, unchanged, and so does a security admin's unit-admin
+// grant, so a single-admin install can create unit admins. A unit admin's write is
+// govQueue whatever the switch says: held unless an exemption proves it narrowing (DESIGN-TREE §5.2).
+func (s *Server) unitWriteMode(w http.ResponseWriter, r *http.Request) (govWriteMode, bool) {
+	if s.isUnitAdminCaller(r.Context()) {
+		return govQueue, true
+	}
+	return s.governanceWriteMode(w, r)
+}
+
 // governanceWriteMode decides how a covered write is carried out, having already written its own 503
 // (ok=false) in local mode. The admin token is checked before local mode, so it stays the way past a
 // switch local mode cannot enforce.
@@ -182,12 +193,20 @@ var governanceChangeKinds = map[string]govKind{
 	govKindRunnerTrust:         {approver: securityApprover, apply: applyRunnerTrustChange},
 	govKindRunNodeRecord:       {approver: securityApprover, apply: applyRunNodeRecordChange},
 	govKindBoundary:            {approver: securityApprover, apply: applyBoundaryChange},
+	govKindUnitAdmin:           {approver: securityApprover, apply: applyUnitAdminChange},
 }
 
 // forChange is the kind as it decides one held change. A remote-hosted runner add to or removal from an
 // organization pool is held under the use-policy kind but written on the operatorOnly tier, so only a
 // super admin decides it; a payload that does not decode is given the stricter tier.
+//
+// A unit, membership or unit-admin change may also be decided by a unit admin governing every unit it
+// touches (unitChangeApprover, governance_unit_admin.go): the same predicate decides it and shows it.
 func (k govKind) forChange(ch types.GovernanceChange) govKind {
+	switch ch.TargetKind {
+	case govKindUnit, govKindMembership, govKindUnitAdmin:
+		k.approver = unitChangeApprover(ch)
+	}
 	if ch.TargetKind == govKindRunnerPoolUsePolicy {
 		var held runnerPoolHeldChange
 		if decodeHeldPayload(ch.Payload, &held) != nil || held.Executor != "" {

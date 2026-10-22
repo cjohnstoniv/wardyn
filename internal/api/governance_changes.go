@@ -40,14 +40,15 @@ var governanceChangeStates = []string{
 	types.GovernanceChangeExpired, types.GovernanceChangeStale,
 }
 
-// mountGovernanceChangeRoutes registers the four /governance/changes routes on the SECURITY tier. The
-// group a mount function receives is decided at the call site (routes.go), and authz_test.go's
-// chi.Walk matrix is what enforces it.
-func (s *Server) mountGovernanceChangeRoutes(securityOps chi.Router) {
-	securityOps.Get("/governance/changes", s.handleListGovernanceChanges)
-	securityOps.Get("/governance/changes/{id}", s.handleGetGovernanceChange)
-	securityOps.Post("/governance/changes/{id}/approve", s.handleApproveGovernanceChange)
-	securityOps.Post("/governance/changes/{id}/reject", s.handleRejectGovernanceChange)
+// mountGovernanceChangeRoutes registers the four /governance/changes routes on the unit-admin tier
+// (governance.go): a unit admin lists, reads and decides the changes inside their units, and the
+// per-change approver below decides which those are. The group a mount function receives is decided
+// at the call site, and authz_test.go's chi.Walk matrix is what enforces it.
+func (s *Server) mountGovernanceChangeRoutes(unit chi.Router) {
+	unit.Get("/governance/changes", s.handleListGovernanceChanges)
+	unit.Get("/governance/changes/{id}", s.handleGetGovernanceChange)
+	unit.Post("/governance/changes/{id}/approve", s.handleApproveGovernanceChange)
+	unit.Post("/governance/changes/{id}/reject", s.handleRejectGovernanceChange)
 }
 
 // handleListGovernanceChanges lists changes newest first. ?state= narrows to one state and defaults to
@@ -101,7 +102,7 @@ func (s *Server) handleGetGovernanceChange(w http.ResponseWriter, r *http.Reques
 		writeServerError(w, r, "read governance change", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, ch)
+	writeJSON(w, http.StatusOK, governanceChangeRead{GovernanceChange: ch, Approvers: s.changeApprovers(r.Context(), ch)})
 }
 
 func (s *Server) handleApproveGovernanceChange(w http.ResponseWriter, r *http.Request) {
@@ -162,6 +163,16 @@ func sameGovernanceHuman(ch types.GovernanceChange, principal, email string) boo
 		return true
 	}
 	return email != "" && ch.ProposedByEmail != "" && strings.EqualFold(email, ch.ProposedByEmail)
+}
+
+// secondApproverSentence is the refusal of a proposer approving their own change. With the switch off a
+// change is held because a unit admin's widening always is, so the sentence names no switch then.
+func secondApproverSentence() string {
+	const rule = "a second human must approve this — you proposed it, so someone else approves it (you may reject it)"
+	if envEnabled(envGovernanceSecondHuman) {
+		return envGovernanceSecondHuman + " is set: " + rule
+	}
+	return rule
 }
 
 // recheckApprover re-establishes, inside the decision transaction, that the approver still has the
@@ -291,8 +302,7 @@ func (s *Server) decideGovernanceChange(w http.ResponseWriter, r *http.Request, 
 			}
 			if approve && sameGovernanceHuman(ch, principal, email) {
 				return &govRefusal{why: "approver proposed the change", write: func(w http.ResponseWriter, r *http.Request) {
-					s.refuse(w, r, authz.Deny(authz.ReasonSecondHumanRequired, govChangeTarget, envGovernanceSecondHuman+
-						" is set: a second human must approve this — you proposed it, so someone else approves it (you may reject it)"))
+					s.refuse(w, r, authz.Deny(authz.ReasonSecondHumanRequired, govChangeTarget, secondApproverSentence()))
 				}}
 			}
 		}
@@ -325,6 +335,10 @@ func (s *Server) decideGovernanceChange(w http.ResponseWriter, r *http.Request, 
 			}
 		}
 		tdata["change_id"], tdata["proposed_by"] = out.ID, out.ProposedBy
+		if units, strict, scoped := unitChangeScope(out); scoped {
+			// A change a unit admin may decide records who made it, in which scope it was approved, and by whom.
+			tdata["actor"], tdata["approver"], tdata["unit_scope"] = out.ProposedBy, principal, s.auditUnitScope(ctx, units[0], strict)
+		}
 		s.recordAudit(ctx, s.auditEvent(nil, actorType, principal, applied.action, applied.target, "success", mustJSON(tdata)))
 		s.recordAudit(ctx, s.auditEvent(nil, actorType, principal, "governance.change.approve", out.ID.String(), "success", mustJSON(data)))
 		if bypass {
