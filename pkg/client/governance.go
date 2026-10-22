@@ -89,6 +89,8 @@ type GovernanceMembershipRequest struct {
 type GovernanceDocument struct {
 	Units       []GovernanceUnit       `json:"units"`
 	Memberships []GovernanceMembership `json:"memberships"`
+	// Restrictions are the deny-only lists that follow people, upserted by name.
+	Restrictions []Restriction `json:"restrictions,omitempty"`
 	// MaxDepth is the server's maximum unit depth, as GET /governance reports it. An apply never
 	// sends it: the limit is site_config.governance_max_depth.
 	MaxDepth int `json:"max_depth,omitempty"`
@@ -567,12 +569,22 @@ func (c *Client) ApplyGovernanceResult(ctx context.Context, doc GovernanceDocume
 		}
 	}
 
+	if err := c.applyRestrictions(ctx, current, &doc, &res); err != nil {
+		return res, err
+	}
+
 	if prune {
 		// A pending write means the state prune would compare against is not
 		// final, so no delete is issued after one (ApplyGovernance's doc).
 		res.PruneSkipped = len(res.Pending) > 0
 		if !res.PruneSkipped {
 			res.PruneSkipped, err = c.pruneGovernance(ctx, current, doc, &res)
+			if err != nil {
+				return res, err
+			}
+		}
+		if !res.PruneSkipped {
+			res.PruneSkipped, err = c.pruneRestrictions(ctx, current, doc, &res)
 			if err != nil {
 				return res, err
 			}

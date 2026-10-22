@@ -44,6 +44,10 @@ an operator follows to turn one on and run the queue.
 - `POST /governance/memberships/{id}/promote` makes a legacy membership a context (already one: `409` `governance_membership_invalid`); audit `governance.membership.promote`. Both follow the switch below, held as ops `move`/`promote`.
 - Deleting a legacy membership can let a lower legacy one become someone's context. `activates: [{unit_id, unit_name}]` lists those units (a group one matches anyone) in the held change's diff, or the direct delete's `governance.membership.delete` row.
 
+**Restrictions.**
+
+- A restriction (`/governance/restrictions`) is a deny-only list that follows its members; a workspace's unit pin is `PUT /workspaces/{id}/owning-unit`.
+
 **Optional: four-eyes on governance writes.**
 
 - Set `WARDYN_GOVERNANCE_SECOND_HUMAN=1` and no single administrator can change a governance profile, an assignment, a capability grant, the enforcement map, a value's availability, a user type's priority, a role mapping or a key-domain assignment alone.
@@ -55,7 +59,7 @@ an operator follows to turn one on and run the queue.
 - A second human approves it with `POST /governance/changes/{id}/approve`, or any authorised human rejects it with `POST /governance/changes/{id}/reject` (an optional `reason`, at most 512 characters, no control characters, recorded on the change and its audit row only).
 - `GET /governance/changes` lists the queue (`?state=` narrows it; pending by default) and `GET /governance/changes/{id}` reads one.
 - A change nobody decides expires after `WARDYN_GOVERNANCE_CHANGE_TTL` (default `72h`).
-- Nothing notifies anyone that a change waits: approvers find them with `wardyn governance changes list` or the API.
+- Nothing notifies anyone that a change waits: approvers find them with `wardyn governance changes list` or the API; name who looks, and how often, in your runbook.
 
 - **Who may approve.**
   - The approver must pass the predicate of the tier the write was proposed on, never a weaker one.
@@ -137,7 +141,7 @@ an operator follows to turn one on and run the queue.
 ## Four-eyes on governance writes: a walkthrough
 
 - The rules are in "Optional: four-eyes on governance writes" above; this is the order to work in.
-- The switch and its TTL are in [ENV.md](../ENV.md); the audit rows are in [AUDIT-ACTIONS.md](../AUDIT-ACTIONS.md); the residuals are in [THREAT-MODEL.md](../../threatmodel/THREAT-MODEL.md) §5 "Four-eyes on governance writes".
+- The switch and its TTL are in [ENV.md](../ENV.md); the audit rows in [AUDIT-ACTIONS.md](../AUDIT-ACTIONS.md); the residuals in [THREAT-MODEL.md](../../threatmodel/THREAT-MODEL.md) §5 "Four-eyes on governance writes".
 
 **1. Before you turn it on.** All four must hold, or the switch deadlocks you or does not bind:
 
@@ -146,7 +150,7 @@ an operator follows to turn one on and run the queue.
 - **Two humans can approve.** Every covered target needs a second security admin or super admin, except role mappings and an organization pool's remote-hosted runner add or removal, which need a second super admin (see step 6).
 - **Every CLI and SDK caller is upgraded.** A client built before 0.8.6 decodes the `202` as an empty object ([sdk.md](../sdk.md) "Old clients"): nothing applies unapproved, but its error confuses.
 
-Then set `WARDYN_GOVERNANCE_SECOND_HUMAN` (and, if `72h` is wrong for your approvers, `WARDYN_GOVERNANCE_CHANGE_TTL`) in the daemon's environment; on Kubernetes that is the chart's existing `env` map.
+Then set `WARDYN_GOVERNANCE_SECOND_HUMAN` (and, if `72h` is wrong, `WARDYN_GOVERNANCE_CHANGE_TTL`) in the daemon's environment; on Kubernetes that is the chart's existing `env` map.
 
 - Both are read at boot.
 - Turned off later, pending changes stay approvable and rejectable under the same rules, self-approval included; new writes apply directly.
@@ -166,6 +170,7 @@ Then set `WARDYN_GOVERNANCE_SECOND_HUMAN` (and, if `72h` is wrong for your appro
 | Service identity create, and a PATCH that changes the sponsor | always (the PATCH whole) | security admin or super admin |
 | Egress baseline (`PUT /governance/egress-baseline`) | always | security admin or super admin |
 | The Wardyn boundary (`PUT /governance/boundary`, see [boundary.md](boundary.md)) | always | security admin or super admin |
+| A restriction delete or loosening; a unit pin moved off its branch | always | security admin or super admin |
 | Credential delivery policy (`PUT /governance/credential-delivery`) | always | security admin or super admin |
 | Runner pool use policy set, delete | always | security admin or super admin |
 | Remote-hosted runner people policy set, delete | always | security admin or super admin |
@@ -207,7 +212,6 @@ wardyn governance set governance.json --prune    # the same apply, once the plan
 - Running the SAME document again before then is safe: a target whose held change is that very write reports pending, naming it, and the rest of the file applies.
 - A document edited since is refused at that target (`409` `governance_change_pending`, naming the held change) until it is decided; none of the edit is stored.
 - The console does the same on the Governance screen's Changes tab, with the diff in a drawer; Approve is disabled on your own proposal.
-- Nothing notifies an approver that a change is waiting: name who looks, and how often, in your runbook.
 - There is at most one pending change per target:
   - a second proposal at the same target is `409` `governance_change_pending`, which names the first and carries it in `pending_change`,
   - with `pending_change_matches` saying whether it is the very write that was refused (same operation, same payload).
@@ -234,10 +238,8 @@ wardyn governance set governance.json --prune    # the same apply, once the plan
 
 - Role mappings, and a held remote-hosted runner add to or removal from an organization pool, are written on the super-admin tier, so only a super admin may approve one, and nobody approves their own.
 - With a single super admin, no role mapping or held pool membership can change while the switch is on, except through the admin token (audited as a bypass).
-- Add a second super admin before you enable the switch, or accept the token as their path.
 - The lockout guard is judged against the **approver's** own roles at apply, so the approver cannot be the person whose mapping change would strip their own admin.
 
 **7. What stays single-human.**
 
 - Workspace approved and denied egress lists, record-egress promotion, `/policies`, `/site-config`, `/integrations`, the approval `always` scope, user-type create and delete, and the SCIM purge's deletion of a person's own assignments and grants.
-- The threat model lists each with its reason.
