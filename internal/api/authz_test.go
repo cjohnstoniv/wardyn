@@ -1390,6 +1390,11 @@ func TestAuthzMatrix(t *testing.T) {
 				if w := doSSO(t, srv, method, p, memberSess, body); w.Code != http.StatusForbidden {
 					t.Errorf("member: status = %d, want 403; body=%s", w.Code, w.Body.String())
 				}
+				// A unit-admin grant reaches no admin or security route: the promotion, the boundary,
+				// site config, people, role maps, grants and every other surface stay refused.
+				if w := doSSO(t, srv, method, p, unitAdminSess, body); w.Code != http.StatusForbidden {
+					t.Errorf("unit admin: status = %d, want 403; body=%s", w.Code, w.Body.String())
+				}
 				if w := doSSO(t, srv, method, p, nil, body); w.Code != http.StatusUnauthorized {
 					t.Errorf("unauthenticated: status = %d, want 401; body=%s", w.Code, w.Body.String())
 				}

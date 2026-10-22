@@ -287,7 +287,8 @@ func unitPath(byID map[uuid.UUID]types.GovernanceUnit, id uuid.UUID) []unitPathL
 
 // checkEffective resolves q's context under choice by the enforcement path's own steps: the context
 // ceiling (contextCeiling, the body of resolveContext) and then the boundary. Provenance records the
-// deployment, then the context's unit on each knob it changed, then the boundary.
+// deployment, then the context's unit on each knob it changed, then the boundary, and marks a knob a
+// lock above fixes, as a run's provenance does.
 func (s *Server) checkEffective(ctx context.Context, q contextQuery, choice contextChoice) (*checkEffective, error) {
 	deployment := governanceCeiling{Spec: s.cfg.DefaultPolicy.Clone(), MemberDefault: s.memberDefaultFor(s.cfg.DefaultPolicy.Resources)}
 	c, err := s.contextCeiling(ctx, q, choice, deployment)
@@ -301,6 +302,7 @@ func (s *Server) checkEffective(ctx context.Context, q contextQuery, choice cont
 		return nil, err
 	}
 	prov.setBy(boundaryProvenance, c.Spec, bounded.Spec)
+	prov.markLocked(bounded)
 	return &checkEffective{Ceiling: redactSpecForRead(bounded.Spec, true), Limits: bounded.Limits, Provenance: prov}, nil
 }
 
