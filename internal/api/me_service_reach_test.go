@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -142,7 +144,22 @@ func TestMeServiceReach(t *testing.T) {
 			}
 		}
 	})
-	// Last: it swaps the store.
+	// Last: these swap the store. A failed list read fails /me as it fails the route, never a partial reach.
+	storeErr := func(t *testing.T, st store.Store, route string, sameBody bool) {
+		t.Helper()
+		prev := e.h.srv.cfg.Store
+		e.h.srv.cfg.Store = st
+		t.Cleanup(func() { e.h.srv.cfg.Store = prev })
+		me, list := get("/api/v1/me"), get(route)
+		if me.Code != http.StatusInternalServerError || respReason(me) != reasonInternalError || list.Code != me.Code || respReason(list) != respReason(me) {
+			t.Errorf("service GET /me = %d %s, GET %s = %d %s, want both 500 %s", me.Code, me.Body.String(), route, list.Code, list.Body.String(), reasonInternalError)
+		}
+		if sameBody && me.Body.String() != list.Body.String() {
+			t.Errorf("service GET /me body %s differs from GET %s body %s", me.Body.String(), route, list.Body.String())
+		}
+	}
+	t.Run("presets_store_error", func(t *testing.T) { storeErr(t, presetsUnreadable{e.st}, "/api/v1/presets", true) })
+	t.Run("workspaces_store_error", func(t *testing.T) { storeErr(t, workspacesUnreadable{e.st}, "/api/v1/workspaces", false) })
 	t.Run("site_config_unreadable", func(t *testing.T) {
 		prev := e.h.srv.cfg.Store
 		e.h.srv.cfg.Store = siteConfigUnreadable{e.st}
@@ -155,6 +172,19 @@ func TestMeServiceReach(t *testing.T) {
 			t.Errorf("a person's GET /me with an unreadable site config = %d %s, want 200", w.Code, w.Body.String())
 		}
 	})
+}
+
+// presetsUnreadable and workspacesUnreadable are the PG store with one list read failing.
+type presetsUnreadable struct{ store.PG }
+
+func (presetsUnreadable) ListLaunchPresets(context.Context) ([]types.LaunchPreset, error) {
+	return nil, errors.New("presets read failed")
+}
+
+type workspacesUnreadable struct{ store.PG }
+
+func (workspacesUnreadable) ListWorkspaces(context.Context) ([]types.Workspace, error) {
+	return nil, errors.New("workspaces read failed")
 }
 
 // TestMeServiceReach_PersonBodyGolden: a person's GET /me body is byte-identical to the one before the

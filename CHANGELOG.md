@@ -53,12 +53,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Recording is a level: a policy's `recording` is `off`, `terminal` or `screen_actions`, and
   `site_config.recording` sets the organisation's level and can lock it as a minimum. Nothing set records terminal
   sessions, as before. `WARDYN_RECORDING_STORE=off` still records nothing, and keystrokes are never recorded.
+- A service token reads its own runs' audit, the presets and workspaces it may launch with, and its reach on
+  `GET /me`.
 
 ### Changed
 
 - The CLI's hint under a `401` follows the answer's reason. On a single-sign-on deployment with no admin token
   (`sign_in_required`) it says to use a personal API token in `WARDYN_TOKEN`, not the compose stack's admin token. For
   a token the organisation does not know (`admin_token_not_configured`) it names where the token came from.
+- A service token's `GET /me` answers 503 `roster_unreadable` when the site configuration cannot be read, as
+  `GET /workspaces` does, and fails rather than answering a partial reach.
 
 ## [0.9.6] — 2026-10-20
 
