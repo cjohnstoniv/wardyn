@@ -81,9 +81,13 @@ func newRigAt(t *testing.T, markerDir string) *rig {
 	t.Cleanup(cancel)
 	r := &rig{port: &fakePort{}, ctx: ctx, srv: &Server{Version: "test", Home: t.TempDir(), OutDir: t.TempDir(), MarkerDir: markerDir}}
 	l := newPortListener(ctx, r.port, 5*time.Millisecond)
+	h, err := r.srv.Handler()
+	if err != nil {
+		t.Fatal(err)
+	}
 	var protocols http.Protocols
 	protocols.SetUnencryptedHTTP2(true)
-	hs := &http.Server{Handler: r.srv.Handler(), Protocols: &protocols}
+	hs := &http.Server{Handler: h, Protocols: &protocols}
 	go func() { _ = hs.Serve(l) }()
 	t.Cleanup(func() { _ = hs.Close() })
 	return r
@@ -168,6 +172,12 @@ func TestPartWayFailedInitStaysRefused(t *testing.T) {
 	good := Init{Files: []File{{Path: filepath.Join(t.TempDir(), "managed.json"), Mode: 0o644}}}
 	if err := newRigAt(t, boot).client(t).Init(ctxT(t), good); err == nil || !strings.Contains(err.Error(), `409 Conflict: "the sandbox is already initialised"`) {
 		t.Fatalf("init after a part-way failure = %v, want refused", err)
+	}
+}
+
+func TestHandlerRefusesAnEmptyMarkerDir(t *testing.T) {
+	if _, err := (&Server{Version: "test", Home: t.TempDir(), OutDir: t.TempDir()}).Handler(); err == nil {
+		t.Fatal("a Server with no MarkerDir got a handler")
 	}
 }
 

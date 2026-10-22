@@ -73,8 +73,12 @@ func (d *detached) notify() {
 	d.mu.Unlock()
 }
 
-// Handler serves the requests the package doc lists.
-func (s *Server) Handler() http.Handler {
+// Handler serves the requests the package doc lists. It refuses a Server with no MarkerDir, whose
+// marker would land in the working directory, where a reboot does not clear it.
+func (s *Server) Handler() (http.Handler, error) {
+	if s.MarkerDir == "" {
+		return nil, errors.New("the guest agent has no marker directory")
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/ready", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, Ready{Version: s.Version}) })
 	mux.HandleFunc("POST /v1/init", s.handleInit)
@@ -97,7 +101,7 @@ func (s *Server) Handler() http.Handler {
 		}
 		writeJSON(w, d.state())
 	})
-	return mux
+	return mux, nil
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
