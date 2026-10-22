@@ -95,6 +95,9 @@ func (s *Server) localResolvedPlan(ctx context.Context, run types.AgentRun, self
 		UpstreamProxySecretRef: sc.UpstreamProxySecretRef, LocalSelfDefinedComponents: selfDefinedAllowed,
 		TrustedOutput: localTrustedOutputRun(run), SelfDefinedComponents: selfDefinedSnapshotNames(comps),
 	}
+	if run.RunnerID != nil {
+		p.VerifiedLocalPaths = s.drivePathsOn(*run.RunnerID, spec.Drives)
+	}
 	owner := runIdentitySubject(ctx, run.CreatedBy)
 	byID := map[uuid.UUID]types.CredentialGrant{}
 	for _, g := range rows {

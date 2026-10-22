@@ -86,9 +86,10 @@ func TestRecoveryManifest_VerifyRefusesTheSameSeqWithAnotherRowHash(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	re := regexp.MustCompile(`"audit_head_hash":\s*""`)
+	// Whatever head the fixture has (a fresh schema's governance.boundary.seed row), the pin swaps its hash.
+	re := regexp.MustCompile(`"audit_head_hash":\s*"[^"]*"`)
 	if !re.Match(raw) {
-		t.Fatalf("the fixture's manifest does not carry an empty audit head hash: %s", raw)
+		t.Fatalf("the fixture's manifest carries no audit head hash: %s", raw)
 	}
 	writeFixtureFile(t, path, string(re.ReplaceAll(raw, []byte(`"audit_head_hash": "other"`))))
 	err = verifyRecoveryManifest(context.Background(), dsn, set)

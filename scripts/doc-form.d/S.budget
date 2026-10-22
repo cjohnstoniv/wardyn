@@ -263,7 +263,13 @@
 # docs/sdk.md 21947 = ours 21146 + theirs 21224 - base 20423 at the 0.10 W4c merge of origin/main 7e33976ca onto the train.
 # docs/sdk.md=21224 adds 86 (0.10 TREE-MODEL): three unit-context reasons and the GET /governance tree fields.
 # docs/sdk.md 22033 = ours 21947 + theirs 21310 - base 21224 at the 0.10 W4c merge of W4h 2ccd426db into the W4X train.
-docs/sdk.md=22033 share=21 # tightened from 21227 to the measured count at the 0.10 W4d merge
+# 0.10 SI-POLICY: docs/sdk.md 20524 adds 101 over 20423: five approval-rule wire reasons, measured.
+# docs/sdk.md 21325 = ours 21224 + theirs 20524 - base 20423 at the 0.10 W4f merge of SI-POLICY onto the train.
+# docs/sdk.md 20521 adds 98 over 20423, measured (0.10 POL-MOUNT): the governance_mount_keep_unknown row, the governance case of admin_surface, and the mount-source tier in the run-policy rows.
+# docs/sdk.md 21423 = ours 21325 + theirs 20521 - base 20423 at the 0.10 W4f merge of POL-MOUNT onto the train.
+# docs/sdk.md 21436 = ours 21423 + theirs 20436 - base 20423 at the 0.10 W4f merge of SI-DOCS onto the train.
+# docs/sdk.md 22245 = ours 22033 + theirs 21436 - base 21224 at the 0.10 W4c merge of W4f a55a58e89 into the W4X train.
+docs/sdk.md=22245 share=21 # tightened from 21227 to the measured count at the 0.10 W4d merge
 # docs/sdk.md 20423 = ours 20195 + theirs 20288 - base 20060 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/sdk.md 20315 = ours + theirs - base at the 0.10 HYB-C merge of main onto VM-A, measured.
 # 0.10 HYB-C: docs/sdk.md 20343 adds 28 over 20315, measured: the placement_capability refusal of a linux_vm run with a folder on a runner that cannot share one.

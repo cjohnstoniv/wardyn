@@ -106,8 +106,8 @@ func (s *Server) routes() chi.Router {
 			//   mountGovernanceRoutes  (governance.go) — CALLED WITH securityOps,
 			//       despite naming its parameter operatorOnly; read the call site
 			//   mountUserDriveFamily   (user_drives_reclaim.go) — wraps
-			//       mountUserDriveRoutes (user_drives.go) split: 4 operatorOnly,
-			//       3 securityOps (issue #168) + the destroy verb, operatorOnly
+			//       mountUserDriveRoutes (user_drives.go) split: 3 operatorOnly,
+			//       4 securityOps (issue #168, and the list in #2827) + the destroy verb, operatorOnly
 			//   mountWorkspaceProviderRoutes        operatorOnly
 			//       (workspace_providers.go)
 			//   mountAgentProviderRoutes            operatorOnly
@@ -623,15 +623,17 @@ func (s *Server) routes() chi.Router {
 
 			// User drives (migration 0054): the storage an admin registers
 			// and allocates, and the per-run flag a member mounts theirs with.
-			// Seven routes SPLIT across both tiers (issue #168, 0.8): the four
-			// that name a HOST PATH (host_root) or a cluster storage class —
-			// creating, listing, updating, and removing the drive itself — stay
+			// Seven routes SPLIT across both tiers (issue #168, 0.8): the three
+			// that write a HOST PATH (host_root) or a cluster storage class —
+			// creating, updating, and removing the drive itself — stay
 			// operatorOnly, because "never the host" is exactly what separates
 			// the two admin tiers. The other three — granting an allocation,
 			// revoking one, and previewing whose drive resolves — moved to
 			// securityOps: a security admin's authority over drives was already
 			// the DenyUserDrive door in the profile editor (/governance above),
-			// and none of the three names a host path.
+			// and none of the three names a host path. The list joined them in
+			// 0.10 (issue #2827) so a security admin's Drives page has something
+			// to read; the handler blanks host_root and storage_class for them.
 			//
 			// Registered UNCONDITIONALLY (mountUserDriveRoutes' own doc), so
 			// TestAuthzMatrix's every-conditional-route-mounted doctrine has
@@ -843,6 +845,10 @@ func (s *Server) mountPermissionRoutes(securityOps chi.Router) {
 	securityOps.Get("/governance/boundary", s.handleGetBoundary)
 	securityOps.Put("/governance/boundary", s.handlePutBoundary)
 	securityOps.Post("/governance/dry-run", s.handleBoundaryDryRun)
+	securityOps.Get("/governance/approval-rules", s.handleListApprovalRules)
+	securityOps.Post("/governance/approval-rules/dry-run", s.handleApprovalRuleDryRun)
+	securityOps.Put("/governance/approval-rules/{name}", s.handlePutApprovalRule)
+	securityOps.Delete("/governance/approval-rules/{name}", s.handleDeleteApprovalRule)
 	securityOps.Get("/governance/credential-delivery", s.handleGetCredentialDelivery)
 	securityOps.Put("/governance/credential-delivery", s.handlePutCredentialDelivery)
 }

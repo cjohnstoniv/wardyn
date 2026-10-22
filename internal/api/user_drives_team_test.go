@@ -59,7 +59,7 @@ func TestTeamDriveResolvesOneReadOnlyFolder(t *testing.T) {
 	}
 	srv := New(Config{BaseCtx: testBaseCtx(t), RunnerTarget: "docker", LocalMode: true})
 	mount, ok := srv.driveMountFor(context.Background(), httptest.NewRecorder(),
-		runDrive{resolved: *alice, target: runner.DriveTargetFor(*alice, false)})
+		runDrive{resolved: *alice, target: runner.DriveTargetFor(*alice, false)}, drivePlace{})
 	if !ok || !mount.Team || mount.SubjectHash != "" || mount.Target != runner.SharedRoot+"/team-data" {
 		t.Fatalf("mount = %+v (ok %v), want a team mount with no subject hash under %s", mount, ok, runner.SharedRoot)
 	}
@@ -109,7 +109,7 @@ func TestTeamDriveMemberWriteIsRefused(t *testing.T) {
 	}
 	srv := New(Config{BaseCtx: testBaseCtx(t), RunnerTarget: "docker", LocalMode: true})
 	mount, ok := srv.driveMountFor(context.Background(), httptest.NewRecorder(),
-		runDrive{resolved: *resolved, target: runner.DriveTargetFor(*resolved, false)})
+		runDrive{resolved: *resolved, target: runner.DriveTargetFor(*resolved, false)}, drivePlace{})
 	if !ok || !mount.ReadOnly {
 		t.Fatalf("mount = %+v (ok %v), want read-only", mount, ok)
 	}

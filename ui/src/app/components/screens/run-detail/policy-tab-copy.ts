@@ -48,6 +48,8 @@ export const POLICY_TAB = {
   // S-31
   hidden: "Hidden",
   hiddenTip: "Only admins can see this.",
+  // A mount's host path: hidden from every reader but a super admin.
+  mountHiddenTip: "Only a super admin can see this.",
   // S-32
   scope:
     "Not shown here: hosts approved while the run was running (see Approvals), credentials it was handed (see Credentials on Overview), folders added from a workspace or drive, and Azure DevOps access that came from the connection's defaults.",

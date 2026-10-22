@@ -221,7 +221,7 @@ spec:
       automountServiceAccountToken: {{ .Values.serviceAccount.automount }}
       # `default 70` carries a --reuse-values upgrade from a chart that had no
       # such value; see values.yaml for why 70.
-      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds | default 70 }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds | default 85 }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       {{- with .Values.image.pullSecrets }}

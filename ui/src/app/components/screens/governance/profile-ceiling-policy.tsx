@@ -8,6 +8,7 @@
 // ceiling is one authored string the profile editor holds; this file only
 // shows it and routes every edit back through a parse.
 import * as React from "react";
+import { GOVERNANCE } from "../../../lib/governance-copy";
 import { TIER_PICKER } from "../../../lib/tier-picker-copy";
 import type { ConfinementClass, SetupModelProvider } from "../../../lib/types";
 import { CC_ORDER } from "../../../lib/types";
@@ -16,6 +17,7 @@ import { CC_META } from "../../wardyn/cc-meta";
 import { POLICY_DOCUMENT as D } from "../../wardyn/copy/policy-document";
 import { PolicyDocument, type PolicyView } from "../../wardyn/policy-document/policy-document";
 import { OperationError, useEditModeFocus } from "../../wardyn/policy-document/policy-editor";
+import { REDACTED } from "../../wardyn/policy-document/policy-summary";
 import {
   setSpecKey,
   type ParsedSpec,
@@ -59,7 +61,13 @@ export function ProfileCeilingPolicy({
         onViewChange={setView}
         source={{ text: source, format }}
         headingLevel={4}
-        notes={!parsed.ok && <p className="text-xs text-warning">{D.INVALID_GATE}</p>}
+        notes={
+          !parsed.ok ? (
+            <p className="text-xs text-warning">{D.INVALID_GATE}</p>
+          ) : (
+            hasWithheldMount(parsed.spec) && <p className="text-xs text-muted-foreground">{GOVERNANCE.CEILING_MOUNTS_LOCKED}</p>
+          )
+        }
         actions={
           !editing && (
             <Button id={EDIT_ID} type="button" variant="outline" size="sm" onClick={() => setEditing(true)}>
@@ -135,4 +143,12 @@ function AllowedBarriersField({
       {refused?.source === source && <OperationError error={refused.error} className="mt-2" />}
     </div>
   );
+}
+
+// A mount whose host path the server withheld from this reader comes back as
+// `<redacted>`. The server keeps it when it is sent back that way, and refuses
+// any other source from a reader below the super admin tier.
+function hasWithheldMount(spec: unknown): boolean {
+  const mounts = (spec as { workspace_mounts?: unknown } | null)?.workspace_mounts;
+  return Array.isArray(mounts) && mounts.some((m) => (m as { source?: unknown } | null)?.source === REDACTED);
 }

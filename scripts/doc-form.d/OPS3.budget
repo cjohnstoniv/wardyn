@@ -49,6 +49,20 @@
 # docs/operations/denials.md 5520 = ours 5492 + theirs 5359 - base 5331 at the W4g merge of PROXYCAP.
 # docs/operations/governance-writes.md 3478 = ours 3171 + theirs 3478 - base 3171 at the 0.10 W4c merge of W4h 2ccd426db into the W4X train.
 # docs/operations/denials.md 5520 = ours 5492 + theirs 5520 - base 5492 at the 0.10 W4c merge of W4h 2ccd426db into the W4X train.
+# 0.10 SI-POLICY: docs/operations/admin-only-writes.md 3765 adds 38 over 3727: the /governance/approval-rules tier row, measured.
+# docs/operations/admin-only-writes.md 3769 = ours 3731 + theirs 3765 - base 3727 at the 0.10 W4f merge of SI-POLICY onto the train.
+# docs/operations/admin-only-writes.md 3747 measured (0.10 Drives read): the GET /drives security-tier clause and its withheld fields.
+# docs/operations/admin-only-writes.md 3789 = ours 3769 + theirs 3747 - base 3727 at the 0.10 W4f merge of RUL-UI onto the train.
+# docs/operations/three-roles.md 4720 adds 38 over 4682, measured (0.10 POL-MOUNT): mount host paths are the exception to the security tier's profile authoring.
+# 0.10 SI-POLICY: docs/operations/governance-writes.md 3192 adds 21 over 3171: the approval-rule row, measured.
+# docs/operations/governance-writes.md 3185 adds 14 over 3171, measured (0.10 POL-MOUNT): a profile change that sets a mount host path is super-approved.
+# docs/operations/governance-writes.md 3206 = ours 3192 + theirs 3185 - base 3171 at the 0.10 W4f merge of POL-MOUNT onto the train.
+# docs/operations/denials.md 5497 = ours 5492 + theirs 5336 - base 5331 at the 0.10 W4f merge of SI-DOCS onto the train.
+# docs/operations/admin-only-writes.md 3791 = ours 3733 + theirs 3789 - base 3731 at the 0.10 W4c merge of W4f a55a58e89 into the W4X train.
+# docs/operations/three-roles.md 4720 = ours 4682 + theirs 4720 - base 4682 at the 0.10 W4c merge of W4f a55a58e89 into the W4X train.
+# docs/operations/governance-writes.md 3513 = ours 3478 + theirs 3206 - base 3171 at the 0.10 W4c merge of W4f a55a58e89 into the W4X train.
+# docs/operations/api-tokens.md 6034 = ours 5948 + theirs 6034 - base 5948 at the 0.10 W4c merge of W4f a55a58e89 into the W4X train.
+# docs/operations/denials.md 5525 = ours 5520 + theirs 5497 - base 5492 at the 0.10 W4c merge of W4f a55a58e89 into the W4X train.
 docs/operations/who-gets-in.md=1938 share=35
 # docs/operations/admin-only-writes.md 3173 measured after F-1511-1510 merge.
 # docs/operations/admin-only-writes.md 3182 measured after the F-1508-author merge (human_author; four-eyes on service-identity create and sponsor change).
@@ -73,7 +87,7 @@ docs/operations/who-gets-in.md=1938 share=35
 # docs/operations/admin-only-writes.md 3698 adds 53, measured: the POST /runs/{id}/node-record row.
 # docs/operations/admin-only-writes.md 3700 adds 2 over 3698, measured (0.10 OC-API1b): a launch preset blocks removing a user type.
 # docs/operations/admin-only-writes.md 3729 = ours 3700 + theirs 3727 - base 3698 at the 0.10 W4c merge of origin/main ba16e8564 (W4b) onto the train.
-docs/operations/admin-only-writes.md=3733 share=35 # tightened from 3738 to the measured count at the 0.10 W4d merge
+docs/operations/admin-only-writes.md=3791 share=35 # tightened from 3738 to the measured count at the 0.10 W4d merge
 # docs/operations/admin-only-writes.md 3730 adds 32 over 3698, measured (0.10 LAY-A): the /governance/walls tier row.
 # docs/operations/admin-only-writes.md 3727 measured (0.10 BOUNDARY): the /governance/boundary tier row.
 # docs/operations/three-roles.md 4024 measured after G-090-cleanup slice F: docs rows that contradicted the code.
@@ -83,7 +97,7 @@ docs/operations/admin-only-writes.md=3733 share=35 # tightened from 3738 to the 
 # docs/operations/three-roles.md 4238 adds 20 over 4218, measured: where GET /governance keeps the resolved ceiling (0.9.3 ASK-6).
 # docs/operations/three-roles.md 4650 = 4630 + 20, measured after merging the ASK-6 rubric docs with the resolved-ceiling note.
 # docs/operations/three-roles.md 4682 adds 5 (0.10 API-2): a baseline mark covers that host only.
-docs/operations/three-roles.md=4682 share=35
+docs/operations/three-roles.md=4720 share=35
 # docs/operations/provider-policy.md 1362 adds 84 over 1278, measured (0.10.0 GHPAT): the GitHub per_user row that takes each person's own token.
 # docs/operations/provider-policy.md 1382 adds 20 over 1362, measured (0.10.0 GHPAT r2): a run cannot mix a shared and a personal-token GitHub row.
 docs/operations/provider-policy.md=1382 share=35
@@ -96,7 +110,7 @@ docs/operations/ownership-and-offboarding.md=2414 share=35
 # 0.9.4 W4-DOCS-1: docs/operations/governance-writes.md 3158 adds 26 over 3132, measured: #2369: the run node record row.
 # docs/operations/governance-writes.md 3170 adds 12 over 3158, measured (0.10 LAY-A): the org walls row in the covered-writes table.
 # docs/operations/governance-writes.md 3171 measured (0.10 BOUNDARY): the org walls renamed the Wardyn boundary, with modes.
-docs/operations/governance-writes.md=3478 share=35
+docs/operations/governance-writes.md=3513 share=35
 # 0.9.4 L8: docs/operations/member-runs.md 1054 adds 10 over 1044: ssh_key delivery claims bounded.
 docs/operations/member-runs.md=1054 share=35
 # docs/operations/user-drives.md 4818 adds 14 over 4804 (0.9 release text for the fix sets merged at release); measured.
@@ -124,7 +138,7 @@ docs/operations/custom-components.md=1269 share=35
 # docs/operations/api-tokens.md 5582, measured at the FIN-E2 merge into the final train (both sides' sentences).
 # docs/operations/api-tokens.md=5582 adds 8 (0.10): unbind is refused while a runner or runner token is held.
 # 0.10 ATT-LOGIN-SRV: docs/operations/api-tokens.md 5948 adds 358 over 5590: the CLI sign-in section, measured.
-docs/operations/api-tokens.md=5948 share=35
+docs/operations/api-tokens.md=6034 share=35 # +86 (lane SI-DOCS), measured
 # G-1423 r1: docs/operations/denials.md 4709 adds 32 over 4677 for the audit-only delegation_scope source.
 # docs/operations/denials.md 4786 adds 77 (0.9 G-sec-rest): the exec relay rows (#1976) and the audit_retention_actor_reserved row.
 # D-108-114 merge: docs/operations/denials.md 4806 adds 20 over 4786 for the runs.placement cause of governance_profile.
@@ -146,7 +160,7 @@ docs/operations/api-tokens.md=5948 share=35
 # docs/operations/denials.md 5318 adds 14 (0.10 LAY-C r2): the authz.denied layer keys and the operator cap naming the deployment.
 # 0.10: docs/operations/denials.md 5200 adds 9, measured: user_view_preview names the security admin case.
 # docs/operations/denials.md 5331 measured (0.10 BOUNDARY): the boundary provenance layer.
-docs/operations/denials.md=5520 share=35
+docs/operations/denials.md=5525 share=35
 # Round 1: docs/operations/who-gets-in.md measured 1453 after the split banner and heading cleanup.
 # Round 1: docs/operations/admin-only-writes.md measured 2869 after the split banner and heading cleanup.
 # Round 1: docs/operations/three-roles.md measured 4012 after the split banner and heading cleanup.

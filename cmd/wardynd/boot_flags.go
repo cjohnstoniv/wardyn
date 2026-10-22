@@ -285,6 +285,9 @@ type bootFlags struct {
 	// proxyResponseScrub has every run's proxy replace a value it injected when a
 	// relayed response echoes it back (off by default in 0.10.0).
 	proxyResponseScrub *bool
+	// pushHoldCanonicalRepos keys a held git_pat push to github.com on one
+	// spelling of its repository (off by default in 0.10.0).
+	pushHoldCanonicalRepos *bool
 	// attachLocal lets a person's CLI attach to their run on their own runner's computer (off by
 	// default in 0.10.0; only "on" enables it).
 	attachLocal *string
@@ -604,6 +607,7 @@ func parseBootFlags() *bootFlags {
 		fileSecretPlaceholders:   flagBool("file-secret-placeholders", "WARDYN_FILE_SECRET_PLACEHOLDERS", false, "a file_secret grant whose scope names a host gets a placeholder file in the sandbox, which the run's proxy replaces with the value on requests to that host (default false)"),
 		runnerSecretPlaceholders: flagBool("runner-secret-placeholders", "WARDYN_RUNNER_SECRET_PLACEHOLDERS", false, "a runner_resident env_secret or file_secret grant whose scope names a host gets a placeholder on the runner, which the organisation's egress replaces with the value on requests to that host (default false)"),
 		attachLocal:              flagEnv("attach-local", "WARDYN_ATTACH_LOCAL", "off", `"on": a person's CLI on their own runner's computer attaches to their run there, the terminal staying on that computer while the organisation keeps the admission, the writer lease, the recording and the audit; anything else keeps every attach on the relay`),
+		pushHoldCanonicalRepos:   flagBool("push-hold-canonical-repos", "WARDYN_PUSH_HOLD_CANONICAL_REPOS", false, "have each run's egress proxy name a held git_pat push to github.com by its repository lowercased and without .git, so one admin decision covers every spelling; off names the path as git spelled it"),
 		proxyResponseScrub:       flagBool("proxy-response-scrub", "WARDYN_PROXY_RESPONSE_SCRUB", false, "have each run's egress proxy replace a credential it added when an upstream response echoes it back to the sandbox (default false)"),
 		gitPATBrokerOffRefused:   flagBool("git-pat-broker-off-refused", "WARDYN_GIT_PAT_BROKER_OFF_REFUSED", false, "while WARDYN_GIT_PAT_BROKER is off, refuse a run that would hold a resident PAT on operators' runs too; a member's run is refused it either way (default false)"),
 		multiAgentTasks:          flagBool("multi-agent-tasks", "WARDYN_MULTI_AGENT_TASKS", false, "let a background agent task run several agents side by side in one sandbox, each on its own tools[].task: every agent's rules are met (strictest wins), the run ends when the last agent exits and fails if any failed; off refuses a request that gives an agent its own task"),

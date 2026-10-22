@@ -35,6 +35,10 @@ export interface MeUserDrive {
   home_name?: string;
   /** Allocated, then disabled by an admin. Omitted when false. */
   paused?: boolean;
+  /** A share, which can be reached from more than one place (#113). */
+  placement_eligible?: boolean;
+  /** Where it mounts from, printed as it is (M10): "Organisation runners", and the bound runner when you own it. */
+  mounts_from?: string;
 }
 
 // GET /me — see whoami() below for where each field comes from. One

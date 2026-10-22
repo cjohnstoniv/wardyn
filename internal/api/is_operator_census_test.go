@@ -83,8 +83,19 @@ var isOperatorCensus = map[string]int{
 	// Drive storage layout on the security-tier drive routes: the directory
 	// name, writability past the drive's posture, and the host path stay the
 	// super admin's.
+	"user_drives.go:handleGetUserDrives":            1, // a security admin reads the allow-listed projection
 	"user_drives_preview.go:handlePreviewUserDrive": 1,
 	"user_drives_tier.go:upsertUserDriveGrantAs":    1,
+	// Which runner a drive's second place is bound to is named to an operator and that runner's owner only.
+	"user_drives_second_place.go:boundRunnerName": 1,
+	// Audit rows: host detail stays the super admin's on the feed reads and the partition export.
+	"audit.go:auditRowsFor":                          1,
+	"audit_partition_export.go:exportAuditPartition": 1,
+	// A mount's host path is the super admin's: the spec read tier withholds it below
+	// that tier, and a profile write or its approval sets one only as a super admin.
+	"policies.go:specReadTierFor":                  1,
+	"governance_unit_write.go:writeGovernanceUnit": 1,
+	"governance_change_kinds.go:applyUnitChange":   1,
 	// The measured reason can carry a substrate's own error text, so only an operator reads it.
 	"runner_usage.go:remoteUsage": 1,
 	// Operators host their own runner without the self_host_runner grant (capabilities.md).

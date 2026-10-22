@@ -21,7 +21,7 @@ import (
 var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[proxy.Config](): strings.Fields("RunID ControlPlaneURL ControlPlaneCAPEM RunToken Policy Injection Listen DecisionBufferSize SelfLapse DecisionSink HardDeny MITMCACertPEM MITMCAKeyPEM MITMHosts GitGrants PATGrants " +
 		"BrokeredPATGrantIDs ResidentMints ADOGrant AzureGates GitHubAPI AzureARM AWSSigV4 KubeAPI MITMLLM UpstreamProxyURL UpstreamProxyNoProxy AllowedPeers " +
-		"TrustedCAPEM InternalHosts LLMUpstreams LLMChannelHosts LLMUnavailableDetail LocalModels Unattended ScrubResponses Attribution DecisionSpoolDir PushRuleSets PushRuleBase HarnessToolRules HarnessCredentials ViaOrgRoutes MCPServers MCPBindings " +
+		"TrustedCAPEM InternalHosts LLMUpstreams LLMChannelHosts LLMUnavailableDetail LocalModels Unattended ScrubResponses CanonicalPushRepos Attribution DecisionSpoolDir PushRuleSets PushRuleBase HarnessToolRules HarnessCredentials ViaOrgRoutes MCPServers MCPBindings " +
 		// SigninListen is ProxyConfig.DesktopSignins as stored (localStoredSpec), refused by its row.
 		"VM PortRule SigninListen"),
 	reflect.TypeFor[proxy.InjectionConfig]():      strings.Fields("InjectionRule GrantID"),
@@ -55,7 +55,7 @@ var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[runner.Mount]():               strings.Fields("Source Target ReadOnly MemberAuthored DriveAuthored"),
 	reflect.TypeFor[runner.UserWritableCeiling](): strings.Fields("Roots Deny"),
 	reflect.TypeFor[runner.Resources]():           strings.Fields("CPUMillis MemoryMiB CPURequestMillis MemoryRequestMiB PidsLimit DiskMiB DiskMiBSoft LifetimeCap ProxyAzure"),
-	reflect.TypeFor[types.DriveMount]():           strings.Fields("DriveID Backend ObjectName HostRoot DriveName StorageClass HomeName SubjectHash Target ReadOnly SizeMiB Enforcement Team"),
+	reflect.TypeFor[types.DriveMount]():           strings.Fields("DriveID Backend ObjectName HostRoot DriveName StorageClass HomeName SubjectHash Target ReadOnly SizeMiB Enforcement Team RunnerID"),
 	reflect.TypeFor[types.GrantSpec]():            strings.Fields("Kind Scope TTLSeconds RequiresApproval OwnerOnly OwnerOnlyRefs"),
 	reflect.TypeFor[types.InternalHost]():         strings.Fields("HostSuffix CIDRs Baseline"),
 	reflect.TypeFor[types.LLMInspectionSpec]():    strings.Fields("Mode WorkspaceSecretNames WorkspaceSecretValues DetectSecrets DetectSecretPatterns DetectEntropy DetectPII DetectorSidecarURL ClassifiedMarkers ScanAttachments InspectForwardEgress MaxScanBytes OnScannerError RequireInspectableLLM InterceptTLS BlockMinSeverity"),

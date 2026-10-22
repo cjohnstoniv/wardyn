@@ -42,7 +42,7 @@ user, same host](#second-user-same-host)". Deciding who can do what:
 - [Kubernetes: day-2](#kubernetes-day-2)
 - [High availability](#high-availability)
 - [Kubernetes: known gaps](operations/kubernetes-known-gaps.md#kubernetes-known-gaps)
-- Task pages under [`docs/operations/`](operations/): [Managed laptops: client-mode runners](operations/hybrid-laptops.md), [Runner pools](operations/runner-pools.md#runner-pools-where-a-run-goes), [Launch presets](operations/launch-presets.md#launch-presets), [Console branding](operations/console-branding.md#console-branding), [The Wardyn boundary](operations/boundary.md#the-wardyn-boundary-the-outermost-layer-of-every-run)
+- Task pages under [`docs/operations/`](operations/): [Managed laptops: client-mode runners](operations/hybrid-laptops.md), [Runner pools](operations/runner-pools.md#runner-pools-where-a-run-goes), [Launch presets](operations/launch-presets.md#launch-presets), [Console branding](operations/console-branding.md#console-branding), [The Wardyn boundary](operations/boundary.md#the-wardyn-boundary-the-outermost-layer-of-every-run), [Approval rules](operations/approval-rules.md#approval-rules-a-security-admins-rule-approves-a-service-identitys-held-call)
 
 </details>
 
@@ -938,6 +938,11 @@ psql -Atc "SELECT 'db:     ' || audit_partition_digest('audit_events_p202610')"
 - Only a security operator may export a partition; anyone else gets an empty export, and `?partition=` with any other
   filter is refused (`audit_export_partition_filter`).
 - The readable form (`form=readable`, the default) gives the same rows in the audit feed's own event shape.
+- A `security_admin`'s export withholds host detail: such a row carries `redacted_fields` and stored hashes, so the
+  fold and links verify, and `redacted_rows` in the footer counts them. Report their content apart, as not verifiable
+  at that tier; a super admin's export re-hashes in full. Cross-check that the marker appears only on the actions
+  [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md#host-detail-below-the-super-admin-tier) lists, that each row's
+  `redacted_fields` names only that action's withheld fields, and that the marked rows number `redacted_rows`.
 
 - **Rows written before the upgrade** keep `NULL` hashes, are reported as `legacy`, and are never a failure.
   - There is no backfill, on purpose: hashes computed after the fact by the same process that could have altered the
@@ -1064,6 +1069,8 @@ lever today**. Concretely:
     an empty export; a run that is not theirs or does not exist still answers the same empty `200`.
   - Below the security tier both `GET /audit` and the export leave out the name of an organisation's `shared` component
     secret; `admin` and `security_admin` receive the rows as recorded ([Custom components](operations/custom-components.md#custom-components)).
+  - Below a super admin both reads also withhold host detail, such as a drive's host root, named in `redacted_fields`;
+    sinks keep the whole row ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md#host-detail-below-the-super-admin-tier)).
 
 - **This is asymmetric with session recordings**, which have the retention lever audit lacks:
   `WARDYN_RECORDING_RETENTION_DAYS` ([ENV.md](ENV.md#wardyn_recording_retention_days)) age-deletes stored PTY casts, defaulting to
@@ -1864,8 +1871,9 @@ enforces, not a re-derivation:
 - Whoever can read the run (`GET /runs/{id}`): its creator or an admin.
 - Anyone else gets the run's own `404` and a `not_owner` audit row.
 - A portal's delegated token is refused `403` `delegation_scope`: the route is not on the delegation list.
-- Below the security admin tier the policy's mount sources read `<redacted>` and grant secret names are dropped (`redacted: true`), the same rule as reading a policy; `llm_inspection` secret values are never returned.
-- The result is a policy document you can reuse as is only from the security admin tier up; below it, fill in the hidden values first.
+- Below the super admin tier the policy's mount sources read `<redacted>`, and below the security admin tier grant secret names are dropped too (`redacted: true`), the same rule as reading a policy; `llm_inspection` secret values are never returned.
+- Tier reach: a mount's host path is the super admin's to read and to set, on every policy, preset and governance profile read; a security admin keeps or removes a mount but never sees or changes its host path.
+- The result is a policy document you can reuse as is only as a super admin; anyone else fills in the hidden values first.
 - A run that used an organisation component's shared secret is the exception for everyone: its grant carries `shared: true`, which no authored policy may set, so the document is a record of the run and validation refuses it. Select the component again on the new run.
 
 **What it does not cover:** hosts approved while the run was running (Approvals), credentials the run was handed (Credentials), folders added from a workspace or a drive, and Azure DevOps access that came from the connection's defaults.
@@ -4023,6 +4031,10 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0216` (`0216_recordings_size_tail`) adds `size_bytes`, `tail` and `stat_updated_at` to `recordings` (`0028`'s table): a cast's byte size and last 8 KiB, which the Recordings list reads instead of decompressing each stored recording; the migration reads every stored recording once to fill them, and holds an exclusive lock on `recordings` until it commits.
 - `0217` (`0217_run_machine_kind`) adds `machine_kind` and `vm_machine` to `agent_runs` (`0001`'s table): the kind of sandbox a run asked for (empty for a container) and the virtual machine a Linux VM run started on.
 - `0218` (`0218_approval_human_takeover`) admits the approval kind `human_takeover` ("Needs you") in `approvals.kind`'s CHECK and adds `approvals.takeover_holder` and `approvals.handed_back_at` (`0001`'s table): who has control of a run the agent asked a person to take over, and when they handed it back.
+- `0208` (`0208_agent_runs_model_allowlists`) adds `model_allowlists` to `agent_runs` (`0001`'s table): the model allowlist each local model provider handed the run's proxy at its latest dispatch.
+- `0209` (`0209_governance_boundary_seed`) adds `governance_boundary.seeded_at` and the boundary's one row in `no_limits`, so an upgrade keeps its boundary as it was. Only a fresh install's first boot then moves that row to `hard_limits` with floor `CC1` and nothing listed, which reaches what `no_limits` does, and writes `governance.boundary.seed`.
+- `0210` (`0210_approval_rules`) creates `approval_rules`, the security tier's approval rules ([approval-rules.md](operations/approval-rules.md)); a split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `approval_rules`.
+- `0211` (`0211_user_drives_second_place`) adds `alt_backend`, `alt_host_root` and `alt_runner_id` to `user_drives` (`0054`'s table; the runner references `runners`): a share's second place, the same share as one person's own runner sees it. All three are NULL on every existing drive, which mounts exactly as before. Before you upgrade: a drive becomes reachable on a person's own runner only once an admin binds it to that runner and the runner's owner starts `wardyn-runnerd` with a `--drive-root` covering the path; nothing else changes reach.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.

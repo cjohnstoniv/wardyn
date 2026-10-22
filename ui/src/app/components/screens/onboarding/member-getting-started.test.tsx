@@ -354,6 +354,18 @@ describe("MemberGettingStarted", () => {
     ).toBeInTheDocument();
   });
 
+  // M10: the server's mounts_from rides beside the chip, in the sentence; a paused drive mounts nowhere.
+  it("says where the drive mounts from beside the chip, and nothing while it is paused", async () => {
+    renderPage(baseMe({ user_drive: baseMeDrive({ mounts_from: "Organisation runners and mbp-dev" }) }));
+    expect(await screen.findByTestId("gs-drive-mounts-from")).toHaveTextContent(/^Mounts from organisation runners and mbp-dev$/);
+  });
+
+  it("says no mounts-from line for a paused drive", async () => {
+    renderPage(baseMe({ user_drive: baseMeDrive({ mounts_from: "Organisation runners", paused: true }) }));
+    expect(await screen.findByText(DM.GS_DRIVE_CHIP_PAUSED("Scratch"))).toBeInTheDocument();
+    expect(screen.queryByTestId("gs-drive-mounts-from")).toBeNull();
+  });
+
   // Paused wins over the size and the mode: an allocation an admin disabled
   // mounts nothing next run, so naming its size would describe storage this
   // member cannot reach.

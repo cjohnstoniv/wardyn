@@ -50,6 +50,7 @@ vi.mock("./components/wardyn/needs-you-notices", () => ({ NeedsYouNotices: () =>
 
 import App from "./App";
 import { SESSION_ENDED_REASON } from "./lib/api/core";
+import { SESSION_ENDED } from "./lib/session-continuity-copy";
 
 const gate = () => screen.queryByRole("heading", { name: "Sign in" });
 
@@ -188,7 +189,7 @@ describe("a cold load that cannot reach the daemon", () => {
     expect(screen.queryByText(SESSION_ENDED_REASON)).not.toBeInTheDocument();
     await tick(1000);
     expect(gate()).toBeInTheDocument();
-    expect(screen.getByText(SESSION_ENDED_REASON)).toBeInTheDocument();
+    expect(screen.getByText(SESSION_ENDED.EXPIRED)).toBeInTheDocument();
   });
 
   it("neg: a 401 on a retry with no reason and no stored token shows no notice", async () => {
@@ -210,7 +211,7 @@ describe("a cold load that cannot reach the daemon", () => {
     await tick(0);
     expect(probes.calls).toBe(2);
     expect(gate()).toBeInTheDocument();
-    expect(screen.getByText(SESSION_ENDED_REASON)).toBeInTheDocument();
+    expect(screen.getByText(SESSION_ENDED.EXPIRED)).toBeInTheDocument();
   });
 
   it("neg: a focus re-probe 401 with no reason and no stored token shows no notice", async () => {
@@ -223,5 +224,16 @@ describe("a cold load that cannot reach the daemon", () => {
     expect(probes.calls).toBe(2);
     expect(gate()).toBeInTheDocument();
     expect(screen.queryByText(SESSION_ENDED_REASON)).not.toBeInTheDocument();
+  });
+
+  // M12 (#1995): the reason a 401 names must reach the gate on every probe path, not only the mount probe.
+  it("a 401 on a retry names why the session ended", async () => {
+    const core = await import("./lib/api/core");
+    vi.mocked(core.probeAuthWithReason).mockImplementationOnce(async () => ({ probe: "unreachable", reason: "", transient: true }));
+    vi.mocked(core.probeAuthWithReason).mockImplementationOnce(async () => ({ probe: "unauthed", reason: "revoked_session", transient: false }));
+    await mount();
+    expect(screen.queryByText(SESSION_ENDED.REVOKED)).toBeNull();
+    await tick(1000);
+    expect(screen.getByText(SESSION_ENDED.REVOKED)).toBeInTheDocument();
   });
 });

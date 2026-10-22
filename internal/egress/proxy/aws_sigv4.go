@@ -263,11 +263,12 @@ func admitAWSSigV4(r *http.Request, scope awsSigV4HostScope) (awsSigV4Plan, *aws
 
 // awsSigV4ActionGuard is how the proxy judges a query-protocol service's action before it
 // re-signs: STS re-signs only the actions in allow, since its others hand out credentials, and
-// IAM every action but those in deny, which create long-lived credentials or sign-ins. A token
-// API another service offers (ECR or CodeArtifact GetAuthorizationToken, say) is not guarded.
+// IAM only the actions that start with one of reads, since any IAM write can create a credential
+// for some principal. Both compare exactly. A token API another service offers (ECR or
+// CodeArtifact GetAuthorizationToken, say) is not guarded.
 type awsSigV4ActionGuard struct {
-	allow, deny []string
-	why         string
+	allow, reads []string
+	why          string
 }
 
 // awsSigV4ActionGuards are the guarded services, by signing name. Every host of either family
@@ -275,9 +276,8 @@ type awsSigV4ActionGuard struct {
 var awsSigV4ActionGuards = map[string]awsSigV4ActionGuard{
 	"sts": {allow: []string{"GetCallerIdentity"},
 		why: "Wardyn re-signs only GetCallerIdentity on AWS STS; its other actions hand out credentials, which would put them in the sandbox"},
-	"iam": {deny: []string{"CreateAccessKey", "CreateLoginProfile", "CreateServiceSpecificCredential", "ResetServiceSpecificCredential",
-		"UpdateLoginProfile", "CreateVirtualMFADevice", "UploadSSHPublicKey", "UploadSigningCertificate"},
-		why: "Wardyn does not re-sign the IAM actions that create long-lived credentials or sign-ins"},
+	"iam": {reads: []string{"Get", "List", "Simulate", "Generate"},
+		why: "Wardyn re-signs only IAM actions that read (Get, List, Simulate, Generate); any IAM write can create a credential for some principal"},
 }
 
 // awsActionName is the shape of an AWS action name; a value of any other shape (empty, padded,
@@ -295,7 +295,7 @@ var awsQueryKey = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 // refused: an action named in a header (X-Amz-Target, Smithy-Protocol), any Content-Encoding, a
 // chunked or streamed body, a body or content type that is not a form (or more than one Content-Type),
 // a query or form that does not parse, and no Action, more than one, one not shaped like an action
-// name, or one the guard refuses (the deny list compared under any case). "" admits it.
+// name, or one the guard refuses. "" admits it.
 func awsSigV4ActionRefusal(r *http.Request, payload string, body []byte, g awsSigV4ActionGuard) string {
 	ct := r.Header.Get("Content-Type")
 	mt, _, err := mime.ParseMediaType(ct)
@@ -320,7 +320,7 @@ func awsSigV4ActionRefusal(r *http.Request, payload string, body []byte, g awsSi
 	case !awsActionName.MatchString(actions[0]):
 		return fmt.Sprintf("its Action %q is not an action name, and Wardyn re-signs only one it can read", actions[0])
 	case (g.allow != nil && !slices.Contains(g.allow, actions[0])) || // exact: folding would widen an allow list
-		slices.ContainsFunc(g.deny, func(d string) bool { return strings.EqualFold(d, actions[0]) }):
+		(g.reads != nil && !slices.ContainsFunc(g.reads, func(p string) bool { return strings.HasPrefix(actions[0], p) })):
 		return g.why
 	}
 	return ""

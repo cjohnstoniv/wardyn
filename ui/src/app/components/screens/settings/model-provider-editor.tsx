@@ -23,6 +23,7 @@ import { HttpError } from "../../../lib/api/core";
 import { modelProviders, type ModelProvidersList } from "../../../lib/api/model-providers";
 import { AVAILABILITY } from "../../../lib/availability-copy";
 import { getErrorMessage } from "../../../lib/format";
+import { useUnsavedGuard } from "../../../lib/use-unsaved-guard";
 import { LOCAL_MODEL_EDITOR } from "../../../lib/local-model-copy";
 import { MODEL_PROVIDERS, PROVIDER_EDITOR, PROVIDERS } from "../../../lib/model-providers-copy";
 import { LOCAL_MODEL_DEFAULTS, type ModelProvider } from "../../../lib/types/site";
@@ -97,6 +98,8 @@ export interface ModelProviderEditorProps {
 
 type Confirm = "address" | "remove" | null;
 
+const editedText = (draft: ProviderDraft, audience: AvailabilityDraftValue) => JSON.stringify({ ...draft, audience }, null, 2);
+
 export function ModelProviderEditor({
   list: listProp,
   editing: editingProp,
@@ -119,6 +122,8 @@ export function ModelProviderEditor({
   // Once the create landed, closing must re-read even without another save.
   const close = partial ? onSaved : onClose;
   const [draft, setDraft] = React.useState<ProviderDraft | null>(() => (editing ? draftFrom(editing, harnesses) : null));
+  // What the editor opened on (an existing provider), or the kind picked (a new one): the baseline for the unsaved guard.
+  const [baseline, setBaseline] = React.useState<string | null>(() => (editing ? editedText(draftFrom(editing, harnesses), audience) : null));
   const [saving, setSaving] = React.useState(false);
   const [refused, setRefused] = React.useState<string | null>(null);
   const [stale, setStale] = React.useState<string | null>(null);
@@ -148,6 +153,10 @@ export function ModelProviderEditor({
     }
   };
 
+  // Leaving with edits that were not saved asks first. The draft holds names and settings only, never a credential.
+  const edited = draft ? editedText(draft, audience) : "";
+  useUnsavedGuard("model-provider-editor", draft !== null && edited !== baseline, () => edited);
+
   const candidate = () => providerFrom(draft!, editing, stored.map((p) => p.id));
 
   const save = async () => {
@@ -161,6 +170,7 @@ export function ModelProviderEditor({
       } catch (e) {
         const provider = snap.providers.providers?.find((p) => p.id === next.id) ?? next;
         setPartial({ list: { ...snap, connected: list.connected }, provider, message: getErrorMessage(e) });
+        setBaseline(edited);
         return;
       }
     }
@@ -209,7 +219,11 @@ export function ModelProviderEditor({
 
         {!draft ? (
           <KindStep
-            onPick={(kind) => setDraft(newDraft(kind, harnesses))}
+            onPick={(kind) => {
+              const d = newDraft(kind, harnesses);
+              setDraft(d);
+              setBaseline(editedText(d, audience));
+            }}
             onCancel={onClose}
             subscriptionAvailable={subscriptionAvailable}
           />

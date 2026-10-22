@@ -549,7 +549,7 @@ describe("My runner card: resources and limits", () => {
     expect(screen.getByText("Every runner needs limits before it can run anything: in total, per run, and how many runs at once.")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Suggested: half of what it reports as the total (4 CPUs · 16 GB memory · 250 GB disk), 4 runs at once, and each run gets the total ÷ Runs at once (1 CPU · 4 GB memory · 62 GB disk).",
+        "Suggested: half of what it reports as the total (4 CPUs · 16 GB memory · 250 GB disk), 4 runs at once, and each run gets the total ÷ \"Runs at once\" (1 CPU · 4 GB memory · 62 GB disk).",
       ),
     ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Set limits for laptop-7" }));

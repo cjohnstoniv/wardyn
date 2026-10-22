@@ -605,7 +605,7 @@ describe("Admin -> Runners remote-hosted runner", () => {
     const dialog = await screen.findByRole("dialog", { name: "Limits for shared-docker" });
     expect(within(dialog).getByText("Remote-hosted runners need limits too. Every run on it stays within them.")).toBeInTheDocument();
     expect(within(dialog).getByText("Running now: 1. Lowering any limit never stops a run already going.")).toBeInTheDocument();
-    expect(within(dialog).getByText("Total ÷ Runs at once: 24 ÷ 6 = 4 CPUs · 96 ÷ 6 = 16 GB memory · 1000 ÷ 6 = 166 GB disk. At least 1 CPU and 1 GB.")).toBeInTheDocument();
+    expect(within(dialog).getByText("Total ÷ \"Runs at once\": 24 ÷ 6 = 4 CPUs · 96 ÷ 6 = 16 GB memory · 1000 ÷ 6 = 166 GB disk. At least 1 CPU and 1 GB.")).toBeInTheDocument();
     const memory = within(dialog).getAllByRole("spinbutton", { name: "Memory (GB)" });
     setField(memory[1], "128");
     await user.click(within(dialog).getByRole("button", { name: "Save" }));

@@ -172,7 +172,13 @@
 # docs/ENV.md 43019 = ours 43002 + theirs 42206 - base 42189 at the 0.10 W4d merge of CLEANUP onto the train.
 # docs/ENV.md 43636 = ours 43023 + theirs 42802 - base 42189 at the 0.10 W4d merge of main (W4e); CREDENTIALS 4658 = 4605 + 4504 - 4451; THREAT-MODEL 67723 = 67489 + 66764 - 66530.
 # docs/ENV.md 44446 = ours 43612 + theirs 43636 - base 42802 at the 0.10 W4c merge of origin/main 7e33976ca onto the train.
-docs/ENV.md=44446 share=5 # tightened from 43019 to the measured count at the 0.10 W4d merge; +18 (0.10 RENAME), measured: 43005 + 42207 - 42189
+# docs/ENV.md=43636 tightened from 43019 to the measured count at the 0.10 W4d merge; +18 (0.10 RENAME), measured: 43005 + 42207 - 42189
+# docs/ENV.md 42223 adds 34 over 42189 (0.10 RUL-API), measured: the WARDYN_PUSH_HOLD_CANONICAL_REPOS row (#2749).
+# docs/ENV.md 43670 = ours 43636 + theirs 42223 - base 42189 at the 0.10 W4f merge of RUL-API onto the train.
+# 0.10 SI-POLICY: docs/ENV.md 42332 adds 143 over 42189: the WARDYN_APPROVAL_RULES row and section, measured.
+# docs/ENV.md 43813 = ours 43670 + theirs 42332 - base 42189 at the 0.10 W4f merge of SI-POLICY onto the train.
+# docs/ENV.md 44623 = ours 44446 + theirs 43813 - base 43636 at the 0.10 W4c merge of W4f a55a58e89 into the W4X train.
+docs/ENV.md=44623 share=5 # tightened from 43019 to the measured count at the 0.10 W4d merge; +18 (0.10 RENAME), measured: 43005 + 42207 - 42189
 # docs/ENV.md 42259 = ours + theirs - base at the 0.10 HYB-C merge of main onto VM-A, measured.
 # docs/ENV.md 41191 adds 520 over 40671 (0.10 FEAT-1MCP), measured: the WARDYN_MCP_LOCAL_SERVERS row and details with its before-you-upgrade lines and its setup-status feature bit, and the WARDYN_MCP_STDIO_TOML row and details, which the env-doc guard requires.
 # docs/ENV.md 41208 adds 17 over 41191 (0.10 FEAT-1MCP review): the npx pin applies to the npx form only; an absolute program is trusted as the image is.

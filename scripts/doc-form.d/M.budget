@@ -13,7 +13,8 @@
 # 0.9.4 W4-DOCS-1: docs/USERS.md 4720 adds 15 over 4705, measured: #2369: runner trust class and run node record in the approver list.
 # API-5: USERS.md 4761 adds 13 over 4748 (back-channel logout in the sign-out bullet), measured.
 # PRIV-1: docs/USERS.md 4784 adds 23 over 4761, measured: an admin may replay your recordings, and each replay is audited.
-docs/USERS.md=4784 share=35
+# SESS-M12: docs/USERS.md 4903 adds 119 over 4784, measured: the Session lifetime section.
+docs/USERS.md=4903 share=35
 # docs/SSH.md 5396 adds 84 (0.9 SSH lane): the wardyn-sync subsystem and its env, the sync cap, the configurable channel cap and the sync audit action.
 # docs/SSH.md 5508 adds 112 over 5396 (0.9 E-S1): the `wardyn sync` section (command, safety rules, the rsync alternative).
 # docs/SSH.md 5586 adds 78 over 5508 (0.9 E-S1 round 1): the pull byte limits, the plain-http refusal, the invisible-name and normalisation rules, the one-second mtime limit and the rsync caveat.

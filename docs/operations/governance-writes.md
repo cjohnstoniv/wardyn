@@ -59,7 +59,7 @@ an operator follows to turn one on and run the queue.
 - **Who may approve.**
   - The approver must pass the predicate of the tier the write was proposed on, never a weaker one.
   - Profile, assignment, grant, enforcement, availability and user-type priority changes are proposed on the security tier, so a security admin or a super admin approves; a security admin may approve a super admin's change.
-  - A role mapping, and an organization pool's remote-hosted runner add or removal that the table below marks, is written on the super-admin tier, so only a super admin approves one:
+  - A role mapping, an organization pool's remote-hosted runner add or removal that the table below marks, and a profile change that sets a mount's host path or makes a mount writable, is written on the super-admin tier, so only a super admin approves one:
     - a security admin who tries is refused `403` `authz.denied` reason `admin_surface` (target `governance.change`),
     - and those changes are neither listed to a security admin nor readable by one (`GET /governance/changes/{id}` answers `404`).
   - The predicate is evaluated again inside the approval transaction:
@@ -171,6 +171,7 @@ Then set `WARDYN_GOVERNANCE_SECOND_HUMAN` (and, if `72h` is wrong for your appro
 | Service identity create, and a PATCH that changes the sponsor | always (the PATCH whole) | security admin or super admin |
 | Egress baseline (`PUT /governance/egress-baseline`) | always | security admin or super admin |
 | The Wardyn boundary (`PUT /governance/boundary`, see [boundary.md](boundary.md)) | always | security admin or super admin |
+| An approval rule (`PUT /governance/approval-rules/{name}`, see [approval-rules.md](approval-rules.md)); a `DELETE` is never held | always, an edit included | security admin or super admin |
 | Credential delivery policy (`PUT /governance/credential-delivery`) | always | security admin or super admin |
 | Runner pool use policy set, delete | always | security admin or super admin |
 | Remote-hosted runner people policy set, delete | always | security admin or super admin |

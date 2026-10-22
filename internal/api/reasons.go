@@ -308,10 +308,16 @@ const (
 	reasonBoundaryInvalid          = "boundary_invalid"            // the boundary document has no mode, or names a knob it cannot hold, or a value that knob refuses
 	reasonBoundaryStale            = "boundary_stale"              // If-Match does not match the current boundary ETag
 	reasonBoundaryHost             = "boundary_host"               // an egress approval would admit a host the Wardyn boundary does not allow
-	reasonBoundaryHardLimitsGated  = "boundary_hard_limits_gated"  // a write into hard_limits before the boundary bounds every brokered credential path
 	reasonGrantWithheld            = "credential_withheld"         // a mint or redeem of a grant the run's profile or the Wardyn boundary now withholds
 	reasonGrantWithheldUnread      = "credential_withheld_unread"  // the run, its grants, its profile or the boundary could not be read to check the mint
 	reasonBreakGlassReasonRequired = "break_glass_reason_required" // an admin-token break-glass run without a usable reason
+
+	// /governance/approval-rules, and an approval rule's own refusals inside decide().
+	reasonApprovalRuleInvalid       = "approval_rule_invalid"        // the rule document names an unknown kind, a glob, a wildcard host, a scope other than once or run, or no repo or preset
+	reasonApprovalRuleNotFound      = "approval_rule_not_found"      // no approval rule has that name
+	reasonApprovalRuleChanged       = "approval_rule_changed"        // the rule was written after it matched, so it decides nothing
+	reasonApprovalRuleNotApplicable = "approval_rule_not_applicable" // an approval rule never decides this approval: the kind, an Azure DevOps escalation, a run no service identity created, or a match that no longer holds
+	reasonApprovalRuleHost          = "approval_rule_host"           // a rule's host is outside the Wardyn boundary in hard_limits
 
 	// PUT /governance/credential-delivery.
 	reasonCredentialDeliveryInvalid     = "credential_delivery_invalid"     // an unknown or fixed class, a mode outside the class's bounds or one the server cannot build (422), or require_posture without runner_resident
@@ -326,7 +332,7 @@ const (
 
 	// PUT/POST /governance/{profiles,assignments} and the preview routes.
 	reasonGovernanceUnitRequestInvalid = "governance_unit_request_invalid" // the profile body did not decode
-	reasonGovernanceCeilingInvalid     = "governance_ceiling_invalid"      // the ceiling names a grant outside the deployment's own EligibleGrants
+	reasonGovernanceCeilingInvalid     = "governance_ceiling_invalid"      // the ceiling names a grant outside the deployment's own EligibleGrants, or one pairing twice
 	reasonGovernanceUnitNameConflict   = "governance_unit_name_conflict"   // a profile by that name already exists
 	reasonGovernanceUnitInUse          = "governance_unit_in_use"          // the profile is still assigned; delete its assignments first
 	reasonGovernanceMembershipInvalid  = "governance_membership_invalid"   // the assignment fails validation
@@ -339,6 +345,7 @@ const (
 	reasonGovernanceUnitCycle            = "governance_unit_cycle"            // the write would make a profile its own base
 	reasonGovernanceUnitDepth            = "governance_unit_depth"            // the write would put a unit deeper than the maximum unit depth
 	reasonGovernanceOverlayUnsatisfiable = "governance_overlay_unsatisfiable" // nothing satisfies a profile and its base together
+	reasonGovernanceMountKeepUnknown     = "governance_mount_keep_unknown"    // a mount sent back with a withheld source names a target with no stored host path
 	// reasonGovernancePreviewClaimsInvalid is shared by GET /governance/check
 	// and the user-drive naming preview (user_drives_preview.go): both feed the
 	// same normalizeGovernancePreviewClaims validator over user_subjects/groups.

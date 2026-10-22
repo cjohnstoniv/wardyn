@@ -107,6 +107,10 @@ type DecisionLog struct {
 	// Refusal, on a deny row, says whose refusal it was: Wardyn's, a peer outside it, or
 	// unknown. Nil on every allow and on every deny the proxy does not classify.
 	Refusal *Refusal `json:"refusal,omitempty"`
+	// MatchedRule is the tool_rules key that answered a policy:tool-allow or
+	// policy:tool-deny row: the tool or "*", prefixed "<harness>:" under
+	// per-harness rules. Empty on every other row.
+	MatchedRule string `json:"matched_rule,omitempty"`
 }
 
 // ScanSummary is the CONTENT-FREE summary of one LLM content-inspection pass.

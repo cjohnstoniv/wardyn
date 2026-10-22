@@ -15,6 +15,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   comes back in the next run that attaches it.
 - Upgrade wardyn-runnerd before you rely on a newer proxy feature: a run that sets one (`aws_sigv4`,
   `scrub_responses`, `vm`, `port_rule`, `local_models` or `kube_api`) is refused on an older wardyn-runnerd.
+- **A security admin can no longer add or change a mount source on a governance profile, or see a mount's host path; a super admin can.**
+  A security admin reads every `workspace_mounts[].source` as `<redacted>`, on policies, presets, profiles, the
+  policy default and held changes. To keep a mount, send it back with that sentinel and its target, as
+  `wardyn governance get` and `set` do; an empty source is still refused `400`. Adding a mount, changing its host
+  path or making a kept mount writable is refused `403` `admin_surface`, and a sentinel on a target with no stored
+  host path is refused `422` `governance_mount_keep_unknown`. A pending profile change that sets a host path is
+  shown to and decided by super admins only. The risk assessment and the composed-profile warnings name a mount by
+  its target, for every reader.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on
   `aws_sso_refused_tokens` (migration `0194_aws_sso_refused_tokens`). Without it an AWS SSO session whose renewal
@@ -87,6 +95,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Starting the agent again admits the run anew, and the erased row keeps only its harnesses, so it is refused in the
   organisation form ("Ask your admin"). An erased remote server is refused too, which a 0.9 revive accepted. A run
   that is still running keeps its server until it ends.
+- **Approval rules are off.** `WARDYN_APPROVAL_RULES` (new, default `off`) lets a security admin's
+  approval rule approve a held tool call or a first-use egress host on a service identity's runs. Nothing changes until a
+  deployment sets it. Set `dry_run` first: matching approvals then get an `approval.policy.would_approve` audit row and
+  stay pending. A rule never decides a credential, `credential_reauth` or `push_content` approval, and never counts as a
+  second human.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
+  `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on
+  `approval_rules` (migration `0210_approval_rules`). Without it approval rules cannot be listed, written or deleted,
+  and a raise with `WARDYN_APPROVAL_RULES` set writes an `approval.policy.skip` row instead of matching a rule.
 
 ### Added
 
@@ -94,6 +111,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   run's internal network hands connections to allowed hosts to the run's proxy and refuses raw IP addresses, outside DNS
   resolvers and IPv6. The reference guest image addresses its NIC for the relay. Kubernetes VM pods are unchanged.
 - A Linux VM sandbox gets the same folders a container on its runner would: a member's folder under the runner's roots is shared into the guest over virtiofs at the same path and mode, and a folder synced from another computer arrives through the guest agent. A runner without folder sharing refuses such a run at create (`placement_capability`).
+- Approval rules (migration `0210_approval_rules`, off unless `WARDYN_APPROVAL_RULES` is `dry_run` or `on`): a security
+  admin's rule approves a held `tool_call` or first-use `egress_domain` approval on a service identity's run, through the
+  same decide path and gates a person's approval meets, audited as `policy:<rule_id>` with the rule's version, digest and
+  what matched. `/governance/approval-rules` lists, writes, deletes and dry-runs rules; see
+  [approval-rules.md](docs/operations/approval-rules.md). A `policy:tool-allow` or `policy:tool-deny` egress row now names
+  the `tool_rules` key that answered in `matched_rule`.
 - `wardyn attach <run-id>` keeps the terminal on this computer when the run is on your own runner here and the
   organisation allows it (`WARDYN_ATTACH_LOCAL`, off by default); otherwise it goes through the organisation, as
   before. One line on stderr names the path. `--via local|relay|auto` forces a path, and `--take-over` takes the
@@ -137,6 +160,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - On a phone, the Runs filter bar is a search box, a `Filters (n)` button and a row of removable chips, so the first run
   is on the first screen instead of under five rows of controls (#3041). The button opens a sheet with every other
   control and Save view. From the tablet breakpoint up the bar is unchanged.
+- The security tier's audit read no longer shows a drive's host root. Below a super admin, `GET /audit` and both
+  exports withhold, per action: a drive's host root and storage class, a source's path, the recovery rehearsal's
+  database target, the site config's logo path, internal hosts, upstream proxy URL and egress redirects, a redirect
+  probe's target, and each workspace mount's host path in a policy spec, a policy write or delete and a launch preset.
+  Each such row names what was withheld in `redacted_fields` and keeps its stored hashes, so the chain still links
+  across it, and a partition export's footer counts those rows (`redacted_rows`). A super admin's read is unchanged,
+  and so are the operator's sinks.
+- Runner settings are in one file, `runnerd.json` in the user config directory (mode 0600), and the service
+  definition carries only the binary and that file's path. Setup no longer writes a proxy image the organisation
+  named: that image, like the release image, is derived again at each start, so replacing the binary moves the proxy
+  with it. A `proxy_image` set in the file, by `--proxy-image` or by hand, is the pin. An earlier install keeps
+  working, and running setup again moves its settings into the file.
 
 ### Fixed
 

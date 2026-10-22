@@ -585,9 +585,11 @@ type Config struct {
 	// MultiAgentTasks (WARDYN_MULTI_AGENT_TASKS, off by default in 0.10.0): a background task
 	// may run several agents, each on its tools[].task. Off, that is refused multi_agent_tasks_off.
 	MultiAgentTasks bool
-	// ScrubProxyResponses (WARDYN_PROXY_RESPONSE_SCRUB) stamps
-	// proxy.Config.ScrubResponses on every new dispatch.
+	// ScrubProxyResponses (WARDYN_PROXY_RESPONSE_SCRUB) stamps proxy.Config.ScrubResponses on every new dispatch.
 	ScrubProxyResponses bool
+	// CanonicalPushRepos (WARDYN_PUSH_HOLD_CANONICAL_REPOS; off by default in
+	// 0.10.0) stamps proxy.Config.CanonicalPushRepos on every new dispatch.
+	CanonicalPushRepos bool
 	// EnvSecretPlaceholders / FileSecretPlaceholders (WARDYN_ENV_SECRET_PLACEHOLDERS,
 	// WARDYN_FILE_SECRET_PLACEHOLDERS; off by default in 0.10.0): an env_secret
 	// or file_secret grant whose scope names a host gets a placeholder in the
@@ -774,8 +776,7 @@ type Server struct {
 	runnerStreams runnerStreamState
 	cfg           Config
 	router        chi.Router
-	// metrics holds the /metrics scrape counters (see metrics.go). Zero value is
-	// ready to use.
+	// metrics holds the /metrics scrape counters (see metrics.go). Zero value is ready to use.
 	metrics metrics
 	// viaOrg is the organisation's via_org egress state (via_org_streams.go).
 	viaOrg viaOrgState
@@ -862,8 +863,7 @@ type Server struct {
 	// sshSyncOpen is the directory and open time of each live wardyn-sync
 	// channel, for GET /runs/{id}'s sync.open. Guarded by sshSessionsMu.
 	sshSyncOpen map[uuid.UUID][]*runSyncOpen
-	// builds tracks per-workspace image builds (the wizard's Build step).
-	// Zero value is ready to use.
+	// builds tracks per-workspace image builds (the wizard's Build step). Zero value is ready to use.
 	builds buildTracker
 	// attachHolders tracks who currently holds each run's SHARED tmux PTY, so a
 	// second client can be admitted read-only instead of silently competing for

@@ -48,7 +48,7 @@ func main() {
 
     // 2. Submit a run. Answers as soon as the run row exists, so the result's
     //    client.AgentRun (embedded) reads state PENDING — the image build and
-    //    dispatch continue server-side; poll or GetRun for RUNNING/FAILED.
+    //    dispatch continue server-side; follow RunEvents (below) or GetRun for RUNNING/FAILED.
     //    Also carries any ADVISORY warnings — the run is live either way, so
     //    surface them.
     created, err := c.CreateRun(ctx, client.CreateRunRequest{
@@ -170,7 +170,7 @@ if v.State == client.RunPolicyViewRecorded {
 | `state` | `recorded`, `not_yet` (the run has not reached sandbox setup) or `never` (it ended before that); `spec` and `recorded_at` are set for `recorded` only |
 | `source` | `kind` is `stored`, `inline`, `default`, `profile` or `unknown`; a saved policy carries `policy_id` and its `name` at launch, and `deleted` once it is gone; `preset` and `preset_version` when the run came from one |
 | `spec` | the policy the sandbox's proxy enforces, restart denies included; `llm_inspection` secret values are never present |
-| `redacted` | true when the reader is below the security admin tier and mount sources or secret names were hidden (`<redacted>`, or dropped); the spec then strict-decodes as a policy but does not validate |
+| `redacted` | true when the reader is below the super admin tier and mount sources were hidden (`<redacted>`), or below the security admin tier and secret names were dropped; the spec then strict-decodes as a policy but does not validate |
 | `changes` | never `null`; each item says why, where and what changed, and never shows a hidden value; the item fields are listed under the table |
 | `complete` | false for a run from before Wardyn recorded its starting policy: `changes` then lists only what the launch audit rows state |
 | `stored_policy_now` | for a saved-policy source: `same`, `changed`, `updated` (a run from before the record: edited since, possibly a rename only) or `deleted`, with the policy's current `name` |
@@ -182,8 +182,8 @@ The CLI is `wardyn run policy <run-id> [--json]`.
 
 The spec always strict-decodes as a policy. Whether it passes policy validation depends on the reader and the run.
 
-- At the security admin tier it passes, and `wardyn run --policy-file` runs it again as is.
-- Below that tier it holds `<redacted>` values and fewer secret names, so it is a starting point.
+- As a super admin it passes, and `wardyn run --policy-file` runs it again as is.
+- Below that tier it holds `<redacted>` mount sources (and, below the security admin tier, fewer secret names), so it is a starting point.
 - A run that used an organisation component's shared secret is a record for every reader. The grant carries `shared: true`, which every authored door refuses, so validation fails.
 - For such a run, start the new run with the component named in `CreateRunRequest.Components` ([Custom components](#custom-components)).
 - The CLI says so in a `#` comment line above the YAML, and in its help.
@@ -656,7 +656,7 @@ start.
 | `delivery_not_via_org` / `via_org_destination_refused` / `via_org_cap_exceeded` | `/internal/via-org/{grantID}/…` serves only this run's grant delivered `via_org`, to the grant's own destination, within 16 open streams and 8 GiB a run per server replica, reset on restart. |
 | `missing_scope_snapshot` | The grant names the credential sentinel but carries no dispatch-time snapshot (a hand-authored grant). Azure DevOps, AWS SSO; and every grant naming `bedrock-api-key`, which is no longer a model credential. |
 | `owner_not_caller` | The grant's snapshot owner is not the run token's own subject. Azure DevOps. |
-| `roster_unreadable` | The site configuration could not be read; nothing is resolved from a failed read. Azure DevOps, AWS SSO. |
+| `roster_unreadable` | The site configuration could not be read; nothing is resolved from a failed read. Azure DevOps, AWS SSO, and a service identity's `GET /workspaces` (`503`). |
 | `run_unreadable` | The run row itself could not be read. AWS SSO; also `POST /approvals/{id}/{approve,deny}`'s second-human gate (`WARDYN_EGRESS_SECOND_HUMAN`, `WARDYN_CAPABILITY_SECOND_HUMAN`). |
 | `scope_changed` | The live provider row has drifted from the run's dispatch-time snapshot. Azure DevOps, AWS SSO. |
 | `store_error` | The credential store operation failed. AWS SSO (a read); also the Azure DevOps sign-in callback's own captured-credential write (`ado_entra.go`) — the identical "a store errored" fact, not a second name for it. |
@@ -773,6 +773,7 @@ start.
 | `site_config_probe_request_invalid` / `site_config_probe_url_invalid` / `egress_redirect_from_required` / `egress_redirect_not_found` | `POST /site-config/probe-proxy` and the egress-redirect edit routes. |
 | `governance_unit_request_invalid` / `governance_ceiling_invalid` / `governance_unit_name_conflict` / `governance_unit_in_use` / `governance_membership_invalid` / `governance_preview_claims_invalid` | `PUT/POST /governance/units` and `/governance/memberships`, and the preview routes — `governance_preview_claims_invalid` is shared with the user-drive naming preview (`user_drives_preview.go`), which feeds the same `normalizeGovernancePreviewClaims` validator. `governance_unit_in_use` is a `409` when a profile is still assigned or still the base of another profile (the body names those profiles). A composed profile read by an SDK that predates composition shows `ceiling: {}` and `limits: {}` and ignores `effective`; a `PUT` from it omits the composition fields, which are kept, so it cannot flatten the profile. |
 | `governance_overlay_invalid` | `PUT/POST /governance/units` (400): a composed profile's `overlay` or `overlay_limits` does not decode, names something its base does not permit (a domain outside the base, a method the base excludes, `allow_all_egress` on a base without it, a looser bound, a grant the base does not hold), would mean "everything" by being empty (`allowed_methods: []`), names a base that does not exist, or sits beside a non-empty `ceiling` or `limits` (a composed profile states its policy only in the overlay). |
+| `governance_mount_keep_unknown` | `PUT/POST /governance/units` (422): a mount was sent back with the withheld source `<redacted>` on a target that stores no host path to keep (a new mount, or one the profile no longer has). A new mount needs its host path, and only a super admin sets one. |
 | `governance_unit_cycle` | `PUT/POST /governance/units` (409): the write would make a profile, through its base, its own base. |
 | `governance_unit_depth` | `PUT/POST /governance/units` (409): the write would put a unit or one below it deeper than `governance_max_depth` (16 unset or `0`; `null` keeps it). |
 | `unit_not_a_context` | `POST /runs`, preflight and the policy preview (403): the unit asked for is not one of the caller's. |
@@ -787,7 +788,11 @@ start.
 | `governance_change_state_invalid` | `GET /governance/changes?state=` (400): not one of `pending`, `applied`, `rejected`, `expired` or `stale`. |
 | `boundary_invalid` | `PUT /governance/boundary` and `POST /governance/dry-run` (400): the `PUT` names no `mode` or an unknown one, or the document sets `allow_all_egress` beside `allowed_domains`, a `max_end_ahead_sec` below 1, a bad `contact`, or a value a run policy would refuse; `501` on a store that keeps no boundary. |
 | `boundary_stale` | `PUT /governance/boundary` (412): `If-Match` names a boundary that has since changed. |
-| `boundary_hard_limits_gated` | `PUT /governance/boundary` (409): the write names `hard_limits`, which cannot be set until the boundary bounds every brokered credential path a run is given. |
+| `approval_rule_invalid` | `PUT /governance/approval-rules/{name}` and `.../dry-run` (400): a kind other than `tool_call` or `egress_domain`, a glob tool, a wildcard or ported host, a scope other than `once` or `run`, no repo and no preset, or a body name not the path's. `501` on a store with no approval rules. |
+| `approval_rule_not_found` | `DELETE /governance/approval-rules/{name}` and `.../dry-run` (404): no rule has that name. |
+| `approval_rule_host` | `PUT /governance/approval-rules/{name}` (409): a `hard_limits` boundary does not allow one of `approve.hosts`. |
+| `approval_rule_changed` | An `approval.policy.skip` reason, never sent to a client: the rule changed after it matched. |
+| `approval_rule_not_applicable` | An `approval.policy.skip` reason, never sent to a client: no rule decides that approval. |
 | `boundary_host` | `POST /approvals/{id}/approve` (403): the Wardyn boundary is in `hard_limits` and denies the egress host, or does not allow it. |
 | `credential_withheld` | `POST /internal/credentials/mint`, `GET /internal/injection/{grantID}` (403): the run's governance profile or the Wardyn boundary now withholds the grant or a host it reaches. |
 | `credential_withheld_unread` | `POST /internal/credentials/mint` (503): the run, its grants, its profile or the Wardyn boundary could not be read to check the grant; retry. |
@@ -951,7 +956,7 @@ The rest reach the wire only through
 
 | Reason | Meaning |
 |---|---|
-| `admin_surface` / `security_admin_surface` | The tier gates every admin/security-admin-only route runs through (`isOperator`/`isSecurityOperator`): the caller's stamped role is below the route's own floor. Both answer the byte-identical sentence "requires admin role" — the reason is what tells the two tiers apart. |
+| `admin_surface` / `security_admin_surface` | The tier gates every admin/security-admin-only route runs through (`isOperator`/`isSecurityOperator`): the caller's stamped role is below the route's own floor. Both answer the byte-identical sentence "requires admin role" — the reason is what tells the two tiers apart. `admin_surface` also answers a governance profile write (`PUT/POST /governance/units`, and approving a held one) from below the super admin tier that sets a mount's host path or makes a kept mount writable; its target is `governance.unit.<field>` and its sentence names the field. |
 | `audit_export_partition_filter` | `GET /audit/export?partition=` carried another filter (`run_id`, `since`, `until`, `action`, `action_prefix`, `actor`, `target`, `actor_type`, `outcome` or `origin`): a partition export always covers the whole partition. Answered `400` and not audited. |
 | `audit_retention_not_oldest` | `POST /audit/retention/drop` named a partition that is not the oldest retained one. Answered `409` and audited (`authz.denied`, target `audit.retention`, `partition` in the row). |
 | `audit_retention_not_closed` | `POST /audit/retention/drop`: the oldest partition can still receive rows. Answered `409` and audited. |
@@ -962,7 +967,7 @@ The rest reach the wire only through
 | `byoi_user` | A Bring-Your-Own-Identity principal reached a route BYOI does not extend to. |
 | `capability_egress_host` / `capability_feature` / `capability_secret` | The capability-grant gates outside the five launch-door kinds already covered above: an egress host, a feature flag, or a secret the caller's capability grants do not cover. A feature flag also gates the invitation claim and the sponsor's service-token mint (`api_token`) and, as the foreign-run `404`'s audit reason, a sponsor entering a service identity's run (`service_attach`). |
 | `delegation_scope` | A portal's delegated token asked for a route outside its own delegation allow-list (#1142). |
-| `service_scope` | A service identity's token asked for a route outside its fixed allow-list (#1508): run create, preflight, list, read, events, output, `PATCH` and kill, `GET /me`, `GET /setup/status` and its own model-provider credential. Everything else, audit reads included, answers `403`. |
+| `service_scope` | A service identity's token asked for a route outside its fixed allow-list (#1508): run create, preflight, list, read, events, output, `PATCH` and kill, `GET /audit?run_id=`, `GET /presets`, `GET /workspaces`, `GET /me`, `GET /setup/status` and its own model-provider credential. Everything else, `GET /audit/export` included, answers `403`. |
 | `event_stream_cap` | The caller already holds 32 open `GET /runs/{id}/events` streams, the most one principal may (#1407); close one and retry. Answered `422` and not audited, like `run_quota`. |
 | `component_autonomy` | The organisation's autonomy cap on runs that use the caller's own custom components closes the door, with or without a governance profile; the body's `policy` names the deployment. |
 | `placement_component_self_defined` | A run on your own runner carries a component you defined while your limits omit `local_self_defined_components` (default deny); `403`, target `runs.placement`. |
@@ -1160,8 +1165,8 @@ curl -s -X POST http://localhost:8080/api/v1/runs \
   -H 'Content-Type: application/json' \
   -d '{"agent":"claude-code","repo":"org/repo","title":"Refund flow","task":"fix the flaky test"}'
 
-# The outcome contract: poll until .state is terminal, then read the task's real
-# exit code off the run.complete audit event. `wardyn run --wait` wraps this.
+# The outcome contract: follow GET /runs/{id}/events (or poll GET /runs/{id}) until the run ends,
+# then read the task's real exit code off the run.complete audit event. `wardyn run --wait` polls.
 curl -s -H 'Authorization: Bearer demo-admin-token' \
   http://localhost:8080/api/v1/runs/<id>   # .state: COMPLETED | FAILED | ...
 

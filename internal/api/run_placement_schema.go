@@ -27,7 +27,7 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[adoEntraGrade]():         strings.Fields("graded rowID org tokenMode"),
 	reflect.TypeFor[adoEntraRun]():           strings.Fields("rowID org owner tenantID clientID tokenMode credentialSource caps capsFromPolicy ceiling patHours serverHost residentOptIn"),
 	reflect.TypeFor[adoStandingBound]():      strings.Fields("operator governance"),
-	reflect.TypeFor[bedrockAuth]():           strings.Fields("env egressHosts ready bearer runtimeHost runtimePort region model ssoInject ssoAccountID ssoRoleName ssoRegion ssoProxyInject sigv4Hosts maskErr"),
+	reflect.TypeFor[bedrockAuth]():           strings.Fields("env egressHosts ready bearer runtimeHost runtimePort region model ssoInject ssoAccountID ssoRoleName ssoRegion ssoProxyInject sigv4Hosts residentGrant maskErr"),
 	reflect.TypeFor[bedrockCredGrade]():      strings.Fields("graded host"),
 	reflect.TypeFor[bedrockTransportAudit](): strings.Fields("region model endpoint mode detail hosts"),
 	reflect.TypeFor[chosenProvider]():        strings.Fields("provider owner"),

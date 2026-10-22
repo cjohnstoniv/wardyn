@@ -12,9 +12,9 @@
 - Launch adds workspace and source-control hosts, routes GitHub through the git-broker, applies the governance profile's walls and the org's disk size, and clamps a member's policy to their limits.
 - `GET /api/v1/runs/{id}/policy` and `wardyn run policy <run-id>` return the resolved policy, under `spec` as a `RunPolicySpec` document, where it started from, what changed and why, and whether a saved policy has since been edited (see [OPERATIONS.md](OPERATIONS.md#the-policy-a-run-got) and [sdk.md](sdk.md)).
 - The CLI prints YAML behind `#` comment lines, so `wardyn run policy <id> > p.yaml` is a policy file.
-- Reuse is scoped: the document always strict-decodes as a policy, and it passes `validatePolicySpec` for a security or super admin.
+- Reuse is scoped: the document always strict-decodes as a policy, and it passes `validatePolicySpec` for a super admin.
 - For them `wardyn run --policy-file p.yaml` runs it again as is, as long as the run's allowlist, with what launch added, still fits the per-policy domain cap.
-- For anyone else, mount sources read `<redacted>` and grant secret names are dropped: it is a starting point, with those values to fill in.
+- For anyone else, mount sources read `<redacted>` (and, below the security admin tier, grant secret names are dropped): it is a starting point, with those values to fill in.
 - A run that used an organisation component's shared secret is the exception for every reader, an admin included.
   - Its grant carries `shared: true`, which no authored policy may set, so validation refuses the document.
   - It is a record of the run, not a policy to reuse: select the component on the new run instead ([Custom components](#custom-components)).
@@ -1161,6 +1161,7 @@ So an entry a pattern matches is judged one of two ways:
   - the first ten matched paths, sorted, and how many matched in all; the object ids the push sets its refs to, sorted;
   - each ref paired with the object id it is set to (`updates`, sorted by ref, all zeros for a delete); and a SHA-256 over **every** matched path, sorted and NUL-terminated.
   - The scope is the dedup key — two identical pushes are one request.
+  - With `WARDYN_PUSH_HOLD_CANONICAL_REPOS` on (off by default), a `git_pat` push to github.com names its repository lowercased and without `.git`, so `Owner/Repo.git` and `owner/repo` are one request; other forges keep the path git sent.
   - Commits are content addresses, so a retry git repacks carries the same commits in different bytes and is let through on the approval already given.
   - The key is the whole scope: the same commits pushed
     - to another repository or branch, or

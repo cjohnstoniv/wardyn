@@ -257,6 +257,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_GIT_PAT_BROKER_OFF_REFUSED` | bool | `false` | 0.10.0: while `WARDYN_GIT_PAT_BROKER` is `off`, refuse a PAT in the sandbox on operators' runs too; a member's run is refused it either way (flag `-git-pat-broker-off-refused`). [Details](#wardyn_git_pat_broker) |
 | `WARDYN_MULTI_AGENT_TASKS` | bool | `false` | 0.10.0: a background agent task may run several agents in one sandbox, each on its own `tools[].task`. Off, such a request is `422` `multi_agent_tasks_off`. Needs a 0.10.0 harnesses image ([sdk.md](sdk.md#several-agents-in-one-background-run); flag `-multi-agent-tasks`) |
 | `WARDYN_PROXY_RESPONSE_SCRUB` | bool | `false` | 0.10.0 switch: each run's proxy replaces a credential it added with `<secret-hidden>` when a response echoes it, in headers and body on intercepted and brokered routes (flag `-proxy-response-scrub`). On a stream, an event's last bytes can arrive with the next |
+| `WARDYN_PUSH_HOLD_CANONICAL_REPOS` | bool | `false` | 0.10.0 switch: a held `git_pat` push to github.com names its repository lowercased and without `.git`, so one admin decision covers every spelling (flag `-push-hold-canonical-repos`). Other forges keep the spelling git sent |
 | `WARDYN_ENV_SECRET_PLACEHOLDERS` | bool | `false` | 0.10.0 switch: an `env_secret` grant whose scope names a `host` gets a placeholder in its variable, which the run's proxy fills in the `Authorization` header to that host. [POLICIES.md](POLICIES.md#env_secret) has the limits (flag `-env-secret-placeholders`) |
 | `WARDYN_FILE_SECRET_PLACEHOLDERS` | bool | `false` | 0.10.0 switch: the same for a `file_secret` grant whose scope names a `host`: the file holds the placeholder (flag `-file-secret-placeholders`) |
 | `WARDYN_RUNNER_SECRET_PLACEHOLDERS` | bool | `false` | 0.10.0 switch: the same for a `runner_resident` `env_secret` or `file_secret` grant whose scope names a `host`: the runner gets the placeholder instead of the value, and the organisation's egress fills it (`via_org`). [POLICIES.md](POLICIES.md#env_secret) has the limits (flag `-runner-secret-placeholders`) |
@@ -298,6 +299,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_SCHEDULED_RUNS` | bool | (unset) | let a run be scheduled to start once, later (`start_at` on `POST /runs`, within 7 days less the run's wait); unset refuses `start_at` with `scheduled_runs_off`. Read per request. [Details](#wardyn_scheduled_runs) |
 | `WARDYN_EGRESS_PORT_RULE` | enum | `off` | container runs' egress port rule, `off`, `dry_run` or `on` (flag `-egress-port-rule`); the proxy turns it on for runs dispatched as a desktop VM. [Details](#wardyn_egress_port_rule) |
 | `WARDYN_DESKTOP_SIGNINS` | enum | `off` | `on` lets a run's creator sign in to websites in a browser of their own inside the run's desktop, with the agent stopped, and share one site's login with the agent (flag `-desktop-signins`). [Details](#wardyn_desktop_signins) |
+| `WARDYN_APPROVAL_RULES` | enum | `off` | approval rules, `off`, `dry_run` or `on`: a security admin's rule may approve a held `tool_call` or first-use `egress_domain` approval on a service identity's run. [Details](#wardyn_approval_rules) |
 | `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` | string (URL) | (unset) | **TEST ONLY.** Re-points **both** AWS IAM Identity Center services at this base URL (flag `-aws-sso-endpoint-override`; `ValidateAWSSSOEndpointOverride`, [`internal/api/awssso_endpoint.go`](../internal/api/awssso_endpoint.go)); **REFUSED unless `WARDYN_ALLOW_TEST_ENDPOINTS=true`**. [Details](#wardyn_aws_sso_endpoint_override) |
 | `WARDYN_AWS_SSO_PROXY_INJECT` | enum | `on` | a captured AWS SSO session is injected **proxy-side** (flag `-aws-sso-proxy-inject`). `off` was removed in 0.10.0 and refuses boot. On a private-endpoint estate whose corporate proxy is also TLS-intercepting, the MITM re-origination fails closed unless `WARDYN_TRUSTED_CA_FILE` is ALSO staged. [Details](#wardyn_aws_sso_proxy_inject) |
 | `WARDYN_AWS_SIGV4_AT_PROXY` | enum | `off` | `on`: an AWS sign-in lane's sandbox profile holds a placeholder key pair and the proxy re-signs each AWS request with role credentials the sandbox never holds (flag `-aws-sigv4-at-proxy`). New dispatches only. [Details](#wardyn_aws_sigv4_at_proxy) |
@@ -1599,6 +1601,15 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The person's sign-in browser runs as a different uid in the same sandbox, not in a sandbox of its own: [THREAT-MODEL §5.1a](../threatmodel/THREAT-MODEL.md) says what that does and does not protect. A login reaches the agent only when the person shares that site, and after a share the agent holds those cookies within its egress.
 - Takes effect for runs dispatched after the change. Any other value exits 2 at boot. Not a secret, so it has no `_FILE` twin.
 
+### `WARDYN_APPROVAL_RULES`
+
+- Approval rules ([approval-rules.md](operations/approval-rules.md); `approvalRulesSwitch`, [`internal/api/approval_rules_approver.go`](../internal/api/approval_rules_approver.go)), read per request.
+- `off` (the default): the approval raise reads no rule. The `/governance/approval-rules` routes still work, so rules can be staged.
+- `dry_run`: every rule acts as `mode: dry_run`. A matching approval gets an `approval.policy.would_approve` row and stays pending.
+- `on`: a rule in `mode: enforce` approves a matching held `tool_call` or first-use `egress_domain` approval on a service identity's run; a `dry_run` rule writes would-approve rows.
+- A rule never decides a `credential`, `credential_reauth` or `push_content` approval or an Azure DevOps escalation, and is never a second human.
+- Env-only on purpose: a switch that widens reach needs deploy access. Any value other than `off`, `dry_run` or `on` exits 2 at boot.
+
 ### `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE`
 
 - **TEST ONLY.** Re-points **both** AWS IAM Identity Center services — `sso-oidc` and the `sso` portal — at this base URL (flag `-aws-sso-endpoint-override`; `ValidateAWSSSOEndpointOverride`, [`internal/api/awssso_endpoint.go`](../internal/api/awssso_endpoint.go)).
@@ -1641,7 +1652,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
   - SigV4a (`aws_sigv4_algorithm`), and a signature for another service or Region than the host's (`aws_sigv4_scope`);
   - a chunk-signed upload (`aws_sigv4_signed_chunks`; for the AWS CLI set `payload_signing_enabled = false`) and an event-stream request body, such as Bedrock's bidirectional stream (`aws_sigv4_event_stream`);
   - a payload hash it cannot read (`aws_sigv4_payload`), and a body over 16 MiB that carries no `x-amz-content-sha256` (`aws_sigv4_body_too_large`);
-  - on STS (every host of it, FIPS included) any action but `GetCallerIdentity`, since the others hand out credentials, and on IAM `CreateAccessKey`, `CreateLoginProfile`, `CreateServiceSpecificCredential`, `ResetServiceSpecificCredential`, `UpdateLoginProfile`, `CreateVirtualMFADevice`, `UploadSSHPublicKey` and `UploadSigningCertificate`, compared under any case (`aws_sigv4_action`);
+  - on STS (every host of it, FIPS included) any action but `GetCallerIdentity`, since the others hand out credentials (`aws_sigv4_action`);
+  - on IAM any action but a read (`Get`, `List`, `Simulate`, `Generate`), compared exactly (`aws_sigv4_action`);
   - on either, a request whose one `Action` it cannot read from the query and a plain form body (`aws_sigv4_action`). That is an `X-Amz-Target` or `Smithy-Protocol` header, more than one `Content-Type`, a `Content-Encoding`, a chunked or streamed body, or a body that is not a form;
   - on either, no `Action` or more than one, an `Action` that is not letters and digits starting with a letter, or a parameter name with a character outside letters, digits, `.`, `_` and `-` (`aws_sigv4_action`);
   - a request when the role credentials cannot be got (`aws_sigv4_credentials`).

@@ -83,10 +83,13 @@ A run's model credential is its owner's, and CI is no exception. So `ci-run.sh` 
 * Its audit trail says "CI" and names its sponsor on every row, rather than one human's token paying for and being blamed for every pipeline run.
   * Scope it with `capModelProvider`/`capAgent` through the `user` subject `service:<name>`.
 * A person's token is not the CI credential: it acts as that person, and leaves with them when they leave.
-* A service token reaches only what a pipeline needs: launch and dry-run, read, `PATCH` and kill its own runs, `GET /me`, `GET /setup/status` and its model-provider credential. Anything else answers `403` `service_scope`.
-  * It has no audit read, so `run --wait` reports a `FAILED` run as exit `1` and not the task's own code, and `ci-run.sh` writes an empty `audit.json` (`[]`) and collects no `session.cast`.
-  * Read those as the sponsor or an admin in the console.
-* When the sponsor leaves, is suspended or is replaced, the identity's tokens stop and its live runs continue: change the sponsor (`wardyn service-identity update <name> --sponsor <principal>`) and mint a new token.
+* A service token reaches only what a pipeline needs. Anything else answers `403` `service_scope`.
+  * Launch and dry-run, read, `PATCH` and kill its own runs, `GET /me` (with its reach), `GET /setup/status` and its model-provider credential.
+  * Read the audit rows of its own runs (`GET /audit?run_id=<id>`) and the presets and workspaces it may launch with (`GET /presets`, `GET /presets/{name}`, `GET /workspaces`).
+  * Follow a run with `GET /runs/{id}/events`, a `text/event-stream`, rather than polling. It sends a keepalive every 15s and ends with `ended`. It carries no exit code: after `ended`, read `GET /runs/{id}` for the state and `GET /audit?run_id=<id>` for the task's code (`run.complete` `.data.exit_code`).
+  * That audit read covers only runs it created (any other id answers `200` `[]`), so `run --wait` reports the task's own code and `ci-run.sh` collects `audit.json`.
+  * It has no recording read, so `ci-run.sh` collects no `session.cast`: read it as the sponsor or an admin.
+* A sponsor does not need a live session; a deactivated sponsor ends the identity. When the sponsor leaves, is suspended or is replaced, the identity's tokens stop and its live runs continue: change the sponsor (`wardyn service-identity update <name> --sponsor <principal>`) and mint a new token.
 * The deployment's admin token is no substitute: under OIDC it holds no model credential, and `ci-run.sh` says so if it is handed one.
 * Do not use the Claude subscription kind for CI ([below](#model-access-for-harness-mode-running-a-real-agent)).
 
@@ -154,6 +157,9 @@ plane request itself (auth/client/server/network), independent of what the run i
   - **`"first_use_approval": "always_deny"`** — non-negotiable for unattended runs. Anything off the allowlist is hard-denied instantly; nothing ever waits on a human. (`wait_for_review` holds connections for a reviewer; `deny_with_review` files approvals nobody will decide.)
   - **Complete `allowed_domains`** — list every host the task legitimately needs (package registries, your model provider). The sealed default (empty list) means the sandbox can reach nothing. GitHub is the exception: it is reached through the Wardyn git-broker (see below), not via `allowed_domains`.
   - **No `requires_approval: true` grants** — an approval-gated credential never mints without a human. Use `requires_approval: false` grants whose secret the CI principal already holds on the control plane.
+  - **Decide tool calls in the policy**: with `tool_approvals: hold`, give [`tool_rules`](POLICIES.md#tool_rules--toolrule) an `allow` or `deny` for each tool the task uses and a `"*"` default of `deny`, so no call waits on a human.
+    - Carry the policy in a launch preset (`preset` and `preset_version` on `POST /runs`) so every run of the job gets the same answers.
+    - Rows decided this way create no approval.
   - **Bound the run** — `auto_stop_after_sec` (ci.json: 1 hour) is the reaper backstop behind `WARDYN_CI_TIMEOUT`.
   - Against `WARDYN_URL`, `ci-run.sh` also kills the run on exit `124` and when the job is cancelled, once the CLI has printed the run id.
 
@@ -176,7 +182,7 @@ plane request itself (auth/client/server/network), independent of what the run i
 > - Anthropic's terms for running Claude Code in agent infrastructure require each end user to authenticate with their own credential and prohibit intermediating usage on their behalf, which would put **you**, the operator, in breach rather than Wardyn.
 
 - The shared-subscription switches are retired ([`ENV.md`](ENV.md) lists them).
-- Give the CI principal an **API-key** or **Bedrock** provider instead, with its own credential.
+- Give the CI principal a provider whose credential it stores as a key or token: `anthropic_api_key`, `openai_api_key`, `bedrock_bearer` (a Bedrock API key) or `custom_endpoint`. The Claude subscription, `bedrock_sso` and `azure_foundry` are signed into, and a service identity cannot sign in, so its run is refused `422` `model_credential`.
 
 ### Least-privilege, derived not guessed
 

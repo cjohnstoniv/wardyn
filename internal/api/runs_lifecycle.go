@@ -885,6 +885,10 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 			}
 		}
 	}
+	// The revokes below get their own window, opened after the teardown wait: a slow sandbox kill can
+	// use the whole kill deadline, and the revokes must not inherit what is left of it.
+	revokeCtx, revokeCancel := context.WithTimeout(context.WithoutCancel(ctx), killRevokeTimeout)
+	defer revokeCancel()
 	// (3) Identity revocation: deny every (current+future) token for the run. A
 	// bounded retry guards against a transient store error leaving the run's
 	// JWT-SVID valid (until its <=1h TTL) while the kill is reported as success.
@@ -892,24 +896,24 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 	// provider must not panic mid-cascade (after the KILLED CAS + KillSandbox but
 	// before the audit) — the revoke step is simply skipped.
 	if s.cfg.Identity != nil {
-		if rerr := retrying(ctx, func() error { return s.cfg.Identity.RevokeRun(ctx, id) }); rerr != nil {
+		if rerr := retrying(revokeCtx, func() error { return s.cfg.Identity.RevokeRun(revokeCtx, id) }); rerr != nil {
 			killData["identity_error"] = rerr.Error()
 		}
 	}
 	// (4) Broker credential revocation (best-effort; audits per minted jti).
 	if s.cfg.Broker != nil {
-		if berr := retrying(ctx, func() error { return s.cfg.Broker.RevokeRun(ctx, id) }); berr != nil {
+		if berr := retrying(revokeCtx, func() error { return s.cfg.Broker.RevokeRun(revokeCtx, id) }); berr != nil {
 			killData["broker_error"] = berr.Error()
 		}
 	}
 	// (5) The run's stored proxy config (#1176) has nothing left to rebuild.
-	if perr := s.dropRunProxyConfig(ctx, id); perr != nil {
+	if perr := s.dropRunProxyConfig(revokeCtx, id); perr != nil {
 		killData["proxy_config_error"] = perr.Error()
 	}
 	// (6) Its Azure DevOps personal access tokens (best-effort; the sweep retries),
 	// and the erase of any value its runner holds resident, as revokeRunCascade does.
-	s.revokeRunPATs(ctx, id, adoPATRevokeKill)
-	s.kickRunResidentErase(ctx, id)
+	s.revokeRunPATs(revokeCtx, id, adoPATRevokeKill)
+	s.kickRunResidentErase(revokeCtx, id)
 	// (7) Its output, on a tracked goroutine: the drain barrier and the write
 	// never delay the kill's answer, and the sandbox is already gone.
 	s.finishRunOutputDetached(ctx, id)
@@ -931,14 +935,17 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 	if queued {
 		data["sandbox_stop"] = "queued"
 	}
-	s.recordAudit(ctx, s.auditEvent(&id, killerType, killer, "run.kill",
+	// On revokeCtx, not ctx: a slow kill leaves ctx expired, and the audit row and the reconciles below
+	// would then write and read nothing. It is detached and already bounded, and it shares the
+	// revokes' window so the tail's worst case stays killCascadeTimeout + killRevokeTimeout.
+	s.recordAudit(revokeCtx, s.auditEvent(&id, killerType, killer, "run.kill",
 		id.String(), outcome, mustJSON(data)))
 
 	// A killed workspace run still settles its workspace: verify/scan runs get
 	// the no-result reconcile; a record run's kill IS the normal "Done recording"
 	// for interactive mode (which has no completion watcher), so capture here.
-	s.reconcileWorkspaceRun(ctx, id)
-	s.reconcileRecordRun(ctx, id)
+	s.reconcileWorkspaceRun(revokeCtx, id)
+	s.reconcileRecordRun(revokeCtx, id)
 
 	return killData
 }
@@ -948,27 +955,7 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 // kill route has always applied, kept as one name now that two callers share it.
 const killCascadeTimeout = 30 * time.Second
 
-// handleSweepSandboxes is the operator-triggered counterpart to the boot pass
-// and to cmd/wardynd's periodic ticker (runTerminalSandboxSweeper, #710),
-// which calls SweepTerminalSandboxesPage on its own bounded cadence instead.
-// This route stays unbounded (SweepTerminalSandboxes, ListRuns UNPAGED,
-// probing Runner.Status for every terminal run carrying a SandboxRef) on
-// purpose: an operator asking for it once, right now, wants the whole table
-// checked immediately, not the next several bounded pages' worth — and it is
-// cheap precisely because the operator decides when to pay for it, unlike a
-// ticker that would pay on every tick forever.
-func (s *Server) handleSweepSandboxes(w http.ResponseWriter, r *http.Request) {
-	swept, err := s.SweepTerminalSandboxes(r.Context())
-	if err != nil {
-		writeServerError(w, r, "sandbox sweep failed", err)
-		return
-	}
-	// NOT `sandbox.sweep`: that action is documented as emitted on FAILED
-	// teardown only, by the primitive itself, and reusing it for a success event
-	// would make docs/AUDIT-ACTIONS.md false. This row answers a different
-	// question — WHO asked for a sweep, and what did it find — and the
-	// primitive's own failure rows still fire underneath it.
-	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r), "sandbox.sweep.request",
-		"", "success", mustJSON(map[string]any{"swept": swept})))
-	writeJSON(w, http.StatusOK, map[string]any{"swept": swept})
-}
+// killRevokeTimeout is the window the kill's revokes, its run.kill audit row and its workspace
+// reconciles share after the sandbox teardown, whatever the teardown used of killCascadeTimeout: a slow
+// kubelet wait must not squeeze them. backgroundShutdownBudget counts it.
+const killRevokeTimeout = 15 * time.Second

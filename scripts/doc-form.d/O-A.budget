@@ -168,7 +168,22 @@
 # docs/OPERATIONS.md 59906 = ours 58872 + theirs 58785 - base 57751 at the 0.10 W4c merge of origin/main 7e33976ca onto the train.
 # docs/OPERATIONS.md=58785 adds 63 (0.10 TREE-MODEL): the unit-tree migration row.
 # docs/OPERATIONS.md 59969 = ours 59906 + theirs 58848 - base 58785 at the 0.10 W4c merge of W4h 2ccd426db into the W4X train.
-docs/OPERATIONS.md=59969 share=35
+# 0.10 MISC-B (#3374): docs/OPERATIONS.md 57713 adds 23, measured: the 0200 migration line.
+# 0.10 MISC-B merge of main: docs/OPERATIONS.md 57774 = ours 57713 + theirs 57751 - base 57690, measured.
+# docs/OPERATIONS.md 58808 = ours 58785 + theirs 57774 - base 57751 at the 0.10 W4f merge of MISC-B onto the train.
+# docs/OPERATIONS.md 57768 measured: migration 0201 (the boundary seed marker)
+# docs/OPERATIONS.md 58854 = ours 58808 + theirs 57768 - base 57722 at the 0.10 W4f merge of G1B onto the train.
+# 0.10 SI-POLICY: docs/OPERATIONS.md 57776 adds 25 over 57751: the 0202 migration line and the approval-rules task page link, measured.
+# docs/OPERATIONS.md 58879 = ours 58854 + theirs 57776 - base 57751 at the 0.10 W4f merge of SI-POLICY onto the train.
+# docs/OPERATIONS.md 57820 adds 69 (0.10 AUD-REDACT): the audit reads and partition export withhold host detail.
+# docs/OPERATIONS.md 57848 adds 28 (0.10 AUD-REDACT round 2): the partition export recipe's redacted-row cross-checks.
+# docs/OPERATIONS.md 58976 = ours 58879 + theirs 57848 - base 57751 at the 0.10 W4f merge of AUD-REDACT onto the train.
+# docs/OPERATIONS.md 57794 adds 43 over 57751, measured (0.10 POL-MOUNT): the tier-reach sentence: a mount host path is the super admin's to read and set.
+# docs/OPERATIONS.md 59019 = ours 58976 + theirs 57794 - base 57751 at the 0.10 W4f merge of POL-MOUNT onto the train.
+# M10 (#113, #112): docs/OPERATIONS.md 58699 adds 79 over 58620, measured: the 0204 user_drives_second_place migration line and its Before you upgrade note.
+# docs/OPERATIONS.md 59098 = ours 59019 + theirs 58699 - base 58620 at the 0.10 W4f merge of DRV-M10 onto the train.
+# docs/OPERATIONS.md 60282 = ours 59969 + theirs 59098 - base 58785 at the 0.10 W4c merge of W4f a55a58e89 into the W4X train.
+docs/OPERATIONS.md=60282 share=35
 # docs/OPERATIONS.md 57751 = ours 57562 + theirs 57690 - base 57501 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/OPERATIONS.md 57722 = ours + theirs - base at the 0.10 HYB-C merge of main onto VM-A, measured.
 # docs/OPERATIONS.md 55848 adds 132 over 55716: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).

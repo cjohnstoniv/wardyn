@@ -116,6 +116,8 @@ type Proxy struct {
 	maskKey uuid.UUID
 	// scrubResponses is Options.ScrubResponses (scrub.go).
 	scrubResponses bool
+	// canonicalPushRepos is Options.CanonicalPushRepos (patPushTarget).
+	canonicalPushRepos bool
 	// patGrants is the per-run git_pat broker allowlist: lowercased host -> the
 	// grant to mint from. Empty/nil == no host brokered (the route always 403s),
 	// which is also what a deployment with the lane switched off looks like.
@@ -396,6 +398,7 @@ func newProxy(opts Options) *Proxy {
 		localModels:          compileLocalModels(opts.LocalModels),
 		pushHolds:            pushHolds{unattended: opts.Unattended},
 		scrubResponses:       opts.ScrubResponses,
+		canonicalPushRepos:   opts.CanonicalPushRepos,
 		attribution:          opts.Attribution,
 		gatewayVendor:        gatewayVendor,
 		channelHosts:         compileChannelHosts(opts.LLMChannelHosts),

@@ -55,6 +55,9 @@ type serveOptions struct {
 	localAttach, orgURL string
 	// offline is what the next connect reports about why this runner could not connect or start.
 	offline *offlineLog
+	// driveRoots is --drive-root: the folders a drive bound to this runner may mount from (none by
+	// default, so no drive mounts here until its owner allows one).
+	driveRoots []string
 }
 
 func (o serveOptions) recordingEnabled() (bool, error) {
@@ -209,6 +212,7 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 	cmd.Flags().StringVar(&opts.substrate, "substrate", "docker", "where runs execute: docker (this host's engine) or k8s (a runs namespace of the cluster runnerd runs in); "+
 		"folders runs nothing and only shares folders on this computer with runs elsewhere")
 	cmd.Flags().StringArrayVar(&opts.folderRoots, "folder-root", nil, "folders: a folder this runner may share, with everything under it (repeatable; default: your home folder)")
+	cmd.Flags().StringArrayVar(&opts.driveRoots, "drive-root", nil, "docker: a folder a drive bound to this runner may mount from, with everything under it (repeatable; default: none, so no drive mounts here)")
 	cmd.Flags().StringVar(&opts.runsNamespace, "runs-namespace", "", "k8s: the dedicated namespace runs are created in; never runnerd's own")
 	cmd.Flags().StringVar(&opts.relayService, "relay-service", "", "k8s: the relay Service's DNS name (<name>.<namespace>.svc.<cluster domain>), which must resolve to exactly one ClusterIP")
 	cmd.Flags().StringVar(&opts.arch, "arch", os.Getenv(archEnv), "k8s, required: the sandbox node architecture, amd64 or arm64, pinned as every run pod's kubernetes.io/arch node selector")

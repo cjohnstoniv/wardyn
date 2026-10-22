@@ -23,6 +23,8 @@ import { createRenderer, type RendererControl, type RendererPref, type RendererS
 import { createCopyGate, isMacPlatform, type CopyGate, type CopyOffer, type GateTerm } from "./attach-terminal-clipboard";
 import { runs } from "../lib/api/runs";
 import { wsURL } from "../lib/base-path";
+import { shortTime } from "../lib/format";
+import { TERMINAL_SESSION } from "../lib/session-continuity-copy";
 import { HttpError, TIMEOUT_STATUS } from "../lib/api/core";
 import type { PolicyRef } from "../lib/api/health";
 import { sessionExpiry } from "../lib/api/session-activity";
@@ -311,6 +313,10 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     // still in flight when the sign-out landed.
     let suspended = signedOutRef.current;
     let gen = 0;
+    // M12: a terminal that had a live socket, lost it to a sign-out, and is signed in again says so once,
+    // in its own scrollback, when the new socket opens: the output above is the same terminal's.
+    let wasOpen = false;
+    let resumedAfterSignOut = false;
 
     // Streaming decoder for the output observer (a multibyte glyph split across
     // frames stays correct; our token of interest is ASCII regardless).
@@ -482,6 +488,11 @@ export function useAttachSession(args: UseAttachSessionArgs) {
 
       ws.onopen = () => {
         opened = true;
+        wasOpen = true;
+        if (resumedAfterSignOut) {
+          resumedAfterSignOut = false;
+          term.writeln(`\r\n\x1b[36m${TERMINAL_SESSION.RESUMED(shortTime(new Date().toISOString()))}\x1b[0m`);
+        }
         clearConnectTimer();
         // #216 — was `term.writeln([reconnected])`; the open dot below says so.
         reconnectAttempts = 0; // a successful attach resets the budget
@@ -676,6 +687,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     suspendRef.current = (on: boolean) => {
       if (disposed || on === suspended) return;
       suspended = on;
+      if (on && wasOpen) resumedAfterSignOut = true;
       if (!on) {
         reconnectAttempts = 0;
         setReconnectAttempt(0);

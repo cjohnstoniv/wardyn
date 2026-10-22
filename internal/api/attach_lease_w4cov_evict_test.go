@@ -403,7 +403,7 @@ func TestLeaseCovARemoteTakeOverReplacesTheLeaseWithAReservationAndNamesTheDispl
 	}
 
 	// Alice's replica finds out on its next check, and her client can no longer write.
-	r.alice.h.lease.verified.Store(0)
+	r.alice.h.lease.verified.Store(nil)
 	if r.alice.h.canWrite() {
 		t.Error("alice can still write after her lease was replaced")
 	}

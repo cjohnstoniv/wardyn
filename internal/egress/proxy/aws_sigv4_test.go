@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -608,6 +609,16 @@ func TestAWSSigV4_ConfigValidation(t *testing.T) {
 	}
 }
 
+// IAM is guarded by a read-only allow list: exactly these action prefixes, compared with their case.
+func TestAWSSigV4_IAMReadPrefixes(t *testing.T) {
+	if got, want := awsSigV4ActionGuards["iam"].reads, []string{"Get", "List", "Simulate", "Generate"}; !slices.Equal(got, want) {
+		t.Fatalf("iam read prefixes = %v, want %v", got, want)
+	}
+	if g := awsSigV4ActionGuards["iam"]; g.allow != nil {
+		t.Fatalf("iam guard carries an exact allow list %v; it is judged by its read prefixes only", g.allow)
+	}
+}
+
 // STS and IAM are judged on the one Action they run, read from the query and the plain form
 // body together, never from a header, an encoded body or one of several Actions.
 func TestAWSSigV4_GuardsQueryProtocolActions(t *testing.T) {
@@ -637,7 +648,9 @@ func TestAWSSigV4_GuardsQueryProtocolActions(t *testing.T) {
 		{"sts GetCallerIdentity in the body", req{"POST", sigv4STSLondon, "/", "Action=GetCallerIdentity&Version=2011-06-15", form, "sts", "eu-west-2", false, ""}, "sts"},
 		{"sts-fips GetCallerIdentity", req{"POST", sigv4STSFIPS, "/", "Action=GetCallerIdentity&Version=2011-06-15", form, "sts", "us-east-1", false, ""}, "sts"},
 		{"iam ListUsers", req{"POST", sigv4IAM, "/", "Action=ListUsers&Version=2010-05-08", form, "iam", "us-east-1", false, ""}, "iam"},
-		{"iam TagUser with member keys", req{"POST", sigv4IAM, "/", "Action=TagUser&UserName=u&Tags.member.1.Key=team&Tags.member.1.Value=a_b-c&Version=2010-05-08", form, "iam", "us-east-1", false, ""}, "iam"},
+		{"iam GetUser", req{"GET", sigv4IAM, "/?Action=GetUser&UserName=u&Version=2010-05-08", "", nil, "iam", "us-east-1", false, ""}, "iam"},
+		{"iam SimulatePrincipalPolicy with member keys", req{"POST", sigv4IAM, "/", "Action=SimulatePrincipalPolicy&PolicySourceArn=arn&ActionNames.member.1=s3%3AGetObject&Version=2010-05-08", form, "iam", "us-east-1", false, ""}, "iam"},
+		{"iam GenerateCredentialReport", req{"POST", sigv4IAM, "/", "Action=GenerateCredentialReport&Version=2010-05-08", form, "iam", "us-east-1", false, ""}, "iam"},
 	}
 	for _, tc := range allowed {
 		t.Run(tc.name, func(t *testing.T) {
@@ -706,7 +719,10 @@ func TestAWSSigV4_GuardsQueryProtocolActions(t *testing.T) {
 			name, code string
 			r          req
 		}{"a key with a tab", awsSigV4Action, req{"POST", sigv4IAM, "/?Action=ListUsers", "Act%09ion=CreateAccessKey&UserName=u", form, "iam", "us-east-1", false, ""}})
-	for _, action := range []string{"ResetServiceSpecificCredential", "UploadSSHPublicKey", "UploadSigningCertificate"} {
+	// Every IAM write, not only the ones that mint a credential directly: each can make one for some
+	// principal. A read prefix under another case is not a read.
+	for _, action := range []string{"ResetServiceSpecificCredential", "UploadSSHPublicKey", "UploadSigningCertificate",
+		"TagUser", "AttachRolePolicy", "PutRolePolicy", "UpdateAssumeRolePolicy", "CreateRole", "AddUserToGroup", "getUser", "LISTUsers"} {
 		refused = append(refused,
 			struct {
 				name, code string
