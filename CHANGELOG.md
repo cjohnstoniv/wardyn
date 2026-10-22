@@ -14,7 +14,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   folder as its person's own drive; whatever an agent leaves there, a planted script or a harness project file included,
   comes back in the next run that attaches it.
 - Upgrade wardyn-runnerd before you rely on a newer proxy feature: a run that sets one (`aws_sigv4`,
-  `scrub_responses`, `vm`, `port_rule`, `local_models` or `kube_api`) is refused on an older wardyn-runnerd.
+  `scrub_responses`, `vm`, `port_rule`, `local_models`, `kube_api` or `canonical_push_repos`) is refused on an
+  older wardyn-runnerd.
 - **A security admin can no longer add or change a mount source on a governance profile, or see a mount's host path; a super admin can.**
   A security admin reads every `workspace_mounts[].source` as `<redacted>`, on policies, presets, profiles, the
   policy default and held changes. To keep a mount, send it back with that sentinel and its target, as

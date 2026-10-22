@@ -367,8 +367,8 @@ const keptAgentStopWait = 2 * time.Second
 // pass. Its proxy is stopped and removed (runner.ProxyStopper, as for a run lost to an outage), so
 // nothing in it has egress, and its agent's processes are killed and seen ended (AgentStatus). The
 // pass back is untouched: it is an exec through the substrate (execSFTPServer), not traffic
-// through the proxy. It answers notQuiescable for a run on a runner, whose stop_proxy is a lost
-// run's containment, queued only with its loss (a Kubernetes runner's deletes the agent pod when
+// through the proxy. It answers notQuiescable for a linux_vm run, whose guest the server's Docker
+// cannot reach, and for a run on a runner, whose stop_proxy is a lost run's containment, queued only with its loss (a Kubernetes runner's deletes the agent pod when
 // it cannot prove the stop), and for a substrate that cannot stop its proxy alone (Kubernetes in
 // server mode). An exec-less sandbox, whose agent is its main process, is refused outright: its
 // agent ends only with the sandbox, so no pass runs. A sandbox already stopped answers
@@ -376,6 +376,9 @@ const keptAgentStopWait = 2 * time.Second
 func (s *Server) quiesceKeptSandbox(ctx context.Context, run types.AgentRun, ref string) error {
 	if run.RunnerID != nil {
 		return notQuiescable("a sandbox on a runner is not kept")
+	}
+	if run.MachineKind.IsVM() {
+		return notQuiescable("a virtual machine is not quiesced from the server's Docker")
 	}
 	stopper, ok := s.cfg.Runner.(runner.ProxyStopper)
 	if !ok {
