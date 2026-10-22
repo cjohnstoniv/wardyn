@@ -12,6 +12,9 @@
 #
 # Usage: scripts/test-image-build-logs.sh   (exit 0 = PASS, non-zero = FAIL)
 set -uo pipefail
+# Hosted CI exports GITHUB_ACTIONS=true, which makes the helper stream. The quiet
+# cases need it unset; the streaming cases set it themselves.
+unset GITHUB_ACTIONS
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 E2E_LIVE_SH="${E2E_LIVE_SH:-${REPO_ROOT}/scripts/run-e2e-live.sh}"
