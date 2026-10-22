@@ -1572,8 +1572,8 @@ jobs:
   # NOT a required check. Hosted ubuntu-latest exposes /dev/kvm; GitHub's documented udev rule
   # opens it to the runner's user, and the QEMU container gets it as an unprivileged user. Builds
   # the QEMU image and the reference guest image, then boots the guest through the real Docker
-  # driver (test/conformance/vm: probe, boot, exec, terminal, shared folder, the network stub that
-  # answers no frame, teardown).
+  # driver (test/conformance/vm: probe, boot, exec, terminal, shared folder, the network relay and
+  # the real proxy, teardown).
   vm:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' }}
@@ -1584,7 +1584,7 @@ jobs:
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
-          prime: '/library/(golang:[0-9.]+|debian:trixie-slim|busybox:latest)@'
+          prime: '/library/(golang:[0-9.]+(-alpine)?|debian:trixie-slim|busybox:latest)@'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
@@ -1595,16 +1595,18 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
           ls -l /dev/kvm
-      - name: Build the QEMU image and the reference guest image (local only)
+      - name: Build the QEMU, reference guest and proxy images (local only)
         run: |
           docker build -q -f deploy/runner/vm-qemu/Dockerfile -t wardyn/vm-qemu:ci .
           docker build -q -f deploy/images/vm-linux/Dockerfile -t wardyn/vm-linux:ci .
+          docker build -q -f deploy/compose/Dockerfile.proxy -t wardyn/proxy:ci .
       # A hosted runner's CPU does not offer every feature of the default model (Haswell-v4 needs
       # spec-ctrl), so the job names the oldest model every x86-64 KVM host can run.
       - name: Linux VM conformance
         env:
           WARDYN_TEST_VM_QEMU_IMAGE: wardyn/vm-qemu:ci
           WARDYN_TEST_VM_GUEST_IMAGE: wardyn/vm-linux:ci
+          WARDYN_TEST_VM_PROXY_IMAGE: wardyn/proxy:ci
           WARDYN_TEST_VM_CPU_MODEL: Nehalem-v1
         run: grep -m1 'model name' /proc/cpuinfo && go test -tags 'docker vm' -count=1 -v -timeout 20m ./test/conformance/vm/
 

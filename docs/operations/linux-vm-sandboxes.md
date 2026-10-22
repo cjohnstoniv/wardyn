@@ -17,7 +17,8 @@
 | Shared folders | The folders a container on this runner would get, at the same paths and mode, one unprivileged `virtiofsd` container each. No other host folder is shared, and a guest write lands as the runner's user |
 | Synced folders | A folder synced from another computer lands in the guest as in a container: through the guest agent and the image's `sftp-server`, as `agent`. The agent waits for the first sync |
 | Confinement | The VM boundary, which the runner treats as the `CC3` family (hardware virtualisation). The run's recorded `confinement_class` stays the one it asked for |
-| Network | None until the network relay ships: QEMU's only link goes to a socket nothing answers. Then every connection the desktop makes goes through Wardyn's network relay, which hands allowed ones to the proxy and drops the rest |
+| Network | On a Docker runner, QEMU's only link is the network relay (`wardyn-vmnet`), which hands connections to allowed hosts to the run's proxy. A Kubernetes VM pod has no relay yet |
+| Refused traffic | A port or host the policy does not allow, a raw IP address, a DNS query to an outside resolver, and IPv6. The proxy records each refusal as a deny decision |
 
 - Not in this release: drives, session recording, reviving a stopped VM, replacing its proxy, and recovering its output after the VM is gone. Each is refused with a reason.
 - A VM's terminal is a plain shell. Opening it in the agent CLI (`interactive_start: agent`) and watching or taking over the agent's terminal are refused too.
@@ -48,6 +49,7 @@
 | `/dev/kvm` access | Its group is not `root`, or it is open to all (mode `0666`). The QEMU container gets that group, never root's |
 | Runner user | Any user. A runner that runs as root starts its VM containers as uid 65532 |
 | The QEMU image | Built from [`deploy/runner/vm-qemu`](../../deploy/runner/vm-qemu/Dockerfile) and named in `WARDYN_RUNNER_VM_QEMU_IMAGE` |
+| The proxy image | Also carries the network relay (`wardyn-vmnet`), so a `proxy_image` pin in `runnerd.json` pins the relay too |
 
 ## Turn it on
 
@@ -87,6 +89,7 @@
 - It runs systemd, `qemu-guest-agent` (with `hwclock`, which sets the guest clock), and the Wardyn guest agent at `/usr/local/bin/wardyn-guest-agent` with its unit enabled.
 - It has the user `agent` (uid 1000, home `/home/agent`), as a container agent image does, and `/usr/lib/openssh/sftp-server`, which a folder sync writes through.
 - It installs the run's CA from `/sys/firmware/qemu_fw_cfg/by_name/opt/org.wardyn/ca.pem/raw` on every boot, so a VM trusts its own run's CA and never another's.
+- Its one NIC is `10.0.2.15/24`, with `10.0.2.2` as gateway and resolver (the network relay's address).
 
 ## What the host can see
 

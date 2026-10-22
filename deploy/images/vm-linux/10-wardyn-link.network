@@ -1,8 +1,11 @@
-# The VM's one NIC comes up with an IPv6 link-local address and nothing else. Its addressing is the
-# network relay's contract; until the relay serves the run, no frame the guest sends is answered.
+# The VM's one NIC, as the network relay addresses it (wardyn-vmnet): 10.0.2.15/24, with the relay
+# at 10.0.2.2 as gateway and resolver (wardyn-resolv.service). IPv6 stays link-local; the relay
+# carries none of it.
 [Match]
 Type=ether
 
 [Network]
+Address=10.0.2.15/24
+Gateway=10.0.2.2
 LinkLocalAddressing=ipv6
 IPv6AcceptRA=no

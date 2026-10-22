@@ -259,7 +259,7 @@ func (d *Driver) runNetworkAndProxy(ctx context.Context, spec runner.SandboxSpec
 	if err != nil {
 		return fail(err)
 	}
-	prep, err := d.prepareProxy(ctx, spec.RunID, proxyCfg)
+	prep, err := d.prepareProxy(ctx, spec.RunID, proxyCfg, spec.MachineKind.IsVM())
 	var proxyID string
 	if err == nil {
 		proxyID, err = d.startProxy(ctx, spec.RunID, d.labels(spec.RunID, componentProxy, spec.Labels),
@@ -581,6 +581,10 @@ func (d *Driver) teardown(ctx context.Context, agentRef string) error {
 	d.drainSink(ctx, id)
 	if err := d.removeProxy(ctx, id); err != nil {
 		return err
+	}
+	// A VM's network relay is on the run's network, which Docker removes only once it is gone.
+	if _, err := d.cli.ContainerRemove(ctx, vmnetName(id), client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
+		return fmt.Errorf("docker: remove the VM's network relay: %w", err)
 	}
 	if _, err := d.cli.NetworkRemove(ctx, internalNetName(id), client.NetworkRemoveOptions{}); err != nil && !isNotFound(err) {
 		return fmt.Errorf("docker: remove internal network: %w", err)

@@ -176,6 +176,14 @@ func TestLinuxVMPodIsTheCC3Pod(t *testing.T) {
 	if vpod.Spec.HostNetwork {
 		t.Fatal("VM pod is on the host network")
 	}
+	// The pod's proxy serves a container run's network, not wardyn-vmnet: its config has no vm key.
+	sec, err := vcs.CoreV1().Secrets(testNamespace).Get(ctx, secretName(runID), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get the VM run's proxy config Secret: %v", err)
+	}
+	if strings.Contains(string(sec.Data[proxyConfigSecretKey]), `"vm":`) {
+		t.Fatalf("VM pod's proxy config carries the vm key: %s", sec.Data[proxyConfigSecretKey])
+	}
 }
 
 // What a VM does not honour in this release is refused before any object exists.

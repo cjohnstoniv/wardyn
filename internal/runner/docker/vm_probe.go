@@ -30,6 +30,15 @@ import (
 // fallbackVMUID is who VM containers run as when the runner itself runs as root.
 const fallbackVMUID = 65532
 
+// vmUser is who VM containers (QEMU, virtiofsd, the network relay) run as: the runner's own uid and
+// gid, or fallbackVMUID when the runner runs as root. Never root.
+func vmUser(uid, gid int) (int, int) {
+	if uid == 0 {
+		return fallbackVMUID, fallbackVMUID
+	}
+	return uid, gid
+}
+
 // ProbeVM checks that this host can run Linux VM sandboxes and returns c completed with what it
 // found: /dev/kvm's group, the containers' user, and the QEMU version and versioned q35 machine. It
 // starts one paused, diskless VM in a container hardened as every VM is, whose QMP socket runnerd
@@ -53,10 +62,7 @@ func (d *Driver) ProbeVM(ctx context.Context, c VMConfig) (VMConfig, error) {
 	case fi.Mode().Perm()&0o006 != 0o006:
 		return c, errors.New("/dev/kvm belongs to group root: install the kvm group's udev rule (see the Linux VM sandboxes guide) and restart the runner")
 	}
-	c.UID, c.GID = os.Getuid(), os.Getgid()
-	if c.UID == 0 {
-		c.UID, c.GID = fallbackVMUID, fallbackVMUID
-	}
+	c.UID, c.GID = vmUser(os.Getuid(), os.Getgid())
 	if c.QEMUImage == "" {
 		return c, errors.New("no QEMU image: set WARDYN_RUNNER_VM_QEMU_IMAGE to an image built from deploy/runner/vm-qemu")
 	}
