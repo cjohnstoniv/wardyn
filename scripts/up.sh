@@ -691,7 +691,8 @@ cmd_up() {
   until { [ -n "${_cid}" ] && [ "$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${_cid}" 2>/dev/null)" = "healthy" ]; } \
         || curl -fsS -m 3 "${_url}/healthz" >/dev/null 2>&1; do
     _tries=$((_tries + 1))
-    if [ "$(date +%s)" -ge "${_deadline}" ]; then
+    _now=$(date +%s)
+    if [ "${_now}" -ge "${_deadline}" ]; then
       compose logs --tail 50 wardynd
       die "wardynd did not become healthy within 330s — see logs above (or: docker compose -f ${COMPOSE_FILE} logs wardynd)"
     fi
