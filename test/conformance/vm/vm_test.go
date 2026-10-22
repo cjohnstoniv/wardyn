@@ -31,6 +31,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/docker"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 	"github.com/cjohnstoniv/wardyn/internal/vm/qemu"
 )
 
@@ -248,6 +249,21 @@ func TestLinuxVMSandbox(t *testing.T) {
 	if code, _ := run(t, d, sb.Ref, "cat /sys/firmware/qemu_fw_cfg/by_name/opt/org.wardyn/run-id/raw"); code == 0 {
 		t.Fatal("the agent user read fw_cfg")
 	}
+	// The agent user can neither open the guest agent's port nor make its init marker. EACCES, not
+	// EBUSY: EBUSY shows only that the agent holds the port.
+	for name, redirect := range map[string]string{"AgentPortReadIsEACCES": "<", "AgentPortWriteIsEACCES": ">"} {
+		t.Run(name, func(t *testing.T) {
+			code, o := run(t, d, sb.Ref, "exec 3"+redirect+"/dev/virtio-ports/"+guestagent.PortName)
+			if code == 0 || !strings.Contains(o, "Permission denied") {
+				t.Errorf("the agent user opening the port = %d %q, want EACCES", code, o)
+			}
+		})
+	}
+	t.Run("RunMarkerNotCreatable", func(t *testing.T) {
+		if code, o := run(t, d, sb.Ref, "touch /run/wardyn-guest-init && exit 3; [ -w /run ] && exit 4; exit 0"); code != 0 {
+			t.Errorf("as the agent user = %d %q: 3 created the init marker, 4 /run is writable", code, o)
+		}
+	})
 
 	// Stop, then nothing of the run is left.
 	if err := d.StopSandbox(ctx, sb.Ref); err != nil {
