@@ -72,6 +72,13 @@ func (r *agentSandbox) ExecStream(ctx context.Context, ref string, spec runner.E
 	if r.onPID1 != nil && len(spec.Argv) == 2 && spec.Argv[1] == "/proc/1/cmdline" {
 		r.onPID1()
 	}
+	if slices.Equal(spec.Argv, keptAgentKill) {
+		// The quiesce path's stop of the agent (quiesceKeptSandbox): not the pass. The base runner
+		// records the kill its AgentStatus reads.
+		r.agentDown = true
+		r.calls = append(r.calls, "quiesce")
+		return r.folderSandboxRunner.ExecStream(ctx, ref, spec)
+	}
 	if sess, ok := agentExec(spec, r.pid1, func() (string, int) {
 		r.stops++
 		r.calls = append(r.calls, "stop")
@@ -129,7 +136,8 @@ func bringBackFixture(t *testing.T) (*Server, *computerFolderStore, *recRecorder
 	}
 	cs.dispatchTestStore.mu.Lock()
 	cs.run.CreatedBy, cs.run.SandboxRef = bringBackOwner, "sbx"
-	// A computer-folder run is a run on that computer's runner, which cannot be quiesced.
+	// A run on a sandbox runner, which cannot be quiesced: the person's bring-back stops its agent itself.
+	// A test of the server-Docker path (RunnerID nil) clears it, as withoutRunner does.
 	runnerID := cs.runner.ID
 	cs.run.RunnerID = &runnerID
 	run = cs.run
@@ -284,7 +292,8 @@ func TestBringComputerFolderBack_Refusals(t *testing.T) {
 // A writer asleep when the person asks (sleep 300 && echo x > f) wakes during the pass unless the
 // agent is stopped first: what it writes after the request never comes back.
 func TestBringComputerFolderBack_AWriteAfterTheRequestDoesNotComeBack(t *testing.T) {
-	s, _, _, run, sb, app := bringBackFixture(t)
+	s, cs, _, run, sb, app := bringBackFixture(t)
+	withoutRunner(cs) // this one runs the quiesce path; the others, the runner's
 	if res := bringBack(t, s, bringBackOwnerSession(t), run); res.code != http.StatusOK {
 		t.Fatalf("bring-back = %d %s", res.code, res.body)
 	}
@@ -315,6 +324,36 @@ func TestBringComputerFolderBack_ARunnerBackedRunsAgentIsStoppedBeforeThePass(t 
 	}
 	if b, _ := os.ReadFile(filepath.Join(app, "README.md")); string(b) != "edited by the agent" {
 		t.Errorf("README.md = %q: the changes made before the request did not come back", b)
+	}
+}
+
+// withoutRunner makes the fixture's run one on the server's own Docker (RunnerID nil), the path whose
+// sandbox can be quiesced.
+func withoutRunner(cs *computerFolderStore) {
+	cs.dispatchTestStore.mu.Lock()
+	cs.run.RunnerID = nil
+	cs.dispatchTestStore.mu.Unlock()
+}
+
+// On a sandbox that can be quiesced the bring-back stops the agent by quiescing it, and does not run the
+// person's separate stop first: the calls are the quiesce, then the pass.
+func TestBringComputerFolderBack_AQuiescableSandboxIsQuiescedNotStoppedTwice(t *testing.T) {
+	s, cs, _, run, sb, app := bringBackFixture(t)
+	withoutRunner(cs)
+	if res := bringBack(t, s, bringBackOwnerSession(t), run); res.code != http.StatusOK {
+		t.Fatalf("bring-back = %d %s", res.code, res.body)
+	}
+	sb.mu.Lock()
+	calls, stops := slices.Clone(sb.calls), sb.stops
+	sb.mu.Unlock()
+	if !slices.Equal(calls, []string{"quiesce", "pass"}) || stops != 0 {
+		t.Fatalf("sandbox calls = %v with %d stopAgentForPass runs, want [quiesce pass] and none", calls, stops)
+	}
+	if b, _ := os.ReadFile(filepath.Join(app, "README.md")); string(b) != "edited by the agent" {
+		t.Errorf("README.md = %q: the changes made before the request did not come back", b)
+	}
+	if _, err := os.Stat(filepath.Join(app, "late.txt")); err == nil || sb.wrote {
+		t.Error("a write the agent made after the request came back")
 	}
 }
 
