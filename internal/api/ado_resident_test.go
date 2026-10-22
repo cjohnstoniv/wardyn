@@ -44,10 +44,9 @@ func TestADOResident_SandboxOptInRequiresTheFirst(t *testing.T) {
 		Resident []string `json:"runner_resident"`
 		Sandbox  []string `json:"runner_resident_sandbox"`
 	}
-	audit.mu.Lock()
-	defer audit.mu.Unlock()
-	i := slices.IndexFunc(audit.events, func(ev types.AuditEvent) bool { return ev.Action == "workspace_provider.write" })
-	if i < 0 || json.Unmarshal(audit.events[i].Data, &data) != nil || !slices.Equal(data.Resident, []string{"ado"}) || !slices.Equal(data.Sandbox, []string{"ado"}) {
+	rows := audit.snapshot()
+	i := slices.IndexFunc(rows, func(ev types.AuditEvent) bool { return ev.Action == "workspace_provider.write" })
+	if i < 0 || json.Unmarshal(rows[i].Data, &data) != nil || !slices.Equal(data.Resident, []string{"ado"}) || !slices.Equal(data.Sandbox, []string{"ado"}) {
 		t.Fatalf("workspace_provider.write data = %+v", data)
 	}
 
@@ -58,11 +57,10 @@ func TestADOResident_SandboxOptInRequiresTheFirst(t *testing.T) {
 	if w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, `{"workspace_providers":`+both+`}`); w.Code != http.StatusOK {
 		t.Fatalf("site-config PUT = %d %s", w.Code, w.Body.String())
 	}
-	siteAudit.mu.Lock()
-	defer siteAudit.mu.Unlock()
 	data.Resident, data.Sandbox = nil, nil
-	i = slices.IndexFunc(siteAudit.events, func(ev types.AuditEvent) bool { return ev.Action == "site_config.write" })
-	if i < 0 || json.Unmarshal(siteAudit.events[i].Data, &data) != nil || !slices.Equal(data.Resident, []string{"ado"}) || !slices.Equal(data.Sandbox, []string{"ado"}) {
+	rows = siteAudit.snapshot()
+	i = slices.IndexFunc(rows, func(ev types.AuditEvent) bool { return ev.Action == "site_config.write" })
+	if i < 0 || json.Unmarshal(rows[i].Data, &data) != nil || !slices.Equal(data.Resident, []string{"ado"}) || !slices.Equal(data.Sandbox, []string{"ado"}) {
 		t.Fatalf("site_config.write data = %+v", data)
 	}
 }

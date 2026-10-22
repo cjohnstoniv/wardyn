@@ -39,6 +39,12 @@ func (f *fakeProxy) note(ev string) {
 	f.mu.Unlock()
 }
 
+func (f *fakeProxy) setBanner(b string) {
+	f.mu.Lock()
+	f.banner = b
+	f.mu.Unlock()
+}
+
 func (f *fakeProxy) snapshot() ([]string, []refusal) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -71,7 +77,10 @@ func startFakeProxy(t *testing.T, allowed ...string) *fakeProxy {
 			}
 			c, brw, _ := w.(http.Hijacker).Hijack()
 			defer c.Close()
-			_, _ = io.WriteString(c, "HTTP/1.1 200 Connection Established\r\n\r\n"+f.banner)
+			f.mu.Lock()
+			banner := f.banner
+			f.mu.Unlock()
+			_, _ = io.WriteString(c, "HTTP/1.1 200 Connection Established\r\n\r\n"+banner)
 			_ = c.SetReadDeadline(time.Now().Add(time.Second))
 			b, _ := io.ReadAll(brw)
 			f.tunnel <- b
@@ -200,8 +209,8 @@ func TestRelayTLSFlows(t *testing.T) {
 		waitFor(t, "first-flight-timeout report", refusedWith(f, "first-flight-timeout"))
 	})
 	t.Run("a server-speaks-first protocol on a granted port tunnels after the wait", func(t *testing.T) {
-		f.banner = "SSH-2.0-origin\r\n"
-		defer func() { f.banner = "" }()
+		f.setBanner("SSH-2.0-origin\r\n")
+		defer f.setBanner("")
 		c, err := g.Dial(addr, 2222, 3*time.Second)
 		if err != nil {
 			t.Fatal(err)
