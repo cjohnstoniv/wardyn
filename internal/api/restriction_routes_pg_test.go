@@ -145,6 +145,7 @@ func TestRestrictionWriteFourEyes(t *testing.T) {
 		t.Errorf("audit rows: write %d delete %d", len(e.audits("governance.restriction.write")), len(e.audits("governance.restriction.delete")))
 	}
 
+	t.Setenv(envGovernanceSecondHuman, "")
 	off := newGovEnvOn(t, throwawayPGPool(t))
 	rec := off.call(off.alice, http.MethodPost, "/api/v1/governance/restrictions", restrictionJSON(t, base))
 	var r2 types.Restriction
@@ -209,7 +210,7 @@ func TestRestrictionProvenance(t *testing.T) {
 		t.Errorf("contact %+v, want the restriction's", got.Contact)
 	}
 	ref := e.srv.restrictionAttribution(context.Background(), types.AgentRun{RestrictionIDs: []uuid.UUID{r.ID}})
-	if ref == nil || ref.Name != "pv-r" || ref.Source != policyref.LayerRestriction {
+	if ref == nil || ref.Name != "pv-r" || ref.Source != policyref.SourceUnit {
 		t.Errorf("attribution %+v, want the restriction", ref)
 	}
 }

@@ -239,7 +239,7 @@ func (s *Server) restrictionAttribution(ctx context.Context, run types.AgentRun)
 	if err != nil || len(list) == 0 {
 		return nil
 	}
-	return policyref.Project(policyref.LayerRestriction, list[0].Name, list[0].Contact)
+	return policyref.Project(policyref.SourceUnit, list[0].Name, list[0].Contact) // the wire knows two sources; a restriction reads as a named profile
 }
 
 // restrictionAdmitApproval is the restrictions' bound on an egress approval, beside the boundary's:

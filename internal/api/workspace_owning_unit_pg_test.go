@@ -144,6 +144,7 @@ func TestOwningUnitWriteFourEyes(t *testing.T) {
 	if len(e.audits("workspace.owning_unit.set")) < 4 {
 		t.Errorf("audit rows: %d, want one per applied write", len(e.audits("workspace.owning_unit.set")))
 	}
+	t.Setenv(envGovernanceSecondHuman, "")
 	off := newGovEnvOn(t, throwawayPGPool(t))
 	u := treeChild(t, off, `{"name":"ow-off","mode":"pass_through","parent_id":"`+store.DefaultUnitID.String()+`"}`)
 	ws2 := seedPinnableWorkspace(t, off, "ow-ws2")
