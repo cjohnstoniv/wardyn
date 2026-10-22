@@ -258,8 +258,13 @@ done
 # #2223: the wait is wardynd's own boot budget (30s connect + the default 300s WARDYN_MIGRATE_TIMEOUT, the sum
 # setup.sh's host-mode wait and the chart's startupProbe use), not ~2 minutes: a shorter one fails the stack
 # while a slow migration is still working and skips the runner limits, probes and image builds after it.
-grep -q '_deadline=\$((SECONDS + 330))' "${UP_SH}" && grep -q '"${SECONDS}" -ge "${_deadline}"' "${UP_SH}" \
-  || fail "cmd_up's health wait is no longer a 330s deadline - it gives up before wardynd's 330s boot budget while a migration is still running (#2223)"
+# The 330 is read from the source, not copied here, and the wait keeps time with `date +%s` (POSIX), never bash's
+# SECONDS: under dash or busybox ash SECONDS is an ordinary unset variable, so `set -u` aborts the wait.
+_budget="$(sed -n 's/^  _deadline=\$(( \$(date +%s) + \([0-9][0-9]*\) ))$/\1/p' "${UP_SH}")"
+[ "${_budget}" = 330 ] \
+  || fail "cmd_up's health wait is no longer a 330s date-based deadline - it gives up before wardynd's 330s boot budget while a migration is still running (#2223)"
+grep -q '^    _now=$(date +%s)$' "${UP_SH}" && grep -q '"${_now}" -ge "${_deadline}"' "${UP_SH}" \
+  || fail "cmd_up's health wait no longer reads date +%s into _now (so set -e aborts if date fails) before comparing it with its deadline (#2223)"
 grep -q 'still waiting on wardynd' "${UP_SH}" \
   || fail "cmd_up's 330s health wait prints no progress line, so a long migration reads as a hang (#2223)"
 
@@ -270,6 +275,64 @@ grep -q '_cid=$(compose ps -q wardynd 2>/dev/null || true)$' "${UP_SH}" || fail 
 _health_wait_loop="$(awk '/^  until \{ \[ -n "\$\{_cid\}"/,/^  done$/' "${UP_SH}")"
 grep -q 'compose ps -q wardynd' <<<"${_health_wait_loop}" \
   || fail "cmd_up's health-wait loop never re-reads _cid — an empty first capture (slow daemon, right after \`compose up -d\`) wedges the wait on the host-curl arm for its whole budget (perf2-C1)"
+
+# #3518: run the REAL health wait (extracted live from up.sh) under dash with SECONDS unset and `set -eu`, against a
+# stubbed docker/curl and a stub clock that sleep advances (no daemon, no network, no real 330s wait).
+# CI must have dash (ubuntu runners ship it); a laptop without it skips only (a), (b) and (c).
+_have_dash=1
+command -v dash >/dev/null 2>&1 || {
+  [ "${GITHUB_ACTIONS:-}" != true ] || fail "dash is not installed, so the POSIX health-wait pins cannot run (ubuntu runners ship it)"
+  _have_dash=0
+}
+_wait_body="$(awk '/^  _deadline=/,/^  log "wardynd is healthy"/' "${UP_SH}")"
+grep -q '^  log "wardynd is healthy"$' <<<"${_wait_body}" || fail "cannot extract cmd_up's health wait from up.sh (the pins below need it)"
+# run_wait <healthy-after-N-inspects|never> [date-ok-calls]: output in _wait_out, exit status in _wait_rc. $1 and $2 are
+# baked into the docker and date stubs; with $2 set, date fails after that many calls, and sleep aborts the harness
+# with a distinct marker after 400 calls so a wait with no ceiling cannot hang the test.
+run_wait() {
+  printf '%s\n' 1000 > "${dir}/clock"; : > "${dir}/inspects"; : > "${dir}/dates"; : > "${dir}/sleeps"
+  cat > "${dir}/wait.sh" <<HARNESS
+log() { echo "log: \$*"; }
+die() { echo "die: \$*" >&2; exit 1; }
+compose() { :; }
+curl() { return 22; }
+sleep() {
+  echo x >> "${dir}/sleeps"
+  [ "\$(wc -l < "${dir}/sleeps")" -le 400 ] || { echo SLEEP-CEILING-HIT; exit 99; }
+  echo \$(( \$(cat "${dir}/clock") + 2 )) > "${dir}/clock"
+}
+date() {
+  echo x >> "${dir}/dates"
+  if [ "${2:-0}" != 0 ] && [ "\$(wc -l < "${dir}/dates")" -gt "${2:-0}" ]; then return 1; fi
+  cat "${dir}/clock"
+}
+docker() {
+  echo x >> "${dir}/inspects"
+  if [ "$1" = never ] || [ "\$(wc -l < "${dir}/inspects")" -le "$1" ]; then echo starting; else echo healthy; fi
+}
+_cid=abc; _url=http://localhost:8080; COMPOSE_FILE=stub.yml
+${_wait_body}
+echo POST-WAIT-REACHED
+HARNESS
+  _wait_rc=0
+  _wait_out="$(env -u SECONDS dash -eu "${dir}/wait.sh" 2>&1)" || _wait_rc=$?
+}
+if [ "${_have_dash}" = 1 ]; then
+  run_wait 3
+  { [ "${_wait_rc}" = 0 ] && grep -q 'POST-WAIT-REACHED' <<<"${_wait_out}" && grep -q 'wardynd is healthy' <<<"${_wait_out}"; } \
+    || { echo "${_wait_out}" >&2; fail "(a) the health wait did not exit 0 and reach the post-wait marker when wardynd turned healthy on the 4th probe under dash -eu with SECONDS unset (#3518)"; }
+  pass "(a) health wait under dash -eu: unhealthy probes, then healthy -> exit 0, post-wait marker reached"
+  run_wait never
+  { [ "${_wait_rc}" != 0 ] && grep -q 'did not become healthy within 330s' <<<"${_wait_out}" && ! grep -q 'POST-WAIT-REACHED' <<<"${_wait_out}"; } \
+    || { echo "${_wait_out}" >&2; fail "(b) a stub clock past the 330s deadline did not die with the timeout message and skip the post-wait marker under dash -eu (#3518)"; }
+  pass "(b) health wait under dash -eu: clock past the deadline -> die (nonzero), post-wait marker not reached"
+  run_wait never 5
+  { [ "${_wait_rc}" != 0 ] && ! grep -q 'POST-WAIT-REACHED' <<<"${_wait_out}" && ! grep -q 'SLEEP-CEILING-HIT' <<<"${_wait_out}"; } \
+    || { echo "${_wait_out}" >&2; fail "(c) a date that fails mid-loop did not abort the health wait under dash -eu: the loop ran on with no ceiling (#3518)"; }
+  pass "(c) health wait under dash -eu: date failing mid-loop -> nonzero abort, no unbounded wait"
+else
+  echo "SKIP  (a)/(b)/(c) health wait under dash: dash not installed (CI runs them)"
+fi
 
 # Behavioural proof against a real stalled peer: a listener that ACCEPTS and
 # never replies. wait_healthy must return within its own budget, not hang.
