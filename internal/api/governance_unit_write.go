@@ -413,6 +413,11 @@ func (s *Server) buildGovernanceUnit(createdBy string, id uuid.UUID, req governa
 		return p, nil, writeRefusal(http.StatusConflict, reasonGovernanceUnitNameConflict, "a governance profile named %q already exists", req.Name)
 	}
 	base, overlay, limits := composedFrom(all, id, req.comp)
+	if base == nil && overlay != nil && slices.ContainsFunc(all, func(x types.GovernanceUnit) bool { return x.ID == store.DefaultUnitID }) {
+		// Built on the deployment default with no base named: the Default unit is that base, for a
+		// pass-through unit as for an own-walls one (the console sends no parent for either).
+		base = &store.DefaultUnitID
+	}
 	if p.Mode == types.UnitModePassThrough {
 		// Its parent's walls exactly: a parent of its own, and nothing it adds.
 		if base == nil {
@@ -434,10 +439,6 @@ func (s *Server) buildGovernanceUnit(createdBy string, id uuid.UUID, req governa
 		if !reflect.DeepEqual(req.Ceiling, types.RunPolicySpec{}) || !reflect.DeepEqual(req.Limits, types.GovernanceLimits{}) {
 			return p, nil, writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid,
 				"a composed profile states its policy in overlay and overlay_limits: ceiling and limits must be empty")
-		}
-		if base == nil && slices.ContainsFunc(all, func(x types.GovernanceUnit) bool { return x.ID == store.DefaultUnitID }) {
-			// Built on the deployment default with no base named: the Default unit is that base.
-			base = &store.DefaultUnitID
 		}
 		p.ParentID, p.Overlay, p.OverlayLimits = base, overlay, limits
 	} else {
