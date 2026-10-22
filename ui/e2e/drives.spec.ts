@@ -37,6 +37,7 @@ import { DRIVE_REFUSAL } from "../src/app/lib/drive-refusals";
 import { DRIVES, DRIVE_MEMBER, PEOPLE, PERM, PREVIEW } from "../src/app/lib/user-drives-copy";
 import { GOVERNANCE as GOV, MEMBER } from "../src/app/lib/governance-copy";
 import { OPERATOR_ONLY_REASON } from "../src/app/components/wardyn/copy";
+import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
 import type { MeUserDrive } from "../src/app/lib/api/health";
 import type { Locator, Page } from "@playwright/test";
 
@@ -659,13 +660,16 @@ test.describe("drives — the registry is SUPER's, and no super admin's nav list
     // is a screen they never see.
     await expect(sidebarLink(page, "Governance")).toHaveCount(0);
 
-    // Reaching /drives directly: the read answers 403 for a member, and the
-    // screen renders that as the TIER refusal (PageHeader + OperatorOnlyHint),
-    // never as the transport sentence with a Retry that would 403 forever. The
-    // role splice leaves the bearer the admin's, so the 403 is routed here to
-    // be the real server's shape, not a fixture's.
+    // Reaching /admin/drives directly: a member is refused by VIEW, before the
+    // Drives screen mounts. The tier refusal (PageHeader + OperatorOnlyHint on a
+    // 403 read) is the screen's own and is pinned in drives-screen.test.tsx;
+    // the member never gets that far, and nothing behind the refusal is
+    // fetched. The role splice leaves the bearer the admin's, so a GET /drives
+    // is routed to the real server's 403 shape and counted: it must not happen.
+    let driveReads = 0;
     await page.route("**/api/v1/drives", async (route) => {
       if (route.request().method() !== "GET") return route.fallback();
+      driveReads++;
       await route.fulfill({
         status: 403,
         contentType: "application/json",
@@ -673,11 +677,17 @@ test.describe("drives — the registry is SUPER's, and no super admin's nav list
       });
     });
     await navToRoute(page, "/admin/drives");
-    await expect(page.getByRole("heading", { name: DRIVES.TITLE, level: 1 })).toBeVisible();
-    await expect(page.getByText(OPERATOR_ONLY_REASON)).toBeVisible();
+    await expect(page.getByRole("heading", { name: VIEW_REFUSAL.TITLE })).toBeVisible();
+    await expect(page.getByText(VIEW_REFUSAL.BODY)).toBeVisible();
+    await expect(page.getByRole("heading", { name: DRIVES.TITLE, level: 1 })).toHaveCount(0);
     await expect(page.getByRole("button", { name: DRIVES.NEW_CTA, exact: true })).toHaveCount(0);
-    await expect(page.getByText(DRIVES.FETCH_FAILED_TITLE)).toHaveCount(0);
-    await expect(tealActions(page)).toHaveCount(0);
+    expect(driveReads).toBe(0);
+    // The refusal card's one action is the way back to the member's own Runs
+    // (console-view.tsx ViewGate: navigate("/runs"), no request, no write). It
+    // is named and counted; no other primary action is on the page.
+    const back = page.getByRole("button", { name: VIEW_REFUSAL.CTA, exact: true });
+    await expect(back).toHaveCount(1);
+    await expect(tealActions(page).filter({ hasNotText: new RegExp(`^${VIEW_REFUSAL.CTA}$`) })).toHaveCount(0);
   });
 });
 
