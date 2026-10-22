@@ -4,7 +4,6 @@
 package offline
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
