@@ -97,7 +97,7 @@ func (s *Server) handleSetWorkspaceOwningUnit(w http.ResponseWriter, r *http.Req
 		writeServerError(w, r, "read workspace", err)
 		return
 	}
-	units, err := s.cfg.Store.ListGovernanceUnits(r.Context())
+	units, err := s.unitOutlines(r.Context())
 	if err != nil {
 		writeServerError(w, r, "list governance profiles", err)
 		return

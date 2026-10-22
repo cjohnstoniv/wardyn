@@ -84,7 +84,7 @@ type governanceResponse struct {
 	// Boundary is the Wardyn boundary as GET /governance/boundary returns it.
 	Boundary types.Boundary `json:"boundary"`
 	// Restrictions are the deny-only lists that follow people, each with how many people it names.
-	Restrictions []restrictionView `json:"restrictions"`
+	Restrictions []restrictionView `json:"restrictions,omitempty"`
 }
 
 // handleGetGovernance returns the whole governance picture. operatorOnly

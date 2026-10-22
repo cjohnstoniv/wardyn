@@ -387,8 +387,8 @@ export interface GovernanceCheckWorkspaceGroup {
 export interface GovernanceCheck extends GovernancePreview {
   contexts: GovernanceCheckContext[];
   dormant: GovernanceDormantMembership[];
-  restrictions: GovernanceCheckRestriction[];
-  workspaces: GovernanceCheckWorkspaceGroup[];
+  restrictions?: GovernanceCheckRestriction[];
+  workspaces?: GovernanceCheckWorkspaceGroup[];
   effective: { ceiling: RunPolicySpec; limits: GovernanceLimits; provenance: Record<string, PolicyProvenance> } | null;
 }
 

@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -57,6 +58,10 @@ func (s *Server) restrictionsFor(ctx context.Context, q contextQuery) ([]types.R
 			return nil, err
 		}
 		if has {
+			// Decided and recorded here, as selectByTier does for the ceiling: a display read writes no row.
+			if !isDisplayRead(ctx) {
+				s.recordRefusal(ctx, nil, authz.Deny(authz.ReasonGroupsSnapshotStale, "governance.ceiling", ""))
+			}
 			return nil, errGroupsSnapshotStale
 		}
 		groups = nil

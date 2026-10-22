@@ -157,10 +157,10 @@ type governanceCheckResponse struct {
 	Dormant   []checkDormant  `json:"dormant"`
 	Effective *checkEffective `json:"effective"`
 	// Restrictions are the deny-only lists that cover the person, in every unit they run in.
-	Restrictions []checkRestriction `json:"restrictions"`
+	Restrictions []checkRestriction `json:"restrictions,omitempty"`
 	// Workspaces are the workspaces the person owns, grouped by the unit each is pinned to (a nil
 	// unit_id is the group pinned to none).
-	Workspaces []checkWorkspaceGroup `json:"workspaces"`
+	Workspaces []checkWorkspaceGroup `json:"workspaces,omitempty"`
 }
 
 // checkRestriction is one restriction covering the person.

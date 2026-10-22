@@ -100,6 +100,14 @@ func securityAdminWorkspaceExpectations() map[string]securityAdminWorkspaceExpec
 			why:            "promoting a workspace's observed egress is named in the securityOps rationale",
 		},
 
+		// The owning-unit pin is a governance act, which is this tier's. A null body is a pin that only
+		// narrows (no pin to no pin), so the probe reaches the lookup under any switch setting.
+		"PUT /api/v1/workspaces/{id}/owning-unit": {
+			body:           `{"unit_id":null}`,
+			reachesForeign: true,
+			why:            "pinning a workspace to a unit is a governance write; scoping it to owned workspaces would leave the tier unable to pin the org's",
+		},
+
 		// The record route is not here: it is operatorOnly, not classSecurity,
 		// so it is not in this derived set. TestRecordWorkspaceIsSuperAdminOnly
 		// (security_admin_test.go) is where that route is pinned.
