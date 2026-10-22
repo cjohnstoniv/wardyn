@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -94,7 +95,15 @@ func runIdleAndSignal(t *testing.T, script string, env []string, prepDone string
 		b, _ := os.ReadFile(outFile.Name())
 		return string(b)
 	}
-	if err := cmd.Start(); err != nil {
+	// A signal ignored when this test binary started (a background job of a
+	// non-interactive shell ignores SIGINT) stays ignored across exec, and bash
+	// cannot trap a signal it starts with ignored, so the INT cases would sit
+	// out the wait below. Handling it here makes exec hand bash the default.
+	ignored := make(chan os.Signal, 1)
+	signal.Notify(ignored, sig)
+	err = cmd.Start()
+	signal.Stop(ignored)
+	if err != nil {
 		t.Fatalf("start agent-run --idle: %v", err)
 	}
 	// Reaches every process in the group, including the orphaned `sleep` the
