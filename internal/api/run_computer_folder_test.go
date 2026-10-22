@@ -203,6 +203,8 @@ type folderSandboxRunner struct {
 	// proxyEnds is Docker's StopProxy failing closed: it stops the agent's container and still
 	// returns proxyErr.
 	proxyEnds bool
+	// verifyLeft makes the quiesce path's /proc check report a process the kill could not end.
+	verifyLeft bool
 	// onPass runs as a pass's sftp-server starts in the sandbox's folder.
 	onPass func()
 }
@@ -264,6 +266,17 @@ func (b blockingGet) Fileread(r *sftp.Request) (io.ReaderAt, error) {
 func (r *folderSandboxRunner) ExecStream(_ context.Context, _ string, spec runner.ExecSpec) (*runner.ExecSession, error) {
 	if r.ended {
 		return nil, errors.New("container is not running")
+	}
+	if len(spec.Argv) == 3 && spec.Argv[0] == "sh" && spec.Argv[2] == agentVerifyScript {
+		// The quiesce path's /proc check after the kill: clean unless a test leaves a process behind.
+		out, code := agentStoppedMark+"\n", 0
+		if r.verifyLeft {
+			out, code = "left: 42\n", 3
+		}
+		return &runner.ExecSession{
+			Stdin: nopWriteCloser{io.Discard}, Stdout: strings.NewReader(out), Stderr: strings.NewReader(""),
+			Wait: func() (int, error) { return code, nil }, Close: func() error { return nil },
+		}, nil
 	}
 	if slices.Equal(spec.Argv, keptAgentKill) {
 		if r.killErr != nil {

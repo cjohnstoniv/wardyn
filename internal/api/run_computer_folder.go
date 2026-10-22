@@ -417,6 +417,11 @@ func (s *Server) quiesceKeptSandbox(ctx context.Context, run types.AgentRun, ref
 	for {
 		st, err := s.cfg.Runner.AgentStatus(ctx, ref, run.AgentExecID)
 		if err == nil && st.State != types.RunRunning {
+			// The agent's own exec has ended; a process of another user, which keptAgentKill could not
+			// signal, would survive unseen, so only the sandbox's init may be left.
+			if err := s.verifyAgentGone(ctx, ref); err != nil {
+				return s.unlessStopped(ctx, ref, fmt.Errorf("its agent could not be stopped: %w", err))
+			}
 			return nil
 		}
 		if time.Now().After(deadline) {

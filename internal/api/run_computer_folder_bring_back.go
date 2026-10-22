@@ -169,18 +169,10 @@ func (s *Server) agentStoppable(ctx context.Context, run types.AgentRun) bool {
 	return interactive || main == "sh\x00-c\x00"+runner.AgentIdleScript
 }
 
-// agentStopScript ends every process in the sandbox but PID 1 (the idle main process) and itself:
-// SIGTERM, a second's grace, then SIGKILL. It then confirms from /proc that nothing is left but
-// zombies, its own children, and the sleep the idle loop restarts, retrying SIGKILL for about two
-// seconds, and prints agentStoppedMark only then. A process it may not signal (another user's)
-// stays, and the stop fails.
-const agentStopScript = `self=$$
-kill -s TERM -1 2>/dev/null
-sleep 1
-kill -s KILL -1 2>/dev/null
-n=0
-while :; do
-  left=
+// agentLeftWalk sets left to the processes in the sandbox that are not PID 1, the script itself, its
+// children, zombies, or the sleep the idle loop restarts. A process it may not signal (another user's)
+// stays there. Both scripts below read /proc through this one copy.
+const agentLeftWalk = `  left=
   for d in /proc/[0-9]*; do
     p=${d#/proc/}
     if [ "$p" = 1 ] || [ "$p" = "$self" ]; then continue; fi
@@ -193,10 +185,34 @@ while :; do
     if [ "$pp" = 1 ] && [ "$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null)" = "sleep 3600 " ]; then continue; fi
     left="$left $p"
   done
-  [ -z "$left" ] && { echo ` + agentStoppedMark + `; exit 0; }
+`
+
+// agentStopScript ends every process in the sandbox but PID 1 (the idle main process) and itself:
+// SIGTERM, a second's grace, then SIGKILL. It then confirms from /proc (agentLeftWalk) that nothing is
+// left, retrying SIGKILL for about two seconds, and prints agentStoppedMark only then. A process it
+// may not signal (another user's) stays, and the stop fails.
+const agentStopScript = `self=$$
+kill -s TERM -1 2>/dev/null
+sleep 1
+kill -s KILL -1 2>/dev/null
+n=0
+while :; do
+` + agentLeftWalk + `  [ -z "$left" ] && { echo ` + agentStoppedMark + `; exit 0; }
   n=$((n+1))
   [ "$n" -ge 10 ] && { echo "left:$left"; exit 3; }
   kill -s KILL $left 2>/dev/null
+  sleep 0.2
+done`
+
+// agentVerifyScript is agentStopScript's confirmation alone: it kills nothing, and waits about two
+// seconds for what is left to go, printing agentStoppedMark only when nothing but PID 1 is left. The
+// quiesced pass back runs it after keptAgentKill, which signals only what the exec user may.
+const agentVerifyScript = `self=$$
+n=0
+while :; do
+` + agentLeftWalk + `  [ -z "$left" ] && { echo ` + agentStoppedMark + `; exit 0; }
+  n=$((n+1))
+  [ "$n" -ge 10 ] && { echo "left:$left"; exit 3; }
   sleep 0.2
 done`
 
@@ -205,7 +221,17 @@ const agentStoppedMark = "wardyn-agent-stopped"
 
 // stopAgentForPass ends the agent before a bring-back's pass and confirms it ended.
 func (s *Server) stopAgentForPass(ctx context.Context, ref string) error {
-	out, code, err := s.sandboxExecOutput(ctx, ref, "sh", "-c", agentStopScript)
+	return s.runAgentScript(ctx, ref, agentStopScript)
+}
+
+// verifyAgentGone confirms from /proc that nothing but the sandbox's init is left, killing nothing.
+func (s *Server) verifyAgentGone(ctx context.Context, ref string) error {
+	return s.runAgentScript(ctx, ref, agentVerifyScript)
+}
+
+// runAgentScript runs script (agentStopScript or agentVerifyScript) and requires its stopped mark.
+func (s *Server) runAgentScript(ctx context.Context, ref, script string) error {
+	out, code, err := s.sandboxExecOutput(ctx, ref, "sh", "-c", script)
 	if err != nil {
 		return err
 	}

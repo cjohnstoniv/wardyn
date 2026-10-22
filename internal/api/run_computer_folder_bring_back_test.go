@@ -72,6 +72,10 @@ func (r *agentSandbox) ExecStream(ctx context.Context, ref string, spec runner.E
 	if r.onPID1 != nil && len(spec.Argv) == 2 && spec.Argv[1] == "/proc/1/cmdline" {
 		r.onPID1()
 	}
+	if len(spec.Argv) == 3 && spec.Argv[0] == "sh" && spec.Argv[2] == agentVerifyScript {
+		r.calls = append(r.calls, "verify")
+		return r.folderSandboxRunner.ExecStream(ctx, ref, spec)
+	}
 	if slices.Equal(spec.Argv, keptAgentKill) {
 		// The quiesce path's stop of the agent (quiesceKeptSandbox): not the pass. The base runner
 		// records the kill its AgentStatus reads.
@@ -336,7 +340,7 @@ func withoutRunner(cs *computerFolderStore) {
 }
 
 // On a sandbox that can be quiesced the bring-back stops the agent by quiescing it, and does not run the
-// person's separate stop first: the calls are the quiesce, then the pass.
+// person's separate stop first: the calls are the quiesce, the check that only init is left, then the pass.
 func TestBringComputerFolderBack_AQuiescableSandboxIsQuiescedNotStoppedTwice(t *testing.T) {
 	s, cs, _, run, sb, app := bringBackFixture(t)
 	withoutRunner(cs)
@@ -346,14 +350,51 @@ func TestBringComputerFolderBack_AQuiescableSandboxIsQuiescedNotStoppedTwice(t *
 	sb.mu.Lock()
 	calls, stops := slices.Clone(sb.calls), sb.stops
 	sb.mu.Unlock()
-	if !slices.Equal(calls, []string{"quiesce", "pass"}) || stops != 0 {
-		t.Fatalf("sandbox calls = %v with %d stopAgentForPass runs, want [quiesce pass] and none", calls, stops)
+	if !slices.Equal(calls, []string{"quiesce", "verify", "pass"}) || stops != 0 {
+		t.Fatalf("sandbox calls = %v with %d stopAgentForPass runs, want [quiesce verify pass] and none", calls, stops)
 	}
 	if b, _ := os.ReadFile(filepath.Join(app, "README.md")); string(b) != "edited by the agent" {
 		t.Errorf("README.md = %q: the changes made before the request did not come back", b)
 	}
 	if _, err := os.Stat(filepath.Join(app, "late.txt")); err == nil || sb.wrote {
 		t.Error("a write the agent made after the request came back")
+	}
+}
+
+// The quiesce kills what the exec user may signal, then checks /proc: a process it could not signal (another
+// user's) survives the kill, so a pass is never run with it alive, on a bring-back or on any other pass back.
+func TestBringComputerFolderBack_AProcessTheKillCouldNotEndStopsThePass(t *testing.T) {
+	for _, byPerson := range []bool{true, false} {
+		s, cs, _, run, sb, app := bringBackFixture(t)
+		withoutRunner(cs)
+		sb.verifyLeft = true
+		if byPerson {
+			if res := bringBack(t, s, bringBackOwnerSession(t), run); res.code != http.StatusOK {
+				t.Fatalf("bring-back = %d %s", res.code, res.body)
+			}
+		} else {
+			if !s.bringComputerFolderBack(context.Background(), run.ID, "sbx") && cs.status.Back == nil {
+				t.Fatal("a pass back that could not quiesce recorded nothing")
+			}
+		}
+		sb.mu.Lock()
+		calls := slices.Clone(sb.calls)
+		sb.mu.Unlock()
+		if !slices.Equal(calls, []string{"quiesce", "verify"}) {
+			t.Errorf("by person %v: sandbox calls = %v, want the quiesce and its check, and no pass", byPerson, calls)
+		}
+		if b, _ := os.ReadFile(filepath.Join(app, "README.md")); string(b) != "hello" {
+			t.Errorf("by person %v: README.md = %q: a pass ran with a process left", byPerson, b)
+		}
+		if cs.status.Back == nil || cs.status.Back.Error == "" {
+			t.Fatalf("by person %v: the folder's record = %+v, want the failure", byPerson, cs.status.Back)
+		}
+		if byPerson && cs.status.Back.Error != bringBackAgentRunningMsg {
+			t.Errorf("record error = %q, want %q", cs.status.Back.Error, bringBackAgentRunningMsg)
+		}
+		if !byPerson && !strings.Contains(cs.status.Back.Error, "no pass ran") {
+			t.Errorf("record error = %q, want it to say no pass ran", cs.status.Back.Error)
+		}
 	}
 }
 
