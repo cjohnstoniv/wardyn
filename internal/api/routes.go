@@ -439,6 +439,7 @@ func (s *Server) routes() chi.Router {
 			// Operator-owned egress approvals (promotion of the scanner's
 			// content-derived suggestions; see handleSetApprovedEgress).
 			securityOps.Put("/workspaces/{id}/approved-egress", s.handleSetApprovedEgress)
+			securityOps.Put("/workspaces/{id}/owning-unit", s.handleSetWorkspaceOwningUnit)
 			// Denied-egress twin (Phase 4 revocation) — the only way to undo a
 			// `deny · always` decision, including curing an already-bricked
 			// workspace (H5); see handleSetDeniedEgress's doc comment for why its
@@ -825,6 +826,7 @@ func (s *Server) mountPermissionRoutes(securityOps chi.Router) {
 	securityOps.Get("/governance/boundary", s.handleGetBoundary)
 	securityOps.Put("/governance/boundary", s.handlePutBoundary)
 	securityOps.Post("/governance/dry-run", s.handleBoundaryDryRun)
+	s.mountGovernanceRestrictionRoutes(securityOps)
 	securityOps.Get("/governance/credential-delivery", s.handleGetCredentialDelivery)
 	securityOps.Put("/governance/credential-delivery", s.handlePutCredentialDelivery)
 }

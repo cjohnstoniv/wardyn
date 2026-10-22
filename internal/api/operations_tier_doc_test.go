@@ -118,6 +118,7 @@ var docTierRows = []struct{ route, token string }{
 	// securityOps (SEC) — the eight the pre-0.7 table marked admin-only, plus
 	// the rest of the tier the same table now names.
 	{"PUT /api/v1/workspaces/{id}/approved-egress", "`approved-egress`"},
+	{"PUT /api/v1/workspaces/{id}/owning-unit", "`PUT /workspaces/{id}/owning-unit`"},
 	{"PUT /api/v1/workspaces/{id}/denied-egress", "`denied-egress`"},
 	// SEPARATE TOKENS, because 0.7 re-tiered one of these and not the other.
 	// They shared the surface token "`record` + `promote-egress`" while they
@@ -214,6 +215,9 @@ var docTierRows = []struct{ route, token string }{
 	{"GET /api/v1/governance/boundary", "the `/governance/boundary` routes"},
 	{"PUT /api/v1/governance/boundary", "the `/governance/boundary` routes"},
 	{"POST /api/v1/governance/dry-run", "the `/governance/boundary` routes"},
+	{"POST /api/v1/governance/restrictions", "the `/governance/restrictions` routes"},
+	{"PUT /api/v1/governance/restrictions/{id}", "the `/governance/restrictions` routes"},
+	{"DELETE /api/v1/governance/restrictions/{id}", "the `/governance/restrictions` routes"},
 	{"GET /api/v1/key-domains", "the `/key-domains` routes"},
 	{"PUT /api/v1/key-domains/assignments/{subject_type}/{subject}", "the `/key-domains` routes"},
 	{"DELETE /api/v1/key-domains/assignments/{subject_type}/{subject}", "the `/key-domains` routes"},

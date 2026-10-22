@@ -487,6 +487,7 @@ var routeMatrix = map[string]classifiedRoute{
 	// record itself is classAdmin above: it LAUNCHES the sandbox whose
 	// observations promote-egress promotes, and launching is not deciding.
 	"PUT /api/v1/workspaces/{id}/approved-egress":               {class: classSecurity},
+	"PUT /api/v1/workspaces/{id}/owning-unit":                   {class: classSecurity},
 	"PUT /api/v1/workspaces/{id}/denied-egress":                 {class: classSecurity},
 	"POST /api/v1/workspaces/{id}/record/{task}/promote-egress": {class: classSecurity},
 	// Non-mutating: they launch a throwaway probe sandbox and answer "does the
@@ -504,11 +505,14 @@ var routeMatrix = map[string]classifiedRoute{
 	"DELETE /api/v1/permissions/grants/{id}": {class: classSecurity},
 	"PUT /api/v1/permissions/enforcement":    {class: classSecurity},
 	// The egress baseline lowers grades, so it is a governance write: security tier, four-eyes covered.
-	"GET /api/v1/governance/egress-baseline": {class: classSecurity},
-	"PUT /api/v1/governance/egress-baseline": {class: classSecurity},
-	"GET /api/v1/governance/boundary":        {class: classSecurity},
-	"PUT /api/v1/governance/boundary":        {class: classSecurity},
-	"POST /api/v1/governance/dry-run":        {class: classSecurity},
+	"GET /api/v1/governance/egress-baseline":      {class: classSecurity},
+	"PUT /api/v1/governance/egress-baseline":      {class: classSecurity},
+	"GET /api/v1/governance/boundary":             {class: classSecurity},
+	"PUT /api/v1/governance/boundary":             {class: classSecurity},
+	"POST /api/v1/governance/dry-run":             {class: classSecurity},
+	"POST /api/v1/governance/restrictions":        {class: classSecurity},
+	"PUT /api/v1/governance/restrictions/{id}":    {class: classSecurity},
+	"DELETE /api/v1/governance/restrictions/{id}": {class: classSecurity},
 
 	"GET /api/v1/governance/credential-delivery": {class: classSecurity},
 	"PUT /api/v1/governance/credential-delivery": {class: classSecurity},
@@ -2188,6 +2192,9 @@ func (s *authzStore) SetWorkspaceOwner(_ context.Context, id uuid.UUID, owner st
 	ws.OwnedBy = owner
 	s.workspaces[id] = ws
 	return ws, nil
+}
+func (s *authzStore) SetWorkspaceOwningUnit(context.Context, uuid.UUID, *uuid.UUID) (types.Workspace, error) {
+	return types.Workspace{}, store.ErrNotFound
 }
 func (s *authzStore) SetWorkspaceRequirements(context.Context, uuid.UUID, map[string]types.WorkspaceRequirement) (types.Workspace, error) {
 	return types.Workspace{}, store.ErrNotFound

@@ -292,13 +292,18 @@ const (
 	reasonEgressBaselineStale   = "egress_baseline_stale"   // If-Match does not match the current baseline ETag
 
 	// GET/PUT /governance/boundary, POST /governance/dry-run, and the boundary's own refusals.
-	reasonBoundaryInvalid          = "boundary_invalid"            // the boundary document has no mode, or names a knob it cannot hold, or a value that knob refuses
-	reasonBoundaryStale            = "boundary_stale"              // If-Match does not match the current boundary ETag
-	reasonBoundaryHost             = "boundary_host"               // an egress approval would admit a host the Wardyn boundary does not allow
-	reasonBoundaryHardLimitsGated  = "boundary_hard_limits_gated"  // a write into hard_limits before the boundary bounds every brokered credential path
-	reasonGrantWithheld            = "credential_withheld"         // a mint or redeem of a grant the run's profile or the Wardyn boundary now withholds
-	reasonGrantWithheldUnread      = "credential_withheld_unread"  // the run, its grants, its profile or the boundary could not be read to check the mint
-	reasonBreakGlassReasonRequired = "break_glass_reason_required" // an admin-token break-glass run without a usable reason
+	reasonBoundaryInvalid = "boundary_invalid" // the boundary document has no mode, or names a knob it cannot hold, or a value that knob refuses
+	// POST/PUT/DELETE /governance/restrictions, PUT /workspaces/{id}/owning-unit, and the restriction refusals at a launch.
+	reasonRestrictionInvalid         = "restriction_invalid"           // the restriction names a knob it cannot hold, turns a permission on, or fails validation
+	reasonRestrictionNotFound        = "restriction_not_found"         // no restriction has that id
+	reasonRestrictionHost            = "restriction_host"              // an egress approval would admit a host a restriction on the run's owner denies
+	reasonWorkspaceOwningUnitDefault = "workspace_owning_unit_default" // the Default unit cannot be pinned: unpin the workspace with null instead
+	reasonBoundaryStale              = "boundary_stale"                // If-Match does not match the current boundary ETag
+	reasonBoundaryHost               = "boundary_host"                 // an egress approval would admit a host the Wardyn boundary does not allow
+	reasonBoundaryHardLimitsGated    = "boundary_hard_limits_gated"    // a write into hard_limits before the boundary bounds every brokered credential path
+	reasonGrantWithheld              = "credential_withheld"           // a mint or redeem of a grant the run's profile or the Wardyn boundary now withholds
+	reasonGrantWithheldUnread        = "credential_withheld_unread"    // the run, its grants, its profile or the boundary could not be read to check the mint
+	reasonBreakGlassReasonRequired   = "break_glass_reason_required"   // an admin-token break-glass run without a usable reason
 
 	// PUT /governance/credential-delivery.
 	reasonCredentialDeliveryInvalid     = "credential_delivery_invalid"     // an unknown or fixed class, a mode outside the class's bounds or one the server cannot build (422), or require_posture without runner_resident
