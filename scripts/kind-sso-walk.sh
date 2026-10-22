@@ -135,10 +135,11 @@ DISK_MIB=2048
 # every later walk — and with only the two 0.7.5 spec files the `off` posture is
 # GREEN, so a release walk could certify the posture nobody ships. Only case K
 # discriminates, and only if it runs. Default `on` = the daemon's own default =
-# what a release must certify; override for a diagnostic run and the record says
-# so. Set HERE, with the other configuration, so the provenance record can print
-# it before the upgrade that applies it.
+# what a release must certify. Since 0.10.0 the daemon refuses `off` at boot, so
+# `on` is the only value. Set HERE, with the other configuration, so the
+# provenance record can print it before the upgrade that applies it.
 PROXY_INJECT="${WARDYN_KIND_SSO_PROXY_INJECT:-on}"
+[[ "${PROXY_INJECT}" == "on" ]] || die "WARDYN_KIND_SSO_PROXY_INJECT='${PROXY_INJECT}': only 'on' is accepted; the daemon refuses 'off' at boot since 0.10.0"
 
 HTTP_PORT="${WARDYN_QUICKSTART_HTTP_PORT:-8280}"
 BASE_URL="http://localhost:${HTTP_PORT}"

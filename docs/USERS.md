@@ -346,12 +346,9 @@ resolves your drive the same way, in a dry run too:
     sandbox.
   - A Bedrock SSO sign-in is the one exception: the in-sandbox AWS SDK
     always derives short-lived AWS role credentials that stay resident in the
-    sandbox for the run.
-  - With `WARDYN_AWS_SSO_PROXY_INJECT=off` the SSO
-    access token itself is written into the sandbox too — see
+    sandbox for the run — see
     [../threatmodel/THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) ("Derived
-    AWS role credentials") and [ENV.md](ENV.md)
-    (`WARDYN_AWS_SSO_PROXY_INJECT`).
+    AWS role credentials").
 
 ## Your model connections
 

@@ -2663,7 +2663,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_KIND_SSO_NODE` | string | `<cluster>-control-plane` | The kind NODE the walk hands to [`ui/e2e/walk/sso-member-recovery.spec.ts`](../ui/e2e/walk/sso-member-recovery.spec.ts), whose cold-start case taints it to hold a run pod in `Pending`. Override it only on a multi-node kind cluster |
 | `WARDYN_KIND_SSO_TOKEN_TTL` | duration | `12m` | The fake's `AWSSSOFAKE_TOKEN_TTL`, set via `kubectl set env` before the walk's hold cases (finding 4): how long a captured AWS SSO access token lives. [Details](#wardyn_kind_sso_token_ttl) |
 | `WARDYN_KIND_SSO_ROLE_CRED_TTL` | duration | `3m` | The fake's `AWSSSOFAKE_ROLE_CRED_TTL`, set alongside the token TTL above: how long each `GetRoleCredentials` answer lasts, stamped per call. [Details](#wardyn_kind_sso_role_cred_ttl) |
-| `WARDYN_KIND_SSO_PROXY_INJECT` | `on` / `off` | `on` | The kill-switch posture the kind SSO walk pins on the deployment and records in the walk's `MANIFEST.json`; a mismatch stops the walk. [Details](#wardyn_kind_sso_proxy_inject) |
+| `WARDYN_KIND_SSO_PROXY_INJECT` | `on` | `on` | The kill-switch posture the kind SSO walk pins on the deployment and records in the walk's `MANIFEST.json`; a mismatch stops the walk. [Details](#wardyn_kind_sso_proxy_inject) |
 | `WARDYN_KIND_SSO_PROFILE` | `default` / `ado` | `default` | Which walk [`scripts/kind-sso-walk.sh`](../scripts/kind-sso-walk.sh) runs and which overlay [`deploy/kind/sso/overlay.sh`](../deploy/kind/sso/overlay.sh) installs; `ado` is the Azure DevOps profile. [Details](#wardyn_kind_sso_profile) |
 | `WARDYN_KIND_SSO_SKIP_REAUTH_HOLD` | bool | (unset = run it) | `1` drops [`ui/e2e/walk/sso-reauth-hold.spec.ts`](../ui/e2e/walk/sso-reauth-hold.spec.ts) from the walk's invocation; its case K spends about ten minutes of wall clock waiting for the injector's own re-resolve window. [Details](#wardyn_kind_sso_skip_reauth_hold) |
 
@@ -2794,7 +2794,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 ### `WARDYN_KIND_SSO_PROXY_INJECT`
 
 - The kill-switch posture the kind SSO walk pins on the deployment (`helm upgrade --set env.WARDYN_AWS_SSO_PROXY_INJECT=…`), printed in the step line, read back off the Deployment and recorded in the walk's `MANIFEST.json`; a mismatch stops the walk.
-- `off` is for a diagnostic run of the 0.7.5 resident-token posture (finding 4's rollback); the walk's certification runs with the daemon's own default, `on`.
+- `on` is the only value: the daemon refuses `off` at boot since 0.10.0, and the walk stops on any other value.
 
 ### `WARDYN_KIND_SSO_PROFILE`
 
