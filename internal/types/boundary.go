@@ -32,6 +32,8 @@ type Boundary struct {
 	Contact   *policyref.Contact `json:"contact,omitempty"`
 	UpdatedBy string             `json:"updated_by,omitempty"`
 	UpdatedAt *time.Time         `json:"updated_at,omitempty"`
+	// LockedKnobs are the knobs no unit may change, a narrowing included (docs/operations/unit-admins.md).
+	LockedKnobs []string `json:"locked_knobs,omitempty"`
 }
 
 // HardLimits reports whether the boundary binds runs.
@@ -61,6 +63,9 @@ type BoundaryWrite struct {
 	Spec    BoundarySpec       `json:"spec"`
 	Limits  BoundaryLimits     `json:"limits"`
 	Contact *policyref.Contact `json:"contact,omitempty"`
+	// LockedKnobs replaces the boundary's locks when present; absent keeps them, so a client that does
+	// not know the field never unlocks a knob.
+	LockedKnobs *[]string `json:"locked_knobs,omitempty"`
 }
 
 // Overlay is the boundary as a composed-profile overlay over an effective policy. Eligible grants
