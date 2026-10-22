@@ -135,6 +135,23 @@ manifest "$B" "$SHA" "$(pj skip 'TestAdd' '--- FAIL: TestAdd' internal/p/p_test.
 expect "a skipped named test FAILs" 1 "result=FAIL reason=skipped" "$SCRIPT" run "$B" "$REPO"
 clean "skip"
 
+# The named test passes but logs a fake FAIL line; another test fails, so rc is 1.
+spooftest() { printf 'package p\n\nimport "testing"\n\nfunc TestAdd(t *testing.T)    { t.Log("\\n--- FAIL: TestAdd") }\nfunc TestAddBar(t *testing.T) { t.Fatal("bar") }\n'; }
+B="$TMP/spoof"; put_file "$B" spoof internal/p/p_test.go < <(spooftest)
+manifest "$B" "$SHA" "$(pj spoof 'TestAdd' '--- FAIL: TestAdd' internal/p/p_test.go)"
+expect "a log-spoofed FAIL line FAILs" 1 "result=FAIL reason=named test passed" "$SCRIPT" run "$B" "$REPO"
+clean "spoof"
+
+# A bundle file that is a link to a file outside the bundle, or to one inside it.
+B="$TMP/blink"; put_file "$B" blink internal/p/p.go < <(addbug)
+manifest "$B" "$SHA" "$(pj blink 'TestAdd' '--- FAIL: TestAdd' internal/p/p.go)"
+mv "$B/.proofs/files/blink/internal/p/p.go" "$B/real.go"
+ln -s /etc/hostname "$B/.proofs/files/blink/internal/p/p.go"
+expect "a bundle link to a file outside is refused" 2 "missing or a link" "$SCRIPT" run "$B" "$REPO"
+ln -sf "$B/real.go" "$B/.proofs/files/blink/internal/p/p.go"
+expect "a bundle link inside the bundle is refused" 2 "missing or a link" "$SCRIPT" run "$B" "$REPO"
+clean "blink"
+
 # The -run regex matches nothing.
 B="$TMP/notests"; put_file "$B" notests internal/p/p.go < <(addbug)
 manifest "$B" "$SHA" "$(pj notests 'TestNoSuchTest' '--- FAIL: TestNoSuchTest' internal/p/p.go)"
@@ -161,12 +178,12 @@ done
 [ "$(printf 'b/y\0a/x\0b/y\0' | "$SCRIPT" paths)" = $'a/x\nb/y' ] || fail "paths did not sort and dedupe"
 echo "ok   path normaliser"
 
-# TestAddBar fails; "--- FAIL: TestAdd" is only a prefix of that line.
+# Only TestAddBar runs and fails; "--- FAIL: TestAdd" is only a prefix of that line.
 B="$TMP/substr"; put_file "$B" substr internal/p/p.go < <(barbug)
-manifest "$B" "$SHA" "$(pj substr 'TestAdd' '--- FAIL: TestAdd' internal/p/p.go)"
+manifest "$B" "$SHA" "$(pj substr 'TestAddBar' '--- FAIL: TestAdd' internal/p/p.go)"
 expect "substring want_fail FAILs" 1 "result=FAIL reason=no output line equals the want_fail" "$SCRIPT" run "$B" "$REPO"
 clean "substring"
-manifest "$B" "$SHA" "$(pj substr 'TestAdd' '--- FAIL: TestAddBar' internal/p/p.go)"
+manifest "$B" "$SHA" "$(pj substr 'TestAddBar' '--- FAIL: TestAddBar' internal/p/p.go)"
 expect "the full name PASSes" 0 "result=PASS" "$SCRIPT" run "$B" "$REPO"
 
 # The manifest names p.go and p_test.go; only p.go differs from the tree.
@@ -235,6 +252,7 @@ else
   [ "$timeouts" = "$jobs" ] || fail "workflow: $jobs jobs but $timeouts timeout-minutes"
   gated="$(grep -cF "    if: github.ref == 'refs/heads/main'" "$WF" || true)"
   [ "$gated" = "$jobs" ] || fail "workflow: $gated of $jobs jobs are gated on github.ref == refs/heads/main"
+  grep -Fq 'security boundary' "$WF" || fail "workflow: the main gate comment overstates the gate"
   grep -Fq 'never dispatch while a train attempt 1 is queued' "$WF" || fail "workflow: the throttle comment is missing"
   echo "ok   workflow text checks"
 fi

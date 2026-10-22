@@ -34,7 +34,9 @@
 #
 # A proof also FAILs, each with its own reason, when the run says "no tests to
 # run", when the named test is skipped (so go test runs with -v), or when any
-# line starts with "panic:". A target path that resolves outside the checkout or
+# line starts with "panic:", or when the named test's own "--- PASS:" line is
+# there (a passing test can log a fake FAIL line). A bundle file that is a link,
+# or resolves outside the bundle, is refused. A target path that resolves outside the checkout or
 # into .git (a tracked link, say) fails before anything is copied.
 #
 # want_fail is matched against whole output lines, after dropping leading
@@ -111,8 +113,11 @@ def load(bundle):
         for repo, b in files.items():
             if not safe(repo) or not safe(b) or not b.startswith(FILES):
                 bad(f"{name}: unsafe path {repo!r} -> {b!r}")
-            if not os.path.isfile(os.path.join(bundle, b)):
-                bad(f"{name}: bundle file {b} is missing")
+            full = os.path.join(bundle, b)
+            if os.path.islink(full) or not os.path.isfile(full):
+                bad(f"{name}: bundle file {b} is missing or a link")
+            if not os.path.realpath(full).startswith(os.path.realpath(bundle) + os.sep):
+                bad(f"{name}: bundle file {b} resolves outside the bundle")
     return m
 
 
@@ -238,12 +243,14 @@ prove_one() {
   else
     rc=0
     (cd "$src" && go test -v -count=1 ${tags:+-tags "$tags"} -run "$run" "$pkg") >"$out" 2>&1 || rc=$?
-    local norm wl pl name_ skipl
+    local norm wl pl name_ skipl passl
     norm=$(sed -E -e 's/^[[:space:]]+//' -e 's/ \([0-9.]+s\)$//' "$out")
     wl=$(grep -Fxn -- "$want" <<<"$norm" | head -n 1 | cut -d: -f1 || true)
     pl=$(grep -m1 "^panic:" <<<"$norm" || true)
-    # The named test, or one of its subtests, reported as skipped.
+    # The named test, or one of its subtests, reported as skipped. Its own
+    # "--- PASS:" line means a FAIL line in the output was printed by a log call.
     name_=${want#--- FAIL: }
+    passl=$(grep -Fx -e "--- PASS: $name_" <<<"$norm" || true)
     skipl=$(grep -Fx -e "--- SKIP: $name_" <<<"$norm" || grep -F -e "--- SKIP: $name_/" <<<"$norm" || true)
     if grep -Fq '[build failed]' "$out"; then reason="build failed"
     elif grep -Fq '[setup failed]' "$out"; then reason="setup failed"
@@ -252,6 +259,7 @@ prove_one() {
     elif [ -n "$pl" ]; then reason="panic"
     elif [ "$rc" = 0 ]; then reason="overlay green"
     elif [ "$rc" != 1 ]; then reason="rc $rc, want 1"
+    elif [ -n "$passl" ]; then reason="named test passed"
     elif [ -z "$wl" ]; then reason="no output line equals the want_fail"
     fi
     grep -E '^[[:space:]]*(--- (FAIL|SKIP)|FAIL|ok|panic:)|\[(build|setup) failed\]|no tests to run' "$out" | head -n 20 | sed 's/^/  | /'

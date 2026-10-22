@@ -16,7 +16,9 @@ name: Overlay proofs
 #
 # The script comes from the ref this workflow was dispatched on, not from the
 # bundle branch or the keyed sha, which may predate it. Both jobs run only when
-# that ref is main, so a branch cannot supply its own script.
+# that ref is main, which stops a dispatch from a branch by mistake. It is not a
+# security boundary: anyone who can push can edit this workflow. The run is safe
+# anyway: its token is read-only and nothing in it reads a secret.
 on:
   workflow_dispatch:
     inputs:
