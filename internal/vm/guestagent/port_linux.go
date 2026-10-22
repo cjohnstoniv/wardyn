@@ -11,7 +11,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"slices"
 	"sync"
 	"time"
 )
@@ -19,7 +18,7 @@ import (
 // ServePort serves h over the virtio-serial port at path, one host session at a time, until ctx
 // ends. A virtio-serial port reads end-of-file while no host is connected (runnerd restarted, or has
 // not dialled yet), but a host that redials at once can leave none between two sessions, so each
-// session starts at its host's hello (sessionMagic), wherever it falls in the stream.
+// session starts at its host's hello: a record (record.go), which no session's bytes can form.
 func ServePort(ctx context.Context, path string, h http.Handler) error {
 	f, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
@@ -41,8 +40,8 @@ func ServePort(ctx context.Context, path string, h http.Handler) error {
 	return err
 }
 
-// chunk is one event of the port's byte stream, in order: bytes, a host's hello (start), end-of-file
-// (no host connected) or a failure.
+// chunk is one event of the port's byte stream, in order: a data record's body, a host's hello
+// (start), end-of-file (no host connected) or a failure.
 type chunk struct {
 	data  []byte
 	start bool   // a host's hello: the bytes after it are the next session's
@@ -78,7 +77,7 @@ func newPortListener(ctx context.Context, port io.ReadWriter, idle time.Duration
 // read is the port's only reader.
 func (l *portListener) read(port io.Reader, idle time.Duration) {
 	buf := make([]byte, 32<<10)
-	var s helloScanner
+	var s recordScanner
 	for {
 		n, err := port.Read(buf)
 		switch {
@@ -87,7 +86,7 @@ func (l *portListener) read(port io.Reader, idle time.Duration) {
 				return
 			}
 		case errors.Is(err, io.EOF):
-			s = helloScanner{} // a hello its host left in the middle of is dropped
+			s = recordScanner{} // a record its host left in the middle of is dropped
 			l.endWrites()
 			if !l.send(chunk{eof: true}) {
 				return
@@ -113,42 +112,47 @@ func (l *portListener) send(c chunk) bool {
 	}
 }
 
-// helloScanner finds hosts' hellos in the port's bytes. A hello can straddle two reads, so the last
-// bytes passed on are kept to match against. They are passed on at once all the same: a session
-// whose bytes were held back here could wait on them for good, its host waiting on its answer.
-type helloScanner struct {
-	tail  []byte // the last magicLen-1 bytes passed on
-	hello []byte // a hello whose magic has been read, while the rest of it is
+// recordScanner cuts the port's bytes into records. It starts out of step, as it is again after an
+// end-of-file, and takes no record until it has read a 0x00: the bytes before one can be the tail of
+// a record whose head went to no one (QEMU drops what a host sends while the port is closed), and the
+// tail of a data record is a session's bytes, which a workload can shape into anything, a hello's
+// record included. Each host sends a 0x00 ahead of its hello, so it is not kept waiting.
+type recordScanner struct {
+	inStep bool
+	rec    []byte // the record being read, up to its 0x00
 }
 
-// scan passes b on as session bytes and hellos; false once the listener has ended.
-func (l *portListener) scan(s *helloScanner, b []byte) bool {
+// scan passes on the records in b; false once the listener has ended.
+func (l *portListener) scan(s *recordScanner, b []byte) bool {
 	for len(b) > 0 {
-		if s.hello != nil {
-			k := min(helloLen-len(s.hello), len(b))
-			s.hello, b = append(s.hello, b[:k]...), b[k:]
-			if len(s.hello) < helloLen {
-				return true
-			}
-			hello := s.hello
-			s.hello = nil
-			if !l.startSession(hello) {
-				return false
-			}
-			continue
-		}
-		t := len(s.tail)
-		w := slices.Concat(s.tail, b)
-		i := bytes.Index(w, sessionMagic)
+		i := bytes.IndexByte(b, 0)
 		if i < 0 {
-			s.tail = bytes.Clone(w[max(0, len(w)-(magicLen-1)):])
-			return l.send(chunk{data: w[t:]})
+			if s.inStep {
+				s.rec = append(s.rec, b...)
+			}
+			if len(s.rec) > maxRecord {
+				s.rec, s.inStep = nil, false // longer than any record: the scanner has lost its place
+			}
+			return true
 		}
-		if i > t && !l.send(chunk{data: w[t:i]}) {
+		rec, inStep := append(s.rec, b[:i]...), s.inStep
+		s.rec, s.inStep, b = nil, true, b[i+1:]
+		if inStep && !l.record(rec) {
 			return false
 		}
-		s.tail, s.hello = nil, append(make([]byte, 0, helloLen), sessionMagic...)
-		b = w[i+magicLen:]
+	}
+	return true
+}
+
+// record passes on one record: a data record's body to the session, a hello to startSession. Any
+// other is dropped, such as a record a host left unfinished, which the next host's 0x00 ends.
+func (l *portListener) record(rec []byte) bool {
+	typ, body, ok := decodeRecord(rec)
+	switch {
+	case ok && typ == recData && len(body) > 0:
+		return l.send(chunk{data: body})
+	case ok && typ == recHello && len(body) == helloLen:
+		return l.startSession(body)
 	}
 	return true
 }
@@ -159,8 +163,10 @@ func (l *portListener) scan(s *helloScanner, b []byte) bool {
 // next one, which drops it: its nonce is not that host's.
 func (l *portListener) startSession(hello []byte) bool {
 	l.endWrites()
-	hello[magicLen] = helloVersion // the echo: the host's nonce, this agent's version
-	_, _ = l.w.Write(hello)        // if the port has failed, the reader's next read says so
+	hello[0] = helloVersion // the echo: the host's nonce, this agent's version
+	// The 0x00 ahead of the echo ends a record the ended session's last write left unfinished. If
+	// the port has failed, the reader's next read says so.
+	_, _ = l.w.Write(appendRecord([]byte{0}, recHello, hello))
 	return l.send(chunk{start: true, epoch: l.epoch})
 }
 
@@ -289,7 +295,10 @@ func (c *portConn) Write(p []byte) (int, error) {
 	if c.epoch != c.l.epoch {
 		return 0, net.ErrClosed // its host has gone: the bytes would reach the next one
 	}
-	return c.l.w.Write(p)
+	if _, err := c.l.w.Write(appendData(nil, p)); err != nil {
+		return 0, err
+	}
+	return len(p), nil
 }
 
 func (c *portConn) Close() error {
