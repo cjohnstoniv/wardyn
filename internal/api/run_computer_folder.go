@@ -230,6 +230,9 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 		rctx, cancel = teardownCtx(ctx)
 		defer cancel()
 		errText := folderBackGivenUp("no pass ran", "its agent and egress could not be stopped first: "+qerr.Error(), 0)
+		if errors.Is(qerr, errSandboxStopped) {
+			errText = "no pass ran; the sandbox had already stopped, with its changes not brought back yet, uncounted"
+		}
 		s.recordComputerFolderPass(rctx, runID, func(st *types.RunLocalFolderStatus) {
 			st.Resume, st.Back = nil, folderPassRecord(s.cfg.Now(), runnerwire.FolderPass{}, errText, true)
 		})
@@ -321,6 +324,18 @@ type notQuiescable string
 
 func (e notQuiescable) Error() string { return string(e) }
 
+// errSandboxStopped is quiesceKeptSandbox's answer for a sandbox that no longer runs, as at a lease
+// end whose EndSandbox stopped it: no pass can run in it, whatever stopping its agent would do.
+var errSandboxStopped = errors.New("the sandbox had already stopped")
+
+// unlessStopped is err, or errSandboxStopped when ref's sandbox reads as no longer running.
+func (s *Server) unlessStopped(ctx context.Context, ref string, err error) error {
+	if st, serr := s.cfg.Runner.Status(ctx, ref); serr == nil && (st.State == types.RunStopped || st.State == types.RunFailed) {
+		return errSandboxStopped
+	}
+	return err
+}
+
 // keptAgentKill kills every process of a kept sandbox that runs as the exec's user, the agent's
 // own, except the sandbox's idle main process: kill -1 never signals PID 1, whose loop
 // (runner.AgentIdleScript) restarts its sleep. That is the agent and everything it started.
@@ -336,7 +351,9 @@ const keptAgentStopWait = 2 * time.Second
 // through the proxy. It answers notQuiescable for a run on a runner, whose stop_proxy is a lost
 // run's containment, queued only with its loss (a Kubernetes runner's deletes the agent pod when
 // it cannot prove the stop), and for a substrate that cannot stop its proxy alone (Kubernetes in
-// server mode).
+// server mode). An exec-less sandbox, whose agent is its main process, is refused outright: its
+// agent ends only with the sandbox, so no pass runs. A sandbox already stopped answers
+// errSandboxStopped.
 func (s *Server) quiesceKeptSandbox(ctx context.Context, run types.AgentRun, ref string) error {
 	if run.RunnerID != nil {
 		return notQuiescable("a sandbox on a runner is not kept")
@@ -348,14 +365,18 @@ func (s *Server) quiesceKeptSandbox(ctx context.Context, run types.AgentRun, ref
 	if err := stopper.StopProxy(ctx, ref); errors.Is(err, runner.ErrEndUnsupported) {
 		return notQuiescable("its substrate cannot stop its proxy alone")
 	} else if err != nil {
-		return fmt.Errorf("its proxy did not stop: %w", err)
+		return s.unlessStopped(ctx, ref, fmt.Errorf("its proxy did not stop: %w", err))
+	}
+	if run.AgentExecID == runner.MainProcessExecID {
+		// An exec-less sandbox (the container is the agent): its agent ends only with the sandbox.
+		return s.unlessStopped(ctx, ref, errors.New("its agent is the sandbox's main process, which cannot be stopped without stopping the sandbox"))
 	}
 	if run.AgentExecID == "" {
 		return errors.New("its agent's process is not known")
 	}
 	sess, err := s.cfg.Runner.ExecStream(ctx, ref, runner.ExecSpec{Argv: keptAgentKill})
 	if err != nil {
-		return fmt.Errorf("its agent could not be stopped: %w", err)
+		return s.unlessStopped(ctx, ref, fmt.Errorf("its agent could not be stopped: %w", err))
 	}
 	for _, r := range []io.Reader{sess.Stdout, sess.Stderr} {
 		if r != nil {
@@ -378,7 +399,10 @@ func (s *Server) quiesceKeptSandbox(ctx context.Context, run types.AgentRun, ref
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("its agent still reads as running (%v)", err)
+			if err != nil {
+				return fmt.Errorf("its agent's status could not be read: %w", err)
+			}
+			return errors.New("its agent still reads as running")
 		}
 		select {
 		case <-ctx.Done():

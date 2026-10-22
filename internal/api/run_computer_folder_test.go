@@ -196,6 +196,10 @@ type folderSandboxRunner struct {
 	// proxy removed and its agent's processes killed.
 	proxyErr                  error
 	proxyStopped, agentKilled atomic.Bool
+	// killErr fails the agent kill's exec; agentLives keeps the agent running through it; ended is
+	// a sandbox already stopped, as a lease end's EndSandbox leaves it.
+	killErr           error
+	agentLives, ended bool
 	// onPass runs as a pass's sftp-server starts in the sandbox's folder.
 	onPass func()
 }
@@ -211,8 +215,16 @@ func (r *folderSandboxRunner) StopProxy(context.Context, string) error {
 
 // AgentStatus is the agent's exec: running until keptAgentKill reaches the sandbox.
 func (r *folderSandboxRunner) AgentStatus(context.Context, string, string) (runner.Status, error) {
-	if r.agentKilled.Load() {
+	if r.ended || r.agentKilled.Load() && !r.agentLives {
 		return runner.Status{State: types.RunFailed}, nil
+	}
+	return runner.Status{State: types.RunRunning}, nil
+}
+
+// Status is the sandbox's container: running unless ended.
+func (r *folderSandboxRunner) Status(context.Context, string) (runner.Status, error) {
+	if r.ended {
+		return runner.Status{State: types.RunStopped}, nil
 	}
 	return runner.Status{State: types.RunRunning}, nil
 }
@@ -243,7 +255,13 @@ func (b blockingGet) Fileread(r *sftp.Request) (io.ReaderAt, error) {
 }
 
 func (r *folderSandboxRunner) ExecStream(_ context.Context, _ string, spec runner.ExecSpec) (*runner.ExecSession, error) {
+	if r.ended {
+		return nil, errors.New("container is not running")
+	}
 	if slices.Equal(spec.Argv, keptAgentKill) {
+		if r.killErr != nil {
+			return nil, r.killErr
+		}
 		r.agentKilled.Store(true)
 		return &runner.ExecSession{
 			Stdin: nopWriteCloser{io.Discard}, Stdout: strings.NewReader(""), Stderr: strings.NewReader(""),
@@ -697,23 +715,51 @@ func TestFinalizeRunEffects_TheFirstPassBackRunsWithTheAgentStoppedAndNoEgress(t
 }
 
 // A sandbox whose substrate can stop its agent and egress, but where that fails, runs no pass
-// back: it is stopped, and the record says so (#3466).
+// back: it is stopped, and the record says why (#3466). An exec-less sandbox, whose agent is its
+// main process, is refused before any kill, and one already stopped is named as that.
 func TestFinalizeRunEffects_ASandboxWhoseAgentCannotBeStoppedRunsNoPass(t *testing.T) {
-	s, cs, audit, run, sb, _ := computerFolderFixture(t, types.ComputerFolderBoth)
-	if !s.holdForLocalFolder(context.Background(), run, "sbx") {
-		t.Fatal(cs.FailureHint())
+	cases := map[string]struct {
+		setup func(*localFolderStore, *folderSandboxRunner)
+		want  string
+	}{
+		"its proxy is wedged": {func(_ *localFolderStore, sb *folderSandboxRunner) {
+			sb.proxyErr = errors.New("the proxy is wedged")
+		}, "no pass ran; its agent and egress could not be stopped first: its proxy did not stop: the proxy is wedged"},
+		"its agent is the main process": {func(ls *localFolderStore, _ *folderSandboxRunner) {
+			ls.run.AgentExecID = runner.MainProcessExecID
+		}, "no pass ran; its agent and egress could not be stopped first: its agent is the sandbox's main process, which cannot be stopped without stopping the sandbox"},
+		"its kill cannot reach it": {func(_ *localFolderStore, sb *folderSandboxRunner) {
+			sb.killErr = errors.New("exec refused")
+		}, "no pass ran; its agent and egress could not be stopped first: its agent could not be stopped: exec refused"},
+		"its agent outlives the kill": {func(_ *localFolderStore, sb *folderSandboxRunner) {
+			sb.agentLives = true
+		}, "no pass ran; its agent and egress could not be stopped first: its agent still reads as running,"},
+		"it had already stopped": {func(_ *localFolderStore, sb *folderSandboxRunner) {
+			sb.ended = true
+		}, "no pass ran; the sandbox had already stopped, with its changes not brought back yet, uncounted"},
 	}
-	sb.proxyErr = errors.New("the proxy is wedged")
-	passed := false
-	sb.onPass = func() { passed = true }
-	if err := s.finalizeRunEffects(context.Background(), run.ID, "sbx", "run.complete", nil, false, false); err != nil {
-		t.Errorf("finalize: %v", err)
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			s, cs, audit, run, sb, _ := computerFolderFixture(t, types.ComputerFolderBoth)
+			if !s.holdForLocalFolder(context.Background(), run, "sbx") {
+				t.Fatal(cs.FailureHint())
+			}
+			tc.setup(cs.localFolderStore, sb)
+			var passed atomic.Bool
+			sb.onPass = func() { passed.Store(true) }
+			if err := s.finalizeRunEffects(context.Background(), run.ID, "sbx", "run.complete", nil, false, false); err != nil {
+				t.Errorf("finalize: %v", err)
+			}
+			if passed.Load() {
+				t.Error("a pass back ran with the agent and its egress not stopped")
+			}
+			if name == "its agent is the main process" && sb.agentKilled.Load() {
+				t.Error("an exec-less sandbox's agent kill ran; want it refused before any kill")
+			}
+			assertFolderBackTornDown(t, cs, audit, run, sb, tc.want)
+			assertFolderBackTornDown(t, cs, audit, run, sb, "its changes not brought back yet, uncounted")
+		})
 	}
-	if passed {
-		t.Error("a pass back ran with the agent and its egress not stopped")
-	}
-	assertFolderBackTornDown(t, cs, audit, run, sb, "no pass ran; its agent and egress could not be stopped first: its proxy did not stop: the proxy is wedged")
-	assertFolderBackTornDown(t, cs, audit, run, sb, "its changes not brought back yet, uncounted")
 }
 
 // agentWrites has the agent write each name, new, in the sandbox's folder.
