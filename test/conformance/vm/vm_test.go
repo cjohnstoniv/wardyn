@@ -111,6 +111,11 @@ func settledIPv6Drops(t *testing.T, cli *dockerclient.Client, runID uuid.UUID) i
 	return n
 }
 
+// linkLocalReady exits 0 once the guest's link-local addresses have passed duplicate address
+// detection: a tentative address (/proc/net/if_inet6 flag 0x40) is no source, so a connection
+// from it fails with EADDRNOTAVAIL and puts no frame on the link.
+const linkLocalReady = `seen=0; while read a i p s f n; do [ "$n" = lo ] && continue; case $a in fe80*) seen=1; [ $((0x$f & 0x40)) -eq 0 ] || exit 1;; esac; done < /proc/net/if_inet6; [ $seen = 1 ]`
+
 func run(t *testing.T, d *docker.Driver, ref, script string) (int, string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -341,7 +346,17 @@ func TestLinuxVMSandbox(t *testing.T) {
 	// IPv6: a link-local connect puts frames on the link, which the relay drops and reports
 	// (batched, one row a second per kind, with a repeat count); a global one has no route in the
 	// guest. The guest's own IPv6 chatter is reported the same way, so the probe must add to a
-	// count that has settled.
+	// count that has settled, and it must run from an address that has passed duplicate address
+	// detection.
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(200 * time.Millisecond) {
+		if code, _ := run(t, d, sb.Ref, linkLocalReady); code == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			_, o := run(t, d, sb.Ref, "cat /proc/net/if_inet6")
+			t.Fatalf("the guest's link-local address is still tentative: %q", o)
+		}
+	}
 	before := settledIPv6Drops(t, cli, spec.RunID)
 	if code, o := run(t, d, sb.Ref, `for i in $(ls /sys/class/net); do if [ "$i" != lo ] && timeout 5 bash -c "</dev/tcp/fe80::1%$i/80"; then exit 0; fi; done; timeout 10 bash -c '</dev/tcp/2001:4860:4860::8888/443' && exit 0; exit 7`); code != 7 {
 		t.Errorf("IPv6 from the guest = %d %q, want refused", code, o)
@@ -352,6 +367,7 @@ func TestLinuxVMSandbox(t *testing.T) {
 			break
 		}
 	}
+	t.Logf("the relay counted %d IPv6 frames dropped, %d of them before the IPv6 probe", ipv6Drops(decisions(t, cli, spec.RunID)), before)
 	// The proxy's rows: the port rule refused port 22 (the run's proxy is marked vm, as nothing else
 	// turns that rule on here), the relay reported what only it sees, and every allow is the origin.
 	want := map[string]bool{"policy:port": false, "policy:default-deny": false, "vmnet:literal-ip": false, "vmnet:udp": false, "vmnet:dropped-frame": false}
