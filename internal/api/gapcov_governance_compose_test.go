@@ -135,3 +135,11 @@ func TestGapCovApplyStepRefusesAnOverlayWithInvalidLimits(t *testing.T) {
 func (s *gapCovResolveStore) ListMembershipsFor(ctx context.Context, users, groups []string, userType string) ([]store.MembershipMatch, error) {
 	return membershipsFromResolve(s.ResolveGovernanceUnit(ctx, users, groups, userType))
 }
+
+// ListGovernanceUnits is the tree the check names its contexts from: the bound row alone.
+func (s *gapCovResolveStore) ListGovernanceUnits(context.Context) ([]types.GovernanceUnit, error) {
+	if s.row == nil {
+		return nil, s.err
+	}
+	return []types.GovernanceUnit{*s.row}, s.err
+}

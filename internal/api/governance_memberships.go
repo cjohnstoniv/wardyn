@@ -591,7 +591,7 @@ func (s *Server) activationsAfterDelete(ctx context.Context, removed types.Gover
 	all, err := s.cfg.Store.ListGovernanceMemberships(ctx)
 	if err == nil {
 		var units []types.GovernanceUnit
-		if units, err = s.cfg.Store.ListGovernanceUnits(ctx); err == nil {
+		if units, err = s.unitOutlines(ctx); err == nil {
 			return legacyActivations(removed, all, units)
 		}
 	}
