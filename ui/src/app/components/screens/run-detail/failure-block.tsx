@@ -322,10 +322,10 @@ export function RunFailureBlock({
         : killedCopy(ending.evidence, held, run.placement === "local" ? runnerLabel(run) : undefined, runnerLabel(run))
       : ENDING_COPY[ending.kind];
   // The ending event's own timestamp bounds the run's lifetime; without one
-  // (a truncated trail) fall back to the run's last update, which is what the
-  // command bar's own clock freezes at.
+  // (a truncated trail) fall back to when the run ended, then to its last
+  // update, which is what the command bar's own clock freezes at.
   const elapsed = formatDuration(
-    new Date(ending.time ?? run.updated_at).getTime() - new Date(run.created_at).getTime(),
+    new Date(ending.time ?? run.ended_at ?? run.updated_at).getTime() - new Date(run.created_at).getTime(),
   );
 
   return (

@@ -242,6 +242,14 @@ describe("RunFailureBlock", () => {
     expect(screen.getByTestId("run-failure-block")).toHaveAttribute("data-evidence", "partial");
   });
 
+  it("a kill row with no timestamp reads the run's own end time for how far in it was, not its last update (#2521)", () => {
+    const endedAt = new Date(NOW_MS - 16 * 60 * 1000).toISOString();
+    const noTime = ev("run.kill", "success", { actor: "alice", actor_type: "human", time: undefined as unknown as string });
+    render(<RunFailureBlock run={{ ...run("KILLED"), ended_at: endedAt }} audit={[noTime]} onGoAudit={vi.fn()} />);
+    // CREATED is 26m before NOW_MS, ended_at 16m before it: 10m in. updated_at (NOW_MS) would say 26m.
+    expect(screen.getByText(/An operator killed this run 10m 0s in\./)).toBeInTheDocument();
+  });
+
   // Ported from the review probe: a KILLED run whose trail has no run.kill row
   // invented the ending from the state alone and printed the clean claim.
   it("KILLED with no kill record: says it cannot confirm, with no actor, elapsed time or run.kill line", () => {
