@@ -21,7 +21,7 @@ const AGENTS = [
 ];
 const OUTPUT = "[claude-code] fixing login.test.ts\n[codex-cli] writing retry.test.ts\n[claude-code] done";
 
-async function multiAgentRun(page: Page): Promise<string> {
+async function multiAgentRun(page: Page, state: "PENDING" | "RUNNING" = "RUNNING"): Promise<string> {
   await gotoConsole(page);
   const created = await consoleAPI(page, "POST", "/api/v1/runs", { agent: "claude-code", task: "multi-agent e2e " + randomUUID().slice(0, 8) });
   expect(created.status, created.text).toBe(201);
@@ -29,7 +29,7 @@ async function multiAgentRun(page: Page): Promise<string> {
   await page.route(`**/api/v1/runs/${id}`, async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
     const real = (await (await route.fetch()).json()) as Record<string, unknown>;
-    await route.fulfill({ json: { ...real, state: "RUNNING", agents: AGENTS } });
+    await route.fulfill({ json: { ...real, state, agents: AGENTS } });
   });
   return id;
 }
@@ -56,6 +56,24 @@ const hold = (runId: string, kind: "tool_call" | "egress_domain", scope: Record<
 });
 
 test.describe("A run with several agents", () => {
+  test("a pending run does not label agents as Running before their state arrives", async ({ page }) => {
+    await page.route("**/api/v1/runs/*/output", (route) =>
+      route.fulfill({
+        json: {
+          output: "", truncated: false, complete: false, source: "stdout", incomplete: false, capture_gap: false,
+        },
+      }),
+    );
+    const id = await multiAgentRun(page, "PENDING");
+    await navToRoute(page, `/runs/${id}`);
+    await page.getByRole("tab", { name: RUN_OUTPUT.tab }).click();
+
+    const panel = page.getByRole("region", { name: RUN_AGENTS.title });
+    await expect(panel.getByRole("listitem")).toHaveCount(2);
+    await expect(panel.getByText("Running")).toHaveCount(0);
+    await expect(panel.getByText(/agents ·/)).toHaveCount(0);
+  });
+
   test("the Output tab lists each agent with its task and status, and the filter shows one agent's lines", async ({ page }) => {
     await page.route("**/api/v1/runs/*/output", (route) =>
       route.fulfill({
