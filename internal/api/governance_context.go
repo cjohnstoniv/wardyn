@@ -424,10 +424,15 @@ func depthLimitOf(sc types.SiteConfig, err error) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("api: read the maximum governance unit depth: %w", err)
 	}
-	if sc.GovernanceMaxDepth == 0 {
-		return maxUnitDepthDefault, nil
+	return governanceMaxDepthOf(sc.GovernanceMaxDepth), nil
+}
+
+// governanceMaxDepthOf is a stored governance_max_depth as a limit: nil and 0 are the default, 16.
+func governanceMaxDepthOf(p *int) int {
+	if p == nil || *p == 0 {
+		return maxUnitDepthDefault
 	}
-	return sc.GovernanceMaxDepth, nil
+	return *p
 }
 
 // checkConfiguredDepth refuses a path deeper than the configured maximum. A path of one unit is
@@ -447,7 +452,11 @@ func (s *Server) checkConfiguredDepth(ctx context.Context, chain []types.Governa
 }
 
 // validGovernanceMaxDepth is site_config.governance_max_depth's shape: 0 (the default) or 1..64.
-func validGovernanceMaxDepth(n int) error {
+func validGovernanceMaxDepth(p *int) error {
+	if p == nil {
+		return nil
+	}
+	n := *p
 	if n < 0 || n > store.MaxUnitDepthCap {
 		return fmt.Errorf("governance_max_depth: %d is not a depth — use 1 to %d, or 0 for the default (%d)", n, store.MaxUnitDepthCap, maxUnitDepthDefault)
 	}
@@ -458,12 +467,9 @@ func validGovernanceMaxDepth(n int) error {
 // naming that path (a body that does not name it was carried forward, siteConfigFieldsAfter066).
 // False when it answered. An unchanged value needs no read: every unit write is already held to it.
 func (s *Server) admitGovernanceMaxDepth(w http.ResponseWriter, r *http.Request, cfg *types.SiteConfig, existing types.SiteConfig) bool {
-	if cfg.GovernanceMaxDepth == existing.GovernanceMaxDepth {
+	limit := governanceMaxDepthOf(cfg.GovernanceMaxDepth)
+	if limit == governanceMaxDepthOf(existing.GovernanceMaxDepth) {
 		return true
-	}
-	limit := cfg.GovernanceMaxDepth
-	if limit == 0 {
-		limit = maxUnitDepthDefault
 	}
 	depth, path, err := s.cfg.Store.MaxUnitDepth(r.Context())
 	if err != nil {

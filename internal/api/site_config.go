@@ -541,7 +541,7 @@ var siteConfigFieldsAfter066 = []string{
 // `{"internal_hosts": null}` both MENTION the field and both clear it, exactly
 // as a client intends. Only silence is treated as silence.
 func carryForwardUnnamedSiteConfigFields(cfg *types.SiteConfig, existing types.SiteConfig, present map[string]bool) {
-	if !present["governance_max_depth"] {
+	if cfg.GovernanceMaxDepth == nil { // null or absent keeps it; 0 is the explicit reset
 		cfg.GovernanceMaxDepth = existing.GovernanceMaxDepth
 	}
 	if !present["upstream_proxy_no_proxy"] {

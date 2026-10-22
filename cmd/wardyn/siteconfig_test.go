@@ -382,6 +382,29 @@ func TestSiteConfigSet_NoOmittedFieldsNoteIsSilent(t *testing.T) {
 	}
 }
 
+// TestSiteConfigSet_GovernanceMaxDepthZeroStaysOnTheWire: governance_max_depth 0 is the explicit
+// reset to the default, so the re-marshalled document must keep the key (an int with omitempty
+// dropped it, and the server then carried the stored depth forward instead).
+func TestSiteConfigSet_GovernanceMaxDepthZeroStaysOnTheWire(t *testing.T) {
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("{}"))
+	}))
+	t.Cleanup(srv.Close)
+	if _, _, err := runSiteConfigSet(t, srv.URL, `{"governance_max_depth":0}`); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatalf("wire body %q: %v", body, err)
+	}
+	if v, ok := wire["governance_max_depth"]; !ok || v != float64(0) {
+		t.Errorf("wire = %s, want governance_max_depth present as 0", body)
+	}
+}
+
 // TestSiteConfigSet_NoOmittedFieldsNoteOnRejectedApply: the note is about a
 // SUCCESSFUL apply's carry-forward, not the file's shape — a server that
 // rejects the write (500 here) must not print it, or an operator debugging

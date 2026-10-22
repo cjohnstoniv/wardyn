@@ -233,7 +233,7 @@ func TestPG_ComposedProfileWrites(t *testing.T) {
 	})
 
 	t.Run("a cycle and a depth overflow are refused", func(t *testing.T) {
-		if _, err := e.pg.PutSiteConfig(e.ctx, types.SiteConfig{GovernanceMaxDepth: 4}); err != nil {
+		if _, err := e.pg.PutSiteConfig(e.ctx, types.SiteConfig{GovernanceMaxDepth: new(4)}); err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _, _ = e.pg.PutSiteConfig(e.ctx, types.SiteConfig{}) })

@@ -127,8 +127,8 @@ export interface SiteConfig {
   // Set through the site-config document (API, CLI or MDM); no console surface
   // writes it.
   policy_help?: PolicyContact;
-  // types.SiteConfig.GovernanceMaxDepth — the maximum unit depth: 0 or absent is 16, otherwise
-  // 1..64. A value below the deepest unit path that exists is refused.
+  // types.SiteConfig.GovernanceMaxDepth — the maximum unit depth: 0 resets to 16, null or absent
+  // keeps the stored value, otherwise 1..64. A value below the deepest unit path that exists is refused.
   governance_max_depth?: number;
   // #1215 — the part of the console branding a site config carries: the logo,
   // as a file wardynd reads when this document is applied

@@ -118,9 +118,10 @@ type SiteConfig struct {
 	// policyref.Project on every read.
 	PolicyHelp *policyref.Contact `json:"policy_help,omitempty"`
 	// GovernanceMaxDepth is the longest unit path from the top (Default and every parent-less
-	// unit are depth 1): 0 is the default, 16; otherwise 1..64. PUT /site-config refuses a value
+	// unit are depth 1): 1..64. A pointer so PUT can tell its three answers apart: 0 resets
+	// to the default, 16; null or absent keeps the stored value. PUT /site-config refuses a value
 	// below the deepest unit path that exists.
-	GovernanceMaxDepth int `json:"governance_max_depth,omitempty"`
+	GovernanceMaxDepth *int `json:"governance_max_depth,omitempty"`
 	// Branding is the part of the console branding (#1215) a site config can
 	// carry: today only the logo, as a file wardynd reads when this document is
 	// applied. A POINTER for the same byte-identical-GET reason as the provider
