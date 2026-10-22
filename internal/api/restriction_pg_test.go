@@ -241,25 +241,37 @@ func TestRestrictionSealAndMint(t *testing.T) {
 	}
 }
 
-// TestRestrictionApprovalRefused: a security admin cannot approve a host a restriction on the run's
-// owner denies.
+// TestRestrictionApprovalRefused: a security admin cannot approve, through the route, a host a
+// restriction on the run's owner denies.
 func TestRestrictionApprovalRefused(t *testing.T) {
 	e := newGovEnvOn(t, throwawayPGPool(t))
 	r := seedRestriction(t, e, "rp-appr", types.RestrictionSpec{DeniedDomains: strs("pypi.org")}, types.RestrictionLimits{}, userMember("sub-rp-appr"))
-	run := types.AgentRun{ID: uuid.New(), CreatedBy: "sub-rp-appr", RestrictionIDs: []uuid.UUID{r.ID}}
-	ap := types.ApprovalRequest{ID: uuid.New(), RunID: run.ID, Kind: types.ApprovalEgressDomain, RequestedScope: json.RawMessage(`{"host":"PyPI.org"}`)}
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/approvals/"+ap.ID.String()+"/approve", nil)
-	w := httptest.NewRecorder()
-	if _, _, ok := e.srv.restrictionAdmitApproval(w, req, ap, run, true); ok || w.Code != http.StatusForbidden || wireReason(t, w) != reasonRestrictionHost {
-		t.Errorf("approving a denied host: ok %v %d %s, want 403 %s", ok, w.Code, w.Body, reasonRestrictionHost)
+	run, err := e.pg.CreateRun(context.Background(), types.AgentRun{ID: uuid.New(), CreatedBy: "sub-rp-appr", Agent: "claude-code",
+		ConfinementClass: types.CC3, State: types.RunRunning, RunnerTarget: "docker", Task: "t", RestrictionIDs: []uuid.UUID{r.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ask := func(host string) uuid.UUID {
+		ap, err := e.h.approvals.Request(context.Background(), types.ApprovalRequest{RunID: run.ID, Kind: types.ApprovalEgressDomain,
+			RequestedScope: json.RawMessage(`{"host":"` + host + `"}`)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ap.ID
+	}
+	decider := e.otherServer(func(c *Config) { c.Approvals = e.h.approvals })
+	approve := func(id uuid.UUID) *httptest.ResponseRecorder {
+		return doSSO(t, decider, http.MethodPost, "/api/v1/approvals/"+id.String()+"/approve", e.alice, `{}`)
+	}
+	w := approve(ask("PyPI.org"))
+	if w.Code != http.StatusForbidden || wireReason(t, w) != reasonRestrictionHost {
+		t.Errorf("approving a denied host: %d %s, want 403 %s", w.Code, w.Body, reasonRestrictionHost)
 	}
 	if !strings.Contains(w.Body.String(), "rp-appr") || !strings.Contains(w.Body.String(), "rp-appr-owner") {
 		t.Errorf("the refusal %s does not name the restriction and its contact", w.Body)
 	}
-	ap.RequestedScope = json.RawMessage(`{"host":"github.com"}`)
-	w = httptest.NewRecorder()
-	if _, _, ok := e.srv.restrictionAdmitApproval(w, req, ap, run, true); !ok {
-		t.Errorf("approving a host the restriction does not deny was refused: %d %s", w.Code, w.Body)
+	if w := approve(ask("github.com")); w.Code != http.StatusOK {
+		t.Errorf("approving a host the restriction does not deny: %d %s, want 200", w.Code, w.Body)
 	}
 }
 
