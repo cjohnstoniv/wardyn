@@ -292,6 +292,95 @@ func TestTakeover_Refusals(t *testing.T) {
 	}
 }
 
+// TestTakeover_DeclineRefusesEveryOtherKind: decline decides through Approvals.Decide directly, so it
+// must refuse any approval that is not a takeover request, and leave it PENDING. (That a decline is a
+// DENIED is TestTakeover_Refusals' last assertions.)
+func TestTakeover_DeclineRefusesEveryOtherKind(t *testing.T) {
+	f := newTakeoverFixture(t, true)
+	for _, k := range types.ApprovalKinds {
+		if k == types.ApprovalHumanTakeover {
+			continue
+		}
+		id := f.seed(k, types.ApprovalPending, "")
+		w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/decline", f.owner, "")
+		if w.Code != http.StatusConflict || reasonOf(t, w) != reasonNotATakeoverRequest {
+			t.Errorf("decline a %s: %d %s, want 409 %s", k, w.Code, w.Body.String(), reasonNotATakeoverRequest)
+		}
+		if got, err := f.aap.Get(context.Background(), id); err != nil || got.State != types.ApprovalPending {
+			t.Errorf("decline a %s left it %v (%v), want PENDING", k, got.State, err)
+		}
+	}
+}
+
+// noAuditQuery is a pauseStore that answers the audit query a take over's surface reads (it has none).
+type noAuditQuery struct{ *pauseStore }
+
+func (noAuditQuery) QueryAuditEvents(context.Context, uuid.UUID, int) ([]types.AuditEvent, error) {
+	return nil, nil
+}
+
+// pausedTakeover is a run paused waiting on a takeover request, with the member who owns it signed in.
+func pausedTakeover(t *testing.T) (*pauseFixture, takeoverApprovals, uuid.UUID, *http.Cookie) {
+	t.Helper()
+	aap := takeoverApprovals{newAuthzApprovals(newAuthzStore())}
+	f := newPauseFixture(t, time.Hour, func(c *Config) { c.Approvals, c.Store = aap, noAuditQuery{c.Store.(*pauseStore)} })
+	paused := time.Now().UTC()
+	f.st.run.PausedAt, f.st.run.PausedReason = &paused, types.PauseWaiting
+	id := uuid.New()
+	aap.mu.Lock()
+	aap.byID[id] = types.ApprovalRequest{ID: id, RunID: f.run.ID, Kind: types.ApprovalHumanTakeover, State: types.ApprovalPending,
+		RequestedScope: json.RawMessage(`{"reason":"the sign-in sends a code to a phone"}`), RequestedAt: time.Now().UTC().Add(-2 * time.Minute)}
+	aap.mu.Unlock()
+	return f, aap, id, ssoSession(t, pauseOwner, "owner@corp.example", oidc.RoleUser)
+}
+
+func approvalsCounted(f *pauseFixture, decision string) int64 {
+	f.srv.metrics.mu.Lock()
+	defer f.srv.metrics.mu.Unlock()
+	return f.srv.metrics.approvals[decision]
+}
+
+// TestTakeover_DeclineThawsAPausedRunAndCounts: declining the request a run is paused on is a decision
+// like any other. It persists DENIED, counts as one, and thaws the run, as decide() does for its own.
+func TestTakeover_DeclineThawsAPausedRunAndCounts(t *testing.T) {
+	f, aap, id, owner := pausedTakeover(t)
+	w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/decline", owner, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("decline = %d %s", w.Code, w.Body.String())
+	}
+	if got, err := aap.Get(context.Background(), id); err != nil || got.State != types.ApprovalDenied {
+		t.Errorf("declined request = %v (%v), want DENIED", got.State, err)
+	}
+	if _, thaws := f.rn.counts(); thaws != 1 {
+		t.Errorf("thaws = %d after a decline, want 1: the run stayed paused on an answered request", thaws)
+	}
+	if n := approvalsCounted(f, "denied"); n != 1 {
+		t.Errorf("denied decisions counted = %d, want 1", n)
+	}
+}
+
+// TestTakeover_TakeOverThawsAPausedRunAndCountsOnce: the first take over answers the request (counted,
+// run thawed); a second person replacing the holder decides nothing, and a hand back closes no request.
+func TestTakeover_TakeOverThawsAPausedRunAndCountsOnce(t *testing.T) {
+	f, _, id, owner := pausedTakeover(t)
+	w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/take-over", owner, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("take over = %d %s", w.Code, w.Body.String())
+	}
+	if _, thaws := f.rn.counts(); thaws != 1 {
+		t.Errorf("thaws = %d after the first take over, want 1", thaws)
+	}
+	if n := approvalsCounted(f, "approved"); n != 1 {
+		t.Errorf("approved decisions counted = %d, want 1", n)
+	}
+	if w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/hand-back", owner, ""); w.Code != http.StatusOK {
+		t.Fatalf("hand back = %d %s", w.Code, w.Body.String())
+	}
+	if n := approvalsCounted(f, "approved") + approvalsCounted(f, "denied"); n != 1 {
+		t.Errorf("decisions counted = %d after a hand back, want still 1", n)
+	}
+}
+
 // TestTakeover_EntryShapes: the three verbs keep the attach ticket's entry shapes. A super admin on
 // a run that is not theirs gets the 403 naming why; a security admin, who also sees every run, gets
 // the missing approval's 404 like any stranger; and a Background run's owner gets 409

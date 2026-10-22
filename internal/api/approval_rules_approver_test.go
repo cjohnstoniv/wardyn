@@ -663,8 +663,10 @@ func TestApprovalsDecideHasOneCaller(t *testing.T) {
 			})
 		}
 	}
-	if len(fsmCallers) != 1 || fsmCallers["decide"] != 1 {
-		t.Fatalf("Approvals.Decide callers = %v, want decide only", fsmCallers)
+	// handleDeclineTakeover is the one other caller: a takeover request is declined under the takeover
+	// entry rule (loadTakeover, human_takeover only, always DENIED) and ends in the same approvalResolved.
+	if len(fsmCallers) != 2 || fsmCallers["decide"] != 1 || fsmCallers["handleDeclineTakeover"] != 1 {
+		t.Fatalf("Approvals.Decide callers = %v, want decide and handleDeclineTakeover only", fsmCallers)
 	}
 	want := map[string]int{"handleApproveApproval": 1, "handleDenyApproval": 1, "policyDecide": 1}
 	if len(decideCallers) != len(want) {

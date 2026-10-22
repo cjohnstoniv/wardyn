@@ -222,6 +222,8 @@ func (s *Server) handleTakeOverApproval(w http.ResponseWriter, r *http.Request) 
 		data["from"] = prev
 	} else {
 		data["after_ms"] = s.cfg.Now().Sub(got.RequestedAt).Milliseconds()
+		// The first take over answers the request: counted, and a run paused waiting on it thawed.
+		s.approvalResolved(r.Context(), true, got.RunID)
 	}
 	s.recordAudit(r.Context(), s.auditEvent(&got.RunID, actorType, principal, "takeover.begin", got.ID.String(), "success", mustJSON(data)))
 	if prev == "" && s.takeoverRecorded(run) {
@@ -281,5 +283,6 @@ func (s *Server) handleDeclineTakeover(w http.ResponseWriter, r *http.Request) {
 		writeDecideError(w, r, err)
 		return
 	}
+	s.approvalResolved(r.Context(), false, got.RunID)
 	writeJSON(w, http.StatusOK, got)
 }

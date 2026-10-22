@@ -307,6 +307,14 @@ func (s *Server) refuseUndecidableKind(w http.ResponseWriter, r *http.Request, i
 	return true
 }
 
+// approvalResolved is what follows a request's move out of PENDING, after the write committed: the
+// decision counted, and a run paused waiting on the request thawed. Every handler that decides or
+// takes over a request ends in it, so no path leaves a run frozen on an answered request.
+func (s *Server) approvalResolved(ctx context.Context, approved bool, runID uuid.UUID) {
+	s.metrics.approvalDecided(approved)
+	s.approvalClosed(ctx, runID)
+}
+
 func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	id, ok := parseIDParam(w, r, "id", "approval")
 	if !ok {
@@ -526,9 +534,9 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	// decision path) funnel through — never in handleApprove/handleDeny, which
 	// would each need their own increment. The counter cannot live in
 	// approval.Decide itself: internal/api imports internal/approval, so the
-	// dependency only runs this way.
-	s.metrics.approvalDecided(approve)
-	s.approvalClosed(r.Context(), result.RunID) // thaw a run paused waiting on it
+	// dependency only runs this way. A takeover request's decline decides through
+	// Approvals.Decide too, and ends in the same approvalResolved.
+	s.approvalResolved(r.Context(), approve, result.RunID)
 	// The four-eyes break-glass on a decision that WAS made — the success half
 	// of the pair, the failure half being the emit on Decide's error path
 	// above. Recorded HERE and not inside the gate that detected it, so this
