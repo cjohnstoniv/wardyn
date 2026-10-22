@@ -40,13 +40,16 @@ func ServePort(ctx context.Context, path string, h http.Handler) error {
 
 // chunk is one read of the port: bytes, end-of-file (no host connected) or a failure.
 type chunk struct {
-	data []byte
-	eof  bool
-	err  error
+	data  []byte
+	epoch uint64 // of data: the listener's epoch when it was read
+	eof   bool
+	err   error
 }
 
 // portListener yields one portConn per host session over the same open port. One goroutine is the
-// port's only reader, so bytes never go to a session that has already ended.
+// port's only reader, so bytes never go to a session that has already ended. Writes have no such
+// guard in the port: they reach whichever host is connected when they leave, so a session writes
+// only until the reader sees its host go (epoch).
 type portListener struct {
 	ctx    context.Context
 	w      io.Writer
@@ -56,6 +59,9 @@ type portListener struct {
 
 	mu      sync.Mutex
 	current *portConn
+
+	wmu   sync.Mutex // held by every session write, and by the reader to end them
+	epoch uint64     // hosts the reader has seen go: only it changes epoch, under wmu
 }
 
 func newPortListener(ctx context.Context, port io.ReadWriter, idle time.Duration) *portListener {
@@ -67,8 +73,9 @@ func newPortListener(ctx context.Context, port io.ReadWriter, idle time.Duration
 			var c chunk
 			switch {
 			case n > 0:
-				c.data = append([]byte(nil), buf[:n]...)
+				c.data, c.epoch = append([]byte(nil), buf[:n]...), l.epoch
 			case errors.Is(err, io.EOF):
+				l.endWrites()
 				c.eof = true
 			case err != nil:
 				c.err = err
@@ -95,6 +102,22 @@ func newPortListener(ctx context.Context, port io.ReadWriter, idle time.Duration
 	return l
 }
 
+// endWrites ends the writes of the session whose host has gone, before the reader looks for the
+// next host. The kernel holds a write made while no host is connected and hands it to the next
+// one, so a past deadline ends any such write first; taking wmu then waits out one in flight.
+func (l *portListener) endWrites() {
+	d, _ := l.w.(interface{ SetWriteDeadline(time.Time) error })
+	if d != nil {
+		_ = d.SetWriteDeadline(time.Unix(1, 0))
+	}
+	l.wmu.Lock()
+	l.epoch++
+	if d != nil {
+		_ = d.SetWriteDeadline(time.Time{})
+	}
+	l.wmu.Unlock()
+}
+
 func (l *portListener) next() (chunk, error) {
 	select {
 	case c := <-l.chunks:
@@ -118,9 +141,13 @@ func (l *portListener) Accept() (net.Conn, error) {
 		case <-l.done:
 			return nil, net.ErrClosed
 		}
+		// Its last Read has returned and no later one takes a chunk, so sawEOF is final.
+		prev.rmu.Lock()
+		eof := prev.sawEOF
+		prev.rmu.Unlock()
 		// A session that ended on anything but the host going away may have left its bytes in the
 		// port: drop them until the host disconnects, so the next session starts clean.
-		for eof := prev.sawEOF; !eof; {
+		for !eof {
 			c, err := l.next()
 			if err != nil {
 				return nil, err
@@ -134,7 +161,7 @@ func (l *portListener) Accept() (net.Conn, error) {
 			return nil, err
 		}
 		if len(c.data) > 0 {
-			conn := &portConn{l: l, pending: c.data, closed: make(chan struct{})}
+			conn := &portConn{l: l, epoch: c.epoch, pending: c.data, closed: make(chan struct{})}
 			l.mu.Lock()
 			l.current = conn
 			l.mu.Unlock()
@@ -152,14 +179,29 @@ func (l *portListener) Addr() net.Addr { return portAddr{} }
 
 // portConn is one host session on the port. Close ends the session, never the port.
 type portConn struct {
-	l       *portListener
+	l      *portListener
+	epoch  uint64 // the listener's epoch at the session's first byte
+	closed chan struct{}
+	once   sync.Once
+
+	rmu     sync.Mutex // held by Read; Accept takes it once the session is closed
 	pending []byte
-	closed  chan struct{}
-	once    sync.Once
 	sawEOF  bool
 }
 
 func (c *portConn) Read(p []byte) (int, error) {
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	// A closed session, or one past its host's end-of-file, takes no chunk: the next one is the
+	// next session's, or the end-of-file Accept drains to.
+	select {
+	case <-c.closed:
+		return 0, net.ErrClosed
+	default:
+	}
+	if c.sawEOF {
+		return 0, io.EOF
+	}
 	if len(c.pending) == 0 {
 		select {
 		case ch := <-c.l.chunks:
@@ -183,10 +225,15 @@ func (c *portConn) Read(p []byte) (int, error) {
 }
 
 func (c *portConn) Write(p []byte) (int, error) {
+	c.l.wmu.Lock()
+	defer c.l.wmu.Unlock()
 	select {
 	case <-c.closed:
 		return 0, net.ErrClosed
 	default:
+	}
+	if c.epoch != c.l.epoch {
+		return 0, net.ErrClosed // its host has gone: the bytes would reach the next one
 	}
 	return c.l.w.Write(p)
 }
