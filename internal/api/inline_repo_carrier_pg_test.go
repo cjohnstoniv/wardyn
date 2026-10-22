@@ -77,8 +77,8 @@ func (fx inlineCarrierFixture) grant(t *testing.T, ws types.Workspace, effect ty
 	return g.ID
 }
 
-// runBody is alice's run naming govWorkspaceRepo inline, attaching attach when set.
-func runBody(attach *uuid.UUID) string {
+// carrierRunBody is alice's run naming govWorkspaceRepo inline, attaching attach when set.
+func carrierRunBody(attach *uuid.UUID) string {
 	body := `{"agent":"claude-code","task":"t",`
 	if attach != nil {
 		body += `"workspace_id":"` + attach.String() + `",`
@@ -87,11 +87,11 @@ func runBody(attach *uuid.UUID) string {
 		`"workspace_repos":[{"repo":"` + govWorkspaceRepo + `"}]}}`
 }
 
-// launch posts runBody(attach) and answers the response, the run row once
+// launch posts carrierRunBody(attach) and answers the response, the run row once
 // dispatch has settled, and the allowlist dispatch handed the proxy.
 func (fx inlineCarrierFixture) launch(t *testing.T, attach *uuid.UUID) (int, string, types.AgentRun, []string) {
 	t.Helper()
-	return fx.post(t, runBody(attach))
+	return fx.post(t, carrierRunBody(attach))
 }
 
 // post creates alice's run from body, as launch does.
@@ -276,7 +276,7 @@ func TestPG_InlineRepoCarrier_PreflightMatchesRun(t *testing.T) {
 	fx.grant(t, fx.a, types.CapabilityAllow)
 	fx.grant(t, fx.b, types.CapabilityDeny)
 	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
-	w := doSSO(t, fx.h.srv, http.MethodPost, "/api/v1/runs/preflight", alice, runBody(nil))
+	w := doSSO(t, fx.h.srv, http.MethodPost, "/api/v1/runs/preflight", alice, carrierRunBody(nil))
 	if w.Code != http.StatusOK {
 		t.Fatalf("preflight: %d %s, want 200", w.Code, w.Body.String())
 	}
