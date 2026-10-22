@@ -32,7 +32,7 @@ func TestRestrictionRevive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ids := func(c ownerCeiling) []uuid.UUID { return sortedIDs(c.restrictionIDs) }
+	ids := func(c ownerCeiling) []uuid.UUID { return sortedRestrictionIDs(c.restrictionIDs) }
 	late := seedRestriction(t, e, "rv-late-user", types.RestrictionSpec{DeniedDomains: strs("b.example")}, types.RestrictionLimits{}, userMember("sub-rv-r"))
 	lateGroup := seedRestriction(t, e, "rv-late-group", types.RestrictionSpec{DeniedDomains: strs("c.example")}, types.RestrictionLimits{},
 		types.RestrictionMember{SubjectType: types.CapabilitySubjectGroup, Subject: "rv-eng"})
@@ -41,7 +41,7 @@ func TestRestrictionRevive(t *testing.T) {
 		for _, r := range rs {
 			out = append(out, r.ID)
 		}
-		return sortedIDs(out)
+		return sortedRestrictionIDs(out)
 	}
 	owner := treeCtx("sub-rv-r", []string{"rv-eng"}, "")
 	c, rerr := e.srv.reviveCeiling(owner, run, types.ActorHuman, "sub-rv-r")
@@ -74,7 +74,7 @@ func TestRestrictionRevive(t *testing.T) {
 		t.Fatalf("persist: %+v", rerr)
 	}
 	got, err := e.pg.GetRun(ctx, run.ID)
-	if err != nil || !slices.Equal(sortedIDs(got.RestrictionIDs), want(captured, late, lateGroup)) {
+	if err != nil || !slices.Equal(sortedRestrictionIDs(got.RestrictionIDs), want(captured, late, lateGroup)) {
 		t.Errorf("persisted ids %v %v, want the owner's revive set", got.RestrictionIDs, err)
 	}
 	// A restriction deleted since is gone from the revive.
@@ -241,6 +241,6 @@ func TestBreakGlassRestriction(t *testing.T) {
 	}
 }
 
-func sortedIDs(ids []uuid.UUID) []uuid.UUID {
+func sortedRestrictionIDs(ids []uuid.UUID) []uuid.UUID {
 	return slices.SortedFunc(slices.Values(ids), func(a, b uuid.UUID) int { return strings.Compare(a.String(), b.String()) })
 }
