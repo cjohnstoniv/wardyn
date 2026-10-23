@@ -6,13 +6,16 @@ package api
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/recording"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -35,9 +38,12 @@ type runDesktopRecording struct {
 	paused *desktopPause
 }
 
+// desktopPause is one gap: it opens with the first reason to pause the run and closes when the last
+// one ends, so a take over and a sign-in that overlap keep one gap, named by the reason that opened it.
 type desktopPause struct {
-	at     time.Time
-	reason string
+	at      time.Time
+	reason  string
+	holders []string // every reason still holding the gap open, the opener's included
 }
 
 // recordDesktopConn records conn's sandbox side when the run records screen_actions, the app is the
@@ -54,6 +60,7 @@ func (s *Server) recordDesktopConn(run types.AgentRun, sess uiSession, conn net.
 	return recording.ReadSideConn(conn, rec, func() {
 		s.desktopRecs.remove(run.ID, rec)
 		s.saveDesktopRecording(s.cfg.BaseCtx, run, sess, session, rec)
+		s.forgetEndedDesktopPause(s.cfg.BaseCtx, run.ID)
 	})
 }
 
@@ -118,10 +125,31 @@ func (d *desktopRecordings) remove(run uuid.UUID, rec *recording.RFBRecorder) {
 	}
 }
 
+// forgetEndedDesktopPause drops a paused run's entry once its last connection closed and the run has
+// ended (or is gone), so a pause nothing will resume does not stay for the life of the process. A
+// live run keeps it: a connection that opens during the pause must start paused.
+func (s *Server) forgetEndedDesktopPause(ctx context.Context, runID uuid.UUID) {
+	if s.cfg.Store == nil {
+		return
+	}
+	cur, err := s.cfg.Store.GetRun(ctx, runID)
+	if !errors.Is(err, store.ErrNotFound) && (err != nil || !cur.State.IsTerminal()) {
+		return
+	}
+	d := &s.desktopRecs
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if r := d.byRun[runID]; r != nil && len(r.recs) == 0 {
+		delete(d.byRun, runID)
+	}
+}
+
 // PauseDesktopRecording stops keeping the run's screen frames (C11): the action log, the clipboard
 // rules and the run itself carry on. The pause is written to the tamper-evident audit log as
-// desktop.recording.pause, by Wardyn, never by the desktop. It reports false when already paused.
-// Its callers are the "Needs you" takeover and a desktop sign-in, on a run whose screen is recorded.
+// desktop.recording.pause, by Wardyn, never by the desktop. A pause while one is open joins it: no
+// new gap or row, and the gap stays open until every reason holding it has resumed. It reports
+// whether it opened the gap. Its callers are the "Needs you" takeover and a desktop sign-in, on a run
+// whose screen is recorded.
 func (s *Server) PauseDesktopRecording(ctx context.Context, run types.AgentRun, reason string) bool {
 	d := &s.desktopRecs
 	d.mu.Lock()
@@ -134,11 +162,14 @@ func (s *Server) PauseDesktopRecording(ctx context.Context, run types.AgentRun, 
 		d.byRun[run.ID] = r
 	}
 	if r.paused != nil {
+		if !slices.Contains(r.paused.holders, reason) {
+			r.paused.holders = append(r.paused.holders, reason)
+		}
 		d.mu.Unlock()
 		return false
 	}
 	at := s.cfg.Now().UTC()
-	r.paused = &desktopPause{at: at, reason: reason}
+	r.paused = &desktopPause{at: at, reason: reason, holders: []string{reason}}
 	for rec := range r.recs {
 		rec.Pause(reason)
 	}
@@ -148,14 +179,20 @@ func (s *Server) PauseDesktopRecording(ctx context.Context, run types.AgentRun, 
 	return true
 }
 
-// ResumeDesktopRecording keeps frames again and writes desktop.recording.resume with the whole gap:
-// its start, end, length and reason. It reports false when the run was not paused for reason, so
-// one pause's end never ends another's.
+// ResumeDesktopRecording ends reason's hold on the gap. When it was the last one, frames are kept
+// again and desktop.recording.resume is written with the whole gap: its start, end, length and the
+// reason that opened it. It reports whether the recording resumed, so one pause's end never ends
+// another's.
 func (s *Server) ResumeDesktopRecording(ctx context.Context, run types.AgentRun, reason string) bool {
 	d := &s.desktopRecs
 	d.mu.Lock()
 	r := d.byRun[run.ID]
-	if r == nil || r.paused == nil || r.paused.reason != reason {
+	if r == nil || r.paused == nil || !slices.Contains(r.paused.holders, reason) {
+		d.mu.Unlock()
+		return false
+	}
+	r.paused.holders = slices.DeleteFunc(r.paused.holders, func(h string) bool { return h == reason })
+	if len(r.paused.holders) > 0 {
 		d.mu.Unlock()
 		return false
 	}

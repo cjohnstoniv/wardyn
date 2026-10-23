@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"net"
 	"net/http"
 	"strings"
 	"testing"
@@ -136,5 +137,100 @@ func TestDesktopRecording_ResumeEndsOnlyItsOwnPause(t *testing.T) {
 	}
 	if !srv.ResumeDesktopRecording(context.Background(), run, desktopPauseTakeover) {
 		t.Fatal("the hand back did not resume its own pause")
+	}
+}
+
+// TestDesktopRecording_OverlappingPausesHoldOneGap: a take over and a sign-in that overlap, in either
+// order, hold one gap until the last of them ends. Nothing shown while either is open is recorded,
+// and one pause row and one resume row are written, both naming the reason that opened the gap.
+func TestDesktopRecording_OverlappingPausesHoldOneGap(t *testing.T) {
+	for name, order := range map[string][2]string{
+		"take over then sign-in": {desktopPauseTakeover, desktopPauseSignin},
+		"sign-in then take over": {desktopPauseSignin, desktopPauseTakeover},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			audit := &recRecorder{}
+			srv := New(Config{Audit: audit, AdminToken: adminToken, RecordingStore: fsRecordingStore(t)})
+			run := types.AgentRun{ID: uuid.New(), RecordingLevel: types.RecordingScreenActions}
+			rec := liveDesktopRecorder(srv, run.ID)
+			first, second := order[0], order[1]
+			if !srv.PauseDesktopRecording(ctx, run, first) {
+				t.Fatal("the first pause did not open the gap")
+			}
+			_, _ = rec.Write(desktopFrame(desktopUpdate("typedsecret!")))
+			if srv.PauseDesktopRecording(ctx, run, second) {
+				t.Error("a second pause opened another gap")
+			}
+			if srv.ResumeDesktopRecording(ctx, run, first) {
+				t.Error("the recording resumed while " + second + " still holds it")
+			}
+			_, _ = rec.Write(desktopFrame(desktopUpdate("typedagain!!")))
+			if !srv.ResumeDesktopRecording(ctx, run, second) {
+				t.Fatal("the last reason's end did not resume the recording")
+			}
+			_, _ = rec.Write(desktopFrame(desktopUpdate("afterresume!")))
+
+			screen, gaps := recordedScreen(t, rec)
+			if bytes.Contains(screen, []byte("typedsecret!")) || bytes.Contains(screen, []byte("typedagain!!")) {
+				t.Error("the screen while a person drove is in the recording")
+			}
+			if !bytes.Contains(screen, []byte("afterresume!")) {
+				t.Error("the screen after the last hand back is not in the recording")
+			}
+			if len(gaps) != 1 || gaps[0].Reason != first || gaps[0].EndMS == 0 {
+				t.Errorf("gaps = %+v, want one closed gap named %q", gaps, first)
+			}
+			rows := map[string][]string{}
+			for _, ev := range audit.snapshot() {
+				if strings.HasPrefix(ev.Action, "desktop.recording.") {
+					reason, _ := auditData(t, ev)["reason"].(string)
+					rows[ev.Action] = append(rows[ev.Action], reason)
+				}
+			}
+			if len(rows["desktop.recording.pause"]) != 1 || len(rows["desktop.recording.resume"]) != 1 ||
+				rows["desktop.recording.pause"][0] != first || rows["desktop.recording.resume"][0] != first {
+				t.Errorf("desktop.recording rows = %v, want one pause and one resume naming %q", rows, first)
+			}
+		})
+	}
+}
+
+// TestDesktopRecording_AnEndedRunsPauseIsForgotten: when a paused run's last desktop connection closes,
+// its pause is kept while the run lives (a new connection starts paused) and dropped once it ended.
+func TestDesktopRecording_AnEndedRunsPauseIsForgotten(t *testing.T) {
+	ast := newAuthzStore()
+	cfg := baseTestConfig(newHarness(t), ast)
+	cfg.RecordingStore = fsRecordingStore(t)
+	srv := New(cfg)
+	run := types.AgentRun{ID: uuid.New(), State: types.RunRunning, RecordingLevel: types.RecordingScreenActions}
+	ast.mu.Lock()
+	ast.runs[run.ID] = run
+	ast.mu.Unlock()
+	held := func() bool {
+		srv.desktopRecs.mu.Lock()
+		defer srv.desktopRecs.mu.Unlock()
+		_, ok := srv.desktopRecs.byRun[run.ID]
+		return ok
+	}
+	closeOne := func() {
+		sandbox, relay := net.Pipe()
+		conn := srv.recordDesktopConn(run, uiSession{Run: run.ID, App: desktopApp, Principal: "alice"}, relay)
+		_ = sandbox.Close()
+		_ = conn.Close()
+	}
+	srv.PauseDesktopRecording(context.Background(), run, desktopPauseTakeover)
+	closeOne()
+	if !held() {
+		t.Fatal("a live run's pause was dropped when its connection closed")
+	}
+	ast.mu.Lock()
+	ended := ast.runs[run.ID]
+	ended.State = types.RunCompleted
+	ast.runs[run.ID] = ended
+	ast.mu.Unlock()
+	closeOne()
+	if held() {
+		t.Fatal("an ended run's pause is still held")
 	}
 }
