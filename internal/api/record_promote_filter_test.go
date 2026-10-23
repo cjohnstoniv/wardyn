@@ -6,6 +6,7 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -31,6 +32,9 @@ func TestPromoteEntryReject(t *testing.T) {
 		{"confined flag", "build", RecordTaskResult{Status: recordStatusRecorded, Confined: true}, true},
 		{"verify key, flag unset", recordVerifyKeyPrefix + "build", RecordTaskResult{Status: recordStatusRecorded}, true},
 		{"truncated", "build", truncated, true},
+		// A result stored before the note was capitalised (#2662) is still refused.
+		{"truncated, stored lower-case", "build", RecordTaskResult{Status: recordStatusRecorded,
+			Caveats: []string{strings.ToLower(captureAuditTruncatedNote[:1]) + captureAuditTruncatedNote[1:]}}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			why := promoteEntryReject(tc.key, tc.res)

@@ -165,7 +165,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.cfg.LocalMode && !isLoopbackHost(r.Host) {
-		writeErrorReason(w, http.StatusForbidden, reasonLocalModeHostNotLoopback, "local mode: request Host is not loopback (DNS-rebinding guard)")
+		writeErrorReason(w, http.StatusForbidden, reasonLocalModeHostNotLoopback, "Local mode: request Host is not loopback (DNS-rebinding guard)")
 		return
 	}
 

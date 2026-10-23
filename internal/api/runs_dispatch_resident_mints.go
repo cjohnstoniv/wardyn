@@ -30,7 +30,7 @@ import (
 // residentPATBrokered is the refusal of a runner_resident git_pat while the PAT
 // broker is on: the broker would mint that PAT proxy-side, so it is never also
 // resident. Create, dispatch and revive refuse with it.
-const residentPATBrokered = "A git_pat is brokered proxy-side while WARDYN_GIT_PAT_BROKER is on"
+const residentPATBrokered = "a git_pat is brokered proxy-side while WARDYN_GIT_PAT_BROKER is on"
 
 // authorResidentMints authors the run's runner_resident ssh_key and git_pat
 // grants onto spec.ProxyConfig.ResidentMints and adds their values to resident,
@@ -168,7 +168,7 @@ func (s *Server) skipResidentMint(ctx context.Context, run types.AgentRun, row t
 
 // residentRunnerTooOld is the refusal of a resident run whose runner does not
 // advertise Caps.Resident.
-const residentRunnerTooOld = "The runner does not hold runner_resident credentials; upgrade wardyn-runnerd to 0.9.3 or later"
+const residentRunnerTooOld = "the runner does not hold runner_resident credentials; upgrade wardyn-runnerd to 0.9.3 or later"
 
 // beginValueResolution opens the run's masking manifest, then refuses a
 // resident run whose runner cannot hold its values: both before dispatch

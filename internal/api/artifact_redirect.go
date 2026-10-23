@@ -440,7 +440,7 @@ func secondPortTokenRedirects(sc types.SiteConfig, have map[string]bool) map[int
 
 // redirectSecondPortRefusal is the denied row's detail for the redirect secondPortTokenRedirects refuses. It holds
 // whether or not the first redirect's token resolved or was vetoed. Arguments: the first redirect's port, this one's.
-const redirectSecondPortRefusal = "refused: another redirect for this host on port %d carries a token, and a token is injected per host, " +
+const redirectSecondPortRefusal = "Refused: another redirect for this host on port %d carries a token, and a token is injected per host, " +
 	"never per host:port, so the redirect on port %d is not applied; give each mirror its own host"
 
 // redirectToken is one redirect's resolved credential presentation: which

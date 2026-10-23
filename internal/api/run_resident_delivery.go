@@ -90,7 +90,7 @@ func residentClass(kind types.GrantKind) string {
 // shared one is retired), runner_resident delivers an operator's value, and a
 // connection's runner_resident opt-in admits only its minted PAT, a class whose
 // resident delivery is not built.
-const residentADOGitPATRefused = "An Azure DevOps git token is never delivered runner_resident"
+const residentADOGitPATRefused = "an Azure DevOps git token is never delivered runner_resident"
 
 // residentADOGitPAT reports whether g is a git_pat for an Azure DevOps host
 // under sc. Create refuses it resident and delivery checks it again against

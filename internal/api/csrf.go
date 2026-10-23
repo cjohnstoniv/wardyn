@@ -38,7 +38,7 @@ import (
 
 const (
 	// csrfRefusedBody is the one sentence both guards answer with. The
-	// LocalMode arm in http.go prefixes "local mode: " and otherwise says
+	// LocalMode arm in http.go prefixes "Local mode: " and otherwise says
 	// exactly this — they are one refusal, phrased once.
 	csrfRefusedBody = "Cross-origin state-changing request rejected (CSRF guard)"
 )

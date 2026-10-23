@@ -350,7 +350,7 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 			// with 403. Only LocalMode is gated here; SSO/token modes already require a
 			// credential and are unaffected.
 			if !isLoopbackHost(r.Host) {
-				writeErrorReason(w, http.StatusForbidden, reasonLocalModeHostNotLoopback, "local mode: request Host is not loopback (DNS-rebinding guard)")
+				writeErrorReason(w, http.StatusForbidden, reasonLocalModeHostNotLoopback, "Local mode: request Host is not loopback (DNS-rebinding guard)")
 				return
 			}
 			// Blind-CSRF guard: a malicious page can fire a no-cors
@@ -379,7 +379,7 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 				origin := strings.TrimSpace(r.Header.Get("Origin"))
 				if isForeignSiteFetch(r) || (origin != "" && !s.originIsRequestHost(r, origin)) {
 					s.auditAuthFailedAs(r, csrfActor, csrfAuditReason)
-					writeErrorReason(w, http.StatusForbidden, csrfAuditReason, "local mode: "+csrfRefusedBody)
+					writeErrorReason(w, http.StatusForbidden, csrfAuditReason, "Local mode: "+csrfRefusedBody)
 					return
 				}
 			}

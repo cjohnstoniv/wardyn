@@ -50,16 +50,19 @@ var sentenceConstFragments = map[string]string{
 
 	"laneAppReason": whyLaneReason, "laneSSHReason": whyLaneReason, "adoSSHRetired": whyLaneReason, "adoPATRetired": whyLaneReason,
 
-	"subjectNameReservedMsg":        "always written after the field's name (\"principal: \", \"sub: \", \"owner: \"), " + whyAfterPrefix,
-	"RetiredModelCredentialRefusal": "always written after \"<name> is a retired model credential: \" or \"; \" (secrets.go, policy.go), " + whyAfterPrefix,
-	"route":                         "local const in egress_baseline.go, written after \"...is a governance write: \", " + whyAfterPrefix,
-	"pg":                            "local const in setup_recording.go, written after \"Point -recording-dir ... or \", " + whyAfterPrefix,
-	"githubCLIBlockedOrgProblem":    "the predicate of \"components[%d]: this component <problem> Ask your admin.\" (components_run.go), " + whyAfterPrefix,
-	"kubectlCLISecondRowRefusal":    "the problem half of componentRefused's \"components[%d]: <field path><problem>\", " + whyAfterPrefix,
-	"azureCLISecondRowRefusal":      "the problem half of componentRefused's \"components[%d]: <field path><problem>\", " + whyAfterPrefix,
-	"krunManagedFilesUnverified":    "written after \"cannot vouch for them: \" in the 201 warning (runs_dispatch_agentpolicy.go), " + whyAfterPrefix,
-	"boundaryLocker":                "the locker's name inside \"<knob> is locked by <locker>; ask <contact>\", " + whyAfterPrefix,
-	"componentAutonomySource":       "the phrase an autonomy refusal names (\"... because <phrase> ...\"), " + whyAfterPrefix,
+	"subjectNameReservedMsg":                         "always written after the field's name (\"principal: \", \"sub: \", \"owner: \"), " + whyAfterPrefix,
+	"RetiredModelCredentialRefusal":                  "always written after \"<name> is a retired model credential: \" or \"; \" (secrets.go, policy.go), " + whyAfterPrefix,
+	"egress_baseline.go:inlineBaselineRefusal.route": "local const in egress_baseline.go, written after \"...is a governance write: \", " + whyAfterPrefix,
+	"setup_recording.go:recordingCheck.pg":           "local const in setup_recording.go, written after \"Point -recording-dir ... or \", " + whyAfterPrefix,
+	"githubCLIBlockedOrgProblem":                     "the predicate of \"components[%d]: this component <problem> Ask your admin.\" (components_run.go), " + whyAfterPrefix,
+	"kubectlCLISecondRowRefusal":                     "the problem half of componentRefused's \"components[%d]: <field path><problem>\", " + whyAfterPrefix,
+	"azureCLISecondRowRefusal":                       "the problem half of componentRefused's \"components[%d]: <field path><problem>\", " + whyAfterPrefix,
+	"krunManagedFilesUnverified":                     "written after \"cannot vouch for them: \" in the 201 warning (runs_dispatch_agentpolicy.go), " + whyAfterPrefix,
+	"residentPATBrokered":                            "the detail of a placement refusal, written after \"This run was not launched on your own runner: \" and next to its lower-case siblings (run_resident_delivery.go, runs_dispatch_resident_mints.go), " + whyAfterPrefix,
+	"residentADOGitPATRefused":                       "same as residentPATBrokered",
+	"residentRunnerTooOld":                           "same as residentPATBrokered",
+	"boundaryLocker":                                 "the locker's name inside \"<knob> is locked by <locker>; ask <contact>\", " + whyAfterPrefix,
+	"componentAutonomySource":                        "the phrase an autonomy refusal names (\"... because <phrase> ...\"), " + whyAfterPrefix,
 }
 
 // sentenceConstNotSentences are named string consts that #585 never covered
@@ -74,7 +77,7 @@ var sentenceConstNotSentences = map[string]string{
 
 	"desktopListScript": whyScript, "desktopUploadScript": whyScript, "desktopDownloadScript": whyScript,
 	"agentStopScript": whyScript, "agentVerifyScript": whyScript, "signInReadScript": whyScript,
-	"redirectProbeScript": whyScript, "csp": "the Content-Security-Policy header template, not a sentence",
+	"redirectProbeScript": whyScript, "security_headers.go:securityHeaders.csp": "the Content-Security-Policy header template, not a sentence",
 
 	"attachLeaseLostReason": "a WebSocket close reason, " + whyReasonToken,
 	"maskFencedReason":      "the session.detach audit reason, " + whyReasonToken,
@@ -91,59 +94,102 @@ var sentenceConstNotSentences = map[string]string{
 	"sftpServerMissing":      "written to the SSH session's stderr and logged, led by the protocol name sftp",
 }
 
-// wirePrefixRe matches a const whose text opens with a field path or other
-// wire identifier and a colon ("model_providers[%d].id: ...", "agents: ...",
-// "wardynd: ..."): the identifier is case-significant, so the sentence after
-// it follows the repo's validation-message style, not the capital rule.
-var wirePrefixRe = regexp.MustCompile(`^[a-z][a-z0-9_]*(\[[^\]]*\]|\.[a-z0-9_%]+)*: `)
+// wireFieldPathRe matches a const whose text opens with a field path and a
+// colon ("model_providers[%d].id: ...", "git[%d].lanes: ...",
+// "storage.user_drive.disabled: ..."): the path is case-significant, so the
+// sentence after it follows the repo's validation-message style, not the
+// capital rule. It needs at least one [..] or .name segment: a bare word and a
+// colon is prose ("error: the run cannot start") and is NOT exempt.
+var wireFieldPathRe = regexp.MustCompile(`^[a-z][a-z0-9_]*(\[[^\]]*\]|\.[a-z0-9_%]+)+: `)
+
+// wireBareLeads are the bare field or package names that may open a const as
+// "<name>: ..." — every one is a request field, a config block or a log
+// prefix, listed so a new prose lead like "error: ..." is not waved through.
+var wireBareLeads = []string{
+	"agent", "agents", "api", "components", "deny_placements", "drive", "egress", "email", "groups_snapshot_stale",
+	"lanes", "model_provider", "model_providers", "require_inspectable_llm", "sponsor", "wardynd",
+}
+
+var wireBareLeadRe = regexp.MustCompile(`^(` + strings.Join(wireBareLeads, "|") + `): `)
 
 // wireIdentLeadRe matches a const whose first word is a wire identifier with
 // an underscore or dot in it ("max_holds must be...", "delivery.mode %q ...",
 // "github.com repositories ..."): capitalising it would misspell the name.
 var wireIdentLeadRe = regexp.MustCompile(`^[a-z][a-z0-9]*(_[a-z0-9]+|\.[a-z0-9]+)+[ ,]`)
 
+// allowKey is the key a const has in the allowlists: its bare name for a
+// package-level const, "file:func.name" for one local to a function, so a
+// same-named const anywhere else is not exempt.
+func allowKey(file, fn, name string) string {
+	if fn == "" {
+		return name
+	}
+	return file + ":" + fn + "." + name
+}
+
 // lowercaseSentenceConsts is the census behind
 // TestRefusalSentenceConstsStartCapitalized: it walks every top-level and
 // function-local string const of files and returns one message per
 // sentence-shaped const that starts with a lower-case letter and is neither
 // listed in the two allowlists above nor opened by a wire identifier. It also
-// records, in seenFragment and seenNotSentence, which allowlist names it
-// found, so a stale entry fails the test.
+// records, in seenFragment and seenNotSentence, which allowlisted consts it
+// still finds lower-case, so a stale entry (deleted, or now capitalised)
+// fails the test.
 func lowercaseSentenceConsts(files []apiSource, seenFragment, seenNotSentence map[string]bool) []string {
 	var bad []string
+	check := func(file, fn string, vs *ast.ValueSpec) {
+		if len(vs.Names) != 1 || len(vs.Values) != 1 {
+			return
+		}
+		lit := leadingStringLiteral(vs.Values[0])
+		if !looksLikeSentence(lit) {
+			return
+		}
+		if r := []rune(lit)[0]; r < 'a' || r > 'z' {
+			return
+		}
+		name := vs.Names[0].Name
+		key := allowKey(file, fn, name)
+		if _, ok := sentenceConstFragments[key]; ok {
+			seenFragment[key] = true
+			return
+		}
+		if _, ok := sentenceConstNotSentences[key]; ok {
+			seenNotSentence[key] = true
+			return
+		}
+		if wireFieldPathRe.MatchString(lit) || wireBareLeadRe.MatchString(lit) || wireIdentLeadRe.MatchString(lit) {
+			return
+		}
+		bad = append(bad, file+": "+name+" = "+strconv.Quote(lit)+" — a user-visible sentence must start with a capital letter")
+	}
 	for _, f := range files {
-		ast.Inspect(f.file, func(n ast.Node) bool {
-			gd, ok := n.(*ast.GenDecl)
-			if !ok || gd.Tok != token.CONST {
+		for _, d := range f.file.Decls {
+			fn := ""
+			if gd, ok := d.(*ast.GenDecl); ok && gd.Tok == token.CONST {
+				for _, spec := range gd.Specs {
+					if vs, ok := spec.(*ast.ValueSpec); ok {
+						check(f.name, "", vs)
+					}
+				}
+				continue
+			}
+			if fd, ok := d.(*ast.FuncDecl); ok {
+				fn = fd.Name.Name
+			} else {
+				fn = "(package var)"
+			}
+			ast.Inspect(d, func(n ast.Node) bool {
+				if gd, ok := n.(*ast.GenDecl); ok && gd.Tok == token.CONST {
+					for _, spec := range gd.Specs {
+						if vs, ok := spec.(*ast.ValueSpec); ok {
+							check(f.name, fn, vs)
+						}
+					}
+				}
 				return true
-			}
-			for _, spec := range gd.Specs {
-				vs, ok := spec.(*ast.ValueSpec)
-				if !ok || len(vs.Names) != 1 || len(vs.Values) != 1 {
-					continue
-				}
-				lit := leadingStringLiteral(vs.Values[0])
-				if !looksLikeSentence(lit) {
-					continue
-				}
-				name := vs.Names[0].Name
-				if _, isFragment := sentenceConstFragments[name]; isFragment {
-					seenFragment[name] = true
-					continue
-				}
-				if _, notSentence := sentenceConstNotSentences[name]; notSentence {
-					seenNotSentence[name] = true
-					continue
-				}
-				if wirePrefixRe.MatchString(lit) || wireIdentLeadRe.MatchString(lit) {
-					continue
-				}
-				if r := []rune(lit)[0]; r >= 'a' && r <= 'z' {
-					bad = append(bad, f.name+": "+name+" = "+strconv.Quote(lit)+" — a user-visible sentence must start with a capital letter")
-				}
-			}
-			return true
-		})
+			})
+		}
 	}
 	return bad
 }
@@ -167,23 +213,37 @@ func TestRefusalSentenceConstsStartCapitalized(t *testing.T) {
 	for _, msg := range lowercaseSentenceConsts(parseAPISources(t), seenFragment, seenNotSentence) {
 		t.Error(msg)
 	}
+	for _, msg := range staleAllowlistEntries(seenFragment, seenNotSentence) {
+		t.Error(msg)
+	}
+}
+
+// staleAllowlistEntries names every allowlist entry whose const was not seen
+// lower-case: deleted, renamed, or capitalised since (the fix the entry waited
+// for), so the lists can only shrink.
+func staleAllowlistEntries(seenFragment, seenNotSentence map[string]bool) []string {
+	var stale []string
 	for name := range sentenceConstFragments {
 		if !seenFragment[name] {
-			t.Errorf("sentenceConstFragments lists %s, which no longer occurs (sentence-shaped) in internal/api — delete the entry", name)
+			stale = append(stale, "sentenceConstFragments lists "+name+", which no longer occurs as a lower-case sentence-shaped const in internal/api — delete the entry")
 		}
 	}
 	for name := range sentenceConstNotSentences {
 		if !seenNotSentence[name] {
-			t.Errorf("sentenceConstNotSentences lists %s, which no longer occurs (sentence-shaped) in internal/api — delete the entry", name)
+			stale = append(stale, "sentenceConstNotSentences lists "+name+", which no longer occurs as a lower-case sentence-shaped const in internal/api — delete the entry")
 		}
 	}
+	return stale
 }
 
 // TestRefusalSentenceConstsStartCapitalized_PlantedViolation is the guard's
-// twin: it hands the scanner a file that is on no list — one lower-case
-// sentence const, top-level, one inside a function, plus the shapes the guard
-// must let through — and proves the scanner reports exactly the two lower-case
-// sentences, so a green guard is not green because it stopped looking.
+// twin: it hands the scanner a file that is on no list — lower-case sentence
+// consts at package level, inside a function, behind a bare "error:" lead, and
+// under the names route and csp in a function the allowlist does not name,
+// plus the shapes the guard must let through — and proves the scanner reports
+// exactly the lower-case sentences, so a green guard is not green because it
+// stopped looking. It also proves an allowlist entry whose const has been
+// capitalised is reported stale.
 func TestRefusalSentenceConstsStartCapitalized_PlantedViolation(t *testing.T) {
 	const planted = `package api
 
@@ -192,7 +252,9 @@ const (
 	plantedCapital   = "This one starts with a capital letter, so it is fine"
 	plantedMachine   = "signin_busy"
 	plantedFieldPath = "git[%d].lanes: a path that opens a validation message"
+	plantedBareLead  = "agents: a listed field name that opens a validation message"
 	plantedIdentLead = "max_holds must be between 0 and %d, got %d"
+	plantedProse     = "error: the run cannot start right now"
 	mpSubNoStore     = "the %s state clause inside mpRunRefusal, same sentence"
 )
 
@@ -200,15 +262,31 @@ func plantedLocal() string {
 	const inFunction = "a lower-case sentence that lives inside a function body"
 	return inFunction
 }
+
+// route and csp are allowlisted only in the functions the list names; the
+// same names in any other function or file are ordinary lower-case sentences.
+func plantedRoute() string {
+	const route = "the run cannot be started right now, try again later"
+	const csp = "the run cannot be started with this policy, change it first"
+	return route + csp
+}
 `
-	f, err := parser.ParseFile(token.NewFileSet(), "planted.go", planted, 0)
-	if err != nil {
-		t.Fatal(err)
+	parse := func(name, src string) []apiSource {
+		f, err := parser.ParseFile(token.NewFileSet(), name, src, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return []apiSource{{name, f}}
 	}
-	got := lowercaseSentenceConsts([]apiSource{{"planted.go", f}}, map[string]bool{}, map[string]bool{})
+	seenFragment, seenNotSentence := map[string]bool{}, map[string]bool{}
+	got := lowercaseSentenceConsts(parse("planted.go", planted), seenFragment, seenNotSentence)
+	const tail = " — a user-visible sentence must start with a capital letter"
 	want := []string{
-		`planted.go: plantedRefusal = "this thing cannot be done right now, try again later" — a user-visible sentence must start with a capital letter`,
-		`planted.go: inFunction = "a lower-case sentence that lives inside a function body" — a user-visible sentence must start with a capital letter`,
+		`planted.go: plantedRefusal = "this thing cannot be done right now, try again later"` + tail,
+		`planted.go: plantedProse = "error: the run cannot start right now"` + tail,
+		`planted.go: inFunction = "a lower-case sentence that lives inside a function body"` + tail,
+		`planted.go: route = "the run cannot be started right now, try again later"` + tail,
+		`planted.go: csp = "the run cannot be started with this policy, change it first"` + tail,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("scanner reported %d findings %q, want %d %q", len(got), got, len(want), want)
@@ -217,6 +295,21 @@ func plantedLocal() string {
 		if got[i] != want[i] {
 			t.Errorf("finding %d = %q, want %q", i, got[i], want[i])
 		}
+	}
+	if !seenFragment["mpSubNoStore"] {
+		t.Error("an allowlisted lower-case const was not marked seen")
+	}
+
+	// An allowlisted const that has since been capitalised is not "seen", so
+	// its entry is reported stale instead of lingering.
+	seenFragment = map[string]bool{}
+	lowercaseSentenceConsts(parse("fixed.go", `package api
+
+const mpSubNoStore = "The %s state clause inside mpRunRefusal, same sentence"
+`), seenFragment, map[string]bool{})
+	stale := strings.Join(staleAllowlistEntries(seenFragment, map[string]bool{}), "\n")
+	if !strings.Contains(stale, "sentenceConstFragments lists mpSubNoStore,") {
+		t.Errorf("a capitalised allowlisted const was not reported stale:\n%s", stale)
 	}
 }
 
