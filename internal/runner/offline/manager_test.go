@@ -107,7 +107,11 @@ func managerFixture(t *testing.T) (*Manager, *localSub, *time.Duration, time.Tim
 }
 func createLocal(t *testing.T, m *Manager, org time.Time) uuid.UUID {
 	t.Helper()
-	id := uuid.New()
+	return createLocalAs(t, m, org, uuid.New())
+}
+
+func createLocalAs(t *testing.T, m *Manager, org time.Time, id uuid.UUID) uuid.UUID {
+	t.Helper()
 	ctx := context.Background()
 	if err := m.Lease(ctx, runnerwire.Lease{RunID: id, TokenRenewedAt: org, EndsAt: org.Add(3 * time.Hour)}); err != nil {
 		t.Fatal(err)
