@@ -35,9 +35,14 @@ package conformance_test
 // rather than actually proving anything.
 
 import (
+	"bufio"
 	"context"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -140,6 +145,164 @@ func TestConformanceK8s(t *testing.T) {
 	t.Run("AgentCannotReachAnythingButTheProxy", func(t *testing.T) {
 		testAgentCannotReachAnythingButTheProxy(t, r, agentImage)
 	})
+
+	t.Run("ClosedOffAfterTeardown", func(t *testing.T) {
+		testClosedOffAfterTeardown(t, r, cs, ns, agentImage)
+	})
+}
+
+// heldScript holds a connection to the proxy and prints held=1 once it has stayed up for 2 s.
+const heldScript = `sleep 3600 | nc wardyn-proxy 3128 &
+pid=$!
+sleep 2
+kill -0 "$pid" && echo held=1
+wait`
+
+// closedOffBound is how long a held connection may outlive a teardown that has returned. A driver that
+// waits for the pods to be gone has the kubelet's word that every container stopped, so this is only the
+// beat the exec stream takes to notice. A driver that returns on a zero-grace delete leaves the
+// containers running for the kubelet's own minimum grace (2 s) after the pod object is gone.
+const closedOffBound = 500 * time.Millisecond
+
+// leakyTeardown is the negative control: a driver whose Stop and Kill delete the run's pods with zero grace
+// and return at once, without waiting for them to be gone. closedOff must fail it, or it proves nothing.
+type leakyTeardown struct {
+	runner.Runner
+	cs kubernetes.Interface
+	ns string
+}
+
+func (l leakyTeardown) KillSandbox(ctx context.Context, ref string) error { return l.drop(ctx, ref) }
+func (l leakyTeardown) StopSandbox(ctx context.Context, ref string) error { return l.drop(ctx, ref) }
+
+func (l leakyTeardown) drop(ctx context.Context, ref string) error {
+	pod, err := l.cs.CoreV1().Pods(l.ns).Get(ctx, ref, metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
+	return l.cs.CoreV1().Pods(l.ns).DeleteCollection(ctx, metav1.DeleteOptions{GracePeriodSeconds: ptr(int64(0))},
+		metav1.ListOptions{LabelSelector: "wardyn.run-id=" + pod.Labels["wardyn.run-id"]})
+}
+
+// testClosedOffAfterTeardown is the case a teardown that returns before the kubelet has stopped the pod's
+// containers would pass every other case: once StopSandbox or KillSandbox returns, the run's pods are gone
+// from the API and a connection the agent held to its proxy is closed. A pod IP probe from another pod
+// cannot stand in for the second half here: the agent's NetworkPolicy denies all ingress, so a live pod and
+// a dead one both stay silent to it.
+//
+// Non-vacuous by construction: the same check, run against leakyTeardown, must report an open pod or
+// connection.
+func testClosedOffAfterTeardown(t *testing.T, r runner.Runner, cs kubernetes.Interface, ns, agentImage string) {
+	t.Helper()
+	for _, tc := range []struct {
+		name     string
+		teardown func(runner.Runner) func(context.Context, string) error
+	}{
+		{"Kill", func(r runner.Runner) func(context.Context, string) error { return r.KillSandbox }},
+		{"Stop", func(r runner.Runner) func(context.Context, string) error { return r.StopSandbox }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := closedOffAfter(t, r, cs, ns, agentImage, tc.teardown(r)); err != nil {
+				t.Errorf("%s returned but the run is not closed off: %v", tc.name, err)
+			}
+		})
+	}
+	t.Run("ACheckThatPassesADriverWhichReturnsEarlyProvesNothing", func(t *testing.T) {
+		leaky := leakyTeardown{r, cs, ns}
+		if err := closedOffAfter(t, r, cs, ns, agentImage, leaky.KillSandbox); err == nil {
+			t.Error("closedOffAfter passed a driver that deletes with zero grace and returns without waiting for the pods to go")
+		} else {
+			t.Logf("the early-returning driver is caught, as it must be: %v", err)
+		}
+	})
+}
+
+// closedOffAfter creates a sandbox, holds a connection from its agent to its proxy, runs teardown, and on
+// return reports every way the run is still open: pods still listed for it, or the held connection still
+// up after closedOffBound. It cleans up with the real runner. An environment problem (the connection
+// never came up) fails t outright: that is no verdict either way.
+func closedOffAfter(t *testing.T, r runner.Runner, cs kubernetes.Interface, ns, agentImage string, teardown func(context.Context, string) error) error {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	caps, err := r.Capabilities(ctx)
+	if err != nil {
+		t.Fatalf("Capabilities: %v", err)
+	}
+	if len(caps.ConfinementClasses) == 0 {
+		t.Skip("no ConfinementClasses declared; cannot create a sandbox")
+	}
+	spec := runner.SandboxSpec{
+		RunID:            uuid.New(),
+		Image:            agentImage,
+		ConfinementClass: caps.ConfinementClasses[len(caps.ConfinementClasses)-1],
+		Labels:           map[string]string{"wardyn.conformance": "true"},
+		ProxyConfig:      conformance.LoadableProxyConfig(),
+		Resources:        runner.Resources{CPUMillis: 250, MemoryMiB: 128},
+	}
+	sb, err := r.CreateSandbox(ctx, spec)
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	t.Cleanup(func() {
+		stopCtx, stop := context.WithTimeout(context.Background(), time.Minute)
+		defer stop()
+		_ = r.KillSandbox(stopCtx, sb.Ref)
+	})
+	runPods := metav1.ListOptions{LabelSelector: "wardyn.run-id=" + spec.RunID.String()}
+
+	sess, err := r.ExecStream(ctx, sb.Ref, runner.ExecSpec{Argv: []string{"sh", "-c", heldScript}})
+	if err != nil {
+		t.Fatalf("ExecStream (hold a connection to the proxy): %v", err)
+	}
+	go func() { _, _ = io.Copy(io.Discard, sess.Stderr) }()
+	if sess.Stdin != nil {
+		_ = sess.Stdin.Close()
+	}
+	held, closed := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(closed)
+		sc := bufio.NewScanner(sess.Stdout)
+		for sc.Scan() {
+			if strings.TrimSpace(sc.Text()) == "held=1" {
+				close(held)
+			}
+		}
+	}()
+	select {
+	case <-held:
+	case <-closed:
+		t.Fatal("the connection from the agent to its proxy did not stay up for 2 s — an environment problem, not a verdict: the check has nothing to find closed")
+	case <-time.After(time.Minute):
+		t.Fatal("the held-connection script never reported — an environment problem, not a verdict")
+	}
+	before, err := cs.CoreV1().Pods(ns).List(ctx, runPods)
+	if err != nil || len(before.Items) == 0 {
+		t.Fatalf("the run's pods before teardown (err %v, %d pods) — the positive control: with none listed, none listed afterwards proves nothing", err, len(before.Items))
+	}
+
+	if err := teardown(ctx, sb.Ref); err != nil {
+		t.Fatalf("teardown: %v", err)
+	}
+
+	var open []error
+	after, err := cs.CoreV1().Pods(ns).List(ctx, runPods)
+	if err != nil {
+		t.Fatalf("list the run's pods after teardown: %v", err)
+	}
+	if n := len(after.Items); n > 0 {
+		names := make([]string, n)
+		for i, p := range after.Items {
+			names[i] = fmt.Sprintf("%s (%s)", p.Name, p.Status.Phase)
+		}
+		open = append(open, fmt.Errorf("%d pod(s) still listed: %s", n, strings.Join(names, ", ")))
+	}
+	select {
+	case <-closed:
+	case <-time.After(closedOffBound):
+		open = append(open, fmt.Errorf("the connection the agent held to its proxy was still up %s after teardown returned", closedOffBound))
+	}
+	return errors.Join(open...)
 }
 
 // apiServerProbeScript is a CODED probe (review round 2, H2): the original
