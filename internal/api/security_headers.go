@@ -51,6 +51,17 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 	})
 }
 
+// allowFramingBy replaces securityHeaders' frame-ancestors 'none' with origin and drops X-Frame-Options,
+// on one response. Only the front-channel logout route calls it, with the identity provider's origin:
+// the provider's sign-out page loads that route in a frame. An empty origin changes nothing.
+func allowFramingBy(h http.Header, origin string) {
+	if origin == "" {
+		return
+	}
+	h.Set("Content-Security-Policy", strings.Replace(h.Get("Content-Security-Policy"), "frame-ancestors 'none'", "frame-ancestors "+origin, 1))
+	h.Del("X-Frame-Options")
+}
+
 // cspConnectSrc builds connect-src for ONE request. The only outbound channel is
 // the PTY-attach WebSocket to this deployment; the bare ws:/wss: SCHEMES match ANY
 // host, so emitting them would unbound where an injected script may ship data.

@@ -51,10 +51,10 @@ func (s *Server) auditSignInDenied(r *http.Request, reason string) {
 	}
 }
 
-// auditIdPLogout records a back-channel logout from the identity provider as the session.revoke row
-// an admin's sessions-only revoke writes, marked with its source.
-func (s *Server) auditIdPLogout(r *http.Request, sub string, err error) {
-	data := map[string]any{"scope": "sub", "sub": sub, "sessions_only": true, "tokens_revoked": 0, "ssh_keys_deleted": 0, "source": "idp_back_channel_logout"}
+// auditIdPLogout records a back- or front-channel logout from the identity provider as the
+// session.revoke row an admin's sessions-only revoke writes, marked with its source.
+func (s *Server) auditIdPLogout(r *http.Request, source, sub string, err error) {
+	data := map[string]any{"scope": "sub", "sub": sub, "sessions_only": true, "tokens_revoked": 0, "ssh_keys_deleted": 0, "source": source}
 	outcome := "success"
 	if err != nil {
 		outcome, data["error"] = "failure", err.Error()
@@ -75,13 +75,35 @@ const (
 func (s *Server) backchannelLogout() http.HandlerFunc {
 	next := s.cfg.OIDC.BackchannelLogoutHandler(s.isReservedPrincipal, func(r *http.Request, sub string, err error) {
 		s.backchannelLimiter.refund("", s.cfg.Now())
-		s.auditIdPLogout(r, sub, err)
+		s.auditIdPLogout(r, "idp_back_channel_logout", sub, err)
 	})
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !s.backchannelLimiter.allow("", s.cfg.Now()) {
 			w.Header().Set("Cache-Control", "no-store")
 			w.Header().Set("Retry-After", "1")
 			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "temporarily_unavailable", "error_description": "too many logout tokens; retry later"})
+			return
+		}
+		next(w, r)
+	}
+}
+
+// frontchannelLogout serves GET /auth/frontchannel-logout within frontchannelLimiter, bounded like the
+// back-channel route: every request spends a charge and a cut gives it back, so requests naming no
+// sign-in (forged or stale sids) are refused with 429 past backchannelLogoutBurst, then one a second.
+// Every answer may be framed by the identity provider's origin, and by no other.
+func (s *Server) frontchannelLogout() http.HandlerFunc {
+	next := s.cfg.OIDC.FrontchannelLogoutHandler(func(r *http.Request, sub string, err error) {
+		s.frontchannelLimiter.refund("", s.cfg.Now())
+		s.auditIdPLogout(r, "idp_front_channel_logout", sub, err)
+	})
+	origin := s.cfg.OIDC.FrontchannelFrameOrigin()
+	return func(w http.ResponseWriter, r *http.Request) {
+		allowFramingBy(w.Header(), origin)
+		if !s.frontchannelLimiter.allow("", s.cfg.Now()) {
+			w.Header().Set("Cache-Control", "no-cache, no-store")
+			w.Header().Set("Retry-After", "1")
+			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "temporarily_unavailable", "error_description": "too many logout requests; retry later"})
 			return
 		}
 		next(w, r)

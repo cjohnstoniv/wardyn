@@ -596,6 +596,7 @@ func reapTickLock(pool *pgxpool.Pool) func(context.Context) (func(), bool) {
 		if ok {
 			pruneAWSSSOSpentTokens(ctx, pool)
 			pruneAWSSSORefusedTokens(ctx, pool)
+			pruneOIDCSessionSIDs(ctx, pool)
 			pruneUIDesktopClosed(ctx, pool)
 		}
 		return release, ok
