@@ -52,6 +52,16 @@ describe("LiveApprovals", () => {
     expect(await screen.findByTestId("live-approvals-idle")).toBeInTheDocument();
   });
 
+  it("#3030: a strip row reads the Approvals card's human title, with Approve before Deny", async () => {
+    listApprovalsMock.mockResolvedValue([pending({ id: "t", requested_scope: { host: "title.example" } })]);
+    render(<LiveApprovals runId="r1" />);
+    const row = await screen.findByTestId("live-approval-row");
+    expect(within(row).getByText("Reach title.example")).toBeInTheDocument();
+    const approve = within(row).getByRole("button", { name: "Approve" });
+    const deny = within(row).getByRole("button", { name: "Deny" });
+    expect(approve.compareDocumentPosition(deny) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("flags a wait_for_review request as HELD ('waiting') and only this run's approvals", async () => {
     listApprovalsMock.mockResolvedValue([
       pending({ id: "held", requested_scope: { host: "held.example", mode: "wait_for_review" } }),
@@ -59,7 +69,7 @@ describe("LiveApprovals", () => {
     ]);
     render(<LiveApprovals runId="r1" />);
     const panel = await screen.findByTestId("live-approvals");
-    expect(within(panel).getByText("held.example")).toBeInTheDocument();
+    expect(within(panel).getByText("Reach held.example")).toBeInTheDocument();
     expect(within(panel).queryByText("other.example")).not.toBeInTheDocument(); // filtered by runId
     expect(within(panel).getByText("waiting")).toBeInTheDocument(); // per-row held badge (exact)
     expect(within(panel).getByText(/Sandbox is waiting/i)).toBeInTheDocument(); // header
@@ -75,7 +85,7 @@ describe("LiveApprovals", () => {
     ]);
     render(<LiveApprovals runId="r1" />);
     const panel = await screen.findByTestId("live-approvals");
-    expect(within(panel).getByText("stale.example")).toBeInTheDocument();
+    expect(within(panel).getByText("Reach stale.example")).toBeInTheDocument();
     expect(within(panel).queryByText("waiting")).not.toBeInTheDocument();
     expect(within(panel).queryByText(/Sandbox is waiting/i)).not.toBeInTheDocument();
   });
@@ -107,8 +117,8 @@ describe("LiveApprovals", () => {
   // secrets demos' authorized-not-issued mint is raised from INSIDE the
   // sandbox mid-run, over the broker's own route — the same
   // decision-visible-where-it-happens principle egress/tool_call rows already
-  // get, so it renders on the strip, labeled by host like an egress row.
-  it("a pending api_key-shaped credential renders on the strip, labeled by host", async () => {
+  // get, so it renders on the strip, titled with the host like an egress row.
+  it("a pending api_key-shaped credential renders on the strip, titled with the host", async () => {
     listApprovalsMock.mockResolvedValue([
       pending({
         id: "cred-key",
@@ -118,7 +128,7 @@ describe("LiveApprovals", () => {
     ]);
     render(<LiveApprovals runId="r1" />);
     const panel = await screen.findByTestId("live-approvals");
-    expect(within(panel).getByText("example.com")).toBeInTheDocument();
+    expect(within(panel).getByText(/for example\.com$/)).toBeInTheDocument();
   });
 
   // Deny's confirm copy must own up to what the click actually refuses: a
@@ -157,11 +167,11 @@ describe("LiveApprovals", () => {
       });
     }
 
-    it("renders tool + cmd, clipped for the strip with the full string on the title", async () => {
+    it("titles a tool call as Run <cmd>, clipped for the strip with the full string on the title", async () => {
       listApprovalsMock.mockResolvedValue([toolRow({ requested_scope: { tool: "Bash", cmd: LONG_CMD } })]);
       render(<LiveApprovals runId="r1" />);
       const panel = await screen.findByTestId("live-approvals");
-      const full = `Bash: ${LONG_CMD}`;
+      const full = `Run ${LONG_CMD}`;
       const line = within(panel).getByTitle(full);
       expect(line.textContent).toBe(full.slice(0, 71) + "…");
       expect(line.textContent!.length).toBeLessThan(full.length);
@@ -691,10 +701,10 @@ describe("LiveApprovals — precedence and the two-row overflow", () => {
     render(<LiveApprovals runId="r1" />);
     const panel = await screen.findByTestId("live-approvals");
     const rows = within(panel).getAllByTestId("live-approval-row");
-    expect(rows[0]).toHaveTextContent("held.example");
+    expect(rows[0]).toHaveTextContent("Reach held.example");
     // The regression the cap creates: the one decision parking the sandbox
     // must never be the row behind "Show all".
-    expect(within(panel).getByText("held.example")).toBeInTheDocument();
+    expect(within(panel).getByText("Reach held.example")).toBeInTheDocument();
   });
 
   it("Show all reveals every row, and folds back", async () => {
@@ -750,7 +760,7 @@ describe("LiveApprovals — the PENDING read is scoped server-side", () => {
     );
     render(<LiveApprovals runId="r1" />);
     const panel = await screen.findByTestId("live-approvals");
-    expect(within(panel).getByText("unlisted.example")).toBeInTheDocument();
+    expect(within(panel).getByText("Reach unlisted.example")).toBeInTheDocument();
     expect(listApprovalsMock).toHaveBeenCalledWith("PENDING", "r1");
   });
 
@@ -763,11 +773,11 @@ describe("LiveApprovals — the PENDING read is scoped server-side", () => {
     const many = { created_by: "dana", state: "RUNNING" as const, agents: [{ agent: "claude-code" }, { agent: "codex-cli" }] };
     const { unmount } = render(<LiveApprovals runId="r1" run={many} />);
     const panel = await screen.findByTestId("live-approvals");
-    expect(within(panel).getByText("Bash: npm ci")).toBeInTheDocument();
+    expect(within(panel).getByText("Run npm ci")).toBeInTheDocument();
     expect(within(panel).getByText("· Asked by Claude Code")).toBeInTheDocument();
     unmount();
     render(<LiveApprovals runId="r1" run={{ ...many, agents: [{ agent: "claude-code" }] }} />);
-    expect(await screen.findByText("Bash: npm ci")).toBeInTheDocument();
+    expect(await screen.findByText("Run npm ci")).toBeInTheDocument();
     expect(screen.queryByText(/Asked by/)).toBeNull();
   });
 
@@ -775,7 +785,7 @@ describe("LiveApprovals — the PENDING read is scoped server-side", () => {
     listApprovalsMock.mockResolvedValue([pending({ requested_scope: { host: "registry.npmjs.org", harness: "claude-code" } })]);
     const many = { created_by: "dana", state: "RUNNING" as const, agents: [{ agent: "claude-code" }, { agent: "codex-cli" }] };
     render(<LiveApprovals runId="r1" run={many} />);
-    expect(await screen.findByText("registry.npmjs.org")).toBeInTheDocument();
+    expect(await screen.findByText("Reach registry.npmjs.org")).toBeInTheDocument();
     expect(screen.queryByText(/Asked by/)).toBeNull();
   });
 });

@@ -85,6 +85,7 @@ import {
   denyDialogCopy,
 } from "./copy";
 import { ScopeMenu, ReauthRow } from "./live-approvals-rows";
+import { deriveTitle } from "../screens/approvals";
 
 const POLL_MS = 2000;
 
@@ -109,9 +110,9 @@ interface DenyTarget {
 // a longer hold this chip stops flagging at 30s; wire the policy value
 // through if anyone ships a policy that sets it.
 
-// rowLabel is the row's identity line: the host for an egress hold, the tool
-// and its command for a tool hold. The full string is the Mono title; clip()
-// keeps the strip one line tall (the Approvals screen renders the whole scope).
+// rowLabel is the identity string behind a row: the host for an egress hold, the tool and its command for a tool
+// hold. It names the telemetry tag and the Deny dialog; the row itself reads deriveTitle, as the Approvals card does.
+// clip() keeps the strip one line tall.
 function rowLabel(a: ApprovalRequest): string {
   // A re-auth row has no host and no tool: its scope is an identity. The label
   // states the NEED, which is all the row proves.
@@ -537,6 +538,7 @@ export function LiveApprovals({
           );
         }
         const label = rowLabel(a);
+        const title = deriveTitle(a.kind, a.requested_scope ?? {});
         const held = isHeld(a);
         // Only egress decisions carry a scope (decide rule 4) — see decide().
         const scoped = a.kind === "egress_domain";
@@ -552,9 +554,10 @@ export function LiveApprovals({
               <ShieldAlert className="size-3.5 shrink-0 text-warning" />
             )}
             <span className="flex min-w-0 flex-1 items-baseline gap-2">
-              <Mono className="text-foreground" title={label}>
-                {clip(label)}
-              </Mono>
+              {/* #3030: the Approvals screen's own title (deriveTitle), so a request reads the same on the card and the strip. */}
+              <span className="min-w-0 truncate text-sm text-foreground" title={title}>
+                {clip(title)}
+              </span>
               {asker(a) && <span className="text-xs text-muted-foreground">{APPROVAL_ASKED.STRIP(agentName(asker(a)!))}</span>}
             </span>
             {telemetry && (

@@ -231,7 +231,7 @@ describe("RecordPane — confined replay (Replay confined -> replaying -> replay
 
     // Only THIS run's pending approval shows (the other run's is filtered out).
     const panel = await screen.findByTestId("live-approvals");
-    expect(within(panel).getByText("evil.example.com")).toBeInTheDocument();
+    expect(within(panel).getByText("Reach evil.example.com")).toBeInTheDocument();
     expect(within(panel).queryByText("other.com")).not.toBeInTheDocument();
 
     // Deny is a two-step confirm (LiveApprovals: it

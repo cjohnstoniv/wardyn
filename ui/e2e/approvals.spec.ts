@@ -564,6 +564,8 @@ test.describe("Approvals — decision-scope split button (run cockpit)", () => {
       const row = page.getByTestId("live-approval-row");
       await expect(row).toBeVisible();
       await expect(row.getByText(markerRe(marker))).toBeVisible();
+      // #3030: the strip row reads the Approvals card's human title, not the bare host.
+      await expect(row.getByText(`Reach ${marker}`, { exact: true })).toBeVisible();
 
       // The split button's bare halves stay named "Approve"/"Deny" — same
       // unanchored match the card buttons above use (not exact:true: that's
