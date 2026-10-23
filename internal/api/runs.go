@@ -281,6 +281,13 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// is harmless (WithoutCancel of a detached ctx is a no-op in effect) and
 	// keeps the two concerns independent.
 	abort := s.abortHalfBuiltRun(ctx, runID)
+	if f.keep != nil { // the run never started, so the drive made for it would only count against the person
+		failRun := abort
+		abort = func(hint string) {
+			failRun(hint)
+			s.dropUnstartedKeptDrive(ctx, runID)
+		}
+	}
 
 	// The kept work folder's drive, counted again at the insert: a race past the
 	// fold's count is refused here and the run is never started.

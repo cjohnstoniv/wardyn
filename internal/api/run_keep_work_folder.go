@@ -7,13 +7,16 @@
 // POST /me/drives meets, plus storage.user_drive.member_create.keep_main_drive,
 // and the store's own count cap. Only the work folder is kept: home, agent
 // settings and /tmp stay the sandbox's. Nothing happens at run end: no
-// teardown reclaims a drive's volume or claim, only a drive delete does.
+// teardown reclaims a drive's volume or claim, only a drive delete does. The one
+// exception is a run that ends without ever starting: nothing was mounted, so
+// dropUnstartedKeptDrive deletes its drive row and frees the person's count.
 package api
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"path"
 	"strings"
@@ -191,6 +194,42 @@ func (s *Server) auditKeptDrive(r *http.Request, k *keptWorkFolder, run types.Ag
 	}
 	s.recordAudit(r.Context(), s.auditEvent(&run.ID, actorTypeFromRequest(r), principalFromRequest(r),
 		"drive.member.create", saved.ID.String(), "success", mustJSON(data)))
+}
+
+// memberDriveByRunEnd is the "by" of the drive.member.delete row of a kept drive whose run never started.
+const memberDriveByRunEnd = "run_never_started"
+
+// dropUnstartedKeptDrive deletes the drive run kept its work folder in, for a run that ended without ever
+// starting (cancelled or timed out in the queue, aborted by the component fence, or aborted after its
+// insert on the direct path). The drive was made with the run and nothing was mounted, so there is no
+// object to reclaim and it would only count against the person's max_per_person. A run that has no kept
+// drive, a drive some other run kept, and a drive another delete holds are all left alone. Best effort:
+// a failure is logged and the drive stays, as it did before.
+func (s *Server) dropUnstartedKeptDrive(ctx context.Context, runID uuid.UUID) {
+	ms, ok := s.cfg.Store.(store.MemberDriveStore)
+	if !ok {
+		return
+	}
+	ctx = context.WithoutCancel(ctx)
+	id := keptWorkFolderDriveID(runID)
+	d, err := ms.GetMemberDrive(ctx, id)
+	if err != nil || d.KeptFromRun == nil || *d.KeptFromRun != runID {
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			slog.WarnContext(ctx, "api: read the kept drive of a run that never started", slog.String("run_id", runID.String()), slog.Any("err", err))
+		}
+		return
+	}
+	d, started, err := ms.BeginMemberDriveDeleteAdmin(ctx, id)
+	if err == nil {
+		err = ms.FinishMemberDriveDelete(ctx, id, started)
+	}
+	if err != nil {
+		if !errors.Is(err, store.ErrNotFound) && !errors.Is(err, store.ErrMemberDriveBusy) {
+			slog.WarnContext(ctx, "api: delete the kept drive of a run that never started", slog.String("run_id", runID.String()), slog.Any("err", err))
+		}
+		return
+	}
+	s.auditMemberDriveDelete(ctx, d, memberDriveDeletion{outcome: string(runner.DriveReclaimAlreadyAbsent)}, memberDriveByRunEnd)
 }
 
 // keptWorkFolderMount is the mount of the drive run keeps its work folder in,
