@@ -290,6 +290,16 @@ git -C "$BR" reset -q --hard "$BUNDLE"
 git -C "$BR" mv scripts/s.sh .proofs/s.sh
 git -C "$BR" commit -q -m "moves a script into .proofs/"
 expect "base: a file moved into .proofs/ is refused" 2 "outside .proofs/: scripts/s.sh" "$SCRIPT" base "$BR" HEAD main
+git -C "$BR" reset -q --hard "$BUNDLE"
+git -C "$BR" rm -q scripts/s.sh
+git -C "$BR" commit -q -m "deletes a script"
+expect "base: a deletion outside .proofs/ is refused" 2 "outside .proofs/: scripts/s.sh" "$SCRIPT" base "$BR" HEAD main
+git -C "$BR" switch -q --orphan orphan
+mkdir -p "$BR/.proofs"
+echo '{}' >"$BR/.proofs/manifest.json"
+git -C "$BR" add .proofs
+git -C "$BR" commit -q -m orphan
+expect "base: a branch off main's history is refused" 2 "shares no history with main" "$SCRIPT" base "$BR" HEAD main
 expect "base: not a commit" 2 "is not a commit" "$SCRIPT" base "$BR" no-such-ref main
 
 [ "$fails" = 0 ] || { echo "test-overlay-proof.sh: $fails failures" >&2; exit 1; }

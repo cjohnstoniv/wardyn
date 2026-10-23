@@ -30,7 +30,8 @@ name: Overlay proofs
 # Trust. This file and the script run from the dispatched branch, so plan first
 # refuses a branch whose tree differs from the main commit it sits on anywhere
 # outside .proofs/ (`overlay-proof.sh base`). That check runs from the branch
-# too, so a run counts only once it also passes locally on the run's head sha.
+# too, so a run counts only once `git diff --quiet origin/main...<head sha> --
+# ':(exclude).proofs'` exits 0 locally: it reads no file from the branch.
 on:
   workflow_dispatch:
     inputs:
