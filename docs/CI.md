@@ -436,8 +436,8 @@ gh run list -R cjohnstoniv/wardyn --workflow ci.yml --status completed --limit 6
 ### Nightly scope and release runs
 
 - The 07:00 nightly and a plain dispatch run every lane. A release candidate dispatches it with `-f scope=candidate`, which [`scripts/release-patch.sh`](../scripts/release-patch.sh) does right after pushing the branch and before opening the PR.
-- Ten jobs then skip through a job-level `if: inputs.scope != 'candidate'`: `e2e-live`, `ci-mode-dogfood-model-fake`, `test-e2e-concurrent`, `kind-survival-walk`, `k6-kind-conformance`, `kind-acceptance-walks`, `hybrid-walk`, `kind-upgrade-walk`, `migration-merge-check` and `published-image-scan`.
-- That frees about 60 runner-minutes by median and 12 job slots (counted before `k6-kind-conformance`). What remains is `release.yml`'s `watched=` list plus the `multi-arch build` staging jobs.
+- Five jobs then skip through a job-level `if: inputs.scope != 'candidate'`: `e2e-live`, `ci-mode-dogfood-model-fake`, `test-e2e-concurrent`, `migration-merge-check` and `published-image-scan`.
+- `kind-survival-walk`, `k6-kind-conformance`, `kind-acceptance-walks`, `hybrid-walk` and `kind-upgrade-walk` run under `scope=candidate`, are in `release.yml`'s `watched=`, and gate a release. [`scripts/green-by-tree.sh`](../scripts/green-by-tree.sh) requires every leg of a matrix job to be green (#3439).
 - [`scripts/test-repo-guards.sh`](../scripts/test-repo-guards.sh) guard 18 keeps the skip set in step with `notify-new-lanes`. A skipped job reports `skipped`, so that job stays quiet.
 - A dispatched nightly has one concurrency group per ref and scope, so a second dispatch cancels the first. A scheduled run has its own group and is never cancelled.
 - On a same-repo `train/*` or `prep/*` pull request, `train-suites` dispatches the nightly (`scope=candidate`, `publish=false`) on the head and waits; `train-gate` needs that run green. A call would fail on a fork's read-only token, so nothing uses `workflow_call`.

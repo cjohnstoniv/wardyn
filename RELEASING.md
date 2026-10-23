@@ -22,7 +22,7 @@
     - and `release` ([`.github/workflows/release.yml`](.github/workflows/release.yml), triggered by step 5's tag push itself, so it cannot be a prerequisite of tagging).
 - **Before tagging, dispatch `nightly.yml` on the candidate branch and wait for it to complete.**
   - `gh workflow run nightly.yml --ref release/X.Y` (or `main`, if that is the commit).
-  - For a release candidate add `-f scope=candidate`. The run then skips every job outside `release.yml`'s `watched=` list but keeps the `multi-arch build` staging jobs, saving about 60 runner-minutes.
+  - For a release candidate add `-f scope=candidate`. The run skips only the unwatched jobs (`e2e-live`, `ci-mode-dogfood-model-fake`, `test-e2e-concurrent`, `migration-merge-check`, `published-image-scan`); the kind walks and `k6-kind-conformance` run and gate.
   - The default, `scope=full`, and the 07:00 schedule run every lane. [`scripts/green-by-tree.sh`](scripts/green-by-tree.sh) accepts either scope.
   - A second dispatch on the same ref and scope cancels the first. A scheduled run is never cancelled.
   - A `train/*` or `prep/*` pull request's `train-gate` waits on this candidate run.
