@@ -140,8 +140,56 @@ func TestRecordingChain_Answers(t *testing.T) {
 	if w := doSSO(t, srv, http.MethodGet, strings.TrimSuffix(path, "&from=2026-10-20T10:40:00Z"), ses["owner"], ""); w.Code != http.StatusBadRequest {
 		t.Fatalf("no from: %d %s, want 400", w.Code, w.Body.String())
 	}
+	if w := doSSO(t, srv, http.MethodGet, strings.Replace(path, "key=k", "key=", 1), ses["owner"], ""); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), `"reason":"`+reasonRecordingChainKeyRequired+`"`) {
+		t.Fatalf("no key: %d %s, want 400 %s", w.Code, w.Body.String(), reasonRecordingChainKeyRequired)
+	}
 	srv.cfg.Store = base
 	if w := doSSO(t, srv, http.MethodGet, path, ses["owner"], ""); w.Code != http.StatusNotImplemented {
 		t.Fatalf("a store with no chain: %d %s, want 501", w.Code, w.Body.String())
+	}
+}
+
+// heldRangeStore holds its first range check until released, so a second can arrive while it walks.
+type heldRangeStore struct {
+	store.Store
+	walking chan struct{}
+	release chan struct{}
+}
+
+func (s *heldRangeStore) VerifyRecordingAuditRange(context.Context, uuid.UUID, string, time.Time) (store.AuditChainRange, bool, error) {
+	select {
+	case s.walking <- struct{}{}:
+		<-s.release
+	default:
+	}
+	return store.AuditChainRange{OK: true}, true, nil
+}
+
+// TestRecordingChain_OneWalkAtATime: the range walk hashes the org's log over the run's lifetime, so
+// while one check walks, a second is refused with a 503 recording_chain_busy and a Retry-After, never
+// queued; once the first ends the next one walks.
+func TestRecordingChain_OneWalkAtATime(t *testing.T) {
+	srv, run, _, ses := entryServer(t, false)
+	hs := &heldRangeStore{Store: srv.cfg.Store, walking: make(chan struct{}), release: make(chan struct{})}
+	srv.cfg.Store = hs
+	path := "/api/v1/runs/" + run.ID.String() + "/recording-chain?key=k&from=2026-10-20T10:40:00Z"
+
+	first := make(chan *httptest.ResponseRecorder)
+	go func() { first <- doSSO(t, srv, http.MethodGet, path, ses["owner"], "") }()
+	select {
+	case <-hs.walking:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the first check never reached the walk")
+	}
+	w := doSSO(t, srv, http.MethodGet, path, ses["owner"], "")
+	close(hs.release)
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), `"reason":"`+reasonRecordingChainBusy+`"`) || w.Header().Get("Retry-After") == "" {
+		t.Errorf("a second check while one walks: %d %q Retry-After=%q, want 503 %s with Retry-After", w.Code, w.Body.String(), w.Header().Get("Retry-After"), reasonRecordingChainBusy)
+	}
+	if w := <-first; w.Code != http.StatusOK {
+		t.Fatalf("the first check: %d %s, want 200", w.Code, w.Body.String())
+	}
+	if w := doSSO(t, srv, http.MethodGet, path, ses["owner"], ""); w.Code != http.StatusOK {
+		t.Fatalf("a check after the walk ended: %d %s, want 200", w.Code, w.Body.String())
 	}
 }

@@ -22,7 +22,8 @@ import (
 // (recordingReader). Anyone else, a run that does not exist and a key with no recording all get the
 // recording read's own 404 (recording.Handler), byte for byte, so the check is no existence oracle;
 // a refused caller on a run that exists leaves the not_owner row recordingAuthorizer leaves.
-// A broken range answers 200 with ok=false, as the whole sweep does.
+// A broken range answers 200 with ok=false, as the whole sweep does. One check walks at a time per
+// replica; a second is a 503 recording_chain_busy.
 func (s *Server) handleRecordingChain(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
@@ -45,11 +46,24 @@ func (s *Server) handleRecordingChain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := r.URL.Query().Get("key")
-	from, err := time.Parse(time.RFC3339Nano, r.URL.Query().Get("from"))
-	if err != nil || key == "" {
-		writeErrorReason(w, http.StatusBadRequest, reasonAuditInvalidTimestampParam, "key and from (RFC 3339) are required")
+	if key == "" {
+		writeErrorReason(w, http.StatusBadRequest, reasonRecordingChainKeyRequired, "key (the recording's key) is required")
 		return
 	}
+	from, err := time.Parse(time.RFC3339Nano, r.URL.Query().Get("from"))
+	if err != nil {
+		writeErrorReason(w, http.StatusBadRequest, reasonAuditInvalidTimestampParam, "from (RFC 3339) is required")
+		return
+	}
+	// The walk is the whole sweep's work over a narrower window, open to every run owner, so it is
+	// single-flight per replica like the sweep (audit.go) and refused like a busy replay
+	// (recording.Handler): 503 with Retry-After, never queued.
+	if !s.recordingChainWalk.TryLock() {
+		w.Header().Set("Retry-After", "5")
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonRecordingChainBusy, "another recording's chain check is running; retry shortly")
+		return
+	}
+	defer s.recordingChainWalk.Unlock()
 	rng, found, err := v.VerifyRecordingAuditRange(r.Context(), run.ID, key, from)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "wardyn: recording audit range check failed", slog.Any("err", err))
