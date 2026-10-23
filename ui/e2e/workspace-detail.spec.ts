@@ -5,6 +5,7 @@
 
 import { test, expect, ADMIN_TOKEN, gotoConsole, navToRoute } from "./fixtures";
 import type { Page } from "@playwright/test";
+import { WORKSPACE_DETAIL_EXTRA } from "../src/app/lib/workspace-copy";
 
 // E2E coverage for the workspace DETAIL page (src/app/components/screens/
 // workspace-detail/workspace-detail.tsx) — X2-F5/F4/F19.
@@ -64,6 +65,25 @@ test.describe("Workspace detail — the seeded workspace's real page", () => {
     await expect(page.getByText("Recorded sessions")).toBeVisible();
     await expect(page.getByText("Allowed hosts")).toBeVisible();
     await expect(page.getByText("Denied hosts")).toBeVisible();
+  });
+});
+
+test.describe("Workspace detail — Recorded sessions, never recorded (#3042)", () => {
+  test("says the idea once in the card description, then No sessions yet and the New session form", async ({ page }) => {
+    const name = uniqueName("never-recorded");
+    const wsId = await createWorkspace(page, name);
+    await gotoConsole(page);
+    await navToRoute(page, `/workspaces/${wsId}`);
+
+    await expect(page.getByText(WORKSPACE_DETAIL_EXTRA.SESSIONS_SUBTITLE)).toBeVisible();
+    await expect(page.getByText(WORKSPACE_DETAIL_EXTRA.SESSIONS_EMPTY, { exact: true })).toBeVisible();
+    await expect(page.getByTestId("record-new-session")).toBeVisible();
+    await expect(page.getByText(WORKSPACE_DETAIL_EXTRA.SESSIONS_START_HELP)).toBeVisible();
+    // Gone: the chip, the paragraph, "Never recorded ...", and the helper's replay sentence.
+    await expect(page.getByText("Recommended · skippable")).toHaveCount(0);
+    await expect(page.getByText(/replay it confined/i)).toHaveCount(0);
+    await expect(page.getByText(/Never recorded/)).toHaveCount(0);
+    await expect(page.getByText(/once it settles/)).toHaveCount(0);
   });
 });
 

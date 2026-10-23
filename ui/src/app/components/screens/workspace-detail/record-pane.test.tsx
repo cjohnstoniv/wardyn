@@ -35,6 +35,7 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.f
 
 import { RecordPane } from "./record-pane";
 import { setField } from "../../../../test/set-field";
+import { WORKSPACE_DETAIL_EXTRA } from "../../../lib/workspace-copy";
 
 const obs = (over: Partial<ProfileObservations> = {}): ProfileObservations => ({
   domains: [],
@@ -116,9 +117,12 @@ beforeEach(() => {
 });
 
 describe("RecordPane — header, open-egress banner, model note", () => {
-  it("shows the recommended/skippable chip and, with no tier data at all, the weakest-barrier wording", () => {
+  it("with no tier data at all, shows the weakest-barrier wording, and says the record-then-replay idea nowhere (the card description does)", () => {
     renderPane();
-    expect(screen.getByText(/recommended/i)).toBeInTheDocument();
+    // #3042: no chip and no paragraph repeating what the card's description already says.
+    expect(screen.queryByText(/recommended/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/skippable/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/replay it confined/i)).not.toBeInTheDocument();
     const banner = screen.getByTestId("record-open-egress-banner");
     expect(banner).toHaveTextContent(/fence/i);
     expect(banner).toHaveTextContent(/egress/i);
@@ -263,9 +267,21 @@ describe("RecordPane — new session", () => {
     expect(onRecord).not.toHaveBeenCalled();
   });
 
-  it("shows the never-recorded helper line when there are no sessions yet", () => {
+  it("shows No sessions yet, with the New session form right under it, when there are no sessions", () => {
     renderPane();
-    expect(screen.getByText(/never recorded/i)).toBeInTheDocument();
+    const empty = screen.getByText(WORKSPACE_DETAIL_EXTRA.SESSIONS_EMPTY);
+    expect(empty).toHaveTextContent("No sessions yet");
+    expect(screen.queryByText(/never recorded/i)).not.toBeInTheDocument();
+    expect(empty.nextElementSibling).toBe(screen.getByTestId("record-new-session"));
+  });
+
+  it("keeps the first two sentences of the helper under the form and drops the replay sentence (#3042 B)", () => {
+    renderPane();
+    const helper = screen.getByText(/^Opens an attached terminal/);
+    expect(helper).toHaveTextContent(
+      "Opens an attached terminal with the repo + your model provider ready. Do the real thing, then click Done recording to capture what it used.",
+    );
+    expect(helper).not.toHaveTextContent(/replay/i);
   });
 });
 

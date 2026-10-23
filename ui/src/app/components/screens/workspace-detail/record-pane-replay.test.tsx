@@ -379,15 +379,15 @@ describe("RecordPane — off-policy bucket subtracts the requirements lane too",
 // A wizard Verify session is stored confined under key "verify:verify" with
 // no open "verify" sibling — recordSessions (open-only) can never list it, so
 // without orphanedVerifySessions + this card it would be invisible here even
-// while isRecording(ws) still counts it: "Never recorded", "Start recording"
+// while isRecording(ws) still counts it: "No sessions yet", "Start recording"
 // disabled, no way to see or stop the live run.
 describe("RecordPane — an orphaned verify:* session (no open sibling)", () => {
-  it("live: renders a stoppable card (terminal + live approvals + Done), never 'Never recorded'", async () => {
+  it("live: renders a stoppable card (terminal + live approvals + Done), never 'No sessions yet'", async () => {
     const onDoneRecording = vi.fn();
     const running: RecordResult = { run_id: "vr-live", label: "verify", mode: "interactive", confined: true, status: "recording" };
     renderPane({ record_results: { "verify:verify": running } }, { onDoneRecording });
 
-    expect(screen.queryByText(/never recorded/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/no sessions yet/i)).not.toBeInTheDocument();
     expect(screen.getByTestId("session-verify:verify")).toBeInTheDocument();
     expect(screen.getByTestId("attach-terminal")).toHaveTextContent("vr-live");
 
