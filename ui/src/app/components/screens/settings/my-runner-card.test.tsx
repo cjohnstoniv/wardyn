@@ -218,6 +218,24 @@ describe("My runner card", () => {
     expect(screen.getByRole("button", { name: "Create a pool" })).toBeInTheDocument();
   });
 
+  // #3423: GET /me/capabilities may_self_host_runner=false puts the one-line refusal in place of the three steps.
+  it("says Personal runners aren't turned on, in place of the steps, when the server says the person may not self-host", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        String(url).includes("/me/capabilities") ? new Response(JSON.stringify({ grants: [], enforcement: {}, may_self_host_runner: false }), { status: 200 }) : new Response(HEALTHZ, { status: 200 }),
+      ),
+    );
+    listMineMock.mockResolvedValue([]);
+    const user = userEvent.setup();
+    renderCard();
+    await expand(user);
+    expect(await screen.findByText("Personal runners aren't turned on for you. Ask your admin.")).toBeInTheDocument();
+    const block = screen.getByRole("heading", { name: "Add this computer" }).closest("section") as HTMLElement;
+    expect(within(block).queryByText("wardyn runner setup")).toBeNull();
+    expect(within(block).queryByRole("heading", { level: 5 })).toBeNull();
+  });
+
   it("a read failure says so with a Retry and no summary", async () => {
     listMineMock.mockRejectedValueOnce(new HttpError(500, "boom"));
     const user = userEvent.setup();
