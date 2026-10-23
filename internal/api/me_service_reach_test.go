@@ -131,7 +131,8 @@ func TestMeServiceReach(t *testing.T) {
 		}
 	})
 	// The service's /me bytes for the 200 and each error arm, taken from the handler before meServiceReach
-	// stopped taking the ResponseWriter; workspace ids are written WS_OPEN and WS_OWN.
+	// stopped taking the ResponseWriter (the 200 plus unit_admin_of, which GET /me gained later);
+	// workspace ids are written WS_OPEN and WS_OWN.
 	golden := func(t *testing.T, arm string, w *httptest.ResponseRecorder) {
 		t.Helper()
 		got := strings.NewReplacer(wsOpen.String(), "WS_OPEN", wsOwn.String(), "WS_OWN").Replace(fmt.Sprintf("%d %s", w.Code, w.Body.String()))
@@ -191,7 +192,7 @@ func TestMeServiceReach(t *testing.T) {
 
 // meServiceGoldens are TestMeServiceReach's service /me answers ("<status> <body>"), by arm.
 var meServiceGoldens = map[string]string{
-	"200":            `200 {"email":"","governance_contact":{"source":"deployment"},"member_local_dir_root":null,"method":"token","name":"","operator":false,"principal":"service:ci-bot","role":"user","security_operator":false,"service":{"name":"ci-bot","sponsor":"sponsor-sub","routes":["DELETE /api/v1/model-providers/{id}/credential","GET /api/v1/audit","GET /api/v1/me","GET /api/v1/presets","GET /api/v1/presets/{name}","GET /api/v1/runs","GET /api/v1/runs/{id}","GET /api/v1/runs/{id}/events","GET /api/v1/runs/{id}/output","GET /api/v1/setup/status","GET /api/v1/workspaces","PATCH /api/v1/runs/{id}","POST /api/v1/runs","POST /api/v1/runs/preflight","POST /api/v1/runs/{id}/kill","PUT /api/v1/model-providers/{id}/credential"],"presets":[{"name":"open-all","version":1},{"name":"open-ci","version":1}],"workspaces":[{"id":"WS_OWN","name":"service-owned"},{"id":"WS_OPEN","name":"operator-open"}]},"user_drive":null,"user_drive_denied_by_unit":"","user_drive_unavailable":"","user_preview_available":false,"user_type":{"id":"ci","name":"CI"},"user_view":false,"user_view_dropped":null,"user_view_no_credential":false,"user_view_preselect_type":"","user_view_types":null}` + "\n",
+	"200":            `200 {"email":"","governance_contact":{"source":"deployment"},"member_local_dir_root":null,"method":"token","name":"","operator":false,"principal":"service:ci-bot","role":"user","security_operator":false,"service":{"name":"ci-bot","sponsor":"sponsor-sub","routes":["DELETE /api/v1/model-providers/{id}/credential","GET /api/v1/audit","GET /api/v1/me","GET /api/v1/presets","GET /api/v1/presets/{name}","GET /api/v1/runs","GET /api/v1/runs/{id}","GET /api/v1/runs/{id}/events","GET /api/v1/runs/{id}/output","GET /api/v1/setup/status","GET /api/v1/workspaces","PATCH /api/v1/runs/{id}","POST /api/v1/runs","POST /api/v1/runs/preflight","POST /api/v1/runs/{id}/kill","PUT /api/v1/model-providers/{id}/credential"],"presets":[{"name":"open-all","version":1},{"name":"open-ci","version":1}],"workspaces":[{"id":"WS_OWN","name":"service-owned"},{"id":"WS_OPEN","name":"operator-open"}]},"unit_admin_of":[],"user_drive":null,"user_drive_denied_by_unit":"","user_drive_unavailable":"","user_preview_available":false,"user_type":{"id":"ci","name":"CI"},"user_view":false,"user_view_dropped":null,"user_view_no_credential":false,"user_view_preselect_type":"","user_view_types":null}` + "\n",
 	"503":            `503 {"error":"the site configuration could not be read; try again","reason":"roster_unreadable"}` + "\n",
 	"500 presets":    `500 {"error":"list presets","reason":"internal_error"}` + "\n",
 	"500 workspaces": `500 {"error":"list workspaces","reason":"internal_error"}` + "\n",
@@ -211,7 +212,8 @@ func (workspacesUnreadable) ListWorkspaces(context.Context) ([]types.Workspace, 
 }
 
 // TestMeServiceReach_PersonBodyGolden: a person's GET /me body is byte-identical to the one before the
-// service block existed (the goldens were taken from that handler).
+// service block existed (the goldens were taken from that handler), plus unit_admin_of, which GET /me
+// gained later.
 func TestMeServiceReach_PersonBodyGolden(t *testing.T) {
 	member := withOIDCRole(withOIDCName(withOIDCEmail(withOIDCHuman(context.Background(), "gsv-member-0001"),
 		"alice.smith@corp.example"), "Alice Smith"), oidc.RoleUser)
@@ -219,8 +221,8 @@ func TestMeServiceReach_PersonBodyGolden(t *testing.T) {
 		ctx  context.Context
 		want string
 	}{
-		"sso member":  {member, `{"email":"alice.smith@corp.example","governance_contact":{"source":"deployment"},"member_local_dir_root":null,"method":"token","name":"Alice Smith","operator":false,"principal":"gsv-member-0001","role":"user","security_operator":false,"user_drive":null,"user_drive_denied_by_unit":"","user_drive_unavailable":"","user_preview_available":false,"user_type":null,"user_view":false,"user_view_dropped":null,"user_view_no_credential":false,"user_view_preselect_type":"","user_view_types":null}` + "\n"},
-		"admin token": {context.Background(), `{"email":"","governance_contact":null,"member_local_dir_root":null,"method":"token","name":"","operator":true,"principal":"admin-token","role":"admin","security_operator":true,"user_drive":null,"user_drive_denied_by_unit":"","user_drive_unavailable":"","user_preview_available":false,"user_type":null,"user_view":false,"user_view_dropped":null,"user_view_no_credential":false,"user_view_preselect_type":"","user_view_types":null}` + "\n"},
+		"sso member":  {member, `{"email":"alice.smith@corp.example","governance_contact":{"source":"deployment"},"member_local_dir_root":null,"method":"token","name":"Alice Smith","operator":false,"principal":"gsv-member-0001","role":"user","security_operator":false,"unit_admin_of":[],"user_drive":null,"user_drive_denied_by_unit":"","user_drive_unavailable":"","user_preview_available":false,"user_type":null,"user_view":false,"user_view_dropped":null,"user_view_no_credential":false,"user_view_preselect_type":"","user_view_types":null}` + "\n"},
+		"admin token": {context.Background(), `{"email":"","governance_contact":null,"member_local_dir_root":null,"method":"token","name":"","operator":true,"principal":"admin-token","role":"admin","security_operator":true,"unit_admin_of":[],"user_drive":null,"user_drive_denied_by_unit":"","user_drive_unavailable":"","user_preview_available":false,"user_type":null,"user_view":false,"user_view_dropped":null,"user_view_no_credential":false,"user_view_preselect_type":"","user_view_types":null}` + "\n"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			w := httptest.NewRecorder()
