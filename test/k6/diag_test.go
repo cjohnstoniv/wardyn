@@ -1,5 +1,7 @@
-// Copyright 2025 The Wardyn Authors
+// Copyright 2026 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
+
+//go:build k8s
 
 package k6_test
 
@@ -167,4 +169,37 @@ func (d diagSrc) events(ctx context.Context) string {
 		out = append(out, fmt.Sprintf("%s %s %s %s/%s: %s", at(e).UTC().Format(time.RFC3339), e.Type, e.Reason, strings.ToLower(e.InvolvedObject.Kind), e.InvolvedObject.Name, e.Message))
 	}
 	return tailLines(strings.Join(out, "\n"))
+}
+
+// TestRedactedPod needs no cluster: a dump must not print an env value, whichever container carries
+// it, and must keep the name of a secretKeyRef.
+func TestRedactedPod(t *testing.T) {
+	const secret = "s3cr3t-value"
+	p := corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:          "wardyn-proxy-x",
+			ManagedFields: []metav1.ManagedFieldsEntry{{Manager: "managed-fields-marker"}},
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Name: "c", Env: []corev1.EnvVar{
+				{Name: "TOKEN", Value: secret},
+				{Name: "FROM_SECRET", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "wardyn-env-secret"}, Key: "k"}}},
+			}}},
+			InitContainers: []corev1.Container{{Name: "i", Env: []corev1.EnvVar{{Name: "INIT_TOKEN", Value: secret}}}},
+		},
+	}
+	got := redactedPod(p)
+	if strings.Contains(got, secret) {
+		t.Errorf("an env value survived the redaction:\n%s", got)
+	}
+	if n := strings.Count(got, "<redacted>"); n != 2 {
+		t.Errorf("want 2 redacted values (container and init container), got %d:\n%s", n, got)
+	}
+	if !strings.Contains(got, "wardyn-env-secret") {
+		t.Errorf("the secretKeyRef name is gone:\n%s", got)
+	}
+	if strings.Contains(got, "managedFields") || strings.Contains(got, "managed-fields-marker") {
+		t.Errorf("managedFields appear in the output:\n%s", got)
+	}
 }
