@@ -58,7 +58,7 @@ derives its role.
   - What a member can change is what the profile leaves open; what they can ask for is an escalation on the Approvals page.
 - **Unit admins (0.10.0).**
   - A unit admin is not a fourth role: it is a grant on a unit, held by a person or an IdP group, whatever their role.
-  - It governs that unit and every unit below it, and nothing else. A unit admin's widenings are always held for a second human ([unit admins](unit-admins.md)).
+  - It governs that unit and every unit below it, nothing else. A unit admin's widenings are always held for a second human ([unit admins](unit-admins.md)).
 - **Governance profiles.**
   - One profile per subject; when several match, the most specific wins (user beats group beats user type beats everyone; priority breaks group ties).
   - The Governance page shows the resolved answer, and `GET /policies/default` returns the ceiling that actually binds the caller.

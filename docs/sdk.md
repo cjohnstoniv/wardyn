@@ -1055,7 +1055,7 @@ applied until a different approver approves it. The SDK never reads that body as
   Its matching rules are `ApplyGovernance`'s. A plan is a snapshot: the server may change before an apply.
 - `GET /governance` returns every profile and every assignment; a composed profile's own `ceiling` holds only what it stores, so read the resolved one under `effective.ceiling`. Units carry `kind`, `mode` and `depth`, memberships `home` and `legacy`, and the document `max_depth` ([governance writes](operations/governance-writes.md)). `/governance/units` and `/governance/units/{id}` take writes only, so a `GET` on either answers `405`.
   It also carries `boundary` (security admins only), `unit_admins` and, per unit but Default, `people`: the membership subjects in it or below.
-  A unit admin reads only their subtrees, plus `parent_walls`: the walls each subtree hangs from, with `provenance`.
+  A unit admin reads only their subtrees, plus `parent_walls`: the walls above each subtree, with `provenance`.
 - `GrantUnitAdmin` (`POST /governance/units/{id}/admins`) and `RevokeUnitAdmin` (`DELETE …/admins/{admin}`) are `wardyn governance admins add|remove`; a unit admin's are always held ([unit admins](operations/unit-admins.md)).
   The governance file's `admins`, keyed by unit name, and each unit's `locked_knobs` apply and prune like memberships.
 - A held change and a dry-run report list `approvers`: who could decide it. `GET /me`'s `unit_admin_of` names the caller's granted units.
