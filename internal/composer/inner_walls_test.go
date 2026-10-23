@@ -72,7 +72,9 @@ func TestInnerWallsMeet(t *testing.T) {
 		{walls(types.InnerSandboxOff, ""), walls("", wardyn), walls(types.InnerSandboxOff, wardyn), false},
 		{walls("", wardyn), walls("", wardyn), walls("", wardyn), false},
 		{walls("", wardyn), walls("", none), nil, true},
-		{nil, walls(types.InnerSandboxReadOnly, ""), nil, true},
+		{nil, walls(types.InnerSandboxReadOnly, ""), walls(types.InnerSandboxReadOnly, ""), false},
+		{walls(types.InnerSandboxWorkspaceWrite, ""), walls(types.InnerSandboxReadOnly, ""), nil, true},
+		{nil, walls("danger-full-access", ""), nil, true},
 	} {
 		base := Authority{Ceiling: types.RunPolicySpec{MinConfinementClass: types.CC2, HarnessInnerWalls: tc.base}}
 		got, _, err := ApplyOverlay(base, Overlay{Ceiling: types.CeilingOverlay{HarnessInnerWalls: tc.over}})

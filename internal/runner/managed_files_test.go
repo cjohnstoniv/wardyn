@@ -20,6 +20,10 @@ func TestValidateManagedFiles(t *testing.T) {
 	}{
 		{name: "accepts the consumer's path", files: []ManagedFile{ok}},
 		{name: "accepts nothing at all", files: nil},
+		{name: "accepts codex's requirements", files: []ManagedFile{{Path: "/etc/codex/requirements.toml", Content: []byte("x")}}},
+		{name: "a codex subdirectory", files: []ManagedFile{{Path: "/etc/codex/sub/x"}}, want: outside},
+		{name: "a sibling sharing codex's prefix", files: []ManagedFile{{Path: "/etc/codexx/x"}}, want: outside},
+		{name: "agent-owned in codex's dir", files: []ManagedFile{{Path: "/etc/codex/x", AgentOwned: true, Mode: ComponentSecretFileMode}}, want: "delivered secret"},
 		{name: "relative path", files: []ManagedFile{{Path: "etc/claude-code/x"}}, want: "must be absolute"},
 		{name: "traversal", files: []ManagedFile{{Path: "/etc/claude-code/../../x"}}, want: "must be clean"},
 		{name: "trailing separator", files: []ManagedFile{{Path: "/etc/claude-code/x/"}}, want: "must be clean"},

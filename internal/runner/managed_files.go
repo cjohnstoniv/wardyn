@@ -58,6 +58,11 @@ const DefaultManagedFileMode fs.FileMode = 0o644
 // joins only once checked against each of those.
 const ManagedFileDir = "/etc/claude-code"
 
+// CodexManagedFileDir is where Codex reads its managed requirements on Linux (#2822). It joined the
+// allowlist against ManagedFileDir's three checks: it sits under the same root-owned /etc, nothing
+// loosens it after delivery, and no Wardyn image ships it.
+const CodexManagedFileDir = "/etc/codex"
+
 // ComponentSecretDir is the one directory a delivered secret (AgentOwned) lands
 // in. Fixed, never authored: a file_secret grant names a FILE, not a path.
 //
@@ -99,8 +104,8 @@ func ValidateManagedFiles(files []ManagedFile) error {
 			return fmt.Errorf("managed file %q: path must be absolute", f.Path)
 		case path.Clean(f.Path) != f.Path:
 			return fmt.Errorf("managed file %q: path must be clean (no %q, %q or trailing separator)", f.Path, "..", "//")
-		case path.Dir(f.Path) != ManagedFileDir && path.Dir(f.Path) != ComponentSecretDir:
-			return fmt.Errorf("managed file %q: a managed file must sit directly in %s; anywhere else the agent could rename its directory aside, a mount could hide it, or delivery could write into a directory it did not create", f.Path, ManagedFileDir)
+		case path.Dir(f.Path) != ManagedFileDir && path.Dir(f.Path) != CodexManagedFileDir && path.Dir(f.Path) != ComponentSecretDir:
+			return fmt.Errorf("managed file %q: a managed file must sit directly in %s or %s; anywhere else the agent could rename its directory aside, a mount could hide it, or delivery could write into a directory it did not create", f.Path, ManagedFileDir, CodexManagedFileDir)
 		case f.AgentOwned != (path.Dir(f.Path) == ComponentSecretDir):
 			return fmt.Errorf("managed file %q: an agent-owned file is a delivered secret and sits in %s, and nothing else does; in %s it would be a ceiling its own subject can rewrite", f.Path, ComponentSecretDir, ManagedFileDir)
 		case f.WipeAfterRead && !f.AgentOwned:

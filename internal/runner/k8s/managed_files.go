@@ -57,7 +57,7 @@ func managedFileSecretData(files []runner.ManagedFile) map[string][]byte {
 // ReadOnly makes writes EROFS regardless of mode), and mounting the
 // DIRECTORY (not just the file) stops the agent renaming it away and
 // substituting its own. runner.ValidateManagedFiles confines the mount
-// points to runner.ManagedFileDir and runner.ComponentSecretDir, so one
+// points to runner.ManagedFileDir, runner.CodexManagedFileDir and runner.ComponentSecretDir, so one
 // never hides a directory the image needs.
 //
 // An AgentOwned file (a delivered secret) is projected at agentSecretItemMode

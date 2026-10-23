@@ -179,6 +179,13 @@ describe("Effective policy card", () => {
     expect(tools).toHaveTextContent("codex-cli: Harness walls: the harness's own sandbox, approvals in the harness");
   });
 
+  // #2822: a Codex run bound to its own sandbox mode says the mode.
+  it("says the Codex sandbox mode a policy binds", () => {
+    const harnesses = [{ ...harnessDefault("codex-cli", "hold"), inner_walls: { sandbox_mode: "read-only", approvals: "none" } }];
+    render(<EffectivePolicyCard draft={draftOf(BASE)} pre={{ ...SCENARIO_PREFLIGHT.member, access: { ...SCENARIO_ACCESS.member, harnesses } } as never} preview={null} />);
+    expect(document.querySelector("[data-policy-row=tools]")).toHaveTextContent("Harness walls: harness sandbox read-only");
+  });
+
   // #2428: the accept-edits source describes only the default for a tool no rule names. The sentence must not
   // claim every other tool asks while the policy's named rules allow or deny some of them.
   it("qualifies the accept-edits sentence to tools no rule names, with named allow and deny rules present", () => {
