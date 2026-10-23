@@ -2224,8 +2224,16 @@ func (s *authzStore) SetWorkspaceOwner(_ context.Context, id uuid.UUID, owner st
 	s.workspaces[id] = ws
 	return ws, nil
 }
-func (s *authzStore) SetWorkspaceOwningUnit(context.Context, uuid.UUID, *uuid.UUID) (types.Workspace, error) {
-	return types.Workspace{}, store.ErrNotFound
+func (s *authzStore) SetWorkspaceOwningUnit(_ context.Context, id uuid.UUID, unit *uuid.UUID) (types.Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ws, ok := s.workspaces[id]
+	if !ok {
+		return types.Workspace{}, store.ErrNotFound
+	}
+	ws.OwningUnitID = unit
+	s.workspaces[id] = ws
+	return ws, nil
 }
 func (s *authzStore) SetWorkspaceRequirements(context.Context, uuid.UUID, map[string]types.WorkspaceRequirement) (types.Workspace, error) {
 	return types.Workspace{}, store.ErrNotFound
