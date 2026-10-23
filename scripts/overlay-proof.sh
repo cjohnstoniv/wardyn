@@ -16,7 +16,8 @@
 #       <lane-dir>/proofs.tsv) has one proof per line, tab-separated:
 #       name, -run regex, want_fail line[, build tags[, package]]. The package
 #       defaults to the directory of the first replaced file. Commit DIR/.proofs
-#       to a throwaway proofs/<lane>-<sha12> branch, never to main.
+#       as the one commit of a throwaway proofs/<lane>-<sha12> branch cut from
+#       origin/main, dispatch the workflow on that branch, and never merge it.
 #   overlay-proof.sh plan <bundle-dir> <keyed_sha>
 #       Prints the workflow matrix as one JSON line: proofs grouped by package.
 #   overlay-proof.sh paths      (NUL-separated paths on stdin)
@@ -26,6 +27,11 @@
 #       Runs the selected proofs one after another, each in a clean tree.
 #       Exit 0 only if every one PASSes, 1 if any FAILs, 2 if the bundle or the
 #       checkout is not what the manifest names.
+#   overlay-proof.sh base <repo-dir> <commit> <main-ref>
+#       Prints the main commit <commit> branches from (their merge base); exit 2
+#       if any path outside .proofs/ differs between the two, so that the
+#       workflow and this script at <commit> are main's. The workflow's plan job
+#       runs it on the dispatched branch; a run counts once it passes locally too.
 #
 # <bundle-dir>/.proofs/manifest.json:
 #   { "keyed_sha": "<40-hex>", "proofs": [ { "name", "package", "run", "tags",
@@ -47,10 +53,11 @@ set -euo pipefail
 # Timeout sizing for the workflow (docs/CI.md: at least twice the measured
 # maximum, ten-minute floor). Measured locally on 2026-10-22 under gate.sh
 # (GOMAXPROCS=2, nice 19): a cold `go test -c ./internal/api` took 89 s and each
-# proof, which recompiles the package under its reverted file, 72 s. A hosted
-# runner starts with a restored but possibly stale cache, so the cold allowance
-# is 5 minutes and each proof gets 2.
-COLD_MIN=${OVERLAY_PROOF_COLD_MIN:-5}
+# proof, which recompiles the package under its reverted file, 72 s. That cold
+# compile had the box's module and build caches; a hosted job restores no cache
+# (the workflow's header says why), so it downloads and builds everything. Not
+# yet measured there: the cold allowance is 10 minutes and each proof gets 2.
+COLD_MIN=${OVERLAY_PROOF_COLD_MIN:-10}
 PROOF_MIN=${OVERLAY_PROOF_PROOF_MIN:-2}
 
 die() { echo "overlay-proof.sh: $*" >&2; exit 2; }
@@ -281,6 +288,17 @@ prove_one() {
   [ "$result" = PASS ]
 }
 
+cmd_base() {
+  [ $# -eq 3 ] || die "usage: base <repo-dir> <commit> <main-ref>"
+  local repo=$1 main=$3 commit base other
+  commit=$(git -C "$repo" rev-parse -q --verify "$2^{commit}") || die "$2 is not a commit in $repo"
+  base=$(git -C "$repo" merge-base "$main" "$commit") || die "$commit shares no history with $main"
+  # --no-renames: a file moved into .proofs/ is listed at its old path, however git pairs renames.
+  other=$(git -C "$repo" diff --name-only --no-renames "$base" "$commit" -- ':(exclude).proofs') || die "cannot diff $commit against $base"
+  [ -z "$other" ] || die "$commit differs from $main ($base) outside .proofs/: $(tr '\n' ' ' <<<"$other")"
+  echo "$base"
+}
+
 cmd_run() {
   [ $# -ge 2 ] || die "usage: run <bundle-dir> <checkout-dir> [--only <name>...]"
   local bundle=$1 src=$2 only=()
@@ -346,7 +364,8 @@ main() {
       ;;
     paths) helper paths ;;
     run) cmd_run "$@" ;;
-    *) die "usage: overlay-proof.sh pack|plan|run|paths ... (see the header)" ;;
+    base) cmd_base "$@" ;;
+    *) die "usage: overlay-proof.sh pack|plan|run|paths|base ... (see the header)" ;;
   esac
 }
 main "$@"
