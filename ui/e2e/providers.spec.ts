@@ -179,6 +179,30 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     await saveProviders(page);
   });
 
+  // #3385: the saved toast sat bottom right for 8 s, on top of Save providers. It now opens at the top centre, below
+  // the top bar, so it covers no control.
+  test("the saved toast opens at the top centre, below the top bar, clear of Save providers", async ({ page }) => {
+    await gotoProviders(page);
+    await page.getByTestId("provider-row-github").locator("textarea").fill("https://github.com/acme2");
+    await page.getByRole("button", { name: PROVIDERS.SAVE_CTA }).click();
+    const toast = page.getByRole("listitem").filter({ hasText: PROVIDERS.SAVED_TOAST });
+    await expect(toast).toBeVisible();
+    // Sonner slides the toast in (0.4s): measure once it has settled.
+    await expect.poll(async () => (await toast.boundingBox())?.y ?? -1).toBeGreaterThanOrEqual(56);
+    const t = (await toast.boundingBox())!;
+    const bar = (await page.locator("header").first().boundingBox())!;
+    const save = (await page.getByRole("button", { name: PROVIDERS.SAVE_CTA }).boundingBox())!;
+    const vw = page.viewportSize()!.width;
+    expect(t.y).toBeGreaterThanOrEqual(bar.y + bar.height);
+    expect(Math.abs(t.x + t.width / 2 - vw / 2)).toBeLessThan(40);
+    const overlaps = t.x < save.x + save.width && save.x < t.x + t.width && t.y < save.y + save.height && save.y < t.y + t.height;
+    expect(overlaps).toBe(false);
+    await toast.getByRole("button", { name: "Close toast" }).click();
+    await expect(page.getByText(PROVIDERS.SAVED_TOAST)).toHaveCount(0);
+    await page.getByTestId("provider-row-github").locator("textarea").fill("https://github.com/acme");
+    await saveProviders(page);
+  });
+
   // #1429/#1428: an Azure DevOps row has no shared credential lane to tick; the
   // console authors the lane its addresses call for and the person-owned choice.
   test("Add provider authors a valid Azure DevOps row: no lanes to tick, the token choice, saved in the entra lane", async ({ page }) => {

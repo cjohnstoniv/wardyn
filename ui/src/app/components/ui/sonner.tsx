@@ -27,6 +27,13 @@ const Toaster = ({ ...props }: ToasterProps) => {
       // {duration}) still wins for that one toast.
       closeButton
       toastOptions={{ duration: 8000 }}
+      // #3385: top centre, below the 56px top bar (h-14) plus a gap. The bottom-right corner is where Save sits
+      // (the shared form bar pins every long editor's primary there), and the top right is the page header's actions
+      // slot; the top centre is the page title, text, so no toast covers a control. mobileOffset keeps the same gap
+      // on a phone, where sonner spans the width.
+      position="top-center"
+      offset={{ top: 64 }}
+      mobileOffset={{ top: 64 }}
       {...props}
     />
   );
