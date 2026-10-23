@@ -654,6 +654,7 @@ func (s *Server) handlePutWorkspaceProviders(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	// SEAM-1: the site-config lock (locks.go) serializes this RMW with the document's other writers.
+	defer s.revokeWithdrawnLocalPATs(r.Context()) // before the unlock below, so it runs after it
 	r, unlock, ok := s.lockDoor(w, r, db.SiteConfigLockClass)
 	if !ok {
 		return

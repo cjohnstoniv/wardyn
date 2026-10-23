@@ -131,6 +131,7 @@ func (s *Server) handlePutRunnerTrust(w http.ResponseWriter, r *http.Request) {
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r), placement.ActionRunnerTrustWrite, id.String(), "success",
 		mustJSON(runnerTrustAuditData(prev.TrustClass, row.TrustClass, reason))))
+	s.revokeWithdrawnLocalPATs(r.Context())
 	if mode == govBypass {
 		s.recordGovernanceBypass(r, govKindRunnerTrust, id.String(), "success", nil)
 	}
@@ -179,5 +180,6 @@ func applyRunnerTrustChange(s *Server, r *http.Request, q store.Querier, ch type
 		return govApplied{}, err
 	}
 	return govApplied{action: placement.ActionRunnerTrustWrite, target: c.RunnerID.String(),
-		data: runnerTrustAuditData(row.TrustClass, after.TrustClass, c.Reason)}, nil
+		data:        runnerTrustAuditData(row.TrustClass, after.TrustClass, c.Reason),
+		afterCommit: func() map[string]any { s.revokeWithdrawnLocalPATs(ctx); return nil }}, nil
 }

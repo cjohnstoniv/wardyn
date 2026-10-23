@@ -369,8 +369,9 @@ func (s *Server) refuseRelayedDelivery(w http.ResponseWriter, r *http.Request, c
 // least every residentRejudgeEvery (resolveADORunPAT), so a policy flip, a
 // trust change or a withdrawn opt-in refuses within that interval, and the
 // run's tokens are then revoked at Azure DevOps (reason drift), so a token the
-// proxy still holds is dead at the provider too. Every other resident grant is
-// refused.
+// proxy still holds is dead at the provider too. A write that withdraws the
+// delivery revokes them at once (revokeWithdrawnLocalPATs). Every other
+// resident grant is refused.
 func (s *Server) relayedResidentADO(ctx context.Context, runID, runner uuid.UUID, grant types.CredentialGrant) bool {
 	if grant.RunID != runID || grant.Spec.Kind != types.GrantAPIKey {
 		return false
@@ -379,19 +380,11 @@ func (s *Server) relayedResidentADO(ctx context.Context, runID, runner uuid.UUID
 	if err != nil || run.Placement != types.PlacementLocal || run.RunnerID == nil || *run.RunnerID != runner {
 		return false
 	}
-	origin, ref := s.localGrantOrigin(ctx, runIdentitySubject(ctx, run.CreatedBy), grant.Spec)
-	if ref != nil || !residentADOOrigin(origin) {
-		return false
-	}
-	r, err := s.residentADOAdmits(ctx, run, origin)
-	if err != nil {
-		return false
-	}
-	if r != nil {
+	admitted, withdrawn := s.judgeResidentADO(ctx, run, runIdentitySubject(ctx, run.CreatedBy), grant)
+	if withdrawn {
 		s.revokeRunPATs(ctx, runID, adoPATRevokeDrift)
-		return false
 	}
-	return true
+	return admitted
 }
 
 // denyRelayed writes a relay refusal: authz.denied with runner_id (the
