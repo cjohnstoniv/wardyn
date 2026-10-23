@@ -1385,8 +1385,9 @@ jobs:
           # so leaving it unset made a green release depend on that default
           # never crossing a major — and docs/VERIFY.md's `cosign verify-blob
           # --signature/--certificate` recipe depends on the same v2 shape.
-          # Migrating to `--bundle SHA256SUMS.sigstore.json` means changing that
-          # documented verify recipe in the same edit; until then, pin.
+          # The sign step also writes the Sigstore bundle SHA256SUMS.sigstore.json
+          # (`wardyn runner install` verifies it offline); the .sig/.pem pair stays
+          # for that documented recipe, so keep the pin.
           cosign-release: "v2.6.4"
       - name: Collect the per-image SBOMs
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -1443,6 +1444,7 @@ jobs:
           cosign sign-blob --yes \
             --output-signature SHA256SUMS.sig \
             --output-certificate SHA256SUMS.pem \
+            --bundle SHA256SUMS.sigstore.json --new-bundle-format \
             SHA256SUMS
       - name: Upload to the Release
         env:
@@ -1461,7 +1463,7 @@ jobs:
         run: |
           set -euo pipefail
           have=$(gh release view "$TAG" --json assets -q '.assets[].name' | sort)
-          for want in SHA256SUMS SHA256SUMS.sig SHA256SUMS.pem THIRD-PARTY-NOTICES.md LICENSE NOTICE \
+          for want in SHA256SUMS SHA256SUMS.sig SHA256SUMS.pem SHA256SUMS.sigstore.json THIRD-PARTY-NOTICES.md LICENSE NOTICE \
                       install.sh install-cli.sh install-cli.ps1 wardyn-linux-amd64 wardyn-linux-arm64 wardyn-darwin-amd64 wardyn-darwin-arm64 \
                       wardyn-windows-amd64.exe wardyn-windows-arm64.exe \
                       wardyn-runnerd-linux-amd64 wardyn-runnerd-linux-arm64 wardyn-runnerd-darwin-amd64 wardyn-runnerd-darwin-arm64 \

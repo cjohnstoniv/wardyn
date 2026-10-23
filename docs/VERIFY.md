@@ -135,6 +135,15 @@ cosign verify-blob \
   SHA256SUMS
 ```
 
+From 0.10.0, `SHA256SUMS.sigstore.json` carries the same signature as a Sigstore bundle:
+
+```sh
+cosign verify-blob --bundle SHA256SUMS.sigstore.json \
+  --certificate-identity "https://github.com/cjohnstoniv/wardyn/.github/workflows/release.yml@refs/tags/v${WARDYN_VERSION}" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  SHA256SUMS
+```
+
 ## 6. What the one-line installer checks — and what it leaves to you
 
 > [!IMPORTANT]
