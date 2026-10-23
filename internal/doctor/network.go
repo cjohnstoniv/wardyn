@@ -37,8 +37,10 @@ type Network struct {
 	// Identity adds the /api/v1/me stage. Token is never printed; TokenSource names where it came from.
 	Identity           bool
 	Token, TokenSource string
-	LookupHost         func(ctx context.Context, host string) ([]string, error)
-	ProxyFor           func(*http.Request) (*url.URL, error)
+	// Wire adds the runner-wire stage: whether a WebSocket upgrade on the runner stream route gets through.
+	Wire       bool
+	LookupHost func(ctx context.Context, host string) ([]string, error)
+	ProxyFor   func(*http.Request) (*url.URL, error)
 	// SystemRoots is the trust store the command uses (nil: the system's). ExtraCA is a PEM bundle named by
 	// ExtraCASource (a setting's name); ExtraCATrusted says whether the command being diagnosed trusts it:
 	// the runner does, the CLI does not, and a certificate only that bundle verifies is a failure there.
@@ -63,6 +65,9 @@ func (n *Network) Run(ctx context.Context) []Stage {
 	var out []Stage
 	add := func(s Stage) { out = append(out, s.scrub(secrets)) }
 	rest := func(why string, names ...string) {
+		if n.Wire {
+			names = append(names, "wire")
+		}
 		if n.Identity {
 			names = append(names, "identity")
 		}
@@ -97,6 +102,13 @@ func (n *Network) Run(ctx context.Context) []Stage {
 		healthSt = n.healthStage(u, proxy, p, resp, err)
 	}
 	add(healthSt)
+	if n.Wire {
+		if healthSt.Status != StatusOK {
+			add(SkipStage("wire", "not run: /healthz did not answer"))
+		} else {
+			add(n.wireStage(ctx, u, proxy, p, tr))
+		}
+	}
 	if n.Identity {
 		if healthSt.Status != StatusOK {
 			add(SkipStage("identity", "not run: /healthz did not answer"))
@@ -372,4 +384,42 @@ func (n *Network) identityStage(ctx context.Context, u *url.URL, tr *http.Transp
 		who = "the token from " + n.TokenSource
 	}
 	return OKStage("identity", fmt.Sprintf("%s: method %s, role %s", who, me.Method, me.Role))
+}
+
+// nilRunner names no runner. The wire stage asks for an upgrade on this runner's stream route, so no
+// identity of the runner's is used and no credential is sent.
+const nilRunner = "00000000-0000-0000-0000-000000000000"
+
+// wireStage asks the runner stream route to switch to a WebSocket and hangs up at once. The organisation
+// answers 101 when the upgrade got through every proxy and gateway on the route; a proxy that strips the
+// upgrade headers leaves the organisation a plain GET (426), or answers by itself.
+func (n *Network) wireStage(ctx context.Context, u, proxy *url.URL, p *probe, tr *http.Transport) Stage {
+	ctx, cancel := context.WithTimeout(ctx, 3*stageBound)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(u.String(), "/")+"/api/v1/runners/"+nilRunner+"/stream", nil)
+	if err != nil {
+		return FailStage("wire", "the runner stream address cannot be built: "+err.Error(), n.OrgSetting, "your organisation's public HTTPS address")
+	}
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	req.Header.Set("Sec-WebSocket-Version", "13")
+	req.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+	resp, err := (&http.Client{Transport: tr, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}).Do(req)
+	if err != nil {
+		return n.connFailure("wire", err, p, u, proxy)
+	}
+	_ = resp.Body.Close()
+	where, setting, fix := "something on the route to "+u.Host, n.OrgSetting, "an address that reaches Wardyn without a gateway that strips the WebSocket upgrade (a runner holds one WebSocket open to it)"
+	if proxy != nil {
+		where, setting, fix = "the proxy "+proxy.Host, proxyVar(u), "a proxy that passes WebSocket upgrades (Connection: Upgrade, Upgrade: websocket) to "+u.Host+", or add it to NO_PROXY"
+	}
+	switch {
+	case resp.StatusCode == http.StatusSwitchingProtocols:
+		return OKStage("wire", "the runner stream route switched to a WebSocket: the upgrade gets through")
+	case resp.StatusCode == http.StatusProxyAuthRequired:
+		return FailStage("wire", where+" answered 407: it wants proxy authentication", proxyVar(u), "a proxy address that includes credentials it accepts")
+	case resp.StatusCode == http.StatusUpgradeRequired || resp.StatusCode < 300:
+		return FailStage("wire", fmt.Sprintf("the runner stream route answered %d instead of switching to a WebSocket: %s removes the upgrade, and a runner cannot connect through it", resp.StatusCode, where), setting, fix)
+	}
+	return FailStage("wire", fmt.Sprintf("the runner stream route answered %d: runners are switched off there, or %s blocks WebSocket upgrades", resp.StatusCode, where), setting, fix)
 }

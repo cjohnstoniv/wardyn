@@ -5,6 +5,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -38,6 +39,22 @@ type runnerStatus struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// statusPath is statusFile in stateDir.
+func statusPath(stateDir string) string { return filepath.Join(stateDir, statusFile) }
+
+// loadStatus is what the service last wrote to path, for doctor. It reads only.
+func loadStatus(path string) (runnerStatus, error) {
+	var st runnerStatus
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return st, err
+	}
+	if err := json.Unmarshal(b, &st); err != nil {
+		return st, fmt.Errorf("%s is not readable as the runner's status: %w", path, err)
+	}
+	return st, nil
+}
+
 // statusWriter keeps statusFile current. A write that fails is logged once and never stops the runner.
 type statusWriter struct {
 	mu     sync.Mutex
@@ -51,7 +68,7 @@ type statusWriter struct {
 }
 
 func newStatusWriter(stateDir string) *statusWriter {
-	w := &statusWriter{path: filepath.Join(stateDir, statusFile), now: time.Now}
+	w := &statusWriter{path: statusPath(stateDir), now: time.Now}
 	w.cur = runnerStatus{PID: os.Getpid()}
 	w.set("starting")
 	return w
