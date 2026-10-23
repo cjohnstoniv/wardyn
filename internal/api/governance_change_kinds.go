@@ -211,9 +211,12 @@ func newUnitDiffView(row types.GovernanceUnit, res *ResolvedUnit, tier specReadT
 }
 
 // redactOverlayForRead is redactSpecForRead for an overlay, on a copy: a raw llm_inspection secret
-// value is replaced by a count, and below the super admin tier each workspace mount's host path is
-// withheld. Only the admin surfaces serve an overlay, so tier is never specReadMember here.
+// value is replaced by a count, below the super admin tier each workspace mount's host path is
+// withheld, and at the member tier (a unit admin's read) redactOverlayForUser applies.
 func redactOverlayForRead(o *types.CeilingOverlay, tier specReadTier) *types.CeilingOverlay {
+	if tier == specReadMember {
+		o = redactOverlayForUser(o)
+	}
 	withhold := tier != specReadFull && o != nil && o.WorkspaceMounts != nil && len(*o.WorkspaceMounts) > 0
 	if !withhold && (o == nil || o.LLMInspection == nil || len(o.LLMInspection.WorkspaceSecretValues) == 0) {
 		return o
@@ -228,6 +231,27 @@ func redactOverlayForRead(o *types.CeilingOverlay, tier specReadTier) *types.Cei
 		li.WorkspaceSecretValues = []string{fmt.Sprintf("<%d value(s) redacted>", len(li.WorkspaceSecretValues))}
 		cp.LLMInspection = &li
 	}
+	return &cp
+}
+
+// redactOverlayForUser is redactSpecForUser for an overlay's eligible grants and llm_inspection, on a
+// copy: the secret refs on the grants and llm_inspection.workspace_secret_names are hidden as a
+// member-tier ceiling hides them.
+func redactOverlayForUser(o *types.CeilingOverlay) *types.CeilingOverlay {
+	if o == nil || (o.EligibleGrants == nil && o.LLMInspection == nil) {
+		return o
+	}
+	cp := *o
+	spec := types.RunPolicySpec{LLMInspection: o.LLMInspection}
+	if o.EligibleGrants != nil {
+		spec.EligibleGrants = *o.EligibleGrants
+	}
+	spec = redactSpecForUser(spec)
+	if o.EligibleGrants != nil {
+		grants := spec.EligibleGrants
+		cp.EligibleGrants = &grants
+	}
+	cp.LLMInspection = spec.LLMInspection
 	return &cp
 }
 

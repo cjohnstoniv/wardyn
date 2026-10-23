@@ -225,8 +225,9 @@ func profilePayloadSetsHostPath(raw json.RawMessage) bool {
 // every workspace_mounts[].source anywhere in the diff is mountSourceWithheld. A change that sets a
 // host path is already hidden from that tier (canSeeGovernanceChange); this holds whatever the diff
 // was rendered with. At the member tier (a unit admin) every ceiling in it also passes
-// redactSpecForUser, the step redactSpecForRead adds there over the security tier the diff was
-// rendered at, so a held change's specs read as GET /governance shows them. Both sides of the diff
+// redactSpecForUser and every overlay redactOverlayForUser, the step each read redaction adds there
+// over the security tier the diff was rendered at, so a held change's specs read as GET /governance
+// shows them. Both sides of the diff
 // pass it alike and changed keeps the paths the rendered views differ at, so a redacted field never
 // reads as a change it is not. A diff that does not decode is not served.
 func (s *Server) changeForRead(r *http.Request, ch types.GovernanceChange) types.GovernanceChange {
@@ -247,18 +248,27 @@ func (s *Server) changeForRead(r *http.Request, ch types.GovernanceChange) types
 }
 
 // redactCeilingsForUserIn replaces every "ceiling" object in v (each one a types.RunPolicySpec) with
-// redactSpecForUser of it, and reports false when one does not decode as a spec.
+// redactSpecForUser of it and every "overlay" object (a types.CeilingOverlay) with
+// redactOverlayForUser of it, and reports false when one does not decode as its type.
 func redactCeilingsForUserIn(v any) bool {
 	switch x := v.(type) {
 	case map[string]any:
 		for k, val := range x {
-			if m, ok := val.(map[string]any); ok && k == "ceiling" {
+			m, ok := val.(map[string]any)
+			switch {
+			case ok && k == "ceiling":
 				var spec types.RunPolicySpec
 				if json.Unmarshal(mustJSON(m), &spec) != nil {
 					return false
 				}
 				x[k] = mustJSON(redactSpecForUser(spec))
-			} else if !redactCeilingsForUserIn(val) {
+			case ok && k == "overlay":
+				var o types.CeilingOverlay
+				if json.Unmarshal(mustJSON(m), &o) != nil {
+					return false
+				}
+				x[k] = mustJSON(redactOverlayForUser(&o))
+			case !redactCeilingsForUserIn(val):
 				return false
 			}
 		}
