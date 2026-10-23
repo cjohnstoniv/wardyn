@@ -39,3 +39,27 @@ func TestEgressHostPortAllowRows_InertOnlyWithTheSwitch(t *testing.T) {
 		}
 	}
 }
+
+// The access step's decider follows the same switch: with it on, a member whose only egress_host allow
+// row carries a port decides nothing for themselves (admin); with it off that row still makes them a
+// decider (you_or_admin). A host allow row keeps them one either way.
+func TestEgressHostPortAllowRows_DeciderExcludesThemOnlyWithTheSwitch(t *testing.T) {
+	enf := map[string]bool{capEgressHost: true}
+	portAllow := grant(types.CapabilitySubjectUser, capSub, capEgressHost, "pypi.org:443", types.CapabilityAllow)
+	hostAllow := grant(types.CapabilitySubjectUser, capSub, capEgressHost, "pypi.org", types.CapabilityAllow)
+	for _, tc := range []struct {
+		grants []types.CapabilityGrant
+		on     bool
+		want   string
+	}{
+		{[]types.CapabilityGrant{portAllow}, false, deciderYouOrAdmin},
+		{[]types.CapabilityGrant{portAllow}, true, deciderAdmin},
+		{[]types.CapabilityGrant{portAllow, hostAllow}, true, deciderYouOrAdmin},
+	} {
+		srv := capServer(&capStore{grants: tc.grants, enf: enf})
+		srv.cfg.EgressHostPortGrantsInert = tc.on
+		if got, err := srv.accessDecider(memberCtx(nil)); err != nil || got != tc.want {
+			t.Errorf("switch %v, %d row(s): decider = %q, %v; want %q", tc.on, len(tc.grants), got, err, tc.want)
+		}
+	}
+}
