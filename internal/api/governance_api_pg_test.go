@@ -378,7 +378,7 @@ func TestGovernanceCheckEqualsResolve(t *testing.T) {
 		}
 		got := e.check(body).Effective
 		want := treeCeiling(t, e, withContextChoice(treeCtx("sub-ck", nil, ""), contextChoice{RunIn: runIn}))
-		if got == nil || !reflect.DeepEqual(got.Ceiling, redactSpecForRead(want.Spec, true)) || !reflect.DeepEqual(got.Limits, want.Limits) {
+		if got == nil || !reflect.DeepEqual(got.Ceiling, redactSpecForRead(want.Spec, specReadFull)) || !reflect.DeepEqual(got.Limits, want.Limits) {
 			t.Errorf("run_in %s: check effective %+v, want the resolved %+v %+v", runIn, got, want.Spec, want.Limits)
 		}
 	}

@@ -1,0 +1,28 @@
+#!/bin/sh
+# Copyright 2026 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# wardyn-vm-image: converts a guest image's filesystem, /out/rootfs.tar (the image exported by
+# wardyn-runnerd), into the files a Linux VM sandbox boots from, in /out: rootfs.raw (ext4, built
+# from the tar by mke2fs -d, so file owners come from the tar and nothing runs as root), vmlinuz and
+# initrd.img (the image's one /boot/vmlinuz-* and /boot/initrd.img-*, for direct kernel boot). The
+# filesystem is the tar's size x 1.5 + 1 GiB, rounded up to 256 MiB: the room a run's overlay can grow into.
+set -eu
+# libarchive (mke2fs -d) refuses non-ASCII names, link targets included, outside a UTF-8 locale.
+export LC_ALL=C.UTF-8
+cd /out
+[ -f rootfs.tar ] || { echo "wardyn-vm-image: no /out/rootfs.tar" >&2; exit 2; }
+bytes=$(stat -c %s rootfs.tar)
+size=$(( (bytes * 3 / 2 / 1048576 + 1024 + 255) / 256 * 256 ))
+tar -tf rootfs.tar > list
+k=$(grep -E '^(\./)?boot/vmlinuz-[^/]+$' list || true)
+i=$(grep -E '^(\./)?boot/initrd\.img-[^/]+$' list || true)
+[ "$(printf '%s\n' "$k" | grep -c .)" = 1 ] || { echo "wardyn-vm-image: the image must hold exactly one /boot/vmlinuz-*" >&2; exit 3; }
+[ "$(printf '%s\n' "$i" | grep -c .)" = 1 ] || { echo "wardyn-vm-image: the image must hold exactly one /boot/initrd.img-*" >&2; exit 3; }
+mkdir boot.x
+tar -C boot.x -xf rootfs.tar "$k" "$i"
+mv "boot.x/$k" vmlinuz
+mv "boot.x/$i" initrd.img
+rm -rf boot.x list
+mke2fs -q -F -t ext4 -L wardyn-root -d rootfs.tar rootfs.raw "${size}M"
+rm rootfs.tar

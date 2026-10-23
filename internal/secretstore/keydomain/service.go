@@ -122,30 +122,108 @@ type Placement struct {
 
 // Place is Domain with the reason: the same decision, the same refusals.
 func (s *Service) Place(ctx context.Context, owner string) (Placement, error) {
-	var groups []string
-	var truncated bool
-	var raw []byte
-	err := s.pool.QueryRow(ctx, `SELECT groups, truncated FROM key_domain_login_groups WHERE principal=$1`, owner).Scan(&raw, &truncated)
-	switch {
-	case errors.Is(err, pgx.ErrNoRows):
-	case err != nil:
-		return Placement{}, unavailable("read the login's groups", err)
-	default:
-		if err := json.Unmarshal(raw, &groups); err != nil {
-			return Placement{}, fmt.Errorf("keydomain: the stored groups of %q are not a list: %w", owner, err)
+	p := s.PlaceMany(ctx, []string{owner})[owner]
+	return p.Placement, p.Err
+}
+
+// Placed is one person's outcome from PlaceMany: what Place returns for them.
+type Placed struct {
+	Placement
+	Err error
+}
+
+// PlaceMany is Place for every owner in two set queries instead of two per
+// person. Each owner's outcome, refusals included, is what Place would give; a
+// Postgres that does not answer is every owner's outcome.
+func (s *Service) PlaceMany(ctx context.Context, owners []string) map[string]Placed {
+	down := func(err error) map[string]Placed {
+		out := make(map[string]Placed, len(owners))
+		for _, o := range owners {
+			out[o] = Placed{Err: err}
+		}
+		return out
+	}
+	rows, err := s.pool.Query(ctx, `SELECT principal, groups, truncated FROM key_domain_login_groups WHERE principal = ANY($1)`, owners)
+	if err != nil {
+		return down(unavailable("read the login's groups", err))
+	}
+	logins, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct {
+		Principal string
+		Raw       []byte
+		Truncated bool
+	}])
+	if err != nil {
+		return down(unavailable("read the login's groups", err))
+	}
+	out := make(map[string]Placed, len(owners))
+	groupsOf := map[string]map[string]bool{}
+	truncatedOf := map[string]bool{}
+	var allGroups []string
+	for _, l := range logins {
+		var groups []string
+		if err := json.Unmarshal(l.Raw, &groups); err != nil {
+			out[l.Principal] = Placed{Err: fmt.Errorf("keydomain: the stored groups of %q are not a list: %w", l.Principal, err)}
+			continue
+		}
+		groupsOf[l.Principal] = map[string]bool{}
+		for _, g := range groups {
+			groupsOf[l.Principal][g] = true
+		}
+		truncatedOf[l.Principal] = l.Truncated
+		allGroups = append(allGroups, groups...)
+	}
+	rows, err = s.pool.Query(ctx, `
+		SELECT subject_type, subject, domain FROM key_domain_assignments
+		WHERE (subject_type='user' AND subject = ANY($1)) OR subject_type='all' OR (subject_type='group' AND subject = ANY($2))`,
+		owners, allGroups)
+	if err != nil {
+		return down(unavailable("read the assignments", err))
+	}
+	hits, err := pgx.CollectRows(rows, pgx.RowToStructByPos[hit])
+	if err != nil {
+		return down(unavailable("read the assignments", err))
+	}
+	var allHits []hit
+	userHits, groupHits := map[string][]hit{}, map[string][]hit{}
+	for _, h := range hits {
+		switch h.Type {
+		case SubjectAll:
+			allHits = append(allHits, h)
+		case SubjectUser:
+			userHits[h.Subject] = append(userHits[h.Subject], h)
+		case SubjectGroup:
+			groupHits[h.Subject] = append(groupHits[h.Subject], h)
 		}
 	}
-	rows, err := s.pool.Query(ctx, `
-		SELECT subject_type, subject, domain FROM key_domain_assignments
-		WHERE (subject_type='user' AND subject=$1) OR subject_type='all' OR (subject_type='group' AND subject = ANY($2))`,
-		owner, groups)
-	if err != nil {
-		return Placement{}, unavailable("read the assignments", err)
+	var anyGroup, anyRead bool
+	anyGroupAssignment := func() (bool, error) { // asked once, and only for a truncated login
+		if !anyRead {
+			err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM key_domain_assignments WHERE subject_type='group')`).Scan(&anyGroup)
+			if err != nil {
+				return false, unavailable("read the assignments", err)
+			}
+			anyRead = true
+		}
+		return anyGroup, nil
 	}
-	hits, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct{ Type, Subject, Domain string }])
-	if err != nil {
-		return Placement{}, unavailable("read the assignments", err)
+	for _, owner := range owners {
+		if _, done := out[owner]; done {
+			continue
+		}
+		mine := slices.Concat(allHits, userHits[owner])
+		for g := range groupsOf[owner] {
+			mine = append(mine, groupHits[g]...)
+		}
+		out[owner] = s.decide(owner, mine, truncatedOf[owner], anyGroupAssignment)
 	}
+	return out
+}
+
+// hit is one assignment row that may name a person.
+type hit struct{ Type, Subject, Domain string }
+
+// decide places owner from the assignments that name them, failing closed.
+func (s *Service) decide(owner string, hits []hit, truncated bool, anyGroupAssignment func() (bool, error)) Placed {
 	var user, all string
 	byGroup := map[string][]string{} // domain -> the groups naming it
 	for _, h := range hits {
@@ -169,7 +247,7 @@ func (s *Service) Place(ctx context.Context, owner string) (Placement, error) {
 			parts = append(parts, fmt.Sprintf("%s (%s)", d, strings.Join(gs, ", ")))
 		}
 		slices.Sort(parts)
-		return Placement{}, fmt.Errorf("%w: %q is in groups assigned to %s; assign the person to one domain as a user", ErrAmbiguous, owner, strings.Join(parts, " and "))
+		return Placed{Err: fmt.Errorf("%w: %q is in groups assigned to %s; assign the person to one domain as a user", ErrAmbiguous, owner, strings.Join(parts, " and "))}
 	case len(byGroup) == 1:
 		for d, gs := range byGroup {
 			slices.Sort(gs)
@@ -179,18 +257,18 @@ func (s *Service) Place(ctx context.Context, owner string) (Placement, error) {
 		place = Placement{Domain: all, Source: SourceAll}
 	}
 	if truncated && user == "" {
-		var any bool
-		if err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM key_domain_assignments WHERE subject_type='group')`).Scan(&any); err != nil {
-			return Placement{}, unavailable("read the assignments", err)
+		any, err := anyGroupAssignment()
+		if err != nil {
+			return Placed{Err: err}
 		}
 		if any {
-			return Placement{}, fmt.Errorf("%w: the last sign-in of %q lost groups; assign the person to a domain as a user", ErrGroupsTruncated, owner)
+			return Placed{Err: fmt.Errorf("%w: the last sign-in of %q lost groups; assign the person to a domain as a user", ErrGroupsTruncated, owner)}
 		}
 	}
 	if !s.Has(place.Domain) {
-		return Placement{}, fmt.Errorf("%w: %q is assigned to %q", ErrUnknownDomain, owner, place.Domain)
+		return Placed{Err: fmt.Errorf("%w: %q is assigned to %q", ErrUnknownDomain, owner, place.Domain)}
 	}
-	return place, nil
+	return Placed{Placement: place}
 }
 
 // RecordLoginGroups stamps the groups of a verified login, which a group

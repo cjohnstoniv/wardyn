@@ -58,17 +58,6 @@ func validateBoundary(b *types.BoundaryWrite) error {
 	return validateBoundarySpec(b.Spec, b.Limits)
 }
 
-// boundaryHardLimitsGated refuses a write into hard_limits: the boundary cannot be switched on until
-// it bounds every brokered credential path a run is given (#3238).
-// Ungating it must update docs/sdk.md's line that nothing locks a knob yet.
-func boundaryHardLimitsGated(b types.BoundaryWrite) *unitWriteError {
-	if b.Mode != types.BoundaryHardLimits {
-		return nil
-	}
-	return writeRefusal(http.StatusConflict, reasonBoundaryHardLimitsGated,
-		"hard_limits cannot be set yet: the Wardyn boundary does not bound every brokered credential path a run is given, so it stays in no_limits until it does")
-}
-
 // validateBoundarySpec refuses knobs the boundary cannot hold. They are judged by the validator a
 // stored policy passes (an unnamed confinement floor reads as the lowest), so a boundary allowlist,
 // deny list or grant is spelled as a policy's is.
@@ -98,7 +87,7 @@ func validateBoundarySpec(sp types.BoundarySpec, limits types.BoundaryLimits) er
 	if err := validateAllowedDomainsCount(spec.AllowedDomains); err != nil {
 		return err
 	}
-	return validatePolicySpec(spec)
+	return validateAuthoredPolicySpec(spec)
 }
 
 // handleGetBoundary returns the boundary, with the ETag PUT's If-Match is judged against.
@@ -130,10 +119,6 @@ func (s *Server) handlePutBoundary(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := validateBoundary(&body); err != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonBoundaryInvalid, "invalid Wardyn boundary: "+err.Error())
-		return
-	}
-	if g := boundaryHardLimitsGated(body); g != nil {
-		writeErrorReason(w, g.status, g.reason, g.msg)
 		return
 	}
 	cur, err := bs.GetBoundary(r.Context())
@@ -182,9 +167,6 @@ func applyBoundaryChange(_ *Server, r *http.Request, q store.Querier, ch types.G
 	}
 	if err := validateBoundary(&held); err != nil {
 		return govApplied{}, writeRefusal(http.StatusBadRequest, reasonBoundaryInvalid, "invalid Wardyn boundary: %s", err.Error())
-	}
-	if g := boundaryHardLimitsGated(held); g != nil {
-		return govApplied{}, g
 	}
 	if err := store.LockGovernanceTarget(ctx, q, govKindBoundary); err != nil {
 		return govApplied{}, err
@@ -266,14 +248,15 @@ func (s *Server) handleBoundaryDryRun(w http.ResponseWriter, r *http.Request) {
 }
 
 // boundaryDryRun meets the deployment default, each profile as it composes, each stored policy and so
-// each assignment with b. The values shown pass the read redaction a security admin's read does.
+// each assignment with b. The values shown pass the read redaction of the caller's tier.
 func (s *Server) boundaryDryRun(ctx context.Context, b types.Boundary) (boundaryReport, error) {
+	tier := s.specReadTierFor(ctx)
 	meet := func(spec types.RunPolicySpec, limits types.GovernanceLimits) ([]boundaryChange, error) {
 		after, afterLimits, _, err := boundaryMeet(b, spec, limits)
 		if err != nil {
 			return nil, err
 		}
-		return boundaryChanges(redactSpecForRead(spec, true), redactSpecForRead(after, true), limits, afterLimits), nil
+		return boundaryChanges(redactSpecForRead(spec, tier), redactSpecForRead(after, tier), limits, afterLimits), nil
 	}
 	report := boundaryReport{Units: []boundaryReportRow{}, StoredPolicies: []boundaryReportRow{}, Memberships: []boundaryReportAssign{}}
 	var err error
@@ -372,10 +355,10 @@ func (s *Server) admitBreakGlass(w http.ResponseWriter, r *http.Request) (*http.
 // outside. The Default unit (the deployment default) does not count: the admin token never was held
 // to it; nor does a pass-through unit, which adds nothing. With no such unit there is nothing to
 // lift, so the run is an ordinary one, bound by the boundary, untagged. Restrictions join this test
-// with the RESTRICT-PIN lane.
+// with the RESTRICT-PIN lane. A boundary that bounds nothing (the fresh-install seed) asks no reason, as no_limits.
 func (s *Server) breakGlassLifts(ctx context.Context) (bool, error) {
 	b, err := s.governanceBoundary(ctx)
-	if err != nil || !b.HardLimits() {
+	if err != nil || !b.HardLimits() || boundaryBoundsNothing(b, boundaryOverlay(b)) {
 		return false, err
 	}
 	units, err := s.cfg.Store.CountOwnWallsUnits(ctx)

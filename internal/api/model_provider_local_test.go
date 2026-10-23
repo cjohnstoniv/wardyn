@@ -169,6 +169,9 @@ func TestProviderDispatch_LocalModel(t *testing.T) {
 				lm.MaxOutput != types.DefaultLocalMaxOutput || lm.KeepAliveSeconds != types.DefaultLocalKeepAliveSeconds {
 				t.Errorf("local models = %+v, want the allowlist with the default bounds", plan.localModels)
 			}
+			if got := plan.localAllowlists[p.ID]; !slices.Equal(got, p.Local.Models) {
+				t.Errorf("local allowlists = %v, want %s -> %v", plan.localAllowlists, p.ID, p.Local.Models)
+			}
 			switch tc.agent {
 			case "claude-code":
 				for _, k := range []string{"ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL"} {

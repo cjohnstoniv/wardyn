@@ -60,7 +60,9 @@ type backgroundDoor struct {
 // gateway, so a direct API or CLI call needs no door of its own: denying here
 // denies there.
 var backgroundDoors = []backgroundDoor{
-	{Door: "terminal", Owner: "H4 (attach relay), H5", Symbols: []string{"handleAttachTicket", "handleAttachWS", "handleAttachTakeover"},
+	// admitRunEntry, not handleAttachTicket: the ticket mint and a "Needs you" takeover's three
+	// verbs (loadTakeover, under /approvals/{id}) enter only through it, and it asks the predicate.
+	{Door: "terminal", Owner: "H4 (attach relay), H5", Symbols: []string{"admitRunEntry", "handleAttachWS", "handleAttachTakeover"},
 		Routes: []string{"POST /runs/{id}/attach-ticket", "POST /runs/{id}/attach/ticket", "GET /runs/{id}/attach", "POST /runs/{id}/attach/takeover"}, Enforced: true},
 	{Door: "interactive exec", Owner: "C-mode-doors", Symbols: []string{"establishExec"}, Enforced: true},
 	// sshFreshRun, not the channel handlers: those take a run id and hold no run,
@@ -70,7 +72,13 @@ var backgroundDoors = []backgroundDoor{
 	// handleUIEnter only parses and delegates to uiEnterCommon, and handleUIBind
 	// sets a binding cookie without reading any run, so neither can ask honestly.
 	{Door: "web application gateway", Owner: "C-mode-doors", Symbols: []string{"uiEnterCommon", "uiSessionStillAuthorized"}, Enforced: true},
-	{Door: "desktop", Owner: "C-mode-doors (no desktop surface exists yet; its first owner adds the symbols here)"},
+	// The desktop's own display is the novnc app, behind the web application
+	// gateway above. Its routes here are the Files panel, which moves files in and
+	// out of the graphical desktop (desktopRun), and the person's sign-in inside it
+	// (#2972): signinRun is the one read every sign-in route makes before it acts.
+	{Door: "desktop", Owner: "CTL-A (desktop Files panel), CTL-C (desktop sign-ins)", Symbols: []string{"desktopRun", "signinRun"},
+		Routes: []string{"GET /runs/{id}/desktop/files", "PUT /runs/{id}/desktop/files/{name}", "GET /runs/{id}/desktop/files/{name}",
+			"POST /runs/{id}/desktop-signin", "POST /runs/{id}/desktop-signin/shares", "POST /runs/{id}/desktop-signin/end"}, Enforced: true},
 }
 
 // passiveRunRoutes are the /runs/{id} routes that are not interactive doors: they
@@ -98,6 +106,8 @@ var passiveRunRoutes = map[string]string{
 	"POST /runs/{id}/profile/synthesize": "synthesise a profile from audit",
 	"POST /runs/{id}/resume":             "lifecycle: resume a paused run",
 	"POST /runs/{id}/revive":             "lifecycle recovery; the revived run keeps its stored experience, so every door above still refuses it",
+
+	"POST /runs/{id}/computer-folder/bring-back": "lifecycle: end the run, bringing its computer folder back first; opens no shell",
 }
 
 // backgroundOnlyRefusal is the one call every interactive door makes: nil when

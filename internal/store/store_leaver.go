@@ -143,23 +143,27 @@ const (
 // SearchIdentities is the identity rows a SCIM filter `attr eq value` selects under issuer, at most
 // limit. externalId matches the SCIM projection or the bound object id; userName and emails.value
 // match the projection, the login email and every alias the identity has been seen under.
+//
+// Each way of matching is its own indexable arm of a UNION: an OR between a column test and an alias
+// sub-select would leave Postgres no index to use and scan every identity under the issuer.
 func (s PG) SearchIdentities(ctx context.Context, issuer, attr, value string, limit int) ([]PrincipalIdentity, error) {
 	v := strings.ToLower(strings.TrimSpace(value))
-	var where string
+	var arms string
 	switch attr {
 	case SearchExternalID:
-		where = `(lower(scim_external_id) = $2 OR object_id = $2)`
+		arms = `SELECT id FROM principal_identities WHERE issuer = $1 AND lower(scim_external_id) = $2
+			UNION SELECT id FROM principal_identities WHERE issuer = $1 AND object_id = $2`
 	case SearchUserName:
-		where = `(lower(scim_user_name) = $2 OR EXISTS (SELECT 1 FROM principal_identity_aliases a
-			WHERE a.identity_id = principal_identities.id AND a.value_lower = $2))`
+		arms = `SELECT id FROM principal_identities WHERE issuer = $1 AND lower(scim_user_name) = $2
+			UNION SELECT identity_id FROM principal_identity_aliases WHERE value_lower = $2`
 	case SearchEmail:
-		where = `(email_lower = $2 OR EXISTS (SELECT 1 FROM principal_identity_aliases a
-			WHERE a.identity_id = principal_identities.id AND a.kind = 'email' AND a.value_lower = $2))`
+		arms = `SELECT id FROM principal_identities WHERE issuer = $1 AND email_lower = $2
+			UNION SELECT identity_id FROM principal_identity_aliases WHERE kind = 'email' AND value_lower = $2`
 	default:
 		return nil, fmt.Errorf("store: search identities: unknown attribute %q", attr)
 	}
 	return collect(ctx, s.Pool, "search", "principal identities", `SELECT `+principalIdentityCols+`
-		FROM principal_identities WHERE issuer = $1 AND `+where+` ORDER BY created_at, id LIMIT $3`,
+		FROM principal_identities WHERE issuer = $1 AND id IN (`+arms+`) ORDER BY created_at, id LIMIT $3`,
 		[]any{issuer, v, limit}, scanPrincipalIdentity)
 }
 
@@ -167,8 +171,9 @@ func (s PG) SearchIdentities(ctx context.Context, issuer, attr, value string, li
 // as an email or a userName: the removal-only link a SCIM user with no object-id match falls to.
 func (s PG) IdentitiesByAlias(ctx context.Context, issuer, valueLower string) ([]PrincipalIdentity, error) {
 	return collect(ctx, s.Pool, "list", "principal identities by alias", `SELECT `+principalIdentityCols+`
-		FROM principal_identities WHERE issuer = $1 AND object_id = '' AND (email_lower = $2 OR EXISTS (
-			SELECT 1 FROM principal_identity_aliases a WHERE a.identity_id = principal_identities.id AND a.value_lower = $2))
+		FROM principal_identities WHERE issuer = $1 AND object_id = '' AND id IN (
+			SELECT id FROM principal_identities WHERE issuer = $1 AND email_lower = $2
+			UNION SELECT identity_id FROM principal_identity_aliases WHERE value_lower = $2)
 		ORDER BY created_at, id`, []any{issuer, valueLower}, scanPrincipalIdentity)
 }
 

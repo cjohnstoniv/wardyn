@@ -155,6 +155,12 @@ func RunnerRecordingOffUnpooledMsg() string {
 	return "Recording is required, and the runner this run would use does not record runs. Turn recording on for the runner."
 }
 
+// RecordingSettingUnreadableMsg is the failure sentence for a run held at dispatch because the
+// organisation's or its pool's recording setting could not be read.
+func RecordingSettingUnreadableMsg() string {
+	return "Could not read the recording setting, so this run was stopped rather than started unrecorded. Try again."
+}
+
 // RecordingStoreOffMsg is the create and preflight refusal (recording_store_off) for a run whose
 // organisation or pool requires recording while the organisation keeps no session recordings.
 func RecordingStoreOffMsg() string {

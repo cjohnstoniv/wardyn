@@ -19,6 +19,7 @@ import { SECURITY_ONLY_REASON } from "../../wardyn/copy";
 import { POOLS, RUNNER_V6 } from "../../wardyn/copy/runner-pools";
 import { RUNNERS } from "../../wardyn/copy/runners";
 import { useOperator } from "../../wardyn/operator-context";
+import { AddComputerBlock } from "../../wardyn/add-computer-block";
 import { useRovingRadio } from "../../wardyn/use-roving-radio";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
@@ -28,7 +29,7 @@ import { PageContainer } from "../../wardyn/page-container";
 import { PageTabs } from "../../wardyn/page-tabs";
 import { HowItWorks } from "../../wardyn/how-it-works";
 import { EmptyState, STATES, TableSkeleton } from "../../wardyn/states";
-import { MintTokenDialog } from "./mint-token-dialog";
+import { MintTokenPanel } from "./mint-token-panel";
 import { PoolsTab } from "./pools/pools-tab";
 import { RemoteRunnerDrawer } from "./remote-runner-drawer";
 import { fleetOf, RunnerCard, searchText, type FleetRunner } from "./runner-card";
@@ -106,7 +107,6 @@ export function RunnersScreen() {
   const [search, setSearch] = React.useState("");
   const [q, setQ] = React.useState("");
   const [selected, setSelected] = React.useState<{ kind: RunnerKind; id: string } | null>(null);
-  const [minting, setMinting] = React.useState(false);
   const [switching, setSwitching] = React.useState<"on" | "off" | null>(null);
 
   // The box debounces into q, so each keystroke is not a pass over the rows.
@@ -145,17 +145,13 @@ export function RunnersScreen() {
   const selectedRunner = selected?.kind === "self_hosted" ? (rows.find((r) => r.id === selected.id) ?? null) : null;
   const selectedRemote = selected?.kind === "remote_hosted" ? (remote.find((r) => r.id === selected.id) ?? null) : null;
 
-  const createToken = superAdmin && enabled && status === "ready";
+  const addComputer = superAdmin && enabled && status === "ready";
   const empty = rows.length === 0 && remote.length === 0;
   const actions =
-    createToken && tab === "runners" ? (
-      <div className="flex items-center gap-2">
-        <Button variant="outline" onClick={() => setSwitching("off")}>
-          {RUNNERS.TURN_OFF}
-        </Button>
-        {/* The page's one default. */}
-        <Button onClick={() => setMinting(true)}>{RUNNERS.MINT_CTA}</Button>
-      </div>
+    addComputer && tab === "runners" ? (
+      <Button variant="outline" onClick={() => setSwitching("off")}>
+        {RUNNERS.TURN_OFF}
+      </Button>
     ) : undefined;
 
   const off = (
@@ -206,8 +202,7 @@ export function RunnersScreen() {
         <EmptyState
           icon={Laptop}
           title={RUNNERS.EMPTY_TITLE}
-          description={RUNNERS.EMPTY_BODY}
-          action={superAdmin ? <Button onClick={() => setMinting(true)}>{RUNNERS.MINT_CTA}</Button> : undefined}
+          description={addComputer ? `${RUNNERS.EMPTY_BODY} ${RUNNERS.EMPTY_BODY_MDM}` : RUNNERS.EMPTY_BODY}
         />
       </Framed>
     ) : (
@@ -236,6 +231,12 @@ export function RunnersScreen() {
           <span className="font-medium text-foreground">{RUNNERS.HOW_POOLS_TAB}</span> {POOLS.LEAD}
         </p>
       </HowItWorks>
+      {/* Kept mounted (hidden) on the Pools tab, so a minted token that was not copied survives a tab switch. */}
+      {addComputer && (
+        <div className="mb-4" hidden={tab !== "runners"}>
+          <AddComputerBlock mdm={<MintTokenPanel onMinted={reload} />} />
+        </div>
+      )}
       {ready && (
         <PageTabs
           className="mb-4"
@@ -258,7 +259,6 @@ export function RunnersScreen() {
         onOpenPool={openPool}
         onSaveLimits={(r, limits) => remoteRunners.update(r.id, { revision: r.revision, limits })}
       />
-      <MintTokenDialog open={minting} onOpenChange={setMinting} onMinted={reload} />
       <RunnersSwitchDialog mode={switching} onOpenChange={(o) => !o && setSwitching(null)} onChanged={reload} />
     </PageContainer>
   );

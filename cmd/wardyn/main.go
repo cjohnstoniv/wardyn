@@ -361,6 +361,7 @@ func rootCmd() *cobra.Command {
 
 	root.AddCommand(
 		loginCmd(func() (string, bool) { return serverURL, urlFromDefault }),
+		versionCmd(),
 		whoamiCmd(client, sess),
 		logoutCmd(func() string { return serverURL }),
 		runCmd(client),
@@ -374,6 +375,7 @@ func rootCmd() *cobra.Command {
 		secretCmd(client),
 		sshKeyCmd(client),
 		syncCmd(client),
+		folderCmd(client),
 		recordCmd(client),
 		setupCmd(client),
 		siteConfigCmd(client),

@@ -23,11 +23,12 @@ export interface ToolRulesProps {
   fact: ToolPolicyFact;
   harnessName: string;
   personal: readonly ToolRule[];
+  remoteMcp?: boolean;
   onAdd: (rule: ToolRule) => void;
   onRemove: (tool: string) => void;
 }
 
-export function ToolRules({ fact, harnessName, personal, onAdd, onRemove }: ToolRulesProps) {
+export function ToolRules({ fact, harnessName, personal, remoteMcp, onAdd, onRemove }: ToolRulesProps) {
   const headingId = React.useId();
   const [adding, setAdding] = React.useState(false);
   const label = (tool: string) => (tool === "*" ? NR_TOOLS.DEFAULT_LABEL : tool);
@@ -62,6 +63,7 @@ export function ToolRules({ fact, harnessName, personal, onAdd, onRemove }: Tool
           fact={fact}
           harnessName={harnessName}
           existing={personal}
+          remoteMcp={remoteMcp}
           onAdd={(rule) => { onAdd(rule); setAdding(false); }}
           onClose={() => setAdding(false)}
         />

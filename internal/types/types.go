@@ -169,6 +169,12 @@ type AgentRun struct {
 	// NotRecorded says why the run has no session recording, decided once at dispatch and kept for
 	// the run's life; empty when the run is recorded (or predates the field).
 	NotRecorded RunNotRecorded `json:"not_recorded,omitempty"`
+	// MachineKind is the kind of the run's sandbox: empty for a container (every run before the
+	// field), or linux_vm. Written once at create.
+	MachineKind MachineKind `json:"machine_kind,omitempty"`
+	// VMMachine is the virtual hardware a VM run was started with, recorded after its create; nil
+	// for a container.
+	VMMachine *VMMachine `json:"vm_machine,omitempty"`
 	// RecordingLevel is the level the run is recorded at, resolved once at dispatch with NotRecorded
 	// (RecordingChoice); empty for a run dispatched before the level existed, which reads as terminal.
 	RecordingLevel RecordingLevel `json:"recording_level,omitempty"`
@@ -357,13 +363,18 @@ const (
 	// ApprovalPushContent: a brokered git push touched a require_review_paths path, held for an
 	// admin decision. Admin-only — a member deciding their own push is the exfiltration it stops.
 	ApprovalPushContent ApprovalKind = "push_content"
+	// ApprovalHumanTakeover: the run's agent asked a person to take over its desktop or terminal
+	// ("Needs you", `wardyn needs-you <reason>`). Not decided with approve/deny: take over moves it
+	// to APPROVED with a holder, hand back stamps handed_back_at, decline moves it to DENIED. It
+	// grants the run nothing — the person drives what the agent already has.
+	ApprovalHumanTakeover ApprovalKind = "human_takeover"
 )
 
 // ApprovalKinds is the closed set, checked by test against the constants above — closedEnumChecks
 // once missed approvals.kind entirely, which would have let a DB-rejected constant pass every gate green.
 var ApprovalKinds = []ApprovalKind{
 	ApprovalCredential, ApprovalEgressDomain, ApprovalToolCall, ApprovalCredentialReauth,
-	ApprovalPushContent,
+	ApprovalPushContent, ApprovalHumanTakeover,
 }
 
 // ApprovalState is the approval lifecycle.
@@ -469,7 +480,20 @@ type ApprovalRequest struct {
 	// rows only, never stored; tier 0 (the first notice) and "no later tier" leave them zero.
 	EscalationTier int16      `json:"escalation_tier,omitempty"`
 	SLADueAt       *time.Time `json:"sla_due_at,omitempty"`
+	// TakeoverHolder is the person who has control on an APPROVED human_takeover row (the latest one
+	// to take over), and HandedBackAt is when they handed control back. Empty/nil on every other kind.
+	TakeoverHolder string     `json:"takeover_holder,omitempty"`
+	HandedBackAt   *time.Time `json:"handed_back_at,omitempty"`
 }
+
+// TakeoverScope is the requested_scope of an ApprovalHumanTakeover row: the agent's own words, shown
+// to the person quoted and unedited. MaxTakeoverReason bounds it where it is raised.
+type TakeoverScope struct {
+	Reason string `json:"reason"`
+}
+
+// MaxTakeoverReason caps a takeover reason in bytes: a sentence or two for a person, not a payload.
+const MaxTakeoverReason = 1000
 
 // ApprovalDecision is what a human (or the sweeper, for a stale-PENDING expiry) is deciding,
 // threaded as one value instead of growing DecideApproval's signature. ExpireStale leaves Scope at
@@ -480,6 +504,7 @@ type ApprovalDecision struct {
 	Reason    string
 	Scope     ApprovalScope // meaningful only for an egress_domain approval; others leave the zero value
 	ExpiresAt *time.Time
+	Policy    *ApprovalPolicyMatch // the approval rule that decided, nil for a person or the admin token
 }
 
 // AuditEvent is one append-only audit record. Every credential mint/revoke, approval decision,
@@ -669,6 +694,17 @@ const (
 type RunLocalFolderStatus struct {
 	Seed *FolderPassRecord `json:"seed,omitempty"`
 	Back *FolderPassRecord `json:"back,omitempty"`
+	// Resume is set while a pass back that was cut short keeps the run's sandbox for a later
+	// sweep to resume it.
+	Resume *FolderResume `json:"resume,omitempty"`
+}
+
+// FolderResume is a pass back kept for a resume: Stalled counts the cut passes in a row that
+// saved nothing, and Unsynced is the sandbox's changed files the latest pass that counted them
+// had not brought back.
+type FolderResume struct {
+	Stalled  int `json:"stalled"`
+	Unsynced int `json:"unsynced,omitempty"`
 }
 
 // FolderPassRecord is one pass as the runner counted it. Error is set when it did not complete.

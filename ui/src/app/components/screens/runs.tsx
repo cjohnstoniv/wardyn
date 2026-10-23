@@ -80,6 +80,9 @@ export function RunsScreen() {
   const [hiddenOlder, setHiddenOlder] = React.useState(0);
   const [hiddenKilled, setHiddenKilled] = React.useState(0);
   const [truncated, setTruncated] = React.useState(false);
+  // Every run the caller owns, as of the last fetch no filter narrowed: a search, a status or a
+  // workspace filter changes the rows shown, not how many runs there are.
+  const [owned, setOwned] = React.useState<{ n: number; more: boolean } | null>(null);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   // whether ANY fetch has ever landed. Only the very first load
   // shows the full-page skeleton (design.md §2.1's "Loading" state); every
@@ -120,6 +123,9 @@ export function RunsScreen() {
           setHiddenOlder(res.hiddenOlder);
           setHiddenKilled(res.hiddenKilled);
           setTruncated(res.truncated);
+          if (!adminView && filters.q === "" && filters.status === "all" && filters.workspace === "all") {
+            setOwned({ n: res.runs.length + res.hiddenOlder + res.hiddenKilled, more: res.truncated });
+          }
           setStatus("ready");
           setLoadedOnce(true);
         },
@@ -181,8 +187,12 @@ export function RunsScreen() {
 
   const sections: RunSections = React.useMemo(() => sectionRuns(runsList), [runsList]);
   const workspaceOptions = React.useMemo(
-    () => Array.from(new Set(runsList.map((r) => r.repo).filter(Boolean))).sort(),
-    [runsList],
+    () => {
+      const labels = runsList.map((r) => r.repo || r.workspace_path).filter((l): l is string => !!l);
+      if (filters.workspace !== "all") labels.push(filters.workspace);
+      return Array.from(new Set(labels)).sort();
+    },
+    [runsList, filters.workspace],
   );
 
   // scope only ever narrows anything in the Admin view (H-4) — a stray
@@ -225,7 +235,7 @@ export function RunsScreen() {
   // example (13 shown + 4 older + 1 killed = "Your runs · 18").
   const description = adminView
     ? "Every run, live — each confined behind its own barrier."
-    : `Your runs · ${runsList.length + hiddenOlder + hiddenKilled}${truncated ? "+" : ""}`;
+    : `Your runs · ${owned?.n ?? runsList.length + hiddenOlder + hiddenKilled}${(owned?.more ?? truncated) ? "+" : ""}`;
 
   const clearFilters = () => setFilters(DEFAULT_RUNS_FILTERS);
 
@@ -267,6 +277,8 @@ export function RunsScreen() {
             adminView={adminView}
             currentSearch={searchParams.toString()}
             savedViews={savedViews}
+            runCount={runsList.length}
+            runsTruncated={truncated}
             onChange={setFilters}
             onSelectView={(search) =>
               setSearchParams(applySavedViewOwner(search, adminView, filters.scope), { replace: true })

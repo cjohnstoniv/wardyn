@@ -31,6 +31,26 @@ func (m *Manager) HoldsSandbox(localRef string) bool {
 	return ok && !r.Retired
 }
 
+// refusesExecution is the one refusal an agent execution, start, proxy replacement, selftest and
+// local attach share: the runner offline or revoked, or the run failed, contained, quarantined,
+// mid-failure or past its lease. Callers hold m.mu.
+func (m *Manager) refusesExecution(id uuid.UUID, r localRun) bool {
+	return !m.online || m.state.Revoked || r.FailedCreation || r.ContainmentOnly || r.Quarantine != nil || r.Containment != nil || r.MutationFailure != nil || m.expired(id)
+}
+
+// AttachRef is run id's local sandbox ref for a local attach, or "" when the runner holds no such
+// run, has retired it, or would refuse it an execution. It maps a run to its sandbox only; the
+// org's grant admits.
+func (m *Manager) AttachRef(id uuid.UUID) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r, ok := m.state.Runs[id]
+	if !ok || r.Ref == "" || r.Retired || m.refusesExecution(id, r) {
+		return ""
+	}
+	return r.Ref
+}
+
 // BeforeRefCall refuses any start, revive or agent execution without the
 // authenticated connection's live lease. Containment never needs permission.
 func (m *Manager) BeforeRefCall(ctx context.Context, method, ref string, generation uuid.UUID) error {
@@ -57,7 +77,7 @@ func (m *Manager) BeforeRefCall(ctx context.Context, method, ref string, generat
 	}
 	switch method {
 	case runnerwire.MethodExec, runnerwire.MethodStart, runnerwire.MethodReplaceProxy:
-		if !m.online || m.state.Revoked || r.FailedCreation || r.ContainmentOnly || r.Quarantine != nil || r.Containment != nil || r.MutationFailure != nil || m.expired(id) {
+		if m.refusesExecution(id, r) {
 			return runner.ErrRunnerOffline
 		}
 	}
@@ -101,7 +121,7 @@ func (m *Manager) CheckSelftest(ctx context.Context, ref string, generation uuid
 	if !ok {
 		return errors.New("runner reference has no durable binding")
 	}
-	if !m.online || m.state.Revoked || r.FailedCreation || r.ContainmentOnly || r.Quarantine != nil || r.Containment != nil || r.MutationFailure != nil || m.expired(id) {
+	if m.refusesExecution(id, r) {
 		return runner.ErrRunnerOffline
 	}
 	if generation == uuid.Nil || r.Lease.ExecutionGeneration != generation || r.Executions[generation] != "" {

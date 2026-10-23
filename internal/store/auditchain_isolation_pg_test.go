@@ -139,11 +139,16 @@ func TestPG_InsertAuditEventDoesNotForkTheChainAtRepeatableRead(t *testing.T) {
 
 	// Wait until the loser is genuinely BLOCKED on the advisory lock; a sleep
 	// here would make the test a race rather than a proof.
+	// pg_locks lists the whole server and this test's schema lives in the shared test database, so count
+	// only waiters on the audit-chain key, in this database.
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		var waiting int
 		if err := pool.QueryRow(ctx,
-			`SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`).Scan(&waiting); err != nil {
+			`SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted
+			AND objsubid = 1 AND classid::bigint = $1::bigint >> 32 AND objid::bigint = $1::bigint & 4294967295
+			AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`,
+			db.AuditChainLockKey).Scan(&waiting); err != nil {
 			t.Fatalf("poll pg_locks: %v", err)
 		}
 		if waiting > 0 {

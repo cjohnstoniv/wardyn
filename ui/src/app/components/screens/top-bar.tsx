@@ -17,6 +17,7 @@ import { Chip } from "../wardyn/primitives";
 import { SHELL, TIER } from "../wardyn/copy";
 import { useTheme } from "../wardyn/theme-provider";
 import { useGuardedNavClick } from "../../lib/use-unsaved-guard";
+import { SESSION_MENU, signedInUntil } from "../../lib/session-continuity-copy";
 import { Button } from "../ui/button";
 import {
   DropdownMenu,
@@ -217,6 +218,12 @@ export function TopBar({
                       ? "local mode — no login on this install"
                       : ""}
               </div>
+              {/* M12: until when this session lasts, from /me. Local mode has no session. */}
+              {meta.method !== "local" && meta.sessionExpiresAt && (
+                <div className="text-meta text-muted-foreground" data-testid="signed-in-until">
+                  {signedInUntil(meta.sessionExpiresAt)}
+                </div>
+              )}
               {tier && TIER.LABEL[tier] && (
                 <div className="text-meta text-muted-foreground">
                   {TIER.MENU_PREFIX}: {TIER.LABEL[tier]}
@@ -239,7 +246,12 @@ export function TopBar({
                   onClick={onSignOut}
                   className="text-danger focus:text-danger"
                 >
-                  <LogOut className="size-4" /> Sign out
+                  <div className="flex flex-col">
+                    <span className="flex items-center gap-2">
+                      <LogOut className="size-4" /> Sign out
+                    </span>
+                    <span className="mt-0.5 pl-6 text-meta font-normal text-muted-foreground">{SESSION_MENU.SIGN_OUT_HINT}</span>
+                  </div>
                 </DropdownMenuItem>
               </>
             )}

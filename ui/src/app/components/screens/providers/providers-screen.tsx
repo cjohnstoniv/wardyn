@@ -119,8 +119,8 @@ export function ProvidersScreen() {
         setSetupStatus(s);
         setStatus("ready");
       })
-      // GET /workspace-providers is operatorOnly, like GET /drives — a 403 is
-      // the tier, not the network (drives-screen.tsx's own comment).
+      // GET /workspace-providers is operatorOnly — a 403 is the tier, not the
+      // network (the same reading drives-screen.tsx makes of a member's 403).
       .catch((e) => setStatus(loadFailStatus(e)));
   }, []);
   React.useEffect(() => {

@@ -55,7 +55,9 @@ const killRunMock = vi.fn();
 const getGrantsMock = vi.fn();
 vi.mock("../../../lib/api/runs", () => ({
   runs: {
-    listRuns: (...a: unknown[]) => listRunsMock(...a),
+    // An admin's unfiltered read sees every person's runs (internal/api/runs_policy.go handleListRuns).
+    listRuns: () => Promise.resolve([{ id: "someone-elses" }]),
+    listRunsFiltered: async (...a: unknown[]) => ({ runs: await listRunsMock(...a), truncated: false, hiddenOlder: 0, hiddenKilled: 0 }),
     createRunWire: (...a: unknown[]) => createRunMock(...a),
     getRun: (...a: unknown[]) => getRunMock(...a),
     killRun: (...a: unknown[]) => killRunMock(...a),
@@ -268,6 +270,14 @@ describe("MemberGettingStarted", () => {
     ).toBeInTheDocument();
   });
 
+  it("#2513: reads only the caller's own runs, so other people's runs never mark 'Your first run' done", async () => {
+    listRunsMock.mockResolvedValue([]);
+    renderPage();
+
+    await screen.findByRole("link", { name: "New run" });
+    expect(listRunsMock).toHaveBeenCalledWith({ view: "user", limit: 1, includeKilled: true, sponsored: "exclude" });
+  });
+
   it("a rejecting listRuns() leaves the section not-done", async () => {
     listRunsMock.mockRejectedValue(new Error("network"));
     renderPage();
@@ -352,6 +362,18 @@ describe("MemberGettingStarted", () => {
     expect(
       await screen.findByText(DM.GS_DRIVE_CHIP_NOSIZE("Corporate homes", DRIVES.MODE_RO_INLINE)),
     ).toBeInTheDocument();
+  });
+
+  // M10: the server's mounts_from rides beside the chip, in the sentence; a paused drive mounts nowhere.
+  it("says where the drive mounts from beside the chip, and nothing while it is paused", async () => {
+    renderPage(baseMe({ user_drive: baseMeDrive({ mounts_from: "Organisation runners and mbp-dev" }) }));
+    expect(await screen.findByTestId("gs-drive-mounts-from")).toHaveTextContent(/^Mounts from organisation runners and mbp-dev$/);
+  });
+
+  it("says no mounts-from line for a paused drive", async () => {
+    renderPage(baseMe({ user_drive: baseMeDrive({ mounts_from: "Organisation runners", paused: true }) }));
+    expect(await screen.findByText(DM.GS_DRIVE_CHIP_PAUSED("Scratch"))).toBeInTheDocument();
+    expect(screen.queryByTestId("gs-drive-mounts-from")).toBeNull();
   });
 
   // Paused wins over the size and the mode: an allocation an admin disabled

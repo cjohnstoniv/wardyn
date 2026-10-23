@@ -42,7 +42,7 @@ describe("template field registry", () => {
       expect(new Set(rules.map((r) => r.name)).size).toBe(rules.length);
     }
     expect(TEMPLATE_REQUEST_FIELDS.length).toBeGreaterThanOrEqual(34);
-    expect(TEMPLATE_POLICY_FIELDS).toHaveLength(22);
+    expect(TEMPLATE_POLICY_FIELDS).toHaveLength(23);
   });
 
   it("every carried field names its part and omission meaning; every excluded one its reason", () => {
@@ -79,6 +79,7 @@ describe("template field registry", () => {
       "integration_id",
       "keep_work_folder",
       "local_folder",
+      "machine_kind",
       "max_wait_sec",
       "mode_contract",
       "policy_overlay",

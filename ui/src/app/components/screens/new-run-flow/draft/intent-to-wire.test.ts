@@ -126,6 +126,18 @@ describe("intentToWire unsupported fields (U2)", () => {
   });
 });
 
+describe("launch-excluded rows", () => {
+  it("carries machine_kind and the chosen local_folder, and still reports max_wait_sec", () => {
+    const folder = { name: "f", remote_dir: "/w" };
+    const launch = { machine_kind: "linux_vm", local_folder: folder, max_wait_sec: 60 } as unknown as RunIntent;
+    const { body, unsupported } = intentToWire(launch);
+    expect(body.machine_kind).toBe("linux_vm");
+    expect(unsupported).toEqual(["max_wait_sec"]);
+    expect(body).toHaveProperty("local_folder", folder);
+    expect(body).not.toHaveProperty("max_wait_sec");
+  });
+});
+
 describe("the overlay's registry row, under either name", () => {
   const overlay = { inline_policy: { allowed_domains: ["a.example"] } } satisfies RunIntent;
   const rows = (rename: (name: string) => string | undefined) =>
@@ -147,6 +159,14 @@ describe("the overlay's registry row, under either name", () => {
   it("reports the overlay when the registry carries neither", () => {
     const without = rows((n) => (n === "inline_policy" ? undefined : n));
     expect(wireSerializer(without, TEMPLATE_POLICY_FIELDS)(overlay)).toEqual({ body: { mode_contract: "0.9" }, unsupported: ["inline_policy"] });
+  });
+});
+
+describe("launch-only fields", () => {
+  it("sends the machine kind each launch names, which a template never carries", () => {
+    const { body, unsupported } = intentToWire({ machine_kind: "linux_vm" });
+    expect(unsupported).toEqual([]);
+    expect(body).toEqual({ mode_contract: "0.9", machine_kind: "linux_vm" });
   });
 });
 

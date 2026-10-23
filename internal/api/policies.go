@@ -69,7 +69,7 @@ func decodePolicyRequest(w http.ResponseWriter, r *http.Request, ado adoHostsLoa
 // "Available to" (capPolicy): anyone below the security tier gets only the
 // rows the launch door would let them select (capVisible), filtered BEFORE the
 // window so the page and X-Wardyn-Truncated count nothing they cannot see. The
-// security tier sees every row for the same reason it sees them unredacted: it
+// security tier sees every row, redacted only of mount host paths, for the same reason: it
 // writes each policy's Available to list and cannot do it against rows it is
 // not shown. Selecting one is still capability-bounded at the door.
 //
@@ -82,11 +82,12 @@ func (s *Server) handleListPolicies(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	security := s.isSecurityOperator(ctx)
+	tier := s.specReadTierFor(ctx)
 	var pageFn func(store.Page) ([]types.RunPolicy, error)
 	if pg, ok := s.cfg.Store.(store.Pager); ok && security {
 		pageFn = func(p store.Page) ([]types.RunPolicy, error) {
 			ps, err := pg.ListPoliciesPage(ctx, p)
-			return redactPoliciesForRead(ps, security), err
+			return redactPoliciesForRead(ps, tier), err
 		}
 	}
 	servePage(w, r, page, pageFn, func() ([]types.RunPolicy, error) {
@@ -97,7 +98,7 @@ func (s *Server) handleListPolicies(w http.ResponseWriter, r *http.Request) {
 		if !security {
 			ps = capVisible(ctx, s, capPolicy, ps, func(p types.RunPolicy) string { return p.ID.String() })
 		}
-		return redactPoliciesForRead(ps, security), nil
+		return redactPoliciesForRead(ps, tier), nil
 	})
 }
 
@@ -121,7 +122,7 @@ func (s *Server) handleGetPolicy(w http.ResponseWriter, r *http.Request) {
 		"Stored policy "+p.ID.String()+" isn't available to you. Ask your admin, or launch without policy_id.") {
 		return
 	}
-	writeJSON(w, http.StatusOK, redactPolicyForRead(p, s.isSecurityOperator(r.Context())))
+	writeJSON(w, http.StatusOK, redactPolicyForRead(p, s.specReadTierFor(r.Context())))
 }
 
 // defaultPolicyResponse is GET /policies/default's body: the resolved ceiling
@@ -186,7 +187,7 @@ func (s *Server) handleGetDefaultPolicy(w http.ResponseWriter, r *http.Request) 
 	}
 	operator := s.isSecurityOperator(r.Context())
 	resp := defaultPolicyResponse{
-		RunPolicySpec: redactSpecForRead(ceiling.Spec, operator),
+		RunPolicySpec: redactSpecForRead(ceiling.Spec, s.specReadTierFor(r.Context())),
 	}
 	if ceiling.Limits.DenyUIApps {
 		// A run under this ceiling gets no UI apps, so the read lists none.
@@ -246,17 +247,43 @@ func (s *Server) callerContexts(ctx context.Context) ([]defaultPolicyContext, er
 // (runs_dispatch.go) — same shape, different chokepoint. Does not mutate p's
 // own LLMInspection (a fresh copy is substituted), so a caller holding the
 // original is never surprised by an in-place edit.
-func redactPolicyForRead(p types.RunPolicy, operator bool) types.RunPolicy {
-	p.Spec = redactSpecForRead(p.Spec, operator)
+func redactPolicyForRead(p types.RunPolicy, tier specReadTier) types.RunPolicy {
+	p.Spec = redactSpecForRead(p.Spec, tier)
 	return p
+}
+
+// specReadTier is how much of a policy spec a reader may see, in the shape of workspaceReadTier.
+// A super admin reads it whole. A security admin reads everything but the host paths behind
+// workspace_mounts[].source: a mount's host path is the super admin's to see and set (the tier
+// that writes the host, http.go). Everyone else reads it as redactSpecForUser leaves it.
+type specReadTier int
+
+const (
+	specReadFull specReadTier = iota
+	specReadSecurity
+	specReadMember
+)
+
+// specReadTierFor answers which tier this request reads a policy spec at.
+func (s *Server) specReadTierFor(ctx context.Context) specReadTier {
+	switch {
+	case s.isOperator(ctx):
+		return specReadFull
+	case s.isSecurityOperator(ctx):
+		return specReadSecurity
+	}
+	return specReadMember
 }
 
 // redactSpecForRead is redactPolicyForRead's logic, factored out so
 // handleGetDefaultPolicy (which reads a bare spec, not a stored types.RunPolicy)
 // gets the same redaction without a fake wrapper row.
-func redactSpecForRead(spec types.RunPolicySpec, operator bool) types.RunPolicySpec {
+func redactSpecForRead(spec types.RunPolicySpec, tier specReadTier) types.RunPolicySpec {
 	spec.WorkspaceRepos = redactWorkspaceRepoList(spec.WorkspaceRepos) // a legacy row, every tier
-	if !operator {
+	switch tier {
+	case specReadSecurity:
+		spec = withholdMountSources(spec)
+	case specReadMember:
 		spec = redactSpecForUser(spec)
 	}
 	li := spec.LLMInspection
@@ -270,9 +297,9 @@ func redactSpecForRead(spec types.RunPolicySpec, operator bool) types.RunPolicyS
 }
 
 // redactPoliciesForRead maps redactPolicyForRead over a list read (handleListPolicies).
-func redactPoliciesForRead(ps []types.RunPolicy, operator bool) []types.RunPolicy {
+func redactPoliciesForRead(ps []types.RunPolicy, tier specReadTier) []types.RunPolicy {
 	for i := range ps {
-		ps[i] = redactPolicyForRead(ps[i], operator)
+		ps[i] = redactPolicyForRead(ps[i], tier)
 	}
 	return ps
 }
@@ -296,13 +323,7 @@ var memberSecretScopeKeys = []string{"secret_name", "key_secret_ref", "known_hos
 // process's whole life, so an in-place edit here would redact it permanently
 // for the operator too.
 func redactSpecForUser(spec types.RunPolicySpec) types.RunPolicySpec {
-	if len(spec.WorkspaceMounts) > 0 {
-		mounts := slices.Clone(spec.WorkspaceMounts)
-		for i := range mounts {
-			mounts[i].Source = "<redacted>"
-		}
-		spec.WorkspaceMounts = mounts
-	}
+	spec = withholdMountSources(spec)
 	if len(spec.EligibleGrants) > 0 {
 		grants := slices.Clone(spec.EligibleGrants)
 		for i := range grants {
@@ -318,6 +339,29 @@ func redactSpecForUser(spec types.RunPolicySpec) types.RunPolicySpec {
 		spec.LLMInspection = &cp
 	}
 	return spec
+}
+
+// mountSourceWithheld is the source a reader below the super admin tier reads in place of a mount's
+// host path, and the one spelling a writer sends back to keep that mount (governance_mount_keep.go).
+const mountSourceWithheld = "<redacted>"
+
+// withholdMountSources is spec with every workspace_mounts[].source replaced by mountSourceWithheld,
+// target and read_only kept. It clones the mounts, for the reason redactSpecForUser does.
+func withholdMountSources(spec types.RunPolicySpec) types.RunPolicySpec {
+	spec.WorkspaceMounts = withholdMounts(spec.WorkspaceMounts)
+	return spec
+}
+
+// withholdMounts is withholdMountSources for a bare list (an overlay's), on a copy.
+func withholdMounts(in []types.WorkspaceMount) []types.WorkspaceMount {
+	if len(in) == 0 {
+		return in
+	}
+	out := slices.Clone(in)
+	for i := range out {
+		out[i].Source = mountSourceWithheld
+	}
+	return out
 }
 
 // redactScopeSecretRefs drops the secret-naming keys from one grant scope,

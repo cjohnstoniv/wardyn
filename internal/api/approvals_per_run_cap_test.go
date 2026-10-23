@@ -34,7 +34,7 @@ func TestInternalApprovalRequest_PerRunCapAnswers429(t *testing.T) {
 	}
 
 	h.approvals.countForRun = maxApprovalsPerRun
-	before := len(h.audit.events)
+	before := len(h.audit.snapshot())
 	w := do(t, h.srv, http.MethodPost, "/api/v1/internal/approvals", tok,
 		`{"kind":"egress_domain","requested_scope":{"host":"other.example.com"}}`)
 	if w.Code != http.StatusTooManyRequests {
@@ -43,7 +43,7 @@ func TestInternalApprovalRequest_PerRunCapAnswers429(t *testing.T) {
 	// The refusal writes no audit action of its own: a run that hits the cap must
 	// not flood the trail with the refusal instead of the rows (B5's lesson one
 	// wave over). The rows it already raised ARE the trail.
-	for _, ev := range h.audit.events[before:] {
+	for _, ev := range h.audit.snapshot()[before:] {
 		t.Errorf("the cap refusal emitted a %q audit row; it is a rate bound, not a security event", ev.Action)
 	}
 }

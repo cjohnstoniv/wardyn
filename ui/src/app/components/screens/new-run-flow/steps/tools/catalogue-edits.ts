@@ -9,10 +9,11 @@
 // anything the proxy cannot carry alone (a file, an environment variable, an MCP
 // server) is an inline component beside the policy.
 
-import type { ComponentDefinition, ComponentRef } from "../../../../../lib/types/components";
+import type { ComponentDefinition, ComponentDelivery, ComponentRef } from "../../../../../lib/types/components";
 import type { SecretOverride } from "../../../../../lib/types/new-run-contract";
 import { withKeys } from "../../lenses/lens-keys";
 import type { RunIntent } from "../../draft/run-intent";
+import { splitCommand } from "./mcp-local-form";
 
 /** An inline MCP server: the definition's `mcp` block (DS-7 4.1) until the wire type carries it. */
 export type McpDefinition = ComponentDefinition & { mcp: { url: string; transport: "http" } };
@@ -87,6 +88,17 @@ export function mcpRef(name: string, url: string, tokenSecret: string | undefine
     hosts: [parts.authority],
     ...(tokenSecret && { secrets: [{ secret_name: tokenSecret, delivery: { mode: "header" as const, host: parts.hostname } }] }),
     mcp: { url: url.trim(), transport: "http" },
+  };
+  return { name, inline };
+}
+
+/** A server the harness starts in the run's sandbox: `command` split into command and arguments, the hosts it reaches and at most one saved secret. */
+export function mcpLocalRef(name: string, command: string, hosts: string[], secret?: { secret_name: string; delivery: ComponentDelivery }): ComponentRef {
+  const { command: cmd, args } = splitCommand(command);
+  const inline: ComponentDefinition = {
+    hosts,
+    ...(secret && { secrets: [secret] }),
+    mcp: { transport: "stdio", launch: { command: cmd, ...(args.length && { args }) } },
   };
   return { name, inline };
 }

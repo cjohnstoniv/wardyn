@@ -151,10 +151,10 @@ _rl_set() {
     # --if-unset loses to a limit declared between the list and the set: then the runner has limits, just
     # not these.
     if _rl_still="$(wardyn runner remote list --no-limits --set-up-here --ids </dev/null 2>/dev/null)" &&
-      ! printf '%s\n' "${_rl_still}" | grep -qx -- "$1"; then
+      ! printf '%s\n' "${_rl_still}" | grep -x -- "$1" >/dev/null; then
       # Gone from the no-limits list is not yet "someone set limits": the runner may have been removed.
       if _rl_every="$(wardyn runner remote list --ids </dev/null 2>/dev/null)" &&
-        ! printf '%s\n' "${_rl_every}" | grep -qx -- "$1"; then
+        ! printf '%s\n' "${_rl_every}" | grep -x -- "$1" >/dev/null; then
         _rl_say "$1: it was removed from the server meanwhile; nothing was set"
         return 0
       fi
@@ -175,7 +175,7 @@ wardyn_ensure_runner_limits() {
     return 1
   }
   for _rl_id in ${_rl_all}; do
-    printf '%s\n' "${_rl_ids}" | grep -qx -- "${_rl_id}" ||
+    printf '%s\n' "${_rl_ids}" | grep -x -- "${_rl_id}" >/dev/null ||
       _rl_say "${_rl_id}: not set up on this server, so it takes no run here and is left as it is"
   done
   if [ -z "${_rl_ids}" ]; then

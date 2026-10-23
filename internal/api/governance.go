@@ -116,8 +116,9 @@ func (s *Server) handleGetGovernance(w http.ResponseWriter, r *http.Request) {
 	people := unitPeople(resolved, assignments)
 	deployment := governanceCeiling{Spec: s.cfg.DefaultPolicy.Clone(), MemberDefault: s.memberDefaultFor(s.cfg.DefaultPolicy.Resources)}
 	profiles := make([]governanceUnitView, len(resolved))
+	tier := s.specReadTierFor(r.Context())
 	for i, p := range resolved {
-		profiles[i] = newUnitView(p.Row, p.Resolved, p.Err)
+		profiles[i] = newUnitView(p.Row, p.Resolved, p.Err, tier)
 		if p.Row.ID != store.DefaultUnitID {
 			n := len(people[p.Row.ID])
 			profiles[i].People = &n
@@ -128,7 +129,7 @@ func (s *Server) handleGetGovernance(w http.ResponseWriter, r *http.Request) {
 			if !(contextPick{unit: p.Row}).isDefault() {
 				c, _ = s.ceilingFromUnit(r.Context(), p.Resolved, nil, deployment)
 			}
-			if walls, err := contextWalls(deployment, c, boundary); err == nil {
+			if walls, err := contextWalls(deployment, c, boundary, tier); err == nil {
 				profiles[i].PathProvenance = walls.PathProvenance
 			}
 		}

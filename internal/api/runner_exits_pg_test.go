@@ -6,6 +6,8 @@ package api
 import (
 	"context"
 	"errors"
+	"io"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -197,6 +199,83 @@ func TestRunnerExitPG_TeardownQueuedOnOfflineRunnerAuditsOnce(t *testing.T) {
 	}
 	if got, _ := st.GetRun(ctx, run.ID); got.State != types.RunCompleted || got.SandboxRef == "" {
 		t.Fatal("queued teardown cleared the sandbox ref as if confirmed")
+	}
+	srv.WaitBackground()
+}
+
+// hangingSandboxProbe is runnerExitTailProbe whose sandbox's sftp-server never answers, so a
+// computer folder's pass back runs out of time; a done ctx fails its stop, as Docker's does.
+type hangingSandboxProbe struct{ *runnerExitTailProbe }
+
+func (r *hangingSandboxProbe) ExecStream(context.Context, string, runner.ExecSpec) (*runner.ExecSession, error) {
+	stdout, quiet := io.Pipe()
+	return &runner.ExecSession{
+		Stdin: nopWriteCloser{io.Discard}, Stdout: stdout, Stderr: strings.NewReader(""),
+		Wait:  func() (int, error) { return 0, nil },
+		Close: func() error { return quiet.Close() },
+	}, nil
+}
+
+func (r *hangingSandboxProbe) StopSandbox(ctx context.Context, ref string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return r.runnerExitTailProbe.StopSandbox(ctx, ref)
+}
+
+// A runner exit whose computer folder's pass back would outlast the exit's bound still stops the
+// sandbox and completes: a sandbox on a runner is never kept for a resume, so the cut pass is
+// recorded as given up, and the next sweep does not run the pass again (#3466).
+func TestRunnerExitPG_AFolderPassPastTheDeadlineStillCompletesTheExit(t *testing.T) {
+	pool, cfg, rn, run, exit, probe := runnerExitAPIFixture(t)
+	ctx := t.Context()
+	st := cfg.Store.(store.PG)
+	home, app := laptopHome(t)
+	folder := types.RunLocalFolder{Name: "my-app", RemoteDir: "/home/agent/work", RunnerID: &rn.ID, Path: app, Direction: types.ComputerFolderBoth}
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET local_folder=$2 WHERE id=$1`, run.ID, mustJSON(folder)); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := st.SetRunLocalFolderSeed(ctx, run.ID, ""); err != nil || !ok {
+		t.Fatalf("seed: %v %v", ok, err)
+	}
+	cfg.Runner = &hangingSandboxProbe{probe}
+	cfg.ComputerFolders = true
+	cfg.RunnerOnline = func(uuid.UUID) bool { return true }
+	srv := New(cfg)
+	srv.runnerStreams.subs = map[uuid.UUID]runnerEndpoint{rn.ID: folderRunnerEndpoint(t, rn.ID, true, home)}
+	event := runnerwire.Event{Kind: runnerwire.EventAgentExit, RunID: &run.ID, Data: mustJSON(exit)}
+	if err := srv.ExitFromRunner(ctx, rn.ID, event); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.BindRunnerExecution(ctx, rn.ID, run.ID, exit.Generation, exit.ExecID); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := st.ListRunnerExitWork(ctx, uuid.Nil)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("exit work = %d rows, %v", len(rows), err)
+	}
+	bounded, cancel := context.WithTimeout(ctx, runTeardownBudget+computerFolderAccountTime+500*time.Millisecond)
+	defer cancel()
+	if err := srv.applyRunnerExit(bounded, st, rows[0]); err != nil {
+		t.Fatalf("the exit did not complete: %v", err)
+	}
+	assertRunnerExitPhase(t, pool, run.ID, true, true, 1)
+	if err := srv.SweepRunnerExits(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := probe.calls.Load(); n != 1 {
+		t.Fatalf("StopSandbox reached %d times, want once", n)
+	}
+	if got, _ := st.GetRun(ctx, run.ID); got.SandboxRef != "" {
+		t.Error("the stopped sandbox's ref was not cleared")
+	}
+	status, err := st.RunLocalFolderStatus(ctx, run.ID)
+	if err != nil || status.Resume != nil || status.Back == nil || !strings.Contains(status.Back.Error, "a sandbox on a runner is not kept") ||
+		!strings.Contains(status.Back.Error, "so the sandbox was stopped with its changes not brought back yet, uncounted") {
+		t.Errorf("back record = %+v, resume = %+v, %v; want the cut pass given up on a runner", status.Back, status.Resume, err)
+	}
+	if !cfg.Audit.(*syncAudit).has(run.ID, "run.folder.transfer", "failure") {
+		t.Error("the cut-short pass back is not audited")
 	}
 	srv.WaitBackground()
 }

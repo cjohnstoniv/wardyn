@@ -715,6 +715,12 @@ type DriveRequest struct {
 	// instead of a folder per person. Refused unless storage.user_drive.team_drives
 	// is on, and it cannot change while the drive is allocated.
 	Team bool `json:"team,omitempty"`
+	// AltBackend, AltHostRoot and AltRunnerID add the drive's second place: the
+	// same share as one person's own runner sees it (host_path, the path on that
+	// runner, the runner). All three or none; only a share has one.
+	AltBackend  DriveBackend `json:"alt_backend,omitempty"`
+	AltHostRoot string       `json:"alt_host_root,omitempty"`
+	AltRunnerID *uuid.UUID   `json:"alt_runner_id,omitempty"`
 }
 
 // DriveGrantRequest is the POST /drives/grants body — one allocation of a

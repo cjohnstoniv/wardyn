@@ -83,10 +83,13 @@ A run's model credential is its owner's, and CI is no exception. So `ci-run.sh` 
 * Its audit trail says "CI" and names its sponsor on every row, rather than one human's token paying for and being blamed for every pipeline run.
   * Scope it with `capModelProvider`/`capAgent` through the `user` subject `service:<name>`.
 * A person's token is not the CI credential: it acts as that person, and leaves with them when they leave.
-* A service token reaches only what a pipeline needs: launch and dry-run, read, `PATCH` and kill its own runs, `GET /me`, `GET /setup/status` and its model-provider credential. Anything else answers `403` `service_scope`.
-  * It has no audit read, so `run --wait` reports a `FAILED` run as exit `1` and not the task's own code, and `ci-run.sh` writes an empty `audit.json` (`[]`) and collects no `session.cast`.
-  * Read those as the sponsor or an admin in the console.
-* When the sponsor leaves, is suspended or is replaced, the identity's tokens stop and its live runs continue: change the sponsor (`wardyn service-identity update <name> --sponsor <principal>`) and mint a new token.
+* A service token reaches only what a pipeline needs. Anything else answers `403` `service_scope`.
+  * Launch and dry-run, read, `PATCH` and kill its own runs, `GET /me` (with its reach), `GET /setup/status` and its model-provider credential.
+  * Read the audit rows of its own runs (`GET /audit?run_id=<id>`) and the presets and workspaces it may launch with (`GET /presets`, `GET /presets/{name}`, `GET /workspaces`).
+  * Follow a run with `GET /runs/{id}/events`, a `text/event-stream`, rather than polling. It sends a keepalive every 15s and ends with `ended`. It carries no exit code: after `ended`, read `GET /runs/{id}` for the state and `GET /audit?run_id=<id>` for the task's code (`run.complete` `.data.exit_code`).
+  * That audit read covers only runs it created (any other id answers `200` `[]`), so `run --wait` reports the task's own code and `ci-run.sh` collects `audit.json`.
+  * It has no recording read, so `ci-run.sh` collects no `session.cast`: read it as the sponsor or an admin.
+* A sponsor does not need a live session; a deactivated sponsor ends the identity. When the sponsor leaves, is suspended or is replaced, the identity's tokens stop and its live runs continue: change the sponsor (`wardyn service-identity update <name> --sponsor <principal>`) and mint a new token.
 * The deployment's admin token is no substitute: under OIDC it holds no model credential, and `ci-run.sh` says so if it is handed one.
 * Do not use the Claude subscription kind for CI ([below](#model-access-for-harness-mode-running-a-real-agent)).
 
@@ -110,7 +113,7 @@ plane request itself (auth/client/server/network), independent of what the run i
 
 - `wardyn run get <id> --json` (or the `run.complete` audit event) always has the authoritative outcome — check it when the process's own exit status alone doesn't say why a run didn't complete.
 - That is also how a pipeline tells the two meanings of `1` apart:
-  - a **usage** failure never created a run, so there is no run id to get;
+  - a **usage** failure never created a run, so no run id exists;
   - a `FAILED` run whose exit code was unreadable has one, and its `run.complete` event says so.
 
 #### Exit 3
@@ -129,7 +132,7 @@ plane request itself (auth/client/server/network), independent of what the run i
 
 - the invocation failed **locally**, before or beside the request:
   - a usage error (unknown flag or argument), a malformed id, an unreadable or schema-invalid `--policy-file`, or a response the CLI could not classify (e.g. a 2xx whose body did not decode).
-- This is `exitCodeFor`'s catch-all in [`cmd/wardyn/main.go`](../cmd/wardyn/main.go), so it is also what a future local failure lands on.
+- This is `exitCodeFor`'s catch-all in [`cmd/wardyn/main.go`](../cmd/wardyn/main.go), so a future local failure lands here too.
 - **Also** `run --wait`: see [the row below](#exit-codes)
 
 #### ssh's own remote status
@@ -154,6 +157,9 @@ plane request itself (auth/client/server/network), independent of what the run i
   - **`"first_use_approval": "always_deny"`** — non-negotiable for unattended runs. Anything off the allowlist is hard-denied instantly; nothing ever waits on a human. (`wait_for_review` holds connections for a reviewer; `deny_with_review` files approvals nobody will decide.)
   - **Complete `allowed_domains`** — list every host the task legitimately needs (package registries, your model provider). The sealed default (empty list) means the sandbox can reach nothing. GitHub is the exception: it is reached through the Wardyn git-broker (see below), not via `allowed_domains`.
   - **No `requires_approval: true` grants** — an approval-gated credential never mints without a human. Use `requires_approval: false` grants whose secret the CI principal already holds on the control plane.
+  - **Decide tool calls in the policy**: with `tool_approvals: hold`, give [`tool_rules`](POLICIES.md#tool_rules--toolrule) an `allow` or `deny` for each tool the task uses and a `"*"` default of `deny`, so no call waits on a human.
+    - Carry the policy in a launch preset (`preset` and `preset_version` on `POST /runs`) so every run of the job gets the same answers.
+    - Rows decided this way create no approval.
   - **Bound the run** — `auto_stop_after_sec` (ci.json: 1 hour) is the reaper backstop behind `WARDYN_CI_TIMEOUT`.
   - Against `WARDYN_URL`, `ci-run.sh` also kills the run on exit `124` and when the job is cancelled, once the CLI has printed the run id.
 
@@ -167,7 +173,7 @@ plane request itself (auth/client/server/network), independent of what the run i
 - Model access is the CI principal's own credential for a model provider on the control plane `WARDYN_URL` names (see "[CI's identity](#cis-identity)" above):
   - it stores it once, through `PUT /model-providers/{id}/credential` (or the console),
   - and the pipeline sets `WARDYN_CI_MODEL_PROVIDER` to that provider's id.
-- Nothing is seeded pre-run and the policy carries no key; there is no key on the pipeline's env block to rotate or leak.
+- Nothing is seeded pre-run and the policy carries no key; the pipeline's env block holds no key to rotate or leak.
 - The throwaway stack has no such credential, so it runs `exec` mode only.
 
 > [!WARNING]
@@ -176,7 +182,7 @@ plane request itself (auth/client/server/network), independent of what the run i
 > - Anthropic's terms for running Claude Code in agent infrastructure require each end user to authenticate with their own credential and prohibit intermediating usage on their behalf, which would put **you**, the operator, in breach rather than Wardyn.
 
 - The shared-subscription switches are retired ([`ENV.md`](ENV.md) lists them).
-- Give the CI principal an **API-key** or **Bedrock** provider instead, with its own credential.
+- Give the CI principal a provider whose credential it stores as a key or token: `anthropic_api_key`, `openai_api_key`, `bedrock_bearer` (a Bedrock API key) or `custom_endpoint`. The Claude subscription, `bedrock_sso` and `azure_foundry` are signed into, and a service identity cannot sign in, so its run is refused `422` `model_credential`.
 
 ### Least-privilege, derived not guessed
 
@@ -209,7 +215,7 @@ What synthesis does and does not derive:
   - so parallel invocations don't collide on container names, the control-plane network, the recordings volume, or any of those five host ports,
   - and one job's `down --volumes` never tears down another's.
 - The default project name's suffix comes from `/dev/urandom`,
-  - so it is unique even between jobs that cannot see each other's PIDs (the usual shape: every job in its own container, all of them driving one shared host Docker socket).
+  - so it is unique even between jobs that cannot see each other's PIDs (the usual shape: every job in its own container, all driving one shared host Docker socket).
 - And because a job's teardown is `down --volumes`, `ci-run.sh` refuses to start at all when its project name already has **running** containers —
   - a pinned `WARDYN_CI_PROJECT` reused while the previous job is still live is an error, not a silent teardown of that job.
 - (Stopped leftovers don't count, so retrying a pinned name after its stack exited still works.)
@@ -238,7 +244,7 @@ COMPOSE_PROJECT_NAME=job-a WARDYN_NS=job-a WARDYN_UP_PORT=0 WARDYN_PG_PORT=0 \
   - that a container on job A's network cannot reach job B's wardynd,
   - that A survives B's `down --volumes`,
   - and that each tears down independently.
-- It needs a live daemon and `wardyn/wardynd:local` (the target builds it if absent), so it is not part of the per-push CI; the `test-e2e-concurrent` job in [.github/workflows/nightly.yml](../.github/workflows/nightly.yml) runs it nightly.
+- It needs a live daemon and `wardyn/wardynd:local` (the target builds it if absent), so it is outside the per-push CI; the `test-e2e-concurrent` job in [.github/workflows/nightly.yml](../.github/workflows/nightly.yml) runs it nightly.
 - Its `compose_ns` helper scopes the same five ports as `ci-run.sh` above.
 
 > [!WARNING]
@@ -253,7 +259,7 @@ These scripts stay out of the per-PR [`ci.yml`](../.github/workflows/ci.yml) **b
   - GitHub's `ubuntu-latest` runs dockerd, so a CI copy would test nothing it doesn't already test.
   - Run it by hand when re-validating the Podman claim in [threatmodel/THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md).
 - **[`scripts/stage-agent-binary.sh`](../scripts/stage-agent-binary.sh)** — stages a checksum-verified agent CLI binary into `deploy/images/<agent>/` for corp networks where public npm is blocked.
-  - The output is gitignored and the default image build installs from npm, so there is nothing for CI to run; it is invoked by an operator before `make agent-images-core` (see [deploy/images/README.md](../deploy/images/README.md)).
+  - The output is gitignored and the default image build installs from npm, so CI has nothing to run; it is invoked by an operator before `make agent-images-core` (see [deploy/images/README.md](../deploy/images/README.md)).
 - **[`scripts/run-e2e-byoi.sh`](../scripts/run-e2e-byoi.sh)** (`make test-e2e-byoi`) — live BYOI wrap + selftest proof.
   - It requires a wardynd ALREADY running with `-envbuild` and a staged `WARDYN_ENVBUILD_TOOLS_DIR`, and — unlike the SSH and UI-sandbox scripts below — starts no control plane of its own.
   - That is setup this repo does not put on every PR,
@@ -301,7 +307,7 @@ These scripts stay out of the per-PR [`ci.yml`](../.github/workflows/ci.yml) **b
 
 ## This repository's own CI
 
-Wardyn's own [`ci.yml`](../.github/workflows/ci.yml) runs on every pull request and push to `main`. Runner slots constrain throughput: with many open pull requests, queueing takes longer than execution. This section therefore measures check counts, runner-minutes and elapsed time.
+Wardyn's own [`ci.yml`](../.github/workflows/ci.yml) runs on every pull request and push to `main`. Runner slots constrain throughput: with many open pull requests, queueing outlasts execution. This section measures check counts, runner-minutes and elapsed time.
 
 - `pull_request:` carries no `branches:` filter — that field matches the PR's *base*, and the 0.8 working practice stacks lanes on `<kind>/<issue#>-<slug>` branches (#90), not on `main`, so a filtered trigger gave a stacked PR no checks at all.
 - `push:` stays narrow to `main`, `master` and `feature/**`, since every other commit already gets a run from its own PR.
@@ -374,10 +380,12 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 | `envbuild-integration` | 60 | 3.6 | 4.0 | 20 |
 | `gates (staticcheck)` | 60 | 2.7 | 2.9 | 15 |
 | `helm-install-test` | – | pending | pending | 20 |
+| `vm` | – | pending | pending | 30 |
 | `trivy-wardynd` (check `trivy (wardynd)`) | 50 | 2.0 | 2.5 | 40 |
 | `trivy-wardynd-fips` (check `trivy (wardynd-fips)`) | 49 | 2.0 | 2.3 | 40 |
 | `trivy-agent-novnc` (check `trivy (agent-novnc)`) | 51 | 1.6 | 2.2 | 40 |
 | `trivy-agent-vscode` (check `trivy (agent-vscode)`) | 50 | 1.6 | 2.0 | 40 |
+| `trivy-agent-novnc-signin` (check `trivy (agent-novnc-signin)`) | – | pending | pending | 50 |
 | `notices` | 60 | 1.5 | 1.9 | 15 |
 | `gates (licenses)` | 60 | 1.4 | 2.0 | 15 |
 | `trivy-agent-codex-cli` (check `trivy (agent-codex-cli)`) | 51 | 1.4 | 1.7 | 40 |
@@ -434,6 +442,7 @@ gh run list -R cjohnstoniv/wardyn --workflow ci.yml --status completed --limit 6
 - A dispatched nightly has one concurrency group per ref and scope, so a second dispatch cancels the first. A scheduled run has its own group and is never cancelled.
 - On a same-repo `train/*` or `prep/*` pull request, `train-suites` dispatches the nightly (`scope=candidate`, `publish=false`) on the head and waits; `train-gate` needs that run green. A call would fail on a fork's read-only token, so nothing uses `workflow_call`.
 - The nightly restores the `go-<suite>-` caches `ci.yml` saves and saves none. Only `publish` on (the default) stages and attests images.
+- [`overlay-proofs.yml`](../.github/workflows/overlay-proofs.yml) runs [`scripts/overlay-proof.sh`](../scripts/overlay-proof.sh) revert proofs; each must exit 1 with its named FAIL. Never dispatch it while a train attempt 1 is queued.
 - `release.yml` has one group per ref and cancels nothing, so a dispatch and the tag push cannot publish at once.
 - `release.yml`'s `runner-pkg` job (macOS) builds `wardyn-runnerd.pkg` with [`scripts/build-runner-pkg.sh`](../scripts/build-runner-pkg.sh). Each signing step runs only when its `APPLE_DEVELOPER_ID_*` or `APPLE_NOTARY_*` secrets are set, and logs a skip line otherwise; [`scripts/test-runner-pkg.sh`](../scripts/test-runner-pkg.sh) covers the script on Linux.
 
@@ -532,7 +541,8 @@ Three mechanisms (#932), on top of the per-job Go cache (#470) and the single ra
 
 So:
 
-- `test-pg` (the aggregator over its `test-pg-shard` matrix, which fails unless every shard passed), `conformance`, `conformance-k8s`, `helm` and `envbuild-integration` skip on `backend == 'false'`, `notices` on `notices == 'false'`, the nine `trivy (<image>)` jobs on `images == 'false'` or on `image-scope`'s answer for their image.
+- `test-pg` (the aggregator over its `test-pg-shard` matrix, which fails unless every shard passed), `conformance`, `conformance-k8s`, `vm`, `helm` and `envbuild-integration` skip on `backend == 'false'`, `notices` on `notices == 'false'`, the nine `trivy (<image>)` jobs on `images == 'false'` or on `image-scope`'s answer for their image.
+- `vm` boots the reference Linux VM guest under QEMU/KVM through the real Docker driver ([`test/conformance/vm/vm_test.go`](../test/conformance/vm/vm_test.go)), after GitHub's documented udev rule opens `/dev/kvm`. Not a required check.
 - `build` needs `go-lint`, `image-scope` and every `go` leg and runs with `if: always()`.
   - Its first step fails unless every leg passed, so the `build` context is green only when all four legs and the union floor are.
   - The union steps carry `if: needs.changes.outputs.backend != 'false'`, so only an explicit docs- or console-only classification skips them.
@@ -628,7 +638,7 @@ So:
 - A change to Go still asks for 35 runners.
 - Branch protection requires 24 contexts and a change to Go can affect every one of them,
   - so that count moves only if contexts are merged (the image scans into one or two jobs, the five `gates` into one), which is a branch-protection change.
-- What changed for it is the wall time: `test-pg` and `ui-e2e` are split, the long jobs get their runners first, and vitest runs 76 files (71 s) where it ran 341 (547 s).
+- Its wall time changed: `test-pg` and `ui-e2e` are split, the long jobs get their runners first, and vitest runs 76 files (71 s) where it ran 341 (547 s).
 - A console-only change is held at 10.5 minutes by the whole vitest suite in `ui`; two vitest shards behind a `ui` aggregator would bring it to about 7.5 minutes for two more jobs.
 - A run of everything (a push to `main`, a `train/*` pull request) runs that same `ui` job, so `ui` is its longest job as well.
 
@@ -656,7 +666,7 @@ Docker Hub rate-limited CI even after `docker/login-action`, so CI reads the Doc
 ## Driving an existing control plane instead
 
 - If you already run wardynd somewhere, set `WARDYN_URL` + `WARDYN_CI_TOKEN` and `ci-run.sh` launches there (see "[CI's identity](#cis-identity)" above).
-- Or use the CLI directly — it is fully non-interactive with `WARDYN_URL` + `WARDYN_TOKEN`, the CI service identity's `wdn_` token, not a person's.
+- Or use the CLI directly — fully non-interactive with `WARDYN_URL` + `WARDYN_TOKEN`, the CI service identity's `wdn_` token, not a person's.
   - The shared `WARDYN_ADMIN_TOKEN` is no substitute: under OIDC it holds no model credential to launch a model run with.
 - `--task-mode exec` runs the task as a plain shell command, so **no `--agent` is needed** — the image is what the run needs, and naming an agent it never invokes was a formality this documentation used to demonstrate.
 

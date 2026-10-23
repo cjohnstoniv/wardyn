@@ -223,15 +223,15 @@ wardyn run --image "$RUNNER_IMAGE" --task-mode exec \
 echo "exit $?"
 ```
 
-- That prints `exit 1`: the CI principal is a service identity, and its token has no audit read (`403` `service_scope`), so `run --wait` cannot read the task's own code and reports a `FAILED` run as `1` ([CI.md](CI.md#cis-identity)).
-- With a token that can read the audit (an admin's, or the sponsor signed in), the same run prints `exit 7`.
+- That prints `exit 7`: the CI principal is a service identity, and its token reads the audit rows of the runs it created (`GET /audit?run_id=`), so `run --wait` reads the task's own code ([CI.md](CI.md#cis-identity)).
+- If the code cannot be read, a `FAILED` run is `1`.
 - The full table is in [CI.md](CI.md#exit-codes).
 - The ones a launcher acts on:
 
 | Exit | Meaning |
 |---|---|
 | `0` | The run `COMPLETED`. |
-| `1` | The run `FAILED`. With an audit-reading token the exit is the task's own code instead. |
+| `1` | The run `FAILED` and the task's own code could not be read. Otherwise the exit is the task's own code. |
 | `2` | The run was `KILLED` or `STOPPED`, or the launch was refused for who you are (an image not granted, an interactive run). |
 | `3` | The launch was refused for what you asked (a policy or class the runner cannot meet, the run cap). |
 | `124` | The wait timed out. **The run is still running.** |
@@ -249,7 +249,7 @@ echo "exit $code"
 
 - `--json` puts the created run on stdout and progress on stderr, so `jq -r .id` is safe.
 - The same launch from Go, without the token grant (it omits `eligible_grants`), reads the exit code the way the CLI does, from the `run.complete` event.
-- A service token cannot read that event, so run this with an audit-reading token:
+- A service token reads that event for a run it created:
 
 ```go
 package main
@@ -333,7 +333,7 @@ echo "exit $?"
 ## 8. Read what the job did
 
 - Every job leaves one trail, keyed by run id.
-- A service token has no audit read (`403` `service_scope`), so these `wardyn audit` commands run with the admin token or as the sponsor signed in, not as the CI principal:
+- A service token reads only the audit rows of runs it created (any other id answers `[]`). `GET /audit/export` is `403` `service_scope`, so it runs with the admin token or as the sponsor signed in:
 
 ```sh
 # admin

@@ -29,6 +29,8 @@ export interface CreateRunInput {
   // One of the caller's units to run in, by id or exact name; absent runs in their home unit.
   run_in?: string;
   confinement_class?: ConfinementClass;
+  // pkg/client.CreateRunRequest.MachineKind: absent is a container; "linux_vm" a Linux desktop VM.
+  machine_kind?: "container" | "linux_vm";
   interactive?: boolean;
   // Bring Your Own Image: a user-supplied base image the backend WRAPS with the
   // runner tools (FROM <image> + COPY tools + cleared ENTRYPOINT) before use.

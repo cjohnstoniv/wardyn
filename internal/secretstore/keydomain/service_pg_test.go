@@ -4,12 +4,19 @@
 package keydomain_test
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/subjectkey/subjectkeytest"
 )
@@ -211,6 +218,117 @@ func TestService_TruncatedGroups(t *testing.T) {
 	login(t, s, "hal", false, "x")
 	if got := domainOf(t, s, "hal"); got != keydomain.Default {
 		t.Fatalf("after a complete login: %q, want default", got)
+	}
+}
+
+// oldPlace is Place as it was before PlaceMany took it over (410aeb773), kept to hold PlaceMany to what Place did.
+func oldPlace(ctx context.Context, pool *pgxpool.Pool, s *keydomain.Service, owner string) (keydomain.Placement, error) {
+	var groups []string
+	var truncated bool
+	var raw []byte
+	err := pool.QueryRow(ctx, `SELECT groups, truncated FROM key_domain_login_groups WHERE principal=$1`, owner).Scan(&raw, &truncated)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+	case err != nil:
+		return keydomain.Placement{}, oldUnavailable("read the login's groups", err)
+	default:
+		if err := json.Unmarshal(raw, &groups); err != nil {
+			return keydomain.Placement{}, fmt.Errorf("keydomain: the stored groups of %q are not a list: %w", owner, err)
+		}
+	}
+	rows, err := pool.Query(ctx, `
+		SELECT subject_type, subject, domain FROM key_domain_assignments
+		WHERE (subject_type='user' AND subject=$1) OR subject_type='all' OR (subject_type='group' AND subject = ANY($2))`,
+		owner, groups)
+	if err != nil {
+		return keydomain.Placement{}, oldUnavailable("read the assignments", err)
+	}
+	hits, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct{ Type, Subject, Domain string }])
+	if err != nil {
+		return keydomain.Placement{}, oldUnavailable("read the assignments", err)
+	}
+	var user, all string
+	byGroup := map[string][]string{} // domain -> the groups naming it
+	for _, h := range hits {
+		switch h.Type {
+		case keydomain.SubjectUser:
+			user = h.Domain
+		case keydomain.SubjectAll:
+			all = h.Domain
+		case keydomain.SubjectGroup:
+			byGroup[h.Domain] = append(byGroup[h.Domain], h.Subject)
+		}
+	}
+	place := keydomain.Placement{Domain: keydomain.Default, Source: keydomain.SourceDefault}
+	switch {
+	case user != "":
+		place = keydomain.Placement{Domain: user, Source: keydomain.SourceUser}
+	case len(byGroup) > 1:
+		var parts []string
+		for d, gs := range byGroup {
+			slices.Sort(gs)
+			parts = append(parts, fmt.Sprintf("%s (%s)", d, strings.Join(gs, ", ")))
+		}
+		slices.Sort(parts)
+		return keydomain.Placement{}, fmt.Errorf("%w: %q is in groups assigned to %s; assign the person to one domain as a user", keydomain.ErrAmbiguous, owner, strings.Join(parts, " and "))
+	case len(byGroup) == 1:
+		for d, gs := range byGroup {
+			slices.Sort(gs)
+			place = keydomain.Placement{Domain: d, Source: keydomain.SourceGroup, Group: gs[0]}
+		}
+	case all != "":
+		place = keydomain.Placement{Domain: all, Source: keydomain.SourceAll}
+	}
+	if truncated && user == "" {
+		var any bool
+		if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM key_domain_assignments WHERE subject_type='group')`).Scan(&any); err != nil {
+			return keydomain.Placement{}, oldUnavailable("read the assignments", err)
+		}
+		if any {
+			return keydomain.Placement{}, fmt.Errorf("%w: the last sign-in of %q lost groups; assign the person to a domain as a user", keydomain.ErrGroupsTruncated, owner)
+		}
+	}
+	if !s.Has(place.Domain) {
+		return keydomain.Placement{}, fmt.Errorf("%w: %q is assigned to %q", keydomain.ErrUnknownDomain, owner, place.Domain)
+	}
+	return place, nil
+}
+
+func oldUnavailable(op string, err error) error {
+	return fmt.Errorf("keydomain: %s: %w: %w", op, secretstore.ErrUnavailable, err)
+}
+
+// PlaceMany places a corpus of people in one call exactly as the one-person Place did before it:
+// the same domain and source, and the same refusals.
+func TestService_PlaceManyMatchesPlace(t *testing.T) {
+	pool := subjectkeytest.ThrowawayDB(t)
+	s := keydomain.NewService(pool, []string{"a", "b", "c"})
+	login(t, s, "gina", false, "eng", "staff")
+	login(t, s, "hal", false, "eng", "ops")
+	login(t, s, "ivy", false, "ops")
+	login(t, s, "jon", true, "eng")
+	login(t, s, "kim", true, "other")
+	set(t, s, "all", "", "c")
+	set(t, s, "group", "eng", "a")
+	set(t, s, "group", "ops", "b")
+	set(t, s, "user", "ivy", "c")
+	set(t, s, "user", "kim", "a")
+	people := []string{"gina", "hal", "ivy", "jon", "kim", "nobody", "gina"}
+	got := s.PlaceMany(t.Context(), people)
+	for _, p := range people {
+		want, werr := oldPlace(t.Context(), pool, s, p)
+		if got[p].Placement != want || (got[p].Err == nil) != (werr == nil) || (werr != nil && got[p].Err.Error() != werr.Error()) {
+			t.Errorf("PlaceMany[%s] = (%+v, %v), oldPlace = (%+v, %v)", p, got[p].Placement, got[p].Err, want, werr)
+		}
+	}
+	if got["gina"].Domain != "a" || got["gina"].Source != keydomain.SourceGroup || got["gina"].Group != "eng" {
+		t.Errorf("gina = %+v, want group eng -> a", got["gina"])
+	}
+	if !errors.Is(got["hal"].Err, keydomain.ErrAmbiguous) || !errors.Is(got["jon"].Err, keydomain.ErrGroupsTruncated) {
+		t.Errorf("hal = %v, jon = %v; want ErrAmbiguous and ErrGroupsTruncated", got["hal"].Err, got["jon"].Err)
+	}
+	if got["ivy"].Source != keydomain.SourceUser || got["kim"].Domain != "a" || got["nobody"].Source != keydomain.SourceAll {
+		t.Errorf("ivy = %+v, kim = %+v, nobody = %+v", got["ivy"], got["kim"], got["nobody"])
 	}
 }
 

@@ -34,10 +34,12 @@ import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/
 import { PageHeader } from "../wardyn/page-header";
 import { PageContainer } from "../wardyn/page-container";
 import { ReasonDialog } from "../wardyn/reason-dialog";
+import { useRefusedApprovals } from "../../lib/hooks/use-refused-approvals";
 import { REAUTH_ROW, REAUTH_TITLE, reauthRowHint, type ReauthAudience } from "../wardyn/model-access-copy";
 import { useOperator, useRole } from "../wardyn/operator-context";
 import { useConsoleMode } from "../wardyn/console-view";
 import { ADO } from "../../lib/ado-entra-copy";
+import { NEEDS_YOU } from "../wardyn/copy/needs-you";
 import { APPROVALS } from "../../lib/approvals-copy";
 import { PUSH } from "../wardyn/copy/push";
 import {
@@ -321,6 +323,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
     },
     [setSearchParams],
   );
+  const { refused, noteRefusal } = useRefusedApprovals();
   const [prompt, setPrompt] = React.useState<{ id: string; action: "approve" | "deny"; kind: ApprovalRequest["kind"] } | null>(null);
 
   // EXPIRED approvals must be fetched too, or a request that timed out
@@ -426,6 +429,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
       onChanged?.();
       return true;
     } catch (err) {
+      noteRefusal(prompt.id, err);
       toast.error(
         prompt.action === "approve" ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED,
         { description: getErrorMessage(err) },
@@ -462,6 +466,19 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // draws this card's own Approve/Deny pair, the same direct-decide shape
   // decideAdoDirect above takes for its own kind, minus the scope.
   const decidePushDirect = (id: string, approve: boolean): Promise<void> => decideAdoDirect(id, approve, []);
+
+  // #2963 — a "Needs you" request's Decline: not a decide() verb (approvals_takeover.go).
+  const declineTakeover = async (id: string): Promise<void> => {
+    try {
+      await api.decline(id);
+      fetchAll().catch(() => {
+        /* transient refresh failure — the decline itself already succeeded */
+      });
+      onChanged?.();
+    } catch (err) {
+      toast.error(NEEDS_YOU.failed.decline, { description: getErrorMessage(err) });
+    }
+  };
 
   // The pending queue's own tool_call items, and only those — the screen-
   // level honesty note (ADO.TOOL_CALL_NOTE) is worth a line only
@@ -539,6 +556,8 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
                 onAct={(action) => setPrompt({ id: a.id, action, kind: a.kind })}
                 onAdoDecide={decideAdoDirect}
                 onPushDecide={decidePushDirect}
+                onDecline={declineTakeover}
+                refused={refused.has(a.id)}
               />
             ))}
           </div>

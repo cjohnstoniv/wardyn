@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -55,5 +56,41 @@ func TestUIGateway_AWaitBehindHeldStreamsEndsInTheCapRefusal(t *testing.T) {
 		if code := <-streams; code != http.StatusOK {
 			t.Errorf("a held stream answered %d, want 200", code)
 		}
+	}
+}
+
+// TestUIConnWaiter_ADeliveredConnectionIsNeverCancelled: the timer can fire a moment after the
+// transport hands the request its connection. Once the connection is delivered, a late timer must
+// neither cancel the request nor record the connection-cap refusal.
+func TestUIConnWaiter_ADeliveredConnectionIsNeverCancelled(t *testing.T) {
+	base, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w := &uiConnWaiter{base: base, cancel: cancel}
+	w.timer = time.AfterFunc(time.Hour, w.expire)
+	w.done()
+	w.expire() // the timer firing just after the delivery
+	if base.Err() != nil {
+		t.Fatalf("a request whose connection was delivered was cancelled: %v", base.Err())
+	}
+}
+
+// TestUIConnWaiter_AnUndeliveredWaitExpires pins the other side: with no connection in hand, the timer
+// cancels the request.
+func TestUIConnWaiter_AnUndeliveredWaitExpires(t *testing.T) {
+	base, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w := &uiConnWaiter{base: base, cancel: cancel}
+	w.timer = time.AfterFunc(time.Hour, w.expire)
+	w.expire()
+	if base.Err() == nil {
+		t.Fatal("an undelivered wait did not cancel the request on expiry")
+	}
+}
+
+// TestUIConnWait_BoundIsAtLeastFifteenSeconds: a slow but finite backlog must be able to drain
+// before the connection-cap refusal (#3170).
+func TestUIConnWait_BoundIsAtLeastFifteenSeconds(t *testing.T) {
+	if uiConnWait < 15*time.Second {
+		t.Errorf("uiConnWait = %v, want at least 15s", uiConnWait)
 	}
 }

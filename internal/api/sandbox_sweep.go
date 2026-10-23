@@ -11,6 +11,7 @@ package api
 
 import (
 	"context"
+	"net/http"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
@@ -228,4 +229,29 @@ func (s *Server) runnerProvenRevoked(ctx context.Context, run types.AgentRun) bo
 	}
 	row, err := rs.GetRunner(ctx, *run.RunnerID)
 	return err == nil && row.State == types.RunnerRevoked
+}
+
+// handleSweepSandboxes is the operator-triggered counterpart to the boot pass
+// and to cmd/wardynd's periodic ticker (runTerminalSandboxSweeper, #710),
+// which calls SweepTerminalSandboxesPage on its own bounded cadence instead.
+// This route stays unbounded (SweepTerminalSandboxes, ListRuns UNPAGED,
+// probing Runner.Status for every terminal run carrying a SandboxRef) on
+// purpose: an operator asking for it once, right now, wants the whole table
+// checked immediately, not the next several bounded pages' worth — and it is
+// cheap precisely because the operator decides when to pay for it, unlike a
+// ticker that would pay on every tick forever.
+func (s *Server) handleSweepSandboxes(w http.ResponseWriter, r *http.Request) {
+	swept, err := s.SweepTerminalSandboxes(r.Context())
+	if err != nil {
+		writeServerError(w, r, "sandbox sweep failed", err)
+		return
+	}
+	// NOT `sandbox.sweep`: that action is documented as emitted on FAILED
+	// teardown only, by the primitive itself, and reusing it for a success event
+	// would make docs/AUDIT-ACTIONS.md false. This row answers a different
+	// question — WHO asked for a sweep, and what did it find — and the
+	// primitive's own failure rows still fire underneath it.
+	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r), "sandbox.sweep.request",
+		"", "success", mustJSON(map[string]any{"swept": swept})))
+	writeJSON(w, http.StatusOK, map[string]any{"swept": swept})
 }

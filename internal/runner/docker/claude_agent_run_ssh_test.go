@@ -72,6 +72,7 @@ func TestClaudeAgentRun_SSHLaneUsesTheProxyAgent(t *testing.T) {
 		"    KnownHostsCommand " + helper + " ssh-known-hosts " + grant,
 		"    UserKnownHostsFile /dev/null",
 		"    HostName ssh.github.com",
+		"    PubkeyAuthentication host-bound",
 		"    ProxyCommand corkscrew wardyn-proxy 3128 %h %p",
 	} {
 		if !strings.Contains(calls, want) {

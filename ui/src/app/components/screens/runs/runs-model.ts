@@ -28,7 +28,7 @@ import { scheduledWait } from "./scheduled-state";
 import { ordinal } from "../../../lib/ordinal";
 
 export type RowHue = "blue" | "amber" | "red" | "grey";
-export type RowAction = "review" | "sign-in" | "revive" | "cancel" | null;
+export type RowAction = "review" | "sign-in" | "revive" | "take-over" | "cancel" | null;
 
 export interface RowPresentation {
   hue: RowHue;
@@ -76,11 +76,28 @@ export function rowPresentation(run: AgentRun, adminView = false): RowPresentati
     const you = a.by === "you";
     switch (a.kind) {
       case "approval":
+        // by=admin is a wait this viewer cannot clear: neutral wait copy, never a "needs you".
+        if (!you) {
+          return {
+            hue: "amber",
+            word: RUNS_ROW_WORD.WAITING_FOR_ADMIN,
+            subword: RUN_WAIT.waitingHeld(a.pending),
+            action: null,
+            needsYou: false,
+          };
+        }
         return {
           hue: "amber",
-          word: you ? RUN_HEADER.DECISIONS_NEED_YOU(Math.max(1, a.pending)) : RUNS_ROW_WORD.WAITING_FOR_ADMIN,
-          subword: RUN_WAIT.waitingHeld(a.pending),
-          action: you ? "review" : null,
+          word: adminView ? RUNS_ROW_WORD.NEEDS_YOU : RUN_HEADER.DECISIONS_NEED_YOU(Math.max(1, a.pending)),
+          subword: adminView ? RUNS_ROW_WORD.HELD(a.pending) : RUN_WAIT.waitingHeld(a.pending),
+          action: "review",
+          needsYou: true,
+        };
+      case "takeover":
+        return {
+          hue: "amber",
+          word: you ? RUNS_ROW_WORD.NEEDS_TAKEOVER : RUNS_ROW_WORD.WAITING_FOR_TAKEOVER,
+          action: you ? "take-over" : null,
           needsYou: you,
         };
       case "reauth":

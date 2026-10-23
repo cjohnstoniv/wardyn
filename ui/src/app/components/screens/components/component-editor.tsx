@@ -12,6 +12,7 @@ import * as React from "react";
 import { Loader2, Plus, X } from "lucide-react";
 import { components as api } from "../../../lib/api/components";
 import { getErrorMessage } from "../../../lib/format";
+import { useUnsavedGuard } from "../../../lib/use-unsaved-guard";
 import type { Component, ComponentDeliveryMode } from "../../../lib/types";
 import { Button } from "../../ui/button";
 import { Checkbox } from "../../ui/checkbox";
@@ -183,6 +184,15 @@ export function ComponentEditor({
   const [error, setError] = React.useState<string | null>(null);
   const hostChoices = headerHostChoices(hostLines(draft.hosts));
   const canSave = draft.name.trim() !== "" && !saving;
+
+  // Leaving with edits that were not saved asks first; a save closes this dialog (onSaved). Row keys are random, so they are left out.
+  const edited = JSON.stringify(
+    { ...draft, secrets: draft.secrets.map(({ key: _k, ...s }) => s), settings: draft.settings.map(({ key: _k, ...s }) => s) },
+    null,
+    2,
+  );
+  const initial = React.useRef(edited).current;
+  useUnsavedGuard("component-editor", edited !== initial, () => edited);
 
   const save = async () => {
     setSaving(true);

@@ -52,11 +52,13 @@ type Credential struct {
 // port (:443 for https, :80 for http) and trailing slashes do not matter. A
 // value that does not parse as a URL with a host is hashed as trimmed.
 func OrgURLSHA256(orgURL string) string {
-	sum := sha256.Sum256([]byte(normaliseOrgURL(orgURL)))
+	sum := sha256.Sum256([]byte(NormaliseOrgURL(orgURL)))
 	return hex.EncodeToString(sum[:])
 }
 
-func normaliseOrgURL(raw string) string {
+// NormaliseOrgURL is the form OrgURLSHA256 hashes: origin plus base path, as the local attach
+// pointer file carries it.
+func NormaliseOrgURL(raw string) string {
 	raw = strings.TrimSpace(raw)
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme == "" || u.Hostname() == "" {

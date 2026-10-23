@@ -44,12 +44,19 @@ const (
 	// MethodSelftest runs a BYOI image's contract check on a runner that
 	// advertises Caps.BYOISelftest: never an Exec, so it spends no generation.
 	MethodSelftest = "byoi_selftest"
+	// MethodCreateVM creates a Linux VM sandbox on a runner whose caps carry LinuxVM. It is its own
+	// method so a runner that predates VMs refuses it instead of reading it as create_sandbox and
+	// starting a container; every later verb on the VM's ref is the container one.
+	MethodCreateVM = "create_vm"
 	// MethodListFolders, MethodSyncFolder and MethodSyncFolderWait are a
 	// folder-only runner's (Caps.Folders): the folders under its roots, and one
 	// `wardyn sync` pass between one of them and a run's sandbox.
 	MethodListFolders    = "list_folders"
 	MethodSyncFolder     = "sync_folder"
 	MethodSyncFolderWait = "sync_folder_wait"
+	// MethodDialDesktop opens a `desktop` stream to a VM sandbox's display (QEMU's RFB socket) on a
+	// runner whose caps carry LinuxVM.Desktop; an older runner never gets the call.
+	MethodDialDesktop = "dial_desktop"
 	// The local attach calls are sent only to a runner that advertises Caps.LocalAttach.
 	// MethodLocalAttach opens a pty_tee stream and answers its id; MethodLocalAttachMode changes the
 	// session's writer/observer mode and is answered once the runner has applied it;
@@ -121,6 +128,11 @@ type AttachArgs struct {
 	Options runner.AttachOptions `json:"options"`
 }
 
+// DialDesktopArgs names the VM sandbox whose display dial_desktop opens.
+type DialDesktopArgs struct {
+	Ref string `json:"ref"`
+}
+
 // StreamResult names the byte stream a call opened (the pty stream of Attach).
 type StreamResult struct {
 	Stream uint32 `json:"stream"`
@@ -182,7 +194,8 @@ type SyncFolderWaitArgs struct {
 }
 
 // FolderPass is one pass's outcome, as the runner counts it. Refused holds at
-// most MaxFolderRefusals paths. Error is set when the pass did not complete.
+// most MaxFolderRefusals paths. Error is set when the pass did not complete; its
+// file counts are then what it finished, and saved in its state, before it stopped.
 type FolderPass struct {
 	Pushed    int             `json:"pushed"`
 	Pulled    int             `json:"pulled"`
@@ -191,7 +204,9 @@ type FolderPass struct {
 	Ignored   int             `json:"ignored"`
 	BytesOut  int64           `json:"bytes_out"`
 	BytesIn   int64           `json:"bytes_in"`
-	Error     string          `json:"error,omitempty"`
+	// Unsynced is, on a pass back cut short, the sandbox's changed files it had not brought back.
+	Unsynced int    `json:"unsynced,omitempty"`
+	Error    string `json:"error,omitempty"`
 }
 
 // FolderRefusal is one path a pass refused and why.

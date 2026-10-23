@@ -57,8 +57,14 @@ var serviceActorType = types.ActorService
 // serviceAllowed is the whole of what a service identity's token may reach, keyed as chi reports a
 // matched route: "METHOD pattern". Anything not here, including any route added later, answers 403
 // service_scope. Absent on purpose: attach, approvals, secrets, tokens, SSH keys, invitations, runner
-// claims and every admin route.
+// claims and every admin route. The four read routes, three reads (audit, presets, workspaces), answer only what the service
+// may already launch with: its own runs' audit, the presets open to its type, the workspaces it may launch.
+// The workspace detail and the audit export stay off.
 var serviceAllowed = map[string]bool{
+	"GET /api/v1/audit":                              true,
+	"GET /api/v1/presets":                            true,
+	"GET /api/v1/presets/{name}":                     true,
+	"GET /api/v1/workspaces":                         true,
 	"POST /api/v1/runs":                              true,
 	"POST /api/v1/runs/preflight":                    true,
 	"GET /api/v1/runs":                               true,

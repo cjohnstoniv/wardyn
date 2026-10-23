@@ -35,6 +35,10 @@ export interface MeUserDrive {
   home_name?: string;
   /** Allocated, then disabled by an admin. Omitted when false. */
   paused?: boolean;
+  /** A share, which can be reached from more than one place (#113). */
+  placement_eligible?: boolean;
+  /** Where it mounts from, printed as it is (M10): "Organisation runners", and the bound runner when you own it. */
+  mounts_from?: string;
 }
 
 // GET /me — see whoami() below for where each field comes from. One
@@ -441,6 +445,11 @@ export const health = {
     // mean "no mirror" — lib/demo-videos.ts's episodeUrl falls back to its
     // own hardcoded GitHub base either way.
     demo_video_base_url?: string;
+    // WARDYN_CLI_ARTIFACT_BASE (internal/api/healthz.go on lane ATT-INSTALL, not on
+    // main yet): the operator's internal mirror of the release assets, already
+    // validated at boot (https, no userinfo/query/fragment). Absent while unset and
+    // on an older daemon. The card's Get the CLI lines fetch from it when present.
+    cli_artifact_base?: string;
   }> {
     try {
       // /healthz is un-prefixed (not under /api/v1), so it is the ONE call
