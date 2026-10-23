@@ -34,6 +34,7 @@ var ungovernedCallerCensus = map[string]struct {
 	"approvals.go:authorizeUserDecision":                       {1, "A: the member decision gate; the boundary hook runs after it for every decider"},
 	"approvals.go:resolveAlwaysTarget":                         {1, "A: an always-scope approval's target; the boundary hook bounds the host"},
 	"approvals_decidable.go:decidableKindAndOwner":             {1, "A: who may decide; the boundary hook bounds what is admitted"},
+	"approvals_decidable.go:projectDecidable":                  {1, "authz-only: a list display; an operator's rows skip the run read, and decide() re-checks on the click"},
 	"approvals_list_view.go:approvalsViewScope":                {1, "authz-only: which approvals a reader lists"},
 	"approvals_reauth.go:canSeeApproval":                       {1, "authz-only: approval read reach"},
 	"approvals_takeover.go:loadTakeover":                       {1, "authz-only: a takeover's reach and the deny_interactive door, as refuseAttachEntry's ticket lane"},
