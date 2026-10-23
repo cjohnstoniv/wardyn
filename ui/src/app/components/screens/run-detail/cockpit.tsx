@@ -188,7 +188,7 @@ export function Cockpit({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <RunStatusStrip ctx={ctx} />
-      <LocalModelsCard run={run} audit={audit} />
+      <LocalModelsCard run={run} />
       <div className="flex min-h-0 flex-1 flex-col">
         <RunCanvas ctx={ctx} />
       </div>
