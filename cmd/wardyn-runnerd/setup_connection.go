@@ -4,11 +4,15 @@
 package main
 
 import (
+	"cmp"
 	"fmt"
+	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/net/http/httpproxy"
 
 	"github.com/cjohnstoniv/wardyn/internal/doctor"
 )
@@ -20,8 +24,12 @@ import (
 // engine and relay are preflight's own probes, which doctor's stages run too.
 func (h setupHost) checkConnection(cmd *cobra.Command, plan setupPlan) error {
 	out := cmd.OutOrStdout()
-	conn := runnerConn{org: plan.org, orgSource: "--org", trustedCA: plan.trustedCAFile, orgCA: plan.orgCAFile}
+	conn := runnerConn{org: plan.org, orgSource: cmp.Or(plan.orgFrom, "--org"), trustedCA: plan.trustedCAFile, orgCA: plan.orgCAFile,
+		proxyNote: ": the settings setup will install for the service, not this shell's"}
 	net := h.network
+	if net.ProxyFor == nil {
+		net.ProxyFor = serviceProxyFor(plan.runnerFile())
+	}
 	net.WireDespiteHealthz = true
 	stages, serverVersion := h.connectionStages(cmd.Context(), plan.paths, plan.paths.stateDir, conn, &net, true)
 	if skew, ok := proxyImageSkew(plan.proxyImage, plan.flagged, serverVersion); ok {
@@ -53,4 +61,11 @@ func setupHint(st doctor.Stage) string {
 		return "; setup takes the root with --org-ca-file <file> for this runner's own connection to the organisation only, or --trusted-ca-file <file> to give it to every run's proxy and sandbox as well"
 	}
 	return ""
+}
+
+// serviceProxyFor routes a request the way the runner service will: by the HTTPS_PROXY and NO_PROXY that
+// runnerd.json carries for it (serve exports them), credential-stripped, and by nothing in this shell.
+func serviceProxyFor(f runnerFile) func(*http.Request) (*url.URL, error) {
+	proxy := (&httpproxy.Config{HTTPSProxy: f.RunnerProxy, NoProxy: f.RunnerNoProxy}).ProxyFunc()
+	return func(r *http.Request) (*url.URL, error) { return proxy(r.URL) }
 }

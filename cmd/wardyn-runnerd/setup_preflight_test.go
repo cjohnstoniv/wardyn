@@ -4,8 +4,11 @@
 package main
 
 import (
+	"crypto/ed25519"
 	"encoding/json"
+	"encoding/pem"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -13,7 +16,14 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
+
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/federation"
+	"github.com/cjohnstoniv/wardyn/internal/runneridentity"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 )
 
 // machineDependent matches what a setup prints from this computer's own measurements and the key it just made.
@@ -188,5 +198,146 @@ func TestSetupGoesOnWhenHealthzAnswersAPlainError(t *testing.T) {
 				t.Errorf("setup did not register (%d)", f.count("POST /api/v1/runners/register"))
 			}
 		})
+	}
+}
+
+// connectProxy is a CONNECT proxy that tunnels to target whatever host it is asked for, and records each
+// request. With wantAuth it answers 407 to a CONNECT that carries no Proxy-Authorization.
+type connectProxy struct {
+	URL  *url.URL
+	mu   sync.Mutex
+	seen []*http.Request
+}
+
+func newConnectProxy(t *testing.T, target string, wantAuth bool) *connectProxy {
+	t.Helper()
+	p := &connectProxy{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p.mu.Lock()
+		p.seen = append(p.seen, r)
+		p.mu.Unlock()
+		if r.Method != http.MethodConnect {
+			http.Error(w, "connect only", http.StatusMethodNotAllowed)
+			return
+		}
+		if wantAuth && r.Header.Get("Proxy-Authorization") == "" {
+			w.Header().Set("Proxy-Authenticate", `Basic realm="corp"`)
+			w.WriteHeader(http.StatusProxyAuthRequired)
+			return
+		}
+		dst, err := net.Dial("tcp", target)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			_ = dst.Close()
+			return
+		}
+		_, _ = conn.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n"))
+		go func() { _, _ = io.Copy(dst, conn); _ = dst.Close() }()
+		_, _ = io.Copy(conn, dst)
+		_ = conn.Close()
+	}))
+	t.Cleanup(srv.Close)
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.URL = u
+	return p
+}
+
+func (p *connectProxy) connects() (hosts []string, auth bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, r := range p.seen {
+		hosts = append(hosts, r.Host)
+		auth = auth || r.Header.Get("Proxy-Authorization") != ""
+	}
+	return hosts, auth
+}
+
+// proxiedOrg is a setupFixture whose organisation is a TLS server reached as https://example.com:PORT, a name
+// no machine resolves, so that only a proxy that tunnels to the server gets there. ca is the file that trusts it.
+func proxiedOrg(t *testing.T) (f *setupFixture, ca, serverAddr string) {
+	t.Helper()
+	clearProxyEnv(t)
+	f = newSetupFixture(t, "linux")
+	srv := httptest.NewTLSServer(http.HandlerFunc(f.serve))
+	t.Cleanup(srv.Close)
+	serverAddr = srv.Listener.Addr().String()
+	f.org = "https://example.com:" + strings.Split(serverAddr, ":")[1]
+	ca = writeFile(t, filepath.Join(t.TempDir(), "org-ca.pem"), string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})))
+	return f, ca, serverAddr
+}
+
+// TestSetupChecksTheConnectionThroughTheProxyItInstalls pins that the stages route as the service will: a rerun
+// from a shell with no proxy keeps the earlier setup's proxy (runnerd.json), and the check goes through it.
+func TestSetupChecksTheConnectionThroughTheProxyItInstalls(t *testing.T) {
+	f, ca, addr := proxiedOrg(t)
+	proxy := newConnectProxy(t, addr, false)
+	p := mustPaths(t, f)
+	key, err := runneridentity.Generate(p.stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := runneridentity.Identity{RunnerID: uuid.New(), PrivateKey: key, Fingerprint: runnerwire.Fingerprint(key.Public().(ed25519.PublicKey)), OrgURLSHA256: federation.OrgURLSHA256(f.org)}
+	if err := runneridentity.Save(p.stateDir, id); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(p.configFile()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(runnerFile{OrgURL: f.org, RunnerProxy: proxy.URL.String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.configFile(), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := f.run(setupOptions{orgCAFile: ca})
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	hosts, _ := proxy.connects()
+	if len(hosts) == 0 || hosts[0] != strings.TrimPrefix(f.org, "https://") {
+		t.Errorf("the proxy was asked to connect to %v, want the organisation", hosts)
+	}
+	if want := "via proxy " + proxy.URL.Host; !strings.Contains(out, want) || !strings.Contains(out, "the settings setup will install for the service") {
+		t.Errorf("the proxy stage does not say which proxy it used (%q):\n%s", want, out)
+	}
+}
+
+// TestSetupProbesWithoutTheCredentialItWillNotInstall pins that a proxy address with a user name and password
+// in this shell is probed as the service gets it, without them: against a proxy that wants authentication the
+// check is refused at 407 with doctor's message, and the credential is in no output and was never sent.
+func TestSetupProbesWithoutTheCredentialItWillNotInstall(t *testing.T) {
+	f, ca, addr := proxiedOrg(t)
+	proxy := newConnectProxy(t, addr, true)
+	t.Setenv("HTTPS_PROXY", "http://deploy:s3cretpw@"+proxy.URL.Host)
+	out, err := f.run(setupOptions{tokenFile: f.tokenFile, orgCAFile: ca})
+	if err == nil || !strings.Contains(err.Error(), "the tls stage failed, so setup stops here") || !strings.Contains(err.Error(), "407: it wants proxy authentication") ||
+		!strings.Contains(err.Error(), "set HTTPS_PROXY to") {
+		t.Fatalf("err = %v, want a refusal at 407 naming HTTPS_PROXY\n%s", err, out)
+	}
+	if all := out + err.Error(); strings.Contains(all, "s3cretpw") || strings.Contains(all, "deploy:") {
+		t.Errorf("the credential is in the output:\n%s", all)
+	}
+	if hosts, auth := proxy.connects(); len(hosts) == 0 || auth {
+		t.Errorf("proxy saw %v with a credential sent: %v; want a probe through it without one", hosts, auth)
+	}
+	if f.count("POST /api/v1/runners/register") != 0 {
+		t.Error("setup registered")
+	}
+}
+
+// TestSetupNamesWhereTheOrganisationCameFrom pins the managed preference as the source the org-url line names.
+func TestSetupNamesWhereTheOrganisationCameFrom(t *testing.T) {
+	f := newSetupFixture(t, "linux")
+	out, err := f.run(setupOptions{tokenFile: f.tokenFile, orgFrom: "the OrgURL managed preference"})
+	if err != nil || !strings.Contains(out, "(from the OrgURL managed preference)") {
+		t.Fatalf("err=%v\n%s", err, out)
 	}
 }

@@ -45,8 +45,10 @@ type setupOptions struct {
 	// orgCAFile is --org-ca-file: roots for this runner's own connection to the organisation only.
 	orgCAFile                     string
 	claim, makeDefault, noService bool
-	pool                          string
-	limits                        registerLimits
+	// orgFrom names where org came from when it was not --org; "" is --org.
+	orgFrom string
+	pool    string
+	limits  registerLimits
 }
 
 // newSetupCommand is the one command a person or device management runs to turn a downloaded
@@ -70,8 +72,8 @@ func newSetupCommand() *cobra.Command {
 			return err
 		}
 		// On a Mac with the configuration profile, --org is optional.
-		if !cmd.Flags().Changed("org") {
-			o.org = cmp.Or(managedPref("OrgURL"), o.org)
+		if pref := managedPref("OrgURL"); !cmd.Flags().Changed("org") && pref != "" {
+			o.org, o.orgFrom = pref, "the OrgURL managed preference"
 		}
 		if o.org == "" {
 			return errors.New(`required flag(s) "org" not set`)

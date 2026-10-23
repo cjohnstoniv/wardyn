@@ -7,6 +7,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -36,6 +38,7 @@ type doctorRig struct {
 	noNet     bool
 	netErr    error
 	orgPool   *x509.CertPool
+	cert      *x509.Certificate
 	org       string
 	// stripUpgrade makes the organisation see the stream route's request without its upgrade headers, the way
 	// a gateway that strips them does.
@@ -66,6 +69,7 @@ func newRig(t *testing.T) *doctorRig {
 	t.Cleanup(srv.Close)
 	pool := x509.NewCertPool()
 	pool.AddCert(srv.Certificate())
+	rig.cert = srv.Certificate()
 	rig.env, rig.orgPool, rig.org = map[string]string{"WARDYN_RUNNER_ORG_URL": srv.URL}, pool, srv.URL
 	return rig
 }
@@ -323,5 +327,55 @@ func TestRunnerDoctorPlainOutputGolden(t *testing.T) {
 	}
 	if got != string(want) {
 		t.Errorf("plain output differs from testdata/doctor_runner.golden:\n%s", got)
+	}
+}
+
+// TestDoctorReadsWhatSetupRecordedInRunnerJSON pins that the runner stages read runnerd.json, where a current
+// setup records the organisation and the CA bundles, beside the legacy service definition and this shell: the
+// organisation's certificate is trusted by no system root, only by the recorded bundle.
+func TestDoctorReadsWhatSetupRecordedInRunnerJSON(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		file  func(org, ca string) runnerFile
+		shell bool
+		stage string
+		in    string
+	}{
+		{"org_url", func(org, _ string) runnerFile { return runnerFile{OrgURL: org} }, false, "org-url", "WARDYN_RUNNER_ORG_URL in the service's settings"},
+		{"trusted_ca_file", func(_, ca string) runnerFile { return runnerFile{TrustedCAFile: ca} }, true, "trusted-ca", "1 certificate(s) from ca.pem"},
+		{"org_ca_file", func(_, ca string) runnerFile { return runnerFile{OrgCAFile: ca} }, true, "org-ca", "1 certificate(s) from ca.pem"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRig(t)
+			if tc.shell {
+				r.orgPool = x509.NewCertPool() // only the recorded bundle trusts the certificate
+			}
+			ca := writeFile(t, filepath.Join(t.TempDir(), "ca.pem"), string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: r.cert.Raw})))
+			if !tc.shell {
+				// The organisation is only in runnerd.json, and the system pool trusts its certificate.
+				delete(r.env, "WARDYN_RUNNER_ORG_URL")
+			}
+			p, err := (setupHost{goos: "linux", home: r.home}).paths()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Dir(p.configFile()), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := json.Marshal(tc.file(r.org, ca))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p.configFile(), raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			rep := r.run(doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"})
+			if s := stage(t, rep, tc.stage); s.Status != doctor.StatusOK || !strings.Contains(s.Detail, tc.in) {
+				t.Errorf("%s = %s %q, want ok naming %q", tc.stage, s.Status, s.Detail, tc.in)
+			}
+			if s := stage(t, rep, "tls"); s.Status != doctor.StatusOK {
+				t.Errorf("tls = %s %q %q, want ok", s.Status, s.Detail, s.Fix)
+			}
+		})
 	}
 }

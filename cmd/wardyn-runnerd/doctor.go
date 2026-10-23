@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -69,23 +70,47 @@ func newDoctorCommand() *cobra.Command {
 	return cmd
 }
 
-// doctorSettings reads each setting the way the service does, and says where it came from.
+// doctorSettings reads each setting the way the service does, and says where it came from. file is runnerd.json,
+// where setup records them.
 type doctorSettings struct {
 	paths  setupPaths
 	getenv func(string) string
+	file   runnerFile
 }
 
-// get is flag's value, else key as setup recorded it for the service, else key in this shell's environment.
+// get is flag's value, else key as runnerd.json holds it, else as a setup before it recorded it in the service
+// definition, else key in this shell's environment.
 func (s doctorSettings) get(flagName, flag, key string) (value, source string) {
 	switch {
 	case flag != "":
 		return flag, "--" + flagName
+	case s.fileValue(key) != "":
+		return s.fileValue(key), key + " in the service's settings"
 	case s.paths.setting(key) != "":
 		return s.paths.setting(key), key + " in the service's settings"
 	case s.getenv(key) != "":
 		return s.getenv(key), key
 	}
 	return "", ""
+}
+
+// fileValue is the runnerd.json field the environment variable key stands for, "" when it has none.
+func (s doctorSettings) fileValue(key string) string {
+	name := ""
+	if key == "WARDYN_RUNNER_ORG_URL" {
+		name = "org_url"
+	}
+	for _, f := range runnerFields {
+		if slices.Contains(f.env, key) {
+			name = f.name
+		}
+	}
+	for _, f := range runnerFields {
+		if f.name == name {
+			return *f.file(&s.file)
+		}
+	}
+	return ""
 }
 
 // stateDir is --state-dir, else the one setup used.
@@ -104,7 +129,9 @@ func runDoctor(ctx context.Context, h setupHost, o doctorOptions, getenv func(st
 	if err != nil {
 		return doctor.Report{Stages: []doctor.Stage{doctor.FailStage("state", err.Error(), "WARDYN_RUNNER_STATE_DIR", "the directory of the identity this computer's service runs")}}.Scrubbed()
 	}
-	s := doctorSettings{paths, getenv}
+	s := doctorSettings{paths: paths, getenv: getenv}
+	var fileErr error
+	s.file, fileErr = loadRunnerFile(paths.configFile(), false)
 	org, orgSource := s.get("org", o.org, "WARDYN_RUNNER_ORG_URL")
 	if pref := managedPref("OrgURL"); o.org == "" && pref != "" {
 		org, orgSource = pref, "the OrgURL managed preference"
@@ -119,7 +146,12 @@ func runDoctor(ctx context.Context, h setupHost, o doctorOptions, getenv func(st
 	if o.runnerOnly {
 		serverVersion = o.serverVersion
 	}
-	return doctor.Report{Stages: append(stages, h.engineStages(ctx, s, o, org, serverVersion)...)}.Scrubbed()
+	stages = append(stages, h.engineStages(ctx, s, o, org, serverVersion)...)
+	if fileErr != nil {
+		bad := doctor.FailStage("config", oneLine(fileErr.Error()), "", "fix that field, or remove the file and run `wardyn-runnerd setup` again")
+		stages = append([]doctor.Stage{bad}, stages...)
+	}
+	return doctor.Report{Stages: stages}.Scrubbed()
 }
 
 // runnerConn is what the connection stages are told about the runner's organisation: its address and where
