@@ -124,7 +124,7 @@ export function StepShell({ title, lede, eyebrow, progress, back, primary, issue
     </header>
   );
   const primaryButton = primary && (
-    <Button type="button" className={primary.className} disabled={primary.disabled} aria-describedby={primary.describedBy} onClick={() => activate.current()}>
+    <Button type="button" className={primary.className} disabled={primary.disabled} aria-disabled={primary.disabled || undefined} aria-describedby={primary.describedBy} onClick={() => activate.current()}>
       {primary.label}
       {primary.arrow !== false && <span aria-hidden="true">→</span>}
     </Button>

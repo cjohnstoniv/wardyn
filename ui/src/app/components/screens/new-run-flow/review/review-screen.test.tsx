@@ -34,6 +34,8 @@ import { NEW_RUN_SCREENS, NewRunRoute, useNewRunDraft, type Seed, type SeedLoade
 import { runDocumentText } from "../document/run-document";
 import { ReviewScreen } from "./review-screen";
 
+const setSecretMock = vi.hoisted(() => vi.fn());
+vi.mock("../../../../lib/api/secrets", () => ({ secrets: { setSecret: (...a: unknown[]) => setSecretMock(...a) } }));
 const { checks, wfetchMock } = vi.hoisted(() => ({
   checks: { current: {} as Record<string, unknown>, params: undefined as { body: unknown } | undefined },
   wfetchMock: vi.fn(),
@@ -295,6 +297,72 @@ describe("Review Launch gate (U11)", () => {
     await user.click(screen.getByRole("button", { name: NR_REVIEW.VIEW_YAML }));
     expect(await screen.findByText(NR_REVIEW.CHECKED_ANNOUNCE)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: NR_REVIEW.CHECK_AGAIN })).toBeNull();
+  });
+});
+
+describe("Review: Add a secret that is not stored (#2108)", () => {
+  const NPM = { id: "secret:npm_token", kind: "secret", label: "Secret: npm_token", required_by: "Application", status: "missing", fix: { action: "add_secret", secret_name: "npm_token" } };
+  const withItems = (items: unknown[]) => ({ ...SCENARIO_PREFLIGHT.member, setup_items: items }) as unknown as PreflightResult;
+
+  it("a blocker for a named missing secret has Add beside its link; the dialog starts empty and names only the secret", async () => {
+    checks.current = answered(withItems([NPM]));
+    const user = userEvent.setup();
+    open(AGENT);
+    await ready();
+    const list = within(blockerList());
+    expect(list.getByRole("button", { name: "Secret: npm_token" })).toBeInTheDocument();
+    await user.click(list.getByRole("button", { name: NR_TOOLS.SETUP_ADD }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Secret: npm_token" });
+    const token = within(dialog).getByLabelText(NR_TOOLS.TOKEN_LABEL);
+    expect(token).toHaveAttribute("type", "password");
+    expect(token).toHaveValue("");
+    expect(within(dialog).getByRole("button", { name: NR_TOOLS.TOKEN_CONFIRM })).toBeDisabled();
+  });
+
+  it("saving stores the secret under the item's name, announces it, and asks the server again; Launch stays shut until it answers", async () => {
+    checks.current = answered(withItems([NPM]));
+    setSecretMock.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    open(AGENT);
+    await ready();
+    await user.click(within(blockerList()).getByRole("button", { name: NR_TOOLS.SETUP_ADD }));
+    const dialog = await screen.findByRole("dialog", { name: "Secret: npm_token" });
+    await user.type(within(dialog).getByLabelText(NR_TOOLS.TOKEN_LABEL), "s3cret");
+    await user.click(within(dialog).getByRole("button", { name: NR_TOOLS.TOKEN_CONFIRM }));
+
+    await waitFor(() => expect(setSecretMock).toHaveBeenCalledWith("npm_token", "s3cret"));
+    expect(await screen.findByText(NR_TOOLS.TOKEN_SAVED)).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(preflight).toHaveBeenCalledTimes(1);
+    expect(retry).toHaveBeenCalledTimes(1);
+    // The server has not yet said it is stored: the blocker and the shut Launch stand.
+    expect(launch()).toBeDisabled();
+    expect(within(blockerList()).getByRole("button", { name: "Secret: npm_token" })).toBeInTheDocument();
+  });
+
+  it("offers no Add on a blocker that is not a named add-secret fix", async () => {
+    checks.current = answered(SCENARIO_PREFLIGHT.app);
+    open(AGENT);
+    await ready();
+    expect(within(blockerList()).queryByRole("button", { name: NR_TOOLS.SETUP_ADD })).toBeNull();
+  });
+
+  it("a shut Launch run is aria-disabled and wears the grey disabled fill, not a dimmed teal", async () => {
+    checks.current = answered(withItems([NPM]));
+    open(AGENT);
+    await ready();
+    expect(launch()).toBeDisabled();
+    expect(launch()).toHaveAttribute("aria-disabled", "true");
+    expect(launch().className).toContain("dark:disabled:bg-muted");
+    expect(launch().className).toContain("dark:disabled:text-muted-foreground");
+  });
+
+  it("an open Launch run is not aria-disabled", async () => {
+    open(AGENT);
+    await ready();
+    expect(launch()).toBeEnabled();
+    expect(launch()).not.toHaveAttribute("aria-disabled");
   });
 });
 
