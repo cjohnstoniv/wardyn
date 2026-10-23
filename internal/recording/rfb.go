@@ -85,17 +85,26 @@ type RFBRecorder struct {
 	msg     []byte
 
 	stream  *rfbStream // the RFB stream after a 101
-	kept    []byte
 	stopped int64
 	seen    int64 // every byte Write was given
+
+	// A frame holds whole server messages only, so a pause leaves out whole messages and what is kept
+	// still decodes. pending is the kept bytes of the message being read, out the whole messages the
+	// WebSocket message being read ended. dropping: the message being read is left out, since it
+	// overlaps a pause. The handshake is kept even while paused: it holds no screen and a replay
+	// cannot decode anything without it.
+	pending  []byte
+	out      []byte
+	inited   bool
+	dropping bool
 
 	frames    []string
 	size      int
 	truncated bool
 	gaps      []RFBGap
 	paused    bool
-	// tainted: the message being read holds bytes that arrived while paused (or the stream carries a
-	// field begun then), so it is not kept even if it ends after Resume. The parser still follows it.
+	// tainted: the WebSocket message being read holds bytes that arrived while paused, so no server
+	// message in it is kept even if it ends after Resume. The parser still follows it.
 	tainted bool
 }
 
@@ -165,6 +174,8 @@ func (r *RFBRecorder) readHeader(p []byte) []byte {
 	status, fields, _ := strings.Cut(head, "\r\n")
 	if parts := strings.Fields(status); len(parts) >= 2 && parts[1] == "101" {
 		r.state, r.stream = rfbFrames, newRFBStream()
+		r.stream.boundary = r.boundary
+		r.pending, r.inited, r.dropping = nil, false, false
 		return rest
 	}
 	r.state = rfbScan
@@ -213,7 +224,7 @@ func (r *RFBRecorder) readFrames(p []byte) []byte {
 				r.msg = append(r.msg, b)
 			}
 			r.tainted = r.tainted || r.paused
-			if r.size+len(r.msg) > MaxRFBBytes {
+			if r.size+len(r.pending)+len(r.msg) > MaxRFBBytes {
 				r.truncated, r.msg = true, nil
 			}
 		}
@@ -265,7 +276,7 @@ func (r *RFBRecorder) frameHeader() bool {
 }
 
 // endFrame closes a frame; a final data frame ends its message. The RFB reader keeps the message's
-// bytes except ServerCutText, and they are a frame unless paused.
+// bytes except ServerCutText, and the whole server messages it ended are a frame.
 func (r *RFBRecorder) endFrame() {
 	r.inFrame = false
 	if r.ctl || !r.fin {
@@ -279,18 +290,37 @@ func (r *RFBRecorder) endFrame() {
 		}
 		payload = dec
 	}
-	r.kept = r.kept[:0]
-	r.stream.feed(payload, func(b []byte) { r.kept = append(r.kept, b...) })
+	r.out = r.out[:0]
+	r.stream.feed(payload, r.keep)
 	if r.stream.failed && r.stopped == 0 {
 		r.stopped = max(r.ms(), 1)
 	}
-	if len(r.kept) > 0 && !r.paused && !r.tainted && !r.truncated {
-		r.frames = append(r.frames, "{"+strconv.FormatInt(r.ms(), 10)+"{"+base64.StdEncoding.EncodeToString(r.kept))
-		r.size += len(r.kept)
+	r.tainted = false
+	if r.stream.atBoundary() {
+		r.dropping = r.paused
+	}
+	if len(r.out) > 0 && !r.truncated {
+		r.frames = append(r.frames, "{"+strconv.FormatInt(r.ms(), 10)+"{"+base64.StdEncoding.EncodeToString(r.out))
+		r.size += len(r.out)
 	}
 	r.msg, r.opcode = r.msg[:0], 0
-	// A paused field the stream still carries keeps the next message tainted too.
-	r.tainted = r.tainted && len(r.stream.buf) > 0
+}
+
+// keep takes bytes the RFB reader keeps, unless the message they belong to is left out.
+func (r *RFBRecorder) keep(b []byte) {
+	if !r.inited || !r.dropping {
+		r.pending = append(r.pending, b...)
+	}
+}
+
+// boundary runs as each server message starts: the one that just ended is kept unless it was left
+// out, and the next is left out when it starts during a pause or in bytes that arrived during one.
+func (r *RFBRecorder) boundary() {
+	if !r.inited || !r.dropping {
+		r.out = append(r.out, r.pending...)
+	}
+	r.inited, r.pending = true, r.pending[:0]
+	r.dropping = r.paused || r.tainted
 }
 
 // ClipboardOmitted is how many clipboard messages the recording left out so far.
@@ -311,6 +341,10 @@ func (r *RFBRecorder) Pause(reason string) bool {
 		return false
 	}
 	r.paused = true
+	if r.inited {
+		// The message being read began before the pause and ends in it: none of it is kept.
+		r.pending, r.dropping = r.pending[:0], true
+	}
 	r.gaps = append(r.gaps, RFBGap{StartMS: r.ms(), Reason: reason})
 	return true
 }
@@ -323,8 +357,11 @@ func (r *RFBRecorder) Resume() bool {
 		return false
 	}
 	r.paused = false
-	// A message or RFB field already begun holds paused bytes: the message that ends it is not kept.
-	r.tainted = r.tainted || r.inFrame || len(r.msg) > 0 || (r.stream != nil && len(r.stream.buf) > 0)
+	// A server message already begun holds paused bytes: it stays out, and keeping starts with the
+	// next message to start.
+	if r.stream != nil && r.stream.atBoundary() && len(r.msg) == 0 {
+		r.dropping = false
+	}
 	r.gaps[len(r.gaps)-1].EndMS = max(r.ms(), 1)
 	return true
 }
