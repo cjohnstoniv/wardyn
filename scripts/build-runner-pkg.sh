@@ -22,7 +22,8 @@
 #   package  APPLE_DEVELOPER_ID_INSTALLER_P12_BASE64 + APPLE_DEVELOPER_ID_INSTALLER_P12_PASSWORD
 #            + APPLE_DEVELOPER_ID_INSTALLER_IDENTITY     (productsign)
 #   notarize APPLE_NOTARY_APPLE_ID + APPLE_NOTARY_TEAM_ID + APPLE_NOTARY_PASSWORD (an app-specific password);
-#            runs only when both certificates signed, then staples the ticket.
+#            runs only when both certificates signed, then staples the ticket. DRY_RUN=true skips it (the
+#            package goes to Apple), and the release workflow sets that outside a vX.Y.Z tag run.
 # Without them the package is unsigned: a person allows it in System Settings, Privacy & Security, Open
 # Anyway (macOS 15 and later; right-click, Open no longer works), and MDM can push it only through an
 # agent or script install (a Jamf or Kandji policy, `installer` run as root), not Apple's native app install.
@@ -122,7 +123,9 @@ else
   echo "build-runner-pkg: package signing skipped: APPLE_DEVELOPER_ID_INSTALLER_* secrets are not all set; the package is unsigned (Privacy & Security, Open Anyway)"
 fi
 
-if [ "$PKG_SIGNED" = 1 ] && [ "$BIN_SIGNED" = 1 ] && secret_set "${NOTARY_SECRETS[@]}"; then
+if [ "${DRY_RUN:-}" = true ]; then
+  echo "build-runner-pkg: notarization skipped: DRY_RUN=true, nothing is submitted to Apple"
+elif [ "$PKG_SIGNED" = 1 ] && [ "$BIN_SIGNED" = 1 ] && secret_set "${NOTARY_SECRETS[@]}"; then
   xcrun notarytool submit "$OUT" --apple-id "$APPLE_NOTARY_APPLE_ID" --team-id "$APPLE_NOTARY_TEAM_ID" \
     --password "$APPLE_NOTARY_PASSWORD" --wait
   xcrun stapler staple "$OUT"
