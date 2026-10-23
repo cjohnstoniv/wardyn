@@ -536,6 +536,10 @@ func (e *env) waitRunGone(t *testing.T, id uuid.UUID, within time.Duration) {
 		return ok, nil
 	})
 	if err != nil {
+		// The poll's deadline can cut its last List short; read once more so the message names what is left.
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_, left = e.runGone(ctx, id)
 		t.Fatalf("run %s objects not gone within %s: %s", id, within, left)
 	}
 }
