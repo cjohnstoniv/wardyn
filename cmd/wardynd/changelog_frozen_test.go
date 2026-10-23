@@ -11,6 +11,7 @@ package main
 // minors live in docs/releases/<minor>.md (#466), and both are frozen.
 
 import (
+	"fmt"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -74,7 +75,8 @@ var changelogPreexistingCorrections = map[string]string{
 
 // changelogKnownGaps matches the spellings the #466 move unified into one
 // "### Known gaps" heading: "### Known gaps and deferrals" and the nested
-// "#### Known gaps".
+// "#### Known gaps". Only releases up to 0.8 used them, so the rewrite stops
+// there: a newer section spelled that way is a real edit, not a shipped form.
 var changelogKnownGaps = regexp.MustCompile(`(?m)^(?:### Known gaps and deferrals|#### Known gaps)$`)
 
 // changelogProcessHeadings are the only text the #466 move removed from a
@@ -93,9 +95,37 @@ var changelogProcessHeadings = map[string][]string{
 	},
 }
 
+// changelogLinkTarget matches an inline link's relative target: not an anchor,
+// an absolute path or a URL scheme.
+var changelogLinkTarget = regexp.MustCompile(`\]\(([^)\s]+)`)
+
+var changelogLinkScheme = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*:`)
+
+// changelogRebaseLinks is the one edit the move to docs/releases/ makes to a
+// section's links: a relative target is written from the repo root, so it gains
+// "../../" and nothing else changes.
+func changelogRebaseLinks(text string) string {
+	return changelogLinkTarget.ReplaceAllStringFunc(text, func(m string) string {
+		target := m[len("]("):]
+		if strings.HasPrefix(target, "#") || strings.HasPrefix(target, "/") || changelogLinkScheme.MatchString(target) {
+			return m
+		}
+		return "](../../" + target
+	})
+}
+
+// changelogUpTo08 reports whether version is a 0.x release with x <= 8.
+func changelogUpTo08(version string) bool {
+	var major, minor int
+	_, err := fmt.Sscanf(version, "%d.%d.", &major, &minor)
+	return err == nil && major == 0 && minor <= 8
+}
+
 // changelogBaseline is the text a released section must carry now: the
 // shipped (or correcting-commit) text with the #466 editorial edits applied.
-func changelogBaseline(t *testing.T, version, shipped string) string {
+// moved is true for a section that lives in docs/releases/, where its links are
+// rebased.
+func changelogBaseline(t *testing.T, version, shipped string, moved bool) string {
 	t.Helper()
 	for _, cut := range changelogProcessHeadings[version] {
 		if strings.Count(shipped, cut) != 1 {
@@ -103,7 +133,13 @@ func changelogBaseline(t *testing.T, version, shipped string) string {
 		}
 		shipped = strings.Replace(shipped, cut, "", 1)
 	}
-	return changelogKnownGaps.ReplaceAllString(shipped, "### Known gaps")
+	if changelogUpTo08(version) {
+		shipped = changelogKnownGaps.ReplaceAllString(shipped, "### Known gaps")
+	}
+	if moved {
+		shipped = changelogRebaseLinks(shipped)
+	}
+	return shipped
 }
 
 // changelogFiles lists every file that holds released sections: CHANGELOG.md
@@ -132,18 +168,54 @@ func changelogFiles(t *testing.T) []string {
 // this guard's job is to catch a real edit, not to make git-fetch depth a
 // build requirement. CI's build job checks out full history with tags, so
 // every subtest runs there.
-func TestChangelogReleasedSectionsAreFrozen(t *testing.T) {
-	root := repoRoot(t)
-	type section struct{ file, body string }
-	sections := map[string]section{}
+type changelogSection struct{ file, body string }
+
+// allChangelogSections reads every released section from CHANGELOG.md and
+// docs/releases/*.md, failing if one version is recorded in two places.
+func allChangelogSections(t *testing.T) map[string]changelogSection {
+	t.Helper()
+	sections := map[string]changelogSection{}
 	for _, file := range changelogFiles(t) {
 		for version, body := range changelogSections(readRepo(t, file)) {
 			if prev, dup := sections[version]; dup {
 				t.Fatalf("[%s] is in both %s and %s — a release is recorded once", version, prev.file, file)
 			}
-			sections[version] = section{file, body}
+			sections[version] = changelogSection{file, body}
 		}
 	}
+	return sections
+}
+
+// TestChangelogEveryTaggedReleaseHasASection fails when a final release tag
+// from v0.4.0 on has no section in CHANGELOG.md or docs/releases/: the freeze
+// compares only the sections that are present, so a section lost in a move
+// would otherwise go unnoticed. Tags this checkout does not carry are not
+// listed, so a shallow clone checks fewer.
+func TestChangelogEveryTaggedReleaseHasASection(t *testing.T) {
+	out, err := exec.Command("git", "-C", repoRoot(t), "tag", "-l", "v*").Output()
+	if err != nil {
+		t.Fatalf("git tag -l: %v", err)
+	}
+	sections := allChangelogSections(t)
+	final := regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
+	for _, tag := range strings.Fields(string(out)) {
+		var major, minor, patch int
+		if !final.MatchString(tag) {
+			continue // a release candidate
+		}
+		_, _ = fmt.Sscanf(tag, "v%d.%d.%d", &major, &minor, &patch)
+		if major == 0 && minor < 4 {
+			continue // older than v0.4.0: CHANGELOG-ARCHIVE.md
+		}
+		if _, ok := sections[tag[1:]]; !ok {
+			t.Errorf("tag %s has no \"## [%s]\" section in CHANGELOG.md or docs/releases/*.md — a released section was dropped", tag, tag[1:])
+		}
+	}
+}
+
+func TestChangelogReleasedSectionsAreFrozen(t *testing.T) {
+	root := repoRoot(t)
+	sections := allChangelogSections(t)
 	if len(sections) == 0 {
 		t.Fatal("no \"## [X.Y.Z]\" release heading found in CHANGELOG.md — the guard's anchor moved, so it is asserting nothing")
 	}
@@ -167,7 +239,7 @@ func TestChangelogReleasedSectionsAreFrozen(t *testing.T) {
 				t.Fatalf("%s's own CHANGELOG.md has no \"## [%s]\" heading — the guard's anchor moved, so it is asserting nothing", rev, version)
 			}
 			// A moved section ends at its file's end, so only the trailing newlines differ.
-			want = strings.TrimRight(changelogBaseline(t, version, want), "\n")
+			want = strings.TrimRight(changelogBaseline(t, version, want, sec.file != "CHANGELOG.md"), "\n")
 			if got := strings.TrimRight(sec.body, "\n"); want != got {
 				t.Errorf("%s's [%s] section no longer matches %s — a released section only changes for a documented correction (key the correcting commit in changelogPreexistingCorrections), never a silent edit", sec.file, version, rev)
 			}
