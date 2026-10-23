@@ -21,10 +21,18 @@ ALTER TABLE governance_units
     ADD COLUMN IF NOT EXISTS mode text NOT NULL DEFAULT 'own_walls',
     ADD COLUMN IF NOT EXISTS depth smallint NOT NULL DEFAULT 1;
 
--- The Default unit (store.DefaultUnitID). It keeps the name Default unless a unit already holds it.
+-- The Default unit (store.DefaultUnitID). It takes the first label no unit holds, in the order
+-- Default, Default (deployment), Default (deployment 2), ...: the name is UNIQUE, so an install that
+-- already has units named Default and Default (deployment) must not collide.
 INSERT INTO governance_units (id, name, kind, ceiling, limits)
 SELECT '00000000-0000-0000-0000-000000000001',
-       CASE WHEN EXISTS (SELECT 1 FROM governance_units WHERE name = 'Default') THEN 'Default (deployment)' ELSE 'Default' END,
+       (SELECT c.label
+          FROM (SELECT 0 AS n, 'Default' AS label
+                UNION ALL SELECT 1, 'Default (deployment)'
+                UNION ALL SELECT g, 'Default (deployment ' || g || ')' FROM generate_series(2, 1000) AS g) c
+         WHERE NOT EXISTS (SELECT 1 FROM governance_units u WHERE u.name = c.label)
+         ORDER BY c.n
+         LIMIT 1),
        'default', '{}', '{}'
 WHERE NOT EXISTS (SELECT 1 FROM governance_units WHERE id = '00000000-0000-0000-0000-000000000001')
 ON CONFLICT (id) DO NOTHING;
