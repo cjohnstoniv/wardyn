@@ -142,6 +142,7 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `@floating-ui/utils` | 0.2.12 | MIT |
 | `@fontsource/inter` | 5.3.0 | OFL-1.1 |
 | `@fontsource/jetbrains-mono` | 5.3.0 | OFL-1.1 |
+| `@novnc/novnc` | 1.7.0 | MPL-2.0 |
 | `@radix-ui/number` | 1.1.3 | MIT |
 | `@radix-ui/primitive` | 1.2.0 | MIT |
 | `@radix-ui/react-alert-dialog` | 1.2.1 | MIT |

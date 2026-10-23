@@ -23,12 +23,14 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-ALLOWED_LICENSES_FILE="${ALLOWED_LICENSES_FILE:-licenses/ALLOWED-LICENSES.txt}"
+ALLOWED_LICENSES_FILE="$(realpath "${ALLOWED_LICENSES_FILE:-licenses/ALLOWED-LICENSES.txt}")"
 
 # Build the alternation from the shared allowlist, regex-escaping dots. Ids are
 # enumerated upstream, never wildcarded (a bare `BSD` token is an unversioned,
 # ambiguous declaration; `BSD-*` admits BSD-4-Clause and BSD-Protection).
-allow=$(grep -vE '^[[:space:]]*(#|$)' "$ALLOWED_LICENSES_FILE" | sed 's/\./\\./g' | paste -sd'|')
+# Only one-token lines: a scoped "<id> <package>..." line allows its id for the named packages
+# alone (scoped_ok below), so it never joins the alternation.
+allow=$(grep -vE '^[[:space:]]*(#|$)' "$ALLOWED_LICENSES_FILE" | awk 'NF == 1' | sed 's/\./\\./g' | paste -sd'|')
 [ -n "$allow" ] || { echo "ERROR: allowlist $ALLOWED_LICENSES_FILE is empty or unreadable — failing closed"; exit 1; }
 
 # residue <expression> -> whatever is left after stripping allowlisted tokens and
@@ -45,6 +47,33 @@ residue() {
     | sed -E "s/\b($allow)\b//g; s/\b(OR|AND|WITH)\b//g; s/[()]//g; s/[[:space:]]+//g"
 }
 
+# scoped_ok <licence> <package> -> true when a scoped allowlist line names exactly this licence id and
+# this package. Exact id only: "MPL-2.0 OR GPL-3.0" on the named package is still rejected.
+scoped_ok() {
+  grep -vE '^[[:space:]]*(#|$)' "$ALLOWED_LICENSES_FILE" | awk -v id="$1" -v pkg="$2" \
+    'NF > 1 && $1 == id { for (i = 2; i <= NF; i++) if ($i == pkg) found = 1 } END { exit !found }'
+}
+
+# no_vendored_novnc -> fails when noVNC is copied or patched in-tree: the MPL-2.0 exception holds
+# only while Wardyn ships the package unmodified (owner ruling 2026-10-23).
+no_vendored_novnc() {
+  local bad=""
+  if jq -e '(.pnpm.patchedDependencies // {}) | keys[] | select(startswith("@novnc/novnc"))' ui/package.json >/dev/null 2>&1; then
+    bad+=" ui/package.json pnpm.patchedDependencies names @novnc/novnc;"
+  fi
+  if jq -e '((.dependencies // {}) + (.devDependencies // {})) | has("patch-package")' ui/package.json >/dev/null 2>&1; then
+    bad+=" ui/package.json depends on patch-package;"
+  fi
+  if grep -qE '^patchedDependencies:' ui/pnpm-lock.yaml && grep -A20 -E '^patchedDependencies:' ui/pnpm-lock.yaml | grep -q '@novnc/novnc'; then
+    bad+=" ui/pnpm-lock.yaml patches @novnc/novnc;"
+  fi
+  local copied
+  copied=$(git ls-files -- ui ':!:ui/node_modules' | grep -vE '^ui/(node_modules|dist)/' \
+    | xargs -r grep -lE 'noVNC: HTML5 VNC client|The noVNC authors' 2>/dev/null || true)
+  [ -z "$copied" ] || bad+=" noVNC source copied into the tree: $(echo $copied);"
+  [ -z "$bad" ] || { echo "ERROR: @novnc/novnc must ship unmodified:$bad"; return 1; }
+}
+
 if [ "${1:-}" = "--self-test" ]; then
   fail=0
   check() { # check <expr> <allow|reject>
@@ -57,7 +86,17 @@ if [ "${1:-}" = "--self-test" ]; then
   for e in "Unknown" "UNLICENSED" "SEE LICENSE IN LICENSE.md" "SSPL-1.0" "BUSL-1.1" \
            "Elastic-2.0" "CC-BY-NC-4.0" "MIT OR AGPL-3.0" "BSD-4-Clause" "BSD-Protection" \
            "GPL-3.0" "MPL-2.0" ""; do check "$e" reject; done
-  [ "$fail" -eq 0 ] && echo "check-ui-licenses --self-test: PASS (19 expressions)" || exit 1
+  # The scoped exception: MPL-2.0 for @novnc/novnc alone.
+  scope() { # scope <licence> <package> <allow|reject>
+    if scoped_ok "$1" "$2"; then got=allow; else got=reject; fi
+    [ "$got" = "$3" ] || { echo "SELF-TEST FAIL: '$1' for '$2' should be ${3^^}ED"; fail=1; }
+  }
+  scope "MPL-2.0" "@novnc/novnc" allow
+  scope "MPL-2.0" "some-other-package" reject
+  scope "MPL-2.0" "@novnc/novnc-fork" reject
+  scope "MPL-2.0 OR GPL-3.0" "@novnc/novnc" reject
+  scope "GPL-3.0" "@novnc/novnc" reject
+  [ "$fail" -eq 0 ] && echo "check-ui-licenses --self-test: PASS (24 expressions)" || exit 1
   exit 0
 fi
 
@@ -69,8 +108,12 @@ pnpm licenses list --prod --json > "$LICENSES_JSON"
 n=$(jq '[.[][]] | length' "$LICENSES_JSON")
 [ "$n" -ge 1 ] || { echo "ERROR: examined 0 production packages — is ui/node_modules installed? Failing closed."; exit 1; }
 
+# A licence off the bare allowlist passes only when a scoped line names it for EVERY package under it.
 bad=$(jq -r 'keys[]' "$LICENSES_JSON" | while IFS= read -r lic; do
-  [ -z "$(residue "$lic")" ] || printf '%s\n' "$lic"
+  [ -z "$(residue "$lic")" ] && continue
+  while IFS= read -r pkg; do
+    scoped_ok "$lic" "$pkg" || printf '%s (%s)\n' "$lic" "$pkg"
+  done < <(jq -r --arg l "$lic" '.[$l][].name' "$LICENSES_JSON")
 done || true)
 
 if [ -n "$bad" ]; then
@@ -79,4 +122,5 @@ if [ -n "$bad" ]; then
   jq . "$LICENSES_JSON"
   exit 1
 fi
+(cd .. && no_vendored_novnc)
 echo "All $n production dependency licences are on the allowlist."

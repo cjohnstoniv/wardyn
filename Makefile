@@ -785,7 +785,8 @@ gitleaks: ## Scan this branch's own git history for committed secrets
 # covered by driving the tag through GOFLAGS on the later passes (U112). The
 # fourth pass is the real production build invocation (GO_BUILD_TAGS=docker,k8s).
 ALLOWED_LICENSES_FILE ?= licenses/ALLOWED-LICENSES.txt
-GO_LICENSE_ALLOW ?= $(shell grep -vE '^[[:space:]]*(\#|$$)' $(ALLOWED_LICENSES_FILE) | paste -sd,)
+# One-token lines only: a scoped "<id> <package>" line is a UI package exception, never a Go one.
+GO_LICENSE_ALLOW ?= $(shell grep -vE '^[[:space:]]*(\#|$$)' $(ALLOWED_LICENSES_FILE) | awk 'NF == 1' | paste -sd,)
 
 licenses: ## Every Go dependency licence must be on licenses/ALLOWED-LICENSES.txt (all tag sets)
 	@echo "Checking Go dependency licences against $(ALLOWED_LICENSES_FILE) (tagless + docker + k8s + docker,k8s)..."

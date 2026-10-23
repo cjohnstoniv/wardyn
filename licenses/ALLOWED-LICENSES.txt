@@ -22,3 +22,11 @@ BSD-3-Clause
 ISC
 MIT
 OFL-1.1
+
+# Scoped entries: "<id> <package> [<package>...]" allows the id ONLY for the named UI packages,
+# never for Go modules (the Go gate reads one-token lines only) and never for any other UI package
+# (scripts/check-ui-licenses.sh). Owner ruling 2026-10-23: MPL-2.0 for @novnc/novnc, shipped
+# unmodified (the desktop replay's decoder, #2968). MPL-2.0 is a free licence with no fee or paid
+# tier; its file-level copyleft applies only to modified MPL files, and Wardyn modifies none
+# (check-ui-licenses.sh refuses a vendored or patched copy).
+MPL-2.0 @novnc/novnc
