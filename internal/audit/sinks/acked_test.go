@@ -359,18 +359,11 @@ func TestAcked_OutageThenResumeDeliversEveryEventFromTheCheckpoint(t *testing.T)
 		}
 	}
 
-	// Delivery is at-least-once (a POST that fails after the collector took the batch sends it again),
-	// so a collector deduplicates and so does this check.
-	var got []ackedLine
-	seen := map[ackedLine]bool{}
-	for _, l := range col.snapshot() {
-		if !seen[l] {
-			seen[l] = true
-			got = append(got, l)
-		}
-	}
+	// Exactly once each: the sink's connection pool is its own, so no POST the collector took can fail on
+	// the sink's side, and a resume that sends rows from before the checkpoint again shows up here.
+	got := col.snapshot()
 	if len(got) != len(rows) {
-		t.Fatalf("collector holds %d distinct lines, want all %d: %+v", len(got), len(rows), got)
+		t.Fatalf("collector holds %d lines, want all %d: %+v", len(got), len(rows), got)
 	}
 	for i, l := range got {
 		if l.ID != rows[i].ID || l.Seq != rows[i].Seq || l.RowHash != rows[i].RowHash {
