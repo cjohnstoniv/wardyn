@@ -37,15 +37,16 @@ func TestDesktopGroupLock_ATeamBelowCannotSetOrClearIt(t *testing.T) {
 		}
 	}
 
+	// An overlay's unset direction reads as its default, so each body spells out ua-a's blocked upload.
 	a1Body := func(d map[string]string) string {
 		return uaUnitBody("ua-a1", e.a.ID, map[string]any{"allowed_domains": []string{"pypi.org", "github.com"}, "desktop": d}, nil)
 	}
-	if w := e.call(e.adminA1, http.MethodPut, pathA1, a1Body(map[string]string{"paste_in": "blocked"})); w.Code != http.StatusConflict ||
+	if w := e.call(e.adminA1, http.MethodPut, pathA1, a1Body(map[string]string{"paste_in": "blocked", "copy_out": "blocked", "upload": "blocked", "download": "blocked"})); w.Code != http.StatusConflict ||
 		wireReason(t, w) != reasonUnitKnobLocked || !strings.Contains(w.Body.String(), "desktop.paste_in is locked by ua-a") {
 		t.Errorf("ua-a1's admin blocking paste in on ua-a1 = %d %s, want 409 naming ua-a's lock", w.Code, w.Body)
 	}
 	unchanged("narrowing a locked direction below")
-	if w := e.call(e.adminA1, http.MethodPut, pathA1, a1Body(map[string]string{"copy_out": "allowed"})); w.Code != http.StatusBadRequest ||
+	if w := e.call(e.adminA1, http.MethodPut, pathA1, a1Body(map[string]string{"copy_out": "allowed", "upload": "blocked"})); w.Code != http.StatusBadRequest ||
 		wireReason(t, w) != reasonGovernanceOverlayInvalid {
 		t.Errorf("ua-a1's admin allowing copy out on ua-a1 = %d %s, want 400 (an overlay only blocks more)", w.Code, w.Body)
 	}
