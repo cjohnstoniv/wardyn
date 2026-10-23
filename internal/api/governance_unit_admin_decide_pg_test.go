@@ -41,7 +41,7 @@ func (e *unitAdminEnv) stateOf(id uuid.UUID) string {
 }
 
 // TestUnitAdminApproverScopeRereadInTx: a unit admin's scope over a held change is read again inside
-// the decision's transaction, for a session and for an API token. A grant revoked, or the unit
+// the decision's transaction, for a session and for an API token. A grant revoked, or the change's unit
 // re-parented out of the approver's subtree, after the pre-check passed refuses the approval and
 // leaves the change pending; an approver still in scope applies it.
 func TestUnitAdminApproverScopeRereadInTx(t *testing.T) {
@@ -76,9 +76,13 @@ func TestUnitAdminApproverScopeRereadInTx(t *testing.T) {
 	})
 
 	t.Run("session unit re-parented out", func(t *testing.T) {
+		// A held grant: its base is the grant row alone, so the re-parent does not make it stale (a
+		// membership change's base holds the unit chain and would be), and only the scope read refuses.
 		sub, _ := approver()
+		proposer, _ := approver()
 		target := e.child(e.a)
-		ch := e.heldOn(target)
+		ch := e.pending(e.call(uaSession(t, proposer, []string{}, false), http.MethodPost,
+			"/api/v1/governance/units/"+target.ID.String()+"/admins", `{"subject_type":"user","subject":"`+e.fresh("sub-ua-grantee")+`"}`))
 		hook = func() {
 			if w := e.admin(http.MethodPut, "/api/v1/governance/units/"+target.ID.String(), e.restate(target, map[string]any{"parent_id": e.b.ID})); w.Code != http.StatusOK {
 				t.Errorf("re-parent %s under ua-b = %d %s, want 200", target.Name, w.Code, w.Body)
