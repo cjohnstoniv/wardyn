@@ -4,6 +4,7 @@
 package doctor
 
 import (
+	"bufio"
 	"context"
 	"io"
 	"net"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/coder/websocket"
 )
@@ -58,13 +60,54 @@ func tunnel(t *testing.T) string {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		w.WriteHeader(http.StatusOK)
-		src, _, _ := w.(http.Hijacker).Hijack()
-		go func() { _, _ = io.Copy(dst, src); _ = dst.Close() }()
+		// Hijack before answering, and read through the buffer it returns: bytes the client sent behind
+		// the CONNECT (or behind the 200) may already sit there.
+		src, buf, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			_ = dst.Close()
+			return
+		}
+		_, _ = io.WriteString(src, "HTTP/1.1 200 Connection established\r\n\r\n")
+		go func() { _, _ = io.Copy(dst, buf); _ = dst.Close() }()
 		go func() { _, _ = io.Copy(src, dst); _ = src.Close() }()
 	}))
 	t.Cleanup(srv.Close)
 	return srv.URL
+}
+
+// The tunnel passes on bytes the client sends right behind its CONNECT: net/http may already have read them
+// into the buffer Hijack hands back, which is how a ClientHello went missing on a loaded CI runner.
+func TestTunnelKeepsBytesSentBehindTheConnect(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		if c, err := ln.Accept(); err == nil {
+			_, _ = io.Copy(c, c)
+			_ = c.Close()
+		}
+	}()
+	c, err := net.Dial("tcp", strings.TrimPrefix(tunnel(t), "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+	addr := ln.Addr().String()
+	if _, err := io.WriteString(c, "CONNECT "+addr+" HTTP/1.1\r\nHost: "+addr+"\r\n\r\nping"); err != nil {
+		t.Fatal(err)
+	}
+	br := bufio.NewReader(c)
+	res, err := http.ReadResponse(br, &http.Request{Method: http.MethodConnect})
+	if err != nil || res.StatusCode != http.StatusOK {
+		t.Fatalf("CONNECT answered %v, %v; want 200", res, err)
+	}
+	got := make([]byte, 4)
+	if _, err := io.ReadFull(br, got); err != nil || string(got) != "ping" {
+		t.Fatalf("echoed %q, %v; want the bytes sent behind the CONNECT", got, err)
+	}
 }
 
 func runnerNet(o org) Network {
