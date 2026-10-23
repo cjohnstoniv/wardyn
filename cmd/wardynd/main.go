@@ -461,7 +461,7 @@ func run() error {
 		OperatorEmails:                splitCSV(*f.oidcOperatorEmails),
 		AllowEmailMappings:            *f.oidcAllowEmailMappings,
 		CapabilityGrantsVerifiedEmail: *f.capabilityGrantsVerifiedEmail,
-		GovernanceUnitPutExistingOnly: *f.governanceUnitPutExistingOnly,
+		GovernanceUnitPutCreates:      f.unitPutCreates(),
 		EgressHostPortGrantsInert:     *f.egressHostPortGrantsInert,
 		UserMounts:                    memberMounts,
 		UserDriveHostRoots:            driveHostRoots,

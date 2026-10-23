@@ -327,6 +327,12 @@ func TestGovCovOverlayFieldNames(t *testing.T) {
 	}
 }
 
+// govCovPIDStored is a stored profile at govCovPID, so a PUT there updates it rather than creating one
+// (which the default refuses).
+func govCovPIDStored() []types.GovernanceUnit {
+	return []types.GovernanceUnit{govCovStandalone(govCovPID, "p", "pypi.org")}
+}
+
 // govCovProfilePut runs PUT /governance/units/{id} as the admin token against st.
 func govCovProfilePut(t *testing.T, s *Server, body string) (code int, reason string, resp string) {
 	t.Helper()
@@ -344,9 +350,9 @@ func TestGovCovProfileWriteDoorRefusals(t *testing.T) {
 		wantReason string
 	}{
 		{"a composition member that does not parse", `{"name":"p","parent_id":3,"overlay":{}}`, &govCovStore{}, 400, reasonGovernanceOverlayInvalid},
-		{"a composition the build refuses", `{"name":"p","parent_id":"` + govCovBase.String() + `","overlay":{}}`, &govCovStore{}, 400, reasonGovernanceOverlayInvalid},
-		{"a name another profile holds", good, &govCovStore{writeErr: store.ErrConflict}, 409, reasonGovernanceUnitNameConflict},
-		{"a store failure", good, &govCovStore{writeErr: errors.New("pg: down")}, 500, reasonInternalError},
+		{"a composition the build refuses", `{"name":"p","parent_id":"` + govCovBase.String() + `","overlay":{}}`, &govCovStore{profiles: govCovPIDStored()}, 400, reasonGovernanceOverlayInvalid},
+		{"a name another profile holds", good, &govCovStore{writeErr: store.ErrConflict, profiles: govCovPIDStored()}, 409, reasonGovernanceUnitNameConflict},
+		{"a store failure", good, &govCovStore{writeErr: errors.New("pg: down"), profiles: govCovPIDStored()}, 500, reasonInternalError},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s, h := govCovServer(t, c.st)
@@ -364,7 +370,7 @@ func TestGovCovProfileWriteDoorRefusals(t *testing.T) {
 	}
 
 	t.Run("a name conflict names the profile", func(t *testing.T) {
-		s, _ := govCovServer(t, &govCovStore{writeErr: store.ErrConflict})
+		s, _ := govCovServer(t, &govCovStore{writeErr: store.ErrConflict, profiles: govCovPIDStored()})
 		_, _, resp := govCovProfilePut(t, s, good)
 		if !strings.Contains(resp, `a governance profile named \"p\" already exists`) {
 			t.Errorf("body = %s", resp)
@@ -382,7 +388,7 @@ func TestGovCovProfileWriteDoorRefusals(t *testing.T) {
 }
 
 func TestGovCovProfileWriteDoorAnswersWithWarningsAndAudit(t *testing.T) {
-	s, h := govCovServer(t, &govCovStore{})
+	s, h := govCovServer(t, &govCovStore{profiles: govCovPIDStored()})
 	code, _, resp := govCovProfilePut(t, s, govCovProfileBody("p", "pypi.org"))
 	if code != http.StatusOK {
 		t.Fatalf("PUT = %d %s", code, resp)

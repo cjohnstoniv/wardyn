@@ -285,10 +285,10 @@ type Config struct {
 	// sign-in vouches for the email (unverifiedEmailSubject). Default false keeps
 	// the match and logs it. Deny rows match the email either way.
 	CapabilityGrantsVerifiedEmail bool
-	// GovernanceUnitPutExistingOnly is WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY:
-	// PUT /governance/units/{id} replaces an existing profile only, and a
-	// new one is created through POST. Default false keeps create-at-id and logs it.
-	GovernanceUnitPutExistingOnly bool
+	// GovernanceUnitPutCreates is WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY set off:
+	// PUT /governance/units/{id} naming an id no profile holds creates one there,
+	// logged. The zero value (the default) answers it 404; create through POST.
+	GovernanceUnitPutCreates bool
 	// EgressHostPortGrantsInert is WARDYN_EGRESS_HOST_PORT_GRANTS_INERT: a stored
 	// egress_host ALLOW row whose value carries a ":port" (written before the
 	// write boundary stored the host alone) is inert, marked and never matched.
