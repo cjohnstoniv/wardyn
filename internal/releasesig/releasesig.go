@@ -43,7 +43,13 @@ func Identity(version string) string { return workflowAt + version }
 // TrustedRoot is the embedded Sigstore public-good trust root.
 func TrustedRoot() (root.TrustedMaterial, error) { return root.NewTrustedRootFromJSON(trustedRootJSON) }
 
-// VerifySums checks that bundleJSON signs sums, that the certificate chains to tm's Fulcio, that a
+// policy is the verifier policy VerifySums applies, as `cosign verify-blob` does by default: an embedded SCT
+// from a trusted CT log, and a transparency-log entry whose time vouches for the short-lived certificate.
+var policy = []verify.VerifierOption{
+	verify.WithSignedCertificateTimestamps(1), verify.WithTransparencyLog(1), verify.WithObserverTimestamps(1),
+}
+
+// VerifySums checks that bundleJSON signs sums, that the certificate chains to tm's Fulcio and carries an SCT, that a
 // transparency-log entry (verified against tm, offline) vouches for the signing time, and that the signer is
 // release.yml at v<version> with the GitHub Actions issuer. There is no fallback: any failure refuses.
 func VerifySums(tm root.TrustedMaterial, sums, bundleJSON []byte, version string) error {
@@ -51,7 +57,7 @@ func VerifySums(tm root.TrustedMaterial, sums, bundleJSON []byte, version string
 	if err := b.UnmarshalJSON(bundleJSON); err != nil {
 		return fmt.Errorf("%w: %v", ErrBundle, err)
 	}
-	v, err := verify.NewVerifier(tm, verify.WithTransparencyLog(1), verify.WithObserverTimestamps(1))
+	v, err := verify.NewVerifier(tm, policy...)
 	if err != nil {
 		return err
 	}

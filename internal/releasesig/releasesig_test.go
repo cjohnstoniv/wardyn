@@ -5,6 +5,7 @@ package releasesig_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/releasesig"
@@ -68,6 +69,17 @@ func TestVerifySumsRequiresATransparencyLogEntry(t *testing.T) {
 	o.NoTlog = true
 	if err := releasesig.VerifySums(s.TrustedMaterial(), sums, s.Sign(sums, o), version); err == nil {
 		t.Fatal("a bundle with no transparency-log entry was accepted")
+	}
+}
+
+// The shipped policy requires an SCT, as cosign verify-blob does by default.
+func TestVerifySumsRequiresASignedCertificateTimestamp(t *testing.T) {
+	s := releasesigtest.New(t)
+	o := release()
+	o.NoSCT = true
+	err := releasesig.VerifySums(s.TrustedMaterial(), sums, s.Sign(sums, o), version)
+	if !errors.Is(err, releasesig.ErrSignature) || !strings.Contains(err.Error(), "SCT") {
+		t.Fatalf("a certificate with no SCT: err = %v, want an SCT refusal", err)
 	}
 }
 

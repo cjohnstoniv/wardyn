@@ -26,6 +26,9 @@ import (
 	"testing"
 	"time"
 
+	ct "github.com/google/certificate-transparency-go"
+	cttls "github.com/google/certificate-transparency-go/tls"
+	ctx509 "github.com/google/certificate-transparency-go/x509"
 	protobundle "github.com/sigstore/protobuf-specs/gen/pb-go/bundle/v1"
 	protocommon "github.com/sigstore/protobuf-specs/gen/pb-go/common/v1"
 	protorekor "github.com/sigstore/protobuf-specs/gen/pb-go/rekor/v1"
@@ -35,7 +38,8 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
-// Signer is a test Fulcio (a root and an intermediate) beside a test Rekor holding one-entry trees.
+// Signer is a test Fulcio (a root and an intermediate) beside a test CT log and a test Rekor holding
+// one-entry trees.
 type Signer struct {
 	t        *testing.T
 	trust    *root.TrustedRoot
@@ -43,6 +47,8 @@ type Signer struct {
 	interKey *ecdsa.PrivateKey
 	rekorKey *ecdsa.PrivateKey
 	rekorID  string // hex SHA-256 of the Rekor key, as Rekor names its log
+	ctKey    *ecdsa.PrivateKey
+	ctID     [32]byte // SHA-256 of the CT log key, as CT names its log
 }
 
 // Fulcio's issuer (v2) and source repository URI extensions.
@@ -63,9 +69,17 @@ func New(t *testing.T) *Signer {
 	s.check(err)
 	id := sha256.Sum256(der)
 	s.inter, s.interKey, s.rekorKey, s.rekorID = inter, interKey, rekorKey, hex.EncodeToString(id[:])
+	s.ctKey, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	s.check(err)
+	ctDER, err := x509.MarshalPKIXPublicKey(s.ctKey.Public())
+	s.check(err)
+	s.ctID = sha256.Sum256(ctDER)
+	ctHex := hex.EncodeToString(s.ctID[:])
 	s.trust, err = root.NewTrustedRoot(root.TrustedRootMediaType01,
 		[]root.CertificateAuthority{&root.FulcioCertificateAuthority{Root: rootCert, Intermediates: []*x509.Certificate{inter}, URI: "https://fulcio.test"}},
-		nil, nil, map[string]*root.TransparencyLog{s.rekorID: {BaseURL: "https://rekor.localhost", ID: []byte(s.rekorID),
+		map[string]*root.TransparencyLog{ctHex: {BaseURL: "https://ctfe.test", ID: s.ctID[:], ValidityPeriodStart: time.Now().Add(-time.Hour),
+			HashFunc: crypto.SHA256, PublicKey: s.ctKey.Public(), SignatureHashFunc: crypto.SHA256}},
+		nil, map[string]*root.TransparencyLog{s.rekorID: {BaseURL: "https://rekor.localhost", ID: []byte(s.rekorID),
 			ValidityPeriodStart: time.Now().Add(-time.Hour), HashFunc: crypto.SHA256, PublicKey: rekorKey.Public(), SignatureHashFunc: crypto.SHA256}})
 	s.check(err)
 	return s
@@ -95,6 +109,7 @@ func (s *Signer) TrustedMaterial() root.TrustedMaterial { return s.trust }
 type Options struct {
 	Identity, Issuer, Repository string
 	NoTlog                       bool // leave the transparency-log entry out
+	NoSCT                        bool // leave the certificate's signed certificate timestamp out
 }
 
 // Sign is the SHA256SUMS.sigstore.json the release workflow would publish for sums, signed as o says.
@@ -111,6 +126,11 @@ func (s *Signer) Sign(sums []byte, o Options) []byte {
 		ExtraExtensions: []pkix.Extension{s.derString(oidIssuer, o.Issuer), s.derString(oidRepository, o.Repository)}}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, s.inter, &key.PublicKey, s.interKey)
 	s.check(err)
+	if !o.NoSCT {
+		tmpl.ExtraExtensions = append(tmpl.ExtraExtensions, s.sct(der))
+		der, err = x509.CreateCertificate(rand.Reader, tmpl, s.inter, &key.PublicKey, s.interKey)
+		s.check(err)
+	}
 	digest := sha256.Sum256(sums)
 	sig, err := ecdsa.SignASN1(rand.Reader, key, digest[:])
 	s.check(err)
@@ -124,6 +144,31 @@ func (s *Signer) Sign(sums []byte, o Options) []byte {
 	out, err := protojson.Marshal(pb)
 	s.check(err)
 	return out
+}
+
+// sct is the embedded SCT-list extension for the certificate pre, as the test CT log would sign it: pre is the
+// same certificate without the extension, which is the precertificate the log signs over.
+func (s *Signer) sct(pre []byte) pkix.Extension {
+	leaf, err := x509.ParseCertificate(pre)
+	s.check(err)
+	ts := uint64(time.Now().UnixMilli())
+	entry := &ct.MerkleTreeLeaf{Version: ct.V1, LeafType: ct.TimestampedEntryLeafType, TimestampedEntry: &ct.TimestampedEntry{
+		EntryType: ct.PrecertLogEntryType, Timestamp: ts,
+		PrecertEntry: &ct.PreCert{IssuerKeyHash: sha256.Sum256(s.inter.RawSubjectPublicKeyInfo), TBSCertificate: leaf.RawTBSCertificate}}}
+	sct := ct.SignedCertificateTimestamp{SCTVersion: ct.V1, LogID: ct.LogID{KeyID: s.ctID}, Timestamp: ts}
+	input, err := ct.SerializeSCTSignatureInput(sct, ct.LogEntry{Leaf: *entry})
+	s.check(err)
+	digest := sha256.Sum256(input)
+	sig, err := ecdsa.SignASN1(rand.Reader, s.ctKey, digest[:])
+	s.check(err)
+	sct.Signature = ct.DigitallySigned{Algorithm: cttls.SignatureAndHashAlgorithm{Hash: cttls.SHA256, Signature: cttls.ECDSA}, Signature: sig}
+	one, err := cttls.Marshal(sct)
+	s.check(err)
+	list, err := cttls.Marshal(ctx509.SignedCertificateTimestampList{SCTList: []ctx509.SerializedSCT{{Val: one}}})
+	s.check(err)
+	value, err := asn1.Marshal(list)
+	s.check(err)
+	return pkix.Extension{Id: asn1.ObjectIdentifier(ctx509.OIDExtensionCTSCT), Value: value}
 }
 
 // tlogEntry is a hashedrekord entry for the signature, with the test Rekor's promise and inclusion proof.

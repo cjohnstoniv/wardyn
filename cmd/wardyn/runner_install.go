@@ -149,6 +149,8 @@ func runRunnerUpgrade(cmd *cobra.Command, version, flagBase string) error {
 	defer cleanup()
 	from := cmp.Or(current, copySetupOldVersion)
 	fmt.Fprintf(out, copyUpgradeSwapping+"\n", from, version)
+	prev := installed + ".previous"
+	prevBefore, _ := os.Stat(prev)
 	started := time.Now()
 	failure := runRunnerdSetup(cmd, bin, org, "", "")
 	if failure == nil {
@@ -157,9 +159,9 @@ func runRunnerUpgrade(cmd *cobra.Command, version, flagBase string) error {
 			return nil
 		}
 	}
-	// Roll back only what this upgrade replaced: a setup that failed before the rename left the old file.
-	prev := installed + ".previous"
-	if !sameFile(installed, bin) || !fileExists(prev) {
+	// Roll back only to a .previous this swap kept: a setup that failed before the rename left the old file,
+	// and one whose old file was already these bytes kept none, so an older .previous is stale.
+	if !sameFile(installed, bin) || !keptNow(prev, prevBefore) {
 		return fmt.Errorf(errUpgradeNotReplaced, version, failure)
 	}
 	fmt.Fprintf(out, copyUpgradeRollingBack+"\n", version, failure, from)
@@ -310,6 +312,12 @@ func waitStarted(ctx context.Context, stateDir string, since time.Time) error {
 		msg += "; " + fmt.Sprintf(copySetupLastError, st.LastError)
 	}
 	return errors.New(msg)
+}
+
+// keptNow is whether prev exists and is not the file before was (nil when there was none).
+func keptNow(prev string, before os.FileInfo) bool {
+	after, err := os.Stat(prev)
+	return err == nil && (before == nil || !os.SameFile(before, after) || !after.ModTime().Equal(before.ModTime()))
 }
 
 func sameFile(a, b string) bool {

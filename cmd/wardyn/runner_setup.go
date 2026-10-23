@@ -489,7 +489,12 @@ func artifactBase(flag, advertised string) (string, error) {
 	} else if base, err = cliprofile.ReadArtifactBase(dir); err != nil {
 		return "", err
 	}
-	return strings.TrimSuffix(cmp.Or(base, advertised, releaseDownloadBase), "/"), nil
+	if base == "" && advertised != "" {
+		if base, err = cliprofile.NormalizeArtifactBase(advertised); err != nil {
+			return "", fmt.Errorf(errInstallAdvertisedBase, err)
+		}
+	}
+	return strings.TrimSuffix(cmp.Or(base, releaseDownloadBase), "/"), nil
 }
 
 // download GETs u through orgClient for each origin it is sent to. orgClient follows no redirect, and a

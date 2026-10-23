@@ -54,7 +54,7 @@ func releaseSigner(version string) releasesigtest.Options {
 	return releasesigtest.Options{Identity: releasesig.Identity(version), Issuer: releasesig.Issuer, Repository: releasesig.Repository}
 }
 
-// fakeRunner is a wardyn-runnerd of version: --version says it, and setup does what wardyn-runnerd setup
+// fakeRunner is a wardyn-runnerd of version: --version says it (fails for ""), and setup does what wardyn-runnerd setup
 // does to the binary (read itself first, as it may be .previous, keep the old one as .previous and rename
 // itself into place), records the call and
 // writes the status a started service would, connected unless starts is false.
@@ -65,7 +65,7 @@ func (r *installRig) fakeRunner(version string, starts bool) []byte {
 	}
 	dst := installedRunnerd()
 	return []byte(fmt.Sprintf(`#!/bin/sh
-[ "$1" = --version ] && { echo "wardyn-runnerd version %[1]s"; exit 0; }
+[ "$1" = --version ] && { [ -n "%[1]s" ] || exit 1; echo "wardyn-runnerd version %[1]s"; exit 0; }
 echo "%[1]s $*" >> %[2]s/calls
 if ! /usr/bin/cmp -s "$0" %[3]s; then
   /bin/cp "$0" %[3]s.tmp
@@ -162,6 +162,40 @@ func TestRunnerUpgradeAtTheSameVersionIsANoOp(t *testing.T) {
 	}
 	if got := r.called("GET /release"); len(got) != 0 || r.record("calls") != "" {
 		t.Fatalf("a no-op downloaded %v or ran setup %q", got, r.record("calls"))
+	}
+}
+
+// A runner whose version cannot be read and whose bytes are already the release's keeps no new .previous,
+// so a failed start must not put back an older .previous left by an earlier upgrade.
+func TestRunnerUpgradeNeverRestoresAStalePrevious(t *testing.T) {
+	r := newInstallRig(t)
+	broken, stale := r.fakeRunner("", false), r.fakeRunner("0.9.0", true)
+	r.installed(broken)
+	if err := os.WriteFile(installedRunnerd()+".previous", stale, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	r.publish("0.10.1", broken, releaseSigner("0.10.1"), nil)
+	out, err := r.cli("upgrade", "--version", "0.10.1")
+	if err == nil || !strings.Contains(err.Error(), "kept no previous runner to put back") {
+		t.Fatalf("err = %v\n%s", err, out)
+	}
+	if !r.installedIs(broken) || r.record("calls") != " setup --org "+r.srv.URL+"\n" {
+		t.Fatalf("the stale v0.9.0 .previous was put back: calls %q\n%s", r.record("calls"), out)
+	}
+}
+
+// The organisation's advertised mirror is held to https, as the flag and the managed preference are.
+func TestRunnerUpgradeRefusesAPlainHTTPAdvertisedMirror(t *testing.T) {
+	r := newInstallRig(t)
+	old := r.fakeRunner("0.10.0", true)
+	r.installed(old)
+	r.advertised = "http://mirror.example"
+	out, err := r.cli("upgrade", "--version", "0.10.1")
+	if err == nil || !strings.Contains(err.Error(), "the organisation's advertised mirror (/healthz.cli_artifact_base)") {
+		t.Fatalf("err = %v\n%s", err, out)
+	}
+	if got := r.called("GET /release"); len(got) != 0 || !r.installedIs(old) {
+		t.Fatalf("downloaded %v from the organisation's own origin instead", got)
 	}
 }
 
