@@ -88,7 +88,8 @@ func (k knobProvenance) resetUnchanged(rec policyref.Provenance, before, after t
 // canonicalKnobs is a clone of s in the form composer's merges leave it: host
 // and method lists case-folded, trimmed, sorted and deduped (composer.union),
 // push_rules paths sorted and deduped by exact bytes (composer.unionPaths), an
-// empty list absent, and first_use_approval normalized.
+// empty list absent, first_use_approval normalized, and desktop as its effective
+// rules (an unset desktop and its defaults spelled out are the same rules).
 func canonicalKnobs(s types.RunPolicySpec) types.RunPolicySpec {
 	s = s.Clone()
 	fold := func(xs []string) []string {
@@ -105,6 +106,8 @@ func canonicalKnobs(s types.RunPolicySpec) types.RunPolicySpec {
 		s.PushRules.DenyPaths, s.PushRules.RequireReviewPaths = slices.Compact(s.PushRules.DenyPaths), slices.Compact(s.PushRules.RequireReviewPaths)
 	}
 	s.FirstUseApproval = s.FirstUseApproval.Normalize()
+	d := s.Desktop.Effective()
+	s.Desktop = &d
 	return s
 }
 

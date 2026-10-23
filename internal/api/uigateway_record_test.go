@@ -70,7 +70,7 @@ func TestDesktopRecording_PauseGapRow(t *testing.T) {
 	}
 	sent <- desktopFrame(desktopBell)
 	read(3)
-	if !srv.ResumeDesktopRecording(context.Background(), run) {
+	if !srv.ResumeDesktopRecording(context.Background(), run, "you took over to sign in") {
 		t.Fatal("resume refused")
 	}
 	sent <- desktopFrame(desktopBell + desktopCut)

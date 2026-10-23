@@ -388,3 +388,50 @@ func TestReadSideConnNeverRecordsKeystrokes(t *testing.T) {
 		t.Fatalf("the browser's side reached the recorder: it was given %d bytes, the sandbox sent %d", seen, len(upgrade)+len(hello))
 	}
 }
+
+// decodes follows kept bytes as a replay does, from the handshake on, and reports how many server
+// messages it read whole, or -1 when it cannot follow them or they stop inside a message.
+func decodes(kept []byte) int {
+	s := newRFBStream()
+	n := -1
+	s.boundary = func() { n++ }
+	s.feed(kept, func([]byte) {})
+	if !s.atBoundary() {
+		return -1
+	}
+	return n
+}
+
+// TestRFBRecorderResumedMidMessageDecodesEndToEnd: a pause that starts inside one framebuffer update
+// and a resume that lands inside another, each split over WebSocket messages, leave out those whole
+// updates and everything between, so what is kept still decodes from the handshake to the end.
+func TestRFBRecorderResumedMidMessageDecodesEndToEnd(t *testing.T) {
+	c := &clock{t: time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)}
+	r := NewRFBRecorder(c.now)
+	_, _ = r.Write([]byte(upgrade))
+	_, _ = r.Write(wsFrame(true, 2, rfbHello(), nil))
+	_, _ = r.Write(wsFrame(true, 2, fbu(1, append(rect(3, 1, 0), "beforepause!"...)), nil))
+	straddlesPause := fbu(1, append(rect(3, 1, 0), "headtailhalf"...))
+	_, _ = r.Write(wsFrame(true, 2, straddlesPause[:20], nil))
+	r.Pause("you took over to sign in")
+	_, _ = r.Write(wsFrame(true, 2, straddlesPause[20:], nil))
+	_, _ = r.Write(wsFrame(true, 2, fbu(1, append(rect(3, 1, 0), "secretscreen"...)), nil))
+	straddlesResume := fbu(1, append(rect(3, 1, 0), "typedsecret!"...))
+	_, _ = r.Write(wsFrame(true, 2, straddlesResume[:22], nil))
+	r.Resume()
+	_, _ = r.Write(wsFrame(true, 2, straddlesResume[22:], nil))
+	_, _ = r.Write(wsFrame(true, 2, fbu(1, append(rect(3, 1, 0), "afterresume!"...)), nil))
+
+	k := kept(t, playback(t, r))
+	if got := decodes(k); got != 2 {
+		t.Fatalf("the recording decodes to %d whole messages, want 2 (the updates before and after the gap): %q", got, k)
+	}
+	for _, s := range []string{"head", "tail", "secretscreen", "typeds", "ecret!"} {
+		if bytes.Contains(k, []byte(s)) {
+			t.Errorf("bytes of an update that overlaps the pause are in the recording: %q", s)
+		}
+	}
+	if !bytes.Contains(k, []byte("beforepause!")) || !bytes.Contains(k, []byte("afterresume!")) {
+		t.Errorf("an update wholly outside the pause was not kept: %q", k)
+	}
+}
