@@ -57,7 +57,7 @@ import { AdminSshKeysCard } from "./admin-ssh-keys-card";
 import { ApprovalNotifyCard } from "./approval-notify-card";
 import { ScimCard } from "./scim-card";
 import { ComponentsSettingsCard } from "./components-settings-card";
-import { ViewNotice } from "../../wardyn/console-view";
+import { RoleRefusal } from "../../wardyn/console-view";
 import { SETTINGS_SUPER_ONLY } from "../../wardyn/copy/console-view";
 import { Button } from "../../ui/button";
 import { HOST_CARD } from "../../wardyn/copy/host-card";
@@ -381,13 +381,7 @@ export function AdminSettingsScreen() {
   }, [shellStatus, load, refused]);
 
   if (refused) {
-    return (
-      <ViewNotice title={SETTINGS_SUPER_ONLY.TITLE} body={SETTINGS_SUPER_ONLY.BODY}>
-        <Button size="sm" onClick={() => navigate("/admin/runs")}>
-          {SETTINGS_SUPER_ONLY.CTA}
-        </Button>
-      </ViewNotice>
-    );
+    return <RoleRefusal copy={SETTINGS_SUPER_ONLY} cta={() => navigate("/admin/runs")} />;
   }
 
   return (

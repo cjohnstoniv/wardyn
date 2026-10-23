@@ -121,6 +121,7 @@ describe("ProvidersScreen — a security admin", () => {
   it("is refused with the super-admin card and a way back to Runs, and nothing is fetched", async () => {
     renderScreen(false);
     expect(await screen.findByText(PROVIDERS_SUPER_ONLY.TITLE)).toBeInTheDocument();
+    expect(screen.getByTestId("refusal")).toBeInTheDocument(); // #3047: the Why can't I? card, one action
     expect(screen.getByText(PROVIDERS_SUPER_ONLY.BODY)).toBeInTheDocument();
     expect(getWorkspaceProvidersMock).not.toHaveBeenCalled();
     expect(getSetupStatusMock).not.toHaveBeenCalled();

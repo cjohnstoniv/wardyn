@@ -50,7 +50,7 @@ import { SavedElsewhereBanner } from "../../wardyn/saved-elsewhere-banner";
 import { useDiscardReload } from "../../wardyn/use-discard-reload";
 import { EmptyState, TableSkeleton, loadFailStatus } from "../../wardyn/states";
 import { useOperator, useOperatorResolved } from "../../wardyn/operator-context";
-import { ViewNotice } from "../../wardyn/console-view";
+import { RoleRefusal } from "../../wardyn/console-view";
 import { PROVIDERS_SUPER_ONLY } from "../../wardyn/copy/console-view";
 import { PageTabs } from "../../wardyn/page-tabs";
 import { AgentsTab } from "./agents-tab";
@@ -236,13 +236,7 @@ export function ProvidersScreen() {
   const enforcement = setupStatus?.runner.ephemeral_disk_enforcement;
 
   if (refused) {
-    return (
-      <ViewNotice title={PROVIDERS_SUPER_ONLY.TITLE} body={PROVIDERS_SUPER_ONLY.BODY}>
-        <Button size="sm" onClick={() => navigate("/admin/runs")}>
-          {PROVIDERS_SUPER_ONLY.CTA}
-        </Button>
-      </ViewNotice>
-    );
+    return <RoleRefusal copy={PROVIDERS_SUPER_ONLY} cta={() => navigate("/admin/runs")} />;
   }
 
   return (
