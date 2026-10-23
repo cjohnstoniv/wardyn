@@ -245,7 +245,6 @@ describe("GovernanceScreen — the profiles table", () => {
   it("at rest the ONE teal is Assign — New profile and Edit are not", async () => {
     renderScreen();
     await screen.findByText(GREENFIELD.name);
-
     const teal = tealButtons();
     expect(teal).toHaveLength(1);
     expect(teal[0]).toHaveTextContent(GOV.ADD_CTA);

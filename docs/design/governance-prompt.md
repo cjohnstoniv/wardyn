@@ -317,7 +317,7 @@ dark, Inter + JetBrains Mono, `chip`/`btn`/`sw`/`seg`/`dlg`/`note`/`card` idioms
 Unlike the People round, **teal is in budget here** — the Governance console is a full screen,
 not a setup step, so `CONSOLE-RULES.md` §2's normal rule applies: exactly **one** `default`
 (teal) button per surface, and the screen enforces it over time rather than by counting forms.
-**Assign** is the screen's teal button at rest. When the profile editor opens in place its
+**Assign profile** is the screen's teal button at rest. When the profile editor opens in place its
 **Save profile** takes that role, and the add-assignment form collapses to its disabled
 `ADD_TITLE` summary row for exactly that span — so the two teal buttons can never co-occur
 (§2.6; drawn in the mock's editor state). Everything else is `outline` or `ghost`; Delete is
