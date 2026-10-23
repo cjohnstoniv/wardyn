@@ -23,6 +23,25 @@
 - Not in this release: drives, session recording, reviving a stopped VM, replacing its proxy, and recovering its output after the VM is gone. Each is refused with a reason.
 - A VM's terminal is a plain shell. Opening it in the agent CLI (`interactive_start: agent`) and watching or taking over the agent's terminal are refused too.
 
+## On a Kubernetes runner
+
+- A VM on a Kubernetes runner is the run's pod under the `CC3` RuntimeClass, so a microVM runtime such as Kata boots it in a guest kernel of its own.
+- Its network, proxy and Secret are a container run's. There is no QEMU image, `/dev/kvm` rule or probe; the node's runtime picks the virtual hardware.
+
+| Setting | Detail |
+|---|---|
+| `k8s.linuxVM` | Runner chart value, `false` by default. `true` sets `WARDYN_RUNNER_LINUX_VM=1` on the runner |
+| `k8s.runtimeClasses.CC3` | The RuntimeClass every VM pod runs under, whatever class the run named. It sets `CC3=<name>` in `WARDYN_CONFINEMENT_MAP`. No name is built in |
+| `WARDYN_RUNNER_LINUX_VM` | `1` or unset; any other value stops the runner at boot |
+
+1. Install a RuntimeClass whose handler boots a guest kernel, such as Kata.
+2. Upgrade the runner chart with `--set k8s.runtimeClasses.CC3=<name> --set k8s.linuxVM=true`.
+3. Restart the runner. It logs `Linux VM sandboxes are on` with the machine type, or `Linux VM sandboxes are off on this runner` with the reason.
+
+- The reason is a missing `CC3` pin or a RuntimeClass that does not exist. The runner then offers no VM, and a `linux_vm` run is refused before anything is created.
+- The machine recorded on the run is `runtimeclass:<handler>` in every field, so two runs compare equal only when the same handler started both.
+- Drives and recording are refused, as on a Docker runner.
+
 ## When the organisation is unreachable
 
 | Situation | Behaviour |
