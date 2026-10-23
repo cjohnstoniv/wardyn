@@ -2826,3 +2826,35 @@ func TestRunOutput_PaneSnapshotIsReadOnTheRecordingsRule(t *testing.T) {
 func (s *authzStore) ListMembershipsFor(ctx context.Context, users, groups []string, userType string) ([]store.MembershipMatch, error) {
 	return membershipsFromResolve(s.ResolveGovernanceUnit(ctx, users, groups, userType))
 }
+
+// TestPathProvenanceIsSecurityTierOnly: path_provenance names the units above a person's leaf, so it
+// rides the two security-tier reads alone, GET /governance (each unit) and POST /governance/check
+// (effective). No other response type in this package declares it: a member's surfaces and the run
+// views (GET /runs/{id}/policy, the run.policy.resolve row) carry the leaf-only provenance.
+func TestPathProvenanceIsSecurityTierOnly(t *testing.T) {
+	for _, route := range []string{"GET /api/v1/governance", "POST /api/v1/governance/check"} {
+		if got := routeMatrix[route].class; got != classSecurity {
+			t.Errorf("%s is %q, want %q: it carries path_provenance", route, got, classSecurity)
+		}
+	}
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var carriers []string
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(src), `json:"path_provenance`) {
+			carriers = append(carriers, f)
+		}
+	}
+	if want := []string{"governance_check.go", "governance_unit_write.go"}; !slices.Equal(carriers, want) {
+		t.Errorf("path_provenance is declared in %v, want only %v (checkEffective, governanceUnitView)", carriers, want)
+	}
+}

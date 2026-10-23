@@ -71,6 +71,18 @@ func (k knobProvenance) setBy(rec policyref.Provenance, before, after types.RunP
 	}
 }
 
+// resetUnchanged records rec on every knob whose value is the same at after as at before, compared
+// as setBy compares: a value the steps between them changed and changed back is before's again.
+func (k knobProvenance) resetUnchanged(rec policyref.Provenance, before, after types.RunPolicySpec) {
+	changed := knobProvenance{}
+	changed.setBy(rec, before, after)
+	for name := range k {
+		if _, ok := changed[name]; !ok {
+			k[name] = rec
+		}
+	}
+}
+
 // canonicalKnobs is a clone of s in the form composer's merges leave it: host
 // and method lists case-folded, trimmed, sorted and deduped (composer.union),
 // push_rules paths sorted and deduped by exact bytes (composer.unionPaths), an

@@ -198,7 +198,7 @@ func TestRenameMap(t *testing.T) {
 
 // treeFields are what the unit tree (unit-tree migration) added to the governance surface; this pin
 // covers the rename only, so they and the Default unit's row are left out of the comparison.
-var treeFields = []string{"kind", "mode", "depth", "home", "legacy", "max_depth", "people"}
+var treeFields = []string{"kind", "mode", "depth", "home", "legacy", "max_depth", "people", "path_provenance"}
 
 // treeAPIFields are the top-level keys the unit tree's API (lane TREE-API brief §8 and §10) added to
 // a step's body, left out per step because a unit's own "effective" is renamed surface: check's

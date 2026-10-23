@@ -7,6 +7,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -177,11 +178,13 @@ type checkDormant struct {
 }
 
 // checkEffective is one context's resolved walls, after the Wardyn boundary, and which layer set each
-// knob.
+// knob. Provenance is the leaf-level answer a run gets; PathProvenance names, where Provenance names
+// the leaf, the unit on the path that changed the value, and is Provenance on every other knob.
 type checkEffective struct {
-	Ceiling    types.RunPolicySpec    `json:"ceiling"`
-	Limits     types.GovernanceLimits `json:"limits"`
-	Provenance knobProvenance         `json:"provenance"`
+	Ceiling        types.RunPolicySpec    `json:"ceiling"`
+	Limits         types.GovernanceLimits `json:"limits"`
+	Provenance     knobProvenance         `json:"provenance"`
+	PathProvenance knobProvenance         `json:"path_provenance"`
 }
 
 // checkContexts lists q's contexts and dormant memberships from the rows the selection reads
@@ -234,22 +237,38 @@ func unitPath(byID map[uuid.UUID]types.GovernanceUnit, id uuid.UUID) []unitPathL
 }
 
 // checkEffective resolves q's context under choice by the enforcement path's own steps: the context
-// ceiling (contextCeiling, the body of resolveContext) and then the boundary. Provenance records the
-// deployment, then the context's unit on each knob it changed, then the boundary.
+// ceiling (contextCeiling, the body of resolveContext) and then the boundary (contextWalls).
 func (s *Server) checkEffective(ctx context.Context, q contextQuery, choice contextChoice) (*checkEffective, error) {
 	deployment := governanceCeiling{Spec: s.cfg.DefaultPolicy.Clone(), MemberDefault: s.memberDefaultFor(s.cfg.DefaultPolicy.Resources)}
 	c, err := s.contextCeiling(ctx, q, choice, deployment)
 	if err != nil {
 		return nil, err
 	}
+	b, err := s.governanceBoundary(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return contextWalls(deployment, c, b, s.specReadTierFor(ctx))
+}
+
+// contextWalls is context c met with boundary b. Provenance records the deployment, then c's unit on
+// each knob it changed, then the boundary; PathProvenance the same with c's path step by step
+// (ResolvedUnit.PathProvenance) in place of its unit. POST /governance/check and GET /governance
+// both answer through it, each redacting the ceiling at its own caller's tier.
+func contextWalls(deployment, c governanceCeiling, b types.Boundary, tier specReadTier) (*checkEffective, error) {
 	prov := startProvenance(deploymentProvenance)
 	prov.setBy(c.provenance(), deployment.Spec, c.Spec)
-	bounded, err := s.boundaryCeiling(ctx, c)
+	path := startProvenance(deploymentProvenance)
+	if c.Unit != nil {
+		path = maps.Clone(c.Unit.PathProvenance)
+	}
+	bounded, err := boundCeiling(b, c)
 	if err != nil {
 		return nil, err
 	}
 	prov.setBy(boundaryProvenance, c.Spec, bounded.Spec)
-	return &checkEffective{Ceiling: redactSpecForRead(bounded.Spec, s.specReadTierFor(ctx)), Limits: bounded.Limits, Provenance: prov}, nil
+	path.setBy(boundaryProvenance, c.Spec, bounded.Spec)
+	return &checkEffective{Ceiling: redactSpecForRead(bounded.Spec, tier), Limits: bounded.Limits, Provenance: prov, PathProvenance: path}, nil
 }
 
 // normalizeGovernancePreviewClaims lowercases, trims and de-duplicates one

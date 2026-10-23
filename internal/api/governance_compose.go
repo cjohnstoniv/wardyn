@@ -62,6 +62,10 @@ type ResolvedUnit struct {
 	Warnings []string
 	// AdminWarnings carry the base-level detail for GET /governance and the 409 bodies.
 	AdminWarnings []string
+	// PathProvenance is, per knob, the layer that last changed it from the deployment default to
+	// Ceiling: the deployment, or the unit on the path whose step changed it (never a pass-through
+	// unit, which changes nothing). It names the bases, so it is admin surfaces only.
+	PathProvenance knobProvenance
 }
 
 // unitLink names one profile of a chain.
@@ -270,19 +274,30 @@ func (s *Server) composeChain(chain []types.GovernanceUnit) (*ResolvedUnit, erro
 		}
 		next = root - 1
 	}
+	// The path's provenance, step by step from the deployment's walls with its own size filled in:
+	// that fill-in is the deployment's (Default's root changes nothing), a standalone root's own walls
+	// are the root's, and each step's changes are its unit's.
+	deployment := s.deploymentAuthority().Ceiling
+	last := policyref.Provenance{Layer: policyref.LayerUnit, Name: chain[root].Name}
+	out.PathProvenance = startProvenance(deploymentProvenance)
+	out.PathProvenance.setBy(last, deployment, base.Ceiling)
 	for i := next; i >= 0; i-- {
 		if chain[i].Mode == types.UnitModePassThrough {
 			continue // its parent's walls exactly: the step is the identity
 		}
+		before := base.Ceiling.Clone()
 		var err error
 		if base, err = s.applyStep(out, base, chain[i], i == 0); err != nil {
 			return nil, err
 		}
+		last = policyref.Provenance{Layer: policyref.LayerUnit, Name: chain[i].Name}
+		out.PathProvenance.setBy(last, before, base.Ceiling)
 	}
 	out.Ceiling, out.Limits = base.Ceiling, base.Limits
 	if out.Composed {
 		out.Ceiling.Resources = s.inheritDeploymentResources(out.Ceiling.Resources)
 	}
+	out.PathProvenance.resetUnchanged(deploymentProvenance, deployment, out.Ceiling)
 	return out, nil
 }
 
