@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/uuid"
@@ -95,5 +96,59 @@ func TestKillRun_EndUnderTheKillKeepsItsOutcome(t *testing.T) {
 				t.Errorf("revocations = %d, KillSandbox calls = %d; a kill that lost to an end must touch neither", n, rn.kills.Load())
 			}
 		})
+	}
+}
+
+// everyReadMovesStore requeues or promotes the run after each of its first moves reads (PENDING and QUEUED in
+// turn, as a promoted run whose start did not dispatch is requeued and promoted again), so every CAS the kill
+// makes starts from a state the run has left. attempts counts the kill's CASes.
+type everyReadMovesStore struct {
+	raceStore
+	moves    int
+	attempts atomic.Int32
+}
+
+func (s *everyReadMovesStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
+	r, err := s.raceStore.GetRun(ctx, id)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.moves > 0 {
+		s.moves--
+		s.state = map[types.RunState]types.RunState{types.RunPending: types.RunQueued, types.RunQueued: types.RunPending}[s.state]
+	}
+	return r, err
+}
+
+func (s *everyReadMovesStore) UpdateRunStateIf(ctx context.Context, id uuid.UUID, from, to types.RunState) (bool, error) {
+	if to == types.RunKilled {
+		s.attempts.Add(1)
+	}
+	return s.raceStore.UpdateRunStateIf(ctx, id, from, to)
+}
+
+// A run that moves on every read is never claimed: the kill stops after four CASes (one per forward move a live
+// run can make, and the one that lands) and answers 409 run_kill_state_changed, with nothing revoked or torn
+// down. The run moves ten times, so a kill without the bound would land and answer 202.
+func TestKillRun_KeepsMovingGivesUpAfterFourAttempts(t *testing.T) {
+	h := newHarness(t)
+	runID := uuid.New()
+	st := &everyReadMovesStore{raceStore: raceStore{run: types.AgentRun{ID: runID, SandboxRef: "sbx-1"}, state: types.RunPending}, moves: 10}
+	brk := &raceBroker{}
+	rn := &killCountRunner{fakeRunner: &fakeRunner{}}
+	cfg := baseTestConfig(h, st)
+	cfg.Broker = brk
+	cfg.Runner = rn
+	w := do(t, New(cfg), http.MethodPost, "/api/v1/runs/"+runID.String()+"/kill", adminToken, "")
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), reasonRunKillStateChanged) {
+		t.Fatalf("kill of a run that moves on every read = %d %s, want 409 %s", w.Code, w.Body, reasonRunKillStateChanged)
+	}
+	if n := st.attempts.Load(); n != 4 {
+		t.Errorf("CAS attempts = %d, want exactly 4", n)
+	}
+	if n := brk.revocations(runID); n != 0 || rn.kills.Load() != 0 {
+		t.Errorf("revocations = %d, KillSandbox calls = %d; a kill that never landed must touch neither", n, rn.kills.Load())
+	}
+	if got := st.State(); got == types.RunKilled {
+		t.Errorf("state = KILLED, want the run left live")
 	}
 }
