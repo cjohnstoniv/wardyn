@@ -22,6 +22,7 @@ func (h setupHost) checkConnection(cmd *cobra.Command, plan setupPlan) error {
 	out := cmd.OutOrStdout()
 	conn := runnerConn{org: plan.org, orgSource: "--org", trustedCA: plan.trustedCAFile, orgCA: plan.orgCAFile}
 	net := h.network
+	net.WireDespiteHealthz = true
 	stages, serverVersion := h.connectionStages(cmd.Context(), plan.paths, plan.paths.stateDir, conn, &net, true)
 	if skew, ok := proxyImageSkew(plan.proxyImage, plan.flagged, serverVersion); ok {
 		stages = append(stages, skew)
@@ -31,7 +32,7 @@ func (h setupHost) checkConnection(cmd *cobra.Command, plan setupPlan) error {
 	if err := report.WriteText(out); err != nil {
 		return err
 	}
-	if st, ok := report.FirstFailure(doctor.SetupBlocking...); ok {
+	if st, ok := report.FirstBlocking(doctor.SetupBlocking...); ok {
 		return fmt.Errorf("the %s stage failed, so setup stops here: %s%s (nothing was changed and no token was spent)", st.Name, st.Message(), setupHint(st))
 	}
 	var warned []string

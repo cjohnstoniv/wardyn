@@ -33,6 +33,9 @@ type Stage struct {
 	Detail  string `json:"detail"`
 	Setting string `json:"setting,omitempty"`
 	Fix     string `json:"fix,omitempty"`
+	// Advisory marks a failure that does not by itself stop a connection: the command diagnosed never makes
+	// the call that failed. It is not part of the output.
+	Advisory bool `json:"-"`
 }
 
 // Report is a run's stages in order.
@@ -58,10 +61,11 @@ func (s Stage) Message() string {
 	return s.Detail + "; " + s.Fix
 }
 
-// FirstFailure is the first failed stage among those named (any stage, when none is named).
-func (r Report) FirstFailure(names ...string) (Stage, bool) {
+// FirstBlocking is the first failed stage among those named (any stage, when none is named) that is not
+// advisory.
+func (r Report) FirstBlocking(names ...string) (Stage, bool) {
 	for _, s := range r.Stages {
-		if s.Status == StatusFail && (len(names) == 0 || slices.Contains(names, s.Name)) {
+		if s.Status == StatusFail && !s.Advisory && (len(names) == 0 || slices.Contains(names, s.Name)) {
 			return s, true
 		}
 	}

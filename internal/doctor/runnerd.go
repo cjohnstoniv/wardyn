@@ -22,5 +22,5 @@ func RunnerdPath(goos, home, xdgData string) string {
 
 // SetupBlocking are the stages whose failure makes `wardyn-runnerd setup` pointless: the runner could not
 // register with the organisation, or hold the WebSocket it serves through, from this computer. A failure of
-// any other stage is a warning there.
+// any other stage, or an advisory one (a plain non-200 at /healthz: the runner never calls it), is a warning there.
 var SetupBlocking = []string{"org-url", "dns", "proxy", "tls", "healthz", "wire"}

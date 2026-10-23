@@ -38,9 +38,12 @@ type Network struct {
 	Identity           bool
 	Token, TokenSource string
 	// Wire adds the runner-wire stage: whether a WebSocket upgrade on the runner stream route gets through.
-	Wire       bool
-	LookupHost func(ctx context.Context, host string) ([]string, error)
-	ProxyFor   func(*http.Request) (*url.URL, error)
+	Wire bool
+	// WireDespiteHealthz runs the wire stage after an advisory healthz failure too, for a command that
+	// goes on past it.
+	WireDespiteHealthz bool
+	LookupHost         func(ctx context.Context, host string) ([]string, error)
+	ProxyFor           func(*http.Request) (*url.URL, error)
 	// SystemRoots is the trust store the command uses (nil: the system's). ExtraCA is a PEM bundle named by
 	// ExtraCASource (a setting's name); ExtraCATrusted says whether the command being diagnosed trusts it:
 	// the runner does, the CLI does not, and a certificate only that bundle verifies is a failure there.
@@ -103,7 +106,7 @@ func (n *Network) Run(ctx context.Context) []Stage {
 	}
 	add(healthSt)
 	if n.Wire {
-		if healthSt.Status != StatusOK {
+		if healthSt.Status != StatusOK && !(n.WireDespiteHealthz && healthSt.Advisory) {
 			add(SkipStage("wire", "not run: /healthz did not answer"))
 		} else {
 			add(n.wireStage(ctx, u, proxy, p, tr))
@@ -343,7 +346,10 @@ func (n *Network) healthStage(u, proxy *url.URL, p *probe, resp *http.Response, 
 		}
 		return FailStage("healthz", fmt.Sprintf("redirected (%d) to %s", resp.StatusCode, to), n.OrgSetting, "the address it redirects to")
 	case resp.StatusCode != http.StatusOK:
-		return FailStage("healthz", fmt.Sprintf("answered %d: this address is not a healthy Wardyn control plane", resp.StatusCode), n.OrgSetting, "your organisation's Wardyn address")
+		// A gateway may route the API and answer nothing at /healthz, and the runner never calls it.
+		st := FailStage("healthz", fmt.Sprintf("answered %d: this address is not a healthy Wardyn control plane", resp.StatusCode), n.OrgSetting, "your organisation's Wardyn address")
+		st.Advisory = true
+		return st
 	}
 	var body struct{ Status, Version string }
 	raw, _ := io.ReadAll(resp.Body)

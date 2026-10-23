@@ -87,6 +87,15 @@ func TestSetupRefusesWithDoctorsMessageWhenTheWireFails(t *testing.T) {
 		{"a proxy answers 407", func(t *testing.T, f *setupFixture) {
 			proxyTo(t, f, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusProxyAuthRequired) })
 		}, "healthz", "HTTP_PROXY", "answered 407: it wants proxy authentication"},
+		{"healthz redirects", func(_ *testing.T, f *setupFixture) {
+			f.healthz = func(w http.ResponseWriter) {
+				w.Header().Set("Location", "https://login.example.com/")
+				w.WriteHeader(http.StatusFound)
+			}
+		}, "healthz", "WARDYN_RUNNER_ORG_URL", "redirected (302) to login.example.com"},
+		{"healthz answers 200 with a page", func(_ *testing.T, f *setupFixture) {
+			f.healthz = func(w http.ResponseWriter) { _, _ = w.Write([]byte("<html>welcome</html>")) }
+		}, "healthz", "WARDYN_RUNNER_ORG_URL", "not Wardyn's health report"},
 		{"a gateway strips the WebSocket upgrade", func(_ *testing.T, f *setupFixture) { f.stripUpgrade = true },
 			"wire", "WARDYN_RUNNER_ORG_URL", "answered 426 instead of switching to a WebSocket"},
 		{"a proxy strips the WebSocket upgrade", func(t *testing.T, f *setupFixture) { proxyTo(t, f, stripsUpgrade) },
@@ -155,5 +164,29 @@ func TestSetupWarnsOfAPinnedProxyImageOfAnotherRelease(t *testing.T) {
 	}
 	if f.count("POST /api/v1/runners/register") != 1 {
 		t.Errorf("setup did not register after the warning (%d)", f.count("POST /api/v1/runners/register"))
+	}
+}
+
+// TestSetupGoesOnWhenHealthzAnswersAPlainError pins that /healthz, which the runner never calls, does not stop
+// a setup whose wire works: a gateway may route the API and answer nothing there. The line is a warning, and the
+// registration goes on.
+func TestSetupGoesOnWhenHealthzAnswersAPlainError(t *testing.T) {
+	for _, code := range []int{http.StatusNotFound, http.StatusForbidden, http.StatusServiceUnavailable} {
+		t.Run(http.StatusText(code), func(t *testing.T) {
+			f := newSetupFixture(t, "linux")
+			f.healthz = func(w http.ResponseWriter) { w.WriteHeader(code) }
+			out, err := f.run(setupOptions{tokenFile: f.tokenFile})
+			if err != nil {
+				t.Fatalf("%v\n%s", err, out)
+			}
+			for _, want := range []string{"FAIL  healthz", "ok    wire", "warning: the healthz stage failed; setup goes on"} {
+				if !strings.Contains(out, want) {
+					t.Errorf("no %q in:\n%s", want, out)
+				}
+			}
+			if f.count("POST /api/v1/runners/register") != 1 {
+				t.Errorf("setup did not register (%d)", f.count("POST /api/v1/runners/register"))
+			}
+		})
 	}
 }
