@@ -2890,7 +2890,7 @@ Consequences worth knowing:
   - A capture takes the same per-person lock as a launch and re-reads the run's state before it stores.
   - So a capture from a sandbox the person's next sign-in replaced is refused (`harness.credential.refuse` / `reason = run_killed`) instead of overwriting the newer session.
   - A capture that cannot get the lock within about 5 seconds is refused with `reason = signin_busy` and stores nothing.
-  - Whoever is watching the old sandbox sees "this sign-in sandbox was closed — a newer sign-in for you replaced it…" and finishes in the new one.
+  - Whoever is watching the old sandbox sees "This sign-in sandbox was closed — a newer sign-in for you replaced it…" and finishes in the new one.
   - At an unserialized pass (every call at `pool_max_conns=1`) there is no lock, so a supersede landing between the re-read and the write can still lose to the old capture; the next sign-in replaces it.
 
 ### What the sign-in pane's waiting messages mean

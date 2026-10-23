@@ -110,7 +110,7 @@ A rebuild happens when a run launches and the cache key matches but the image is
 - The failure Detail is the `run.build` error followed by one `: <input> (want <digest>, got not_found)` per difference, joined by `; `:
 
 ```text
-a pinned input is no longer available; refresh the image to resolve it again: feature:ghcr.io/devcontainers/features/go:1 (want sha256:…, got not_found)
+A pinned input is no longer available; refresh the image to resolve it again: feature:ghcr.io/devcontainers/features/go:1 (want sha256:…, got not_found)
 ```
 
 - A rebuild never retries with fresh resolution. The fix is a refresh.

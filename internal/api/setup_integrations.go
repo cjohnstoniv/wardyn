@@ -153,7 +153,7 @@ func userSafeCapabilities(caps []Capability, in types.Integration) []Capability 
 // reasonCredentialWithheld is secretGate's own ref-less sentence
 // (integrations.go), reused verbatim so this projection introduces no new
 // member-facing copy.
-const reasonCredentialWithheld = "no credential configured"
+const reasonCredentialWithheld = "No credential configured"
 
 // withheldIntegrationValues lists the strings userSafeIntegration drops from
 // a row: the credential refs, the egress entries (and their bare hosts, since a

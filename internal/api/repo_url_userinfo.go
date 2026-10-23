@@ -21,8 +21,9 @@ import (
 // hosts take a token in that position, and nothing here can tell a token from a
 // name. The scp form (git@host:path) and ssh:// carry the SSH login user, never
 // a secret, and stay allowed. The URL itself is never echoed.
-const repoURLUserinfo400 = "a repository URL may not carry a user name, password or token before its host; give the plain URL and hand the credential over as a git_pat grant"
+const repoURLUserinfo400 = "A repository URL may not carry a user name, password or token before its host; give the plain URL and hand the credential over as a git_pat grant"
 
+//lint:ignore ST1005 the text is the sentence the refused person reads
 var errRepoURLUserinfo = errors.New(repoURLUserinfo400)
 
 // repoURLHasUserinfo reports whether raw carries a credential before its host:

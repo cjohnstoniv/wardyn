@@ -139,7 +139,7 @@ test.describe("Run detail — Desktop", () => {
     const card = tab.getByRole("region", { name: DESKTOP.linkBlocked });
     await expect(card).toBeVisible();
     await expect(card.getByText(DESKTOP.linkBody)).toBeVisible();
-    await expect(card.getByTestId("desktop-refused-said")).toHaveText("invalid, expired, or already-used attach ticket");
+    await expect(card.getByTestId("desktop-refused-said")).toHaveText("Invalid, expired, or already-used attach ticket");
     await other.close();
   });
 

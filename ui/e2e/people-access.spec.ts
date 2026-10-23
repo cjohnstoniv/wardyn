@@ -569,7 +569,7 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
   test("(e) a stale-snapshot 400 renders STALE_SNAPSHOT_ERROR, DISTINCT from lockout, in-viewport", async ({ page }) => {
     await submitAddExpectingError(page, {
       status: 400,
-      body: { error: "your sign-in is too old to verify this change — sign in again before changing role mappings" },
+      body: { error: "Your sign-in is too old to verify this change — sign in again before changing role mappings" },
     });
     await expect(page.getByText(ACCESS_ERROR.STALE_SNAPSHOT_ERROR)).toBeInViewport();
     await expect(page.getByText(ACCESS_ERROR.LOCKOUT_ERROR)).toHaveCount(0);

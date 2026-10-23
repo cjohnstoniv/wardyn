@@ -488,7 +488,7 @@ describe("E6 — save refused", () => {
   });
 
   it("a 412 gets the console's shared someone-else-saved banner, not a silent overwrite", async () => {
-    putMock.mockRejectedValue(new HttpError(412, "model providers changed since you loaded them — reload and retry"));
+    putMock.mockRejectedValue(new HttpError(412, "Model providers changed since you loaded them — reload and retry"));
     const { user } = renderEditor({ editing: CORP, list: list([CORP]) });
     await user.click(screen.getByRole("button", { name: E.SAVE }));
     expect(await screen.findByText(WS_PROVIDERS.SAVED_ELSEWHERE_TITLE)).toBeInTheDocument();
@@ -498,7 +498,7 @@ describe("E6 — save refused", () => {
     const assign = vi.fn();
     const reload = vi.fn();
     vi.spyOn(window, "location", "get").mockReturnValue({ ...window.location, assign, reload });
-    putMock.mockRejectedValue(new HttpError(412, "model providers changed since you loaded them — reload and retry"));
+    putMock.mockRejectedValue(new HttpError(412, "Model providers changed since you loaded them — reload and retry"));
     whoamiMock.mockResolvedValue({ principal: "someone-else" });
     const { user, onSaved } = renderEditor({ editing: CORP, list: list([CORP]) });
     await user.click(screen.getByRole("button", { name: E.SAVE }));
@@ -514,7 +514,7 @@ describe("E6 — save refused", () => {
     const assign = vi.fn();
     const reload = vi.fn();
     vi.spyOn(window, "location", "get").mockReturnValue({ ...window.location, hash: "#top", assign, reload });
-    putMock.mockRejectedValue(new HttpError(412, "model providers changed since you loaded them — reload and retry"));
+    putMock.mockRejectedValue(new HttpError(412, "Model providers changed since you loaded them — reload and retry"));
     whoamiMock.mockResolvedValue({ principal: "someone-else" });
     const { user, onSaved } = renderEditor({ editing: CORP, list: list([CORP]) });
     await user.click(screen.getByRole("button", { name: E.SAVE }));
@@ -529,7 +529,7 @@ describe("E6 — save refused", () => {
     const assign = vi.fn();
     const reload = vi.fn();
     vi.spyOn(window, "location", "get").mockReturnValue({ ...window.location, assign, reload });
-    putMock.mockRejectedValue(new HttpError(412, "model providers changed since you loaded them — reload and retry"));
+    putMock.mockRejectedValue(new HttpError(412, "Model providers changed since you loaded them — reload and retry"));
     whoamiMock.mockResolvedValue({ principal: "alice" });
     const { user, onSaved } = renderEditor({ editing: CORP, list: list([CORP]) });
     await user.click(screen.getByRole("button", { name: E.SAVE }));
@@ -545,7 +545,7 @@ describe("E6 — save refused", () => {
     const assign = vi.fn();
     const reload = vi.fn();
     vi.spyOn(window, "location", "get").mockReturnValue({ ...window.location, assign, reload });
-    putMock.mockRejectedValue(new HttpError(412, "model providers changed since you loaded them — reload and retry"));
+    putMock.mockRejectedValue(new HttpError(412, "Model providers changed since you loaded them — reload and retry"));
     whoamiMock.mockResolvedValue(null);
     const { user, onSaved } = renderEditor({ editing: CORP, list: list([CORP]) });
     await user.click(screen.getByRole("button", { name: E.SAVE }));

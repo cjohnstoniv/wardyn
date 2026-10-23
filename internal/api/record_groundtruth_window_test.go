@@ -81,7 +81,7 @@ func TestReconcileRecordRun_CorroborationIsPerCapture(t *testing.T) {
 	}
 	// The host's own state is still reported — as review-time state, about the
 	// host, not as a claim about this capture.
-	if c := caveatNaming(res.Caveats, "kernel ground truth", "idle"); c == "" {
+	if c := caveatNaming(res.Caveats, "Kernel ground truth", "idle"); c == "" {
 		t.Errorf("caveats = %v, want the host sensor's own state still reported", res.Caveats)
 	}
 }

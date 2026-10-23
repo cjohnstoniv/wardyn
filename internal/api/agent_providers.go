@@ -41,7 +41,7 @@ const (
 	agent400Unknown = "agents: %q names no agent this deployment can run — a catalog id or a WARDYN_AGENT_IMAGES key"
 	agent400DupID   = "agents: id %q is not unique"
 	agent400SetKey  = "agents: %q joins harness ids with +, which names a harness-set image, not an agent"
-	agent412Stale   = "agents changed since you loaded them — reload and retry"
+	agent412Stale   = "Agents changed since you loaded them — reload and retry"
 
 	// The default model provider. A turned-off provider is still a valid
 	// default (it is the one-click incident switch); a missing one, or one not

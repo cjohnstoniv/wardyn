@@ -31,15 +31,15 @@ const (
 	// workspaceSources400TooMany is the cap refusal for POST/PUT /workspaces.
 	// Spelled like its siblings' ("too many requirements (max %d)", "too many
 	// domains (max 64)") so the door answers one shape for every bound it has.
-	workspaceSources400TooMany = "too many sources (max %d)"
+	workspaceSources400TooMany = "Too many sources (max %d)"
 	// workspaceDelete409ActiveRun is the in-use refusal for DELETE
 	// /workspaces/{id} — handleDeleteSource's own shape (name what is holding
 	// it, tell the caller what to do), because the caller's only alternative to
 	// being told is a silently lost recording. It names the run id rather than a
 	// title: the id is what /runs/{id} takes and what the audit trail keys on.
-	workspaceDelete409ActiveRun = "workspace is in use by run %s — stop that run first, then delete"
-	workspaceNameTakenMsg       = "this owner already has a workspace with this name — pick another name, or rename the other workspace first"
-	workspaceUpdateConflictMsg  = "the workspace changed while this edit was being saved — reload it and apply the edit again"
+	workspaceDelete409ActiveRun = "Workspace is in use by run %s — stop that run first, then delete"
+	workspaceNameTakenMsg       = "This owner already has a workspace with this name — pick another name, or rename the other workspace first"
+	workspaceUpdateConflictMsg  = "The workspace changed while this edit was being saved — reload it and apply the edit again"
 )
 
 // canonicalWorkspaceSource returns src with its IDENTITY fields spelled the way

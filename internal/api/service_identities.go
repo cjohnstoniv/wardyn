@@ -37,7 +37,7 @@ const (
 var serviceNameRE = regexp.MustCompile(`^[a-z][a-z0-9-]{2,62}$`)
 
 // serviceNotFoundMsg is the one body a missing name and another person's identity answer with.
-const serviceNotFoundMsg = "service identity not found"
+const serviceNotFoundMsg = "Service identity not found"
 
 // mountServiceIdentityRoutes registers the service identity family: create, suspend and retire on the
 // security tier (D17), and the sponsor's own half beside /me/tokens.

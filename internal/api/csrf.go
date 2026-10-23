@@ -40,7 +40,7 @@ const (
 	// csrfRefusedBody is the one sentence both guards answer with. The
 	// LocalMode arm in http.go prefixes "local mode: " and otherwise says
 	// exactly this — they are one refusal, phrased once.
-	csrfRefusedBody = "cross-origin state-changing request rejected (CSRF guard)"
+	csrfRefusedBody = "Cross-origin state-changing request rejected (CSRF guard)"
 )
 
 // csrfAuditReason is the `reason` both arms emit on the EXISTING auth.fail
@@ -58,6 +58,8 @@ const (
 // errCrossOriginRefused is the sentinel sameOriginOrRefuse returns. Its text IS
 // the 403 body, so the caller writes err.Error() and no second string exists to
 // drift.
+//
+//lint:ignore ST1005 the text is the sentence the refused person reads
 var errCrossOriginRefused = errors.New(csrfRefusedBody)
 
 // sameOriginOrRefuse decides whether a cookie-authenticated request may change

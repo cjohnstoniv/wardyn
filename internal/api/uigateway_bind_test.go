@@ -56,7 +56,7 @@ func TestUIGateway_EnterRefusesATicketThisBrowserDidNotBind(t *testing.T) {
 			browserA := h.bindCookie(ticket)
 
 			rec := h.enterUnbound(tc.method, v)
-			if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "invalid, expired, or already-used attach ticket") {
+			if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "Invalid, expired, or already-used attach ticket") {
 				t.Fatalf("browser B: %d %s, want the bad-ticket 403", rec.Code, rec.Body.String())
 			}
 			for _, c := range rec.Result().Cookies() {

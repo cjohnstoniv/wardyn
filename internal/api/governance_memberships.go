@@ -226,8 +226,8 @@ const (
 	defaultHasNoMembershipsMsg = "Default has no memberships; delete this membership instead"
 	// defaultTakesNoMembershipsMsg answers a membership added to the Default unit.
 	defaultTakesNoMembershipsMsg = "Default has no memberships: a person no membership places already runs there"
-	membershipAlreadyMemberMsg   = "the subject is already a member of that unit; delete this membership instead"
-	membershipAlreadyContext     = "this membership is already a context"
+	membershipAlreadyMemberMsg   = "The subject is already a member of that unit; delete this membership instead"
+	membershipAlreadyContext     = "This membership is already a context"
 )
 
 // errGovernanceTxUnsupported is a store with no committed governance transaction (a test double).

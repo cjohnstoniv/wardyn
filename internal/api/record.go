@@ -69,7 +69,7 @@ const recordInteractiveIdleCap = 4 * time.Hour
 // recordMaskingCaveat is the standing honesty note stamped on every capture:
 // the secretmask registry is seed-ahead only, so an open run can touch secrets
 // nobody declared — those are NOT masked anywhere.
-const recordMaskingCaveat = "secret masking is seed-ahead only: a secret this open run touched that was " +
+const recordMaskingCaveat = "Secret masking is seed-ahead only: a secret this open run touched that was " +
 	"never declared to Wardyn is NOT masked in logs or observations — treat raw output as sensitive"
 
 // RecordTaskResult is one task's Record Mode state, persisted opaquely in

@@ -43,7 +43,7 @@ type approvalTakeover interface {
 }
 
 // takeoverNotDecidableBody answers approve/deny on a human_takeover row, for every tier.
-const takeoverNotDecidableBody = "a takeover request is answered by taking over or declining, not by approve or deny"
+const takeoverNotDecidableBody = "A takeover request is answered by taking over or declining, not by approve or deny"
 
 // recordingGapReason is the reason the pause and resume rows give for the gap.
 const recordingGapReason = "takeover"

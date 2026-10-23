@@ -393,7 +393,7 @@ func (s *Server) handleScanWorkspace(w http.ResponseWriter, r *http.Request) {
 // sourceScanNoADOConnectionRefusal replaces the "connect and start the run again" sentences at the Scan door
 // (#2276): a scan run never carries a person's Azure DevOps credential (TestSourceScan_NeverTakesTheADOLane), so
 // connecting would not let it read the repository and the refusal must not offer it.
-const sourceScanNoADOConnectionRefusal = "a scan doesn't use your Azure DevOps connection, so it can't read a private repository there yet — " +
+const sourceScanNoADOConnectionRefusal = "A scan doesn't use your Azure DevOps connection, so it can't read a private repository there yet — " +
 	"connecting doesn't change that"
 
 // scanCredentialRefusal is gitCredentialRefusal at the Scan door: the same gate and the same unreadable 503, with

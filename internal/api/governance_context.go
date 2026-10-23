@@ -187,8 +187,8 @@ func (e *errWorkspaceUnitNotYours) Error() string {
 }
 
 const (
-	unitNotAContextMsg      = "the unit you asked to run in is not one of your units — name a unit you are a member of, or leave it out to run in your home unit"
-	workspaceUnitNotYoursFm = "this workspace belongs to the unit %q, and you are not a member of it or of a unit above or below it — ask its contact for access, or launch without the workspace"
+	unitNotAContextMsg      = "The unit you asked to run in is not one of your units — name a unit you are a member of, or leave it out to run in your home unit"
+	workspaceUnitNotYoursFm = "This workspace belongs to the unit %q, and you are not a member of it or of a unit above or below it — ask its contact for access, or launch without the workspace"
 )
 
 // contextRunRefusal maps a context choice the person cannot make to its 403, or nil for any other

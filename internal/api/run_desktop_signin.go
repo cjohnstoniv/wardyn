@@ -64,7 +64,7 @@ const (
 
 // desktopSigninRunnerMsg answers a begin on a run dispatched without sign-ins;
 // the run itself started normally, without the sign-in lane.
-const desktopSigninRunnerMsg = "this run started without desktop sign-ins: they run on this deployment's own Docker runner, in the sign-in desktop image (agent-novnc-signin), on a run started while WARDYN_DESKTOP_SIGNINS was on"
+const desktopSigninRunnerMsg = "This run started without desktop sign-ins: they run on this deployment's own Docker runner, in the sign-in desktop image (agent-novnc-signin), on a run started while WARDYN_DESKTOP_SIGNINS was on"
 
 // signinOffImageNotGranted is desktop_signin_runs.off_reason for a run whose
 // image its person chose, held to the exact ref by the image capability, and

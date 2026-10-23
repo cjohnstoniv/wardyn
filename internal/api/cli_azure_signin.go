@@ -63,7 +63,7 @@ const (
 )
 
 const (
-	cliSignInNotAzure           = "this component is not an Azure CLI, so there is nothing to sign in to"
+	cliSignInNotAzure           = "This component is not an Azure CLI, so there is nothing to sign in to"
 	azureCLISignInNoSession     = "An Azure sign-in must be started from a signed-in browser session: the captured sign-in is bound to your identity provider subject, and an admin-token caller has none"
 	azureCLISignInUnconfigured  = "This deployment has no console Entra sign-in configured, which the Azure CLI requires"
 	azureCLISignInRequired      = "components[%d]: sign in to Azure for %q first, then start the run."

@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	mp412Stale        = "model providers changed since you loaded them — reload and retry"
+	mp412Stale        = "Model providers changed since you loaded them — reload and retry"
 	mp400StillDefault = "model_providers: %q is the default for %q — choose another default first"
 )
 

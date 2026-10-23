@@ -489,7 +489,7 @@ func TestReconcileRecordRun_StampsEbpfGroundtruthCaveat(t *testing.T) {
 	res := fake.savedResult(t, "build")
 	found := false
 	for _, c := range res.Caveats {
-		if strings.Contains(c, "kernel ground truth") && strings.Contains(c, "partial") {
+		if strings.Contains(c, "Kernel ground truth") && strings.Contains(c, "partial") {
 			found = true
 		}
 	}

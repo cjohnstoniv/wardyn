@@ -267,7 +267,7 @@ const linuxVMOnRemote = "Linux VM sandboxes run only on a registered runner that
 
 // linuxVMAgentStart is the refusal of interactive_start: agent on a Linux VM, whose terminal is a
 // plain shell in this release (no shared session to open in the agent CLI or to take over).
-const linuxVMAgentStart = "a Linux VM sandbox's terminal opens a shell, not the agent CLI, in this release: set interactive_start to shell"
+const linuxVMAgentStart = "A Linux VM sandbox's terminal opens a shell, not the agent CLI, in this release: set interactive_start to shell"
 
 // runnerCaps is the runner's own last caps event, which remote.Substrate keeps.
 type runnerCaps interface {

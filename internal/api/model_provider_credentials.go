@@ -84,12 +84,12 @@ var providerTypedKinds = map[types.ModelProviderKind]bool{
 }
 
 const (
-	mpcNotFound = "no model provider %q is available to you"
+	mpcNotFound = "No model provider %q is available to you"
 	mpcSignIn   = "%q is connected by signing in, not with a key"
-	mpcNoPerson = "the admin token is a shared credential rather than a person, so it cannot hold a model credential of its own — sign in to the console, or use your own wdn_ API token"
-	mpcBody     = `body must be {"value":"<your key or token>"}`
-	mpcTooShort = "your key or token must be at least %d characters"
-	mpcNoStore  = "no secret store configured"
+	mpcNoPerson = "The admin token is a shared credential rather than a person, so it cannot hold a model credential of its own — sign in to the console, or use your own wdn_ API token"
+	mpcBody     = `Body must be {"value":"<your key or token>"}`
+	mpcTooShort = "Your key or token must be at least %d characters"
+	mpcNoStore  = "No secret store configured"
 )
 
 // keyDoorSaveUnavailable (design packet F, canon KEY_DOOR.SAVE_UNAVAILABLE) is
@@ -350,7 +350,7 @@ func (s *Server) purgeProviderCredentials(ctx context.Context, before, after *ty
 // modelProviderPurgeFailedMsg is what the person who changed a provider's address reads when the purge of its
 // credentials fails (#2127). The purge is all or nothing and runs before the save, so nothing was saved and saving
 // the same change again retries the whole purge; the sentence says so rather than leaving a bare "purge failed".
-const modelProviderPurgeFailedMsg = "the credentials stored for the changed model provider could not all be removed, so the change was not saved. " +
+const modelProviderPurgeFailedMsg = "The credentials stored for the changed model provider could not all be removed, so the change was not saved. " +
 	"Save it again to finish removing them"
 
 // deleteCredentialsEverywhere deletes names from every namespace and retires

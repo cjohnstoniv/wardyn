@@ -51,12 +51,12 @@ import (
 const (
 	// uiSessionNoLongerAuthorizedMsg is the 403 body when role/ownership or the
 	// revoke cutoff turns a still-valid cookie down at connect time.
-	uiSessionNoLongerAuthorizedMsg = "this UI session is no longer authorized for this run — open the app again from its run page"
+	uiSessionNoLongerAuthorizedMsg = "This UI session is no longer authorized for this run — open the app again from its run page"
 	// uiSessionUnverifiableMsg is the 503 body when the store cannot answer —
 	// the revocation cutoff, or the run the session is re-checked against. A
 	// retryable condition, said as one: the relay fails CLOSED rather than
 	// serving a credential an admin may have just cancelled.
-	uiSessionUnverifiableMsg = "could not verify this UI session; try again"
+	uiSessionUnverifiableMsg = "Could not verify this UI session; try again"
 )
 
 // The ui.authorize/denied `reason` values a refused re-check writes are

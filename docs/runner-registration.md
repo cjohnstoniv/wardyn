@@ -23,7 +23,7 @@ From 0.9 the control plane places runs on a claimed runner through its owner's u
 | Internal network | `serve` creates the `--internal-network` bridge (default `wardyn-internal`) when it is missing. |
 | Architecture | The runner reports its engine's (`amd64` or `arm64`). Images are multi-arch indexes, or the organisation names an `@arm64` entry in `WARDYN_AGENT_IMAGES` and `WARDYN_PROXY_IMAGE_ARM64`; see [Multi-arch images](adoption/corp-image-authoring.md#multi-arch-images). |
 | Windows | There is no native binary: run the runner inside WSL2 with Docker Desktop's WSL integration. |
-| Permission | `POST /api/v1/me/runners/tokens` needs the [`self_host_runner`](operations/capabilities.md#self_host_runner) permission (`403` `capability_feature`, target `me.runners.tokens`: "hosting your own runner isn't available to you. Ask your admin for the self_host_runner permission."). Admins are never asked. |
+| Permission | `POST /api/v1/me/runners/tokens` needs the [`self_host_runner`](operations/capabilities.md#self_host_runner) permission (`403` `capability_feature`, target `me.runners.tokens`: "Hosting your own runner isn't available to you. Ask your admin for the self_host_runner permission."). Admins are never asked. |
 
 - A Docker engine, or a relay address no proxy can reach, that fails the startup check is an error; systemd `Restart=on-failure` and launchd `KeepAlive` retry it.
 - On macOS verify a download with `shasum -a 256 <file>`; on Linux, `sha256sum <file>`.

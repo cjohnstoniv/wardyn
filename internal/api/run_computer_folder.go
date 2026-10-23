@@ -44,7 +44,7 @@ const (
 )
 
 // computerFolderOffMsg is the "blocked by your org" refusal.
-const computerFolderOffMsg = "your organisation doesn't allow folders from personal computers (WARDYN_COMPUTER_FOLDERS is off)"
+const computerFolderOffMsg = "Your organisation doesn't allow folders from personal computers (WARDYN_COMPUTER_FOLDERS is off)"
 
 // folderRunner is the caller's own claimed runner id that shares folders and is online on this
 // replica, with its endpoint. It writes the refusal and returns false otherwise.

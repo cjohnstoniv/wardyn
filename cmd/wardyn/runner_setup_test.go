@@ -130,7 +130,7 @@ func (r *setupRig) serve(w http.ResponseWriter, req *http.Request) {
 	case req.Method == http.MethodPost && p == me+"/claim":
 		if r.claimStatus != 0 {
 			w.WriteHeader(r.claimStatus)
-			_, _ = w.Write([]byte(`{"error":"this runner has already been claimed"}`))
+			_, _ = w.Write([]byte(`{"error":"This runner has already been claimed"}`))
 			return
 		}
 		r.claimed = true
@@ -428,7 +428,7 @@ func TestRunnerSetupSelfHostRefusalIsTheServersLine(t *testing.T) {
 	r := newSetupRig(t)
 	bin, sum := r.fakeRunnerd(r.binDir, 0)
 	pinnedRunnerdSHA256 = sum
-	const serverLine = "hosting your own runner isn't available to you. Ask your admin for the self_host_runner permission."
+	const serverLine = "Hosting your own runner isn't available to you. Ask your admin for the self_host_runner permission."
 	r.mintStatus, r.mintBody = http.StatusForbidden, `{"error":"`+serverLine+`","reason":"capability_feature"}`
 	_, err := r.run("--token", "wdn_personal", "--runnerd", bin)
 	if err == nil || err.Error() != serverLine+"\n"+copySetupStepUp {
@@ -600,7 +600,7 @@ func TestRunnerSetupRefusedClaimOnARegisteredHostNamesTheStateDir(t *testing.T) 
 	}
 	r.claimStatus = http.StatusForbidden
 	_, err := r.run("--token", "wdn_personal", "--runnerd", bin)
-	want := fmt.Sprintf(errSetupClaimRegistered, r.runnerID, "API error 403: this runner has already been claimed", r.stateDir())
+	want := fmt.Sprintf(errSetupClaimRegistered, r.runnerID, "API error 403: This runner has already been claimed", r.stateDir())
 	if err == nil || err.Error() != want {
 		t.Fatalf("err = %q\nwant  %q", err, want)
 	}

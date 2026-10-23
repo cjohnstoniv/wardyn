@@ -214,7 +214,7 @@ func TestTeamDriveReclaimSkipsIt(t *testing.T) {
 	}
 	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if w.Code != http.StatusUnprocessableEntity || len(rn.calls) != 0 || len(audit.events) != 0 ||
-		body.Error != "this is a team drive: its files belong to its groups and are not reclaimed per person; "+
+		body.Error != "This is a team drive: its files belong to its groups and are not reclaimed per person; "+
 			"remove the folder on the substrate (docs/OPERATIONS.md) once the groups no longer need it" {
 		t.Fatalf("reclaim of a team drive = %d (%s), calls %d, rows %d; want 422 and nothing touched",
 			w.Code, w.Body.String(), len(rn.calls), len(audit.events))
