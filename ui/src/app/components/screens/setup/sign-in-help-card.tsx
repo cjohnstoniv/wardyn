@@ -24,6 +24,7 @@ import { SIGNIN_HELP, SIGNIN_HELP_TEXT_MAX } from "../../../lib/access-posture-c
 import { SIGNIN } from "../../../lib/sign-in-copy";
 import type { SiteConfig } from "../../../lib/types";
 import { Button } from "../../ui/button";
+import { INLINE_ACTIONS } from "../../wardyn/form-actions";
 import { Input } from "../../ui/input";
 import { Textarea } from "../../ui/textarea";
 import { cn } from "../../ui/utils";
@@ -205,8 +206,8 @@ export function SignInHelpCard() {
             </p>
           )}
 
-          <div className="flex justify-end">
-            <Button variant="outline" size="sm" onClick={() => void save()} disabled={saving || !dirty || tooLong || badUrl}>
+          <div className={INLINE_ACTIONS}>
+            <Button onClick={() => void save()} disabled={saving || !dirty || tooLong || badUrl}>
               {saving ? <Loader2 className="size-4 animate-spin" /> : null}
               {SIGNIN_HELP.SAVE}
             </Button>

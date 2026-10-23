@@ -143,10 +143,13 @@ function InstallStep({ facts, level, headingRef, onRetry }: { facts: Facts; leve
 export function AddComputerBlock({
   mdm,
   level = 2,
+  selfHostOff = false,
 }: {
   /** The folded "Managed install (MDM)" content; absent where a person adds only their own computer. */
   mdm?: React.ReactNode;
   level?: 2 | 4;
+  /** The server says this person may not host a runner (may_self_host_runner false): the steps give way to one line. */
+  selfHostOff?: boolean;
 }) {
   const [facts, retry] = useFacts();
   const url = window.location.origin + appURL("");
@@ -170,29 +173,31 @@ export function AddComputerBlock({
         <H level={level} id="add-computer-title" className="text-sm font-semibold text-foreground">
           {ADD_COMPUTER.TITLE}
         </H>
-        <p className={NOTE}>{ADD_COMPUTER.LEAD}</p>
-        {windows && <p className="text-body text-foreground">{ADD_COMPUTER.WSL2_NOTE}</p>}
+        <p className={NOTE}>{selfHostOff ? ADD_COMPUTER.SELF_HOST_OFF : ADD_COMPUTER.LEAD}</p>
+        {windows && !selfHostOff && <p className="text-body text-foreground">{ADD_COMPUTER.WSL2_NOTE}</p>}
       </div>
-      <ol className="space-y-3">
-        <InstallStep
-          facts={facts}
-          level={step}
-          headingRef={installTitle}
-          onRetry={(button) => {
-            retryButton.current = button;
-            retry();
-          }}
-        />
-        <Step n={2} title={ADD_COMPUTER.STEP_SIGN_IN} level={step}>
-          <CmdRow text={ADD_COMPUTER_COMMANDS.login(url)} label={ADD_COMPUTER.COPY_SIGN_IN} />
-          {/* Silent until /healthz answers: nothing is promised about sign-in capability that was not read. */}
-          {facts.answered && <p className={NOTE}>{facts.cliSignIn ? ADD_COMPUTER.SIGN_IN_NOTE : ADD_COMPUTER.NO_CLI_SIGN_IN}</p>}
-        </Step>
-        <Step n={3} title={ADD_COMPUTER.STEP_SETUP} level={step}>
-          <CmdRow text={ADD_COMPUTER_COMMANDS.setup} label={ADD_COMPUTER.COPY_SETUP} />
-          <p className={NOTE}>{ADD_COMPUTER.SETUP_NOTE}</p>
-        </Step>
-      </ol>
+      {!selfHostOff && (
+        <ol className="space-y-3">
+          <InstallStep
+            facts={facts}
+            level={step}
+            headingRef={installTitle}
+            onRetry={(button) => {
+              retryButton.current = button;
+              retry();
+            }}
+          />
+          <Step n={2} title={ADD_COMPUTER.STEP_SIGN_IN} level={step}>
+            <CmdRow text={ADD_COMPUTER_COMMANDS.login(url)} label={ADD_COMPUTER.COPY_SIGN_IN} />
+            {/* Silent until /healthz answers: nothing is promised about sign-in capability that was not read. */}
+            {facts.answered && <p className={NOTE}>{facts.cliSignIn ? ADD_COMPUTER.SIGN_IN_NOTE : ADD_COMPUTER.NO_CLI_SIGN_IN}</p>}
+          </Step>
+          <Step n={3} title={ADD_COMPUTER.STEP_SETUP} level={step}>
+            <CmdRow text={ADD_COMPUTER_COMMANDS.setup} label={ADD_COMPUTER.COPY_SETUP} />
+            <p className={NOTE}>{ADD_COMPUTER.SETUP_NOTE}</p>
+          </Step>
+        </ol>
+      )}
       {mdm && (
         <Disclosure className="border-t border-border pt-3" summary={<span className="text-[13px] font-semibold text-foreground">{ADD_COMPUTER.MDM_TITLE}</span>}>
           <div data-mdm className="space-y-3 pt-2">

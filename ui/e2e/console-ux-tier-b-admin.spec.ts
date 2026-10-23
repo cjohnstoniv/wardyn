@@ -308,6 +308,57 @@ test.describe("Tier B computed styles", () => {
     expect(faces.value.toLowerCase()).toContain("mono");
     expect(faces.placeholder.toLowerCase()).not.toContain("mono");
   });
+
+  // #3051: the dialog's title stays on screen with the pinned footer while the body scrolls, without moving at rest,
+  // and the pinned header never covers the Close X.
+  async function openNewPolicy(page: Page) {
+    await page.setViewportSize({ width: 1280, height: 480 });
+    await gotoConsole(page, "admin");
+    await navTo(page, "Policies");
+    await page.getByRole("button", { name: "New policy" }).first().click();
+    const dialog = page.getByRole("dialog").filter({ hasText: "New policy" });
+    const title = dialog.getByRole("heading", { name: "New policy" });
+    await expect(title).toBeVisible();
+    return { dialog, title };
+  }
+
+  test("Policies: a scrolled New policy dialog keeps its title in view, with no strip above it", async ({ page }) => {
+    const { dialog, title } = await openNewPolicy(page);
+    // At rest the title sits where the dialog's own border and padding put it: the sticky header moves nothing.
+    const rest = await dialog.evaluate((el, t) => {
+      const cs = getComputedStyle(el);
+      const top = el.getBoundingClientRect().top + parseFloat(cs.borderTopWidth) + parseFloat(cs.paddingTop);
+      return t.getBoundingClientRect().top - top;
+    }, await title.elementHandle());
+    expect(Math.abs(rest)).toBeLessThanOrEqual(1);
+
+    const scrolls = await dialog.evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+      return el.scrollTop > 0;
+    });
+    expect(scrolls, "the dialog must be taller than a 480px window for this check to mean anything").toBe(true);
+    const [t, d] = [await title.boundingBox(), await dialog.boundingBox()];
+    // Pinned header: the title stays at the dialog's top edge plus its padding, so no body shows above it.
+    expect(t!.y).toBeGreaterThanOrEqual(d!.y - 1);
+    expect(t!.y).toBeLessThanOrEqual(d!.y + 1 + 24 + 1);
+    expect(t!.y + t!.height).toBeLessThanOrEqual(d!.y + d!.height);
+  });
+
+  test("Policies: the Close X of a New policy dialog is clickable, at rest and after scrolling", async ({ page }) => {
+    const { dialog } = await openNewPolicy(page);
+    await dialog.getByRole("button", { name: "Close" }).click();
+    await expect(page.getByRole("dialog").filter({ hasText: "New policy" })).toHaveCount(0);
+
+    await page.getByRole("button", { name: "New policy" }).first().click();
+    const again = page.getByRole("dialog").filter({ hasText: "New policy" });
+    await expect(again).toBeVisible();
+    await again.evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+    });
+    // Playwright scrolls the X into view and checks the point it clicks is the X, not the header over it.
+    await again.getByRole("button", { name: "Close" }).click();
+    await expect(page.getByRole("dialog").filter({ hasText: "New policy" })).toHaveCount(0);
+  });
 });
 
 test.describe("New policy template menu (#2836)", () => {

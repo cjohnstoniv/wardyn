@@ -208,7 +208,7 @@ copy is permanent.
 - **An interactive run with no snapshot.**
   - It answers `409 run_output_interactive`, and the sentence says what this run kept.
   - With recording on, it points at the run's recording.
-  - With recording off (`components.recording` reads `none` on `/healthz`), it says nothing was kept from this
+  - With recording off (`components.recording` reads `none` on a signed-in `/healthz`), it says nothing was kept from this
     session, and for a kill, a failure or a reconcile, that the session did not end through a Wardyn stop.
   - A security admin always gets the recording-on sentence, so it never tells them whether a snapshot exists.
 - **From the CLI.**
@@ -2890,7 +2890,7 @@ Consequences worth knowing:
   - A capture takes the same per-person lock as a launch and re-reads the run's state before it stores.
   - So a capture from a sandbox the person's next sign-in replaced is refused (`harness.credential.refuse` / `reason = run_killed`) instead of overwriting the newer session.
   - A capture that cannot get the lock within about 5 seconds is refused with `reason = signin_busy` and stores nothing.
-  - Whoever is watching the old sandbox sees "this sign-in sandbox was closed — a newer sign-in for you replaced it…" and finishes in the new one.
+  - Whoever is watching the old sandbox sees "This sign-in sandbox was closed — a newer sign-in for you replaced it…" and finishes in the new one.
   - At an unserialized pass (every call at `pool_max_conns=1`) there is no lock, so a supersede landing between the re-read and the write can still lose to the old capture; the next sign-in replaces it.
 
 ### What the sign-in pane's waiting messages mean

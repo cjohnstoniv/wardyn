@@ -482,6 +482,9 @@ func TestModelProviderWritesPurgeCredentials(t *testing.T) {
 			raw, _ := json.Marshal(body)
 			if w := do(t, srv, http.MethodPut, d.path, adminToken, d.wrap(string(raw))); w.Code != http.StatusInternalServerError {
 				t.Errorf("%s: PUT = %d, want 500", d.path, w.Code)
+			} else if !strings.Contains(w.Body.String(), "Save it again to finish removing them") || !strings.Contains(w.Body.String(), "the change was not saved") {
+				// #2127: the failure says nothing was saved and that saving again finishes the purge.
+				t.Errorf("%s: body %s does not tell the person to save again", d.path, w.Body.String())
 			}
 			if fake.putSeen != nil {
 				t.Errorf("%s: the block was saved although its credentials were not purged", d.path)

@@ -471,7 +471,7 @@ test("V00 act 1 — a workspace", async () => {
   ).toBeVisible({ timeout: 30_000 });
   await centerInFrame(allowedHeading);
   await spotlight(page, allowedHeading);
-  await expect(page.getByText("Nothing approved yet.")).toBeVisible();
+  await expect(page.getByText("No approved hosts")).toBeVisible();
   await caption(page, "The workspace keeps its own list of hosts a run may reach."); // C16
   await beat(page, PACE.read);
   await caption(page, "Right now: nothing. Nothing has been earned yet."); // C17

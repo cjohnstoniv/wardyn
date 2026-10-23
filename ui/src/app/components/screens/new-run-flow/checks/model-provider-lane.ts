@@ -27,6 +27,7 @@
 // a disabled default is never silently replaced by whichever OTHER candidate
 // happened to survive) and the rail's own ModelProviderSection (so it can
 // name the same fact instead of falling through to R9's generic shape).
+import { isTokenKind } from "../../../../lib/model-access";
 import type { SetupModelProvider, SetupProviderAccess } from "../../../../lib/types";
 import { RAIL_PROVIDER } from "../../../wardyn/copy/new-run-rail";
 
@@ -58,7 +59,7 @@ function isSignInKind(kind: string): boolean {
 export function providerWhatWord(kind: string): string {
   if (kind === "bedrock_sso") return "AWS sign-in";
   if (kind === "anthropic_subscription") return "sign-in";
-  if (kind === "custom_endpoint") return "token";
+  if (isTokenKind(kind)) return "token";
   return "key";
 }
 

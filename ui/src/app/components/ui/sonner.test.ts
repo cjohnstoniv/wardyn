@@ -44,4 +44,18 @@ describe("Toaster — closeButton + a longer default duration", () => {
     expect(closeButtonIdx).toBeLessThan(propsSpreadIdx);
     expect(toastOptionsIdx).toBeLessThan(propsSpreadIdx);
   });
+
+  // #3385 — a toast at the bottom right covered Save providers for 8 s. Top centre, offset below the top bar
+  // (top-bar.tsx is h-14 = 56px), so it covers page-title text and never a control.
+  it("opens at the top centre, offset below the 56px top bar, on desktop and phone alike", () => {
+    expect(src).toMatch(/position="top-center"/);
+    const off = /\boffset=\{\{\s*top:\s*(\d+)/.exec(src);
+    const mob = /mobileOffset=\{\{\s*top:\s*(\d+)/.exec(src);
+    expect(off, "offset.top not found").not.toBeNull();
+    expect(mob, "mobileOffset.top not found").not.toBeNull();
+    expect(Number(off![1])).toBeGreaterThanOrEqual(56);
+    expect(Number(mob![1])).toBeGreaterThanOrEqual(56);
+    // Placed before the {...props} spread, so a caller can still override.
+    expect(src.indexOf('position="top-center"')).toBeLessThan(src.lastIndexOf("{...props}"));
+  });
 });

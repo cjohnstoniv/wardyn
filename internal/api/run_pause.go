@@ -391,7 +391,7 @@ func (s *Server) noteAgentActive(ctx context.Context, runID uuid.UUID) {
 // runPausedReadMsg is the run page widgets' answer for a paused run. They poll,
 // and a poll is not a person, so reading never thaws a run (an open tab would
 // otherwise keep it awake); the daemon would refuse the exec anyway.
-const runPausedReadMsg = "run is paused; resume it to read its sandbox"
+const runPausedReadMsg = "Run is paused; resume it to read its sandbox"
 
 // presenceReader calls mark before handing on bytes a person sent, so a paused
 // run is thawed before they reach it.

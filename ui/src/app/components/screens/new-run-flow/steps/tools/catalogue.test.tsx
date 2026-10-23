@@ -15,6 +15,7 @@ import type { AccessFacts, AccessRow } from "../../../../../lib/types/new-run-ac
 import { ADD_ACCESS, CUSTOM_COMPONENT as CC, MY_COMPONENTS as MY_COMPONENTS_COPY } from "../../../../wardyn/copy/components";
 import { ModelAccessProvider } from "../../../../wardyn/model-access-context";
 import type { SetupStatus } from "../../../../../lib/types/setup";
+import { isStepSectionHeading } from "../../../../../lib/test-dom";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import type { RunIntent } from "../../draft/run-intent";
 import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft } from "../../new-run-route";
@@ -87,6 +88,13 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
 describe("catalogue", () => {
+  it("#3044: is drawn as the guided steps' StepSection, with Custom component as its one action", async () => {
+    await show();
+    const heading = screen.getByRole("heading", { name: NR_TOOLS.ADD_TITLE });
+    expect(isStepSectionHeading(heading)).toBe(true);
+    expect(within(heading.closest("section") as HTMLElement).getByRole("button", { name: NR_TOOLS.CUSTOM_COMPONENT })).toBeTruthy();
+  });
+
   it("lists the built CLI cards with their states, and only the org rows the person is granted", async () => {
     await show();
     expect(await screen.findByRole("heading", { name: "AWS ReadOnly-Dev" })).toBeTruthy();

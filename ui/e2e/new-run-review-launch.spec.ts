@@ -102,10 +102,12 @@ async function openNameDialog(page: Page) {
 
 /** The Review header chip. Each blamed group also renders the same words in an sr-only span, so a page-wide text match is ambiguous. */
 function setupChip(page: Page, text: string) {
+  // The marker is a StepSection status mark (#3044), in the section titled Run setup.
   return page
-    .locator("header")
+    .locator("section")
     .filter({ has: page.getByRole("heading", { name: NR_REVIEW.SETUP_TITLE }) })
-    .getByText(text, { exact: true });
+    .getByTestId("review-status-mark")
+    .filter({ hasText: new RegExp(`^${text}$`) });
 }
 
 test.describe("New Run, Review: blockers and Check again", () => {

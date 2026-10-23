@@ -19,6 +19,7 @@ import { includedMark } from "./catalogue-pending";
 import { IconTile } from "./icon-tile";
 import { reasonText } from "./tool-facts";
 import { credentialLabel, deliveryLabel } from "./totals";
+import { StepSection } from "../../../../wardyn/step-section";
 
 const FROM: Record<string, string> = {
   harness: NR_TOOLS.FROM_HARNESS,
@@ -109,16 +110,12 @@ export function AlreadyIncluded({ access, answered, intent, names, providers }: 
   const headingId = React.useId();
   const rows = access?.rows.filter((r) => r.from in FROM) ?? [];
   return (
-    <section aria-labelledby={headingId} className="flex flex-col gap-3.5 rounded-xl border border-border bg-card p-[18px]">
-      <div>
-        <h2 id={headingId} className="font-semibold">{NR_TOOLS.INCLUDED_TITLE}</h2>
-        <p className="text-sm text-muted-foreground">{NR_TOOLS.INCLUDED_BODY}</p>
-      </div>
+    <StepSection titleId={headingId} title={NR_TOOLS.INCLUDED_TITLE} description={NR_TOOLS.INCLUDED_BODY}>
       {access && rows.length > 0 && (
         <ul className="flex flex-col gap-2">
           {rows.map((row) => <IncludedRow key={row.id} row={row} access={access} answered={answered} intent={intent} names={names} providers={providers} />)}
         </ul>
       )}
-    </section>
+    </StepSection>
   );
 }

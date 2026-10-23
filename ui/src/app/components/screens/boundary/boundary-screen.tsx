@@ -16,7 +16,8 @@ import { AlertTriangle, Loader2 } from "lucide-react";
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import { boundary as boundaryApi, type BoundaryChange, type BoundaryMode, type BoundaryReport, type BoundaryReportAssign, type BoundarySnapshot, type BoundaryWrite } from "../../../lib/api/boundary";
 import type { ConfinementClass } from "../../../lib/types/runs";
-import { BOUNDARY, BOUNDARY_DRY_RUN } from "../../../lib/boundary-copy";
+import type { DesktopControls } from "../../../lib/types/policy";
+import { BOUNDARY, BOUNDARY_DESKTOP, BOUNDARY_DRY_RUN } from "../../../lib/boundary-copy";
 import { BASELINE, CHANGES, DELIVERY } from "../../../lib/governance-copy";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
 import { getErrorMessage } from "../../../lib/format";
@@ -31,6 +32,7 @@ import { SECURITY_ONLY_REASON } from "../../wardyn/copy";
 import { EmptyState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../../wardyn/states";
 import { Note } from "../governance/display";
 import { SubmittedNote } from "../governance/submitted-note";
+import { DesktopGroupCard, desktopNow } from "./desktop-group-card";
 
 const CLASSES: ConfinementClass[] = ["CC1", "CC2", "CC3"];
 
@@ -38,6 +40,8 @@ interface Draft {
   mode: BoundaryMode;
   blocked: string;
   floor: ConfinementClass | "";
+  // Absent: the boundary names no desktop, so it bounds none of its directions.
+  desktop?: DesktopControls;
 }
 
 const lines = (text: string) =>
@@ -50,6 +54,7 @@ const draftFrom = (b: BoundaryWrite): Draft => ({
   mode: b.mode,
   blocked: (b.spec.denied_domains ?? []).join("\n"),
   floor: b.spec.min_confinement_class ?? "",
+  desktop: b.spec.desktop,
 });
 
 // The PUT body: the draft's knobs over the stored document, so knobs this page doesn't edit are kept.
@@ -57,7 +62,12 @@ const bodyFrom = (d: Draft, stored: BoundaryWrite): BoundaryWrite => {
   const blocked = lines(d.blocked);
   return {
     mode: d.mode,
-    spec: { ...stored.spec, denied_domains: blocked.length > 0 ? blocked : undefined, min_confinement_class: d.floor || undefined },
+    spec: {
+      ...stored.spec,
+      denied_domains: blocked.length > 0 ? blocked : undefined,
+      min_confinement_class: d.floor || undefined,
+      desktop: d.desktop,
+    },
     limits: stored.limits,
     ...(stored.contact ? { contact: stored.contact } : {}),
   };
@@ -278,6 +288,7 @@ export function BoundaryScreen() {
                   <span className="text-muted-foreground">{BOUNDARY.FLOOR_TAIL(floorLabel(draft.floor || undefined))}</span>
                 </div>
               </div>
+              <DesktopGroupCard value={draft.desktop} disabled={disabled} onChange={(desktop) => edit({ desktop })} />
               <p className="text-xs text-muted-foreground">
                 {BOUNDARY.HARD_FOOT}
                 <br />
@@ -442,6 +453,7 @@ function DryRunReport({
     [BOUNDARY_DRY_RUN.MODE, modeLabel(stored.mode), modeLabel(body.mode)],
     [BOUNDARY.BLOCKED_LABEL, showValue("denied_domains", stored.spec.denied_domains), showValue("denied_domains", body.spec.denied_domains)],
     [BOUNDARY.FLOOR_LABEL, floorLabel(stored.spec.min_confinement_class), floorLabel(body.spec.min_confinement_class)],
+    [BOUNDARY_DESKTOP.TITLE, desktopNow(stored.spec.desktop), desktopNow(body.spec.desktop)],
   ];
 
   return (
@@ -519,7 +531,7 @@ function ReportBody({ report }: { report: BoundaryReport }) {
     ...report.units.map((p) => ({ key: p.id, name: p.name, changes: p.changes })),
   ];
   const policies = report.stored_policies.map((p) => ({ key: p.id, name: p.name, changes: p.changes }));
-  const row = (a: BoundaryReportAssign) => ({ key: a.id, name: `${a.subject} · ${a.unit_name}`, changes: a.changes });
+  const row = (a: BoundaryReportAssign) => ({ key: a.id, name: BOUNDARY_DRY_RUN.ASSIGNMENT_ROW(a.subject_type, a.subject, a.unit_name), changes: a.changes });
   const people = report.memberships.filter((a) => a.subject_type === "user").map(row);
   const others = report.memberships.filter((a) => a.subject_type !== "user").map(row);
   const none = teams.length + policies.length + people.length + others.length === 0;

@@ -43,6 +43,19 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("Add this computer: personal runners off for the person", () => {
+  it("shows the one refusal line in place of the lead and the steps", () => {
+    healthz({ version: "0.10.0", cli_sign_in: true });
+    const { container } = render(<AddComputerBlock selfHostOff />);
+    expect(screen.getByRole("heading", { name: "Add this computer" })).toBeInTheDocument();
+    expect(screen.getByText("Personal runners aren't turned on for you. Ask your admin.")).toBeInTheDocument();
+    expect(screen.queryByText(/Run these three commands/)).not.toBeInTheDocument();
+    expect(screen.queryByText("wardyn runner setup")).not.toBeInTheDocument();
+    expect(screen.queryAllByRole("heading", { level: 3 })).toHaveLength(0);
+    expectNoForbidden(container);
+  });
+});
+
 describe("Add this computer: the three steps", () => {
   it("with CLI sign-in on: title, lead, the three steps with their commands and notes, and nothing forbidden", async () => {
     healthz({ version: "0.10.0", cli_sign_in: true });

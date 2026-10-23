@@ -263,7 +263,7 @@ https://<your-wardyn-address>/api/v1/scm/azure-devops/callback
 - A run that names an Azure DevOps repository but does not get the credential starts without it and says why, in its Credentials panel, `wardyn run get` and its clone failure line.
 - A run with no person behind it (an operator token, local mode or a service identity) starts without the credential; a device is still refused.
 - A person who has not connected cannot launch against the row:
-  - the launch is refused ("you are not connected to Azure DevOps — connect and start the run again"),
+  - the launch is refused ("You are not connected to Azure DevOps — connect and start the run again"),
   - and a run that reaches dispatch without a stored connection fails with "Connect Azure DevOps once before launching; Wardyn creates the run's token from that connection."
 - Their state shows in Settings and in `/me/scm-access`, and a launch is refused with the sentence for the state they are in.
 - Every sign-in that captures a connection on a `minted_pat` row is audited as `ado_pat.connect`.
@@ -460,7 +460,7 @@ That has two consequences:
   - Runs already using it keep it for up to 10 minutes; revoke it in Azure DevOps to stop them now.
   - The bound is the stored-key lease (`storedKeyTTL`, 10 minutes), or the date you entered when that is sooner.
   - A run on a grant that waits for approval does not refresh its lease, so it keeps the token until that date.
-- **A launch with no token is refused** ("you are not connected to Azure DevOps — connect and start the run again"),
+- **A launch with no token is refused** ("You are not connected to Azure DevOps — connect and start the run again"),
   - **and so is one with an expired token:**
     - "Your runs can't reach Azure DevOps until you add a new token."
 - **A token that expires mid-run** holds the run's next Azure DevOps request on the Azure DevOps sign-in request until the person adds a new token, which answers it.

@@ -182,7 +182,7 @@ type WriteErrorKind =
 // than what the server actually says.
 const LOCKOUT_MESSAGE = "this change would remove your own admin access (checked against your last sign-in)";
 const STALE_SNAPSHOT_MESSAGE =
-  "your sign-in is too old to verify this change — sign in again before changing role mappings";
+  "Your sign-in is too old to verify this change — sign in again before changing role mappings";
 
 function classifyWriteError(e: unknown): WriteErrorKind {
   if (e instanceof AccessPostureFlipRequiredError) {

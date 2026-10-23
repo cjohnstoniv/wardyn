@@ -8,7 +8,7 @@
 // is never a second place to work. Decline answers it here.
 import type { ApprovalRequest } from "../../lib/types";
 import { Button } from "../ui/button";
-import { ApprovalKindChip, ApprovalStateBadge } from "./primitives";
+import { ApprovalKindChip } from "./primitives";
 import { NEEDS_YOU } from "./copy/needs-you";
 
 /** "2m ago" — the card's own short form (M8-Banner-A "requested 2m ago"). */
@@ -38,9 +38,6 @@ export function TakeoverCard({
       <div className="flex flex-wrap items-center gap-2">
         <ApprovalKindChip kind="human_takeover" />
         <span className="text-sm font-semibold text-foreground">{NEEDS_YOU.card.title}</span>
-        <span className="ml-auto">
-          <ApprovalStateBadge state={item.state} />
-        </span>
       </div>
       <p className="mt-3 text-sm text-muted-foreground">{NEEDS_YOU.card.asked}</p>
       <blockquote className="text-sm text-foreground">{reason}</blockquote>

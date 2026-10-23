@@ -211,7 +211,7 @@ func (s *Server) handleDenyApproval(w http.ResponseWriter, r *http.Request) {
 // surfaces say the same thing. It is a 409, not a 404: the approval exists and
 // the caller is allowed to see it; what changed is that the question expired
 // with its run.
-const approvalRunEndedBody = "the run ended before anyone decided this; the approval has been cancelled and nothing was approved or denied"
+const approvalRunEndedBody = "The run ended before anyone decided this; the approval has been cancelled and nothing was approved or denied"
 
 // refuseIfRunEnded is decide()'s last pre-Decide() rule. The terminal cascade
 // (cancelRunApprovals) is supposed to have moved a dead run's rows to

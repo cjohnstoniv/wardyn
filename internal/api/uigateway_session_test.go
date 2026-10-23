@@ -710,7 +710,7 @@ func TestUIGateway_TicketMintedBeforeCutoffIsRefused(t *testing.T) {
 	h.clock.advance(3 * time.Second)
 
 	rec := h.enter(url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {ticket}})
-	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "invalid, expired, or already-used attach ticket") {
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "Invalid, expired, or already-used attach ticket") {
 		t.Fatalf("a ticket minted before the cutoff: %d %s, want the 403 bad-ticket body", rec.Code, rec.Body.String())
 	}
 	if cs := setUICookies(rec); len(cs) != 0 {
@@ -863,7 +863,7 @@ func TestUIGateway_TicketWithoutAuthorityIsRefused(t *testing.T) {
 	h.store.tickets["legacy"] = store.AttachTicket{RunID: h.run.ID, ActorType: types.ActorHuman, Principal: h.owner, Role: oidc.RoleUser}
 	h.store.mu.Unlock()
 	rec := h.enterWith("legacy")
-	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "invalid, expired, or already-used attach ticket") ||
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "Invalid, expired, or already-used attach ticket") ||
 		len(setUICookies(rec)) != 0 {
 		t.Fatalf("a ticket with no authority time: %d %s, want the 403 bad-ticket body and no cookie", rec.Code, rec.Body.String())
 	}
@@ -927,7 +927,7 @@ func (h *uiHarness) portalTicket(via types.DelegationVia) string {
 }
 
 func TestUIGateway_PortalGrant(t *testing.T) {
-	const body = "invalid, expired, or already-used attach ticket"
+	const body = "Invalid, expired, or already-used attach ticket"
 
 	t.Run("redemption after a portal revoke is refused, naming the portal", func(t *testing.T) {
 		h, ds, _, via := portalHarness(t)

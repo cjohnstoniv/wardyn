@@ -201,6 +201,39 @@ func (s *Server) ServeSSHGateway(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("ssh gateway: listen %s: %w", s.cfg.SSHListenAddr, err)
 	}
+	return s.serveSSH(ctx, ln, signer, cfg)
+}
+
+// ListenSSHGateway binds the gateway's address ahead of ServeSSHGatewayOn, so boot can learn a port is taken before
+// its workers start (WARDYN_SSH_BIND_EARLY). nil, nil when the gateway is off, as ServeSSHGateway is a no-op.
+func (s *Server) ListenSSHGateway() (net.Listener, error) {
+	if s.cfg.SSHListenAddr == "" || len(s.cfg.SSHHostKey) == 0 {
+		return nil, nil
+	}
+	ln, err := net.Listen("tcp", s.cfg.SSHListenAddr)
+	if err != nil {
+		return nil, fmt.Errorf("ssh gateway: listen %s: %w", s.cfg.SSHListenAddr, err)
+	}
+	return ln, nil
+}
+
+// MarkSSHGatewayUnbound records that the gateway's bind failed at boot, so /healthz stops advertising SSH
+// (sshGatewayHealthz) instead of pointing people at a port nothing serves.
+func (s *Server) MarkSSHGatewayUnbound() { s.sshUnbound.Store(true) }
+
+// ServeSSHGatewayOn is ServeSSHGateway over a listener ListenSSHGateway bound: it blocks until ctx is cancelled and
+// closes ln on return.
+func (s *Server) ServeSSHGatewayOn(ctx context.Context, ln net.Listener) error {
+	signer, err := ssh.NewSignerFromKey(s.cfg.SSHHostKey)
+	if err != nil {
+		_ = ln.Close()
+		return fmt.Errorf("ssh gateway: host signer: %w", err)
+	}
+	return s.serveSSH(ctx, ln, signer, s.sshServerConfig(signer))
+}
+
+// serveSSH is the accept loop both entry points share.
+func (s *Server) serveSSH(ctx context.Context, ln net.Listener, signer ssh.Signer, cfg *ssh.ServerConfig) error {
 	defer ln.Close()
 	slog.Info("wardynd: ssh gateway listening",
 		slog.String("listen", s.cfg.SSHListenAddr),
@@ -325,7 +358,7 @@ func (s *Server) sshServerConfig(signer ssh.Signer) *ssh.ServerConfig {
 // proxy_command only when WARDYN_SSH_PROXY_COMMAND is set — see healthz.go's
 // handleHealthz.
 func (s *Server) sshGatewayHealthz() map[string]any {
-	if s.cfg.SSHListenAddr == "" || len(s.cfg.SSHHostKey) == 0 {
+	if s.cfg.SSHListenAddr == "" || len(s.cfg.SSHHostKey) == 0 || s.sshUnbound.Load() {
 		return nil
 	}
 	signer, err := ssh.NewSignerFromKey(s.cfg.SSHHostKey)

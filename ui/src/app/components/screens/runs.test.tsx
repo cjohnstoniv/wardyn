@@ -105,6 +105,13 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
     expect(screen.getByText("Your runs · 1+")).toBeInTheDocument();
   });
 
+  it("sits in the shared list column (#3058), not a page of its own width", async () => {
+    listRunsFilteredMock.mockResolvedValue({ runs: [run()], truncated: false, hiddenOlder: 0, hiddenKilled: 0 });
+    renderScreen("user");
+    const title = await screen.findByRole("heading", { level: 1, name: "Runs" });
+    expect(title.closest("[data-page-width]")).toHaveAttribute("data-page-width", "list");
+  });
+
   it("a page that is not truncated carries no such note", async () => {
     listRunsFilteredMock.mockResolvedValue({ runs: [run()], truncated: false, hiddenOlder: 0, hiddenKilled: 0 });
     renderScreen("user");

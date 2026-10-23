@@ -4,6 +4,7 @@
  */
 
 import { test, expect, expandCard, gotoConsole, navToRoute } from "./fixtures";
+import { PROVIDER_EDITOR } from "../src/app/lib/model-providers-copy";
 
 // The provider editor (#537, model-provider-editor.tsx), opened from
 // Settings → Model providers (#536). Two things only an e2e
@@ -25,7 +26,7 @@ async function addEndpoint(page: import("@playwright/test").Page, baseURL: strin
   const paths = dialog.getByLabel("Path");
   await paths.nth(0).fill("/anthropic");
   await paths.nth(1).fill("/v1");
-  await dialog.getByRole("button", { name: "Save", exact: true }).click();
+  await dialog.getByRole("button", { name: PROVIDER_EDITOR.SAVE, exact: true }).click();
   return dialog;
 }
 
@@ -130,7 +131,7 @@ test.describe("Settings — the provider editor: Bedrock and Claude subscription
     await dialog.getByLabel("Pinned AWS account id").fill("111122223333");
     await dialog.getByLabel("Pinned IAM role name").fill("WardynBedrockUser");
     await dialog.getByLabel("Model").fill("acme.claude-sonnet");
-    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    await dialog.getByRole("button", { name: PROVIDER_EDITOR.SAVE, exact: true }).click();
 
     await expect(page.getByText("Provider saved.")).toBeVisible();
     expect(puts).toHaveLength(1);
@@ -156,7 +157,7 @@ test.describe("Settings — the provider editor: Bedrock and Claude subscription
     await expect(dialog.getByLabel("Region")).toHaveValue("us-east-1");
     await expect(dialog.getByLabel("AWS access portal start URL")).toHaveValue("https://acme.awsapps.com/start");
     await dialog.getByLabel("Region").fill("eu-west-1");
-    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    await dialog.getByRole("button", { name: PROVIDER_EDITOR.SAVE, exact: true }).click();
 
     // The first save's sonner toast (8s default duration, sonner.tsx) is
     // still on screen, so a plain getByText("Provider saved.") strict-mode
@@ -214,7 +215,7 @@ test.describe("Settings — the provider editor: Bedrock and Claude subscription
     await page.getByRole("button", { name: "Add model provider" }).click();
     let dialog = page.getByRole("dialog");
     await dialog.getByRole("button", { name: "Claude subscription" }).click();
-    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    await dialog.getByRole("button", { name: PROVIDER_EDITOR.SAVE, exact: true }).click();
 
     await expect(page.getByText("Provider saved.")).toBeVisible();
     expect(puts).toHaveLength(1);

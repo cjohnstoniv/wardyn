@@ -68,7 +68,7 @@ var delegationAllowed = map[string]bool{
 }
 
 // delegationRefusal is the 403 body a delegated token gets on any other route.
-const delegationRefusal = "a delegated token cannot reach this action — the person must do it themselves"
+const delegationRefusal = "A delegated token cannot reach this action — the person must do it themselves"
 
 // delegatedTokenAuth is the delegated lane, mounted by humanOrAdminAuth in
 // front of apiTokenAuth. A bearer without delegatedTokenPrefix goes straight

@@ -11,6 +11,9 @@
 export const EGRESS = {
   // The Allowed hosts card's subtitle. Rows come from approvals, recordings,
   // scans and composed sources, so it claims none of those as the only origin.
+  // #3047: the card's empty state, a noun phrase with no period and one sentence under it.
+  ALLOWED_EMPTY_TITLE: "No approved hosts",
+  ALLOWED_EMPTY_BODY: "Hosts you approve for this workspace appear here.",
   ALLOWED_HOSTS_SUBTITLE: "Every run against this workspace may reach these. Each row says where it came from.",
   SCAN_SEEDED_REASON: "Detected by this workspace's scan, not approved here — the next scan puts it back.",
   // The other half of the same mismatch: an operator-authored requirement that

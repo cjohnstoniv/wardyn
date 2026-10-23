@@ -48,7 +48,7 @@ func TestSynthesizeProfile_StampsEbpfGroundtruthCaveat(t *testing.T) {
 	}
 	found := false
 	for _, warn := range resp.Warnings {
-		if strings.Contains(warn, "kernel ground truth") && strings.Contains(warn, "partial") {
+		if strings.Contains(warn, "Kernel ground truth") && strings.Contains(warn, "partial") {
 			found = true
 		}
 	}

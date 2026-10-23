@@ -121,9 +121,15 @@ func (s *Server) recordCreateFolds(ctx context.Context, runID uuid.UUID, reqEven
 // already gone — its cancelled context cannot write the FAILED state the
 // compensator exists to write, so the run would strand PENDING with un-revoked
 // credentials on exactly the path this exists for.
-func (s *Server) abortHalfBuiltRun(ctx context.Context, runID uuid.UUID) func(hint string) {
+//
+// keptDrive is a keep_work_folder run: it never started, so the drive made for it is dropped
+// with it (dropUnstartedKeptDrive), as it would only count against the person.
+func (s *Server) abortHalfBuiltRun(ctx context.Context, runID uuid.UUID, keptDrive bool) func(hint string) {
 	return func(hint string) {
 		s.failAndRevoke(context.WithoutCancel(ctx), runID, types.RunPending, hint)
+		if keptDrive {
+			s.dropUnstartedKeptDrive(ctx, runID)
+		}
 	}
 }
 

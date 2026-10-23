@@ -201,7 +201,7 @@ type runResourcesResponse struct {
 // tier limit — ErrExecStreamUnsupported is a property of the RUNNER, and
 // blaming the barrier would send an operator to change a security setting that
 // has nothing to do with it.
-const runResourcesUnsupportedMsg = "sandbox resource usage needs sandbox exec, which this runner does not support"
+const runResourcesUnsupportedMsg = "Sandbox resource usage needs sandbox exec, which this runner does not support"
 
 // handleRunResources serves GET /api/v1/runs/{id}/resources.
 func (s *Server) handleRunResources(w http.ResponseWriter, r *http.Request) {

@@ -721,6 +721,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// Integrations forward from its own read, below) against the three
 	// integration-write handlers' own RMWs on the same document
 	// (setup_integrations.go) — see handlePutIntegration's SEAM-1 comment.
+	defer s.revokeWithdrawnLocalPATs(r.Context()) // before the unlock below, so it runs after it
 	r, unlock, ok := s.lockDoor(w, r, db.SiteConfigLockClass)
 	if !ok {
 		return
@@ -814,7 +815,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// same as PUT /model-providers, so it purges the same way, before the save.
 	invalidated, err := s.purgeProviderCredentials(r.Context(), existing.ModelProviders, cfg.ModelProviders)
 	if err != nil {
-		writeServerError(w, r, "purge model provider credentials", err)
+		writeServerError(w, r, modelProviderPurgeFailedMsg, err)
 		return
 	}
 	saved, err := s.cfg.Store.PutSiteConfig(r.Context(), cfg)

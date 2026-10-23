@@ -62,28 +62,28 @@ const (
 	// sites. It is deliberately identical everywhere: which door refused is not
 	// a fact a member can act on, and varying the sentence per site would leak
 	// the shape of the policy one refusal at a time.
-	admitMember = "this repository's host is not an enabled git provider — ask an admin"
+	admitMember = "This repository's host is not an enabled git provider — ask an admin"
 	// admitOperator is the ordinary operator refusal: nothing claims this host.
-	admitOperator = "repository %s is outside every enabled provider's allowed addresses (%s)"
+	admitOperator = "Repository %s is outside every enabled provider's allowed addresses (%s)"
 	// admitOperatorClaimed is the refusal for a repo on a host the legacy
 	// scm_hosts list still names, which a provider row has since CLAIMED — so
 	// the addresses to compare against are that row's, not the union.
-	admitOperatorClaimed = "repository %s is on a host claimed by the %s provider %q " +
+	admitOperatorClaimed = "Repository %s is on a host claimed by the %s provider %q " +
 		"and is outside its allowed addresses (%s)"
 	// admitDisabledRow is the refusal from a present-but-disabled row: the admin
 	// said "off", and saying "outside the allowed addresses" would send them
 	// looking for a base URL to widen instead of a switch to flip.
-	admitDisabledRow = "repository %s is on the %s provider %q, which is turned off for this deployment"
+	admitDisabledRow = "Repository %s is on the %s provider %q, which is turned off for this deployment"
 	// admitLaneDropped is a 201 WARNING, never a refusal: a lane the row does
 	// not permit drops its wiring and says so. This is the MEMBER's form — a
 	// member receives the 201 of their own run, so the warning is held to the
 	// same disclosure rule the refusals are and names the kind alone.
-	admitLaneDropped = "the %s lane is not permitted for %s; the %s grant was not wired"
+	admitLaneDropped = "The %s lane is not permitted for %s; the %s grant was not wired"
 	// admitLaneDroppedOperator adds the row an operator would have to edit.
-	admitLaneDroppedOperator = "the %s lane is not permitted for the %s provider %q; the %s grant was not wired"
+	admitLaneDroppedOperator = "The %s lane is not permitted for the %s provider %q; the %s grant was not wired"
 	// admitLegacyHost is the other 201 warning: admitted for one release because
 	// nothing claims its host, which is a state the admin should close.
-	admitLegacyHost = "host %s is admitted through the legacy scm_hosts list; enable a provider for it before 0.8"
+	admitLegacyHost = "Host %s is admitted through the legacy scm_hosts list; enable a provider for it before 0.8"
 	// admitSSHHostLevel is the third 201 warning: the SSH scoping CEILING, said
 	// out loud at the one moment it actually matters. An SSH clone URL carries no
 	// path a base URL can be compared against, so a row scoped to one org admits

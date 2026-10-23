@@ -62,9 +62,9 @@ const (
 	// on another replica ends it within this bound.
 	uiDesktopClosedRecheck = 15 * time.Second
 
-	uiTicketInvalidMsg = "invalid, expired, or already-used attach ticket"
-	uiNoSessionMsg     = "no valid UI session for this run — open the app again from its run page"
-	uiNoDesktopMsg     = "this run has no desktop: only a Linux desktop VM run has one"
+	uiTicketInvalidMsg = "Invalid, expired, or already-used attach ticket"
+	uiNoSessionMsg     = "No valid UI session for this run — open the app again from its run page"
+	uiNoDesktopMsg     = "This run has no desktop: only a Linux desktop VM run has one"
 )
 
 // The desktop stream's close codes (RFC 6455 private range): the viewer tells an ended session or

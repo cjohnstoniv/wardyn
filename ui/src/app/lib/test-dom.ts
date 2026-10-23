@@ -26,3 +26,9 @@ export function startsWith(prefix: string): (name: string) => boolean {
 export async function expandCard(title: string) {
   await userEvent.setup().click(screen.getByRole("button", { name: startsWith(title) }));
 }
+
+/** #3044: a heading drawn by StepSection (a 15px sentence-case title in the 12px-radius section card), not a section of its own. */
+export function isStepSectionHeading(heading: HTMLElement): boolean {
+  const card = heading.closest("section");
+  return heading.className.includes("text-[15px]") && !!card?.className.includes("rounded-xl") && !card.className.includes("p-[18px]");
+}

@@ -16,6 +16,7 @@ import {
 import type { AccessFacts, ToolPolicyFact } from "../../../../../lib/types/new-run-access";
 import type { HarnessSetFact } from "../../../../../lib/types/new-run-contract";
 import type { SetupItem } from "../../../../../lib/types/preflight";
+import { isStepSectionHeading } from "../../../../../lib/test-dom";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft } from "../../new-run-route";
 import type { RunIntent } from "../../draft/run-intent";
@@ -67,6 +68,11 @@ beforeEach(() => { h.operator = false; h.answered = true; h.providers = null; h.
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
 describe("HarnessSetup", () => {
+  it("#3044: is drawn as the guided steps' StepSection", () => {
+    show([]);
+    expect(isStepSectionHeading(screen.getByRole("heading", { name: NR_TOOLS.HARNESS_SETUP_TITLE }))).toBe(true);
+  });
+
   it("shows nothing until the server has answered, and says so when the run has no harness", () => {
     const { container } = show(undefined);
     expect(container.querySelector("section")).toBeNull();

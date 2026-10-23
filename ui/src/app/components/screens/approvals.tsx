@@ -26,6 +26,7 @@ import { anyCapabilityEnforced, useMyCapabilities } from "../../lib/capabilities
 import { DENIED } from "../../lib/permissions-copy";
 import { LIST_LIMIT } from "../../lib/api/core";
 import { usePoll } from "../../lib/use-poll";
+import { useRunTitles } from "../../lib/use-run-titles";
 import { getErrorMessage } from "../../lib/format";
 import { grantsWrite, scopeRepos } from "../../lib/grant-sentence";
 import { Button } from "../ui/button";
@@ -234,7 +235,7 @@ export function deriveBanner(kind: ApprovalKind, scope: Scope, reauth?: ReauthAu
         const write = grantsWrite(scope);
         return {
           what: `The broker mints a short-lived GitHub token${repos.length ? ` scoped to ${repos.join(", ")}` : ""}${ttl}. The agent never sees your stored key.`,
-          blast: `${CAPABILITY.brokerLine} ${write ? "It can push to the listed repos" : "It's limited to the listed read permissions"} until it expires — it can't mint a wider scope, and no other repo is reachable.`,
+          blast: `${write ? "It can push to the listed repos" : "It's limited to the listed read permissions"} until it expires — it can't mint a wider scope, and no other repo is reachable.`,
         };
       }
       if (ck === "api_key") {
@@ -299,6 +300,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // per-card DECISION gate moves to the security predicate.
   const operator = useOperator();
   const caps = useMyCapabilities(!operator);
+  const runTitles = useRunTitles();
   const [pendingItems, setPendingItems] = React.useState<ApprovalRequest[]>([]);
   const [decidedItems, setDecidedItems] = React.useState<ApprovalRequest[]>([]);
   const [decidedLongest, setDecidedLongest] = React.useState(0);
@@ -587,7 +589,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
         <>
           <div className="overflow-hidden rounded-xl border border-border bg-card">
             {decidedItems.map((d) => (
-              <DecidedRow key={d.id} item={d} />
+              <DecidedRow key={d.id} item={d} runTitle={runTitles.get(d.run_id)} />
             ))}
           </div>
           <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">

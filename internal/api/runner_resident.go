@@ -64,6 +64,7 @@ func (s *Server) PostureFromRunner(ctx context.Context, runnerID uuid.UUID, ev r
 	s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "runner:"+runnerID.String(),
 		placement.ActionRunnerPostureRecord, runnerID.String(), "success",
 		mustJSON(map[string]any{"posture": p, "posture_source": types.RunnerPostureSourceRunnerAsserted})))
+	s.revokeWithdrawn(ctx, runnerID)
 	return nil
 }
 

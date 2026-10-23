@@ -24,6 +24,7 @@ import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import { aheadByHours } from "../../../lib/test-clock";
 import type { GovernanceChange } from "../../../lib/types";
 import type { RunnerView } from "../../../lib/types/runners";
+import { expectActionBar } from "../../../../test/action-bar";
 import { setField } from "../../../../test/set-field";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { RunnerCard } from "./runner-card";
@@ -94,6 +95,15 @@ describe("Admin -> Runners trust class: a person's runner, a security admin", ()
     expect(within(section).getByText("A person's computer your organization manages. This is your assertion; Wardyn can't check it.")).toBeInTheDocument();
     expect(within(section).getByText("Required. Kept on the change and in the audit trail.")).toBeInTheDocument();
     expect(save).toBeEnabled();
+  });
+
+  // #3064: full-size filled teal on the right, not a small outline on the left.
+  it("the action bar is one full-size teal Change trust class on the right", async () => {
+    open(runner({ trust_set_by: "sam@example.com", trust_set_at: aheadByHours(-72) }));
+    const section = (await screen.findByRole("dialog")).querySelector("[data-trust]") as HTMLElement;
+    const change = within(section).getByRole("button", { name: "Change trust class" });
+    expectActionBar(change);
+    expect(change.className).not.toContain("h-8");
   });
 
   it("a change needs its reason: a blank one keeps Change off", async () => {

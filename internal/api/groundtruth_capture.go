@@ -25,24 +25,24 @@ import (
 // (profileResponse.Warnings).
 const (
 	// The capture's OWN claim, from its own events.
-	captureNoCorroborationCaveat = "kernel corroboration: none for this capture — no exec, connect or file-write was " +
+	captureNoCorroborationCaveat = "Kernel corroboration: none for this capture — no exec, connect or file-write was " +
 		"bound to this run by the kernel sensor, so the proxy's own egress decisions are the whole of the evidence here"
 	// The four host-sensor states, as REVIEW-TIME
 	// state about the host rather than a claim about this capture.
-	hostSensorUnavailableCaveat = "kernel ground truth (host sensor, as of this review): unavailable — no eBPF sensor " +
+	hostSensorUnavailableCaveat = "Kernel ground truth (host sensor, as of this review): unavailable — no eBPF sensor " +
 		"heartbeat has ever been observed on this host"
-	hostSensorDegradedCaveat = "kernel ground truth (host sensor, as of this review): degraded — the eBPF sensor's " +
+	hostSensorDegradedCaveat = "Kernel ground truth (host sensor, as of this review): degraded — the eBPF sensor's " +
 		"heartbeat is stale; whether it was healthy while this capture ran is a separate question, which this capture's own kernel evidence is what answers"
-	hostSensorIdleCaveat = "kernel ground truth (host sensor, as of this review): idle — the eBPF sensor is alive but " +
+	hostSensorIdleCaveat = "Kernel ground truth (host sensor, as of this review): idle — the eBPF sensor is alive but " +
 		"has mapped zero kernel events; whether it was healthy while this capture ran is a separate question, which this capture's own kernel evidence is what answers"
-	hostSensorPartialCaveatPrefix = "kernel ground truth (host sensor, as of this review): partial — the eBPF sensor " +
+	hostSensorPartialCaveatPrefix = "Kernel ground truth (host sensor, as of this review): partial — the eBPF sensor " +
 		"has never observed "
 	hostSensorPartialCaveatSuffix = "; whether it was healthy while this capture ran is a separate question, which this capture's own kernel evidence is what answers"
 )
 
 // captureNoCorroborationFragment is the substring a test (or a UI filter) uses
 // to recognise the per-capture note without pinning the whole sentence.
-const captureNoCorroborationFragment = "kernel corroboration: none for this capture"
+const captureNoCorroborationFragment = "Kernel corroboration: none for this capture"
 
 // groundtruthCaveats returns the kernel-ground-truth notes for ONE capture, in
 // reading order: what this capture's own evidence shows, then what the host

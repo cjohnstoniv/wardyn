@@ -234,6 +234,9 @@ export function DrivesScreen() {
               )}
             </div>
 
+            {/* #3052: with no drives, the empty state shows only while the editor is closed; an open New drive
+                editor takes its place right under the card's title. Cancel brings it back. */}
+            {!(noDrives && editorOpen) && (
             <div className="mt-4">
               {status === "loading" ? (
                 <TableSkeleton rows={3} cols={7} />
@@ -371,6 +374,7 @@ export function DrivesScreen() {
                 </>
               )}
             </div>
+            )}
 
             {/* Opens IN PLACE, under the list it edits — not a dialog. The
                 allocation form below collapses for exactly this span. */}

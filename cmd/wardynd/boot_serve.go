@@ -280,17 +280,40 @@ func warnSmallPool(maxConns int32) {
 		slog.Int("pool_max_conns", int(maxConns)))
 }
 
+// bindSSHGatewayEarly is WARDYN_SSH_BIND_EARLY: with it on, the SSH gateway's address is bound before the
+// background workers start. A taken port does not stop boot: it is logged, /healthz stops advertising SSH
+// (MarkSSHGatewayUnbound), and nil comes back so no accept loop runs. With it off, or the gateway off, it binds
+// nothing and returns nil, leaving startSSHGateway's own bind exactly as it was.
+func bindSSHGatewayEarly(f *bootFlags, srv *api.Server) net.Listener {
+	if !*f.sshBindEarly || *f.sshListen == "" {
+		return nil
+	}
+	ln, err := srv.ListenSSHGateway()
+	if err != nil {
+		slog.Error("wardynd: ssh gateway could not bind; booting without SSH and not advertising it on /healthz", slog.Any("err", err))
+		srv.MarkSSHGatewayUnbound()
+		return nil
+	}
+	return ln
+}
+
 // startSSHGateway launches the SSH gateway's accept loop in its own goroutine
 // (like the periodic workers above), extracted verbatim from run() to hold
 // run() under the lint gate's funlen limit. A no-op inside ServeSSHGateway
 // when -ssh-listen is empty, so this is safe to call unconditionally; goSafe
-// contains a panic the same as every other background goroutine here.
-func startSSHGateway(rootCtx context.Context, f *bootFlags, srv *api.Server) {
-	if *f.sshListen == "" {
+// contains a panic the same as every other background goroutine here. early is
+// bindSSHGatewayEarly's listener: when the switch is on and the bind failed
+// there is none and nothing is served.
+func startSSHGateway(rootCtx context.Context, f *bootFlags, srv *api.Server, early net.Listener) {
+	if *f.sshListen == "" || (*f.sshBindEarly && early == nil) {
 		return
 	}
 	go goSafe("ssh.gateway", func() {
-		if serr := srv.ServeSSHGateway(rootCtx); serr != nil {
+		serve := srv.ServeSSHGateway
+		if early != nil {
+			serve = func(ctx context.Context) error { return srv.ServeSSHGatewayOn(ctx, early) }
+		}
+		if serr := serve(rootCtx); serr != nil {
 			slog.Error("wardynd: ssh gateway stopped", slog.Any("err", serr))
 		}
 	})

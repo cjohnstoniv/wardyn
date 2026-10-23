@@ -23,7 +23,7 @@ From 0.9 the control plane places runs on a claimed runner through its owner's u
 | Internal network | `serve` creates the `--internal-network` bridge (default `wardyn-internal`) when it is missing. |
 | Architecture | The runner reports its engine's (`amd64` or `arm64`). Images are multi-arch indexes, or the organisation names an `@arm64` entry in `WARDYN_AGENT_IMAGES` and `WARDYN_PROXY_IMAGE_ARM64`; see [Multi-arch images](adoption/corp-image-authoring.md#multi-arch-images). |
 | Windows | There is no native binary: run the runner inside WSL2 with Docker Desktop's WSL integration. |
-| Permission | `POST /api/v1/me/runners/tokens` needs the [`self_host_runner`](operations/capabilities.md#self_host_runner) permission (`403` `capability_feature`, target `me.runners.tokens`: "hosting your own runner isn't available to you. Ask your admin for the self_host_runner permission."). Admins are never asked. |
+| Permission | `POST /api/v1/me/runners/tokens` needs the [`self_host_runner`](operations/capabilities.md#self_host_runner) permission (`403` `capability_feature`, target `me.runners.tokens`: "Hosting your own runner isn't available to you. Ask your admin for the self_host_runner permission."). Admins are never asked. |
 
 - A Docker engine, or a relay address no proxy can reach, that fails the startup check is an error; systemd `Restart=on-failure` and launchd `KeepAlive` retry it.
 - On macOS verify a download with `shasum -a 256 <file>`; on Linux, `sha256sum <file>`.
@@ -305,6 +305,7 @@ An install from before the file keeps working: its environment file or LaunchAge
 
 - Each setting is read as the service reads it: a flag, else the settings `setup` recorded, else this shell. The flags are `--org`, `--state-dir`, `--proxy-image`, `--relay-listen`, `--relay-host-target` and `--trusted-ca-file`. The organisation address alone takes the `OrgURL` managed preference (macOS, set by an MDM profile) after `--org` and before the recorded settings; the line shows which one it came from.
 - It writes nothing and changes no setting. It never creates the proxy bridge, never pulls an image and never connects to the organisation as the runner.
+- The `wire` stage asks the organisation's runner stream route for a WebSocket upgrade as no runner and hangs up, and that probe counts against the runner handshake rate.
 - The relay stage starts one throwaway container, removed afterwards, and only when the proxy image is already on the engine; otherwise it says `skip`.
 - Names are shown and values are not: no token, password or proxy credential appears in either format, and a proxy is shown as its host and port.
 - Beside the link state and last error, `status.json` in the state directory holds `stage` and `stage_at` (the stage above that the last failed connect or start stopped at, and when; empty once connected or after a clean shutdown, kept after a refusal at start until a connect succeeds) and `relay` (`reachable` or `unreachable`; absent when no relay is probed). It holds no token, key or proxy credential.

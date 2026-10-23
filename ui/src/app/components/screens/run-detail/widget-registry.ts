@@ -99,6 +99,8 @@ export type WidgetContext = {
    *  COUNT comes from the live derivation every other surface already uses. */
   heldCount: number;
   audit: AuditEvent[];
+  /** The Files and Sandbox evidence the status strip states (#3038); undefined until the first read lands. */
+  evidence?: EvidenceFacts;
   /** The oldest and newest audit pages did not meet, so counts read off `audit` are a floor. */
   auditGap?: boolean;
   onGoAudit: () => void;
@@ -110,6 +112,9 @@ export type WidgetContext = {
    *  the whole recording/attach fetch graph into a data file. */
   terminalPane: React.ReactNode;
 };
+
+/** What the evidence endpoints answered, read once for the status strip and the Files gate. null = nothing to read. */
+export type EvidenceFacts = { files: number | null; sandbox: string | null };
 
 export type WidgetPlacement = { x: number; y: number; w: number; h: number };
 
@@ -181,6 +186,9 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
       live: { x: 8, y: 4, w: 4, h: 4 },
       finished: { x: 7, y: 0, w: 5, h: 4 },
     },
+    // #3038: a finished run's sandbox is gone, so unless the strip read real files the tile would be a box around one
+    // sentence the Files tile already says. A live run keeps it: files appear there as the agent works.
+    available: (ctx) => !ctx.finished || (ctx.evidence?.files ?? 0) > 0,
   },
   sandbox: {
     label: "Sandbox",

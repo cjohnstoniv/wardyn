@@ -277,12 +277,12 @@ func (s *Server) apiTokenLifetime(w http.ResponseWriter, requested int64) (life,
 // in flight. Shared verbatim so the two arms cannot drift into an oracle that
 // distinguishes "you were never signed in" from "your session was just
 // revoked".
-const apiTokenNoHumanRefusal = "an API token belongs to a signed-in human — sign in to the console and create one from Account, or keep using the admin token directly"
+const apiTokenNoHumanRefusal = "An API token belongs to a signed-in human — sign in to the console and create one from Account, or keep using the admin token directly"
 
 // apiTokenReservedRefusal is the 401 body for a token whose principal is
 // reserved. The holder has the secret, so naming the token is no oracle; the
 // cause stays in the auth.fail row.
-const apiTokenReservedRefusal = "this API token can no longer be used — ask your Wardyn admin"
+const apiTokenReservedRefusal = "This API token can no longer be used — ask your Wardyn admin"
 
 // apiTokenFeatureRefusal is the 403 body when the api_token feature is not
 // available to the caller.

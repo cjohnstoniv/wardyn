@@ -697,7 +697,7 @@ function EventRow({
   // its host, so "Allowed egress to …" would be false on the row.
   const ruled = toolRuleDecision(event);
   const Icon = KIND_META[kind].Icon;
-  // Below sm the row is two lines: time, actor, icon and outcome, then the description with the run chip.
+  // Below sm the row is up to three lines: time, actor, icon and outcome, then the description, then the run reference (#3036).
   // `order` moves the outcome up without touching the DOM order; from sm up it is the one line it always was (#2849).
   return (
     <div className="flex flex-wrap items-center gap-3 px-4 py-3 hover:bg-surface-2/50 sm:flex-nowrap">

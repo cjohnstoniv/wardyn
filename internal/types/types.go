@@ -474,6 +474,9 @@ type ApprovalRequest struct {
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 	Held      bool       `json:"held,omitempty"` // Held/HeldUntil project approval.Hold(this, now) at response time, never stored; both zero on a DECIDED row
 	HeldUntil *time.Time `json:"held_until,omitempty"`
+	// Decidable is the list route's verdict on whether THIS caller may act on a PENDING row (mayDecide, the egress_host
+	// grant included), projected at response time and never stored. Nil on a row the verdict was not computed for.
+	Decidable *bool `json:"decidable,omitempty"`
 	// LastRejoinedAt is when a held request last re-entered the hold on this PENDING row (nil until
 	// then); approval.Hold measures a bounded hold from it when it is later than RequestedAt. Not on the wire.
 	LastRejoinedAt *time.Time `json:"-"`

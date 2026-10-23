@@ -24,6 +24,8 @@ export const INSTALL_DOCS_URL = "https://github.com/cjohnstoniv/wardyn/blob/main
 
 export const ADD_COMPUTER = {
   TITLE: "Add this computer",
+  // Mock M-ATT-4 panels 5 and 7, in place of the steps when GET /me/capabilities says may_self_host_runner is false.
+  SELF_HOST_OFF: "Personal runners aren't turned on for you. Ask your admin.",
   LEAD: "Run these three commands in a terminal on the computer you are adding. It becomes a runner for your own runs.",
   WSL2_NOTE: "Runners run in WSL2. Open your WSL2 distribution and run all three commands there.",
   STEP_INSTALL: "Install the CLI",

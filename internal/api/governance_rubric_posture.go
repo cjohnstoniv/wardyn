@@ -124,8 +124,22 @@ var (
 	classOrder   = []types.ConfinementClass{types.CC1, types.CC2, types.CC3}
 )
 
-// rubricPostureSentence renders the reach: each axis's reachable grades, the rubric rows they select,
-// and the rows nothing here selects.
+// rubricRowLabels name each rubric row the way the profile editor does (ui governance-copy.ts RUBRIC.ROWS), with
+// its axis spelled out where the editor's group heading carries it. No raw row key reaches the person.
+var rubricRowLabels = map[string]string{
+	"egress_open": "Egress open", "egress_reviewed": "Egress reviewed", "egress_sealed": "Egress sealed",
+	"secrets_powerful": "Secrets powerful", "secrets_baseline": "Secrets baseline", "secrets_none": "Secrets none",
+	"confinement_cc1": "Fence (CC1)", "confinement_cc2": "Wall (CC2)", "confinement_cc3": "Vault (CC3)",
+}
+
+// confinementLabel is a class as the editor labels it: "Wall (CC2)".
+func confinementLabel(c types.ConfinementClass) string {
+	return fmt.Sprintf("%s (%s)", types.ConfinementClassNames[c], c)
+}
+
+// rubricPostureSentence renders the reach in at most three short sentences: the rows nothing here selects
+// first (or that every row can cap), then the grades a run can get, then what a run on a model provider is
+// forced to. Rows are named as the editor names them.
 func rubricPostureSentence(r rubricReach) string {
 	// The narrowest run: no egress and no grant, plus the model credential its harness folds.
 	floor := composer.AutonomyPostureOf(types.RunPolicySpec{}, "", r.baseline)
@@ -142,42 +156,47 @@ func rubricPostureSentence(r rubricReach) string {
 		classes = classOrder
 	}
 
-	var bindable, inert []string
-	row := func(p types.AutonomyPosture) string {
-		_, bound := composer.FoldAutonomy(everyRow, p)
-		return bound[0]
-	}
-	place := func(reach bool, name string) {
-		if reach {
-			bindable = append(bindable, name)
-		} else {
-			inert = append(inert, name)
+	var inert []string
+	row := func(reach bool, p types.AutonomyPosture) {
+		if !reach {
+			_, bound := composer.FoldAutonomy(everyRow, p)
+			inert = append(inert, rubricRowLabels[bound[0]])
 		}
 	}
 	// Rows in the rubric's own field order (types.AutonomyRubric, the editor's and bound_by's order).
 	for _, e := range slices.Backward(egressOrder) {
-		place(slices.Contains(egress, e), row(types.AutonomyPosture{Egress: e}))
+		row(slices.Contains(egress, e), types.AutonomyPosture{Egress: e})
 	}
 	for _, sp := range slices.Backward(secretsOrder) {
-		place(slices.Contains(secrets, sp), row(types.AutonomyPosture{Secrets: sp}))
+		row(slices.Contains(secrets, sp), types.AutonomyPosture{Secrets: sp})
 	}
 	for _, c := range classOrder {
-		place(slices.Contains(classes, c), row(types.AutonomyPosture{Confinement: c}))
+		row(slices.Contains(classes, c), types.AutonomyPosture{Confinement: c})
 	}
 
-	out := fmt.Sprintf("on this deployment a run under this profile grades egress %s; secrets %s; and confinement %s",
-		orList(egress), orList(secrets), orList(classes))
+	var out []string
 	if len(inert) == 0 {
-		out += " — so every rubric row can cap it"
+		out = append(out, "Every rubric row can cap a run under this profile here.")
 	} else {
-		out += fmt.Sprintf(" — so only %s can cap it, and %s cap nothing here", andList(bindable), andList(inert))
+		never := "rows never cap"
+		if len(inert) == 1 {
+			never = "row never caps"
+		}
+		classLabels := make([]string, len(classes))
+		for i, c := range classes {
+			classLabels[i] = confinementLabel(c)
+		}
+		out = append(out,
+			fmt.Sprintf("%d rubric %s a run under this profile here: %s.", len(inert), never, andList(inert)),
+			fmt.Sprintf("A run here is graded egress %s, secrets %s, and confinement %s; those rows can cap it.",
+				orList(egress), orList(secrets), orList(classLabels)))
 	}
 	// What a run on a model provider is forced to, when that is more than every run is: the secrets row
 	// that binds such a run whatever it asks for.
 	if onProvider := secretsReach(r.provider, r.baseline); len(r.provider) > 0 && len(onProvider) < len(secrets) {
-		out += fmt.Sprintf("; a run on one of its model providers always grades secrets %s", orList(onProvider))
+		out = append(out, fmt.Sprintf("A run on one of this profile's model providers is always graded secrets %s.", orList(onProvider)))
 	}
-	return out
+	return strings.Join(out, " ")
 }
 
 // everyRow sets all nine rows, so FoldAutonomy names exactly the rows a posture selects.

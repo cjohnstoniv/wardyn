@@ -38,7 +38,7 @@ const (
 	// is to wait or fix the mount, not to edit the drive. It names the root
 	// because every /drives route is operator-only — the member-facing sentences
 	// (driveRefusal) deliberately do not.
-	driveRootUnansweredMsg = "this deployment's drive host root %q did not answer in time, so the ceiling that " +
+	driveRootUnansweredMsg = "This deployment's drive host root %q did not answer in time, so the ceiling that " +
 		"governs host_path drives could not be checked and nothing was written. The share is on a mount that is " +
 		"not responding — re-send once it is back."
 )

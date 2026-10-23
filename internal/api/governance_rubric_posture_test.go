@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -19,10 +20,9 @@ import (
 // graded powerful), a substrate that offers CC1 alone. A run on Codex CLI or Your own tools resolves
 // no provider and carries no credential, so every secrets row can still bind; what the provider forces
 // is said on its own, for runs on it.
-const adopterPosture = "on this deployment a run under this profile grades egress sealed, reviewed or open; " +
-	"secrets none, baseline or powerful; and confinement CC1 — so only egress_open, egress_reviewed, egress_sealed, " +
-	"secrets_powerful, secrets_baseline, secrets_none and confinement_cc1 can cap it, and confinement_cc2 and " +
-	"confinement_cc3 cap nothing here; a run on one of its model providers always grades secrets powerful"
+const adopterPosture = "2 rubric rows never cap a run under this profile here: Wall (CC2) and Vault (CC3). " +
+	"A run here is graded egress sealed, reviewed or open, secrets none, baseline or powerful, and confinement Fence (CC1); those rows can cap it. " +
+	"A run on one of this profile's model providers is always graded secrets powerful."
 
 func TestRubricPostureSentence(t *testing.T) {
 	bedrock := bedrockCredGrade{graded: true, host: "bedrock.llm.corp.example"}
@@ -38,35 +38,38 @@ func TestRubricPostureSentence(t *testing.T) {
 		{"the model host declared baseline: a run on the provider grades baseline, not powerful",
 			rubricReach{baseline: composer.Baseline{Hosts: []string{"bedrock.llm.corp.example"}},
 				launch: []bedrockCredGrade{none, bedrock}, provider: []bedrockCredGrade{bedrock}, offered: cc1},
-			"on this deployment a run under this profile grades egress sealed, reviewed or open; secrets none, baseline or powerful; " +
-				"and confinement CC1 — so only egress_open, egress_reviewed, egress_sealed, secrets_powerful, secrets_baseline, " +
-				"secrets_none and confinement_cc1 can cap it, and confinement_cc2 and confinement_cc3 cap nothing here; " +
-				"a run on one of its model providers always grades secrets baseline or powerful"},
+			"2 rubric rows never cap a run under this profile here: Wall (CC2) and Vault (CC3). " +
+				"A run here is graded egress sealed, reviewed or open, secrets none, baseline or powerful, and confinement Fence (CC1); those rows can cap it. " +
+				"A run on one of this profile's model providers is always graded secrets baseline or powerful."},
 		// Not reachable on today's catalog, which always offers Your own tools; the arithmetic is still
 		// what a deployment whose every launchable run sits on a Bedrock provider would get.
 		{"every launchable run on a Bedrock provider: secrets_none and secrets_baseline are inert",
 			rubricReach{launch: []bedrockCredGrade{bedrock}, provider: []bedrockCredGrade{bedrock}, offered: cc1},
-			"on this deployment a run under this profile grades egress sealed, reviewed or open; secrets powerful; " +
-				"and confinement CC1 — so only egress_open, egress_reviewed, egress_sealed, secrets_powerful and confinement_cc1 " +
-				"can cap it, and secrets_baseline, secrets_none, confinement_cc2 and confinement_cc3 cap nothing here"},
+			"4 rubric rows never cap a run under this profile here: Secrets baseline, Secrets none, Wall (CC2) and Vault (CC3). " +
+				"A run here is graded egress sealed, reviewed or open, secrets powerful, and confinement Fence (CC1); those rows can cap it."},
 		{"a second provider whose credential is not graded: nothing forced on provider runs either",
 			rubricReach{launch: []bedrockCredGrade{none, bedrock, none}, provider: []bedrockCredGrade{bedrock, none}, offered: cc1},
-			"on this deployment a run under this profile grades egress sealed, reviewed or open; secrets none, baseline or powerful; " +
-				"and confinement CC1 — so only egress_open, egress_reviewed, egress_sealed, secrets_powerful, secrets_baseline, " +
-				"secrets_none and confinement_cc1 can cap it, and confinement_cc2 and confinement_cc3 cap nothing here"},
+			"2 rubric rows never cap a run under this profile here: Wall (CC2) and Vault (CC3). " +
+				"A run here is graded egress sealed, reviewed or open, secrets none, baseline or powerful, and confinement Fence (CC1); those rows can cap it."},
 		{"the profile's floor cuts the offered classes",
 			rubricReach{launch: []bedrockCredGrade{none}, offered: []types.ConfinementClass{types.CC1, types.CC2}, floor: types.CC2},
-			"on this deployment a run under this profile grades egress sealed, reviewed or open; secrets none, baseline or powerful; " +
-				"and confinement CC2 — so only egress_open, egress_reviewed, egress_sealed, secrets_powerful, secrets_baseline, secrets_none " +
-				"and confinement_cc2 can cap it, and confinement_cc1 and confinement_cc3 cap nothing here"},
+			"2 rubric rows never cap a run under this profile here: Fence (CC1) and Vault (CC3). " +
+				"A run here is graded egress sealed, reviewed or open, secrets none, baseline or powerful, and confinement Wall (CC2); those rows can cap it."},
 		{"classes unknown (runners on, or no executor answer): nothing is pinned",
 			rubricReach{launch: []bedrockCredGrade{none}},
-			"on this deployment a run under this profile grades egress sealed, reviewed or open; secrets none, baseline or powerful; " +
-				"and confinement CC1, CC2 or CC3 — so every rubric row can cap it"},
+			"Every rubric row can cap a run under this profile here."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := rubricPostureSentence(tc.r); got != tc.want {
+			got := rubricPostureSentence(tc.r)
+			if got != tc.want {
 				t.Errorf("sentence:\n got  %q\n want %q", got, tc.want)
+			}
+			// #2424: the editor's labels, never a raw rubric key, and at most three short sentences.
+			if raw := regexp.MustCompile(`(egress|secrets|confinement)_[a-z0-9]+`).FindString(got); raw != "" {
+				t.Errorf("sentence carries the raw row key %q: %q", raw, got)
+			}
+			if n := strings.Count(got, ". ") + 1; n > 3 {
+				t.Errorf("%d sentences, want at most 3: %q", n, got)
 			}
 		})
 	}
@@ -137,7 +140,7 @@ func TestGovernanceUnitWriteAdvisesTheRubricPosture(t *testing.T) {
 		t.Errorf("warnings = %q, want the posture sentence %q", got, adopterPosture)
 	}
 	posture := func(ws []string) bool {
-		return slices.ContainsFunc(ws, func(s string) bool { return strings.HasPrefix(s, "on this deployment") })
+		return slices.ContainsFunc(ws, func(s string) bool { return strings.Contains(s, "under this profile here") })
 	}
 	if got := write(t, site, `{"name":"r","ceiling":{"min_confinement_class":"CC1"}}`); posture(got) {
 		t.Errorf("no rubric, yet warnings = %q", got)
@@ -145,7 +148,9 @@ func TestGovernanceUnitWriteAdvisesTheRubricPosture(t *testing.T) {
 	runners := site
 	runners.Runners = &types.RunnerSettings{Enabled: true}
 	got := write(t, runners, rubric)
-	if !slices.ContainsFunc(got, func(s string) bool { return strings.Contains(s, "and confinement CC1, CC2 or CC3 —") }) {
+	if !slices.ContainsFunc(got, func(s string) bool {
+		return strings.HasPrefix(s, "Every rubric row can cap a run under this profile here.")
+	}) {
 		t.Errorf("runners on: warnings = %q, want every barrier class reachable", got)
 	}
 }

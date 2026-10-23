@@ -57,7 +57,7 @@ export const PROVIDER_EDITOR = {
   PATH_HINT_CLAUDE: "Where your endpoint serves the Anthropic Messages API for Claude Code, e.g. /anthropic.",
   PATH_HINT_CODEX: "Where your endpoint serves the OpenAI Responses API for Codex CLI, e.g. /v1.",
   CANCEL: "Cancel",
-  SAVE: "Save",
+  SAVE: "Save provider",
   REMOVE: "Remove",
   SAVED_TOAST: "Provider saved.",
   DELETE_TITLE: (name: string) => `Remove ${name}?`,

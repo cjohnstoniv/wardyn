@@ -90,6 +90,10 @@
 #      can lose `rm -rf` to a detached git still writing under .git (#3328).
 #  26. release.yml's CLI build targets (binaries' TARGETS), its cli-<os>-<arch> upload steps and the CLI
 #      names in its release-asset assert are one set, so a target added to one list cannot ship nothing.
+#  29. every release.yml step that writes outside the runner (registry push or copy, cosign
+#      sign/attest/attach, build provenance, gh release or gh api writes, helm push, notarization) is
+#      guarded by an un-negated startsWith(github.ref, 'refs/tags/v') ANDed into its own or its job's
+#      `if`, its `with.push`, or its own DRY_RUN/PUBLISH env that its script reads; never by job env.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -117,14 +121,10 @@ ok()  { echo "ok: $*"; }
 # posture PR #1245 used for daemon-proxy-secret-kind).
 # kind-acceptance-walks (#3110): kind-components-walk and kind-run-output-walk had no caller
 # until this job. Same promotion rule; its date is below.
-# kind-survival-walk (#700), hybrid-walk (#701) and kind-upgrade-walk (#690)
-# are exempt for the SAME reason PR #1245 gave daemon-proxy-secret-kind: none
-# of the three has ever run on a real nightly yet, so watching them from day
-# one would block every release on a job that might fail deterministically
-# for an environment reason this authoring pass could not see (no kind cluster
-# or Docker execution was available to prove them here — see each script's
-# own header). Add all three back to notify-new-lanes' needs (and drop them
-# from here) once each has gone green on a real scheduled run.
+# kind-survival-walk (#700), hybrid-walk (#701), kind-upgrade-walk (#690), k6-kind-conformance
+# and kind-acceptance-walks were exempt here until each had gone green on a real scheduled run
+# (39782025578) and green-by-tree.sh could watch a matrix job's legs (#3439). They are in
+# notify-new-lanes.needs and release.yml's watched= now (guard 13), and run under scope=candidate.
 # provider-subscription-docker-pg (#677 T-17) went green on its first real
 # nightly run (workflow_dispatch, 2026-09-28, run 36393687863) and is now in
 # notify-new-lanes.needs + release.yml's watched= (guard 13) instead of here.
@@ -138,13 +138,12 @@ ok()  { echo "ok: $*"; }
 # release is the fix for a red here. It is NOT in release.yml's watched= (so not in
 # notify-new-lanes.needs, which guard 13 pins to it); it opens its own issue.
 NIGHTLY=.github/workflows/nightly.yml
-NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check test-e2e-concurrent kind-survival-walk hybrid-walk kind-upgrade-walk k6-kind-conformance kind-acceptance-walks ci-mode-dogfood-model-fake published-image-scan notify-published-image-scan"
+NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check test-e2e-concurrent ci-mode-dogfood-model-fake published-image-scan notify-published-image-scan"
 # A job waiting on the promotion rule above carries a date here, job=YYYY-MM-DD, at most 14 days out
 # (the e2e quarantine's rule, #3219). Past it this guard fails until the job joins notify-new-lanes.needs
-# and release.yml's watched=, which needs green-by-tree.sh to match a matrix job's "name (leg)" rows
-# (#3439), or the date is renewed in a reviewed change. k6-kind-conformance and kind-acceptance-walks
-# were green on scheduled runs 39269815742 and 39423832908.
-NOTIFY_EXEMPT_UNTIL="k6-kind-conformance=2026-11-04 kind-acceptance-walks=2026-11-04"
+# and release.yml's watched= (green-by-tree.sh matches a matrix job's "name (leg)" rows, #3439), or the
+# date is renewed in a reviewed change. Empty while no job is waiting.
+NOTIFY_EXEMPT_UNTIL=""
 # notify_exempt_until_problems "<job=date ...>" "<exempt jobs>" <today>: one line per bad entry.
 notify_exempt_until_problems() {
     local pair job until max
@@ -155,7 +154,7 @@ notify_exempt_until_problems() {
         if [[ ! "$until" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || [ "$(date -u -d "$until" +%F 2>/dev/null)" != "$until" ]; then
             echo "'$job' has the invalid date '$until', want YYYY-MM-DD"
         elif [[ "$until" < "$3" ]]; then
-            echo "'$job' was exempt until $until: the way off is #3439 (green-by-tree.sh matching matrix legs, then notify-new-lanes.needs and release.yml's watched=); until it lands, renew the date in a reviewed change (at most 14 days out)"
+            echo "'$job' was exempt until $until: the way off is notify-new-lanes.needs and release.yml's watched= (green-by-tree.sh matches matrix legs since #3439); until the job is watched, renew the date in a reviewed change (at most 14 days out)"
         elif [[ "$until" > "$max" ]]; then
             echo "'$job' is exempt until $until, more than 14 days from $3 ($max) — an exemption is short"
         fi
@@ -619,22 +618,45 @@ else
     # The build STEP decides what a digest is, so it is compared too: a staged
     # image equals a release.yml build only if context, file, platforms,
     # provenance and build-args agree, and neither side carries a target,
-    # cache-from, cache-to or any other key the other lacks.
+    # cache-from, cache-to or any other key the other lacks. The one allowed
+    # difference is buildx-smoke's `build-contexts`, and only at its exact value (the Go
+    # module seed, guard 27): it feeds `go mod download`, which go.sum verifies, so it cannot
+    # change the image. Any other context could replace a stage (`ui=docker-image://...`), so a
+    # different value, or a context on any other pair, is a difference like any other key.
     bps='.steps[] | select((.uses // "") | test("^docker/build-push-action@"))'
-    with_norm="$bps | .with | del(.push) | del(.tags) | del(.labels) | .[\"build-args\"] |= (. // \"\" | sub(\"\\n+\$\"; \"\")) | sort_keys(.)"
-    for pair in "images buildx-smoke" "images-ui-sandbox buildx-smoke-ui-sandbox" "images-ui-sandbox-signin buildx-smoke-ui-sandbox-signin"; do
-        set -- $pair
-        rel_job="$1"; ngt_job="$2"
-        for jf in "$rel_job $REL" "$ngt_job $NIGHTLY"; do
-            set -- $jf
-            [ "$(yq -r ".jobs[\"$1\"] | [$bps] | length" "$2")" = 1 ] \
-                || { bad "$2: job '$1' must have exactly one docker/build-push-action step — guard 16 cannot compare the build step"; stage_fail=1; }
+    export WANT_CTX="\${{ matrix.gomod == 'true' && format('gomodcache={0}', steps.gomod.outputs.dir) || '' }}"
+    # staged_build_step_problems <release.yml> <nightly.yml>: one line per staged build step that differs.
+    staged_build_step_problems() {
+        local rel="$1" ngt="$2" pair rel_job ngt_job jf rel_with ngt_with ctx_del
+        for pair in "images buildx-smoke" "images-ui-sandbox buildx-smoke-ui-sandbox" "images-ui-sandbox-signin buildx-smoke-ui-sandbox-signin"; do
+            set -- $pair
+            rel_job="$1"; ngt_job="$2"
+            for jf in "$rel_job $rel" "$ngt_job $ngt"; do
+                set -- $jf
+                [ "$(yq -r ".jobs[\"$1\"] | [$bps] | length" "$2")" = 1 ] \
+                    || echo "$2: job '$1' must have exactly one docker/build-push-action step — guard 16 cannot compare the build step"
+            done
+            ctx_del=""
+            [ "$ngt_job" = buildx-smoke ] && ctx_del='| with(select(.["build-contexts"] == strenv(WANT_CTX)); del(.["build-contexts"]))'
+            rel_with="$(yq -o=json -I=0 ".jobs[\"$rel_job\"] | $bps | .with | del(.push) | del(.tags) | del(.labels) | .[\"build-args\"] |= (. // \"\" | sub(\"\\n+\$\"; \"\")) | sort_keys(.)" "$rel")"
+            ngt_with="$(yq -o=json -I=0 ".jobs[\"$ngt_job\"] | $bps | .with | del(.push) | del(.tags) | del(.labels) $ctx_del | .[\"build-args\"] |= (. // \"\" | sub(\"\\n+\$\"; \"\")) | sort_keys(.)" "$ngt")"
+            [ "$rel_with" = "$ngt_with" ] \
+                || echo "$ngt: $ngt_job's build step differs from $rel's $rel_job (push, tags and labels aside) — release: $rel_with vs nightly: $ngt_with. A staged digest must be built exactly as release.yml builds it: same platforms and provenance, no target or cache, and no build context but buildx-smoke's gomodcache seed."
         done
-        rel_with="$(yq -o=json -I=0 ".jobs[\"$rel_job\"] | $with_norm" "$REL")"
-        ngt_with="$(yq -o=json -I=0 ".jobs[\"$ngt_job\"] | $with_norm" "$NIGHTLY")"
-        [ "$rel_with" = "$ngt_with" ] \
-            || { bad "$NIGHTLY: $ngt_job's build step differs from $REL's $rel_job (push, tags and labels aside) — release: $rel_with vs nightly: $ngt_with. A staged digest must be built exactly as release.yml builds it: same platforms and provenance, no target or cache."; stage_fail=1; }
+    }
+    while IFS= read -r line; do
+        [ -n "$line" ] && { bad "$line"; stage_fail=1; }
+    done <<<"$(staged_build_step_problems "$REL" "$NIGHTLY")"
+    # The comparison must catch what it exists for: an extra context on the seeded step, a context on a ui-sandbox step.
+    mut_dir="$(mktemp -d)"
+    for mut in 'buildx-smoke|.jobs["buildx-smoke"].steps[] |= (select((.uses // "") | test("^docker/build-push-action@")).with["build-contexts"] += "\nui=docker-image://evil:latest")' \
+               'buildx-smoke|.jobs["buildx-smoke"].steps[] |= (select((.uses // "") | test("^docker/build-push-action@")).with["build-contexts"] = "ui=docker-image://evil:latest")' \
+               'buildx-smoke-ui-sandbox|.jobs["buildx-smoke-ui-sandbox"].steps[] |= (select((.uses // "") | test("^docker/build-push-action@")).with["build-contexts"] = "gomodcache=/x")'; do
+        yq "${mut#*|}" "$NIGHTLY" >"$mut_dir/nightly.yml"
+        [ -n "$(staged_build_step_problems "$REL" "$mut_dir/nightly.yml")" ] \
+            || { bad "guard 16 self-test: a planted build context on ${mut%%|*} went unnoticed (${mut#*|})"; stage_fail=1; }
     done
+    rm -rf "$mut_dir"
     want_args='${{ matrix.build-args }}'
     got_args="$(yq -r ".jobs[\"buildx-smoke\"] | $bps | .with[\"build-args\"]" "$NIGHTLY")"
     [ "$got_args" = "$want_args" ] \
@@ -929,23 +951,9 @@ else
     ok "every scripts/test-*.sh that runs git init/clone/commit turns auto-maintenance off"
 fi
 
-# ── 26. release.yml's CLI targets, upload steps and asserted assets agree ────
-# The binaries job builds every TARGETS entry in one step, but each target has its
-# own fixed upload step and its own line in the release-asset assert. A target in
-# one list and not the others builds a CLI that never ships, or fails only on the
-# tag. Windows ships wardyn-windows-<arch>.exe.
-cli_targets="$(sed -n 's/^ *TARGETS: "\(.*\)"$/\1/p' "$REL" | tr ' ' '\n' | sed '/^$/d; s#/#-#' | sort)"
-cli_uploads="$(sed -n 's/^ *name: cli-\([a-z0-9]*-[a-z0-9]*\)$/\1/p' "$REL" | sort)"
-cli_asserted="$(sed -n '/Assert every required asset actually landed/,/done$/p' "$REL" \
-    | grep -oE 'wardyn-(linux|darwin|windows)-[a-z0-9]+(\.exe)?' | sed 's/^wardyn-//' | sort -u)"
-cli_want_assert="$(printf '%s\n' "$cli_targets" | sed '/^windows-/s/$/.exe/' | sort)"
-if [ -z "$cli_targets" ]; then
-    bad "release.yml: no binaries TARGETS line found — guard 26 checks nothing"
-elif [ "$cli_uploads" != "$cli_targets" ] || [ "$cli_asserted" != "$cli_want_assert" ]; then
-    bad "release.yml: CLI TARGETS ($(echo $cli_targets)) != upload steps cli-* ($(echo $cli_uploads)) or asserted assets ($(echo $cli_asserted)); a target needs its cli-<os>-<arch> upload step and its wardyn-<os>-<arch> (.exe on windows) assert line"
-else
-    ok "release.yml's $(echo "$cli_targets" | wc -l) CLI targets each have an upload step and an asserted release asset"
-fi
+# Guards 26-29 (release.yml and nightly.yml) are in test-repo-guards-release.sh, sourced so they
+# share this file's fail, bad, ok, REL, NIGHTLY and NOTIFY_EXEMPT.
+. "$ROOT/scripts/test-repo-guards-release.sh"
 
 if [ "$fail" = 0 ]; then echo "--- test-repo-guards: PASS ---"; else echo "--- test-repo-guards: FAIL ---"; fi
 exit "$fail"

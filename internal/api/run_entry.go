@@ -249,7 +249,7 @@ func refuseTicketResponse(w http.ResponseWriter, v entryVerdict) {
 		writeErrorReason(w, http.StatusServiceUnavailable, string(v), uiSessionUnverifiableMsg)
 		return
 	}
-	writeErrorReason(w, http.StatusForbidden, reasonUIGatewayTicketInvalid, "invalid, expired, or already-used attach ticket")
+	writeErrorReason(w, http.StatusForbidden, reasonUIGatewayTicketInvalid, "Invalid, expired, or already-used attach ticket")
 }
 
 // refuseAttachTicket is the terminal WebSocket's refusal of a redemption: the

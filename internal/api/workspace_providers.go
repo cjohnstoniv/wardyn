@@ -41,7 +41,7 @@ import (
 const (
 	providers400BaseURL     = "base_urls[%d]: must be an https URL with a host and no credentials, query or fragment"
 	providers400HostKind    = "base_urls[%d]: %q is not a %s host"
-	providers400HostTwoKind = "row %d: host %q is already on a %s row; a host may appear on rows of one kind only"
+	providers400HostTwoKind = "Row %d: host %q is already on a %s row; a host may appear on rows of one kind only"
 	providers400Lane        = "lanes: %q is not available for %s (%s)"
 	providers400DiskOrder   = "storage.ephemeral: default_disk_mib may not exceed max_disk_mib"
 	providers400DupID       = "id %q is not unique"
@@ -49,10 +49,10 @@ const (
 	providers400Kind        = "git[%d].kind: %q is not a git provider kind — want one of: %s"
 	providers400BaseURLNone = "git[%d].base_urls: name at least one address (at most %d)"
 	providers400LaneKind    = "git[%d].lanes: %q is not a lane — want one of: %s"
-	providers400LaneSSHPath = "git %q: the SSH lane has no org path to bound, so it would admit the whole host — drop the SSH lane or widen this row's addresses to the bare host"
+	providers400LaneSSHPath = "Git %q: the SSH lane has no org path to bound, so it would admit the whole host — drop the SSH lane or widen this row's addresses to the bare host"
 	providers400Negative    = "%s: %d is not a size in MiB — use 0 for unset"
 	providers400ADOLanes    = "git[%d].lanes: name the lanes of an Azure DevOps row — an empty list no longer means the shared pat and ssh lanes, which are retired. Use %q, or %q with credential_source per_user on an Azure DevOps Server row"
-	providers412Stale       = "providers changed since you loaded them — reload and retry"
+	providers412Stale       = "Providers changed since you loaded them — reload and retry"
 
 	// laneAppReason / laneSSHReason are the "(%s)" half of providers400Lane.
 	laneAppReason = "the App broker mints repository-scoped tokens on github.com only"
@@ -289,6 +289,7 @@ func validateHostOneKind(rows []types.GitProvider) error {
 		for _, raw := range row.BaseURLs {
 			host := canonicalProviderHost(strings.ToLower(hostrules.HostOf(raw)))
 			if first, ok := kindOf[slugHost(host)]; ok && first != row.Kind {
+				//lint:ignore ST1005 the text is the sentence the refused person reads
 				return fmt.Errorf(providers400HostTwoKind, i, host, string(first))
 			}
 			kindOf[slugHost(host)] = row.Kind
@@ -345,6 +346,7 @@ func validateProviderLanes(i int, row types.GitProvider, refuseSSHPathScope bool
 		// this rule existed must keep re-applying; the console door always
 		// passes true.
 		if refuseSSHPathScope && sshLaneExceedsPathScope(row) {
+			//lint:ignore ST1005 the text is the sentence the refused person reads
 			return fmt.Errorf(providers400LaneSSHPath, row.ID)
 		}
 	}
@@ -654,6 +656,7 @@ func (s *Server) handlePutWorkspaceProviders(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	// SEAM-1: the site-config lock (locks.go) serializes this RMW with the document's other writers.
+	defer s.revokeWithdrawnLocalPATs(r.Context()) // before the unlock below, so it runs after it
 	r, unlock, ok := s.lockDoor(w, r, db.SiteConfigLockClass)
 	if !ok {
 		return
@@ -794,7 +797,7 @@ func storageProvidersConfigured(sc types.SiteConfig) bool {
 // own documentation, so it discloses nothing the console does not already say.
 //
 // Frozen as shipped, the same terms as the PROVIDERS_400 block above.
-const capProvider403 = "you are not granted this deployment's %s provider — ask an admin to grant it, " +
+const capProvider403 = "You are not granted this deployment's %s provider — ask an admin to grant it, " +
 	"or launch against a repository on a provider you hold"
 
 // denyUserWorkspaceProviders is the member half of provider admission: of the

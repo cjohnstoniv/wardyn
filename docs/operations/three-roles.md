@@ -233,11 +233,11 @@ Stated honestly: profiles narrow by omission — a profile that omits secret gra
   - The write is a security-admin governance write, held for a second human under `WARDYN_GOVERNANCE_SECOND_HUMAN`. It takes `If-Match` (a stale ETag is a 412) and is audited as `governance.egress_baseline.write`.
 - **What the rubric can see here, at profile-write time.**
   - A profile write whose resolved rubric sets any row answers with one more advisory, beside the omission warnings; a held write keeps it in the change's notes.
-  - It names the egress, secrets and confinement grades a run under the profile can get on this deployment, the rows those grades select, and the rows that cap nothing here.
+  - It names the rows that cap nothing here first, by the editor's labels, then the grades a run can get on this deployment: three short sentences at most.
   - For example, on a deployment with one Bedrock provider and a substrate that offers only CC1:
 
     ```text
-    on this deployment a run under this profile grades egress sealed, reviewed or open; secrets none, baseline or powerful; and confinement CC1 — so only egress_open, egress_reviewed, egress_sealed, secrets_powerful, secrets_baseline, secrets_none and confinement_cc1 can cap it, and confinement_cc2 and confinement_cc3 cap nothing here; a run on one of its model providers always grades secrets powerful
+    2 rubric rows never cap a run under this profile here: Wall (CC2) and Vault (CC3). A run here is graded egress sealed, reviewed or open, secrets none, baseline or powerful, and confinement Fence (CC1); those rows can cap it. A run on one of this profile's model providers is always graded secrets powerful.
     ```
 
   - It claims only what the deployment forces on every run, so a row it calls inert really is.

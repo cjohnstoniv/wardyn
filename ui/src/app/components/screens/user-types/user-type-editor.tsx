@@ -22,6 +22,7 @@ import { GOVERNANCE as GOV } from "../../../lib/governance-copy";
 import { EXPLAIN, USER_TYPES as UT } from "../../../lib/user-types-copy";
 import type { UserType } from "../../../lib/types";
 import { Button } from "../../ui/button";
+import { INLINE_ACTIONS } from "../../wardyn/form-actions";
 import { Input } from "../../ui/input";
 import { Textarea } from "../../ui/textarea";
 import { Field } from "../../wardyn/form-primitives";
@@ -209,13 +210,13 @@ export function UserTypeEditor({
         </section>
       )}
 
-      <div className="mt-4 flex gap-2">
+      <div className={`mt-4 ${INLINE_ACTIONS}`}>
+        <Button variant="ghost" onClick={onCancel} disabled={saving}>
+          {UT.CANCEL}
+        </Button>
         <Button onClick={save} disabled={disabled || saving || !name.trim()}>
           {saving ? <Loader2 className="size-4 animate-spin" /> : null}
           {UT.SAVE}
-        </Button>
-        <Button variant="outline" onClick={onCancel} disabled={saving}>
-          {UT.CANCEL}
         </Button>
       </div>
     </div>

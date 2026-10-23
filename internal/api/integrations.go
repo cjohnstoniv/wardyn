@@ -179,7 +179,7 @@ func envSecretPresent(env capEnv, ref string) bool {
 // one (dangling ref); reason is "" iff ok.
 func secretGate(ref string, env capEnv) (ok bool, reason string) {
 	if ref == "" {
-		return false, "no credential configured"
+		return false, "No credential configured"
 	}
 	if !envSecretPresent(env, ref) {
 		return false, fmt.Sprintf("secret %q not stored", ref)

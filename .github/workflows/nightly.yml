@@ -404,7 +404,7 @@ jobs:
   #
   # NEVER RUN BEFORE on a hosted runner: NOTIFY_EXEMPT (scripts/test-repo-guards.sh),
   # kept out of notify-new-lanes' needs and release.yml's watched= until it has
-  # gone green on a real scheduled run, the same posture kind-survival-walk has.
+  # gone green on a real scheduled run, the same promotion rule kind-survival-walk had.
   ci-mode-dogfood-model-fake:
     if: inputs.scope != 'candidate'
     runs-on: ubuntu-latest
@@ -807,6 +807,7 @@ jobs:
               GO_BUILD_TAGS=docker,k8s
               RELEASE_BUILD=true
             stage: "true"
+            gomod: "true"
           # The same recipe with the Go Cryptographic Module pinned to the
           # snapshot CMVP certificate #5247 covers. release.yml's `images` row
           # carries the identical build-args (test-repo-guards.sh guard 16).
@@ -817,33 +818,40 @@ jobs:
               RELEASE_BUILD=true
               GOFIPS140=v1.0.0-c2097c7c
             stage: "true"
+            gomod: "true"
           - name: wardyn-proxy
             dockerfile: deploy/compose/Dockerfile.proxy
             build-args: ""
             stage: "true"
+            gomod: "true"
           - name: wardyn-runnerd
             dockerfile: deploy/compose/Dockerfile.runnerd
             build-args: |
               RELEASE_BUILD=true
             stage: "true"
+            gomod: "true"
           - name: agent-base
             dockerfile: deploy/images/base/Dockerfile
             build-args: ""
             stage: "true"
+            gomod: "true"
           - name: agent-codex-cli
             dockerfile: deploy/images/codex-cli/Dockerfile
             build-args: ""
             stage: "true"
+            gomod: "true"
           - name: agent-aws-sso
             dockerfile: deploy/images/aws-sso/Dockerfile
             build-args: ""
             stage: "true"
+            gomod: "true"
           # Never pushed, because it bundles the vendor CLI (release.yml's
           # `images` matrix explains why that image is not published).
           - name: agent-claude-code
             dockerfile: deploy/images/claude-code/Dockerfile
             build-args: ""
             stage: "false"
+            gomod: "true"
     steps:
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
@@ -868,6 +876,24 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # The image builds read the module set this job already downloaded (the Go
+      # Dockerfiles' `gomodcache` build context) instead of each re-fetching every module
+      # from the proxy inside buildx, where one proxy stream error failed a whole build
+      # (#3469). The cache is this job's own fresh `go mod download` of the checked-out
+      # go.mod/go.sum, so it carries nothing the tree did not ask for, and each build runs
+      # `go mod verify` over it. release.yml keeps its cold fetch (DECISIONS-010.md:1137).
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        if: matrix.gomod == 'true'
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Fill the Go module cache for the image builds
+        id: gomod
+        if: matrix.gomod == 'true'
+        run: |
+          set -euo pipefail
+          for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done
+          echo "dir=$(go env GOMODCACHE)/cache/download" >> "$GITHUB_OUTPUT"
       - name: Build both platforms (pushed to staging on a dispatch, discarded otherwise)
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
@@ -878,6 +904,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           provenance: false
           build-args: ${{ matrix.build-args }}
+          build-contexts: ${{ matrix.gomod == 'true' && format('gomodcache={0}', steps.gomod.outputs.dir) || '' }}
           labels: org.opencontainers.image.revision=${{ github.sha }}
           tags: ghcr.io/cjohnstoniv/staging/${{ matrix.name }}:run-${{ github.run_id }}
           # No cache-from or cache-to: a cached apt-get layer would ship stale Debian packages.
@@ -1375,12 +1402,10 @@ jobs:
           if-no-files-found: error
 
   # T-40 (#700), kind leg: scripts/kind-survival-walk.sh against the SAME
-  # `make kind-quickstart` cluster kind-sso-walk reuses. NEVER RUN BEFORE — see
-  # NOTIFY_EXEMPT in scripts/test-repo-guards.sh — kept out of
-  # notify-new-lanes' needs and release.yml's watched= until it has gone green
-  # here at least once, the same posture PR #1245 gave daemon-proxy-secret-kind.
+  # `make kind-quickstart` cluster kind-sso-walk reuses. Green on a real scheduled run (39782025578),
+  # so it is in notify-new-lanes' needs and release.yml's watched= (guard 13), and runs under
+  # scope=candidate: a watched job must never be skipped.
   kind-survival-walk:
-    if: inputs.scope != 'candidate'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -1453,15 +1478,14 @@ jobs:
   # real organisation (wardynd and postgres from deploy/helm/wardyn), enrols runnerd through its
   # chart and rendered Role, and runs test/k6 against both, then under runnerd's own token.
   # bind-delete-serial and bind-delete-overlap are the release gate for the unbound-pod arm: a pod
-  # deleted before it binds must never leave a proxy no one can stop. NEVER RUN BEFORE: NOTIFY_EXEMPT in
-  # scripts/test-repo-guards.sh, out of notify-new-lanes' needs and release.yml's watched= until it
-  # has gone green here, the same posture kind-survival-walk has.
+  # deleted before it binds must never leave a proxy no one can stop. Green on a real scheduled run
+  # (39782025578), so it is in notify-new-lanes' needs and release.yml's watched=: green-by-tree.sh
+  # requires every one of its four "k6-kind-conformance (<kubelet>, <suite>)" legs (#3439).
   # One job per kubelet and suite (four legs, each its own kind cluster), because the two kubelets
   # one after the other with both suites took 61 minutes. The kubelet pins live here, not in the
   # script's default, so a bump is made in both places. fail-fast is off: a red leg must not hide
   # the other three.
   k6-kind-conformance:
-    if: inputs.scope != 'candidate'
     name: k6-kind-conformance (${{ matrix.kubelet }}, ${{ matrix.suite }})
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -1533,11 +1557,10 @@ jobs:
   # the sandbox's environment and files, a file secret 0440 root:fsGroup, the audit rows, and the docker
   # half of the file-mode proof) and kind-run-output-walk in both modes (a run's output surviving a
   # restart, recovered from the recording in pg mode, #1831). Each walk makes and deletes its OWN
-  # quickstart cluster, so the three legs share nothing and run apart. NEVER RUN BEFORE: NOTIFY_EXEMPT in
-  # scripts/test-repo-guards.sh, out of notify-new-lanes' needs and release.yml's watched= until each
-  # leg has gone green here, the same posture kind-survival-walk has.
+  # quickstart cluster, so the three legs share nothing and run apart. Green on a real scheduled run
+  # (39782025578), so it is in notify-new-lanes' needs and release.yml's watched=: green-by-tree.sh
+  # requires every "kind-acceptance-walks (<walk>)" leg (#3439).
   kind-acceptance-walks:
-    if: inputs.scope != 'candidate'
     name: kind-acceptance-walks (${{ matrix.walk }})
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -1610,10 +1633,9 @@ jobs:
   # T-41 (#701): scripts/hybrid-walk.sh — laptop compose <-> org kind. Same
   # `make kind-quickstart` cluster as the job above; the laptop is its own
   # dedicated compose project this job builds fresh (nightly runners share
-  # nothing between jobs). NEVER RUN BEFORE — same NOTIFY_EXEMPT posture as
+  # nothing between jobs). Green on a real scheduled run (39782025578), so watched like
   # kind-survival-walk above.
   hybrid-walk:
-    if: inputs.scope != 'candidate'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
@@ -1692,9 +1714,8 @@ jobs:
   # `make kind-quickstart`'s shared one — see that script's own header for
   # what is and is not built. Needs read access to this repo's own published
   # ghcr.io packages (the chart + wardynd images), hence packages: read below.
-  # NEVER RUN BEFORE — same NOTIFY_EXEMPT posture as the two jobs above.
+  # Green on a real scheduled run (39782025578), so watched like the jobs above.
   kind-upgrade-walk:
-    if: inputs.scope != 'candidate'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
@@ -2161,7 +2182,7 @@ jobs:
           fi
 
   notify-new-lanes:
-    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, buildx-smoke-ui-sandbox, buildx-smoke-ui-sandbox-signin, kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg, managed-settings-drift, runner-compat-walk]
+    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, buildx-smoke-ui-sandbox, buildx-smoke-ui-sandbox-signin, kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg, managed-settings-drift, runner-compat-walk, kind-survival-walk, k6-kind-conformance, kind-acceptance-walks, hybrid-walk, kind-upgrade-walk]
     # main only: a workflow_dispatch on any other branch must not post to the main-health issue.
     if: failure() && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -2186,7 +2207,7 @@ jobs:
             gh issue comment "$existing" --body "Still failing (${failed:-no job reported failure}): $RUN_URL"
           else
             body=$(printf '%s\n' \
-              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, buildx-smoke-ui-sandbox and buildx-smoke-ui-sandbox-signin (multi-arch build), kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg, managed-settings-drift or runner-compat-walk." \
+              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, buildx-smoke-ui-sandbox and buildx-smoke-ui-sandbox-signin (multi-arch build), kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg, managed-settings-drift, runner-compat-walk, kind-survival-walk, k6-kind-conformance, kind-acceptance-walks, hybrid-walk or kind-upgrade-walk." \
               "" \
               "None of them shares the pre-existing failures of the older e2e-live job (deliberately not watched here)." \
               "" \

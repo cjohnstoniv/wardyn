@@ -29,6 +29,7 @@ import { localMcpRefused, useLocalMcpOn } from "./local-mcp";
 import { McpToggles } from "./mcp-toggles";
 import { defaultChoices, reasonText } from "./tool-facts";
 import { ToolRules } from "./tool-rules";
+import { StepSection } from "../../../../wardyn/step-section";
 
 const SELECT_CLASS =
   "h-9 w-full max-w-sm rounded-md border border-input bg-input-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring";
@@ -189,11 +190,7 @@ export function HarnessSetup({ access, harnessSet, intent, answeredFor, answered
   const { status } = useShellSetupStatus();
   if (!access) return null;
   return (
-    <section aria-labelledby={headingId} className="flex flex-col gap-3.5 rounded-xl border border-border bg-card p-[18px]">
-      <div>
-        <h2 id={headingId} className="font-semibold">{NR_TOOLS.HARNESS_SETUP_TITLE}</h2>
-        <p className="text-sm text-muted-foreground">{NR_TOOLS.HARNESS_SETUP_BODY}</p>
-      </div>
+    <StepSection titleId={headingId} title={NR_TOOLS.HARNESS_SETUP_TITLE} description={NR_TOOLS.HARNESS_SETUP_BODY} bodyClassName="flex flex-col gap-3.5">
       {access.harnesses.length === 0 ? (
         <p className="text-sm text-muted-foreground">{NR_TOOLS.NO_HARNESSES}</p>
       ) : (
@@ -201,6 +198,6 @@ export function HarnessSetup({ access, harnessSet, intent, answeredFor, answered
           <HarnessCard key={fact.harness} fact={fact} access={access} harnessSet={harnessSet} intent={intent} answeredFor={answeredFor} name={names?.get(fact.harness) ?? fact.harness} answered={answered} status={status} onSignedIn={onSignedIn} />
         ))
       )}
-    </section>
+    </StepSection>
   );
 }

@@ -15,6 +15,9 @@
 #      nightly query asks for workflow_dispatch runs only
 #   9. gh exits non-zero                              -> 2
 #  10. the script text has no `|| true` and no `|| :`
+#  18. a watched matrix job (#3439): one red leg -> 1, naming that leg and its conclusion;
+#      all legs green -> 0; no leg reported -> 1 "not reported"; a skipped leg -> 1;
+#      a sibling job whose name merely starts with the watched name is not a leg
 # plus: an expired marker, a wrong workflow path, a newer bad candidate in front
 # of an older good one, a nightly on another tree or from a fork, and usage errors.
 # Daemon-free, network-free.
@@ -219,6 +222,21 @@ put2 "repos/$R/actions/workflows/nightly.yml/runs" "{\"workflow_runs\":[$(nightl
 put "repos/$R/actions/runs/702/jobs" "$(jobs_json w1 w2 'multi-arch build (wardynd)')"
 run; want "17 ordering is global: the newest run decides wherever its page" 0
 grep -qx "nightly_run=702" <<<"$OUT" && ok "17 the newest run is reported" || bad "17 stdout was: $OUT"
+
+# ── 18. a watched matrix job reports one check per leg (#3439) ──────────────
+# `mx` is watched; GitHub reports it as "mx (leg)" rows. Every leg must be green;
+# a job that merely shares the name's prefix ("mx-other (a)") is not a leg.
+mx_run() {  # mx_run <label> <rc> <stderr-substring> <jobs-json>: WATCHED="w1 mx" over the given jobs
+  baseline "$1"; put "repos/$R/actions/runs/700/jobs" "$4"
+  WATCHED="w1 mx" run; want "$1" "$2" "$3"
+}
+mx_run 18a 0 "" "$(jobs_json w1 'mx (v1, org)' 'mx (v2, inproc)' 'multi-arch build (wardynd)')"
+mx_run 18b 1 "mx" "$(jobs_json w1 'mx (v1, org)' 'mx (v2, inproc)' 'multi-arch build (wardynd)' | jq -c '.jobs[2].conclusion = "failure"')"
+grep -qF "watched job 'mx' is not green (saw: failure)" <<<"$ERR" && ok "18b the red leg's conclusion is reported" || bad "18b stderr was: $ERR"
+mx_run 18c 1 "not reported" "$(jobs_json w1 'multi-arch build (wardynd)')"
+mx_run 18d 1 "saw: skipped" "$(jobs_json w1 'mx (v1, org)' 'mx (v2, inproc)' 'multi-arch build (wardynd)' | jq -c '.jobs[1].conclusion = "skipped"')"
+mx_run 18e 1 "not reported" "$(jobs_json w1 'mx-other (a)' 'multi-arch build (wardynd)')"
+mx_run 18f 0 "" "$(jobs_json w1 mx 'multi-arch build (wardynd)')"  # an unexpanded plain job named exactly mx still counts
 
 baseline 16
 OUT="$(PATH="$WORK/bin:$PATH" GITHUB_REPOSITORY=$R GH_TOKEN=x WATCHED="$WATCHED" "$SCRIPT" not-a-sha 2>/dev/null)"; RC=$?

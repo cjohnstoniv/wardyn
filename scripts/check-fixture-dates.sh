@@ -57,7 +57,10 @@ literal_dates() {
 
 declare -A ALLOWLIST=(
   ["internal/api/uigateway_record_test.go"]=1 # injected clock only: srv.cfg.Now starts here and steps a second per call, never compared to the wall clock
-  ["internal/recording/rfb_test.go"]=3 # injected clock only: the recorder's clock starts here and the test advances it, never compared to the wall clock
+  ["internal/recording/rfb_test.go"]=4 # injected clock only: the recorder's clock starts here and the test advances it, never compared to the wall clock
+  ["cmd/wardyn-runnerd/doctor_status_test.go"]=2 # passthrough only: status.json's last-error time, echoed in the stage detail, never compared to the clock
+  ["ui/src/app/components/screens/approvals-lists.test.tsx"]=2 # display only: a decided row's requested and decided times
+  ["ui/src/app/components/screens/permissions.test.tsx"]=1 # display only: a deactivated person's deactivated_at
   ["ui/e2e/recording-level.spec.ts"]=4 # passthrough only: stubbed audit rows and a recording's started_at, rendered as given, never compared to the clock
   ["ui/src/app/components/screens/run-detail/recording-tab.level.test.tsx"]=3 # passthrough only: audit rows' time and a gap's start/end, never compared to the clock
   ["cmd/wardyn-aws-sso/main_test.go"]=2
@@ -203,7 +206,7 @@ declare -A ALLOWLIST=(
   ["ui/src/app/components/screens/new-run-flow/launch/refusal-text.test.ts"]=2
   ["ui/src/app/components/screens/new-run-flow/steps/run/run-step.test.tsx"]=1
   ["ui/src/app/components/screens/run-detail-summary-header.test.tsx"]=1
-  ["ui/src/app/components/screens/runs/run-row.test.tsx"]=1
+  ["ui/src/app/components/screens/runs/run-row.test.tsx"]=3 # display only: a scheduled start and two end times, rendered as absolute dates, never compared to the clock
   ["ui/src/app/components/screens/runs/runs-model.test.ts"]=1
   ["ui/src/app/components/screens/runs/scheduled-state.test.ts"]=3
   ["ui/src/app/lib/schedule.test.ts"]=32

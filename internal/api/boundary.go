@@ -110,6 +110,7 @@ func validateBoundarySpec(sp types.BoundarySpec, limits types.BoundaryLimits) er
 	if sp.EligibleGrants != nil {
 		spec.EligibleGrants = *sp.EligibleGrants
 	}
+	spec.Desktop = sp.Desktop
 	if err := validateAllowedDomainsCount(spec.AllowedDomains); err != nil {
 		return err
 	}

@@ -22,7 +22,7 @@ const (
 	// Article-free on purpose: the grant KIND is interpolated, and "a %s" reads
 	// as "a api_key". The kind is the first grant that needs a store, which is
 	// the one the author has to look at first.
-	inlineSecretStoreMissingRefusal = "the %s grant requires a secret store, but none is configured"
+	inlineSecretStoreMissingRefusal = "The %s grant requires a secret store, but none is configured"
 )
 
 // errSecretStoreUnavailable is validateRunSecretRefs' answer when the secret
@@ -367,6 +367,7 @@ func (s *Server) validateRunSecretRefs(ctx context.Context, owner, subject strin
 	// injection can never resolve (fail closed). The message names the KIND that
 	// actually needs it, not whichever kind this check was written for first.
 	if s.cfg.Secrets == nil {
+		//lint:ignore ST1005 the text is the sentence the refused person reads
 		return http.StatusUnprocessableEntity, fmt.Errorf(inlineSecretStoreMissingRefusal, needed[0].kind)
 	}
 

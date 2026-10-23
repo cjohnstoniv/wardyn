@@ -55,7 +55,7 @@ type harnessLoginDispatch struct {
 // id, so the run itself has to carry the reason or it sits PENDING forever
 // with no hint and no watcher lease. Mirrors dispatchRun's own
 // unresolved-ceiling sentence (runs_dispatch.go), in this lane's words.
-const harnessLoginCeilingUnresolved = "this sign-in sandbox was not launched: Wardyn could not resolve the governance ceiling that bounds it — try again, and tell your admin if it keeps failing"
+const harnessLoginCeilingUnresolved = "This sign-in sandbox was not launched: Wardyn could not resolve the governance ceiling that bounds it — try again, and tell your admin if it keeps failing"
 
 // The run's failure_hint when the detached launch
 // PANICS. It needs its own sentence: the panic window is almost entirely inside

@@ -21,7 +21,7 @@ vi.mock("../../../lib/api/boundary", () => ({
 
 import { setField } from "../../../../test/set-field";
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
-import { BOUNDARY, BOUNDARY_DRY_RUN } from "../../../lib/boundary-copy";
+import { BOUNDARY, BOUNDARY_DESKTOP, BOUNDARY_DRY_RUN } from "../../../lib/boundary-copy";
 import { BASELINE, CHANGES, DELIVERY, RUN_LIMITS } from "../../../lib/governance-copy";
 import type { GovernanceChange } from "../../../lib/types";
 import type { BoundaryReport } from "../../../lib/api/boundary";
@@ -136,6 +136,23 @@ describe("BoundaryScreen", () => {
     expect(screen.getByLabelText(BOUNDARY.BLOCKED_LABEL)).toHaveValue("paste.example.org\n  10.20.0.0/16 \n");
   });
 
+  it("the Desktop card's draft goes to the dry run and the report's change table (#2967)", async () => {
+    getMock.mockResolvedValue(hardLimits);
+    const user = userEvent.setup();
+    renderScreen();
+    const card = await screen.findByTestId("boundary-desktop");
+    await user.click(within(within(card).getByRole("group", { name: "Copy out of the desktop" })).getByRole("radio", { name: BOUNDARY_DESKTOP.BLOCKED }));
+    await user.click(screen.getByRole("button", { name: BOUNDARY.REVIEW }));
+    const report = await screen.findByTestId("boundary-dry-run");
+    expect(dryRunMock).toHaveBeenCalledWith({
+      spec: { desktop: { paste_in: "allowed", copy_out: "blocked", upload: "allowed", download: "allowed" } },
+      limits: {},
+    });
+    const row = within(report).getByText(BOUNDARY_DESKTOP.TITLE).closest("tr")!;
+    expect(row).toHaveTextContent("Paste in allowed · Copy out allowed · Upload allowed · Download allowed");
+    expect(row).toHaveTextContent("Paste in allowed · Copy out blocked · Upload allowed · Download allowed");
+  });
+
   it("a dry-run reply that lands after Back and an edit doesn't bring the report back", async () => {
     getMock.mockResolvedValue(hardLimits);
     const late = deferred<BoundaryReport>();
@@ -163,6 +180,7 @@ describe("BoundaryScreen", () => {
       memberships: [
         { id: "a1", subject_type: "user", subject: "jonas@example.org", unit_id: "p1", unit_name: "Platform team", changes: c },
         { id: "a2", subject_type: "group", subject: "platform-leads", unit_id: "p1", unit_name: "Platform team", changes: c },
+        { id: "a3", subject_type: "all", subject: "", unit_id: "p1", unit_name: "Platform team", changes: c },
       ],
     });
     const user = userEvent.setup();
@@ -175,7 +193,9 @@ describe("BoundaryScreen", () => {
     expect(within(tiles).getByText("person narrows").previousSibling).toHaveTextContent("1");
     expect(within(tiles).getByText("stored policies narrow").previousSibling).toHaveTextContent("0");
     expect(within(report).getByText(BOUNDARY_DRY_RUN.OTHER_ASSIGNMENTS)).toBeInTheDocument();
-    expect(within(report).getByText("platform-leads · Platform team")).toBeInTheDocument();
+    expect(within(report).getByText("IdP group platform-leads · Platform team")).toBeInTheDocument();
+    expect(within(report).getByText("Everyone · Platform team")).toBeInTheDocument();
+    expect(within(report).queryByText(/^ · /)).toBeNull();
     expect(within(report).getAllByText(new RegExp(`^${RUN_LIMITS.DEFAULT_END_LABEL}: `)).length).toBeGreaterThan(0);
     expect(BOUNDARY_DRY_RUN.TILE_TEAMS(2)).toBe("teams below narrow");
     expect(BOUNDARY_DRY_RUN.TILE_PEOPLE(2)).toBe("people narrow");

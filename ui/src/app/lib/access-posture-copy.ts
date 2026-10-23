@@ -63,7 +63,7 @@ export const SIGNIN_HELP = {
   LINK_LABEL: SIGNIN_HELP_LINK_LABEL,
   // Not in the mock — the card's save mechanics (canon doc, "implementation
   // strings").
-  SAVE: "Save",
+  SAVE: "Save sign-in help",
   SAVED_TOAST: "Sign-in help saved.",
   SAVE_ERROR: "Couldn't save the sign-in help.",
   LOAD_FAILED: "Couldn't load the sign-in help. Retry to edit it.",

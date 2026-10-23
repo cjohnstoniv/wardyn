@@ -13,6 +13,7 @@ import { NR_HARNESSES } from "../../../wardyn/copy/new-run/harnesses";
 import { NR_FILES } from "../../../wardyn/copy/new-run/files";
 import { ENDS_NONE } from "../../../wardyn/copy/run-lifetime";
 import { NR_RUN } from "../../../wardyn/copy/new-run/run";
+import { isStepSectionHeading } from "../../../../lib/test-dom";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { NR_SAVE } from "../../../wardyn/copy/new-run/save";
 import { NR_SHAPE } from "../../../wardyn/copy/new-run/shape";
@@ -297,6 +298,22 @@ describe("Review Launch gate (U11)", () => {
   });
 });
 
+describe("Review sections", () => {
+  it("#3044: Run setup is the one StepSection card, with the groups as rows inside it and the status as its marker", async () => {
+    open(AGENT, { via: "template" });
+    await ready();
+    const heading = screen.getByRole("heading", { name: NR_REVIEW.SETUP_TITLE });
+    expect(isStepSectionHeading(heading)).toBe(true);
+    const card = heading.closest("section") as HTMLElement;
+    expect(card.querySelectorAll("[data-review-group]").length).toBeGreaterThan(1);
+    // The marker is a status mark like the group rows draw, with its word beside it: never a pill.
+    const mark = within(card).getByTestId("review-status-mark");
+    expect(mark).toHaveTextContent(new RegExp(`^(${NR_REVIEW.BADGE_COMPLETE}|${NR_REVIEW.BADGE_ATTENTION}|${NR_REVIEW.BADGE_CHECK})$`));
+    expect(mark.className).not.toMatch(/rounded-(full|md)|border|bg-/);
+    expect(mark.querySelector("svg")).not.toBeNull();
+  });
+});
+
 describe("Review blockers", () => {
   it("lists them in the design's order, links each to its fix, and keeps Launch shut", async () => {
     const user = userEvent.setup();
@@ -381,7 +398,7 @@ describe("Review blockers", () => {
     // #3043: nothing specific is to blame, so the chip and the card are amber, every group keeps its tick.
     expect(screen.getByText("Check needed")).toBeInTheDocument();
     expect(screen.queryByText(NR_REVIEW.BADGE_ATTENTION)).toBeNull();
-    expect(screen.getByText("Check needed").className).toContain("warning");
+    expect(screen.getByTestId("review-status-mark")).toHaveAttribute("data-tone", "warning");
     expect(blockerList().className).toContain("warning");
     expect(document.querySelector("[data-review-group][data-blocked]")).toBeNull();
   });
@@ -391,7 +408,8 @@ describe("Review blockers", () => {
     open(AGENT);
     await ready();
     await waitFor(() => expect(within(blockerList()).getAllByRole("listitem")).toHaveLength(1));
-    expect(screen.getByText(NR_REVIEW.BADGE_ATTENTION, { selector: "span.inline-flex" }).className).toContain("danger");
+    expect(screen.getByTestId("review-status-mark")).toHaveAttribute("data-tone", "danger");
+    expect(screen.getByTestId("review-status-mark")).toHaveTextContent(NR_REVIEW.BADGE_ATTENTION);
     expect(screen.queryByText("Check needed")).toBeNull();
     expect(within(blockerList()).queryByRole("button", { name: NR_REVIEW.CHECK_AGAIN })).toBeNull();
     expect(blockerList().className).toContain("danger");

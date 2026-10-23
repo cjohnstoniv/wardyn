@@ -27,6 +27,7 @@ import type { SetupHarnessTool, SetupStatus } from "../../lib/types";
 import { WithDoor } from "../../../test/door-harness";
 
 const { bedrock, claude, gateway, anthropicKey } = MODEL_PROVIDERS;
+const localModel = { ...gateway, id: "local-llm", name: "Local LLM", kind: "local_model" } as const;
 const HARNESSES: SetupHarnessTool[] = [
   { id: "claude-code", display: "Claude Code", has_gateway: false, has_login: true },
   { id: "codex-cli", display: "Codex CLI", has_gateway: false, has_login: true },
@@ -172,6 +173,7 @@ describe("provider strip connection causes", () => {
     { provider: claude, sentence: BANNER.B5("Claude Code"), button: CONNECTIONS.SIGN_IN_CLAUDE },
     { provider: gateway, sentence: BANNER.B4("Claude Code", gateway.name, true), button: CONNECTIONS.ADD_TOKEN },
     { provider: anthropicKey, sentence: BANNER.B4("Claude Code", anthropicKey.name, false), button: CONNECTIONS.ADD_KEY },
+    { provider: localModel, sentence: BANNER.B4("Claude Code", localModel.name, true), button: CONNECTIONS.ADD_TOKEN },
   ])("never_connected keeps the first-run line for $provider.kind", ({ provider, sentence, button }) => {
     const status = providerStatus([{ provider, defaultFor: ["claude-code"] }]);
     status.provider_access![0].cause = "never_connected";

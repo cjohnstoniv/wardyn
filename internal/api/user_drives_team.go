@@ -20,7 +20,7 @@ import (
 // folder. The admin write rules live here; the resolution is newResolvedDrive's.
 
 // driveTeamOffMsg refuses marking a drive a team drive while the switch is off.
-const driveTeamOffMsg = "team drives are off for this deployment: turn on storage.user_drive.team_drives first"
+const driveTeamOffMsg = "Team drives are off for this deployment: turn on storage.user_drive.team_drives first"
 
 // driveTeamWriteRefusal refuses a team drive while storage.user_drive.team_drives
 // is off. Empty msg is yes.
@@ -70,7 +70,7 @@ func (s *Server) teamDriveGrantAllowed(w http.ResponseWriter, r *http.Request, g
 }
 
 // driveTeamReclaimMsg is the 422 a person's reclaim of a team drive answers.
-const driveTeamReclaimMsg = "this is a team drive: its files belong to its groups and are not reclaimed per person; " +
+const driveTeamReclaimMsg = "This is a team drive: its files belong to its groups and are not reclaimed per person; " +
 	"remove the folder on the substrate (docs/OPERATIONS.md) once the groups no longer need it"
 
 // driveTeamReclaimRefusal keeps a person's reclaim (the leaver's cleanup) off a

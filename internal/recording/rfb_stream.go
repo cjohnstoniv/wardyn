@@ -30,6 +30,9 @@ type rfbStream struct {
 	failed   bool
 	rects    int
 	cutTexts int
+
+	// boundary, when set, runs as each server message starts, the first one ending the handshake.
+	boundary func()
 }
 
 const (
@@ -51,16 +54,15 @@ func newRFBStream() *rfbStream {
 func (s *rfbStream) feed(p []byte, keep func([]byte)) {
 	for len(p) > 0 && !s.failed {
 		if s.passing {
-			if s.skip == 0 {
-				s.passing = false
-				s.after()
-				continue
-			}
 			k := min(uint64(len(p)), s.skip)
 			if !s.drop {
 				keep(p[:k])
 			}
 			p, s.skip = p[k:], s.skip-k
+			if s.skip == 0 {
+				s.passing = false
+				s.after()
+			}
 			continue
 		}
 		k := min(s.want-len(s.buf), len(p))
@@ -92,7 +94,13 @@ func (s *rfbStream) read(n int, then func([]byte)) {
 	s.want, s.then, s.typeStep = n, then, false
 }
 
+// pass skips n bytes, then runs after. With nothing to skip after runs now, so a message that ends
+// a write ends there, not on the next one.
 func (s *rfbStream) pass(n uint64, after func()) {
+	if n == 0 {
+		after()
+		return
+	}
 	s.skip, s.after, s.passing = n, after, true
 }
 
@@ -156,8 +164,16 @@ func (s *rfbStream) serverInit(b []byte) {
 	}
 }
 
+// atBoundary reports whether the stream is between two server messages.
+func (s *rfbStream) atBoundary() bool {
+	return s.typeStep && len(s.buf) == 0 && !s.passing && !s.failed
+}
+
 // next starts the next server message.
 func (s *rfbStream) next() {
+	if s.boundary != nil {
+		s.boundary()
+	}
 	s.drop = false
 	s.read(1, s.message)
 	s.typeStep = true

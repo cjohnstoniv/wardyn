@@ -29,7 +29,7 @@ const maxSSOTokenUploadBytes = 16 << 10 // 16 KiB
 // names no model provider: a sign-in launched before the model-provider
 // conversion, whose capture no provider could serve. Refused rather than
 // stored; the person signs in again from a provider's own door.
-const ssoTokenUnstampedScopeRefusal = "this sign-in started before Wardyn recorded which model provider it was for — " +
+const ssoTokenUnstampedScopeRefusal = "This sign-in started before Wardyn recorded which model provider it was for — " +
 	"start the sign-in again from Getting started"
 
 // ssoTokenRunKilledRefusal answers a login run that has been KILLED: its own
@@ -39,7 +39,7 @@ const ssoTokenUnstampedScopeRefusal = "this sign-in started before Wardyn record
 // attempt won rather than blaming this one — CONDITIONALLY: after a
 // Cancel, or the pane's own post-capture kill, there is no newer sandbox to be
 // sent to, and a sentence that assumes one sends the reader looking for it.
-const ssoTokenRunKilledRefusal = "this sign-in sandbox was closed — a newer sign-in for you replaced it, " +
+const ssoTokenRunKilledRefusal = "This sign-in sandbox was closed — a newer sign-in for you replaced it, " +
 	"or it was cancelled; if you started a newer sign-in, finish it there"
 
 // handleUploadSSOToken accepts a PUT /api/v1/internal/sso-token/{runID} from

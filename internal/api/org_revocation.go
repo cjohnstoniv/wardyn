@@ -18,9 +18,11 @@ import (
 // organisation has revoked the device. writeServerError answers it 503 with
 // this sentence, so every launcher that already maps its store failure there
 // needs no branch of its own.
+//
+//lint:ignore ST1005 the text is the sentence the refused person reads
 var errOrgRevoked = errors.New(orgRevokedMsg)
 
-const orgRevokedMsg = "this device's enrolment with its organisation was revoked; new runs are refused " +
+const orgRevokedMsg = "This device's enrolment with its organisation was revoked; new runs are refused " +
 	"until it is re-enrolled (deliver a fresh WARDYN_ORG_ENROLMENT_TOKEN and restart wardynd)"
 
 // runCapCreator is the store's atomic capped insert (store.PG), asserted rather
