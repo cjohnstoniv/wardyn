@@ -519,7 +519,7 @@ function ReportBody({ report }: { report: BoundaryReport }) {
     ...report.units.map((p) => ({ key: p.id, name: p.name, changes: p.changes })),
   ];
   const policies = report.stored_policies.map((p) => ({ key: p.id, name: p.name, changes: p.changes }));
-  const row = (a: BoundaryReportAssign) => ({ key: a.id, name: `${a.subject} · ${a.unit_name}`, changes: a.changes });
+  const row = (a: BoundaryReportAssign) => ({ key: a.id, name: BOUNDARY_DRY_RUN.ASSIGNMENT_ROW(a.subject_type, a.subject, a.unit_name), changes: a.changes });
   const people = report.memberships.filter((a) => a.subject_type === "user").map(row);
   const others = report.memberships.filter((a) => a.subject_type !== "user").map(row);
   const none = teams.length + policies.length + people.length + others.length === 0;
