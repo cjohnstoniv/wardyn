@@ -67,8 +67,10 @@ describe("source parity — composed governance profile wire types", () => {
     const checkGo = readFileSync(join(root, "internal/api/governance_check.go"), "utf8");
     expect(goJSONTags(checkGo, "checkEffective")).toEqual(["ceiling", "limits", "provenance", "path_provenance"]);
     const effective = /effective: \{([\s\S]*?)\} \| null;/.exec(tsInterfaceBlock(governanceTs, "GovernanceCheck"));
-    const keys = [...(effective?.[1] ?? "").matchAll(/(\w+): /g)].map((k) => k[1]);
+    const keys = [...(effective?.[1] ?? "").matchAll(/(\w+)\??: /g)].map((k) => k[1]);
     expect(keys).toEqual(["ceiling", "limits", "provenance", "path_provenance"]);
+    // path_provenance is omitempty (a security-tier read), so the TS key is optional.
+    expect(effective?.[1]).toContain("path_provenance?: ");
   });
 
   it("GovernanceEffective: full parity with governanceEffective", () => {
