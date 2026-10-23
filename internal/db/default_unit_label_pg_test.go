@@ -5,6 +5,7 @@ package db
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -29,6 +30,9 @@ func unitNames(t *testing.T, ctx context.Context, pool *pgxpool.Pool) map[string
 		}
 		out[id] = name
 	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read units: %v", err)
+	}
 	return out
 }
 
@@ -39,13 +43,21 @@ func migrateWithUnits(t *testing.T, seeded []string, want string) (*pgxpool.Pool
 	pool, _ := partialSchemaPool(t, "0208") // 0207 is the last applied: units exist, no tree yet
 	ctx := context.Background()
 	before := map[string]string{}
-	for _, name := range seeded {
-		var id string
-		if err := pool.QueryRow(ctx, `INSERT INTO governance_units (id, name, ceiling, limits)
-			VALUES (gen_random_uuid(), $1, '{}', '{}') RETURNING id::text`, name).Scan(&id); err != nil {
-			t.Fatalf("seed unit %q: %v", name, err)
+	rows, err := pool.Query(ctx, `INSERT INTO governance_units (id, name, ceiling, limits)
+		SELECT gen_random_uuid(), n, '{}', '{}' FROM unnest($1::text[]) AS n RETURNING id::text, name`, seeded)
+	if err != nil {
+		t.Fatalf("seed units: %v", err)
+	}
+	for rows.Next() {
+		var id, name string
+		if err := rows.Scan(&id, &name); err != nil {
+			t.Fatalf("scan seeded unit: %v", err)
 		}
 		before[id] = name
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		t.Fatalf("seed units: %v", err)
 	}
 	if err := Migrate(ctx, pool); err != nil {
 		t.Fatalf("Migrate with units %q: %v", seeded, err)
@@ -71,6 +83,16 @@ func TestDefaultUnitLabel_DefaultAndDeploymentTaken(t *testing.T) {
 
 func TestDefaultUnitLabel_ThreeNamesTaken(t *testing.T) {
 	migrateWithUnits(t, []string{"Default", "Default (deployment)", "Default (deployment 2)"}, "Default (deployment 3)")
+}
+
+// A fixed candidate list runs out: 1001 units hold Default, Default (deployment) and
+// Default (deployment 2) through Default (deployment 1000).
+func TestDefaultUnitLabel_EveryCandidateUpTo1000Taken(t *testing.T) {
+	seeded := []string{"Default", "Default (deployment)"}
+	for n := 2; n <= 1000; n++ {
+		seeded = append(seeded, fmt.Sprintf("Default (deployment %d)", n))
+	}
+	migrateWithUnits(t, seeded, "Default (deployment 1001)")
 }
 
 func TestDefaultUnitLabel_OnlyDefaultTaken(t *testing.T) {

@@ -23,13 +23,16 @@ ALTER TABLE governance_units
 
 -- The Default unit (store.DefaultUnitID). It takes the first label no unit holds, in the order
 -- Default, Default (deployment), Default (deployment 2), ...: the name is UNIQUE, so an install that
--- already has units named Default and Default (deployment) must not collide.
+-- already has units named Default and Default (deployment) must not collide. The candidates are
+-- numbered 0..N for N = the unit count: N units occupy at most N of those N+1 distinct labels, so a
+-- free one always exists, however many units there are.
 INSERT INTO governance_units (id, name, kind, ceiling, limits)
 SELECT '00000000-0000-0000-0000-000000000001',
        (SELECT c.label
-          FROM (SELECT 0 AS n, 'Default' AS label
-                UNION ALL SELECT 1, 'Default (deployment)'
-                UNION ALL SELECT g, 'Default (deployment ' || g || ')' FROM generate_series(2, 1000) AS g) c
+          FROM (SELECT n, CASE n WHEN 0 THEN 'Default'
+                                 WHEN 1 THEN 'Default (deployment)'
+                                 ELSE 'Default (deployment ' || n || ')' END AS label
+                FROM generate_series(0, (SELECT count(*) FROM governance_units)) AS n) c
          WHERE NOT EXISTS (SELECT 1 FROM governance_units u WHERE u.name = c.label)
          ORDER BY c.n
          LIMIT 1),
