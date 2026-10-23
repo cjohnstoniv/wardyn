@@ -83,7 +83,7 @@
       "postcss": "8.5.23",
       "source-map-js": "1.2.2",
       "mermaid": "11.16.1",
-      "dompurify": "3.4.16",
+      "dompurify": "3.4.17",
       "katex": "0.18.2",
       "browserslist": "4.28.9",
       "@asamuzakjp/css-color": "7.1.3",
