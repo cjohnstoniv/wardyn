@@ -273,7 +273,7 @@
 # docs/AUDIT-ACTIONS.md 50790 adds 34 over 50756, measured (0.10 RENAME): the line saying rows written before the rename keep the old spellings.
 # docs/AUDIT-ACTIONS.md 51430 = ours 51396 + theirs 50790 - base 50756 at the 0.10 W4d merge of RENAME onto the train.
 # docs/AUDIT-ACTIONS.md=51430 adds 34 (0.10 TREE-MODEL): unit_membership_gone on run.revive and run.end.set, the arm key.
-# docs/AUDIT-ACTIONS.md 51680 adds 216 over 51464, measured (0.10 unit admins): the governance.unit_admin.granted and revoked rows, actor, approver, unit_scope and locked_knobs on the unit and membership write rows, and unit_scope_denied in authz.denied.
+# docs/AUDIT-ACTIONS.md 51680 adds 216 over 51464, measured (0.10 unit admins): the governance.unit_admin.grant and .revoke rows, actor, approver, unit_scope and locked_knobs on the unit and membership write rows, and unit_scope_denied in authz.denied.
 docs/AUDIT-ACTIONS.md=51680 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.

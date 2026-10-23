@@ -73,10 +73,10 @@ func uaUnitBody(name string, parent uuid.UUID, overlay map[string]any, extra map
 
 func uaDomains(ds ...string) map[string]any { return map[string]any{"allowed_domains": ds} }
 
-func newUnitAdminEnv(t *testing.T, secondHuman bool) *unitAdminEnv {
+func newUnitAdminEnv(t *testing.T, secondHuman bool, mutate ...func(*Config)) *unitAdminEnv {
 	t.Helper()
 	t.Setenv(envGovernanceSecondHuman, strconv.FormatBool(secondHuman))
-	e := &unitAdminEnv{govEnv: newGovEnvOn(t, throwawayPGPool(t))}
+	e := &unitAdminEnv{govEnv: newGovEnvOn(t, throwawayPGPool(t), mutate...)}
 	e.a = treeChild(t, e.govEnv, uaUnitBody("ua-a", store.DefaultUnitID, uaDomains("pypi.org", "github.com", "npmjs.org"), nil))
 	e.a1 = treeChild(t, e.govEnv, uaUnitBody("ua-a1", e.a.ID, uaDomains("pypi.org", "github.com"), nil))
 	e.a2 = treeChild(t, e.govEnv, uaUnitBody("ua-a2", e.a.ID, uaDomains("pypi.org"), nil))

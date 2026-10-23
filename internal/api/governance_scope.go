@@ -50,7 +50,8 @@ func (s *Server) unitAdminSubjects(ctx context.Context) (users, groups []string)
 type unitScopeTxKey struct{}
 
 // withUnitScopeTx is ctx whose unitScope reads run on q: an approver re-checked inside the decision's
-// transaction (recheckApprover) reads its scope there, not on a second connection.
+// transaction (recheckApprover, for a session and an API token alike) reads its scope there, not on a
+// second connection and not from the request's memo.
 func withUnitScopeTx(ctx context.Context, q store.Querier) context.Context {
 	return context.WithValue(ctx, unitScopeTxKey{}, q)
 }
