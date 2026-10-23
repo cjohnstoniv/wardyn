@@ -7,6 +7,7 @@ import (
 	"errors"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 )
 
@@ -18,6 +19,9 @@ func sandboxCreateFailure(err error) (hint, reason string) {
 	if errors.Is(err, runner.ErrRelayIPFenced) {
 		return "the sandbox could not be created: the runner gave this run's proxy a network address that is still held for an earlier run it is waiting to confirm stopped, " +
 			"so it stopped this run before it could open. Launch the run again.", reasonRelayIPFenced
+	}
+	if pe := (*remote.ProxySettingError)(nil); errors.As(err, &pe) {
+		return "the sandbox could not be created: " + pe.Error() + ".", reasonRunnerProxySetting
 	}
 	if !errors.Is(err, runner.ErrImageArch) {
 		return "the sandbox could not be created: " + err.Error(), "sandbox_create"

@@ -142,7 +142,7 @@ func previewViaHTTP(t *testing.T, srv *Server, users, groups []string) governanc
 
 // resolveDirect is the enforcement path's own call, made straight against the
 // store. ErrNotFound comes back as the zero answer — the absent-row doctrine,
-// which is exactly what the endpoint ships as an empty object.
+// which is exactly what the endpoint ships as an answer naming no unit.
 func resolveDirect(t *testing.T, pool *pgxpool.Pool, users, groups []string) governancePreviewResponse {
 	t.Helper()
 	p, tier, err := store.NewPG(pool).ResolveGovernanceUnit(context.Background(), users, groups, "")
@@ -240,7 +240,7 @@ func TestGovernancePreview_FoldsClaimsLikeTheEnforcementPath(t *testing.T) {
 	}
 }
 
-// TestGovernancePreview_NoMatchIsTheDeploymentCeiling pins the empty object.
+// TestGovernancePreview_NoMatchIsTheDeploymentCeiling pins the answer that names no unit.
 // An absent unit_name is how the console reads "no assignment matches these
 // claims", the same additive/absent shape defaultPolicyResponse's
 // unit_name uses — "" would be a value the console then has to
@@ -258,7 +258,7 @@ func TestGovernancePreview_NoMatchIsTheDeploymentCeiling(t *testing.T) {
 		t.Fatalf("the database already assigns a profile to unknown claims (%+v) — a leftover everyone-row breaks this test's isolation", want)
 	}
 	if got := previewViaHTTP(t, srv, claims, claims); got != want {
-		t.Errorf("preview = %+v, want the empty object (no assignment matched)", got)
+		t.Errorf("preview = %+v, want the zero answer (no assignment matched)", got)
 	}
 
 	// The RAW body, not just the decoded struct: ProfileID is a uuid.UUID

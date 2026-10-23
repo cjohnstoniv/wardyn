@@ -437,7 +437,8 @@ func TestPG_AuditChain_UnlockedWriterDoesNotForkChain(t *testing.T) {
 // waitForBlockedChainWriter polls pg_locks until some backend is WAITING on the
 // audit-chain advisory lock, and reports whether that ever happened. The
 // advisory key is split across (classid, objid) exactly as pg_locks exposes it:
-// the high 32 bits and the low 32 bits of db.AuditChainLockKey.
+// the high 32 bits and the low 32 bits of db.AuditChainLockKey. Only this
+// test's database counts: pg_locks lists the whole server.
 func waitForBlockedChainWriter(t *testing.T, pool *pgxpool.Pool, within time.Duration) bool {
 	t.Helper()
 	ctx := context.Background()
@@ -449,7 +450,8 @@ func waitForBlockedChainWriter(t *testing.T, pool *pgxpool.Pool, within time.Dur
 		if err := pool.QueryRow(ctx, `
 			SELECT count(*) FROM pg_locks
 			 WHERE locktype = 'advisory' AND NOT granted
-			   AND classid = $1 AND objid = $2`, classid, objid).Scan(&n); err != nil {
+			   AND classid = $1 AND objid = $2
+			   AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`, classid, objid).Scan(&n); err != nil {
 			t.Fatalf("poll pg_locks: %v", err)
 		}
 		if n > 0 {

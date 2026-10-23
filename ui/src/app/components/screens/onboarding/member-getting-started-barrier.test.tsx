@@ -46,7 +46,7 @@ vi.mock("../../../lib/api/secrets", () => ({
 const listRunsMock = vi.fn();
 vi.mock("../../../lib/api/runs", () => ({
   runs: {
-    listRuns: (...a: unknown[]) => listRunsMock(...a),
+    listRunsFiltered: async (...a: unknown[]) => ({ runs: await listRunsMock(...a), truncated: false, hiddenOlder: 0, hiddenKilled: 0 }),
     createRunWire: vi.fn(),
     getRun: vi.fn(),
     killRun: vi.fn(),

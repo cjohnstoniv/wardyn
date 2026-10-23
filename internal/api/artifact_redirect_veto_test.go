@@ -163,7 +163,7 @@ func TestPlanArtifactRedirect_UnrelatedToStillPlans(t *testing.T) {
 func assertRefusalAudited(t *testing.T, rec *recRecorder, host string) {
 	t.Helper()
 	var found bool
-	for _, ev := range rec.events {
+	for _, ev := range rec.snapshot() {
 		if ev.Action != "run.artifact.redirect" {
 			continue
 		}
@@ -173,7 +173,7 @@ func assertRefusalAudited(t *testing.T, rec *recRecorder, host string) {
 		found = true
 	}
 	if !found {
-		t.Fatalf("expected a run.artifact.redirect audit event for the refused host %q, got %+v", host, rec.events)
+		t.Fatalf("expected a run.artifact.redirect audit event for the refused host %q, got %+v", host, rec.snapshot())
 	}
 }
 
@@ -196,7 +196,7 @@ func TestPlanArtifactRedirect_SecondPortOfATokenHostIsAudited(t *testing.T) {
 				t.Fatalf("injections = %d, want the first redirect's alone", len(plan.injections))
 			}
 			var denied int
-			for _, ev := range rec.events {
+			for _, ev := range rec.snapshot() {
 				if ev.Action == "run.artifact.redirect" && ev.Outcome == "denied" {
 					denied++
 				}

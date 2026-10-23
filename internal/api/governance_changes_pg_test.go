@@ -1285,3 +1285,63 @@ func TestPG_GovernanceChanges_ChangeListHonoursState(t *testing.T) {
 		t.Errorf("an unknown change = %d %s, want 404 %s", w.Code, w.Body, reasonGovernanceChangeNotFound)
 	}
 }
+
+// TestPG_GovernanceChanges_HeldUnitKeepsItsMode: the mode a held unit write asked for is the mode it
+// applies with, as a direct write's is; a payload queued without one applies as it always did.
+func TestPG_GovernanceChanges_HeldUnitKeepsItsMode(t *testing.T) {
+	def := store.DefaultUnitID.String()
+	approve := func(t *testing.T, e *govEnv, ch types.GovernanceChange) {
+		t.Helper()
+		if w := e.call(e.bob, http.MethodPost, approvePath(ch.ID), ""); w.Code != http.StatusOK {
+			t.Fatalf("approving %s = %d %s, want 200", ch.ID, w.Code, w.Body)
+		}
+	}
+	heldPassThroughCreate := func(t *testing.T, e *govEnv, name string) types.GovernanceChange {
+		t.Helper()
+		return e.pending(e.call(e.alice, http.MethodPost, "/api/v1/governance/units",
+			`{"name":"`+name+`","mode":"pass_through","parent_id":"`+def+`","overlay":{}}`))
+	}
+
+	t.Run("create", func(t *testing.T) {
+		e := newGovEnv(t)
+		ch := heldPassThroughCreate(t, e, "held-pt")
+		approve(t, e, ch)
+		if got := e.profile(uuid.MustParse(ch.TargetKey)); got.Mode != types.UnitModePassThrough {
+			t.Errorf("held pass-through create applied as mode %q, want pass_through", got.Mode)
+		}
+		if n, err := e.pg.CountOwnWallsUnits(context.Background()); err != nil || n != 0 {
+			t.Errorf("own-walls units after a held pass-through create = %d (%v), want 0", n, err)
+		}
+	})
+
+	t.Run("switch", func(t *testing.T) {
+		e := newGovEnv(t)
+		// The unit narrows its base, so dropping the narrowing is a loosening and is held.
+		def0, denied := store.DefaultUnitID, []string{"evil.example"}
+		own, err := e.pg.UpsertGovernanceUnit(context.Background(), types.GovernanceUnit{
+			Name: "held-switch", CreatedBy: "seed", ParentID: &def0, Overlay: &types.CeilingOverlay{DeniedDomains: &denied},
+		})
+		if err != nil || own.Mode != types.UnitModeOwnWalls {
+			t.Fatalf("seeded unit = mode %q (%v), want own_walls", own.Mode, err)
+		}
+		ch := e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/units/"+own.ID.String(),
+			`{"name":"held-switch","mode":"pass_through","parent_id":"`+def+`","overlay":{}}`))
+		approve(t, e, ch)
+		if got := e.profile(own.ID); got.Mode != types.UnitModePassThrough {
+			t.Errorf("held switch applied as mode %q, want pass_through", got.Mode)
+		}
+	})
+
+	t.Run("old payload", func(t *testing.T) {
+		e := newGovEnv(t)
+		// A payload queued before the mode was carried has none: the stored mode (own_walls for a create).
+		ch := heldPassThroughCreate(t, e, "held-old")
+		if _, err := e.pool.Exec(context.Background(), `UPDATE governance_changes SET payload = payload - 'mode' WHERE id = $1`, ch.ID); err != nil {
+			t.Fatal(err)
+		}
+		approve(t, e, ch)
+		if got := e.profile(uuid.MustParse(ch.TargetKey)); got.Mode != types.UnitModeOwnWalls {
+			t.Errorf("a modeless held create applied as mode %q, want own_walls", got.Mode)
+		}
+	})
+}

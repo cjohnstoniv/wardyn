@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -205,4 +206,16 @@ func TestScanHandlersAnswerTheRunCapWith403(t *testing.T) {
 		srv.handleScanSource(w, req())
 		check(t, w)
 	})
+}
+
+// A scan launch refused for a missing or truncated group snapshot answers the 403 that names the remedy,
+// the same as run-create, not a 500 "launch scan run".
+func TestScanLaunchRefusalAnswersAStaleGroupSnapshotWith403(t *testing.T) {
+	srv, _, _ := govEscapeFixture(t, assignedStore(govProfile("two-at-a-time")))
+	req := httptest.NewRequest(http.MethodPost, "/scan", nil).WithContext(govMemberCtx([]string{"eng"}, false))
+	w := httptest.NewRecorder()
+	if !srv.writeScanLaunchRefusal(w, req, fmt.Errorf("resolve governance ceiling: %w", errGroupsSnapshotStale)) ||
+		w.Code != http.StatusForbidden || reasonOf(t, w) != reasonGroupsSnapshotStale || !strings.Contains(w.Body.String(), "sign in again") {
+		t.Fatalf("= %d %s, want 403 %s naming the remedy", w.Code, w.Body.String(), reasonGroupsSnapshotStale)
+	}
 }

@@ -12,7 +12,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
 )
 
-// Restriction is a deny-only list that follows people (migration 0210): it applies to every governed
+// Restriction is a deny-only list that follows people (migration 0227): it applies to every governed
 // run of the people it covers, in every unit they run in, and never counts as a context. It can only
 // narrow, so its spec and limits hold the few knobs that have a deny shape and nothing else.
 type Restriction struct {

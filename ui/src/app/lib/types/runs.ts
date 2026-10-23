@@ -305,8 +305,7 @@ export interface AgentRun {
   // legacy row the backfill could not date exactly. A lease-ended run (
   // lost_reason "ended") stays RUNNING until the ended-run grace makes it
   // terminal, so ITS end time is lost_at, not this field — internal/types/
-  // types.go's AgentRun.EndedAt doc. Nothing in the console reads this field
-  // yet; it is a live wire field and the mirror rule forbids dropping one.
+  // types.go's AgentRun.EndedAt doc. The run header's total run time reads it.
   ended_at?: string;
   // Set while a kept run's stop could not be confirmed (migration 0088,
   // #1060): the latest stop error and when containment first failed. The
@@ -358,10 +357,23 @@ export interface AgentRun {
   // tracking, so an inline nested object's own keys (kind/by/pending) would
   // misread as top-level AgentRun keys and fail that parity test.
   attention?: RunAttention;
+  // AgentRun.MachineKind / VMMachine (migration 0217): "linux_vm" for a run
+  // in a Linux VM, with the virtual hardware its runner started. Absent for a
+  // container run. A named interface for the same line-scrape reason as above.
+  machine_kind?: "linux_vm";
+  vm_machine?: VMMachine;
+}
+
+// internal/types/machine.go's VMMachine.
+export interface VMMachine {
+  machine_type: string;
+  cpu_model: string;
+  accelerator: string;
+  qemu_version: string;
 }
 
 export interface RunAttention {
-  kind: "approval" | "reauth" | "ado_consent" | "lost";
+  kind: "approval" | "reauth" | "ado_consent" | "lost" | "takeover";
   by: "you" | "owner" | "admin";
   pending: number;
 }
@@ -494,6 +506,9 @@ export interface RunDetail extends AgentRun {
   model_provider_name?: string;
   model_provider_deleted?: boolean;
   created_via_name?: string;
+  // The model allowlist each local model provider handed the run's proxy at its latest dispatch, {provider id: models}
+  // (#3374): what the run is held to, whatever the provider lists now. Absent when the run holds none.
+  model_allowlists?: Record<string, string[]>;
   // The name of the pool the run was admitted into, as it reads now; a deleted pool is still named.
   runner_pool_name?: string;
   kept_until?: string;
@@ -613,7 +628,7 @@ export interface RunPolicyView {
 // internal/policyref.Provenance: the layer that set one value of a run's policy
 // ("deployment", "unit" with the leaf's name, "member" or "operator"), the
 // contact to ask, and locked once a layer forbids lower layers to change it
-// (never set until walls or delegation can lock a knob).
+// (never set until a boundary or delegation can lock a knob).
 export interface PolicyProvenance {
   layer: string;
   name?: string;

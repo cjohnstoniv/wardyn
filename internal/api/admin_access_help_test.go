@@ -243,7 +243,7 @@ func TestHandlePutSiteConfig_SignInHelpAudited(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("PUT = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
-	for _, ev := range audit.events {
+	for _, ev := range audit.snapshot() {
 		if ev.Action != "site_config.write" {
 			continue
 		}

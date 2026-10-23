@@ -39,7 +39,7 @@ Every run captures a **lease** at create:
 | A run already kept by its own end, still inside its files grace | Allowed — moving `ends_at` into the future is the first step toward reviving it (#1061) |
 | A run kept by its own end, past its files grace | Refused: "its end cannot be moved" — start a new run |
 
-- Every extend also re-checks the owner's CURRENT authority over the run's agent, workspaces, model provider, stored policy and git provider.
+- Every extend also re-checks the owner's CURRENT authority over the run's agent, workspaces, model provider, stored policy and git provider, and that the owner's profile still allows the run's placement (`placement_denied`).
 - An owner who has since lost one of those gets the extend refused, naming the capability — exactly as a revive does.
 
 ## End

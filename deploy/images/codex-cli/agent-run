@@ -241,7 +241,12 @@ fi
 if [[ "${1:-}" == "--idle" || "${1:-}" == "--revive" ]]; then
     : "${HOME:=/home/agent}"; export HOME
     # BEFORE any prep — see start_boot_session for why; a revive never re-seeds.
-    if [[ "$1" == "--revive" ]]; then revive_markers; else start_boot_session; fi
+    # An application run (WARDYN_APPLICATION_RUN, set by dispatch) is its startup
+    # command, so a revive starts it again; any other seed is never replayed.
+    if [[ "$1" == "--revive" ]]; then
+        revive_markers
+        if [[ "${WARDYN_APPLICATION_RUN:-}" == "1" ]]; then start_boot_session; fi
+    else start_boot_session; fi
     install_mitm_ca
     prepare_claude_config_dir  # no-op unless CLAUDE_CONFIG_DIR is set (RO cred mount)
     install_artifact_config
@@ -444,8 +449,9 @@ maybe_exec_task_mode "$task"
 #     --dangerously-skip-permissions (claude-code/agent-run). Codex's own
 #     sandbox cannot start under Wardyn's hardening (no user namespaces under
 #     the default seccomp profile), so without this every write fails. Wardyn
-#     IS the boundary: default-deny egress, proxy-injected credentials,
-#     confinement class and the audit trail govern the run (#2174).
+#     IS the boundary: default-deny egress, credentials kept out of the
+#     sandbox wherever Wardyn brokers them, confinement class and the audit
+#     trail govern the run (#2174).
 # The exit code from `codex` propagates to the caller.
 exec_argv=(codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox)
 if [[ -n "${WARDYN_CODEX_MODEL:-}" ]]; then exec_argv+=(-m "$WARDYN_CODEX_MODEL"); fi

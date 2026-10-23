@@ -17,7 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// RestrictionStore keeps the restrictions (migration 0210). A side interface, as BoundaryStore is: a
+// RestrictionStore keeps the restrictions (migration 0227). A side interface, as BoundaryStore is: a
 // store that does not implement it holds none, so every run resolves as before.
 type RestrictionStore interface {
 	ListRestrictions(ctx context.Context) ([]types.Restriction, error)
@@ -304,4 +304,12 @@ func WorkspaceOwningUnitQ(ctx context.Context, q Querier, id uuid.UUID) (*uuid.U
 		return nil, fmt.Errorf("store: read workspace owning unit: %w", err)
 	}
 	return unit, nil
+}
+
+// restrictionIDsParam is the restriction_ids column's value: never NULL, which the column refuses.
+func restrictionIDsParam(ids []uuid.UUID) []uuid.UUID {
+	if ids == nil {
+		return []uuid.UUID{}
+	}
+	return ids
 }

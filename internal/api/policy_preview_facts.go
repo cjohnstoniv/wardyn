@@ -91,7 +91,7 @@ type policyPreviewRepository struct {
 
 func policyPreviewFacts(req createRunRequest, spec types.RunPolicySpec, source policySourceRecord,
 	warnings []string, site types.SiteConfig, choice runProviderChoice) policyPreviewResponse {
-	out := redactSpecForRead(spec, false)
+	out := redactSpecForRead(spec, specReadMember)
 	if out.LLMInspection != nil {
 		inspection := *out.LLMInspection
 		inspection.WorkspaceSecretValues = nil

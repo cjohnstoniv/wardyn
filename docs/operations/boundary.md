@@ -8,9 +8,9 @@
 
 ## Modes
 
-- `no_limits` matches the organisation's boundary, so it narrows nothing. An install with no boundary row is in `no_limits`, and every run resolves exactly as before.
+- `no_limits` matches the organisation's boundary, so it narrows nothing. An upgraded install stays in `no_limits`, and every run resolves exactly as before.
+- A fresh install's first boot starts the boundary in `hard_limits` with nothing listed and floor `CC1`, which reaches what `no_limits` does, so an admin only adds limits. The boot writes `governance.boundary.seed` once. A boundary a person wrote first is kept.
 - `hard_limits` is a Wardyn allow and deny list inside the organisation's boundary.
-- `hard_limits` cannot be set yet. A `PUT` that names it answers `409 boundary_hard_limits_gated` until the boundary bounds every brokered credential path a run is given (#3238). A `no_limits` document can be written and dry-run now.
 
 ## What the boundary holds
 
@@ -37,7 +37,7 @@ A knob the boundary does not name is left as the layers below set it. `contact` 
 
 ## Credentials withheld
 
-After the seal, at dispatch and at revive, every credential lane that reaches a host the boundary denies or does not allow is withheld:
+After the seal, at dispatch and at revive, every credential lane that reaches a host the boundary denies or does not allow is withheld. Revive judges hosts only; `spec.eligible_grants` is applied at dispatch:
 
 - the git broker, when the boundary withholds any host it re-originates to (`github.com`, `api.github.com`, `codeload.github.com`, `*.githubusercontent.com`), with the grant id in the sandbox's env;
 - the PAT broker, per host; the GitHub CLI and Azure CLI doors; the Bedrock lane;
@@ -45,7 +45,9 @@ After the seal, at dispatch and at revive, every credential lane that reaches a 
 
 A revive whose git broker or Azure CLI the boundary no longer allows is refused (`409`); start a new run.
 
-`spec.eligible_grants` binds every grant a run holds, the ones its launch adds included (model provider, workspace, integration and source-control credentials). A grant outside it is dropped at dispatch with its injection, its broker entry and its env or file secret. The run's `run.ceiling.reassert` row carries `boundary: true` and the `withheld_grants` ids, also for a run no profile applies to.
+`spec.eligible_grants` binds every grant a run holds, the ones its launch adds included (model provider, workspace, integration and source-control credentials). A grant outside it is dropped at dispatch with its injection, its broker entry and its env or file secret. The run's `run.ceiling.reassert` row carries `boundary: true` and the `withheld_grants` ids, also for a run no profile applies to. `withheld_grants` lists stored grant rows only. A withheld broker lane, the resident AWS SSO session's included, is listed in `dropped_broker_lanes`.
+
+A captured AWS SSO session held in the sandbox (`WARDYN_AWS_SSO_PROXY_INJECT` off) is judged as the `api_key` grant the proxy-injected session gets: its portal host, `x-amz-sso_bearer_token` and `aws-sso-access-token`. So a boundary admits or withholds it alike under either setting. A withheld session's Bedrock lane is dropped.
 
 The mint and redeem doors check the same rules live, before anything is minted: a grant the boundary or the run's profile now withholds is refused with `403 credential_withheld` and a `credential.mint` denied row. If the run, its grants, its profile or the boundary cannot be read, the answer is `503` (`credential_withheld_unread` at mint; at redeem `run_unreadable` or `store_unavailable`, with a `secret.read` failure row); retry. The AWS SSO renewer skips a grant it withholds.
 
@@ -62,7 +64,7 @@ The dry run calls the same function the resolve calls in `hard_limits`, so its r
 ## Break-glass
 
 - The boundary binds every run: the admin token's, local mode's and super admins' included. Break-glass lifts only a profile's walls, never the boundary.
-- An admin-token run is a break-glass run when the boundary is in `hard_limits` and a unit with its own walls or a restriction exists. It must carry a reason in the `X-Wardyn-Break-Glass-Reason` header (`wardyn run --break-glass-reason`), at most 512 characters.
+- An admin-token run is a break-glass run when the boundary is in `hard_limits` and a restriction exists, or it bounds something and a governance profile with its own walls exists. It must carry a reason in the `X-Wardyn-Break-Glass-Reason` header (`wardyn run --break-glass-reason`), at most 512 characters.
 - Without a reason the run is refused with `400 break_glass_reason_required`, and so are its preflight and policy preview. With neither, no reason is asked and the run is not tagged.
 - The run record carries `break_glass: true`. The `run.break_glass.open` audit row and the run's `run.create` row record the reason.
 - In `hard_limits`, a run whose confinement class is below the boundary's floor is not dispatched, and a paused one is not revived (`409 confinement_class_conflict`). The run-limit sweep holds every live run to `limits.max_end_ahead_sec`, profiled or not, a break-glass run's included, and a later change to a run's end is held to the maximum as it stands then.

@@ -33,7 +33,7 @@ const (
 	SourceDeployment = "deployment"
 
 	// The layer kinds: which layer set a limit (Ref.Layer) or a value of a run's
-	// effective policy (Provenance.Layer). A ceiling is a deployment or a profile
+	// effective policy (Provenance.Layer). A ceiling is a deployment or a unit
 	// layer; member is the run's own policy and operator a run no ceiling binds;
 	// boundary is the Wardyn boundary, the outermost layer (types.Boundary).
 	LayerDeployment = SourceDeployment

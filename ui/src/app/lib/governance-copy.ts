@@ -167,6 +167,7 @@ export const GOVERNANCE = {
   CEILING_TITLE: "Ceiling",
   CEILING_LEAD:
     "Every run under this profile is bounded by this spec. A member's own policy is clamped to it, and so is a saved policy they pick.",
+  CEILING_MOUNTS_LOCKED: "Only a super admin can see or change a mount's host path. You can keep or remove the mount.",
   LIMITS_TITLE: "Limits",
   LIMITS_LEAD:
     "Some of what a run can do routes around the ceiling entirely. Deny it here instead.",

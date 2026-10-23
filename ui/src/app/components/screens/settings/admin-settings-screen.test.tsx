@@ -171,7 +171,8 @@ describe("AdminSettingsScreen", () => {
     renderScreen();
     await screen.findByTestId("user-drives-card");
     expect(await screen.findByTestId("host-card-status")).toHaveTextContent(CARD_STATUS.CANT_LAUNCH);
-    expect(screen.getByTestId("model-providers-list-status")).toHaveTextContent(CARD_STATUS.NOT_SET_UP);
+    // The list's pill appears once its own read answers, which can land after the Host card's.
+    expect(await screen.findByTestId("model-providers-list-status")).toHaveTextContent(CARD_STATUS.NOT_SET_UP);
     for (const [id, href] of [
       ["providers-card", "/admin/providers"],
       ["user-drives-card", "/admin/drives"],

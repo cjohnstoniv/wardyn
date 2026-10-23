@@ -505,14 +505,19 @@ var routeMatrix = map[string]classifiedRoute{
 	"DELETE /api/v1/permissions/grants/{id}": {class: classSecurity},
 	"PUT /api/v1/permissions/enforcement":    {class: classSecurity},
 	// The egress baseline lowers grades, so it is a governance write: security tier, four-eyes covered.
-	"GET /api/v1/governance/egress-baseline":      {class: classSecurity},
-	"PUT /api/v1/governance/egress-baseline":      {class: classSecurity},
-	"GET /api/v1/governance/boundary":             {class: classSecurity},
-	"PUT /api/v1/governance/boundary":             {class: classSecurity},
-	"POST /api/v1/governance/dry-run":             {class: classSecurity},
-	"POST /api/v1/governance/restrictions":        {class: classSecurity},
-	"PUT /api/v1/governance/restrictions/{id}":    {class: classSecurity},
-	"DELETE /api/v1/governance/restrictions/{id}": {class: classSecurity},
+	"GET /api/v1/governance/egress-baseline": {class: classSecurity},
+	"PUT /api/v1/governance/egress-baseline": {class: classSecurity},
+	"GET /api/v1/governance/boundary":        {class: classSecurity},
+	"PUT /api/v1/governance/boundary":        {class: classSecurity},
+	"POST /api/v1/governance/dry-run":        {class: classSecurity},
+	// Approval rules: the tier that decides tool calls writes them; four-eyes covers every write but a delete.
+	"GET /api/v1/governance/approval-rules":           {class: classSecurity},
+	"POST /api/v1/governance/approval-rules/dry-run":  {class: classSecurity},
+	"PUT /api/v1/governance/approval-rules/{name}":    {class: classSecurity},
+	"DELETE /api/v1/governance/approval-rules/{name}": {class: classSecurity},
+	"POST /api/v1/governance/restrictions":            {class: classSecurity},
+	"PUT /api/v1/governance/restrictions/{id}":        {class: classSecurity},
+	"DELETE /api/v1/governance/restrictions/{id}":     {class: classSecurity},
 
 	"GET /api/v1/governance/credential-delivery": {class: classSecurity},
 	"PUT /api/v1/governance/credential-delivery": {class: classSecurity},
@@ -584,9 +589,9 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/key-domains":                                         {class: classSecurity},
 	"PUT /api/v1/key-domains/assignments/{subject_type}/{subject}":    {class: classSecurity},
 	"DELETE /api/v1/key-domains/assignments/{subject_type}/{subject}": {class: classSecurity},
-	// User drives (migration 0054) — SPLIT (issue #168, 0.8). The four routes
-	// that NAME A HOST PATH (host_root) or a cluster storage class — creating,
-	// listing, updating, and removing the drive itself — stay classAdmin, and
+	// User drives (migration 0054) — SPLIT (issue #168, 0.8). The three routes
+	// that WRITE A HOST PATH (host_root) or a cluster storage class — creating,
+	// updating, and removing the drive itself — stay classAdmin, and
 	// the contrast with the seven /governance rows directly above is the tier
 	// line in one pair: "never the host" is precisely what separates SUPER
 	// from securityOps. The other three — granting an allocation, revoking
@@ -596,8 +601,9 @@ var routeMatrix = map[string]classifiedRoute{
 	// they reach through /governance. A member is refused on all seven and
 	// learns about their OWN drive from /me.user_drive instead — the same
 	// "your own answer, never the whole table" split the governance rows draw
-	// against /policies/default.
-	"GET /api/v1/drives":                {class: classAdmin},
+	// against /policies/default. The list is classSecurity too (0.10, #2827):
+	// read-only, host_root and storage_class withheld from a security admin.
+	"GET /api/v1/drives":                {class: classSecurity},
 	"POST /api/v1/drives":               {class: classAdmin},
 	"PUT /api/v1/drives/{id}":           {class: classAdmin},
 	"DELETE /api/v1/drives/{id}":        {class: classAdmin},
@@ -837,6 +843,10 @@ var routeMatrix = map[string]classifiedRoute{
 	// A waiting sign-in's device code: approving it binds the approver's
 	// cloud identity to the owner's stored session, so the owner only.
 	"GET /api/v1/runs/{id}/sign-in": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
+	// The run's Files panel moves files into and out of the owner's sandbox: entry, like a ticket.
+	"GET /api/v1/runs/{id}/desktop/files":        {class: classOwner, entity: entityRun, ownerTier: tierEntry},
+	"PUT /api/v1/runs/{id}/desktop/files/{name}": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
+	"GET /api/v1/runs/{id}/desktop/files/{name}": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 	// Moving a run's end keeps a sandbox and its credentials alive: a write,
 	// so not the security tier's inspect-or-stop.
 	"PATCH /api/v1/runs/{id}": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
@@ -844,6 +854,8 @@ var routeMatrix = map[string]classifiedRoute{
 	// A) — a rename is a display-field write with no security or
 	// incident-response warrant behind it. See run_title.go's doc comment.
 	"PATCH /api/v1/runs/{id}/title": {class: classOwner, entity: entityRun, ownerTier: tierOwnerOnly},
+	// Bringing a computer folder back writes onto the run's person's computer: no admin bypass.
+	"POST /api/v1/runs/{id}/computer-folder/bring-back": {class: classOwner, entity: entityRun, ownerTier: tierOwnerOnly},
 	// A run's launch intent holds its task text: its creator only, no admin bypass
 	// (launch_intent.go). seedRun gives every fixture run one, so the owner arm reads 200.
 	"GET /api/v1/runs/{id}/launch-intent":     {class: classOwner, entity: entityRun, ownerTier: tierOwnerOnly},
@@ -862,6 +874,10 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/runs/{id}/revive":             {class: classOwner, entity: entityRun, ownerTier: tierSuper},
 	"POST /api/v1/runs/{id}/profile":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	"POST /api/v1/runs/{id}/profile/synthesize": {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	// Desktop sign-ins (#2972): the run's creator only (run_desktop_signin.go).
+	"POST /api/v1/runs/{id}/desktop-signin":        {class: classOwner, entity: entityRun, ownerTier: tierEntry},
+	"POST /api/v1/runs/{id}/desktop-signin/shares": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
+	"POST /api/v1/runs/{id}/desktop-signin/end":    {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 	// The run cockpit's live evidence reads. classOwner, same gate as GET
 	// /runs/{id} above: each names a run in its path and each exposes something
 	// about a LIVE sandbox — the workspace's diff, its resource usage, and who
@@ -881,6 +897,10 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/approvals/{id}/approve":    {class: classOwner, entity: entityApproval, ownerTier: tierSecurity},
 	"POST /api/v1/approvals/{id}/deny":       {class: classOwner, entity: entityApproval, ownerTier: tierSecurity},
 	"GET /api/v1/approvals/{id}/paths":       {class: classOwner, entity: entityApproval, ownerTier: tierSecurity},
+	// #2963: answering a "Needs you" request is interactive entry to its run (admitRunEntry).
+	"POST /api/v1/approvals/{id}/take-over": {class: classOwner, entity: entityApproval, ownerTier: tierEntry},
+	"POST /api/v1/approvals/{id}/hand-back": {class: classOwner, entity: entityApproval, ownerTier: tierEntry},
+	"POST /api/v1/approvals/{id}/decline":   {class: classOwner, entity: entityApproval, ownerTier: tierEntry},
 
 	// GET /runs/{id}/attach (the interactive PTY WebSocket) is a SPECIAL case:
 	// its ticket-LESS fallback lane (ticketOrHumanAuth) is plain admin-only
@@ -913,6 +933,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/internal/approvals":                      {class: classInternal},
 	"POST /api/v1/internal/approvals/{id}/expire":          {class: classInternal},
 	"POST /api/v1/internal/credentials/mint":               {class: classInternal},
+	"POST /api/v1/internal/desktop-signin/check":           {class: classInternal},
 	"POST /api/v1/internal/decisions":                      {class: classInternal},
 	"POST /api/v1/internal/activity":                       {class: classInternal},
 	"POST /api/v1/internal/groundtruth":                    {class: classInternal},
@@ -1690,9 +1711,14 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// DELETE /me/components/{id}; 33 since 0.9 added GET
 		// /workspaces/{id}/branches; 34 since 0.9 added GET
 		// /runs/{id}/launch-intent; 35 since 0.9.3 added GET
-		// /runs/{id}/containment.
-		if probed != 35 {
-			t.Errorf("probed %d classOwner routes, want 35 — a route that left classOwner takes its tier "+
+		// /runs/{id}/containment; 38 since #2963 added POST
+		// /approvals/{id}/take-over, hand-back and decline; 41 since 0.10
+		// added the three /runs/{id}/desktop/files routes; 44 since 0.10
+		// (#2972) added POST /runs/{id}/desktop-signin, .../shares and .../end
+		// (tierEntry); 45 since 0.10 added POST
+		// /runs/{id}/computer-folder/bring-back.
+		if probed != 45 {
+			t.Errorf("probed %d classOwner routes, want 45 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})
@@ -1821,8 +1847,11 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// 0.10 TREE-API adds PUT /governance/memberships/{id} (move) and its promote route on the security tier (= 94 SEC).
 	// 0.10 RESTRICT-PIN adds the 3 /governance/restrictions routes and PUT /workspaces/{id}/owning-unit on the security tier (= 98 SEC).
 	// 0.10 FEAT-1KUBE adds PUT /components/{id}/kubectl-token beside the component writes (= 73 SUPER).
-	if sec != 98 || super != 73 {
-		t.Errorf("tier split = %d security / %d admin, want 98 / 73 (the 3 /governance/restrictions routes and the workspace owning-unit pin + the membership move and promote + the 3 Wardyn boundary routes + the node record + the 2 organization pool runner routes + the 4 organization runner routes + the SUPER list and delete of people's drives + the 2 /remote-runners reads and the people-policy pair + the 2 /governance/credential-delivery routes + the token move + the 5 service-identity routes + the 4 invitation routes + the runner revoke + the runners list, detail, token list and revoke and switch read + the 2 /governance/egress-baseline routes + the 3 /key-domains routes + §B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke + the fleet capacity read + GET /people + the audit retention read and drop + the person erasure + the 4 /governance/changes routes + GET /approval-notify/status + the SCIM status read, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes, MINUS #548's retired paste and disconnect, PLUS the identity unbind, runner registration token mint, the runners switch write, 0.9's 6 runner-pool writes and the 3 template-group-admins routes and the 3 /shared-secrets routes and the remote-hosted runner rename)", sec, super)
+	// 0.10 approval rules add their list, write, delete and dry run on the security tier (= 96 SEC).
+	// 0.10 moves GET /drives to the security tier for a read-only Drives page (= 97 SEC, 72 SUPER).
+	// 0.10 RESTRICT-PIN is merged over those (= 103 SEC).
+	if sec != 103 || super != 72 {
+		t.Errorf("tier split = %d security / %d admin, want 103 / 72 (the 3 /governance/restrictions routes and the workspace owning-unit pin + the membership move and promote + the 4 approval-rule routes + the 3 Wardyn boundary routes + the node record + the 2 organization pool runner routes + the 4 organization runner routes + the SUPER list and delete of people's drives + the 2 /remote-runners reads and the people-policy pair + the 2 /governance/credential-delivery routes + the token move + the 5 service-identity routes + the 4 invitation routes + the runner revoke + the runners list, detail, token list and revoke and switch read + the 2 /governance/egress-baseline routes + the 3 /key-domains routes + §B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke + the fleet capacity read + GET /people + the audit retention read and drop + the person erasure + the 4 /governance/changes routes + GET /approval-notify/status + the SCIM status read, MINUS record, PLUS #168's 3 moved /drives routes and the moved GET /drives; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes and the moved GET /drives, MINUS #548's retired paste and disconnect, PLUS the identity unbind, runner registration token mint, the runners switch write, 0.9's 6 runner-pool writes and the 3 template-group-admins routes and the 3 /shared-secrets routes and the remote-hosted runner rename)", sec, super)
 	}
 }
 

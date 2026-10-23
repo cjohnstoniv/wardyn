@@ -44,6 +44,9 @@ type CreateRunRequest struct {
 	// never-reap policy (AutoStopAfterSec < 0) or the idle reaper will stop the
 	// idle sandbox.
 	Interactive bool `json:"interactive,omitempty"`
+	// MachineKind is the kind of sandbox: "" or "container" (the default) or "linux_vm", a Linux
+	// guest under QEMU/KVM that only a registered runner offering it starts.
+	MachineKind string `json:"machine_kind,omitempty"`
 	// WorkspaceID, when set, launches the run against that ONBOARDED workspace:
 	// the server prepends the workspace's stored source onto the resolved policy
 	// (a repo as a workspace_repos entry, a local dir as a read-only-by-default

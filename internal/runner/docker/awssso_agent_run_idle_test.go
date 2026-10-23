@@ -138,9 +138,9 @@ exit "$rc"
 	return home, binDir, tmuxLog
 }
 
-// runIdle runs the real `agent-run --idle` under `timeout`, the same proof
-// oracle_agent_run_idle_test.go uses: a script that holds the container open is
-// KILLED by timeout (124); one that exits on its own reports its own code.
+// runIdle runs the real `agent-run --idle` through runIdleUntilPrep: a script
+// that holds the container open is KILLED (124); one that exits on its own
+// reports its own code.
 func runIdle(t *testing.T, home, binDir, tmuxLog string, extraEnv ...string) (code int, out string) {
 	t.Helper()
 	return runIdleOnPath(t, home, binDir+string(os.PathListSeparator)+os.Getenv("PATH"), tmuxLog, extraEnv...)
@@ -151,8 +151,7 @@ func runIdle(t *testing.T, home, binDir, tmuxLog string, extraEnv ...string) (co
 func runIdleOnPath(t *testing.T, home, pathValue, tmuxLog string, extraEnv ...string) (code int, out string) {
 	t.Helper()
 	caDir := caDirFor(home)
-	cmd := exec.Command("timeout", "3s", "bash", runnableAgentRun(t), "--idle")
-	cmd.Env = append(os.Environ(), append([]string{
+	env := append(os.Environ(), append([]string{
 		"HOME=" + home,
 		"PATH=" + pathValue,
 		"TMUX_LOG=" + tmuxLog,
@@ -169,14 +168,7 @@ func runIdleOnPath(t *testing.T, home, pathValue, tmuxLog string, extraEnv ...st
 		"WARDYN_REPOS=",
 		"WARDYN_REPO_URL=",
 	}, extraEnv...)...)
-	b, err := cmd.CombinedOutput()
-	if exitErr, ok := err.(*exec.ExitError); ok {
-		return exitErr.ExitCode(), string(b)
-	}
-	if err != nil {
-		t.Fatalf("running agent-run --idle: %v\noutput: %s", err, b)
-	}
-	return 0, string(b)
+	return runIdleUntilPrep(t, home, runnableAgentRun(t), env)
 }
 
 // caDirFor is the per-test directory install_mitm_ca writes under, beside the

@@ -23,6 +23,7 @@ import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import { governance as api, isGrantBoundError, type AutonomyRubric, type GovernanceLimits, type GovernanceUnit, type GovernanceUnitInput } from "../../../lib/api/governance";
 import { policies as policiesApi } from "../../../lib/api/policies";
 import { getErrorMessage } from "../../../lib/format";
+import { useUnsavedGuard } from "../../../lib/use-unsaved-guard";
 import { GOVERNANCE as GOV, MEMBER_DRIVE_DOOR, RUN_LIMITS as RL, RUN_LIMIT_UNITS, runLimitUnit } from "../../../lib/governance-copy";
 import { PEOPLE } from "../../../lib/people-access-copy";
 import type { PolicyContact, RunPolicySpec, SetupModelProvider } from "../../../lib/types";
@@ -190,6 +191,12 @@ export function ProfileEditor({
     JSON.stringify(limits) !== opened.current.limits,
     JSON.stringify(contact) !== opened.current.contact,
   ].filter(Boolean).length;
+  // Leaving with edits that were not saved asks first; a save or a held change closes this editor. The fetched
+  // data above is not an edit, and neither is the starter re-seeding itself once the providers are known.
+  const reseeded = !profile && modelProviders !== undefined && spec === specText(minimalSpec(modelProviders));
+  const edited = JSON.stringify({ name, spec: reseeded ? specText(STARTER_SPEC) : spec, base, overlay, overlayLimits, limits, contact }, null, 2);
+  const initial = React.useRef(edited).current;
+  useUnsavedGuard("profile-editor", edited !== initial, () => edited);
 
   const save = async () => {
     const parsed = ceiling;

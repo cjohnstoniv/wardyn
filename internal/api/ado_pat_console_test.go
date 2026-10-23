@@ -455,6 +455,11 @@ func TestADOPATConsole_DisconnectSkipsOwnTokenRows(t *testing.T) {
 // disconnect: the same 404 as no row at all.
 func TestADOPATConsole_DisconnectOwnTokenRowOnlyIsUnconfigured(t *testing.T) {
 	fx := newADOConsoleLane(t, false)
+	// The fixture's captured sign-in belongs to a row this config drops; a disconnect now forgets
+	// that one too, so remove it to leave the person with no sign-in at all.
+	if err := fx.srv.cfg.Secrets.For(fx.subject).Delete(context.Background(), adoEntraSecretName(fx.st.site.WorkspaceProviders.Git[0].ID)); err != nil {
+		t.Fatal(err)
+	}
 	fx.st.site.WorkspaceProviders.Git = []types.GitProvider{ownPATTestRow()}
 	if w := fx.disconnect(t, fx.subject); w.Code != http.StatusNotFound {
 		t.Fatalf("disconnect status = %d, want 404: %s", w.Code, w.Body.String())

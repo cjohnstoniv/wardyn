@@ -179,6 +179,15 @@ func (s *approvalService) CountForRun(ctx context.Context, runID uuid.UUID) (int
 	return s.st.CountApprovalsForRun(ctx, runID)
 }
 
+// TakeOver and HandBack are the OPTIONAL human_takeover surface the api handler type-asserts
+// (approvals_takeover.go); the api layer writes their audit rows.
+func (s *approvalService) TakeOver(ctx context.Context, id uuid.UUID, holder string) (types.ApprovalRequest, string, error) {
+	return s.st.TakeOverApproval(ctx, id, holder)
+}
+func (s *approvalService) HandBack(ctx context.Context, id uuid.UUID, holder string, at time.Time) (types.ApprovalRequest, error) {
+	return s.st.HandBackApproval(ctx, id, holder, at)
+}
+
 // ListApprovalsPage is the OPTIONAL paged lister the api handler type-asserts
 // for (same pattern as store.Pager): the console polls four single-state lists
 // every 10s and decided approvals are never deleted, so the unpaged read grew
@@ -587,6 +596,7 @@ func reapTickLock(pool *pgxpool.Pool) func(context.Context) (func(), bool) {
 		if ok {
 			pruneAWSSSOSpentTokens(ctx, pool)
 			pruneAWSSSORefusedTokens(ctx, pool)
+			pruneUIDesktopClosed(ctx, pool)
 		}
 		return release, ok
 	}
@@ -605,6 +615,20 @@ func pruneAWSSSOSpentTokens(ctx context.Context, pool *pgxpool.Pool) {
 	}
 	if n > 0 {
 		slog.InfoContext(ctx, "wardynd: pruned stale aws sso spent-token rows", slog.Int("deleted", n))
+	}
+}
+
+// pruneUIDesktopClosed deletes the desktop Closes whose cookies have expired: past that bound the
+// cookie is refused anyway. Called from reapTickLock, under the reap advisory lock. Best-effort, as
+// pruneAWSSSOSpentTokens: an expired row is never read, so a missed prune only costs its space.
+func pruneUIDesktopClosed(ctx context.Context, pool *pgxpool.Pool) {
+	n, err := store.NewPG(pool).PruneUIDesktopClosed(ctx, time.Now())
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: pruning desktop Closes failed", slog.Any("err", err))
+		return
+	}
+	if n > 0 {
+		slog.InfoContext(ctx, "wardynd: pruned expired desktop Close rows", slog.Int("deleted", n))
 	}
 }
 
@@ -675,6 +699,9 @@ type lifecycleStopper struct {
 	// could get wrong; and the store this reaper holds is a pool, not the
 	// approval service the API server already owns.
 	cancelApprovals func(context.Context, uuid.UUID)
+	// cancelMaxAgeApprovals is cancelApprovals for a WARDYN_RUN_MAX_AGE stop, which the run's event feed
+	// must not report as an idle stop. Nil-safe.
+	cancelMaxAgeApprovals func(context.Context, uuid.UUID)
 	// finishOutput is the run-output finalisation contract (api.Server's
 	// FinishRunOutput), reached through the server rather than copied here.
 	// Nil-safe, like cancelApprovals.
@@ -687,7 +714,7 @@ type lifecycleStopper struct {
 var _ lifecycle.Stopper = lifecycleStopper{}
 
 func (l lifecycleStopper) StopRun(ctx context.Context, runID uuid.UUID, notAfter time.Time) (lifecycle.StopOutcome, error) {
-	return l.stop(ctx, runID, func() (bool, error) {
+	return l.stop(ctx, runID, l.cancelApprovals, func() (bool, error) {
 		return store.NewPG(l.pool).UpdateRunStateIfIdle(ctx, runID, types.RunRunning, types.RunStopped, notAfter)
 	})
 }
@@ -695,13 +722,14 @@ func (l lifecycleStopper) StopRun(ctx context.Context, runID uuid.UUID, notAfter
 // StopRunMaxAge is StopRun for a run past WARDYN_RUN_MAX_AGE: the same teardown
 // and revocation, behind a transition guarded on the run's age alone.
 func (l lifecycleStopper) StopRunMaxAge(ctx context.Context, runID uuid.UUID, createdNotAfter time.Time) (lifecycle.StopOutcome, error) {
-	return l.stop(ctx, runID, func() (bool, error) {
+	return l.stop(ctx, runID, l.cancelMaxAgeApprovals, func() (bool, error) {
 		return store.NewPG(l.pool).UpdateRunStateIfCreatedBefore(ctx, runID, types.RunRunning, types.RunStopped, createdNotAfter)
 	})
 }
 
-// stop wins transition (a guarded RUNNING->STOPPED), then tears down and revokes.
-func (l lifecycleStopper) stop(ctx context.Context, runID uuid.UUID, transition func() (bool, error)) (lifecycle.StopOutcome, error) {
+// stop wins transition (a guarded RUNNING->STOPPED), then tears down and revokes; cancelApprovals is the
+// approval half of the cascade for the cause of this stop.
+func (l lifecycleStopper) stop(ctx context.Context, runID uuid.UUID, cancelApprovals func(context.Context, uuid.UUID), transition func() (bool, error)) (lifecycle.StopOutcome, error) {
 	run, err := store.NewPG(l.pool).GetRun(ctx, runID)
 	if err != nil {
 		return lifecycle.StopOutcome{}, fmt.Errorf("wardynd: lifecycle get run: %w", err)
@@ -739,8 +767,8 @@ func (l lifecycleStopper) stop(ctx context.Context, runID uuid.UUID, transition 
 	// the CAS must not cancel a still-live run's questions. Best-effort and
 	// non-blocking like the revokes (the server logs + audits its own failure);
 	// the ExpireStale sweeper stays behind it as the backstop it always was.
-	if l.cancelApprovals != nil {
-		l.cancelApprovals(ctx, runID)
+	if cancelApprovals != nil {
+		cancelApprovals(ctx, runID)
 	}
 	errs := map[string]string{}
 	// Revocations BEFORE the teardown, so the pane snapshot's seconds never

@@ -13,6 +13,7 @@ import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import type { SCMAccessPAT } from "../../../../../lib/types/ado-pat";
 import type { AccessCredential, AccessFacts, AccessUnlisted } from "../../../../../lib/types/new-run-access";
 import { hostBadge, rowLabel, type HarnessNames, type HostBadge } from "../../lenses/tools-lens";
+import { isLocalMcp } from "./local-mcp";
 
 const DELIVERY: Record<string, string> = {
   proxy: NR_TOOLS.DELIVERY_PROXY,
@@ -22,7 +23,7 @@ const DELIVERY: Record<string, string> = {
   sandbox_file: NR_TOOLS.DELIVERY_FILE,
   sandbox_short_lived: NR_TOOLS.DELIVERY_SHORT_LIVED,
 };
-const BADGE: Record<HostBadge, { text: string; tone: "neutral" | "success" | "info" | "danger" }> = {
+export const BADGE: Record<HostBadge, { text: string; tone: "neutral" | "success" | "info" | "danger" }> = {
   requested: { text: NR_TOOLS.NET_REQUESTED, tone: "neutral" },
   allowed: { text: NR_TOOLS.NET_ALLOWED, tone: "success" },
   needs_approval: { text: NR_TOOLS.NET_NEEDS_APPROVAL, tone: "info" },
@@ -93,6 +94,7 @@ export interface AdoTokenFacts {
 export function Totals({ access, answered, names: harnessNames, providers, ado, ownRows }: { access: AccessFacts | undefined; answered: boolean; names?: HarnessNames; providers?: ReadonlyMap<string, string>; ado?: AdoTokenFacts; ownRows?: readonly SCMAccessPAT[] }) {
   const names = new Map((access?.rows ?? []).map((r) => [r.id, rowLabel(r, harnessNames)]));
   const rowName = new Map((access?.rows ?? []).map((r) => [r.id, r.name]));
+  const localRows = new Set((access?.rows ?? []).filter(isLocalMcp).map((r) => r.id));
   // Only a run that carries the Azure DevOps credential gets a token, so only its row says so.
   const adoToken = ado?.access?.token_mode === "minted_pat" && !!access?.credentials.some((c) => c.kind === ADO_SIGN_IN) ? ado : undefined;
   return (
@@ -128,6 +130,9 @@ export function Totals({ access, answered, names: harnessNames, providers, ado, 
                 <span className="min-w-0 [overflow-wrap:anywhere]">
                   {kind && <span>{kind} </span>}
                   {names.has(c.row) && <span className="text-sm text-muted-foreground">{NR_TOOLS.FOR_ROW(names.get(c.row) ?? "")}</span>}
+                  {localRows.has(c.row) && (c.delivery === "sandbox_env" || c.delivery === "sandbox_file") && (
+                    <span className="block text-sm text-muted-foreground">{NR_TOOLS.MCP_SANDBOX_READABLE}</span>
+                  )}
                   {c.after_end === "expires" && <span className="block text-sm text-muted-foreground">{NR_TOOLS.EXPIRES_OWN}</span>}
                 </span>
                 {delivery && <Chip className="whitespace-normal">{delivery}</Chip>}

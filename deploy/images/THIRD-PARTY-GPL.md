@@ -547,6 +547,294 @@ MANUAL_ENTRIES):_
 |---|---|---|---|
 | `websockify` | 0.13.0 | LGPL-3.0 | `https://github.com/novnc/websockify/archive/refs/tags/v0.13.0.tar.gz` |
 
+## `ghcr.io/cjohnstoniv/agent-novnc-signin` (not yet published)
+
+_Scanned before publication, from `wardyn/agent-novnc-signin:local` built at commit
+`9fa86dd55` — the same recipe this image will publish from once it
+lands, though apt package versions can float between rebuilds of that
+recipe. No published digest exists yet to scan; this section will be
+replaced by a digest scan of the real tag once one exists._
+
+268 package(s) carrying a GPL or LGPL term.
+
+| package | version | licence | type |
+|---|---|---|---|
+| `adduser` | 3.152 | GPL-2, GPL-2+ | deb |
+| `apt` | 3.0.3 | BSD-3-clause, Expat, GPL-2, GPL-2+, curl | deb |
+| `asciinema` | 2.4.0 | GNU GPLv3 | python |
+| `asciinema` | 2.4.0-1 | GPL-3, GPL-3+ | deb |
+| `at-spi2-common` | 2.56.2-1+deb13u2 | AFL-2.1, GPL-2, GPL-2+, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, public-domain | deb |
+| `base-files` | 13.8+deb13u7 | GPL-2, GPL-2+, verbatim | deb |
+| `base-passwd` | 3.6.7 | GPL-2, public-domain | deb |
+| `bash` | 5.2.37-2+b10 | BSD-4-clause-UC, GFDL-1.3, GFDL-NIV-1.3, GPL-2, GPL-2+, GPL-3, GPL-3+, Latex2e, MIT-like, permissive | deb |
+| `bsdutils` | 1:2.41.5-0+deb13u1 | BSD-2-clause, BSD-3-clause, BSD-4-clause, BSLA, Expat, GPL-2, GPL-2+, GPL-3, GPL-3+, ISC, LGPL, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, LGPL-3, LGPL-3+, public-domain | deb |
+| `ca-certificates` | 20250419 | GPL-2, GPL-2+, MPL-2.0 | deb |
+| `chromium` | 155.0.8059.79-1~deb13u1 | Apache-2.0, Apple-license, BSD-2-clause, BSD-3-clause, BSL-1, GPL-2, GPL-2+, GPL-2.0, GPL-3, GPL-3+, ICU, ISC, LGPL-2, LGPL-2+, LGPL-2.0+, LGPL-2.1, LGPL-2.1+, MIT, MPL-1.1, MPL-2.0, Ms-PL, Public-domain, Unicode, zlib | deb |
+| `chromium-common` | 155.0.8059.79-1~deb13u1 | Apache-2.0, Apple-license, BSD-2-clause, BSD-3-clause, BSL-1, GPL-2, GPL-2+, GPL-2.0, GPL-3, GPL-3+, ICU, ISC, LGPL-2, LGPL-2+, LGPL-2.0+, LGPL-2.1, LGPL-2.1+, MIT, MPL-1.1, MPL-2.0, Ms-PL, Public-domain, Unicode, zlib | deb |
+| `coreutils` | 9.7-3 | BSD-4-clause-UC, FSFULLR, GFDL-1.3, GFDL-NIV-1.3, GPL-3, GPL-3+, ISC | deb |
+| `corkscrew` | 2.0-15 | GPL-2, GPL-2+ | deb |
+| `curl` | 8.14.1-2+deb13u7 | BSD-3-Clause, BSD-3-clause, BSD-4-Clause-UC, FSFULLR, GPL-2, GPL-2+, GPL-3+, ISC, OLDAP-2.8, X11, curl | deb |
+| `dash` | 0.5.12-12 | BSD-3-Clause, BSD-3-clause, GPL-2, GPL-2+, public-domain | deb |
+| `dbus` | 1.16.2-2 | AFL-2.1, BSD-3-clause, BSD-3-clause-generic, Expat, GPL-2, GPL-2+, LGPL-2.1, LGPL-2.1+, Tcl-BSDish, g10-permissive | deb |
+| `dbus-bin` | 1.16.2-2 | AFL-2.1, BSD-3-clause, BSD-3-clause-generic, Expat, GPL-2, GPL-2+, LGPL-2.1, LGPL-2.1+, Tcl-BSDish, g10-permissive | deb |
+| `dbus-daemon` | 1.16.2-2 | AFL-2.1, BSD-3-clause, BSD-3-clause-generic, Expat, GPL-2, GPL-2+, LGPL-2.1, LGPL-2.1+, Tcl-BSDish, g10-permissive | deb |
+| `dbus-session-bus-common` | 1.16.2-2 | AFL-2.1, BSD-3-clause, BSD-3-clause-generic, Expat, GPL-2, GPL-2+, LGPL-2.1, LGPL-2.1+, Tcl-BSDish, g10-permissive | deb |
+| `dbus-system-bus-common` | 1.16.2-2 | AFL-2.1, BSD-3-clause, BSD-3-clause-generic, Expat, GPL-2, GPL-2+, LGPL-2.1, LGPL-2.1+, Tcl-BSDish, g10-permissive | deb |
+| `dbus-user-session` | 1.16.2-2 | AFL-2.1, BSD-3-clause, BSD-3-clause-generic, Expat, GPL-2, GPL-2+, LGPL-2.1, LGPL-2.1+, Tcl-BSDish, g10-permissive | deb |
+| `dconf-gsettings-backend` | 0.40.0-5 | GPL-3, LGPL-2+ | deb |
+| `dconf-service` | 0.40.0-5 | GPL-3, LGPL-2+ | deb |
+| `debianutils` | 5.23.2 | GPL-2, GPL-2+, SMAIL-GPL, public-domain | deb |
+| `diffutils` | 1:3.10-4 | FSFAP, FSFULLR, GFDL-1.3, GFDL-NIV-1.3, GPL-2, GPL-2+, GPL-3, GPL-3+, LGPL-2, LGPL-2.0+, LGPL-2.1, LGPL-2.1+, LGPL-3, LGPL-3.0+, X11, public-domain | deb |
+| `dpkg` | 1.22.22 | GPL-2, GPL-2+, public-domain-s-s-d | deb |
+| `findutils` | 4.10.0-3 | BSD-3-clause, FSFAP, FSFULLR, GFDL-1.3, GFDL-NIV-1.3+, GPL, GPL-2, GPL-2+, GPL-3, GPL-3+, ISC, LGPL, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, LGPL-3, LGPL-3+, X11, public-domain | deb |
+| `fonts-dejavu-core` | 2.37-8 | GPL-2, GPL-2+, bitstream-vera | deb |
+| `fonts-dejavu-mono` | 2.37-8 | GPL-2, GPL-2+, bitstream-vera | deb |
+| `fonts-liberation` | 1:2.1.5-3 | GPL-2, GPL-2+, SIL-OFL-1.1 | deb |
+| `fonts-urw-base35` | 20200910-8 | AGPL-3, CC-BY-4.0, GPL-2, GPL-2+ | deb |
+| `git` | 1:2.47.3-0+deb13u1 | Apache-2.0, Artistic, BSD-3-clause, Boost, EDL-1.0, Expat, GPL, GPL-1+, GPL-2, GPL-2+, ISC, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, Zlib, dlmalloc, mingw-runtime | deb |
+| `git-man` | 1:2.47.3-0+deb13u1 | Apache-2.0, Artistic, BSD-3-clause, Boost, EDL-1.0, Expat, GPL, GPL-1+, GPL-2, GPL-2+, ISC, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, Zlib, dlmalloc, mingw-runtime | deb |
+| `grep` | 3.11-4 | GPL-3, GPL-3+ | deb |
+| `gtk-update-icon-cache` | 4.18.6+ds-2 | Apache-2.0, BSD-3-clause-Google, CC0-1.0, Expat, GPL-3, GPL-3+, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, Unicode-DFS-2016, X11R5-permissive, ZPL-2.1, lcs-telegraphics-permissive, sun-permissive | deb |
+| `gzip` | 1.13-1+deb13u1 | FSF-manpages, GFDL-1.3+-no-invariant, GFDL-3, GPL-3, GPL-3+ | deb |
+| `hicolor-icon-theme` | 0.18-2 | GPL-2, GPL-2+ | deb |
+| `hostname` | 3.25 | GPL-2 | deb |
+| `init-system-helpers` | 1.69~deb13u1 | BSD-3-clause, GPL-2, GPL-2+ | deb |
+| `libacl1` | 2.3.2-2+b1 | GPL-2, GPL-2+, LGPL-2+, LGPL-2.1 | deb |
+| `libapparmor1` | 4.1.0-1 | BSD-3-clause, GPL-2, GPL-2+, LGPL-2.1, LGPL-2.1+ | deb |
+| `libapt-pkg7.0` | 3.0.3 | BSD-3-clause, Expat, GPL-2, GPL-2+, curl | deb |
+| `libasound2-data` | 1.2.14-1+deb13u1 | LGPL-2.1, LGPL-2.1+ | deb |
+| `libasound2t64` | 1.2.14-1+deb13u1 | LGPL-2.1, LGPL-2.1+ | deb |
+| `libass9` | 1:0.17.3-1+deb13u1 | BSD-2-clause, GPL-2, GPL-2+, ISC, NTP, Unlicense | deb |
+| `libasyncns0` | 0.8-6+b5 | LGPL-2.1, LGPL-2.1+ | deb |
+| `libatk-bridge2.0-0t64` | 2.56.2-1+deb13u2 | AFL-2.1, GPL-2, GPL-2+, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, public-domain | deb |
+| `libatk1.0-0t64` | 2.56.2-1+deb13u2 | AFL-2.1, GPL-2, GPL-2+, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, public-domain | deb |
+| `libatspi2.0-0t64` | 2.56.2-1+deb13u2 | AFL-2.1, GPL-2, GPL-2+, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, public-domain | deb |
+| `libattr1` | 1:2.5.2-3 | GPL-2, GPL-2+, LGPL-2+, LGPL-2.1 | deb |
+| `libaudit-common` | 1:4.0.2-2+deb13u1 | GPL-1, GPL-2, LGPL-2.1 | deb |
+| `libaudit1` | 1:4.0.2-2+deb13u1 | GPL-1, GPL-2, LGPL-2.1 | deb |
+| `libavcodec61` | 7:7.1.5-0+deb13u1 | BSD-1-clause, BSD-2-clause, BSD-3-clause, BSL, Expat, GPL-2, GPL-2+, GPL-3, GPL-3+, IJG, ISC, LGPL-2+, LGPL-2.1, LGPL-2.1+, Sundry, Zlib, man-page, public-domain | deb |
+| `libavfilter10` | 7:7.1.5-0+deb13u1 | BSD-1-clause, BSD-2-clause, BSD-3-clause, BSL, Expat, GPL-2, GPL-2+, GPL-3, GPL-3+, IJG, ISC, LGPL-2+, LGPL-2.1, LGPL-2.1+, Sundry, Zlib, man-page, public-domain | deb |
+| `libavformat61` | 7:7.1.5-0+deb13u1 | BSD-1-clause, BSD-2-clause, BSD-3-clause, BSL, Expat, GPL-2, GPL-2+, GPL-3, GPL-3+, IJG, ISC, LGPL-2+, LGPL-2.1, LGPL-2.1+, Sundry, Zlib, man-page, public-domain | deb |
+| `libavutil59` | 7:7.1.5-0+deb13u1 | BSD-1-clause, BSD-2-clause, BSD-3-clause, BSL, Expat, GPL-2, GPL-2+, GPL-3, GPL-3+, IJG, ISC, LGPL-2+, LGPL-2.1, LGPL-2.1+, Sundry, Zlib, man-page, public-domain | deb |
+| `libblkid1` | 2.41.5-0+deb13u1 | BSD-2-clause, BSD-3-clause, BSD-4-clause, BSLA, Expat, GPL-2, GPL-2+, GPL-3, GPL-3+, ISC, LGPL, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, LGPL-3, LGPL-3+, public-domain | deb |
+| `libbluray2` | 1:1.3.4-1+b2 | BSD-3-clause, GPL-2, GPL-2+, LGPL-2.1, LGPL-2.1+, MPL-1.0, custom | deb |
+| `libbs2b0` | 3.1.0+dfsg-8+b1 | Expat, FSF-unlimited, GPL-2, GPL-2+, GPL-3, GPL-3+, MIT+FSF-public | deb |
+| `libbz2-1.0` | 1.0.8-6 | BSD-variant, GPL-2 | deb |
+| `libc-bin` | 2.41-12+deb13u4 | BSD-2-clause, BSD-3-clause-Berkeley, BSD-3-clause-Carnegie, BSD-3-clause-Oracle, BSD-3-clause-WIDE, BSD-like-Spencer, BSL-1.0, CORE-MATH, Carnegie, DEC, FSFAP, GPL-2, GPL-2+, GPL-2+-with-link-exception, GPL-3, GPL-3+, IBM, ISC, Inner-Net, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, LGPL-2.1+-with-link-exception, LGPL-3, LGPL-3+, MIT-like-Lord, PCRE, SunPro, Unicode-DFS-2016, Univ-Coimbra, public-domain | deb |
+| `libc6` | 2.41-12+deb13u4 | BSD-2-clause, BSD-3-clause-Berkeley, BSD-3-clause-Carnegie, BSD-3-clause-Oracle, BSD-3-clause-WIDE, BSD-like-Spencer, BSL-1.0, CORE-MATH, Carnegie, DEC, FSFAP, GPL-2, GPL-2+, GPL-2+-with-link-exception, GPL-3, GPL-3+, IBM, ISC, Inner-Net, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, LGPL-2.1+-with-link-exception, LGPL-3, LGPL-3+, MIT-like-Lord, PCRE, SunPro, Unicode-DFS-2016, Univ-Coimbra, public-domain | deb |
+| `libcap-ng0` | 0.8.5-4+b1 | GPL-2, GPL-2+, GPL-3, LGPL-2.1, LGPL-2.1+ | deb |
+| `libcap2` | 1:2.75-10+deb13u1+b3 | BSD-3-clause, GPL-2, GPL-2+ | deb |
+| `libchromaprint1` | 1.5.1-7 | BSD-3-clause, Expat, LGPL-2.1, LGPL-2.1+ | deb |
+| `libcloudproviders0` | 0.3.6-2 | LGPL-3, LGPL-3+ | deb |
+| `libcodec2-1.2` | 1.2.0-3 | JMVBSD, KISSFFTBSD, LGPL-2.1 | deb |
+| `libcolord2` | 1.4.7-3 | CC0-1.0, GFDL-NIV, GPL-2, GPL-2+, LGPL-2.1+, NPES | deb |
+| `libcom-err2` | 1.47.2-3+b12 | 0BSD, Apache-2, Apache-2.0, BSD-3-Clause, BSD-3-Clause-Variant, BSD-4-Clause-CMU, Expat, GPL, GPL-2, GPL-2+, ISC, Kazlib, LGPL-2, Latex2e | deb |
+| `libcups2t64` | 2.4.10-3+deb13u2 | Apache-2.0, Apache-2.0-with-GPL2-LGPL2-Exception, BSD-2-Clause, FSFUL, Zlib | deb |
+| `libcurl3t64-gnutls` | 8.14.1-2+deb13u7 | BSD-3-Clause, BSD-3-clause, BSD-4-Clause-UC, FSFULLR, GPL-2, GPL-2+, GPL-3+, ISC, OLDAP-2.8, X11, curl | deb |
+| `libcurl4t64` | 8.14.1-2+deb13u7 | BSD-3-Clause, BSD-3-clause, BSD-4-Clause-UC, FSFULLR, GPL-2, GPL-2+, GPL-3+, ISC, OLDAP-2.8, X11, curl | deb |
+| `libdatrie1` | 0.2.13-3+b1 | GPL-2, GPL-2+, LGPL-2.1, LGPL-2.1+ | deb |
+| `libdb5.3t64` | 5.3.28+dfsg2-9 | Artistic, BSD-3-clause, BSD-3-clause-fjord, GPL, GPL-3, MIT-old, Ms-PL, Sleepycat, TCL-like, X11, zlib | deb |
+| `libdbus-1-3` | 1.16.2-2 | AFL-2.1, BSD-3-clause, BSD-3-clause-generic, Expat, GPL-2, GPL-2+, LGPL-2.1, LGPL-2.1+, Tcl-BSDish, g10-permissive | deb |
+| `libdconf1` | 0.40.0-5 | GPL-3, LGPL-2+ | deb |
+| `libde265-0` | 1.0.15-1+deb13u2 | BSD-4-clause, GPL-3, GPL-3+, LGPL-3, LGPL-3+, other-1, public-domain-1 | deb |
+| `libdebconfclient0` | 0.280 | BSD-2-Clause, BSD-2-clause, GPL-2, GPL-2+ | deb |
+| `libdecor-0-0` | 0.2.2-2 | Expat, GPL-3.0, GPL-3.0+ | deb |
+| `libdisplay-info2` | 0.2.0-2 | CC-BY-4.0, Expat, GPL-3 | deb |
+| `libdvdnav4` | 6.1.1-3+b1 | GPL-2, GPL-2+, LGPL-2, LGPL-2+ | deb |
+| `libdvdread8t64` | 6.1.3-2 | GPL-2, GPL-2+, GPL-3, LGPL-2.1, LGPL-2.1+ | deb |
+| `libegl-mesa0` | 25.0.7-2+deb13u1 | Apache-2.0, BSD-2-clause, BSD-3-google, BSL, GPL, GPL-1, GPL-1+, GPL-2, Khronos, MIT, MLAA, SGI | deb |
+| `libegl1` | 1.7.0-1+b2 | Apache-2.0, BSD-1-clause, GPL, GPL-3, GPL-3+, MIT | deb |
+| `libelf1t64` | 0.192-4 | BSD-2-clause, GFDL-1.3, GFDL-NIV-1.3, GPL-2, GPL-3, GPL-3+, LGPL-2.1, LGPL-2.1+, LGPL-3, LGPL-3+ | deb |
+| `liberror-perl` | 0.17030-1 | Artistic, GPL-1, GPL-1+, MIT/X11 | deb |
+| `libevdev2` | 1.13.4+dfsg-1 | Apache-2.0, BSD-3, GPL-2, GPL-2+, MIT | deb |
+| `libevent-core-2.1-7t64` | 2.1.13-stable-1~deb13u1 | BSD-2-clause, BSD-3-clause, BSL, Expat, FSFUL, FSFULLR, FSFULLR-No-Warranty, GPL-2, GPL-2+, GPL-3, GPL-3+, ISC, curl | deb |
+| `libffi8` | 3.4.8-2 | Expat, GPL, GPL-2+, GPL-3+, MPL-1.1, X11, public-domain | deb |
+| `libfftw3-double3` | 3.3.10-2+b1 | GPL-2, GPL-2+ | deb |
+| `libflac14` | 1.5.0+ds-2 | BSD-3-clause, GFDL-1.1+, GFDL-1.2, GPL-2, GPL-2+, ISC, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, Public-domain | deb |
+| `libfreetype6` | 2.13.3+dfsg-1+deb13u1 | BSD-3-Clause, BSL-1.0, Expat, FSFAP, FTL, GPL-2, GPL-2+, GPL-3, GPL-3+, MIT-Modern-Variant, MIT-SMC, OpenGroup-MIT, Public-Domain, Zlib | deb |
+| `libfribidi0` | 1.0.16-1 | LGPL-2.1, LGPL-2.1+ | deb |
+| `libgbm1` | 25.0.7-2+deb13u1 | Apache-2.0, BSD-2-clause, BSD-3-google, BSL, GPL, GPL-1, GPL-1+, GPL-2, Khronos, MIT, MLAA, SGI | deb |
+| `libgdbm-compat4t64` | 1.24-2 | GFDL-NIV-1.3+, GPL-2, GPL-2+, GPL-3, GPL-3+ | deb |
+| `libgdbm6t64` | 1.24-2 | GFDL-NIV-1.3+, GPL-2, GPL-2+, GPL-3, GPL-3+ | deb |
+| `libgdk-pixbuf-2.0-0` | 2.42.12+dfsg-4+deb13u1 | CC0-1.0, GPL-2, GPL-2+, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+ | deb |
+| `libgdk-pixbuf2.0-common` | 2.42.12+dfsg-4+deb13u1 | CC0-1.0, GPL-2, GPL-2+, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+ | deb |
+| `libgl1` | 1.7.0-1+b2 | Apache-2.0, BSD-1-clause, GPL, GPL-3, GPL-3+, MIT | deb |
+| `libgl1-mesa-dri` | 25.0.7-2+deb13u1 | Apache-2.0, BSD-2-clause, BSD-3-google, BSL, GPL, GPL-1, GPL-1+, GPL-2, Khronos, MIT, MLAA, SGI | deb |
+| `libgles2` | 1.7.0-1+b2 | Apache-2.0, BSD-1-clause, GPL, GPL-3, GPL-3+, MIT | deb |
+| `libglib2.0-0t64` | 2.84.4-3~deb13u5 | AFL-2.0, Apache-2.0, CC-BY-SA-3.0, CC0-1.0, Expat, FSFULLR, GPL-2, GPL-2+, Iconv-PD, Janik-permissive, Kuchling-PD, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, LGPL-3, LGPL-3+, MPL-1.1, Mingw-PD, Plumb-PD, Unicode-DFS-2016, bzip2-1.0.6, cmph, old-glib-tests | deb |
+| `libglvnd0` | 1.7.0-1+b2 | Apache-2.0, BSD-1-clause, GPL, GPL-3, GPL-3+, MIT | deb |
+| `libglx-mesa0` | 25.0.7-2+deb13u1 | Apache-2.0, BSD-2-clause, BSD-3-google, BSL, GPL, GPL-1, GPL-1+, GPL-2, Khronos, MIT, MLAA, SGI | deb |
+| `libglx0` | 1.7.0-1+b2 | Apache-2.0, BSD-1-clause, GPL, GPL-3, GPL-3+, MIT | deb |
+| `libgme0` | 0.6.3-7+b2 | LGPL-2.1, LGPL-2.1+, MIT | deb |
+| `libgmp10` | 2:6.3.0+dfsg-3 | GPL-2, GPL-2+, GPL-3, GPL-3+, LGPL-3, LGPL-3+ | deb |
+| `libgpg-error0` | 1.51-4 | BSD-3-clause, GPL-3, GPL-3+, LGPL-2.1, LGPL-2.1+, g10-permissive | deb |
+| `libgraphite2-3` | 1.3.14-2+deb13u1 | Artistic, GPL-1, GPL-1+, GPL-2, GPL-2+, LGPL-2.1, LGPL-2.1+, MPL-1.1, custom-sil-open-font-license, public-domain | deb |
+| `libgs-common` | 10.05.1~dfsg-1+deb13u3 | AGPL-3, AGPL-3+, Apache-2.0, BSD-3-Clause, BSD-3-Clause~Adobe, Expat, Expat~Ghostgum, Expat~SunSoft, FTL, GAP~configure, GPL-1, GPL-1+, GPL-2, GPL-2+, GPL-3, GPL-3+, ISC, LGPL-2.1, MIT-Open-Group, NTP~Lucent, NTP~WSU, X11, ZLIB, public-domain | deb |
+| `libgs10` | 10.05.1~dfsg-1+deb13u3 | AGPL-3, AGPL-3+, Apache-2.0, BSD-3-Clause, BSD-3-Clause~Adobe, Expat, Expat~Ghostgum, Expat~SunSoft, FTL, GAP~configure, GPL-1, GPL-1+, GPL-2, GPL-2+, GPL-3, GPL-3+, ISC, LGPL-2.1, MIT-Open-Group, NTP~Lucent, NTP~WSU, X11, ZLIB, public-domain | deb |
+| `libgs10-common` | 10.05.1~dfsg-1+deb13u3 | AGPL-3, AGPL-3+, Apache-2.0, BSD-3-Clause, BSD-3-Clause~Adobe, Expat, Expat~Ghostgum, Expat~SunSoft, FTL, GAP~configure, GPL-1, GPL-1+, GPL-2, GPL-2+, GPL-3, GPL-3+, ISC, LGPL-2.1, MIT-Open-Group, NTP~Lucent, NTP~WSU, X11, ZLIB, public-domain | deb |
+| `libgtk-3-0t64` | 3.24.49-3 | Apache-2.0, CC-BY-SA-4.0, Expat, GPL-3, GPL-3+, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, SWL, X11R5-permissive, ZPL-2.1, check-gdk-cairo-permissive, other, unencumbered | deb |
+| `libgtk-3-common` | 3.24.49-3 | Apache-2.0, CC-BY-SA-4.0, Expat, GPL-3, GPL-3+, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, SWL, X11R5-permissive, ZPL-2.1, check-gdk-cairo-permissive, other, unencumbered | deb |
+| `libgudev-1.0-0` | 238-6 | LGPL-2, LGPL-2+ | deb |
+| `libharfbuzz-subset0` | 10.2.0-1+deb13u1 | Apache-2.0, CC0-1.0, Expat, FSFAP, FSFUL, FSFULLR, GPL-2, GPL-2+, GPL-3, GPL-3+, ISC, LGPL-2.1, LGPL-2.1+, MIT, Monotype, OFL-1.1, UFL-1.0, Unicode | deb |
+| `libharfbuzz0b` | 10.2.0-1+deb13u1 | Apache-2.0, CC0-1.0, Expat, FSFAP, FSFUL, FSFULLR, GPL-2, GPL-2+, GPL-3, GPL-3+, ISC, LGPL-2.1, LGPL-2.1+, MIT, Monotype, OFL-1.1, UFL-1.0, Unicode | deb |
+| `libheif-plugin-dav1d` | 1.23.4-1~deb13u1 | BSD-2-clause, BSD-3-clause, BSD-4-Clause-UC, BSL-1.0, Expat, GPL-3, GPL-3+, LGPL-3, LGPL-3+ | deb |
+| `libheif-plugin-libde265` | 1.23.4-1~deb13u1 | BSD-2-clause, BSD-3-clause, BSD-4-Clause-UC, BSL-1.0, Expat, GPL-3, GPL-3+, LGPL-3, LGPL-3+ | deb |
+| `libheif1` | 1.23.4-1~deb13u1 | BSD-2-clause, BSD-3-clause, BSD-4-Clause-UC, BSL-1.0, Expat, GPL-3, GPL-3+, LGPL-3, LGPL-3+ | deb |
+| `libhogweed6t64` | 3.10.1-1 | Expat, GAP, GPL, GPL-2, GPL-2+, GPL-3+, LGPL, LGPL-2, LGPL-2+, LGPL-3+, public-domain | deb |
+| `libid3tag0` | 0.16.3-1 | GPL-2, GPL-2+ | deb |
+| `libidn12` | 1.43-1 | Expat, FSFAP, FSFAP-no-warranty, GFDL-1.3, GFDL-NIV-1.3+, GPL-2, GPL-2+, GPL-2+-Autoconf, GPL-2+-Autoconf-Archive, GPL-3, GPL-3+, LGPL-3, LGPL-3+ | deb |
+| `libidn2-0` | 2.3.8-2 | Expat, GPL-2, GPL-2+, GPL-3, GPL-3+, LGPL-3, LGPL-3+, Unicode | deb |
+| `libinput-bin` | 1.28.1-1+deb13u1 | Expat, GPL-2 | deb |
+| `libinput10` | 1.28.1-1+deb13u1 | Expat, GPL-2 | deb |
+| `libjbig0` | 2.1-6.1+b2 | GPL-2, GPL-2+ | deb |
+| `libjbig2dec0` | 0.20-1+deb13u1 | AGPL-3+, BSD-2-clause, GPL-3, GPL-3+, LGPL-2.1, LGPL-2.1+, pubic-domain, public-domain | deb |
+| `libkeyutils1` | 1.6.3-6 | GPL-2, GPL-2+, LGPL-2, LGPL-2+ | deb |
+| `liblastlog2-2` | 2.41.5-0+deb13u1 | BSD-2-clause, BSD-3-clause, BSD-4-clause, BSLA, Expat, GPL-2, GPL-2+, GPL-3, GPL-3+, ISC, LGPL, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, LGPL-3, LGPL-3+, public-domain | deb |
+| `liblcms2-2` | 2.16-2+deb13u2 | GPL-2, GPL-2+, GPL-3, IJG, MIT | deb |
+| `libldap2` | 2.6.10+dfsg-1 | BSD-3-clause, BSD-3-clause-California, BSD-3-clause-variant, BSD-4-clause-California, Beerware, Expat, Expat-ISC, Expat-UNM, F5, FSF-unlimited, GPL-2, GPL-2+, GPL-3, GPL-3+, JCG, MIT-XC, NeoSoft-permissive, OpenLDAP-2.8, UMich, public-domain | deb |
+| `liblz4-1` | 1.10.0-4 | BSD-2-clause, GPL-2, GPL-2+ | deb |
+| `liblzma5` | 5.8.1-1+deb13u2 | 0BSD, FSFUL, FSFULLR, GPL-2, GPL-2+, GPL-3, GPL-3.0-or-later-WITH-Autoconf-exception-macro, LGPL-2.1, LGPL-2.1+, PD, PD-debian, noderivs, permissive-nowarranty | deb |
+| `liblzo2-2` | 2.10-3+b1 | GPL-2, GPL-2+ | deb |
+| `libmbedcrypto16` | 3.6.6-0.1~deb13u1 | Apache-2.0, GPL-2, GPL-2+ | deb |
+| `libmount1` | 2.41.5-0+deb13u1 | BSD-2-clause, BSD-3-clause, BSD-4-clause, BSLA, Expat, GPL-2, GPL-2+, GPL-3, GPL-3+, ISC, LGPL, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, LGPL-3, LGPL-3+, public-domain | deb |
+| `libmp3lame0` | 3.100-6+b3 | BSD-3-clause, GPL-1, GPL-1+, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, zlib/libpng | deb |
+| `libmpg123-0t64` | 1.32.10-1+deb13u1 | LGPL-2.1 | deb |
+| `libneatvnc0` | 0.9.1+dfsg-1 | BSD-3-Clause, CC0-1.0, Expat, GPL-2, GPL-2.0+, ISC | deb |
+| `libnettle8t64` | 3.10.1-1 | Expat, GAP, GPL, GPL-2, GPL-2+, GPL-3+, LGPL, LGPL-2, LGPL-2+, LGPL-3+, public-domain | deb |
+| `libnghttp2-14` | 1.64.0-1.1+deb13u1 | BSD-2-clause, Expat, GPL-3, GPL-3+, MIT, all-permissive | deb |
+| `libnghttp3-9` | 1.8.0-1 | FSFAP, FSFUL, FSFULLR, GPL-2, GPL-2+, GPL-3, GPL-3+, MIT | deb |
+| `libngtcp2-16` | 1.11.0-1+deb13u1 | FSFAP, FSFUL, FSFULLR, GPL-2, GPL-2+, GPL-3, GPL-3+, MIT | deb |
+| `libngtcp2-crypto-gnutls8` | 1.11.0-1+deb13u1 | FSFAP, FSFUL, FSFULLR, GPL-2, GPL-2+, GPL-3, GPL-3+, MIT | deb |
+| `libobrender32v5` | 3.6.1-12+b2 | BSD-3-clause, GPL-2, GPL-2+, GPL-3, GPL-3+ | deb |
+| `libobt2v5` | 3.6.1-12+b2 | BSD-3-clause, GPL-2, GPL-2+, GPL-3, GPL-3+ | deb |
+| `libopenmpt0t64` | 0.7.13-1+b1 | BSD-3-clause, BSL-1.0, GNU-All-Permissive-License, GNU-All-Permissive-License-FSF, GPL-2, GPL-2+, GPL-3, GPL-3+, X11 | deb |
+| `libp11-kit0` | 0.25.5-3 | Apache-2.0, BSD-3-clause, FSFAP, FSFULLR, GPL-2+, GPL-3+, ISC, LGPL-2.1, LGPL-2.1+, X11, customFSFUL, customFSFULLRWD | deb |
+| `libpam-modules` | 1.7.0-5 | BSD-3-clause, BSD-tcp_wrappers, Beerware, GPL-1, GPL-2, GPL-2+, GPL-3, GPL-3+, LGPL-2, LGPL-2+, public-domain | deb |
+| `libpam-modules-bin` | 1.7.0-5 | BSD-3-clause, BSD-tcp_wrappers, Beerware, GPL-1, GPL-2, GPL-2+, GPL-3, GPL-3+, LGPL-2, LGPL-2+, public-domain | deb |
+| `libpam-runtime` | 1.7.0-5 | BSD-3-clause, BSD-tcp_wrappers, Beerware, GPL-1, GPL-2, GPL-2+, GPL-3, GPL-3+, LGPL-2, LGPL-2+, public-domain | deb |
+| `libpam-systemd` | 257.13-1~deb13u1 | CC0-1.0, Expat, GPL-2, GPL-2+, LGPL-2.1, LGPL-2.1+, public-domain | deb |
+| `libpam0g` | 1.7.0-5 | BSD-3-clause, BSD-tcp_wrappers, Beerware, GPL-1, GPL-2, GPL-2+, GPL-3, GPL-3+, LGPL-2, LGPL-2+, public-domain | deb |
+| `libpango-1.0-0` | 1.56.3-1 | Apache-2, Apache-2.0, Bitstream-Vera, Chromium-BSD-style, Example, ICU, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, OFL-1.1, TCL, Unicode | deb |
+| `libpangocairo-1.0-0` | 1.56.3-1 | Apache-2, Apache-2.0, Bitstream-Vera, Chromium-BSD-style, Example, ICU, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, OFL-1.1, TCL, Unicode | deb |
+| `libpangoft2-1.0-0` | 1.56.3-1 | Apache-2, Apache-2.0, Bitstream-Vera, Chromium-BSD-style, Example, ICU, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, OFL-1.1, TCL, Unicode | deb |
+| `libpangoxft-1.0-0` | 1.56.3-1 | Apache-2, Apache-2.0, Bitstream-Vera, Chromium-BSD-style, Example, ICU, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, OFL-1.1, TCL, Unicode | deb |
+| `libpaper2` | 2.2.5-0.3+b2 | Expat, GPL-2, GPL-3, GPL-3+, X11, public-domain | deb |
+| `libperl5.40` | 5.40.1-6+deb13u1 | Artistic, Artistic-2, Artistic-dist, BSD-3-clause, BSD-3-clause-GENERIC, BSD-3-clause-with-weird-numbering, BSD-4-clause-POWERDOG, BZIP, DONT-CHANGE-THE-GPL, Expat, FSFAP, GPL-1, GPL-1+, GPL-2, GPL-2+, GPL-3+-WITH-BISON-EXCEPTION, LGPL-2.1, REGCOMP, REGCOMP,, SDBM-PUBLIC-DOMAIN, TEXT-TABS, Unicode, ZLIB | deb |
+| `libpgm-5.3-0t64` | 5.3.128~dfsg-2.1+b1 | BSD-3-clause, ISC, LGPL-2, LGPL-2+, LGPL-2.1 | deb |
+| `libplacebo349` | 7.349.0-3 | CC0, Expat, LGPL-2.1, LGPL-2.1+, Zlib | deb |
+| `libpng16-16t64` | 1.6.48-1+deb13u6 | Apache-2.0, BSD-3-clause, BSD-like-with-advertising-clause, GPL-2, GPL-2+, expat, libpng | deb |
+| `libpocketsphinx3` | 0.8+5prealpha+1-15+b4 | BSD-2, BSD-3-clause, GPL-2, GPL-2+ | deb |
+| `libpopt0` | 1.19+dfsg-2 | GPL-2, GPL-2+, expat, public-domain | deb |
+| `libpostproc58` | 7:7.1.5-0+deb13u1 | BSD-1-clause, BSD-2-clause, BSD-3-clause, BSL, Expat, GPL-2, GPL-2+, GPL-3, GPL-3+, IJG, ISC, LGPL-2+, LGPL-2.1, LGPL-2.1+, Sundry, Zlib, man-page, public-domain | deb |
+| `libproc2-0` | 2:4.0.4-9 | GPL-2, GPL-2.0+, LGPL-2, LGPL-2.0+, LGPL-2.1, LGPL-2.1+ | deb |
+| `libpulse0` | 17.0+dfsg1-2+b1 | GPL-2, GPL-2+, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, other | deb |
+| `libreadline8t64` | 8.2-6 | GFDL, GFDL-NIV-1.3+, GPL-2, GPL-2+, GPL-3, GPL-3+, ISC-no-attribution | deb |
+| `librsvg2-2` | 2.60.0+dfsg-1+deb13u1 | 0BSD, Apache-2.0, Apache-2.0,, BSD-2-clause, BSD-3-clause, Boost-1.0, CC-zero-waive-1.0-us, Expat, FSFAP, LGPL-2, LGPL-2+, MPL-2.0, OFL-1.1, Sun-permissive, Unlicense, zlib | deb |
+| `librubberband2` | 3.3.0+dfsg-2+b3 | BSD-3-clause, Expat, GPL-2, GPL-2+, Zlib, other-1 | deb |
+| `libsamplerate0` | 0.2.2-4+b2 | BSD-2-clause, FSFAP, GPL-2, GPL-2+, GPL-3, GPL-3+ | deb |
+| `libsasl2-2` | 2.1.28+dfsg1-9 | BSD-2-clause, BSD-2.2-clause, BSD-3-Clause-Attribution, BSD-3-clause, BSD-3-clause-JANET, BSD-3-clause-PADL, BSD-4-clause-UC, FSFULLR, GPL-3, GPL-3+, IBM-as-is, MIT-CMU, MIT-Export, MIT-OpenVision, OpenLDAP, RSA-MD | deb |
+| `libsasl2-modules-db` | 2.1.28+dfsg1-9 | BSD-2-clause, BSD-2.2-clause, BSD-3-Clause-Attribution, BSD-3-clause, BSD-3-clause-JANET, BSD-3-clause-PADL, BSD-4-clause-UC, FSFULLR, GPL-3, GPL-3+, IBM-as-is, MIT-CMU, MIT-Export, MIT-OpenVision, OpenLDAP, RSA-MD | deb |
+| `libseat1` | 0.9.1-1 | Expat, LGPL-2.1, LGPL-2.1+ | deb |
+| `libseccomp2` | 2.6.0-2 | LGPL-2.1 | deb |
+| `libselinux1` | 3.8.1-1 | GPL-2, public-domain | deb |
+| `libsemanage-common` | 3.8.1-1 | GPL-2, LGPL-2.1, LGPL-2.1+ | deb |
+| `libsemanage2` | 3.8.1-1 | GPL-2, LGPL-2.1, LGPL-2.1+ | deb |
+| `libsensors-config` | 1:3.6.2-2 | GPL-2, GPL-2+, LGPL-2.1, LGPL-2.1+, Linux-man-pages-copyleft | deb |
+| `libsensors5` | 1:3.6.2-2 | GPL-2, GPL-2+, LGPL-2.1, LGPL-2.1+, Linux-man-pages-copyleft | deb |
+| `libsepol2` | 3.8.1-1 | GPL-2, GPL-2+, LGPL-2.1, LGPL-2.1+, Zlib | deb |
+| `libshine3` | 3.1.1-2+b2 | GPL-2, GPL-2+, LGPL-2 | deb |
+| `libsmartcols1` | 2.41.5-0+deb13u1 | BSD-2-clause, BSD-3-clause, BSD-4-clause, BSLA, Expat, GPL-2, GPL-2+, GPL-3, GPL-3+, ISC, LGPL, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, LGPL-3, LGPL-3+, public-domain | deb |
+| `libsndfile1` | 1.2.2-2+deb13u1 | Apache-2.0, BSD-2-clause, BSD-3-clause, FSFAP, GPL-2, GPL-2+, GPL-3, GPL-3+, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, NTP, gsm, sun | deb |
+| `libsodium23` | 1.0.18-1+deb13u1 | BSD-2-clause, CC0, CC0-1.0, GPL-2, GPL-2+, ISC, MIT, public-domain | deb |
+| `libsoxr0` | 0.1.3-4+b2 | LGPL-2.1, LGPL-2.1+, Spherepack, permissive1, permissive2 | deb |
+| `libspectre1` | 0.2.12-1+b2 | GPL-2, GPL-2+, GPL-3 | deb |
+| `libspeex1` | 1.2.1-3 | BSD-3-Clause, GFDL-1.1-or-later, GFDL-1.2, LGPL-2, LGPL-2.0-or-later, custom-1 | deb |
+| `libsphinxbase3t64` | 0.8+5prealpha+1-21+b1 | BSD-2-clause, BSD-2-clause-beyond, BSD-3-clause, BSD-3-clause-carnegie, GPL-2, GPL-2+, lucent, u-o-tennesee | deb |
+| `libsqlite3-0` | 3.46.1-7+deb13u2 | GPL-2, GPL-2+, public-domain | deb |
+| `libsrt1.5-gnutls` | 1.5.4-1+deb13u1 | BSD-3-clause, LGPL-2.1, LGPL-2.1+, MPL-2.0, Zlib, unlicense | deb |
+| `libssh-4` | 0.11.5-0+deb13u1 | BSD-2-clause, BSD-3-clause, ISC, LGPL-2.1, LGPL-2.1+~OpenSSL, public-domain | deb |
+| `libssl3t64` | 3.5.7-1~deb13u3 | Apache-2.0, Artistic, GPL-1, GPL-1+ | deb |
+| `libstartup-notification0` | 0.12-8 | LGPL-2.0-or-later, MIT | deb |
+| `libsvtav1enc2` | 2.3.0+dfsg-1 | BSD-2-clause, BSD-3-Clause-Clear, BSD-3-clause, Expat, ISC, LGPL-2.1, LGPL-2.1+ | deb |
+| `libswresample5` | 7:7.1.5-0+deb13u1 | BSD-1-clause, BSD-2-clause, BSD-3-clause, BSL, Expat, GPL-2, GPL-2+, GPL-3, GPL-3+, IJG, ISC, LGPL-2+, LGPL-2.1, LGPL-2.1+, Sundry, Zlib, man-page, public-domain | deb |
+| `libswscale8` | 7:7.1.5-0+deb13u1 | BSD-1-clause, BSD-2-clause, BSD-3-clause, BSL, Expat, GPL-2, GPL-2+, GPL-3, GPL-3+, IJG, ISC, LGPL-2+, LGPL-2.1, LGPL-2.1+, Sundry, Zlib, man-page, public-domain | deb |
+| `libsystemd-shared` | 257.13-1~deb13u1 | CC0-1.0, Expat, GPL-2, GPL-2+, LGPL-2.1, LGPL-2.1+, public-domain | deb |
+| `libsystemd0` | 257.13-1~deb13u1 | CC0-1.0, Expat, GPL-2, GPL-2+, LGPL-2.1, LGPL-2.1+, public-domain | deb |
+| `libthai-data` | 0.1.29-2 | GPL-2, GPL-2+, LGPL-2.1, LGPL-2.1+ | deb |
+| `libthai0` | 0.1.29-2+b1 | GPL-2, GPL-2+, LGPL-2.1, LGPL-2.1+ | deb |
+| `libtheoradec1` | 1.2.0~alpha1+dfsg-6 | BSD-3-Clause, BSD-4-Clause, GPL-2, GPL-2+, LGPL-2, LGPL-2+ | deb |
+| `libtheoraenc1` | 1.2.0~alpha1+dfsg-6 | BSD-3-Clause, BSD-4-Clause, GPL-2, GPL-2+, LGPL-2, LGPL-2+ | deb |
+| `libtirpc-common` | 1.3.6+ds-1 | BSD-3-Clause, GPL-2, LGPL-2.1 | deb |
+| `libtirpc3t64` | 1.3.6+ds-1 | BSD-3-Clause, GPL-2, LGPL-2.1 | deb |
+| `libtwolame0` | 0.4.0-2+b2 | LGPL-2, LGPL-2+ | deb |
+| `libudev1` | 257.13-1~deb13u1 | CC0-1.0, Expat, GPL-2, GPL-2+, LGPL-2.1, LGPL-2.1+, public-domain | deb |
+| `libudfread0` | 1.1.2-1+b2 | GPL-2, GPL-2+, LGPL-2.1, LGPL-2.1+ | deb |
+| `libunistring5` | 1.3-2 | BSD-3-clause, FreeSoftware, GFDL-1.2+, GFDL-1.3+, GPL-2, GPL-2+, GPL-3, GPL-3+, ISC, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, LGPL-3, LGPL-3+, Unicode-DFS-2016, X11, bsd-3-clause, gfdl-1.2+, gfdl-1.3+, isc, public-domain, unicode-dfs-2016 | deb |
+| `libunwind8` | 1.8.1-0.1 | Expat, GPL-2, GPL-2+ | deb |
+| `libutempter0` | 1.2.1-4 | BSD-2-Clause, LGPL-2.1 | deb |
+| `libuuid1` | 2.41.5-0+deb13u1 | BSD-2-clause, BSD-3-clause, BSD-4-clause, BSLA, Expat, GPL-2, GPL-2+, GPL-3, GPL-3+, ISC, LGPL, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, LGPL-3, LGPL-3+, public-domain | deb |
+| `libva-drm2` | 2.22.0-3 | Expat, Expat-advertising, GPL-2, GPL-2+, other | deb |
+| `libva-x11-2` | 2.22.0-3 | Expat, Expat-advertising, GPL-2, GPL-2+, other | deb |
+| `libva2` | 2.22.0-3 | Expat, Expat-advertising, GPL-2, GPL-2+, other | deb |
+| `libvidstab1.1` | 1.1.0-2+b2 | GPL-2, GPL-2.0+ | deb |
+| `libvncclient1` | 0.9.15+dfsg-1+deb13u2 | BSD-2-clause, BSD-3-clause, Expat, GPL-2, GPL-2+, ISC, LGPL-2, LGPL-2+, X11, public-domain~d3des, wxWin | deb |
+| `libvncserver1` | 0.9.15+dfsg-1+deb13u2 | BSD-2-clause, BSD-3-clause, Expat, GPL-2, GPL-2+, ISC, LGPL-2, LGPL-2+, X11, public-domain~d3des, wxWin | deb |
+| `libwlroots-0.18` | 0.18.2-3 | CC0-1.0, Expat, GPL-2, GPL-2+, LGPL-2.1, LGPL-2.1+ | deb |
+| `libx264-164` | 2:0.164.3108+git31e19f9-2+b1 | BSD-3-clause, Expat, GPL-2, GPL-2+, ISC, LGPL-2.1+, public-domain | deb |
+| `libx265-215` | 4.1-2 | Expat, GPL-2, GPL-2+, ISC, LGPL-2.1, LGPL-2.1+ | deb |
+| `libxcb-ewmh2` | 0.4.2-1 | GPL-2, GPL-2+, MIT/X | deb |
+| `libxcb-icccm4` | 0.4.2-1 | GPL-2, GPL-2+, MIT/X | deb |
+| `libxcb-render-util0` | 0.3.10-1 | Expat, GPL-2, GPL-2+ | deb |
+| `libxcb-util1` | 0.4.1-1 | GPL-2, GPL-2+, MIT | deb |
+| `libxnvctrl0` | 535.171.04-1+b2 | Expat, Expat-Precision, Expat-RedHat, GPL-2, other-MetroLink, other-XFree | deb |
+| `libxvidcore4` | 2:1.3.7-1+b2 | GPL-2, GPL-2+, LGPL-2, LGPL-2+ | deb |
+| `libxxhash0` | 0.8.3-2 | BSD-2-clause, GPL-2, GPL-2+ | deb |
+| `libz3-4` | 4.13.3-1 | Expat, GPL-2, GPL-2+ | deb |
+| `libzimg2` | 3.0.5+ds1-1+b2 | GPL-3, GPL-3+, WTFPL-2 | deb |
+| `libzmq5` | 4.3.5-1+b3 | LGPL-2, LGPL-2.0+, MIT, MPL-2.0 | deb |
+| `libzstd1` | 1.5.7+dfsg-1 | BSD-3-clause, Expat, GPL-2, zlib | deb |
+| `libzvbi-common` | 0.2.44-1 | BSD-2-Clause, BSD-3-Clause, GPL-2, GPL-2+, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, MIT | deb |
+| `libzvbi0t64` | 0.2.44-1 | BSD-2-Clause, BSD-3-Clause, GPL-2, GPL-2+, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, MIT | deb |
+| `login` | 1:4.16.0-2+really2.41.5-0+deb13u1 | BSD-2-clause, BSD-3-clause, BSD-4-clause, BSLA, Expat, GPL-2, GPL-2+, GPL-3, GPL-3+, ISC, LGPL, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, LGPL-3, LGPL-3+, public-domain | deb |
+| `login.defs` | 1:4.17.4-2 | BSD-3-clause, GPL-1, GPL-2, GPL-2+ | deb |
+| `mawk` | 1.3.4.20250131-1 | CC-BY-3.0, GPL-2, GPL-2.0-only, X11 | deb |
+| `mesa-libgallium` | 25.0.7-2+deb13u1 | Apache-2.0, BSD-2-clause, BSD-3-google, BSL, GPL, GPL-1, GPL-1+, GPL-2, Khronos, MIT, MLAA, SGI | deb |
+| `mount` | 2.41.5-0+deb13u1 | BSD-2-clause, BSD-3-clause, BSD-4-clause, BSLA, Expat, GPL-2, GPL-2+, GPL-3, GPL-3+, ISC, LGPL, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, LGPL-3, LGPL-3+, public-domain | deb |
+| `netbase` | 6.5 | GPL-2 | deb |
+| `openbox` | 3.6.1-12+b2 | BSD-3-clause, GPL-2, GPL-2+, GPL-3, GPL-3+ | deb |
+| `openssl` | 3.5.7-1~deb13u3 | Apache-2.0, Artistic, GPL-1, GPL-1+ | deb |
+| `openssl-provider-legacy` | 3.5.7-1~deb13u3 | Apache-2.0, Artistic, GPL-1, GPL-1+ | deb |
+| `passwd` | 1:4.17.4-2 | BSD-3-clause, GPL-1, GPL-2, GPL-2+ | deb |
+| `perl` | 5.40.1-6+deb13u1 | Artistic, Artistic-2, Artistic-dist, BSD-3-clause, BSD-3-clause-GENERIC, BSD-3-clause-with-weird-numbering, BSD-4-clause-POWERDOG, BZIP, DONT-CHANGE-THE-GPL, Expat, FSFAP, GPL-1, GPL-1+, GPL-2, GPL-2+, GPL-3+-WITH-BISON-EXCEPTION, LGPL-2.1, REGCOMP, REGCOMP,, SDBM-PUBLIC-DOMAIN, TEXT-TABS, Unicode, ZLIB | deb |
+| `perl-base` | 5.40.1-6+deb13u1 | Artistic, Artistic-2, Artistic-dist, BSD-3-clause, BSD-3-clause-GENERIC, BSD-3-clause-with-weird-numbering, BSD-4-clause-POWERDOG, BZIP, DONT-CHANGE-THE-GPL, Expat, FSFAP, GPL-1, GPL-1+, GPL-2, GPL-2+, GPL-3+-WITH-BISON-EXCEPTION, LGPL-2.1, REGCOMP, REGCOMP,, SDBM-PUBLIC-DOMAIN, TEXT-TABS, Unicode, ZLIB | deb |
+| `perl-modules-5.40` | 5.40.1-6+deb13u1 | Artistic, Artistic-2, Artistic-dist, BSD-3-clause, BSD-3-clause-GENERIC, BSD-3-clause-with-weird-numbering, BSD-4-clause-POWERDOG, BZIP, DONT-CHANGE-THE-GPL, Expat, FSFAP, GPL-1, GPL-1+, GPL-2, GPL-2+, GPL-3+-WITH-BISON-EXCEPTION, LGPL-2.1, REGCOMP, REGCOMP,, SDBM-PUBLIC-DOMAIN, TEXT-TABS, Unicode, ZLIB | deb |
+| `poppler-data` | 0.4.12-1 | AGPL-3+, BSD-3-cluase, GPL-2, MIT | deb |
+| `procps` | 2:4.0.4-9 | GPL-2, GPL-2.0+, LGPL-2, LGPL-2.0+, LGPL-2.1, LGPL-2.1+ | deb |
+| `python3-autocommand` | 2.2.2-3 | LGPL-3, LGPL-3+ | deb |
+| `python3-jaraco.context` | 6.0.1-1+deb13u1 | Expat, GPL-2, GPL-2+ | deb |
+| `python3-jaraco.functools` | 4.1.0-1 | Expat, GPL-2, GPL-2+ | deb |
+| `readline-common` | 8.2-6 | GFDL, GFDL-NIV-1.3+, GPL-2, GPL-2+, GPL-3, GPL-3+, ISC-no-attribution | deb |
+| `rsync` | 3.5.0+ds1-0+deb13u1 | FSF-unlimited, FSFULLR, GPL-2, GPL-2+, GPL-3, GPL-3+, ISC, PostgreSQL, public-domain, snprintf | deb |
+| `sed` | 4.9-2+deb13u1 | BSD-4-clause-UC, BSL-1, GFDL-1.3, GFDL-NIV-1.3+, GPL-3, GPL-3+, ISC, X11, pcre | deb |
+| `socat` | 1.8.0.3-1+deb13u1 | GPL-2, GPL-3, LGPL-2.1, LGPL-2.1+, MIT | deb |
+| `sqv` | 1.3.0-3+b2 | LGPL-2, LGPL-2.0-or-later | deb |
+| `systemd` | 257.13-1~deb13u1 | CC0-1.0, Expat, GPL-2, GPL-2+, LGPL-2.1, LGPL-2.1+, public-domain | deb |
+| `systemd-sysv` | 257.13-1~deb13u1 | CC0-1.0, Expat, GPL-2, GPL-2+, LGPL-2.1, LGPL-2.1+, public-domain | deb |
+| `sysvinit-utils` | 3.14-4 | GPL-2, GPL-2.0, GPL-2.0+, GPL-3, GPL-3.0, LGPL-2.1, LGPL-2.1+ | deb |
+| `tar` | 1.35+dfsg-3.1 | GPL-2, GPL-2+, GPL-3, GPL-3+, LGPL-2.1, LGPL-2.1+, LGPL-3, LGPL-3+ | deb |
+| `tcl` | 8.6.16 | GPL-2.0-or-later, TCL | deb |
+| `tk` | 8.6.16 | GPL-2.0-or-later, TCL | deb |
+| `util-linux` | 2.41.5-0+deb13u1 | BSD-2-clause, BSD-3-clause, BSD-4-clause, BSLA, Expat, GPL-2, GPL-2+, GPL-3, GPL-3+, ISC, LGPL, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, LGPL-3, LGPL-3+, public-domain | deb |
+| `x11vnc` | 0.9.17-1 | GPL-2, GPL-2.0 | deb |
+
+_Also conveyed, not visible to the SBOM scan (installed from a source
+tarball with no package manifest for syft to read — see this script's
+MANUAL_ENTRIES):_
+
+| package | version | licence | source |
+|---|---|---|---|
+| `websockify` | 0.13.0 | LGPL-3.0 | `https://github.com/novnc/websockify/archive/refs/tags/v0.13.0.tar.gz` |
+
 ## `ghcr.io/cjohnstoniv/agent-vscode:0.9.4`
 
 105 package(s) carrying a GPL or LGPL term.

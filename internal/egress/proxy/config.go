@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/netip"
 	"net/url"
 	"os"
@@ -58,6 +59,10 @@ type Config struct {
 	Injection []InjectionConfig `json:"injection,omitempty"`
 	// Listen is the proxy listen address (default ":3128").
 	Listen string `json:"listen,omitempty"`
+	// SigninListen, when set, opens the person's desktop sign-in lane on this
+	// address (desktop_signin_lane.go): CONNECT tunnels only, admitted by an
+	// open sign-in's credential, never terminated. Empty = no lane.
+	SigninListen string `json:"signin_listen,omitempty"`
 	// AllowedPeers, when set, are the only source networks the proxy serves; a
 	// connection from any other address is closed before a byte is read. The
 	// Docker runner sets the run's own network here under
@@ -267,10 +272,18 @@ type Config struct {
 	// value the proxy added. WARDYN_PROXY_RESPONSE_SCRUB at dispatch; false
 	// (the default) relays responses verbatim.
 	ScrubResponses bool `json:"scrub_responses,omitempty"`
+	// CanonicalPushRepos names a held push over a git_pat grant to github.com
+	// by its repository lowercased and without ".git" (patPushTarget), the
+	// App lane's form, so one decision covers every spelling of it.
+	// WARDYN_PUSH_HOLD_CANONICAL_REPOS at dispatch; false (the default) names
+	// the path as git spelled it.
+	CanonicalPushRepos bool `json:"canonical_push_repos,omitempty"`
 	// VM marks a run whose only client is wardyn-vmnet, the network relay of a
 	// desktop VM (vmnet_flows.go): the port rule is on whatever PortRule says,
-	// and vmnet's two-stage CONNECT and refusal reports are honoured. Set by the
-	// runner for a linux_vm run only; false (every container run) is today.
+	// and vmnet's two-stage CONNECT and refusal reports are honoured. Set only
+	// by the Docker runner that relays a linux_vm run's guest through
+	// wardyn-vmnet (runner/docker prepareProxy); never by the control plane,
+	// and never for a container run or a Kubernetes VM pod.
 	VM bool `json:"vm,omitempty"`
 	// PortRule is the container runs' port rule (port_rule.go): "" or "off"
 	// (today: a bare host is open on every port), "dry_run" (nothing refused,
@@ -475,6 +488,17 @@ func ValidUpstreamProxyURL(raw string) error {
 	return err
 }
 
+// validateSigninListen: the sign-in lane, when set, is a host:port of its own.
+func (c *Config) validateSigninListen() error {
+	if c.SigninListen == "" {
+		return nil
+	}
+	if _, _, err := net.SplitHostPort(c.SigninListen); err != nil || c.SigninListen == c.Listen {
+		return fmt.Errorf("config: signin_listen must be a host:port other than listen")
+	}
+	return nil
+}
+
 func (c *Config) applyDefaultsAndValidate() error {
 	if c.Listen == "" {
 		c.Listen = defaultListen
@@ -490,6 +514,9 @@ func (c *Config) applyDefaultsAndValidate() error {
 	}
 	if c.RunToken == "" {
 		return fmt.Errorf("config: run_token is required")
+	}
+	if err := c.validateSigninListen(); err != nil {
+		return err
 	}
 	if err := hoptls.CheckURL(c.ControlPlaneURL); err != nil {
 		return fmt.Errorf("config: %w", err)

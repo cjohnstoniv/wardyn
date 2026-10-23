@@ -37,9 +37,8 @@ export const SHELL = {
   // browser session of the person.
   SIGN_OUT_FAILED_BODY: "Your session may still be active on the server. Sign in again, then sign out, to end it in every browser.",
   // #2100: signing out ends the Wardyn session only; the identity provider's own session stays live, so
-  // on a shared computer the next person could press "Sign in with SSO" and arrive as this one.
-  SIGN_OUT_SSO_TITLE: "You signed out of Wardyn.",
-  SIGN_OUT_SSO_BODY: "On a shared computer, also sign out of your identity provider.",
+  // on a shared computer the next person could press "Sign in with SSO" and arrive as this one. The
+  // sign-in gate says so after Sign out (session-continuity-copy.ts SESSION_ENDED.OWN_SHARED).
 } as const;
 
 // #217 — the console's one dirty-navigation guard (lib/use-unsaved-guard.tsx),

@@ -10,7 +10,7 @@
 
 export const RUNS_SECTION = {
   NEEDS: "Needs you",
-  NEEDS_ADMIN: "Needs a decision",
+  NEEDS_ADMIN: "Needs you",
   // H-3, Admin view only: owners' sign-ins and lost runs — no admin can act.
   OWNER: "Waiting on the owner",
   // #3039: Starting and Queued rows sit here too, so the section is not named for one state.
@@ -86,6 +86,22 @@ export const RUNS_FILTERS = {
   GROUP_TITLE: "Group · Title",
   // H-8.
   SAVED_VIEW_LABEL: "Saved view",
+  WORKSPACE_CHIP: (w: string) => `Workspace · ${w}`,
+} as const;
+
+// #3041, phone only: the search box keeps the row and everything else sits in
+// a bottom sheet. Strings are the approved R6 Run phone board's or derived from
+// it; docs/design/runs-filters-canon.md freezes them.
+export const RUNS_FILTERS_SHEET = {
+  TITLE: "Filters",
+  CLEAR: "Clear filters",
+  BUTTON_COUNT: (n: number) => `Filters (${n})`,
+  // "Show N runs" is a plural pair: SHOW_ONE is the one form. SHOW_MORE is for a
+  // list cut at its limit, N+ as the page header reads it.
+  SHOW_ONE: "Show 1 run",
+  SHOW: (n: number) => `Show ${n} runs`,
+  SHOW_MORE: (n: number) => `Show ${n}+ runs`,
+  CHIP_REMOVE_ARIA: (chip: string) => `Remove ${chip}`,
 } as const;
 
 // H-8: saved views (localStorage, up to 10). "Save view" names the current
@@ -117,7 +133,14 @@ export const RUNS_SAVE_VIEW_CANCEL = "Cancel";
 // runs-model.ts's rowPresentation — this table only carries what D2 adds or
 // changes.
 export const RUNS_ROW_WORD = {
+  /** The Admin-view row word and the "N held" count beside it (the R6 board). */
+  NEEDS_YOU: "Needs you",
+  HELD: (n: number) => `${n} held`,
   WAITING_FOR_ADMIN: "Waiting for an admin",
+  /** #2963 (M8-Banner-A runs list): the agent asked a person to take over. */
+  NEEDS_TAKEOVER: "Needs you to take over",
+  /** Not on the boards: an admin's view of an owner's takeover request. */
+  WAITING_FOR_TAKEOVER: "Waiting for its owner to take over",
   WAITING_SIGN_IN: "Waiting for sign-in",
   SANDBOX_STOPPED: "Sandbox stopped",
   RUNNING: "Running",
@@ -132,4 +155,5 @@ export const RUNS_ROW_WORD = {
 export const RUNS_ROW_ACTION = {
   REVIEW: "Review",
   SIGN_IN: "Sign in",
+  TAKE_OVER: "Take over",
 } as const;

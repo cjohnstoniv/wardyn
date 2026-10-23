@@ -11,6 +11,7 @@ import { makeRun } from "../../../../test/factories";
 import { aheadByHours } from "../../../lib/test-clock";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { RUN_SIGN_IN } from "../../wardyn/copy";
+import { SIGN_IN_GRACE_MS, SIGN_IN_POLL_MS } from "./use-run-sign-in";
 import {
   AWS_SSO_LOGIN_AGENT,
   HARNESS_LOGIN_TASK,
@@ -124,14 +125,22 @@ describe("LoginSandboxNote — the waiting sign-in strip", () => {
     expect(strip.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("a first not_waiting answer adds nothing, and an old run is not read again", async () => {
+  // The grace is counted from when reading began (ad3ea0338), not from the run's creation, so a run
+  // created an hour ago is still read for the grace once it is on the page.
+  it("a first not_waiting answer adds nothing; an old run is read for the grace from read start, then not again", async () => {
     getMock.mockResolvedValue(answerOf("a completed attempt"));
     view(mine({ created_at: aheadByHours(-1) }));
     await tick(0);
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
     expect(screen.queryByText(RUN_SIGN_IN.NO_LONGER)).not.toBeInTheDocument();
-    await tick(20_000);
     expect(getMock).toHaveBeenCalledTimes(1);
+    await tick(20_000);
+    expect(getMock).toHaveBeenCalledTimes(1 + 20_000 / SIGN_IN_POLL_MS);
+    await tick(SIGN_IN_GRACE_MS);
+    const reads = getMock.mock.calls.length;
+    await tick(30_000);
+    expect(getMock).toHaveBeenCalledTimes(reads);
+    expect(screen.queryByText(RUN_SIGN_IN.NO_LONGER)).not.toBeInTheDocument();
   });
 
   it("D7: a run in its first two minutes keeps reading until the code is drawn", async () => {

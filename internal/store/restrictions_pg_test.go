@@ -1,7 +1,7 @@
 // Copyright 2026 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Restrictions (migration 0210) against Postgres: the rows, the caller match, the run column and the
+// Restrictions (migration 0227) against Postgres: the rows, the caller match, the run column and the
 // workspace pin. Every case runs on its own throwaway database.
 package store_test
 

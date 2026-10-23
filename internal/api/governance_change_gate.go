@@ -184,15 +184,23 @@ var governanceChangeKinds = map[string]govKind{
 	govKindBoundary:            {approver: securityApprover, apply: applyBoundaryChange},
 	govKindRestriction:         {approver: securityApprover, apply: applyRestrictionChange},
 	govKindWorkspaceOwningUnit: {approver: securityApprover, apply: applyWorkspaceOwningUnitChange},
+	govKindApprovalRule:        {approver: securityApprover, apply: applyApprovalRuleChange},
 }
 
 // forChange is the kind as it decides one held change. A remote-hosted runner add to or removal from an
 // organization pool is held under the use-policy kind but written on the operatorOnly tier, so only a
-// super admin decides it; a payload that does not decode is given the stricter tier.
+// super admin decides it; a payload that does not decode is given the stricter tier. So is a profile
+// change whose payload names a mount's host path (a kept mount is held as the sentinel, so only a
+// change that adds a mount, changes a host path or makes a kept mount writable names one).
 func (k govKind) forChange(ch types.GovernanceChange) govKind {
-	if ch.TargetKind == govKindRunnerPoolUsePolicy {
+	switch ch.TargetKind {
+	case govKindRunnerPoolUsePolicy:
 		var held runnerPoolHeldChange
 		if decodeHeldPayload(ch.Payload, &held) != nil || held.Executor != "" {
+			k.approver = operatorApprover
+		}
+	case govKindUnit:
+		if profilePayloadSetsHostPath(ch.Payload) {
 			k.approver = operatorApprover
 		}
 	}
@@ -253,6 +261,7 @@ func (s *Server) proposeGovernanceChange(w http.ResponseWriter, r *http.Request,
 		// plain refusal, as does a held change the caller's role may not read.
 		if held, gerr := s.cfg.Store.GetGovernanceChange(r.Context(), pending.ID); gerr == nil && held.State == types.GovernanceChangePending && s.canSeeGovernanceChange(r, held) {
 			matches := held.Op == p.op && samePayload(held.Payload, payload)
+			held = s.changeForRead(r, held)
 			body.PendingChange, body.PendingChangeMatches = &held, &matches
 		}
 		writeJSON(w, http.StatusConflict, body)
@@ -269,7 +278,7 @@ func (s *Server) proposeGovernanceChange(w http.ResponseWriter, r *http.Request,
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor, "governance.change.propose", saved.ID.String(), "success",
 		mustJSON(map[string]any{"target_kind": p.kind, "op": p.op, "target_key": p.key, "expires_at": saved.ExpiresAt})))
 	w.Header().Set("Location", "/api/v1/governance/changes/"+saved.ID.String())
-	writeJSON(w, http.StatusAccepted, map[string]any{"pending_change": saved})
+	writeJSON(w, http.StatusAccepted, map[string]any{"pending_change": s.changeForRead(r, saved)})
 }
 
 // samePayload reports whether two change payloads encode the same JSON value, whatever their key

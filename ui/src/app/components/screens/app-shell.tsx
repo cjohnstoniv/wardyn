@@ -18,6 +18,7 @@ import {
   Contact,
   Fingerprint,
   FolderOpen,
+  HardDrive,
   KeyRound,
   Laptop,
   LayoutTemplate,
@@ -32,6 +33,7 @@ import {
   Users,
   UsersRound,
 } from "lucide-react";
+import { NeedsYouNotices } from "../wardyn/needs-you-notices";
 import { SHELL } from "../wardyn/copy";
 import { lastCheckedLabel } from "../../lib/readiness";
 import { UnsavedGuardProvider, useGuardedNavClick } from "../../lib/use-unsaved-guard";
@@ -47,6 +49,7 @@ import { SidebarLowerLinks } from "./sidebar-settings-link";
 import {
   ADMIN_NAV_GROUPS,
   CREDENTIALS_NAV_TITLE,
+  DRIVES_NAV_TITLE,
   GOVERNANCE_NAV_TITLE,
   RUNNERS_NAV_TITLE,
   USER_TYPES_NAV_TITLE,
@@ -136,8 +139,8 @@ interface NavItem {
   icon: React.ElementType;
   badge?: "approvals" | "attention";
   // Which admin tier the item belongs to, when only one: a security admin's
-  // nav shows only what that tier can write or read org-wide (§2.1). Secrets
-  // is super-only; Drives has no item for either tier (GET /drives is operatorOnly, #2827);
+  // nav shows only what that tier can write or read org-wide (§2.1). Drives
+  // joins it (grants and preview are securityOps); Secrets is super-only;
   // Recordings waits for F1 (packet M-A QM-5).
   tier?: "super" | "security";
   // Other paths that keep this item lit (see SidebarLowerLinks).
@@ -157,6 +160,9 @@ const ADMIN_NAV: NavItem[] = [
   // 0.9: people's own computers that run their runs. securityOps server-side, so both admin tiers see it;
   // the page explains the off state, so the item is always there (RN-Q4).
   { to: "/admin/runners", label: RUNNERS_NAV_TITLE, icon: Laptop, group: "build" },
+  // User drives: a security admin reaches /admin/drives for its grants and preview (securityOps server-side);
+  // a super admin opens it from Workspaces and Settings' card, so its nav is unchanged.
+  { to: "/admin/drives", label: DRIVES_NAV_TITLE, icon: HardDrive, tier: "security", group: "build" },
   // People (0.8.6 ppl-p2), User types (0.8, UT-7a) and Credentials (CS-8) are securityOps server-side, so
   // both admin tiers see them (a security admin has no Settings and no Secrets, so Credentials can't live
   // in either).
@@ -577,6 +583,8 @@ export function AppShell({
             <React.Suspense fallback={null}>
               <ReauthLayer onResumed={adoptIdentity} />
             </React.Suspense>
+            {/* #2963: a takeover request anywhere in the caller's runs raises a toast. */}
+            <NeedsYouNotices />
             {/* Hidden — not merely covered — in focus mode: the cockpit's overlay is
           painted over the shell anyway, but leaving the header mounted would
           keep a dozen focusable controls ahead of the terminal in tab order

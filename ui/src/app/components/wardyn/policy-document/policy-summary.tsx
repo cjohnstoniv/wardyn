@@ -42,7 +42,7 @@ export interface PolicyFacts {
 }
 
 type ChipSpec = { label: string; tone: "neutral" | "warning"; title?: string };
-type Value = { text?: string; mono?: boolean; hidden?: boolean; mark?: PolicyMark; chips?: ChipSpec[] };
+type Value = { text?: string; mono?: boolean; hidden?: boolean; hiddenTip?: string; mark?: PolicyMark; chips?: ChipSpec[] };
 type Row = { label: string; raw?: boolean; values: Value[] };
 type Group = { heading: string; intro?: string; rows: Row[]; items?: string[]; ado?: string[] };
 
@@ -205,6 +205,7 @@ function summarize(
           const readOnly = m.read_only !== false ? ` · ${SUMMARY.readOnly}` : "";
           return mono(`${target}${hidden ? "" : ` ← ${source}`}${readOnly}`, {
             hidden,
+            hiddenTip: POLICY_TAB.mountHiddenTip,
             mark: marks?.of("workspace_mounts", target),
           });
         }),
@@ -304,9 +305,9 @@ function MarkChip({ mark }: { mark: PolicyMark }) {
 }
 
 // A value the reader may not see. Focusable, so the reason is reachable without a pointer.
-function HiddenChip() {
+function HiddenChip({ tip = POLICY_TAB.hiddenTip }: { tip?: string }) {
   return (
-    <span title={POLICY_TAB.hiddenTip} tabIndex={0} role="note" aria-label={`${POLICY_TAB.hidden}. ${POLICY_TAB.hiddenTip}`}>
+    <span title={tip} tabIndex={0} role="note" aria-label={`${POLICY_TAB.hidden}. ${tip}`}>
       <Chip tone="neutral">{POLICY_TAB.hidden}</Chip>
     </span>
   );
@@ -358,7 +359,7 @@ export function PolicySummary({
                       {r.values.map((v, i) => (
                         <li key={i} className="flex flex-wrap items-baseline gap-2 text-sm text-foreground [overflow-wrap:anywhere]">
                           {v.text && <span className={v.mono ? "font-mono" : undefined}>{v.text}</span>}
-                          {v.hidden && <HiddenChip />}
+                          {v.hidden && <HiddenChip tip={v.hiddenTip} />}
                           {v.chips?.map((c) => (
                             <span key={c.label} title={c.title}>
                               <Chip tone={c.tone}>{c.label}</Chip>

@@ -26,6 +26,18 @@ func driveNotInPoolMsg(name string) string {
 	return fmt.Sprintf("%s: not available in this pool's runners.", name)
 }
 
+// driveOrgRunnersOnlyMsg refuses a drive with no second place on a person's own
+// runner: it mounts only from the organisation's runners.
+func driveOrgRunnersOnlyMsg(name string) string {
+	return fmt.Sprintf("drive: %q mounts only from the organisation's runners — choose an organisation pool, or launch without drive", name)
+}
+
+// driveBoundElsewhereMsg refuses a drive on a person's own runner its second
+// place is not bound to, without naming the runner it is bound to.
+func driveBoundElsewhereMsg(name string) string {
+	return fmt.Sprintf("drive: %q is bound to a different runner — choose an organisation pool, or launch without drive", name)
+}
+
 func driveTargetConflictMsg(a, b, target string) string {
 	return fmt.Sprintf("%s and %s both mount at %s. Attach one of them.", a, b, target)
 }

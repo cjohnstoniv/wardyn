@@ -182,6 +182,19 @@ test.describe("auth / sign-in gate", () => {
     expect(await readToken(page)).toBe(GOOD_TOKEN);
   });
 
+  // #2493: the token form used to land every sign-in on /runs, dropping the link the person opened.
+  test("a token sign-in returns to the deep link that was opened", async ({ page }) => {
+    await clearTokenInit(page);
+    await page.goto("/admin/policies");
+
+    await expect(signInToken(page)).toBeVisible();
+    await signInToken(page).fill(GOOD_TOKEN);
+    await useTokenButton(page).click();
+
+    await expect(runsNav(page)).toBeVisible();
+    await expect(page).toHaveURL(/\/admin\/policies$/);
+  });
+
   test("a per-person token works through the token field", async ({ page }) => {
     await page.goto("/");
     await signInToken(page).fill(MEMBER_TOKEN);
@@ -566,6 +579,28 @@ test.describe("outage vs. rejection", () => {
     // …and the console never claims the token was refused, because nothing
     // refused it.
     await expect(page.getByText(/admin token was rejected/i)).toHaveCount(0);
+  });
+
+  // The cold-load retry (App.tsx COLD_PROBE_RETRY_MS) meets a 401 that names an ended session: the gate
+  // says so, as it does when the mount probe gets that answer.
+  test("a cold 503 whose retry is a 401 naming an ended session shows the signed-out notice", async ({ page }) => {
+    let probes = 0;
+    await page.route("**/api/v1/runs?limit=1", (route) => {
+      probes++;
+      return probes === 1
+        ? route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "database unavailable" }) })
+        : route.fulfill({
+            status: 401,
+            contentType: "application/json",
+            body: JSON.stringify({ error: "unauthorized", reason: "expired_session" }),
+          });
+    });
+    await clearTokenInit(page);
+    await page.goto("/");
+
+    await expect(signInToken(page)).toBeVisible();
+    await expect(page.getByRole("status").filter({ hasText: SESSION_ENDED_REASON })).toBeVisible();
+    await expect(page.getByRole("alert")).toHaveCount(0);
   });
 
   test("the gate keeps asking /healthz, so an SSO-only deployment is not left with no way in", async ({ page }) => {

@@ -6,6 +6,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -78,5 +79,70 @@ func TestPG_APITokens_RefreshIdentityMintedByArm(t *testing.T) {
 	}
 	if got, ok := live(ownRaw); !ok || got.Role != "admin" || got.ID != own.ID {
 		t.Errorf("owner-minted token after a role change = %+v (live %v), want re-stamped admin", got, ok)
+	}
+}
+
+// TestPG_APITokens_ListMintedForOthersMatchesTheGoFilter pins the SQL inventory to the filter it
+// replaced: over live, revoked, expired, owner-minted and admin-minted rows, with and without the
+// finished ones, it keeps exactly the rows the Go predicate over ListAPITokens keeps, newest first.
+func TestPG_APITokens_ListMintedForOthersMatchesTheGoFilter(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	now := time.Now().UTC()
+	person := "inventory-" + uuid.NewString()
+	past, future := now.Add(-time.Hour), now.Add(time.Hour)
+	n := 0
+	seed := func(mintedBy string, expires *time.Time, revoke bool) {
+		t.Helper()
+		n++
+		unknown := true
+		row, err := st.CreateAPIToken(ctx, types.APIToken{
+			ID: uuid.New(), Principal: person, Role: "user", UserType: "standard", GroupsTruncated: &unknown,
+			Name: "ci", CreatedAt: now.Add(-time.Duration(n) * time.Minute), MintedBy: mintedBy, ExpiresAt: expires,
+		}, "wdn_"+uuid.NewString())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if revoke {
+			if _, err := st.RevokeAPIToken(ctx, row.ID, person, now); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	seed("", nil, false)
+	seed(person, nil, false)
+	seed("admin-1", nil, false)
+	seed("admin-1", &future, false)
+	seed("admin-1", &past, false)
+	seed("admin-1", nil, true)
+	seed("admin-2", &future, true)
+	seed(person, nil, true)
+
+	all, err := st.ListAPITokens(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, withFinished := range []bool{false, true} {
+		var want []uuid.UUID
+		for _, tok := range all {
+			finished := tok.RevokedAt != nil || (tok.ExpiresAt != nil && !tok.ExpiresAt.After(now))
+			if tok.Principal == person && tok.MintedBy != "" && tok.MintedBy != tok.Principal && (!finished || withFinished) {
+				want = append(want, tok.ID)
+			}
+		}
+		got, err := st.ListAPITokensMintedForOthers(ctx, withFinished, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ids []uuid.UUID
+		for _, tok := range got {
+			if tok.Principal == person {
+				ids = append(ids, tok.ID)
+			}
+		}
+		if wantN := map[bool]int{false: 2, true: 5}[withFinished]; len(want) != wantN || !slices.Equal(ids, want) {
+			t.Errorf("withFinished=%v: SQL kept %v, Go filter kept %v (want %d rows)", withFinished, ids, want, wantN)
+		}
 	}
 }

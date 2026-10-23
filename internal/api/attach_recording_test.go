@@ -82,7 +82,7 @@ func TestNewSessionRecorder_MasksAndPersists(t *testing.T) {
 
 	// (d) a session.recording.write audit event was emitted, success, keyed.
 	var found bool
-	for _, ev := range audit.events {
+	for _, ev := range audit.snapshot() {
 		if ev.Action == "session.recording.write" {
 			found = true
 			if ev.Outcome != "success" {
@@ -112,7 +112,7 @@ func TestNewSessionRecorder_NoStoreIsNoop(t *testing.T) {
 		t.Error("tee should be nil when no RecordingStore is configured")
 	}
 	finish(context.Background(), types.ActorHuman, "bob") // must not panic
-	for _, ev := range audit.events {
+	for _, ev := range audit.snapshot() {
 		if ev.Action == "session.recording.write" {
 			t.Error("no session.recording.write event should be emitted without a store")
 		}
@@ -133,7 +133,7 @@ func TestNewSessionRecorder_EmptySessionNotPersisted(t *testing.T) {
 	if _, err := store.OpenCast(context.Background(), recording.CastKey(runID.String(), "empty")); err == nil {
 		t.Error("an output-less session should not persist a cast")
 	}
-	for _, ev := range audit.events {
+	for _, ev := range audit.snapshot() {
 		if ev.Action == "session.recording.write" {
 			t.Error("no session.recording.write event for an empty session")
 		}
@@ -406,7 +406,7 @@ func TestNewSessionRecorder_HarnessLoginRunIsNeverRecorded(t *testing.T) {
 		}
 		t.Errorf("a cast was persisted for the harness-login run (%d bytes); it must never be recorded", len(body))
 	}
-	for _, ev := range audit.events {
+	for _, ev := range audit.snapshot() {
 		if ev.Action == "session.recording.write" && ev.Outcome == "success" {
 			t.Error("session.recording.write/success emitted for the harness-login run — nothing should have been recorded")
 		}
@@ -471,9 +471,10 @@ func TestNewSessionRecorder_OversizeCastTruncatedNotLost(t *testing.T) {
 	}
 
 	var rec *types.AuditEvent
-	for i := range audit.events {
-		if audit.events[i].Action == "session.recording.write" {
-			rec = &audit.events[i]
+	rows := audit.snapshot()
+	for i := range rows {
+		if rows[i].Action == "session.recording.write" {
+			rec = &rows[i]
 		}
 	}
 	if rec == nil {

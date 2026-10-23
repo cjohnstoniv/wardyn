@@ -5,6 +5,7 @@ package composer
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -83,6 +84,27 @@ func TestMeetAllowedDomains(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The meet minimises an overlay's allowed_domains quadratically, so the overlay is count-capped
+// before it, at write and at resolve alike.
+func TestOverlayAllowedDomainsCountCap(t *testing.T) {
+	base := Authority{Ceiling: types.RunPolicySpec{AllowedDomains: []string{"*.corp.example"}}}
+	hosts := func(n int) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = fmt.Sprintf("*.h%d.corp.example", i)
+		}
+		return out
+	}
+	atCap, over := hosts(types.MaxAllowedDomainsPerSpec), hosts(types.MaxAllowedDomainsPerSpec+1)
+	if err := ValidateOverlay(base, overlayOf(types.CeilingOverlay{AllowedDomains: &atCap})); err != nil {
+		t.Fatalf("a list at the cap = %v, want accepted", err)
+	}
+	ov := overlayOf(types.CeilingOverlay{AllowedDomains: &over})
+	wantOverlayErr(t, ValidateOverlay(base, ov), ReasonOverlayInvalid, "allowed_domains")
+	_, _, err := ApplyOverlay(base, ov)
+	wantOverlayErr(t, err, ReasonOverlayInvalid, "allowed_domains")
 }
 
 // A base's allow-all never covers an entry, so an overlay naming a private
@@ -519,5 +541,22 @@ func TestMeetLiteralIPIsNotCoveredByAWildcard(t *testing.T) {
 	wantOverlayErr(t, ValidateOverlay(base, ov), ReasonOverlayInvalid, "allowed_domains")
 	if got := mustApply(t, base, ov); len(got.Ceiling.AllowedDomains) != 0 {
 		t.Errorf("allowed_domains = %v: a literal IP must never come out of a wildcard", got.Ceiling.AllowedDomains)
+	}
+}
+
+func TestOverlayDuplicateToolRule(t *testing.T) {
+	base := Authority{Ceiling: types.RunPolicySpec{ToolRules: []types.ToolRule{{Tool: "*", Effect: types.ToolAllow}}}}
+	dup := overlayOf(types.CeilingOverlay{ToolRules: &[]types.ToolRule{{Tool: "Bash", Effect: types.ToolDeny}, {Tool: "Bash", Effect: types.ToolAllow}}})
+	err := ValidateOverlay(base, dup)
+	var oe *OverlayError
+	if !errors.As(err, &oe) || oe.Reason != ReasonOverlayInvalid || oe.Field != "tool_rules" {
+		t.Fatalf("ValidateOverlay = %v, want a governance_overlay_invalid refusal on tool_rules", err)
+	}
+	got, warns, err := ApplyOverlay(base, dup)
+	if err != nil || len(warns) == 0 {
+		t.Fatalf("ApplyOverlay = %v, %v, want the stored overlay to keep resolving with a warning", warns, err)
+	}
+	if e := effectFor(toolEffects(got.Ceiling.ToolRules), "Bash"); e != types.ToolAllow {
+		t.Errorf("Bash = %v, want the last rule's effect", e)
 	}
 }

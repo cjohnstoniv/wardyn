@@ -9,10 +9,41 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"sync"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// workspaceListKey carries a workspaceListMemo on a fold's request context.
+type workspaceListKey struct{}
+
+// workspaceListMemo is one fold's read of the workspaces table: the policy, onboarding and
+// workspace steps each need the whole list, and one request's gates must not each read it again.
+type workspaceListMemo struct {
+	mu   sync.Mutex
+	list []types.Workspace
+	read bool
+}
+
+// listWorkspaces is Store.ListWorkspaces, answered once per fold when ctx carries a memo.
+// A failed read is not kept: the next caller reads again, as it would without the memo.
+func (s *Server) listWorkspaces(ctx context.Context) ([]types.Workspace, error) {
+	m, ok := ctx.Value(workspaceListKey{}).(*workspaceListMemo)
+	if !ok {
+		return s.cfg.Store.ListWorkspaces(ctx)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.read {
+		list, err := s.cfg.Store.ListWorkspaces(ctx)
+		if err != nil {
+			return nil, err
+		}
+		m.list, m.read = list, true
+	}
+	return slices.Clone(m.list), nil
+}
 
 // workspaceSourceIndex indexes onboarded workspaces by each of their local_dir
 // (by Path) and repo (by Source slug/URL) entries — the lookup a workspace
@@ -143,7 +174,7 @@ func (s *Server) validateWorkspaceSources(ctx context.Context, spec types.RunPol
 		return http.StatusUnprocessableEntity, reasonWorkspaceSourcesStoreUnavailable, fmt.Errorf(
 			"workspace onboarding requires a store, but none is configured")
 	}
-	all, err := s.cfg.Store.ListWorkspaces(ctx)
+	all, err := s.listWorkspaces(ctx)
 	if err != nil {
 		return http.StatusUnprocessableEntity, reasonWorkspaceSourcesListUnavailable, fmt.Errorf("list workspaces: %w", err)
 	}
@@ -254,7 +285,7 @@ func (s *Server) requirementWriteRefusal(ctx context.Context, attached []types.W
 					return refuse(reasonWorkspaceSourcesStoreUnavailable, errors.New("workspace onboarding requires a store, but none is configured"))
 				}
 				var err error
-				if stored, err = s.cfg.Store.ListWorkspaces(ctx); err != nil {
+				if stored, err = s.listWorkspaces(ctx); err != nil {
 					return refuse(reasonWorkspaceSourcesListUnavailable, fmt.Errorf("list workspaces: %w", err))
 				}
 			}

@@ -118,8 +118,9 @@ func (s *Server) handleGetGovernance(w http.ResponseWriter, r *http.Request) {
 	}
 	people := unitPeople(resolved, assignments)
 	profiles := make([]governanceUnitView, len(resolved))
+	tier := s.specReadTierFor(r.Context())
 	for i, p := range resolved {
-		profiles[i] = newUnitView(p.Row, p.Resolved, p.Err)
+		profiles[i] = newUnitView(p.Row, p.Resolved, p.Err, tier)
 		if p.Row.ID != store.DefaultUnitID {
 			n := len(people[p.Row.ID])
 			profiles[i].People = &n

@@ -30,9 +30,13 @@ var _ runnerHealthStore = store.PG{}
 // rows) of one runner; a summary sooner than that is dropped.
 const runnerSummaryGap = 10 * time.Second
 
+// runnerClockSkew is how far ahead of the organisation's clock a runner's failure or relay time may be before
+// that part is dropped: a runner's clock is its own, and a time hours ahead would pin its report as the newest.
+const runnerClockSkew = time.Hour
+
 // healthFromRunner keeps the offline summary and relay status a runner's caps carry, once each is
-// checked: a stage that is not a doctor stage name, a missing time or an unknown relay state drops that
-// part; each reason is scrubbed again of any URL's user information and clipped, whatever the runner did.
+// checked: a stage that is not a doctor stage name, a missing time, a time more than runnerClockSkew ahead or an
+// unknown relay state drops that part; each reason is scrubbed again of any URL's user information and clipped, whatever the runner did.
 // A stored summary writes runner.offline_summary.record. Like the rest of caps, nothing here refuses the event.
 func (s *Server) healthFromRunner(ctx context.Context, runnerID uuid.UUID, caps runnerwire.Caps) {
 	now := s.cfg.Now().UTC()
@@ -54,7 +58,7 @@ func (s *Server) healthFromRunner(ctx context.Context, runnerID uuid.UUID, caps 
 }
 
 func checkedOfflineSummary(in *types.RunnerOfflineSummary, now time.Time) *types.RunnerOfflineSummary {
-	if in == nil || !slices.Contains(types.RunnerStages, in.Stage) || in.FirstFailureAt.IsZero() || in.LastFailureAt.Before(in.FirstFailureAt) {
+	if in == nil || !slices.Contains(types.RunnerStages, in.Stage) || in.FirstFailureAt.IsZero() || in.LastFailureAt.Before(in.FirstFailureAt) || in.LastFailureAt.After(now.Add(runnerClockSkew)) {
 		return nil
 	}
 	return &types.RunnerOfflineSummary{Stage: in.Stage, Reason: types.ClipRunnerReason(doctor.Scrub(in.Reason)),
@@ -62,7 +66,7 @@ func checkedOfflineSummary(in *types.RunnerOfflineSummary, now time.Time) *types
 }
 
 func checkedRelayStatus(in *types.RunnerRelayStatus, now time.Time) *types.RunnerRelayStatus {
-	if in == nil || (in.State != types.RelayReachable && in.State != types.RelayUnreachable) || in.Since.IsZero() {
+	if in == nil || (in.State != types.RelayReachable && in.State != types.RelayUnreachable) || in.Since.IsZero() || in.Since.After(now.Add(runnerClockSkew)) {
 		return nil
 	}
 	out := &types.RunnerRelayStatus{State: in.State, Since: in.Since.UTC(), ReportedAt: now}

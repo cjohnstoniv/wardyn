@@ -74,11 +74,25 @@ test.describe("Design consistency", () => {
       await page.route(c.api, (route) => (route.request().method() === "GET" ? route.fulfill({ json: c.json }) : route.fallback()));
       await gotoConsole(page, "admin");
       await navToRoute(page, c.path);
-      await expect(page.getByRole("heading", { name: c.title, level: 4 })).toBeVisible();
-      const block = page.locator('[data-size="compact"]').first();
+      const heading = page.getByRole("heading", { name: c.title, level: 4 });
+      await expect(heading).toBeVisible();
+      const block = page.locator('[data-size="compact"]').filter({ has: heading });
       // The compact block is padded 32px top and bottom; the page-sized hero is 64px. Its height depends on the copy.
       expect(await block.evaluate((el) => getComputedStyle(el).paddingTop)).toBe("32px");
       await page.unrouteAll({ behavior: "ignoreErrors" });
     });
   }
+
+  // The run's Audit tab reads the Audit screen's sentences, keeps the raw key in the tooltip, and does not
+  // print the viewed run's own id on every row.
+  test("Run Audit tab: sentences, raw key in the tooltip, no repeated run id", async ({ page }) => {
+    await gotoConsole(page);
+    const id = await seedRun(page);
+    await navToRoute(page, `/runs/${id}`);
+    await page.getByRole("tab", { name: /^Audit/ }).click();
+    const created = page.getByTestId("run-audit-action").filter({ hasText: "Created the run" }).first();
+    await expect(created).toBeVisible();
+    await expect(created).toHaveAttribute("title", "Created the run (run.create)");
+    await expect(page.getByTestId("run-audit-row").filter({ hasText: id })).toHaveCount(0);
+  });
 });

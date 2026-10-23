@@ -4,7 +4,7 @@
  */
 
 import { afterEach, describe, expect, it } from "vitest";
-import { apiURL, appURL, basePath, routerPath, signInURL, wsURL } from "./base-path";
+import { apiURL, appURL, basePath, originWS, routerPath, signInURL, wsURL } from "./base-path";
 
 function serveUnder(base: string) {
   document.documentElement.dataset.wardynBase = base;
@@ -38,6 +38,14 @@ describe("base-path", () => {
     const host = window.location.host;
     const ws = window.location.protocol === "https:" ? "wss:" : "ws:";
     expect(wsURL("/runs/r1/attach")).toBe(`${ws}//${host}/team/wardyn/api/v1/runs/r1/attach`);
+  });
+
+  it("builds a WebSocket URL on this origin for a path that carries its own base, adding none", () => {
+    serveUnder("/team/wardyn");
+    const host = window.location.host;
+    const ws = window.location.protocol === "https:" ? "wss:" : "ws:";
+    expect(originWS("/gw/r/r1/__desktop/__rfb")).toBe(`${ws}//${host}/gw/r/r1/__desktop/__rfb`);
+    expect(wsURL("/runs/r1/attach")).toBe(originWS(apiURL("/runs/r1/attach")));
   });
 
   it("takes the base off a browser pathname, and only a whole-segment match", () => {

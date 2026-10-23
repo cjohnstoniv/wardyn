@@ -91,6 +91,14 @@ var queryIDMatrix = map[string]queryIDRoute{
 		entity: entityPrincipal, readers: []string{"refuseExplicitOwnerParam"},
 		pinnedBy: "TestExplicitSecrets_NobodyWritesAnotherPersonsNamespace",
 	},
+	"GET /api/v1/me/secrets?owner": {
+		entity: entityPrincipal, readers: []string{"refuseListOwnerParam"},
+		pinnedBy: "TestExplicitSecrets_ListRoutesRefuseTheOwnerParam",
+	},
+	"GET /api/v1/shared-secrets?owner": {
+		entity: entityPrincipal, readers: []string{"refuseListOwnerParam"},
+		pinnedBy: "TestExplicitSecrets_ListRoutesRefuseTheOwnerParam",
+	},
 	"DELETE /api/v1/secrets/{name}?owner": {
 		entity: entityPrincipal, readers: []string{"secretOwnerParam", "deleteSecretFrom"},
 		foreign: 403, pinnedBy: "TestListSecrets_AdminOwnerParam_Member403",
@@ -138,6 +146,7 @@ var queryParamNotAnID = map[string]string{
 	"org":                       "DELETE /me/scm/azure-devops/token: the address of Azure DevOps rows on which the caller's own token is removed (adoOwnPATRowFor, and every row on that address for DELETE); it removes the caller's own token only",
 	"organisation":              "the Azure DevOps organisation an admin-only org check runs against; it must be one the row itself serves (rowServesOrganisation)",
 	"offset":                    "page window (parseListPage)",
+	"sponsored":                 "GET /runs: a run-list switch (\"\" or exclude) that only turns off the addition of the caller's sponsored service identities' runs to their own list; it never widens a scoped listing and names no entity",
 	"survey":                    "GET /me/runners/{id}/folders: 1 asks the caller's own runner to count what a run would get from the folder; it names no entity",
 	"cursor":                    "GET /people (security tier): the opaque last-principal marker of the previous page of a listing that tier already reads whole; it picks where the page starts and widens nothing",
 	"uid":                       "GET /model-providers-entra/signin: the azure_foundry provider row the sign-in is for, a deployment record and not a principal's entity; the capture is bound to the caller's own session subject and stored in their own namespace whatever the row, and a uid that is not an azure_foundry row is refused",
@@ -200,6 +209,7 @@ var queryParamNotAnID = map[string]string{
 	"subject_type":   "Explain grid (security tier route): the grant subject kind asked about",
 	"subject":        "Explain grid (security tier route): the grant subject asked about, over the table that tier already reads whole",
 	"kinds":          "Explain grid (security tier route): capability kind names, a closed set",
+	"v":              "GET /branding/logo (anonymous): the logo's content digest, which only decides whether the answer is cached for good; it names no entity",
 }
 
 // queryParamDynamicReads names the parameters a function reads through a

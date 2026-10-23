@@ -222,9 +222,9 @@ func TestOutputRecoveryAfterOrgRestartAcknowledges(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("restarted org never refused the output OPEN")
 	}
-	// The org signals its refusal before the RESET reaches the runner. A runner that marks the
-	// output unacknowledged only after the recovery's first ACK leaves it lossy, and the write
-	// below then drops bytes the recovery has not read.
+	// The org signals its refusal before the RESET reaches the runner. Waiting for the runner's
+	// mark starts the recovery after it, the order this test pins; a mark that would land after
+	// the recovery's first ACK is TestOutputRecoveryAfterALateRefusalKeepsEveryByte's.
 	for deadline := time.Now().Add(10 * time.Second); !bufferLossy(server, id); {
 		if time.Now().After(deadline) {
 			t.Fatal("runner never marked the refused output unacknowledged")
@@ -260,5 +260,117 @@ func TestOutputRecoveryAfterOrgRestartAcknowledges(t *testing.T) {
 	}
 	if st := bufferState(server, id); !st.Complete || st.Ack != st.End {
 		t.Fatalf("runner cursor=%+v", st)
+	}
+}
+
+// recoveryAfterRestart writes prefix, connects a restarted org that refuses the runner's OPEN and
+// starts its recovery of the run. It returns the run's writer and drain end, the capture and the
+// recovery's result.
+func recoveryAfterRestart(t *testing.T, server *Server, id uuid.UUID, prefix []byte) (io.Writer, func(error), *outputCapture, <-chan error) {
+	t.Helper()
+	local := "local-" + id.String()
+	w, err := server.Output(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = server.BindOutput(id, local); err != nil {
+		t.Fatal(err)
+	}
+	end := runner.BeginOutputDrain(w)
+	if _, err = w.Write(prefix); err != nil {
+		t.Fatal(err)
+	}
+	sub, watch := orgProcess(t, server)
+	select {
+	case <-watch.refused:
+	case <-time.After(10 * time.Second):
+		t.Fatal("restarted org never refused the output OPEN")
+	}
+	capture := &outputCapture{done: make(chan struct{})}
+	recovered := make(chan error, 1)
+	ctx := runner.WithOutputRun(t.Context(), id)
+	go func() { recovered <- sub.RecoverOutput(ctx, placement.RunnerRefPrefix("laptop")+local, capture) }()
+	return w, end, capture, recovered
+}
+
+// writeAsync writes data and ends the drain with the write's error.
+func writeAsync(w io.Writer, end func(error), data []byte) <-chan error {
+	written := make(chan error, 1)
+	go func() {
+		_, err := w.Write(data)
+		end(err)
+		written <- err
+	}()
+	return written
+}
+
+// The runner can read the restarted org's refusal after the recovery has ACKed. That refusal is
+// stale: marking the output unacknowledged then would let a full buffer drop bytes the recovery
+// has not read yet.
+func TestOutputRecoveryAfterALateRefusalKeepsEveryByte(t *testing.T) {
+	server := outputServer(t)
+	id := uuid.New()
+	prefix := []byte("written before the org restarted\n")
+	marked := make(chan struct{})
+	server.markRefused = func(b *outputBuffer, acks uint64) {
+		defer close(marked)
+		for deadline := time.Now().Add(10 * time.Second); bufferState(server, id).Ack < int64(len(prefix)); {
+			if time.Now().After(deadline) {
+				t.Error("recovery never acknowledged the prefix")
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+		b.unacknowledgedSince(acks)
+	}
+	w, end, capture, recovered := recoveryAfterRestart(t, server, id, prefix)
+	select {
+	case <-marked:
+	case <-time.After(time.Minute):
+		t.Fatal("runner never handled the refusal")
+	}
+	more := bytes.Repeat([]byte("z"), outputLimit+outputLimit/8)
+	if err := waitFor(t, "write past the buffer", writeAsync(w, end, more)); err != nil {
+		t.Fatal(err)
+	}
+	if err := waitFor(t, "recovery", recovered); err != nil {
+		t.Fatalf("recovery after a late refusal: %v", err)
+	}
+	want := append(append([]byte{}, prefix...), more...)
+	if !bytes.Equal(capture.Bytes(), want) {
+		t.Fatalf("recovered %d bytes, want %d", capture.Len(), len(want))
+	}
+	if st := bufferState(server, id); !st.Complete || st.Ack != st.End {
+		t.Fatalf("runner cursor=%+v", st)
+	}
+}
+
+// A recovery whose bytes the runner evicted ends with the runner's reset of the stream, not with
+// the context its failed ACK saw.
+func TestOutputRecoveryResetReportsTheRunnersCause(t *testing.T) {
+	server := outputServer(t)
+	id := uuid.New()
+	prefix := []byte("written before the org restarted\n")
+	w, end, _, recovered := recoveryAfterRestart(t, server, id, prefix)
+	for deadline := time.Now().Add(10 * time.Second); bufferState(server, id).Ack < int64(len(prefix)); {
+		if time.Now().After(deadline) {
+			t.Fatal("recovery never acknowledged the prefix")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// Force the eviction: a lossy buffer drops its oldest parts, which the recovery has not read.
+	server.mu.Lock()
+	b := server.outputs[id]
+	server.mu.Unlock()
+	b.mu.Lock()
+	b.lossy = true
+	b.mu.Unlock()
+	if err := waitFor(t, "write past the buffer", writeAsync(w, end, bytes.Repeat([]byte("z"), outputLimit+outputLimit/8))); err != nil {
+		t.Fatal(err)
+	}
+	err := waitFor(t, "recovery", recovered)
+	var reset *runnerwire.ResetError
+	if !errors.As(err, &reset) || reset.Code != runnerwire.ResetInternal {
+		t.Fatalf("recovery ended with %v, want the runner's reset (code %d)", err, runnerwire.ResetInternal)
 	}
 }

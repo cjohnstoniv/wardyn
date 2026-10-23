@@ -5,6 +5,7 @@
 
 import { FIELD_HOME, REVIEW_GROUP_OF_FIELD, type ReviewGroupId } from "../draft/field-homes";
 import type { RunIntent } from "../draft/run-intent";
+import { isServer } from "../lenses/apps-lens";
 
 /** A document-only field the draft carries: shown in its group, never editable here. */
 export interface DocRow {
@@ -19,6 +20,8 @@ export function docOnlyRows(intent: RunIntent): Record<ReviewGroupId, DocRow[]> 
   const rows: Record<ReviewGroupId, DocRow[]> = { run: [], where: [], work: [], tools: [], access: [], limits: [] };
   const add = (path: string, value: unknown) => {
     if (value === undefined || FIELD_HOME[path] !== "document") return;
+    // An application server's ports are the Run group's own rows, not a read-only line.
+    if (path === "inline_policy.ui_apps" && isServer(intent)) return;
     rows[REVIEW_GROUP_OF_FIELD[path] ?? "access"].push({ path, value: show(value) });
   };
   for (const [key, value] of Object.entries(intent)) {

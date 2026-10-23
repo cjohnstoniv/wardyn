@@ -62,9 +62,11 @@ type governancePreviewRequest struct {
 // governancePreviewResponse names the profile that would bind a principal
 // presenting those claims, and the TIER of the assignment that won.
 //
-// Every field is omitempty, and an empty object is the answer for "no
-// assignment matched" — the deployment ceiling. That is the same additive/
-// absent doctrine defaultPolicyResponse.GovernanceUnitName follows: an
+// Every field is omitempty, so the answer for "no assignment matched" names
+// no unit (the check adds contexts, dormant and effective to every answer; a
+// person no membership places has the Default unit as their home context).
+// That is the same additive/absent doctrine
+// defaultPolicyResponse.GovernanceUnitName follows: an
 // absent key already decodes as "no profile" in the TS mirror, while "" would
 // be a value the console then has to special-case.
 //
@@ -96,7 +98,7 @@ type governancePreviewResponse struct {
 // would turn the append-only log into a record of every claim an admin tried.
 //
 // ErrNotFound is a RESULT, not a failure — the absent-row doctrine, answered as
-// the empty object. Only a real store failure is a 500, and it must be: a
+// an answer that names no unit. Only a real store failure is a 500, and it must be: a
 // preview that silently reported "no assignment matches" on a database hiccup
 // would tell an admin their profile does not bind someone it does.
 func (s *Server) handleGovernanceCheck(w http.ResponseWriter, r *http.Request) {
@@ -284,7 +286,7 @@ func (s *Server) checkEffective(ctx context.Context, q contextQuery, choice cont
 		return nil, err
 	}
 	prov.setBy(boundaryProvenance, c.Spec, bounded.Spec)
-	return &checkEffective{Ceiling: redactSpecForRead(bounded.Spec, true), Limits: bounded.Limits, Provenance: prov}, nil
+	return &checkEffective{Ceiling: redactSpecForRead(bounded.Spec, s.specReadTierFor(ctx)), Limits: bounded.Limits, Provenance: prov}, nil
 }
 
 // normalizeGovernancePreviewClaims lowercases, trims and de-duplicates one
