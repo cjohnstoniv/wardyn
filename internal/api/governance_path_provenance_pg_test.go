@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"maps"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // path_provenance (the policy tree's admin reads): which unit on a context's path changed each
@@ -179,6 +181,31 @@ func TestPathProvenanceDeploymentFillInIsTheDeployments(t *testing.T) {
 			if got := path["resources"]; got != deploymentProvenance {
 				t.Errorf("%s %s path_provenance[resources] = %+v, want the deployment's", where, name, got)
 			}
+		}
+	}
+}
+
+// TestPathProvenanceStandaloneRootIsTheRoots: a standalone root's own walls are its own: its
+// resources (unlike the deployment's) stay the root's under a composed child that leaves them.
+func TestPathProvenanceStandaloneRootIsTheRoots(t *testing.T) {
+	e := newGovEnvOn(t, throwawayPGPool(t))
+	eight := 8
+	root, err := e.pg.UpsertGovernanceUnit(context.Background(), types.GovernanceUnit{Name: "pp-sa", CreatedBy: "seed",
+		Ceiling: types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}, MinConfinementClass: types.CC2,
+			Resources: &types.ResourceLimits{CPUMillis: 500}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := e.seedComposed("pp-sa-child", root, types.CeilingOverlay{MaxHolds: &eight})
+	treeMember(t, e, child, types.CapabilitySubjectUser, "sub-pp-sa-child", 1, true)
+	if reflect.DeepEqual(root.Ceiling.Resources, e.srv.deploymentAuthority().Ceiling.Resources) {
+		t.Fatalf("the root's resources are the deployment's: the scenario does not fire")
+	}
+	for where, path := range map[string]map[string]policyref.Provenance{
+		"GET /governance": unitPathProvenance(t, e)[child.ID], "check": checkWallsFor(t, e, "sub-pp-sa-child").PathProvenance,
+	} {
+		if got := path["resources"]; got != unitRec("pp-sa") {
+			t.Errorf("%s pp-sa-child path_provenance[resources] = %+v, want the standalone root pp-sa", where, got)
 		}
 	}
 }
