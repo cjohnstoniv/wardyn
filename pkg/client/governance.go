@@ -486,6 +486,29 @@ type GovernanceApplyResult struct {
 	Steps []ApplyStep `json:"steps,omitempty"`
 }
 
+// writeChangedUnit sends one unit write the server does not already hold and records its step. It answers the
+// saved unit, or nil when the server holds the write for approval (recorded in Pending; the unit is marked pending).
+func (c *Client) writeChangedUnit(ctx context.Context, p, existing GovernanceUnit, exists bool, res *GovernanceApplyResult, pendingProfile map[string]bool) (*GovernanceUnit, error) {
+	var replacing *GovernanceUnit
+	if exists {
+		replacing = &existing
+	}
+	step := governanceUnitStep(p.Name, replacing)
+	got, warnings, pending, werr := c.writeGovernanceUnit(ctx, p, replacing)
+	step = step.withOutcome(pending != nil, werr)
+	step.Warnings = warnings
+	res.Steps = append(res.Steps, step)
+	if werr != nil {
+		return nil, werr
+	}
+	if pending != nil {
+		res.Pending = append(res.Pending, *pending)
+		pendingProfile[p.Name] = true
+		return nil, nil
+	}
+	return &got, nil
+}
+
 // ApplyGovernanceResult is ApplyGovernance with the pending-approval outcome
 // returned as data, not an error: a 202 pending change is an expected result
 // under four-eyes, not a failure. See ApplyGovernance for the matching and
@@ -562,23 +585,12 @@ func (c *Client) ApplyGovernanceResult(ctx context.Context, doc GovernanceDocume
 		if ok && governanceUnitUnchanged(existing, p) {
 			saved = existing
 		} else {
-			var replacing *GovernanceUnit
-			if ok {
-				replacing = &existing
-			}
-			step := governanceUnitStep(p.Name, replacing)
-			got, warnings, pending, werr := c.writeGovernanceUnit(ctx, p, replacing)
-			step = step.withOutcome(pending != nil, werr)
-			step.Warnings = warnings
-			res.Steps = append(res.Steps, step)
+			got, werr := c.writeChangedUnit(ctx, p, existing, ok, &res, pendingProfile)
 			if werr != nil {
 				return res, werr
 			}
-			if pending != nil {
-				res.Pending = append(res.Pending, *pending)
-				pendingProfile[p.Name] = true
-			} else {
-				saved = got
+			if got != nil {
+				saved = *got
 			}
 		}
 		doc.Units[i] = saved
