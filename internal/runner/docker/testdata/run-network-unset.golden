@@ -1,0 +1,8 @@
+POST /v1.44/networks/create?
+{"Name":"wardyn-int-11111111-1111-1111-1111-111111111111","Driver":"bridge","Scope":"","IPAM":null,"Internal":true,"Attachable":false,"Ingress":false,"ConfigOnly":false,"ConfigFrom":null,"Options":null,"Labels":{"wardyn.component":"network","wardyn.deployment":"wardyn-internal","wardyn.managed":"true","wardyn.run-id":"11111111-1111-1111-1111-111111111111"}}
+GET /v1.44/networks/net1?
+
+DELETE /v1.44/networks/net1?
+
+POST /v1.44/networks/create?
+{"Name":"wardyn-int-11111111-1111-1111-1111-111111111111","Driver":"bridge","Scope":"","IPAM":{"Driver":"","Options":null,"Config":[{"Subnet":"10.88.0.0/16"}]},"Internal":true,"Attachable":false,"Ingress":false,"ConfigOnly":false,"ConfigFrom":null,"Options":null,"Labels":{"wardyn.component":"network","wardyn.deployment":"wardyn-internal","wardyn.managed":"true","wardyn.run-id":"11111111-1111-1111-1111-111111111111"}}

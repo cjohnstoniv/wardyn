@@ -2997,6 +2997,14 @@ The line is the substrate's own words, in the shape `<component>: <Reason>[: <me
 2. Add the `default-address-pools` line to `daemon.json` and restart the daemon; networks that already exist keep their subnets.
 3. Optionally set `WARDYN_MAX_CONCURRENT_RUNS` below what the pool holds.
 
+Or leave `daemon.json` alone and give Wardyn its own range:
+
+- Set `WARDYN_DOCKER_RUN_SUBNET_POOL` (for example `10.200.0.0/16`) on `wardynd` or `wardyn-runnerd`.
+- Each run network then takes the next free `/28` of it (`WARDYN_DOCKER_RUN_SUBNET_SIZE` changes the length).
+- Free means no network on the daemon overlaps it, so a restart, a second replica and other stacks all count.
+- A full range refuses the run with a sentence naming the setting.
+- The orphan sweep removes the network of a run that is gone, which hands its subnet back.
+
 ### The start deadlines
 
 The pane will wait; the **runner** will not wait forever, and these are the bounds an operator sizes:
