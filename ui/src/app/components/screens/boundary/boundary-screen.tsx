@@ -5,10 +5,9 @@
 
 // Policies -> Wardyn boundary (board T2) and its dry run (board T4's report anatomy), over
 // GET/PUT /governance/boundary and POST /governance/dry-run. Every save shows the dry run first; the PUT goes
-// through the governance-writes path (202 -> SubmittedNote, 412 -> reload). While the server refuses
-// hard_limits (409 boundary_hard_limits_gated) the Hard limits choice is off (DESIGN-TREE §8 "UI lanes"); the 409
-// is still shown in the server's words should a hard-limits write reach it. The route is security-admin only, as
-// the server's GET is.
+// through the governance-writes path (202 -> SubmittedNote, 412 -> reload). A security admin can choose Hard
+// limits from any stored mode; a refused write is shown in the server's words. The route is security-admin only,
+// as the server's GET is.
 //
 // EVERY user-visible string comes from lib/boundary-copy.ts, or is canon reused from governance-copy.ts.
 import * as React from "react";
@@ -34,10 +33,6 @@ import { Note } from "../governance/display";
 import { SubmittedNote } from "../governance/submitted-note";
 
 const CLASSES: ConfinementClass[] = ["CC1", "CC2", "CC3"];
-
-// Off until the boundary bounds every brokered credential path a run is given (#3238): the server refuses
-// hard_limits with 409 boundary_hard_limits_gated until then, and that lane turns this on.
-export const HARD_LIMITS_SWITCH_ON = false;
 
 interface Draft {
   mode: BoundaryMode;
@@ -169,7 +164,6 @@ export function BoundaryScreen() {
 
   const disabled = !securityOperator || busy;
   const hard = draft.mode === "hard_limits";
-  const hardSelectable = HARD_LIMITS_SWITCH_ON || stored.mode === "hard_limits";
   // "No hard limits yet" only while the draft names no knob at all.
   const noKnobs = [...Object.values(body.spec), ...Object.values(body.limits)].every((v) => v === undefined);
   const chip = hard ? (
@@ -221,13 +215,11 @@ export function BoundaryScreen() {
             <fieldset disabled={disabled}>
               <legend className="text-sm font-medium text-foreground">{BOUNDARY.MODE}</legend>
               <div className="mt-2 grid gap-2 md:grid-cols-2">
-                <label className={`flex gap-2 rounded-lg border border-border p-3${hardSelectable ? "" : " opacity-60"}`}>
+                <label className="flex gap-2 rounded-lg border border-border p-3">
                   <input
                     type="radio"
                     name="boundary-mode"
                     checked={hard}
-                    disabled={!hardSelectable}
-                    aria-describedby={hardSelectable ? undefined : "boundary-hard-gated"}
                     onChange={() => edit({ mode: "hard_limits" })}
                   />
                   <span className="flex flex-col gap-1">
@@ -236,11 +228,6 @@ export function BoundaryScreen() {
                       <Chip tone="primary">{BOUNDARY.RECOMMENDED}</Chip>
                     </span>
                     <span className="text-xs text-muted-foreground">{BOUNDARY.MODE_HARD_BODY}</span>
-                    {!hardSelectable && (
-                      <span id="boundary-hard-gated" className="text-xs text-muted-foreground">
-                        {BOUNDARY.HARD_GATED}
-                      </span>
-                    )}
                   </span>
                 </label>
                 <label className="flex gap-2 rounded-lg border border-border p-3">
