@@ -180,8 +180,11 @@ func (d *Driver) observePod(ctx context.Context, runID uuid.UUID, component stri
 		}
 		if pe.NodeName == "" && pod.Spec.NodeName != "" {
 			pe.NodeName, changed = pod.Spec.NodeName, true
-			needAfter = true
 		}
+		// The after-list follows the first bound read. A later read takes it when runnerd stopped
+		// between that read's save and the after-list (#3545), since without it no arm can ever
+		// hold: the same late after-list a pod that bound while runnerd was down gets.
+		needAfter = pe.NodeName != "" && pe.PostBind == nil
 		nb, c := pe.recordIdentity(pod)
 		changed = changed || c
 		needAnchor = pe.NodeName != "" && (nb || hasUnanchored(pe))
