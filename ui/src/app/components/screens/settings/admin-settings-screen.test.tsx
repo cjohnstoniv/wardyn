@@ -19,7 +19,7 @@
 // caller who ever renders this page now — so they are ported below unchanged,
 // alongside the Host card's own #1228/#1200 coverage.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { CARD_STATUS, SETTINGS_GROUPS } from "../../wardyn/copy/card-status";
@@ -94,6 +94,9 @@ import { SCIM } from "../../../lib/scim-copy";
 import { SETTINGS_SUPER_ONLY, VIEW_REFUSAL } from "../../wardyn/copy/console-view";
 import { HOST_CARD } from "../../wardyn/copy/host-card";
 import { OperatorProvider } from "../../wardyn/operator-context";
+import { ModelAccessProvider } from "../../wardyn/model-access-context";
+import { NoBarrierNotice } from "../no-barrier-notice";
+import { NO_BARRIER } from "../../wardyn/copy";
 import { expandCard, startsWith } from "../../../lib/test-dom";
 
 function renderScreen(operator = true, operatorResolved = true) {
@@ -477,7 +480,7 @@ describe("AdminSettingsScreen — a FAILED site-config read is not a proxy postu
     await expandCard("Host");
     expect(screen.queryByText(/^Internet$/)).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: /^re-check$/i }));
+    await userEvent.click(screen.getByRole("button", { name: HOST_CARD.RECHECK }));
     expect(await screen.findByText(/^Internet$/)).toBeInTheDocument();
     expect(screen.getByText(/proxy\.corp\.example:3128/)).toBeInTheDocument();
   });
@@ -579,6 +582,50 @@ describe("AdminSettingsScreen — the Host card's status tiles", () => {
     await openHost();
     const footer = within(screen.getByTestId("host-footer"));
     expect(footer.getByRole("button", { name: /corporate proxy & egress/i })).toBeInTheDocument();
-    expect(footer.queryAllByRole("button", { name: /^re-check$/i })).toHaveLength(1);
+    expect(footer.queryAllByRole("button", { name: HOST_CARD.RECHECK })).toHaveLength(1);
+  });
+});
+
+// #3342: the shell's no-barrier Re-check and the Host card's Re-check were two buttons with one name, and the
+// shell's did not reach this screen.
+describe("AdminSettingsScreen — the shell's no-barrier Re-check (#3342)", () => {
+  const noRunner = () => baseStatus({ runner: { driver: "none", confinement_classes: [] } });
+
+  function renderInShell(shellStatus: ReturnType<typeof baseStatus>) {
+    const ui = (status: ReturnType<typeof baseStatus>) => (
+      <MemoryRouter initialEntries={["/admin/settings"]}>
+        <ModelAccessProvider status={status} onRefresh={() => {}}>
+          <OperatorProvider operator operatorResolved securityOperator>
+            <NoBarrierNotice canFix onRecheck={() => {}} />
+            <AdminSettingsScreen />
+          </OperatorProvider>
+        </ModelAccessProvider>
+      </MemoryRouter>
+    );
+    const r = render(ui(shellStatus));
+    return { rerender: (status: ReturnType<typeof baseStatus>) => r.rerender(ui(status)) };
+  }
+
+  it("no two buttons on the page share a Re-check name", async () => {
+    renderInShell(noRunner());
+    await screen.findByRole("heading", { name: startsWith("Host"), level: 3 });
+    await expandCard("Host");
+    const names = screen.getAllByRole("button", { name: /re-check/i }).map((b) => b.textContent?.trim());
+    expect(names).toContain(NO_BARRIER.RECHECK);
+    expect(names).toContain(HOST_CARD.RECHECK);
+    expect(new Set(names).size).toBe(names.length);
+  });
+
+  it("when the shell's re-read lands a barrier, the Host row stops saying Can't launch", async () => {
+    getSetupStatusMock.mockResolvedValue(noRunner());
+    const view = renderInShell(noRunner());
+    await screen.findByRole("heading", { name: startsWith("Host"), level: 3 });
+    await expandCard("Host");
+    expect(within(screen.getByTestId("host-state-pill")).getByText(HOST_CARD.CANT_LAUNCH)).toBeInTheDocument();
+
+    getSetupStatusMock.mockResolvedValue(baseStatus());
+    await act(async () => view.rerender(baseStatus()));
+    await waitFor(() => expect(screen.getByTestId("host-state-tile")).toHaveAttribute("data-tone", "success"));
+    expect(screen.queryByText(HOST_CARD.CANT_LAUNCH)).toBeNull();
   });
 });

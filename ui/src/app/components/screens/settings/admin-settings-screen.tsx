@@ -61,6 +61,7 @@ import { ViewNotice } from "../../wardyn/console-view";
 import { SETTINGS_SUPER_ONLY } from "../../wardyn/copy/console-view";
 import { Button } from "../../ui/button";
 import { HOST_CARD } from "../../wardyn/copy/host-card";
+import { useShellSetupStatus } from "../../wardyn/model-access-context";
 import { CARD_STATUS, SETTINGS_GROUPS } from "../../wardyn/copy/card-status";
 import { Chip, SectionLabel } from "../../wardyn/primitives";
 
@@ -299,7 +300,7 @@ function HostCard({
           </button>
         )}
         <Button variant="outline" size="sm" className="ml-auto" onClick={onRecheck}>
-          <RotateCw className="size-3.5" /> Re-check
+          <RotateCw className="size-3.5" /> {HOST_CARD.RECHECK}
         </Button>
       </div>
     </CollapsibleCard>
@@ -368,6 +369,16 @@ export function AdminSettingsScreen() {
     if (refused) return;
     load();
   }, [load, refused]);
+  // #3342: the shell's no-barrier Re-check re-reads the setup status; when that answer lands, this screen reads
+  // again too, so the Host card never keeps saying "Can't launch" after the barrier came up. The first value is
+  // the one the screen mounted with and is the load above's to cover.
+  const { status: shellStatus } = useShellSetupStatus();
+  const seenShellStatus = React.useRef(shellStatus);
+  React.useEffect(() => {
+    if (seenShellStatus.current === shellStatus) return;
+    seenShellStatus.current = shellStatus;
+    if (!refused && shellStatus && !shellStatus.unreachable) load();
+  }, [shellStatus, load, refused]);
 
   if (refused) {
     return (
