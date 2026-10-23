@@ -47,6 +47,9 @@ type BoundarySpec struct {
 	AllowAllEgress      *bool             `json:"allow_all_egress,omitempty"`
 	MinConfinementClass *ConfinementClass `json:"min_confinement_class,omitempty"`
 	EligibleGrants      *[]GrantSpec      `json:"eligible_grants,omitempty"`
+	// Desktop blocks desktop directions for every run (#2967). It only blocks more: a direction it
+	// allows is left to the layers below, and one it leaves unset is that direction's default.
+	Desktop *DesktopControls `json:"desktop,omitempty"`
 }
 
 // BoundaryLimits is the GovernanceLimits subset the boundary bounds. MaxEndAheadSec is also the cap
@@ -76,6 +79,7 @@ func (b BoundarySpec) Overlay() CeilingOverlay {
 	out := CeilingOverlay{
 		AllowedDomains: b.AllowedDomains, DeniedDomains: b.DeniedDomains,
 		AllowAllEgress: b.AllowAllEgress, MinConfinementClass: b.MinConfinementClass,
+		Desktop: b.Desktop,
 	}
 	if b.AllowedDomains != nil && b.AllowAllEgress == nil {
 		off := false

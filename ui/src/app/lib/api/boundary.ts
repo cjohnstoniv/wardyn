@@ -8,7 +8,7 @@
 // required (202, thrown as PendingChangeError by asJson). The dry run writes nothing.
 import { asJson, wfetch } from "./core";
 import type { ConfinementClass } from "../types/runs";
-import type { GrantSpec } from "../types/policy";
+import type { DesktopControls, GrantSpec } from "../types/policy";
 import type { PolicyContact } from "../types/site";
 
 export type BoundaryMode = "no_limits" | "hard_limits";
@@ -20,6 +20,8 @@ export interface BoundarySpec {
   allow_all_egress?: boolean;
   min_confinement_class?: ConfinementClass;
   eligible_grants?: GrantSpec[];
+  // The desktop directions every run is held to (#2967); a direction left unset is its default.
+  desktop?: DesktopControls;
 }
 
 export interface BoundaryLimits {
