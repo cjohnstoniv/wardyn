@@ -294,14 +294,18 @@ An install from before the file keeps working: its environment file or LaunchAge
 | Stage | Checks | A failure names |
 |---|---|---|
 | `trusted-ca` | The CA bundle loads, as `setup` checks it, and warns of an expired or writable file | `WARDYN_TRUSTED_CA_FILE` |
+| `org-ca` | Shown only when set: the bundle of roots this runner's own connection to the organisation trusts loads | `WARDYN_ORG_CA_FILE` |
 | `org-url` | The organisation address is HTTPS, as `setup` requires, and where it came from | `WARDYN_RUNNER_ORG_URL` |
 | `dns` | The name resolves; with a proxy, the proxy's name | `WARDYN_RUNNER_ORG_URL` or `HTTPS_PROXY` |
 | `proxy` | The route in effect, as Go resolves `HTTPS_PROXY` and `NO_PROXY` | `HTTPS_PROXY` |
 | `tls` | The handshake: the issuer presented and the trust store that verified it (`system` or `WARDYN_TRUSTED_CA_FILE`); a proxy's 407 or 403 | `WARDYN_TRUSTED_CA_FILE`, `HTTPS_PROXY` |
 | `healthz` | `/healthz` answers as Wardyn, and the server version | `WARDYN_RUNNER_ORG_URL` |
+| `wire` | The runner stream's WebSocket upgrade gets through every proxy and gateway on the route (101); a proxy or gateway that strips it | `WARDYN_RUNNER_ORG_URL`, `HTTPS_PROXY` |
 | `engine` | The engine answers at `DOCKER_HOST`, and its version | `DOCKER_HOST` |
 | `proxy-image` | The image is on the engine or in its registry; a pinned image of another release than the organisation's is a version-skew failure | `WARDYN_PROXY_IMAGE` |
 | `relay` | The relay address is allowed and a probe container reaches it, through `setup`'s own check; the proxy network exists | `WARDYN_RELAY_LISTEN`, `WARDYN_INTERNAL_NETWORK` (missing network) |
+| `service` | The installed service, and on Linux whether systemd reports it running | |
+| `status` | The state and last error the service recorded in `status.json`, and the stage it stopped at | `WARDYN_RUNNER_STATE_DIR`, or the setting of that stage |
 
 - Each setting is read as the service reads it: a flag, else the settings `setup` recorded, else this shell. The flags are `--org`, `--state-dir`, `--proxy-image`, `--relay-listen`, `--relay-host-target` and `--trusted-ca-file`. The organisation address alone takes the `OrgURL` managed preference (macOS, set by an MDM profile) after `--org` and before the recorded settings; the line shows which one it came from.
 - It writes nothing and changes no setting. It never creates the proxy bridge, never pulls an image and never connects to the organisation as the runner.
@@ -312,7 +316,7 @@ An install from before the file keeps working: its environment file or LaunchAge
 - The proxy stage reads this shell's environment. An installed service does not inherit it, so the line says so ([a runner behind a corporate proxy](#a-runner-behind-a-corporate-proxy)).
 - `wardyn doctor` runs the same network stages for the CLI, adds who `/api/v1/me` says you are, and runs this command's engine, image and relay stages when a runner is installed on the computer.
 - `wardyn-runnerd setup` runs the `trusted-ca`, `org-ca` (when set), `org-url`, `dns`, `proxy`, `tls`, `healthz`, `wire`, `service` and `status` stages first, against the settings it is about to install, and prints their lines. A failed `org-url`, `dns`, `proxy`, `tls`, `healthz` or `wire` stage stops it before the token is spent, with the message `doctor` prints; a failure of any other stage is a warning. Its engine and relay checks are the ones `doctor` runs.
-- Not checked yet: the service's own state and a proxy that strips the WebSocket upgrade. The runner's last error reaches the organisation once it connects ([what the organisation sees](#what-the-organisation-sees-when-a-runner-cannot-connect)). Read the log for those ([a runner that never connected](#a-runner-that-never-connected)).
+- The runner's last error also reaches the organisation once it connects ([what the organisation sees](#what-the-organisation-sees-when-a-runner-cannot-connect)).
 
 ## What the organisation sees when a runner cannot connect
 
