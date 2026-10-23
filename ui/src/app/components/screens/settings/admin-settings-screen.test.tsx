@@ -617,16 +617,29 @@ describe("AdminSettingsScreen — the shell's no-barrier Re-check (#3342)", () =
     expect(new Set(names).size).toBe(names.length);
   });
 
-  it("when the shell's re-read lands a barrier, the Host row stops saying Can't launch", async () => {
+  it("when the shell's re-read lands a barrier, the Host row takes that answer and asks /setup/status for nothing more", async () => {
     getSetupStatusMock.mockResolvedValue(noRunner());
     const view = renderInShell(noRunner());
     await screen.findByRole("heading", { name: startsWith("Host"), level: 3 });
     await expandCard("Host");
     expect(within(screen.getByTestId("host-state-pill")).getByText(HOST_CARD.CANT_LAUNCH)).toBeInTheDocument();
+    const reads = getSetupStatusMock.mock.calls.length;
 
-    getSetupStatusMock.mockResolvedValue(baseStatus());
+    // The screen's own read still says "no barrier": only the shell's answer can turn the row green.
     await act(async () => view.rerender(baseStatus()));
     await waitFor(() => expect(screen.getByTestId("host-state-tile")).toHaveAttribute("data-tone", "success"));
     expect(screen.queryByText(HOST_CARD.CANT_LAUNCH)).toBeNull();
+    // A shell poll lands the same way: no second /setup/status read from this screen.
+    expect(getSetupStatusMock).toHaveBeenCalledTimes(reads);
+  });
+
+  it("the Host card's own Re-check still reads /setup/status", async () => {
+    getSetupStatusMock.mockResolvedValue(noRunner());
+    renderInShell(noRunner());
+    await screen.findByRole("heading", { name: startsWith("Host"), level: 3 });
+    await expandCard("Host");
+    const reads = getSetupStatusMock.mock.calls.length;
+    await userEvent.setup({ pointerEventsCheck: 0 }).click(screen.getByRole("button", { name: HOST_CARD.RECHECK }));
+    await waitFor(() => expect(getSetupStatusMock.mock.calls.length).toBeGreaterThan(reads));
   });
 });
