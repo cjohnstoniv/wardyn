@@ -303,7 +303,7 @@ describe("SshKeysPane — admin-override badge", () => {
 // pointed at a door M-5 removed (the user view was the only place left to add
 // ANY key), so it now points at Admin Settings' new Admin SSH keys card (S-1).
 describe("SshKeysPane — capped-key chip", () => {
-  it("marks only the capped key, with the owner-approved tooltip", async () => {
+  it("marks only the capped key, with the owner-approved note and no title", async () => {
     listKeysMock.mockResolvedValue([
       {
         fingerprint: "SHA256:aaa",

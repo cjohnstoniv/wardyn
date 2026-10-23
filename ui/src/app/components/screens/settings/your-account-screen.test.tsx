@@ -169,7 +169,7 @@ describe("YourAccountScreen — Your SSH keys, the S-2 strings", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows 'User access' (not 'Member access') on a capped key, with the rewritten tooltip", async () => {
+  it("shows 'User access' (not 'Member access') on a capped key, with the rewritten note", async () => {
     listKeysMock.mockResolvedValue([
       { fingerprint: "SHA256:aaa", name: "laptop", public_key: "", role: "user", capped: true, created_at: new Date().toISOString() },
     ]);

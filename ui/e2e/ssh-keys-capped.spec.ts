@@ -18,6 +18,9 @@ import { test, expect, ADMIN_TOKEN, expandCard, gotoConsole, navToRoute } from "
 // too: "Member access" -> "User access", pointing at Admin Settings' new
 // Admin SSH keys card instead of a door M-5 removed.
 const PUBLIC_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBvUZbH/FCPeFHqDUX5bD2AnpEfl06Qpg/DGH7HACslV e2e-capped";
+// The override test's own key: the fingerprint is the primary key across all users, so a second test sharing
+// PUBLIC_KEY (even with another comment) would get a 409 when the two run side by side.
+const OVERRIDE_PUBLIC_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOEWFqo+kNUVebWnmJoqqY45ML45JVHlIdRHz4N3JsO5 e2e-override";
 const KEY_NAME = "e2e-capped-laptop";
 const CHIP = "User access";
 const TOOLTIP =
@@ -27,7 +30,7 @@ const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
 
 test.describe("SSH keys — capped-key chip", () => {
   // ticket: #724 (#584)
-  test("a capped key shows the Member access chip and its tooltip; an uncapped one does not", async ({ page }) => {
+  test("a capped key shows the User access chip and its note; an uncapped one does not", async ({ page }) => {
     const added = await page.request.post("/api/v1/me/ssh-keys", {
       headers: auth,
       data: { name: KEY_NAME, public_key: PUBLIC_KEY },
@@ -78,7 +81,7 @@ test.describe("SSH keys — admin-override chip", () => {
   test("an admin-stamped key shows its meaning as text, not a title", async ({ page }) => {
     const added = await page.request.post("/api/v1/me/ssh-keys", {
       headers: auth,
-      data: { name: "e2e-override-laptop", public_key: PUBLIC_KEY.replace("e2e-capped", "e2e-override") },
+      data: { name: "e2e-override-laptop", public_key: OVERRIDE_PUBLIC_KEY },
     });
     expect(added.ok()).toBe(true);
     const { fingerprint } = (await added.json()) as { fingerprint: string };
