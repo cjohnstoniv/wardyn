@@ -36,6 +36,8 @@ type Stage struct {
 	// Advisory marks a failure that does not by itself stop a connection: the command diagnosed never makes
 	// the call that failed. It is not part of the output.
 	Advisory bool `json:"-"`
+	// ProxyAuth marks a failure that is a proxy's 407.
+	ProxyAuth bool `json:"-"`
 }
 
 // Report is a run's stages in order.

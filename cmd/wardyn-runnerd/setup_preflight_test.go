@@ -273,11 +273,10 @@ func proxiedOrg(t *testing.T) (f *setupFixture, ca, serverAddr string) {
 	return f, ca, serverAddr
 }
 
-// TestSetupChecksTheConnectionThroughTheProxyItInstalls pins that the stages route as the service will: a rerun
-// from a shell with no proxy keeps the earlier setup's proxy (runnerd.json), and the check goes through it.
-func TestSetupChecksTheConnectionThroughTheProxyItInstalls(t *testing.T) {
-	f, ca, addr := proxiedOrg(t)
-	proxy := newConnectProxy(t, addr, false)
+// registerWithProxy makes f's computer a registered runner for f.org, whose runnerd.json carries proxy ("" for none),
+// so that a setup run is a rerun: nothing registers, and the check is the only thing that dials out.
+func registerWithProxy(t *testing.T, f *setupFixture, proxy string) setupPaths {
+	t.Helper()
 	p := mustPaths(t, f)
 	key, err := runneridentity.Generate(p.stateDir)
 	if err != nil {
@@ -290,13 +289,22 @@ func TestSetupChecksTheConnectionThroughTheProxyItInstalls(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(p.configFile()), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := json.Marshal(runnerFile{OrgURL: f.org, RunnerProxy: proxy.URL.String()})
+	raw, err := json.Marshal(runnerFile{OrgURL: f.org, RunnerProxy: proxy})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(p.configFile(), raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	return p
+}
+
+// TestSetupChecksTheConnectionThroughTheProxyItInstalls pins that the stages route as the service will: a rerun
+// from a shell with no proxy keeps the earlier setup's proxy (runnerd.json), and the check goes through it.
+func TestSetupChecksTheConnectionThroughTheProxyItInstalls(t *testing.T) {
+	f, ca, addr := proxiedOrg(t)
+	proxy := newConnectProxy(t, addr, false)
+	registerWithProxy(t, f, proxy.URL.String())
 	out, err := f.run(setupOptions{orgCAFile: ca})
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
@@ -310,26 +318,100 @@ func TestSetupChecksTheConnectionThroughTheProxyItInstalls(t *testing.T) {
 	}
 }
 
-// TestSetupProbesWithoutTheCredentialItWillNotInstall pins that a proxy address with a user name and password
-// in this shell is probed as the service gets it, without them: against a proxy that wants authentication the
-// check is refused at 407 with doctor's message, and the credential is in no output and was never sent.
-func TestSetupProbesWithoutTheCredentialItWillNotInstall(t *testing.T) {
+// (a) The shell's credential for the proxy setup installs is the operator's own: the check sends it to that
+// proxy, never prints it, never writes it to runnerd.json, and setup warns that the service needs the drop-in.
+func TestSetupUsesTheShellCredentialForTheProxyItInstalls(t *testing.T) {
 	f, ca, addr := proxiedOrg(t)
 	proxy := newConnectProxy(t, addr, true)
+	p := registerWithProxy(t, f, "")
 	t.Setenv("HTTPS_PROXY", "http://deploy:s3cretpw@"+proxy.URL.Host)
-	out, err := f.run(setupOptions{tokenFile: f.tokenFile, orgCAFile: ca})
-	if err == nil || !strings.Contains(err.Error(), "the tls stage failed, so setup stops here") || !strings.Contains(err.Error(), "407: it wants proxy authentication") ||
-		!strings.Contains(err.Error(), "set HTTPS_PROXY to") {
-		t.Fatalf("err = %v, want a refusal at 407 naming HTTPS_PROXY\n%s", err, out)
+	out, err := f.run(setupOptions{orgCAFile: ca})
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
 	}
-	if all := out + err.Error(); strings.Contains(all, "s3cretpw") || strings.Contains(all, "deploy:") {
-		t.Errorf("the credential is in the output:\n%s", all)
+	if hosts, auth := proxy.connects(); len(hosts) == 0 || !auth {
+		t.Errorf("proxy saw %v, credential sent: %v; want the check through it with the shell's credential", hosts, auth)
 	}
-	if hosts, auth := proxy.connects(); len(hosts) == 0 || auth {
-		t.Errorf("proxy saw %v with a credential sent: %v; want a probe through it without one", hosts, auth)
+	for name, text := range map[string]string{"output": out, "runnerd.json": f.read(p.configFile())} {
+		if strings.Contains(text, "s3cretpw") || strings.Contains(text, "deploy") {
+			t.Errorf("the credential is in the %s:\n%s", name, text)
+		}
 	}
-	if f.count("POST /api/v1/runners/register") != 0 {
-		t.Error("setup registered")
+	if !strings.Contains(out, "HTTPS_PROXY in this shell contains a credential") || !strings.Contains(out, "systemd drop-in") {
+		t.Errorf("no warning that the service needs the drop-in:\n%s", out)
+	}
+}
+
+// (b) A proxy that wants authentication, reached with no credential the shell supplies, stops setup at its 407,
+// and the text names the drop-in recipe.
+func TestSetupRefusesAProxy407ItHasNoCredentialFor(t *testing.T) {
+	f, ca, addr := proxiedOrg(t)
+	proxy := newConnectProxy(t, addr, true)
+	registerWithProxy(t, f, proxy.URL.String())
+	out, err := f.run(setupOptions{orgCAFile: ca})
+	if err == nil {
+		t.Fatalf("setup went on past a 407\n%s", out)
+	}
+	for _, want := range []string{"the tls stage failed, so setup stops here", "407: it wants proxy authentication", "set HTTPS_PROXY to", "systemd drop-in", "#a-runner-behind-a-corporate-proxy"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("no %q in %v", want, err)
+		}
+	}
+}
+
+// (c) A shell credential is sent only to the proxy setup installs: for another host or port the check uses
+// the installed address, without it.
+func TestServiceProxyForSendsAShellCredentialOnlyToTheInstalledProxy(t *testing.T) {
+	org, _ := http.NewRequest(http.MethodGet, "https://example.com/healthz", nil)
+	for _, tc := range []struct {
+		name, installed, shell, wantHost, wantUser string
+		used                                       bool
+	}{
+		{"same host and port", "http://proxy-a.example:3128", "http://u:p@PROXY-A.example:3128", "proxy-a.example:3128", "u", true},
+		{"another host", "http://proxy-a.example:3128", "http://u:p@proxy-b.example:3128", "proxy-a.example:3128", "", false},
+		{"another port", "http://proxy-a.example:3128", "http://u:p@proxy-a.example:8080", "proxy-a.example:3128", "", false},
+		{"a shell address without a credential", "http://proxy-a.example:3128", "http://proxy-a.example:3128", "proxy-a.example:3128", "", false},
+		{"no shell proxy", "http://proxy-a.example:3128", "", "proxy-a.example:3128", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			route, used := serviceProxyFor(runnerFile{RunnerProxy: tc.installed}, tc.shell)
+			got, err := route(org)
+			if err != nil || got == nil {
+				t.Fatalf("route = %v, %v", got, err)
+			}
+			user := ""
+			if got.User != nil {
+				user = got.User.Username()
+			}
+			if used != tc.used || user != tc.wantUser || !strings.EqualFold(got.Host, tc.wantHost) {
+				t.Errorf("route = host %q user %q used %v; want host %q user %q used %v", got.Host, user, used, tc.wantHost, tc.wantUser, tc.used)
+			}
+		})
+	}
+}
+
+// (d) A service whose proxy credential is already in runnerd-proxy.env (the docs' recipe) gets a 407 as a warning:
+// setup checks that the file exists, never opens it (it is mode 000 here), and goes on.
+func TestSetupGoesOnPast407WhenTheCredentialFileExists(t *testing.T) {
+	f, ca, addr := proxiedOrg(t)
+	proxy := newConnectProxy(t, addr, true)
+	p := registerWithProxy(t, f, proxy.URL.String())
+	env := filepath.Join(filepath.Dir(p.configFile()), "runnerd-proxy.env")
+	if err := os.WriteFile(env, []byte("HTTPS_PROXY=http://deploy:s3cretpw@"+proxy.URL.Host+"\n"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	out, err := f.run(setupOptions{orgCAFile: ca})
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(out, "warning: the proxy answered 407 to this check. "+env+" exists") || !strings.Contains(out, "setup did not open it") {
+		t.Errorf("no warning that the file supplies the credential:\n%s", out)
+	}
+	if !contains(f.commands, "systemctl --user enable --now wardyn-runnerd.service") {
+		t.Errorf("setup did not go on to start the service: %v", f.commands)
+	}
+	if strings.Contains(out, "s3cretpw") {
+		t.Errorf("the credential is in the output:\n%s", out)
 	}
 }
 

@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -78,39 +80,55 @@ type doctorSettings struct {
 	file   runnerFile
 }
 
-// get is flag's value, else key as runnerd.json holds it, else as a setup before it recorded it in the service
-// definition, else key in this shell's environment.
+// get is key's value and where it came from, resolved as serve resolves it (runnerField.resolve): the flag, the
+// managed preference, the environment, then runnerd.json. The environment is the service's: the definition a
+// setup before runnerd.json wrote, else this shell's. A key that is no runnerd.json field is read from the
+// definition, then the shell.
 func (s doctorSettings) get(flagName, flag, key string) (value, source string) {
-	switch {
-	case flag != "":
-		return flag, "--" + flagName
-	case s.fileValue(key) != "":
-		return s.fileValue(key), key + " in the service's settings"
-	case s.paths.setting(key) != "":
-		return s.paths.setting(key), key + " in the service's settings"
-	case s.getenv(key) != "":
-		return s.getenv(key), key
+	f, ok := fieldFor(key)
+	if !ok {
+		if v := s.paths.setting(key); v != "" {
+			return v, key + " in the service's settings"
+		}
+		if v := s.getenv(key); v != "" {
+			return v, key
+		}
+		return "", ""
 	}
-	return "", ""
+	if !slices.Contains(f.env, key) {
+		f.env = append(slices.Clone(f.env), key) // WARDYN_RUNNER_ORG_URL, which serve has no variable for
+	}
+	in := runnerInputs{getenv: func(k string) string { return cmp.Or(s.paths.setting(k), s.getenv(k)) },
+		managed: managedPref, lockRead: managedLockRead, file: s.file, filePath: s.paths.configFile()}
+	if flag != "" {
+		in.flag = func(name string) (string, bool) { return flag, name == f.flag }
+	}
+	in.locked, _ = securityLocked(in)
+	r := f.resolve(in)
+	switch {
+	case r.Value == "" || r.Source == sourceDefault:
+		return "", ""
+	case strings.HasPrefix(r.Source, sourceFlag):
+		return r.Value, "--" + flagName
+	case strings.HasPrefix(r.Source, sourceManaged):
+		return r.Value, "the " + f.managed + " managed preference"
+	case strings.HasPrefix(r.Source, sourceEnv):
+		if name := strings.TrimPrefix(r.Source, sourceEnv+" "); s.paths.setting(name) == "" {
+			return r.Value, name
+		}
+	}
+	return r.Value, key + " in the service's settings"
 }
 
-// fileValue is the runnerd.json field the environment variable key stands for, "" when it has none.
-func (s doctorSettings) fileValue(key string) string {
-	name := ""
-	if key == "WARDYN_RUNNER_ORG_URL" {
-		name = "org_url"
+// fieldFor is the runnerd.json field the environment variable key stands for.
+func fieldFor(key string) (runnerField, bool) {
+	i := slices.IndexFunc(runnerFields, func(f runnerField) bool {
+		return slices.Contains(f.env, key) || (key == "WARDYN_RUNNER_ORG_URL" && f.name == "org_url")
+	})
+	if i < 0 {
+		return runnerField{}, false
 	}
-	for _, f := range runnerFields {
-		if slices.Contains(f.env, key) {
-			name = f.name
-		}
-	}
-	for _, f := range runnerFields {
-		if f.name == name {
-			return *f.file(&s.file)
-		}
-	}
-	return ""
+	return runnerFields[i], true
 }
 
 // stateDir is --state-dir, else the one setup used.
@@ -133,13 +151,17 @@ func runDoctor(ctx context.Context, h setupHost, o doctorOptions, getenv func(st
 	var fileErr error
 	s.file, fileErr = loadRunnerFile(paths.configFile(), false)
 	org, orgSource := s.get("org", o.org, "WARDYN_RUNNER_ORG_URL")
-	if pref := managedPref("OrgURL"); o.org == "" && pref != "" {
-		org, orgSource = pref, "the OrgURL managed preference"
-	}
 	conn := runnerConn{org: org, orgSource: orgSource}
 	conn.trustedCA, _ = s.get("trusted-ca-file", o.trustedCAFile, "WARDYN_TRUSTED_CA_FILE")
 	conn.orgCA, _ = s.get("", "", "WARDYN_ORG_CA_FILE")
-	if paths.installedService() != "" {
+	// The runner's connection goes through the HTTPS_PROXY and NO_PROXY serve exports: the environment's, else
+	// runnerd.json's runner_proxy and runner_no_proxy.
+	proxy, proxySource := s.get("", "", "HTTPS_PROXY")
+	noProxy, _ := s.get("", "", "NO_PROXY")
+	if proxy != "" {
+		conn.proxyFor = proxyFunc(proxy, noProxy)
+	}
+	if proxySource != "" && !strings.HasSuffix(proxySource, "in the service's settings") && paths.installedService() != "" {
 		conn.proxyNote = ": this shell's settings, which the installed service does not receive"
 	}
 	stages, serverVersion := h.connectionStages(ctx, paths, s.stateDir(o), conn, &net, !o.runnerOnly)
@@ -159,6 +181,8 @@ func runDoctor(ctx context.Context, h setupHost, o doctorOptions, getenv func(st
 // WARDYN_ORG_CA_FILE) and a note for the proxy stage about what the diagnosed environment lacks.
 type runnerConn struct {
 	org, orgSource, trustedCA, orgCA, proxyNote string
+	// proxyFor routes the connection; nil follows this shell's environment.
+	proxyFor func(*http.Request) (*url.URL, error)
 }
 
 // connectionStages are the stages `doctor` and `setup` both run, in order: the CA bundles and the network
@@ -209,6 +233,9 @@ func runnerNetwork(ctx context.Context, c runnerConn, net *doctor.Network) ([]do
 		net.Source = "nothing set"
 	}
 	net.ExtraCATrusted, net.Wire, net.ProxyNote = true, true, c.proxyNote
+	if net.ProxyFor == nil {
+		net.ProxyFor = c.proxyFor
+	}
 	return append(stages, net.Run(ctx)...), net.ServerVersion
 }
 
