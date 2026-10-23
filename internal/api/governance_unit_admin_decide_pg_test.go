@@ -7,9 +7,12 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -78,6 +81,8 @@ func TestUnitAdminApproverScopeRereadInTx(t *testing.T) {
 	t.Run("session unit re-parented out", func(t *testing.T) {
 		// A held grant: its base is the grant row alone, so the re-parent does not make it stale (a
 		// membership change's base holds the unit chain and would be), and only the scope read refuses.
+		// Not a unit change either: its approval holds the site-config lock across the hook, and the
+		// hook's PUT /units/{id} takes that same lock, so the test would deadlock on itself.
 		sub, _ := approver()
 		proposer, _ := approver()
 		target := e.child(e.a)
@@ -116,4 +121,86 @@ func TestUnitAdminApproverScopeRereadInTx(t *testing.T) {
 			}
 		}
 	})
+}
+
+// scopeReadStore runs *afterRead once, on the decision's own goroutine, as soon as the decision
+// transaction's first unit-scope read (store.UnitScopeQ's statement) has returned: the window between
+// the approver's scope re-read and the decision's commit.
+type scopeReadStore struct {
+	store.PG
+	afterRead *func()
+}
+
+func (s scopeReadStore) DecideGovernanceChange(ctx context.Context, id uuid.UUID, d store.GovernanceDecision, fn store.GovernanceDecideFunc) (types.GovernanceChange, error) {
+	return s.PG.DecideGovernanceChange(ctx, id, d, func(q store.Querier, ch types.GovernanceChange) error {
+		return fn(scopeReadQuerier{Querier: q, afterRead: s.afterRead}, ch)
+	})
+}
+
+type scopeReadQuerier struct {
+	store.Querier
+	afterRead *func()
+}
+
+func (q scopeReadQuerier) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	row := q.Querier.QueryRow(ctx, sql, args...)
+	if !strings.Contains(sql, "WITH RECURSIVE chain") || !strings.Contains(sql, "governance_unit_admins") {
+		return row
+	}
+	return scopeReadRow{Row: row, afterRead: q.afterRead}
+}
+
+type scopeReadRow struct {
+	pgx.Row
+	afterRead *func()
+}
+
+func (r scopeReadRow) Scan(dest ...any) error {
+	err := r.Row.Scan(dest...)
+	if f := *r.afterRead; f != nil {
+		*r.afterRead = nil
+		f()
+	}
+	return err
+}
+
+// TestUnitAdminDecisionSerializesScopeWrites: a decision's scope re-read and its commit are one
+// section under the graph lock. A direct revoke of the approver's own grant, sent once the re-read has
+// returned, waits for the decision to commit instead of landing between the two.
+func TestUnitAdminDecisionSerializesScopeWrites(t *testing.T) {
+	var afterRead func()
+	e := newUnitAdminEnv(t, false, func(c *Config) {
+		c.Store = scopeReadStore{PG: store.NewPG(c.Store.(store.PG).Pool), afterRead: &afterRead}
+	})
+	sub := e.fresh("sub-ua-approver")
+	g := e.grant(e.a, types.CapabilitySubjectUser, sub)
+	ch := e.heldOn(e.a2)
+	revoked := make(chan int, 1)
+	landed := false
+	afterRead = func() {
+		go func() {
+			revoked <- do(t, e.srv, http.MethodDelete, "/api/v1/governance/units/"+e.a.ID.String()+"/admins/"+g.ID.String(), adminToken, "").Code
+		}()
+		select {
+		case code := <-revoked:
+			landed = true
+			revoked <- code
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	w := e.call(uaSession(t, sub, []string{}, false), http.MethodPost, approvePath(ch.ID), "")
+	if landed {
+		t.Fatalf("the approver's grant was revoked between the decision's scope read and its commit (approve = %d %s)", w.Code, w.Body)
+	}
+	if w.Code != http.StatusOK {
+		t.Fatalf("approve = %d %s, want 200 with the revoke waiting for it", w.Code, w.Body)
+	}
+	select {
+	case code := <-revoked:
+		if code != http.StatusNoContent {
+			t.Fatalf("the revoke after the decision = %d, want 204", code)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the revoke did not finish after the decision committed")
+	}
 }
