@@ -106,6 +106,14 @@ func proxyConfigStagedPath() string { return proxyConfigStagedMountDir + "/" + p
 // createPreflight is CreateSandbox's checks before it creates anything: the runtime class to run
 // under, and the class enforced.
 func (d *Driver) createPreflight(ctx context.Context, spec runner.SandboxSpec) (runtimeClassName, runtimeHandler string, enforced types.ConfinementClass, err error) {
+	enforced = spec.ConfinementClass
+	if spec.MachineKind.Normalize() != "" {
+		if err := d.refuseVMSpec(spec); err != nil {
+			return "", "", "", err
+		}
+		// A VM is the CC3 pod: its RuntimeClass boots a guest kernel, whatever class the run named.
+		enforced = types.CC3
+	}
 	if len(spec.Mounts) > 0 {
 		return "", "", "", fmt.Errorf("k8s: sandbox mounts are not supported (requested %d): %w", len(spec.Mounts), errMountsUnsupported)
 	}
@@ -121,11 +129,10 @@ func (d *Driver) createPreflight(ctx context.Context, spec runner.SandboxSpec) (
 	if n := len(mitmCAPEMEnv) + 1 + len(d.withRunnerTrustedCA(spec.Env)[mitmCAPEMEnv]); n >= maxEnvString {
 		return "", "", "", fmt.Errorf("k8s: %w: %d bytes with the organisation's staged CA and this runner's own bundle; trim one of them", errTrustedCATooBig, n)
 	}
-	runtimeClassName, runtimeHandler, err = d.resolveRuntimeClassName(ctx, spec.ConfinementClass)
+	runtimeClassName, runtimeHandler, err = d.resolveRuntimeClassName(ctx, enforced)
 	if err != nil {
 		return "", "", "", err
 	}
-	enforced = spec.ConfinementClass
 	if enforced == "" {
 		// Class-less floor for direct driver callers only (mirrors docker).
 		enforced = types.CC1
@@ -322,6 +329,13 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 				SecurityContext:          restrictedSecurityContext(),
 				Resources:                proxyResources(len(spec.ProxyConfig.AzureGates) > 0),
 				TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
+				// The proxy binds its listener only after its startup resolve has succeeded, so a
+				// connect to it is that proof: without a probe the container is Ready as soon as it
+				// runs, and waitPodIP can return before a failing resolve exits it.
+				ReadinessProbe: &corev1.Probe{
+					ProbeHandler:  corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(runner.ProxyListenPort)}},
+					PeriodSeconds: 1,
+				},
 			}},
 			Volumes: []corev1.Volume{
 				{
@@ -415,7 +429,8 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	}
 	// Scratch volumes, only when the run carries a disk budget: puts the
 	// agent's own writes inside disk_mib.
-	scratchVols, scratchMounts := ephemeralScratchVolumes(spec.Resources.DiskMiB)
+	keptWork := slices.ContainsFunc(spec.Drives, func(d types.DriveMount) bool { return d.Target == scratchWorkPath })
+	scratchVols, scratchMounts := ephemeralScratchVolumes(spec.Resources.DiskMiB, keptWork)
 	addMainContainerVolumes(agentPod, scratchVols, scratchMounts)
 	// Managed files, read-only off the Secret, in the pod's filesystem before
 	// any container starts, so there's no window where the agent runs without them.
@@ -461,7 +476,18 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if spec.ExecOutput != nil {
 		d.execOutputs.Store(agentPodName(spec.RunID), spec.ExecOutput)
 	}
-	return runner.Sandbox{Ref: agentPodName(spec.RunID), Driver: driverName, EnforcedClass: enforced}, nil
+	return podSandbox(spec, enforced, runtimeHandler), nil
+}
+
+// podSandbox is CreateSandbox's answer for the pod it created: its ref, the class enforced and, for
+// a VM run, the machine its RuntimeClass boots.
+func podSandbox(spec runner.SandboxSpec, enforced types.ConfinementClass, runtimeHandler string) runner.Sandbox {
+	sb := runner.Sandbox{Ref: agentPodName(spec.RunID), Driver: driverName, EnforcedClass: enforced}
+	if spec.MachineKind.IsVM() {
+		m := vmMachine(runtimeHandler)
+		sb.Machine = &m
+	}
+	return sb
 }
 
 // ownedByPod is the ownerReference list that makes a pod owned by owner, or nil when the API

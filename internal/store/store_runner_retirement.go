@@ -189,8 +189,15 @@ type RunnerRetirementCandidate struct {
 // permanently ineligible. A run whose obligation has an action still waiting
 // for the runner is left out until the runner answers it.
 func (s PG) RunnerRetirementCandidates(ctx context.Context) ([]RunnerRetirementCandidate, error) {
-	return collect(ctx, s.Pool, "list", "runner retirement candidates", `SELECT r.id, r.runner_id FROM runner_output_watermarks w
-		JOIN agent_runs r ON r.id = w.run_id
+	return collect(ctx, s.Pool, "list", "runner retirement candidates", `WITH open_set AS (
+			SELECT run_id FROM runner_retirements WHERE state IN ('kill', 'retire')
+			UNION
+			SELECT r.id FROM agent_runs r
+			WHERE r.runner_id IS NOT NULL AND r.sandbox_ref <> '' AND NOT (r.state = ANY($1))
+				AND NOT EXISTS (SELECT 1 FROM runner_retirements x WHERE x.run_id = r.id))
+		SELECT r.id, r.runner_id FROM open_set o
+		JOIN agent_runs r ON r.id = o.run_id
+		JOIN runner_output_watermarks w ON w.run_id = r.id
 		JOIN runner_spool_cursors c ON c.run_id = r.id AND c.runner_id = r.runner_id
 		JOIN runners rn ON rn.id = r.runner_id AND rn.state = 'claimed' AND rn.revoked_at IS NULL AND rn.retire_capable
 		LEFT JOIN runner_retirements t ON t.run_id = r.id
@@ -200,16 +207,6 @@ func (s PG) RunnerRetirementCandidates(ctx context.Context) ([]RunnerRetirementC
 		var c RunnerRetirementCandidate
 		return c, row.Scan(&c.RunID, &c.RunnerID)
 	})
-}
-
-// SetRunnerRetireCapable records whether a runner's latest caps event said it
-// settles retire_run. Every caps event sets it, so a runner downgraded to an
-// older binary stops receiving retire_run once it reconnects.
-func (s PG) SetRunnerRetireCapable(ctx context.Context, id uuid.UUID, capable bool) error {
-	if _, err := s.Pool.Exec(ctx, `UPDATE runners SET retire_capable = $2 WHERE id = $1 AND retire_capable <> $2`, id, capable); err != nil {
-		return fmt.Errorf("store: set runner retire capability: %w", err)
-	}
-	return nil
 }
 
 // AdvanceRunnerRetirement takes one step of runID's retirement, in one

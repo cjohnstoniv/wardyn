@@ -6,7 +6,6 @@ package proxy
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"net/http"
 	"net/url"
@@ -117,6 +116,8 @@ type Proxy struct {
 	maskKey uuid.UUID
 	// scrubResponses is Options.ScrubResponses (scrub.go).
 	scrubResponses bool
+	// canonicalPushRepos is Options.CanonicalPushRepos (patPushTarget).
+	canonicalPushRepos bool
 	// patGrants is the per-run git_pat broker allowlist: lowercased host -> the
 	// grant to mint from. Empty/nil == no host brokered (the route always 403s),
 	// which is also what a deployment with the lane switched off looks like.
@@ -145,6 +146,8 @@ type Proxy struct {
 	arm *azureARMDoor
 	// sigv4 is the run's AWS SigV4 re-signing door (aws_sigv4.go); nil when off.
 	sigv4 *awsSigV4Door
+	// kube is the kubectl door (kube_api_door.go); nil without a kubectl row.
+	kube *kubeAPIDoor
 	// gitTokens caches minted installation tokens per grant so a single clone
 	// (info/refs + git-upload-pack) does not re-mint — mandatory for single-use
 	// approval-gated grants. Guarded by gitTokMu; each entry single-flights its
@@ -170,6 +173,9 @@ type Proxy struct {
 	localClient *http.Client
 	// streamMoved is set when a tunnel or MITM stream moves a byte (activity.go).
 	streamMoved atomic.Bool
+	// signin caches the sign-in credentials the control plane accepted
+	// (desktop_signin_lane.go).
+	signin signinChecks
 
 	// dial connects to a vetted "ip:port" target. Both the plain-HTTP
 	// transport and the CONNECT path use this single seam; tests override it.
@@ -296,18 +302,6 @@ type internalHostRule struct {
 // the hostname (TOCTOU / DNS-rebinding guard).
 type vettedIPKey struct{}
 
-// canonicalGitGrants canonicalises git-broker allowlist keys to lowercase "<org>/<repo>" so
-// lookups match regardless of the slug casing git sends (github owner/repo is case-insensitive).
-func canonicalGitGrants(in map[string]uuid.UUID) map[string]uuid.UUID {
-	gitGrants := make(map[string]uuid.UUID, len(in))
-	for k, id := range in {
-		if k = strings.ToLower(strings.TrimSpace(k)); k != "" && id != uuid.Nil {
-			gitGrants[k] = id
-		}
-	}
-	return gitGrants
-}
-
 //nolint:funlen // one linear wiring of each Options field into the Proxy; splitting it would scatter the wiring
 func newProxy(opts Options) *Proxy {
 	dial := opts.Dial
@@ -388,6 +382,7 @@ func newProxy(opts Options) *Proxy {
 		ghAPI:                newGitHubAPIDoor(opts.GitHubAPI, mitmHosts, mitmPorts),
 		arm:                  newAzureARMDoor(opts.AzureARM, mitmHosts, mitmPorts),
 		sigv4:                newAWSSigV4Door(opts.AWSSigV4, mitmHosts, mitmPorts),
+		kube:                 newKubeAPIDoor(opts.KubeAPI, mitmHosts, mitmPorts),
 		gitTokens:            make(map[uuid.UUID]*gitTokEntry),
 		controlPlaneURL:      controlPlaneEndpoint(opts.ControlPlaneURL, ""),
 		runToken:             opts.RunToken,
@@ -403,12 +398,19 @@ func newProxy(opts Options) *Proxy {
 		localModels:          compileLocalModels(opts.LocalModels),
 		pushHolds:            pushHolds{unattended: opts.Unattended},
 		scrubResponses:       opts.ScrubResponses,
+		canonicalPushRepos:   opts.CanonicalPushRepos,
 		attribution:          opts.Attribution,
 		gatewayVendor:        gatewayVendor,
 		channelHosts:         compileChannelHosts(opts.LLMChannelHosts),
 		dial:                 dial,
 		now:                  now,
 		viaOrgRoutes:         opts.ViaOrgRoutes,
+	}
+	if l := policyref.Layered(opts.Attribution); p.sink != nil && l != nil && l.Layer != "" {
+		p.sink.layer = l.Layer
+		if l.Layer == policyref.LayerUnit {
+			p.sink.layerName = l.Name
+		}
 	}
 	// directDial dials the vetted IP carried on the request context and never
 	// re-resolves — the ORIGINAL behavior, and the ONLY behavior of the
@@ -475,6 +477,7 @@ func newProxy(opts Options) *Proxy {
 		return c, nil
 	})
 	p.offerHTTP2(egressDial, opts.TLSClientConfig)
+	p.kube.bindTransport(p.transport)
 	p.controlTransport = mkTransport(directDial)
 	if opts.ControlTLS == nil {
 		opts.ControlTLS, _ = hoptls.ClientConfig("")
@@ -530,6 +533,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// A self-lapsing proxy serves nothing while closed or lapsed (§6.2).
 	if !p.lapse.serving() {
 		refuseClosed(w)
+		return
+	}
+	// The person's sign-in lane has its own listener and rules (desktop_signin_lane.go).
+	if onSigninLane(r.Context()) {
+		p.serveSignin(w, r)
 		return
 	}
 	// A via_org destination is the organisation's to decide: no spool row, no
@@ -701,7 +709,7 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 			case apDenied:
 				log := decisionLog(req, egress.Deny, "approval:denied")
 				return egress.Deny, "", &log
-			default: // apPending / apNone / apCapped / apRefused / apExpired
+			default: // apPending / apNone / apCapped / apRefused / apExpired / apStale
 				log := decisionLog(req, egress.Pending, approvalPendingReason(r.State))
 				if r.ApprovalID != uuid.Nil {
 					id := r.ApprovalID
@@ -770,7 +778,8 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 			return egress.Deny, "", &log
 		}
 		log := decisionLog(req, egress.Deny, "builtin:private-ip")
-		p.privateIPRefused(req, blockKindOf(terr))
+		log.Cause = liftHintOf(terr) // a refused CONNECT shows curl no body: the row is where the remedy is sure to land
+		p.privateIPRefused(req, blockKindOf(terr), log.Cause)
 		return egress.Deny, "", &log
 	}
 	log := p.allowLog(req, approvalID)
@@ -798,6 +807,14 @@ func (p *Proxy) allowLog(req egress.Request, approvalID uuid.UUID) egress.Decisi
 	log := decisionLog(req, egress.Allow, "approval:"+approvalID.String())
 	log.ApprovalID = &approvalID
 	return log
+}
+
+// refuseGrantHostTunnel answers a CONNECT to a host one of the doors guards with
+// a refusal, in the order the doors were added, and reports whether it did.
+func (p *Proxy) refuseGrantHostTunnel(w http.ResponseWriter, r *http.Request, host string, port int) bool {
+	return p.refuseADOTunnel(w, r, host, port) || p.refuseAzureTunnel(w, r, host, port) || p.refusePATAPITunnel(w, r, host, port) ||
+		p.refuseGitHubAPITunnel(w, r, host, port) || p.refuseAzureARMTunnel(w, r, host, port) || p.refuseAWSSigV4Tunnel(w, r, host, port) ||
+		p.refuseKubeAPITunnel(w, r, host, port)
 }
 
 // handleConnect establishes a raw TCP tunnel for CONNECT (TLS passthrough).
@@ -866,8 +883,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// Never a blind tunnel to an Azure DevOps grant host (refuseADOTunnel).
-	if p.refuseADOTunnel(w, r, host, port) || p.refuseAzureTunnel(w, r, host, port) || p.refusePATAPITunnel(w, r, host, port) ||
-		p.refuseGitHubAPITunnel(w, r, host, port) || p.refuseAzureARMTunnel(w, r, host, port) || p.refuseAWSSigV4Tunnel(w, r, host, port) {
+	if p.refuseGrantHostTunnel(w, r, host, port) {
 		return
 	}
 
@@ -896,7 +912,13 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 			p.emitLLMBlindOnce(host, port, http.MethodConnect)
 		}
 	}
+	p.openTunnel(w, r, host, port, target, log, p.countActivity)
+}
 
+// openTunnel dials an allowed CONNECT's destination and pipes the client leg
+// to it opaquely. count wraps the client leg (the activity counter on the
+// agent's listener; the sign-in lane passes none).
+func (p *Proxy) openTunnel(w http.ResponseWriter, r *http.Request, host string, port int, target string, log *egress.DecisionLog, count func(net.Conn) net.Conn) {
 	hj, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "hijacking unsupported", http.StatusInternalServerError)
@@ -948,18 +970,13 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// never see the client's opening flight. Same readerConn the MITM lane uses
 	// for the same reason.
 	watch := newTunnelWatch(upstream)
-	first, err := tunnel(p.countActivity(&readerConn{Conn: clientConn, r: brw.Reader}), watch)
-	p.tunnelEnded(log, host, watch, first, err)
-}
-
-// writeApprovalPending returns the first-use 403 body the sandbox client sees.
-func writeApprovalPending(w http.ResponseWriter, log *egress.DecisionLog) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusForbidden)
-	id := ""
-	if log != nil && log.ApprovalID != nil {
-		id = log.ApprovalID.String()
+	dest := net.JoinHostPort(host, strconv.Itoa(port))
+	watch.onSSH = func() error { return p.sshAgent.sshTunnel(watch, dest) }
+	defer p.sshAgent.dropTunnel(watch)
+	var client net.Conn = &readerConn{Conn: clientConn, r: brw.Reader}
+	if count != nil {
+		client = count(client)
 	}
-	// {"wardyn":"approval-pending","approval_id":...}
-	_, _ = fmt.Fprintf(w, `{"wardyn":"approval-pending","approval_id":%q}`, id)
+	first, err := tunnel(client, watch)
+	p.tunnelEnded(log, host, watch, first, err)
 }

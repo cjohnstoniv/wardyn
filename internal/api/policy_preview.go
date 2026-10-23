@@ -45,6 +45,9 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	canonicalizeRunRepos(&req, s.adoHostsLoader(r.Context()))
+	if r, ok = s.stampContextChoice(w, r, req); !ok {
+		return
+	}
 	ceiling, reqCC, refusal := s.authorizePreviewRequest(r, req)
 	if refusal.write(s, w, r) {
 		return
@@ -154,6 +157,13 @@ func unionPreviewWorkspaceEgress(spec *types.RunPolicySpec, workspaces []types.W
 		kept, _ := runCloneEgress(ws, trusted)
 		unionAllowedDomains(spec, kept)
 	}
+}
+
+// previewWorkspaceEgressHosts is what unionPreviewWorkspaceEgress adds to an empty allowlist.
+func previewWorkspaceEgressHosts(workspaces []types.Workspace, trusted []string) []string {
+	var scratch types.RunPolicySpec
+	unionPreviewWorkspaceEgress(&scratch, workspaces, trusted)
+	return scratch.AllowedDomains
 }
 
 func previewPending(req createRunRequest, choice runProviderChoice) []policyPreviewPending {

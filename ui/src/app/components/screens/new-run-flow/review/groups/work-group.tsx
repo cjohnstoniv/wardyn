@@ -11,7 +11,6 @@ import type { RunAttachment } from "../../../../../lib/types/new-run-contract";
 import { mainDriveMiB } from "../../lenses/files-lens";
 import { sizeWords } from "../../steps/files/size-words";
 import { readMainDrive, type FilesPreflight } from "../../steps/files/files-seams";
-import { summaryText } from "../../steps/files/files-summary";
 import { isTypedRef } from "../../steps/files/typed-ref";
 import { lifecycleOf, lifecycleText } from "../../steps/files/main-drive-section";
 import { ReviewGroup } from "../review-group";
@@ -24,7 +23,7 @@ const ENFORCEMENT: Record<MainDriveEnforcement, string | undefined> = {
   filesystem: NR_FILES.ENFORCED, eviction: NR_FILES.ENFORCED_BY_STOP, none: NR_FILES.NOT_ENFORCED, unknown: undefined,
 };
 
-const FILE_PATHS = ["workspaces", "drive", "drives", "start_folder", "no_repositories_or_drives", "resources.disk_mib"];
+const FILE_PATHS = ["workspaces", "drive", "drives", "start_folder", "no_repositories_or_drives", "keep_work_folder", "resources.disk_mib"];
 
 export function AttachmentRow({ a, refNotChecked }: { a: RunAttachment; /** The ref was typed, not picked from a listed response (#2107). */ refNotChecked?: boolean }) {
   return (
@@ -58,19 +57,11 @@ export function WorkGroup({ draft, pre, preview, docRows, go }: GroupProps) {
   const drive = readMainDrive(pre as FilesPreflight | null, intent.experience);
   const enforcement = drive.facts && ENFORCEMENT[drive.facts.enforcement];
   const life = lifecycleOf(intent, drive);
-  // The Files step's summary sentence; until a size is known, the names of what is attached (none: the detail says so).
+  // Until a size is known, the names of what is attached; once it is, the sub-card below says it all (#3043).
   const value = size !== undefined
-    ? summaryText({
-      size,
-      noExtra: intent.no_repositories_or_drives === true,
-      chosen: count > 0,
-      startsName: attachments.find((a) => a.starts_here)?.name,
-      // As on the Files step: drives and folders are live storage, so their changes are kept.
-      keptDrives: attachments.filter((a) => a.kind !== "repository").map((a) => a.name),
-      life,
-    })
+    ? undefined
     : attachments.map((a) => a.name).reduce<string | undefined>((all, n) => (all ? NR_SHARED.JOIN(all, n) : n), undefined);
-  const lifeText = lifecycleText(life);
+  const lifeText = lifecycleText(life, intent.keep_work_folder === true);
   return (
     <ReviewGroup
       id="work"

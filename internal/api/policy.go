@@ -181,6 +181,9 @@ func validatePolicySpecMode(spec types.RunPolicySpec, strict, resolveMounts bool
 	if err := validateHarnessInnerWalls(spec.HarnessInnerWalls); err != nil {
 		return err
 	}
+	if err := validateDesktopControls(spec.Desktop); err != nil {
+		return err
+	}
 	if err := validateRecordingLevel(spec.Recording); err != nil {
 		return err
 	}
@@ -312,7 +315,7 @@ const (
 // It is a REFUSAL, not a truncation. A silently truncated allowlist is a policy
 // that reads as permission and denies — the same class of lie validateToolRules
 // refuses a dead rule for.
-const maxAllowedDomainsPerSpec = 256
+const maxAllowedDomainsPerSpec = types.MaxAllowedDomainsPerSpec
 
 // validateAllowedDomainsCount is the count half of allowed_domains validation,
 // split out because it has to run at TWO points on the member path: here, inside
@@ -493,9 +496,6 @@ func validatePushRules(pr *types.PushRulesSpec) error {
 	if pr.MaxFileSizeMiB < 0 {
 		return fmt.Errorf("push_rules.max_file_size_mib must be between 0 and %d, got %d", maxPushRulesFileSizeMiB, pr.MaxFileSizeMiB)
 	}
-	if pr.DenyNewExecutables {
-		return errors.New("push_rules.deny_new_executables is not supported yet")
-	}
 	return nil
 }
 
@@ -642,11 +642,12 @@ func validateEligibleGrantMode(i int, g types.GrantSpec, strict bool) error {
 			return err
 		}
 	}
-	// An ssh_key grant materializes a RESIDENT private key (see GrantSSHKey).
+	// An ssh_key grant's private key is held by the run's proxy, whose ssh agent signs
+	// the clone's sign-in (see GrantSSHKey); the sandbox gets no key file.
 	// Require host + key_secret_ref, reject a reserved platform-internal secret
 	// as either the key or the known_hosts ref, and require the host to be one
 	// of the SSH-over-443 providers Wardyn supports (github.com / dev.azure.com)
-	// so the run never asks for a resident key for an unroutable host. Fail
+	// so the run never asks for a key for an unroutable host. Fail
 	// closed at WRITE time; the broker sink (mintSSHKey) re-checks the secrets.
 	//
 	// nameSinkReservedSecret, not sinkReservedSecret (#1048) — same reasoning
@@ -798,12 +799,12 @@ func validateGrantLaneExclusivity(grants []types.GrantSpec) error {
 	return nil
 }
 
-// validateAllowedMethods refuses a blank entry: it reads as a method restriction
-// and names no method, so the list would be stored and enforce nothing.
+// validateAllowedMethods refuses an entry that is no HTTP method token (a blank one, or "GET /"): it
+// reads as a method restriction and names no method any request carries, so it would be stored and match nothing.
 func validateAllowedMethods(methods []string) error {
 	for i, m := range methods {
-		if strings.TrimSpace(m) == "" {
-			return fmt.Errorf("allowed_methods[%d]: must not be blank", i)
+		if err := proxy.ValidMethodEntry(m); err != nil {
+			return fmt.Errorf("allowed_methods[%d]: %w", i, err)
 		}
 	}
 	return nil

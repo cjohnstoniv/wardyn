@@ -157,49 +157,8 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// The sponsor of a service identity's run passes this load too (sponsorsRun), so the entry check below
-	// can refuse them by capability instead of answering the foreign-run 404 for every refusal.
-	run, ok := s.getRunAuthorizedBy(w, r, id, func(r *http.Request, run types.AgentRun) bool {
-		return s.ownsRunOrAdmin(r, run) || s.sponsorsRun(r, run)
-	})
+	run, asSponsor, ok := s.admitRunEntry(w, r, id, authorizedAt)
 	if !ok {
-		return
-	}
-	// Interactive entry needs the run's owner (mayEnterRun, run_entry.go), on top
-	// of getRunAuthorized: its ownsRunOrAdmin passes a SECURITY ADMIN on any run,
-	// deliberately, for incident response, and a super admin too. Minting is the
-	// one route under that predicate that is not inspect-or-stop: this ticket
-	// becomes a live interactive PTY or UI session inside the owner's sandbox,
-	// holding the owner's personal connections.
-	//
-	// A super admin on a run that is not theirs, and not an operator-owned one,
-	// gets a 403 naming why (#1476): they can already see the run, so there is
-	// no existence to hide. Everyone else keeps the byte-identical 404 the
-	// foreign-member deny writes — no existence oracle, including its wire
-	// reason (AsIf, #656 slice 3) — audited under its OWN reason, so an auditor
-	// can see a security admin refused a foreign PTY without inferring it from
-	// the path. A delegated token is never a super admin here (isOperator is
-	// false under one), so a portal cannot mint for a run its person may not enter.
-	//
-	// The sponsor of a service identity's run enters through the sponsor arm instead (sponsorMayEnter). A
-	// super admin sponsor takes it too, needs the service_attach grant, and gets a member-stamped ticket below.
-	asSponsor := false
-	if !mayEnterRun(run, principalFromRequest(r), s.isOperator(r.Context())) {
-		ok, refused := s.sponsorMayEnter(w, r, run, authorizedAt)
-		switch {
-		case refused:
-			return
-		case ok:
-			asSponsor = true
-		case s.isOperator(r.Context()):
-			s.refuseRunOwnerOnly(w, r, run)
-			return
-		default:
-			s.refuse(w, r, authz.Deny(authz.ReasonAttachTicketForeignRun, run.ID.String(), "run not found").OnRun(run.ID).AsIf(authz.Reason(reasonRunNotFound)))
-			return
-		}
-	}
-	if s.refuseBackgroundOnly(w, r, run, "terminal") {
 		return
 	}
 	// Same fail-closed gate as the WS itself: a ticket for a non-attachable run

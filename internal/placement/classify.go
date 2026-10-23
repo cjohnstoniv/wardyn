@@ -39,13 +39,18 @@ const (
 	RuleExempt        Rule = "exempt"         // sent as dispatched
 	RuleOwnerOnlyOwn  Rule = "owner_only_own" // allowed, persisted OwnerOnly=true
 	RuleNotConfigured Rule = "not_configured" // refused, and not a configurable class
+	// RuleResidentViaOrg is a runner_resident class's placeholder fill
+	// (WARDYN_RUNNER_SECRET_PLACEHOLDERS): admitted only where its class is
+	// delivered runner_resident and ResidentAdmits it, then served via_org, so
+	// the value stays at the organisation.
+	RuleResidentViaOrg Rule = "resident_via_org"
 )
 
 // Rules and Classes are closed sets: a row naming anything else is refused by
 // TestTableRowsAreWellFormed, and at runtime an unknown rule is a gated rule
 // with no gate, which refuses; it is never an allow.
 var (
-	allRules   = []Rule{RuleAllow, RuleDelivery, RuleViaOrgRefuse, RuleRefuse, RuleBound, RuleNotSent, RuleStrip, RuleExempt, RuleOwnerOnlyOwn, RuleNotConfigured}
+	allRules   = []Rule{RuleAllow, RuleDelivery, RuleViaOrgRefuse, RuleRefuse, RuleBound, RuleNotSent, RuleStrip, RuleExempt, RuleOwnerOnlyOwn, RuleNotConfigured, RuleResidentViaOrg}
 	allClasses = []Class{ClassOwn, ClassOperator, ClassBrokered, ClassPlatform, ClassExempt, ClassComposite}
 )
 
@@ -91,7 +96,7 @@ var Table = []Entry{
 	{Struct: StructSandboxSpec, Field: "ManagedFiles", Variant: "AgentOwned file_secret, not OwnerOnly", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassFileSecret, Reason: ReasonPlacementCredential},
 	{Struct: StructSandboxSpec, Field: "Mounts", Variant: "operator-authored, including host-mode ~/.aws", Class: ClassOperator, Rule: RuleRefuse, Reason: ReasonPlacementCapability},
 	{Struct: StructSandboxSpec, Field: "Mounts", Variant: "MemberAuthored local_dir", Class: ClassOwn, Rule: RuleBound, Reason: ReasonPlacementLocalPath},
-	{Struct: StructSandboxSpec, Field: "Drives", Variant: "host_path", Class: ClassOwn, Rule: RuleBound, Reason: ReasonPlacementLocalPath},
+	{Struct: StructSandboxSpec, Field: "Drives", Variant: "host_path: allowed when its second place is bound to this runner and inside the roots its owner allowed", Class: ClassOwn, Rule: RuleBound, Reason: ReasonPlacementLocalPath},
 	{Struct: StructSandboxSpec, Field: "Drives", Variant: "k8s_pvc, k8s_pvc_static, the org's docker_volume", Class: ClassOperator, Rule: RuleRefuse, Reason: ReasonPlacementCapability},
 	{Struct: StructSandboxSpec, Field: "Image", Variant: "any, including a workspace image in the org registry; pulled with the runner's own registry credentials, never the org's pull secrets", Class: ClassOwn, Rule: RuleAllow, Reason: ReasonPlacementCapability},
 	{Struct: StructSandboxSpec, Field: "Env", Variant: "platform variables (the placeholder ~/.aws of a proxy-injected AWS SSO session among them) and the person's own or self-defined component config", Class: ClassExempt, Rule: RuleExempt},
@@ -105,7 +110,9 @@ var Table = []Entry{
 	{Struct: StructSandboxSpec, Field: "ConfinementClass", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructSandboxSpec, Field: "Resources", Class: ClassExempt, Rule: RuleExempt, Variant: "checked against the advertised capacity"},
 	{Struct: StructSandboxSpec, Field: "Interactive", Class: ClassExempt, Rule: RuleExempt},
+	{Struct: StructSandboxSpec, Field: "DesktopSignins", Class: ClassExempt, Rule: RuleRefuse, Reason: ReasonPlacementCapability, Variant: "a boolean, no credential: it mounts the person's sign-in store, a tmpfs. Sign-ins run on the organisation's own Docker runner only (signinTarget gives a runner or pool run none), so a set one is refused"},
 	{Struct: StructSandboxSpec, Field: "Record", Class: ClassExempt, Rule: RuleExempt, Variant: "organisation's per-run recording choice"},
+	{Struct: StructSandboxSpec, Field: "MachineKind", Class: ClassExempt, Rule: RuleExempt, Variant: "the sandbox kind; a runner that cannot start it refuses the create"},
 	{Struct: StructSandboxSpec, Field: "OnWaiting", Class: ClassExempt, Rule: RuleNotSent, Variant: "a callback; waiting events replace it"},
 	{Struct: StructSandboxSpec, Field: "ExecOutput", Class: ClassExempt, Rule: RuleNotSent, Variant: "a writer; the output stream replaces it"},
 	{Struct: StructSandboxSpec, Field: "ProxyConfig", Class: ClassComposite, Rule: RuleStrip, Variant: "classified field by field under ProxyConfig"},
@@ -117,6 +124,8 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "MITMCAKeyPEM", Class: ClassPlatform, Rule: RuleAllow, Variant: "per run; gains MITM of one's own sandbox only"},
 	{Struct: StructProxyConfig, Field: "Injection", Variant: "stored api_key, own namespace", Class: ClassOwn, Rule: RuleOwnerOnlyOwn},
 	{Struct: StructProxyConfig, Field: "Injection", Variant: "operator namespace or shared component; via_org replaces it with a ViaOrgRoutes entry", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassAPIKey, Reason: ReasonPlacementCredential, ViaOrg: true},
+	{Struct: StructProxyConfig, Field: "Injection", Variant: "the placeholder fill of a runner_resident env_secret, WARDYN_RUNNER_SECRET_PLACEHOLDERS on: a ViaOrgRoutes entry replaces it", Class: ClassOperator, Rule: RuleResidentViaOrg, Delivery: ClassEnvSecret, Reason: ReasonPlacementCredential},
+	{Struct: StructProxyConfig, Field: "Injection", Variant: "the placeholder fill of a runner_resident file_secret, WARDYN_RUNNER_SECRET_PLACEHOLDERS on: a ViaOrgRoutes entry replaces it", Class: ClassOperator, Rule: RuleResidentViaOrg, Delivery: ClassFileSecret, Reason: ReasonPlacementCredential},
 	{Struct: StructProxyConfig, Field: "Injection", Variant: "the person's model-provider key or own Claude sign-in", Class: ClassOwn, Rule: RuleAllow},
 	{Struct: StructProxyConfig, Field: "Injection", Variant: "captured AWS SSO, credential_source per_user", Class: ClassOwn, Rule: RuleAllow},
 	{Struct: StructProxyConfig, Field: "Injection", Variant: "captured AWS SSO shared", Class: ClassBrokered, Rule: RuleDelivery, Delivery: ClassAWSSSOBearer, Reason: ReasonPlacementCredential},
@@ -135,6 +144,7 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "GitHubAPI", Variant: "the organisation's GitHub App installation token, for the GitHub CLI", Class: ClassBrokered, Rule: RuleRefuse, Reason: ReasonPlacementCredential},
 	{Struct: StructProxyConfig, Field: "AzureARM", Variant: "the Azure CLI's Resource Manager token, redeemed by the organisation from the person's Entra sign-in", Class: ClassBrokered, Rule: RuleRefuse, Reason: ReasonPlacementCredential},
 	{Struct: StructProxyConfig, Field: "AWSSigV4", Variant: "AWS role credentials the proxy redeems from the person's AWS sign-in to re-sign requests", Class: ClassBrokered, Rule: RuleRefuse, Reason: ReasonPlacementCredential},
+	{Struct: StructProxyConfig, Field: "KubeAPI", Variant: "the kubectl door's grant, whose cluster token the organisation mints from its registered service-account token", Class: ClassBrokered, Rule: RuleRefuse, Reason: ReasonPlacementCredential},
 	{Struct: StructProxyConfig, Field: "UpstreamProxyURL", Class: ClassOperator, Rule: RuleNotSent, Variant: "the runner's own upstream-proxy config applies"},
 	{Struct: StructProxyConfig, Field: "TrustedCAPEM", Class: ClassOperator, Rule: RuleNotSent, Variant: "the proxy copy only: the runner's own --trusted-ca-file bundle replaces it, destinations needing the org's roots take via_org, and the org's roots still reach the sandbox env, where the runner appends its own"},
 	{Struct: StructProxyConfig, Field: "InternalHosts", Class: ClassOperator, Rule: RuleAllow, Variant: "the org's internal_hosts lift only the private-IP guard for declared suffixes; the egress allowlist still decides"},
@@ -163,6 +173,7 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "Policy", Path: "AzureDevOpsCapabilities", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "Policy", Path: "GitHubCapabilities", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "Policy", Path: "HarnessInnerWalls", Class: ClassExempt, Rule: RuleExempt},
+	{Struct: StructProxyConfig, Field: "Policy", Path: "Desktop", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "Policy", Path: "Recording", Class: ClassExempt, Rule: RuleExempt, Variant: "never sent: sidecarPolicy clears it"},
 	{Struct: StructProxyConfig, Field: "Policy", Path: "LLMInspection", Class: ClassExempt, Rule: RuleExempt, Variant: "the rest of LLMInspection; its resolved secret names are the strip row above"},
 	{Struct: StructProxyConfig, Field: "ControlPlaneURL", Class: ClassExempt, Rule: RuleExempt},
@@ -172,8 +183,10 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "LLMUnavailableDetail", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "Unattended", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "ScrubResponses", Class: ClassExempt, Rule: RuleExempt},
+	{Struct: StructProxyConfig, Field: "CanonicalPushRepos", Class: ClassExempt, Rule: RuleExempt, Variant: "the operator's held-push key spelling; it names an approval, no credential"},
 	{Struct: StructProxyConfig, Field: "Attribution", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "VM", Class: ClassExempt, Rule: RuleExempt, Variant: "a desktop VM run's flag: it turns the port rule on and the relay's refusal route; no credential"},
+	{Struct: StructProxyConfig, Field: "DesktopSignins", Class: ClassPlatform, Rule: RuleRefuse, Reason: ReasonPlacementCredential, Variant: "opens the sign-in listener (port 3129), which admits a per-sign-in credential the organisation's control plane checks and carries the person's logins; refused, like signinTarget"},
 	{Struct: StructProxyConfig, Field: "PortRule", Class: ClassExempt, Rule: RuleExempt, Variant: "the operator's egress port rule; it only narrows egress, no credential"},
 	{Struct: StructProxyConfig, Field: "PushRuleBase", Class: ClassExempt, Rule: RuleExempt, Variant: "the run's push rules after the ceiling, for an entry with no set; policy content, no credential"},
 	{Struct: StructProxyConfig, Field: "PushRuleSets", Class: ClassExempt, Rule: RuleExempt, Variant: "push content rules per SCM entry; policy content, no credential"},

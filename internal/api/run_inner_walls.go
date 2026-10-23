@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
+	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/agentpolicy"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -50,11 +52,19 @@ func innerWallsSeedSkips(req createRunRequest) bool {
 func applyInnerWallsHold(req *createRunRequest, spec types.RunPolicySpec) string {
 	w := spec.HarnessInnerWalls
 	if w == nil || w.Approvals != types.InnerApprovalsWardyn || requestIsInteractive(*req) || req.TaskMode == "exec" ||
-		!agentHasHoldLane(req.Agent) || req.ToolApprovals == "hold" {
+		!slices.ContainsFunc(taskAgents(*req), agentHasHoldLane) || req.ToolApprovals == "hold" {
 		return ""
 	}
 	req.ToolApprovals = "hold"
-	return "tool_approvals was set to hold: the run's policy keeps " + req.Agent + "'s approvals in Wardyn (harness_inner_walls.approvals: wardyn)"
+	// Name the agents the policy holds: on a run with several, the one that took the lane
+	// may not be the run's own agent.
+	var held []string
+	for _, a := range taskAgents(*req) {
+		if agentHasHoldLane(a) {
+			held = append(held, a+"'s")
+		}
+	}
+	return "tool_approvals was set to hold: the run's policy keeps " + strings.Join(held, " and ") + " approvals in Wardyn (harness_inner_walls.approvals: wardyn)"
 }
 
 // innerWallsFor is the walls the run's started harness launches with, held to the policy's
@@ -81,7 +91,8 @@ func innerWallsFor(req createRunRequest, spec types.RunPolicySpec, harnesses []t
 	}
 	check := []harnessWalls{{req.Agent, started}}
 	for _, h := range harnesses {
-		if w, ok := agentpolicy.InnerWalls(h.Harness, interactive, false, false); ok && h.Harness != req.Agent {
+		// An agent running its own task launches on the run's lane, as the run's agent does.
+		if w, ok := agentpolicy.InnerWalls(h.Harness, interactive, hold && h.Task != "", false); ok && h.Harness != req.Agent {
 			check = append(check, harnessWalls{h.Harness, w})
 		}
 	}

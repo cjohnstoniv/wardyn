@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -20,6 +20,7 @@ import { baseStatus } from "./lib/test-fixtures";
 import { setField } from "../test/set-field";
 import { UNSAVED } from "./lib/unsaved-copy";
 import { NR_LAUNCH } from "./components/wardyn/copy/new-run/launch";
+import { PREFLIGHT_DEBOUNCE_MS } from "./components/screens/new-run-flow/draft/use-intent-checks";
 import { NR_REVIEW } from "./components/wardyn/copy/new-run/review";
 
 // The next route does not participate in confirming the draft owner's identity.
@@ -85,6 +86,17 @@ const fetchMock = vi.fn((url: RequestInfo | URL, init?: RequestInit): Promise<Re
 const realLocation = window.location;
 const assign = vi.fn();
 let popup: { closed: boolean; close: ReturnType<typeof vi.fn>; opener: unknown; location: { href: string } };
+
+// The first case used to pay the cold import of the lazy New Run chunks inside its own 5 s budget, which a
+// loaded `vitest related` run starves; import them here, under an explicit hook timeout, so every case starts warm.
+beforeAll(async () => {
+  await Promise.all([
+    import("./components/screens/new-run-flow/new-run-route"),
+    import("./components/screens/new-run-flow/launch/review-with-launch"),
+    import("./components/screens/new-run-flow/launch/launched-screen"),
+    import("./components/wardyn/reauth-layer"),
+  ]);
+}, 30_000);
 
 beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -159,7 +171,11 @@ const noDraft = () => {
 
 async function draft() {
   const view = render(<MemoryRouter initialEntries={[`/runs/new?again=${AGAIN}`]}><App /></MemoryRouter>);
+  // The seeding read and the first checks each wait out the checks' debounce: advance the fake clock past it
+  // instead of spending 800 ms of real time on each.
+  await tick(PREFLIGHT_DEBOUNCE_MS);
   const launchRun = await launchButton();
+  await tick(PREFLIGHT_DEBOUNCE_MS);
   await waitFor(() => expect(launchRun).toBeEnabled());
   setField(await openName(), "Keep this draft");
   await tick();

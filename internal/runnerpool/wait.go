@@ -28,9 +28,17 @@ const WaitRunnersAtCapacity WaitReason = "runner_pool_runners_at_capacity"
 // in that state is refused recording_store_off; this is the wait of one already queued.
 const WaitRecordingStoreOff WaitReason = "runner_pool_recording_store_off"
 
+// WaitScheduled: the run was scheduled for a later start (start_at) and that time is still ahead.
+const WaitScheduled WaitReason = "scheduled"
+
+// WaitOwnerSignIn: a scheduled run is due, but its owner's sign-in to the run's model provider has
+// expired and cannot be renewed without them, so it starts only once they sign in again.
+const WaitOwnerSignIn WaitReason = "owner_sign_in"
+
 // Valid reports whether w is a wait reason.
 func (w WaitReason) Valid() bool {
-	return w == WaitAtCapacity || w == WaitNoRunnerFree || w == WaitRunnersAtCapacity || w == WaitRecordingStoreOff
+	return w == WaitAtCapacity || w == WaitNoRunnerFree || w == WaitRunnersAtCapacity || w == WaitRecordingStoreOff ||
+		w == WaitScheduled || w == WaitOwnerSignIn
 }
 
 // Wait is the answer when a new run must queue behind a pool's cap. Whoever owns

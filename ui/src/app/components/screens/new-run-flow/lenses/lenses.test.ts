@@ -9,7 +9,8 @@ import { attachWorkspace, chooseNothing, detachWorkspace, setStartsHere } from "
 import { addHarness, removeHarness, setStarter, setTask } from "./harness-lens";
 import { setCpu, setMemory } from "./limits-lens";
 import { firstInvalidStep, localIssues, stepIssues } from "./local-issues";
-import { chooseBarrier, chooseMode, choosePool, setCommand } from "./run-lens";
+import { setCommand } from "./apps-lens";
+import { chooseBarrier, chooseMachineKind, chooseMode, choosePool } from "./run-lens";
 import { chooseShape, shapeCarriers } from "./shape-lens";
 import { addAllowedHost, setModelProvider } from "./tools-lens";
 
@@ -27,7 +28,7 @@ const START: RunIntent = {
   shape: "agent_task",
   experience: "background",
   workload: { kind: "agent_task", agent: "claude-code", task: "fix it" },
-  tools: [{ id: "claude-code", kind: "harness" }, { id: "codex-cli", kind: "harness" }],
+  tools: [{ id: "claude-code", kind: "harness" }, { id: "codex-cli", kind: "harness", task: "write tests" }],
   workspaces: [{ workspace_id: "w1" }],
   start_folder: { kind: "attachment", attachment: "w1" },
 };
@@ -41,6 +42,8 @@ const EDITS: [string, (i: RunIntent) => RunIntent][] = [
   ["setCommand", (i) => setCommand(i, "make test")],
   ["choosePool", (i) => choosePool(i, "pool-2")],
   ["chooseBarrier", (i) => chooseBarrier(i, "CC3")],
+  ["chooseMachineKind linux_vm", (i) => chooseMachineKind(i, "linux_vm")],
+  ["chooseMachineKind container", (i) => chooseMachineKind(i, "container")],
   ["addHarness", (i) => addHarness(i, "gemini")],
   ["removeHarness", (i) => removeHarness(i, "codex-cli")],
   ["setStarter", (i) => setStarter(i, "claude-code")],
@@ -70,7 +73,7 @@ describe("lenses keep what they do not own (U4)", () => {
     expect(changed(START, setCpu(START, 1000))).toEqual(["resources"]);
     expect(changed(START, addAllowedHost(START, "h.example"))).toEqual(["overrides"]);
     expect(changed(START, setStartsHere(START, "w1"))).toEqual([]);
-    expect(changed(START, chooseShape(START, "application"))).toEqual(["shape", "workload"]);
+    expect(changed(START, chooseShape(START, "application"))).toEqual(["shape", "tools", "workload"]);
   });
 });
 
@@ -96,10 +99,10 @@ describe("lens edits", () => {
     expect(chooseShape(interactive, "environment").startup).toBeUndefined();
   });
 
-  it("never removes an agent task's last harness, and moves the task to the next one", () => {
+  it("never removes an agent task's last harness, and the next one's own task becomes the run's", () => {
     const one = removeHarness(START, "codex-cli");
     expect(removeHarness(one, "claude-code")).toBe(one);
-    expect(removeHarness(START, "claude-code").workload).toEqual({ kind: "agent_task", agent: "codex-cli", task: "fix it" });
+    expect(removeHarness(START, "claude-code").workload).toEqual({ kind: "agent_task", agent: "codex-cli", task: "write tests" });
   });
 
   it("writes an added host as a run override, never as policy", () => {
@@ -123,5 +126,13 @@ describe("local validators", () => {
     expect(stepIssues("files", { no_repositories_or_drives: true })).toEqual([]);
     expect(firstInvalidStep(START)).toBeUndefined();
     expect(localIssues(START, {}, { format: "yaml", text: "", diagnostics: [], validated: false }).map((i) => i.code)).toEqual(["doc_invalid"]);
+  });
+});
+
+describe("chooseMachineKind", () => {
+  it("a VM drops the container barrier; a container is the absent key", () => {
+    const vm = chooseMachineKind({ confinement_class: "CC2", runner_pool_id: "p" }, "linux_vm");
+    expect(vm).toEqual({ machine_kind: "linux_vm", runner_pool_id: "p" });
+    expect(chooseMachineKind(vm, "container")).toEqual({ runner_pool_id: "p" });
   });
 });

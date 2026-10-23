@@ -62,13 +62,17 @@ ARG NO_PROXY=
 RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
  && if [ -n "$HTTP_PROXY" ]; then npm config set proxy "$HTTP_PROXY"; fi \
  && if [ -n "$HTTPS_PROXY" ]; then npm config set https-proxy "$HTTPS_PROXY"; fi \
- && npm install -g pnpm@9.15.4
+ && for i in 1 2 3; do timeout -k 10 180 npm install -g pnpm@9.15.4 && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done
 COPY ui/package.json ui/pnpm-lock.yaml ./
 # puppeteer (a test-only devDependency) postinstalls a full Chrome download,
 # which is dead weight for `pnpm build` and FAILS on bookworm-slim (no unzip).
 # This stage only produces /ui/dist — skip the browser download entirely.
 ENV PUPPETEER_SKIP_DOWNLOAD=true
-RUN pnpm install --frozen-lockfile
+# #3472: the retried, timed step fetches and installs from the lockfile (postinstalls
+# run here), so a hung registry fails in minutes; --offline then only checks the
+# lockfile, with no network.
+RUN for i in 1 2 3; do timeout -k 10 300 pnpm fetch --frozen-lockfile && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done
+RUN pnpm install --frozen-lockfile --offline
 COPY ui/ ./
 # Produces /ui/dist (tsc && vite build). The UI calls /api/v1 same-origin, so
 # no base-URL config is needed — wardynd serves it on the same port.
@@ -119,7 +123,9 @@ RUN apk add --no-cache ca-certificates && \
     fi
 
 COPY go.mod go.sum ./
-RUN go mod download
+# Bounded retry of the module FETCH only (a proxy stream error is transient); go.sum still
+# verifies every module, and no build or test step is ever retried.
+RUN for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done
 
 COPY . .
 # Pure-Go build (CGO off) so the binary runs on distroless static. The docker

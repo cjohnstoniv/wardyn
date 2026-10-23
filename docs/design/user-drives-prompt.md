@@ -586,7 +586,6 @@ confirming happens through the API.
 | `LEAD` | Persistent storage a run can mount. An admin registers a drive and allocates it to people or groups; each person gets their own directory in it, and chooses per run whether to mount it. A person's first drive mounts at `/home/agent/drive`; any others mount beside it, under `/home/agent/drives` or `/home/agent/shared`. |
 | `DRIVES_OFF_BANNER` | User drives are turned off for this deployment under Workspace providers. Everything here is kept; nothing mounts until they are turned back on. |
 | `DRIVES_TITLE` | Drives |
-| `DRIVES_LEAD` | A drive is one place storage comes from: a share your platform already mounts, or a volume Wardyn creates per person. |
 | `COL_NAME` | Name |
 | `COL_BACKEND` | Backend |
 | `COL_SIZE` | Size |
@@ -608,7 +607,6 @@ confirming happens through the API.
 | `SIZE_MIB(n)` | {n} MiB |
 | `SIZE_GIB(n)` | {n} GiB |
 | `EMPTY_TITLE` | No drives yet |
-| `EMPTY_BODY` | Runs keep nothing between them today. Register a drive to give people a directory that persists. |
 | `EDITOR_TITLE_NEW` | New drive |
 | `EDITOR_TITLE_EDIT(name)` | Edit "{name}" |
 | `FIELD_NAME` | Name |
@@ -654,6 +652,51 @@ confirming happens through the API.
 | `ENFORCEMENT_NONE` | Size shown, not enforced |
 | `ENFORCEMENT_EVICTION` | Size limited by eviction — over it, the run is stopped, not the write |
 | `HONESTY` | Wardyn never enforces a drive's size itself. On Kubernetes the size is the volume request and the storage class decides whether it binds — block disks do, network-share provisioners do not. On Docker a managed drive has no byte cap, the same gap `disk_mib` has. A share is bounded by its own quota. The size you see is the allocation, not a guarantee. |
+| `BACKEND_K8S_PVC_STATIC_TEAM` | Share provisioned by your platform (one pre-created volume claim for the team) |
+| `FIELD_TEAM` | Team drive |
+| `FIELD_TEAM_WRITE` | Members can write |
+| `TEAM_ALLOC_HINT` | A team drive is allocated to groups, never to one person or to everyone. Every mount is audited with who mounted it. |
+| `TEAM_CHIP` | Team drive |
+| `TEAM_CLAIM_NOTE` | Every member mounts the same claim, so it must allow many writers at once (ReadWriteMany). Ask your platform team if you're not sure. |
+| `TEAM_EMPTY_READ_ONLY` | Nobody can write to a read-only team drive on a Wardyn-managed volume, so it stays empty. Use a share your platform fills, or turn on Members can write. |
+| `TEAM_GROUP_PLACEHOLDER` | Choose a group |
+| `TEAM_HINT` | One folder shared by everyone it is allocated to. Each person's runs see, and can run, what the others' runs wrote there. |
+| `TEAM_NO_HOME` | Everyone gets the same folder, so a team drive has no directory per person. |
+| `TEAM_ONE_HOST` | Works on one host only. A Docker volume lives on the host that made it, so runs on another host get a different, empty folder. |
+| `TEAM_ONE_HOST_CHIP` | One host only |
+| `TEAM_RECLAIM_CELL` | Kept (team drive) |
+| `TEAM_RECLAIM_KEPT` | Kept. A team drive belongs to its groups, so a leaver's cleanup skips it. |
+| `TEAM_SIZE_HINT` | One size for the whole team: members share it. |
+| `TEAM_WRITE_HINT` | Off by default: members' runs can read the drive and never change it. On, any member's run can change what the others' runs read and run. |
+| `TEAM_WRITE_UNKNOWN` | This drive has more allocations than this page lists, so its write setting cannot be changed here. Saving leaves every allocation's write setting as it is. A group you add here can't write. |
+| `COL_MOUNTS_FROM` | Mounts from |
+| `LABEL_TWO_PLACES` | Can mount from two places |
+| `LABEL_TWO_PLACES_BODY` | A share lives outside Wardyn, so the same directories can also be reached from a person's own runner. Add it below. |
+| `LABEL_ONE_PLACE` | Mounts from one place |
+| `LABEL_ONE_PLACE_DOCKER` | A Wardyn-managed volume lives on this Docker host, so only runs on the organisation's runners can mount it. |
+| `LABEL_ONE_PLACE_K8S` | A Wardyn-managed volume lives in this cluster, so only runs on the organisation's runners can mount it. |
+| `SECOND_PLACE_SHARE_ONLY` | Only a share can also be reachable from a second place. |
+| `SECOND_PLACE_ADD` | Add a second place |
+| `SECOND_PLACE_TITLE` | Also reachable from |
+| `SECOND_PLACE_REMOVE` | Remove this place |
+| `SECOND_PLACE_LEAD` | The same drive and the same directories, mounted from a second place. Each person still sees only their own directory. |
+| `FIELD_WHERE` | Where |
+| `WHERE_OWN_RUNNER` | A person's own runner |
+| `FIELD_RUNNER` | Runner |
+| `RUNNER_OPTION(runner)` | {runner} · a person's own runner |
+| `RUNNER_HINT` | Only runs on this runner can mount the drive there. A runner mounts only folders its owner allowed on it. |
+| `RUNNER_PLACEHOLDER` | Choose a runner |
+| `FIELD_ALT_HOST_ROOT` | Path on that runner |
+| `ALT_HOST_ROOT_HINT` | The same share as above, as that runner sees it. Each person's directory is a subdirectory of it. |
+| `REACH_NOTE` | Binding a drive to a runner lets runs on that runner mount it. |
+| `SECOND_PLACE_REFUSED(name)` | user_drives: "{name}": the second place must also be a share, and somewhere the first is not |
+
+`TEAM_WRITE_UNKNOWN` is a deviation: lead wording 2026-10-20, M1 fix.
+
+`COL_MOUNTS_FROM` through `SECOND_PLACE_REFUSED` are mock M10 (#113, #112). The Mounts from cell and the
+preview line print the server's `mounts_from` as it is. `RUNNER_PLACEHOLDER` is not on the board. The Where
+hint is not rendered: the only second place offered is a person's own runner. `SECOND_PLACE_REFUSED` is the
+server's save refusal, rendered as the server sends it under `SAVE_REFUSED_TITLE`.
 
 `TITLE` is **one string for four places** — the screen heading, the Workspaces header's outline
 button, the setup card's title and the Settings card's title — the way `GOVERNANCE.TITLE`
@@ -682,7 +725,7 @@ With the switch off nothing else on the screen changes.
 | `ALLOC_LEAD` | Who gets a drive. A person's own row beats their group's; a group's beats everyone's. A person can be given more than one drive. |
 | `PRECEDENCE` | The most specific allocation wins: a person beats a group, and a group beats everyone. Within a person, the sign-in subject beats the email. Between groups, the higher priority wins, then the drive name. |
 | `EFFECT_NOTE` | Takes effect on their next run. A run already dispatched keeps what it mounted. |
-| `SIGNIN_NOTE` | A change to someone's groups in your identity provider reaches Wardyn only when they next sign in, so a group's allocation reaches them then — or, for an API token, when it is re-minted. |
+| `SIGNIN_NOTE` | Groups are read when someone signs in. A change in your identity provider reaches Wardyn at their next sign-in, or when their API token is re-minted. |
 | `ADD_TITLE` | Allocate a drive |
 | `ADD_CTA` | Allocate |
 | `FIELD_DRIVE` | Drive |
@@ -732,8 +775,8 @@ console says so instead, where the field is authored.
 governance round's lesson carried over with the object changed: an **allocation** is a row the
 resolver re-reads every run, so it binds at the next *run*; a person's **group membership** is
 read once at sign-in, so a group's allocation reaches them at their next *sign-in* — or, on an
-API token, its next mint. `GOV.SIGNIN_NOTE` is not reused: it ends on "keep their current
-ceiling", and what lags here is a mount.
+API token, its next mint. `SIGNIN_NOTE` is the one groups sentence shared with Governance and
+Permissions (`groups-copy.ts`); `EFFECT_NOTE` says what lags here, a mount.
 
 **The allocations table renders one bounded PAGE, and says so.** `GET /drives` bounds the grants
 read at the list cap and ships `grant_total` — how many allocations EXIST — beside the page it
@@ -849,6 +892,11 @@ SUPER only.
 | `GS_DRIVE_CHIP(name, size, mode)` | Drive · {name}, {size}, {mode} |
 | `GS_DRIVE_CHIP_NOSIZE(name, mode)` | Drive · {name}, {mode} |
 | `GS_DRIVE_CHIP_PAUSED(name)` | Drive · {name} · Paused |
+| `GS_MOUNTS_FROM(where)` | Mounts from {where} |
+| `NR_MOUNTS_FROM(where)` | Mounts from {where}. |
+| `NR_MOUNTED_FROM(runner, path)` | Mounted from {runner}, at {path}. |
+| `NR_ORG_RUNNERS_ONLY(name)` | "{name}" mounts only from the organisation's runners. Choose an organisation pool to mount it, or launch without it. |
+| `NR_BOUND_ELSEWHERE(name)` | "{name}" is bound to a different runner. Choose an organisation pool to mount it, or launch without it. |
 | `GS_DRIVE_BODY` | Your drive is not a workspace: mount it from New run alongside whatever you attach. It is yours alone — a run sees only your directory. |
 
 `NR_HINT`'s `{mode}` and `GS_DRIVE_CHIP`'s `{mode}` are `MODE_RO_INLINE` / `MODE_RW_INLINE`; the
@@ -876,6 +924,9 @@ caption on an offer nobody was made. `GS_DRIVE_CHIP`
 follows `BARRIER_CHIP`'s `Label · value` shape (Q2) and sits beside `MEMBER.GS_CHIP`, the
 governance chip, in the same row. `GS_DRIVE_BODY` renders in the "Add your workspace" card,
 after `WORKSPACE_BODY`, only when `/me.user_drive` is non-null.
+`GS_MOUNTS_FROM` through `NR_BOUND_ELSEWHERE` are mock M10: `{where}` is the server's `mounts_from` with its
+first letter lowered for the sentence. `NR_ORG_RUNNERS_ONLY` and `NR_BOUND_ELSEWHERE` are the New Run lines for an
+organisation drive the pool's runners cannot mount; `NR_BOUND_ELSEWHERE` is not on the board.
 
 ### 7.7 `DRIVE_MEMBER` — refusals (server-composed)
 
@@ -1109,8 +1160,8 @@ Departures from `DESIGN.md` §4.3's draft tables, each with the reason; the mode
    a workspace.
 8. **`DELETE_RESTRICT_BODY` reworded** — the draft said "never widens", governance vocabulary
    with no meaning for a drive; it now says what deleting the row does not do (delete data).
-9. **`SIGNIN_NOTE` and `EFFECT_NOTE` frozen rather than reused** — the governance strings end on
-   a ceiling; these end on a mount. **`PRECEDENCE` is duplicated deliberately**: it differs from
+9. **`EFFECT_NOTE` frozen rather than reused** — the governance string ends on a ceiling; this
+   one ends on a mount. `SIGNIN_NOTE` is the shared groups sentence. **`PRECEDENCE` is duplicated deliberately**: it differs from
    governance-prompt §7.3's only by "allocation"/"drive name", and the two must be edited
    together (a parameterised canon would touch the shipped module mid-hardening).
 10. **The card counts allocations, not people.** The draft's "2 drives · 14 people" cannot be

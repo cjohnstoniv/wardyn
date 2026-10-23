@@ -85,10 +85,16 @@ func (s *Server) handleGetCredentialDelivery(w http.ResponseWriter, r *http.Requ
 	}
 	// buildable_modes sits beside policy, never inside it: PUT decodes the policy strictly, and a client
 	// that sends GET's policy back must not carry it.
+	// unbuildable lists the stored rows PUT would refuse as new ones (same predicate), so an operator finds them
+	// here; absent when there are none. The stored document is only read.
 	resp := struct {
 		types.CredentialDeliveryPolicyDoc
 		BuildableModes map[string][]placement.Mode `json:"buildable_modes"`
-	}{doc, map[string][]placement.Mode{}}
+		Unbuildable    []placement.UnbuildableRow  `json:"unbuildable,omitempty"`
+	}{CredentialDeliveryPolicyDoc: doc, BuildableModes: map[string][]placement.Mode{}}
+	if p, err := deliveryPolicyOf(doc.Policy); err == nil {
+		resp.Unbuildable = p.Unbuildable()
+	}
 	for _, class := range placement.DeliveryClasses() {
 		resp.BuildableModes[class] = placement.BuildableModes(class)
 	}
@@ -146,6 +152,10 @@ func (s *Server) handlePutCredentialDelivery(w http.ResponseWriter, r *http.Requ
 			writeServerError(w, r, "get credential delivery policy", err)
 			return
 		}
+		if err := after.CheckBuildable(before); err != nil {
+			writeErrorReason(w, http.StatusUnprocessableEntity, reasonCredentialDeliveryInvalid, err.Error())
+			return
+		}
 		s.proposeGovernanceChange(w, r, govProposal{
 			kind: govKindCredentialDelivery, op: "replace", key: govCredentialDeliveryKey, payload: after,
 			before: before, after: after, changed: changedPaths(before, after), baseState: before,
@@ -156,11 +166,17 @@ func (s *Server) handlePutCredentialDelivery(w http.ResponseWriter, r *http.Requ
 	// ETag answers 412 even when another write landed between a read and this one.
 	stored, err := st.PutCredentialDeliveryPolicyIf(r.Context(), mustJSON(after), principalFromRequest(r), time.Now().UTC(),
 		func(cur types.CredentialDeliveryPolicyDoc) (err error) {
-			before, err = staleIfMatch(cur)
-			return err
+			if before, err = staleIfMatch(cur); err != nil {
+				return err
+			}
+			return after.CheckBuildable(before)
 		})
 	if errors.Is(err, errCredentialDeliveryStale) {
 		writeStale()
+		return
+	}
+	if errors.Is(err, placement.ErrUnbuildablePolicy) {
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonCredentialDeliveryInvalid, err.Error())
 		return
 	}
 	if err != nil {
@@ -203,6 +219,9 @@ func applyCredentialDeliveryChange(s *Server, r *http.Request, q store.Querier, 
 	}
 	if computeETag(before) != ch.BaseHash {
 		return govApplied{}, store.ErrGovernanceChangeStale
+	}
+	if err := after.CheckBuildable(before); err != nil {
+		return govApplied{}, writeRefusal(http.StatusUnprocessableEntity, reasonCredentialDeliveryInvalid, "%s", err.Error())
 	}
 	if _, err := store.PutCredentialDeliveryPolicyQ(ctx, q, mustJSON(after), principalFromRequest(r), time.Now().UTC()); err != nil {
 		return govApplied{}, err

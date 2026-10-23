@@ -29,7 +29,7 @@ const (
 // boundaryCorpus is the seeded rows: a profile wider than the boundary assigned to one member, and a
 // stored policy that allows all egress.
 type boundaryCorpus struct {
-	profile types.GovernanceProfile
+	profile types.GovernanceUnit
 	open    types.RunPolicy
 }
 
@@ -108,7 +108,8 @@ func resolveBoundaryCorpus(t *testing.T, srv *Server, c boundaryCorpus) []bounda
 	return out
 }
 
-// TestBoundaryNoLimitsGolden: with no boundary row the corpus resolves to the recorded behaviour.
+// TestBoundaryNoLimitsGolden: on a fresh schema (seeded, or with no boundary on the tree that
+// records it) the corpus resolves to the recorded behaviour.
 // It uses only what predates the boundary, so it also runs on the tree that records the golden.
 func TestBoundaryNoLimitsGolden(t *testing.T) {
 	e := newGovEnvOn(t, throwawayPGPool(t))

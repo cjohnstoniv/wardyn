@@ -342,6 +342,22 @@ describe("RunLifetimeBanner — ending soon (M1: Change end… joins Extend 1 da
     expect(screen.queryByText("This run ends in 10 minutes")).not.toBeInTheDocument();
   });
 
+  it("#2532: dismissing one stage does not silence the next one", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const inAnHour = detail({ ends_at: new Date(NOW + 30 * 60_000).toISOString() });
+    const { rerender } = renderBanner(inAnHour);
+    expect(screen.getByText("This run ends in 1 hour")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByText("This run ends in 1 hour")).not.toBeInTheDocument();
+    const soon = detail({ ends_at: new Date(NOW + 9 * 60_000).toISOString() });
+    rerender(
+      <OperatorProvider operator={true} principal={OWNER}>
+        <RunLifetimeBanner run={soon} pending={[]} onChanged={() => {}} />
+      </OperatorProvider>,
+    );
+    expect(screen.getByText("This run ends in 10 minutes")).toBeInTheDocument();
+  });
+
   it("#2596: the warning does not promise a number of days the admin may have changed", () => {
     renderBanner(detail({ ends_at: new Date(NOW + 9 * 60_000).toISOString() }));
     const banner = screen.getByTestId("run-lifetime-warning");
@@ -383,6 +399,29 @@ describe("RunLifetimeBanner — ending soon (M1: Change end… joins Extend 1 da
     });
     renderBanner(run, [], () => {}, { operator: false, principal: OWNER });
     expect(screen.getByRole("button", { name: "Change end…" })).toBeInTheDocument();
+  });
+
+  // #2112: the server refuses No end on a run with a lifetime cap, an operator included.
+  const openChangeEnd = async (over: Partial<RunDetail>) => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderBanner(
+      detail({ ends_at: new Date(NOW + 9 * 60_000).toISOString(), run_limits: { allow_no_end: true }, ...over }),
+      [],
+      () => {},
+      { operator: true, principal: OWNER },
+    );
+    await user.click(screen.getByRole("button", { name: "Change end…" }));
+    await screen.findByRole("dialog");
+  };
+
+  it("#2112: Change end… offers No end when the run has no lifetime cap", async () => {
+    await openChangeEnd({});
+    expect(screen.getByRole("checkbox", { name: "No end" })).toBeInTheDocument();
+  });
+
+  it("#2112: Change end… leaves No end out when the run has a lifetime cap", async () => {
+    await openChangeEnd({ lifetime_cap_at: new Date(NOW + 24 * 3600_000).toISOString() });
+    expect(screen.queryByRole("checkbox", { name: "No end" })).not.toBeInTheDocument();
   });
 });
 

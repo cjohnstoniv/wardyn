@@ -174,6 +174,8 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 				cancelApprovals: srv.CancelTerminalRunApprovals,
 				finishOutput:    srv.FinishRunOutput,
 				snapshotPane:    srv.SnapshotRunPane,
+				// The WARDYN_RUN_MAX_AGE stop's own: the same cascade without the idle_stopped event.
+				cancelMaxAgeApprovals: srv.CancelMaxAgeStoppedRunApprovals,
 			},
 			maskedRec,
 			lifecycle.Config{Interval: *f.autoStopInterval, MaxAge: cliutil.EnvDuration("WARDYN_RUN_MAX_AGE", 0), TickLock: reapTickLock(pool), Sweeps: ticks},
@@ -253,7 +255,7 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	})
 
 	// RS-12: name each composed profile a narrowed base has left unresolvable, once.
-	leaderGo(rootCtx, leader, "governance.profiles.walk", srv.WarnUnresolvableProfiles)
+	leaderGo(rootCtx, leader, "governance.units.walk", srv.WarnUnresolvableUnits)
 
 	// #1513: acknowledged SIEM delivery, off unless the webhook sink asks for it.
 	// f.auditSinks is nil only in the boot tests that build a bare bootFlags.

@@ -24,8 +24,8 @@
 #      SSO proxy-inject on it is admitted local and starts, the sandbox holds
 #      only the placeholder, and the fake's portal accepts the bearer the proxy
 #      injected (the model call then fails on the fake's canned Bedrock body,
-#      which is not a model reply); with proxy-inject off, preflight refuses the
-#      same local run 422 placement_credential before any run exists;
+#      which is not a model reply); `off` was removed in 0.10.0, so the walk
+#      no longer checks the refusal it used to draw;
 #   6. (last) with serve stopped, the owner's revoke answers 200 state revoked,
 #      and GET /me/runner-pools answers 200 with Laptop.
 #
@@ -157,7 +157,7 @@ rd build -q -f deploy/images/claude-code/Dockerfile -t "${AGENT_IMAGE}" . >"${EV
 rd build -q -f deploy/images/aws-sso/Dockerfile -t "${AWSSSO_IMAGE}" . >"${EVIDENCE_DIR}/build-aws-sso.log" 2>&1 || { tail -30 "${EVIDENCE_DIR}/build-aws-sso.log"; die "aws-sso image build failed"; }
 rd save "${WARDYND_IMAGE}" "${PROXY_IMAGE}" "${AWSSSO_IMAGE}" | od load -q || die "loading the org images into ${ORG_DOCKER} failed"
 CGO_ENABLED=0 go build -o "${TMP}/awsssofake" ./test/awsssofake/cmd || die "go build awsssofake failed"
-# Persistent, so the restart in step 7b can still read the captured session.
+# Persistent, so a restart of the org can still read the captured session.
 WARDYN_AGE_KEY="$(od run --rm "${WARDYND_IMAGE}" -gen-age-key 2>/dev/null)"
 [[ "${WARDYN_AGE_KEY}" == AGE-SECRET-KEY-* ]] || die "-gen-age-key printed no key"
 export WARDYN_AGE_KEY
@@ -388,24 +388,6 @@ if [[ "${calls}" -ge 1 ]]; then
 else fail "the fake saw no authenticated GetRoleCredentials: $(jq -c '{sessions, account_id, role_name}' <<<"${seen}"); egress: $(psql1 "SELECT action || ' ' || target || ' ' || coalesce(data->>'rule_source','') FROM audit_events WHERE run_id = '${SSO_RUN_ID}' AND action LIKE 'egress.%'" | tr '\n' ';')"; fi
 echo "  fake bedrock stub: $(jq -c '{bedrock_calls, bedrock_model}' <<<"${seen}"); run output tail: $(w run output "${SSO_RUN_ID}" 2>&1 | tail -c 300 | tr '\n' ' ')"
 echo "relayed rows for ${SSO_RUN_ID}: $(psql1 "SELECT action FROM audit_events WHERE run_id = '${SSO_RUN_ID}' AND data->>'relay' = 'runner:${RID}' ORDER BY seq" | tr '\n' ' ')"
-
-log "STEP 7b (proxy inject off): the same local run is refused at preflight"
-compose_env_off() { WARDYN_AWS_SSO_PROXY_INJECT=off compose "$@"; }
-compose_env_off up -d wardynd >>"${EVIDENCE_DIR}/compose-up.log" 2>&1 || die "restarting the org with proxy-inject off failed"
-wait_healthy "${ORG_URL}" 90 2 || die "the org did not come back after the restart"
-for _ in $(seq 1 30); do
-  api "${MEMBER_TOKEN}" GET "/api/v1/me/runners/${RID}" >/dev/null
-  jq -e '.online == true' "${TMP}/resp.json" >/dev/null && break
-  sleep 2
-done
-before="$(psql1 "SELECT count(*) FROM agent_runs")"
-body="$(jq -nc --slurpfile p "${TMP}/policy.json" '{agent:"claude-code",placement:"local",task:"Reply with the single word laptop-walk.",inline_policy:$p[0]}')"
-code="$(api "${MEMBER_TOKEN}" POST /api/v1/runs/preflight "${body}")"
-after="$(psql1 "SELECT count(*) FROM agent_runs")"
-if [[ "${code}" == 422 ]] && jq -e '.reason == "placement_credential"' "${TMP}/resp.json" >/dev/null \
-  && grep -qF 'SandboxSpec.SecretEnv[WARDYN_AWS_SSO_CONFIG_B64]' "${TMP}/resp.json" && [[ "${before}" == "${after}" ]]; then
-  pass "preflight with proxy-inject off: 422 placement_credential, no run created: $(jq -c . "${TMP}/resp.json" | head -c 400)"
-else fail "preflight with proxy-inject off answered ${code} (runs ${before} -> ${after}): $(head -c 600 "${TMP}/resp.json")"; fi
 
 log "STEP 6 (revoke): stop serve, revoke the dropped runner, read the pools"
 stop_serve

@@ -30,12 +30,13 @@ import (
 //	wardyn governance set governance.json      # restore, or hand-authored additions
 //
 // `set` UPSERTS every profile and assignment the file names, over the
-// existing POST/PUT /governance/profiles and POST /governance/assignments
+// existing POST/PUT /governance/units and POST /governance/memberships
 // routes — there is no bulk-write route, and this command adds none. A
 // PROFILE is upserted BY NAME (its unique human handle), not by id — see
 // ApplyGovernance's doc comment for why that, not id-routing, is what makes a
 // hand-maintained, version-controlled file re-apply as a no-op. An
-// ASSIGNMENT is upserted by its own natural key (subject_type, subject).
+// MEMBERSHIP is upserted by its own natural key (its unit's name, subject_type,
+// subject), so one subject can be a member of several units.
 // Nothing the file omits is touched, and nothing is deleted, unless --prune is
 // passed — so `get` immediately followed by `set` is a no-op, the same round
 // trip drive get/set's pair promises.
@@ -54,8 +55,9 @@ func governanceCmd(client clientFn) *cobra.Command {
 			"    wardyn governance get > governance.json\n" +
 			"    wardyn governance set governance.json\n\n" +
 			"`set` upserts every profile and assignment the file names — a profile is\n" +
-			"upserted BY NAME (its unique handle), an assignment by its own natural key\n" +
-			"(subject_type, subject). A profile in the file but absent server-side is\n" +
+			"upserted BY NAME (its unique handle), a membership by its own natural key\n" +
+			"(its unit's name, subject_type, subject); a unit's `mode` and a membership's\n" +
+			"`home` are written, the Default unit never is. A profile in the file but absent server-side is\n" +
 			"created; one present server-side but absent from the file is left alone unless\n" +
 			"--prune is passed, which also deletes any server-side assignment the file omits.\n" +
 			"`wardyn governance get > f && wardyn governance set f` is a no-op.\n\n" +
@@ -64,7 +66,8 @@ func governanceCmd(client clientFn) *cobra.Command {
 			"changes (it exits 0 and lists them); a second human then runs\n" +
 			"`wardyn governance changes approve <id>`.",
 	}
-	cmd.AddCommand(governanceGetCmd(client), governancePlanCmd(client), governanceSetCmd(client), governanceChangesCmd(client))
+	cmd.AddCommand(governanceGetCmd(client), governancePlanCmd(client), governanceSetCmd(client), governanceChangesCmd(client),
+		governanceCheckCmd(client), governanceDryRunCmd(client))
 	return subcommandGroup(cmd)
 }
 
@@ -105,7 +108,7 @@ func readGovernanceDocument(cmd *cobra.Command, args []string) (sdk.GovernanceDo
 	// error, not silently vanish from what ApplyGovernance then sends.
 	var doc sdk.GovernanceDocument
 	if err := decodeOneJSONStrict(bytes.NewReader(raw), &doc); err != nil {
-		return sdk.GovernanceDocument{}, fmt.Errorf("parse governance document JSON: %w", err)
+		return sdk.GovernanceDocument{}, fmt.Errorf("parse governance document JSON: %w%s", err, renamedKeyHint(err))
 	}
 	return doc, nil
 }
@@ -157,7 +160,7 @@ func printGovernancePlanSummary(w io.Writer, plan sdk.GovernancePlan) {
 		if s.Op != "delete" {
 			continue
 		}
-		if s.Kind == "profile" {
+		if s.Kind == "unit" {
 			fmt.Fprintf(w, "  profile %q\n", s.Name)
 		} else {
 			fmt.Fprintf(w, "  assignment %s %q\n", s.SubjectType, s.Subject)
@@ -215,13 +218,13 @@ func printGovernancePending(w io.Writer, res sdk.GovernanceApplyResult) {
 	if len(profiles) > 0 {
 		fmt.Fprintf(w, "deferred: %d profile(s) not sent, the profile they compose on is pending; apply again once it is approved\n", len(profiles))
 		for _, d := range profiles {
-			fmt.Fprintf(w, "  profile %q -> base %q\n", d.Profile, d.Base)
+			fmt.Fprintf(w, "  profile %q -> base %q\n", d.Unit, d.Base)
 		}
 	}
 	if len(assignments) > 0 {
 		fmt.Fprintf(w, "deferred: %d assignment(s) not sent, their profile is pending; apply again once it is approved\n", len(assignments))
 		for _, d := range assignments {
-			fmt.Fprintf(w, "  %s %q -> profile %q\n", d.SubjectType, d.Subject, d.Profile)
+			fmt.Fprintf(w, "  %s %q -> profile %q\n", d.SubjectType, d.Subject, d.Unit)
 		}
 	}
 	if res.PruneSkipped {
@@ -302,4 +305,57 @@ func governanceChangesCmd(client clientFn) *cobra.Command {
 	reject.Flags().StringVar(&reason, "reason", "", "reason recorded with the rejection")
 	cmd.AddCommand(list, approve, reject)
 	return subcommandGroup(cmd)
+}
+
+// governanceCheckCmd prints which units a person may run in and the walls of one (POST
+// /governance/check).
+func governanceCheckCmd(client clientFn) *cobra.Command {
+	var user, runIn string
+	cmd := &cobra.Command{
+		Use:   "check",
+		Short: "Print the units a person may run in, their dormant memberships and the walls of one, as JSON",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			res, err := client().CheckGovernance(cmd.Context(), sdk.GovernanceCheckRequest{UserSubjects: []string{user}, RunIn: runIn})
+			if err != nil {
+				return err
+			}
+			return emitJSON(cmd.OutOrStdout(), res)
+		},
+	}
+	cmd.Flags().StringVar(&user, "user", "", "the person's sign-in subject or email")
+	cmd.Flags().StringVar(&runIn, "run-in", "", "one of the person's units, by name or id, to show the walls of (default: their home unit)")
+	_ = cmd.MarkFlagRequired("user")
+	return cmd
+}
+
+// governanceDryRunCmd prints what a drafted boundary, unit write or membership move would change
+// (POST /governance/dry-run).
+func governanceDryRunCmd(client clientFn) *cobra.Command {
+	var file string
+	cmd := &cobra.Command{
+		Use:   "dry-run",
+		Short: "Print what a drafted write would change, writing nothing: the file's target is boundary, unit or membership_move",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			var raw []byte
+			var err error
+			if file == "-" {
+				raw, err = io.ReadAll(cmd.InOrStdin())
+			} else {
+				raw, err = os.ReadFile(file)
+			}
+			if err != nil {
+				return fmt.Errorf("read dry-run body: %w", err)
+			}
+			report, err := client().GovernanceDryRun(cmd.Context(), raw)
+			if err != nil {
+				return err
+			}
+			return emitJSON(cmd.OutOrStdout(), report)
+		},
+	}
+	cmd.Flags().StringVarP(&file, "file", "f", "", "the JSON body to dry-run (- for stdin)")
+	_ = cmd.MarkFlagRequired("file")
+	return cmd
 }

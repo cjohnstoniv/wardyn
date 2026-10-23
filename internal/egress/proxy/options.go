@@ -57,6 +57,8 @@ type Options struct {
 	AzureARM *AzureARMGrant
 	// AWSSigV4 backs AWS SigV4 re-signing (aws_sigv4.go). Nil == off.
 	AWSSigV4 *AWSSigV4Config
+	// KubeAPI backs the kubectl door (kube_api_door.go). Nil == off.
+	KubeAPI *KubeAPIGrant
 	// ControlPlaneURL and RunToken back the local brokered routes. The run
 	// token is injected only toward the control plane and never reaches the
 	// sandbox or any LLM upstream.
@@ -106,6 +108,8 @@ type Options struct {
 	Unattended bool
 	// ScrubResponses is Config.ScrubResponses.
 	ScrubResponses bool
+	// CanonicalPushRepos is Config.CanonicalPushRepos.
+	CanonicalPushRepos bool
 	// Attribution is Config.Attribution, already re-projected by LoadConfigBytes.
 	Attribution *policyref.Ref
 

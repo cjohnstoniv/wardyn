@@ -592,6 +592,7 @@ func TestMintedPAT_EveryEndPathRevokes(t *testing.T) {
 		"idle stop": {func(fx *adoPATFixture) {
 			fx.st.edit(fx.run.ID, func(r *types.AgentRun) { r.State = types.RunStopped })
 			fx.srv.CancelTerminalRunApprovals(ctx, fx.run.ID)
+			fx.srv.RevokeStoppedRun(ctx, fx.run.ID)
 		}, adoPATRevokeRunEnd},
 		"a kept run's end (lease end, lost sandbox)": {func(fx *adoPATFixture) {
 			fx.srv.revokeRunBroker(ctx, fx.run.ID)
@@ -884,5 +885,23 @@ func TestMintedPAT_APendingRevokeLeavesTheCascadeDone(t *testing.T) {
 	}
 	if !found {
 		t.Error("no run.revoke row records the pending run PAT revoke")
+	}
+}
+
+// The idle and max-age stops revoke a run's tokens once, in RevokeStoppedRun; the approval half of the
+// cascade leaves them alone, so a failed revoke is not retried (and recorded) a second time.
+func TestMintedPAT_StopApprovalCascadeLeavesTheTokensToRevokeStoppedRun(t *testing.T) {
+	ctx := context.Background()
+	fx := newADOPATFixture(t)
+	first := fx.ok(t, "dev.azure.com", nil)
+	fx.st.edit(fx.run.ID, func(r *types.AgentRun) { r.State = types.RunStopped })
+	fx.srv.CancelTerminalRunApprovals(ctx, fx.run.ID)
+	fx.srv.CancelMaxAgeStoppedRunApprovals(ctx, fx.run.ID)
+	if got := fx.pats.revokedIDs(); len(got) != 0 {
+		t.Fatalf("the approval cascade revoked %v, want none", got)
+	}
+	fx.srv.RevokeStoppedRun(ctx, fx.run.ID)
+	if got := fx.pats.revokedIDs(); !slices.Contains(got, first.JTI) {
+		t.Fatalf("RevokeStoppedRun revoked %v, want %s", got, first.JTI)
 	}
 }

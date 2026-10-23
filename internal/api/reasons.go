@@ -93,6 +93,9 @@ const (
 	reasonApprovalRunEnded             = "approval_run_ended"              // the run ended before the approval was decided; it was auto-cancelled
 	reasonCredentialReauthNotDecidable = "credential_reauth_not_decidable" // a credential-reauth approval is resolved by signing in again, not Approve/Deny
 	reasonDecisionScopeInvalidForKind  = "decision_scope_invalid_for_kind" // decision_scope was sent on an approval kind that does not accept one
+	reasonTakeoverNotDecidable         = "takeover_not_decidable"          // a takeover request is answered by taking over or declining, not Approve/Deny
+	reasonNotATakeoverRequest          = "not_a_takeover_request"          // take over, hand back or decline named an approval of another kind
+	reasonTakeoverNotHolder            = "takeover_not_holder"             // hand back by someone who does not have control
 	reasonApprovalAlreadyDecided       = "approval_already_decided"        // the approval was already approved or denied
 	reasonInvalidRequestBody           = "invalid_request_body"            // the JSON body did not decode
 	reasonInvalidViewParam             = "invalid_view_param"              // ?view= is not one of "", "user", "admin" (approvals AND runs listings)
@@ -168,10 +171,14 @@ const (
 	reasonRunModeConflict    = "run_mode_conflict"    // run-mode carriers contradict each other, or an older field that replaced them
 	reasonStartFolderInvalid = "start_folder_invalid" // start_folder is malformed, names an attachment the run lacks, or escapes its mount
 	reasonRunBackgroundOnly  = "run_background_only"  // a background run has no interactive door: attach, exec, SSH, UI gateway, desktop
+	// Several agents in one background run (run_multi_agent.go).
+	reasonMultiAgentTasksOff = "multi_agent_tasks_off" // tools[].task while WARDYN_MULTI_AGENT_TASKS is off
 	// The main drive (run_main_drive.go). The sentence is mainDriveUnenforceableMsg's, with a TypeScript twin.
 	reasonMainDriveUnenforceable = "main_drive_unenforceable" // the run's policy writes a disk size the runner it lands on cannot cap
 	// The run shape (run_shape.go): New Run's choice, checked against the carriers.
 	reasonRunShapeConflict = "run_shape_conflict" // shape does not fit the run's experience, workload or tools
+	// An application run whose declared app the resolved policy strips (governance_run_doors.go).
+	reasonRunApplicationUIAppsDenied = "run_application_ui_apps_denied" // shape application declares an app the profile's deny_ui_apps removes
 	// The harness set (run_harness_set.go): the harnesses a run includes and the
 	// image that carries them. Each body names the harness in `tool`.
 	reasonHarnessNotInstalled      = "harness_not_installed"      // a run-mode request includes a harness no sandbox image here carries
@@ -205,6 +212,7 @@ const (
 	reasonComputerRunnerOffline                = "computer_runner_offline"                  // the runner holding the folder is not connected, or did not answer
 	reasonComputerRunnerNoFolders              = "computer_runner_no_folders"               // the runner does not share folders (older than 0.10, or not --substrate folders)
 	reasonComputerFolderRefused                = "computer_folder_refused"                  // the runner refused that path (outside its roots, a symlink, a credential folder)
+	reasonMachineKindUnknown                   = "machine_kind_unknown"                     // machine_kind is not "container" or "linux_vm"
 	reasonInteractiveStartUnknown              = "interactive_start_unknown"                // interactive_start is not "shell" or "agent"
 	reasonToolApprovalsUnknown                 = "tool_approvals_unknown"                   // tool_approvals is not "auto" or "hold"
 	reasonToolApprovalsHoldUnsupportedAgent    = "tool_approvals_hold_unsupported_agent"    // tool_approvals=hold on an agent with no external tool-approval contract (codex-cli)
@@ -212,11 +220,25 @@ const (
 	reasonHarnessInnerWallsLooser              = "harness_inner_walls_looser"               // the policy's harness_inner_walls is looser than the walls the run's harness launches with
 	reasonHarnessInnerWallsUnmet               = "harness_inner_walls_unmet"                // the run cannot launch with the policy's harness_inner_walls on its harness and lane
 	reasonHarnessSandboxUnavailable            = "harness_sandbox_unavailable"              // harness_inner_walls.sandbox names a harness sandbox mode, which cannot start inside Wardyn's sandbox
+	reasonDesktopTransferBlocked               = "desktop_transfer_blocked"                 // the run's desktop rules block this file direction
+	reasonDesktopTransferTooLarge              = "desktop_transfer_too_large"               // the upload is over the desktop upload limit
+	reasonDesktopTransferBadRequest            = "desktop_transfer_bad_request"             // the file name is not a plain name, or the upload has no Content-Length
+	reasonDesktopTransferUnavailable           = "desktop_transfer_unavailable"             // the run declares no UI app, so it has no desktop
+	reasonDesktopTransferNotFound              = "desktop_transfer_not_found"               // no regular file of that name in the transfer folder
+	reasonDesktopTransferFailed                = "desktop_transfer_failed"                  // the in-sandbox half of a transfer failed
+	reasonDesktopRulesUnreadable               = "desktop_rules_unreadable"                 // the run's desktop rules could not be read (a failed read, or no recorded policy): the desktop socket and the Files panel refuse
 	reasonIntegrationIDRetired                 = "integration_id_retired"                   // integration_id no longer chooses a model credential; a run's model provider does
 	reasonRunKillAlreadyTerminal               = "run_kill_already_terminal"                // the run is already in a terminal state other than killed
 	reasonRunKillStateChanged                  = "run_kill_state_changed"                   // the run moved to another state between the read and the write
 	reasonRunMaxWaitInvalid                    = "run_max_wait_invalid"                     // max_wait_sec is below 1
 	reasonRunQueued                            = "run_queued"                               // the run is waiting for a slot in its pool: its end is set when it starts
+	// One-time scheduled runs (run_schedule.go): start_at on a create. Kept out of the run-mode block above,
+	// which ui/src/app/lib/run-mode-refusals.test.ts reads as the run-mode set.
+	reasonScheduledRunsOff         = "scheduled_runs_off"         // start_at sent while WARDYN_SCHEDULED_RUNS is off
+	reasonScheduledRunsUnavailable = "scheduled_runs_unavailable" // start_at on a deployment that places no runs, so no queue can hold it
+	reasonStartAtInvalid           = "start_at_invalid"           // start_at or start_time_zone is malformed, or one is sent without the other
+	reasonStartAtPast              = "start_at_past"              // start_at is not in the future
+	reasonStartAtTooFar            = "start_at_too_far"           // start_at is later than 7 days less the run's wait
 
 	// POST /runs/{id}/revive and each run's result in POST /admin/runs/restart
 	// (#1342): the run's substrate cannot replace a proxy in place
@@ -232,6 +254,7 @@ const (
 	reasonStatusNeedsRequiresView   = "status_needs_requires_view"   // status=needs requires view=user or view=admin
 	reasonInvalidEndedWithinParam   = "invalid_ended_within_param"   // ?ended_within= is not one of the closed durations
 	reasonInvalidIncludeKilledParam = "invalid_include_killed_param" // ?include_killed= is not "", "0", or "1"
+	reasonInvalidSponsoredParam     = "invalid_sponsored_param"      // ?sponsored= is not "" or "exclude"
 	reasonInvalidNoEndParam         = "invalid_no_end_param"         // ?no_end= is not "", "0", or "1"
 	reasonRunsSearchQueryTooLong    = "runs_search_query_too_long"   // ?q= exceeds the maximum search length
 	reasonInvalidLimitParam         = "invalid_limit_param"          // ?limit= does not parse as a non-negative integer
@@ -286,11 +309,19 @@ const (
 	reasonBoundaryInvalid          = "boundary_invalid"            // the boundary document has no mode, or names a knob it cannot hold, or a value that knob refuses
 	reasonBoundaryStale            = "boundary_stale"              // If-Match does not match the current boundary ETag
 	reasonBoundaryHost             = "boundary_host"               // an egress approval would admit a host the Wardyn boundary does not allow
-	reasonBoundaryHardLimitsGated  = "boundary_hard_limits_gated"  // a write into hard_limits before the boundary bounds every brokered credential path
+	reasonGrantWithheld            = "credential_withheld"         // a mint or redeem of a grant the run's profile or the Wardyn boundary now withholds
+	reasonGrantWithheldUnread      = "credential_withheld_unread"  // the run, its grants, its profile or the boundary could not be read to check the mint
 	reasonBreakGlassReasonRequired = "break_glass_reason_required" // an admin-token break-glass run without a usable reason
 
+	// /governance/approval-rules, and an approval rule's own refusals inside decide().
+	reasonApprovalRuleInvalid       = "approval_rule_invalid"        // the rule document names an unknown kind, a glob, a wildcard host, a scope other than once or run, or no repo or preset
+	reasonApprovalRuleNotFound      = "approval_rule_not_found"      // no approval rule has that name
+	reasonApprovalRuleChanged       = "approval_rule_changed"        // the rule was written after it matched, so it decides nothing
+	reasonApprovalRuleNotApplicable = "approval_rule_not_applicable" // an approval rule never decides this approval: the kind, an Azure DevOps escalation, a run no service identity created, or a match that no longer holds
+	reasonApprovalRuleHost          = "approval_rule_host"           // a rule's host is outside the Wardyn boundary in hard_limits
+
 	// PUT /governance/credential-delivery.
-	reasonCredentialDeliveryInvalid     = "credential_delivery_invalid"     // an unknown or fixed class, a mode outside the class's bounds, or require_posture without runner_resident
+	reasonCredentialDeliveryInvalid     = "credential_delivery_invalid"     // an unknown or fixed class, a mode outside the class's bounds or one the server cannot build (422), or require_posture without runner_resident
 	reasonCredentialDeliveryUnavailable = "credential_delivery_unavailable" // the store keeps no delivery policy (not the Postgres store)
 	reasonCredentialDeliveryStale       = "credential_delivery_stale"       // If-Match does not match the current policy ETag
 
@@ -301,21 +332,22 @@ const (
 	reasonEgressRedirectNotFound        = "egress_redirect_not_found"         // no egress_redirects entry matches `from`
 
 	// PUT/POST /governance/{profiles,assignments} and the preview routes.
-	reasonGovernanceProfileRequestInvalid = "governance_profile_request_invalid" // the profile body did not decode
-	reasonGovernanceCeilingInvalid        = "governance_ceiling_invalid"         // the ceiling names a grant outside the deployment's own EligibleGrants
-	reasonGovernanceProfileNameConflict   = "governance_profile_name_conflict"   // a profile by that name already exists
-	reasonGovernanceProfileInUse          = "governance_profile_in_use"          // the profile is still assigned; delete its assignments first
-	reasonGovernanceAssignmentInvalid     = "governance_assignment_invalid"      // the assignment fails validation
+	reasonGovernanceUnitRequestInvalid = "governance_unit_request_invalid" // the profile body did not decode
+	reasonGovernanceCeilingInvalid     = "governance_ceiling_invalid"      // the ceiling names a grant outside the deployment's own EligibleGrants, or one pairing twice
+	reasonGovernanceUnitNameConflict   = "governance_unit_name_conflict"   // a profile by that name already exists
+	reasonGovernanceUnitInUse          = "governance_unit_in_use"          // the profile is still assigned; delete its assignments first
+	reasonGovernanceMembershipInvalid  = "governance_membership_invalid"   // the assignment fails validation
 	// Composed profiles (migration 0125). The first three are write refusals. The fourth is the SAME
 	// string as authz's registered reason of that name: a 409 at a profile write that would leave a
 	// descendant with a policy nothing satisfies, and the 403 at every launch and live door when a
 	// composition cannot be applied (see adHocReasonLiterals["reasons.go:governance_overlay_unsatisfiable"]
 	// in refusal_test.go, and documentedDuplicateReasonValues).
 	reasonGovernanceOverlayInvalid       = "governance_overlay_invalid"       // the overlay names something its base does not permit, or does not decode
-	reasonGovernanceProfileCycle         = "governance_profile_cycle"         // the write would make a profile its own base
-	reasonGovernanceProfileDepth         = "governance_profile_depth"         // the write would put a profile more than three deep
+	reasonGovernanceUnitCycle            = "governance_unit_cycle"            // the write would make a profile its own base
+	reasonGovernanceUnitDepth            = "governance_unit_depth"            // the write would put a unit deeper than the maximum unit depth
 	reasonGovernanceOverlayUnsatisfiable = "governance_overlay_unsatisfiable" // nothing satisfies a profile and its base together
-	// reasonGovernancePreviewClaimsInvalid is shared by GET /governance/preview
+	reasonGovernanceMountKeepUnknown     = "governance_mount_keep_unknown"    // a mount sent back with a withheld source names a target with no stored host path
+	// reasonGovernancePreviewClaimsInvalid is shared by GET /governance/check
 	// and the user-drive naming preview (user_drives_preview.go): both feed the
 	// same normalizeGovernancePreviewClaims validator over user_subjects/groups.
 	reasonGovernancePreviewClaimsInvalid = "governance_preview_claims_invalid"
@@ -462,7 +494,7 @@ const (
 	reasonUserDriveReclaimUnsupported      = "user_drive_reclaim_unsupported"       // this deployment's runner cannot reclaim drive storage
 	reasonUserDriveReclaimConflict         = "user_drive_reclaim_conflict"          // the reclaim was refused at the storage layer
 	reasonUserDrivePreviewNoClaims         = "user_drive_preview_no_claims"         // the naming preview named no user_subjects
-	reasonUserDriveDeniedByProfile         = "user_drive_denied_by_profile"         // the caller's governance profile shuts the drive door
+	reasonUserDriveDeniedByUnit            = "user_drive_denied_by_unit"            // the caller's governance profile shuts the drive door
 
 	reasonUserDriveCeilingUnavailable     = "user_drive_ceiling_unavailable"       // the drive write's deployment ceiling could not be answered: the drive-size ceiling (site config) could not be read, or a host_path share did not answer in time (503)
 	reasonUserDriveRehomeListUnavailable  = "user_drive_rehome_list_unavailable"   // the drive list could not be read to run the re-home guard or the host_path nesting check (500)
@@ -524,7 +556,7 @@ const (
 const (
 	reasonMemberDriveRequiresPerson    = "member_drive_requires_person"    // not a person's session or own token
 	reasonMemberDrivesDisabled         = "member_drives_disabled"          // the organisation switch is off
-	reasonMemberDrivesDeniedByProfile  = "member_drives_denied_by_profile" // the caller's governance profile shuts creating
+	reasonMemberDrivesDeniedByUnit     = "member_drives_denied_by_unit"    // the caller's governance profile shuts creating
 	reasonMemberDriveLimitReached      = "member_drive_limit_reached"      // the person already holds the most drives allowed
 	reasonMemberDriveUnsupported       = "member_drive_unsupported"        // this deployment has no managed backend, or no drive size
 	reasonMemberDriveDeleteUnavailable = "member_drive_delete_unavailable" // the substrate could not delete what it would create
@@ -535,6 +567,7 @@ const (
 	reasonMemberDriveDeleteFailed      = "member_drive_delete_failed"      // the substrate failed; nothing was removed
 	reasonMemberDriveRateLimited       = "member_drive_rate_limited"       // too many creates and deletes in a minute
 	reasonUserDriveMemberOwned         = "user_drive_member_owned"         // an admin drive route named a person's drive
+	reasonKeepWorkFolderDisabled       = "keep_work_folder_disabled"       // member drives or the keep_main_drive switch is off
 )
 
 // git_pat narrowing (runs_dispatch_pat_scope.go): a run is refused when a
@@ -584,6 +617,10 @@ const (
 	reasonNodeRecordHumanOnly   = "node_record_human_only"  // the admin token, an API token, or local mode, which cannot show who the people were
 )
 
+// A run refused at create because it sets a run proxy setting its runner's wardyn-runnerd does not
+// carry (sandboxCreateFailure, remote.ProxySettingError): the run.create failure row's reason.
+const reasonRunnerProxySetting = "runner_proxy_setting_unsupported"
+
 // A request with no session and no bearer on a deployment with single sign-on and no admin token
 // (sessionRejectionResponse): the caller has to sign in.
 const reasonSignInRequired = "sign_in_required"
@@ -619,3 +656,58 @@ const (
 // organisation instead. A transport's answer, not a refusal; errorBody.Detail says why. Declared here
 // because reasons_routes.go is at scripts/check-file-size.sh's limit.
 const reasonAttachLocalUnavailable = "attach_local_unavailable"
+
+// The per-run read and action routes under /runs/{id} below moved here from reasons_routes.go,
+// which had reached scripts/check-file-size.sh's limit. Same closed set, same guards.
+
+// PATCH /runs/{id}/title (run_title.go).
+const (
+	reasonRunTitleStoreUnavailable = "run_title_store_unavailable" // this store cannot rename a run
+)
+
+// GET /runs/{id}/resources and GET /runs/{id}/files (run_resources.go,
+// run_files.go): the two widgets read the identical run-state facts, so they
+// share a reason per cause rather than each inventing its own synonym.
+const (
+	reasonRunInspectNoRunner              = "run_inspect_no_runner"               // this deployment configures no runner at all
+	reasonRunInspectTerminal              = "run_inspect_terminal"                // the run has finished; its sandbox is gone
+	reasonRunInspectNoSandbox             = "run_inspect_no_sandbox"              // the run never dispatched (or recorded no sandbox ref)
+	reasonRunInspectPaused                = "run_inspect_paused"                  // the run is paused
+	reasonRunInspectAgentStopped          = "run_inspect_agent_stopped"           // the run is kept with its agent stopped; there is no running sandbox to read
+	reasonRunInspectExecStreamUnsupported = "run_inspect_exec_stream_unsupported" // the runner does not support exec streaming
+	reasonRunResourcesReadFailed          = "run_resources_read_failed"           // the sandbox resource usage script failed
+	reasonRunFilesNoExecSession           = "run_files_no_exec_session"           // the runner returned no exec session
+)
+
+// GET /runs/{id}/output (run_output.go).
+const (
+	reasonRunOutputTailInvalid = "run_output_tail_invalid" // ?tail= is not a positive number of bytes
+	reasonRunOutputInteractive = "run_output_interactive"  // the run is interactive and has no pane snapshot to serve
+	reasonRunOutputOff         = "run_output_off"          // WARDYN_EXEC_OUTPUT_TAIL=off
+	reasonRunOutputNotKept     = "run_output_not_kept"     // no output is kept for the run (one never captured, or one still being captured)
+	reasonRunOutputExpired     = "run_output_expired"      // the tail outlived WARDYN_EXEC_OUTPUT_TAIL_TTL, or the run ended past WARDYN_RUN_OUTPUT_RETENTION_DAYS
+	reasonRunOutputErased      = "run_output_erased"       // the run's output was erased (404)
+	reasonRunOutputNotCaptured = "run_output_not_captured" // the runner cannot capture a run's output (Kubernetes under the recorder); the recording has it
+)
+
+// GET /runs/{id}/sign-in (run_sign_in.go).
+const (
+	reasonRunSignInNotAWS     = "run_sign_in_not_aws"    // the run is not an AWS sign-in run
+	reasonRunSignInUnreadable = "run_sign_in_unreadable" // the pane, or the capture's audit row, could not be read in time
+)
+
+// POST /runs/{id}/computer-folder/bring-back (run_computer_folder_bring_back.go).
+const (
+	reasonComputerFolderNone             = "computer_folder_none"              // the run has no folder from the person's computer
+	reasonComputerFolderCopyInOnly       = "computer_folder_copy_in_only"      // the folder is Copy in only: nothing comes back
+	reasonComputerFolderNotSynced        = "computer_folder_not_synced"        // the folder's first sync never landed
+	reasonComputerFolderNotRunning       = "computer_folder_not_running"       // the run is not RUNNING: a kill or another end got there first
+	reasonComputerFolderPaused           = "computer_folder_paused"            // the run is paused: resuming it for the pass would let its agent write
+	reasonComputerFolderAgentUnstoppable = "computer_folder_agent_unstoppable" // the sandbox's PID 1 is not Wardyn's idle main process, so the agent cannot be stopped first
+)
+
+// POST /runs/{id}/resume (run_pause.go).
+const (
+	reasonRunResumeNotRunning = "run_resume_not_running" // the run is not in a resumable state
+	reasonRunResumeFailed     = "run_resume_failed"      // thawForExec failed
+)

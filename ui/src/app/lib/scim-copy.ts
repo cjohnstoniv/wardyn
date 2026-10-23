@@ -15,7 +15,7 @@ export const SCIM_LIST_CAP = 200;
 
 export const SCIM = {
   TITLE: "SCIM provisioning",
-  SUMMARY_ON: (deactivated: number | string, unfinished: number) => `${deactivated} deactivated · ${unfinished} unfinished`,
+  SUMMARY_ON: (deactivated: number | string, unfinished: number | string) => `${deactivated} deactivated · ${unfinished} unfinished`,
   SUMMARY_OFF: "Not set up",
   LEAD: "Your identity provider tells Wardyn when someone leaves or changes groups. Wardyn then cuts their sessions, tokens, SSH keys and runs, and erases their stored credentials after the purge delay.",
   OFF_BODY: "Not set up. Someone removed in your identity provider keeps their sessions, tokens and runs here until an admin revokes them.",

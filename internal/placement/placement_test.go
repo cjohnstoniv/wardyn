@@ -330,3 +330,88 @@ func pathExists(t reflect.Type, path string) bool {
 	}
 	return true
 }
+
+// A write-time check on the modes a policy sets: every class, and every trust class's override, must be
+// one the engine can build, unless the stored document already holds that very row. A mode outside
+// AllowedModes is Validate's refusal, not this one.
+func TestDeliveryPolicyCheckBuildable(t *testing.T) {
+	var none DeliveryPolicy
+	ok := DeliveryPolicy{
+		Classes: map[string]ClassPolicy{ClassADOMintedPAT: {Mode: ModeRunnerResident}, ClassAPIKey: {Mode: ModeViaOrg}, ClassBedrockBearer: {Mode: ModeRefuse}},
+		ByTrust: map[types.RunnerTrustClass]TrustPolicy{types.RunnerTrustPersonal: {Classes: map[string]ClassPolicy{ClassEnvSecret: {Mode: ModeRunnerResident}}}},
+	}
+	if err := ok.CheckBuildable(none); err != nil {
+		t.Errorf("buildable policy: %v", err)
+	}
+	for name, p := range map[string]DeliveryPolicy{
+		"class default": {Classes: map[string]ClassPolicy{ClassAPIKey: {Mode: ModeRunnerResident}}},
+		"trust override": {ByTrust: map[types.RunnerTrustClass]TrustPolicy{
+			types.RunnerTrustManagedDevice: {Classes: map[string]ClassPolicy{ClassBedrockRoleCreds: {Mode: ModeRunnerResident}}}}},
+	} {
+		err := p.CheckBuildable(none)
+		if !errors.Is(err, ErrUnbuildablePolicy) || strings.Contains(err.Error(), "placement:") {
+			t.Errorf("%s: %v, want ErrUnbuildablePolicy and a sentence without the package sentinel", name, err)
+		}
+	}
+
+	// A row the stored document already holds is let through; a changed row is judged.
+	stored := DeliveryPolicy{
+		Classes: map[string]ClassPolicy{ClassGitPATBroker: {Mode: ModeRunnerResident}},
+		ByTrust: map[types.RunnerTrustClass]TrustPolicy{types.RunnerTrustPersonal: {Classes: map[string]ClassPolicy{ClassBedrockRoleCreds: {Mode: ModeRunnerResident}}}},
+	}
+	same := DeliveryPolicy{Classes: map[string]ClassPolicy{ClassGitPATBroker: {Mode: ModeRunnerResident}, ClassAPIKey: {Mode: ModeViaOrg}}, ByTrust: stored.ByTrust}
+	if err := same.CheckBuildable(stored); err != nil {
+		t.Errorf("unchanged stored rows beside a buildable change: %v", err)
+	}
+	for name, p := range map[string]DeliveryPolicy{
+		"another unbuildable mode": {Classes: map[string]ClassPolicy{ClassGitPATBroker: {Mode: ModeViaOrg}}},
+		"posture added":            {Classes: map[string]ClassPolicy{ClassGitPATBroker: {Mode: ModeRunnerResident, RequirePosture: &PostureRequirement{MDMManaged: true}}}},
+		"new unbuildable override": {ByTrust: map[types.RunnerTrustClass]TrustPolicy{types.RunnerTrustManagedDevice: {Classes: map[string]ClassPolicy{ClassBedrockRoleCreds: {Mode: ModeRunnerResident}}}}},
+	} {
+		if err := p.CheckBuildable(stored); !errors.Is(err, ErrUnbuildablePolicy) {
+			t.Errorf("%s: %v, want ErrUnbuildablePolicy", name, err)
+		}
+	}
+}
+
+// Unbuildable lists the stored rows CheckBuildable would refuse as new ones, with the same predicate: for
+// every class and every mode, a one-row policy is listed exactly when CheckBuildable refuses it.
+func TestDeliveryPolicyUnbuildableSharesThePredicate(t *testing.T) {
+	var none DeliveryPolicy
+	if got := none.Unbuildable(); got != nil {
+		t.Errorf("empty policy: %v, want none", got)
+	}
+	for _, class := range DeliveryClasses() {
+		for _, m := range []Mode{ModeOwn, ModeViaOrg, ModeRunnerResident, ModeRefuse} {
+			for name, p := range map[string]DeliveryPolicy{
+				"class": {Classes: map[string]ClassPolicy{class: {Mode: m}}},
+				"trust": {ByTrust: map[types.RunnerTrustClass]TrustPolicy{types.RunnerTrustPersonal: {Classes: map[string]ClassPolicy{class: {Mode: m}}}}},
+			} {
+				listed := len(p.Unbuildable()) == 1
+				refused := errors.Is(p.CheckBuildable(none), ErrUnbuildablePolicy)
+				if listed != refused || listed == Buildable(class, m) {
+					t.Errorf("%s %s as %s: listed=%v refused=%v buildable=%v", name, class, m, listed, refused, Buildable(class, m))
+				}
+			}
+		}
+	}
+}
+
+func TestDeliveryPolicyUnbuildableRows(t *testing.T) {
+	p := DeliveryPolicy{
+		Classes: map[string]ClassPolicy{ClassGitPATBroker: {Mode: ModeRunnerResident}, ClassAPIKey: {Mode: ModeViaOrg}, ClassAWSSSOBearer: {Mode: ModeViaOrg}},
+		ByTrust: map[types.RunnerTrustClass]TrustPolicy{types.RunnerTrustPersonal: {Classes: map[string]ClassPolicy{ClassBedrockRoleCreds: {Mode: ModeRunnerResident}, ClassEnvSecret: {Mode: ModeRunnerResident}}}},
+	}
+	got := p.Unbuildable()
+	want := []UnbuildableRow{
+		{Class: ClassAWSSSOBearer, Mode: ModeViaOrg, BuildableModes: []Mode{ModeRefuse}},
+		{Class: ClassGitPATBroker, Mode: ModeRunnerResident, BuildableModes: []Mode{ModeRefuse}},
+		{Class: ClassBedrockRoleCreds, TrustClass: types.RunnerTrustPersonal, Mode: ModeRunnerResident, BuildableModes: []Mode{ModeRefuse}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Unbuildable = %+v, want %+v", got, want)
+	}
+	if s := got[2].String(); s != `class "by_trust.personal.bedrock_role_credentials" cannot be delivered as "runner_resident" yet (the server can build: refuse)` {
+		t.Errorf("sentence = %s", s)
+	}
+}

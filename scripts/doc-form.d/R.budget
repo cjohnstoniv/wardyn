@@ -14,7 +14,20 @@
 # lane fragments merged: +61: PRERELEASE and Latest in the publish step, the push-before-checks order of prepare, and wait/publish refusing an unchecked head.
 # RELEASING.md 6004 = ours 5943 + theirs 6001 - base 5940 at the 0.10 W2 merge of CI-D onto the train.
 # RELEASING.md 6005 = ours 6004 + theirs 5941 - base 5940 at the 0.10 W2 merge of FLAKE-D onto the train.
-RELEASING.md=6026 share=35 # +21 (0.10 CI-8): go-lint and the six stop-early jobs join the job list, measured. +1 (0.10 FLAKE-D): the go-gate-tools job joins the job list. +17: the GPL offer regenerated in the release PR (#2192). +15: a resume after the release commit skips MERGE (0.9.4 L9, #2199). +1: the licence bundle among the release assets (0.9.4 L9, #2472). +31: the two Docker Hub Actions secrets, one line each. +7: the runner-units job and the runner release assets (#1968). +249: nightly scope=candidate, dispatch before the PR, and promote at the tag with its rehearsal.
+# lane fragments merged: +1 (0.10 Linux VM, VM-A): the vm job in the job list.
+# RELEASING.md 6006 = ours 6005 + theirs 5941 - base 5940 at the 0.10 W4c merge of VM-A onto the train.
+# lane fragments merged: +11 (0.10.0 ATT-INSTALL, #3319): the CLI installers among the release assets.
+# RELEASING.md 6017 = ours 6006 + theirs 6016 - base 6005 at the 0.10 W4c merge of ATT-INSTALL onto the train.
+# lane fragments merged: +79 (CI-FP), measured: the forward-port check step and its allow file.
+# RELEASING.md 6096 = ours 6017 + theirs 6084 - base 6005 at the 0.10 W4c merge of CI-FP onto the train.
+# RELEASING.md 6006 = ours 5941 + theirs 6005 - base 5940 at the 0.10 W2 merge of CTL-A onto DSK-A.
+# RELEASING.md 6096, measured, at the 0.10 W4c merge of DSK-A 46d21862b onto the train: two merge bases (CTL-A 99d68a80a and VM-C~1 4b06ac1e5), so no single base to subtract.
+# 0.10 CTL-C (#2972): RELEASING.md 6033 adds 28 over 6005, measured: the agent-novnc-signin image: its trivy context, its verification row and its PUBLIC-package owner step.
+# RELEASING.md 6124 = ours 6096 + theirs 6033 - base 6005 at the 0.10 W4c merge of CTL-C 6de42c110 onto the train.
+# RELEASING.md 6145 = ours 6124 + theirs 6026 - base 6005 at the 0.10 W4c merge of origin/main ba16e8564 (W4b) onto the train.
+# RELEASING.md 6145, measured at the 0.10 W4c merge of OFFLINE-VM a359ef27b onto the train (two merge bases, VM-A 47c283334 and main 3cea1aa73, so no single base to subtract).
+# RELEASING.md 6155 = ours 6145 + theirs 6036 - base 6026 at the 0.10 W4c merge of origin/main 7e33976ca onto the train.
+RELEASING.md=6155 share=35 # +1 (0.10 CI-9): the image-scope job joins the job list; 6027 = ours 6026 + theirs 6006 - base 6005; +9 (0.10 CLEANUP): the release-patch marker is per head, per clone, so 6036 = 6027 + 6014 - 6005. +21 (0.10 CI-8): go-lint and the six stop-early jobs join the job list, measured. +1 (0.10 FLAKE-D): the go-gate-tools job joins the job list. +17: the GPL offer regenerated in the release PR (#2192). +15: a resume after the release commit skips MERGE (0.9.4 L9, #2199). +1: the licence bundle among the release assets (0.9.4 L9, #2472). +31: the two Docker Hub Actions secrets, one line each. +7: the runner-units job and the runner release assets (#1968). +249: nightly scope=candidate, dispatch before the PR, and promote at the tag with its rehearsal.
 # ROADMAP.md 5870 measured after merging G-chores-a.
 # ROADMAP.md 5988 adds 118 over 5870: 0.9 final docs pass, measured: the New Run line of the 0.9 scope and the 0.10 scope table.
 # ROADMAP.md 6133 adds 33 over 6100: the v0.9.3-rc.1 Shipped row the release commit adds.
@@ -25,4 +38,5 @@ RELEASING.md=6026 share=35 # +21 (0.10 CI-8): go-lint and the six stop-early job
 ROADMAP.md=6386 share=35 # +25 over 6361: the v0.9.6 Shipped row; 6361 was +21 for the v0.9.2 Shipped row (+47 before it for v0.9.1), which every release commit adds
 # docs/DEMO-SCRIPT.md 6884 adds 17 over 6867: 0.9 final docs pass 2, measured: the demo script no longer cites the removed wizard's code.
 docs/DEMO-SCRIPT.md=6890 share=35
-docs/LIVE-TESTS.md=2518 share=35
+# docs/LIVE-TESTS.md 2517, measured at the 0.10 W4c merge of OFFLINE-VM a359ef27b onto the train (two merge bases, VM-A 47c283334 and main 3cea1aa73, so no single base to subtract).
+docs/LIVE-TESTS.md=2517 share=35

@@ -18,130 +18,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// dispatchParams carries the per-run inputs the create / workspace handlers
-// thread into dispatchRun. It replaces an 11–12-arg positional signature whose
-// two adjacent map[string]string fields — GitPATGrants and SSHGrants — were a
-// silent swap hazard: a transposed pair still compiled and ran, wiring the
-// wrong credential family onto every host. Named fields make each call site
-// self-documenting; the zero value is the "none" case per field.
-type dispatchParams struct {
-	TrustedOutput      bool                 // server-authored probe provenance; never a public request field
-	RunToken           string               // proxy-verifiable run token (never a usable in-sandbox secret)
-	Image              string               // resolved sandbox OCI image (convention or built devcontainer)
-	Policy             types.RunPolicySpec  // egress/resource policy (dispatchRun mutates a local copy)
-	FirstGitHubGrantID *uuid.UUID           // surfaced as WARDYN_GITHUB_GRANT_ID; nil when no GitHub grant
-	GitGrants          map[string]uuid.UUID // git-broker allowlist {"<org>/<repo>": grant_id}; proxy-side only
-	// PATBroker reports whether the never-resident git_pat lane is on: the PAT is
-	// minted PROXY-SIDE and no grant id reaches the sandbox env.
-	//
-	// Set by dispatchRun, never by a caller — it overwrites whatever arrives here
-	// from Config.DisableGitPATBroker (WARDYN_GIT_PAT_BROKER), because the
-	// posture is a DEPLOYMENT-wide operator escape hatch rather than a per-run
-	// choice. It lives on the struct only because applyDispatchModeEnv takes the
-	// whole parameter object; a value a lane sets is ignored.
-	//
-	// That overwrite IS the fix: PATBroker must never be a per-lane opt-in whose
-	// default silently reverts to the resident WARDYN_GIT_PAT_GRANTS posture
-	// (docs/ENV.md, docs/POLICIES.md: only `off` restores it). A per-lane opt-in
-	// that defaults to the weaker posture is a control whose default is "off by
-	// omission", and the omission is invisible.
-	PATBroker        bool
-	PATAPI           bool                    // set by dispatchRun, never a caller: a git_pat grant sets api, so the run needs the MITM CA
-	GitPATGrants     map[string]string       // {host: grant_id} for non-GitHub PAT hosts
-	SSHGrants        map[string]string       // {host: grant_id} for SSH clone hosts
-	Injections       []runner.InjectionGrant // proxy-side credential injections
-	Interactive      bool                    // idle box for `wardyn attach` (no agent exec, no completion watcher)
-	TaskMode         string                  // "exec" for the BYOA/CI plain-command lane; "" for the agent harness
-	InteractiveStart string                  // "agent" opens the attach shell in the image's agent CLI; "" / "shell" = a bare shell. Interactive runs only.
-	SeedAutoTools    bool                    // true lets an interactive run's boot seed use tools before attach (--dangerously-skip-permissions for that pre-attach span). Interactive + agent-started + non-empty seed only.
-	ToolApprovals    string                  // "hold" routes an AUTONOMOUS run's tool calls to a Wardyn approval instead of running unsupervised. "" / "auto" = today's skip-permissions. Non-interactive runs only.
-	// ApprovalExpiryAfter mirrors Config.ApprovalExpiryAfter (dispatchRun sets
-	// it from s.cfg) — the SAME ceiling the approval-expiry sweeper actually
-	// expires a PENDING approval at. Carried onto the sandbox env only when
-	// ToolApprovals=="hold" (WARDYN_APPROVAL_EXPIRY_AFTER, applyDispatchModeEnv)
-	// so wardyn-toolgate's -deadline default and agent-run's MCP_TOOL_TIMEOUT
-	// track the real ceiling instead of their own hardcoded literal (RL-1).
-	ApprovalExpiryAfter time.Duration
-	ExtraEnv            map[string]string // extra NON-SECRET sandbox env: the pre-login WARDYN_AWS_SSO_CONFIG_B64 for an AWS harness login, the site-config probe's own settings
-	// Toolchains is the requirements-driven subset of the toolchain-fidelity
-	// env this run needs (runToolchainNeeds over its workspaces' profiles).
-	// nil = the run has NO workspace context (ad-hoc/BYO/scan/login/composer
-	// runs): nothing was scanned and nothing declared, so dispatch keeps the
-	// full accommodation set — "unknown" must not break the proven CI and
-	// ad-hoc lanes. Non-nil = only what the scans actually detected lands.
-	Toolchains *toolchainNeeds
-	// UserMounts, when its Roots are non-nil, marks this as a run against a
-	// MEMBER-OWNED workspace and carries the operator/MDM-set roots that member's
-	// local_dir binds must resolve inside plus which sources those binds are
-	// (userMountPosture, workspace_refs.go). Roots ride straight onto
-	// SandboxSpec.UserMountRoots and Sources stamp runner.Mount.MemberAuthored,
-	// so the driver re-checks every MEMBER-authored bind against the canonicalized
-	// real path as late as this process can. The ZERO value is every operator run
-	// — the driver then takes exactly today's path.
-	UserMounts userMountPosture
-	// EphemeralDirs are the in-sandbox scratch-directory targets this run's
-	// ephemeral workspace source(s) declare — no host mount, no clone; the
-	// sandbox just needs the directory to exist. Surfaced as
-	// WARDYN_EPHEMERAL_DIRS (comma-separated); nil/empty adds nothing.
-	EphemeralDirs []string
-	// The acting principal's ceiling is deliberately NOT a field here: it is a
-	// required positional argument of dispatchRun/dispatchAndSettle, because an
-	// optional field defaulting to "no ceiling" made enforcement opt-in per call
-	// site and three of five lanes had opted out. See dispatchCeiling
-	// (runs_dispatch_ceiling.go).
-	//
-	// Drives are the acting principal's drives, resolved and narrowed at create
-	// time by stepDrive (migrations 0054, 0169). EMPTY for every run that
-	// did not ask for one — which is every run on a deployment that has
-	// allocated no drives, and every scan/probe/harness lane, none of which
-	// carries a member principal to resolve a drive for.
-	//
-	// A create-time snapshot by necessity, not by preference: resolution keys on
-	// capabilitySubjects (the caller's OIDC sub/email/groups) and the run row
-	// carries only CreatedBy, so there is nothing here to re-resolve from —
-	// exactly the constraint dispatchCeiling is a snapshot for. dispatchRun
-	// runs inline in the create request, so the snapshot has no staleness window
-	// to be stale in. See user_drives_run.go.
-	Drives []types.DriveMount
-	// MemberDrives are the Drives that are people's own, id to owner, which dispatch re-reads (memberDrivesStillThere).
-	MemberDrives map[uuid.UUID]string
-	// MainDrive is the main drive create's fold decided (stepMainDrive): its size and whether it
-	// is soft. NIL for every lane that has no fold decision (scans, record, verify, logins, probes).
-	MainDrive *mainDriveDecision
-	// Components is the dispatch half of the run's components, from the gate's
-	// decision at create (runs_dispatch_components.go). Zero for every other lane.
-	Components componentDispatch
-	// PolicyOverridden marks a run whose person edited the New Run cards: the
-	// proxy's refusal then names the policy as changed for this run
-	// (policyref.Ref.Overridden).
-	PolicyOverridden bool
-	// Provenance is which layer set each value of the run's policy as create
-	// resolved it, recorded on run.policy.resolve. Nil for every lane with no
-	// create resolution (scans, record, verify, logins, probes).
-	Provenance knobProvenance
-	// PushRuleSets are the push content rules per SCM entry the run brings
-	// (pushRuleSetsFor), the product after the ceiling. When set, the proxy
-	// carries them INSTEAD of the policy's run-wide push_rules.
-	PushRuleSets []types.PushRuleSet
-	// HarnessToolRules are the run's tool rules per included harness
-	// (applyHarnessToolRules). When set, the proxy carries them, and a credential
-	// per harness, INSTEAD of the policy's run-wide tool_rules.
-	HarnessToolRules []types.HarnessToolRules
-	// Harnesses are the run's run_harnesses rows, nil without the harness set;
-	// each that names a provider gets its own model credential lane.
-	Harnesses []types.RunHarness
-	// ADOLaneRepo is the run's own repository as the per-person Azure DevOps
-	// lane may serve it. Set only by finishCreateRunLaunch (the create and
-	// pool-queue doors) from the request the fold graded; a server-authored lane
-	// leaves it empty and resolves from WorkspaceRepos alone.
-	ADOLaneRepo string
-	// RedirectProbe is the stored egress redirect row the redirect Test probes,
-	// nil for every other run. Set only by handleTestSiteConfigRedirect: dispatch
-	// plans that one row's token as for a run that reaches its public host, so
-	// the probe presents the token proxy-side exactly as a run does.
-	RedirectProbe *types.EgressRedirect
-}
-
 // dispatchRun launches the sandbox via the runner and advances run state. On any
 // failure it marks the run FAILED and audits — but never returns the failure to
 // the create caller (the run row exists and is queryable). p.RunToken is passed
@@ -170,10 +46,11 @@ type dispatchParams struct {
 // Phase order is the contract: the policy phases below narrow `policy` in
 // sequence, and confineGitBrokerEgress runs LAST of the phases that touch the
 // ALLOWLIST so nothing above it can re-add a broker-managed host;
-// reassertCeilingDenies then runs after it (it only adds denies and only
+// the final seal then meets the result with the outer layers, and
+// reassertCeilingDenies runs after the seal (it only adds denies and only
 // removes credentials, so it cannot un-confine anything, and it has to sit
-// below every WIDENING phase — see its own ordering argument), and the final
-// seal after both meets the result with the outer layers. The ProxyConfig
+// below every WIDENING phase — see its own ordering argument), withholding
+// every credential the ceiling or a sealed layer walls off. The ProxyConfig
 // snapshot then captures that final policy, and the run.policy.resolve audit
 // event discloses it. Keep new phases inside this sequence, in the right place
 // — a phase hoisted into a caller silently loses the ordering guarantee.
@@ -430,7 +307,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 
 	// Governance ceiling re-assertion: union the acting principal's assigned
 	// profile's denies into the policy, drop every injection rule and BROKERED
-	// credential lane that reaches a denied host. Placed here, after
+	// credential lane that reaches a denied host (and, after the seal below, one
+	// the boundary withholds). Placed after
 	// confineGitBrokerEgress and after every widening phase above, because a
 	// create-time deny is defeated by those widenings — the artifact-redirect
 	// phase adds corp hosts AND authors token injections for them mid-dispatch.
@@ -449,11 +327,16 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	s.recordRunDiskCap(ctx, run.ID, policy.Resources)
 	// Record the reservation the driver will apply (best-effort, like the disk cap above).
 	s.recordRunSizing(ctx, run, resourceLimitsToRunner(policy.Resources), len(plan.azure.gates) > 0)
-	s.reassertCeilingDenies(ctx, run, &policy, &injections, ceiling, &p, sandboxEnv, &llm, &plan.bedrockMITMHosts, &p.Components.MITMHosts)
+	// The final seal, after every phase that adds a host: nothing below may widen
+	// policy (run_policy_seal.go). The ceiling's re-assertion follows it and reads
+	// the layers it sealed against, so a credential for a host the Wardyn boundary
+	// denies or does not allow is withheld as one the profile denies is (#3238).
+	layers := s.sealRunPolicy(ctx, run, &policy, p.Provenance)
+	signsBedrock := llm.signsBedrock()
+	grantRows = s.reassertCeilingDenies(ctx, run, &policy, &injections, ceiling, layers, grantRows, &p, sandboxEnv, &llm, &plan.bedrockMITMHosts, &p.Components.MITMHosts)
+	plan.withdrawSigV4(signsBedrock, llm)
 	azureARM := plan.azureCLI.closeWithheld(&policy, injections) // the door, decided once; one the ceiling withheld takes its hosts with it
-	// The final seal, after every phase that adds a host and after the ceiling's
-	// re-assertion: nothing below may widen policy (run_policy_seal.go).
-	s.sealRunPolicy(ctx, run, &policy, p.Provenance)
+	kubeAPI := plan.kubectlCLI.closeWithheld(&policy, injections)
 
 	// Host bind mounts (policy WorkspaceMounts + the host-mode Bedrock ~/.aws
 	// read-only mount) — operator-authored, never agent-chosen; see buildRunMounts.
@@ -485,7 +368,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// started harness's plaintext as a file only its own launch reads, never env.
 	// MCP servers: their credentials move to the broker and each harness's
 	// token goes into its own configuration (run_mcp.go).
-	mcp := dispatchMCP(p.Components.MCP, &injections, proxyURL, p.Interactive, sandboxEnv)
+	mcp := dispatchMCP(p.Components.MCP, withholding{deny: ceiling.deny, layers: layers}, &injections, proxyURL, p.Interactive, sandboxEnv)
 	harnessCreds, credFiles, merr := s.holdLaneHarnessCredentials(ctx, run, p)
 	if merr != nil {
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the run's tool-approval credential could not be made")
@@ -494,6 +377,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// Last of the env writers' credential work, after every injection above is
 	// authored, so its one-credential-per-host check sees them all.
 	placeholderMITM := s.placeEnvSecrets(ctx, run, policy, p, grantRows, secretEnvKeys, sandboxEnv, &injections)
+	resident = s.placeResidentEnvSecrets(ctx, run, policy, p, sandboxEnv, &injections, resident)
 	secretEnv := splitSecretEnv(sandboxEnv, dispatchSecretEnvKeys(secretEnvKeys, llm))
 
 	resources := resourceLimitsToRunner(policy.Resources)
@@ -514,10 +398,18 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// (the proxy refuses both together); the audited envelope below keeps it.
 	proxyPolicy := sidecarPolicy(policy, p)
 
+	// Desktop sign-ins (run_desktop_signin.go): the sign-in image, its store
+	// and the proxy's signin_listen key, all or none. With the knob off, or on
+	// a runner that cannot run a sign-in, the run gets the default image and
+	// no key, which an older proxy would refuse.
+	signins, image := s.desktopSigninDispatch(ctx, run, policy, p.Image, p.SigninImageUngranted)
+	p.Image = image
+
 	spec := runner.SandboxSpec{
 		RunID:            run.ID,
 		Image:            p.Image,
 		ConfinementClass: run.ConfinementClass,
+		MachineKind:      run.MachineKind,
 		Env:              sandboxEnv,
 		// The credential half (SandboxSpec.SecretEnv states the driver
 		// obligations). Nil for a run with no env_secret grant and no resident
@@ -588,6 +480,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// The re-signed AWS lane's grant (runs_dispatch_aws_sigv4.go): nil while
 			// WARDYN_AWS_SIGV4_AT_PROXY is off and on every lane it does not re-sign.
 			AWSSigV4: plan.awsSigV4,
+			// The kubectl door's grant (cli_kubectl.go), on the same terms.
+			KubeAPI: kubeAPI,
 			// The azure_foundry lane's route gate (provider_azure.go), and the hosts inspected as a model host without being a
 			// brokered upstream: that lane's endpoint and a Claude subscription's route-through host. Empty on every other run.
 			AzureGates:      plan.azure.gates,
@@ -620,6 +514,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// proxy refuses the key, and must not refuse every task run.
 			Unattended:         !p.Interactive && pushReviewRules(policy, p.PushRuleSets),
 			ScrubResponses:     s.cfg.ScrubProxyResponses,
+			CanonicalPushRepos: s.cfg.CanonicalPushRepos,
 			PushRuleSets:       p.PushRuleSets,
 			PushRuleBase:       pushRuleBase(policy, p.PushRuleSets),
 			HarnessToolRules:   p.HarnessToolRules,
@@ -631,7 +526,11 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			Attribution: s.runAttribution(ctx, run, siteCfg, p.PolicyOverridden),
 			// WARDYN_EGRESS_PORT_RULE, "" when off: an older proxy refuses the key.
 			PortRule: s.cfg.EgressPortRule,
+			// The person's sign-in listener; false, so no key is written,
+			// unless `signins` above.
+			DesktopSignins: signins,
 		},
+		DesktopSignins: signins,
 		// Hard resource caps. A nil policy block (or a zero field) becomes the
 		// driver's conservative platform default, so EVERY sandbox is CPU/memory/
 		// PID capped even when the policy sets nothing — a fleet of independent
@@ -747,7 +646,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// that the very next event — `run.create` `failure` — contradicted. Nothing
 	// downstream of here can refuse the drive, so this row is now true when it
 	// is written.
-	s.auditDriveMount(ctx, run.ID, p.Drives)
+	s.auditDriveMount(ctx, run.ID, run.CreatedBy, p.Drives)
 	auditAgentPolicy := func() { s.auditAgentPolicy(ctx, run, agentPolicy, spec) }
 	if !agentPolicy.execLess {
 		auditAgentPolicy()
@@ -771,7 +670,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	stopDispatchLease := s.holdRunWatcherLease(ctx, run.ID)
 	defer stopDispatchLease()
 
-	if err := s.recordSandboxRef(ctx, run.ID, sb.Ref); err != nil {
+	if err := s.recordStartedSandbox(ctx, run, sb); err != nil {
 		s.abortUnrecordedSandbox(ctx, run.ID, sb.Ref, err)
 		return
 	}
@@ -800,7 +699,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	s.metrics.sandboxLaunched(s.cfg.Now().Sub(run.CreatedAt))
 
 	// INTERACTIVE vs task exec vs BYOI selftest — see startAgentOrIdle.
-	s.startAgentOrIdle(ctx, run, sb.Ref, p.Image, p.Interactive, execution, auditAgentPolicy)
+	s.startAgentsOrIdle(ctx, run, p.Harnesses, sb.Ref, p.Image, p.Interactive, execution, auditAgentPolicy)
 }
 
 // auditablePolicy returns a Clone of policy safe to write to the append-only

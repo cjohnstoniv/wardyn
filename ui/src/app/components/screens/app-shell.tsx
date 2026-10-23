@@ -5,7 +5,6 @@
 
 import * as React from "react";
 import {
-  Link,
   NavLink,
   Outlet,
   useLocation,
@@ -13,7 +12,6 @@ import {
 } from "react-router-dom";
 import {
   Activity,
-  AlertOctagon,
   AlertTriangle,
   CircleUser,
   Compass,
@@ -35,7 +33,8 @@ import {
   Users,
   UsersRound,
 } from "lucide-react";
-import { NO_BARRIER, SHELL } from "../wardyn/copy";
+import { NeedsYouNotices } from "../wardyn/needs-you-notices";
+import { SHELL } from "../wardyn/copy";
 import { lastCheckedLabel } from "../../lib/readiness";
 import { UnsavedGuardProvider, useGuardedNavClick } from "../../lib/use-unsaved-guard";
 import { SidebarLowerLinks } from "./sidebar-settings-link";
@@ -47,7 +46,15 @@ import { SidebarLowerLinks } from "./sidebar-settings-link";
 // from nav-copy.ts rather than the screen's own copy module so the eager
 // sidebar doesn't drag a whole screen-only canon table into the entry chunk
 // (#498) for one string.
-import { CREDENTIALS_NAV_TITLE, GOVERNANCE_NAV_TITLE, RUNNERS_NAV_TITLE, USER_TYPES_NAV_TITLE } from "../../lib/nav-copy";
+import {
+  ADMIN_NAV_GROUPS,
+  CREDENTIALS_NAV_TITLE,
+  DRIVES_NAV_TITLE,
+  GOVERNANCE_NAV_TITLE,
+  RUNNERS_NAV_TITLE,
+  USER_TYPES_NAV_TITLE,
+  type AdminNavGroup,
+} from "../../lib/nav-copy";
 import { cn } from "../ui/utils";
 import { Button } from "../ui/button";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "../ui/sheet";
@@ -62,6 +69,7 @@ import { useMeta, type ShellMeta } from "./use-shell-meta";
 export type { ShellMeta } from "./use-shell-meta";
 import { useReauth } from "../../lib/reauth";
 import { TopBar } from "./top-bar";
+import { NoBarrierNotice } from "./no-barrier-notice";
 import type { SetupStatus } from "../../lib/types";
 import { SessionRenewButton, SessionRenewSlot } from "../wardyn/session-renew-button";
 import { ViewAccessProvider, type ConsoleView } from "../wardyn/console-view";
@@ -123,9 +131,8 @@ function useSessionExpiry(expiresAt: Date | null): SessionExpiryState {
 // (internal/api/routes.go), and an admin in the User view is answered as a
 // user by the session clamp.
 //
-// Recordings sits after Audit because the two answer the same question, "what
-// happened". Governance sits between Policies and Permissions so the three read
-// as one narrowing sequence (mock Q1).
+// The Admin view groups its items under small headings (#3056): Activity, Build, Access, Limits, Keys.
+// Items both views share keep one relative order: Runs, Approvals, Workspaces, Templates.
 interface NavItem {
   to: string;
   label: string;
@@ -138,48 +145,47 @@ interface NavItem {
   tier?: "super" | "security";
   // Other paths that keep this item lit (see SidebarLowerLinks).
   also?: string[];
+  // The Admin view heading the item sits under.
+  group?: AdminNavGroup;
 }
 const ADMIN_NAV: NavItem[] = [
-  { to: "/admin/runs", label: "Runs", icon: Activity, badge: "attention" },
-  { to: "/admin/approvals", label: "Approvals", icon: ShieldCheck, badge: "approvals" },
-  // 0.8.6 (ppl-p2, M12 D1): right after Approvals, because leaver work is frequent and urgent. securityOps
-  // server-side, so both admin tiers see it.
-  { to: "/admin/people", label: PEOPLE_PAGE.NAV, icon: Contact },
-  // 0.9: people's own computers that run their runs. securityOps server-side, so both admin tiers see it;
-  // the page explains the off state, so the item is always there (RN-Q4).
-  { to: "/admin/runners", label: RUNNERS_NAV_TITLE, icon: Laptop },
-  { to: "/admin/workspaces", label: "Workspaces", icon: FolderOpen },
-  { to: "/admin/policies", label: "Policies", icon: UserCog },
+  { to: "/admin/runs", label: "Runs", icon: Activity, badge: "attention", group: "activity" },
+  { to: "/admin/approvals", label: "Approvals", icon: ShieldCheck, badge: "approvals", group: "activity" },
+  { to: "/admin/audit", label: "Audit", icon: ScrollText, group: "activity" },
+  { to: "/admin/recordings", label: "Recordings", icon: Play, tier: "super", group: "activity" },
+  { to: "/admin/workspaces", label: "Workspaces", icon: FolderOpen, group: "build" },
   // 0.9: saved starting points; org admins rename, delete and publish here. A member route server-side, so
   // both admin tiers see it. The label is literal like its neighbours: the screen's copy module is lazy-only.
-  { to: "/admin/templates", label: "Templates", icon: LayoutTemplate },
-  // GOVERNANCE_NAV_TITLE is one string for the nav and the screen's heading.
-  { to: "/admin/governance", label: GOVERNANCE_NAV_TITLE, icon: Scale },
-  { to: "/admin/permissions", label: "Permissions", icon: Users },
-  // Credentials (CS-8, design F-1) sits right after Permissions — both name
-  // who may act. securityOps server-side, so both admin tiers see it (a
-  // security admin has no Settings and no Secrets, so this page can't live
+  { to: "/admin/templates", label: "Templates", icon: LayoutTemplate, group: "build" },
+  // 0.9: people's own computers that run their runs. securityOps server-side, so both admin tiers see it;
+  // the page explains the off state, so the item is always there (RN-Q4).
+  { to: "/admin/runners", label: RUNNERS_NAV_TITLE, icon: Laptop, group: "build" },
+  // User drives: a security admin reaches /admin/drives for its grants and preview (securityOps server-side);
+  // a super admin opens it from Workspaces and Settings' card, so its nav is unchanged.
+  { to: "/admin/drives", label: DRIVES_NAV_TITLE, icon: HardDrive, tier: "security", group: "build" },
+  // People (0.8.6 ppl-p2), User types (0.8, UT-7a) and Credentials (CS-8) are securityOps server-side, so
+  // both admin tiers see them (a security admin has no Settings and no Secrets, so Credentials can't live
   // in either).
-  { to: "/admin/credentials", label: CREDENTIALS_NAV_TITLE, icon: KeyRound },
-  // User types (0.8, UT-7a) sits beside Permissions — the subject it and
-  // Governance name. securityOps server-side, so both admin tiers see it.
-  { to: "/admin/user-types", label: USER_TYPES_NAV_TITLE, icon: UsersRound },
-  { to: "/admin/drives", label: "Drives", icon: HardDrive, tier: "security" },
-  { to: "/admin/secrets", label: "Secrets", icon: Lock, tier: "super" },
-  { to: "/admin/audit", label: "Audit", icon: ScrollText },
-  { to: "/admin/recordings", label: "Recordings", icon: Play, tier: "super" },
+  { to: "/admin/people", label: PEOPLE_PAGE.NAV, icon: Contact, group: "access" },
+  { to: "/admin/user-types", label: USER_TYPES_NAV_TITLE, icon: UsersRound, group: "access" },
+  { to: "/admin/permissions", label: "Permissions", icon: Users, group: "access" },
+  { to: "/admin/policies", label: "Policies", icon: UserCog, group: "limits" },
+  // GOVERNANCE_NAV_TITLE is one string for the nav and the screen's heading.
+  { to: "/admin/governance", label: GOVERNANCE_NAV_TITLE, icon: Scale, group: "limits" },
+  { to: "/admin/credentials", label: CREDENTIALS_NAV_TITLE, icon: KeyRound, group: "keys" },
+  { to: "/admin/secrets", label: "Secrets", icon: Lock, tier: "super", group: "keys" },
 ];
 const USER_NAV: NavItem[] = [
   { to: "/runs", label: "Runs", icon: Activity, badge: "attention" },
-  { to: "/templates", label: "Templates", icon: LayoutTemplate },
   { to: "/approvals", label: "Approvals", icon: ShieldCheck, badge: "approvals" },
   { to: "/workspaces", label: "Workspaces", icon: FolderOpen },
+  { to: "/templates", label: "Templates", icon: LayoutTemplate },
 ];
-// Under the divider (#217's slot): Setup and Settings in the Admin view, where
-// a security admin has neither; Getting started and Your account in the User
-// view.
+// Under the divider (#217's slot): Getting started and Settings in the Admin view,
+// where a security admin has neither; Getting started and Your account in the
+// User view. The page heading reads "Getting started" in both.
 const ADMIN_LOWER: NavItem[] = [
-  { to: "/admin/setup", label: "Setup", icon: Compass },
+  { to: "/admin/setup", label: "Getting started", icon: Compass },
   // Providers, Components and Drives are opened only from Settings' cards and have no entry of their own.
   { to: "/admin/settings", label: SETTINGS_NAV.SETTINGS, icon: Settings, also: ["/admin/providers", "/admin/components", "/admin/drives"] },
 ];
@@ -325,7 +331,8 @@ function SidebarNav({
       )}
       {view === "user" && <UserViewEyebrow currentUserType={meta.userType} userTypes={meta.userViewTypes} />}
       <nav className="space-y-0.5">
-        {items.map((item) => {
+        {items.map((item, i) => {
+          const heading = view === "admin" && item.group && item.group !== items[i - 1]?.group ? item.group : null;
           const count =
             item.badge === "approvals"
               ? pendingApprovals
@@ -333,29 +340,38 @@ function SidebarNav({
                 ? attentionCount
                 : 0;
           return (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              onClick={guardedClick(item.to, onNavigate)}
-              className={({ isActive }) => navLinkClass(isActive)}
-            >
-              {({ isActive }) => (
-                <>
-                  {isActive && (
-                    <span className="absolute -left-3 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-r bg-sidebar-primary" />
-                  )}
-                  <item.icon
-                    className={cn("size-4", isActive && "text-foreground")}
-                  />
-                  <span className="flex-1 text-left">{item.label}</span>
-                  {count > 0 && (
-                    <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-warning-subtle px-1.5 text-meta font-semibold text-warning">
-                      {count}
-                    </span>
-                  )}
-                </>
+            <React.Fragment key={item.to}>
+              {heading && (
+                <div
+                  data-testid={`nav-group-${heading}`}
+                  className={cn("px-2.5 pb-1 text-xs font-medium text-muted-foreground", i > 0 && "pt-3")}
+                >
+                  {ADMIN_NAV_GROUPS[heading]}
+                </div>
               )}
-            </NavLink>
+              <NavLink
+                to={item.to}
+                onClick={guardedClick(item.to, onNavigate)}
+                className={({ isActive }) => navLinkClass(isActive)}
+              >
+                {({ isActive }) => (
+                  <>
+                    {isActive && (
+                      <span className="absolute -left-3 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-r bg-sidebar-primary" />
+                    )}
+                    <item.icon
+                      className={cn("size-4", isActive && "text-foreground")}
+                    />
+                    <span className="flex-1 text-left">{item.label}</span>
+                    {count > 0 && (
+                      <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-warning-subtle px-1.5 text-meta font-semibold text-warning">
+                        {count}
+                      </span>
+                    )}
+                  </>
+                )}
+              </NavLink>
+            </React.Fragment>
           );
         })}
         {/* #217 — last, under a divider: Settings (Admin view) or Your
@@ -429,6 +445,7 @@ export function AppShell({
   unreachable,
   lastOkAt,
   noBarrier,
+  onRecheck,
   tier,
 }: {
   pendingApprovals: number;
@@ -449,6 +466,8 @@ export function AppShell({
   // than guess, where this is a deployment-wide fact that is always resolved
   // once setupStatus has landed. False/undefined renders nothing.
   noBarrier?: boolean;
+  // Re-reads the setup status for the no-barrier notice's Re-check.
+  onRecheck?: () => void;
   // SetupStatus.tier, for the top bar's account menu and local-only chip.
   tier?: SetupStatus["tier"];
 }) {
@@ -500,6 +519,25 @@ export function AppShell({
     [focus],
   );
 
+  // The z-50 banners stay above focus mode's overlay, so the overlay starts below them: their bottom edge,
+  // published as --shell-banner-h for as long as focus is on (focus-mode.tsx reads it).
+  const bannerStackRef = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    const el = bannerStackRef.current;
+    if (!focus || !el) return;
+    const root = document.documentElement;
+    const sync = () => root.style.setProperty("--shell-banner-h", `${Math.round(el.getBoundingClientRect().bottom)}px`);
+    sync();
+    const ro = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(sync);
+    ro?.observe(el);
+    window.addEventListener("resize", sync);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener("resize", sync);
+      root.style.removeProperty("--shell-banner-h");
+    };
+  }, [focus]);
+
   // Wraps EVERYTHING the shell renders (nav, main/Outlet, and the New Run
   // dialog mounted below) — not just the Outlet — so every screen AND every
   // dialog reachable from here (including the wizard's inline Add secret /
@@ -516,7 +554,7 @@ export function AppShell({
       authGeneration={meta.authGeneration}
       memberLocalDirRoot={meta.memberLocalDirRoot}
       userDrive={meta.userDrive}
-      userDriveDeniedByProfile={meta.userDriveDeniedByProfile}
+      userDriveDeniedByUnit={meta.userDriveDeniedByUnit}
       userDriveUnavailable={meta.userDriveUnavailable}
       userType={meta.userType}
       confinementPosture={confinementPosture}
@@ -538,10 +576,15 @@ export function AppShell({
             >
               Skip to main content
             </a>
+            {/* Measured for focus mode, so it starts above the reauth layer: that layer's z-50 bar
+          must grow this box, or the overlay's offset goes stale when the bar comes and goes. */}
+            <div ref={bannerStackRef} className="shrink-0">
             {/* The lazy coordinator also reconciles auth changes while no dialog or watch is active. */}
             <React.Suspense fallback={null}>
               <ReauthLayer onResumed={adoptIdentity} />
             </React.Suspense>
+            {/* #2963: a takeover request anywhere in the caller's runs raises a toast. */}
+            <NeedsYouNotices />
             {/* Hidden — not merely covered — in focus mode: the cockpit's overlay is
           painted over the shell anyway, but leaving the header mounted would
           keep a dozen focusable controls ahead of the terminal in tab order
@@ -553,7 +596,6 @@ export function AppShell({
                 pendingApprovals={pendingApprovals}
                 attentionCount={attentionCount}
                 onNewRun={() => navigate("/runs/new")}
-                noBarrier={!unreachable && !!noBarrier}
                 tier={tier}
               />
             )}
@@ -587,23 +629,8 @@ export function AppShell({
                 "unknown", not "no barrier", and the banner above already
                 says so. */}
             {!unreachable && noBarrier && (
-              <div
-                role="status"
-                className="relative z-50 flex shrink-0 items-start gap-2 border-b border-border bg-danger-subtle px-4 py-2 text-sm text-danger"
-              >
-                <AlertOctagon className="mt-0.5 size-4 shrink-0" />
-                <div className="min-w-0">
-                  <p className="font-medium">{NO_BARRIER.BANNER_TITLE}</p>
-                  <p className="text-xs text-danger">{NO_BARRIER.BANNER_BODY}</p>
-                </div>
-                {canReachEnvironmentStep && (
-                  <Link
-                    to={NO_BARRIER.ADMIN_ROUTE}
-                    className="ml-auto shrink-0 font-medium underline underline-offset-2"
-                  >
-                    {NO_BARRIER.CTA}
-                  </Link>
-                )}
+              <div className="relative z-50 shrink-0 border-b border-border bg-danger-subtle px-4 py-2">
+                <NoBarrierNotice canFix={canReachEnvironmentStep} onRecheck={onRecheck} />
               </div>
             )}
             {/* B1 — the settled-but-unknown identity, beside the unreachable
@@ -648,6 +675,7 @@ export function AppShell({
             )}
             {/* While a renewal waits, its strip (the reauth layer's) stands here instead. */}
             <SessionRenewSlot />
+            </div>
             {/* LAST in the stack, and not hidden in focus mode: a dead control
           plane, an unknown identity and a dying session are each the better
           explanation of what you are looking at and are read first — but this
@@ -698,7 +726,7 @@ export function AppShell({
             </div>
             <div className="flex min-h-0 flex-1">
               {!focus && (
-                <aside className="hidden w-[228px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar px-3 py-4 md:flex">
+                <aside className="hidden w-[228px] shrink-0 flex-col overflow-y-auto border-r border-sidebar-border bg-sidebar px-3 py-4 md:flex">
                   <SidebarNav
                     pendingApprovals={pendingApprovals}
                     attentionCount={attentionCount}

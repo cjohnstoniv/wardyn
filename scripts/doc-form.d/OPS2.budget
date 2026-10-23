@@ -1,10 +1,16 @@
 # Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the base prose words, so growth fails.
 # docs/operations/integrations.md 2683 adds 74 over 2609: 0.9 final docs pass 2, measured: signing in for an AWS or Azure CLI component.
 # docs/operations/integrations.md 2753 adds 70: Azure Activity Log attribution and the ARM-only scope line (0.9.3 FIN-B2).
+# docs/operations/hybrid-laptops.md 5369 adds 104 over 5265 (0.10 RUNNERD-LOCK), measured: the lock_security_settings row, its three bullets and the clause in the precedence bullet.
+# docs/operations/hybrid-laptops.md 5278 adds 24 (0.10.0 SEC-1b), measured: the runner placeholder switch, WARDYN_RUNNER_SECRET_PLACEHOLDERS.
+# docs/operations/hybrid-laptops.md 5297 adds 19 (0.10.0 SEC-1b review), measured: the placeholder limits, otherwise held as before.
+# docs/operations/hybrid-laptops.md 5412 = ours 5369 + theirs 5297 - base 5254 at the 0.10 W4d merge of SEC-1b onto the train.
+# docs/operations/hybrid-laptops.md 5560 = ours 5404 + theirs 5410 - base 5254 at the 0.10 W4c merge of origin/main 7e33976ca onto the train.
 docs/operations/integrations.md=2763 share=30
 # docs/operations/launch-presets.md 432 adds 42: the preset-version-restarts-on-recreate line (0.9.3 FIN-B2).
 docs/operations/launch-presets.md=432 share=35
-docs/operations/console-branding.md=943 share=35
+# docs/operations/console-branding.md 947 adds 4 at the 0.10 W4c merge of OC-BE1 9b75afa00 onto the train, measured: the lane head measured 947 against its own 943 budget.
+docs/operations/console-branding.md=947 share=35
 # docs/operations/hybrid-laptops.md 597 adds 48: the page now leads with the client-mode claim flow and offline table; legacy enrolment is condensed under it.
 # 622 adds 25: the Azure DevOps bullet below "Where each thing lives" (#475).
 # 635 adds 13: the one-line link to the runner service install (#1968).
@@ -74,8 +80,20 @@ docs/operations/console-branding.md=943 share=35
 # docs/operations/hybrid-laptops.md 5242 = ours 5234 + theirs 4725 - base 4717 at the 0.10 W4a merge of ATT-SRV onto the train.
 # 0.9.6 DIAG: docs/operations/hybrid-laptops.md 4721 adds 12 over 4709, measured: the pointer to a runner behind a corporate proxy.
 # docs/operations/hybrid-laptops.md 5246 = ours 5234 + theirs 4721 - base 4709 at the 0.9.6 forward-port.
+# docs/operations/hybrid-laptops.md=4738 adds 21 (0.10.0 ATT-INSTALL, #3319), measured: the package is for managed Macs, under Other ways to install.
+# docs/operations/hybrid-laptops.md 5267 = ours 5246 + theirs 4738 - base 4717 at the 0.10 W4c merge of ATT-INSTALL onto the train.
 # docs/operations/hybrid-laptops.md 5254 measured at the 0.10 W4a merge of origin/main (0.9.6 forward-port): the larger side, theirs 5246, fails by 8 (ours 5242 has the ATT-SRV words).
-docs/operations/hybrid-laptops.md=5254 share=35
+# docs/operations/hybrid-laptops.md 5275 = ours 5267 + theirs 5254 - base 5246 at the 0.10 W4c merge of origin/main 3cea1aa73 (W4a) onto the train.
+# docs/operations/hybrid-laptops.md 5258, measured at the 0.10 W4c merge of origin/main 3cea1aa73 (W4a) onto the train (the sum above was 5275).
+# docs/operations/hybrid-laptops.md 5265 adds 11 over 5254 (0.10 RDIAG-C), measured: the OrgCAFile row of the managed preferences table.
+# docs/operations/hybrid-laptops.md 5269 = ours 5258 + theirs 5265 - base 5254 at the 0.10 W4c merge of RDIAG-C 03841f528 onto the train.
+# docs/operations/hybrid-laptops.md 5353 = ours 5269 + theirs 5338 - base 5254 at the 0.10 W4c merge of HYB-F be73ad257 onto the train.
+# docs/operations/hybrid-laptops.md 5404, measured at the 0.10 W4c merge of OFFLINE-VM a359ef27b onto the train (two merge bases, VM-A 47c283334 and main 3cea1aa73, so no single base to subtract).
+docs/operations/hybrid-laptops.md=5560 share=35 # tightened from 5412 to the measured count at the 0.10 W4d merge
+# 0.10 HYB-C: docs/operations/hybrid-laptops.md 5269 adds 15 over 5254, measured: a Linux VM sandbox gets the folder the same way.
+# 0.10 OFFLINE-VM: docs/operations/hybrid-laptops.md 5308 adds 39 over 5269, measured: two offline-table rows for a Linux VM sandbox (creation refused, a full spool ends it).
 # docs/operations/hybrid-laptops.md 4024 adds 2 over 4022, measured: the control-plane restart row says the next restart kills an agent kept only for containment.
 # docs/operations/hybrid-laptops.md 4195 = 3926 + 269, measured: the reset section and the recording default.
 # docs/operations/hybrid-laptops.md 4380 = 4195 + 185, measured: how audit decisions reach the organisation (the decision sink), less the removed state-directory check.
+# docs/operations/hybrid-laptops.md 5299 adds 45 over 5254, measured (0.10 HYB-F): wardyn folder bring-back and the kill line, less the stale "not yet" item.
+# docs/operations/hybrid-laptops.md 5338 adds 39 over 5299, measured (0.10 HYB-F): what a failed agent stop discards, and a runner on another release.

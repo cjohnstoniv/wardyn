@@ -44,8 +44,8 @@ import (
 	"gvisor.dev/gvisor/pkg/waiter"
 )
 
-// The link the guest sees: it is 10.0.2.15/24 (static, from its kernel command
-// line); the relay is its gateway and resolver at 10.0.2.2.
+// The link the guest sees: it is 10.0.2.15/24 (static, from the reference image's
+// 10-wardyn-link.network); the relay is its gateway and resolver at 10.0.2.2.
 var (
 	gatewayMAC = tcpip.LinkAddress("\x5a\x94\xef\xe4\x0c\xdd")
 	gatewayIP  = tcpip.AddrFrom4([4]byte{10, 0, 2, 2})

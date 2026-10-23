@@ -72,7 +72,7 @@ func (s *Server) authorizeRequestDrives(r *http.Request, req createRunRequest, c
 		if resolved == nil {
 			return nil, refusal
 		}
-		return []runDrive{{resolved: *resolved, target: runner.DriveTarget, narrow: req.Drive.ReadOnly, legacy: true}}, nil
+		return []runDrive{{resolved: *resolved, target: runner.DriveTargetFor(*resolved, true), narrow: req.Drive.ReadOnly, legacy: true}}, nil
 	}
 	if refusal := s.driveDoorsRefusal(r, ceiling); refusal != nil {
 		return nil, refusal
@@ -153,15 +153,28 @@ func (s *Server) seedRequestDrives(w http.ResponseWriter, r *http.Request,
 	if refusal.write(s, w, r) {
 		return nil, nil, false
 	}
+	// A run with a drive that has a second place mounts its drives where placement
+	// puts it (stepDriveEligibility builds them then); every other run builds them
+	// here, as it always has.
+	if slices.ContainsFunc(drives, func(d runDrive) bool { return d.resolved.Drive.AltRunnerID != nil }) {
+		return drives, nil, true
+	}
+	mounts, ok := s.driveMountsAt(w, r, drives, drivePlace{})
+	return drives, mounts, ok
+}
+
+// driveMountsAt builds every drive's mount where the run mounts it, or writes
+// the first refusal.
+func (s *Server) driveMountsAt(w http.ResponseWriter, r *http.Request, drives []runDrive, at drivePlace) ([]types.DriveMount, bool) {
 	mounts := make([]types.DriveMount, 0, len(drives))
 	for _, d := range drives {
-		mount, ok := s.driveMountFor(r.Context(), w, d)
+		mount, ok := s.driveMountFor(r.Context(), w, d, at)
 		if !ok {
-			return nil, nil, false
+			return nil, false
 		}
 		mounts = append(mounts, *mount)
 	}
-	return drives, mounts, true
+	return mounts, true
 }
 
 // driveTargets are the run's drives as attachment targets, for the overlap tree,
@@ -186,8 +199,12 @@ func startFolderDriveOwner(id string) string { return attachmentDrive + ":" + id
 // stampDriveAudit records on run.create each drive a drives[] request attaches:
 // its id, name, path and mode, never a host path or object name. A legacy
 // drive.enabled run records nothing here, as before; its mount is
-// run.drive.mount's.
-func stampDriveAudit(data map[string]any, drives []runDrive) {
+// run.drive.mount's. A keep_work_folder run adds keep_work_folder and the id
+// of the drive it keeps its work folder in.
+func stampDriveAudit(data map[string]any, drives []runDrive, keep bool, runID uuid.UUID) {
+	if keep {
+		data["keep_work_folder"], data["kept_drive_id"] = true, keptWorkFolderDriveID(runID)
+	}
 	var out []map[string]any
 	for _, d := range drives {
 		if d.id != "" {

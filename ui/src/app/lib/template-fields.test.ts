@@ -42,7 +42,7 @@ describe("template field registry", () => {
       expect(new Set(rules.map((r) => r.name)).size).toBe(rules.length);
     }
     expect(TEMPLATE_REQUEST_FIELDS.length).toBeGreaterThanOrEqual(34);
-    expect(TEMPLATE_POLICY_FIELDS).toHaveLength(22);
+    expect(TEMPLATE_POLICY_FIELDS).toHaveLength(23);
   });
 
   it("every carried field names its part and omission meaning; every excluded one its reason", () => {
@@ -77,18 +77,24 @@ describe("template field registry", () => {
     expect(TEMPLATE_REQUEST_FIELDS.filter((r) => r.excluded).map((r) => r.name).sort()).toEqual([
       "description",
       "integration_id",
+      "keep_work_folder",
       "local_folder",
+      "machine_kind",
       "max_wait_sec",
       "mode_contract",
       "policy_overlay",
       "preset",
       "preset_version",
+      "run_in",
+      "start_at",
+      "start_time_zone",
       "title",
     ]);
     expect(templateFieldRule("title")?.excluded).toBe("launch");
     expect(TEMPLATE_POLICY_FIELDS.filter((r) => r.excluded)).toEqual([]);
     expect(TEMPLATE_NESTED_EXCLUDED.map((e) => e.path)).toEqual([
       "GrantSpec.owner_only_refs",
+      "IncludedTool.task",
       "LLMInspectionSpec.workspace_secret_values",
       "RunLocalFolder.direction",
       "RunLocalFolder.name",

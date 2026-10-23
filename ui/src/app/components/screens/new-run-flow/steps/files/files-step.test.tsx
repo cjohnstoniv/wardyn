@@ -37,11 +37,11 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 const LISTED: RepoBranches = { listing: "listed", branches: ["main", "dev"], default: "main", truncated: false };
 const YOUR_DRIVE: MeDrive = {
   id: "11111111-1111-4111-8111-111111111111", name: "Your drive", section: "user", source: "personal", backend: "docker_volume",
-  target: "/home/agent/drive", writable: true, enforcement: "filesystem", legacy: true, owned: false,
+  target: "/home/agent/drive", writable: true, enforcement: "filesystem", legacy: true, owned: false, team: false,
 };
 const TEAM_SHARE: MeDrive = {
   id: "22222222-2222-4222-8222-222222222222", name: "Data team share", section: "shared", source: "team", backend: "host_path",
-  target: "/home/agent/shared/data-team-share", writable: false, enforcement: "none", legacy: false, owned: false,
+  target: "/home/agent/shared/data-team-share", writable: false, enforcement: "none", legacy: false, owned: false, team: false,
 };
 const FINANCE: MeDrive = { ...TEAM_SHARE, id: "33333333-3333-4333-8333-333333333333", name: "Finance archive", target: "/home/agent/shared/finance-archive", unavailable_reason: "not_in_pool" };
 const CATALOGUE: MeDriveCatalogue = { drives: [YOUR_DRIVE, TEAM_SHARE, FINANCE], pool_checked: true };
@@ -390,8 +390,8 @@ describe("drives (GET /me/drives)", () => {
     await openAdd();
     await pickType(NR_FILES.KIND_SHARED_DRIVE);
     expect(await within(dialog()).findByRole("radio", { name: /^Finance archive/ })).toBeDisabled();
-    expect(within(dialog()).getByText(NR_FILES.NOT_IN_POOL)).toBeInTheDocument();
-    expect(within(dialog()).getByRole("button", { name: NR_FILES.CREATE_SHARED_DRIVE })).toBeDisabled();
+    // #3045: "+ Create shared drive" was a disabled button with a chip; it is not drawn.
+    expect(within(dialog()).queryByRole("button", { name: /create shared drive/i })).toBeNull();
     await pickSource("Data team share");
     await userEvent.click(dialogButton(/^Continue/));
     expect(within(dialog()).queryByLabelText(NR_FILES.ACCESS_LABEL, { selector: "select" })).toBeNull();
@@ -422,7 +422,7 @@ describe("drives (GET /me/drives)", () => {
   });
 
   it("says why no drive can be attached when the catalogue refuses", async () => {
-    catalogue = { drives: [], denied_by_profile: "Contractors", pool_checked: false };
+    catalogue = { drives: [], denied_by_unit: "Contractors", pool_checked: false };
     show(BACKGROUND);
     await openAdd();
     await pickType(NR_FILES.KIND_USER_DRIVE);

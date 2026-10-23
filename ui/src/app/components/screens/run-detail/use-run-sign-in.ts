@@ -6,10 +6,10 @@
 // One read loop for a waiting sign-in, shared by the run page's strip and the
 // Runs list row (approved 088 mock, M2 D4/D7). It asks GET /runs/{id}/sign-in
 // on open and every 5 s. Reading continues until the first `waiting` answer
-// during the run's first two minutes (a page opened seconds after launch sees
-// `not_waiting` before the code is drawn); once `waiting` was seen, the next
-// `not_waiting` ends the loop; past two minutes (counted from the run's own
-// start, not from page open) the next `not_waiting` ends it either way. The
+// during the first two minutes of reading (a run that has just reached RUNNING
+// answers `not_waiting` before the code is drawn, however long it queued or
+// pulled its image first); once `waiting` was seen, the next `not_waiting` ends
+// the loop; past two minutes of reading the next `not_waiting` ends it either way. The
 // first failed read stops the loop until `retry`, and keeps the last answer.
 import * as React from "react";
 import { runSignIn } from "../../../lib/api/run-sign-in";
@@ -17,7 +17,7 @@ import type { RunSignIn } from "../../../lib/types";
 import { useOperatorResolved, usePrincipal } from "../../wardyn/operator-context";
 
 export const SIGN_IN_POLL_MS = 5000;
-/** How long after the run's start a `not_waiting` answer still keeps the loop going. */
+/** How long after reading began a `not_waiting` answer still keeps the loop going. */
 export const SIGN_IN_GRACE_MS = 2 * 60 * 1000;
 /** The first read shows nothing until it has been in flight this long. */
 export const SIGN_IN_CHECKING_MS = 1000;
@@ -36,10 +36,10 @@ export interface RunSignInRead {
 
 const EMPTY_READ = { waiting: null, ended: false, failed: false, checking: false };
 
-export function useRunSignIn(runId: string, createdAt: string, enabled: boolean): RunSignInRead {
+export function useRunSignIn(runId: string, enabled: boolean): RunSignInRead {
   const principal = usePrincipal();
   const resolved = useOperatorResolved();
-  const scope = React.useMemo(() => ({ runId, createdAt, principal, enabled, resolved }), [runId, createdAt, principal, enabled, resolved]);
+  const scope = React.useMemo(() => ({ runId, principal, enabled, resolved }), [runId, principal, enabled, resolved]);
   const [state, setState] = React.useState<Omit<RunSignInRead, "retry"> & { scope: typeof scope }>({ ...EMPTY_READ, scope });
   const inFlight = React.useRef(false);
   const nextRead = React.useRef<(() => void) | null>(null);
@@ -49,6 +49,7 @@ export function useRunSignIn(runId: string, createdAt: string, enabled: boolean)
     setState({ ...EMPTY_READ, scope });
     if (!scope.enabled || !scope.resolved || !scope.principal) return;
     let cancelled = false;
+    const readingSince = Date.now();
     let stopped = false;
     let seenWaiting = false;
     let answered = false;
@@ -83,7 +84,7 @@ export function useRunSignIn(runId: string, createdAt: string, enabled: boolean)
           });
         } else {
           setState({ scope, waiting: null, ended: seenWaiting, failed: false, checking: false });
-          stopped = seenWaiting || Date.now() - Date.parse(scope.createdAt) > SIGN_IN_GRACE_MS;
+          stopped = seenWaiting || Date.now() - readingSince > SIGN_IN_GRACE_MS;
         }
         if (!stopped) timer = setTimeout(() => void tick(), SIGN_IN_POLL_MS);
       } catch {

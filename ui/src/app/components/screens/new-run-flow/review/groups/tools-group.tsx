@@ -11,7 +11,7 @@ import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import type { IncludedTool } from "../../../../../lib/types/new-run-contract";
 import type { RunIntent } from "../../draft/run-intent";
-import { setCommand } from "../../lenses/run-lens";
+import { commandOf, isServer, setCommand } from "../../lenses/apps-lens";
 import { harnessName, loadRoster } from "../../steps/harnesses/roster";
 import { useLoaded } from "../../steps/shape/use-loaded";
 import { draftSource, serverSource } from "../provenance";
@@ -40,7 +40,8 @@ export function ToolsGroup({ draft, pre, preview, docRows, go, dispatch }: Group
     t?.model_provider ?? pre?.harness_set?.harnesses.find((h) => h.id === t?.id)?.model_credential?.provider ?? pre?.model_credential?.provider;
 
   let detail: string;
-  if (command) detail = n === 1 ? NR_REVIEW.TOOLS_COMMAND_ONE : NR_REVIEW.TOOLS_COMMAND(n);
+  if (command && n === 0 && isServer(intent)) detail = NR_REVIEW.TOOLS_START_COMMAND;
+  else if (command) detail = n === 1 ? NR_REVIEW.TOOLS_COMMAND_ONE : NR_REVIEW.TOOLS_COMMAND(n);
   else if (n === 0) detail = NR_REVIEW.TOOLS_NONE;
   else if (interactive) {
     const t = harnesses.find((h) => h.id === starter);
@@ -52,7 +53,7 @@ export function ToolsGroup({ draft, pre, preview, docRows, go, dispatch }: Group
     detail = n === 1 && auto === 1 ? NR_REVIEW.TOOLS_AUTO_ONE : NR_REVIEW.TOOLS_AUTO(auto, n);
   }
 
-  const value = command ? <code className="font-mono text-sm">{intent.workload?.command}</code> : n ? harnesses.map((h) => name(h.id)).reduce((all, next) => NR_SHARED.JOIN(all, next)) : NR_REVIEW.NO_HARNESSES;
+  const value = command ? <code className="font-mono text-sm">{commandOf(intent)}</code> : n ? harnesses.map((h) => name(h.id)).reduce((all, next) => NR_SHARED.JOIN(all, next)) : NR_REVIEW.NO_HARNESSES;
 
   return (
     <ReviewGroup
@@ -62,14 +63,14 @@ export function ToolsGroup({ draft, pre, preview, docRows, go, dispatch }: Group
       detail={detail}
       provenance={
         (command ? undefined : serverSource({ draft, pre, preview }, { kind: "model_provider" })) ??
-        draftSource(draft, command ? ["workload.command"] : ["tools", "startup", "workload.task"], NR_REVIEW.PROV_ADDED)
+        draftSource(draft, command ? ["workload.command", "startup.command"] : ["tools", "startup", "workload.task"], NR_REVIEW.PROV_ADDED)
       }
       docRows={docRows}
       editor={(close) => command ? (
         <>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="review-command">{NR_REVIEW.COMMAND_LABEL}</Label>
-            <Input id="review-command" className="font-mono" value={intent.workload?.command ?? ""}
+            <Input id="review-command" className="font-mono" value={commandOf(intent) ?? ""}
               onChange={(e) => {
                 const command = e.target.value;
                 dispatch({ type: "edit", apply: (i) => setCommand(i, command) });

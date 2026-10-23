@@ -33,7 +33,7 @@ func (s *Server) refreshLocalDeploymentConfig(ctx context.Context, run types.Age
 	if !s.cfg.DisableGitPATBroker && slices.ContainsFunc(cfg.ResidentMints, func(m proxy.ResidentMint) bool { return m.Kind == types.GrantGitPAT }) {
 		return &placement.Refusal{Reason: placement.ReasonPlacementCredential, Field: "ProxyConfig.ResidentMints", Detail: residentPATBrokered}
 	}
-	profile, denied := s.ownerProfile(ctx, run)
+	profile, denied := s.ownerUnit(ctx, run)
 	if denied != nil {
 		return fmt.Errorf("owner profile does not admit local revive")
 	}
@@ -60,14 +60,14 @@ func localStoredSpec(c proxy.Config) runner.SandboxSpec {
 		RunToken: c.RunToken, ControlPlaneURL: c.ControlPlaneURL, ControlPlaneCAPEM: c.ControlPlaneCAPEM,
 		Policy: c.Policy, MITMCACertPEM: c.MITMCACertPEM, MITMCAKeyPEM: c.MITMCAKeyPEM,
 		MITMHosts: c.MITMHosts, MITMLLM: c.MITMLLM, GitGrants: c.GitGrants, PATGrants: c.PATGrants,
-		BrokeredPATGrantIDs: c.BrokeredPATGrantIDs, ResidentMints: c.ResidentMints, ADOGrant: c.ADOGrant, AzureGates: c.AzureGates, GitHubAPI: c.GitHubAPI, AzureARM: c.AzureARM, AWSSigV4: c.AWSSigV4,
+		BrokeredPATGrantIDs: c.BrokeredPATGrantIDs, ResidentMints: c.ResidentMints, ADOGrant: c.ADOGrant, AzureGates: c.AzureGates, GitHubAPI: c.GitHubAPI, AzureARM: c.AzureARM, AWSSigV4: c.AWSSigV4, KubeAPI: c.KubeAPI,
 		UpstreamProxyURL: c.UpstreamProxyURL, TrustedCAPEM: c.TrustedCAPEM, InternalHosts: c.InternalHosts,
 		UpstreamProxyNoProxy: c.UpstreamProxyNoProxy, LLMUpstreams: c.LLMUpstreams,
 		LLMChannelHosts: c.LLMChannelHosts, LLMUnavailableDetail: c.LLMUnavailableDetail, LocalModels: c.LocalModels,
-		Unattended: c.Unattended, ScrubResponses: c.ScrubResponses, Attribution: c.Attribution,
+		Unattended: c.Unattended, ScrubResponses: c.ScrubResponses, CanonicalPushRepos: c.CanonicalPushRepos, Attribution: c.Attribution,
 		PushRuleSets: c.PushRuleSets, PushRuleBase: c.PushRuleBase, HarnessToolRules: c.HarnessToolRules, HarnessCredentials: c.HarnessCredentials, ViaOrgRoutes: c.ViaOrgRoutes,
 		MCPServers: c.MCPServers, MCPBindings: c.MCPBindings,
-		VM: c.VM, PortRule: c.PortRule,
+		VM: c.VM, PortRule: c.PortRule, DesktopSignins: c.SigninListen != "",
 	}
 	for _, in := range c.Injection {
 		pc.Injection = append(pc.Injection, runner.InjectionGrant{GrantID: in.GrantID, Rule: in.InjectionRule})
@@ -102,7 +102,7 @@ func (s *Server) lockRevive(ctx context.Context, run types.AgentRun) (context.Co
 
 // reviveCeilingAdmitting is the owner's ceiling, once it still admits the run where it is.
 func (s *Server) reviveCeilingAdmitting(ctx context.Context, run types.AgentRun, actorType types.ActorType, actor string) (ownerCeiling, *reviveError) {
-	c, rerr := s.reviveCeiling(ctx, run)
+	c, rerr := s.reviveCeiling(ctx, run, actorType, actor)
 	if rerr == nil {
 		rerr = s.revivePlacementDenied(ctx, run, c, actorType, actor)
 	}
@@ -115,17 +115,23 @@ func (s *Server) reviveCeilingAdmitting(ctx context.Context, run types.AgentRun,
 // revivePlacementDenied refuses a revive of a run whose placement the owner's profile now denies, with
 // the create doors' reason and sentence: a profile changed after create stops the run's next revive.
 func (s *Server) revivePlacementDenied(ctx context.Context, run types.AgentRun, c ownerCeiling, actorType types.ActorType, actor string) *reviveError {
-	p := run.Placement
-	if remotePlacement(p) {
-		p = types.PlacementRemote
-	}
-	// A managed-harness sign-in (a server-set task no request can name) is exempt, as at create.
-	if run.Task == harnessLoginTask || !slices.Contains(c.denyPlacements, p) {
+	p, denied := deniedRunPlacement(run, c.denyPlacements)
+	if !denied {
 		return nil
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "denied",
 		mustJSON(map[string]any{"subject": run.CreatedBy, "reason": placement.ReasonPlacementDenied})))
 	return reviveRefused(placement.ReasonPlacementDenied.Status(), string(placement.ReasonPlacementDenied), placementDeniedMsg(p, c.profile))
+}
+
+// deniedRunPlacement is the run's placement and whether deny (a profile's deny_placements) bars it. A
+// managed-harness sign-in (a server-set task no request can name) is exempt, as at create.
+func deniedRunPlacement(run types.AgentRun, deny []types.Placement) (types.Placement, bool) {
+	p := run.Placement
+	if remotePlacement(p) {
+		p = types.PlacementRemote
+	}
+	return p, run.Task != harnessLoginTask && slices.Contains(deny, p)
 }
 
 // ownerCeiling is the part of the owner's profile a revive re-asserts: its
@@ -143,8 +149,12 @@ type ownerCeiling struct {
 // (an unassigned or super-admin owner) has no profile denies, as at dispatch.
 // A captured profile that no longer exists is refused: its walls cannot be
 // known.
-func (s *Server) reviveCeiling(ctx context.Context, run types.AgentRun) (ownerCeiling, *reviveError) {
-	p, ref := s.ownerProfile(ctx, run)
+func (s *Server) reviveCeiling(ctx context.Context, run types.AgentRun, actorType types.ActorType, actor string) (ownerCeiling, *reviveError) {
+	p, ref := s.ownerUnit(ctx, run)
+	if ref != nil && ref.reason == reasonUnitMembershipGone {
+		s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "denied",
+			mustJSON(map[string]any{"subject": run.CreatedBy, "reason": ref.reason, "unit_id": run.UnitID, "arm": ref.arm})))
+	}
 	switch {
 	case ref != nil:
 		return ownerCeiling{}, reviveRefused(ref.status, ref.reason, ref.msg)

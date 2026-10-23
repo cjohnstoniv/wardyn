@@ -86,6 +86,17 @@ func (t llmTransport) providerSubscription() bool {
 	return t.provider != nil && t.provider.provider.Kind == types.ModelProviderAnthropicSubscription
 }
 
+// signsBedrock reports whether the proxy re-signs this run's Bedrock lane.
+func (t llmTransport) signsBedrock() bool { return t.bedrockReady && t.bedrock.sigv4Hosts != nil }
+
+// withdrawSigV4 drops the AWS re-signer once the ceiling's re-assertion withheld the Bedrock lane it
+// signed for: the re-signer's grant is that lane's (named in dropped_broker_lanes).
+func (p *dispatchLLMPlan) withdrawSigV4(signed bool, llm llmTransport) {
+	if signed && !llm.bedrockReady {
+		p.awsSigV4 = nil
+	}
+}
+
 // isModelRun reports whether a dispatch actually invokes the model. Two run
 // kinds make NO model call and so must receive NO LLM credential (least
 // privilege): a scan run (execs wardyn-scan — workspaceID/sourceID set,
@@ -352,6 +363,8 @@ type dispatchLLMPlan struct {
 	// awsSigV4 is ProxyConfig.AWSSigV4: the re-signed AWS lane's grant and hosts
 	// (runs_dispatch_aws_sigv4.go); nil while WARDYN_AWS_SIGV4_AT_PROXY is off.
 	awsSigV4 *proxy.AWSSigV4Config
+	// kubectlCLI is the kubectl row's share: its door's grant.
+	kubectlCLI kubectlCLIPlan
 	// llmUnavailableDetail is the self-explaining detail the proxy's brokered-LLM
 	// 404 renders when this run reaches that route with no credential behind it
 	// (mpNoProviderDetail). Empty => the route's own generic detail.
@@ -363,6 +376,8 @@ type dispatchLLMPlan struct {
 	// localModels is ProxyConfig.LocalModels: each local_model upstream's model
 	// allowlist and request bounds, for the proxy's route gate.
 	localModels map[string]types.LocalModelSettings
+	// localAllowlists is those allowlists by provider id, as recorded on the run (recordModelAllowlists).
+	localAllowlists map[string][]string
 	// mitmLLM is whether the BUILT-IN LLM hosts should be intercepted —
 	// subscription injection or intercept_tls inspection, never a CA minted
 	// purely for artifact tokens. Computed here because every input to it is
@@ -431,7 +446,7 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	var mitmCACertPEM, mitmCAKeyPEM string
 	if subscription || mitmForInspect || artifactInject || llm.injectBedrockBearer || llm.injectBedrockSSO || adoInject ||
 		slices.ContainsFunc(llms, llmTransport.azureInject) || p.PATAPI || len(p.Components.MITMHosts) > 0 ||
-		p.Components.GitHubAPI != nil || p.Components.AWSCLI != nil || p.Components.AzureCLI != nil || s.placeholdersWanted(*policy) {
+		p.Components.GitHubAPI != nil || p.Components.AWSCLI != nil || p.Components.AzureCLI != nil || s.placeholdersWanted(run, *policy) {
 		if mitmCACertPEM, mitmCAKeyPEM, ok = s.provisionDispatchMITMCA(ctx, run, sandboxEnv); !ok {
 			return dispatchLLMPlan{}, false
 		}
@@ -466,6 +481,11 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	if injections, azureCLI, ok = s.authorAzureCLI(ctx, run, p.Components.AzureCLI, mitmCACertPEM, mitmCAKeyPEM, policy, sandboxEnv, injections); !ok {
 		return dispatchLLMPlan{}, false
 	}
+	// The kubectl row's grant, door and the server it opens. Same contract.
+	var kubectlCLI kubectlCLIPlan
+	if injections, kubectlCLI, ok = s.authorKubectlCLI(ctx, run, p.Components.KubectlCLI, mitmCACertPEM, mitmCAKeyPEM, policy, sandboxEnv, injections); !ok {
+		return dispatchLLMPlan{}, false
+	}
 
 	// Artifact-redirect token injections (authored in planArtifactRedirect, whose
 	// egress substitution already added each corp host to policy.AllowedDomains, so
@@ -487,6 +507,7 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	// takes from showing a "success" injection row for a credential it was
 	// never handed (#518).
 	s.recordBedrockTransport(ctx, bedrockRun, llm)
+	s.recordModelAllowlists(ctx, run.ID, prov.localAllowlists)
 
 	return dispatchLLMPlan{
 		llm: llm, injections: injections,
@@ -496,8 +517,9 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 		channelHosts:         providerSubscriptionChannelHosts(llms, azure.channelHosts),
 		azureCLI:             azureCLI,
 		awsSigV4:             awsSigV4,
+		kubectlCLI:           kubectlCLI,
 		mitmLLM:              subscription || mitmForInspect,
-		llmUnavailableDetail: prov.detail, llmUpstreams: prov.upstreams, localModels: prov.localModels,
+		llmUnavailableDetail: prov.detail, llmUpstreams: prov.upstreams, localModels: prov.localModels, localAllowlists: prov.localAllowlists,
 	}, true
 }
 

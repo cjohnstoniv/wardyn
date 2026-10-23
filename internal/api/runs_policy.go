@@ -279,15 +279,23 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		// ComputerFolder is the run's folder from the person's computer, held by their runner, and
 		// its passes (run_computer_folder.go); absent on every other run.
 		ComputerFolder *computerFolderRunView `json:"computer_folder,omitempty"`
+		// Agents (#1987) is every agent of a background run with several, the run's own
+		// first, each with its own task; absent on every other run.
+		Agents []runDetailAgent `json:"agents,omitempty"`
+		// ModelAllowlists (#3374) is the model allowlist each local model provider handed the run's proxy at
+		// its latest dispatch, {provider id: models}: what the run is held to, whatever the provider lists now.
+		ModelAllowlists map[string][]string `json:"model_allowlists,omitempty"`
 	}{
 		AgentRun: run, UIApps: apps, UserTypeName: s.runUserTypeName(r, run.UserType),
 		ModelProviderName: providerName, ModelProviderDeleted: providerDeleted,
-		CreatedViaName: s.runCreatedViaName(r.Context(), run),
-		RunnerPoolName: s.runPoolName(r.Context(), run),
-		KeptUntil:      s.endedRunKeptUntil(run),
-		Policy:         s.runPolicyRef(r.Context(), run),
-		Sync:           s.runSyncOpenView(run.ID),
-		ComputerFolder: s.computerFolderRunView(r.Context(), run.ID),
+		CreatedViaName:  s.runCreatedViaName(r.Context(), run),
+		RunnerPoolName:  s.runPoolName(r.Context(), run),
+		KeptUntil:       s.endedRunKeptUntil(run),
+		Policy:          s.runPolicyRef(r.Context(), run),
+		Sync:            s.runSyncOpenView(run.ID),
+		ComputerFolder:  s.computerFolderRunView(r.Context(), run.ID),
+		Agents:          s.runDetailAgents(r.Context(), run),
+		ModelAllowlists: s.runModelAllowlists(r.Context(), run.ID),
 	})
 }
 
@@ -427,8 +435,8 @@ func (s *Server) effectiveUIApps(ctx context.Context, runID uuid.UUID) ([]types.
 }
 
 // latestPolicyResolve is the run's last decodable run.policy.resolve envelope
-// and when it was written — last wins, because a re-dispatch supersedes an
-// earlier one. ok=false when there is none, and every caller fails closed on it.
+// and when it was written. dispatchRun writes one per run, behind claimDispatch,
+// so last-wins only keeps the read defined if a second ever lands. ok=false when there is none, and every caller fails closed on it.
 func latestPolicyResolve(events []types.AuditEvent) (envelope effectivePolicyDatum, at time.Time, ok bool) {
 	for _, ev := range events {
 		if canonicalAction(ev.Action) != "run.policy.resolve" || len(ev.Data) == 0 {
@@ -481,8 +489,8 @@ func (s *Server) resolvePolicy(ctx context.Context, policyID *uuid.UUID, ceiling
 			spec.AzureDevOpsCapabilities, spec.GitHubCapabilities = nil, nil
 		}
 		origin := policyOrigin{kind: policyKindDefault}
-		if ceiling.Profile != nil {
-			origin = policyOrigin{kind: policyKindProfile, name: ceiling.Profile.Name}
+		if ceiling.Unit != nil {
+			origin = policyOrigin{kind: policyKindUnit, name: ceiling.Unit.Name}
 		}
 		return spec, nil, origin, nil
 	}
@@ -816,6 +824,10 @@ func actorFromRequest(r *http.Request) (types.ActorType, string) {
 // actorFromContext is actorFromRequest's chain for a caller holding only a
 // context. localOverride is the validated dev-only header value, "" for none.
 func actorFromContext(ctx context.Context, localOverride string) (types.ActorType, string) {
+	// An approval rule decides as itself, never the admin-token fallback its human-less context would read as.
+	if d, ok := policyDeciderFrom(ctx); ok {
+		return types.ActorSystem, policyActor(d)
+	}
 	// A device request is the device, never the admin-token fallback at the
 	// bottom (which is what a context with no human would otherwise read as).
 	if d, ok := deviceFromContext(ctx); ok {

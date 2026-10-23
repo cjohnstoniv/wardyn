@@ -126,11 +126,12 @@ func upsertSSHHost(path, block string) error {
 
 // writeFileAtomic replaces path with data through a temp file in the same
 // directory (target's mode if it exists, else mode), fsynced and renamed, so a
-// crash never leaves a half-written ssh config. A symlinked path is written
-// through to its target and stays a symlink.
+// crash never leaves a half-written ssh config. A symlinked path, dangling or
+// not, is written through to its target and stays a symlink.
 func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
-	if resolved, err := filepath.EvalSymlinks(path); err == nil {
-		path = resolved
+	path, err := writeTarget(path)
+	if err != nil {
+		return err
 	}
 	if fi, err := os.Stat(path); err == nil {
 		mode = fi.Mode().Perm()
@@ -191,4 +192,26 @@ func ensureSSHInclude(cmd *cobra.Command, cfg string) (bool, error) {
 		return false, fmt.Errorf("editor: write %s: %w", sshCfg, err)
 	}
 	return true, nil
+}
+
+// writeTarget is the file a write to path lands on: every symlink followed, in the directory it sits in
+// as the kernel resolves it, down to a link whose target does not exist yet. A path whose directory is
+// missing is returned as it is, for the caller's own error.
+func writeTarget(path string) (string, error) {
+	for range 40 {
+		dir, err := filepath.EvalSymlinks(filepath.Dir(path))
+		if err != nil {
+			return path, nil
+		}
+		path = filepath.Join(dir, filepath.Base(path))
+		dest, err := os.Readlink(path)
+		if err != nil {
+			return path, nil
+		}
+		if !filepath.IsAbs(dest) {
+			dest = filepath.Join(dir, dest)
+		}
+		path = dest
+	}
+	return "", errors.New("too many levels of symbolic links: " + path)
 }

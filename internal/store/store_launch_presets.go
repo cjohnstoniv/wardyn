@@ -39,15 +39,15 @@ func (s PG) GetLaunchPreset(ctx context.Context, name string) (types.LaunchPrese
 	return scanLaunchPreset(s.Pool.QueryRow(ctx, q, name))
 }
 
-// PutLaunchPreset creates p at version 1, or replaces the named row and moves
-// its version by one. A write identical to the stored row changes nothing, not
+// PutLaunchPreset creates p at version 1 (above the last version a deleted preset
+// of that name reached), or replaces the named row and moves its version by one. A write identical to the stored row changes nothing, not
 // even the version, so re-applying an unchanged document is a no-op. The
 // comparison and the bump are one statement, so two concurrent writers cannot
 // both land on the same version.
 func (s PG) PutLaunchPreset(ctx context.Context, p types.LaunchPreset) (types.LaunchPreset, PresetWrite, error) {
 	const q = `
-		INSERT INTO launch_presets (name, description, user_types, request, created_by, updated_by)
-		VALUES ($1, $2, $3, $4, $5, $5)
+		INSERT INTO launch_presets (name, version, description, user_types, request, created_by, updated_by)
+		VALUES ($1, COALESCE((SELECT version FROM launch_preset_version_floor WHERE name = $1), 0) + 1, $2, $3, $4, $5, $5)
 		ON CONFLICT (name) DO UPDATE SET
 			version = launch_presets.version + 1,
 			description = EXCLUDED.description,
@@ -81,9 +81,17 @@ func (s PG) PutLaunchPreset(ctx context.Context, p types.LaunchPreset) (types.La
 }
 
 // DeleteLaunchPreset removes a preset by name, returning the removed row, or
-// ErrNotFound. Runs launched from it keep their preset/preset_version stamp.
+// ErrNotFound. Runs launched from it keep their preset/preset_version stamp, and
+// the name keeps its version floor so a recreated preset never reuses a version.
 func (s PG) DeleteLaunchPreset(ctx context.Context, name string) (types.LaunchPreset, error) {
-	return scanLaunchPreset(s.Pool.QueryRow(ctx, `DELETE FROM launch_presets WHERE name = $1 RETURNING `+launchPresetCols, name))
+	const q = `
+		WITH gone AS (DELETE FROM launch_presets WHERE name = $1 RETURNING ` + launchPresetCols + `),
+		floor AS (
+			INSERT INTO launch_preset_version_floor (name, version) SELECT name, version FROM gone
+			ON CONFLICT (name) DO UPDATE SET version = GREATEST(launch_preset_version_floor.version, EXCLUDED.version)
+		)
+		SELECT ` + launchPresetCols + ` FROM gone`
+	return scanLaunchPreset(s.Pool.QueryRow(ctx, q, name))
 }
 
 func scanLaunchPreset(row pgx.Row) (types.LaunchPreset, error) {

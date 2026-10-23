@@ -141,7 +141,7 @@ func literalStoredFixture(t *testing.T, assigned bool, ceilingDomains, stored []
 	st := &memberBoundStore{policy: types.RunPolicy{ID: uuid.New(), Name: "row",
 		Spec: types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: stored}}}
 	if assigned {
-		st.profile = &types.GovernanceProfile{ID: uuid.New(), Name: "walled", Ceiling: ceiling}
+		st.profile = &types.GovernanceUnit{ID: uuid.New(), Name: "walled", Ceiling: ceiling}
 	}
 	cfg := baseTestConfig(h, st)
 	cfg.OIDC = &oidc.Authenticator{}

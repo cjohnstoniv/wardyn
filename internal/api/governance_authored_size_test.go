@@ -15,25 +15,25 @@ import (
 // A resolved ceiling inherits the deployment's size where its profile sets none; the AUTHORED size the
 // member cap reads (#1949) keeps that apart: a standalone row's own size, an overlay's narrowing of it,
 // and nothing for a chain no row of which sets one.
-func TestResolvedProfileCarriesTheAuthoredSize(t *testing.T) {
+func TestResolvedUnitCarriesTheAuthoredSize(t *testing.T) {
 	srv := &Server{cfg: Config{DefaultPolicy: types.RunPolicySpec{Resources: &types.ResourceLimits{CPUMillis: 1000, MemoryMiB: 2048}}}}
 	n := func(v int) *int { return &v }
-	sized := types.GovernanceProfile{ID: uuid.New(), Name: "sized", Ceiling: types.RunPolicySpec{Resources: &types.ResourceLimits{CPUMillis: 3000}}}
-	bare := types.GovernanceProfile{ID: uuid.New(), Name: "bare"}
-	narrowed := types.GovernanceProfile{ID: uuid.New(), Name: "narrowed", BaseProfileID: &sized.ID,
+	sized := types.GovernanceUnit{ID: uuid.New(), Name: "sized", Ceiling: types.RunPolicySpec{Resources: &types.ResourceLimits{CPUMillis: 3000}}}
+	bare := types.GovernanceUnit{ID: uuid.New(), Name: "bare"}
+	narrowed := types.GovernanceUnit{ID: uuid.New(), Name: "narrowed", ParentID: &sized.ID,
 		Overlay: &types.CeilingOverlay{Resources: &types.ResourcesOverlay{CPUMillis: n(2500)}}}
-	composedBare := types.GovernanceProfile{ID: uuid.New(), Name: "composed", BaseProfileID: &bare.ID,
+	composedBare := types.GovernanceUnit{ID: uuid.New(), Name: "composed", ParentID: &bare.ID,
 		Overlay: &types.CeilingOverlay{}}
 	for _, tc := range []struct {
 		name      string
-		chain     []types.GovernanceProfile
+		chain     []types.GovernanceUnit
 		authored  types.ResourceLimits
 		inherited int
 	}{
-		{"a standalone row's own size; memory inherited", []types.GovernanceProfile{sized}, types.ResourceLimits{CPUMillis: 3000}, 3000},
-		{"a row with no size authors none", []types.GovernanceProfile{bare}, types.ResourceLimits{}, 1000},
-		{"an overlay's size is the meet's", []types.GovernanceProfile{narrowed, sized}, types.ResourceLimits{CPUMillis: 2500}, 2500},
-		{"a composed chain that sets none authors none", []types.GovernanceProfile{composedBare, bare}, types.ResourceLimits{}, 1000},
+		{"a standalone row's own size; memory inherited", []types.GovernanceUnit{sized}, types.ResourceLimits{CPUMillis: 3000}, 3000},
+		{"a row with no size authors none", []types.GovernanceUnit{bare}, types.ResourceLimits{}, 1000},
+		{"an overlay's size is the meet's", []types.GovernanceUnit{narrowed, sized}, types.ResourceLimits{CPUMillis: 2500}, 2500},
+		{"a composed chain that sets none authors none", []types.GovernanceUnit{composedBare, bare}, types.ResourceLimits{}, 1000},
 	} {
 		p, err := srv.composeChain(tc.chain)
 		if err != nil {
@@ -50,14 +50,14 @@ func TestResolvedProfileCarriesTheAuthoredSize(t *testing.T) {
 func TestComposedProfileAuthorsItsPidsLimit(t *testing.T) {
 	srv := &Server{cfg: Config{DefaultPolicy: types.RunPolicySpec{Resources: &types.ResourceLimits{CPUMillis: 1000, MemoryMiB: 2048}}}}
 	pids := 256
-	overlaid := types.GovernanceProfile{ID: uuid.New(), Name: "overlaid",
+	overlaid := types.GovernanceUnit{ID: uuid.New(), Name: "overlaid",
 		Overlay: &types.CeilingOverlay{Resources: &types.ResourcesOverlay{PidsLimit: &pids}}}
-	res, err := srv.composeChain([]types.GovernanceProfile{overlaid})
+	res, err := srv.composeChain([]types.GovernanceUnit{overlaid})
 	if err != nil {
 		t.Fatal(err)
 	}
 	source := policySourceRecord{Kind: policyKindStored, Spec: types.RunPolicySpec{Resources: &types.ResourceLimits{PidsLimit: 4096}}}
-	got := appliedPids(source, governanceCeiling{Profile: res}, pids)
+	got := appliedPids(source, governanceCeiling{Unit: res}, pids)
 	want := client.AppliedAmount{Requested: 4096, Applied: pids, Capped: true, Source: types.LimitSourceGovernance, SourceName: "overlaid"}
 	if *got != want {
 		t.Errorf("pids_limit = %+v, want %+v", *got, want)

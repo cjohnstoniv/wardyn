@@ -210,6 +210,8 @@ type toolApprovalRequest struct {
 		Tool string   `json:"tool"`
 		Cmd  string   `json:"cmd"`
 		Env  []string `json:"env,omitempty"`
+		// Reason is a human_takeover's only field: the agent's own words to the person.
+		Reason string `json:"reason,omitempty"`
 	} `json:"payload"`
 }
 
@@ -220,6 +222,10 @@ type toolCallScope struct {
 	Tool string `json:"tool"`
 	Cmd  string `json:"cmd"`
 	Env  string `json:"env,omitempty"`
+	// Harness is the agent that asked, named by its toolgate credential (harnessOf),
+	// never by the body: set only on a run whose agents each hold one (several agents
+	// in one background run), so the approver is told which agent it is deciding for.
+	Harness string `json:"harness,omitempty"`
 }
 
 // handleBrokerCreateApproval forwards POST /wardyn/v1/approvals to the
@@ -250,16 +256,21 @@ func (p *Proxy) handleBrokerCreateApproval(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "wardyn: a tool approval may not name a lane", http.StatusBadRequest)
 		return
 	}
+	if body.Kind == string(types.ApprovalHumanTakeover) {
+		p.raiseTakeover(w, r, body.Payload.Reason)
+		return
+	}
 	if body.Kind != string(types.ApprovalToolCall) {
 		p.emitLocalDecision(r, egress.Deny, ruleSourceApprovals, nil)
-		http.Error(w, `wardyn: this route raises kind "tool_call" only; egress holds are raised proxy-side`,
+		http.Error(w, `wardyn: this route raises kind "tool_call" or "human_takeover" only; egress holds are raised proxy-side`,
 			http.StatusBadRequest)
 		return
 	}
 	scope := toolCallScope{
-		Tool: clampToolField(body.Payload.Tool, maxToolName),
-		Cmd:  clampToolField(body.Payload.Cmd, maxToolCmd),
-		Env:  envNames(body.Payload.Env),
+		Tool:    clampToolField(body.Payload.Tool, maxToolName),
+		Cmd:     clampToolField(body.Payload.Cmd, maxToolCmd),
+		Env:     envNames(body.Payload.Env),
+		Harness: p.harnessOf(r),
 	}
 	// Neither tool nor command asks a human to decide about nothing.
 	if scope.Tool == "" && scope.Cmd == "" {
@@ -278,6 +289,28 @@ func (p *Proxy) handleBrokerCreateApproval(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	// The created row's id rides the decision log so audit can join it to the approval.
+	p.relayControlPlane(w, r, http.MethodPost, "/api/v1/internal/approvals",
+		fwd, "application/json", ruleSourceApprovals, approvalIDAlways)
+}
+
+// raiseTakeover forwards a "Needs you" request (`wardyn needs-you <reason>`): the agent asks a person
+// to take over its desktop or terminal. The scope is the clamped reason and nothing else, so the
+// sandbox cannot shape anything but the sentence the person reads. It is never decided by tool
+// rules: only a person can take over.
+func (p *Proxy) raiseTakeover(w http.ResponseWriter, r *http.Request, reason string) {
+	scope := types.TakeoverScope{Reason: clampToolField(reason, types.MaxTakeoverReason)}
+	if scope.Reason == "" {
+		http.Error(w, "a takeover request needs a reason", http.StatusBadRequest)
+		return
+	}
+	fwd, err := json.Marshal(struct {
+		Kind           string              `json:"kind"`
+		RequestedScope types.TakeoverScope `json:"requested_scope"`
+	}{Kind: string(types.ApprovalHumanTakeover), RequestedScope: scope})
+	if err != nil {
+		p.httpError(w, "encode takeover request", err, http.StatusInternalServerError)
+		return
+	}
 	p.relayControlPlane(w, r, http.MethodPost, "/api/v1/internal/approvals",
 		fwd, "application/json", ruleSourceApprovals, approvalIDAlways)
 }

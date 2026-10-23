@@ -197,6 +197,8 @@ type apiDoor struct {
 	// stream relays the response a chunk at a time, flushing each (relayStreaming), for an
 	// upstream that streams its answer (Bedrock's response streams).
 	stream bool
+	// rt, when set, is the door's own upstream (a cluster's CA bundle); nil is the egress transport.
+	rt http.RoundTripper
 }
 
 // forwardAPIDoor is the forward half the API doors share (servePATAPI,
@@ -212,7 +214,7 @@ func (p *Proxy) forwardAPIDoor(w http.ResponseWriter, r *http.Request, host stri
 	if p.scanner != nil && p.scanner.Mode() != contentscan.ModeOff {
 		if p.scanner.InspectForwardEgress() {
 			if q, err := url.QueryUnescape(r.URL.RawQuery); err == nil && q != "" {
-				res, _, serr := p.scanner.ScanRequest(contentscan.ChannelGeneric, []byte(q))
+				res, _, serr := p.scanner.ScanRequestContext(r.Context(), contentscan.ChannelGeneric, []byte(q))
 				if p.scanner.ShouldBlock(res) {
 					p.emitLLMDecision(r, host, port, egress.Deny, ruleSourceLLMBlocked, scanSummaryFrom(res, serr, p.scanner, "block", contentscan.ChannelGeneric))
 					writeScanBlocked(w, len(res.Findings), categoriesOf(res.Findings), res.SkipReason)
@@ -292,7 +294,12 @@ func (p *Proxy) forwardAPIDoor(w http.ResponseWriter, r *http.Request, host stri
 		}
 	}
 
-	resp, err := p.roundTripUpstream(out)
+	var resp *http.Response
+	if d.rt != nil {
+		resp, err = d.rt.RoundTrip(out)
+	} else {
+		resp, err = p.roundTripUpstream(out)
+	}
 	if err != nil {
 		p.failUpstream(w, err, &egress.DecisionLog{Request: p.reqOf(r, host, port)}, host, far+" api upstream error")
 		return

@@ -431,7 +431,7 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if err := validateHAPosture(f); err != nil {
 		return err
 	}
-	if err := validateUISandboxConfig(*f.uiListen, *f.listen, *f.internalListen, *f.sshListen, *f.uiOriginTemplate, *f.uiStripCookies, posture, *f.allowPlaintextListen); err != nil {
+	if err := validateUISandboxConfig(*f.uiListen, *f.listen, boundInternalListen(*f.internalListen, *f.controlURL), *f.sshListen, *f.uiOriginTemplate, *f.uiStripCookies, posture, *f.allowPlaintextListen); err != nil {
 		return err
 	}
 	if err := validateMetricsListenConfig(*f.metricsListen, *f.listen, *f.internalListen, *f.sshListen, *f.uiListen); err != nil {
@@ -509,6 +509,9 @@ func flagValue(p *string) string {
 // ignored WARDYN_MEMBER_WRITABLE_DENY would silently widen the writable set, so every removed name is
 // refused rather than ignored.
 func refuseRemovedEnv(environ []string) error {
+	if err := refuseRenamedGovernanceEnv(environ); err != nil {
+		return err
+	}
 	left := cliutil.RemovedEnvLeftovers(environ)
 	if len(left) == 0 {
 		return nil

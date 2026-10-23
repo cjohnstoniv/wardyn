@@ -21,7 +21,8 @@ import { LIST_LIMIT } from "../../lib/api/core";
 import { setup as setupApi } from "../../lib/api/setup";
 import { usePoll } from "../../lib/use-poll";
 import { deriveReadiness } from "../../lib/readiness";
-import { NoBarrierBanner, RunsFirstRun } from "./runs-first-run";
+import { useShellSetupStatus } from "../wardyn/model-access-context";
+import { RunsFirstRun } from "./runs-first-run";
 import { RunsMemberEmpty } from "./runs-member-empty";
 import { Button } from "../ui/button";
 import { cn } from "../ui/utils";
@@ -79,6 +80,9 @@ export function RunsScreen() {
   const [hiddenOlder, setHiddenOlder] = React.useState(0);
   const [hiddenKilled, setHiddenKilled] = React.useState(0);
   const [truncated, setTruncated] = React.useState(false);
+  // Every run the caller owns, as of the last fetch no filter narrowed: a search, a status or a
+  // workspace filter changes the rows shown, not how many runs there are.
+  const [owned, setOwned] = React.useState<{ n: number; more: boolean } | null>(null);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   // whether ANY fetch has ever landed. Only the very first load
   // shows the full-page skeleton (design.md §2.1's "Loading" state); every
@@ -119,6 +123,9 @@ export function RunsScreen() {
           setHiddenOlder(res.hiddenOlder);
           setHiddenKilled(res.hiddenKilled);
           setTruncated(res.truncated);
+          if (!adminView && filters.q === "" && filters.status === "all" && filters.workspace === "all") {
+            setOwned({ n: res.runs.length + res.hiddenOlder + res.hiddenKilled, more: res.truncated });
+          }
           setStatus("ready");
           setLoadedOnce(true);
         },
@@ -156,29 +163,36 @@ export function RunsScreen() {
   // carries the "alive" fact now.
   usePoll(refresh, POLL_MS, status !== "ready");
 
-  // Setup status backs the noBarrier banner and RunsFirstRun's own content
+  // Setup status backs RunsFirstRun's own content
   // (readiness/confinementClasses/secretNames) — NOT the true-first-run
   // decision itself. `has_runs` is a bare deployment-wide existence check
   // (internal/api/setup.go), so it is the wrong signal for a member, or an
   // admin's own User view, on a deployment that has OTHER people's runs; see
   // `trueEmpty` below, which reads this caller's own scoped fetch instead.
-  const [setupStatus, setSetupStatus] = React.useState<SetupStatus | null>(null);
+  // The shell already reads /setup/status (and re-reads it on its Re-check), so that answer is used when there
+  // is one; the page fetches its own only when it renders without a shell.
+  const { status: shellStatus } = useShellSetupStatus();
+  const [ownStatus, setOwnStatus] = React.useState<SetupStatus | null>(null);
   const loadSetupStatus = React.useCallback(
-    () => setupApi.getSetupStatus().then(setSetupStatus).catch(() => {}),
+    () => setupApi.getSetupStatus().then(setOwnStatus).catch(() => {}),
     [],
   );
   React.useEffect(() => {
-    void loadSetupStatus();
-  }, [loadSetupStatus]);
+    if (!shellStatus) void loadSetupStatus();
+  }, [loadSetupStatus, shellStatus]);
+  const setupStatus = shellStatus ?? ownStatus;
   const readiness = setupStatus ? deriveReadiness(setupStatus) : null;
   const confinementClasses = setupStatus?.runner?.confinement_classes ?? [];
-  const noBarrier = !!setupStatus && !setupStatus.unreachable && confinementClasses.length === 0;
-  usePoll(loadSetupStatus, SETUP_POLL_MS, !noBarrier && !setupStatus?.unreachable);
+  usePoll(loadSetupStatus, SETUP_POLL_MS, !!shellStatus || !!setupStatus?.unreachable);
 
   const sections: RunSections = React.useMemo(() => sectionRuns(runsList), [runsList]);
   const workspaceOptions = React.useMemo(
-    () => Array.from(new Set(runsList.map((r) => r.repo).filter(Boolean))).sort(),
-    [runsList],
+    () => {
+      const labels = runsList.map((r) => r.repo || r.workspace_path).filter((l): l is string => !!l);
+      if (filters.workspace !== "all") labels.push(filters.workspace);
+      return Array.from(new Set(labels)).sort();
+    },
+    [runsList, filters.workspace],
   );
 
   // scope only ever narrows anything in the Admin view (H-4) — a stray
@@ -221,14 +235,12 @@ export function RunsScreen() {
   // example (13 shown + 4 older + 1 killed = "Your runs · 18").
   const description = adminView
     ? "Every run, live — each confined behind its own barrier."
-    : `Your runs · ${runsList.length + hiddenOlder + hiddenKilled}${truncated ? "+" : ""}`;
+    : `Your runs · ${owned?.n ?? runsList.length + hiddenOlder + hiddenKilled}${(owned?.more ?? truncated) ? "+" : ""}`;
 
   const clearFilters = () => setFilters(DEFAULT_RUNS_FILTERS);
 
   return (
     <div className="mx-auto max-w-[1400px] px-6 py-6">
-      {noBarrier && <NoBarrierBanner onRecheck={loadSetupStatus} />}
-
       <PageHeader title="Runs" description={description} />
 
       {adminView && <AdminOlderLimitsCard />}
@@ -265,6 +277,8 @@ export function RunsScreen() {
             adminView={adminView}
             currentSearch={searchParams.toString()}
             savedViews={savedViews}
+            runCount={runsList.length}
+            runsTruncated={truncated}
             onChange={setFilters}
             onSelectView={(search) =>
               setSearchParams(applySavedViewOwner(search, adminView, filters.scope), { replace: true })

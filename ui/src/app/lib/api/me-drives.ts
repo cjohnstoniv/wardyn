@@ -11,7 +11,7 @@ import { asJson, errText, HttpError, unwrapList, wfetch } from "./core";
 
 export type MeDriveSection = "user" | "shared";
 export type MeDriveSource = "personal" | "team" | "organisation";
-export type MeDriveUnavailableReason = "paused" | "unmountable" | "placement_denied" | "not_in_pool";
+export type MeDriveUnavailableReason = "paused" | "unmountable" | "placement_denied" | "not_in_pool" | "bound_elsewhere";
 
 /** One drive of the caller's catalogue (pkg/client.MeDrive). */
 export interface MeDrive {
@@ -30,12 +30,24 @@ export interface MeDrive {
   unavailable_reason?: MeDriveUnavailableReason;
   /** The caller created it; only an owned drive takes DELETE /me/drives/{id}. */
   owned: boolean;
+  /** One folder shared by the groups it is allocated to; false while team drives are off. */
+  team: boolean;
+  /** On a team drive, the caller's own groups that carry its allocation. */
+  shared_with?: string[];
+  /** The run whose work folder this drive kept (keep_work_folder); absent on a drive made by hand. */
+  kept_from_run?: string;
+  /** That run's title when the catalogue was read; absent when the run is gone or untitled. */
+  kept_from_run_title?: string;
+  /** Where it mounts from, printed as it is (M10): "Organisation runners", and the bound runner when you own it. */
+  mounts_from?: string;
+  /** Set when the pool asked about holds the runner this drive is bound to: that runner, and its path there. */
+  mounted_from?: { runner: string; path: string };
 }
 
 /** GET /me/drives (pkg/client.MeDriveCatalogue). */
 export interface MeDriveCatalogue {
   drives: MeDrive[];
-  denied_by_profile?: string;
+  denied_by_unit?: string;
   unavailable?: string;
   pool_checked: boolean;
   /** Whether the caller may create a drive now; absent when the caller is not a person. */
@@ -45,7 +57,7 @@ export interface MeDriveCatalogue {
 /** Why a person cannot create a drive now (pkg/client.MemberDriveCreateReason). */
 export type MemberDriveCreateReason =
   | "disabled"
-  | "denied_by_profile"
+  | "denied_by_unit"
   | "limit_reached"
   | "unsupported"
   | "delete_unavailable"
@@ -57,11 +69,15 @@ export interface MemberDriveCreate {
   allowed: boolean;
   /** Set exactly when allowed is false. */
   reason?: MemberDriveCreateReason;
-  denied_by_profile?: string;
+  denied_by_unit?: string;
   /** The caller's drives, one being deleted included. */
   count: number;
   /** Drives per person; 0 when the switch is off. */
   limit: number;
+  /** The keep_main_drive switch, reported whether or not allowed. */
+  keep_work_folder: boolean;
+  /** What binds a new drive's size here; "none" on Docker. */
+  enforcement?: StorageEnforcement;
 }
 
 /** Reads the caller's drive catalogue, checked against runnerPoolId when given. */

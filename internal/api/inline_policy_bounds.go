@@ -292,7 +292,7 @@ func (s *Server) narrowUserInlinePolicy(ctx context.Context, owner string, spec 
 	// un-onboarded a few lines later, and dropping it here would turn that clear
 	// refusal into a silently smaller run.
 	if len(spec.WorkspaceRepos) > 0 && s.cfg.Store != nil {
-		all, err := s.cfg.Store.ListWorkspaces(ctx)
+		all, err := s.listWorkspaces(ctx)
 		if err != nil {
 			return nil, nil, fmt.Errorf("api: list workspaces: %w", err)
 		}

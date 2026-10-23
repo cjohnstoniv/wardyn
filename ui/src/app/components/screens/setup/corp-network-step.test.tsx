@@ -249,6 +249,22 @@ describe("Test probes — real states, never a fake pass, running disables+relab
     expect(screen.getByText("Not tested")).toBeInTheDocument();
   });
 
+  it("a failed re-test keeps the held verdict on the panel, so it agrees with the gate (#2575)", async () => {
+    testProxyMock.mockRejectedValueOnce(new Error("503 restarting"));
+    const onGateChange = vi.fn();
+    renderStep({
+      gate: { ...unsetGate(), proxyProbe: { state: "reached", detail: T.TEST_OK } },
+      onGateChange,
+    });
+    expect(screen.getByText("Reached · via proxy")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /^test again$/i }));
+
+    await screen.findByRole("button", { name: /^test again$/i });
+    expect(screen.getByText("Reached · via proxy")).toBeInTheDocument();
+    expect(screen.queryByText("Not tested")).not.toBeInTheDocument();
+    expect(onGateChange).not.toHaveBeenCalledWith(expect.objectContaining({ proxyProbe: undefined }));
+  });
+
   it("redirect row Test: disables + relabels to 'Testing…' while running — the mock left this always-on; both buttons must match", async () => {
     let resolve!: (v: { state: string; detail: string }) => void;
     testRedirectMock.mockReturnValue(new Promise((r) => (resolve = r)));
@@ -331,6 +347,24 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
     // Expanding swaps the row for its editor, whose stable Cancel control only
     // exists once expanded.
     expect(screen.getByRole("button", { name: /^cancel$/i })).toBeInTheDocument();
+  });
+
+  it("a viewer's expanded redirect row disables Save and Remove, as the collapsed row does (#2564)", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <OperatorProvider operator={false}>
+          <Harness siteConfig={{ egress_redirects: redirects }} />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    await user.click(screen.getByRole("tab", { name: /egress redirection/i }));
+    await user.click(screen.getByTitle("https://ghcr.io → https://registry.corp.internal/ghcr-remote"));
+
+    expect(screen.getByRole("button", { name: /^save$/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^remove$/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^cancel$/i })).toBeEnabled();
+    expect(screen.getAllByText(T.VIEWER_HINT).length).toBeGreaterThan(0);
   });
 
   // WIRE-3: an integration-backed redirect must not render identically to an

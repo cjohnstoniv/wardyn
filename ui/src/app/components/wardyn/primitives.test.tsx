@@ -44,6 +44,12 @@ describe("RunStateBadge", () => {
     expect(screen.getByText("Queued")).toBeInTheDocument();
   });
 
+  it("says a state in another word when given one, keeping the state's tone", () => {
+    render(<RunStateBadge state="QUEUED" word="Scheduled" />);
+    expect(screen.getByText("Scheduled")).toBeInTheDocument();
+    expect(screen.queryByText("Queued")).toBeNull();
+  });
+
   it("renders a known state", () => {
     render(<RunStateBadge state="RUNNING" />);
     expect(screen.getByText("Running")).toBeInTheDocument();

@@ -43,7 +43,7 @@ func requestRunnerID(req createRunRequest) uuid.UUID {
 // denies: absent (nil) for a member with no assigned profile, and for a caller
 // whose runs stand outside governance. A deny list, so absent means permitted.
 func (s *Server) deniedPlacements(ctx context.Context, ceiling governanceCeiling) []types.Placement {
-	if ceiling.Profile == nil || s.runUngoverned(ctx) {
+	if ceiling.Unit == nil || s.runUngoverned(ctx) {
 		return nil
 	}
 	return ceiling.Limits.DenyPlacements
@@ -57,7 +57,7 @@ func (s *Server) placementDeniedRefusal(ctx context.Context, p types.Placement, 
 	if !slices.Contains(s.deniedPlacements(ctx, ceiling), p) {
 		return nil
 	}
-	d := authz.Deny(authz.ReasonGovernanceProfile, "runs.placement", placementDeniedMsg(p, ceiling.Profile.Name)).WithPolicy(s.ceilingPolicy(ctx, ceiling))
+	d := authz.Deny(authz.ReasonGovernanceUnit, "runs.placement", placementDeniedMsg(p, ceiling.Unit.Name)).WithPolicy(s.ceilingPolicy(ctx, ceiling))
 	f := runError(placement.ReasonPlacementDenied.Status(), string(placement.ReasonPlacementDenied), d.Sentence)
 	f.decision = &d
 	return f
@@ -186,8 +186,13 @@ func (s *Server) localAdmittedPlan(r *http.Request, req createRunRequest,
 		Origins: map[string]placement.CredentialOrigin{}, UpstreamProxySecretRef: sc.UpstreamProxySecretRef,
 		LocalSelfDefinedComponents: ceiling.Limits.LocalSelfDefinedComponents,
 		TrustedOutput:              localTrustedOutputRequest(req),
+		// A bound drive's runner is the run's (kindTargets holds the run to it).
+		VerifiedLocalPaths: s.drivePathsOn(boundMountRunner(drives), drives),
 	}
 	for _, c := range comps.attached {
+		if !c.snapshot.SelfDefined && c.snapshot.Definition.LocalMCP() {
+			return placement.LocalPlan{}, runError(placement.ReasonPlacementCredential.Status(), string(placement.ReasonPlacementCredential), localMCPOrgServerMsg)
+		}
 		if c.snapshot.SelfDefined {
 			name := c.snapshot.Name
 			if name == "" {
@@ -223,6 +228,11 @@ func (s *Server) localAdmittedPlan(r *http.Request, req createRunRequest,
 // whose header the organisation injects, and the broker's tool rules would not run there.
 const localMCPSharedCredentialMsg = "components: an MCP server's credential that your organisation shares can't reach your own runner; use a secret of your own for it, or run this on a remote-hosted runner"
 
+// localMCPOrgServerMsg refuses a local run with an MCP server that runs in the sandbox from a row the
+// organisation defines: its launch command and args are the organisation's, which may hold what its
+// stripped config values would, and they reach the runner unjudged in the harness's MCP configuration.
+const localMCPOrgServerMsg = "components: your organisation's MCP servers that run in the sandbox can't run on your own runner; define one of your own, or run this on a remote-hosted runner"
+
 // mcpHeaderGrant reports whether g is the header credential of one of the run's MCP servers.
 func mcpHeaderGrant(g types.GrantSpec, mcpHosts []string) bool {
 	if g.Kind != types.GrantAPIKey {
@@ -241,9 +251,9 @@ type boundLocalPath struct {
 // verifiedLocalPaths is the plan's VerifiedLocalPaths: a path is verified only
 // when its stored runner binding is the candidate runner and the path lies
 // inside one of that runner's allowed roots. bound is keyed by the plan path
-// ("SandboxSpec.Mounts[0]", "SandboxSpec.Drives[0]"). Nothing produces a binding on
-// batch yet (local_dir sources and host_path drives carry no runner column), so
-// every local mount still refuses placement_local_path until one does.
+// ("SandboxSpec.Mounts[0]", "SandboxSpec.Drives[0]"). A drive's second place is
+// bound to one runner (drivePathsOn); local_dir sources carry no runner column
+// yet, so every local mount still refuses placement_local_path.
 func verifiedLocalPaths(candidate uuid.UUID, roots []string, bound map[string]boundLocalPath) map[string]bool {
 	out := map[string]bool{}
 	for key, b := range bound {

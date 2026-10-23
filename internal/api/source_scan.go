@@ -112,8 +112,8 @@ func (s *Server) handleScanSource(w http.ResponseWriter, r *http.Request) {
 }
 
 // writeScanLaunchRefusal answers the policy refusals a scan launch can end in,
-// the provider admission, the placement denial and a governance run limit, and
-// reports whether it did.
+// the provider admission, the placement denial, a governance run limit and a stale
+// group snapshot, and reports whether it did.
 func (s *Server) writeScanLaunchRefusal(w http.ResponseWriter, r *http.Request, err error) bool {
 	var denied *placementDeniedError
 	if errors.As(err, &denied) {
@@ -123,6 +123,10 @@ func (s *Server) writeScanLaunchRefusal(w http.ResponseWriter, r *http.Request, 
 	// sentence, as the record and sign-in lanes answer it.
 	if errors.Is(err, errRecordCeilingLimit) {
 		writeErrorReasonPolicy(w, http.StatusForbidden, reasonRecordCeilingLimit, strings.TrimPrefix(err.Error(), errRecordCeilingLimit.Error()+": "), recordCeilingRef(err))
+		return true
+	}
+	if errors.Is(err, errGroupsSnapshotStale) {
+		writeCeilingError(w, r, err)
 		return true
 	}
 	return s.writeAdmissionLaunchRefusal(w, r, err)

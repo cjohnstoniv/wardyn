@@ -23,6 +23,14 @@ sandboxes inside the ceiling your admin set. There is nothing to install.
 - Signing out of Wardyn does not sign you out of your identity provider, nor the reverse: Wardyn has no front-channel logout, and back-channel logout is off unless your operator turned it on ([ENV.md](ENV.md#wardyn_oidc_backchannel_logout)). A session ends at expiry, at your sign-out, or when an admin, SCIM deprovisioning or that back-channel logout cuts it.
 - A run's idle clock does not stop when your terminal closes. A lapse that closes your terminal leaves the run under its own idle and end limits, which [run lifetime](operations/run-lifetime.md#the-clocks-that-end-or-freeze-a-run) explains. A run with idle stop off never stops for inactivity.
 
+## Session lifetime
+
+- How long a console session lasts: your identity provider's ID token expiry, or `WARDYN_OIDC_SESSION_TTL` when your admin sets it. The account menu shows "Signed in until".
+- Why you may be asked to sign in sooner: an admin ended your session, your access changed (`WARDYN_ROLE_STAMP_TTL`), or your access was turned off. The sign-in screen says which.
+- What survives: the page you were on, open editors in that tab, a run's terminal and the run itself. Signing out leaves the run itself unaffected.
+- Shared computers: Sign out ends the Wardyn session only; sign out of your work account too.
+- Tabs: signing out or in in one tab updates the others in the same browser, not other browsers or devices.
+
 ## What you can and cannot do
 
 - The full matrix lives in
@@ -53,7 +61,7 @@ sandboxes inside the ceiling your admin set. There is nothing to install.
 - The agent you picked does not change the level, though at `L1` it can get a
   non-interactive run refused (below).
 - A run whose shape exceeds what your resolved level permits is refused
-  `governance_profile`, the same refusal a denied `task_mode` or interactive flag
+  `governance_unit`, the same refusal a denied `task_mode` or interactive flag
   already gives you — see
   [denials.md § Every denial that isn't a 404](operations/denials.md#every-denial-that-isnt-a-404).
 - A non-interactive claude-code run at `L1` is not refused for lacking
@@ -123,7 +131,7 @@ Three things worth naming here, because they read as bugs otherwise:
 - The last two are **always present**, so a missing key means an older daemon
   rather than "nothing is wrong":
   - `user_drive` — your allocation, or `null`.
-  - `user_drive_denied_by_profile` — the **door**: the name of the governance
+  - `user_drive_denied_by_unit` — the **door**: the name of the governance
     profile that refuses to mount a drive for you, or `""` when none does.
   - `user_drive_unavailable` — `""` when Wardyn could answer. Any other value is
     one of six tokens saying it could **not**, and which remedy that implies:
@@ -346,11 +354,10 @@ resolves your drive the same way, in a dry run too:
     sandbox.
   - A Bedrock SSO sign-in is the one exception: the in-sandbox AWS SDK
     always derives short-lived AWS role credentials that stay resident in the
-    sandbox for the run.
-  - With `WARDYN_AWS_SSO_PROXY_INJECT=off` the SSO
-    access token itself is written into the sandbox too — see
+    sandbox for the run — see
     [../threatmodel/THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) ("Derived
-    AWS role credentials") and [ENV.md](ENV.md)
+    AWS role credentials").
+  - The SSO access token itself stays at the proxy; see [ENV.md](ENV.md)
     (`WARDYN_AWS_SSO_PROXY_INJECT`).
 
 ## Your model connections

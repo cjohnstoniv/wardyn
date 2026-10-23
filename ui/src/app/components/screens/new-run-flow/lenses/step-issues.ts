@@ -9,12 +9,19 @@ import type { RunIntent } from "../draft/run-intent";
 export type NewRunStep = "shape" | "run" | "harnesses" | "files" | "tools";
 export const NEW_RUN_STEPS: readonly NewRunStep[] = ["shape", "run", "harnesses", "files", "tools"];
 
+/** What is wrong with one field of a port row. */
+export const APP_PROBLEM_CODES = ["app_name_invalid", "app_name_duplicate", "app_port_invalid", "app_port_duplicate", "app_path_invalid"] as const;
+export type AppProblemCode = (typeof APP_PROBLEM_CODES)[number];
+
 export type StepIssueCode =
+  | AppProblemCode
   | "shape_required"
   | "harness_required"
   | "task_required"
+  | "agent_task_required"
   | "command_required"
   | "pool_required"
+  | "app_required"
   | "main_drive_size_required"
   | "files_choice_required"
   | "starts_here_required"
@@ -30,6 +37,10 @@ export interface StepIssue {
   code: StepIssueCode;
   /** DOM id of the control a failed Continue focuses. */
   focus: string;
+  /** The port an application issue names (a duplicate says which). */
+  port?: number;
+  /** The name an application issue names (a duplicate says which). */
+  name?: string;
 }
 
 /** The control ids step bodies give the fields an issue points at. */
@@ -37,8 +48,15 @@ export const ISSUE_FOCUS: Record<StepIssueCode, string> = {
   shape_required: "nr-workload",
   harness_required: "nr-harness",
   task_required: "nr-task",
+  agent_task_required: "nr-task",
   command_required: "nr-command",
   pool_required: "nr-pool",
+  app_required: "nr-app-add",
+  app_name_invalid: "nr-app-name-0",
+  app_name_duplicate: "nr-app-name-0",
+  app_port_invalid: "nr-app-port-0",
+  app_port_duplicate: "nr-app-port-0",
+  app_path_invalid: "nr-app-path-0",
   main_drive_size_required: "nr-main-drive-size",
   files_choice_required: "nr-files-choice",
   starts_here_required: "nr-starts-here",

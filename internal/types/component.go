@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -83,8 +84,9 @@ type ComponentDefinition struct {
 	Config      map[string]string `json:"config,omitempty"`
 	// CLI marks an org row as a CLI credential card (azure, aws or github).
 	CLI *ComponentCLI `json:"cli,omitempty"`
-	// MCP makes the component a remote MCP server, which a run's harnesses
-	// reach only through the proxy's broker route (component_mcp.go).
+	// MCP makes the component an MCP server: a remote one, which a run's
+	// harnesses reach only through the proxy's broker route, or one its
+	// harness starts inside the sandbox (ComponentMCP).
 	MCP *ComponentMCP `json:"mcp,omitempty"`
 }
 
@@ -595,11 +597,13 @@ func printable(s string) bool {
 	return utf8.ValidString(s) && strings.IndexFunc(s, func(r rune) bool { return !unicode.IsPrint(r) }) < 0
 }
 
-// CLI kinds a component row can carry. gcloud and kubectl are not built.
+// CLI kinds a component row can carry. gcloud is not built, and kubectl is
+// a kind only where EnvKubectlCLI is on.
 const (
-	CLIKindAzure  = "azure"
-	CLIKindAWS    = "aws"
-	CLIKindGitHub = "github"
+	CLIKindAzure   = "azure"
+	CLIKindAWS     = "aws"
+	CLIKindGitHub  = "github"
+	CLIKindKubectl = "kubectl"
 )
 
 // CLISecretPrefix starts every person's CLI sign-in capture:
@@ -610,12 +614,57 @@ const CLISecretPrefix = "wardyn-cli-"
 const MaxCLIAzureSubscriptions = 16
 
 // ComponentCLI is the credential an org row gives a run's command-line tool.
-// Kind names which of the three arms is set, and only that one is.
+// Kind names which of the arms is set, and only that one is.
 type ComponentCLI struct {
-	Kind   string     `json:"kind"` // azure | aws | github
-	Azure  *CLIAzure  `json:"azure,omitempty"`
-	AWS    *CLIAWS    `json:"aws,omitempty"`
-	GitHub *CLIGitHub `json:"github,omitempty"`
+	Kind    string      `json:"kind"` // azure | aws | github | kubectl
+	Azure   *CLIAzure   `json:"azure,omitempty"`
+	AWS     *CLIAWS     `json:"aws,omitempty"`
+	GitHub  *CLIGitHub  `json:"github,omitempty"`
+	Kubectl *CLIKubectl `json:"kubectl,omitempty"`
+}
+
+// MaxCLIKubectlNamespaces bounds the namespaces one kubectl row pins, and
+// MaxCLIKubectlCABytes its CA bundle.
+const (
+	MaxCLIKubectlNamespaces = 16
+	MaxCLIKubectlCABytes    = 64 << 10
+)
+
+// CLIKubectl registers one cluster: its API server, the CA its serving
+// certificate chains to, the one service account the organisation lets runs act
+// as there, the namespaces a run may reach and whether it may change them. The
+// service account's token is not here: an admin stores it through the row's own
+// route, and only the control plane reads it.
+type CLIKubectl struct {
+	Server         string            `json:"server"`           // https://host[:port], no path
+	CAPEM          string            `json:"ca_pem,omitempty"` // PEM; empty trusts the system roots
+	ServiceAccount CLIServiceAccount `json:"service_account"`
+	Namespaces     []string          `json:"namespaces"` // 1..MaxCLIKubectlNamespaces
+	Access         string            `json:"access"`     // read (GET only) | write
+}
+
+// CLIServiceAccount names a Kubernetes service account.
+type CLIServiceAccount struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+}
+
+// HostPort is the API server's host and port (443 when the URL names none),
+// the host lowercased. ok=false when Server is not a URL validate accepts.
+func (k CLIKubectl) HostPort() (host string, port int, ok bool) {
+	u, err := url.Parse(k.Server)
+	if err != nil || u.Hostname() == "" {
+		return "", 0, false
+	}
+	port = 443
+	if p := u.Port(); p != "" {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 1 || n > 65535 {
+			return "", 0, false
+		}
+		port = n
+	}
+	return strings.ToLower(u.Hostname()), port, true
 }
 
 // CLIGitHub scopes the GitHub CLI to the run's repositories by capability.
@@ -681,9 +730,9 @@ func (d ComponentDefinition) validateCLI(personDefined bool) error {
 	if len(d.Secrets) > 0 {
 		return errors.New("cli: a CLI row carries no secrets; its credential is the run's")
 	}
-	arms := map[string]bool{CLIKindAzure: c.Azure != nil, CLIKindAWS: c.AWS != nil, CLIKindGitHub: c.GitHub != nil}
+	arms := map[string]bool{CLIKindAzure: c.Azure != nil, CLIKindAWS: c.AWS != nil, CLIKindGitHub: c.GitHub != nil, CLIKindKubectl: c.Kubectl != nil}
 	have, ok := arms[c.Kind]
-	if !ok {
+	if !ok || c.Kind == CLIKindKubectl && !KubectlCLIOn() {
 		return fmt.Errorf("cli.kind: %q is not azure, aws or github", c.Kind)
 	}
 	if !have {
@@ -699,6 +748,8 @@ func (d ComponentDefinition) validateCLI(personDefined bool) error {
 		return c.Azure.validate()
 	case CLIKindAWS:
 		return c.AWS.validate()
+	case CLIKindKubectl:
+		return c.Kubectl.validate()
 	}
 	return c.GitHub.validate()
 }
@@ -767,67 +818,43 @@ func (a *CLIAzure) validate() error {
 	return nil
 }
 
-// ComponentMCPTransportHTTP is the one MCP transport a component may use:
-// streamable HTTP.
-const ComponentMCPTransportHTTP = "http"
+// The MCP transports a component may use: streamable HTTP to a remote server,
+// or stdio to a server its harness starts inside the run's sandbox.
+const (
+	ComponentMCPTransportHTTP  = "http"
+	ComponentMCPTransportStdio = "stdio"
+)
 
 // Bounds on an MCP component and on what one reference turns it on for.
 const (
 	MaxComponentMCPURLBytes  = 2048
 	MaxComponentMCPHarnesses = 8
+	MaxComponentMCPArgs      = 32
+	MaxComponentMCPArgBytes  = 1024
 )
 
-// ComponentMCP is a remote MCP server. The run's harnesses never reach URL
-// itself: each is configured with the proxy's broker route, which adds the
-// server's header credential, applies the run's tool rules to its tools and is
-// the only network path to the server.
+// ComponentMCP is an MCP server. Transport decides which kind:
+//
+//   - http: a remote server. The run's harnesses never reach URL itself: each
+//     is configured with the proxy's broker route, which adds the server's
+//     header credential, applies the run's tool rules to its tools and is the
+//     only network path to the server.
+//   - stdio: a local server. Launch is the command its harness starts inside
+//     the run's sandbox, as the agent's user, with the agent's access; the
+//     harness, not the proxy, applies the run's rules to its tools. Its hosts
+//     join the run's allowlist and its secrets are delivered as any
+//     component's are.
+//
+// Launch and Transport are one seam: a later placement (the server in a
+// container of its own, bridged to the broker) adds a field beside them and
+// keeps both.
 type ComponentMCP struct {
-	// URL is the server's streamable HTTP address: https, no userinfo, its
-	// host one of the component's hosts.
-	URL       string `json:"url"`
-	Transport string `json:"transport"` // http
-}
-
-// harnessIDRE is a harness id as tools[].id names one.
-var harnessIDRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
-
-// validateMCP checks the mcp block. Its credential goes to the server and never
-// into the sandbox, so its only secret mode is a header to the server's own
-// host, over TLS.
-func (d ComponentDefinition) validateMCP() error {
-	m := d.MCP
-	if m == nil {
-		return nil
-	}
-	if d.CLI != nil {
-		return errors.New("mcp: a component is an MCP server or a CLI credential, not both")
-	}
-	switch m.Transport {
-	case ComponentMCPTransportHTTP:
-	case "sse":
-		return errors.New("mcp.transport: servers that use SSE are not supported yet; use the server's streamable HTTP address")
-	default:
-		return fmt.Errorf("mcp.transport: %q is not http", m.Transport)
-	}
-	host, err := MCPURLDestination(m.URL)
-	if err != nil {
-		return fmt.Errorf("mcp.url: %w", err)
-	}
-	if !slices.ContainsFunc(d.Hosts, func(h string) bool { return mcpHostAdmits(h, host) }) {
-		return fmt.Errorf("mcp.url: its host %q must be one of this component's hosts", host.String())
-	}
-	for i, s := range d.Secrets {
-		del := s.Delivery
-		switch {
-		case del.Mode != ComponentDeliveryHeader:
-			return fmt.Errorf("secrets[%d].delivery.mode: an MCP server's secret is sent to the server as a header, never into the sandbox", i)
-		case del.Host != host.Host:
-			return fmt.Errorf("secrets[%d].delivery.host: an MCP server's secret goes to the server's host %q", i, host.Host)
-		case del.PlainHTTP:
-			return fmt.Errorf("secrets[%d].delivery.plain_http: an MCP server's secret is only ever sent over TLS", i)
-		}
-	}
-	return nil
+	// URL is a remote server's streamable HTTP address: https, no userinfo,
+	// its host one of the component's hosts.
+	URL       string `json:"url,omitempty"`
+	Transport string `json:"transport"` // http | stdio
+	// Launch is a local server's command.
+	Launch *ComponentMCPLaunch `json:"launch,omitempty"`
 }
 
 // MCPURLDestination checks an MCP server URL and returns its host and port as

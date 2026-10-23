@@ -16,6 +16,7 @@ import type { SetupHarnessTool } from "../../../lib/types";
 import { LOCAL_MODEL_LIST } from "../../../lib/local-model-copy";
 import { MODEL_LEDE, MODEL_PROVIDERS as M, providesLine } from "../../../lib/model-providers-copy";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
+import { CARD_STATUS } from "../../wardyn/copy/card-status";
 import { Button } from "../../ui/button";
 import { Chip } from "../../wardyn/primitives";
 import { EmptyState, TableSkeleton } from "../../wardyn/states";
@@ -64,7 +65,12 @@ export function ModelProvidersList({
 
   return (
     <>
-      <CollapsibleCard title={M.TITLE} summary={summary} testId="model-providers-list">
+      <CollapsibleCard
+        title={M.TITLE}
+        summary={summary}
+        status={typeof data === "object" && data.providers.length === 0 ? { tone: "attention", label: CARD_STATUS.NOT_SET_UP } : undefined}
+        testId="model-providers-list"
+      >
         <div className="flex items-start justify-between gap-4">
           <p className="text-body leading-snug text-muted-foreground">{MODEL_LEDE}</p>
           <Button size="sm" disabled={typeof data === "string"} onClick={() => setEditing("new")}>

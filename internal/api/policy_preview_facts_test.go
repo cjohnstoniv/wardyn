@@ -96,10 +96,10 @@ func TestPolicyPreviewRedactionPreservesPATEmptyAxis(t *testing.T) {
 }
 
 func TestPolicyPreviewSourceProvenance(t *testing.T) {
-	for _, kind := range []string{policyKindDefault, policyKindProfile, policyKindStored, policyKindInline} {
+	for _, kind := range []string{policyKindDefault, policyKindUnit, policyKindStored, policyKindInline} {
 		t.Run(kind, func(t *testing.T) {
 			cs := &capStore{}
-			if kind == policyKindProfile {
+			if kind == policyKindUnit {
 				cs.govProfile = govProfile("assigned-name")
 				cs.govTier = types.CapabilitySubjectUser
 			}
@@ -120,7 +120,7 @@ func TestPolicyPreviewSourceProvenance(t *testing.T) {
 			if kind == policyKindStored && (result.Source.Name != "stored-name" || *result.Source.PolicyID != id) {
 				t.Fatalf("stored source: %+v", result.Source)
 			}
-			if kind == policyKindProfile && (result.Source.Name != "assigned-name" || strings.Contains(w.Body.String(), cs.govProfile.ID.String())) {
+			if kind == policyKindUnit && (result.Source.Name != "assigned-name" || strings.Contains(w.Body.String(), cs.govProfile.ID.String())) {
 				t.Fatalf("profile source leaked identity: %s", w.Body.String())
 			}
 		})

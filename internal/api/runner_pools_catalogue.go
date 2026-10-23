@@ -327,8 +327,8 @@ func (s *Server) personAllowance(r *http.Request, ceiling governanceCeiling) (*c
 	if n := ceiling.Limits.MaxConcurrentRuns; n > 0 {
 		a.Max = &n
 	}
-	if ceiling.Profile != nil {
-		a.ProfileName = ceiling.Profile.Name
+	if ceiling.Unit != nil {
+		a.UnitName = ceiling.Unit.Name
 	}
 	return a, nil
 }

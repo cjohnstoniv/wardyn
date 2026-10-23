@@ -313,6 +313,18 @@ materialize_azure_cli_config() {
     materialize_home_records azure-cli "$WARDYN_AZURE_CLI_CONFIG_B64"
 }
 
+# ── kubectl config (a kubectl component) ─────────────────────────────────────
+# Materialize the ~/.kube/config the control plane generated for a run that
+# attached a kubectl component: the cluster's API server, the run's own CA and
+# an inert placeholder token. No cluster credential is in it: wardyn-proxy adds
+# a short-lived token to each request it lets through to the API server. No-op
+# when the var is unset (every other run), and harmless on an image without
+# kubectl.
+materialize_kubectl_config() {
+    [[ -n "${WARDYN_KUBECTL_CONFIG_B64:-}" ]] || return 0
+    materialize_home_records kubectl "$WARDYN_KUBECTL_CONFIG_B64"
+}
+
 # ── git credential helper caller-auth secret ─────────────────────────────────
 # Provision the per-run secret that gates wardyn-git-helper credential emission.
 # Only meaningful when the run can mint a git credential — i.e. it has a
@@ -335,6 +347,14 @@ provision_git_helper_secret() {
     local dir="${HOME}/.wardyn"
     local secret_file="${dir}/git-helper.secret"
     mkdir -p "$dir"
+    # Several agents in one run (agent-run-set --tasks): the first agent's prep wrote
+    # the secret, and every agent's git presents that one. A fresh one here would
+    # leave the agents already running with a secret the helper no longer accepts.
+    if [[ -n "${WARDYN_TASK_PREPPED:-}" && -r "$secret_file" ]]; then
+        WARDYN_GIT_HELPER_SECRET="$(cat "$secret_file")"
+        export WARDYN_GIT_HELPER_SECRET
+        return 0
+    fi
     # Generate a fresh 256-bit random secret as hex (no shell-special chars).
     # /dev/urandom + od are always present in the trixie-slim base image.
     local secret
@@ -656,7 +676,7 @@ resolve_workdir() {
 repo_scan_ok() {
     [[ -z "${WARDYN_REPOS:-}" && -z "${WARDYN_REPO_URL:-}" ]] && return 0
     [[ -d "$workdir" ]] || return 1
-    find "$workdir" -maxdepth 2 -mindepth 1 -type d -name ".git" 2>/dev/null | grep -q .
+    find "$workdir" -maxdepth 2 -mindepth 1 -type d -name ".git" 2>/dev/null | grep . >/dev/null
 }
 
 # maybe_exec_task_mode "<task>" — exec task mode (BYOA/CI lane): when the
@@ -667,6 +687,12 @@ repo_scan_ok() {
 # deliberately skips the LLM auth wiring (a plain command needs no model).
 # The command's exit code propagates to the caller (0 -> COMPLETED, else FAILED).
 maybe_exec_task_mode() {
+    # Several agents in one run (agent-run-set --tasks): this launcher's shared prep
+    # is done, so the next agent's may start.
+    if [[ -n "${WARDYN_TASK_PREPPED:-}" ]]; then
+        : > "$WARDYN_TASK_PREPPED"
+        unset WARDYN_TASK_PREPPED
+    fi
     if [[ "${WARDYN_TASK_MODE:-}" == "exec" ]]; then
         echo "agent-run: exec task mode — running task as a shell command (no agent harness)" >&2
         # Plain `-c`, NOT `-l`: this process already has the env it needs (it

@@ -87,8 +87,11 @@ export interface RunQueue {
   queued_at: string;
   deadline_at: string;
   position: number;
-  /** runner_pool_at_capacity, runner_pool_no_runner_free, runner_pool_runners_at_capacity or runner_pool_recording_store_off (RUN_WAIT_REASON). */
+  /** runner_pool_at_capacity, runner_pool_no_runner_free, runner_pool_runners_at_capacity, runner_pool_recording_store_off (RUN_WAIT_REASON), scheduled or owner_sign_in. */
   reason: string;
+  /** A scheduled run's start time and the IANA zone it was given in; absent for any other waiting run. */
+  start_at?: string;
+  time_zone?: string;
 }
 
 export interface AgentRun {
@@ -285,7 +288,7 @@ export interface AgentRun {
   queue?: RunQueue;
   wait_budget_sec?: number;
   run_limits?: RunLimits;
-  governance_profile_id?: string;
+  unit_id?: string;
   // Set when the run lost its sandbox but is kept (migration 0073, #568):
   // "ended" = its end passed, so it is stopped with no network and its files
   // stay for the ended-run grace. "reboot" = its container exited under it
@@ -299,8 +302,7 @@ export interface AgentRun {
   // legacy row the backfill could not date exactly. A lease-ended run (
   // lost_reason "ended") stays RUNNING until the ended-run grace makes it
   // terminal, so ITS end time is lost_at, not this field — internal/types/
-  // types.go's AgentRun.EndedAt doc. Nothing in the console reads this field
-  // yet; it is a live wire field and the mirror rule forbids dropping one.
+  // types.go's AgentRun.EndedAt doc. The run header's total run time reads it.
   ended_at?: string;
   // Set while a kept run's stop could not be confirmed (migration 0088,
   // #1060): the latest stop error and when containment first failed. The
@@ -352,10 +354,23 @@ export interface AgentRun {
   // tracking, so an inline nested object's own keys (kind/by/pending) would
   // misread as top-level AgentRun keys and fail that parity test.
   attention?: RunAttention;
+  // AgentRun.MachineKind / VMMachine (migration 0217): "linux_vm" for a run
+  // in a Linux VM, with the virtual hardware its runner started. Absent for a
+  // container run. A named interface for the same line-scrape reason as above.
+  machine_kind?: "linux_vm";
+  vm_machine?: VMMachine;
+}
+
+// internal/types/machine.go's VMMachine.
+export interface VMMachine {
+  machine_type: string;
+  cpu_model: string;
+  accelerator: string;
+  qemu_version: string;
 }
 
 export interface RunAttention {
-  kind: "approval" | "reauth" | "ado_consent" | "lost";
+  kind: "approval" | "reauth" | "ado_consent" | "lost" | "takeover";
   by: "you" | "owner" | "admin";
   pending: number;
 }
@@ -488,6 +503,9 @@ export interface RunDetail extends AgentRun {
   model_provider_name?: string;
   model_provider_deleted?: boolean;
   created_via_name?: string;
+  // The model allowlist each local model provider handed the run's proxy at its latest dispatch, {provider id: models}
+  // (#3374): what the run is held to, whatever the provider lists now. Absent when the run holds none.
+  model_allowlists?: Record<string, string[]>;
   // The name of the pool the run was admitted into, as it reads now; a deleted pool is still named.
   runner_pool_name?: string;
   kept_until?: string;
@@ -498,6 +516,14 @@ export interface RunDetail extends AgentRun {
   sync?: RunSync;
   // The run's folder from the person's computer and its passes (GET /runs/{id} only); see RunComputerFolder.
   computer_folder?: RunComputerFolder;
+  // Every agent of a background run with several, the run's own first; absent otherwise.
+  agents?: RunDetailAgent[];
+}
+
+// One agent of a run with several agents (runDetailAgent, internal/api/run_multi_agent.go).
+export interface RunDetailAgent {
+  agent: string;
+  task?: string;
 }
 
 // GET /runs/{id}'s computer_folder (internal/api/run_computer_folder.go computerFolderRunView): the run's
@@ -528,7 +554,7 @@ export interface RunFolderPass {
 // run_policy_view.go). `spec` strict-decodes as a RunPolicySpec, with values
 // the reader may not see already blanked ("<redacted>") server-side.
 export type RunPolicyState = "recorded" | "not_yet" | "never";
-export type RunPolicySourceKind = "stored" | "inline" | "default" | "profile" | "unknown";
+export type RunPolicySourceKind = "stored" | "inline" | "default" | "unit" | "unknown";
 
 export interface RunPolicySource {
   kind: RunPolicySourceKind | (string & {});
@@ -553,7 +579,7 @@ export type RunPolicyCause =
   | "model_access"
   | "git_broker"
   | "overlay"
-  | "profile"
+  | "unit"
   | "org_disk"
   | "pool_disk"
   | "restart"
@@ -568,7 +594,7 @@ export interface RunPolicyChange {
   removed?: string[];
   // clamp_warnings lines, verbatim (cause "limits" only).
   detail?: string[];
-  profile?: string;
+  unit?: string;
   // Restart time (cause "restart" only).
   at?: string;
 }
@@ -597,9 +623,9 @@ export interface RunPolicyView {
 }
 
 // internal/policyref.Provenance: the layer that set one value of a run's policy
-// ("deployment", "profile" with the leaf's name, "member" or "operator"), the
+// ("deployment", "unit" with the leaf's name, "member" or "operator"), the
 // contact to ask, and locked once a layer forbids lower layers to change it
-// (never set until walls or delegation can lock a knob).
+// (never set until a boundary or delegation can lock a knob).
 export interface PolicyProvenance {
   layer: string;
   name?: string;

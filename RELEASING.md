@@ -10,10 +10,10 @@
 
 - You are the maintainer (see [MAINTAINERS.md](MAINTAINERS.md)); releases push tags to `origin`, so only someone with push rights cuts them.
 - The full CI gate is green on the commit you intend to tag.
-  - The gate is the [`.github/workflows/ci.yml` job list:](.github/workflows/ci.yml) `changes`, `go` (a matrix job: `unit`, `docker`, `k8s`), `go-lint` (reported as `go (lint)`), `build`, `diagrams`, `ui`, `ui-e2e` (a matrix job: `1/2`, `2/2`),
-  - `helm`, `helm-install-test`, `compose`, `runner-units`, `conformance`, `conformance-k8s`, `envbuild-integration`, `vm-conformance` (not required), `test-pg-shard` (a matrix job: `api-1`, `api-2`, `store`, `race`), `test-pg`, `gates` (a matrix job: `govulncheck`, `staticcheck`, `licenses`, `license-headers`, `gitleaks`), `dco`, `ci-ran`, `train-suites`, `train-gate`, `main-red`, `notify-flaky`, `go-modules`, `go-gate-tools`, `go-cache-prune`,
+  - The gate is the [`.github/workflows/ci.yml` job list:](.github/workflows/ci.yml) `changes`, `image-scope`, `go` (a matrix job: `unit`, `docker`, `k8s`), `go-lint` (reported as `go (lint)`), `build`, `diagrams`, `ui`, `ui-e2e` (a matrix job: `1/2`, `2/2`),
+  - `helm`, `helm-install-test`, `compose`, `runner-units`, `conformance`, `conformance-k8s`, `envbuild-integration`, `vm-conformance` (not required), `vm`, `test-pg-shard` (a matrix job: `api-1`, `api-2`, `store`, `race`), `test-pg`, `gates` (a matrix job: `govulncheck`, `staticcheck`, `licenses`, `license-headers`, `gitleaks`), `dco`, `ci-ran`, `train-suites`, `train-gate`, `main-red`, `notify-flaky`, `go-modules`, `go-gate-tools`, `go-cache-prune`,
   - the six `stop-early-<gate>` jobs (`stop-early-go-lint`, `stop-early-compose`, `stop-early-gates`, `stop-early-notices`, `stop-early-diagrams`, `stop-early-dco`), which cancel a red pull request run,
-  - the nine image scans (`trivy-wardynd`, `trivy-wardynd-fips`, `trivy-wardyn-proxy`, `trivy-wardyn-runnerd`, `trivy-agent-base`, `trivy-agent-codex-cli`, `trivy-agent-aws-sso`, `trivy-agent-vscode`, `trivy-agent-novnc`, each reporting as `trivy (<image>)`),
+  - the ten image scans (`trivy-wardynd`, `trivy-wardynd-fips`, `trivy-wardyn-proxy`, `trivy-wardyn-runnerd`, `trivy-agent-base`, `trivy-agent-codex-cli`, `trivy-agent-aws-sso`, `trivy-agent-vscode`, `trivy-agent-novnc`, `trivy-agent-novnc-signin`, each reporting as `trivy (<image>)`),
   - and **`notices`** — the copyleft / unreviewed-dependency gate.
   - `sbom-stub` used to be named here and is **gone**: it was deleted along with `make sbom` (CHANGELOG, *Removed*),
     - so a maintainer following this list literally was waiting on a phantom job while skipping the one that catches a GPL regression.
@@ -199,7 +199,7 @@ crash or a usage limit resumes with the same command:
    - `nightly.yml` is dispatched with `-f scope=candidate`, unless a dispatched nightly on the same tree is already queued, running or green.
    - Then the PR into `release/X.Y` titled `release: V` opens, so the nightly starts beside the PR's CI.
    - Last, the local checks: `lane-preflight.sh --candidate` (no Playwright: hosted `ui-e2e` is the e2e gate), `make dco DCO_RANGE="HEAD ^origin/main ^origin/release/X.Y"`, the version tests and [`scripts/test-claims-match-code.sh`](scripts/test-claims-match-code.sh).
-   - A pass is recorded per head commit. After a failure, fix it and re-run; `wait` and `publish` refuse a head the checks have not passed on (`DRY_RUN=1` excepted).
+   - A pass is recorded per head, in the clone that ran `prepare`; another clone refuses it. After a failure, fix it and re-run; `wait` and `publish` refuse a head the checks have not passed on (`DRY_RUN=1` excepted).
    - After the merge and again after the release-commit step, duplicate CHANGELOG heading keys (including `Unreleased`, regardless of dates) stop prepare before checks, pushes, PRs or nightly dispatch.
    - This also applies when resuming an already released or pushed candidate.
    - Commit a repair preserving the notes and history, then rerun prepare; no reset, amend or force-push is needed.
@@ -214,7 +214,8 @@ crash or a usage limit resumes with the same command:
    forced: a rejected push means `release/X.Y` moved, so it stops),
    - the annotated tag `vX.Y.Z` and its push (by full ref; a local `vX.Y.Z` that points anywhere but the commit just verified is refused by name),
    - `gh run watch` on `release.yml`'s run for the tag, `gh release edit vX.Y.Z --draft=false` (with the pre-release and latest flags `PRERELEASE` picks) on the draft that `release-assets` made, and [`scripts/verify-release.sh`](scripts/verify-release.sh), which must end `fails=0`.
-   - The forward-port commands are printed, never run.
+   - The forward-port commands are printed, never run. The last, before the push, is [`scripts/forward-port-check.sh`](scripts/forward-port-check.sh), which fails when the port deletes a line only `main` has; the `dco` job runs it on every `chore/forward-port-*` pull request into `main`.
+   - A removal the port makes on purpose is listed in `scripts/forward-port-check.d/X.Y.Z.allow`, committed with the port: one `path<TAB>exact removed line<TAB>reason` per line, budget sums included. An entry the port does not need, or with no real reason, fails; so does a port that edits the script or another version's file.
    - After a final release, rehearse the runner compatibility walk against it once: `WARDYN_TEST_DOCKER=1
      WARDYN_COMPAT_RELEASED=vX.Y.Z scripts/runner-compat-walk.sh` on a native Docker engine, or a nightly on `main`.
      From 0.9.3 on it also rolls back a runner that has retired a run, which no earlier release could rehearse.
@@ -405,7 +406,8 @@ crash or a usage limit resumes with the same command:
        **pushed image** (not the source tree, which sees no OS packages) and a build
        provenance statement,
      - then a `release-assets` job uploads those SBOMs,
-       `THIRD-PARTY-NOTICES.md`, `LICENSE`, `NOTICE`, `install.sh`, the four
+       `THIRD-PARTY-NOTICES.md`, `LICENSE`, `NOTICE`, `install.sh`, `install-cli.sh`,
+       `install-cli.ps1`, the four
        `wardyn-<os>-<arch>` CLI binaries and a cosign-signed `SHA256SUMS`
        to the Release —
      - creating a draft Release first if you have not cut one yet —
@@ -500,20 +502,21 @@ gh api -X PATCH repos/cjohnstoniv/wardyn/branches/main/protection/required_statu
     "trivy (wardynd)", "trivy (wardyn-proxy)", "trivy (agent-base)",
     "trivy (agent-codex-cli)", "trivy (agent-aws-sso)",
     "trivy (agent-vscode)", "trivy (agent-novnc)",
-    "trivy (wardynd-fips)", "runner-units", "trivy (wardyn-runnerd)"
+    "trivy (wardynd-fips)", "runner-units", "trivy (wardyn-runnerd)",
+    "trivy (agent-novnc-signin)"
   ]
 }
 JSON
 ```
 
 - The first 24 contexts are the ones `main` requires today, read back on 2026-10-06 with the command below.
-- The last three, **`trivy (wardynd-fips)`, `runner-units` and `trivy (wardyn-runnerd)`**, are not required today.
+- The last four, **`trivy (wardynd-fips)`, `runner-units`, `trivy (wardyn-runnerd)` and `trivy (agent-novnc-signin)`**, are not required today.
 - Their jobs report on every pull request, but a red one blocks no merge until the owner runs this PATCH.
-- Run as written, the command drops nothing that is required now and adds those three contexts.
+- Run as written, the command drops nothing that is required now and adds those four contexts.
 - The PATCH replaces the whole list, so read the live list back first: a context that is live and missing from this body would be dropped.
 
 - Every context in the list reports on every pull request, as skipped when the change cannot affect it ([docs/CI.md](docs/CI.md), "Incremental CI"), so each is an eligible context.
-- `notices` is the copyleft / unreviewed-dependency gate, and the `trivy` checks are the only CVE scan of the nine images a release publishes.
+- `notices` is the copyleft / unreviewed-dependency gate, and the `trivy` checks are the only CVE scan of the ten images a release publishes.
 - Each image has its own `trivy-<image>` job reporting as `trivy (<image>)` — adding an image to [`.github/workflows/ci.yml`](.github/workflows/ci.yml) means adding its job, adding its context here **and** re-running the PATCH, or that image merges unscanned.
 - [`scripts/test-claims-match-code.sh`](scripts/test-claims-match-code.sh) (C6) fails if this list and those jobs drift
   apart.
@@ -526,6 +529,8 @@ JSON
 - Two owner steps belong with #141, both after the FIRST real tag that runs `images-ui-sandbox`:
   - confirm `ghcr.io/cjohnstoniv/agent-vscode` and `ghcr.io/cjohnstoniv/agent-novnc` are PUBLIC packages (a newly-created GHCR package can default to private, which silently breaks every documented pull),
   - and re-check this section's PATCH body still matches `ci.yml`'s actual `trivy` jobs at that point.
+- `ghcr.io/cjohnstoniv/agent-novnc-signin` (#2972, the desktop sign-in variant, `images-ui-sandbox-signin`) needs the
+  same owner step after the FIRST real tag that builds it: confirm the package is PUBLIC.
 
 - Read it back with `gh api repos/cjohnstoniv/wardyn/branches/main/protection --jq .required_status_checks.contexts`.
 - A matrix job reports one context per cell as `<job-id> (<matrix-value>)`, which is why the five supply-chain gates are `gates (...)` rather than bare names.
@@ -567,7 +572,7 @@ JSON
     is what triggers it.
   - It also attests a per-digest CycloneDX SBOM and build
     provenance, publishes the Helm chart to `oci://ghcr.io/cjohnstoniv/charts`,
-    - and uploads the SBOMs, notices, `install.sh`, the four `wardyn-<os>-<arch>`
+    - and uploads the SBOMs, notices, `install.sh`, `install-cli.sh` and `install-cli.ps1` (each stamped with the tag's version), the four `wardyn-<os>-<arch>`
       CLI binaries, the four `wardyn-runnerd-<os>-<arch>` runner binaries,
       `wardyn-runner-units.tar.gz`, `wardyn-licenses.tar.gz`, `wardyn-runnerd.pkg` and a cosign-signed `SHA256SUMS` to the Release —
     - failing if any asset did not land (the required set is the `for want in …`
@@ -599,7 +604,7 @@ JSON
   # 0.6.2 and this loop errored on it every release (an interactive paste with
   # no `set -e` just carries on), while agent-base — the image that IS published
   # — went unverified.
-  for img in wardynd wardynd-fips wardyn-proxy wardyn-runnerd agent-base agent-codex-cli agent-aws-sso agent-vscode agent-novnc; do
+  for img in wardynd wardynd-fips wardyn-proxy wardyn-runnerd agent-base agent-codex-cli agent-aws-sso agent-vscode agent-novnc agent-novnc-signin; do
     ref="ghcr.io/cjohnstoniv/$img:$TAG"
     # 1. the tag resolves to an index listing BOTH platforms
     docker buildx imagetools inspect "$ref"

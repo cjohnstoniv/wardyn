@@ -260,6 +260,10 @@ func (s *Server) authorAWSSSOGrant(ctx context.Context, run types.AgentRun, sn a
 		"pin_path":  awsSSORoleCredentialsPath,
 		"pin_query": awsSSOPinQuery(sn.SSOAccountID, sn.SSORoleName),
 	})
+	// A re-signed lane's session signs these hosts too, so the live check withholds it with them (grantHosts).
+	if sigv4Hosts != nil {
+		scope = scopeWithSignedHosts(scope, sigv4Hosts)
+	}
 	grantID := uuid.New()
 	if _, gerr := s.createDispatchGrant(ctx, run, types.CredentialGrant{
 		ID: grantID, RunID: run.ID, CreatedAt: time.Now(),
@@ -285,6 +289,23 @@ func (s *Server) authorAWSSSOGrant(ctx context.Context, run types.AgentRun, sn a
 	return injections, mitmHosts, nil, true
 }
 
+// awsSSOResidentGrant is the grant a resident captured session (WARDYN_AWS_SSO_PROXY_INJECT off) is
+// judged by against the boundary's eligible grants (#3238): the pairing authorAWSSSOGrant gives the
+// proxy-injected lane (host, header, format, secret, require_tls), since it is the same session for
+// the same portal. So a boundary admits or withholds the captured session alike under either
+// setting. It is never stored: a row naming the session would join the SSO renewer's live set
+// (RenewAWSSSOCredentials), which redeems the refresh token the sandbox holds.
+func (s *Server) awsSSOResidentGrant(region string) *types.GrantSpec {
+	scope, _ := json.Marshal(map[string]any{
+		"host":        ssoPortalHost(region, s.cfg.AWSSSOEndpointOverride),
+		"header":      awsSSOInjectHeader,
+		"format":      "%s",
+		"secret_name": types.AWSSSOAccessTokenSecret,
+		"require_tls": s.cfg.AWSSSOEndpointOverride == "",
+	})
+	return &types.GrantSpec{Kind: types.GrantAPIKey, Scope: scope, TTLSeconds: awsSSOGrantTTLSeconds}
+}
+
 // awsSSORoleCredentialsPath is the ONE portal path a Phase-B run's session is
 // allowed on: the AWS SSO portal's GetRoleCredentials.
 const awsSSORoleCredentialsPath = "/federation/credentials"
@@ -302,4 +323,20 @@ func awsSSOPinQuery(accountID, roleName string) map[string]string {
 		return nil
 	}
 	return map[string]string{"account_id": accountID, "role_name": roleName}
+}
+
+// scopeWithSignedHosts adds signed_hosts to a grant scope written above. The scope stays a map literal at its
+// write so the audit guard (shared_secret_audit_guard_test.go) still reads it as a grant's scope.
+func scopeWithSignedHosts(scope []byte, hosts []string) []byte {
+	var m map[string]any
+	if err := json.Unmarshal(scope, &m); err != nil {
+		// Unreachable: the caller marshalled this scope a moment ago.
+		return scope
+	}
+	m["signed_hosts"] = hosts
+	out, err := json.Marshal(m)
+	if err != nil {
+		return scope
+	}
+	return out
 }

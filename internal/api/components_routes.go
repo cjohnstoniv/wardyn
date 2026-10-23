@@ -51,6 +51,7 @@ func (s *Server) mountComponentRoutes(r, operatorOnly chi.Router) {
 	operatorOnly.Get("/components", s.handleListComponents)
 	operatorOnly.Put("/components/{id}", s.handlePutComponent)
 	operatorOnly.Delete("/components/{id}", s.handleDeleteComponent)
+	operatorOnly.Put("/components/{id}/kubectl-token", s.handlePutKubectlToken)
 }
 
 func (s *Server) componentStoreOr501(w http.ResponseWriter) (store.ComponentStore, bool) {
@@ -107,6 +108,9 @@ func saveRefusal(w http.ResponseWriter, reason, msg string) {
 // A reserved name is the run gate's own rule (componentSecretReserved), whatever
 // the delivery: a row the gate would refuse to attach is not saved.
 func (s *Server) componentSaveRefusal(ctx context.Context, c types.Component) (reason, msg string) {
+	if problem := mcpLocalOffProblem(c.Definition); problem != "" {
+		return reasonComponentDefinitionInvalid, "invalid component: definition." + problem
+	}
 	if err := c.Validate(proxy.ValidDomainEntry); err != nil {
 		return reasonComponentDefinitionInvalid, "invalid component: " + err.Error()
 	}
@@ -399,7 +403,8 @@ func (s *Server) handlePutComponent(w http.ResponseWriter, r *http.Request) {
 		// A row whose AWS sign-ins would point somewhere it no longer names, or
 		// whose Azure sign-ins were captured for subscriptions it no longer pins,
 		// takes them with it, before the write.
-		if cliSignInPinChanged(old.Definition, c.Definition) || azureCLISignInPinChanged(old.Definition, c.Definition) {
+		if cliSignInPinChanged(old.Definition, c.Definition) || azureCLISignInPinChanged(old.Definition, c.Definition) ||
+			kubectlCLIPinChanged(old.Definition, c.Definition) {
 			if err := s.purgeCLISignIns(r.Context(), id.String()); err != nil {
 				writeServerError(w, r, "purge cli sign-ins", err)
 				return

@@ -129,7 +129,9 @@ export function isSignedOutHold(): boolean {
  *  `asPerson` (DR-0034): the request submits a draft composed under the person
  *  this tab confirmed, so it names them and the server refuses it if the shared
  *  cookie now names someone else. */
-export type WfetchInit = RequestInit & { save?: string; endsSession?: true; asPerson?: true };
+// superseded: true once a newer request has taken over this one's question (a session probe, App.tsx), so its answer,
+// a 401 included, is nobody's to act on.
+export type WfetchInit = RequestInit & { save?: string; endsSession?: true; asPerson?: true; superseded?: () => boolean };
 
 // H2: same-origin PATHNAME only. `internal/api/ui.go`'s catch-all route
 // serves index.html with no path cleaning, so `GET //evil.com` 200s and
@@ -356,7 +358,7 @@ async function drainBody(res: Response): Promise<void> {
 
 export async function wfetch(
   path: string,
-  { save, endsSession, asPerson, ...init }: WfetchInit = {},
+  { save, endsSession, asPerson, superseded, ...init }: WfetchInit = {},
   timeoutMs: number = WFETCH_TIMEOUT_MS,
 ): Promise<Response> {
   const method = (init.method ?? "GET").toUpperCase();
@@ -427,7 +429,8 @@ export async function wfetch(
     const { reason } = await errEnvelope(res);
     // Reconciliation can invalidate /me before its 401 reaches the shell.
     // A refused write still belongs to its caller, even after an auth change.
-    const stale = path === "/me" && method === "GET" && (generation !== authGeneration || init.signal?.aborted);
+    const stale =
+      (path === "/me" && method === "GET" && (generation !== authGeneration || init.signal?.aborted)) || !!superseded?.();
     // A REAL 401 means the bearer THIS REQUEST sent was rejected
     // (expired/revoked/foreign admin token) — leaving it stored would replay
     // the same rejected credential on every request from here to sign-in.
@@ -625,7 +628,7 @@ export type AuthProbe = "authed" | "unauthed" | "unreachable";
 
 // The 401 reasons (internal/api/auth_status.go) that mean a session this browser held has ended; the
 // cold load says so (App.tsx) instead of showing a bare sign-in screen.
-const SESSION_ENDED_REASONS = new Set(["expired_session", "revoked_session", "role_stamp_stale", "invalid_session"]);
+const SESSION_ENDED_REASONS = new Set(["expired_session", "revoked_session", "role_stamp_stale", "invalid_session", "identity_deactivated"]);
 export const isSessionEnded = (reason: string): boolean => SESSION_ENDED_REASONS.has(reason);
 
 // Probe auth by hitting a protected endpoint. It needs only a yes/no on the
@@ -638,9 +641,9 @@ export async function probeAuth(): Promise<AuthProbe> {
 /** probeAuth plus the reason a 401 named ("" when it named none, or the probe was not a 401), and whether an
  *  "unreachable" is worth asking again: a network error, a timeout, a 5xx or a 429. A 403 or another 4xx is
  *  "unreachable" too but final, so a caller that retries must read `transient`, not `probe`. */
-export async function probeAuthWithReason(): Promise<{ probe: AuthProbe; reason: string; transient: boolean }> {
+export async function probeAuthWithReason(superseded?: () => boolean): Promise<{ probe: AuthProbe; reason: string; transient: boolean }> {
   try {
-    const res = await wfetch(withLimit("/runs", 1), { method: "GET" });
+    const res = await wfetch(withLimit("/runs", 1), { method: "GET", superseded });
     // wfetch has already thrown HttpError(401) for a real rejection, so a
     // non-ok response here is a 403/5xx: the request carried whatever
     // credentials the caller has and the daemon still could not answer.

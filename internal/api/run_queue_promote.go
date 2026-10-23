@@ -53,13 +53,19 @@ func (s *Server) promoteQueue(ctx context.Context, poolID uuid.UUID, bound time.
 			slog.Int("promoted", len(promoted)), slog.Any("err", err))
 		errs = append(errs, fmt.Errorf("promote the queue of pool %s: %w", poolID, err))
 	}
+	// Reason precedence for a waiting run: the pool's cap (runner_pool_at_capacity) outranks a reason
+	// found while judging, because the judging held no lock and the pool may have filled since. The store
+	// drops these writes when the pool is full by the time it writes them.
+	details := map[uuid.UUID]string{}
 	for _, h := range held {
-		if h.Wait == "" {
-			continue
+		if h.Wait != "" {
+			details[h.RunID] = statusDetailQueuePrefix + h.Wait
 		}
-		if err := qs.SetQueueWait(ctx, h.RunID, statusDetailQueuePrefix+h.Wait); err != nil {
-			slog.WarnContext(ctx, "wardynd: record queue wait", slog.String("run_id", h.RunID.String()), slog.Any("err", err))
-			errs = append(errs, fmt.Errorf("record queue wait of run %s: %w", h.RunID, err))
+	}
+	if len(details) > 0 {
+		if err := qs.SetHeldQueueWaits(ctx, poolID, details); err != nil {
+			slog.WarnContext(ctx, "wardynd: record queue waits", slog.String("pool_id", poolID.String()), slog.Any("err", err))
+			errs = append(errs, fmt.Errorf("record queue waits of pool %s: %w", poolID, err))
 		}
 	}
 	for _, p := range promoted {
@@ -82,13 +88,17 @@ func (s *Server) queueAdmit(ctx context.Context, pool types.RunnerPool, e store.
 	}
 	var auth queueAuthority
 	_ = json.Unmarshal(e.Authority, &auth) //nolint:errcheck // an unreadable authority fails the start's own checks
-	room, err := s.queueRunnerFree(withQueueOwner(auth.context(ctx), e.Owner, e.Authority), pool, launch)
+	octx := withQueueOwner(auth.context(ctx), e.Owner, e.Authority)
+	room, err := s.queueRunnerFree(octx, pool, launch)
 	if err != nil {
 		return store.QueueVerdict{}, err
 	}
 	if room.wait != "" {
 		// Only an unpinned run's wait is its owner's: a run pinned to one runner waits for that runner alone.
 		return store.QueueVerdict{Wait: string(room.wait), Owner: !room.pinned}, nil
+	}
+	if wait := s.queueOwnerSignIn(octx, e, launch); wait != "" {
+		return store.QueueVerdict{Wait: string(wait)}, nil
 	}
 	if s.admitHostCapacity(ctx, e.Owner, "runs", false) != nil {
 		return store.QueueVerdict{Stop: true}, nil
@@ -144,7 +154,7 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 	// on each (placementDemand.refusal: online, the barrier the run was queued at, limits declared, recording
 	// under a required setting). A ceiling that cannot be read denies nothing here: the start judges the
 	// run against it again.
-	in := placementInput{req: &req, reqCC: launch.Barrier, reqCCOK: launch.Barrier != "", drives: launch.Drives, noLocal: launch.NoLocal}
+	in := placementInput{req: &req, reqCC: launch.Barrier, reqCCOK: launch.Barrier != "", drives: launch.Drives, driveRunner: launch.DriveRunner, noLocal: launch.NoLocal}
 	if ceiling, err := s.queueCeiling(ctx); err == nil {
 		in.ceiling = ceiling
 	}
@@ -273,7 +283,8 @@ func (s *Server) SweepRunQueue(ctx context.Context) error {
 	)
 }
 
-// expireQueued ends each waiting run past its deadline: FAILED queue_timeout, with run.queue.expire.
+// expireQueued ends each waiting run past its deadline: FAILED queue_timeout, or queue_sign_in_timeout
+// for a scheduled run last held for its owner's sign-in, with run.queue.expire.
 func (s *Server) expireQueued(ctx context.Context) error {
 	qs, _ := s.queueStore()
 	now := s.cfg.Now().UTC()
@@ -284,7 +295,7 @@ func (s *Server) expireQueued(ctx context.Context) error {
 	}
 	var errs []error
 	for _, e := range expired {
-		reason := types.RunEndQueueTimeout
+		reason := s.queueExpiryReason(ctx, e)
 		applied, err := s.exitQueued(ctx, e.RunID, types.RunFailed, statusDetailQueuePrefix+string(reason), reason.Sentence())
 		if err != nil {
 			errs = append(errs, err)
@@ -296,9 +307,20 @@ func (s *Server) expireQueued(ctx context.Context) error {
 		waited := now.Sub(e.QueuedAt)
 		s.metrics.queueWait(queueOutcomeTimeout, waited)
 		s.recordAudit(ctx, s.auditEvent(&e.RunID, types.ActorSystem, "wardynd", "run.queue.expire", e.RunID.String(), "success",
-			mustJSON(map[string]any{"waited_sec": int(waited.Seconds()), "deadline_at": e.DeadlineAt, "pool_id": e.PoolID})))
+			mustJSON(map[string]any{"waited_sec": int(waited.Seconds()), "deadline_at": e.DeadlineAt, "pool_id": e.PoolID, "reason": reason})))
 	}
 	return errors.Join(errs...)
+}
+
+// queueExpiryReason is why a waiting run past its deadline ends: a scheduled run whose last wait was
+// its owner's sign-in says so, every other run waited too long for a slot.
+func (s *Server) queueExpiryReason(ctx context.Context, e store.RunQueueEntry) types.RunEndReason {
+	if e.StartAt != nil {
+		if run, err := s.cfg.Store.GetRun(ctx, e.RunID); err == nil && run.StatusDetail == statusDetailQueuePrefix+string(runnerpool.WaitOwnerSignIn) {
+			return types.RunEndQueueSignInTimeout
+		}
+	}
+	return types.RunEndQueueTimeout
 }
 
 // queueLeaseStale is how long a promoted run's start may go without touching its lease before the

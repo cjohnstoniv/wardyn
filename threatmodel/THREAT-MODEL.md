@@ -1,6 +1,6 @@
 # Wardyn Published Threat Model
 
-**Version:** v2 (tracks the shipped codebase; last reviewed at v0.9.6)
+**Version:** v2 (tracks the shipped codebase; last reviewed at v0.9.8)
 **Status:** published alongside the codebase.
 
 **Implementation status markers.** Controls are tagged inline: **[shipped]**
@@ -211,7 +211,7 @@ coverage verdict pointing back into this document.
 7. **The delegation chain** (`sub=human`, `act=agent-run-SPIFFE-ID`) —
    attribution integrity; target of the IETF delegation-chain-splicing attack
    class (March 2026).
-8. **The authorization source itself — `role_mappings` and `governance_profiles`**
+8. **The authorization source itself — `role_mappings` and `governance_units`**
    (migrations `0051_role_mappings.sql`, `0052_governance_profiles.sql`,
    `0053_role_mappings_security_admin.sql`).
    - Ranked LAST by immediacy and near the top by consequence: since v0.7 the role a session
@@ -420,7 +420,7 @@ that ceiling down; each run receives only the minimal subset its task needs.
 | Laptop proxy → organisation internal listener | End-to-end TLS through an opaque relay; run token; `runner_id` binding; a closed relayed-route list | #71 |
 | Organisation → laptop (dispatch) | The dispatch-plan classification refuses or strips org-held material | #72 |
 | Laptop → organisation (evidence) | The organisation writes every row; the content is `runner_asserted` | #73, #74 |
-| An org credential used from a laptop run | `via_org`: the value never leaves the organisation. `runner_resident` (0.9.3): four classes, held in the OS keystore for the run, erased best effort; since 0.10 an Azure DevOps minted token, in proxy memory | #75, #76 |
+| An org credential used from a laptop run | `via_org`: the value never leaves the organisation. `runner_resident` (0.9.3): four classes, held in the OS keystore for the run, erased best effort; since 0.9.7 an Azure DevOps minted token, in proxy memory | #75, #76 |
 | Delivery policy by runner | A security operator's trust class picks the per-class delivery mode; `via_org` is never trust-gated | #90 |
 | Laptop proxy → runnerd (decisions) | TLS pinned to runnerd's key; a key per proxy; runnerd the spool's only writer, sharing no directory with the proxy | #77 |
 | Link down | No new run; cached policy and a bounded, fail-closed spool until the lapse | #77 |
@@ -1097,6 +1097,7 @@ ADMIN pre-authorized** —
   operator-authored mount rides the same spec and lives outside every member root by
   construction.
 - An operator run carries no roots and takes exactly the pre-0.6 path.
+- A Linux VM sandbox (0.10) gets those same binds as virtiofs shares, from the same `agentMounts` call: same folders, targets and mode (a read-only one is read-only in its virtiofsd bind, in `--readonly` and in the guest mount), and no other host folder (the runner's own VM state reaches the guest only as its disk). A guest write lands on the host as the runner's user.
 
 ### 4.5 The audit hash chain — what it is and is not
 
@@ -1193,7 +1194,7 @@ ADMIN pre-authorized** —
   - A governance profile can shut the door outright: `GovernanceLimits.DenyUserDrive`
     ([`internal/types/governance.go`](../internal/types/governance.go)) refuses the mount for every
     member under that profile as an audited `403` (`userDriveDoorRefusal` — `authz.denied`, reason
-    `governance_profile`, target `runs.drive`, no new `reason` enum value).
+    `governance_unit`, target `runs.drive`, no new `reason` enum value).
 - **Read-only is TOP-LEVEL on a runtime that does not declare `rro`.**
   - A bind's `ro` reaches SUBMOUNTS only where the runtime declares the OCI recursive read-only
     mount option, and the daemon refuses the create outright for one that does not.
@@ -1390,12 +1391,50 @@ ADMIN pre-authorized** —
   - It resolves through an in-memory user-tier grant to its owner, so the home, object name and subject hash are the ones delete reclaims.
   - A drive being deleted (tombstoned) is not reachable.
   - A member drive is never the legacy drive.
+- **Keeping a run's work folder (`keep_work_folder`, #1991).** Off by default: it needs member drives on and `storage.user_drive.member_create.keep_main_drive`.
+  - The run's person gets a new member drive, counted at their limit, mounted at the harness's working directory, `/home/agent/work`, in place of scratch.
+  - Home, agent settings and `/tmp` stay the sandbox's and are not kept.
+  - Whatever the agent writes in the work folder persists in that drive and comes back on every later run that mounts it.
+  - That includes any token, key or script the agent wrote there, such as an `env_secret` value it copied into a file; the later run's agent can read or run it.
+  - That includes harness project files such as `.claude/settings.json` hooks, `.mcp.json` and `CLAUDE.md`: a later run's harness loads them itself, so what one run writes there can steer the next. Turning keep off stops new keeps only: a drive already kept comes back whenever it is attached, until it is emptied or deleted.
+  - Wardyn doesn't put secrets on the kept drive, but anything the run can read and writes into the work folder stays on it.
+  - Delivered file secrets land only in `/run/wardyn/secrets` (`ComponentSecretDir`), which no mount can cover, and managed settings only in `/etc/claude-code`.
+  - Git credentials are brokered by default: the proxy mints them, and a repo cloned into the work folder holds none in its config. With `WARDYN_GIT_PAT_BROKER=off`, a `git_pat` reaches git through the helper, in memory, never in a file. SSH keys stay in the proxy.
+  - A queued keep run's drive commits with its queue row, so a promotion never starts the run without its drive.
 - (a) Erasure now reaches a person's own drives.
   - The delete goes through the member delete path (tombstone, lifecycle check, in-use check, row last), so an erasure cannot leave a stranded volume or skip the check.
 - (b) A SCIM purge only lists a leaver's drives.
   - Storage is destroyed only by an explicit admin act (`DELETE /drives/member/{id}` or the erasure scope).
 - (c) Turning on k8s member drives needs `drives.reclaim.enabled`, i.e. `delete` on claims for wardynd.
   - A compromised wardynd can then delete any claim in the runs namespace, which is already true whenever reclaim is on.
+
+#### Team drives (0.10) — one folder a group shares
+
+- **With team drives on, members of the allocated groups share one folder.**
+  - If the allocation is writable, what one person's agent writes there, another person's agent can read and run. That is cross-person injection, by design.
+  - Any secret an agent writes there is visible to the whole group.
+  - Nothing inspects or scans the folder's contents.
+- **What bounds it.**
+  - It is off by default. The switch is `storage.user_drive.team_drives` (`UserDriveProvider.TeamDrives`, carried to resolution as `driveSizeCeiling.TeamDrives` by `driveSizeCeilingFor`).
+    - `newResolvedDrive` treats a row as team only when the row says `team` AND the switch is on; otherwise it resolves per person, as before ([`internal/api/user_drives_resolve.go`](../internal/api/user_drives_resolve.go)).
+    - With the switch off, a `team: true` drive write is a `422` (`driveTeamWriteRefusal`, [`internal/api/user_drives_team.go`](../internal/api/user_drives_team.go)).
+  - It is admin-made and allocated to groups only.
+    - Drive writes are super-admin routes. Postgres keeps a team row an admin share with no owner (`user_drives_team_shape`, migration `0205_user_drives_team.sql`).
+    - `types.ValidateTeamDriveGrant` refuses any subject type but `group`, and any `home_override`, at the grant write (`teamDriveGrantAllowed`), and `teamResolvedDrive` runs it again at resolution, so a row written around the boundary mounts nothing.
+  - It is read-only unless a super admin sets `members_can_write`, and the drive itself must be writable.
+    - `newResolvedDrive` folds a team allocation to `writable && members_can_write && drive.writable`, so an allocation's `writable_override` cannot open a read-only team drive.
+    - `types.ValidateTeamDriveGrant` refuses `members_can_write` on a read-only drive, and `types.DriveGrantWidens` names a newly set `members_can_write` a widening, so the security-admin tier allocates read-only only (`upsertUserDriveGrantAs`).
+    - A run asking to write a read-only one is refused (`driveReadOnlyRefusal`).
+  - People outside the allocated groups resolve no grant on the drive, so they get no mount.
+  - The one-person guard is lifted for team rows only.
+    - A team folder's home is `t-` plus a hash of the drive id (`types.DriveTeamHome`), mounted under `/home/agent/shared/<slug>` (`runner.DriveTargetFor`, `runner.ValidateDriveTarget`), and carries no subject fingerprint.
+    - A per-person drive still stamps its `SubjectHash`, and the docker driver still refuses a volume labelled for another person (`driveVolumeAdoptable`).
+  - The mount audit names the person who mounted: `auditDriveMount` adds `team: true` and `mounted_by` (the run's creator) to every team `run.drive.mount` row ([`internal/api/runs_dispatch_mounts.go`](../internal/api/runs_dispatch_mounts.go)).
+  - `GET /me/drives` lists in `shared_with` only the caller's own groups that carry the allocation (`teamSharedWith`).
+- **WHAT THIS DOES NOT CLOSE.**
+  - A leaver's writes stay. A person's reclaim refuses a team drive (`driveTeamReclaimRefusal`), and the erasure's `member_drives` scope reaches only rows the person owns, which a team row never is. The files belong to the drive's groups.
+  - Group membership is the boundary: whoever the identity provider adds to a group reads everything already in the folder.
+  - A `docker_volume` team drive lives on one Docker host; runs elsewhere see a different, empty folder.
 
 ### 4.7 Boot-time state seeded into the sandbox (v0.7.5)
 
@@ -1784,6 +1823,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     - Two things bound the blast radius: the roots are **operator/MDM-set**, so the widest a member can aim the race is *within the declared roots* — the target set cannot be enlarged, only raced within.
     - And the credential-dotfile deny-list matches the **post-`EvalSymlinks` real path**, so a won race landing on `~/.ssh` inside a too-wide root is still refused unless the attacker also defeats that list.
     - The tests pin the ORDERING this depends on; the race itself is not deterministically testable and no test claims to cover it.
+    - The env-as-code write (`POST /workspaces/{id}/env-as-code/write`) re-checks the directory it opened through `/proc/self/fd` on Linux; on a daemon host without it (macOS, Windows) a source swapped between that write's path check and its open is not re-checked.
 
 26. **A reckless member root is a boot WARNING, not a boot refusal.**
     - Setting `WARDYN_USER_WORKSPACE_ROOTS` (or a `_MAP` entry, or `WARDYN_USER_WRITABLE_ROOTS`) to `/` or the daemon's own `$HOME` leaves the dotfile deny-list as the ONLY thing between a member and the operator's credentials.
@@ -2546,6 +2586,14 @@ hiding them would repeat the failure mode we are designed to avoid.
       - It is the reach workspace create already gives a member, bounded by the ceiling's `github_token` permission. Each repository must pass workspace admission and the `workspace_provider` capability.
       - The token is minted proxy-side only (`/wardyn/gh/`), and the run's direct GitHub hosts are denied.
       - Revive and extend re-check the owner's `workspace_provider` permission. They do not notice a repository that is no longer admitted, a provider row whose GitHub App lane was turned off, or a provider row that was removed.
+    - (r) **A local MCP server runs inside the sandbox with the agent's own access [0.10.0, off by default].**
+      - A component whose `mcp` block has `transport: stdio` names a launch command, not a URL. Its harness starts that command inside the run's sandbox, as the agent's user (`claudeMCPFile`, `codexLocalTOML`, [`internal/api/run_mcp.go`](../internal/api/run_mcp.go)).
+      - It is off by default. Until an admin sets `WARDYN_MCP_LOCAL_SERVERS`, saving such a component and attaching one already saved are both refused (`mcpLocalOffProblem`, called by `componentSaveRefusal` and `componentDefinitionProblem`).
+      - An env or file secret given to it is readable by any process in the sandbox, the agent included. Only a request header the proxy adds to one of its hosts stays out of the sandbox.
+      - Its traffic still leaves through the run's proxy and egress policy. Its hosts join the run's allowlist as raw egress (so the agent can reach them too), with no broker route in front of them (`rawEgressHosts`).
+      - The broker never sees its tool calls, so the harness applies the run's rules to them, and the in-sandbox relay that asks is cooperative.
+      - Hold or block rules on its tools are refused at create where the harness can't apply them: Codex CLI in any mode, and any harness a command starts (`localMCPRulesRefusal`, [`internal/api/run_harness_tool_rules.go`](../internal/api/run_harness_tool_rules.go)).
+      - The person chooses which package runs. An `npx` package must pin one exact version (`validateLocal`, [`internal/types/component_mcp.go`](../internal/types/component_mcp.go)), which bounds that supply-chain risk but does not remove it; an absolute program in the image is trusted as the image is.
 
 65. **Behind a shared ingress every runner connection shares one pre-auth address, so one unauthenticated peer can hold that address's handshake bound (0.9; bounded in 0.10).**
     - `handleRunnerStream` ([`internal/api/runner_stream.go`](../internal/api/runner_stream.go)) limits handshakes in progress per peer address (`WARDYN_RUNNER_STREAM_HANDSHAKES_PER_ADDRESS`, default 32) before any read, and refuses a peer whose rate bucket is empty. Behind an ingress that address is the ingress's own.
@@ -2658,7 +2706,7 @@ hiding them would repeat the failure mode we are designed to avoid.
 
 76. **`runner_resident` puts an organisation's value on the runner host for the run, where whoever controls the host can read it, and its erasure is best effort [0.9.3].**
     - A security operator may set a class to `runner_resident` with `PUT /governance/credential-delivery`, optionally requiring posture and per trust class (#90); under `WARDYN_GOVERNANCE_SECOND_HUMAN` the change waits for a second person.
-    - Five classes are delivered: `env_secret`, `file_secret`, `ssh_key`, `git_pat_helper` and, since 0.10, `ado_minted_pat` (`residentBuilt`, [`internal/placement/resident_lift.go`](../internal/placement/resident_lift.go)). Any other class set to it is still refused `placement_credential`.
+    - Five classes are delivered: `env_secret`, `file_secret`, `ssh_key`, `git_pat_helper` and, since 0.9.7, `ado_minted_pat` (`residentBuilt`, [`internal/placement/resident_lift.go`](../internal/placement/resident_lift.go)). Any other class set to it is still refused `placement_credential`.
     - Never resident: a grant that requires approval, a `git_pat` while the PAT broker is on, an Azure DevOps git token (`residentGrantRefusal`, [`internal/api/run_resident_delivery.go`](../internal/api/run_resident_delivery.go)), a brokered `github_token`, which would bypass branch, push and REST rules, and `cloud_sts`.
     - A run with a blast-radius floor never takes one, because a runner-asserted class never meets it (`ResidentAdmits`, `runner_posture_unmet`, #74).
     - **Delivery fence.** The organisation opens the run's erase obligation and a delivery lease before any value is sent. It does so only while the run is `STARTING` on a claimed, unrevoked runner bound to it, with no erase begun (`BeginResidentDelivery`, [`internal/store/store_runner_resident.go`](../internal/store/store_runner_resident.go)).
@@ -2671,7 +2719,7 @@ hiding them would repeat the failure mode we are designed to avoid.
       - A busy or stuck keystore call, a failing delete, a stopped runnerd or an offline runner delays the delete past the cap. Nothing proves the bytes are gone.
       - Root on the host can copy a value while it is held. A value already in the sandbox or proxy stays until the run ends, and a key or token already used stays valid at the forge until rotated.
     - Posture is the runner's own report (`posture_source: runner_asserted`, audited `runner.posture.record`). It tells a lost or unmanaged laptop from a healthy one; it does not constrain the developer.
-    - **Azure DevOps minted token [0.10].** Only on an opted-in connection, never in the keystore: the runner's proxy fetches it over the relay and holds it in memory, at most `pat_max_hours` (`relayedResidentADO`, [`internal/api/internal_relay.go`](../internal/api/internal_relay.go)).
+    - **Azure DevOps minted token [0.9.7].** Only on an opted-in connection, never in the keystore: the runner's proxy fetches it over the relay and holds it in memory, at most `pat_max_hours` (`relayedResidentADO`, [`internal/api/internal_relay.go`](../internal/api/internal_relay.go)).
       - Only on a person's own runner. Each fetch, at most 15 minutes apart, is re-judged, and a refusal, run end, kill and pause revoke it. Root on the host can read the proxy's memory. It is minted in the owner's name, within the run's capabilities.
 
 77. **Offline, a laptop run keeps egress on its cached policy until the lapse, spooling self-reported decisions behind a fail-closed bound [0.9, client mode].**
@@ -2710,7 +2758,8 @@ hiding them would repeat the failure mode we are designed to avoid.
     - Harnesses share the agent uid. A per-harness tool-approval credential stops only body claims and honest cross-attribution (B3). Per-harness uids are not planned: the gate is cooperative, so they would not stop a process that skips it.
     - Create and dispatch refuse two different providers that share an injection host, an AWS sign-in's portal host included, and a second Azure Foundry provider (`harness_providers_conflict`).
     - An AWS sign-in is admitted only on the primary harness. Elsewhere it is refused at create and at dispatch, never launched without a credential.
-    - The `run_harnesses` rows hold harness and provider ids only. Renew, revive and a queued start re-check each harness's agent and model-provider doors against them.
+    - The `run_harnesses` rows hold harness and provider ids, and in a background run with several agents (`WARDYN_MULTI_AGENT_TASKS`) each agent's own task, which person erasure blanks. Renew, revive and a queued start re-check each harness's agent and model-provider doors against them.
+    - Several agents in one background run share one sandbox, policy and proxy, with their rules met (strictest wins), and each meets the doors its own run would. One agent can be served another's model credential of the same person, as above. Per-agent state is read from the shared output, so an agent can forge it; the run's result is the supervisor's exit.
 
 81. **A run waiting for a pool slot holds no credential, and its owner's group membership is as of launch [0.9].**
     - Nothing is minted, renewed or delivered while a run is `QUEUED`, and the internal routes refuse that state.
@@ -2720,6 +2769,10 @@ hiding them would repeat the failure mode we are designed to avoid.
     - Residual: a group removed at the identity provider is not seen before the wait ends: `24h` for a background run, `1h` for an interactive one, at most `7d` when the launch asks.
     - The queue row holds the owner's snapshot and request, names and references with no secret value, and every exit deletes it. A person may hold `100` waiting runs per pool.
     - Slot counts and `queue.position` are aggregate counts over the pool. They name no run, owner or runner, and `queue` is visible only where the run is.
+    - A run can be booked to start once, later, with nobody present at its start (`WARDYN_SCHEDULED_RUNS`, off by default) [0.10]. The 7-day cap holds: it starts no later than 7 days after the request less its wait, and nothing holds it past 7 days from the request.
+    - Its start is the queue's start, so the queue's renewal-at-start rule applies ([docs/design/0.9/pool-queue.md](../docs/design/0.9/pool-queue.md) section 7, step 8): the person's stored model sign-in (an AWS SSO refresh token, a subscription OAuth token, an Azure credential) is read and may be renewed unattended. At the start, Wardyn renews your model sign-in if it can; if it can't, the run waits for you. An unattended wait of up to 7 days is the accepted Q8-B (`pool-queue.md` Q8).
+    - A change made in Wardyn after booking is checked at the start: which profile the person is on, through a group's assignment too (`queue_profile_changed`), the current profile's rules, and the run's policy (`queue_policy_changed`, `queuePolicyUnchanged`). A group removed only at the identity provider is not seen, as above.
+    - `WARDYN_SCHEDULED_RUNS` turned off now refuses booked runs at their start too: each ends `FAILED` `scheduled_runs_off`.
 
 82. **A run template is content, never authority, and its secret scan is not proof [0.9].**
     - Using a template re-resolves the launcher's own policy, credentials, components, pools and drives. A template holds references, never values, and its audience sees those names.
@@ -2966,6 +3019,7 @@ exactly these terms.
   - an OPT-IN Shannon-entropy detector (`detect_entropy`; high-FP in code, pure-hex skipped, medium severity so `block_min_severity` can exclude it),
   - an OPT-IN regex/Luhn PII detector (`detect_pii`; ≈60-70% recall = high false-negative — visibility, NEVER a control),
   - and an OPT-IN out-of-process sidecar (`detector_sidecar_url`; e.g. Presidio/LLM-Guard — fail-open by default, fail-closed under `on_scanner_error=block`).
+    - The sidecar scans at most 64 spans per request. Under the default fail-open (`on_scanner_error=pass`), spans past the 64th are not sent to it, so a request built with more spans gets the rest past the sidecar. The in-process detectors still scan every span, and the skip is recorded as `sidecar_call_cap`. To have every span scanned or the request refused, set `on_scanner_error=block`.
   - None is exhaustive; entropy and PII in particular are best-effort.
   - Detections stay content-free regardless of detector.
 - "Protects all LLM traffic" — Bedrock (SigV4) stays opaque, and any run without `intercept_tls` leaves subscription/OAuth tunnels uninspected (flagged blind).
@@ -2990,12 +3044,13 @@ exactly these terms.
 | **Tool-approval credential** (0.9, a run with a started harness) | The Wardyn-minted credential that selects the started harness's tool rules, as the file `/run/wardyn/secrets/wardyn-toolgate-<harness>`, and the git helper's per-run caller-auth nonce | Not a third party's credential: Wardyn mints it, and the in-sandbox tool gate has to read it | Docker: mode 0400, agent-owned. Kubernetes: root-owned 0440 through the pod's fsGroup, and the plaintext also sits in the run's Secret object. Any process running as the agent user can read it, and the gate is cooperative, so a uid boundary would not stop a process that skips the gate. See [B3](#b3--sandbox-vs-mcptool-gateway). |
 | **Derived AWS role credentials** (every `bedrock_sso` run) | The short-lived role credentials the in-sandbox AWS SDK mints for itself from the SSO session (`portal.sso.<region>` `GetRoleCredentials`) | SigV4 signs in-process, so these stay resident today **regardless** of how the SSO session reached the sandbox; with `WARDYN_AWS_SIGV4_AT_PROXY=on` (off by default) the proxy re-signs SigV4 after TLS interception and they stay out of the sandbox of a lane it re-signs, while a lane with one host it cannot re-sign (a private endpoint, a dual-stack host, a port other than 443, GovCloud IAM) keeps them resident — Phase B would end the SSO token's residency, not theirs — and in 0.7.6 it did. On a lane the proxy re-signs, the proxy holds them and mask-registers their secret key and session token; on an old-path lane they are still resident, still outside Wardyn's sight and still unmaskable, which is why `kindResidency` keeps answering `residencySandbox` for this lane. Phase B did not change the residency classification, and a reader who "fixes" `credential_residency.go` because the SSO token left the sandbox is reading the wrong row. | Bounded only by their own STS lifetime and the IAM role's scope, both set outside Wardyn. On an old-path lane Wardyn never sees these values, so they are **not** mask-registered and cannot be masked; on a re-signed lane the proxy obtains them and mask-registers their secret key and session token. |
 | **AWS CLI component role credentials** (0.9, a run with an AWS CLI component) | The short-lived role credentials the in-sandbox `aws` gets from the person's own sign-in, for the one account and permission set the component pins, cached under `~/.aws/cli/cache`, which since 0.10.0 is a link onto the sandbox's `/tmp` memory file system and ends with the sandbox (`link_aws_cli_cache_to_tmpfs` in [`deploy/images/common/agent-run-lib.sh`](../deploy/images/common/agent-run-lib.sh)); a Docker sandbox kept after its run ends, on a run Wardyn staged an AWS profile for, has `~/.aws/sso/cache` and that cache deleted just before it stops (`wipeAWSCaches` in [`internal/runner/docker/aws_cache_wipe.go`](../internal/runner/docker/aws_cache_wipe.go)), and every other end removes the container or pod | AWS issues them to the client, which signs in-process | Bounded only by the permission set's session duration and its policies, both set outside Wardyn; `GetRoleCredentials` takes no duration, so the administrator's lever is a `PT1H` session duration, the shortest AWS allows. They stay valid at AWS after the run ends and are not mask-registered. Wardyn cannot revoke one STS session; the administrator's lever is revoking the role's active sessions. |
+| **Desktop sign-in logins** (0.10, `WARDYN_DESKTOP_SIGNINS=on` only, a run that declares the `novnc` desktop, the in-process Docker runner only) | The cookies of each website the run's creator signs in to in their own browser inside the run's desktop; and, for each site they **share**, that site's cookies in the agent's browser | The login is made by the person in the sandbox's desktop, through a site Wardyn has no credential for, so there is nothing for the proxy to hold | The person's browser runs as uid 1001, its profile and every socket in a 0700 tmpfs only that uid can open; the agent is stopped (pid 1 from outside, every other agent process proven stopped) for the whole sign-in, at most 30 minutes; a share copies one registrable domain's cookies, re-filtered by wardynd, at most 512 KiB. **This is a uid boundary inside one sandbox, not a sandbox boundary**; the bounds and residuals below say what it does not stop |
 | Container-**login** runs (`harness login`) | **Launched by the person capturing their OWN credential through a model provider's sign-in door; the sandbox is seeded with the ADMIN'S access-portal URL from the provider record and ignores any the caller supplies, so a capture can never be bound to a foreign IdP/account.** The credential the run exists to obtain: `claude setup-token` prints it to the PTY; `aws sso login` writes it to `~/.aws/sso/cache` before `wardyn-aws-sso` uploads it | The credential does not exist yet — there is nothing to inject | A throwaway box: no workspace, no repo, no credential mounts, mints nothing (the AWS flow is seeded with one NON-secret file — a `~/.aws/config` holding the operator's SSO start URL + region, which `aws sso login` cannot run without), default-deny egress pinned to the login flow's hosts, idle auto-stop. **Never recorded** — the recorder is dropped entirely for a `harness login` run (masking could not have covered it: the value arrives after the run's mask snapshot). **0.7.5 — and the sign-in the image now runs itself is not recorded either, deliberately.** The claude-code image's boot pane wraps its seed in `wardyn-rec` (`boot_seed_rec_wrap`, [`deploy/images/common/agent-run-lib.sh`](../deploy/images/common/agent-run-lib.sh)); the aws-sso image's sign-in pane does NOT. It handles the credential this run exists to obtain — the device code, the portal's reply, and the helper's upload — and the recorder is exactly what must not see them, for the same reason the run's recorder is dropped at dispatch: the value arrives after the run's mask snapshot is taken, so masking could not have covered it. The consequence, stated rather than implied: **there is no cast of what happened inside a sign-in sandbox**, including whatever a human typed at the pane's trailing shell after the sign-in finished. That shell has the same bounds as any other attach into this box — the AWS CLI, no repo, no mounts, default-deny egress pinned to the SSO endpoints, and a 30-minute idle cap — and the audit trail still carries the capture (`harness.credential.capture` / `.refused`) and the launch (`harness.login.start`). What is not carried is the keystrokes. **0.10.0:** once the capture is stored, `wardyn-aws-sso` deletes `~/.aws/sso/cache` and `~/.aws/cli/cache` and the pane's history is cleared, and the control plane stops the sign-in sandbox after a 5-second grace (`signInCaptureKillGrace` in [`internal/api/ssotoken.go`](../internal/api/ssotoken.go)); a Claude paste capture stops its sandbox the same way, so the credential no longer sits in the box until the idle cap. |
 
 **On a runner (client mode, 0.9) the laptop is a second place a value lands.**
 
 - Placement changes none of the rows above, which list the SANDBOX. A local run's laptop proxy also holds its run token, MITM CA key and the owner's own credentials, all developer-readable (residual #69).
-- `via_org` keeps an org-held value at the organisation (residual #75). Since 0.9.3 `runner_resident` puts four classes on the runner host for the run: the OS keystore on a laptop, a Secret on an organisation runner, then the sandbox or proxy; since 0.10 an Azure DevOps minted token in proxy memory (residual #76).
+- `via_org` keeps an org-held value at the organisation (residual #75). Since 0.9.3 `runner_resident` puts four classes on the runner host for the run: the OS keystore on a laptop, a Secret on an organisation runner, then the sandbox or proxy; since 0.9.7 an Azure DevOps minted token in proxy memory (residual #76).
 
 **The AWS CLI component's sign-in (0.9) is not resident.**
 
@@ -3005,11 +3060,22 @@ exactly these terms.
 - Deleting or re-pinning the component deletes every person's sign-in for it, and erasing a person's credentials removes theirs.
 - Residual: within their own run, a person granted the component holds role credentials for that role until they expire, as on the `bedrock_sso` lane.
 
+**Desktop sign-ins (0.10, off by default) are a uid boundary inside one sandbox, not a sandbox boundary.**
+
+- With `WARDYN_DESKTOP_SIGNINS=on`, a run's creator can sign in to websites in a browser of their own inside the run's desktop ([`internal/api/run_desktop_signin.go`](../internal/api/run_desktop_signin.go), [`cmd/wardyn-signin`](../cmd/wardyn-signin)). The person's browser and the agent share one container, one kernel and one network namespace; what separates them is the uid, file modes and the stop. The stronger form, the person's browser in a sandbox of its own, is a 0.10.x option and is not built.
+- **What holds.** The agent is stopped before the person's display starts and stays stopped until the person's processes are killed and proven gone; if either step cannot be proven, the display does not start, or the agent stays stopped and the sweep retries. The person's store is a 0700 tmpfs owned by uid 1001; short of a kernel escape, the agent's uid cannot list it, read the lane credential in it, signal or read the environment of the person's processes, or run the person's helper subcommands. The person's proxy forwarder on loopback serves the person's uid alone (it reads the peer's uid from `/proc/net/tcp`).
+- **The sign-in lane (proxy).** The person's traffic leaves on a second proxy listener that admits only `CONNECT` carrying the open sign-in's credential, which wardynd checks and which the agent's uid does not hold ([`internal/egress/proxy/desktop_signin_lane.go`](../internal/egress/proxy/desktop_signin_lane.go)). It is tunnel-only: no TLS interception, no credential injection, and the proxy records host and port, never a URL path, query or body. The run's egress policy still decides by host. The same request from the agent's side is intercepted per policy as before.
+- **A share is the moment to decide.** After a share the agent holds that site's cookies and can act as the person on that site, within its egress, until the run ends or the site expires the login. Nothing Wardyn does after a share takes them back.
+- **Residuals.** Chromium runs with `--no-sandbox` (the hardened container drops the capabilities its own sandbox needs), so a page that exploits the person's browser runs as the person's uid with their logins. The person's lane is not content-inspected. The sign-in image (`agent-novnc-signin`) keeps the `xwayland` package only as cage's hard Depends and deletes its `/usr/bin/Xwayland` binary, so wlroots creates no Xwayland server and cage opens no X socket in the shared `/tmp`; [`scripts/test-image-novnc-signin.sh`](../scripts/test-image-novnc-signin.sh) pins both. The package's unfixed CVEs are accepted for that image alone (`.trivyignore.novnc-signin`). wardynd's own helper execs as the agent's uid (file list, resources, the UI launcher) are not stopped by the sign-in. Abstract unix sockets carry no file mode: the person's own sockets (Wayland, VNC, noVNC, control) are path sockets in its store, and no test pins that Chromium opens no abstract socket. Code the agent left running in a shared place before the sign-in (`/tmp`, `/dev/shm`) is stopped with the agent, but what it wrote there stays.
+- **Snapshots.** A run where any sign-in began counts as holding secrets for good (`internal/secretspresent`), so a future snapshot or fork refuses it.
+
 **The `ssh_key` grant (0.10) is not resident.**
 
 - The proxy holds the key and signs only an SSH sign-in for it (`isUserauthRequest`, [`internal/egress/proxy/ssh_agent.go`](../internal/egress/proxy/ssh_agent.go)); `ssh` reaches it through a per-command socket from `wardyn-git-helper ssh-exec`.
 - The mint route withholds any `ssh_key` answer, the broker issues it once per run (`checkedMintRow`), and `close_ssh_agent` closes the agent after the clone.
-- Residual: until that close, a sandbox process can have the proxy sign a sign-in with it. An image that never closes it leaves that open for the run.
+- A host-bound sign-in must name a grant known_hosts or `pinnedSSHHostKeys` key; GitHub signs only host-bound. While a key is held, a CONNECT tunnel either side opens with an SSH identification goes only to grant endpoints.
+- Residual: Azure DevOps's plain sign-in names no host; that tunnel bound misses TLS-wrapped SSH and pre-banner lines.
+- Residual: until that close (all run, if an image skips it), sandbox code can have the proxy sign one.
 
 **Where this table is now stated to the person launching the run.**
 

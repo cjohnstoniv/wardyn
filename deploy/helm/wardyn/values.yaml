@@ -61,7 +61,7 @@ ha:
 # of the Service's endpoints; liveness and startup stay on /healthz either way.
 #
 # ONLY OVERRIDE THIS FOR AN OLD IMAGE. /readyz was added in 0.6, and the empty
-# image.tag above resolves to .Chart.AppVersion, which is 0.9.6 — so the default
+# image.tag above resolves to .Chart.AppVersion, which is 0.9.8 — so the default
 # install serves it. An image.tag PINNED at or below 0.5.0 does not: the probe
 # 404s forever, the pod never becomes Ready, and the rollout hangs with no other
 # symptom. Pin it back with `--set readinessProbe.path=/healthz` and accept
@@ -569,10 +569,10 @@ daemonProxySecret:
   mountPath: /etc/wardyn/daemon-proxy-secret
   defaultMode: 0440
 
-# Phase B kill switch (WARDYN_AWS_SSO_PROXY_INJECT): "on" (proxy-side AWS SSO
-# session injection, the daemon's own default) or "off" (the pre-0.7.6
-# behaviour — the SSO token is written into the sandbox). See
-# docs/OPERATIONS.md "Turning the lane off". Empty (default) => no named env
+# AWS sign-in lane (WARDYN_AWS_SSO_PROXY_INJECT): "on" (proxy-side AWS SSO
+# session injection, the daemon's own default) or empty. "off", "false" and "0" were
+# removed in 0.10.0 and wardynd refuses to boot on them; see docs/OPERATIONS.md "Removed in
+# 0.10.0". Empty (default) => no named env
 # entry rendered, so wardynd's own compiled default ("on") applies — byte-
 # identical to today. Wires WARDYN_AWS_SSO_PROXY_INJECT unless
 # env.WARDYN_AWS_SSO_PROXY_INJECT is already set (which always wins) —
@@ -859,14 +859,14 @@ metrics:
 podAnnotations: {}
 
 # How long Kubernetes waits after SIGTERM before SIGKILL. wardynd's orderly
-# stop needs up to ~65s: http.Server.Shutdown (15s), then the detached work it
-# waits for (a run launch, a superseded sign-in's teardown: up to 35s), then
+# stop needs up to ~80s: http.Server.Shutdown (15s), then the detached work it
+# waits for (a run launch, a superseded sign-in's teardown and revokes: up to 50s), then
 # the audit sinks' final flush (the webhook sink's own timeout: 15s). The
 # Kubernetes default of 30s can SIGKILL a teardown mid-KillSandbox, leaving
-# the run KILLED with its sandbox still up and no run.kill row. Keep it at 70
+# the run KILLED with its sandbox still up and no run.kill row. Keep it at 85
 # or above. 0 is not supported: the template's `| default` treats an explicit
 # 0 the same as unset and falls back to the chart default.
-terminationGracePeriodSeconds: 70
+terminationGracePeriodSeconds: 85
 
 # Pod-level security context. distroless:nonroot runs as uid/gid 65532.
 podSecurityContext:

@@ -55,7 +55,7 @@ const killRunMock = vi.fn();
 const getGrantsMock = vi.fn();
 vi.mock("../../../lib/api/runs", () => ({
   runs: {
-    listRuns: (...a: unknown[]) => listRunsMock(...a),
+    listRunsFiltered: async (...a: unknown[]) => ({ runs: await listRunsMock(...a), truncated: false, hiddenOlder: 0, hiddenKilled: 0 }),
     createRunWire: (...a: unknown[]) => createRunMock(...a),
     getRun: (...a: unknown[]) => getRunMock(...a),
     killRun: (...a: unknown[]) => killRunMock(...a),
@@ -99,7 +99,7 @@ vi.mock("../../../lib/api/workspaces", () => ({
 }));
 
 // The member's own ceiling, named by GET /policies/default. The default answer
-// carries no governance_profile_name — an UNASSIGNED member.
+// carries no unit_name — an UNASSIGNED member.
 const getDefaultPolicyMock = vi.fn();
 vi.mock("../../../lib/api/policies", () => ({
   policies: { getDefaultPolicy: (...a: unknown[]) => getDefaultPolicyMock(...a) },
@@ -135,7 +135,7 @@ function renderPage(me: Me = baseMe(), shell: SetupStatus | null = null, search 
           operator={false}
           securityOperator={false}
           userDrive={me.user_drive}
-          userDriveDeniedByProfile={me.user_drive_denied_by_profile}
+          userDriveDeniedByUnit={me.user_drive_denied_by_unit}
         >
           <MemberGettingStarted />
         </OperatorProvider>

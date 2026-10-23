@@ -6,6 +6,7 @@ package main
 import (
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -23,6 +24,7 @@ func isolateProfile(t *testing.T) string {
 	cfg := t.TempDir()
 	t.Setenv("HOME", cfg)
 	t.Setenv("XDG_CONFIG_HOME", cfg)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(cfg, "cache")) // the version notice's cache
 	t.Setenv("WARDYN_URL", "")
 	t.Setenv("WARDYN_CLI_ALLOW_PLAINTEXT", "")
 	t.Setenv("WARDYN_ADMIN_TOKEN", "")
@@ -49,16 +51,17 @@ func execCaptureErr(t *testing.T, args ...string) (stderr string, err error) {
 	return errOut.String(), err
 }
 
-// TestLoginURL pins `wardyn login <url>`: it saves the normalised URL, and for a plain-http,
-// non-loopback one it warns exactly as a command's token warning does (silenced by
-// WARDYN_CLI_ALLOW_PLAINTEXT) and never refuses.
+// TestLoginURL pins `wardyn login <url>`: it saves the normalised URL before it dials anything, and for a
+// plain-http, non-loopback one it warns exactly as a command's token warning does (silenced by
+// WARDYN_CLI_ALLOW_PLAINTEXT) and never refuses. These organisations do not answer, so login then says it
+// saved the URL but could not reach it to sign in.
 func TestLoginURL(t *testing.T) {
 	for _, tc := range []struct {
 		name, arg, env, want string
 		warns                bool
 	}{
 		{"https is saved as its origin and base path", " https://wardyn.example.com/w/ ", "", "https://wardyn.example.com/w", false},
-		{"loopback http does not warn", "http://localhost:8080", "", "http://localhost:8080", false},
+		{"loopback http does not warn", "http://localhost:1", "", "http://localhost:1", false},
 		{"plain http to another host warns and is still saved", "http://wardyn.example.com", "", "http://wardyn.example.com", true},
 		{"WARDYN_CLI_ALLOW_PLAINTEXT silences the warning and still saves", "http://wardyn.example.com", "1", "http://wardyn.example.com", false},
 	} {
@@ -66,8 +69,8 @@ func TestLoginURL(t *testing.T) {
 			dir := isolateProfile(t)
 			t.Setenv("WARDYN_CLI_ALLOW_PLAINTEXT", tc.env)
 			stderr, err := execCaptureErr(t, "login", tc.arg)
-			if err != nil {
-				t.Fatalf("login refused %q: %v (it warns, it never refuses)", tc.arg, err)
+			if err == nil || !strings.HasPrefix(err.Error(), "saved "+tc.want+", but could not reach it") {
+				t.Fatalf("login %q: %v, want the saved-but-unreachable line (it warns, it never refuses)", tc.arg, err)
 			}
 			if warned := strings.Contains(stderr, "WARNING"); warned != tc.warns {
 				t.Errorf("warned = %v, want %v (stderr %q)", warned, tc.warns, stderr)
@@ -79,15 +82,19 @@ func TestLoginURL(t *testing.T) {
 	}
 	t.Run("it saves, then says the control plane's sign-in is a token", func(t *testing.T) {
 		isolateProfile(t)
+		older := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"status":"ok"}`)) // an organisation older than CLI sign-in
+		}))
+		t.Cleanup(older.Close)
 		root := rootCmd()
-		root.SetArgs([]string{"login", "https://wardyn.example.com"})
+		root.SetArgs([]string{"login", older.URL})
 		var stdout strings.Builder
 		root.SetOut(&stdout)
 		root.SetErr(&strings.Builder{})
 		if err := root.Execute(); err != nil {
 			t.Fatal(err)
 		}
-		want := "Saved https://wardyn.example.com. This control plane does not offer CLI sign-in: set WARDYN_TOKEN to a personal API token. " +
+		want := "Saved " + older.URL + ". This control plane does not offer CLI sign-in: set WARDYN_TOKEN to a personal API token. " +
 			"A Wardyn admin can invite you to create one, and you claim it under Your account in the console.\n"
 		if !strings.HasPrefix(stdout.String(), want) {
 			t.Errorf("login printed %q, want it to start %q", stdout.String(), want)

@@ -242,6 +242,14 @@ describe("RunFailureBlock", () => {
     expect(screen.getByTestId("run-failure-block")).toHaveAttribute("data-evidence", "partial");
   });
 
+  it("a kill row with no timestamp reads the run's own end time for how far in it was, not its last update (#2521)", () => {
+    const endedAt = new Date(NOW_MS - 16 * 60 * 1000).toISOString();
+    const noTime = ev("run.kill", "success", { actor: "alice", actor_type: "human", time: undefined as unknown as string });
+    render(<RunFailureBlock run={{ ...run("KILLED"), ended_at: endedAt }} audit={[noTime]} onGoAudit={vi.fn()} />);
+    // CREATED is 26m before NOW_MS, ended_at 16m before it: 10m in. updated_at (NOW_MS) would say 26m.
+    expect(screen.getByText(/An operator killed this run 10m 0s in\./)).toBeInTheDocument();
+  });
+
   // Ported from the review probe: a KILLED run whose trail has no run.kill row
   // invented the ending from the state alone and printed the clean claim.
   it("KILLED with no kill record: says it cannot confirm, with no actor, elapsed time or run.kill line", () => {
@@ -548,5 +556,14 @@ describe("RunFailureBlock: a run on a person's computer", () => {
     renderLocal([ev("run.kill", "success", { actor: "alice", actor_type: "human" })], { placement: "remote", runner_id: undefined, runner_name: undefined });
     expect(screen.getByText("An operator killed this run 26m 0s in. Wardyn stopped and removed the sandbox and will issue it no more credentials.")).toBeInTheDocument();
     expect(screen.getByText("Files written to a mounted workspace are still on the host; scratch is gone.")).toBeInTheDocument();
+  });
+});
+
+describe("RunFailureBlock: a run Wardyn killed for a desktop sign-in", () => {
+  it("says why in words, never the reason code", () => {
+    renderBlock("KILLED", [ev("run.kill", "success", { actor: "wardynd", data: { reason: "desktop_signin_resume_failed", signin_id: "s1" } })]);
+    const block = screen.getByTestId("run-failure-block");
+    expect(block).toHaveTextContent("couldn't resume the agent after a sign-in, so it ended the run");
+    expect(block).not.toHaveTextContent("desktop_signin_resume_failed");
   });
 });

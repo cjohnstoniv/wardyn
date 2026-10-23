@@ -163,8 +163,10 @@ func TestSweeperLeader_LostLockCancelsAndJoinsTheSweeps(t *testing.T) {
 		t.Fatal("b swept while a led")
 	}
 
+	// pg_locks lists the whole server: end the leader in this database, never another test's.
 	if _, err := killer.Exec(ctx, `SELECT pg_terminate_backend(pid) FROM pg_locks
-		WHERE locktype = 'advisory' AND granted AND classid::bigint = $1 AND objid::bigint = $2 AND objsubid = 1`,
+		WHERE locktype = 'advisory' AND granted AND classid::bigint = $1 AND objid::bigint = $2 AND objsubid = 1
+		AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`,
 		(SweeperLeaderLockKey>>32)&0xffffffff, SweeperLeaderLockKey&0xffffffff); err != nil {
 		t.Fatalf("ending the leader's session: %v", err)
 	}

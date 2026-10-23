@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -40,7 +41,7 @@ import (
 
 // f153RecordSrv drives launchRecordRun over a store that hands `profile` to
 // whoever asks, with `active` runs already going.
-func f153RecordSrv(t *testing.T, profile *types.GovernanceProfile, active int) (*Server, *fakeRunner) {
+func f153RecordSrv(t *testing.T, profile *types.GovernanceUnit, active int) (*Server, *fakeRunner) {
 	t.Helper()
 	h := newHarness(t)
 	ws := types.Workspace{ID: uuid.New(), Status: types.WorkspaceScanned}
@@ -65,7 +66,7 @@ func (s *f153ScanStore) CountActiveRunsBy(context.Context, string) (int, error) 
 
 // f153Scan drives the real launchSourceScanRun for a member with `active` runs
 // already going, under `profile`.
-func f153Scan(t *testing.T, profile *types.GovernanceProfile, active int) (*Server, error) {
+func f153Scan(t *testing.T, profile *types.GovernanceUnit, active int) (*Server, error) {
 	t.Helper()
 	cs := &capStore{}
 	if profile != nil {
@@ -205,4 +206,16 @@ func TestScanHandlersAnswerTheRunCapWith403(t *testing.T) {
 		srv.handleScanSource(w, req())
 		check(t, w)
 	})
+}
+
+// A scan launch refused for a missing or truncated group snapshot answers the 403 that names the remedy,
+// the same as run-create, not a 500 "launch scan run".
+func TestScanLaunchRefusalAnswersAStaleGroupSnapshotWith403(t *testing.T) {
+	srv, _, _ := govEscapeFixture(t, assignedStore(govProfile("two-at-a-time")))
+	req := httptest.NewRequest(http.MethodPost, "/scan", nil).WithContext(govMemberCtx([]string{"eng"}, false))
+	w := httptest.NewRecorder()
+	if !srv.writeScanLaunchRefusal(w, req, fmt.Errorf("resolve governance ceiling: %w", errGroupsSnapshotStale)) ||
+		w.Code != http.StatusForbidden || reasonOf(t, w) != reasonGroupsSnapshotStale || !strings.Contains(w.Body.String(), "sign in again") {
+		t.Fatalf("= %d %s, want 403 %s naming the remedy", w.Code, w.Body.String(), reasonGroupsSnapshotStale)
+	}
 }

@@ -12,13 +12,13 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 type Answer = "authed" | "unauthed" | "unreachable" | "forbidden";
-const probes = vi.hoisted(() => ({ results: [] as Answer[], calls: 0 }));
+const probes = vi.hoisted(() => ({ results: [] as Answer[], reasons: [] as string[], calls: 0 }));
 const next = () => {
   probes.calls++;
   const a = probes.results.shift() ?? "unreachable";
   return {
     probe: a === "forbidden" ? ("unreachable" as const) : a,
-    reason: "",
+    reason: probes.reasons.shift() ?? "",
     transient: a === "unreachable",
   };
 };
@@ -45,8 +45,12 @@ vi.mock("./lib/use-poll", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./lib/use-poll")>()),
   usePoll: () => {},
 }));
+// The shell's Needs you notices poll on their own interval, which is not this test's backoff.
+vi.mock("./components/wardyn/needs-you-notices", () => ({ NeedsYouNotices: () => null }));
 
 import App from "./App";
+import { SESSION_ENDED_REASON, setToken } from "./lib/api/core";
+import { SESSION_ENDED } from "./lib/session-continuity-copy";
 
 const gate = () => screen.queryByRole("heading", { name: "Sign in" });
 
@@ -66,10 +70,12 @@ describe("a cold load that cannot reach the daemon", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     probes.results = [];
+    probes.reasons = [];
     probes.calls = 0;
   });
   afterEach(() => {
     cleanup();
+    setToken(null);
     vi.useRealTimers();
   });
 
@@ -175,5 +181,82 @@ describe("a cold load that cannot reach the daemon", () => {
     expect(probes.calls).toBe(2);
     expect(gate()).toBeInTheDocument();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("a 401 on a retry that names an ended session shows the signed-out notice", async () => {
+    probes.results = ["unreachable", "unauthed"];
+    probes.reasons = ["", "expired_session"];
+    await mount();
+    expect(screen.queryByText(SESSION_ENDED_REASON)).not.toBeInTheDocument();
+    await tick(1000);
+    expect(gate()).toBeInTheDocument();
+    expect(screen.getByText(SESSION_ENDED.EXPIRED)).toBeInTheDocument();
+  });
+
+  it("a 401 with no reason on a retry, with a stored token, shows the fallback notice", async () => {
+    probes.results = ["unreachable", "unauthed"];
+    setToken("stored-token");
+    await mount();
+    await tick(1000);
+    expect(gate()).toBeInTheDocument();
+    expect(screen.getByText(SESSION_ENDED_REASON)).toBeInTheDocument();
+  });
+
+  it("a focus re-probe 401 with no reason, with a stored token, shows the fallback notice", async () => {
+    probes.results = ["unreachable", "unauthed"];
+    setToken("stored-token");
+    await mount();
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await tick(0);
+    expect(probes.calls).toBe(2);
+    expect(gate()).toBeInTheDocument();
+    expect(screen.getByText(SESSION_ENDED_REASON)).toBeInTheDocument();
+  });
+
+  it("neg: a 401 on a retry with no reason and no stored token shows no notice", async () => {
+    probes.results = ["unreachable", "unauthed"];
+    await mount();
+    await tick(1000);
+    expect(gate()).toBeInTheDocument();
+    expect(screen.queryByText(SESSION_ENDED_REASON)).not.toBeInTheDocument();
+  });
+
+  it("a focus re-probe that wins the race and gets a 401 naming an ended session shows the notice, with no timer tick", async () => {
+    probes.results = ["unreachable", "unauthed"];
+    probes.reasons = ["", "expired_session"];
+    await mount();
+    expect(screen.queryByText(SESSION_ENDED_REASON)).not.toBeInTheDocument();
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await tick(0);
+    expect(probes.calls).toBe(2);
+    expect(gate()).toBeInTheDocument();
+    expect(screen.getByText(SESSION_ENDED.EXPIRED)).toBeInTheDocument();
+  });
+
+  it("neg: a focus re-probe 401 with no reason and no stored token shows no notice", async () => {
+    probes.results = ["unreachable", "unauthed"];
+    await mount();
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await tick(0);
+    expect(probes.calls).toBe(2);
+    expect(gate()).toBeInTheDocument();
+    expect(screen.queryByText(SESSION_ENDED_REASON)).not.toBeInTheDocument();
+  });
+
+  // M12 (#1995): the reason a 401 names must reach the gate on every probe path, not only the mount probe.
+  it("a 401 on a retry names why the session ended", async () => {
+    const core = await import("./lib/api/core");
+    vi.mocked(core.probeAuthWithReason).mockImplementationOnce(async () => ({ probe: "unreachable", reason: "", transient: true }));
+    vi.mocked(core.probeAuthWithReason).mockImplementationOnce(async () => ({ probe: "unauthed", reason: "revoked_session", transient: false }));
+    await mount();
+    expect(screen.queryByText(SESSION_ENDED.REVOKED)).toBeNull();
+    await tick(1000);
+    expect(screen.getByText(SESSION_ENDED.REVOKED)).toBeInTheDocument();
   });
 });

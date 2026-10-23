@@ -17,6 +17,7 @@ import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import { userTypes as api } from "../../../lib/api/user-types";
 import type { GovernanceSnapshot } from "../../../lib/api/governance";
 import { getErrorMessage } from "../../../lib/format";
+import { useUnsavedGuard } from "../../../lib/use-unsaved-guard";
 import { GOVERNANCE as GOV } from "../../../lib/governance-copy";
 import { EXPLAIN, USER_TYPES as UT } from "../../../lib/user-types-copy";
 import type { UserType } from "../../../lib/types";
@@ -30,7 +31,7 @@ import { limitChips, limitsBoundNothing } from "../governance/limit-chips";
 import { ExplainGrid } from "./explain-grid";
 
 // The profile bound to this type, by governance's own priority rule (highest
-// wins) — the exact ordering ResolveGovernanceProfile applies, so a type with
+// wins) — the exact ordering ResolveGovernanceUnit applies, so a type with
 // two assignments (a bug elsewhere, not something this screen writes) is never
 // misreported by picking the wrong one.
 function boundProfile(snapshot: GovernanceSnapshot | null, typeID: string) {
@@ -39,7 +40,7 @@ function boundProfile(snapshot: GovernanceSnapshot | null, typeID: string) {
     .filter((a) => a.subject_type === "user_type" && a.subject === typeID)
     .sort((a, b) => b.priority - a.priority)[0];
   if (!assignment) return undefined;
-  return snapshot.profiles.find((p) => p.id === assignment.profile_id);
+  return snapshot.profiles.find((p) => p.id === assignment.unit_id);
 }
 
 export function UserTypeEditor({
@@ -70,6 +71,11 @@ export function UserTypeEditor({
   const [id, setId] = React.useState("");
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+
+  // Leaving with edits that were not saved asks first; a save or a held change closes this editor.
+  const edited = JSON.stringify({ name, description, priority, id }, null, 2);
+  const initial = React.useRef(edited).current;
+  useUnsavedGuard("user-type-editor", edited !== initial, () => edited);
 
   const save = async () => {
     setSaving(true);

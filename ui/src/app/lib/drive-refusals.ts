@@ -14,6 +14,12 @@ export const DRIVE_REFUSAL = {
   TOO_MANY: (max: string) => `drives: attach at most ${max} drives.`,
   NOT_FOUND: (id: string) => `No drive ${id} is available to you.`,
   NOT_IN_POOL: (name: string) => `${name}: not available in this pool's runners.`,
+  // A person's own runner (M10): a drive with no second place, and one bound to another runner. The quoted
+  // name is Go's %q.
+  ORG_RUNNERS_ONLY: (name: string) =>
+    `drive: ${JSON.stringify(name)} mounts only from the organisation's runners — choose an organisation pool, or launch without drive`,
+  BOUND_ELSEWHERE: (name: string) =>
+    `drive: ${JSON.stringify(name)} is bound to a different runner — choose an organisation pool, or launch without drive`,
   TARGET_CONFLICT: (a: string, b: string, target: string) => `${a} and ${b} both mount at ${target}. Attach one of them.`,
   SHARE_BESIDE_MANAGED: (share: string, managed: string) =>
     `${share} is a shared drive and ${managed} a managed one; a Kubernetes run mounts one kind or the other. Attach one of them.`,
@@ -21,7 +27,7 @@ export const DRIVE_REFUSAL = {
   // Go's %q, which JSON.stringify matches for the names a drive can carry.
   MEMBER_REQUIRES_PERSON: () => "Sign in under your own account to create or delete a drive.",
   MEMBER_DISABLED: () => "Your organisation doesn't let people create drives. Ask an admin.",
-  MEMBER_DENIED_BY_PROFILE: (profile: string) =>
+  MEMBER_DENIED_BY_UNIT: (profile: string) =>
     `Your governance profile ${JSON.stringify(profile)} doesn't let you create drives.`,
   MEMBER_LIMIT_REACHED: (n: string, limit: string) => `You have ${n} of ${limit} drives. Delete one to create another.`,
   MEMBER_UNSUPPORTED: () => "This server can't create drives.",
@@ -44,11 +50,13 @@ export const DRIVE_REFUSAL_REASON = {
   TOO_MANY: "drive_invalid",
   NOT_FOUND: "drive_not_found",
   NOT_IN_POOL: "drive_not_in_pool",
+  ORG_RUNNERS_ONLY: "drive_not_in_pool",
+  BOUND_ELSEWHERE: "drive_not_in_pool",
   TARGET_CONFLICT: "drive_target_conflict",
   SHARE_BESIDE_MANAGED: "drive_share_beside_managed",
   MEMBER_REQUIRES_PERSON: "member_drive_requires_person",
   MEMBER_DISABLED: "member_drives_disabled",
-  MEMBER_DENIED_BY_PROFILE: "member_drives_denied_by_profile",
+  MEMBER_DENIED_BY_UNIT: "member_drives_denied_by_unit",
   MEMBER_LIMIT_REACHED: "member_drive_limit_reached",
   MEMBER_UNSUPPORTED: "member_drive_unsupported",
   MEMBER_UNSIZED: "member_drive_unsupported",

@@ -124,7 +124,7 @@ wardyn attach <id>
 - The **Secrets** group is eight cards covering a stored *value* rather than a destination —
   - the write-only store itself, proxy-side header injection, an approval-gated single-use mint, and then one card per credential KIND,
   - because what a credential's own protocol accepts is what decides how far out of the sandbox it can be kept:
-    - an `api_key` never enters the box, a `git_pat` stays at the proxy by default (it enters only as a pipe to git with `WARDYN_GIT_PAT_BROKER=off`), an `ssh_key` is the documented resident exception,
+    - an `api_key` never enters the box, a `git_pat` stays at the proxy by default (it enters only with `WARDYN_GIT_PAT_BROKER=off`), an `ssh_key` is signed for by the proxy,
     - a `github_token` is minted proxy-side and refused if the sandbox asks for it, and a `cloud_sts` grant is refused at run-create outright without a SPIRE identity provider.
 
 <!-- Regenerated with `make screenshots` (docs.spec.ts) for 0.7.4. Freshness is
@@ -225,7 +225,7 @@ subscription` is gone, `wardyn secret set` refuses the model-credential names, a
   - The model is a cross-region *inference-profile* id, or the profile's full ARN — `arn:aws:bedrock:<region>:<acct>:inference-profile/<id>` or `…:application-inference-profile/<id>` — not a bare model id.
   - A `bedrock_sso` run holds that person's short-lived role credentials in its own sandbox (see [`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md) §5.1a).
 
-## Level 2.5 — record a session, rerun it as a governed profile
+## Level 2.5 — record a session, rerun it as a governed unit
 
 - The primary way to onboard your own work: in a workspace, **record** a named interactive session (with model access), then rerun it governed —
   - the New Run dialog's Basics step offers the workspace's recorded sessions as **profiles**;

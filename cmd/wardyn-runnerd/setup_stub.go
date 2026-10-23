@@ -5,14 +5,9 @@
 
 package main
 
-import (
-	"context"
-	"errors"
-)
+import "context"
 
 // The docker build holds setup's engine check and relay probe; this build cannot tell the engine is usable.
-var errSetupNeedsDocker = errors.New("setup requires a build with the docker tag")
-
 func readySetupEngine(context.Context, string, relayPair) (dockerEngine, error) {
 	return dockerEngine{}, errSetupNeedsDocker
 }
@@ -20,3 +15,11 @@ func readySetupEngine(context.Context, string, relayPair) (dockerEngine, error) 
 func probeSetupRelay(context.Context, string, string, dockerEngine, relayPair) (relayPair, error) {
 	return relayPair{}, errSetupNeedsDocker
 }
+
+func inspectSetupEngine(context.Context, relayPair) (dockerEngine, error) {
+	return dockerEngine{}, errSetupNeedsDocker
+}
+
+func resolveProxyImage(context.Context, string) (string, error) { return "", errSetupNeedsDocker }
+
+func inspectSetupNetwork(context.Context, string) (bool, error) { return false, errSetupNeedsDocker }

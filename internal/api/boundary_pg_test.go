@@ -122,7 +122,7 @@ func TestBoundaryProvenanceNamesTheBoundary(t *testing.T) {
 	}
 }
 
-// TestBoundaryNoLimitsIsByteIdentical: with no row, with the upgrade posture SetBoundaryNoLimits
+// TestBoundaryNoLimitsIsByteIdentical: with a fresh install's seeded row, with the upgrade posture SetBoundaryNoLimits
 // writes, and with a no_limits row that keeps a drafted spec, the corpus resolves to the golden
 // recorded on a tree without the boundary.
 func TestBoundaryNoLimitsIsByteIdentical(t *testing.T) {
@@ -139,7 +139,7 @@ func TestBoundaryNoLimitsIsByteIdentical(t *testing.T) {
 // knobJSON is one top-level knob of spec as the dry run and provenance compare it.
 func knobJSON(t *testing.T, spec types.RunPolicySpec, knob string) string {
 	t.Helper()
-	v := reflect.ValueOf(canonicalKnobs(redactSpecForRead(spec, true)))
+	v := reflect.ValueOf(canonicalKnobs(redactSpecForRead(spec, specReadFull)))
 	i := slices.Index(policyKnobFields, knob)
 	if i < 0 {
 		t.Fatalf("no knob %q", knob)
@@ -162,8 +162,8 @@ func TestBoundaryDryRunEqualsTheOnSwitch(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &report); err != nil {
 		t.Fatal(err)
 	}
-	if len(report.Profiles) != 1 || report.Profiles[0].ID != c.profile.ID || len(report.StoredPolicies) != 1 ||
-		report.StoredPolicies[0].ID != c.open.ID || len(report.Assignments) != 1 || report.Assignments[0].Subject != boundaryMemberSub {
+	if len(report.Units) != 1 || report.Units[0].ID != c.profile.ID || len(report.StoredPolicies) != 1 ||
+		report.StoredPolicies[0].ID != c.open.ID || len(report.Memberships) != 1 || report.Memberships[0].Subject != boundaryMemberSub {
 		t.Fatalf("report rows = %s", w.Body)
 	}
 	cases := map[string]boundaryCase{}
@@ -195,7 +195,7 @@ func TestBoundaryDryRunEqualsTheOnSwitch(t *testing.T) {
 		}
 	}
 	on := resolveBoundaryCase(t, e.srv, c, cases["profile_chain_default"])
-	check("profile", report.Profiles[0].Changes, off["profile_chain_default"].CeilingSpec, on.CeilingSpec)
+	check("profile", report.Units[0].Changes, off["profile_chain_default"].CeilingSpec, on.CeilingSpec)
 	on = resolveBoundaryCase(t, e.srv, c, cases["deployment_default_unassigned"])
 	check("deployment", report.Deployment, off["deployment_default_unassigned"].CeilingSpec, on.CeilingSpec)
 	on = resolveBoundaryCase(t, e.srv, c, cases["stored_policy_unassigned"])
@@ -282,7 +282,9 @@ func TestBoundaryBreakGlass(t *testing.T) {
 // TestBoundaryBoundEgressApprovals: in hard_limits no decider admits a host the boundary does not
 // allow, a host it allows is decided as before, and a break-glass run's approval is bound the same.
 func TestBoundaryBoundEgressApprovals(t *testing.T) {
-	e := newGovEnvOn(t, throwawayPGPool(t))
+	pool := throwawayPGPool(t)
+	testutil.SetBoundaryNoLimits(t, pool) // the walled run is created before the boundary is set
+	e := newGovEnvOn(t, pool)
 	e.seedProfile("team", "pypi.org") // so the admin token's reason makes a break-glass run
 	mkRun := func(breakGlass bool) uuid.UUID {
 		r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", strings.NewReader(`{"agent":"claude-code","task":"t"}`))
@@ -430,15 +432,15 @@ func TestBoundaryWriteNeedsMode(t *testing.T) {
 	}
 }
 
-// TestBoundaryHardLimitsWriteGated: no write puts the boundary in hard_limits until it bounds every
-// brokered credential path (#3238): the PUT answers 409 and the boundary stays as it was.
-func TestBoundaryHardLimitsWriteGated(t *testing.T) {
+// TestBoundaryHardLimitsWritable: a security admin's write puts the boundary in hard_limits, now
+// that it bounds every brokered credential path a run is given (#3238).
+func TestBoundaryHardLimitsWritable(t *testing.T) {
 	e := newGovEnvOn(t, throwawayPGPool(t))
 	w := e.call(e.alice, http.MethodPut, "/api/v1/governance/boundary", boundaryJSON(testBoundary(types.BoundaryHardLimits)))
-	if w.Code != http.StatusConflict || wireReason(t, w) != reasonBoundaryHardLimitsGated {
-		t.Fatalf("hard_limits write = %d %s, want 409 %s", w.Code, w.Body, reasonBoundaryHardLimitsGated)
+	if w.Code != http.StatusOK {
+		t.Fatalf("hard_limits write = %d %s, want 200", w.Code, w.Body)
 	}
-	if got, err := e.pg.GetBoundary(context.Background()); err != nil || got.HardLimits() || got.Spec.AllowedDomains != nil {
-		t.Errorf("boundary after a refused write = %+v (%v)", got, err)
+	if got, err := e.pg.GetBoundary(context.Background()); err != nil || !got.HardLimits() || got.Spec.AllowedDomains == nil {
+		t.Errorf("boundary after the write = %+v (%v), want hard_limits with its allowlist", got, err)
 	}
 }

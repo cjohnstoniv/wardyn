@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -57,16 +58,6 @@ func validateBoundary(b *types.BoundaryWrite) error {
 	return validateBoundarySpec(b.Spec, b.Limits)
 }
 
-// boundaryHardLimitsGated refuses a write into hard_limits: the boundary cannot be switched on until
-// it bounds every brokered credential path a run is given (#3238).
-func boundaryHardLimitsGated(b types.BoundaryWrite) *profileWriteError {
-	if b.Mode != types.BoundaryHardLimits {
-		return nil
-	}
-	return writeRefusal(http.StatusConflict, reasonBoundaryHardLimitsGated,
-		"hard_limits cannot be set yet: the Wardyn boundary does not bound every brokered credential path a run is given, so it stays in no_limits until it does")
-}
-
 // validateBoundarySpec refuses knobs the boundary cannot hold. They are judged by the validator a
 // stored policy passes (an unnamed confinement floor reads as the lowest), so a boundary allowlist,
 // deny list or grant is spelled as a policy's is.
@@ -96,7 +87,7 @@ func validateBoundarySpec(sp types.BoundarySpec, limits types.BoundaryLimits) er
 	if err := validateAllowedDomainsCount(spec.AllowedDomains); err != nil {
 		return err
 	}
-	return validatePolicySpec(spec)
+	return validateAuthoredPolicySpec(spec)
 }
 
 // handleGetBoundary returns the boundary, with the ETag PUT's If-Match is judged against.
@@ -128,10 +119,6 @@ func (s *Server) handlePutBoundary(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := validateBoundary(&body); err != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonBoundaryInvalid, "invalid Wardyn boundary: "+err.Error())
-		return
-	}
-	if g := boundaryHardLimitsGated(body); g != nil {
-		writeErrorReason(w, g.status, g.reason, g.msg)
 		return
 	}
 	cur, err := bs.GetBoundary(r.Context())
@@ -181,9 +168,6 @@ func applyBoundaryChange(_ *Server, r *http.Request, q store.Querier, ch types.G
 	if err := validateBoundary(&held); err != nil {
 		return govApplied{}, writeRefusal(http.StatusBadRequest, reasonBoundaryInvalid, "invalid Wardyn boundary: %s", err.Error())
 	}
-	if g := boundaryHardLimitsGated(held); g != nil {
-		return govApplied{}, g
-	}
 	if err := store.LockGovernanceTarget(ctx, q, govKindBoundary); err != nil {
 		return govApplied{}, err
 	}
@@ -206,9 +190,9 @@ func applyBoundaryChange(_ *Server, r *http.Request, q store.Querier, ch types.G
 // Rows the boundary leaves as they are are not listed.
 type boundaryReport struct {
 	Deployment     []boundaryChange       `json:"deployment"`
-	Profiles       []boundaryReportRow    `json:"profiles"`
+	Units          []boundaryReportRow    `json:"units"`
 	StoredPolicies []boundaryReportRow    `json:"stored_policies"`
-	Assignments    []boundaryReportAssign `json:"assignments"`
+	Memberships    []boundaryReportAssign `json:"memberships"`
 }
 
 type boundaryReportRow struct {
@@ -221,16 +205,31 @@ type boundaryReportAssign struct {
 	ID          uuid.UUID        `json:"id"`
 	SubjectType string           `json:"subject_type"`
 	Subject     string           `json:"subject"`
-	ProfileID   uuid.UUID        `json:"profile_id"`
-	ProfileName string           `json:"profile_name"`
+	UnitID      uuid.UUID        `json:"unit_id"`
+	UnitName    string           `json:"unit_name"`
 	Changes     []boundaryChange `json:"changes"`
 }
 
-// handleBoundaryDryRun reports what the drafted boundary (the body's spec and limits, judged in
-// hard_limits whatever its mode) would narrow. It writes nothing.
+// handleBoundaryDryRun is POST /governance/dry-run. A body whose target is boundary, or that names
+// none, reports what the drafted boundary (the body's spec and limits, judged in hard_limits whatever
+// its mode) would narrow; any other target is governance_dry_run.go's. It writes nothing.
 func (s *Server) handleBoundaryDryRun(w http.ResponseWriter, r *http.Request) {
-	var body types.BoundaryWrite
-	if !decodeStrict(w, r, &body) {
+	raw, ok := readCappedBody(w, r, maxJSONBody, "request body")
+	if !ok {
+		return
+	}
+	var head dryRunTarget
+	_ = json.Unmarshal(raw, &head) // the strict decode of its target refuses a body that does not parse
+	if head.Target != "" && head.Target != dryRunTargetBoundary {
+		s.treeDryRun(w, r, head.Target, raw)
+		return
+	}
+	var body struct {
+		dryRunTarget
+		types.BoundaryWrite
+	}
+	if msg := strictJSON(raw, &body); msg != "" {
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, msg)
 		return
 	}
 	if err := validateBoundarySpec(body.Spec, body.Limits); err != nil {
@@ -242,20 +241,24 @@ func (s *Server) handleBoundaryDryRun(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "Wardyn boundary dry run", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, report)
+	writeJSON(w, http.StatusOK, struct {
+		Target string `json:"target"`
+		boundaryReport
+	}{dryRunTargetBoundary, report})
 }
 
 // boundaryDryRun meets the deployment default, each profile as it composes, each stored policy and so
-// each assignment with b. The values shown pass the read redaction a security admin's read does.
+// each assignment with b. The values shown pass the read redaction of the caller's tier.
 func (s *Server) boundaryDryRun(ctx context.Context, b types.Boundary) (boundaryReport, error) {
+	tier := s.specReadTierFor(ctx)
 	meet := func(spec types.RunPolicySpec, limits types.GovernanceLimits) ([]boundaryChange, error) {
 		after, afterLimits, _, err := boundaryMeet(b, spec, limits)
 		if err != nil {
 			return nil, err
 		}
-		return boundaryChanges(redactSpecForRead(spec, true), redactSpecForRead(after, true), limits, afterLimits), nil
+		return boundaryChanges(redactSpecForRead(spec, tier), redactSpecForRead(after, tier), limits, afterLimits), nil
 	}
-	report := boundaryReport{Profiles: []boundaryReportRow{}, StoredPolicies: []boundaryReportRow{}, Assignments: []boundaryReportAssign{}}
+	report := boundaryReport{Units: []boundaryReportRow{}, StoredPolicies: []boundaryReportRow{}, Memberships: []boundaryReportAssign{}}
 	var err error
 	if report.Deployment, err = meet(s.cfg.DefaultPolicy, types.GovernanceLimits{}); err != nil {
 		return boundaryReport{}, err
@@ -263,7 +266,7 @@ func (s *Server) boundaryDryRun(ctx context.Context, b types.Boundary) (boundary
 	if s.cfg.Store == nil {
 		return report, nil
 	}
-	profiles, err := s.resolveAllProfiles(ctx)
+	profiles, err := s.resolveAllUnits(ctx)
 	if err != nil {
 		return boundaryReport{}, fmt.Errorf("list governance profiles: %w", err)
 	}
@@ -272,13 +275,16 @@ func (s *Server) boundaryDryRun(ctx context.Context, b types.Boundary) (boundary
 		if p.Err != nil || p.Resolved == nil {
 			continue // a profile that does not compose resolves to no ceiling at all
 		}
+		if p.Row.Kind == types.UnitKindDefault {
+			continue // its walls are the deployment default, reported above
+		}
 		changes, err := meet(p.Resolved.Ceiling, p.Resolved.Limits)
 		if err != nil {
 			return boundaryReport{}, err
 		}
 		if len(changes) > 0 {
 			row := boundaryReportRow{ID: p.Row.ID, Name: p.Row.Name, Changes: changes}
-			report.Profiles = append(report.Profiles, row)
+			report.Units = append(report.Units, row)
 			byProfile[p.Row.ID] = row
 		}
 	}
@@ -295,14 +301,14 @@ func (s *Server) boundaryDryRun(ctx context.Context, b types.Boundary) (boundary
 			report.StoredPolicies = append(report.StoredPolicies, boundaryReportRow{ID: p.ID, Name: p.Name, Changes: changes})
 		}
 	}
-	assignments, err := s.cfg.Store.ListGovernanceAssignments(ctx)
+	assignments, err := s.cfg.Store.ListGovernanceMemberships(ctx)
 	if err != nil {
 		return boundaryReport{}, fmt.Errorf("list governance assignments: %w", err)
 	}
 	for _, a := range assignments {
-		if row, ok := byProfile[a.ProfileID]; ok {
-			report.Assignments = append(report.Assignments, boundaryReportAssign{ID: a.ID, SubjectType: string(a.SubjectType),
-				Subject: a.Subject, ProfileID: a.ProfileID, ProfileName: row.Name, Changes: row.Changes})
+		if row, ok := byProfile[a.UnitID]; ok {
+			report.Memberships = append(report.Memberships, boundaryReportAssign{ID: a.ID, SubjectType: string(a.SubjectType),
+				Subject: a.Subject, UnitID: a.UnitID, UnitName: row.Name, Changes: row.Changes})
 		}
 	}
 	return report, nil
@@ -337,7 +343,7 @@ func (s *Server) admitBreakGlass(w http.ResponseWriter, r *http.Request) (*http.
 	reason := strings.TrimSpace(r.Header.Get(breakGlassReasonHeader))
 	if reason == "" || utf8.RuneCountInString(reason) > maxGovernanceRejectReasonLen || !controlCharFree(reason) {
 		writeErrorReason(w, http.StatusBadRequest, reasonBreakGlassReasonRequired,
-			"the Wardyn boundary is in hard_limits and governance profiles exist: an admin-token run lifts their walls, so it is a break-glass run and needs a reason in the "+breakGlassReasonHeader+
+			"the Wardyn boundary is in hard_limits and units with their own walls exist: an admin-token run lifts their walls, so it is a break-glass run and needs a reason in the "+breakGlassReasonHeader+
 				" header (at most 512 characters, no control characters)")
 		return r, false
 	}
@@ -345,16 +351,18 @@ func (s *Server) admitBreakGlass(w http.ResponseWriter, r *http.Request) (*http.
 }
 
 // breakGlassLifts reports whether an admin-token run would lift anything: the boundary is in
-// hard_limits and at least one governance profile exists, whose walls the admin token stands outside.
-// The deployment default does not count: the admin token never was held to it. With no profile there
-// is nothing to lift, so the run is an ordinary one, bound by the boundary, untagged.
+// hard_limits and at least one unit with its own walls exists, whose walls the admin token stands
+// outside. The Default unit (the deployment default) does not count: the admin token never was held
+// to it; nor does a pass-through unit, which adds nothing. With no such unit there is nothing to
+// lift, so the run is an ordinary one, bound by the boundary, untagged. Restrictions join this test
+// with the RESTRICT-PIN lane. A boundary that bounds nothing (the fresh-install seed) asks no reason, as no_limits.
 func (s *Server) breakGlassLifts(ctx context.Context) (bool, error) {
 	b, err := s.governanceBoundary(ctx)
-	if err != nil || !b.HardLimits() {
+	if err != nil || !b.HardLimits() || boundaryBoundsNothing(b, boundaryOverlay(b)) {
 		return false, err
 	}
-	profiles, err := s.resolveAllProfiles(ctx)
-	return len(profiles) > 0, err
+	units, err := s.cfg.Store.CountOwnWallsUnits(ctx)
+	return units > 0, err
 }
 
 // stampBreakGlass records a break-glass run on its run.create datum and writes its run.break_glass.open

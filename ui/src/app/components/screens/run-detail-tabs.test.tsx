@@ -377,6 +377,41 @@ describe("RunDetailScreen — Audit tab row shape", () => {
   });
 });
 
+// #3035: the run's Audit tab speaks the Audit screen's words; the raw key stays on hover.
+describe("RunDetailScreen — Audit tab wording", () => {
+  const base = { time: new Date().toISOString(), actor_type: "system", actor: "wardynd", outcome: "success", run_id: "run-1" };
+
+  async function openAuditTab(rows: Record<string, unknown>[]) {
+    listAuditMock.mockImplementation((_id: string, action?: unknown) => Promise.resolve(action ? [] : rows));
+    renderRun(RUN);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /audit/i }));
+    return screen.findAllByTestId("run-audit-row");
+  }
+
+  it("shows the sentence with the raw key on hover, and blanks the run's own id", async () => {
+    const [own, other] = await openAuditTab([
+      { ...base, id: "e1", action: "run.create", target: "run-1" },
+      { ...base, id: "e2", action: "egress.allow", target: "pypi.org", actor_type: "proxy" },
+    ]);
+    const action = within(own).getByTestId("run-audit-action");
+    expect(action).toHaveTextContent("Created the run");
+    expect(action).toHaveAttribute("title", "Created the run\nrun.create");
+    expect(within(own).getByTestId("run-audit-target").textContent).toBe("");
+    expect(within(own).getByTestId("run-audit-target").querySelector("[title]")).toBeNull();
+
+    expect(within(other).getByTestId("run-audit-action")).toHaveTextContent("Allowed egress to");
+    expect(within(other).getByTestId("run-audit-action")).toHaveAttribute("title", "Allowed egress to pypi.org\negress.allow");
+    expect(within(other).getByTestId("run-audit-target")).toHaveTextContent("pypi.org");
+  });
+
+  it("reads an egress row with no target as the Audit screen does", async () => {
+    const [row] = await openAuditTab([{ ...base, id: "e3", action: "egress.deny", target: "", actor_type: "proxy", outcome: "deny" }]);
+    expect(within(row).getByTestId("run-audit-action")).toHaveTextContent("Denied egress to");
+    expect(within(row).getByTestId("run-audit-target")).toHaveTextContent("an unknown host");
+  });
+});
+
 // #2925: the empty card has the populated list's width, so the content does not jump between tabs.
 describe("RunDetailScreen — Approvals tab empty card", () => {
   it("is capped at the populated list's width", async () => {
@@ -386,6 +421,82 @@ describe("RunDetailScreen — Approvals tab empty card", () => {
     const card = await screen.findByTestId("run-approvals-empty");
     expect(card).toHaveTextContent("No approvals for this run");
     expect(card.className).toContain("max-w-3xl");
+  });
+});
+
+// A pending git credential mint is admin-only: the Runs list says "Waiting for an admin", so the run page must
+// not tell a member it is their turn.
+describe("RunDetailScreen — who the pending decision waits on", () => {
+  const MINT = {
+    id: "a1",
+    run_id: "run-1",
+    kind: "credential",
+    state: "PENDING",
+    requested_at: new Date().toISOString(),
+    requested_scope: { secret_name: "deploy-token", username: "ci" },
+  };
+
+  function renderAs(operator: boolean) {
+    listApprovalsMock.mockResolvedValue([MINT]);
+    getRunMock.mockResolvedValue({ ...RUN, state: "RUNNING" });
+    return render(
+      <MemoryRouter initialEntries={["/runs/run-1"]}>
+        <OperatorProvider operator={operator} securityOperator={operator} principal="me">
+          <Routes>
+            <Route path="/runs/:id" element={<RunDetailScreen />} />
+          </Routes>
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  it("a member sees Waiting for an admin, and the Overview bar offers no Review", async () => {
+    renderAs(false);
+    expect(await screen.findByTestId("run-status-sentence")).toHaveTextContent("Waiting for an admin.");
+    const bar = await screen.findByTestId("decision-bar");
+    expect(bar).toHaveTextContent("Waiting for an admin");
+    expect(within(bar).queryByRole("button", { name: "Review" })).toBeNull();
+    expect(screen.queryByText("Waiting on you to decide.")).toBeNull();
+    // The header chip offers no Review, and the Approvals tab names an admin, not "Waiting on you".
+    expect(screen.getByTestId("pending-approval-chip-text")).not.toHaveTextContent("Review");
+    await userEvent.setup({ pointerEventsCheck: 0 }).click(await screen.findByRole("tab", { name: /approvals/i }));
+    expect(await screen.findByRole("region", { name: "Waiting for an admin" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Waiting on you" })).toBeNull();
+  });
+
+  it("an admin sees it is their turn, with Review", async () => {
+    renderAs(true);
+    expect(await screen.findByTestId("run-status-sentence")).toHaveTextContent("Waiting on you to decide.");
+    const bar = await screen.findByTestId("decision-bar");
+    expect(bar).toHaveTextContent("1 decision needs you");
+    expect(within(bar).getByRole("button", { name: "Review" })).toBeInTheDocument();
+    expect(screen.getByTestId("pending-approval-chip-text")).toHaveTextContent("Review");
+    await userEvent.setup({ pointerEventsCheck: 0 }).click(await screen.findByRole("tab", { name: /approvals/i }));
+    expect(await screen.findByRole("region", { name: "Waiting on you" })).toBeInTheDocument();
+  });
+});
+
+// The Runs list's Review button opens a run on its Approvals tab (?tab=approvals).
+describe("RunDetailScreen — ?tab= picks the opening tab", () => {
+  function renderAt(search: string) {
+    getRunMock.mockResolvedValue({ ...RUN, state: "RUNNING" });
+    return render(
+      <MemoryRouter initialEntries={[`/runs/run-1${search}`]}>
+        <Routes>
+          <Route path="/runs/:id" element={<RunDetailScreen />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+  }
+
+  it("opens on Approvals when asked", async () => {
+    renderAt("?tab=approvals");
+    expect(await screen.findByRole("tab", { name: /approvals/i })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("ignores a tab it does not know", async () => {
+    renderAt("?tab=nonsense");
+    expect(await screen.findByRole("tab", { name: /overview/i })).toHaveAttribute("aria-selected", "true");
   });
 });
 
@@ -648,7 +759,7 @@ describe("RunDetailScreen — the Policy tab", () => {
 // allow row never do.
 describe("RunDetailScreen — Audit tab Request access remedy", () => {
   const POLICY = {
-    source: "profile",
+    source: "unit",
     name: "Contractors",
     owner: "Platform Security",
     request_url: "https://example.com/access",
@@ -730,7 +841,7 @@ describe("RunDetailScreen — erased values on the Audit tab (M4 D)", () => {
       "Erased on request. The event and its place in the log remain.",
     );
     expect(screen.queryByText("[erased]")).toBeNull();
-    expect(screen.getByText("approval.decide")).toBeInTheDocument();
+    expect(screen.getByText("Decided an approval request")).toHaveAttribute("title", "Decided an approval request — Erased\napproval.decide");
   });
 
   it("a row with nothing erased shows no Erased note", async () => {

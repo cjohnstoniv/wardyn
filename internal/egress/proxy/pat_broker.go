@@ -170,7 +170,7 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 		rules, entryErr := p.rulesForRemote(host, rest)
 		body, release, ok := p.applyPushRules(w, r, reqBody, slog.String("host", host),
 			func(ruleSource string) { p.emitPATDecision(r, host, egress.Deny, ruleSource) },
-			p.patForge(host, rest, grant), patPushTarget(host, rest, grant), rules, entryErr)
+			p.patForge(host, rest, grant), patPushTarget(host, rest, grant, p.canonicalPushRepos), rules, entryErr)
 		defer release()
 		if !ok {
 			return
@@ -230,7 +230,11 @@ func (p *Proxy) forwardBrokeredGit(w http.ResponseWriter, r *http.Request, host,
 	// broker is a credential path, not a bypass of the IP guard.
 	target, _, err := p.egressTarget(host, 443)
 	if err != nil {
-		p.emitPATDecision(r, host, egress.Deny, denySrc)
+		if p.sink != nil {
+			dl := decisionLog(p.reqOf(r, host, 443), egress.Deny, denySrc)
+			dl.Cause = liftHintOf(err) // the remedy on the row: a git client shows the 403 body, a console reader the row
+			p.sink.emit(dl)
+		}
 		p.httpError(w, "vet git host", err, http.StatusForbidden)
 		return nil, false
 	}

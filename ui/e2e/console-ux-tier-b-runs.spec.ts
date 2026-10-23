@@ -15,6 +15,7 @@ import {
 import { NR_FILES } from "../src/app/components/wardyn/copy/new-run/files";
 import { NR_HARNESSES } from "../src/app/components/wardyn/copy/new-run/harnesses";
 import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
+import { NR_RUN } from "../src/app/components/wardyn/copy/new-run/run";
 import { NR_SHARED } from "../src/app/components/wardyn/copy/new-run/shared";
 import { NR_TOOLS } from "../src/app/components/wardyn/copy/new-run/tools";
 
@@ -99,6 +100,18 @@ test.describe("Tier B run pages", () => {
       await expect(page.locator("aside").getByRole("link", { name: /^Runs/ })).toHaveAttribute("aria-current", "page");
     });
   }
+
+  // #3035: the run's Audit tab uses the Audit screen's sentence, keeps the raw key on hover, and does not repeat the run's id.
+  test("Run Audit tab: sentence with the key on hover, and no repeated run id", async ({ page }) => {
+    await gotoConsole(page);
+    const id = await seedRun(page);
+    await navToRoute(page, `/runs/${id}`);
+    await page.getByRole("tab", { name: /^Audit/ }).click();
+    const row = page.getByTestId("run-audit-row").filter({ has: page.locator('[data-testid="run-audit-action"][title$="run.create"]') }).first();
+    await expect(row.getByTestId("run-audit-action")).toHaveText("Created the run");
+    await expect(row.getByTestId("run-audit-action")).toHaveAttribute("title", /^Created the run[\s\S]*\nrun\.create$/);
+    await expect(row.getByTestId("run-audit-target")).not.toContainText(id);
+  });
 });
 
 const CAPACITY = {
@@ -155,6 +168,8 @@ test.describe("Tier B run header", () => {
     const chip = page.getByTestId("pending-approval-chip-text");
     await expect(chip).toBeVisible();
     expect(await chip.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+    // The chip is a link to the Approvals tab (#3032).
+    await expect(chip).toHaveText(/Review/);
   });
 });
 
@@ -254,8 +269,10 @@ test.describe("Tier B guided setup", () => {
     await startGuided(page);
     await chooseShape(page, "agent_task");
     await chooseRunMode(page, "autonomous");
-    await expect(page.getByRole("radio", { name: "Run now", exact: true })).toBeVisible();
-    await expect(page.getByRole("radio", { name: "Schedule for later", exact: true })).toBeVisible();
+    // #3045: timing is one sentence; scheduling is not built, so no radios.
+    await expect(page.getByText(NR_RUN.TIMING_NOW, { exact: true }).first()).toBeVisible();
+    await expect(page.getByText(NR_RUN.TIMING_NOW_BODY)).toBeVisible();
+    await expect(page.getByRole("radio", { name: /Schedule for later/ })).toHaveCount(0);
     await continueNewRun(page, NR_HARNESSES.TITLE);
     await firstHarness(page, "e2e task");
     await continueNewRun(page, NR_FILES.TITLE);
@@ -299,6 +316,8 @@ test.describe("Tier B run tabs at 390px", () => {
     await page.setViewportSize(PHONE);
     await navToRoute(page, `/runs/${id}`);
     await page.getByRole("tab", { name: /^Approvals/ }).click();
+    // The scope is collapsed behind its own disclosure; opening it is what puts the command on screen.
+    await page.getByText("View requested scope").first().click();
     const pre = page.locator("pre", { hasText: "rm -rf node_modules" }).first();
     await expect(pre).toBeVisible();
     expect(await pre.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);

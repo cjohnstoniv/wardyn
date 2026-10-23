@@ -17,12 +17,12 @@ import (
 // Nothing here names a host path, a storage object or another person.
 type MeDriveCatalogue struct {
 	// Drives is never null. It is empty when nothing is granted, when a
-	// profile shuts the door (DeniedByProfile) or when the catalogue could not
+	// profile shuts the door (DeniedByUnit) or when the catalogue could not
 	// be answered (Unavailable).
 	Drives []MeDrive `json:"drives"`
-	// DeniedByProfile names the governance profile whose deny_user_drive
+	// DeniedByUnit names the governance profile whose deny_user_drive
 	// shuts the door for the caller.
-	DeniedByProfile string `json:"denied_by_profile,omitempty"`
+	DeniedByUnit string `json:"denied_by_unit,omitempty"`
 	// Unavailable is why the catalogue could not be answered:
 	// groups_snapshot_stale, user_type_unknown, drive_subject_unsupported,
 	// unavailable or governance_unavailable (the /me.user_drive_unavailable tokens).
@@ -43,12 +43,19 @@ type MemberDriveCreate struct {
 	Allowed bool `json:"allowed"`
 	// Reason is set exactly when Allowed is false.
 	Reason MemberDriveCreateReason `json:"reason,omitempty"`
-	// DeniedByProfile names the profile, with reason denied_by_profile.
-	DeniedByProfile string `json:"denied_by_profile,omitempty"`
+	// DeniedByUnit names the profile, with reason denied_by_unit.
+	DeniedByUnit string `json:"denied_by_unit,omitempty"`
 	// Count is the caller's drives, one being deleted included.
 	Count int `json:"count"`
 	// Limit is the switch's drives per person; 0 when the switch is off.
 	Limit int `json:"limit"`
+	// KeepWorkFolder is the organisation's keep_main_drive switch
+	// (CreateRunRequest.KeepWorkFolder), reported whether or not Allowed, so a
+	// screen tells a closed door (Reason) from a switch that is off.
+	KeepWorkFolder bool `json:"keep_work_folder"`
+	// Enforcement is what binds a new drive's size here: none on Docker, whose
+	// volumes have no size limit, so a screen says the size is not enforced.
+	Enforcement types.StorageEnforcement `json:"enforcement,omitempty"`
 }
 
 // MemberDriveCreateReason is why a person cannot create a drive now. Closed;
@@ -58,8 +65,8 @@ type MemberDriveCreateReason string
 const (
 	// MemberDriveCreateDisabled: the org switch is off, or drives are off.
 	MemberDriveCreateDisabled MemberDriveCreateReason = "disabled"
-	// MemberDriveCreateDeniedByProfile: deny_member_drives or deny_user_drive.
-	MemberDriveCreateDeniedByProfile MemberDriveCreateReason = "denied_by_profile"
+	// MemberDriveCreateDeniedByUnit: deny_member_drives or deny_user_drive.
+	MemberDriveCreateDeniedByUnit MemberDriveCreateReason = "denied_by_unit"
 	// MemberDriveCreateLimitReached: Count has reached Limit.
 	MemberDriveCreateLimitReached MemberDriveCreateReason = "limit_reached"
 	// MemberDriveCreateUnsupported: no managed backend for this deployment.
@@ -93,11 +100,35 @@ type MeDrive struct {
 	// caller's top-ranked grant.
 	Legacy bool `json:"legacy"`
 	// UnavailableReason is why a run cannot attach this drive now: paused,
-	// unmountable, placement_denied or not_in_pool. "" when it can.
+	// unmountable, placement_denied, not_in_pool or bound_elsewhere. "" when it can.
 	UnavailableReason string `json:"unavailable_reason,omitempty"`
 	// Owned is true for a drive the caller created (POST /me/drives). Only an
 	// owned drive takes DELETE /me/drives/{id}.
 	Owned bool `json:"owned"`
+	// Team is true for a team drive: one folder shared by the groups it is
+	// allocated to. Always false while storage.user_drive.team_drives is off.
+	Team bool `json:"team"`
+	// SharedWith names, on a team drive, the caller's own groups that carry its
+	// allocation. Never a group the caller does not hold.
+	SharedWith []string `json:"shared_with,omitempty"`
+	// KeptFromRun is the id of the run whose work folder this drive kept
+	// (CreateRunRequest.KeepWorkFolder); "" on a drive made by hand.
+	KeptFromRun string `json:"kept_from_run,omitempty"`
+	// KeptFromRunTitle is that run's title when the catalogue was read; "" when
+	// the run is gone or has no title.
+	KeptFromRunTitle string `json:"kept_from_run_title,omitempty"`
+	// MountsFrom is where the drive mounts from, printed as it is: "Organisation runners", and the runner
+	// its second place is bound to when that runner is the caller's own.
+	MountsFrom string `json:"mounts_from,omitempty"`
+	// MountedFrom is set when the pool read is one of the caller's own runners the drive's second place is
+	// bound to: that runner's name and the share's path on it.
+	MountedFrom *MeDriveMountedFrom `json:"mounted_from,omitempty"`
+}
+
+// MeDriveMountedFrom is the second place a run in the pool read mounts the drive from.
+type MeDriveMountedFrom struct {
+	Runner string `json:"runner"`
+	Path   string `json:"path"`
 }
 
 // MemberDriveCreateRequest is POST /api/v1/me/drives: a person creates their

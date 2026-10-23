@@ -60,6 +60,12 @@ func (siteConfigDispatchStore) DeleteRunProxyConfig(context.Context, uuid.UUID) 
 // server's (s.cfg), which dispatch and revive both read.
 func dispatchInternalHostsRun(t *testing.T, sc *types.SiteConfig, runnerID uuid.UUID, image, cpURL, cpCAPEM string) (*Server, types.AgentRun, runner.SandboxSpec) {
 	t.Helper()
+	return dispatchLocalRunAllowing(t, sc, runnerID, image, cpURL, cpCAPEM, internalHostDeclared, internalHostUndeclared)
+}
+
+// dispatchLocalRunAllowing is dispatchInternalHostsRun for a policy that allows domains.
+func dispatchLocalRunAllowing(t *testing.T, sc *types.SiteConfig, runnerID uuid.UUID, image, cpURL, cpCAPEM string, domains ...string) (*Server, types.AgentRun, runner.SandboxSpec) {
+	t.Helper()
 	srv, ls, _, run := localDispatchFixture(t, types.PlacementLocal)
 	run.RunnerID = &runnerID
 	ls.dispatchTestStore.run, ls.dispatchTestStore.state = run, types.RunPending
@@ -68,7 +74,7 @@ func dispatchInternalHostsRun(t *testing.T, sc *types.SiteConfig, runnerID uuid.
 	ctx := context.Background()
 	srv.dispatchRun(ctx, run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 		RunToken: "run-token", Image: image, Interactive: true,
-		Policy: types.RunPolicySpec{AllowedDomains: []string{internalHostDeclared, internalHostUndeclared}, MinConfinementClass: types.CC1},
+		Policy: types.RunPolicySpec{AllowedDomains: domains, MinConfinementClass: types.CC1},
 	})
 	if hint := ls.dispatchTestStore.FailureHint(); !strings.Contains(hint, "lease the run to its runner") {
 		t.Fatalf("dispatch did not reach the runner lease: %s %q", ls.dispatchTestStore.State(), hint)
@@ -105,7 +111,19 @@ const dispatchedInternalHostsGolden = "../egress/proxy/testdata/dispatched_inter
 func TestInternalHostsDispatchWireConfig(t *testing.T) {
 	sc := internalHostsSite()
 	_, _, spec := dispatchInternalHostsRun(t, &sc, uuid.New(), "busybox:latest", "http://127.0.0.1:9", "")
+	cfg := checkRunnerProxyGolden(t, spec, dispatchedInternalHostsGolden)
+	if len(cfg.InternalHosts) != 1 || cfg.InternalHosts[0].HostSuffix != "corp.internal" {
+		t.Fatalf("the runner's proxy config carries internal_hosts %+v, want the site's one declaration", cfg.InternalHosts)
+	}
+}
 
+// checkRunnerProxyGolden carries spec across the runner wire encoding
+// (runnerwire CreateSandboxArgs), renders it as a runner does
+// (runner.BuildProxyConfig), loads it in the proxy (LoadConfigBytes), and
+// compares the rendered bytes, run id fixed, with the golden at path, which a
+// proxy package test boots. WARDYN_UPDATE_GOLDEN=1 rewrites it.
+func checkRunnerProxyGolden(t *testing.T, spec runner.SandboxSpec, path string) *proxy.Config {
+	t.Helper()
 	data, err := runnerwire.Marshal(runnerwire.CreateSandboxArgs{Spec: spec})
 	if err != nil {
 		t.Fatal(err)
@@ -122,9 +140,6 @@ func TestInternalHostsDispatchWireConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cfg.InternalHosts) != 1 || cfg.InternalHosts[0].HostSuffix != "corp.internal" {
-		t.Fatalf("the runner's proxy config carries internal_hosts %+v, want the site's one declaration", cfg.InternalHosts)
-	}
 	var doc map[string]any
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		t.Fatal(err)
@@ -136,13 +151,14 @@ func TestInternalHostsDispatchWireConfig(t *testing.T) {
 	}
 	got = append(got, '\n')
 	if os.Getenv("WARDYN_UPDATE_GOLDEN") == "1" {
-		if err := os.WriteFile(dispatchedInternalHostsGolden, got, 0o644); err != nil {
+		if err := os.WriteFile(path, got, 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	want, err := os.ReadFile(dispatchedInternalHostsGolden)
+	want, err := os.ReadFile(path)
 	if err != nil || !bytes.Equal(got, want) {
-		t.Fatalf("%s is not what local dispatch renders for a runner (%v); regenerate with WARDYN_UPDATE_GOLDEN=1 go test ./internal/api -run TestInternalHostsDispatchWireConfig\n%s",
-			dispatchedInternalHostsGolden, err, got)
+		t.Fatalf("%s is not what local dispatch renders for a runner (%v); regenerate with WARDYN_UPDATE_GOLDEN=1 go test ./internal/api -run %s\n%s",
+			path, err, t.Name(), got)
 	}
+	return cfg
 }

@@ -173,6 +173,8 @@
 # docs/sdk.md 19383 = 19309 + 5 + 69, measured after merging main into the trusted-peers lane.
 # 0.10 W1 train: docs/sdk.md tightened to 19521, measured at the train merge.
 # docs/sdk.md=19378 adds 22 (0.10 HYB-A): local_folder reasons and launch exclusion
+# docs/sdk.md 19545 adds 2 (0.10 Linux VM): the machine_kind_unknown reason.
+# docs/sdk.md 19570 adds 25 (0.10 Linux VM): interactive_start agent on a Linux VM is a placement_capability.
 # docs/sdk.md 19635 = ours 19470 + theirs 19543 - base 19378 at the 0.10.0 SEC-1 merge of main; re-measured below if higher.
 # docs/sdk.md 19653 adds 18 (0.9.6 P096B), measured: the runner_posture_unmet detail names every unmet field.
 # docs/sdk.md 19679 adds 26 (0.9.6 P096B), measured: buildable_modes on GET /governance/credential-delivery.
@@ -191,6 +193,19 @@
 # 0.10 HYBB (#2982): docs/sdk.md 19696 adds 61, measured: the computer_folders_off, computer_runner_offline, computer_runner_no_folders and computer_folder_refused reason rows.
 # docs/sdk.md 19743 = ours 19696 + theirs 19682 - base 19635 at the 0.10 merge of main (W2) into HYBB.
 # docs/sdk.md 20060 = ours 19999 + theirs 19743 - base 19682 at the 0.10 W3 merge of HYBB onto the train.
+# docs/sdk.md 19545 adds 2 (0.10 Linux VM): the machine_kind_unknown reason.
+# docs/sdk.md 19570 adds 25 (0.10 Linux VM): interactive_start agent on a Linux VM is a placement_capability.
+# docs/sdk.md 20087 = ours 20060 + theirs 19570 - base 19543 at the 0.10 W4c merge of VM-A onto the train.
+# docs/sdk.md 19723 adds 41 over 19682 (0.10 DSK-B), measured: the takeover kind in the approvals list and the take-over/hand-back reasons.
+# docs/sdk.md 20128 = ours 20087 + theirs 19723 - base 19682 at the 0.10 W4c merge of DSK-B 12054370b onto the train.
+# docs/sdk.md 19694 adds 12 over 19682 (OC-CLEAN2): the git_pat_broker_off_resident row says an admin under WARDYN_GOVERN_ADMIN_RUNS is still refused on revive.
+# docs/sdk.md 20140 = ours 20128 + theirs 19694 - base 19682 at the 0.10 W4c merge of OC-CLEAN2 onto the train.
+# docs/sdk.md 20070 adds 10 over 20060, measured (0.10 OC-API1b): a max-age stop ends the event stream with ended alone.
+# docs/sdk.md 20150 = ours 20140 + theirs 20070 - base 20060 at the 0.10 W4c merge of OC-API1b onto the train.
+# docs/sdk.md 19701 adds 19 over 19682 (0.10 FEAT-1APP): the interactive application shape row (#1994).
+# docs/sdk.md 20169 = ours 20150 + theirs 19701 - base 19682 at the 0.10 W4c merge of FEAT-1APP onto the train.
+# docs/sdk.md 20079 = ours 20060 + theirs 19701 - base 19682 at the 0.10 merge of FEAT-1APP onto the lane (#1994).
+# docs/sdk.md 20547 = ours 20169 + theirs 20079 - base 19701 at the 0.10 W4c merge of FEAT-1APP-UI onto the train.
 # docs/sdk.md 19726 = 19635 + 91 (0.10 LAY-A), measured after merging main into 0.10 LAY-A.
 # docs/sdk.md 19766 measured (0.10 BOUNDARY): the boundary reasons, boundary_hard_limits_gated added.
 # docs/sdk.md 19770 measured (0.10 BOUNDARY): break_glass_reason_required only when a profile exists.
@@ -202,8 +217,62 @@
 # docs/sdk.md 20084 = ours 20060 + theirs 19706 - base 19682 at the 0.10 W4a merge of ATT-SRV onto the train.
 # 0.10 ATT-LOGIN-SRV: docs/sdk.md 19886 adds 204 over 19682: twelve CLI sign-in reasons, measured.
 # docs/sdk.md 20288 = ours 20084 + theirs 19886 - base 19682 at the 0.10 W4a merge of ATT-LOGIN-SRV onto the train.
+# docs/sdk.md 20775 = ours 20547 + theirs 20288 - base 20060 at the 0.10 W4c merge of origin/main 3cea1aa73 (W4a) onto the train.
+# docs/sdk.md 20397, measured at the 0.10 W4c merge of origin/main 3cea1aa73 (W4a) onto the train (the sum above was 20775).
+# docs/sdk.md 19731 adds 30 over 19701 (APP-FU #3391): the run_application_ui_apps_denied row.
+# docs/sdk.md 19738 adds 7 over 19731 (APP-FU #3391 review): the policy-preview door and the allowed-apps cause on the run_application_ui_apps_denied row, measured.
+# docs/sdk.md 20434 = ours 20397 + theirs 19738 - base 19701 at the 0.10 W4c merge of APP-FU 857bd637f onto the train.
+# docs/sdk.md 19743 adds 61 (0.10 CTL-A): the desktop_transfer reasons (#2967).
+# docs/sdk.md 19545 adds 2 (0.10 Linux VM): the machine_kind_unknown reason.
+# docs/sdk.md 19570 adds 25 (0.10 Linux VM): interactive_start agent on a Linux VM is a placement_capability.
+# docs/sdk.md 19770 = ours 19570 + theirs 19743 - base 19543 at the 0.10 W2 merge of CTL-A onto DSK-A.
+# docs/sdk.md 19772 adds 29 (0.10 CTL-A r3): desktop_rules_unreadable, the desktop's refusal when its rules cannot be read (#2967).
+# docs/sdk.md 20524 = ours 20434 + theirs 19772 - base 19682 at the 0.10 W4c merge of CTL-A 99d68a80a onto the train.
+# docs/sdk.md 19799 = ours 19770 + theirs 19772 - base 19743 at the 0.10 W2 merge of CTL-A r3 onto DSK-A.
+# docs/sdk.md 20524, measured, at the 0.10 W4c merge of DSK-A 46d21862b onto the train: two merge bases (CTL-A 99d68a80a and VM-C~1 4b06ac1e5), so no single base to subtract.
+# 0.10 CTL-C (#2972): docs/sdk.md 20334 adds 274 over 20060, measured: the four desktop sign-in routes and their reason rows.
+# 0.10 CTL-C r3 (#2972 H1): docs/sdk.md 20360 adds 26 over 20334, measured: desktop_signin_runner_unsupported names its other two causes (another desktop image, sign-ins off at start), and pause_failed says the agent stays stopped while Wardyn retries a resume that cannot finish.
+# 0.10 CTL-C r3 (#2972 M1): docs/sdk.md 20398 adds 38 over 20360, measured: the desktop_signin_image_not_granted reason row.
+# 0.10 CTL-C r4 (#2972 L1): docs/sdk.md 20441 adds 43 over 20398, measured: the desktop_signin_resume_failed reason row.
+# docs/sdk.md 20669 = ours 20441 + theirs 20288 - base 20060 at the 0.10 CTL-C r4 merge of main.
+# docs/sdk.md 20905 = ours 20524 + theirs 20669 - base 20288 at the 0.10 W4c merge of CTL-C 6de42c110 onto the train.
+# docs/sdk.md 19704 adds 22 over 19682, measured (OC-API1a review): workspace_request_invalid also answers the env-as-code write on a denied local_dir source.
+# docs/sdk.md 20927 = ours 20905 + theirs 19704 - base 19682 at the 0.10 W4c merge of OC-API1a 0f92145af onto the train.
+# docs/sdk.md 20979 = ours 20927 + theirs 20340 - base 20288 at the 0.10 W4c merge of HYB-F be73ad257 onto the train.
+# docs/sdk.md 20983 adds 4 at the 0.10 W4c merge of OC-BE1 9b75afa00 onto the train, measured: the lane head measured 19686 against its own 19682 budget.
+# docs/sdk.md 21118 = ours 20983 + theirs 20423 - base 20288 at the 0.10 W4c merge of origin/main ba16e8564 (W4b) onto the train.
+# docs/sdk.md 21146, measured at the 0.10 W4c merge of OFFLINE-VM a359ef27b onto the train (two merge bases, VM-A 47c283334 and main 3cea1aa73, so no single base to subtract).
+# docs/sdk.md 19698 adds 16 over 19682, measured: the revive_ceiling_denies_kubectl_cli reason and the kube_api credential's namespaces and access (#1990).
+# docs/sdk.md 20304 = ours 20288 + theirs 19698 - base 19682 at the 0.10 W4d merge of FEAT-1KUBE onto the train.
+# docs/sdk.md 19731 adds 49 over 19682 (0.10 FEAT-2SCHED): the scheduled-run refusal reasons row.
+# docs/sdk.md 19783 adds 52 over 19731 (0.10 FEAT-2SCHED): the Scheduled runs section (request fields, queue fields, features.scheduled_runs).
+# docs/sdk.md 19825 adds 42 over 19783 (0.10 FEAT-2SCHED review r1 M1/M2): the latest start a run's wait allows, and scheduled_runs_off at the start.
+# docs/sdk.md 20447 = ours 20304 + theirs 19825 - base 19682 at the 0.10 W4d merge of FEAT-2SCHED-UI onto the train.
+# #1987: docs/sdk.md 20113 adds 431 over 19682, measured: the several-agents section (with its setup-status bit and run agents), the multi_agent_tasks_off reason row and the background-task line.
+# docs/sdk.md 20491 = ours 20113 + theirs 20060 - base 19682 at the 0.10 merge of main into FEAT-2MULTI.
+# #1987 review: docs/sdk.md 20508 adds 17 over 20491, measured: the agent prefix and ?agent= are display only.
+# docs/sdk.md 20736 = ours 20508 + theirs 20288 - base 20060 at the 0.10 second merge of main into FEAT-2MULTI.
+# docs/sdk.md 20895 = ours 20447 + theirs 20736 - base 20288 at the 0.10 W4d merge of MULTI-DOC onto the train.
+# docs/sdk.md 20195 adds 135 over 20060, measured: #1991 keep_work_folder (round 1): the keep_work_folder_disabled reason row and the keep_work_folder bullet.
+# docs/sdk.md 20211 adds 16 over 20195, measured: kept_from_run_title on the kept drive row (0.10 FEAT-2KEEP).
+# docs/sdk.md 21046 = ours 20895 + theirs 20211 - base 20060 at the 0.10 W4d merge of FEAT-2KEEP-UI onto the train.
+# docs/sdk.md 21181 = ours 21046 + theirs 20423 - base 20288 at the 0.10 W4d merge of W4b-main onto the train.
+# docs/sdk.md 20423 = ours 19817 + theirs 20288 - base 19682 at the 0.10 LANES merge of main onto BOUNDARY.
+# docs/sdk.md 20469 measured: the credential_withheld reasons
+# docs/sdk.md 21227 = ours 21181 + theirs 20469 - lane's pre-LANES value 20423 (the lane stacked LAY-A, which main already carries) at the 0.10 W4d merge of LANES onto the train.
+# docs/sdk.md 21947 = ours 21146 + theirs 21224 - base 20423 at the 0.10 W4c merge of origin/main 7e33976ca onto the train.
+# docs/sdk.md=21224 adds 86 (0.10 TREE-MODEL): three unit-context reasons and the GET /governance tree fields.
+# docs/sdk.md 22033 = ours 21947 + theirs 21310 - base 21224 at the 0.10 W4c merge of W4h 2ccd426db into the W4X train.
+# 0.10 SI-POLICY: docs/sdk.md 20524 adds 101 over 20423: five approval-rule wire reasons, measured.
+# docs/sdk.md 21325 = ours 21224 + theirs 20524 - base 20423 at the 0.10 W4f merge of SI-POLICY onto the train.
+# docs/sdk.md 20521 adds 98 over 20423, measured (0.10 POL-MOUNT): the governance_mount_keep_unknown row, the governance case of admin_surface, and the mount-source tier in the run-policy rows.
+# docs/sdk.md 21423 = ours 21325 + theirs 20521 - base 20423 at the 0.10 W4f merge of POL-MOUNT onto the train.
+# docs/sdk.md 21436 = ours 21423 + theirs 20436 - base 20423 at the 0.10 W4f merge of SI-DOCS onto the train.
+# docs/sdk.md 22245 = ours 22033 + theirs 21436 - base 21224 at the 0.10 W4c merge of W4f a55a58e89 into the W4X train.
+docs/sdk.md=22245 share=21 # tightened from 21227 to the measured count at the 0.10 W4d merge
 # docs/sdk.md 20423 = ours 20195 + theirs 20288 - base 20060 at the 0.10 merge of main (W4a) into the W4b train.
-docs/sdk.md=20423 share=21
+# docs/sdk.md 20315 = ours + theirs - base at the 0.10 HYB-C merge of main onto VM-A, measured.
+# 0.10 HYB-C: docs/sdk.md 20343 adds 28 over 20315, measured: the placement_capability refusal of a linux_vm run with a folder on a runner that cannot share one.
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
@@ -236,3 +305,4 @@ docs/sdk.md=20423 share=21
 # Runner pools add 70 measured words for the five pool reasons the routes send: docs/sdk.md 12761.
 # docs/sdk.md 12817 adds 21 (0.9 F-1511-1510 r1): reserved_principal on the two erase routes.
 # R2-api-1: docs/sdk.md 13256 adds 38 over 13218 for the five local-placement refusal reasons the docs guard now derives.
+# docs/sdk.md 20340 adds 52 over 20288, measured (0.10 HYB-F): the six bring-back refusal reasons.

@@ -127,6 +127,9 @@ export interface SiteConfig {
   // Set through the site-config document (API, CLI or MDM); no console surface
   // writes it.
   policy_help?: PolicyContact;
+  // types.SiteConfig.GovernanceMaxDepth — the maximum unit depth: 0 resets to 16, null or absent
+  // keeps the stored value, otherwise 1..64. A value below the deepest unit path that exists is refused.
+  governance_max_depth?: number;
   // #1215 — the part of the console branding a site config carries: the logo,
   // as a file wardynd reads when this document is applied
   // (types.SiteConfig.Branding). Delivered by `wardyn site-config set` or the
@@ -459,6 +462,9 @@ export interface UserDriveProvider {
   max_size_mib?: number;
   // The switch for people creating their own drives. Absent = off.
   member_create?: MemberDrivePolicy;
+  // Lets an admin mark a drive a team drive: one folder shared by the groups it
+  // is allocated to. Absent = off, and every drive resolves per person.
+  team_drives?: boolean;
 }
 
 // types.MemberDrivePolicy. `max_per_person` is 1..20 when enabled. `size_mib` is
@@ -469,6 +475,8 @@ export interface MemberDrivePolicy {
   max_per_person?: number;
   size_mib?: number;
   storage_class?: string;
+  // Lets a run keep its work folder as its person's drive. Absent = off; no effect unless enabled.
+  keep_main_drive?: boolean;
 }
 
 // One SiteConfig.internal_hosts entry — see that field's doc.

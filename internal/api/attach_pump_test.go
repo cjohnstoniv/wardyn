@@ -6,7 +6,9 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -325,5 +327,70 @@ func TestAttachPump_PausedLivePeerSurvives(t *testing.T) {
 	wsWrite(t, c, websocket.MessageText, []byte(`{"type":"resume"}`))
 	if got, ok := recvWithin(frames, 3*time.Second); !ok || string(got) != "held" {
 		t.Fatalf("after a late resume got %q ok=%v, want the held output", got, ok)
+	}
+}
+
+// TestAttachPump_FenceErrorTellsTheWriterItsInputWasDropped: a writer whose lease fence check
+// errors is still shown driving (no mode frame moves), so the keys it types are refused with an
+// input-dropped frame to its client and a log line, never silently, and none reach the shell.
+func TestAttachPump_FenceErrorTellsTheWriterItsInputWasDropped(t *testing.T) {
+	logs := leaseCovCaptureLogs(t)
+	leases := newLeaseCovLeases()
+	srv, _, _ := leaseCovServer(t, leases, leaseCovServerOpts{})
+	alice := newLeaseCovClient("alice", attachSourceWeb)
+	if readOnly, _ := srv.registerAttachHolder(leaseCovRun, alice.h); readOnly {
+		t.Fatal("the first client was admitted read-only")
+	}
+	old := time.Now().Add(-time.Hour)
+	alice.h.lease.verified.Store(&old)
+	leases.fail("holds", errors.New("database stalled"))
+	sess := newGatedSession()
+	defer sess.Close()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		srv.attachPump(r.Context(), c, leaseCovRun, alice.h, nil, func() error {
+			alice.h.mux.install(sess, 80, 24)
+			alice.h.ready.setReadyIf(func() bool { return true })
+			return nil
+		})
+	}))
+	defer ts.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	c, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(ts.URL, "http"), nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer c.CloseNow()
+
+	if err := c.Write(ctx, websocket.MessageBinary, []byte("echo lost\r")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	var got attachInputDroppedMsg
+	for got.Type == "" {
+		typ, data, err := c.Read(ctx)
+		if err != nil {
+			t.Fatalf("no input-dropped frame: %v", err)
+		}
+		if typ == websocket.MessageText {
+			if err := json.Unmarshal(data, &got); err != nil {
+				t.Fatalf("frame %q: %v", data, err)
+			}
+		}
+	}
+	if got.Type != "input-dropped" || got.Bytes != int64(len("echo lost\r")) {
+		t.Fatalf("frame = %+v, want input-dropped of %d bytes", got, len("echo lost\r"))
+	}
+	if n := len(logs.with("wardynd: could not check a run's attach lease; the client's input is discarded until the database answers")); n != 1 {
+		t.Fatalf("fence-error log lines = %d, want 1", n)
+	}
+	select {
+	case b := <-sess.entered:
+		t.Fatalf("refused input reached the shell: %q", b)
+	default:
 	}
 }

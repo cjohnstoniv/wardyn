@@ -81,11 +81,13 @@ var _ PrincipalDirectoryStore = PG{}
 // the principal their credentials, runs and audit rows carry. The link is the one the sign-in itself
 // makes (samePersonKey): the same issuer, tenant and object id. The people row's own namespace is
 // empty, and erasing it would report success over a person's data left behind.
+// The join's own empty-object-id exclusion on i repeats the one on p, so that it can read the partial
+// principal_identities_object_key instead of every identity.
 func signedInAs(query string) string {
 	return `SELECT DISTINCT COALESCE(i.principal, h.principal) FROM (` + query + `) h(principal)
 	  LEFT JOIN people p ON p.principal = h.principal AND p.object_id <> ''
 	  LEFT JOIN principal_identities i ON i.issuer = p.issuer AND i.tenant_id = p.tenant_id
-	   AND i.object_id = p.object_id AND i.principal IS NOT NULL`
+	   AND i.object_id = p.object_id AND i.object_id <> '' AND i.principal IS NOT NULL`
 }
 
 func (s PG) PrincipalsNamed(ctx context.Context, name string) ([]string, error) {
@@ -183,7 +185,21 @@ func (s PG) BlankRunTasks(ctx context.Context, createdBy string) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("store: blank a person's run tasks: %w", err)
 	}
-	return int(tag.RowsAffected()), nil
+	n := int(tag.RowsAffected())
+	// An agent's own task in a run with several agents. Read first, so an install that
+	// never ran one (a split-role app role without UPDATE on run_harnesses) never issues the UPDATE.
+	var held bool
+	if err := s.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM run_harnesses h JOIN agent_runs r ON r.id = h.run_id
+		WHERE r.created_by = $1 AND h.task <> '')`, createdBy).Scan(&held); err != nil {
+		return 0, fmt.Errorf("store: read a person's agent tasks: %w", err)
+	}
+	if held {
+		if _, err := s.Pool.Exec(ctx, `UPDATE run_harnesses h SET task = '' FROM agent_runs r
+			WHERE r.id = h.run_id AND r.created_by = $1 AND h.task <> ''`, createdBy); err != nil {
+			return 0, fmt.Errorf("store: blank a person's agent tasks: %w", err)
+		}
+	}
+	return n, nil
 }
 
 // PrincipalForName maps a name an event carries (a principal, an entra:<tenant>:<object> form, an

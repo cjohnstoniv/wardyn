@@ -459,6 +459,95 @@ describe("RecordingScreen — paging (#159)", () => {
     expect(screen.getByText("All 2 recordings are loaded.")).toBeInTheDocument();
   });
 
+  it("#2522: a run that moved the window between pages is shown once, and counted once", async () => {
+    listRunsMock.mockResolvedValueOnce(page([recorded("run_1", { task: "fix the leak" })], true));
+    listRunsMock.mockResolvedValueOnce(page([recorded("run_1", { task: "fix the leak" }), recorded("run_2", { task: "bump deps" })], false));
+    renderScreen();
+
+    await screen.findByText("fix the leak");
+    fireEvent.click(screen.getByRole("button", { name: "Search 100 more runs" }));
+
+    await screen.findByText("bump deps");
+    expect(screen.getAllByText("fix the leak")).toHaveLength(1);
+    expect(screen.getByText("All 2 recordings are loaded.")).toBeInTheDocument();
+  });
+
+  const more = () => screen.getByRole("button", { name: "Search 100 more runs" });
+
+  it("#2522: a page made only of rows already shown still advances, so the next click reaches the older rows", async () => {
+    listRunsMock.mockResolvedValueOnce(page([recorded("run_1", { task: "fix the leak" })], true));
+    listRunsMock.mockResolvedValueOnce(page([recorded("run_1", { task: "fix the leak" })], true));
+    listRunsMock.mockResolvedValueOnce(page([recorded("run_0", { task: "older work" })], false));
+    renderScreen();
+
+    await screen.findByText("fix the leak");
+    fireEvent.click(more());
+    await waitFor(() => expect(listRunsMock).toHaveBeenCalledTimes(2));
+    expect(listRunsMock).toHaveBeenLastCalledWith({ includeRecordingMeta: true, limit: 100, offset: 1 });
+    await waitFor(() => expect(more()).not.toBeDisabled());
+    fireEvent.click(more());
+
+    await screen.findByText("older work");
+    expect(listRunsMock).toHaveBeenLastCalledWith({ includeRecordingMeta: true, limit: 100, offset: 2 });
+  });
+
+  it("#2522: a partly overlapping page advances by every row the server returned", async () => {
+    listRunsMock.mockResolvedValueOnce(page([recorded("run_1"), recorded("run_2")], true));
+    listRunsMock.mockResolvedValueOnce(page([recorded("run_2"), recorded("run_3", { task: "third" })], true));
+    listRunsMock.mockResolvedValueOnce(page([recorded("run_4", { task: "fourth" })], false));
+    renderScreen();
+
+    await waitFor(() => expect(more()).toBeInTheDocument());
+    fireEvent.click(more());
+    await screen.findByText("third");
+    expect(listRunsMock).toHaveBeenLastCalledWith({ includeRecordingMeta: true, limit: 100, offset: 2 });
+    fireEvent.click(more());
+
+    await screen.findByText("fourth");
+    expect(listRunsMock).toHaveBeenLastCalledWith({ includeRecordingMeta: true, limit: 100, offset: 4 });
+  });
+
+  it("#2522: a failed page leaves the offset where it was, after a page that overlapped", async () => {
+    listRunsMock.mockResolvedValueOnce(page([recorded("run_1")], true));
+    listRunsMock.mockResolvedValueOnce(page([recorded("run_1"), recorded("run_2")], true));
+    listRunsMock.mockRejectedValueOnce(new Error("boom"));
+    listRunsMock.mockResolvedValueOnce(page([recorded("run_3", { task: "third" })], false));
+    renderScreen();
+
+    await waitFor(() => expect(more()).toBeInTheDocument());
+    fireEvent.click(more());
+    await waitFor(() => expect(listRunsMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(more()).not.toBeDisabled());
+    fireEvent.click(more());
+    await screen.findByText("Couldn't load more recordings");
+    expect(listRunsMock).toHaveBeenLastCalledWith({ includeRecordingMeta: true, limit: 100, offset: 3 });
+
+    fireEvent.click(screen.getByRole("button", { name: /retry/i }));
+    await screen.findByText("third");
+    expect(listRunsMock).toHaveBeenLastCalledWith({ includeRecordingMeta: true, limit: 100, offset: 3 });
+  });
+
+  it("#2522: Refresh starts the offset over from the first page", async () => {
+    listRunsMock.mockResolvedValueOnce(page([recorded("run_1"), recorded("run_2")], true));
+    listRunsMock.mockResolvedValueOnce(page([recorded("run_3", { task: "third" })], true));
+    listRunsMock.mockResolvedValueOnce(page([recorded("run_1", { task: "fix the leak" })], true));
+    listRunsMock.mockResolvedValueOnce(page([recorded("run_9", { task: "ninth" })], false));
+    renderScreen();
+
+    await waitFor(() => expect(more()).toBeInTheDocument());
+    fireEvent.click(more());
+    await screen.findByText("third");
+    expect(listRunsMock).toHaveBeenLastCalledWith({ includeRecordingMeta: true, limit: 100, offset: 2 });
+
+    fireEvent.click(screen.getByRole("button", { name: /refresh/i }));
+    await screen.findByText("fix the leak");
+    expect(listRunsMock).toHaveBeenLastCalledWith({ includeRecordingMeta: true, limit: 100, offset: 0 });
+    fireEvent.click(more());
+
+    await screen.findByText("ninth");
+    expect(listRunsMock).toHaveBeenLastCalledWith({ includeRecordingMeta: true, limit: 100, offset: 1 });
+  });
+
   it("a failed Load more keeps what already loaded, names the count, and Retry resumes from the same offset", async () => {
     listRunsMock.mockResolvedValueOnce(page([recorded("run_1", { task: "fix the leak" })], true));
     listRunsMock.mockRejectedValueOnce(new Error("boom"));

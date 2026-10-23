@@ -17,4 +17,8 @@ export const APPROVALS = {
   TOAST_DENIED: `Request denied`,
   TOAST_APPROVE_FAILED: `Couldn't approve this request`,
   TOAST_DENY_FAILED: `Couldn't deny this request`,
+  // #3047: a noun-phrase title for both roles; only the sentence under it differs.
+  EMPTY_TITLE: `No pending approvals`,
+  EMPTY_MEMBER: `Requests from your runs appear here.`,
+  EMPTY_ADMIN: `New credential, egress, and tool-call requests appear here the moment an agent needs you.`,
 } as const;

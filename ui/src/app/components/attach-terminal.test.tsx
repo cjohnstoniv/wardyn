@@ -343,7 +343,7 @@ describe("AttachTerminal — role-aware attach", () => {
   // deny-f4: a refused entry that is not a governance limit keeps the one owner-and-ask line from the run's own
   // policy; the why card is only for a refusal that is a limit (#2951).
   it("an owner-only refusal shows the one-line remedy from the run's policy, not the why card, and none without one", async () => {
-    const policy = { source: "profile", owner: "Platform Security", request_url: "https://example.com/access" };
+    const policy = { source: "unit", owner: "Platform Security", request_url: "https://example.com/access" };
     const { unmount } = render(
       <OperatorProvider operator={false} principal="alice@example.com">
         <AttachTerminal runId="run_1" createdBy="bob@example.com" policy={policy} />

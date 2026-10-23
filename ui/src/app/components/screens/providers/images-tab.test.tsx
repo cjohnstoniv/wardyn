@@ -133,9 +133,9 @@ describe("ImagesTab", () => {
     expect(within(dialog).getByText(AVAILABILITY.IMAGE_HINT)).toBeInTheDocument();
 
     await userEvent.type(ref, "ghcr.io/acme/dev-toolbox:1.4");
+    await userEvent.click(within(dialog).getByRole("radio", { name: AVAILABILITY.ONLY }));
     await userEvent.type(within(dialog).getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER), "portfolio-manager");
     await userEvent.click(within(dialog).getByRole("button", { name: AVAILABILITY.ADD_CTA }));
-    await userEvent.click(within(dialog).getByRole("radio", { name: AVAILABILITY.ONLY }));
     await userEvent.click(within(dialog).getByRole("button", { name: IMAGES.ADD_CTA }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
@@ -145,6 +145,28 @@ describe("ImagesTab", () => {
       "restrict image ghcr.io/acme/dev-toolbox:1.4 true",
     ]);
     expect(listMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("Only these with nobody listed disables Add image, so nothing saves open to Everyone; the first Add enables it (#2593)", async () => {
+    listMock.mockResolvedValue([]);
+    addMock.mockResolvedValue(entry("b9", "x", "ghcr.io/acme/x:1"));
+    render(<ImagesTab />);
+    await userEvent.click(await screen.findByRole("button", { name: IMAGES.ADD_CTA }));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.type(within(dialog).getByLabelText(IMAGES.REF), "ghcr.io/acme/x:1");
+    const add = within(dialog).getByRole("button", { name: IMAGES.ADD_CTA });
+    expect(add).toBeEnabled();
+
+    await userEvent.click(within(dialog).getByRole("radio", { name: AVAILABILITY.ONLY }));
+    expect(within(dialog).getByTestId("availability-pending")).toHaveTextContent(AVAILABILITY.PENDING_NOTE_IMAGE);
+    expect(add).toBeDisabled();
+    await userEvent.click(add);
+    expect(addMock).not.toHaveBeenCalled();
+
+    await userEvent.type(within(dialog).getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER), "portfolio-manager");
+    await userEvent.click(within(dialog).getByRole("button", { name: AVAILABILITY.ADD_CTA }));
+    await within(dialog).findByText("Portfolio manager");
+    expect(add).toBeEnabled();
   });
 
   it("Admins only on the form writes only the image", async () => {
@@ -171,9 +193,9 @@ describe("ImagesTab", () => {
     const dialog = await screen.findByRole("dialog");
 
     await userEvent.type(within(dialog).getByLabelText(IMAGES.REF), TOOLBOX.image);
+    await userEvent.click(within(dialog).getByRole("radio", { name: AVAILABILITY.ONLY }));
     await userEvent.type(within(dialog).getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER), "portfolio-mgr");
     await userEvent.click(within(dialog).getByRole("button", { name: AVAILABILITY.ADD_CTA }));
-    await userEvent.click(within(dialog).getByRole("radio", { name: AVAILABILITY.ONLY }));
     await userEvent.click(within(dialog).getByRole("button", { name: IMAGES.ADD_CTA }));
 
     expect(await within(dialog).findByText(AVAILABILITY.CREATE_PARTIAL_TITLE)).toBeInTheDocument();

@@ -76,7 +76,9 @@ RUN if [ -f /corp-ca/corp-ca.pem ]; then \
 
 # Cache module downloads before the full source copy (layer cache friendly).
 COPY go.mod go.sum ./
-RUN go mod download
+# Bounded retry of the module FETCH only (a proxy stream error is transient); go.sum still
+# verifies every module, and no build or test step is ever retried.
+RUN for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done
 
 # Full source tree needed to build the two binaries.
 COPY . .
@@ -217,7 +219,7 @@ ARG TARGETARCH
 # bumped deliberately, like every other version here.
 ARG NPM_VERSION=11.19.1
 RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
- && npm install -g "npm@${NPM_VERSION}" \
+ && for i in 1 2 3; do timeout -k 10 180 npm install -g "npm@${NPM_VERSION}" && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done \
  && npm --version
 
 # ── GitHub CLI (gh) ──────────────────────────────────────────────────────────
@@ -379,6 +381,8 @@ COPY --from=builder /out/wardyn-git-helper /usr/local/bin/wardyn-git-helper
 COPY --from=builder /out/wardyn-scan       /usr/local/bin/wardyn-scan
 # wardyn-toolgate: parks tool-use approvals on the Wardyn UI (hold runs).
 COPY --from=builder /out/wardyn-toolgate   /usr/local/bin/wardyn-toolgate
+# wardyn: the in-sandbox `wardyn needs-you <reason>` ("Needs you" takeover request), run by wardyn-toolgate.
+COPY deploy/images/common/wardyn-in-sandbox /usr/local/bin/wardyn
 
 # agent-run: the thin shell wrapper used by the Wardyn driver to launch one task.
 # agent-run-lib.sh: functions shared with every other agent image's agent-run.
@@ -395,6 +399,7 @@ RUN chmod +x /usr/local/bin/wardyn-rec \
            /usr/local/bin/wardyn-git-helper \
            /usr/local/bin/wardyn-scan \
            /usr/local/bin/wardyn-toolgate \
+           /usr/local/bin/wardyn \
            /usr/local/bin/agent-run
 
 # System-wide GLOBAL git credential helper (all hosts).

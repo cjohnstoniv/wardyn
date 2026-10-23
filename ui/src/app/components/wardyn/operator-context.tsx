@@ -170,7 +170,7 @@ export interface UserDriveMeta {
   drive: MeUserDrive | null;
   /** The governance profile's NAME when its DenyUserDrive limit refuses this
    *  caller a drive; "" when it does not. */
-  deniedByProfile: string;
+  deniedByUnit: string;
   /** WHY /me could not answer for this caller's drive; "" when it could.
    *
    *  R4/F091 — THE THIRD KEY, and the reason there are three rather than two
@@ -193,7 +193,7 @@ export interface UserDriveMeta {
   unavailable: string;
 }
 
-const NO_USER_DRIVE: UserDriveMeta = { drive: null, deniedByProfile: "", unavailable: "" };
+const NO_USER_DRIVE: UserDriveMeta = { drive: null, deniedByUnit: "", unavailable: "" };
 
 // 0.8 (UT-7a) — see MeIdentity.userType.
 export interface UserTypeMeta {
@@ -235,7 +235,7 @@ export function OperatorProvider({
   authGeneration = 0,
   memberLocalDirRoot = null,
   userDrive = null,
-  userDriveDeniedByProfile = "",
+  userDriveDeniedByUnit = "",
   userDriveUnavailable = "",
   userType = null,
   confinementPosture = "",
@@ -259,7 +259,7 @@ export function OperatorProvider({
   authGeneration?: number;
   memberLocalDirRoot?: string | null;
   userDrive?: MeUserDrive | null;
-  userDriveDeniedByProfile?: string;
+  userDriveDeniedByUnit?: string;
   /** GET /me's `user_drive_unavailable` — see UserDriveMeta.unavailable.
    *  Defaults to "" ("nothing is wrong") so every existing caller that passes
    *  only the first two keeps today's behaviour. */
@@ -283,10 +283,10 @@ export function OperatorProvider({
   const drive = React.useMemo<UserDriveMeta>(
     () => ({
       drive: userDrive ?? null,
-      deniedByProfile: userDriveDeniedByProfile,
+      deniedByUnit: userDriveDeniedByUnit,
       unavailable: userDriveUnavailable,
     }),
-    [userDrive, userDriveDeniedByProfile, userDriveUnavailable],
+    [userDrive, userDriveDeniedByUnit, userDriveUnavailable],
   );
   // DR-0034: a draft names the person this tab confirmed (see setExpectedPrincipal),
   // and only once /me has answered: the "unknown" and "…" placeholders name no one.

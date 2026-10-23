@@ -35,6 +35,12 @@ func TestShutdownSinkMarginCoversSyslogClose(t *testing.T) {
 // KILLED with its sandbox up and no run.kill row. Both shipped deployments must
 // give the whole sequence room.
 func TestShutdownGraceCoversTheBudget(t *testing.T) {
+	// The longest tracked goroutine is the post-capture sign-in kill: its run read, the kill cascade, and
+	// the revokes, run.kill row and reconciles that follow it on their own killRevokeTimeout window.
+	if want := signInCaptureReadTimeout + killCascadeTimeout + killRevokeTimeout; backgroundShutdownBudget < want {
+		t.Errorf("backgroundShutdownBudget = %s, want >= %s (read %s + kill cascade %s + revoke window %s): a shutdown would cut off in-flight revokes",
+			backgroundShutdownBudget, want, signInCaptureReadTimeout, killCascadeTimeout, killRevokeTimeout)
+	}
 	need := HTTPShutdownTimeout + backgroundShutdownBudget + shutdownSinkMargin
 
 	var values struct {

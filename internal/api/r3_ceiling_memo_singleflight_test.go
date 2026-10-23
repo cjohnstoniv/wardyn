@@ -46,7 +46,7 @@ func TestCeilingMemoIsSingleFlight(t *testing.T) {
 		case <-release:
 		case <-time.After(100 * time.Millisecond):
 		}
-		return governanceCeiling{Profile: &ResolvedProfile{
+		return governanceCeiling{Unit: &ResolvedUnit{
 			ID: uuid.New(), Name: "profile-" + strconv.FormatInt(n, 10),
 		}}, nil
 	}
@@ -68,7 +68,7 @@ func TestCeilingMemoIsSingleFlight(t *testing.T) {
 				return
 			}
 			mu.Lock()
-			seen = append(seen, c.Profile.Name)
+			seen = append(seen, c.Unit.Name)
 			mu.Unlock()
 		}()
 	}
@@ -77,7 +77,7 @@ func TestCeilingMemoIsSingleFlight(t *testing.T) {
 
 	if got := calls.Load(); got != 1 {
 		t.Errorf("the resolver ran %d times for one memo, want 1 — the memo must resolve AT MOST ONCE, or two "+
-			"reads of governance_assignments in one request can straddle a profile edit", got)
+			"reads of governance_memberships in one request can straddle a profile edit", got)
 	}
 	for _, name := range seen {
 		if name != seen[0] {
@@ -101,7 +101,7 @@ func TestCeilingMemoStoresTheFailure(t *testing.T) {
 		if calls.Add(1) == 1 {
 			return governanceCeiling{}, context.DeadlineExceeded
 		}
-		return governanceCeiling{Profile: &ResolvedProfile{Name: "would-have-succeeded"}}, nil
+		return governanceCeiling{Unit: &ResolvedUnit{Name: "would-have-succeeded"}}, nil
 	}
 	if _, err := memo.do(context.Background(), resolve); err == nil {
 		t.Fatal("first call: want the resolver's error")

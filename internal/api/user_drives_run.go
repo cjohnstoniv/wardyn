@@ -75,8 +75,11 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -138,7 +141,7 @@ func (s *Server) refuseDrive(w http.ResponseWriter, status int, reason, member s
 // driveDoorProfile names the governance profile whose DenyUserDrive DOOR is
 // shut for this caller, or "" when the door is open. ONE predicate, read by
 // the enforcement path (userDriveDoorRefusal's 403) and the display path
-// (userDriveDeniedByProfile, the /me field) alike: this is an authz rule, and
+// (userDriveDeniedByUnit, the /me field) alike: this is an authz rule, and
 // two spellings of one authz rule is one place a widening can hide.
 //
 // Keyed on ceiling.Profile != nil, the scoping rule every limit in
@@ -167,17 +170,17 @@ func (s *Server) driveDoorProfile(ctx context.Context, ceiling governanceCeiling
 // every previewed principal. Two spellings of one authz rule is one place a
 // widening can hide, so the rule stays here and only the exemption moves.
 func driveDoorShut(ceiling governanceCeiling) (string, bool) {
-	if ceiling.Profile == nil || !ceiling.Limits.DenyUserDrive {
+	if ceiling.Unit == nil || !ceiling.Limits.DenyUserDrive {
 		return "", false
 	}
 	// The DECISION is the bool, never the name: a profile row's name is TEXT NOT
 	// NULL UNIQUE with no non-empty CHECK, so returning the name alone made a
 	// blank-named profile with DenyUserDrive set read as "no door" and fail OPEN
 	// at the enforcement site. The name is display only.
-	return ceiling.Profile.Name, true
+	return ceiling.Unit.Name, true
 }
 
-// driveDeniedByProfileMsg is the door's frozen member sentence
+// driveDeniedByUnitMsg is the door's frozen member sentence
 // (DRIVE_MEMBER.DENIED_DRIVE), composed once because two surfaces ship it: the
 // enforcement 403 below and the admin preview, which answers a claim set the
 // door would refuse with the same bytes rather than a paraphrase.
@@ -187,7 +190,7 @@ func driveDoorShut(ceiling governanceCeiling) (string, bool) {
 // the rule ValidateAuthoredTarget's reserved-target refusal already follows, and
 // the canon module (ui/src/app/lib/user-drives-copy.ts) carries none. The wire
 // bytes are the canon's bytes; the console renders `drive` as mono itself.
-func driveDeniedByProfileMsg(profile string) string {
+func driveDeniedByUnitMsg(profile string) string {
 	return fmt.Sprintf("mounting a user drive is not allowed by your governance profile %q. Launch without drive.", profile)
 }
 
@@ -232,8 +235,8 @@ func driveDeniedByProfileMsg(profile string) string {
 //  2. The share is not there (host_path only — see driveShareIsBindable).
 //
 // It writes its own 422 and returns false once it has.
-func (s *Server) driveIsMountableHere(ctx context.Context, w http.ResponseWriter, resolved types.ResolvedDrive) bool {
-	f := s.driveBindFailureHere(ctx, resolved)
+func (s *Server) driveIsMountableHere(ctx context.Context, w http.ResponseWriter, resolved types.ResolvedDrive, at drivePlace) bool {
+	f := s.driveBindFailureHere(ctx, resolved, at)
 	if f == nil {
 		return true
 	}
@@ -300,8 +303,19 @@ func (f *driveBindFailure) write(s *Server, w http.ResponseWriter) {
 }
 
 // driveBindFailureHere is driveIsMountableHere's DECISION, with no writer, no
-// metric and no log — nil means "this deployment would bind it".
-func (s *Server) driveBindFailureHere(ctx context.Context, resolved types.ResolvedDrive) *driveBindFailure {
+// metric and no log — nil means "this deployment would bind it". at is where the
+// run mounts it: on a person's own runner only a second place bound to that
+// runner binds, and that runner checks the path against its owner's roots
+// (drivePathsOn, then its own driver), so none of the organisation's checks
+// below apply there.
+func (s *Server) driveBindFailureHere(ctx context.Context, resolved types.ResolvedDrive, at drivePlace) *driveBindFailure {
+	if at.runner != nil {
+		if msg := driveOnRunnerMsg(resolved.Drive, at.runner); msg != "" {
+			return &driveBindFailure{status: http.StatusUnprocessableEntity, reason: driveRefusalBackendElsewhere,
+				member: strings.TrimPrefix(msg, "drive: "), attrs: []any{slog.String("drive", resolved.Drive.Name)}}
+		}
+		return nil
+	}
 	if s.cfg.Runner != nil {
 		caps, cerr := s.cfg.Runner.Capabilities(ctx)
 		if cerr != nil {
@@ -338,10 +352,18 @@ func (s *Server) driveBindFailureHere(ctx context.Context, resolved types.Resolv
 //	would find out when their work failed to persist. The narrow direction
 //	(read_only:true on a writable allocation) is always honoured — that is what
 //	NARROW-ONLY means, and it matches WorkspaceSelection.ReadOnly exactly.
-func (s *Server) driveMountFor(ctx context.Context, w http.ResponseWriter, d runDrive) (*types.DriveMount, bool) {
+func (s *Server) driveMountFor(ctx context.Context, w http.ResponseWriter, d runDrive, at drivePlace) (*types.DriveMount, bool) {
 	resolved := d.resolved
-	if !s.driveIsMountableHere(ctx, w, resolved) {
+	if !s.driveIsMountableHere(ctx, w, resolved, at) {
 		return nil, false
+	}
+	// On a person's own runner the mount carries the drive's stored binding, read before the swap, never the
+	// runner placement chose: the local plan's RuleBound gate (drivePathsOn) then holds the bound runner to the
+	// run's own, a second check beside driveBindFailureHere's.
+	var bound *uuid.UUID
+	if at.runner != nil {
+		bound = resolved.Drive.AltRunnerID
+		resolved = secondPlaceResolved(resolved)
 	}
 	if refusal := driveReadOnlyRefusal(d.narrow, resolved); refusal != nil {
 		refusal.drive.write(s, w)
@@ -384,6 +406,8 @@ func (s *Server) driveMountFor(ctx context.Context, w http.ResponseWriter, d run
 		ReadOnly:    d.readOnly(),
 		SizeMiB:     resolved.SizeMiB,
 		Enforcement: resolved.Enforcement,
+		Team:        resolved.Team,
+		RunnerID:    bound,
 	}, true
 }
 

@@ -142,8 +142,8 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/jso
 > It is published as a residual ([`threatmodel/THREAT-MODEL.md`](../../threatmodel/THREAT-MODEL.md) §5, "A per-user API token's role AND group snapshot are bounded-stale, not frozen").
 ## CLI sign-in (`wardyn login`)
 
-Off unless the operator sets `WARDYN_CLI_SIGN_IN=true`; it needs SSO. The CLI half is a separate change; this is
-what the server does.
+Off unless the operator sets `WARDYN_CLI_SIGN_IN=true`; it needs SSO. The CLI half: `wardyn login`, `whoami`, `logout`;
+a new login ends the last.
 
 - **Sign-in.** The CLI asks for a sign-in and opens the console. The person checks the computer name, the code and the
   address on the approve page, which also shows the lifetimes that apply, and presses Approve or Deny. Approving needs
@@ -351,20 +351,24 @@ A service identity is automation that runs under its own name. It is not a perso
   - It must expire: the default and maximum are `90d`, or the deployment cap if lower.
   - It is a bearer. Wardyn does not bind it to a workload or a network.
 - **Every request is re-checked** against the live identity and its sponsor.
-  - A missing, suspended or retired identity, a token older than the current sponsor, or a sponsor whose session is not live is refused with the one `401` of an unknown token.
+  - A missing, suspended or retired identity, a token older than the current sponsor, or a sponsor who is deactivated, purged or fully revoked after the token was minted is refused with the one `401` of an unknown token.
+  - A sponsor does not need a live session: signing out leaves the service's tokens working. A deactivated sponsor ends the identity.
   - The `auth.fail` row says why: `service_identity_inactive` or `service_sponsor_inactive`.
   - A sponsor disabled only at the identity provider is not seen. Without SCIM or a session revoke the service's tokens work until they expire, and its live runs continue either way.
 
 | A service identity's token may reach | Why |
 |---|---|
 | `POST /runs`, `POST /runs/preflight` | launch, and the dry run CI uses |
-| `GET /runs`, `GET /runs/{id}`, `/events`, `/output` | read its own runs |
+| `GET /runs`, `GET /runs/{id}`, `/events`, `/output` | read its own runs; `/events` is a stream to follow, not poll |
+| `GET /audit?run_id=<id>` | the audit rows of a run it created, and `[]` for any other run id |
+| `GET /presets`, `GET /presets/{name}` | the launch presets open to its user type |
+| `GET /workspaces` | the workspaces it may launch with |
 | `PATCH /runs/{id}`, `POST /runs/{id}/kill` | manage its own runs |
-| `GET /me`, `GET /setup/status` | who am I, and which providers are live |
+| `GET /me`, `GET /setup/status` | who am I and what can I reach (`GET /me` adds a `service` block), and which providers are live |
 | `PUT`, `DELETE /model-providers/{id}/credential` | its own model key, in its own namespace |
 
 - Every other route, including any added later, answers `403` `service_scope` with an `authz.denied` row.
-  - That covers attach, approvals, secrets, tokens, SSH keys, invitations, audit reads and every admin route.
+  - That covers attach, approvals, secrets, tokens, SSH keys, invitations, `GET /audit/export`, `GET /workspaces/{id}` and every admin route.
 - **Grants and credentials.**
   - Capability grants and governance assignments bind to the `user` subject type with the subject `service:<name>`.
   - It has no groups, so only `all` and user-type rows reach it.

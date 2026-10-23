@@ -170,7 +170,9 @@ func registrationTransient(err error) bool {
 // registerArgs are register's inputs: setup passes the same ones from its own flags.
 type registerArgs struct {
 	org, tokenFile, stateDir, name string
-	limits                         *registerLimits
+	// token, when set, is the registration token setup already read from a /dev/fd/N tokenFile.
+	token  string
+	limits *registerLimits
 	// proxyImage is the image that measures a VM-backed engine's disk; "" is the release image.
 	proxyImage string
 	// noMeasure (k8s): no engine to measure or ask, so every total comes from a flag.
@@ -234,9 +236,12 @@ func registerRunner(cmd *cobra.Command, a registerArgs) (registeredRunner, error
 		}
 		name = machine
 	}
-	token, err := readRegistrationToken(tokenFile)
-	if err != nil {
-		return registeredRunner{}, err
+	token := a.token
+	if token == "" {
+		var err error
+		if token, err = readRegistrationToken(tokenFile); err != nil {
+			return registeredRunner{}, err
+		}
 	}
 	// Read before anything is spent, like the token: an unusable bundle keeps both.
 	orgClient, err := registrationClient(a)

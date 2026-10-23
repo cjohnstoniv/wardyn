@@ -46,7 +46,7 @@ export function changeLabel(c: GovernanceChange): string {
 // create), as is a runner trust change's runner. Every other kind's key is already its natural key.
 export function changeTarget(c: GovernanceChange): string {
   // A runner's key is its id; the diff carries its name on both sides.
-  if (c.target_kind === "governance_profile" || c.target_kind === "runner_trust") {
+  if (c.target_kind === "governance_unit" || c.target_kind === "runner_trust") {
     for (const side of [c.diff.after, c.diff.before]) {
       const name = (side as { name?: unknown } | undefined)?.name;
       if (typeof name === "string" && name) return name;
@@ -75,7 +75,7 @@ function valueAt(root: unknown, path: string): unknown {
 
 // The profile an assignment change assigns, from the diff's own `after.profile`.
 function assignedProfile(c: GovernanceChange): Record<string, unknown> | null {
-  const p = (c.diff.after as { profile?: unknown } | undefined)?.profile;
+  const p = (c.diff.after as { unit?: unknown } | undefined)?.unit;
   return p && typeof p === "object" ? (p as Record<string, unknown>) : null;
 }
 

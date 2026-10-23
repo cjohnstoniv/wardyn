@@ -377,6 +377,7 @@ func TestHasRunsListFilterParams(t *testing.T) {
 		{"no_end=1", true},
 		{"workspace=org/repo", true},
 		{"q=refund", true},
+		{"sponsored=exclude", true},
 	}
 	for _, c := range cases {
 		q, err := url.ParseQuery(c.query)

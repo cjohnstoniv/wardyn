@@ -124,6 +124,28 @@ func TestClassifyMethodOverride(t *testing.T) {
 	})
 }
 
+// The query POSTs are documented as POSTs: any other write method to the same path is a write.
+func TestClassifyQueryPathsReadOnlyOnPOST(t *testing.T) {
+	for _, tc := range []struct {
+		path string
+		read Capability
+	}{
+		{"/acme/_apis/wit/wiql", CapWorkRead},
+		{"/acme/_apis/wit/workitemsbatch", CapWorkRead},
+		{"/acme/proj/_apis/git/repositories/r1/pullrequestquery", CapCodeRead},
+	} {
+		if v, err := Classify(adoReq(http.MethodPost, tc.path, `{}`)); err != nil || v.Capability != tc.read {
+			t.Errorf("POST %s = %+v, %v; want %s", tc.path, v, err, tc.read)
+		}
+		for _, method := range []string{http.MethodPut, http.MethodPatch, http.MethodDelete} {
+			v, err := Classify(adoReq(method, tc.path, `{}`))
+			if err == nil && v.Capability == tc.read {
+				t.Errorf("%s %s classified as the query read %s", method, tc.path, tc.read)
+			}
+		}
+	}
+}
+
 // HAZARD 2 — POSTs that only read. Azure DevOps posts queries whose input is
 // too large for a query string, so charging them a write would make a
 // read-only grant unable to read.
@@ -166,6 +188,15 @@ func TestClassifyPostsThatAreReads(t *testing.T) {
 			req:  adoReq(http.MethodPost, "/acme/proj/_apis/wit/workitems/$task", `{}`),
 			want: CapWorkWrite,
 		},
+	})
+}
+
+// The query doors read only as a POST: the same route under any other write method is a write, so a
+// read-only grant cannot edit through a query path.
+func TestClassifyQueryRouteOnANonPostIsAWrite(t *testing.T) {
+	runCases(t, []caseT{
+		{name: "a PUT to the work-item query route", req: adoReq(http.MethodPut, "/acme/proj/_apis/wit/wiql", ""), want: CapWorkWrite},
+		{name: "a PATCH to the work-item batch route", req: adoReq(http.MethodPatch, "/acme/_apis/wit/workitemsbatch", ""), want: CapWorkWrite},
 	})
 }
 

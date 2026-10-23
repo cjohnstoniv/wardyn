@@ -22,7 +22,7 @@ import (
 // gapCovResolveStore answers the precedence read with one scripted row.
 type gapCovResolveStore struct {
 	store.Store
-	row  *types.GovernanceProfile
+	row  *types.GovernanceUnit
 	tier types.CapabilitySubjectType
 	err  error
 
@@ -32,7 +32,7 @@ type gapCovResolveStore struct {
 	}
 }
 
-func (s *gapCovResolveStore) ResolveGovernanceProfile(_ context.Context, users, groups []string, userType string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (s *gapCovResolveStore) ResolveGovernanceUnit(_ context.Context, users, groups []string, userType string) (*types.GovernanceUnit, types.CapabilitySubjectType, error) {
 	s.asked.users, s.asked.groups, s.asked.userType = users, groups, userType
 	return s.row, s.tier, s.err
 }
@@ -48,13 +48,22 @@ func TestGapCovAssignedProfileIdentity(t *testing.T) {
 		wantTier types.CapabilitySubjectType
 		wantErr  error
 	}{
-		{"a bound profile", &gapCovResolveStore{row: &types.GovernanceProfile{ID: pid, Name: "contractors"}, tier: types.CapabilitySubjectGroup}, pid, "contractors", types.CapabilitySubjectGroup, nil},
+		{"a bound profile", &gapCovResolveStore{row: &types.GovernanceUnit{ID: pid, Name: "contractors"}, tier: types.CapabilitySubjectGroup}, pid, "contractors", types.CapabilitySubjectGroup, nil},
 		{"no row is not found", &gapCovResolveStore{}, uuid.Nil, "", "", store.ErrNotFound},
 		{"a store failure passes through", &gapCovResolveStore{err: boom}, uuid.Nil, "", "", boom},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := &Server{cfg: Config{Store: tc.st}}
-			id, name, tier, err := s.assignedProfileIdentity(t.Context(), []string{"a@corp.example"}, []string{"eng"}, "dev")
+			pick, err := s.selectContext(t.Context(), contextQuery{users: []string{"a@corp.example"}, groups: []string{"eng"}, userType: "dev"}, contextChoice{})
+			var id uuid.UUID
+			var name string
+			var tier types.CapabilitySubjectType
+			if err == nil && !pick.isDefault() {
+				id, name, tier = pick.unit.ID, pick.unit.Name, pick.row.Membership.SubjectType
+			}
+			if errors.Is(tc.wantErr, store.ErrNotFound) && err == nil && pick.isDefault() {
+				err = store.ErrNotFound // no membership selects the Default unit
+			}
 			if id != tc.wantID || name != tc.wantName || tier != tc.wantTier || !errors.Is(err, tc.wantErr) {
 				t.Fatalf("= %s %q %q %v; want %s %q %q %v", id, name, tier, err, tc.wantID, tc.wantName, tc.wantTier, tc.wantErr)
 			}
@@ -68,11 +77,11 @@ func TestGapCovAssignedProfileIdentity(t *testing.T) {
 // The preview names the profile and the tier that bound the claims.
 func TestGapCovPreviewNamesTheBoundProfile(t *testing.T) {
 	pid := uuid.MustParse("00000000-0000-0000-0000-00000000b002")
-	st := &gapCovResolveStore{row: &types.GovernanceProfile{ID: pid, Name: "contractors"}, tier: types.CapabilitySubjectUserType}
+	st := &gapCovResolveStore{row: &types.GovernanceUnit{ID: pid, Name: "contractors"}, tier: types.CapabilitySubjectUserType}
 	h := newHarness(t)
 	srv := New(baseTestConfig(h, st))
 
-	w := do(t, srv, http.MethodPost, "/api/v1/governance/preview", adminToken, `{"user_type":"dev"}`)
+	w := do(t, srv, http.MethodPost, "/api/v1/governance/check", adminToken, `{"user_type":"dev"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("POST = %d %s, want 200", w.Code, w.Body)
 	}
@@ -80,7 +89,7 @@ func TestGapCovPreviewNamesTheBoundProfile(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.ProfileID != pid || got.ProfileName != "contractors" || got.MatchedTier != types.CapabilitySubjectUserType {
+	if got.UnitID != pid || got.UnitName != "contractors" || got.MatchedTier != types.CapabilitySubjectUserType {
 		t.Fatalf("preview = %+v, want the bound profile and its tier", got)
 	}
 	if st.asked.userType != "dev" {
@@ -110,8 +119,8 @@ func TestGapCovWriteCeilingErrorPrefixedAnswersAnUnsatisfiableOverlay(t *testing
 func TestGapCovApplyStepRefusesAnOverlayWithInvalidLimits(t *testing.T) {
 	negative := -1
 	s := &Server{cfg: Config{}}
-	row := types.GovernanceProfile{Name: "contractors", OverlayLimits: &types.LimitsOverlay{MaxCPUMillis: &negative}}
-	out := &ResolvedProfile{Name: "contractors"}
+	row := types.GovernanceUnit{Name: "contractors", OverlayLimits: &types.LimitsOverlay{MaxCPUMillis: &negative}}
+	out := &ResolvedUnit{Name: "contractors"}
 
 	_, err := s.applyStep(out, composer.Authority{}, row, true)
 	u, ok := isOverlayUnsatisfiable(err)
@@ -121,4 +130,16 @@ func TestGapCovApplyStepRefusesAnOverlayWithInvalidLimits(t *testing.T) {
 	if u.Leaf != "contractors" || !strings.Contains(u.Detail, "max_cpu_millis") {
 		t.Errorf("unsatisfiable = %+v, want the leaf and the limit named", u)
 	}
+}
+
+func (s *gapCovResolveStore) ListMembershipsFor(ctx context.Context, users, groups []string, userType string) ([]store.MembershipMatch, error) {
+	return membershipsFromResolve(s.ResolveGovernanceUnit(ctx, users, groups, userType))
+}
+
+// ListGovernanceUnits is the tree the check names its contexts from: the bound row alone.
+func (s *gapCovResolveStore) ListGovernanceUnits(context.Context) ([]types.GovernanceUnit, error) {
+	if s.row == nil {
+		return nil, s.err
+	}
+	return []types.GovernanceUnit{*s.row}, s.err
 }

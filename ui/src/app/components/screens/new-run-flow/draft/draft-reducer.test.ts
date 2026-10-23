@@ -67,3 +67,21 @@ describe("draftReducer (U3)", () => {
     expect(sameValue({ a: false }, {})).toBe(false);
   });
 });
+
+describe("a start later", () => {
+  const schedule = { date: "2026-10-21", time: "02:00", zone: "UTC" };
+
+  it("is the draft's own, outside the intent: it sets and clears, and a seed clears it", () => {
+    const d = draftReducer(seeded(), { type: "schedule", schedule });
+    expect(d.schedule).toEqual(schedule);
+    expect(d.intent).toBe(LOADED);
+    expect(draftReducer(d, { type: "schedule", schedule: undefined }).schedule).toBeUndefined();
+    expect(draftReducer(d, { type: "seed", origin: TEMPLATE, intent: LOADED }).schedule).toBeUndefined();
+    expect(draftReducer(d, { type: "reset", owner: "bob" })).toEqual(initialDraft("bob"));
+  });
+
+  it("makes the draft dirty, so leaving asks first", () => {
+    expect(isDirty(draftReducer(seeded(), { type: "schedule", schedule }))).toBe(true);
+    expect(isDirty(draftReducer(draftReducer(seeded(), { type: "schedule", schedule }), { type: "schedule", schedule: undefined }))).toBe(false);
+  });
+});
