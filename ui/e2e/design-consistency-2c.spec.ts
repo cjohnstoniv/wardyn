@@ -92,7 +92,7 @@ test.describe("Design consistency", () => {
     await page.getByRole("tab", { name: /^Audit/ }).click();
     const created = page.getByTestId("run-audit-action").filter({ hasText: "Created the run" }).first();
     await expect(created).toBeVisible();
-    await expect(created).toHaveAttribute("title", "Created the run (run.create)");
+    await expect(created).toHaveAttribute("title", "Created the run\nrun.create");
     await expect(page.getByTestId("run-audit-row").filter({ hasText: id })).toHaveCount(0);
   });
 });
