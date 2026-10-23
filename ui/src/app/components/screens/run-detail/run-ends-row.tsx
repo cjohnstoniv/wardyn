@@ -3,8 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// RL-15 (#580, #1197 L5) — the run page's own "Run limits" row (long-holds
-// design rev 4 §2.3, mock "Ends": the four states). Extending within the
+// RL-15 (#580, #1197 L5) — the run's lifetime controls (long-holds design rev 4 §2.3, mock "Ends": the four
+// states), drawn since #3034 as two pill menus in the header's facts row, "Ends: never" and "Waits up to 24 h",
+// with the explanations in the menu items; the full-width band they replaced is gone. Extending within the
 // run's captured max is always allowed (it IS the lease); shortening,
 // picking a date, No end, and the wait need the captured user_changes_limits
 // gate — this component reads that gate off run.run_limits, never re-derives
@@ -13,22 +14,24 @@
 // rendered from what the server sent back, not guessed client-side.
 //
 // Self-contained (the LaunchWarningsNote/TerminalPane pattern): owns its own
-// PATCH calls and dialog state so run-detail.tsx, already at the file-size
-// gate's ceiling, needs only the one mount line.
+// PATCH calls and dialog state, so the header needs only the one mount line.
 import * as React from "react";
 import { toast } from "sonner";
 import type { RunDetail } from "../../../lib/types";
 import { isTerminalRunState } from "../../../lib/types";
 import { runs as runsApi } from "../../../lib/api/runs";
-import { getErrorMessage, relativeTime, shortDate, shortTime, weekday } from "../../../lib/format";
+import { getErrorMessage, shortDate, shortTime, weekday } from "../../../lib/format";
 import { useOperator, usePrincipal } from "../../wardyn/operator-context";
+import { Check, ChevronDown } from "lucide-react";
 import { Button } from "../../ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "../../ui/dropdown-menu";
+import { cn } from "../../ui/utils";
 import * as RL from "../../wardyn/copy/run-lifetime";
 import { ChangeEndDialog } from "./change-end-dialog";
 
@@ -57,7 +60,23 @@ export function keptUntilText(iso: string, now: number = Date.now()): string {
   return `${shortDate(iso)} ${shortTime(iso)}`;
 }
 
-export function RunEndsRow({ run, onChanged }: { run: RunDetail; onChanged: () => void }) {
+const PILL = "h-6 gap-1 rounded-full px-2.5 text-xs font-normal";
+const ITEM = "flex-col items-start gap-0.5";
+
+/** A menu item with its explanation under it. */
+function Item({ label, hint, current, onSelect }: { label: string; hint?: string; current?: boolean; onSelect?: () => void }) {
+  return (
+    <DropdownMenuItem disabled={current} onSelect={onSelect} className={cn(ITEM, current && "opacity-100")}>
+      <span className="flex items-center gap-1.5">
+        {label}
+        {current && <Check className="size-3.5" aria-hidden />}
+      </span>
+      {hint && <span className="max-w-[28ch] whitespace-normal text-meta text-muted-foreground">{hint}</span>}
+    </DropdownMenuItem>
+  );
+}
+
+export function RunEndsControls({ run, onChanged }: { run: RunDetail; onChanged: () => void }) {
   const [changeOpen, setChangeOpen] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   // handleSetRunEndAndWait's own exempt rule (run_end_wait.go): a super admin
@@ -77,12 +96,12 @@ export function RunEndsRow({ run, onChanged }: { run: RunDetail; onChanged: () =
   // use for "own".
   const principal = usePrincipal();
 
-  // The Ends row is the LIVE-run surface; a lease-ended or otherwise lost run
+  // These are the LIVE-run controls; a lease-ended or otherwise lost run
   // (kept, no network) and every terminal state get the lifetime banner's own
   // Ended/Lost treatment instead (run-lifetime-banner.tsx) — showing both
   // would tell two different stories about the same run.
   // A QUEUED run has no end yet because it has not started (its start writes one), so "No end" would be
-  // false and "Set an end" is refused; the row waits for the start.
+  // false and "Set an end" is refused; the controls wait for the start.
   if (isTerminalRunState(run.state) || run.lost_at || run.state === "QUEUED") return null;
 
   const canAct = operator || run.created_by === principal;
@@ -127,7 +146,7 @@ export function RunEndsRow({ run, onChanged }: { run: RunDetail; onChanged: () =
     setBusy(true);
     try {
       // No canon string covers a capped WAIT (only ENDS_CAPPED, for the end) —
-      // the re-rendered button already shows the actual value the server
+      // the re-rendered pill already shows the actual value the server
       // applied, so a toast here would either invent copy or repeat that
       // number in seconds (the defect this replaced, F: "Capped at N sec").
       await runsApi.setRunEndAndWait(run.id, { waitBudgetSec: Math.round(hours * 3600) });
@@ -139,79 +158,79 @@ export function RunEndsRow({ run, onChanged }: { run: RunDetail; onChanged: () =
     }
   };
 
-  return (
-    <div data-testid="run-ends-row" className="flex flex-col gap-2 border-b border-border px-4 py-2.5 text-xs sm:flex-row sm:flex-wrap sm:items-center sm:gap-4">
-      <div className="flex items-center gap-2">
-        <span className="font-medium text-foreground">
-          {run.ends_at ? RL.endsValue(weekdayClock(run.ends_at), relativeTime(run.ends_at)) : RL.ENDS_NONE}
-        </span>
-        {run.ends_at ? (
-          canAct && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="h-6 px-2 text-xs" disabled={busy}>
-                  {RL.ENDS_EXTEND}
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start">
-                <DropdownMenuItem onSelect={() => extendBy(DAY_MS)}>{RL.ENDS_EXTEND_1_DAY}</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => extendBy(WEEK_MS)}>{RL.ENDS_EXTEND_1_WEEK}</DropdownMenuItem>
-                {/* F12 (PR #1317 round-2 review): with no captured cap, "as
-                    far as allowed" has no ceiling to name and duplicated the
-                    trigger's own "Extend" label — 1 day/1 week already cover
-                    the uncapped case, and Change… reaches any further date. */}
-                {maxDays && (
-                  <DropdownMenuItem onSelect={() => extendBy(FAR_FUTURE_MS)}>
-                    {RL.endsExtendAsFarAsAllowed(maxDays)}
-                  </DropdownMenuItem>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )
-        ) : (
-          mayChange && (
-            <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => setChangeOpen(true)}>
-              {RL.ENDS_SET_AN_END}
-            </Button>
-          )
-        )}
-        {mayChange && run.ends_at && (
-          <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => setChangeOpen(true)}>
-            {RL.ENDS_CHANGE}
-          </Button>
-        )}
-        {/* M2 (packet:246): the "No end" hint is a fact about the STATE, shown
-            regardless of who can change it — the mock's own "No end · where
-            allowed" column pairs it with "No end" itself, not with the gate. */}
-        {!run.ends_at && <span className="text-muted-foreground">{RL.NO_END_HINT}</span>}
-        {!mayChange && run.ends_at && maxDays && (
-          <span className="text-muted-foreground">{RL.endsLocked(maxDays)}</span>
-        )}
-      </div>
+  const pill = (label: string) => (
+    <>
+      {label}
+      <ChevronDown className="size-3" aria-hidden />
+    </>
+  );
+  const wait = run.wait_budget_sec;
 
-      {typeof run.wait_budget_sec === "number" && (
-        <div className="flex items-center gap-2">
-          <span className="text-muted-foreground">{RL.WAIT_LABEL}:</span>
-          {mayChange ? (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="h-6 px-2 text-xs" disabled={busy}>
-                  {RL.waitValueSec(run.wait_budget_sec)}
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start">
-                {[1, 4, 8, 24].map((h) => (
-                  <DropdownMenuItem key={h} onSelect={() => void setWaitHours(h)}>
-                    {RL.waitValueHours(h)}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          ) : (
-            <span className="text-muted-foreground">{RL.waitLocked(run.wait_budget_sec)}</span>
-          )}
-        </div>
+  return (
+    <>
+      {run.ends_at ? (
+        canAct ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button data-testid="run-ends-pill" variant="outline" size="sm" className={PILL} disabled={busy}>
+                {pill(RL.endsPill(weekdayClock(run.ends_at)))}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              <Item label={RL.ENDS_EXTEND_1_DAY} onSelect={() => extendBy(DAY_MS)} />
+              <Item label={RL.ENDS_EXTEND_1_WEEK} onSelect={() => extendBy(WEEK_MS)} />
+              {/* F12 (PR #1317 round-2 review): with no captured cap, "as
+                  far as allowed" has no ceiling to name — 1 day/1 week already cover
+                  the uncapped case, and Change… reaches any further date. */}
+              {maxDays && <Item label={RL.endsExtendAsFarAsAllowed(maxDays)} onSelect={() => extendBy(FAR_FUTURE_MS)} />}
+              {mayChange && <Item label={RL.ENDS_CHANGE} onSelect={() => setChangeOpen(true)} />}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : (
+          <span data-testid="run-ends-pill" className={cn("inline-flex items-center rounded-full border border-border text-muted-foreground", PILL)}>
+            {RL.endsPill(weekdayClock(run.ends_at))}
+          </span>
+        )
+      ) : (
+        // M2 (packet:246): the "No end" state's own hint is a fact about the STATE, shown regardless of who can
+        // change it — so the menu always opens, with No end checked, and Set an end… only where it is allowed.
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button data-testid="run-ends-pill" variant="outline" size="sm" className={PILL} disabled={busy}>
+              {pill(RL.ENDS_PILL_NEVER)}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            <Item label={RL.ENDS_NONE} hint={RL.NO_END_HINT} current />
+            {mayChange && <Item label={RL.ENDS_SET_AN_END} hint={maxDays ? RL.endsHint(maxDays) : undefined} onSelect={() => setChangeOpen(true)} />}
+          </DropdownMenuContent>
+        </DropdownMenu>
       )}
+      {!mayChange && run.ends_at && maxDays && <span className="text-xs text-muted-foreground">{RL.endsLocked(maxDays)}</span>}
+
+      {typeof wait === "number" &&
+        (mayChange ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button data-testid="run-waits-pill" variant="outline" size="sm" className={PILL} disabled={busy}>
+                {pill(RL.waitsPill(wait))}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              <DropdownMenuLabel className="text-meta font-normal text-muted-foreground">{RL.WAIT_LABEL}</DropdownMenuLabel>
+              {[1, 4, 8, 24].map((h) => (
+                <Item key={h} label={RL.waitValueHours(h)} current={wait === h * 3600} onSelect={() => void setWaitHours(h)} />
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : (
+          <>
+            <span data-testid="run-waits-pill" className={cn("inline-flex items-center rounded-full border border-border text-muted-foreground opacity-70", PILL)}>
+              {RL.waitsPill(wait)}
+            </span>
+            <span className="text-xs text-muted-foreground">{RL.waitLocked(wait)}</span>
+          </>
+        ))}
 
       <ChangeEndDialog
         open={changeOpen}
@@ -221,6 +240,6 @@ export function RunEndsRow({ run, onChanged }: { run: RunDetail; onChanged: () =
         maxDays={maxDays}
         allowNoEnd={allowNoEnd}
       />
-    </div>
+    </>
   );
 }

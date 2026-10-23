@@ -72,7 +72,6 @@ import { NEEDS_YOU } from "../wardyn/copy/needs-you";
 import { RunDetailCommandBar } from "./run-detail-command-bar";
 import { LaunchWarningsNote } from "./run-detail/launch-warnings-note";
 import { RunLifetimeWithContainment } from "./run-detail/containment-pending";
-import { RunEndsRow } from "./run-detail/run-ends-row";
 import { PolicyTab } from "./run-detail/policy-tab";
 import { POLICY_TAB } from "./run-detail/policy-tab-copy";
 import { RecordingTab } from "./run-detail/recording-tab";
@@ -313,15 +312,14 @@ function RunDetailPage({ id }: { id: string }) {
             canKillAgain={killAgain}
             onClone={view === "user" ? () => void onClone() : undefined}
             onRename={view === "user" ? rename : undefined}
+            onLifetimeChanged={() => load(false)}
           />
 
           <LaunchWarningsNote />
           {/* RL-15 (#580, #1197 L5): one lifetime banner (lost/ended/paused/
-              ending-soon — mutually exclusive server facts) plus the
-              persistent Ends/wait row, both self-contained per the
-              LaunchWarningsNote pattern above. */}
+              ending-soon — mutually exclusive server facts), self-contained per the LaunchWarningsNote pattern
+              above. The Ends and wait controls live in the header's facts row (#3034). */}
           <RunLifetimeWithContainment run={run} pending={pending} onChanged={() => load(false)} />
-          <RunEndsRow run={run} onChanged={() => load(false)} />
           {/* "Needs you" (#2963, mock M8 Option A): the agent's takeover request on the run. */}
           <NeedsYouBanner
             run={run}

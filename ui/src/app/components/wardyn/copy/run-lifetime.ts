@@ -12,9 +12,6 @@
 
 // ---- Ends (design.md §2.3) ----
 
-export function endsValue(dateText: string, relText: string): string {
-  return `Ends ${dateText} (${relText})`;
-}
 export const ENDS_NONE = "No end";
 export function endsHint(days: number): string {
   return `You can set it up to ${days} day${days === 1 ? "" : "s"} ahead and extend it any time.`;
@@ -22,7 +19,7 @@ export function endsHint(days: number): string {
 // F11 (PR #1317 review): the mock's own admin-set column (packet:249-251)
 // shows the value line ("Ends Tue 18:00 (in 8 hours)") ABOVE this hint, so the
 // hint itself never repeats the date — only the caller (run-ends-row.tsx),
-// which already renders that value line right beside this one, would.
+// which already renders the date in its pill, would.
 export function endsLocked(days: number): string {
   return `You can extend it up to ${days} day${days === 1 ? "" : "s"} ahead; your admin sets the rest.`;
 }
@@ -40,7 +37,6 @@ export const ENDS_CAPPED_LOOSENED =
 export function endsTightened(dateText: string): string {
   return `Your admin shortened the limit. This run now ends ${dateText}.`;
 }
-export const ENDS_EXTEND = "Extend";
 export const ENDS_EXTEND_1_DAY = "1 more day";
 export const ENDS_EXTEND_1_WEEK = "1 more week";
 export function endsExtendAsFarAsAllowed(days: number): string {
@@ -56,6 +52,21 @@ export const ENDS_NO_END_OPTION = "No end";
 // "No end" in the first place, since Change… is how anyone gets there).
 export const NO_END_HINT =
   "Keeps going until you or an admin ends it. It pauses when nobody is here and keeps its memory.";
+
+// #3034 (R6RUN, approved 2026-10-20): the two header controls that replaced the lifetime band. The explanations
+// that band spelled out (NO_END_HINT, endsHint, WAIT_LABEL) live in the menus' items.
+export const ENDS_EXTEND = "Extend";
+export const ENDS_PILL_NEVER = "Ends: never";
+export function endsPill(dateText: string): string {
+  return `Ends: ${dateText}`;
+}
+// "Waits up to 24 h": whole hours read as hours; anything else in minutes ("20 min", "1 h 30 min").
+export function waitsPill(sec: number): string {
+  const mins = Math.max(1, Math.round(sec / 60));
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return `Waits up to ${h === 0 ? `${m} min` : m === 0 ? `${h} h` : `${h} h ${m} min`}`;
+}
 
 // ---- Warnings (design.md §2.3, mock "1 hour before") ----
 
@@ -175,9 +186,6 @@ function waitSpan(sec: number): string {
   const hours = `${h} hour${h === 1 ? "" : "s"}`;
   const minutes = `${m} minute${m === 1 ? "" : "s"}`;
   return h === 0 ? minutes : m === 0 ? hours : `${hours} ${minutes}`;
-}
-export function waitValueSec(sec: number): string {
-  return `Keep it for up to ${waitSpan(sec)}`;
 }
 export function waitLocked(sec: number): string {
   return `Kept for up to ${waitSpan(sec)}. Your admin sets this.`;

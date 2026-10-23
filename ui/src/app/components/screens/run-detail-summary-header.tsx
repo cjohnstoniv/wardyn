@@ -21,6 +21,7 @@ import { waitingAdoConsent, waitingReauth } from "../../lib/reauth-waiting-copy"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { RUN_HEADER } from "../wardyn/copy/run-header";
 import { KillRunDialog } from "../wardyn/kill-run-dialog";
+import { RunEndsControls } from "./run-detail/run-ends-row";
 import { useOperator, useOperatorResolved, usePrincipal } from "../wardyn/operator-context";
 import { mayEnterRunOrUnknown } from "../../lib/run-entry";
 import { RUN_FACTS } from "../wardyn/copy/door";
@@ -93,6 +94,7 @@ export function SummaryHeader({
   onGoApprovals,
   onCopyLink,
   onKill,
+  onLifetimeChanged,
   canKillAgain,
   onClone,
   onRename,
@@ -128,6 +130,8 @@ export function SummaryHeader({
   // Copy this run's permalink, from the More menu.
   onCopyLink?: () => void;
   onKill: (runId: string) => void;
+  /** Re-reads the run after its end or wait is changed. Without it the lifetime controls are not drawn. */
+  onLifetimeChanged?: () => void;
   // A KILLED run whose trail does not prove the teardown (#1487): Kill stays
   // so the person can run the cascade again.
   canKillAgain?: boolean;
@@ -319,6 +323,8 @@ export function SummaryHeader({
         <span className="text-muted-foreground" aria-label={`${terminal ? "Total run time" : "Running for"} ${elapsed}`}>
           {terminal ? RUN_HEADER.RAN(elapsed, shortTime(run.updated_at)) : elapsed}
         </span>
+        {/* #3034: the run's lifetime is two pill menus on the facts row, not a band under the header. */}
+        {onLifetimeChanged && <RunEndsControls run={run} onChanged={onLifetimeChanged} />}
       </div>
     </div>
     {/* #1234: how a portal-launched run got here, one thin muted line directly
