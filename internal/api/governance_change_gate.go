@@ -133,10 +133,12 @@ func (s *Server) recordGovernanceBypass(r *http.Request, kind, target, outcome s
 }
 
 // govApprover is who may decide a change of one kind: the predicate of the tier the write was
-// proposed on, never a weaker one, and the refusal reason that tier gives.
+// proposed on, never a weaker one, and the refusal reason that tier gives. scoped marks a predicate
+// that reads the unit scope, which the decision re-reads under the graph lock (recheckApprover).
 type govApprover struct {
 	allowed func(s *Server, r *http.Request) bool
 	reason  authz.Reason
+	scoped  bool
 }
 
 // operatorApprover is the tier of the operatorOnly routes: a super admin only. A security admin who

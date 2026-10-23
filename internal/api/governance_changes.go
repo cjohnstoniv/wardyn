@@ -183,7 +183,15 @@ func secondApproverSentence() string {
 // its owner check is asked again as apiTokenAuth asks it (the credential cutoff and the identity row,
 // not the browser-session cut), and the approver predicate is re-evaluated against the role the row
 // holds now, its scope also read on q. Each failure is the auth lane's own answer, never a pass.
+// A scoped approver's read is taken under the graph lock (after the change row, before any key
+// lock), which a re-parent, a grant and a revoke also take: each commits before the read or after
+// the decision, never between.
 func (s *Server) recheckApprover(ctx context.Context, r *http.Request, q store.Querier, kind govKind) error {
+	if kind.approver.scoped {
+		if err := store.LockGovernanceGraph(ctx, q); err != nil {
+			return err
+		}
+	}
 	tokenID := apiTokenIDFromContext(ctx)
 	if tokenID == uuid.Nil {
 		if !kind.approver.allowed(s, r.WithContext(withUnitScopeTx(ctx, q))) {

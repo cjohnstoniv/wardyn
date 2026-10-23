@@ -274,6 +274,7 @@ func unitScopeApprover(strict bool, units ...uuid.UUID) govApprover {
 			return err == nil && in
 		},
 		reason: authz.ReasonUnitScopeDenied,
+		scoped: true,
 	}
 }
 

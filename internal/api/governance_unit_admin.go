@@ -170,7 +170,12 @@ func (s *Server) writeUnitAdminError(w http.ResponseWriter, r *http.Request, err
 }
 
 // lockUnitAdminKey serializes the direct write to one grant with the approval of a held change to it.
+// The graph lock comes first: a grant or revoke changes someone's unit scope, so it serializes with a
+// decision's scope re-read (recheckApprover) as a re-parent does.
 func lockUnitAdminKey(ctx context.Context, q store.Querier, p unitAdminPayload) error {
+	if err := store.LockGovernanceGraph(ctx, q); err != nil {
+		return err
+	}
 	return store.LockGovernanceTarget(ctx, q, govKindUnitAdmin, p.UnitID.String(), string(p.SubjectType), p.Subject)
 }
 
