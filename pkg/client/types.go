@@ -236,6 +236,9 @@ type (
 	// Returned by GetGovernance and ApplyGovernance.
 	GovernanceUnit = types.GovernanceUnit
 
+	// Restriction is a deny-only list that follows people (GovernanceDocument.Restrictions).
+	Restriction = types.Restriction
+
 	// PolicyContact is the contact a GovernanceUnit (and SiteConfig.PolicyHelp)
 	// publishes: owner, email, request_url and request_text, validated by the
 	// server on write.

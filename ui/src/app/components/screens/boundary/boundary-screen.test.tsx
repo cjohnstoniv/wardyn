@@ -32,7 +32,7 @@ import { BoundaryScreen } from "./boundary-screen";
 const noLimits = { mode: "no_limits", spec: {}, limits: {}, etag: '"b1"' };
 // A boundary already in hard_limits (set through the store).
 const hardLimits = { mode: "hard_limits", spec: {}, limits: {}, etag: '"b1"' };
-const emptyReport: BoundaryReport = { deployment: [], units: [], stored_policies: [], memberships: [] };
+const emptyReport: BoundaryReport = { target: "boundary", deployment: [], units: [], stored_policies: [], memberships: [] };
 const REFUSED = "invalid Wardyn boundary: denied_domains: not a hostname";
 
 function renderScreen(securityOperator = true) {

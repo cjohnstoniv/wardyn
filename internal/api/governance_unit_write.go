@@ -48,6 +48,9 @@ type governanceUnitRequest struct {
 	// Mode is own_walls or pass_through (the parent's walls exactly). Absent keeps the stored mode
 	// on a PUT and is own_walls on a POST.
 	Mode string `json:"mode,omitempty"`
+	// LockedKnobs replaces the unit's locks (governance_locks.go) when present; absent or null keeps
+	// them, so a client that does not know the field never unlocks a knob.
+	LockedKnobs *[]string `json:"locked_knobs,omitempty"`
 
 	contact    *policyref.Contact
 	contactSet bool
@@ -84,6 +87,10 @@ type governanceUnitView struct {
 	// People counts, on GET /governance, the membership subjects (a user, a group, a user type or
 	// everyone) in this unit or a unit below it. Absent for the Default unit, whose people hold no rows.
 	People *int `json:"people,omitempty"`
+	// PathProvenance is, on GET /governance only, POST /governance/check's path_provenance for a
+	// person homed in this unit (contextWalls). Absent on the unit write responses, to a caller below
+	// the security tier (a unit admin), and when the unit has no effective walls.
+	PathProvenance knobProvenance `json:"path_provenance,omitempty"`
 }
 
 // governanceEffective is a profile's composed content. Warnings and Error carry base-level detail
@@ -244,7 +251,7 @@ func (req *governanceUnitRequest) parseComposition() string {
 // then, unless the build proves it narrowing (unitWriteExempt), held for approval instead of
 // stored: the same transaction that would have stored it is abandoned and the change is proposed.
 func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id uuid.UUID, status int) {
-	mode, ok := s.governanceWriteMode(w, r)
+	mode, ok := s.unitWriteMode(w, r)
 	if !ok {
 		return
 	}
@@ -256,6 +263,13 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 	if msg := req.parseComposition(); msg != "" {
 		writeErrorReason(w, http.StatusBadRequest, reasonGovernanceOverlayInvalid, msg)
 		return
+	}
+	write, unitAdmin := s.cfg.Store.WriteGovernanceUnit, s.isUnitAdminCaller(r.Context())
+	if unitAdmin {
+		if !s.unitWritePrecheck(w, r, id, status, req) {
+			return
+		}
+		write = s.writeUnitInScope
 	}
 	// The site-config lock: a PUT /site-config lowering governance_max_depth checks the deepest path
 	// and saves under it, so this write reads the limit and stores its path either wholly before or
@@ -270,20 +284,29 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 		writeServerError(w, r, "write governance profile", err)
 		return
 	}
+	// The boundary's locks, read before the write's transaction: they bind only in hard_limits, and
+	// the boundary's walls meet every run whatever a unit states.
+	b, err := s.governanceBoundary(r.Context())
+	if err != nil {
+		writeServerError(w, r, "write governance profile", err)
+		return
+	}
 	var effective *ResolvedUnit
 	var held *heldUnitWrite
 	putCreates := false
 	createdBy := principalFromRequest(r)
-	saved, err := s.cfg.Store.WriteGovernanceUnit(r.Context(), id,
+	saved, err := write(r.Context(), id,
 		func(all []types.GovernanceUnit, assignments []types.GovernanceMembership) (types.GovernanceUnit, error) {
 			putCreates = unitPutCreatesAtID(id, status, all)
 			if refusal := s.unitPutCreateRefusal(putCreates); refusal != nil {
 				return types.GovernanceUnit{}, refusal
 			}
-			p, res, keep, err := s.buildGovernanceUnit(createdBy, s.isOperator(r.Context()), id, req, all, limit)
+			p, res, keep, err := s.buildGovernanceUnit(createdBy, s.isOperator(r.Context()), id, req, all, b, limit)
 			effective = res
 			exemptCtx := withGovernanceMemberships(r.Context(), assignments)
-			if err == nil && mode == govQueue && !s.unitWriteExempt(exemptCtx, all, p, res) {
+			// A unit admin's new unit is empty, so it binds nobody and applies directly (DESIGN-TREE §5.2).
+			newUnit := !slices.ContainsFunc(all, func(x types.GovernanceUnit) bool { return x.ID == id })
+			if err == nil && mode == govQueue && !(unitAdmin && newUnit) && !s.unitWriteExempt(exemptCtx, all, p, res) {
 				held = &heldUnitWrite{all: all, row: p, res: res, keep: keep}
 				return p, errHoldForApproval
 			}
@@ -296,6 +319,8 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 	var refusal *unitWriteError
 	var tier *mountTierRefusal
 	switch {
+	case s.answerOutsideScope(w, r, "governance.unit", err):
+		return
 	case errors.As(err, &tier):
 		s.refuse(w, r, tier.decision())
 		return
@@ -310,6 +335,10 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 		writeServerError(w, r, "write governance profile", err)
 		return
 	}
+	data := unitWriteAuditData(saved, effective)
+	if unitAdmin {
+		data = unitScopeAudit(data, r, s.auditUnitScope(r.Context(), saved.ID, false))
+	}
 	if putCreates {
 		// Only a PUT that created a profile is logged, and only now that the write stored it: a held, refused or
 		// failed write created nothing.
@@ -317,7 +346,7 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 			"unit_id", id.String())
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"governance.unit.write", saved.ID.String(), "success", mustJSON(unitWriteAuditData(saved, effective))))
+		"governance.unit.write", saved.ID.String(), "success", mustJSON(data)))
 	if mode == govBypass {
 		s.recordGovernanceBypass(r, govKindUnit, saved.ID.String(), "success", nil)
 	}
@@ -365,6 +394,7 @@ func unitWriteAuditData(saved types.GovernanceUnit, effective *ResolvedUnit) map
 		"contact_request_url":   contactURL,
 		"parent_id":             saved.ParentID,
 		"overlay_fields":        overlayFieldNames(saved),
+		"locked_knobs":          nonNilStrings(saved.LockedKnobs),
 	}
 }
 
@@ -426,13 +456,16 @@ func composedFrom(all []types.GovernanceUnit, id uuid.UUID, comp compositionRequ
 // direct or held write, the approver's when a held write is applied. It decides what the mount guard
 // (governance_mount_keep.go) admits, and keep is what that guard decided.
 func (s *Server) buildGovernanceUnit(createdBy string, super bool, id uuid.UUID, req governanceUnitRequest,
-	all []types.GovernanceUnit, limit int) (p types.GovernanceUnit, res *ResolvedUnit, keep mountKeep, err error) {
+	all []types.GovernanceUnit, b types.Boundary, limit int) (p types.GovernanceUnit, res *ResolvedUnit, keep mountKeep, err error) {
 	if !super {
 		defer func() { err = scrubMountSources(err, s.mountSourcesOf(all)) }()
 	}
 	p = types.GovernanceUnit{
 		ID: id, Name: req.Name, CreatedBy: createdBy, Contact: req.contact, ContactSet: req.contactSet,
-		Mode: cmp.Or(req.Mode, storedUnitMode(all, id)),
+		Mode: cmp.Or(req.Mode, storedUnitMode(all, id)), LockedKnobs: unitsByID(all)[id].LockedKnobs,
+	}
+	if p.LockedKnobs, err = requestLockedKnobs(req, p.LockedKnobs); err != nil {
+		return p, nil, keep, err
 	}
 	// UNIQUE(name) is judged here too, so a held create or rename is refused at proposal
 	// and not left pending to fail at every approval.
@@ -510,8 +543,31 @@ func (s *Server) buildGovernanceUnit(createdBy string, super bool, id uuid.UUID,
 		}
 		p.Ceiling, p.Limits = req.Ceiling, req.Limits
 	}
-	p, res, err = s.checkGraphWrite(p, all, limit)
+	p, res, err = s.checkLockedGraphWrite(p, all, b, limit)
 	return p, res, keep, err
+}
+
+// requestLockedKnobs is the locks a unit write stores: the request's, normalized, when it sends them,
+// the stored row's otherwise.
+func requestLockedKnobs(req governanceUnitRequest, stored []string) ([]string, error) {
+	if req.LockedKnobs == nil {
+		return stored, nil
+	}
+	locks, msg := normalizeLockedKnobs(*req.LockedKnobs)
+	if msg != "" {
+		return stored, writeRefusal(http.StatusUnprocessableEntity, reasonGovernanceUnitRequestInvalid, "%s", msg)
+	}
+	return locks, nil
+}
+
+// checkLockedGraphWrite is checkGraphWrite, then the locks, which bind every writer, a narrowing
+// included (governance_locks.go).
+func (s *Server) checkLockedGraphWrite(p types.GovernanceUnit, all []types.GovernanceUnit, b types.Boundary, limit int) (types.GovernanceUnit, *ResolvedUnit, error) {
+	p, res, err := s.checkGraphWrite(p, all, limit)
+	if err != nil {
+		return p, res, err
+	}
+	return p, res, s.checkUnitLocks(p, res, all, b, limit)
 }
 
 // storedUnitMode is the mode of the stored row id, own_walls when there is none.
@@ -689,12 +745,16 @@ func (s *Server) handleUpdateGovernanceUnit(w http.ResponseWriter, r *http.Reque
 // way, naming them, because deleting it would widen every child to the deployment. operatorOnly
 // (routes.go).
 func (s *Server) handleDeleteGovernanceUnit(w http.ResponseWriter, r *http.Request) {
-	mode, ok := s.governanceWriteMode(w, r)
+	mode, ok := s.unitWriteMode(w, r)
 	if !ok {
 		return
 	}
 	id, ok := parseIDParam(w, r, "id", "governance profile")
 	if !ok || refuseDefaultUnitWrite(w, id) {
+		return
+	}
+	if s.isUnitAdminCaller(r.Context()) {
+		s.deleteUnitInScope(w, r, id)
 		return
 	}
 	if mode == govQueue {
@@ -769,6 +829,11 @@ func (s *Server) writeUnitDeleteError(w http.ResponseWriter, r *http.Request, er
 				"(deleting it would silently widen them back to the deployment ceiling)", strings.Join(children.Names, ", ")))
 		return true
 	}
+	var pinned *store.ErrUnitPinned
+	if errors.As(err, &pinned) {
+		writeErrorReason(w, http.StatusConflict, reasonGovernanceUnitInUse, unitPinnedMsg(pinned))
+		return true
+	}
 	if errors.Is(err, store.ErrConflict) {
 		writeErrorReason(w, http.StatusConflict, reasonGovernanceUnitInUse,
 			"this governance profile is still assigned — delete its assignments first "+
@@ -777,4 +842,13 @@ func (s *Server) writeUnitDeleteError(w http.ResponseWriter, r *http.Request, er
 	}
 	writeServerError(w, r, "delete governance profile", err)
 	return true
+}
+
+// unitPinnedMsg is the 409 a unit delete gets while workspaces name it as their owning unit.
+func unitPinnedMsg(e *store.ErrUnitPinned) string {
+	names := "a workspace"
+	if len(e.Workspaces) > 0 {
+		names = "workspace(s) " + strings.Join(e.Workspaces, ", ")
+	}
+	return "this governance profile is pinned by " + names + "; unpin them first"
 }

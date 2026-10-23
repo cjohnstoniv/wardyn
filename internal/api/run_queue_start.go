@@ -383,7 +383,15 @@ func (s *Server) queueGovernance(st *queuedStart, req createRunRequest) (governa
 }
 
 // sameUnit reports whether ceiling resolved to the profile the launch recorded (nil for none).
+// A run the restrictions alone put in the Default unit counts as none, so a restriction added or
+// removed while the run waited is not a changed profile (the restrictions are re-read at start).
 func sameUnit(ceiling governanceCeiling, recorded *uuid.UUID) bool {
+	if recorded != nil && *recorded == store.DefaultUnitID {
+		recorded = nil
+	}
+	if restrictionDefaultUnit(ceiling.Unit) {
+		ceiling.Unit = nil
+	}
 	if ceiling.Unit == nil || recorded == nil {
 		return ceiling.Unit == nil && recorded == nil
 	}
@@ -452,7 +460,7 @@ func (s *Server) queueLaunch(st *queuedStart, req createRunRequest, ceiling gove
 	}
 	started, ok, err := qs.StartQueuedRun(st.ctx, run.ID, store.QueueStart{
 		SPIFFEID: id.SPIFFEID, ConfinementClass: f.enforced, ModelProviderID: f.mpChoice.provider.ID, AutonomyLevel: f.autonomy.Level, InnerWalls: f.innerWalls,
-		EndsAt: anchor.EndsAt, WaitBudgetSec: anchor.WaitBudgetSec, RunLimits: anchor.RunLimits, UnitID: anchor.UnitID,
+		EndsAt: anchor.EndsAt, WaitBudgetSec: anchor.WaitBudgetSec, RunLimits: anchor.RunLimits, UnitID: anchor.UnitID, RestrictionIDs: anchor.RestrictionIDs,
 		LifetimeCapAt: anchor.LifetimeCapAt, LifetimeCapSource: anchor.LifetimeCapSource,
 		Placement: placed.Placement, PlacementFilled: placed.PlacementFilled, RunnerID: placed.RunnerID,
 		EvidenceSource: placed.EvidenceSource, RunnerPoolExecutor: placed.RunnerPoolExecutor, RunnerFallbacks: f.place.otherRunners(f.enforced, placed.RunnerID),

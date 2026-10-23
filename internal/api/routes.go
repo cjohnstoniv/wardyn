@@ -103,8 +103,8 @@ func (s *Server) routes() chi.Router {
 			//   mountLibraryRoutes     (sources.go) operatorOnly (+ member reads on r)
 			//   mountSetupMutationRoutes            operatorOnly
 			//   mountAccessRoutes      (access.go)  operatorOnly
-			//   mountGovernanceRoutes  (governance.go) — CALLED WITH securityOps,
-			//       despite naming its parameter operatorOnly; read the call site
+			//   mountGovernanceRoutes  (governance.go) — CALLED WITH securityOps
+			//       and r: promotion on securityOps, the rest behind requireUnitScope
 			//   mountUserDriveFamily   (user_drives_reclaim.go) — wraps
 			//       mountUserDriveRoutes (user_drives.go) split: 3 operatorOnly,
 			//       4 securityOps (issue #168, and the list in #2827) + the destroy verb, operatorOnly
@@ -452,6 +452,7 @@ func (s *Server) routes() chi.Router {
 			// Operator-owned egress approvals (promotion of the scanner's
 			// content-derived suggestions; see handleSetApprovedEgress).
 			securityOps.Put("/workspaces/{id}/approved-egress", s.handleSetApprovedEgress)
+			securityOps.Put("/workspaces/{id}/owning-unit", s.handleSetWorkspaceOwningUnit)
 			// Denied-egress twin (Phase 4 revocation) — the only way to undo a
 			// `deny · always` decision, including curing an already-bricked
 			// workspace (H5); see handleSetDeniedEgress's doc comment for why its
@@ -605,11 +606,13 @@ func (s *Server) routes() chi.Router {
 			// Governance profiles (migration 0052): named, ASSIGNABLE ceilings
 			// and the rows binding them to a user/group/everyone — what lets one
 			// deployment run two groups under two different policies instead of
-			// the single site-wide DefaultPolicy. Seven routes, all securityOps
-			// (governance.go's mountGovernanceRoutes): profile authoring IS the
-			// security-admin duty. Note mountGovernanceRoutes still NAMES its
-			// parameter `operatorOnly`; the group a mount function receives is
-			// decided HERE, never by that parameter's name.
+			// the single site-wide DefaultPolicy. governance.go's
+			// mountGovernanceRoutes: profile authoring IS the security-admin
+			// duty, which a unit admin holds for their own units only, so all
+			// but the promotion sit behind requireUnitScope on r. Note
+			// mountGovernanceRoutes still NAMES its first parameter
+			// `operatorOnly`; the group a mount function receives is decided
+			// HERE, never by that parameter's name.
 			//
 			// Authoring a profile is not self-exemption: effectiveCeiling's
 			// short-circuit keys on isOperator, so a security admin's own runs
@@ -619,7 +622,7 @@ func (s *Server) routes() chi.Router {
 			// claims and answers with the profile THE RESOLVER picks, so the
 			// console never re-implements the precedence rule in order to show
 			// it.
-			s.mountGovernanceRoutes(securityOps)
+			s.mountGovernanceRoutes(securityOps, r)
 
 			// User drives (migration 0054): the storage an admin registers
 			// and allocates, and the per-run flag a member mounts theirs with.
@@ -844,7 +847,7 @@ func (s *Server) mountPermissionRoutes(securityOps chi.Router) {
 	securityOps.Put("/governance/egress-baseline", s.handlePutEgressBaseline)
 	securityOps.Get("/governance/boundary", s.handleGetBoundary)
 	securityOps.Put("/governance/boundary", s.handlePutBoundary)
-	securityOps.Post("/governance/dry-run", s.handleBoundaryDryRun)
+	s.mountGovernanceRestrictionRoutes(securityOps)
 	securityOps.Get("/governance/approval-rules", s.handleListApprovalRules)
 	securityOps.Post("/governance/approval-rules/dry-run", s.handleApprovalRuleDryRun)
 	securityOps.Put("/governance/approval-rules/{name}", s.handlePutApprovalRule)

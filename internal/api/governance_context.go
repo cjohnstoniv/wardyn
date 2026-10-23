@@ -146,9 +146,28 @@ func (s *Server) stampContextChoice(w http.ResponseWriter, r *http.Request, req 
 	return r.WithContext(withContextChoice(r.Context(), c)), true
 }
 
-// owningUnitFromRequest is the units owning the request's workspaces; the RESTRICT-PIN lane fills it.
-func (s *Server) owningUnitFromRequest(context.Context, createRunRequest) ([]uuid.UUID, error) {
-	return nil, nil
+// owningUnitFromRequest is the owning units of the request's attached workspaces, in request order:
+// each workspace's pin (workspaces.owning_unit_id), none for an unpinned one. pinCandidates applies
+// them (every pin holds, the deepest wins, DESIGN-TREE Q8). A store without workspaces has no pins.
+func (s *Server) owningUnitFromRequest(ctx context.Context, req createRunRequest) ([]uuid.UUID, error) {
+	ids := attachedWorkspaceIDs(req)
+	if len(ids) == 0 || s.cfg.Store == nil {
+		return nil, nil
+	}
+	var pins []uuid.UUID
+	for _, id := range ids {
+		ws, err := s.cfg.Store.GetWorkspace(ctx, id)
+		if errors.Is(err, store.ErrNotFound) {
+			continue // the launch refuses an unknown workspace on its own
+		}
+		if err != nil {
+			return nil, err
+		}
+		if ws.OwningUnitID != nil {
+			pins = append(pins, *ws.OwningUnitID)
+		}
+	}
+	return pins, nil
 }
 
 // errUnitNotAContext is a RunIn that names no unit of the person's: an unknown unit and a unit the
@@ -209,7 +228,7 @@ func (p contextPick) isDefault() bool {
 // resolveContext is the governed caller's ceiling below the boundary (DESIGN-TREE §4.1 steps 2-7
 // and 9): their memberships, the one context the request's choice selects, and that context's
 // path composed from the top. Step 1, the ungoverned caller, is resolveChainCeiling's.
-// Restrictions (step 8) are the RESTRICT-PIN lane's, applied after this.
+// Restrictions (step 8) are applied by contextCeiling, so a check and a preview see them too.
 func (s *Server) resolveContext(ctx context.Context, deployment governanceCeiling) (governanceCeiling, error) {
 	subj, err := s.callerSubjects(ctx)
 	if err != nil {
@@ -224,10 +243,20 @@ func (s *Server) resolveContext(ctx context.Context, deployment governanceCeilin
 	return s.contextCeiling(ctx, q, contextChoiceFrom(ctx), deployment)
 }
 
-// contextCeiling selects q's context under choice and composes it. Default is the deployment's
-// ceiling with no unit (Unit nil iff the context is Default); any other context is its path,
-// composed from the top (governance_compose.go) and refused past the configured depth.
+// contextCeiling selects q's context under choice, composes it, and applies the restrictions that
+// cover q (DESIGN-TREE §4.1 step 8, governance_restrictions.go). A restriction never selects a context.
 func (s *Server) contextCeiling(ctx context.Context, q contextQuery, choice contextChoice, deployment governanceCeiling) (governanceCeiling, error) {
+	c, err := s.contextCeilingBelowRestrictions(ctx, q, choice, deployment)
+	if err != nil {
+		return governanceCeiling{}, err
+	}
+	return s.applyRestrictions(ctx, q, c)
+}
+
+// contextCeilingBelowRestrictions selects q's context under choice and composes it. Default is the
+// deployment's ceiling with no unit (Unit nil iff the context is Default); any other context is its
+// path, composed from the top (governance_compose.go) and refused past the configured depth.
+func (s *Server) contextCeilingBelowRestrictions(ctx context.Context, q contextQuery, choice contextChoice, deployment governanceCeiling) (governanceCeiling, error) {
 	pick, err := s.selectContext(ctx, q, choice)
 	if err != nil {
 		return governanceCeiling{}, err

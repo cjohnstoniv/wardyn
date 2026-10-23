@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
@@ -147,6 +148,18 @@ type defaultPolicyResponse struct {
 	UnitName string                 `json:"unit_name,omitempty"`
 	UnitPath []unitPathLink         `json:"unit_path,omitempty"`
 	Contexts []defaultPolicyContext `json:"contexts,omitempty"`
+	// Restrictions are the deny-only lists that bind the caller in every unit (the spec above already
+	// carries them), so a refusal can name who to ask.
+	Restrictions []defaultPolicyRestriction `json:"restrictions,omitempty"`
+}
+
+// defaultPolicyRestriction is one restriction on the caller, as the default-policy read shows it.
+type defaultPolicyRestriction struct {
+	ID      uuid.UUID               `json:"id"`
+	Name    string                  `json:"name"`
+	Spec    types.RestrictionSpec   `json:"spec"`
+	Limits  types.RestrictionLimits `json:"limits"`
+	Contact *policyref.Contact      `json:"contact,omitempty"`
 }
 
 // defaultPolicyContext is one unit the caller may run in; home is the one a run naming none runs in.
@@ -193,15 +206,25 @@ func (s *Server) handleGetDefaultPolicy(w http.ResponseWriter, r *http.Request) 
 		// A run under this ceiling gets no UI apps, so the read lists none.
 		resp.UIApps = nil
 	}
-	if ceiling.Unit != nil {
+	if rs, ok := s.restrictionStore(); ok && len(ceiling.RestrictionIDs) > 0 {
+		list, rerr := rs.GetRestrictionsByID(r.Context(), ceiling.RestrictionIDs)
+		if rerr != nil {
+			writeServerError(w, r, "read restrictions", rerr)
+			return
+		}
+		for _, x := range list {
+			resp.Restrictions = append(resp.Restrictions, defaultPolicyRestriction{ID: x.ID, Name: x.Name, Spec: x.Spec, Limits: x.Limits, Contact: x.Contact})
+		}
+	}
+	if ceiling.Unit != nil && !restrictionDefaultUnit(ceiling.Unit) {
 		resp.UnitName = ceiling.Unit.Name
 		if operator { // the chain is an admin surface (ResolvedUnit.Chain): a member reads the leaf alone
 			for _, l := range ceiling.Unit.Chain {
-				resp.UnitPath = append(resp.UnitPath, unitPathLink(l))
+				resp.UnitPath = append(resp.UnitPath, unitPathLink{ID: l.ID, Name: l.Name})
 			}
 		}
 	}
-	if !ceiling.Operator && ceiling.Unit != nil && s.cfg.Store != nil {
+	if !ceiling.Operator && ceiling.Unit != nil && !restrictionDefaultUnit(ceiling.Unit) && s.cfg.Store != nil {
 		if resp.Contexts, err = s.callerContexts(r.Context()); err != nil {
 			writeCeilingError(w, r, err)
 			return

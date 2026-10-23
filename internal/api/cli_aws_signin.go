@@ -129,7 +129,7 @@ func (s *Server) handleCLISignIn(w http.ResponseWriter, r *http.Request) {
 	run, dispatch, err := s.launchHarnessLoginRun(r.Context(), actor, hl, t)
 	switch {
 	case errors.Is(err, errRecordCeilingLimit):
-		writeErrorReasonPolicy(w, http.StatusForbidden, reasonRecordCeilingLimit, strings.TrimPrefix(err.Error(), errRecordCeilingLimit.Error()+": "), recordCeilingRef(err))
+		writeErrorReasonPolicy(w, http.StatusForbidden, reasonRecordCeilingLimit, strings.TrimPrefix(err.Error(), errRecordCeilingLimit.Error()+": "), recordCeilingRef(err), recordCeilingKnob(err))
 		return
 	case errors.Is(err, errSignInBusy):
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonCaptureSignInBusy, signInBusyRefusal)

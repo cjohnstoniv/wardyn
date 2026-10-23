@@ -240,12 +240,24 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	// set beside writeDriveError, which composes the sentence a member meets if
 	// they launch anyway.
 	body["user_drive_unavailable"] = unavailable
+	// The units this caller administers by a unit-admin grant (governance_unit_admin.go), so the console
+	// can show them the Governance screens. Always present: [] for none.
+	body["unit_admin_of"] = s.meUnitAdminOf(r)
 	// Who to ask for a change to the policy that bounds this caller (deny-f2):
 	// the leaf profile's published contact, the bare deployment arm, or null for
 	// an operator and for any ceiling that could not be resolved. Always present.
 	body["governance_contact"] = nil
 	if ref := s.meGovernanceContact(r); ref != nil {
 		body["governance_contact"] = ref
+	}
+	// A service identity's reach (me_service_reach.go); a person's body never carries the key.
+	if _, _, ok := serviceIdentityFromContext(r.Context()); ok {
+		reach, err := s.meServiceReach(r)
+		if err != nil {
+			writeServiceReachError(w, r, err)
+			return
+		}
+		body["service"] = reach
 	}
 	// An SSO session dies outright at this instant (no refresh) — the
 	// console polls this and warns ahead of it, rather than the human learning

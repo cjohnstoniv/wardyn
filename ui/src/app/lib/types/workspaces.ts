@@ -277,6 +277,10 @@ export interface Workspace {
   // useCanMutate(ws.owned_by) reads to decide whether a member may mutate
   // this row.
   owned_by?: string;
+  // The unit this workspace is pinned to (B1): a run on it runs in that unit or one below, set only by
+  // PUT /workspaces/{id}/owning-unit. owning_unit_name is the unit's name, joined at read.
+  owning_unit_id?: string;
+  owning_unit_name?: string;
   created_at: string;
   updated_at: string;
   // #1267: a member-safe, per-row, per-CALLER bit — would the SAME decide

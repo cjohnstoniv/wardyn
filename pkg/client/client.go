@@ -22,7 +22,7 @@
 //     ListPoliciesPage, UpdatePolicy, DeletePolicy
 //   - workspaces (/api/v1/workspaces):   CreateWorkspace, GetWorkspace, ListWorkspaces,
 //     ListWorkspacesPage, UpdateWorkspace, DeleteWorkspace, ScanWorkspace, RecordWorkspaceTask,
-//     GetWorkspaceBuild, BuildWorkspace
+//     GetWorkspaceBuild, BuildWorkspace, SetWorkspaceOwningUnit
 //   - sources (/api/v1/sources):         ListSources, CreateSource, GetSource, ScanSource, DeleteSource
 //   - audit (/api/v1/audit):             AuditEvents, AuditEventsPage, RecentAuditEvents,
 //     ExportAuditPartition, AuditRetention, DropAuditPartition
@@ -42,7 +42,8 @@
 //     ImportTemplate — and, on /api/v1/admin/template-group-admins, ListTemplateGroupAdmins, GrantTemplateGroupAdmin,
 //     RevokeTemplateGroupAdmin. The server answers 501 templates_unavailable when its store holds no templates
 //   - governance (/api/v1/governance):   GetGovernance, PlanGovernance, ApplyGovernance, ApplyGovernanceResult
-//     — and MoveGovernanceMembership, PromoteGovernanceMembership, CheckGovernance, GovernanceDryRun
+//     — and MoveGovernanceMembership, PromoteGovernanceMembership, GrantUnitAdmin, RevokeUnitAdmin, CheckGovernance,
+//     GovernanceDryRun
 //   - governance changes (/api/v1/governance/changes): ListGovernanceChanges, GetGovernanceChange,
 //     ApproveGovernanceChange, RejectGovernanceChange
 //   - setup (/api/v1/setup):             SetupStatus, ConnectManagedSubscription, DisconnectManagedSubscription

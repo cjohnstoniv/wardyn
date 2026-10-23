@@ -289,6 +289,9 @@ export interface AgentRun {
   wait_budget_sec?: number;
   run_limits?: RunLimits;
   unit_id?: string;
+  // The restrictions captured at create (internal/types AgentRun.RestrictionIDs); each is read at its
+  // current spec by the seal, the mint, the doors and a revive.
+  restriction_ids?: string[];
   // Set when the run lost its sandbox but is kept (migration 0073, #568):
   // "ended" = its end passed, so it is stopped with no network and its files
   // stay for the ended-run grace. "reboot" = its container exited under it
