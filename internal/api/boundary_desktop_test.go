@@ -5,6 +5,7 @@ package api
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -59,5 +60,44 @@ func TestBoundaryRefusesAnUnknownDesktopRule(t *testing.T) {
 	good := types.BoundaryWrite{Mode: types.BoundaryHardLimits, Spec: types.BoundarySpec{Desktop: &allDesktopAllowed}}
 	if err := validateBoundary(&good); err != nil {
 		t.Fatalf("validateBoundary(allowed) = %v", err)
+	}
+}
+
+// TestBoundaryDesktopLeavesAnUnchangedRunUnreported: a run that names no desktop, under a boundary
+// whose desktop leaves its effective rules as they are, reports no desktop change (so no warning and
+// no dry-run row) and records no boundary provenance on desktop. A real narrowing still reports.
+func TestBoundaryDesktopLeavesAnUnchangedRunUnreported(t *testing.T) {
+	defaults := types.DesktopControls{PasteIn: types.TransferAllowed, CopyOut: types.TransferBlocked,
+		Upload: types.TransferAllowed, Download: types.TransferBlocked}
+	for name, wall := range map[string]types.DesktopControls{"all allowed": allDesktopAllowed, "the defaults": defaults} {
+		t.Run(name, func(t *testing.T) {
+			b := types.Boundary{Mode: types.BoundaryHardLimits, Spec: types.BoundarySpec{Desktop: &wall}}
+			base := types.RunPolicySpec{MinConfinementClass: types.CC1}
+			got, _, changes, err := boundaryMeet(b, base, types.GovernanceLimits{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Desktop.Effective() != defaults {
+				t.Fatalf("desktop = %+v, want the defaults kept", got.Desktop.Effective())
+			}
+			for _, c := range changes {
+				if c.Knob == "desktop" {
+					t.Errorf("the dry run and the run's warnings report desktop: %+v (warnings %q)", c, boundaryWarnings(changes))
+				}
+			}
+			prov := knobProvenance{}
+			prov.setBy(boundaryProvenance, base, got)
+			if p, ok := prov["desktop"]; ok {
+				t.Errorf("desktop provenance = %+v, want none", p)
+			}
+		})
+	}
+
+	wall := allDesktopAllowed
+	wall.CopyOut = types.TransferBlocked
+	b := types.Boundary{Mode: types.BoundaryHardLimits, Spec: types.BoundarySpec{Desktop: &wall}}
+	_, _, changes, err := boundaryMeet(b, types.RunPolicySpec{MinConfinementClass: types.CC1, Desktop: &allDesktopAllowed}, types.GovernanceLimits{})
+	if err != nil || !slices.ContainsFunc(changes, func(c boundaryChange) bool { return c.Knob == "desktop" }) {
+		t.Errorf("a narrowed desktop is not reported: %+v %v", changes, err)
 	}
 }

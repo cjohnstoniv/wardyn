@@ -31,7 +31,6 @@ describe("DesktopGroupCard", () => {
     }
     for (const r of C.ROWS) {
       expect(within(card).getByRole("group", { name: r.label })).toBeInTheDocument();
-      expect(within(card).getByText(r.sub)).toBeInTheDocument();
     }
     expect(C.COUNT(4)).toBe("4 settings");
   });

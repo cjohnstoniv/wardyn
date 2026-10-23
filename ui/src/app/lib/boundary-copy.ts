@@ -81,10 +81,10 @@ export const BOUNDARY_DESKTOP = {
   BELOW: "Teams below may only block more.",
   ENFORCED: "Enforced at the desktop relay, outside the sandbox. Every use is logged by direction, size and hash. Never the content.",
   ROWS: [
-    { key: "paste_in", short: "Paste in", label: "Paste into the desktop", sub: "From your computer." },
-    { key: "copy_out", short: "Copy out", label: "Copy out of the desktop", sub: "To your computer." },
-    { key: "upload", short: "Upload", label: "Upload files", sub: "Into the transfer folder." },
-    { key: "download", short: "Download", label: "Download files", sub: "Out of the transfer folder." },
+    { key: "paste_in", short: "Paste in", label: "Paste into the desktop" },
+    { key: "copy_out", short: "Copy out", label: "Copy out of the desktop" },
+    { key: "upload", short: "Upload", label: "Upload files" },
+    { key: "download", short: "Download", label: "Download files" },
   ],
 } as const;
 

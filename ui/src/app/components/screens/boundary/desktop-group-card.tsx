@@ -66,9 +66,8 @@ export function DesktopGroupCard({
           <li key={r.key} className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border px-4 py-3 last:border-b-0">
             <fieldset disabled={disabled} className="flex flex-wrap items-center gap-x-4 gap-y-2">
               <legend className="sr-only">{r.label}</legend>
-              <span aria-hidden="true" className="flex min-w-[13rem] flex-col">
-                <span className="text-sm font-medium text-foreground">{r.label}</span>
-                <span className="text-xs text-muted-foreground">{r.sub}</span>
+              <span aria-hidden="true" className="min-w-[13rem] text-sm font-medium text-foreground">
+                {r.label}
               </span>
               <span className="inline-flex overflow-hidden rounded-md border border-border text-xs">
                 {RULES.map((v) => (

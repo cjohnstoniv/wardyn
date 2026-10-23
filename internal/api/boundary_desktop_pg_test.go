@@ -14,7 +14,8 @@ import (
 
 // TestBoundaryDesktopBlocksCopyOutForARunThatAllowsIt (#2967): a boundary that blocks copy out blocks it
 // for a run whose own policy allows it (a super admin's and the admin token's inline policy, which no
-// profile clamps), with the boundary's warning; the directions it allows stay open.
+// profile clamps), with the boundary's warning; the directions it allows stay open. A run that names no
+// desktop, which the boundary leaves as it was, gets no warning.
 func TestBoundaryDesktopBlocksCopyOutForARunThatAllowsIt(t *testing.T) {
 	e := newGovEnvOn(t, throwawayPGPool(t))
 	c := seedBoundaryCorpus(t, e)
@@ -41,5 +42,13 @@ func TestBoundaryDesktopBlocksCopyOutForARunThatAllowsIt(t *testing.T) {
 				t.Errorf("warnings = %q, want the boundary's desktop warning", got.Warnings)
 			}
 		})
+	}
+
+	// A run that names no desktop already blocks copy out by default: nothing is narrowed or warned.
+	got := resolveBoundaryCase(t, e.srv, c, boundaryCase{"no_desktop", super, func(boundaryCorpus) createRunRequest {
+		return createRunRequest{Agent: "claude-code", Repo: "acme/widgets", InlinePolicy: &types.RunPolicySpec{MinConfinementClass: types.CC1}}
+	}})
+	if !got.OK || slices.Contains(got.Warnings, "the Wardyn boundary narrowed desktop") {
+		t.Errorf("a run with no desktop: ok=%v warnings %q, want no desktop warning", got.OK, got.Warnings)
 	}
 }
