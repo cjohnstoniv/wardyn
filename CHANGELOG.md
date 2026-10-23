@@ -207,7 +207,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Both `no_limits` and `hard_limits` can be set, and the console shows the dry run before every save. A fresh install
   starts in `hard_limits` with nothing listed and floor `CC1`, which narrows nothing; an upgraded install stays in
   `no_limits`. Break-glass (`wardyn run --break-glass-reason`) is asked of an admin-token run only once the boundary
-  bounds something and a unit with its own walls exists.
+  bounds something and a unit with its own walls or a restriction exists.
 - Policy field `harness_inner_walls` (`sandbox_mode`, `approvals`) chooses the harness's own walls inside Wardyn's.
   Omitted, each run keeps what its harness and lane give today. It only adds walls: a looser choice refuses the run
   (`harness_inner_walls_looser`), and `sandbox_mode` takes `off` only (`workspace-write` and `read-only` answer
