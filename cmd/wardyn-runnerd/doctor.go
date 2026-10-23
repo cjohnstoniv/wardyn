@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/doctor"
 	"github.com/cjohnstoniv/wardyn/internal/runneridentity"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // doctorOptions are `doctor`'s flags. A setting left out is read the way the service reads it: from the
@@ -86,6 +88,15 @@ func (s doctorSettings) get(flagName, flag, key string) (value, source string) {
 	return "", ""
 }
 
+// stateDir is --state-dir, else the one setup used.
+func (s doctorSettings) stateDir(o doctorOptions) string {
+	if o.stateDir != "" {
+		abs, _ := filepath.Abs(o.stateDir)
+		return abs
+	}
+	return s.paths.stateDir
+}
+
 // runDoctor runs every stage. net carries what a test replaces (the resolver, the proxy function, the
 // trust store); its organisation fields are filled here.
 func runDoctor(ctx context.Context, h setupHost, o doctorOptions, getenv func(string) string, net doctor.Network) doctor.Report {
@@ -105,6 +116,7 @@ func runDoctor(ctx context.Context, h setupHost, o doctorOptions, getenv func(st
 		network, serverVersion = runnerNetwork(ctx, s, o, org, orgSource, &net)
 		stages = append(stages, network...)
 	}
+	stages = append(stages, h.serviceStage(ctx, paths), statusStage(statusPath(s.stateDir(o))))
 	return doctor.Report{Stages: append(stages, h.engineStages(ctx, s, o, org, serverVersion)...)}.Scrubbed()
 }
 
@@ -132,11 +144,73 @@ func runnerNetwork(ctx context.Context, s doctorSettings, o doctorOptions, org, 
 	if orgSource == "" {
 		net.Source = "nothing set"
 	}
-	net.ExtraCASource, net.ExtraCATrusted = "WARDYN_TRUSTED_CA_FILE", true
+	net.ExtraCASource, net.ExtraCATrusted, net.Wire = "WARDYN_TRUSTED_CA_FILE", true, true
 	if s.paths.installedService() != "" {
 		net.ProxyNote = ": this shell's settings, which the installed service does not receive"
 	}
 	return append(stages, net.Run(ctx)...), net.ServerVersion
+}
+
+// serviceStage says whether the service setup installed is there and, where systemd can say, running. No
+// service is not a failure: --no-service runs the runner by hand.
+func (h setupHost) serviceStage(ctx context.Context, p setupPaths) doctor.Stage {
+	file := p.installedService()
+	if file == "" {
+		return doctor.SkipStage("service", "no service is installed for this runner: it runs only where you start `wardyn-runnerd serve`, and `wardyn-runnerd setup` installs one")
+	}
+	if h.goos != "linux" || h.run == nil {
+		return doctor.OKStage("service", "installed ("+filepath.Base(file)+"); whether it is running is not checked on this OS")
+	}
+	out, err := h.run(ctx, "systemctl", "--user", "is-active", serviceUnit)
+	state := strings.TrimSpace(string(out))
+	switch {
+	case err == nil, state == "activating", state == "reloading":
+		return doctor.OKStage("service", fmt.Sprintf("%s is %s", serviceUnit, cmp.Or(state, "active")))
+	case state == "":
+		return doctor.SkipStage("service", "installed, but systemd did not say whether it is running: "+oneLine(err.Error()))
+	}
+	return doctor.FailStage("service", fmt.Sprintf("%s is installed but systemd reports it %s", serviceUnit, state), "",
+		"start it with `systemctl --user start "+serviceUnit+"`; `journalctl --user -u wardyn-runnerd` says why it stopped")
+}
+
+// statusSetting is the setting, and what to set it to, that fixes a connection that failed at stage.
+var statusSetting = map[string][2]string{
+	types.RunnerStageDNS:        {"WARDYN_RUNNER_ORG_URL", "an address that resolves from this computer (or fix its DNS or VPN)"},
+	types.RunnerStageProxy:      {"HTTPS_PROXY", "a proxy address the service environment can reach, or unset it (NO_PROXY lists hosts to reach directly)"},
+	types.RunnerStageTLS:        {"WARDYN_TRUSTED_CA_FILE", "a PEM file holding the root CA of the certificate the organisation presents"},
+	types.RunnerStageHealthz:    {"WARDYN_RUNNER_ORG_URL", "your organisation's public HTTPS address"},
+	types.RunnerStageEngine:     {"DOCKER_HOST", "the engine's socket if it is not the default"},
+	types.RunnerStageProxyImage: {"WARDYN_PROXY_IMAGE", "an image this engine can pull for this computer's architecture"},
+	types.RunnerStageRelay:      {"WARDYN_RELAY_LISTEN", "an address of this host that the engine's containers reach"},
+}
+
+// statusStage reads the file the service writes (status.json) for its last error and when it happened. With
+// no file the service has not run, and nothing is dialled to find out: this stage only reads.
+func statusStage(path string) doctor.Stage {
+	st, err := loadStatus(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return doctor.SkipStage("status", "the service has not run yet: there is no "+statusFile+" in "+filepath.Dir(path))
+	case err != nil:
+		return doctor.FailStage("status", oneLine(err.Error()), "WARDYN_RUNNER_STATE_DIR", "the directory of the identity this computer's service runs")
+	}
+	last := ""
+	if st.LastError != "" && st.LastErrorAt != nil {
+		last = fmt.Sprintf("; last error at %s: %s", st.LastErrorAt.UTC().Format(time.RFC3339), st.LastError)
+	}
+	since := st.Since.UTC().Format(time.RFC3339)
+	if st.State == "connected" || (st.LastError == "" && st.State != "offline") {
+		return doctor.OKStage("status", fmt.Sprintf("%s since %s%s", st.State, since, last))
+	}
+	set := statusSetting[st.Stage]
+	if st.Stage == types.RunnerStageIdentity {
+		return doctor.FailStage("status", fmt.Sprintf("%s since %s (stage identity)%s", st.State, since, last), "",
+			"register this runner again: the organisation refused the proof it signs with its stored key (revoked or unknown)")
+	}
+	if set[0] == "" {
+		set = [2]string{"WARDYN_RUNNER_ORG_URL", "your organisation's public HTTPS address"}
+	}
+	return doctor.FailStage("status", fmt.Sprintf("%s since %s (stage %s)%s", st.State, since, cmp.Or(st.Stage, "none"), last), set[0], set[1])
 }
 
 // engineStages are the runner's own stages: the local engine, the proxy image and the relay.
@@ -182,12 +256,8 @@ func doctorRelayWant(s doctorSettings, o doctorOptions) (relayPair, error) {
 // (proxyImagePinned) applied to it.
 func (h setupHost) proxyImageChoice(s doctorSettings, o doctorOptions, org string) (image string, pinned bool) {
 	var fromIdentity string
-	stateDir := s.paths.stateDir
-	if o.stateDir != "" {
-		stateDir, _ = filepath.Abs(o.stateDir)
-	}
 	if org != "" {
-		if id, err := runneridentity.Load(stateDir, org); err == nil {
+		if id, err := runneridentity.Load(s.stateDir(o), org); err == nil {
 			fromIdentity = id.ProxyImage
 		}
 	}

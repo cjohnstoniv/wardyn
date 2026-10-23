@@ -19,6 +19,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/coder/websocket"
+
 	"github.com/cjohnstoniv/wardyn/internal/doctor"
 )
 
@@ -35,22 +37,55 @@ type doctorRig struct {
 	netErr    error
 	orgPool   *x509.CertPool
 	org       string
+	// stripUpgrade makes the organisation see the stream route's request without its upgrade headers, the way
+	// a gateway that strips them does.
+	stripUpgrade bool
+	// systemd is what `systemctl --user is-active` prints and returns; the service is installed when unit is set.
+	systemd    string
+	systemdErr error
+	unit       bool
 }
 
 func newRig(t *testing.T) *doctorRig {
 	t.Helper()
 	t.Setenv("DOCKER_HOST", "")
+	rig := &doctorRig{home: t.TempDir(), imageAt: "local", systemd: "active"}
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/stream") {
+			if rig.stripUpgrade {
+				r.Header.Del("Connection")
+				r.Header.Del("Upgrade")
+			}
+			if c, err := websocket.Accept(w, r, nil); err == nil {
+				_ = c.CloseNow()
+			}
+			return
+		}
 		_, _ = w.Write([]byte(`{"status":"ok","version":"0.10.0"}`))
 	}))
 	t.Cleanup(srv.Close)
 	pool := x509.NewCertPool()
 	pool.AddCert(srv.Certificate())
-	return &doctorRig{home: t.TempDir(), env: map[string]string{"WARDYN_RUNNER_ORG_URL": srv.URL}, imageAt: "local", orgPool: pool, org: srv.URL}
+	rig.env, rig.orgPool, rig.org = map[string]string{"WARDYN_RUNNER_ORG_URL": srv.URL}, pool, srv.URL
+	return rig
+}
+
+// installUnit puts the service's unit file where setup would have.
+func (r *doctorRig) installUnit(t *testing.T) {
+	t.Helper()
+	dir := filepath.Join(r.home, ".config", "systemd", "user")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, serviceUnit), []byte("[Service]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r.unit = true
 }
 
 func (r *doctorRig) run(o doctorOptions) doctor.Report {
 	h := setupHost{goos: "linux", home: r.home, dockerHost: "unix:///var/run/docker.sock",
+		run: func(context.Context, string, ...string) ([]byte, error) { return []byte(r.systemd + "\n"), r.systemdErr },
 		inspect: func(context.Context, relayPair) (dockerEngine, error) {
 			if r.engineErr != nil {
 				return dockerEngine{}, r.engineErr
@@ -81,6 +116,8 @@ func stage(t *testing.T, rep doctor.Report, name string) doctor.Stage {
 
 func TestRunnerDoctorAllGood(t *testing.T) {
 	r := newRig(t)
+	r.installUnit(t)
+	r.writeStatus(t, "", runnerStatus{State: "connected", Since: statusAt})
 	rep := r.run(doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"})
 	for _, s := range rep.Stages {
 		if s.Name == "trusted-ca" {
@@ -131,6 +168,7 @@ func TestRunnerDoctorStagesNameTheirSetting(t *testing.T) {
 		{"proxy network lookup fails", func(r *doctorRig) { r.netErr = errors.New("permission denied") }, doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}, "relay", "DOCKER_HOST", "could not look for the Docker network wardyn-internal: permission denied"},
 		{"organisation URL not https", func(r *doctorRig) { r.env["WARDYN_RUNNER_ORG_URL"] = "http://wardyn.example.com" }, doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}, "org-url", "WARDYN_RUNNER_ORG_URL", "https://"},
 		{"no organisation set", func(r *doctorRig) { delete(r.env, "WARDYN_RUNNER_ORG_URL") }, doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}, "org-url", "WARDYN_RUNNER_ORG_URL", "no organisation"},
+		{"gateway strips the WebSocket upgrade", func(r *doctorRig) { r.stripUpgrade = true }, doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}, "wire", "WARDYN_RUNNER_ORG_URL", "answered 426 instead of switching to a WebSocket"},
 		{"CA bundle unreadable", func(*doctorRig) {}, doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0", trustedCAFile: "/nonexistent/ca.pem"}, "trusted-ca", "WARDYN_TRUSTED_CA_FILE", "/nonexistent/ca.pem"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -187,7 +225,7 @@ func TestRunnerOnlyRunsNoNetworkStages(t *testing.T) {
 	for _, s := range rep.Stages {
 		names = append(names, s.Name)
 	}
-	if got := strings.Join(names, ","); got != "engine,proxy-image,relay" {
+	if got := strings.Join(names, ","); got != "service,status,engine,proxy-image,relay" {
 		t.Errorf("stages = %s, want only the runner's", got)
 	}
 }
@@ -209,7 +247,7 @@ func TestDoctorWritesNothing(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(cfg, "runner"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for name, body := range map[string]string{"runnerd.env": "WARDYN_PROXY_IMAGE=mirror.example.com/p:1\n", "runner/runner.json": "{}"} {
+	for name, body := range map[string]string{"runnerd.env": "WARDYN_PROXY_IMAGE=mirror.example.com/p:1\n", "runner/runner.json": "{}", "runner/status.json": `{"state":"offline","stage":"tls","last_error":"x"}`} {
 		if err := os.WriteFile(filepath.Join(cfg, name), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -262,6 +300,8 @@ func TestDoctorNeverPrintsAProxyCredential(t *testing.T) {
 // TestRunnerDoctorPlainOutputGolden pins the plain lines of a run that fails in the engine's stages.
 func TestRunnerDoctorPlainOutputGolden(t *testing.T) {
 	r := newRig(t)
+	r.installUnit(t)
+	r.writeStatus(t, "", runnerStatus{State: "connected", Since: statusAt})
 	r.relayErr = errors.New("relay: no container on Docker engine \"Ubuntu\" (box) (native) reached this runner:\n  listen 172.17.0.1, reach at host-gateway: refused\n" +
 		"Set --relay-listen (WARDYN_RELAY_LISTEN) and --relay-host-target (WARDYN_RELAY_HOST_TARGET); see docs/runner-registration.md#requirements.")
 	rep := r.run(doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"})
