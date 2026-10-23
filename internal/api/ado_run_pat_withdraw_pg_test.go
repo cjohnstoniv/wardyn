@@ -66,18 +66,31 @@ func newWithdrawEnv(t *testing.T, policy string) *withdrawEnv {
 		t.Fatal(err)
 	}
 
+	e.run, e.grant, e.authID = e.localRun(e.runner)
+	// The fixture is only a pin if its delivery is admitted before the write.
+	if admitted, _ := e.srv.judgeResidentADO(ctx, e.run, withdrawOwner, e.grant); !admitted {
+		t.Fatal("the run's runner_resident delivery is not admitted before the write")
+	}
+	return e
+}
+
+// localRun is a live local run of withdrawOwner bound to runnerID, holding one live token delivered
+// runner_resident: the run, its grant and the token's authorization id.
+func (e *withdrawEnv) localRun(runnerID uuid.UUID) (types.AgentRun, types.CredentialGrant, uuid.UUID) {
+	e.t.Helper()
+	ctx := context.Background()
 	now := time.Now().UTC()
 	id := uuid.New()
 	if _, err := e.pg.CreateRun(ctx, types.AgentRun{ID: id, CreatedAt: now, UpdatedAt: now, CreatedBy: withdrawOwner, Agent: "claude-code", Task: "t",
 		ConfinementClass: types.CC2, State: types.RunStopped, SPIFFEID: "spiffe://wardyn.test/agent-run/" + id.String(), RunnerTarget: "docker"}); err != nil {
-		t.Fatal(err)
+		e.t.Fatal(err)
 	}
-	if _, err := e.pool.Exec(ctx, `UPDATE agent_runs SET state = 'RUNNING', placement = 'local', runner_id = $2 WHERE id = $1`, id, e.runner); err != nil {
-		t.Fatal(err)
+	if _, err := e.pool.Exec(ctx, `UPDATE agent_runs SET state = 'RUNNING', placement = 'local', runner_id = $2 WHERE id = $1`, id, runnerID); err != nil {
+		e.t.Fatal(err)
 	}
-	var err error
-	if e.run, err = e.pg.GetRun(ctx, id); err != nil {
-		t.Fatal(err)
+	run, err := e.pg.GetRun(ctx, id)
+	if err != nil {
+		e.t.Fatal(err)
 	}
 	row := withdrawRow()
 	snapshot := adoEntraScopeSnapshot{ProviderRowID: row.ID, Organisation: "contoso", OwnerSubject: withdrawOwner,
@@ -85,21 +98,18 @@ func newWithdrawEnv(t *testing.T, policy string) *withdrawEnv {
 		TokenMode: string(types.ADOTokenModeMintedPAT), Capabilities: row.Entra.DefaultProfile}
 	scope := mustJSON(map[string]any{"host": "dev.azure.com", "header": adoEntraInjectHeader, "format": adoInjectFormat(types.ADOTokenModeMintedPAT),
 		"secret_name": types.ADOEntraAccessTokenSecret, "require_tls": true, "snapshot": snapshot})
-	if e.grant, err = e.pg.CreateGrant(ctx, types.CredentialGrant{ID: uuid.New(), RunID: id, CreatedAt: now, Delivery: types.GrantDeliveryResident,
-		Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: scope, TTLSeconds: adoEntraGrantTTLSeconds}}); err != nil {
-		t.Fatal(err)
+	grant, err := e.pg.CreateGrant(ctx, types.CredentialGrant{ID: uuid.New(), RunID: id, CreatedAt: now, Delivery: types.GrantDeliveryResident,
+		Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: scope, TTLSeconds: adoEntraGrantTTLSeconds}})
+	if err != nil {
+		e.t.Fatal(err)
 	}
-	e.authID = uuid.New()
-	if err := e.pg.InsertRunPAT(ctx, store.RunPAT{RunID: id, AuthorizationID: e.authID, Owner: withdrawOwner, ProviderRowID: row.ID,
+	authID := uuid.New()
+	if err := e.pg.InsertRunPAT(ctx, store.RunPAT{RunID: id, AuthorizationID: authID, Owner: withdrawOwner, ProviderRowID: row.ID,
 		Org: "contoso", Scope: "vso.code", ValidTo: now.Add(time.Hour)}); err != nil {
-		t.Fatal(err)
+		e.t.Fatal(err)
 	}
-	e.pats.live[e.authID.String()] = adoPAT{AuthorizationID: e.authID.String()}
-	// The fixture is only a pin if its delivery is admitted before the write.
-	if admitted, _ := e.srv.judgeResidentADO(ctx, e.run, withdrawOwner, e.grant); !admitted {
-		t.Fatal("the run's runner_resident delivery is not admitted before the write")
-	}
-	return e
+	e.pats.live[authID.String()] = adoPAT{AuthorizationID: authID.String()}
+	return run, grant, authID
 }
 
 // withdrawRow is the minted_pat connection opted in to runner_resident.
@@ -115,13 +125,13 @@ func withdrawSite(edit func(*types.GitProvider)) types.SiteConfig {
 	return types.SiteConfig{WorkspaceProviders: &types.WorkspaceProviders{Git: []types.GitProvider{row}}}
 }
 
-// revoked reports the token's row closed, with its reason.
-func (e *withdrawEnv) revoked() (bool, string) {
+// revoked reports the row of the token authID closed, with its reason.
+func (e *withdrawEnv) revoked(authID uuid.UUID) (bool, string) {
 	e.t.Helper()
 	var closed bool
 	var reason string
 	if err := e.pool.QueryRow(context.Background(), `SELECT revoked_at IS NOT NULL, revoke_reason FROM ado_run_pats WHERE authorization_id = $1`,
-		e.authID).Scan(&closed, &reason); err != nil {
+		authID).Scan(&closed, &reason); err != nil {
 		e.t.Fatal(err)
 	}
 	return closed, reason
@@ -164,7 +174,7 @@ func TestPG_WithdrawnLocalDeliveryRevokesAtTheWrite(t *testing.T) {
 		"delivery policy refuses, held then approved": {withdrawResident, func(e *withdrawEnv) {
 			e.t.Setenv(envGovernanceSecondHuman, "true")
 			ch := e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/credential-delivery", `{"classes":{"ado_minted_pat":{"mode":"refuse"}}}`))
-			if closed, _ := e.revoked(); closed {
+			if closed, _ := e.revoked(e.authID); closed {
 				e.t.Fatal("a held change revoked the token before it was approved")
 			}
 			e.approve(ch.ID)
@@ -178,6 +188,21 @@ func TestPG_WithdrawnLocalDeliveryRevokesAtTheWrite(t *testing.T) {
 				e.t.Fatal(err)
 			}
 		}, true},
+		"runner posture: a token on another runner is not judged": {withdrawEncrypted, func(e *withdrawEnv) {
+			// Withdrawn already (its runner reports no encrypted disk), so only the runner filter keeps it.
+			other := e.claimedRunner(withdrawOwner)
+			if _, err := e.pg.RecordRunnerPosture(context.Background(), other, types.RunnerPosture{OS: "linux", Evidence: types.PostureEvidenceOSProbe}, time.Now()); err != nil {
+				e.t.Fatal(err)
+			}
+			_, _, otherAuth := e.localRun(other)
+			ev := runnerwire.Event{Data: mustJSON(types.RunnerPosture{OS: "linux", DiskEncrypted: false, Evidence: types.PostureEvidenceOSProbe})}
+			if err := e.srv.PostureFromRunner(context.Background(), e.runner, ev); err != nil {
+				e.t.Fatal(err)
+			}
+			if closed, _ := e.revoked(otherAuth); closed || slices.Contains(e.pats.revokedIDs(), otherAuth.String()) {
+				e.t.Fatal("a posture report revoked a token held by a run on another runner")
+			}
+		}, true},
 		"control: a site config write that withdraws nothing": {withdrawResident, func(e *withdrawEnv) {
 			sc := withdrawSite(func(*types.GitProvider) {})
 			sc.SignInHelpText = "Ask the service desk."
@@ -187,7 +212,7 @@ func TestPG_WithdrawnLocalDeliveryRevokesAtTheWrite(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			e := newWithdrawEnv(t, tc.policy)
 			tc.write(e)
-			closed, reason := e.revoked()
+			closed, reason := e.revoked(e.authID)
 			atADO := slices.Contains(e.pats.revokedIDs(), e.authID.String())
 			if tc.revokes && (!closed || reason != adoPATRevokeDrift || !atADO) {
 				t.Fatalf("after the write: closed=%v reason=%q revoked at Azure DevOps=%v, want the token revoked with reason drift", closed, reason, atADO)

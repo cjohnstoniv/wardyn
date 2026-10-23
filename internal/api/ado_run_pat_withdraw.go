@@ -18,7 +18,7 @@ package api
 //     (applyCredentialDeliveryChange);
 //   - the runner's trust class: handlePutRunnerTrust and its held change
 //     (applyRunnerTrustChange);
-//   - the runner's posture: PostureFromRunner.
+//   - the runner's posture: PostureFromRunner, for that runner's runs only.
 
 import (
 	"context"
@@ -37,6 +37,14 @@ import (
 // is logged and audited by revokeRunPATs, and the run's next resolve judges it
 // again.
 func (s *Server) revokeWithdrawnLocalPATs(ctx context.Context) {
+	s.revokeWithdrawn(ctx, uuid.Nil)
+}
+
+// revokeWithdrawn is revokeWithdrawnLocalPATs narrowed to the runs bound to
+// onRunner, unless that is uuid.Nil. A runner's posture report can withdraw
+// only its own runs, and it is judged in the runner's event loop, so it judges
+// no other runner's.
+func (s *Server) revokeWithdrawn(ctx context.Context, onRunner uuid.UUID) {
 	st, ok := s.cfg.Store.(store.RunPATStore)
 	if !ok {
 		return
@@ -54,18 +62,19 @@ func (s *Server) revokeWithdrawnLocalPATs(ctx context.Context) {
 			continue
 		}
 		judged[p.RunID] = true
-		if s.localResidentWithdrawn(ctx, p.RunID) {
+		if s.localResidentWithdrawn(ctx, p.RunID, onRunner) {
 			s.revokeRunPATs(ctx, p.RunID, adoPATRevokeDrift)
 		}
 	}
 }
 
-// localResidentWithdrawn reports whether runID is a live local run with a
-// runner_resident Azure DevOps grant its delivery no longer admits. A read that
-// fails withdraws nothing.
-func (s *Server) localResidentWithdrawn(ctx context.Context, runID uuid.UUID) bool {
+// localResidentWithdrawn reports whether runID is a live local run, bound to
+// onRunner unless that is uuid.Nil, with a runner_resident Azure DevOps grant its
+// delivery no longer admits. A read that fails withdraws nothing.
+func (s *Server) localResidentWithdrawn(ctx context.Context, runID, onRunner uuid.UUID) bool {
 	run, err := s.cfg.Store.GetRun(ctx, runID)
-	if err != nil || run.State.IsTerminal() || run.Placement != types.PlacementLocal || run.RunnerID == nil {
+	if err != nil || run.State.IsTerminal() || run.Placement != types.PlacementLocal || run.RunnerID == nil ||
+		(onRunner != uuid.Nil && *run.RunnerID != onRunner) {
 		return false
 	}
 	grants, err := s.cfg.Store.ListGrantsByRun(ctx, runID)
