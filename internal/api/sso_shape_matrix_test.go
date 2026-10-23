@@ -54,7 +54,7 @@ func TestSSOShapeRoleMatrix(t *testing.T) {
 			for key, rc := range routeMatrix {
 				method, pattern, _ := strings.Cut(key, " ")
 				switch rc.class {
-				case classAdmin, classSecurity:
+				case classAdmin, classSecurity, classUnit:
 					t.Run(key, func(t *testing.T) { probeGatedRoute(t, srv, method, pattern, rc, cast) })
 				case classMember:
 					t.Run(key, func(t *testing.T) { probeMemberRoute(t, srv, method, pattern, rc, cast) })
@@ -134,7 +134,7 @@ func probeGatedRoute(t *testing.T, srv *Server, method, pattern string, rc class
 	body, p := bodyFor(method, rc), buildPath(pattern, "x1")
 	assertNotBlocked(t, "admin", doSSO(t, srv, method, p, cast.admin.cookie, body))
 	w := doSSO(t, srv, method, p, cast.sec.cookie, body)
-	if rc.class == classSecurity {
+	if rc.class == classSecurity || rc.class == classUnit {
 		assertNotBlocked(t, "security_admin", w)
 	} else if w.Code != http.StatusForbidden {
 		t.Errorf("security_admin on a super route: %d, want 403", w.Code)

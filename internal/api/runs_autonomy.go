@@ -152,7 +152,7 @@ func (s *Server) autonomyLadder(w http.ResponseWriter, r *http.Request, req *cre
 		s.refuse(w, r, authz.Deny(src.reason, "runs.task_mode", fmt.Sprintf(
 			"`task_mode=exec` is not allowed by %s at this run's posture: it permits autonomy level %s (bound by %s), "+
 				"and an exec run carries no agent and no tool approvals, so nothing supervises it. Launch with an agent instead.",
-			src.phrase, level, bound)).WithPolicy(src.policy))
+			src.phrase, level, bound)).WithPolicy(src.policy).OnKnob(src.knob))
 		return nil, false
 	}
 	// The shell boot seed ranks WITH exec, not with seed_auto_tools, because it
@@ -168,21 +168,21 @@ func (s *Server) autonomyLadder(w http.ResponseWriter, r *http.Request, req *cre
 			"a startup command is not allowed by %s at this run's posture: it permits autonomy level %s (bound by %s), "+
 				"and with `interactive_start` unset or `shell` an interactive run's task runs as a shell command at sandbox boot, before anyone attaches — "+
 				"what `task_mode=exec` does. Launch with `interactive_start=agent` to hand the task to the agent as its first prompt, or without a task.",
-			src.phrase, level, bound)).WithPolicy(src.policy))
+			src.phrase, level, bound)).WithPolicy(src.policy).OnKnob(src.knob))
 		return nil, false
 	}
 	if level.Rank() < types.AutonomyL2.Rank() && req.SeedAutoTools {
 		s.refuse(w, r, authz.Deny(src.reason, "runs.seed_auto_tools", fmt.Sprintf(
 			"`seed_auto_tools` is not allowed by %s at this run's posture: it permits autonomy level %s (bound by %s), "+
 				"and the pre-attach seed runs before any human is at the pane. Launch without it.",
-			src.phrase, level, bound)).WithPolicy(src.policy))
+			src.phrase, level, bound)).WithPolicy(src.policy).OnKnob(src.knob))
 		return nil, false
 	}
 	if level.Rank() < types.AutonomyL1.Rank() && !interactive {
 		s.refuse(w, r, authz.Deny(src.reason, "runs.interactive", fmt.Sprintf(
 			"unattended runs are not allowed by %s at this run's posture: it permits autonomy level %s (bound by %s), "+
 				"which requires a human at the pane. Launch with `--interactive`, or narrow the run's egress, secrets or confinement.",
-			src.phrase, level, bound)).WithPolicy(src.policy))
+			src.phrase, level, bound)).WithPolicy(src.policy).OnKnob(src.knob))
 		return nil, false
 	}
 	return s.autonomyDerive(w, r, req, level, bound, src, interactive)
@@ -229,7 +229,7 @@ func (s *Server) autonomyDerive(w http.ResponseWriter, r *http.Request, req *cre
 		s.refuse(w, r, authz.Deny(src.reason, "runs.agent", fmt.Sprintf(
 			"%s is not supported under %s at this run's posture: it permits autonomy level %s (bound by %s), which routes an "+
 				"unattended run's tool calls to a Wardyn approval, and this agent has no external tool-approval contract. Launch a different agent, or launch interactively.",
-			autonomyAgentLabel(agents[i]), src.phrase, level, bound)).WithPolicy(src.policy))
+			autonomyAgentLabel(agents[i]), src.phrase, level, bound)).WithPolicy(src.policy).OnKnob(src.knob))
 		return nil, false
 	}
 	if req.ToolApprovals == "hold" {

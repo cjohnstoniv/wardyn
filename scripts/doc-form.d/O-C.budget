@@ -171,6 +171,7 @@
 # docs/OPERATIONS.md 58711 = ours 58681 + theirs 57531 - base 57501 at the 0.10 W4d merge of RDIAG-B onto the train.
 # docs/OPERATIONS.md 59906 = ours 58872 + theirs 58785 - base 57751 at the 0.10 W4c merge of origin/main 7e33976ca onto the train.
 # docs/OPERATIONS.md=58785 adds 63 (0.10 TREE-MODEL): the unit-tree migration row.
+# docs/OPERATIONS.md 58948 adds 100 over 58848, measured (0.10 unit admins): 52 for the 0210 migration row the base already carries, 48 for the 0228 row (first numbered 0211) and the unit-admins task-page link.
 # docs/OPERATIONS.md 59969 = ours 59906 + theirs 58848 - base 58785 at the 0.10 W4c merge of W4h 2ccd426db into the W4X train.
 # 0.10 MISC-B (#3374): docs/OPERATIONS.md 57713 adds 23, measured: the 0200 migration line.
 # 0.10 MISC-B merge of main: docs/OPERATIONS.md 57774 = ours 57713 + theirs 57751 - base 57690, measured.
@@ -187,7 +188,8 @@
 # M10 (#113, #112): docs/OPERATIONS.md 58699 adds 79 over 58620, measured: the 0204 user_drives_second_place migration line and its Before you upgrade note.
 # docs/OPERATIONS.md 59098 = ours 59019 + theirs 58699 - base 58620 at the 0.10 W4f merge of DRV-M10 onto the train.
 # docs/OPERATIONS.md 60282 = ours 59969 + theirs 59098 - base 58785 at the 0.10 W4c merge of W4f a55a58e89 into the W4X train.
-docs/OPERATIONS.md=60282
+# docs/OPERATIONS.md 60382 = ours 58948 + theirs 60282 - base 58848 at the 0.10 UNIT-ADMIN merge of RESTRICT-PIN 35c385de1.
+docs/OPERATIONS.md=60382
 # docs/OPERATIONS.md 57751 = ours 57562 + theirs 57690 - base 57501 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/OPERATIONS.md 57722 = ours + theirs - base at the 0.10 HYB-C merge of main onto VM-A, measured.
 # docs/OPERATIONS.md 55840 adds 124 over 55716, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.

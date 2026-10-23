@@ -122,7 +122,7 @@ func (s *Server) writeScanLaunchRefusal(w http.ResponseWriter, r *http.Request, 
 	// A limit refuses a well-formed request, so 403 with the limit's own
 	// sentence, as the record and sign-in lanes answer it.
 	if errors.Is(err, errRecordCeilingLimit) {
-		writeErrorReasonPolicy(w, http.StatusForbidden, reasonRecordCeilingLimit, strings.TrimPrefix(err.Error(), errRecordCeilingLimit.Error()+": "), recordCeilingRef(err))
+		writeErrorReasonPolicy(w, http.StatusForbidden, reasonRecordCeilingLimit, strings.TrimPrefix(err.Error(), errRecordCeilingLimit.Error()+": "), recordCeilingRef(err), recordCeilingKnob(err))
 		return true
 	}
 	if errors.Is(err, errGroupsSnapshotStale) {

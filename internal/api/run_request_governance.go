@@ -120,7 +120,7 @@ func (s *Server) runGovernancePosture(r *http.Request, req createRunRequest, cei
 	// door that routes around the gate entirely.
 	if ceiling.Limits.DenyTaskModeExec && req.TaskMode == "exec" {
 		return runDenied(authz.Deny(authz.ReasonGovernanceUnit, "runs.task_mode", fmt.Sprintf(
-			"`task_mode=exec` is not allowed by your governance profile %q — an exec run carries no agent and no tool approvals, so nothing supervises it. Launch with an agent instead.", name)).WithPolicy(policy))
+			"`task_mode=exec` is not allowed by your governance profile %q — an exec run carries no agent and no tool approvals, so nothing supervises it. Launch with an agent instead.", name)).WithPolicy(policy).OnKnob(ceiling.lockOf("deny_task_mode_exec")))
 	}
 	// The same door through an interactive run: a task with interactive_start
 	// unset or "shell" is run by the image as `bash -lc` at boot, before anyone
@@ -128,7 +128,8 @@ func (s *Server) runGovernancePosture(r *http.Request, req createRunRequest, cei
 	// and the seed cannot disagree; `!= "agent"` keeps an unknown value refused.
 	if ceiling.Limits.DenyTaskModeExec && req.InteractiveStart != "agent" && interactiveBootSeed(requestIsInteractive(req), req.Task) != "" {
 		return runDenied(authz.Deny(authz.ReasonGovernanceUnit, "runs.interactive_start", fmt.Sprintf(
-			"a shell startup command is not allowed by your governance profile %q — with `interactive_start` unset or `shell` the task runs as a shell command at sandbox boot, before anyone attaches, unattended the way exec does. Launch with `interactive_start=agent`, or without a task.", name)).WithPolicy(policy))
+			"a shell startup command is not allowed by your governance profile %q — with `interactive_start` unset or `shell` the task runs as a shell command at sandbox boot, before anyone attaches, unattended the way exec does. Launch with `interactive_start=agent`, or without a task.", name)).WithPolicy(policy).
+			OnKnob(ceiling.lockOf("deny_task_mode_exec")))
 	}
 	// Post-coercion, and that is the whole gate. req.Interactive is still the RAW
 	// field here — this function runs before the empty-task→interactive coercion
@@ -136,7 +137,7 @@ func (s *Server) runGovernancePosture(r *http.Request, req createRunRequest, cei
 	// is the one request shape a deny_interactive profile most needs to refuse.
 	if ceiling.Limits.DenyInteractive && (req.Interactive || (complete && requestIsInteractive(req))) {
 		return runDenied(authz.Deny(authz.ReasonGovernanceUnit, "runs.interactive", fmt.Sprintf(
-			"interactive runs are not allowed by your governance profile %q, and a request with no task comes up interactive too. Launch with a task, and without `--interactive`.", name)).WithPolicy(policy))
+			"interactive runs are not allowed by your governance profile %q, and a request with no task comes up interactive too. Launch with a task, and without `--interactive`.", name)).WithPolicy(policy).OnKnob(ceiling.lockOf("deny_interactive")))
 	}
 	return nil
 }
@@ -156,7 +157,7 @@ func (s *Server) runGovernanceSupervision(r *http.Request, req createRunRequest,
 	// scoped to the derivation's non-interactive lane the way the codex one is.
 	if req.SeedAutoTools {
 		return runDenied(authz.Deny(authz.ReasonGovernanceUnit, "runs.seed_auto_tools", fmt.Sprintf(
-			"`seed_auto_tools` is not allowed by your governance profile %q: its tool rules hold or deny, and the pre-attach seed runs before any human is at the pane. Launch without it.", name)).WithPolicy(policy))
+			"`seed_auto_tools` is not allowed by your governance profile %q: its tool rules hold or deny, and the pre-attach seed runs before any human is at the pane. Launch without it.", name)).WithPolicy(policy).OnKnob(ceiling.lockOf("tool_rules")))
 	}
 	// A command run can start any harness it includes, and nothing pauses a
 	// harness a command starts: the DenyTaskModeExec rationale, on the hold-rules
@@ -164,7 +165,7 @@ func (s *Server) runGovernanceSupervision(r *http.Request, req createRunRequest,
 	if req.TaskMode == "exec" {
 		if t, ok := primaryHarness(req); ok {
 			return runDenied(authz.Deny(authz.ReasonGovernanceUnit, "runs.tools", fmt.Sprintf(
-				"A harness your command can start is not allowed under your governance profile %q: its tool rules hold or deny, and nothing can pause a harness a command starts. Remove the harness, or choose an interactive environment.", name)).WithPolicy(policy).With("tool", t.ID))
+				"A harness your command can start is not allowed under your governance profile %q: its tool rules hold or deny, and nothing can pause a harness a command starts. Remove the harness, or choose an interactive environment.", name)).WithPolicy(policy).OnKnob(ceiling.lockOf("tool_rules")).With("tool", t.ID))
 		}
 	}
 	// Scoped to exactly the case where effectiveToolApprovals WOULD derive
@@ -174,7 +175,7 @@ func (s *Server) runGovernanceSupervision(r *http.Request, req createRunRequest,
 	// field the caller never set.
 	if !requestIsInteractive(req) && slices.Contains(taskAgents(req), codexHarness) {
 		return runDenied(authz.Deny(authz.ReasonGovernanceUnit, "runs.agent", fmt.Sprintf(
-			"codex-cli is not supported under your governance profile %q: its tool rules hold or deny, and codex-cli has no external tool-approval contract. Launch a different agent.", name)).WithPolicy(policy))
+			"codex-cli is not supported under your governance profile %q: its tool rules hold or deny, and codex-cli has no external tool-approval contract. Launch a different agent.", name)).WithPolicy(policy).OnKnob(ceiling.lockOf("tool_rules")))
 	}
 	return nil
 }
@@ -193,5 +194,5 @@ func (s *Server) runQuotaRefusal(r *http.Request, ceiling governanceCeiling) *ru
 	}
 	return runDenied(authz.Deny(authz.ReasonRunQuota, "runs.quota", fmt.Sprintf(
 		"too many runs at once (max %d) — your governance profile %q caps how many runs you can have going, and %d are still active. Stop one first.",
-		limit, ceiling.Unit.Name, active)).WithPolicy(s.ceilingPolicy(r.Context(), ceiling)))
+		limit, ceiling.Unit.Name, active)).WithPolicy(s.ceilingPolicy(r.Context(), ceiling)).OnKnob(ceiling.lockOf("max_concurrent_runs")))
 }

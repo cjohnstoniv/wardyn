@@ -40,7 +40,7 @@ func govCovBuildErrAt(t *testing.T, s *Server, all []types.GovernanceUnit, id uu
 	if msg != "" {
 		t.Fatalf("fixture body refused before the build: %s", msg)
 	}
-	_, _, _, err := s.buildGovernanceUnit("alice", true, id, req, all, limit)
+	_, _, _, err := s.buildGovernanceUnit("alice", true, id, req, all, types.Boundary{Mode: types.BoundaryNoLimits}, limit)
 	return err
 }
 

@@ -246,7 +246,7 @@ func (s *Server) handleProviderSignIn(w http.ResponseWriter, r *http.Request) {
 	run, dispatch, err := s.launchHarnessLoginRun(r.Context(), actor, hl, t)
 	if err != nil {
 		if errors.Is(err, errRecordCeilingLimit) {
-			writeErrorReasonPolicy(w, http.StatusForbidden, reasonRecordCeilingLimit, strings.TrimPrefix(err.Error(), errRecordCeilingLimit.Error()+": "), recordCeilingRef(err))
+			writeErrorReasonPolicy(w, http.StatusForbidden, reasonRecordCeilingLimit, strings.TrimPrefix(err.Error(), errRecordCeilingLimit.Error()+": "), recordCeilingRef(err), recordCeilingKnob(err))
 			return
 		}
 		if errors.Is(err, errSignInBusy) {

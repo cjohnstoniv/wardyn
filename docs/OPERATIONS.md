@@ -42,7 +42,7 @@ user, same host](#second-user-same-host)". Deciding who can do what:
 - [Kubernetes: day-2](#kubernetes-day-2)
 - [High availability](#high-availability)
 - [Kubernetes: known gaps](operations/kubernetes-known-gaps.md#kubernetes-known-gaps)
-- Task pages under [`docs/operations/`](operations/): [Managed laptops: client-mode runners](operations/hybrid-laptops.md), [Runner pools](operations/runner-pools.md#runner-pools-where-a-run-goes), [Launch presets](operations/launch-presets.md#launch-presets), [Console branding](operations/console-branding.md#console-branding), [The Wardyn boundary](operations/boundary.md#the-wardyn-boundary-the-outermost-layer-of-every-run), [Approval rules](operations/approval-rules.md#approval-rules-a-security-admins-rule-approves-a-service-identitys-held-call)
+- Task pages under [`docs/operations/`](operations/): [Managed laptops: client-mode runners](operations/hybrid-laptops.md), [Runner pools](operations/runner-pools.md#runner-pools-where-a-run-goes), [Launch presets](operations/launch-presets.md#launch-presets), [Console branding](operations/console-branding.md#console-branding), [The Wardyn boundary](operations/boundary.md#the-wardyn-boundary-the-outermost-layer-of-every-run), [Approval rules](operations/approval-rules.md#approval-rules-a-security-admins-rule-approves-a-service-identitys-held-call), [Unit admins](operations/unit-admins.md#unit-admins-governing-one-part-of-the-tree)
 
 </details>
 
@@ -4030,6 +4030,8 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0224` (`0224_approval_rules`) creates `approval_rules`, the security tier's approval rules ([approval-rules.md](operations/approval-rules.md)); a split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `approval_rules`.
 - `0225` (`0225_user_drives_second_place`) adds `alt_backend`, `alt_host_root` and `alt_runner_id` to `user_drives` (`0054`'s table; the runner references `runners`): a share's second place, the same share as one person's own runner sees it. All three are NULL on every existing drive, which mounts exactly as before. Before you upgrade: a drive becomes reachable on a person's own runner only once an admin binds it to that runner and the runner's owner starts `wardyn-runnerd` with a `--drive-root` covering the path; nothing else changes reach.
 - `0226` (`0226_governance_change_tree_ops`) admits held-change ops `move` and `promote`; no row or grant changes.
+- `0227` (`0227_governance_restrictions`): a split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `governance_restrictions` and `governance_restriction_members`.
+- `0228` (`0228_governance_unit_admins`) creates `governance_unit_admins` (the people and IdP groups who administer a unit and the units below it) and adds `locked_knobs` to `governance_units` and `governance_boundary` (a constant-default array, so no row is rewritten); a split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `governance_unit_admins`.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.

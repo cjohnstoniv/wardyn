@@ -57,7 +57,7 @@ func govCovBuilt(t *testing.T, s *Server, all []types.GovernanceUnit, id uuid.UU
 	if msg != "" {
 		t.Fatalf("fixture body refused: %s", msg)
 	}
-	p, res, _, err := s.buildGovernanceUnit("alice", true, id, req, all, maxUnitDepthDefault)
+	p, res, _, err := s.buildGovernanceUnit("alice", true, id, req, all, types.Boundary{Mode: types.BoundaryNoLimits}, maxUnitDepthDefault)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}

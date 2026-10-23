@@ -449,7 +449,7 @@ func (s PG) MergeWorkspaceRequirements(ctx context.Context, id uuid.UUID, add ma
 		SET requirements = COALESCE(requirements, '{}'::jsonb) || $2::jsonb, updated_at = now()
 		WHERE id = $1
 		  AND (SELECT count(*) FROM jsonb_object_keys(COALESCE(requirements, '{}'::jsonb) || $2::jsonb)) <= 256
-		RETURNING `+wsCols, id, patch))
+		RETURNING `+wsReadCols, id, patch))
 	if errors.Is(err, ErrNotFound) {
 		// Distinguish "no such workspace" from "cap reached" for the caller.
 		if _, gerr := s.GetWorkspace(ctx, id); gerr == nil {

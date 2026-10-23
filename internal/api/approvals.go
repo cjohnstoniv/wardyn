@@ -423,7 +423,8 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	// The Wardyn boundary bounds every decider's approve (boundary_meet.go), after the member gate so the
 	// refusal is never an existence oracle.
 	if approve && ap.Kind == types.ApprovalEgressDomain {
-		if run, haveRun, ok = s.boundaryAdmitApproval(w, r, ap, run, haveRun); !ok {
+		// A restriction on the run's owner bounds it the same way (governance_restrictions.go).
+		if run, haveRun, ok = s.admitApprovalBounds(w, r, ap, run, haveRun); !ok {
 			return
 		}
 	}

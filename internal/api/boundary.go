@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -38,7 +39,32 @@ const (
 
 // boundaryState is the part of the boundary a write replaces and an approval compares.
 func boundaryState(b types.Boundary) types.BoundaryWrite {
-	return types.BoundaryWrite{Mode: b.Mode, Spec: b.Spec, Limits: b.Limits, Contact: b.Contact}
+	w := types.BoundaryWrite{Mode: b.Mode, Spec: b.Spec, Limits: b.Limits, Contact: b.Contact}
+	if len(b.LockedKnobs) > 0 {
+		locks := slices.Clone(b.LockedKnobs)
+		w.LockedKnobs = &locks
+	}
+	return w
+}
+
+// boundaryLocksRefusal checks a boundary write's locks against the units as they stand: an unknown
+// knob is a 422, and a lock newly binding a knob a unit states with another value is a 409 naming
+// them (clearing their values would widen them). body's list is normalized in place.
+func boundaryLocksRefusal(body *types.BoundaryWrite, cur types.Boundary, units []types.GovernanceUnit) *unitWriteError {
+	if body.LockedKnobs == nil {
+		return nil
+	}
+	locks, msg := normalizeLockedKnobs(*body.LockedKnobs)
+	if msg != "" {
+		return writeRefusal(http.StatusUnprocessableEntity, reasonBoundaryInvalid, "invalid Wardyn boundary: %s", msg)
+	}
+	body.LockedKnobs = &locks
+	after := types.Boundary{Mode: body.Mode, Spec: body.Spec, Limits: body.Limits, LockedKnobs: locks}
+	if conflicts := boundaryLockConflicts(units, cur, after); len(conflicts) > 0 {
+		return writeRefusal(http.StatusConflict, reasonUnitKnobLocked,
+			"these units set a knob this boundary locks to another value; change them first: %s", strings.Join(conflicts, ", "))
+	}
+	return nil
 }
 
 // validateBoundary refuses a write the boundary cannot hold: a missing or unknown mode, a bad
@@ -132,6 +158,20 @@ func (s *Server) handlePutBoundary(w http.ResponseWriter, r *http.Request) {
 			"If-Match does not match the current Wardyn boundary — GET /governance/boundary again and retry")
 		return
 	}
+	if body.LockedKnobs == nil {
+		body.LockedKnobs = before.LockedKnobs // absent keeps the stored locks, and the diff says so
+	}
+	if body.LockedKnobs != nil {
+		units, err := s.unitTreeRows(r.Context())
+		if err != nil {
+			writeServerError(w, r, "read governance units", err)
+			return
+		}
+		if ref := boundaryLocksRefusal(&body, cur, units); ref != nil {
+			writeErrorReason(w, ref.status, ref.reason, ref.msg)
+			return
+		}
+	}
 	if mode == govQueue {
 		s.proposeGovernanceChange(w, r, govProposal{
 			kind: govKindBoundary, op: "replace", key: govBoundaryKey, payload: body,
@@ -179,6 +219,15 @@ func applyBoundaryChange(_ *Server, r *http.Request, q store.Querier, ch types.G
 	if computeETag(before) != ch.BaseHash {
 		return govApplied{}, store.ErrGovernanceChangeStale
 	}
+	if held.LockedKnobs != nil {
+		units, err := store.ListGovernanceUnitsQ(ctx, q)
+		if err != nil {
+			return govApplied{}, err
+		}
+		if ref := boundaryLocksRefusal(&held, cur, units); ref != nil {
+			return govApplied{}, ref
+		}
+	}
 	if _, err := store.PutBoundaryQ(ctx, q, held, principalFromRequest(r)); err != nil {
 		return govApplied{}, err
 	}
@@ -187,8 +236,9 @@ func applyBoundaryChange(_ *Server, r *http.Request, q store.Querier, ch types.G
 
 // boundaryReport is POST /governance/dry-run's answer: every layer and row the boundary as drafted
 // would narrow in hard_limits, knob by knob, computed by boundaryMeet, the function the resolve calls.
-// Rows the boundary leaves as they are are not listed.
+// Rows the boundary leaves as they are are not listed. Target is always "boundary".
 type boundaryReport struct {
+	Target         string                 `json:"target"`
 	Deployment     []boundaryChange       `json:"deployment"`
 	Units          []boundaryReportRow    `json:"units"`
 	StoredPolicies []boundaryReportRow    `json:"stored_policies"`
@@ -224,6 +274,11 @@ func (s *Server) handleBoundaryDryRun(w http.ResponseWriter, r *http.Request) {
 		s.treeDryRun(w, r, head.Target, raw)
 		return
 	}
+	if s.isUnitAdminCaller(r.Context()) {
+		// The route is on the unit-admin tier for its unit targets; the boundary is never a unit admin's.
+		s.refuseOutsideScope(w, r, "governance.boundary")
+		return
+	}
 	var body struct {
 		dryRunTarget
 		types.BoundaryWrite
@@ -241,10 +296,8 @@ func (s *Server) handleBoundaryDryRun(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "Wardyn boundary dry run", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, struct {
-		Target string `json:"target"`
-		boundaryReport
-	}{dryRunTargetBoundary, report})
+	report.Target = dryRunTargetBoundary
+	writeJSON(w, http.StatusOK, report)
 }
 
 // boundaryDryRun meets the deployment default, each profile as it composes, each stored policy and so
@@ -343,7 +396,7 @@ func (s *Server) admitBreakGlass(w http.ResponseWriter, r *http.Request) (*http.
 	reason := strings.TrimSpace(r.Header.Get(breakGlassReasonHeader))
 	if reason == "" || utf8.RuneCountInString(reason) > maxGovernanceRejectReasonLen || !controlCharFree(reason) {
 		writeErrorReason(w, http.StatusBadRequest, reasonBreakGlassReasonRequired,
-			"the Wardyn boundary is in hard_limits and units with their own walls exist: an admin-token run lifts their walls, so it is a break-glass run and needs a reason in the "+breakGlassReasonHeader+
+			"the Wardyn boundary is in hard_limits and units with their own walls or restrictions exist: an admin-token run lifts their walls, so it is a break-glass run and needs a reason in the "+breakGlassReasonHeader+
 				" header (at most 512 characters, no control characters)")
 		return r, false
 	}
@@ -354,15 +407,24 @@ func (s *Server) admitBreakGlass(w http.ResponseWriter, r *http.Request) (*http.
 // hard_limits and at least one unit with its own walls exists, whose walls the admin token stands
 // outside. The Default unit (the deployment default) does not count: the admin token never was held
 // to it; nor does a pass-through unit, which adds nothing. With no such unit there is nothing to
-// lift, so the run is an ordinary one, bound by the boundary, untagged. Restrictions join this test
-// with the RESTRICT-PIN lane. A boundary that bounds nothing (the fresh-install seed) asks no reason, as no_limits.
+// lift, so the run is an ordinary one, bound by the boundary, untagged. A restriction is a wall the
+// admin token stands outside too, so one existing counts like a unit with its own walls. A boundary
+// that bounds nothing (the fresh-install seed) asks no reason, restrictions or not, as no_limits.
 func (s *Server) breakGlassLifts(ctx context.Context) (bool, error) {
 	b, err := s.governanceBoundary(ctx)
 	if err != nil || !b.HardLimits() || boundaryBoundsNothing(b, boundaryOverlay(b)) {
 		return false, err
 	}
 	units, err := s.cfg.Store.CountOwnWallsUnits(ctx)
-	return units > 0, err
+	if err != nil || units > 0 {
+		return units > 0, err
+	}
+	rs, ok := s.restrictionStore()
+	if !ok {
+		return false, nil
+	}
+	n, err := rs.CountRestrictions(ctx)
+	return n > 0, err
 }
 
 // stampBreakGlass records a break-glass run on its run.create datum and writes its run.break_glass.open

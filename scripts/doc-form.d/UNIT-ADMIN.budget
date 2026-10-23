@@ -1,0 +1,3 @@
+# Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the measured prose words of the page, so growth fails.
+# docs/operations/unit-admins.md 714 measured: who holds a grant, the scoped routes, four-eyes, locks and the grant steps.
+docs/operations/unit-admins.md=714 share=35

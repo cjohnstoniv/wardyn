@@ -160,6 +160,7 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 		if refusal != nil {
 			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
 		}
+		source.knobs.markLocked(ceiling)
 		clampWarnings = append(clampWarnings, wallWarns...)
 		// Audit the use of an inline (non-stored) policy. The run id is not yet
 		// minted at this point, so this event carries a nil run id (like the
@@ -301,6 +302,7 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 	if refusal != nil {
 		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
 	}
+	source.knobs.markLocked(ceiling)
 	storedWarns = append(storedWarns, wallWarns...)
 	if refusal := patDuplicatesRunRefusal("invalid policy: ", spec); refusal != nil {
 		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal

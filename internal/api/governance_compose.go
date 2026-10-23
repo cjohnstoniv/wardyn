@@ -68,10 +68,13 @@ type ResolvedUnit struct {
 	PathProvenance knobProvenance
 }
 
-// unitLink names one profile of a chain.
+// unitLink names one profile of a chain, with the knobs it locks for the units below it and its
+// contact (markLocked reads both).
 type unitLink struct {
-	ID   uuid.UUID
-	Name string
+	ID      uuid.UUID
+	Name    string
+	Locked  []string
+	Contact *policyref.Contact
 }
 
 // overlayUnsatisfiableError is a composition the meet refuses: no value satisfies both the base and
@@ -249,7 +252,7 @@ func (s *Server) composeChain(chain []types.GovernanceUnit) (*ResolvedUnit, erro
 	leaf := chain[0]
 	out := &ResolvedUnit{ID: leaf.ID, Name: leaf.Name, Contact: leaf.Contact, Composed: leaf.Composed()}
 	for _, r := range chain {
-		out.Chain = append(out.Chain, unitLink{ID: r.ID, Name: r.Name})
+		out.Chain = append(out.Chain, unitLink{ID: r.ID, Name: r.Name, Locked: r.LockedKnobs, Contact: r.Contact})
 	}
 	root := len(chain) - 1
 	var base composer.Authority

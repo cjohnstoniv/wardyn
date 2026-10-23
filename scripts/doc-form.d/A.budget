@@ -294,6 +294,7 @@
 # docs/AUDIT-ACTIONS.md 51430 = ours 51396 + theirs 50790 - base 50756 at the 0.10 W4d merge of RENAME onto the train.
 # docs/AUDIT-ACTIONS.md 52595 = ours 51992 + theirs 51430 - base 50827 at the 0.10 W4c merge of origin/main 7e33976ca onto the train.
 # docs/AUDIT-ACTIONS.md=51430 adds 34 (0.10 TREE-MODEL): unit_membership_gone on run.revive and run.end.set, the arm key.
+# docs/AUDIT-ACTIONS.md 51680 adds 216 over 51464, measured (0.10 unit admins): the governance.unit_admin.grant and .revoke rows, actor, approver, unit_scope and locked_knobs on the unit and membership write rows, and unit_scope_denied in authz.denied.
 # docs/AUDIT-ACTIONS.md 52629 = ours 52595 + theirs 51464 - base 51430 at the 0.10 W4c merge of W4h 2ccd426db into the W4X train.
 # docs/AUDIT-ACTIONS.md 50804 measured: the governance.boundary.seed row
 # docs/AUDIT-ACTIONS.md 51478 = ours 51430 + theirs 50804 - base 50756 at the 0.10 W4f merge of G1B onto the train.
@@ -303,7 +304,8 @@
 # docs/AUDIT-ACTIONS.md 51067 adds 110 (0.10 AUD-REDACT round 2): each withheld field named per action, policy and preset mount paths, and site_config.write's recording and runner_resident keys the emit pin found undocumented.
 # docs/AUDIT-ACTIONS.md 51994 = ours 51754 + theirs 51067 - base 50827 at the 0.10 W4f merge of AUD-REDACT onto the train.
 # docs/AUDIT-ACTIONS.md 53193 = ours 52629 + theirs 51994 - base 51430 at the 0.10 W4c merge of W4f a55a58e89 into the W4X train.
-docs/AUDIT-ACTIONS.md=53193 share=8
+# docs/AUDIT-ACTIONS.md 53409 = ours 51680 + theirs 53193 - base 51464 at the 0.10 UNIT-ADMIN merge of RESTRICT-PIN 35c385de1.
+docs/AUDIT-ACTIONS.md=53409 share=8
 # docs/AUDIT-ACTIONS.md 50827 = ours 50175 + theirs 50556 - base 49904 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.

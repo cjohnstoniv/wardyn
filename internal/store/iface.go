@@ -77,6 +77,9 @@ type Store interface {
 	// to the operator via owner ""). Scoped and separate from UpdateWorkspace so no ordinary edit
 	// can move ownership or race a concurrent async scan.
 	SetWorkspaceOwner(ctx context.Context, id uuid.UUID, owner string) (types.Workspace, error)
+	// SetWorkspaceOwningUnit replaces ONLY owning_unit_id (nil unpins): the pin's one writer, scoped
+	// as SetWorkspaceOwner is, so UpdateWorkspace can never move it. ErrNotFound for an unknown workspace or unit.
+	SetWorkspaceOwningUnit(ctx context.Context, id uuid.UUID, unit *uuid.UUID) (types.Workspace, error)
 	SetWorkspaceRequirements(ctx context.Context, id uuid.UUID, reqs map[string]types.WorkspaceRequirement) (types.Workspace, error)
 	SetWorkspaceRecordResult(ctx context.Context, id uuid.UUID, taskKey string, result json.RawMessage, onlyIfStatus string) (types.Workspace, bool, error)
 	ClaimWorkspaceActiveRun(ctx context.Context, id, runID uuid.UUID, expected *uuid.UUID) (types.Workspace, bool, error)

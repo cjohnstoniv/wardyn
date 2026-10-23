@@ -5,6 +5,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"maps"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -117,6 +119,13 @@ func (s *Server) handleGovernanceCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := contextQuery{users: users, groups: groups, userType: strings.TrimSpace(req.UserType)}
+	var scope map[uuid.UUID]bool // a unit admin's: the units of the person's memberships they govern
+	if s.isUnitAdminCaller(r.Context()) {
+		var ok bool
+		if scope, ok = s.checkScope(w, r, q); !ok {
+			return
+		}
+	}
 	pick, err := s.selectContext(r.Context(), q, contextChoice{})
 	if err != nil {
 		writeServerError(w, r, "resolve governance profile", err)
@@ -132,6 +141,13 @@ func (s *Server) handleGovernanceCheck(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "list governance contexts", err)
 		return
 	}
+	if resp.Restrictions, err = s.checkRestrictions(r.Context(), q); err == nil {
+		resp.Workspaces, err = s.checkWorkspaces(r.Context(), q)
+	}
+	if err != nil {
+		writeServerError(w, r, "list restrictions and workspaces", err)
+		return
+	}
 	runIn, err := s.runInFromRequest(r.Context(), createRunRequest{RunIn: req.RunIn})
 	if err == nil {
 		resp.Effective, err = s.checkEffective(r.Context(), q, contextChoice{RunIn: runIn})
@@ -140,7 +156,53 @@ func (s *Server) handleGovernanceCheck(w http.ResponseWriter, r *http.Request) {
 		ceilingRunRefusal(err).write(s, w, r)
 		return
 	}
+	if scope != nil {
+		resp = resp.within(scope, runIn, pick)
+	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// checkScope is a unit admin's scope over a check: the person the claims describe holds a membership
+// in a unit the caller governs. It answers the in-scope units among the person's memberships, or
+// writes the refusal (ok false).
+func (s *Server) checkScope(w http.ResponseWriter, r *http.Request, q contextQuery) (map[uuid.UUID]bool, bool) {
+	ctx := r.Context()
+	ms, err := s.cfg.Store.ListMembershipsFor(ctx, q.users, q.groups, q.userType)
+	if err != nil {
+		writeServerError(w, r, "read unit scope", err)
+		return nil, false
+	}
+	scope := map[uuid.UUID]bool{}
+	for _, m := range ms {
+		in, err := s.unitScope(ctx, m.Unit.ID, false)
+		if err != nil {
+			writeServerError(w, r, "read unit scope", err)
+			return nil, false
+		}
+		if in {
+			scope[m.Unit.ID] = true
+		}
+	}
+	if len(scope) == 0 {
+		s.refuseOutsideScope(w, r, "governance.check")
+		return nil, false
+	}
+	return scope, true
+}
+
+// within is a check's answer as a unit admin may read it: the contexts and dormant memberships in the
+// units they govern, the home context's fields only when it is one of those, and the effective walls
+// only of a context that is.
+func (c governanceCheckResponse) within(scope map[uuid.UUID]bool, runIn uuid.UUID, home contextPick) governanceCheckResponse {
+	if !scope[c.UnitID] {
+		c.governancePreviewResponse = governancePreviewResponse{}
+	}
+	c.Contexts = slices.DeleteFunc(c.Contexts, func(x checkContext) bool { return !scope[x.UnitID] })
+	c.Dormant = slices.DeleteFunc(c.Dormant, func(x checkDormant) bool { return !scope[x.UnitID] })
+	if asked := cmp.Or(runIn, home.unit.ID); !scope[asked] {
+		c.Effective = nil
+	}
+	return c
 }
 
 // governanceCheckResponse is POST /governance/check's body: the home context's fields above (empty
@@ -151,6 +213,28 @@ type governanceCheckResponse struct {
 	Contexts  []checkContext  `json:"contexts"`
 	Dormant   []checkDormant  `json:"dormant"`
 	Effective *checkEffective `json:"effective"`
+	// Restrictions are the deny-only lists that cover the person, in every unit they run in.
+	Restrictions []checkRestriction `json:"restrictions,omitempty"`
+	// Workspaces are the workspaces the person owns, grouped by the unit each is pinned to (a nil
+	// unit_id is the group pinned to none).
+	Workspaces []checkWorkspaceGroup `json:"workspaces,omitempty"`
+}
+
+// checkRestriction is one restriction covering the person.
+type checkRestriction struct {
+	ID      uuid.UUID               `json:"id"`
+	Name    string                  `json:"name"`
+	Spec    types.RestrictionSpec   `json:"spec"`
+	Limits  types.RestrictionLimits `json:"limits"`
+	Contact *policyref.Contact      `json:"contact,omitempty"`
+}
+
+// checkWorkspaceGroup is the person's workspaces pinned to one unit.
+type checkWorkspaceGroup struct {
+	UnitID   *uuid.UUID `json:"unit_id"`
+	UnitName string     `json:"unit_name,omitempty"`
+	Count    int        `json:"count"`
+	Names    []string   `json:"names"`
 }
 
 // unitPathLink is one unit of a path.
@@ -237,10 +321,15 @@ func unitPath(byID map[uuid.UUID]types.GovernanceUnit, id uuid.UUID) []unitPathL
 }
 
 // checkEffective resolves q's context under choice by the enforcement path's own steps: the context
-// ceiling (contextCeiling, the body of resolveContext) and then the boundary (contextWalls).
+// ceiling (contextCeiling, the body of resolveContext), its restrictions, and then the boundary
+// (contextWalls).
 func (s *Server) checkEffective(ctx context.Context, q contextQuery, choice contextChoice) (*checkEffective, error) {
 	deployment := governanceCeiling{Spec: s.cfg.DefaultPolicy.Clone(), MemberDefault: s.memberDefaultFor(s.cfg.DefaultPolicy.Resources)}
-	c, err := s.contextCeiling(ctx, q, choice, deployment)
+	base, err := s.contextCeilingBelowRestrictions(ctx, q, choice, deployment)
+	if err != nil {
+		return nil, err
+	}
+	c, err := s.applyRestrictions(ctx, q, base)
 	if err != nil {
 		return nil, err
 	}
@@ -248,19 +337,25 @@ func (s *Server) checkEffective(ctx context.Context, q contextQuery, choice cont
 	if err != nil {
 		return nil, err
 	}
-	return contextWalls(deployment, c, b, s.specReadTierFor(ctx))
+	return contextWalls(deployment, base, c, b, s.specReadTierFor(ctx))
 }
 
-// contextWalls is context c met with boundary b. Provenance records the deployment, then c's unit on
-// each knob it changed, then the boundary; PathProvenance the same with c's path step by step
-// (ResolvedUnit.PathProvenance) in place of its unit. POST /governance/check and GET /governance
-// both answer through it, each redacting the ceiling at its own caller's tier.
-func contextWalls(deployment, c governanceCeiling, b types.Boundary, tier specReadTier) (*checkEffective, error) {
+// contextWalls is context c, which is base after its restrictions (c is base when none apply), met
+// with boundary b. Provenance records the deployment, then base's unit on each knob it changed, then
+// the restriction that narrowed a knob, then the boundary, and marks a knob a lock above fixes, as a
+// run's provenance does; PathProvenance the same with base's path step by step
+// (ResolvedUnit.PathProvenance) in place of its unit. POST /governance/check and GET /governance both
+// answer through it, each redacting the ceiling at its own caller's tier.
+func contextWalls(deployment, base, c governanceCeiling, b types.Boundary, tier specReadTier) (*checkEffective, error) {
 	prov := startProvenance(deploymentProvenance)
-	prov.setBy(c.provenance(), deployment.Spec, c.Spec)
+	prov.setBy(base.provenance(), deployment.Spec, base.Spec)
 	path := startProvenance(deploymentProvenance)
-	if c.Unit != nil {
-		path = maps.Clone(c.Unit.PathProvenance)
+	if base.Unit != nil && base.Unit.PathProvenance != nil {
+		path = maps.Clone(base.Unit.PathProvenance)
+	}
+	for name, by := range c.restrictionKnobs {
+		prov[name] = by
+		path[name] = by
 	}
 	bounded, err := boundCeiling(b, c)
 	if err != nil {
@@ -268,6 +363,7 @@ func contextWalls(deployment, c governanceCeiling, b types.Boundary, tier specRe
 	}
 	prov.setBy(boundaryProvenance, c.Spec, bounded.Spec)
 	path.setBy(boundaryProvenance, c.Spec, bounded.Spec)
+	prov.markLocked(bounded)
 	return &checkEffective{Ceiling: redactSpecForRead(bounded.Spec, tier), Limits: bounded.Limits, Provenance: prov, PathProvenance: path}, nil
 }
 
@@ -341,4 +437,57 @@ func normalizeGovernancePreviewGroups(in []string) ([]string, string) {
 		}
 	}
 	return out, ""
+}
+
+// checkRestrictions lists the restrictions covering q, in name order.
+func (s *Server) checkRestrictions(ctx context.Context, q contextQuery) ([]checkRestriction, error) {
+	list, err := s.restrictionsFor(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]checkRestriction, 0, len(list))
+	for _, r := range list {
+		out = append(out, checkRestriction{ID: r.ID, Name: r.Name, Spec: r.Spec, Limits: r.Limits, Contact: r.Contact})
+	}
+	return out, nil
+}
+
+// checkWorkspaces groups the workspaces q's users own by owning unit: the pinned groups in unit-name
+// order, then the unpinned one.
+func (s *Server) checkWorkspaces(ctx context.Context, q contextQuery) ([]checkWorkspaceGroup, error) {
+	out := []checkWorkspaceGroup{}
+	if s.cfg.Store == nil || len(q.users) == 0 {
+		return out, nil
+	}
+	all, err := s.cfg.Store.ListWorkspaces(ctx)
+	if err != nil {
+		return nil, err
+	}
+	byUnit := map[uuid.UUID]*checkWorkspaceGroup{}
+	var unpinned checkWorkspaceGroup
+	for _, ws := range all {
+		if ws.OwnedBy == "" || !slices.Contains(q.users, ws.OwnedBy) {
+			continue
+		}
+		g := &unpinned
+		if ws.OwningUnitID != nil {
+			if byUnit[*ws.OwningUnitID] == nil {
+				id := *ws.OwningUnitID
+				byUnit[id] = &checkWorkspaceGroup{UnitID: &id, UnitName: ws.OwningUnitName}
+			}
+			g = byUnit[*ws.OwningUnitID]
+		}
+		g.Count++
+		g.Names = append(g.Names, ws.Name)
+	}
+	for _, g := range byUnit {
+		slices.Sort(g.Names)
+		out = append(out, *g)
+	}
+	slices.SortFunc(out, func(a, b checkWorkspaceGroup) int { return strings.Compare(a.UnitName, b.UnitName) })
+	if unpinned.Count > 0 {
+		slices.Sort(unpinned.Names)
+		out = append(out, unpinned)
+	}
+	return out, nil
 }

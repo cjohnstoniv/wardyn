@@ -140,7 +140,7 @@ func policyCensusViolations(fset *token.FileSet, name string, f *ast.File) []str
 		if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "WithPolicy" && len(call.Args) == 1 && isBare(call.Args[0], "nil") {
 			at(call, "a refusal that names no policy, so no layer: WithPolicy(nil)")
 		}
-		if isBare(call.Fun, "writeErrorReasonPolicy") && len(call.Args) > 0 && isBare(call.Args[len(call.Args)-1], "nil") {
+		if isBare(call.Fun, "writeErrorReasonPolicy") && len(call.Args) > 4 && isBare(call.Args[4], "nil") {
 			at(call, "a refusal that names no policy, so no layer: writeErrorReasonPolicy(..., nil)")
 		}
 		return true
@@ -246,7 +246,7 @@ func f() { writeErrorReason(w, http.StatusForbidden, reasonRecordCeilingLimit, "
 		{"a wrapped governance_unit refusal passes", `package api
 func f(s *Server) { s.refuse(w, r, authz.Deny(authz.ReasonGovernanceUnit, "runs.x", "no").OnRun(id).WithPolicy(p)) }`, 0},
 		{"reasonRecordCeilingLimit through writeErrorReasonPolicy passes", `package api
-func f() { writeErrorReasonPolicy(w, http.StatusForbidden, reasonRecordCeilingLimit, "no", ref) }`, 0},
+func f() { writeErrorReasonPolicy(w, http.StatusForbidden, reasonRecordCeilingLimit, "no", ref, knob) }`, 0},
 		{"an unwrapped component_autonomy refusal", `package api
 func f(s *Server) { s.refuse(w, r, authz.Deny(authz.ReasonComponentAutonomy, "runs.x", "no")) }`, 1},
 		{"an unwrapped ladder refusal through an autonomySource parameter", `package api
@@ -263,7 +263,7 @@ func f(s *Server) { s.refuse(w, r, authz.Deny(authz.ReasonNotOwner, "run", "no")
 		{"a ceiling refusal wrapped with no policy", `package api
 func f(s *Server) { s.refuse(w, r, authz.Deny(authz.ReasonGovernanceUnit, "runs.x", "no").WithPolicy(nil)) }`, 1},
 		{"reasonRecordCeilingLimit with no policy", `package api
-func f() { writeErrorReasonPolicy(w, http.StatusForbidden, reasonRecordCeilingLimit, "no", nil) }`, 1},
+func f() { writeErrorReasonPolicy(w, http.StatusForbidden, reasonRecordCeilingLimit, "no", nil, knob) }`, 1},
 		{"a hand-built policy ref", `package api
 func f(s *Server) { s.refuse(w, r, authz.Deny(authz.ReasonRunQuota, "runs.quota", "no").WithPolicy(&policyref.Ref{Source: "walls"})) }`, 1},
 		{"an error body whose policy skips the layer stamp", `package api

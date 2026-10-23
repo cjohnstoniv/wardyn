@@ -116,6 +116,16 @@ func planGovernance(current, doc GovernanceDocument, prune bool) (GovernancePlan
 			SubjectType: a.SubjectType, Subject: a.Subject, Unit: profile, ID: &id, Fields: fields})
 	}
 
+	// The grants after the memberships, and their revokes before the membership deletes, as an apply
+	// issues them.
+	admins := newAdminPlan(current, func(name string) (uuid.UUID, bool) {
+		p, ok := profileByName[name]
+		return p.ID, ok
+	}, nil)
+	steps, unchanged := planUnitAdmins(admins, doc.Admins, prune)
+	plan.Steps = append(plan.Steps, steps...)
+	plan.Unchanged += unchanged
+
 	if prune {
 		keepAssignment := make(map[string]bool, len(doc.Memberships))
 		for _, a := range doc.Memberships {
@@ -141,6 +151,7 @@ func planGovernance(current, doc GovernanceDocument, prune bool) (GovernancePlan
 			plan.Steps = append(plan.Steps, ApplyStep{Kind: "unit", Op: "delete", Name: p.Name, ID: &id})
 		}
 	}
+	planRestrictions(current, doc, prune, &plan)
 	plan.Destructive = slices.ContainsFunc(plan.Steps, func(s ApplyStep) bool { return s.Op == "delete" })
 	return plan, nil
 }

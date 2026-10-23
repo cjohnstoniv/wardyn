@@ -80,6 +80,17 @@ func isAdminTokenCaller(r *http.Request) bool {
 	return actorType == types.ActorSystem && principal == adminTokenPrincipal
 }
 
+// unitWriteMode is governanceWriteMode for the routes a unit admin may use (governance_scope.go): a
+// security caller's write follows the switch, unchanged, and so does a security admin's unit-admin
+// grant, so a single-admin install can create unit admins. A unit admin's write is
+// govQueue whatever the switch says: held unless an exemption proves it narrowing (DESIGN-TREE §5.2).
+func (s *Server) unitWriteMode(w http.ResponseWriter, r *http.Request) (govWriteMode, bool) {
+	if s.isUnitAdminCaller(r.Context()) {
+		return govQueue, true
+	}
+	return s.governanceWriteMode(w, r)
+}
+
 // governanceWriteMode decides how a covered write is carried out, having already written its own 503
 // (ok=false) in local mode. The admin token is checked before local mode, so it stays the way past a
 // switch local mode cannot enforce.
@@ -122,10 +133,12 @@ func (s *Server) recordGovernanceBypass(r *http.Request, kind, target, outcome s
 }
 
 // govApprover is who may decide a change of one kind: the predicate of the tier the write was
-// proposed on, never a weaker one, and the refusal reason that tier gives.
+// proposed on, never a weaker one, and the refusal reason that tier gives. scoped marks a predicate
+// that reads the unit scope, which the decision re-reads under the graph lock (recheckApprover).
 type govApprover struct {
 	allowed func(s *Server, r *http.Request) bool
 	reason  authz.Reason
+	scoped  bool
 }
 
 // operatorApprover is the tier of the operatorOnly routes: a super admin only. A security admin who
@@ -182,6 +195,9 @@ var governanceChangeKinds = map[string]govKind{
 	govKindRunnerTrust:         {approver: securityApprover, apply: applyRunnerTrustChange},
 	govKindRunNodeRecord:       {approver: securityApprover, apply: applyRunNodeRecordChange},
 	govKindBoundary:            {approver: securityApprover, apply: applyBoundaryChange},
+	govKindUnitAdmin:           {approver: securityApprover, apply: applyUnitAdminChange},
+	govKindRestriction:         {approver: securityApprover, apply: applyRestrictionChange},
+	govKindWorkspaceOwningUnit: {approver: securityApprover, apply: applyWorkspaceOwningUnitChange},
 	govKindApprovalRule:        {approver: securityApprover, apply: applyApprovalRuleChange},
 }
 
@@ -190,6 +206,9 @@ var governanceChangeKinds = map[string]govKind{
 // super admin decides it; a payload that does not decode is given the stricter tier. So is a profile
 // change whose payload names a mount's host path (a kept mount is held as the sentinel, so only a
 // change that adds a mount, changes a host path or makes a kept mount writable names one).
+//
+// A unit, membership or unit-admin change may also be decided by a unit admin governing every unit it
+// touches (unitChangeApprover, governance_unit_admin.go): the same predicate decides it and shows it.
 func (k govKind) forChange(ch types.GovernanceChange) govKind {
 	switch ch.TargetKind {
 	case govKindRunnerPoolUsePolicy:
@@ -198,9 +217,12 @@ func (k govKind) forChange(ch types.GovernanceChange) govKind {
 			k.approver = operatorApprover
 		}
 	case govKindUnit:
+		k.approver = unitChangeApprover(ch)
 		if profilePayloadSetsHostPath(ch.Payload) {
 			k.approver = operatorApprover
 		}
+	case govKindMembership, govKindUnitAdmin:
+		k.approver = unitChangeApprover(ch)
 	}
 	return k
 }

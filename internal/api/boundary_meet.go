@@ -197,6 +197,15 @@ func (c governanceCeiling) boundaryBoundsEnd() bool {
 // and an operator's unclamped run. Knobs the boundary already narrowed in the ceiling are recorded
 // as the boundary's where the ceiling's layer set them.
 func (s *Server) boundaryRunStep(ceiling governanceCeiling, spec *types.RunPolicySpec, source *policySourceRecord) ([]string, *runRefusal) {
+	warns, refusal := s.boundaryMeetRunStep(ceiling, spec, source)
+	if refusal == nil {
+		ceiling.restrictionRunStep(source.knobs)
+	}
+	return warns, refusal
+}
+
+// boundaryMeetRunStep is boundaryRunStep's meet with the boundary alone.
+func (s *Server) boundaryMeetRunStep(ceiling governanceCeiling, spec *types.RunPolicySpec, source *policySourceRecord) ([]string, *runRefusal) {
 	if !ceiling.bounded() {
 		return nil, nil
 	}

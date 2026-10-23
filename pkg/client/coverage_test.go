@@ -66,6 +66,7 @@ var (
 	_ client.HomeTemplate
 	_ client.DriveReclaim
 	_ client.CapabilitySubjectType
+	_ client.Restriction
 	_ client.PresetsDocument
 	_ client.Preset
 	_ client.PresetRequest
@@ -116,7 +117,7 @@ func routeFamilies() map[string][]string {
 		"runs.list":   {"ListRuns", "ListRunsPage"},
 		"approvals":   {"ListApprovals", "ListApprovalsPage", "Approve", "Deny"},
 		"policies":    {"CreatePolicy", "GetPolicy", "GetDefaultPolicy", "ListPolicies", "ListPoliciesPage", "UpdatePolicy", "DeletePolicy"},
-		"workspaces":  {"CreateWorkspace", "GetWorkspace", "ListWorkspaces", "ListWorkspacesPage", "UpdateWorkspace", "DeleteWorkspace", "ScanWorkspace", "RecordWorkspaceTask", "GetWorkspaceBuild", "BuildWorkspace"},
+		"workspaces":  {"CreateWorkspace", "GetWorkspace", "ListWorkspaces", "ListWorkspacesPage", "UpdateWorkspace", "DeleteWorkspace", "ScanWorkspace", "RecordWorkspaceTask", "GetWorkspaceBuild", "BuildWorkspace", "SetWorkspaceOwningUnit"},
 		"sources":     {"ListSources", "CreateSource", "GetSource", "ScanSource", "DeleteSource"},
 		"audit":       {"AuditEvents", "AuditEventsPage", "RecentAuditEvents", "ExportAuditPartition", "AuditRetention", "DropAuditPartition"},
 		"secrets":     {"ListSecrets", "ListSecretsPage", "ListSecretsScoped", "ListSecretsScopedPage", "SetSecret", "DeleteSecret", "ListMySecrets", "ListMySecretsPage", "SetMySecret", "DeleteMySecret", "ListSharedSecrets", "ListSharedSecretsPage", "SetSharedSecret", "DeleteSharedSecret"},
@@ -125,7 +126,7 @@ func routeFamilies() map[string][]string {
 		"templates":   {"ListTemplates", "GetTemplate", "SaveTemplate", "DeleteTemplate", "CopyTemplate", "ImportTemplate", "ListTemplateGroupAdmins", "GrantTemplateGroupAdmin", "RevokeTemplateGroupAdmin"},
 		"presets":     {"ListPresets", "GetPreset", "PutPreset", "DeletePreset", "ApplyPresets"},
 		"governance": {"GetGovernance", "ApplyGovernance", "ApplyGovernanceResult", "PlanGovernance",
-			"MoveGovernanceMembership", "PromoteGovernanceMembership", "CheckGovernance", "GovernanceDryRun"},
+			"MoveGovernanceMembership", "PromoteGovernanceMembership", "GrantUnitAdmin", "RevokeUnitAdmin", "CheckGovernance", "GovernanceDryRun"},
 		"gov.changes":     {"ListGovernanceChanges", "GetGovernanceChange", "ApproveGovernanceChange", "RejectGovernanceChange"},
 		"setup":           {"SetupStatus"},
 		"identity":        {"Me"},

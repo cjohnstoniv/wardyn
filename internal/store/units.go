@@ -26,10 +26,10 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-const governanceUnitCols = `id, name, ceiling, limits, created_at, updated_at, created_by, contact, parent_id, overlay, overlay_limits, kind, mode, depth`
+const governanceUnitCols = `id, name, ceiling, limits, created_at, updated_at, created_by, contact, parent_id, overlay, overlay_limits, kind, mode, depth, locked_knobs`
 
 // governanceUnitColsP is governanceUnitCols qualified for a join or a recursive term.
-const governanceUnitColsP = `p.id, p.name, p.ceiling, p.limits, p.created_at, p.updated_at, p.created_by, p.contact, p.parent_id, p.overlay, p.overlay_limits, p.kind, p.mode, p.depth`
+const governanceUnitColsP = `p.id, p.name, p.ceiling, p.limits, p.created_at, p.updated_at, p.created_by, p.contact, p.parent_id, p.overlay, p.overlay_limits, p.kind, p.mode, p.depth, p.locked_knobs`
 
 // DefaultUnitID is the one Default unit's fixed id (unit-tree migration). Its walls are the deployment
 // default, read at resolve; the row stores none.
@@ -49,6 +49,15 @@ type ErrProfileHasChildren struct{ Names []string }
 
 func (e *ErrProfileHasChildren) Error() string {
 	return "store: governance profile is the base of: " + strings.Join(e.Names, ", ")
+}
+
+// ErrUnitPinned is DeleteGovernanceUnit's refusal when workspaces are pinned to the unit
+// (workspaces.owning_unit_id): Workspaces are their names, sorted. Deleting the unit would drop their
+// walls, so they are unpinned first.
+type ErrUnitPinned struct{ Workspaces []string }
+
+func (e *ErrUnitPinned) Error() string {
+	return "store: governance unit is pinned by workspaces: " + strings.Join(e.Workspaces, ", ")
 }
 
 const governanceMembershipCols = `id, subject_type, subject, unit_id, priority, created_at, created_by, home, legacy`
@@ -182,8 +191,8 @@ func upsertGovernanceUnitTx(ctx context.Context, tx Querier, p types.GovernanceU
 			return types.GovernanceUnit{}, err
 		}
 		const composed = `
-		INSERT INTO governance_units (id, name, ceiling, limits, created_by, contact, parent_id, overlay, overlay_limits, mode)
-		VALUES ($1,$2,'{}'::jsonb,'{}'::jsonb,$3,$4,$5,$6,$7,$9)
+		INSERT INTO governance_units (id, name, ceiling, limits, created_by, contact, parent_id, overlay, overlay_limits, mode, locked_knobs)
+		VALUES ($1,$2,'{}'::jsonb,'{}'::jsonb,$3,$4,$5,$6,$7,$9,$10)
 		ON CONFLICT (id) DO UPDATE
 			SET name = EXCLUDED.name,
 			    ceiling = '{}'::jsonb,
@@ -193,10 +202,11 @@ func upsertGovernanceUnitTx(ctx context.Context, tx Querier, p types.GovernanceU
 			    overlay = EXCLUDED.overlay,
 			    overlay_limits = EXCLUDED.overlay_limits,
 			    mode = EXCLUDED.mode,
+			    locked_knobs = EXCLUDED.locked_knobs,
 			    updated_at = now()
 		RETURNING ` + governanceUnitCols
 		q, args = composed, []any{p.ID, p.Name, p.CreatedBy, contactJSON, p.ParentID, overlayJSON, overlayLimitsJSON, p.ContactSet,
-			cmp.Or(p.Mode, types.UnitModeOwnWalls)}
+			cmp.Or(p.Mode, types.UnitModeOwnWalls), nonNil(p.LockedKnobs)}
 	} else {
 		ceilingJSON, err := json.Marshal(p.Ceiling)
 		if err != nil {
@@ -209,18 +219,19 @@ func upsertGovernanceUnitTx(ctx context.Context, tx Querier, p types.GovernanceU
 		// ceiling and limits each keep the keys this binary's types don't
 		// declare, so a field a newer wardynd set survives this binary's edit.
 		const standalone = `
-		INSERT INTO governance_units (id, name, ceiling, limits, created_by, contact)
-		VALUES ($1,$2,$3,$4,$5,$8)
+		INSERT INTO governance_units (id, name, ceiling, limits, created_by, contact, locked_knobs)
+		VALUES ($1,$2,$3,$4,$5,$8,$10)
 		ON CONFLICT (id) DO UPDATE
 			SET name = EXCLUDED.name,
 			    ceiling = (governance_units.ceiling - $6::text[]) || EXCLUDED.ceiling,
 			    limits = (governance_units.limits - $7::text[]) || EXCLUDED.limits,
 			    contact = CASE WHEN $9::boolean THEN EXCLUDED.contact ELSE governance_units.contact END,
 			    parent_id = NULL, overlay = NULL, overlay_limits = NULL, mode = 'own_walls',
+			    locked_knobs = EXCLUDED.locked_knobs,
 			    updated_at = now()
 		RETURNING ` + governanceUnitCols
 		q, args = standalone, []any{p.ID, p.Name, ceilingJSON, limitsJSON, p.CreatedBy,
-			declaredJSONKeys(p.Ceiling), declaredJSONKeys(p.Limits), contactJSON, p.ContactSet}
+			declaredJSONKeys(p.Ceiling), declaredJSONKeys(p.Limits), contactJSON, p.ContactSet, nonNil(p.LockedKnobs)}
 	}
 	out, err := scanGovernanceUnit(tx.QueryRow(ctx, q, args...))
 	if err != nil {
@@ -340,10 +351,23 @@ func DeleteGovernanceUnitQ(ctx context.Context, q Querier, id uuid.UUID) error {
 	if len(names) > 0 {
 		return &ErrProfileHasChildren{Names: names}
 	}
+	rows, err = q.Query(ctx, `SELECT name FROM workspaces WHERE owning_unit_id = $1 ORDER BY name`, id)
+	if err != nil {
+		return fmt.Errorf("store: list workspaces pinned to a governance unit: %w", err)
+	}
+	if names, err = pgx.CollectRows(rows, pgx.RowTo[string]); err != nil {
+		return fmt.Errorf("store: list workspaces pinned to a governance unit: %w", err)
+	}
+	if len(names) > 0 {
+		return &ErrUnitPinned{Workspaces: names}
+	}
 	tag, err := q.Exec(ctx, `DELETE FROM governance_units WHERE id = $1`, id)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			if pgErr.ConstraintName == "workspaces_owning_unit_id_fkey" {
+				return &ErrUnitPinned{} // pinned since the read above
+			}
 			return ErrConflict
 		}
 		return fmt.Errorf("store: delete governance profile: %w", err)
@@ -618,7 +642,7 @@ func scanGovernanceUnitPrefixed(row pgx.Row, prefix ...any) (types.GovernanceUni
 	var p types.GovernanceUnit
 	var ceilingRaw, limitsRaw, contactRaw, overlayRaw, overlayLimitsRaw []byte
 	dest := append(prefix, &p.ID, &p.Name, &ceilingRaw, &limitsRaw,
-		&p.CreatedAt, &p.UpdatedAt, &p.CreatedBy, &contactRaw, &p.ParentID, &overlayRaw, &overlayLimitsRaw, &p.Kind, &p.Mode, &p.Depth)
+		&p.CreatedAt, &p.UpdatedAt, &p.CreatedBy, &contactRaw, &p.ParentID, &overlayRaw, &overlayLimitsRaw, &p.Kind, &p.Mode, &p.Depth, &p.LockedKnobs)
 	err := row.Scan(dest...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.GovernanceUnit{}, ErrNotFound

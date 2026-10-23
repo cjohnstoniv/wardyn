@@ -47,7 +47,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE` on
   `governance_boundary` (migration `0200_governance_boundary`). Without it the Wardyn boundary cannot be read or
-  written. The same migration's `agent_runs.break_glass` column needs no grant.
+  written. The same migration's `agent_runs.break_glass` column needs no grant. Grant it `SELECT, INSERT, UPDATE,
+  DELETE` on `governance_restrictions` and `governance_restriction_members` (migration `0227_governance_restrictions`).
+  Without it restrictions cannot be read or written.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on
   `ui_desktop_closed` (migration `0219_ui_desktop_closed`). Without it a desktop Close cannot be stored or read, so
@@ -96,6 +98,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Starting the agent again admits the run anew, and the erased row keeps only its harnesses, so it is refused in the
   organisation form ("Ask your admin"). An erased remote server is refused too, which a 0.9 revive accepted. A run
   that is still running keeps its server until it ends.
+- **The first restriction changes how admin-token runs are recorded.** With the Wardyn boundary in `hard_limits` and
+  bounding something, an admin-token run is a break-glass run once any unit with its own walls exists, and now also
+  once any restriction exists. A boundary that bounds nothing, as the fresh-install seed does, asks no reason. A
+  deployment that has only pass-through units or none sees no change until someone writes its first restriction.
+  From that write on, an admin-token `POST /runs`, `/runs/preflight` or `/runs/policy-preview` without an
+  `X-Wardyn-Break-Glass-Reason` header (`wardyn run --break-glass-reason`; at most 512 characters) is refused `400
+  break_glass_reason_required`, so a script or CI job that starts runs with the admin token and sends no reason stops
+  working. Runs it starts with a reason carry `break_glass: true` and a `run.break_glass.open` audit row holding the
+  reason. The boundary still binds them, including its run-length maximum (`limits.max_end_ahead_sec`). Restrictions
+  themselves never apply to those runs. Deleting the last restriction (and having no unit with walls) ends this.
+- A person covered by a restriction has their stored policy rows clamped to the ceiling, grants included (unlisted
+  pairings are dropped).
 - **Approval rules are off.** `WARDYN_APPROVAL_RULES` (new, default `off`) lets a security admin's
   approval rule approve a held tool call or a first-use egress host on a service identity's runs. Nothing changes until a
   deployment sets it. Set `dry_run` first: matching approvals then get an `approval.policy.would_approve` audit row and
@@ -193,7 +207,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Both `no_limits` and `hard_limits` can be set, and the console shows the dry run before every save. A fresh install
   starts in `hard_limits` with nothing listed and floor `CC1`, which narrows nothing; an upgraded install stays in
   `no_limits`. Break-glass (`wardyn run --break-glass-reason`) is asked of an admin-token run only once the boundary
-  bounds something and a unit with its own walls exists.
+  bounds something and a unit with its own walls or a restriction exists.
 - Policy field `harness_inner_walls` (`sandbox_mode`, `approvals`) chooses the harness's own walls inside Wardyn's.
   Omitted, each run keeps what its harness and lane give today. It only adds walls: a looser choice refuses the run
   (`harness_inner_walls_looser`), and `sandbox_mode` takes `off` only (`workspace-write` and `read-only` answer
@@ -254,6 +268,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - The CLI's hint under a `401` follows the answer's reason. On a single-sign-on deployment with no admin token
   (`sign_in_required`) it says to use a personal API token in `WARDYN_TOKEN`, not the compose stack's admin token. For
   a token the organisation does not know (`admin_token_not_configured`) it names where the token came from.
+- Under a `hard_limits` boundary that bounds something, admin-token runs are break-glass runs once any restriction
+  exists, as for a unit with its own walls (see "Before you upgrade").
 - On a phone, the Runs filter bar is a search box, a `Filters (n)` button and a row of removable chips, so the first run
   is on the first screen instead of under five rows of controls (#3041). The button opens a sheet with every other
   control and Save view. From the tablet breakpoint up the bar is unchanged.

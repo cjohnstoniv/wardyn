@@ -38,17 +38,19 @@ import (
 // deleted profile instead, since a revive re-issues authority while a door only narrows a session;
 // the two are left apart on purpose.
 func (s *Server) runUnit(ctx context.Context, run types.AgentRun) (*ResolvedUnit, error) {
-	if run.UnitID == nil {
-		return nil, nil
+	var p *ResolvedUnit
+	if run.UnitID != nil {
+		var err error
+		p, err = s.resolveUnitByID(ctx, *run.UnitID)
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			p = nil
+		case err != nil:
+			return nil, fmt.Errorf("resolve the run's governance profile: %w", err)
+		}
 	}
-	p, err := s.resolveUnitByID(ctx, *run.UnitID)
-	switch {
-	case errors.Is(err, store.ErrNotFound):
-		return nil, nil
-	case err != nil:
-		return nil, fmt.Errorf("resolve the run's governance profile: %w", err)
-	}
-	return p, nil
+	// The run's captured restrictions are met into its limits at their current spec (restrictions.go).
+	return s.foldRestrictionLimits(ctx, run, p)
 }
 
 // refuseRunUnitError answers a door whose profile read failed: a composition nothing satisfies is
@@ -100,7 +102,7 @@ func (s *Server) refuseInteractiveAttach(w http.ResponseWriter, r *http.Request,
 		return false
 	}
 	return s.refuse(w, r, authz.Deny(authz.ReasonGovernanceUnit, "runs.attach", fmt.Sprintf(
-		"attaching is not allowed under the governance profile %q this run was launched under: it denies interactive sessions.", p.Name)).OnRun(run.ID).WithPolicy(s.unitRefWithSiteHelp(r.Context(), p)))
+		"attaching is not allowed under the governance profile %q this run was launched under: it denies interactive sessions.", p.Name)).OnRun(run.ID).WithPolicy(s.unitRefWithSiteHelp(r.Context(), p)).OnKnob(s.runLockOf(r.Context(), p, "deny_interactive")))
 }
 
 // refuseUIAppsDenied is the UI gateway's deny_ui_apps door, for a run created
@@ -115,7 +117,7 @@ func (s *Server) refuseUIAppsDenied(w http.ResponseWriter, r *http.Request, run 
 		return false
 	}
 	return s.refuse(w, r, authz.Deny(authz.ReasonGovernanceUnit, "runs.ui_apps", fmt.Sprintf(
-		"UI apps are not allowed under the governance profile %q this run was launched under.", p.Name)).OnRun(run.ID).WithPolicy(s.unitRefWithSiteHelp(r.Context(), p)))
+		"UI apps are not allowed under the governance profile %q this run was launched under.", p.Name)).OnRun(run.ID).WithPolicy(s.unitRefWithSiteHelp(r.Context(), p)).OnKnob(s.runLockOf(r.Context(), p, "deny_ui_apps")))
 }
 
 // boundUIApps is deny_ui_apps at create, called from both of resolveRunPolicy's
