@@ -93,6 +93,12 @@ test.describe("Runs landing — the seeded 9-fixture backend", () => {
     await expect(page.getByText("Completed", { exact: true }).first()).toBeVisible();
     await expect(sidebarLink(page, "Runs")).toBeVisible();
 
+    // #3039: a row's status is the run header's pill: Killed is the solid red chip, Completed is not.
+    const statusOf = (task: string, word: string) =>
+      page.getByTestId("run-row").filter({ hasText: task }).getByText(word, { exact: true });
+    await expect(statusOf("e2e fixture 7", "Killed")).toHaveClass(/bg-danger/);
+    await expect(statusOf("e2e fixture 4", "Completed")).not.toHaveClass(/bg-danger/);
+
     // The needs-you / ended words this backend's own fixtures reach.
     await expect(page.getByText("Failed", { exact: true }).first()).toBeVisible({ timeout: 15_000 });
   });
