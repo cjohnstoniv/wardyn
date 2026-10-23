@@ -2999,7 +2999,7 @@ The line is the substrate's own words, in the shape `<component>: <Reason>[: <me
 
 Or leave `daemon.json` alone and give Wardyn its own range:
 
-- Set `WARDYN_DOCKER_RUN_SUBNET_POOL` (for example `10.200.0.0/16`) on `wardynd` or `wardyn-runnerd`.
+- Set `WARDYN_DOCKER_RUN_SUBNET_POOL` on `wardynd` or `wardyn-runnerd` to a range no host route or VPN uses (for example `10.200.0.0/16`); Docker checks only its own networks.
 - Each run network then takes the next free `/28` of it (`WARDYN_DOCKER_RUN_SUBNET_SIZE` changes the length).
 - Free means no network on the daemon overlaps it, so a restart, a second replica and other stacks all count.
 - A full range refuses the run with a sentence naming the setting.
