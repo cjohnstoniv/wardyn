@@ -243,6 +243,9 @@ func TestPG_InlineRepoCarrier_GrantRemovedAfterAdmission(t *testing.T) {
 func TestPG_InlineRepoCarrier_DefaultPolicyKeepsOperatorCarrier(t *testing.T) {
 	fx := newInlineCarrierFixture(t, true, "")
 	fx.h.srv.cfg.DefaultPolicy.WorkspaceRepos = []types.WorkspaceRepo{{Repo: govWorkspaceRepo}}
+	// The harness ceiling's bare api_key entry bounds members' proposed grants;
+	// as the run's own spec it is an unscoped grant, so this default drops it.
+	fx.h.srv.cfg.DefaultPolicy.EligibleGrants = nil
 	fx.enforce(t)
 	fx.grant(t, fx.a, types.CapabilityAllow)
 	code, body, run, allowed := fx.post(t, `{"agent":"claude-code","task":"t"}`)
