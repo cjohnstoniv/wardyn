@@ -24,13 +24,13 @@ func allowedPeersOf(t *testing.T, cfg []byte) []netip.Prefix {
 	return c.AllowedPeers
 }
 
-// With ProxySandboxPeersOnly on, the run's proxy is told to serve only its own
-// network's subnet, on create and on revive; off, its config carries none.
+// By default (ProxyServesAnyPeer unset) the run's proxy is told to serve only its own
+// network's subnet, on create and on revive; with ProxyServesAnyPeer, its config carries none.
 func TestProxySandboxPeersOnly_OnCreateAndRevive(t *testing.T) {
 	for _, on := range []bool{true, false} {
 		f := newFakeDocker()
 		f.images["busybox:latest"] = true
-		d := newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev", InternalNetwork: "wardyn-internal", ProxySandboxPeersOnly: on})
+		d := newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev", InternalNetwork: "wardyn-internal", ProxyServesAnyPeer: !on})
 		ctx := context.Background()
 		spec := testSpec()
 		sb, err := d.CreateSandbox(ctx, spec)
