@@ -25,6 +25,7 @@ import { Button } from "../../ui/button";
 import { Label } from "../../ui/label";
 import { Textarea } from "../../ui/textarea";
 import { Chip } from "../../wardyn/primitives";
+import { PageContainer } from "../../wardyn/page-container";
 import { CC_META } from "../../wardyn/cc-meta";
 import { useSecurityOperator } from "../../wardyn/operator-context";
 import { SavedElsewhereBanner } from "../../wardyn/saved-elsewhere-banner";
@@ -183,7 +184,7 @@ export function BoundaryScreen() {
   );
 
   return (
-    <div className="mx-auto max-w-[1100px] px-4 py-6 sm:px-6">
+    <PageContainer width="list">
       <nav aria-label="Breadcrumb" className="mb-2 flex items-center gap-1.5 text-xs text-muted-foreground">
         <Link to="/admin/policies" className="hover:text-foreground">
           {BOUNDARY.BREADCRUMB_PARENT}
@@ -348,7 +349,7 @@ export function BoundaryScreen() {
           onSubmit={() => void submit()}
         />
       )}
-    </div>
+    </PageContainer>
   );
 }
 

@@ -88,6 +88,12 @@ describe("BoundaryScreen", () => {
     expect(putMock).not.toHaveBeenCalled();
   });
 
+  it("sits in the shared list column (#3058), not a page of its own width", async () => {
+    renderScreen();
+    const title = await screen.findByRole("heading", { level: 1, name: BOUNDARY.TITLE });
+    expect(title.closest("[data-page-width]")).toHaveAttribute("data-page-width", "list");
+  });
+
   it("no second-admin claim before a submit, and no New installs chip", async () => {
     renderScreen();
     await screen.findByText(BOUNDARY.ORG_PANEL);
