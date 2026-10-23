@@ -1751,9 +1751,10 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// added the three /runs/{id}/desktop/files routes; 44 since 0.10
 		// (#2972) added POST /runs/{id}/desktop-signin, .../shares and .../end
 		// (tierEntry); 45 since 0.10 added POST
-		// /runs/{id}/computer-folder/bring-back.
-		if probed != 45 {
-			t.Errorf("probed %d classOwner routes, want 45 — a route that left classOwner takes its tier "+
+		// /runs/{id}/computer-folder/bring-back; 46 since 0.10 (#2968) added GET
+		// /runs/{id}/recording-chain.
+		if probed != 46 {
+			t.Errorf("probed %d classOwner routes, want 46 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})

@@ -37,7 +37,7 @@ import (
 // entityGateFuncs maps each routeEntity to the (*Server) methods that decide
 // ownership for it today (design 4.4 row I11). The set may only grow.
 var entityGateFuncs = map[routeEntity][]string{
-	entityRun:       {"ownsRunOrAdmin", "ownsRunOrSuperAdmin", "getRunAuthorized", "getRunAuthorizedBy"},
+	entityRun:       {"ownsRunOrAdmin", "ownsRunOrSuperAdmin", "getRunAuthorized", "getRunAuthorizedBy", "recordingReader"},
 	entityWorkspace: {"ownsWorkspaceOrAdmin", "ownsWorkspaceOrSecurityAdmin", "getWorkspaceAuthorized", "denyForeignWorkspace"},
 	entityApproval:  {"authorizeUserDecision", "ownsRunOrAdmin"},
 	entityComponent: {"ownsComponent"},
