@@ -43,6 +43,8 @@ var scopeVerbs = []struct{ method, call string }{
 	{runnerwire.MethodStop, "stop"},
 	{runnerwire.MethodEnd, "end"},
 	{runnerwire.MethodStopProxy, "stop_proxy"},
+	{runnerwire.MethodPauseAgent, "pause_agent"},
+	{runnerwire.MethodResumeAgent, "resume_agent"},
 	{runnerwire.MethodStatus, "status"},
 	{runnerwire.MethodWait, "wait"},
 	{runnerwire.MethodAgentStatus, "agent_status "},

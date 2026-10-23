@@ -410,7 +410,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		Image:            p.Image,
 		ConfinementClass: run.ConfinementClass,
 		MachineKind:      run.MachineKind,
-		Env:              sandboxEnv,
+		// "Sign-ins in a desktop" for the run's agent (run_desktop_vm_signin.go); only a VM reads it.
+		DesktopSignInsOff: desktopSignInsOff(siteCfg, siteCfgErr, run.Agent),
+		Env:               sandboxEnv,
 		// The credential half (SandboxSpec.SecretEnv states the driver
 		// obligations). Nil for a run with no env_secret grant and no resident
 		// Bedrock credential, which is most of them.

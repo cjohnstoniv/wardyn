@@ -168,6 +168,15 @@ func (f *Fake) EndSandbox(_ context.Context, ref string) error {
 
 func (f *Fake) StopProxy(_ context.Context, ref string) error { f.note("stop_proxy", ref); return nil }
 
+func (f *Fake) PauseAgent(_ context.Context, ref string) error {
+	f.note("pause_agent", ref)
+	return nil
+}
+func (f *Fake) ResumeAgent(_ context.Context, ref string) error {
+	f.note("resume_agent", ref)
+	return nil
+}
+
 func (f *Fake) StartSandbox(_ context.Context, ref string) error {
 	f.note("start", ref)
 	f.mu.Lock()

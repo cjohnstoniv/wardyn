@@ -55,6 +55,8 @@ const ACTION_VERB: Record<string, string> = {
   "policy.delete": "deleted a policy",
   "policy.inline.apply": "applied an inline policy",
   "session.attach": "attached to the run's terminal",
+  // One row per Pause-to-Resume session in a VM's desktop (#2972, board R11-2972-DesktopSignIns).
+  "desktop.sign_in.pause": "paused the agent to sign in inside the desktop",
   "session.detach": "detached from the run's terminal",
   "session.recording.write": "recorded the terminal session",
   "recording.upload": "uploaded the run recording",

@@ -42,6 +42,7 @@ import { Chip, OperatorOnlyHint } from "../../wardyn/primitives";
 import { SavedElsewhereBanner } from "../../wardyn/saved-elsewhere-banner";
 import { useDiscardReload } from "../../wardyn/use-discard-reload";
 import { EmptyState, TableSkeleton } from "../../wardyn/states";
+import { Segmented } from "../../wardyn/segmented";
 
 // The two catalog agents whose model credential folds to a coarse
 // ai-integration type harness.go's ProviderTypes checks against
@@ -171,6 +172,38 @@ function DefaultProviderField({
   );
 }
 
+// Sign-ins in a desktop (#2972, board R11-2972-DesktopSignIns): Allowed is the default (the owner's
+// answer), and only an admin edits this row, so the value is locked per agent.
+function DesktopSignInsField({
+  harness,
+  row,
+  operator,
+  onUpdate,
+}: {
+  harness: SetupHarnessTool;
+  row: AgentProvider;
+  operator: boolean;
+  onUpdate: (next: AgentProvider) => void;
+}) {
+  const id = `agent-${harness.id}-desktop-sign-ins`;
+  return (
+    <Field label={AGENTS.FIELD_DESKTOP_SIGN_INS} htmlFor={id} hint={AGENTS.DESKTOP_SIGN_INS_HINT}>
+      <div id={id} role="group" aria-label={`${AGENTS.FIELD_DESKTOP_SIGN_INS} — ${harness.display}`}>
+        <Segmented
+          value={row.desktop_sign_ins_off ? "off" : "on"}
+          disabled={!operator}
+          options={[
+            { value: "on", label: AGENTS.DESKTOP_SIGN_INS_ALLOWED },
+            { value: "off", label: AGENTS.DESKTOP_SIGN_INS_NOT_ALLOWED },
+          ]}
+          // Allowed drops the key, so a row saves exactly as it did before the field existed.
+          onChange={(v) => onUpdate({ ...row, desktop_sign_ins_off: v === "off" ? true : undefined })}
+        />
+      </div>
+    </Field>
+  );
+}
+
 function Row({
   harness,
   row,
@@ -224,6 +257,7 @@ function Row({
       ) : (
         <div className="space-y-4 p-3">
           <DefaultProviderField harness={harness} row={row} providers={providers} operator={operator} onUpdate={onUpdate} />
+          <DesktopSignInsField harness={harness} row={row} operator={operator} onUpdate={onUpdate} />
         </div>
       )}
     </div>

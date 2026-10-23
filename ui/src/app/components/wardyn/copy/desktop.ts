@@ -43,4 +43,12 @@ export const DESKTOP = {
   whyCanChangeBody: "Yes. Open the desktop again from the run page to get a new link.",
   gatewaySaid: "What the gateway said:",
   copyDetails: "Copy details",
+  // Sign-ins in a desktop (#2972, board R11-2972-DesktopSignIns). Byte for byte from the board.
+  signInsNote:
+    "Sign-ins you make in this desktop are kept in this machine's memory and are gone when it shuts down: at the run's end, or when the run is killed. While the run goes on, the agent can use them too. Closing this tab doesn't remove them. Anything you save to a file stays with the run's files, where the agent can read it.",
+  pauseToSignIn: "Pause the agent to sign in",
+  agentPaused: "Agent paused",
+  pausedNote: "The agent is paused while you sign in. Once you resume it, it can use what you signed into.",
+  resume: "Resume the agent",
+  signInsOff: (agent: string) => `Your admin doesn't allow sign-ins in this desktop while ${agent} runs, so this desktop keeps none.`,
 } as const;

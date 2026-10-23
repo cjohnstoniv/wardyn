@@ -54,7 +54,9 @@ func run(port, out string) error {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	srv := &guestagent.Server{Version: version.String(), Cred: cred, Home: guestagent.AgentHome, OutDir: out, Mount: guestagent.MountVirtiofs, MarkerDir: "/run"}
+	srv := &guestagent.Server{Version: version.String(), Cred: cred, Home: guestagent.AgentHome, OutDir: out, Mount: guestagent.MountVirtiofs, MarkerDir: "/run",
+		Swaps:       "/proc/swaps",
+		SignInStore: func(off bool) error { return guestagent.MountSignInStore(guestagent.AgentHome, off) }}
 	h, err := srv.Handler()
 	if err != nil {
 		return err

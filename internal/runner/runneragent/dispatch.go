@@ -353,6 +353,15 @@ func (d *Dispatcher) dispatchRef(ctx context.Context, method, ref string, a refA
 		return runnerwire.WaitResult{ExitCode: code}, err
 	case runnerwire.MethodStatus:
 		return sub.Status(ctx, ref)
+	case runnerwire.MethodPauseAgent, runnerwire.MethodResumeAgent:
+		p, ok := sub.(runner.AgentPauser)
+		if !ok {
+			return nil, runner.ErrAgentPauseUnsupported
+		}
+		if method == runnerwire.MethodPauseAgent {
+			return nil, p.PauseAgent(ctx, ref)
+		}
+		return nil, p.ResumeAgent(ctx, ref)
 	case runnerwire.MethodAgentStatus:
 		return sub.AgentStatus(ctx, ref, a.AgentExecID)
 	case runnerwire.MethodStop:

@@ -219,6 +219,7 @@ func (s *Server) routes() chi.Router {
 			r.Get("/runs/{id}/desktop/files", s.handleListDesktopFiles)
 			r.Put("/runs/{id}/desktop/files/{name}", s.handleUploadDesktopFile)
 			r.Get("/runs/{id}/desktop/files/{name}", s.handleDownloadDesktopFile)
+			s.mountDesktopSignInRoutes(r) // sign-ins in a VM's desktop (#2972)
 			// The run's Azure DevOps tokens: owner or admin; not on the delegation list.
 			r.Get("/runs/{id}/ado-tokens", s.handleListRunADOTokens)
 			// Resume a paused run (#572): owner or SUPER admin — handleResumeRun.

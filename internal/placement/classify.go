@@ -111,6 +111,7 @@ var Table = []Entry{
 	{Struct: StructSandboxSpec, Field: "Resources", Class: ClassExempt, Rule: RuleExempt, Variant: "checked against the advertised capacity"},
 	{Struct: StructSandboxSpec, Field: "Interactive", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructSandboxSpec, Field: "DesktopSignins", Class: ClassExempt, Rule: RuleRefuse, Reason: ReasonPlacementCapability, Variant: "a boolean, no credential: it mounts the person's sign-in store, a tmpfs. Sign-ins run on the organisation's own Docker runner only (signinTarget gives a runner or pool run none), so a set one is refused"},
+	{Struct: StructSandboxSpec, Field: "DesktopSignInsOff", Class: ClassExempt, Rule: RuleExempt, Variant: "a boolean, no credential: the admin's Not allowed for a VM desktop's sign-ins, which only narrows the run"},
 	{Struct: StructSandboxSpec, Field: "Record", Class: ClassExempt, Rule: RuleExempt, Variant: "organisation's per-run recording choice"},
 	{Struct: StructSandboxSpec, Field: "MachineKind", Class: ClassExempt, Rule: RuleExempt, Variant: "the sandbox kind; a runner that cannot start it refuses the create"},
 	{Struct: StructSandboxSpec, Field: "OnWaiting", Class: ClassExempt, Rule: RuleNotSent, Variant: "a callback; waiting events replace it"},

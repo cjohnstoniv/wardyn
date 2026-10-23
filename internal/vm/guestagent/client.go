@@ -78,9 +78,21 @@ func (c *Client) Ready(ctx context.Context) (Ready, error) {
 	return r, c.do(ctx, http.MethodGet, "/v1/ready", nil, &r)
 }
 
-// Init hands the agent the sandbox's env, files and mounts; the agent refuses a second one.
-func (c *Client) Init(ctx context.Context, in Init) error {
-	return c.do(ctx, http.MethodPost, "/v1/init", in, nil)
+// Init hands the agent the sandbox's env, files and mounts; the agent refuses a second one. The
+// answer says what it made of the sign-in store.
+func (c *Client) Init(ctx context.Context, in Init) (InitResult, error) {
+	var r InitResult
+	return r, c.do(ctx, http.MethodPost, "/v1/init", in, &r)
+}
+
+// PauseAgent stops the latest detached exec's process group; ErrNoExec when none is running.
+func (c *Client) PauseAgent(ctx context.Context) error {
+	return c.do(ctx, http.MethodPost, "/v1/agent/pause", nil, nil)
+}
+
+// ResumeAgent continues it; ErrNoExec when none is running.
+func (c *Client) ResumeAgent(ctx context.Context) error {
+	return c.do(ctx, http.MethodPost, "/v1/agent/resume", nil, nil)
 }
 
 // State is a detached exec's state.

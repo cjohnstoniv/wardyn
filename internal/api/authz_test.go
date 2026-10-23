@@ -860,6 +860,11 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/runs/{id}/desktop/files":        {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 	"PUT /api/v1/runs/{id}/desktop/files/{name}": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 	"GET /api/v1/runs/{id}/desktop/files/{name}": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
+	// Sign-ins in a VM's desktop (#2972): reading the store is owner or security admin; pausing and
+	// resuming the agent is entry, like the desktop itself.
+	"GET /api/v1/runs/{id}/desktop/sign-ins":         {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	"POST /api/v1/runs/{id}/desktop/sign-ins/pause":  {class: classOwner, entity: entityRun, ownerTier: tierEntry},
+	"POST /api/v1/runs/{id}/desktop/sign-ins/resume": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 	// Moving a run's end keeps a sandbox and its credentials alive: a write,
 	// so not the security tier's inspect-or-stop.
 	"PATCH /api/v1/runs/{id}": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
@@ -1750,9 +1755,10 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// added the three /runs/{id}/desktop/files routes; 44 since 0.10
 		// (#2972) added POST /runs/{id}/desktop-signin, .../shares and .../end
 		// (tierEntry); 45 since 0.10 added POST
-		// /runs/{id}/computer-folder/bring-back.
-		if probed != 45 {
-			t.Errorf("probed %d classOwner routes, want 45 — a route that left classOwner takes its tier "+
+		// /runs/{id}/computer-folder/bring-back; 48 since 0.10 (#2972) added GET
+		// /runs/{id}/desktop/sign-ins and POST .../pause and .../resume.
+		if probed != 48 {
+			t.Errorf("probed %d classOwner routes, want 48 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})

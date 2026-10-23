@@ -125,6 +125,9 @@ type SandboxSpec struct {
 	// MachineKind is the sandbox's kind; empty is a container. A substrate that cannot start the kind
 	// refuses the create before creating anything, never falls back to a container.
 	MachineKind types.MachineKind `json:"machine_kind,omitempty"`
+	// DesktopSignInsOff makes a VM's sign-in store read-only, so its desktop keeps no sign-ins: the
+	// admin set "Not allowed" for the run's agent (#2972). A container ignores it.
+	DesktopSignInsOff bool `json:"desktop_sign_ins_off,omitempty"`
 }
 
 // RecordWithin is whether this run is recorded on a substrate whose own setting is ceiling.
@@ -367,6 +370,9 @@ type Sandbox struct {
 	EnforcedClass types.ConfinementClass // what the driver actually applied (>= requested or error)
 	// Machine is the virtual hardware a VM sandbox was started with; nil for a container.
 	Machine *types.VMMachine `json:",omitempty"`
+	// SignIns is what a VM's guest made of its sign-in store (guestagent.SignInsMemory or
+	// SignInsNone); empty for a container, or a guest or runner that predates the store.
+	SignIns string `json:",omitempty"`
 }
 
 // Status reports observed sandbox state.
@@ -458,6 +464,18 @@ const AWSProfileRecordEnv = "WARDYN_AWS_SSO_CONFIG_B64"
 type DesktopDialer interface {
 	DialDesktop(ctx context.Context, ref string) (io.ReadWriteCloser, error)
 }
+
+// AgentPauser is an OPTIONAL Runner capability: stop a VM sandbox's agent inside the guest and
+// continue it, through the guest agent (SIGSTOP and SIGCONT of the agent's process group), while the
+// guest and its desktop keep running. It is not Freezer, which would freeze the desktop too.
+type AgentPauser interface {
+	PauseAgent(ctx context.Context, ref string) error
+	ResumeAgent(ctx context.Context, ref string) error
+}
+
+// ErrAgentPauseUnsupported is AgentPauser's answer for a sandbox whose agent it cannot pause (a
+// container), or from a router or runner that cannot.
+var ErrAgentPauseUnsupported = errors.New("runner: this sandbox's agent cannot be paused in place")
 
 // ErrDesktopUnsupported is DialDesktop's answer for a sandbox with no desktop to open (a container),
 // or from a router or runner that cannot open one.
