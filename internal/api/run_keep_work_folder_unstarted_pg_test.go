@@ -5,10 +5,12 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -87,6 +89,57 @@ func TestPG_KeepRunThatNeverStartsFreesItsDrive(t *testing.T) {
 			}
 			if _, w := e.launch(e.person, e.reread(pool), `,"keep_work_folder":true`); w.Code != http.StatusCreated {
 				t.Errorf("a second keep run after the first never started = %d %s, want 201", w.Code, w.Body)
+			}
+		})
+	}
+}
+
+// reclaimInUse is the keep env's runner whose substrate holds every drive: another run has it mounted.
+type reclaimInUse struct{ *keepPoolRunner }
+
+func (reclaimInUse) ReclaimDrive(context.Context, types.DriveMount) (runner.DriveReclaimOutcome, error) {
+	return "", runner.ErrDriveInUse
+}
+
+// The kept drive is an ordinary member drive, so another run of the person can mount it. A queued run that
+// ends while one holds it leaves the drive where it is, and the audit row says the delete was refused, never
+// that the object was already absent: the two in-use guards of a person's own delete run for it too.
+func TestPG_KeepRunThatNeverStartsLeavesTheDriveAnotherRunHolds(t *testing.T) {
+	cases := []struct {
+		name string
+		hold func(e *queueEnv, owner string)
+	}{
+		{"another run of the owner is starting", func(e *queueEnv, owner string) {
+			e.exec(`UPDATE agent_runs SET state = 'STARTING', created_by = $1 WHERE created_by = 'occupant'`, owner)
+		}},
+		{"the substrate has the drive mounted", func(e *queueEnv, _ string) {
+			e.srv.cfg.Runner = reclaimInUse{&keepPoolRunner{e.runner}}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e, pool := keepEnv(t, 1)
+			run := e.run(e.queuedLaunch(e.person, e.reread(pool), `,"keep_work_folder":true`).ID)
+			tc.hold(e, run.CreatedBy)
+			if w := e.admin(http.MethodPost, "/api/v1/runs/"+run.ID.String()+"/kill", ""); w.Code != http.StatusAccepted {
+				t.Fatalf("kill = %d %s, want 202", w.Code, w.Body)
+			}
+			if !e.keptDriveExists(run) {
+				t.Errorf("the kept drive was deleted while another run holds it")
+			}
+			var rows []map[string]any
+			for _, ev := range e.h.audit.snapshot() {
+				if ev.Action != "drive.member.delete" {
+					continue
+				}
+				var data map[string]any
+				if err := json.Unmarshal(ev.Data, &data); err != nil {
+					t.Fatal(err)
+				}
+				rows = append(rows, data)
+			}
+			if len(rows) != 1 || rows[0]["outcome"] != "refused" || rows[0]["by"] != memberDriveByRunEnd {
+				t.Errorf("drive.member.delete rows = %v, want one refused by %s, never already_absent", rows, memberDriveByRunEnd)
 			}
 		})
 	}

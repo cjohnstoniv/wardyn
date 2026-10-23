@@ -8,8 +8,8 @@
 // and the store's own count cap. Only the work folder is kept: home, agent
 // settings and /tmp stay the sandbox's. Nothing happens at run end: no
 // teardown reclaims a drive's volume or claim, only a drive delete does. The one
-// exception is a run that ends without ever starting: nothing was mounted, so
-// dropUnstartedKeptDrive deletes its drive row and frees the person's count.
+// exception is a run that ends without ever starting: nothing was mounted by it, so
+// dropUnstartedKeptDrive deletes its drive, through the delete a person's own drive takes, and frees the person's count.
 package api
 
 import (
@@ -201,10 +201,13 @@ const memberDriveByRunEnd = "run_never_started"
 
 // dropUnstartedKeptDrive deletes the drive run kept its work folder in, for a run that ended without ever
 // starting (cancelled or timed out in the queue, aborted by the component fence, or aborted after its
-// insert on the direct path). The drive was made with the run and nothing was mounted, so there is no
-// object to reclaim and it would only count against the person's max_per_person. A run that has no kept
-// drive, a drive some other run kept, and a drive another delete holds are all left alone. Best effort:
-// a failure is logged and the drive stays, as it did before.
+// insert on the direct path). The drive was made with the run and nothing was mounted by it, so it would
+// only count against the person's max_per_person. It goes through the same delete as the person's own:
+// the owner-starting check, then the substrate's reclaim. The drive is a member drive like any other and
+// the owner's other runs can attach it, so a drive one of them holds is left in place, and the refusal is
+// audited by that delete as it audits its own, never as an already-absent object. A run that has no kept
+// drive, a drive some other run kept, and a drive another delete holds are left alone. Best effort: a
+// failure is logged and the drive stays, as it did before.
 func (s *Server) dropUnstartedKeptDrive(ctx context.Context, runID uuid.UUID) {
 	ms, ok := s.cfg.Store.(store.MemberDriveStore)
 	if !ok {
@@ -219,17 +222,22 @@ func (s *Server) dropUnstartedKeptDrive(ctx context.Context, runID uuid.UUID) {
 		}
 		return
 	}
-	d, started, err := ms.BeginMemberDriveDeleteAdmin(ctx, id)
-	if err == nil {
-		err = ms.FinishMemberDriveDelete(ctx, id, started)
+	if refused, serr := s.memberDriveOwnerStarting(ctx, ms, d, memberDriveByRunEnd); serr != nil || refused {
+		if serr != nil {
+			slog.WarnContext(ctx, "api: read the owner's starting runs for a kept drive", slog.String("run_id", runID.String()), slog.Any("err", serr))
+		}
+		return
 	}
+	d, started, err := ms.BeginMemberDriveDeleteAdmin(ctx, id)
 	if err != nil {
 		if !errors.Is(err, store.ErrNotFound) && !errors.Is(err, store.ErrMemberDriveBusy) {
 			slog.WarnContext(ctx, "api: delete the kept drive of a run that never started", slog.String("run_id", runID.String()), slog.Any("err", err))
 		}
 		return
 	}
-	s.auditMemberDriveDelete(ctx, d, memberDriveDeletion{outcome: string(runner.DriveReclaimAlreadyAbsent)}, memberDriveByRunEnd)
+	if res := s.deleteMemberDrive(ctx, ms, d, started, memberDriveByRunEnd); res.err != nil {
+		slog.WarnContext(ctx, "api: finish the delete of the kept drive of a run that never started", slog.String("run_id", runID.String()), slog.Any("err", res.err))
+	}
 }
 
 // keptWorkFolderMount is the mount of the drive run keeps its work folder in,
