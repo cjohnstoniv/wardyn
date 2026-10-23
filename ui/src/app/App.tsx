@@ -5,6 +5,7 @@
 
 import * as React from "react";
 import { Loader2 } from "lucide-react";
+import { NotFoundPage } from "./components/wardyn/not-found-page";
 import { RouteFallback } from "./components/wardyn/route-fallback";
 import { Navigate, Route, Routes, useLocation, useNavigate, Outlet } from "react-router-dom";
 import { toast } from "sonner";
@@ -897,7 +898,7 @@ export default function App() {
             <Route path="/admin/providers" element={suspend(<ProvidersScreen />)} />
             <Route path="/admin/drives" element={suspend(<DrivesScreen />)} />
             <Route path="/admin/components" element={suspend(<ComponentsScreen />)} />
-            <Route path="/admin/*" element={<Navigate to="/admin/runs" replace />} />
+            <Route path="/admin/*" element={<NotFoundPage admin />} />
             <Route path="/account" element={suspend(<YourAccountScreen />)} />
             <Route path="/account/pools/new" element={suspend(<PoolFormScreen scope="mine" />)} />
             <Route path="/account/pools/:id/edit" element={suspend(<PoolFormScreen scope="mine" />)} />
@@ -960,7 +961,7 @@ export default function App() {
                 </React.Suspense>
               }
             />
-            <Route path="*" element={<Navigate to="/runs" replace />} />
+            <Route path="*" element={<NotFoundPage admin={false} />} />
           </Route>
           </Route>
         </Route>

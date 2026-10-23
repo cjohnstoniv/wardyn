@@ -62,6 +62,20 @@ describe("LiveApprovals", () => {
     expect(approve.compareDocumentPosition(deny) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  // #2912: under 640px the title takes its own line, whole, and the verdict controls sit under it at the right. jsdom
+  // applies no CSS, so this pins the classes; the e2e focus-dock-decision spec measures the result.
+  it("#2912: the request row wraps below 640px — title on its own line, never truncated there", async () => {
+    listApprovalsMock.mockResolvedValue([pending({ id: "w", requested_scope: { host: "wrap.example" } })]);
+    render(<LiveApprovals runId="r1" />);
+    const row = await screen.findByTestId("live-approval-row");
+    expect(row).toHaveClass("flex-wrap");
+    const title = within(row).getByText("Reach wrap.example");
+    expect(title).toHaveClass("sm:truncate");
+    expect(title).not.toHaveClass("truncate");
+    expect(title.parentElement).toHaveClass("max-sm:basis-full");
+    expect(within(row).getByRole("button", { name: "Approve" }).closest("div.max-sm\\:ml-auto")).not.toBeNull();
+  });
+
   it("flags a wait_for_review request as HELD ('waiting') and only this run's approvals", async () => {
     listApprovalsMock.mockResolvedValue([
       pending({ id: "held", requested_scope: { host: "held.example", mode: "wait_for_review" } }),

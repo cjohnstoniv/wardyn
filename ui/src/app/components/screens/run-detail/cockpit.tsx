@@ -135,6 +135,10 @@ export function Cockpit({
         onGoRecording={onGoRecording}
         execMode={execMode}
       />
+    </>
+  );
+  const decisionPane = (
+    <>
       {!terminal && notOnStrip.length > 0 && (
         <div className="shrink-0 pt-2.5">
           <DecisionBar
@@ -146,7 +150,7 @@ export function Cockpit({
         </div>
       )}
       {run.state === "RUNNING" && (
-        <div className="shrink-0 space-y-2 pt-2.5">
+        <div className="shrink-0 space-y-2 pt-2.5 empty:hidden">
           {/* Said once, where a viewer actually feels the consequence: the
               run is stopped and they personally cannot unstick it — the
               command bar states the pending count and the strip below is the
@@ -185,6 +189,7 @@ export function Cockpit({
     onGoAudit,
     onGoPolicy,
     terminalPane,
+    decisionPane,
   };
 
   return (

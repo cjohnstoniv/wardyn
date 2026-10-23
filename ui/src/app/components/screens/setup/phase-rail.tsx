@@ -29,8 +29,7 @@ const TONE_DOT: Record<StepBadge["tone"], string> = {
   info: "text-info",
 };
 
-// One item's dot + label + badge — shared by every group below (and by the
-// icon-only compact rail's own render, separately). `num` prints a small
+// One item's dot + label + badge — shared by every group below. `num` prints a small
 // ordinal ahead of the dot for the Required group only (1-4); every other
 // group's items carry none, matching the prototype's own railItem (a step
 // off the required walk "is not on the way anywhere"). aria-hidden: the
@@ -128,71 +127,20 @@ export function PhaseRail({
 }) {
   return (
     <>
-      {/* Compact icon rail — visible lg only (56px column) */}
-      <nav aria-label="Setup steps" className="hidden lg:flex xl:hidden flex-col gap-2 items-center">
-        {order.map((stepId) => {
-          const badge = badges[stepId];
-          const isDone = done[stepId];
-          // A4: visited-without-configuring (see setup-screen's Skipped override)
-          // reads as a muted dot — distinct from both the untouched tone-outline
-          // ring and the green done checkmark. isDone still wins outright (an
-          // explicitly-skipped model step earns its checkmark elsewhere).
-          const isVisited = !isDone && badge.text === "Skipped";
-          const active = current === stepId;
-          const refusal = refuseNext?.(stepId);
-          const label = `${STEP_LABEL[stepId]} — ${badge.text}`;
-          return (
-            <button
-              key={stepId}
-              onClick={() => onSelect(stepId)}
-              aria-current={active ? "step" : undefined}
-              disabled={!!refusal}
-              // #459/#497: the refusal reason is never title-only — a
-              // disabled control can't surface a tooltip. This icon-only
-              // rail has no room for visible caption text, so the reason
-              // goes into the accessible name below. In the lg band only
-              // this rail renders (the full rail is hidden there), so the
-              // title stays too, for a sighted mouse user.
-              title={refusal ?? label}
-              className={cn(
-                "flex size-8 items-center justify-center rounded-full border transition-colors",
-                active ? "border-primary bg-primary/10" : "border-transparent hover:bg-muted",
-                refusal && "opacity-50",
-              )}
-            >
-              <span
-                data-visited={isVisited || undefined}
-                className={cn(
-                  "flex size-4 shrink-0 items-center justify-center rounded-full border",
-                  isDone
-                    ? "border-success bg-success text-success-foreground"
-                    : isVisited
-                      ? "border-border-strong bg-muted-foreground/40 text-muted-foreground"
-                      : cn("border-border-strong", TONE_DOT[badge.tone]),
-                )}
-              >
-                {isDone && <Check className="size-3" aria-hidden />}
-              </span>
-              <span className="sr-only">{refusal ? `${label} — ${refusal}` : label}</span>
-            </button>
-          );
-        })}
-      </nav>
-
-      {/* Full rail — stacked above content on mobile, hidden at lg (the icon-rail
-          band), back at xl+. #213 — three categories, not the old five phases:
+      {/* The rail — stacked above content on mobile, a 200px column at lg and a 240px one at xl (#2844). #213 — three categories, not the old five phases:
           Required (numbered, what blocks a run), Optional setup (real
           configuration, unnumbered), Demos (unnumbered, split into its two
           existing sections so egress and secrets stay visually apart). Each
           list is only the walkable members of `order` — a phase left with
           none (Secrets demos on a host with no demo secret stored) renders
           nothing at all rather than an empty group heading over a 0. */}
-      <nav aria-label="Setup steps" className="flex flex-col gap-5 lg:hidden xl:flex">
+      <nav aria-label="Setup steps" className="flex flex-col gap-5">
         {(() => {
           const item = (stepId: SetupStepId, num?: number) => {
             const badge = badges[stepId];
             const isDone = done[stepId];
-            // A4: see the compact rail above for what this means.
+            // A4: visited-without-configuring (see setup-screen's Skipped override) reads as a muted dot, distinct from
+            // both the untouched ring and the done checkmark; isDone still wins outright.
             const isVisited = !isDone && badge.text === "Skipped";
             return (
               <RailItem

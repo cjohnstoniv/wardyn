@@ -85,15 +85,10 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
     // the page.
     await expect(page.getByRole("heading", { name: /who can sign in/i })).toHaveCount(1);
 
-    // "Multi-user" renders in THREE places: the compact icon-rail's sr-only
-    // label ("People — Multi-user", always in the DOM but visually hidden —
-    // phase-rail.tsx's lg-only/xl-hidden rail), the full rail's own badge
-    // span, and the step body's MULTI_USER_CHIP — the exact same string
-    // (wardyn/copy.ts's PEOPLE_STEP.MULTI_USER_CHIP). DOM order decides which
-    // one .first() lands on (setup-layout.tsx renders the rail <aside>
-    // before the content <div>, and PhaseRail renders the compact rail
-    // before the full one), so ancestry — not text, and not visibility — is
-    // what proves this is the rail's, not the body's.
+    // "Multi-user" renders in TWO places: the rail's own badge span and the step body's MULTI_USER_CHIP, the exact
+    // same string (wardyn/copy.ts's PEOPLE_STEP.MULTI_USER_CHIP). DOM order decides which one .first() lands on
+    // (setup-layout.tsx renders the rail <aside> before the content <div>), so ancestry — not text, and not
+    // visibility — is what proves this is the rail's, not the body's.
     const firstMultiUser = page.getByText("Multi-user").first();
     const isInsideRail = await firstMultiUser.evaluate((el) => !!el.closest('[aria-label="Setup steps"]'));
     expect(isInsideRail).toBe(true);

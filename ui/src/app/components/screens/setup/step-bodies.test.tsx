@@ -224,9 +224,6 @@ describe("step-bodies.tsx — smoke", () => {
       <ReviewStep
         status={status}
         readiness={deriveReadiness(status)}
-        onRecheck={vi.fn()}
-        rechecking={false}
-        lastCheckedAt={null}
         onJump={vi.fn()}
         onSwitchToUser={onSwitchToUser}
       />,
@@ -241,9 +238,6 @@ describe("step-bodies.tsx — smoke", () => {
       <ReviewStep
         status={status}
         readiness={deriveReadiness(status)}
-        onRecheck={vi.fn()}
-        rechecking={false}
-        lastCheckedAt={null}
         onJump={vi.fn()}
       />,
     );
@@ -272,9 +266,6 @@ describe("step-bodies.tsx — smoke", () => {
       <ReviewStep
         status={status}
         readiness={deriveReadiness(status)}
-        onRecheck={vi.fn()}
-        rechecking={false}
-        lastCheckedAt={null}
         onJump={vi.fn()}
       />,
     );
@@ -307,9 +298,6 @@ describe("step-bodies.tsx — smoke", () => {
       <ReviewStep
         status={status}
         readiness={deriveReadiness(status)}
-        onRecheck={vi.fn()}
-        rechecking={false}
-        lastCheckedAt={null}
         onJump={vi.fn()}
       />,
     );
@@ -326,9 +314,6 @@ describe("step-bodies.tsx — smoke", () => {
       <ReviewStep
         status={status}
         readiness={deriveReadiness(status)}
-        onRecheck={vi.fn()}
-        rechecking={false}
-        lastCheckedAt={null}
         onJump={vi.fn()}
       />,
     );
@@ -345,9 +330,6 @@ describe("step-bodies.tsx — smoke", () => {
       <ReviewStep
         status={status}
         readiness={deriveReadiness(status)}
-        onRecheck={vi.fn()}
-        rechecking={false}
-        lastCheckedAt={null}
         onJump={vi.fn()}
       />,
     );
@@ -371,9 +353,6 @@ describe("step-bodies.tsx — smoke", () => {
       <ReviewStep
         status={status}
         readiness={deriveReadiness(status)}
-        onRecheck={vi.fn()}
-        rechecking={false}
-        lastCheckedAt={null}
         onJump={vi.fn()}
       />,
     );
