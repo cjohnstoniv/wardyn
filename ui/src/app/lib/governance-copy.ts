@@ -236,7 +236,7 @@ export const GOVERNANCE = {
   PRIORITY_NA: "—",
   PRIORITY_HINT: "Breaks ties between groups a person is in. Higher wins. It is ignored for a person and for everyone.",
   ADD_TITLE: "Assign a profile",
-  ADD_CTA: "Assign",
+  ADD_CTA: "Assign profile",
   FIELD_PROFILE: "Profile",
   PROFILE_PLACEHOLDER: "Pick a profile",
   FIELD_PRIORITY: "Priority",
@@ -401,7 +401,7 @@ export const BASELINE = {
   SUFFIXES_HINT: "One per line. Each must already be an internal host in site config; it covers that host only, not the hosts under it — list each of those under Exact hosts.",
   // Under the suffixes box, one line per entry as typed: the reach an entry has before it is saved (#2130).
   COVERS: (entry: string) => `${entry} covers ${entry} only, not the hosts under it (*.${entry}).`,
-  SAVE: "Save",
+  SAVE: "Save hosts",
   SAVED: "Saved. New runs are graded with these hosts; runs already going keep the level they started with.",
   REFUSED_TITLE: "This can't be saved as written",
   FETCH_FAILED_TITLE: "Couldn't load the baseline hosts",

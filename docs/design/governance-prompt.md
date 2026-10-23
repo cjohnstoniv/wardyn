@@ -583,7 +583,7 @@ is what an operator can actually do.
 | `PRIORITY_NA` | — |
 | `PRIORITY_HINT` | Breaks ties between groups a person is in. Higher wins. It is ignored for a person and for everyone. |
 | `ADD_TITLE` | Assign a profile |
-| `ADD_CTA` | Assign |
+| `ADD_CTA` | Assign profile |
 | `FIELD_PROFILE` | Profile |
 | `PROFILE_PLACEHOLDER` | Pick a profile |
 | `FIELD_PRIORITY` | Priority |

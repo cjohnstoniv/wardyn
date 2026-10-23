@@ -65,7 +65,7 @@ These strings cover the card's save mechanics. The mock did not draw them.
 |---|---|
 | refusal: control character | sign_in_help_text: contains a line break, control character or invisible formatting character — it renders as one plain paragraph on the sign-in page |
 | refusal: malformed URL | sign_in_help_url: must be a plain web address with a real host name — no spaces, sign-in details or hidden characters — it is shown to people who have not signed in |
-| `SIGNIN_HELP.SAVE` | Save |
+| `SIGNIN_HELP.SAVE` | Save sign-in help |
 | `SIGNIN_HELP.SAVED_TOAST` | Sign-in help saved. |
 | `SIGNIN_HELP.SAVE_ERROR` | Couldn't save the sign-in help. |
 | `SIGNIN_HELP.LOAD_FAILED` | Couldn't load the sign-in help. Retry to edit it. |

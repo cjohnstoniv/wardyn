@@ -6,6 +6,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { expectActionBar } from "../../../../test/action-bar";
 
 import { HttpError } from "../../../lib/api/core";
 import { SIGNIN_HELP } from "../../../lib/access-posture-copy";
@@ -62,6 +63,15 @@ describe("SignInHelpCard (#484)", () => {
     // No counter until the admin types.
     expect(screen.queryByText("0 / 1000")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: SIGNIN_HELP.SAVE })).toBeDisabled();
+  });
+
+  // #3064: a full-size filled teal Save sign-in help on the right.
+  it("the action bar is one full-size teal Save sign-in help on the right", async () => {
+    renderCard();
+    const save = await screen.findByRole("button", { name: "Save sign-in help" });
+    expect(SIGNIN_HELP.SAVE).toBe("Save sign-in help");
+    expectActionBar(save);
+    expect(save.className).not.toContain("h-8");
   });
 
   it("renders nothing for a non-admin, and never reads the document", () => {

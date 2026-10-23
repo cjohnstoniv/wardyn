@@ -33,6 +33,8 @@ import { OperatorProvider } from "../../../wardyn/operator-context";
 import { setField } from "../../../../../test/set-field";
 import { aheadByHours } from "../../../../lib/test-clock";
 import { PoolDrawer } from "./pool-drawer";
+import { expectActionBar } from "../../../../../test/action-bar";
+import { POOL_DRAWER } from "../../../wardyn/copy/runner-pools";
 import { member, pool, remoteRunner, selfRunner } from "./pool-test-fixtures";
 
 const EU = remoteRunner();
@@ -263,6 +265,22 @@ describe("who may use it", () => {
     renderDrawer(pool());
     expect(await screen.findByText("Nobody can use this pool.")).toBeInTheDocument();
     expect(screen.getByText("Everyone it listed has left. Add people, groups or roles, or clear the policy.")).toBeInTheDocument();
+  });
+
+  // #3064: Clear the policy far left in danger text; Cancel (ghost) then Save who may use it (teal) on the right;
+  // Add to list sits beside the Name field, not in the bar.
+  it("the editor's action bar: Clear far left, Cancel, then the teal Save who may use it; Add to list is beside its field", async () => {
+    usePolicyMock.mockResolvedValue(POLICY);
+    renderDrawer(pool());
+    await userEvent.click(await screen.findByRole("button", { name: "Edit who may use it" }));
+    const save = screen.getByRole("button", { name: "Save who may use it" });
+    expectActionBar(save, {
+      secondary: screen.getByRole("button", { name: POOL_DRAWER.CANCEL }),
+      destructive: screen.getByRole("button", { name: POOL_DRAWER.CLEAR_POLICY }),
+    });
+    const bar = save.parentElement!;
+    expect(within(bar).queryByRole("button", { name: "Add to list" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Add to list" }).parentElement).toBe(screen.getByLabelText("Name").closest(".grid"));
   });
 
   it("is held, not saved, when a second person must approve the change", async () => {

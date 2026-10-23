@@ -20,6 +20,7 @@ import { AGENTS, AGENTS_EXTRA, PROVIDERS as WS_PROVIDERS, PROVIDERS_EXTRA as WS_
 import { ModelProviderEditor, type ModelProviderEditorProps } from "./model-provider-editor";
 import { addressChanged, providerIdFrom } from "./model-provider-draft";
 import { setField } from "../../../../test/set-field";
+import { expectActionBar } from "../../../../test/action-bar";
 import { OperatorProvider } from "../../wardyn/operator-context";
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
@@ -554,6 +555,27 @@ describe("E6 — save refused", () => {
     expect(assign).not.toHaveBeenCalled();
     expect(reload).not.toHaveBeenCalled();
     expect(releaseMock).not.toHaveBeenCalled();
+  });
+});
+
+// #3064: Remove far left in danger text, Cancel (ghost) then Save provider, the filled teal one, last.
+describe("the action bar", () => {
+  it("editing: Remove far left, then Cancel and Save provider on the right", () => {
+    renderEditor({ editing: CORP, list: list([CORP, ANTHROPIC], { "corp-gateway": 12 }) });
+    expect(E.SAVE).toBe("Save provider");
+    expectActionBar(screen.getByRole("button", { name: "Save provider" }), {
+      secondary: within(dialog()).getByRole("button", { name: E.CANCEL }),
+      destructive: screen.getByRole("button", { name: E.REMOVE }),
+    });
+  });
+
+  it("adding: Cancel and Save provider on the right, no Remove", async () => {
+    const { user } = renderEditor({ list: list([CORP]) });
+    await user.click(screen.getByRole("button", { name: MODEL_PROVIDERS.KIND.anthropic_api_key }));
+    expectActionBar(screen.getByRole("button", { name: "Save provider" }), {
+      secondary: within(dialog()).getByRole("button", { name: E.CANCEL }),
+    });
+    expect(screen.queryByRole("button", { name: E.REMOVE })).toBeNull();
   });
 });
 

@@ -123,7 +123,7 @@ freezes exactly as shipped.
 | `PRIORITY_HINT` | editor field, under Priority | Breaks a sign-in tie between two custom types — higher wins. Standard user never takes part in a tie. |
 | `FIELD_ID` | editor field, new type only | Id |
 | `ID_HINT` | editor field, under Id, new type only | Role mappings and grants use this to refer to the type. It's made from the name unless you set it, and it can't change once saved. |
-| `SAVE` | editor button | Save |
+| `SAVE` | editor button | Save type |
 | `CANCEL` | editor button | Cancel |
 | `DELETE_CONFIRM(name)` | delete, confirm | Delete {name}? If a role mapping, grant, assignment, drive grant or run still names it, the delete is refused and nothing changes. |
 | `DELETE_BUILTIN` | delete, the built-in type | Standard user can't be deleted — it's the type everyone signs in as when no other type matches. |

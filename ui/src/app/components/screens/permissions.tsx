@@ -34,6 +34,7 @@ import type {
   PermissionsSnapshot,
 } from "../../lib/types";
 import { Button } from "../ui/button";
+import { INLINE_ACTIONS } from "../wardyn/form-actions";
 import { Input } from "../ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
@@ -818,7 +819,8 @@ export function AddGrantForm({
           />
         </Field>
       </div>
-      <div className="mt-4 flex flex-wrap items-center gap-3">
+      <div className={`mt-4 ${INLINE_ACTIONS}`}>
+        {duplicate && <Chip tone="info">{PERM.DUPLICATE}</Chip>}
         <Button
           // A deny on a user type is a wall no person or group allow lifts —
           // design §7 asks before writing one.
@@ -828,7 +830,6 @@ export function AddGrantForm({
           {saving ? <Loader2 className="size-4 animate-spin" /> : null}
           {PERM.ADD_CTA}
         </Button>
-        {duplicate && <Chip tone="info">{PERM.DUPLICATE}</Chip>}
       </div>
       {/* G-7's "Refused" state (packet §2): the server's own sentence, in the
           form the caller is still looking at. The dialog never closes on it. */}

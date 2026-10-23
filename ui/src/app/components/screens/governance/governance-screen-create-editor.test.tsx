@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// GovernanceScreen — the create editor on an empty list (#3052). Split from governance-screen.test.tsx,
+// GovernanceScreen — the create editor and the Assign bar (#3052, #3064). Split from governance-screen.test.tsx,
 // which is at the file-size cap.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
@@ -39,6 +39,7 @@ vi.mock("../../../lib/api/user-types", () => ({ userTypes: { listUserTypes: () =
 import type { GovernanceUnit, GovernanceSnapshot } from "../../../lib/api/governance";
 import { GOVERNANCE as GOV } from "../../../lib/governance-copy";
 import { PEOPLE } from "../../../lib/people-access-copy";
+import { expectActionBar } from "../../../../test/action-bar";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { GovernanceScreen } from "./governance-screen";
 import { aheadByHours } from "../../../lib/test-clock";
@@ -90,5 +91,14 @@ describe("GovernanceScreen — New profile on an empty list (#3052)", () => {
     expect(await screen.findByText(GOV.EMPTY_TITLE)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: GOV.NEW_CTA })).toBeEnabled();
     expect(tealButtons().map((b) => b.textContent)).toEqual([GOV.NEW_CTA]);
+  });
+});
+
+describe("GovernanceScreen — the Assign bar (#3064)", () => {
+  it("the label names its object, and the button sits at the right end of its form", async () => {
+    renderScreen({ profiles: [PLATFORM], assignments: [] });
+    await screen.findByText(PLATFORM.name);
+    expect(GOV.ADD_CTA).toBe("Assign profile");
+    expectActionBar(screen.getByRole("button", { name: "Assign profile" }));
   });
 });
