@@ -220,7 +220,7 @@ func (s *Server) handleGetDefaultPolicy(w http.ResponseWriter, r *http.Request) 
 		resp.UnitName = ceiling.Unit.Name
 		if operator { // the chain is an admin surface (ResolvedUnit.Chain): a member reads the leaf alone
 			for _, l := range ceiling.Unit.Chain {
-				resp.UnitPath = append(resp.UnitPath, unitPathLink(l))
+				resp.UnitPath = append(resp.UnitPath, unitPathLink{ID: l.ID, Name: l.Name})
 			}
 		}
 	}
