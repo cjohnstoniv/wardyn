@@ -78,6 +78,11 @@ describe("resolveDoor — which door an entrance opens", () => {
     expect(resolveDoor(offDefault, { login: "aws" }, "user")).toMatchObject({ provider: { id: "bedrock-prod" } });
   });
 
+  it("a local_model provider's door is a token door, like custom_endpoint", () => {
+    const local = { ...gateway, id: "local-llm", kind: "local_model" } as const;
+    expect(resolveDoor(providerStatus([{ provider: local }]), { provider: "local-llm" }, "user")).toMatchObject({ kind: "key", token: true });
+  });
+
   it("a login request with no provider of its kind opens no door", () => {
     const status = providerStatus([{ provider: gateway, defaultFor: ["claude-code"] }]);
     expect(resolveDoor(status, { login: "aws" }, "user")).toBeNull();

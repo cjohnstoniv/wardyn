@@ -13,7 +13,7 @@
 // this page is reached only through the lazy Settings/Account chunk.
 //
 import { absoluteTime, relativeTime, shortDate } from "./format";
-import { harnessDisplayNames } from "./model-access";
+import { harnessDisplayNames, isTokenKind } from "./model-access";
 import { modelConnectionCause } from "./model-connection-cause";
 import type { SetupModelProvider, SetupProviderAccess, SetupStatus } from "./types";
 import { AGENTS } from "./workspace-providers-copy";
@@ -210,8 +210,8 @@ function connectionRowCopyByKind(
   }
 
   // Every other kind is a typed key or token (door-dialog.tsx's own rule):
-  // custom_endpoint says "token", every other closed kind "key".
-  const token = provider.kind === "custom_endpoint";
+  // custom_endpoint and local_model say "token", every other closed kind "key".
+  const token = isTokenKind(provider.kind);
   if (access.state === "live") {
     return {
       chip: { label: token ? CONNECTIONS.YOUR_TOKEN : CONNECTIONS.YOUR_KEY, tone: "success" },
