@@ -8,24 +8,33 @@ name: Overlay proofs
 # Operational rule: never dispatch while a train attempt 1 is queued. Every proof
 # compiles internal/api, and these jobs take runner slots that attempt waits on.
 #
-# Inputs
-#   proofs_ref  the throwaway proofs/<lane>-<sha12> branch holding .proofs/ (a
-#               manifest.json and the reverted files). Never merged to main.
+# Dispatch it on the bundle branch, never on main:
+#   gh workflow run overlay-proofs.yml --ref proofs/<lane>-<sha12> -f keyed_sha=<sha>
+# That throwaway branch is one commit on origin/main that adds .proofs/ (a
+# manifest.json and the reverted files). It is never merged.
+#
+# Input
 #   keyed_sha   the 40-hex commit the bundle was made for. It must equal the
 #               manifest's keyed_sha, and it is the tree the proofs run against.
 #
-# The script comes from the ref this workflow was dispatched on, not from the
-# bundle branch or the keyed sha, which may predate it. Both jobs run only when
-# that ref is main, which stops a dispatch from a branch by mistake. It is not a
-# security boundary: anyone who can push can edit this workflow. The run is safe
-# anyway: its token is read-only and nothing in it reads a secret.
+# Cache scope. The proofs run lane code, and code in any step can save Actions
+# cache entries under the run's ref through the job's runtime token, whatever
+# this file's permissions say. Entries saved on main reach every branch, and
+# ci.yml and the nightly restore them, so every job runs only on a
+# refs/heads/proofs/ ref, whose entries no other branch restores. Dispatched on
+# main, every job skips, and only main's copy of this file can run there. No
+# step restores or saves a cache either (setup-go cache: false): a job starts
+# with empty module and build caches. The token is read-only and no step reads
+# a secret.
+#
+# Trust. This file and the script run from the dispatched branch, so plan first
+# refuses a branch whose tree differs from the main commit it sits on anywhere
+# outside .proofs/ (`overlay-proof.sh base`). That check runs from the branch
+# too, so a run counts only once `git diff --quiet origin/main...<head sha> --
+# ':(exclude).proofs'` exits 0 locally: it reads no file from the branch.
 on:
   workflow_dispatch:
     inputs:
-      proofs_ref:
-        description: "Branch holding the .proofs/ bundle (proofs/<lane>-<sha12>)"
-        type: string
-        required: true
       keyed_sha:
         description: "Full 40-hex sha the bundle is keyed to; the proofs run against this tree"
         type: string
@@ -36,41 +45,41 @@ permissions:
 
 # Every job sets timeout-minutes, at least twice its measured maximum with a
 # ten-minute floor (docs/CI.md). The prove value is computed per group by
-# `overlay-proof.sh plan` from the measurements in that script's header
-# (cold compile 89 s, 72 s per proof, locally); plan and the floor job get 10.
+# `overlay-proof.sh plan` from the allowances in that script's header; plan
+# gets 10.
 jobs:
-  # Reads the manifest, refuses a keyed_sha that is not the manifest's, and
-  # groups the proofs by package: one prove job per package, its proofs in turn.
+  # Refuses a branch that is more than main plus .proofs/, reads the manifest,
+  # refuses a keyed_sha that is not the manifest's, and groups the proofs by
+  # package: one prove job per package, its proofs in turn.
   plan:
     name: plan
-    if: github.ref == 'refs/heads/main'
+    if: startsWith(github.ref, 'refs/heads/proofs/')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
     steps:
+      # Every branch's history, so the merge base with main is known.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          path: tools
-          persist-credentials: false
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          ref: ${{ inputs.proofs_ref }}
           path: bundle
+          fetch-depth: 0
           persist-credentials: false
       - id: plan
         env:
           KEYED_SHA: ${{ inputs.keyed_sha }}
         run: |
           [[ "$KEYED_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "keyed_sha must be 40 lowercase hex" >&2; exit 2; }
-          matrix="$(bash tools/scripts/overlay-proof.sh plan bundle "$KEYED_SHA")"
+          base="$(bash bundle/scripts/overlay-proof.sh base bundle HEAD origin/main)"
+          echo "the bundle is main at $base plus .proofs/"
+          matrix="$(bash bundle/scripts/overlay-proof.sh plan bundle "$KEYED_SHA")"
           echo "$matrix"
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
   prove:
     name: prove (${{ matrix.package }})
     needs: plan
-    if: github.ref == 'refs/heads/main'
+    if: startsWith(github.ref, 'refs/heads/proofs/')
     runs-on: ubuntu-latest
     timeout-minutes: ${{ matrix.timeout }}
     strategy:
@@ -80,38 +89,17 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          path: tools
+          path: bundle
           persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ inputs.keyed_sha }}
           path: src
           persist-credentials: false
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          ref: ${{ inputs.proofs_ref }}
-          path: bundle
-          persist-credentials: false
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: src/go.mod
           cache: false
-      # Restore only, keyed like ci.yml's go (unit) caches: a main push saves
-      # them, these jobs never do, so a proof run cannot poison a later PR.
-      - name: Restore the Go module cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/go/pkg/mod
-          key: gomod-${{ runner.os }}-${{ hashFiles('src/go.mod', 'src/go.sum') }}
-          restore-keys: gomod-${{ runner.os }}-
-      - name: Restore Go build cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/go-build
-          key: go-unit-${{ runner.os }}-${{ hashFiles('src/go.mod', 'src/go.sum') }}-${{ github.run_id }}
-          restore-keys: |
-            go-unit-${{ runner.os }}-${{ hashFiles('src/go.mod', 'src/go.sum') }}-
-            go-unit-${{ runner.os }}-
       # Fetch modules before any proof, with a bounded retry, so a registry blip
       # fails the job as setup instead of turning a proof into "build failed".
       - name: Download modules
@@ -122,4 +110,4 @@ jobs:
           ONLY: ${{ matrix.only }}
         run: |
           read -ra names <<< "$ONLY"
-          bash tools/scripts/overlay-proof.sh run bundle src --only "${names[@]}"
+          bash bundle/scripts/overlay-proof.sh run bundle src --only "${names[@]}"

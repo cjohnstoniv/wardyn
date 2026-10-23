@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"strings"
 	"sync"
@@ -130,6 +131,11 @@ type Config struct {
 	// and on revive, as TrustedCAPEM becomes trusted_ca_pem; the organisation never sends one to a
 	// runner. It may carry a credential, so it is never logged. Empty changes nothing.
 	UpstreamProxyURL string
+	// RunSubnetPool (WARDYN_DOCKER_RUN_SUBNET_POOL, default unset) is the IPv4 range each run's
+	// network takes its own RunSubnetBits-long subnet from (WARDYN_DOCKER_RUN_SUBNET_SIZE, default
+	// 28), so runs stop using up the daemon's default address pools. Unset, the daemon picks the subnet.
+	RunSubnetPool netip.Prefix
+	RunSubnetBits int
 }
 
 // RecordingMountTarget is where RecordingMount appears inside the agent
@@ -175,6 +181,9 @@ type Driver struct {
 	// the deliberate default for fake-backed test drivers, so the unit suite
 	// doesn't pay a real wall-clock tax on every CreateSandbox.
 	proxySettle time.Duration
+
+	// subnetMu serialises this driver's run network creates from RunSubnetPool (createPoolRunNetwork).
+	subnetMu sync.Mutex
 
 	// mu guards agentExecs, pending, mainProc, and creating — the driver's
 	// only mutable state.

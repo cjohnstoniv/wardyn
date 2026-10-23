@@ -37,6 +37,8 @@ const (
 
 	componentAgent = "agent"
 	componentProxy = "proxy"
+	// componentNetwork labels a run's internal network (createRunNetwork).
+	componentNetwork = "network"
 )
 
 // Object names are deterministic per run, so teardown is selector-free and
