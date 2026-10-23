@@ -143,7 +143,7 @@
   <text class="m" x="650" y="680" font-size="14" font-weight="700" letter-spacing="2">THE INNER WALL, BOTH WAYS</text>
   <text class="t" x="650" y="710" font-size="17">Out: only through its egress proxy</text>
   <text class="r" x="650" y="736" font-size="17">In: nothing connects in</text>
-  <text class="t" x="650" y="764" font-size="17">Keys are added at the proxy,</text>
+  <text class="t" x="650" y="764" font-size="17">Most keys are added at the proxy,</text>
   <text class="t" x="650" y="786" font-size="17">not placed in the sandbox</text>
 
   <!-- People's devices -->
@@ -206,7 +206,7 @@
   <path class="ord" d="M530 1008 H570"/>
   <text class="m" x="582" y="1014" font-size="16">Ordinary traffic: outer wall only</text>
   <path class="link" d="M900 1008 H940"/>
-  <text class="m" x="952" y="1014" font-size="16">Policy and audit links, not traffic</text>
+  <text class="m" x="952" y="1014" font-size="16">Links to the org control plane</text>
   <use href="#proxy" x="1300" y="1008"/>
   <text class="m" x="1318" y="1014" font-size="16">Wardyn's egress proxy</text>
   <path class="blk" d="M64 1046 H104"/>

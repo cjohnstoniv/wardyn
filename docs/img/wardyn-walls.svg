@@ -189,5 +189,5 @@
   <path class="ord" d="M520 1000 H560"/>
   <text class="m" x="572" y="1006" font-size="17">Ordinary traffic: outer wall only</text>
   <path class="link" d="M880 1000 H920"/>
-  <text class="m" x="932" y="1006" font-size="17">Policy and audit links, not traffic</text>
+  <text class="m" x="932" y="1006" font-size="17">Links to the org control plane</text>
 </svg>
