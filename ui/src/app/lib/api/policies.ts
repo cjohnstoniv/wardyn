@@ -5,6 +5,8 @@
 
 // Run policies (admin-gated config): list/create/update/delete.
 import type { ComponentRequirement, RunPolicy, RunPolicySpec } from "../types";
+import type { PolicyContact } from "../types/site";
+import type { RestrictionLimits, RestrictionSpec } from "./restrictions";
 import { asJson, errText, HttpError, unwrapList, wfetch, withLimit } from "./core";
 
 // GET /policies/default's body (internal/api/policies.go's
@@ -16,15 +18,24 @@ import { asJson, errText, HttpError, unwrapList, wfetch, withLimit } from "./cor
 // assignment — absent, never "". That is what lets the member surfaces follow
 // the absent-row doctrine: no profile ⇒ no chip, no line, no placeholder, and
 // today's screens byte for byte.
-// contexts (the caller's own units; absent for a caller no ceiling binds) and unit_path (the
-// answered unit and those above it, leaf first, names only; absent for the Default unit) are the
-// policy tree's.
+// contexts (the caller's own units; absent for a caller no ceiling binds or no unit places) and
+// unit_path (the answered unit and those above it, leaf first, names only; security admins only,
+// absent for the Default unit) are the policy tree's.
 export interface DefaultPolicyContext {
   unit_id: string;
   unit_name: string;
   home: boolean;
 }
+export interface DefaultPolicyRestriction {
+  id: string;
+  name: string;
+  spec: RestrictionSpec;
+  limits: RestrictionLimits;
+  contact?: PolicyContact;
+}
 export type DefaultPolicy = RunPolicySpec & {
+  // The restrictions that bind the caller in every unit (defaultPolicyRestriction).
+  restrictions?: DefaultPolicyRestriction[];
   unit_name?: string;
   unit_path?: { id: string; name: string }[];
   contexts?: DefaultPolicyContext[];

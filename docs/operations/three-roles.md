@@ -19,6 +19,7 @@ derives its role.
   - `GET /workspaces/{id}/env-as-code` is NOT in that set (owner-or-super, since F287): its files carry the internal registry coordinate, the site-config artifact redirects and the operator's setup commands, none of which are an egress-decision input.
   - They cannot otherwise WRITE a workspace: renaming, reassigning, deleting, binding credential material and launching a recording all stay with the super admin.
   - Security admins author and assign **governance profiles** (named ceilings bound to users or groups), write the org allow/denylists (capability grants).
+  - Mount host paths are the exception: a security admin reads them as `<redacted>`, and may keep a mount, make it read-only or remove it. Only a super admin adds a mount, changes its host path or makes it writable.
   - They decide escalated approvals — egress, credential, tool — on anyone's run.
   - They revoke sessions and API tokens, and verify the audit chain.
   - They can also **stop** any run in the deployment.

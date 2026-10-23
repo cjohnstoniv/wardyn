@@ -46,7 +46,7 @@ Pick one of three shapes. The server records it as `shape` ([run documents](sdk.
 |---|---|---|
 | **Agent task** | Interactive · Autonomous · Repeat / schedule coming soon | A one-time coding task, driven by you or running on its own |
 | **Environment sandbox** | Interactive · Your drive is attached when you have one | A reusable workspace for development or analysis |
-| **Application sandbox** | Automation / script · Application / server coming soon | A sandboxed command that runs on its own |
+| **Application sandbox** | Automation / script · Application / server | A sandboxed command that runs on its own, or a server you open in your browser |
 
 - Choosing a shape opens step 2. Choosing the shape a draft already has changes nothing: its starter, prompt and task stay.
 - Picking **Saved template** or **Run again** hides the shapes, and **Continue** opens Review.
@@ -56,8 +56,10 @@ Pick one of three shapes. The server records it as `shape` ([run documents](sdk.
 - **How should it run?** (Agent task only): **Interactive** or **Autonomous**.
   - Interactive means you work in the sandbox, and one harness can start with it.
   - Autonomous means an agent runs on its own, with no SSH or terminal. **When should it run?** offers **Run now**; **Schedule for later** is marked **Coming soon**.
-- **What should run?** (Application sandbox only): **Automation / script**. **Application / server** is **Coming soon**.
-- **Command** is required for an Application sandbox. It runs verbatim, and the run ends when it exits.
+- **What should run?** (Application sandbox only): **Automation / script** or **Application / server**.
+- **Command** is required for an automation. It runs verbatim, and the run ends when it exits.
+- An **Application / server** takes a required **Start command** and one to eight **Ports**, each with a name, a port and a path. The run is interactive and keeps going until you end it or it reaches its lifetime limit.
+  - Each port opens from the run page through the web app gateway, and only people who may enter the run can open it. Review holds Launch when the gateway is off.
 - **Pool** is required. A pool that cannot take this run stays listed with its reason, such as **No online runners** or **Background only**.
 - The pool panel shows **Total pool capacity**, **Your allowance**, **Waiting**, **Run types** and **Per-run limits**; the strictest limit applies.
 - **Barrier** is **Fence**, **Wall** or **Vault**, weakest to strongest. A barrier that cannot be offered is disabled with its reason. An untouched barrier lets the server choose.

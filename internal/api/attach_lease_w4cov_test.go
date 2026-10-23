@@ -186,18 +186,22 @@ func TestLeaseCovLiveFencesAHolderAgainstTheStore(t *testing.T) {
 	}{
 		{"a fresh confirmation is trusted without asking", func(_ *leaseCovLeases, c *leaseCovClient) {
 			c.h.lease.held.Store(true)
-			c.h.lease.verified.Store(time.Now().Add(time.Hour).UnixNano())
+			fresh := time.Now().Add(time.Hour)
+			c.h.lease.verified.Store(&fresh)
 		}, true, 0, true, false},
 		{"a lease this holder never took", func(_ *leaseCovLeases, c *leaseCovClient) { c.h.lease.held.Store(false) }, false, 0, false, false},
 		{"an old confirmation the store still backs", func(_ *leaseCovLeases, c *leaseCovClient) {
-			c.h.lease.verified.Store(time.Now().Add(-long).UnixNano())
+			old := time.Now().Add(-long)
+			c.h.lease.verified.Store(&old)
 		}, true, 1, true, false},
 		{"an old confirmation and an unreachable store fails closed", func(l *leaseCovLeases, c *leaseCovClient) {
-			c.h.lease.verified.Store(time.Now().Add(-long).UnixNano())
+			old := time.Now().Add(-long)
+			c.h.lease.verified.Store(&old)
 			l.fail("holds", boom)
 		}, false, 1, true, false},
 		{"an old confirmation of a lease another client took ends the holder", func(l *leaseCovLeases, c *leaseCovClient) {
-			c.h.lease.verified.Store(time.Now().Add(-long).UnixNano())
+			old := time.Now().Add(-long)
+			c.h.lease.verified.Store(&old)
 			l.advance(attachLeaseTTL + time.Second)
 			l.put(leaseCovRun, uuid.New(), "bob", attachSourceWeb)
 		}, false, 1, false, true},
@@ -259,7 +263,7 @@ func TestLeaseCovTickRenewsHeldLeasesAndEndsOnesThatLapsed(t *testing.T) {
 			srv, _, _ := leaseCovServer(t, leases, leaseCovServerOpts{bus: "replica-a"})
 			alice := newLeaseCovClient("alice", attachSourceWeb)
 			srv.registerAttachHolder(leaseCovRun, alice.h)
-			alice.h.lease.verified.Store(0)
+			alice.h.lease.verified.Store(nil)
 			tc.prepare(leases)
 			expires := leaseCovEpoch.Add(attachLeaseTTL)
 
@@ -289,11 +293,11 @@ func TestLeaseCovTickRenewsHeldLeasesAndEndsOnesThatLapsed(t *testing.T) {
 				t.Errorf("writer=%v held=%v, want alice to keep the slot", w, alice.h.lease.held.Load())
 			}
 			if tc.name == "a live lease is renewed" {
-				if alice.h.lease.verified.Load() == 0 || !row.ExpiresAt.Equal(leases.now.Add(attachLeaseTTL)) {
-					t.Errorf("renewed row expires %v (verified %d), want it pushed a full ttl past the store's clock", row.ExpiresAt, alice.h.lease.verified.Load())
+				if alice.h.lease.verified.Load() == nil || !row.ExpiresAt.Equal(leases.now.Add(attachLeaseTTL)) {
+					t.Errorf("renewed row expires %v (verified %v), want it pushed a full ttl past the store's clock", row.ExpiresAt, alice.h.lease.verified.Load())
 				}
-			} else if !row.ExpiresAt.Equal(expires) || alice.h.lease.verified.Load() != 0 {
-				t.Errorf("a failed renew changed the row (expires %v) or the confirmation (%d)", row.ExpiresAt, alice.h.lease.verified.Load())
+			} else if !row.ExpiresAt.Equal(expires) || alice.h.lease.verified.Load() != nil {
+				t.Errorf("a failed renew changed the row (expires %v) or the confirmation (%v)", row.ExpiresAt, alice.h.lease.verified.Load())
 			}
 		})
 	}

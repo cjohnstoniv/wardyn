@@ -825,6 +825,9 @@ const (
 // Audit failures must never block the primary operation (the Recorder owns
 // durability/retry); we swallow the error after the event is constructed.
 func (s *Server) recordAudit(ctx context.Context, ev types.AuditEvent) {
+	if d, ok := policyDeciderFrom(ctx); ok && d.report {
+		return // the draft approval-rule dry run reports and writes nothing (approval_rules.go)
+	}
 	_ = s.recordAuditDurably(ctx, ev)
 }
 

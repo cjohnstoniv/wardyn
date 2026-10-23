@@ -79,7 +79,7 @@ func TestStartAgentOrIdle_BYOIOnExecLessRuntime_RefusedWithoutWastingTheSlot(t *
 		t.Errorf("sandbox must be torn down exactly once, got %d StopSandbox calls", rn.stopped)
 	}
 	found := false
-	for _, ev := range h.audit.events {
+	for _, ev := range h.audit.snapshot() {
 		if ev.Action == "run.selftest" && ev.Outcome == "failure" && ev.RunID != nil && *ev.RunID == runID &&
 			strings.Contains(string(ev.Data), "exec-less") {
 			found = true

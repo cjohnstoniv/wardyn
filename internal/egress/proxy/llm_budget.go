@@ -4,9 +4,11 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
+	"net/http"
 	"sync"
 	"time"
 
@@ -69,12 +71,8 @@ func (b *scanBudget) readBody(ctx context.Context, body io.Reader, declared, lim
 		if n = min(n, b.limit-charged); n <= 0 {
 			return true
 		}
-		if !b.retained.TryAcquire(n) {
-			wctx, cancel := context.WithTimeout(ctx, scanQueueWait)
-			defer cancel()
-			if b.retained.Acquire(wctx, n) != nil {
-				return false
-			}
+		if !b.acquire(ctx, n) {
+			return false
 		}
 		charged += n
 		return true
@@ -107,6 +105,43 @@ func (b *scanBudget) readBody(ctx context.Context, body io.Reader, declared, lim
 		return nil, func() {}, errScanBusy
 	}
 	return buf, release, nil
+}
+
+// acquire takes n bytes of the retained budget, waiting for room at most scanQueueWait.
+func (b *scanBudget) acquire(ctx context.Context, n int64) bool {
+	if b.retained.TryAcquire(n) {
+		return true
+	}
+	wctx, cancel := context.WithTimeout(ctx, scanQueueWait)
+	defer cancel()
+	return b.retained.Acquire(wctx, n) == nil
+}
+
+// chargeMore charges n more bytes to a request already holding had from readBody, never taking
+// it past the whole budget, so it cannot wait on its own bytes. It fails with errScanBusy as
+// readBody does; the returned release is idempotent and non-nil.
+func (b *scanBudget) chargeMore(ctx context.Context, had, n int64) (func(), error) {
+	b.init()
+	if n = min(n, b.limit-min(had, b.limit)); n <= 0 {
+		return func() {}, nil
+	}
+	if !b.acquire(ctx, n) {
+		return func() {}, errScanBusy
+	}
+	var once sync.Once
+	return func() { once.Do(func() { b.retained.Release(n) }) }, nil
+}
+
+// chargedBodyKey marks a request whose body a door already holds charged by readBody:
+// scanBufferedBody scans those bytes instead of reading them again, since a second charge
+// would wait on the request's own bytes until scanQueueWait.
+type chargedBodyKey struct{}
+
+// holdChargedBody makes buf, read and charged by the caller, r's body; the caller keeps
+// the charge until r is done.
+func holdChargedBody(r *http.Request, buf []byte) {
+	r.Body, r.ContentLength = io.NopCloser(bytes.NewReader(buf)), int64(len(buf))
+	*r = *r.WithContext(context.WithValue(r.Context(), chargedBodyKey{}, buf))
 }
 
 // takeSlot waits, bounded by ctx and scanQueueWait, for one of b's scan slots. An error means

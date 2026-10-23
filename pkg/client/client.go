@@ -22,7 +22,7 @@
 //     ListPoliciesPage, UpdatePolicy, DeletePolicy
 //   - workspaces (/api/v1/workspaces):   CreateWorkspace, GetWorkspace, ListWorkspaces,
 //     ListWorkspacesPage, UpdateWorkspace, DeleteWorkspace, ScanWorkspace, RecordWorkspaceTask,
-//     GetWorkspaceBuild, BuildWorkspace
+//     GetWorkspaceBuild, BuildWorkspace, SetWorkspaceOwningUnit
 //   - sources (/api/v1/sources):         ListSources, CreateSource, GetSource, ScanSource, DeleteSource
 //   - audit (/api/v1/audit):             AuditEvents, AuditEventsPage, RecentAuditEvents,
 //     ExportAuditPartition, AuditRetention, DropAuditPartition

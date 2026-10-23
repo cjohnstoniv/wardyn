@@ -668,7 +668,8 @@ test.describe("Policies — stored token narrowing", () => {
       api: true,
     });
 
-    const created = page.waitForResponse((r) => r.url().includes("/api/v1/policies") && r.request().method() === "POST");
+    // The create itself: the safety meter's POST /policies/grade can land first, and answers 200.
+    const created = page.waitForResponse((r) => new URL(r.url()).pathname.endsWith("/api/v1/policies") && r.request().method() === "POST");
     await dialog.getByRole("button", { name: "Create policy" }).click();
     const res = await created;
     expect(res.status()).toBe(201);

@@ -32,10 +32,18 @@ var isOperatorCensus = map[string]int{
 	"helpers.go:ownsWorkspaceOrAdmin":     1,
 	"helpers.go:ownsRunOrSuperAdmin":      1,
 	"helpers.go:workspaceReadTierFor":     1,
-	"attach_ticket.go:handleAttachTicket": 3, // reach, and the ticket's reach stamp
+	"attach_ticket.go:handleAttachTicket": 1, // the ticket's reach stamp; its reach is admitRunEntry's
+	"desktop_files.go:desktopRun":         1, // the entry rule (mayEnterRun) and the deny_ui_apps skip, as the ticket's
 	"attach.go:refuseAttachEntry":         1,
 	"run_entry.go:getRunForEntry":         1,
 	"sshkeys.go:handleAddSSHKey":          1,
+	// The interactive entry rule an attach ticket and a takeover share: the owner rule's
+	// super-admin arm, and the super admin's 403 on a run that is not theirs.
+	"run_entry.go:admitRunEntry": 2,
+	// A takeover's entry: who may learn the request exists, and the deny_interactive door
+	// keyed on the role the ticket it leads to is stamped with (refuseAttachEntry's ticket
+	// lane); the governed-admin answer is adminDoorExempt's, as there.
+	"approvals_takeover.go:loadTakeover": 1,
 	// Reach: organisation templates are written with the effective role, so the
 	// User view publishes to the organisation as the member it is.
 	"template_list.go:templateCallerOf": 1,
@@ -60,7 +68,11 @@ var isOperatorCensus = map[string]int{
 	"setup_integrations.go:handleListIntegrations": 1,
 	// A member's Checks are redacted, so a member poll never probes the image store.
 	"setup_claude_signin_image.go:claudeSignInImageRows": 1,
-	"me.go:handleMe": 3,
+	// Key custody and the KEK row: handleSetupStatus redacts every check for a non-operator, so
+	// their inputs are not read for one.
+	"setup_checks_kek.go:kekLocalRows":    1,
+	"setup_checks_keys.go:keyCustodyRows": 1,
+	"me.go:handleMe":                      3,
 	// A member's backend row names neither the probe error nor the substrate.
 	"compose_setup.go:setupBackendItem": 1,
 	// Compares stamped tiers: the switch must not change whether a demotion
@@ -71,8 +83,20 @@ var isOperatorCensus = map[string]int{
 	// Drive storage layout on the security-tier drive routes: the directory
 	// name, writability past the drive's posture, and the host path stay the
 	// super admin's.
+	"user_drives.go:handleGetUserDrives":            1, // a security admin reads the allow-listed projection
 	"user_drives_preview.go:handlePreviewUserDrive": 1,
 	"user_drives_tier.go:upsertUserDriveGrantAs":    1,
+	// Which runner a drive's second place is bound to is named to an operator and that runner's owner only.
+	"user_drives_second_place.go:boundRunnerName": 1,
+	// Audit rows: host detail stays the super admin's on the feed reads and the partition export.
+	"audit.go:auditRowsFor":                          1,
+	"audit_partition_export.go:exportAuditPartition": 1,
+	// A mount's host path is the super admin's: the spec read tier withholds it below
+	// that tier, and a profile write or its approval sets one only as a super admin.
+	"policies.go:specReadTierFor":                  1,
+	"governance_unit_write.go:writeGovernanceUnit": 1,
+	"governance_change_kinds.go:applyUnitChange":   1,
+	"governance_dry_run.go:applyUnitWriteQ":        1,
 	// The measured reason can carry a substrate's own error text, so only an operator reads it.
 	"runner_usage.go:remoteUsage": 1,
 	// Operators host their own runner without the self_host_runner grant (capabilities.md).

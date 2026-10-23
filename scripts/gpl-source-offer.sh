@@ -117,6 +117,7 @@ done
 # deploy/images/novnc/Dockerfile; a new entry here needs its own check there.
 MANUAL_ENTRIES=(
   "agent-novnc|websockify|0.13.0|LGPL-3.0|https://github.com/novnc/websockify/archive/refs/tags/v0.13.0.tar.gz"
+  "agent-novnc-signin|websockify|0.13.0|LGPL-3.0|https://github.com/novnc/websockify/archive/refs/tags/v0.13.0.tar.gz"
 )
 
 # Frozen history: offers owed for artifacts that can no longer be re-scanned

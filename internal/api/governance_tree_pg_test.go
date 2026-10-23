@@ -336,7 +336,7 @@ func TestDefaultUnitIsTheDeploymentDefault(t *testing.T) {
 		t.Fatalf("GET /governance = %d %s", w.Code, w.Body)
 	}
 	i := slices.IndexFunc(body.Units, func(u governanceUnitView) bool { return u.Kind == types.UnitKindDefault })
-	if i < 0 || !sameAsJSON(t, body.Units[i].Effective.Ceiling, redactSpecForRead(want.Ceiling, true)) || body.MaxDepth != 16 {
+	if i < 0 || !sameAsJSON(t, body.Units[i].Effective.Ceiling, redactSpecForRead(want.Ceiling, specReadFull)) || body.MaxDepth != 16 {
 		t.Errorf("GET /governance Default = %+v, max_depth %d; want the deployment default and 16", body.Units, body.MaxDepth)
 	}
 }
@@ -616,7 +616,7 @@ func TestBreakGlassUnitsPassThroughOnly(t *testing.T) {
 		t.Errorf("Default and a pass-through child only, no reason: %d %s, want 200", w.Code, w.Body)
 	}
 	e.seedProfile("bg-walls", "pypi.org")
-	if w := post(); w.Code != http.StatusBadRequest || wireReason(t, w) != reasonBreakGlassReasonRequired || !strings.Contains(w.Body.String(), "units with their own walls exist") {
+	if w := post(); w.Code != http.StatusBadRequest || wireReason(t, w) != reasonBreakGlassReasonRequired || !strings.Contains(w.Body.String(), "units with their own walls or restrictions exist") {
 		t.Errorf("with a unit of its own walls, no reason: %d %s, want 400 %s", w.Code, w.Body, reasonBreakGlassReasonRequired)
 	}
 }

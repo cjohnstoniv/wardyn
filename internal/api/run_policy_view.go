@@ -208,12 +208,12 @@ func (s *Server) handleGetRunPolicy(w http.ResponseWriter, r *http.Request) {
 		slog.WarnContext(ctx, "api: run policy view without the site config", "run_id", run.ID, "err", err)
 	}
 	resp.Changes = explainRunPolicy(base, served, ev, sc, run)
-	resp.Provenance = envelope.Provenance.withContacts(s.runPolicyRef(ctx, run), sc.PolicyHelp)
+	resp.Provenance = envelope.Provenance.withContacts(s.runPolicyRef(ctx, run), sc.PolicyHelp, s.restrictionContacts(ctx, run.RestrictionIDs))
 	s.fillLockerContacts(ctx, run, resp.Provenance)
 	resp.StoredPolicyNow = s.storedPolicyNowOf(ctx, run, create, &resp.Source)
 
-	secOp := s.isSecurityOperator(ctx)
-	out := redactSpecForRead(served, secOp)
+	tier := s.specReadTierFor(ctx)
+	out := redactSpecForRead(served, tier)
 	if out.LLMInspection != nil {
 		li := *out.LLMInspection
 		li.WorkspaceSecretValues = nil // a placeholder count would fail validatePolicySpec's no-raw-values rule
@@ -222,7 +222,8 @@ func (s *Server) handleGetRunPolicy(w http.ResponseWriter, r *http.Request) {
 	if out.AllowedDomains == nil {
 		out.AllowedDomains = []string{}
 	}
-	resp.Redacted = !secOp && !reflect.DeepEqual(specJSON(served), specJSON(redactSpecForUser(served)))
+	// Redacted: this tier was shown less than a super admin is (a mount's host path, a secret name).
+	resp.Redacted = !reflect.DeepEqual(specJSON(redactSpecForRead(served, specReadFull)), specJSON(redactSpecForRead(served, tier)))
 	resp.Spec = &out
 	writeJSON(w, http.StatusOK, resp)
 }

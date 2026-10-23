@@ -83,6 +83,12 @@
       "shared",
       "delivery"
     ],
+    "DesktopControls": [
+      "paste_in",
+      "copy_out",
+      "upload",
+      "download"
+    ],
     "DriveAttachment": [
       "drive_id",
       "read_only"
@@ -386,6 +392,14 @@
       "omitted": "unset_optional",
       "empty": "value",
       "meaning": "No application is declared for the browser.",
+      "section": "run_wide"
+    },
+    {
+      "name": "desktop",
+      "part": "tools_image",
+      "omitted": "unset_optional",
+      "empty": "same_as_omitted",
+      "meaning": "The desktop keeps its defaults: paste in and upload allowed, copy out and download blocked.",
       "section": "run_wide"
     },
     {
@@ -726,6 +740,11 @@
       "name": "local_folder",
       "excluded": "launch",
       "why": "A folder on one person's computer is named at each launch; a template cannot know where it is."
+    },
+    {
+      "name": "machine_kind",
+      "excluded": "launch",
+      "why": "The kind of sandbox is chosen at each launch in this release; a template never prefills a Linux VM."
     },
     {
       "name": "max_wait_sec",

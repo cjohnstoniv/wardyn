@@ -40,6 +40,9 @@ const (
 	GovernanceTargetRunNodeRecord          = "run_node_record"
 	GovernanceTargetBoundary               = "governance_boundary"
 	GovernanceTargetUnitAdmin              = "governance_unit_admin"
+	GovernanceTargetRestriction            = "governance_restriction"
+	GovernanceTargetWorkspaceOwningUnit    = "workspace_owning_unit"
+	GovernanceTargetApprovalRule           = "approval_rule"
 )
 
 // GovernanceChange is one governance write held for a second human (migration 0126). Payload is the

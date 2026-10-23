@@ -427,6 +427,31 @@ describe("AvailabilityDraft + writeAvailability — a creation form (decision 4)
     expect(screen.getByRole("button", { name: AVAILABILITY.REMOVE_ARIA("Portfolio manager") })).toBeDisabled();
   });
 
+  it("holds Only these as pending, never as restricted, with nobody listed: it waits for the first audience (#2593)", async () => {
+    const onDraft = vi.fn();
+    render(<Harness onDraft={onDraft} />);
+
+    await userEvent.click(screen.getByRole("radio", { name: AVAILABILITY.ONLY }));
+    expect(onDraft).toHaveBeenLastCalledWith({ restricted: false, audiences: [], pending: true });
+    expect(screen.getByRole("radio", { name: AVAILABILITY.ONLY })).toBeChecked();
+    expect(screen.getByTestId("availability-pending")).toHaveTextContent(AVAILABILITY.PENDING_NOTE_IMAGE);
+
+    await userEvent.click(screen.getByRole("radio", { name: AVAILABILITY.ADMINS_ONLY }));
+    expect(screen.queryByTestId("availability-pending")).not.toBeInTheDocument();
+    expect(onDraft).toHaveBeenLastCalledWith({ restricted: false, audiences: [] });
+
+    await userEvent.click(screen.getByRole("radio", { name: AVAILABILITY.ONLY }));
+    await userEvent.type(screen.getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER), "portfolio-manager");
+    await userEvent.click(screen.getByRole("button", { name: AVAILABILITY.ADD_CTA }));
+    await screen.findByText("Portfolio manager");
+    expect(onDraft).toHaveBeenCalledTimes(4);
+    expect(onDraft).toHaveBeenLastCalledWith({
+      restricted: true,
+      audiences: [{ subject_type: "user_type", subject: "portfolio-manager" }],
+    });
+    expect(screen.queryByTestId("availability-pending")).not.toBeInTheDocument();
+  });
+
   it("writes the list first, then Only these", async () => {
     const calls: string[] = [];
     upsertGrantMock.mockImplementation(async (g: { subject: string }) => calls.push(`grant ${g.subject}`));

@@ -151,6 +151,7 @@ func planGovernance(current, doc GovernanceDocument, prune bool) (GovernancePlan
 			plan.Steps = append(plan.Steps, ApplyStep{Kind: "unit", Op: "delete", Name: p.Name, ID: &id})
 		}
 	}
+	planRestrictions(current, doc, prune, &plan)
 	plan.Destructive = slices.ContainsFunc(plan.Steps, func(s ApplyStep) bool { return s.Op == "delete" })
 	return plan, nil
 }

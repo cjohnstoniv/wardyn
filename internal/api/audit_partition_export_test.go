@@ -300,8 +300,19 @@ func TestPG_AuditPartitionExportMatchesTheDatabaseDigest(t *testing.T) {
 			t.Fatalf("%s export: %d %s", form, w.Code, w.Body.String())
 		}
 		lines := ndjsonObjects(t, w.Body.Bytes())
-		if len(lines) != rows+2 {
-			t.Fatalf("%s export has %d lines, want manifest + %d rows + footer", form, len(lines), rows)
+		// The partition also holds rows this test did not write (a fresh schema's
+		// governance.boundary.seed), so only the probe rows are counted.
+		if len(lines) < 2 {
+			t.Fatalf("%s export has %d lines, want a manifest and a footer", form, len(lines))
+		}
+		var probes []map[string]any
+		for _, r := range lines[1 : len(lines)-1] {
+			if r["action"] == "export.partition.probe" {
+				probes = append(probes, r)
+			}
+		}
+		if len(probes) != rows {
+			t.Fatalf("%s export has %d lines with %d probe rows, want manifest + %d probe rows + footer", form, len(lines), len(probes), rows)
 		}
 		if got := lines[len(lines)-1]["digest"]; got != dbDigest {
 			t.Errorf("%s export footer digest = %v, audit_partition_digest = %s", form, got, dbDigest)
@@ -324,8 +335,8 @@ func TestPG_AuditPartitionExportMatchesTheDatabaseDigest(t *testing.T) {
 			if d != dbDigest {
 				t.Errorf("a fold of the raw archive with nothing but sha256 = %s, audit_partition_digest = %s", d, dbDigest)
 			}
-			if lines[1]["data"] != `{"a": {"n": 2}, "z": 1}` {
-				t.Errorf("raw data = %q, want the jsonb's own text", lines[1]["data"])
+			if probes[0]["data"] != `{"a": {"n": 2}, "z": 1}` {
+				t.Errorf("raw data = %q, want the jsonb's own text", probes[0]["data"])
 			}
 		}
 	}

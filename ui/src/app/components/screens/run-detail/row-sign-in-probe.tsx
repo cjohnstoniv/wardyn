@@ -12,15 +12,13 @@ import { useRunSignIn } from "./use-run-sign-in";
 
 export default function RowSignInProbe({
   runId,
-  createdAt,
   onChange,
 }: {
   runId: string;
-  createdAt: string;
   /** Called with whether a sign-in is waiting; a failed read reports false. */
   onChange: (waiting: boolean) => void;
 }) {
-  const r = useRunSignIn(runId, createdAt, true);
+  const r = useRunSignIn(runId, true);
   const waiting = !!r.waiting && !r.failed;
   React.useEffect(() => onChange(waiting), [waiting, onChange]);
   return null;

@@ -73,9 +73,11 @@ func TestSponsorReach_RouteCensus(t *testing.T) {
 			t.Errorf("routes.go does not mount %s (%v)", route, err)
 		}
 	}
-	// sponsorsRun itself is asked only by the predicate above and by the ticket mint, whose load admits a
-	// sponsor so that its entry check can refuse by capability; any other caller is a new sponsor door.
-	if want := map[string]int{"ownsRunOrSponsorOrAdmin": 1, "handleAttachTicket": 1, "sponsorMayEnter": 1}; !maps.Equal(direct, want) {
+	// sponsorsRun itself is asked only by the predicate above and by the interactive entry rule (admitRunEntry,
+	// the ticket mint's and a takeover's), whose load admits a sponsor so that its entry check can refuse by
+	// capability. loadTakeover asks it only to send a sponsor on to that rule rather than refuse them as a
+	// stranger; it admits nothing itself. Any other caller is a new sponsor door.
+	if want := map[string]int{"ownsRunOrSponsorOrAdmin": 1, "admitRunEntry": 1, "loadTakeover": 1, "sponsorMayEnter": 1}; !maps.Equal(direct, want) {
 		t.Errorf("sponsorsRun is asked by %v, want %v", direct, want)
 	}
 	// mayEnterRunOrSponsor admits a sponsor on a redeemed ticket or an open UI session without a delegation

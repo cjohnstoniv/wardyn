@@ -287,6 +287,66 @@ func TestAccessCredential_BedrockSSOFollowsInjectSwitch(t *testing.T) {
 	}
 }
 
+// With WARDYN_AWS_SIGV4_AT_PROXY on, an AWS sign-in lane the proxy re-signs holds only a placeholder
+// key pair: its role credentials are the proxy's and gone with the run. A lane with a host the proxy
+// cannot re-sign keeps them in the sandbox, as it does with the switch off. Pinned by a golden.
+func TestAccessCredential_AWSRoleFollowsReSigning(t *testing.T) {
+	bedrock := runProviderChoice{chosen: true, provider: types.ModelProvider{ID: "bedrock", Name: "Bedrock", Kind: types.ModelProviderBedrockSSO,
+		Bedrock: &types.BedrockSettings{Region: "us-east-1"}}}
+	cliRow := func(id uuid.UUID, host string) attachedComponent {
+		return attachedComponent{source: componentSourceOrg, snapshot: types.RunComponent{ComponentID: &id, Name: "AWS CLI",
+			Definition: types.ComponentDefinition{Hosts: []string{host}, CLI: &types.ComponentCLI{Kind: types.CLIKindAWS,
+				AWS: &types.CLIAWS{StartURL: "https://d-1234567890.awsapps.com/start", SSORegion: "us-east-1", AccountID: "123456789012", RoleName: "Dev", Region: "us-east-1"}}}}}
+	}
+	comps := runComponents{attached: []attachedComponent{
+		cliRow(uuid.MustParse("0b5c3a52-77e1-4c1e-9d0a-1d4f3c2b1a01"), "s3.us-east-1.amazonaws.com"),
+		cliRow(uuid.MustParse("0b5c3a52-77e1-4c1e-9d0a-1d4f3c2b1a02"), "s3.us-east-1.amazonaws.com:8443"), // not port 443: never re-signed
+	}}
+	req := createRunRequest{Agent: "claude-code", Task: "t"}
+	got := map[string][]client.AccessCredential{}
+	for _, on := range []bool{false, true} {
+		srv := &Server{cfg: Config{AWSSSOProxyInject: true, AWSSigV4AtProxy: on}}
+		facts := componentFacts(componentFactInputs{req: &req, mpChoice: bedrock, comps: comps}, nil)
+		access, err := srv.accessFor(httptest.NewRequest(http.MethodPost, preflightDoor, nil), accessInputs{req: &req, mpChoice: bedrock, comps: comps, facts: facts})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var aws []client.AccessCredential
+		for _, c := range access.Credentials {
+			if c.Kind == credKindAWSRole || c.Kind == credKindModel {
+				aws = append(aws, c)
+			}
+		}
+		got[map[bool]string{false: "off", true: "on"}[on]] = aws
+	}
+	compareOrUpdateGolden(t, "testdata/access_facts_aws_sigv4_golden.json", got)
+}
+
+// The portal route is opened only for a lane the proxy does not re-sign, so a re-signed AWS CLI row
+// lists no portal.sso host and a lane that keeps the sign-in lists it.
+func TestAccessCredential_AWSPortalHostFollowsReSigning(t *testing.T) {
+	id := uuid.MustParse("0b5c3a52-77e1-4c1e-9d0a-1d4f3c2b1a01")
+	comps := runComponents{attached: []attachedComponent{{source: componentSourceOrg, snapshot: types.RunComponent{ComponentID: &id, Name: "AWS CLI",
+		Definition: types.ComponentDefinition{Hosts: []string{"s3.us-east-1.amazonaws.com"}, CLI: &types.ComponentCLI{Kind: types.CLIKindAWS,
+			AWS: &types.CLIAWS{StartURL: "https://d-1234567890.awsapps.com/start", SSORegion: "us-east-1", AccountID: "123456789012", RoleName: "Dev", Region: "us-east-1"}}}}}}}
+	req := createRunRequest{Agent: "claude-code", Task: "t"}
+	for _, on := range []bool{false, true} {
+		srv := &Server{cfg: Config{AWSSSOProxyInject: true, AWSSigV4AtProxy: on}}
+		facts := componentFacts(componentFactInputs{req: &req, comps: comps}, nil)
+		access, err := srv.accessFor(httptest.NewRequest(http.MethodPost, preflightDoor, nil), accessInputs{req: &req, comps: comps, facts: facts})
+		if err != nil {
+			t.Fatal(err)
+		}
+		listed := false
+		for _, h := range access.Hosts {
+			listed = listed || h.Host == "portal.sso.us-east-1.amazonaws.com"
+		}
+		if listed == on {
+			t.Errorf("re-signing %v: portal.sso listed = %v, want %v", on, listed, !on)
+		}
+	}
+}
+
 // The unlisted line reads the effective spec: unset is always_deny, a
 // wait_for_review hold defaults to the proxy's window, allow-all is reported.
 func TestAccessUnlisted(t *testing.T) {

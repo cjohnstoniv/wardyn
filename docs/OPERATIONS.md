@@ -42,7 +42,7 @@ user, same host](#second-user-same-host)". Deciding who can do what:
 - [Kubernetes: day-2](#kubernetes-day-2)
 - [High availability](#high-availability)
 - [Kubernetes: known gaps](operations/kubernetes-known-gaps.md#kubernetes-known-gaps)
-- Task pages under [`docs/operations/`](operations/): [Managed laptops: client-mode runners](operations/hybrid-laptops.md), [Runner pools](operations/runner-pools.md#runner-pools-where-a-run-goes), [Launch presets](operations/launch-presets.md#launch-presets), [Console branding](operations/console-branding.md#console-branding), [The Wardyn boundary](operations/boundary.md#the-wardyn-boundary-the-outermost-layer-of-every-run), [Unit admins](operations/unit-admins.md#unit-admins-governing-one-part-of-the-tree)
+- Task pages under [`docs/operations/`](operations/): [Managed laptops: client-mode runners](operations/hybrid-laptops.md), [Runner pools](operations/runner-pools.md#runner-pools-where-a-run-goes), [Launch presets](operations/launch-presets.md#launch-presets), [Console branding](operations/console-branding.md#console-branding), [The Wardyn boundary](operations/boundary.md#the-wardyn-boundary-the-outermost-layer-of-every-run), [Approval rules](operations/approval-rules.md#approval-rules-a-security-admins-rule-approves-a-service-identitys-held-call), [Unit admins](operations/unit-admins.md#unit-admins-governing-one-part-of-the-tree)
 
 </details>
 
@@ -938,6 +938,11 @@ psql -Atc "SELECT 'db:     ' || audit_partition_digest('audit_events_p202610')"
 - Only a security operator may export a partition; anyone else gets an empty export, and `?partition=` with any other
   filter is refused (`audit_export_partition_filter`).
 - The readable form (`form=readable`, the default) gives the same rows in the audit feed's own event shape.
+- A `security_admin`'s export withholds host detail: such a row carries `redacted_fields` and stored hashes, so the
+  fold and links verify, and `redacted_rows` in the footer counts them. Report their content apart, as not verifiable
+  at that tier; a super admin's export re-hashes in full. Cross-check that the marker appears only on the actions
+  [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md#host-detail-below-the-super-admin-tier) lists, that each row's
+  `redacted_fields` names only that action's withheld fields, and that the marked rows number `redacted_rows`.
 
 - **Rows written before the upgrade** keep `NULL` hashes, are reported as `legacy`, and are never a failure.
   - There is no backfill, on purpose: hashes computed after the fact by the same process that could have altered the
@@ -1064,6 +1069,8 @@ lever today**. Concretely:
     an empty export; a run that is not theirs or does not exist still answers the same empty `200`.
   - Below the security tier both `GET /audit` and the export leave out the name of an organisation's `shared` component
     secret; `admin` and `security_admin` receive the rows as recorded ([Custom components](operations/custom-components.md#custom-components)).
+  - Below a super admin both reads also withhold host detail, such as a drive's host root, named in `redacted_fields`;
+    sinks keep the whole row ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md#host-detail-below-the-super-admin-tier)).
 
 - **This is asymmetric with session recordings**, which have the retention lever audit lacks:
   `WARDYN_RECORDING_RETENTION_DAYS` ([ENV.md](ENV.md#wardyn_recording_retention_days)) age-deletes stored PTY casts, defaulting to
@@ -1864,8 +1871,9 @@ enforces, not a re-derivation:
 - Whoever can read the run (`GET /runs/{id}`): its creator or an admin.
 - Anyone else gets the run's own `404` and a `not_owner` audit row.
 - A portal's delegated token is refused `403` `delegation_scope`: the route is not on the delegation list.
-- Below the security admin tier the policy's mount sources read `<redacted>` and grant secret names are dropped (`redacted: true`), the same rule as reading a policy; `llm_inspection` secret values are never returned.
-- The result is a policy document you can reuse as is only from the security admin tier up; below it, fill in the hidden values first.
+- Below the super admin tier the policy's mount sources read `<redacted>`, and below the security admin tier grant secret names are dropped too (`redacted: true`), the same rule as reading a policy; `llm_inspection` secret values are never returned.
+- Tier reach: a mount's host path is the super admin's to read and to set, on every policy, preset and governance profile read; a security admin keeps or removes a mount but never sees or changes its host path.
+- The result is a policy document you can reuse as is only as a super admin; anyone else fills in the hidden values first.
 - A run that used an organisation component's shared secret is the exception for everyone: its grant carries `shared: true`, which no authored policy may set, so the document is a record of the run and validation refuses it. Select the component again on the new run.
 
 **What it does not cover:** hosts approved while the run was running (Approvals), credentials the run was handed (Credentials), folders added from a workspace or a drive, and Azure DevOps access that came from the connection's defaults.
@@ -2282,7 +2290,7 @@ It is dropped there with an audited reason (`unloadable-upstream-url`, a
 
 ### Phase B: the SSO/Bedrock MITM lane and the upstream proxy
 
-- Phase B (`WARDYN_AWS_SSO_PROXY_INJECT=on`, the default — see [ENV.md](ENV.md) and "[Turning the lane off](#turning-the-lane-off)" below) terminates and re-originates `portal.sso.<region>.amazonaws.com` inside the `wardyn-proxy` sidecar to inject a captured AWS SSO session on the wire.
+- Phase B (`WARDYN_AWS_SSO_PROXY_INJECT=on`, the default — see [ENV.md](ENV.md); `off` was removed, see "[Removed in 0.10.0](#removed-in-0100)" below) terminates and re-originates `portal.sso.<region>.amazonaws.com` inside the `wardyn-proxy` sidecar to inject a captured AWS SSO session on the wire.
 - That re-origination is a forward dial like any other in this section, not a separate lane with its own rules: it is governed by `upstream_proxy_url`, `upstream_proxy_no_proxy` and `internal_hosts` exactly as above.
 - On a private-endpoint estate it needs the same configuration a VPC-endpoint Bedrock deployment does:
   - bypass plus lift where the sidecar can reach the endpoint itself;
@@ -3268,21 +3276,15 @@ Naming these is the point of the walk, not a caveat on it:
 - It also ends after three consecutive 404s, and at its budget.
 - It never ends later.
 
-### Turning the lane off
+### Removed in 0.10.0
 
-- `WARDYN_AWS_SSO_PROXY_INJECT=off` restores the pre-0.7.6 behaviour:
-  - the SSO access token is written into the sandbox's token cache;
-  - `portal.sso` is not TLS-MITM'd;
-  - no injection grant is authored;
-  - a lapsed session fails the run's model call as it used to.
-- It is also the sanctioned stopgap for the corporate-proxy interaction described in ["Phase B: the SSO/Bedrock MITM lane and the upstream proxy"](#phase-b-the-ssobedrock-mitm-lane-and-the-upstream-proxy) above.
-- It is reachable now as a named Helm value and a Compose env line, not only through the raw env passthrough.
-- It applies to **new dispatches only**.
-- The placeholder cache, the injection grant and the MITM entry are all authored at dispatch.
-- So a run that is already running keeps the lane it was authored with until it ends.
-- That includes a run that is currently HELD, which keeps holding to its budget and can still be resolved by a sign-in.
-- After flipping the switch, relaunch the runs that matter or wait them out; do not expect a running sandbox to change lane under you.
-- The default is `on` — set the environment variable to `off` to roll back; a run already dispatched under `on` is unaffected by a later flip either direction.
+- `WARDYN_AWS_SSO_PROXY_INJECT=off` is gone: `wardynd` refuses to start on `off`, `false` or `0` (`refuseAWSSSOProxyInjectOff` in [`cmd/wardynd/boot_posture.go`](../cmd/wardynd/boot_posture.go)), whether it comes from the environment, the `-aws-sso-proxy-inject` flag or the Helm value `awsSSOProxyInject`. To start again, unset it or set it to `on`. The default `on` applies to new dispatches only: a run already running keeps the lane it was authored with, a held run included.
+- The AWS sign-in token now always stays at the proxy, and the sandbox's token cache holds a placeholder.
+- `off` was the stopgap for a TLS-intercepting corporate proxy. Stage that proxy's CA instead:
+  1. Put the proxy's root CA in a PEM bundle.
+  2. Point `WARDYN_TRUSTED_CA_FILE` at it (see [ENV.md](ENV.md#wardyn_trusted_ca_file)).
+  3. Start new runs. The `wardyn-proxy` then trusts that CA when it re-originates the sign-in lane.
+- A proxy that cannot reach the AWS hosts is a routing problem, not a TLS one: use `upstream_proxy_no_proxy` and `internal_hosts` ("[Upstream proxy: the bypass list](#upstream-proxy-the-bypass-list-upstream_proxy_no_proxy)").
 
 > [!WARNING]
 > **A downgrade to 0.7.5 with `credential_reauth` rows present is UNSUPPORTED.**
@@ -3368,7 +3370,7 @@ No provider of this kind registered means today's behaviour, unchanged.
 
 1. Bind the model server where the proxy can reach it but the network cannot: on a laptop, the Docker host (`http://host.docker.internal:11434` under Docker Desktop); on a node, its private address.
 2. Pull every model yourself on that machine. A run can never pull, push, create, copy or delete one.
-3. `GET /api/v1/model-providers`, add the row, and `PUT` the list back; a `PUT` replaces the whole list. The console form comes later. The row:
+3. Add the row in Settings → Model providers (kind Local model server), or `GET /api/v1/model-providers`, add it and `PUT` the list back; a `PUT` replaces the whole list. The row:
    `{"id":"laptop-gpu","kind":"local_model","base_url":"http://host.docker.internal:11434","local":{"models":["qwen2.5-coder:7b"]},"harnesses":[{"harness":"claude-code","model":"qwen2.5-coder:7b"},{"harness":"codex-cli","model":"qwen2.5-coder:7b"}]}`
 4. Grant it to people as any other provider; with no `auth`, nobody has anything to connect.
 
@@ -4012,10 +4014,24 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0205` (`0205_user_drives_team`) adds `user_drives.team` (`0054`'s table), with a check keeping it off a person's own drive and off `k8s_pvc`, and `user_drive_grants.members_can_write` (`0054`'s table, false by default): a team drive and its allocations' write bit (`storage.user_drive.team_drives`). A write setting `team` on a `k8s_pvc` or member-owned row now fails.
 - `0206` (`0206_runner_health`) adds `runner_health`, one row per runner (`0139`'s `runners`): the last offline summary a runner reported, when stored, and its last relay status, each runner-reported and capped.
 - `0207` (`0207_governance_units`) renames `governance_profiles` to `governance_units` (`base_profile_id` becomes `parent_id`), `governance_assignments` to `governance_memberships` (`profile_id` becomes `unit_id`) and `agent_runs.governance_profile_id` to `unit_id`, and rewrites the `profile_id` key of each queued run's launch and the kind and JSON keys of each `governance_changes` row. No other row is rewritten; a table rename keeps its grants, so a split-role install needs no grant change. A change proposed before the upgrade reads as stale once: propose it again.
-- `0208` (`0208_governance_unit_tree`) makes units a tree under one Default unit (id `00000000-0000-0000-0000-000000000001`, named `Default (deployment)` when `Default` is taken). Composed units with no base become its children and compose as before. Memberships are keyed `(unit_id, subject_type, subject)`; existing ones are `legacy`, and only a person's first by precedence is a context, so no run's walls change. No table is new: no grant change.
-- `0209` (`0209_governance_change_tree_ops`) admits held-change ops `move` and `promote`; no row or grant changes.
-- `0210` (`0210_governance_restrictions`) creates `governance_restrictions` and `governance_restriction_members` (deny-only lists that follow people), adds `workspaces.owning_unit_id` (`0008`'s table; a unit the workspace is pinned to, `ON DELETE RESTRICT`) and `agent_runs.restriction_ids` (`0001`'s table; a constant-default array, so no row is rewritten); a split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `governance_restrictions` and `governance_restriction_members`.
-- `0211` (`0211_governance_unit_admins`) creates `governance_unit_admins` (the people and IdP groups who administer a unit and the units below it) and adds `locked_knobs` to `governance_units` and `governance_boundary` (a constant-default array, so no row is rewritten); a split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `governance_unit_admins`.
+- `0208` (`0208_governance_unit_tree`) makes units a tree under one Default unit (id `00000000-0000-0000-0000-000000000001`, named `Default`, else the first free of `Default (deployment)`, `Default (deployment 2)`, …). Composed units with no base become its children and compose as before. Memberships are keyed `(unit_id, subject_type, subject)`; existing ones are `legacy`, and only a person's first by precedence is a context, so no run's walls change. No table is new: no grant change.
+- `0209` (`0209_runner_pending_actions_run_index`) adds the index `runner_pending_actions_run_kind_queued` on `runner_pending_actions` (`0139`'s table), which a run's lease checks read its action history through; the build holds a lock on the table for its duration.
+- `0210` (`0210_approval_notifications_purge_index`) adds the partial index `approval_notifications_purge_idx` on `approval_notifications` (`0118`'s table) over its sent, cancelled and dead rows, which the outbox purge reads; the build holds a lock on the table for its duration.
+- `0211` (`0211_principal_identity_scim_lookup_indexes`) adds indexes on `principal_identities` (`0113`'s table) over `lower(scim_user_name)`, `lower(scim_external_id)`, `object_id` and `email_lower`, and on `principal_identity_aliases` over `value_lower`, which SCIM user lookups read; the builds hold a lock on each table for their duration.
+- `0212` (`0212_principal_lower_indexes`) adds indexes over `lower(principal)` on `principal_identities` (`0113`), `people` (`0090`) and `api_tokens` (`0045`), and over `lower(owned_by)` on `workspaces` (`0008`), which the case-folded name lookup behind a person's erasure and a SCIM group removal reads; the builds hold a lock on each table for their duration.
+- `0213` (`0213_approvals_pending_scope_hash_uniq`) replaces the partial unique index `approvals_pending_noncred_uniq` on `approvals` with `approvals_pending_noncred_hash_uniq`, keyed on a sha256 of the requested scope instead of the scope itself so a large scope no longer fails to insert; the build holds a lock on the table for its duration.
+- `0214` (`0214_audit_chain_head_lazy`) is a later `CREATE OR REPLACE` of `0130`'s chain function, which reads the newest hashed row from `audit_events` only while no head has been recorded in `audit_partition_meta`, instead of on every insert; it re-creates the audit triggers, which holds a lock on the table briefly.
+- `0215` (`0215_agent_runs_runner_ref_index`) adds the partial index `agent_runs_runner_ref_idx` on `agent_runs` over runner runs that still hold a sandbox ref, which the runner retirement producer reads; the build holds a lock on the table for its duration.
+- `0216` (`0216_recordings_size_tail`) adds `size_bytes`, `tail` and `stat_updated_at` to `recordings` (`0028`'s table): a cast's byte size and last 8 KiB, which the Recordings list reads instead of decompressing each stored recording; the migration reads every stored recording once to fill them, and holds an exclusive lock on `recordings` until it commits.
+- `0217` (`0217_run_machine_kind`) adds `machine_kind` and `vm_machine` to `agent_runs` (`0001`'s table): the kind of sandbox a run asked for (empty for a container) and the virtual machine a Linux VM run started on.
+- `0218` (`0218_approval_human_takeover`) admits the approval kind `human_takeover` ("Needs you") in `approvals.kind`'s CHECK and adds `approvals.takeover_holder` and `approvals.handed_back_at` (`0001`'s table): who has control of a run the agent asked a person to take over, and when they handed it back.
+- `0222` (`0222_agent_runs_model_allowlists`) adds `model_allowlists` to `agent_runs` (`0001`'s table): the model allowlist each local model provider handed the run's proxy at its latest dispatch.
+- `0223` (`0223_governance_boundary_seed`) adds `governance_boundary.seeded_at` and the boundary's one row in `no_limits`, so an upgrade keeps its boundary as it was. Only a fresh install's first boot then moves that row to `hard_limits` with floor `CC1` and nothing listed, which reaches what `no_limits` does, and writes `governance.boundary.seed`.
+- `0224` (`0224_approval_rules`) creates `approval_rules`, the security tier's approval rules ([approval-rules.md](operations/approval-rules.md)); a split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `approval_rules`.
+- `0225` (`0225_user_drives_second_place`) adds `alt_backend`, `alt_host_root` and `alt_runner_id` to `user_drives` (`0054`'s table; the runner references `runners`): a share's second place, the same share as one person's own runner sees it. All three are NULL on every existing drive, which mounts exactly as before. Before you upgrade: a drive becomes reachable on a person's own runner only once an admin binds it to that runner and the runner's owner starts `wardyn-runnerd` with a `--drive-root` covering the path; nothing else changes reach.
+- `0226` (`0226_governance_change_tree_ops`) admits held-change ops `move` and `promote`; no row or grant changes.
+- `0227` (`0227_governance_restrictions`): a split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `governance_restrictions` and `governance_restriction_members`.
+- `0228` (`0228_governance_unit_admins`) creates `governance_unit_admins` (the people and IdP groups who administer a unit and the units below it) and adds `locked_knobs` to `governance_units` and `governance_boundary` (a constant-default array, so no row is rewritten); a split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `governance_unit_admins`.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
@@ -4774,7 +4790,7 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 **What a member's run sees.**
 
 - The folder mounts at `/home/agent/shared/<name-slug>`, read-only unless the allocation says `members_can_write`. A run asking to write a read-only one is refused.
-- Its home segment is `t-` plus 20 hex characters, derived from the drive id: `<host_root>/t-…` on `host_path` (create that directory; Wardyn never creates one on a share) and a claim or volume named `wardyn-drive-<drive-id-hex>-<home>` with that home. `POST /api/v1/drives/preview` for any group member prints it.
+- Its home segment is `t-` plus 20 hex characters, derived from the drive id: `<host_root>/t-…` on `host_path` (create that directory; Wardyn never creates one on a share) and a claim or volume named `wardyn-drive-<drive-id-hex>-<home>` (`id` scheme; under `slug` the drive's name-slug stands in for the id, see `object_scheme`) with that home. `POST /api/v1/drives/preview` for any group member prints it.
 - People outside the allocated groups never get the mount.
 - `GET /api/v1/me/drives` marks the row `team: true` and lists in `shared_with` the caller's own groups that carry the allocation, never anyone else's.
 - Every run's mount writes `run.drive.mount` with `team: true` and `mounted_by`, the person whose run mounted it.
@@ -5547,6 +5563,9 @@ What the switch needs, and refuses to render or boot without:
       and app role install grants the app role `SELECT, INSERT, DELETE` on
       `run_output_chunks`, `SELECT, INSERT, UPDATE, DELETE` on `run_attach_leases` and
       `ado_run_pat_state`, and `SELECT, INSERT, UPDATE` on `ado_signin_ends`.
+- **A desktop Close is shared through the database** (`ui_desktop_closed`): every replica refuses the closed cookie,
+  and a stream open on another replica ends within 15 s.
+  - While the database is unreachable, open desktops end and new opens are refused until it is back.
 
 ### What stays per replica
 

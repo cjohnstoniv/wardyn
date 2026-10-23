@@ -75,7 +75,7 @@ func (s *Server) scopeGovernanceRead(ctx context.Context, resp governanceRespons
 		if p.Resolved == nil {
 			walls.Effective.Error = "the walls above this unit cannot be composed"
 		} else {
-			walls.Effective = governanceEffective{Ceiling: redactSpecForRead(p.Resolved.Ceiling, true), Limits: p.Resolved.Limits}
+			walls.Effective = governanceEffective{Ceiling: redactSpecForRead(p.Resolved.Ceiling, s.specReadTierFor(ctx)), Limits: p.Resolved.Limits}
 			walls.Provenance = s.wallsProvenance(rows, p.Resolved, s.locksOver(rows, parent, b, limit))
 		}
 		out.ParentWalls = append(out.ParentWalls, walls)

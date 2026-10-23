@@ -4,8 +4,8 @@
  */
 
 // Policies -> Wardyn boundary (board T2) and its dry run (board T4's report): the stored mode is what the page
-// shows, Hard limits stays off while the server gates it, every save runs the dry run before anything is
-// written, a stale dry-run reply is dropped, the PUT carries the draft with the ETag it read, the 409 fallback
+// shows, Hard limits can be chosen from no_limits, every save runs the dry run before anything is
+// written, a stale dry-run reply is dropped, the PUT carries the draft with the ETag it read, a refused write
 // reads in the server's words, and a held write is the submitted note. The page is security-admin only.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
@@ -30,10 +30,10 @@ import { OperatorProvider } from "../../wardyn/operator-context";
 import { BoundaryScreen } from "./boundary-screen";
 
 const noLimits = { mode: "no_limits", spec: {}, limits: {}, etag: '"b1"' };
-// A boundary already in hard_limits (set through the store): the only way the editor is reachable while gated.
+// A boundary already in hard_limits (set through the store).
 const hardLimits = { mode: "hard_limits", spec: {}, limits: {}, etag: '"b1"' };
 const emptyReport: BoundaryReport = { target: "boundary", deployment: [], units: [], stored_policies: [], memberships: [] };
-const GATED = "hard_limits cannot be set yet: the Wardyn boundary does not bound every brokered credential path a run is given, so it stays in no_limits until it does";
+const REFUSED = "invalid Wardyn boundary: denied_domains: not a hostname";
 
 function renderScreen(securityOperator = true) {
   return render(
@@ -75,17 +75,17 @@ describe("BoundaryScreen", () => {
     expect(screen.getByRole("group", { name: BOUNDARY.RINGS_LABEL })).toHaveTextContent(BOUNDARY.NOT_VISIBLE);
   });
 
-  it("while the server gates hard limits, the Hard limits choice is off, says why, and the list can't be reached", async () => {
+  it("with a stored no_limits boundary the Hard limits choice is enabled, and choosing it then Review shows the dry run", async () => {
     const user = userEvent.setup();
     renderScreen();
     await screen.findByText(BOUNDARY.ORG_PANEL);
-    expect(hardRadio()).toBeDisabled();
-    expect(hardRadio()).toHaveAccessibleDescription(BOUNDARY.HARD_GATED);
+    expect(hardRadio()).toBeEnabled();
     await user.click(hardRadio());
-    expect(screen.queryByTestId("boundary-hard-limits")).toBeNull();
-    expect(screen.queryByText(BOUNDARY.HARD_HEADING)).toBeNull();
-    expect(screen.queryByText(BOUNDARY.BLOCKED_HINT)).toBeNull();
-    expect(screen.getByRole("button", { name: BOUNDARY.REVIEW })).toBeDisabled();
+    expect(await screen.findByTestId("boundary-hard-limits")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: BOUNDARY.REVIEW }));
+    expect(await screen.findByTestId("boundary-dry-run")).toBeInTheDocument();
+    expect(dryRunMock).toHaveBeenCalledTimes(1);
+    expect(putMock).not.toHaveBeenCalled();
   });
 
   it("no second-admin claim before a submit, and no New installs chip", async () => {
@@ -190,9 +190,9 @@ describe("BoundaryScreen", () => {
     expect(await within(await screen.findByTestId("boundary-dry-run")).findByText(BOUNDARY_DRY_RUN.NO_CHANGE)).toBeInTheDocument();
   });
 
-  it("Submit sends the draft with the ETag it read, and the gated hard_limits 409 reads in the server's words", async () => {
+  it("Submit sends the draft with the ETag it read, and a refused write reads in the server's words", async () => {
     getMock.mockResolvedValue(hardLimits);
-    putMock.mockRejectedValue(new HttpError(409, GATED, "boundary_hard_limits_gated"));
+    putMock.mockRejectedValue(new HttpError(400, REFUSED, "boundary_invalid"));
     const user = userEvent.setup();
     renderScreen();
     await draftHosts("paste.example.org");
@@ -201,7 +201,7 @@ describe("BoundaryScreen", () => {
     await user.click(await within(report).findByRole("button", { name: BOUNDARY_DRY_RUN.SUBMIT }));
     expect(putMock).toHaveBeenCalledWith({ mode: "hard_limits", spec: { denied_domains: ["paste.example.org"] }, limits: {} }, '"b1"');
     expect(await within(report).findByText(BASELINE.REFUSED_TITLE)).toBeInTheDocument();
-    expect(within(report).getByText(GATED)).toBeInTheDocument();
+    expect(within(report).getByText(REFUSED)).toBeInTheDocument();
   });
 
   it("a held write is the submitted note and Submit goes off until the draft changes", async () => {

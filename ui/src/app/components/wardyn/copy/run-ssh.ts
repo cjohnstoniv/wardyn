@@ -19,3 +19,34 @@ export const RUN_SSH = {
   COPY_COMMAND: "Copy ssh command",
   COPY_CLI: "Copy CLI command",
 } as const;
+
+// The Wardyn CLI lane and "Get the CLI" of "Attach from your terminal" (M-ATT-1,
+// approved 2026-10-20, ATT1-Card/States/Phone). The command, the run id, the
+// URL, the version, the mirror and the fingerprints are data, never copy.
+export const RUN_CLI = {
+  TITLE: "Wardyn CLI",
+  NOTE: "Works on every deployment — no gateway to enable, no key to register. Ctrl-C goes to the sandbox; close the window to detach.",
+  COMMAND: (id: string) => `wardyn attach ${id}`,
+  FIRST_TIME: "First time on this computer?",
+  LOGIN: (url: string) => `wardyn login ${url}`,
+  GET_TITLE: "Get the CLI",
+  VERSION: (v: string) => `Version ${v}, the same as this deployment.`,
+  PHONE_LINE: "Run this on the computer where you will type the command.",
+  UNIX: "macOS, Linux and WSL2",
+  WINDOWS: "Windows (PowerShell)",
+  OTHER_OS: "Another operating system",
+  SHOW: "Show ▾",
+  HIDE: "Hide ▴",
+  MIRROR_NOTE: "Your administrator set an internal mirror for the CLI; both lines use it.",
+  OTHER_WAYS: "Other ways to install",
+  OTHER_WAYS_BODY: "Managed Macs: the .pkg. Scripts and air-gapped hosts: the release files and VERIFY.md.",
+  NO_INSTALL_LINE: "This deployment didn't report its version, so there is no install line here. See Other ways to install.",
+  TRY_AGAIN: "Try again",
+  CA_TITLE: "Your organisation's CA",
+  CA_BODY: "If your network inspects TLS, add its CA with wardyn ca add <file> and check that the fingerprint it prints matches:",
+  COPY: "Copy",
+  COPY_INSTALL_UNIX: "Copy install line for macOS, Linux and WSL2",
+  COPY_INSTALL_WINDOWS: "Copy install line for Windows",
+  COPY_FINGERPRINT: "Copy CA fingerprint",
+  SSH_TITLE: "SSH",
+} as const;

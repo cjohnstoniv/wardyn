@@ -8,10 +8,13 @@ package store_test
 import (
 	"context"
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -365,5 +368,157 @@ func TestPG_WithIdentitySharedLeavesThePoolToFn(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("WithIdentityShared on a one-connection pool: %v", err)
+	}
+}
+
+const (
+	oldSearchUserNameWhere = `(lower(scim_user_name) = $2 OR EXISTS (SELECT 1 FROM principal_identity_aliases a
+		WHERE a.identity_id = principal_identities.id AND a.value_lower = $2))`
+	oldSearchEmailWhere = `(email_lower = $2 OR EXISTS (SELECT 1 FROM principal_identity_aliases a
+		WHERE a.identity_id = principal_identities.id AND a.kind = 'email' AND a.value_lower = $2))`
+	oldSearchExternalIDWhere = `(lower(scim_external_id) = $2 OR object_id = $2)`
+	oldByAliasSQL            = `SELECT id FROM principal_identities WHERE issuer = $1 AND object_id = '' AND (email_lower = $2 OR EXISTS (
+		SELECT 1 FROM principal_identity_aliases a WHERE a.identity_id = principal_identities.id AND a.value_lower = $2))
+		ORDER BY created_at, id`
+)
+
+func identityIDs(rows []store.PrincipalIdentity) []uuid.UUID {
+	ids := make([]uuid.UUID, len(rows))
+	for i, r := range rows {
+		ids[i] = r.ID
+	}
+	return ids
+}
+
+func queryIDs(t *testing.T, pool *pgxpool.Pool, q string, args ...any) []uuid.UUID {
+	t.Helper()
+	rows, err := pool.Query(t.Context(), q, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ids
+}
+
+// The SCIM lookups were rewritten from an OR over an alias sub-select into a UNION of indexable arms; this
+// holds them to the answers of the OR form over a corpus that tells the arms apart.
+func TestPG_ScimLookupsMatchTheirOrForm(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := t.Context()
+	const other = "https://other.example"
+	for i, r := range []struct{ issuer, object, email, user, ext string }{
+		{idIssuer, "oa", "alice@corp.example", "Alice@Corp.Example", "EXT-A"},
+		{idIssuer, "", "bob@corp.example", "bob", ""},
+		{other, "oa", "alice@corp.example", "Alice@Corp.Example", "EXT-A"},
+		{idIssuer, "od", "", "", ""},
+		{idIssuer, "ext-a", "", "", ""},
+		{idIssuer, "", "", "", ""},
+	} {
+		if _, err := pool.Exec(ctx, `INSERT INTO principal_identities (issuer, object_id, email_lower, scim_user_name, scim_external_id, created_at)
+			VALUES ($1, $2, $3, $4, $5, now() - make_interval(secs => $6))`, r.issuer, r.object, r.email, r.user, r.ext, float64(100-i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, a := range []struct{ owner, kind, value string }{
+		{"bob@corp.example", "email", "bob.old@corp.example"}, {"bob@corp.example", "user_name", "bobby"},
+		{"od", "user_name", "alice@corp.example"}, {"od", "email", "bob.old@corp.example"},
+	} {
+		if _, err := pool.Exec(ctx, `INSERT INTO principal_identity_aliases (identity_id, kind, value_lower, source)
+			SELECT id, $2, $3, 'scim' FROM principal_identities WHERE issuer = $4 AND (email_lower = $1 OR object_id = $1)`, a.owner, a.kind, a.value, idIssuer); err != nil {
+			t.Fatal(err)
+		}
+	}
+	values := []string{"alice@corp.example", " ALICE@Corp.Example ", "ext-a", "EXT-A", "oa", "bobby", "bob.old@corp.example", "bob", "", "nobody"}
+	for attr, where := range map[string]string{
+		store.SearchUserName: oldSearchUserNameWhere, store.SearchEmail: oldSearchEmailWhere, store.SearchExternalID: oldSearchExternalIDWhere,
+	} {
+		for _, v := range values {
+			for _, limit := range []int{10, 1} {
+				got, err := st.SearchIdentities(ctx, idIssuer, attr, v, limit)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := queryIDs(t, pool, `SELECT id FROM principal_identities WHERE issuer = $1 AND `+where+` ORDER BY created_at, id LIMIT $3`,
+					idIssuer, strings.ToLower(strings.TrimSpace(v)), limit)
+				if !slices.Equal(identityIDs(got), want) {
+					t.Errorf("SearchIdentities(%s, %q, %d) = %v, the OR form gives %v", attr, v, limit, identityIDs(got), want)
+				}
+			}
+		}
+	}
+	nonEmpty := 0
+	for _, issuer := range []string{idIssuer, other} {
+		for _, v := range values {
+			v = strings.ToLower(strings.TrimSpace(v))
+			got, err := st.IdentitiesByAlias(ctx, issuer, v)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := queryIDs(t, pool, oldByAliasSQL, issuer, v)
+			if !slices.Equal(identityIDs(got), want) {
+				t.Errorf("IdentitiesByAlias(%s, %q) = %v, the OR form gives %v", issuer, v, identityIDs(got), want)
+			}
+			if len(want) > 0 {
+				nonEmpty++
+			}
+		}
+	}
+	if nonEmpty == 0 {
+		t.Fatal("no alias lookup of the corpus found anything, so the comparison proves nothing")
+	}
+}
+
+// A provisioning sync does one lookup per user, so each lookup reads its own arms by index rather than every
+// identity under the issuer, for an Entra directory (object ids) and for one whose rows carry none.
+func TestPG_ScimLookupsUseTheirIndexes(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := t.Context()
+	const noObjectIDs = "https://idp.example"
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO principal_identities (issuer, tenant_id, object_id, email_lower, scim_external_id, scim_user_name)
+		SELECT i, CASE WHEN i = $1 THEN '' ELSE 't' END, CASE WHEN i = $1 THEN '' ELSE 'o' || g END,
+		       'u' || g || '@corp.example', 'X' || g, 'U' || g || '@corp.example'
+		FROM unnest(ARRAY[$1, $2]) i, generate_series(1, 20000) g`, noObjectIDs, idIssuer); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO principal_identity_aliases (identity_id, kind, value_lower, source)
+		SELECT id, k, k || '-' || id, 'scim' FROM principal_identities, unnest(ARRAY['email', 'user_name']) k`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `ANALYZE principal_identities; ANALYZE principal_identity_aliases`); err != nil {
+		t.Fatal(err)
+	}
+	const aliasIdx = "principal_identity_aliases_value_lower_idx"
+	search := func(issuer, attr, value string) func(store.PG) {
+		return func(st store.PG) { _, _ = st.SearchIdentities(ctx, issuer, attr, value, 10) }
+	}
+	byAlias := func(issuer string) func(store.PG) {
+		return func(st store.PG) { _, _ = st.IdentitiesByAlias(ctx, issuer, "u77@corp.example") }
+	}
+	for name, c := range map[string]struct {
+		call func(store.PG)
+		idx  []string
+	}{
+		"userName":             {search(noObjectIDs, store.SearchUserName, "U77@corp.example"), []string{"principal_identities_scim_user_name_idx", aliasIdx}},
+		"emails.value":         {search(idIssuer, store.SearchEmail, "u77@corp.example"), []string{"principal_identities_email_lower_idx", aliasIdx}},
+		"externalId":           {search(idIssuer, store.SearchExternalID, "x77"), []string{"principal_identities_scim_external_id_idx", "principal_identities_object_id_idx"}},
+		"by alias, no objects": {byAlias(noObjectIDs), []string{"principal_identities_email_lower_idx", aliasIdx}},
+		"by alias, objects":    {byAlias(idIssuer), []string{"principal_identities_email_lower_idx", aliasIdx}},
+	} {
+		plan := planOfCall(t, ctx, pool, c.call)
+		t.Logf("%s plan:\n%s", name, plan)
+		if strings.Contains(plan, "Seq Scan on principal_identit") {
+			t.Errorf("%s scans a table:\n%s", name, plan)
+		}
+		for _, idx := range c.idx {
+			if !strings.Contains(plan, idx) {
+				t.Errorf("%s does not use %s:\n%s", name, idx, plan)
+			}
+		}
 	}
 }

@@ -153,48 +153,6 @@ const (
 	reasonModelProviderNoBlockConfigured = "model_provider_no_block_configured" // model_provider was named but this deployment has no model providers
 )
 
-// PATCH /runs/{id}/title (run_title.go).
-const (
-	reasonRunTitleStoreUnavailable = "run_title_store_unavailable" // this store cannot rename a run
-)
-
-// GET /runs/{id}/resources and GET /runs/{id}/files (run_resources.go,
-// run_files.go): the two widgets read the identical run-state facts, so they
-// share a reason per cause rather than each inventing its own synonym.
-const (
-	reasonRunInspectNoRunner              = "run_inspect_no_runner"               // this deployment configures no runner at all
-	reasonRunInspectTerminal              = "run_inspect_terminal"                // the run has finished; its sandbox is gone
-	reasonRunInspectNoSandbox             = "run_inspect_no_sandbox"              // the run never dispatched (or recorded no sandbox ref)
-	reasonRunInspectPaused                = "run_inspect_paused"                  // the run is paused
-	reasonRunInspectAgentStopped          = "run_inspect_agent_stopped"           // the run is kept with its agent stopped; there is no running sandbox to read
-	reasonRunInspectExecStreamUnsupported = "run_inspect_exec_stream_unsupported" // the runner does not support exec streaming
-	reasonRunResourcesReadFailed          = "run_resources_read_failed"           // the sandbox resource usage script failed
-	reasonRunFilesNoExecSession           = "run_files_no_exec_session"           // the runner returned no exec session
-)
-
-// GET /runs/{id}/output (run_output.go).
-const (
-	reasonRunOutputTailInvalid = "run_output_tail_invalid" // ?tail= is not a positive number of bytes
-	reasonRunOutputInteractive = "run_output_interactive"  // the run is interactive and has no pane snapshot to serve
-	reasonRunOutputOff         = "run_output_off"          // WARDYN_EXEC_OUTPUT_TAIL=off
-	reasonRunOutputNotKept     = "run_output_not_kept"     // no output is kept for the run (one never captured, or one still being captured)
-	reasonRunOutputExpired     = "run_output_expired"      // the tail outlived WARDYN_EXEC_OUTPUT_TAIL_TTL, or the run ended past WARDYN_RUN_OUTPUT_RETENTION_DAYS
-	reasonRunOutputErased      = "run_output_erased"       // the run's output was erased (404)
-	reasonRunOutputNotCaptured = "run_output_not_captured" // the runner cannot capture a run's output (Kubernetes under the recorder); the recording has it
-)
-
-// GET /runs/{id}/sign-in (run_sign_in.go).
-const (
-	reasonRunSignInNotAWS     = "run_sign_in_not_aws"    // the run is not an AWS sign-in run
-	reasonRunSignInUnreadable = "run_sign_in_unreadable" // the pane, or the capture's audit row, could not be read in time
-)
-
-// POST /runs/{id}/resume (run_pause.go).
-const (
-	reasonRunResumeNotRunning = "run_resume_not_running" // the run is not in a resumable state
-	reasonRunResumeFailed     = "run_resume_failed"      // thawForExec failed
-)
-
 // POST /internal/* (internal.go, internal_live_run.go): the sidecar/proxy
 // surface, not the member-facing API.
 const (
@@ -311,7 +269,7 @@ const (
 	reasonUIGatewayExecFailed                 = "ui_gateway_exec_failed"                  // starting the relay's own exec session failed
 	reasonUIGatewayLauncherExecFailed         = "ui_gateway_launcher_exec_failed"         // starting the in-sandbox launcher probe failed
 	reasonUIGatewayLauncherMissing            = "ui_gateway_launcher_missing"             // the image has no launcher script for this app
-	reasonUIGatewayLauncherNotListening       = "ui_gateway_launcher_not_listening"       // the launcher ran but nothing bound the app's port in time
+	reasonUIGatewayLauncherNotListening       = "ui_gateway_launcher_not_listening"       // the launcher ran but nothing bound the app's port in time, or an application run's startup command is not listening on the port
 	reasonUIGatewayLauncherProbeFailed        = "ui_gateway_launcher_probe_failed"        // the launcher probe exited with an unrecognized code
 	reasonUIGatewayConnectionClosed           = "ui_gateway_connection_closed"            // the sandbox closed the relay connection unexpectedly
 	reasonUIGatewayBindMissingTicket          = "ui_gateway_bind_missing_ticket"          // POST /__wardyn/bind's form carried no ticket
@@ -804,7 +762,7 @@ const (
 	brandReasonLinkShape  = "invalid_link"
 	brandReasonLogoSize   = "logo_too_large"
 	brandReasonLogo       = "invalid_logo"
-	// brandReasonLogoFromFile: remove_logo on a logo the site config delivers (#1215).
+	// brandReasonLogoFromFile: remove_logo or a new logo on a logo the site config delivers (#1215).
 	brandReasonLogoFromFile = "logo_from_site_config"
 )
 
@@ -946,4 +904,26 @@ const (
 )
 
 // GET /runs/{id}/launch-intent (launch_intent.go).
-const reasonLaunchIntentNotFound = "launch_intent_not_found" // the run kept no setup, or the caller may not see it
+const (
+	reasonLaunchIntentNotFound = "launch_intent_not_found" // the run kept no setup, or the caller may not see it
+)
+
+// Desktop sign-ins (run_desktop_signin.go).
+const (
+	reasonDesktopSigninsOff              = "desktop_signins_off"               // WARDYN_DESKTOP_SIGNINS is not on
+	reasonDesktopSigninNotRunning        = "desktop_signin_not_running"        // the run is not running in a sandbox
+	reasonDesktopSigninNoDesktop         = "desktop_signin_no_desktop"         // the run's policy declares no novnc app
+	reasonDesktopSigninRunnerUnsupported = "desktop_signin_runner_unsupported" // the run started without sign-ins: another runner, another desktop image, or sign-ins were off
+	reasonDesktopSigninImageNotGranted   = "desktop_signin_image_not_granted"  // the run's image was its person's choice, and its sign-in variant is not granted to them
+	reasonDesktopSigninOpen              = "desktop_signin_open"               // a sign-in is already open on the run
+	reasonDesktopSigninNotOpen           = "desktop_signin_not_open"           // no sign-in is open on the run
+	reasonDesktopSigninNotHolder         = "desktop_signin_not_holder"         // the open sign-in was begun by someone else
+	reasonDesktopSigninPauseFailed       = "desktop_signin_pause_failed"       // the agent could not be stopped and proven stopped
+	reasonDesktopSigninStartFailed       = "desktop_signin_start_failed"       // the person's display did not start
+	reasonDesktopSigninEndFailed         = "desktop_signin_end_failed"         // the display could not be proven closed; the agent stays stopped
+	reasonDesktopSigninSiteInvalid       = "desktop_signin_site_invalid"       // a share's site is not a registrable host name
+	reasonDesktopSigninShareFailed       = "desktop_signin_share_failed"       // a share's export or import failed; nothing was shared
+	reasonDesktopSigninUnavailable       = "desktop_signin_unavailable"        // the sign-in store could not be read or written
+	reasonDesktopSigninCredentialRefused = "desktop_signin_credential_refused" // the proxy's check: not an open sign-in's credential
+	reasonDesktopSigninResumeFailed      = "desktop_signin_resume_failed"      // run.kill: a failed begin's agent could not be continued, so the run was killed
+)

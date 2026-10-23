@@ -631,7 +631,7 @@ func TestApplyIntegrationRequirement_UnreadableConfigFailsClosed(t *testing.T) {
 	integ := feedIntegration()
 	rows := []integrationRow{{Integration: integ, Source: "stored"}}
 	spec := &types.RunPolicySpec{}
-	events := srv.applyIntegrationRequirement(context.Background(), map[string]bool{"artifactory-token": true}, rows, spec, integ.ID)
+	events := srv.applyIntegrationRequirement(context.Background(), map[string]bool{"artifactory-token": true}, rows, spec, integ.ID, nil, nil)
 	if len(spec.EligibleGrants) != 0 {
 		t.Fatalf("grants = %+v, want none with the provider rows unknown", spec.EligibleGrants)
 	}

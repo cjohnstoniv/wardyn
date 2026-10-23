@@ -27,6 +27,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -90,6 +91,9 @@ type governanceResponse struct {
 	MaxDepth int `json:"max_depth"`
 	// Boundary is the Wardyn boundary as GET /governance/boundary returns it; absent for a unit admin.
 	Boundary *types.Boundary `json:"boundary,omitempty"`
+	// Restrictions are the deny-only lists that follow people, each with how many people it names;
+	// absent for a unit admin.
+	Restrictions []restrictionView `json:"restrictions,omitempty"`
 	// UnitAdmins is the unit-admin grants (governance_unit_admin.go).
 	UnitAdmins []types.GovernanceUnitAdmin `json:"unit_admins"`
 	// ParentWalls is, for a unit admin, the walls each of their subtrees hangs from (scopeGovernanceRead).
@@ -127,8 +131,9 @@ func (s *Server) handleGetGovernance(w http.ResponseWriter, r *http.Request) {
 	}
 	people := unitPeople(resolved, assignments)
 	profiles := make([]governanceUnitView, len(resolved))
+	tier := s.specReadTierFor(r.Context())
 	for i, p := range resolved {
-		profiles[i] = newUnitView(p.Row, p.Resolved, p.Err)
+		profiles[i] = newUnitView(p.Row, p.Resolved, p.Err, tier)
 		if p.Row.ID != store.DefaultUnitID {
 			n := len(people[p.Row.ID])
 			profiles[i].People = &n
@@ -143,7 +148,15 @@ func (s *Server) handleGetGovernance(w http.ResponseWriter, r *http.Request) {
 		}
 		admins = append(admins, got...)
 	}
-	resp := governanceResponse{Units: profiles, Memberships: assignments, MaxDepth: limit, Boundary: &boundary, UnitAdmins: admins}
+	restrictions := []types.Restriction{}
+	if rs, ok := s.restrictionStore(); ok {
+		if restrictions, err = rs.ListRestrictions(r.Context()); err != nil {
+			writeServerError(w, r, "list restrictions", err)
+			return
+		}
+	}
+	resp := governanceResponse{Units: profiles, Memberships: assignments, MaxDepth: limit, Boundary: &boundary, UnitAdmins: admins,
+		Restrictions: restrictionViews(restrictions)}
 	if !s.isSecurityOperator(r.Context()) {
 		if resp, err = s.scopeGovernanceRead(r.Context(), resp, resolved, boundary, limit); err != nil {
 			writeServerError(w, r, "read unit admin grants", err)
@@ -253,6 +266,10 @@ type governanceCeiling struct {
 	// are the knobs it narrowed here (boundary_meet.go).
 	boundary      *types.Boundary
 	boundaryKnobs []string
+	// RestrictionIDs are the restrictions applied here, in name order (captured on the run);
+	// restrictionKnobs says which restriction narrowed each knob (governance_restrictions.go).
+	RestrictionIDs   []uuid.UUID
+	restrictionKnobs map[string]policyref.Provenance
 }
 
 // errGroupsSnapshotStale is the 403-class resolver failure: this caller's group

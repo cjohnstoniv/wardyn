@@ -50,13 +50,13 @@ func Serve(ctx context.Context, conn runnerwire.Conn, runnerID string, sub subst
 }
 
 // PublishCaps sends the `caps` event: the backing substrate's classes plus the
-// capacity and roots given.
+// capacity and roots given, and every run proxy setting, as a current runner does.
 func (s *Server) PublishCaps(ctx context.Context, capacity placement.Capacity, roots []string, version string) error {
 	cs, err := s.sub.Classes(ctx)
 	if err != nil {
 		return err
 	}
-	data, err := json.Marshal(runnerwire.Caps{Support: cs, Capacity: capacity, AllowedRoots: roots, Version: version})
+	data, err := json.Marshal(runnerwire.Caps{Support: cs, Capacity: capacity, AllowedRoots: roots, Version: version, ProxySettings: runnerwire.ProxySettings})
 	if err != nil {
 		return err
 	}

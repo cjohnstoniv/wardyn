@@ -4,13 +4,17 @@
 package api
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
@@ -55,6 +59,15 @@ func (s *Server) handleWriteEnvAsCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	skipped, werr := writeEnvAsCode(localDirs[0].Path, files)
+	if errors.Is(werr, errEnvRootDenied) {
+		// The stored path was vetted when it was written; it names a host path no sandbox may be given now.
+		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+			"workspace.envcode.write", id.String(), "denied",
+			auditWorkspaceData(r, ws.OwnedBy, map[string]any{"reason": reasonWorkspaceRequestInvalid})))
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonWorkspaceRequestInvalid,
+			"the workspace's source directory is, or now resolves to, a host path no sandbox may be given; nothing was written. Edit the workspace's source")
+		return
+	}
 	if werr != nil {
 		writeServerError(w, r, "write env-as-code", werr)
 		return
@@ -137,6 +150,44 @@ func (s *Server) handleGetEnvAsCode(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"emitted_files": files})
 }
 
+// errEnvRootDenied marks a root writeEnvAsCode refuses to write under: the handler answers it with a
+// 422 and a denied audit row, not a 500.
+var errEnvRootDenied = errors.New("env-as-code root is a denied host path")
+
+// envRootChecked is a test seam: it runs between the path check and the open, the window a swap
+// would use.
+var envRootChecked = func(string) {}
+
+// rootRealPath names the directory dir holds open: /proc/self/fd/<fd>, so it is the real path
+// wherever the stored path points now. A test replaces it to run the no-/proc path on Linux.
+var rootRealPath = func(dir *os.File) (string, error) {
+	return os.Readlink("/proc/self/fd/" + strconv.Itoa(int(dir.Fd())))
+}
+
+// denyOpenedRoot refuses a root whose opened directory is a path no sandbox may be given, running the
+// mount deny-list on its real path. Where /proc/self/fd is missing (a non-Linux host, or Linux
+// without /proc) the real path cannot be read: nothing is refused and the write proceeds on the path
+// the earlier check vetted, as before, so there a path swapped between the check and the open is not
+// re-checked (THREAT-MODEL residual #25).
+func denyOpenedRoot(root *os.Root) error {
+	dir, err := root.Open(".")
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	real, err := rootRealPath(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("%w: cannot resolve the opened directory: %v", errEnvRootDenied, err)
+	}
+	if err := runner.ValidateMountSource(real); err != nil {
+		return fmt.Errorf("%w: %v", errEnvRootDenied, err)
+	}
+	return nil
+}
+
 // writeEnvAsCode writes generated env-as-code files under root, returning the
 // subset of keys it left untouched because they already existed. Paths are
 // the fixed, safe outputs of EmitEnvAsCode.
@@ -144,18 +195,29 @@ func (s *Server) handleGetEnvAsCode(w http.ResponseWriter, r *http.Request) {
 // symlink escaping root: the sandbox agent (and any imported repo) can write
 // this tree, so `<root>/AGENTS.md -> ~/.bashrc` would otherwise truncate an
 // operator file. The lexical check is only a cheap first gate against `..`.
-// workspacescan.EnvAsCodeDockerfilePath is special-cased: .devcontainer/Dockerfile
-// is where an operator already keeps their OWN Dockerfile, so an existing one is
-// left alone and reported UNLESS byte-identical to what Wardyn would write now
-// (genAgentToolDockerfile is pure, so that is Wardyn's own stub) — keying on
-// existence alone would permanently block the regenerate path for this file.
+// An existing file is left alone and reported (skipped) UNLESS it is byte-identical to
+// what Wardyn would write now: .devcontainer/Dockerfile, AGENTS.md and the artifact
+// config files (.npmrc, pip.conf, .cargo/config.toml) are all places an operator keeps
+// hand-written content, and keying on existence alone would permanently block the
+// regenerate path for a file Wardyn wrote itself.
 func writeEnvAsCode(rootPath string, files map[string]string) ([]string, error) {
 	cleanRoot := filepath.Clean(rootPath)
+	if err := runner.ValidateMountSource(cleanRoot); err != nil {
+		return nil, fmt.Errorf("%w: %v", errEnvRootDenied, err)
+	}
+	envRootChecked(cleanRoot)
 	root, err := os.OpenRoot(cleanRoot)
 	if err != nil {
 		return nil, err
 	}
 	defer root.Close()
+	// The stored path was vetted when the workspace was written; a symlink planted there since can
+	// point it at a path no sandbox may be given, and os.Root only holds writes inside what it opened.
+	// On Linux the check below re-runs on the directory actually opened, so a path swapped after the
+	// check above cannot redirect the write.
+	if err := denyOpenedRoot(root); err != nil {
+		return nil, err
+	}
 	var skipped []string
 	for rel, content := range files {
 		dst := filepath.Join(cleanRoot, filepath.FromSlash(rel))
@@ -169,21 +231,23 @@ func writeEnvAsCode(rootPath string, files map[string]string) ([]string, error) 
 			}
 		}
 		flag := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
-		if rel == workspacescan.EnvAsCodeDockerfilePath {
-			// The EXCL guard is needed only when a pre-existing file can't
-			// already be PROVEN to be Wardyn's own: byte-identical to what
-			// would be written right now (genAgentToolDockerfile is a pure
-			// function of tools, so only Wardyn's own previous stub can
-			// match). A read error — including "does not exist" — falls
-			// through to the guard, the safe default: create fresh, or fail
-			// closed into the EEXIST-skip path below rather than guess.
-			if existing, rerr := root.ReadFile(relPath); rerr != nil || string(existing) != content {
-				flag = os.O_WRONLY | os.O_CREATE | os.O_EXCL
-			}
+		// The EXCL guard is needed only when a pre-existing file can't already be
+		// PROVEN to be Wardyn's own: byte-identical to what would be written right
+		// now (every emitted file is a pure function of the profile). A read
+		// error — including "does not exist" — falls through to the guard, the
+		// safe default: create fresh, or fail closed into the EEXIST-skip path
+		// below rather than guess.
+		if existing, rerr := root.ReadFile(relPath); rerr != nil || string(existing) != content {
+			flag = os.O_WRONLY | os.O_CREATE | os.O_EXCL
 		}
 		f, err := root.OpenFile(relPath, flag, 0o644)
 		if err != nil {
 			if os.IsExist(err) {
+				// O_EXCL reports an existing symlink before os.Root follows it, so an
+				// escaping link would read as a kept file; Stat follows it and refuses.
+				if _, serr := root.Stat(relPath); serr != nil && !os.IsNotExist(serr) {
+					return nil, fmt.Errorf("refusing to write %s: %w", rel, serr)
+				}
 				skipped = append(skipped, rel)
 				continue
 			}

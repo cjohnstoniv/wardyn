@@ -70,6 +70,13 @@ func (m *meeter) meetPosture(o types.CeilingOverlay) {
 	if o.HarnessInnerWalls != nil {
 		m.meetInnerWalls(*o.HarnessInnerWalls)
 	}
+	if o.Desktop != nil {
+		if !leqDesktop(o.Desktop, c.Desktop) {
+			m.widen("desktop", "the base blocks a desktop direction, and an overlay can only block more")
+		}
+		d := c.Desktop.Meet(o.Desktop)
+		c.Desktop = &d
+	}
 	if o.Recording != nil {
 		// A level is a minimum: the overlay may record more than the base, and less is a widening.
 		if o.Recording.Rank() < c.Recording.Rank() {
@@ -116,10 +123,10 @@ func (m *meeter) meetMounts(base, ov []types.WorkspaceMount) []types.WorkspaceMo
 		i := slices.IndexFunc(base, func(b types.WorkspaceMount) bool { return mountKey{b.Source, b.Target} == k })
 		switch {
 		case i < 0:
-			m.widen("workspace_mounts", "%s:%s is not a mount of the base", o.Source, o.Target)
+			m.widen("workspace_mounts", "%s is not a mount of the base", o.Target) // the target only: a host path is the super admin's to read
 			continue
 		case base[i].ReadOnlyOrDefault() && !o.ReadOnlyOrDefault():
-			m.widen("workspace_mounts", "%s:%s is read-only in the base", o.Source, o.Target)
+			m.widen("workspace_mounts", "%s is read-only in the base", o.Target)
 		}
 		if seen[k] {
 			continue

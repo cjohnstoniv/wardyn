@@ -17,7 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// RestrictionStore keeps the restrictions (migration 0210). A side interface, as BoundaryStore is: a
+// RestrictionStore keeps the restrictions (migration 0227). A side interface, as BoundaryStore is: a
 // store that does not implement it holds none, so every run resolves as before.
 type RestrictionStore interface {
 	ListRestrictions(ctx context.Context) ([]types.Restriction, error)
@@ -254,4 +254,62 @@ func (s PG) SetWorkspaceOwningUnit(ctx context.Context, id uuid.UUID, unit *uuid
 func isForeignKeyViolation(err error) bool {
 	var pe *pgconn.PgError
 	return errors.As(err, &pe) && pe.Code == "23503"
+}
+
+// SetWorkspaceOwningUnitQ is the pin write on q, for a held change's approval. ErrNotFound for an
+// unknown workspace or unit.
+func SetWorkspaceOwningUnitQ(ctx context.Context, q Querier, id uuid.UUID, unit *uuid.UUID) error {
+	tag, err := q.Exec(ctx, `UPDATE workspaces SET owning_unit_id=$1, updated_at=now() WHERE id=$2`, unit, id)
+	if isForeignKeyViolation(err) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("store: set workspace owning unit: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// RunRestrictionSetter records the restrictions a revive holds a run to, a side interface like
+// RunLimitsReclamper so a store without it keeps the ids the run was created with.
+type RunRestrictionSetter interface {
+	SetRunRestrictionIDs(ctx context.Context, id uuid.UUID, ids []uuid.UUID) error
+}
+
+var _ RunRestrictionSetter = PG{}
+
+// SetRunRestrictionIDs replaces the run's restriction_ids. ErrNotFound for an unknown run.
+func (s PG) SetRunRestrictionIDs(ctx context.Context, id uuid.UUID, ids []uuid.UUID) error {
+	tag, err := s.Pool.Exec(ctx, `UPDATE agent_runs SET restriction_ids=$1 WHERE id=$2`, restrictionIDsParam(ids), id)
+	if err != nil {
+		return fmt.Errorf("store: set run restriction ids: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// WorkspaceOwningUnitQ is workspace id's pin on q (nil when unpinned), for a held change's approval to
+// compare. ErrNotFound for an unknown workspace.
+func WorkspaceOwningUnitQ(ctx context.Context, q Querier, id uuid.UUID) (*uuid.UUID, error) {
+	var unit *uuid.UUID
+	err := q.QueryRow(ctx, `SELECT owning_unit_id FROM workspaces WHERE id=$1`, id).Scan(&unit)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("store: read workspace owning unit: %w", err)
+	}
+	return unit, nil
+}
+
+// restrictionIDsParam is the restriction_ids column's value: never NULL, which the column refuses.
+func restrictionIDsParam(ids []uuid.UUID) []uuid.UUID {
+	if ids == nil {
+		return []uuid.UUID{}
+	}
+	return ids
 }

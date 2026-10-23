@@ -101,7 +101,9 @@ export function RunnerCard({ f, onOpen, onOpenPool }: { f: FleetRunner; onOpen: 
           {shared && !shared.configured && <Chip tone="warning">{RUNNER_KIND.NOT_CONFIGURED}</Chip>}
           {self && self.state === "claimed" && (online || self.last_seen_at) && (
             <span className="text-xs text-muted-foreground" title={self.last_seen_at ? absoluteTime(self.last_seen_at) : undefined}>
-              {RUNNER_V6.LAST_SEEN(online ? RUNNER_V6.LAST_SEEN_NOW : relativeTime(self.last_seen_at ?? ""))}
+              {online && Date.now() - Date.parse(self.created_at) < 60_000
+                ? RUNNER_V6.REGISTERED_JUST_NOW
+                : RUNNER_V6.LAST_SEEN(online ? RUNNER_V6.LAST_SEEN_NOW : relativeTime(self.last_seen_at ?? ""))}
             </span>
           )}
           {self && self.state === "claimed" && !online && !self.last_seen_at && <span className="text-xs text-muted-foreground">{RUNNER.NEVER_CONNECTED}</span>}

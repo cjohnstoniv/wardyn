@@ -74,10 +74,17 @@ func (s *Server) reclampProfiledRuns(ctx context.Context, rc store.RunLimitsRecl
 		// the ones it captured, held to the boundary's maximum.
 		l, ok := current[*run.UnitID]
 		if !ok {
-			if capSec == 0 {
+			if capSec == 0 && len(run.RestrictionIDs) == 0 {
 				continue
 			}
 			l = run.RunLimits
+		}
+		// The restrictions the run captured bind it at their current limits, whatever its unit says.
+		l, err = s.restrictionRunLimits(ctx, run, l)
+		if err != nil {
+			slog.WarnContext(ctx, "wardynd: a run's restrictions could not be read, so its limits are not re-clamped to them",
+				slog.String("run_id", run.ID.String()), slog.Any("err", err))
+			continue
 		}
 		if capSec > 0 {
 			l.MaxEndAheadSec, l.AllowNoEnd = composer.TighterSec(l.MaxEndAheadSec, capSec), false

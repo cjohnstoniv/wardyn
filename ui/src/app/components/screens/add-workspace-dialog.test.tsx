@@ -52,6 +52,15 @@ describe("AddWorkspaceDialog — the local_dir root constraint follows !operator
     expect(screen.queryByLabelText(/path on this host/i)).not.toBeInTheDocument();
   });
 
+  it("#2490: a repository typed before picking the unavailable Local directory is not sendable", async () => {
+    renderDialog(false, null);
+    await userEvent.type(screen.getByLabelText(/repository url/i), "acme/payments");
+    expect(screen.getByRole("button", { name: /^add workspace/i })).toBeEnabled();
+    await pickLocalDir();
+    expect(screen.getByRole("button", { name: /^add workspace/i })).toBeDisabled();
+    expect(workspacesApi.createWorkspace).not.toHaveBeenCalled();
+  });
+
   // #2889: an unavailable source reads as unavailable but stays selectable, since selecting it is how the explainer shows.
   it("draws the unavailable Local directory card dashed and muted, still clickable; an available one is plain", async () => {
     const { unmount } = renderDialog(false, null);

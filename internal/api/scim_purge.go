@@ -135,6 +135,9 @@ func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, sl
 		s.purgeStep(ctx, st, id, jobs, store.JobKey{Step: jobStepGrants}, func() (map[string]int, error) {
 			// An address another principal holds keeps its rows: it can be a recycled one, and those are the new holder's.
 			n, err := st.DeleteUserSubjectRows(ctx, id, principals, emails)
+			if err == nil {
+				s.auditLeaverPoolPolicies(ctx, n.Pools)
+			}
 			return map[string]int{"grants_deleted": int(n.Grants), "assignments_deleted": int(n.Assignments), "email_rows_kept": int(n.Kept),
 				"pools_narrowed": int(n.PoolsNarrowed), "pools_emptied": int(n.PoolsEmptied)}, err
 		}),
@@ -482,6 +485,22 @@ func (s *Server) auditPurge(ctx context.Context, st scimStore, id uuid.UUID, for
 		return errors.Join(err, st.FailDeprovisionJob(ctx, id, store.JobKindPurge, key, err))
 	}
 	return st.FinishDeprovisionJob(ctx, id, store.JobKindPurge, key, nil)
+}
+
+// auditLeaverPoolPolicies records one runner_pool.use_policy.set row per pool use policy a purge
+// narrowed, so an admin asking why a pool is unavailable finds the pool named. The row carries the
+// policy as it now stands and never the subjects taken out: they are the purged person's own names.
+// It is written once the strip has committed, so a crash before it loses the row and the retry,
+// with nothing left to strip, writes none.
+func (s *Server) auditLeaverPoolPolicies(ctx context.Context, pools []types.RunnerPoolUsePolicy) {
+	for _, p := range pools {
+		after := p.Subjects
+		if after == nil {
+			after = []types.RunnerPoolSubject{}
+		}
+		s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, scimActor, auditPoolUsePolicySet, p.PoolID.String(), "success",
+			mustJSON(map[string]any{"after": after, "revision": p.Revision, "emptied": len(after) == 0, "cause": "leaver_purge"})))
+	}
 }
 
 // drainOwedRefusals drains the refusal rows one identity's ledger of one kind still owes.

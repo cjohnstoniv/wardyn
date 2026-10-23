@@ -94,7 +94,8 @@ export function RunLifetimeBanner({
   containmentPending?: boolean;
 }) {
   const [action, setAction] = React.useState<Action>(null);
-  const [dismissed, setDismissed] = React.useState(false);
+  // The stage and end it was dismissed at: a later stage or an extended end warns again.
+  const [dismissed, setDismissed] = React.useState<string | null>(null);
   const [changeOpen, setChangeOpen] = React.useState(false);
   const operator = useOperator();
   const principal = usePrincipal();
@@ -376,7 +377,7 @@ export function RunLifetimeBanner({
 
     // ---- Ending soon: the 24h/1h/10m warning (design.md §2.3) ----
     const stage = endsWarningStageNow(run);
-    if (stage && !dismissed) {
+    if (stage && dismissed !== `${stage}@${run.ends_at}`) {
       return (
         <Banner data-testid="run-lifetime-warning" tone="warn" title={RL.warnTitle(stage)} body={run.ends_at ? RL.warnBody(weekdayClock(run.ends_at)) : undefined}>
           <div className="mt-2.5 flex flex-wrap gap-2">
@@ -395,7 +396,7 @@ export function RunLifetimeBanner({
                 {RL.WARN_CHANGE_END}
               </Button>
             )}
-            <Button size="sm" variant="ghost" onClick={() => setDismissed(true)}>
+            <Button size="sm" variant="ghost" onClick={() => setDismissed(`${stage}@${run.ends_at}`)}>
               {RL.WARN_DISMISS}
             </Button>
           </div>

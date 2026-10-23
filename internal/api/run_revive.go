@@ -217,6 +217,9 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	if rerr != nil {
 		return reviveResult{}, rerr
 	}
+	// The restrictions the revive holds the run to are the run's from here: the seal and the mint read them.
+	capturedRestrictions := run.RestrictionIDs
+	run.RestrictionIDs = c.restrictionIDs
 	cfg, rerr := s.reviveSourceConfig(ctx, rv, run, actorType, actor)
 	if rerr != nil {
 		return reviveResult{}, rerr
@@ -282,6 +285,9 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	// the row as read here, so a run read live still had its old proxy running.
 	// It also refreshes the watcher lease, so the watcher sweep does not find
 	// a rebooted agent not yet started and lose the run again.
+	if rerr := s.saveRevivedRestrictions(ctx, run, capturedRestrictions); rerr != nil {
+		return reviveResult{}, rerr
+	}
 	if rerr := s.claimRevive(ctx, reviver, run, rebooted, actorType, actor); rerr != nil {
 		return reviveResult{}, rerr
 	}

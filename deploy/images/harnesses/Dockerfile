@@ -45,7 +45,7 @@ RUN set -eu; \
     if [ "$CODEX_INSTALL" = "native" ]; then \
         [ -f /codex-stage/codex-bin ] || { echo "CODEX_INSTALL=native but deploy/images/codex-cli/codex-bin is not staged — stage it first (see deploy/images/README.md)" >&2; exit 1; }; \
         want="${TARGETARCH:-$(dpkg --print-architecture)}"; \
-        case "$(od -An -tx1 -j18 -N1 /codex-stage/codex-bin | tr -d ' ')" in 3e) have=amd64;; b7) have=arm64;; *) have=unknown;; esac; \
+        case "$(od -An -tx1 -N4 /codex-stage/codex-bin | tr -d ' ')$(od -An -tx1 -j18 -N1 /codex-stage/codex-bin | tr -d ' ')" in 7f454c463e) have=amd64;; 7f454c46b7) have=arm64;; *) have=unknown;; esac; \
         [ "$have" = unknown ] || [ "$have" = "$want" ] || { echo "staged codex-bin is $have but this image builds for $want; restage with: scripts/stage-agent-binary.sh codex-cli --arch $want" >&2; exit 1; }; \
         install -m 0755 /codex-stage/codex-bin /usr/local/bin/codex; \
         echo "installed host-staged native codex"; \
@@ -53,7 +53,7 @@ RUN set -eu; \
         if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi; \
         if [ -n "$HTTP_PROXY" ]; then npm config set proxy "$HTTP_PROXY"; fi; \
         if [ -n "$HTTPS_PROXY" ]; then npm config set https-proxy "$HTTPS_PROXY"; fi; \
-        npm install -g "@openai/codex@$CODEX_VERSION"; \
+        for i in 1 2 3; do timeout -k 10 180 npm install -g "@openai/codex@$CODEX_VERSION" && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done; \
         npm config delete proxy https-proxy; \
         echo "installed codex $CODEX_VERSION via npm"; \
     fi

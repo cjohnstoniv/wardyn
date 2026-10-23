@@ -57,7 +57,7 @@ func govCovBuilt(t *testing.T, s *Server, all []types.GovernanceUnit, id uuid.UU
 	if msg != "" {
 		t.Fatalf("fixture body refused: %s", msg)
 	}
-	p, res, err := s.buildGovernanceUnit("alice", id, req, all, types.Boundary{Mode: types.BoundaryNoLimits}, maxUnitDepthDefault)
+	p, res, _, err := s.buildGovernanceUnit("alice", true, id, req, all, types.Boundary{Mode: types.BoundaryNoLimits}, maxUnitDepthDefault)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -186,19 +186,19 @@ func TestGovCovContactHelpers(t *testing.T) {
 }
 
 func TestGovCovRedactOverlayForRead(t *testing.T) {
-	if redactOverlayForRead(nil) != nil {
+	if redactOverlayForRead(nil, specReadFull) != nil {
 		t.Error("nil overlay must stay nil")
 	}
 	plain := &types.CeilingOverlay{}
-	if redactOverlayForRead(plain) != plain {
+	if redactOverlayForRead(plain, specReadFull) != plain {
 		t.Error("an overlay with no inspection block is returned as is")
 	}
 	empty := &types.CeilingOverlay{LLMInspection: &types.LLMInspectionSpec{}}
-	if redactOverlayForRead(empty) != empty {
+	if redactOverlayForRead(empty, specReadFull) != empty {
 		t.Error("an inspection block with no secret values is returned as is")
 	}
 	secret := &types.CeilingOverlay{LLMInspection: &types.LLMInspectionSpec{WorkspaceSecretValues: []string{"hunter2", "hunter3"}}}
-	got := redactOverlayForRead(secret)
+	got := redactOverlayForRead(secret, specReadFull)
 	if !reflect.DeepEqual(got.LLMInspection.WorkspaceSecretValues, []string{"<2 value(s) redacted>"}) {
 		t.Errorf("redacted values = %v", got.LLMInspection.WorkspaceSecretValues)
 	}
@@ -222,7 +222,7 @@ func TestGovCovNewProfileDiffViewNeverCarriesASecretValue(t *testing.T) {
 		Limits:        types.GovernanceLimits{},
 		AdminWarnings: []string{"warned"},
 	}
-	v := newUnitDiffView(row, res)
+	v := newUnitDiffView(row, res, specReadFull)
 	raw, err := json.Marshal(v)
 	if err != nil {
 		t.Fatal(err)
@@ -238,7 +238,7 @@ func TestGovCovNewProfileDiffViewNeverCarriesASecretValue(t *testing.T) {
 	if v.Effective == nil || !reflect.DeepEqual(v.Effective.Warnings, []string{"warned"}) {
 		t.Errorf("effective = %+v, want the composed view with its warnings", v.Effective)
 	}
-	if got := newUnitDiffView(row, nil); got.Effective != nil {
+	if got := newUnitDiffView(row, nil, specReadFull); got.Effective != nil {
 		t.Errorf("a profile that does not compose has no effective view, got %+v", got.Effective)
 	}
 }

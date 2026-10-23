@@ -32,6 +32,7 @@ function bar(q: string, onChange = vi.fn()) {
       adminView={false}
       currentSearch=""
       savedViews={[]}
+      runCount={0}
       onChange={onChange}
       onSelectView={vi.fn()}
       onSaveView={vi.fn()}
@@ -50,6 +51,7 @@ function showQ(view: ReturnType<typeof bar>, q: string): void {
       adminView={false}
       currentSearch=""
       savedViews={[]}
+      runCount={0}
       onChange={view.onChange}
       onSelectView={vi.fn()}
       onSaveView={vi.fn()}

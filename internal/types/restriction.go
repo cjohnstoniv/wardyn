@@ -12,7 +12,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
 )
 
-// Restriction is a deny-only list that follows people (migration 0210): it applies to every governed
+// Restriction is a deny-only list that follows people (migration 0227): it applies to every governed
 // run of the people it covers, in every unit they run in, and never counts as a context. It can only
 // narrow, so its spec and limits hold the few knobs that have a deny shape and nothing else.
 type Restriction struct {
@@ -55,6 +55,9 @@ type RestrictionSpec struct {
 	MinConfinementClass *ConfinementClass `json:"min_confinement_class,omitempty"`
 	AutoStopAfterSec    *int              `json:"auto_stop_after_sec,omitempty"`
 	GitPushAnyBranch    *bool             `json:"git_push_any_branch,omitempty"`
+	// WithheldGrants names credentials the run is not given: a grant of the same kind (a scope-less
+	// entry) or the same pairing is kept from it at dispatch and mint. It never reaches Overlay().
+	WithheldGrants []GrantSpec `json:"withheld_grants,omitempty"`
 }
 
 // RestrictionLimits is the part of GovernanceLimits a restriction may carry. The five deny_* switches

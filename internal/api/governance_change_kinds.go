@@ -44,6 +44,7 @@ func sameJSON(a, b any) bool {
 // stay distinguishable when the payload is replayed).
 type unitChangePayload struct {
 	Name          string                 `json:"name"`
+	Mode          string                 `json:"mode,omitempty"`
 	Ceiling       types.RunPolicySpec    `json:"ceiling"`
 	Limits        types.GovernanceLimits `json:"limits"`
 	Contact       json.RawMessage        `json:"contact,omitempty"`
@@ -55,7 +56,7 @@ type unitChangePayload struct {
 
 func unitPayloadOf(req governanceUnitRequest) unitChangePayload {
 	return unitChangePayload{
-		Name: req.Name, Ceiling: req.Ceiling, Limits: req.Limits,
+		Name: req.Name, Mode: req.Mode, Ceiling: req.Ceiling, Limits: req.Limits,
 		Contact: req.Contact, ParentID: req.ParentID, Overlay: req.Overlay, OverlayLimits: req.OverlayLimits,
 		LockedKnobs: req.LockedKnobs,
 	}
@@ -83,9 +84,10 @@ func unitRequestFromPayload(raw json.RawMessage) (governanceUnitRequest, string)
 // heldUnitWrite is what a profile build proved before it was abandoned: every profile as the
 // transaction read them, the row it would have stored and what that composes to.
 type heldUnitWrite struct {
-	all []types.GovernanceUnit
-	row types.GovernanceUnit
-	res *ResolvedUnit
+	all  []types.GovernanceUnit
+	row  types.GovernanceUnit
+	res  *ResolvedUnit
+	keep mountKeep
 }
 
 // unitWriteExempt reports whether a human's profile update applies without a second human. Only an
@@ -192,30 +194,40 @@ type unitDiffView struct {
 	Effective *governanceEffective `json:"effective,omitempty"`
 }
 
-func newUnitDiffView(row types.GovernanceUnit, res *ResolvedUnit) *unitDiffView {
+// tier is the lowest tier that may read the change (holdUnitWrite): a change that sets a host path
+// is decided by super admins only, so it is rendered whole; any other is rendered for a security admin.
+func newUnitDiffView(row types.GovernanceUnit, res *ResolvedUnit, tier specReadTier) *unitDiffView {
 	v := &unitDiffView{unitDiffStored: unitDiffStored{
-		Name: row.Name, Ceiling: redactSpecForRead(row.Ceiling, true), Limits: row.Limits,
+		Name: row.Name, Ceiling: redactSpecForRead(row.Ceiling, tier), Limits: row.Limits,
 		Contact: nonZeroContact(row.Contact), ParentID: row.ParentID,
-		Overlay: redactOverlayForRead(row.Overlay), OverlayLimits: row.OverlayLimits, LockedKnobs: row.LockedKnobs,
+		Overlay: redactOverlayForRead(row.Overlay, tier), OverlayLimits: row.OverlayLimits, LockedKnobs: row.LockedKnobs,
 	}}
 	if res != nil {
 		v.Effective = &governanceEffective{
-			Ceiling: redactSpecForRead(res.Ceiling, true), Limits: res.Limits, Warnings: res.AdminWarnings,
+			Ceiling: redactSpecForRead(res.Ceiling, tier), Limits: res.Limits, Warnings: res.AdminWarnings,
 		}
 	}
 	return v
 }
 
-// redactOverlayForRead is redactSpecForRead for an overlay's llm_inspection block: a raw secret value
-// is replaced by a count, on a copy.
-func redactOverlayForRead(o *types.CeilingOverlay) *types.CeilingOverlay {
-	if o == nil || o.LLMInspection == nil || len(o.LLMInspection.WorkspaceSecretValues) == 0 {
+// redactOverlayForRead is redactSpecForRead for an overlay, on a copy: a raw llm_inspection secret
+// value is replaced by a count, and below the super admin tier each workspace mount's host path is
+// withheld. Only the admin surfaces serve an overlay, so tier is never specReadMember here.
+func redactOverlayForRead(o *types.CeilingOverlay, tier specReadTier) *types.CeilingOverlay {
+	withhold := tier != specReadFull && o != nil && o.WorkspaceMounts != nil && len(*o.WorkspaceMounts) > 0
+	if !withhold && (o == nil || o.LLMInspection == nil || len(o.LLMInspection.WorkspaceSecretValues) == 0) {
 		return o
 	}
 	cp := *o
-	li := *o.LLMInspection
-	li.WorkspaceSecretValues = []string{fmt.Sprintf("<%d value(s) redacted>", len(li.WorkspaceSecretValues))}
-	cp.LLMInspection = &li
+	if withhold {
+		mounts := withholdMounts(*o.WorkspaceMounts)
+		cp.WorkspaceMounts = &mounts
+	}
+	if o.LLMInspection != nil && len(o.LLMInspection.WorkspaceSecretValues) > 0 {
+		li := *o.LLMInspection
+		li.WorkspaceSecretValues = []string{fmt.Sprintf("<%d value(s) redacted>", len(li.WorkspaceSecretValues))}
+		cp.LLMInspection = &li
+	}
 	return &cp
 }
 
@@ -234,12 +246,18 @@ func (s *Server) resolveForDiff(all []types.GovernanceUnit, id uuid.UUID) *Resol
 
 // unitBaseState is the profile graph as a change to profile id depends on it: the row itself (nil
 // when absent) and the chain of bases above base. An approval that finds either changed refuses as
-// stale, so the profile the reviewer saw, and what it composes on, is what is written.
+// stale, so the profile the reviewer saw, and what it composes on, is what is written. With no base
+// (a fold into a standalone ceiling), the chain is the stored row's own: the fold keeps the mounts
+// that chain resolves to (storedCeilingMounts), so a change there makes the held fold stale too.
 func unitBaseState(all []types.GovernanceUnit, id uuid.UUID, base *uuid.UUID) any {
 	byID := unitsByID(all)
 	state := map[string]any{"self": nil}
-	if row, ok := byID[id]; ok {
+	row, ok := byID[id]
+	if ok {
 		state["self"] = row
+	}
+	if base == nil {
+		base = row.ParentID
 	}
 	bases := []types.GovernanceUnit{}
 	seen := map[uuid.UUID]bool{id: true}
@@ -261,15 +279,21 @@ func (s *Server) holdUnitWrite(w http.ResponseWriter, r *http.Request, id uuid.U
 	cur, exists := unitsByID(h.all)[id]
 	row := h.row
 	op := "create"
+	// Rendered for the lowest tier that may read the change: whole only when it sets a host path,
+	// which only a super admin decides.
+	tier := specReadSecurity
+	if h.keep.setsHostPath {
+		tier = specReadFull
+	}
 	var before *unitDiffView
 	if exists {
 		op = "update"
-		before = newUnitDiffView(cur, s.resolveForDiff(h.all, id))
+		before = newUnitDiffView(cur, s.resolveForDiff(h.all, id), tier)
 		row.Contact = unitContactAfter(cur, h.row)
 	}
-	after := newUnitDiffView(row, h.res)
+	after := newUnitDiffView(row, h.res, tier)
 	p := govProposal{
-		kind: govKindUnit, op: op, key: id.String(), payload: unitPayloadOf(req),
+		kind: govKindUnit, op: op, key: id.String(), payload: heldProfilePayload(req, h.keep),
 		after: after, baseState: unitBaseState(h.all, id, h.row.ParentID),
 	}
 	var beforeStored *unitDiffStored
@@ -308,7 +332,7 @@ func (s *Server) holdUnitDelete(w http.ResponseWriter, r *http.Request, id uuid.
 		return
 	}
 	cur := unitsByID(all)[id]
-	before := newUnitDiffView(cur, s.resolveForDiff(all, id))
+	before := newUnitDiffView(cur, s.resolveForDiff(all, id), specReadSecurity)
 	s.proposeGovernanceChange(w, r, govProposal{
 		kind: govKindUnit, op: "delete", key: id.String(), payload: map[string]any{"id": id},
 		before: before, changed: changedPaths(before.unitDiffStored, nil),
@@ -347,10 +371,16 @@ func applyUnitChange(s *Server, r *http.Request, q store.Querier, ch types.Gover
 		if err != nil {
 			return types.GovernanceUnit{}, err
 		}
-		p, res, err := s.buildGovernanceUnit(ch.ProposedBy, id, req, all, b, limit)
+		p, res, _, err := s.buildGovernanceUnit(ch.ProposedBy, s.isOperator(ctx), id, req, all, b, limit)
 		effective = res
 		return p, err
 	})
+	var tier *mountTierRefusal
+	if errors.As(err, &tier) {
+		return govApplied{}, &govRefusal{why: "mount source tier", write: func(w http.ResponseWriter, r *http.Request) {
+			s.refuse(w, r, tier.decision())
+		}}
+	}
 	if errors.Is(err, store.ErrConflict) {
 		return govApplied{}, writeRefusal(http.StatusConflict, reasonGovernanceUnitNameConflict,
 			"a governance profile named %q already exists", req.Name)
@@ -378,9 +408,12 @@ func applyUnitDelete(ctx context.Context, q store.Querier, ch types.GovernanceCh
 	}
 	err = store.DeleteGovernanceUnitQ(ctx, q, id)
 	var children *store.ErrProfileHasChildren
+	var pinned *store.ErrUnitPinned
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		return govApplied{}, writeRefusal(http.StatusNotFound, reasonGovernanceUnitNotFoundByID, "governance profile not found")
+	case errors.As(err, &pinned):
+		return govApplied{}, writeRefusal(http.StatusConflict, reasonGovernanceUnitInUse, "%s", unitPinnedMsg(pinned))
 	case errors.As(err, &children):
 		return govApplied{}, writeRefusal(http.StatusConflict, reasonGovernanceUnitInUse,
 			"this governance profile is the base of %s — delete or re-base them first", strings.Join(children.Names, ", "))
@@ -458,7 +491,8 @@ type membershipDiffView struct {
 }
 
 // newMembershipDiffView renders a with the profile chain (leaf first) it points at. The profile's
-// ceiling and limits are its EFFECTIVE ones, and the ceiling passes read-redaction.
+// ceiling and limits are its EFFECTIVE ones, and the ceiling passes a security admin's read-redaction
+// (an assignment sets no host path, so a security admin may decide it).
 func (s *Server) newMembershipDiffView(a types.GovernanceMembership, chain []types.GovernanceUnit) *membershipDiffView {
 	v := &membershipDiffView{SubjectType: a.SubjectType, Subject: a.Subject, UnitID: a.UnitID, Priority: a.Priority}
 	if len(chain) == 0 {
@@ -467,9 +501,9 @@ func (s *Server) newMembershipDiffView(a types.GovernanceMembership, chain []typ
 	pv := &membershipUnitView{ID: chain[0].ID, Name: chain[0].Name}
 	res, err := s.composeChain(chain)
 	if err != nil {
-		pv.Ceiling, pv.Limits, pv.Error = redactSpecForRead(chain[0].Ceiling, true), chain[0].Limits, adminResolveError(err)
+		pv.Ceiling, pv.Limits, pv.Error = redactSpecForRead(chain[0].Ceiling, specReadSecurity), chain[0].Limits, adminResolveError(err)
 	} else {
-		pv.Ceiling, pv.Limits = redactSpecForRead(res.Ceiling, true), res.Limits
+		pv.Ceiling, pv.Limits = redactSpecForRead(res.Ceiling, specReadSecurity), res.Limits
 	}
 	v.Unit = pv
 	return v

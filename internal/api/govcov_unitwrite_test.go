@@ -40,7 +40,7 @@ func govCovBuildErrAt(t *testing.T, s *Server, all []types.GovernanceUnit, id uu
 	if msg != "" {
 		t.Fatalf("fixture body refused before the build: %s", msg)
 	}
-	_, _, err := s.buildGovernanceUnit("alice", id, req, all, types.Boundary{Mode: types.BoundaryNoLimits}, limit)
+	_, _, _, err := s.buildGovernanceUnit("alice", true, id, req, all, types.Boundary{Mode: types.BoundaryNoLimits}, limit)
 	return err
 }
 
@@ -251,7 +251,7 @@ func TestGovCovNewProfileView(t *testing.T) {
 	row.Ceiling.LLMInspection = &types.LLMInspectionSpec{WorkspaceSecretValues: []string{"stored-secret-value"}}
 	res := &ResolvedUnit{Ceiling: types.RunPolicySpec{AllowedDomains: []string{"pypi.org"}}, Limits: types.GovernanceLimits{MaxConcurrentRuns: 3}, AdminWarnings: []string{"w"}}
 
-	v := newUnitView(row, res, nil)
+	v := newUnitView(row, res, nil, specReadFull)
 	if raw, _ := json.Marshal(v); strings.Contains(string(raw), "stored-secret-value") {
 		t.Errorf("the view carries the stored secret value: %s", raw)
 	}
@@ -260,11 +260,11 @@ func TestGovCovNewProfileView(t *testing.T) {
 	}
 
 	u := &overlayUnsatisfiableError{Leaf: "p", Detail: "base detail"}
-	v = newUnitView(row, nil, u)
+	v = newUnitView(row, nil, u, specReadFull)
 	if v.Effective.Error != "base detail" || len(v.Effective.Ceiling.AllowedDomains) != 0 {
 		t.Errorf("effective on an unsatisfiable chain = %+v, want the admin detail and no content", v.Effective)
 	}
-	if v = newUnitView(row, nil, nil); !reflect.DeepEqual(v.Effective, governanceEffective{}) {
+	if v = newUnitView(row, nil, nil, specReadFull); !reflect.DeepEqual(v.Effective, governanceEffective{}) {
 		t.Errorf("effective with neither a resolution nor an error = %+v", v.Effective)
 	}
 }

@@ -4,6 +4,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -418,7 +419,7 @@ type withholding struct {
 // binds reports whether anything can be withheld at all.
 func (w withholding) binds() bool {
 	return len(w.deny) > 0 || slices.ContainsFunc(w.layers, func(l sealLayer) bool {
-		return l.grants != nil || l.egress.AllowedDomains != nil || (l.egress.DeniedDomains != nil && len(*l.egress.DeniedDomains) > 0)
+		return l.grants != nil || len(l.withheldGrants) > 0 || l.egress.AllowedDomains != nil || (l.egress.DeniedDomains != nil && len(*l.egress.DeniedDomains) > 0)
 	})
 }
 
@@ -428,7 +429,22 @@ func (w withholding) binds() bool {
 // provider, workspace, integration and source-control credentials) included.
 func (w withholding) grantWithheld(g types.GrantSpec) bool {
 	return slices.ContainsFunc(w.layers, func(l sealLayer) bool {
-		return l.grants != nil && governanceGrantWithinCeiling(g, *l.grants) != nil
+		return (l.grants != nil && governanceGrantWithinCeiling(g, *l.grants) != nil) || grantWithheldBy(g, l.withheldGrants)
+	})
+}
+
+// withheldScopeless is a withheld entry with no scope: absent, or the null a stored spec round-trips to.
+func withheldScopeless(s json.RawMessage) bool {
+	t := bytes.TrimSpace(s)
+	return len(t) == 0 || string(t) == "null"
+}
+
+// grantWithheldBy reports whether a layer's withheld list names g: an entry with no scope names every
+// grant of its kind, one with a scope the grants of the same pairing (composer.CeilingGrantsCovering).
+// Identity only: unlike the ceiling comparator, a longer TTL or a dropped approval never lets g past.
+func grantWithheldBy(g types.GrantSpec, list []types.GrantSpec) bool {
+	return slices.ContainsFunc(list, func(w types.GrantSpec) bool {
+		return w.Kind == g.Kind && (withheldScopeless(w.Scope) || len(composer.CeilingGrantsCovering(g, []types.GrantSpec{w})) > 0)
 	})
 }
 
@@ -828,8 +844,14 @@ const bedrockCeilingLane = "bedrock"
 // doc). A run that asked for no model call, or that has another lane, still
 // launches; one that needed Bedrock meets the deny at the proxy with the
 // ordinary refusal, which is the same thing it already did for the bearer mode.
+//
+// A resident captured session is withheld by its grant as well (bedrockAuth.residentGrant): no
+// mint or redeem door sees it after dispatch, so this is the one place eligible grants meet it.
 func narrowCeilingBedrockLane(w withholding, llm *llmTransport, mitmHosts *[]string, injections *[]runner.InjectionGrant, sandboxEnv map[string]string) (lanes, droppedInjection []string) {
-	if llm == nil || !llm.bedrockReady || !w.withheldAny(llm.bedrock.egressHosts) {
+	if llm == nil || !llm.bedrockReady {
+		return nil, nil
+	}
+	if g := llm.bedrock.residentGrant; !w.withheldAny(llm.bedrock.egressHosts) && (g == nil || !w.grantWithheld(*g)) {
 		return nil, nil
 	}
 	laneHosts := llm.bedrock.egressHosts // read before the lane is reset below

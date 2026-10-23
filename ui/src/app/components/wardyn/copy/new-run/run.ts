@@ -11,6 +11,7 @@ export const NR_RUN = {
   TITLE_AGENT: "Choose how and where it runs",
   TITLE_ENV: "Choose where the environment runs",
   TITLE_APP: "Choose where the automation runs",
+  TITLE_APP_SERVER: "Choose where the application runs",
   /** pending W-05: the recommended text until the owner answers. */
   LEDE_ORG: "Your organisation's defaults are selected.",
   /** pending W-05: the recommended text until the owner answers. */
@@ -40,6 +41,34 @@ export const NR_RUN = {
   APP_LABEL: "What should run?",
   APP_AUTOMATION: "Automation / script",
   APP_AUTOMATION_BODY: "A command or job that runs on its own.",
+  APP_SERVER: "Application / server",
+  APP_SERVER_BODY: "A web app, API or dev server you open in your browser.",
+  START_COMMAND_LABEL: "Start command",
+  START_COMMAND_HELP:
+    "Run verbatim in the sandbox when it starts. The run keeps going until you end it or it reaches its lifetime limit.",
+  PORTS_LABEL: "Ports",
+  PORTS_HELP:
+    "Each port opens from the run page through Wardyn's web app gateway. Only people who may enter this run can open it.",
+  PORT_COL_NAME: "Name",
+  PORT_COL_PORT: "Port",
+  PORT_COL_PATH: "Path",
+  PORT_ADD: "Add a port",
+  PORTS_FULL: "A run can open up to 8 ports.",
+  PORT_INVALID: "Enter a port from 1 to 65535.",
+  PORT_DUPLICATE: (port: string | number) => `Two apps can't share port ${port}.`,
+  /** Lead wording 2026-10-20 (FEAT-1APP-UI): the Review blocker for a server with no port left. */
+  PORT_REQUIRED: "An application needs at least one port to open.",
+  /** Lead wording, cleared by the overseer 2026-10-20 (APP-UI-2): a port row the server would refuse, said on the row and on Review. */
+  APP_NAME_DUPLICATE: (name: string) => `Two applications are named ${name}. Give each its own name.`,
+  APP_NAME_INVALID: "Use lower-case letters, numbers and dashes, up to 32 characters, starting and ending with a letter or number.",
+  APP_PATH_INVALID: 'Start the path with a single /, with no host and no "..".',
+  /** Accessible names for a port row's controls; a row with no name yet is called by its place, APP_ROW(n). */
+  APP_ROW: (n: number) => `row ${n}`,
+  APP_NAME_ARIA: (n: number) => `Name for row ${n}`,
+  APP_PORT_ARIA: (who: string) => `Port for ${who}`,
+  APP_PATH_ARIA: (who: string) => `Path for ${who}`,
+  APP_REMOVE_ARIA: (who: string) => `Remove ${who}`,
+  APP_TERMINAL_NOTE: "The sandbox also has a terminal, as an Environment sandbox does.",
   COMMAND_LABEL: "Command",
   /** Lead wording 2026-10-17 (FR-0099): the Review blocker for a command run with no command. */
   COMMAND_REQUIRED: "A command run needs a command to run.",

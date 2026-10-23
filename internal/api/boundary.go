@@ -84,18 +84,6 @@ func validateBoundary(b *types.BoundaryWrite) error {
 	return validateBoundarySpec(b.Spec, b.Limits)
 }
 
-// boundaryHardLimitsGated refuses a write into hard_limits: the boundary cannot be switched on until
-// it bounds every brokered credential path a run is given (#3238).
-// Ungating it also makes the boundary's locks bind (governance_locks.go), as docs/sdk.md's line on
-// locked knobs says.
-func boundaryHardLimitsGated(b types.BoundaryWrite) *unitWriteError {
-	if b.Mode != types.BoundaryHardLimits {
-		return nil
-	}
-	return writeRefusal(http.StatusConflict, reasonBoundaryHardLimitsGated,
-		"hard_limits cannot be set yet: the Wardyn boundary does not bound every brokered credential path a run is given, so it stays in no_limits until it does")
-}
-
 // validateBoundarySpec refuses knobs the boundary cannot hold. They are judged by the validator a
 // stored policy passes (an unnamed confinement floor reads as the lowest), so a boundary allowlist,
 // deny list or grant is spelled as a policy's is.
@@ -125,7 +113,7 @@ func validateBoundarySpec(sp types.BoundarySpec, limits types.BoundaryLimits) er
 	if err := validateAllowedDomainsCount(spec.AllowedDomains); err != nil {
 		return err
 	}
-	return validatePolicySpec(spec)
+	return validateAuthoredPolicySpec(spec)
 }
 
 // handleGetBoundary returns the boundary, with the ETag PUT's If-Match is judged against.
@@ -157,10 +145,6 @@ func (s *Server) handlePutBoundary(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := validateBoundary(&body); err != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonBoundaryInvalid, "invalid Wardyn boundary: "+err.Error())
-		return
-	}
-	if g := boundaryHardLimitsGated(body); g != nil {
-		writeErrorReason(w, g.status, g.reason, g.msg)
 		return
 	}
 	cur, err := bs.GetBoundary(r.Context())
@@ -223,9 +207,6 @@ func applyBoundaryChange(_ *Server, r *http.Request, q store.Querier, ch types.G
 	}
 	if err := validateBoundary(&held); err != nil {
 		return govApplied{}, writeRefusal(http.StatusBadRequest, reasonBoundaryInvalid, "invalid Wardyn boundary: %s", err.Error())
-	}
-	if g := boundaryHardLimitsGated(held); g != nil {
-		return govApplied{}, g
 	}
 	if err := store.LockGovernanceTarget(ctx, q, govKindBoundary); err != nil {
 		return govApplied{}, err
@@ -320,14 +301,15 @@ func (s *Server) handleBoundaryDryRun(w http.ResponseWriter, r *http.Request) {
 }
 
 // boundaryDryRun meets the deployment default, each profile as it composes, each stored policy and so
-// each assignment with b. The values shown pass the read redaction a security admin's read does.
+// each assignment with b. The values shown pass the read redaction of the caller's tier.
 func (s *Server) boundaryDryRun(ctx context.Context, b types.Boundary) (boundaryReport, error) {
+	tier := s.specReadTierFor(ctx)
 	meet := func(spec types.RunPolicySpec, limits types.GovernanceLimits) ([]boundaryChange, error) {
 		after, afterLimits, _, err := boundaryMeet(b, spec, limits)
 		if err != nil {
 			return nil, err
 		}
-		return boundaryChanges(redactSpecForRead(spec, true), redactSpecForRead(after, true), limits, afterLimits), nil
+		return boundaryChanges(redactSpecForRead(spec, tier), redactSpecForRead(after, tier), limits, afterLimits), nil
 	}
 	report := boundaryReport{Units: []boundaryReportRow{}, StoredPolicies: []boundaryReportRow{}, Memberships: []boundaryReportAssign{}}
 	var err error
@@ -414,7 +396,7 @@ func (s *Server) admitBreakGlass(w http.ResponseWriter, r *http.Request) (*http.
 	reason := strings.TrimSpace(r.Header.Get(breakGlassReasonHeader))
 	if reason == "" || utf8.RuneCountInString(reason) > maxGovernanceRejectReasonLen || !controlCharFree(reason) {
 		writeErrorReason(w, http.StatusBadRequest, reasonBreakGlassReasonRequired,
-			"the Wardyn boundary is in hard_limits and units with their own walls exist: an admin-token run lifts their walls, so it is a break-glass run and needs a reason in the "+breakGlassReasonHeader+
+			"the Wardyn boundary is in hard_limits and units with their own walls or restrictions exist: an admin-token run lifts their walls, so it is a break-glass run and needs a reason in the "+breakGlassReasonHeader+
 				" header (at most 512 characters, no control characters)")
 		return r, false
 	}
@@ -425,15 +407,24 @@ func (s *Server) admitBreakGlass(w http.ResponseWriter, r *http.Request) (*http.
 // hard_limits and at least one unit with its own walls exists, whose walls the admin token stands
 // outside. The Default unit (the deployment default) does not count: the admin token never was held
 // to it; nor does a pass-through unit, which adds nothing. With no such unit there is nothing to
-// lift, so the run is an ordinary one, bound by the boundary, untagged. Restrictions join this test
-// with the RESTRICT-PIN lane.
+// lift, so the run is an ordinary one, bound by the boundary, untagged. A restriction is a wall the
+// admin token stands outside too, so one existing counts like a unit with its own walls. A boundary
+// that bounds nothing (the fresh-install seed) asks no reason, restrictions or not, as no_limits.
 func (s *Server) breakGlassLifts(ctx context.Context) (bool, error) {
 	b, err := s.governanceBoundary(ctx)
-	if err != nil || !b.HardLimits() {
+	if err != nil || !b.HardLimits() || boundaryBoundsNothing(b, boundaryOverlay(b)) {
 		return false, err
 	}
 	units, err := s.cfg.Store.CountOwnWallsUnits(ctx)
-	return units > 0, err
+	if err != nil || units > 0 {
+		return units > 0, err
+	}
+	rs, ok := s.restrictionStore()
+	if !ok {
+		return false, nil
+	}
+	n, err := rs.CountRestrictions(ctx)
+	return n > 0, err
 }
 
 // stampBreakGlass records a break-glass run on its run.create datum and writes its run.break_glass.open

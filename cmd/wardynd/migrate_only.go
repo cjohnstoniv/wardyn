@@ -195,7 +195,9 @@ func otherClients(ctx context.Context, conn *pgxpool.Conn) ([]string, error) {
 }
 
 // singleInstanceHolder names the session holding the single-instance lock, best effort: the answer
-// only shapes an error message, so a failed lookup says so rather than failing the refusal.
+// only shapes an error message, so a failed lookup says so rather than failing the refusal. Advisory
+// locks are per database but pg_locks lists the whole server, so only this database's holder counts:
+// the pid in the message is one an operator may stop.
 func singleInstanceHolder(ctx context.Context, pool *pgxpool.Pool) string {
 	var pid int32
 	var user, app, addr string
@@ -204,6 +206,7 @@ func singleInstanceHolder(ctx context.Context, pool *pgxpool.Pool) string {
 		FROM pg_locks l LEFT JOIN pg_stat_activity a ON a.pid = l.pid
 		WHERE l.locktype = 'advisory' AND l.objsubid = 1 AND l.granted
 		  AND ((l.classid::bigint << 32) | l.objid::bigint) = $1
+		  AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())
 		LIMIT 1`, db.SingleInstanceLockKey).Scan(&pid, &user, &app, &addr)
 	if err != nil {
 		return "a session that could not be identified"

@@ -23,5 +23,7 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+    // The console, and the desktop viewer the UI gateway serves for a VM run (internal/api/uigateway_desktop.go).
+    rollupOptions: { input: { main: 'index.html', desktop: 'desktop.html' } },
   },
 })

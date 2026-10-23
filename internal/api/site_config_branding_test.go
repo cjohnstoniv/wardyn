@@ -4,6 +4,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -224,8 +225,8 @@ func TestSiteConfigBrandingLogoPendingWithoutRecord(t *testing.T) {
 	}
 }
 
-// remove_logo on a file-delivered logo is refused; every other save keeps it,
-// and an upload replaces it (the file's next apply puts it back).
+// remove_logo and a new logo on a file-delivered logo are refused; every other
+// save keeps it (the file's next apply would put either change back).
 func TestBrandingRemoveLogoRefusedForFileLogo(t *testing.T) {
 	srv, st, _ := siteBrandingServer(t, true)
 	path := writeFile(t, filepath.Join(t.TempDir(), "logo.png"), testPNG(t, 8))
@@ -247,10 +248,23 @@ func TestBrandingRemoveLogoRefusedForFileLogo(t *testing.T) {
 		!st.br.rec.LogoFromFile {
 		t.Fatalf("a plain save = %d, flag %v; want it kept", w.Code, st.br.rec.LogoFromFile)
 	}
+	was := append([]byte(nil), st.br.rec.Logo...)
+	w = do(t, srv, http.MethodPut, "/api/v1/branding/settings", adminToken,
+		brandingBody(t, func(b map[string]any) { b["logo"] = logoField("image/png", testPNG(t, 9)) }))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("a replacement logo = %d %s, want 400", w.Code, w.Body.String())
+	}
+	if reason, msg := errReason(t, w.Body.Bytes()); reason != brandReasonLogoFromFile || !strings.HasPrefix(msg, "logo:") || !strings.Contains(msg, "branding.logo_path") {
+		t.Errorf("reason %q msg %q", reason, msg)
+	}
+	if !st.br.rec.LogoFromFile || !bytes.Equal(st.br.rec.Logo, was) {
+		t.Fatalf("a refused replacement changed the record: %+v", st.br.rec)
+	}
+	// Once the logo is an upload (not the file's), a replacement is accepted.
+	st.br.rec.LogoFromFile = false
 	if w := do(t, srv, http.MethodPut, "/api/v1/branding/settings", adminToken,
-		brandingBody(t, func(b map[string]any) { b["logo"] = logoField("image/png", testPNG(t, 9)) })); w.Code != http.StatusOK ||
-		st.br.rec.LogoFromFile {
-		t.Fatalf("an upload = %d, flag %v; want it cleared", w.Code, st.br.rec.LogoFromFile)
+		brandingBody(t, func(b map[string]any) { b["logo"] = logoField("image/png", testPNG(t, 9)) })); w.Code != http.StatusOK {
+		t.Fatalf("an upload over an uploaded logo = %d", w.Code)
 	}
 	// An uploaded logo is removable.
 	if w := do(t, srv, http.MethodPut, "/api/v1/branding/settings", adminToken,

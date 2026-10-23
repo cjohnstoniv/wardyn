@@ -104,6 +104,8 @@ type bootFlags struct {
 	governAdminRunsExempt *string
 	// egressPortRule is WARDYN_EGRESS_PORT_RULE (boot_egress.go).
 	egressPortRule *string
+	// desktopSignins is WARDYN_DESKTOP_SIGNINS (boot_desktop_signins.go).
+	desktopSignins *string
 	// runnerTargetOverride is WARDYN_RUNNER_TARGET, and it is a TEST-HARNESS
 	// knob: the substrate name STORED objects validate against while -runner is
 	// "none". A runner-less daemon resolves the target "none", which no drive
@@ -161,6 +163,10 @@ type bootFlags struct {
 	// once at boot, control-plane-authored only. Mutually exclusive with
 	// daemonProxyURL (bootDaemonProxy refuses boot if both are set).
 	daemonProxySecretFile *string
+	// cliArtifactBase is WARDYN_CLI_ARTIFACT_BASE (see
+	// internal/api/cli_artifact_base.go): the operator's internal mirror of the
+	// release assets, published on /healthz. Empty (default) = none.
+	cliArtifactBase *string
 	// orgCAFingerprints is WARDYN_ORG_CA_FINGERPRINTS (see
 	// internal/api/org_ca_fingerprints.go): published on /healthz for
 	// `wardyn ca add` to be compared against. Empty (default) = none.
@@ -279,6 +285,9 @@ type bootFlags struct {
 	// proxyResponseScrub has every run's proxy replace a value it injected when a
 	// relayed response echoes it back (off by default in 0.10.0).
 	proxyResponseScrub *bool
+	// pushHoldCanonicalRepos keys a held git_pat push to github.com on one
+	// spelling of its repository (off by default in 0.10.0).
+	pushHoldCanonicalRepos *bool
 	// attachLocal lets a person's CLI attach to their run on their own runner's computer (off by
 	// default in 0.10.0; only "on" enables it).
 	attachLocal *string
@@ -484,6 +493,7 @@ func parseBootFlags() *bootFlags {
 		userDriveHostRoots:     flagEnv("user-drive-host-roots", "WARDYN_USER_DRIVE_HOST_ROOTS", "", "comma-separated absolute host directories a host_path user drive may be registered inside, typically the mount point of a share the operator mounted host-side. Empty (default) means no host_path drive may be registered; never $HOME or /"),
 		governAdminRuns:        flagBool("govern-admin-runs", "WARDYN_GOVERN_ADMIN_RUNS", false, "govern every run an SSO admin or an admin-role personal token launches, like a member's; the admin token and local mode stay ungoverned and are marked governance_exempt on run.create. With OIDC unset it binds nobody (default false)"),
 		egressPortRule:         flagEnv("egress-port-rule", "WARDYN_EGRESS_PORT_RULE", "off", "container runs' egress port rule: off (default; a bare allowlist host is open on every port), dry_run (nothing refused; each allow the rule would refuse is marked port_rule=dry_run in the audit log) or on (ports 80 and 443 plus host:port allowlist entries). The proxy turns it on for runs dispatched as a desktop VM. Any other value is refused at boot"),
+		desktopSignins:         flagEnv("desktop-signins", "WARDYN_DESKTOP_SIGNINS", "off", "desktop sign-ins: on lets a run's creator sign in to websites in a browser of their own inside the run's desktop (a run whose policy declares the novnc app, on the in-process Docker runner), with the agent stopped, and share one site's login with the agent; off (default) mounts no sign-in store and opens no sign-in lane. Any other value is refused at boot"),
 		governAdminRunsExempt:  flagEnv("govern-admin-runs-exempt", "WARDYN_GOVERN_ADMIN_RUNS_EXEMPT", "", "comma-separated lanes left ungoverned under -govern-admin-runs; the only value is \"recording\" (Record Mode runs as before). Any other value is refused at boot; set without -govern-admin-runs it does nothing"),
 		ssoOnly:                flagBool("sso-only", "WARDYN_SSO_ONLY", false, "declare SSO the only way into the console; refuses to start unless OIDC is configured and the admin token, local mode, member mode and no-operator-list override are all unset (default false)"),
 		uiDir:                  flagEnv("ui-dir", "WARDYN_UI_DIR", "", "directory holding the built web UI (optional)"),
@@ -509,6 +519,7 @@ func parseBootFlags() *bootFlags {
 		daemonProxyURL:         flagEnv("daemon-proxy-url", "WARDYN_DAEMON_PROXY_URL", "", "forward proxy (http:// or https://, no user:pass@) for wardynd's own outbound HTTP calls: OIDC discovery/JWKS, audit webhooks, GitHub App token minting, AWS SSO token renewal and Entra directory sync. Empty (default) leaves the default transport untouched"),
 		daemonNoProxy:          flagEnv("daemon-no-proxy", "WARDYN_DAEMON_NO_PROXY", "", "NO_PROXY-style bypass list for -daemon-proxy-url (host, .suffix, CIDR or *); ignored when the proxy URL is unset"),
 		daemonProxySecretFile:  flagEnv("daemon-proxy-secret-file", "WARDYN_DAEMON_PROXY_SECRET", "", "path to a file holding one forward-proxy URL that may embed user:pass@, the credentialed form of -daemon-proxy-url; refused if group- or world-writable, or if other-readable and owned by wardynd's own non-root uid (group-read, as a Kubernetes Secret mount gives, is accepted). Mutually exclusive with -daemon-proxy-url"),
+		cliArtifactBase:        flagEnv("cli-artifact-base", "WARDYN_CLI_ARTIFACT_BASE", "", "internal mirror (https://) of the release assets, published on the anonymous /healthz as cli_artifact_base so the console's install line and 'wardyn runner setup' fetch from it: <base>/v<version>/<asset>. Empty (default) publishes none"),
 		orgCAFingerprints:      flagEnv("org-ca-fingerprints", "WARDYN_ORG_CA_FINGERPRINTS", "", "comma-separated sha256:<hex> fingerprints of the organisation's CA certificates, published on the anonymous /healthz as org_ca_fingerprints for people to compare with what 'wardyn ca add' prints. Empty (default) publishes none"),
 		demoVideoBaseURL:       flagEnv("demo-video-base-url", "WARDYN_DEMO_VIDEO_BASE_URL", "", "mirror base URL (https://) re-pointing the Getting Started demo episodes for an air-gapped deployment where github.com is unreachable. Empty (default) uses the two GitHub hosts"),
 		ageKey:                 flagEnv("age-key", "WARDYN_AGE_KEY", "", "age X25519 identity (AGE-SECRET-KEY-...) for the secret store; generated and logged if empty"),
@@ -596,6 +607,7 @@ func parseBootFlags() *bootFlags {
 		fileSecretPlaceholders:   flagBool("file-secret-placeholders", "WARDYN_FILE_SECRET_PLACEHOLDERS", false, "a file_secret grant whose scope names a host gets a placeholder file in the sandbox, which the run's proxy replaces with the value on requests to that host (default false)"),
 		runnerSecretPlaceholders: flagBool("runner-secret-placeholders", "WARDYN_RUNNER_SECRET_PLACEHOLDERS", false, "a runner_resident env_secret or file_secret grant whose scope names a host gets a placeholder on the runner, which the organisation's egress replaces with the value on requests to that host (default false)"),
 		attachLocal:              flagEnv("attach-local", "WARDYN_ATTACH_LOCAL", "off", `"on": a person's CLI on their own runner's computer attaches to their run there, the terminal staying on that computer while the organisation keeps the admission, the writer lease, the recording and the audit; anything else keeps every attach on the relay`),
+		pushHoldCanonicalRepos:   flagBool("push-hold-canonical-repos", "WARDYN_PUSH_HOLD_CANONICAL_REPOS", false, "have each run's egress proxy name a held git_pat push to github.com by its repository lowercased and without .git, so one admin decision covers every spelling; off names the path as git spelled it"),
 		proxyResponseScrub:       flagBool("proxy-response-scrub", "WARDYN_PROXY_RESPONSE_SCRUB", false, "have each run's egress proxy replace a credential it added when an upstream response echoes it back to the sandbox (default false)"),
 		gitPATBrokerOffRefused:   flagBool("git-pat-broker-off-refused", "WARDYN_GIT_PAT_BROKER_OFF_REFUSED", false, "while WARDYN_GIT_PAT_BROKER is off, refuse a run that would hold a resident PAT on operators' runs too; a member's run is refused it either way (default false)"),
 		multiAgentTasks:          flagBool("multi-agent-tasks", "WARDYN_MULTI_AGENT_TASKS", false, "let a background agent task run several agents side by side in one sandbox, each on its own tools[].task: every agent's rules are met (strictest wins), the run ends when the last agent exits and fails if any failed; off refuses a request that gives an agent its own task"),
@@ -733,6 +745,7 @@ func finalizeBootFlags(f *bootFlags) {
 	exitOnBadSecretFiles(f)
 	exitOnGovernanceFlags(f)
 	exitOnBadPortRule(f)
+	exitOnBadDesktopSignins(f)
 }
 
 // exitOnBadSecretFiles is parseBootFlags' <VAR>_FILE resolution, extracted

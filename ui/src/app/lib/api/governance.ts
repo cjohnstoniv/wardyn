@@ -25,6 +25,7 @@ import type { PlacementValue } from "../types/new-run-contract";
 import type { PolicyProvenance } from "../types/runs";
 import type { Boundary, BoundaryChange } from "./boundary";
 import type { GovernanceChangeApprover } from "../types/governance-change";
+import type { RestrictionLimits, RestrictionSpec, RestrictionView } from "./restrictions";
 import { USER_TYPE_STANDARD } from "../types/user-types";
 import { asJson, asNoContent, errEnvelope, errText, HttpError, throwIfPending, unwrapList, wfetch } from "./core";
 
@@ -278,6 +279,8 @@ export interface GovernanceSnapshot {
   unit_admins?: GovernanceUnitAdmin[];
   // A unit admin's view only: the walls each of their subtrees hangs from.
   parent_walls?: GovernanceParentWalls[];
+  // The deny-only lists that follow people, each with how many people it names.
+  restrictions?: RestrictionView[];
   // Console only, never on the wire: every unit's name by id, Default included, for a membership on a unit the list hides.
   unit_names?: Record<string, string>;
 }
@@ -396,9 +399,26 @@ export interface GovernanceDormantMembership {
   unit_id: string;
   unit_name: string;
 }
+// A restriction covering the person (checkRestriction), and their workspaces grouped by owning unit
+// (checkWorkspaceGroup; a null unit_id is the group pinned to none).
+export interface GovernanceCheckRestriction {
+  id: string;
+  name: string;
+  spec: RestrictionSpec;
+  limits: RestrictionLimits;
+  contact?: PolicyContact;
+}
+export interface GovernanceCheckWorkspaceGroup {
+  unit_id: string | null;
+  unit_name?: string;
+  count: number;
+  names: string[];
+}
 export interface GovernanceCheck extends GovernancePreview {
   contexts: GovernanceCheckContext[];
   dormant: GovernanceDormantMembership[];
+  restrictions?: GovernanceCheckRestriction[];
+  workspaces?: GovernanceCheckWorkspaceGroup[];
   effective: { ceiling: RunPolicySpec; limits: GovernanceLimits; provenance: Record<string, PolicyProvenance> } | null;
 }
 
@@ -450,12 +470,14 @@ export const governance = {
       units?: unknown;
       memberships?: unknown;
       max_depth?: number;
+      restrictions?: unknown;
       unit_admins?: unknown;
       parent_walls?: unknown;
     }>(res);
     return {
       profiles: unwrapList<GovernanceUnit>(body.units),
       assignments: unwrapList<GovernanceMembership>(body.memberships),
+      restrictions: unwrapList<RestrictionView>(body.restrictions),
       max_depth: body.max_depth,
       unit_admins: unwrapList<GovernanceUnitAdmin>(body.unit_admins),
       parent_walls: unwrapList<GovernanceParentWalls>(body.parent_walls),

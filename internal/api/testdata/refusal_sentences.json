@@ -6,6 +6,11 @@
   },
   {
     "reason": "admin_surface",
+    "target": "\"governance.unit.\" + e.field",
+    "sentence": "e.sentence"
+  },
+  {
+    "reason": "admin_surface",
     "target": "\"workspaces.llm_cred\"",
     "sentence": "\"llm_cred is operator-only — an admin binds a workspace's model/harness credential \" + \"(PUT /workspaces/{id}/llm-cred); create your workspace without it and ask for the binding\""
   },
@@ -33,6 +38,16 @@
     "reason": "admin_view",
     "target": "r.URL.Path",
     "sentence": "userViewLaunchRefusal(typeID)"
+  },
+  {
+    "reason": "attach_ticket_foreign_run",
+    "target": "run.ID.String()",
+    "sentence": "\"approval not found\""
+  },
+  {
+    "reason": "attach_ticket_foreign_run",
+    "target": "run.ID.String()",
+    "sentence": "\"run not found\""
   },
   {
     "reason": "attach_ticket_foreign_run",
@@ -177,6 +192,11 @@
   {
     "reason": "capability_egress_host",
     "target": "id.String()",
+    "sentence": "\"the service identity that created this run is not granted egress host \" + host"
+  },
+  {
+    "reason": "capability_egress_host",
+    "target": "id.String()",
     "sentence": "\"you are not granted egress host \" + host + \" — an admin decides this one, or can grant it to you\""
   },
   {
@@ -313,6 +333,11 @@
     "reason": "governance_unit",
     "target": "\"runs.ui_apps\"",
     "sentence": "fmt.Sprintf(\"UI apps are not allowed under the governance profile %q this run was launched under.\", p.Name)"
+  },
+  {
+    "reason": "groups_snapshot_stale",
+    "target": "\"governance.ceiling\"",
+    "sentence": "(audit only)"
   },
   {
     "reason": "groups_snapshot_stale",
@@ -463,6 +488,11 @@
     "reason": "second_human_required",
     "target": "id.String()",
     "sentence": "sw + \" is set: a second human must decide this — you created this run, so someone else approves or denies its egress\""
+  },
+  {
+    "reason": "second_human_required",
+    "target": "id.String()",
+    "sentence": "sw + \" is set: a second human must decide this, and an approval rule is never a second human\""
   },
   {
     "reason": "second_human_required",

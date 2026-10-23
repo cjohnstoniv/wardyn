@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -377,7 +378,7 @@ func TestGovernanceCheckEqualsResolve(t *testing.T) {
 		}
 		got := e.check(body).Effective
 		want := treeCeiling(t, e, withContextChoice(treeCtx("sub-ck", nil, ""), contextChoice{RunIn: runIn}))
-		if got == nil || !reflect.DeepEqual(got.Ceiling, redactSpecForRead(want.Spec, true)) || !reflect.DeepEqual(got.Limits, want.Limits) {
+		if got == nil || !reflect.DeepEqual(got.Ceiling, redactSpecForRead(want.Spec, specReadFull)) || !reflect.DeepEqual(got.Limits, want.Limits) {
 			t.Errorf("run_in %s: check effective %+v, want the resolved %+v %+v", runIn, got, want.Spec, want.Limits)
 		}
 	}
@@ -473,9 +474,12 @@ func TestDefaultPolicyContexts(t *testing.T) {
 		t.Errorf("contexts %+v unit %q, want %+v answering dp-root", home.Contexts, home.UnitName, want)
 	}
 	in := get(member, "?run_in=dp-child")
+	if in.UnitName != child.Name || !slices.Equal(in.AllowedDomains, []string{"pypi.org"}) || in.UnitPath != nil {
+		t.Errorf("?run_in=dp-child answered %q %v path %+v, want dp-child [pypi.org] and no path: the units above are admin-only", in.UnitName, in.AllowedDomains, in.UnitPath)
+	}
 	wantPath := []unitPathLink{{ID: child.ID, Name: child.Name}, {ID: root.ID, Name: root.Name}}
-	if in.UnitName != child.Name || !slices.Equal(in.AllowedDomains, []string{"pypi.org"}) || !reflect.DeepEqual(in.UnitPath, wantPath) {
-		t.Errorf("?run_in=dp-child answered %q %v path %+v, want dp-child [pypi.org] %+v", in.UnitName, in.AllowedDomains, in.UnitPath, wantPath)
+	if sec := get(ssoSession(t, "sub-dp", "sub-dp@corp.example", oidc.RoleSecurityAdmin), "?run_in=dp-child"); !reflect.DeepEqual(sec.UnitPath, wantPath) {
+		t.Errorf("a security admin's ?run_in=dp-child path %+v, want %+v", sec.UnitPath, wantPath)
 	}
 	if w := e.call(member, http.MethodGet, "/api/v1/policies/default?run_in="+other.ID.String(), ""); w.Code != http.StatusForbidden || wireReason(t, w) != reasonUnitNotAContext {
 		t.Errorf("?run_in= someone else's unit = %d %s, want 403 %s", w.Code, w.Body, reasonUnitNotAContext)

@@ -26,7 +26,7 @@ func (s PG) GetBoundary(ctx context.Context) (types.Boundary, error) {
 	return GetBoundaryQ(ctx, s.Pool)
 }
 
-// PutBoundary replaces the boundary.
+// PutBoundary replaces the boundary, and marks it seeded so a fresh-install seed never overwrites it.
 func (s PG) PutBoundary(ctx context.Context, b types.BoundaryWrite, by string) (types.Boundary, error) {
 	return PutBoundaryQ(ctx, s.Pool, b, by)
 }
@@ -78,13 +78,15 @@ func PutBoundaryQ(ctx context.Context, q Querier, b types.BoundaryWrite, by stri
 	if b.LockedKnobs != nil {
 		locks = nonNil(*b.LockedKnobs)
 	}
+	// seeded_at: a written boundary is never seeded afterwards (internal/db/fresh_seed.go).
 	if _, err := q.Exec(ctx, `
-		INSERT INTO governance_boundary (singleton, mode, spec, limits, contact, updated_by, updated_at, locked_knobs)
-		VALUES (true, $1, $2, $3, $4, $5, now(), COALESCE($6::text[], '{}'))
+		INSERT INTO governance_boundary (singleton, mode, spec, limits, contact, updated_by, updated_at, locked_knobs, seeded_at)
+		VALUES (true, $1, $2, $3, $4, $5, now(), COALESCE($6::text[], '{}'), now())
 		ON CONFLICT (singleton) DO UPDATE
 			SET mode = EXCLUDED.mode, spec = EXCLUDED.spec, limits = EXCLUDED.limits, contact = EXCLUDED.contact,
 			    updated_by = EXCLUDED.updated_by, updated_at = EXCLUDED.updated_at,
-			    locked_knobs = COALESCE($6::text[], governance_boundary.locked_knobs)`,
+			    locked_knobs = COALESCE($6::text[], governance_boundary.locked_knobs),
+			    seeded_at = COALESCE(governance_boundary.seeded_at, now())`,
 		string(b.Mode), spec, limits, contact, by, locks); err != nil {
 		return types.Boundary{}, fmt.Errorf("store: put boundary: %w", err)
 	}

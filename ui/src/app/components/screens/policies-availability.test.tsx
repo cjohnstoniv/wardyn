@@ -165,6 +165,24 @@ describe("New policy asks who gets it (decision 4)", () => {
     ]);
   });
 
+  it("Only these with nobody listed disables Create, so nothing saves open to Everyone; the first Add enables it (#2593)", async () => {
+    createPolicyMock.mockResolvedValue(POLICY);
+    const dialog = await openNew();
+    const create = within(dialog).getByRole("button", { name: /create policy/i });
+    expect(create).toBeEnabled();
+
+    await userEvent.click(within(dialog).getByRole("radio", { name: AVAILABILITY.ONLY }));
+    expect(within(dialog).getByTestId("availability-pending")).toHaveTextContent(AVAILABILITY.PENDING_NOTE);
+    expect(create).toBeDisabled();
+    await userEvent.click(create);
+    expect(createPolicyMock).not.toHaveBeenCalled();
+
+    await userEvent.type(within(dialog).getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER), "portfolio-manager");
+    await userEvent.click(within(dialog).getByRole("button", { name: AVAILABILITY.ADD_CTA }));
+    expect(await within(dialog).findByText("Portfolio manager")).toBeInTheDocument();
+    expect(create).toBeEnabled();
+  });
+
   it("the policy saved but its list was refused: stays open on it, with the server's sentence and what holds now", async () => {
     createPolicyMock.mockResolvedValue(POLICY);
     upsertGrantMock.mockRejectedValue(new HttpError(400, UNKNOWN_TYPE));

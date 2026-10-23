@@ -427,3 +427,22 @@ func TestAgentPolicyDispatchLockedL2(t *testing.T) {
 		})
 	}
 }
+
+// A command-mode run (task mode exec) is created with the same proxy environment as an agent run: the
+// sandbox spec carries it, and the exec the runner starts inherits it.
+func TestDispatchExecTaskModeCarriesTheProxyEnvironment(t *testing.T) {
+	spec, _, _ := agentPolicyDispatchParams(t, &fakeRunner{}, "claude-code", "", "ls", dispatchParams{TaskMode: "exec"})
+	if spec.Env["WARDYN_TASK_MODE"] != "exec" {
+		t.Fatalf("Env[WARDYN_TASK_MODE] = %q, want exec (the run is not in command mode)", spec.Env["WARDYN_TASK_MODE"])
+	}
+	for _, k := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"} {
+		if spec.Env[k] == "" || spec.Env[k] != spec.Env["WARDYN_PROXY_URL"] {
+			t.Errorf("Env[%s] = %q, want the proxy URL %q", k, spec.Env[k], spec.Env["WARDYN_PROXY_URL"])
+		}
+	}
+	for _, k := range []string{"NO_PROXY", "no_proxy"} {
+		if !strings.Contains(spec.Env[k], "localhost") {
+			t.Errorf("Env[%s] = %q, want a bypass list", k, spec.Env[k])
+		}
+	}
+}

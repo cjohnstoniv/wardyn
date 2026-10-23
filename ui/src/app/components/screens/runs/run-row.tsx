@@ -102,13 +102,15 @@ export function RunRow({ run }: { run: AgentRun }) {
       ? RUNS_ROW_ACTION.REVIEW
       : p.action === "sign-in"
         ? RUNS_ROW_ACTION.SIGN_IN
-        : p.action === "cancel"
-          ? SCHEDULED_RUN.CANCEL_RUN
-          : p.action === "revive"
-            ? reviving
-              ? REVIVING
-              : REVIVE
-            : null;
+        : p.action === "take-over"
+          ? RUNS_ROW_ACTION.TAKE_OVER
+          : p.action === "cancel"
+            ? SCHEDULED_RUN.CANCEL_RUN
+            : p.action === "revive"
+              ? reviving
+                ? REVIVING
+                : REVIVE
+              : null;
   const meta = metaLine(run, adminView, own);
 
   return (
@@ -184,7 +186,7 @@ export function RunRow({ run }: { run: AgentRun }) {
       )}
       {eligible && (
         <React.Suspense fallback={null}>
-          <RowSignInProbe runId={run.id} createdAt={run.created_at} onChange={setWaitingSignIn} />
+          <RowSignInProbe runId={run.id} onChange={setWaitingSignIn} />
         </React.Suspense>
       )}
     </div>

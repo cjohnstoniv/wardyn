@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"slices"
 	"strings"
 )
 
@@ -188,4 +189,10 @@ func syncIsIgnoreFile(rel string) bool {
 		}
 	}
 	return false
+}
+
+// syncNamesIgnoreFile reports an ignore-file name at any component of rel, a directory
+// included: creating `.wardynignore/` on the laptop would block the laptop's own file of that name.
+func syncNamesIgnoreFile(rel string) bool {
+	return slices.ContainsFunc(strings.Split(rel, "/"), syncIsIgnoreFile)
 }

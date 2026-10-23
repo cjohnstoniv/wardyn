@@ -46,3 +46,24 @@ func TestCreateSandbox_ProxyPodMemoryFollowsTheAzureGate(t *testing.T) {
 		}
 	}
 }
+
+// The proxy container is Ready only once it accepts a connection, which it does only after its
+// startup resolve succeeded; without the probe waitPodIP returns the moment the container runs.
+func TestCreateSandbox_ProxyContainerHasAReadinessProbeOnItsListener(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	installProxyIPReactor(t, cs, "10.244.0.7")
+	installAgentRunningReactor(t, cs)
+	spec := testSandboxSpec()
+	if _, err := d.CreateSandbox(context.Background(), spec); err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	pod, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), proxyPodName(spec.RunID), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get proxy pod: %v", err)
+	}
+	probe := pod.Spec.Containers[0].ReadinessProbe
+	if pod.Spec.Containers[0].Name != proxyContainerName || probe == nil || probe.TCPSocket == nil ||
+		probe.TCPSocket.Port.IntValue() != runner.ProxyListenPort {
+		t.Fatalf("proxy container readiness probe = %+v, want a TCP probe on %d", probe, runner.ProxyListenPort)
+	}
+}

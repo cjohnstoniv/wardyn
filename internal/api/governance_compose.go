@@ -119,6 +119,21 @@ func (s *Server) unitLeafName(ctx context.Context, id uuid.UUID) (string, error)
 	return chain[0].Name, nil
 }
 
+// unitOutlines is every unit's id, name, kind and parent and nothing else: walls, overlay, limits
+// and contact stay here, so no reader can take authority from what it returns. It is for the readers
+// that only name units or walk their paths (the check's contexts, a legacy delete's activations).
+func (s *Server) unitOutlines(ctx context.Context) ([]types.GovernanceUnit, error) {
+	rows, err := s.cfg.Store.ListGovernanceUnits(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]types.GovernanceUnit, len(rows))
+	for i, r := range rows {
+		out[i] = types.GovernanceUnit{ID: r.ID, Name: r.Name, Kind: r.Kind, ParentID: r.ParentID}
+	}
+	return out, nil
+}
+
 // unitResolution is one profile of the whole list with what composing it gave. Err is why it
 // has no effective content (a cycle, a depth overflow, an unsatisfiable overlay), shown to admins
 // rather than failing the list.

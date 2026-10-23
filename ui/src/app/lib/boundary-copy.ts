@@ -32,8 +32,6 @@ export const BOUNDARY = {
   MODE_HARD: "Hard limits",
   RECOMMENDED: "Recommended",
   MODE_HARD_BODY: "A short list of what no Wardyn run may ever do. Teams give access inside it; the Default team gives everyone else a working setup.",
-  /** not on the boards: why the Hard limits choice is off until the boundary bounds brokered credential paths. */
-  HARD_GATED: "Not available yet. Hard limits can't be switched on until the Wardyn boundary bounds every brokered credential path a run is given.",
   MODE_ORG: "As your organisation's boundary allows",
   MODE_ORG_BODY: "Wardyn adds no limits of its own at the top. Only the walls below and your organisation's boundary apply.",
 

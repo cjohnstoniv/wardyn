@@ -201,10 +201,10 @@ func (s *Server) applyUnitWriteQ(r *http.Request, q store.Querier, id uuid.UUID,
 		return err
 	}
 	_, err = store.WriteGovernanceUnitQ(r.Context(), q, id, s.scopedUnitBuild(r.Context(), q, id, func(all []types.GovernanceUnit, _ []types.GovernanceMembership) (types.GovernanceUnit, error) {
-		if refusal := s.unitPutCreateRefusal(r, id, status, all); refusal != nil {
+		if refusal := s.unitPutCreateRefusal(unitPutCreatesAtID(id, status, all)); refusal != nil {
 			return types.GovernanceUnit{}, refusal
 		}
-		p, _, err := s.buildGovernanceUnit(principalFromRequest(r), id, req, all, b, limit)
+		p, _, _, err := s.buildGovernanceUnit(principalFromRequest(r), s.isOperator(r.Context()), id, req, all, b, limit)
 		return p, err
 	}))
 	if errors.Is(err, store.ErrConflict) {
@@ -259,7 +259,7 @@ func (s *Server) snapshotWalls(ctx context.Context, snap treeSnapshot) (map[uuid
 			out[res.Row.ID] = unitWalls{err: adminResolveError(err)}
 			continue
 		}
-		out[res.Row.ID] = unitWalls{spec: redactSpecForRead(c.Spec, true), limits: c.Limits}
+		out[res.Row.ID] = unitWalls{spec: redactSpecForRead(c.Spec, s.specReadTierFor(ctx)), limits: c.Limits}
 	}
 	return out, nil
 }

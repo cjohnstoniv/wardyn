@@ -464,6 +464,7 @@ func newRunRow(ctx context.Context, in runRowInput) types.AgentRun {
 		ConfinementClass: in.enforced,
 		RunnerTarget:     in.runnerTarget,
 		Interactive:      req.Interactive,
+		MachineKind:      types.MachineKind(req.MachineKind).Normalize(),
 		Experience:       req.Experience,
 		LocalFolder:      req.LocalFolder,
 		WorkspacePath:    in.workspacePath,
@@ -614,6 +615,12 @@ func createRunAuditData(req createRunRequest, policyID *uuid.UUID, enforced type
 		// outlives it: this ties the run to the preset version it came from.
 		data["preset"] = req.Preset
 		data["preset_version"] = req.PresetVersion
+	}
+	if req.Shape != "" {
+		// The New Run choice the run was set up from. The run row does not keep
+		// it, and the launch intent that does is not always kept, so this row is
+		// what says a run was started as an application (#1994).
+		data["shape"] = req.Shape
 	}
 	if req.TaskMode == "exec" {
 		// The run row doesn't store task_mode (request-scoped), so the audit
