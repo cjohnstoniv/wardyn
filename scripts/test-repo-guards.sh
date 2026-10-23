@@ -90,9 +90,10 @@
 #      can lose `rm -rf` to a detached git still writing under .git (#3328).
 #  26. release.yml's CLI build targets (binaries' TARGETS), its cli-<os>-<arch> upload steps and the CLI
 #      names in its release-asset assert are one set, so a target added to one list cannot ship nothing.
-#  29. every release.yml step that writes outside the runner (registry push, cosign sign/attest/copy,
-#      build provenance, gh release create/edit/upload, helm push, notarization) is tied to a
-#      startsWith(github.ref, 'refs/tags/v') condition on the step or its job.
+#  29. every release.yml step that writes outside the runner (registry push or copy, cosign
+#      sign/attest/attach, build provenance, gh release or gh api writes, helm push, notarization) is
+#      guarded by an un-negated startsWith(github.ref, 'refs/tags/v') ANDed into its own or its job's
+#      `if`, its `with.push`, or its own DRY_RUN/PUBLISH env that its script reads; never by job env.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -1002,27 +1003,36 @@ done
 if [ "$walk_fail" = 0 ]; then ok "the five kind walks are watched by release.yml and none is exempt"; fi
 
 # ── 29. release.yml writes only on a release tag ref ─────────────────────────
-# A step that leaves the runner (registry push, signature, attestation, Release upload, notarization)
-# must run only when the ref is a vX.Y.Z tag, so a dispatch off a branch, or a fork's branch, can
-# publish nothing even with dry_run=false. The condition may sit on the step (if, env or with) or on its
-# job (if or env); build-runner-pkg.sh and the promote script read the same expression as DRY_RUN.
-# The yq pipeline prints one row per write step with "guarded" true/false; awk filters, because
+# A step that leaves the runner (registry push or copy, signature, attestation, Release upload,
+# notarization) must run only when the ref is a vX.Y.Z tag, so a dispatch off a branch, or a fork's
+# branch, can publish nothing even with dry_run=false. A step counts as guarded only when
+#   (i)   its own `if`, or its job's `if`, holds startsWith(github.ref, 'refs/tags/v') un-negated,
+#         with no `||` anywhere in that expression; or
+#   (ii)  its `with.push` holds the same, again with no `||`; or
+#   (iii) its OWN env sets DRY_RUN to `inputs.dry_run == true || !startsWith(...)` or PUBLISH to
+#         `inputs.dry_run != true && startsWith(...)`, exactly, and its run text reads that variable.
+# A job-level env never stands in for a step: a write step added to a job must carry its own guard.
+# The yq pipeline prints one row per write step with "guarded" true/false and awk filters, because
 # yq 4.44's select() on a value that does not depend on `.` keeps every row.
 release_write_steps() { # <workflow> -> "<guarded>\t<job>\t<step>" for each step that runs a write command
-    WRITE_RE='docker( buildx)?( [a-z-]+)* push|--push|(^|[^A-Za-z0-9_-])cosign +(sign|sign-blob|attest|copy)([^A-Za-z0-9_-]|$)|gh +release +(create|edit|upload|delete)|notarytool|git +push|oras +push|helm +push|build-runner-pkg\.sh' \
-    TAG_RE="startsWith\\(github\\.ref, 'refs/tags/v'\\)" \
+    WRITE_RE='docker( buildx)?( [a-z-]+)* push|--push|imagetools +create|(^|[^A-Za-z0-9_-])cosign +(sign|sign-blob|attest|attach|copy)([^A-Za-z0-9_-]|$)|(^|[^A-Za-z0-9_-])crane +(copy|cp|tag|push|mutate)([^A-Za-z0-9_-]|$)|skopeo +copy|(^|[^A-Za-z0-9_-])regctl([^A-Za-z0-9_-]|$)|gh +release +(create|edit|upload|delete)|gh +api .*(-X|--method)[ =]*(POST|PUT|PATCH|DELETE)|notarytool|git +push|oras +push|helm +push|build-runner-pkg\.sh' \
+    TAG_POS="(^|[^!])startsWith\\(github\\.ref, 'refs/tags/v'\\)" \
+    ENV_DRY="\${{ inputs.dry_run == true || !startsWith(github.ref, 'refs/tags/v') }}" \
+    ENV_PUBLISH="\${{ inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v') }}" \
     yq -r '
       .jobs | to_entries[] | .key as $j
-      | (.value.if // "") as $jif
-      | ((.value.env // {}) | to_entries | map(.value | tostring) | join(" ")) as $jenv
+      | (.value.if // "" | tostring) as $jif
       | .value.steps[]?
       | ((.run // "x") | split("\n") | map(select(test("^\\s*#") | not)) | join("\n")) as $code
       | ($code | test(strenv(WRITE_RE))) as $w
       | ((.uses // "") | test("^(docker/build-push-action|actions/attest-build-provenance)@")) as $u
-      | (($jif) + " " + $jenv + " " + ((.if // "") | tostring) + " "
-         + ((.env // {}) | to_entries | map(.value | tostring) | join(" ")) + " "
-         + ((.with // {}) | to_entries | map(.value | tostring) | join(" "))) as $guard
-      | ($guard | test(strenv(TAG_RE))) as $g
+      | (.if // "" | tostring) as $sif
+      | (.with.push // "" | tostring) as $push
+      | ((($sif | test(strenv(TAG_POS))) and (($sif | test("[|][|]")) | not))
+         or (($jif | test(strenv(TAG_POS))) and (($jif | test("[|][|]")) | not))
+         or (($push | test(strenv(TAG_POS))) and (($push | test("[|][|]")) | not))
+         or ((.env.DRY_RUN // "" | tostring) == strenv(ENV_DRY) and ($code | test("[$][{]?DRY_RUN([^A-Za-z0-9_]|$)")))
+         or ((.env.PUBLISH // "" | tostring) == strenv(ENV_PUBLISH) and ($code | test("[$][{]?PUBLISH([^A-Za-z0-9_]|$)")))) as $g
       | [($w or $u), $g, $j, (.name // .uses // "unnamed step")] | @tsv' "$1" \
     | awk -F'\t' '$1 == "true" { print $2 "\t" $3 "\t" $4 }'
 }
@@ -1040,17 +1050,24 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           push: ${{ inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v') }}
-      - name: guarded through env
+      - name: guarded through its own env
         env:
           DRY_RUN: ${{ inputs.dry_run == true || !startsWith(github.ref, 'refs/tags/v') }}
-        run: scripts/build-runner-pkg.sh --out x.pkg
+        run: DRY_RUN="$DRY_RUN" scripts/build-runner-pkg.sh --out x.pkg
+      - name: publish flag
+        env:
+          PUBLISH: ${{ inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v') }}
+        run: |
+          if [ "$PUBLISH" != "true" ]; then exit 0; fi
+          helm push x.tgz oci://ghcr.io/x
       - name: reads and comments are not writes
         run: |
           # cosign sign would go here
           gh release view "$TAG"
+          gh api repos/x/y --jq .id
           cosign verify "$REF"
   job-ok:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - name: upload
         run: gh release upload "$TAG" assets/*
@@ -1058,6 +1075,16 @@ jobs:
     steps:
       - name: sign anywhere
         if: inputs.dry_run != true
+        run: cosign sign --yes "$REF"
+  bad-or:
+    steps:
+      - name: sign on a tag or a real run
+        if: inputs.dry_run != true || startsWith(github.ref, 'refs/tags/v')
+        run: cosign sign --yes "$REF"
+  bad-negated:
+    steps:
+      - name: sign off a tag
+        if: '!startsWith(github.ref, ''refs/tags/v'')'
         run: cosign sign --yes "$REF"
   bad-push:
     steps:
@@ -1069,11 +1096,37 @@ jobs:
       - name: notarize
         run: |
           xcrun notarytool submit x.pkg --wait
+  bad-job-env:
+    env:
+      DRY_RUN: ${{ inputs.dry_run == true || !startsWith(github.ref, 'refs/tags/v') }}
+    steps:
+      - name: sign with only a job-level env
+        run: cosign sign --yes "$REF"
+  bad-env-unread:
+    steps:
+      - name: env set but never read
+        env:
+          DRY_RUN: ${{ inputs.dry_run == true || !startsWith(github.ref, 'refs/tags/v') }}
+        run: cosign sign --yes "$REF"
+  bad-other-writers:
+    steps:
+      - name: imagetools
+        run: docker buildx imagetools create -t ghcr.io/x/y:1 ghcr.io/x/y@sha256:0
+      - name: crane
+        run: crane copy a b
+      - name: skopeo
+        run: skopeo copy docker://a docker://b
+      - name: regctl
+        run: regctl image copy a b
+      - name: gh api post
+        run: gh api -X POST repos/x/y/releases
+      - name: attach
+        run: cosign attach sbom --sbom s.json "$REF"
 PLANT
 planted_hits="$(unguarded_release_writes "$planted/w.yml" | sort | tr '\n' '|')"
-planted_want="bad-push / docker/build-push-action@v7|bad-script / notarize|bad-sign / sign anywhere|"
+planted_want="bad-env-unread / env set but never read|bad-job-env / sign with only a job-level env|bad-negated / sign off a tag|bad-or / sign on a tag or a real run|bad-other-writers / attach|bad-other-writers / crane|bad-other-writers / gh api post|bad-other-writers / imagetools|bad-other-writers / regctl|bad-other-writers / skopeo|bad-push / docker/build-push-action@v7|bad-script / notarize|bad-sign / sign anywhere|"
 if [ "$planted_hits" != "$planted_want" ]; then
-    bad "guard 29 self-test: the detector found '$planted_hits', wanted '$planted_want' (guarded steps, reads and comments must pass; the three planted writes must be named)"; tag_fail=1
+    bad "guard 29 self-test: the detector found '$planted_hits', wanted '$planted_want' (guarded steps, reads and comments must pass; every planted write must be named)"; tag_fail=1
 fi
 rm -rf "$planted"
 rel_writes="$(release_write_steps "$REL" | wc -l)"
@@ -1082,9 +1135,9 @@ if [ "$rel_writes" -lt 20 ]; then
     bad "$REL: guard 29 found only $rel_writes write steps (expected 20 or more) — the detector no longer reads the workflow"; tag_fail=1
 fi
 if [ -n "$rel_loose" ]; then
-    bad "$REL: write steps with no startsWith(github.ref, 'refs/tags/v') condition on the step or its job: $rel_loose — add it, ANDed with the dry_run condition"; tag_fail=1
+    bad "$REL: write steps with no un-negated startsWith(github.ref, 'refs/tags/v') on the step's or job's if (no ||), its with.push, or its own DRY_RUN/PUBLISH env that its script reads: $rel_loose — add it, ANDed with the dry_run condition"; tag_fail=1
 fi
-if [ "$tag_fail" = 0 ]; then ok "all $rel_writes release.yml write steps are tied to a release tag ref (self-test catches 3 planted violations)"; fi
+if [ "$tag_fail" = 0 ]; then ok "all $rel_writes release.yml write steps are tied to a release tag ref (self-test catches $(printf %s "$planted_want" | tr -cd "|" | wc -c) planted violations)"; fi
 
 if [ "$fail" = 0 ]; then echo "--- test-repo-guards: PASS ---"; else echo "--- test-repo-guards: FAIL ---"; fi
 exit "$fail"

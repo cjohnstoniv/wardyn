@@ -864,7 +864,6 @@ jobs:
       attestations: write
     env:
       DIGESTS: ${{ needs.preflight-green.outputs.digests }}
-      DRY_RUN: ${{ inputs.dry_run == true || !startsWith(github.ref, 'refs/tags/v') }}
       REF_NAME: ${{ github.ref_name }}
       PARALLEL: "4"
       # The same ten rows as `images`, `images-ui-sandbox` and
@@ -955,6 +954,9 @@ jobs:
       # promoted: the same bytes as the release tags, and readable in a dry run,
       # where nothing is copied.
       - name: Promote, sign and attest each image (no rebuild)
+        env:
+          # Copies, signs and attests only on a vX.Y.Z tag ref and not under dry_run (guard 29).
+          DRY_RUN: ${{ inputs.dry_run == true || !startsWith(github.ref, 'refs/tags/v') }}
         run: |
           set -euo pipefail
           RELEASE_TAG="${REF_NAME#v}"
@@ -1276,7 +1278,7 @@ jobs:
         run: |
           set -euo pipefail
           version=$(sed -n 's/^const Version = "\(.*\)"$/\1/p' internal/version/version.go)
-          scripts/build-runner-pkg.sh --version "$version" \
+          DRY_RUN="$DRY_RUN" scripts/build-runner-pkg.sh --version "$version" \
             --arm64 bin/wardyn-runnerd-darwin-arm64 --amd64 bin/wardyn-runnerd-darwin-amd64 \
             --cli-arm64 bin/wardyn-darwin-arm64 --cli-amd64 bin/wardyn-darwin-amd64 \
             --out wardyn-runnerd.pkg
