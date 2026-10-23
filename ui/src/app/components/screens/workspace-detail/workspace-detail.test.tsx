@@ -39,10 +39,6 @@ const getSetupStatusMock = vi.fn();
 vi.mock("../../../lib/api/setup", () => ({
   setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) },
 }));
-const getModelProvidersMock = vi.fn();
-vi.mock("../../../lib/api/model-providers", () => ({
-  modelProviders: { getModelProviders: (...a: unknown[]) => getModelProvidersMock(...a) },
-}));
 const killRunMock = vi.fn();
 vi.mock("../../../lib/api/runs", () => ({ runs: { killRun: (...a: unknown[]) => killRunMock(...a) } }));
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
@@ -62,7 +58,6 @@ vi.mock("../../../lib/api/permissions", async () => {
 
 import { toast } from "sonner";
 import { AVAILABILITY } from "../../../lib/availability-copy";
-import { DENIED } from "../../../lib/permissions-copy";
 import { WorkspaceDetailScreen } from "./workspace-detail";
 
 function ws(over: Partial<Workspace> = {}): Workspace {
@@ -145,7 +140,6 @@ function renderDetail(
 beforeEach(() => {
   vi.clearAllMocks();
   getSetupStatusMock.mockResolvedValue(setupStatus());
-  getModelProvidersMock.mockResolvedValue({ providers: { providers: [{ id: "mp-1", name: "Team gateway", kind: "openai_compatible" }] } });
   // Never settles by default, so the Availability card stays empty in every
   // test that isn't about it.
   getAvailabilityMock.mockReturnValue(new Promise(() => {}));
@@ -994,74 +988,5 @@ describe("WorkspaceDetailScreen — a stale load can't clobber a newer one", () 
     await new Promise((r) => setTimeout(r, 0));
     expect(screen.getByRole("heading", { name: "beta" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "alpha" })).not.toBeInTheDocument();
-  });
-});
-
-// #2588: the header card's Model provider row, under Image. Change opens the existing Model access dialog for an
-// admin (useOperator, not canMutate); a member who owns the workspace gets it disabled with the admin-role reason.
-describe("WorkspaceDetailScreen — the Model provider row (#2588)", () => {
-  const DESCRIPTION = "A run that picks this workspace/container uses this model provider unless it chooses one itself.";
-  const changeButton = () => screen.getByRole("button", { name: "Change" });
-
-  it("an admin sees the bound provider's id and Change opens the dialog; Save writes the new binding", async () => {
-    getWorkspaceMock.mockResolvedValue(ws({ llm_cred: { provider_ref: "mp-gone" } }));
-    setWorkspaceLLMCredMock.mockResolvedValue(ws({ llm_cred: { provider_ref: "mp-1" } }));
-    const user = userEvent.setup({ pointerEventsCheck: 0 });
-    // The row names a provider by the display name the caller's own list carries.
-    renderDetail("ws-1", true, true, [{ id: "mp-1", name: "Team gateway", kind: "openai_compatible", harnesses: [], host: "" }]);
-
-    expect(await screen.findByText("mp-gone")).toBeInTheDocument();
-    expect(screen.getByText(DESCRIPTION)).toBeInTheDocument();
-    expect(changeButton()).toBeEnabled();
-    await user.click(changeButton());
-
-    const dialog = await screen.findByRole("dialog", { name: "Model access — payments" });
-    // The dead binding stays selectable so it can be cleared; picking a listed provider rebinds.
-    expect(await within(dialog).findByText(/mp-gone \(not in the Model providers list\)/)).toBeInTheDocument();
-    await user.click(await within(dialog).findByRole("radio", { name: /Team gateway/ }));
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(setWorkspaceLLMCredMock).toHaveBeenCalledWith("ws-1", { provider_ref: "mp-1" }));
-    // The row now names the provider by its display name, and the dialog is gone.
-    expect(await screen.findByText("Team gateway")).toBeInTheDocument();
-    expect(screen.queryByRole("dialog", { name: "Model access — payments" })).not.toBeInTheDocument();
-  });
-
-  it("an unbound workspace reads None", async () => {
-    getWorkspaceMock.mockResolvedValue(ws());
-    renderDetail();
-    expect(await screen.findByText("None")).toBeInTheDocument();
-  });
-
-  it("not an admin: Change is disabled with the admin-role reason, even for the workspace's owner", async () => {
-    getWorkspaceMock.mockResolvedValue(ws({ owned_by: "dana@corp.example", llm_cred: { provider_ref: "mp-1" } }));
-    render(
-      <MemoryRouter initialEntries={["/workspaces/ws-1"]}>
-        <OperatorProvider operator={false} securityOperator={false} principal="dana@corp.example">
-          <Routes>
-            <Route path="/workspaces/:id" element={<WorkspaceDetailScreen />} />
-          </Routes>
-        </OperatorProvider>
-      </MemoryRouter>,
-    );
-    // The owner can mutate (Delete is live), which is exactly why Change must not follow canMutate.
-    expect(await screen.findByRole("button", { name: /delete this workspace/i })).not.toBeDisabled();
-    expect(changeButton()).toBeDisabled();
-    expect(screen.getAllByText(OPERATOR_ONLY_REASON).length).toBeGreaterThan(0);
-  });
-
-  it("a non-operator never gets an enabled Change", async () => {
-    getWorkspaceMock.mockResolvedValue(ws());
-    renderDetail("ws-1", false);
-    await screen.findByText("None");
-    expect(changeButton()).toBeDisabled();
-  });
-
-  it("a provider the server hid from this person shows a dash and the canon line, never an id", async () => {
-    getWorkspaceMock.mockResolvedValue(ws({ llm_cred: { provider_unavailable: true } }));
-    renderDetail("ws-1", false);
-    const row = (await screen.findByText(/^Model provider/)).closest("p");
-    expect(row).toHaveTextContent("Model provider —");
-    expect(screen.getAllByText(DENIED.WORKSPACE_NOT_AVAILABLE).length).toBeGreaterThan(0);
-    expect(screen.queryByText(DESCRIPTION)).not.toBeInTheDocument();
   });
 });

@@ -217,7 +217,7 @@ describe("ProfileReview", () => {
     await user.click(within(dialog).getByRole("radio", { name: AVAILABILITY.ONLY }));
     // Only these with nobody listed holds Save policy shut.
     expect(within(dialog).getByRole("button", { name: /^save policy$/i })).toBeDisabled();
-    await user.type(within(dialog).getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER), "team-docs");
+    setField(within(dialog).getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER), "team-docs");
     await user.click(within(dialog).getByRole("button", { name: AVAILABILITY.ADD_CTA }));
     await user.click(within(dialog).getByRole("button", { name: /^save policy$/i }));
 
@@ -240,7 +240,7 @@ describe("ProfileReview", () => {
     await user.click(screen.getByRole("button", { name: /^save as policy$/i }));
     const dialog = await screen.findByRole("dialog", { name: "Save as policy" });
     await user.click(within(dialog).getByRole("radio", { name: AVAILABILITY.ONLY }));
-    await user.type(within(dialog).getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER), "team-docs");
+    setField(within(dialog).getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER), "team-docs");
     await user.click(within(dialog).getByRole("button", { name: AVAILABILITY.ADD_CTA }));
     await user.click(within(dialog).getByRole("button", { name: /^save policy$/i }));
 

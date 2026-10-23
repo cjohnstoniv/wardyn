@@ -328,7 +328,7 @@ describe("Review: Add a secret that is not stored (#2108)", () => {
     await ready();
     await user.click(within(blockerList()).getByRole("button", { name: NR_TOOLS.SETUP_ADD }));
     const dialog = await screen.findByRole("dialog", { name: "Secret: npm_token" });
-    await user.type(within(dialog).getByLabelText(NR_TOOLS.TOKEN_LABEL), "s3cret");
+    setField(within(dialog).getByLabelText(NR_TOOLS.TOKEN_LABEL), "s3cret");
     await user.click(within(dialog).getByRole("button", { name: NR_TOOLS.TOKEN_CONFIRM }));
 
     await waitFor(() => expect(setSecretMock).toHaveBeenCalledWith("npm_token", "s3cret"));
