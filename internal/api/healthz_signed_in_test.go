@@ -69,7 +69,7 @@ func TestHealthz_SignedInFieldCensus(t *testing.T) {
 				r.AddCookie(tc.cookie)
 			}
 			w := httptest.NewRecorder()
-			srv.Handler().ServeHTTP(w, r)
+			panicFails(t, srv.Handler()).ServeHTTP(w, r)
 			if w.Code != http.StatusOK {
 				t.Fatalf("status = %d %s, want 200", w.Code, w.Body)
 			}
