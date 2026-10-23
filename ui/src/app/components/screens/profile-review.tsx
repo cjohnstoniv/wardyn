@@ -23,7 +23,7 @@ import {
   TerminalSquare,
 } from "lucide-react";
 import { toast } from "sonner";
-import type { ProfileProposal, RiskItem, RunPolicySpec } from "../../lib/types";
+import type { ProfileProposal, RiskItem, RunPolicy, RunPolicySpec } from "../../lib/types";
 import { firstUseLabel } from "../../lib/types";
 import { policies as api } from "../../lib/api/policies";
 import { runs as runsApi } from "../../lib/api/runs";
@@ -48,6 +48,13 @@ import { Label } from "../ui/label";
 import { Mono } from "../wardyn/code-block";
 import { YamlBlock } from "../wardyn/yaml-block";
 import { Chip, ConfinementChip, OperatorOnlyHint, RiskBadge } from "../wardyn/primitives";
+import {
+  AvailabilityControl,
+  AvailabilityDraft,
+  writeAvailability,
+  type AvailabilityDraftValue,
+} from "../wardyn/availability-control";
+import { AVAILABILITY } from "../../lib/availability-copy";
 import { useOperator } from "../wardyn/operator-context";
 import { ErrorState, TableSkeleton } from "../wardyn/states";
 import { RUN_MODE } from "../wardyn/copy";
@@ -58,32 +65,13 @@ export function ProfileReview({
   onClose,
 }: {
   runId: string | null;
-  // Pre-filled "save as is" policy name (e.g. workspace-recording). When set, a
-  // one-click "Save as is" button persists the policy under it without the dialog.
+  // Pre-filled policy name (e.g. workspace-recording) for the Save as policy dialog.
   suggestedName?: string;
   onClose: () => void;
 }) {
   const [proposal, setProposal] = React.useState<ProfileProposal | null>(null);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [saveOpen, setSaveOpen] = React.useState(false);
-  const [savingAsIs, setSavingAsIs] = React.useState(false);
-
-  // "Save as is" — persist the synthesized policy directly under the suggested name
-  // (workspace + recording), skipping the name dialog. Falls back to the dialog if
-  // no name was supplied.
-  const saveAsIs = React.useCallback(async () => {
-    if (!proposal || !suggestedName) return;
-    setSavingAsIs(true);
-    try {
-      await api.createPolicy(suggestedName, proposal.proposed.inline_policy);
-      toast.success(`Saved policy “${suggestedName}”`);
-      onClose();
-    } catch (e) {
-      toast.error("Failed to save policy", { description: getErrorMessage(e) });
-    } finally {
-      setSavingAsIs(false);
-    }
-  }, [proposal, suggestedName, onClose]);
 
   const load = React.useCallback(() => {
     if (!runId) return;
@@ -135,9 +123,6 @@ export function ProfileReview({
           ) : proposal ? (
             <ProfileBody
               proposal={proposal}
-              suggestedName={suggestedName}
-              savingAsIs={savingAsIs}
-              onSaveAsIs={saveAsIs}
               onSave={() => setSaveOpen(true)}
             />
           ) : null}
@@ -151,13 +136,9 @@ export function ProfileReview({
           spec={proposal.proposed.inline_policy}
           defaultName={suggestedName}
           onSaved={() => {
-            // Both save paths end the same way: the policy now EXISTS, so the sheet
-            // must stop claiming "nothing is created until you save it". Closing the
-            // dialog alone left the drawer standing behind it still saying that, while
-            // the "Save as is" button next to it closed everything — two buttons, two
-            // stories about the same completed write. Dismiss the dialog first (its
-            // open-state is ours, not the parent's, so onClose can't clear it) and then
-            // hand the drawer back to the parent.
+            // The policy now EXISTS, so the sheet must stop claiming "nothing is created
+            // until you save it". Dismiss the dialog first (its open-state is ours, not the
+            // parent's, so onClose can't clear it) and then hand the drawer back to the parent.
             setSaveOpen(false);
             onClose();
           }}
@@ -169,15 +150,9 @@ export function ProfileReview({
 
 function ProfileBody({
   proposal,
-  suggestedName,
-  savingAsIs,
-  onSaveAsIs,
   onSave,
 }: {
   proposal: ProfileProposal;
-  suggestedName?: string;
-  savingAsIs?: boolean;
-  onSaveAsIs?: () => void;
   onSave: () => void;
 }) {
   const { proposed, risk_assessment, overall_risk, observations, warnings } = proposal;
@@ -301,14 +276,8 @@ function ProfileBody({
       {/* --- actions --- */}
       <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border pt-4">
         {!operator && <OperatorOnlyHint />}
-        {suggestedName && onSaveAsIs && (
-          <Button onClick={onSaveAsIs} disabled={!operator || savingAsIs} data-testid="profile-save-as-is">
-            {savingAsIs ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
-            Save as is (<span className="font-mono">{suggestedName}</span>)
-          </Button>
-        )}
-        <Button variant={suggestedName ? "outline" : "default"} disabled={!operator} onClick={onSave}>
-          <Save className="size-4" /> Save as{suggestedName ? " with a name…" : " policy"}
+        <Button disabled={!operator} onClick={onSave}>
+          <Save className="size-4" /> Save as policy
         </Button>
       </div>
     </div>
@@ -451,7 +420,8 @@ function ObsList({
 }
 
 // SavePolicyDialog — names the proposed inline_policy and persists it via
-// POST /policies. The server validates the spec; a 400 surfaces inline.
+// POST /policies, then asks who can pick it, as Policies → New policy does: a new policy is
+// open to everyone until a list is written. The server validates the spec; a 400 surfaces inline.
 function SavePolicyDialog({
   open,
   onOpenChange,
@@ -469,12 +439,17 @@ function SavePolicyDialog({
   const [name, setName] = React.useState(defaultName || "recorded-profile");
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const [audience, setAudience] = React.useState<AvailabilityDraftValue>({ restricted: false, audiences: [] });
+  // The policy exists but its list write was refused: it stays available to everyone meanwhile.
+  const [partial, setPartial] = React.useState<{ policy: RunPolicy; message: string } | null>(null);
 
   React.useEffect(() => {
     if (open) {
       setName(defaultName || "recorded-profile");
       setError(null);
       setSaving(false);
+      setAudience({ restricted: false, audiences: [] });
+      setPartial(null);
     }
   }, [open, defaultName]);
 
@@ -486,7 +461,14 @@ function SavePolicyDialog({
     }
     setSaving(true);
     try {
-      await api.createPolicy(name.trim(), spec);
+      const created = await api.createPolicy(name.trim(), spec);
+      try {
+        await writeAvailability("policy", created.id, audience);
+      } catch (e) {
+        setPartial({ policy: created, message: getErrorMessage(e) });
+        setSaving(false);
+        return;
+      }
       toast.success(`Saved policy “${name.trim()}”`);
       onSaved();
     } catch (e) {
@@ -495,8 +477,11 @@ function SavePolicyDialog({
     }
   };
 
+  // Once the create landed, closing must hand the sheet back even without another save.
+  const close = partial ? onSaved : () => onOpenChange(false);
+
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onOpenChange(false)}>
+    <Dialog open={open} onOpenChange={(o) => !o && close()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Save as policy</DialogTitle>
@@ -507,13 +492,39 @@ function SavePolicyDialog({
         </DialogHeader>
 
         <div className="space-y-2 py-1">
+          {partial && (
+            <div role="alert" className="flex flex-col gap-1 rounded-lg bg-danger-subtle p-3 text-body text-danger">
+              <b className="font-semibold">{AVAILABILITY.CREATE_PARTIAL_TITLE}</b>
+              <span>{partial.message}</span>
+              <span>{AVAILABILITY.CREATE_PARTIAL_EVERYONE}</span>
+            </div>
+          )}
           <Label htmlFor="profile-policy-name">Policy name</Label>
           <Input
             id="profile-policy-name"
             placeholder="recorded-profile"
             value={name}
+            disabled={!!partial}
             onChange={(e) => setName(e.target.value)}
           />
+          <div className="border-t border-border pt-4">
+            {partial ? (
+              <AvailabilityControl
+                kind="policy"
+                value={partial.policy.id}
+                onlyHint={AVAILABILITY.POLICY_ONLY_HINT}
+                note={AVAILABILITY.POLICY_NOTE}
+              />
+            ) : (
+              <AvailabilityDraft
+                draft={audience}
+                onChange={setAudience}
+                disabled={saving}
+                onlyHint={AVAILABILITY.POLICY_ONLY_HINT}
+                note={AVAILABILITY.POLICY_NOTE}
+              />
+            )}
+          </div>
           {error && (
             <div className="rounded-lg border border-danger/30 bg-danger-subtle px-3 py-2 text-xs text-danger">
               {error}
@@ -522,13 +533,15 @@ function SavePolicyDialog({
         </div>
 
         <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={saving}>
+          <Button variant="ghost" onClick={close} disabled={saving}>
             Cancel
           </Button>
-          <Button onClick={save} disabled={saving || !name.trim()}>
-            {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
-            Save policy
-          </Button>
+          {!partial && (
+            <Button onClick={save} disabled={saving || !name.trim() || audience.pending}>
+              {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+              Save policy
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>
