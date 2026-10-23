@@ -117,14 +117,10 @@ ok()  { echo "ok: $*"; }
 # posture PR #1245 used for daemon-proxy-secret-kind).
 # kind-acceptance-walks (#3110): kind-components-walk and kind-run-output-walk had no caller
 # until this job. Same promotion rule; its date is below.
-# kind-survival-walk (#700), hybrid-walk (#701) and kind-upgrade-walk (#690)
-# are exempt for the SAME reason PR #1245 gave daemon-proxy-secret-kind: none
-# of the three has ever run on a real nightly yet, so watching them from day
-# one would block every release on a job that might fail deterministically
-# for an environment reason this authoring pass could not see (no kind cluster
-# or Docker execution was available to prove them here — see each script's
-# own header). Add all three back to notify-new-lanes' needs (and drop them
-# from here) once each has gone green on a real scheduled run.
+# kind-survival-walk (#700), hybrid-walk (#701), kind-upgrade-walk (#690), k6-kind-conformance
+# and kind-acceptance-walks were exempt here until each had gone green on a real scheduled run
+# (39782025578) and green-by-tree.sh could watch a matrix job's legs (#3439). They are in
+# notify-new-lanes.needs and release.yml's watched= now (guard 13), and run under scope=candidate.
 # provider-subscription-docker-pg (#677 T-17) went green on its first real
 # nightly run (workflow_dispatch, 2026-09-28, run 36393687863) and is now in
 # notify-new-lanes.needs + release.yml's watched= (guard 13) instead of here.
@@ -138,13 +134,12 @@ ok()  { echo "ok: $*"; }
 # release is the fix for a red here. It is NOT in release.yml's watched= (so not in
 # notify-new-lanes.needs, which guard 13 pins to it); it opens its own issue.
 NIGHTLY=.github/workflows/nightly.yml
-NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check test-e2e-concurrent kind-survival-walk hybrid-walk kind-upgrade-walk k6-kind-conformance kind-acceptance-walks ci-mode-dogfood-model-fake published-image-scan notify-published-image-scan"
+NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check test-e2e-concurrent ci-mode-dogfood-model-fake published-image-scan notify-published-image-scan"
 # A job waiting on the promotion rule above carries a date here, job=YYYY-MM-DD, at most 14 days out
 # (the e2e quarantine's rule, #3219). Past it this guard fails until the job joins notify-new-lanes.needs
-# and release.yml's watched=, which needs green-by-tree.sh to match a matrix job's "name (leg)" rows
-# (#3439), or the date is renewed in a reviewed change. k6-kind-conformance and kind-acceptance-walks
-# were green on scheduled runs 39269815742 and 39423832908.
-NOTIFY_EXEMPT_UNTIL="k6-kind-conformance=2026-11-04 kind-acceptance-walks=2026-11-04"
+# and release.yml's watched= (green-by-tree.sh matches a matrix job's "name (leg)" rows, #3439), or the
+# date is renewed in a reviewed change. Empty while no job is waiting.
+NOTIFY_EXEMPT_UNTIL=""
 # notify_exempt_until_problems "<job=date ...>" "<exempt jobs>" <today>: one line per bad entry.
 notify_exempt_until_problems() {
     local pair job until max
@@ -155,7 +150,7 @@ notify_exempt_until_problems() {
         if [[ ! "$until" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || [ "$(date -u -d "$until" +%F 2>/dev/null)" != "$until" ]; then
             echo "'$job' has the invalid date '$until', want YYYY-MM-DD"
         elif [[ "$until" < "$3" ]]; then
-            echo "'$job' was exempt until $until: the way off is #3439 (green-by-tree.sh matching matrix legs, then notify-new-lanes.needs and release.yml's watched=); until it lands, renew the date in a reviewed change (at most 14 days out)"
+            echo "'$job' was exempt until $until: the way off is notify-new-lanes.needs and release.yml's watched= (green-by-tree.sh matches matrix legs since #3439); until the job is watched, renew the date in a reviewed change (at most 14 days out)"
         elif [[ "$until" > "$max" ]]; then
             echo "'$job' is exempt until $until, more than 14 days from $3 ($max) — an exemption is short"
         fi
@@ -985,6 +980,23 @@ if [ "$(yq -r '[.jobs[].steps[]? | select((.uses // "") | test("^docker/build-pu
     bad "$REL: a docker/build-push-action step passes build-contexts — release keeps the cold Go module fetch (DECISIONS-010.md:1137)"; gm_fail=1
 fi
 if [ "$gm_fail" = 0 ]; then ok "nightly image builds seed the Go module cache from the job; release.yml builds cold"; fi
+
+# ── 28. the kind walks stay watched, matrix legs included ────────────────────
+# #3439: green-by-tree.sh reads a watched matrix job through its "name (leg)" rows, so
+# k6-kind-conformance and kind-acceptance-walks (matrix jobs) and the three single walks that
+# were exempt only until they had gone green are on release.yml's watched=, and none is back in
+# NOTIFY_EXEMPT. A job with a matrix and no `name:` still reports "<id> (<leg>)", so the id prefixes the leg.
+walk_fail=0
+walk_watched="$(yq -r '.jobs["preflight-green"].steps[].run // ""' "$REL" | sed -n 's/^ *watched="\(.*\)"$/\1/p' | head -1)"
+for job in kind-survival-walk k6-kind-conformance kind-acceptance-walks hybrid-walk kind-upgrade-walk; do
+    case " $walk_watched " in *" $job "*) ;; *) bad "$REL: preflight-green's watched= lacks '$job' (#3439)"; walk_fail=1 ;; esac
+    case " $NOTIFY_EXEMPT " in *" $job "*) bad "scripts/test-repo-guards.sh: NOTIFY_EXEMPT names '$job', which green-by-tree.sh can watch since #3439"; walk_fail=1 ;; esac
+    case "$(yq -r ".jobs[\"$job\"].name // \"$job\"" "$NIGHTLY")" in
+        "$job"|"$job ("*) ;;
+        *) bad "$NIGHTLY: job '$job' has a name that is neither '$job' nor '$job (<leg>)' — green-by-tree.sh cannot match its checks"; walk_fail=1 ;;
+    esac
+done
+if [ "$walk_fail" = 0 ]; then ok "the five kind walks are watched by release.yml and none is exempt"; fi
 
 if [ "$fail" = 0 ]; then echo "--- test-repo-guards: PASS ---"; else echo "--- test-repo-guards: FAIL ---"; fi
 exit "$fail"
