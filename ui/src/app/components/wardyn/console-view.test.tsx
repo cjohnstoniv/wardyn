@@ -201,6 +201,9 @@ describe("ViewGate", () => {
     expect(screen.getByTestId("refusal")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: VIEW_ADMIN_TOKEN.TITLE })).toBeInTheDocument();
     expect(screen.getByText(VIEW_ADMIN_TOKEN.CAN_CHANGE)).toBeInTheDocument();
+    // #3047 (overseer ruling): the card's Enforced and Can change values, verbatim.
+    expect(screen.getByText("By the server, on every request the admin token makes")).toBeInTheDocument();
+    expect(screen.getByText("Not with the admin token. Sign in as a person.")).toBeInTheDocument();
     expect(screen.getByText(VIEW_ADMIN_TOKEN.BODY)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: VIEW_ADMIN_TOKEN.CTA }));
     expect(screen.getByTestId("where")).toHaveTextContent("/admin");
