@@ -349,9 +349,19 @@ func TestAcked_OutageThenResumeDeliversEveryEventFromTheCheckpoint(t *testing.T)
 		}
 	}
 
-	got := col.snapshot()
+	// Delivery is at-least-once, so a collector deduplicates and so does this check. A batch comes twice
+	// when its POST fails after the collector took it: another parallel test's httptest.Server.Close
+	// closes http.DefaultTransport's idle connections, one of which may still owe its caller the 200.
+	var got []ackedLine
+	seen := map[ackedLine]bool{}
+	for _, l := range col.snapshot() {
+		if !seen[l] {
+			seen[l] = true
+			got = append(got, l)
+		}
+	}
 	if len(got) != len(rows) {
-		t.Fatalf("collector holds %d lines, want all %d: %+v", len(got), len(rows), got)
+		t.Fatalf("collector holds %d distinct lines, want all %d: %+v", len(got), len(rows), got)
 	}
 	for i, l := range got {
 		if l.ID != rows[i].ID || l.Seq != rows[i].Seq || l.RowHash != rows[i].RowHash {
