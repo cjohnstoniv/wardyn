@@ -3,15 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Policies -> Wardyn boundary against the real server: a security admin reaches the page from Policies, the
-// stored no_limits boundary reads as the off state, and while the server gates hard_limits the Hard limits
-// choice is off with its reason, so the hard-limits list (and its claims) can't be reached and nothing is
-// offered for review. No second-admin claim is made before a submit.
+// Policies -> Wardyn boundary against the real server: a security admin reaches the page from Policies, a fresh
+// install's boundary is seeded in hard_limits (#3238), so the page opens on the Hard limits mode with its list,
+// and nothing is offered for review until something changes. No second-admin claim is made before a submit.
 import { test, expect, asRealSecurityAdmin, gotoConsole, navTo } from "./fixtures";
 import { BOUNDARY } from "../src/app/lib/boundary-copy";
 
 test.describe("Policies: the Wardyn boundary", () => {
-  test("the off state is shown, and Hard limits is off with its reason while the server gates it", async ({ page }) => {
+  test("a fresh install reads Hard limits, with the list shown and nothing to review", async ({ page }) => {
     await asRealSecurityAdmin(page);
     await gotoConsole(page, "admin");
     await navTo(page, "Policies");
@@ -20,14 +19,14 @@ test.describe("Policies: the Wardyn boundary", () => {
     await page.getByRole("link", { name: BOUNDARY.TITLE, exact: true }).click();
     await expect(page).toHaveURL(/\/admin\/policies\/boundary$/);
     await expect(page.getByRole("heading", { level: 1, name: BOUNDARY.TITLE })).toBeVisible();
-    await expect(page.getByTestId("boundary-org").getByText(BOUNDARY.ORG_PANEL)).toBeVisible();
-    await expect(page.getByTestId("boundary-mode-chip")).toHaveText(BOUNDARY.MODE_ORG);
+    await expect(page.getByTestId("boundary-mode-chip")).toHaveText(BOUNDARY.CHIP_HARD);
 
     const hard = page.getByRole("radio", { name: new RegExp(BOUNDARY.MODE_HARD_BODY.slice(0, 20)) });
-    await expect(hard).toBeDisabled();
-    await expect(hard).toHaveAccessibleDescription(BOUNDARY.HARD_GATED);
-    await expect(page.getByTestId("boundary-hard-limits")).toHaveCount(0);
-    await expect(page.getByText(BOUNDARY.HARD_HEADING)).toHaveCount(0);
+    await expect(hard).toBeChecked();
+    await expect(hard).toBeEnabled();
+    await expect(page.getByTestId("boundary-hard-limits")).toBeVisible();
+    await expect(page.getByText(BOUNDARY.HARD_HEADING)).toBeVisible();
+    await expect(page.getByTestId("boundary-org")).toHaveCount(0);
     await expect(page.getByRole("button", { name: BOUNDARY.REVIEW, exact: true })).toBeDisabled();
     await expect(page.getByText(/second admin|another security admin/)).toHaveCount(0);
   });

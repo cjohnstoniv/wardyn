@@ -10,6 +10,7 @@ import { GOVERNANCE as GOV } from "../src/app/lib/governance-copy";
 import { SIGNIN } from "../src/app/lib/sign-in-copy";
 import { SIGNIN_HELP_LINK_LABEL } from "../src/app/lib/sign-in-copy";
 import { SESSION_ENDED_REASON } from "../src/app/lib/api/core";
+import { SESSION_ENDED } from "../src/app/lib/session-continuity-copy";
 import { REAUTH_BAR, REAUTH_DIALOG, REAUTH_EXTRA } from "../src/app/lib/reauth-copy";
 
 // Auth / sign-in lane.
@@ -530,7 +531,7 @@ test.describe("a cold load finds the session ended (#2110)", () => {
     await clearTokenInit(page);
     await page.goto("/");
 
-    await expect(page.getByText(SESSION_ENDED_REASON)).toBeVisible();
+    await expect(page.getByText(SESSION_ENDED.EXPIRED)).toBeVisible();
   });
 
   test("a 401 naming no session shows no notice", async ({ page }) => {
@@ -599,7 +600,7 @@ test.describe("outage vs. rejection", () => {
     await page.goto("/");
 
     await expect(signInToken(page)).toBeVisible();
-    await expect(page.getByRole("status").filter({ hasText: SESSION_ENDED_REASON })).toBeVisible();
+    await expect(page.getByRole("status").filter({ hasText: SESSION_ENDED.EXPIRED })).toBeVisible();
     await expect(page.getByRole("alert")).toHaveCount(0);
   });
 

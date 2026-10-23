@@ -293,9 +293,9 @@ test.describe("Run detail — the Policy tab (#1425)", () => {
     await page.getByRole("tab", { name: POLICY_TAB.tab }).click();
     const tab = page.getByTestId("run-policy-tab");
 
-    await expect(tab.getByRole("note", { name: `${POLICY_TAB.hidden}. ${POLICY_TAB.hiddenTip}` })).toHaveAttribute(
+    await expect(tab.getByRole("note", { name: `${POLICY_TAB.hidden}. ${POLICY_TAB.mountHiddenTip}` })).toHaveAttribute(
       "title",
-      POLICY_TAB.hiddenTip,
+      POLICY_TAB.mountHiddenTip,
     );
     await expect(tab.getByText("/home/agent/work/shared")).toBeVisible();
     await expect(tab).not.toContainText("<redacted>");
