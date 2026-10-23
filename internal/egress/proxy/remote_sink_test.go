@@ -333,6 +333,9 @@ func TestRemoteSink_DrainEndsInFlightMITMRequest(t *testing.T) {
 		started <- struct{}{}
 		<-r.Context().Done()
 		ended <- time.Now()
+		// Hang up without an answer: an empty 200 written as the proxy cancels can still reach it while
+		// its TLS connection closes, and the inner request is then relayed and recorded as allowed.
+		panic(http.ErrAbortHandler)
 	}))
 	defer up.Close()
 	certPEM, keyPEM := genTestCA(t)

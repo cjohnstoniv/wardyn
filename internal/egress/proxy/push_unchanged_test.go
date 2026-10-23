@@ -487,7 +487,9 @@ func TestPushRulesKeepTheStrictReadingWhenTheForgeCannotBeRead(t *testing.T) {
 				case <-time.After(5 * time.Second):
 				case <-r.Context().Done():
 				}
-				return true
+				// Hang up without an answer. An empty 200 sent the moment the broker gives up can
+				// still reach it while it closes the connection, and net/http hands it over.
+				panic(http.ErrAbortHandler)
 			}
 		}, "deadline exceeded"},
 		{"the comparison needs more reads than a push may make", func(t *testing.T, f *gitForge) {
