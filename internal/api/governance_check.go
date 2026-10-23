@@ -263,12 +263,14 @@ type checkDormant struct {
 
 // checkEffective is one context's resolved walls, after the Wardyn boundary, and which layer set each
 // knob. Provenance is the leaf-level answer a run gets; PathProvenance names, where Provenance names
-// the leaf, the unit on the path that changed the value, and is Provenance on every other knob.
+// the leaf, the unit on the path that changed the value, and is Provenance on every other knob. It
+// names the units above the leaf, so it is a security-tier read: absent for any other caller (a unit
+// admin), whom contextWalls gives the leaf-level Provenance alone.
 type checkEffective struct {
 	Ceiling        types.RunPolicySpec    `json:"ceiling"`
 	Limits         types.GovernanceLimits `json:"limits"`
 	Provenance     knobProvenance         `json:"provenance"`
-	PathProvenance knobProvenance         `json:"path_provenance"`
+	PathProvenance knobProvenance         `json:"path_provenance,omitempty"`
 }
 
 // checkContexts lists q's contexts and dormant memberships from the rows the selection reads
@@ -345,7 +347,8 @@ func (s *Server) checkEffective(ctx context.Context, q contextQuery, choice cont
 // the restriction that narrowed a knob, then the boundary, and marks a knob a lock above fixes, as a
 // run's provenance does; PathProvenance the same with base's path step by step
 // (ResolvedUnit.PathProvenance) in place of its unit. POST /governance/check and GET /governance both
-// answer through it, each redacting the ceiling at its own caller's tier.
+// answer through it, each redacting the ceiling at its own caller's tier, and giving PathProvenance to
+// a security-tier caller only.
 func contextWalls(deployment, base, c governanceCeiling, b types.Boundary, tier specReadTier) (*checkEffective, error) {
 	prov := startProvenance(deploymentProvenance)
 	prov.setBy(base.provenance(), deployment.Spec, base.Spec)
@@ -364,7 +367,11 @@ func contextWalls(deployment, base, c governanceCeiling, b types.Boundary, tier 
 	prov.setBy(boundaryProvenance, c.Spec, bounded.Spec)
 	path.setBy(boundaryProvenance, c.Spec, bounded.Spec)
 	prov.markLocked(bounded)
-	return &checkEffective{Ceiling: redactSpecForRead(bounded.Spec, tier), Limits: bounded.Limits, Provenance: prov, PathProvenance: path}, nil
+	out := &checkEffective{Ceiling: redactSpecForRead(bounded.Spec, tier), Limits: bounded.Limits, Provenance: prov}
+	if tier != specReadMember {
+		out.PathProvenance = path
+	}
+	return out, nil
 }
 
 // normalizeGovernancePreviewClaims lowercases, trims and de-duplicates one

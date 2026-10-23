@@ -348,6 +348,34 @@ func TestUnitAdminGovernanceRead(t *testing.T) {
 	}
 }
 
+// TestUnitAdminReadsNoPathProvenance: path_provenance names the units above a person's leaf, a
+// security-tier read: a unit admin's GET /governance and POST /governance/check carry none, a
+// security admin's carry it.
+func TestUnitAdminReadsNoPathProvenance(t *testing.T) {
+	e := newUnitAdminEnv(t, false)
+	person := e.fresh("sub-ua-person")
+	treeMember(t, e.govEnv, e.a1, types.CapabilitySubjectUser, person, 1, false)
+	check := `{"user_subjects":["` + person + `"]}`
+	for _, tc := range []struct {
+		who  string
+		c    *http.Cookie
+		want bool
+	}{
+		{"ua-a's admin", e.adminA, false},
+		{"a security admin", e.alice, true},
+	} {
+		for _, req := range [][3]string{{http.MethodGet, "/api/v1/governance", ""}, {http.MethodPost, "/api/v1/governance/check", check}} {
+			w := e.call(tc.c, req[0], req[1], req[2])
+			if w.Code != http.StatusOK {
+				t.Fatalf("%s %s as %s = %d %s", req[0], req[1], tc.who, w.Code, w.Body)
+			}
+			if got := strings.Contains(w.Body.String(), `"path_provenance"`); got != tc.want {
+				t.Errorf("%s %s as %s carries path_provenance = %v, want %v", req[0], req[1], tc.who, got, tc.want)
+			}
+		}
+	}
+}
+
 // TestUnitAdminStaleGroups: a group-granted admin whose snapshot is stale or truncated holds no group
 // grant: refused at the door (403, not a 5xx), with their member reach intact; a fresh snapshot passes.
 func TestUnitAdminStaleGroups(t *testing.T) {

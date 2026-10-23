@@ -422,12 +422,13 @@ export interface GovernanceCheck extends GovernancePreview {
   dormant: GovernanceDormantMembership[];
   restrictions?: GovernanceCheckRestriction[];
   workspaces?: GovernanceCheckWorkspaceGroup[];
-  // provenance: the leaf-level answer a run gets; path_provenance: which unit on the path changed each knob.
+  // provenance: the leaf-level answer a run gets; path_provenance: which unit on the path changed each
+  // knob, a security-tier read (absent for a unit admin).
   effective: {
     ceiling: RunPolicySpec;
     limits: GovernanceLimits;
     provenance: Record<string, PolicyProvenance>;
-    path_provenance: Record<string, PolicyProvenance>;
+    path_provenance?: Record<string, PolicyProvenance>;
   } | null;
 }
 

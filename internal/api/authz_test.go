@@ -2910,13 +2910,27 @@ func (s *authzStore) ListMembershipsFor(ctx context.Context, users, groups []str
 }
 
 // TestPathProvenanceIsSecurityTierOnly: path_provenance names the units above a person's leaf, so it
-// rides the two security-tier reads alone, GET /governance (each unit) and POST /governance/check
-// (effective). No other response type in this package declares it: a member's surfaces and the run
-// views (GET /runs/{id}/policy, the run.policy.resolve row) carry the leaf-only provenance.
+// is a security-tier read. It rides two reads alone, GET /governance (each unit) and POST
+// /governance/check (effective); no other response type in this package declares it: a member's
+// surfaces and the run views (GET /runs/{id}/policy, the run.policy.resolve row) carry the leaf-only
+// provenance. A route that carries it is security class, or omits it for every caller below the
+// security tier: both routes are unit class (a unit admin reads them), and both answer it through
+// contextWalls, which sets it at the security tiers alone. TestUnitAdminReadsNoPathProvenance pins
+// the omission on the wire.
 func TestPathProvenanceIsSecurityTierOnly(t *testing.T) {
+	wantOmitted := map[specReadTier]bool{specReadFull: false, specReadSecurity: false, specReadMember: true}
+	for tier, omits := range wantOmitted {
+		walls, err := contextWalls(governanceCeiling{}, governanceCeiling{}, governanceCeiling{}, types.Boundary{}, tier)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := len(walls.PathProvenance) == 0; got != omits {
+			t.Errorf("contextWalls at tier %d: path_provenance omitted = %v, want %v", tier, got, omits)
+		}
+	}
 	for _, route := range []string{"GET /api/v1/governance", "POST /api/v1/governance/check"} {
-		if got := routeMatrix[route].class; got != classSecurity {
-			t.Errorf("%s is %q, want %q: it carries path_provenance", route, got, classSecurity)
+		if got := routeMatrix[route].class; got != classSecurity && got != classUnit {
+			t.Errorf("%s is %q, want %q, or %q with path_provenance omitted below the security tier", route, got, classSecurity, classUnit)
 		}
 	}
 	files, err := filepath.Glob("*.go")
