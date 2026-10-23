@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -203,6 +204,24 @@ func TestPlanArtifactRedirect_SecondPortOfATokenHostIsAudited(t *testing.T) {
 			}
 			if (denied == 1) != tc.wantRow || denied > 1 {
 				t.Errorf("denied rows = %d, want a row=%v", denied, tc.wantRow)
+			}
+			// #2118: the token is never handed to the second port, and the row refuses it by name.
+			if len(plan.mitmHosts) != 1 || plan.mitmHosts[0] != "mirror.corp.example:443" {
+				t.Errorf("mitmHosts = %v, want only mirror.corp.example:443 (the second port carries no token)", plan.mitmHosts)
+			}
+			if tc.wantRow {
+				want := fmt.Sprintf(redirectSecondPortRefusal, 443, 8443)
+				var found bool
+				for _, ev := range rec.snapshot() {
+					found = found || ev.Action == "run.artifact.redirect" && ev.Outcome == "denied" && strings.Contains(string(ev.Data), want)
+				}
+				if !found {
+					t.Errorf("no denied row with the refusal %q in %+v", want, rec.snapshot())
+				}
+				if want != "refused: this host's token is already injected for port 443, and a token is injected per host, never per host:port, "+
+					"so the redirect on port 8443 is applied without one; give each mirror its own host" {
+					t.Errorf("refusal text drifted: %q", want)
+				}
 			}
 		})
 	}

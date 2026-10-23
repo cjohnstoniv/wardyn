@@ -314,7 +314,7 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 				s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.artifact.redirect",
 					run.ID.String(), "denied", mustJSON(map[string]any{
 						"ecosystem": r.Ecosystem, "host": host, "port": port,
-						"detail": fmt.Sprintf("another redirect to this host already carries the token, on port %d; this port was applied without token injection", first),
+						"detail": fmt.Sprintf(redirectSecondPortRefusal, first, port),
 					})))
 			}
 			continue
@@ -407,6 +407,12 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 	}
 	return plan
 }
+
+// redirectSecondPortRefusal is the denied row's detail for a second token-bearing redirect to a host that already
+// carries a token on another port (#2118). The token is keyed by host, so it is never handed to the second port
+// (no host:port widening); the row says so and how to fix it. Arguments: the first redirect's port, this one's.
+const redirectSecondPortRefusal = "refused: this host's token is already injected for port %d, and a token is injected per host, " +
+	"never per host:port, so the redirect on port %d is applied without one; give each mirror its own host"
 
 // redirectToken is one redirect's resolved credential presentation: which
 // stored secret, in which header, wrapped how.
