@@ -98,10 +98,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Starting the agent again admits the run anew, and the erased row keeps only its harnesses, so it is refused in the
   organisation form ("Ask your admin"). An erased remote server is refused too, which a 0.9 revive accepted. A run
   that is still running keeps its server until it ends.
-- **The first restriction changes how admin-token runs are recorded.** With the Wardyn boundary in `hard_limits`, an
-  admin-token run is a break-glass run once any unit with its own walls exists, and now also once any restriction
-  exists. A deployment that has only pass-through units or none sees no change until someone writes its first
-  restriction. From that write on, an admin-token `POST /runs`, `/runs/preflight` or `/runs/policy-preview` without an
+- **The first restriction changes how admin-token runs are recorded.** With the Wardyn boundary in `hard_limits` and
+  bounding something, an admin-token run is a break-glass run once any unit with its own walls exists, and now also
+  once any restriction exists. A boundary that bounds nothing, as the fresh-install seed does, asks no reason. A
+  deployment that has only pass-through units or none sees no change until someone writes its first restriction. From that write on, an admin-token `POST /runs`, `/runs/preflight` or `/runs/policy-preview` without an
   `X-Wardyn-Break-Glass-Reason` header (`wardyn run --break-glass-reason`; at most 512 characters) is refused `400
   break_glass_reason_required`, so a script or CI job that starts runs with the admin token and sends no reason stops
   working. Runs it starts with a reason carry `break_glass: true` and a `run.break_glass.open` audit row holding the
@@ -264,10 +264,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - The CLI's hint under a `401` follows the answer's reason. On a single-sign-on deployment with no admin token
   (`sign_in_required`) it says to use a personal API token in `WARDYN_TOKEN`, not the compose stack's admin token. For
   a token the organisation does not know (`admin_token_not_configured`) it names where the token came from.
-- Runs started with the admin token are recorded as break-glass runs once any restriction exists under
-  `hard_limits`, as they already are once a unit with its own walls exists. That changes their audit class: they need
-  `X-Wardyn-Break-Glass-Reason`, carry `break_glass: true` and write a `run.break_glass.open` row, and the boundary's
-  run-length maximum still caps them.
+- Admin-token runs are recorded as break-glass runs once any restriction exists, as for a unit with its own walls (see
+  "Before you upgrade").
 - On a phone, the Runs filter bar is a search box, a `Filters (n)` button and a row of removable chips, so the first run
   is on the first screen instead of under five rows of controls (#3041). The button opens a sheet with every other
   control and Save view. From the tablet breakpoint up the bar is unchanged.

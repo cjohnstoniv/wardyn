@@ -341,6 +341,11 @@
   },
   {
     "reason": "groups_snapshot_stale",
+    "target": "\"governance.ceiling\"",
+    "sentence": "(audit only)"
+  },
+  {
+    "reason": "groups_snapshot_stale",
     "target": "\"runs.drive\"",
     "sentence": "(audit only)"
   },

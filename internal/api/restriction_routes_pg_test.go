@@ -236,6 +236,23 @@ func TestBreakGlassRestriction(t *testing.T) {
 	}
 }
 
+// TestBreakGlassRestrictionSeededBoundary: the fresh-install seed bounds nothing, so a restriction
+// does not make an admin-token run a break-glass run there, as it does not in no_limits.
+func TestBreakGlassRestrictionSeededBoundary(t *testing.T) {
+	e := newGovEnvOn(t, throwawayPGPool(t))
+	requireSeeded(t, e)
+	seedRestriction(t, e, "bg-seed", types.RestrictionSpec{DeniedDomains: strs("a.example")}, types.RestrictionLimits{}, userMember("sub-seed"))
+	w := e.admin(http.MethodPost, "/api/v1/runs", `{"agent":"claude-code","task":"t","inline_policy":{"min_confinement_class":"CC1","allow_all_egress":true}}`)
+	var created createRunResponse
+	if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &created) != nil {
+		t.Fatalf("admin-token run, seeded boundary, a restriction, no reason: %d %s, want 201", w.Code, w.Body)
+	}
+	run, err := e.pg.GetRun(context.Background(), created.ID)
+	if err != nil || run.BreakGlass || len(e.audits("run.break_glass.open")) != 0 {
+		t.Errorf("run break_glass = %v, open rows %d (%v), want an untagged run", run.BreakGlass, len(e.audits("run.break_glass.open")), err)
+	}
+}
+
 func sortedRestrictionIDs(ids []uuid.UUID) []uuid.UUID {
 	return slices.SortedFunc(slices.Values(ids), func(a, b uuid.UUID) int { return strings.Compare(a.String(), b.String()) })
 }

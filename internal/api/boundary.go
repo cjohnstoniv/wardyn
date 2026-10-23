@@ -356,17 +356,15 @@ func (s *Server) admitBreakGlass(w http.ResponseWriter, r *http.Request) (*http.
 // to it; nor does a pass-through unit, which adds nothing. With no such unit there is nothing to
 // lift, so the run is an ordinary one, bound by the boundary, untagged. A restriction is a wall the
 // admin token stands outside too, so one existing counts like a unit with its own walls. A boundary
-// that bounds nothing (the fresh-install seed) leaves the own-walls test no reason to ask, as no_limits.
+// that bounds nothing (the fresh-install seed) asks no reason, restrictions or not, as no_limits.
 func (s *Server) breakGlassLifts(ctx context.Context) (bool, error) {
 	b, err := s.governanceBoundary(ctx)
-	if err != nil || !b.HardLimits() {
+	if err != nil || !b.HardLimits() || boundaryBoundsNothing(b, boundaryOverlay(b)) {
 		return false, err
 	}
-	if !boundaryBoundsNothing(b, boundaryOverlay(b)) {
-		units, err := s.cfg.Store.CountOwnWallsUnits(ctx)
-		if err != nil || units > 0 {
-			return units > 0, err
-		}
+	units, err := s.cfg.Store.CountOwnWallsUnits(ctx)
+	if err != nil || units > 0 {
+		return units > 0, err
 	}
 	rs, ok := s.restrictionStore()
 	if !ok {

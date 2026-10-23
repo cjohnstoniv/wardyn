@@ -110,7 +110,7 @@ func validateRestriction(b *types.RestrictionWrite) error {
 			return err
 		}
 	}
-	if err := validatePolicySpec(restrictionAsSpec(b.Spec)); err != nil {
+	if err := validateAuthoredPolicySpec(restrictionAsSpec(b.Spec)); err != nil {
 		return err
 	}
 	for i, g := range b.Spec.WithheldGrants {
