@@ -1,0 +1,15 @@
+{
+ "keyed_sha": "c0c68382c05b11085c2cb529aba364df03018d4a",
+ "proofs": [
+  {
+   "name": "no-escape",
+   "package": "./internal/api",
+   "run": "TestDesktopViewerDataSurvivesItsAttribute",
+   "tags": "",
+   "files": {
+    "internal/api/uigateway_desktop.go": ".proofs/files/no-escape/internal/api/uigateway_desktop.go"
+   },
+   "want_fail": "--- FAIL: TestDesktopViewerDataSurvivesItsAttribute"
+  }
+ ]
+}
