@@ -142,7 +142,7 @@ func (s *Server) handlePutModelProviders(w http.ResponseWriter, r *http.Request)
 	assignModelProviderUIDs(block, existing.ModelProviders)
 	invalidated, err := s.purgeProviderCredentials(ctx, existing.ModelProviders, block)
 	if err != nil {
-		writeServerError(w, r, "purge model provider credentials", err)
+		writeServerError(w, r, modelProviderPurgeFailedMsg, err)
 		return
 	}
 	candidate := existing

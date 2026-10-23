@@ -347,6 +347,12 @@ func (s *Server) purgeProviderCredentials(ctx context.Context, before, after *ty
 	return n, nil
 }
 
+// modelProviderPurgeFailedMsg is what the person who changed a provider's address reads when the purge of its
+// credentials fails (#2127). The purge is all or nothing and runs before the save, so nothing was saved and saving
+// the same change again retries the whole purge; the sentence says so rather than leaving a bare "purge failed".
+const modelProviderPurgeFailedMsg = "the credentials stored for the changed model provider could not all be removed, so the change was not saved. " +
+	"Save it again to finish removing them"
+
 // deleteCredentialsEverywhere deletes names from every namespace and retires
 // each deleted row's process-wide mask copies, keyed by the holders read
 // first: a sign-in's refresh token and client secret carry no expiry, so
