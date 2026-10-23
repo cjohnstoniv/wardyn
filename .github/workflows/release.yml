@@ -155,6 +155,11 @@ name: Release images
 # binaries and the chart are built here on both paths. Promote is idempotent, so
 # a failed job can simply be re-run.
 #
+# Writes. Every step that pushes, signs, attests, uploads to the Release or
+# submits for notarization runs only on a vX.Y.Z tag ref (a tag push, or a
+# dispatch whose ref is the tag), and, as before, not under dry_run.
+# test-repo-guards.sh guard 29 fails when a new write step lacks that condition.
+#
 on:
   push:
     tags: ['v*']
@@ -237,6 +242,15 @@ jobs:
       digests: ${{ steps.staging.outputs.digests }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # Every write below (registry push, signature, attestation, Release upload,
+      # notarization) also requires a vX.Y.Z tag ref, so a dispatch off a branch
+      # with dry_run=false would publish nothing. Fail it here, so the mistake is
+      # loud rather than a run that quietly skips its publishing.
+      - name: Refuse a real publish outside a release tag
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run != true && !startsWith(github.ref, 'refs/tags/v')
+        run: |
+          echo "::error::dry_run=false needs the dispatch ref to be a vX.Y.Z tag (got ${GITHUB_REF}); rehearse with dry_run=true"
+          exit 1
       # Which publish path runs: build rebuilds the images at the tag, promote
       # copies the digests the candidate's nightly staged. A dispatch asks for one
       # (the input defaults to build). A tag push promotes when green-by-tree.sh,
@@ -255,7 +269,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -uo pipefail
-          watched="task-e2e-live ssh-e2e-live test-drive ci-mode-dogfood docker-tagged-live byoi-e2e-live ui-sandbox-e2e-live kind-sso-walk kek-conformance fuzz gvisor-cc2-live kind-sso-ado-walk compose-sso-roles daemon-proxy-secret-kind provider-subscription-docker-pg managed-settings-drift runner-compat-walk"
+          watched="task-e2e-live ssh-e2e-live test-drive ci-mode-dogfood docker-tagged-live byoi-e2e-live ui-sandbox-e2e-live kind-sso-walk kek-conformance fuzz gvisor-cc2-live kind-sso-ado-walk compose-sso-roles daemon-proxy-secret-kind provider-subscription-docker-pg managed-settings-drift runner-compat-walk kind-survival-walk k6-kind-conformance kind-acceptance-walks hybrid-walk kind-upgrade-walk"
           echo "watched=${watched}" >> "$GITHUB_OUTPUT"
           choice=build
           if [ "$EVENT_NAME" = workflow_dispatch ]; then
@@ -546,7 +560,7 @@ jobs:
           # is exactly what a multi-arch build produces. Building without an
           # exporter still validates every Dockerfile and every RUN step, which is
           # what this rehearsal is for.
-          push: ${{ inputs.dry_run != true }}
+          push: ${{ inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v') }}
           platforms: linux/amd64,linux/arm64
           provenance: false
           build-args: ${{ matrix.build-args }}
@@ -556,7 +570,7 @@ jobs:
       # both platforms. The Dockerfile checks the same line at build time, which
       # is all a dry run (nothing pushed) can reach. Gated on the exit code.
       - name: Assert the pushed digest carries the pinned GOFIPS140 snapshot
-        if: inputs.dry_run != true && contains(matrix.build-args, 'GOFIPS140=')
+        if: inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v') && contains(matrix.build-args, 'GOFIPS140=')
         env:
           BUILD_ARGS: ${{ matrix.build-args }}
           IMAGE_REF: ghcr.io/cjohnstoniv/${{ matrix.name }}@${{ steps.build.outputs.digest }}
@@ -566,7 +580,7 @@ jobs:
           test -n "$pin"
           ./scripts/check-fips-image.sh "$IMAGE_REF" "$pin"
       - name: Sign the pushed image (keyless, by digest)
-        if: inputs.dry_run != true
+        if: inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
         env:
           IMAGE_REF: ghcr.io/cjohnstoniv/${{ matrix.name }}@${{ steps.build.outputs.digest }}
         run: cosign sign --yes "${IMAGE_REF}"
@@ -621,14 +635,14 @@ jobs:
           test "$(jq '.components | length' "sbom-${{ matrix.name }}.cdx.json")" -gt 0 \
             || { echo "SBOM for ${IMAGE_REF} has zero components — refusing to attest it"; exit 1; }
       - name: Attest the SBOM to the digest
-        if: inputs.dry_run != true
+        if: inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
         env:
           IMAGE_REF: ghcr.io/cjohnstoniv/${{ matrix.name }}@${{ steps.build.outputs.digest }}
         run: cosign attest --yes --type cyclonedx --predicate "sbom-${{ matrix.name }}.cdx.json" "${IMAGE_REF}"
       # Build provenance: how it was built, not merely who signed it. Separate
       # from cosign because this is the format GitHub's own verification consumes.
       - name: Attest build provenance
-        if: inputs.dry_run != true
+        if: inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/cjohnstoniv/${{ matrix.name }}
@@ -746,14 +760,14 @@ jobs:
         with:
           context: .
           file: ${{ matrix.dockerfile }}
-          push: ${{ inputs.dry_run != true }}
+          push: ${{ inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v') }}
           platforms: linux/amd64,linux/arm64
           provenance: false
           build-args: |
             BASE_IMAGE=${{ steps.base.outputs.ref }}
           tags: ${{ steps.tags.outputs.tags }}
       - name: Sign the pushed image (keyless, by digest)
-        if: inputs.dry_run != true
+        if: inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
         env:
           IMAGE_REF: ghcr.io/cjohnstoniv/${{ matrix.name }}@${{ steps.build.outputs.digest }}
         run: cosign sign --yes "${IMAGE_REF}"
@@ -779,12 +793,12 @@ jobs:
           test "$(jq '.components | length' "sbom-${{ matrix.name }}.cdx.json")" -gt 0 \
             || { echo "SBOM for ${IMAGE_REF} has zero components — refusing to attest it"; exit 1; }
       - name: Attest the SBOM to the digest
-        if: inputs.dry_run != true
+        if: inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
         env:
           IMAGE_REF: ghcr.io/cjohnstoniv/${{ matrix.name }}@${{ steps.build.outputs.digest }}
         run: cosign attest --yes --type cyclonedx --predicate "sbom-${{ matrix.name }}.cdx.json" "${IMAGE_REF}"
       - name: Attest build provenance
-        if: inputs.dry_run != true
+        if: inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/cjohnstoniv/${{ matrix.name }}
@@ -806,7 +820,7 @@ jobs:
   images-ui-sandbox-signin:
     name: build, push, sign (${{ matrix.name }})
     needs: [preflight-green, images-ui-sandbox]
-    if: needs.preflight-green.outputs.path == 'build' && inputs.dry_run != true
+    if: needs.preflight-green.outputs.path == 'build' && inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -850,7 +864,6 @@ jobs:
       attestations: write
     env:
       DIGESTS: ${{ needs.preflight-green.outputs.digests }}
-      DRY_RUN: ${{ inputs.dry_run == true }}
       REF_NAME: ${{ github.ref_name }}
       PARALLEL: "4"
       # The same ten rows as `images`, `images-ui-sandbox` and
@@ -941,6 +954,9 @@ jobs:
       # promoted: the same bytes as the release tags, and readable in a dry run,
       # where nothing is copied.
       - name: Promote, sign and attest each image (no rebuild)
+        env:
+          # Copies, signs and attests only on a vX.Y.Z tag ref and not under dry_run (guard 29).
+          DRY_RUN: ${{ inputs.dry_run == true || !startsWith(github.ref, 'refs/tags/v') }}
         run: |
           set -euo pipefail
           RELEASE_TAG="${REF_NAME#v}"
@@ -1020,70 +1036,70 @@ jobs:
           fi
           echo "promoted: $(wc -l <<<"$names") images"
       - name: Attest build provenance (wardynd)
-        if: inputs.dry_run != true
+        if: inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/cjohnstoniv/wardynd
           subject-digest: ${{ fromJSON(needs.preflight-green.outputs.digests)['wardynd'] }}
           push-to-registry: true
       - name: Attest build provenance (wardynd-fips)
-        if: inputs.dry_run != true
+        if: inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/cjohnstoniv/wardynd-fips
           subject-digest: ${{ fromJSON(needs.preflight-green.outputs.digests)['wardynd-fips'] }}
           push-to-registry: true
       - name: Attest build provenance (wardyn-proxy)
-        if: inputs.dry_run != true
+        if: inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/cjohnstoniv/wardyn-proxy
           subject-digest: ${{ fromJSON(needs.preflight-green.outputs.digests)['wardyn-proxy'] }}
           push-to-registry: true
       - name: Attest build provenance (wardyn-runnerd)
-        if: inputs.dry_run != true
+        if: inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/cjohnstoniv/wardyn-runnerd
           subject-digest: ${{ fromJSON(needs.preflight-green.outputs.digests)['wardyn-runnerd'] }}
           push-to-registry: true
       - name: Attest build provenance (agent-base)
-        if: inputs.dry_run != true
+        if: inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/cjohnstoniv/agent-base
           subject-digest: ${{ fromJSON(needs.preflight-green.outputs.digests)['agent-base'] }}
           push-to-registry: true
       - name: Attest build provenance (agent-codex-cli)
-        if: inputs.dry_run != true
+        if: inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/cjohnstoniv/agent-codex-cli
           subject-digest: ${{ fromJSON(needs.preflight-green.outputs.digests)['agent-codex-cli'] }}
           push-to-registry: true
       - name: Attest build provenance (agent-aws-sso)
-        if: inputs.dry_run != true
+        if: inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/cjohnstoniv/agent-aws-sso
           subject-digest: ${{ fromJSON(needs.preflight-green.outputs.digests)['agent-aws-sso'] }}
           push-to-registry: true
       - name: Attest build provenance (agent-vscode)
-        if: inputs.dry_run != true
+        if: inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/cjohnstoniv/agent-vscode
           subject-digest: ${{ fromJSON(needs.preflight-green.outputs.digests)['agent-vscode'] }}
           push-to-registry: true
       - name: Attest build provenance (agent-novnc)
-        if: inputs.dry_run != true
+        if: inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/cjohnstoniv/agent-novnc
           subject-digest: ${{ fromJSON(needs.preflight-green.outputs.digests)['agent-novnc'] }}
           push-to-registry: true
       - name: Attest build provenance (agent-novnc-signin)
-        if: inputs.dry_run != true
+        if: inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/cjohnstoniv/agent-novnc-signin
@@ -1248,6 +1264,8 @@ jobs:
           path: bin
       - name: Build, sign and notarize (each only with its secrets)
         env:
+          # Notarization submits the package to Apple, so it runs only for a real release tag run.
+          DRY_RUN: ${{ inputs.dry_run == true || !startsWith(github.ref, 'refs/tags/v') }}
           APPLE_DEVELOPER_ID_APPLICATION_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_P12_BASE64 }}
           APPLE_DEVELOPER_ID_APPLICATION_P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_P12_PASSWORD }}
           APPLE_DEVELOPER_ID_APPLICATION_IDENTITY: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_IDENTITY }}
@@ -1260,7 +1278,7 @@ jobs:
         run: |
           set -euo pipefail
           version=$(sed -n 's/^const Version = "\(.*\)"$/\1/p' internal/version/version.go)
-          scripts/build-runner-pkg.sh --version "$version" \
+          DRY_RUN="$DRY_RUN" scripts/build-runner-pkg.sh --version "$version" \
             --arm64 bin/wardyn-runnerd-darwin-arm64 --amd64 bin/wardyn-runnerd-darwin-amd64 \
             --cli-arm64 bin/wardyn-darwin-arm64 --cli-amd64 bin/wardyn-darwin-amd64 \
             --out wardyn-runnerd.pkg
@@ -1310,6 +1328,7 @@ jobs:
         id: push
         env:
           TAG: ${{ github.ref_name }}
+          PUBLISH: ${{ inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v') }}
         run: |
           set -euo pipefail
           ver="${TAG#v}"
@@ -1324,14 +1343,14 @@ jobs:
           test "$chart_ver" = "$ver" \
             || { echo "Chart.yaml version=$chart_ver but the tag is $ver — bump it (RELEASING.md step 1b)"; exit 1; }
           helm package deploy/helm/wardyn -d dist/
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
-            echo "dry run: packaged dist/wardyn-${ver}.tgz, not pushing"
+          if [ "$PUBLISH" != "true" ]; then
+            echo "not a release tag run, or a dry run: packaged dist/wardyn-${ver}.tgz, not pushing"
             exit 0
           fi
           helm push "dist/wardyn-${ver}.tgz" oci://ghcr.io/cjohnstoniv/charts 2>&1 | tee push.log
           echo "digest=$(grep -oE 'sha256:[a-f0-9]{64}' push.log | head -1)" >> "$GITHUB_OUTPUT"
       - name: Sign the chart (keyless, by digest)
-        if: inputs.dry_run != true
+        if: inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
         run: cosign sign --yes "ghcr.io/cjohnstoniv/charts/wardyn@${{ steps.push.outputs.digest }}"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
@@ -1348,7 +1367,7 @@ jobs:
     name: Release assets (SBOMs, checksums, notices)
     # !failure() lets this run when `images` or `promote` was skipped by the path
     # choice; any job that FAILED still stops it.
-    if: ${{ !cancelled() && !failure() && inputs.dry_run != true }}
+    if: ${{ !cancelled() && !failure() && inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v') }}
     needs: [preflight-green, images, images-ui-sandbox, images-ui-sandbox-signin, promote, chart, binaries, runner-pkg]
     runs-on: ubuntu-latest
     timeout-minutes: 15
