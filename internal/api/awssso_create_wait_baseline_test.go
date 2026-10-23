@@ -187,7 +187,7 @@ func TestCreateWait_UnchangedRowAfterLockReleaseWaitsForBudget(t *testing.T) {
 	srv := createRenewalFixture(t)
 	srv.cfg.Secrets = revisionedSecrets{srv.cfg.Secrets}
 	storeSSOBlobFor(t, srv, createRenewalOwner, createWaitBlob())
-	_, unlock, err := srv.lockAWSSSOOwner(context.Background(), createRenewalOwner)
+	_, unlock, err := srv.lockAWSSSOCredential(context.Background(), createRenewalScope())
 	if err != nil {
 		t.Fatal(err)
 	}

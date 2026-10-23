@@ -134,10 +134,12 @@ func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Req
 // locks that order every other writer of a stored credential, taken in this
 // order and nowhere nested the other way round (#1478):
 //
-//  1. lockAWSSSOOwner(owner): an AWS SSO renewal in flight finishes and
-//     persists first, then is erased with the rest. The erase waits at most the
-//     renewal's own bound, 2 x its CreateToken timeout plus its retry delay,
-//     about 21 seconds at the defaults (AWSSSORefreshTuning).
+//  1. lockAWSSSOEveryCredential(owner): the person's AWS SSO lock, then every
+//     stored AWS SSO credential's lock in ascending key order. A renewal in
+//     flight finishes and persists first, then is erased with the rest. The
+//     erase waits at most the renewal's own bound, 2 x its CreateToken timeout
+//     plus its retry delay, about 21 seconds at the defaults
+//     (AWSSSORefreshTuning), since renewals of different credentials run at once.
 //  2. The Entra redemption lock (inside eraseADOSignIn), taken even when no
 //     sign-in row is configured, so the order never depends on configuration.
 //  3. adoOwnPATWriteMu, innermost, held only around EraseOwner (the deletes
@@ -167,7 +169,7 @@ func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Req
 // the erase is refused with secretstore.ErrGenerationChanged and one that
 // begins after it lands. The audit row's write_fence says which held.
 func (s *Server) eraseLocked(ctx context.Context, owner, rowID string, want *erasureNames, rep *secretstore.EraseReport) error {
-	ctx, unlock, err := s.lockAWSSSOOwner(ctx, owner)
+	ctx, unlock, err := s.lockAWSSSOEveryCredential(ctx, owner)
 	if err != nil {
 		return err
 	}

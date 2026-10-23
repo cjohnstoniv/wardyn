@@ -5499,8 +5499,10 @@ What the switch needs, and refuses to render or boot without:
     - a sweep never waits for it, it skips a locked run until the next pass),
   - the **site-config** and **capability-enforcement** writers, the **audit chain verify sweep**, and the **AWS SSO** and
     **Azure DevOps sign-in refresh** single-flights, which keep one rotating refresh token from being redeemed twice.
+    The AWS SSO one is per stored credential, so one person's sessions renew independently; a capture and the
+    credential erase also take the person's AWS SSO lock, and the erase then takes every credential's.
 - They are taken in one order (run operation, run-token mint,
-  AWS SSO, Azure DevOps sign-in, the organisation MCP server key, the document locks, the audit sweep last), each
+  the person's AWS SSO lock, then each AWS SSO credential's in a fixed order, Azure DevOps sign-in, the organisation MCP server key, the document locks, the audit sweep last), each
   nested lock shares its caller's connection, and none proceeds unlocked.
 - A lock
   that cannot be taken answers `503` `lock_unavailable` and is retried.

@@ -613,7 +613,7 @@ func (s *Server) auditADOOwnPAT(ctx context.Context, actor, action, rowID, outco
 // (eraseLocked) — so a stamp never writes an old token back over a fresh paste,
 // nor a removed or erased one back into the store. The stamp reads and writes
 // under it and only ever rewrites a record it just found, so it cannot create
-// one. It is the INNERMOST of the three locks the erase takes (AWS owner lock,
+// one. It is the INNERMOST of the three locks the erase takes (AWS SSO locks,
 // Entra redemption lock, this), and none of its holders takes either of the
 // others while holding it; keep that, or the erase can deadlock. The mutex is
 // in-process. What holds a second replica's writer back from resurrecting a

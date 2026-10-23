@@ -167,16 +167,16 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	}
 	defer releaseLoginLock()
 
-	// Serialised per scope, because the once-only guard below is a read-then-put
+	// Serialised per credential, because the once-only guard below is a read-then-put
 	// (a read-then-put race): two concurrent PUTs from the same login sandbox both read
 	// "not captured yet" and both stored, last write winning, so the guard held
 	// only against a SEQUENTIAL second capture. This is the refresher's own
-	// per-owner single-flight lock (awssso_refresh.go), keyed the same way — the
-	// scope IS the secret-store namespace both paths read-modify-write, so an
-	// upload racing a dispatch-time renewal of the same credential is serialised
-	// too, and two different people's uploads still never wait on each other.
+	// per-credential single-flight lock (awssso_locks.go), so an upload racing a
+	// dispatch-time renewal of the same credential is serialised too, and a
+	// renewal of another one never waits on it. The person's lock is taken first,
+	// as the whole-person erase takes it: no capture lands while an erase runs.
 	// Held through the store so the check and the write are one critical section.
-	lctx, unlock, lerr := s.lockAWSSSOOwner(r.Context(), scope.owner)
+	lctx, unlock, lerr := s.lockAWSSSOCapture(r.Context(), scope)
 	if lerr != nil {
 		slog.WarnContext(r.Context(), "wardynd: could not take the AWS SSO credential lock; refusing the capture", slog.Any("err", lerr))
 		s.refuseCapture(w, r, claims, http.StatusServiceUnavailable, reasonLockUnavailable, lockUnavailableMsg, &scope)

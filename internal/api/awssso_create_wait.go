@@ -5,7 +5,7 @@ package api
 
 // Create's wait for a renewal another flight already has in flight.
 //
-// Create only tries the owner lock (tryLockAWSSSOOwner): N launches must not each
+// Create only tries the credential's lock (tryLockAWSSSOCredential): N launches must not each
 // wait out one stalled renewal, and a blocking wait would hold lock-pool slots.
 // But a create that served the token in hand while another flight was renewing
 // could insert its run row just before that flight ended invalid_grant, and
@@ -25,7 +25,9 @@ package api
 // own 30 s, awsSSOPersistBudget) can still mark the pair spent after the run
 // exists; that needs a failed persist, so it is rare.
 // A holder that releases its lock without changing the row is invisible to
-// this metadata-only watch; an unchanged row still waits out the budget.
+// this metadata-only watch; an unchanged row still waits out the budget. The
+// lock is the credential's own (#2137), so a flight renewing another credential
+// of the same person never makes create wait.
 
 import (
 	"context"
@@ -70,7 +72,7 @@ func (s *Server) readAWSSORenewalBaseline(ctx context.Context, scope awsSSOScope
 }
 
 // renewalInFlight is refreshAWSSSOBlob's answer when another flight holds the
-// owner lock and the token in hand can still carry a run. Create has no later
+// credential's lock and the token in hand can still carry a run. Create has no later
 // chance to refuse, so it waits for that flight's result rather than make a run
 // on a pair the flight may be about to spend; any other caller serves the token.
 func (s *Server) renewalInFlight(ctx context.Context, scope awsSSOScope, blob awsSSOBlob) (awsSSOBlob, string) {
@@ -83,7 +85,7 @@ func (s *Server) renewalInFlight(ctx context.Context, scope awsSSOScope, blob aw
 }
 
 // awaitAWSSSORenewalInFlight is a create-time renewal's answer when another
-// flight holds the owner lock. Each poll reads metadata only, under a deadline
+// flight holds the credential's lock. Each poll reads metadata only, under a deadline
 // derived from the request's context: the spent mark, and the stored row's
 // revision. Spent, or the row gone: the spent sentence, so no run row is made.
 // The revision changed: the pair is read once and, when it can carry a run,
