@@ -5,8 +5,7 @@
 
 // The Wardyn boundary routes (internal/api/boundary.go), both securityOps. The PUT replaces the whole document,
 // takes the GET's ETag as If-Match (a stale draft is a 412), and is held for a second person where one is
-// required (202, thrown as PendingChangeError by asJson). A PUT naming hard_limits is refused 409
-// boundary_hard_limits_gated until the boundary bounds every brokered credential path. The dry run writes nothing.
+// required (202, thrown as PendingChangeError by asJson). The dry run writes nothing.
 import { asJson, wfetch } from "./core";
 import type { ConfinementClass } from "../types/runs";
 import type { GrantSpec } from "../types/policy";
