@@ -19,6 +19,7 @@ import type { RunnerPool, RunnerPoolMemberView } from "../../../../lib/types/run
 import { POOL_DRAWER, POOL_FORM, POOLS } from "../../../wardyn/copy/runner-pools";
 import { Field } from "../../../wardyn/form-primitives";
 import { countChanged, FormActions } from "../../../wardyn/form-actions";
+import { PageContainer } from "../../../wardyn/page-container";
 import { PageHeader } from "../../../wardyn/page-header";
 import { Button } from "../../../ui/button";
 import { Checkbox } from "../../../ui/checkbox";
@@ -71,6 +72,11 @@ function Group({ label, hint, error, children }: { label: string; hint: string; 
       )}
     </div>
   );
+}
+
+/** The admin editor sits in the shared form column (#3058); My runner's own page keeps its narrower layout. */
+function PoolPage({ mine, children }: { mine: boolean; children: React.ReactNode }) {
+  return mine ? <div className="mx-auto max-w-[900px] px-6 py-8">{children}</div> : <PageContainer width="form">{children}</PageContainer>;
 }
 
 export function PoolFormScreen({ scope }: { scope: "admin" | "mine" }) {
@@ -150,7 +156,6 @@ export function PoolFormScreen({ scope }: { scope: "admin" | "mine" }) {
     }
   };
 
-  const wrap = mine ? "mx-auto max-w-[900px] px-6 py-8" : "mx-auto max-w-[1200px] px-6 py-6";
   const title = pool ? POOL_FORM.TITLE_EDIT(pool.name) : POOL_FORM.TITLE_NEW;
   const backButton = (
     <Button variant="ghost" size="sm" type="button" className="-ml-3" onClick={back}>
@@ -159,7 +164,7 @@ export function PoolFormScreen({ scope }: { scope: "admin" | "mine" }) {
   );
   if (!loaded) {
     return (
-      <div className={wrap}>
+      <PoolPage mine={mine}>
         {loadFailed ? (
           <div className="space-y-3">
             <div role="alert" className="rounded-lg border border-danger bg-danger-subtle p-3 text-body">
@@ -177,7 +182,7 @@ export function PoolFormScreen({ scope }: { scope: "admin" | "mine" }) {
             <span className="sr-only">{POOLS.LOADING}</span>
           </div>
         )}
-      </div>
+      </PoolPage>
     );
   }
 
@@ -185,7 +190,7 @@ export function PoolFormScreen({ scope }: { scope: "admin" | "mine" }) {
   const total = runsTotal(members);
   const topError = top || Object.values(errors)[0];
   return (
-    <div className={wrap}>
+    <PoolPage mine={mine}>
       <div className="mb-3">{backButton}</div>
       <PageHeader title={title} description={<span className="block max-w-[68ch]">{POOL_FORM.LEDE}</span>} />
       {topError && (
@@ -274,6 +279,6 @@ export function PoolFormScreen({ scope }: { scope: "admin" | "mine" }) {
           cancelLabel={POOL_FORM.CANCEL}
         />
       </form>
-    </div>
+    </PoolPage>
   );
 }
