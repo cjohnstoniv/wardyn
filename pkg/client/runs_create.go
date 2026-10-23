@@ -44,6 +44,9 @@ type CreateRunRequest struct {
 	// never-reap policy (AutoStopAfterSec < 0) or the idle reaper will stop the
 	// idle sandbox.
 	Interactive bool `json:"interactive,omitempty"`
+	// MachineKind is the kind of sandbox: "" or "container" (the default) or "linux_vm", a Linux
+	// guest under QEMU/KVM that only a registered runner offering it starts.
+	MachineKind string `json:"machine_kind,omitempty"`
 	// WorkspaceID, when set, launches the run against that ONBOARDED workspace:
 	// the server prepends the workspace's stored source onto the resolved policy
 	// (a repo as a workspace_repos entry, a local dir as a read-only-by-default
@@ -140,6 +143,10 @@ type CreateRunRequest struct {
 	// deployment with no model providers, or on a run that calls no model, it
 	// is refused rather than ignored.
 	ModelProvider string `json:"model_provider,omitempty"`
+	// RunIn names the unit this run runs in: one of the caller's units, by id or exact name. Empty runs
+	// in the caller's home unit. A unit that is not one of theirs, or no unit at all, is refused 403
+	// unit_not_a_context.
+	RunIn string `json:"run_in,omitempty"`
 	// Drive opts this run into the member's USER DRIVE — the per-user storage
 	// an admin allocated them. Nil (the default) mounts nothing, byte for byte
 	// today. Nothing here names a path or a drive: the server resolves which

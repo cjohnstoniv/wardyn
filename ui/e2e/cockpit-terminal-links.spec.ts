@@ -104,6 +104,8 @@ test("any other link, same-origin included, asks first; Cancel opens nothing and
   await clickLink(page, "https://example.com/docs");
   await page.getByRole("button", { name: "Open link" }).click();
   expect(await opened(page)).toEqual([["https://example.com/docs?a=1", "_blank", "noopener,noreferrer"]]);
+  // The closing dialog's overlay covers the terminal until it unmounts: a hover sent before then never reaches xterm.
+  await expect(dialog).toHaveCount(0);
 
   // The console's own origin is never exempt.
   await clickLink(page, `${new URL(baseURL!).origin}/runs`);

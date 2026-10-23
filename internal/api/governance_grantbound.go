@@ -42,3 +42,17 @@ func governanceGrantWithinCeiling(g types.GrantSpec, ceiling []types.GrantSpec) 
 	}
 	return composer.GrantWithin(g, ceiling)
 }
+
+// ceilingDuplicatePairing refuses a ceiling's grant list that names one stored-secret pairing twice
+// (composer.DuplicatePairing): the runtime clamp would answer it by list order, the write-time
+// comparator by any entry. Judged where a profile's ceiling or overlay grants are written; a row
+// already stored, and the deployment policy file, still resolve as before.
+func ceilingDuplicatePairing(grants []types.GrantSpec) error {
+	i, j, ok := composer.DuplicatePairing(grants)
+	if !ok {
+		return nil
+	}
+	host, _, _, _, _ := composer.GrantPairing(grants[j])
+	return fmt.Errorf("eligible_grants[%d] names the same %s pairing (%q) as eligible_grants[%d]: a ceiling lists each pairing once, "+
+		"so its approval, TTL and owner_only never depend on list order; merge them into one grant", j, grants[j].Kind, host, i)
+}

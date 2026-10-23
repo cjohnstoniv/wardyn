@@ -25,6 +25,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // proxyStartWatch/proxyStartWatchInterval bound how long startProxy waits to
@@ -76,11 +77,12 @@ type proxyPrep struct {
 	cfgJSON    []byte
 }
 
-// prepareProxy computes runID's proxyPrep from the control plane's cfgJSON. ReplaceProxy runs it before
+// prepareProxy computes runID's proxyPrep from the control plane's cfgJSON, marked vm for a desktop VM
+// (the driver starts its network relay, startVMNet, as the proxy's only client). ReplaceProxy runs it before
 // it removes the running proxy, so a refused relay, a failed subnet read or an unusable CA or upstream
 // proxy keeps that proxy rather than costing it. The decision sink's key is not part of it: Succeed
 // refuses while the old proxy's producer is unsettled, so startProxy takes it after the remove.
-func (d *Driver) prepareProxy(ctx context.Context, runID uuid.UUID, cfgJSON []byte) (proxyPrep, error) {
+func (d *Driver) prepareProxy(ctx context.Context, runID uuid.UUID, cfgJSON []byte, vm bool) (proxyPrep, error) {
 	hosts := []string{"host.docker.internal:host-gateway"}
 	if d.cfg.ControlPlaneRelay != nil {
 		name, target, err := d.relayHostsEntry(cfgJSON)
@@ -98,6 +100,17 @@ func (d *Driver) prepareProxy(ctx context.Context, runID uuid.UUID, cfgJSON []by
 		return proxyPrep{}, err
 	}
 	if cfgJSON, err = withUpstreamProxy(cfgJSON, d.cfg.UpstreamProxyURL); err != nil {
+		return proxyPrep{}, err
+	}
+	// The port rule on, and the relay's two-stage CONNECT and refusal reports honoured
+	// (proxy.Config.VM): set here, where the relay is known, and taken off any other run's
+	// config, so a control plane never puts a container's proxy into VM mode.
+	if vm {
+		cfgJSON, err = runner.WithProxyConfigKeys(cfgJSON, map[string]any{"vm": true})
+	} else {
+		cfgJSON, err = withoutProxyConfigKey(cfgJSON, "vm")
+	}
+	if err != nil {
 		return proxyPrep{}, err
 	}
 	if d.cfg.ProxySandboxPeersOnly {
@@ -411,7 +424,12 @@ func (d *Driver) EnsureProxyImage(ctx context.Context) error {
 }
 
 // CanReplaceProxy — see runner.ProxyReviver: Docker always can.
-func (d *Driver) CanReplaceProxy(context.Context, string) error { return nil }
+func (d *Driver) CanReplaceProxy(ctx context.Context, ref string) error {
+	if d.vmFor(ctx, ref) != nil {
+		return errVMUnsupported
+	}
+	return nil
+}
 
 // ReplaceProxy swaps the agent ref's proxy sidecar, if it still has one, for
 // a new one running cfgJSON on the current proxy image (runner.ProxyReviver).
@@ -431,6 +449,9 @@ func (d *Driver) CanReplaceProxy(context.Context, string) error { return nil }
 // place, so its logs still name the cause; the next revive removes it by name
 // before starting another.
 func (d *Driver) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) error {
+	if d.vmFor(ctx, ref) != nil {
+		return errVMUnsupported
+	}
 	id, err := d.proxyRunID(ctx, ref)
 	if err != nil {
 		return err
@@ -462,7 +483,7 @@ func (d *Driver) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) e
 		return err
 	}
 	// Not ErrProxyReplaceFailed either: nothing is removed yet, so the revive keeps the running proxy.
-	prep, err := d.prepareProxy(ctx, id, cfgJSON)
+	prep, err := d.prepareProxy(ctx, id, cfgJSON, agentLabels[labelMachineKind] == string(types.MachineLinuxVM))
 	if err != nil {
 		return fmt.Errorf("docker: replace proxy: %w", err)
 	}
@@ -485,6 +506,9 @@ func (d *Driver) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) e
 // back, and an agent started first could take the address its own hosts
 // entry pins as wardyn-proxy. Recording dirs are prepared again as at create.
 func (d *Driver) StartSandbox(ctx context.Context, ref string) error {
+	if d.vmFor(ctx, ref) != nil {
+		return errVMUnsupported
+	}
 	id, err := d.proxyRunID(ctx, ref)
 	if err != nil {
 		return err
@@ -596,4 +620,17 @@ func validRelayTarget(t string) error {
 		return fmt.Errorf("the relay target %q is not a routable host address (unspecified, multicast or loopback)", t)
 	}
 	return nil
+}
+
+// withoutProxyConfigKey returns the proxy config b without key k, or b itself when it has none.
+func withoutProxyConfigKey(b []byte, k string) ([]byte, error) {
+	var data map[string]json.RawMessage
+	if err := json.Unmarshal(b, &data); err != nil {
+		return nil, err
+	}
+	if _, ok := data[k]; !ok {
+		return b, nil
+	}
+	delete(data, k)
+	return json.Marshal(data)
 }

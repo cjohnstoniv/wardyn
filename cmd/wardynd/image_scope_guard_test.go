@@ -17,7 +17,7 @@ import (
 )
 
 // These guards hold scripts/image-scope.sh, which decides on a pull request
-// which of the nine trivy image scans can be skipped. A skipped scan that
+// which of the ten trivy image scans can be skipped. A skipped scan that
 // should have run ships an unscanned image change, so the oracle here is built
 // from the Dockerfiles and `go list` and shares no code with the script: every
 // input the oracle derives is planted as a changed path, and the script must
@@ -25,7 +25,7 @@ import (
 
 type scannedImage struct{ name, dockerfile string }
 
-// scannedImages reads the nine images from the trivy jobs' env, as the script does.
+// scannedImages reads the ten images from the trivy jobs' env, as the script does.
 func scannedImages(t *testing.T, root string) []scannedImage {
 	t.Helper()
 	wf, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "ci.yml"))
@@ -36,8 +36,8 @@ func scannedImages(t *testing.T, root string) []scannedImage {
 	for _, m := range regexp.MustCompile(`(?m)^\s+TRIVY_IMAGE: (\S+)\n\s+TRIVY_DOCKERFILE: (\S+)`).FindAllStringSubmatch(string(wf), -1) {
 		out = append(out, scannedImage{m[1], m[2]})
 	}
-	if len(out) != 9 {
-		t.Fatalf("ci.yml has %d trivy images, want the 9 the release publishes", len(out))
+	if len(out) != 10 {
+		t.Fatalf("ci.yml has %d trivy images, want the 10 the release publishes", len(out))
 	}
 	return out
 }
@@ -299,10 +299,10 @@ func TestImageScopeSkipsWhatNoInputReaches(t *testing.T) {
 		apiFile:                                {"wardynd", "wardynd-fips"},
 		"deploy/images/codex-cli/agent-run":    {"agent-codex-cli"},
 		"deploy/images/aws-sso/signin-pane.sh": {"agent-aws-sso"},
-		// The shared boot library: every image that copies it, and so the two UIs built on agent-base.
-		"deploy/images/common/agent-run-lib.sh": {"agent-aws-sso", "agent-base", "agent-codex-cli", "agent-novnc", "agent-vscode", "wardynd", "wardynd-fips"},
-		// A base image change reaches the two images built FROM it.
-		"deploy/images/base/Dockerfile": {"agent-base", "agent-novnc", "agent-vscode"},
+		// The shared boot library: every image that copies it, and so the three UIs built on agent-base.
+		"deploy/images/common/agent-run-lib.sh": {"agent-aws-sso", "agent-base", "agent-codex-cli", "agent-novnc", "agent-novnc-signin", "agent-vscode", "wardynd", "wardynd-fips"},
+		// A base image change reaches the three images built FROM it.
+		"deploy/images/base/Dockerfile": {"agent-base", "agent-novnc", "agent-novnc-signin", "agent-vscode"},
 	} {
 		if got := scans(path); !slices.Equal(got, want) {
 			t.Errorf("%s: scans %v, want exactly %v", path, got, want)

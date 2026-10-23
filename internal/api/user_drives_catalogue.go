@@ -165,6 +165,10 @@ func (s *Server) meDrives(ctx context.Context, poolID string) ([]client.MeDrive,
 			}
 		}
 		row.UnavailableReason = s.driveUnavailableHere(ctx, d, pool, checked, remoteDenied)
+		row.MountsFrom = s.driveMountsFrom(ctx, drive)
+		if name := s.boundRunnerName(ctx, drive); name != "" && checked && driveOnPoolRunner(pool, drive) {
+			row.MountedFrom = &client.MeDriveMountedFrom{Runner: name, Path: drive.AltHostRoot}
+		}
 		row.KeptFromRun = keptFromRunOf(drive)
 		row.KeptFromRunTitle = s.keptFromRunTitle(ctx, drive)
 		out = append(out, row)
@@ -177,19 +181,34 @@ func (s *Server) driveUnavailableHere(ctx context.Context, d reachableDrive, poo
 	switch {
 	case d.resolved != nil && d.resolved.Paused:
 		return client.MeDriveUnavailablePaused
-	case d.resolved == nil || d.target() == "" || s.driveBindFailureHere(ctx, *d.resolved) != nil:
+	case d.resolved == nil || d.target() == "":
+		return client.MeDriveUnavailableUnmountable
+	case checked && driveOnPoolRunner(pool, d.winner.Drive):
+		// A run in this pool goes to the bound runner (kindTargets) and mounts the
+		// second place, so the first place's checks do not decide it.
+		return ""
+	case s.driveBindFailureHere(ctx, *d.resolved, drivePlace{}) != nil:
 		return client.MeDriveUnavailableUnmountable
 	case remoteDenied:
 		return client.MeDriveUnavailablePlacementDenied
+	case checked && driveNotInPool(pool, d.winner.Drive) && d.winner.Drive.AltRunnerID != nil:
+		return client.MeDriveUnavailableBoundElsewhere
 	case checked && driveNotInPool(pool, d.winner.Drive):
 		return client.MeDriveUnavailableNotInPool
 	}
 	return ""
 }
 
-// driveNotInPool is the pool half of a drive's availability: no drive mounts on
-// a person's own runner, whose substrate holds no organisation storage, so a
-// user pool with no remote-hosted runner has nowhere to mount one. For a
+// driveOnPoolRunner reports whether d's second place is bound to one of the
+// caller's own runners in pool, where a run of theirs mounts it (M10).
+func driveOnPoolRunner(pool store.RunnerPoolCatalogueRow, d types.UserDrive) bool {
+	return d.AltRunnerID != nil && slices.Contains(pool.OwnRunnerIDs, *d.AltRunnerID)
+}
+
+// driveNotInPool is the pool half of a drive's availability: a drive mounts on a
+// person's own runner only from a second place bound to it (driveOnPoolRunner),
+// so for any other drive a user pool with no remote-hosted runner has nowhere to
+// mount it. For a
 // person's own drive that is its permanent rule (memberDriveNeverOnPool); for
 // an organisation drive it is how those runners are today.
 //

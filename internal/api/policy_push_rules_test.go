@@ -93,8 +93,6 @@ func TestValidatePolicySpec_PushRulesBounds(t *testing.T) {
 			"push_rules.max_file_size_mib must be between 0 and 32"},
 		{"max_file_size_mib above the cap", spec(&types.PushRulesSpec{MaxFileSizeMiB: maxPushRulesFileSizeMiB + 1}),
 			"the most a pack can carry is 32 MiB"},
-		{"deny_new_executables is not enforced yet", spec(&types.PushRulesSpec{DenyNewExecutables: true}),
-			"push_rules.deny_new_executables is not supported yet"},
 		{"hold_seconds above the proxy's hold ceiling", spec(&types.PushRulesSpec{HoldSeconds: maxPushRulesHoldSeconds + 1}),
 			"push_rules.hold_seconds must be between 0 and 600"},
 	}
@@ -120,6 +118,7 @@ func TestValidatePolicySpec_PushRulesBounds(t *testing.T) {
 		spec(&types.PushRulesSpec{MaxFileSizeMiB: maxPushRulesFileSizeMiB}),
 		spec(&types.PushRulesSpec{RequireReviewPaths: []string{".github/workflows/**"}, HoldSeconds: maxPushRulesHoldSeconds}),
 		spec(&types.PushRulesSpec{DenyPaths: []string{"secrets/**"}, RequireReviewPaths: []string{"infra/"}}),
+		spec(&types.PushRulesSpec{DenyNewExecutables: true}),
 	} {
 		if err := validatePolicySpec(ok); err != nil {
 			t.Errorf("rejected a policy inside the bounds %+v: %v", ok, err)

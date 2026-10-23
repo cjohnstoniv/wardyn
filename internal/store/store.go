@@ -40,7 +40,7 @@ func (s PG) Ping(ctx context.Context) error {
 // runReservedCols and runInsertOnlyCols column, in order (TestCreateRunBindsEveryInsertColumn).
 var createRunSQL = `
 		INSERT INTO agent_runs (` + runInsertCols + `, ` + runReservedCols + `, ` + runInsertOnlyCols + `)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,` + runnerPoolFence + `,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,` + runnerPoolFence + `,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54)
 		RETURNING ` + runCols
 
 // runnerPoolFence is the value of the runner_pool_id column in createRunSQL: the pool read through its
@@ -252,7 +252,8 @@ func (s PG) createRunArgs(r types.AgentRun) ([]any, error) {
 		r.EndsAt, r.WaitBudgetSec, limitsJSON, r.UnitID, r.ModelProviderID, r.UserType,
 		r.Preset, r.PresetVersion, r.OperatorOwned, r.CreatedVia, r.DiskMiB,
 		string(r.Placement), r.PlacementFilled, r.RunnerID, string(r.EvidenceSource), string(r.Experience),
-		r.LifetimeCapAt, string(r.LifetimeCapSource), r.RunnerPoolID, r.RunnerPoolRevision, string(r.RunnerPoolSelection), r.RunnerPoolExecutor, r.HumanAuthor, walls, r.BreakGlass,
+		r.LifetimeCapAt, string(r.LifetimeCapSource), r.RunnerPoolID, r.RunnerPoolRevision, string(r.RunnerPoolSelection), r.RunnerPoolExecutor, r.HumanAuthor, walls,
+		string(r.MachineKind.Normalize()), r.BreakGlass,
 		r.Reserved.CPUMillis, r.Reserved.MemoryMiB, r.Reserved.DiskMiB,
 		localFolder,
 	}, nil
@@ -423,7 +424,7 @@ func (s PG) TouchRun(ctx context.Context, id uuid.UUID) error {
 // so a column appended to runInsertCols reaches both lists at once.
 const runInsertCols = `id, created_at, updated_at, created_by, agent, repo, task, policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids, autonomy_level, ` +
 	`ends_at, wait_budget_sec, run_limits, unit_id, model_provider_id, user_type, preset, preset_version, operator_owned, created_via, disk_mib, placement, placement_filled, runner_id, ` +
-	`evidence_source, experience, lifetime_cap_at, lifetime_cap_source, runner_pool_id, runner_pool_revision, runner_pool_selection, runner_pool_executor, human_author, inner_walls, break_glass`
+	`evidence_source, experience, lifetime_cap_at, lifetime_cap_source, runner_pool_id, runner_pool_revision, runner_pool_selection, runner_pool_executor, human_author, inner_walls, machine_kind, break_glass`
 
 // runReservedCols are what a run holds on its runner (0174, types.AgentRun.Reserved): written at
 // insert and summed by runnerUsageSQL, never read back into a run.
@@ -433,15 +434,15 @@ const runReservedCols = `reserved_cpu_millis, reserved_memory_mib, reserved_disk
 // (0195, types.AgentRun.LocalFolder) by RunLocalFolderSeed.
 const runInsertOnlyCols = `local_folder`
 
-const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_reason, containment_error, containment_error_at, ended_at, paused_at, paused_reason, active_at, end_tightened_at, admitted_at, not_recorded, recording_level`
+const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_reason, containment_error, containment_error_at, ended_at, paused_at, paused_reason, active_at, end_tightened_at, admitted_at, not_recorded, vm_machine, recording_level`
 
 // scanRun is the ONE reader for runCols. A new column is appended to
 // runInsertCols/runCols and to the end of this Scan — appending is the one edit
 // that can't silently transpose two same-typed columns past the compiler.
 func scanRun(row pgx.Row) (types.AgentRun, error) {
 	var r types.AgentRun
-	var cc, state, autonomyLevel, lostReason, pausedReason, placement, evidenceSource, experience, capSource, poolSelection, notRecorded, recordingLevel string
-	var limitsRaw, wallsRaw []byte
+	var cc, state, autonomyLevel, lostReason, pausedReason, placement, evidenceSource, experience, capSource, poolSelection, notRecorded, machineKind, recordingLevel string
+	var limitsRaw, wallsRaw, vmMachineRaw []byte
 	var containmentErr *string
 	err := row.Scan(
 		&r.ID, &r.CreatedAt, &r.UpdatedAt, &r.CreatedBy, &r.Agent, &r.Repo, &r.Task,
@@ -451,9 +452,9 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 		&r.EndsAt, &r.WaitBudgetSec, &limitsRaw, &r.UnitID, &r.ModelProviderID, &r.UserType,
 		&r.Preset, &r.PresetVersion, &r.OperatorOwned, &r.CreatedVia, &r.DiskMiB,
 		&placement, &r.PlacementFilled, &r.RunnerID, &evidenceSource, &experience, &r.LifetimeCapAt, &capSource,
-		&r.RunnerPoolID, &r.RunnerPoolRevision, &poolSelection, &r.RunnerPoolExecutor, &r.HumanAuthor, &wallsRaw, &r.BreakGlass,
+		&r.RunnerPoolID, &r.RunnerPoolRevision, &poolSelection, &r.RunnerPoolExecutor, &r.HumanAuthor, &wallsRaw, &machineKind, &r.BreakGlass,
 		&r.FailureHint, &r.StatusDetail, &r.LostAt, &lostReason, &containmentErr, &r.ContainmentErrorAt, &r.EndedAt,
-		&r.PausedAt, &pausedReason, &r.ActiveAt, &r.EndTightenedAt, &r.AdmittedAt, &notRecorded, &recordingLevel,
+		&r.PausedAt, &pausedReason, &r.ActiveAt, &r.EndTightenedAt, &r.AdmittedAt, &notRecorded, &vmMachineRaw, &recordingLevel,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.AgentRun{}, ErrNotFound
@@ -483,6 +484,9 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 		if err := json.Unmarshal(wallsRaw, r.InnerWalls); err != nil {
 			return types.AgentRun{}, fmt.Errorf("store: unmarshal run inner walls: %w", err)
 		}
+	}
+	if err := scanRunMachine(&r, machineKind, vmMachineRaw); err != nil {
+		return types.AgentRun{}, err
 	}
 	return r, nil
 }
@@ -738,15 +742,19 @@ func (s PG) DecideApproval(ctx context.Context, id uuid.UUID, decision types.App
 		UPDATE approvals
 		SET state=$1, decided_at=$2, decided_by=$3, reason=$4, decision_scope=$5, decision_expires_at=$6
 		WHERE id=$7 AND state='PENDING'
+		  AND (($1 IN ('EXPIRED', 'CANCELLED') AND $3 = 'system') OR COALESCE(` + approvalExpiresAtSQL + ` > $2, true))
 		RETURNING ` + approvalCols
 	a, err := scanApproval(s.Pool.QueryRow(ctx, q,
 		string(decision.State), anchor.Translate(decidedAt), decision.DecidedBy, decision.Reason,
 		string(decision.Scope), decision.ExpiresAt, id,
 	))
 	if errors.Is(err, ErrNotFound) {
-		// Distinguish "not PENDING" from "doesn't exist" by checking existence.
+		// Distinguish "not PENDING or past its expires_at" from "doesn't exist" by checking existence.
+		// A person's decision on a PENDING row past its expiry is refused like a decided one; only the system actor (the sweeper's EXPIRED, the run-end cascade's CANCELLED) still lands there.
 		var exists bool
-		_ = s.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM approvals WHERE id=$1)`, id).Scan(&exists)
+		if qerr := s.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM approvals WHERE id=$1)`, id).Scan(&exists); qerr != nil {
+			return types.ApprovalRequest{}, fmt.Errorf("store: decide approval existence check: %w", qerr)
+		}
 		if exists {
 			return types.ApprovalRequest{}, ErrAlreadyDecided
 		}
@@ -759,7 +767,7 @@ func (s PG) DecideApproval(ctx context.Context, id uuid.UUID, decision types.App
 // scanApproval's order. Same shape as agent_runs: the read list adds the
 // columns a raise does not set (see CreateApproval).
 const approvalInsertCols = `id, run_id, grant_id, kind, requested_scope, state, requested_at, decided_at, decided_by, minted_jti, reason`
-const approvalCols = approvalInsertCols + `, decision_scope, decision_expires_at, ` + approvalExpiresAtSQL + `, last_rejoined_at`
+const approvalCols = approvalInsertCols + `, decision_scope, decision_expires_at, ` + approvalExpiresAtSQL + `, last_rejoined_at, takeover_holder, handed_back_at`
 
 // approvalExpiresAtSQL computes a request's expiry from its run's CURRENT end
 // and wait: min(requested_at + wait_budget_sec, ends_at); NULL when the run has
@@ -779,7 +787,7 @@ func scanApproval(row pgx.Row) (types.ApprovalRequest, error) {
 	err := row.Scan(
 		&a.ID, &a.RunID, &a.GrantID, &kind, &scopeRaw, &state, &a.RequestedAt,
 		&a.DecidedAt, &a.DecidedBy, &a.MintedJTI, &a.Reason, &decisionScope, &a.DecisionExpiresAt, &a.ExpiresAt,
-		&a.LastRejoinedAt,
+		&a.LastRejoinedAt, &a.TakeoverHolder, &a.HandedBackAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.ApprovalRequest{}, ErrNotFound

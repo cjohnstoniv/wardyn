@@ -21,6 +21,9 @@ const (
 	// AttentionLost: the run lost its sandbox for a reason other than lease
 	// end (reboot, outage) and needs a revive.
 	AttentionLost AttentionKind = "lost"
+	// AttentionTakeover: the run's agent asked a person to take over ("Needs you", a PENDING
+	// human_takeover). Whoever may enter the run can take over; the owner reads "you".
+	AttentionTakeover AttentionKind = "takeover"
 )
 
 // AttentionBy names who the run is waiting on, in the viewer's own console

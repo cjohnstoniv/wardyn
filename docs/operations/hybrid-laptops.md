@@ -187,7 +187,7 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 
 ## Claiming a runner
 
-1. The owner mints a single-use `wdr_` registration token (`wardyn runner token`, or *My runner*). It lasts 1 hour, and needs the [`self_host_runner`](capabilities.md#self_host_runner) permission; admins are never asked.
+1. The owner mints a single-use `wdr_` registration token (`wardyn runner setup`). It lasts 1 hour, and needs the [`self_host_runner`](capabilities.md#self_host_runner) permission; admins are never asked.
 2. An admin can mint one for a named person (`--owner`). It lasts 72 hours so MDM can deliver it, and needs no grant.
 3. On the laptop, `wardyn-runnerd setup --org <url> --token-file <file>` generates an Ed25519 key pair locally, installs the service and prints the key fingerprint.
 4. The org records an `unclaimed` runner. It is offered no run and relays nothing, and it expires after 24 hours.
@@ -202,7 +202,7 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 ## Installing with a macOS package and MDM
 
 - Every release from 0.9.3 carries `wardyn-runnerd.pkg`, a universal (Apple silicon and Intel) installer for `wardyn-runnerd` (from 0.10.0 also the `wardyn` CLI), and a managed-preferences profile template, `deploy/runner/macos/wardyn-runnerd.mobileconfig` (also inside the package and `wardyn-runner-units.tar.gz`).
-- The package installs both binaries and a LaunchAgent. It is the recommended macOS install: nobody compiles the CLI ([Set up a runner](../runner-registration.md#set-up-a-runner) lists the downloads). It cannot register the laptop: that needs a person's single-use token ([Claiming a runner](#claiming-a-runner)).
+- The package installs both binaries and a LaunchAgent. It is for managed Macs, listed under *Other ways to install* ([ranked install paths](../runner-registration.md#install-the-cli)); a person installs the CLI with `install-cli.sh`. It cannot register the laptop: that needs a person's single-use token ([Claiming a runner](#claiming-a-runner)).
 - **Until the release is signed, the package is unsigned.** Gatekeeper refuses a double-click.
   - On macOS 15 and later, open **System Settings**, then **Privacy & Security**, and choose **Open Anyway** (right-click, **Open** no longer works there).
   - Apple's native MDM app install needs a Developer ID Installer signature, so push the package from an MDM agent or script (a Jamf or Kandji policy, or `installer -pkg` run as root).
@@ -274,6 +274,12 @@ What happens:
   [`WARDYN_ENDED_RUN_GRACE`](../ENV.md#wardyn_ended_run_grace) has stopped the sandbox; a krun run is refused at start.
 - Known limit: on a runner-hosted or Kubernetes sandbox, the agent can stay running with its
   network for up to about 2 minutes after the run ends, while the first pass back runs (its timeout).
+- `wardyn folder bring-back <run>` ends a **Both ways** run early: the agent is stopped, then its changes come
+  back. Only you can do it.
+- A kill is containment: it ends the run without bringing the folder back. To keep the sandbox's changes, use Bring
+  back (or `wardyn folder bring-back <run>`) before you end the run.
+- If the agent can't be stopped, no pass runs, the run still ends and the sandbox's changes are discarded. The folder on your computer is not touched.
+- A runner on a different Wardyn release can refuse a bring-back until it is upgraded.
 - The copy follows the `wardyn sync` rules: `.git` stays on your computer, `.gitignore` and `.wardynignore` apply,
   symlinks are refused, and `WARDYN_SYNC_DENY` applies to every pass.
 - The runner checks every path itself:
@@ -284,10 +290,11 @@ What happens:
     `.kube`, `.config/gh`, `.config/gcloud`, `.netrc`, `.git-credentials`, `.git/config` and `Library/Keychains`.
     A project's own `.claude` or `.docker` folder is left out too.
   - While you browse, only folder names, file counts and sizes reach Wardyn.
+- A Linux VM sandbox gets the folder the same way, into its guest as `agent`.
 - The runner opens no port, Wardyn never connects in, and the runner never reaches into a sandbox: Wardyn joins the
   runner's own outbound session to the sandbox's `sftp-server`.
 
-Not yet: bringing changes back when you take over a live run, live sync, and **Pause sync**.
+Not yet: live sync, and **Pause sync**.
 For now this needs a single-replica deployment: with several replicas, a runner connected to another replica reads as
 offline.
 
@@ -296,7 +303,9 @@ offline.
 | Situation | Behaviour |
 | --- | --- |
 | Link down at run creation | Refused `runner_offline`; no run row exists |
-| Link drops mid-run | Nothing is torn down; the proxy enforces its cached policy and spools decisions. A full spool holds a request up to 10 s, then answers a retryable `503` naming the runner's link |
+| Link down at a Linux VM sandbox's creation | Refused `runner_offline`; the VM does not start |
+| Link drops mid-run | Nothing is torn down; the proxy enforces its cached policy and spools decisions. A full spool holds a request up to 5 s, then answers a retryable `503` naming the runner's link |
+| A Linux VM sandbox's audit spool fills | The runner ends the VM, powered down and kept. A container keeps the hold and `503` above |
 | Link down past the lapse (about 1h5m) | The runner stops the proxy itself and keeps the agent and files |
 | The runner process restarts | Its runs stop reaching the network until each is revived. This is fail-closed |
 | The control plane restarts, or answers `503` while it starts | The runner reconnects once the organisation answers; live runs keep running. A teardown of a run it keeps only for containment is refused, so it cannot hold the connection; the next restart kills that agent instead. Nothing needs resetting |

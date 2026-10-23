@@ -186,6 +186,9 @@ func (s *Server) secondHumanAllows(r *http.Request, ap types.ApprovalRequest, ru
 	if _, on := secondHumanGate(ap); !on {
 		return true
 	}
+	if _, isPolicy := policyDeciderFrom(r.Context()); isPolicy {
+		return false // requireSecondHuman's policy arm: an approval rule is never a second human
+	}
 	actorType, principal := actorFromRequest(r)
 	if actorType == types.ActorSystem && principal == adminTokenPrincipal {
 		return true // the same break-glass requireSecondHuman reports (and decide() then audits)

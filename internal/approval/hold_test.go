@@ -69,6 +69,11 @@ func TestHold(t *testing.T) {
 			wantHeld: true,
 		},
 		{
+			name:     "a PENDING human_takeover an hour old is still held — the agent waits for a person",
+			ap:       types.ApprovalRequest{Kind: types.ApprovalHumanTakeover, State: types.ApprovalPending, RequestedAt: now.Add(-time.Hour)},
+			wantHeld: true,
+		},
+		{
 			name:     "an EXPIRED tool_call is not held, regardless of age",
 			ap:       types.ApprovalRequest{Kind: types.ApprovalToolCall, State: types.ApprovalExpired, RequestedAt: now},
 			wantHeld: false,

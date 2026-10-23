@@ -234,14 +234,10 @@ func TestSpoolReplayBoundedByHeadAtStart(t *testing.T) {
 // A run whose spool will not open does not stop the other runs' backlogs reaching the org; the
 // replay still fails, so the runner does not come ready with a spool it never replayed.
 func TestSpoolReplayGoesOnPastAnUnopenableSpool(t *testing.T) {
-	m, good, _, org := spoolBacklogAt(t, 3)
-	var bad uuid.UUID
-	for {
-		bad = createLocal(t, m, org)
-		if bad.String() < good.String() {
-			break
-		}
-	}
+	m, _, _, org := spoolBacklogAt(t, 3)
+	// The lowest version-4 id sorts before the backlog's run, so the replay must go on past the bad spool.
+	// Fixed, not drawn until one sorts lower: every draw is a run each later save and the replay pay for.
+	bad := createLocalAs(t, m, org, uuid.MustParse("00000000-0000-4000-8000-000000000000"))
 	spools := filepath.Join(m.dir, "spools")
 	if err := os.MkdirAll(spools, 0o700); err != nil {
 		t.Fatal(err)

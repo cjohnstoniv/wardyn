@@ -186,6 +186,21 @@ describe("assignments", () => {
     await waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
   });
 
+  it("a refused remove keeps the dialog open with the server's sentence and the row in place", async () => {
+    listMock.mockResolvedValue(data());
+    removeMock.mockRejectedValue(new HttpError(409, "The key domain is still assigned elsewhere."));
+    renderCard();
+    await screen.findByText(KEY_DOMAINS.ASSIGN_TITLE);
+    const row = screen.getByText("eng-finance").closest("tr")!;
+    await userEvent.click(within(row).getByRole("button", { name: KEY_DOMAINS.REMOVE }));
+    const dialog = await screen.findByRole("alertdialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: KEY_DOMAINS.REMOVE }));
+    await waitFor(() => expect(removeMock).toHaveBeenCalledWith("group", "eng-finance"));
+    expect(await within(screen.getByRole("alertdialog")).findByText("The key domain is still assigned elsewhere.")).toBeInTheDocument();
+    expect(screen.getByText("eng-finance")).toBeInTheDocument();
+    expect(listMock).toHaveBeenCalledTimes(1);
+  });
+
   it("a held remove (202) shows the note and leaves the row", async () => {
     listMock.mockResolvedValue(data());
     removeMock.mockResolvedValue("pending");

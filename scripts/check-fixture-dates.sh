@@ -65,6 +65,7 @@ declare -A ALLOWLIST=(
   ["cmd/wardyn/runner_limits_test.go"]=2 # display only: runner list prints LastSeenAt as given, never compared to the clock
   ["cmd/wardyn/drive_test.go"]=1 # passthrough only: the member drive list's created_at, never compared to the clock
   ["cmd/wardyn/people_test.go"]=3 # display only: personDay formats LastSignedInAt, never compared to the clock
+  ["cmd/wardyn/folder_test.go"]=3 # display only: a bring-back's back.at, printed as a local time, never compared to the clock
   ["cmd/wardyn/policyio_test.go"]=2
   ["cmd/wardyn/siteconfig_test.go"]=4
   ["cmd/wardynd/login_stamp_test.go"]=1
@@ -206,6 +207,8 @@ declare -A ALLOWLIST=(
   ["ui/src/app/components/screens/runs/runs-model.test.ts"]=1
   ["ui/src/app/components/screens/runs/scheduled-state.test.ts"]=3
   ["ui/src/app/lib/schedule.test.ts"]=32
+  # 0.10 W4f: SESS-M12's signedInUntil tests pass a fixed instant in as the clock (now) and compare only to it.
+  ["ui/src/app/lib/session-continuity-copy.test.ts"]=3 # injected clock only: signedInUntil(at, now), never compared to the wall clock
 )
 
 fail=0

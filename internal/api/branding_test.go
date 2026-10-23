@@ -307,6 +307,45 @@ func TestBrandingLogoServedWithStrictTypeAndNosniff(t *testing.T) {
 	}
 }
 
+// The icon URL the public read names is content-addressed, so only a request that carries its current
+// digest is cached for good; any other stays no-store, and a changed logo is named by a new URL.
+func TestBrandingLogoIsImmutableOnlyAtItsCurrentDigest(t *testing.T) {
+	srv, _, _ := brandingServer(t)
+	iconURL := func() string {
+		var pub brandingPublic
+		w := doSSO(t, srv, http.MethodGet, "/api/v1/branding", nil, "")
+		if json.Unmarshal(w.Body.Bytes(), &pub) != nil || pub.IconURL == "" {
+			t.Fatalf("public read: %s", w.Body.String())
+		}
+		return pub.IconURL
+	}
+	put := func(size int) {
+		body := brandingBody(t, func(b map[string]any) { b["logo"] = logoField("image/png", testPNG(t, size)) })
+		if w := do(t, srv, http.MethodPut, "/api/v1/branding/settings", adminToken, body); w.Code != http.StatusOK {
+			t.Fatalf("PUT: %d %s", w.Code, w.Body.String())
+		}
+	}
+	put(8)
+	url := iconURL()
+	w := doSSO(t, srv, http.MethodGet, url, nil, "")
+	if got := w.Header().Get("Cache-Control"); got != "public, max-age=31536000, immutable" {
+		t.Errorf("Cache-Control at the current digest = %q", got)
+	}
+	if got := w.Header().Get("ETag"); got != `"`+url[strings.Index(url, "v=")+2:]+`"` {
+		t.Errorf("ETag = %q", got)
+	}
+	for _, path := range []string{"/api/v1/branding/logo", "/api/v1/branding/logo?v=stale"} {
+		w := doSSO(t, srv, http.MethodGet, path, nil, "")
+		if got := w.Header().Get("Cache-Control"); got != "no-store" || w.Header().Get("ETag") != "" {
+			t.Errorf("%s: Cache-Control %q, ETag %q; want no-store and none", path, got, w.Header().Get("ETag"))
+		}
+	}
+	put(16)
+	if now := iconURL(); now == url {
+		t.Errorf("a changed logo kept its icon URL %s", url)
+	}
+}
+
 // A brand with no logo still gets a tab icon from 'self': a monogram tile in its
 // own validated colours, the initials escaped.
 func TestBrandingIconIsAMonogramWithoutALogo(t *testing.T) {

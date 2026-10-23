@@ -39,6 +39,7 @@ import { LIST_LIMIT } from "../../lib/api/core";
 import { appURL } from "../../lib/base-path";
 import { useCopyToClipboard } from "../../lib/use-copy-to-clipboard";
 import { absoluteTime, clockTime, getErrorMessage } from "../../lib/format";
+import { describeAction, describeEvent, describeObject } from "../../lib/audit-copy";
 import { Button } from "../ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { ActorTypeChip } from "../wardyn/primitives";
@@ -66,6 +67,8 @@ import { ProfileReview } from "./profile-review";
 import { SummaryHeader } from "./run-detail-summary-header";
 import { viewerBlockedOnDecision } from "./run-detail/viewer-blocked";
 import { ApprovalsTab } from "./run-detail-approvals-tab";
+import { NeedsYouBanner } from "../wardyn/needs-you-banner";
+import { NEEDS_YOU } from "../wardyn/copy/needs-you";
 import { RunDetailCommandBar } from "./run-detail-command-bar";
 import { LaunchWarningsNote } from "./run-detail/launch-warnings-note";
 import { RunLifetimeWithContainment } from "./run-detail/containment-pending";
@@ -228,6 +231,16 @@ function RunDetailPage({ id }: { id: string }) {
   // decision_scope on this kind).
   const decidePushDirect = (id: string, approve: boolean): Promise<void> => decideAdoDirect(id, approve, []);
 
+  // #2963 — a "Needs you" request's Decline from the Approvals tab.
+  const declineTakeover = async (approvalId: string): Promise<void> => {
+    try {
+      await approvalsApi.decline(approvalId);
+      void load(false);
+    } catch (err) {
+      toast.error(NEEDS_YOU.failed.decline, { description: getErrorMessage(err) });
+    }
+  };
+
   // The page does not scroll. `h-full min-h-0 flex flex-col` fills
   // app-shell's <main> exactly — main is flex-1 inside a h-screen column, so
   // its height is definite and this resolves against it; overflow-y-auto up
@@ -309,6 +322,14 @@ function RunDetailPage({ id }: { id: string }) {
               LaunchWarningsNote pattern above. */}
           <RunLifetimeWithContainment run={run} pending={pending} onChanged={() => load(false)} />
           <RunEndsRow run={run} onChanged={() => load(false)} />
+          {/* "Needs you" (#2963, mock M8 Option A): the agent's takeover request on the run. */}
+          <NeedsYouBanner
+            run={run}
+            approvals={approvals}
+            onChanged={() => void load(false)}
+            onOpenTerminal={() => setTab("overview")}
+            onGoAudit={() => setTab("audit")}
+          />
 
           <RunDetailCommandBar
             tabs={
@@ -372,6 +393,8 @@ function RunDetailPage({ id }: { id: string }) {
               onDecide={(approvalId, action, kind) => setDecide({ id: approvalId, action, kind })}
               onAdoDecide={decideAdoDirect}
               onPushDecide={decidePushDirect}
+              onTakeOver={() => setTab("overview")}
+              onDecline={declineTakeover}
               refused={refused}
             />
           </TabsContent>
@@ -512,10 +535,11 @@ function AuditTab({
                   <ActorTypeChip type={e.actor_type} />
                 </span>
                 <span
-                  className="min-w-0 grow basis-[120px] truncate font-mono text-xs text-muted-foreground sm:w-[190px] sm:grow-0 sm:basis-auto sm:shrink-0"
-                  title={e.action}
+                  data-testid="run-audit-action"
+                  className="min-w-0 grow basis-[120px] truncate text-xs text-foreground sm:w-[190px] sm:grow-0 sm:basis-auto sm:shrink-0"
+                  title={`${describeEvent(e)}\n${e.action}`}
                 >
-                  {e.action}
+                  {describeAction(e)}
                 </span>
                 {/* A tool call the policy's own tool_rules answered rides an
                     egress.allow/deny row whose target is the CONTROL PLANE —
@@ -529,8 +553,9 @@ function AuditTab({
                         {AUDIT.ERASED}
                       </span>
                     ) : (
-                      <span className="min-w-0 flex-1 truncate text-xs text-foreground" title={e.target}>
-                        {e.target || "—"}
+                      // #3035: the viewed run's own id says nothing the page does not.
+                      <span className="min-w-0 flex-1 truncate text-xs text-foreground" title={e.target === runId ? undefined : e.target}>
+                        {e.target === runId ? "" : describeObject(e) || "—"}
                       </span>
                     )}
                     <RuleSourceChip event={e} />

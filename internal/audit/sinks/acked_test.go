@@ -146,6 +146,19 @@ func (r *fakeRecorder) first() types.AuditEvent {
 	return r.events[0]
 }
 
+// newTestAckedWebhook is NewAckedWebhook on a connection pool of its own. On http.DefaultTransport
+// every parallel test's httptest.Server.Close closes the sink's idle connections, one of which may still
+// owe a POST its 200; the sink then reads the accepted batch as failed and sends it again.
+func newTestAckedWebhook(t *testing.T, cfg WebhookConfig, st DeliveryStore, rec audit.Recorder) *AckedWebhook {
+	t.Helper()
+	a, err := NewAckedWebhook(cfg, st, rec)
+	if err != nil {
+		t.Fatalf("NewAckedWebhook: %v", err)
+	}
+	a.client.Transport = &http.Transport{}
+	return a
+}
+
 // ackedRows gives n chained rows, seq 1..n, each with a distinct id and hash
 // the way audit_events stores them.
 func ackedRows(n int) []types.FederatedAuditEvent {
@@ -335,10 +348,7 @@ func TestAcked_OutageThenResumeDeliversEveryEventFromTheCheckpoint(t *testing.T)
 	rows := ackedRows(5)
 	st.setRows(rows)
 
-	a, err := NewAckedWebhook(WebhookConfig{URL: srv.URL, RetryBaseDelay: "1ms", BatchSize: 2}, st, &fakeRecorder{})
-	if err != nil {
-		t.Fatalf("NewAckedWebhook: %v", err)
-	}
+	a := newTestAckedWebhook(t, WebhookConfig{URL: srv.URL, RetryBaseDelay: "1ms", BatchSize: 2}, st, &fakeRecorder{})
 	var stop bool
 	for range 8 {
 		if _, stop = a.step(ctx); stop {
@@ -349,9 +359,18 @@ func TestAcked_OutageThenResumeDeliversEveryEventFromTheCheckpoint(t *testing.T)
 		}
 	}
 
-	got := col.snapshot()
+	// Delivery is at-least-once (a POST that fails after the collector took the batch sends it again),
+	// so a collector deduplicates and so does this check.
+	var got []ackedLine
+	seen := map[ackedLine]bool{}
+	for _, l := range col.snapshot() {
+		if !seen[l] {
+			seen[l] = true
+			got = append(got, l)
+		}
+	}
 	if len(got) != len(rows) {
-		t.Fatalf("collector holds %d lines, want all %d: %+v", len(got), len(rows), got)
+		t.Fatalf("collector holds %d distinct lines, want all %d: %+v", len(got), len(rows), got)
 	}
 	for i, l := range got {
 		if l.ID != rows[i].ID || l.Seq != rows[i].Seq || l.RowHash != rows[i].RowHash {
@@ -378,10 +397,7 @@ func TestAcked_RestartResumesFromTheStoredCheckpoint(t *testing.T) {
 	col := &lineCollector{}
 	srv := col.server(t)
 
-	a, err := NewAckedWebhook(WebhookConfig{URL: srv.URL, RetryBaseDelay: "1ms"}, st, &fakeRecorder{})
-	if err != nil {
-		t.Fatalf("NewAckedWebhook: %v", err)
-	}
+	a := newTestAckedWebhook(t, WebhookConfig{URL: srv.URL, RetryBaseDelay: "1ms"}, st, &fakeRecorder{})
 	if _, stop := a.step(context.Background()); stop {
 		t.Fatal("step stopped on a healthy collector")
 	}
@@ -414,10 +430,7 @@ func TestAcked_TerminalStatusHaltsAndRecordsTheError(t *testing.T) {
 	st := &fakeDeliveryStore{haveRow: true}
 	st.setRows(ackedRows(2))
 
-	a, err := NewAckedWebhook(WebhookConfig{URL: secretURL, BearerToken: token, RetryBaseDelay: "1ms"}, st, &fakeRecorder{})
-	if err != nil {
-		t.Fatalf("NewAckedWebhook: %v", err)
-	}
+	a := newTestAckedWebhook(t, WebhookConfig{URL: secretURL, BearerToken: token, RetryBaseDelay: "1ms"}, st, &fakeRecorder{})
 	// The loop builds its own client; the test server's is the one that trusts
 	// the httptest certificate, so the POST actually reaches the collector.
 	a.client = srv.Client()
@@ -452,10 +465,7 @@ func TestAcked_GapRecordsAResetEvent(t *testing.T) {
 	srv := col.server(t)
 	rec := &fakeRecorder{}
 
-	a, err := NewAckedWebhook(WebhookConfig{URL: srv.URL, RetryBaseDelay: "1ms"}, st, rec)
-	if err != nil {
-		t.Fatalf("NewAckedWebhook: %v", err)
-	}
+	a := newTestAckedWebhook(t, WebhookConfig{URL: srv.URL, RetryBaseDelay: "1ms"}, st, rec)
 	if _, stop := a.step(context.Background()); stop {
 		t.Fatal("step stopped; a gap is resent, not a refusal")
 	}
@@ -509,10 +519,7 @@ func TestAcked_GapOfOnlyAcknowledgedRowsIsNotReported(t *testing.T) {
 	srv := col.server(t)
 	rec := &fakeRecorder{}
 
-	a, err := NewAckedWebhook(WebhookConfig{URL: srv.URL, RetryBaseDelay: "1ms"}, st, rec)
-	if err != nil {
-		t.Fatalf("NewAckedWebhook: %v", err)
-	}
+	a := newTestAckedWebhook(t, WebhookConfig{URL: srv.URL, RetryBaseDelay: "1ms"}, st, rec)
 	if _, stop := a.step(context.Background()); stop {
 		t.Fatal("step stopped; a harmless gap is not a refusal")
 	}
@@ -555,10 +562,7 @@ func TestAcked_RedirectIsNotFollowedAndHaltsWithoutAdvancing(t *testing.T) {
 
 	st := &fakeDeliveryStore{haveRow: true}
 	st.setRows(ackedRows(3))
-	a, err := NewAckedWebhook(WebhookConfig{URL: srv.URL + "/ingest", RetryBaseDelay: "1ms"}, st, &fakeRecorder{})
-	if err != nil {
-		t.Fatalf("NewAckedWebhook: %v", err)
-	}
+	a := newTestAckedWebhook(t, WebhookConfig{URL: srv.URL + "/ingest", RetryBaseDelay: "1ms"}, st, &fakeRecorder{})
 	if _, stop := a.step(context.Background()); !stop {
 		t.Fatal("step did not stop on a 301; a redirect must halt the loop")
 	}
@@ -588,10 +592,7 @@ func TestAcked_RestartClearsAStoredHaltAndError(t *testing.T) {
 	col := &lineCollector{}
 	srv := col.server(t)
 
-	a, err := NewAckedWebhook(WebhookConfig{URL: srv.URL, RetryBaseDelay: "1ms"}, st, &fakeRecorder{})
-	if err != nil {
-		t.Fatalf("NewAckedWebhook: %v", err)
-	}
+	a := newTestAckedWebhook(t, WebhookConfig{URL: srv.URL, RetryBaseDelay: "1ms"}, st, &fakeRecorder{})
 	if _, stop := a.step(context.Background()); stop {
 		t.Fatal("step stopped on a healthy collector")
 	}
@@ -619,10 +620,7 @@ func TestAcked_TransportErrorDoesNotLeakTheURL(t *testing.T) {
 
 	st := &fakeDeliveryStore{haveRow: true}
 	st.setRows(ackedRows(2))
-	a, err := NewAckedWebhook(WebhookConfig{URL: url, RetryBaseDelay: "1ms"}, st, &fakeRecorder{})
-	if err != nil {
-		t.Fatalf("NewAckedWebhook: %v", err)
-	}
+	a := newTestAckedWebhook(t, WebhookConfig{URL: url, RetryBaseDelay: "1ms"}, st, &fakeRecorder{})
 	if _, stop := a.step(context.Background()); stop {
 		t.Fatal("step stopped; an unreachable collector is retried")
 	}
@@ -716,10 +714,7 @@ func TestAcked_RetryClassificationAndRetryAfter(t *testing.T) {
 			srv := col.server(t)
 			st := &fakeDeliveryStore{haveRow: true}
 			st.setRows(ackedRows(2))
-			a, err := NewAckedWebhook(WebhookConfig{URL: srv.URL, RetryBaseDelay: "1ms"}, st, &fakeRecorder{})
-			if err != nil {
-				t.Fatalf("NewAckedWebhook: %v", err)
-			}
+			a := newTestAckedWebhook(t, WebhookConfig{URL: srv.URL, RetryBaseDelay: "1ms"}, st, &fakeRecorder{})
 			wait, stop := a.step(context.Background())
 			if stop != tc.wantStop {
 				t.Fatalf("stop = %v, want %v", stop, tc.wantStop)
@@ -767,10 +762,7 @@ func TestAcked_BenignGapThenOutageStillReportsALaterLoss(t *testing.T) {
 	srv := col.server(t)
 	rec := &fakeRecorder{}
 
-	a, err := NewAckedWebhook(WebhookConfig{URL: srv.URL, RetryBaseDelay: "1ms"}, st, rec)
-	if err != nil {
-		t.Fatalf("NewAckedWebhook: %v", err)
-	}
+	a := newTestAckedWebhook(t, WebhookConfig{URL: srv.URL, RetryBaseDelay: "1ms"}, st, rec)
 	ctx := context.Background()
 	if _, stop := a.step(ctx); stop {
 		t.Fatal("step stopped on a 503")
@@ -826,10 +818,7 @@ func TestAcked_BenignVerdictGoesStaleBeforeTheBatchIsRead(t *testing.T) {
 	srv := col.server(t)
 	rec := &fakeRecorder{}
 
-	a, err := NewAckedWebhook(WebhookConfig{URL: srv.URL, RetryBaseDelay: "1ms"}, st, rec)
-	if err != nil {
-		t.Fatalf("NewAckedWebhook: %v", err)
-	}
+	a := newTestAckedWebhook(t, WebhookConfig{URL: srv.URL, RetryBaseDelay: "1ms"}, st, rec)
 	if _, stop := a.step(context.Background()); stop {
 		t.Fatal("step stopped on a healthy collector")
 	}
@@ -868,10 +857,7 @@ func TestAcked_BenignVerdictLeftByAFailedReadReportsALaterLossOnce(t *testing.T)
 	srv := col.server(t)
 	rec := &fakeRecorder{}
 
-	a, err := NewAckedWebhook(WebhookConfig{URL: srv.URL, RetryBaseDelay: "1ms"}, st, rec)
-	if err != nil {
-		t.Fatalf("NewAckedWebhook: %v", err)
-	}
+	a := newTestAckedWebhook(t, WebhookConfig{URL: srv.URL, RetryBaseDelay: "1ms"}, st, rec)
 	ctx := context.Background()
 	a.step(ctx)
 	if n := rec.count(); n != 0 {
@@ -903,10 +889,7 @@ func TestAcked_RetainedRowOlderThanTheCheckpointIsNotAGap(t *testing.T) {
 	srv := col.server(t)
 	rec := &fakeRecorder{}
 
-	a, err := NewAckedWebhook(WebhookConfig{URL: srv.URL, RetryBaseDelay: "1ms"}, st, rec)
-	if err != nil {
-		t.Fatalf("NewAckedWebhook: %v", err)
-	}
+	a := newTestAckedWebhook(t, WebhookConfig{URL: srv.URL, RetryBaseDelay: "1ms"}, st, rec)
 	if _, stop := a.step(context.Background()); stop {
 		t.Fatal("step stopped on a healthy collector")
 	}
@@ -933,10 +916,7 @@ func TestAcked_BenignVerdictSurvivesAFullBatchOfOlderRows(t *testing.T) {
 	srv := col.server(t)
 	rec := &fakeRecorder{}
 
-	a, err := NewAckedWebhook(WebhookConfig{URL: srv.URL, RetryBaseDelay: "1ms", BatchSize: 2}, st, rec)
-	if err != nil {
-		t.Fatalf("NewAckedWebhook: %v", err)
-	}
+	a := newTestAckedWebhook(t, WebhookConfig{URL: srv.URL, RetryBaseDelay: "1ms", BatchSize: 2}, st, rec)
 	ctx := context.Background()
 	if _, stop := a.step(ctx); stop {
 		t.Fatal("step stopped on a healthy collector")

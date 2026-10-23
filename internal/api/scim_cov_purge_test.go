@@ -49,8 +49,17 @@ func scimCovSeedPurgee(st *scimCovStore) scimCovLeaver {
 	}
 	st.grantsDeleted, st.assignDeleted = 3, 2
 	st.poolsNarrowed, st.poolsEmptied = 2, 1
+	st.pools = []types.RunnerPoolUsePolicy{
+		{PoolID: scimCovNarrowedPool, Revision: 4, Subjects: []types.RunnerPoolSubject{{SubjectType: types.CapabilitySubjectUser, Subject: "sub-bystander"}}},
+		{PoolID: scimCovEmptiedPool, Revision: 7, Subjects: []types.RunnerPoolSubject{}},
+	}
 	return l
 }
+
+var (
+	scimCovNarrowedPool = uuid.MustParse("00000000-0000-4000-8000-0000000000a1")
+	scimCovEmptiedPool  = uuid.MustParse("00000000-0000-4000-8000-0000000000a2")
+)
 
 func (e *scimCovEnv) purgeRow() types.AuditEvent {
 	e.t.Helper()
@@ -113,6 +122,25 @@ func TestSCIMCovDeletePurgesAndRecordsEveryStep(t *testing.T) {
 		d["credentials_erased"] != float64(0) || d["masks_fenced"] != float64(0) ||
 		d["pools_narrowed"] != float64(2) || d["pools_emptied"] != float64(1) {
 		t.Errorf("purge row data = %v, want the counts of the steps", d)
+	}
+	// One row per pool the purge narrowed, naming the pool and the policy left, never the leaver.
+	pools := e.auditRows("runner_pool.use_policy.set")
+	if len(pools) != 2 || pools[0].Target != scimCovNarrowedPool.String() || pools[1].Target != scimCovEmptiedPool.String() {
+		t.Fatalf("runner_pool.use_policy.set rows = %+v, want one per narrowed pool", pools)
+	}
+	for i, want := range []struct {
+		rev     float64
+		emptied bool
+		after   int
+	}{{4, false, 1}, {7, true, 0}} {
+		pd := e.auditData(pools[i])
+		after, _ := pd["after"].([]any)
+		if pd["cause"] != "leaver_purge" || pd["revision"] != want.rev || pd["emptied"] != want.emptied || len(after) != want.after {
+			t.Errorf("pool row %d data = %v, want cause leaver_purge, revision %v, emptied %v, %d subject(s) after", i, pd, want.rev, want.emptied, want.after)
+		}
+		if _, ok := pd["before"]; ok || strings.Contains(string(pools[i].Data), "sub-pat") || strings.Contains(strings.ToLower(string(pools[i].Data)), "pat@corp") {
+			t.Errorf("pool row %d data = %s, must not carry the leaver's subjects", i, pools[i].Data)
+		}
 	}
 	if drives, _ := d["drives"].([]any); len(drives) != 2 || drives[0] != "alpha" || drives[1] != "zeta" {
 		t.Errorf("drives = %v, want the person's drives once each, sorted, and no one else's", d["drives"])

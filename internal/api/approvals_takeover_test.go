@@ -1,0 +1,518 @@
+// Copyright 2026 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"io/fs"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/coder/websocket"
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/recording"
+	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
+
+// takeoverApprovals adds the human_takeover CAS (store.PG.TakeOverApproval/HandBackApproval,
+// pinned against Postgres in internal/store) to the authz approvals double.
+type takeoverApprovals struct{ *authzApprovals }
+
+func (a takeoverApprovals) TakeOver(_ context.Context, id uuid.UUID, holder string) (types.ApprovalRequest, string, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	ap, ok := a.byID[id]
+	if !ok {
+		return ap, "", store.ErrNotFound
+	}
+	open := ap.State == types.ApprovalPending || (ap.State == types.ApprovalApproved && ap.HandedBackAt == nil)
+	if ap.Kind != types.ApprovalHumanTakeover || !open || ap.TakeoverHolder == holder {
+		return ap, "", store.ErrAlreadyDecided
+	}
+	prev := ap.TakeoverHolder
+	if ap.State == types.ApprovalPending {
+		now := time.Now().UTC()
+		ap.State, ap.DecidedAt, ap.DecidedBy = types.ApprovalApproved, &now, holder
+	}
+	ap.TakeoverHolder = holder
+	a.byID[id] = ap
+	return ap, prev, nil
+}
+
+func (a takeoverApprovals) HandBack(_ context.Context, id uuid.UUID, holder string, at time.Time) (types.ApprovalRequest, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	ap, ok := a.byID[id]
+	if !ok {
+		return ap, store.ErrNotFound
+	}
+	if ap.Kind != types.ApprovalHumanTakeover || ap.State != types.ApprovalApproved || ap.HandedBackAt != nil {
+		return ap, store.ErrAlreadyDecided
+	}
+	if ap.TakeoverHolder != holder {
+		return ap, store.ErrTakeoverNotHolder
+	}
+	ap.HandedBackAt = &at
+	a.byID[id] = ap
+	return ap, nil
+}
+
+const takeoverOwnerSub = "sub-takeover-owner"
+
+type takeoverFixture struct {
+	srv   *Server
+	aap   takeoverApprovals
+	audit *recRecorder
+	owner *http.Cookie
+	run   uuid.UUID
+}
+
+// newTakeoverFixture is a server with a RUNNING run owned by a member, recorded when recorded is set.
+func newTakeoverFixture(t *testing.T, recorded bool) takeoverFixture {
+	t.Helper()
+	ast := newAuthzStore()
+	aap := takeoverApprovals{newAuthzApprovals(ast)}
+	h := newHarness(t)
+	cfg := baseTestConfig(h, ast)
+	cfg.OIDC = &oidc.Authenticator{}
+	cfg.Approvals = aap
+	if recorded {
+		casts, err := recording.NewFSStore(t.TempDir())
+		if err != nil {
+			t.Fatalf("NewFSStore: %v", err)
+		}
+		cfg.RecordingStore = casts
+	}
+	srv := New(cfg)
+	runID := uuid.New()
+	ast.mu.Lock()
+	ast.runs[runID] = types.AgentRun{ID: runID, CreatedBy: takeoverOwnerSub, State: types.RunRunning, SandboxRef: "sbx-1"}
+	ast.mu.Unlock()
+	return takeoverFixture{srv: srv, aap: aap, audit: h.audit,
+		owner: ssoSession(t, takeoverOwnerSub, "owner@corp.example", oidc.RoleUser), run: runID}
+}
+
+func (f takeoverFixture) seed(kind types.ApprovalKind, state types.ApprovalState, holder string) uuid.UUID {
+	id := uuid.New()
+	f.aap.mu.Lock()
+	defer f.aap.mu.Unlock()
+	f.aap.byID[id] = types.ApprovalRequest{ID: id, RunID: f.run, Kind: kind, State: state, TakeoverHolder: holder,
+		RequestedScope: json.RawMessage(`{"reason":"the sign-in sends a code to a phone"}`), RequestedAt: time.Now().UTC().Add(-2 * time.Minute)}
+	return id
+}
+
+// takeoverRows is every takeover.* and recording.* row, in order: action and its data keys.
+func takeoverRows(t *testing.T, a *recRecorder) [][2]string {
+	t.Helper()
+	var out [][2]string
+	for _, ev := range a.snapshot() {
+		if !strings.HasPrefix(ev.Action, "takeover.") && !strings.HasPrefix(ev.Action, "recording.") {
+			continue
+		}
+		var data map[string]any
+		if err := json.Unmarshal(ev.Data, &data); err != nil {
+			t.Fatalf("%s data: %v", ev.Action, err)
+		}
+		keys := make([]string, 0, len(data))
+		for k := range data {
+			keys = append(keys, k)
+		}
+		slices.Sort(keys)
+		out = append(out, [2]string{ev.Action + "/" + string(ev.ActorType) + ":" + ev.Actor, strings.Join(keys, ",")})
+	}
+	return out
+}
+
+// TestTakeover_RaiseWritesTheRequestRow: the agent's raise (through the proxy, run token) is stored
+// with its canonical {reason} scope and audited as takeover.request; a scope with anything else is
+// refused before anything is stored.
+func TestTakeover_RaiseWritesTheRequestRow(t *testing.T) {
+	h, srv, runID := newTakeoverRaiseFixture(t, "")
+	tok := h.mintRunToken(t, runID)
+	for _, bad := range []string{`{"reason":"   "}`, `{"reason":"x","cmd":"rm -rf /"}`, `{"reason":"` + strings.Repeat("y", types.MaxTakeoverReason+40) + `"}`} {
+		w := do(t, srv, http.MethodPost, "/api/v1/internal/approvals", tok, `{"kind":"human_takeover","requested_scope":`+bad+`}`)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("scope %.40s: status = %d, want 400", bad, w.Code)
+		}
+	}
+	if len(h.approvals.requested) != 0 {
+		t.Fatal("a refused takeover scope was stored")
+	}
+	w := do(t, srv, http.MethodPost, "/api/v1/internal/approvals", tok,
+		`{"kind":"human_takeover","requested_scope":{"reason":"  I can't finish the sign-in  "}}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("raise: status = %d body=%s", w.Code, w.Body.String())
+	}
+	got := h.approvals.requested[0]
+	if got.Kind != types.ApprovalHumanTakeover || got.RunID != runID || string(got.RequestedScope) != `{"reason":"I can't finish the sign-in"}` {
+		t.Fatalf("stored %+v scope=%s", got, got.RequestedScope)
+	}
+	rows := takeoverRows(t, h.audit)
+	if len(rows) != 1 || !strings.HasPrefix(rows[0][0], "takeover.request/agent:") || rows[0][1] != "approval_id,reason" {
+		t.Fatalf("audit rows = %v, want one takeover.request by the agent with approval_id,reason", rows)
+	}
+}
+
+// newTakeoverRaiseFixture is a server whose store holds one running run of the given experience,
+// for the agent's raise through the internal route.
+func newTakeoverRaiseFixture(t *testing.T, experience types.RunExperience) (*harness, *Server, uuid.UUID) {
+	t.Helper()
+	h := newHarness(t)
+	ast := newAuthzStore()
+	cfg := baseTestConfig(h, ast)
+	cfg.Approvals = h.approvals
+	runID := uuid.New()
+	ast.runs[runID] = types.AgentRun{ID: runID, CreatedBy: takeoverOwnerSub, State: types.RunRunning, SandboxRef: "sbx-1",
+		Experience: experience}
+	return h, New(cfg), runID
+}
+
+// TestTakeover_BackgroundRunRaisesNothing: a Background run's agent asking for a person is refused at
+// the raise with the takeover verbs' own 409 (run_background_only, the sentence `wardyn needs-you`
+// prints), so no request is stored, no takeover.request row is written and no banner asks anyone.
+func TestTakeover_BackgroundRunRaisesNothing(t *testing.T) {
+	h, srv, runID := newTakeoverRaiseFixture(t, types.ExperienceBackground)
+	w := do(t, srv, http.MethodPost, "/api/v1/internal/approvals", h.mintRunToken(t, runID),
+		`{"kind":"human_takeover","requested_scope":{"reason":"I can't finish the sign-in"}}`)
+	var got struct{ Error, Reason string }
+	if w.Code != http.StatusConflict || json.Unmarshal(w.Body.Bytes(), &got) != nil ||
+		got.Reason != reasonRunBackgroundOnly || got.Error != runBackgroundOnlyMsg("terminal") {
+		t.Fatalf("raise on a background run: %d %s, want 409 %s", w.Code, w.Body.String(), reasonRunBackgroundOnly)
+	}
+	if len(h.approvals.requested) != 0 {
+		t.Fatalf("a background run's takeover request was stored: %+v", h.approvals.requested)
+	}
+	if rows := takeoverRows(t, h.audit); len(rows) != 0 {
+		t.Fatalf("audit rows = %v, want none", rows)
+	}
+}
+
+// TestTakeover_TakeAndHandBackAuditInOrder pins the five rows of one takeover on a recorded run
+// (mock M8-HandBack): request is the raise's; then takeover.begin, recording.pause, recording.resume,
+// takeover.close, each with a closed set of keys, so nothing typed, no clipboard and no screen can
+// ride along.
+func TestTakeover_TakeAndHandBackAuditInOrder(t *testing.T) {
+	f := newTakeoverFixture(t, true)
+	id := f.seed(types.ApprovalHumanTakeover, types.ApprovalPending, "")
+	w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/take-over", f.owner, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("take over: %d %s", w.Code, w.Body.String())
+	}
+	var took takeoverResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &took); err != nil || took.State != types.ApprovalApproved ||
+		took.TakeoverHolder != takeoverOwnerSub || took.Surface != "terminal" {
+		t.Fatalf("take over answer: %+v %v", took, err)
+	}
+	w = doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/hand-back", f.owner, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("hand back: %d %s", w.Code, w.Body.String())
+	}
+	want := [][2]string{
+		{"takeover.begin/human:" + takeoverOwnerSub, "after_ms,approval_id,surface"},
+		{"recording.pause/system:wardyn", "approval_id,reason"},
+		{"recording.resume/system:wardyn", "approval_id,gap_ms,reason"},
+		{"takeover.close/human:" + takeoverOwnerSub, "approval_id,held_ms"},
+	}
+	if got := takeoverRows(t, f.audit); !slices.Equal(got, want) {
+		t.Fatalf("audit rows =\n%v\nwant\n%v", got, want)
+	}
+	if w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/hand-back", f.owner, ""); w.Code != http.StatusConflict {
+		t.Fatalf("second hand back: %d, want 409", w.Code)
+	}
+}
+
+// TestTakeover_UnrecordedRunHasNothingToPause (mock M8-States 10): no recording, no pause rows.
+func TestTakeover_UnrecordedRunHasNothingToPause(t *testing.T) {
+	f := newTakeoverFixture(t, false)
+	id := f.seed(types.ApprovalHumanTakeover, types.ApprovalPending, "")
+	for _, verb := range []string{"/take-over", "/hand-back"} {
+		if w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+verb, f.owner, ""); w.Code != http.StatusOK {
+			t.Fatalf("%s: %d %s", verb, w.Code, w.Body.String())
+		}
+	}
+	for _, r := range takeoverRows(t, f.audit) {
+		if strings.HasPrefix(r[0], "recording.") {
+			t.Fatalf("an unrecorded run wrote %v", r)
+		}
+	}
+}
+
+// TestTakeover_Refusals: a takeover request is never approved or denied (every tier), the verbs
+// refuse another kind and a stranger, only the holder hands back, and decline is a recorded DENIED.
+func TestTakeover_Refusals(t *testing.T) {
+	f := newTakeoverFixture(t, true)
+	id := f.seed(types.ApprovalHumanTakeover, types.ApprovalPending, "")
+	for _, verb := range []string{"/approve", "/deny"} {
+		w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+verb, f.owner, "")
+		if w.Code != http.StatusConflict || reasonOf(t, w) != reasonTakeoverNotDecidable {
+			t.Errorf("owner %s: %d %s, want 409 %s", verb, w.Code, w.Body.String(), reasonTakeoverNotDecidable)
+		}
+		w = do(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+verb, adminToken, "")
+		if w.Code != http.StatusConflict || reasonOf(t, w) != reasonTakeoverNotDecidable {
+			t.Errorf("admin token %s: %d %s, want 409 %s", verb, w.Code, w.Body.String(), reasonTakeoverNotDecidable)
+		}
+	}
+	// A stranger's answer is the byte-identical 404 a missing approval gets: no oracle on the id.
+	stranger := ssoSession(t, "sub-stranger", "stranger@corp.example", oidc.RoleUser)
+	for _, verb := range []string{"/take-over", "/hand-back", "/decline"} {
+		w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+verb, stranger, "")
+		missing := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+uuid.New().String()+verb, stranger, "")
+		if w.Code != http.StatusNotFound || missing.Code != http.StatusNotFound || w.Body.String() != missing.Body.String() {
+			t.Errorf("stranger %s: %d %q, want the missing approval's %d %q", verb, w.Code, w.Body.String(), missing.Code, missing.Body.String())
+		}
+	}
+	tool := f.seed(types.ApprovalToolCall, types.ApprovalPending, "")
+	if w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+tool.String()+"/take-over", f.owner, ""); w.Code != http.StatusConflict ||
+		reasonOf(t, w) != reasonNotATakeoverRequest {
+		t.Errorf("take over a tool_call: %d %s", w.Code, w.Body.String())
+	}
+	held := f.seed(types.ApprovalHumanTakeover, types.ApprovalApproved, "someone-else")
+	if w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+held.String()+"/hand-back", f.owner, ""); w.Code != http.StatusConflict ||
+		reasonOf(t, w) != reasonTakeoverNotHolder {
+		t.Errorf("hand back by a non-holder: %d %s", w.Code, w.Body.String())
+	}
+	w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/decline", f.owner, "")
+	var got types.ApprovalRequest
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &got) != nil || got.State != types.ApprovalDenied || got.DecidedBy != takeoverOwnerSub {
+		t.Fatalf("decline: %d %s", w.Code, w.Body.String())
+	}
+	if w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/take-over", f.owner, ""); w.Code != http.StatusConflict {
+		t.Fatalf("take over a declined request: %d, want 409", w.Code)
+	}
+}
+
+// TestTakeover_DeclineRefusesEveryOtherKind: decline decides through Approvals.Decide directly, so it
+// must refuse any approval that is not a takeover request, and leave it PENDING. (That a decline is a
+// DENIED is TestTakeover_Refusals' last assertions.)
+func TestTakeover_DeclineRefusesEveryOtherKind(t *testing.T) {
+	f := newTakeoverFixture(t, true)
+	for _, k := range types.ApprovalKinds {
+		if k == types.ApprovalHumanTakeover {
+			continue
+		}
+		id := f.seed(k, types.ApprovalPending, "")
+		w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/decline", f.owner, "")
+		if w.Code != http.StatusConflict || reasonOf(t, w) != reasonNotATakeoverRequest {
+			t.Errorf("decline a %s: %d %s, want 409 %s", k, w.Code, w.Body.String(), reasonNotATakeoverRequest)
+		}
+		if got, err := f.aap.Get(context.Background(), id); err != nil || got.State != types.ApprovalPending {
+			t.Errorf("decline a %s left it %v (%v), want PENDING", k, got.State, err)
+		}
+	}
+}
+
+// noAuditQuery is a pauseStore that answers the audit query a take over's surface reads (it has none).
+type noAuditQuery struct{ *pauseStore }
+
+func (noAuditQuery) QueryAuditEvents(context.Context, uuid.UUID, int) ([]types.AuditEvent, error) {
+	return nil, nil
+}
+
+// pausedTakeover is a run paused waiting on a takeover request, with the member who owns it signed in.
+func pausedTakeover(t *testing.T) (*pauseFixture, takeoverApprovals, uuid.UUID, *http.Cookie) {
+	t.Helper()
+	aap := takeoverApprovals{newAuthzApprovals(newAuthzStore())}
+	f := newPauseFixture(t, time.Hour, func(c *Config) { c.Approvals, c.Store = aap, noAuditQuery{c.Store.(*pauseStore)} })
+	paused := time.Now().UTC()
+	f.st.run.PausedAt, f.st.run.PausedReason = &paused, types.PauseWaiting
+	id := uuid.New()
+	aap.mu.Lock()
+	aap.byID[id] = types.ApprovalRequest{ID: id, RunID: f.run.ID, Kind: types.ApprovalHumanTakeover, State: types.ApprovalPending,
+		RequestedScope: json.RawMessage(`{"reason":"the sign-in sends a code to a phone"}`), RequestedAt: time.Now().UTC().Add(-2 * time.Minute)}
+	aap.mu.Unlock()
+	return f, aap, id, ssoSession(t, pauseOwner, "owner@corp.example", oidc.RoleUser)
+}
+
+func approvalsCounted(f *pauseFixture, decision string) int64 {
+	f.srv.metrics.mu.Lock()
+	defer f.srv.metrics.mu.Unlock()
+	return f.srv.metrics.approvals[decision]
+}
+
+// TestTakeover_DeclineThawsAPausedRunAndCounts: declining the request a run is paused on is a decision
+// like any other. It persists DENIED, counts as one, and thaws the run, as decide() does for its own.
+func TestTakeover_DeclineThawsAPausedRunAndCounts(t *testing.T) {
+	f, aap, id, owner := pausedTakeover(t)
+	w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/decline", owner, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("decline = %d %s", w.Code, w.Body.String())
+	}
+	if got, err := aap.Get(context.Background(), id); err != nil || got.State != types.ApprovalDenied {
+		t.Errorf("declined request = %v (%v), want DENIED", got.State, err)
+	}
+	if _, thaws := f.rn.counts(); thaws != 1 {
+		t.Errorf("thaws = %d after a decline, want 1: the run stayed paused on an answered request", thaws)
+	}
+	if n := approvalsCounted(f, "denied"); n != 1 {
+		t.Errorf("denied decisions counted = %d, want 1", n)
+	}
+}
+
+// TestTakeover_TakeOverThawsAPausedRunAndCountsOnce: the first take over answers the request (counted, run
+// thawed, row APPROVED and held by the taker); a later take over that replaces the holder decides nothing, and
+// a hand back closes no request.
+func TestTakeover_TakeOverThawsAPausedRunAndCountsOnce(t *testing.T) {
+	f, aap, id, owner := pausedTakeover(t)
+	w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/take-over", owner, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("take over = %d %s", w.Code, w.Body.String())
+	}
+	if got, err := aap.Get(context.Background(), id); err != nil || got.State != types.ApprovalApproved || got.TakeoverHolder != pauseOwner {
+		t.Errorf("taken-over request = %v held by %q (%v), want APPROVED held by %q", got.State, got.TakeoverHolder, err, pauseOwner)
+	}
+	if _, thaws := f.rn.counts(); thaws != 1 {
+		t.Errorf("thaws = %d after the first take over, want 1", thaws)
+	}
+	if n := approvalsCounted(f, "approved"); n != 1 {
+		t.Errorf("approved decisions counted = %d, want 1", n)
+	}
+	// A second person takes over, then the owner takes it back: each replaces a holder and decides nothing.
+	if _, prev, err := aap.TakeOver(context.Background(), id, "sub-second"); err != nil || prev != pauseOwner {
+		t.Fatalf("second person's take over: replaced %q (%v), want %q", prev, err, pauseOwner)
+	}
+	w = doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/take-over", owner, "")
+	var back takeoverResponse
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &back) != nil || back.TakeoverHolder != pauseOwner {
+		t.Fatalf("replacing take over = %d %s", w.Code, w.Body.String())
+	}
+	if _, thaws := f.rn.counts(); thaws != 1 {
+		t.Errorf("thaws = %d after a replacing take over, want still 1", thaws)
+	}
+	if n := approvalsCounted(f, "approved"); n != 1 {
+		t.Errorf("approved decisions counted = %d after a replacing take over, want still 1", n)
+	}
+	if w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/hand-back", owner, ""); w.Code != http.StatusOK {
+		t.Fatalf("hand back = %d %s", w.Code, w.Body.String())
+	}
+	if n := approvalsCounted(f, "approved") + approvalsCounted(f, "denied"); n != 1 {
+		t.Errorf("decisions counted = %d after a hand back, want still 1", n)
+	}
+	if _, thaws := f.rn.counts(); thaws != 1 {
+		t.Errorf("thaws = %d after a hand back, want still 1", thaws)
+	}
+}
+
+// TestTakeover_EntryShapes: the three verbs keep the attach ticket's entry shapes. A super admin on
+// a run that is not theirs gets the 403 naming why; a security admin, who also sees every run, gets
+// the missing approval's 404 like any stranger; and a Background run's owner gets 409
+// run_background_only, so a takeover never opens a door the run's shape closes.
+func TestTakeover_EntryShapes(t *testing.T) {
+	f := newTakeoverFixture(t, true)
+	id := f.seed(types.ApprovalHumanTakeover, types.ApprovalPending, "")
+	verbs := []string{"/take-over", "/hand-back", "/decline"}
+	admin := ssoSession(t, "sub-super-admin", "admin@corp.example", oidc.RoleAdmin)
+	security := ssoSession(t, "sub-security-admin", "security@corp.example", oidc.RoleSecurityAdmin)
+	for _, verb := range verbs {
+		if w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+verb, admin, ""); w.Code != http.StatusForbidden ||
+			reasonOf(t, w) != runOwnerOnlyReason {
+			t.Errorf("super admin %s: %d %s, want 403 %s", verb, w.Code, w.Body.String(), runOwnerOnlyReason)
+		}
+		w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+verb, security, "")
+		missing := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+uuid.New().String()+verb, security, "")
+		if w.Code != http.StatusNotFound || w.Body.String() != missing.Body.String() {
+			t.Errorf("security admin %s: %d %q, want the missing approval's %d %q", verb, w.Code, w.Body.String(), missing.Code, missing.Body.String())
+		}
+	}
+	ast := f.srv.cfg.Store.(*authzStore)
+	ast.mu.Lock()
+	run := ast.runs[f.run]
+	run.Experience = types.ExperienceBackground
+	ast.runs[f.run] = run
+	ast.mu.Unlock()
+	for _, verb := range verbs {
+		if w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+verb, f.owner, ""); w.Code != http.StatusConflict ||
+			reasonOf(t, w) != reasonRunBackgroundOnly {
+			t.Errorf("owner %s on a background run: %d %s, want 409 %s", verb, w.Code, w.Body.String(), reasonRunBackgroundOnly)
+		}
+	}
+	f.aap.mu.Lock()
+	got := f.aap.byID[id]
+	f.aap.mu.Unlock()
+	if got.State != types.ApprovalPending || got.TakeoverHolder != "" {
+		t.Fatalf("a refused verb changed the request: %+v", got)
+	}
+}
+
+// TestTakeover_InputIsNotTeedToTheAttachRecorder: what the person types into the console terminal
+// while they drive is not teed to the console's per-attach session recorder; only what the terminal
+// shows is. The boot seed's cast is wardyn-rec's (cmd/wardyn-rec TestRec_TypedInputIsNotRecorded).
+func TestTakeover_InputIsNotTeedToTheAttachRecorder(t *testing.T) {
+	srv, fr, _, run, ts, returned := attachSlotsTestServer(t)
+	dir := t.TempDir()
+	casts, err := recording.NewFSStore(dir)
+	if err != nil {
+		t.Fatalf("NewFSStore: %v", err)
+	}
+	srv.cfg.RecordingStore = casts
+	c := dialAttach(t, ts, srv, run.ID, holderOwner, "")
+	readAttachMode(t, c)
+	sess := waitForSession(t, fr, 0)
+	const typed = "hunter2-typed-by-the-person"
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := c.Write(ctx, websocket.MessageBinary, []byte(typed+"\r")); err != nil {
+		t.Fatalf("type: %v", err)
+	}
+	waitFor(t, "the keystrokes to reach the terminal", func() bool {
+		sess.mu.Lock()
+		defer sess.mu.Unlock()
+		for _, w := range sess.writes {
+			if strings.Contains(string(w), typed) {
+				return true
+			}
+		}
+		return false
+	})
+	sess.feed("Code: shown-on-screen\r\n")
+	if _, _, err := c.Read(ctx); err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	_ = c.Close(websocket.StatusNormalClosure, "")
+	recvSlotEvent(t, returned, "the attach handler to return")
+	var cast strings.Builder
+	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			b, _ := os.ReadFile(p)
+			cast.Write(b)
+		}
+		return nil
+	})
+	if !strings.Contains(cast.String(), "shown-on-screen") {
+		t.Fatalf("no recording of the session was written (%d bytes)", cast.Len())
+	}
+	if strings.Contains(cast.String(), typed) {
+		t.Fatal("the person's keystrokes were teed to the per-attach recording")
+	}
+}
+
+// TestAttention_TakeoverLeadsAndIsTheOwners: a PENDING takeover request puts its run under
+// "Needs you" as kind takeover, ahead of a held approval on the same run, and is the owner's to act on.
+func TestAttention_TakeoverLeadsAndIsTheOwners(t *testing.T) {
+	s := attentionFixture(t)
+	runID := uuid.New()
+	run := types.AgentRun{ID: runID, State: types.RunRunning, CreatedBy: "sub-owner"}
+	pending := []types.ApprovalRequest{
+		pendingRow(runID, types.ApprovalToolCall, `{"tool":"Bash","cmd":"ls"}`, nil),
+		pendingRow(runID, types.ApprovalHumanTakeover, `{"reason":"x"}`, nil),
+	}
+	s.projectHolds(pending)
+	owner := httptest.NewRequest(http.MethodGet, "/api/v1/runs", nil).WithContext(memberCtxFor("sub-owner"))
+	if got := s.attention(owner, run, pending, false); got == nil || got.Kind != types.AttentionTakeover || got.By != types.AttentionYou {
+		t.Fatalf("owner: attention = %+v, want takeover by you", got)
+	}
+	admin := httptest.NewRequest(http.MethodGet, "/api/v1/runs", nil).WithContext(adminCtx())
+	if got := s.heldCandidates(admin, run, pending, true); len(got) == 0 || got[0].kind != types.AttentionTakeover || got[0].by != types.AttentionOwner {
+		t.Fatalf("admin view: candidates = %+v, want takeover by owner first", got)
+	}
+}

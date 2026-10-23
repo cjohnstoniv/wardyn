@@ -216,7 +216,7 @@ RUN set -eu; \
     if [ "$CLAUDE_INSTALL" = "native" ]; then \
         if [ -f /claude-stage/claude-bin ]; then \
             want="${TARGETARCH:-$(dpkg --print-architecture)}"; \
-            case "$(od -An -tx1 -j18 -N1 /claude-stage/claude-bin | tr -d ' ')" in 3e) have=amd64;; b7) have=arm64;; *) have=unknown;; esac; \
+            case "$(od -An -tx1 -N4 /claude-stage/claude-bin | tr -d ' ')$(od -An -tx1 -j18 -N1 /claude-stage/claude-bin | tr -d ' ')" in 7f454c463e) have=amd64;; 7f454c46b7) have=arm64;; *) have=unknown;; esac; \
             [ "$have" = unknown ] || [ "$have" = "$want" ] || { echo "staged claude-bin is $have but this image builds for $want; restage with: scripts/stage-agent-binary.sh claude-code <version> --arch $want" >&2; exit 1; }; \
             install -m 0755 /claude-stage/claude-bin /usr/local/bin/claude; \
             echo "installed host-staged native claude"; \
@@ -419,6 +419,8 @@ COPY --from=builder /out/wardyn-git-helper /usr/local/bin/wardyn-git-helper
 COPY --from=builder /out/wardyn-scan       /usr/local/bin/wardyn-scan
 # wardyn-toolgate: parks tool-use approvals on the Wardyn UI (hold runs).
 COPY --from=builder /out/wardyn-toolgate   /usr/local/bin/wardyn-toolgate
+# wardyn: the in-sandbox `wardyn needs-you <reason>` ("Needs you" takeover request), run by wardyn-toolgate.
+COPY deploy/images/common/wardyn-in-sandbox /usr/local/bin/wardyn
 
 # agent-run: the thin shell wrapper used by the Wardyn driver to launch one task.
 # agent-run-lib.sh: functions shared with every other agent image's agent-run.
@@ -432,6 +434,7 @@ RUN chmod +x /usr/local/bin/wardyn-rec \
            /usr/local/bin/wardyn-git-helper \
            /usr/local/bin/wardyn-scan \
            /usr/local/bin/wardyn-toolgate \
+           /usr/local/bin/wardyn \
            /usr/local/bin/agent-run
 
 # System-wide GLOBAL git credential helper (all hosts).

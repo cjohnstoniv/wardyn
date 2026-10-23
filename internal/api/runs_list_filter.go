@@ -28,7 +28,7 @@ import (
 // name statically and cannot see one read through a loop variable.
 func hasRunsListFilterParams(q url.Values) bool {
 	return q.Has("view") || q.Has("owner") || q.Has("status") ||
-		q.Has("ended_within") || q.Has("include_killed") || q.Has("no_end") || q.Has("workspace") || q.Has("q")
+		q.Has("ended_within") || q.Has("include_killed") || q.Has("no_end") || q.Has("workspace") || q.Has("q") || q.Has("sponsored")
 }
 
 // maxRunsListQueryLen bounds ?q=: it is parameterised (store_runs_filtered.go
@@ -97,6 +97,13 @@ func (s *Server) parseRunsListParams(w http.ResponseWriter, r *http.Request, pri
 		writeErrorReason(w, http.StatusBadRequest, reasonInvalidOwnerParam, "invalid owner")
 		return parsedRunsListParams{}, false
 	}
+	sponsored := q.Get("sponsored")
+	switch sponsored {
+	case "", "exclude":
+	default:
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidSponsoredParam, "invalid sponsored")
+		return parsedRunsListParams{}, false
+	}
 	// #1197: view=user forces owner=me for EVERY caller, admins and security
 	// operators included — the bug this lane fixes (a non-operator was
 	// already forced regardless of view, below). Absent a view, an explicit
@@ -120,8 +127,9 @@ func (s *Server) parseRunsListParams(w http.ResponseWriter, r *http.Request, pri
 		resolvedOwner = principal
 	}
 	// A person's own list, view=user included (the console always sends a view), carries the runs of the
-	// service identities they currently sponsor (design §8). A portal's delegated token gets none.
-	withSponsored := resolvedOwner != "" && !delegatedRequest(r.Context())
+	// service identities they currently sponsor (design §8). A portal's delegated token gets none, and
+	// ?sponsored=exclude turns the widening off for a caller that wants only the person's own runs (#2513).
+	withSponsored := resolvedOwner != "" && !delegatedRequest(r.Context()) && sponsored != "exclude"
 
 	var statuses []string
 	seenStatus := map[string]bool{}

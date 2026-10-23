@@ -221,7 +221,7 @@ spec:
       automountServiceAccountToken: {{ .Values.serviceAccount.automount }}
       # `default 70` carries a --reuse-values upgrade from a chart that had no
       # such value; see values.yaml for why 70.
-      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds | default 70 }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds | default 85 }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       {{- with .Values.image.pullSecrets }}
@@ -569,7 +569,8 @@ spec:
               value: {{ printf "%s/%s" ($dps.mountPath | default "/etc/wardyn/daemon-proxy-secret") ($dps.existingSecretKey | default "proxy-url") | quote }}
             {{- end }}
             {{- if and .Values.awsSSOProxyInject (not (hasKey .Values.env "WARDYN_AWS_SSO_PROXY_INJECT")) }}
-            # Phase B kill switch (docs/OPERATIONS.md "Turning the lane off").
+            # AWS sign-in lane value ("on" or empty; "off" was removed in 0.10.0,
+            # docs/OPERATIONS.md "Removed in 0.10.0").
             # An .Values.env entry overrides — scripts/kind-sso-walk.sh pins
             # its posture with `--set env.WARDYN_AWS_SSO_PROXY_INJECT=...`,
             # which must keep winning over this named value.

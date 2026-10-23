@@ -117,7 +117,7 @@ func interactiveLine(startup *sdk.RunStartup, id string) string {
 func runCmd(client clientFn) *cobra.Command {
 	var repo, agent, task, policyID, confinement, policyFile, image, taskMode, workspaceID string
 	var title, description, file string
-	var devcontainerRepo, devcontainerRef, modelProvider, localFolder, localFolderRemote string
+	var devcontainerRepo, devcontainerRef, modelProvider, localFolder, localFolderRemote, runIn string
 	var interactive, wait, createJSON, dryRun bool
 	var timeout, maxWait time.Duration
 	var mode runModeFlags
@@ -151,7 +151,7 @@ func runCmd(client clientFn) *cobra.Command {
 				ConfinementClass: normalizeConfinement(confinement), Interactive: interactive,
 				Image: image, TaskMode: taskMode,
 				DevcontainerRepo: devcontainerRepo, DevcontainerRef: devcontainerRef,
-				ModelProvider: modelProvider,
+				ModelProvider: modelProvider, RunIn: runIn,
 			}
 			// --policy is a policy UUID; --workspace attaches an onboarded
 			// workspace by id (see setOptionalID for the parse-here rationale).
@@ -264,6 +264,7 @@ func runCmd(client clientFn) *cobra.Command {
 	cmd.Flags().StringVar(&localFolder, "local-folder", "", "a folder on this computer to seed into the sandbox with 'wardyn sync': the agent starts only once this first sync completes (a task run whose SSH access is open; needs 'wardyn ssh-key ensure')")
 	cmd.Flags().StringVar(&localFolderRemote, "local-folder-remote-dir", "", "where --local-folder lands in the sandbox, under /home/agent/ (default /home/agent/work)")
 	client = breakGlassReasonFlag(cmd, client)
+	runInFlag(cmd, &runIn)
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "resolve and check the run without launching it: prints the setup checklist and the confinement class that would be enforced")
 	cmd.Flags().BoolVar(&wait, "wait", false, "block until the run reaches a terminal state and exit with the run's outcome (COMPLETED=0, FAILED=agent exit code, KILLED/STOPPED=2, timeout=124)")
 	cmd.Flags().DurationVar(&maxWait, "max-wait", 0, "how long the run may wait for a free slot in a pool at its run limit (at least 1s; over 7 days is cut to 7). "+

@@ -8,6 +8,7 @@ package store_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"testing"
@@ -220,5 +221,30 @@ func TestPG_CreateUserType_RefusedWhileAnOrphanedSubjectRowNamesTheID(t *testing
 	}
 	if _, err := st.CreateUserType(ctx, types.UserType{ID: id, Name: "Reborn " + id}); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("recreate orphaned id = %v, want ErrConflict", err)
+	}
+}
+
+// TestPG_UserType_NamedByALaunchPreset: a launch preset restricted to a type holds it like any other
+// subject row, and an orphan of it keeps the id from being recreated (the preset carries no foreign key).
+func TestPG_UserType_NamedByALaunchPreset(t *testing.T) {
+	st := store.NewPG(runsPGPool(t))
+	ctx := context.Background()
+	id := seedSubjectUserType(t, st, "preset")
+	name := "preset-" + id
+	if _, _, err := st.PutLaunchPreset(ctx, types.LaunchPreset{Name: name, UserTypes: []string{id}, Request: json.RawMessage(`{}`), CreatedBy: "u"}); err != nil {
+		t.Fatalf("put preset: %v", err)
+	}
+	t.Cleanup(func() { _, _ = st.DeleteLaunchPreset(ctx, name) })
+	if n, err := st.UserTypeReferences(ctx, id); err != nil || n != 1 {
+		t.Fatalf("references = %d, %v; want 1", n, err)
+	}
+	if err := st.DeleteUserType(ctx, id); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("delete while a preset names it = %v, want ErrConflict", err)
+	}
+	if _, err := st.Pool.Exec(ctx, `DELETE FROM user_types WHERE id = $1`, id); err != nil {
+		t.Fatalf("force-delete: %v", err)
+	}
+	if _, err := st.CreateUserType(ctx, types.UserType{ID: id, Name: "Reborn " + id}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("recreate an id a preset names = %v, want ErrConflict", err)
 	}
 }

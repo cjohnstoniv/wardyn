@@ -173,7 +173,7 @@ func (s *Server) adoDisconnectRow(ctx context.Context) (string, bool, error) {
 }
 
 // adoHeldSignInRows is every Azure DevOps row, whatever its state, under which owner's OWN list
-// holds a stored sign-in. It never reads through For(owner).Get, which falls back to the operator's row.
+// holds a stored sign-in, including one under a row no longer in site config. It never reads through For(owner).Get, which falls back to the operator's row.
 func (s *Server) adoHeldSignInRows(ctx context.Context, owner string) ([]string, error) {
 	if s.cfg.Store == nil || s.cfg.Secrets == nil {
 		return nil, nil
@@ -190,6 +190,12 @@ func (s *Server) adoHeldSignInRows(ctx context.Context, owner string) ([]string,
 	for _, row := range gitProviderRows(sc) {
 		if row.Kind == types.GitProviderAzureDevOps && adoEntraValidRowID(row.ID) && slices.Contains(held, adoEntraSecretName(row.ID)) {
 			rows = append(rows, row.ID)
+		}
+	}
+	// A sign-in stored under a row since deleted from site config is still the person's to forget.
+	for _, name := range held {
+		if id, ok := adoEntraRowIDFromSecretName(name); ok && !slices.Contains(rows, id) {
+			rows = append(rows, id)
 		}
 	}
 	return rows, nil

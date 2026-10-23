@@ -29,6 +29,10 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// VMNoFolderShare refuses a Linux VM run that carries a folder on a runner whose caps do not say it
+// shares one into the guest (virtiofs): the org's placement says it at create, and here at dispatch.
+const VMNoFolderShare = "this runner cannot share a folder into a Linux VM sandbox: its version predates folder shares into VMs, or its QEMU image has no working virtiofsd"
+
 var (
 	errOffline = fmt.Errorf("%w: no session", runner.ErrRunnerOffline)
 
@@ -201,6 +205,20 @@ func (s *Substrate) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) 
 	if err := s.refuseResident(spec.RunID, spec); err != nil {
 		return runner.Sandbox{}, err
 	}
+	method := runnerwire.MethodCreateSandbox
+	if spec.MachineKind.IsVM() {
+		// Asked of no runner that has not said it starts VMs: an older one would refuse create_vm
+		// anyway, but this refusal names the reason and makes no call.
+		c, ok := s.Caps()
+		if !ok || c.LinuxVM == nil {
+			return runner.Sandbox{}, runnerwire.Refuse("this runner does not offer Linux VM sandboxes: it is older than 0.10, or its operator has not turned them on")
+		}
+		// Nor a VM that carries a folder of a runner that cannot share one into the guest.
+		if len(spec.Mounts) > 0 && !c.LinuxVM.Virtiofs {
+			return runner.Sandbox{}, runnerwire.Refuse(VMNoFolderShare)
+		}
+		method = runnerwire.MethodCreateVM
+	}
 	var registered *outputSink
 	if spec.ExecOutput != nil {
 		s.mu.Lock()
@@ -211,7 +229,7 @@ func (s *Substrate) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) 
 		s.mu.Unlock()
 	}
 	var res runnerwire.CreateSandboxResult
-	err := s.call(ctx, runnerwire.MethodCreateSandbox, args, &res, runnerwire.WithEvents(func(ev runnerwire.Event) {
+	err := s.call(ctx, method, args, &res, runnerwire.WithEvents(func(ev runnerwire.Event) {
 		var w runnerwire.Waiting
 		if ev.Kind == runnerwire.EventWaiting && json.Unmarshal(ev.Data, &w) == nil {
 			spec.NotifyWaiting(w.Detail)

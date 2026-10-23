@@ -27,8 +27,14 @@ export function apiURL(path: string): string {
 
 /** The ws:// or wss:// URL of an API path on this origin (same-origin, so the session cookie rides along). */
 export function wsURL(path: string): string {
+  return originWS(apiURL(path));
+}
+
+/** The ws:// or wss:// URL of a path that already carries its base, on this origin (the desktop viewer's
+ *  stream, whose path the UI gateway writes with its own base path). */
+export function originWS(path: string): string {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${window.location.host}${apiURL(path)}`;
+  return `${proto}//${window.location.host}${path}`;
 }
 
 /** A browser pathname as the router sees it: the base path taken off. */

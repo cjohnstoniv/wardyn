@@ -171,7 +171,7 @@ var docTierRows = []struct{ route, token string }{
 	// per route either way, so a route that leaves the family still has to be
 	// re-pointed here. (The other three /drives routes moved to their own
 	// tokens above in #168.)
-	{"GET /api/v1/drives", "`mountUserDriveRoutes`"},
+	{"GET /api/v1/drives", "`GET /drives`"},
 	{"PUT /api/v1/drives/{id}", "`mountUserDriveRoutes`"},
 	{"DELETE /api/v1/drives/{id}", "`mountUserDriveRoutes`"},
 	// The destroy verb gets its OWN token rather than riding the family's:
@@ -198,6 +198,8 @@ var docTierRows = []struct{ route, token string }{
 	{"DELETE /api/v1/governance/units/{id}", "`/governance` profile and assignment routes"},
 	{"POST /api/v1/governance/memberships", "`/governance` profile and assignment routes"},
 	{"DELETE /api/v1/governance/memberships/{id}", "`/governance` profile and assignment routes"},
+	{"PUT /api/v1/governance/memberships/{id}", "`/governance` profile and assignment routes"},
+	{"POST /api/v1/governance/memberships/{id}/promote", "`/governance` profile and assignment routes"},
 	{"POST /api/v1/governance/check", "`/governance` profile and assignment routes"},
 	{"GET /api/v1/governance/changes", "`/governance` profile and assignment routes"},
 	{"GET /api/v1/governance/changes/{id}", "`/governance` profile and assignment routes"},
@@ -212,6 +214,10 @@ var docTierRows = []struct{ route, token string }{
 	{"GET /api/v1/governance/boundary", "the `/governance/boundary` routes"},
 	{"PUT /api/v1/governance/boundary", "the `/governance/boundary` routes"},
 	{"POST /api/v1/governance/dry-run", "the `/governance/boundary` routes"},
+	{"GET /api/v1/governance/approval-rules", "the `/governance/approval-rules` routes"},
+	{"POST /api/v1/governance/approval-rules/dry-run", "the `/governance/approval-rules` routes"},
+	{"PUT /api/v1/governance/approval-rules/{name}", "the `/governance/approval-rules` routes"},
+	{"DELETE /api/v1/governance/approval-rules/{name}", "the `/governance/approval-rules` routes"},
 	{"GET /api/v1/key-domains", "the `/key-domains` routes"},
 	{"PUT /api/v1/key-domains/assignments/{subject_type}/{subject}", "the `/key-domains` routes"},
 	{"DELETE /api/v1/key-domains/assignments/{subject_type}/{subject}", "the `/key-domains` routes"},

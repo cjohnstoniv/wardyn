@@ -1,4 +1,4 @@
-.PHONY: doc-links test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build runnerd-image compose-up compose-down demo clean test-conformance-docker test-conformance-k8s test-kek-conformance test-kek-conformance-kind test-daemon-proxy-secret-kind build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-pg-api test-report-pg-store test-report-docker test-report-k8s cover-check cover-union release-check release-patch candidate-preflight ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-provider-seed test-e2e-ui screenshots record-demo setup stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-harnesses agent-image-claude-code-multiarch agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
+.PHONY: doc-links test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build runnerd-image compose-up compose-down demo clean test-conformance-docker test-conformance-k8s test-kek-conformance test-kek-conformance-kind test-daemon-proxy-secret-kind build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-pg-api test-report-pg-store test-report-docker test-report-k8s cover-check cover-union release-check release-patch candidate-preflight ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-provider-seed test-e2e-ui screenshots record-demo setup stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-harnesses agent-image-claude-code-multiarch agent-image-vscode agent-image-novnc agent-image-novnc-signin test-image-novnc-signin gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -173,6 +173,17 @@ agent-image-novnc: agent-image-base ## Build the noVNC UI-sandbox agent image
 	@echo "Building the noVNC UI-sandbox image..."
 	docker build $(DOCKER_BUILD_ARGS) -f deploy/images/novnc/Dockerfile -t wardyn/agent-novnc:local .
 	@echo "noVNC UI-sandbox image built: wardyn/agent-novnc:local"
+
+# The desktop sign-in variant (#2972): agent-novnc plus the person's browser.
+# wardynd runs it only with WARDYN_DESKTOP_SIGNINS=on (docs/UI-SANDBOXES.md).
+agent-image-novnc-signin: agent-image-novnc ## Build the desktop sign-in variant of the noVNC image
+	docker build $(DOCKER_BUILD_ARGS) -f deploy/images/novnc-signin/Dockerfile -t wardyn/agent-novnc-signin:local .
+	@echo "desktop sign-in image built: wardyn/agent-novnc-signin:local"
+
+# Image gate for desktop sign-ins (#2972): needs a built wardyn/agent-novnc-signin:local
+# (IMAGE= overrides) and a docker daemon (DOCKER_HOST, default the wardyn-docker one).
+test-image-novnc-signin: ## Image gate: a person's cookie reaches the agent only through a per-site share
+	./scripts/test-image-novnc-signin.sh
 
 build: ## Build Go binaries (default tags)
 	@echo "Building Go binaries..."
@@ -701,6 +712,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-e2e-recording-step.sh
 	./scripts/test-fetch-gate-tools.sh
 	./scripts/test-fixture-dates.sh
+	./scripts/test-forward-port-check.sh
 	./scripts/test-gaps.sh --self-test
 	./scripts/test-gpl-source-offer.sh
 	./scripts/test-green-by-tree.sh
@@ -708,6 +720,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-helm-templates.sh
 	./scripts/test-image-pins.sh
 	./scripts/test-image-build-logs.sh
+	./scripts/test-install-cli.sh
 	./scripts/test-install-sh-trust.sh
 	./scripts/test-install-sh.sh
 	./scripts/test-kind-follow-main.sh
@@ -716,6 +729,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-migration-numbers.sh
 	./scripts/test-narrate-speakable.sh
 	./scripts/test-nightly-migration-merge-check.sh
+	./scripts/test-overlay-proof.sh
 	./scripts/test-release-check.sh
 	./scripts/test-release-commit.sh
 	./scripts/test-test-report.sh
@@ -815,7 +829,7 @@ helm-lint: ## Lint + template-render both Helm charts (default + all-on values +
 	echo "$$out" | grep -q "kind: NetworkPolicy" || { echo "chart rendered no NetworkPolicy (default-on L0 egress control)"; exit 1; }; \
 	echo "$$out" | grep -q "runAsNonRoot: true" || { echo "chart rendered no runAsNonRoot: true securityContext"; exit 1; }; \
 	echo "$$out" | grep -q "readOnlyRootFilesystem: true" || { echo "chart rendered no readOnlyRootFilesystem: true securityContext"; exit 1; }; \
-	echo "$$out" | grep -q "terminationGracePeriodSeconds: 70$$" || { echo "chart no longer renders terminationGracePeriodSeconds: 70 — the Kubernetes default of 30s SIGKILLs wardynd's orderly stop (HTTP 15s + detached work 35s + audit flush 15s) mid-teardown"; exit 1; }; \
+	echo "$$out" | grep -q "terminationGracePeriodSeconds: 85$$" || { echo "chart no longer renders terminationGracePeriodSeconds: 85 — the Kubernetes default of 30s SIGKILLs wardynd's orderly stop (HTTP 15s + detached work 50s + audit flush 15s) mid-teardown"; exit 1; }; \
 	echo "$$out" | grep -q "name: WARDYN_ADMIN_TOKEN" || { echo "chart rendered no WARDYN_ADMIN_TOKEN — the API would 401 every request"; exit 1; }; \
 	echo "$$out" | grep -A1 "name: WARDYN_RECORDING_STORE" | grep -q 'value: "off"' || { echo "chart no longer pins WARDYN_RECORDING_STORE=off on a stock install — with wardynd's pg default it silently persists every PTY asciicast into Postgres, forever, while values.yaml/README say recording is off (and 0.7.0's fs + empty-dir spelling crash-looped the pod)"; exit 1; }; \
 	echo "$$out" | grep -q "name: WARDYN_RECORDING_DIR" && { echo "chart set WARDYN_RECORDING_DIR without persistence — an empty value keeps wardynd's default, which writes to the read-only root FS"; exit 1; }; \
@@ -1269,7 +1283,7 @@ helm-lint: ## Lint + template-render both Helm charts (default + all-on values +
 	@helm template wardyn ./deploy/helm/wardyn --set secrets.ageKeyFromSecret=true --set env.WARDYN_ADMIN_TOKEN=tok --set extraEnv[0].name=WARDYN_ADMIN_TOKEN_FILE --set extraEnv[0].value=/mnt/s/admin-token 2>&1 | grep -q "WARDYN_ADMIN_TOKEN and WARDYN_ADMIN_TOKEN_FILE are both set" || { echo "chart no longer refuses WARDYN_ADMIN_TOKEN beside WARDYN_ADMIN_TOKEN_FILE (across env and extraEnv) — wardynd refuses both forms at boot"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set postgres.dsn.secretRef.name= --set env.WARDYN_PG_DSN_FILE=/mnt/s/pg-dsn 2>&1 | grep -q "WARDYN_PG_DSN_FILE is a PERSISTENT Postgres, but no age identity is wired" || { echo "chart no longer refuses a file-delivered (Vault Agent / CSI) DSN with an ephemeral age key — boot 2 cannot decrypt what boot 1 wrote"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set-file defaultPolicy=examples/policies/demo.json --set env.WARDYN_DEFAULT_POLICY=/examples/policies/demo.json | grep -q 'value: "/examples/policies/demo.json"' || { echo "env.WARDYN_DEFAULT_POLICY no longer wins over the ConfigMap-backed default"; exit 1; }
-	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set awsSSOProxyInject=off --set env.WARDYN_AWS_SSO_PROXY_INJECT=on | grep -A1 "name: WARDYN_AWS_SSO_PROXY_INJECT" | grep -q 'value: "on"' || { echo "env.WARDYN_AWS_SSO_PROXY_INJECT no longer wins over awsSSOProxyInject — scripts/kind-sso-walk.sh's --set env.WARDYN_AWS_SSO_PROXY_INJECT posture pin would stop working"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set awsSSOProxyInject=shadowed --set env.WARDYN_AWS_SSO_PROXY_INJECT=on | grep -A1 "name: WARDYN_AWS_SSO_PROXY_INJECT" | grep -q 'value: "on"' || { echo "env.WARDYN_AWS_SSO_PROXY_INJECT no longer wins over awsSSOProxyInject — scripts/kind-sso-walk.sh's --set env.WARDYN_AWS_SSO_PROXY_INJECT posture pin would stop working"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set defaultPolicy='not json' 2>&1 | grep -q "mustFromJson" || { echo "chart no longer refuses an invalid defaultPolicy at render"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set ingress.enabled=true 2>&1 | grep -q "ingress.enabled is set with no ingress.hosts" || { echo "chart no longer refuses ingress.enabled with no hosts — an Ingress with no rules applies cleanly and routes nothing"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set ingress.enabled=true --set 'ingress.hosts[0].host=wardyn.example.test' | grep -A2 'paths:' | grep -q 'path: /' || { echo "an ingress.hosts entry with no paths no longer defaults to the console root — it rendered paths: null, which the API server rejects"; exit 1; }

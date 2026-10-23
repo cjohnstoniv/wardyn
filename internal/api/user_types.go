@@ -311,7 +311,7 @@ func (s *Server) handleDeleteUserType(w http.ResponseWriter, r *http.Request) {
 
 // userTypeInUse is everything that still names a user type a DELETE would
 // remove: a WARDYN_OIDC_ROLE_MAP value, WARDYN_OIDC_DEFAULT_ROLE, the People role mappings, the
-// capability-grant, governance-assignment and drive-grant rows written
+// capability-grant, governance-assignment, drive-grant and launch-preset rows written
 // against it, the service identities not retired that carry it, and the unrevoked API tokens stamped with it (a token whose type
 // is gone would carry a type nothing defines).
 type userTypeInUse struct {
@@ -350,7 +350,7 @@ func (u userTypeInUse) refusal() string {
 		if u.rows == 1 {
 			noun = "row names"
 		}
-		clauses = append(clauses, fmt.Sprintf("%d permission, profile, drive or service identity %s it", u.rows, noun))
+		clauses = append(clauses, fmt.Sprintf("%d permission, profile, drive, launch preset or service identity %s it", u.rows, noun))
 		fixes = append(fixes, "remove those rows")
 	}
 	switch {

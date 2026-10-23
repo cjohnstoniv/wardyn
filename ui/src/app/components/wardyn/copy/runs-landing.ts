@@ -10,7 +10,7 @@
 
 export const RUNS_SECTION = {
   NEEDS: "Needs you",
-  NEEDS_ADMIN: "Needs a decision",
+  NEEDS_ADMIN: "Needs you",
   // H-3, Admin view only: owners' sign-ins and lost runs — no admin can act.
   OWNER: "Waiting on the owner",
   // #3039: Starting and Queued rows sit here too, so the section is not named for one state.
@@ -133,7 +133,14 @@ export const RUNS_SAVE_VIEW_CANCEL = "Cancel";
 // runs-model.ts's rowPresentation — this table only carries what D2 adds or
 // changes.
 export const RUNS_ROW_WORD = {
+  /** The Admin-view row word and the "N held" count beside it (the R6 board). */
+  NEEDS_YOU: "Needs you",
+  HELD: (n: number) => `${n} held`,
   WAITING_FOR_ADMIN: "Waiting for an admin",
+  /** #2963 (M8-Banner-A runs list): the agent asked a person to take over. */
+  NEEDS_TAKEOVER: "Needs you to take over",
+  /** Not on the boards: an admin's view of an owner's takeover request. */
+  WAITING_FOR_TAKEOVER: "Waiting for its owner to take over",
   WAITING_SIGN_IN: "Waiting for sign-in",
   SANDBOX_STOPPED: "Sandbox stopped",
   RUNNING: "Running",
@@ -148,4 +155,5 @@ export const RUNS_ROW_WORD = {
 export const RUNS_ROW_ACTION = {
   REVIEW: "Review",
   SIGN_IN: "Sign in",
+  TAKE_OVER: "Take over",
 } as const;

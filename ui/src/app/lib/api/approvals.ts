@@ -76,4 +76,23 @@ export const approvals = {
     });
     return asJson<ApprovalRequest>(res);
   },
+
+  // "Needs you" (#2963): a human_takeover request's three verbs (internal/api/approvals_takeover.go).
+  // POST /api/v1/approvals/{id}/take-over → the row and where the person drives.
+  async takeOver(id: string): Promise<ApprovalRequest & { surface: "desktop" | "terminal" }> {
+    const res = await wfetch(`/approvals/${encodeURIComponent(id)}/take-over`, { method: "POST", asPerson: true });
+    return asJson<ApprovalRequest & { surface: "desktop" | "terminal" }>(res);
+  },
+
+  // POST /api/v1/approvals/{id}/hand-back
+  async handBack(id: string): Promise<ApprovalRequest> {
+    const res = await wfetch(`/approvals/${encodeURIComponent(id)}/hand-back`, { method: "POST", asPerson: true });
+    return asJson<ApprovalRequest>(res);
+  },
+
+  // POST /api/v1/approvals/{id}/decline
+  async decline(id: string): Promise<ApprovalRequest> {
+    const res = await wfetch(`/approvals/${encodeURIComponent(id)}/decline`, { method: "POST", asPerson: true });
+    return asJson<ApprovalRequest>(res);
+  },
 };

@@ -50,8 +50,14 @@ type serveOptions struct {
 	maxPodLifetime                               time.Duration
 	// folderRoots is --folder-root: the folders a --substrate folders runner shares (default: home).
 	folderRoots []string
+	// localAttach is --local-attach, the runner's own ceiling on local attach; orgURL is --org, which
+	// the local attach pointer file names.
+	localAttach, orgURL string
 	// offline is what the next connect reports about why this runner could not connect or start.
 	offline *offlineLog
+	// driveRoots is --drive-root: the folders a drive bound to this runner may mount from (none by
+	// default, so no drive mounts here until its owner allows one).
+	driveRoots []string
 }
 
 func (o serveOptions) recordingEnabled() (bool, error) {
@@ -62,6 +68,19 @@ func (o serveOptions) recordingEnabled() (bool, error) {
 		return false, nil
 	default:
 		return false, errors.New("runner recording mode must be pg, fs or off")
+	}
+}
+
+// localAttachEnabled is --local-attach: on lets the organisation turn local attach on, off withdraws
+// the capability and the socket whatever the organisation says. Unset is the flag's default, on.
+func (o serveOptions) localAttachEnabled() (bool, error) {
+	switch o.localAttach {
+	case "on", "":
+		return true, nil
+	case "off":
+		return false, nil
+	default:
+		return false, errors.New("runner local attach must be on or off")
 	}
 }
 
@@ -145,10 +164,15 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 		if err := proxy.ValidUpstreamProxyURL(opts.upstreamProxy); err != nil {
 			return fmt.Errorf("--upstream-proxy / WARDYN_UPSTREAM_PROXY / runnerd.json upstream_proxy (%s): %w (the URL is not repeated here: it may hold a credential)", cfg.field("upstream_proxy").Source, err)
 		}
+		opts.orgURL = org
 		if build == nil {
 			return errors.New("runner execution and durable offline handlers are unavailable")
 		}
 		opts.offline = newOfflineLog(stateDir, urlSecrets(opts.upstreamProxy))
+		// The status file from here, so a refusal at start is on record in it before serve exits.
+		status := newStatusWriter(stateDir)
+		defer status.stopped()
+		opts.offline.reportTo(status)
 		runtime, err := build(cmd.Context(), identity, stateDir, opts)
 		if err != nil {
 			opts.offline.startFailed(err)
@@ -165,8 +189,6 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		status := newStatusWriter(stateDir)
-		defer status.stopped()
 		client, err := runnerwire.NewClient(runnerwire.ClientConfig{OrgURL: org, RunnerID: identity.RunnerID.String(), PrivateKey: identity.PrivateKey, Hooks: runtime.hooks, HTTPClient: httpClient, LinkChanged: status.linkChanged})
 		if err != nil {
 			return err
@@ -188,9 +210,11 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 	cmd.Flags().StringVar(&opts.upstreamProxy, "upstream-proxy", "", "this runner's own corporate upstream proxy, http://[user:pass@]host[:port], that every run's proxy chains its egress through; "+
 		"never sent to the organisation. Prefer the WARDYN_UPSTREAM_PROXY environment variable when it holds a credential (it is read after the flags are parsed, so --help never shows it). Read at startup only")
 	cmd.Flags().StringVar(&opts.recording, "recording-store", "", "organisation recording mode: pg, fs or off (off disables local capture; default pg)")
+	cmd.Flags().StringVar(&opts.localAttach, "local-attach", "on", "on lets a person's CLI on this computer attach to its runs over a per-user socket when the organisation allows it; off never opens the socket")
 	cmd.Flags().StringVar(&opts.substrate, "substrate", "docker", "where runs execute: docker (this host's engine) or k8s (a runs namespace of the cluster runnerd runs in); "+
 		"folders runs nothing and only shares folders on this computer with runs elsewhere")
 	cmd.Flags().StringArrayVar(&opts.folderRoots, "folder-root", nil, "folders: a folder this runner may share, with everything under it (repeatable; default: your home folder)")
+	cmd.Flags().StringArrayVar(&opts.driveRoots, "drive-root", nil, "docker: a folder a drive bound to this runner may mount from, with everything under it (repeatable; default: none, so no drive mounts here)")
 	cmd.Flags().StringVar(&opts.runsNamespace, "runs-namespace", "", "k8s: the dedicated namespace runs are created in; never runnerd's own")
 	cmd.Flags().StringVar(&opts.relayService, "relay-service", "", "k8s: the relay Service's DNS name (<name>.<namespace>.svc.<cluster domain>), which must resolve to exactly one ClusterIP")
 	cmd.Flags().StringVar(&opts.arch, "arch", os.Getenv(archEnv), "k8s, required: the sandbox node architecture, amd64 or arm64, pinned as every run pod's kubernetes.io/arch node selector")

@@ -705,7 +705,7 @@ function PolicyEditor({
           </Button>
           <Button
             onClick={save}
-            disabled={!operator || saving || !name.trim() || !parsed.ok}
+            disabled={!operator || saving || !name.trim() || !parsed.ok || audience.pending}
             aria-describedby={
               [error ? "policy-editor-error" : undefined, !operator ? "policy-editor-operator-reason" : undefined]
                 .filter(Boolean)

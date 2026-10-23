@@ -174,6 +174,8 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 				cancelApprovals: srv.CancelTerminalRunApprovals,
 				finishOutput:    srv.FinishRunOutput,
 				snapshotPane:    srv.SnapshotRunPane,
+				// The WARDYN_RUN_MAX_AGE stop's own: the same cascade without the idle_stopped event.
+				cancelMaxAgeApprovals: srv.CancelMaxAgeStoppedRunApprovals,
 			},
 			maskedRec,
 			lifecycle.Config{Interval: *f.autoStopInterval, MaxAge: cliutil.EnvDuration("WARDYN_RUN_MAX_AGE", 0), TickLock: reapTickLock(pool), Sweeps: ticks},

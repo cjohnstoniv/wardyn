@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -259,6 +260,23 @@ func (s PG) CreateCLISession(ctx context.Context, sess CLISessionRow, secret str
 	var out types.APIToken
 	err = s.cliTx(ctx, func(tx pgx.Tx) error {
 		id := sess.Identity
+		// Ordered against every cut: the shared revocation-order lock, held to commit, comes after the
+		// guard's row locks (as in SuspendIdentity). A cut that committed before it is read below against
+		// the approval's own sequence; a cut after it waits for this commit, and its sweep then ends the row.
+		// The read is its own statement, so its snapshot is taken after the lock is granted.
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock_shared($1, 0)`, db.RevocationOrderLockClass); err != nil {
+			return fmt.Errorf("store: lock revocation order: %w", err)
+		}
+		var cut bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM (
+				SELECT sub, seq FROM oidc_session_revocations UNION ALL SELECT sub, seq FROM oidc_session_cuts) c
+			WHERE (c.sub = $1 OR lower(c.sub) = lower($2) OR c.sub = '') AND c.seq > $3)`,
+			id.Principal, id.Email, id.RevSeq).Scan(&cut); err != nil {
+			return fmt.Errorf("store: cli session cut check: %w", err)
+		}
+		if cut {
+			return ErrIdentityDeactivated
+		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO cli_sessions (id, principal, email, role, user_type, groups, groups_truncated, rev_seq, authority_epoch,
 			                          identity_stamped_at, machine, store, public_key, secret_sha256, created_at, last_refresh_at, expires_at)

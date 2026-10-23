@@ -669,8 +669,34 @@ confirming happens through the API.
 | `TEAM_SIZE_HINT` | One size for the whole team: members share it. |
 | `TEAM_WRITE_HINT` | Off by default: members' runs can read the drive and never change it. On, any member's run can change what the others' runs read and run. |
 | `TEAM_WRITE_UNKNOWN` | This drive has more allocations than this page lists, so its write setting cannot be changed here. Saving leaves every allocation's write setting as it is. A group you add here can't write. |
+| `COL_MOUNTS_FROM` | Mounts from |
+| `LABEL_TWO_PLACES` | Can mount from two places |
+| `LABEL_TWO_PLACES_BODY` | A share lives outside Wardyn, so the same directories can also be reached from a person's own runner. Add it below. |
+| `LABEL_ONE_PLACE` | Mounts from one place |
+| `LABEL_ONE_PLACE_DOCKER` | A Wardyn-managed volume lives on this Docker host, so only runs on the organisation's runners can mount it. |
+| `LABEL_ONE_PLACE_K8S` | A Wardyn-managed volume lives in this cluster, so only runs on the organisation's runners can mount it. |
+| `SECOND_PLACE_SHARE_ONLY` | Only a share can also be reachable from a second place. |
+| `SECOND_PLACE_ADD` | Add a second place |
+| `SECOND_PLACE_TITLE` | Also reachable from |
+| `SECOND_PLACE_REMOVE` | Remove this place |
+| `SECOND_PLACE_LEAD` | The same drive and the same directories, mounted from a second place. Each person still sees only their own directory. |
+| `FIELD_WHERE` | Where |
+| `WHERE_OWN_RUNNER` | A person's own runner |
+| `FIELD_RUNNER` | Runner |
+| `RUNNER_OPTION(runner)` | {runner} · a person's own runner |
+| `RUNNER_HINT` | Only runs on this runner can mount the drive there. A runner mounts only folders its owner allowed on it. |
+| `RUNNER_PLACEHOLDER` | Choose a runner |
+| `FIELD_ALT_HOST_ROOT` | Path on that runner |
+| `ALT_HOST_ROOT_HINT` | The same share as above, as that runner sees it. Each person's directory is a subdirectory of it. |
+| `REACH_NOTE` | Binding a drive to a runner lets runs on that runner mount it. |
+| `SECOND_PLACE_REFUSED(name)` | user_drives: "{name}": the second place must also be a share, and somewhere the first is not |
 
 `TEAM_WRITE_UNKNOWN` is a deviation: lead wording 2026-10-20, M1 fix.
+
+`COL_MOUNTS_FROM` through `SECOND_PLACE_REFUSED` are mock M10 (#113, #112). The Mounts from cell and the
+preview line print the server's `mounts_from` as it is. `RUNNER_PLACEHOLDER` is not on the board. The Where
+hint is not rendered: the only second place offered is a person's own runner. `SECOND_PLACE_REFUSED` is the
+server's save refusal, rendered as the server sends it under `SAVE_REFUSED_TITLE`.
 
 `TITLE` is **one string for four places** — the screen heading, the Workspaces header's outline
 button, the setup card's title and the Settings card's title — the way `GOVERNANCE.TITLE`
@@ -866,6 +892,11 @@ SUPER only.
 | `GS_DRIVE_CHIP(name, size, mode)` | Drive · {name}, {size}, {mode} |
 | `GS_DRIVE_CHIP_NOSIZE(name, mode)` | Drive · {name}, {mode} |
 | `GS_DRIVE_CHIP_PAUSED(name)` | Drive · {name} · Paused |
+| `GS_MOUNTS_FROM(where)` | Mounts from {where} |
+| `NR_MOUNTS_FROM(where)` | Mounts from {where}. |
+| `NR_MOUNTED_FROM(runner, path)` | Mounted from {runner}, at {path}. |
+| `NR_ORG_RUNNERS_ONLY(name)` | "{name}" mounts only from the organisation's runners. Choose an organisation pool to mount it, or launch without it. |
+| `NR_BOUND_ELSEWHERE(name)` | "{name}" is bound to a different runner. Choose an organisation pool to mount it, or launch without it. |
 | `GS_DRIVE_BODY` | Your drive is not a workspace: mount it from New run alongside whatever you attach. It is yours alone — a run sees only your directory. |
 
 `NR_HINT`'s `{mode}` and `GS_DRIVE_CHIP`'s `{mode}` are `MODE_RO_INLINE` / `MODE_RW_INLINE`; the
@@ -893,6 +924,9 @@ caption on an offer nobody was made. `GS_DRIVE_CHIP`
 follows `BARRIER_CHIP`'s `Label · value` shape (Q2) and sits beside `MEMBER.GS_CHIP`, the
 governance chip, in the same row. `GS_DRIVE_BODY` renders in the "Add your workspace" card,
 after `WORKSPACE_BODY`, only when `/me.user_drive` is non-null.
+`GS_MOUNTS_FROM` through `NR_BOUND_ELSEWHERE` are mock M10: `{where}` is the server's `mounts_from` with its
+first letter lowered for the sentence. `NR_ORG_RUNNERS_ONLY` and `NR_BOUND_ELSEWHERE` are the New Run lines for an
+organisation drive the pool's runners cannot mount; `NR_BOUND_ELSEWHERE` is not on the board.
 
 ### 7.7 `DRIVE_MEMBER` — refusals (server-composed)
 

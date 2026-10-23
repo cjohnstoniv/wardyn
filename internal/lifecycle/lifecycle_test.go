@@ -5,7 +5,9 @@ package lifecycle_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -602,6 +604,15 @@ func TestRevokeFailureEmitsRevokeFailureEvent(t *testing.T) {
 	}
 	if !strings.Contains(string(revoke.Data), "identity_error") {
 		t.Errorf("run.revoke data should carry identity_error, got %s", revoke.Data)
+	}
+	var d struct {
+		Failed []map[string]string `json:"failed_steps"`
+	}
+	if err := json.Unmarshal(revoke.Data, &d); err != nil {
+		t.Fatal(err)
+	}
+	if want := []map[string]string{{"step": "identity_revoke", "reason": "revocation store unavailable"}}; !reflect.DeepEqual(d.Failed, want) {
+		t.Errorf("run.revoke failed_steps = %v, want %v", d.Failed, want)
 	}
 }
 

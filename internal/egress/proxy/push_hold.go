@@ -96,9 +96,16 @@ func appPushTarget(orgRepo string, grantID uuid.UUID) pushTarget {
 
 // patPushTarget is the git_pat lane's: the host and the path git named,
 // less the receive-pack verb — "dev.azure.com/org/project/_git/repo" on Azure
-// DevOps.
-func patPushTarget(host, rest string, g PATGrant) pushTarget {
+// DevOps. With canonical (Config.CanonicalPushRepos) a github.com path drops
+// ".git" and is lowercased, as parseGitBrokerPath keys the App lane: GitHub
+// resolves every such spelling to one repository. Any other forge's path,
+// Azure DevOps' included, stays as git named it; the host is already
+// lowercased (parsePATBrokerPath).
+func patPushTarget(host, rest string, g PATGrant, canonical bool) pushTarget {
 	repo := strings.Trim(strings.TrimSuffix(rest, "/git-receive-pack"), "/")
+	if canonical && host == githubHost {
+		repo = strings.ToLower(strings.TrimSuffix(repo, ".git"))
+	}
 	return pushTarget{repo: host + "/" + repo, actsAs: string(types.GrantGitPAT) + ":" + g.GrantID.String()}
 }
 

@@ -31,6 +31,8 @@ export function ApprovalsTab({
   onDecide,
   onAdoDecide,
   onPushDecide,
+  onTakeOver,
+  onDecline,
   viewerBlocked = false,
   refused,
 }: {
@@ -41,6 +43,9 @@ export function ApprovalsTab({
   onDecide: (id: string, action: "approve" | "deny", kind: ApprovalRequest["kind"]) => void;
   onAdoDecide: (id: string, approve: boolean, opts: [DecisionOptions]) => Promise<void>;
   onPushDecide: (id: string, approve: boolean) => Promise<void>;
+  // #2963 — a "Needs you" request: Take over goes to the run's Overview, under its banner.
+  onTakeOver?: () => void;
+  onDecline?: (id: string) => Promise<void>;
   /** The pending decisions are ones this viewer cannot make (viewerBlockedOnDecision). */
   viewerBlocked?: boolean;
   /** Requests the server refused this viewer with capability_egress_host. */
@@ -90,6 +95,8 @@ export function ApprovalsTab({
                 onAct={(action) => onDecide(a.id, action, a.kind)}
                 onAdoDecide={onAdoDecide}
                 onPushDecide={onPushDecide}
+                onTakeOver={onTakeOver}
+                onDecline={onDecline}
                 refused={refused?.has(a.id)}
               />
             ),

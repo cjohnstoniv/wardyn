@@ -175,6 +175,11 @@ func TestResidentClassPins_AuthorClassifyDeliver(t *testing.T) {
 			if got := placeholderOf(spec, c, g.ID); got != placement.ResidentPlaceholder(g.ID) {
 				t.Fatalf("the spec carries %q where the placeholder belongs", got)
 			}
+			for _, m := range spec.ProxyConfig.ResidentMints {
+				if m.Kind == types.GrantSSHKey && m.Host != c.host {
+					t.Fatalf("the resident ssh_key names SSH host %q, want %q", m.Host, c.host)
+				}
+			}
 			if b, _ := json.Marshal(spec); bytes.Contains(b, []byte(strings.TrimSpace(val))) {
 				t.Fatalf("the spec carries the value: %s", b)
 			}

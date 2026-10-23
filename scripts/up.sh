@@ -683,7 +683,7 @@ cmd_up() {
   # 330s is wardynd's own boot budget (30s connect + the default 300s WARDYN_MIGRATE_TIMEOUT),
   # the same sum setup.sh's host-mode wait and the chart's startupProbe use: a shorter wait
   # fails the stack while a slow migration is still working.
-  _deadline=$((SECONDS + 330))
+  _deadline=$(( $(date +%s) + 330 ))
   _tries=0
   # -m 3 (the shape the WSL-reachability probe below uses): a peer that ACCEPTS
   # and never replies hangs an unbounded curl forever, so the deadline below
@@ -691,7 +691,8 @@ cmd_up() {
   until { [ -n "${_cid}" ] && [ "$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${_cid}" 2>/dev/null)" = "healthy" ]; } \
         || curl -fsS -m 3 "${_url}/healthz" >/dev/null 2>&1; do
     _tries=$((_tries + 1))
-    if [ "${SECONDS}" -ge "${_deadline}" ]; then
+    _now=$(date +%s)
+    if [ "${_now}" -ge "${_deadline}" ]; then
       compose logs --tail 50 wardynd
       die "wardynd did not become healthy within 330s — see logs above (or: docker compose -f ${COMPOSE_FILE} logs wardynd)"
     fi

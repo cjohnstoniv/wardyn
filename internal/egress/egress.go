@@ -107,6 +107,10 @@ type DecisionLog struct {
 	// Refusal, on a deny row, says whose refusal it was: Wardyn's, a peer outside it, or
 	// unknown. Nil on every allow and on every deny the proxy does not classify.
 	Refusal *Refusal `json:"refusal,omitempty"`
+	// MatchedRule is the tool_rules key that answered a policy:tool-allow or
+	// policy:tool-deny row: the tool or "*", prefixed "<harness>:" under
+	// per-harness rules. Empty on every other row.
+	MatchedRule string `json:"matched_rule,omitempty"`
 }
 
 // ScanSummary is the CONTENT-FREE summary of one LLM content-inspection pass.
@@ -120,7 +124,7 @@ type ScanSummary struct {
 	Action     string        `json:"action"`                // "alert" | "block" | "skip" | "bypass" | "fail"
 	Channel    string        `json:"channel,omitempty"`     // e.g. "anthropic.messages"
 	Skipped    bool          `json:"skipped,omitempty"`     // a span/the body was not fully scanned
-	SkipReason string        `json:"skip_reason,omitempty"` // "span_oversize" | "parse_error" | "sidecar_error" | "body_oversize" | "uninspected_channel" | "findings_capped"
+	SkipReason string        `json:"skip_reason,omitempty"` // "span_oversize" | "parse_error" | "sidecar_error" | "sidecar_call_cap" | "body_oversize" | "uninspected_channel" | "findings_capped"
 	Findings   []ScanFinding `json:"findings,omitempty"`
 	// FindingsCapped and FindingsPastCap put the per-request findings cap ON
 	// THE WIRE, since Findings above carries at most the cap's worth of rows

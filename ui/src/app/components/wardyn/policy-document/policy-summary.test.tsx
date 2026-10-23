@@ -256,8 +256,12 @@ describe("PolicySummary — facts, launch checks, marks and hidden values", () =
     const { container } = render(<PolicySummary spec={spec} />);
     const folder = row("Files and code", "Folders from the host");
     expect(folder).toHaveTextContent("/mnt/shared · Read-only" + "Hidden");
+    // A host path is the super admin's alone; a secret name is hidden only below the security tier.
+    const mount = within(folder).getByRole("note", { name: "Hidden. Only a super admin can see this." });
+    expect(mount).toHaveAttribute("title", "Only a super admin can see this.");
+    expect(mount).toHaveAttribute("tabindex", "0");
     const notes = screen.getAllByRole("note", { name: "Hidden. Only admins can see this." });
-    expect(notes).toHaveLength(2);
+    expect(notes).toHaveLength(1);
     expect(notes[0]).toHaveAttribute("title", "Only admins can see this.");
     expect(notes[0]).toHaveAttribute("tabindex", "0");
     expect(container).not.toHaveTextContent("<redacted>");

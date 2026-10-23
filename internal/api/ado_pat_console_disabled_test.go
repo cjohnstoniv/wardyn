@@ -173,3 +173,30 @@ func TestADODisconnect_UsableRowAlsoForgetsWithdrawnRowSignIns(t *testing.T) {
 		t.Errorf("ado_pat.disconnect rows = %+v, want the usable row then %q", rows, second.ID)
 	}
 }
+
+// A disconnect also forgets a sign-in stored under a row since deleted from site config: the
+// person's every stored Azure DevOps sign-in goes, whether or not its row still exists.
+func TestADODisconnect_ForgetsSignInUnderADeletedRow(t *testing.T) {
+	fx := newADOConsoleLane(t, false)
+	git := fx.st.site.WorkspaceProviders.Git
+	const deleted = "ado-row-gone"
+	held := fx.srv.cfg.Secrets.For(fx.subject)
+	if err := held.Put(context.Background(), adoEntraSecretName(deleted), []byte("{}")); err != nil {
+		t.Fatal(err)
+	}
+
+	if w := fx.disconnect(t, fx.subject); w.Code != http.StatusNoContent {
+		t.Fatalf("disconnect = %d %s, want 204", w.Code, w.Body.String())
+	}
+	names, err := held.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(names, adoEntraSecretName(deleted)) {
+		t.Error("the sign-in under a deleted row survived the disconnect")
+	}
+	rows := fx.audit.find(adoPATAuditDisconnect)
+	if len(rows) != 2 || rows[0].Target != git[0].ID || rows[1].Target != deleted {
+		t.Errorf("ado_pat.disconnect rows = %+v, want the usable row then %q", rows, deleted)
+	}
+}

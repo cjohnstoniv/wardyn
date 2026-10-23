@@ -25,7 +25,7 @@ const policy = (names: string) => names.split(" ").map((n) => `inline_policy.${n
 
 const POLICY_REVIEW = "allowed_domains denied_domains allow_all_egress first_use_approval first_use_hold_seconds max_holds " +
   "allowed_methods eligible_grants tool_rules harness_inner_walls git_push_any_branch push_rules azure_devops_capabilities github_capabilities";
-const POLICY_DOCUMENT = "auto_stop_after_sec ui_apps llm_inspection recording min_confinement_class workspace_mounts workspace_repos resources";
+const POLICY_DOCUMENT = "auto_stop_after_sec ui_apps desktop llm_inspection recording min_confinement_class workspace_mounts workspace_repos resources";
 
 /**
  * Policy rows go to Review, never to Tools and access: that step writes only
@@ -41,7 +41,7 @@ export const FIELD_HOME: Record<string, FieldHome> = {
   ...homes("document", "ends_after_sec no_end image allowed_image devcontainer_repo devcontainer_ref placement runner_id " +
     "policy_id preset preset_version agent task repo workspace_id interactive task_mode interactive_start seed_auto_tools " +
     "tool_approvals integration_id model_provider"),
-  ...homes("excluded", "title description mode_contract max_wait_sec start_at start_time_zone policy_overlay local_folder keep_work_folder"),
+  ...homes("excluded", "title description mode_contract max_wait_sec start_at start_time_zone policy_overlay local_folder keep_work_folder machine_kind run_in"),
   ...homes("review", policy(POLICY_REVIEW)),
   ...homes("document", policy(POLICY_DOCUMENT)),
 };
@@ -58,11 +58,11 @@ export const FIELD_HOME_OVERRIDES: Record<string, FieldHome> = {
 };
 
 export const REVIEW_GROUP_OF_FIELD: Record<string, ReviewGroupId> = {
-  ...groups("run", "shape experience workload interactive task_mode interactive_start agent task preset preset_version title description mode_contract max_wait_sec start_at start_time_zone policy_overlay local_folder"),
-  ...groups("where", "runner_pool_id confinement_class placement runner_id image allowed_image devcontainer_repo devcontainer_ref " +
+  ...groups("run", policy("ui_apps") + " shape experience workload interactive task_mode interactive_start agent task preset preset_version title description mode_contract max_wait_sec start_at start_time_zone policy_overlay local_folder"),
+  ...groups("where", "machine_kind run_in runner_pool_id confinement_class placement runner_id image allowed_image devcontainer_repo devcontainer_ref " +
     policy("min_confinement_class")),
   ...groups("work", "workspaces drive drives start_folder no_repositories_or_drives keep_work_folder repo workspace_id " + policy("workspace_mounts workspace_repos")),
-  ...groups("tools", "tools startup components model_provider integration_id seed_auto_tools tool_approvals " + policy("ui_apps")),
+  ...groups("tools", "tools startup components model_provider integration_id seed_auto_tools tool_approvals " + policy("desktop")),
   ...groups("access", "overrides policy_id inline_policy " + policy(`${POLICY_REVIEW} llm_inspection recording`)),
   ...groups("limits", "resources ends_after_sec no_end " + policy("resources auto_stop_after_sec")),
 };
@@ -91,6 +91,8 @@ export const HOME_OF_REASON: Record<KnownLaunchReason, FieldHome> = {
   run_mode_required: "run", run_mode_invalid: "run", run_mode_conflict: "run", run_background_only: "run",
   start_folder_invalid: "files", main_drive_unenforceable: "files",
   run_shape_conflict: "shape",
+  // An application needs its app, so the way out is the shape: pick another, since the console has no field for the app.
+  run_application_ui_apps_denied: "shape",
   runner_pool_invalid: "run", runner_pool_required: "run", runner_pool_not_found: "run", runner_pool_unavailable: "run",
   runner_pool_default_unavailable: "run", runner_pool_stale: "run", runner_pool_no_eligible_member: "run",
   runner_pool_member_mismatch: "run", runner_pools_unavailable: "run", runner_pool_run_type_not_allowed: "run", runner_pool_run_type_missing: "run",

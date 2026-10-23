@@ -10,6 +10,7 @@ allowed_peers
 attribution
 attribution.email
 attribution.layer
+attribution.locked
 attribution.name
 attribution.overridden
 attribution.owner
@@ -32,6 +33,7 @@ azure_gates.host
 azure_gates.models
 azure_gates.route
 brokered_pat_grant_ids
+canonical_push_repos
 control_plane_ca_pem
 control_plane_url
 decision_buffer_size
@@ -117,6 +119,11 @@ policy.allowed_methods
 policy.auto_stop_after_sec
 policy.azure_devops_capabilities
 policy.denied_domains
+policy.desktop
+policy.desktop.copy_out
+policy.desktop.download
+policy.desktop.paste_in
+policy.desktop.upload
 policy.eligible_grants
 policy.eligible_grants.kind
 policy.eligible_grants.owner_only
@@ -201,6 +208,7 @@ push_rule_sets.rules.require_review_paths
 resident_mints
 resident_mints.expires_at
 resident_mints.grant_id
+resident_mints.host
 resident_mints.kind
 resident_mints.known_hosts
 resident_mints.token
@@ -209,6 +217,7 @@ run_id
 run_token
 scrub_responses
 self_lapse
+signin_listen
 trusted_ca_pem
 unattended
 upstream_proxy_no_proxy

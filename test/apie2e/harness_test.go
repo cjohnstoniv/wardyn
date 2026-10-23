@@ -225,6 +225,12 @@ func (s *approvalService) ExpireOne(ctx context.Context, id uuid.UUID, actor, re
 func (s *approvalService) CountForRun(ctx context.Context, runID uuid.UUID) (int, error) {
 	return s.st.CountApprovalsForRun(ctx, runID)
 }
+func (s *approvalService) TakeOver(ctx context.Context, id uuid.UUID, holder string) (types.ApprovalRequest, string, error) {
+	return s.st.TakeOverApproval(ctx, id, holder)
+}
+func (s *approvalService) HandBack(ctx context.Context, id uuid.UUID, holder string, at time.Time) (types.ApprovalRequest, error) {
+	return s.st.HandBackApproval(ctx, id, holder, at)
+}
 
 // ListApprovalsPage is the OPTIONAL paged lister the api handler type-asserts
 // for (same pattern as store.Pager): the console polls four single-state lists

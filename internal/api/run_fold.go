@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -59,6 +60,10 @@ type runFold struct {
 	// the primary leading); wsRefs adds every other one the spec references.
 	seed   workspaceSeed
 	wsRefs []types.Workspace
+	// signinImageUngranted: the person's own image keeps its desktop sign-ins
+	// off at dispatch (signinVariantUngranted), decided here with the caller's
+	// identity, which the detached launch does not hold.
+	signinImageUngranted bool
 	// attachments is the run's mount map and startFolder its one working
 	// directory (WARDYN_START_FOLDER), both from stepWorkspaces.
 	attachments        []client.RunAttachment
@@ -214,6 +219,7 @@ var runFoldSteps = []runFoldStep{
 func (s *Server) foldRunRequest(w http.ResponseWriter, r *http.Request, mode foldMode,
 	req *createRunRequest, ceiling governanceCeiling, reqCC types.ConfinementClass,
 ) (runFold, bool) {
+	r = r.WithContext(context.WithValue(r.Context(), workspaceListKey{}, &workspaceListMemo{}))
 	f := runFold{mode: mode, w: w, r: r, req: req, ceiling: ceiling, reqCC: reqCC, promoted: startingPromoted(r.Context())}
 	rec := &foldRecorder{}
 	for _, step := range runFoldSteps {

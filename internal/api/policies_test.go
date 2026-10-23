@@ -117,7 +117,7 @@ func TestRedactPolicyForRead(t *testing.T) {
 			},
 		},
 	}
-	got := redactPolicyForRead(p, true)
+	got := redactPolicyForRead(p, specReadFull)
 	if got.Spec.LLMInspection == nil {
 		t.Fatal("llm_inspection dropped entirely; want it kept (only values redacted)")
 	}
@@ -137,7 +137,7 @@ func TestRedactPolicyForRead(t *testing.T) {
 
 	// A policy with no llm_inspection (or no values) passes through unchanged.
 	plain := types.RunPolicy{Spec: types.RunPolicySpec{MinConfinementClass: types.CC1}}
-	if got := redactPolicyForRead(plain, true); got.Spec.LLMInspection != nil {
+	if got := redactPolicyForRead(plain, specReadFull); got.Spec.LLMInspection != nil {
 		t.Errorf("a policy with no llm_inspection must pass through unchanged, got %+v", got.Spec.LLMInspection)
 	}
 }

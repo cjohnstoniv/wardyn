@@ -100,7 +100,7 @@ type MeDrive struct {
 	// caller's top-ranked grant.
 	Legacy bool `json:"legacy"`
 	// UnavailableReason is why a run cannot attach this drive now: paused,
-	// unmountable, placement_denied or not_in_pool. "" when it can.
+	// unmountable, placement_denied, not_in_pool or bound_elsewhere. "" when it can.
 	UnavailableReason string `json:"unavailable_reason,omitempty"`
 	// Owned is true for a drive the caller created (POST /me/drives). Only an
 	// owned drive takes DELETE /me/drives/{id}.
@@ -117,6 +117,18 @@ type MeDrive struct {
 	// KeptFromRunTitle is that run's title when the catalogue was read; "" when
 	// the run is gone or has no title.
 	KeptFromRunTitle string `json:"kept_from_run_title,omitempty"`
+	// MountsFrom is where the drive mounts from, printed as it is: "Organisation runners", and the runner
+	// its second place is bound to when that runner is the caller's own.
+	MountsFrom string `json:"mounts_from,omitempty"`
+	// MountedFrom is set when the pool read is one of the caller's own runners the drive's second place is
+	// bound to: that runner's name and the share's path on it.
+	MountedFrom *MeDriveMountedFrom `json:"mounted_from,omitempty"`
+}
+
+// MeDriveMountedFrom is the second place a run in the pool read mounts the drive from.
+type MeDriveMountedFrom struct {
+	Runner string `json:"runner"`
+	Path   string `json:"path"`
 }
 
 // MemberDriveCreateRequest is POST /api/v1/me/drives: a person creates their

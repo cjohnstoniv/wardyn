@@ -4,7 +4,7 @@
  */
 
 import * as React from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Bot, Check, ChevronRight, Code2, ShieldCheck, X } from "lucide-react";
 import {
   canDecideApproval,
@@ -25,6 +25,7 @@ import { RunContextRow } from "../wardyn/run-context-row";
 import { JsonBlock } from "../wardyn/yaml-block";
 import { AdoCapabilityCard } from "../wardyn/ado-capability-card";
 import { isPushContentRequest, PushContentCard } from "../wardyn/push-content-card";
+import { isTakeoverRequest, TakeoverCard } from "../wardyn/takeover-card";
 import { REAUTH_ROW, reauthAudience } from "../wardyn/model-access-copy";
 import { useClaimModelAccessDoor, useModelAccessDoor, useShellSetupStatus } from "../wardyn/model-access-context";
 import { resolveDoor } from "../../lib/model-access";
@@ -49,6 +50,8 @@ export function ApprovalCard({
   onAct,
   onAdoDecide,
   onPushDecide,
+  onTakeOver,
+  onDecline,
   refused = false,
 }: {
   item: ApprovalRequest;
@@ -65,6 +68,10 @@ export function ApprovalCard({
   // #181 — the push_content card's own decide path; see decidePushDirect's
   // doc above for why it bypasses onAct/ReasonDialog too, minus the scope.
   onPushDecide: (id: string, approve: boolean) => Promise<void>;
+  // #2963 — a "Needs you" request's Decline (Take over opens the run instead).
+  onDecline?: (id: string) => Promise<void>;
+  // A caller on the run's own page opens its Overview for Take over instead of navigating.
+  onTakeOver?: () => void;
   // The server refused this viewer's decision with capability_egress_host: the caps read cannot see it
   // (the run page passes none), so the refusal itself turns the buttons off.
   refused?: boolean;
@@ -162,6 +169,8 @@ export function ApprovalCard({
   // enough to spin only the pressed button. The push card follows the same rule.
   const [adoBusy, setAdoBusy] = React.useState<"approve" | "deny" | null>(null);
   const [pushBusy, setPushBusy] = React.useState<"approve" | "deny" | null>(null);
+  const [takeoverBusy, setTakeoverBusy] = React.useState(false);
+  const navigate = useNavigate();
   // N1 (round 2): ApprovalCard only ever receives PENDING rows today
   // (pendingItems is fetched via api.listApprovals("PENDING")), but the
   // state check is explicit here too — defense-in-depth against this
@@ -199,6 +208,26 @@ export function ApprovalCard({
   // branch, the paths under review) this generic card has no slot for, and
   // an admin-only decide with no scope menu (see push-content-card.tsx's own
   // doc). Same "PENDING only" defense-in-depth as the ADO branch above.
+  // #2963 — a "Needs you" request is answered on its run: Take over opens it there, where the
+  // banner drives the takeover; Decline answers it here.
+  if (isTakeoverRequest(item) && item.state === "PENDING") {
+    return (
+      <div className="space-y-2">
+        {runRow}
+        <TakeoverCard
+          item={item}
+          busy={takeoverBusy}
+          onTakeOver={() => (onTakeOver ? onTakeOver() : void navigate(runPath(view, item.run_id)))}
+          onDecline={async () => {
+            setTakeoverBusy(true);
+            await onDecline?.(item.id);
+            setTakeoverBusy(false);
+          }}
+        />
+      </div>
+    );
+  }
+
   if (isPushContentRequest(item) && item.state === "PENDING") {
     return (
       <div className="space-y-2">

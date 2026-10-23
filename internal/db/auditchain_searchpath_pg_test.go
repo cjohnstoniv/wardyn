@@ -122,9 +122,15 @@ func TestPG_ChainTriggerWorksOutsideThePublicSchema(t *testing.T) {
 		return rowHash, prevHash
 	}
 
+	// A fresh schema's only row is its own fresh-install seed (fresh_seed.go), written through the same
+	// chain: the probe's first row chains to it, never to another schema's head.
+	var head string
+	if err := pool.QueryRow(ctx, `SELECT row_hash FROM audit_events WHERE action = 'governance.boundary.seed'`).Scan(&head); err != nil {
+		t.Fatalf("read this schema's seed row: %v", err)
+	}
 	first, firstPrev := append1("test.searchpath.nonpublic.1")
-	if firstPrev != "" {
-		t.Fatalf("the first row of a FRESH schema chained to prev_hash %q; the head read reached another schema's audit_events", firstPrev)
+	if firstPrev != head {
+		t.Fatalf("the first row of a FRESH schema chained to prev_hash %q, not its seed row's %q; the head read reached another schema's audit_events", firstPrev, head)
 	}
 	_, secondPrev := append1("test.searchpath.nonpublic.2")
 	if secondPrev != first {

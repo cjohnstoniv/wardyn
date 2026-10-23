@@ -85,6 +85,60 @@ func TestPG_ListPendingApprovalsForRuns(t *testing.T) {
 	}
 }
 
+// TestPG_ListPendingApprovalsByKind pins PendingApprovalsByKindPager's contract: the PENDING rows of
+// the one kind, fleet-wide, and exactly the rows a Go filter over the whole pending list keeps.
+func TestPG_ListPendingApprovalsByKind(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+
+	runA := persistRun(t, ctx, pool, newRun(types.RunRunning)).ID
+	runB := persistRun(t, ctx, pool, newRun(types.RunRunning)).ID
+	mk := func(runID uuid.UUID, kind types.ApprovalKind, decide types.ApprovalState) types.ApprovalRequest {
+		ap, err := pg.CreateApproval(ctx, types.ApprovalRequest{
+			ID: uuid.New(), RunID: runID, Kind: kind,
+			RequestedScope: json.RawMessage(`{"host":"h` + uuid.New().String() + `","mode":"wait_for_review"}`),
+			State:          types.ApprovalPending, RequestedAt: time.Now().UTC(),
+		})
+		if err != nil {
+			t.Fatalf("create approval: %v", err)
+		}
+		if decide != "" {
+			if _, err := pg.DecideApproval(ctx, ap.ID, types.ApprovalDecision{State: decide, DecidedBy: "tester"}); err != nil {
+				t.Fatalf("decide approval: %v", err)
+			}
+		}
+		return ap
+	}
+	mk(runA, types.ApprovalCredentialReauth, types.ApprovalApproved)
+	mk(runA, types.ApprovalEgressDomain, "")
+	mk(runA, types.ApprovalToolCall, "")
+	mk(runB, types.ApprovalCredentialReauth, "")
+	mk(runA, types.ApprovalCredentialReauth, "")
+
+	got, err := pg.ListPendingApprovalsByKind(ctx, types.ApprovalCredentialReauth)
+	if err != nil {
+		t.Fatalf("ListPendingApprovalsByKind: %v", err)
+	}
+	all, err := pg.ListApprovals(ctx, types.ApprovalPending)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want []uuid.UUID
+	for _, ap := range all {
+		if ap.Kind == types.ApprovalCredentialReauth {
+			want = append(want, ap.ID)
+		}
+	}
+	var ids []uuid.UUID
+	for _, ap := range got {
+		ids = append(ids, ap.ID)
+	}
+	if len(want) != 2 || !slices.Equal(ids, want) {
+		t.Fatalf("by kind = %v, want the Go-filtered pending credential_reauth rows %v (2 of them)", ids, want)
+	}
+}
+
 // TestPG_CountPendingApprovals pins the deployment-wide count GET
 // /me/attention's admin view answers with: every PENDING row, regardless of
 // which run raised it, and nothing else.

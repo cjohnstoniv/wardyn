@@ -341,7 +341,8 @@ func TestAttachPump_FenceErrorTellsTheWriterItsInputWasDropped(t *testing.T) {
 	if readOnly, _ := srv.registerAttachHolder(leaseCovRun, alice.h); readOnly {
 		t.Fatal("the first client was admitted read-only")
 	}
-	alice.h.lease.verified.Store(time.Now().Add(-time.Hour).UnixNano())
+	old := time.Now().Add(-time.Hour)
+	alice.h.lease.verified.Store(&old)
 	leases.fail("holds", errors.New("database stalled"))
 	sess := newGatedSession()
 	defer sess.Close()

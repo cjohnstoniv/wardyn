@@ -6,6 +6,7 @@ package sinks
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
@@ -53,12 +54,27 @@ type SyslogConfig struct {
 	Addr string `json:"addr,omitempty"`
 }
 
+// decodeConfig refuses a key no sink block knows, and anything after the object:
+// a typo such as "syslg" would otherwise parse to no sink and boot with forwarding off.
+func decodeConfig(cfgJSON []byte) (Config, error) {
+	var cfg Config
+	dec := json.NewDecoder(bytes.NewReader(cfgJSON))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&cfg); err != nil {
+		return Config{}, err
+	}
+	if dec.More() {
+		return Config{}, errors.New("unexpected data after the config object")
+	}
+	return cfg, nil
+}
+
 // ParseSinks parses cfgJSON into the enabled sinks, for wrapping in a Fanout;
 // the caller must Close() any Closer sinks (SyslogSink, FileSink) on
 // shutdown, including any sinks returned alongside an error.
 func ParseSinks(cfgJSON []byte) ([]audit.Sink, error) {
-	var cfg Config
-	if err := json.Unmarshal(cfgJSON, &cfg); err != nil {
+	cfg, err := decodeConfig(cfgJSON)
+	if err != nil {
 		return nil, fmt.Errorf("sinks.ParseSinks: invalid JSON: %w", err)
 	}
 	var out []audit.Sink
@@ -112,8 +128,8 @@ func AcknowledgedWebhook(cfgJSON []byte) (*WebhookConfig, error) {
 	if len(bytes.TrimSpace(cfgJSON)) == 0 {
 		return nil, nil
 	}
-	var cfg Config
-	if err := json.Unmarshal(cfgJSON, &cfg); err != nil {
+	cfg, err := decodeConfig(cfgJSON)
+	if err != nil {
 		return nil, fmt.Errorf("sinks.AcknowledgedWebhook: invalid JSON: %w", err)
 	}
 	if cfg.Webhook == nil || cfg.Webhook.Delivery != DeliveryAcknowledged {

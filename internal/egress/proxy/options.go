@@ -108,6 +108,8 @@ type Options struct {
 	Unattended bool
 	// ScrubResponses is Config.ScrubResponses.
 	ScrubResponses bool
+	// CanonicalPushRepos is Config.CanonicalPushRepos.
+	CanonicalPushRepos bool
 	// Attribution is Config.Attribution, already re-projected by LoadConfigBytes.
 	Attribution *policyref.Ref
 

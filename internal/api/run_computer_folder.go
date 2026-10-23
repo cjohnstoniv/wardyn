@@ -189,7 +189,7 @@ const computerFolderStalls = 2
 
 // bringComputerFolderBack is the pass that brings the sandbox's changes back to the person's
 // computer when a "both" run ends: after the revoke cascade, before the sandbox is stopped. A run
-// whose folder never seeded, or that has no such folder, is left alone. The pass ends
+// whose folder never seeded, or that has no such folder, (or whose changes a pass already brought back: a later end of the same run, such as its runner's exit) is left alone. The pass ends
 // runTeardownBudget before ctx's deadline, so the teardown after it keeps its time. Its reads
 // before the pass and its record after it are each on a teardownCtx, which outlives ctx's
 // deadline and cancel.
@@ -213,6 +213,12 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 		cancel()
 		return false
 	}
+	if ss, ok := s.cfg.Store.(store.RunLocalFolderStatuses); ok {
+		if rec, err := ss.RunLocalFolderStatus(rctx, runID); err == nil && rec.Back != nil && rec.Back.Error == "" {
+			cancel()
+			return false
+		}
+	}
 	run, err := s.cfg.Store.GetRun(rctx, runID)
 	cancel()
 	if err != nil {
@@ -226,10 +232,23 @@ func (s *Server) bringComputerFolderBack(ctx context.Context, runID uuid.UUID, r
 	qerr := s.quiesceKeptSandbox(qctx, run, ref)
 	qcancel()
 	var cannot notQuiescable
+	if errors.As(qerr, &cannot) {
+		if _, ok := bringBackBy(ctx); ok {
+			// The person ended the run to bring the folder back: where the sandbox cannot be quiesced
+			// (a runner's), nothing may write during the pass, so the agent is stopped first.
+			if err := s.stopAgentForPass(ctx, ref); err != nil {
+				slog.WarnContext(ctx, "wardynd: stop the agent before a bring-back", slog.String("run_id", runID.String()), slog.Any("err", err))
+				qerr = fmt.Errorf("the agent could not be stopped: %w", err)
+			}
+		}
+	}
 	if qerr != nil && !errors.As(qerr, &cannot) {
 		rctx, cancel = teardownCtx(ctx)
 		defer cancel()
 		errText := folderBackGivenUp("no pass ran", "its agent and egress could not be stopped first: "+qerr.Error(), 0)
+		if _, ok := bringBackBy(ctx); ok {
+			errText = bringBackAgentRunningMsg
+		}
 		if errors.Is(qerr, errSandboxStopped) {
 			errText = "no pass ran; the sandbox had already stopped, with its changes not brought back yet, uncounted"
 		}
@@ -348,8 +367,8 @@ const keptAgentStopWait = 2 * time.Second
 // pass. Its proxy is stopped and removed (runner.ProxyStopper, as for a run lost to an outage), so
 // nothing in it has egress, and its agent's processes are killed and seen ended (AgentStatus). The
 // pass back is untouched: it is an exec through the substrate (execSFTPServer), not traffic
-// through the proxy. It answers notQuiescable for a run on a runner, whose stop_proxy is a lost
-// run's containment, queued only with its loss (a Kubernetes runner's deletes the agent pod when
+// through the proxy. It answers notQuiescable for a linux_vm run, whose guest the server's Docker
+// cannot reach, and for a run on a runner, whose stop_proxy is a lost run's containment, queued only with its loss (a Kubernetes runner's deletes the agent pod when
 // it cannot prove the stop), and for a substrate that cannot stop its proxy alone (Kubernetes in
 // server mode). An exec-less sandbox, whose agent is its main process, is refused outright: its
 // agent ends only with the sandbox, so no pass runs. A sandbox already stopped answers
@@ -357,6 +376,9 @@ const keptAgentStopWait = 2 * time.Second
 func (s *Server) quiesceKeptSandbox(ctx context.Context, run types.AgentRun, ref string) error {
 	if run.RunnerID != nil {
 		return notQuiescable("a sandbox on a runner is not kept")
+	}
+	if run.MachineKind.IsVM() {
+		return notQuiescable("a virtual machine is not quiesced from the server's Docker")
 	}
 	stopper, ok := s.cfg.Runner.(runner.ProxyStopper)
 	if !ok {
@@ -398,6 +420,11 @@ func (s *Server) quiesceKeptSandbox(ctx context.Context, run types.AgentRun, ref
 	for {
 		st, err := s.cfg.Runner.AgentStatus(ctx, ref, run.AgentExecID)
 		if err == nil && st.State != types.RunRunning {
+			// The agent's own exec has ended; a process of another user, which keptAgentKill could not
+			// signal, would survive unseen, so only the sandbox's init may be left.
+			if err := s.verifyAgentGone(ctx, ref); err != nil {
+				return s.unlessStopped(ctx, ref, fmt.Errorf("its agent could not be stopped: %w", err))
+			}
 			return nil
 		}
 		if time.Now().After(deadline) {
@@ -501,17 +528,22 @@ func (s *Server) computerFolderPassWithin(ctx context.Context, d time.Duration, 
 }
 
 // auditComputerFolderPass records one pass as run.folder.transfer: direction seed (the computer to
-// the sandbox, before the agent starts) or back (the sandbox to the computer, when the run ends).
+// the sandbox, before the agent starts), back (the sandbox to the computer, when the run ends) or
+// bring_back (the same pass, when the person ended the run to bring the folder back; they are its actor).
 func (s *Server) auditComputerFolderPass(ctx context.Context, runID uuid.UUID, folder types.RunLocalFolder, back bool, res runnerwire.FolderPass, errText string) {
 	data := map[string]any{"folder": folder.Name, "remote_dir": folder.RemoteDir, "direction": "seed", "files": res.Pushed, "bytes": res.BytesOut}
+	actorType, actor := types.ActorSystem, "wardynd"
 	if back {
 		data["direction"], data["files"], data["bytes"] = "back", res.Pulled, res.BytesIn
+		if by, ok := bringBackBy(ctx); ok {
+			data["direction"], actorType, actor = "bring_back", by.actorType, by.principal
+		}
 	}
 	outcome := "success"
 	if errText != "" {
 		outcome, data["error"] = "failure", localFolderSeedError(errText)
 	}
-	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.folder.transfer", runID.String(), outcome, mustJSON(data)))
+	s.recordAudit(ctx, s.auditEvent(&runID, actorType, actor, "run.folder.transfer", runID.String(), outcome, mustJSON(data)))
 }
 
 func folderPassRecord(now time.Time, res runnerwire.FolderPass, errText string, back bool) *types.FolderPassRecord {

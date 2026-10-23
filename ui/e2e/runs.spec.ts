@@ -36,7 +36,7 @@ import type { Page } from "@playwright/test";
 // the old title-grouped board needed one. State is asserted via the row's own
 // status WORD (runs/runs-model.ts's rowPresentation), never CSS classes:
 //   PENDING "Pending", STARTING "Starting", RUNNING "Running",
-//   WAITING_FOR_CONFIRMATION "Awaiting confirmation", COMPLETED "Completed",
+//   WAITING_FOR_CONFIRMATION "1 decision needs you", COMPLETED "Completed",
 //   STOPPED "Stopped", FAILED "Failed", KILLED "Killed", ARCHIVED "Archived".
 // Barriers, the agent monogram and the Run ID moved to the run page — none of
 // them render on this page anymore (design.md §4).
@@ -111,6 +111,19 @@ test.describe("Runs landing — the seeded 9-fixture backend", () => {
       await expect(page.getByText("e2e fixture 4")).toBeVisible({ timeout: 3_000 });
       await expect(page.getByText("e2e fixture 0", { exact: true })).toHaveCount(0);
     }).toPass({ timeout: 15_000 });
+  });
+
+  test("a search leaves the 'Your runs · N' total alone", async ({ page }) => {
+    await openRuns(page);
+    const total = page.getByText(/^Your runs · \d+\+?$/);
+    const before = await total.textContent();
+    const search = page.getByLabel("Search runs", { exact: true });
+
+    await expect(async () => {
+      await search.fill("zzz-no-such-run-zzz");
+      await expect(page.getByText("No runs match these filters.")).toBeVisible({ timeout: 3_000 });
+    }).toPass({ timeout: 15_000 });
+    await expect(total).toHaveText(before ?? "");
   });
 
   test("a non-matching search shows the empty state, then recovers when cleared", async ({ page }) => {
@@ -276,7 +289,7 @@ test.describe("Runs landing — real hold-timing edges reaching the row (#509, #
       const row = lane.getByTestId("run-row").filter({ hasText: "e2e long-held solo" });
       await expect(row).toBeVisible();
       await expect(row.getByRole("button", { name: "Review" })).toBeVisible();
-      await expect(row.getByText("1 decision needs you")).toBeVisible();
+      await expect(row.getByText("1 decision needs you", { exact: true })).toBeVisible();
       await expect(row.getByText(RUN_WAIT.waitingHeld(1))).toBeVisible();
       // Review opens the run on its Approvals tab, where the decision card is (#3032).
       await row.getByRole("button", { name: "Review" }).click();

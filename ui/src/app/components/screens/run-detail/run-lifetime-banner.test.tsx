@@ -342,6 +342,22 @@ describe("RunLifetimeBanner — ending soon (M1: Change end… joins Extend 1 da
     expect(screen.queryByText("This run ends in 10 minutes")).not.toBeInTheDocument();
   });
 
+  it("#2532: dismissing one stage does not silence the next one", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const inAnHour = detail({ ends_at: new Date(NOW + 30 * 60_000).toISOString() });
+    const { rerender } = renderBanner(inAnHour);
+    expect(screen.getByText("This run ends in 1 hour")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByText("This run ends in 1 hour")).not.toBeInTheDocument();
+    const soon = detail({ ends_at: new Date(NOW + 9 * 60_000).toISOString() });
+    rerender(
+      <OperatorProvider operator={true} principal={OWNER}>
+        <RunLifetimeBanner run={soon} pending={[]} onChanged={() => {}} />
+      </OperatorProvider>,
+    );
+    expect(screen.getByText("This run ends in 10 minutes")).toBeInTheDocument();
+  });
+
   it("#2596: the warning does not promise a number of days the admin may have changed", () => {
     renderBanner(detail({ ends_at: new Date(NOW + 9 * 60_000).toISOString() }));
     const banner = screen.getByTestId("run-lifetime-warning");

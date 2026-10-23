@@ -112,14 +112,21 @@ export function RecordingScreen() {
   // the New Run rail make. See use-recording-disabled.ts.
   const recordingDisabled = useRecordingDisabled() === true;
 
+  // How many raw rows the server has handed back across the pages fetched so far: the next page's offset.
+  // Not `runs.length` — the held rows are de-duplicated, so a page of rows already shown would advance
+  // nothing, and every later click would ask for that same offset again.
+  const consumed = React.useRef(0);
+
   const load = React.useCallback(() => {
     let cancelled = false;
     setStatus("loading");
     setPageError(false);
+    consumed.current = 0;
     runsApi
       .listRuns({ includeRecordingMeta: true, limit: PAGE_SIZE, offset: 0 })
       .then((got) => {
         if (cancelled) return;
+        consumed.current = got.runs.length;
         setRuns(got.runs);
         setTruncated(got.truncated);
         setStatus("ready");
@@ -134,22 +141,28 @@ export function RecordingScreen() {
 
   React.useEffect(load, [load]);
 
-  // #159: fetch the next PAGE_SIZE rows starting where the loaded set ends.
-  // `runs.length` IS the next offset — every row this screen holds came from
-  // one of these paged fetches, one page at a time, so nothing else can have
-  // advanced it out from under this call.
+  // #159: fetch the next PAGE_SIZE rows starting where the last page ended.
+  // `consumed` is the next offset, advanced by the rows the server returned and
+  // left alone when a page fails. A run created since the last page shifts the
+  // window, so rows already held are skipped by id; that skip never moves the
+  // offset (ponytail: offset paging; keyset paging if a deleted run's skipped
+  // neighbour matters).
   const loadMore = React.useCallback(() => {
     setLoadingMore(true);
     setPageError(false);
     runsApi
-      .listRuns({ includeRecordingMeta: true, limit: PAGE_SIZE, offset: runs.length })
+      .listRuns({ includeRecordingMeta: true, limit: PAGE_SIZE, offset: consumed.current })
       .then((got) => {
-        setRuns((prev) => [...prev, ...got.runs]);
+        consumed.current += got.runs.length;
+        setRuns((prev) => {
+          const held = new Set(prev.map((r) => r.id));
+          return [...prev, ...got.runs.filter((r) => !held.has(r.id))];
+        });
         setTruncated(got.truncated);
       })
       .catch(() => setPageError(true))
       .finally(() => setLoadingMore(false));
-  }, [runs.length]);
+  }, []);
 
   // Fetches the cast for `playing` — and ONLY `playing` — whenever it
   // changes. Nothing here runs while the library is just being browsed.

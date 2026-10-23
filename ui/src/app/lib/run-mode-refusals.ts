@@ -22,6 +22,8 @@ export const RUN_MODE_REASON = {
   BACKGROUND_ONLY: "run_background_only",
   /** shape does not fit the run's experience, workload or tools. */
   SHAPE_CONFLICT: "run_shape_conflict",
+  /** An application run declares an app that the governance profile (deny_ui_apps or its allowed apps) removes. */
+  UI_APPS_DENIED: "run_application_ui_apps_denied",
   /** The harness set: each body names the harness in `tool` (HttpError.tool). */
   HARNESS_NOT_INSTALLED: "harness_not_installed",
   HARNESS_SET_NO_IMAGE: "harness_set_no_image",
