@@ -10,9 +10,11 @@
 // handleHealthz, and server.go's remaining job is the Config/Server wiring they
 // merely read.
 //
-// The reason this handler earns its own file at all: /healthz is ANONYMOUS
-// (routes.go, classAnonymous in authz_test.go's matrix), so every field added
-// here is a disclosure to an unauthenticated caller, and the honesty rules the
+// The reason this handler earns its own file at all: /healthz is reachable
+// ANONYMOUSLY (routes.go, classAnonymous in authz_test.go's matrix), so every
+// field added here is a disclosure to an unauthenticated caller unless the
+// handler drops it for one, as it drops confinement_substrates and components
+// (healthzSignedIn); and the honesty rules the
 // eBPF verdict follows — "healthy" only while events actually arrive, never a
 // claim the stream cannot back — are easier to hold in one place than scattered
 // through the server's constructor.

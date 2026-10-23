@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -37,13 +39,22 @@ func TestHealthz_SignedInFieldCensus(t *testing.T) {
 	session := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
 	tampered := *session
 	tampered.Value += "x"
+	// Signed validly but expired: it passes the presence check, so the gate itself refuses it and clears it.
+	payload, err := json.Marshal(oidc.Session{V: oidc.SessionCodecVersion, Sub: "sub-member", Email: "member@corp.example",
+		Role: oidc.RoleUser, UserType: types.UserTypeStandard, Expiry: time.Now().UTC().Add(-time.Minute)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expired := signedSessionCookie(payload)
 	for name, tc := range map[string]struct {
 		bearer   string
 		cookie   *http.Cookie
 		signedIn bool
+		cleared  bool // the gate's clearing of the cookie reaches the response
 	}{
 		"anonymous":                    {},
 		"a session cookie that fails":  {cookie: &tampered},
+		"an expired session":           {cookie: expired, cleared: true},
 		"a wrong admin token":          {bearer: "not-the-token"},
 		"signed in by session":         {cookie: session, signedIn: true},
 		"signed in by the admin token": {bearer: adminToken, signedIn: true},
@@ -61,6 +72,9 @@ func TestHealthz_SignedInFieldCensus(t *testing.T) {
 			srv.Handler().ServeHTTP(w, r)
 			if w.Code != http.StatusOK {
 				t.Fatalf("status = %d %s, want 200", w.Code, w.Body)
+			}
+			if set := w.Result().Header.Values("Set-Cookie"); tc.cleared && (len(set) != 1 || !strings.Contains(set[0], "Max-Age=0")) {
+				t.Errorf("Set-Cookie = %q, want the one session cookie cleared (Max-Age=0)", set)
 			}
 			var body map[string]json.RawMessage
 			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {

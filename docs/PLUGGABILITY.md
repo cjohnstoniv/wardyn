@@ -10,10 +10,10 @@
 ## 1. The standard
 
 - **Honesty rule (read this first).**
-  - The *shipped out-of-box default* and the *recommended production default* are deliberately kept as **two separate columns** below, and for every seam `/healthz.components` covers — exactly `identity`, `secret_store`, `recording`, `policy_engine`, and `sandbox` —
-  - it reports the **actual running** impl in `components.<seam>.selected`, plus `available` and `source` —
+  - The *shipped out-of-box default* and the *recommended production default* are kept as **two columns** below, and for every seam `/healthz.components` (signed in) covers — exactly `identity`, `secret_store`, `recording`, `policy_engine`, and `sandbox` —
+  - it reports the **running** impl in `components.<seam>.selected`, plus `available` and `source` —
   - the recommended-production column lives in the matrix below and [ROADMAP.md](../ROADMAP.md), because a runtime endpoint reports runtime facts (see §2 step 5).
-  - A row that recommends, say, SPIRE does **not** mean the running binary is SPIRE.
+  - A row that recommends SPIRE does **not** mean the running binary is SPIRE.
   - It means SPIRE is the standard Wardyn recommends converging to, and the seam + a conformance suite are ready to hold an implementation to contract when it lands.
   - Until then, `selected` is what you are running, and `/healthz` says so.
 
@@ -61,12 +61,12 @@
 2. `Register("<name>", <constructor>)` from your package's `init()`.
 3. Make it pass `<seam>test.RunConformance` (a 3-line `_test.go` calling the suite).
 4. Add a row to the matrix below.
-5. For the registry-backed seams — identity, secret store, recording, confinement substrate, and **only** those four; `policy_engine` is NOT among them — it now appears in `/healthz.components.<seam>.available` automatically (`<seam>` ∈ `identity`, `secret_store`, `recording`, `sandbox`)
+5. For the registry-backed seams — identity, secret store, recording, confinement substrate, and **only** those four; `policy_engine` is NOT among them — it appears in `/healthz.components.<seam>.available` (signed in) automatically (`<seam>` ∈ `identity`, `secret_store`, `recording`, `sandbox`)
    - and is selectable via that seam's selector env var — `WARDYN_IDENTITY`, `WARDYN_SECRET_STORE`, and `WARDYN_RECORDING_STORE` respectively
    - (the substrate selects via the `-runner` flag / `WARDYN_RUNNER`;
    - a build-tag-gated impl like the OCI substrate registers — and thus appears — only in builds that compile it, so a tagless binary honestly advertises `sandbox.available: []` and fails closed on `-runner docker`).
    - Seams **without** a registry are wired through their own config knobs and surface elsewhere at runtime, not in `components`:
-     - the LLM gateway and content detection are builtin (proxy-side), audit sinks via `WARDYN_AUDIT_SINKS` (boot log), eBPF ground-truth via `/healthz.ebpf_groundtruth`, and per-class substrate runtimes via `/healthz.confinement_substrates`.
+     - the LLM gateway and content detection are builtin (proxy-side), audit sinks via `WARDYN_AUDIT_SINKS` (boot log), eBPF ground-truth via `/healthz.ebpf_groundtruth`, and per-class substrate runtimes via `/healthz.confinement_substrates` (signed in).
 
 - For the **policy-evaluator**, **egress-gateway**, and **confinement-substrate** seams, also honor the security rules:
   - the evaluator's verdict cannot relax the IP guard / approval FSM;
