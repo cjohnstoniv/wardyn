@@ -308,6 +308,9 @@ export function GovernanceScreen() {
               </div>
             )}
 
+            {/* #3052: with no profiles, the empty state shows only while the editor is closed; an open
+                New profile editor takes its place right under the card's title and lead. Cancel brings it back. */}
+            {!(noProfiles && editorOpen) && (
             <div className="mt-4">
               {status === "loading" ? (
                 <TableSkeleton rows={3} cols={6} />
@@ -403,6 +406,7 @@ export function GovernanceScreen() {
                 </Table>
               )}
             </div>
+            )}
 
             {/* Opens IN PLACE, under the list it edits — not a dialog. The add
                 form below collapses for exactly this span. */}

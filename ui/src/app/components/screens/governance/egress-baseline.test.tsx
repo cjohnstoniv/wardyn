@@ -17,6 +17,7 @@ vi.mock("../../../lib/api/egress-baseline", () => ({
 }));
 
 import { setField } from "../../../../test/set-field";
+import { expectActionBar } from "../../../../test/action-bar";
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import { BASELINE, CHANGES } from "../../../lib/governance-copy";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
@@ -44,6 +45,14 @@ describe("EgressBaselineTab", () => {
     expect(await screen.findByLabelText(BASELINE.HOSTS_LABEL)).toHaveValue("llm.corp.example");
     expect(screen.getByText(BASELINE.LEAD)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: BASELINE.SAVE })).toBeDisabled();
+  });
+
+  // #3064: the label names its object; the teal Save stays on the right.
+  it("the action bar is one filled teal Save hosts on the right", async () => {
+    renderTab();
+    await screen.findByLabelText(BASELINE.HOSTS_LABEL);
+    expect(BASELINE.SAVE).toBe("Save hosts");
+    expectActionBar(screen.getByRole("button", { name: "Save hosts" }));
   });
 
   it("saves one host per line, trimmed, with the ETag it read", async () => {

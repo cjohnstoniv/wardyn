@@ -778,6 +778,8 @@ type Server struct {
 	router        chi.Router
 	// metrics holds the /metrics scrape counters (see metrics.go). Zero value is ready to use.
 	metrics metrics
+	// sshUnbound is set by MarkSSHGatewayUnbound when the SSH gateway could not bind at boot; /healthz then omits ssh.
+	sshUnbound atomic.Bool
 	// viaOrg is the organisation's via_org egress state (via_org_streams.go).
 	viaOrg viaOrgState
 	// fleet is the 15-second capacity snapshot behind the /metrics capacity gauges (metrics_fleet.go).

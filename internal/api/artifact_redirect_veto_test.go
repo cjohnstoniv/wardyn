@@ -6,6 +6,8 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -204,7 +206,47 @@ func TestPlanArtifactRedirect_SecondPortOfATokenHostIsAudited(t *testing.T) {
 			if (denied == 1) != tc.wantRow || denied > 1 {
 				t.Errorf("denied rows = %d, want a row=%v", denied, tc.wantRow)
 			}
+			// #2118: the token is never handed to the second port, and the row refuses it by name.
+			if len(plan.mitmHosts) != 1 || plan.mitmHosts[0] != "mirror.corp.example:443" {
+				t.Errorf("mitmHosts = %v, want only mirror.corp.example:443 (the second port carries no token)", plan.mitmHosts)
+			}
+			if tc.wantRow {
+				want := fmt.Sprintf(redirectSecondPortRefusal, 443, 8443)
+				var found bool
+				for _, ev := range rec.snapshot() {
+					found = found || ev.Action == "run.artifact.redirect" && ev.Outcome == "denied" && strings.Contains(string(ev.Data), want)
+				}
+				if !found {
+					t.Errorf("no denied row with the refusal %q in %+v", want, rec.snapshot())
+				}
+				if want != "Refused: another redirect for this host on port 443 carries a token, and a token is injected per host, never per host:port, "+
+					"so the redirect on port 8443 is not applied; give each mirror its own host" {
+					t.Errorf("refusal text drifted: %q", want)
+				}
+			}
 		})
+	}
+}
+
+// #2118: a refused second port gets no allow entry either. The injection is keyed by bare host and a cleartext
+// request is admitted on any authored port, so an entry for the second port would carry the first port's token.
+// A second redirect without a token is not a token host's second port and keeps its entry.
+func TestSubstituteArtifactEgress_SecondPortOfATokenHostGetsNoAllowEntry(t *testing.T) {
+	first, second := "http://h.corp.example:8081", "http://h.corp.example:8082"
+	redirects := func(secondToken string) types.SiteConfig {
+		return types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+			{From: "a.example.com", To: first, TokenSecretRef: "corp-token"},
+			{From: "b.example.com", To: second, TokenSecretRef: secondToken},
+		}}
+	}
+	in := []string{"a.example.com", "b.example.com"}
+	e1, e2 := redirectToEntry("h.corp.example", first), redirectToEntry("h.corp.example", second)
+	got := substituteArtifactEgress(in, redirects("corp-token"))
+	if !slices.Contains(got, e1) || slices.Contains(got, e2) || !slices.Contains(got, "b.example.com") {
+		t.Errorf("egress = %v, want %q, no %q, and the refused redirect's From left alone", got, e1, e2)
+	}
+	if got := substituteArtifactEgress(in, redirects("")); !slices.Contains(got, e1) || !slices.Contains(got, e2) {
+		t.Errorf("a second redirect with no token: egress = %v, want both %q and %q", got, e1, e2)
 	}
 }
 

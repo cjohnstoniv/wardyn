@@ -75,7 +75,7 @@ The #537 packet's rows: `docs/design/model-providers-mock/canon.html` Table 1 (b
 | `PROVIDER_EDITOR.PATH_HINT_CLAUDE` | E2 | Where your endpoint serves the Anthropic Messages API for Claude Code, e.g. /anthropic. |
 | `PROVIDER_EDITOR.PATH_HINT_CODEX` | E2 | Where your endpoint serves the OpenAI Responses API for Codex CLI, e.g. /v1. |
 | `PROVIDER_EDITOR.CANCEL` | every dialog | Cancel |
-| `PROVIDER_EDITOR.SAVE` | editor; E9 confirm | Save |
+| `PROVIDER_EDITOR.SAVE` | editor; E9 confirm | Save provider |
 | `PROVIDER_EDITOR.REMOVE` | edit footer; E7, E8 confirm | Remove |
 | `PROVIDER_EDITOR.SAVED_TOAST` | toast after Save | Provider saved. |
 | `PROVIDERS.SAVE_REFUSED_TITLE_ONE` | E6, over the server's 400 | This provider can't be saved as written |

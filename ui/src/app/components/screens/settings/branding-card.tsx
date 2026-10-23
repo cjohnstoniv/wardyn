@@ -27,6 +27,8 @@ import {
 } from "../../ui/alert-dialog";
 import { Field, fieldHintId, OptionCard } from "../../wardyn/form-primitives";
 import { ApprovalStateBadge } from "../../wardyn/primitives";
+import { DANGER_OUTLINE, INLINE_ACTIONS } from "../../wardyn/form-actions";
+import { cn } from "../../ui/utils";
 import { ErrorState } from "../../wardyn/states";
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { useThemeName } from "../../wardyn/theme-provider";
@@ -144,7 +146,6 @@ function storedBody(b: Branding): BrandingSave {
   };
 }
 
-const DANGER_OUTLINE = "border-danger text-danger hover:bg-danger/10 hover:text-danger";
 const DANGER_CONFIRM = "bg-danger text-danger-foreground hover:bg-danger/90";
 
 function readBase64(file: File): Promise<string> {
@@ -354,16 +355,17 @@ export function BrandingCard() {
                 </ColourField>
               </>
             )}
-            <div className="flex items-center gap-3">
-              <Button onClick={() => void save()} disabled={!canSave}>{BRANDING.SAVE}</Button>
+            {/* #3064: actions at the right end; the destructive one far left, the primary last. */}
+            <div className={INLINE_ACTIONS} data-testid="branding-actions">
               {brand && (
-                <Button type="button" variant="outline" className={DANGER_OUTLINE} onClick={() => setConfirm("all")}>
+                <Button type="button" variant="outline" className={cn("mr-auto", DANGER_OUTLINE)} onClick={() => setConfirm("all")}>
                   {BRANDING.REMOVE_BRANDING}
                 </Button>
               )}
               {problems > 0 && (
                 <span className="text-meta text-muted-foreground">{problems > 1 ? BRANDING.FIX_MANY : BRANDING.FIX_ONE}</span>
               )}
+              <Button onClick={() => void save()} disabled={!canSave}>{BRANDING.SAVE}</Button>
             </div>
           </div>
           <div className="space-y-3">

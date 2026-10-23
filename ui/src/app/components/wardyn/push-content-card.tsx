@@ -35,7 +35,7 @@ import { absoluteTime, relativeTime } from "../../lib/format";
 import { PUSH } from "./copy/push";
 import { APPROVAL, APPROVAL_BANNER_LABEL, SECURITY_ONLY_REASON } from "./copy";
 import { Button } from "../ui/button";
-import { ApprovalKindChip, ApprovalStateBadge, Chip } from "./primitives";
+import { ApprovalKindChip, Chip } from "./primitives";
 
 // Lives here rather than beside isAdoCapabilityRequest/isAdoConsentRequest in
 // lib/types/approvals.ts: that module is eager (isHeld is imported into the
@@ -185,9 +185,6 @@ export function PushContentCard({
       <div className="flex flex-wrap items-center gap-2">
         <ApprovalKindChip kind="push_content" />
         <span className="text-sm font-semibold text-foreground">{PUSH.CARD_TITLE}</span>
-        <span className="ml-auto">
-          <ApprovalStateBadge state={item.state} />
-        </span>
       </div>
 
       <dl className="mt-3 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-sm">

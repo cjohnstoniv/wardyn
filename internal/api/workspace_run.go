@@ -315,7 +315,7 @@ func (s *Server) settleTerminalLaunch(ctx context.Context, runID uuid.UUID, crea
 // This is a FAILURE, never "the task needs no egress": the (open) recording
 // exists to observe, and the common cause of observing nothing is the proxy's
 // decision callbacks not reaching the control plane, not a network-free task.
-const recordEmptyCaptureHint = "no egress evidence was captured for this recording — most commonly the " +
+const recordEmptyCaptureHint = "No egress evidence was captured for this recording — most commonly the " +
 	"proxy sidecar's decision callbacks cannot reach the control plane (Docker Desktop + WSL2 NAT needs " +
 	"mirrored networking or the compose stack, `make setup`). Treat this recording as failed, NOT as " +
 	"proof the task needs no egress."
@@ -332,7 +332,7 @@ const maxCaptureAuditEvents = 100000
 // captureAuditTruncatedNote is the honest signal stamped on a capture / synthesis
 // whose audit read reached maxCaptureAuditEvents — its observations/profile may be
 // incomplete for an exceptionally long run.
-const captureAuditTruncatedNote = "audit-event capture reached its ceiling; the derived observations/profile " +
+const captureAuditTruncatedNote = "Audit-event capture reached its ceiling; the derived observations/profile " +
 	"may be incomplete for an exceptionally long run"
 
 // dispatchFailureReason is the record card's "why the sandbox never started"

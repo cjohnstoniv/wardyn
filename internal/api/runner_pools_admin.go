@@ -28,10 +28,10 @@ import (
 const noOrgUserPoolDefaultMsg = "There is no organization default for user pools; people choose their own."
 
 // personalBarrierDefaultMsg refuses a person's own defaults naming a barrier.
-const personalBarrierDefaultMsg = "barrier is an organisation setting; an admin sets it"
+const personalBarrierDefaultMsg = "Barrier is an organisation setting; an admin sets it"
 
 // personalRevisionDefaultMsg refuses a person's own defaults naming a revision.
-const personalRevisionDefaultMsg = "revision belongs to the organization's default; a personal default has none"
+const personalRevisionDefaultMsg = "Revision belongs to the organization's default; a personal default has none"
 
 // livePool reads an organization pool for an administrator's write; ok=false: the 404 or 500 is
 // written. A person's user pool is the 404 an unknown id gets: no administrator writes one.

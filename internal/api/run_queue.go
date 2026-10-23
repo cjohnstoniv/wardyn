@@ -430,6 +430,7 @@ func (s *Server) exitQueued(ctx context.Context, runID uuid.UUID, to types.RunSt
 	if applied {
 		s.metrics.runTerminal(to)
 		s.runEvents.moved(runID, types.RunQueued, to)
+		s.dropUnstartedKeptDrive(ctx, runID)
 	}
 	return applied, nil
 }
@@ -442,6 +443,7 @@ func (s *Server) killQueuedTail(ctx context.Context, run types.AgentRun, killerT
 	maps.Copy(data, extra)
 	s.metrics.queueWait(queueOutcomeCancelled, s.cfg.Now().Sub(run.CreatedAt))
 	s.recordAudit(ctx, s.auditEvent(&run.ID, killerType, killer, "run.kill", run.ID.String(), "success", mustJSON(data)))
+	s.dropUnstartedKeptDrive(ctx, run.ID)
 	return map[string]any{}
 }
 
@@ -453,6 +455,7 @@ func (s *Server) auditPoolRemovalCancels(ctx context.Context, ids []uuid.UUID) {
 		s.runEvents.moved(id, types.RunQueued, types.RunKilled)
 		s.recordAudit(ctx, s.auditEvent(&id, types.ActorSystem, "wardynd", "run.kill", id.String(), "success",
 			mustJSON(map[string]any{"queued": true, "reason": string(types.RunEndRunnerPoolRemoved)})))
+		s.dropUnstartedKeptDrive(ctx, id)
 	}
 }
 

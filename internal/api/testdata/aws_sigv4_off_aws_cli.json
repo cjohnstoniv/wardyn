@@ -56,7 +56,7 @@
       }
     ],
     "listen": ":3128",
-    "llm_unavailable_detail": "no model provider serves this agent on this deployment — an admin adds one under Settings → Model providers",
+    "llm_unavailable_detail": "No model provider serves this agent on this deployment — an admin adds one under Settings → Model providers",
     "mitm_ca_cert_pem": "\u003cpem\u003e",
     "mitm_ca_key_pem": "\u003cpem\u003e",
     "mitm_hosts": [

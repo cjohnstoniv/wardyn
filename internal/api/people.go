@@ -237,7 +237,7 @@ func personCollision(directory []principalIdentity, principal, email string) str
 // behind them. The refusal below no longer needs a minter, but the two no-store
 // guards keep their reasons: an API token or the shared admin token still hears
 // why it is refused, and the shared reason pins stay what they were.
-const personMintNoHumanRefusal = "minting a token for a person needs a signed-in admin — the admin token and local mode name no one to record as its minter"
+const personMintNoHumanRefusal = "Minting a token for a person needs a signed-in admin — the admin token and local mode name no one to record as its minter"
 
 // personTokenMintRemovedRefusal is the packet's wording, verbatim (#1477).
 const personTokenMintRemovedRefusal = "No one can create a token that acts as another person. They sign in and create their own."

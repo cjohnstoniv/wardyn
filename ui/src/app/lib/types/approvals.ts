@@ -81,6 +81,10 @@ export interface ApprovalRequest {
   // is absent when none is left. Both are absent on a DECIDED row.
   escalation_tier?: number;
   sla_due_at?: string;
+  // decidable (#2604): the list route's verdict on whether THIS caller may approve or deny this PENDING row
+  // (kind, ownership, and the egress_host grant for a member's egress_domain row). Absent when the server did not
+  // compute it, then canDecideApproval's role-and-kind guess is all there is. Four-eyes is not folded in.
+  decidable?: boolean;
 }
 
 // canDecideApproval mirrors the ROLE and KIND checks of internal/api/approvals.go's decide(): an

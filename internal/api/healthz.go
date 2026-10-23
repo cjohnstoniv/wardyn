@@ -10,9 +10,11 @@
 // handleHealthz, and server.go's remaining job is the Config/Server wiring they
 // merely read.
 //
-// The reason this handler earns its own file at all: /healthz is ANONYMOUS
-// (routes.go, classAnonymous in authz_test.go's matrix), so every field added
-// here is a disclosure to an unauthenticated caller, and the honesty rules the
+// The reason this handler earns its own file at all: /healthz is reachable
+// ANONYMOUSLY (routes.go, classAnonymous in authz_test.go's matrix), so every
+// field added here is a disclosure to an unauthenticated caller unless the
+// handler drops it for one, as it drops confinement_substrates and components
+// (healthzSignedIn); and the honesty rules the
 // eBPF verdict follows — "healthy" only while events actually arrive, never a
 // claim the stream cannot back — are easier to hold in one place than scattered
 // through the server's constructor.
@@ -118,7 +120,8 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		"runner":            runnerName,
 		// confinement_classes are the enforceable isolation LEVELS; the
 		// confinement_substrates map names WHICH runtime backs each (e.g.
-		// "CC3":"oci/kata-qemu") — honest visibility into the pluggable substrate.
+		// "CC3":"oci/kata-qemu") — honest visibility into the pluggable substrate,
+		// for a signed-in caller only (dropped below).
 		// confinement_names is the static CC-code -> friendly-tier-name dictionary
 		// (types.ConfinementClassNames, mirroring the UI's cc-meta.ts) so a
 		// scriptable consumer can learn "CC1" means "Fence" without hardcoding it.
@@ -126,7 +129,8 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		"confinement_substrates": substrates,
 		"confinement_names":      types.ConfinementClassNames,
 		// components reports the SELECTED pluggable-component impl per seam, plus
-		// what this build's registries actually hold. Runtime facts only.
+		// what this build's registries actually hold. Runtime facts only, for a
+		// signed-in caller only (dropped below).
 		"components": s.cfg.Components,
 		// ebpf_groundtruth is the honest health of the SECOND audit stream. It
 		// is driven by the most recent kernel.sensor.ping: healthy only when
@@ -224,8 +228,46 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 			body["sign_in_help_url"] = link
 		}
 	}
+	// Which runtime backs each class and which component serves each seam are
+	// for a signed-in caller; an anonymous one learns neither.
+	if !s.healthzSignedIn(w, r) {
+		delete(body, "confinement_substrates")
+		delete(body, "components")
+	}
 	writeJSON(w, http.StatusOK, body)
 }
+
+// healthzSignedIn reports whether humanOrAdminAuth admits r. It is asked only
+// when r presents a credential (local mode, a bearer token, or a session cookie
+// whose signature verifies), so a probe that presents none writes no auth.fail
+// row. The gate's own answer never reaches the caller: a refusal only means the
+// anonymous body. The session cookies it sets (a cleared or renewed session)
+// are kept.
+func (s *Server) healthzSignedIn(w http.ResponseWriter, r *http.Request) bool {
+	_, bearer := bearerToken(r)
+	cookie := false
+	if s.cfg.OIDC != nil {
+		_, _, _, cookie = s.cfg.OIDC.SessionBounds(r)
+	}
+	if !s.cfg.LocalMode && !bearer && !cookie {
+		return false
+	}
+	signedIn := false
+	gate := healthzGateWriter{h: http.Header{}}
+	s.humanOrAdminAuth(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { signedIn = true })).ServeHTTP(gate, r)
+	for _, c := range gate.h.Values("Set-Cookie") {
+		w.Header().Add("Set-Cookie", c)
+	}
+	return signedIn
+}
+
+// healthzGateWriter takes what humanOrAdminAuth writes while healthzSignedIn
+// asks it, and sends nothing.
+type healthzGateWriter struct{ h http.Header }
+
+func (g healthzGateWriter) Header() http.Header       { return g.h }
+func (healthzGateWriter) Write(b []byte) (int, error) { return len(b), nil }
+func (healthzGateWriter) WriteHeader(int)             {}
 
 // ebpfGroundtruthStatus reports the eBPF/Tetragon ground-truth stream's health
 // from the latest kernel.sensor.ping:

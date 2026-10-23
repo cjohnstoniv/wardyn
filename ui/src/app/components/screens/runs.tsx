@@ -28,6 +28,7 @@ import { Button } from "../ui/button";
 import { cn } from "../ui/utils";
 import { EmptyState, ErrorState } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
+import { PageContainer } from "../wardyn/page-container";
 import { useRole } from "../wardyn/operator-context";
 import { useConsoleMode } from "../wardyn/console-view";
 import { RunsComposer } from "./runs/runs-composer";
@@ -240,7 +241,7 @@ export function RunsScreen() {
   const clearFilters = () => setFilters(DEFAULT_RUNS_FILTERS);
 
   return (
-    <div className="mx-auto max-w-[1400px] px-6 py-6">
+    <PageContainer width="list">
       <PageHeader title="Runs" description={description} />
 
       {adminView && <AdminOlderLimitsCard />}
@@ -349,7 +350,7 @@ export function RunsScreen() {
           )}
         </>
       )}
-    </div>
+    </PageContainer>
   );
 }
 

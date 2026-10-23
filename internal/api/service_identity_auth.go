@@ -80,7 +80,7 @@ var serviceAllowed = map[string]bool{
 }
 
 // serviceScopeRefusal is the 403 body a service identity's token gets on any other route.
-const serviceScopeRefusal = "a service identity cannot reach this action"
+const serviceScopeRefusal = "A service identity cannot reach this action"
 
 // serviceTokenAuth authenticates a wdn_ token whose principal is a service identity's, in apiTokenAuth's
 // place for it. A refusal falls through to fallback with its auth.fail reason set, so every refusal is the

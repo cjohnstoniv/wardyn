@@ -7,7 +7,7 @@
 // The small "server & session" surface the shell always needs.
 import { SERVER_OWNED_SITE_CONFIG_KEYS, type SiteConfig } from "../types";
 import type { DriveBackend, StorageEnforcement } from "./drives";
-import { LAUNCH_DEADLINE_MS, WFETCH_TIMEOUT_MS, asJson, wfetch } from "./core";
+import { LAUNCH_DEADLINE_MS, WFETCH_TIMEOUT_MS, asJson, getToken, wfetch } from "./core";
 import { appURL } from "../base-path";
 
 // GET /me's `user_drive` (0.7, migration 0054) — what this caller would mount
@@ -450,7 +450,8 @@ export const health = {
     // name ("recording", "identity", ...). recording.selected ===
     // "none" is the honest signal that THIS deployment's recording store
     // never came up (stock Helm install: persistence off) — distinct from
-    // "no run has produced one yet". Absent on an older daemon.
+    // "no run has produced one yet". Absent on an older daemon, and for a
+    // caller who is not signed in (internal/api/healthz.go healthzSignedIn).
     components?: Record<string, { selected?: string; available?: string[]; source?: string }>;
     // The daemon's own build (internal/api/healthz.go's deliberate anonymous
     // disclosure — a support issue or CLI/server skew after a rolling upgrade
@@ -484,8 +485,12 @@ export const health = {
       // every route is gated behind that (app-shell.tsx:128-158, App.tsx's
       // roleResolved). The catch below already turns a failure into {}, which
       // is exactly how the shell reads "control plane unreachable".
+      // Signed in, the body also carries components: the session cookie rides
+      // on credentials:"include", and the admin token, when one is set, here.
+      const token = getToken();
       const res = await fetch(appURL("/healthz"), {
         credentials: "include",
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
         signal: AbortSignal.timeout(WFETCH_TIMEOUT_MS),
       });
       if (!res.ok) return {};

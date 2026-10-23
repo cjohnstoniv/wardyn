@@ -88,6 +88,7 @@ func (s *Server) treeDryRun(w http.ResponseWriter, r *http.Request, target strin
 			writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, msg)
 			return
 		}
+		req.keepsSecrets = s.specReadTierFor(r.Context()) == specReadMember
 		unit, msg := finishGovernanceUnitRequest(req.governanceUnitRequest)
 		if msg != "" {
 			writeErrorReason(w, http.StatusBadRequest, repoURLMsgReason(msg, reasonGovernanceUnitRequestInvalid), msg)
@@ -204,7 +205,11 @@ func (s *Server) applyUnitWriteQ(r *http.Request, q store.Querier, id uuid.UUID,
 		if refusal := s.unitPutCreateRefusal(unitPutCreatesAtID(id, status, all)); refusal != nil {
 			return types.GovernanceUnit{}, refusal
 		}
-		p, _, _, err := s.buildGovernanceUnit(principalFromRequest(r), s.isOperator(r.Context()), id, req, all, b, limit)
+		kept, err := s.keepSecretRefs(r.Context(), id, req, all)
+		if err != nil {
+			return types.GovernanceUnit{}, err
+		}
+		p, _, _, err := s.buildGovernanceUnit(principalFromRequest(r), s.isOperator(r.Context()), id, kept, all, b, limit)
 		return p, err
 	}))
 	if errors.Is(err, store.ErrConflict) {

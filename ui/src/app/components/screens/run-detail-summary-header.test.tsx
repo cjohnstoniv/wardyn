@@ -121,6 +121,39 @@ describe("SummaryHeader — where a local run is", () => {
   });
 });
 
+// #3034: the run's lifetime is two pill menus ending the facts row, not a full-width band under the header.
+describe("SummaryHeader — the lifetime pills", () => {
+  const live = { ...runningInteractive, created_by: "me", wait_budget_sec: 4 * 3600, run_limits: { user_changes_limits: true } } as AgentRun;
+
+  it("draws 'Ends: never' and 'Waits up to 4 h' in the facts row when the page can refresh the run", () => {
+    renderHeader(
+      <OperatorProvider operator={true}>
+        <SummaryHeader run={live} terminal={false} onKill={() => {}} onLifetimeChanged={() => {}} />
+      </OperatorProvider>,
+    );
+    expect(screen.getByTestId("run-ends-pill")).toHaveTextContent("Ends: never");
+    expect(screen.getByTestId("run-waits-pill")).toHaveTextContent("Waits up to 4 h");
+    expect(screen.queryByTestId("run-ends-row")).not.toBeInTheDocument();
+  });
+
+  it("draws no pills without a refresh callback, and none on a finished run", () => {
+    const { rerender } = renderHeader(
+      <OperatorProvider operator={true}>
+        <SummaryHeader run={live} terminal={false} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+    expect(screen.queryByTestId("run-ends-pill")).not.toBeInTheDocument();
+    rerender(
+      <MemoryRouter>
+        <OperatorProvider operator={true}>
+          <SummaryHeader run={{ ...live, state: "COMPLETED" } as AgentRun} terminal onKill={() => {}} onLifetimeChanged={() => {}} />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    expect(screen.queryByTestId("run-ends-pill")).not.toBeInTheDocument();
+  });
+});
+
 // Command-bar reshape (design board seg2a): the fat identity card became a
 // 52px single row at xl and up (wraps below). These pin the
 // shape that survived the squeeze — task as the page's h1, terminal-disabled

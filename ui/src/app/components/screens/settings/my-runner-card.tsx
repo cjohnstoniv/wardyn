@@ -14,6 +14,7 @@ import { useLocation } from "react-router-dom";
 import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
 import { RUNNERS_DISABLED, runners as runnersApi } from "../../../lib/api/runners";
+import { useMyCapabilities } from "../../../lib/capabilities";
 import { absoluteTime, relativeTime, shortDate } from "../../../lib/format";
 import type { RunnerView } from "../../../lib/types/runners";
 import { MY_POOLS, RES, RUNNER_V6 } from "../../wardyn/copy/runner-pools";
@@ -210,7 +211,7 @@ function RevokedNotice({ r }: { r: RunnerView }) {
  * below it once there is one, so it remounts when the first runner appears; `inBlock` tells the card whether focus
  * was inside it, to put focus back on the card.
  */
-function AddBlock({ inBlock }: { inBlock: React.MutableRefObject<boolean> }) {
+function AddBlock({ inBlock, selfHostOff }: { inBlock: React.MutableRefObject<boolean>; selfHostOff: boolean }) {
   return (
     <div
       onFocus={() => (inBlock.current = true)}
@@ -219,7 +220,7 @@ function AddBlock({ inBlock }: { inBlock: React.MutableRefObject<boolean> }) {
         if ((e.target as Element).isConnected && !e.currentTarget.contains(e.relatedTarget)) inBlock.current = false;
       }}
     >
-      <AddComputerBlock level={4} />
+      <AddComputerBlock level={4} selfHostOff={selfHostOff} />
     </div>
   );
 }
@@ -297,6 +298,8 @@ export function MyRunnerCard({ onHidden }: { onHidden?: (reason: string) => void
 
   const available = status === "ready" || status === "error";
   const pools = useMyPools(status === "ready");
+  // Unknown (not loaded, or the read failed) never shows the refusal: only an explicit false does.
+  const selfHostOff = useMyCapabilities(status === "ready")?.may_self_host_runner === false;
   // The #my-runner deep link opens and focuses the card once per navigation, never on a data refresh.
   React.useEffect(() => {
     if (location.hash === "#my-runner" && available) {
@@ -377,9 +380,9 @@ export function MyRunnerCard({ onHidden }: { onHidden?: (reason: string) => void
                   )}
                 </ul>
               )}
-              {live.length === 0 && <AddBlock inBlock={inBlock} />}
+              {live.length === 0 && <AddBlock inBlock={inBlock} selfHostOff={selfHostOff} />}
               <MyPoolsSection pools={pools} runners={live} />
-              {live.length > 0 && <AddBlock inBlock={inBlock} />}
+              {live.length > 0 && <AddBlock inBlock={inBlock} selfHostOff={selfHostOff} />}
             </>
           )}
         </div>

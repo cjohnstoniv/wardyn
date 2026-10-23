@@ -166,6 +166,7 @@ export const permissions = {
       session_groups: unwrapList<string>(body.session_groups),
       groups_snapshot_stale: !!body.groups_snapshot_stale,
       kinds_version: body.kinds_version ?? 0,
+      may_self_host_runner: body.may_self_host_runner !== false,
     };
   },
 

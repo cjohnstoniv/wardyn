@@ -111,7 +111,7 @@ func TestCapabilitiesFor(t *testing.T) {
 			env:  capEnv{SecretPresent: secretSet("git-pat-github-com")},
 			want: []Capability{
 				{ID: "clone:pat", State: CapAvailable, Residency: "resident_env"},
-				{ID: "clone:ssh", State: CapNeedsSetup, Reason: "no credential configured"},
+				{ID: "clone:ssh", State: CapNeedsSetup, Reason: "No credential configured"},
 				{ID: "egress_host", State: CapAvailable},
 			},
 		},
@@ -120,7 +120,7 @@ func TestCapabilitiesFor(t *testing.T) {
 			in:   types.Integration{Kind: "git_host", Secrets: []types.IntegrationSecret{secretRow("ssh_key", "ssh-key-github-com")}},
 			env:  capEnv{SecretPresent: secretSet("ssh-key-github-com")},
 			want: []Capability{
-				{ID: "clone:pat", State: CapNeedsSetup, Reason: "no credential configured"},
+				{ID: "clone:pat", State: CapNeedsSetup, Reason: "No credential configured"},
 				{ID: "clone:ssh", State: CapAvailable, Residency: "resident_env"},
 				{ID: "egress_host", State: CapAvailable},
 			},
@@ -140,8 +140,8 @@ func TestCapabilitiesFor(t *testing.T) {
 			in:   types.Integration{Kind: "git_host"},
 			env:  capEnv{SecretPresent: secretSet()},
 			want: []Capability{
-				{ID: "clone:pat", State: CapNeedsSetup, Reason: "no credential configured"},
-				{ID: "clone:ssh", State: CapNeedsSetup, Reason: "no credential configured"},
+				{ID: "clone:pat", State: CapNeedsSetup, Reason: "No credential configured"},
+				{ID: "clone:ssh", State: CapNeedsSetup, Reason: "No credential configured"},
 				{ID: "egress_host", State: CapAvailable},
 			},
 		},

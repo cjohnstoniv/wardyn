@@ -20,7 +20,7 @@ import { OpenInUserViewMenu, runPath, useConsoleMode } from "../../wardyn/consol
 import { ownerLabel } from "../../wardyn/copy/console-view";
 import { useOperator, usePrincipal } from "../../wardyn/operator-context";
 import { Button } from "../../ui/button";
-import { cn } from "../../ui/utils";
+import { Chip, RunStateBadge } from "../../wardyn/primitives";
 import { repoLabel, rowHeadline } from "./board-groups";
 import { glyphKindFor, RowGlyph } from "./row-glyph";
 import { rowPresentation, waitingSignInPresentation } from "./runs-model";
@@ -142,15 +142,18 @@ export function RunRow({ run }: { run: AgentRun }) {
         </div>
       </div>
       <div className="col-start-2 flex flex-wrap items-center justify-start gap-2 text-left sm:col-auto sm:flex-col sm:items-end sm:justify-normal sm:gap-1 sm:text-right">
-        <span
-          className={cn(
-            "text-meta sm:whitespace-nowrap",
-            p.hue === "amber" && "text-warning",
-            p.hue === "red" && "text-danger",
-            p.hue !== "amber" && p.hue !== "red" && "text-muted-foreground",
+        {/* #3039: the run header's own pill, so a row and its page say the same thing. An attention row keeps an amber
+            chip, because "Needs you" is not a run state; a lease-ended RUNNING run is over, so it gets a neutral one. */}
+        <span className="sm:whitespace-nowrap">
+          {p.hue === "amber" ? (
+            <Chip tone="warning" dot>
+              {p.word}
+            </Chip>
+          ) : run.lost_reason === "ended" ? (
+            <Chip tone="neutral">{p.word}</Chip>
+          ) : (
+            <RunStateBadge state={run.state} word={p.word} />
           )}
-        >
-          {p.word}
         </span>
         {/* The held-count subline (design.md §2.2) — its own line under the
             status word, always muted (the word already carries the hue). */}

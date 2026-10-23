@@ -8,6 +8,8 @@ package k8s
 import (
 	"context"
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -497,5 +499,44 @@ func TestSweepOrphanedSandboxes_SeesAPodCreatedAfterTheNetPolList(t *testing.T) 
 	if swept != 0 {
 		t.Errorf("swept = %d, want 0 — a pod that appeared after the NetworkPolicy list must still be seen, "+
 			"or its run's older Secret decides the run's fate alone", swept)
+	}
+}
+
+// TestRunnerSweepHoldsCandidateAcrossRetries (#3534): the org retries a READY sweep pass that met a
+// held candidate. Every pass reaches the same proof-of-stop hold, reports it as the pass's error
+// rather than skipping it, and releases nothing; the first pass after the stop is proven sweeps it.
+func TestRunnerSweepHoldsCandidateAcrossRetries(t *testing.T) {
+	h := newRunnerHarness(t)
+	h.boundProxy(t)
+	ctx := context.Background()
+	name := proxyPodName(h.runID)
+	for pass := 1; pass <= 4; pass++ {
+		swept, err := h.d.SweepOrphanedSandboxes(ctx, 0, alwaysOrphan)
+		if swept != 0 || err == nil || !strings.Contains(err.Error(), "held, NetworkPolicies kept") {
+			t.Fatalf("pass %d, no proof of stop: swept %d, err %v", pass, swept, err)
+		}
+		pod, gerr := h.cs.CoreV1().Pods(testNamespace).Get(ctx, name, metav1.GetOptions{})
+		if gerr != nil || !slices.Contains(pod.Finalizers, stopProofFinalizer) || !h.ev.get(t, h.runID).Hold {
+			t.Fatalf("pass %d released the held proxy with no proof of stop: %v", pass, gerr)
+		}
+		if n := countActions(h.cs, "delete-collection", "networkpolicies") + countActions(h.cs, "delete-collection", "secrets"); n != 0 {
+			t.Fatalf("pass %d dropped %d collections with no proof of stop", pass, n)
+		}
+	}
+	// The kubelet reports the proxy's container terminated: the proof the next pass needs.
+	obj, err := h.cs.Tracker().Get(podsGVR, testNamespace, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pod := obj.(*corev1.Pod).DeepCopy()
+	terminate(pod, "containerd://p1")
+	if err := h.cs.Tracker().Update(podsGVR, pod, testNamespace); err != nil {
+		t.Fatal(err)
+	}
+	if swept, err := h.d.SweepOrphanedSandboxes(ctx, 0, alwaysOrphan); swept != 1 || err != nil {
+		t.Fatalf("pass after the proof: swept %d, err %v", swept, err)
+	}
+	if n := countActions(h.cs, "delete-collection", "networkpolicies"); n != 1 {
+		t.Fatalf("NetworkPolicies dropped %d times once the stop was proven, want 1", n)
 	}
 }

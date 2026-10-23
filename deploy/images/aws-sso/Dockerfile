@@ -43,6 +43,12 @@
 # $TARGETARCH below (pure Go, CGO_ENABLED=0) — no QEMU for the compile. Stage 2
 # does need it (apt + the AWS CLI installer run as the target arch; that stage
 # already selects x86_64/aarch64 off its own TARGETARCH).
+# Module-download seed: empty unless a build passes `--build-context gomodcache=<dir>`
+# (nightly.yml's multi-arch build and scripts/lib/image-build.sh do), so a CI job's
+# already-filled module cache feeds `go mod download` below instead of the network.
+# An ordinary and a release build leave it empty and download as before.
+FROM scratch AS gomodcache
+
 FROM --platform=$BUILDPLATFORM golang:1.27.2@sha256:5bc7f572bbaa98885a3a1fd9c0aa76b59e3e14e8628bfc316bbfd0c701e4818c AS builder
 
 WORKDIR /build
@@ -68,7 +74,19 @@ RUN if [ -f /corp-ca/corp-ca.pem ]; then \
 COPY go.mod go.sum ./
 # Bounded retry of the module FETCH only (a proxy stream error is transient); go.sum still
 # verifies every module, and no build or test step is ever retried.
-RUN for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done
+# The seed (a module cache's cache/download tree, empty unless a build passes
+# `--build-context gomodcache=<dir>`) is copied in first; `go mod download` then fetches
+# only what it lacks. go.sum is checked against each module's recorded hash, and
+# `go mod verify` re-checks the cache when a seed was used.
+RUN --mount=type=bind,from=gomodcache,target=/gomodcache-seed \
+    seed=; \
+    if [ -n "$(ls -A /gomodcache-seed)" ]; then \
+        seed=1 && \
+        mkdir -p "$(go env GOMODCACHE)/cache/download" && \
+        cp -a /gomodcache-seed/. "$(go env GOMODCACHE)/cache/download/"; \
+    fi && \
+    for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done && \
+    if [ -n "$seed" ]; then go mod verify; fi
 
 COPY . .
 

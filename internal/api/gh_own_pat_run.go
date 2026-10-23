@@ -45,7 +45,7 @@ const (
 	// gitHubOwnTokenMixedMember is the mixed refusal held to the disclosure rule (workspace_admission.go):
 	// a launcher who is not an operator is told the shape, never a row id.
 	gitHubOwnTokenMixedMember     = "github.com repositories in this run are admitted by both a shared GitHub provider and your own token; one run uses one GitHub credential. Pick repositories from one of them."
-	gitHubOwnTokenResidentRefusal = "wardyn: this git_pat grant is a person's own GitHub token, and this deployment's git broker is off, so it would be handed into the sandbox. Nothing was minted."
+	gitHubOwnTokenResidentRefusal = "Wardyn: this git_pat grant is a person's own GitHub token, and this deployment's git broker is off, so it would be handed into the sandbox. Nothing was minted."
 )
 
 // gitHubOwnTokenRefusal is a launch refused over the token, with its reason.

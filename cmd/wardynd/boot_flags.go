@@ -399,6 +399,11 @@ type bootFlags struct {
 	sshAdvertise    *string
 	sshProxyCommand *string
 	sshRoleTTL      *time.Duration
+
+	// sshBindEarly binds the gateway before the background workers start and, when the port is taken, keeps booting
+	// with SSH left out of /healthz. Off (default) keeps the log-only bind failure inside ServeSSHGateway.
+	sshBindEarly *bool
+
 	// sshMaxSessionsPerRun is api.Config.SSHMaxSessionsPerRun, validated by
 	// validateSSHMaxSessionsPerRun.
 	sshMaxSessionsPerRun *int
@@ -700,6 +705,7 @@ func parseBootFlags() *bootFlags {
 		uiOriginTemplate: flagEnv("ui-sandbox-origin-template", "WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE", "", `optional per-run origin for the UI-sandbox gateway, e.g. "https://run-{run}.ui.example.com" (needs wildcard DNS and certificate); must contain {run}. Empty (default) shares one origin across every run`),
 		metricsListen:    flagEnv("metrics-listen", "WARDYN_METRICS_LISTEN", "", `plain-HTTP listen address that serves only GET /metrics with no credential, for a scraper that sends none, e.g. ":9464". Empty (default) disables it; must differ from -listen, -internal-listen, -ssh-listen and -ui-sandbox-listen`),
 
+		sshBindEarly:           flagBool("ssh-bind-early", "WARDYN_SSH_BIND_EARLY", false, "bind the SSH gateway before the background workers start; if its port is taken, keep booting and stop advertising SSH on /healthz instead of only logging at accept time (default false)"),
 		sshAdvertise:           flagEnv("ssh-advertise", "WARDYN_SSH_ADVERTISE", "", `externally-reachable host[:port] for the SSH gateway, shown in the run-detail Connect pane; advisory only. Empty (default) publishes no address, so "wardyn run ssh" refuses`),
 		oidcSessionTTL:         flagDuration("oidc-session-ttl", "WARDYN_OIDC_SESSION_TTL", 0, "how long a console session lasts from sign-in, instead of ending at the ID token's expiry (duration; 0 = the ID token's expiry; at most 24h)"),
 		sessionLife:            registerSessionLifeFlags(),

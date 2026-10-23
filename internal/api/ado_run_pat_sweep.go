@@ -46,7 +46,7 @@ func (s *Server) revokeRunPATs(ctx context.Context, runID uuid.UUID, reason stri
 	}
 	ctx, e, unlock, lerr := s.lockRunPAT(ctx, runID)
 	if lerr != nil {
-		slog.WarnContext(ctx, "wardynd: a run's Azure DevOps token lock could not be taken; its tokens are not revoked now and the sweep retries",
+		slog.WarnContext(ctx, "wardynd: a run's Azure DevOps token lock could not be taken; its tokens are not revoked now; the sweep retries an ended or paused run, and a live run's next relayed resolve judges it again",
 			slog.String("run_id", runID.String()), slog.Any("err", lerr))
 		return
 	}

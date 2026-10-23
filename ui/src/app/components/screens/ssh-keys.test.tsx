@@ -68,7 +68,7 @@ describe("SshKeysPane — empty state", () => {
   it("shows the empty-state copy and an Add key affordance", async () => {
     listKeysMock.mockResolvedValue([]);
     renderScreen();
-    await screen.findByText("No keys yet.");
+    await screen.findByText("No keys yet");
     expect(screen.getByText("Add your public key to connect over SSH.")).toBeInTheDocument();  });
 });
 
@@ -92,7 +92,7 @@ describe("SshKeysPane — Your account card", () => {
       </MemoryRouter>,
     );
     await expandCard("Your SSH keys");
-    await screen.findByText("No keys yet.");
+    await screen.findByText("No keys yet");
     expect(screen.getAllByRole("button", { name: /add key/i })).toHaveLength(1);
     unmount();
 
@@ -182,7 +182,7 @@ describe("SshKeysPane — add key", () => {
     });
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderScreen();
-    await screen.findByText("No keys yet.");
+    await screen.findByText("No keys yet");
 
     await user.click(screen.getAllByRole("button", { name: /add key/i })[0]);
     setField(screen.getByLabelText(/name/i), "new key");
@@ -201,7 +201,7 @@ describe("SshKeysPane — add key", () => {
     addKeyMock.mockRejectedValue(new Error("this looks like a PRIVATE key — paste your PUBLIC key instead"));
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderScreen();
-    await screen.findByText("No keys yet.");
+    await screen.findByText("No keys yet");
 
     await user.click(screen.getAllByRole("button", { name: /add key/i })[0]);
     setField(screen.getByLabelText(/public key/i), "-----BEGIN OPENSSH PRIVATE KEY-----");
@@ -214,7 +214,7 @@ describe("SshKeysPane — add key", () => {
   it("never asks for a name in the paste field's own text — the helper line says public-key-only", async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderScreen();
-    await screen.findByText("No keys yet.");
+    await screen.findByText("No keys yet");
     await user.click(screen.getAllByRole("button", { name: /add key/i })[0]);
     expect(screen.getByText("Public key only — never paste a private key.")).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/ssh-ed25519 AAAA/)).toBeInTheDocument();
@@ -227,7 +227,7 @@ describe("SshKeysPane — add key", () => {
   it("marks the Public key field required — the app's required-field convention", async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderScreen();
-    await screen.findByText("No keys yet.");
+    await screen.findByText("No keys yet");
     await user.click(screen.getAllByRole("button", { name: /add key/i })[0]);
     expect(screen.getByLabelText(/public key/i)).toBeRequired();
     expect(screen.getByLabelText(/^name$/i)).not.toBeRequired();
@@ -337,7 +337,7 @@ describe("SshKeysPane — ssh_key feature not available", () => {
       grants: [{ id: "g2", subject_type: "all", subject: "", capability: "feature", value: "api_token", effect: "deny", created_at: "" }],
     };
     renderAsUser();
-    await screen.findByText("No keys yet.");
+    await screen.findByText("No keys yet");
     await waitFor(() => {
       for (const b of screen.getAllByRole("button", { name: /add key/i })) expect(b).toBeEnabled();
     });
@@ -347,7 +347,7 @@ describe("SshKeysPane — ssh_key feature not available", () => {
   it("never fetches or disables for a super admin", async () => {
     mockCaps = { ...mockCaps, enforcement: { feature: true } };
     renderScreen();
-    await screen.findByText("No keys yet.");
+    await screen.findByText("No keys yet");
     for (const b of screen.getAllByRole("button", { name: /add key/i })) expect(b).toBeEnabled();
     expect(screen.queryByText(DENIED.SSH_KEY_FEATURE)).not.toBeInTheDocument();
   });

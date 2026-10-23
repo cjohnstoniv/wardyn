@@ -50,7 +50,7 @@ export const USER_TYPES = {
   PRIORITY_HINT: "Breaks a sign-in tie between two custom types — higher wins. Standard user never takes part in a tie.",
   FIELD_ID: "Id",
   ID_HINT: "Role mappings and grants use this to refer to the type. It's made from the name unless you set it, and it can't change once saved.",
-  SAVE: "Save",
+  SAVE: "Save type",
   CANCEL: "Cancel",
 
   // ---- delete ----

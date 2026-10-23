@@ -67,7 +67,7 @@ const (
 	kubectlCLISecondRowRefusal       = "a run can attach one kubectl component; remove the second"
 	kubectlCLINoCertificateAuthority = "This run was not launched: its kubectl needs a per-run certificate authority to be added on the wire, " +
 		"and none was provisioned. Without one the proxy could not check or credential kubectl's requests."
-	kubectlTokenBody = `body must be {"value":"<the service account's token>"}`
+	kubectlTokenBody = `Body must be {"value":"<the service account's token>"}`
 )
 
 func kubectlTokenSecretName(componentID string) string {

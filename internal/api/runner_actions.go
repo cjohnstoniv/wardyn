@@ -197,7 +197,9 @@ func (s *Server) admitRunner(_ context.Context, rn types.Runner) (remote.Admissi
 		Ready: func() {
 			go s.releaseRunnerLeases(s.cfg.BaseCtx, id)
 			s.startResidentErase(id)
-			go s.sweepRunnerOrphansOnReady(s.cfg.BaseCtx, id, ep.sub)
+			peer := ep.link.ReadyPeer()
+			sameSession := func() bool { return peer != nil && ep.link.ReadyPeer() == peer }
+			go s.sweepRunnerOrphansOnReady(s.cfg.BaseCtx, id, ep.sub, sameSession, readySweepRetries)
 		},
 	}, nil
 }

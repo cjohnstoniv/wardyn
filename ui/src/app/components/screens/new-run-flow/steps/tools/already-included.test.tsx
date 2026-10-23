@@ -9,6 +9,7 @@ import userEvent from "@testing-library/user-event";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import { BEDROCK_SSO_SWITCH_OFF, HARNESS_NAMES, SCENARIO_ACCESS } from "../../../../../lib/new-run-fixtures/scenarios/tools";
 import type { RunIntent } from "../../draft/run-intent";
+import { isStepSectionHeading } from "../../../../../lib/test-dom";
 import { AlreadyIncluded } from "./already-included";
 
 afterEach(cleanup);
@@ -19,6 +20,11 @@ const rowOf = (name: string) => screen.getByText(name, { selector: "strong" }).c
 const open = async (name: string) => userEvent.click(within(rowOf(name)).getByRole("button", { name: NR_TOOLS.DETAILS_FOR(name) }));
 
 describe("Already included", () => {
+  it("#3044: is drawn as the guided steps' StepSection", () => {
+    render(<AlreadyIncluded names={HARNESS_NAMES} answered access={SCENARIO_ACCESS.member} intent={{ tools: [{ id: "claude-code", kind: "harness" }] }} />);
+    expect(isStepSectionHeading(screen.getByRole("heading", { name: NR_TOOLS.INCLUDED_TITLE }))).toBe(true);
+  });
+
   it("lists what the earlier steps bring, each with its chip and sub-line, and offers nothing to add or remove", () => {
     render(<AlreadyIncluded names={HARNESS_NAMES} answered access={SCENARIO_ACCESS.member} intent={{ tools: [{ id: "claude-code", kind: "harness" }], startup: { kind: "harness", tool: "claude-code" } }} />);
     expect(screen.getByRole("heading", { level: 2, name: NR_TOOLS.INCLUDED_TITLE })).toBeInTheDocument();

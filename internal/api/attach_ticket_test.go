@@ -366,7 +366,7 @@ func TestAttachWS_TicketMintedBeforeCutoffIsRefused(t *testing.T) {
 	}
 
 	w := do(t, srv, http.MethodGet, "/api/v1/runs/"+run.String()+"/attach?ticket="+tok, "", "")
-	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "invalid, expired, or already-used attach ticket") {
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "Invalid, expired, or already-used attach ticket") {
 		t.Fatalf("a ticket minted before the cutoff: %d %s, want the 403 bad-ticket body", w.Code, w.Body.String())
 	}
 	var denied []types.AuditEvent

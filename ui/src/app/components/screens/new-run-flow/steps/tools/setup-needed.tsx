@@ -27,6 +27,7 @@ import { Chip } from "../../../../wardyn/primitives";
 import type { RunIntent } from "../../draft/run-intent";
 import { providerControlId, setupDoor, setupRowId, signInProvider, type HarnessNames, type SetupDoor } from "../../lenses/tools-lens";
 import { useAnnounce } from "../step-shell";
+import { StepSection } from "../../../../wardyn/step-section";
 
 const DOOR_LABEL: Record<SetupDoor, string> = { sign_in: NR_TOOLS.SETUP_SIGN_IN, choose: NR_TOOLS.SETUP_CHOOSE, add: NR_TOOLS.SETUP_ADD, connect: ADO_PAT.MEMBER_CONNECT };
 
@@ -129,11 +130,7 @@ export function SetupNeeded({ items, pending, done, intent, names, answered = tr
   };
 
   return (
-    <section aria-labelledby={headingId} className="flex flex-col gap-3.5 rounded-xl border border-border bg-card p-[18px]">
-      <div>
-        <h2 id={headingId} className="font-semibold">{NR_TOOLS.SETUP_TITLE}</h2>
-        <p className="text-sm text-muted-foreground">{NR_TOOLS.SETUP_BODY}</p>
-      </div>
+    <StepSection titleId={headingId} title={NR_TOOLS.SETUP_TITLE} description={NR_TOOLS.SETUP_BODY} bodyClassName="flex flex-col gap-3.5">
       {items.length === 0 ? (
         answered && <p className="flex items-center gap-2 text-sm text-muted-foreground"><Check aria-hidden className="size-4 text-success" />{NR_TOOLS.SETUP_ALL_SET}</p>
       ) : (
@@ -170,6 +167,6 @@ export function SetupNeeded({ items, pending, done, intent, names, answered = tr
           onSaved={() => { announce(NR_TOOLS.TOKEN_SAVED); onDone(adding.id); setAdding(null); }}
         />
       )}
-    </section>
+    </StepSection>
   );
 }

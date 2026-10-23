@@ -352,7 +352,7 @@ so a submount under the share's home could be writable inside the sandbox
 
 - **Turning drives OFF deployment-wide** is `storage.user_drive.disabled` on the same screen, and it is a different question from a profile's `deny_user_drive`.
 - The switch is asked FIRST and says *this install offers no drives*:
-  - every drive and allocation write answers **422 "drives are disabled for this deployment"**,
+  - every drive and allocation write answers **422 "Drives are disabled for this deployment"**,
   - a run asking for its drive is refused 422 in the same family,
   - and no `authz.denied` row is written, because no profile denied anybody.
 - Every drive row and every allocation is KEPT — the screen still lists them, above a banner — so turning it back on restores exactly what was there.

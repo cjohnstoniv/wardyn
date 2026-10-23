@@ -40,3 +40,16 @@ CVE-2026-60002
 # outside the sandbox parses through it. Accepted 2026-09-30 by the owner for
 # 0.8.3; delete when Debian 13 ships a fix.
 CVE-2026-6653
+
+# libbrotli1 (every agent image: agent-base, codex-cli, aws-sso, novnc,
+# novnc-signin, vscode; it comes in with curl through libcurl4t64). Buffer
+# overflow in the Brotli decoder: a crafted compressed stream can corrupt the
+# decoding process's memory. No release of our base fixes it yet: Debian 13
+# carries 1.1.0-2, vulnerable, and bookworm, forky and sid are vulnerable too
+# (Debian bug 1151690); upstream fixed it in 1.0.10, 1.1.1 and 1.2.1. Why it
+# does not reach us: the decoder runs only inside the sandbox, as its
+# unprivileged user, on a stream from a server the run itself contacted through
+# the proxy; wardynd, wardyn-proxy and wardyn-runnerd do not carry it. At worst
+# a malicious server subverts a process the run itself started.
+# Accepted 2026-10-23 by the owner for 0.10.0; delete when Debian 13 ships a fix.
+CVE-2026-111497

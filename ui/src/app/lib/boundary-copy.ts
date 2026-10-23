@@ -67,6 +67,27 @@ export const BOUNDARY = {
   FETCH_FAILED_TITLE: "Couldn't load the Wardyn boundary",
 } as const;
 
+// The Desktop group card (board M7-Knobs-B, approved 2026-10-20 as Option B), in the boundary's hard limits.
+// The board's group also holds Recording ("5 settings"), which the boundary does not hold yet, so the count is
+// the rows shown; the per-setting locks and "Lock the group for teams below" are not on this page yet.
+export const BOUNDARY_DESKTOP = {
+  TITLE: "Desktop",
+  /** not on the boards: the board's "5 settings" counts Recording too. */
+  COUNT: (n: number) => `${n} settings`,
+  APPLIES: "Applies to runs that land on a desktop.",
+  NOW: "Now",
+  ALLOWED: "Allowed",
+  BLOCKED: "Blocked",
+  BELOW: "Teams below may only block more.",
+  ENFORCED: "Enforced at the desktop relay, outside the sandbox. Every use is logged by direction, size and hash. Never the content.",
+  ROWS: [
+    { key: "paste_in", short: "Paste in", label: "Paste into the desktop" },
+    { key: "copy_out", short: "Copy out", label: "Copy out of the desktop" },
+    { key: "upload", short: "Upload", label: "Upload files" },
+    { key: "download", short: "Download", label: "Download files" },
+  ],
+} as const;
+
 // The dry run (board T4's report anatomy, for the Wardyn boundary).
 export const BOUNDARY_DRY_RUN = {
   /** not on the boards: T4 titles name a team change; this one names the boundary. */
@@ -86,7 +107,10 @@ export const BOUNDARY_DRY_RUN = {
   POLICIES: "Stored policies",
   PEOPLE: "People",
   /** not on the boards: assignments to an IdP group, a user type or everyone (T3 says "IdP group"). */
-  OTHER_ASSIGNMENTS: "Assigned to a group, a user type or everyone",
+  OTHER_ASSIGNMENTS: "Assigned to an IdP group, a user type or everyone",
+  /** not on the boards: an assignment row names its kind; an "everyone" assignment has no subject to show. */
+  ASSIGNMENT_ROW: (kind: string, subject: string, team: string) =>
+    `${kind === "group" ? `IdP group ${subject}` : kind === "user_type" ? `User type ${subject}` : kind === "all" ? "Everyone" : subject} · ${team}`,
   DEFAULT_TEAM: "Default",
   NARROWED: "Narrowed",
   NO_CHANGE: "No change",
@@ -104,6 +128,7 @@ export const BOUNDARY_DRY_RUN = {
     denied_domains: "Blocked hosts and ranges",
     min_confinement_class: "Confinement floor",
     eligible_grants: "Credentials",
+    desktop: BOUNDARY_DESKTOP.TITLE,
     "limits.max_end_ahead_sec": "Longest run",
     "limits.default_end_sec": RUN_LIMITS.DEFAULT_END_LABEL, // canon: the profile limit's own label
   } as Record<string, string>,

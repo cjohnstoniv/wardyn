@@ -104,13 +104,16 @@ export function signsIn(kind: string): boolean {
   return SIGN_IN_KINDS[kind] !== undefined;
 }
 
+/** Typed kinds whose member credential is a "token" in the copy (operator side: providesLine); the rest say "key". */
+export const isTokenKind = (kind: string): boolean => kind === "custom_endpoint" || kind === "local_model";
+
 function providerDoor(status: SetupStatus, p: SetupModelProvider): DoorTarget {
   const login = SIGN_IN_KINDS[p.kind];
   if (login) return { kind: "signin", login, provider: p };
   // Every other kind is a typed key or token (the server's providerTypedKinds);
-  // custom_endpoint says "token", the rest "key" — gradeProviderKey's own rule.
+  // custom_endpoint and local_model say "token", the rest "key".
   const state = status.provider_access?.find((a) => a.provider === p.id)?.state;
-  return { kind: "key", provider: p, token: p.kind === "custom_endpoint", stored: state === "live" };
+  return { kind: "key", provider: p, token: isTokenKind(p.kind), stored: state === "live" };
 }
 
 /**

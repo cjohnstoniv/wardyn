@@ -22,9 +22,9 @@
 import * as React from "react";
 import { Info, Loader2, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
-import { HttpError, LIST_LIMIT, PendingChangeError } from "../../lib/api/core";
+import { HttpError, PendingChangeError } from "../../lib/api/core";
 import { permissions as api } from "../../lib/api/permissions";
-import { runs as runsApi } from "../../lib/api/runs";
+import { people as peopleApi } from "../../lib/api/people";
 import { absoluteTime, getErrorMessage, relativeTime } from "../../lib/format";
 import { CAPABILITY_KINDS, KIND, PERM, PERM_EXTRA, type CapabilityKind } from "../../lib/permissions-copy";
 import type {
@@ -34,6 +34,7 @@ import type {
   PermissionsSnapshot,
 } from "../../lib/types";
 import { Button } from "../ui/button";
+import { INLINE_ACTIONS } from "../wardyn/form-actions";
 import { Input } from "../ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
@@ -818,7 +819,8 @@ export function AddGrantForm({
           />
         </Field>
       </div>
-      <div className="mt-4 flex flex-wrap items-center gap-3">
+      <div className={`mt-4 ${INLINE_ACTIONS}`}>
+        {duplicate && <Chip tone="info">{PERM.DUPLICATE}</Chip>}
         <Button
           // A deny on a user type is a wall no person or group allow lifts —
           // design §7 asks before writing one.
@@ -828,7 +830,6 @@ export function AddGrantForm({
           {saving ? <Loader2 className="size-4 animate-spin" /> : null}
           {PERM.ADD_CTA}
         </Button>
-        {duplicate && <Chip tone="info">{PERM.DUPLICATE}</Chip>}
       </div>
       {/* G-7's "Refused" state (packet §2): the server's own sentence, in the
           form the caller is still looking at. The dialog never closes on it. */}
@@ -870,39 +871,33 @@ export function AddGrantForm({
   );
 }
 
-// How many members the enforcement confirm says are about to be bounded.
-//
-// ponytail: there is no member registry to count — Wardyn keeps no user table,
-// and OIDC identities exist only inside a session cookie. The console's one
-// durable record of who has used this deployment is the runs list, so this
-// counts DISTINCT run creators, minus the signed-in admin (exempt) and minus
-// the admin-token machine lane. Ceiling: it over-counts if another ADMIN has
-// launched a run (the safe direction — a louder warning), and it cannot see a
-// member who has never launched one. Upgrade path: a server-side principal
-// roster (or a count on GET /permissions), at which point this hook reads it
-// instead of deriving it.
-// `null` is UNKNOWN, not zero: listRuns() can be refused (403) or fail, and a
-// dialog that then reads "0 members are bounded" states the opposite of the
-// lockout risk it exists to communicate. It is also unknown when the server
-// cut the runs page short (X-Wardyn-Truncated): the creators in the newest
-// page are then only some of the members, and a number would under-count them.
+// How many members the enforcement confirm says are about to be bounded: the People directory's active
+// entries (GET /people, the same security tier as /permissions), minus super admins (the one role capAllowed
+// exempts: a security admin is bounded like a member), the signed-in admin and the admin-token machine lane. The directory holds people who never launched a run, which the
+// runs list cannot see (#2515). A person whose role is "unknown" (their sign-in's groups were truncated) is
+// counted: an over-count only makes the warning louder.
+// `null` is UNKNOWN, not zero: the read can be refused (403) or fail, and a dialog that then reads "0 members
+// are bounded" states the opposite of the lockout risk it exists to communicate.
+
 function useAffectedMemberCount(): number | null {
   const principal = usePrincipal();
   const [count, setCount] = React.useState<number | null>(null);
   React.useEffect(() => {
     let live = true;
-    runsApi
-      .listRuns({ limit: LIST_LIMIT, offset: 0 })
-      .then(({ runs: rs, truncated }) => {
-        if (!live) return;
-        if (truncated) return setCount(null);
-        const people = new Set(
-          rs
-            .map((r) => r.created_by)
-            .filter((p) => !!p && p !== principal && p !== ADMIN_TOKEN_PRINCIPAL),
-        );
-        setCount(people.size);
-      })
+    (async () => {
+      const members = new Set<string>();
+      let cursor: string | undefined;
+      do {
+        const page = await peopleApi.list({ limit: 200, cursor, state: "active" });
+        for (const p of page.people) {
+          if (p.deactivated_at || p.role === "admin") continue;
+          if (p.principal !== principal && p.principal !== ADMIN_TOKEN_PRINCIPAL) members.add(p.principal);
+        }
+        cursor = page.next_cursor;
+      } while (cursor);
+      return members.size;
+    })()
+      .then((n) => live && setCount(n))
       .catch(() => {
         // The dialog still states the consequence; the count stays null, and
         // ConfirmEnforcement says so instead of printing a number it never read.

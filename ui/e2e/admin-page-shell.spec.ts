@@ -29,7 +29,7 @@ test.describe("admin page shell (#3058, #3080)", () => {
   test("list pages share one title x, form pages share another, all on the page-title rung", async ({ page }) => {
     await gotoConsole(page, "admin");
     const lists = [];
-    for (const label of ["People", "Credentials", "Governance", "Audit", "Templates"] as const) lists.push(await title(page, label));
+    for (const label of ["People", "Credentials", "Governance", "Audit", "Templates", "Runs"] as const) lists.push(await title(page, label));
     const forms = [];
     for (const label of ["Settings", "Approvals"] as const) forms.push(await title(page, label));
 

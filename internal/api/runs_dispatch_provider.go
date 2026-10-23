@@ -43,10 +43,10 @@ const (
 	mpRunNoIntegration = "integration_id no longer chooses a model credential: a run's model provider does — use model_provider instead."
 	// mpNoProviderDetail is the brokered-LLM 404's detail for a model run no
 	// provider serves: under a provider block nothing else credentials it.
-	mpNoProviderDetail = "no model provider serves this agent on this deployment — an admin adds one under Settings → Model providers"
+	mpNoProviderDetail = "No model provider serves this agent on this deployment — an admin adds one under Settings → Model providers"
 	// mpNoProviderHarnessDetail is mpNoProviderDetail for a run whose other
 	// harnesses each reach their own provider: it names the one that has none.
-	mpNoProviderHarnessDetail = "no model provider serves %s on this deployment, though this run's other harnesses have their own — an admin adds one under Settings → Model providers"
+	mpNoProviderHarnessDetail = "No model provider serves %s on this deployment, though this run's other harnesses have their own — an admin adds one under Settings → Model providers"
 )
 
 // providerDenial is a model-provider refusal: the sentence, and whether the

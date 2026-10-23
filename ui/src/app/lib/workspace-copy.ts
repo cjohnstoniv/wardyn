@@ -73,6 +73,11 @@ export const WORKSPACE_DETAIL_EXTRA = {
   // session profile" action. This subtitle matches RecordPane's own wording.
   SESSIONS_SUBTITLE:
     "Run a task once with everything open. Wardyn watches what it reaches and you approve the hosts. Replay it confined to prove that approval is enough.",
+  // #3042: the card's description says the record-then-replay idea once; the empty state only says there is nothing yet.
+  SESSIONS_EMPTY: "No sessions yet",
+  // The helper under the New session form describes the button, not the idea.
+  SESSIONS_START_HELP:
+    "Opens an attached terminal with the repo + your model provider ready. Do the real thing, then click Done recording to capture what it used.",
 } as const;
 
 // M-6 (QM-10/§4.6, admin-member-modes-design.md, modes-b.html) — Record

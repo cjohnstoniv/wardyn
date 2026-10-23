@@ -101,9 +101,10 @@ describe("ApprovalsScreen — copy + EXPIRED inclusion", () => {
     const decidedTab = await screen.findByRole("tab", { name: /decided/i });
     await user.click(decidedTab);
     await waitFor(() => expect(listApprovalsMock).toHaveBeenCalledWith("CANCELLED"));
-    await waitFor(() => expect(screen.getByTitle("Open run run_cancelled_77")).toBeInTheDocument());
+    // #3036: the row names the run with a RunRef, whose copy button carries the full id and prints the short one.
+    const idButton = await screen.findByTitle(/^run_cancelled_77 /);
     // #2853: the row prints a short id, so the request title keeps its width.
-    expect(screen.getByTitle("Open run run_cancelled_77")).toHaveTextContent(/^run_canc$/);
+    expect(idButton).toHaveTextContent(/^cancelle$/);
     // The badge reads the ONE copy key, not a title-cased wire value.
     expect(screen.getByText(APPROVAL.STATE_CANCELLED)).toBeInTheDocument();
   });
@@ -128,7 +129,7 @@ describe("ApprovalsScreen — copy + EXPIRED inclusion", () => {
     const decidedTab = await screen.findByRole("tab", { name: /decided/i });
     await user.click(decidedTab);
     // The EXPIRED request's run id must render in the decided list.
-    await waitFor(() => expect(screen.getByTitle("Open run run_expired_42")).toBeInTheDocument());
+    expect(await screen.findByTitle(/^run_expired_42 /)).toHaveTextContent(/^expired_$/);
   });
 
   it("labels the approve dialog 'Approve', not 'Approve & mint'", async () => {

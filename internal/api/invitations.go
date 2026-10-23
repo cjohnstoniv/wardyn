@@ -35,7 +35,7 @@ const (
 
 // invitationNotFoundMsg is the one body a missing id, another person's invitation and an invitation
 // that is no longer pending (on revoke) answer with, so none of them is an oracle for the others.
-const invitationNotFoundMsg = "invitation not found"
+const invitationNotFoundMsg = "Invitation not found"
 
 // mountInvitationRoutes registers the invitation family: the admin half on securityOps, the
 // signed-in person's half beside /me/tokens.

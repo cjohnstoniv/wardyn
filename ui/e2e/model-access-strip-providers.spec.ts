@@ -23,6 +23,7 @@ import { AGENTS } from "../src/app/lib/workspace-providers-copy";
 const P = {
   bedrock: { id: "bedrock-prod", name: "Bedrock (prod)", kind: "bedrock_sso" },
   gateway: { id: "corp-gateway", name: "Corp gateway", kind: "custom_endpoint", host: "gateway.corp.example" },
+  local: { id: "local-llm", name: "Local LLM", kind: "local_model", host: "llm.corp.example" },
   claude: { id: "claude-sub", name: "Claude subscription", kind: "anthropic_subscription" },
 };
 
@@ -97,6 +98,16 @@ test.describe("the shell strip under a provider block (design §5.5, #540)", () 
     await expect(page.getByText("Codex CLI runs use Corp gateway, and no token is available.")).toBeVisible();
     await page.getByRole("button", { name: CONNECTIONS.ADD_TOKEN }).click();
     await expect(page.getByRole("dialog", { name: KEY_DOOR.TITLE(true, P.gateway.name) })).toBeVisible();
+  });
+
+  test("B4: a local model server default says token, not key, and opens the token door", async ({ page }) => {
+    await withProviderAttention(page, [P.local], { [P.local.id]: { state: "not_configured" } }, { [P.local.id]: ["codex-cli"] });
+    await gotoConsole(page);
+    await navToRoute(page, "/runs");
+
+    await expect(page.getByText(BANNER.B4("Codex CLI", P.local.name, true))).toBeVisible();
+    await page.getByRole("button", { name: CONNECTIONS.ADD_TOKEN }).click();
+    await expect(page.getByRole("dialog", { name: KEY_DOOR.TITLE(true, P.local.name) })).toBeVisible();
   });
 
   test("B5: a Claude subscription default: the sign-in sentence opens the Claude door", async ({ page }) => {

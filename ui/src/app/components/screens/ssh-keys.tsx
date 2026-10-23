@@ -75,7 +75,7 @@ export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) 
   React.useEffect(load, [load]);
 
   // #1200 compact cards — one line, absent while unloaded. "No keys", not the
-  // EmptyState's own "No keys yet." — both render at once once expanded, and
+  // EmptyState's own "No keys yet" — both render at once once expanded, and
   // a query for that canon string must still resolve to a single node. The
   // error case is absent too (review R2-L1): the packet has no error summary
   // for this card, and ErrorState's own heading (states.tsx's STATES.
@@ -107,7 +107,7 @@ export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) 
         ) : keys.length === 0 ? (
           <EmptyState
             icon={KeyRound}
-            title="No keys yet."
+            title="No keys yet"
             description="Add your public key to connect over SSH."
             action={
               <Button onClick={() => setAddOpen(true)} disabled={addBlocked}>

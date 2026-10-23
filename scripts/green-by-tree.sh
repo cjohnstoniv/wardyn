@@ -24,8 +24,9 @@
 #
 # Nightly evidence. The NEWEST completed workflow_dispatch run of nightly.yml in
 # this repository whose head commit has the tree decides, where every name in
-# WATCHED is a success job and there is at least one `multi-arch build (` job,
-# all success. Cancelled runs are skipped, and an in-progress one is not
+# WATCHED is a success job (a matrix job counts as every "<name> (<leg>)" check
+# it reported, all success; none reported is "not reported") and there is at
+# least one `multi-arch build (` job, all success. Cancelled runs are skipped, and an in-progress one is not
 # completed; a newer red run is not rescued by an older green one. (CI keeps
 # the first green run instead: dco and gitleaks depend on history.)
 # A scheduled run never counts: it builds nothing to stage, and GitHub may
@@ -67,11 +68,14 @@ jq_out() {
   JQ="$(jq "$@" <<<"${OUT}")" || { say "could not read the API response"; exit 2; }
 }
 
-# status_of <job name> <name<TAB>conclusion lines>: success, the first bad
-# conclusion, or "not reported". Every job carrying the name must succeed.
+# status_of <job name> <name<TAB>conclusion lines> [legs]: success, the first bad
+# conclusion, or "not reported". Every job carrying the name must succeed. With a
+# third argument, a matrix job's rows count too: GitHub reports one check per leg,
+# named "<job name> (<leg>)", and every leg must succeed. Only the nightly's watched
+# jobs ask for legs: a required context is always an exact check name.
 status_of() {
-  awk -F'\t' -v n="$1" '
-    $1 == n { seen = 1; if ($2 != "success" && bad == "") bad = $2 }
+  awk -F'\t' -v n="$1" -v legs="${3:-}" '
+    $1 == n || (legs != "" && index($1, n " (") == 1) { seen = 1; if ($2 != "success" && bad == "") bad = $2 }
     END { if (!seen) print "not reported"; else if (bad != "") print bad; else print "success" }' <<<"$2"
 }
 
@@ -160,7 +164,7 @@ while IFS=$'\t' read -r id head event; do
   jobs="${JQ}"
   good=0
   for job in "${watched_jobs[@]}"; do
-    status="$(status_of "${job}" "${jobs}")"
+    status="$(status_of "${job}" "${jobs}" legs)"
     if [ "${status}" != success ]; then
       say "nightly run ${id}: watched job '${job}' is not green (saw: ${status})"
       good=1

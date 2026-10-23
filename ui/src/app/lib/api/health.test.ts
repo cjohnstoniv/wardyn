@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { health } from "./health";
-import { WFETCH_TIMEOUT_MS } from "./core";
+import { WFETCH_TIMEOUT_MS, setToken } from "./core";
 import { SERVER_OWNED_SITE_CONFIG_KEYS } from "../types";
 import { aheadByHours } from "../test-clock";
 
@@ -544,5 +544,40 @@ describe("source parity — GET /me's Go body vs the TS Me mirror", () => {
     expect(goTags.length).toBeGreaterThanOrEqual(6);
     const tsKeys = tsInterfaceKeys(healthTs, "MeUserDrive").sort();
     expect(tsKeys).toEqual(goTags);
+  });
+});
+
+// /healthz names the components only to a signed-in caller, so health() must
+// present the console's credential: the session cookie and, when set, the
+// admin token. Without the token an admin-token console reads no components and
+// the recording hook (use-recording-disabled.ts) never settles.
+describe("health.health() — presents the console's credential", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: "ok" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    setToken(null);
+    vi.unstubAllGlobals();
+  });
+
+  it("sends the admin token and the cookie", async () => {
+    setToken("t-admin");
+    await health.health();
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/healthz");
+    expect(init?.credentials).toBe("include");
+    expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer t-admin");
+  });
+
+  it("sends no Authorization header without a token", async () => {
+    setToken(null);
+    await health.health();
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init?.credentials).toBe("include");
+    expect(new Headers(init?.headers).has("Authorization")).toBe(false);
   });
 });

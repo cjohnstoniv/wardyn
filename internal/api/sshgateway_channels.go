@@ -36,7 +36,7 @@ const sshDisplaceGrace = time.Second
 // sshExecStreamUnsupportedMsg is what every ExecStream consumer in this file
 // reports on runner.ErrExecStreamUnsupported: a clean channel error, never a
 // hang, on a substrate with no exec-streaming primitive.
-const sshExecStreamUnsupportedMsg = "this sandbox's runtime does not support SSH exec/sftp/forwarding"
+const sshExecStreamUnsupportedMsg = "This sandbox's runtime does not support SSH exec/sftp/forwarding"
 
 // SSH connection-protocol request/channel-open payloads (RFC 4254 §6, §7.2),
 // mirrored here with EXPORTED fields so ssh.Unmarshal (reflection-based,

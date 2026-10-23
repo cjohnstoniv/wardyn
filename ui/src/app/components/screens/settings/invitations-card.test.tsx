@@ -91,7 +91,7 @@ describe("InvitationsCard", () => {
   });
 
   it("shows nothing where there is no person to invite (the admin token, local mode)", async () => {
-    route = () => json({ error: "an API token belongs to a signed-in human", reason: "api_token_no_human" }, 403);
+    route = () => json({ error: "An API token belongs to a signed-in human", reason: "api_token_no_human" }, 403);
     const { container } = mount();
     await waitFor(() => expect(container).toBeEmptyDOMElement());
   });

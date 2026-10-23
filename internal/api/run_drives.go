@@ -84,10 +84,11 @@ func (s *Server) authorizeRequestDrives(r *http.Request, req createRunRequest, c
 	out := make([]runDrive, 0, len(req.Drives))
 	for _, a := range req.Drives {
 		i := slices.IndexFunc(reach, func(d reachableDrive) bool { return d.winner.Drive.ID.String() == a.DriveID })
-		if i < 0 {
+		if i < 0 || reach[i].held {
 			// The row carries no id (authz.Datum records no sentence), so
 			// another person's drive and an id that names nothing leave the
-			// same row; only the 422 body echoes the id as sent.
+			// same row; only the 422 body echoes the id as sent. A kept work
+			// folder whose run has not ended (held) is refused the same way.
 			return nil, driveDenied(authz.Deny(authz.ReasonDriveNotFound, "runs.drive", ""), driveNotFoundMsg(a.DriveID))
 		}
 		d := reach[i]

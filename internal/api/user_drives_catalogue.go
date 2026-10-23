@@ -30,6 +30,9 @@ type reachableDrive struct {
 	legacy bool
 	// owned marks the caller's own member drive (memberReachableDrives).
 	owned bool
+	// held marks a kept work folder whose run has not ended: listed, but a run cannot attach it
+	// (runDrivesFor), because that run alone holds it until then.
+	held bool
 }
 
 // target is where this drive mounts (runner.DriveTargetFor).

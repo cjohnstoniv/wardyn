@@ -20,6 +20,7 @@ import { useDeferredBusy } from "../../../lib/use-deferred-busy";
 import { useUnsavedGuard } from "../../../lib/use-unsaved-guard";
 import { SavedElsewhereBanner } from "../../wardyn/saved-elsewhere-banner";
 import { Button } from "../../ui/button";
+import { INLINE_ACTIONS } from "../../wardyn/form-actions";
 import { Label } from "../../ui/label";
 import { Textarea } from "../../ui/textarea";
 import { useSecurityOperator } from "../../wardyn/operator-context";
@@ -191,7 +192,7 @@ export function EgressBaselineTab({ onSubmitted }: { onSubmitted?: () => void })
                 <span>{outcome.message}</span>
               </Note>
             )}
-            <div className="flex justify-end">
+            <div className={INLINE_ACTIONS}>
               <Button disabled={disabled || !dirty} onClick={() => void save()}>
                 {showSpinner ? <Loader2 className="size-4 animate-spin" /> : null}
                 {BASELINE.SAVE}

@@ -77,6 +77,8 @@ var kernelDoors = map[string][]string{
 	"cliSessionCutsPass": {"capFeature"},
 	// Self-hosting: POST /me/runners/tokens asks the self_host_runner value.
 	"handleRunnerTokenSelf": {"capFeature"},
+	// GET /me/capabilities' may_self_host_runner: the same value, asked read-only so the console can say so first.
+	"handleMeCapabilities": {"capFeature"},
 	// A sponsor entering a service identity's run: service_attach, asked with the operator step off (F6).
 	"sponsorMayEnter": {"capFeature"},
 	// The key and sign-in doors, answered as an unknown provider (D-6).
