@@ -534,6 +534,40 @@ describe("LiveApprovals", () => {
       expect(screen.getByText(SECURITY_ONLY_REASON)).toBeInTheDocument();
     });
 
+    // #2604: the list carries the server's verdict (egress_host grant applied), so no click is needed to learn it.
+    it("decidable=false turns the buttons off before any click and shows the admin-only hint; decidable=true leaves them on", async () => {
+      listApprovalsMock.mockResolvedValue([
+        pending({ id: "e-no", requested_scope: { host: "unlisted.example" }, decidable: false }),
+        pending({ id: "e-yes", requested_scope: { host: "listed.example" }, decidable: true }),
+      ]);
+      render(
+        <OperatorProvider operator={false} securityOperator={false}>
+          <LiveApprovals runId="r1" />
+        </OperatorProvider>,
+      );
+      const panel = await screen.findByTestId("live-approvals");
+      const approve = within(panel).getAllByRole("button", { name: /^Approve$/ });
+      const deny = within(panel).getAllByRole("button", { name: /^Deny$/ });
+      expect(approve).toHaveLength(2);
+      const off = approve.findIndex((b) => (b as HTMLButtonElement).disabled);
+      expect(off).toBeGreaterThanOrEqual(0);
+      expect(approve.filter((b) => !(b as HTMLButtonElement).disabled)).toHaveLength(1);
+      expect(deny[off]).toBeDisabled();
+      expect(screen.getByText(SECURITY_ONLY_REASON)).toBeInTheDocument();
+      expect(approveMock).not.toHaveBeenCalled();
+    });
+
+    it("decidable=true enables a row role+kind alone would have closed", async () => {
+      listApprovalsMock.mockResolvedValue([pending({ id: "t1", kind: "tool_call", requested_scope: {}, decidable: true })]);
+      render(
+        <OperatorProvider operator={false} securityOperator={false}>
+          <LiveApprovals runId="r1" />
+        </OperatorProvider>,
+      );
+      const panel = await screen.findByTestId("live-approvals");
+      expect(within(panel).getByRole("button", { name: /^Approve$/ })).not.toBeDisabled();
+    });
+
     it("a member CANNOT Approve/Deny an api_key credential row — stays admin-only", async () => {
       listApprovalsMock.mockResolvedValue([
         pending({

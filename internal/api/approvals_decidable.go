@@ -88,6 +88,7 @@ func (s *Server) withHoldProjection(r *http.Request, fn func(store.Page) ([]type
 		}
 		s.projectHolds(rows)
 		s.projectEscalations(r.Context(), rows)
+		s.projectDecidable(r, rows)
 		return rows, nil
 	}
 }
@@ -100,7 +101,40 @@ func (s *Server) withHoldProjectionAll(r *http.Request, fn func() ([]types.Appro
 		}
 		s.projectHolds(rows)
 		s.projectEscalations(r.Context(), rows)
+		s.projectDecidable(r, rows)
 		return rows, nil
+	}
+}
+
+// projectDecidable sets Decidable on every PENDING row to the part of mayDecide's verdict the console can act on
+// before a click: kind, ownership and, for a member's egress_domain row, the egress_host grant (#2604). The
+// four-eyes switch is left out on purpose: it refuses with its own stated reason on the click, and a button
+// disabled with no reason would be worse. The run is loaded (once per run) only for a non-operator. A run that
+// cannot be read leaves the row's Decidable nil, which the console reads as "not told", never as "no".
+func (s *Server) projectDecidable(r *http.Request, rows []types.ApprovalRequest) {
+	operator := s.isSecurityOperator(r.Context())
+	runs := map[uuid.UUID]*types.AgentRun{}
+	for i := range rows {
+		ap := rows[i]
+		if ap.State != types.ApprovalPending {
+			continue
+		}
+		var run types.AgentRun
+		if !operator {
+			got, seen := runs[ap.RunID]
+			if !seen && s.cfg.Store != nil {
+				if loaded, err := s.cfg.Store.GetRun(r.Context(), ap.RunID); err == nil {
+					got = &loaded
+				}
+				runs[ap.RunID] = got
+			}
+			if got == nil {
+				continue
+			}
+			run = *got
+		}
+		may := ap.Kind != types.ApprovalCredentialReauth && s.decidableKindAndOwner(r, ap, run)
+		rows[i].Decidable = &may
 	}
 }
 

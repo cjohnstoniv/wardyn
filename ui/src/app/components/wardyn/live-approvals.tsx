@@ -337,15 +337,15 @@ export function LiveApprovals({
   // function, right after this one) — NOT decide() — because decisionArgs'
   // omit-for-"run" convention would collide with adoDecisionRule's own
   // different bodyless default; see decideAdo's doc.
-  // Rows the server refused with capability_egress_host: the list cannot tell who holds the host, so the first
-  // refusal is what turns that row's buttons off and names the admin.
+  // The server's per-row `decidable` (egress_host grant applied) leads; role+kind is only the guess for an
+  // unstamped row. A 403 capability_egress_host still turns that row off, for a grant withdrawn since the list.
   const [adminOnly, setAdminOnly] = React.useState<ReadonlySet<string>>(new Set());
   const noteRefusal = (id: string, e: unknown) => {
     if (e instanceof HttpError && e.status === 403 && e.reason === "capability_egress_host") {
       setAdminOnly((cur) => new Set(cur).add(id));
     }
   };
-  const canDecide = (a: ApprovalRequest) => canDecideApproval(securityOperator, a.kind) && !adminOnly.has(a.id);
+  const canDecide = (a: ApprovalRequest) => (a.decidable ?? canDecideApproval(securityOperator, a.kind)) && !adminOnly.has(a.id);
   const decide = async (a: ApprovalRequest, approve: boolean, scope: ApprovalScope = "run", until?: string) => {
     setBusy(a.id);
     try {
