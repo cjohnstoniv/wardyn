@@ -30,14 +30,12 @@ vi.mock("../../lib/api/permissions", () => ({
   },
 }));
 
-const listRunsMock = vi.fn();
-// The paged overload (limit + offset) answers { runs, truncated }; the plain one a bare array.
-vi.mock("../../lib/api/runs", () => ({
-  runs: {
-    listRuns: (o?: { limit?: number }) =>
-      listRunsMock().then((page: { runs: unknown[] }) => (o?.limit != null ? page : page.runs)),
-  },
+// The enforcement confirm counts members from the People directory (#2515).
+const listPeopleMock = vi.fn();
+vi.mock("../../lib/api/people", () => ({
+  people: { list: (o?: unknown) => listPeopleMock(o) },
 }));
+const person = (principal: string, extra: Record<string, unknown> = {}) => ({ principal, issuer_kind: "oidc", ...extra });
 
 // UT-7a: the add form's "User type" branch — a closed picker of the org's
 // types (UserTypeSubjectSelect), never free text.
@@ -85,7 +83,7 @@ beforeEach(() => {
   upsertGrantMock.mockReset();
   deleteGrantMock.mockReset();
   putEnforcementMock.mockReset();
-  listRunsMock.mockReset().mockResolvedValue({ runs: [], truncated: false });
+  listPeopleMock.mockReset().mockResolvedValue({ people: [] });
   listUserTypesMock.mockReset().mockResolvedValue([]);
 });
 
@@ -224,16 +222,17 @@ describe("PermissionsScreen — the capability row (#3053)", () => {
 describe("PermissionsScreen — enforcement confirms", () => {
   it("turning a kind on names the affected member count and writes the FULL map", async () => {
     getPermissionsMock.mockResolvedValue({ grants: [grant()], enforcement: {} });
-    // Two distinct human run creators, plus the admin-token machine lane which
-    // must not be counted as a member.
-    listRunsMock.mockResolvedValue({
-      runs: [
-        { created_by: "bob@corp.example" },
-        { created_by: "dana@corp.example" },
-        { created_by: "bob@corp.example" },
-        { created_by: "admin-token" },
+    // Three bounded: two members (one never launched a run) and a security admin, who is bounded like a member.
+    // Not counted: the admin-token machine lane, a super admin and a deactivated person.
+    listPeopleMock.mockResolvedValue({
+      people: [
+        person("bob@corp.example"),
+        person("dana@corp.example", { pre_created: true }),
+        person("admin-token"),
+        person("root@corp.example", { role: "admin" }),
+        person("sec@corp.example", { role: "security_admin" }),
+        person("gone@corp.example", { deactivated_at: "2026-10-01T00:00:00Z" }),
       ],
-      truncated: false,
     });
     putEnforcementMock.mockResolvedValue({ egress_host: true });
     const user = userEvent.setup({ pointerEventsCheck: 0 });
@@ -244,7 +243,7 @@ describe("PermissionsScreen — enforcement confirms", () => {
 
     const dialog = await screen.findByRole("alertdialog");
     expect(within(dialog).getByText(PERM.ENFORCE_ON_TITLE(KIND.egress_host.label))).toBeInTheDocument();
-    expect(within(dialog).getByText(PERM.ENFORCE_ON_BODY(2))).toBeInTheDocument();
+    expect(within(dialog).getByText(PERM.ENFORCE_ON_BODY(3))).toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: PERM.ENFORCE_CONFIRM }));
 
     // The PUT carries EVERY kind, not just the one that flipped (the endpoint
@@ -349,9 +348,9 @@ describe("PermissionsScreen — a snapshot that never arrived", () => {
 
 describe("PermissionsScreen — an affected-member count that could not be read", () => {
   // ticket: R4/F133
-  it("says members are bounded WITHOUT a number when GET /runs is refused — never '0 members'", async () => {
+  it("says members are bounded WITHOUT a number when GET /people is refused — never '0 members'", async () => {
     getPermissionsMock.mockResolvedValue({ grants: [grant()], enforcement: {} });
-    listRunsMock.mockRejectedValue(new Error("403"));
+    listPeopleMock.mockRejectedValue(new Error("403"));
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderScreen();
 
@@ -366,10 +365,14 @@ describe("PermissionsScreen — an affected-member count that could not be read"
     expect(within(dialog).getByText(PERM.ENFORCE_ON_BODY_UNKNOWN)).toBeInTheDocument();
   });
 
-  // #2515: the runs page is the newest 1000; past that the creators it shows are only some of the members.
-  it("says members are bounded WITHOUT a number when the runs page is truncated", async () => {
+  // #2515: the directory is paged; a count from the first page alone would under-count.
+  it("counts every page of the People directory", async () => {
     getPermissionsMock.mockResolvedValue({ grants: [grant()], enforcement: {} });
-    listRunsMock.mockResolvedValue({ runs: [{ created_by: "bob@corp.example" }, { created_by: "dana@corp.example" }], truncated: true });
+    listPeopleMock.mockImplementation(async (o?: { cursor?: string }) =>
+      o?.cursor
+        ? { people: [person("dana@corp.example")] }
+        : { people: [person("bob@corp.example")], next_cursor: "c2" },
+    );
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderScreen();
 
@@ -377,8 +380,8 @@ describe("PermissionsScreen — an affected-member count that could not be read"
     await user.click(screen.getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.egress_host.label}` }));
 
     const dialog = await screen.findByRole("alertdialog");
-    expect(within(dialog).queryByText(PERM.ENFORCE_ON_BODY(2))).toBeNull();
-    expect(within(dialog).getByText(PERM.ENFORCE_ON_BODY_UNKNOWN)).toBeInTheDocument();
+    expect(await within(dialog).findByText(PERM.ENFORCE_ON_BODY(2))).toBeInTheDocument();
+    expect(listPeopleMock).toHaveBeenCalledWith(expect.objectContaining({ state: "active" }));
   });
 });
 

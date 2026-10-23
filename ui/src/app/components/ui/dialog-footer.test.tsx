@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "./dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./dialog";
 
 // jsdom does no layout, so this pins the classes that pin the bar; the e2e spec proves it on screen.
 describe("DialogFooter", () => {
@@ -27,5 +27,27 @@ describe("DialogFooter", () => {
     expect(footer).toHaveAttribute("data-slot", "dialog-footer");
     expect(footer.className).toContain("sticky");
     expect(footer.className).toContain("bottom-0");
+  });
+});
+
+describe("DialogHeader", () => {
+  it("is sticky to the top of the scrolling dialog, so the title stays with the pinned footer", () => {
+    render(
+      <Dialog open>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit</DialogTitle>
+            <DialogDescription>Fields</DialogDescription>
+          </DialogHeader>
+        </DialogContent>
+      </Dialog>,
+    );
+    const header = screen.getByRole("heading", { name: "Edit" }).parentElement!;
+    expect(header).toHaveAttribute("data-slot", "dialog-header");
+    expect(header.className).toContain("sticky");
+    expect(header.className).toContain("-top-6");
+    expect(header.className).toContain("bg-background");
+    // The Close X sits above the header, or the header covers it.
+    expect(screen.getByRole("button", { name: "Close" }).className).toContain("z-20");
   });
 });

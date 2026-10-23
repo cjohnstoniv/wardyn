@@ -54,6 +54,7 @@ describe("providerWhatWord / providerStateWord / providerOptionLabel — QC-2", 
     ["bedrock_sso", "AWS sign-in"],
     ["anthropic_subscription", "sign-in"],
     ["custom_endpoint", "token"],
+    ["local_model", "token"],
     ["anthropic_api_key", "key"],
     ["openai_api_key", "key"],
   ])("%s reads as %s", (kind, word) => {

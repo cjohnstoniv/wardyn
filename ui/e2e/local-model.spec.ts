@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, expandCard, gotoConsole, navTo, navToRoute } from "./fixtures";
+import { test, expect, expandCard, gotoConsole, mockMemberRole, navTo, navToRoute } from "./fixtures";
 import { LOCAL_MODEL_CARD, LOCAL_MODEL_EDITOR, LOCAL_MODEL_LIST } from "../src/app/lib/local-model-copy";
 import { MODEL_PROVIDERS } from "../src/app/lib/model-providers-copy";
 
@@ -95,6 +95,23 @@ test.describe("Settings — a local model server", () => {
   });
 });
 
+/** Gives the seeded run "e2e fixture 2" a local model provider and the allowlist it launched with (#3374). */
+async function withLocalModelRun(page: import("@playwright/test").Page): Promise<void> {
+  await page.route("**/api/v1/runs/*", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    const response = await route.fetch();
+    const json = await response.json();
+    if (json.task === "e2e fixture 2") {
+      Object.assign(json, {
+        model_provider_id: "laptop-gpu",
+        model_provider_name: "Laptop GPU",
+        model_allowlists: { "laptop-gpu": ["qwen2.5-coder:7b", "llama3.2:3b"] },
+      });
+    }
+    await route.fulfill({ response, json });
+  });
+}
+
 test.describe("Run detail — the Local models card", () => {
   test("a run on a local model server shows its allowed models, the server and the caps", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -124,27 +141,7 @@ test.describe("Run detail — the Local models card", () => {
             },
           }),
     );
-    await page.route("**/api/v1/runs/*", async (route) => {
-      if (route.request().method() !== "GET") return route.fallback();
-      const response = await route.fetch();
-      const json = await response.json();
-      if (json.task === "e2e fixture 2") Object.assign(json, { model_provider_id: "laptop-gpu", model_provider_name: "Laptop GPU" });
-      await route.fulfill({ response, json });
-    });
-    // The kind is not on the run row; the page reads it off the run.create audit row.
-    await page.route("**/api/v1/audit*", async (route) => {
-      const url = new URL(route.request().url());
-      const response = await route.fetch();
-      if (!url.searchParams.get("run_id") || url.searchParams.get("action") || url.searchParams.get("action_prefix")) {
-        return route.fulfill({ response });
-      }
-      const rows = (await response.json()) as { action: string; data?: Record<string, unknown> }[];
-      const snapshot = { id: "laptop-gpu", kind: "local_model", name: "Laptop GPU" };
-      await route.fulfill({
-        response,
-        json: rows.map((r) => (r.action === "run.create" ? { ...r, data: { ...r.data, model_provider: snapshot } } : r)),
-      });
-    });
+    await withLocalModelRun(page);
 
     await gotoConsole(page);
     await navTo(page, "Runs");
@@ -152,12 +149,27 @@ test.describe("Run detail — the Local models card", () => {
 
     const card = page.locator("section", { has: page.getByRole("heading", { name: LOCAL_MODEL_CARD.TITLE }) });
     await expect(card).toBeVisible();
-    await expect(card.getByText(LOCAL_MODEL_CARD.LEDE)).toBeVisible();
     await expect(card.getByText("qwen2.5-coder:7b")).toBeVisible();
     await expect(card.getByText(LOCAL_MODEL_CARD.ASKED_FOR(["Claude Code", "Codex CLI"]))).toBeVisible();
     await expect(card.getByText(LOCAL_MODEL_CARD.NOT_ASKED_FOR)).toBeVisible();
     await expect(card.getByText("host.docker.internal:11434")).toBeVisible();
     await expect(card.getByText("Up to 30 minutes")).toBeVisible();
     await expect(card.getByText(LOCAL_MODEL_CARD.NO_MANAGEMENT)).toBeVisible();
+  });
+
+  test("a member sees the models their own run launched with, and no server or caps", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await mockMemberRole(page);
+    await withLocalModelRun(page);
+
+    await gotoConsole(page);
+    await navToRoute(page, "/runs");
+    await page.getByText("e2e fixture 2").click();
+
+    const card = page.locator("section", { has: page.getByRole("heading", { name: LOCAL_MODEL_CARD.TITLE }) });
+    await expect(card.getByText("qwen2.5-coder:7b")).toBeVisible();
+    await expect(card.getByText("llama3.2:3b")).toBeVisible();
+    await expect(card.getByText(LOCAL_MODEL_CARD.NO_MANAGEMENT)).toBeVisible();
+    await expect(card.getByText(LOCAL_MODEL_CARD.SERVER, { exact: true })).toHaveCount(0);
   });
 });

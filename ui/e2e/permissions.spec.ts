@@ -144,15 +144,15 @@ test.describe("permissions — the admin surface, end to end", () => {
     await expect(page.getByText(PERM.CHIP_ON, { exact: true })).toHaveCount(0);
   });
 
-  // #2515: the member count is read from the newest page of runs; a page the server cut short is not a count.
-  test("a truncated runs page is not counted: the confirm says members are bounded, with no number", async ({ page }) => {
+  // #2515: the member count is the People directory's, so a person who never launched a run is counted.
+  test("the enforcement confirm counts the People directory, not the people who launched runs", async ({ page }) => {
     let served = false;
-    await page.route((url) => url.pathname === "/api/v1/runs" && url.searchParams.get("offset") === "0", (route) => {
+    await page.route((url) => url.pathname === "/api/v1/people", (route) => {
       if (route.request().method() !== "GET") return route.fallback();
       served = true;
+      const person = (principal: string, extra: object = {}) => ({ principal, issuer_kind: "oidc", pre_created: false, active_sessions: 0, api_tokens: 0, ssh_keys: 0, credentials: 0, active_runs: 0, ...extra });
       return route.fulfill({
-        json: [{ id: "r1", created_by: "bob@corp.example" }],
-        headers: { "X-Wardyn-Truncated": "true" },
+        json: { people: [person("never-launched@corp.example"), person("also-never@corp.example"), person("boss@corp.example", { role: "admin" })] },
       });
     });
     await gotoConsole(page, "admin");
@@ -160,8 +160,7 @@ test.describe("permissions — the admin surface, end to end", () => {
 
     await page.getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.workspace.label}` }).click();
     const dialog = page.getByRole("alertdialog");
-    await expect(dialog.getByText(PERM.ENFORCE_ON_BODY_UNKNOWN)).toBeVisible();
-    // The unknown wording is for the truncated page we served, not for a failed read.
+    await expect(dialog.getByText(PERM.ENFORCE_ON_BODY(2))).toBeVisible();
     expect(served).toBe(true);
     await dialog.getByRole("button", { name: "Cancel" }).click();
   });

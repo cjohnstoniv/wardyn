@@ -32,7 +32,7 @@ import { Link, useLocation } from "react-router-dom";
 import { toast } from "sonner";
 
 import { relativeTime, absoluteTime } from "../../lib/format";
-import { harnessDisplayNames, providerAttention, type ProviderAttention } from "../../lib/model-access";
+import { harnessDisplayNames, isTokenKind, providerAttention, type ProviderAttention } from "../../lib/model-access";
 import { modelConnectionCause } from "../../lib/model-connection-cause";
 import { AGENTS } from "../../lib/workspace-providers-copy";
 import { MODEL_ACCESS_BANNER } from "./model-access-copy";
@@ -90,7 +90,7 @@ export function providerStripLine(
     case "anthropic_subscription":
       return { sentence: BANNER.B5(harnesses), button: CONNECTIONS.SIGN_IN_CLAUDE, title: "", tone: "warning", dismissible: false };
     default: {
-      const token = a.provider.kind === "custom_endpoint";
+      const token = isTokenKind(a.provider.kind);
       return {
         sentence: BANNER.B4(harnesses, name, token),
         button: token ? CONNECTIONS.ADD_TOKEN : CONNECTIONS.ADD_KEY,

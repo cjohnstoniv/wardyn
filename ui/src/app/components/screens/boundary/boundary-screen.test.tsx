@@ -163,6 +163,7 @@ describe("BoundaryScreen", () => {
       memberships: [
         { id: "a1", subject_type: "user", subject: "jonas@example.org", unit_id: "p1", unit_name: "Platform team", changes: c },
         { id: "a2", subject_type: "group", subject: "platform-leads", unit_id: "p1", unit_name: "Platform team", changes: c },
+        { id: "a3", subject_type: "all", subject: "", unit_id: "p1", unit_name: "Platform team", changes: c },
       ],
     });
     const user = userEvent.setup();
@@ -175,7 +176,9 @@ describe("BoundaryScreen", () => {
     expect(within(tiles).getByText("person narrows").previousSibling).toHaveTextContent("1");
     expect(within(tiles).getByText("stored policies narrow").previousSibling).toHaveTextContent("0");
     expect(within(report).getByText(BOUNDARY_DRY_RUN.OTHER_ASSIGNMENTS)).toBeInTheDocument();
-    expect(within(report).getByText("platform-leads · Platform team")).toBeInTheDocument();
+    expect(within(report).getByText("IdP group platform-leads · Platform team")).toBeInTheDocument();
+    expect(within(report).getByText("Everyone · Platform team")).toBeInTheDocument();
+    expect(within(report).queryByText(/^ · /)).toBeNull();
     expect(within(report).getAllByText(new RegExp(`^${RUN_LIMITS.DEFAULT_END_LABEL}: `)).length).toBeGreaterThan(0);
     expect(BOUNDARY_DRY_RUN.TILE_TEAMS(2)).toBe("teams below narrow");
     expect(BOUNDARY_DRY_RUN.TILE_PEOPLE(2)).toBe("people narrow");

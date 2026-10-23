@@ -86,7 +86,10 @@ export const BOUNDARY_DRY_RUN = {
   POLICIES: "Stored policies",
   PEOPLE: "People",
   /** not on the boards: assignments to an IdP group, a user type or everyone (T3 says "IdP group"). */
-  OTHER_ASSIGNMENTS: "Assigned to a group, a user type or everyone",
+  OTHER_ASSIGNMENTS: "Assigned to an IdP group, a user type or everyone",
+  /** not on the boards: an assignment row names its kind; an "everyone" assignment has no subject to show. */
+  ASSIGNMENT_ROW: (kind: string, subject: string, team: string) =>
+    `${kind === "group" ? `IdP group ${subject}` : kind === "user_type" ? `User type ${subject}` : kind === "all" ? "Everyone" : subject} · ${team}`,
   DEFAULT_TEAM: "Default",
   NARROWED: "Narrowed",
   NO_CHANGE: "No change",
