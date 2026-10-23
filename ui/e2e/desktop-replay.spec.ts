@@ -65,7 +65,7 @@ test.describe("Desktop replay", () => {
           frames: ["{0{UkZCIDAwMy4wMDgK", "{850000{AAAA"], gaps: [{ start_ms: 138_100, end_ms: 272_000, reason: "you took over to sign in" }] }),
       }),
     );
-    await page.route(`**/api/v1/runs/${id}/recording-chain?**`, (route: Route) =>
+    await page.route(new RegExp(`/api/v1/runs/${id}/recording-chain\\?`), (route: Route) =>
       route.fulfill({ json: { ok: true, first_seq: 4801, last_seq: 4838, checked: 38, marks: [{ id: ids.pause, seq: 4815 }, { id: ids.resume, seq: 4822 }] } }),
     );
 
