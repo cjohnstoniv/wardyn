@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"slices"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 )
 
@@ -68,9 +70,18 @@ func (s *Server) runRequestGovernance(r *http.Request, req createRunRequest) (go
 					"or launch with the agent's convention image or an onboarded workspace's base image"))
 		}
 	}
+	// Every workspace the request selects, workspace_id first, each once and in
+	// request order, so the refusal names the first one not granted.
+	ids := attachedWorkspaceIDs(req)
 	if req.WorkspaceID != nil {
-		if refusal := s.runCapabilityRefusal(r, capWorkspace, req.WorkspaceID.String(), "runs.workspace",
-			"you are not granted workspace "+req.WorkspaceID.String()+" — ask an admin for access, or launch without a workspace"); refusal != nil {
+		ids = append([]uuid.UUID{*req.WorkspaceID}, ids...)
+	}
+	for i, id := range ids {
+		if slices.Contains(ids[:i], id) {
+			continue
+		}
+		if refusal := s.runCapabilityRefusal(r, capWorkspace, id.String(), "runs.workspace",
+			"you are not granted workspace "+id.String()+" — ask an admin for access, or launch without a workspace"); refusal != nil {
 			return governanceCeiling{}, refusal
 		}
 	}

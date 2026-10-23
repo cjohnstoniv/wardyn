@@ -282,6 +282,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   fetching the console's packages each get three tries with a time limit, so an unreachable registry fails the build
   in about ten minutes, and a package fetch that stalls fails it in under twenty. The lockfile is still enforced.
 - `make setup` no longer stops at the health wait on hosts whose /bin/sh is dash (Debian, Ubuntu, WSL Ubuntu).
+- Creating a run checks the workspace grant for every attached workspace, not only `workspace_id`. Preflight and the
+  policy preview answer the same.
 - Getting started no longer counts a service identity's run as your first run (#2513). `GET /api/v1/runs` takes
   `sponsored=exclude`, which turns off only the addition of the runs of service identities you sponsor to your own list;
   the page sends it, and the Runs list still shows those runs.
