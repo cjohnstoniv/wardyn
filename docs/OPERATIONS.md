@@ -208,7 +208,7 @@ copy is permanent.
 - **An interactive run with no snapshot.**
   - It answers `409 run_output_interactive`, and the sentence says what this run kept.
   - With recording on, it points at the run's recording.
-  - With recording off (`components.recording` reads `none` on `/healthz`), it says nothing was kept from this
+  - With recording off (`components.recording` reads `none` on a signed-in `/healthz`), it says nothing was kept from this
     session, and for a kill, a failure or a reconcile, that the session did not end through a Wardyn stop.
   - A security admin always gets the recording-on sentence, so it never tells them whether a snapshot exists.
 - **From the CLI.**

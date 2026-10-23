@@ -226,12 +226,12 @@
 ## 4. The recommended-vs-shipped tension, made honest
 
 - We recommend SPIRE / OpenBao / OPA / Kata-CC3 / Tetragon for hostile-multi-tenant production while the binary ships embedded / pg / builtin / docker(runc..kata) / heartbeat-only.
-- "Recommended: SPIRE" must never be misread as "you are running SPIRE", so three things keep the gap visible:
+- "Recommended: SPIRE" must never read as "you are running SPIRE", so three things keep the gap visible:
 
 1. The two columns above never merge.
-2. **`/healthz` is machine-honest.** For every seam `components` covers, `components.<seam>.selected` is the *actual* running impl, `components.<seam>.available` is what this build's registry actually holds, and `source` distinguishes `default` from `configured`.
-   - Same structural anti-overclaim guarantee as `ebpf_groundtruth` and runner `Capabilities`.
-3. **One shared conformance contract.** A future SPIRE / OpenBao / OPA impl must pass the *same* `RunConformance` suite the shipped default passes — until an alternate is built and green, the shipped default is what you run.
+2. **`/healthz` is machine-honest.** For every seam `components` covers, `components.<seam>.selected` is the *running* impl, `components.<seam>.available` is this build's registry, and `source` distinguishes `default` from `configured`. Signed out, `/healthz` omits it and `confinement_substrates`.
+   - Same anti-overclaim guarantee as `ebpf_groundtruth` and runner `Capabilities`.
+3. **One shared conformance contract.** A future SPIRE / OpenBao / OPA impl must pass the *same* `RunConformance` suite the shipped default passes — until an alternate is green, the shipped default is what you run.
 
 ---
 
