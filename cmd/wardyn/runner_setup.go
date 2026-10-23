@@ -52,6 +52,9 @@ var (
 type runnerSetupFlags struct {
 	pool, name, runnerd, artifactBase string
 	makeDefault                       bool
+	// release, set by `wardyn runner install`, is the version whose signed release is downloaded in place
+	// of the runner this CLI pins.
+	release string
 }
 
 // runnerSetupCmd is `wardyn runner setup` (design ATTACH 11.4): one command makes this computer one of the
@@ -124,7 +127,11 @@ func runRunnerSetup(cmd *cobra.Command, c *sdk.Client, f runnerSetupFlags, renew
 		return fmt.Errorf(errSetupOtherOrg, other, org, other, local.dir)
 	}
 	// Step 3: the wardyn-runnerd to run, checked before any credential is used.
-	bin, cleanup, err := resolveRunnerd(ctx, f, org, health.ArtifactBase, out)
+	resolve := resolveRunnerd
+	if f.release != "" {
+		resolve = signedRunnerd
+	}
+	bin, cleanup, err := resolve(ctx, f, org, health.ArtifactBase, out)
 	if err != nil {
 		return err
 	}
@@ -448,10 +455,19 @@ func packageRunnerdTrusted(path string) bool {
 	return true
 }
 
-// runnerdURL is the download for this platform: <base>/v<version>/wardyn-runnerd-<os>-<arch>, the base
-// being --artifact-base (then saved in cli.json), the saved artifact_base, the organisation's advertised
-// mirror (/healthz.cli_artifact_base), else the release.
+// runnerdURL is the download for this platform: <base>/v<version>/wardyn-runnerd-<os>-<arch>.
 func runnerdURL(flag, advertised string) (string, error) {
+	base, err := artifactBase(flag, advertised)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s/v%s/wardyn-runnerd-%s-%s", base, setupVersion(), setupGOOS, setupGOARCH), nil
+}
+
+// artifactBase is where release assets are downloaded from: --artifact-base (then saved in cli.json), the
+// managed preference ArtifactBase (macOS profile), the saved artifact_base, the organisation's advertised
+// mirror (/healthz.cli_artifact_base), else the release.
+func artifactBase(flag, advertised string) (string, error) {
 	dir, err := cliprofile.Dir()
 	if err != nil {
 		return "", err
@@ -464,11 +480,16 @@ func runnerdURL(flag, advertised string) (string, error) {
 		if err := cliprofile.WriteArtifactBase(dir, base); err != nil {
 			return "", err
 		}
+	} else if base, err = managedArtifactBase(); err != nil {
+		return "", err
+	} else if base != "" {
+		if base, err = cliprofile.NormalizeArtifactBase(base); err != nil {
+			return "", fmt.Errorf(errInstallManagedBase, err)
+		}
 	} else if base, err = cliprofile.ReadArtifactBase(dir); err != nil {
 		return "", err
 	}
-	base = strings.TrimSuffix(cmp.Or(base, advertised, releaseDownloadBase), "/")
-	return fmt.Sprintf("%s/v%s/wardyn-runnerd-%s-%s", base, setupVersion(), setupGOOS, setupGOARCH), nil
+	return strings.TrimSuffix(cmp.Or(base, advertised, releaseDownloadBase), "/"), nil
 }
 
 // download GETs u through orgClient for each origin it is sent to. orgClient follows no redirect, and a
@@ -503,11 +524,19 @@ func download(ctx context.Context, u string) (io.ReadCloser, error) {
 			u = next.String()
 		default:
 			resp.Body.Close()
-			return nil, fmt.Errorf(errSetupAnswered, resp.Status)
+			return nil, statusError{resp.StatusCode, resp.Status}
 		}
 	}
 	return nil, errors.New(errSetupRedirects)
 }
+
+// statusError is a download the server answered with anything but 200 or a redirect.
+type statusError struct {
+	code   int
+	status string
+}
+
+func (e statusError) Error() string { return fmt.Sprintf(errSetupAnswered, e.status) }
 
 // copyHashed writes what open gives to dst, a new file, and returns its SHA-256.
 func copyHashed(dst string, open func() (io.ReadCloser, error)) (string, error) {
