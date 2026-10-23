@@ -53,7 +53,7 @@ func newWithdrawEnv(t *testing.T, policy string) *withdrawEnv {
 	e.srv.adoPATs = e.pats
 	// The sign-in's access token, as a redemption would have left it.
 	key := strings.Join([]string{withdrawOwner, cfg.RowID, cfg.TenantID, cfg.ClientID, strings.Join(adoscope.MintScopes(), " ")}, "\x00")
-	e.srv.adoEntraTokens.put(key, adoEntraCached{ADOEntraAccess: ADOEntraAccess{AccessToken: "access", Scopes: adoscope.MintScopes(), ExpiresAt: time.Now().Add(time.Hour)}})
+	e.srv.adoEntraTokens.put(key, adoEntraCached{ADOEntraAccess: ADOEntraAccess{AccessToken: "access", Scopes: adoscope.MintScopes(), ExpiresAt: time.Now().Add(time.Hour)}, filled: time.Now()})
 
 	e.runner = e.claimedRunner(withdrawOwner)
 	if _, err := e.pg.RecordRunnerPosture(ctx, e.runner, types.RunnerPosture{OS: "linux", DiskEncrypted: true, Evidence: types.PostureEvidenceOSProbe}, time.Now()); err != nil {

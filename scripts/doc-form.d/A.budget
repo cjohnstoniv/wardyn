@@ -305,7 +305,8 @@
 # docs/AUDIT-ACTIONS.md 51994 = ours 51754 + theirs 51067 - base 50827 at the 0.10 W4f merge of AUD-REDACT onto the train.
 # docs/AUDIT-ACTIONS.md 53193 = ours 52629 + theirs 51994 - base 51430 at the 0.10 W4c merge of W4f a55a58e89 into the W4X train.
 # docs/AUDIT-ACTIONS.md 53409 = ours 51680 + theirs 53193 - base 51464 at the 0.10 UNIT-ADMIN merge of RESTRICT-PIN 35c385de1.
-docs/AUDIT-ACTIONS.md=53409 share=8
+# docs/AUDIT-ACTIONS.md 53480 adds 71 over 53409 (0.10 CREDPATH, #2140), measured: a cache-served Azure DevOps resolve writes only the sentinel row and a cache-served branch listing none; the fill is recorded as ado-refresh; the one-hour bound.
+docs/AUDIT-ACTIONS.md=53480 share=8
 # docs/AUDIT-ACTIONS.md 50827 = ours 50175 + theirs 50556 - base 49904 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.

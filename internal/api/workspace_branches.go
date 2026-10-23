@@ -310,7 +310,7 @@ func (s *Server) adoBranchAuth(ctx context.Context, a adoEntraRun) (auth, reason
 	if !ok {
 		return "", branchReasonNoCredential, nil
 	}
-	access, err := s.adoEntraAccessFor(rctx, cfg, a.owner, s.adoRequestScopes(rctx, cfg, a.owner), false)
+	access, err := s.adoEntraAccessFor(rctx, cfg, a.owner, nil, false)
 	switch ADOEntraClassify(err) {
 	case ADOEntraFailureNone:
 		return "Bearer " + access.AccessToken, "", nil
