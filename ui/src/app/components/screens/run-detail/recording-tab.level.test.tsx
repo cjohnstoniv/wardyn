@@ -4,21 +4,26 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { AuditEvent } from "../../../lib/types";
 
 const getDesktopRecording = vi.fn();
+const verifyChain = vi.fn();
 vi.mock("../../../lib/api/recordings", () => ({
-  recordings: { getDesktopRecording: (...a: unknown[]) => getDesktopRecording(...a) },
+  recordings: {
+    getDesktopRecording: (...a: unknown[]) => getDesktopRecording(...a),
+    verifyChain: (...a: unknown[]) => verifyChain(...a),
+  },
 }));
+vi.mock("../../../lib/api/audit", () => ({ audit: { listAudit: async () => [] } }));
 
 import { RecordingTab } from "./recording-tab";
 
 const RUN = "11111111-1111-4111-8111-111111111111";
 const KEY = `${RUN}~desktop-abc`;
-const ev = (action: string, data: Record<string, unknown>, target = RUN): AuditEvent =>
-  ({ id: action, time: "2026-10-20T10:44:32Z", actor: "wardynd", action, target, outcome: "success", data }) as AuditEvent;
+const ev = (action: string, data: Record<string, unknown>, target = RUN, time = "2026-10-20T10:44:32Z"): AuditEvent =>
+  ({ id: action, time, actor_type: "system", actor: "wardynd", action, target, outcome: "success", data }) as AuditEvent;
 
 function tab(props: Partial<React.ComponentProps<typeof RecordingTab>>) {
   return render(
@@ -43,23 +48,57 @@ describe("RecordingTab levels (#2968, M7 RunStrip, Replay, States 8)", () => {
     expect(screen.getByText("This run's policy set recording to Off. The audit log still shows what happened.")).toBeInTheDocument();
   });
 
-  it("a desktop recording shows its gap and the tamper-evident rows Wardyn wrote", async () => {
+  it("a desktop recording marks its gap, jumps from the action log and shows the chain verdict", async () => {
     getDesktopRecording.mockResolvedValue({
       raw: "{}",
-      playback: { version: 1, format: "novnc-playback", encoding: "base64", started_at: "", frames: ["{0{AA=="],
-        gaps: [{ start_ms: 1000, end_ms: 135_000, reason: "you took over to sign in" }] },
+      playback: { version: 1, format: "novnc-playback", encoding: "base64", started_at: "2026-10-20T10:40:00Z", frames: ["{0{AA==", "{600000{AA=="],
+        gaps: [{ start_ms: 138_100, end_ms: 272_000, reason: "you took over to sign in" }] },
     });
+    verifyChain.mockResolvedValue({ ok: true, first_seq: 4801, last_seq: 4838, checked: 38,
+      marks: [{ id: "desktop.recording.pause", seq: 4815 }, { id: "desktop.recording.resume", seq: 4822 }] });
     const audit = [
-      ev("desktop.recording.write", { key: KEY }, KEY),
+      ev("desktop.recording.write", { key: KEY }, KEY, "2026-10-20T10:50:00Z"),
+      ev("desktop.recording.pause", { gap_start: "2026-10-20T10:42:18Z", reason: "you took over to sign in" }, RUN, "2026-10-20T10:42:18Z"),
       ev("desktop.recording.resume", { gap_start: "2026-10-20T10:42:18Z", gap_end: "2026-10-20T10:44:32Z", gap_ms: 134_000, reason: "you took over to sign in" }),
     ];
     tab({ level: "screen_actions", recordingAudit: audit, selected: KEY });
-    const gap = await screen.findByTestId("desktop-replay-gap");
+    await screen.findByTestId("desktop-replay");
+    expect(screen.queryByTestId("desktop-replay-gap")).toBeNull();
+    expect(screen.getByTestId("desktop-replay-gap-mark")).toHaveTextContent("Gap 2 min 14 s");
+
+    const rows = screen.getAllByTestId("desktop-replay-action");
+    expect(rows.map((r) => within(r).getByText(/the screen recording$/).textContent)).toEqual(["paused the screen recording", "resumed the screen recording"]);
+    fireEvent.click(rows[0]);
+    expect(screen.getByTestId("desktop-replay-playhead")).toHaveAttribute("data-ms", "138000");
+    expect(rows[0]).toHaveAttribute("aria-current", "true");
+    const gap = screen.getByTestId("desktop-replay-gap");
     expect(gap).toHaveTextContent("Recording paused for 2 min 14 s");
     expect(gap).toHaveTextContent("You took over to sign in, so no screen frames were kept. The action log kept going. The gap is marked in the audit log.");
-    const row = screen.getByTestId("desktop-replay-log-row");
+    fireEvent.click(within(gap).getByRole("button", { name: "Skip the gap" }));
+    expect(screen.getByTestId("desktop-replay-playhead")).toHaveAttribute("data-ms", "272000");
+    expect(screen.queryByTestId("desktop-replay-gap")).toBeNull();
+
+    const chain = screen.getByTestId("desktop-replay-chain");
+    expect(await within(chain).findByText("Chain intact")).toBeInTheDocument();
+    expect(verifyChain).toHaveBeenCalledWith(RUN, KEY, "2026-10-20T10:40:00Z");
+    expect(within(chain).getByTestId("desktop-replay-chain-verdict")).toHaveTextContent("Entries 4,801 to 4,838 are chained and none is missing.");
+    const row = within(chain).getByTestId("desktop-replay-log-row");
+    expect(row).toHaveTextContent("Entry 4,815 · ");
+    expect(row).toHaveTextContent("Entry 4,822 · ");
     expect(within(row).getByText("Wardyn, not the desktop")).toBeInTheDocument();
     expect(screen.getByText("Keystrokes are never recorded.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Download recording" })).toBeInTheDocument();
+  });
+
+  it("a broken range says which entry does not verify", async () => {
+    getDesktopRecording.mockResolvedValue({
+      raw: "{}",
+      playback: { version: 1, format: "novnc-playback", encoding: "base64", started_at: "2026-10-20T10:40:00Z", frames: ["{0{AA=="] },
+    });
+    verifyChain.mockResolvedValue({ ok: false, first_seq: 4801, last_seq: 4838, checked: 20, broken_seq: 4820, reason: "row_hash does not match", marks: [] });
+    tab({ level: "screen_actions", recordingAudit: [ev("desktop.recording.write", { key: KEY }, KEY)], selected: KEY });
+    const chain = await screen.findByTestId("desktop-replay-chain");
+    expect(await within(chain).findByText("Chain broken")).toBeInTheDocument();
+    expect(within(chain).getByTestId("desktop-replay-chain-verdict")).toHaveTextContent("Entry 4,820 does not verify: row_hash does not match.");
   });
 });

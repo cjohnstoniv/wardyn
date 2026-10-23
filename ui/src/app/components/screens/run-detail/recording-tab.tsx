@@ -61,6 +61,7 @@ export function RecordingTab({
   level,
   notRecorded,
   recordingAudit = [],
+  onGoAudit,
 }: {
   state: "idle" | "loading" | "error" | "ready";
   recording: Recording | null;
@@ -78,6 +79,8 @@ export function RecordingTab({
   notRecorded?: RunNotRecorded;
   /** The run's session.recording and desktop.recording rows, for the desktop recordings and gaps. */
   recordingAudit?: AuditEvent[];
+  /** Opens the run's Audit tab (the desktop replay's "Open in Audit"). */
+  onGoAudit?: () => void;
 }) {
   // M-1b: the Recordings library is Admin view only (/admin/recordings) and,
   // until F1, not offered to a security admin either — a user reaches a
@@ -115,7 +118,7 @@ export function RecordingTab({
       )}
 
       {desktopSelected ? (
-        <DesktopReplay runId={runId} recKey={selected} audit={recordingAudit} />
+        <DesktopReplay runId={runId} recKey={selected} audit={recordingAudit} onGoAudit={onGoAudit} />
       ) : state === "loading" || state === "idle" ? (
         <div className="flex h-[360px] items-center justify-center rounded-xl border border-border bg-card">
           <Loader2 className="size-5 animate-spin text-muted-foreground" />
