@@ -84,14 +84,20 @@ describe("RunEndsControls — the Ends pill (mock 'Ends')", () => {
     expect(screen.getByTestId("run-ends-pill").textContent).not.toMatch(/never/);
   });
 
-  it("has an end, ungated: Extend items only, no Change…, and the locked hint with no repeated date (F11)", async () => {
+  it("has an end, locked by an admin: the pill stays a greyed menu that says why, extends stay, no Change… (R6)", async () => {
     renderRow(
       detail({ ends_at: endsAt(), run_limits: { user_changes_limits: false, max_end_ahead_sec: 30 * 24 * 3600 } }),
     );
-    const hint = screen.getByText(/your admin sets the rest/);
-    expect(hint.textContent).not.toMatch(/^Ends /);
+    const pill = screen.getByTestId("run-ends-pill");
+    expect(pill.tagName).toBe("BUTTON");
+    expect(pill).toHaveClass("opacity-70");
+    // The sentence lives in the menu, not on the facts row.
+    expect(screen.queryByText(/your admin sets the rest/)).not.toBeInTheDocument();
     await openMenu("run-ends-pill");
-    expect(await screen.findByRole("menuitem", { name: "1 more day" })).toBeInTheDocument();
+    const why = await screen.findByTestId("lock-reason");
+    expect(why).toHaveTextContent("You can extend it up to 30 days ahead; your admin sets the rest.");
+    expect(why.textContent).not.toMatch(/^Ends /);
+    expect(screen.getByRole("menuitem", { name: "1 more day" })).toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: "Change…" })).not.toBeInTheDocument();
   });
 
@@ -228,17 +234,22 @@ describe("RunEndsControls — the Waits pill", () => {
     expect(screen.queryByTestId("run-waits-pill")).not.toBeInTheDocument();
   });
 
-  it("ungated: a static pill plus the locked sentence, no menu", () => {
+  it("locked by an admin: a greyed menu pill whose menu says why, with nothing to pick (R6)", async () => {
     renderRow(detail({ wait_budget_sec: 4 * 3600, run_limits: { user_changes_limits: false } }));
-    expect(screen.getByTestId("run-waits-pill").tagName).toBe("SPAN");
-    expect(screen.getByText("Kept for up to 4 hours. Your admin sets this.")).toBeInTheDocument();
+    const pill = screen.getByTestId("run-waits-pill");
+    expect(pill.tagName).toBe("BUTTON");
+    expect(pill).toHaveClass("opacity-70");
+    expect(screen.queryByText(/Your admin sets this/)).not.toBeInTheDocument();
+    await openMenu("run-waits-pill");
+    expect(await screen.findByTestId("lock-reason")).toHaveTextContent("Kept for up to 4 hours. Your admin sets this.");
+    expect(screen.queryByRole("menuitem")).not.toBeInTheDocument();
   });
 
   it("a sub-hour or fractional budget is shown in minutes, not rounded to whole hours", () => {
-    renderRow(detail({ wait_budget_sec: 1200, run_limits: { user_changes_limits: false } }));
+    renderRow(detail({ wait_budget_sec: 1200, run_limits: { user_changes_limits: true } }));
     expect(screen.getByTestId("run-waits-pill")).toHaveTextContent("Waits up to 20 min");
     cleanup();
-    renderRow(detail({ wait_budget_sec: 5400, run_limits: { user_changes_limits: false } }));
+    renderRow(detail({ wait_budget_sec: 5400, run_limits: { user_changes_limits: true } }));
     expect(screen.getByTestId("run-waits-pill")).toHaveTextContent("Waits up to 1 h 30 min");
   });
 
@@ -260,7 +271,8 @@ describe("RunEndsControls — an operator caller is never gated, regardless of t
     renderRow(run, () => {}, { operator: true, principal: "someone-else" });
     await openMenu("run-ends-pill");
     expect(await screen.findByRole("menuitem", { name: "Change…" })).toBeInTheDocument();
-    expect(screen.queryByText(/your admin sets the rest/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("lock-reason")).not.toBeInTheDocument();
+    expect(screen.getByTestId("run-ends-pill")).not.toHaveClass("opacity-70");
   });
 
   it("an all-zero-value run_limits OBJECT (an operator's own unassigned run) is still fully open", async () => {
@@ -274,14 +286,22 @@ describe("RunEndsControls — an operator caller is never gated, regardless of t
 // security admin looking at a run they neither own nor superadmin over gets a 403 on all of them; the client must
 // not dangle a control that always fails.
 describe("RunEndsControls — F16: a non-owner, non-operator viewer gets no action controls", () => {
-  it("gated run, foreign viewer: the Ends pill is static text, not a menu", () => {
+  it("foreign viewer: both pills are static text, not menus, and nothing tells them what they may extend", () => {
     renderRow(
-      detail({ ends_at: endsAt(), run_limits: { user_changes_limits: true, allow_no_end: true } }),
+      detail({
+        ends_at: endsAt(),
+        wait_budget_sec: 4 * 3600,
+        run_limits: { user_changes_limits: false, allow_no_end: true, max_end_ahead_sec: 7 * 24 * 3600 },
+      }),
       () => {},
       { operator: false, principal: "a-security-admin" },
     );
     expect(screen.getByTestId("run-ends-pill").tagName).toBe("SPAN");
+    expect(screen.getByTestId("run-waits-pill").tagName).toBe("SPAN");
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    // A viewer who cannot extend must not read "You can extend it up to 7 days ahead".
+    expect(screen.queryByText(/You can extend it/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Your admin sets this/)).not.toBeInTheDocument();
   });
 
   it("no-end run, foreign viewer: no Set an end…, but the explanation still shows", async () => {
