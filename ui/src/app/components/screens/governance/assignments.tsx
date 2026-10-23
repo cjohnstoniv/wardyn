@@ -51,6 +51,7 @@ import {
   AlertDialogTitle,
 } from "../../ui/alert-dialog";
 import { Button, buttonVariants } from "../../ui/button";
+import { INLINE_ACTIONS } from "../../wardyn/form-actions";
 import { Input } from "../../ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../ui/table";
@@ -366,7 +367,7 @@ function AddAssignmentForm({
         </Field>
       </div>
 
-      <div className="mt-4">
+      <div className={`mt-4 ${INLINE_ACTIONS}`}>
         <Button variant={teal ? "default" : "outline"} onClick={submit} disabled={disabled || saving || !ready}>
           {saving ? <Loader2 className="size-4 animate-spin" /> : null}
           {GOV.ADD_CTA}

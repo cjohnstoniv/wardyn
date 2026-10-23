@@ -19,6 +19,8 @@ import { Mono } from "../../../wardyn/code-block";
 import { Notice } from "../../../wardyn/notice";
 import { Chip } from "../../../wardyn/primitives";
 import { Button } from "../../../ui/button";
+import { cn } from "../../../ui/utils";
+import { DANGER_OUTLINE, INLINE_ACTIONS } from "../../../wardyn/form-actions";
 import { Input } from "../../../ui/input";
 import { Label } from "../../../ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../../ui/select";
@@ -181,7 +183,8 @@ export function PoolPolicy({
       )}
       {editing && (
         <>
-          <div className="grid grid-cols-2 items-end gap-3 max-sm:grid-cols-1">
+          {/* #3064: Add to list sits beside the field it adds; the bar below is Clear far left, then Cancel and Save. */}
+          <div className="grid grid-cols-[1fr_1fr_auto] items-end gap-3 max-sm:grid-cols-1">
             <div className="space-y-1.5">
               <Label htmlFor="pol-type">{POOL_DRAWER.ADD}</Label>
               <Select value={type} onValueChange={(v) => setType(v as SubjectType)}>
@@ -215,24 +218,24 @@ export function PoolPolicy({
                 }}
               />
             </div>
+            <Button variant="outline" onClick={add}>
+              {POOL_DRAWER.ADD_TO_LIST}
+            </Button>
           </div>
           {error && (
             <p id="pol-err" role="alert" className="mt-1.5 text-xs text-danger">
               {error}
             </p>
           )}
-          <div className="mt-3 flex flex-wrap gap-2">
-            <Button variant="outline" size="sm" onClick={add}>
-              {POOL_DRAWER.ADD_TO_LIST}
-            </Button>
-            <Button variant="outline" disabled={busy} onClick={() => void save()}>
-              {POOL_DRAWER.SAVE_WHO}
-            </Button>
-            <Button variant="outline" aria-disabled={!set} onClick={() => set && setClearing(true)}>
+          <div className={`mt-3 ${INLINE_ACTIONS}`}>
+            <Button variant="outline" className={cn("mr-auto", DANGER_OUTLINE)} aria-disabled={!set} onClick={() => set && setClearing(true)}>
               {POOL_DRAWER.CLEAR_POLICY}
             </Button>
             <Button variant="ghost" onClick={() => setEditing(false)}>
               {POOL_DRAWER.CANCEL}
+            </Button>
+            <Button disabled={busy} onClick={() => void save()}>
+              {POOL_DRAWER.SAVE_WHO}
             </Button>
           </div>
         </>

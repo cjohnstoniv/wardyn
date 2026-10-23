@@ -20,6 +20,7 @@ import { POOL_DRAWER, RUNNER_TRUST } from "../../wardyn/copy/runner-pools";
 import { Field } from "../../wardyn/form-primitives";
 import { Notice } from "../../wardyn/notice";
 import { Button } from "../../ui/button";
+import { INLINE_ACTIONS } from "../../wardyn/form-actions";
 import { Input } from "../../ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { Hint } from "./resource-table";
@@ -124,8 +125,8 @@ function TrustEditor({ runner, onChanged }: { runner: RunnerView; onChanged: () 
           {error}
         </p>
       )}
-      <div className="mt-3">
-        <Button variant="outline" size="sm" disabled={busy || held || draft === runner.trust_class || reason.trim() === ""} onClick={() => void save()}>
+      <div className={`mt-3 ${INLINE_ACTIONS}`}>
+        <Button disabled={busy || held || draft === runner.trust_class || reason.trim() === ""} onClick={() => void save()}>
           {RUNNER_TRUST.SAVE}
         </Button>
       </div>

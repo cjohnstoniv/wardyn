@@ -114,6 +114,12 @@ describe("PushContentCard — held (#181)", () => {
     expect(within(card).queryByText(/^Commits$/)).not.toBeInTheDocument();
   });
 
+  // #3031: a PENDING card does not wear the name of its tab as a chip.
+  it("renders no Pending state chip on a PENDING card", () => {
+    render(<PushContentCard item={push()} securityOperator run={RUNNING} busy={null} onApprove={vi.fn()} onDeny={vi.fn()} />);
+    expect(within(screen.getByTestId("push-content-card")).queryByText("Pending")).not.toBeInTheDocument();
+  });
+
   // Review finding 7 — a broader guard than the text-only check above:
   // acts_as must not leak through ANY attribute (title, aria-label, ...) on
   // ANY element in the card, not just as visible text. innerHTML serializes

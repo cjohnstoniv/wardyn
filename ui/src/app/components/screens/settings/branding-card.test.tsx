@@ -24,6 +24,7 @@ import { BrandingCard } from "./branding-card";
 import { BRANDING } from "../../../lib/branding-copy";
 import { expandCard, startsWith } from "../../../lib/test-dom";
 import { unsavedSnapshot } from "../../../lib/unsaved-registry";
+import { expectActionBar } from "../../../../test/action-bar";
 
 function renderCard() {
   return render(
@@ -219,6 +220,17 @@ describe("Branding card (#1125)", () => {
     await validDraft();
     expect(screen.queryByRole("button", { name: BRANDING.REMOVE_LOGO })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: BRANDING.REMOVE_BRANDING })).not.toBeInTheDocument();
+  });
+
+  // #3064: the action bar is on the right, Remove branding far left, the primary last.
+  it("the action bar: Remove branding far left, Save branding the last, filled teal button on the right", async () => {
+    await storedCard();
+    expectActionBar(saveButton(), { destructive: screen.getByRole("button", { name: BRANDING.REMOVE_BRANDING }) });
+  });
+
+  it("the action bar without stored branding is just Save branding on the right", async () => {
+    await validDraft();
+    expectActionBar(saveButton());
   });
 
   it("Remove logo: confirms in the approved words, then removes only the logo and toasts", async () => {

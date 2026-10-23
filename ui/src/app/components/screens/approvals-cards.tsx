@@ -271,9 +271,12 @@ export function ApprovalCard({
           </Chip>
         )}
         {item.sla_due_at && <Chip tone="neutral">{APPROVAL_ESCALATION.ESCALATES(relativeTime(item.sla_due_at))}</Chip>}
-        <span className="ml-auto">
-          <ApprovalStateBadge state={item.state} />
-        </span>
+        {/* #3031: a Pending-tab card does not wear the name of its tab. Decided rows keep their state chip. */}
+        {item.state !== "PENDING" && (
+          <span className="ml-auto">
+            <ApprovalStateBadge state={item.state} />
+          </span>
+        )}
       </div>
 
       {/* #543: which AWS provider the hold is for — a sign-in to another

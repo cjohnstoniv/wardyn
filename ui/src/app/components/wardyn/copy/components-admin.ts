@@ -120,7 +120,7 @@ export const COMPONENTS_ADMIN = {
   MANAGE_LABEL: "Components you provide",
   MANAGE_BODY: "The organisation's components, and who may use each.",
   MANAGE_CTA: "Open Components",
-  SETTINGS_SAVE: "Save",
+  SETTINGS_SAVE: "Save component settings",
   SETTINGS_SAVED_TOAST: "Custom component settings saved.",
   SETTINGS_SAVE_FAILED: "Couldn't save these settings.",
   SETTINGS_LOAD_FAILED: "Couldn't load these settings.",

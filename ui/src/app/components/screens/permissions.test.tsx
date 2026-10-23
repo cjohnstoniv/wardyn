@@ -54,6 +54,7 @@ import { HttpError, PendingChangeError } from "../../lib/api/core";
 import { CHANGES } from "../../lib/governance-copy";
 import { aheadByHours } from "../../lib/test-clock";
 import { setField } from "../../../test/set-field";
+import { expectActionBar } from "../../../test/action-bar";
 
 function grant(over: Partial<CapabilityGrant> = {}): CapabilityGrant {
   return {
@@ -189,6 +190,13 @@ describe("PermissionsScreen — the capability row (#3053)", () => {
     expect(workspace.className).toContain("bg-warning-subtle");
     await user.click(within(workspace).getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.workspace.label}` }));
     expect(within(await screen.findByRole("alertdialog")).getByText(PERM.ENFORCE_ZERO_CONFIRM)).toBeInTheDocument();
+  });
+
+  // #3064: Add grant sits at the right end of its form, as the one filled teal button.
+  it("the add form's action bar is on the right, with Add grant last", async () => {
+    renderScreen();
+    await screen.findByText(PERM.ADD_TITLE);
+    expectActionBar(screen.getByRole("button", { name: PERM.ADD_CTA }));
   });
 
   it("Add grant on a row chooses that capability in the add form", async () => {

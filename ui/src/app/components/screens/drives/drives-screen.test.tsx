@@ -159,6 +159,21 @@ describe("DrivesScreen — states", () => {
     expect(screen.getAllByText("/home/agent/drive")[0].className).toContain("font-mono");
   });
 
+  // #3052: pressing New drive on an empty list shows the form, not a hero saying nothing exists above it.
+  it("no drives: the empty state is hidden while New drive's editor is open, and Cancel brings it back", async () => {
+    renderScreen(snapshot({ drives: [], grants: [] }));
+    await screen.findByText(DRIVES.EMPTY_TITLE);
+    await userEvent.click(screen.getByRole("button", { name: DRIVES.NEW_CTA }));
+    expect(await screen.findByTestId("drives-drive-editor")).toBeInTheDocument();
+    expect(screen.queryByText(DRIVES.EMPTY_TITLE)).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: PEOPLE.CANCEL }));
+    expect(screen.queryByTestId("drives-drive-editor")).not.toBeInTheDocument();
+    expect(await screen.findByText(DRIVES.EMPTY_TITLE)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: DRIVES.NEW_CTA })).toBeEnabled();
+    expect(tealButtons().map((b) => b.textContent)).toEqual([DRIVES.NEW_CTA]);
+  });
+
   it("no drives: the empty state carries New drive, and it is the ONE teal", async () => {
     renderScreen(snapshot({ drives: [], grants: [] }));
     expect(await screen.findByText(DRIVES.EMPTY_TITLE)).toBeInTheDocument();

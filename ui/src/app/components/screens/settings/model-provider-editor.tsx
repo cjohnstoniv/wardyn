@@ -39,6 +39,7 @@ import {
   AlertDialogTitle,
 } from "../../ui/alert-dialog";
 import { Button, buttonVariants } from "../../ui/button";
+import { DANGER_OUTLINE, INLINE_ACTIONS } from "../../wardyn/form-actions";
 import { Checkbox } from "../../ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../../ui/dialog";
 import { Input } from "../../ui/input";
@@ -264,13 +265,12 @@ export function ModelProviderEditor({
               </div>
             )}
             {stale && <SavedElsewhereBanner documentText={stale} onDiscard={discard} />}
-            <div className="flex flex-wrap items-center gap-2 pt-2">
+            <div className={`${INLINE_ACTIONS} pt-2`}>
               {editing && (
-                <Button type="button" variant="outline" disabled={busy} onClick={() => setConfirm("remove")}>
+                <Button type="button" variant="outline" className={`mr-auto ${DANGER_OUTLINE}`} disabled={busy} onClick={() => setConfirm("remove")}>
                   {PROVIDER_EDITOR.REMOVE}
                 </Button>
               )}
-              <span className="grow" />
               <Button type="button" variant="ghost" onClick={close}>
                 {PROVIDER_EDITOR.CANCEL}
               </Button>

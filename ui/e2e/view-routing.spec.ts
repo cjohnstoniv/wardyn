@@ -128,6 +128,8 @@ test.describe("view routing", () => {
     // #3047: a refusal is the Why can't I? card, not the plain notice.
     await expect(page.getByTestId("refusal").getByRole("heading", { name: VIEW_ADMIN_TOKEN.TITLE })).toBeVisible();
     await expect(page.getByText(VIEW_ADMIN_TOKEN.BODY)).toBeVisible();
+    await expect(page.getByText("By the server, on every request the admin token makes")).toBeVisible();
+    await expect(page.getByText("Not with the admin token. Sign in as a person.")).toBeVisible();
     await page.getByRole("button", { name: VIEW_ADMIN_TOKEN.CTA }).click();
     await expect(page).toHaveURL(/\/admin\/(runs|setup)/);
   });

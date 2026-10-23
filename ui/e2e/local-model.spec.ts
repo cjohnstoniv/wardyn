@@ -5,7 +5,7 @@
 
 import { test, expect, expandCard, gotoConsole, mockMemberRole, navTo, navToRoute } from "./fixtures";
 import { LOCAL_MODEL_CARD, LOCAL_MODEL_EDITOR, LOCAL_MODEL_LIST } from "../src/app/lib/local-model-copy";
-import { MODEL_PROVIDERS } from "../src/app/lib/model-providers-copy";
+import { MODEL_PROVIDERS, PROVIDER_EDITOR } from "../src/app/lib/model-providers-copy";
 
 // M9: registering a local model server (the whole add → save → list round trip through the real
 // client), the real server's refusal of a write in the editor's red card, and the run Overview's
@@ -54,7 +54,7 @@ test.describe("Settings — a local model server", () => {
     const dialog = await openLocalForm(page, "http://host.docker.internal:11434");
     await expect(dialog.getByText(LOCAL_MODEL_EDITOR.MODELS_COUNT(2))).toBeVisible();
     await dialog.getByLabel(LOCAL_MODEL_EDITOR.REPLY).fill("4096");
-    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    await dialog.getByRole("button", { name: PROVIDER_EDITOR.SAVE, exact: true }).click();
 
     await expect(page.getByText("Provider saved.")).toBeVisible();
     await expect(dialog).toHaveCount(0);
@@ -81,7 +81,7 @@ test.describe("Settings — a local model server", () => {
   test("a refused write: the real server's sentence in the red card, the Base URL outlined, what was typed kept", async ({ page }) => {
     await gotoConsole(page);
     const dialog = await openLocalForm(page, "http://localhost:11434");
-    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    await dialog.getByRole("button", { name: PROVIDER_EDITOR.SAVE, exact: true }).click();
 
     const note = dialog.getByRole("alert");
     await expect(note.getByText("This provider can't be saved as written", { exact: true })).toBeVisible();

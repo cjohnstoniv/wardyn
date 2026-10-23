@@ -131,8 +131,8 @@ export const VIEW_ADMIN_TOKEN = {
   BODY: "Runs and connections belong to a person. Sign in with SSO to use them.",
   WALL: "User pages",
   SET_BY: "Wardyn",
-  ENFORCED: "By the server, for every run and connection",
-  CAN_CHANGE: "Not with the admin token. Sign in with SSO.",
+  ENFORCED: "By the server, on every request the admin token makes",
+  CAN_CHANGE: "Not with the admin token. Sign in as a person.",
   CTA: "Back to the admin view",
 } as const;
 

@@ -9,7 +9,7 @@
 // four state pins there apply here too (one `default` button, delete refused
 // with the server's own message).
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 const listUserTypesMock = vi.fn();
@@ -54,6 +54,7 @@ import { EXPLAIN, USER_TYPES as UT } from "../../../lib/user-types-copy";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { SECURITY_ONLY_REASON } from "../../wardyn/copy";
 import { UserTypesScreen } from "./user-types-screen";
+import { expectActionBar } from "../../../../test/action-bar";
 
 function type(over: Partial<UserType> = {}): UserType {
   return {
@@ -131,6 +132,17 @@ describe("UserTypesScreen — states", () => {
 });
 
 describe("UserTypesScreen — create", () => {
+  // #3064: Cancel (ghost) then Save type (teal), on the right.
+  it("the editor's action bar is Cancel then Save type, on the right", async () => {
+    renderScreen([STANDARD]);
+    await screen.findByText(STANDARD.name);
+    await userEvent.click(screen.getByRole("button", { name: UT.NEW_CTA }));
+    expect(UT.SAVE).toBe("Save type");
+    expectActionBar(screen.getByRole("button", { name: "Save type" }), {
+      secondary: within(screen.getByTestId("user-type-editor")).getByRole("button", { name: UT.CANCEL }),
+    });
+  });
+
   it("opens the editor, saves, and reloads the list", async () => {
     renderScreen([STANDARD]);
     await screen.findByText(STANDARD.name);
