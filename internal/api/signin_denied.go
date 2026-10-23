@@ -6,6 +6,8 @@ package api
 import (
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -85,6 +87,14 @@ func (s *Server) backchannelLogout() http.HandlerFunc {
 			return
 		}
 		next(w, r)
+	}
+}
+
+// mountFrontchannelLogout mounts GET /auth/frontchannel-logout, the identity provider's front-channel
+// logout loaded in the person's browser, only when WARDYN_OIDC_FRONTCHANNEL_LOGOUT is on.
+func (s *Server) mountFrontchannelLogout(r chi.Router) {
+	if s.cfg.OIDC.FrontchannelLogoutEnabled() {
+		r.Get("/auth/frontchannel-logout", s.frontchannelLogout())
 	}
 }
 

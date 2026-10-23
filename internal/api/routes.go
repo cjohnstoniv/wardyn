@@ -58,11 +58,8 @@ func (s *Server) routes() chi.Router {
 		if s.cfg.OIDC.BackchannelLogoutEnabled() {
 			r.Post("/auth/backchannel-logout", s.backchannelLogout())
 		}
-		// Its front-channel twin, loaded by the provider in the person's browser: absent unless
-		// WARDYN_OIDC_FRONTCHANNEL_LOGOUT is on.
-		if s.cfg.OIDC.FrontchannelLogoutEnabled() {
-			r.Get("/auth/frontchannel-logout", s.frontchannelLogout())
-		}
+		// Its front-channel twin, absent unless WARDYN_OIDC_FRONTCHANNEL_LOGOUT is on (signin_denied.go).
+		s.mountFrontchannelLogout(r)
 	}
 
 	// SCIM Users (scim_users.go): its own bearer, outside /api/v1 and every human gate.
