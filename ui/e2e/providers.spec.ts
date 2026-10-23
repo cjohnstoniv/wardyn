@@ -88,11 +88,8 @@ async function saveProviders(page: Page): Promise<void> {
   // The screen commits the PUT response as its new draft and baseline before the
   // toast shows (#3329), so the unsaved marker is already clear: this asserts it.
   await expect(page.getByTestId("unsaved-marker")).toHaveCount(0);
-  // The toast slides in (0.4s) at the bottom right, where Save sits once scrolled
-  // to, and stays 8s. A click on Save while it slides can press Save and release
-  // on the toast: Playwright checks only the press, calls the click done, and Save
-  // never fires. Close it and wait for it to unmount, so nothing covers Save and
-  // the next save's toast is its own.
+  // The toast slides in (0.4s) and stays 8s. Close it and wait for it to unmount, so the next save's
+  // toast is its own (the helper counts on one at a time).
   await page.getByRole("listitem").filter({ hasText: PROVIDERS.SAVED_TOAST }).getByRole("button", { name: "Close toast" }).click();
   await expect(page.getByText(PROVIDERS.SAVED_TOAST)).toHaveCount(0);
 }
@@ -180,28 +177,40 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
   });
 
   // #3385: the saved toast sat bottom right for 8 s, on top of Save providers. It now opens at the top centre, below
-  // the top bar, so it covers no control.
-  test("the saved toast opens at the top centre, below the top bar, clear of Save providers", async ({ page }) => {
-    await gotoProviders(page);
-    await page.getByTestId("provider-row-github").locator("textarea").fill("https://github.com/acme2");
-    await page.getByRole("button", { name: PROVIDERS.SAVE_CTA }).click();
-    const toast = page.getByRole("listitem").filter({ hasText: PROVIDERS.SAVED_TOAST });
-    await expect(toast).toBeVisible();
-    // Sonner slides the toast in (0.4s): measure once it has settled.
-    await expect.poll(async () => (await toast.boundingBox())?.y ?? -1).toBeGreaterThanOrEqual(56);
-    const t = (await toast.boundingBox())!;
-    const bar = (await page.locator("header").first().boundingBox())!;
-    const save = (await page.getByRole("button", { name: PROVIDERS.SAVE_CTA }).boundingBox())!;
-    const vw = page.viewportSize()!.width;
-    expect(t.y).toBeGreaterThanOrEqual(bar.y + bar.height);
-    expect(Math.abs(t.x + t.width / 2 - vw / 2)).toBeLessThan(40);
-    const overlaps = t.x < save.x + save.width && save.x < t.x + t.width && t.y < save.y + save.height && save.y < t.y + t.height;
-    expect(overlaps).toBe(false);
-    await toast.getByRole("button", { name: "Close toast" }).click();
-    await expect(page.getByText(PROVIDERS.SAVED_TOAST)).toHaveCount(0);
-    await page.getByTestId("provider-row-github").locator("textarea").fill("https://github.com/acme");
-    await saveProviders(page);
-  });
+  // the top bar, so it covers no control. Pinned at 1280, 1024 and 390 wide (the board's note): below the 56px top
+  // bar, clear of Save providers, and clear of any page-header actions slot (this screen has none, so that last
+  // check has nothing to meet here; the geometry above is what keeps the slot clear on the screens that do).
+  for (const vp of [
+    { w: 1280, h: 720 },
+    { w: 1024, h: 768 },
+    { w: 390, h: 844 },
+  ]) {
+    test(`the saved toast opens at the top centre, below the top bar, clear of Save providers at ${vp.w}px`, async ({ page }) => {
+      await page.setViewportSize({ width: vp.w, height: vp.h });
+      await gotoProviders(page);
+      await page.getByTestId("provider-row-github").locator("textarea").fill("https://github.com/acme2");
+      await page.getByRole("button", { name: PROVIDERS.SAVE_CTA }).click();
+      const toast = page.getByRole("listitem").filter({ hasText: PROVIDERS.SAVED_TOAST });
+      await expect(toast).toBeVisible();
+      // Sonner slides the toast in (0.4s): measure once it has settled.
+      await expect.poll(async () => (await toast.boundingBox())?.y ?? -1).toBeGreaterThanOrEqual(56);
+      const t = (await toast.boundingBox())!;
+      const bar = (await page.locator("header").first().boundingBox())!;
+      const save = (await page.getByRole("button", { name: PROVIDERS.SAVE_CTA }).boundingBox())!;
+      const hits = (o: { x: number; y: number; width: number; height: number }) =>
+        t.x < o.x + o.width && o.x < t.x + t.width && t.y < o.y + o.height && o.y < t.y + t.height;
+      expect(t.y).toBeGreaterThanOrEqual(bar.y + bar.height);
+      expect(Math.abs(t.x + t.width / 2 - vp.w / 2)).toBeLessThan(40);
+      expect(hits(save)).toBe(false);
+      for (const slot of await page.getByTestId("page-header-actions").all()) {
+        expect(hits((await slot.boundingBox())!)).toBe(false);
+      }
+      await toast.getByRole("button", { name: "Close toast" }).click();
+      await expect(page.getByText(PROVIDERS.SAVED_TOAST)).toHaveCount(0);
+      await page.getByTestId("provider-row-github").locator("textarea").fill("https://github.com/acme");
+      await saveProviders(page);
+    });
+  }
 
   // #1429/#1428: an Azure DevOps row has no shared credential lane to tick; the
   // console authors the lane its addresses call for and the person-owned choice.
