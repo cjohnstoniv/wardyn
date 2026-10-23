@@ -208,6 +208,10 @@ Host wardyn-<short-id>
   `ssh-keygen`'s own presentation, nothing custom.
 - A stopped or SSH-disabled run shows no card at all — there is nothing to
   connect to, and no "try anyway" affordance that would just fail.
+- **Where a channel starts.** An interactive shell joins the run's shared terminal session, in whatever directory
+  that session is in now.
+  - A command (`ssh <run-id>@<advertise-host> -p <port> <command>` or `wardyn run exec`) and an sftp session start
+    in `$HOME`, as OpenSSH does. Give paths under `/home/agent/work` in full.
 
 ### Exec, forward and editor from the CLI
 
