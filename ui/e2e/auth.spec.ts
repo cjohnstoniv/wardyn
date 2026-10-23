@@ -431,6 +431,20 @@ test.describe("sign-in refusals name Wardyn and point this reader at what they c
     await expect(page.getByRole("alert")).toHaveText(SIGNIN.OIDC_REFUSED);
   });
 
+  // r11 #2775: an expired or replaced sign-in lands on a notice and one way on, not the red generic alert.
+  test("an expired sign-in reads as a notice with Sign in again (#2775)", async ({ page }) => {
+    await page.route("**/healthz", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "ok", sso: true, token_login: true }) }),
+    );
+    await clearTokenInit(page);
+    await page.goto("/?auth_error=sign_in_expired");
+
+    await expect(page.getByRole("status").filter({ hasText: SIGNIN.SIGN_IN_EXPIRED })).toBeVisible();
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    await expect(page.getByRole("link", { name: SIGNIN.SIGN_IN_AGAIN })).toHaveAttribute("href", /\/auth\/login/);
+    await expect(page.getByText(SIGNIN.AUTH_FAILED)).toHaveCount(0);
+  });
+
   test("the email_domain refusal points a locked-out reader at their admin, not an env var they cannot reach", async ({ page }) => {
     await clearTokenInit(page);
     await page.goto("/?auth_error=email_domain");
