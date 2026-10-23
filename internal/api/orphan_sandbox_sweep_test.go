@@ -124,7 +124,7 @@ func TestRunnerOrphanSweepOnReady(t *testing.T) {
 	}}
 	srv := New(baseTestConfig(h, st))
 	rn := &orphanMinAge{sandboxOrphanRunner: sandboxOrphanRunner{fakeRunner: &fakeRunner{}, live: []uuid.UUID{failed, live, inflight, missing}}}
-	srv.sweepRunnerOrphansOnReady(context.Background(), uuid.New(), rn)
+	srv.sweepRunnerOrphansOnReady(context.Background(), uuid.New(), rn, func() bool { return true }, nil)
 	swept := map[uuid.UUID]bool{}
 	for _, id := range rn.tornDown {
 		swept[id] = true
