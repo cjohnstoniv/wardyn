@@ -73,8 +73,9 @@ client_mutagen() {
     fail "mutagen: sandbox-written file did not sync back"
   fi
 
-  if mutagen sync list editors-alpha | grep -q 'Status: Watching for changes' \
-      && ! mutagen sync list editors-alpha | grep -qiE 'conflicts|problems'; then
+  sync_state=$(mutagen sync list editors-alpha 2>&1)
+  if grep -q 'Status: Watching for changes' <<<"$sync_state" \
+      && ! grep -qiE 'conflicts|problems' <<<"$sync_state"; then
     pass "mutagen: session settled at 'Watching for changes' with no conflicts or problems"
   else
     fail "mutagen: session not settled cleanly"
