@@ -343,8 +343,9 @@ type GovernanceUnit struct {
 	Kind  string `json:"kind,omitempty"`
 	Mode  string `json:"mode,omitempty"`
 	Depth int    `json:"depth,omitempty"`
-	// LockedKnobs are the knobs (overlay and limits JSON names) this unit fixes for every unit below
-	// it: no write to a unit below may change one, a narrowing included.
+	// LockedKnobs are the knobs (overlay and limits JSON names, and desktop.<direction> for one desktop
+	// direction) this unit fixes for every unit below it: no write to a unit below may change one, a
+	// narrowing included.
 	LockedKnobs []string `json:"locked_knobs,omitempty"`
 }
 

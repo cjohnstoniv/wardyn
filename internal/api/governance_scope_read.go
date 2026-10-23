@@ -132,10 +132,7 @@ func (s *Server) wallsProvenance(rows []types.GovernanceUnit, res *ResolvedUnit,
 	var above map[string]json.RawMessage
 	for i := len(res.Chain) - 1; i >= 0; i-- {
 		link := res.Chain[i]
-		var eff map[string]json.RawMessage
-		if r := s.resolveForDiff(rows, link.ID); r != nil {
-			eff = jsonFields(r.Ceiling, r.Limits)
-		}
+		eff := resolvedKnobs(s.resolveForDiff(rows, link.ID))
 		for k := range lockableKnobs {
 			v, has := eff[k]
 			set := false

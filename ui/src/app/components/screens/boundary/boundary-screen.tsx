@@ -32,7 +32,7 @@ import { SECURITY_ONLY_REASON } from "../../wardyn/copy";
 import { EmptyState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../../wardyn/states";
 import { Note } from "../governance/display";
 import { SubmittedNote } from "../governance/submitted-note";
-import { DesktopGroupCard, desktopNow } from "./desktop-group-card";
+import { DesktopGroupCard, desktopLocksNow, desktopNow } from "./desktop-group-card";
 
 const CLASSES: ConfinementClass[] = ["CC1", "CC2", "CC3"];
 
@@ -42,6 +42,8 @@ interface Draft {
   floor: ConfinementClass | "";
   // Absent: the boundary names no desktop, so it bounds none of its directions.
   desktop?: DesktopControls;
+  // The boundary's locked_knobs: the Desktop card edits its desktop ones, and the rest are kept.
+  locks: string[];
 }
 
 const lines = (text: string) =>
@@ -55,9 +57,13 @@ const draftFrom = (b: BoundaryWrite): Draft => ({
   blocked: (b.spec.denied_domains ?? []).join("\n"),
   floor: b.spec.min_confinement_class ?? "",
   desktop: b.spec.desktop,
+  locks: b.locked_knobs ?? [],
 });
 
-// The PUT body: the draft's knobs over the stored document, so knobs this page doesn't edit are kept.
+const sameLocks = (a: readonly string[], b: readonly string[]) => JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
+
+// The PUT body: the draft's knobs over the stored document, so knobs this page doesn't edit are kept. Locks
+// are sent only when the draft changes them; absent keeps the stored ones.
 const bodyFrom = (d: Draft, stored: BoundaryWrite): BoundaryWrite => {
   const blocked = lines(d.blocked);
   return {
@@ -70,6 +76,7 @@ const bodyFrom = (d: Draft, stored: BoundaryWrite): BoundaryWrite => {
     },
     limits: stored.limits,
     ...(stored.contact ? { contact: stored.contact } : {}),
+    ...(sameLocks(d.locks, stored.locked_knobs ?? []) ? {} : { locked_knobs: d.locks }),
   };
 };
 
@@ -83,7 +90,7 @@ export function BoundaryScreen() {
   const securityOperator = useSecurityOperator();
   const [status, setStatus] = React.useState<ScreenStatus>(securityOperator ? "loading" : "forbidden");
   const [stored, setStored] = React.useState<BoundaryWrite>({ mode: "no_limits", spec: {}, limits: {} });
-  const [draft, setDraft] = React.useState<Draft>({ mode: "no_limits", blocked: "", floor: "" });
+  const [draft, setDraft] = React.useState<Draft>({ mode: "no_limits", blocked: "", floor: "", locks: [] });
   const [report, setReport] = React.useState<ReportState | null>(null);
   const [outcome, setOutcome] = React.useState<Outcome>(null);
   const [busy, setBusy] = React.useState(false);
@@ -94,7 +101,13 @@ export function BoundaryScreen() {
   const dryRunRef = React.useRef(0);
 
   const adopt = (doc: BoundarySnapshot) => {
-    const b: BoundaryWrite = { mode: doc.mode, spec: doc.spec ?? {}, limits: doc.limits ?? {}, ...(doc.contact ? { contact: doc.contact } : {}) };
+    const b: BoundaryWrite = {
+      mode: doc.mode,
+      spec: doc.spec ?? {},
+      limits: doc.limits ?? {},
+      ...(doc.contact ? { contact: doc.contact } : {}),
+      ...(doc.locked_knobs ? { locked_knobs: doc.locked_knobs } : {}),
+    };
     setStored(b);
     setDraft(draftFrom(b));
     etagRef.current = doc.etag ?? null;
@@ -288,7 +301,13 @@ export function BoundaryScreen() {
                   <span className="text-muted-foreground">{BOUNDARY.FLOOR_TAIL(floorLabel(draft.floor || undefined))}</span>
                 </div>
               </div>
-              <DesktopGroupCard value={draft.desktop} disabled={disabled} onChange={(desktop) => edit({ desktop })} />
+              <DesktopGroupCard
+                value={draft.desktop}
+                locks={draft.locks}
+                disabled={disabled}
+                onChange={(desktop) => edit({ desktop })}
+                onLocksChange={(locks) => edit({ locks })}
+              />
               <p className="text-xs text-muted-foreground">
                 {BOUNDARY.HARD_FOOT}
                 <br />
@@ -454,6 +473,7 @@ function DryRunReport({
     [BOUNDARY.BLOCKED_LABEL, showValue("denied_domains", stored.spec.denied_domains), showValue("denied_domains", body.spec.denied_domains)],
     [BOUNDARY.FLOOR_LABEL, floorLabel(stored.spec.min_confinement_class), floorLabel(body.spec.min_confinement_class)],
     [BOUNDARY_DESKTOP.TITLE, desktopNow(stored.spec.desktop), desktopNow(body.spec.desktop)],
+    [BOUNDARY_DESKTOP.LOCKS, desktopLocksNow(stored.locked_knobs), desktopLocksNow(body.locked_knobs ?? stored.locked_knobs)],
   ];
 
   return (
