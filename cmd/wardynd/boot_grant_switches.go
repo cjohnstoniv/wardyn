@@ -3,6 +3,10 @@
 
 package main
 
+// unverifiedEmailGrants is api.Config.UnverifiedEmailCapGrantsMatch: true only
+// with WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL set off.
+func (f *bootFlags) unverifiedEmailGrants() bool { return !*f.capabilityGrantsVerifiedEmail }
+
 // unitPutCreates is api.Config.GovernanceUnitPutCreates: true only with
 // WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY set off.
 func (f *bootFlags) unitPutCreates() bool { return !*f.governanceUnitPutExistingOnly }

@@ -300,7 +300,7 @@ func TestInlinePolicy_EgressHostNarrowing(t *testing.T) {
 
 	t.Run("switch on: only the granted host survives, and Review says which went", func(t *testing.T) {
 		h := capPolicyServer(t,
-			[]types.CapabilityGrant{grant(types.CapabilitySubjectUser, capEmail, capEgressHost, "pypi.org", types.CapabilityAllow)},
+			[]types.CapabilityGrant{grant(types.CapabilitySubjectUser, capSub, capEgressHost, "pypi.org", types.CapabilityAllow)},
 			map[string]bool{capEgressHost: true})
 		h.srv.cfg.DefaultPolicy = ceiling
 		got, warns := resolveInline(t, h, types.RunPolicySpec{
@@ -557,12 +557,12 @@ func TestDenyMemberRequest_WorkspaceNarrows(t *testing.T) {
 		},
 		{
 			name:   "switch on, this workspace granted: launched",
-			grants: []types.CapabilityGrant{grant(types.CapabilitySubjectUser, capEmail, capWorkspace, ws.String(), types.CapabilityAllow)},
+			grants: []types.CapabilityGrant{grant(types.CapabilitySubjectUser, capSub, capWorkspace, ws.String(), types.CapabilityAllow)},
 			enf:    map[string]bool{capWorkspace: true},
 		},
 		{
 			name:   "switch on, a different workspace granted: refused",
-			grants: []types.CapabilityGrant{grant(types.CapabilitySubjectUser, capEmail, capWorkspace, uuid.New().String(), types.CapabilityAllow)},
+			grants: []types.CapabilityGrant{grant(types.CapabilitySubjectUser, capSub, capWorkspace, uuid.New().String(), types.CapabilityAllow)},
 			enf:    map[string]bool{capWorkspace: true}, wantDenied: true,
 		},
 		{
@@ -663,7 +663,7 @@ func TestInlinePolicy_WorkspaceNarrowing(t *testing.T) {
 
 	t.Run("switch on, this workspace granted: kept", func(t *testing.T) {
 		h := srv(t,
-			[]types.CapabilityGrant{grant(types.CapabilitySubjectUser, capEmail, capWorkspace, ws.ID.String(), types.CapabilityAllow)},
+			[]types.CapabilityGrant{grant(types.CapabilitySubjectUser, capSub, capWorkspace, ws.ID.String(), types.CapabilityAllow)},
 			map[string]bool{capWorkspace: true})
 		got, warns := resolveInline(t, h, authored)
 		if len(got.WorkspaceRepos) != 1 || len(dropWarns(warns)) != 0 {

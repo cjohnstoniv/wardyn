@@ -116,27 +116,38 @@ func (s *Server) markInertGrants(r *http.Request, grants []types.CapabilityGrant
 	return out
 }
 
-// LogGrantSwitches logs, once at boot, the state of the two default-on grant switches and how many
+// LogGrantSwitches logs, once at boot, the state of the three default-on grant switches and how many
 // stored egress_host allow rows carry a port, which are inert while WARDYN_EGRESS_HOST_PORT_GRANTS_INERT
-// is on. A store error is logged, not fatal: the count is advice.
+// is on. It WARNs, only when there are some, with the count of user allow rows keyed to an email that
+// grant nothing because sign-in does not vouch for the email. A store error is logged, not fatal: the
+// counts are advice.
 func (s *Server) LogGrantSwitches(ctx context.Context) {
 	grants, err := s.cfg.Store.ListCapabilityGrants(ctx)
 	if err != nil {
-		slog.WarnContext(ctx, "api: could not count the egress_host allow grants stored with a port", "error", err)
+		slog.WarnContext(ctx, "api: could not count the stored capability grants the grant switches affect", "error", err)
 	}
-	portRows, inert := 0, 0
+	portRows, inert, emailRows := 0, 0, 0
 	for _, g := range grants {
 		if egressHostPortAllow(g) {
 			portRows++
+		}
+		if g.Effect == types.CapabilityAllow && g.SubjectType == types.CapabilitySubjectUser && strings.Contains(g.Subject, "@") {
+			emailRows++
 		}
 	}
 	if !s.cfg.EgressHostPortGrantsMatch {
 		inert = portRows
 	}
 	slog.InfoContext(ctx, "api: grant switches",
+		"WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL", !s.cfg.UnverifiedEmailCapGrantsMatch,
 		"WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY", !s.cfg.GovernanceUnitPutCreates,
 		"WARDYN_EGRESS_HOST_PORT_GRANTS_INERT", !s.cfg.EgressHostPortGrantsMatch,
 		"egress_host_port_rows", portRows, "inert_rows", inert)
+	if emailRows > 0 && !s.cfg.UnverifiedEmailCapGrantsMatch && !s.emailTrusted() {
+		slog.WarnContext(ctx, "api: capability allow grants keyed to a person's email grant nothing: sign-in does not vouch for the email (WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL is on)",
+			"rows", emailRows,
+			"remedy", "re-grant each to the person's user id or a group through POST /api/v1/permissions/grants, or set WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL=false")
+	}
 }
 
 // egressHostPortAllow reports whether g is a stored egress_host allow row whose value names a port.

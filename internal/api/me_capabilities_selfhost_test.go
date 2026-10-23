@@ -18,7 +18,7 @@ import (
 // holds it until an allow names it; a deny row takes it back; an operator is exempt.
 func TestMeCapabilities_MaySelfHostRunner(t *testing.T) {
 	restricted := map[string]map[string]bool{capFeature: {featureSelfHostRunner: true}}
-	allow := grant(types.CapabilitySubjectUser, capEmail, capFeature, featureSelfHostRunner, types.CapabilityAllow)
+	allow := grant(types.CapabilitySubjectUser, capSub, capFeature, featureSelfHostRunner, types.CapabilityAllow)
 	deny := grant(types.CapabilitySubjectUser, capEmail, capFeature, featureSelfHostRunner, types.CapabilityDeny)
 	for name, tc := range map[string]struct {
 		grants []types.CapabilityGrant

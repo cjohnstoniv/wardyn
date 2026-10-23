@@ -240,7 +240,7 @@ func TestProviderCredentialAvailableTo(t *testing.T) {
 	restricted := func() *capStore {
 		return &capStore{
 			restricted: restrictedOne(capModelProvider, "anthropic"),
-			grants: []types.CapabilityGrant{{SubjectType: types.CapabilitySubjectUser, Subject: "listed@corp.example",
+			grants: []types.CapabilityGrant{{SubjectType: types.CapabilitySubjectUser, Subject: "sub-listed",
 				Capability: capModelProvider, Value: "anthropic", Effect: types.CapabilityAllow}},
 		}
 	}

@@ -280,11 +280,11 @@ type Config struct {
 	// UNAFFECTED either way (legacy, still boot-warned separately — see
 	// buildOptionalFeatures).
 	AllowEmailMappings bool
-	// CapabilityGrantsVerifiedEmail is WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL: a
-	// capability ALLOW row written for a person's email matches them only when
-	// sign-in vouches for the email (unverifiedEmailSubject). Default false keeps
-	// the match and logs it. Deny rows match the email either way.
-	CapabilityGrantsVerifiedEmail bool
+	// UnverifiedEmailCapGrantsMatch is WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL set
+	// off: a capability ALLOW row written for a person's email still matches when
+	// sign-in does not vouch for it (unverifiedEmailSubject), logged. The zero value
+	// (the default) grants nothing through it. Deny rows match the email either way.
+	UnverifiedEmailCapGrantsMatch bool
 	// GovernanceUnitPutCreates is WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY set off:
 	// PUT /governance/units/{id} naming an id no profile holds creates one there,
 	// logged. The zero value (the default) answers it 404; create through POST.

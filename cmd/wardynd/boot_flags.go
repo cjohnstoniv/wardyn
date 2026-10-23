@@ -243,8 +243,8 @@ type bootFlags struct {
 	// Role/group keys, which env WARDYN_OIDC_ROLE_MAP email keys were never
 	// gated on (legacy, still boot-warned separately).
 	oidcAllowEmailMappings *bool
-	// Three tightenings: verified-email default off, the other two default on
-	// (api.Config takes their inverse, unitPutCreates and hostPortGrantsMatch).
+	// Three tightenings, each default on; api.Config takes their inverse
+	// (unverifiedEmailGrants, unitPutCreates, hostPortGrantsMatch).
 	capabilityGrantsVerifiedEmail *bool
 	governanceUnitPutExistingOnly *bool
 	egressHostPortGrantsInert     *bool
@@ -567,8 +567,8 @@ func parseBootFlags() *bootFlags {
 		oidcRoleMap:             flagEnv("oidc-role-map", "WARDYN_OIDC_ROLE_MAP", "", `comma-separated "value=role" pairs mapping an App Role, group or email to "admin", "security_admin" or "user"; highest tier wins (user < security_admin < admin); this map is the only way to grant "security_admin". The pre-0.8 "member" is refused since 0.9. Empty (default) disables role derivation; every signed-in human is "admin"`),
 		oidcDefaultRole:         flagEnv("oidc-default-role", "WARDYN_OIDC_DEFAULT_ROLE", "", `role ("admin", "user" or a user type id; the pre-0.8 "member" is refused since 0.9) assigned when -oidc-role-map is set but nothing matched; "security_admin" is refused here. Empty (default) denies that login instead. Ignored when -oidc-role-map is empty`),
 		oidcAllowEmailMappings:  flagBool("oidc-allow-email-mappings", "WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS", false, "allow an email-shaped value on a console People-step role mapping (POST /access/mappings); refused by default in favor of an App Role or group key (default false)"),
-		capabilityGrantsVerifiedEmail: flagBool("capability-grants-verified-email", "WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL", false,
-			"a capability allow grant written for a person's email matches them only when sign-in verifies the email (WARDYN_OIDC_EMAIL_DOMAINS or WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED) or WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS is on; deny grants match either way (default false: the match is kept and logged)"),
+		capabilityGrantsVerifiedEmail: flagBool("capability-grants-verified-email", "WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL", true,
+			"a capability allow grant written for a person's email matches them only when sign-in verifies the email (WARDYN_OIDC_EMAIL_DOMAINS or WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED) or WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS is on; deny grants match either way (default true; false keeps the match, logged)"),
 		governanceUnitPutExistingOnly: flagBool("governance-unit-put-existing-only", "WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY", true,
 			"PUT /api/v1/governance/units/{id} replaces an existing profile only and answers 404 for an id no profile holds; create through POST (default true; false lets a PUT create at the id, logged)"),
 		egressHostPortGrantsInert: flagBool("egress-host-port-grants-inert", "WARDYN_EGRESS_HOST_PORT_GRANTS_INERT", true,

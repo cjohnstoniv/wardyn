@@ -15,6 +15,7 @@ var defaultOnGrantSwitches = []struct {
 	env   string
 	loose func(*bootFlags) bool // the api.Config field the switch set off turns on
 }{
+	{"WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL", (*bootFlags).unverifiedEmailGrants},
 	{"WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY", (*bootFlags).unitPutCreates},
 	{"WARDYN_EGRESS_HOST_PORT_GRANTS_INERT", (*bootFlags).hostPortGrantsMatch},
 }

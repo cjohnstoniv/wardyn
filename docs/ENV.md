@@ -240,7 +240,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_OIDC_ROLE_MAP` | CSV (`value=role` pairs) | (unset = role derivation off unless a console-managed mapping actually contributes to the merged map) | Maps an Entra App Role, `groups` claim entry or email to `admin`, `security_admin`, `user` or a user type id (flag `-oidc-role-map`); the only way to `security_admin`; a group deny against a partial snapshot fails closed. [Details](#wardyn_oidc_role_map) |
 | `WARDYN_OIDC_DEFAULT_ROLE` | string (`admin`\|`user`\|a user type id; `security_admin` is refused at boot; the pre-0.8 `member` has been refused at boot since 0.9) | (unset = **deny the login**, this applies once the merged map — chart or console — is non-empty) | Role assigned when a signed-in human's roles, groups or email matched none of the merged map's entries; unset denies that login (flag `-oidc-default-role`). Not applied when the IdP withheld the claims. [Details](#wardyn_oidc_default_role) |
 | `WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS` | bool | `false` | Opt-in for an email-shaped value on a console People-step role mapping only; refused by default (`EMAIL_KEY_REFUSED`, [`internal/api/access.go`](../internal/api/access.go)) (flag `-oidc-allow-email-mappings`). [Details](#wardyn_oidc_allow_email_mappings) |
-| `WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL` | bool | `false` | an allow grant written for a caller's email matches only when sign-in vouches for the email (flag `-capability-grants-verified-email`); deny grants match it either way. [Details](#wardyn_capability_grants_verified_email) |
+| `WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL` | bool | `true` | an allow grant written for a caller's email matches only when sign-in vouches for the email (flag `-capability-grants-verified-email`); deny grants match it either way. [Details](#wardyn_capability_grants_verified_email) |
 | `WARDYN_DIRECTORY_PROVIDER` | string (`entra`) | (unset = **off**) | Identity-directory connector behind the console's "who" autocomplete; unset is the whole feature off. Setting it grants wardynd read of the whole directory (flag `-directory-provider`). [Details](#wardyn_directory_provider) |
 | `WARDYN_DIRECTORY_TENANT` | string | (unset = derived from `WARDYN_OIDC_ISSUER`) | Entra tenant id or verified domain for the connector; unset, it is derived from a commercial-cloud issuer such as `https://login.microsoftonline.com/<tenant>/v2.0`, and any other issuer is a boot refusal (flag `-directory-tenant`). [Details](#wardyn_directory_tenant) |
 | `WARDYN_DIRECTORY_CLIENT_ID` | string | (unset = reuses `WARDYN_OIDC_CLIENT_ID`) | Client id of a dedicated, least-privilege app registration for the directory read; the three directory vars are set together or not at all (flag `-directory-client-id`). [Details](#wardyn_directory_client_id) |
@@ -1229,10 +1229,10 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 ### `WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL`
 
-- Off (the default): a capability allow grant whose subject is the caller's email matches as before, and each such match is logged at INFO as one the switch would stop.
-- On: that grant matches only when sign-in vouches for the email: `WARDYN_OIDC_EMAIL_DOMAINS` or `WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED` is set, or `WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS` is on. A grant on the caller's sub or group is unaffected.
+- On (the default since 0.10.0): a capability allow grant whose subject is the caller's email matches only when sign-in vouches for the email: `WARDYN_OIDC_EMAIL_DOMAINS` or `WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED` is set, or `WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS` is on. A grant on the caller's sub, a group, a user type or everyone is unaffected, and sign-in itself is unchanged.
+- An Entra ID token usually omits `email_verified`, so on Entra such email grants stop granting. Boot WARNs with how many stored allow grants are keyed to an email while sign-in does not vouch for it.
 - A deny grant on the email binds either way.
-- Before you turn it on, read the INFO lines and re-key each named grant to the person's sub or a group (flag `-capability-grants-verified-email`).
+- Remedy: re-grant each to the person's user id (sub) or a group, or set it to `false` (flag `-capability-grants-verified-email=false`), which keeps the match and logs each one at INFO.
 
 ### `WARDYN_DIRECTORY_PROVIDER`
 

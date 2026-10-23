@@ -460,7 +460,7 @@ func run() error {
 		SessionRevocations:            sessionRevocationsFor(feats.authn, pool),
 		OperatorEmails:                splitCSV(*f.oidcOperatorEmails),
 		AllowEmailMappings:            *f.oidcAllowEmailMappings,
-		CapabilityGrantsVerifiedEmail: *f.capabilityGrantsVerifiedEmail,
+		UnverifiedEmailCapGrantsMatch: f.unverifiedEmailGrants(),
 		GovernanceUnitPutCreates:      f.unitPutCreates(),
 		EgressHostPortGrantsMatch:     f.hostPortGrantsMatch(),
 		UserMounts:                    memberMounts,
