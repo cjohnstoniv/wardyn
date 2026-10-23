@@ -786,6 +786,10 @@ jobs:
   # SELECTS its AWS CLI installer by TARGETARCH. timeout-minutes is generous on
   # purpose: emulated apt/npm is slow, and a timeout kill here would read as a
   # build break.
+  #
+  # agent-claude-code is not a row here: it is never published (release.yml's `images`
+  # matrix says why), so it needs no staging, and agent-claude-code-native below
+  # builds each architecture on a runner of that architecture instead of emulating arm64.
   buildx-smoke:
     name: multi-arch build (${{ matrix.name }})
     runs-on: ubuntu-latest
@@ -844,13 +848,6 @@ jobs:
             dockerfile: deploy/images/aws-sso/Dockerfile
             build-args: ""
             stage: "true"
-            gomod: "true"
-          # Never pushed, because it bundles the vendor CLI (release.yml's
-          # `images` matrix explains why that image is not published).
-          - name: agent-claude-code
-            dockerfile: deploy/images/claude-code/Dockerfile
-            build-args: ""
-            stage: "false"
             gomod: "true"
     steps:
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
@@ -929,6 +926,80 @@ jobs:
           subject-name: ghcr.io/cjohnstoniv/staging/${{ matrix.name }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
+
+  # agent-claude-code on each architecture's own runner (#2980). The image is a local
+  # build recipe that release.yml never publishes, so nothing here is staged or pushed.
+  # Its RUN steps (apt, npm, gh, the AWS CLI) run as the target arch, so the arm64 leg
+  # builds on GitHub's arm64 runner rather than under QEMU: no setup-qemu step, nothing
+  # emulated. Both legs then run what the image contract promises, in the image just
+  # built: the harness reports its version and agent-run's selftest passes.
+  # The checks are named `multi-arch build (...)` so green-by-tree.sh and
+  # release-patch.sh keep judging them as the arm64 half's proof before a release.
+  agent-claude-code-native:
+    name: multi-arch build (agent-claude-code, ${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
+        run: |
+          command -v dockerd >/dev/null || exit 0
+          f=/etc/docker/daemon.json
+          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
+          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
+          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
+          running="$(docker ps -q)"; sudo systemctl restart docker
+          [ -z "$running" ] || docker start $running >/dev/null
+          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
+      # The same job-filled module cache as buildx-smoke (#3469); the Dockerfile verifies it.
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Fill the Go module cache for the image build
+        id: gomod
+        run: |
+          set -euo pipefail
+          for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done
+          echo "dir=$(go env GOMODCACHE)/cache/download" >> "$GITHUB_OUTPUT"
+      - name: Build the runner's own architecture (loaded, not pushed)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          file: deploy/images/claude-code/Dockerfile
+          push: false
+          load: true
+          platforms: linux/${{ matrix.arch }}
+          provenance: false
+          build-contexts: gomodcache=${{ steps.gomod.outputs.dir }}
+          tags: wardyn/agent-claude-code:native
+          # No cache-from or cache-to: a cached apt-get layer would ship stale Debian packages.
+      - name: Acceptance on this architecture (harness version, agent-run selftest)
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          img=wardyn/agent-claude-code:native
+          test "$(docker image inspect "$img" --format '{{.Architecture}}')" = "$ARCH"
+          case "$ARCH" in amd64) m=x86_64 ;; arm64) m=aarch64 ;; esac
+          test "$(docker run --rm "$img" uname -m)" = "$m"
+          docker run --rm "$img" claude --version
+          docker run --rm "$img" agent-run --selftest
 
   # agent-vscode and agent-novnc build FROM the agent-base staged by
   # buildx-smoke in this same run, by digest, so the tag a release promotes is
@@ -2182,7 +2253,7 @@ jobs:
           fi
 
   notify-new-lanes:
-    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, buildx-smoke-ui-sandbox, buildx-smoke-ui-sandbox-signin, kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg, managed-settings-drift, runner-compat-walk, kind-survival-walk, k6-kind-conformance, kind-acceptance-walks, hybrid-walk, kind-upgrade-walk]
+    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, agent-claude-code-native, buildx-smoke-ui-sandbox, buildx-smoke-ui-sandbox-signin, kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg, managed-settings-drift, runner-compat-walk, kind-survival-walk, k6-kind-conformance, kind-acceptance-walks, hybrid-walk, kind-upgrade-walk]
     # main only: a workflow_dispatch on any other branch must not post to the main-health issue.
     if: failure() && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -2207,7 +2278,7 @@ jobs:
             gh issue comment "$existing" --body "Still failing (${failed:-no job reported failure}): $RUN_URL"
           else
             body=$(printf '%s\n' \
-              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, buildx-smoke-ui-sandbox and buildx-smoke-ui-sandbox-signin (multi-arch build), kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg, managed-settings-drift, runner-compat-walk, kind-survival-walk, k6-kind-conformance, kind-acceptance-walks, hybrid-walk or kind-upgrade-walk." \
+              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, agent-claude-code-native, buildx-smoke-ui-sandbox and buildx-smoke-ui-sandbox-signin (multi-arch build), kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg, managed-settings-drift, runner-compat-walk, kind-survival-walk, k6-kind-conformance, kind-acceptance-walks, hybrid-walk or kind-upgrade-walk." \
               "" \
               "None of them shares the pre-existing failures of the older e2e-live job (deliberately not watched here)." \
               "" \
