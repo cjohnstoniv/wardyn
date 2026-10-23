@@ -374,7 +374,7 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 	}()
 
 	conn := websocket.NetConn(r.Context(), ws, websocket.MessageBinary)
-	filtered := s.desktopClipboardFilter(ctx, sess, rules, &wsFramed{raw: display, wsUnframer: wsUnframer{w: display}})
+	filtered := s.desktopClipboardFilter(ctx, sess, rules, s.recordVMDisplay(run, sess, &wsFramed{raw: display, wsUnframer: wsUnframer{w: display}}))
 	defer func() { _ = filtered.Close() }()
 	done := make(chan struct{}, 2)
 	go func() { _, _ = io.Copy(wsFramer{filtered}, conn); done <- struct{}{} }()
