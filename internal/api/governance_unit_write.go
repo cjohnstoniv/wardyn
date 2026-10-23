@@ -460,12 +460,8 @@ func (s *Server) buildGovernanceUnit(createdBy string, super bool, id uuid.UUID,
 		ID: id, Name: req.Name, CreatedBy: createdBy, Contact: req.contact, ContactSet: req.contactSet,
 		Mode: cmp.Or(req.Mode, storedUnitMode(all, id)), LockedKnobs: unitsByID(all)[id].LockedKnobs,
 	}
-	if req.LockedKnobs != nil {
-		locks, msg := normalizeLockedKnobs(*req.LockedKnobs)
-		if msg != "" {
-			return p, nil, keep, writeRefusal(http.StatusUnprocessableEntity, reasonGovernanceUnitRequestInvalid, "%s", msg)
-		}
-		p.LockedKnobs = locks
+	if p.LockedKnobs, err = requestLockedKnobs(req, p.LockedKnobs); err != nil {
+		return p, nil, keep, err
 	}
 	// UNIQUE(name) is judged here too, so a held create or rename is refused at proposal
 	// and not left pending to fail at every approval.
@@ -543,12 +539,31 @@ func (s *Server) buildGovernanceUnit(createdBy string, super bool, id uuid.UUID,
 		}
 		p.Ceiling, p.Limits = req.Ceiling, req.Limits
 	}
-	p, res, err = s.checkGraphWrite(p, all, limit)
-	if err != nil {
-		return p, res, keep, err
+	p, res, err = s.checkLockedGraphWrite(p, all, b, limit)
+	return p, res, keep, err
+}
+
+// requestLockedKnobs is the locks a unit write stores: the request's, normalized, when it sends them,
+// the stored row's otherwise.
+func requestLockedKnobs(req governanceUnitRequest, stored []string) ([]string, error) {
+	if req.LockedKnobs == nil {
+		return stored, nil
 	}
-	// Locks bind every writer, a narrowing included (governance_locks.go).
-	return p, res, keep, s.checkUnitLocks(p, res, all, b, limit)
+	locks, msg := normalizeLockedKnobs(*req.LockedKnobs)
+	if msg != "" {
+		return stored, writeRefusal(http.StatusUnprocessableEntity, reasonGovernanceUnitRequestInvalid, "%s", msg)
+	}
+	return locks, nil
+}
+
+// checkLockedGraphWrite is checkGraphWrite, then the locks, which bind every writer, a narrowing
+// included (governance_locks.go).
+func (s *Server) checkLockedGraphWrite(p types.GovernanceUnit, all []types.GovernanceUnit, b types.Boundary, limit int) (types.GovernanceUnit, *ResolvedUnit, error) {
+	p, res, err := s.checkGraphWrite(p, all, limit)
+	if err != nil {
+		return p, res, err
+	}
+	return p, res, s.checkUnitLocks(p, res, all, b, limit)
 }
 
 // storedUnitMode is the mode of the stored row id, own_walls when there is none.
