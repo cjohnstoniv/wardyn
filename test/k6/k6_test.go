@@ -83,6 +83,7 @@ type env struct {
 	fences                                           *fences
 	main                                             *k8s.Driver
 	stoppedIP                                        string // normal-stop's proxy IP, for pod-ip-reuse-after-stop
+	runs                                             runIDs // the runs a case registered with cleanupRun: what a failed case dumps
 }
 
 func must(t *testing.T, key string) string {
@@ -144,6 +145,11 @@ func TestK6(t *testing.T) {
 	kase := func(name string, fn func(t *testing.T, e *env)) {
 		var status, detail string
 		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if ids := e.runs.take(); t.Failed() {
+					e.dump(t, ids)
+				}
+			}()
 			defer func() {
 				detail = notes(t)
 				switch {
@@ -495,6 +501,7 @@ func proxyName(id uuid.UUID) string { return "wardyn-proxy-" + id.String() }
 // cleanupRun strips every finalizer from the run's pods and deletes what is left, so one case's
 // leftovers never reach the next. It runs after a case's assertions.
 func (e *env) cleanupRun(t *testing.T, id uuid.UUID) {
+	e.runs.add(id.String())
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
@@ -512,6 +519,14 @@ func (e *env) cleanupRun(t *testing.T, id uuid.UUID) {
 			return err == nil && len(l.Items) == 0, nil
 		})
 	})
+}
+
+// dump logs the failed case's diagnostics (diagSrc.dump). The org namespace and runnerd's deployment
+// are the script's; a harness that does not hand them over gets the pods, events and proxy logs.
+func (e *env) dump(t *testing.T, ids []string) {
+	d := diagSrc{admin: e.admin, kc: os.Getenv("K6_ADMIN_KUBECONFIG"), runsNS: e.runsNS, ownNS: e.ownNS,
+		orgNS: os.Getenv("K6_ORG_NS"), runnerd: os.Getenv("K6_RUNNERD_DEPLOY"), runnerID: e.runnerID}
+	d.dump(t, ids)
 }
 
 // runGone reports whether every object of the run is gone.
