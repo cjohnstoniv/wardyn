@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -117,5 +118,98 @@ func TestSCIMPurgeRevokesRunnersAndRegistrationTokens(t *testing.T) {
 	}
 	if len(e.rows(e.a, "runner.revoke")) != 1 || len(e.rows(e.a, "runner.token.revoke")) != 1 {
 		t.Errorf("revoke rows: runner %d, token %d, want one each", len(e.rows(e.a, "runner.revoke")), len(e.rows(e.a, "runner.token.revoke")))
+	}
+}
+
+// redeemEnv is a SCIM-provisioned person with runners on and one unused registration token: redeem
+// presents it, spent and owned read it and the person's runner rows back.
+type redeemEnv struct {
+	e     *scimEnv
+	id    string // the SCIM user
+	tok   uuid.UUID
+	raw   string
+	email string
+}
+
+const redeemSub = "sub-redeem"
+
+func newRedeemEnv(t *testing.T) redeemEnv {
+	t.Helper()
+	const email = "redeem.owner@corp.example"
+	e := newSCIMEnv(t, scimRunnerShape)
+	e.seedEntra(redeemSub, email, oidPat)
+	id := e.postUserID(e.a, oidPat, email, email)
+	ctx := context.Background()
+	if _, err := e.st.PutSiteConfig(ctx, types.SiteConfig{Runners: &types.RunnerSettings{Enabled: true}}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	raw := newBearer("wdr_")
+	tok, err := e.st.MintRunnerRegistrationToken(ctx, raw, types.RunnerRegistrationToken{ID: uuid.New(), Owner: redeemSub, MintedBy: "admin",
+		CreatedAt: now, ExpiresAt: now.Add(time.Hour), OrgURLSHA256: federation.OrgURLSHA256(admissionOrgURL)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return redeemEnv{e: e, id: id, tok: tok.ID, raw: raw, email: email}
+}
+
+func (r redeemEnv) redeem(t *testing.T) (int, string) {
+	t.Helper()
+	pub, _, _ := ed25519.GenerateKey(rand.Reader)
+	body, _ := json.Marshal(types.RunnerRegisterRequest{Token: r.raw, PublicKey: pub, Name: "laptop", Limits: roomyRunnerLimits(), MachineName: "m", Arch: "amd64"})
+	w := do(t, r.e.a.srv, http.MethodPost, "/api/v1/runners/register", "", string(body))
+	return w.Code, w.Body.String()
+}
+
+func (r redeemEnv) spent(t *testing.T) bool {
+	t.Helper()
+	tok, err := r.e.st.GetRunnerRegistrationToken(context.Background(), r.tok)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tok.ConsumedAt != nil
+}
+
+func (r redeemEnv) owned(t *testing.T) int {
+	t.Helper()
+	var n int
+	if err := r.e.pool.QueryRow(context.Background(), `SELECT count(*) FROM runners WHERE owner = $1`, redeemSub).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// A suspended person's unused registration token is refused at redeem with identity_deactivated: it
+// stays unspent and no runner is registered.
+func TestRunnerTokenRedeemRefusedWhileOwnerSuspended(t *testing.T) {
+	r := newRedeemEnv(t)
+	r.e.suspendOn(r.e.a, r.email)
+	code, body := r.redeem(t)
+	if code != http.StatusForbidden || !strings.Contains(body, reasonIdentityDeactivated) {
+		t.Fatalf("redeem while suspended = %d %s, want 403 %s", code, body, reasonIdentityDeactivated)
+	}
+	if r.spent(t) || r.owned(t) != 0 {
+		t.Fatalf("a refused redeem spent the token (%v) or registered %d runner(s)", r.spent(t), r.owned(t))
+	}
+}
+
+// The token a suspension refused redeems once the person is reactivated.
+func TestRunnerTokenRedeemsAfterOwnerReactivated(t *testing.T) {
+	r := newRedeemEnv(t)
+	r.e.suspendOn(r.e.a, r.email)
+	_, _ = r.redeem(t)
+	if w := r.e.patch(r.e.b, r.id, patchOf("true")); w.Code != http.StatusOK {
+		t.Fatalf("reactivate = %d %s", w.Code, w.Body.String())
+	}
+	if code, body := r.redeem(t); code != http.StatusCreated || !r.spent(t) || r.owned(t) != 1 {
+		t.Fatalf("redeem after reactivation = %d %s (spent %v, runners %d), want 201, spent, one runner", code, body, r.spent(t), r.owned(t))
+	}
+}
+
+// An active person's token redeems as before: spent, one runner registered.
+func TestRunnerTokenRedeemsForAnActiveOwner(t *testing.T) {
+	r := newRedeemEnv(t)
+	if code, body := r.redeem(t); code != http.StatusCreated || !r.spent(t) || r.owned(t) != 1 {
+		t.Fatalf("redeem for an active owner = %d %s (spent %v, runners %d), want 201, spent, one runner", code, body, r.spent(t), r.owned(t))
 	}
 }
