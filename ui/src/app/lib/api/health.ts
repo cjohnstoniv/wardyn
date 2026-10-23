@@ -155,6 +155,28 @@ export interface Me {
   // binds them. null for an operator and whenever the ceiling could not be
   // resolved; absent on a pre-0.8.6 daemon.
   governance_contact?: PolicyRef | null;
+  // A service identity's reach (internal/api/me_service_reach.go): the routes
+  // its token may call and what it may already launch with. Present only for a
+  // service identity's token; a person's /me never carries it.
+  service?: ServiceReach;
+}
+
+export interface ServiceReach {
+  name: string;
+  sponsor: string;
+  routes: string[];
+  presets: ServiceReachPreset[];
+  workspaces: ServiceReachWorkspace[];
+}
+
+export interface ServiceReachPreset {
+  name: string;
+  version: number;
+}
+
+export interface ServiceReachWorkspace {
+  id: string;
+  name: string;
 }
 
 // internal/policyref.Ref — the member-safe reference a refusal, /me and a run

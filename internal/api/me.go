@@ -247,6 +247,15 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	if ref := s.meGovernanceContact(r); ref != nil {
 		body["governance_contact"] = ref
 	}
+	// A service identity's reach (me_service_reach.go); a person's body never carries the key.
+	if _, _, ok := serviceIdentityFromContext(r.Context()); ok {
+		reach, err := s.meServiceReach(r)
+		if err != nil {
+			writeServiceReachError(w, r, err)
+			return
+		}
+		body["service"] = reach
+	}
 	// An SSO session dies outright at this instant (no refresh) — the
 	// console polls this and warns ahead of it, rather than the human learning
 	// about it from a sudden 401 that wipes mid-work state back to the gate.

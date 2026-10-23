@@ -244,6 +244,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   stops answering, and reports it as `relay_status` on the runner's read.
 - A runner's `status.json` now records the stage a failed connect or start stopped at (`stage`, `stage_at`) and whether
   the run relay answers (`relay`), so the file shows why the runner is down (Refs #3296).
+- A service token reads its own runs' audit, the presets and workspaces it may launch with, and its reach on
+  `GET /me`.
 
 ### Changed
 
@@ -267,6 +269,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   named: that image, like the release image, is derived again at each start, so replacing the binary moves the proxy
   with it. A `proxy_image` set in the file, by `--proxy-image` or by hand, is the pin. An earlier install keeps
   working, and running setup again moves its settings into the file.
+- A service token's `GET /me` answers 503 `roster_unreadable` when the site configuration cannot be read, as
+  `GET /workspaces` does, and 500 when its presets or workspaces cannot be listed.
 
 ### Fixed
 
