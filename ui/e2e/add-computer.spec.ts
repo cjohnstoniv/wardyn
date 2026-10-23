@@ -235,4 +235,23 @@ test.describe("Your account -> My runner: Add this computer", () => {
     await expect(page.getByRole("button", { name: "Register a runner" })).toHaveCount(0);
     await expect(block.getByText("Managed install (MDM)")).toHaveCount(0);
   });
+
+  test("when the server says the member may not host a runner, one line stands in place of the steps (#3423)", async ({ page }) => {
+    await healthz(page, { version: "0.10.0", cli_sign_in: true });
+    await page.route("**/api/v1/me/runners*", (r) => (r.request().method() === "GET" ? r.fulfill({ json: [] }) : r.fallback()));
+    await page.route("**/api/v1/me/capabilities", async (r) => {
+      if (r.request().method() !== "GET") return r.fallback();
+      const body = (await (await r.fetch()).json()) as Record<string, unknown>;
+      return r.fulfill({ json: { ...body, may_self_host_runner: false } });
+    });
+    await asRealMember(page);
+    await gotoConsole(page, "user");
+    await navTo(page, "Your account");
+    await page.getByRole("button", { name: /^My runner/ }).click();
+    const block = page.locator("[data-add-computer]");
+    await expect(block.getByText("Personal runners aren't turned on for you. Ask your admin.")).toBeVisible();
+    await expect(block.getByRole("heading", { level: 5 })).toHaveCount(0);
+    await expect(block.getByText(SH, { exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Register a runner" })).toHaveCount(0);
+  });
 });
