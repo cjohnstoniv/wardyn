@@ -538,10 +538,10 @@ func TestCapAllowedMatrix(t *testing.T) {
 			ctx:    memberCtx(nil), kind: capEgressHost, value: "api.example.com:443", want: true,
 		},
 		{
-			name:   "egress_host: a port on the GRANT does not dodge the match either",
+			name:   "egress_host: an allow GRANT stored with a port is inert by default",
 			grants: []types.CapabilityGrant{grant(types.CapabilitySubjectAll, "", capEgressHost, "pypi.org:443", allow)},
 			enf:    map[string]bool{capEgressHost: true},
-			ctx:    memberCtx(nil), kind: capEgressHost, value: "pypi.org", want: true,
+			ctx:    memberCtx(nil), kind: capEgressHost, value: "pypi.org", want: false,
 		},
 		{
 			name:   "egress_host: a suffix grant does not cover an unrelated host",

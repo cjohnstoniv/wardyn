@@ -292,7 +292,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_GOVERNANCE_SECOND_HUMAN` | bool | (unset) | four-eyes on governance writes: a human's write to a governance profile, a capability grant, a key-domain assignment or `local_credential_delivery` is stored as a pending change. A second, distinct human must approve it. [Details](#wardyn_governance_second_human) |
 | `WARDYN_GOVERNANCE_CHANGE_TTL` | duration | `72h` | how long a governance change held for a second human waits for approval (flag `-governance-change-ttl`); past it the change reads as `expired` and cannot be approved. [Details](#wardyn_governance_change_ttl) |
 | `WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY` | bool | `true` | `PUT /governance/units/{id}` updates an existing profile only; an id no profile holds answers `404` (flag `-governance-unit-put-existing-only`). [Details](#wardyn_governance_unit_put_existing_only) |
-| `WARDYN_EGRESS_HOST_PORT_GRANTS_INERT` | bool | `false` | a stored `egress_host` allow grant whose value carries a port is inert: marked so and never matched (flag `-egress-host-port-grants-inert`). [Details](#wardyn_egress_host_port_grants_inert) |
+| `WARDYN_EGRESS_HOST_PORT_GRANTS_INERT` | bool | `true` | a stored `egress_host` allow grant whose value carries a port is inert: marked so and never matched (flag `-egress-host-port-grants-inert`). [Details](#wardyn_egress_host_port_grants_inert) |
 | `WARDYN_HA` | bool | `false` | multi-replica mode (flag `-ha`): skip the single-instance lock so several wardynd replicas can serve one database; refused at boot unless the runner is the Kubernetes substrate. [Details](#wardyn_ha) |
 | `WARDYN_GOVERN_ADMIN_RUNS` | bool | (unset) | constrained-admin mode: govern every run an SSO admin or an admin-role personal API token launches, like a member's (flag `-govern-admin-runs`). **With OIDC unset the switch binds nobody**, and boot WARNs it (`warnGovernAdminRunsUnbound`, [`cmd/wardynd/boot_posture.go`](../cmd/wardynd/boot_posture.go)). [Details](#wardyn_govern_admin_runs) |
 | `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT` | CSV | (unset) | the lanes left ungoverned under `WARDYN_GOVERN_ADMIN_RUNS`; the only value is `recording` (flag `-govern-admin-runs-exempt`). [Details](#wardyn_govern_admin_runs_exempt) |
@@ -1538,10 +1538,10 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 ### `WARDYN_EGRESS_HOST_PORT_GRANTS_INERT`
 
-- The write boundary stores an `egress_host` grant's host alone; an older row may still carry `host:port`, and the resolver matches it on the host for every port.
-- Off (the default): such allow rows match as before, and listing the grants WARNs with each one and the remedy.
-- On: such an allow row is inert: `GET /api/v1/permissions` marks it `inert` and it grants nothing. A deny row with a port keeps binding.
-- Before you turn it on, re-save each WARNed row through `POST /api/v1/permissions/grants`, then delete the old row (flag `-egress-host-port-grants-inert`).
+- The write boundary stores an `egress_host` grant's host alone; an older row may still carry `host:port`, which, with this switch off, the resolver matches on the host for every port.
+- On (the default since 0.10.0): such an allow row is inert: `GET /api/v1/permissions` marks it `inert` and it grants nothing. A deny row with a port keeps binding. Boot logs how many rows went inert.
+- Off (`false`): such allow rows match as before, and listing the grants WARNs with each one and the remedy.
+- To keep a row working, re-save it through `POST /api/v1/permissions/grants`, which stores the host alone, then delete the old row (flag `-egress-host-port-grants-inert=false` turns the switch off).
 
 ### `WARDYN_HA`
 

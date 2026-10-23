@@ -16,6 +16,7 @@ var defaultOnGrantSwitches = []struct {
 	loose func(*bootFlags) bool // the api.Config field the switch set off turns on
 }{
 	{"WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY", (*bootFlags).unitPutCreates},
+	{"WARDYN_EGRESS_HOST_PORT_GRANTS_INERT", (*bootFlags).hostPortGrantsMatch},
 }
 
 func bootFlagsWith(t *testing.T, env, val string) *bootFlags {

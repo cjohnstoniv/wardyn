@@ -462,7 +462,7 @@ func run() error {
 		AllowEmailMappings:            *f.oidcAllowEmailMappings,
 		CapabilityGrantsVerifiedEmail: *f.capabilityGrantsVerifiedEmail,
 		GovernanceUnitPutCreates:      f.unitPutCreates(),
-		EgressHostPortGrantsInert:     *f.egressHostPortGrantsInert,
+		EgressHostPortGrantsMatch:     f.hostPortGrantsMatch(),
 		UserMounts:                    memberMounts,
 		UserDriveHostRoots:            driveHostRoots,
 		ImageBuilder:                  feats.imgBuilder,
@@ -581,6 +581,7 @@ func run() error {
 	// answers "nothing to add", the authorization request is not widened and the
 	// callback stores nothing (internal/api/ado_entra_login.go).
 	attachLoginGrantSink(feats.authn, srv)
+	srv.LogGrantSwitches(bootCtx)
 
 	// The network settings a rebuilt database lost, from WARDYN_SITE_CONFIG_SEED_FILE,
 	// before anything is served. A no-op when the file is unset.

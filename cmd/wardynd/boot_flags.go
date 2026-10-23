@@ -243,8 +243,8 @@ type bootFlags struct {
 	// Role/group keys, which env WARDYN_OIDC_ROLE_MAP email keys were never
 	// gated on (legacy, still boot-warned separately).
 	oidcAllowEmailMappings *bool
-	// Three tightenings fed to api.Config; put-existing-only defaults on, and
-	// api.Config takes its inverse (unitPutCreates).
+	// Three tightenings: verified-email default off, the other two default on
+	// (api.Config takes their inverse, unitPutCreates and hostPortGrantsMatch).
 	capabilityGrantsVerifiedEmail *bool
 	governanceUnitPutExistingOnly *bool
 	egressHostPortGrantsInert     *bool
@@ -571,8 +571,8 @@ func parseBootFlags() *bootFlags {
 			"a capability allow grant written for a person's email matches them only when sign-in verifies the email (WARDYN_OIDC_EMAIL_DOMAINS or WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED) or WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS is on; deny grants match either way (default false: the match is kept and logged)"),
 		governanceUnitPutExistingOnly: flagBool("governance-unit-put-existing-only", "WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY", true,
 			"PUT /api/v1/governance/units/{id} replaces an existing profile only and answers 404 for an id no profile holds; create through POST (default true; false lets a PUT create at the id, logged)"),
-		egressHostPortGrantsInert: flagBool("egress-host-port-grants-inert", "WARDYN_EGRESS_HOST_PORT_GRANTS_INERT", false,
-			"a stored egress_host allow grant whose value carries a :port is inert: marked on the Permissions read and never matched; deny grants keep matching (default false: matched by host and logged)"),
+		egressHostPortGrantsInert: flagBool("egress-host-port-grants-inert", "WARDYN_EGRESS_HOST_PORT_GRANTS_INERT", true,
+			"a stored egress_host allow grant whose value carries a :port is inert: marked on the Permissions read and never matched; deny grants keep matching (default true; false matches it by host, logged)"),
 
 		dirProvider: flagEnv("directory-provider", "WARDYN_DIRECTORY_PROVIDER", "", `identity-directory connector for the console's "who" autocomplete: "entra" (Microsoft Graph) or empty. Empty (default) is the feature off; enabling it grants wardynd read of the whole directory`),
 		dirTenant:   flagEnv("directory-tenant", "WARDYN_DIRECTORY_TENANT", "", "Entra tenant id/domain for the directory connector. Empty (default) derives it from -oidc-issuer; set together with -directory-client-id/-secret to use a dedicated app registration"),

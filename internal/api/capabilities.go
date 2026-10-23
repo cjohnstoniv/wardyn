@@ -802,7 +802,7 @@ func (b *capBatch) scan(ctx context.Context, kind, value string) (deny, allow bo
 			continue
 		}
 		if capValueMatches(kind, g.Value, value) && !b.unverifiedEmailAllow(ctx, g) &&
-			!(b.s.cfg.EgressHostPortGrantsInert && egressHostPortAllow(g)) {
+			(b.s.cfg.EgressHostPortGrantsMatch || !egressHostPortAllow(g)) {
 			allow = true
 		}
 	}

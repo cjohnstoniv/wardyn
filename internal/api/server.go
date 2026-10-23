@@ -289,11 +289,11 @@ type Config struct {
 	// PUT /governance/units/{id} naming an id no profile holds creates one there,
 	// logged. The zero value (the default) answers it 404; create through POST.
 	GovernanceUnitPutCreates bool
-	// EgressHostPortGrantsInert is WARDYN_EGRESS_HOST_PORT_GRANTS_INERT: a stored
-	// egress_host ALLOW row whose value carries a ":port" (written before the
-	// write boundary stored the host alone) is inert, marked and never matched.
-	// Default false keeps matching it by host and logs it. Deny rows keep matching.
-	EgressHostPortGrantsInert bool
+	// EgressHostPortGrantsMatch is WARDYN_EGRESS_HOST_PORT_GRANTS_INERT set off: a
+	// stored egress_host ALLOW row whose value carries a ":port" (written before
+	// the write boundary stored the host alone) still matches by host, logged. The
+	// zero value (the default) leaves it inert, marked and never matched. Deny rows keep matching.
+	EgressHostPortGrantsMatch bool
 	// UserMounts is the operator/MDM-set posture for MEMBER-authored local_dir
 	// binds (WARDYN_USER_WORKSPACE_ROOTS + _MAP + WARDYN_USER_WRITABLE_ROOTS
 	// + _DENY, parsed at boot by runner.ParseUserMountPolicy). The ZERO VALUE
