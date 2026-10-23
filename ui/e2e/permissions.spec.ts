@@ -258,25 +258,21 @@ test.describe("permissions — a snapshot, and a count, that never arrived", () 
     }
   });
 
-  test("a refused GET /runs leaves the enforce dialog without a count, never '0 members'", async ({
+  test("a refused GET /people leaves the enforce dialog without a count, never '0 members'", async ({
     page,
   }) => {
-    // The count is derived from the runs list; refusing it must not read as
+    // The count is read from the People directory (#2515); refusing it must not read as
     // "this affects nobody", which is the opposite of the lockout risk.
-    // Refuse the runs LIST the enforce dialog counts from — but not the
-    // console's boot probe (GET /runs?limit=1, core.ts probeAuth), which a 403
-    // would turn into "unreachable" and park the console at the sign-in gate
-    // before the screen under test ever renders.
     await page.route(
-      (url) => url.pathname.endsWith("/api/v1/runs") && url.searchParams.get("limit") !== "1",
-      (route) => route.fulfill({ status: 403, body: "{}" }),
+      (url) => url.pathname.endsWith("/api/v1/people"),
+      (route) => (route.request().method() === "GET" ? route.fulfill({ status: 403, body: "{}" }) : route.fallback()),
     );
     await gotoConsole(page, "admin");
     await navTo(page, "Permissions");
 
     await page.getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.egress_host.label}` }).click();
     const dialog = page.getByRole("alertdialog");
-    await expect(dialog.getByText(PERM.ENFORCE_ON_BODY_UNKNOWN)).toBeVisible();
+    await expect(dialog.getByText(PERM.ENFORCE_ON_BODY_UNKNOWN, { exact: true })).toBeVisible();
     await expect(dialog.getByText(/\b0 members\b/)).toHaveCount(0);
     await dialog.getByRole("button", { name: "Cancel" }).click();
   });

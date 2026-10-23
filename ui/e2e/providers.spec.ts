@@ -186,8 +186,9 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     { w: 390, h: 844 },
   ]) {
     test(`the saved toast opens at the top centre, below the top bar, clear of Save providers at ${vp.w}px`, async ({ page }) => {
-      await page.setViewportSize({ width: vp.w, height: vp.h });
+      // The console's landing is walked at desktop width (its nav collapses on a phone), then the page narrows.
       await gotoProviders(page);
+      await page.setViewportSize({ width: vp.w, height: vp.h });
       await page.getByTestId("provider-row-github").locator("textarea").fill("https://github.com/acme2");
       await page.getByRole("button", { name: PROVIDERS.SAVE_CTA }).click();
       const toast = page.getByRole("listitem").filter({ hasText: PROVIDERS.SAVED_TOAST });

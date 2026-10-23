@@ -217,6 +217,13 @@ test.describe("Your account -> My runner: Add this computer", () => {
   test("with no runner, the same three steps stand in place of Register a runner, without the MDM section", async ({ page }) => {
     await healthz(page, { version: "0.10.0", cli_sign_in: true });
     await page.route("**/api/v1/me/runners*", (r) => (r.request().method() === "GET" ? r.fulfill({ json: [] }) : r.fallback()));
+    // The seeded member has no self_host_runner feature, so the server answers may_self_host_runner false and the
+    // steps give way to one line (#3423). This test is about the steps, so the answer says the member may host one.
+    await page.route("**/api/v1/me/capabilities", async (r) => {
+      if (r.request().method() !== "GET") return r.fallback();
+      const body = (await (await r.fetch()).json()) as Record<string, unknown>;
+      return r.fulfill({ json: { ...body, may_self_host_runner: true } });
+    });
     await asRealMember(page);
     await gotoConsole(page, "user");
     await navTo(page, "Your account");

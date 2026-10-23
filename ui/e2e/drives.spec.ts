@@ -400,10 +400,10 @@ test.describe("drives — the editor offers what this deployment can mount, and 
     await expect(page.getByRole("button", { name: DRIVES.ADD_CTA, exact: true })).toHaveCount(0);
 
     // ONE default-weight action on the surface, and it is Save drive — the
-    // empty state's own New drive hands its teal over for exactly this span.
+    // editor opens in the empty state's place, so its New drive is gone (#3052).
     await expect(tealActions(page)).toHaveCount(1);
     await expect(page.getByRole("button", { name: DRIVES.SAVE_CTA, exact: true })).toHaveClass(/bg-primary/);
-    await expect(page.getByRole("button", { name: DRIVES.NEW_CTA, exact: true })).not.toHaveClass(/bg-primary/);
+    await expect(page.getByRole("button", { name: DRIVES.NEW_CTA, exact: true })).toHaveCount(0);
     // Save waits for the one field that has no default.
     await expect(page.getByRole("button", { name: DRIVES.SAVE_CTA, exact: true })).toBeDisabled();
 

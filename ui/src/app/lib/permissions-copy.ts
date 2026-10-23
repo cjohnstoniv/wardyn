@@ -223,7 +223,7 @@ export const PERM = {
   ENFORCE_ON_TITLE: (kind: string) => `Enforce ${kind}?`,
   ENFORCE_ON_BODY: (n: number) =>
     `${n} member${n === 1 ? "" : "s"} ${n === 1 ? "is" : "are"} bounded by the grants below from their next request. Anything not granted starts being refused.`,
-  // The count comes from GET /runs, which can be refused or fail — an unread
+  // The count comes from GET /people, which can be refused or fail — an unread
   // count must not print as "0 members are bounded", the opposite of the
   // lockout risk this dialog exists to state. Same sentence, minus the number.
   ENFORCE_ON_BODY_UNKNOWN:
