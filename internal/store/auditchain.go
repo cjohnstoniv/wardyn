@@ -110,6 +110,9 @@ type auditChainWalk struct {
 	prev string
 	// anchored: the walk starts after an attested drop, and prev began as that drop's tail hash.
 	anchored bool
+	// ranged: the walk checks a range of the chain (VerifyRecordingAuditRange), and prev began as the
+	// hash of the row before it, not a drop's tail.
+	ranged bool
 }
 
 func newAuditChainWalk() *auditChainWalk {
@@ -149,7 +152,7 @@ func (w *auditChainWalk) step(l auditChainLink) bool {
 		w.fail(l.seq, "row_hash does not match the row's contents (the row was edited after it was written)")
 	case w.prev == "" && !l.prevIsNull:
 		w.fail(l.seq, removedWithoutDrop+": the first chained row carries a prev_hash (the row it chained to was deleted)")
-	case w.prev != "" && l.prev != w.prev && w.st.Checked == 1 && w.anchored:
+	case w.prev != "" && l.prev != w.prev && w.st.Checked == 1 && w.anchored && !w.ranged:
 		w.fail(l.seq, removedWithoutDrop+": the first retained row does not chain to the newest retention drop's recorded tail")
 	case w.prev != "" && l.prev != w.prev:
 		w.fail(l.seq, removedWithoutDrop+": prev_hash does not match the preceding row (a row was deleted or reordered)")

@@ -873,6 +873,7 @@ var routeMatrix = map[string]classifiedRoute{
 	// (launch_intent.go). seedRun gives every fixture run one, so the owner arm reads 200.
 	"GET /api/v1/runs/{id}/launch-intent":     {class: classOwner, entity: entityRun, ownerTier: tierOwnerOnly},
 	"GET /api/v1/runs/{id}/recording/{runID}": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
+	"GET /api/v1/runs/{id}/recording-chain":   {class: classOwner, entity: entityRun, ownerTier: tierSuper},
 	"POST /api/v1/runs/{id}/attach-ticket":    {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 	// /attach/ticket, /attach/holder and /profile/synthesize (below) are the
 	// 0.8 route names (#658); the dash/bare forms above and below are the chi

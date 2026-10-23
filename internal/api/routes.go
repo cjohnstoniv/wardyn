@@ -653,6 +653,8 @@ func (s *Server) routes() chi.Router {
 			if s.cfg.RecordingStore != nil {
 				r.Mount("/runs/{id}/recording", recording.Handler(s.cfg.RecordingStore, s.recordingAuthorizer))
 			}
+			// A desktop recording's stretch of the audit chain verifies (recording_chain.go): the recording's readers.
+			r.Get("/runs/{id}/recording-chain", s.handleRecordingChain)
 		})
 
 		// Interactive attach (WebSocket). Its own group: browsers cannot put

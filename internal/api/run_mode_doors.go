@@ -98,6 +98,7 @@ var passiveRunRoutes = map[string]string{
 	"GET /runs/{id}/resources":           "read",
 	"GET /runs/{id}/sign-in":             "read",
 	"MOUNT /runs/{id}/recording":         "replay of a finished recording",
+	"GET /runs/{id}/recording-chain":     "the audit chain check of a recording's range",
 	"PATCH /runs/{id}":                   "lifecycle: end and wait",
 	"PATCH /runs/{id}/title":             "lifecycle: title",
 	"POST /runs/{id}/kill":               "lifecycle: kill",
