@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -219,11 +220,33 @@ func TestPlanArtifactRedirect_SecondPortOfATokenHostIsAudited(t *testing.T) {
 					t.Errorf("no denied row with the refusal %q in %+v", want, rec.snapshot())
 				}
 				if want != "refused: this host's token is already injected for port 443, and a token is injected per host, never per host:port, "+
-					"so the redirect on port 8443 is applied without one; give each mirror its own host" {
+					"so the redirect on port 8443 is not applied; give each mirror its own host" {
 					t.Errorf("refusal text drifted: %q", want)
 				}
 			}
 		})
+	}
+}
+
+// #2118: a refused second port gets no allow entry either. The injection is keyed by bare host and a cleartext
+// request is admitted on any authored port, so an entry for the second port would carry the first port's token.
+// A second redirect without a token is not a token host's second port and keeps its entry.
+func TestSubstituteArtifactEgress_SecondPortOfATokenHostGetsNoAllowEntry(t *testing.T) {
+	first, second := "http://h.corp.example:8081", "http://h.corp.example:8082"
+	redirects := func(secondToken string) types.SiteConfig {
+		return types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+			{From: "a.example.com", To: first, TokenSecretRef: "corp-token"},
+			{From: "b.example.com", To: second, TokenSecretRef: secondToken},
+		}}
+	}
+	in := []string{"a.example.com", "b.example.com"}
+	e1, e2 := redirectToEntry("h.corp.example", first), redirectToEntry("h.corp.example", second)
+	got := substituteArtifactEgress(in, redirects("corp-token"))
+	if !slices.Contains(got, e1) || slices.Contains(got, e2) || !slices.Contains(got, "b.example.com") {
+		t.Errorf("egress = %v, want %q, no %q, and the refused redirect's From left alone", got, e1, e2)
+	}
+	if got := substituteArtifactEgress(in, redirects("")); !slices.Contains(got, e1) || !slices.Contains(got, e2) {
+		t.Errorf("a second redirect with no token: egress = %v, want both %q and %q", got, e1, e2)
 	}
 }
 
