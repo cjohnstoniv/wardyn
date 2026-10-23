@@ -42,8 +42,8 @@ function render(docKey: string): string {
 }
 
 describe("sign-in-copy / states — signin-first-contact-canon.md, #457", () => {
-  it("finds all 22 frozen keys in the doc", () => {
-    expect(doc.size).toBe(22);
+  it("finds all 24 frozen keys in the doc", () => {
+    expect(doc.size).toBe(24);
   });
 
   it.each([...doc.keys()])("%s is byte-exact", (key) => {
@@ -104,7 +104,7 @@ const INLINE_JSX_ANCHORS: Record<string, RegExp> = {
     /onCheckedChange=\{[^}]*\}\s*\n\s*aria-label="[^"]*"\s*\n\s*\/>[^]*?<span>\s*\n\s*(.+?)(?:\{" "\})?\s*\n\s*<span/,
   "Remember checkbox hint": /<span className="text-muted-foreground">\s*\n\s*(.+?)\s*\n\s*<\/span>/,
   "token form submit": /<>\s*\n\s*(.+?)\s*\n\s*<ArrowRight/,
-  "SSO control": /<DoorOpen[^>]*\/>\s*\n\s*(\{SSO_SIGN_IN\})\s*\n\s*<\/a>/,
+  "SSO control": /<DoorOpen[^>]*\/>\s*\n\s*\{expired \? SIGNIN\.SIGN_IN_AGAIN : (SSO_SIGN_IN)\}\s*\n\s*<\/a>/,
 };
 
 describe("sign-in-copy — the doc's inline-JSX rows, pinned against sign-in.tsx (#865)", () => {
@@ -121,7 +121,7 @@ describe("sign-in-copy — the doc's inline-JSX rows, pinned against sign-in.tsx
     if (!match) throw new Error(`${where}: anchor regex found no match in sign-in.tsx`);
     // A `{NAME}` placeholder (#488 lifted two of these into exported
     // constants) resolves to that constant's literal in the same file.
-    const placeholder = /^\{([A-Z_]+)\}$/.exec(match[1]);
+    const placeholder = /^\{?([A-Z_]+)\}?$/.exec(match[1]);
     const literal = placeholder
       ? new RegExp(`^export const ${placeholder[1]} = "(.+)";$`, "m").exec(SIGN_IN_TSX)?.[1]
       : match[1];
