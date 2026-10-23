@@ -30,6 +30,7 @@ import { unsavedSnapshot } from "../../../lib/unsaved-registry";
 import { PROVIDERS_EXTRA } from "../../../lib/workspace-providers-copy";
 import type { GovernanceChange } from "../../../lib/types";
 import type { DeliveryPolicy } from "../../../lib/types/credential-delivery";
+import { RUNNER_TRUST } from "../../wardyn/copy/runner-pools";
 import { RunnerCredentials } from "./runner-credentials";
 
 const doc = (classes: DeliveryPolicy["classes"] = {}) => ({ policy: { classes }, updated_at: "", updated_by: "" });
@@ -373,5 +374,63 @@ describe("RunnerCredentials — loading", () => {
     expect(screen.getByText(DELIVERY.FETCH_FAILED_BODY)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /retry/i }));
     expect(await screen.findByRole("radiogroup", { name: DELIVERY.CLASS.api_key })).toBeInTheDocument();
+  });
+});
+
+// #2446: a stored per-trust exception is drawn read-only under its row and in People see, by the server's
+// DeliveryPolicy.ForTrust: nothing under a row kept in the organisation, nothing for a class it does not name.
+describe("RunnerCredentials — stored exceptions", () => {
+  const withTrust = (classes: DeliveryPolicy["classes"], by_trust: NonNullable<DeliveryPolicy["by_trust"]>) =>
+    getMock.mockResolvedValue({ ...doc(classes), policy: { classes, by_trust } });
+  const personalRefuse = { personal: { classes: { env_secret: { mode: "refuse" as const } } } };
+
+  it("with no exception stored, there is no note and no exception line", async () => {
+    renderTab();
+    await screen.findByRole("radiogroup", { name: DELIVERY.CLASS.api_key });
+    expect(screen.queryByText(DELIVERY.EXCEPTIONS_NOTE)).not.toBeInTheDocument();
+    expect(screen.queryByText(DELIVERY.EXCEPTION_CHIP)).not.toBeInTheDocument();
+    expect(screen.queryByText(DELIVERY.EXCEPTION_KEPT)).not.toBeInTheDocument();
+  });
+
+  it("an exception shows the note, a line under its row and a People see line, and only for the class it names", async () => {
+    withTrust({ env_secret: { mode: "runner_resident" } }, personalRefuse);
+    renderTab();
+    await screen.findByRole("radiogroup", { name: DELIVERY.CLASS.api_key });
+
+    expect(screen.getByText(DELIVERY.EXCEPTIONS_NOTE)).toBeInTheDocument();
+    const line = screen.getByTestId("dc-env_secret-exceptions");
+    expect(within(line).getByText(DELIVERY.EXCEPTION_CHIP)).toBeInTheDocument();
+    expect(within(line).getByText(RUNNER_TRUST.PERSONAL)).toBeInTheDocument();
+    expect(within(line).getByText(DELIVERY.MODE.refuse)).toBeInTheDocument();
+    expect(within(line).getByText(DELIVERY.EXCEPTION_KEPT)).toBeInTheDocument();
+    // The default is still the row's outcome; the exception is its own line.
+    expect(
+      screen.getByText(DELIVERY.EXCEPTION_PEOPLE_SEE(RUNNER_TRUST.PERSONAL, DELIVERY.LOCAL_DELIVERY.refuse)),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText(DELIVERY.EXCEPTION_CHIP)).toHaveLength(1);
+    expect(screen.queryByTestId("dc-file_secret-exceptions")).not.toBeInTheDocument();
+    // The radios keep editing the defaults: the row still reads Store on the runner.
+    expect(option("env_secret", "runner_resident")).toBeChecked();
+  });
+
+  it("draws nothing under a row kept in the organisation, where the server would refuse an exception", async () => {
+    withTrust({ env_secret: { mode: "via_org" } }, personalRefuse);
+    renderTab();
+    await screen.findByRole("radiogroup", { name: DELIVERY.CLASS.api_key });
+    expect(screen.queryByTestId("dc-env_secret-exceptions")).not.toBeInTheDocument();
+    expect(screen.queryByText(DELIVERY.EXCEPTIONS_NOTE)).not.toBeInTheDocument();
+  });
+
+  it("an exception that asks for posture shows it in the row's own words", async () => {
+    withTrust(
+      { env_secret: { mode: "refuse" } },
+      { managed_device: { classes: { env_secret: { mode: "runner_resident", require_posture: { mdm_managed: true, os_min: { darwin: "15.0" } } } } } },
+    );
+    renderTab();
+    const line = await screen.findByTestId("dc-env_secret-exceptions");
+    expect(within(line).getByText(RUNNER_TRUST.MANAGED)).toBeInTheDocument();
+    expect(
+      within(line).getByText(`${DELIVERY.POSTURE_TITLE}: ${DELIVERY.POSTURE_MDM}, ${DELIVERY.OS_MIN(DELIVERY.OS_NAME.darwin)} 15.0`),
+    ).toBeInTheDocument();
   });
 });
