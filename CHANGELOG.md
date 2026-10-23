@@ -182,6 +182,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   administrator's run may hold it. An administrator's run is refused too when `WARDYN_GIT_PAT_BROKER_OFF_REFUSED` is
   on (off by default). Azure DevOps hosts, GitHub-brokered forges and `runner_resident` grants are not affected. Turn
   the broker back on for members.
+- **Commands and sftp sessions over the SSH gateway start in your home directory, not the image's working directory
+  (#3549).** A script that runs `ssh <run-id> <command>` with a relative path, or copies with `scp` or `sftp` to a
+  relative path, now resolves it from `$HOME` (`/home/agent` on Wardyn's images). Use an absolute path, such as
+  `/home/agent/work/...`, to keep the old place. `wardyn sync` and `wardyn-sync` still use the directory they name.
 
 ### Added
 
@@ -302,6 +306,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- Commands and sftp sessions over the SSH gateway now start in your home directory, as OpenSSH does, not in the
+  image's working directory, so a bare `mutagen sync create` works without a `.mutagen` link in the sandbox (#3549).
+  This is a clean break (see "Before you upgrade").
 - A run that needs a proxy setting its runner cannot honour is refused before its sandbox starts, naming the setting
   (reason `runner_proxy_setting_unsupported`).
 - The CLI's hint under a `401` follows the answer's reason. On a single-sign-on deployment with no admin token
