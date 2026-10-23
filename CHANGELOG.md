@@ -308,9 +308,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Getting started no longer counts a service identity's run as your first run (#2513). `GET /api/v1/runs` takes
   `sponsored=exclude`, which turns off only the addition of the runs of service identities you sponsor to your own list;
   the page sends it, and the Runs list still shows those runs.
-
-### Fixed
-
 - A computer folder's pass back no longer uses up the time a run's teardown has (#3466). On Docker, every pass back
   runs with the agent stopped and no egress: only the folder pass back runs. If the agent cannot be stopped first, no
   pass runs, and the sandbox is stopped with the record. That includes an exec-less (krun) sandbox, whose agent is the
