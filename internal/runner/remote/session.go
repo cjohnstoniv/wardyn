@@ -58,6 +58,17 @@ func (l *Link) Ready(peer *runnerwire.Peer) error {
 	return nil
 }
 
+// ReadyPeer is the session Ready admitted, nil while none is admitted and online. A caller that
+// keeps it can tell the same session from a reconnect's.
+func (l *Link) ReadyPeer() *runnerwire.Peer {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if !l.ready || l.peer == nil || !l.peer.Online() {
+		return nil
+	}
+	return l.peer
+}
+
 // Close rejects dispatch immediately and ends the active peer.
 func (l *Link) Close() {
 	l.mu.Lock()
