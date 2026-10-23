@@ -443,6 +443,9 @@ gh run list -R cjohnstoniv/wardyn --workflow ci.yml --status completed --limit 6
 - On a same-repo `train/*` or `prep/*` pull request, `train-suites` dispatches the nightly (`scope=candidate`, `publish=false`) on the head and waits; `train-gate` needs that run green. A call would fail on a fork's read-only token, so nothing uses `workflow_call`.
 - The nightly restores the `go-<suite>-` caches `ci.yml` saves and saves none. Only `publish` on (the default) stages and attests images.
 - [`overlay-proofs.yml`](../.github/workflows/overlay-proofs.yml) runs [`scripts/overlay-proof.sh`](../scripts/overlay-proof.sh) revert proofs; each must exit 1 with its named FAIL. Never dispatch it while a train attempt 1 is queued.
+  - Dispatch it on the bundle branch `proofs/<lane>-<sha12>`, one commit on `origin/main` adding `.proofs/`; on `main` every job skips.
+  - Lane code can save cache entries under its run's ref whatever the token allows, and `ci.yml` restores `main`'s. So it never runs there, and it uses no cache.
+  - A run counts only once `git diff --quiet origin/main...<head sha> -- ':(exclude).proofs'` exits 0 locally, so the workflow and script were main's.
 - `release.yml` has one group per ref and cancels nothing, so a dispatch and the tag push cannot publish at once.
 - `release.yml`'s `runner-pkg` job (macOS) builds `wardyn-runnerd.pkg` with [`scripts/build-runner-pkg.sh`](../scripts/build-runner-pkg.sh). Each signing step runs only when its `APPLE_DEVELOPER_ID_*` or `APPLE_NOTARY_*` secrets are set, and logs a skip line otherwise; [`scripts/test-runner-pkg.sh`](../scripts/test-runner-pkg.sh) covers the script on Linux.
 

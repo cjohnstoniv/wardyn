@@ -240,8 +240,13 @@ else
   ! grep -Eq ':[[:space:]]*(write|admin)' "$WF" || fail "workflow: a write permission"
   ! grep -Fq 'secrets.' "$WF" || fail "workflow: reads a secret"
   ! grep -Fq 'id-token' "$WF" || fail "workflow: id-token"
-  ! grep -Eq 'actions/cache@|actions/cache/save' "$WF" || fail "workflow: saves a cache (restore only)"
-  grep -Fq 'actions/cache/restore@' "$WF" || fail "workflow: no cache restore step"
+  # Lane code runs here: no cache step at all, and setup-go's own cache off.
+  ! grep -Fq 'actions/cache' "$WF" || fail "workflow: a cache step (it runs lane code; no cache at all)"
+  [ "$(grep -c 'actions/setup-go@' "$WF")" = "$(grep -c '^          cache: false$' "$WF")" ] || fail "workflow: a setup-go step without cache: false"
+  # The only ref given to a checkout is the keyed sha; the bundle is the dispatched branch itself.
+  refs="$(grep -E '^[[:space:]]+ref:' "$WF" | grep -Fvx '          ref: ${{ inputs.keyed_sha }}' || true)"
+  [ -z "$refs" ] || fail "workflow: a checkout of a ref other than the keyed sha: $refs"
+  grep -Fq 'overlay-proof.sh base bundle HEAD origin/main' "$WF" || fail "workflow: plan does not check the branch is main plus .proofs/"
   unpinned="$(grep -E '^[[:space:]]*(-[[:space:]]+)?uses:' "$WF" | grep -Ev '@[0-9a-f]{40}( |$)' || true)"
   [ -z "$unpinned" ] || fail "workflow: a uses: not pinned by full sha: $unpinned"
   mp="$(grep -E '^[[:space:]]*max-parallel:' "$WF" | grep -Eo '[0-9]+' || true)"
@@ -250,12 +255,52 @@ else
   timeouts="$(grep -cE '^    timeout-minutes:' "$WF" || true)"
   [ "$jobs" -ge 2 ] || fail "workflow: only $jobs jobs"
   [ "$timeouts" = "$jobs" ] || fail "workflow: $jobs jobs but $timeouts timeout-minutes"
-  gated="$(grep -cF "    if: github.ref == 'refs/heads/main'" "$WF" || true)"
-  [ "$gated" = "$jobs" ] || fail "workflow: $gated of $jobs jobs are gated on github.ref == refs/heads/main"
-  grep -Fq 'security boundary' "$WF" || fail "workflow: the main gate comment overstates the gate"
+  gated="$(grep -cF "    if: startsWith(github.ref, 'refs/heads/proofs/')" "$WF" || true)"
+  [ "$gated" = "$jobs" ] || fail "workflow: $gated of $jobs jobs are gated on a refs/heads/proofs/ ref"
+  grep -Fq 'Cache scope.' "$WF" || fail "workflow: the header does not say why the jobs run off main"
   grep -Fq 'never dispatch while a train attempt 1 is queued' "$WF" || fail "workflow: the throttle comment is missing"
   echo "ok   workflow text checks"
 fi
+
+# ── 6. base: the dispatched branch is a main commit plus .proofs/ ───────────
+BR="$TMP/base"
+mkdir -p "$BR/scripts"
+echo one >"$BR/scripts/s.sh"
+git -C "$BR" -c init.defaultBranch=main init -q
+git -C "$BR" add -A
+git -C "$BR" commit -q -m main
+MAIN="$(git -C "$BR" rev-parse HEAD)"
+git -C "$BR" switch -q -c proofs/x
+mkdir "$BR/.proofs"
+echo '{}' >"$BR/.proofs/manifest.json"
+git -C "$BR" add -A
+git -C "$BR" commit -q -m bundle
+BUNDLE="$(git -C "$BR" rev-parse HEAD)"
+expect "base: main plus .proofs/" 0 "$MAIN" "$SCRIPT" base "$BR" HEAD main
+git -C "$BR" switch -q main
+echo two >"$BR/scripts/t.sh"
+git -C "$BR" add -A
+git -C "$BR" commit -q -m "main moves on"
+expect "base: main moved on since the cut" 0 "$MAIN" "$SCRIPT" base "$BR" "$BUNDLE" main
+git -C "$BR" switch -q proofs/x
+echo edited >>"$BR/scripts/s.sh"
+git -C "$BR" commit -q -am "edits a script"
+expect "base: a change outside .proofs/ is refused" 2 "outside .proofs/: scripts/s.sh" "$SCRIPT" base "$BR" HEAD main
+git -C "$BR" reset -q --hard "$BUNDLE"
+git -C "$BR" mv scripts/s.sh .proofs/s.sh
+git -C "$BR" commit -q -m "moves a script into .proofs/"
+expect "base: a file moved into .proofs/ is refused" 2 "outside .proofs/: scripts/s.sh" "$SCRIPT" base "$BR" HEAD main
+git -C "$BR" reset -q --hard "$BUNDLE"
+git -C "$BR" rm -q scripts/s.sh
+git -C "$BR" commit -q -m "deletes a script"
+expect "base: a deletion outside .proofs/ is refused" 2 "outside .proofs/: scripts/s.sh" "$SCRIPT" base "$BR" HEAD main
+git -C "$BR" switch -q --orphan orphan
+mkdir -p "$BR/.proofs"
+echo '{}' >"$BR/.proofs/manifest.json"
+git -C "$BR" add .proofs
+git -C "$BR" commit -q -m orphan
+expect "base: a branch off main's history is refused" 2 "shares no history with main" "$SCRIPT" base "$BR" HEAD main
+expect "base: not a commit" 2 "is not a commit" "$SCRIPT" base "$BR" no-such-ref main
 
 [ "$fails" = 0 ] || { echo "test-overlay-proof.sh: $fails failures" >&2; exit 1; }
 echo "test-overlay-proof.sh: all checks passed"
