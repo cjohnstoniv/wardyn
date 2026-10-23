@@ -216,3 +216,12 @@ func TestPathProvenanceAgreesWithProvenance(t *testing.T) {
 		t.Errorf("path_provenance never names a unit above the leaf: the scenario proves nothing")
 	}
 }
+
+// TestContextWallsRedactAtTheCallersTier: the check's walls (contextWalls) and GET /governance's units
+// are redacted at the caller's tier: a security admin reads the deployment's mount host path as the
+// sentinel, the super admin reads it.
+func TestContextWallsRedactAtTheCallersTier(t *testing.T) {
+	e := newMountEnv(t, false)
+	e.pinRead(http.MethodPost, "/api/v1/governance/check", `{"user_subjects":["sub-pp-none"]}`, pinBaseSrc)
+	e.pinRead(http.MethodGet, "/api/v1/governance", "", pinBaseSrc)
+}
