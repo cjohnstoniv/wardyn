@@ -619,9 +619,11 @@ else
     # The build STEP decides what a digest is, so it is compared too: a staged
     # image equals a release.yml build only if context, file, platforms,
     # provenance and build-args agree, and neither side carries a target,
-    # cache-from, cache-to or any other key the other lacks.
+    # cache-from, cache-to or any other key the other lacks. nightly's `build-contexts`
+# (the Go module seed, guard 27) is the one allowed difference: it only feeds
+# `go mod download`, which go.sum verifies, so it cannot change the image.
     bps='.steps[] | select((.uses // "") | test("^docker/build-push-action@"))'
-    with_norm="$bps | .with | del(.push) | del(.tags) | del(.labels) | .[\"build-args\"] |= (. // \"\" | sub(\"\\n+\$\"; \"\")) | sort_keys(.)"
+    with_norm="$bps | .with | del(.push) | del(.tags) | del(.labels) | del(.[\"build-contexts\"]) | .[\"build-args\"] |= (. // \"\" | sub(\"\\n+\$\"; \"\")) | sort_keys(.)"
     for pair in "images buildx-smoke" "images-ui-sandbox buildx-smoke-ui-sandbox" "images-ui-sandbox-signin buildx-smoke-ui-sandbox-signin"; do
         set -- $pair
         rel_job="$1"; ngt_job="$2"
@@ -946,6 +948,43 @@ elif [ "$cli_uploads" != "$cli_targets" ] || [ "$cli_asserted" != "$cli_want_ass
 else
     ok "release.yml's $(echo "$cli_targets" | wc -l) CLI targets each have an upload step and an asserted release asset"
 fi
+
+# ── 27. nightly image builds take their Go modules from the job, not the proxy ─
+# #3469: every buildx build re-downloaded all Go modules, so one module-proxy stream
+# error failed a whole multi-arch build. The nightly job fills the module cache once and
+# passes it as the `gomodcache` build context, and each Go Dockerfile it builds declares
+# that stage (empty unless passed). release.yml keeps the cold fetch (release
+# reproducibility, DECISIONS-010.md:1137), so it must pass no build-contexts at all.
+gm_fail=0
+gm_bps='.steps[] | select((.uses // "") | test("^docker/build-push-action@"))'
+gm_ctx="$(yq -r ".jobs[\"buildx-smoke\"] | $gm_bps | .with[\"build-contexts\"] // \"\"" "$NIGHTLY")"
+case "$gm_ctx" in
+    *"gomodcache={0}"*"steps.gomod.outputs.dir"*) ;;
+    *) bad "$NIGHTLY: buildx-smoke's build step does not pass the filled Go module cache as 'gomodcache=' build-contexts (got '$gm_ctx') — each image build would fetch every module from the proxy (#3469)"; gm_fail=1 ;;
+esac
+gm_fill="$(yq -r '.jobs["buildx-smoke"].steps[] | select(.id == "gomod") | .run' "$NIGHTLY")"
+case "$gm_fill" in
+    *"go mod download"*"cache/download"*) ;;
+    *) bad "$NIGHTLY: buildx-smoke has no step id 'gomod' that runs go mod download and outputs the cache/download dir (#3469)"; gm_fail=1 ;;
+esac
+gm_fill_at="$(yq -r '.jobs["buildx-smoke"].steps | to_entries | .[] | select(.value.id == "gomod") | .key' "$NIGHTLY")"
+gm_build_at="$(yq -r ".jobs[\"buildx-smoke\"].steps | to_entries | .[] | select((.value.uses // \"\") | test(\"^docker/build-push-action@\")) | .key" "$NIGHTLY")"
+if [ -z "$gm_fill_at" ] || [ -z "$gm_build_at" ] || [ "$gm_fill_at" -ge "$gm_build_at" ]; then
+    bad "$NIGHTLY: buildx-smoke's gomod fill step must come before its build step (fill at '${gm_fill_at}', build at '${gm_build_at}')"; gm_fail=1
+fi
+gm_rows="$(yq -r '.jobs["buildx-smoke"].strategy.matrix.include[] | .name + " " + .dockerfile + " " + (.gomod // "")' "$NIGHTLY")"
+while read -r gm_name gm_df gm_flag; do
+    [ -n "$gm_name" ] || continue
+    if grep -qE '^[^#]*go mod download' "$gm_df"; then
+        [ "$gm_flag" = true ] || { bad "$NIGHTLY: buildx-smoke row '$gm_name' builds $gm_df, which downloads Go modules, but its gomod flag is not \"true\" — it would fetch cold"; gm_fail=1; }
+        grep -q '^FROM scratch AS gomodcache$' "$gm_df" && grep -q 'from=gomodcache' "$gm_df" \
+            || { bad "$gm_df: downloads Go modules but lacks the 'gomodcache' stage and its bind mount — the nightly seed would be ignored (#3469)"; gm_fail=1; }
+    fi
+done <<<"$gm_rows"
+if [ "$(yq -r '[.jobs[].steps[]? | select((.uses // "") | test("^docker/build-push-action@")) | select(.with["build-contexts"])] | length' "$REL")" != 0 ]; then
+    bad "$REL: a docker/build-push-action step passes build-contexts — release keeps the cold Go module fetch (DECISIONS-010.md:1137)"; gm_fail=1
+fi
+if [ "$gm_fail" = 0 ]; then ok "nightly image builds seed the Go module cache from the job; release.yml builds cold"; fi
 
 if [ "$fail" = 0 ]; then echo "--- test-repo-guards: PASS ---"; else echo "--- test-repo-guards: FAIL ---"; fi
 exit "$fail"

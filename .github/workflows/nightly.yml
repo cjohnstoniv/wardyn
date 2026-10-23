@@ -807,6 +807,7 @@ jobs:
               GO_BUILD_TAGS=docker,k8s
               RELEASE_BUILD=true
             stage: "true"
+            gomod: "true"
           # The same recipe with the Go Cryptographic Module pinned to the
           # snapshot CMVP certificate #5247 covers. release.yml's `images` row
           # carries the identical build-args (test-repo-guards.sh guard 16).
@@ -817,33 +818,40 @@ jobs:
               RELEASE_BUILD=true
               GOFIPS140=v1.0.0-c2097c7c
             stage: "true"
+            gomod: "true"
           - name: wardyn-proxy
             dockerfile: deploy/compose/Dockerfile.proxy
             build-args: ""
             stage: "true"
+            gomod: "true"
           - name: wardyn-runnerd
             dockerfile: deploy/compose/Dockerfile.runnerd
             build-args: |
               RELEASE_BUILD=true
             stage: "true"
+            gomod: "true"
           - name: agent-base
             dockerfile: deploy/images/base/Dockerfile
             build-args: ""
             stage: "true"
+            gomod: "true"
           - name: agent-codex-cli
             dockerfile: deploy/images/codex-cli/Dockerfile
             build-args: ""
             stage: "true"
+            gomod: "true"
           - name: agent-aws-sso
             dockerfile: deploy/images/aws-sso/Dockerfile
             build-args: ""
             stage: "true"
+            gomod: "true"
           # Never pushed, because it bundles the vendor CLI (release.yml's
           # `images` matrix explains why that image is not published).
           - name: agent-claude-code
             dockerfile: deploy/images/claude-code/Dockerfile
             build-args: ""
             stage: "false"
+            gomod: "true"
     steps:
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
@@ -868,6 +876,24 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # The image builds read the module set this job already downloaded (the Go
+      # Dockerfiles' `gomodcache` build context) instead of each re-fetching every module
+      # from the proxy inside buildx, where one proxy stream error failed a whole build
+      # (#3469). The cache is this job's own fresh `go mod download` of the checked-out
+      # go.mod/go.sum, so it carries nothing the tree did not ask for, and each build runs
+      # `go mod verify` over it. release.yml keeps its cold fetch (DECISIONS-010.md:1137).
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        if: matrix.gomod == 'true'
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Fill the Go module cache for the image builds
+        id: gomod
+        if: matrix.gomod == 'true'
+        run: |
+          set -euo pipefail
+          for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done
+          echo "dir=$(go env GOMODCACHE)/cache/download" >> "$GITHUB_OUTPUT"
       - name: Build both platforms (pushed to staging on a dispatch, discarded otherwise)
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
@@ -878,6 +904,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           provenance: false
           build-args: ${{ matrix.build-args }}
+          build-contexts: ${{ matrix.gomod == 'true' && format('gomodcache={0}', steps.gomod.outputs.dir) || '' }}
           labels: org.opencontainers.image.revision=${{ github.sha }}
           tags: ghcr.io/cjohnstoniv/staging/${{ matrix.name }}:run-${{ github.run_id }}
           # No cache-from or cache-to: a cached apt-get layer would ship stale Debian packages.
