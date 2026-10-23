@@ -55,6 +55,9 @@ type governanceUnitRequest struct {
 	contact    *policyref.Contact
 	contactSet bool
 	comp       compositionRequest
+	// keepsSecrets: the write is served at the member tier, so keepSecretRefs puts back what that
+	// tier's read hid before the ceiling is judged in full.
+	keepsSecrets bool
 }
 
 // compositionRequest is the parsed composition members. Each pair is (set, value): not set keeps the
@@ -155,10 +158,17 @@ func writeRefusal(status int, reason, format string, args ...any) *unitWriteErro
 // (its policy is the overlay), and an older client sends it back unchanged. A standalone row's empty
 // ceiling is refused by buildGovernanceUnit, which knows which kind of row it is writing.
 func decodeGovernanceUnitRequest(w http.ResponseWriter, r *http.Request) (governanceUnitRequest, string) {
+	return decodeGovernanceUnitRequestKeeping(w, r, false)
+}
+
+// decodeGovernanceUnitRequestKeeping is decodeGovernanceUnitRequest for a write that, when keepsSecrets,
+// puts back the secret refs and names a member-tier read hid (keepSecretRefs).
+func decodeGovernanceUnitRequestKeeping(w http.ResponseWriter, r *http.Request, keepsSecrets bool) (governanceUnitRequest, string) {
 	var req governanceUnitRequest
 	if msg := decodeStrictMsg(w, r, &req); msg != "" {
 		return governanceUnitRequest{}, msg
 	}
+	req.keepsSecrets = keepsSecrets
 	return finishGovernanceUnitRequest(req)
 }
 
@@ -175,8 +185,13 @@ func finishGovernanceUnitRequest(req governanceUnitRequest) (governanceUnitReque
 	}
 	if !reflect.DeepEqual(req.Ceiling, types.RunPolicySpec{}) {
 		// A kept mount's sentinel source is not a path: buildGovernanceUnit puts the stored one back
-		// and judges the result.
-		if err := validateAuthoredPolicySpec(withoutKeptMounts(req.Ceiling)); err != nil {
+		// and judges the result. On a write that keeps secrets (keepSecretRefs), the same holds for a
+		// grant read without its secret ref and for a names count.
+		spec := withoutKeptMounts(req.Ceiling)
+		if req.keepsSecrets {
+			spec = withoutKeptSecrets(spec)
+		}
+		if err := validateAuthoredPolicySpec(spec); err != nil {
 			return governanceUnitRequest{}, "invalid ceiling: " + err.Error()
 		}
 	}
@@ -255,7 +270,7 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 	if !ok {
 		return
 	}
-	req, msg := decodeGovernanceUnitRequest(w, r)
+	req, msg := decodeGovernanceUnitRequestKeeping(w, r, s.specReadTierFor(r.Context()) == specReadMember)
 	if msg != "" {
 		writeErrorReason(w, http.StatusBadRequest, repoURLMsgReason(msg, reasonGovernanceUnitRequestInvalid), msg)
 		return
@@ -295,13 +310,19 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 	var held *heldUnitWrite
 	putCreates := false
 	createdBy := principalFromRequest(r)
+	heldReq := req
 	saved, err := write(r.Context(), id,
 		func(all []types.GovernanceUnit, assignments []types.GovernanceMembership) (types.GovernanceUnit, error) {
 			putCreates = unitPutCreatesAtID(id, status, all)
 			if refusal := s.unitPutCreateRefusal(putCreates); refusal != nil {
 				return types.GovernanceUnit{}, refusal
 			}
-			p, res, keep, err := s.buildGovernanceUnit(createdBy, s.isOperator(r.Context()), id, req, all, b, limit)
+			kept, err := s.keepSecretRefs(r.Context(), id, req, all)
+			if err != nil {
+				return types.GovernanceUnit{}, err
+			}
+			heldReq = kept
+			p, res, keep, err := s.buildGovernanceUnit(createdBy, s.isOperator(r.Context()), id, kept, all, b, limit)
 			effective = res
 			exemptCtx := withGovernanceMemberships(r.Context(), assignments)
 			// A unit admin's new unit is empty, so it binds nobody and applies directly (DESIGN-TREE §5.2).
@@ -313,7 +334,7 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 			return p, err
 		})
 	if held != nil && errors.Is(err, errHoldForApproval) {
-		s.holdUnitWrite(w, r, id, req, *held)
+		s.holdUnitWrite(w, r, id, heldReq, *held)
 		return
 	}
 	var refusal *unitWriteError

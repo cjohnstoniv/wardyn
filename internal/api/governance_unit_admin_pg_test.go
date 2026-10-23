@@ -376,6 +376,281 @@ func TestUnitAdminReadsNoPathProvenance(t *testing.T) {
 	}
 }
 
+// TestUnitAdminHeldChangeRedactsSecrets: a held change's diff reads at its reader's tier, as GET
+// /governance does. A unit admin lists and reads a held unit change and a held membership change on
+// ua-a1 with the secret refs and secret names of each ceiling redacted, the ceiling of ua-a1 in each
+// exactly the effective ceiling GET /governance shows them; a security admin reads them whole.
+func TestUnitAdminHeldChangeRedactsSecrets(t *testing.T) {
+	const secretRef, secretName = "ua-vendor-key", "ua-prod-db"
+	e := newUnitAdminEnv(t, false, func(c *Config) {
+		p := govTestPolicy
+		p.EligibleGrants = []types.GrantSpec{{Kind: types.GrantAPIKey,
+			Scope: json.RawMessage(`{"host":"api.vendor.example","secret_name":"` + secretRef + `"}`)}}
+		p.LLMInspection = &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, WorkspaceSecretNames: []string{secretName}}
+		c.DefaultPolicy = p
+	})
+	unitCh := e.pending(e.call(e.adminA, http.MethodPut, "/api/v1/governance/units/"+e.a1.ID.String(),
+		uaUnitBody("ua-a1", e.a.ID, uaDomains("pypi.org", "github.com", "npmjs.org"), nil)))
+	memberCh := e.heldOn(e.a1)
+	// at is the JSON value at path in raw, nil when absent.
+	at := func(raw json.RawMessage, path ...string) json.RawMessage {
+		for _, k := range path {
+			var m map[string]json.RawMessage
+			if json.Unmarshal(raw, &m) != nil {
+				return nil
+			}
+			raw = m[k]
+		}
+		return raw
+	}
+	for _, tc := range []struct {
+		who    string
+		c      *http.Cookie
+		redact bool
+	}{
+		{"ua-a's admin", e.adminA, true},
+		{"a security admin", e.alice, false},
+	} {
+		var gov struct {
+			Units []struct {
+				ID        uuid.UUID       `json:"id"`
+				Effective json.RawMessage `json:"effective"`
+			} `json:"units"`
+		}
+		w := e.call(tc.c, http.MethodGet, "/api/v1/governance", "")
+		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &gov) != nil {
+			t.Fatalf("GET /governance as %s = %d %s", tc.who, w.Code, w.Body)
+		}
+		var want json.RawMessage
+		for _, u := range gov.Units {
+			if u.ID == e.a1.ID {
+				want = at(u.Effective, "ceiling")
+			}
+		}
+		if len(want) == 0 || strings.Contains(string(want), secretRef) == tc.redact || strings.Contains(string(want), secretName) == tc.redact {
+			t.Fatalf("GET /governance as %s: ua-a1's effective ceiling %s, want the secret ref and name redacted = %v", tc.who, want, tc.redact)
+		}
+		var queue []types.GovernanceChange
+		if w := e.call(tc.c, http.MethodGet, "/api/v1/governance/changes", ""); w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &queue) != nil {
+			t.Fatalf("GET /governance/changes as %s = %d %s", tc.who, w.Code, w.Body)
+		}
+		diffs := map[string]json.RawMessage{}
+		for _, ch := range queue {
+			diffs["GET /governance/changes "+ch.ID.String()] = ch.Diff
+		}
+		for _, id := range []uuid.UUID{unitCh.ID, memberCh.ID} {
+			var ch types.GovernanceChange
+			if w := e.call(tc.c, http.MethodGet, "/api/v1/governance/changes/"+id.String(), ""); w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &ch) != nil {
+				t.Fatalf("GET /governance/changes/%s as %s = %d %s", id, tc.who, w.Code, w.Body)
+			}
+			diffs["GET /governance/changes/{id} "+id.String()] = ch.Diff
+		}
+		for _, id := range []uuid.UUID{unitCh.ID, memberCh.ID} {
+			for _, route := range []string{"GET /governance/changes ", "GET /governance/changes/{id} "} {
+				diff, ok := diffs[route+id.String()]
+				if !ok {
+					t.Fatalf("%s as %s does not carry change %s", route, tc.who, id)
+				}
+				path := []string{"before", "effective", "ceiling"}
+				if id == memberCh.ID {
+					path = []string{"after", "unit", "ceiling"}
+				}
+				if got := at(diff, path...); !samePayload(got, want) {
+					t.Errorf("%s%s as %s: %s = %s, want GET /governance's %s", route, id, tc.who, strings.Join(path, "."), got, want)
+				}
+				if strings.Contains(string(diff), secretRef) == tc.redact || strings.Contains(string(diff), secretName) == tc.redact {
+					t.Errorf("%s%s as %s: diff %s, want the secret ref and name redacted = %v", route, id, tc.who, diff, tc.redact)
+				}
+			}
+		}
+	}
+}
+
+const (
+	uaSecretRef  = "ua-vendor-key" // an eligible grant's secret ref, hidden from a unit admin
+	uaSecretName = "ua-prod-db"    // an llm_inspection workspace secret name, hidden from a unit admin
+	uaSubAdminS  = "sub-ua-admin-s"
+)
+
+func uaSecretGrants() []types.GrantSpec {
+	return []types.GrantSpec{{Kind: types.GrantAPIKey,
+		Scope: json.RawMessage(`{"header":"Authorization","host":"api.vendor.example","secret_name":"` + uaSecretRef + `"}`)}}
+}
+
+func uaSecretInspection() *types.LLMInspectionSpec {
+	return &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, WorkspaceSecretNames: []string{uaSecretName}}
+}
+
+// newUnitAdminSecretEnv is the unit-admin tree on a deployment that carries a secret-ref grant, a
+// workspace secret name and a mount, with two profiles that carry them too: secrets, composed below
+// ua-a with them in its overlay, and standalone, with them in its ceiling and adminS its unit admin.
+func newUnitAdminSecretEnv(t *testing.T) (e *unitAdminEnv, secrets, standalone types.GovernanceUnit, adminS *http.Cookie) {
+	t.Helper()
+	e = newUnitAdminEnv(t, false, func(c *Config) {
+		p := govTestPolicy
+		p.EligibleGrants, p.LLMInspection = uaSecretGrants(), uaSecretInspection()
+		p.WorkspaceMounts = []types.WorkspaceMount{{Source: pinBaseSrc, Target: pinTgtA}}
+		c.DefaultPolicy = p
+	})
+	now := time.Now().UTC()
+	if _, err := e.pg.CreateWorkspace(context.Background(), types.Workspace{ID: uuid.New(), Name: "ws-ua-secrets", Status: types.WorkspaceScanned,
+		Sources:   []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: pinBaseSrc}, {Type: types.WorkspaceSourceTypeLocalDir, Path: pinMountSrc}},
+		CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("onboard the seeded mount sources: %v", err)
+	}
+	grants := uaSecretGrants()
+	secrets = e.seedComposed("ua-secrets", e.a, types.CeilingOverlay{AllowedDomains: &[]string{"pypi.org", "github.com"},
+		EligibleGrants: &grants, LLMInspection: uaSecretInspection(), WorkspaceMounts: &[]types.WorkspaceMount{{Source: pinBaseSrc, Target: pinTgtA}}})
+	standalone, err := e.pg.UpsertGovernanceUnit(context.Background(), types.GovernanceUnit{Name: "ua-standalone", CreatedBy: "seed",
+		Ceiling: types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com", "pypi.org"}, MinConfinementClass: types.CC2,
+			EligibleGrants: uaSecretGrants(), LLMInspection: uaSecretInspection(), WorkspaceMounts: []types.WorkspaceMount{{Source: pinMountSrc, Target: pinTgtA}}}})
+	if err != nil {
+		t.Fatalf("seed the standalone profile: %v", err)
+	}
+	e.grant(standalone, types.CapabilitySubjectUser, uaSubAdminS)
+	return e, secrets, standalone, uaSession(t, uaSubAdminS, []string{}, false)
+}
+
+// roundTrip is profile id as reader c reads it on GET /governance, sent back as a PUT body; domains,
+// when given, replaces its allowed_domains (a narrowing or a widening in the same write).
+func (e *unitAdminEnv) roundTrip(c *http.Cookie, id uuid.UUID, domains ...string) string {
+	e.t.Helper()
+	v, _ := e.view(c, id)
+	if v.Effective.Error != "" {
+		e.t.Fatalf("profile %s does not compose: %s", id, v.Effective.Error)
+	}
+	m := map[string]any{"name": v.Name}
+	if v.Overlay != nil {
+		o := *v.Overlay
+		if domains != nil {
+			o.AllowedDomains = &domains
+		}
+		m["parent_id"], m["overlay"] = v.ParentID, o
+	} else {
+		ceiling := v.Ceiling
+		if domains != nil {
+			ceiling.AllowedDomains = domains
+		}
+		m["ceiling"], m["limits"] = ceiling, v.Limits
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return string(b)
+}
+
+// uaJSONAt is the JSON value at path in raw, nil when absent.
+func uaJSONAt(raw json.RawMessage, path ...string) json.RawMessage {
+	for _, k := range path {
+		var m map[string]json.RawMessage
+		if json.Unmarshal(raw, &m) != nil {
+			return nil
+		}
+		raw = m[k]
+	}
+	return raw
+}
+
+// TestUnitAdminOverlaySecretsRedacted: a unit's overlay reads as its ceiling does at the reader's tier.
+// A unit admin's GET /governance, and their list and {id} reads of a held change to the unit, show
+// the overlay's eligible-grant secret ref and llm_inspection secret name redacted; a security admin's
+// show both.
+func TestUnitAdminOverlaySecretsRedacted(t *testing.T) {
+	e, secrets, _, _ := newUnitAdminSecretEnv(t)
+	held := e.pending(e.call(e.adminA, http.MethodPut, "/api/v1/governance/units/"+secrets.ID.String(),
+		e.roundTrip(e.adminA, secrets.ID, "pypi.org", "github.com", "npmjs.org")))
+	for _, tc := range []struct {
+		who    string
+		c      *http.Cookie
+		redact bool
+	}{
+		{"ua-a's admin", e.adminA, true},
+		{"a security admin", e.alice, false},
+	} {
+		leaks := func(raw []byte) bool {
+			return strings.Contains(string(raw), uaSecretRef) || strings.Contains(string(raw), uaSecretName)
+		}
+		v, _ := e.view(tc.c, secrets.ID)
+		if got := mustJSON(v.Overlay); leaks(got) == tc.redact || !strings.Contains(string(got), "api.vendor.example") {
+			t.Errorf("GET /governance as %s: overlay %s, want the secret ref and name redacted = %v", tc.who, got, tc.redact)
+		}
+		var queue []types.GovernanceChange
+		if w := e.call(tc.c, http.MethodGet, "/api/v1/governance/changes", ""); w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &queue) != nil {
+			t.Fatalf("GET /governance/changes as %s = %d %s", tc.who, w.Code, w.Body)
+		}
+		var read types.GovernanceChange
+		if w := e.call(tc.c, http.MethodGet, "/api/v1/governance/changes/"+held.ID.String(), ""); w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &read) != nil {
+			t.Fatalf("GET /governance/changes/%s as %s = %d %s", held.ID, tc.who, w.Code, w.Body)
+		}
+		i := slices.IndexFunc(queue, func(ch types.GovernanceChange) bool { return ch.ID == held.ID })
+		if i < 0 {
+			t.Fatalf("GET /governance/changes as %s does not list %s", tc.who, held.ID)
+		}
+		for route, diff := range map[string]json.RawMessage{"GET /governance/changes": queue[i].Diff, "GET /governance/changes/{id}": read.Diff} {
+			for _, side := range []string{"before", "after"} {
+				if got := uaJSONAt(diff, side, "overlay"); leaks(got) == tc.redact || !strings.Contains(string(got), "api.vendor.example") {
+					t.Errorf("%s as %s: %s.overlay %s, want the secret ref and name redacted = %v", route, tc.who, side, got, tc.redact)
+				}
+			}
+		}
+	}
+}
+
+// TestUnitAdminRoundTripKeepsSecrets: a unit admin who sends a profile back as they read it, with a
+// narrowing, keeps the secret refs, secret names and mount sources the read redacted, in an overlay
+// and in a ceiling, and the narrowing applies; a names count that stands for no stored names is
+// refused. A security admin's round trip stores the ceiling byte for byte.
+func TestUnitAdminRoundTripKeepsSecrets(t *testing.T) {
+	e, secrets, standalone, adminS := newUnitAdminSecretEnv(t)
+	same := func(what string, got, want any) {
+		t.Helper()
+		if g, w := mustJSON(got), mustJSON(want); string(g) != string(w) {
+			t.Errorf("%s = %s, want %s as stored", what, g, w)
+		}
+	}
+	before := e.profile(secrets.ID)
+	if w := e.call(e.adminA, http.MethodPut, "/api/v1/governance/units/"+secrets.ID.String(), e.roundTrip(e.adminA, secrets.ID, "pypi.org")); w.Code != http.StatusOK {
+		t.Fatalf("ua-a's admin round trip of the overlay with a narrowing = %d %s, want 200", w.Code, w.Body)
+	}
+	after := e.profile(secrets.ID)
+	same("overlay.eligible_grants", after.Overlay.EligibleGrants, before.Overlay.EligibleGrants)
+	same("overlay.llm_inspection", after.Overlay.LLMInspection, before.Overlay.LLMInspection)
+	same("overlay.workspace_mounts", after.Overlay.WorkspaceMounts, before.Overlay.WorkspaceMounts)
+	same("overlay.allowed_domains", after.Overlay.AllowedDomains, []string{"pypi.org"})
+
+	before = e.profile(standalone.ID)
+	if w := e.call(adminS, http.MethodPut, "/api/v1/governance/units/"+standalone.ID.String(), e.roundTrip(adminS, standalone.ID, "api.anthropic.com")); w.Code != http.StatusOK {
+		t.Fatalf("the unit admin's round trip of the ceiling with a narrowing = %d %s, want 200", w.Code, w.Body)
+	}
+	after = e.profile(standalone.ID)
+	same("ceiling.eligible_grants", after.Ceiling.EligibleGrants, before.Ceiling.EligibleGrants)
+	same("ceiling.llm_inspection", after.Ceiling.LLMInspection, before.Ceiling.LLMInspection)
+	same("ceiling.workspace_mounts", after.Ceiling.WorkspaceMounts, before.Ceiling.WorkspaceMounts)
+	same("ceiling.allowed_domains", after.Ceiling.AllowedDomains, []string{"api.anthropic.com"})
+
+	// json.Marshal writes < and > escaped.
+	body := e.roundTrip(adminS, standalone.ID)
+	if !strings.Contains(body, `\u003c1 name(s) redacted\u003e`) {
+		t.Fatalf("the unit admin reads no names count: %s", body)
+	}
+	stale := strings.Replace(body, `\u003c1 name(s) redacted\u003e`, `\u003c2 name(s) redacted\u003e`, 1)
+	wantStatusReason(t, e.call(adminS, http.MethodPut, "/api/v1/governance/units/"+standalone.ID.String(), stale),
+		http.StatusUnprocessableEntity, reasonGovernanceUnitRequestInvalid)
+	same("ceiling.llm_inspection after the refused count", e.profile(standalone.ID).Ceiling.LLMInspection, before.Ceiling.LLMInspection)
+
+	// The security admin reads both whole and stores what they send.
+	v, _ := e.view(e.alice, standalone.ID)
+	if got := mustJSON(v.Ceiling); !strings.Contains(string(got), uaSecretRef) || !strings.Contains(string(got), uaSecretName) {
+		t.Errorf("GET /governance as a security admin: ceiling %s, want the secret ref and name", got)
+	}
+	stored := e.profile(standalone.ID).Ceiling
+	if w := e.call(e.alice, http.MethodPut, "/api/v1/governance/units/"+standalone.ID.String(), e.roundTrip(e.alice, standalone.ID)); w.Code != http.StatusOK {
+		t.Fatalf("a security admin's round trip = %d %s, want 200", w.Code, w.Body)
+	}
+	same("the ceiling after a security admin's round trip", e.profile(standalone.ID).Ceiling, stored)
+}
+
 // TestUnitAdminStaleGroups: a group-granted admin whose snapshot is stale or truncated holds no group
 // grant: refused at the door (403, not a 5xx), with their member reach intact; a fresh snapshot passes.
 func TestUnitAdminStaleGroups(t *testing.T) {
