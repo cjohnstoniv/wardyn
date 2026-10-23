@@ -219,7 +219,7 @@ func TestPlanArtifactRedirect_SecondPortOfATokenHostIsAudited(t *testing.T) {
 				if !found {
 					t.Errorf("no denied row with the refusal %q in %+v", want, rec.snapshot())
 				}
-				if want != "refused: this host's token is already injected for port 443, and a token is injected per host, never per host:port, "+
+				if want != "refused: another redirect for this host on port 443 carries a token, and a token is injected per host, never per host:port, "+
 					"so the redirect on port 8443 is not applied; give each mirror its own host" {
 					t.Errorf("refusal text drifted: %q", want)
 				}

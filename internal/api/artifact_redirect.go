@@ -411,7 +411,9 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 // secondPortTokenRedirects maps the index of each token-bearing redirect in scope that fronts a host an earlier
 // token-bearing one fronts on another port to that earlier port (#2118). The injection is keyed by bare host, so
 // such a redirect is refused outright: the plan injects nothing for it and substituteArtifactEgress adds no allow
-// entry for its host:port, so the first port's token never reaches the second. Both read it, so they cannot disagree.
+// entry for its host:port, so the first port's token is not carried to it by a redirect. Both read it, so they
+// cannot disagree. It covers token-bearing redirects only: a second port with no token, or a port the run's own
+// policy authors, is not refused here.
 func secondPortTokenRedirects(sc types.SiteConfig, have map[string]bool) map[int]int {
 	first := map[string]int{}
 	var out map[int]int
@@ -436,9 +438,9 @@ func secondPortTokenRedirects(sc types.SiteConfig, have map[string]bool) map[int
 	return out
 }
 
-// redirectSecondPortRefusal is the denied row's detail for the redirect secondPortTokenRedirects refuses. Arguments:
-// the first redirect's port, this one's.
-const redirectSecondPortRefusal = "refused: this host's token is already injected for port %d, and a token is injected per host, " +
+// redirectSecondPortRefusal is the denied row's detail for the redirect secondPortTokenRedirects refuses. It holds
+// whether or not the first redirect's token resolved or was vetoed. Arguments: the first redirect's port, this one's.
+const redirectSecondPortRefusal = "refused: another redirect for this host on port %d carries a token, and a token is injected per host, " +
 	"never per host:port, so the redirect on port %d is not applied; give each mirror its own host"
 
 // redirectToken is one redirect's resolved credential presentation: which
