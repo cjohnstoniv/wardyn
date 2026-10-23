@@ -11,6 +11,7 @@ import { MoreHorizontal } from "lucide-react";
 import { Button } from "../../../ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../../ui/dropdown-menu";
 import { Chip } from "../../../wardyn/primitives";
+import { StepSection } from "../../../wardyn/step-section";
 import { Segmented } from "../../../wardyn/segmented";
 import { NR_FILES } from "../../../wardyn/copy/new-run/files";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
@@ -196,17 +197,19 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
       <BlockerList blockers={blockers} go={(loc: NewRunLocation) => go(loc)} onCheckAgain={issues.length ? undefined : checkAgain} />
       {view === "pretty" ? (
         <div className="grid items-start gap-3.5 lg:grid-cols-[minmax(0,1.7fr)_minmax(280px,0.8fr)]">
-          <section className="flex flex-col overflow-hidden rounded-xl border border-border bg-card">
-            <header className="flex min-h-[78px] items-start justify-between gap-3 border-b border-border px-5 py-[18px]">
-              <div>
-                <h2 className="font-medium">{NR_REVIEW.SETUP_TITLE}</h2>
-                <p className="text-sm text-muted-foreground">{setupTitle(draft.intent)}</p>
-              </div>
-              {/* A blocker that names a group is red; a stale result alone blames none, so it is amber (#3043). */}
+          {/* #3044: Review's groups are flat rows in the one section card the guided steps use. A blocker that names a
+              group is red; a stale result alone blames none, so it is amber (#3043). */}
+          <StepSection
+            title={NR_REVIEW.SETUP_TITLE}
+            description={setupTitle(draft.intent)}
+            marker={
               <Chip tone={hard.length ? "danger" : blockers.length ? "warning" : "success"}>
                 {hard.length ? NR_REVIEW.BADGE_ATTENTION : blockers.length ? NR_REVIEW.BADGE_CHECK : NR_REVIEW.BADGE_COMPLETE}
               </Chip>
-            </header>
+            }
+            className="overflow-hidden"
+            bodyClassName="p-0"
+          >
             <BlockedGroups.Provider value={groupsBlockedBy(hard)}>
               <RunGroup {...group} docRows={docRows.run} />
               <WhereGroup {...group} docRows={docRows.where} />
@@ -215,7 +218,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
               <AccessGroup {...group} docRows={docRows.access} />
               <LimitsGroup {...group} docRows={docRows.limits} />
             </BlockedGroups.Provider>
-          </section>
+          </StepSection>
           <EffectivePolicyCard draft={draft} pre={pre} preview={checks.preview.result} />
         </div>
       ) : (

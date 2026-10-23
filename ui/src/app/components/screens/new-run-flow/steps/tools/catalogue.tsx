@@ -37,6 +37,7 @@ import { githubAccess, kubectlAccess, kubectlSwitchOn, localMcpAccess, MODE_DELI
 import { NOTHING, ToolCard, type ToolAccess } from "./tool-card";
 import { CustomComponentDialog } from "./custom-component-dialog";
 import { isLocalMcp, useLocalMcpOn } from "./local-mcp";
+import { StepSection } from "../../../../wardyn/step-section";
 
 type Category = "all" | "cli" | "mcp" | "api" | "secret";
 type Door = "secret" | "host" | "mcp" | "custom";
@@ -277,12 +278,12 @@ export function AddTools({ access, answered, intent, answeredFor, githubRepos = 
   const addedRows = access?.rows.filter((r) => r.from === "added") ?? [];
 
   return (
-    <section aria-labelledby={headingId} className="flex flex-col gap-3.5 rounded-xl border border-border bg-card p-[18px]">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 flex-[1_1_20rem]">
-          <h2 id={headingId} className="font-semibold">{NR_TOOLS.ADD_TITLE}</h2>
-          <p className="text-sm text-muted-foreground">{NR_TOOLS.ADD_BODY}</p>
-        </div>
+    <StepSection
+      titleId={headingId}
+      title={NR_TOOLS.ADD_TITLE}
+      description={NR_TOOLS.ADD_BODY}
+      bodyClassName="flex flex-col gap-3.5"
+      action={
         <div className="flex max-w-[16rem] flex-col items-end gap-1">
           <Button type="button" variant="outline" disabled={!mayDefine} aria-describedby={noDefine ? noDefineId : failed ? failedId : undefined} onClick={() => open("custom")}>
             <Plus aria-hidden />
@@ -290,7 +291,8 @@ export function AddTools({ access, answered, intent, answeredFor, githubRepos = 
           </Button>
           {noDefine && <Reason text={noDefine} id={noDefineId} />}
         </div>
-      </div>
+      }
+    >
       {failed && <p id={failedId} role="alert" className="text-sm text-danger">{failed}</p>}
       <div role="group" aria-label={NR_TOOLS.CATEGORY_ARIA}>
         <Segmented<Category>
@@ -398,6 +400,6 @@ export function AddTools({ access, answered, intent, answeredFor, githubRepos = 
         <AddMcpDialog names={names} namesFailure={namesFailure} localServers={localMcp} residentAllowed={residentAllowed} residentOffReason={residentOff} onAdd={attach} onClose={close} />
       )}
       {door === "custom" && names && <CustomComponentDialog names={names} namesFailure={namesFailure} residentAllowed={residentAllowed} secretsPath={SECRETS_PATH} onAttach={attach} onClose={close} />}
-    </section>
+    </StepSection>
   );
 }

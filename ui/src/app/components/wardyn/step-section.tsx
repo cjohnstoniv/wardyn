@@ -8,9 +8,9 @@ import { cn } from "../ui/utils";
 
 // #3044 (R6NEW, approved 2026-10-20): the one section card of the guided steps and Review. A sentence-case title
 // (which may hold a select), an optional description, a marker slot (Required, Optional or a status mark; never a
-// pill, never caps), one action slot, and a body under a rule. Shape, Run, Harnesses and Files draw their
-// sections with it, so one idea has one radius, one heading style and one marker style. The Tools step and
-// Review's groups still draw their own cards; moving them over is a follow-up.
+// pill, never caps), one action slot, and a body under a rule. Shape, Run, Harnesses, Files, Tools and Review
+// (whose groups are flat rows inside one of these cards) draw their sections with it, so one idea has one
+// radius, one heading style and one marker style.
 export function StepSection({
   title,
   titleId,

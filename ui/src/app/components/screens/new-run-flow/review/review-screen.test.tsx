@@ -13,6 +13,7 @@ import { NR_HARNESSES } from "../../../wardyn/copy/new-run/harnesses";
 import { NR_FILES } from "../../../wardyn/copy/new-run/files";
 import { ENDS_NONE } from "../../../wardyn/copy/run-lifetime";
 import { NR_RUN } from "../../../wardyn/copy/new-run/run";
+import { isStepSectionHeading } from "../../../../lib/test-dom";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { NR_SAVE } from "../../../wardyn/copy/new-run/save";
 import { NR_SHAPE } from "../../../wardyn/copy/new-run/shape";
@@ -294,6 +295,18 @@ describe("Review Launch gate (U11)", () => {
     await user.click(screen.getByRole("button", { name: NR_REVIEW.VIEW_YAML }));
     expect(await screen.findByText(NR_REVIEW.CHECKED_ANNOUNCE)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: NR_REVIEW.CHECK_AGAIN })).toBeNull();
+  });
+});
+
+describe("Review sections", () => {
+  it("#3044: Run setup is the one StepSection card, with the groups as rows inside it and the status as its marker", async () => {
+    open(AGENT, { via: "template" });
+    await ready();
+    const heading = screen.getByRole("heading", { name: NR_REVIEW.SETUP_TITLE });
+    expect(isStepSectionHeading(heading)).toBe(true);
+    const card = heading.closest("section") as HTMLElement;
+    expect(card.querySelectorAll("[data-review-group]").length).toBeGreaterThan(1);
+    expect(within(card).getAllByText(new RegExp(`^(${NR_REVIEW.BADGE_COMPLETE}|${NR_REVIEW.BADGE_ATTENTION}|${NR_REVIEW.BADGE_CHECK})$`))).toHaveLength(1);
   });
 });
 
