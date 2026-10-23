@@ -46,6 +46,13 @@ const toasted = vi.hoisted(() => ({
   message: vi.fn(),
   error: vi.fn(),
 }));
+// jsdom lays nothing out, so what a tile's content measures is the test's to say (#3038).
+const measured = vi.hoisted(() => ({ px: {} as Record<string, number> }));
+vi.mock("./fit-layout", async (orig) => ({
+  ...(await orig<typeof import("./fit-layout")>()),
+  measureTile: (tile: HTMLElement) => measured.px[tile.dataset.widget ?? ""] ?? 0,
+}));
+
 vi.mock("sonner", () => ({
   toast: {
     success: (...a: unknown[]) => toasted.success(...a),
@@ -105,6 +112,7 @@ function tileY(el: Element | null | undefined): number {
 const widgetHeading = (name: string) => screen.queryByRole("heading", { name });
 
 beforeEach(() => {
+  measured.px = {};
   getLayout.mockReset();
   putLayout.mockReset();
   getLayout.mockResolvedValue({ preset: "live", layout: [] });
@@ -162,12 +170,48 @@ describe("RunCanvas — loading a layout", () => {
   });
 
   it("uses the finished preset for a stopped run — the situation picks it", async () => {
-    render(<RunCanvas ctx={ctx({ finished: true })} />);
+    render(<RunCanvas ctx={ctx({ finished: true, evidence: { files: 3, sandbox: null } })} />);
 
     await waitFor(() => expect(getLayout).toHaveBeenCalledWith("finished"));
     // A stopped run has no sandbox to meter, so that preset leaves it out.
     await waitFor(() => expect(widgetHeading("Sandbox")).not.toBeInTheDocument());
     expect(widgetHeading("Files changed")).toBeInTheDocument();
+  });
+
+  // #3038: a finished run whose sandbox is gone has no files to list, and the strip's Files tile already says so.
+  it("gives a finished run with no files no Files box, and a live run keeps it", async () => {
+    const done = render(<RunCanvas ctx={ctx({ finished: true, evidence: { files: null, sandbox: null } })} />);
+    await screen.findByRole("heading", { name: "Egress" });
+    expect(widgetHeading("Files changed")).not.toBeInTheDocument();
+    done.unmount();
+    render(<RunCanvas ctx={ctx({ evidence: { files: null, sandbox: null } })} />);
+    await screen.findByRole("heading", { name: "Egress" });
+    expect(widgetHeading("Files changed")).toBeInTheDocument();
+  });
+
+  // #3038: the finished default sizes each tile to what it holds, so Identity is whole rather than four rows.
+  it("sizes a finished run's Identity tile to its content", async () => {
+    measured.px = { identity: 700 };
+    const tile = (name: string) => widgetHeading(name)!.closest(".react-grid-item") as HTMLElement;
+    render(<RunCanvas ctx={ctx({ finished: true, evidence: { files: 3, sandbox: null } })} />);
+    await screen.findByRole("heading", { name: "Identity" });
+    await waitFor(() => expect(parseFloat(tile("Identity").style.height)).toBeGreaterThanOrEqual(700));
+  });
+
+  it("shows an arrangement the person made exactly as stored, however tall its content", async () => {
+    measured.px = { identity: 700 };
+    getLayout.mockResolvedValue({
+      preset: "finished",
+      layout: [
+        { widget: "terminal", x: 0, y: 0, w: 12, h: 6 },
+        { widget: "identity", x: 0, y: 6, w: 12, h: 3 },
+      ],
+    });
+    render(<RunCanvas ctx={ctx({ finished: true })} />);
+    const item = (await screen.findByRole("heading", { name: "Identity" })).closest(".react-grid-item") as HTMLElement;
+    // Three stored rows are 116px at the unmeasured row height; the 700px it would measure changes nothing.
+    await waitFor(() => expect(item.style.height).toBe("116px"));
+    expect(measured.px.identity).toBe(700);
   });
 
   it("still renders a cockpit when the layout GET fails outright", async () => {

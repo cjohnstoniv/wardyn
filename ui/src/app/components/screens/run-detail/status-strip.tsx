@@ -8,16 +8,15 @@ import { runs as runsApi } from "../../../lib/api/runs";
 import { usePoll } from "../../../lib/use-poll";
 import { cn } from "../../ui/utils";
 import { RUN_COCKPIT } from "../../wardyn/copy";
-import type { WidgetContext } from "./widget-registry";
+import type { EvidenceFacts, WidgetContext } from "./widget-registry";
 
 const POLL_MS = 10000;
 
 // #3038: what the Files and Sandbox tiles can say. Both read the same two evidence endpoints the widgets under
 // them poll; anything that is not a real reading (no sandbox, no exec channel, no git, an error) is "nothing to show".
-type Facts = { files: number | null; sandbox: string | null };
-
-function useEvidenceFacts(runId: string, live: boolean): Facts | undefined {
-  const [facts, setFacts] = React.useState<Facts | undefined>(undefined);
+// The cockpit reads them once and hands them to the strip and the widget gate through the widget context.
+export function useEvidenceFacts(runId: string, live: boolean): EvidenceFacts | undefined {
+  const [facts, setFacts] = React.useState<EvidenceFacts | undefined>(undefined);
   const load = React.useCallback(async () => {
     const [files, resources] = await Promise.allSettled([runsApi.getFiles(runId), runsApi.getResources(runId)]);
     setFacts({
@@ -55,7 +54,7 @@ function Tile({ label, value, tone }: { label: string; value?: string; tone?: "w
 // The four tiles above the Overview's canvas: Egress, Files, Sandbox, Credentials. The empty ones say so once, in
 // a fixed phrase, instead of each widget spending a box on a sentence.
 export function RunStatusStrip({ ctx }: { ctx: WidgetContext }) {
-  const facts = useEvidenceFacts(ctx.run.id, !ctx.finished);
+  const facts = ctx.evidence;
   const minted = ctx.audit.filter((e) => e.action === "credential.mint" && e.outcome === "success").length;
   // Held is the alarm and leads; otherwise what the run was allowed, then refused; nothing recorded is "None yet".
   const allowed = ctx.egress.filter((e) => e.decision === "allow").length;

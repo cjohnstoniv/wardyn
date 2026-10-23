@@ -34,6 +34,7 @@ import { RUN_COCKPIT } from "../../wardyn/copy";
 import { useFocusMode } from "../app-shell";
 import { FocusMode } from "./focus-mode";
 import { useRunLayout } from "./use-run-layout";
+import { fitRows, measureTile, settleItems } from "./fit-layout";
 import { WidgetSlot } from "./widget-slot";
 import { ErrorBoundary } from "../../wardyn/error-boundary";
 import {
@@ -42,6 +43,7 @@ import {
   RUN_WIDGETS,
   WIDGET_IDS,
   addWidget,
+  presetLayout,
   removeWidget,
   type WidgetContext,
   type WidgetId,
@@ -113,7 +115,7 @@ function useCanvasSize() {
     ro.observe(node);
     return () => ro.disconnect();
   }, [node]);
-  return { ref: setNode, width: size.width, height: size.height };
+  return { ref: setNode, node, width: size.width, height: size.height };
 }
 
 /** Where the terminal shows right now: the cockpit tile or the focus overlay.
@@ -128,6 +130,14 @@ function TerminalSlot({ host }: { host: HTMLElement }) {
   );
   return <div ref={attach} className="flex min-h-0 flex-1 flex-col" />;
 }
+
+const sameLayout = (a: { widget: string; x: number; y: number; w: number; h: number }[], b: typeof a) =>
+  a.length === b.length && a.every((w, n) => w.widget === b[n].widget && w.x === b[n].x && w.y === b[n].y && w.w === b[n].w && w.h === b[n].h);
+
+const sameRows = (a: Record<string, number>, b: Record<string, number>) => {
+  const keys = Object.keys(b);
+  return keys.length === Object.keys(a).length && keys.every((k) => a[k] === b[k]);
+};
 
 export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
   // The situation picks the preset; the toolbar can override it while editing.
@@ -150,7 +160,7 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
   const [active, setActive] = React.useState<{ i: string; w: number; h: number } | null>(null);
 
   const { layout, persistable, apply, save, reset } = useRunLayout(preset);
-  const { ref, width, height } = useCanvasSize();
+  const { ref, node, width, height } = useCanvasSize();
 
   // Focus mode (design board 2c). The shell learns about it through
   // app-shell's FocusContext, which is also why this is safe outside the
@@ -215,6 +225,30 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
     minH: RUN_WIDGETS[w.widget as WidgetId].defaultLayout.minH,
   }));
 
+  // #3038: a finished run nobody has rearranged reads at its content's size: each tile is as tall as what it holds, so
+  // Identity is never cut off and an emptier tile is shorter. The terminal keeps its rows, and an arrangement the
+  // person made, or one being edited, is shown exactly as stored.
+  const fitOn = ctx.finished && !editing && sameLayout(layout, presetLayout("finished"));
+  const [fitted, setFitted] = React.useState<Record<string, number>>({});
+  const visibleKey = visible.map((w) => w.widget).join();
+  React.useLayoutEffect(() => {
+    if (!fitOn || !node) return;
+    const measure = () => {
+      const next: Record<string, number> = {};
+      node.querySelectorAll<HTMLElement>("[data-widget]").forEach((tile) => {
+        const px = measureTile(tile);
+        if (px > 0) next[tile.dataset.widget!] = fitRows(px, rowHeight, MARGIN[1]);
+      });
+      setFitted((prev) => (sameRows(prev, next) ? prev : next));
+    };
+    measure();
+    // A widget's own fetch lands inside its tile without the canvas rendering, so watch the tiles' contents too.
+    const mo = new MutationObserver(measure);
+    mo.observe(node, { childList: true, subtree: true, characterData: true });
+    return () => mo.disconnect();
+  }, [fitOn, node, rowHeight, gridWidth, visibleKey]);
+  const laid = fitOn ? settleItems(items, fitted, ["terminal"]) : items;
+
   const commit = (next: Layout) => {
     apply([...next.map((it) => ({ widget: it.i, x: it.x, y: it.y, w: it.w, h: it.h })), ...hidden]);
     setActive(null);
@@ -266,7 +300,7 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
         >
           <GridLayout
             width={gridWidth}
-            layout={items}
+            layout={laid}
             className={GHOST}
             gridConfig={{
               cols: GRID_COLS,
@@ -298,6 +332,7 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
                   // Load-bearing for e2e: the terminal's tile must be findable
                   // AND above the fold. Both presets place it at y=0.
                   data-testid={id === "terminal" ? "run-terminal-pane" : undefined}
+                  data-widget={id}
                 >
                   {editing && (
                     <TileHandle
