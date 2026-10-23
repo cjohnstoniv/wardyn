@@ -138,6 +138,9 @@ func runSetup(cmd *cobra.Command, h setupHost, o setupOptions) error {
 	if err != nil {
 		return err
 	}
+	if err := h.checkConnection(cmd, plan); err != nil {
+		return err
+	}
 	if err := h.installBinary(cmd.Context(), plan.paths.installed, !plan.noService); err != nil {
 		return err
 	}

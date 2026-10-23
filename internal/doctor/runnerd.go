@@ -19,3 +19,8 @@ func RunnerdPath(goos, home, xdgData string) string {
 	}
 	return ""
 }
+
+// SetupBlocking are the stages whose failure makes `wardyn-runnerd setup` pointless: the runner could not
+// register with the organisation, or hold the WebSocket it serves through, from this computer. A failure of
+// any other stage is a warning there.
+var SetupBlocking = []string{"org-url", "dns", "proxy", "tls", "healthz", "wire"}

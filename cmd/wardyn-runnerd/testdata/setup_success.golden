@@ -1,0 +1,20 @@
+Docker engine "Ubuntu 24.04 LTS" (laptop): the run relay listens on 172.17.0.1 and a run's proxy reaches it at host-gateway (checked with a probe container).
+Checking the connection to the organisation, as `wardyn-runnerd doctor` does:
+skip  trusted-ca   no extra CA bundle is set: the system roots only
+ok    org-url      ORG (from --org)
+ok    dns          127.0.0.1 is an address: nothing to resolve
+ok    proxy        direct (no proxy applies to this address)
+skip  tls          plain http://: there is no handshake to check
+ok    healthz      status ok, server version 0.10.0
+ok    wire         the runner stream route switched to a WebSocket: the upgrade gets through
+skip  service      no service is installed for this runner: it runs only where you start `wardyn-runnerd serve`, and `wardyn-runnerd setup` installs one
+skip  status       the service has not run yet: there is no status.json in ROOT/home/.config/wardyn/runner
+The wardyn CLI now points at ORG (change it with wardyn login <url>).
+Registering this computer. At a terminal it asks for the runner's limits (Enter takes each suggestion); otherwise it registers with the limits it suggests.
+this computer reports MEASURED
+registered MEASURED
+  limits: MEASURED
+Started the wardyn-runnerd user service. Logs: journalctl --user -u wardyn-runnerd
+To keep it running when you are logged out: loginctl enable-linger $USER
+Key fingerprint MEASURED. Claim this runner as its owner in the console (Your account → My runner), or run
+  WARDYN_TOKEN=<your personal API token> wardyn runner claim --pool <name> --default

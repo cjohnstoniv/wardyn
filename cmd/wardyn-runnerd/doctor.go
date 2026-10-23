@@ -100,7 +100,6 @@ func (s doctorSettings) stateDir(o doctorOptions) string {
 // runDoctor runs every stage. net carries what a test replaces (the resolver, the proxy function, the
 // trust store); its organisation fields are filled here.
 func runDoctor(ctx context.Context, h setupHost, o doctorOptions, getenv func(string) string, net doctor.Network) doctor.Report {
-	var stages []doctor.Stage
 	paths, err := h.paths()
 	if err != nil {
 		return doctor.Report{Stages: []doctor.Stage{doctor.FailStage("state", err.Error(), "WARDYN_RUNNER_STATE_DIR", "the directory of the identity this computer's service runs")}}.Scrubbed()
@@ -110,44 +109,74 @@ func runDoctor(ctx context.Context, h setupHost, o doctorOptions, getenv func(st
 	if pref := managedPref("OrgURL"); o.org == "" && pref != "" {
 		org, orgSource = pref, "the OrgURL managed preference"
 	}
-	serverVersion := o.serverVersion
-	if !o.runnerOnly {
-		var network []doctor.Stage
-		network, serverVersion = runnerNetwork(ctx, s, o, org, orgSource, &net)
-		stages = append(stages, network...)
+	conn := runnerConn{org: org, orgSource: orgSource}
+	conn.trustedCA, _ = s.get("trusted-ca-file", o.trustedCAFile, "WARDYN_TRUSTED_CA_FILE")
+	conn.orgCA, _ = s.get("", "", "WARDYN_ORG_CA_FILE")
+	if paths.installedService() != "" {
+		conn.proxyNote = ": this shell's settings, which the installed service does not receive"
 	}
-	stages = append(stages, h.serviceStage(ctx, paths), statusStage(statusPath(s.stateDir(o))))
+	stages, serverVersion := h.connectionStages(ctx, paths, s.stateDir(o), conn, &net, !o.runnerOnly)
+	if o.runnerOnly {
+		serverVersion = o.serverVersion
+	}
 	return doctor.Report{Stages: append(stages, h.engineStages(ctx, s, o, org, serverVersion)...)}.Scrubbed()
 }
 
-// runnerNetwork is the network stages for the organisation this runner talks to, with the trusted-ca stage
-// before them: the runner's session trusts that bundle beside the system roots.
-func runnerNetwork(ctx context.Context, s doctorSettings, o doctorOptions, org, orgSource string, net *doctor.Network) ([]doctor.Stage, string) {
+// runnerConn is what the connection stages are told about the runner's organisation: its address and where
+// that came from, the CA bundles the runner trusts for it (trustedCA is WARDYN_TRUSTED_CA_FILE, orgCA is
+// WARDYN_ORG_CA_FILE) and a note for the proxy stage about what the diagnosed environment lacks.
+type runnerConn struct {
+	org, orgSource, trustedCA, orgCA, proxyNote string
+}
+
+// connectionStages are the stages `doctor` and `setup` both run, in order: the CA bundles and the network
+// stages, when network is set, then the service and the runner's status. It also returns the organisation's
+// version, "" when /healthz did not report one.
+func (h setupHost) connectionStages(ctx context.Context, p setupPaths, stateDir string, c runnerConn, net *doctor.Network, network bool) (stages []doctor.Stage, serverVersion string) {
+	if network {
+		stages, serverVersion = runnerNetwork(ctx, c, net)
+	}
+	return append(stages, h.serviceStage(ctx, p), statusStage(statusPath(stateDir))), serverVersion
+}
+
+// runnerNetwork is the network stages for the organisation this runner talks to, with the CA stages
+// before them: the runner's session trusts those bundles beside the system roots.
+func runnerNetwork(ctx context.Context, c runnerConn, net *doctor.Network) ([]doctor.Stage, string) {
 	var stages []doctor.Stage
-	file, _ := s.get("trusted-ca-file", o.trustedCAFile, "WARDYN_TRUSTED_CA_FILE")
+	pool, sources := x509.NewCertPool(), []string(nil)
 	switch {
-	case file == "":
+	case c.trustedCA == "":
 		stages = append(stages, doctor.SkipStage("trusted-ca", "no extra CA bundle is set: the system roots only"))
 	default:
-		bundle, n, err := loadTrustedCA(file)
+		bundle, n, err := loadTrustedCA(c.trustedCA)
 		if err != nil {
 			stages = append(stages, doctor.FailStage("trusted-ca", err.Error(), "WARDYN_TRUSTED_CA_FILE", "a PEM file of certificates (a proxy that inspects TLS: its root CA), 64 KiB at most"))
 			break
 		}
-		net.ExtraCA = x509.NewCertPool()
-		net.ExtraCA.AppendCertsFromPEM([]byte(bundle))
-		detail := fmt.Sprintf("%d certificate(s) from %s", n, filepath.Base(file))
-		_, warnings := trustedCAFileCheck(file, time.Now())
+		pool.AppendCertsFromPEM([]byte(bundle))
+		sources = append(sources, "WARDYN_TRUSTED_CA_FILE")
+		detail := fmt.Sprintf("%d certificate(s) from %s", n, filepath.Base(c.trustedCA))
+		_, warnings := trustedCAFileCheck(c.trustedCA, time.Now())
 		stages = append(stages, doctor.OKStage("trusted-ca", detail+strings.Join(append([]string{""}, warnings...), "; warning: ")))
 	}
-	net.OrgURL, net.Source, net.OrgSetting, net.Strict = org, orgSource, "WARDYN_RUNNER_ORG_URL", true
-	if orgSource == "" {
+	if c.orgCA != "" {
+		bundle, n, err := loadOrgCA(c.orgCA)
+		if err != nil {
+			stages = append(stages, doctor.FailStage("org-ca", err.Error(), "WARDYN_ORG_CA_FILE", "a PEM file of the roots this runner's own connection to the organisation trusts"))
+		} else {
+			pool.AppendCertsFromPEM([]byte(bundle))
+			sources = append(sources, "WARDYN_ORG_CA_FILE")
+			stages = append(stages, doctor.OKStage("org-ca", fmt.Sprintf("%d certificate(s) from %s", n, filepath.Base(c.orgCA))))
+		}
+	}
+	if len(sources) > 0 {
+		net.ExtraCA, net.ExtraCASource = pool, strings.Join(sources, " and ")
+	}
+	net.OrgURL, net.Source, net.OrgSetting, net.Strict = c.org, c.orgSource, "WARDYN_RUNNER_ORG_URL", true
+	if c.orgSource == "" {
 		net.Source = "nothing set"
 	}
-	net.ExtraCASource, net.ExtraCATrusted, net.Wire = "WARDYN_TRUSTED_CA_FILE", true, true
-	if s.paths.installedService() != "" {
-		net.ProxyNote = ": this shell's settings, which the installed service does not receive"
-	}
+	net.ExtraCATrusted, net.Wire, net.ProxyNote = true, true, c.proxyNote
 	return append(stages, net.Run(ctx)...), net.ServerVersion
 }
 
@@ -283,15 +312,24 @@ func (h setupHost) imageStage(ctx context.Context, s doctorSettings, o doctorOpt
 		return image, "", doctor.SkipStage("proxy-image", "not checked: the engine did not answer")
 	}
 	state, err := h.image(ctx, image)
-	switch {
-	case err != nil:
+	if err != nil {
 		return image, "", doctor.FailStage("proxy-image", fmt.Sprintf("%s cannot be found on this engine or in its registry: %s", image, oneLine(err.Error())), "WARDYN_PROXY_IMAGE", fix)
-	case pinned && serverVersion != "" && releaseVersion.MatchString(serverVersion) && imageReleaseTag(image) != "" && imageReleaseTag(image) != serverVersion:
-		return image, state, doctor.FailStage("proxy-image", fmt.Sprintf("version skew: the pinned image %s is release %s but the organisation is release %s, and a proxy of another release may refuse what this runner sends",
-			image, imageReleaseTag(image), serverVersion), "WARDYN_PROXY_IMAGE", "the release the organisation runs, or remove the pin (WARDYN_PROXY_IMAGE_PINNED) to follow the organisation")
+	}
+	if skew, ok := proxyImageSkew(image, pinned, serverVersion); ok {
+		return image, state, skew
 	}
 	where := map[string]string{"local": "is on this engine", "registry": "is not on this engine yet but its registry has it"}[state]
 	return image, state, doctor.OKStage("proxy-image", image+" "+where)
+}
+
+// proxyImageSkew is the failure for a pinned image whose release is not the organisation's, and whether
+// there is one.
+func proxyImageSkew(image string, pinned bool, serverVersion string) (doctor.Stage, bool) {
+	if !pinned || serverVersion == "" || !releaseVersion.MatchString(serverVersion) || imageReleaseTag(image) == "" || imageReleaseTag(image) == serverVersion {
+		return doctor.Stage{}, false
+	}
+	return doctor.FailStage("proxy-image", fmt.Sprintf("version skew: the pinned image %s is release %s but the organisation is release %s, and a proxy of another release may refuse what this runner sends",
+		image, imageReleaseTag(image), serverVersion), "WARDYN_PROXY_IMAGE", "the release the organisation runs, or remove the pin (WARDYN_PROXY_IMAGE_PINNED) to follow the organisation"), true
 }
 
 // relayStage is setup's own relay check (findRelay, through h.relay) on a throwaway container, run only
