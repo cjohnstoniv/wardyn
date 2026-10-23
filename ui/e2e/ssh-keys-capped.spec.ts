@@ -63,7 +63,47 @@ test.describe("SSH keys — capped-key chip", () => {
       await expandCard(page, "Your SSH keys");
       const chip = page.getByRole("row").filter({ hasText: KEY_NAME }).getByText(CHIP);
       await expect(chip).toBeVisible();
-      await expect(page.locator(`[title="${TOOLTIP}"]`)).toHaveText(CHIP);
+      // r11 #2244: the meaning is text under the table, not a hover-only title.
+      await expect(page.getByTestId("ssh-key-chip-notes").getByText(TOOLTIP)).toBeVisible();
+      await expect(page.locator(`[title="${TOOLTIP}"]`)).toHaveCount(0);
+      await expect(chip).not.toHaveAttribute("title");
+    } finally {
+      await page.request.delete(`/api/v1/me/ssh-keys/${encodeURIComponent(fingerprint)}`, { headers: auth });
+    }
+  });
+});
+
+// r11 #2244: the Admin override chip's meaning is text under the table too, and the chip carries no title.
+test.describe("SSH keys — admin-override chip", () => {
+  test("an admin-stamped key shows its meaning as text, not a title", async ({ page }) => {
+    const added = await page.request.post("/api/v1/me/ssh-keys", {
+      headers: auth,
+      data: { name: "e2e-override-laptop", public_key: PUBLIC_KEY.replace("e2e-capped", "e2e-override") },
+    });
+    expect(added.ok()).toBe(true);
+    const { fingerprint } = (await added.json()) as { fingerprint: string };
+
+    try {
+      await page.route("**/api/v1/me/ssh-keys", async (route) => {
+        if (route.request().method() !== "GET") {
+          await route.continue();
+          return;
+        }
+        const res = await route.fetch();
+        const keys = ((await res.json()) ?? []) as Array<{ fingerprint: string }>;
+        await route.fulfill({
+          response: res,
+          json: keys.map((k) => (k.fingerprint === fingerprint ? { ...k, role: "admin" } : k)),
+        });
+      });
+
+      await gotoConsole(page);
+      await navToRoute(page, "/account");
+      await expandCard(page, "Your SSH keys");
+      const chip = page.getByRole("row").filter({ hasText: "e2e-override-laptop" }).getByText("Admin override");
+      await expect(chip).toBeVisible();
+      await expect(chip).not.toHaveAttribute("title");
+      await expect(page.getByTestId("ssh-key-chip-notes").getByText(/^Registered while you were an admin, so this key reaches runs you do not own\./)).toBeVisible();
     } finally {
       await page.request.delete(`/api/v1/me/ssh-keys/${encodeURIComponent(fingerprint)}`, { headers: auth });
     }

@@ -295,7 +295,10 @@ describe("AdminSettingsScreen — Admin SSH keys (S-1)", () => {
     const card = within(heading.closest("section")!);
     await expandCard(ADMIN_SSH_KEYS.TITLE);
     expect(await card.findByText("break-glass laptop")).toBeInTheDocument();
-    expect(card.getByText("Admin override")).toBeInTheDocument();
+    expect(card.getByText("Admin override", { selector: "tr *" })).toBeInTheDocument();
+    // r11 #2244: what the chip means is visible text under the table, and the chip has no title.
+    expect(card.getByText(/^Registered while you were an admin, so this key reaches runs you do not own\./)).toBeVisible();
+    expect(card.getByText("Admin override", { selector: "tr *" })).not.toHaveAttribute("title");
     expect(card.queryByText(ADMIN_SSH_KEYS.EMPTY_TITLE)).not.toBeInTheDocument();
   });
 
