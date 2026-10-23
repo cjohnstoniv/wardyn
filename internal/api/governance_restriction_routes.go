@@ -114,6 +114,9 @@ func validateRestriction(b *types.RestrictionWrite) error {
 		return err
 	}
 	for i, g := range b.Spec.WithheldGrants {
+		if err := authoredGrantRefusal(fmt.Sprintf("withheld_grants[%d]", i), g); err != nil {
+			return err
+		}
 		if _, ok := withheldGrantKinds[g.Kind]; !ok {
 			return fmt.Errorf("withheld_grants[%d]: unknown grant kind %q", i, g.Kind)
 		}

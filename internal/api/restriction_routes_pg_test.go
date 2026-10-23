@@ -253,6 +253,30 @@ func TestBreakGlassRestrictionSeededBoundary(t *testing.T) {
 	}
 }
 
+// TestRestrictionWriteRefusesAuthoredGrantFields: a restriction write that names owner_only_refs on a
+// withheld grant is refused as a policy write naming it is, with the same sentence. Status and
+// reason are each route's own: 400 policy_request_invalid, 422 restriction_invalid.
+func TestRestrictionWriteRefusesAuthoredGrantFields(t *testing.T) {
+	e := newGovEnvOn(t, throwawayPGPool(t))
+	pol := e.admin(http.MethodPost, "/api/v1/policies", `{"name":"p-refs","spec":{"min_confinement_class":"CC2","allowed_domains":["github.com"],`+
+		`"eligible_grants":[{"kind":"ssh_key","owner_only_refs":["k"],"scope":{"host":"github.com","key_secret_ref":"k","known_hosts_secret_ref":"kh"}}]}}`)
+	res := e.admin(http.MethodPost, "/api/v1/governance/restrictions", restrictionJSON(t, types.RestrictionWrite{Name: "r-refs",
+		Spec:    types.RestrictionSpec{WithheldGrants: []types.GrantSpec{{Kind: types.GrantSSHKey, OwnerOnlyRefs: []string{"k"}}}},
+		Members: []types.RestrictionMember{userMember("sub-refs")}}))
+	if pol.Code != http.StatusBadRequest || wireReason(t, pol) != reasonPolicyRequestInvalid {
+		t.Fatalf("policy naming owner_only_refs: %d %s, want 400 %s", pol.Code, pol.Body, reasonPolicyRequestInvalid)
+	}
+	if res.Code != http.StatusUnprocessableEntity || wireReason(t, res) != reasonRestrictionInvalid {
+		t.Fatalf("restriction naming owner_only_refs: %d %s, want 422 %s", res.Code, res.Body, reasonRestrictionInvalid)
+	}
+	const sentence = "owner_only_refs is set by Wardyn at launch, never authored; mark the grant owner_only instead"
+	for name, w := range map[string]*httptest.ResponseRecorder{"policy": pol, "restriction": res} {
+		if !strings.Contains(w.Body.String(), sentence) {
+			t.Errorf("%s refusal %s lacks %q", name, w.Body, sentence)
+		}
+	}
+}
+
 func sortedRestrictionIDs(ids []uuid.UUID) []uuid.UUID {
 	return slices.SortedFunc(slices.Values(ids), func(a, b uuid.UUID) int { return strings.Compare(a.String(), b.String()) })
 }
