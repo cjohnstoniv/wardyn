@@ -170,8 +170,9 @@ func TestPathProvenanceDeploymentFillInIsTheDeployments(t *testing.T) {
 	if reflect.DeepEqual(e.srv.cfg.DefaultPolicy.Resources, e.srv.deploymentAuthority().Ceiling.Resources) {
 		t.Fatalf("the deployment default's resources need no fill-in: the scenario does not fire")
 	}
+	homes := pathHomes(t, e)
 	units := unitPathProvenance(t, e)
-	for name, h := range pathHomes(t, e) {
+	for name, h := range homes {
 		for where, path := range map[string]map[string]policyref.Provenance{
 			"GET /governance": units[h.id], "check": checkWallsFor(t, e, h.sub).PathProvenance,
 		} {
