@@ -839,11 +839,29 @@ func caseOrgSweepRollback(t *testing.T, o *orgEnv) {
 	deadline = time.Now().Add(5 * time.Minute)
 	for exec.Command("kubectl", "--kubeconfig", o.adminKC, "-n", o.runsNS, "get", "pod", "wardyn-proxy-"+id).Run() == nil {
 		if time.Now().After(deadline) {
+			o.dumpSweep(t, id)
 			t.Fatalf("run %s is %s at the org, but its proxy pod is still on the runner 5 min after runnerd came back: nothing rolled it back", id, r.State)
 		}
 		time.Sleep(2 * time.Second)
 	}
 	note(t, "run %s %s at the org; its leftover pods were removed %s after runnerd came back", id, r.State, time.Since(back).Round(time.Second))
+}
+
+// dumpSweep logs what tells the reconnect sweep's failure modes apart: the run and its pods (dumpRun),
+// the leftover proxy pod's finalizers, deletion mark and container states, and wardynd's lines for the
+// sweep, the runner and the run.
+func (o *orgEnv) dumpSweep(t *testing.T, id string) {
+	o.dumpRun(t, id)
+	pod, _ := exec.Command("kubectl", "--kubeconfig", o.adminKC, "-n", o.runsNS, "get", "pod", "wardyn-proxy-"+id, "-o", "yaml").CombinedOutput()
+	t.Logf("leftover proxy pod:\n%s", tail(string(pod), 8000))
+	org, _ := exec.Command("kubectl", "--kubeconfig", o.adminKC, "-n", o.orgNS, "logs", "deployment/wardyn-org", "--all-containers", "--timestamps").CombinedOutput()
+	var lines []string
+	for _, l := range strings.Split(string(org), "\n") {
+		if strings.Contains(l, "orphan sweep") || strings.Contains(l, id) || strings.Contains(l, o.runnerID) {
+			lines = append(lines, l)
+		}
+	}
+	t.Logf("wardynd lines for the sweep, runner %s and run %s:\n%s", o.runnerID, id, tail(strings.Join(lines, "\n"), 8000))
 }
 
 func tail(s string, n int) string {
