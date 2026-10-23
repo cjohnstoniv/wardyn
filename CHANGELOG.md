@@ -243,8 +243,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `POST /governance/memberships/{id}/promote` makes a legacy membership a context; both follow the second-human
   switch. `POST /governance/check` lists the person's contexts with their walls. `POST /governance/dry-run` takes a
   `target` (`boundary`, `unit` or `membership_move`). `wardyn governance check` and `wardyn governance dry-run` follow.
-- `POST /governance/check` and `GET /governance` name, in `path_provenance`, the unit on the path that changed each
-  knob. A restated value or a clamped-away widening stays the parent's, and a pass-through unit is never named.
+- `POST /governance/check` and `GET /governance` name, for a security admin, in `path_provenance`, the unit on the path
+  that changed each knob. A restated value or a clamped-away widening stays the parent's, and a pass-through unit is never named.
 - Policy field `harness_inner_walls` (`sandbox_mode`, `approvals`) chooses the harness's own walls inside Wardyn's.
   Omitted, each run keeps what its harness and lane give today. It only adds walls: a looser choice refuses the run
   (`harness_inner_walls_looser`), and `sandbox_mode` takes `off` only (`workspace-write` and `read-only` answer
