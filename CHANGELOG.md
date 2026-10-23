@@ -49,7 +49,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `governance_boundary` (migration `0200_governance_boundary`). Without it the Wardyn boundary cannot be read or
   written. The same migration's `agent_runs.break_glass` column needs no grant. Grant it `SELECT, INSERT, UPDATE,
   DELETE` on `governance_restrictions` and `governance_restriction_members` (migration `0227_governance_restrictions`).
-  Without it restrictions cannot be read or written.
+  Without it restrictions cannot be read or written. Grant it `SELECT, INSERT, UPDATE, DELETE` on
+  `governance_unit_admins` (migration `0228_governance_unit_admins`). Without it unit admins cannot be granted, read
+  or revoked.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on
   `ui_desktop_closed` (migration `0219_ui_desktop_closed`). Without it a desktop Close cannot be stored or read, so
