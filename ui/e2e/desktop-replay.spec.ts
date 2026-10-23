@@ -7,7 +7,7 @@
 // runner has no desktop, so the stored playback, the desktop's audit rows and the chain verdict are
 // spliced on the way past; the real range check is pinned in Go (internal/store/auditchain_range_pg_test.go,
 // internal/api/recording_chain_test.go), and the real route's refusal is read here unspliced. The screen
-// itself is not drawn: the noVNC decoder is not a console dependency (PLAYER_PENDING).
+// is drawn by noVNC's unmodified decoder from a real RFB 3.8 stream (rfbFrames).
 import { randomUUID } from "node:crypto";
 import type { Page, Route } from "@playwright/test";
 import { test, expect, consoleAPI, gotoConsole, navToRoute } from "./fixtures";
@@ -15,6 +15,22 @@ import { RECORDING_REPLAY as C } from "../src/app/components/wardyn/copy/recordi
 
 const START = "2026-10-20T10:40:00Z";
 const at = (s: number) => new Date(Date.parse(START) + s * 1000).toISOString();
+
+// A server's side of an RFB 3.8 session: no auth, a 64x48 desktop, one orange Raw rectangle, then a bell.
+function rfbFrames(): string[] {
+  const u16 = (n: number) => [n >> 8, n & 255];
+  const u32 = (n: number) => [...u16(n >>> 16), ...u16(n & 0xffff)];
+  const [w, h] = [64, 48];
+  const pixelFormat = [32, 24, 0, 1, ...u16(255), ...u16(255), ...u16(255), 16, 8, 0, 0, 0, 0];
+  const messages = [
+    [...Buffer.from("RFB 003.008\n")],
+    [1, 1],
+    u32(0),
+    [...u16(w), ...u16(h), ...pixelFormat, ...u32(2), ...Buffer.from("wd")],
+    [0, 0, ...u16(1), ...u16(0), ...u16(0), ...u16(w), ...u16(h), ...u32(0), ...Array.from({ length: w * h }, () => [0xff, 0x40, 0, 0]).flat()],
+  ];
+  return [...messages.map((m, i) => `{${i * 10}{${Buffer.from(m).toString("base64")}`), "{850000{Ag=="];
+}
 
 async function seedRun(page: Page): Promise<string> {
   const created = await consoleAPI(page, "POST", "/api/v1/runs", { agent: "claude-code", task: "desktop-replay e2e " + randomUUID().slice(0, 8) });
@@ -62,7 +78,7 @@ test.describe("Desktop replay", () => {
       route.fulfill({
         contentType: "application/json",
         body: JSON.stringify({ version: 1, format: "novnc-playback", encoding: "base64", started_at: START,
-          frames: ["{0{UkZCIDAwMy4wMDgK", "{850000{AAAA"], gaps: [{ start_ms: 138_100, end_ms: 272_000, reason: "you took over to sign in" }] }),
+          frames: rfbFrames(), gaps: [{ start_ms: 138_100, end_ms: 272_000, reason: "you took over to sign in" }] }),
       }),
     );
     await page.route(new RegExp(`/api/v1/runs/${id}/recording-chain\\?`), (route: Route) =>
@@ -82,6 +98,16 @@ test.describe("Desktop replay", () => {
     await replay.getByRole("button", { name: C.PLAY }).click();
     await expect.poll(async () => Number(await playhead.getAttribute("data-ms"))).toBeGreaterThan(0);
     await replay.getByRole("button", { name: C.PAUSE }).click();
+
+    // The frames up to the playhead are drawn: the screen's canvas holds the stream's orange rectangle.
+    const painted = () =>
+      replay.getByTestId("desktop-replay-screen").locator("canvas").evaluate((c: HTMLCanvasElement) => {
+        const d = c.getContext("2d")!.getImageData(0, 0, c.width, c.height).data;
+        let n = 0;
+        for (let i = 0; i < d.length; i += 4) if (d[i] === 0xff && d[i + 1] === 0x40 && d[i + 3] === 0xff) n++;
+        return n;
+      });
+    await expect.poll(painted, { message: "the replay canvas paints the recorded frames" }).toBeGreaterThan(0);
 
     // The gap is on the timeline; jumping into it from the action log shows the pause, not frames.
     await expect(replay.getByTestId("desktop-replay-gap-mark")).toContainText(C.GAP("2 min 14 s"));

@@ -6,8 +6,8 @@
 // A desktop's screen recording on the Recording tab (#2968, M7-Replay and States 6 and 7): a timeline
 // that marks every pause gap instead of hiding it, the action log beside it (a click jumps the
 // playhead there), and the tamper-evident log's verdict on the recording's range. Keystrokes are
-// never recorded. The screen itself is not drawn yet: the noVNC decoder is not a console dependency,
-// so the recording still downloads as noVNC playback frames.
+// never recorded. The screen is drawn by noVNC's own decoder (@novnc/novnc, unmodified, loaded on
+// first use) fed the recording's frames through a fake socket (desktop-replay-feed.ts).
 import * as React from "react";
 import { Download, Loader2, Pause, Play } from "lucide-react";
 import { recordings, type DesktopPlayback } from "../../../lib/api/recordings";
@@ -15,6 +15,7 @@ import { audit as auditApi } from "../../../lib/api/audit";
 import { clockTime } from "../../../lib/format";
 import type { AuditEvent } from "../../../lib/types";
 import { advance, gapAt, pct, replayActions, replayDuration, replayGaps } from "../../../lib/desktop-replay-timeline";
+import { decodeFrames, PlaybackSocket, ReplayFeed } from "../../../lib/desktop-replay-feed";
 import { Button } from "../../ui/button";
 import { RECORDING_REPLAY as C, gapDuration } from "../../wardyn/copy/recording-level";
 import { ReplayActionLog, ReplayChain } from "./desktop-replay-panels";
@@ -87,6 +88,41 @@ function Player({ runId, recKey, doc, audit, onGoAudit }: {
   const [speed, setSpeed] = React.useState<number>(1);
   const [active, setActive] = React.useState<string | undefined>();
   const marks = React.useRef<Record<number, HTMLButtonElement | null>>({});
+  const screen = React.useRef<HTMLDivElement>(null);
+  const feed = React.useRef<ReplayFeed | undefined>(undefined);
+  const msNow = React.useRef(ms);
+  msNow.current = ms;
+  const [screenFailed, setScreenFailed] = React.useState(false);
+  const frames = React.useMemo(() => decodeFrames(pb.frames), [pb.frames]);
+
+  // The decoder loads once per recording; each seek back gives it a fresh RFB on the same element.
+  React.useEffect(() => {
+    let alive = true;
+    import("@novnc/novnc")
+      .then(({ default: RFB }) => {
+        const el = screen.current;
+        if (!alive || !el) return;
+        feed.current = new ReplayFeed(frames, () => {
+          el.replaceChildren();
+          const sock = new PlaybackSocket();
+          const rfb = new RFB(el, sock, { shared: true });
+          rfb.viewOnly = true;
+          rfb.scaleViewport = true;
+          rfb.focusOnClick = false;
+          return { push: (b) => sock.push(b), close: () => rfb.disconnect() };
+        });
+        feed.current.seek(msNow.current);
+      })
+      .catch(() => alive && setScreenFailed(true));
+    return () => {
+      alive = false;
+      feed.current?.close();
+      feed.current = undefined;
+    };
+  }, [frames]);
+  React.useEffect(() => {
+    feed.current?.seek(ms);
+  }, [ms]);
 
   React.useEffect(() => {
     if (!playing) return;
@@ -124,9 +160,12 @@ function Player({ runId, recKey, doc, audit, onGoAudit }: {
           </Button>
         </div>
         <div className="relative p-3.5">
-          <div className="grid h-[400px] place-items-center rounded-lg border border-border bg-background p-6 text-center text-meta text-muted-foreground">
-            {!gap && <p>{C.PLAYER_PENDING}</p>}
-          </div>
+          <div ref={screen} className="h-[400px] overflow-hidden rounded-lg border border-border bg-background" data-testid="desktop-replay-screen" />
+          {screenFailed && (
+            <p role="alert" className="absolute inset-x-3.5 top-3.5 p-6 text-center text-meta text-muted-foreground">
+              {C.SCREEN_FAILED}
+            </p>
+          )}
           {gap && (
             <div className="absolute inset-3.5 grid place-items-center">
               <div role="status" className="flex max-w-[440px] flex-col items-center gap-2.5 rounded-xl border border-warning/40 bg-warning-subtle px-7 py-5 text-center" data-testid="desktop-replay-gap">

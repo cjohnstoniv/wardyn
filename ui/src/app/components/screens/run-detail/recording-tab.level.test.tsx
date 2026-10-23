@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { AuditEvent } from "../../../lib/types";
 
@@ -17,6 +17,20 @@ vi.mock("../../../lib/api/recordings", () => ({
   },
 }));
 vi.mock("../../../lib/api/audit", () => ({ audit: { listAudit: async () => [] } }));
+// Stands in for noVNC's RFB: records what reaches the display through the channel it was handed.
+const decoders = vi.hoisted(() => [] as { target: HTMLElement; got: number[]; gone: boolean }[]);
+vi.mock("@novnc/novnc", () => ({
+  default: class {
+    viewOnly = false;
+    disconnect: () => void;
+    constructor(target: HTMLElement, channel: { onmessage: ((e: { data: ArrayBuffer }) => void) | null }) {
+      const d = { target, got: [] as number[], gone: false };
+      decoders.push(d);
+      channel.onmessage = (e) => d.got.push(...new Uint8Array(e.data));
+      this.disconnect = () => (d.gone = true);
+    }
+  },
+}));
 
 import { RecordingTab } from "./recording-tab";
 
@@ -88,6 +102,34 @@ describe("RecordingTab levels (#2968, M7 RunStrip, Replay, States 8)", () => {
     expect(within(row).getByText("Wardyn, not the desktop")).toBeInTheDocument();
     expect(screen.getByText("Keystrokes are never recorded.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Download recording" })).toBeInTheDocument();
+  });
+
+  it("the frames up to the playhead reach noVNC's display, and a jump back replays them on a fresh one", async () => {
+    decoders.length = 0;
+    getDesktopRecording.mockResolvedValue({
+      raw: "{}",
+      playback: { version: 1, format: "novnc-playback", encoding: "base64", started_at: "2026-10-20T10:40:00Z",
+        frames: ["{0{AQ==", "{100000{Ag==", "{300000{Aw=="], gaps: [{ start_ms: 138_100, end_ms: 272_000, reason: "you took over to sign in" }] },
+    });
+    verifyChain.mockResolvedValue({ ok: true, first_seq: 1, last_seq: 2, checked: 2, marks: [] });
+    const audit = [
+      ev("desktop.recording.write", { key: KEY }, KEY, "2026-10-20T10:50:00Z"),
+      ev("desktop.recording.pause", { gap_start: "2026-10-20T10:42:18Z", reason: "you took over to sign in" }, RUN, "2026-10-20T10:42:18Z"),
+      ev("desktop.recording.resume", { gap_start: "2026-10-20T10:42:18Z", gap_end: "2026-10-20T10:44:32Z", gap_ms: 134_000, reason: "you took over to sign in" }),
+    ];
+    tab({ level: "screen_actions", recordingAudit: audit, selected: KEY });
+    const screenEl = await screen.findByTestId("desktop-replay-screen");
+    await waitFor(() => expect(decoders).toHaveLength(1));
+    expect(decoders[0].target).toBe(screenEl);
+    expect(decoders[0].got).toEqual([1]);
+
+    const rows = screen.getAllByTestId("desktop-replay-action");
+    fireEvent.click(rows[1]);
+    expect(screen.getByTestId("desktop-replay-playhead")).toHaveAttribute("data-ms", "272000");
+    expect(decoders[0].got).toEqual([1, 2]);
+    fireEvent.click(rows[0]);
+    expect(screen.getByTestId("desktop-replay-playhead")).toHaveAttribute("data-ms", "138000");
+    expect(decoders.map((d) => [d.got, d.gone])).toEqual([[[1, 2], true], [[1, 2], false]]);
   });
 
   it("a broken range says which entry does not verify", async () => {

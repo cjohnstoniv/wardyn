@@ -66,8 +66,8 @@ export const RECORDING_REPLAY = {
   REASON: "Reason",
   WRITTEN_BY: "Written by",
   WRITTEN_BY_VALUE: "Wardyn, not the desktop",
-  // Not on the boards: the console's player has no screen yet (the noVNC decoder is not a dependency).
-  PLAYER_PENDING: "Download the recording to watch it in noVNC's playback page.",
+  // Not on the boards: the decoder could not load, so only the download is left.
+  SCREEN_FAILED: "The screen could not be drawn here. Download the recording to watch it in noVNC's playback page.",
   // Not on the boards: the picker's row for a desktop recording.
   SESSION_OPTION: (ended: string) => `Screen and actions · ended ${ended}`,
   LOADING: "Loading the captured session…",
