@@ -103,6 +103,10 @@ type Config struct {
 	// the target, so the proxy's control-plane clamp covers one address, and an
 	// IP-literal URL (which no hosts entry can remap) refuses the create.
 	ControlPlaneRelay func(controlPlaneURL *url.URL) (target string, err error)
+	// LocalModelRelay, set only by wardyn-runnerd beside ControlPlaneRelay, makes sure the runner's
+	// relay serves a laptop local model's port at the relay target, forwarded to this computer's
+	// loopback at that port alone (withRunnerLocalModels). Nil refuses a run that needs one.
+	LocalModelRelay func(port uint16) error
 	// TrustedCAPEM, set only by wardyn-runnerd, is the runner's own validated
 	// corporate CA bundle (--trusted-ca-file, runner.TrustedCABundle). It
 	// becomes every proxy's trusted_ca_pem, on create and on revive, in place

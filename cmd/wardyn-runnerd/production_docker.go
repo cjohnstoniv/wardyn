@@ -14,6 +14,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -81,7 +82,7 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	}
 	ev := &evidenceForwarder{}
 	sub, err := docker.New(docker.Config{RunnerID: identity.RunnerID.String(), ProxyImage: opts.proxyImage, InternalNetwork: opts.network, Record: record,
-		ControlPlaneRelay: relay.Ensure, TrustedCAPEM: opts.trustedCA, TrustedCAFile: opts.trustedCAPath, UpstreamProxyURL: opts.upstreamProxy,
+		ControlPlaneRelay: relay.Ensure, LocalModelRelay: relay.EnsureLocalModel, TrustedCAPEM: opts.trustedCA, TrustedCAFile: opts.trustedCAPath, UpstreamProxyURL: opts.upstreamProxy,
 		DecisionSink: sinkAdapter{s: sink.spoolSink, url: sink.proxyURL}, Evidence: ev,
 		ProxySandboxPeersOnly: cliutil.EnvBool(docker.EnvProxySandboxPeersOnly, false), UserDriveHostRoots: driveRoots})
 	if err != nil {
@@ -98,7 +99,7 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	extras.linuxVM = enableLinuxVM(ctx, sub, stateDir, os.Getenv)
 	extras.localAttach, extras.orgURL = local, opts.orgURL
 	endVMsOnFullSpool(sink.spoolSink, extras.linuxVM, sub.EndVM)
-	extras.driveRoots = driveRoots
+	extras.driveRoots, extras.localModelRelay = driveRoots, true
 	// The runtime first: its startup containment pass stops lapsed runs even when the check below fails.
 	rt, err := localRunnerRuntime(ctx, identity, stateDir, sub, docker.SandboxRef, relay, dockerCapacity, extras)
 	if err != nil {
@@ -389,6 +390,18 @@ type runtimeExtras struct {
 	report connectReport
 	// driveRoots are --drive-root, advertised as the runner's allowed_roots.
 	driveRoots []string
+	// localModelRelay: the substrate relays a laptop local model (the Docker driver's
+	// LocalModelRelay), so the caps name runnerwire.ProxySettingLocalModelRelay.
+	localModelRelay bool
+}
+
+// proxySettings are the run proxy settings the caps name: every one this build carries, and the
+// local model relay where the substrate serves it.
+func (e runtimeExtras) proxySettings() []string {
+	if !e.localModelRelay {
+		return runnerwire.ProxySettings
+	}
+	return append(slices.Clip(runnerwire.ProxySettings), runnerwire.ProxySettingLocalModelRelay)
 }
 
 // parseDriveRoots checks --drive-root: each an absolute, cleaned folder. The docker driver binds a drive
@@ -512,7 +525,7 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 			return err
 		}
 		caps.Capacity, caps.BYOISelftest, caps.Retire, caps.Resident = capacity(ctx), dispatcher.Selftests(), true, dispatcher.Residents()
-		caps.ProxySettings, caps.AllowedRoots = runnerwire.ProxySettings, extra.driveRoots
+		caps.ProxySettings, caps.AllowedRoots = extra.proxySettings(), extra.driveRoots
 		caps.LinuxVM, caps.LocalAttach = extra.linuxVM, local != nil
 		if !extra.report.fill(ctx, &caps, reprobe) && !always {
 			return nil

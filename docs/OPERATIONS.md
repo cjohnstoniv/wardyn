@@ -3365,6 +3365,7 @@ No provider of this kind registered means today's behaviour, unchanged.
 | `local.max_context` | Cap on a request's `options.num_ctx` | 0 = 32768 |
 | `local.max_output` | Cap on `max_tokens`, `max_completion_tokens`, `max_output_tokens` and `options.num_predict` | 0 = 32768 |
 | `local.keep_alive_seconds` | Cap on `keep_alive`; a negative ("forever") value is capped too | 0 = 1800, at most 86400 |
+| `local.allow_on_laptop_runners` | Runs on a person's own runner may use the server on that computer | Default `false`; `true` needs `base_url` on `host.docker.internal` |
 | `auth` | How each person's own token is sent, when the server wants one | Unset = no credential at all |
 | `harnesses[].model` | The model that agent asks for | Required; one of `local.models` |
 
@@ -3390,7 +3391,17 @@ What a run may call on the server (every other method and path is refused `403 e
 - The private-address guard is lifted for this route and this address alone: the registered host and port may answer on the Docker bridge's gateway address (the Docker host). The control plane, loopback and link-local stay refused.
 - With `auth` set, each person's own token rides as a custom endpoint's does, and the host joins the run's allowlist so the token can be attached. Over `http://` it crosses the network unencrypted, so a write with `auth` over `http://` is refused unless the host is `host.docker.internal`, `gateway.docker.internal` or a private IPv4 address (10/8, 172.16/12, 192.168/16, 100.64/10): use `https://` to send a token off this machine.
 - Claude Code gets the allowlisted model for every tier (`ANTHROPIC_MODEL` and the opus, sonnet and haiku defaults), so no background call names another.
-- A run placed on your own runner is refused (`ProxyConfig.LocalModels`): the runner path is a later release.
+- A run placed on a person's own runner is refused (`ProxyConfig.LocalModels`) unless `local.allow_on_laptop_runners` is `true`.
+
+#### On a person's own runner
+
+With `local.allow_on_laptop_runners: true` (API only for now; off by default), a run on a person's own runner uses the model server on that computer, such as Ollama on `127.0.0.1:11434`.
+
+- The runner's relay serves that one port where its run proxies reach it and forwards it to the computer's loopback at the same port; nothing else is reached through it. On Docker Desktop and other VM-backed engines the engine already routes there, so nothing is opened.
+- Only a run granted the provider reaches it: its proxy admits the relay address for that host and port alone, with the same routes, allowlist and caps as above.
+- An organisation's runner is refused (`ProxyConfig.LocalModels`). A wardyn-runnerd without the relay refuses the run with `runner_proxy_setting_unsupported`, naming `local_model_relay`.
+- Once a run has used the port, the runner serves it until the runner stops, to any container on that computer that reaches the Docker bridge's gateway.
+- A server bound to every address already holds that port there, so the run is refused at create: bind it to `127.0.0.1`.
 
 > [!IMPORTANT]
 > **Upgrade note.** Move the proxy image pin with wardynd, image first, before you add a `local_model` provider.

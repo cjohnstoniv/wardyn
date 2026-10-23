@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -139,5 +140,36 @@ func TestUnsetProxySettingsOnAnOldRunnerSendTheSameBytes(t *testing.T) {
 	}
 	if got := marshalSent(t, rig, spec.RunID); got != string(golden) {
 		t.Fatalf("the runner received a different payload:\n got %s\nwant %s", got, golden)
+	}
+}
+
+// A laptop local model (#2957) needs a runner that relays it from its own computer. A runner that
+// names every proxy setting but local_model_relay (a 0.10 runner from before the relay, or a
+// Kubernetes one) is refused before anything is sent, with the named setting; one that names it is
+// sent the run. Unflagged, the same spec goes to the older runner as before.
+func TestCreateSandboxRefusesALaptopModelOnARunnerWithoutTheRelay(t *testing.T) {
+	laptop := func(allow bool) runner.SandboxSpec {
+		return runner.SandboxSpec{RunID: uuid.New(), Image: "img", ConfinementClass: types.CC1, ProxyConfig: runner.ProxyConfig{
+			LocalModels: map[string]types.LocalModelSettings{"http://host.docker.internal:11434": {Models: []string{"m"}, AllowOnLaptopRunners: allow}}}}
+	}
+	rig := runnertest.NewRig(t, rid)
+	_, err := rig.Sub.CreateSandbox(ctxT(t), laptop(true))
+	var pe *remote.ProxySettingError
+	if !errors.As(err, &pe) || pe.Setting != runnerwire.ProxySettingLocalModelRelay || !strings.Contains(err.Error(), "too old for local_model_relay") {
+		t.Fatalf("create = %v, want a ProxySettingError naming %s", err, runnerwire.ProxySettingLocalModelRelay)
+	}
+	if len(rig.Fake.Created) != 0 {
+		t.Fatal("the refused create reached the runner")
+	}
+	if _, err := rig.Sub.CreateSandbox(ctxT(t), laptop(false)); err != nil {
+		t.Fatalf("an unflagged local model was refused: %v", err)
+	}
+	named, err := json.Marshal(append(slices.Clone(runnerwire.ProxySettings), runnerwire.ProxySettingLocalModelRelay))
+	if err != nil {
+		t.Fatal(err)
+	}
+	publishCaps(t, rig, `{"support":{"Classes":["CC1","CC2"]},"cpu_millis_max":4000,"memory_mib_max":8192,"version":"relay","proxy_settings":`+string(named)+`}`)
+	if _, err := rig.Sub.CreateSandbox(ctxT(t), laptop(true)); err != nil {
+		t.Fatalf("a runner naming %s was refused: %v", runnerwire.ProxySettingLocalModelRelay, err)
 	}
 }

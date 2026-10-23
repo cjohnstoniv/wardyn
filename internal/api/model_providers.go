@@ -68,6 +68,7 @@ const (
 	mp400LocalModel       = "model_providers: %q: local.models: %q is not a model name a run may use — letters, digits and ._:@+[]- , no \"/\" (a registry or namespace) and no cloud tag"
 	mp400LocalModelDup    = "model_providers: %q: local.models lists %q twice"
 	mp400LocalBound       = "model_providers: %q: local.%s must be between 0 (the default, %d) and %d"
+	mp400LocalLaptopHost  = "model_providers: %q: local.allow_on_laptop_runners needs base_url on " + types.LaptopModelHost + " — the model server on the runner's own computer"
 	mp400LocalHarness     = "model_providers: %q: %s: model must be one of local.models — it is the model this agent asks for"
 )
 
@@ -553,6 +554,11 @@ func validateProviderLocal(mp types.ModelProvider) error {
 	} {
 		if b.v < 0 || b.v > b.hi {
 			return fmt.Errorf(mp400LocalBound, mp.ID, b.name, b.d, b.hi)
+		}
+	}
+	if l.AllowOnLaptopRunners {
+		if u, err := url.Parse(mp.BaseURL); err != nil || strings.ToLower(strings.TrimSuffix(u.Hostname(), ".")) != types.LaptopModelHost {
+			return fmt.Errorf(mp400LocalLaptopHost, mp.ID)
 		}
 	}
 	return nil

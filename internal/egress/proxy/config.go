@@ -260,6 +260,13 @@ type Config struct {
 	// because an older proxy refuses a key it does not know. Empty (the
 	// default) => no local model route, byte-identical to today.
 	LocalModels map[string]types.LocalModelSettings `json:"local_models,omitempty"`
+	// RunnerLocalModels names the LocalModels entries (each AllowOnLaptopRunners) whose server is
+	// on the runner's own computer: the runner relays that one port from its relay address, the
+	// address the control plane resolves to on a runner, and vetTrustedHost admits that address
+	// for that host and port alone. Set only by a runner's Docker driver once its relay serves the
+	// port (runner/docker prepareProxy), which removes it from every other config; never by the
+	// control plane. Empty (the default) => byte-identical to before.
+	RunnerLocalModels []string `json:"runner_local_models,omitempty"`
 	// Unattended marks a run nobody is driving (a non-interactive task run).
 	// A push that touches a push_rules.require_review_paths entry is then
 	// refused outright rather than held for a decision nobody is waiting to

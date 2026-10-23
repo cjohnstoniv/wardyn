@@ -297,6 +297,9 @@ func (s *Substrate) checkProxySettings(pc runner.ProxyConfig) error {
 			return &ProxySettingError{Setting: setting}
 		}
 	}
+	if runnerwire.LocalModelRelayNeeded(pc) && !slices.Contains(c.ProxySettings, runnerwire.ProxySettingLocalModelRelay) {
+		return &ProxySettingError{Setting: runnerwire.ProxySettingLocalModelRelay}
+	}
 	return nil
 }
 

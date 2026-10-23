@@ -113,6 +113,9 @@ func (d *Driver) prepareProxy(ctx context.Context, runID uuid.UUID, cfgJSON []by
 	if err != nil {
 		return proxyPrep{}, err
 	}
+	if cfgJSON, err = d.withRunnerLocalModels(cfgJSON); err != nil {
+		return proxyPrep{}, err
+	}
 	if d.cfg.ProxySandboxPeersOnly {
 		subnets, err := d.runSubnets(ctx, runID)
 		if err != nil {

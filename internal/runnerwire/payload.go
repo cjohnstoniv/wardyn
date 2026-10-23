@@ -163,6 +163,23 @@ const (
 	ProxySettingCanonicalRepos = "canonical_push_repos"
 )
 
+// ProxySettingLocalModelRelay is no proxy.Config field: a Docker runner names it when it relays a
+// laptop local model (LocalModelSettings.AllowOnLaptopRunners) from its own computer to its run's proxy.
+// The org refuses such a create on a runner that does not name it (LocalModelRelayNeeded); it is not in
+// ProxySettings, which every runner substrate carries.
+const ProxySettingLocalModelRelay = "local_model_relay"
+
+// LocalModelRelayNeeded reports whether pc has a laptop local model, which only a runner naming
+// ProxySettingLocalModelRelay serves.
+func LocalModelRelayNeeded(pc runner.ProxyConfig) bool {
+	for _, s := range pc.LocalModels {
+		if s.AllowOnLaptopRunners {
+			return true
+		}
+	}
+	return false
+}
+
 // ProxySettings is every run proxy setting this build's runner carries through to its proxy, in the
 // order ProxySettingsSet tests them.
 var ProxySettings = []string{ProxySettingAWSSigV4, ProxySettingScrubResponses, ProxySettingVM, ProxySettingPortRule, ProxySettingLocalModels, ProxySettingKubeAPI, ProxySettingCanonicalRepos}

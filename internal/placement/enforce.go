@@ -152,6 +152,14 @@ func deleteIndexed[T any](in []T, drop func(int) bool) []T {
 	return out
 }
 
+// laptopLocalModel reports whether base is a local model server the admin allowed on
+// laptop runners (LocalModelSettings.AllowOnLaptopRunners) and the candidate is a
+// person's own runner: its relay then reaches the server on that computer alone.
+func laptopLocalModel(p LocalPlan, base string) bool {
+	s, ok := p.Spec.ProxyConfig.LocalModels[base]
+	return ok && s.AllowOnLaptopRunners && p.OwnerKind == types.RunnerOwnerPerson
+}
+
 // viaOrgGitHubHost is the destination of a brokered GitHub grant's /wardyn/gh/ route.
 const viaOrgGitHubHost = "github.com"
 
@@ -191,17 +199,22 @@ var gates = map[string]func(LocalPlan) *Refusal{
 	},
 	// The gateway table is the organisation's network and is never sent; a run
 	// that needs it is refused rather than left to dial the vendor host.
+	// The one exception is a laptop local model's own entry (laptopLocalModel).
 	"ProxyConfig.LLMUpstreams": func(p LocalPlan) *Refusal {
-		if len(p.Spec.ProxyConfig.LLMUpstreams) != 0 {
-			return refuse(ReasonPlacementCredential, "ProxyConfig.LLMUpstreams", "credential variant has no permitted local rule")
+		for _, u := range p.Spec.ProxyConfig.LLMUpstreams {
+			if !laptopLocalModel(p, u) {
+				return refuse(ReasonPlacementCredential, "ProxyConfig.LLMUpstreams", "credential variant has no permitted local rule")
+			}
 		}
 		return nil
 	},
 	// A local model server is the organisation's or the laptop host's network,
-	// never sent with the run (#2957: the runner path is a later design).
+	// never sent with the run, unless the admin allowed it on laptop runners (#2957).
 	"ProxyConfig.LocalModels": func(p LocalPlan) *Refusal {
-		if len(p.Spec.ProxyConfig.LocalModels) != 0 {
-			return refuse(ReasonPlacementCredential, "ProxyConfig.LocalModels", "credential variant has no permitted local rule")
+		for u := range p.Spec.ProxyConfig.LocalModels {
+			if !laptopLocalModel(p, u) {
+				return refuse(ReasonPlacementCredential, "ProxyConfig.LocalModels", "credential variant has no permitted local rule")
+			}
 		}
 		return nil
 	},

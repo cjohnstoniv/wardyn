@@ -52,6 +52,13 @@ type localRelay struct {
 	waiting   int                           // connections in conns yet to send their first byte
 	refused   int                           // closed at the cap since capWarnAt
 	capWarnAt time.Time
+
+	// models are the laptop local model ports served at the bind (EnsureLocalModel), modelConns
+	// their open connections; modelAddr is where each is forwarded, this computer's loopback when
+	// zero (tests use another loopback address).
+	models     map[uint16]net.Listener
+	modelConns map[net.Conn]bool
+	modelAddr  netip.Addr
 }
 
 // relayBind admits only Docker's host-gateway address held by the Docker
@@ -125,6 +132,8 @@ func (r *localRelay) Ensure(u *url.URL) (string, error) {
 		return "", errors.New("relay: no address a proxy reaches has been found yet")
 	case r.listeners[uint16(port)] != nil:
 		return r.pair.target, nil
+	case r.models[uint16(port)] != nil:
+		return "", fmt.Errorf("relay: port %d serves a local model server, not the organisation", port)
 	}
 	ln, err := net.Listen("tcp", netip.AddrPortFrom(r.pair.bind, uint16(port)).String())
 	if err != nil {
@@ -133,6 +142,91 @@ func (r *localRelay) Ensure(u *url.URL) (string, error) {
 	r.listeners[uint16(port)] = ln
 	go r.serve(ln)
 	return r.pair.target, nil
+}
+
+// localModelDialWait bounds the dial of the model server on this computer.
+const localModelDialWait = 5 * time.Second
+
+// EnsureLocalModel is the Docker driver's LocalModelRelay (#2957): a run's proxy reaches a laptop
+// local model at the relay target on the server's port, and that port alone is forwarded to this
+// computer's loopback, where the model server listens. Nothing else is reached through it: no other
+// port, address or relay stream. Where the bind is that loopback address (a VM-backed engine, whose
+// route to this computer lands there) the server itself answers and nothing is opened. Once open, a
+// port stays open until the runner stops, as the organisation relay's do.
+func (r *localRelay) EnsureLocalModel(port uint16) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	to := cmp.Or(r.modelAddr, relayLoopback)
+	switch {
+	case r.closed:
+		return net.ErrClosed
+	case !r.pair.bind.IsValid():
+		return errors.New("relay: no address a proxy reaches has been found yet")
+	case r.listeners[port] != nil:
+		return fmt.Errorf("relay: port %d is the organisation relay's own, so no local model server can use it", port)
+	case r.models[port] != nil || r.pair.bind == to:
+		return nil
+	}
+	ln, err := net.Listen("tcp", netip.AddrPortFrom(r.pair.bind, port).String())
+	if err != nil {
+		return fmt.Errorf("relay: serve the local model server's port %d at %s: %w", port, r.pair.bind, err)
+	}
+	if r.models == nil {
+		r.models, r.modelConns = map[uint16]net.Listener{}, map[net.Conn]bool{}
+	}
+	r.models[port] = ln
+	go r.serveModel(ln, netip.AddrPortFrom(to, port).String())
+	return nil
+}
+
+// serveModel copies each connection to ln to the model server at addr, with half-close both ways.
+func (r *localRelay) serveModel(ln net.Listener, addr string) {
+	for {
+		c, err := ln.Accept()
+		if errors.Is(err, net.ErrClosed) {
+			return
+		}
+		if err != nil {
+			time.Sleep(50 * time.Millisecond) // a transient accept error (EMFILE) must not end the listener
+			continue
+		}
+		go func() {
+			r.mu.Lock()
+			if r.closed {
+				r.mu.Unlock()
+				_ = c.Close()
+				return
+			}
+			r.modelConns[c] = true
+			r.mu.Unlock()
+			defer func() {
+				r.mu.Lock()
+				delete(r.modelConns, c)
+				r.mu.Unlock()
+				_ = c.Close()
+			}()
+			s, err := net.DialTimeout("tcp", addr, localModelDialWait)
+			if err != nil {
+				return
+			}
+			defer s.Close()
+			done := make(chan struct{})
+			go func() { halfCopy(s, c); close(done) }()
+			halfCopy(c, s)
+			<-done
+		}()
+	}
+}
+
+// halfCopy copies src to dst, then half-closes dst's write side (or closes it, ending the other copy).
+func halfCopy(dst, src net.Conn) {
+	if _, err := io.Copy(dst, src); err == nil {
+		if hc, ok := dst.(interface{ CloseWrite() error }); ok {
+			_ = hc.CloseWrite()
+			return
+		}
+	}
+	_ = dst.Close()
 }
 
 func (r *localRelay) serve(ln net.Listener) {
@@ -273,8 +367,14 @@ func (r *localRelay) Close() error {
 	for _, ln := range r.listeners {
 		errs = append(errs, ln.Close())
 	}
-	conns := make([]net.Conn, 0, len(r.conns))
+	for _, ln := range r.models {
+		errs = append(errs, ln.Close())
+	}
+	conns := make([]net.Conn, 0, len(r.conns)+len(r.modelConns))
 	for c := range r.conns {
+		conns = append(conns, c)
+	}
+	for c := range r.modelConns {
 		conns = append(conns, c)
 	}
 	r.mu.Unlock()

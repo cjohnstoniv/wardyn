@@ -154,7 +154,15 @@ type LocalModelSettings struct {
 	MaxContext       int      `json:"max_context,omitempty"`        // cap on a request's options.num_ctx
 	MaxOutput        int      `json:"max_output,omitempty"`         // cap on max_tokens and its per-API spellings
 	KeepAliveSeconds int      `json:"keep_alive_seconds,omitempty"` // cap on keep_alive, so no run pins a model in memory
+	// AllowOnLaptopRunners lets a run on a person's own runner use the server on that runner's own
+	// computer (base_url on host.docker.internal), which the runner relays to its loopback at that
+	// port alone. Admin-set; false (the default) refuses the run on every person's runner, as before.
+	AllowOnLaptopRunners bool `json:"allow_on_laptop_runners,omitempty"`
 }
+
+// LaptopModelHost is the one base_url host an AllowOnLaptopRunners provider may name: the runner's own
+// computer as its run's proxy reaches it.
+const LaptopModelHost = "host.docker.internal"
 
 // The default bounds: generous enough for an agent's long context and replies, small enough that one
 // run cannot hold a model in memory indefinitely.

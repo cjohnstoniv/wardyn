@@ -88,6 +88,7 @@ llm_channel_hosts
 llm_unavailable_detail
 llm_upstreams
 local_models
+local_models.*.allow_on_laptop_runners
 local_models.*.keep_alive_seconds
 local_models.*.max_context
 local_models.*.max_output
@@ -215,6 +216,7 @@ resident_mints.token
 resident_mints.username
 run_id
 run_token
+runner_local_models
 scrub_responses
 self_lapse
 signin_listen

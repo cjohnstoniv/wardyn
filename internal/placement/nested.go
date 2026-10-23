@@ -21,7 +21,7 @@ import (
 var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[proxy.Config](): strings.Fields("RunID ControlPlaneURL ControlPlaneCAPEM RunToken Policy Injection Listen DecisionBufferSize SelfLapse DecisionSink HardDeny MITMCACertPEM MITMCAKeyPEM MITMHosts GitGrants PATGrants " +
 		"BrokeredPATGrantIDs ResidentMints ADOGrant AzureGates GitHubAPI AzureARM AWSSigV4 KubeAPI MITMLLM UpstreamProxyURL UpstreamProxyNoProxy AllowedPeers " +
-		"TrustedCAPEM InternalHosts LLMUpstreams LLMChannelHosts LLMUnavailableDetail LocalModels Unattended ScrubResponses CanonicalPushRepos Attribution DecisionSpoolDir PushRuleSets PushRuleBase HarnessToolRules HarnessCredentials ViaOrgRoutes MCPServers MCPBindings " +
+		"TrustedCAPEM InternalHosts LLMUpstreams LLMChannelHosts LLMUnavailableDetail LocalModels RunnerLocalModels Unattended ScrubResponses CanonicalPushRepos Attribution DecisionSpoolDir PushRuleSets PushRuleBase HarnessToolRules HarnessCredentials ViaOrgRoutes MCPServers MCPBindings " +
 		// SigninListen is ProxyConfig.DesktopSignins as stored (localStoredSpec), refused by its row.
 		"VM PortRule SigninListen"),
 	reflect.TypeFor[proxy.InjectionConfig]():      strings.Fields("InjectionRule GrantID"),
@@ -31,7 +31,7 @@ var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[proxy.ResidentMint]():         strings.Fields("GrantID Kind Username KnownHosts Token ExpiresAt Host"),
 	reflect.TypeFor[proxy.MCPServerConfig]():      strings.Fields("Key URL GrantID Ordinal"),
 	reflect.TypeFor[proxy.MCPBinding]():           strings.Fields("Harness SHA256 Servers"),
-	reflect.TypeFor[types.LocalModelSettings]():   strings.Fields("Models MaxContext MaxOutput KeepAliveSeconds"),
+	reflect.TypeFor[types.LocalModelSettings]():   strings.Fields("Models MaxContext MaxOutput KeepAliveSeconds AllowOnLaptopRunners"),
 	reflect.TypeFor[LocalPlan]():                  strings.Fields("Spec Origins CredentialIntents OrgConfigKeys VerifiedLocalPaths UpstreamProxySecretRef TrustedOutput SelfDefinedComponents LocalSelfDefinedComponents Delivery Posture ConfinementFloor Trust OwnerKind"),
 	reflect.TypeFor[CredentialOrigin]():           strings.Fields("Class Delivery GrantKind Stored OwnNamespace OwnerOnly ResidentOptIn"),
 	reflect.TypeFor[CredentialIntent]():           strings.Fields("Field Origin"),

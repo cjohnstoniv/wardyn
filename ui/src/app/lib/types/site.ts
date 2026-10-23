@@ -311,6 +311,9 @@ export interface LocalModelSettings {
   max_context?: number;
   max_output?: number;
   keep_alive_seconds?: number;
+  // Admin-set through the API (no console control yet): runs on a person's own
+  // runner may use this server on that computer.
+  allow_on_laptop_runners?: boolean;
 }
 
 // Go's types.DefaultLocal* and the API's maxLocalModels, maxLocalBound and
