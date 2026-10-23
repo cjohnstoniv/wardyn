@@ -29,7 +29,7 @@ const (
 )
 
 const (
-	secretPersonalNeedsPersonRefusal = "your own secrets belong to a signed-in person; this caller (the admin token, local mode or automation) has no personal namespace. " +
+	secretPersonalNeedsPersonRefusal = "Your own secrets belong to a signed-in person; this caller (the admin token, local mode or automation) has no personal namespace. " +
 		"Use PUT /shared-secrets/{name} for a shared service secret"
 	secretExplicitOwnerRefusal = "?owner= is not accepted here: this route names its namespace itself, and nobody sets or removes a secret for another person on it"
 )

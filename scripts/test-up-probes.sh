@@ -106,10 +106,10 @@ emit() { printf '%s\n%s' "$1" "$2"; exit 0; }
 
 if [[ "${GATE_LOCAL_MODE}" == "true" ]]; then
   [[ "${GATE_TRUST_FORWARDER}" == "true" ]] \
-    || emit '{"error":"local mode: request peer is not loopback (bind wardynd to 127.0.0.1, set WARDYN_LOCAL_TRUST_FORWARDER when behind a loopback-only publish, or configure auth)"}' 403
+    || emit '{"error":"Local mode: request peer is not loopback (bind wardynd to 127.0.0.1, set WARDYN_LOCAL_TRUST_FORWARDER when behind a loopback-only publish, or configure auth)"}' 403
   case "${host%%:*}" in
     127.0.0.1|localhost|'[::1]'|'::1') ;;
-    *) emit '{"error":"local mode: request Host is not loopback (DNS-rebinding guard)"}' 403 ;;
+    *) emit '{"error":"Local mode: request Host is not loopback (DNS-rebinding guard)"}' 403 ;;
   esac
 elif [[ "${path}" != "/healthz" ]]; then
   # humanOrAdminAuth: /api/v1/** needs a credential when local mode is off.

@@ -94,7 +94,7 @@ func writeLockRefused(w http.ResponseWriter, r *http.Request, err error) {
 	writeErrorReason(w, http.StatusServiceUnavailable, reasonLockUnavailable, lockUnavailableMsg)
 }
 
-const lockUnavailableMsg = "another operation on this resource is in progress, or the server cannot take its lock right now; retry in a moment"
+const lockUnavailableMsg = "Another operation on this resource is in progress, or the server cannot take its lock right now; retry in a moment"
 
 // The per-run operation lock (#1480). Two paths in this daemon act on one run's
 // proxy and broker credentials from a row they read earlier: a revive replaces

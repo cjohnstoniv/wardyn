@@ -98,14 +98,15 @@ func (s *Server) revokeRunnerAndAnswer(w http.ResponseWriter, r *http.Request, i
 	writeJSON(w, http.StatusOK, body)
 }
 
-const msgRunnerRevokeUnavailable = "runner revocation requires the Postgres runner store"
+const msgRunnerRevokeUnavailable = "Runner revocation requires the Postgres runner store"
 
 // msgRunnerRevokeIncomplete is the 500 of a revoke that committed but left a step undone, with what
 // finishes each: recoverAbandonedKillTail for a run that was on the runner, the queue sweep
 // (endQueuedRunsOfRevokedRunners) for one waiting for it.
-const msgRunnerRevokeIncomplete = "runner revoked, but closing its session, ending a run on it or ending a run waiting for it did not complete; " +
+const msgRunnerRevokeIncomplete = "Runner revoked, but closing its session, ending a run on it or ending a run waiting for it did not complete; " +
 	"the kill-tail sweep retries the steps of a run that was on it, and the queue sweep ends a run still waiting for it"
 
+//lint:ignore ST1005 the text is the sentence the refused person reads
 var errRunnerRevokeUnavailable = errors.New(msgRunnerRevokeUnavailable)
 
 // revokeRunner is the whole revoke. The runner is unrouted first, so no new

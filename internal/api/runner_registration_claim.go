@@ -161,11 +161,11 @@ func (s *Server) handleRunnerClaimOrg(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, types.RunnerRegistration{RunnerID: claimed.ID, Fingerprint: claimed.KeyFingerprint, State: claimed.State, OrgURLSHA256: claimed.OrgURLSHA256, Limits: claimed.Limits})
 }
 
-const runnerClaimAlreadyMsg = "this runner has already been claimed"
+const runnerClaimAlreadyMsg = "This runner has already been claimed"
 
 // runnerClaimUnknownMsg answers a claim naming a row that is another person's, absent or swept alike:
 // the 24 hour sweep deletes an unclaimed registration, so the row's owner cannot be told apart.
-const runnerClaimUnknownMsg = "no unclaimed runner of yours has this id; a runner not claimed within 24 hours is removed, so register it again with a new token and a fresh state directory"
+const runnerClaimUnknownMsg = "No unclaimed runner of yours has this id; a runner not claimed within 24 hours is removed, so register it again with a new token and a fresh state directory"
 
 // runnerClaimRefusal says why the owner's own runner row cannot be claimed, or "" when it can. It runs only
 // after the owner matched, so naming the cause tells the owner nothing about anyone else's runner.

@@ -16,7 +16,7 @@ const expectedPrincipalHeader = "X-Wardyn-Expected-Principal"
 // expectedPrincipalMismatch is the operator API sentence for the refusal. None
 // of the existing stale sentences fits every draft (a launch is not a providers
 // document), so there is one generic one.
-const expectedPrincipalMismatch = "this page was opened as a different person than the one now signed in — reload and retry"
+const expectedPrincipalMismatch = "This page was opened as a different person than the one now signed in — reload and retry"
 
 // expectedPrincipalGuard answers 412 before any write when a draft was composed
 // under a different person than the one the shared session cookie now names:

@@ -200,7 +200,7 @@ func finishGovernanceUnitRequest(req governanceUnitRequest) (governanceUnitReque
 }
 
 // passThroughTopLevelMsg refuses a pass-through unit with no parent of its own.
-const passThroughTopLevelMsg = "a top-level unit that adds no limits would pass everything through; give it a parent or its own walls"
+const passThroughTopLevelMsg = "A top-level unit that adds no limits would pass everything through; give it a parent or its own walls"
 
 // parseComposition reads the three composition members. A message is the 400
 // governance_overlay_invalid; the overlay is decoded strictly, so an unknown key is refused rather
@@ -793,7 +793,7 @@ func (s *Server) handleDeleteGovernanceUnit(w http.ResponseWriter, r *http.Reque
 }
 
 // defaultUnitReadonlyMsg is the refusal of a write to the Default unit.
-const defaultUnitReadonlyMsg = "the Default unit is set by WARDYN_DEFAULT_POLICY; change that and redeploy"
+const defaultUnitReadonlyMsg = "The Default unit is set by WARDYN_DEFAULT_POLICY; change that and redeploy"
 
 // defaultUnitWriteRefusal is the 409 for a write to id when id is the Default unit, else nil. Its walls
 // are the deployment default, read at resolve, so no stored write could change them.

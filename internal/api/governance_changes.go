@@ -168,7 +168,7 @@ func sameGovernanceHuman(ch types.GovernanceChange, principal, email string) boo
 // secondApproverSentence is the refusal of a proposer approving their own change. With the switch off a
 // change is held because a unit admin's widening always is, so the sentence names no switch then.
 func secondApproverSentence() string {
-	const rule = "a second human must approve this — you proposed it, so someone else approves it (you may reject it)"
+	const rule = "A second human must approve this — you proposed it, so someone else approves it (you may reject it)"
 	if envEnabled(envGovernanceSecondHuman) {
 		return envGovernanceSecondHuman + " is set: " + rule
 	}

@@ -16,11 +16,11 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/store"
 )
 
-const identityDeactivatedMsg = "this account's access has been removed — sign in again, or ask your Wardyn admin"
+const identityDeactivatedMsg = "This account's access has been removed — sign in again, or ask your Wardyn admin"
 
-const credentialErasedDuringWriteMsg = "this person's stored credentials were erased while this was being saved, so nothing was saved — connect again to store it"
+const credentialErasedDuringWriteMsg = "This person's stored credentials were erased while this was being saved, so nothing was saved — connect again to store it"
 
-const runCapMsg = "this deployment is at its limit of concurrent runs (WARDYN_MAX_CONCURRENT_RUNS) — wait for one to finish, or ask an admin to stop one"
+const runCapMsg = "This deployment is at its limit of concurrent runs (WARDYN_MAX_CONCURRENT_RUNS) — wait for one to finish, or ask an admin to stop one"
 
 // writeServerError is writeError's 5xx twin: it LOGS the underlying error and
 // writes only msg to the caller.

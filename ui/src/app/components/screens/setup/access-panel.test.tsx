@@ -596,7 +596,7 @@ describe("AccessPanel — add mapping error classification", () => {
   // server string (no `.includes`), never conflated with the lockout message.
   it("a stale-snapshot 400 renders STALE_SNAPSHOT_ERROR, distinct from LOCKOUT_ERROR", async () => {
     upsertMappingMock.mockRejectedValue(
-      new HttpError(400, "your sign-in is too old to verify this change — sign in again before changing role mappings"),
+      new HttpError(400, "Your sign-in is too old to verify this change — sign in again before changing role mappings"),
     );
     renderPanel(chartAndConsole);
     await userEvent.type(screen.getByLabelText(PEOPLE.FIELD_VALUE), "*");

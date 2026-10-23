@@ -198,10 +198,10 @@ describe("DesktopViewer", () => {
   });
 
   it("a used link gets the refusal card with the gateway's words", () => {
-    render(<DesktopViewer boot={{ state: "refused", said: "invalid, expired, or already-used attach ticket" }} />);
+    render(<DesktopViewer boot={{ state: "refused", said: "Invalid, expired, or already-used attach ticket" }} />);
     const card = screen.getByRole("region", { name: DESKTOP.linkBlocked });
     for (const s of [DESKTOP.linkRefused, DESKTOP.linkBody, DESKTOP.whyWallBody, DESKTOP.whySetByBody, DESKTOP.whyEnforcedBody, DESKTOP.whyCanChangeBody, DESKTOP.gatewaySaid])
       expect(within(card).getByText(s)).toBeInTheDocument();
-    expect(within(card).getByTestId("desktop-refused-said")).toHaveTextContent("invalid, expired, or already-used attach ticket");
+    expect(within(card).getByTestId("desktop-refused-said")).toHaveTextContent("Invalid, expired, or already-used attach ticket");
   });
 });

@@ -244,7 +244,7 @@ const (
 	// driveDisabledMsg is storage.user_drive.disabled: a 422 in the
 	// REFUSED_BACKEND family and never a 403, because nobody was denied by a
 	// profile — this install offers no drives at all.
-	driveDisabledMsg = "drives are disabled for this deployment"
+	driveDisabledMsg = "Drives are disabled for this deployment"
 	// driveCeilingMsg is storage.user_drive.max_size_mib at the WRITE boundary.
 	// A 422 for decodeUserDriveRequest's own reason: the request is well-formed
 	// and it is the DEPLOYMENT that cannot accept it.
@@ -254,7 +254,7 @@ const (
 	// sentence is this template's {reason} for a run carrying `drive.enabled`, so
 	// it is composed from two constants in this block rather than written out at
 	// the refusal site, and the M2 swap stays a one-file diff.
-	driveRefusedBackendMsg = "this deployment cannot mount your drive (%s)"
+	driveRefusedBackendMsg = "This deployment cannot mount your drive (%s)"
 )
 
 // userDriveProvider is the org's storage.user_drive block — the switch and the

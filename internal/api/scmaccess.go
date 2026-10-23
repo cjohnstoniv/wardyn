@@ -553,14 +553,14 @@ type gitCredentialErrorBody struct {
 // "git_credential" separately, so the prefix double-encoded the same fact.
 // The owner's approval stands in for the mock round; the canon row
 // (docs/design/ado-entra-prompt.md §7.1) and this test change together.
-const gitCredentialNotConnectedRefusal = "you are not connected to Azure DevOps — connect and start the run again"
+const gitCredentialNotConnectedRefusal = "You are not connected to Azure DevOps — connect and start the run again"
 
 // gitCredentialEndedRefusal / gitCredentialConsentRefusal are §7.1's two
 // expired_signin sentences, by cause (scmAccessCauseEnded /
 // scmAccessCauseConsentNeeded) — pinned by the same canon test.
 const (
-	gitCredentialEndedRefusal   = "your Azure DevOps connection ended — connect and start the run again"
-	gitCredentialConsentRefusal = "your Azure DevOps connection doesn't cover the access this run needs — connect and start the run again"
+	gitCredentialEndedRefusal   = "Your Azure DevOps connection ended — connect and start the run again"
+	gitCredentialConsentRefusal = "Your Azure DevOps connection doesn't cover the access this run needs — connect and start the run again"
 )
 
 // gitCredentialOwnPATExpiredRefusal is the approved own-token mock's "Expired"
@@ -571,9 +571,9 @@ const gitCredentialOwnPATExpiredRefusal = "Your runs can't reach Azure DevOps un
 // is someone else's: the organisation's allow list (the mock's "Blocked by
 // your organisation" wording), the admin's consent, or the console's secret.
 const (
-	gitCredentialBlockedRefusal = "your organisation doesn't let you create personal access tokens — ask an " +
+	gitCredentialBlockedRefusal = "Your organisation doesn't let you create personal access tokens — ask an " +
 		"Azure DevOps administrator to add you to the allow list, then start the run again"
-	gitCredentialPermissionsRefusal = "your Azure DevOps sign-in can't create tokens yet — an administrator must " +
+	gitCredentialPermissionsRefusal = "Your Azure DevOps sign-in can't create tokens yet — an administrator must " +
 		"grant the token permissions; then connect and start the run again"
 )
 
@@ -615,7 +615,7 @@ func writeGitCredentialUnreadable(w http.ResponseWriter, r *http.Request, err er
 // gitCredentialNoPersonRefusal answers a DEVICE caller (a laptop's wdd_
 // credential) whose run would need a per-person Azure DevOps credential. Not UI
 // canon: no console renders it, since a device has no console session.
-const gitCredentialNoPersonRefusal = "this run needs a person's own Azure DevOps connection, and a device submitted it with no person — submit it as the person"
+const gitCredentialNoPersonRefusal = "This run needs a person's own Azure DevOps connection, and a device submitted it with no person — submit it as the person"
 
 // gitCredentialRefusalForLauncher is the git_credential launch GATE for a
 // caller with no ResponseWriter — a SERVER-SIDE launcher

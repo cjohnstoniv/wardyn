@@ -450,7 +450,7 @@ describe("ProvidersScreen", () => {
       providers: { git: [{ id: "github", kind: "github", base_urls: ["https://github.com/acme"] }] },
       etag: '"e5"',
     });
-    putWorkspaceProvidersMock.mockRejectedValue(new HttpError(412, "providers changed since you loaded them — reload and retry"));
+    putWorkspaceProvidersMock.mockRejectedValue(new HttpError(412, "Providers changed since you loaded them — reload and retry"));
     renderScreen();
     const row = await screen.findByTestId("provider-row-github");
     await userEvent.type(within(row).getByLabelText(PROVIDERS.FIELD_BASE_URLS), "{Enter}https://git.corp.example/team");
@@ -478,7 +478,7 @@ describe("ProvidersScreen", () => {
       providers: { git: [{ id: "github", kind: "github", base_urls: ["https://github.com/acme"] }] },
       etag: '"e5"',
     });
-    putWorkspaceProvidersMock.mockRejectedValue(new HttpError(412, "providers changed since you loaded them — reload and retry"));
+    putWorkspaceProvidersMock.mockRejectedValue(new HttpError(412, "Providers changed since you loaded them — reload and retry"));
     whoamiMock.mockResolvedValue({ principal: "someone-else" });
     renderScreen();
     await screen.findByTestId("provider-row-github");
@@ -496,7 +496,7 @@ describe("ProvidersScreen", () => {
       providers: { git: [{ id: "github", kind: "github", base_urls: ["https://github.com/acme"] }] },
       etag: '"e5"',
     });
-    putWorkspaceProvidersMock.mockRejectedValue(new HttpError(412, "providers changed since you loaded them — reload and retry"));
+    putWorkspaceProvidersMock.mockRejectedValue(new HttpError(412, "Providers changed since you loaded them — reload and retry"));
     whoamiMock.mockResolvedValue({ principal: "alice" });
     renderScreen();
     await screen.findByTestId("provider-row-github");
@@ -515,7 +515,7 @@ describe("ProvidersScreen", () => {
       providers: { git: [{ id: "github", kind: "github", base_urls: ["https://github.com/acme"] }] },
       etag: '"e5"',
     });
-    putWorkspaceProvidersMock.mockRejectedValue(new HttpError(412, "providers changed since you loaded them — reload and retry"));
+    putWorkspaceProvidersMock.mockRejectedValue(new HttpError(412, "Providers changed since you loaded them — reload and retry"));
     whoamiMock.mockResolvedValue(null);
     renderScreen();
     await screen.findByTestId("provider-row-github");

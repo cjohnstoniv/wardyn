@@ -333,7 +333,7 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
       await route.fulfill({
         status: 412,
         contentType: "application/json",
-        body: JSON.stringify({ error: "providers changed since you loaded them — reload and retry" }),
+        body: JSON.stringify({ error: "Providers changed since you loaded them — reload and retry" }),
       });
     });
     await page.getByRole("button", { name: PROVIDERS.SAVE_CTA }).click();

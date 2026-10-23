@@ -34,7 +34,7 @@ func validateDesktopControls(d *types.DesktopControls) error {
 var errNoPolicyEnvelope = errors.New("the run has no recorded policy envelope")
 
 // desktopRulesUnreadableMsg is the refusal when runDesktopPolicy cannot answer.
-const desktopRulesUnreadableMsg = "this run's desktop rules could not be read. Try again."
+const desktopRulesUnreadableMsg = "This run's desktop rules could not be read. Try again."
 
 // runDesktopPolicy is one read of the run's run.policy.resolve envelope (effectiveUIApps' source):
 // its UI apps and its effective desktop rules, from the same snapshot. A failed read, or a run with

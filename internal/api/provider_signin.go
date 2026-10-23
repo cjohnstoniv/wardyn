@@ -30,21 +30,21 @@ import (
 )
 
 const (
-	mpsNoBlock     = "this install has no model providers yet — ask your admin to add one under Settings → Model providers"
+	mpsNoBlock     = "This install has no model providers yet — ask your admin to add one under Settings → Model providers"
 	mpsTyped       = "%q is connected with your own key or token, not by signing in"
-	mpsOff         = "model provider %q is turned off, so there is nothing to sign in to"
-	mpsNoPortal    = "model provider %q has no AWS access portal or region set — ask your admin to set them before you sign in"
-	mpsAccounts    = "model provider %q serves models in more than one AWS account and pins none — ask your admin to pin the account and role before you sign in"
-	mpsNoImage     = "signing in to Claude needs the Claude Code sign-in image, which this install hasn't built yet. See Operations → Claude sign-in image."
+	mpsOff         = "Model provider %q is turned off, so there is nothing to sign in to"
+	mpsNoPortal    = "Model provider %q has no AWS access portal or region set — ask your admin to set them before you sign in"
+	mpsAccounts    = "Model provider %q serves models in more than one AWS account and pins none — ask your admin to pin the account and role before you sign in"
+	mpsNoImage     = "Signing in to Claude needs the Claude Code sign-in image, which this install hasn't built yet. See Operations → Claude sign-in image."
 	mpsPreview     = "Exit the user view to sign in — the capture would land on your own identity."
 	mpsUnreadable  = "Wardyn couldn't read its model providers just now — nothing was started. Try again in a moment."
-	mpsCaptureBody = `body must be {"run_id":"<your sign-in run>","token":"<the claude setup-token output>"}`
+	mpsCaptureBody = `Body must be {"run_id":"<your sign-in run>","token":"<the claude setup-token output>"}`
 	mpsAWSByHelper = "%q stores your AWS sign-in itself when you finish it in the sign-in sandbox — there is nothing to paste"
-	mpsNotYourRun  = "that is not a Claude sign-in you started for model provider %q — start the sign-in again"
+	mpsNotYourRun  = "That is not a Claude sign-in you started for model provider %q — start the sign-in again"
 	// The upload's refusals for a provider sign-in (handleUploadSSOToken); the
 	// second is the Claude PUT's too.
-	mpsCaptureNotOwner = "this sign-in was started by someone else, so it cannot be stored for you — start the sign-in again"
-	mpsCaptureChanged  = "the model provider this sign-in was for was removed, changed or re-addressed while it was open — start the sign-in again"
+	mpsCaptureNotOwner = "This sign-in was started by someone else, so it cannot be stored for you — start the sign-in again"
+	mpsCaptureChanged  = "The model provider this sign-in was for was removed, changed or re-addressed while it was open — start the sign-in again"
 )
 
 // loginTarget is what a login sandbox signs in for: the access portal, SSO

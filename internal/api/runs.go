@@ -34,13 +34,13 @@ const (
 	// identity already minted, so the compensator has to say WHY the badge reads
 	// FAILED. The driver's own error text is in the 500 body and in the audit
 	// row; this is the one line the console shows under the badge.
-	createRunGrantAbortHint = "the run's credential grants could not be recorded, so it was never started"
+	createRunGrantAbortHint = "The run's credential grants could not be recorded, so it was never started"
 	// createRunComponentsAbortHint is the same for the run's component snapshot.
-	createRunComponentsAbortHint = "the run's components could not be recorded, so it was never started"
+	createRunComponentsAbortHint = "The run's components could not be recorded, so it was never started"
 	// createRunHarnessesAbortHint is the same for the run's harness set.
-	createRunHarnessesAbortHint = "the run's harnesses could not be recorded, so it was never started"
+	createRunHarnessesAbortHint = "The run's harnesses could not be recorded, so it was never started"
 	// createRunKeepAbortHint is the same for the drive keep_work_folder makes.
-	createRunKeepAbortHint = "the drive for the run's work folder could not be made, so it was never started"
+	createRunKeepAbortHint = "The drive for the run's work folder could not be made, so it was never started"
 	// devcontainerNoBuilderWarning is the 201 warning for a devcontainer_repo run
 	// on a deployment with no image builder wired: the build silently fell
 	// through to the convention image, which is a different sandbox from the one
