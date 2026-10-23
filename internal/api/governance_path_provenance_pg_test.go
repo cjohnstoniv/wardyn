@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"maps"
 	"net/http"
+	"reflect"
 	"testing"
 
 	"github.com/google/uuid"
@@ -161,9 +162,30 @@ func TestPathProvenanceGetEqualsCheck(t *testing.T) {
 	}
 }
 
+// TestPathProvenanceDeploymentFillInIsTheDeployments: no unit on pathTree sets resources, so the
+// size Default's root fills in from the deployment stays the deployment's on every unit, Default's
+// own included, on GET /governance and on check.
+func TestPathProvenanceDeploymentFillInIsTheDeployments(t *testing.T) {
+	e := newGovEnvOn(t, throwawayPGPool(t))
+	if reflect.DeepEqual(e.srv.cfg.DefaultPolicy.Resources, e.srv.deploymentAuthority().Ceiling.Resources) {
+		t.Fatalf("the deployment default's resources need no fill-in: the scenario does not fire")
+	}
+	units := unitPathProvenance(t, e)
+	for name, h := range pathHomes(t, e) {
+		for where, path := range map[string]map[string]policyref.Provenance{
+			"GET /governance": units[h.id], "check": checkWallsFor(t, e, h.sub).PathProvenance,
+		} {
+			if got := path["resources"]; got != deploymentProvenance {
+				t.Errorf("%s %s path_provenance[resources] = %+v, want the deployment's", where, name, got)
+			}
+		}
+	}
+}
+
 // TestPathProvenanceAgreesWithProvenance: for every knob of every context, path_provenance names a
 // unit exactly when provenance names the leaf, and the two are equal on every deployment and
-// boundary record.
+// boundary record. The one exception is resources' deployment fill-in, which check's provenance
+// credits to the leaf.
 func TestPathProvenanceAgreesWithProvenance(t *testing.T) {
 	e := newGovEnvOn(t, throwawayPGPool(t))
 	refined := false
@@ -176,6 +198,9 @@ func TestPathProvenanceAgreesWithProvenance(t *testing.T) {
 			path, ok := walls.PathProvenance[knob]
 			leaf := h.leaf != "" && prov == unitRec(h.leaf)
 			switch {
+			case leaf && knob == "resources" && path == deploymentProvenance:
+				// check's leaf-only provenance credits the leaf with the deployment's own size fill-in;
+				// the path keeps it the deployment's (TestPathProvenanceDeploymentFillInIsTheDeployments).
 			case !ok:
 				t.Errorf("%s: path_provenance has no %s", name, knob)
 			case leaf != (path.Layer == policyref.LayerUnit):

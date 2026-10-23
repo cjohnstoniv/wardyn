@@ -274,11 +274,13 @@ func (s *Server) composeChain(chain []types.GovernanceUnit) (*ResolvedUnit, erro
 		}
 		next = root - 1
 	}
-	// The path's provenance, step by step from the deployment default check compares against: the
-	// root's own walls (a filled-in size for Default) are the root's, each step's changes its unit's.
+	// The path's provenance, step by step from the deployment's walls with its own size filled in:
+	// that fill-in is the deployment's (Default's root changes nothing), a standalone root's own walls
+	// are the root's, and each step's changes are its unit's.
+	deployment := s.deploymentAuthority().Ceiling
 	last := policyref.Provenance{Layer: policyref.LayerUnit, Name: chain[root].Name}
 	out.PathProvenance = startProvenance(deploymentProvenance)
-	out.PathProvenance.setBy(last, s.cfg.DefaultPolicy, base.Ceiling)
+	out.PathProvenance.setBy(last, deployment, base.Ceiling)
 	for i := next; i >= 0; i-- {
 		if chain[i].Mode == types.UnitModePassThrough {
 			continue // its parent's walls exactly: the step is the identity
@@ -294,9 +296,8 @@ func (s *Server) composeChain(chain []types.GovernanceUnit) (*ResolvedUnit, erro
 	out.Ceiling, out.Limits = base.Ceiling, base.Limits
 	if out.Composed {
 		out.Ceiling.Resources = s.inheritDeploymentResources(out.Ceiling.Resources)
-		out.PathProvenance.setBy(last, base.Ceiling, out.Ceiling)
 	}
-	out.PathProvenance.resetUnchanged(deploymentProvenance, s.cfg.DefaultPolicy, out.Ceiling)
+	out.PathProvenance.resetUnchanged(deploymentProvenance, deployment, out.Ceiling)
 	return out, nil
 }
 
