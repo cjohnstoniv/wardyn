@@ -300,6 +300,9 @@ crash or a usage limit resumes with the same command:
      [`scripts/test-claims-match-code.sh`](scripts/test-claims-match-code.sh) to the first migration number this
      release does not ship, and keep this release's `Split-role installs` bullet in its own section; the next release
      starts a new bullet.
+   - **At the first final release of a new minor, move the older minors out.** Cut every `## [X.Y.Z]` section of the
+     previous minor from `CHANGELOG.md` into `docs/releases/<minor>.md` (see [0.8.md](docs/releases/0.8.md)), unchanged and newest first,
+     and link the new file from the CHANGELOG header. `TestChangelogReleasedSectionsAreFrozen` checks both places against the tags.
    - **Then put a fresh, empty `## [Unreleased]` heading back above the new section.**
      - `make release-check` hard-fails if `CHANGELOG.md` has no `## [Unreleased]` (`grep -q "## \[Unreleased\]" CHANGELOG.md || exit 1`), so renaming it away and not restoring it leaves the gate red for the *next* release —
        - which is a confusing failure to debug from the tag commit backwards.
