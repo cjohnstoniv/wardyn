@@ -1553,6 +1553,34 @@ jobs:
           path: test/reports/e2e/
           if-no-files-found: error
 
+  # Each k6 leg's failure rate over the last 30 scheduled nightlies, from the job history (#3538), in
+  # this run's summary. A failed leg costs a full rerun, so a leg that keeps failing shows as a number.
+  # It reads history, so it needs no `needs:` (this run is not counted until it completes), and it
+  # must not turn the nightly red, so a gh error is not a failure. actions: read is all it asks for.
+  k6-rerun-rate:
+    if: inputs.scope != 'candidate'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    permissions:
+      contents: read # checkout
+      actions: read # gh run list / gh run view
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Write each k6 leg's failure rate to the job summary
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### k6-kind-conformance: failure rate per leg, last 30 scheduled nightlies"
+            echo
+            ./scripts/k6-rerun-rate.sh 30
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # The acceptance walks that had no caller (#3110): kind-components-walk (a header secret absent from
   # the sandbox's environment and files, a file secret 0440 root:fsGroup, the audit rows, and the docker
   # half of the file-mode proof) and kind-run-output-walk in both modes (a run's output surviving a
