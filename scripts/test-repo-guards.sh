@@ -618,24 +618,45 @@ else
     # The build STEP decides what a digest is, so it is compared too: a staged
     # image equals a release.yml build only if context, file, platforms,
     # provenance and build-args agree, and neither side carries a target,
-    # cache-from, cache-to or any other key the other lacks. nightly's `build-contexts`
-# (the Go module seed, guard 27) is the one allowed difference: it only feeds
-# `go mod download`, which go.sum verifies, so it cannot change the image.
+    # cache-from, cache-to or any other key the other lacks. The one allowed
+    # difference is buildx-smoke's `build-contexts`, and only at its exact value (the Go
+    # module seed, guard 27): it feeds `go mod download`, which go.sum verifies, so it cannot
+    # change the image. Any other context could replace a stage (`ui=docker-image://...`), so a
+    # different value, or a context on any other pair, is a difference like any other key.
     bps='.steps[] | select((.uses // "") | test("^docker/build-push-action@"))'
-    with_norm="$bps | .with | del(.push) | del(.tags) | del(.labels) | del(.[\"build-contexts\"]) | .[\"build-args\"] |= (. // \"\" | sub(\"\\n+\$\"; \"\")) | sort_keys(.)"
-    for pair in "images buildx-smoke" "images-ui-sandbox buildx-smoke-ui-sandbox" "images-ui-sandbox-signin buildx-smoke-ui-sandbox-signin"; do
-        set -- $pair
-        rel_job="$1"; ngt_job="$2"
-        for jf in "$rel_job $REL" "$ngt_job $NIGHTLY"; do
-            set -- $jf
-            [ "$(yq -r ".jobs[\"$1\"] | [$bps] | length" "$2")" = 1 ] \
-                || { bad "$2: job '$1' must have exactly one docker/build-push-action step — guard 16 cannot compare the build step"; stage_fail=1; }
+    export WANT_CTX="\${{ matrix.gomod == 'true' && format('gomodcache={0}', steps.gomod.outputs.dir) || '' }}"
+    # staged_build_step_problems <release.yml> <nightly.yml>: one line per staged build step that differs.
+    staged_build_step_problems() {
+        local rel="$1" ngt="$2" pair rel_job ngt_job jf rel_with ngt_with ctx_del
+        for pair in "images buildx-smoke" "images-ui-sandbox buildx-smoke-ui-sandbox" "images-ui-sandbox-signin buildx-smoke-ui-sandbox-signin"; do
+            set -- $pair
+            rel_job="$1"; ngt_job="$2"
+            for jf in "$rel_job $rel" "$ngt_job $ngt"; do
+                set -- $jf
+                [ "$(yq -r ".jobs[\"$1\"] | [$bps] | length" "$2")" = 1 ] \
+                    || echo "$2: job '$1' must have exactly one docker/build-push-action step — guard 16 cannot compare the build step"
+            done
+            ctx_del=""
+            [ "$ngt_job" = buildx-smoke ] && ctx_del='| with(select(.["build-contexts"] == strenv(WANT_CTX)); del(.["build-contexts"]))'
+            rel_with="$(yq -o=json -I=0 ".jobs[\"$rel_job\"] | $bps | .with | del(.push) | del(.tags) | del(.labels) | .[\"build-args\"] |= (. // \"\" | sub(\"\\n+\$\"; \"\")) | sort_keys(.)" "$rel")"
+            ngt_with="$(yq -o=json -I=0 ".jobs[\"$ngt_job\"] | $bps | .with | del(.push) | del(.tags) | del(.labels) $ctx_del | .[\"build-args\"] |= (. // \"\" | sub(\"\\n+\$\"; \"\")) | sort_keys(.)" "$ngt")"
+            [ "$rel_with" = "$ngt_with" ] \
+                || echo "$ngt: $ngt_job's build step differs from $rel's $rel_job (push, tags and labels aside) — release: $rel_with vs nightly: $ngt_with. A staged digest must be built exactly as release.yml builds it: same platforms and provenance, no target or cache, and no build context but buildx-smoke's gomodcache seed."
         done
-        rel_with="$(yq -o=json -I=0 ".jobs[\"$rel_job\"] | $with_norm" "$REL")"
-        ngt_with="$(yq -o=json -I=0 ".jobs[\"$ngt_job\"] | $with_norm" "$NIGHTLY")"
-        [ "$rel_with" = "$ngt_with" ] \
-            || { bad "$NIGHTLY: $ngt_job's build step differs from $REL's $rel_job (push, tags and labels aside) — release: $rel_with vs nightly: $ngt_with. A staged digest must be built exactly as release.yml builds it: same platforms and provenance, no target or cache."; stage_fail=1; }
+    }
+    while IFS= read -r line; do
+        [ -n "$line" ] && { bad "$line"; stage_fail=1; }
+    done <<<"$(staged_build_step_problems "$REL" "$NIGHTLY")"
+    # The comparison must catch what it exists for: an extra context on the seeded step, a context on a ui-sandbox step.
+    mut_dir="$(mktemp -d)"
+    for mut in 'buildx-smoke|.jobs["buildx-smoke"].steps[] |= (select((.uses // "") | test("^docker/build-push-action@")).with["build-contexts"] += "\nui=docker-image://evil:latest")' \
+               'buildx-smoke|.jobs["buildx-smoke"].steps[] |= (select((.uses // "") | test("^docker/build-push-action@")).with["build-contexts"] = "ui=docker-image://evil:latest")' \
+               'buildx-smoke-ui-sandbox|.jobs["buildx-smoke-ui-sandbox"].steps[] |= (select((.uses // "") | test("^docker/build-push-action@")).with["build-contexts"] = "gomodcache=/x")'; do
+        yq "${mut#*|}" "$NIGHTLY" >"$mut_dir/nightly.yml"
+        [ -n "$(staged_build_step_problems "$REL" "$mut_dir/nightly.yml")" ] \
+            || { bad "guard 16 self-test: a planted build context on ${mut%%|*} went unnoticed (${mut#*|})"; stage_fail=1; }
     done
+    rm -rf "$mut_dir"
     want_args='${{ matrix.build-args }}'
     got_args="$(yq -r ".jobs[\"buildx-smoke\"] | $bps | .with[\"build-args\"]" "$NIGHTLY")"
     [ "$got_args" = "$want_args" ] \
@@ -958,7 +979,7 @@ gm_fail=0
 gm_bps='.steps[] | select((.uses // "") | test("^docker/build-push-action@"))'
 gm_ctx="$(yq -r ".jobs[\"buildx-smoke\"] | $gm_bps | .with[\"build-contexts\"] // \"\"" "$NIGHTLY")"
 case "$gm_ctx" in
-    *"gomodcache={0}"*"steps.gomod.outputs.dir"*) ;;
+    "$WANT_CTX") ;;
     *) bad "$NIGHTLY: buildx-smoke's build step does not pass the filled Go module cache as 'gomodcache=' build-contexts (got '$gm_ctx') — each image build would fetch every module from the proxy (#3469)"; gm_fail=1 ;;
 esac
 gm_fill="$(yq -r '.jobs["buildx-smoke"].steps[] | select(.id == "gomod") | .run' "$NIGHTLY")"
