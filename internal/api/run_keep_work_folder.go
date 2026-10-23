@@ -240,6 +240,21 @@ func (s *Server) dropUnstartedKeptDrive(ctx context.Context, runID uuid.UUID) {
 	}
 }
 
+// keptRunEnded reports whether runID, the run a kept drive was kept from, has ended or is gone. Until then
+// the drive is that run's alone: it is not offered to another run (memberReachableDrives). A run that cannot
+// be read counts as not ended, so the drive stays out of reach rather than into it.
+func (s *Server) keptRunEnded(ctx context.Context, runID uuid.UUID) bool {
+	run, err := s.cfg.Store.GetRun(ctx, runID)
+	if errors.Is(err, store.ErrNotFound) {
+		return true
+	}
+	if err != nil {
+		slog.WarnContext(ctx, "api: read the run a kept drive was kept from", slog.String("run_id", runID.String()), slog.Any("err", err))
+		return false
+	}
+	return run.State.IsTerminal()
+}
+
 // keptWorkFolderMount is the mount of the drive run keeps its work folder in,
 // read under the run's person, and that drive's id and owner for dispatch's
 // re-read (memberDrivesStillThere). A drive that cannot be read fails the run

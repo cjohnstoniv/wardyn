@@ -7,9 +7,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -127,6 +131,15 @@ func TestPG_KeepRunThatNeverStartsLeavesTheDriveAnotherRunHolds(t *testing.T) {
 			if !e.keptDriveExists(run) {
 				t.Errorf("the kept drive was deleted while another run holds it")
 			}
+			// A refusal leaves no tombstone behind: a drive marked for delete is gone from every run's reach.
+			var tombstoned bool
+			if err := e.poolEnv.pool.QueryRow(context.Background(),
+				`SELECT delete_started_at IS NOT NULL FROM user_drives WHERE id = $1`, keptWorkFolderDriveID(run.ID)).Scan(&tombstoned); err != nil {
+				t.Fatal(err)
+			}
+			if tombstoned {
+				t.Errorf("the refused drop left delete_started_at set on the kept drive")
+			}
 			var rows []map[string]any
 			for _, ev := range e.h.audit.snapshot() {
 				if ev.Action != "drive.member.delete" {
@@ -170,5 +183,50 @@ func TestPG_KeepRunThatStartedKeepsItsDrive(t *testing.T) {
 	}
 	if !e.keptDriveExists(started) {
 		t.Errorf("a run that started lost its kept drive when it ended")
+	}
+}
+
+// A kept work folder belongs to the run it was kept from until that run has ended: another run of the person
+// asking for it is refused as for a drive that is not there (drive_not_found), and once the run has ended it is
+// offered. Otherwise a run could write to it and end, and then the drop of a queued run that never started would
+// delete that work.
+func TestPG_KeptDriveIsOfferedOnlyOnceItsRunHasEnded(t *testing.T) {
+	e := newQueueEnv(t)
+	ctx := context.Background()
+	e.srv.cfg.RunnerTarget = "docker"
+	e.srv.cfg.Runner = &keepPoolRunner{e.runner}
+	site, err := e.pg.GetSiteConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	site.WorkspaceProviders = keepSite(true, true, 3, 0).WorkspaceProviders
+	if _, err := e.pg.PutSiteConfig(ctx, site); err != nil {
+		t.Fatal(err)
+	}
+	pool := e.cappedPool("Shared", 1)
+	occupant := e.occupy(pool)
+	waiting := e.queuedLaunch(e.person, e.reread(pool), `,"keep_work_folder":true`)
+	ask := func() *httptest.ResponseRecorder {
+		body := strings.Replace(endBody("background", `"runner_pool_id":"`+pool.ID.String()+`"`),
+			`"no_repositories_or_drives":true`, fmt.Sprintf(`"drives":[{"drive_id":%q}]`, keptWorkFolderDriveID(waiting.ID)), 1)
+		return e.call(e.person, http.MethodPost, "/api/v1/runs", body)
+	}
+	refused := func(when string) {
+		t.Helper()
+		if w := ask(); w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), string(authz.ReasonDriveNotFound)) {
+			t.Fatalf("asking for the kept drive %s = %d %s, want 422 drive_not_found", when, w.Code, w.Body)
+		}
+	}
+	refused("while its run is queued")
+	e.free(occupant)
+	e.sweep()
+	started := e.waitStarted(waiting.ID)
+	refused("while its run is running")
+	if w := e.admin(http.MethodPost, "/api/v1/runs/"+started.ID.String()+"/kill", ""); w.Code != http.StatusAccepted {
+		t.Fatalf("kill = %d %s, want 202", w.Code, w.Body)
+	}
+	e.eventually("the kept run to end", func() bool { return e.run(started.ID).State.IsTerminal() })
+	if w := ask(); w.Code != http.StatusCreated {
+		t.Errorf("asking for the kept drive after its run ended = %d %s, want 201", w.Code, w.Body)
 	}
 }

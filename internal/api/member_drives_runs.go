@@ -26,7 +26,10 @@ import (
 // memberReachableDrives appends the caller's own member drives to out: matched
 // on the exact sign-in subject (never the email), each resolved through an
 // in-memory user-tier grant to its owner, so its home and object are the ones
-// delete reclaims. A drive being deleted is left out. None is legacy. A
+// delete reclaims. A drive being deleted is left out, and so is a kept work
+// folder (keep_work_folder) until the run it was kept from has ended: the drop of
+// a run that never started deletes its drive, and a run that attached it in the
+// meantime would lose what it wrote. None is legacy. A
 // caller whose runs are created as someone else (a device, a service identity)
 // reaches none, since dispatch re-reads each drive under the run's creator.
 func (s *Server) memberReachableDrives(ctx context.Context, out []reachableDrive, ceiling driveSizeCeiling) ([]reachableDrive, error) {
@@ -40,7 +43,7 @@ func (s *Server) memberReachableDrives(ctx context.Context, out []reachableDrive
 		return nil, fmt.Errorf("api: list member drives: %w", err)
 	}
 	for _, d := range drives {
-		if d.OwnerSubject != owner || d.DeleteStartedAt != nil {
+		if d.OwnerSubject != owner || d.DeleteStartedAt != nil || (d.KeptFromRun != nil && !s.keptRunEnded(ctx, *d.KeptFromRun)) {
 			continue
 		}
 		r := reachableDrive{owned: true, winner: store.UserDriveWinner{Drive: d, Grant: types.UserDriveGrant{
