@@ -369,16 +369,16 @@ export function AdminSettingsScreen() {
     if (refused) return;
     load();
   }, [load, refused]);
-  // #3342: the shell's no-barrier Re-check re-reads the setup status; when that answer lands, this screen reads
-  // again too, so the Host card never keeps saying "Can't launch" after the barrier came up. The first value is
-  // the one the screen mounted with and is the load above's to cover.
+  // #3342: the shell re-reads /setup/status (its Re-check, its 5-minute poll) and this screen takes THAT answer, so
+  // the Host card never keeps saying "Can't launch" after the barrier came up, and nothing here asks the expensive
+  // endpoint a second time. The first value is the one the screen mounted with and is the load above's to cover.
   const { status: shellStatus } = useShellSetupStatus();
   const seenShellStatus = React.useRef(shellStatus);
   React.useEffect(() => {
     if (seenShellStatus.current === shellStatus) return;
     seenShellStatus.current = shellStatus;
-    if (!refused && shellStatus && !shellStatus.unreachable) load();
-  }, [shellStatus, load, refused]);
+    if (!refused && shellStatus && !shellStatus.unreachable) setStatus(shellStatus);
+  }, [shellStatus, refused]);
 
   if (refused) {
     return <RoleRefusal copy={SETTINGS_SUPER_ONLY} cta={() => navigate("/admin/runs")} />;

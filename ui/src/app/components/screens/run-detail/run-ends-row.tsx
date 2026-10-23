@@ -62,6 +62,16 @@ export function keptUntilText(iso: string, now: number = Date.now()): string {
 
 const PILL = "h-6 gap-1 rounded-full px-2.5 text-xs font-normal";
 const ITEM = "flex-col items-start gap-0.5";
+const LOCKED = "opacity-70";
+
+/** The sentence a locked control's menu opens with: why it can't be changed. */
+function Why({ text }: { text: string }) {
+  return (
+    <DropdownMenuLabel data-testid="lock-reason" className="max-w-[28ch] whitespace-normal text-meta font-normal text-muted-foreground">
+      {text}
+    </DropdownMenuLabel>
+  );
+}
 
 /** A menu item with its explanation under it. */
 function Item({ label, hint, current, onSelect }: { label: string; hint?: string; current?: boolean; onSelect?: () => void }) {
@@ -118,6 +128,8 @@ export function RunEndsControls({ run, onChanged }: { run: RunDetail; onChanged:
   // #2112: a run with a lifetime cap is never given No end (run_end_wait.go planEnd refuses it for an operator
   // too), so the choice is not offered rather than refused after the click.
   const allowNoEnd = canAct && !run.lifetime_cap_at && (operator || !!limits?.allow_no_end);
+  // Locked by an admin: the viewer may act on the run, but the run's captured limits keep its end and wait fixed.
+  const locked = canAct && !mayChange;
   const maxDays = limits?.max_end_ahead_sec ? Math.ceil(limits.max_end_ahead_sec / (24 * 3600)) : undefined;
 
   const applyEndsAt = async (endsAt: string | null) => {
@@ -172,11 +184,13 @@ export function RunEndsControls({ run, onChanged }: { run: RunDetail; onChanged:
         canAct ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button data-testid="run-ends-pill" variant="outline" size="sm" className={PILL} disabled={busy}>
+              <Button data-testid="run-ends-pill" variant="outline" size="sm" className={cn(PILL, locked && LOCKED)} disabled={busy}>
                 {pill(RL.endsPill(weekdayClock(run.ends_at)))}
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start">
+              {/* R6-Run-Sheet: a locked run keeps its controls, greyed, and the menu says why. */}
+              {locked && maxDays && <Why text={RL.endsLocked(maxDays)} />}
               <Item label={RL.ENDS_EXTEND_1_DAY} onSelect={() => extendBy(DAY_MS)} />
               <Item label={RL.ENDS_EXTEND_1_WEEK} onSelect={() => extendBy(WEEK_MS)} />
               {/* F12 (PR #1317 round-2 review): with no captured cap, "as
@@ -196,7 +210,7 @@ export function RunEndsControls({ run, onChanged }: { run: RunDetail; onChanged:
         // change it — so the menu always opens, with No end checked, and Set an end… only where it is allowed.
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button data-testid="run-ends-pill" variant="outline" size="sm" className={PILL} disabled={busy}>
+            <Button data-testid="run-ends-pill" variant="outline" size="sm" className={cn(PILL, locked && LOCKED)} disabled={busy}>
               {pill(RL.ENDS_PILL_NEVER)}
             </Button>
           </DropdownMenuTrigger>
@@ -206,30 +220,32 @@ export function RunEndsControls({ run, onChanged }: { run: RunDetail; onChanged:
           </DropdownMenuContent>
         </DropdownMenu>
       )}
-      {!mayChange && run.ends_at && maxDays && <span className="text-xs text-muted-foreground">{RL.endsLocked(maxDays)}</span>}
 
       {typeof wait === "number" &&
-        (mayChange ? (
+        (canAct ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button data-testid="run-waits-pill" variant="outline" size="sm" className={PILL} disabled={busy}>
+              <Button data-testid="run-waits-pill" variant="outline" size="sm" className={cn(PILL, locked && LOCKED)} disabled={busy}>
                 {pill(RL.waitsPill(wait))}
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start">
-              <DropdownMenuLabel className="text-meta font-normal text-muted-foreground">{RL.WAIT_LABEL}</DropdownMenuLabel>
-              {[1, 4, 8, 24].map((h) => (
-                <Item key={h} label={RL.waitValueHours(h)} current={wait === h * 3600} onSelect={() => void setWaitHours(h)} />
-              ))}
+              {locked ? (
+                <Why text={RL.waitLocked(wait)} />
+              ) : (
+                <>
+                  <DropdownMenuLabel className="text-meta font-normal text-muted-foreground">{RL.WAIT_LABEL}</DropdownMenuLabel>
+                  {[1, 4, 8, 24].map((h) => (
+                    <Item key={h} label={RL.waitValueHours(h)} current={wait === h * 3600} onSelect={() => void setWaitHours(h)} />
+                  ))}
+                </>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         ) : (
-          <>
-            <span data-testid="run-waits-pill" className={cn("inline-flex items-center rounded-full border border-border text-muted-foreground opacity-70", PILL)}>
-              {RL.waitsPill(wait)}
-            </span>
-            <span className="text-xs text-muted-foreground">{RL.waitLocked(wait)}</span>
-          </>
+          <span data-testid="run-waits-pill" className={cn("inline-flex items-center rounded-full border border-border text-muted-foreground", PILL)}>
+            {RL.waitsPill(wait)}
+          </span>
         ))}
 
       <ChangeEndDialog

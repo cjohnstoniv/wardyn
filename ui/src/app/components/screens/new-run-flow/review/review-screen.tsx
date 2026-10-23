@@ -7,10 +7,9 @@
 // ordered blocker list, and Launch only on a current, fresh, clean check.
 
 import * as React from "react";
-import { MoreHorizontal } from "lucide-react";
+import { Check, CircleAlert, MoreHorizontal } from "lucide-react";
 import { Button } from "../../../ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../../ui/dropdown-menu";
-import { Chip } from "../../../wardyn/primitives";
 import { StepSection } from "../../../wardyn/step-section";
 import { Segmented } from "../../../wardyn/segmented";
 import { NR_FILES } from "../../../wardyn/copy/new-run/files";
@@ -73,6 +72,25 @@ function setupTitle(intent: ReturnType<typeof useNewRunDraft>["intent"]): string
   if (intent.shape === "environment") return NR_REVIEW.SETUP_ENVIRONMENT;
   if (intent.shape !== "agent_task") return undefined;
   return intent.experience === "background" ? NR_REVIEW.SETUP_AGENT_AUTONOMOUS : NR_REVIEW.SETUP_AGENT_INTERACTIVE;
+}
+
+const MARK_TONE = {
+  danger: "border-danger/25 bg-danger-subtle text-danger",
+  warning: "border-warning/30 bg-warning-subtle text-warning",
+  success: "border-success/35 bg-success-subtle text-success",
+} as const;
+
+/** The status mark the group rows draw, with its word beside it: a mark, never a pill (the StepSection marker rule). */
+function SetupMark({ tone }: { tone: keyof typeof MARK_TONE }) {
+  const Icon = tone === "success" ? Check : CircleAlert;
+  return (
+    <span data-testid="review-status-mark" data-tone={tone} className="inline-flex items-center gap-1.5">
+      <span aria-hidden="true" className={`grid size-[22px] place-items-center rounded-full border ${MARK_TONE[tone]}`}>
+        <Icon className="size-3" />
+      </span>
+      {tone === "danger" ? NR_REVIEW.BADGE_ATTENTION : tone === "warning" ? NR_REVIEW.BADGE_CHECK : NR_REVIEW.BADGE_COMPLETE}
+    </span>
+  );
 }
 
 export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScreenProps) {
@@ -202,11 +220,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
           <StepSection
             title={NR_REVIEW.SETUP_TITLE}
             description={setupTitle(draft.intent)}
-            marker={
-              <Chip tone={hard.length ? "danger" : blockers.length ? "warning" : "success"}>
-                {hard.length ? NR_REVIEW.BADGE_ATTENTION : blockers.length ? NR_REVIEW.BADGE_CHECK : NR_REVIEW.BADGE_COMPLETE}
-              </Chip>
-            }
+            marker={<SetupMark tone={hard.length ? "danger" : blockers.length ? "warning" : "success"} />}
             className="overflow-hidden"
             bodyClassName="p-0"
           >

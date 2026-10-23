@@ -306,7 +306,11 @@ describe("Review sections", () => {
     expect(isStepSectionHeading(heading)).toBe(true);
     const card = heading.closest("section") as HTMLElement;
     expect(card.querySelectorAll("[data-review-group]").length).toBeGreaterThan(1);
-    expect(within(card).getAllByText(new RegExp(`^(${NR_REVIEW.BADGE_COMPLETE}|${NR_REVIEW.BADGE_ATTENTION}|${NR_REVIEW.BADGE_CHECK})$`))).toHaveLength(1);
+    // The marker is a status mark like the group rows draw, with its word beside it: never a pill.
+    const mark = within(card).getByTestId("review-status-mark");
+    expect(mark).toHaveTextContent(new RegExp(`^(${NR_REVIEW.BADGE_COMPLETE}|${NR_REVIEW.BADGE_ATTENTION}|${NR_REVIEW.BADGE_CHECK})$`));
+    expect(mark.className).not.toMatch(/rounded-(full|md)|border|bg-/);
+    expect(mark.querySelector("svg")).not.toBeNull();
   });
 });
 
@@ -394,7 +398,7 @@ describe("Review blockers", () => {
     // #3043: nothing specific is to blame, so the chip and the card are amber, every group keeps its tick.
     expect(screen.getByText("Check needed")).toBeInTheDocument();
     expect(screen.queryByText(NR_REVIEW.BADGE_ATTENTION)).toBeNull();
-    expect(screen.getByText("Check needed").className).toContain("warning");
+    expect(screen.getByTestId("review-status-mark")).toHaveAttribute("data-tone", "warning");
     expect(blockerList().className).toContain("warning");
     expect(document.querySelector("[data-review-group][data-blocked]")).toBeNull();
   });
@@ -404,7 +408,8 @@ describe("Review blockers", () => {
     open(AGENT);
     await ready();
     await waitFor(() => expect(within(blockerList()).getAllByRole("listitem")).toHaveLength(1));
-    expect(screen.getByText(NR_REVIEW.BADGE_ATTENTION, { selector: "span.inline-flex" }).className).toContain("danger");
+    expect(screen.getByTestId("review-status-mark")).toHaveAttribute("data-tone", "danger");
+    expect(screen.getByTestId("review-status-mark")).toHaveTextContent(NR_REVIEW.BADGE_ATTENTION);
     expect(screen.queryByText("Check needed")).toBeNull();
     expect(within(blockerList()).queryByRole("button", { name: NR_REVIEW.CHECK_AGAIN })).toBeNull();
     expect(blockerList().className).toContain("danger");

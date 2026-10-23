@@ -282,7 +282,7 @@ test.describe("Approvals screen", () => {
     await expect(page.getByText("Denied", { exact: true }).first()).toHaveClass(/text-danger/);
 
     // #3036: a decided row names its run through RunRef (title, then the short id that copies), never the bare id link.
-    const ref = page.getByTestId("run-ref").first();
+    const ref = page.getByTestId("run-ref").filter({ has: page.locator(`button[title^="${anyRunId()}"]`) }).first();
     await expect(ref).toContainText(anyRunId().replace(/^run_/, "").slice(0, 8));
     await expect(ref.getByRole("button", { name: /^[0-9a-f]{8}/ })).toHaveAttribute("title", new RegExp(RUN_REF.CLICK_TO_COPY));
 
