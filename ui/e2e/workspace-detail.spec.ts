@@ -81,9 +81,14 @@ test.describe("Workspace detail — Recorded sessions, never recorded (#3042)", 
     await expect(page.getByText(WORKSPACE_DETAIL_EXTRA.SESSIONS_START_HELP)).toBeVisible();
     // Gone: the chip, the paragraph, "Never recorded ...", and the helper's replay sentence.
     await expect(page.getByText("Recommended · skippable")).toHaveCount(0);
-    await expect(page.getByText(/replay it confined/i)).toHaveCount(0);
-    await expect(page.getByText(/Never recorded/)).toHaveCount(0);
-    await expect(page.getByText(/once it settles/)).toHaveCount(0);
+    // Scoped to the Record pane: the card description above it says "Replay it confined" once, on purpose.
+    const pane = page.locator("fieldset").filter({ has: page.getByTestId("record-new-session") });
+    await expect(pane).toBeVisible();
+    await expect(pane.getByText(/Record a session for anything this workspace needs to do/)).toHaveCount(0);
+    await expect(pane.getByText(/replay it confined/i)).toHaveCount(0);
+    await expect(pane.getByText(/blocked live/)).toHaveCount(0);
+    await expect(pane.getByText(/Never recorded/)).toHaveCount(0);
+    await expect(pane.getByText(/once it settles/)).toHaveCount(0);
   });
 });
 
