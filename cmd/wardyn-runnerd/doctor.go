@@ -199,7 +199,9 @@ func statusStage(path string) doctor.Stage {
 		last = fmt.Sprintf("; last error at %s: %s", st.LastErrorAt.UTC().Format(time.RFC3339), st.LastError)
 	}
 	since := st.Since.UTC().Format(time.RFC3339)
-	if st.State == "connected" || (st.LastError == "" && st.State != "offline") {
+	// A failure is a runner that is not connected and either stopped at a stage or is offline. An error left
+	// from an earlier drop, on a runner that has since started or stopped cleanly, is history.
+	if st.State == "connected" || (st.Stage == "" && st.State != "offline") {
 		return doctor.OKStage("status", fmt.Sprintf("%s since %s%s", st.State, since, last))
 	}
 	set := statusSetting[st.Stage]

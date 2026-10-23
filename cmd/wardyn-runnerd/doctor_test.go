@@ -85,7 +85,9 @@ func (r *doctorRig) installUnit(t *testing.T) {
 
 func (r *doctorRig) run(o doctorOptions) doctor.Report {
 	h := setupHost{goos: "linux", home: r.home, dockerHost: "unix:///var/run/docker.sock",
-		run: func(context.Context, string, ...string) ([]byte, error) { return []byte(r.systemd + "\n"), r.systemdErr },
+		run: func(context.Context, string, ...string) ([]byte, error) {
+			return []byte(r.systemd + "\n"), r.systemdErr
+		},
 		inspect: func(context.Context, relayPair) (dockerEngine, error) {
 			if r.engineErr != nil {
 				return dockerEngine{}, r.engineErr

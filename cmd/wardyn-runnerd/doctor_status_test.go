@@ -110,6 +110,24 @@ func TestStatusStageConnectedReportsAnOldErrorWithoutFailing(t *testing.T) {
 	}
 }
 
+// TestStatusStageStoppedOrStartingAfterAnOldDropIsNotAFailure: linkChanged keeps the last error across a
+// reconnect and a clean shutdown records no stage, so a runner that dropped once and later stopped cleanly
+// (or is starting again) must not be told to change its organisation address.
+func TestStatusStageStoppedOrStartingAfterAnOldDropIsNotAFailure(t *testing.T) {
+	for _, state := range []string{"stopped", "starting"} {
+		t.Run(state, func(t *testing.T) {
+			r := newRig(t)
+			st := offlineAt("", "link down")
+			st.State = state
+			r.writeStatus(t, "", st)
+			s := stage(t, r.run(doctorOptions{}), "status")
+			if s.Status == doctor.StatusFail || s.Setting != "" || !strings.Contains(s.Detail, "link down") {
+				t.Errorf("status = %s setting %q %q, want a non-failure that still carries the old error", s.Status, s.Setting, s.Detail)
+			}
+		})
+	}
+}
+
 func TestStatusStageCorruptFileNamesTheStateDir(t *testing.T) {
 	r := newRig(t)
 	dir := filepath.Join(r.home, ".config", "wardyn", "runner")

@@ -160,29 +160,16 @@ wait`
 
 // closedOffBound is how long a held connection may outlive a teardown that has returned. A driver that
 // waits for the pods to be gone has the kubelet's word that every container stopped, so this is only the
-// beat the exec stream takes to notice. A driver that returns on a zero-grace delete leaves the
-// containers running for the kubelet's own minimum grace (2 s) after the pod object is gone.
+// beat the exec stream takes to notice.
 const closedOffBound = 500 * time.Millisecond
 
-// leakyTeardown is the negative control: a driver whose Stop and Kill delete the run's pods with zero grace
-// and return at once, without waiting for them to be gone. closedOff must fail it, or it proves nothing.
-type leakyTeardown struct {
-	runner.Runner
-	cs kubernetes.Interface
-	ns string
-}
+// leakyTeardown is the negative control: a driver whose Stop and Kill return at once and delete nothing.
+// closedOffAfter must report both an open pod and an open connection for it, or it proves nothing. The
+// real runner's Kill, in the case's cleanup, removes what it leaves. No kubelet timing is involved.
+type leakyTeardown struct{ runner.Runner }
 
-func (l leakyTeardown) KillSandbox(ctx context.Context, ref string) error { return l.drop(ctx, ref) }
-func (l leakyTeardown) StopSandbox(ctx context.Context, ref string) error { return l.drop(ctx, ref) }
-
-func (l leakyTeardown) drop(ctx context.Context, ref string) error {
-	pod, err := l.cs.CoreV1().Pods(l.ns).Get(ctx, ref, metav1.GetOptions{})
-	if err != nil {
-		return err
-	}
-	return l.cs.CoreV1().Pods(l.ns).DeleteCollection(ctx, metav1.DeleteOptions{GracePeriodSeconds: ptr(int64(0))},
-		metav1.ListOptions{LabelSelector: "wardyn.run-id=" + pod.Labels["wardyn.run-id"]})
-}
+func (leakyTeardown) KillSandbox(context.Context, string) error { return nil }
+func (leakyTeardown) StopSandbox(context.Context, string) error { return nil }
 
 // testClosedOffAfterTeardown is the case a teardown that returns before the kubelet has stopped the pod's
 // containers would pass every other case: once StopSandbox or KillSandbox returns, the run's pods are gone
@@ -208,11 +195,14 @@ func testClosedOffAfterTeardown(t *testing.T, r runner.Runner, cs kubernetes.Int
 		})
 	}
 	t.Run("ACheckThatPassesADriverWhichReturnsEarlyProvesNothing", func(t *testing.T) {
-		leaky := leakyTeardown{r, cs, ns}
-		if err := closedOffAfter(t, r, cs, ns, agentImage, leaky.KillSandbox); err == nil {
-			t.Error("closedOffAfter passed a driver that deletes with zero grace and returns without waiting for the pods to go")
-		} else {
-			t.Logf("the early-returning driver is caught, as it must be: %v", err)
+		err := closedOffAfter(t, r, cs, ns, agentImage, leakyTeardown{r}.KillSandbox)
+		switch {
+		case err == nil:
+			t.Error("closedOffAfter passed a driver whose teardown returns having deleted nothing")
+		case !strings.Contains(err.Error(), "pod(s) still listed") || !strings.Contains(err.Error(), "still up") || !strings.Contains(err.Error(), "after teardown returned"):
+			t.Errorf("closedOffAfter must report both the open pods and the open connection of a driver that deleted nothing, got: %v", err)
+		default:
+			t.Logf("the driver that deletes nothing is caught, as it must be: %v", err)
 		}
 	})
 }
