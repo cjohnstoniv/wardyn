@@ -3405,10 +3405,12 @@ What a run may call on the server (every other method and path is refused `403 e
 
 With `local.allow_on_laptop_runners: true` (API only for now; off by default), a run on a person's own runner uses the model server on that computer, such as Ollama on `127.0.0.1:11434`.
 
-- The runner's relay serves that one port where its run proxies reach it and forwards it to the computer's loopback at the same port; nothing else is reached through it. On Docker Desktop and other VM-backed engines the engine already routes there, so nothing is opened.
+- What it opens: on native Docker, a listener on the Docker bridge's gateway at that one port, forwarded to the computer's loopback at the same port. It opens with the first flagged run and closes when the last one ends or the runner stops.
+- To whom: only the proxies of those flagged runs, by their container addresses. Any other container or process that reaches the gateway is closed before a byte is relayed.
+- The port is the one in `base_url`, chosen by the admin, and every member's runner relays it to its own loopback. Set it only to a model server's port.
 - Only a run granted the provider reaches it: its proxy admits the relay address for that host and port alone, with the same routes, allowlist and caps as above.
-- An organisation's runner is refused (`ProxyConfig.LocalModels`). A wardyn-runnerd without the relay refuses the run with `runner_proxy_setting_unsupported`, naming `local_model_relay`.
-- Once a run has used the port, the runner serves it until the runner stops, to any container on that computer that reaches the Docker bridge's gateway.
+- An organisation's runner is refused (`ProxyConfig.LLMUpstreams`). A wardyn-runnerd without the relay refuses the run with `runner_proxy_setting_unsupported`, naming `local_model_relay`.
+- On Docker Desktop and other VM-backed engines the engine already routes to the computer's loopback, so the flag opens nothing there; any container on that engine reaches the loopback as before.
 - A server bound to every address already holds that port there, so the run is refused at create: bind it to `127.0.0.1`.
 
 > [!IMPORTANT]

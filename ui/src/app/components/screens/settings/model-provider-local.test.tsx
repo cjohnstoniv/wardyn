@@ -6,7 +6,7 @@
 // M9: the local model server in the provider editor (chips, the token switch, the caps,
 // the Model pick, the server's refusals in their place) and in the provider list.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { HttpError } from "../../../lib/api/core";
@@ -183,6 +183,19 @@ describe("the local model server form", () => {
     expect(screen.getByLabelText(L.REPLY)).toHaveValue(null);
     expect(screen.getByLabelText(L.KEEP_ALIVE)).toHaveValue(600);
     expect(screen.getByRole("button", { name: E.REMOVE })).toBeInTheDocument();
+  });
+
+  it("a console save keeps an admin's laptop-runner flag, which the editor does not show (#2957)", async () => {
+    const flagged: ModelProvider = { ...LAPTOP, local: { ...LAPTOP.local!, allow_on_laptop_runners: true } };
+    renderEditor(LAPTOP, snapshot([LAPTOP]));
+    const plain = { text: document.body.textContent, fields: document.body.querySelectorAll("input, select, button").length };
+    cleanup();
+    const { user, onSaved } = renderEditor(flagged, snapshot([flagged]));
+    expect({ text: document.body.textContent, fields: document.body.querySelectorAll("input, select, button").length }).toEqual(plain);
+    setField(screen.getByLabelText(L.REPLY), "2048");
+    await user.click(screen.getByRole("button", { name: E.SAVE }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(putBody().providers[0].local).toEqual({ models: ["qwen2.5-coder:7b", "llama3.2:3b"], max_output: 2048, allow_on_laptop_runners: true });
   });
 
   async function refusedWith(message: string, fill?: (user: ReturnType<typeof userEvent.setup>) => Promise<void>) {

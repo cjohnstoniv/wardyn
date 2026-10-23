@@ -5,6 +5,8 @@ package proxy
 
 import (
 	"bytes"
+	"cmp"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
@@ -94,18 +96,20 @@ func TestLocalModel_LaptopPathKeepsTheRouteGate(t *testing.T) {
 		name, path, body string
 		status           int
 		cause            string
+		method           string // POST when empty
 	}{
-		{"allowlisted", "v1/messages", `{"model":"qwen2.5:3b"}`, http.StatusOK, ""},
-		{"other model", "v1/messages", `{"model":"llama3.2:3b"}`, http.StatusForbidden, `model "llama3.2:3b" is not on this run's model allowlist`},
-		{"pull", "api/pull", `{"model":"qwen2.5:3b"}`, http.StatusForbidden, "POST /api/pull is not a route"},
-		{"push", "api/push", `{"model":"qwen2.5:3b"}`, http.StatusForbidden, "POST /api/push is not a route"},
-		{"create", "api/create", `{"model":"x"}`, http.StatusForbidden, "POST /api/create is not a route"},
+		{"allowlisted", "v1/messages", `{"model":"qwen2.5:3b"}`, http.StatusOK, "", ""},
+		{"other model", "v1/messages", `{"model":"llama3.2:3b"}`, http.StatusForbidden, `model "llama3.2:3b" is not on this run's model allowlist`, ""},
+		{"pull", "api/pull", `{"model":"qwen2.5:3b"}`, http.StatusForbidden, "POST /api/pull is not a route", ""},
+		{"push", "api/push", `{"model":"qwen2.5:3b"}`, http.StatusForbidden, "POST /api/push is not a route", ""},
+		{"create", "api/create", `{"model":"x"}`, http.StatusForbidden, "POST /api/create is not a route", ""},
+		{"delete", "api/delete", `{"model":"qwen2.5:3b"}`, http.StatusForbidden, "DELETE /api/delete is not a route", http.MethodDelete},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			up := captureUpstream(t, false, `{}`)
 			p, buf := laptopProxy(t, upstreamAddr(up.srv), true, true, false)
 			rec := httptest.NewRecorder()
-			p.ServeHTTP(rec, mustLocalReq(t, http.MethodPost, llmAnthropicPrefix+tc.path, strings.NewReader(tc.body)))
+			p.ServeHTTP(rec, mustLocalReq(t, cmp.Or(tc.method, http.MethodPost), llmAnthropicPrefix+tc.path, strings.NewReader(tc.body)))
 			if rec.Code != tc.status {
 				t.Fatalf("status = %d, want %d (body %q)", rec.Code, tc.status, rec.Body.String())
 			}
@@ -141,5 +145,16 @@ func TestLocalModel_RunnerLocalModelsValidation(t *testing.T) {
 		LocalModels: map[string]types.LocalModelSettings{laptopModelBase: {Models: []string{localModelName}, AllowOnLaptopRunners: true}}}
 	if err := ok.validateLocalModels(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Flag off, a local model's settings reach the proxy in main's bytes: the flag is omitted, not false.
+func TestLocalModel_FlagOffWireIsUnchanged(t *testing.T) {
+	got, err := json.Marshal(map[string]types.LocalModelSettings{"http://gpu-node:11434": {Models: []string{"qwen2.5:3b"}, MaxOutput: 4096}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"http://gpu-node:11434":{"models":["qwen2.5:3b"],"max_output":4096}}`; string(got) != want {
+		t.Errorf("flag off, local_models = %s, want main's %s", got, want)
 	}
 }

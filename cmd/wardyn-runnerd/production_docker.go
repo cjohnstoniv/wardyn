@@ -86,7 +86,7 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	}
 	ev := &evidenceForwarder{}
 	sub, err := docker.New(docker.Config{RunnerID: identity.RunnerID.String(), ProxyImage: opts.proxyImage, InternalNetwork: opts.network, Record: record,
-		ControlPlaneRelay: relay.Ensure, LocalModelRelay: relay.EnsureLocalModel, TrustedCAPEM: opts.trustedCA, TrustedCAFile: opts.trustedCAPath, UpstreamProxyURL: opts.upstreamProxy,
+		ControlPlaneRelay: relay.Ensure, LocalModelRelay: relay, TrustedCAPEM: opts.trustedCA, TrustedCAFile: opts.trustedCAPath, UpstreamProxyURL: opts.upstreamProxy,
 		DecisionSink: sinkAdapter{s: sink.spoolSink, url: sink.proxyURL}, Evidence: ev,
 		ProxySandboxPeersOnly: cliutil.EnvBool(docker.EnvProxySandboxPeersOnly, false), UserDriveHostRoots: driveRoots,
 		RunSubnetPool: runSubnets, RunSubnetBits: runSubnetBits})

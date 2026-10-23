@@ -214,11 +214,11 @@ func (s *Server) localAdmittedPlan(r *http.Request, req createRunRequest,
 			p.Spec.ProxyConfig.Policy.EligibleGrants[i].OwnerOnly = true
 		}
 	}
-	intents, upstreams, refusal := s.localCredentialIntents(r, req, spec, comps, workspaces, sc)
+	intents, upstreams, localModels, refusal := s.localCredentialIntents(r, req, spec, comps, workspaces, sc)
 	if refusal != nil {
 		return placement.LocalPlan{}, refusal
 	}
-	p.CredentialIntents, p.Spec.ProxyConfig.LLMUpstreams = intents, upstreams
+	p.CredentialIntents, p.Spec.ProxyConfig.LLMUpstreams, p.Spec.ProxyConfig.LocalModels = intents, upstreams, localModels
 	return p, nil
 }
 
