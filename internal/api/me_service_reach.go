@@ -31,16 +31,15 @@ type meReachWorkspace struct {
 }
 
 // meServiceReach builds the block from the same predicates the routes use: presetOpenTo (GET /presets)
-// and serviceLaunchableWorkspaces (GET /workspaces). It writes the error those routes would and reports
-// false when either read fails, so /me never shows a reach narrower or wider than the routes answer.
-func (s *Server) meServiceReach(w http.ResponseWriter, r *http.Request) (meServiceReach, bool) {
+// and serviceLaunchableWorkspaces (GET /workspaces). A failed read is returned, never a shorter list;
+// writeServiceReachError answers it as those routes would.
+func (s *Server) meServiceReach(r *http.Request) (meServiceReach, error) {
 	name, sponsor, _ := serviceIdentityFromContext(r.Context())
 	reach := meServiceReach{Name: name, Sponsor: sponsor, Routes: slices.Sorted(maps.Keys(serviceAllowed)),
 		Presets: []meReachPreset{}, Workspaces: []meReachWorkspace{}}
 	presets, err := s.cfg.Store.ListLaunchPresets(r.Context())
 	if err != nil {
-		writeServerError(w, r, "list presets", err)
-		return meServiceReach{}, false
+		return meServiceReach{}, reachReadError{"list presets", err}
 	}
 	for _, p := range presets {
 		if s.presetOpenTo(r, p) {
@@ -48,16 +47,35 @@ func (s *Server) meServiceReach(w http.ResponseWriter, r *http.Request) (meServi
 		}
 	}
 	rows, err := s.serviceLaunchableWorkspaces(r.WithContext(withCapBatch(r.Context())))
-	if errors.Is(err, errServiceSiteConfigUnreadable) {
-		writeErrorReason(w, http.StatusServiceUnavailable, reasonRosterUnreadable, "the site configuration could not be read; try again")
-		return meServiceReach{}, false
-	}
 	if err != nil {
-		writeServerError(w, r, "list workspaces", err)
-		return meServiceReach{}, false
+		return meServiceReach{}, reachReadError{"list workspaces", err}
 	}
 	for _, ws := range rows {
 		reach.Workspaces = append(reach.Workspaces, meReachWorkspace{ID: ws.ID.String(), Name: ws.Name})
 	}
-	return reach, true
+	return reach, nil
 }
+
+// writeServiceReachError answers a failed meServiceReach: 503 roster_unreadable when the site config
+// cannot be read, as GET /workspaces does, otherwise the routes' 500 under the read that failed.
+func writeServiceReachError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, errServiceSiteConfigUnreadable) {
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonRosterUnreadable, "the site configuration could not be read; try again")
+		return
+	}
+	var re reachReadError
+	if errors.As(err, &re) {
+		writeServerError(w, r, re.read, re.err)
+		return
+	}
+	writeServerError(w, r, "service reach", err)
+}
+
+// reachReadError is a failed read inside meServiceReach, named as the route that makes it names it.
+type reachReadError struct {
+	read string
+	err  error
+}
+
+func (e reachReadError) Error() string { return e.read + ": " + e.err.Error() }
+func (e reachReadError) Unwrap() error { return e.err }

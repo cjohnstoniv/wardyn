@@ -249,8 +249,9 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	}
 	// A service identity's reach (me_service_reach.go); a person's body never carries the key.
 	if _, _, ok := serviceIdentityFromContext(r.Context()); ok {
-		reach, ok := s.meServiceReach(w, r)
-		if !ok {
+		reach, err := s.meServiceReach(r)
+		if err != nil {
+			writeServiceReachError(w, r, err)
 			return
 		}
 		body["service"] = reach
