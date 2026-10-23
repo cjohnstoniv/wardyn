@@ -268,6 +268,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   named: that image, like the release image, is derived again at each start, so replacing the binary moves the proxy
   with it. A `proxy_image` set in the file, by `--proxy-image` or by hand, is the pin. An earlier install keeps
   working, and running setup again moves its settings into the file.
+- A service token's `GET /me` answers 503 `roster_unreadable` when the site configuration cannot be read, as
+  `GET /workspaces` does, and 500 when its presets or workspaces cannot be listed.
 
 ### Fixed
 
@@ -357,8 +359,6 @@ A small release on top of 0.9.6. An Azure DevOps token that the organisation min
 ### Before you upgrade
 
 - A credential-delivery write that sets a mode the server can't build is now refused (`credential_delivery_invalid`); a stored document is left as it is.
-- A service token's `GET /me` answers 503 `roster_unreadable` when the site configuration cannot be read, as
-  `GET /workspaces` does, and 500 when its presets or workspaces cannot be listed.
 
 ## [0.9.6] — 2026-10-20
 
