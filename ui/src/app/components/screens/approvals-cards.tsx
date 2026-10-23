@@ -4,7 +4,7 @@
  */
 
 import * as React from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { Bot, Check, ChevronRight, Code2, ShieldCheck, X } from "lucide-react";
 import {
   canDecideApproval,
@@ -22,6 +22,7 @@ import { absoluteTime, relativeTime } from "../../lib/format";
 import { Button } from "../ui/button";
 import { ApprovalKindChip, ApprovalStateBadge, Chip } from "../wardyn/primitives";
 import { RunContextRow } from "../wardyn/run-context-row";
+import { RunRef } from "../wardyn/run-ref";
 import { JsonBlock } from "../wardyn/yaml-block";
 import { AdoCapabilityCard } from "../wardyn/ado-capability-card";
 import { isPushContentRequest, PushContentCard } from "../wardyn/push-content-card";
@@ -387,7 +388,15 @@ export function ApprovalCard({
 }
 
 // `showRun` is false on a run's own page, where the run is the context and a link back to it is noise.
-export function DecidedRow({ item, showRun = true }: { item: ApprovalRequest; showRun?: boolean }) {
+export function DecidedRow({
+  item,
+  showRun = true,
+  runTitle,
+}: {
+  item: ApprovalRequest;
+  showRun?: boolean;
+  runTitle?: string;
+}) {
   const scope = item.requested_scope ?? {};
   // A CANCELLED row carries decided_by="system" (the terminal-run cascade wrote
   // it), so it reads with the same "by …" prefix an expiry-with-a-writer does —
@@ -405,15 +414,7 @@ export function DecidedRow({ item, showRun = true }: { item: ApprovalRequest; sh
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-border px-4 py-3 first:border-t-0">
       <ApprovalKindChip kind={item.kind} />
       <span className="min-w-0 flex-1 truncate text-sm text-foreground">{deriveTitle(item.kind, scope)}</span>
-      {showRun && (
-        <Link
-          to={runPath(view, item.run_id)}
-          className="font-mono text-xs text-muted-foreground hover:text-foreground"
-          title={`Open run ${item.run_id}`}
-        >
-          {item.run_id.slice(0, 8)}
-        </Link>
-      )}
+      {showRun && <RunRef runId={item.run_id} title={runTitle} to={runPath(view, item.run_id)} className="max-w-[16rem]" />}
       <ApprovalStateBadge state={item.state} />
       {scopeBadge && <Chip tone="neutral">{scopeBadge}</Chip>}
       <span className="whitespace-nowrap text-xs text-muted-foreground">{meta}</span>
