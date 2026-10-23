@@ -510,22 +510,16 @@ ssh -L 8080:127.0.0.1:3000 <run-id>@<advertise-host> -p <port>
 | JetBrains Gateway | Exec channels, a file transfer for its backend, and `-L` to the backend's port | Backend half: tested (nightly `ssh-editors-live`). The GUI thin client is not run |
 | Mutagen | Exec channels and a file transfer for its agent | Tested (nightly `ssh-editors-live`), with the link below |
 
-- **How they are tested**: the nightly job `ssh-editors-live` runs the real clients in a container against a live gateway (`make test-e2e-ssh-editors`; [`test/editors/`](../test/editors/)).
-  - Versions are pinned there by sha256: Mutagen 0.18.1, IntelliJ IDEA 2026.2.3.
-  - JetBrains: it uploads the IDE archive over sftp, unpacks it over an exec channel, starts the headless `remote-dev-server.sh`, and completes a TLS handshake with the backend through `-L`.
-    - Gateway's thin client is a GUI and is not run, so the connection it makes after that handshake is untested.
-  - Mutagen: `sync create` (it installs its agent through the gateway), a flush each way, and a byte compare.
-- **Mutagen needs one link**: it runs its agent by the relative path `.mutagen/agents/<version>/mutagen-agent`.
-  - A normal `sshd` starts commands in `$HOME`; the gateway starts them in the sandbox's working directory (`/home/agent/work`), so the agent is not found.
-  - Run once per sandbox before `mutagen sync create`:
+- **How they are tested**: the nightly job `ssh-editors-live` runs the real clients in a container against a live gateway (`make test-e2e-ssh-editors`, [`test/editors/`](../test/editors/)). Versions are pinned there by sha256: Mutagen 0.18.1, IntelliJ IDEA 2026.2.3.
+  - JetBrains: an sftp upload of the IDE, an exec unpack, the headless `remote-dev-server.sh`, and a TLS handshake with the backend through `-L`. Gateway's GUI thin client is not run.
+  - Mutagen: `sync create`, a flush each way, a byte compare.
+- **Mutagen needs one link.** It runs its agent by the relative path `.mutagen/agents/<version>/mutagen-agent`. A normal `sshd` starts commands in `$HOME`; the gateway starts them in the sandbox's working directory, so the agent is not found. Once per sandbox, before `mutagen sync create`:
 
 ```sh
 ssh <host> 'mkdir -p ~/.mutagen && ln -sfn ~/.mutagen .mutagen'
 ```
 
-- **What the image must carry**: `openssh-sftp-server` for every editor above that transfers files (VS Code's server, JetBrains' backend, Mutagen's agent), and `socat` for `-L`; see the [image contract](#image-contract-byoi).
-  - Exec channels need only `/bin/sh`.
-  - JetBrains also needs about 6 GB free in the sandbox while it unpacks.
+- **The image must carry** `openssh-sftp-server` for the file transfers and `socat` for `-L` ([image contract](#image-contract-byoi)). Exec channels need only `/bin/sh`. JetBrains unpacks about 6 GB in the sandbox.
 
 - A folder on your computer can also reach a remote sandbox with no editor and no `wardyn sync`: see
   [hybrid-laptops.md](operations/hybrid-laptops.md#a-folder-on-your-computer-for-a-remote-sandbox).
