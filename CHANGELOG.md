@@ -112,6 +112,25 @@ and does not yet follow semantic versioning (interfaces are not stable).
   themselves never apply to those runs. Deleting the last restriction (and having no unit with walls) ends this.
 - A person covered by a restriction has their stored policy rows clamped to the ceiling, grants included (unlisted
   pairings are dropped).
+- A workspace pinned to an owning unit always runs in that unit's walls. A person with no membership on that unit's
+  path cannot launch on it (`workspace_unit_not_yours`).
+- The Default unit is read-only: `PUT /governance/units/<Default>` answers 409; change `WARDYN_DEFAULT_POLICY`. A
+  membership can no longer be added to the Default unit or moved into it: `POST` and `PUT /governance/memberships`
+  answer 409 `governance_membership_default_unit`.
+- `POST /governance/dry-run` takes a `target` (`boundary`, `unit` or `membership_move`); a body with no target is read
+  as a boundary dry run.
+- Deleting an assignment that was winning for someone may let a lower one take over. With the second-human switch on,
+  that delete is held and names the units that may become active.
+- Unit admins: a security admin, or a unit admin of a unit above, can make a person or an IdP group a unit admin. A
+  security admin's grant follows `WARDYN_GOVERNANCE_SECOND_HUMAN`, so a single-admin install can create unit admins; a
+  unit admin's grant always waits for a second approver. A unit admin's narrowing applies at once and their widening
+  always waits for a second approver. Locked settings bind every unit below the lock, narrowings included.
+- The governance routes a unit admin can use now answer a member who is not one with 403 `unit_scope_denied`, where they
+  used to answer the security-tier refusal.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
+  `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on
+  `governance_unit_admins` (migration `0228_governance_unit_admins`). Without it unit admins cannot be listed, granted
+  or revoked. Migration `0226_governance_change_tree_ops` widens one CHECK and changes no row or grant.
 - **Approval rules are off.** `WARDYN_APPROVAL_RULES` (new, default `off`) lets a security admin's
   approval rule approve a held tool call or a first-use egress host on a service identity's runs. Nothing changes until a
   deployment sets it. Set `dry_run` first: matching approvals then get an `approval.policy.would_approve` audit row and
@@ -210,6 +229,24 @@ and does not yet follow semantic versioning (interfaces are not stable).
   starts in `hard_limits` with nothing listed and floor `CC1`, which narrows nothing; an upgraded install stays in
   `no_limits`. Break-glass (`wardyn run --break-glass-reason`) is asked of an admin-token run only once the boundary
   bounds something and a unit with its own walls or a restriction exists.
+- Restrictions are deny-only lists (domains, run limits, withheld credential kinds) that follow users, groups, user
+  types or everyone into every unit they run in. A workspace can be pinned to an owning unit
+  (`PUT /workspaces/{id}/owning-unit`, `wardyn workspace set-unit`).
+- A person or an IdP group can be granted as a unit admin (`POST /governance/units/{id}/admins`,
+  `DELETE /governance/units/{id}/admins/{admin}`, `wardyn governance admins add|remove`). A unit admin governs that
+  unit and every unit below it and nothing else: the unit and membership writes, `GET /governance`, the check, the
+  dry run and the held changes now check the target against their units, and `GET /me` gains `unit_admin_of`. A unit
+  admin's narrowing applies at once and their widening is held for a second approver. A unit's `locked_knobs` fix a
+  knob for every unit below (409 `unit_knob_locked`). Audit actions are `governance.unit_admin.grant` and
+  `governance.unit_admin.revoke`; see [unit-admins.md](docs/operations/unit-admins.md).
+- A run can pick which of its person's units to run in: `run_in` on `POST /runs`, preflight and the policy preview, and
+  `wardyn run --run-in`. A unit the person is not in and an unknown unit both answer 403 `unit_not_a_context`.
+  `PUT /governance/memberships/{id}` with a `unit_id` moves a membership and
+  `POST /governance/memberships/{id}/promote` makes a legacy membership a context; both follow the second-human
+  switch. `POST /governance/check` lists the person's contexts with their walls. `POST /governance/dry-run` takes a
+  `target` (`boundary`, `unit` or `membership_move`). `wardyn governance check` and `wardyn governance dry-run` follow.
+- `POST /governance/check` and `GET /governance` name, for a security admin, in `path_provenance`, the unit on the path
+  that changed each knob. A restated value or a clamped-away widening stays the parent's, and a pass-through unit is never named.
 - Policy field `harness_inner_walls` (`sandbox_mode`, `approvals`) chooses the harness's own walls inside Wardyn's.
   Omitted, each run keeps what its harness and lane give today. It only adds walls: a looser choice refuses the run
   (`harness_inner_walls_looser`), and `sandbox_mode` takes `off` only (`workspace-write` and `read-only` answer
@@ -310,9 +347,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Getting started no longer counts a service identity's run as your first run (#2513). `GET /api/v1/runs` takes
   `sponsored=exclude`, which turns off only the addition of the runs of service identities you sponsor to your own list;
   the page sends it, and the Runs list still shows those runs.
-
-### Fixed
-
 - A computer folder's pass back no longer uses up the time a run's teardown has (#3466). On Docker, every pass back
   runs with the agent stopped and no egress: only the folder pass back runs. If the agent cannot be stopped first, no
   pass runs, and the sandbox is stopped with the record. That includes an exec-less (krun) sandbox, whose agent is the
