@@ -167,7 +167,7 @@
   {
     "reason": "capKinds[capWorkspace].reason",
     "target": "\"runs.workspace\"",
-    "sentence": "\"you are not granted workspace \" + req.WorkspaceID.String() + \" — ask an admin for access, or launch without a workspace\""
+    "sentence": "\"you are not granted workspace \" + id.String() + \" — ask an admin for access, or launch without a workspace\""
   },
   {
     "reason": "capKinds[kind].reason",
