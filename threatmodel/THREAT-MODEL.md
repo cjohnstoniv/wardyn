@@ -4157,9 +4157,10 @@ The **explicit kill** path (`handleKillRun`) runs this fixed order:
 
 1. **Durable state transition** — compare-and-swap to KILLED from the state just
    read.
-   - This runs FIRST (C002): a kill that loses the race to a concurrent forward transition (e.g. a
-     dispatch PENDING→STARTING) 409s WITHOUT touching the runner or revoking anything.
+   - This runs FIRST (C002): a kill that loses the race touches neither the runner nor a credential.
      - So it can never strip a still-live run's credentials.
+     - A loss to a forward transition (e.g. a dispatch PENDING→STARTING) re-reads the run and claims
+       it from the state it now holds, a bounded number of times; a loss to an end or another kill 409s.
    - Only the transition that actually WINS KILLED proceeds.
    - An already-KILLED run is the one exception to the terminal guard: re-kill CASes KILLED→KILLED
      (a value no-op) and re-runs the idempotent steps below.

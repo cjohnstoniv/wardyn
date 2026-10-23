@@ -229,7 +229,7 @@ const (
 	reasonDesktopRulesUnreadable               = "desktop_rules_unreadable"                 // the run's desktop rules could not be read (a failed read, or no recorded policy): the desktop socket and the Files panel refuse
 	reasonIntegrationIDRetired                 = "integration_id_retired"                   // integration_id no longer chooses a model credential; a run's model provider does
 	reasonRunKillAlreadyTerminal               = "run_kill_already_terminal"                // the run is already in a terminal state other than killed
-	reasonRunKillStateChanged                  = "run_kill_state_changed"                   // the run moved to another state between the read and the write
+	reasonRunKillStateChanged                  = "run_kill_state_changed"                   // the run ended or kept moving between the read and the write
 	reasonRunMaxWaitInvalid                    = "run_max_wait_invalid"                     // max_wait_sec is below 1
 	reasonRunQueued                            = "run_queued"                               // the run is waiting for a slot in its pool: its end is set when it starts
 	// One-time scheduled runs (run_schedule.go): start_at on a create. Kept out of the run-mode block above,
