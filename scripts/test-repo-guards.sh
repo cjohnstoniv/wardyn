@@ -139,8 +139,10 @@ ok()  { echo "ok: $*"; }
 # notify-new-lanes.needs, which guard 13 pins to it); it opens its own issue.
 # ssh-editors-live (#2988): real Mutagen and JetBrains backend runs against the SSH gateway, never run on a
 # hosted runner (a 1.5 GB IDE download and a full compose stack). Same promotion rule; its date is below.
+# k6-rerun-rate (#3538) only writes a job-summary table from the job history and is continue-on-error:
+# no release waits on it and a red one would say nothing about the code.
 NIGHTLY=.github/workflows/nightly.yml
-NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check test-e2e-concurrent ci-mode-dogfood-model-fake published-image-scan notify-published-image-scan ssh-editors-live"
+NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check test-e2e-concurrent ci-mode-dogfood-model-fake published-image-scan notify-published-image-scan ssh-editors-live k6-rerun-rate"
 # A job waiting on the promotion rule above carries a date here, job=YYYY-MM-DD, at most 14 days out
 # (the e2e quarantine's rule, #3219). Past it this guard fails until the job joins notify-new-lanes.needs
 # and release.yml's watched= (green-by-tree.sh matches a matrix job's "name (leg)" rows, #3439), or the

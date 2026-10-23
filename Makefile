@@ -728,6 +728,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-install-cli.sh
 	./scripts/test-install-sh-trust.sh
 	./scripts/test-install-sh.sh
+	./scripts/test-k6-rerun-rate.sh
 	./scripts/test-kind-follow-main.sh
 	./scripts/test-kind-sso-walk-log.sh
 	./scripts/test-lane-preflight.sh

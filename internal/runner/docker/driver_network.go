@@ -236,7 +236,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 func (d *Driver) runNetworkAndProxy(ctx context.Context, spec runner.SandboxSpec) (intNetID, proxyIP string, undo func(), err error) {
 	// (1) Per-run internal network. Internal=true => Docker provisions no gateway, so the network
 	// cannot route off-host: this is what upholds L0 even though the agent is *connected* to it.
-	intNetID, err = d.createRunNetwork(ctx, spec.RunID, d.labels(spec.RunID, "network", spec.Labels))
+	intNetID, err = d.createRunNetwork(ctx, spec.RunID, d.labels(spec.RunID, componentNetwork, spec.Labels))
 	if err != nil {
 		return "", "", nil, err
 	}
@@ -306,6 +306,9 @@ func (d *Driver) runNetworkAndProxy(ctx context.Context, spec runner.SandboxSpec
 // between makes the create fail on the overlap, and the pick is retried.
 func (d *Driver) createRunNetwork(ctx context.Context, runID uuid.UUID, labels map[string]string) (string, error) {
 	name := internalNetName(runID)
+	if d.cfg.RunSubnetPool.IsValid() {
+		return d.createPoolRunNetwork(ctx, name, labels)
+	}
 	var err error
 	for range 3 {
 		opts := client.NetworkCreateOptions{Driver: "bridge", Internal: true, Labels: labels}
@@ -651,7 +654,8 @@ var _ containerListerAPI = (*client.Client)(nil)
 // after the proxy started and before the agent existed (or a rollback whose proxy removal the daemon
 // refused) leaves a proxy holding the run's config, and an exec-less sandbox has no agent until its
 // first Exec. A crash between network-create and proxy-start leaves a network with no container to
-// key on; that edge is left to `docker network prune`.
+// key on; with Config.RunSubnetPool set, sweepRunNetworks removes it, otherwise that edge is left
+// to `docker network prune`.
 func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duration, isOrphan func(runID uuid.UUID) bool) (int, error) {
 	lister, ok := d.cli.(containerListerAPI)
 	if !ok {
@@ -693,6 +697,11 @@ func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duratio
 			continue
 		}
 		swept++
+	}
+	if d.cfg.RunSubnetPool.IsValid() {
+		nets, nerr := d.sweepRunNetworks(ctx, cutoff, isOrphan)
+		swept += nets
+		errs = append(errs, nerr)
 	}
 	return swept, errors.Join(errs...)
 }
