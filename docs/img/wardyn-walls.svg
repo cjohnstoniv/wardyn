@@ -1,0 +1,193 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1040" width="1600" height="1040" role="img" aria-labelledby="title desc" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title id="title">Where Wardyn sits: many inner walls, one outer wall</title>
+  <desc id="desc">An isometric compound where one outer wall surrounds a datacentre and people's devices, each sandbox sits behind Wardyn's inner wall, and the org control plane links by runs and audit.</desc>
+  <style>
+    .bg { fill: #ffffff; stroke: #d0d7de; }
+    .w-side { fill: #bcc4cd; }
+    .w-top { fill: #e3e8ec; stroke: #afb8c1; }
+    .w-far { fill: #ced5dc; }
+    .floor { fill: #f3f5f7; stroke: #afb8c1; }
+    .box-top { fill: #d0d7de; }
+    .box-l { fill: #8c959f; }
+    .box-r { fill: #6e7781; }
+    .screen { fill: #424a53; }
+    .glass { fill: #0a7f73; fill-opacity: 0.08; stroke: #0a7f73; stroke-width: 2; }
+    .glass-floor { fill: #e3f5f2; }
+    .rim { fill: none; stroke: #0a7f73; stroke-width: 3; }
+    .cube-top { fill: #9fe3d9; }
+    .cube-l { fill: #0a7f73; }
+    .cube-r { fill: #075e55; }
+    .miniwall { fill: none; stroke: #0a7f73; stroke-width: 1.5; }
+    .pill { fill: #ffffff; stroke: #8c959f; }
+    .t { fill: #1f2328; }
+    .m { fill: #59636e; }
+    .a { fill: #0a7f73; }
+    .fa { fill: #0a7f73; }
+    .ft { fill: #1f2328; }
+    .sha { stroke: #0a7f73; }
+    .sb { fill: none; stroke: #0a7f73; stroke-width: 3; }
+    .ord { fill: none; stroke: #6e7781; stroke-width: 2.5; }
+    .link { fill: none; stroke: #1f2328; stroke-width: 2.5; stroke-dasharray: 1 7; stroke-linecap: round; }
+    .lead { fill: none; stroke: #bf8700; stroke-width: 1.5; }
+    .dot { fill: #bf8700; }
+    .eyebrow { font-size: 18px; font-weight: 700; letter-spacing: 3px; }
+    @media (prefers-color-scheme: dark) {
+        .bg { fill: #0d1117; stroke: #3d444d; }
+        .w-side { fill: #1c2128; }
+        .w-top { fill: #2d333b; stroke: #4d5561; }
+        .w-far { fill: #22272e; }
+        .floor { fill: #161b22; stroke: #4d5561; }
+        .box-top { fill: #545d68; }
+        .box-l { fill: #373e47; }
+        .box-r { fill: #2d333b; }
+        .screen { fill: #1c2128; }
+        .glass { fill: #2dd4bf; fill-opacity: 0.08; stroke: #2dd4bf; stroke-width: 2; }
+        .glass-floor { fill: #0d2b28; }
+        .rim { fill: none; stroke: #2dd4bf; stroke-width: 3; }
+        .cube-top { fill: #99f6e4; }
+        .cube-l { fill: #2dd4bf; }
+        .cube-r { fill: #14958a; }
+        .miniwall { fill: none; stroke: #2dd4bf; stroke-width: 1.5; }
+        .pill { fill: #161b22; stroke: #4d5561; }
+        .t { fill: #f0f6fc; }
+        .m { fill: #9198a1; }
+        .a { fill: #2dd4bf; }
+        .fa { fill: #2dd4bf; }
+        .ft { fill: #f0f6fc; }
+        .sha { stroke: #2dd4bf; }
+        .sb { fill: none; stroke: #2dd4bf; stroke-width: 3; }
+        .ord { fill: none; stroke: #8b949e; stroke-width: 2.5; }
+        .link { fill: none; stroke: #f0f6fc; stroke-width: 2.5; stroke-dasharray: 1 7; stroke-linecap: round; }
+        .lead { fill: none; stroke: #e3b341; stroke-width: 1.5; }
+        .dot { fill: #e3b341; }
+    }
+  </style>
+  <defs>
+    <marker id="ah-sb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path class="fa" d="M0 0 10 5 0 10z"/></marker>
+    <marker id="ah-link" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path class="ft" d="M0 0 10 5 0 10z"/></marker>
+    <g id="shield"><path d="M0 -11 9 -7.5 V0.5 C9 6 4.5 9.5 0 11 C-4.5 9.5 -9 6 -9 0.5 V-7.5Z" fill="none" stroke-width="2" stroke-linejoin="round"/><path d="M-4 0 -1 3 4.5 -3" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <!-- Isometric parts, drawn around their base centre: x' = 0.866 (x - y), y' = 0.5 (x + y) - z -->
+    <g id="cube"><path class="cube-top" d="M0 -75 43.3 -50 0 -25 -43.3 -50Z"/><path class="cube-l" d="M-43.3 -50 0 -25 0 25 -43.3 0Z"/><path class="cube-r" d="M0 -25 43.3 -50 43.3 0 0 25Z"/></g>
+    <g id="desk"><path class="box-top" d="M-6.9 -44 34.6 -20 6.9 -4 -34.6 -28Z"/><path class="box-l" d="M-34.6 -28 6.9 -4 6.9 20 -34.6 -4Z"/><path class="box-r" d="M6.9 -4 34.6 -20 34.6 4 6.9 20Z"/><path class="screen" d="M-3.5 -38 24.2 -22 24.2 -48 -3.5 -64Z"/></g>
+    <g id="sandbox"><path class="cube-top" d="M0 -48 13.9 -40 0 -32 -13.9 -40Z"/><path class="cube-l" d="M-13.9 -40 0 -32 0 -16 -13.9 -24Z"/><path class="cube-r" d="M0 -32 13.9 -40 13.9 -24 0 -16Z"/><path class="miniwall" d="M0 -37 22.5 -24 0 -11 -22.5 -24Z M0 -61 22.5 -48 0 -35 -22.5 -48Z M22.5 -24 V-48 M0 -11 V-35 M-22.5 -24 V-48"/></g>
+    <clipPath id="yard-floor"><rect x="-290" y="-290" width="580" height="580" rx="50" transform="translate(-60 -60)"/></clipPath>
+    <clipPath id="yard"><rect x="-290" y="-290" width="580" height="580" rx="50" transform="matrix(0.866 0.5 -0.866 0.5 800 560)"/></clipPath>
+  </defs>
+
+  <rect class="bg" x="1" y="1" width="1598" height="1038" rx="28"/>
+
+  <!-- Header -->
+  <text class="a eyebrow" x="64" y="88">WHERE WARDYN SITS</text>
+  <use class="sha" href="#shield" x="1432" y="78"/>
+  <text class="t" x="1452" y="86" font-size="24" font-weight="700">Wardyn</text>
+  <text class="t" x="64" y="146" font-size="48" font-weight="700">Many inner walls, one outer wall</text>
+  <text class="m" x="64" y="188" font-size="24">One outer wall around every place work runs. Wardyn's inner wall goes wherever a sandbox does.</text>
+
+  <!-- Outer wall: a 60-high ring, outer 680 square, inner 580 square -->
+  <rect class="w-side" x="-340" y="-340" width="680" height="680" rx="80" transform="matrix(0.866 0.5 -0.866 0.5 800 620)"/>
+  <path class="w-side" d="M251.7 560 H1348.3 V620 H251.7Z"/>
+  <rect class="w-top" x="-340" y="-340" width="680" height="680" rx="80" transform="matrix(0.866 0.5 -0.866 0.5 800 560)" vector-effect="non-scaling-stroke"/>
+  <rect class="w-far" x="-290" y="-290" width="580" height="580" rx="50" transform="matrix(0.866 0.5 -0.866 0.5 800 560)"/>
+  <rect class="floor" x="-290" y="-290" width="580" height="580" rx="50" transform="matrix(0.866 0.5 -0.866 0.5 800 620)" clip-path="url(#yard)" vector-effect="non-scaling-stroke"/>
+
+  <!-- Paths on the floor -->
+  <g transform="matrix(0.866 0.5 -0.866 0.5 800 620)" clip-path="url(#yard-floor)">
+    <path class="ord" d="M-120 212 H212 V-90 H290 M40 212 V230" vector-effect="non-scaling-stroke"/>
+    <path class="sb" d="M120 0 H200 V-120 H290 M-250 -6 V100 H-160 M-206 150 H-160 M-160 100 V200 H200 V-120" vector-effect="non-scaling-stroke"/>
+  </g>
+
+  <!-- Org control plane -->
+  <path class="box-top" d="M981.9 335 1033.8 365 981.9 395 929.9 365Z"/>
+  <path class="box-l" d="M929.9 365 981.9 395 981.9 505 929.9 475Z"/>
+  <path class="box-r" d="M981.9 395 1033.8 365 1033.8 475 981.9 505Z"/>
+  <path class="fa" d="M1010 392 1014 390 1014 470 1010 472Z"/>
+
+  <!-- Sandbox on a desktop -->
+  <use href="#desk" x="609.5" y="480"/>
+  <use href="#sandbox" x="596" y="483"/>
+
+  <!-- Cloud or datacentre: Wardyn's inner wall around the sandboxes -->
+  <path class="glass-floor" d="M800 500 1007.8 620 800 740 592.2 620Z"/>
+  <path class="glass" d="M592.2 620 800 500 800 400 592.2 520Z"/>
+  <path class="glass" d="M800 500 1007.8 620 1007.8 520 800 400Z"/>
+  <use href="#cube" x="800" y="560"/>
+  <use href="#cube" x="696.1" y="620"/>
+  <use href="#cube" x="903.9" y="620"/>
+  <use href="#cube" x="800" y="680"/>
+  <path class="glass" d="M592.2 620 800 740 800 640 592.2 520Z"/>
+  <path class="glass" d="M800 740 1007.8 620 1007.8 520 800 640Z"/>
+  <path class="rim" d="M800 400 1007.8 520 800 640 592.2 520Z"/>
+
+  <!-- Sandbox on a laptop, and desks with no sandbox -->
+  <use href="#desk" x="470.9" y="580"/>
+  <use href="#sandbox" x="457" y="583"/>
+  <use href="#desk" x="496.9" y="675"/>
+  <use href="#desk" x="626.8" y="760"/>
+
+  <!-- Outer gate, and out to the internet -->
+  <path class="box-top" d="M1185.4 602.5 1237.3 632.5 1168 672.5 1116.1 642.5Z"/>
+  <path class="box-l" d="M1116.1 642.5 1168 672.5 1168 752.5 1116.1 722.5Z"/>
+  <path class="box-r" d="M1168 672.5 1237.3 632.5 1237.3 712.5 1168 752.5Z"/>
+  <path class="sb" d="M1202.7 732.5 1423.5 860" marker-end="url(#ah-sb)"/>
+  <text class="t" x="1436" y="884" font-size="22" font-weight="700">Internet</text>
+
+  <!-- Runs and audit -->
+  <path class="link" d="M609 418 Q760 250 966 336" marker-end="url(#ah-link)"/>
+  <path class="link" d="M471 516 Q600 240 966 336"/>
+  <rect class="pill" x="700" y="268" width="112" height="30" rx="15"/>
+  <text class="t" x="756" y="289" font-size="16" font-weight="600" text-anchor="middle">runs, audit</text>
+  <path class="link" d="M902 470 Q930 440 936 420" marker-end="url(#ah-link)"/>
+  <rect class="pill" x="830" y="472" width="124" height="30" rx="15"/>
+  <text class="t" x="892" y="493" font-size="16" font-weight="600" text-anchor="middle">policy, audit</text>
+  <rect class="pill" x="672" y="364" width="104" height="30" rx="15"/>
+  <text class="t" x="724" y="385" font-size="16" font-weight="600" text-anchor="middle">Inner wall</text>
+  <path class="lead" d="M776 382 790 396"/>
+
+  <!-- Callouts -->
+  <path class="lead" d="M298 286 L596 440"/><circle class="dot" cx="596" cy="440" r="4"/>
+  <text class="t" x="64" y="292" font-size="22" font-weight="700">Sandbox on a desktop</text>
+
+  <path class="lead" d="M244 392 L478 556"/><circle class="dot" cx="478" cy="556" r="4"/>
+  <text class="t" x="40" y="394" font-size="22" font-weight="700">Wardyn's inner wall</text>
+  <text class="m" x="40" y="420" font-size="17">on the device itself.</text>
+  <text class="m" x="40" y="444" font-size="17">Runs arrive from the organisation.</text>
+
+  <path class="lead" d="M244 544 L440 548"/><circle class="dot" cx="440" cy="548" r="4"/>
+  <text class="t" x="30" y="552" font-size="22" font-weight="700">Sandbox on a laptop</text>
+
+  <path class="lead" d="M196 768 L490 652"/><circle class="dot" cx="490" cy="652" r="4"/>
+  <path class="lead" d="M250 788 L620 740"/><circle class="dot" cx="620" cy="740" r="4"/>
+  <text class="t" x="64" y="776" font-size="22" font-weight="700">No sandbox</text>
+  <text class="m" x="64" y="802" font-size="17">Normal path only</text>
+
+  <path class="lead" d="M184 906 L635 835"/><circle class="dot" cx="635" cy="835" r="4"/>
+  <text class="t" x="64" y="912" font-size="22" font-weight="700">Outer wall</text>
+  <text class="m" x="64" y="938" font-size="17">Your organisation's firewall, proxy,</text>
+  <text class="m" x="64" y="962" font-size="17">VPN, device management</text>
+
+  <path class="lead" d="M1180 254 L1000 352"/><circle class="dot" cx="1000" cy="352" r="4"/>
+  <text class="t" x="1188" y="242" font-size="22" font-weight="700">Org control plane</text>
+  <text class="m" x="1188" y="268" font-size="17">policy · approvals · audit</text>
+
+  <path class="lead" d="M1368 512 L1008 560"/><circle class="dot" cx="1008" cy="560" r="4"/>
+  <text class="t" x="1378" y="500" font-size="22" font-weight="700">Cloud or</text>
+  <text class="t" x="1378" y="526" font-size="22" font-weight="700">datacentre</text>
+  <text class="m" x="1378" y="552" font-size="17">Any run (agent, CI job,</text>
+  <text class="m" x="1378" y="576" font-size="17">app server, developer</text>
+  <text class="m" x="1378" y="600" font-size="17">sandbox), each behind</text>
+  <text class="m" x="1378" y="624" font-size="17">its own inner wall</text>
+  <text class="m" x="1378" y="648" font-size="17">and proxy.</text>
+  <text class="m" x="1378" y="672" font-size="17">Nothing connects in.</text>
+
+  <path class="lead" d="M1368 712 L1190 628"/><circle class="dot" cx="1190" cy="628" r="4"/>
+  <text class="t" x="1378" y="712" font-size="22" font-weight="700">Outer gate</text>
+  <text class="m" x="1378" y="738" font-size="17">Your existing egress</text>
+
+  <!-- Legend -->
+  <path class="sb" d="M64 1000 H104"/>
+  <text class="m" x="116" y="1006" font-size="17">Sandbox traffic: inner wall, then outer wall</text>
+  <path class="ord" d="M520 1000 H560"/>
+  <text class="m" x="572" y="1006" font-size="17">Ordinary traffic: outer wall only</text>
+  <path class="link" d="M880 1000 H920"/>
+  <text class="m" x="932" y="1006" font-size="17">Policy and audit links, not traffic</text>
+</svg>
