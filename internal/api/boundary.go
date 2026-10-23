@@ -125,6 +125,7 @@ func (s *Server) handleGetBoundary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("ETag", computeETag(boundaryState(b)))
+	b.SecondHumanRequired = GovernanceSecondHumanEnabled()
 	writeJSON(w, http.StatusOK, b)
 }
 
@@ -191,6 +192,7 @@ func (s *Server) handlePutBoundary(w http.ResponseWriter, r *http.Request) {
 		s.recordGovernanceBypass(r, govKindBoundary, govBoundaryKey, "success", nil)
 	}
 	w.Header().Set("ETag", computeETag(boundaryState(saved)))
+	saved.SecondHumanRequired = GovernanceSecondHumanEnabled()
 	writeJSON(w, http.StatusOK, saved)
 }
 

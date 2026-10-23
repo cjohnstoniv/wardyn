@@ -34,6 +34,9 @@ type Boundary struct {
 	UpdatedAt *time.Time         `json:"updated_at,omitempty"`
 	// LockedKnobs are the knobs no unit may change, a narrowing included (docs/operations/unit-admins.md).
 	LockedKnobs []string `json:"locked_knobs,omitempty"`
+	// SecondHumanRequired is set on the read: a save of the boundary is held for a second human
+	// (WARDYN_GOVERNANCE_SECOND_HUMAN on), so the editor words its submit as a request. Never stored.
+	SecondHumanRequired bool `json:"second_human_required,omitempty"`
 }
 
 // HardLimits reports whether the boundary binds runs.
