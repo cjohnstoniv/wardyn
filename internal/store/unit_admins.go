@@ -14,7 +14,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// UnitAdminStore keeps the unit-admin grants (migration 0211): a person or an IdP group that governs
+// UnitAdminStore keeps the unit-admin grants (migration 0228): a person or an IdP group that governs
 // one unit and everything under it. A side interface, as BoundaryStore is: a store that does not
 // implement it holds none, so only a security caller governs.
 type UnitAdminStore interface {
