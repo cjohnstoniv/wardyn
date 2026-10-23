@@ -168,8 +168,41 @@ func TestCreateSandboxRefusesALaptopModelOnARunnerWithoutTheRelay(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	publishCaps(t, rig, `{"support":{"Classes":["CC1","CC2"]},"cpu_millis_max":4000,"memory_mib_max":8192,"version":"relay","proxy_settings":`+string(named)+`}`)
+	publishCaps(t, rig, `{"support":{"Classes":["CC1","CC2"]},"cpu_millis_max":4000,"memory_mib_max":8192,"version":"relay","proxy_settings":`+string(named)+`,"local_model_ports":[11434]}`)
 	if _, err := rig.Sub.CreateSandbox(ctxT(t), laptop(true)); err != nil {
 		t.Fatalf("a runner naming %s was refused: %v", runnerwire.ProxySettingLocalModelRelay, err)
+	}
+}
+
+// The person allows a laptop local model's port on their own runner (--local-model-port): a runner that
+// relays local models but does not list the port, or lists none, is refused before anything is sent, with
+// the port named; one that lists it is sent the run.
+func TestCreateSandboxRefusesALaptopModelPortThePersonHasNotAllowed(t *testing.T) {
+	spec := func() runner.SandboxSpec {
+		return runner.SandboxSpec{RunID: uuid.New(), Image: "img", ConfinementClass: types.CC1, ProxyConfig: runner.ProxyConfig{
+			LocalModels: map[string]types.LocalModelSettings{"http://host.docker.internal:11434": {Models: []string{"m"}, AllowOnLaptopRunners: true}}}}
+	}
+	named, err := json.Marshal(append(slices.Clone(runnerwire.ProxySettings), runnerwire.ProxySettingLocalModelRelay))
+	if err != nil {
+		t.Fatal(err)
+	}
+	caps := func(version, ports string) string {
+		return `{"support":{"Classes":["CC1","CC2"]},"cpu_millis_max":4000,"memory_mib_max":8192,"version":"` + version + `","proxy_settings":` + string(named) + ports + `}`
+	}
+	rig := runnertest.NewRig(t, rid)
+	for name, ports := range map[string]string{"none set": "", "another port": `,"local_model_ports":[8080]`} {
+		publishCaps(t, rig, caps(name, ports))
+		_, err := rig.Sub.CreateSandbox(ctxT(t), spec())
+		var pe *remote.LocalModelPortError
+		if !errors.As(err, &pe) || pe.Port != 11434 || !strings.Contains(err.Error(), "--local-model-port 11434") {
+			t.Errorf("%s: create = %v, want a LocalModelPortError naming port 11434", name, err)
+		}
+	}
+	if len(rig.Fake.Created) != 0 {
+		t.Fatal("a refused create reached the runner")
+	}
+	publishCaps(t, rig, caps("allowed", `,"local_model_ports":[8080,11434]`))
+	if _, err := rig.Sub.CreateSandbox(ctxT(t), spec()); err != nil {
+		t.Fatalf("a runner allowing port 11434 was refused: %v", err)
 	}
 }

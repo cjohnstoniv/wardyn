@@ -3407,7 +3407,7 @@ With `local.allow_on_laptop_runners: true` (API only for now; off by default), a
 
 - What it opens: on native Docker, a listener on the Docker bridge's gateway at that one port, forwarded to the computer's loopback at the same port. It opens with the first flagged run and closes when the last one ends or the runner stops.
 - To whom: only the proxies of those flagged runs, by their container addresses. Any other container or process that reaches the gateway is closed before a byte is relayed.
-- The port is the one in `base_url`, chosen by the admin, and every member's runner relays it to its own loopback. Set it only to a model server's port.
+- The person allows the port on their own runner: `wardyn-runnerd --local-model-port 11434` (or `local_model_port` in `runnerd.json`). Until they do, the run is refused with `runner_local_model_port_not_allowed`.
 - Only a run granted the provider reaches it: its proxy admits the relay address for that host and port alone, with the same routes, allowlist and caps as above.
 - An organisation's runner is refused (`ProxyConfig.LLMUpstreams`). A wardyn-runnerd without the relay refuses the run with `runner_proxy_setting_unsupported`, naming `local_model_relay`.
 - On Docker Desktop and other VM-backed engines the engine already routes to the computer's loopback, so the flag opens nothing there; any container on that engine reaches the loopback as before.

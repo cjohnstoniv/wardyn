@@ -30,6 +30,20 @@ export const LOCAL_MODEL_EDITOR = {
   LIMITS_HINT: "Empty means the number shown. Context and reply go up to 1,048,576. Keep loaded goes up to 86,400.",
   MODEL_HINT: "One of the models above.",
   MODEL_HINT_CLAUDE: "One of the models above. Claude Code uses it for every model tier.",
+  // r12 (#2957, owner-approved 2026-10-23): local.allow_on_laptop_runners.
+  LAPTOP_SWITCH: "Let runs on a person's own computer use that computer's model server",
+  LAPTOP_OFF_HINT: "Off: runs on a person's own computer can't use this server.",
+  LAPTOP_ON_HINT: "On: runs on a person's own computer use the model server on that computer.",
+  LAPTOP_DISCLOSURE: "What this turns on",
+  LAPTOP_BULLETS: [
+    "A run on a person's own computer uses the model server on that computer. Wardyn reaches it through one port there: the port in Base URL.",
+    "Only runs given this provider can reach that port, and only through their own run proxy. The proxy keeps the list of allowed models and the limits, and still refuses pulling, pushing, creating, copying and deleting models.",
+    "That port opens only while a run that uses this server is going, and only to that run's proxy. Other containers on that computer can't use it, and it closes when the last such run ends.",
+    "A runner too old for this refuses the run until it is updated. Runs on your organisation's runners still can't use this server.",
+    "The person also has to allow that port on their own runner. Until they do, their runs can't use this server.",
+  ],
+  LAPTOP_FOOT: "Have the server listen on 127.0.0.1 only. A server open on every address stops the run from starting.",
+  LAPTOP_BASE_URL: "With this on, the Base URL must use host.docker.internal, such as http://host.docker.internal:11434.",
 } as const;
 
 export const LOCAL_MODEL_LIST = {

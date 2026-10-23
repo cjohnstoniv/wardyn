@@ -278,8 +278,10 @@ Upgrade the organisation before its runners. A runner installed with `setup` upg
 | `upstream_proxy` | none | `WARDYN_UPSTREAM_PROXY` | `--upstream-proxy` |
 | `runner_proxy`, `runner_no_proxy` | none | `HTTPS_PROXY`, `NO_PROXY` | |
 | `recording_store` | `pg` | `WARDYN_RECORDING_STORE` | `--recording-store` |
+| `local_model_port` | none | `WARDYN_LOCAL_MODEL_PORT` | `--local-model-port` |
 
 - A setting comes from the first of these that has it: the flag, the managed preference (macOS profile), the environment, the file, the default.
+- `local_model_port` lists the ports, comma-separated, of a model server on this computer that runs here may use, such as `11434`. Unset, no run uses it. See [Local model server](OPERATIONS.md#on-a-persons-own-runner).
 - A `proxy_image` in the file is a pin: `serve` keeps it. `proxy_image_mirror` is a repository without a tag, such as `registry.example/wardyn-proxy`: `serve` pulls the tag the organisation names from it.
 - The file never holds a credential. A proxy URL with a user name or password is refused where it is read, with the variable to set instead.
 - `serve` checks the file at every start and refuses an unknown field or a bad value by name. An absent default file is fine; a `--config` that does not exist is not.

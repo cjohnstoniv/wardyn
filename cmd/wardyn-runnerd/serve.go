@@ -58,6 +58,8 @@ type serveOptions struct {
 	// driveRoots is --drive-root: the folders a drive bound to this runner may mount from (none by
 	// default, so no drive mounts here until its owner allows one).
 	driveRoots []string
+	// localModelPorts is --local-model-port (parseLocalModelPorts): the laptop local model ports the person allows.
+	localModelPorts string
 }
 
 func (o serveOptions) recordingEnabled() (bool, error) {
@@ -214,6 +216,8 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 	cmd.Flags().StringVar(&opts.substrate, "substrate", "docker", "where runs execute: docker (this host's engine) or k8s (a runs namespace of the cluster runnerd runs in); "+
 		"folders runs nothing and only shares folders on this computer with runs elsewhere")
 	cmd.Flags().StringArrayVar(&opts.folderRoots, "folder-root", nil, "folders: a folder this runner may share, with everything under it (repeatable; default: your home folder)")
+	cmd.Flags().StringVar(&opts.localModelPorts, "local-model-port", "", "docker: the port, or comma-separated ports, of a model server on this computer that runs here may use when the organisation allows it, "+
+		"such as 11434; default: none, so no run here uses this computer's model server")
 	cmd.Flags().StringArrayVar(&opts.driveRoots, "drive-root", nil, "docker: a folder a drive bound to this runner may mount from, with everything under it (repeatable; default: none, so no drive mounts here)")
 	cmd.Flags().StringVar(&opts.runsNamespace, "runs-namespace", "", "k8s: the dedicated namespace runs are created in; never runnerd's own")
 	cmd.Flags().StringVar(&opts.relayService, "relay-service", "", "k8s: the relay Service's DNS name (<name>.<namespace>.svc.<cluster domain>), which must resolve to exactly one ClusterIP")
@@ -242,5 +246,5 @@ func (c runnerConfig) applyTo(org, stateDir *string, o *serveOptions) {
 	o.proxyImage, o.proxyImageMirror = c.get("proxy_image"), c.get("proxy_image_mirror")
 	o.relayListen, o.relayHostTarget, o.network = c.get("relay_listen"), c.get("relay_host_target"), c.get("internal_network")
 	o.trustedCAFile, o.upstreamProxy, o.recording = c.get("trusted_ca_file"), c.get("upstream_proxy"), c.get("recording_store")
-	o.orgCAFile = c.get("org_ca_file")
+	o.orgCAFile, o.localModelPorts = c.get("org_ca_file"), c.get("local_model_port")
 }

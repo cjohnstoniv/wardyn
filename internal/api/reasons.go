@@ -626,6 +626,10 @@ const (
 // carry (sandboxCreateFailure, remote.ProxySettingError): the run.create failure row's reason.
 const reasonRunnerProxySetting = "runner_proxy_setting_unsupported"
 
+// A run refused at create because its laptop local model is on a port the runner's person has not allowed
+// (sandboxCreateFailure, remote.LocalModelPortError): the run.create failure row's reason.
+const reasonRunnerLocalModelPort = "runner_local_model_port_not_allowed"
+
 // A request with no session and no bearer on a deployment with single sign-on and no admin token
 // (sessionRejectionResponse): the caller has to sign in.
 const reasonSignInRequired = "sign_in_required"

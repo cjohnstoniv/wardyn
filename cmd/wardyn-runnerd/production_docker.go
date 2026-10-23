@@ -73,7 +73,12 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	if err != nil {
 		return runnerRuntime{}, err
 	}
+	modelPorts, err := parseLocalModelPorts(opts.localModelPorts)
+	if err != nil {
+		return runnerRuntime{}, err
+	}
 	relay := newLocalRelay(ctx)
+	relay.modelPorts = modelPorts
 	// The decision sink before the runtime: its startup containment stops the runs' proxies, and one
 	// still running delivers what it holds while it stops only if the sink already listens.
 	sink, err := newDockerSink(ctx, stateDir, eng)
@@ -104,7 +109,7 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	extras.linuxVM = enableLinuxVM(ctx, sub, stateDir, os.Getenv)
 	extras.localAttach, extras.orgURL = local, opts.orgURL
 	endVMsOnFullSpool(sink.spoolSink, extras.linuxVM, sub.EndVM)
-	extras.driveRoots, extras.localModelRelay = driveRoots, true
+	extras.driveRoots, extras.localModelRelay, extras.localModelPorts = driveRoots, true, modelPorts
 	// The runtime first: its startup containment pass stops lapsed runs even when the check below fails.
 	rt, err := localRunnerRuntime(ctx, identity, stateDir, sub, docker.SandboxRef, relay, dockerCapacity, extras)
 	if err != nil {
@@ -398,6 +403,8 @@ type runtimeExtras struct {
 	// localModelRelay: the substrate relays a laptop local model (the Docker driver's
 	// LocalModelRelay), so the caps name runnerwire.ProxySettingLocalModelRelay.
 	localModelRelay bool
+	// localModelPorts are --local-model-port, advertised as the runner's local_model_ports.
+	localModelPorts []uint16
 }
 
 // proxySettings are the run proxy settings the caps name: every one this build carries, and the
@@ -530,7 +537,7 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 			return err
 		}
 		caps.Capacity, caps.BYOISelftest, caps.Retire, caps.Resident = capacity(ctx), dispatcher.Selftests(), true, dispatcher.Residents()
-		caps.ProxySettings, caps.AllowedRoots = extra.proxySettings(), extra.driveRoots
+		caps.ProxySettings, caps.AllowedRoots, caps.LocalModelPorts = extra.proxySettings(), extra.driveRoots, extra.localModelPorts
 		caps.LinuxVM, caps.LocalAttach = extra.linuxVM, local != nil
 		if !extra.report.fill(ctx, &caps, reprobe) && !always {
 			return nil

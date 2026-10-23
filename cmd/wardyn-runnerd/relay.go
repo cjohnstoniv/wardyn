@@ -60,6 +60,9 @@ type localRelay struct {
 	// (tests use another loopback address).
 	models    map[uint16]*modelPort
 	modelAddr netip.Addr
+	// modelPorts are the ports the person allows a local model server on (--local-model-port); none
+	// when empty, and OpenLocalModel refuses any other.
+	modelPorts []uint16
 }
 
 // relayBind admits only Docker's host-gateway address held by the Docker
@@ -170,7 +173,7 @@ func (m *modelPort) admits(src netip.Addr) bool {
 // laptop local model at the relay target on each of ports, and that port alone is forwarded to this
 // computer's loopback, where the model server listens. A connection from any other address is closed
 // before a byte is read or relayed, and nothing else is reached through it: no other port, address or
-// relay stream. A port's listener opens with the first run that names it and closes with the last
+// relay stream. A port the person has not allowed (modelPorts) is refused. A port's listener opens with the first run that names it and closes with the last
 // (CloseLocalModel) or when the runner stops (Close). Where the bind is that loopback address (a
 // VM-backed engine, whose route to this computer lands there) the server itself answers and nothing
 // is opened.
@@ -185,6 +188,11 @@ func (r *localRelay) OpenLocalModel(runID uuid.UUID, ports []uint16, peers []net
 		return errors.New("relay: no address a proxy reaches has been found yet")
 	case len(peers) == 0:
 		return errors.New("relay: a local model server is served only to a run's proxy, and none was named")
+	}
+	for _, port := range ports {
+		if !slices.Contains(r.modelPorts, port) {
+			return fmt.Errorf("relay: port %d is not a local model port this runner allows (wardyn-runnerd --local-model-port)", port)
+		}
 	}
 	r.closeModelRunLocked(runID)
 	if r.pair.bind == to {

@@ -107,7 +107,10 @@ type Caps struct {
 	Support substrate.ClassSupport `json:"support"`
 	placement.Capacity
 	AllowedRoots []string `json:"allowed_roots,omitempty"`
-	Version      string   `json:"version"`
+	// LocalModelPorts are the laptop local model ports the person allows on this runner
+	// (--local-model-port): a run whose model server is on another port is refused before it is sent.
+	LocalModelPorts []uint16 `json:"local_model_ports,omitempty"`
+	Version         string   `json:"version"`
 	// MachineName is the host's own name (os.Hostname), stored as the runner's machine_name.
 	MachineName string `json:"machine_name,omitempty"`
 	// Arch is the Docker engine's CPU architecture ("amd64" or "arm64"), stored as the runner's arch;

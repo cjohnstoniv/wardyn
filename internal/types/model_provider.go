@@ -4,8 +4,11 @@
 package types
 
 import (
+	"errors"
 	"maps"
+	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -163,6 +166,28 @@ type LocalModelSettings struct {
 // LaptopModelHost is the one base_url host an AllowOnLaptopRunners provider may name: the runner's own
 // computer as its run's proxy reaches it.
 const LaptopModelHost = "host.docker.internal"
+
+// LaptopModelPort is the port of a laptop local model's base URL, whose host must be LaptopModelHost: the
+// one port a person's runner relays to its own loopback for it, once that person allows it there.
+func LaptopModelPort(raw string) (uint16, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return 0, err
+	}
+	if strings.ToLower(strings.TrimSuffix(u.Hostname(), ".")) != LaptopModelHost {
+		return 0, errors.New("a laptop local model must be on " + LaptopModelHost)
+	}
+	port := map[string]uint64{"http": 80, "https": 443}[u.Scheme]
+	if p := u.Port(); p != "" {
+		if port, err = strconv.ParseUint(p, 10, 16); err != nil {
+			return 0, errors.New("port " + strconv.Quote(p))
+		}
+	}
+	if port == 0 {
+		return 0, errors.New("no port")
+	}
+	return uint16(port), nil
+}
 
 // The default bounds: generous enough for an agent's long context and replies, small enough that one
 // run cannot hold a model in memory indefinitely.

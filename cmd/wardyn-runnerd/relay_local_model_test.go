@@ -43,9 +43,10 @@ func modelServer(t *testing.T) (port uint16, accepted *atomic.Int32) {
 	return uint16(ln.Addr().(*net.TCPAddr).Port), accepted
 }
 
-func modelRelay() *localRelay {
+// modelRelay is a relay whose person allows ports (--local-model-port).
+func modelRelay(ports ...uint16) *localRelay {
 	return &localRelay{ctx: context.Background(), pair: pair("127.0.0.1", "host-gateway"), listeners: map[uint16]net.Listener{}, conns: map[net.Conn]*runnerwire.Peer{},
-		modelAddr: netip.MustParseAddr("127.0.0.2")}
+		modelAddr: netip.MustParseAddr("127.0.0.2"), modelPorts: ports}
 }
 
 // askModel connects from src to the relay at port, sends a request and returns what came back.
@@ -71,7 +72,7 @@ func askModel(t *testing.T, src string, port uint16) (string, error) {
 // refused, and where the bind is the model server's own address nothing is opened.
 func TestLocalModelRelayForwardsItsPortToTheModelServer(t *testing.T) {
 	port, _ := modelServer(t)
-	r := modelRelay()
+	r := modelRelay(port)
 	defer r.Close()
 	run := uuid.New()
 	for range 2 {
@@ -86,6 +87,7 @@ func TestLocalModelRelayForwardsItsPortToTheModelServer(t *testing.T) {
 		t.Fatalf("the model server answered %q (%v) through the relay", got, err)
 	}
 
+	r.modelPorts = append(r.modelPorts, 443)
 	r.listeners[443] = r.models[port].ln // stands in for the organisation relay's listener on 443
 	if err := r.OpenLocalModel(uuid.New(), []uint16{443}, []netip.Addr{netip.MustParseAddr("127.0.0.1")}); err == nil || !strings.Contains(err.Error(), "organisation relay's own") {
 		t.Errorf("the organisation relay's port = %v", err)
@@ -95,7 +97,7 @@ func TestLocalModelRelayForwardsItsPortToTheModelServer(t *testing.T) {
 		t.Error("the organisation relay took a local model server's port")
 	}
 
-	direct := &localRelay{ctx: context.Background(), pair: pair("127.0.0.1", "host-gateway"), listeners: map[uint16]net.Listener{}, conns: map[net.Conn]*runnerwire.Peer{}}
+	direct := &localRelay{ctx: context.Background(), pair: pair("127.0.0.1", "host-gateway"), listeners: map[uint16]net.Listener{}, conns: map[net.Conn]*runnerwire.Peer{}, modelPorts: []uint16{11434}}
 	if err := direct.OpenLocalModel(uuid.New(), []uint16{11434}, []netip.Addr{netip.MustParseAddr("172.30.0.9")}); err != nil || len(direct.models) != 0 {
 		t.Errorf("a loopback bind opened %v (%v): the model server answers there itself", direct.models, err)
 	}
@@ -105,7 +107,7 @@ func TestLocalModelRelayForwardsItsPortToTheModelServer(t *testing.T) {
 // the bridge, a process on this computer) is closed before a byte reaches the model server.
 func TestLocalModelRelayRefusesASourceThatIsNoFlaggedRunsProxy(t *testing.T) {
 	port, accepted := modelServer(t)
-	r := modelRelay()
+	r := modelRelay(port)
 	defer r.Close()
 	if err := r.OpenLocalModel(uuid.New(), []uint16{port}, []netip.Addr{netip.MustParseAddr("127.0.0.3")}); err != nil {
 		t.Fatal(err)
@@ -122,7 +124,7 @@ func TestLocalModelRelayRefusesASourceThatIsNoFlaggedRunsProxy(t *testing.T) {
 // and admission with it, the last run's end closes the listener, and so does the runner's stop.
 func TestLocalModelRelayClosesWhenTheLastFlaggedRunEnds(t *testing.T) {
 	port, _ := modelServer(t)
-	r := modelRelay()
+	r := modelRelay(port)
 	defer r.Close()
 	a, b := uuid.New(), uuid.New()
 	for run, peer := range map[uuid.UUID]string{a: "127.0.0.3", b: "127.0.0.5"} {
@@ -158,7 +160,7 @@ func TestLocalModelRelayClosesWhenTheLastFlaggedRunEnds(t *testing.T) {
 // wait: one that sends nothing is closed and never reaches the server.
 func TestLocalModelRelayDialsOnlyAfterAFirstByte(t *testing.T) {
 	port, accepted := modelServer(t)
-	r := modelRelay()
+	r := modelRelay(port)
 	r.firstByte = 50 * time.Millisecond
 	defer r.Close()
 	if err := r.OpenLocalModel(uuid.New(), []uint16{port}, []netip.Addr{netip.MustParseAddr("127.0.0.3")}); err != nil {
@@ -173,5 +175,23 @@ func TestLocalModelRelayDialsOnlyAfterAFirstByte(t *testing.T) {
 	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
 	if _, err := c.Read(make([]byte, 1)); err == nil || accepted.Load() != 0 {
 		t.Errorf("a silent connection was kept (%v) or dialled the model server (%d connection(s))", err, accepted.Load())
+	}
+}
+
+// A port the person has not allowed (--local-model-port), or any port when they allowed none, is
+// refused and nothing listens on it, on a native engine and on a VM-backed one alike.
+func TestLocalModelRelayRefusesAPortThePersonHasNotAllowed(t *testing.T) {
+	port, _ := modelServer(t)
+	peers := []netip.Addr{netip.MustParseAddr("127.0.0.3")}
+	for name, r := range map[string]*localRelay{"none allowed": modelRelay(), "another port allowed": modelRelay(port + 1)} {
+		err := r.OpenLocalModel(uuid.New(), []uint16{port}, peers)
+		if err == nil || !strings.Contains(err.Error(), "not a local model port this runner allows") || len(r.models) != 0 {
+			t.Errorf("%s: port %d = %v, listeners %v; want it refused", name, port, err, r.models)
+		}
+		_ = r.Close()
+	}
+	vm := &localRelay{ctx: context.Background(), pair: pair("127.0.0.1", "host-gateway"), listeners: map[uint16]net.Listener{}, conns: map[net.Conn]*runnerwire.Peer{}}
+	if err := vm.OpenLocalModel(uuid.New(), []uint16{11434}, peers); err == nil {
+		t.Error("a VM-backed engine's relay admitted a port its person has not allowed")
 	}
 }

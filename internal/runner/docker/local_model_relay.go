@@ -10,10 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/netip"
-	"net/url"
 	"slices"
-	"strconv"
-	"strings"
 
 	"github.com/google/uuid"
 	"github.com/moby/moby/client"
@@ -53,7 +50,7 @@ func (d *Driver) withRunnerLocalModels(cfgJSON []byte) ([]byte, []uint16, error)
 		if !s.AllowOnLaptopRunners || d.cfg.ControlPlaneRelay == nil {
 			continue
 		}
-		port, err := laptopModelPort(raw)
+		port, err := types.LaptopModelPort(raw)
 		if err == nil && d.cfg.LocalModelRelay == nil {
 			err = fmt.Errorf("this runner does not relay a local model server")
 		}
@@ -109,26 +106,4 @@ func (d *Driver) closeLocalModels(runID uuid.UUID) {
 	if d.cfg.LocalModelRelay != nil {
 		d.cfg.LocalModelRelay.CloseLocalModel(runID)
 	}
-}
-
-// laptopModelPort is the port of a laptop local model's base URL, whose host must be
-// types.LaptopModelHost (the API holds it there at write).
-func laptopModelPort(raw string) (uint16, error) {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return 0, err
-	}
-	if strings.ToLower(strings.TrimSuffix(u.Hostname(), ".")) != types.LaptopModelHost {
-		return 0, fmt.Errorf("a laptop local model must be on %s", types.LaptopModelHost)
-	}
-	port := map[string]uint64{"http": 80, "https": 443}[u.Scheme]
-	if p := u.Port(); p != "" {
-		if port, err = strconv.ParseUint(p, 10, 16); err != nil {
-			return 0, fmt.Errorf("port %q", p)
-		}
-	}
-	if port == 0 {
-		return 0, fmt.Errorf("no port")
-	}
-	return uint16(port), nil
 }
