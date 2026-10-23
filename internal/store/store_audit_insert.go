@@ -8,12 +8,23 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+type auditReplayKey struct{}
+
+// WithAuditReplay marks ctx's audit writes as replays of events whose id and time are already fixed
+// (an owed row's pinned event, a spooled line): InsertAuditEvent appends one only when no row already
+// carries that id and time, so replaying an event the table holds adds no row. Writers serialise on
+// the chain lock, so two replays of one event at once land one row.
+func WithAuditReplay(ctx context.Context) context.Context {
+	return context.WithValue(ctx, auditReplayKey{}, true)
+}
 
 // InsertAuditEvent appends a single audit event. Implements audit.Recorder.
 // The Postgres trigger blocks UPDATE/DELETE; this function only ever INSERTs.
@@ -58,6 +69,16 @@ func InsertAuditEvent(ctx context.Context, pool *pgxpool.Pool, ev *types.AuditEv
 	if _, err := tx.Exec(ctx, lockAuditChainSQL, db.AuditChainLockKey); err != nil {
 		return fmt.Errorf("store: lock audit chain (waited up to %s; another transaction that inserted into audit_events may still be open): %w",
 			db.AuditChainLockTimeout, err)
+	}
+	if replay, _ := ctx.Value(auditReplayKey{}).(bool); replay && ev.ID != uuid.Nil {
+		var held bool
+		// audit_events_time_idx finds it; under the chain lock, every earlier writer has committed.
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM audit_events WHERE time = $1 AND id = $2)`, ev.Time, ev.ID).Scan(&held); err != nil {
+			return fmt.Errorf("store: look up a replayed audit event: %w", err)
+		}
+		if held {
+			return nil // already recorded: nothing to append, and ev keeps no chain hashes
+		}
 	}
 	// audit_append is the only way a row enters audit_events: it allocates seq and recorded_at under
 	// the chain lock and the chain trigger refuses a row it did not allocate. COALESCE: the genesis

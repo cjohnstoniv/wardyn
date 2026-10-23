@@ -744,12 +744,12 @@ commands are the ones in "Back them up" and "Restore them", and in
     - so each compaction halves it and a full drain writes at most about twice the backlog rather than once per batch.
   - The consequence to know is that mid-drain the spool FILE can still hold lines that have already reached the store —
     - `wc -l` on it is not the backlog, `wardyn_audit_spool_lines` is —
-    - and that an unclean stop mid-recovery can replay the not-yet-reclaimed prefix, which the trail records as
-      duplicate events with the same `id`.
-  - The spool has always been at-least-once for this reason (a crash between the store write and the trim).
+    - and that an unclean stop mid-recovery can replay the not-yet-reclaimed prefix.
+  - A replayed line whose event the store already holds (same `id` and `time`) adds no row, so the trail keeps one;
+    the audit sinks may still receive it again.
+  - The spool replays at least once for this reason (a crash between the store write and the trim).
   - This widens that window in exchange for not fsyncing the whole backlog once per batch onto the volume the database
     is recovering on.
-  - Duplicates are the benign direction: `seq` still identifies every row, and each one verifies.
 
 ### The hash chain — what a rewritten row looks like
 

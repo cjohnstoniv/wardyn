@@ -238,7 +238,7 @@ func (s *Server) recordDeprovisionRefusal(ctx context.Context, ident store.Princ
 
 // recordDeprovisionRefusalAs is recordDeprovisionRefusal for an owed row: with a non-zero id the event
 // carries that id and time, the pair the ledger pinned (PinDeprovisionEvent), so every replay of one
-// obligation is the same event.
+// obligation is the same event, and the store appends it only once (store.WithAuditReplay).
 func (s *Server) recordDeprovisionRefusalAs(ctx context.Context, ident store.PrincipalIdentity, kind, outcome, reason, unproved string, id uuid.UUID, at time.Time) bool {
 	data := map[string]any{"kind": kind, "reason": reason}
 	if unproved != "" {
@@ -247,6 +247,7 @@ func (s *Server) recordDeprovisionRefusalAs(ctx context.Context, ident store.Pri
 	ev := s.auditEvent(nil, types.ActorSystem, scimActor, "person.deprovision", ident.ID.String(), outcome, mustJSON(data))
 	if id != uuid.Nil {
 		ev.ID, ev.Time = id, at
+		ctx = store.WithAuditReplay(ctx)
 	}
 	return s.recordAuditDurably(ctx, ev)
 }
@@ -266,10 +267,11 @@ func oweRefusalAudit(ctx context.Context, st scimStore, id uuid.UUID, kind strin
 // drainRefusalAudits writes the refusal rows jobs (one kind's ledger, or one group removal's) still owe,
 // before the step goes on to cut or complete anything. A row durably accepted marks its ledger row done; one
 // that is not stays owed. A purge's owed row is keyed by the unproved form it stopped on.
-// Delivery is at least once: nothing claims the row, so two replicas draining it at once both write it,
-// and an owe that reopens a row a concurrent drain just finished writes it again. Every write of one
-// obligation carries the same event id and time (the first drain pins them on the ledger row), so a
-// repeat is recognisable as the same event.
+// Nothing claims the row, so two replicas draining it at once both write it, and an owe that reopens a
+// row a concurrent drain just finished writes it again. Every write of one obligation carries the same
+// event id and time (the first drain pins them on the ledger row), and the audit table keeps one row
+// per id and time for these writes (store.WithAuditReplay), so a failing completion write or a second
+// drainer adds no row. The audit sinks may still see a repeat.
 func (s *Server) drainRefusalAudits(ctx context.Context, st scimStore, ident store.PrincipalIdentity, kind string, jobs []store.DeprovisionJob) error {
 	var errs []error
 	for _, j := range jobs {
