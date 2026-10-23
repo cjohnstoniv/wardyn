@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -129,6 +130,16 @@ func TestMeServiceReach(t *testing.T) {
 			t.Errorf("GET /workspaces = %v, want %s and %s (the parity must not be trivial)", got, wsOwn, wsOpen)
 		}
 	})
+	// The service's /me bytes for the 200 and each error arm, taken from the handler before meServiceReach
+	// stopped taking the ResponseWriter; workspace ids are written WS_OPEN and WS_OWN.
+	golden := func(t *testing.T, arm string, w *httptest.ResponseRecorder) {
+		t.Helper()
+		got := strings.NewReplacer(wsOpen.String(), "WS_OPEN", wsOwn.String(), "WS_OWN").Replace(fmt.Sprintf("%d %s", w.Code, w.Body.String()))
+		if want := meServiceGoldens[arm]; got != want {
+			t.Errorf("service GET /me (%s) =\n%s\nwant\n%s", arm, got, want)
+		}
+	}
+	t.Run("golden_200", func(t *testing.T) { golden(t, "200", get("/api/v1/me")) })
 	t.Run("person_has_no_service_key", func(t *testing.T) {
 		for who, w := range map[string]*httptest.ResponseRecorder{
 			"sponsor":     doSSO(t, e.h.srv, http.MethodGet, "/api/v1/me", e.sponsor, ""),
@@ -145,7 +156,7 @@ func TestMeServiceReach(t *testing.T) {
 		}
 	})
 	// Last: these swap the store. A failed list read fails /me as it fails the route, never a partial reach.
-	storeErr := func(t *testing.T, st store.Store, route string, sameBody bool) {
+	storeErr := func(t *testing.T, st store.Store, route string, sameBody bool, arm string) {
 		t.Helper()
 		prev := e.h.srv.cfg.Store
 		e.h.srv.cfg.Store = st
@@ -154,17 +165,21 @@ func TestMeServiceReach(t *testing.T) {
 		if me.Code != http.StatusInternalServerError || respReason(me) != reasonInternalError || list.Code != me.Code || respReason(list) != respReason(me) {
 			t.Errorf("service GET /me = %d %s, GET %s = %d %s, want both 500 %s", me.Code, me.Body.String(), route, list.Code, list.Body.String(), reasonInternalError)
 		}
+		golden(t, arm, me)
 		if sameBody && me.Body.String() != list.Body.String() {
 			t.Errorf("service GET /me body %s differs from GET %s body %s", me.Body.String(), route, list.Body.String())
 		}
 	}
-	t.Run("presets_store_error", func(t *testing.T) { storeErr(t, presetsUnreadable{e.st}, "/api/v1/presets", true) })
-	t.Run("workspaces_store_error", func(t *testing.T) { storeErr(t, workspacesUnreadable{e.st}, "/api/v1/workspaces", false) })
+	t.Run("presets_store_error", func(t *testing.T) { storeErr(t, presetsUnreadable{e.st}, "/api/v1/presets", true, "500 presets") })
+	t.Run("workspaces_store_error", func(t *testing.T) {
+		storeErr(t, workspacesUnreadable{e.st}, "/api/v1/workspaces", false, "500 workspaces")
+	})
 	t.Run("site_config_unreadable", func(t *testing.T) {
 		prev := e.h.srv.cfg.Store
 		e.h.srv.cfg.Store = siteConfigUnreadable{e.st}
 		t.Cleanup(func() { e.h.srv.cfg.Store = prev })
 		me, list := get("/api/v1/me"), get("/api/v1/workspaces")
+		golden(t, "503", me)
 		if me.Code != http.StatusServiceUnavailable || respReason(me) != reasonRosterUnreadable || me.Body.String() != list.Body.String() {
 			t.Errorf("service GET /me with an unreadable site config = %d %s, want GET /workspaces' 503 %s", me.Code, me.Body.String(), list.Body.String())
 		}
@@ -172,6 +187,14 @@ func TestMeServiceReach(t *testing.T) {
 			t.Errorf("a person's GET /me with an unreadable site config = %d %s, want 200", w.Code, w.Body.String())
 		}
 	})
+}
+
+// meServiceGoldens are TestMeServiceReach's service /me answers ("<status> <body>"), by arm.
+var meServiceGoldens = map[string]string{
+	"200":            `200 {"email":"","governance_contact":{"source":"deployment"},"member_local_dir_root":null,"method":"token","name":"","operator":false,"principal":"service:ci-bot","role":"user","security_operator":false,"service":{"name":"ci-bot","sponsor":"sponsor-sub","routes":["DELETE /api/v1/model-providers/{id}/credential","GET /api/v1/audit","GET /api/v1/me","GET /api/v1/presets","GET /api/v1/presets/{name}","GET /api/v1/runs","GET /api/v1/runs/{id}","GET /api/v1/runs/{id}/events","GET /api/v1/runs/{id}/output","GET /api/v1/setup/status","GET /api/v1/workspaces","PATCH /api/v1/runs/{id}","POST /api/v1/runs","POST /api/v1/runs/preflight","POST /api/v1/runs/{id}/kill","PUT /api/v1/model-providers/{id}/credential"],"presets":[{"name":"open-all","version":1},{"name":"open-ci","version":1}],"workspaces":[{"id":"WS_OWN","name":"service-owned"},{"id":"WS_OPEN","name":"operator-open"}]},"user_drive":null,"user_drive_denied_by_unit":"","user_drive_unavailable":"","user_preview_available":false,"user_type":{"id":"ci","name":"CI"},"user_view":false,"user_view_dropped":null,"user_view_no_credential":false,"user_view_preselect_type":"","user_view_types":null}` + "\n",
+	"503":            `503 {"error":"the site configuration could not be read; try again","reason":"roster_unreadable"}` + "\n",
+	"500 presets":    `500 {"error":"list presets","reason":"internal_error"}` + "\n",
+	"500 workspaces": `500 {"error":"list workspaces","reason":"internal_error"}` + "\n",
 }
 
 // presetsUnreadable and workspacesUnreadable are the PG store with one list read failing.
@@ -196,8 +219,8 @@ func TestMeServiceReach_PersonBodyGolden(t *testing.T) {
 		ctx  context.Context
 		want string
 	}{
-		"sso member":  {member, `{"email":"alice.smith@corp.example","governance_contact":{"source":"deployment"},"member_local_dir_root":null,"method":"token","name":"Alice Smith","operator":false,"principal":"gsv-member-0001","role":"user","security_operator":false,"user_drive":null,"user_drive_denied_by_profile":"","user_drive_unavailable":"","user_preview_available":false,"user_type":null,"user_view":false,"user_view_dropped":null,"user_view_no_credential":false,"user_view_preselect_type":"","user_view_types":null}` + "\n"},
-		"admin token": {context.Background(), `{"email":"","governance_contact":null,"member_local_dir_root":null,"method":"token","name":"","operator":true,"principal":"admin-token","role":"admin","security_operator":true,"user_drive":null,"user_drive_denied_by_profile":"","user_drive_unavailable":"","user_preview_available":false,"user_type":null,"user_view":false,"user_view_dropped":null,"user_view_no_credential":false,"user_view_preselect_type":"","user_view_types":null}` + "\n"},
+		"sso member":  {member, `{"email":"alice.smith@corp.example","governance_contact":{"source":"deployment"},"member_local_dir_root":null,"method":"token","name":"Alice Smith","operator":false,"principal":"gsv-member-0001","role":"user","security_operator":false,"user_drive":null,"user_drive_denied_by_unit":"","user_drive_unavailable":"","user_preview_available":false,"user_type":null,"user_view":false,"user_view_dropped":null,"user_view_no_credential":false,"user_view_preselect_type":"","user_view_types":null}` + "\n"},
+		"admin token": {context.Background(), `{"email":"","governance_contact":null,"member_local_dir_root":null,"method":"token","name":"","operator":true,"principal":"admin-token","role":"admin","security_operator":true,"user_drive":null,"user_drive_denied_by_unit":"","user_drive_unavailable":"","user_preview_available":false,"user_type":null,"user_view":false,"user_view_dropped":null,"user_view_no_credential":false,"user_view_preselect_type":"","user_view_types":null}` + "\n"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			w := httptest.NewRecorder()
