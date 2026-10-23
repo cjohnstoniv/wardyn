@@ -89,7 +89,7 @@ export function BoundaryScreen() {
   const [outcome, setOutcome] = React.useState<Outcome>(null);
   const [busy, setBusy] = React.useState(false);
   const [savedElsewhere, setSavedElsewhere] = React.useState<string | null>(null);
-  const [secondHuman, setSecondHuman] = React.useState(false);
+  const [held, setHeld] = React.useState(false);
   const [submittedJson, setSubmittedJson] = React.useState<string | null>(null);
   const etagRef = React.useRef<string | null>(null);
   // The dry run a reply belongs to: Back, a new review or an edit makes any earlier reply stale.
@@ -98,7 +98,7 @@ export function BoundaryScreen() {
   const adopt = (doc: BoundarySnapshot) => {
     const b: BoundaryWrite = { mode: doc.mode, spec: doc.spec ?? {}, limits: doc.limits ?? {}, ...(doc.contact ? { contact: doc.contact } : {}) };
     setStored(b);
-    setSecondHuman(doc.second_human_required === true);
+    setHeld(doc.save_held_for_approval === true);
     setDraft(draftFrom(b));
     etagRef.current = doc.etag ?? null;
     setSubmittedJson(null);
@@ -186,7 +186,7 @@ export function BoundaryScreen() {
   );
 
   return (
-    <PageContainer width="list">
+    <PageContainer width="form">
       <nav aria-label="Breadcrumb" className="mb-2 flex items-center gap-1.5 text-xs text-muted-foreground">
         <Link to="/admin/policies" className="hover:text-foreground">
           {BOUNDARY.BREADCRUMB_PARENT}
@@ -322,7 +322,7 @@ export function BoundaryScreen() {
             {savedElsewhere !== null && <SavedElsewhereBanner reloaded documentText={savedElsewhere} onDiscard={() => setSavedElsewhere(null)} />}
             {outcome?.kind === "saved" && <Note role="status">{DELIVERY.SAVED}</Note>}
             <div className="flex flex-wrap items-center justify-end gap-2">
-              <span className="mr-auto text-xs text-muted-foreground">{secondHuman ? BOUNDARY.FOOTER_SECOND_HUMAN : BOUNDARY.FOOTER}</span>
+              <span className="mr-auto text-xs text-muted-foreground">{held ? BOUNDARY.FOOTER_SECOND_HUMAN : BOUNDARY.FOOTER}</span>
               <Button variant="ghost" disabled={disabled || !dirty} onClick={() => edit(draftFrom(stored))}>
                 {BOUNDARY.DISCARD}
               </Button>
@@ -338,7 +338,7 @@ export function BoundaryScreen() {
         <DryRunReport
           stored={stored}
           body={body}
-          secondHuman={secondHuman}
+          held={held}
           state={report}
           outcome={outcome}
           canSubmit={!disabled && dirty}
@@ -430,7 +430,7 @@ function ReportRows({ title, rows }: { title: string; rows: { key: string; name:
 function DryRunReport({
   stored,
   body,
-  secondHuman,
+  held,
   state,
   outcome,
   canSubmit,
@@ -441,7 +441,7 @@ function DryRunReport({
 }: {
   stored: BoundaryWrite;
   body: BoundaryWrite;
-  secondHuman: boolean;
+  held: boolean;
   state: ReportState;
   outcome: Outcome;
   canSubmit: boolean;
@@ -473,7 +473,7 @@ function DryRunReport({
           <tr>
             <th className="py-1 font-medium">{BOUNDARY.TITLE}</th>
             <th className="py-1 font-medium">{BOUNDARY_DRY_RUN.TODAY}</th>
-            <th className="py-1 font-medium">{secondHuman ? BOUNDARY_DRY_RUN.AFTER : BOUNDARY_DRY_RUN.AFTER_SAVE}</th>
+            <th className="py-1 font-medium">{held ? BOUNDARY_DRY_RUN.AFTER : BOUNDARY_DRY_RUN.AFTER_SAVE}</th>
           </tr>
         </thead>
         <tbody>
@@ -523,7 +523,7 @@ function DryRunReport({
           </Button>
           <Button disabled={!canSubmit || state.status !== "ready"} onClick={onSubmit}>
             {busy ? <Loader2 className="size-4 animate-spin" /> : null}
-            {secondHuman ? BOUNDARY_DRY_RUN.SUBMIT : BOUNDARY_DRY_RUN.SUBMIT_SAVE}
+            {held ? BOUNDARY_DRY_RUN.SUBMIT : BOUNDARY_DRY_RUN.SUBMIT_SAVE}
           </Button>
         </div>
       </div>

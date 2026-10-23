@@ -59,7 +59,7 @@ export const BOUNDARY = {
   // The pinned footer.
   // The board's footer is "Every save shows a dry run first. Changing the mode needs a second admin."; the
   // second sentence is true only when the deployment requires a second person, which the read says
-  // (second_human_required), so the footer, the report's After column and its submit button follow it.
+  // (save_held_for_approval), so the footer, the report's After column and its submit button follow it.
   FOOTER: "Every save shows a dry run first.",
   /** not on the boards: the board's second sentence, worded for a save of any kind being held. */
   FOOTER_SECOND_HUMAN: "Every save shows a dry run first, then waits for a second admin to approve it.",

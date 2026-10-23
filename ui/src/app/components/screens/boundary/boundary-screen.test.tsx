@@ -88,10 +88,10 @@ describe("BoundaryScreen", () => {
     expect(putMock).not.toHaveBeenCalled();
   });
 
-  it("sits in the shared list column (#3058), not a page of its own width", async () => {
+  it("sits in the shared form column (#3058), not a page of its own width", async () => {
     renderScreen();
     const title = await screen.findByRole("heading", { level: 1, name: BOUNDARY.TITLE });
-    expect(title.closest("[data-page-width]")).toHaveAttribute("data-page-width", "list");
+    expect(title.closest("[data-page-width]")).toHaveAttribute("data-page-width", "form");
   });
 
   it("with no second person required, the report says After saving and the button says Save changes; the read's flag switches both and the footer (#3389)", async () => {
@@ -107,7 +107,7 @@ describe("BoundaryScreen", () => {
     expect(within(report).queryByText(BOUNDARY_DRY_RUN.SUBMIT)).toBeNull();
     unmount();
 
-    getMock.mockResolvedValue({ ...noLimits, second_human_required: true });
+    getMock.mockResolvedValue({ ...noLimits, save_held_for_approval: true });
     renderScreen();
     await screen.findByText(BOUNDARY.ORG_PANEL);
     await user.click(hardRadio());
@@ -256,17 +256,17 @@ describe("BoundaryScreen", () => {
   });
 
   it("a held write is the submitted note and Submit goes off until the draft changes", async () => {
-    getMock.mockResolvedValue(hardLimits);
+    getMock.mockResolvedValue({ ...hardLimits, save_held_for_approval: true });
     putMock.mockRejectedValue(new PendingChangeError({ id: "c1" } as GovernanceChange));
     const user = userEvent.setup();
     renderScreen();
     await draftHosts("paste.example.org");
     await user.click(screen.getByRole("button", { name: BOUNDARY.REVIEW }));
     const report = await screen.findByTestId("boundary-dry-run");
-    await user.click(await within(report).findByRole("button", { name: BOUNDARY_DRY_RUN.SUBMIT_SAVE }));
+    await user.click(await within(report).findByRole("button", { name: BOUNDARY_DRY_RUN.SUBMIT }));
     expect(await within(report).findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
     expect(screen.queryByText(DELIVERY.SAVED)).toBeNull();
-    expect(within(report).getByRole("button", { name: BOUNDARY_DRY_RUN.SUBMIT_SAVE })).toBeDisabled();
+    expect(within(report).getByRole("button", { name: BOUNDARY_DRY_RUN.SUBMIT })).toBeDisabled();
   });
 
   it("a failed dry run can't be submitted, and Try again runs it again", async () => {

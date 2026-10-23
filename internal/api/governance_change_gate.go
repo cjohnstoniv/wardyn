@@ -80,6 +80,12 @@ func isAdminTokenCaller(r *http.Request) bool {
 	return actorType == types.ActorSystem && principal == adminTokenPrincipal
 }
 
+// governanceSaveHeld reports whether a covered write by this caller would be held for a second human: the
+// switch is on and the caller is not the admin token, which governanceWriteMode lets through as govBypass.
+func governanceSaveHeld(r *http.Request) bool {
+	return envEnabled(envGovernanceSecondHuman) && !isAdminTokenCaller(r)
+}
+
 // unitWriteMode is governanceWriteMode for the routes a unit admin may use (governance_scope.go): a
 // security caller's write follows the switch, unchanged, and so does a security admin's unit-admin
 // grant, so a single-admin install can create unit admins. A unit admin's write is
