@@ -5,9 +5,10 @@
 
 // Policies -> Wardyn boundary against the real server: a security admin reaches the page from Policies, a fresh
 // install's boundary is seeded in hard_limits (#3238), so the page opens on the Hard limits mode with its list,
-// and nothing is offered for review until something changes. No second-admin claim is made before a submit.
+// and nothing is offered for review until something changes. No second-admin claim is made before a submit. The
+// Desktop group card (M7-Knobs-B, #2967) shows the value each direction is held to and drafts into the dry run.
 import { test, expect, asRealSecurityAdmin, consoleAPI, gotoConsole, navTo } from "./fixtures";
-import { BOUNDARY } from "../src/app/lib/boundary-copy";
+import { BOUNDARY, BOUNDARY_DESKTOP } from "../src/app/lib/boundary-copy";
 
 // Serial: the second test moves the install's one boundary document and puts it back.
 test.describe.configure({ mode: "serial" });
@@ -57,6 +58,38 @@ test.describe("Policies: the Wardyn boundary", () => {
       // Nothing is written until Submit: the stored document is still no_limits.
       const stored = await consoleAPI(page, "GET", path);
       expect(JSON.parse(stored.text).mode).toBe("no_limits");
+    } finally {
+      const back = await consoleAPI(page, "PUT", path, { mode, spec, limits });
+      expect(back.status, back.text).toBe(200);
+    }
+  });
+
+  test("the Desktop card holds an unset direction to its default and drafts a change into the dry run", async ({ page }) => {
+    await asRealSecurityAdmin(page);
+    const path = "/api/v1/governance/boundary";
+    const original = await consoleAPI(page, "GET", path);
+    expect(original.status, original.text).toBe(200);
+    const { mode, spec, limits } = JSON.parse(original.text);
+    const set = await consoleAPI(page, "PUT", path, { mode: "hard_limits", spec: { ...spec, desktop: { copy_out: "allowed" } }, limits });
+    expect(set.status, set.text).toBe(200);
+    try {
+      await gotoConsole(page, "admin");
+      await navTo(page, "Policies");
+      await page.getByRole("link", { name: BOUNDARY.TITLE, exact: true }).click();
+      const card = page.getByTestId("boundary-desktop");
+      await expect(card).toBeVisible();
+      const row = (name: string) => card.getByRole("group", { name });
+      await expect(row("Copy out of the desktop").getByRole("radio", { name: BOUNDARY_DESKTOP.ALLOWED })).toBeChecked();
+      await expect(row("Download files").getByRole("radio", { name: BOUNDARY_DESKTOP.BLOCKED })).toBeChecked();
+      await expect(page.getByTestId("boundary-desktop-now")).toContainText("Download blocked");
+
+      await row("Copy out of the desktop").getByText(BOUNDARY_DESKTOP.BLOCKED, { exact: true }).click();
+      await page.getByRole("button", { name: BOUNDARY.REVIEW, exact: true }).click();
+      const report = page.getByTestId("boundary-dry-run");
+      await expect(report).toBeVisible();
+      await expect(report.getByRole("row", { name: new RegExp(`^${BOUNDARY_DESKTOP.TITLE}`) })).toContainText("Copy out blocked");
+      const stored = await consoleAPI(page, "GET", path);
+      expect(JSON.parse(stored.text).spec.desktop).toEqual({ copy_out: "allowed" });
     } finally {
       const back = await consoleAPI(page, "PUT", path, { mode, spec, limits });
       expect(back.status, back.text).toBe(200);
