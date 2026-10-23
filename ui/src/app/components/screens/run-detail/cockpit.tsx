@@ -27,7 +27,7 @@ import { VIEWER_APPROVAL_BLOCKS_NOTE } from "../../wardyn/copy";
 import { deriveTitle } from "../approvals";
 import { viewerBlockedOnDecision } from "./viewer-blocked";
 import { RunCanvas } from "./canvas";
-import { RunStatusStrip } from "./status-strip";
+import { RunStatusStrip, useEvidenceFacts } from "./status-strip";
 import { RunFailureBlock } from "./failure-block";
 import { LocalModelsCard } from "./local-models-card";
 import { LoginSandboxNote } from "./login-sandbox-note";
@@ -166,6 +166,7 @@ export function Cockpit({
     </>
   );
 
+  const evidence = useEvidenceFacts(run.id, !terminal);
   const ctx: WidgetContext = {
     run,
     finished: terminal,
@@ -179,6 +180,7 @@ export function Cockpit({
     // render; this is the state the alarm chip states.
     heldCount: pending.filter(isHeld).length,
     audit,
+    evidence,
     auditGap,
     onGoAudit,
     onGoPolicy,

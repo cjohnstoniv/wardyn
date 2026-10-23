@@ -7,10 +7,10 @@
 // ordered blocker list, and Launch only on a current, fresh, clean check.
 
 import * as React from "react";
-import { MoreHorizontal } from "lucide-react";
+import { Check, CircleAlert, MoreHorizontal } from "lucide-react";
 import { Button } from "../../../ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../../ui/dropdown-menu";
-import { Chip } from "../../../wardyn/primitives";
+import { StepSection } from "../../../wardyn/step-section";
 import { Segmented } from "../../../wardyn/segmented";
 import { NR_FILES } from "../../../wardyn/copy/new-run/files";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
@@ -72,6 +72,25 @@ function setupTitle(intent: ReturnType<typeof useNewRunDraft>["intent"]): string
   if (intent.shape === "environment") return NR_REVIEW.SETUP_ENVIRONMENT;
   if (intent.shape !== "agent_task") return undefined;
   return intent.experience === "background" ? NR_REVIEW.SETUP_AGENT_AUTONOMOUS : NR_REVIEW.SETUP_AGENT_INTERACTIVE;
+}
+
+const MARK_TONE = {
+  danger: "border-danger/25 bg-danger-subtle text-danger",
+  warning: "border-warning/30 bg-warning-subtle text-warning",
+  success: "border-success/35 bg-success-subtle text-success",
+} as const;
+
+/** The status mark the group rows draw, with its word beside it: a mark, never a pill (the StepSection marker rule). */
+function SetupMark({ tone }: { tone: keyof typeof MARK_TONE }) {
+  const Icon = tone === "success" ? Check : CircleAlert;
+  return (
+    <span data-testid="review-status-mark" data-tone={tone} className="inline-flex items-center gap-1.5">
+      <span aria-hidden="true" className={`grid size-[22px] place-items-center rounded-full border ${MARK_TONE[tone]}`}>
+        <Icon className="size-3" />
+      </span>
+      {tone === "danger" ? NR_REVIEW.BADGE_ATTENTION : tone === "warning" ? NR_REVIEW.BADGE_CHECK : NR_REVIEW.BADGE_COMPLETE}
+    </span>
+  );
 }
 
 export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScreenProps) {
@@ -196,17 +215,15 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
       <BlockerList blockers={blockers} go={(loc: NewRunLocation) => go(loc)} onCheckAgain={issues.length ? undefined : checkAgain} />
       {view === "pretty" ? (
         <div className="grid items-start gap-3.5 lg:grid-cols-[minmax(0,1.7fr)_minmax(280px,0.8fr)]">
-          <section className="flex flex-col overflow-hidden rounded-xl border border-border bg-card">
-            <header className="flex min-h-[78px] items-start justify-between gap-3 border-b border-border px-5 py-[18px]">
-              <div>
-                <h2 className="font-medium">{NR_REVIEW.SETUP_TITLE}</h2>
-                <p className="text-sm text-muted-foreground">{setupTitle(draft.intent)}</p>
-              </div>
-              {/* A blocker that names a group is red; a stale result alone blames none, so it is amber (#3043). */}
-              <Chip tone={hard.length ? "danger" : blockers.length ? "warning" : "success"}>
-                {hard.length ? NR_REVIEW.BADGE_ATTENTION : blockers.length ? NR_REVIEW.BADGE_CHECK : NR_REVIEW.BADGE_COMPLETE}
-              </Chip>
-            </header>
+          {/* #3044: Review's groups are flat rows in the one section card the guided steps use. A blocker that names a
+              group is red; a stale result alone blames none, so it is amber (#3043). */}
+          <StepSection
+            title={NR_REVIEW.SETUP_TITLE}
+            description={setupTitle(draft.intent)}
+            marker={<SetupMark tone={hard.length ? "danger" : blockers.length ? "warning" : "success"} />}
+            className="overflow-hidden"
+            bodyClassName="p-0"
+          >
             <BlockedGroups.Provider value={groupsBlockedBy(hard)}>
               <RunGroup {...group} docRows={docRows.run} />
               <WhereGroup {...group} docRows={docRows.where} />
@@ -215,7 +232,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
               <AccessGroup {...group} docRows={docRows.access} />
               <LimitsGroup {...group} docRows={docRows.limits} />
             </BlockedGroups.Provider>
-          </section>
+          </StepSection>
           <EffectivePolicyCard draft={draft} pre={pre} preview={checks.preview.result} />
         </div>
       ) : (

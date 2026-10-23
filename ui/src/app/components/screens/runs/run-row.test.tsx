@@ -17,6 +17,7 @@ import { OperatorProvider } from "../../wardyn/operator-context";
 import { RUNS_ROW_ACTION, RUNS_ROW_WORD } from "../../wardyn/copy/runs-landing";
 import { HttpError, TIMEOUT_STATUS } from "../../../lib/api/core";
 import { RunRow } from "./run-row";
+import { rowPresentation } from "./runs-model";
 
 const signInMock = vi.fn();
 vi.mock("../../../lib/api/run-sign-in", () => ({ runSignIn: { get: (...a: unknown[]) => signInMock(...a) } }));
@@ -243,5 +244,24 @@ describe("RunRow — a scheduled run", () => {
     expect(screen.getByText("Queued")).toBeInTheDocument();
     expect(screen.getByTitle(/· started /)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Cancel run" })).not.toBeInTheDocument();
+  });
+});
+
+// #3039: the row's status is the run header's pill, so Completed and Killed no longer read as the same grey word.
+describe("RunRow — the status pill", () => {
+  const pillOf = (word: string) => screen.getByText(word).closest("span[class*='rounded']") as HTMLElement;
+
+  it("renders the status as the badge, and Completed and Killed differ", () => {
+    const killed = renderRow(makeRun({ state: "KILLED", title: "Reindex search", ended_at: "2026-10-20T10:00:00Z" }));
+    expect(pillOf("Killed").className).toMatch(/bg-danger/);
+    killed.unmount();
+    renderRow(makeRun({ state: "COMPLETED", title: "Migrate invoices", ended_at: "2026-10-20T10:00:00Z" }));
+    expect(pillOf("Completed").className).not.toMatch(/bg-danger/);
+  });
+
+  it("keeps an amber chip on an attention row", () => {
+    const run = makeRun({ attention: { kind: "approval", by: "you", pending: 1 } });
+    renderRow(run);
+    expect(pillOf(rowPresentation(run).word).className).toMatch(/warning/);
   });
 });

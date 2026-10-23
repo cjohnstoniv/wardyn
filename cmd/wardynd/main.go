@@ -599,13 +599,16 @@ func run() error {
 		return err
 	}
 
+	// WARDYN_SSH_BIND_EARLY: bind the SSH gateway before the workers start. Nil (and a no-op) with it off.
+	sshLn := bindSSHGatewayEarly(f, srv)
+
 	// Periodic goroutines (lifecycle reaper, groundtruth token rotator, approval
 	// expiry sweeper) + the boot-time reconciliation pass (C3).
 	startBackgroundWorkers(rootCtx, f, srv, run, pool, st, idp, brk, maskedRec, feats.recStore, leader, ticks)
 
 	// SSH gateway accept loop (own goroutine, like the periodic workers above,
 	// and extracted the same way — see startSSHGateway's own doc comment).
-	startSSHGateway(rootCtx, f, srv)
+	startSSHGateway(rootCtx, f, srv, sshLn)
 
 	// UI-sandbox gateway: a SECOND HTTP listener on its own origin (see
 	// startUISandboxGateway; a no-op when -ui-sandbox-listen is empty).

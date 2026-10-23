@@ -8,6 +8,7 @@ import type { Page } from "@playwright/test";
 import { test, expect, MEMBER_PRINCIPAL, asRealMember, asRealSecurityAdmin, consoleAPI, gotoConsole, sql } from "./fixtures";
 import { APPROVAL, RUN_COCKPIT, SECURITY_ONLY_REASON, UNTIL_PAST } from "../src/app/components/wardyn/copy";
 import { APPROVALS } from "../src/app/lib/approvals-copy";
+import { RUN_REF } from "../src/app/components/wardyn/copy/run-ref";
 import { APPROVALS_TAB } from "../src/app/components/wardyn/copy/approvals";
 import { DENIED } from "../src/app/lib/permissions-copy";
 import { REAUTH_ROW, REAUTH_TITLE } from "../src/app/components/wardyn/model-access-copy";
@@ -279,6 +280,11 @@ test.describe("Approvals screen", () => {
 
     // Honesty: a DENIED verdict renders in the danger/red tone, never a green ✓.
     await expect(page.getByText("Denied", { exact: true }).first()).toHaveClass(/text-danger/);
+
+    // #3036: a decided row names its run through RunRef (title, then the short id that copies), never the bare id link.
+    const ref = page.getByTestId("run-ref").filter({ has: page.locator(`button[title^="${anyRunId()}"]`) }).first();
+    await expect(ref).toContainText(anyRunId().replace(/^run_/, "").slice(0, 8));
+    await expect(ref.getByRole("button", { name: /^[0-9a-f]{8}/ })).toHaveAttribute("title", new RegExp(RUN_REF.CLICK_TO_COPY));
 
     // Decided cards are terminal — no Approve/Deny actions.
     await expect(page.getByRole("button", { name: "Approve" })).toHaveCount(0);
@@ -558,6 +564,8 @@ test.describe("Approvals — decision-scope split button (run cockpit)", () => {
       const row = page.getByTestId("live-approval-row");
       await expect(row).toBeVisible();
       await expect(row.getByText(markerRe(marker))).toBeVisible();
+      // #3030: the strip row reads the Approvals card's human title, not the bare host.
+      await expect(row.getByText(`Reach ${marker}`, { exact: true })).toBeVisible();
 
       // The split button's bare halves stay named "Approve"/"Deny" — same
       // unanchored match the card buttons above use (not exact:true: that's

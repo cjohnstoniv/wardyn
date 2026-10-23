@@ -4,7 +4,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import type { WidgetContext } from "./widget-registry";
 
 const getFiles = vi.fn();
@@ -13,7 +13,7 @@ vi.mock("../../../lib/api/runs", () => ({
   runs: { getFiles: (...a: unknown[]) => getFiles(...a), getResources: (...a: unknown[]) => getResources(...a) },
 }));
 
-import { RunStatusStrip } from "./status-strip";
+import { RunStatusStrip, useEvidenceFacts } from "./status-strip";
 
 const ctx = (over: Partial<WidgetContext> = {}) =>
   ({
@@ -35,37 +35,30 @@ beforeEach(() => {
 
 describe("RunStatusStrip (#3038)", () => {
   it("is four tiles: Egress, Files, Sandbox, Credentials", async () => {
-    getFiles.mockRejectedValue(new Error("501"));
-    getResources.mockRejectedValue(new Error("501"));
-    render(<RunStatusStrip ctx={ctx()} />);
+    render(<RunStatusStrip ctx={ctx({ evidence: { files: null, sandbox: null } })} />);
     await screen.findAllByText("Not available");
     const labels = screen.getAllByTestId("status-tile").map((t) => t.firstElementChild?.textContent);
     expect(labels).toEqual(["Egress", "Files", "Sandbox", "Credentials"]);
   });
 
   it("the Sandbox tile says Not available, and Files says Not inspectable, when the runner offers nothing", async () => {
-    getFiles.mockRejectedValue(new Error("501"));
-    getResources.mockRejectedValue(new Error("409"));
-    render(<RunStatusStrip ctx={ctx({ finished: true })} />);
+    render(<RunStatusStrip ctx={ctx({ finished: true, evidence: { files: null, sandbox: null } })} />);
     expect(await tile("Sandbox").findByText("Not available")).toBeInTheDocument();
     expect(tile("Files").getByText("Not inspectable")).toBeInTheDocument();
     expect(screen.queryByText("n/a")).toBeNull();
   });
 
   it("reads real evidence when there is some", async () => {
-    getFiles.mockResolvedValue({ vcs: "git", files: [{ path: "a" }, { path: "b" }] });
-    getResources.mockResolvedValue({ cpu_percent: 12.4 });
-    render(<RunStatusStrip ctx={ctx()} />);
+    render(<RunStatusStrip ctx={ctx({ evidence: { files: 2, sandbox: "12%" } })} />);
     expect(await tile("Files").findByText("2")).toBeInTheDocument();
     expect(tile("Sandbox").getByText("12%")).toBeInTheDocument();
   });
 
   it("Egress leads with what is held, Credentials counts grants and mints", async () => {
-    getFiles.mockResolvedValue({ vcs: "git", files: [] });
-    getResources.mockResolvedValue({});
     render(
       <RunStatusStrip
         ctx={ctx({
+          evidence: { files: 0, sandbox: null },
           heldCount: 1,
           grants: [{ id: "g" }] as unknown as WidgetContext["grants"],
           audit: [{ action: "credential.mint", outcome: "success" }] as unknown as WidgetContext["audit"],
@@ -78,10 +71,21 @@ describe("RunStatusStrip (#3038)", () => {
   });
 
   it("Egress says None yet with nothing recorded", async () => {
-    getFiles.mockResolvedValue({ vcs: "git", files: [] });
-    getResources.mockResolvedValue({});
-    render(<RunStatusStrip ctx={ctx()} />);
+    render(<RunStatusStrip ctx={ctx({ evidence: { files: 0, sandbox: null } })} />);
     expect(tile("Egress").getByText("None yet")).toBeInTheDocument();
     await screen.findAllByText("Not available");
+  });
+});
+
+describe("useEvidenceFacts (#3038)", () => {
+  it("reads the file count and the CPU, and reads anything else as nothing to show", async () => {
+    getFiles.mockResolvedValue({ vcs: "git", files: [{ path: "a" }, { path: "b" }] });
+    getResources.mockResolvedValue({ cpu_percent: 12.4 });
+    const ok = renderHook(() => useEvidenceFacts("run-1", false));
+    await waitFor(() => expect(ok.result.current).toEqual({ files: 2, sandbox: "12%" }));
+    getFiles.mockResolvedValue({ vcs: "none", files: [] });
+    getResources.mockRejectedValue(new Error("409"));
+    const none = renderHook(() => useEvidenceFacts("run-2", false));
+    await waitFor(() => expect(none.result.current).toEqual({ files: null, sandbox: null }));
   });
 });

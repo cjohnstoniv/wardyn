@@ -52,6 +52,9 @@ export interface MeCapabilities {
   groups_snapshot_stale: boolean;
   // capKindsVersion: bumped when the set of capability kinds changes.
   kinds_version: number;
+  // The self_host_runner feature, answered as POST /me/runners/tokens would. False: Personal runners are off for the
+  // caller. Absent (an older server) reads as allowed: the refusal copy never shows on a guess.
+  may_self_host_runner?: boolean;
 }
 
 // POST /permissions/grants — the natural key plus the effect. Identity

@@ -197,6 +197,10 @@ describe("ViewGate", () => {
 
   it("the admin token is told a user page belongs to a person", async () => {
     mount("/runs", "admin-only");
+    // #3047: a refusal is the Why can't I? card with one action, not the plain notice.
+    expect(screen.getByTestId("refusal")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: VIEW_ADMIN_TOKEN.TITLE })).toBeInTheDocument();
+    expect(screen.getByText(VIEW_ADMIN_TOKEN.CAN_CHANGE)).toBeInTheDocument();
     expect(screen.getByText(VIEW_ADMIN_TOKEN.BODY)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: VIEW_ADMIN_TOKEN.CTA }));
     expect(screen.getByTestId("where")).toHaveTextContent("/admin");

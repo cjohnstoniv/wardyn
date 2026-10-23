@@ -61,7 +61,13 @@ export const YOUR_ACCOUNT = {
 // page is fetched (AdminSettingsScreen checks this before its first read).
 export const SETTINGS_SUPER_ONLY = {
   TITLE: "Settings is for super admins",
+  CHIP: "Refused by role",
   BODY: "You're signed in as a security admin.",
+  // #3047: the card's Wall, Set by, Enforced and Can change values, in that order.
+  WALL: "Super admin pages",
+  SET_BY: "Wardyn super admins",
+  ENFORCED: "By the server, on every settings read and write",
+  CAN_CHANGE: "Not from here. A super admin can give you access.",
   CTA: "Back to Runs",
 } as const;
 
@@ -69,7 +75,12 @@ export const SETTINGS_SUPER_ONLY = {
 // URL. It was a page header over an 11px "Requires the admin role." to someone who is an admin, with no way back.
 export const PROVIDERS_SUPER_ONLY = {
   TITLE: "Workspace providers is for super admins",
+  CHIP: "Refused by role",
   BODY: "You're signed in as a security admin.",
+  WALL: "Super admin pages",
+  SET_BY: "Wardyn super admins",
+  ENFORCED: "By the server, on every provider read and write",
+  CAN_CHANGE: "Not from here. A super admin can give you access.",
   CTA: "Back to Runs",
 } as const;
 
@@ -115,7 +126,13 @@ export const VIEW_TO_USER = {
 
 // The admin token on an SSO install opens a user page: it is not a person.
 export const VIEW_ADMIN_TOKEN = {
+  TITLE: "This page needs a person",
+  CHIP: "Refused by sign-in",
   BODY: "Runs and connections belong to a person. Sign in with SSO to use them.",
+  WALL: "User pages",
+  SET_BY: "Wardyn",
+  ENFORCED: "By the server, for every run and connection",
+  CAN_CHANGE: "Not with the admin token. Sign in with SSO.",
   CTA: "Back to the admin view",
 } as const;
 

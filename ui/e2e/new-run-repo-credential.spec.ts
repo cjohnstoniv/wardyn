@@ -45,6 +45,8 @@ async function openTools(page: Page, dropped: boolean) {
   await page.getByRole("textbox", { name: NR_DOCUMENT.EDITOR_ARIA("YAML") }).fill(DOCUMENT);
   await press(page, NR_DOCUMENT.CONTINUE_REVIEW);
   await expect(page.getByRole("heading", { name: NR_REVIEW.TITLE })).toBeVisible();
+  // #3044: Review's groups sit in the one StepSection card (15px sentence-case title).
+  await expect(page.getByRole("heading", { name: NR_REVIEW.SETUP_TITLE })).toHaveClass(/text-\[15px\]/);
   await press(page, `${NR_REVIEW.CHANGE} ${NR_REVIEW.GROUP_ACCESS}`);
   await press(page, NR_REVIEW.EDIT_TOOLS_ACCESS);
   await expect(page.getByRole("heading", { name: NR_TOOLS.TITLE })).toBeVisible();
@@ -56,6 +58,13 @@ test.describe("New Run, step 5: a repository with no credential", () => {
     const row = page.getByText("acme/web", { exact: true }).locator("xpath=ancestor::li[1]");
     await expect(row.getByText(SENTENCE, { exact: true })).toBeVisible();
     await expect(row.getByText(NR_TOOLS.STATUS_NEEDS_SETUP, { exact: true })).toBeVisible();
+  });
+
+  test("the Tools step's sections use the guided steps' one section card (#3044)", async ({ page }) => {
+    await openTools(page, false);
+    for (const title of [NR_TOOLS.INCLUDED_TITLE, NR_TOOLS.ADD_TITLE]) {
+      await expect(page.getByRole("heading", { name: title })).toHaveClass(/text-\[15px\]/);
+    }
   });
 
   test("a repository that has its credential says nothing of the kind", async ({ page }) => {

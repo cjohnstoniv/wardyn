@@ -7,13 +7,16 @@
 // POST /me/drives meets, plus storage.user_drive.member_create.keep_main_drive,
 // and the store's own count cap. Only the work folder is kept: home, agent
 // settings and /tmp stay the sandbox's. Nothing happens at run end: no
-// teardown reclaims a drive's volume or claim, only a drive delete does.
+// teardown reclaims a drive's volume or claim, only a drive delete does. The one
+// exception is a run that ends without ever starting: nothing was mounted by it, so
+// dropUnstartedKeptDrive deletes its drive, through the delete a person's own drive takes, and frees the person's count.
 package api
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"path"
 	"strings"
@@ -191,6 +194,65 @@ func (s *Server) auditKeptDrive(r *http.Request, k *keptWorkFolder, run types.Ag
 	}
 	s.recordAudit(r.Context(), s.auditEvent(&run.ID, actorTypeFromRequest(r), principalFromRequest(r),
 		"drive.member.create", saved.ID.String(), "success", mustJSON(data)))
+}
+
+// memberDriveByRunEnd is the "by" of the drive.member.delete row of a kept drive whose run never started.
+const memberDriveByRunEnd = "run_never_started"
+
+// dropUnstartedKeptDrive deletes the drive run kept its work folder in, for a run that ended without ever
+// starting (cancelled or timed out in the queue, aborted by the component fence, or aborted after its
+// insert on the direct path). The drive was made with the run and nothing was mounted by it, so it would
+// only count against the person's max_per_person. It goes through the same delete as the person's own:
+// the owner-starting check, then the substrate's reclaim. The drive is a member drive like any other and
+// the owner's other runs can attach it, so a drive one of them holds is left in place, and the refusal is
+// audited by that delete as it audits its own, never as an already-absent object. A run that has no kept
+// drive, a drive some other run kept, and a drive another delete holds are left alone. Best effort: a
+// failure is logged and the drive stays, as it did before.
+func (s *Server) dropUnstartedKeptDrive(ctx context.Context, runID uuid.UUID) {
+	ms, ok := s.cfg.Store.(store.MemberDriveStore)
+	if !ok {
+		return
+	}
+	ctx = context.WithoutCancel(ctx)
+	id := keptWorkFolderDriveID(runID)
+	d, err := ms.GetMemberDrive(ctx, id)
+	if err != nil || d.KeptFromRun == nil || *d.KeptFromRun != runID {
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			slog.WarnContext(ctx, "api: read the kept drive of a run that never started", slog.String("run_id", runID.String()), slog.Any("err", err))
+		}
+		return
+	}
+	if refused, serr := s.memberDriveOwnerStarting(ctx, ms, d, memberDriveByRunEnd); serr != nil || refused {
+		if serr != nil {
+			slog.WarnContext(ctx, "api: read the owner's starting runs for a kept drive", slog.String("run_id", runID.String()), slog.Any("err", serr))
+		}
+		return
+	}
+	d, started, err := ms.BeginMemberDriveDeleteAdmin(ctx, id)
+	if err != nil {
+		if !errors.Is(err, store.ErrNotFound) && !errors.Is(err, store.ErrMemberDriveBusy) {
+			slog.WarnContext(ctx, "api: delete the kept drive of a run that never started", slog.String("run_id", runID.String()), slog.Any("err", err))
+		}
+		return
+	}
+	if res := s.deleteMemberDrive(ctx, ms, d, started, memberDriveByRunEnd); res.err != nil {
+		slog.WarnContext(ctx, "api: finish the delete of the kept drive of a run that never started", slog.String("run_id", runID.String()), slog.Any("err", res.err))
+	}
+}
+
+// keptRunEnded reports whether runID, the run a kept drive was kept from, has ended or is gone. Until then
+// the drive is that run's alone: another run cannot attach it (reachableDrive.held). A run that cannot
+// be read counts as not ended, so the drive stays out of reach rather than into it.
+func (s *Server) keptRunEnded(ctx context.Context, runID uuid.UUID) bool {
+	run, err := s.cfg.Store.GetRun(ctx, runID)
+	if errors.Is(err, store.ErrNotFound) {
+		return true
+	}
+	if err != nil {
+		slog.WarnContext(ctx, "api: read the run a kept drive was kept from", slog.String("run_id", runID.String()), slog.Any("err", err))
+		return false
+	}
+	return run.State.IsTerminal()
 }
 
 // keptWorkFolderMount is the mount of the drive run keeps its work folder in,

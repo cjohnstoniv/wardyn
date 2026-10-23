@@ -253,9 +253,42 @@ export function OpenInUserViewMenu({ runId }: { runId: string }) {
   );
 }
 
-// Exported for AdminSettingsScreen's S-5 refusal (packet M-5, #636): same
-// shape as every other tier refusal in this file, a different body and CTA.
-export function ViewNotice({ title, body, children }: { title?: string; body: string; children: React.ReactNode }) {
+type RefusalCopy = {
+  TITLE: string;
+  CHIP: string;
+  BODY: string;
+  WALL: string;
+  SET_BY: string;
+  ENFORCED: string;
+  CAN_CHANGE: string;
+  CTA: string;
+};
+
+// #3047: every role refusal is the Why can't I? card with its one canon button, whichever page refused.
+export function RoleRefusal({ copy, cta }: { copy: RefusalCopy; cta: () => void }) {
+  return (
+    <div className="flex min-h-[60vh] items-center justify-center px-6 py-16">
+      <Refusal
+        title={copy.TITLE}
+        chip={copy.CHIP}
+        body={copy.BODY}
+        rows={[
+          { label: REFUSAL.WALL, value: copy.WALL },
+          { label: REFUSAL.SET_BY, value: copy.SET_BY },
+          { label: REFUSAL.ENFORCED, value: copy.ENFORCED },
+          { label: REFUSAL.CAN_CHANGE, value: copy.CAN_CHANGE },
+        ]}
+      >
+        <Button size="sm" onClick={cta}>
+          {copy.CTA}
+        </Button>
+      </Refusal>
+    </div>
+  );
+}
+
+// The view-switch interstitial's card: two buttons, so it is not a refusal (those are RoleRefusal, with one).
+function ViewNotice({ title, body, children }: { title?: string; body: string; children: React.ReactNode }) {
   return (
     <div className="flex min-h-[60vh] items-center justify-center px-6 py-16">
       <section className="w-full max-w-md space-y-2 rounded-xl border border-border bg-card p-6">
@@ -313,33 +346,9 @@ export function ViewGate({ fallback }: { fallback: React.ReactNode }) {
     case "twin":
       return <Navigate to={`${verdict.to}${search}${hash}`} replace />;
     case "refuse":
-      return (
-        <div className="flex min-h-[60vh] items-center justify-center px-6 py-16">
-          <Refusal
-            title={VIEW_REFUSAL.TITLE}
-            chip={VIEW_REFUSAL.CHIP}
-            body={VIEW_REFUSAL.BODY}
-            rows={[
-              { label: REFUSAL.WALL, value: VIEW_REFUSAL.WALL },
-              { label: REFUSAL.SET_BY, value: VIEW_REFUSAL.SET_BY },
-              { label: REFUSAL.ENFORCED, value: VIEW_REFUSAL.ENFORCED },
-              { label: REFUSAL.CAN_CHANGE, value: VIEW_REFUSAL.CAN_CHANGE },
-            ]}
-          >
-            <Button size="sm" onClick={() => navigate("/runs")}>
-              {VIEW_REFUSAL.CTA}
-            </Button>
-          </Refusal>
-        </div>
-      );
+      return <RoleRefusal copy={VIEW_REFUSAL} cta={() => navigate("/runs")} />;
     case "admin-token":
-      return (
-        <ViewNotice body={VIEW_ADMIN_TOKEN.BODY}>
-          <Button size="sm" variant="outline" onClick={() => navigate("/admin")}>
-            {VIEW_ADMIN_TOKEN.CTA}
-          </Button>
-        </ViewNotice>
-      );
+      return <RoleRefusal copy={VIEW_ADMIN_TOKEN} cta={() => navigate("/admin")} />;
     default:
       return (
         <ViewInterstitial

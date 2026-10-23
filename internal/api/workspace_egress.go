@@ -147,7 +147,11 @@ func substituteArtifactEgress(domains []string, sc types.SiteConfig) []string {
 	dropHost := map[string]bool{} // bare hosts to remove
 	var add []string
 	added := map[string]bool{}
-	for _, r := range sc.EgressRedirects {
+	refused := secondPortTokenRedirects(sc, have)
+	for i, r := range sc.EgressRedirects {
+		if _, no := refused[i]; no {
+			continue // a second port of a token host: refused, so it neither drops public reach nor adds an entry
+		}
 		to := strings.ToLower(hostrules.HostOf(r.To))
 		if to == "" {
 			continue // malformed To: this redirect contributes nothing

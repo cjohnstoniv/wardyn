@@ -559,6 +559,10 @@ type meCapabilitiesResponse struct {
 	SessionGroups       []string                `json:"session_groups"`
 	GroupsSnapshotStale bool                    `json:"groups_snapshot_stale"`
 	KindsVersion        int                     `json:"kinds_version"`
+	// MaySelfHostRunner answers the self_host_runner feature the way POST /me/runners/tokens does, an
+	// operator's exemption included, so the console can say so before the person copies a command that
+	// could only end in that refusal. Read-only: it grants nothing.
+	MaySelfHostRunner bool `json:"may_self_host_runner"`
 }
 
 // handleMeCapabilities is the member-safe twin of GET /permissions: it sits on
@@ -604,6 +608,11 @@ func (s *Server) handleMeCapabilities(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "get capability enforcement", err)
 		return
 	}
+	maySelfHost, err := s.capSeamAllowed(ctx, capFeature, featureSelfHostRunner)
+	if err != nil {
+		writeServerError(w, r, "resolve self-host runner capability", err)
+		return
+	}
 	// CreatedBy names the ADMIN who wrote the row (principal or email). A member
 	// needs to know WHAT they hold, never which colleague signed it — and the
 	// field is `omitempty`, so blanking it drops it from the body rather than
@@ -620,5 +629,6 @@ func (s *Server) handleMeCapabilities(w http.ResponseWriter, r *http.Request) {
 		SessionGroups:       subj.groups,
 		GroupsSnapshotStale: subj.stale,
 		KindsVersion:        capKindsVersion,
+		MaySelfHostRunner:   maySelfHost,
 	})
 }

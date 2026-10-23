@@ -8,4 +8,6 @@
 export const HOST_CARD = {
   // The state pill when the host has no sandbox runner. A host with one reads "Runs default to <tier>".
   CANT_LAUNCH: "Can't launch",
+  // #3342: the card's own button; the shell's no-barrier notice says "Re-check barrier".
+  RECHECK: "Re-check host",
 } as const;

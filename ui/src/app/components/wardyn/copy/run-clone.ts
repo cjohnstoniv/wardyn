@@ -84,7 +84,8 @@ export const NO_BARRIER = {
   // The reader who cannot fix it: who can, and no dead-end control.
   BANNER_MEMBER: "Ask a Wardyn admin to set one up.",
   SETUP_COMMAND: "wardyn setup status",
-  RECHECK: "Re-check",
+  // #3342: not the Host card's "Re-check host"; two buttons on one page must not share a name.
+  RECHECK: "Re-check barrier",
   FINISH_GATE_HEAD: "Setup can't finish without a barrier.",
   FINISH_GATE_REASON: "Wardyn confines every run.",
 } as const;

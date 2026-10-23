@@ -280,7 +280,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// exactly the path this closure exists for. Detaching here and again below
 	// is harmless (WithoutCancel of a detached ctx is a no-op in effect) and
 	// keeps the two concerns independent.
-	abort := s.abortHalfBuiltRun(ctx, runID)
+	abort := s.abortHalfBuiltRun(ctx, runID, f.keep != nil)
 
 	// The kept work folder's drive, counted again at the insert: a race past the
 	// fold's count is refused here and the run is never started.

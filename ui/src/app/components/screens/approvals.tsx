@@ -26,6 +26,7 @@ import { anyCapabilityEnforced, useMyCapabilities } from "../../lib/capabilities
 import { DENIED } from "../../lib/permissions-copy";
 import { LIST_LIMIT } from "../../lib/api/core";
 import { usePoll } from "../../lib/use-poll";
+import { useRunTitles } from "../../lib/use-run-titles";
 import { getErrorMessage } from "../../lib/format";
 import { grantsWrite, scopeRepos } from "../../lib/grant-sentence";
 import { Button } from "../ui/button";
@@ -299,6 +300,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // per-card DECISION gate moves to the security predicate.
   const operator = useOperator();
   const caps = useMyCapabilities(!operator);
+  const runTitles = useRunTitles();
   const [pendingItems, setPendingItems] = React.useState<ApprovalRequest[]>([]);
   const [decidedItems, setDecidedItems] = React.useState<ApprovalRequest[]>([]);
   const [decidedLongest, setDecidedLongest] = React.useState(0);
@@ -587,7 +589,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
         <>
           <div className="overflow-hidden rounded-xl border border-border bg-card">
             {decidedItems.map((d) => (
-              <DecidedRow key={d.id} item={d} />
+              <DecidedRow key={d.id} item={d} runTitle={runTitles.get(d.run_id)} />
             ))}
           </div>
           <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
