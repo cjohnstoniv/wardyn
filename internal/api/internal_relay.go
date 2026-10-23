@@ -20,6 +20,7 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -206,6 +207,14 @@ func (s *Server) acceptRelay(runnerID string, c net.Conn) error {
 	return nil
 }
 
+// relayHandshakeWait and relayIdleWait are the internal listener's own bounds (internal_tls.go):
+// a relay stream that does not finish its TLS handshake and request header within the first, or
+// stays idle between requests past the second, is closed, and its runner's relay slot comes back.
+const (
+	relayHandshakeWait = 10 * time.Second
+	relayIdleWait      = 120 * time.Second
+)
+
 // newRelayHTTPServer is the relay's HTTP server. It speaks HTTP/1.1 only: an h2 connection
 // multiplexes requests over the one relay stream, and the per-connection runner tag and the
 // per-runner stream cap assume one request at a time per stream.
@@ -213,11 +222,13 @@ func newRelayHTTPServer(h http.Handler, tlsCfg *tls.Config) *http.Server {
 	cfg := tlsCfg.Clone()
 	cfg.NextProtos = slices.DeleteFunc(slices.Clone(cfg.NextProtos), func(p string) bool { return p == "h2" })
 	return &http.Server{
-		Handler:        h,
-		TLSConfig:      cfg,
-		TLSNextProto:   map[string]func(*http.Server, *tls.Conn, http.Handler){},
-		ConnContext:    relayConnContext,
-		MaxHeaderBytes: 1 << 20,
+		Handler:           h,
+		TLSConfig:         cfg,
+		TLSNextProto:      map[string]func(*http.Server, *tls.Conn, http.Handler){},
+		ConnContext:       relayConnContext,
+		MaxHeaderBytes:    1 << 20,
+		ReadHeaderTimeout: relayHandshakeWait, // net/http bounds the TLS handshake by it too
+		IdleTimeout:       relayIdleWait,
 	}
 }
 
