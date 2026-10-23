@@ -28,7 +28,7 @@ func TestLegacyAuditSpellingsStillRead(t *testing.T) {
 	}
 
 	ref := &policyref.Ref{Source: policyref.SourceUnit, Name: "team"}
-	got := knobProvenance{"allowed_domains": {Layer: "profile", Name: "team"}}.withContacts(ref, nil)
+	got := knobProvenance{"allowed_domains": {Layer: "profile", Name: "team"}}.withContacts(ref, nil, nil)
 	if got["allowed_domains"].Layer != policyref.LayerUnit {
 		t.Errorf("legacy layer read as %q, want %q", got["allowed_domains"].Layer, policyref.LayerUnit)
 	}

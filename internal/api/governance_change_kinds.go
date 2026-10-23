@@ -51,12 +51,14 @@ type unitChangePayload struct {
 	ParentID      json.RawMessage        `json:"parent_id,omitempty"`
 	Overlay       json.RawMessage        `json:"overlay,omitempty"`
 	OverlayLimits json.RawMessage        `json:"overlay_limits,omitempty"`
+	LockedKnobs   *[]string              `json:"locked_knobs,omitempty"`
 }
 
 func unitPayloadOf(req governanceUnitRequest) unitChangePayload {
 	return unitChangePayload{
 		Name: req.Name, Mode: req.Mode, Ceiling: req.Ceiling, Limits: req.Limits,
 		Contact: req.Contact, ParentID: req.ParentID, Overlay: req.Overlay, OverlayLimits: req.OverlayLimits,
+		LockedKnobs: req.LockedKnobs,
 	}
 }
 
@@ -104,7 +106,7 @@ type heldUnitWrite struct {
 func (s *Server) unitWriteExempt(ctx context.Context, all []types.GovernanceUnit, p types.GovernanceUnit, res *ResolvedUnit) bool {
 	byID := unitsByID(all)
 	cur, exists := byID[p.ID]
-	if !exists || res == nil {
+	if !exists || res == nil || locksRemoved(cur.LockedKnobs, p.LockedKnobs) {
 		return false
 	}
 	if !sameJSON(nonZeroContact(cur.Contact), nonZeroContact(unitContactAfter(cur, p))) {
@@ -182,6 +184,7 @@ type unitDiffStored struct {
 	ParentID      *uuid.UUID             `json:"parent_id,omitempty"`
 	Overlay       *types.CeilingOverlay  `json:"overlay,omitempty"`
 	OverlayLimits *types.LimitsOverlay   `json:"overlay_limits,omitempty"`
+	LockedKnobs   []string               `json:"locked_knobs,omitempty"`
 }
 
 // unitDiffView is a profile as the reviewer reads it: the stored fields and what composing them
@@ -197,7 +200,7 @@ func newUnitDiffView(row types.GovernanceUnit, res *ResolvedUnit, tier specReadT
 	v := &unitDiffView{unitDiffStored: unitDiffStored{
 		Name: row.Name, Ceiling: redactSpecForRead(row.Ceiling, tier), Limits: row.Limits,
 		Contact: nonZeroContact(row.Contact), ParentID: row.ParentID,
-		Overlay: redactOverlayForRead(row.Overlay, tier), OverlayLimits: row.OverlayLimits,
+		Overlay: redactOverlayForRead(row.Overlay, tier), OverlayLimits: row.OverlayLimits, LockedKnobs: row.LockedKnobs,
 	}}
 	if res != nil {
 		v.Effective = &governanceEffective{
@@ -364,7 +367,11 @@ func applyUnitChange(s *Server, r *http.Request, q store.Querier, ch types.Gover
 		if err != nil {
 			return types.GovernanceUnit{}, err
 		}
-		p, res, _, err := s.buildGovernanceUnit(ch.ProposedBy, s.isOperator(ctx), id, req, all, limit)
+		b, err := s.boundaryQ(ctx, q)
+		if err != nil {
+			return types.GovernanceUnit{}, err
+		}
+		p, res, _, err := s.buildGovernanceUnit(ch.ProposedBy, s.isOperator(ctx), id, req, all, b, limit)
 		effective = res
 		return p, err
 	})
@@ -401,9 +408,12 @@ func applyUnitDelete(ctx context.Context, q store.Querier, ch types.GovernanceCh
 	}
 	err = store.DeleteGovernanceUnitQ(ctx, q, id)
 	var children *store.ErrProfileHasChildren
+	var pinned *store.ErrUnitPinned
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		return govApplied{}, writeRefusal(http.StatusNotFound, reasonGovernanceUnitNotFoundByID, "governance profile not found")
+	case errors.As(err, &pinned):
+		return govApplied{}, writeRefusal(http.StatusConflict, reasonGovernanceUnitInUse, "%s", unitPinnedMsg(pinned))
 	case errors.As(err, &children):
 		return govApplied{}, writeRefusal(http.StatusConflict, reasonGovernanceUnitInUse,
 			"this governance profile is the base of %s — delete or re-base them first", strings.Join(children.Names, ", "))

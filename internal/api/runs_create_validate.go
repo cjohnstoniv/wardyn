@@ -250,7 +250,9 @@ func requestIsInteractive(req createRunRequest) bool {
 // refusal deployment-wide, on an upgrade that changed no configuration. Absent
 // row, absent behaviour change.
 func governanceHoldRules(ceiling governanceCeiling) bool {
-	if ceiling.Unit == nil {
+	// A restriction alone puts a run in the Default unit (withRestrictions); that is no assigned
+	// profile, so the deployment default's tool rules stay what they were for such a person.
+	if ceiling.Unit == nil || restrictionDefaultUnit(ceiling.Unit) {
 		return false
 	}
 	for _, r := range ceiling.Spec.ToolRules {

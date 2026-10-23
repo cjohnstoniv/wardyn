@@ -39,6 +39,9 @@ const (
 	GovernanceTargetRunnerTrust            = "runner_trust"
 	GovernanceTargetRunNodeRecord          = "run_node_record"
 	GovernanceTargetBoundary               = "governance_boundary"
+	GovernanceTargetUnitAdmin              = "governance_unit_admin"
+	GovernanceTargetRestriction            = "governance_restriction"
+	GovernanceTargetWorkspaceOwningUnit    = "workspace_owning_unit"
 	GovernanceTargetApprovalRule           = "approval_rule"
 )
 

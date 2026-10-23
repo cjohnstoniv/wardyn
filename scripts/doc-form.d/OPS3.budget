@@ -87,9 +87,11 @@ docs/operations/who-gets-in.md=1938 share=35
 # docs/operations/admin-only-writes.md 3698 adds 53, measured: the POST /runs/{id}/node-record row.
 # docs/operations/admin-only-writes.md 3700 adds 2 over 3698, measured (0.10 OC-API1b): a launch preset blocks removing a user type.
 # docs/operations/admin-only-writes.md 3729 = ours 3700 + theirs 3727 - base 3698 at the 0.10 W4c merge of origin/main ba16e8564 (W4b) onto the train.
-docs/operations/admin-only-writes.md=3791 share=35 # tightened from 3738 to the measured count at the 0.10 W4d merge
+# docs/operations/admin-only-writes.md 3820 = ours 3760 + theirs 3791 - base 3731 at the 0.10 UNIT-ADMIN merge of RESTRICT-PIN 35c385de1.
+docs/operations/admin-only-writes.md=3820 share=35 # tightened from 3738 to the measured count at the 0.10 W4d merge
 # docs/operations/admin-only-writes.md 3730 adds 32 over 3698, measured (0.10 LAY-A): the /governance/walls tier row.
 # docs/operations/admin-only-writes.md 3727 measured (0.10 BOUNDARY): the /governance/boundary tier row.
+# docs/operations/admin-only-writes.md 3760 adds 29 over 3731, measured (0.10 unit admins): the unit-admin tier row, and the promotion named in the security row.
 # docs/operations/three-roles.md 4024 measured after G-090-cleanup slice F: docs rows that contradicted the code.
 # docs/operations/three-roles.md 4063 adds 39 over 4024: 0.9 final docs pass 3, measured: a profile maximum never cuts below an untouched run's size.
 # docs/operations/three-roles.md 4194 adds 21 over 4173, measured (0.9.3 ADO): GET /governance is the read; the profile routes answer 405 to GET.
@@ -97,7 +99,9 @@ docs/operations/admin-only-writes.md=3791 share=35 # tightened from 3738 to the 
 # docs/operations/three-roles.md 4238 adds 20 over 4218, measured: where GET /governance keeps the resolved ceiling (0.9.3 ASK-6).
 # docs/operations/three-roles.md 4650 = 4630 + 20, measured after merging the ASK-6 rubric docs with the resolved-ceiling note.
 # docs/operations/three-roles.md 4682 adds 5 (0.10 API-2): a baseline mark covers that host only.
-docs/operations/three-roles.md=4720 share=35
+# docs/operations/three-roles.md 4734 adds 52 over 4682, measured (0.10 unit admins): a unit admin is a grant on a unit, not a fourth role.
+# docs/operations/three-roles.md 4772 = ours 4734 + theirs 4720 - base 4682 at the 0.10 UNIT-ADMIN merge of RESTRICT-PIN 35c385de1.
+docs/operations/three-roles.md=4772 share=35
 # docs/operations/provider-policy.md 1362 adds 84 over 1278, measured (0.10.0 GHPAT): the GitHub per_user row that takes each person's own token.
 # docs/operations/provider-policy.md 1382 adds 20 over 1362, measured (0.10.0 GHPAT r2): a run cannot mix a shared and a personal-token GitHub row.
 docs/operations/provider-policy.md=1382 share=35
@@ -110,7 +114,9 @@ docs/operations/ownership-and-offboarding.md=2414 share=35
 # 0.9.4 W4-DOCS-1: docs/operations/governance-writes.md 3158 adds 26 over 3132, measured: #2369: the run node record row.
 # docs/operations/governance-writes.md 3170 adds 12 over 3158, measured (0.10 LAY-A): the org walls row in the covered-writes table.
 # docs/operations/governance-writes.md 3171 measured (0.10 BOUNDARY): the org walls renamed the Wardyn boundary, with modes.
-docs/operations/governance-writes.md=3513 share=35
+# docs/operations/governance-writes.md 3529 adds 51 over 3478, measured (0.10 unit admins): a unit admin's widening is always held; a security admin's grant follows the switch.
+# docs/operations/governance-writes.md 3564 = ours 3529 + theirs 3513 - base 3478 at the 0.10 UNIT-ADMIN merge of RESTRICT-PIN 35c385de1.
+docs/operations/governance-writes.md=3564 share=35
 # 0.9.4 L8: docs/operations/member-runs.md 1054 adds 10 over 1044: ssh_key delivery claims bounded.
 docs/operations/member-runs.md=1054 share=35
 # docs/operations/user-drives.md 4818 adds 14 over 4804 (0.9 release text for the fix sets merged at release); measured.
@@ -160,7 +166,9 @@ docs/operations/api-tokens.md=6034 share=35 # +86 (lane SI-DOCS), measured
 # docs/operations/denials.md 5318 adds 14 (0.10 LAY-C r2): the authz.denied layer keys and the operator cap naming the deployment.
 # 0.10: docs/operations/denials.md 5200 adds 9, measured: user_view_preview names the security admin case.
 # docs/operations/denials.md 5331 measured (0.10 BOUNDARY): the boundary provenance layer.
-docs/operations/denials.md=5525 share=35
+# docs/operations/denials.md 5527 adds 35 over 5492, measured (0.10 unit admins): the unit_scope_denied row.
+# docs/operations/denials.md 5560 = ours 5527 + theirs 5525 - base 5492 at the 0.10 UNIT-ADMIN merge of RESTRICT-PIN 35c385de1.
+docs/operations/denials.md=5560 share=35
 # Round 1: docs/operations/who-gets-in.md measured 1453 after the split banner and heading cleanup.
 # Round 1: docs/operations/admin-only-writes.md measured 2869 after the split banner and heading cleanup.
 # Round 1: docs/operations/three-roles.md measured 4012 after the split banner and heading cleanup.

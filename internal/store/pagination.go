@@ -389,7 +389,7 @@ func (s PG) ListPoliciesPage(ctx context.Context, p Page) ([]types.RunPolicy, er
 // so the order is total: a run's fold reads this list twice and credits a
 // source two workspaces carry from it.
 func (s PG) ListWorkspacesPage(ctx context.Context, p Page) ([]types.Workspace, error) {
-	q, args := p.appendTo(`SELECT `+wsCols+` FROM workspaces ORDER BY created_at DESC, id DESC`, nil)
+	q, args := p.appendTo(`SELECT `+wsReadCols+` FROM workspaces ORDER BY created_at DESC, id DESC`, nil)
 	wss, err := collect(ctx, s.Pool, "list", "workspaces", q, args, scanWorkspace)
 	if err != nil {
 		return nil, err
@@ -416,7 +416,7 @@ var _ WorkspacesByOwnerPager = PG{}
 // every pre-0.6 workspace). workspaces_owned_by_idx covers the IN.
 func (s PG) ListWorkspacesPageForOwner(ctx context.Context, owner string, p Page) ([]types.Workspace, error) {
 	q, args := p.appendTo(
-		`SELECT `+wsCols+` FROM workspaces WHERE owned_by IN ('', $1) ORDER BY created_at DESC`,
+		`SELECT `+wsReadCols+` FROM workspaces WHERE owned_by IN ('', $1) ORDER BY created_at DESC`,
 		[]any{owner})
 	wss, err := collect(ctx, s.Pool, "list", "workspaces by owner", q, args, scanWorkspace)
 	if err != nil {

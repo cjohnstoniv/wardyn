@@ -535,6 +535,7 @@ type QueueStart struct {
 	WaitBudgetSec     int
 	RunLimits         types.RunLimits
 	UnitID            *uuid.UUID
+	RestrictionIDs    []uuid.UUID
 	LifetimeCapAt     *time.Time
 	LifetimeCapSource types.LimitSource
 	Placement         types.Placement
@@ -600,13 +601,13 @@ func startQueuedRun(ctx context.Context, q Querier, id uuid.UUID, st QueueStart,
 		UPDATE agent_runs SET spiffe_id=$2, confinement_class=$3, model_provider_id=$4, autonomy_level=$5, ends_at=$6,
 			wait_budget_sec=$7, run_limits=$8, unit_id=$9, lifetime_cap_at=$10, lifetime_cap_source=$11,
 			placement=$12, placement_filled=$13, runner_id=$14, evidence_source=$15, runner_pool_executor=$16, updated_at=now(),
-			reserved_cpu_millis=$18, reserved_memory_mib=$19, reserved_disk_mib=$20, inner_walls=$21
+			reserved_cpu_millis=$18, reserved_memory_mib=$19, reserved_disk_mib=$20, inner_walls=$21, restriction_ids=$22
 		WHERE id=$1 AND state=$17 AND admitted_at IS NOT NULL AND sandbox_ref = ''
 		RETURNING `+runCols,
 		id, st.SPIFFEID, string(st.ConfinementClass), st.ModelProviderID, string(st.AutonomyLevel), st.EndsAt,
 		st.WaitBudgetSec, limits, st.UnitID, st.LifetimeCapAt, string(st.LifetimeCapSource),
 		string(st.Placement), st.PlacementFilled, st.RunnerID, string(st.EvidenceSource), st.RunnerPoolExecutor,
-		string(types.RunPending), st.Reserved.CPUMillis, st.Reserved.MemoryMiB, st.Reserved.DiskMiB, walls))
+		string(types.RunPending), st.Reserved.CPUMillis, st.Reserved.MemoryMiB, st.Reserved.DiskMiB, walls, restrictionIDsParam(st.RestrictionIDs)))
 	if errors.Is(err, ErrNotFound) {
 		return types.AgentRun{}, false, nil
 	}

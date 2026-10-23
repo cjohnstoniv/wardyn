@@ -32,6 +32,8 @@ export interface BoundaryWrite {
   spec: BoundarySpec;
   limits: BoundaryLimits;
   contact?: PolicyContact;
+  // The knobs no unit may change while the boundary is in hard_limits; absent keeps the stored locks.
+  locked_knobs?: string[];
 }
 
 /** types.Boundary. */
@@ -40,6 +42,7 @@ export interface Boundary {
   spec: BoundarySpec;
   limits: BoundaryLimits;
   contact?: PolicyContact;
+  locked_knobs?: string[];
   updated_by?: string;
   updated_at?: string;
 }
@@ -71,6 +74,7 @@ export interface BoundaryReportAssign {
 
 /** boundaryReport: only the rows the drafted boundary would narrow are listed. */
 export interface BoundaryReport {
+  target: "boundary";
   deployment: BoundaryChange[];
   units: BoundaryReportRow[];
   stored_policies: BoundaryReportRow[];
@@ -100,6 +104,6 @@ export const boundary = {
   async dryRun(body: Pick<BoundaryWrite, "spec" | "limits">): Promise<BoundaryReport> {
     const res = await wfetch("/governance/dry-run", { method: "POST", asPerson: true, body: JSON.stringify(body) });
     const r = await asJson<Partial<BoundaryReport>>(res);
-    return { deployment: r.deployment ?? [], units: r.units ?? [], stored_policies: r.stored_policies ?? [], memberships: r.memberships ?? [] };
+    return { target: "boundary", deployment: r.deployment ?? [], units: r.units ?? [], stored_policies: r.stored_policies ?? [], memberships: r.memberships ?? [] };
   },
 };

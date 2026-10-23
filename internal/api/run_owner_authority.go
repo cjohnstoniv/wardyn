@@ -387,6 +387,9 @@ func (s *Server) ownerUnit(ctx context.Context, run types.AgentRun) (*ResolvedUn
 		return nil, &ownerRefusal{status: http.StatusServiceUnavailable, reason: reasonOwnerUnitUnreadable,
 			msg: loggedMsg(ctx, "resolve the owner's governance profile", err)}
 	}
+	if restrictionDefaultUnit(p) {
+		return p, nil // the Default unit a restriction put the run in needs no membership
+	}
 	ref, err := s.ownerMembershipRefusal(ctx, run, p)
 	if err != nil {
 		return nil, &ownerRefusal{status: http.StatusServiceUnavailable, reason: reasonOwnerUnitUnreadable,

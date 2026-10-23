@@ -42,19 +42,35 @@ function tsInterfaceKeys(src: string, name: string): string[] {
   return keys;
 }
 
+function tsInterfaceBlock(src: string, name: string): string {
+  const m = new RegExp(`export\\s+interface\\s+${name}\\b[^{]*\\{([\\s\\S]*?)\\n\\}`).exec(src);
+  if (!m) throw new Error(`interface ${name} not found`);
+  return m[1];
+}
+
 describe("source parity — composed governance profile wire types", () => {
   const root = repoRoot();
   const typesGo = readFileSync(join(root, "internal/types/governance.go"), "utf8");
   const writeGo = readFileSync(join(root, "internal/api/governance_unit_write.go"), "utf8");
   const governanceTs = readFileSync(join(root, "ui/src/app/lib/api/governance.ts"), "utf8");
 
-  it("GovernanceUnit: every Go tag is mirrored, plus the view's own `effective` and `people`", () => {
+  it("GovernanceUnit: every Go tag is mirrored, plus the view's own `effective`, `people` and `path_provenance`", () => {
     const goTags = goJSONTags(typesGo, "GovernanceUnit");
     expect(goTags).toEqual(expect.arrayContaining(["parent_id", "overlay", "overlay_limits"]));
     const view = goJSONTags(writeGo, "governanceUnitView");
-    expect(view).toEqual(["effective", "people"]);
+    expect(view).toEqual(["effective", "people", "path_provenance"]);
     const tsKeys = tsInterfaceKeys(governanceTs, "GovernanceUnit");
     expect(new Set(tsKeys)).toEqual(new Set([...goTags, ...view]));
+  });
+
+  it("GovernanceCheck.effective: full parity with checkEffective, both provenances included", () => {
+    const checkGo = readFileSync(join(root, "internal/api/governance_check.go"), "utf8");
+    expect(goJSONTags(checkGo, "checkEffective")).toEqual(["ceiling", "limits", "provenance", "path_provenance"]);
+    const effective = /effective: \{([\s\S]*?)\} \| null;/.exec(tsInterfaceBlock(governanceTs, "GovernanceCheck"));
+    const keys = [...(effective?.[1] ?? "").matchAll(/(\w+)\??: /g)].map((k) => k[1]);
+    expect(keys).toEqual(["ceiling", "limits", "provenance", "path_provenance"]);
+    // path_provenance is omitempty (a security-tier read), so the TS key is optional.
+    expect(effective?.[1]).toContain("path_provenance?: ");
   });
 
   it("GovernanceEffective: full parity with governanceEffective", () => {

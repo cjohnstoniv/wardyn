@@ -46,7 +46,7 @@ var kernelDoors = map[string][]string{
 	// repos resolve to, then the model provider it will use.
 	"runRequestGovernance":      {"capAgent", "capImage", "capPolicy", "capWorkspace"},
 	"narrowUserInlinePolicy":    {"capEgressHost", "capSecret"},
-	"anyCarrierGranted":         {"capWorkspace"}, // narrowUserInlinePolicy's workspace bound
+	"admittingCarrier":          {"capWorkspace"}, // narrowUserInlinePolicy's workspace bound, and the carrier the run then uses
 	"seededImageRefusal":        {"capImage"},
 	"workspaceProvidersRefusal": {"capWorkspaceProvider"},
 	"chooseRunModelProvider":    {"capModelProvider"},

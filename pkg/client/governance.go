@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -43,6 +44,9 @@ type GovernanceUnitRequest struct {
 	OverlayLimits json.RawMessage `json:"overlay_limits,omitempty"`
 	// Mode is own_walls or pass_through; "" keeps the stored mode (own_walls on a create).
 	Mode string `json:"mode,omitempty"`
+	// LockedKnobs replaces the knobs the unit locks for the units below it; nil keeps the stored
+	// locks. ApplyGovernance sends an empty list when it must clear them.
+	LockedKnobs *[]string `json:"locked_knobs,omitempty"`
 }
 
 // withComposition sets the request's composition members from p. Nothing is sent when neither p nor
@@ -89,9 +93,17 @@ type GovernanceMembershipRequest struct {
 type GovernanceDocument struct {
 	Units       []GovernanceUnit       `json:"units"`
 	Memberships []GovernanceMembership `json:"memberships"`
+	// Restrictions are the deny-only lists that follow people, upserted by name.
+	Restrictions []Restriction `json:"restrictions,omitempty"`
 	// MaxDepth is the server's maximum unit depth, as GET /governance reports it. An apply never
 	// sends it: the limit is site_config.governance_max_depth.
 	MaxDepth int `json:"max_depth,omitempty"`
+	// Admins is each unit's unit admins, by unit name (GET /governance's unit_admins). An apply
+	// grants the ones the server lacks; --prune also revokes the ones the document omits.
+	Admins map[string][]GovernanceAdminSubject `json:"admins,omitempty"`
+	// grants is the server's grants as GetGovernance read them, with their ids, for a plan or an
+	// apply against that state. Never encoded.
+	grants []GovernanceUnitAdmin
 }
 
 // GovernanceChangeDiff is a pending change's server-rendered diff: the target's
@@ -121,6 +133,9 @@ type GovernanceChange struct {
 	DecidedAt  *time.Time           `json:"decided_at,omitempty"`
 	// Reason is a rejection's optional explanation.
 	Reason string `json:"reason,omitempty"`
+	// Approvers is who could decide the change, the proposer left out (GET
+	// /governance/changes/{id} only).
+	Approvers []GovernanceChangeApprover `json:"approvers,omitempty"`
 }
 
 // GovernanceDeferredWrite is a write ApplyGovernanceResult did not send because
@@ -171,9 +186,16 @@ func (e *PendingApprovalError) Error() string {
 // GetGovernance returns every governance profile and assignment. GET
 // /api/v1/governance.
 func (c *Client) GetGovernance(ctx context.Context) (GovernanceDocument, error) {
-	var out GovernanceDocument
-	err := c.do(ctx, http.MethodGet, "/api/v1/governance", nil, &out)
-	return out, err
+	var read governanceRead
+	if err := c.do(ctx, http.MethodGet, "/api/v1/governance", nil, &read); err != nil {
+		return GovernanceDocument{}, err
+	}
+	out := read.GovernanceDocument
+	out.Admins = adminsByUnitName(out.Units, read.UnitAdmins)
+	if len(read.UnitAdmins) > 0 {
+		out.grants = read.UnitAdmins
+	}
+	return out, nil
 }
 
 // governanceMembershipKey is the natural key ApplyGovernance and
@@ -256,7 +278,17 @@ func governanceUnitChangedFields(existing, p GovernanceUnit) []string {
 	if p.Mode != "" && p.Mode != cmpOr(existing.Mode, types.UnitModeOwnWalls) {
 		fields = append(fields, "mode")
 	}
+	if !slices.Equal(sortedKnobs(existing.LockedKnobs), sortedKnobs(p.LockedKnobs)) {
+		fields = append(fields, "locked_knobs")
+	}
 	return fields
+}
+
+// sortedKnobs is a locked_knobs list in the server's order (sorted, without repeats).
+func sortedKnobs(knobs []string) []string {
+	out := slices.Clone(knobs)
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 func cmpOr(a, b string) string {
@@ -454,6 +486,29 @@ type GovernanceApplyResult struct {
 	Steps []ApplyStep `json:"steps,omitempty"`
 }
 
+// writeChangedUnit sends one unit write the server does not already hold and records its step. It answers the
+// saved unit, or nil when the server holds the write for approval (recorded in Pending; the unit is marked pending).
+func (c *Client) writeChangedUnit(ctx context.Context, p, existing GovernanceUnit, exists bool, res *GovernanceApplyResult, pendingProfile map[string]bool) (*GovernanceUnit, error) {
+	var replacing *GovernanceUnit
+	if exists {
+		replacing = &existing
+	}
+	step := governanceUnitStep(p.Name, replacing)
+	got, warnings, pending, werr := c.writeGovernanceUnit(ctx, p, replacing)
+	step = step.withOutcome(pending != nil, werr)
+	step.Warnings = warnings
+	res.Steps = append(res.Steps, step)
+	if werr != nil {
+		return nil, werr
+	}
+	if pending != nil {
+		res.Pending = append(res.Pending, *pending)
+		pendingProfile[p.Name] = true
+		return nil, nil
+	}
+	return &got, nil
+}
+
 // ApplyGovernanceResult is ApplyGovernance with the pending-approval outcome
 // returned as data, not an error: a 202 pending change is an expected result
 // under four-eyes, not a failure. See ApplyGovernance for the matching and
@@ -530,23 +585,12 @@ func (c *Client) ApplyGovernanceResult(ctx context.Context, doc GovernanceDocume
 		if ok && governanceUnitUnchanged(existing, p) {
 			saved = existing
 		} else {
-			var replacing *GovernanceUnit
-			if ok {
-				replacing = &existing
-			}
-			step := governanceUnitStep(p.Name, replacing)
-			got, warnings, pending, werr := c.writeGovernanceUnit(ctx, p, replacing)
-			step = step.withOutcome(pending != nil, werr)
-			step.Warnings = warnings
-			res.Steps = append(res.Steps, step)
+			got, werr := c.writeChangedUnit(ctx, p, existing, ok, &res, pendingProfile)
 			if werr != nil {
 				return res, werr
 			}
-			if pending != nil {
-				res.Pending = append(res.Pending, *pending)
-				pendingProfile[p.Name] = true
-			} else {
-				saved = got
+			if got != nil {
+				saved = *got
 			}
 		}
 		doc.Units[i] = saved
@@ -567,12 +611,39 @@ func (c *Client) ApplyGovernanceResult(ctx context.Context, doc GovernanceDocume
 		}
 	}
 
+	admins := newAdminPlan(current, func(name string) (uuid.UUID, bool) {
+		if id, ok := nameToRealID[name]; ok {
+			return id, true
+		}
+		p, ok := profileByName[name]
+		return p.ID, ok
+	}, pendingProfile)
+	if err := c.applyUnitAdmins(ctx, admins, doc.Admins, &res); err != nil {
+		return res, err
+	}
+
+	if err := c.applyRestrictions(ctx, current, &doc, &res); err != nil {
+		return res, err
+	}
+
 	if prune {
 		// A pending write means the state prune would compare against is not
 		// final, so no delete is issued after one (ApplyGovernance's doc).
 		res.PruneSkipped = len(res.Pending) > 0
 		if !res.PruneSkipped {
+			res.PruneSkipped, err = c.pruneUnitAdmins(ctx, admins, doc.Admins, &res)
+			if err != nil {
+				return res, err
+			}
+		}
+		if !res.PruneSkipped {
 			res.PruneSkipped, err = c.pruneGovernance(ctx, current, doc, &res)
+			if err != nil {
+				return res, err
+			}
+		}
+		if !res.PruneSkipped {
+			res.PruneSkipped, err = c.pruneRestrictions(ctx, current, doc, &res)
 			if err != nil {
 				return res, err
 			}
@@ -642,6 +713,11 @@ func (c *Client) applyMembership(ctx context.Context, plan membershipPlan, a Gov
 func (c *Client) writeGovernanceUnit(ctx context.Context, p GovernanceUnit, replacing *GovernanceUnit) (GovernanceUnit, []string, *GovernanceChange, error) {
 	req := GovernanceUnitRequest{Name: p.Name, Ceiling: p.Ceiling, Limits: p.Limits, Contact: p.Contact, Mode: p.Mode}
 	req.withComposition(p, replacing)
+	// The document's locks replace the stored ones; none sent keeps them, so an empty list clears.
+	if len(p.LockedKnobs) > 0 || (replacing != nil && len(replacing.LockedKnobs) > 0) {
+		knobs := append([]string{}, p.LockedKnobs...)
+		req.LockedKnobs = &knobs
+	}
 	method, path := http.MethodPost, "/api/v1/governance/units"
 	if replacing != nil {
 		method, path = http.MethodPut, path+"/"+replacing.ID.String()
@@ -818,11 +894,13 @@ type GovernanceDormantMembership struct {
 }
 
 // GovernanceEffectiveWalls is one context's resolved walls and which layer set
-// each knob.
+// each knob: Provenance is the leaf-level answer a run gets, PathProvenance
+// which unit on the path changed each value.
 type GovernanceEffectiveWalls struct {
-	Ceiling    types.RunPolicySpec         `json:"ceiling"`
-	Limits     GovernanceLimits            `json:"limits"`
-	Provenance map[string]PolicyProvenance `json:"provenance"`
+	Ceiling        types.RunPolicySpec         `json:"ceiling"`
+	Limits         GovernanceLimits            `json:"limits"`
+	Provenance     map[string]PolicyProvenance `json:"provenance"`
+	PathProvenance map[string]PolicyProvenance `json:"path_provenance"`
 }
 
 // GovernanceCheckResult is POST /api/v1/governance/check's answer: the home

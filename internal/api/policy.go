@@ -82,9 +82,17 @@ func validateAuthoredPolicySpec(spec types.RunPolicySpec) error {
 		return err
 	}
 	for i, g := range spec.EligibleGrants {
-		if g.OwnerOnlyRefs != nil {
-			return fmt.Errorf("eligible_grants[%d]: owner_only_refs is set by Wardyn at launch, never authored; mark the grant owner_only instead", i)
+		if err := authoredGrantRefusal(fmt.Sprintf("eligible_grants[%d]", i), g); err != nil {
+			return err
 		}
+	}
+	return nil
+}
+
+// authoredGrantRefusal refuses what a person never authors on a grant (see validateAuthoredPolicySpec).
+func authoredGrantRefusal(path string, g types.GrantSpec) error {
+	if g.OwnerOnlyRefs != nil {
+		return fmt.Errorf("%s: owner_only_refs is set by Wardyn at launch, never authored; mark the grant owner_only instead", path)
 	}
 	return nil
 }

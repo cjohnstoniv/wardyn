@@ -56,6 +56,8 @@ type treeDryRunReport struct {
 	Target   string             `json:"target"`
 	People   []treeDryRunPerson `json:"people"`
 	LiveRuns []uuid.UUID        `json:"live_runs"`
+	// Approvers is who could decide the write were it held, the caller left out (approversFor).
+	Approvers []changeApprover `json:"approvers"`
 }
 
 // treeDryRunPerson is one membership, the context it is (from_unit) and would be (unit), and the knobs
@@ -76,6 +78,9 @@ type treeDryRunPerson struct {
 // the boundary.
 func (s *Server) treeDryRun(w http.ResponseWriter, r *http.Request, target string, raw []byte) {
 	var apply func(q store.Querier) error
+	// touched is the units an approver of the write would have to govern (unitChangeScope's rule), from
+	// the states either side of it; none means only a security admin could decide it.
+	var touched func(before, after treeSnapshot) []uuid.UUID
 	switch target {
 	case dryRunTargetUnit:
 		var req unitDryRunRequest
@@ -101,7 +106,25 @@ func (s *Server) treeDryRun(w http.ResponseWriter, r *http.Request, target strin
 		if id == uuid.Nil {
 			id, status = uuid.New(), http.StatusCreated
 		}
+		if s.isUnitAdminCaller(r.Context()) && !s.unitWritePrecheck(w, r, id, status, unit) {
+			return
+		}
 		apply = func(q store.Querier) error { return s.applyUnitWriteQ(r, q, id, status, unit, limit) }
+		touched = func(before, after treeSnapshot) []uuid.UUID {
+			was, existed := unitsByID(before.units)[id]
+			now := unitsByID(after.units)[id]
+			units := []uuid.UUID{}
+			if existed {
+				units = append(units, id)
+				if sameJSON(was.ParentID, now.ParentID) {
+					return units
+				}
+			}
+			if now.ParentID == nil {
+				return nil
+			}
+			return append(units, *now.ParentID)
+		}
 	case dryRunTargetMembershipMove:
 		var req membershipMoveDryRunRequest
 		if msg := strictJSON(raw, &req); msg != "" {
@@ -109,8 +132,20 @@ func (s *Server) treeDryRun(w http.ResponseWriter, r *http.Request, target strin
 			return
 		}
 		apply = func(q store.Querier) error {
+			if row, err := store.GetGovernanceMembershipQ(r.Context(), q, req.ID, false); err == nil {
+				if err := s.requireUnitScopeQ(r.Context(), q, false, row.UnitID, req.UnitID); err != nil {
+					return err
+				}
+			}
 			_, _, err := moveMembershipQ(r.Context(), q, req.ID, req.UnitID)
 			return err
+		}
+		touched = func(before, _ treeSnapshot) []uuid.UUID {
+			i := slices.IndexFunc(before.memberships, func(m types.GovernanceMembership) bool { return m.ID == req.ID })
+			if i < 0 {
+				return nil
+			}
+			return []uuid.UUID{before.memberships[i].UnitID, req.UnitID}
 		}
 	default:
 		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody,
@@ -128,7 +163,7 @@ func (s *Server) treeDryRun(w http.ResponseWriter, r *http.Request, target strin
 		after, err = readTreeSnapshot(r.Context(), q)
 		return err
 	})
-	if writeMembershipTreeError(w, r, "governance dry run", err) {
+	if s.answerOutsideScope(w, r, "governance.dry_run", err) || writeMembershipTreeError(w, r, "governance dry run", err) {
 		return
 	}
 	report, err := s.treeEffect(r.Context(), before, after)
@@ -137,6 +172,10 @@ func (s *Server) treeDryRun(w http.ResponseWriter, r *http.Request, target strin
 		return
 	}
 	report.Target = target
+	report.Approvers = []changeApprover{{Kind: "security"}}
+	if units := touched(before, after); len(units) > 0 {
+		report.Approvers = s.approversFor(r.Context(), units, false, principalFromRequest(r), oidcEmailFromContext(r.Context()))
+	}
 	writeJSON(w, http.StatusOK, report)
 }
 
@@ -157,13 +196,17 @@ func (s *Server) applyUnitWriteQ(r *http.Request, q store.Querier, id uuid.UUID,
 	if refusal := defaultUnitWriteRefusal(id); refusal != nil {
 		return refusal
 	}
-	_, err := store.WriteGovernanceUnitQ(r.Context(), q, id, func(all []types.GovernanceUnit, _ []types.GovernanceMembership) (types.GovernanceUnit, error) {
+	b, err := s.boundaryQ(r.Context(), q)
+	if err != nil {
+		return err
+	}
+	_, err = store.WriteGovernanceUnitQ(r.Context(), q, id, s.scopedUnitBuild(r.Context(), q, id, func(all []types.GovernanceUnit, _ []types.GovernanceMembership) (types.GovernanceUnit, error) {
 		if refusal := s.unitPutCreateRefusal(unitPutCreatesAtID(id, status, all)); refusal != nil {
 			return types.GovernanceUnit{}, refusal
 		}
-		p, _, _, err := s.buildGovernanceUnit(principalFromRequest(r), s.isOperator(r.Context()), id, req, all, limit)
+		p, _, _, err := s.buildGovernanceUnit(principalFromRequest(r), s.isOperator(r.Context()), id, req, all, b, limit)
 		return p, err
-	})
+	}))
 	if errors.Is(err, store.ErrConflict) {
 		return writeRefusal(http.StatusConflict, reasonGovernanceUnitNameConflict, "a governance profile named %q already exists", req.Name)
 	}

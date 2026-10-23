@@ -343,6 +343,22 @@ type GovernanceUnit struct {
 	Kind  string `json:"kind,omitempty"`
 	Mode  string `json:"mode,omitempty"`
 	Depth int    `json:"depth,omitempty"`
+	// LockedKnobs are the knobs (overlay and limits JSON names) this unit fixes for every unit below
+	// it: no write to a unit below may change one, a narrowing included.
+	LockedKnobs []string `json:"locked_knobs,omitempty"`
+}
+
+// GovernanceUnitAdmin makes a person (a user subject: sub or email) or an IdP group the admin of one
+// unit and every unit below it (migration governance_unit_admins). GrantedBy proposed the grant and
+// ApprovedBy is the second human who approved it ("" when it applied directly).
+type GovernanceUnitAdmin struct {
+	ID          uuid.UUID             `json:"id"`
+	UnitID      uuid.UUID             `json:"unit_id"`
+	SubjectType CapabilitySubjectType `json:"subject_type"`
+	Subject     string                `json:"subject"`
+	GrantedBy   string                `json:"granted_by"`
+	ApprovedBy  string                `json:"approved_by,omitempty"`
+	CreatedAt   time.Time             `json:"created_at"`
 }
 
 // The unit kinds and modes (unit-tree migration).

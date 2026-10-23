@@ -303,6 +303,10 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["ADOPATAccess", "internal/api/ado_pat_console.go", "ADOPATAccess", "ui/src/app/lib/types/ado-pat.ts"],
     // #1991: the drive catalogue's create block, keep_work_folder and enforcement included.
     ["MemberDriveCreate", "pkg/client/me_drives.go", "MemberDriveCreate", "ui/src/app/lib/api/me-drives.ts"],
+    // GET /me's `service` block, present only for a service identity's token.
+    ["meServiceReach", "internal/api/me_service_reach.go", "ServiceReach", "ui/src/app/lib/api/health.ts"],
+    ["meReachPreset", "internal/api/me_service_reach.go", "ServiceReachPreset", "ui/src/app/lib/api/health.ts"],
+    ["meReachWorkspace", "internal/api/me_service_reach.go", "ServiceReachWorkspace", "ui/src/app/lib/api/health.ts"],
   ])("%s: full parity with the TS mirror", (goName, goFile, tsName, tsFile) => {
     const goTags = goJSONTags(readFileSync(join(root, goFile), "utf8"), goName);
     expect(goTags.length).toBeGreaterThanOrEqual(2); // stale-regex guard (ADOPATAccess has two tags)
@@ -880,6 +884,27 @@ describe("Wardyn boundary wire (GET/PUT /governance/boundary, POST /governance/d
     for (const [go, goName, tsName] of pairs) {
       expect(tsInterfaceTopKeys(ts, tsName).sort(), tsName).toEqual(goJSONTags(go, goName).sort());
     }
+  });
+});
+
+describe("Restriction wire (GET /governance restrictions, POST/PUT /governance/restrictions)", () => {
+  it("each restriction DTO's TypeScript keys are exactly its Go json tags", () => {
+    const root = repoRoot();
+    const types = readFileSync(join(root, "internal/types/restriction.go"), "utf8");
+    const policies = readFileSync(join(root, "internal/api/policies.go"), "utf8");
+    const ts = readFileSync(join(root, "ui/src/app/lib/api/restrictions.ts"), "utf8");
+    const pairs: [string, string, string][] = [
+      [types, "Restriction", "Restriction"],
+      [types, "RestrictionMember", "RestrictionMember"],
+      [types, "RestrictionWrite", "RestrictionWrite"],
+      [types, "RestrictionSpec", "RestrictionSpec"],
+      [types, "RestrictionLimits", "RestrictionLimits"],
+    ];
+    for (const [go, goName, tsName] of pairs) {
+      expect(tsInterfaceTopKeys(ts, tsName).sort(), tsName).toEqual(goJSONTags(go, goName).sort());
+    }
+    const pol = readFileSync(join(root, "ui/src/app/lib/api/policies.ts"), "utf8");
+    expect(tsInterfaceTopKeys(pol, "DefaultPolicyRestriction").sort()).toEqual(goJSONTags(policies, "defaultPolicyRestriction").sort());
   });
 });
 

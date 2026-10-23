@@ -50,6 +50,7 @@ type autonomySource struct {
 	phrase string
 	reason authz.Reason
 	policy *policyref.Ref
+	knob   policyref.Provenance // the rubric's lock when a profile decided (lockOf)
 }
 
 // foldComponentCap folds the organisation's cap into the level the rubric
@@ -92,5 +93,6 @@ func (s *Server) foldComponentCap(ctx context.Context, ceiling governanceCeiling
 		phrase: fmt.Sprintf("your governance profile %q", ceiling.Unit.Name),
 		reason: authz.ReasonGovernanceUnit,
 		policy: s.ceilingPolicy(ctx, ceiling),
+		knob:   ceiling.lockOf("autonomy_rubric"),
 	}
 }

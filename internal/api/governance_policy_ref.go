@@ -111,8 +111,9 @@ func (s *Server) runPolicyRef(ctx context.Context, run types.AgentRun) *policyre
 // unchanged: errors.Is keeps matching the sentinel and the member sentence the
 // writers trim out of Error() is byte-identical to what it was.
 type recordCeilingError struct {
-	err error
-	ref *policyref.Ref
+	err  error
+	ref  *policyref.Ref
+	knob policyref.Provenance // the refused knob's lock, if one fixes it (lockOf)
 }
 
 func (e recordCeilingError) Error() string { return e.err.Error() }
@@ -125,6 +126,14 @@ func recordCeilingRef(err error) *policyref.Ref {
 		return ce.ref
 	}
 	return nil
+}
+
+// recordCeilingKnob is the provenance record of the knob a launch error refused on, zero when it
+// names none.
+func recordCeilingKnob(err error) policyref.Provenance {
+	var ce recordCeilingError
+	errors.As(err, &ce)
+	return ce.knob
 }
 
 // meGovernanceContact is /me's governance_contact: the policy that bounds the

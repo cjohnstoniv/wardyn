@@ -106,7 +106,7 @@ func validateGovernanceMembership(a *types.GovernanceMembership) error {
 // returns the EXISTING row's id on a conflict, never the candidate's).
 // operatorOnly (routes.go).
 func (s *Server) handleUpsertGovernanceMembership(w http.ResponseWriter, r *http.Request) {
-	mode, ok := s.governanceWriteMode(w, r)
+	mode, ok := s.unitWriteMode(w, r)
 	if !ok {
 		return
 	}
@@ -129,6 +129,9 @@ func (s *Server) handleUpsertGovernanceMembership(w http.ResponseWriter, r *http
 		return
 	}
 	if !s.userTypeSubjectExists(w, r, a.SubjectType, a.Subject) {
+		return
+	}
+	if s.isUnitAdminCaller(r.Context()) && !s.membershipAddInScope(w, r, a) {
 		return
 	}
 	a.ID = uuid.New()
@@ -166,12 +169,16 @@ func (s *Server) handleUpsertGovernanceMembership(w http.ResponseWriter, r *http
 // deployment ceiling, which is why it is audited on its own line rather than
 // riding a profile delete. operatorOnly (routes.go).
 func (s *Server) handleDeleteGovernanceMembership(w http.ResponseWriter, r *http.Request) {
-	mode, ok := s.governanceWriteMode(w, r)
+	mode, ok := s.unitWriteMode(w, r)
 	if !ok {
 		return
 	}
 	id, ok := parseIDParam(w, r, "id", "governance assignment")
 	if !ok {
+		return
+	}
+	if s.isUnitAdminCaller(r.Context()) {
+		s.deleteMembershipInScope(w, r, id)
 		return
 	}
 	if mode == govQueue {
@@ -255,7 +262,7 @@ func writeMembershipTreeError(w http.ResponseWriter, r *http.Request, what strin
 // handleMoveGovernanceMembership moves one membership to another unit (200 with the moved row). It
 // follows the second-human switch exactly as an assignment write does. securityOps (routes.go).
 func (s *Server) handleMoveGovernanceMembership(w http.ResponseWriter, r *http.Request) {
-	mode, ok := s.governanceWriteMode(w, r)
+	mode, ok := s.unitWriteMode(w, r)
 	if !ok {
 		return
 	}
@@ -272,6 +279,10 @@ func (s *Server) handleMoveGovernanceMembership(w http.ResponseWriter, r *http.R
 		return
 	}
 	if writeMembershipTreeError(w, r, "", defaultMembershipRefusal(req.UnitID, defaultHasNoMembershipsMsg)) {
+		return
+	}
+	if s.isUnitAdminCaller(r.Context()) {
+		s.moveMembershipInScope(w, r, id, req.UnitID)
 		return
 	}
 	if mode == govQueue {

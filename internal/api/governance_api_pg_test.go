@@ -429,7 +429,11 @@ func TestDryRunEqualsEffect(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		want.Target = tc.what
+		// approvers is who could decide the write, not part of its effect.
+		if len(got.Approvers) == 0 || got.Approvers[0].Kind != "security" {
+			t.Errorf("%s: approvers %+v, want the security admins first", tc.what, got.Approvers)
+		}
+		want.Target, want.Approvers = tc.what, got.Approvers
 		gotJSON, _ := json.Marshal(got)
 		wantJSON, _ := json.Marshal(want)
 		if len(want.People) == 0 || string(gotJSON) != string(wantJSON) {
