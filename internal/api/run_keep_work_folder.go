@@ -241,7 +241,7 @@ func (s *Server) dropUnstartedKeptDrive(ctx context.Context, runID uuid.UUID) {
 }
 
 // keptRunEnded reports whether runID, the run a kept drive was kept from, has ended or is gone. Until then
-// the drive is that run's alone: it is not offered to another run (memberReachableDrives). A run that cannot
+// the drive is that run's alone: another run cannot attach it (reachableDrive.held). A run that cannot
 // be read counts as not ended, so the drive stays out of reach rather than into it.
 func (s *Server) keptRunEnded(ctx context.Context, runID uuid.UUID) bool {
 	run, err := s.cfg.Store.GetRun(ctx, runID)
