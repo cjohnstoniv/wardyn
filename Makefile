@@ -687,6 +687,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-stage-agent-binary.sh
 	./scripts/test-doc-form.sh
 	./scripts/test-doc-links.sh
+	./scripts/test-e2e-backend-down.sh
 	./scripts/test-e2e-harness.sh
 	./scripts/test-e2e-lane-kill-tree.sh
 	./scripts/test-e2e-live-base-url.sh
