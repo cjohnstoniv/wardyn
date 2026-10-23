@@ -45,8 +45,7 @@ type desktopPause struct {
 // browser's side is never read (recording.ReadSideConn), so keystrokes are never recorded. A run its
 // runner declined to record is still recorded here: this relay is Wardyn's, as for a console session.
 func (s *Server) recordDesktopConn(run types.AgentRun, sess uiSession, conn net.Conn) net.Conn {
-	if sess.App != desktopApp || run.RecordingLevel != types.RecordingScreenActions || run.NotRecorded == types.NotRecordedPolicyOff ||
-		s.cfg.RecordingStore == nil || runIsUnrecordable(run) {
+	if sess.App != desktopApp || !s.desktopRecorded(run) {
 		return conn
 	}
 	rec := recording.NewRFBRecorder(s.cfg.Now)
@@ -57,6 +56,20 @@ func (s *Server) recordDesktopConn(run types.AgentRun, sess uiSession, conn net.
 		s.saveDesktopRecording(s.cfg.BaseCtx, run, sess, session, rec)
 	})
 }
+
+// desktopRecorded reports whether run's desktop screen is recorded: the run records screen_actions and
+// the organisation keeps recordings.
+func (s *Server) desktopRecorded(run types.AgentRun) bool {
+	return run.RecordingLevel == types.RecordingScreenActions && run.NotRecorded != types.NotRecordedPolicyOff &&
+		s.cfg.RecordingStore != nil && !runIsUnrecordable(run)
+}
+
+// Why Wardyn paused a desktop recording, as the gap names it: a "Needs you" takeover, or a desktop
+// sign-in (board M7-Replay's words).
+const (
+	desktopPauseTakeover = "you took over"
+	desktopPauseSignin   = "you took over to sign in"
+)
 
 // saveDesktopRecording stores a closed connection's recording and writes desktop.recording.write.
 // A connection that carried no RFB frames (a static file, or one that never upgraded) stores nothing.
@@ -108,7 +121,7 @@ func (d *desktopRecordings) remove(run uuid.UUID, rec *recording.RFBRecorder) {
 // PauseDesktopRecording stops keeping the run's screen frames (C11): the action log, the clipboard
 // rules and the run itself carry on. The pause is written to the tamper-evident audit log as
 // desktop.recording.pause, by Wardyn, never by the desktop. It reports false when already paused.
-// Its caller is the "Needs you" takeover.
+// Its callers are the "Needs you" takeover and a desktop sign-in, on a run whose screen is recorded.
 func (s *Server) PauseDesktopRecording(ctx context.Context, run types.AgentRun, reason string) bool {
 	d := &s.desktopRecs
 	d.mu.Lock()
@@ -136,12 +149,13 @@ func (s *Server) PauseDesktopRecording(ctx context.Context, run types.AgentRun, 
 }
 
 // ResumeDesktopRecording keeps frames again and writes desktop.recording.resume with the whole gap:
-// its start, end, length and reason. It reports false when the run was not paused.
-func (s *Server) ResumeDesktopRecording(ctx context.Context, run types.AgentRun) bool {
+// its start, end, length and reason. It reports false when the run was not paused for reason, so
+// one pause's end never ends another's.
+func (s *Server) ResumeDesktopRecording(ctx context.Context, run types.AgentRun, reason string) bool {
 	d := &s.desktopRecs
 	d.mu.Lock()
 	r := d.byRun[run.ID]
-	if r == nil || r.paused == nil {
+	if r == nil || r.paused == nil || r.paused.reason != reason {
 		d.mu.Unlock()
 		return false
 	}

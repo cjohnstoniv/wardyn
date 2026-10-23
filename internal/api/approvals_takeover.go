@@ -10,10 +10,12 @@
 // Nothing here lets the run reach more. No credential is stored, brokered or handed to the agent;
 // the person types into the desktop or terminal the run already has, and what they type is never
 // recorded as input: the boot seed's cast is output only (wardyn-rec runs asciinema without
-// --stdin), so is the console terminal's session cast (attach.go), the desktop relay records
-// nothing (uigateway.go), and every row below carries a closed set of keys. What the terminal shows,
-// echoed characters included, is output, and a recorded run keeps it: recording.pause marks the
-// gap, but no recorder acts on recording_gap yet.
+// --stdin), so is the console terminal's session cast (attach.go), the desktop relay records the
+// sandbox's side only (uigateway_record.go), and every row below carries a closed set of keys. What
+// the terminal shows, echoed characters included, is output, and a recorded run keeps it:
+// recording.pause marks the gap, but no terminal recorder acts on recording_gap yet. A recorded
+// desktop keeps no screen frames from take over to hand back (PauseDesktopRecording) on the replica
+// that answers the take over.
 package api
 
 import (
@@ -160,7 +162,7 @@ func (s *Server) takeoverRecorded(run types.AgentRun) bool {
 
 // recordingGap writes recording.pause or recording.resume (the gap's start or end, with its reason,
 // in the tamper-evident log) and tells every replica's recorder over the live bus. Nothing consumes
-// the notice yet, so the screen output of the gap is still recorded.
+// the notice yet, so a terminal's output in the gap is still recorded.
 func (s *Server) recordingGap(ctx context.Context, ap types.ApprovalRequest, paused bool, data map[string]any) {
 	action := "recording.resume"
 	if paused {
@@ -229,6 +231,9 @@ func (s *Server) handleTakeOverApproval(w http.ResponseWriter, r *http.Request) 
 	if prev == "" && s.takeoverRecorded(run) {
 		s.recordingGap(r.Context(), got, true, map[string]any{})
 	}
+	if prev == "" && s.desktopRecorded(run) {
+		s.PauseDesktopRecording(r.Context(), run, desktopPauseTakeover)
+	}
 	writeJSON(w, http.StatusOK, takeoverResponse{ApprovalRequest: got, Surface: surface})
 }
 
@@ -262,6 +267,7 @@ func (s *Server) handleHandBackApproval(w http.ResponseWriter, r *http.Request) 
 	if s.takeoverRecorded(run) {
 		s.recordingGap(r.Context(), got, false, map[string]any{"gap_ms": held})
 	}
+	s.ResumeDesktopRecording(r.Context(), run, desktopPauseTakeover)
 	s.recordAudit(r.Context(), s.auditEvent(&got.RunID, actorType, principal, "takeover.close", got.ID.String(), "success",
 		mustJSON(map[string]any{"approval_id": got.ID, "held_ms": held})))
 	writeJSON(w, http.StatusOK, takeoverResponse{ApprovalRequest: got, Surface: s.takeoverSurface(r.Context(), run)})
