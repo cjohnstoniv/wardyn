@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
@@ -44,6 +45,7 @@ const auditDesktopSignIn = "desktop.sign_in.pause"
 const (
 	desktopSignInsOffMsg         = "Your admin doesn't allow sign-ins in this desktop while this agent runs"
 	desktopSignInsUnavailableMsg = "This run's desktop has no sign-in store: its runner or its guest image is older than sign-ins"
+	desktopResumeUnrecordedMsg   = "the agent was resumed, but that could not be recorded; try again"
 )
 
 // desktopSignInsView is GET /runs/{id}/desktop/sign-ins and the pause and resume answers. Store is
@@ -192,10 +194,12 @@ func (s *Server) agentPauser(w http.ResponseWriter) (runner.AgentPauser, bool) {
 // store keeps none or the admin has since set Not allowed: the console's missing button is not the
 // control.
 func (s *Server) handlePauseDesktopAgent(w http.ResponseWriter, r *http.Request) {
+	base := r.Context() // without the run's lock, so a pause that loses it can take it again
 	r, run, st, row, unlock, ok := s.desktopSignInsRun(w, r, true)
 	if !ok {
 		return
 	}
+	unlock = sync.OnceFunc(unlock) // released once the last write it guards is done
 	defer unlock()
 	ctx, cancelCall := context.WithTimeout(r.Context(), desktopAgentCallWait)
 	defer cancelCall()
@@ -226,15 +230,44 @@ func (s *Server) handlePauseDesktopAgent(w http.ResponseWriter, r *http.Request)
 	stage := "pause"
 	if err == nil {
 		stage = "record"
-		var marked bool
-		if marked, err = st.PauseDesktopVMAgent(bg, run.ID, principal, now); err == nil && !marked {
-			err = errDesktopSignInUnmarked
+		// Marked only under the run's lock: with it lost, another pause may have stopped and marked the
+		// agent since.
+		if err = s.lockHeld(bg); err == nil {
+			var marked bool
+			if marked, err = st.PauseDesktopVMAgent(bg, run.ID, principal, now); err == nil && !marked {
+				err = errDesktopSignInUnmarked
+			}
 		}
 	}
 	if err != nil {
 		// Never leave the agent stopped with no mark, which no resume would continue: a stop can land
-		// even when the runner answers an error, so continue it.
-		_ = p.ResumeAgent(bg, run.SandboxRef)
+		// even when the runner answers an error, so continue it, under the run's lock. One lost since
+		// the call is taken again and the row read again: a pause that has marked it since owns the
+		// stopped agent, which its resume continues.
+		send, relocked := bg, func() {}
+		if s.lockHeld(bg) != nil {
+			unlock()
+			var lctx context.Context
+			var cur store.DesktopVMSignIns
+			if lctx, cur, relocked, ok = s.desktopRelock(base, run, st); !ok {
+				s.recordAudit(bg, s.auditEvent(&run.ID, at, principal, auditDesktopSignIn, run.ID.String(), "failure",
+					mustJSON(map[string]any{"stage": "lock_lost", "error": err.Error()})))
+				w.Header().Set("Retry-After", "5")
+				writeErrorReason(w, http.StatusServiceUnavailable, reasonLockUnavailable, lockUnavailableMsg)
+				return
+			}
+			defer relocked()
+			if cur.PausedAt != nil {
+				newer := s.desktopSignInsView(lctx, run, cur)
+				relocked()
+				writeJSON(w, http.StatusOK, newer)
+				return
+			}
+			send = lctx
+		}
+		_ = p.ResumeAgent(send, run.SandboxRef)
+		relocked()
+		unlock()
 		s.recordAudit(bg, s.auditEvent(&run.ID, at, principal, auditDesktopSignIn, run.ID.String(), "failure",
 			mustJSON(map[string]any{"stage": stage, "error": err.Error()})))
 		if stage == "record" {
@@ -254,6 +287,7 @@ func (s *Server) handlePauseDesktopAgent(w http.ResponseWriter, r *http.Request)
 	if s.desktopRecorded(run) {
 		s.PauseDesktopRecording(bg, run, desktopPauseSignin, vmSignInHold(run))
 	}
+	unlock()
 	v.Paused, v.PausedAt = true, &now
 	writeJSON(w, http.StatusOK, v)
 }
@@ -261,6 +295,30 @@ func (s *Server) handlePauseDesktopAgent(w http.ResponseWriter, r *http.Request)
 // desktopAgentCallWait bounds a pause's or resume's runner call, and again the writes after its answer,
 // so a hung runner holds the run's lock for about a minute at most.
 const desktopAgentCallWait = 30 * time.Second
+
+// desktopRelock takes the run's lock again for a pause or resume that lost it after the runner's
+// answer, and has released the lost hold (one only reported lost, its connection busy, would
+// otherwise hold this take off), waiting at most desktopAgentCallWait, and reads the row under it.
+// ok is false when either fails or the new lock is lost too: nothing more is sent or written.
+// relocked releases it.
+func (s *Server) desktopRelock(base context.Context, run types.AgentRun, st store.DesktopVMSignInStore) (ctx context.Context, row store.DesktopVMSignIns, relocked func(), ok bool) {
+	slog.WarnContext(base, "wardynd: a desktop sign-in pause or resume lost its run lock; reconciling under a new one", "run_id", run.ID)
+	lctx, unlock, ok := s.lockRunOpWithin(context.WithoutCancel(base), run.ID, desktopAgentCallWait)
+	if !ok {
+		return nil, row, nil, false
+	}
+	ctx, cancel := context.WithTimeout(lctx, desktopAgentCallWait)
+	relocked = sync.OnceFunc(func() { cancel(); unlock() })
+	row, _, err := st.DesktopVMSignIns(ctx, run.ID)
+	if err == nil {
+		err = s.lockHeld(ctx)
+	}
+	if err != nil {
+		relocked()
+		return nil, row, nil, false
+	}
+	return ctx, row, relocked, true
+}
 
 // errDesktopSignInUnmarked is an acked pause whose row was no longer a 'memory' row with no mark.
 var errDesktopSignInUnmarked = errors.New("the run's sign-in row was not marked paused")
@@ -300,10 +358,12 @@ func (s *Server) holdOpenVMSignIn(run types.AgentRun) {
 // never refused for policy: an agent is not left stopped because the setting changed. A pause in flight
 // holds the run's lock, so a resume waits for its answer rather than overtaking it.
 func (s *Server) handleResumeDesktopAgent(w http.ResponseWriter, r *http.Request) {
+	base := r.Context() // without the run's lock, so a resume that loses it can take it again
 	r, run, st, row, unlock, ok := s.desktopSignInsRun(w, r, true)
 	if !ok {
 		return
 	}
+	unlock = sync.OnceFunc(unlock) // released once the last write it guards is done
 	defer unlock()
 	ctx, cancelCall := context.WithTimeout(r.Context(), desktopAgentCallWait)
 	defer cancelCall()
@@ -320,21 +380,48 @@ func (s *Server) handleResumeDesktopAgent(w http.ResponseWriter, r *http.Request
 	bg, cancel := context.WithTimeout(context.WithoutCancel(ctx), desktopAgentCallWait)
 	defer cancel()
 	if err != nil {
+		unlock()
 		s.recordAudit(bg, s.auditEvent(&run.ID, at, principal, auditDesktopSignIn, run.ID.String(), "failure",
 			mustJSON(map[string]any{"stage": "resume", "paused_by": row.PausedBy, "paused_at": row.PausedAt, "error": err.Error()})))
 		writeErrorReason(w, http.StatusBadGateway, reasonDesktopSignInsResumeFailed, "the agent could not be resumed; it is still paused. Try again")
 		return
 	}
 	// The agent runs again: clear its mark even if the person's tab has closed, or the run would say
-	// paused while its agent runs.
+	// paused while its agent runs. Cleared only under the run's lock: one lost since the call is taken
+	// again and the row read again, and a mark that is no longer the one this resume read is another
+	// pause's, left to its own resume.
+	write, relocked := bg, func() {}
+	if s.lockHeld(bg) != nil {
+		unlock()
+		var lctx context.Context
+		var cur store.DesktopVMSignIns
+		if lctx, cur, relocked, ok = s.desktopRelock(base, run, st); !ok {
+			s.recordAudit(bg, s.auditEvent(&run.ID, at, principal, auditDesktopSignIn, run.ID.String(), "failure",
+				mustJSON(map[string]any{"stage": "lock_lost", "paused_by": row.PausedBy, "paused_at": row.PausedAt})))
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonDesktopSignInsResumeFailed, desktopResumeUnrecordedMsg)
+			return
+		}
+		defer relocked()
+		if cur.PausedAt == nil || !cur.PausedAt.Equal(*row.PausedAt) {
+			current := s.desktopSignInsView(lctx, run, cur)
+			relocked()
+			writeJSON(w, http.StatusOK, current)
+			return
+		}
+		write = lctx
+	}
 	now := time.Now().UTC()
-	by, pausedAt, cleared, err := st.ResumeDesktopVMAgent(bg, run.ID)
+	by, pausedAt, cleared, err := st.ResumeDesktopVMAgent(write, run.ID)
 	if err != nil {
-		writeErrorReason(w, http.StatusServiceUnavailable, reasonDesktopSignInsResumeFailed, "the agent was resumed, but that could not be recorded; try again")
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonDesktopSignInsResumeFailed, desktopResumeUnrecordedMsg)
 		return
 	}
 	if cleared {
 		s.endDesktopHold(bg, run, vmSignInHold(run))
+	}
+	relocked()
+	unlock()
+	if cleared {
 		s.recordAudit(bg, s.auditEvent(&run.ID, at, principal, auditDesktopSignIn, run.ID.String(), "success",
 			mustJSON(map[string]any{"paused_by": by, "paused_at": pausedAt, "resumed_at": now, "paused_seconds": int(now.Sub(pausedAt).Seconds())})))
 	}

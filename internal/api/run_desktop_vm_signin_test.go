@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -84,7 +85,8 @@ func (s *vmSignInTestStore) ResumeDesktopVMAgent(_ context.Context, runID uuid.U
 }
 
 // pauseFakeRunner is the guest agent behind runner.AgentPauser: it records each call and whether the
-// agent is stopped. A pause's stop lands even when it answers pauseErr, as one whose answer was lost.
+// agent is stopped. A pause's stop lands even when it answers pauseErr, or the call's context has
+// ended, as one whose answer was lost.
 type pauseFakeRunner struct {
 	*sshFakeRunner
 	pmu      sync.Mutex
@@ -94,11 +96,14 @@ type pauseFakeRunner struct {
 	// hold, when set, keeps each PauseAgent inside the call until it is closed, after telling inPause.
 	inPause chan struct{}
 	hold    chan struct{}
+	// during, when set, runs inside each call ("pause" or "resume"): before a pause's stop lands, after
+	// a resume's continue has.
+	during func(ctx context.Context, call string)
 }
 
 var _ runner.AgentPauser = (*pauseFakeRunner)(nil)
 
-func (f *pauseFakeRunner) PauseAgent(_ context.Context, ref string) error {
+func (f *pauseFakeRunner) PauseAgent(ctx context.Context, ref string) error {
 	f.pmu.Lock()
 	f.calls = append(f.calls, "pause "+ref)
 	f.pmu.Unlock()
@@ -106,17 +111,26 @@ func (f *pauseFakeRunner) PauseAgent(_ context.Context, ref string) error {
 		f.inPause <- struct{}{}
 		<-f.hold
 	}
+	if f.during != nil {
+		f.during(ctx, "pause")
+	}
 	f.pmu.Lock()
 	defer f.pmu.Unlock()
 	f.stopped = true
-	return f.pauseErr
+	if f.pauseErr != nil {
+		return f.pauseErr
+	}
+	return ctx.Err()
 }
 
-func (f *pauseFakeRunner) ResumeAgent(_ context.Context, ref string) error {
+func (f *pauseFakeRunner) ResumeAgent(ctx context.Context, ref string) error {
 	f.pmu.Lock()
-	defer f.pmu.Unlock()
 	f.calls = append(f.calls, "resume "+ref)
 	f.stopped = false
+	f.pmu.Unlock()
+	if f.during != nil {
+		f.during(ctx, "resume")
+	}
 	return nil
 }
 
@@ -144,6 +158,56 @@ func (l runLockWaits) Lock(ctx context.Context, k db.LockKey, wait time.Duration
 		l.waits <- struct{}{}
 	}
 	return l.Locker.Lock(ctx, k, wait)
+}
+
+// droppingLocker is the in-process locker with a run lock a test can lose, as a Postgres session's lock
+// is lost with its connection: drop releases the first hold of a run's lock taken through it, so
+// another request takes the lock, ends that hold's context with db.ErrLockLost, and from then on
+// lockHeld answers ErrLockLost for it. refuse makes every later take of a run's lock refuse at once.
+type droppingLocker struct {
+	db.Locker
+	mu     sync.Mutex
+	drop   func()
+	refuse atomic.Bool
+}
+
+type lostHoldKey struct{}
+
+func (l *droppingLocker) Lock(ctx context.Context, k db.LockKey, wait time.Duration) (context.Context, func(), error) {
+	if k.Class == db.RunOpLockClass && l.refuse.Load() {
+		return nil, nil, db.ErrLockBusy
+	}
+	lctx, unlock, err := l.Locker.Lock(ctx, k, wait)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if err != nil || k.Class != db.RunOpLockClass || l.drop != nil {
+		return lctx, unlock, err
+	}
+	lost := new(atomic.Bool)
+	cctx, cancel := context.WithCancelCause(context.WithValue(lctx, lostHoldKey{}, lost))
+	release := sync.OnceFunc(unlock)
+	l.drop = func() { lost.Store(true); release(); cancel(db.ErrLockLost) }
+	return cctx, release, nil
+}
+
+// loseLocks gives f's server a droppingLocker: drop loses the next run lock a request takes, and with
+// refuse, no request takes it again.
+func (f *vmSignInFixture) loseLocks() (drop func(refuse bool)) {
+	l := &droppingLocker{Locker: db.NewLocalLocker()}
+	f.srv.locks.override = l
+	f.srv.locks.held = func(ctx context.Context) error {
+		if lost, _ := ctx.Value(lostHoldKey{}).(*atomic.Bool); lost != nil && lost.Load() {
+			return db.ErrLockLost
+		}
+		return db.LockHeld(ctx)
+	}
+	return func(refuse bool) {
+		l.refuse.Store(refuse)
+		l.mu.Lock()
+		d := l.drop
+		l.mu.Unlock()
+		d()
+	}
 }
 
 type vmSignInFixture struct {
@@ -528,6 +592,108 @@ func TestDesktopSignIns_PauseSurvivesARestart(t *testing.T) {
 	}
 	if rows := f.signInRows(); len(rows) != 1 || rows[0].Outcome != "success" {
 		t.Fatalf("rows = %+v, want the session's one success", rows)
+	}
+}
+
+// A pause that loses the run's lock during its runner call, as one whose database session died does,
+// acts on the agent no more: another pause took the lock, stopped the agent and marked the row, and
+// that agent is its to continue. The first takes the lock again, finds the newer mark and sends
+// nothing, so the agent stays stopped under the mark its resume will clear.
+func TestDesktopSignIns_PauseThatLostItsLockLeavesANewerPauseAlone(t *testing.T) {
+	f := newVMSignInFixture(t, "memory")
+	drop := f.loseLocks()
+	var first atomic.Bool
+	var newer vmSignInAnswer
+	f.rn.during = func(_ context.Context, call string) {
+		if call == "pause" && first.CompareAndSwap(false, true) {
+			drop(false)
+			newer.code, newer.v, newer.body = f.do(t, http.MethodPost, "/pause")
+		}
+	}
+	code, v, body := f.do(t, http.MethodPost, "/pause")
+	if newer.code != http.StatusOK || !newer.v.Paused || newer.v.PausedAt == nil {
+		t.Fatalf("the newer pause = %d %s", newer.code, newer.body)
+	}
+	if code != http.StatusOK || !v.Paused || v.PausedAt == nil || !v.PausedAt.Equal(*newer.v.PausedAt) {
+		t.Fatalf("the pause that lost its lock = %d %s, want the newer pause's mark", code, body)
+	}
+	if got := f.rn.seen(); !slices.Equal(got, []string{"pause vm-1", "pause vm-1"}) {
+		t.Fatalf("runner calls = %v, want the two pauses and no continue", got)
+	}
+	if !f.rn.agentStopped() {
+		t.Fatal("the pause that lost its lock continued the newer pause's agent")
+	}
+	if row, _, _ := f.st.DesktopVMSignIns(context.Background(), f.run.ID); row.PausedAt == nil || !row.PausedAt.Equal(*newer.v.PausedAt) {
+		t.Fatalf("row = %+v, want the newer pause's mark", row)
+	}
+	if rows := f.signInRows(); len(rows) != 0 {
+		t.Fatalf("rows = %+v, want none until the resume", rows)
+	}
+}
+
+// A pause that loses the run's lock during its runner call and cannot take it again sends nothing:
+// the agent may be left stopped with no mark (docs/operations/linux-vm-sandboxes.md says how to
+// recover it), the failure is audited as lock_lost, and the answer is the lock's 503.
+func TestDesktopSignIns_PauseThatCannotRetakeItsLockSendsNothing(t *testing.T) {
+	f := newVMSignInFixture(t, "memory")
+	drop := f.loseLocks()
+	f.rn.during = func(_ context.Context, call string) {
+		if call == "pause" {
+			drop(true)
+		}
+	}
+	code, _, body := f.do(t, http.MethodPost, "/pause")
+	if code != http.StatusServiceUnavailable || !strings.Contains(body, reasonLockUnavailable) {
+		t.Fatalf("pause = %d %s, want 503 %s", code, body, reasonLockUnavailable)
+	}
+	if got := f.rn.seen(); !slices.Equal(got, []string{"pause vm-1"}) || !f.rn.agentStopped() {
+		t.Fatalf("runner calls = %v, want the pause and no continue", got)
+	}
+	if row, _, _ := f.st.DesktopVMSignIns(context.Background(), f.run.ID); row.PausedAt != nil {
+		t.Fatalf("row = %+v, want no mark", row)
+	}
+	rows := f.signInRows()
+	var d map[string]any
+	if len(rows) != 1 || rows[0].Outcome != "failure" || json.Unmarshal(rows[0].Data, &d) != nil || d["stage"] != "lock_lost" {
+		t.Fatalf("rows = %+v, want one lock_lost failure", rows)
+	}
+}
+
+// A resume that loses the run's lock after its runner call clears no mark but its own: the session was
+// resumed from another tab and a newer pause has marked the row since, so that mark stays for its own
+// resume, and the newer pause's agent stays stopped.
+func TestDesktopSignIns_ResumeThatLostItsLockLeavesANewerPauseAlone(t *testing.T) {
+	f := newVMSignInFixture(t, "memory")
+	if code, _, body := f.do(t, http.MethodPost, "/pause"); code != http.StatusOK {
+		t.Fatalf("pause = %d %s", code, body)
+	}
+	drop := f.loseLocks()
+	var first atomic.Bool
+	var newer vmSignInAnswer
+	f.rn.during = func(_ context.Context, call string) {
+		if call == "resume" && first.CompareAndSwap(false, true) {
+			drop(false)
+			if code, _, body := f.do(t, http.MethodPost, "/resume"); code != http.StatusOK {
+				t.Errorf("the other tab's resume = %d %s", code, body)
+			}
+			newer.code, newer.v, newer.body = f.do(t, http.MethodPost, "/pause")
+		}
+	}
+	code, v, body := f.do(t, http.MethodPost, "/resume")
+	if newer.code != http.StatusOK || !newer.v.Paused || newer.v.PausedAt == nil {
+		t.Fatalf("the newer pause = %d %s", newer.code, newer.body)
+	}
+	if code != http.StatusOK || !v.Paused || v.PausedAt == nil || !v.PausedAt.Equal(*newer.v.PausedAt) {
+		t.Fatalf("the resume that lost its lock = %d %s, want the newer pause's mark", code, body)
+	}
+	if row, _, _ := f.st.DesktopVMSignIns(context.Background(), f.run.ID); row.PausedAt == nil || !row.PausedAt.Equal(*newer.v.PausedAt) {
+		t.Fatalf("row = %+v, want the newer pause's mark", row)
+	}
+	if !f.rn.agentStopped() {
+		t.Fatal("the newer pause's agent is not stopped")
+	}
+	if rows := f.signInRows(); len(rows) != 1 || rows[0].Outcome != "success" {
+		t.Fatalf("rows = %+v, want the other tab's one success", rows)
 	}
 }
 
