@@ -540,6 +540,25 @@ describe("SignIn — renders the OIDC callback's ?auth_error=<code> inline", () 
     expect(await screen.findByRole("alert")).toHaveTextContent(SIGNIN.OIDC_REFUSED);
   });
 
+  // r11 #2775: an expired or replaced state cookie is news, not a refusal: an info notice, one way on.
+  it.each([
+    ["microsoft", SIGNIN.SSO_MICROSOFT_HINT],
+    ["", null],
+  ])("sign_in_expired (provider %j): an info notice, no alert, Sign in again, no help link", async (provider, hint) => {
+    window.history.pushState({}, "", "/?auth_error=sign_in_expired");
+    healthMock.mockResolvedValue({ status: "ok", sso: true, sso_provider: provider, sign_in_help_text: "Ask IT", sign_in_help_url: "https://it.example/r" });
+    renderSignIn();
+    const notice = await screen.findByText(SIGNIN.SIGN_IN_EXPIRED);
+    expect(notice.closest("[role=status]")).not.toBeNull();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    const link = await screen.findByRole("link", { name: SIGNIN.SIGN_IN_AGAIN });
+    expect(link.getAttribute("href")).toMatch(/\/auth\/login/);
+    expect(screen.queryByText(SIGNIN.AUTH_FAILED)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("sign-in-help")).not.toBeInTheDocument();
+    if (hint) expect(screen.getByText(hint)).toBeInTheDocument();
+    expect(window.location.search).toBe("");
+  });
+
   it("shows no error banner when the URL carries no auth_error", () => {
     window.history.pushState({}, "", "/");
     healthMock.mockResolvedValue({});

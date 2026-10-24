@@ -86,6 +86,8 @@ because #457 touches its neighbors).
 | `SIGNIN.OIDC_REFUSED` | New | `auth_error=oidc_refused` | Your identity provider didn't complete the sign-in. If you declined a prompt, try again; otherwise ask your Wardyn admin whether you are assigned to Wardyn in your identity provider. |
 | `SIGNIN.OIDC_TRANSIENT` | Reused | `auth_error=oidc_transient` | Your identity provider didn't respond in time. This is usually temporary — try signing in again. |
 | `SIGNIN.AUTH_FAILED` | Changed | `auth_error=<unrecognized>` (default arm) | Sign-in failed. Try again, or ask your Wardyn admin. |
+| `SIGNIN.SIGN_IN_EXPIRED` | New (r11 #2775) | `auth_error=sign_in_expired`: an info notice in the notices slot under the lead, role status, no help link | That sign-in ran out or was replaced, usually because it took more than 10 minutes or a newer one was started in another tab. |
+| `SIGNIN.SIGN_IN_AGAIN` | New (r11 #2775) | the SSO button label on that notice (Microsoft button look kept on an Entra deployment) | Sign in again |
 | — | Reused (inline JSX, not a copy-module key) | admin-token label | Admin token |
 | — | Reused (inline JSX) | Remember checkbox label | Remember on this device |
 | — | Reused (inline JSX) | Remember checkbox hint | (keeps the token after the browser closes) |
