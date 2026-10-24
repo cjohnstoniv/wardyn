@@ -254,6 +254,7 @@ type refArgs struct {
 	Argv        []string `json:"argv"`
 	AgentExecID string   `json:"agent_exec_id"`
 	CfgJSON     []byte   `json:"cfg_json"`
+	Generation  int64    `json:"generation"` // runnerwire.AgentPauseArgs
 }
 
 func (d *Dispatcher) refCall(ctx context.Context, method string, args json.RawMessage) (result any, err error) {
@@ -358,10 +359,12 @@ func (d *Dispatcher) dispatchRef(ctx context.Context, method, ref string, a refA
 		if !ok {
 			return nil, runner.ErrAgentPauseUnsupported
 		}
+		call := p.ResumeAgent
 		if method == runnerwire.MethodPauseAgent {
-			return nil, p.PauseAgent(ctx, ref)
+			call = p.PauseAgent
 		}
-		return nil, p.ResumeAgent(ctx, ref)
+		fenced, err := call(ctx, ref, a.Generation)
+		return runnerwire.AgentPauseResult{FencedPause: fenced}, err
 	case runnerwire.MethodAgentStatus:
 		return sub.AgentStatus(ctx, ref, a.AgentExecID)
 	case runnerwire.MethodStop:

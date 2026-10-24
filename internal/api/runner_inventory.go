@@ -303,6 +303,12 @@ func (s *Server) getRunnerView(w http.ResponseWriter, r *http.Request, owner str
 			return
 		}
 	}
+	if ps, ok := s.cfg.Store.(parkedExitStore); ok {
+		if views[0].ParkedExits, err = ps.ParkedRunnerExits(r.Context(), id); err != nil {
+			writeServerError(w, r, "read parked runner exits", err)
+			return
+		}
+	}
 	writeJSON(w, http.StatusOK, views[0])
 }
 

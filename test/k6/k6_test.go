@@ -25,10 +25,13 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -50,6 +53,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/hoptls"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/k8s"
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
@@ -74,12 +78,13 @@ const (
 type env struct {
 	admin, sa                                        kubernetes.Interface
 	runsNS, ownNS, saName, runnerID, relayIP, orgURL string
-	orgCA, proxyImage, agentImage, arch              string
+	proxyImage, agentImage, arch                     string
 	peerLabels                                       map[string]string
 	pin, other                                       string // the two workers: pin carries runs, other is spare
 	nodes                                            []string
 	store                                            *store
 	sink                                             *fakeSink
+	cp                                               *fakeControlPlane
 	fences                                           *fences
 	main                                             *k8s.Driver
 	stoppedIP                                        string // normal-stop's proxy IP, for pod-ip-reuse-after-stop
@@ -115,11 +120,11 @@ func TestK6(t *testing.T) {
 		arch:  must(t, "K6_ARCH"),
 		store: newStore(), fences: newFences(),
 	}
-	ca, err := os.ReadFile(must(t, "K6_ORG_CA"))
+	orgU, err := url.Parse(e.orgURL)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("K6_ORG_URL: %v", err)
 	}
-	e.orgCA = string(ca)
+	e.cp = newFakeControlPlane(t, orgU.Hostname(), must(t, "K6_APISERVER"))
 	if err := json.Unmarshal([]byte(must(t, "K6_RUNNERD_SELECTOR")), &e.peerLabels); err != nil {
 		t.Fatalf("K6_RUNNERD_SELECTOR: %v", err)
 	}
@@ -431,6 +436,58 @@ func (f *fences) ipOf(run uuid.UUID) (string, bool) {
 	return ip, ok
 }
 
+// fakeControlPlane stands in for the runnerd relay that production puts in front of the org: a TLS
+// listener on this process's kind-network address that answers the proxy's run-token renew. The proxy
+// opens only after its first successful renew, so without it no runner-mode proxy becomes ready.
+type fakeControlPlane struct {
+	ip     string // the kind-network source address the proxy pod reaches this process on
+	url    string // https://<org host>:8443, the port the relay Service exposes
+	caPEM  string
+	renews atomic.Int64
+}
+
+func newFakeControlPlane(t *testing.T, host, apiserver string) *fakeControlPlane {
+	t.Helper()
+	// A UDP "dial" sends nothing; it only makes the kernel pick the source address for the route.
+	c, err := net.Dial("udp", apiserver)
+	if err != nil {
+		t.Fatalf("fake control plane: route to %s: %v", apiserver, err)
+	}
+	ip := c.LocalAddr().(*net.UDPAddr).IP.String()
+	_ = c.Close()
+	now := time.Now()
+	blob, err := hoptls.NewCA(now)
+	if err != nil {
+		t.Fatalf("fake control plane: CA: %v", err)
+	}
+	ca, err := hoptls.ParseCA(blob)
+	if err != nil {
+		t.Fatalf("fake control plane: parse CA: %v", err)
+	}
+	cert, err := ca.ServingCert(host, now)
+	if err != nil {
+		t.Fatalf("fake control plane: serving cert for %s: %v", host, err)
+	}
+	ln, err := tls.Listen("tcp", net.JoinHostPort(ip, "8443"), &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13})
+	if err != nil {
+		t.Fatalf("fake control plane: listen on %s:8443: %v", ip, err)
+	}
+	f := &fakeControlPlane{ip: ip, url: "https://" + net.JoinHostPort(host, "8443"), caPEM: string(ca.CertPEM)}
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/v1/internal/token/renew", func(w http.ResponseWriter, r *http.Request) {
+		f.renews.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"token":      strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "),
+			"expires_at": time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+		})
+	})
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	return f
+}
+
 // --- driver and runs ----------------------------------------------------------------------------
 
 // newDriver builds a runner-mode Driver as runnerd's k8sRunnerHooks does, over v. Its boot canary
@@ -446,7 +503,14 @@ func (e *env) newDriver(t *testing.T, v *view) *k8s.Driver {
 	d, err := k8s.NewRunner(substrate.Deps{ProxyImage: e.proxyImage}, func(c *k8s.Config) {
 		c.Namespace = e.runsNS
 		c.RunnerID = e.runnerID
-		c.ControlPlaneRelay = func(*url.URL) (string, error) { return e.relayIP, nil }
+		// Mirrors relay.Ensure (cmd/wardyn-runnerd/relay_k8s.go): the URL must use the relay Service's port.
+		// The address it returns is the fake control plane's, so the proxy's hostAlias maps the org host to it.
+		c.ControlPlaneRelay = func(u *url.URL) (string, error) {
+			if u.Port() != "8443" {
+				return "", fmt.Errorf("relay_port_mismatch: the control-plane URL uses port %q and the relay Service exposes 8443", u.Port())
+			}
+			return e.cp.ip, nil
+		}
 		c.RunnerdPeer = &k8s.RunnerdPeer{Namespace: e.ownNS, PodLabels: e.peerLabels, RelayPort: 8443, SinkPort: 8444}
 		c.Evidence = v
 		c.Fence = e.fences.fence
@@ -469,7 +533,7 @@ func (e *env) spec(id uuid.UUID) runner.SandboxSpec {
 	return runner.SandboxSpec{
 		RunID: id, RunnerID: e.runnerID, Image: e.agentImage, ConfinementClass: types.CC1,
 		Labels:      map[string]string{"wardyn.k6": "true"},
-		ProxyConfig: runner.ProxyConfig{RunToken: "k6-" + id.String(), ControlPlaneURL: e.orgURL, ControlPlaneCAPEM: e.orgCA},
+		ProxyConfig: runner.ProxyConfig{RunToken: "k6-" + id.String(), ControlPlaneURL: e.cp.url, ControlPlaneCAPEM: e.cp.caPEM},
 	}
 }
 

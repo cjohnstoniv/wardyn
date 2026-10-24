@@ -467,7 +467,6 @@ func TestCreateSandbox_ProxyExitsAtConfigLoad(t *testing.T) {
 	f := newFakeDocker()
 	f.images["busybox:latest"] = true
 	d := newTestDriver(f)
-	d.proxySettle = proxyStartSettle // a fake-backed driver defaults to 0; exercise the real settle window here
 	runID := testSpec().RunID
 	f.exitAfterInspects = map[string]int{proxyContainerName(runID): 3} // the listen lookup takes the first inspect
 	f.logs = map[string][]byte{proxyContainerName(runID): muxFrame(1, `unknown field "x"`)}
@@ -513,7 +512,6 @@ func TestCreateSandbox_OlderProxyImageNamesTheFix(t *testing.T) {
 			f := newFakeDocker()
 			f.images["busybox:latest"] = true
 			d := newTestDriver(f)
-			d.proxySettle = proxyStartSettle
 			runID := testSpec().RunID
 			f.exitAfterInspects = map[string]int{proxyContainerName(runID): 3}
 			f.logs = map[string][]byte{proxyContainerName(runID): muxFrame(1, tc.log)}
@@ -547,7 +545,8 @@ func TestCreateSandbox_ProxyExitsAtConfigLoad_ClockSkew(t *testing.T) {
 	f := newFakeDocker()
 	f.images["busybox:latest"] = true
 	d := newTestDriver(f)
-	d.proxySettle = proxyStartSettle // exercise the real settle window
+	d.proxySettle = proxyStartSettle                                // exercise the real settle window
+	f.legacyProxyImages = map[string]bool{"wardyn-proxy:dev": true} // the exit-watch is the path for an image without the marker
 	runID := testSpec().RunID
 	name := proxyContainerName(runID)
 	f.startedAtOverride = map[string]time.Time{name: time.Now().Add(-5 * time.Second)}
