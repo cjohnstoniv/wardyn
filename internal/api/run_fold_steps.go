@@ -349,7 +349,11 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 // not asked.
 func (s *Server) stepPlacementCapability(f *runFold, rec *foldRecorder) bool {
 	mounts := len(buildRunMounts(f.spec, s.userMountPosture(f.wsRefs))) // the folders the sandbox would get
-	return !s.placementCapabilityRefusal(f.r.Context(), *f.req, f.place, f.ceiling, mounts).write(s, f.w, f.r)
+	var ask macOSVMAsk
+	if types.MachineKind(f.req.MachineKind).IsMacOSVM() {
+		ask = macOSVMAskOf(f)
+	}
+	return !s.placementCapabilityRefusalFor(f.r.Context(), *f.req, f.place, f.ceiling, mounts, ask).write(s, f.w, f.r)
 }
 
 // stepModelProvider makes the model-provider choice and refuses one whose

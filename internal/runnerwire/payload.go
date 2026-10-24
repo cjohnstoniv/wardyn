@@ -144,6 +144,11 @@ type Caps struct {
 	// gives them. Present only when its operator turned VMs on and its start-up probe passed; an older
 	// runner never sends it, and the org asks no runner without it for a VM.
 	LinuxVM *VMCaps `json:"linux_vm,omitempty"`
+	// MacOSVM says the runner starts macOS VM sandboxes (create_vm with machine_kind macos_vm) and what
+	// its Mac can serve now. Present only when its operator turned them on and the Mac passed its probe;
+	// it is resent when it changes, as Relay is. An older runner never sends it and the org never sends
+	// such a runner a macOS VM; an older org ignores it.
+	MacOSVM *MacVMCaps `json:"macos_vm,omitempty"`
 	// OfflineSummary is why the runner could not connect (or start) since its last session, sent once
 	// on the first connect after; Relay is a Docker runner's latest run relay check, sent again when it
 	// changes. Both 0.10 on; an older organisation ignores them, and an older runner sends neither.
@@ -214,6 +219,52 @@ type VMCaps struct {
 	// resume_agent) (#2972). A runner without it is never asked.
 	SignIns bool `json:"sign_ins,omitempty"`
 }
+
+// MacVMCaps is what a Mac runner's macOS VM sandboxes can be given right now. The org reads it through
+// one function (macOSVMOffer), so no surface keeps a readiness story of its own.
+type MacVMCaps struct {
+	// Max is how many more macOS VMs the Mac's host ledger can admit now (at most 2, Apple's licence).
+	Max int `json:"max"`
+	// MinCPUs and MinMemoryMiB are the base image's minimum guest size; 0 when it has not said.
+	MinCPUs      int `json:"min_cpus,omitempty"`
+	MinMemoryMiB int `json:"min_memory_mib,omitempty"`
+	// Harnesses are the harness ids the base can serve now.
+	Harnesses []string `json:"harnesses,omitempty"`
+	// Desktop is MacVMDesktop*: whether the guest's screen can be controlled, only watched, or neither.
+	Desktop string `json:"desktop,omitempty"`
+	// SignIns says the runner keeps a macOS desktop's sign-ins and pauses its agent (pause_agent,
+	// resume_agent). A runner without it is never asked.
+	SignIns bool      `json:"sign_ins,omitempty"`
+	Base    MacVMBase `json:"base"`
+	// Refusal is, in words, why the runner offers no macOS VM; empty when it offers them.
+	Refusal string `json:"refusal,omitempty"`
+}
+
+// MacVMCaps.Desktop values.
+const (
+	MacVMDesktopControl = "control"
+	MacVMDesktopObserve = "observe"
+	MacVMDesktopNone    = "none"
+)
+
+// MacVMBase is the Mac's one base image: State is MacVMBase*, GuestOS the build it holds, Progress the
+// percent done while it prepares, Error the last failure.
+type MacVMBase struct {
+	State    string `json:"state"`
+	GuestOS  string `json:"guest_os,omitempty"`
+	Progress int    `json:"progress,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
+// MacVMBase.State values. Only ready serves a run; update_needed is a base whose guest agent no longer
+// speaks the runner's session protocol.
+const (
+	MacVMBaseNone         = "none"
+	MacVMBasePreparing    = "preparing"
+	MacVMBaseReady        = "ready"
+	MacVMBaseUpdateNeeded = "update_needed"
+	MacVMBaseFailed       = "failed"
+)
 
 // Waiting is the `waiting` event's data.
 type Waiting struct {
