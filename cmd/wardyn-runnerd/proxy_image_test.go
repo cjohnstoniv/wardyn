@@ -192,29 +192,3 @@ func TestWarnPinnedProxyImageSkewAtStartup(t *testing.T) {
 		t.Fatalf("no skew warning naming both:\n%s", buf.String())
 	}
 }
-
-// An unpinned k8s runner following an older release's proxy image is warned at startup, naming the
-// image, its own release and the fix; an equal or newer release, a development build and an
-// unversioned image are not.
-func TestWarnOlderProxyImage(t *testing.T) {
-	var buf strings.Builder
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
-	t.Cleanup(func() { slog.SetDefault(prev) })
-	for _, c := range [][2]string{
-		{"m/p:0.10.0", "0.10.0"}, {"m/p:0.10.1", "0.10.0"}, {"m/p:0.10.0", "0.10.0-rc.2"}, {"m/p:0.10.0-rc.2", "0.10.0-rc.1"},
-		{"m/p:dev", "0.10.0"}, {"m/p", "0.10.0"}, {"m/p:0.9.8", "0.10.0+abc123"},
-	} {
-		warnOlderProxyImage(c[0], c[1])
-	}
-	if buf.Len() != 0 {
-		t.Fatalf("an equal, newer, development or unversioned image warned:\n%s", buf.String())
-	}
-	for image, runner := range map[string]string{"m/p:0.9.8": "0.10.0", "m/p:0.10.0-rc.1": "0.10.0-rc.2", "m/p:0.10.0-rc.2": "0.10.0"} {
-		buf.Reset()
-		warnOlderProxyImage(image, runner)
-		if out := buf.String(); !strings.Contains(out, image) || !strings.Contains(out, runner) || !strings.Contains(out, "ghcr.io/cjohnstoniv/wardyn-proxy:"+runner) {
-			t.Fatalf("%s under %s: no warning naming both and the fix:\n%s", image, runner, out)
-		}
-	}
-}

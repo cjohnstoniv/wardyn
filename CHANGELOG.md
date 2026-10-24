@@ -13,11 +13,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Before you upgrade
 
-- A Kubernetes runner (wardyn-runnerd) needs a proxy image of its own release. Its proxy pod now reads as ready only
-  once the proxy answers `/wardyn/v1/ready`, which an older proxy answers 404: every run then fails at the start
-  deadline. The Helm chart pins the proxy tag to the runner's, so a Helm install is safe. A runner started without Helm
-  and not pinned uses the proxy image the organisation named at registration: it logs a warning at startup when that
-  image is an older release, with the fix (`--proxy-image` set to this release's proxy image).
+- A Kubernetes runner (wardyn-runnerd) gets the short-run recording fix below only with a proxy image of this release.
+  The Helm chart pins the proxy tag to the runner's. A runner started without Helm and not pinned uses the proxy image
+  the organisation named at registration: when that is an older release, its runs keep working as before, without the
+  fix, and the runner logs a warning once. Have the organisation name this release's proxy image, or run setup with
+  `--proxy-image` set to it.
 
 ### Fixed
 

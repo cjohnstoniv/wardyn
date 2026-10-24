@@ -43,9 +43,6 @@ func k8sRunnerHooks(ctx context.Context, identity runneridentity.Identity, state
 	if opts.proxyImage == "" {
 		return runnerRuntime{}, errors.New("runner serve requires --proxy-image")
 	}
-	if !opts.proxyImagePinned {
-		warnOlderProxyImage(opts.proxyImage, buildVersion())
-	}
 	if opts.runsNamespace == "" || opts.relayService == "" {
 		return runnerRuntime{}, errors.New("--substrate=k8s requires --runs-namespace and --relay-service")
 	}

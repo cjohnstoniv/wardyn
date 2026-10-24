@@ -7,6 +7,7 @@ package k8s
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -17,8 +18,11 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clienttesting "k8s.io/client-go/testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 )
 
 // TestRunnerCreateSandbox_NoAgentPodWhileItsProxyRefuses pins the cause of a short k8s runner run
@@ -75,6 +79,56 @@ func TestRunnerCreateSandbox_NoAgentPodWhileItsProxyRefuses(t *testing.T) {
 	}
 	if err == nil {
 		t.Fatal("CreateSandbox succeeded while its proxy refused every request")
+	}
+}
+
+// TestRunnerCreateSandbox_OlderProxyImageKeepsTheTCPProbe: a runner whose proxy image is a known
+// release older than proxyReadyRelease answers proxy.ReadyPath 404, so probing there would fail
+// every run at the start deadline. Its pods keep the TCP probe, and the driver warns once naming
+// the image and the fix. A current release, a digest pin and a development tag are probed on
+// proxy.ReadyPath.
+func TestRunnerCreateSandbox_OlderProxyImageKeepsTheTCPProbe(t *testing.T) {
+	var buf strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	const repo = "ghcr.io/cjohnstoniv/wardyn-proxy"
+	for _, tc := range []struct {
+		image string
+		http  bool
+	}{
+		{repo + ":0.10.0-rc.1", false},
+		{repo + ":0.9.8", false},
+		{repo + ":" + proxyReadyRelease, true},
+		{repo + ":0.10.0", true},
+		{repo + "@sha256:" + strings.Repeat("a", 64), true},
+		{"wardyn/wardyn-proxy:dev", true},
+	} {
+		buf.Reset()
+		h := newRunnerHarness(t)
+		h.d.cfg.ProxyImage = tc.image
+		h.d.cfg.Sink = &fakeSink{h: h}
+		h.d.cfg.ControlPlaneRelay = func(*url.URL) (string, error) { return "10.96.0.40", nil }
+		installProxyIPReactor(t, h.cs, "10.244.0.7")
+		installAgentRunningReactor(t, h.cs)
+		for range 2 {
+			spec := testSandboxSpec()
+			if _, err := h.d.CreateSandbox(context.Background(), spec); err != nil {
+				t.Fatalf("%s: CreateSandbox: %v", tc.image, err)
+			}
+			pod, err := h.cs.CoreV1().Pods(testNamespace).Get(context.Background(), proxyPodName(spec.RunID), metav1.GetOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			probe := pod.Spec.Containers[0].ReadinessProbe
+			if gotHTTP := probe.HTTPGet != nil && probe.HTTPGet.Path == proxy.ReadyPath; gotHTTP != tc.http || !tc.http && probe.TCPSocket == nil {
+				t.Fatalf("%s: readiness probe %+v, want HTTP on the ready path = %v (else TCP)", tc.image, probe.ProbeHandler, tc.http)
+			}
+		}
+		warned := strings.Count(buf.String(), "the proxy image is older than this runner")
+		if tc.http && warned != 0 || !tc.http && (warned != 1 || !strings.Contains(buf.String(), tc.image)) {
+			t.Fatalf("%s: warned %d times, want %d naming the image:\n%s", tc.image, warned, map[bool]int{true: 0, false: 1}[tc.http], buf.String())
+		}
 	}
 }
 

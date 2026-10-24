@@ -13,7 +13,9 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"math"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -330,7 +332,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 				SecurityContext:          restrictedSecurityContext(),
 				Resources:                proxyResources(len(spec.ProxyConfig.AzureGates) > 0),
 				TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
-				ReadinessProbe:           proxyReadinessProbe(d.runnerMode()),
+				ReadinessProbe:           proxyReadinessProbe(d.probesProxyReady()),
 			}},
 			Volumes: []corev1.Volume{
 				{
@@ -794,6 +796,69 @@ func proxyReadinessProbe(runnerMode bool) *corev1.Probe {
 		h = corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: proxy.ReadyPath, Port: intstr.FromInt32(runner.ProxyListenPort)}}
 	}
 	return &corev1.Probe{ProbeHandler: h, PeriodSeconds: 1}
+}
+
+// proxyReadyRelease is the first release whose proxy answers proxy.ReadyPath.
+const proxyReadyRelease = "0.10.0-rc.2"
+
+// probesProxyReady is whether the proxy pod is probed on proxy.ReadyPath: in runner mode, unless the
+// proxy image is a known release older than proxyReadyRelease, which answers that path 404 and would
+// never read Ready. Such an image keeps the TCP probe, as before, and with it the window in which a
+// short run's recording upload can be refused; the driver says so once. An image whose release
+// cannot be read (a digest pin, a development build) is taken to be current.
+func (d *Driver) probesProxyReady() bool {
+	if !d.runnerMode() {
+		return false
+	}
+	tag := imageReleaseTag(d.cfg.ProxyImage)
+	if tag == "" || !releaseOlder(tag, proxyReadyRelease) {
+		return true
+	}
+	d.olderProxyWarned.Do(func() {
+		slog.Warn("k8s: the proxy image is older than this runner; its runs keep the TCP readiness probe, so a short run's recording can be lost",
+			slog.String("image", d.cfg.ProxyImage), slog.String("needs", proxyReadyRelease),
+			slog.String("fix", "have the organisation name this release's proxy image, or run setup with --proxy-image set to it"))
+	})
+	return false
+}
+
+// releaseTagRE is a release (X.Y.Z) or a release candidate (X.Y.Z-rc.N) image tag.
+var releaseTagRE = regexp.MustCompile(`^([0-9]+)\.([0-9]+)\.([0-9]+)(?:-rc\.([0-9]+))?$`)
+
+// imageReleaseTag is image's tag when it names a release, else "": a digest-only reference, an
+// untagged one or a development tag has none.
+func imageReleaseTag(image string) string {
+	ref, _, _ := strings.Cut(image, "@")
+	i := strings.LastIndex(ref, ":")
+	if i < 0 || strings.Contains(ref[i:], "/") || !releaseTagRE.MatchString(ref[i+1:]) {
+		return ""
+	}
+	return ref[i+1:]
+}
+
+// releaseOlder reports whether release tag a is older than b: a release candidate is older than
+// its release.
+func releaseOlder(a, b string) bool {
+	pa, pb := releaseParts(a), releaseParts(b)
+	for i := range pa {
+		if pa[i] != pb[i] {
+			return pa[i] < pb[i]
+		}
+	}
+	return false
+}
+
+func releaseParts(v string) [4]int {
+	m := releaseTagRE.FindStringSubmatch(v)
+	var p [4]int
+	for i := range 3 {
+		p[i], _ = strconv.Atoi(m[i+1])
+	}
+	p[3] = math.MaxInt // a release sorts after each of its candidates
+	if m[4] != "" {
+		p[3], _ = strconv.Atoi(m[4])
+	}
+	return p
 }
 
 // runnerProxyConfig adds the runner-only proxy config keys (runner mode): runnerd's own CA bundle
