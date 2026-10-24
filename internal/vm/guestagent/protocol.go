@@ -17,8 +17,8 @@
 //	GET  /v1/exec/{id}                  ExecState
 //	GET  /v1/exec/{id}/output?offset=N  a detached exec's output from N, following until it exits
 //	GET  /v1/agent                      ExecState of the latest detached exec
-//	POST /v1/agent/pause                stop the latest detached exec's process group (SIGSTOP)
-//	POST /v1/agent/resume               continue it (SIGCONT)
+//	POST /v1/agent/pause                AgentSignal: stop the latest detached exec's process group (SIGSTOP)
+//	POST /v1/agent/resume               AgentSignal: continue it (SIGCONT)
 package guestagent
 
 import (
@@ -61,6 +61,19 @@ type Init struct {
 // SignInsMemory, SignInsNone, or empty from an agent that has no store (an older one answers {}).
 type InitResult struct {
 	SignIns string `json:"sign_ins,omitempty"`
+}
+
+// AgentSignal is the body of POST /v1/agent/pause and /v1/agent/resume. Generation orders them
+// (PauseFence): the agent answers 409 to one older than the newest it has seen and signals nothing. An
+// empty body, from a runner that predates it, is generation 0.
+type AgentSignal struct {
+	Generation int64 `json:"generation,omitempty"`
+}
+
+// AgentSignalResult is their answer. FencedPause says the agent ordered the request by its
+// generation: false for one with none, and an older agent answers {}.
+type AgentSignalResult struct {
+	FencedPause bool `json:"fenced_pause,omitempty"`
 }
 
 // The sign-in store (#2972): a desktop's keychain and browser profiles, each a tmpfs the agent mounts

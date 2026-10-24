@@ -468,9 +468,14 @@ type DesktopDialer interface {
 // AgentPauser is an OPTIONAL Runner capability: stop a VM sandbox's agent inside the guest and
 // continue it, through the guest agent (SIGSTOP and SIGCONT of the agent's process group), while the
 // guest and its desktop keep running. It is not Freezer, which would freeze the desktop too.
+//
+// gen is the run's pause generation (migration 0231): a guest agent that orders requests by it drops
+// one older than the newest it has seen, so a continue delivered after a later pause's stop does not
+// run the agent. fenced says the request was ordered so; it is false from a runner or guest image that
+// predates the generation, which signals each request as it arrives.
 type AgentPauser interface {
-	PauseAgent(ctx context.Context, ref string) error
-	ResumeAgent(ctx context.Context, ref string) error
+	PauseAgent(ctx context.Context, ref string, gen int64) (fenced bool, err error)
+	ResumeAgent(ctx context.Context, ref string, gen int64) (fenced bool, err error)
 }
 
 // ErrAgentPauseUnsupported is AgentPauser's answer for a sandbox whose agent it cannot pause (a

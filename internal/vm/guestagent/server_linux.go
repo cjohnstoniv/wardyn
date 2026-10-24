@@ -45,6 +45,9 @@ type Server struct {
 	// no store (tests only).
 	SignInStore func(off bool) error
 
+	// fence drops a pause or resume older than the newest one seen.
+	fence PauseFence
+
 	mu      sync.Mutex
 	inited  bool
 	env     []string // Init's Env and SecretEnv, KEY=VALUE
@@ -100,8 +103,8 @@ func (s *Server) Handler() (http.Handler, error) {
 		http.Error(w, "no such exec", http.StatusNotFound)
 	})
 	mux.HandleFunc("GET /v1/exec/{id}/output", s.handleOutput)
-	mux.HandleFunc("POST /v1/agent/pause", func(w http.ResponseWriter, _ *http.Request) { s.signalAgent(w, unix.SIGSTOP) })
-	mux.HandleFunc("POST /v1/agent/resume", func(w http.ResponseWriter, _ *http.Request) { s.signalAgent(w, unix.SIGCONT) })
+	mux.HandleFunc("POST /v1/agent/pause", func(w http.ResponseWriter, r *http.Request) { s.signalAgent(w, r, unix.SIGSTOP) })
+	mux.HandleFunc("POST /v1/agent/resume", func(w http.ResponseWriter, r *http.Request) { s.signalAgent(w, r, unix.SIGCONT) })
 	mux.HandleFunc("GET /v1/agent", func(w http.ResponseWriter, _ *http.Request) {
 		s.mu.Lock()
 		d := s.execs[s.latest]
@@ -188,8 +191,14 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 }
 
 // signalAgent sends sig to the latest detached exec's process group: the harness and every process
-// it started that stayed in its group. A process that left the group (setsid) is not reached.
-func (s *Server) signalAgent(w http.ResponseWriter, sig unix.Signal) {
+// it started that stayed in its group. A process that left the group (setsid) is not reached. A request
+// older than the newest pause or resume seen is dropped (PauseFence) and answered 409.
+func (s *Server) signalAgent(w http.ResponseWriter, r *http.Request, sig unix.Signal) {
+	var in AgentSignal
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<10)).Decode(&in); err != nil && !errors.Is(err, io.EOF) {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
 	s.mu.Lock()
 	d := s.execs[s.latest]
 	s.mu.Unlock()
@@ -197,11 +206,16 @@ func (s *Server) signalAgent(w http.ResponseWriter, sig unix.Signal) {
 		http.Error(w, "no agent is running", http.StatusNotFound)
 		return
 	}
-	if err := unix.Kill(-d.pid, sig); err != nil {
+	applied, err := s.fence.Do(in.Generation, func() error { return unix.Kill(-d.pid, sig) })
+	if !applied {
+		http.Error(w, "a newer pause or resume has reached the agent", http.StatusConflict)
+		return
+	}
+	if err != nil {
 		http.Error(w, "signal the agent: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, struct{}{})
+	writeJSON(w, AgentSignalResult{FencedPause: in.Generation > 0})
 }
 
 // writeFile writes a managed file: created fresh (an existing one is replaced, never followed), root's

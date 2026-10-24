@@ -5,6 +5,7 @@ package guestagent
 
 import (
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -71,11 +72,11 @@ func TestPauseStopsTheAgentsProcessGroup(t *testing.T) {
 	pid := r.srv.lookup(id).pid
 	t.Cleanup(func() { _ = syscallKillGroup(pid) })
 	waitGroup(t, pid, 3, false)
-	if err := c.PauseAgent(ctxT(t)); err != nil {
+	if _, err := c.PauseAgent(ctxT(t), 1); err != nil {
 		t.Fatal(err)
 	}
 	waitGroup(t, pid, 3, true)
-	if err := c.ResumeAgent(ctxT(t)); err != nil {
+	if _, err := c.ResumeAgent(ctxT(t), 1); err != nil {
 		t.Fatal(err)
 	}
 	waitGroup(t, pid, 3, false)
@@ -83,8 +84,95 @@ func TestPauseStopsTheAgentsProcessGroup(t *testing.T) {
 
 func TestPauseWithNoAgentIsNoExec(t *testing.T) {
 	c := newRig(t).client(t)
-	if err := c.PauseAgent(ctxT(t)); !errors.Is(err, ErrNoExec) {
+	if _, err := c.PauseAgent(ctxT(t), 1); !errors.Is(err, ErrNoExec) {
 		t.Fatalf("pause with no agent = %v, want ErrNoExec", err)
+	}
+}
+
+// startGroup starts a detached agent of two processes in one group and returns the group.
+func startGroup(t *testing.T, r *rig, c *Client) int {
+	t.Helper()
+	id, err := c.Start(ctxT(t), ExecRequest{Argv: []string{"sh", "-c", "sleep 30 & wait"}, Detach: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid := r.srv.lookup(id).pid
+	t.Cleanup(func() { _ = syscallKillGroup(pid) })
+	waitGroup(t, pid, 2, false)
+	return pid
+}
+
+// signal sends one pause or resume of generation gen and answers whether the agent applied it: a
+// dropped one is its 409, and an applied one says it was ordered.
+func signal(t *testing.T, c *Client, pause bool, gen int64) bool {
+	t.Helper()
+	call := c.ResumeAgent
+	if pause {
+		call = c.PauseAgent
+	}
+	fenced, err := call(ctxT(t), gen)
+	if err != nil {
+		if !strings.Contains(err.Error(), "409") {
+			t.Fatalf("pause=%v generation %d = %v, want applied or dropped with 409", pause, gen, err)
+		}
+		return false
+	}
+	if !fenced {
+		t.Fatalf("pause=%v generation %d was applied but not answered fenced_pause", pause, gen)
+	}
+	return true
+}
+
+// A continue that reaches the guest after a later pause's stop, as a delayed one does once wardynd
+// lost the run's lock, is dropped: the agent stays stopped under the later pause, whose own continue
+// still runs it. A stop delivered after a later pause's continue is dropped the same way.
+func TestAStaleContinueAfterALaterStopIsDropped(t *testing.T) {
+	r := newRig(t)
+	c := r.client(t)
+	pid := startGroup(t, r, c)
+	if !signal(t, c, true, 2) { // pause 2's stop
+		t.Fatal("pause 2's stop was dropped")
+	}
+	waitGroup(t, pid, 2, true)
+	if signal(t, c, false, 1) { // pause 1's continue, delivered late
+		t.Fatal("pause 1's continue, older than pause 2's stop, was applied")
+	}
+	waitGroup(t, pid, 2, true)
+	if !signal(t, c, false, 2) { // pause 2's resume
+		t.Fatal("pause 2's continue was dropped")
+	}
+	waitGroup(t, pid, 2, false)
+
+	// Reordered the other way: pause 1's stop, delivered after pause 3 has stopped and continued.
+	for _, step := range []struct {
+		pause   bool
+		gen     int64
+		applied bool
+		stopped bool
+	}{{true, 3, true, true}, {false, 3, true, false}, {true, 1, false, false}, {true, 4, true, true}, {true, 4, true, true}} {
+		if got := signal(t, c, step.pause, step.gen); got != step.applied {
+			t.Fatalf("pause=%v generation %d applied = %v, want %v", step.pause, step.gen, got, step.applied)
+		}
+		waitGroup(t, pid, 2, step.stopped)
+	}
+}
+
+// A runner or wardynd that predates the generation sends none (an empty body, or 0): the agent
+// signals it as it arrives, as it did before, and answers no fenced_pause.
+func TestAPauseWithNoGenerationIsSignalledAsBefore(t *testing.T) {
+	r := newRig(t)
+	c := r.client(t)
+	pid := startGroup(t, r, c)
+	for _, step := range []struct {
+		path    string
+		in      any
+		stopped bool
+	}{{"/v1/agent/pause", nil, true}, {"/v1/agent/resume", nil, false}, {"/v1/agent/pause", AgentSignal{}, true}, {"/v1/agent/resume", AgentSignal{}, false}} {
+		var res AgentSignalResult
+		if err := c.do(ctxT(t), http.MethodPost, step.path, step.in, &res); err != nil || res.FencedPause {
+			t.Fatalf("%s with %v = %+v %v, want applied with no fenced_pause", step.path, step.in, res, err)
+		}
+		waitGroup(t, pid, 2, step.stopped)
 	}
 }
 
