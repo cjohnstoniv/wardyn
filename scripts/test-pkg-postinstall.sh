@@ -114,9 +114,11 @@ run kept-base; check_ledger "a root-owned 0711 base" 711; [ "$(ino "$(B)")" = "$
 fresh nohelper; rm "$R/usr/local/wardyn/bin/wardyn-macvm"; run nohelper
 [ ! -e "$(B)" ] || fail "a package without the helper made the ledger"
 
-# 6b. ledger-setup failing, or /Users/Shared not root:wheel 1777, fails closed with the one message.
+# 6b. ledger-setup failing fails closed with the one message.
 fresh helper-fails; echo 1 >"$R/helper.rc"
 ! post || fail "postinstall succeeded when ledger-setup failed"; grep -q 'macOS VMs stay off' "${WORK}/out" || fail "no fail-closed message"
+
+# 6c. A /Users/Shared that is not root:wheel 1777 fails closed before anything is made in it.
 fresh shared-not-sticky; chmod 777 "$R/Users/Shared"
 ! post || fail "postinstall succeeded over a non-sticky /Users/Shared"
 [ ! -e "$(B)" ] && [ ! -e "$R/ledger-setup.args" ] || fail "postinstall touched a non-sticky /Users/Shared"
@@ -162,8 +164,8 @@ p=$!; until [ -s "$WORK/pid" ]; do sleep 0.01; done
 for t in 1700000000 1700000001; do ln -s "$R/victim" "$R/Users/Shared/.wardyn-quarantine-$t-$(cat "$WORK/pid")"; done
 : >"$WORK/go"; wait "$p" || { cat "${WORK}/out" >&2; fail "postinstall failed (predict)"; }
 /bin/rm "$T/date"
-check_ledger "a predicted quarantine name"
 [ -z "$(ls -A "$R/victim")" ] && [ "$(mode "$R/victim")" = 700 ] && ! root_owned "$R/victim" || fail "the moved-aside directory landed in the predicted name's target"
+check_ledger "a predicted quarantine name"
 q="$(ls -d "$R"/Users/Shared/.wardyn-quarantine.?????? 2>/dev/null | head -1 || true)"
 [ -n "$q" ] && [ -e "$q/Wardyn/evil" ] && [ "$(mode "$q")" = 700 ] && root_owned "$q" || fail "the directory was not moved into a random root-only quarantine"
 
