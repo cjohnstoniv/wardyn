@@ -44,7 +44,8 @@ test.describe("Review: Add a secret that is not stored (#2108)", () => {
     const blockers = page.locator("#nr-blockers");
     await expect(blockers.getByRole("button", { name: `Secret: ${NAME}` })).toBeVisible();
 
-    await blockers.getByRole("button", { name: NR_TOOLS.SETUP_ADD }).click();
+    // exact: the blocker's own label button, "Secret: e2e_add_door_token", has "add" in its name too.
+    await blockers.getByRole("button", { name: NR_TOOLS.SETUP_ADD, exact: true }).click();
     const dialog = page.getByRole("dialog", { name: `Secret: ${NAME}` });
     await expect(dialog.getByLabel(NR_TOOLS.TOKEN_LABEL)).toHaveValue("");
     await expect(dialog.getByRole("button", { name: NR_TOOLS.TOKEN_CONFIRM })).toBeDisabled();
