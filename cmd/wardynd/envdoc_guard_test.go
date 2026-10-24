@@ -241,6 +241,8 @@ var envDocShellOnly = map[string]bool{
 	"WARDYN_NOVNC_GEOMETRY": true, "WARDYN_REC_WRAP": true,
 	"WARDYN_SESSION_START": true, "WARDYN_SSH_AGENT_DIR": true,
 	"WARDYN_WALK_ADO_MEMBER_EMAIL": true, "WARDYN_WALK_ADO_PROXY_URL": true,
+	// The agent-run belt's wait bound (agent-run-lib.sh wait_for_proxy); no run sets it, Go never reads it.
+	"WARDYN_PROXY_WAIT_SECS": true,
 }
 
 var wardynVarLit = regexp.MustCompile(`WARDYN_[A-Z0-9_]+`)

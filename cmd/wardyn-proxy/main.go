@@ -157,6 +157,9 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// The runner holds the agent back until this line appears: it prints only once :3128 is bound.
+	srv.OnListening(func() { fmt.Fprintln(os.Stdout, proxy.ReadyMarker) })
+
 	errCh := make(chan error, 1)
 	go func() {
 		slog.Info("wardyn-proxy: listening",

@@ -27,6 +27,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `--proxy-image` set to it.
   A proxy image named by digest or by a tag that is not a release number is taken to be this release, so an older
   image named that way never becomes ready and its runs fail at the start deadline.
+- The proxy-ready fix on Docker spans three pieces: wardyn-runnerd, the wardyn-proxy image and the agent images.
+  Upgrade the organisation before its runners, as always. A runner that follows an older organisation's proxy image
+  keeps starting runs as before and logs once that the image does not announce when it is listening, so the fix does not
+  reach those runs until the organisation is upgraded. The agent images wait for the proxy on their own and need no
+  runner change.
 
 ### Changed
 
@@ -64,6 +69,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - `GET /runs/{id}/output` no longer points the run's owner or an operator at a recording that was never received.
   With run output persistence off, an ended run on a runner that does not capture output, and whose recording never
   arrived, answers `409` `run_output_not_kept`.
+- On Docker, a run's agent can no longer start before its proxy is listening. The runner now holds the agent back until
+  the proxy reports it has bound its port, and fails the run if it does not within 10 seconds. The
+  agent images also wait up to 10 seconds for the proxy before they run the task, and carry on with one stderr line if
+  it never answers. Before, an exec run's first requests, or a very short run's recording upload, could be refused with
+  "connection refused".
 
 ## [0.10.0-rc.1] — 2026-10-24
 

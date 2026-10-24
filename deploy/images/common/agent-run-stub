@@ -18,6 +18,7 @@
 # far worse to debug than a sentence.
 set -euo pipefail
 source /usr/local/bin/agent-run-lib.sh
+wait_for_proxy
 # The boot pane --idle starts for a startup command (below): it runs inside the
 # `wardyn` session as the agent user, waits for --idle's prep rather than doing
 # any, and runs the command once. Not restarted when it exits; it ends with PID 1.
