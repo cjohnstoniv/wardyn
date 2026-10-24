@@ -631,12 +631,16 @@ func (s *Server) holdMembershipUpsert(w http.ResponseWriter, r *http.Request, a 
 	ctx := r.Context()
 	var st membershipState
 	var beforeChain []types.GovernanceUnit
+	var shift legacyShift
 	err := s.cfg.Store.DryRunGovernance(ctx, func(q store.Querier) error {
 		var err error
 		if st, err = readMembershipState(ctx, q, a.UnitID, string(a.SubjectType), a.Subject, false); err != nil {
 			return err
 		}
 		beforeChain = st.chain
+		if shift, err = upsertShiftQ(ctx, q, st.current, a); err != nil {
+			return err
+		}
 		_, err = store.UpsertGovernanceMembershipQ(ctx, q, a)
 		return err
 	})
@@ -654,6 +658,7 @@ func (s *Server) holdMembershipUpsert(w http.ResponseWriter, r *http.Request, a 
 		after:     after,
 		baseState: st.state(),
 		belongsBy: belongsBy,
+		shift:     shift,
 	}
 	var before *membershipDiffView
 	if st.current != nil {
@@ -825,6 +830,13 @@ func applyMembershipChange(s *Server, r *http.Request, q store.Querier, ch types
 	}
 	a.ID = uuid.New()
 	a.CreatedBy = ch.ProposedBy
+	shift, err := upsertShiftQ(ctx, q, st.current, a) // under the graph and key locks taken above
+	if err == nil {
+		err = heldShiftStale(ch, shift)
+	}
+	if err != nil {
+		return govApplied{}, err
+	}
 	saved, err := store.UpsertGovernanceMembershipQ(ctx, q, a)
 	if errors.Is(err, store.ErrNotFound) {
 		return govApplied{}, writeRefusal(http.StatusNotFound, reasonGovernanceUnitNotFoundByID, "governance profile not found")
