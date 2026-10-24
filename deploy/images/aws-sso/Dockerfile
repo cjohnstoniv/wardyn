@@ -49,7 +49,7 @@
 # An ordinary and a release build leave it empty and download as before.
 FROM scratch AS gomodcache
 
-FROM --platform=$BUILDPLATFORM golang:1.27.2@sha256:5bc7f572bbaa98885a3a1fd9c0aa76b59e3e14e8628bfc316bbfd0c701e4818c AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27.2@sha256:820153096fda4de6ac1b7194d12e416b7dd8f4e9a33d17e0345b111b945162d8 AS builder
 
 WORKDIR /build
 
@@ -98,7 +98,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-rec   
  && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-aws-sso    ./cmd/wardyn-aws-sso
 
 # ── Stage 2: agent runtime ────────────────────────────────────────────────────
-FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
+FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad
 
 # Apache-2.0 s4(a) requires a copy of the Licence to accompany the distribution and
 # s4(d) requires the NOTICE contents to be carried. Publishing an image IS
