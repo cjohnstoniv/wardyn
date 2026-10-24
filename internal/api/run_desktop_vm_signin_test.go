@@ -125,7 +125,9 @@ type pauseFakeRunner struct {
 	pmu      sync.Mutex
 	calls    []string
 	pauseErr error
-	stopped  bool
+	// resumeErr is what each ResumeAgent answers once its continue has landed, as a lost answer.
+	resumeErr error
+	stopped   bool
 	// hold, when set, keeps each PauseAgent inside the call until it is closed, after telling inPause.
 	inPause chan struct{}
 	hold    chan struct{}
@@ -164,7 +166,9 @@ func (f *pauseFakeRunner) ResumeAgent(ctx context.Context, ref string) error {
 	if f.during != nil {
 		f.during(ctx, "resume")
 	}
-	return nil
+	f.pmu.Lock()
+	defer f.pmu.Unlock()
+	return f.resumeErr
 }
 
 func (f *pauseFakeRunner) seen() []string {
@@ -837,6 +841,62 @@ func TestDesktopSignIns_ResumeThatLostItsLockLeavesANewerPauseAlone(t *testing.T
 	}
 	if !f.rn.agentStopped() {
 		t.Fatal("the newer pause's agent is not stopped")
+	}
+	rows := f.signInRows()
+	if len(rows) != 2 || rows[0].Outcome != "success" {
+		t.Fatalf("rows = %+v, want the other tab's success and this resume's failure", rows)
+	}
+	wantSuperseded(t, rows, *newer.v.PausedAt)
+}
+
+// A resume whose continue answers an error, with the run's lock lost during it, is reconciled as one
+// that answered: a newer pause has marked the row since, and the continue may have landed after its
+// stop. The resume takes the lock again, stops the agent once more under it, and leaves that pause's
+// mark.
+func TestDesktopSignIns_AFailedResumeThatLostItsLockStopsTheAgentAgain(t *testing.T) {
+	f := newVMSignInFixture(t, "memory")
+	if code, _, body := f.do(t, http.MethodPost, "/pause"); code != http.StatusOK {
+		t.Fatalf("pause = %d %s", code, body)
+	}
+	drop := f.loseLocks()
+	var first atomic.Bool
+	var restopLock error
+	var newer vmSignInAnswer
+	newerDone, restops := false, 0
+	f.rn.during = func(ctx context.Context, call string) {
+		if call == "pause" && newerDone { // the resume's stop, once the newer pause has answered
+			restops++
+			restopLock = f.srv.lockHeld(ctx)
+			return
+		}
+		if call != "resume" || !first.CompareAndSwap(false, true) {
+			return
+		}
+		drop(false)
+		if code, _, body := f.do(t, http.MethodPost, "/resume"); code != http.StatusOK {
+			t.Errorf("the other tab's resume = %d %s", code, body)
+		}
+		newer.code, newer.v, newer.body = f.do(t, http.MethodPost, "/pause")
+		newerDone = true
+		f.rn.pmu.Lock()
+		f.rn.resumeErr = errors.New("guestagent: connection reset by peer") // this resume's answer is lost
+		f.rn.pmu.Unlock()
+	}
+	code, v, body := f.do(t, http.MethodPost, "/resume")
+	if newer.code != http.StatusOK || !newer.v.Paused || newer.v.PausedAt == nil {
+		t.Fatalf("the newer pause = %d %s", newer.code, newer.body)
+	}
+	if code != http.StatusOK || v.PausedAt == nil || !v.PausedAt.Equal(*newer.v.PausedAt) {
+		t.Fatalf("the failed resume = %d %s, want the newer pause's mark", code, body)
+	}
+	if restops != 1 || restopLock != nil {
+		t.Fatalf("stops after the newer pause = %d, run lock %v: want one, sent under the lock taken again", restops, restopLock)
+	}
+	if !f.rn.agentStopped() {
+		t.Fatal("the newer pause's agent is not stopped")
+	}
+	if row, _, _ := f.st.DesktopVMSignIns(context.Background(), f.run.ID); row.PausedAt == nil || !row.PausedAt.Equal(*newer.v.PausedAt) {
+		t.Fatalf("row = %+v, want the newer pause's mark intact", row)
 	}
 	rows := f.signInRows()
 	if len(rows) != 2 || rows[0].Outcome != "success" {
