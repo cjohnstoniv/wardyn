@@ -72,9 +72,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   empty tmpfs over its keychain and browser profile paths (`/home/agent/.local/share/keyrings`, `.mozilla`,
   `.config/chromium` and the rest in [Linux VM sandboxes](docs/operations/linux-vm-sandboxes.md#sign-ins-in-the-desktop)),
   read-only for an agent set Not allowed, so anything a custom guest image baked there is hidden. A guest with any swap
-  or zram on now fails to start. Upgrade wardyn-runnerd and rebuild the guest image together. Split-role installs: grant
-  the app role `SELECT, INSERT, UPDATE, DELETE` on `desktop_vm_sign_ins` (migration `0230_desktop_vm_sign_ins`).
-  Without it a VM's run page says nothing about sign-ins and offers no pause.
+  or zram on now fails to start. Upgrade wardyn-runnerd and rebuild the guest image together.
+- Split-role installs as above: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `desktop_vm_sign_ins`
+  (migration `0230_desktop_vm_sign_ins`). Without it a VM's run page says nothing about sign-ins and offers no pause.
+- Split-role installs as above: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `oidc_session_sids` (migration
+  `0229_oidc_session_sids`). Without it, with `WARDYN_OIDC_FRONTCHANNEL_LOGOUT` on, a sign-in's `sid` is not kept, so
+  the identity provider's front-channel logout ends none of that person's sessions.
 - **Desktop sign-ins are new and off** (`WARDYN_DESKTOP_SIGNINS`, default `off`). Turned on, a run's creator can sign
   in to websites inside the run's desktop while the agent is stopped, and share one site's login with the agent. The
   person's browser is a different uid in the same sandbox, not a sandbox of its own, and after a share the agent holds
