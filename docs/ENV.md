@@ -1452,7 +1452,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
   - its posture says `mdm_managed` from the MDM's posture file.
 - A Mac whose posture fails is refused with `runner_posture_unmet`; every other refusal here is `placement_capability`.
 - Placement refuses a Mac whose base image is not ready or that is at its limit of macOS VMs (at most 2).
-- In a pooled run, every eligible runner must offer the kind and pass the gate; a pool with one runner that doesn't (or a Mac at its limit) refuses.
+- macOS VMs need a pool where every runner offers them; a mixed pool refuses them. This matches Linux VMs.
 - It also refuses a harness the base cannot serve, and a CPU or memory below the base's minimum.
 - A macOS VM takes no folder mount, and a Kubernetes runner refuses the kind.
 - `GET /setup/status` publishes it as `features.macos_vms`, present only when on.
