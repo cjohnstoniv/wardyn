@@ -417,7 +417,7 @@ func TestSinkWithheldUnreadAuditTarget(t *testing.T) {
 			if name == "shared" {
 				want = grant.ID.String()
 			}
-			if ev := lastAuditEvent(t, h.audit.events, "secret.read"); ev.Outcome != "failure" || ev.Target != want {
+			if ev := lastAuditEvent(t, h.audit.snapshot(), "secret.read"); ev.Outcome != "failure" || ev.Target != want {
 				t.Errorf("audit = %s target %q, want a failure naming %q", ev.Outcome, ev.Target, want)
 			}
 		})
