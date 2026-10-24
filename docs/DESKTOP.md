@@ -19,7 +19,7 @@
 
 ## Topology
 
-![On a laptop runner, everyday work takes the normal path while each sandbox leaves only through its egress proxy, nothing connects in, and one outbound link brings runs from the organisation and carries audit back.](img/wardyn-laptop.svg)
+![On a laptop runner, everyday work takes the normal path while each sandbox leaves only through its egress proxy, nothing connects in, and one outbound link brings runs from the organisation and carries audit back.](img/wardyn-laptop.webp)
 
 The figure shows a client-mode runner. The diagram below shows the deprecated enrolled-daemon shape, where the laptop runs its own `wardynd` and takes policy from MDM. A client-mode runner runs no control plane: the organisation schedules its runs and writes its audit ([guide](operations/hybrid-laptops.md)).
 

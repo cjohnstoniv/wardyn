@@ -261,9 +261,10 @@ func (s *Server) holdExecutorChange(w http.ResponseWriter, r *http.Request, row 
 const opExecutorAttach = "set"
 
 // applyRunnerPoolUsePolicyChange applies a held use policy set or clear, or remote-hosted runner add or
-// removal, inside the decision transaction: the target lock, then the pool's policy and remote-hosted
-// runners read as they now stand
-// and compared with what the proposal reviewed, and the write through the pool row lock.
+// removal, inside the decision transaction: the target lock (and a runner add or removal's lock on
+// that runner, LockRemoteRunnerPoolMembershipQ), then the pool's policy and remote-hosted runners read
+// as they now stand and compared with what the proposal reviewed, and the write through the pool row
+// lock.
 func applyRunnerPoolUsePolicyChange(s *Server, r *http.Request, q store.Querier, ch types.GovernanceChange) (govApplied, error) {
 	ctx := r.Context()
 	poolID, err := uuid.Parse(ch.TargetKey)
@@ -276,6 +277,11 @@ func applyRunnerPoolUsePolicyChange(s *Server, r *http.Request, q store.Querier,
 	}
 	if err := store.LockGovernanceTarget(ctx, q, govKindRunnerPoolUsePolicy, poolID.String()); err != nil {
 		return govApplied{}, err
+	}
+	if held.Executor != "" {
+		if err := store.LockRemoteRunnerPoolMembershipQ(ctx, q, held.Executor); err != nil {
+			return govApplied{}, err
+		}
 	}
 	// The pool row next, before anything is read: every member and policy write takes it, so none can
 	// commit between the stale check and the apply.
