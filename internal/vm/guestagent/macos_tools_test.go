@@ -71,7 +71,8 @@ func quoteAll(ss []string) []string {
 
 // The CLT's git runs with exactly `--version`. Each rejection control is refused before anything runs:
 // another argv of that binary, the binary by another path (a ".." component, a link to it in the bin
-// dir, a relative path), a shell, and touch or rm on anything but the trigger file.
+// dir, a relative path), a shell, launchctl in any form, softwareupdate but `-l` or `-i` with a CLT
+// label, and touch or rm on anything but the trigger file.
 func TestToolsExecAllowsExactlyTheCLTGitVersion(t *testing.T) {
 	rig := newToolsRig(t)
 	if err := os.MkdirAll(rig.bin, 0o755); err != nil {
@@ -89,6 +90,8 @@ func TestToolsExecAllowsExactlyTheCLTGitVersion(t *testing.T) {
 	refused := [][]string{
 		{},
 		{MacCLTGit},
+		{MacCLTGit, "--help"},
+		{MacCLTGit, "init"},
 		{MacCLTGit, "--version", "--help"},
 		{MacCLTGit, "-c", "core.pager=sh", "--version"},
 		{MacCLTGit, "config", "--global", "core.sshCommand", "sh"},
@@ -105,6 +108,17 @@ func TestToolsExecAllowsExactlyTheCLTGitVersion(t *testing.T) {
 		{"/usr/bin/touch", MacCLTTrigger, "/etc/sudoers"},
 		{"/bin/rm", "-rf", "/"},
 		{"/bin/rm", MacCLTTrigger},
+		{"/bin/launchctl", "asuser", "0", "/bin/sh"},
+		{"/bin/launchctl", "submit", "-l", "x", "--", "/bin/sh"},
+		{"/bin/launchctl", "kickstart", "-k", "system/com.wardyn.guest-agent"},
+		{"/usr/sbin/softwareupdate"},
+		{"/usr/sbin/softwareupdate", "-l", "-a"},
+		{"/usr/sbin/softwareupdate", "-i", "Command Line Tools for Xcode-16.0", "--restart"},
+		{"/usr/sbin/softwareupdate", "-i", "macOS Sequoia 15.1-24B83"},
+		{"/usr/sbin/softwareupdate", "-i", "-a"},
+		{"/usr/sbin/softwareupdate", "-i", "Command Line Tools\n--all"},
+		{"/usr/sbin/softwareupdate", "--install-rosetta"},
+		{"/usr/sbin/softwareupdate", "--schedule", "on"},
 		{filepath.Join(rig.bin, "missing"), "--version"},
 		{filepath.Join(rig.bin, "sub", "claude"), "--version"},
 	}
@@ -119,6 +133,7 @@ func TestToolsExecAllowsExactlyTheCLTGitVersion(t *testing.T) {
 	allowed := [][]string{
 		CLTGitArgv,
 		{"/usr/sbin/softwareupdate", "-l"},
+		{"/usr/sbin/softwareupdate", "-i", "Command Line Tools for Xcode-16.0"},
 		{"/usr/bin/touch", MacCLTTrigger},
 		{"/bin/rm", "-f", MacCLTTrigger},
 		{filepath.Join(rig.bin, "claude"), "--version"},
@@ -164,6 +179,10 @@ func TestToolsPush(t *testing.T) {
 		{"sha mismatch", pushPath(dest, "755", 5, []byte("other")), "hello", http.StatusUnprocessableEntity},
 		{"short body", pushPath(dest, "755", 6, []byte("hello!")), "hello", http.StatusBadRequest},
 		{"setuid", pushPath(dest, "4755", 5, []byte("hello")), "hello", http.StatusBadRequest},
+		{"world-writable", pushPath(dest, "777", 5, []byte("hello")), "hello", http.StatusBadRequest},
+		{"group-writable", pushPath(dest, "775", 5, []byte("hello")), "hello", http.StatusBadRequest},
+		{"a dot component under the bin dir", pushPath(rig.bin+"/x/../claude", "755", 5, []byte("hello")), "hello", http.StatusForbidden},
+		{"a doubled slash", pushPath(rig.bin+"//claude", "755", 5, []byte("hello")), "hello", http.StatusForbidden},
 		{"outside the bin dir", pushPath("/etc/sudoers", "644", 5, []byte("hello")), "hello", http.StatusForbidden},
 		{"dot component", pushPath(rig.bin+"/../x", "755", 5, []byte("hello")), "hello", http.StatusForbidden},
 		{"dot file", pushPath(rig.bin+"/.claude", "755", 5, []byte("hello")), "hello", http.StatusForbidden},
@@ -341,5 +360,37 @@ func TestServeToolsClassifiesItsDial(t *testing.T) {
 	}
 	if p, err := cl.ToolsPointer(ctx); err != nil || p != (Pointer{X: 10, Y: 20}) {
 		t.Errorf("ToolsPointer = %+v, %v", p, err)
+	}
+}
+
+// A host that accepts the tools dial but never sends its hello leaves the record timeout once the
+// dial's timeout passes, never the refused of the dial before: the class clears on connect.
+func TestServeToolsHelloLessListenerIsATimeout(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var host net.Conn // the host end, which never writes; set before handed closes
+	handed := make(chan struct{})
+	dials := 0
+	dial := func(context.Context) (net.Conn, error) {
+		dials++
+		switch dials {
+		case 1:
+			return nil, fmt.Errorf("vsock connect to the host on port 1026: %w", syscall.ECONNREFUSED)
+		case 2:
+			g, h := net.Pipe()
+			host = h
+			close(handed)
+			return g, nil
+		}
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	rec := &ToolsDialRecord{}
+	go func() { _ = serveTools(ctx, dial, http.NewServeMux(), rec, 5*time.Millisecond, 300*time.Millisecond) }()
+	<-handed
+	defer host.Close()
+	waitDial(t, rec, "")
+	if d := waitDial(t, rec, DialTimeout); d.Dials != 2 || !strings.Contains(d.Error, "hello") {
+		t.Errorf("record = %+v, want a hello timeout on the second dial", d)
 	}
 }

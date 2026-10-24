@@ -284,7 +284,13 @@ func TestDarwinToolsRoutesAre404OnTheControlSession(t *testing.T) {
 			t.Errorf("tools session: %s %s = 404", rt.method, rt.path)
 		}
 	}
+	// The pointer is read through tools mode only: the control session's old route is gone.
 	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/v1/desktop/pointer", nil))
+	if w.Code != http.StatusNotFound {
+		t.Errorf("control session: GET /v1/desktop/pointer = %d, want 404", w.Code)
+	}
+	w = httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest("GET", "/v1/dial/tools", nil))
 	if w.Code != 200 {
 		t.Errorf("GET /v1/dial/tools on the control session = %d", w.Code)
