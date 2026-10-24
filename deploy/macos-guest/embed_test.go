@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net/netip"
 	"os"
 	"testing"
 
@@ -38,7 +39,7 @@ func TestShippedToolingParses(t *testing.T) {
 }
 
 func TestPrepProxyConfigAcceptsShippedAllowlist(t *testing.T) {
-	if _, err := prepproxy.Config(macosguest.PrepAllowlistJSON, 3128, nil); err != nil {
+	if _, err := prepproxy.Config(macosguest.PrepAllowlistJSON, 3128, []netip.Prefix{netip.MustParsePrefix("172.20.0.0/24")}); err != nil {
 		t.Fatal(err)
 	}
 }
