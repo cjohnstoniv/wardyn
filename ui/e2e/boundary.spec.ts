@@ -121,7 +121,9 @@ test.describe("Policies: the Wardyn boundary", () => {
       await page.getByRole("button", { name: BOUNDARY.REVIEW, exact: true }).click();
       const report = page.getByTestId("boundary-dry-run");
       await expect(report).toBeVisible();
-      await expect(report.getByRole("row", { name: new RegExp(`^${BOUNDARY_DESKTOP.TITLE}`) })).toContainText("Copy out blocked");
+      // The Desktop row, not DESK-LOCKS's "Desktop locks" row below it: its first cell is the title exactly.
+      const desktopRow = report.getByRole("row").filter({ has: page.getByText(BOUNDARY_DESKTOP.TITLE, { exact: true }) });
+      await expect(desktopRow).toContainText("Copy out blocked");
       const stored = await consoleAPI(page, "GET", path);
       expect(JSON.parse(stored.text).spec.desktop).toEqual({ copy_out: "allowed" });
     } finally {
