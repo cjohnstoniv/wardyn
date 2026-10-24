@@ -28,6 +28,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"sync"
 	"time"
 
 	"gvisor.dev/gvisor/pkg/buffer"
@@ -64,6 +65,14 @@ type Config struct {
 	// Log receives one JSON line per DNS addition, eviction, allow and
 	// refusal (refusals rate limited per kind).
 	Log *slog.Logger
+	// DHCP answers the guest's DHCPv4 with the link's one lease (dhcp.go). A
+	// macOS guest needs it; a Linux guest is static and leaves it off.
+	DHCP bool
+	// Prep makes this a base-image preparation relay: no run proxy, so every
+	// guest flow is refused at its SYN and nothing leaves the stack. The only
+	// traffic is the host dialling the guest's own address (DialGuest), and DHCP
+	// is on. Proxy and Dial are unused.
+	Prep bool
 	// Dial and Now are seams for tests; nil means net.Dialer and time.Now.
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
 	Now  func() time.Time
@@ -79,6 +88,8 @@ type Relay struct {
 	rep   *reporter
 	log   *slog.Logger
 	stop  chan struct{}
+	dhcp  bool
+	prep  bool
 }
 
 // New builds a relay's stack. Close releases it.
@@ -97,8 +108,13 @@ func New(cfg Config) (*Relay, error) {
 		proxy: newProxyClient(cfg.Proxy, cfg.Dial),
 		log:   log,
 		stop:  make(chan struct{}),
+		dhcp:  cfg.DHCP || cfg.Prep,
+		prep:  cfg.Prep,
 	}
 	rl.rep = newReporter(now, log, func(r refusal) {
+		if rl.prep {
+			return // no proxy to report to; the relay's own log line has it
+		}
 		if err := rl.proxy.send(r); err != nil {
 			log.Warn("refusal report failed", "reason", r.Reason, "err", err.Error())
 		}
@@ -150,6 +166,20 @@ func New(cfg Config) (*Relay, error) {
 	return rl, nil
 }
 
+// ErrNotPrep is DialGuest on a relay that is not a preparation relay.
+var ErrNotPrep = errors.New("vmnet: DialGuest is for a preparation relay")
+
+// DialGuest opens a TCP connection from the relay's stack to the guest's own
+// address (10.0.2.15) on port. It is how the host reaches the guest while its
+// base image is prepared; only a Prep relay does it, and it can reach nothing
+// but that one address.
+func (rl *Relay) DialGuest(ctx context.Context, port uint16) (net.Conn, error) {
+	if !rl.prep {
+		return nil, ErrNotPrep
+	}
+	return gonet.DialContextTCP(ctx, rl.stack, tcpip.FullAddress{NIC: nicID, Addr: guestIP, Port: port}, ipv4.ProtocolNumber)
+}
+
 // Close stops the relay.
 func (rl *Relay) Close() {
 	close(rl.stop)
@@ -158,9 +188,19 @@ func (rl *Relay) Close() {
 
 // Serve carries one QEMU connection's frames until it ends. Open guest flows
 // survive a reconnect only as long as the guest's own retries do.
-func (rl *Relay) Serve(c net.Conn) error {
+func (rl *Relay) Serve(c net.Conn) error { return rl.ServeStream(c, c) }
+
+// ServeStream is Serve over separate directions, such as a process's stdin and
+// stdout (wardyn-vmnet -stdio). It ends when r does.
+func (rl *Relay) ServeStream(r io.Reader, w io.Writer) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	var wmu sync.Mutex // the stack's frames and DHCP replies share w
+	write := func(frame []byte) error {
+		wmu.Lock()
+		defer wmu.Unlock()
+		return writeFrame(w, frame)
+	}
 	go func() {
 		for {
 			pkt := rl.link.ReadContext(ctx)
@@ -168,7 +208,7 @@ func (rl *Relay) Serve(c net.Conn) error {
 				return
 			}
 			frame := pkt.ToView().AsSlice()
-			err := writeFrame(c, frame)
+			err := write(frame)
 			pkt.DecRef()
 			if err != nil {
 				return
@@ -177,7 +217,7 @@ func (rl *Relay) Serve(c net.Conn) error {
 	}()
 	buf := make([]byte, maxFrame)
 	for {
-		frame, err := readFrame(c, buf)
+		frame, err := readFrame(r, buf)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return nil
@@ -186,6 +226,16 @@ func (rl *Relay) Serve(c net.Conn) error {
 		}
 		if pass, kind := filterFrame(frame); !pass {
 			rl.rep.refuse(refusal{Reason: "dropped-frame", Detail: kind})
+			continue
+		}
+		if rl.dhcp && isDHCPRequest(frame) {
+			if reply, ok := dhcpReply(frame); ok {
+				if err := write(reply); err != nil {
+					return err
+				}
+			} else {
+				rl.rep.refuse(refusal{Reason: "dropped-frame", Detail: "dhcp_unanswered"})
+			}
 			continue
 		}
 		pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{Payload: buffer.MakeWithData(frame)})
@@ -218,6 +268,12 @@ func (rl *Relay) serveDNS(c *gonet.UDPConn) {
 func (rl *Relay) handleTCP(r *tcp.ForwarderRequest) {
 	id := r.ID()
 	port := id.LocalPort
+	if rl.prep {
+		// Base preparation has no egress: reset at the SYN, whatever the target.
+		r.Complete(true)
+		rl.rep.refuse(refusal{Reason: "prep-egress", Host: id.LocalAddress.String(), Port: int(port)})
+		return
+	}
 	name, named := rl.names.lookup(id.LocalAddress.As4())
 	if !named {
 		// Not an address the relay handed out, so the flow has no name to put
