@@ -71,6 +71,9 @@ const (
 	SignInsMemory = "memory"
 	// SignInsNone: each path is an empty read-only tmpfs, so nothing signed in is kept there.
 	SignInsNone = "none"
+	// SignInsRunDisk: a macOS guest keeps its keychain and browser profiles on the run's own disk,
+	// which goes with the run's clone. It is not secure erasure.
+	SignInsRunDisk = "run_disk"
 )
 
 // SignInPaths are the sign-in store's paths under AgentHome: the Secret Service keyrings (GNOME
