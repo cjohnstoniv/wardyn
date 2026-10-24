@@ -73,12 +73,15 @@ root_owned() { [ -e "$OWN/$(ino "$1")" ]; }
 mark() { : >"$OWN/$(ino "$1")"; }
 mode() { /usr/bin/stat -c %a "$1"; }
 B() { echo "$R/Users/Shared/Wardyn"; }
-# check_ledger <what> [mode]: Wardyn is a root-owned directory (0755, or the mode a kept base had), and
-# ledger-setup ran on it, last.
-check_ledger() {
+# check_base <what> [mode]: Wardyn is a root-owned directory (0755, or the mode a kept base had).
+check_base() {
   local b; b="$(B)"
   [ -d "$b" ] && [ ! -L "$b" ] && root_owned "$b" && [ "$(mode "$b")" = "${2:-755}" ] || fail "$1: Wardyn is not a root-owned ${2:-755} directory"
-  [ "$(tail -1 "$R/ledger-setup.args" 2>/dev/null)" = "ledger-setup $b" ] || fail "$1: ledger-setup did not run on $b"
+}
+# check_ledger <what> [mode]: check_base, and ledger-setup ran on it, last.
+check_ledger() {
+  check_base "$@"
+  [ "$(tail -1 "$R/ledger-setup.args" 2>/dev/null)" = "ledger-setup $(B)" ] || fail "$1: ledger-setup did not run on $(B)"
 }
 
 # 1. From nothing, and again over a sound base: the base keeps its inode and ledger-setup runs again.
@@ -148,7 +151,7 @@ for i in $(seq 1 20); do
   pkill -P "$bg" || true; kill "$bg" 2>/dev/null || true; wait "$bg" 2>/dev/null || true; bg=""
   [ "$(victim_state)" = "$before" ] || fail "race run $i changed a victim: $before -> $(victim_state)"
   [ "$(cat "$R/victimf")" = keep ] && [ -z "$(ls -A "$R/victim")" ] || fail "race run $i wrote to a victim"
-  if [ "$rc" = 0 ]; then check_ledger "race run $i"; made=$((made + 1))
+  if [ "$rc" = 0 ]; then check_base "race run $i"; made=$((made + 1))
   else grep -q 'macOS VMs stay off' "${WORK}/out" || fail "race run $i failed without saying so: $(cat "${WORK}/out")"; fi
 done
 echo "test-pkg-postinstall: race: victims untouched in 20 runs; ledger made in $made, failed closed in $((20 - made))"
