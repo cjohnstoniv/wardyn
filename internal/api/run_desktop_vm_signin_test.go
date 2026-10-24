@@ -849,6 +849,54 @@ func TestDesktopSignIns_ResumeThatLostItsLockLeavesANewerPauseAlone(t *testing.T
 	wantSuperseded(t, rows, *newer.v.PausedAt)
 }
 
+// A stop again that fails is answered as a failed pause, never with the newer pause's paused view: the
+// agent may run under that mark. The failure row carries the error and both pauses' times, and the
+// newer mark stays.
+func TestDesktopSignIns_AFailedStopAgainIsNotAnsweredPaused(t *testing.T) {
+	f := newVMSignInFixture(t, "memory")
+	drop := f.loseLocks()
+	f.rn.pauseErr = errors.New("guestagent: 502 Bad Gateway")
+	var first atomic.Bool
+	var newer vmSignInAnswer
+	f.rn.during = func(_ context.Context, call string) {
+		if call != "resume" || !first.CompareAndSwap(false, true) {
+			return
+		}
+		drop(false)
+		f.rn.pmu.Lock()
+		f.rn.pauseErr = nil
+		f.rn.pmu.Unlock()
+		newer.code, newer.v, newer.body = f.do(t, http.MethodPost, "/pause")
+		f.rn.pmu.Lock()
+		f.rn.pauseErr = errors.New("guestagent: no route to host") // the stop again fails
+		f.rn.pmu.Unlock()
+	}
+	code, _, body := f.do(t, http.MethodPost, "/pause")
+	if newer.code != http.StatusOK || newer.v.PausedAt == nil {
+		t.Fatalf("the newer pause = %d %s", newer.code, newer.body)
+	}
+	if code != http.StatusBadGateway || !strings.Contains(body, reasonDesktopSignInsPauseFailed) {
+		t.Fatalf("pause = %d %s, want the failed pause's 502, not a paused view", code, body)
+	}
+	if got := f.rn.seen(); !slices.Equal(got, []string{"pause vm-1", "resume vm-1", "pause vm-1", "pause vm-1"}) {
+		t.Fatalf("runner calls = %v, want the failed pause, its continue, the newer pause and the failed stop again", got)
+	}
+	if row, _, _ := f.st.DesktopVMSignIns(context.Background(), f.run.ID); row.PausedAt == nil || !row.PausedAt.Equal(*newer.v.PausedAt) {
+		t.Fatalf("row = %+v, want the newer pause's mark intact", row)
+	}
+	rows := f.signInRows()
+	var d struct {
+		Stage        string     `json:"stage"`
+		Error        string     `json:"error"`
+		PausedAt     *time.Time `json:"paused_at"`
+		SupersededBy *time.Time `json:"superseded_by"`
+	}
+	if len(rows) != 1 || rows[0].Outcome != "failure" || json.Unmarshal(rows[0].Data, &d) != nil || d.Stage != "restop" ||
+		!strings.Contains(d.Error, "no route to host") || d.PausedAt == nil || d.SupersededBy == nil || !d.SupersededBy.Equal(*newer.v.PausedAt) {
+		t.Fatalf("rows = %+v, want one restop failure naming both pauses and the error", rows)
+	}
+}
+
 // A failed pause's continue is cancelled when the run's lock is lost even after the person's tab has
 // closed: the lock's context then keeps the tab's cause, so the lock itself is asked. Holding the lock
 // again with the row unmarked, the pause sends the continue once more.

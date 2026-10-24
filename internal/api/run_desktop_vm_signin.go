@@ -252,16 +252,19 @@ func (s *Server) handlePauseDesktopAgent(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	if err != nil {
-		newer, ok := s.continueStoppedAgent(base, r.Context(), bg, p, run, st, unlock)
+		newer, restop, ok := s.continueStoppedAgent(base, r.Context(), bg, p, run, st, unlock)
 		unlock()
-		if !ok {
+		switch {
+		case !ok:
 			s.recordAudit(bg, s.auditEvent(&run.ID, at, principal, auditDesktopSignIn, run.ID.String(), "failure",
 				mustJSON(map[string]any{"stage": "lock_lost", "error": err.Error()})))
 			w.Header().Set("Retry-After", "5")
 			writeErrorReason(w, http.StatusServiceUnavailable, reasonLockUnavailable, lockUnavailableMsg)
 			return
-		}
-		if newer != nil {
+		case restop != nil:
+			s.restopFailed(bg, w, run, at, principal, *newer, restop, map[string]any{"paused_at": now})
+			return
+		case newer != nil:
 			s.supersededBy(bg, w, run, at, principal, *newer, map[string]any{"error": err.Error()})
 			return
 		}
@@ -275,7 +278,7 @@ func (s *Server) handlePauseDesktopAgent(w http.ResponseWriter, r *http.Request)
 		if errors.Is(err, runner.ErrAgentPauseUnsupported) {
 			status = http.StatusConflict
 		}
-		writeErrorReason(w, status, reasonDesktopSignInsPauseFailed, "the agent could not be paused; it keeps running")
+		writeDesktopPauseFailed(w, status)
 		return
 	}
 	// The desktop's screen recording keeps no frames from here until the resume ends this hold, as a
@@ -323,44 +326,45 @@ func (s *Server) desktopRelock(base context.Context, run types.AgentRun, st stor
 // during it (lockBound). With the lock lost before or during it, unlock releases the lost hold, the lock is taken
 // again and the row read again (reconcileLostLock): newer is the row of a pause that has marked it
 // since, which owns the stopped agent and whose resume continues it. ok is false when the lock could not
-// be taken again: nothing more is sent.
+// be taken again: nothing more is sent. restop is the error of a stop again that failed (reconcileLostLock).
 func (s *Server) continueStoppedAgent(base, lockCtx, bg context.Context, p runner.AgentPauser, run types.AgentRun,
-	st store.DesktopVMSignInStore, unlock func()) (newer *store.DesktopVMSignIns, ok bool) {
+	st store.DesktopVMSignInStore, unlock func()) (newer *store.DesktopVMSignIns, restop error, ok bool) {
 	sent := false
 	if s.lockHeld(bg) == nil {
 		send, stop := s.lockBound(lockCtx, bg)
 		_ = p.ResumeAgent(send, run.SandboxRef)
 		stop()
 		if s.lockHeld(bg) == nil {
-			return nil, true
+			return nil, nil, true
 		}
 		sent = true
 	}
 	unlock()
-	lctx, cur, relocked, ok := s.reconcileLostLock(base, p, run, st, nil, sent)
+	lctx, cur, relocked, restop, ok := s.reconcileLostLock(base, p, run, st, nil, sent)
 	if !ok {
-		return nil, false
+		return nil, nil, false
 	}
 	defer relocked()
 	if cur.PausedAt != nil {
-		return &cur, true
+		return &cur, restop, true
 	}
 	_ = p.ResumeAgent(lctx, run.SandboxRef)
-	return nil, true
+	return nil, nil, true
 }
 
 // reconcileLostLock takes the run's lock again for a pause or resume that lost it, and reads the row
 // under it (desktopRelock). A mark other than own (the pause a resume read; nil for a pause) is a newer
 // pause's, which owns the stopped agent. When this request's continue may have reached the runner
 // (sent), it may land after that pause's stop, so the agent is stopped again here, under the lock that
-// pause's resume needs: stopping a stopped agent changes nothing.
+// pause's resume needs: stopping a stopped agent changes nothing. restop is that stop's error, which
+// nothing retries (restopFailed).
 func (s *Server) reconcileLostLock(base context.Context, p runner.AgentPauser, run types.AgentRun, st store.DesktopVMSignInStore,
-	own *time.Time, sent bool) (ctx context.Context, row store.DesktopVMSignIns, relocked func(), ok bool) {
+	own *time.Time, sent bool) (ctx context.Context, row store.DesktopVMSignIns, relocked func(), restop error, ok bool) {
 	ctx, row, relocked, ok = s.desktopRelock(base, run, st)
 	if ok && sent && row.PausedAt != nil && (own == nil || !row.PausedAt.Equal(*own)) {
-		_ = p.PauseAgent(ctx, run.SandboxRef)
+		restop = p.PauseAgent(ctx, run.SandboxRef)
 	}
-	return ctx, row, relocked, ok
+	return ctx, row, relocked, restop, ok
 }
 
 // lockBound is bg, cancelled too, with db.ErrLockLost, once the run's lock that lockCtx carries is seen
@@ -399,6 +403,21 @@ func (s *Server) supersededBy(ctx context.Context, w http.ResponseWriter, run ty
 	data["stage"], data["superseded_by"] = "lock_lost", cur.PausedAt
 	s.recordAudit(ctx, s.auditEvent(&run.ID, at, principal, auditDesktopSignIn, run.ID.String(), "failure", mustJSON(data)))
 	writeJSON(w, http.StatusOK, s.desktopSignInsView(ctx, run, cur))
+}
+
+// restopFailed answers a pause or resume whose stop again, for the newer pause whose mark (cur) stands,
+// failed: the agent may run under that mark, so no paused view is given. Its failure row carries the
+// error and both pauses' paused_at; nothing retries the stop.
+func (s *Server) restopFailed(ctx context.Context, w http.ResponseWriter, run types.AgentRun, at types.ActorType, principal string,
+	cur store.DesktopVMSignIns, err error, data map[string]any) {
+	data["stage"], data["superseded_by"], data["error"] = "restop", cur.PausedAt, err.Error()
+	s.recordAudit(ctx, s.auditEvent(&run.ID, at, principal, auditDesktopSignIn, run.ID.String(), "failure", mustJSON(data)))
+	writeDesktopPauseFailed(w, http.StatusBadGateway)
+}
+
+// writeDesktopPauseFailed refuses a pause that left the agent running, or may have.
+func writeDesktopPauseFailed(w http.ResponseWriter, status int) {
+	writeErrorReason(w, status, reasonDesktopSignInsPauseFailed, "the agent could not be paused; it keeps running")
 }
 
 // errDesktopSignInUnmarked is an acked pause whose row was no longer a 'memory' row with no mark.
@@ -636,7 +655,8 @@ func (s *Server) handleResumeDesktopAgent(w http.ResponseWriter, r *http.Request
 		unlock()
 		var lctx context.Context
 		var cur store.DesktopVMSignIns
-		if lctx, cur, relocked, ok = s.reconcileLostLock(base, p, run, st, row.PausedAt, true); !ok {
+		var restop error
+		if lctx, cur, relocked, restop, ok = s.reconcileLostLock(base, p, run, st, row.PausedAt, true); !ok {
 			if err != nil {
 				failed("lock_lost")
 				return
@@ -649,6 +669,10 @@ func (s *Server) handleResumeDesktopAgent(w http.ResponseWriter, r *http.Request
 		defer relocked()
 		if cur.PausedAt == nil || !cur.PausedAt.Equal(*row.PausedAt) {
 			relocked()
+			if restop != nil {
+				s.restopFailed(bg, w, run, at, principal, cur, restop, map[string]any{"paused_by": row.PausedBy, "paused_at": row.PausedAt})
+				return
+			}
 			s.resumeOvertaken(bg, w, run, at, principal, row, cur)
 			return
 		}

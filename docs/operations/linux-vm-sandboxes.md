@@ -62,7 +62,7 @@
 - If `wardynd` crashes after the guest agent stopped the agent but before the pause was recorded, the agent stays stopped and the run page offers the pause again. Press it, which records the pause (the agent is already stopped), then "Resume the agent".
 - A stop that reaches the guest only after a failed pause has continued the agent leaves it stopped the same way, and is recovered the same way.
 - A failed pause continues the agent, as a resume does. Once `wardynd` sees that it lost the run's lock meanwhile, it cancels a continue the guest agent has not received yet. Holding the lock again, it stops the agent again if another pause has marked the row since, as a continue already received may have landed after that pause's stop.
-- A `wardynd` that exits, or cannot take the lock again within 30 seconds, before then leaves such a continue in place: the agent runs while the run page says paused. Press "Resume the agent", then pause again.
+- A `wardynd` that exits, cannot take the lock again within 30 seconds, or fails to stop the agent again leaves such a continue in place. Nothing retries the stop, and the agent runs while the run page says paused. A failed stop again answers that the agent could not be paused. Press "Resume the agent", then pause again.
 
 ### Host memory
 
