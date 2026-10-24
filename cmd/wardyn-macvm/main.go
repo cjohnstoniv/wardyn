@@ -105,8 +105,18 @@ func cmdRun(ctx context.Context, args []string, d deps) int {
 		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
 		return 1
 	}
+	// The run's VNC password: runnerd reads it from ctl.sock for the guest agent's Init, and the shim
+	// logs in to the guest's Screen Sharing with it.
+	pw, err := macvm.NewDesktopSecret()
+	if err != nil {
+		log.Error("wardyn-macvm: desktop password", "err", err.Error())
+		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
+		return 1
+	}
 	err = macvm.Run(ctx, macvm.RunOptions{
 		Engine: eng, RunDir: *dir, Log: log,
+		Desktop:         &macvm.RFBShim{Credential: pw.Credential, Log: log},
+		DesktopPassword: pw,
 		Claim: func(c macvm.RunConfig) error {
 			if c.LedgerEntry == "" || c.RunnerID == "" {
 				return errors.New("run.json names no admission entry")

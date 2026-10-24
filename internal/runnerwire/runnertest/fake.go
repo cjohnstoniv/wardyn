@@ -36,6 +36,9 @@ type Fake struct {
 	Orphans    []uuid.UUID // runs the sweep may remove
 	execed     map[string]bool
 	StoppedRef map[string]bool
+	// PauseGens is the generation of each pause_agent and resume_agent, and FencedPause their answer.
+	PauseGens   []int64
+	FencedPause bool
 }
 
 // NewFake offers CC1 and CC2.
@@ -168,13 +171,20 @@ func (f *Fake) EndSandbox(_ context.Context, ref string) error {
 
 func (f *Fake) StopProxy(_ context.Context, ref string) error { f.note("stop_proxy", ref); return nil }
 
-func (f *Fake) PauseAgent(_ context.Context, ref string) error {
+func (f *Fake) PauseAgent(_ context.Context, ref string, gen int64) (bool, error) {
 	f.note("pause_agent", ref)
-	return nil
+	return f.notePause(gen), nil
 }
-func (f *Fake) ResumeAgent(_ context.Context, ref string) error {
+func (f *Fake) ResumeAgent(_ context.Context, ref string, gen int64) (bool, error) {
 	f.note("resume_agent", ref)
-	return nil
+	return f.notePause(gen), nil
+}
+
+func (f *Fake) notePause(gen int64) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.PauseGens = append(f.PauseGens, gen)
+	return f.FencedPause
 }
 
 func (f *Fake) StartSandbox(_ context.Context, ref string) error {

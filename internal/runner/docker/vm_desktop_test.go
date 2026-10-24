@@ -84,22 +84,22 @@ func TestVMPauseAgentReachesTheGuestAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := r.d.PauseAgent(ctx, sb.Ref); !errors.Is(err, guestagent.ErrNoExec) {
+	if _, err := r.d.PauseAgent(ctx, sb.Ref, 1); !errors.Is(err, guestagent.ErrNoExec) {
 		t.Fatalf("pause before the agent started = %v, want ErrNoExec", err)
 	}
 	if _, err := r.d.Exec(ctx, sb.Ref, []string{"sleep", "5"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.d.PauseAgent(ctx, sb.Ref); err != nil {
-		t.Fatal(err)
+	if fenced, err := r.d.PauseAgent(ctx, sb.Ref, 1); err != nil || !fenced {
+		t.Fatalf("pause = fenced %v, %v; want the guest agent's ordered answer", fenced, err)
 	}
-	if err := r.d.ResumeAgent(ctx, sb.Ref); err != nil {
-		t.Fatal(err)
+	if fenced, err := r.d.ResumeAgent(ctx, sb.Ref, 1); err != nil || !fenced {
+		t.Fatalf("resume = fenced %v, %v; want the guest agent's ordered answer", fenced, err)
 	}
 	id := uuid.New()
 	seedSandbox(r.f, id)
-	for _, f := range []func(context.Context, string) error{r.d.PauseAgent, r.d.ResumeAgent} {
-		if err := f(ctx, agentContainerName(id)); !errors.Is(err, runner.ErrAgentPauseUnsupported) {
+	for _, f := range []func(context.Context, string, int64) (bool, error){r.d.PauseAgent, r.d.ResumeAgent} {
+		if _, err := f(ctx, agentContainerName(id), 1); !errors.Is(err, runner.ErrAgentPauseUnsupported) {
 			t.Fatalf("a container's agent = %v, want ErrAgentPauseUnsupported", err)
 		}
 	}
