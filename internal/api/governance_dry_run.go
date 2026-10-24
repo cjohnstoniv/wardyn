@@ -58,8 +58,8 @@ type treeDryRunReport struct {
 	LiveRuns []uuid.UUID        `json:"live_runs"`
 	// Approvers is who could decide the write were it held, the caller left out (approversFor).
 	Approvers []changeApprover `json:"approvers"`
-	// Activates lists the units a legacy membership move may make someone's context, Vacates the
-	// units it may take someone out of (H3).
+	// Activates lists the units a legacy membership move or a unit rename may make someone's context,
+	// Vacates the units it may take someone out of (H3).
 	Activates []unitActivation `json:"activates,omitempty"`
 	Vacates   []unitActivation `json:"vacates,omitempty"`
 }
@@ -115,13 +115,19 @@ func (s *Server) treeDryRun(w http.ResponseWriter, r *http.Request, target strin
 		if s.isUnitAdminCaller(r.Context()) && !s.unitWritePrecheck(w, r, id, status, unit) {
 			return
 		}
-		apply = func(q store.Querier) error { return s.applyUnitWriteQ(r, q, id, status, unit, limit) }
+		apply = func(q store.Querier) (err error) {
+			shift, err = s.applyUnitWriteQ(r, q, id, status, unit, limit)
+			return err
+		}
 		touched = func(before, after treeSnapshot) []uuid.UUID {
 			was, existed := unitsByID(before.units)[id]
 			now := unitsByID(after.units)[id]
 			units := []uuid.UUID{}
 			if existed {
 				units = append(units, id)
+				for _, a := range slices.Concat(shift.activates, shift.vacates) {
+					units = append(units, a.UnitID)
+				}
 				if sameJSON(was.ParentID, now.ParentID) {
 					return units
 				}
@@ -210,14 +216,15 @@ func strictJSON(raw []byte, dst any) string {
 
 // applyUnitWriteQ applies a unit write on q with the refusals and the build of the write itself
 // (writeGovernanceUnit) and of its approval (applyUnitChange): the Default unit's 409, the PUT-create
-// rule, buildGovernanceUnit and WriteGovernanceUnitQ.
-func (s *Server) applyUnitWriteQ(r *http.Request, q store.Querier, id uuid.UUID, status int, req governanceUnitRequest, limit int) error {
+// rule, buildGovernanceUnit and WriteGovernanceUnitQ. shift is a rename's legacy shift
+// (unitRenameShiftQ), read before the write.
+func (s *Server) applyUnitWriteQ(r *http.Request, q store.Querier, id uuid.UUID, status int, req governanceUnitRequest, limit int) (shift legacyShift, err error) {
 	if refusal := defaultUnitWriteRefusal(id); refusal != nil {
-		return refusal
+		return shift, refusal
 	}
 	b, err := s.boundaryQ(r.Context(), q)
 	if err != nil {
-		return err
+		return shift, err
 	}
 	_, err = store.WriteGovernanceUnitQ(r.Context(), q, id, s.scopedUnitBuild(r.Context(), q, id, func(all []types.GovernanceUnit, _ []types.GovernanceMembership) (types.GovernanceUnit, error) {
 		if refusal := s.unitPutCreateRefusal(unitPutCreatesAtID(id, status, all)); refusal != nil {
@@ -228,12 +235,15 @@ func (s *Server) applyUnitWriteQ(r *http.Request, q store.Querier, id uuid.UUID,
 			return types.GovernanceUnit{}, err
 		}
 		p, _, _, err := s.buildGovernanceUnit(principalFromRequest(r), s.isOperator(r.Context()), id, kept, all, b, limit)
+		if err == nil {
+			shift, err = unitRenameShiftQ(r.Context(), q, all, id, p.Name)
+		}
 		return p, err
 	}))
 	if errors.Is(err, store.ErrConflict) {
-		return writeRefusal(http.StatusConflict, reasonGovernanceUnitNameConflict, "a governance profile named %q already exists", req.Name)
+		return shift, writeRefusal(http.StatusConflict, reasonGovernanceUnitNameConflict, "a governance profile named %q already exists", req.Name)
 	}
-	return err
+	return shift, err
 }
 
 // treeSnapshot is the unit tree and its memberships as one transaction reads them.

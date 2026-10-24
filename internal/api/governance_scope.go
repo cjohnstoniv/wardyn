@@ -296,11 +296,11 @@ func (s *Server) unitWritePrecheck(w http.ResponseWriter, r *http.Request, id uu
 }
 
 // writeUnitInScope is store.WriteGovernanceUnit for a unit admin: the same graph-locked write, on a
-// transaction whose build re-checks their scope (scopedUnitBuild).
-func (s *Server) writeUnitInScope(ctx context.Context, id uuid.UUID, build store.GovernanceUnitBuild) (types.GovernanceUnit, error) {
+// transaction q whose build, handed q, re-checks their scope (scopedUnitBuild).
+func (s *Server) writeUnitInScope(ctx context.Context, id uuid.UUID, build func(store.Querier) store.GovernanceUnitBuild) (types.GovernanceUnit, error) {
 	var out types.GovernanceUnit
 	err := s.writeGovernance(ctx, func(q store.Querier) (err error) {
-		out, err = store.WriteGovernanceUnitQ(ctx, q, id, s.scopedUnitBuild(ctx, q, id, build))
+		out, err = store.WriteGovernanceUnitQ(ctx, q, id, s.scopedUnitBuild(ctx, q, id, build(q)))
 		return err
 	})
 	return out, err
