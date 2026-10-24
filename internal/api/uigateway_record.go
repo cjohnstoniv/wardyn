@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -75,7 +76,6 @@ func (s *Server) recordVMDisplay(run types.AgentRun, sess uiSession, display io.
 // closes, stores it (desktop.recording.write) and lets the run's entry go.
 func (s *Server) trackDesktopRecording(run types.AgentRun, sess uiSession, rec *recording.RFBRecorder) func() {
 	session := desktopRecordingSuffix + uuid.NewString()
-	s.holdOpenVMSignIn(run)
 	s.desktopRecs.add(run.ID, rec)
 	return func() {
 		s.desktopRecs.remove(run.ID, rec)
@@ -270,6 +270,23 @@ func (d *desktopRecordings) holds(run uuid.UUID, hold string) bool {
 	defer d.mu.Unlock()
 	r := d.byRun[run]
 	return r != nil && r.paused != nil && slices.Contains(r.paused.holders, hold)
+}
+
+// heldWith lists the holds on run's open gap here whose id starts with prefix.
+func (d *desktopRecordings) heldWith(run uuid.UUID, prefix string) []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	r := d.byRun[run]
+	if r == nil || r.paused == nil {
+		return nil
+	}
+	var out []string
+	for _, h := range r.paused.holders {
+		if strings.HasPrefix(h, prefix) {
+			out = append(out, h)
+		}
+	}
+	return out
 }
 
 // auditDesktopResume writes desktop.recording.resume for gap p, ending now.

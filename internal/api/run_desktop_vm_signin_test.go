@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -16,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
@@ -32,8 +34,24 @@ type vmSignInTestStore struct {
 	vmu  sync.Mutex
 	rows map[uuid.UUID]store.DesktopVMSignIns
 	sc   types.SiteConfig
-	// markErr fails PauseDesktopVMAgent.
+	// markErr fails PauseDesktopVMAgent; readErr fails DesktopVMSignIns.
 	markErr error
+	readErr error
+	// onRead, when set, runs as each DesktopVMSignIns begins, and what it returns runs once that read
+	// has taken its answer, before the answer is returned: writes landing just before and just after.
+	onRead func() (after func())
+}
+
+func (s *vmSignInTestStore) setReadErr(err error) {
+	s.vmu.Lock()
+	defer s.vmu.Unlock()
+	s.readErr = err
+}
+
+func (s *vmSignInTestStore) setOnRead(f func() func()) {
+	s.vmu.Lock()
+	defer s.vmu.Unlock()
+	s.onRead = f
 }
 
 var _ store.DesktopVMSignInStore = (*vmSignInTestStore)(nil)
@@ -51,8 +69,22 @@ func (s *vmSignInTestStore) RecordDesktopVMSignIns(_ context.Context, runID uuid
 
 func (s *vmSignInTestStore) DesktopVMSignIns(_ context.Context, runID uuid.UUID) (store.DesktopVMSignIns, bool, error) {
 	s.vmu.Lock()
-	defer s.vmu.Unlock()
+	onRead := s.onRead
+	s.vmu.Unlock()
+	var after func()
+	if onRead != nil {
+		after = onRead()
+	}
+	s.vmu.Lock()
 	row, ok := s.rows[runID]
+	err := s.readErr
+	s.vmu.Unlock()
+	if after != nil {
+		after()
+	}
+	if err != nil {
+		return store.DesktopVMSignIns{}, false, err
+	}
 	return row, ok, nil
 }
 
@@ -366,11 +398,10 @@ func TestDesktopSignIns_PauseStopsTheAgentAndResumeAuditsTheSession(t *testing.T
 func TestDesktopSignIns_PauseHoldsTheDesktopRecordingUntilTheResume(t *testing.T) {
 	f := newVMSignInFixture(t, "memory")
 	f.recordDesktop(t)
-	hold := vmSignInHold(f.run)
 	if code, _, body := f.do(t, http.MethodPost, "/pause"); code != http.StatusOK {
 		t.Fatalf("pause = %d %s", code, body)
 	}
-	if !f.srv.desktopRecs.holds(f.run.ID, hold) {
+	if !signInHeld(f.srv, f.run.ID) {
 		t.Fatal("the desktop recording is not held paused while the sign-in is open")
 	}
 	if p, r := desktopRows(f.h.audit); p != 1 || r != 0 {
@@ -379,7 +410,7 @@ func TestDesktopSignIns_PauseHoldsTheDesktopRecordingUntilTheResume(t *testing.T
 	if code, _, body := f.do(t, http.MethodPost, "/resume"); code != http.StatusOK {
 		t.Fatalf("resume = %d %s", code, body)
 	}
-	if f.srv.desktopRecs.holds(f.run.ID, hold) {
+	if signInHeld(f.srv, f.run.ID) {
 		t.Fatal("the resume left the desktop recording paused")
 	}
 	if p, r := desktopRows(f.h.audit); p != 1 || r != 1 {
@@ -440,12 +471,11 @@ func TestDesktopSignIns_FailedPauseResumesAndLeavesNoMark(t *testing.T) {
 func TestDesktopSignIns_GETSaysPausedOnlyOnceTheRunnerAnswers(t *testing.T) {
 	f := newVMSignInFixture(t, "memory")
 	f.recordDesktop(t)
-	hold := vmSignInHold(f.run)
 	release, paused := f.pauseInFlight(t)
 	if code, v, body := f.do(t, http.MethodGet, ""); code != http.StatusOK || v.Paused || v.PausedAt != nil {
 		t.Fatalf("GET while the runner has not answered the pause = %d %s, want not paused", code, body)
 	}
-	if f.srv.desktopRecs.holds(f.run.ID, hold) {
+	if signInHeld(f.srv, f.run.ID) {
 		t.Fatal("the desktop recording was held before the runner stopped the agent")
 	}
 	release()
@@ -455,7 +485,7 @@ func TestDesktopSignIns_GETSaysPausedOnlyOnceTheRunnerAnswers(t *testing.T) {
 	if _, v, _ := f.do(t, http.MethodGet, ""); !v.Paused {
 		t.Fatal("GET after the runner's answer does not say paused")
 	}
-	if !f.srv.desktopRecs.holds(f.run.ID, hold) {
+	if !signInHeld(f.srv, f.run.ID) {
 		t.Fatal("the desktop recording is not held once the agent is paused")
 	}
 }
@@ -539,7 +569,7 @@ func TestDesktopSignIns_FailedPauseInFlightLeavesTheAgentRunning(t *testing.T) {
 	if _, v, _ := f.do(t, http.MethodGet, ""); v.Paused {
 		t.Fatal("a failed pause left the agent marked paused")
 	}
-	if f.srv.desktopRecs.holds(f.run.ID, vmSignInHold(f.run)) {
+	if signInHeld(f.srv, f.run.ID) {
 		t.Fatal("a failed pause left the desktop recording held")
 	}
 	if rows := f.signInRows(); len(rows) != 1 || rows[0].Outcome != "failure" {
@@ -562,7 +592,7 @@ func TestDesktopSignIns_UnrecordedPauseContinuesTheAgent(t *testing.T) {
 	if f.rn.agentStopped() {
 		t.Fatal("an unrecorded pause left the agent stopped")
 	}
-	if f.srv.desktopRecs.holds(f.run.ID, vmSignInHold(f.run)) {
+	if signInHeld(f.srv, f.run.ID) {
 		t.Fatal("an unrecorded pause left the desktop recording held")
 	}
 	if rows := f.signInRows(); len(rows) != 1 || rows[0].Outcome != "failure" {
@@ -709,43 +739,85 @@ type vmSignInDesktopRunner struct {
 	runner.AgentPauser
 }
 
+// vmSignInDesktop is vmDesktopRun with the run's sign-in row and a guest agent that stops it. The open
+// stream re-reads the row only when the test sends on recheck.
+type vmSignInDesktop struct {
+	h       *uiHarness
+	dr      *desktopFakeRunner
+	send    chan []byte
+	st      *vmSignInTestStore
+	guest   *pauseFakeRunner
+	recheck chan chan struct{}
+}
+
+func newVMSignInDesktop(t *testing.T, row store.DesktopVMSignIns) *vmSignInDesktop {
+	t.Helper()
+	h, dr, send, _ := vmDesktopRun(t)
+	d := &vmSignInDesktop{h: h, dr: dr, send: send, recheck: make(chan chan struct{}),
+		st:    &vmSignInTestStore{uiMemStore: h.store, rows: map[uuid.UUID]store.DesktopVMSignIns{h.run.ID: row}},
+		guest: &pauseFakeRunner{sshFakeRunner: h.runner, stopped: row.PausedAt != nil}}
+	h.srv.cfg.Store = vmSignInDesktopStore{desktopClosedStore: h.srv.cfg.Store.(*desktopClosedStore), DesktopVMSignInStore: d.st}
+	h.srv.cfg.Runner = vmSignInDesktopRunner{desktopFakeRunner: dr, AgentPauser: d.guest}
+	h.srv.vmSignInTick = d.recheck
+	return d
+}
+
+// signIn answers POST .../desktop/sign-ins/<action> ("pause" or "resume") on srv as the run's owner,
+// called past the router: the UI harness serves no SSO routes.
+func (d *vmSignInDesktop) signIn(srv *Server, action string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs/"+d.h.run.ID.String()+"/desktop/sign-ins/"+action, nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", d.h.run.ID.String())
+	w := httptest.NewRecorder()
+	answer := srv.handleResumeDesktopAgent
+	if action == "pause" {
+		answer = srv.handlePauseDesktopAgent
+	}
+	answer(w, r.WithContext(context.WithValue(withOIDCHuman(r.Context(), d.h.owner), chi.RouteCtxKey, rctx)))
+	return w
+}
+
+// reread has the open stream re-read the row once, as its vmSignInRecheck ticker does, and waits for it.
+func (d *vmSignInDesktop) reread(t *testing.T) {
+	t.Helper()
+	done := make(chan struct{})
+	select {
+	case d.recheck <- done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no desktop stream took the re-read")
+	}
+	recvSlotEvent(t, done, "the stream's re-read")
+}
+
+// signInHeld reports whether srv holds run's desktop recording paused for a sign-in or an unread mark.
+func signInHeld(srv *Server, run uuid.UUID) bool {
+	return len(srv.desktopRecs.heldWith(run, "vm-sign-in")) > 0
+}
+
 // A pause's hold on the desktop recording is one process's memory; the row's mark is not. A server that
 // never saw the pause, as after a restart, holds a desktop that connects while the row says paused: what
 // the VM sends is not recorded until the resume, and is recorded again after it.
 func TestDesktopSignIns_RestartedServerHoldsANewDesktopUntilTheResume(t *testing.T) {
-	h, dr, send, _ := vmDesktopRun(t)
 	at := time.Now().UTC()
-	h.srv.cfg.Store = vmSignInDesktopStore{
-		desktopClosedStore: h.srv.cfg.Store.(*desktopClosedStore),
-		DesktopVMSignInStore: &vmSignInTestStore{uiMemStore: h.store,
-			rows: map[uuid.UUID]store.DesktopVMSignIns{h.run.ID: {Store: "memory", PausedBy: h.owner, PausedAt: &at}}},
-	}
-	guest := &pauseFakeRunner{sshFakeRunner: h.runner, stopped: true}
-	h.srv.cfg.Runner = vmSignInDesktopRunner{desktopFakeRunner: dr, AgentPauser: guest}
+	d := newVMSignInDesktop(t, store.DesktopVMSignIns{Store: "memory", PausedBy: "someone", PausedAt: &at})
+	h := d.h
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	v := openVMDesktop(t, ctx, h, dr)
-	hold := vmSignInHold(h.run)
-	if !h.srv.desktopRecs.holds(h.run.ID, hold) {
+	v := openVMDesktop(t, ctx, h, d.dr)
+	if !signInHeld(h.srv, h.run.ID) {
 		t.Fatal("a desktop that connected while the row says paused is not held")
 	}
-	send <- vmFBU // sent while the sign-in pause is open: the viewer sees it, the recording does not
+	d.send <- vmFBU // sent while the sign-in pause is open: the viewer sees it, the recording does not
 	v.read(len(vmFBU))
-
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs/"+h.run.ID.String()+"/desktop/sign-ins/resume", nil)
-	rctx := chi.NewRouteContext()
-	rctx.URLParams.Add("id", h.run.ID.String())
-	w := httptest.NewRecorder()
-	h.srv.handleResumeDesktopAgent(w, r.WithContext(context.WithValue(withOIDCHuman(r.Context(), h.owner), chi.RouteCtxKey, rctx)))
-	if w.Code != http.StatusOK {
+	if w := d.signIn(h.srv, "resume"); w.Code != http.StatusOK {
 		t.Fatalf("resume = %d %s", w.Code, w.Body.String())
 	}
-	if guest.agentStopped() || h.srv.desktopRecs.holds(h.run.ID, hold) {
+	if d.guest.agentStopped() || signInHeld(h.srv, h.run.ID) {
 		t.Fatal("the resume left the agent stopped or the desktop recording held")
 	}
-	send <- []byte("\x02\x02") // two Bells, after the resume
+	d.send <- []byte("\x02\x02") // two Bells, after the resume
 	v.read(2)
-	endVMDesktop(t, h, v, send)
+	endVMDesktop(t, h, v, d.send)
 
 	_, pb, kept := storedVMRecording(t, h)
 	if want := vmHandshake() + "\x02\x02"; kept != want {
@@ -753,6 +825,179 @@ func TestDesktopSignIns_RestartedServerHoldsANewDesktopUntilTheResume(t *testing
 	}
 	if len(pb.Gaps) != 1 || pb.Gaps[0].Reason != desktopPauseSignin || pb.Gaps[0].EndMS == 0 {
 		t.Errorf("playback gaps = %+v, want one closed %q gap", pb.Gaps, desktopPauseSignin)
+	}
+}
+
+// A pause answered on another replica reaches a desktop already open on this one at the stream's next
+// re-read of the row (every vmSignInRecheck), and so does the resume: nothing the VM sends in between
+// is recorded, and what it sends before and after is.
+func TestDesktopSignIns_APauseOnAnotherReplicaHoldsAnOpenDesktop(t *testing.T) {
+	d := newVMSignInDesktop(t, store.DesktopVMSignIns{Store: "memory"})
+	h := d.h
+	other := New(h.srv.cfg) // another replica over the same database and runner
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	v := openVMDesktop(t, ctx, h, d.dr)
+	d.send <- []byte("\x02") // a Bell before the pause
+	v.read(1)
+	if w := d.signIn(other, "pause"); w.Code != http.StatusOK {
+		t.Fatalf("pause on the other replica = %d %s", w.Code, w.Body.String())
+	}
+	d.reread(t)
+	if !signInHeld(h.srv, h.run.ID) {
+		t.Fatal("a pause answered on another replica did not hold this replica's open desktop at its re-read")
+	}
+	d.send <- vmFBU // sent while the pause is open
+	v.read(len(vmFBU))
+	if w := d.signIn(other, "resume"); w.Code != http.StatusOK {
+		t.Fatalf("resume on the other replica = %d %s", w.Code, w.Body.String())
+	}
+	d.reread(t)
+	if signInHeld(h.srv, h.run.ID) {
+		t.Fatal("the resume on another replica left this replica's desktop recording held after its re-read")
+	}
+	d.send <- []byte("\x02\x02") // two Bells after the resume
+	v.read(2)
+	endVMDesktop(t, h, v, d.send)
+
+	_, pb, kept := storedVMRecording(t, h)
+	if want := vmHandshake() + "\x02" + "\x02\x02"; kept != want {
+		t.Errorf("recorded frames = %q, want the handshake and the Bells either side of the pause %q", kept, want)
+	}
+	if len(pb.Gaps) != 1 || pb.Gaps[0].Reason != desktopPauseSignin || pb.Gaps[0].EndMS == 0 {
+		t.Errorf("playback gaps = %+v, want one closed %q gap", pb.Gaps, desktopPauseSignin)
+	}
+}
+
+// A recorded VM desktop whose sign-in mark cannot be read is refused with 503 before the runner is
+// dialled: it is never recorded on a state nobody read.
+func TestDesktopSignIns_AnUnreadableMarkRefusesTheDesktop(t *testing.T) {
+	d := newVMSignInDesktop(t, store.DesktopVMSignIns{Store: "memory"})
+	h := d.h
+	srv := httptest.NewServer(h.gateway)
+	t.Cleanup(srv.Close)
+	c := desktopCookie(t, h.enterDesktop(h.ticket(h.run.ID, h.owner, oidc.RoleUser)))
+	d.st.setReadErr(errors.New("store: pool closed"))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, resp, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")+desktopPath(h, uiDesktopRFB),
+		&websocket.DialOptions{HTTPHeader: http.Header{"Cookie": {c.Name + "=" + c.Value}}})
+	if err == nil || resp == nil || resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("dial = %v %v, want a 503 refusal", resp, err)
+	}
+	if body, _ := io.ReadAll(resp.Body); !strings.Contains(string(body), reasonDesktopSignInsUnavailable) || !strings.Contains(string(body), desktopSignInsUnreadableMsg) {
+		t.Fatalf("refusal = %s, want %s", body, reasonDesktopSignInsUnavailable)
+	}
+	select {
+	case ref := <-d.dr.dialled:
+		t.Fatalf("dialled %q with the sign-in mark unreadable", ref)
+	default:
+	}
+}
+
+// An open stream whose re-read of the row fails keeps no frames until a re-read answers: it never
+// records on a state nobody read.
+func TestDesktopSignIns_AnUnreadableMarkMidStreamHoldsTheRecording(t *testing.T) {
+	d := newVMSignInDesktop(t, store.DesktopVMSignIns{Store: "memory"})
+	h := d.h
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	v := openVMDesktop(t, ctx, h, d.dr)
+	d.st.setReadErr(errors.New("store: pool closed"))
+	d.reread(t)
+	if !signInHeld(h.srv, h.run.ID) {
+		t.Fatal("a stream whose re-read failed kept recording")
+	}
+	d.send <- vmFBU // sent while the mark cannot be read
+	v.read(len(vmFBU))
+	d.st.setReadErr(nil)
+	d.reread(t)
+	if signInHeld(h.srv, h.run.ID) {
+		t.Fatal("a re-read that answered left the recording held")
+	}
+	d.send <- []byte("\x02\x02")
+	v.read(2)
+	endVMDesktop(t, h, v, d.send)
+	if _, _, kept := storedVMRecording(t, h); kept != vmHandshake()+"\x02\x02" {
+		t.Errorf("recorded frames = %q, want only the handshake and the Bells once the mark was read", kept)
+	}
+}
+
+// A resume that clears the mark between the stream's first read of it and the hold that read takes
+// leaves the stream unheld: the second read ends the hold of the pause that is over.
+func TestDesktopSignIns_AResumeRacingTheOpeningHoldEndsUnheld(t *testing.T) {
+	at := time.Now().UTC()
+	d := newVMSignInDesktop(t, store.DesktopVMSignIns{Store: "memory", PausedBy: "someone", PausedAt: &at})
+	h := d.h
+	reads := 0
+	d.st.setOnRead(func() func() {
+		if reads++; reads != 1 {
+			return nil
+		}
+		return func() { // the first read has answered paused: the resume lands before its hold is taken
+			if w := d.signIn(h.srv, "resume"); w.Code != http.StatusOK {
+				t.Errorf("resume = %d %s", w.Code, w.Body.String())
+			}
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	v := openVMDesktop(t, ctx, h, d.dr)
+	d.st.setOnRead(nil)
+	if signInHeld(h.srv, h.run.ID) {
+		t.Fatal("a resume that raced the opening hold left the desktop recording held")
+	}
+	d.send <- []byte("\x02\x02")
+	v.read(2)
+	endVMDesktop(t, h, v, d.send)
+	if _, _, kept := storedVMRecording(t, h); kept != vmHandshake()+"\x02\x02" {
+		t.Errorf("recorded frames = %q, want the handshake and the Bells", kept)
+	}
+}
+
+// A read of the row that is stale by the time it acts ends only the hold of the pause it saw over,
+// never a newer pause's. The stream's first read takes the open pause's hold; a resume ends it before
+// the second read, and a new pause marks the row and takes its own hold just after that read has
+// answered unpaused. The second read's release must leave the new pause's hold, so nothing the VM
+// sends during it is recorded.
+func TestDesktopSignIns_AStaleReadNeverEndsANewerPausesHold(t *testing.T) {
+	at := time.Now().UTC().Add(-time.Minute)
+	d := newVMSignInDesktop(t, store.DesktopVMSignIns{Store: "memory", PausedBy: "someone", PausedAt: &at})
+	h := d.h
+	reads := 0
+	d.st.setOnRead(func() func() {
+		if reads++; reads != 2 {
+			return nil
+		}
+		d.st.setOnRead(nil)
+		if w := d.signIn(h.srv, "resume"); w.Code != http.StatusOK { // before the second read
+			t.Errorf("resume = %d %s", w.Code, w.Body.String())
+		}
+		return func() { // the second read has answered unpaused: a new pause lands before it acts
+			if w := d.signIn(h.srv, "pause"); w.Code != http.StatusOK {
+				t.Errorf("new pause = %d %s", w.Code, w.Body.String())
+			}
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	v := openVMDesktop(t, ctx, h, d.dr)
+	if row, _, _ := d.st.DesktopVMSignIns(ctx, h.run.ID); row.PausedAt == nil || row.PausedAt.Equal(at) {
+		t.Fatalf("row = %+v, want the new pause's mark", row)
+	}
+	if !signInHeld(h.srv, h.run.ID) {
+		t.Fatal("the stream's stale read ended the new pause's hold on the desktop recording")
+	}
+	d.send <- vmFBU // sent during the new pause
+	v.read(len(vmFBU))
+	if w := d.signIn(h.srv, "resume"); w.Code != http.StatusOK {
+		t.Fatalf("resume = %d %s", w.Code, w.Body.String())
+	}
+	d.send <- []byte("\x02\x02")
+	v.read(2)
+	endVMDesktop(t, h, v, d.send)
+	if _, _, kept := storedVMRecording(t, h); kept != vmHandshake()+"\x02\x02" {
+		t.Errorf("recorded frames = %q, want the handshake and the Bells after the new pause's resume", kept)
 	}
 }
 

@@ -321,6 +321,15 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonDesktopRulesUnreadable, desktopRulesUnreadableMsg)
 		return
 	}
+	// A recorded run's stream keeps no frames while the run's row says its agent is paused to sign in,
+	// from the first frame and at each vmSignInRecheck after; a mark that cannot be read refuses the
+	// stream rather than record it.
+	signIn, err := s.watchVMSignIn(r.Context(), sess.Run)
+	if err != nil {
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonDesktopSignInsUnavailable, desktopSignInsUnreadableMsg)
+		return
+	}
+	defer signIn.stop()
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{"binary"}})
 	if err != nil {
 		return // Accept answered the request
@@ -383,6 +392,12 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 	defer tick.Stop()
 	closedTick := time.NewTicker(cmp.Or(s.uiDesktopClosedEvery, uiDesktopClosedRecheck))
 	defer closedTick.Stop()
+	var signInTick <-chan time.Time
+	if signIn != nil && s.vmSignInTick == nil {
+		recheck := time.NewTicker(vmSignInRecheck)
+		defer recheck.Stop()
+		signInTick = recheck.C
+	}
 	for {
 		select {
 		case <-done:
@@ -405,6 +420,12 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 				_ = c.Close(code, why)
 				return
 			}
+		case <-signInTick:
+			// A read that fails holds the recording until one answers.
+			_ = signIn.sync(ctx)
+		case reread := <-s.vmSignInTick:
+			_ = signIn.sync(ctx)
+			close(reread)
 		}
 	}
 }

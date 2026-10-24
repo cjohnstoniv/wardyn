@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 )
 
 // Sign-ins in a Linux VM's desktop (#2972). The guest keeps its keychain and browser profiles on a
@@ -46,6 +48,7 @@ const (
 	desktopSignInsOffMsg         = "Your admin doesn't allow sign-ins in this desktop while this agent runs"
 	desktopSignInsUnavailableMsg = "This run's desktop has no sign-in store: its runner or its guest image is older than sign-ins"
 	desktopResumeUnrecordedMsg   = "the agent was resumed, but that could not be recorded; try again"
+	desktopSignInsUnreadableMsg  = "the desktop's sign-ins could not be read; try again"
 )
 
 // desktopSignInsView is GET /runs/{id}/desktop/sign-ins and the pause and resume answers. Store is
@@ -134,7 +137,7 @@ func (s *Server) desktopSignInsRun(w http.ResponseWriter, r *http.Request, enter
 	if err != nil {
 		unlock()
 		slog.WarnContext(r.Context(), "wardynd: desktop sign-ins unreadable", "run_id", run.ID, "err", err)
-		writeErrorReason(w, http.StatusServiceUnavailable, reasonDesktopSignInsUnavailable, "the desktop's sign-ins could not be read; try again")
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonDesktopSignInsUnavailable, desktopSignInsUnreadableMsg)
 		return r, run, nil, none, nil, false
 	}
 	if enter && !found {
@@ -226,7 +229,7 @@ func (s *Server) handlePauseDesktopAgent(w http.ResponseWriter, r *http.Request)
 	err := p.PauseAgent(ctx, run.SandboxRef)
 	bg, cancel := context.WithTimeout(context.WithoutCancel(ctx), desktopAgentCallWait)
 	defer cancel()
-	now := time.Now().UTC()
+	now := time.Now().UTC().Truncate(time.Microsecond) // Postgres keeps microseconds: the hold names the row's paused_at
 	stage := "pause"
 	if err == nil {
 		stage = "record"
@@ -285,7 +288,7 @@ func (s *Server) handlePauseDesktopAgent(w http.ResponseWriter, r *http.Request)
 	// container's sign-in does. A run that ends while paused drops the hold with its last connection
 	// (forgetEndedDesktopPause).
 	if s.desktopRecorded(run) {
-		s.PauseDesktopRecording(bg, run, desktopPauseSignin, vmSignInHold(run))
+		s.PauseDesktopRecording(bg, run, desktopPauseSignin, vmSignInHold(run.ID, now))
 	}
 	unlock()
 	v.Paused, v.PausedAt = true, &now
@@ -323,34 +326,95 @@ func (s *Server) desktopRelock(base context.Context, run types.AgentRun, st stor
 // errDesktopSignInUnmarked is an acked pause whose row was no longer a 'memory' row with no mark.
 var errDesktopSignInUnmarked = errors.New("the run's sign-in row was not marked paused")
 
-// vmSignInHold is a VM sign-in pause's hold on the run's desktop recording: a run has at most one.
-func vmSignInHold(run types.AgentRun) string {
-	return "vm-sign-in:" + run.ID.String()
+// vmSignInHold is a VM sign-in pause's hold on the run's desktop recording, named by the pause's
+// paused_at, so ending one pause's hold never ends a newer pause's.
+func vmSignInHold(run uuid.UUID, pausedAt time.Time) string {
+	return vmSignInHolds(run) + strconv.FormatInt(pausedAt.UnixMicro(), 10)
 }
 
-// holdOpenVMSignIn takes vmSignInHold for a recording that starts while the run's row says its agent is
-// paused. The hold the pause took lives in one process's memory, so after a restart, or on another
-// replica, this read of the row is what keeps a new desktop connection from recording the sign-in;
-// the resume ends it as it ends the pause's own. The second read undoes a hold taken just after a
-// resume cleared the mark, which that resume's endDesktopHold ran too early to end.
-func (s *Server) holdOpenVMSignIn(run types.AgentRun) {
-	hold := vmSignInHold(run)
+// vmSignInHolds starts every vmSignInHold of run.
+func vmSignInHolds(run uuid.UUID) string {
+	return "vm-sign-in:" + run.String() + ":"
+}
+
+// vmSignInRecheck is how often a recorded VM desktop stream re-reads its run's sign-in mark, so a
+// pause or resume answered on another replica holds or frees its recording within this bound.
+const vmSignInRecheck = 2 * time.Second
+
+// vmSignInWatch keeps one recorded VM desktop stream's recording held while its run's row says the
+// agent is paused to sign in, or cannot be read. The hold a pause takes lives in the memory of the
+// replica that answered it, so after a restart, or on another replica, this read of the row is what
+// keeps the stream from recording the sign-in.
+type vmSignInWatch struct {
+	s   *Server
+	run types.AgentRun
+	st  store.DesktopVMSignInStore
+	// unread is this stream's own hold while the row cannot be read.
+	unread string
+}
+
+// watchVMSignIn reads the sign-in mark of a desktop stream about to open on runID, holding its
+// recording from the first frame while the row marks a pause. It is nil for a run whose screen is not
+// recorded or whose store keeps no sign-ins. A run or row that cannot be read is an error: the stream
+// is refused, never recorded on a state nobody read.
+func (s *Server) watchVMSignIn(ctx context.Context, runID uuid.UUID) (*vmSignInWatch, error) {
 	st, ok := s.cfg.Store.(store.DesktopVMSignInStore)
-	if !ok || !run.MachineKind.IsVM() || s.desktopRecs.holds(run.ID, hold) {
-		return
+	if !ok {
+		return nil, nil
 	}
-	ctx := s.cfg.BaseCtx
-	row, found, err := st.DesktopVMSignIns(ctx, run.ID)
+	run, err := s.cfg.Store.GetRun(ctx, runID)
 	if err != nil {
-		slog.WarnContext(ctx, "wardynd: a VM desktop's recording could not read whether its agent is paused to sign in; it records", "run_id", run.ID, "err", err)
-		return
+		slog.WarnContext(ctx, "wardynd: a VM desktop's run could not be read for its sign-in mark; the stream is refused", "run_id", runID, "err", err)
+		return nil, err
 	}
-	if !found || row.PausedAt == nil {
-		return
+	if !run.MachineKind.IsVM() || !s.desktopRecorded(run) {
+		return nil, nil
 	}
-	s.PauseDesktopRecording(ctx, run, desktopPauseSignin, hold)
-	if row, found, err = st.DesktopVMSignIns(ctx, run.ID); err == nil && (!found || row.PausedAt == nil) {
-		s.ResumeDesktopRecording(ctx, run, hold)
+	w := &vmSignInWatch{s: s, run: run, st: st, unread: "vm-sign-in-unread:" + runID.String() + ":" + uuid.NewString()}
+	if err := w.sync(ctx); err != nil {
+		w.stop()
+		return nil, err
+	}
+	// The second read ends a hold the first took of a pause whose resume has since cleared it: that
+	// resume's endDesktopHold ran before the hold was taken.
+	_ = w.sync(ctx)
+	return w, nil
+}
+
+// sync holds the recording while the row marks a pause, and while it cannot be read, and ends this
+// replica's hold of a pause the row has since moved past. It ends only holds taken before its read:
+// one taken after is of a pause the read may not have seen.
+func (w *vmSignInWatch) sync(ctx context.Context) error {
+	if w == nil {
+		return nil
+	}
+	s, run, bg := w.s, w.run, w.s.cfg.BaseCtx
+	before := s.desktopRecs.heldWith(run.ID, vmSignInHolds(run.ID))
+	row, found, err := w.st.DesktopVMSignIns(ctx, run.ID)
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: a VM desktop's sign-in mark could not be read; its recording keeps no frames until it is", "run_id", run.ID, "err", err)
+		s.PauseDesktopRecording(bg, run, desktopPauseSignin, w.unread)
+		return err
+	}
+	current := ""
+	if found && row.PausedAt != nil {
+		current = vmSignInHold(run.ID, *row.PausedAt)
+		s.PauseDesktopRecording(bg, run, desktopPauseSignin, current)
+	}
+	for _, h := range before {
+		if h != current {
+			s.ResumeDesktopRecording(bg, run, h)
+		}
+	}
+	s.ResumeDesktopRecording(bg, run, w.unread)
+	return nil
+}
+
+// stop ends the stream's own hold as it closes. A pause's hold stays: it is the pause's, and its
+// resume ends it.
+func (w *vmSignInWatch) stop() {
+	if w != nil {
+		w.s.ResumeDesktopRecording(w.s.cfg.BaseCtx, w.run, w.unread)
 	}
 }
 
@@ -417,7 +481,7 @@ func (s *Server) handleResumeDesktopAgent(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if cleared {
-		s.endDesktopHold(bg, run, vmSignInHold(run))
+		s.endDesktopHold(bg, run, vmSignInHold(run.ID, pausedAt))
 	}
 	relocked()
 	unlock()
