@@ -217,11 +217,11 @@ func TestUnitAdminAddRechecksBelonging(t *testing.T) {
 	}
 }
 
-// TestHeldAddBelongsByReadAtFullTierOnly: ua-a's admin's held add of a person in ua-a1 to ua-a2 is
-// stored with the unit that admitted it, ua-a, which the decision reads again. A reader below the super
-// admin tier, an admin granted on ua-a2 alone or a security admin, reads the change, on its own and in
-// the list, without it; a super admin reads it with it.
-func TestHeldAddBelongsByReadAtFullTierOnly(t *testing.T) {
+// TestHeldAddBelongsByHiddenFromUnitAdmins: ua-a's admin's held add of a person in ua-a1 to ua-a2 is
+// stored with the unit that admitted it, ua-a, which the decision reads again. A unit admin, granted
+// on ua-a2 alone, reads the change, on its own and in the list, without it; a security admin, who
+// governs every unit, and a super admin read it with it.
+func TestHeldAddBelongsByHiddenFromUnitAdmins(t *testing.T) {
 	const person = "sub-ua-placed"
 	e := newUnitAdminEnv(t, false)
 	treeMember(t, e.govEnv, e.a1, types.CapabilitySubjectUser, person, 1, false)
@@ -246,7 +246,7 @@ func TestHeldAddBelongsByReadAtFullTierOnly(t *testing.T) {
 		want bool
 	}{
 		{"an admin of ua-a2 alone", uaSession(t, onA2, []string{}, false), false},
-		{"a security admin", e.alice, false},
+		{"a security admin", e.alice, true},
 		{"a super admin", e.super, true},
 	} {
 		var one types.GovernanceChange
