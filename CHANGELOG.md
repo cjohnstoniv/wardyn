@@ -382,8 +382,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `https://` with no path or credential and not a loopback address, and `local.models` (1 to 64 exact names, tag
   included, none with a `/` or a `:cloud` or `-cloud` tag) is the allowlist the request's `model` must be on. Other
   methods and paths are refused `403 egress_denied`, a model inventory is filtered to the allowlist, and
-  `local.max_context`, `local.max_output` and `local.keep_alive_seconds` cap a request (unset means 32768, 32768 and
-  1800 seconds). A run never pulls, pushes, creates, copies or deletes a model, and the prompt is never rewritten. The
+  `local.max_context`, `local.max_output` and `local.keep_alive_seconds` cap those request fields when a request
+  supplies them (unset caps mean 32768, 32768 and 1800 seconds); a request that omits one keeps the model server's own
+  default. A run never pulls, pushes, creates, copies or deletes a model, and the prompt is never rewritten. The
   proxy lifts its private-address guard for the registered host and port alone; every other lane refuses that host.
   With no provider of this kind, nothing changes. Move the proxy image pin with `wardynd`, image first, before adding
   one: an older proxy refuses the `local_models` key it writes.
