@@ -290,8 +290,8 @@ test.describe("Tier B computed styles", () => {
     await dialog.getByLabel("Name", { exact: true }).fill("tier-b-colour-probe");
     await dialog.getByLabel("Value", { exact: true }).fill("x");
     await expect(save).toBeEnabled();
-    const fill = await save.evaluate((el) => getComputedStyle(el).backgroundColor);
-    expect(fill).toBe(await tokenColour(page, "backgroundColor", "--primary"));
+    // Retried: the enabled fill fades in from the disabled grey (transition-all), so a single read can land mid-fade.
+    await expect(save).toHaveCSS("background-color", await tokenColour(page, "backgroundColor", "--primary"));
   });
 
   // #2874: the Available to placeholder is in the sans face; the typed value stays mono.
