@@ -237,7 +237,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `governance.recording.write`.
 - A Linux VM's desktop keeps sign-ins in the machine's memory, gone when it shuts down, and the run page says so (#2972).
   "Pause the agent to sign in" stops the agent's processes inside the guest while the desktop stays live; "Resume the
-  agent" continues them, and each pause-to-resume is one `desktop.sign_in.pause` audit row. The run page says plainly that
+  agent" continues them, and each pause-to-resume is one `desktop.sign_in.pause` audit row. On a recorded desktop the
+  pause holds the screen recording on every replica within about 2 seconds, a desktop that connects after a `wardynd`
+  restart records nothing while the sign-in is open, and a desktop whose sign-in state cannot be read is refused rather
+  than recorded. The run page says plainly that
   the resumed agent can use those sign-ins and read saved files. An admin can set an agent's "Sign-ins in a desktop" to
   Not allowed: its desktops keep none, and the pause is refused at the server.
 - `GET /api/v1/runs/{id}/desktop/sign-ins` reads a VM desktop's sign-in store (`memory` or `none`) and whether its agent
