@@ -35,9 +35,10 @@ function setStore(id: string, store: "memory" | "none" | null): void {
 }
 
 /** The seeded RUNNING run has no sandbox ref (e2e-backend.sh gives it one only under WARDYN_E2E_TMUX=1), so
- * a real pause is refused as not running before the policy is read; the refusal tests give it one. */
+ * a real pause is refused as not running before the policy is read; the refusal tests give it one. No ref is
+ * the empty string: agent_runs.sandbox_ref is NOT NULL DEFAULT '' (migration 0001). */
 function setSandboxRef(id: string, ref: string | null): void {
-  sql(`UPDATE agent_runs SET sandbox_ref = ${ref === null ? "NULL" : `'${ref}'`} WHERE id = '${id}'`);
+  sql(`UPDATE agent_runs SET sandbox_ref = '${ref ?? ""}' WHERE id = '${id}'`);
 }
 
 async function openVMRun(page: Page, id: string) {
