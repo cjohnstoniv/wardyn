@@ -129,6 +129,73 @@ func TestUnitAdminOutsideSubtreeAdd(t *testing.T) {
 	}
 }
 
+// addedTo reports whether subject holds a membership in unit u.
+func (e *unitAdminEnv) addedTo(subject string, u types.GovernanceUnit) bool {
+	e.t.Helper()
+	ms, err := e.pg.ListGovernanceMemberships(context.Background())
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return slices.ContainsFunc(ms, func(m types.GovernanceMembership) bool { return m.Subject == subject && m.UnitID == u.ID })
+}
+
+// TestUnitAdminAddRechecksBelonging: a unit admin's add is admitted because the person already belongs
+// in their units, and the decision reads that again under its locks. With the person's ua-a1 row, the
+// one that admitted the add to ua-a2, removed since, ua-a's peer admin approving is stale and creates
+// no row, and a fresh proposal of the same add is refused. With that row unchanged, or removed while a
+// ua-a row that admitted the add too remains, the approval applies.
+func TestUnitAdminAddRechecksBelonging(t *testing.T) {
+	const person = "sub-ua-placed"
+	user := types.CapabilitySubjectUser
+	for _, tc := range []struct {
+		name                     string
+		alsoInA, removeA1, stale bool
+	}{
+		{"the admitting row removed since", false, true, true},
+		{"the admitting row unchanged", false, false, false},
+		{"one admitting row removed and another remaining", true, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newUnitAdminEnv(t, false)
+			a1 := treeMember(t, e.govEnv, e.a1, user, person, 1, false)
+			if tc.alsoInA {
+				treeMember(t, e.govEnv, e.a, user, person, 1, false)
+			}
+			add := membershipBody(person, e.a2.ID)
+			ch := e.pending(e.call(e.adminA, http.MethodPost, "/api/v1/governance/memberships", add))
+			if tc.removeA1 {
+				if w := e.admin(http.MethodDelete, "/api/v1/governance/memberships/"+a1.ID.String(), ""); w.Code != http.StatusNoContent {
+					t.Fatalf("remove the ua-a1 row = %d %s, want 204", w.Code, w.Body)
+				}
+			}
+			w := e.call(e.peerA, http.MethodPost, approvePath(ch.ID), "")
+			if tc.stale {
+				if w.Code != http.StatusConflict || wireReason(t, w) != reasonGovernanceChangeStale || e.addedTo(person, e.a2) {
+					t.Fatalf("approving = %d %s with the row added = %v, want 409 %s and no row", w.Code, w.Body, e.addedTo(person, e.a2), reasonGovernanceChangeStale)
+				}
+				if w := e.call(e.adminA, http.MethodPost, "/api/v1/governance/memberships", add); !scopeRefused(t, w) {
+					t.Errorf("a fresh proposal after the removal = %d %s, want 403 unit_scope_denied", w.Code, w.Body)
+				}
+				return
+			}
+			if w.Code != http.StatusOK || !e.addedTo(person, e.a2) {
+				t.Fatalf("approving = %d %s with the row added = %v, want 200 and the row", w.Code, w.Body, e.addedTo(person, e.a2))
+			}
+		})
+	}
+}
+
+// TestSecurityAddFirstPlacementApplies: a security admin's held add may place a person who holds no
+// membership yet. It is not admitted by belonging, so its approval applies with nothing to recheck.
+func TestSecurityAddFirstPlacementApplies(t *testing.T) {
+	e := newUnitAdminEnv(t, true)
+	const person = "sub-ua-first"
+	ch := e.pending(e.call(e.alice, http.MethodPost, "/api/v1/governance/memberships", membershipBody(person, e.a2.ID)))
+	if w := e.call(e.peerA, http.MethodPost, approvePath(ch.ID), ""); w.Code != http.StatusOK || !e.addedTo(person, e.a2) {
+		t.Fatalf("approving = %d %s with the row added = %v, want 200 and the row", w.Code, w.Body, e.addedTo(person, e.a2))
+	}
+}
+
 // legacyDelete seeds person's legacy rows, ua-a1's first by priority and then rest's in order, and has
 // ua-a's admin delete the ua-a1 row: held, since the next row takes over as the person's context.
 func (e *unitAdminEnv) legacyDelete(person string, rest ...types.GovernanceUnit) types.GovernanceChange {
@@ -168,6 +235,53 @@ func TestLegacyDeleteUnitAdminOutOfScope(t *testing.T) {
 	}
 	if c := treeCeiling(t, e.govEnv, treeCtx("sub-ua-legacy", nil, "")); unitIDOf(c) != e.b.ID {
 		t.Errorf("the person's context is %s after the delete, want ua-b", unitIDOf(c))
+	}
+}
+
+// TestLegacyDeleteRechecksKeeping: a unit admin's delete is admitted because the person keeps another
+// membership in their units, and the decision reads that again under its locks. The person's rows are
+// in ua-a1, ua-b and ua-a2 at falling priority (and in ua-a too, lowest, in one case), and ua-a's
+// admin deletes the ua-a1 row, held since ua-b takes over. With the ua-a2 row, the one kept in ua-a's
+// units, removed since, a security admin's approval is stale and keeps the row, and a fresh proposal
+// is refused. With it unchanged, or removed while the ua-a row remains, the approval applies.
+func TestLegacyDeleteRechecksKeeping(t *testing.T) {
+	const person = "sub-ua-legacy"
+	for _, tc := range []struct {
+		name                     string
+		alsoInA, removeA2, stale bool
+	}{
+		{"the kept row removed since", false, true, true},
+		{"the kept row unchanged", false, false, false},
+		{"one kept row removed and another remaining", true, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newUnitAdminEnv(t, false)
+			rest := []types.GovernanceUnit{e.b, e.a2}
+			if tc.alsoInA {
+				rest = append(rest, e.a)
+			}
+			ch := e.legacyDelete(person, rest...)
+			deleted := e.rowOf(person, e.a1)
+			if tc.removeA2 {
+				if w := e.admin(http.MethodDelete, "/api/v1/governance/memberships/"+e.rowOf(person, e.a2).ID.String(), ""); w.Code != http.StatusNoContent {
+					t.Fatalf("remove the ua-a2 row = %d %s, want 204", w.Code, w.Body)
+				}
+			}
+			w := e.call(e.alice, http.MethodPost, approvePath(ch.ID), "")
+			kept := e.addedTo(person, e.a1)
+			if tc.stale {
+				if w.Code != http.StatusConflict || wireReason(t, w) != reasonGovernanceChangeStale || !kept {
+					t.Fatalf("approving = %d %s with the row kept = %v, want 409 %s and the row kept", w.Code, w.Body, kept, reasonGovernanceChangeStale)
+				}
+				if w := e.call(e.adminA, http.MethodDelete, "/api/v1/governance/memberships/"+deleted.ID.String(), ""); !scopeRefused(t, w) {
+					t.Errorf("a fresh proposal after the removal = %d %s, want 403 unit_scope_denied", w.Code, w.Body)
+				}
+				return
+			}
+			if w.Code != http.StatusOK || kept {
+				t.Fatalf("approving = %d %s with the row kept = %v, want 200 and the row deleted", w.Code, w.Body, kept)
+			}
+		})
 	}
 }
 

@@ -369,44 +369,49 @@ func (s *Server) deleteUnitInScope(w http.ResponseWriter, r *http.Request, id uu
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// subjectBelongsInScope reports whether the subject (type and value) holds a membership, other than
-// except, in a unit the caller governs: "people who already belong" (§5.1). A group subject belongs by
-// a group row of the same group.
-func (s *Server) subjectBelongsInScope(ctx context.Context, ms []types.GovernanceMembership, st types.CapabilitySubjectType,
-	subject string, except uuid.UUID, scope func(uuid.UUID) (bool, error)) (bool, error) {
+// subjectUnitsInScope is the units, once each, of the subject's (type and value) memberships other than
+// except that scope admits: where it already belongs, "people who already belong" (§5.1). A group
+// subject belongs by a group row of the same group.
+func subjectUnitsInScope(ms []types.GovernanceMembership, st types.CapabilitySubjectType, subject string, except uuid.UUID,
+	scope func(uuid.UUID) (bool, error)) ([]uuid.UUID, error) {
+	var units []uuid.UUID
 	for _, m := range ms {
-		if m.ID == except || m.SubjectType != st || m.Subject != subject {
+		if m.ID == except || m.SubjectType != st || m.Subject != subject || slices.Contains(units, m.UnitID) {
 			continue
 		}
 		in, err := scope(m.UnitID)
-		if err != nil || in {
-			return in, err
+		if err != nil {
+			return nil, err
+		}
+		if in {
+			units = append(units, m.UnitID)
 		}
 	}
-	return false, nil
+	return units, nil
 }
 
 // membershipAddInScope is a unit admin's scope over a membership add: the unit is one they govern and
-// the subject already belongs in their units. The add itself is always held (unitWriteMode).
-func (s *Server) membershipAddInScope(w http.ResponseWriter, r *http.Request, a types.GovernanceMembership) bool {
+// the subject already belongs in their units. The add itself is always held (unitWriteMode); belongsBy
+// is the units of theirs the subject belongs in, which the decision reads again (heldBelongsStale).
+func (s *Server) membershipAddInScope(w http.ResponseWriter, r *http.Request, a types.GovernanceMembership) (belongsBy []uuid.UUID, ok bool) {
 	ctx := r.Context()
 	if !s.requireUnitsInScope(w, r, "governance.membership", false, a.UnitID) {
-		return false
+		return nil, false
 	}
 	ms, err := s.cfg.Store.ListGovernanceMemberships(ctx)
-	var belongs bool
 	if err == nil {
-		belongs, err = s.subjectBelongsInScope(ctx, ms, a.SubjectType, a.Subject, uuid.Nil,
+		belongsBy, err = subjectUnitsInScope(ms, a.SubjectType, a.Subject, uuid.Nil,
 			func(u uuid.UUID) (bool, error) { return s.unitScope(ctx, u, false) })
 	}
 	if err != nil {
 		writeServerError(w, r, "read unit scope", err)
-		return false
+		return nil, false
 	}
-	if !belongs {
+	if len(belongsBy) == 0 {
 		s.refuseOutsideScope(w, r, "governance.membership")
+		return nil, false
 	}
-	return belongs
+	return belongsBy, true
 }
 
 // deleteMembershipInScope is a unit admin's membership delete: the membership is in a unit they govern
@@ -416,6 +421,7 @@ func (s *Server) membershipAddInScope(w http.ResponseWriter, r *http.Request, a 
 func (s *Server) deleteMembershipInScope(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
 	ctx := r.Context()
 	var removed types.GovernanceMembership
+	var keepsIn []uuid.UUID
 	err := s.writeGovernance(ctx, func(q store.Querier) error {
 		row, err := lockedMembershipQ(ctx, q, id)
 		if err != nil {
@@ -428,12 +434,12 @@ func (s *Server) deleteMembershipInScope(w http.ResponseWriter, r *http.Request,
 		if err != nil {
 			return err
 		}
-		keeps, err := s.subjectBelongsInScope(ctx, all, row.SubjectType, row.Subject, row.ID,
+		keepsIn, err = subjectUnitsInScope(all, row.SubjectType, row.Subject, row.ID,
 			func(u uuid.UUID) (bool, error) { return s.unitScopeQ(ctx, q, u, false) })
 		if err != nil {
 			return err
 		}
-		if !keeps {
+		if len(keepsIn) == 0 {
 			return errOutsideScope
 		}
 		activates, err := deleteActivationsQ(ctx, q, row)
@@ -447,7 +453,7 @@ func (s *Server) deleteMembershipInScope(w http.ResponseWriter, r *http.Request,
 		return store.DeleteGovernanceMembershipQ(ctx, q, id)
 	})
 	if errors.Is(err, errHoldForApproval) {
-		s.holdMembershipDelete(w, r, id)
+		s.holdMembershipDelete(w, r, id, keepsIn)
 		return
 	}
 	if s.answerOutsideScope(w, r, "governance.membership", err) || writeMembershipTreeError(w, r, "delete governance assignment", err) {
