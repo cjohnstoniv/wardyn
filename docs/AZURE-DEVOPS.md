@@ -701,6 +701,10 @@ What the refresh token is redeemed for depends on the mode:
 - **`bearer`:** the access token injected on the wire.
   - It is short-lived, on the order of an hour, up to about ninety minutes,
     - and Wardyn's control plane renews it when a run's proxy starts and again as it nears expiry, without the person doing anything, for as long as the refresh token keeps redeeming.
+  - Wardyn reuses one redeemed token across a run's hosts and resolves.
+    - A resolve served from that cache reads no stored sign-in and writes no `secret.read` row; every redemption that fills it reads the sign-in and records `secret.read` with purpose `ado-refresh`.
+    - A cached token is served for at most one hour after its redemption, and never within ten minutes of its expiry.
+    - It is dropped when the person disconnects, when their credentials are erased, when the authority refuses the sign-in, and when the stored sign-in is replaced.
 
 When a redemption is refused — the refresh token has been revoked or has expired, or a Conditional Access policy requires the person to sign in interactively — what happens depends on when:
 

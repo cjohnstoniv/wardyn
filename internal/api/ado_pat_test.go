@@ -251,9 +251,8 @@ func TestADOPAT_S1FirstReadIsUnusable(t *testing.T) {
 // as a redemption that returned them would.
 func (rf *adoResolveFixture) seedBearer(t *testing.T, granted []string) {
 	t.Helper()
-	req := rf.srv.adoRequestScopes(context.Background(), rf.cfg, rf.subject)
-	key := strings.Join([]string{rf.subject, rf.cfg.RowID, rf.cfg.TenantID, rf.cfg.ClientID, strings.Join(req, " ")}, "\x00")
-	rf.srv.adoEntraTokens.put(key, adoEntraCached{ADOEntraAccess: ADOEntraAccess{AccessToken: "fake-entra-access-seeded", Scopes: granted, ExpiresAt: adoTestNow.Add(time.Hour)}})
+	key := strings.Join([]string{rf.subject, rf.cfg.RowID, rf.cfg.TenantID, rf.cfg.ClientID, "ceiling", strings.Join(rf.cfg.Scopes, " ")}, "\x00")
+	rf.srv.adoEntraTokens.put(key, adoEntraCached{ADOEntraAccess: ADOEntraAccess{AccessToken: "fake-entra-access-seeded", Scopes: granted, ExpiresAt: adoTestNow.Add(time.Hour)}, filled: adoTestNow})
 }
 
 func TestInjectionADO_S2RefusesABearerThatCanMintOrReportsNothing(t *testing.T) {

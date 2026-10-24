@@ -49,8 +49,8 @@ func runAWSSSORenewer(ctx context.Context, srv awsSSORenewer, interval time.Dura
 }
 
 // startAWSSSORenewer runs the renewer on the elected sweeper leader, like the other leader sweeps. A
-// second leader for a moment renews nothing twice: each renewal takes its credential's cross-replica
-// owner lock and re-reads the credential under it.
+// second leader for a moment renews nothing twice: each renewal takes its credential's own cross-replica
+// lock and re-reads the credential under it.
 func startAWSSSORenewer(ctx context.Context, leader *db.SweeperLeader, srv awsSSORenewer, ticks *sweephealth.Tracker) {
 	leaderGo(ctx, leader, "aws_sso.renewer", func(ctx context.Context) {
 		runAWSSSORenewer(ctx, srv, awsSSORenewInterval, ticks)

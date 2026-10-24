@@ -90,6 +90,39 @@ func requireNestingSemantics(t *testing.T, l Locker) {
 	}
 }
 
+// requireCredentialKeysAscend: several AWS SSO credential locks nest only in
+// ascending Obj, so two whole-person erases cannot each hold what the other
+// waits for; another class's second key still refuses.
+func requireCredentialKeysAscend(t *testing.T, l Locker) {
+	t.Helper()
+	ctx := context.Background()
+	lo, hi := NewLockKey(AWSSSOCredentialLockClass, t.Name(), "a"), NewLockKey(AWSSSOCredentialLockClass, t.Name(), "b")
+	if lo.Obj > hi.Obj {
+		lo, hi = hi, lo
+	}
+	octx, releaseLo, err := l.Lock(ctx, lo, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ictx, releaseHi, err := l.Lock(octx, hi, time.Second)
+	if err != nil {
+		t.Fatalf("a second credential lock in ascending order was refused: %v", err)
+	}
+	if got := len(HeldLocks(ictx)); got != 2 {
+		t.Errorf("held = %d, want 2", got)
+	}
+	releaseHi()
+	releaseLo()
+	hctx, releaseHi, err := l.Lock(ctx, hi, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseHi()
+	if _, _, err := l.Lock(hctx, lo, time.Second); !errors.Is(err, ErrLockOrder) {
+		t.Errorf("a credential lock in descending order nested: %v", err)
+	}
+}
+
 // requireReleaseEndsTheContext: the context a hold returns is the guarded
 // work's and ends with the hold, whichever locker made it, so a caller that
 // keeps using it after unlocking fails in a test with no database too.
@@ -114,6 +147,9 @@ func TestLocalLocker_ReleaseEndsTheContext(t *testing.T) {
 
 func TestLocalLocker_Order(t *testing.T)   { requireOrderEnforced(t, NewLocalLocker()) }
 func TestLocalLocker_Nesting(t *testing.T) { requireNestingSemantics(t, NewLocalLocker()) }
+func TestLocalLocker_CredentialKeysAscend(t *testing.T) {
+	requireCredentialKeysAscend(t, NewLocalLocker())
+}
 func TestLocalLocker_Serializes(t *testing.T) {
 	requireSerializes(t, NewLocalLocker(), NewLocalLocker())
 }
@@ -151,14 +187,14 @@ func requireSerializes(t *testing.T, a, b Locker) {
 }
 
 // The order is pinned to the one documented in docs/design/0.8/0.8.6-ha.md §3
-// and OPERATIONS.md: run operation, Azure DevOps run-token mint/revoke, AWS SSO,
+// and OPERATIONS.md: run operation, Azure DevOps run-token mint/revoke, AWS SSO (person, then credential),
 // Azure DevOps sign-in, the organisation MCP server key, document locks (site config before capability
 // enforcement), the audit sweep last. Reordering the table inverts every
 // nesting it names, and the nestings the daemon really makes (the credential
 // erase takes AWS SSO then the sign-in; a capture takes a credential lock then
 // the site-config lock) run in the api suites under this order's enforcement.
 func TestLockOrderIsTheDocumentedOne(t *testing.T) {
-	want := []int32{RunOpLockClass, ADORunTokenLockClass, AWSSSOLockClass, ADOSignInLockClass,
+	want := []int32{RunOpLockClass, ADORunTokenLockClass, AWSSSOLockClass, AWSSSOCredentialLockClass, ADOSignInLockClass,
 		ComponentKeyLockClass, SiteConfigLockClass, CapEnforcementLockClass, AuditSweepLockClass}
 	if len(LockOrder) != len(want) {
 		t.Fatalf("LockOrder has %d classes, want %d", len(LockOrder), len(want))

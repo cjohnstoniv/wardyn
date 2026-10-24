@@ -22,7 +22,7 @@ func TestPG_MaskErasureAWSWaitKeepsTheDoorGeneration(t *testing.T) {
 	l.personRun(createRenewalOwner, "wait erasure")
 	storeSSOBlobFor(t, b.srv, createRenewalOwner, createWaitBlob())
 	calls := renewedOIDC(t)
-	_, release, err := a.srv.lockAWSSSOOwner(t.Context(), createRenewalOwner)
+	_, release, err := a.srv.lockAWSSSOCredential(t.Context(), createRenewalScope())
 	if err != nil {
 		t.Fatal(err)
 	}
