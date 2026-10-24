@@ -294,11 +294,14 @@ canonical text for that licence is in `licenses/texts/common/`.
 ## Components bundled inside UI packages
 
 Third-party code a UI package ships inside its own tarball. Its licence text is in
-`licenses/texts/npm/<package>/<component>-LICENSE` (list: `licenses/bundled-in-ui-packages.tsv`).
+`licenses/texts/npm/<package>/<component>-LICENSE`, or its notice in `<component>-NOTICE` there; where the
+package ships no text for it, the canonical text is in `licenses/texts/common/` (list: `licenses/bundled-in-ui-packages.tsv`).
 
 | package | component | version | licence |
 |---|---|---|---|
 | `@novnc/novnc` | pako | 1.0.3, the ES-module port noVNC vendors | MIT |
+| `@novnc/novnc` | des | 1.7.0, core/crypto/des.js | BSD-2-Clause AND LicenseRef-noVNC-des |
+| `@novnc/novnc` | keysymdef | 1.7.0, core/input/keysymdef.js, generated from X.Org keysymdef.h | X11 |
 
 ## In-tree components derived from third-party projects
 

@@ -78,18 +78,26 @@ done < "$tmp/ui.tsv"
 
 # Components a UI package bundles inside itself carry their own licence text too. The TSV's tabs become
 # \x1f before the read, as for ui.tsv above: a tab IFS would merge an empty field into the next.
+# A "<file>:<from>-<to>" path is a notice in a source file's header, shipped as <component>-NOTICE; a "-" path
+# ships nothing here, the licence's canonical text below covers it.
 while IFS=$'\x1f' read -r pkg path comp _ _; do
   case "$pkg" in ''|'#'*) continue ;; esac
-  src="ui/node_modules/$pkg/$path"
+  [ "$path" = - ] && continue
+  src="ui/node_modules/$pkg/${path%:*}"
   [ -f "$src" ] || { echo "ERROR: $comp (bundled in $pkg): licence text $src is missing. Failing closed."; exit 1; }
-  mkdir -p "$tmp/out/npm/$pkg"; cp "$src" "$tmp/out/npm/$pkg/$comp-LICENSE"
+  mkdir -p "$tmp/out/npm/$pkg"
+  case "$path" in
+    *:*-*) lines=${path##*:}; sed -n "${lines%-*},${lines#*-}p" "$src" > "$tmp/out/npm/$pkg/$comp-NOTICE" ;;
+    *) cp "$src" "$tmp/out/npm/$pkg/$comp-LICENSE" ;;
+  esac
 done < <(tr '\t' '\037' < licenses/bundled-in-ui-packages.tsv)
 
 # Canonical text for every licence id in use, so a package with no own text is
 # still fully covered. Sourced from licenses/canonical/ (checked in, offline).
 while IFS= read -r id; do
   [ -f "licenses/canonical/$id.txt" ] && cp "licenses/canonical/$id.txt" "$tmp/out/common/$id.txt"
-done < <( { cut -d, -f3 "$tmp/go.csv"; jq -r '.[][] | .license // empty' "$tmp/ui.json"; } \
+done < <( { cut -d, -f3 "$tmp/go.csv"; jq -r '.[][] | .license // empty' "$tmp/ui.json"
+            grep -vE '^[[:space:]]*(#|$)' licenses/bundled-in-ui-packages.tsv | cut -f5 | sed -E 's/ (AND|OR) /,/g'; } \
           | tr ',' '\n' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g' | grep -v '^$' | sort -u )
 
 # ── the index ────────────────────────────────────────────────────────────────
@@ -149,7 +157,8 @@ done < <( { cut -d, -f3 "$tmp/go.csv"; jq -r '.[][] | .license // empty' "$tmp/u
   echo "## Components bundled inside UI packages"
   echo
   echo "Third-party code a UI package ships inside its own tarball. Its licence text is in"
-  echo "\`licenses/texts/npm/<package>/<component>-LICENSE\` (list: \`licenses/bundled-in-ui-packages.tsv\`)."
+  echo "\`licenses/texts/npm/<package>/<component>-LICENSE\`, or its notice in \`<component>-NOTICE\` there; where the"
+  echo "package ships no text for it, the canonical text is in \`licenses/texts/common/\` (list: \`licenses/bundled-in-ui-packages.tsv\`)."
   echo
   echo "| package | component | version | licence |"
   echo "|---|---|---|---|"
