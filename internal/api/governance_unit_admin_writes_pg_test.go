@@ -139,42 +139,74 @@ func (e *unitAdminEnv) addedTo(subject string, u types.GovernanceUnit) bool {
 	return slices.ContainsFunc(ms, func(m types.GovernanceMembership) bool { return m.Subject == subject && m.UnitID == u.ID })
 }
 
+// qualifierChange is what a belonging test does, after the change is held, to the unit q below ua-a
+// whose membership admitted it: nothing, remove the person's row there, or re-parent q under ua-b,
+// out of ua-a's units with the row unchanged.
+type qualifierChange int
+
+const (
+	qualifierKept qualifierChange = iota
+	qualifierRemoved
+	qualifierMovedOut
+)
+
+// changeQualifier applies c to the person's row in unit q, as a security admin.
+func (e *unitAdminEnv) changeQualifier(c qualifierChange, person string, q types.GovernanceUnit) {
+	e.t.Helper()
+	switch c {
+	case qualifierRemoved:
+		if w := e.admin(http.MethodDelete, "/api/v1/governance/memberships/"+e.rowOf(person, q).ID.String(), ""); w.Code != http.StatusNoContent {
+			e.t.Fatalf("remove the row in %s = %d %s, want 204", q.Name, w.Code, w.Body)
+		}
+	case qualifierMovedOut:
+		if w := e.admin(http.MethodPut, "/api/v1/governance/units/"+q.ID.String(), e.restate(q, map[string]any{"parent_id": e.b.ID})); w.Code != http.StatusOK {
+			e.t.Fatalf("re-parent %s under ua-b = %d %s, want 200", q.Name, w.Code, w.Body)
+		}
+	}
+}
+
+// qualifierCases are the belonging tests' cases: the admitting row changed (stale unless the person's
+// ua-a row also admits the change) or not.
+var qualifierCases = []struct {
+	name    string
+	change  qualifierChange
+	alsoInA bool
+	stale   bool
+}{
+	{"the admitting row unchanged", qualifierKept, false, false},
+	{"the admitting row removed since", qualifierRemoved, false, true},
+	{"the admitting row's unit moved out from under ua-a since", qualifierMovedOut, false, true},
+	{"the admitting row removed and another remaining", qualifierRemoved, true, false},
+	{"the admitting row's unit moved out and another remaining", qualifierMovedOut, true, false},
+}
+
 // TestUnitAdminAddRechecksBelonging: a unit admin's add is admitted because the person already belongs
-// in their units, and the decision reads that again under its locks. With the person's ua-a1 row, the
-// one that admitted the add to ua-a2, removed since, ua-a's peer admin approving is stale and creates
-// no row, and a fresh proposal of the same add is refused. With that row unchanged, or removed while a
-// ua-a row that admitted the add too remains, the approval applies.
+// in their units, and the decision reads that again under its locks, against the units below ua-a as
+// they stand. The person's row in q, a unit below ua-a, admits ua-a's admin's add to ua-a2. With that
+// row removed since, or q re-parented out from under ua-a, ua-a's peer admin approving is stale and
+// creates no row, and a fresh proposal of the same add is refused. With it unchanged, or while a ua-a
+// row that admits the add too remains, the approval applies.
 func TestUnitAdminAddRechecksBelonging(t *testing.T) {
 	const person = "sub-ua-placed"
 	user := types.CapabilitySubjectUser
-	for _, tc := range []struct {
-		name                     string
-		alsoInA, removeA1, stale bool
-	}{
-		{"the admitting row removed since", false, true, true},
-		{"the admitting row unchanged", false, false, false},
-		{"one admitting row removed and another remaining", true, true, false},
-	} {
+	for _, tc := range qualifierCases {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newUnitAdminEnv(t, false)
-			a1 := treeMember(t, e.govEnv, e.a1, user, person, 1, false)
+			q := e.child(e.a)
+			treeMember(t, e.govEnv, q, user, person, 1, false)
 			if tc.alsoInA {
 				treeMember(t, e.govEnv, e.a, user, person, 1, false)
 			}
 			add := membershipBody(person, e.a2.ID)
 			ch := e.pending(e.call(e.adminA, http.MethodPost, "/api/v1/governance/memberships", add))
-			if tc.removeA1 {
-				if w := e.admin(http.MethodDelete, "/api/v1/governance/memberships/"+a1.ID.String(), ""); w.Code != http.StatusNoContent {
-					t.Fatalf("remove the ua-a1 row = %d %s, want 204", w.Code, w.Body)
-				}
-			}
+			e.changeQualifier(tc.change, person, q)
 			w := e.call(e.peerA, http.MethodPost, approvePath(ch.ID), "")
 			if tc.stale {
 				if w.Code != http.StatusConflict || wireReason(t, w) != reasonGovernanceChangeStale || e.addedTo(person, e.a2) {
 					t.Fatalf("approving = %d %s with the row added = %v, want 409 %s and no row", w.Code, w.Body, e.addedTo(person, e.a2), reasonGovernanceChangeStale)
 				}
 				if w := e.call(e.adminA, http.MethodPost, "/api/v1/governance/memberships", add); !scopeRefused(t, w) {
-					t.Errorf("a fresh proposal after the removal = %d %s, want 403 unit_scope_denied", w.Code, w.Body)
+					t.Errorf("a fresh proposal since = %d %s, want 403 unit_scope_denied", w.Code, w.Body)
 				}
 				return
 			}
@@ -239,34 +271,25 @@ func TestLegacyDeleteUnitAdminOutOfScope(t *testing.T) {
 }
 
 // TestLegacyDeleteRechecksKeeping: a unit admin's delete is admitted because the person keeps another
-// membership in their units, and the decision reads that again under its locks. The person's rows are
-// in ua-a1, ua-b and ua-a2 at falling priority (and in ua-a too, lowest, in one case), and ua-a's
-// admin deletes the ua-a1 row, held since ua-b takes over. With the ua-a2 row, the one kept in ua-a's
-// units, removed since, a security admin's approval is stale and keeps the row, and a fresh proposal
-// is refused. With it unchanged, or removed while the ua-a row remains, the approval applies.
+// membership in their units, and the decision reads that again under its locks, against the units
+// below ua-a as they stand. The person's legacy rows are in ua-a1, ua-b and q, a unit below ua-a, at
+// falling priority (and in ua-a too, lowest, when another remains), and ua-a's admin deletes the ua-a1
+// row, held since ua-b takes over. With the q row removed since, or q re-parented out from under ua-a,
+// a security admin's approval is stale and keeps the row, and a fresh proposal is refused. With it
+// unchanged, or while the ua-a row remains, the approval applies.
 func TestLegacyDeleteRechecksKeeping(t *testing.T) {
 	const person = "sub-ua-legacy"
-	for _, tc := range []struct {
-		name                     string
-		alsoInA, removeA2, stale bool
-	}{
-		{"the kept row removed since", false, true, true},
-		{"the kept row unchanged", false, false, false},
-		{"one kept row removed and another remaining", true, true, false},
-	} {
+	for _, tc := range qualifierCases {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newUnitAdminEnv(t, false)
-			rest := []types.GovernanceUnit{e.b, e.a2}
+			q := e.child(e.a)
+			rest := []types.GovernanceUnit{e.b, q}
 			if tc.alsoInA {
 				rest = append(rest, e.a)
 			}
 			ch := e.legacyDelete(person, rest...)
 			deleted := e.rowOf(person, e.a1)
-			if tc.removeA2 {
-				if w := e.admin(http.MethodDelete, "/api/v1/governance/memberships/"+e.rowOf(person, e.a2).ID.String(), ""); w.Code != http.StatusNoContent {
-					t.Fatalf("remove the ua-a2 row = %d %s, want 204", w.Code, w.Body)
-				}
-			}
+			e.changeQualifier(tc.change, person, q)
 			w := e.call(e.alice, http.MethodPost, approvePath(ch.ID), "")
 			kept := e.addedTo(person, e.a1)
 			if tc.stale {
@@ -274,7 +297,7 @@ func TestLegacyDeleteRechecksKeeping(t *testing.T) {
 					t.Fatalf("approving = %d %s with the row kept = %v, want 409 %s and the row kept", w.Code, w.Body, kept, reasonGovernanceChangeStale)
 				}
 				if w := e.call(e.adminA, http.MethodDelete, "/api/v1/governance/memberships/"+deleted.ID.String(), ""); !scopeRefused(t, w) {
-					t.Errorf("a fresh proposal after the removal = %d %s, want 403 unit_scope_denied", w.Code, w.Body)
+					t.Errorf("a fresh proposal since = %d %s, want 403 unit_scope_denied", w.Code, w.Body)
 				}
 				return
 			}
