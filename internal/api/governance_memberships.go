@@ -551,30 +551,6 @@ type unitActivation struct {
 	UnitName string    `json:"unit_name"`
 }
 
-// legacyActivations is the units whose legacy rows may take over for someone when legacy row d is
-// deleted (DESIGN-TREE §5.2 H3): a person's first legacy row by precedence is their one active legacy
-// row, so removing it lets the next one rank first. It is computed over the legacy rows of all,
-// conservatively: a group row counts as matching anyone (no session's groups are known here), and two
-// user rows may be one person's sub and email, whose order only that person's claims decide. Only two
-// user_type rows of different types can never match one person.
-func legacyActivations(d types.GovernanceMembership, all []types.GovernanceMembership, units []types.GovernanceUnit) []unitActivation {
-	if !d.Legacy {
-		return nil
-	}
-	byID := unitsByID(units)
-	var out []unitActivation
-	for _, l := range all {
-		if !l.Legacy || l.ID == d.ID || l.UnitID == d.UnitID || !mayRankAfter(d, l, byID) {
-			continue
-		}
-		if !slices.ContainsFunc(out, func(a unitActivation) bool { return a.UnitID == l.UnitID }) {
-			out = append(out, unitActivation{UnitID: l.UnitID, UnitName: byID[l.UnitID].Name})
-		}
-	}
-	slices.SortFunc(out, func(a, b unitActivation) int { return strings.Compare(a.UnitName, b.UnitName) })
-	return out
-}
-
 // legacyShift is what a legacy row's delete or move may do to whose row wins (H3): the units it may
 // make someone's context, and for a move the units it may take someone out of.
 type legacyShift struct {
@@ -773,56 +749,25 @@ func sameUnits(a, b []unitActivation) bool {
 	return true
 }
 
-// subjectTier is a membership's tier in the store's precedence order (store.subjectTierOrder).
-func subjectTier(t types.CapabilitySubjectType) int {
-	switch t {
-	case types.CapabilitySubjectUser:
-		return 0
-	case types.CapabilitySubjectGroup:
-		return 1
-	case types.CapabilitySubjectUserType:
-		return 2
-	}
-	return 3
-}
-
-// mayRankAfter reports whether l may match a person d matches and rank after d for them: the store's
-// precedence (tier, then sub before email, then priority DESC, unit name ASC, subject ASC), read
-// conservatively where it depends on a person's claims.
-func mayRankAfter(d, l types.GovernanceMembership, byID map[uuid.UUID]types.GovernanceUnit) bool {
-	if dt, lt := subjectTier(d.SubjectType), subjectTier(l.SubjectType); dt != lt {
-		return lt > dt
-	}
-	if d.Subject != l.Subject {
-		switch d.SubjectType {
-		case types.CapabilitySubjectUser:
-			return true // a sub and an email: the person's claims order them
-		case types.CapabilitySubjectUserType:
-			return false // a person has one type
-		}
-	}
-	if d.Priority != l.Priority {
-		return l.Priority < d.Priority
-	}
-	if dn, ln := byID[d.UnitID].Name, byID[l.UnitID].Name; dn != ln {
-		return ln > dn
-	}
-	return l.Subject > d.Subject
-}
-
-// activationsAfterDelete is legacyActivations for a legacy row a direct delete removed, over the rows
-// left. It is advisory: a failed read logs and lists none, since the delete has already committed.
+// activationsAfterDelete is deleteActivationsQ for a legacy row a direct delete removed, read after
+// the commit on a rolled-back transaction that puts the row back first, so the order is the
+// resolver's as it stood before the delete. It is advisory: a failed read logs and lists none, since
+// the delete has already committed.
 func (s *Server) activationsAfterDelete(ctx context.Context, removed types.GovernanceMembership) []unitActivation {
 	if !removed.Legacy {
 		return nil
 	}
-	all, err := s.cfg.Store.ListGovernanceMemberships(ctx)
-	if err == nil {
-		var units []types.GovernanceUnit
-		if units, err = s.unitOutlines(ctx); err == nil {
-			return legacyActivations(removed, all, units)
+	var activates []unitActivation
+	err := s.cfg.Store.DryRunGovernance(ctx, func(q store.Querier) (err error) {
+		if err = store.InsertGovernanceMembershipQ(ctx, q, removed); err != nil {
+			return err
 		}
+		activates, err = deleteActivationsQ(ctx, q, removed)
+		return err
+	})
+	if err != nil {
+		slog.ErrorContext(ctx, "api: list the units a legacy membership delete may activate", "membership_id", removed.ID, "err", err)
+		return nil
 	}
-	slog.ErrorContext(ctx, "api: list the units a legacy membership delete may activate", "membership_id", removed.ID, "err", err)
-	return nil
+	return activates
 }

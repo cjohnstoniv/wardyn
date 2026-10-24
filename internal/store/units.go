@@ -471,6 +471,17 @@ func (s PG) DeleteGovernanceMembership(ctx context.Context, id uuid.UUID) (types
 	return a, tx.Commit(ctx)
 }
 
+// InsertGovernanceMembershipQ writes a on q with every column as given, its id and legacy flag
+// included: how a rolled-back read puts back a row a committed delete removed, to read the precedence
+// as it stood before.
+func InsertGovernanceMembershipQ(ctx context.Context, q Querier, a types.GovernanceMembership) error {
+	if _, err := q.Exec(ctx, `INSERT INTO governance_memberships (`+governanceMembershipCols+`) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		a.ID, a.SubjectType, a.Subject, a.UnitID, a.Priority, a.CreatedAt, a.CreatedBy, a.Home, a.Legacy); err != nil {
+		return fmt.Errorf("store: put back governance assignment: %w", err)
+	}
+	return nil
+}
+
 // DeleteGovernanceMembershipQ is the held-change apply's delete on q: ErrNotFound when no row
 // matched, a statement failure as a plain error. It does not read the removed row back.
 func DeleteGovernanceMembershipQ(ctx context.Context, q Querier, id uuid.UUID) error {
