@@ -158,8 +158,33 @@ func (s *Server) handleGovernanceCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	if scope != nil {
 		resp = resp.within(scope, runIn, pick)
+		if err := s.trimContextPaths(r.Context(), resp.Contexts); err != nil {
+			writeServerError(w, r, "read unit scope", err)
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// trimContextPaths cuts each of a unit admin's contexts' paths to what GET /governance shows them of
+// it: the units they govern, leaf first, and the parent of the topmost (scopeGovernanceRead's
+// parent_walls). A unit they govern has every unit below it governed too, so those are a prefix.
+func (s *Server) trimContextPaths(ctx context.Context, contexts []checkContext) error {
+	for i, c := range contexts {
+		n := 0
+		for n < len(c.Path) {
+			in, err := s.unitScope(ctx, c.Path[n].ID, false)
+			if err != nil {
+				return err
+			}
+			if !in {
+				break
+			}
+			n++
+		}
+		contexts[i].Path = c.Path[:min(n+1, len(c.Path))]
+	}
+	return nil
 }
 
 // checkScope is a unit admin's scope over a check: the person the claims describe holds a membership

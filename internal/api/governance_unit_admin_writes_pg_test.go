@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
@@ -352,6 +353,125 @@ func TestLegacyMoveHeldGoesStale(t *testing.T) {
 				t.Fatalf("approving = %d %s with the row moved = %v, want 200 and the row moved", w.Code, w.Body, i >= 0 && ms[i].UnitID != e.a1.ID)
 			}
 		})
+	}
+}
+
+// rowOf is subject's membership in unit u.
+func (e *unitAdminEnv) rowOf(subject string, u types.GovernanceUnit) types.GovernanceMembership {
+	e.t.Helper()
+	ms, err := e.pg.ListGovernanceMemberships(context.Background())
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	i := slices.IndexFunc(ms, func(m types.GovernanceMembership) bool { return m.Subject == subject && m.UnitID == u.ID })
+	if i < 0 {
+		e.t.Fatalf("%s has no membership in %s", subject, u.Name)
+	}
+	return ms[i]
+}
+
+// TestLegacyDeleteHeldGoesStale: a held legacy delete is decided over the units it would activate when
+// held (the person's rows in ua-a1, ua-b and ua-a2 at falling priority, the ua-a1 row deleted, so ua-b
+// takes over). An edit since that changes which row takes over makes the approval stale, even a
+// security admin's, and keeps the row: the ua-b row moved to ua-s, or lowered below the ua-a2 row. An
+// unrelated edit since leaves the approval to apply.
+func TestLegacyDeleteHeldGoesStale(t *testing.T) {
+	const person = "sub-ua-legacy"
+	for _, tc := range []struct {
+		name  string
+		edit  func(e *unitAdminEnv)
+		stale bool
+	}{
+		{"the ua-b row moved to another unit", func(e *unitAdminEnv) {
+			s := treeChild(e.t, e.govEnv, uaUnitBody("ua-s", store.DefaultUnitID, uaDomains("pypi.org"), nil))
+			if w := e.admin(http.MethodPut, "/api/v1/governance/memberships/"+e.rowOf(person, e.b).ID.String(), `{"unit_id":"`+s.ID.String()+`"}`); w.Code != http.StatusOK {
+				e.t.Fatalf("move the ua-b row to ua-s = %d %s", w.Code, w.Body)
+			}
+		}, true},
+		{"the ua-b row lowered below the ua-a2 row", func(e *unitAdminEnv) {
+			if _, err := e.pool.Exec(context.Background(), `UPDATE governance_memberships SET priority = 1 WHERE id = $1`, e.rowOf(person, e.b).ID); err != nil {
+				e.t.Fatalf("lower the ua-b row's priority: %v", err)
+			}
+		}, true},
+		{"an unrelated unit edited", func(e *unitAdminEnv) {
+			if w := e.admin(http.MethodPut, "/api/v1/governance/units/"+e.a2.ID.String(),
+				e.restate(e.a2, map[string]any{"overlay_limits": map[string]any{"deny_interactive": true}})); w.Code != http.StatusOK {
+				e.t.Fatalf("edit ua-a2 = %d %s", w.Code, w.Body)
+			}
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newUnitAdminEnv(t, false)
+			ch := e.legacyDelete(person, e.b, e.a2)
+			deleted := e.rowOf(person, e.a1)
+			tc.edit(e)
+			w := e.call(e.alice, http.MethodPost, approvePath(ch.ID), "")
+			ms, err := e.pg.ListGovernanceMemberships(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			kept := slices.ContainsFunc(ms, func(m types.GovernanceMembership) bool { return m.ID == deleted.ID })
+			if tc.stale {
+				if w.Code != http.StatusConflict || wireReason(t, w) != reasonGovernanceChangeStale || !kept {
+					t.Fatalf("approving = %d %s with the row kept = %v, want 409 %s and the row kept", w.Code, w.Body, kept, reasonGovernanceChangeStale)
+				}
+				return
+			}
+			if w.Code != http.StatusOK || kept {
+				t.Fatalf("approving = %d %s with the row kept = %v, want 200 and the row deleted", w.Code, w.Body, kept)
+			}
+			if c := treeCeiling(t, e.govEnv, treeCtx(person, nil, "")); unitIDOf(c) != e.b.ID {
+				t.Errorf("the person's context is %s after the delete, want ua-b", unitIDOf(c))
+			}
+		})
+	}
+}
+
+// TestLegacyMoveFollowsTheDatabaseOrder: which legacy row a move hands a person is read in the
+// resolver's own order, so the database's collation sorts the unit names, not Go's byte order. The
+// person's rows are in ua-a1 and UA-M at one priority, and the ua-a1 row moves to ua-n below it. Under
+// a case-folding collation ua-a1 < UA-M < ua-n, so the move hands the person UA-M and is held; in byte
+// order UA-M sorts first on both sides and the move changes nothing. The move's answer and the unit
+// recorded as activated must match the order the database applies, and the resolver's pick after it.
+func TestLegacyMoveFollowsTheDatabaseOrder(t *testing.T) {
+	e := newUnitAdminEnv(t, false)
+	m := treeChild(t, e.govEnv, uaUnitBody("UA-M", store.DefaultUnitID, uaDomains("pypi.org"), nil))
+	group := types.CapabilitySubjectGroup
+	w, to, _ := e.legacyMove(legacyRow{unit: e.a1, st: group, subject: "ua-g1", priority: 5},
+		legacyRow{unit: m, st: group, subject: "ua-g2", priority: 5}, "ua-n")
+	var order []uuid.UUID
+	rows, err := e.pool.Query(context.Background(), `SELECT id FROM governance_units WHERE id = ANY($1) ORDER BY name`, []uuid.UUID{e.a1.ID, m.ID, to.ID})
+	if err == nil {
+		order, err = pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	}
+	if err != nil {
+		t.Fatalf("read the database's order of the unit names: %v", err)
+	}
+	var collation string
+	_ = e.pool.QueryRow(context.Background(), `SELECT datcollate FROM pg_database WHERE datname = current_database()`).Scan(&collation)
+	held := slices.Equal(order, []uuid.UUID{e.a1.ID, m.ID, to.ID})
+	t.Logf("collation %q orders the names %v: the move is held = %v (byte order would never hold it)", collation, order, held)
+	who := treeCtx("sub-ua-collation", []string{"ua-g1", "ua-g2"}, "")
+	if !held {
+		if w.Code != http.StatusOK || e.pendingCount() != 0 {
+			t.Fatalf("move = %d %s with %d pending, want 200 and none", w.Code, w.Body, e.pendingCount())
+		}
+		if c := treeCeiling(t, e.govEnv, who); unitIDOf(c) != m.ID {
+			t.Errorf("the person's context is %s after the move, want UA-M as before it", unitIDOf(c))
+		}
+		return
+	}
+	ch := e.pending(w)
+	stored, err := e.pg.GetGovernanceChange(context.Background(), ch.ID)
+	var diff governanceDiffBody
+	if err != nil || json.Unmarshal(stored.Diff, &diff) != nil || len(diff.Activates) != 1 || diff.Activates[0].UnitID != m.ID {
+		t.Fatalf("the held move records activates %+v (%v), want UA-M alone", diff.Activates, err)
+	}
+	if w := e.call(e.alice, http.MethodPost, approvePath(ch.ID), ""); w.Code != http.StatusOK {
+		t.Fatalf("a security admin approving = %d %s, want 200", w.Code, w.Body)
+	}
+	if c := treeCeiling(t, e.govEnv, who); unitIDOf(c) != m.ID {
+		t.Errorf("the resolver picks %s after the move, want UA-M, the unit the move recorded", unitIDOf(c))
 	}
 }
 
