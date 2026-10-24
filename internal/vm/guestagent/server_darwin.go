@@ -45,6 +45,9 @@ type Server struct {
 	MarkerDir string
 	// Desktop is the guest's Screen Sharing; nil serves no desktop requests (tests only).
 	Desktop *Desktop
+	// ToolsDial is how the agent's tools-port dial ended (ServeTools), answered as GET /v1/dial/tools;
+	// nil serves no such request. The tools requests themselves are never served here.
+	ToolsDial *ToolsDialRecord
 
 	// signal signals a process group; nil is kill(2) (tests hold or fail it).
 	signal func(pgid int, sig unix.Signal) error
@@ -114,6 +117,9 @@ func (s *Server) Handler() (http.Handler, error) {
 	mux.HandleFunc("GET /v1/exec/{id}/output", s.handleOutput)
 	if s.Desktop != nil {
 		s.Desktop.Register(mux)
+	}
+	if s.ToolsDial != nil {
+		mux.Handle("GET /v1/dial/tools", s.ToolsDial)
 	}
 	mux.HandleFunc("POST /v1/agent/pause", func(w http.ResponseWriter, r *http.Request) { s.signalAgent(w, r, unix.SIGSTOP) })
 	mux.HandleFunc("POST /v1/agent/resume", func(w http.ResponseWriter, r *http.Request) { s.signalAgent(w, r, unix.SIGCONT) })

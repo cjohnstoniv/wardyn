@@ -169,3 +169,22 @@ func TestUnsupportedExchangeIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// The staging dir's own base lock is not the base's update lock: a clone of
+// <base>.update must not wait on the update that built it.
+func TestLockPathsOfBaseAndStagingDiffer(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "0")
+	paths := map[string]string{
+		"base lock":           baseLockPath(base),
+		"update lock":         updateLockPath(base),
+		"staging base lock":   baseLockPath(base + ".update"),
+		"staging update lock": updateLockPath(base + ".update"),
+	}
+	seen := map[string]string{}
+	for name, p := range paths {
+		if other, ok := seen[p]; ok {
+			t.Fatalf("the %s and the %s are both %s", name, other, p)
+		}
+		seen[p] = name
+	}
+}

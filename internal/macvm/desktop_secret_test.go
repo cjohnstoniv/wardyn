@@ -39,7 +39,7 @@ func openDesktop(t *testing.T, r *runRig, m *macvmtest.Machine, password string,
 		}
 		appleFake{version: "RFB 003.889\n", offered: []byte{2}, password: password}.serve(t, guest)
 	}()
-	viewer, err := net.Dial("unix", filepath.Join(r.dir, macvm.DesktopSock))
+	viewer, err := net.Dial("unix", filepath.Join(r.sock, macvm.DesktopSock))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -99,7 +99,7 @@ func initEnv(env, secret map[string]string, ca []string) []string {
 }
 
 // CmdRunner runs one command to completion and returns its stdout. The darwin code reaches launchctl,
-// kickstart, osascript and id only through it, so a fake stands in for them in tests.
+// osascript and id only through it, so a fake stands in for them in tests.
 type CmdRunner interface {
 	Run(ctx context.Context, name string, args ...string) ([]byte, error)
 }

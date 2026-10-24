@@ -40,6 +40,12 @@ type guest struct {
 	sw func(argv []string) (string, int)
 	// version overrides a version check's output.
 	version map[string]string
+	// passwords are the desktop passwords set, in order; passwordSet, if set,
+	// answers whether the nth (1-based) was set.
+	passwords   []string
+	passwordSet func(n int) bool
+	// pointerX/Y is where the guest's pointer is.
+	pointerX, pointerY int
 }
 
 func newGuest() *guest { return &guest{files: map[string][]byte{}, version: map[string]string{}} }
@@ -81,6 +87,24 @@ func (g *guest) Run(_ context.Context, argv []string) (string, int, error) {
 	}
 	return "", 0, nil
 }
+
+func (g *guest) DesktopPassword(_ context.Context, pw []byte) (bool, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.passwords = append(g.passwords, string(pw))
+	if g.passwordSet != nil {
+		return g.passwordSet(len(g.passwords)), nil
+	}
+	return true, nil
+}
+
+func (g *guest) Pointer(context.Context) (int, int, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.pointerX, g.pointerY, nil
+}
+
+func (g *guest) ToolsDial(context.Context) (string, error) { return macvm.ToolsDialConnected, nil }
 
 func (g *guest) ran(prefix ...string) bool {
 	g.mu.Lock()

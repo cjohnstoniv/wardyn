@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // RunOptions configures one helper `run`.
@@ -37,6 +39,8 @@ type RunOptions struct {
 	// in its admission entry (admission.Ledger.ClaimHelper) and does not
 	// start when that fails.
 	Claim func(RunConfig) error
+	// SockFstat replaces fstat(2) in the socket directory checks (tests).
+	SockFstat func(fd int, name string) (unix.Stat_t, error)
 }
 
 // DefaultStopTimeout is the graceful stop allowance when none is given.
@@ -49,10 +53,11 @@ var ErrNetworkLost = errors.New("macvm: the macOS VM lost its network")
 const hardStopWait = 15 * time.Second
 
 type runner struct {
-	o      RunOptions
-	cfg    RunConfig
-	id     Identity
-	events eventHub
+	o       RunOptions
+	cfg     RunConfig
+	id      Identity
+	events  eventHub
+	sockDir string
 
 	mu      sync.Mutex
 	st      Status
@@ -88,8 +93,13 @@ func Run(ctx context.Context, o RunOptions) error {
 	if err != nil {
 		return err
 	}
+	sockDir, err := makeRunSockDir(o, cfg)
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(sockDir)
 	r := &runner{
-		o: o, cfg: cfg,
+		o: o, cfg: cfg, sockDir: sockDir,
 		netCh:   make(chan *os.File, 1),
 		stopReq: make(chan stopRequest, 1),
 		stopped: make(chan struct{}),
@@ -145,7 +155,7 @@ func (r *runner) run(ctx context.Context) error {
 		return fmt.Errorf("macvm: build VM: %w", err)
 	}
 
-	ctl, err := listenUnix(filepath.Join(r.o.RunDir, ControlSock))
+	ctl, err := listenUnix(filepath.Join(r.sockDir, ControlSock))
 	if err != nil {
 		return err
 	}
@@ -210,6 +220,7 @@ func (r *runner) run(ctx context.Context) error {
 
 	stopServing, err := r.serveGuest(m)
 	if err != nil {
+		r.setState(StateError, err.Error())
 		r.finish(m, stopRequest{})
 		return err
 	}
@@ -237,7 +248,9 @@ func (r *runner) run(ctx context.Context) error {
 }
 
 // serveGuest listens for the guest agent's vsock connections and serves
-// agent.sock (and desktop.sock when a shim is set).
+// agent.sock (and desktop.sock when a shim is set). Every vsock listener is
+// registered first, and the set is checked before agent.sock exists, so
+// runnerd can send no Init to a VM listening on anything but a run's ports.
 func (r *runner) serveGuest(m Machine) (func(), error) {
 	var closers []io.Closer
 	cleanup := func() {
@@ -245,34 +258,49 @@ func (r *runner) serveGuest(m Machine) (func(), error) {
 			_ = c.Close()
 		}
 	}
-	add := func(port uint32, sock string, open []byte, serve func(host, guest net.Conn)) error {
-		gl, err := m.Listen(port)
+	type guestPort struct {
+		port  uint32
+		sock  string
+		open  []byte
+		serve func(host, guest net.Conn)
+	}
+	ports := []guestPort{{port: AgentPort, sock: AgentSock, serve: splice}}
+	if r.o.Desktop != nil {
+		ports = append(ports, guestPort{port: DesktopPort, sock: DesktopSock, open: []byte{DesktopOpenByte}, serve: r.o.Desktop.ServeDesktop})
+	}
+	for _, port := range runExtraPorts {
+		ports = append(ports, guestPort{port: port, sock: "tools.sock", serve: splice})
+	}
+	listeners := make([]net.Listener, len(ports))
+	for i, gp := range ports {
+		gl, err := m.Listen(gp.port)
 		if err != nil {
-			return fmt.Errorf("macvm: vsock %d: %w", port, err)
+			cleanup()
+			return nil, fmt.Errorf("macvm: vsock %d: %w", gp.port, err)
 		}
 		closers = append(closers, gl)
-		p := newPairer(open)
-		if port == AgentPort {
-			p.connected = func() { r.events.publish(Event{Type: EventGuestAgent, Detail: "connected"}) }
-		}
-		go p.acceptGuest(gl)
-		hl, err := listenUnix(filepath.Join(r.o.RunDir, sock))
-		if err != nil {
-			return err
-		}
-		closers = append(closers, hl, closerFunc(p.close))
-		go servePaired(hl, p, serve)
-		return nil
+		listeners[i] = gl
+		r.mu.Lock()
+		r.st.Listeners = append(r.st.Listeners, gp.port)
+		r.mu.Unlock()
 	}
-	if err := add(AgentPort, AgentSock, nil, splice); err != nil {
+	if err := checkRunListeners(r.status().Listeners); err != nil {
 		cleanup()
 		return nil, err
 	}
-	if r.o.Desktop != nil {
-		if err := add(DesktopPort, DesktopSock, []byte{DesktopOpenByte}, r.o.Desktop.ServeDesktop); err != nil {
+	for i, gp := range ports {
+		p := newPairer(gp.open)
+		if gp.port == AgentPort {
+			p.connected = func() { r.events.publish(Event{Type: EventGuestAgent, Detail: "connected"}) }
+		}
+		go p.acceptGuest(listeners[i])
+		hl, err := listenUnix(filepath.Join(r.sockDir, gp.sock))
+		if err != nil {
 			cleanup()
 			return nil, err
 		}
+		closers = append(closers, hl, closerFunc(p.close))
+		go servePaired(hl, p, gp.serve)
 	}
 	return cleanup, nil
 }

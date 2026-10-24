@@ -5,10 +5,14 @@ package guestagent
 
 import (
 	"bytes"
+	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -22,7 +26,8 @@ func newDarwinServer(t *testing.T) (*Server, *fakeRunner, http.Handler) {
 	t.Helper()
 	r := &fakeRunner{}
 	s := &Server{Version: "t", Home: t.TempDir(), User: "agent", OutDir: t.TempDir(), MarkerDir: t.TempDir(),
-		Desktop: &Desktop{Run: r, Console: fakeConsole{uid: 502}}}
+		Desktop:   &Desktop{Run: r, Console: fakeConsole{uid: 502}, VNCSettings: filepath.Join(t.TempDir(), "com.apple.VNCSettings.txt")},
+		ToolsDial: &ToolsDialRecord{}}
 	h, err := s.Handler()
 	if err != nil {
 		t.Fatal(err)
@@ -50,9 +55,10 @@ func TestDarwinInitRunDiskDesktopAndCA(t *testing.T) {
 	if pw, ok := s.Desktop.Password(); !ok || pw != "Abcd2345" {
 		t.Errorf("no run password after Init: %q %v", pw, ok)
 	}
-	if len(r.calls) == 0 || !slices.Equal(r.calls[0], append([]string{kickstart}, KickstartArgs("Abcd2345")...)) {
-		t.Errorf("Init did not set the VNC password: %v", r.calls)
+	if got, err := os.ReadFile(s.Desktop.VNCSettings); err != nil || !bytes.Equal(got, VNCSettingsLine("Abcd2345")) {
+		t.Errorf("Init did not write the VNC password: %q %v", got, err)
 	}
+	noArgvHolds(t, r, "Abcd2345")
 	if w := postInit(h, Init{}); w.Code != http.StatusConflict {
 		t.Errorf("second Init = %d", w.Code)
 	}
@@ -82,11 +88,10 @@ func TestDarwinInitSignInsOffRunsAgentOnlyWithNoDesktop(t *testing.T) {
 	if _, ok := s.Desktop.Password(); ok {
 		t.Error("a password was set")
 	}
-	for _, c := range r.calls {
-		if c[0] == kickstart {
-			t.Errorf("kickstart ran: %v", c)
-		}
+	if _, err := os.Stat(s.Desktop.VNCSettings); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the VNC settings file was written: %v", err)
 	}
+	noArgvHolds(t, r, "Abcd2345")
 }
 
 func TestDarwinInitSignInsOffDisablesTheDesktopEvenIfWritingFails(t *testing.T) {
@@ -229,34 +234,59 @@ func TestDarwinThePauseOrderOutlivesAServiceRestartNotABoot(t *testing.T) {
 }
 
 // Init sets the host's password in Screen Sharing and says whether it did: an Init with none (from a
-// runner that predates it), and one whose kickstart fails, answer desktop_password_set false, so the
+// runner that predates it), and one whose settings write fails, answer desktop_password_set false, so the
 // helper's shim cannot log in and refuses the desktop. The agent never makes a password of its own.
 func TestDarwinInitReportsWhetherTheDesktopPasswordIsSet(t *testing.T) {
-	s, r, h := newDarwinServer(t)
+	s, _, h := newDarwinServer(t)
 	if w := postInit(h, Init{}); w.Code != 200 || !strings.Contains(w.Body.String(), `"desktop_password_set":false`) {
 		t.Fatalf("Init with no password = %d %s", w.Code, w.Body)
 	}
 	if _, ok := s.Desktop.Password(); ok {
 		t.Error("the agent made a password of its own")
 	}
-	for _, c := range r.calls {
-		if c[0] == kickstart {
-			t.Errorf("kickstart ran with no password: %v", c)
-		}
+	if _, err := os.Stat(s.Desktop.VNCSettings); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the VNC settings file was written with no password: %v", err)
 	}
 
-	s, r, h = newDarwinServer(t)
-	r.out = func(a []string) ([]byte, error) {
-		if a[0] == kickstart {
-			return nil, errors.New("not permitted")
-		}
-		return nil, nil
-	}
+	s, _, h = newDarwinServer(t)
+	s.Desktop.VNCSettings = filepath.Join(t.TempDir(), "missing", "com.apple.VNCSettings.txt")
 	w := postInit(h, Init{DesktopPassword: "Abcd2345"})
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `"desktop_password_set":false`) || strings.Contains(w.Body.String(), "Abcd2345") {
-		t.Fatalf("Init whose kickstart fails = %d %s", w.Code, w.Body)
+		t.Fatalf("Init whose settings write fails = %d %s", w.Code, w.Body)
 	}
 	if _, ok := s.Desktop.Password(); ok {
 		t.Error("a password that was not set is held")
+	}
+}
+
+// toolsRoutes is one request per tools-mode route, for the 404-on-the-control-session test.
+var toolsRoutes = []struct{ method, path, body string }{
+	{"POST", "/v1/tools/push?dest=/usr/local/bin/x&mode=755&size=1&sha256=" + hex.EncodeToString(make([]byte, 32)), ""}, // 400 before any write
+	{"POST", "/v1/tools/exec", `{"argv":["/usr/sbin/softwareupdate","-l"]}`},
+	{"GET", "/v1/tools/pointer", ""},
+	{"POST", "/v1/tools/desktop_password", `{"password":"Abcd2345"}`},
+}
+
+// The control session serves no tools request: each answers 404 there, while the session that arrived
+// on the tools port (ToolsHandler) serves them. The control session does answer the tools dial's report.
+func TestDarwinToolsRoutesAre404OnTheControlSession(t *testing.T) {
+	s, _, h := newDarwinServer(t)
+	tools := (&Tools{Desktop: s.Desktop, run: func(context.Context, []string) ([]byte, int, error) { return nil, 0, nil }}).ToolsHandler()
+	for _, rt := range toolsRoutes {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(rt.method, rt.path, strings.NewReader(rt.body)))
+		if w.Code != http.StatusNotFound {
+			t.Errorf("control session: %s %s = %d, want 404", rt.method, rt.path, w.Code)
+		}
+		w = httptest.NewRecorder()
+		tools.ServeHTTP(w, httptest.NewRequest(rt.method, rt.path, strings.NewReader(rt.body)))
+		if w.Code == http.StatusNotFound {
+			t.Errorf("tools session: %s %s = 404", rt.method, rt.path)
+		}
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/v1/dial/tools", nil))
+	if w.Code != 200 {
+		t.Errorf("GET /v1/dial/tools on the control session = %d", w.Code)
 	}
 }

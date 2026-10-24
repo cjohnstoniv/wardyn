@@ -1,0 +1,182 @@
+// Copyright 2026 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package admission
+
+import (
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+func (v *view) alive(pid int, start int64) bool {
+	for _, p := range v.procs {
+		if p.PID == pid && p.Start == start {
+			return true
+		}
+	}
+	return false
+}
+
+// vzCount is how many Virtualization processes uid has.
+func (v *view) vzCount(uid int) int { return v.count(uid, VirtualizationProcess) }
+
+// helperCount is how many helper processes uid has.
+func (v *view) helperCount(uid int) int { return v.count(uid, HelperProcess) }
+
+// count is how many of uid's processes have a (possibly truncated) name that
+// is a prefix of name.
+func (v *view) count(uid int, name string) int {
+	n := 0
+	for _, p := range v.procs {
+		if p.UID == uid && p.Name != "" && strings.HasPrefix(name, p.Name) {
+			n++
+		}
+	}
+	return n
+}
+
+// helperGone: the entry's helper (or, for an entry with no helper yet, its
+// owner runnerd) is no longer the process it was.
+func (v *view) helperGone(e Entry) bool {
+	if e.HelperPID != 0 {
+		return !v.alive(e.HelperPID, e.HelperStart)
+	}
+	return !v.alive(e.OwnerPID, e.OwnerStart)
+}
+
+// tombstonable is the tombstone condition: an entry of this boot, not
+// leaked, whose helper is gone while no Virtualization process and no helper
+// process of its uid remains. (A helper whose runnerd died before recording
+// it is still a helper process, so its entry is never tombstoned under it.)
+func (v *view) tombstonable(e Entry) bool {
+	return e.BootTime == v.boot && e.Kind != KindLeaked && v.helperGone(e) &&
+		v.vzCount(e.UID) == 0 && v.helperCount(e.UID) == 0
+}
+
+// tombstoned: a tombstone exists and the condition still holds now.
+func (v *view) tombstoned(e Entry) bool {
+	_, ok := v.tombs[e.file]
+	return ok && v.tombstonable(e)
+}
+
+// ReclaimOwn removes one of this runner's entries whose helper died without
+// reporting a stop, or that another login tombstoned: allowed once the helper
+// is gone, this uid has no more Virtualization or helper processes than its
+// other counted entries with a live helper (so none of them can be this
+// entry's VM), and the run dir (empty: none) is gone. That last step is the
+// owner's reconcile, which frees a tombstoned entry's disk debt.
+func (l *Ledger) ReclaimOwn(id, runDir string) error {
+	return l.withLock(func() error {
+		v, err := l.load()
+		if err != nil {
+			return err
+		}
+		e, err := l.own(v, id)
+		if err != nil {
+			return err
+		}
+		if e.BootTime == v.boot {
+			if e.Kind == KindLeaked {
+				return errors.New("admission: a leaked slot clears only when the Mac restarts")
+			}
+			if !v.helperGone(e) {
+				return errors.New("admission: the helper is still running")
+			}
+			others := 0
+			for _, o := range v.counted {
+				if o.ID != e.ID && o.UID == e.UID && o.HelperPID != 0 && v.alive(o.HelperPID, o.HelperStart) {
+					others++
+				}
+			}
+			if v.vzCount(e.UID) > others || v.helperCount(e.UID) > others {
+				return errors.New("admission: a Virtualization or helper process of this user may still be this VM")
+			}
+		}
+		if runDir != "" {
+			if _, err := os.Lstat(runDir); !os.IsNotExist(err) {
+				return errors.New("admission: the run directory is not gone yet")
+			}
+		}
+		return l.remove(e)
+	})
+}
+
+// Sweep tidies this login's files and tombstones other logins' dead entries
+// (helper gone and no Virtualization process of that uid), never a leaked
+// one. It never deletes another login's file. It returns how many
+// tombstones it wrote.
+func (l *Ledger) Sweep() (int, error) {
+	n := 0
+	err := l.withLock(func() error {
+		v, err := l.load()
+		if err != nil {
+			return err
+		}
+		l.tidy(v)
+		for _, e := range v.all {
+			if e.UID == l.c.UID || !v.tombstonable(e) {
+				continue
+			}
+			if _, ok := v.tombs[e.file]; ok {
+				continue
+			}
+			if err := l.writeFile(e.file+tombSuffix, tombstoneBody(e)); err != nil {
+				return err
+			}
+			n++
+		}
+		return nil
+	})
+	return n, err
+}
+
+// tidy runs in each writing transaction: this login deletes its own entries
+// from an earlier boot, and its own tombstones whose entry is gone or from an
+// earlier boot. Its own tombstoned entries stay until ReclaimOwn reconciles
+// them, since their disk is a debt until the run files are gone.
+func (l *Ledger) tidy(v *view) {
+	byFile := map[string]Entry{}
+	for _, e := range v.all {
+		byFile[e.file] = e
+		if e.UID == l.c.UID && e.BootTime != v.boot {
+			if os.Remove(filepath.Join(l.c.Dir, e.file)) == nil {
+				delete(byFile, e.file)
+			}
+		}
+	}
+	for entry, t := range v.tombs {
+		if t.owner != l.c.UID {
+			continue
+		}
+		if e, ok := byFile[entry]; !ok || e.BootTime != v.boot {
+			_ = os.Remove(filepath.Join(l.c.Dir, t.name))
+		}
+	}
+}
+
+// tombstoneBody records the tombstone's state: the slot and memory are
+// recovered, the disk and the owner's files are not.
+func tombstoneBody(e Entry) []byte {
+	b, _ := json.Marshal(map[string]any{
+		"entry": e.ID, "capacity": "recovered", "owner_cleanup": "pending", "disk_debt_bytes": e.DiskReserve,
+	})
+	return append(b, '\n')
+}
+
+// Debts returns the honoured-tombstoned entries whose disk is still held
+// (owner-file cleanup pending).
+func (l *Ledger) Debts() ([]Entry, error) {
+	var out []Entry
+	err := l.withLock(func() error {
+		v, err := l.load()
+		if err != nil {
+			return err
+		}
+		out = v.debts
+		return nil
+	})
+	return out, err
+}
