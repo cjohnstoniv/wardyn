@@ -74,6 +74,20 @@ no_vendored_novnc() {
   [ -z "$bad" ] || { echo "ERROR: @novnc/novnc must ship unmodified:$bad"; return 1; }
 }
 
+# bundled_texts_present -> fails unless every component a UI package bundles (licenses/bundled-in-ui-packages.tsv)
+# is under a bare-allowlisted licence and has its text, the same bytes as the package's, and its notices row.
+bundled_texts_present() {
+  local bad="" pkg path comp lic txt
+  while IFS=$'\t' read -r pkg path comp _ lic; do
+    case "$pkg" in ''|'#'*) continue ;; esac
+    txt="licenses/texts/npm/$pkg/$comp-LICENSE"
+    [ -z "$(residue "$lic")" ] || bad+=" $comp ($pkg) is $lic, not on the allowlist;"
+    cmp -s "ui/node_modules/$pkg/$path" "$txt" || bad+=" $comp ($pkg) has no $txt matching ui/node_modules/$pkg/$path;"
+    grep -qF "| \`$pkg\` | $comp |" THIRD-PARTY-NOTICES.md || bad+=" $comp ($pkg) has no THIRD-PARTY-NOTICES.md row;"
+  done < licenses/bundled-in-ui-packages.tsv
+  [ -z "$bad" ] || { echo "ERROR: a bundled component's licence is not shipped:$bad"; return 1; }
+}
+
 if [ "${1:-}" = "--self-test" ]; then
   fail=0
   check() { # check <expr> <allow|reject>
@@ -122,5 +136,5 @@ if [ -n "$bad" ]; then
   jq . "$LICENSES_JSON"
   exit 1
 fi
-(cd .. && no_vendored_novnc)
+(cd .. && no_vendored_novnc && bundled_texts_present)
 echo "All $n production dependency licences are on the allowlist."

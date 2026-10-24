@@ -252,6 +252,15 @@ canonical text for that licence is in `licenses/texts/common/`.
 |---|---|---|---|
 | `react-remove-scroll-bar` | 2.3.8 | MIT | Anton Korzunov |
 
+## Components bundled inside UI packages
+
+Third-party code a UI package ships inside its own tarball. Its licence text is in
+`licenses/texts/npm/<package>/<component>-LICENSE` (list: `licenses/bundled-in-ui-packages.tsv`).
+
+| package | component | version | licence |
+|---|---|---|---|
+| `@novnc/novnc` | pako | 1.0.3, the ES-module port noVNC vendors | MIT |
+
 ## In-tree components derived from third-party projects
 
 Not dependencies — third-party source adapted into this repository, and therefore
