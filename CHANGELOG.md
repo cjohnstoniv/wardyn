@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Before you upgrade
+
+- 0.10 can't be rolled back by redeploying 0.9.x: its migrations rename tables and change constraints. Take a database backup first.
+
 ## [0.10.0-rc.1] — 2026-10-24
 
 ### Before you upgrade
