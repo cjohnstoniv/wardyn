@@ -54,7 +54,7 @@ jobs:
   plan:
     name: plan
     if: startsWith(github.ref, 'refs/heads/proofs/')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
@@ -80,7 +80,7 @@ jobs:
     name: prove (${{ matrix.package }})
     needs: plan
     if: startsWith(github.ref, 'refs/heads/proofs/')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: ${{ matrix.timeout }}
     strategy:
       fail-fast: false
