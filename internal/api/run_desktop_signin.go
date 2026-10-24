@@ -154,6 +154,11 @@ func (s *Server) desktopSigninDispatch(ctx context.Context, run types.AgentRun, 
 			mustJSON(map[string]any{"reason": off, "image": image, "signin_image": variant})))
 		return false, image
 	}
+	// The row's image is the provenance of what the sandbox ran, and the
+	// create path wrote the pre-swap ref (best-effort, as there).
+	if err := s.cfg.Store.SetRunImage(ctx, run.ID, variant); err != nil {
+		slog.ErrorContext(ctx, "wardynd: persist run sign-in image failed", slog.String("run_id", run.ID.String()), slog.Any("err", err))
+	}
 	return true, variant
 }
 
