@@ -70,6 +70,7 @@
 - A mixed-version `wardynd` rollout, a `wardynd` rollback, or a `wardyn-runnerd` downgrade mid-run sends requests with none. A resume from the older side then answers `409` and the run stays paused: its failure row's `error` keeps the guest's answer.
 - During a rolling control-plane upgrade, a desktop sign-in pause can stay paused until it is resumed from an upgraded server. Resume it from an upgraded `wardynd`, or reboot the VM, which clears `/run`.
 - The older side's pause still acts and keeps the old order, which the newer side's stop again narrows and does not close.
+- An older side's pause that failed after its stop leaves the agent stopped with no pause recorded, as a `wardynd` crash above does. Press the pause from an upgraded `wardynd`, then resume.
 - A run whose `wardyn-runnerd` or guest image predates the pause generation keeps the old order, and its audit row says `fenced` false. Its guest agent signals each request as it handles it, in no set order, and ignores a cancel once a request has reached it.
 - On such a run, a continue the guest agent received earlier can still take effect after a later stop, even the stop again. The steps above narrow that gap and do not close it. Upgrade `wardyn-runnerd` and rebuild the guest image to close it.
 - On such a run, a `wardynd` that exits, cannot take the lock again within 30 seconds, or fails to stop the agent again leaves such a continue in place. Nothing retries the stop, and the agent runs while the run page says paused.
