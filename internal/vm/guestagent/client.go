@@ -85,14 +85,22 @@ func (c *Client) Init(ctx context.Context, in Init) (InitResult, error) {
 	return r, c.do(ctx, http.MethodPost, "/v1/init", in, &r)
 }
 
-// PauseAgent stops the latest detached exec's process group; ErrNoExec when none is running.
-func (c *Client) PauseAgent(ctx context.Context) error {
-	return c.do(ctx, http.MethodPost, "/v1/agent/pause", nil, nil)
+// PauseAgent stops the latest detached exec's process group; ErrNoExec when none is running. gen is
+// the pause's generation (AgentSignal), and fenced says the agent ordered the request by it: false from
+// an agent that predates it, which signals every request as it arrives.
+func (c *Client) PauseAgent(ctx context.Context, gen int64) (fenced bool, err error) {
+	return c.signalAgent(ctx, "/v1/agent/pause", gen)
 }
 
-// ResumeAgent continues it; ErrNoExec when none is running.
-func (c *Client) ResumeAgent(ctx context.Context) error {
-	return c.do(ctx, http.MethodPost, "/v1/agent/resume", nil, nil)
+// ResumeAgent continues it; see PauseAgent.
+func (c *Client) ResumeAgent(ctx context.Context, gen int64) (fenced bool, err error) {
+	return c.signalAgent(ctx, "/v1/agent/resume", gen)
+}
+
+func (c *Client) signalAgent(ctx context.Context, path string, gen int64) (bool, error) {
+	var res AgentSignalResult
+	err := c.do(ctx, http.MethodPost, path, AgentSignal{Generation: gen}, &res)
+	return res.FencedPause, err
 }
 
 // State is a detached exec's state.

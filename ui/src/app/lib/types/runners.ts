@@ -99,6 +99,8 @@ export interface RunnerView {
   offline_summary?: RunnerOfflineSummary;
   /** One-runner reads only: the runner's last run relay check; runner-reported, absent for a runner with no relay. */
   relay_status?: RunnerRelayStatus;
+  /** One-runner reads only: how many of its exit receipts the organisation parked (refused on every try, no longer retried); absent for none. */
+  parked_exits?: number;
 }
 
 /** The `wardyn-runnerd doctor` stage names an offline summary names. Go: types.RunnerStages. */

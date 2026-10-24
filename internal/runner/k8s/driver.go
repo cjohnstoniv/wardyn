@@ -226,6 +226,9 @@ type Driver struct {
 	// restarted wardynd has neither.
 	execOutputs sync.Map
 
+	// olderProxyWarned says once that the proxy image is older than proxyReadyRelease.
+	olderProxyWarned sync.Once
+
 	// runLocks serialise each run's evidence read-modify-write (runner mode).
 	runLocks sync.Map
 	// brackets routes a creating pod's start-wait reads through its bracket (runner mode).

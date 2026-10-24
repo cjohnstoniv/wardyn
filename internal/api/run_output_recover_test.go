@@ -375,9 +375,9 @@ func TestRecoverRunOutput_NeverReplacesAFinalRowOrReadsForAnErasedRun(t *testing
 
 // TestRunOutput_UncapturedRunnerSaysSo: on a runner that cannot capture an
 // exec's output (Kubernetes under the recorder) a run keeps no tail, its end
-// neither reads the substrate nor writes a row, and every read, live or after
-// the end, is refused as not captured, naming the recording, never served as a
-// complete, empty capture. A runner that captures is unchanged: a run that
+// neither reads the substrate nor writes a row, and a live read is refused as
+// not captured, naming the recording, never served as a complete, empty
+// capture. Ended with no recording received, it reads as a run that kept none. A runner that captures is unchanged: a run that
 // printed nothing still reads as complete and empty.
 func TestRunOutput_UncapturedRunnerSaysSo(t *testing.T) {
 	rr := newRecoveringRunner()
@@ -406,7 +406,13 @@ func TestRunOutput_UncapturedRunnerSaysSo(t *testing.T) {
 	if n := rr.recoverCount(); n != 0 {
 		t.Fatalf("the run's end read the substrate %d times", n)
 	}
-	readsNotCaptured("ended")
+	// No recording store here, so no recording was received: the ended run kept no output.
+	w := do(t, f.srv, http.MethodGet, "/api/v1/runs/"+f.run.ID.String()+"/output", adminToken, "")
+	var refusal errorBody
+	_ = json.Unmarshal(w.Body.Bytes(), &refusal)
+	if w.Code != http.StatusConflict || refusal.Reason != reasonRunOutputNotKept || refusal.Error != "no output is kept for this run" {
+		t.Fatalf("ended: %d %s, want 409 %s: no recording was received", w.Code, w.Body, reasonRunOutputNotKept)
+	}
 
 	c := newOutputFixture(t)
 	c.open(t)

@@ -226,10 +226,19 @@ func (s *Server) refMethod(ctx context.Context, method string, args json.RawMess
 		if !ok {
 			return nil, runner.ErrAgentPauseUnsupported
 		}
-		if method == runnerwire.MethodPauseAgent {
-			return nil, p.PauseAgent(ctx, ref)
+		pa, err := decode[runnerwire.AgentPauseArgs](args)
+		if err != nil {
+			return nil, err
 		}
-		return nil, p.ResumeAgent(ctx, ref)
+		call := p.ResumeAgent
+		if method == runnerwire.MethodPauseAgent {
+			call = p.PauseAgent
+		}
+		fenced, err := call(ctx, ref, pa.Generation)
+		if !fenced {
+			return nil, err // as a runner that predates the generation answers
+		}
+		return runnerwire.AgentPauseResult{FencedPause: true}, err
 	case runnerwire.MethodStopProxy:
 		p, ok := s.sub.(runner.ProxyStopper)
 		if !ok {

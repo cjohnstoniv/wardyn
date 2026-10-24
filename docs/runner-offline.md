@@ -33,6 +33,47 @@ matching terminal transition and audit. Pending receipts and incomplete cleanup
 block another generation. The worker retries shared terminal effects after
 restart; checked stream callbacks never wait for same-peer teardown RPCs.
 
+The worker runs every 5 seconds, but a receipt that failed waits its own delay
+before its next try: 5 seconds, doubling to a 5-minute cap. An identical error
+is logged once per such interval, with `repeated` counting the lines left out.
+A restart retries every pending receipt at once. A receipt the organisation
+refuses as a foreign, stale or incomplete incarnation on 8 tries in a row
+(about ten minutes) is parked (migration `0232_runner_exit_parked.sql`): the
+row is kept with `parked_at` set, a `runner.exit.park` audit row records the
+tries and the error, and the worker no longer retries it. `wardyn doctor` on
+the runner's computer reports it as a failed `runner-exits` stage.
+
+## A parked exit receipt
+
+A parked receipt is never completed, so the organisation refuses every later
+generation of its run: the run cannot be started or given a new incarnation
+on any runner, and it keeps the state the organisation last recorded.
+
+To release the run:
+
+1. Read the run's `runner.exit.park` audit row, and check that the refusal it
+   names is permanent: the runner was revoked, or the run moved on.
+2. Stop anything of that run still running on the runner by hand, and settle
+   the run's state if it needs settling: releasing the receipt runs none of its
+   terminal effects (the transition if the exit was never accepted, the
+   sandbox teardown).
+3. As the database owner, mark the receipt complete:
+
+   ```sql
+   UPDATE runner_execution_exits SET tail_complete = true
+    WHERE run_id = '<run id>' AND parked_at IS NOT NULL;
+   ```
+
+The receipt stays, still marked parked, for the record. A later generation
+of the run can start, and `wardyn doctor` no longer counts it.
+
+The runner retries failed containment on every pass of its 1-second loop, with
+no added backoff, until it holds. A run whose replay to the organisation fails
+waits its own delay, 5 seconds doubling to 5 minutes, and never holds up the
+other runs' replay. The `runner containment will retry` error and the replay
+loop's warnings are logged like the exit sweep's: an identical line once per
+interval, 5 seconds growing to 5 minutes, with a `repeated` count.
+
 Live activity uses a separate, bounded per-run marker under the proxy-only state
 mount. Admission captures a fresh connection epoch; reconnect invalidates it.
 Only a new admitted decision from the current epoch may send an unbuffered

@@ -63,8 +63,19 @@
 - If `wardynd` crashes after the guest agent stopped the agent but before the pause was recorded, the agent stays stopped and the run page offers the pause again. Press it, which records the pause (the agent is already stopped), then "Resume the agent".
 - A stop that reaches the guest only after a failed pause has continued the agent leaves it stopped the same way, and is recovered the same way.
 - A failed pause continues the agent, as a resume does. Once `wardynd` sees that it lost the run's lock meanwhile, it cancels a continue the guest agent has not received yet. Holding the lock again, it stops the agent again if another pause has marked the row since, as a continue already received may have landed after that pause's stop.
-- These steps narrow the gap and do not close it. The guest agent signals each request as it handles it, in no set order, and ignores a cancel once a request has reached it. A continue it received earlier can still take effect after a later stop, even the stop again.
-- A `wardynd` that exits, cannot take the lock again within 30 seconds, or fails to stop the agent again leaves such a continue in place. Nothing retries the stop, and the agent runs while the run page says paused. A failed stop again answers that the agent could not be paused. Press "Resume the agent", then pause again.
+- Each pause takes the run's next pause generation, which the database keeps, and so does each stop again. Every stop and continue carries a generation to the guest agent.
+- The guest agent drops a request older than the newest it has seen, and a stop that reaches it after the continue of its own generation, and answers `409`. It checks and signals under one lock.
+- So a continue that reaches the guest agent late, after a later pause's stop, does not run the agent, and a stop delivered again after the resume does not stop it. The pause-to-resume's audit row says `fenced` true.
+- The guest agent keeps that order in `/run`: a restart of its service keeps it, and the guest's boot clears it.
+- Once it has seen a generation, the guest agent still obeys a stop with none, as a pause only protects a sign-in, and logs it. It drops a continue with none, answering `409` `stale_unfenced_resume`, and the agent stays paused until a resume with a generation.
+- A mixed-version `wardynd` rollout, a `wardynd` rollback, or a `wardyn-runnerd` downgrade mid-run sends requests with none. A resume from the older side then answers `409` and the run stays paused: its failure row's `error` keeps the guest's answer.
+- During a rolling control-plane upgrade, a desktop sign-in pause can stay paused until it is resumed from an upgraded server. Resume it from an upgraded `wardynd`, or reboot the VM, which clears `/run`.
+- The older side's pause still acts and keeps the old order, which the newer side's stop again narrows and does not close.
+- An older side's pause that failed after its stop leaves the agent stopped with no pause recorded, as a `wardynd` crash above does. Press the pause from an upgraded `wardynd`, then resume.
+- A run whose `wardyn-runnerd` or guest image predates the pause generation keeps the old order, and its audit row says `fenced` false. Its guest agent signals each request as it handles it, in no set order, and ignores a cancel once a request has reached it.
+- On such a run, a continue the guest agent received earlier can still take effect after a later stop, even the stop again. The steps above narrow that gap and do not close it. Upgrade `wardyn-runnerd` and rebuild the guest image to close it.
+- On such a run, a `wardynd` that exits, cannot take the lock again within 30 seconds, or fails to stop the agent again leaves such a continue in place. Nothing retries the stop, and the agent runs while the run page says paused.
+- A failed stop again answers that the agent could not be paused. Press "Resume the agent", then pause again.
 
 ### Host memory
 
