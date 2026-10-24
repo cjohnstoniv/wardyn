@@ -78,11 +78,12 @@ no_vendored_novnc() {
 # expr_ok <expression> <package> -> true when every id in a non-empty expression is on the bare allowlist or
 # scoped to that package. Whole ids, never substrings: "MIT-open-group" is not MIT.
 expr_ok() {
-  local id seen=""
+  local id seen="" bare
+  bare="$(grep -vE '^[[:space:]]*(#|$)' "$ALLOWED_LICENSES_FILE" | awk 'NF == 1')"
   for id in ${1//[()]/ }; do
     case "$id" in AND|OR|WITH) continue ;; esac
     seen=1
-    grep -vE '^[[:space:]]*(#|$)' "$ALLOWED_LICENSES_FILE" | awk 'NF == 1' | grep -qxF -- "$id" || scoped_ok "$id" "$2" || return 1
+    grep -qxF -- "$id" <<<"$bare" || scoped_ok "$id" "$2" || return 1
   done
   [ -n "$seen" ]
 }
