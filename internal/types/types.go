@@ -170,7 +170,7 @@ type AgentRun struct {
 	// the run's life; empty when the run is recorded (or predates the field).
 	NotRecorded RunNotRecorded `json:"not_recorded,omitempty"`
 	// MachineKind is the kind of the run's sandbox: empty for a container (every run before the
-	// field), or linux_vm. Written once at create.
+	// field), linux_vm or macos_vm. Written once at create.
 	MachineKind MachineKind `json:"machine_kind,omitempty"`
 	// VMMachine is the virtual hardware a VM run was started with, recorded after its create; nil
 	// for a container.

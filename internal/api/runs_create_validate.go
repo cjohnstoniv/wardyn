@@ -117,8 +117,8 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 		writeErrorReason(w, http.StatusBadRequest, reasonRunTaskReserved, fmt.Sprintf("task %q is set by the server and cannot be requested directly", req.Task))
 		return req, noCeiling, "", "", false
 	}
-	if err := types.MachineKind(req.MachineKind).Validate(); err != nil {
-		writeErrorReason(w, http.StatusBadRequest, reasonMachineKindUnknown, err.Error())
+	if msg := machineKindRefusal(types.MachineKind(req.MachineKind)); msg != "" {
+		writeErrorReason(w, http.StatusBadRequest, reasonMachineKindUnknown, msg)
 		return req, noCeiling, "", "", false
 	}
 
@@ -222,6 +222,28 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	// derived value would otherwise trip.
 	req.ToolApprovals = effectiveToolApprovals(req, ceiling)
 	return req, ceiling, reqCC, warning, true
+}
+
+// macOSVMsOff is the create refusal of machine_kind macos_vm while WARDYN_MACOS_VMS is off.
+const macOSVMsOff = "macOS virtual machines are turned off in this organisation."
+
+// machineKindRefusal is why kind cannot be created, or "" when it can. With WARDYN_MACOS_VMS off the
+// closed set is today's two kinds, and a refusal reads as it did before macos_vm existed, except that
+// macos_vm itself says the switch is off.
+func machineKindRefusal(kind types.MachineKind) string {
+	if envEnabled(envMacOSVMs) {
+		if err := kind.Validate(); err != nil {
+			return err.Error()
+		}
+		return ""
+	}
+	switch kind {
+	case "", types.MachineContainer, types.MachineLinuxVM:
+		return ""
+	case types.MachineMacOSVM:
+		return macOSVMsOff
+	}
+	return fmt.Sprintf("machine_kind %q is neither %q nor %q", string(kind), types.MachineContainer, types.MachineLinuxVM)
 }
 
 // requestIsInteractive reports a create request's POST-COERCION interactivity:
