@@ -9,7 +9,9 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -52,12 +54,43 @@ type desktopPause struct {
 // desktop and the organisation keeps recordings; any other connection is returned as it is. The
 // browser's side is never read (recording.ReadSideConn), so keystrokes are never recorded. A run its
 // runner declined to record is still recorded here: this relay is Wardyn's, as for a console session.
-func (s *Server) recordDesktopConn(run types.AgentRun, sess uiSession, conn net.Conn) net.Conn {
-	if sess.App != desktopApp || !s.desktopRecorded(run) {
+// closed, when set, runs once the recording is stored (watchDesktopApp's stop).
+func (s *Server) recordDesktopConn(run types.AgentRun, sess uiSession, conn net.Conn, closed func()) net.Conn {
+	if !s.recordsDesktopApp(run, sess) {
 		return conn
 	}
 	rec := recording.NewRFBRecorder(s.cfg.Now)
-	return recording.ReadSideConn(conn, rec, s.trackDesktopRecording(run, sess, rec))
+	stored := s.trackDesktopRecording(run, sess, rec)
+	return recording.ReadSideConn(conn, rec, func() {
+		stored()
+		if closed != nil {
+			closed()
+		}
+	})
+}
+
+// recordsDesktopApp is whether recordDesktopConn records sess's connections on run.
+func (s *Server) recordsDesktopApp(run types.AgentRun, sess uiSession) bool {
+	return sess.App == desktopApp && s.desktopRecorded(run)
+}
+
+// watchDesktopApp admits a recorded desktop app connection as a Linux VM's display is admitted
+// (serveDesktopRFB): the recording is held from the first frame while the run has an open take over or,
+// on a Linux VM, its sign-in row marks a pause, and either read failing refuses the connection (503).
+// The watch starts now, before the dial, so a pause or take over on another replica during the dial is
+// held within the same bound. stop ends it, once the connection's recording is stored; it is a no-op
+// for any other connection.
+func (s *Server) watchDesktopApp(ctx context.Context, run types.AgentRun, sess uiSession) (stop func(), err error) {
+	if !s.recordsDesktopApp(run, sess) {
+		return func() {}, nil
+	}
+	signIn, err := s.watchVMSignIn(ctx, run.ID)
+	if err != nil {
+		return nil, uiFail(ctx, http.StatusServiceUnavailable, reasonDesktopSignInsUnavailable, desktopSignInsUnreadableMsg)
+	}
+	wctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	go signIn.watch(wctx)
+	return sync.OnceFunc(func() { cancel(); signIn.stop() }), nil
 }
 
 // recordVMDisplay is recordDesktopConn on a Linux VM's display, framed as the clipboard filter reads it
@@ -269,6 +302,23 @@ func (d *desktopRecordings) holds(run uuid.UUID, hold string) bool {
 	defer d.mu.Unlock()
 	r := d.byRun[run]
 	return r != nil && r.paused != nil && slices.Contains(r.paused.holders, hold)
+}
+
+// heldWith lists the holds on run's open gap here whose id starts with prefix.
+func (d *desktopRecordings) heldWith(run uuid.UUID, prefix string) []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	r := d.byRun[run]
+	if r == nil || r.paused == nil {
+		return nil
+	}
+	var out []string
+	for _, h := range r.paused.holders {
+		if strings.HasPrefix(h, prefix) {
+			out = append(out, h)
+		}
+	}
+	return out
 }
 
 // auditDesktopResume writes desktop.recording.resume for gap p, ending now.

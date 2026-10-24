@@ -89,7 +89,8 @@ docs/operations/who-gets-in.md=1952 share=35
 # docs/operations/admin-only-writes.md 3700 adds 2 over 3698, measured (0.10 OC-API1b): a launch preset blocks removing a user type.
 # docs/operations/admin-only-writes.md 3729 = ours 3700 + theirs 3727 - base 3698 at the 0.10 W4c merge of origin/main ba16e8564 (W4b) onto the train.
 # docs/operations/admin-only-writes.md 3820 = ours 3760 + theirs 3791 - base 3731 at the 0.10 UNIT-ADMIN merge of RESTRICT-PIN 35c385de1.
-docs/operations/admin-only-writes.md=3820 share=35 # tightened from 3738 to the measured count at the 0.10 W4d merge
+# docs/operations/admin-only-writes.md 3855 adds 35 over 3820, measured (#2967 DESK-LOCKS row 5): the /governance/recording tier row.
+docs/operations/admin-only-writes.md=3855 share=35 # tightened from 3738 to the measured count at the 0.10 W4d merge
 # docs/operations/admin-only-writes.md 3730 adds 32 over 3698, measured (0.10 LAY-A): the /governance/walls tier row.
 # docs/operations/admin-only-writes.md 3727 measured (0.10 BOUNDARY): the /governance/boundary tier row.
 # docs/operations/admin-only-writes.md 3760 adds 29 over 3731, measured (0.10 unit admins): the unit-admin tier row, and the promotion named in the security row.
@@ -117,7 +118,8 @@ docs/operations/ownership-and-offboarding.md=2414 share=35
 # docs/operations/governance-writes.md 3171 measured (0.10 BOUNDARY): the org walls renamed the Wardyn boundary, with modes.
 # docs/operations/governance-writes.md 3529 adds 51 over 3478, measured (0.10 unit admins): a unit admin's widening is always held; a security admin's grant follows the switch.
 # docs/operations/governance-writes.md 3564 = ours 3529 + theirs 3513 - base 3478 at the 0.10 UNIT-ADMIN merge of RESTRICT-PIN 35c385de1.
-docs/operations/governance-writes.md=3564 share=35
+# docs/operations/governance-writes.md 3572 adds 8 over 3564, measured (#2967 DESK-LOCKS row 5): the recording level row in the covered-writes table.
+docs/operations/governance-writes.md=3572 share=35
 # 0.9.4 L8: docs/operations/member-runs.md 1054 adds 10 over 1044: ssh_key delivery claims bounded.
 docs/operations/member-runs.md=1054 share=35
 # docs/operations/user-drives.md 4818 adds 14 over 4804 (0.9 release text for the fix sets merged at release); measured.

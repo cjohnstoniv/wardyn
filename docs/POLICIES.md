@@ -980,6 +980,7 @@ The match is exact, so it would never fire and would silently read as enforcemen
 - A required setting (the organisation's or a runner pool's `recording: required`) records at least `terminal`. With `WARDYN_RECORDING_STORE=off` nothing is recorded at any level.
 - Keystrokes are never recorded. No value names them, and the desktop relay never reads the browser's side of the stream.
 - The level is resolved once at dispatch and kept on the run as `recording_level`; a run resolved to `off` is `not_recorded: policy_off`.
+- A take over keeps no screen frames until the hand back, on every replica and after a restart. After a `wardynd` restart during a take over, the earlier `desktop.recording.pause` row has no matching resume; the new process writes and closes its own.
 
 ## `harness_inner_walls` — `HarnessInnerWalls`
 

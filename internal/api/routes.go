@@ -858,6 +858,8 @@ func (s *Server) mountPermissionRoutes(securityOps chi.Router) {
 	securityOps.Put("/governance/egress-baseline", s.handlePutEgressBaseline)
 	securityOps.Get("/governance/boundary", s.handleGetBoundary)
 	securityOps.Put("/governance/boundary", s.handlePutBoundary)
+	securityOps.Get("/governance/recording", s.handleGetRecording)
+	securityOps.Put("/governance/recording", s.handlePutRecording)
 	s.mountGovernanceRestrictionRoutes(securityOps)
 	securityOps.Get("/governance/approval-rules", s.handleListApprovalRules)
 	securityOps.Post("/governance/approval-rules/dry-run", s.handleApprovalRuleDryRun)

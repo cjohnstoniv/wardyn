@@ -149,6 +149,9 @@ func (s *Server) handleGovernanceCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	runIn, err := s.runInFromRequest(r.Context(), createRunRequest{RunIn: req.RunIn})
+	if err == nil && scope != nil && runIn != uuid.Nil {
+		err = s.runInWithinScope(r.Context(), runIn)
+	}
 	if err == nil {
 		resp.Effective, err = s.checkEffective(r.Context(), q, contextChoice{RunIn: runIn})
 	}
@@ -158,8 +161,44 @@ func (s *Server) handleGovernanceCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	if scope != nil {
 		resp = resp.within(scope, runIn, pick)
+		if err := s.trimContextPaths(r.Context(), resp.Contexts); err != nil {
+			writeServerError(w, r, "read unit scope", err)
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// runInWithinScope refuses a unit admin's run_in of a unit they do not govern with errUnitNotAContext,
+// the answer for a unit that does not exist or is not the person's: whether the person is in a unit
+// outside the caller's units is not theirs to learn, so all three read the same.
+func (s *Server) runInWithinScope(ctx context.Context, unit uuid.UUID) error {
+	in, err := s.unitScope(ctx, unit, false)
+	if err == nil && !in {
+		err = errUnitNotAContext
+	}
+	return err
+}
+
+// trimContextPaths cuts each of a unit admin's contexts' paths to what GET /governance shows them of
+// it: the units they govern, leaf first, and the parent of the topmost (scopeGovernanceRead's
+// parent_walls). A unit they govern has every unit below it governed too, so those are a prefix.
+func (s *Server) trimContextPaths(ctx context.Context, contexts []checkContext) error {
+	for i, c := range contexts {
+		n := 0
+		for n < len(c.Path) {
+			in, err := s.unitScope(ctx, c.Path[n].ID, false)
+			if err != nil {
+				return err
+			}
+			if !in {
+				break
+			}
+			n++
+		}
+		contexts[i].Path = c.Path[:min(n+1, len(c.Path))]
+	}
+	return nil
 }
 
 // checkScope is a unit admin's scope over a check: the person the claims describe holds a membership
@@ -190,17 +229,28 @@ func (s *Server) checkScope(w http.ResponseWriter, r *http.Request, q contextQue
 	return scope, true
 }
 
-// within is a check's answer as a unit admin may read it: the contexts and dormant memberships in the
-// units they govern, the home context's fields only when it is one of those, and the effective walls
-// only of a context that is.
+// within is a check's answer as a unit admin may read it: the contexts, dormant memberships and
+// workspace groups in the units they govern, the home context's fields only when it is one of those,
+// and the effective walls only of a context that is. The restrictions are left out, as GET
+// /governance leaves them out for a unit admin (scopeGovernanceRead), and so is the name of one that
+// set a knob: the walls' provenance says only that a restriction did, so it names no more than the
+// provenance GET /governance gives them (wallsProvenance).
 func (c governanceCheckResponse) within(scope map[uuid.UUID]bool, runIn uuid.UUID, home contextPick) governanceCheckResponse {
 	if !scope[c.UnitID] {
 		c.governancePreviewResponse = governancePreviewResponse{}
 	}
 	c.Contexts = slices.DeleteFunc(c.Contexts, func(x checkContext) bool { return !scope[x.UnitID] })
 	c.Dormant = slices.DeleteFunc(c.Dormant, func(x checkDormant) bool { return !scope[x.UnitID] })
+	c.Restrictions = nil
+	c.Workspaces = slices.DeleteFunc(c.Workspaces, func(x checkWorkspaceGroup) bool { return x.UnitID == nil || !scope[*x.UnitID] })
 	if asked := cmp.Or(runIn, home.unit.ID); !scope[asked] {
 		c.Effective = nil
+	} else if c.Effective != nil {
+		for k, p := range c.Effective.Provenance {
+			if p.Layer == policyref.LayerRestriction {
+				c.Effective.Provenance[k] = policyref.Provenance{Layer: p.Layer}
+			}
+		}
 	}
 	return c
 }

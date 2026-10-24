@@ -82,9 +82,9 @@ export function NeedsYouBanner({
   }, [apId]);
 
   // Mirrors the server's takeoverRecorded: a runner that declined still has the console and SSH
-  // sessions recorded here; an organisation that keeps no recordings, or a harness login run (never
-  // recorded), means the takeover is not recorded.
-  const recorded = run.not_recorded !== "org_off" && run.task !== HARNESS_LOGIN_TASK;
+  // sessions recorded here; an organisation that keeps no recordings, a run whose policy set recording
+  // to Off (it records no session), or a harness login run (never recorded), means the takeover is not recorded.
+  const recorded = run.not_recorded !== "org_off" && run.not_recorded !== "policy_off" && run.task !== HARNESS_LOGIN_TASK;
 
   if (done) {
     return (

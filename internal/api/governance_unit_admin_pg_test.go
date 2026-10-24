@@ -19,6 +19,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -373,6 +374,130 @@ func TestUnitAdminReadsNoPathProvenance(t *testing.T) {
 				t.Errorf("%s %s as %s carries path_provenance = %v, want %v", req[0], req[1], tc.who, got, tc.want)
 			}
 		}
+	}
+}
+
+// TestUnitAdminCheckWithinScope: a unit admin's POST /governance/check carries no restrictions (no spec,
+// limits or contact) and of the person's workspaces only the group pinned to a unit they govern, so
+// no unit outside their units is named; a security admin's check carries all of it. The effective
+// walls' provenance is no richer than GET /governance's: the knob the restriction set says only that
+// a restriction did, where a security admin's names it. A context's path is GET's shape too: an admin
+// of a unit two below ua-a reads the path up to ua-a1, the parent of their unit, and no unit above.
+func TestUnitAdminCheckWithinScope(t *testing.T) {
+	e := newUnitAdminEnv(t, false)
+	person := e.fresh("sub-ua-person")
+	treeMember(t, e.govEnv, e.a1, types.CapabilitySubjectUser, person, 1, false)
+	r := types.RestrictionWrite{Name: "ua-check-r", Spec: types.RestrictionSpec{DeniedDomains: strs("denied.ua.example")},
+		Contact: &policyref.Contact{Email: "restrictions@ua.example"}, Members: []types.RestrictionMember{userMember(person)}}
+	if w := e.call(e.alice, http.MethodPost, "/api/v1/governance/restrictions", restrictionJSON(t, r)); w.Code != http.StatusCreated {
+		t.Fatalf("create the restriction = %d %s", w.Code, w.Body)
+	}
+	for name, unit := range map[string]uuid.UUID{"ua-ws-in": e.a1.ID, "ua-ws-out": e.b.ID} {
+		ws, err := e.pg.CreateWorkspace(context.Background(), types.Workspace{
+			ID: uuid.New(), Name: name, OwnedBy: person, Status: types.WorkspaceScanned,
+			Sources:   []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeEphemeral, Target: "/home/agent/work"}},
+			CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+		})
+		if err == nil {
+			_, err = e.pg.SetWorkspaceOwningUnit(context.Background(), ws.ID, &unit)
+		}
+		if err != nil {
+			t.Fatalf("seed workspace %s: %v", name, err)
+		}
+	}
+	check := `{"user_subjects":["` + person + `"]}`
+	for _, tc := range []struct {
+		who  string
+		c    *http.Cookie
+		want bool
+	}{
+		{"ua-a's admin", e.adminA, false},
+		{"a security admin", e.alice, true},
+	} {
+		w := e.call(tc.c, http.MethodPost, "/api/v1/governance/check", check)
+		var got governanceCheckResponse
+		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &got) != nil {
+			t.Fatalf("check as %s = %d %s", tc.who, w.Code, w.Body)
+		}
+		whole := len(got.Restrictions) == 1 && got.Restrictions[0].Spec.DeniedDomains != nil &&
+			got.Restrictions[0].Contact != nil && got.Restrictions[0].Contact.Email == "restrictions@ua.example"
+		if whole != tc.want || (!tc.want && strings.Contains(w.Body.String(), `"restrictions":`)) {
+			t.Errorf("check as %s: restrictions %+v, want them whole = %v", tc.who, got.Restrictions, tc.want)
+		}
+		var names []string
+		for _, g := range got.Workspaces {
+			names = append(names, g.UnitName+":"+strings.Join(g.Names, ","))
+		}
+		want := []string{"ua-a1:ua-ws-in"}
+		if tc.want {
+			want = append(want, "ua-b:ua-ws-out")
+		}
+		if !slices.Equal(names, want) || strings.Contains(w.Body.String(), `"ua-b"`) != tc.want {
+			t.Errorf("check as %s: workspaces %v, want %v and ua-b named = %v", tc.who, names, want, tc.want)
+		}
+		wantRec := policyref.Provenance{Layer: policyref.LayerRestriction}
+		if tc.want {
+			wantRec.Name = r.Name
+		}
+		if got.Effective == nil || got.Effective.Provenance["denied_domains"] != wantRec || strings.Contains(w.Body.String(), r.Name) != tc.want {
+			t.Errorf("check as %s: denied_domains provenance %+v, want %+v and the restriction named = %v", tc.who, got.Effective, wantRec, tc.want)
+		}
+	}
+	mid := e.child(e.a1)
+	leaf := e.child(mid)
+	deep, admin := e.fresh("sub-ua-deep"), e.fresh("sub-ua-mid-admin")
+	treeMember(t, e.govEnv, leaf, types.CapabilitySubjectUser, deep, 1, false)
+	e.grant(mid, types.CapabilitySubjectUser, admin)
+	for _, tc := range []struct {
+		who  string
+		c    *http.Cookie
+		want []uuid.UUID
+	}{
+		{"the admin of the unit below ua-a1", uaSession(t, admin, []string{}, false), []uuid.UUID{leaf.ID, mid.ID, e.a1.ID}},
+		{"a security admin", e.alice, []uuid.UUID{leaf.ID, mid.ID, e.a1.ID, e.a.ID}},
+	} {
+		w := e.call(tc.c, http.MethodPost, "/api/v1/governance/check", `{"user_subjects":["`+deep+`"]}`)
+		var got governanceCheckResponse
+		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &got) != nil || len(got.Contexts) != 1 {
+			t.Fatalf("check as %s = %d %s, want 200 and one context", tc.who, w.Code, w.Body)
+		}
+		var path []uuid.UUID
+		for _, l := range got.Contexts[0].Path {
+			path = append(path, l.ID)
+		}
+		if len(path) < len(tc.want) || !slices.Equal(path[:len(tc.want)], tc.want) || (tc.c != e.alice && len(path) != len(tc.want)) {
+			t.Errorf("check as %s: path %v, want it to open with %v (and end there below a security admin)", tc.who, path, tc.want)
+		}
+		if named := strings.Contains(w.Body.String(), `"ua-a"`); named != (tc.c == e.alice) {
+			t.Errorf("check as %s names ua-a = %v", tc.who, named)
+		}
+	}
+}
+
+// TestUnitAdminCheckRunInOutsideScope: a unit admin's run_in of a unit they do not govern answers as a
+// unit that is not the person's does, so the check does not tell them whether the person is in it.
+// ua-a's admin naming ua-b for a person in ua-a1 and ua-b, for one in ua-a1 only, and naming a unit no
+// one holds reads the same status and body; naming ua-a1, which they govern, answers 200.
+func TestUnitAdminCheckRunInOutsideScope(t *testing.T) {
+	e := newUnitAdminEnv(t, false)
+	user, both, only := types.CapabilitySubjectUser, e.fresh("sub-ua-both"), e.fresh("sub-ua-only")
+	treeMember(t, e.govEnv, e.a1, user, both, 1, false)
+	treeMember(t, e.govEnv, e.b, user, both, 2, false)
+	treeMember(t, e.govEnv, e.a1, user, only, 1, false)
+	check := func(person, runIn string) *httptest.ResponseRecorder {
+		return e.call(e.adminA, http.MethodPost, "/api/v1/governance/check", `{"user_subjects":["`+person+`"],"run_in":"`+runIn+`"}`)
+	}
+	in, out, none := check(both, "ua-b"), check(only, "ua-b"), check(both, "ua-nowhere")
+	if in.Code != http.StatusForbidden || wireReason(t, in) != reasonUnitNotAContext {
+		t.Fatalf("run_in ua-b for a person in it = %d %s, want 403 %s", in.Code, in.Body, reasonUnitNotAContext)
+	}
+	for what, w := range map[string]*httptest.ResponseRecorder{"a person not in it": out, "a unit no one holds": none} {
+		if w.Code != in.Code || w.Body.String() != in.Body.String() {
+			t.Errorf("run_in for %s = %d %s, want byte for byte the answer for a person in it: %d %s", what, w.Code, w.Body, in.Code, in.Body)
+		}
+	}
+	if w := check(both, "ua-a1"); w.Code != http.StatusOK {
+		t.Errorf("run_in ua-a1, a unit they govern = %d %s, want 200", w.Code, w.Body)
 	}
 }
 

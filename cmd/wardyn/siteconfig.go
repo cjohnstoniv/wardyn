@@ -201,6 +201,10 @@ func siteConfigSetCmd(client clientFn) *cobra.Command {
 			if res.EgressBaselineIgnored {
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: the egress baseline in this file was not applied — it is a governance write; set it with PUT /api/v1/governance/egress-baseline, and the stored one is left as it is\n")
 			}
+			// The recording level likewise: the SDK sends the document without it.
+			if res.RecordingIgnored {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: the recording level in this file was not applied — it is a governance write; set it with PUT /api/v1/governance/recording, and the stored one is left as it is\n")
+			}
 			if res.BrandingLogoPending {
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: branding.logo_path was not attached — the console has no branding yet; save the Branding card (Admin view, Settings), then apply this file again\n")
 			}

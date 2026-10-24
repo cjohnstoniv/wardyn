@@ -79,7 +79,7 @@
       "@types/react-dom": "19.3.0",
       "brace-expansion@^2": "2.1.4",
       "brace-expansion@^5": "5.0.12",
-      "undici": "8.11.2",
+      "undici": "8.12.2",
       "whatwg-url@^17": "17.2.0",
       "postcss": "8.5.23",
       "source-map-js": "1.2.2",
@@ -95,7 +95,8 @@
       "@csstools/css-parser-algorithms": "4.0.2",
       "@csstools/color-helpers": "6.1.2",
       "seroval": "1.6.8",
-      "seroval-plugins": "1.6.8"
+      "seroval-plugins": "1.6.8",
+      "zod": "4.6.6"
     }
   }
 }

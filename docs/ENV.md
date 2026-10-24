@@ -161,7 +161,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_RUNNERD_HARD_DENY_CIDRS` | CIDR list | (unset) | **`serve --substrate k8s`**, chart-set: further in-cluster CIDRs (pod and Service ranges) every proxy hard-denies |
 | `WARDYN_RUNNERD_POD_SELECTOR` | JSON object | (required) | **`serve --substrate k8s`**, chart-set: runnerd's own pod labels, which each run's proxy NetworkPolicy admits for the relay and sink ports |
 | `WARDYN_RUNNERD_ARCH` | `amd64` or `arm64` | (required for k8s) | **`register`, `serve --substrate k8s`**, `--arch`'s twin, chart `sandbox.arch`: run pods get this `kubernetes.io/arch` node selector and the runner reports it. Another selector arch refuses boot; Docker refuses it. Mixed clusters install one release per arch |
-| `WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY` | bool | on | **`wardynd` and `wardyn-runnerd`, Docker substrate**: each run's proxy serves only callers on the run's own network; others are closed before a byte is read. Proven on Docker; not tested on Podman |
+| `WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY` | bool | on | **`wardynd` and `wardyn-runnerd`, Docker substrate**: each run's proxy serves only callers on the run's own network; others are closed before a byte is read. Proven on Docker; not tested on Podman. [Details](#wardyn_docker_proxy_sandbox_peers_only) |
 | `WARDYN_DOCKER_RUN_SUBNET_POOL` | IPv4 CIDR | (unset) | **`wardynd` and `wardyn-runnerd`, Docker substrate**: the range each run's network takes its own small subnet from, so runs stop using up the daemon's `default-address-pools`. Unset, the daemon picks each subnet. A full range refuses the run, naming this setting. [Details](OPERATIONS.md#docker-host-one-subnet-per-run) |
 | `WARDYN_DOCKER_RUN_SUBNET_SIZE` | int | `28` | **same**: the prefix length of each run's subnet in `WARDYN_DOCKER_RUN_SUBNET_POOL`, from the range's own length to `29`. Set without the pool, it refuses boot |
 | `WARDYN_ALLOW_UNENFORCEABLE_CAPS` | bool | off | escape hatch: allow a run to start on a host where the resource caps (memory/pids/cpu) can't actually be enforced. Off by default, the gate fails closed; it applies to sandbox launches only. [Details](#wardyn_allow_unenforceable_caps) |
@@ -702,6 +702,12 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Reviving or restarting a run whose agent still runs takes no extra slot and is never refused for it.
 - `0` (the default) is unlimited.
 - Separate from a governance profile's per-member `max_concurrent_runs`, which is soft by design (flag `-max-concurrent-runs`; chart `maxConcurrentRuns`).
+
+### `WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY`
+
+- Unset, a runner that is newer than its organisation keeps the old behaviour (any peer) until the organisation is upgraded, and logs that it did: the organisation's proxy image refuses `allowed_peers`.
+- Meanwhile `wardyn-runnerd doctor`'s status stage says `peers-only not in effect: organisation older`.
+- Set to `true`, such a run is refused instead.
 
 ### `WARDYN_ALLOW_UNENFORCEABLE_CAPS`
 
@@ -1809,6 +1815,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The oldest an API token's or console session's role stamp may be (flag `-role-stamp-ttl`).
 - **Tokens:** a `wdn_` token whose `api_tokens.identity_stamped_at` (migration `0115`, set at mint and at every sign-in of its owner) is older is refused `401` `role_stamp_stale` with an `authz.denied` row.
 - Until its owner signs in again, which re-stamps it with their current role and groups.
+- A CLI renewal's new token keeps its session's stamp, so only a console sign-in resets the clock.
 - A token never stamped counts as stale.
 - **Sessions:** a console session whose issued-at is older is sent through sign-in (`auth.fail` reason `role_stamp_stale`); a cookie with no issued-at counts as older than any TTL.
 - With `WARDYN_OIDC_SESSION_TTL` unset, a session already ends at the IdP ID token's expiry ([`internal/auth/oidc/oidc_callback.go`](../internal/auth/oidc/oidc_callback.go)); with it set, at that TTL after sign-in.

@@ -101,6 +101,14 @@ describe("NeedsYouBanner", () => {
     expect(off.getAttribute("title")).toBe("This run isn't being recorded.");
   });
 
+  it("a run whose policy set recording to Off says Recording off", () => {
+    mount([request({ state: "APPROVED", decided_at: new Date().toISOString(), takeover_holder: "dev-sub" })], {
+      ...run,
+      not_recorded: "policy_off",
+    } as RunDetail);
+    expect(screen.getByTestId("needs-you-recording").textContent).toBe(NEEDS_YOU.strip.off);
+  });
+
   it("a run whose runner declined to record still shows the takeover as recorded", () => {
     mount([request({ state: "APPROVED", decided_at: new Date().toISOString(), takeover_holder: "dev-sub" })], {
       ...run,

@@ -5,10 +5,7 @@ package api
 
 import (
 	"fmt"
-	"net/http"
 
-	"github.com/cjohnstoniv/wardyn/internal/placement"
-	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -37,16 +34,6 @@ func carryForwardSiteRecording(cfg *types.SiteConfig, existing types.SiteConfig,
 	} else if cfg.Recording != nil && *cfg.Recording == (types.SiteRecording{}) {
 		cfg.Recording = nil
 	}
-}
-
-// refuseSiteRecordingWithoutStore answers 422 recording_store_off to a save that locks a recording
-// minimum above off while this organisation keeps no session recordings, and reports whether it did.
-func (s *Server) refuseSiteRecordingWithoutStore(w http.ResponseWriter, r *types.SiteRecording) bool {
-	if r == nil || !r.Locked || r.OrgLevel() == types.RecordingOff || s.cfg.RecordingStore != nil {
-		return false
-	}
-	writeErrorReason(w, placement.ReasonRecordingStoreOff.Status(), string(placement.ReasonRecordingStoreOff), runnerpool.RecordingSaveStoreOffMsg())
-	return true
 }
 
 // auditSiteRecording puts the organisation's effective recording level on the site_config.write row.

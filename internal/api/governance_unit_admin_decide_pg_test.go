@@ -5,8 +5,11 @@ package api
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -102,6 +105,57 @@ func TestUnitAdminApproverScopeRereadInTx(t *testing.T) {
 		ch := e.heldOn(e.a2)
 		hook = revoke(g)
 		refusedPending(t, "token grant revoked", ch, do(t, e.srv, http.MethodPost, approvePath(ch.ID), raw, ""))
+	})
+
+	// A cli_access token publishes the role user whatever role its row holds, at the door and in the
+	// re-check alike: its stored security-admin role is no approval after its grant is revoked.
+	cliAccess := func(sub string) string {
+		pub, _, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		now, notTruncated := time.Now().UTC(), false
+		exp := now.Add(time.Hour)
+		email := sub + "@corp.example"
+		sess := store.CLISessionRow{ID: uuid.New(), Identity: store.CLIIdentity{Principal: sub, Email: email, Role: oidc.RoleSecurityAdmin,
+			UserType: types.UserTypeStandard, GroupsTruncated: &notTruncated, RevSeq: 1},
+			IdentityStampedAt: now, Machine: "laptop", Store: types.CLIStoreKeychain, PublicKey: pub, CreatedAt: now, ExpiresAt: now.Add(24 * time.Hour)}
+		raw := apiTokenPrefix + strings.ReplaceAll(uuid.NewString(), "-", "")
+		if _, err := e.pg.CreateCLISession(context.Background(), sess, "wdc_"+uuid.NewString(), types.APIToken{
+			ID: uuid.New(), Principal: sub, Email: email, Role: oidc.RoleSecurityAdmin, UserType: types.UserTypeStandard,
+			Name: "CLI: laptop", GroupsTruncated: &notTruncated, CreatedAt: now, ExpiresAt: &exp,
+			Kind: types.APITokenKindCLIAccess, CLISessionID: &sess.ID,
+		}, raw); err != nil {
+			t.Fatalf("seed a CLI session with a cli_access token: %v", err)
+		}
+		return raw
+	}
+	added := func(ch types.GovernanceChange) bool {
+		unit, _, subject, _ := splitMembershipKey(ch.TargetKey)
+		ms, err := e.pg.ListGovernanceMemberships(context.Background())
+		if err != nil {
+			t.Fatalf("list memberships: %v", err)
+		}
+		return slices.ContainsFunc(ms, func(m types.GovernanceMembership) bool { return m.UnitID == unit && m.Subject == subject })
+	}
+
+	t.Run("cli_access token with an elevated role, grant revoked", func(t *testing.T) {
+		sub, g := approver()
+		raw := cliAccess(sub)
+		ch := e.heldOn(e.a2)
+		hook = revoke(g)
+		refusedPending(t, "cli_access grant revoked", ch, do(t, e.srv, http.MethodPost, approvePath(ch.ID), raw, ""))
+		if added(ch) {
+			t.Fatalf("cli_access grant revoked: the held membership was written")
+		}
+	})
+
+	t.Run("cli_access token with an elevated role, in scope", func(t *testing.T) {
+		sub, _ := approver()
+		ch := e.heldOn(e.a2)
+		if w := do(t, e.srv, http.MethodPost, approvePath(ch.ID), cliAccess(sub), ""); w.Code != http.StatusOK || !added(ch) {
+			t.Fatalf("cli_access approve in scope = %d %s, want 200 and the membership written", w.Code, w.Body)
+		}
 	})
 
 	t.Run("in scope applies", func(t *testing.T) {

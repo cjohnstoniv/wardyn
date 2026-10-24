@@ -4,7 +4,7 @@
  */
 
 import type { Page } from "@playwright/test";
-import { test, expect } from "./fixtures";
+import { test, expect, consoleAPI } from "./fixtures";
 import { PEOPLE_STEP } from "../src/app/components/wardyn/copy";
 import { ACCESS_ERROR, ACCESS_STATE, GUARD, PEOPLE, PREVIEW } from "../src/app/lib/people-access-copy";
 import { ADMIN_ACCESS_BANNER, SIGNIN_HELP } from "../src/app/lib/access-posture-copy";
@@ -807,5 +807,37 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
     const cleared = await (await page.request.get("/healthz")).json();
     expect(cleared.sign_in_help_text).toBeUndefined();
     expect(cleared.sign_in_help_url).toBeUndefined();
+  });
+
+  // (k) #2967 — PUT /site-config refuses a CHANGED recording block (PUT /governance/recording owns it), so
+  // a settings save over a stored non-default level must send it back unchanged: the save lands and the
+  // level stays as it was.
+  test("(k) a help card save over a stored recording level lands and keeps the level", async ({ page }) => {
+    await mockSsoStatus(page);
+    await gotoPeopleStep(page);
+    const path = "/api/v1/governance/recording";
+    const original = await consoleAPI(page, "GET", path);
+    expect(original.status, original.text).toBe(200);
+    const set = await consoleAPI(page, "PUT", path, { level: "screen_actions" });
+    expect(set.status, set.text).toBe(200);
+    try {
+      await page.reload();
+      const text = page.getByLabel(SIGNIN_HELP.TEXT_LABEL);
+      const save = page.getByRole("button", { name: SIGNIN_HELP.SAVE });
+      await text.fill("Ask in #it-helpdesk.");
+      const savePut = page.waitForResponse((r) => r.url().includes("/api/v1/site-config") && r.request().method() === "PUT");
+      await save.click();
+      expect((await savePut).status()).toBe(200);
+      const kept = await consoleAPI(page, "GET", path);
+      expect(JSON.parse(kept.text)).toEqual({ level: "screen_actions" });
+
+      await text.fill("");
+      const clearPut = page.waitForResponse((r) => r.url().includes("/api/v1/site-config") && r.request().method() === "PUT");
+      await save.click();
+      expect((await clearPut).status()).toBe(200);
+    } finally {
+      const back = await consoleAPI(page, "PUT", path, JSON.parse(original.text));
+      expect(back.status, back.text).toBe(200);
+    }
   });
 });

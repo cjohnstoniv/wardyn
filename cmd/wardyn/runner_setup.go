@@ -248,6 +248,16 @@ func selfMintRefusal(err error) error {
 	return errors.New(body.Error + "\n" + copySetupStepUp)
 }
 
+// orgCAFileSince is the first release whose wardyn-runnerd setup takes --org-ca-file.
+const orgCAFileSince = "0.10.0"
+
+// takesOrgCAFile reports whether a runnerd reporting version v takes --org-ca-file. A development build
+// reports "0.9.8+<rev>[-dirty]", which older cannot read, so the build metadata is cut off first.
+func takesOrgCAFile(v string) bool {
+	core, _, _ := strings.Cut(v, "+")
+	return !older(core, orgCAFileSince)
+}
+
 // runRunnerdSetup runs `wardyn-runnerd setup --org <org>`. A token goes over a pipe as file descriptor 3,
 // so it is in no argument, no environment variable and no file; the environment passed is the shell's
 // without the CLI's own credentials.
@@ -257,7 +267,8 @@ func runRunnerdSetup(cmd *cobra.Command, bin, org, name, token string) error {
 		args = append(args, "--name", name)
 	}
 	if path, _, err := anchorFile(org); err == nil {
-		if _, err := os.Stat(path); err == nil {
+		// A binary older than orgCAFileSince (the .previous of an upgrade from 0.9) rejects the flag.
+		if _, err := os.Stat(path); err == nil && takesOrgCAFile(installedRunnerdVersion(cmd.Context(), bin)) {
 			args = append(args, "--org-ca-file", path)
 		}
 	}

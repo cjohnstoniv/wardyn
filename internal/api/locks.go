@@ -33,6 +33,17 @@ type lockState struct {
 	// override replaces the store's locker. Set by tests only, to hand a server
 	// a locker that refuses or has a one-connection pool.
 	override db.Locker
+	// held replaces db.LockHeld. Set by tests only, to lose a hold the
+	// in-process locker never loses.
+	held func(context.Context) error
+}
+
+// lockHeld is db.LockHeld: nil only while every lock ctx carries is held.
+func (s *Server) lockHeld(ctx context.Context) error {
+	if s.locks.held != nil {
+		return s.locks.held(ctx)
+	}
+	return db.LockHeld(ctx)
 }
 
 // locker is the store's own (Postgres, shared by every replica over one

@@ -17,8 +17,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   folder as its person's own drive; whatever an agent leaves there, a planted script or a harness project file included,
   comes back in the next run that attaches it.
 - Upgrade wardyn-runnerd before you rely on a newer proxy feature: a run that sets one (`aws_sigv4`,
-  `scrub_responses`, `vm`, `port_rule`, `local_models`, `kube_api` or `canonical_push_repos`) is refused on an
-  older wardyn-runnerd.
+  `scrub_responses`, `vm`, `port_rule`, `local_models`, `kube_api`, `canonical_push_repos` or `local_model_relay`) is
+  refused on an older wardyn-runnerd.
 - **A security admin can no longer add or change a mount source on a governance profile, or see a mount's host path; a super admin can.**
   A security admin reads every `workspace_mounts[].source` as `<redacted>`, on policies, presets, profiles, the
   policy default and held changes. To keep a mount, send it back with that sentinel and its target, as
@@ -72,7 +72,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   empty tmpfs over its keychain and browser profile paths (`/home/agent/.local/share/keyrings`, `.mozilla`,
   `.config/chromium` and the rest in [Linux VM sandboxes](docs/operations/linux-vm-sandboxes.md#sign-ins-in-the-desktop)),
   read-only for an agent set Not allowed, so anything a custom guest image baked there is hidden. A guest with any swap
-  or zram on now fails to start. Upgrade wardyn-runnerd and rebuild the guest image together.
+  or zram on now fails to start. Upgrade wardyn-runnerd and rebuild the guest image together. A sign-in pause stops the
+  agent and pauses the desktop recording while it is open.
 - Split-role installs as above: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `desktop_vm_sign_ins`
   (migration `0230_desktop_vm_sign_ins`). Without it a VM's run page says nothing about sign-ins and offers no pause.
 - Split-role installs as above: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `oidc_session_sids` (migration
@@ -104,6 +105,20 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - `WARDYN_GOVERNANCE_PROFILE_PUT_EXISTING_ONLY` is now `WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY`. wardynd refuses
   to start while the old name is set, and names the new one. A notify route keyed `profiles` is now `units`; the
   old key is refused when the config is read.
+- **Four hardening switches are now on by default.** Set one to `false` to keep its old behaviour; boot logs each
+  one's state.
+  - `WARDYN_EGRESS_HOST_PORT_GRANTS_INERT`: re-save each `egress_host` allow grant whose value carries a port through
+    `POST /api/v1/permissions/grants`, which stores the host alone, then delete the old row. Boot logs how many
+    rows are inert.
+  - `WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY`: switch callers that create a unit by `PUT` to
+    `POST /api/v1/governance/units`.
+  - `WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL`: check that each allow grant matched on an email has a sign-in that
+    vouches for it (`WARDYN_OIDC_EMAIL_DOMAINS` or `WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED` set, or
+    `WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS` on). An Entra ID token usually carries no `email_verified`, so on Entra
+    those grants stop granting; boot warns with how many. Re-grant each to the person's user id (sub) or a group.
+  - `WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY`: a caller of a run's proxy from outside the run's own network is now
+    refused. A runner that is newer than its organisation keeps the old behaviour (any peer) until the organisation
+    is upgraded, and logs that it did.
 - Migration `0207_governance_units` renames the governance tables and their columns, keeping every row, grant and
   foreign key, so a split-role install needs no grant change. A governance change proposed before the upgrade reads
   as stale once and is proposed again.
@@ -200,14 +215,41 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   (#3549).** A script that runs `ssh <run-id> <command>` with a relative path, or copies with `scp` or `sftp` to a
   relative path, now resolves it from `$HOME` (`/home/agent` on Wardyn's images). Use an absolute path, such as
   `/home/agent/work/...`, to keep the old place. `wardyn sync` and `wardyn-sync` still use the directory they name.
+- **`wardyn runner install` and `wardyn runner upgrade` check the release's Sigstore bundle (`SHA256SUMS.sigstore.json`) before installing anything.** This is a clean break: a CLI from this release refuses a release published before 0.10.0, because those carry no bundle. A mirror must serve `SHA256SUMS.sigstore.json` beside `SHA256SUMS`.
+- During a rolling upgrade, a person may be asked to sign in to AWS again once.
+- A person set up by Entra object id who has already signed in keeps that principal, even if items later appear under
+  their raw sign-in id (their pairwise `sub`). Before, that next sign-in was refused (`sign_in_refused`) because the
+  identity was already bound to the person.
+- `WARDYN_RUNNER_SECRET_PLACEHOLDERS` is new and off by default, so nothing changes until you set it to `true`. Then a
+  `runner_resident` `env_secret` or `file_secret` grant whose scope names a `host` is no longer delivered to the
+  runner: the sandbox holds `wardyn-placeholder:<id>`, and requests to that host go through the organisation's egress,
+  which fills the placeholder in the `Authorization` header. Those requests then leave from the organisation's
+  network, not the laptop's, so a host only the laptop can reach stops working for that grant. A grant without a
+  `host`, a host that is not an exact allowlist entry or already carries a credential, and a value that spans lines
+  are delivered to the runner as before. Without `WARDYN_PROXY_RESPONSE_SCRUB`, a host that echoes the value can
+  return it to the sandbox. No runner upgrade is needed.
 
 ### Added
 
+- `GET` and `PUT /api/v1/governance/recording`, on the security tier, read and set the organisation's recording level
+  and whether it is a locked minimum, the Wardyn boundary's recording row (#2967). The `PUT` writes that block and no
+  other field, is held for a second human under `WARDYN_GOVERNANCE_SECOND_HUMAN`, and is audited as
+  `governance.recording.write`.
 - A Linux VM's desktop keeps sign-ins in the machine's memory, gone when it shuts down, and the run page says so (#2972).
   "Pause the agent to sign in" stops the agent's processes inside the guest while the desktop stays live; "Resume the
-  agent" continues them, and each pause-to-resume is one `desktop.sign_in.pause` audit row. The run page says plainly that
+  agent" continues them, and each pause-to-resume is one `desktop.sign_in.pause` audit row. On a recorded desktop the
+  pause holds the screen recording on every replica within 2 seconds, a desktop that connects after a `wardynd`
+  restart records nothing while the sign-in is open, and a desktop whose sign-in state cannot be read is refused rather
+  than recorded, or, already open, keeps no frames until it is read. The run page says plainly that
   the resumed agent can use those sign-ins and read saved files. An admin can set an agent's "Sign-ins in a desktop" to
   Not allowed: its desktops keep none, and the pause is refused at the server.
+- `GET /api/v1/runs/{id}/desktop/sign-ins` reads a VM desktop's sign-in store (`memory` or `none`) and whether its agent
+  is paused; `POST` to `.../pause` and `.../resume` stop and continue the agent for the person who may enter the run's
+  desktop, while it runs. Reasons: `desktop_sign_ins_off` (`403`, the agent is set Not allowed),
+  `desktop_sign_ins_unavailable` (the run has no store, because its runner or guest image predates sign-ins, or the
+  store could not be read), `desktop_sign_ins_pause_failed` (the agent keeps running) and
+  `desktop_sign_ins_resume_failed` (it is still paused; try again). A failed pause or resume writes a failed
+  `desktop.sign_in.pause` row (#2972).
 - A Linux VM sandbox on a Docker runner now has a network: a relay (`wardyn-vmnet`, built into the proxy image) on the
   run's internal network hands connections to allowed hosts to the run's proxy and refuses raw IP addresses, outside DNS
   resolvers and IPv6. The reference guest image addresses its NIC for the relay. Kubernetes VM pods are unchanged.
@@ -234,6 +276,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   - Every renewal rotates the secret and re-checks revokes, sessions cuts, deactivation, the role stamp and the
     `api_token` feature. An old secret presented again ends the session. A revoke, Sign out everywhere, a console
     sign-out and a per-computer sign-out end it at once, with its tokens.
+  - A renewed token carries the role, groups and role-stamp age of the person's last console sign-in, so a renewal
+    never resets the `WARDYN_ROLE_STAMP_TTL` clock.
   - An admin's CLI acts as role `user`; `wardyn login --admin` gives a 1-hour admin token, never renewed.
   - Routes: `POST /api/v1/cli/sign-ins`, `POST /api/v1/cli/sign-ins/{id}/token`, `POST /api/v1/cli/sessions/{id}/refresh`,
     `GET /api/v1/me/cli-sign-ins/{id}` with `/approve` and `/deny`, `GET /api/v1/me/cli-sessions` and
@@ -245,6 +289,14 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Recording is a level: a policy's `recording` is `off`, `terminal` or `screen_actions`, and
   `site_config.recording` sets the organisation's level and can lock it as a minimum. Nothing set records terminal
   sessions, as before. `WARDYN_RECORDING_STORE=off` still records nothing, and keystrokes are never recorded.
+- Replay a recorded desktop session on the run's Recording tab: the screen is drawn with noVNC at the playhead, the
+  pauses show as gaps on the timeline (with a 1x, 2x or 4x play clock and "Skip the gap" or "Show it on the timeline"),
+  the action log jumps to its moment, and the tamper-evident log's verdict for the recording's range is shown beside it
+  (#2968). `GET /api/v1/runs/{id}/recording-chain?key=&from=` checks the audit chain over that range for whoever may
+  read the recording: `ok: false` names the broken sequence, `400` `recording_chain_key_required` has no `key`, and
+  `503` `recording_chain_busy` (with `Retry-After`) means another check is walking the log on that replica. The console
+  bundles `@novnc/novnc` 1.7.0, unmodified, under MPL-2.0; [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) lists it
+  and the `pako` code inside it.
 - The Wardyn boundary is the outermost layer of every run's policy, with a dry run and break-glass. A security admin
   reads and writes it at `GET`/`PUT /api/v1/governance/boundary` and previews a draft with
   `POST /api/v1/governance/dry-run`, which writes nothing and lists what the boundary would narrow, knob by knob.
@@ -252,6 +304,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   starts in `hard_limits` with nothing listed and floor `CC1`, which narrows nothing; an upgraded install stays in
   `no_limits`. Break-glass (`wardyn run --break-glass-reason`) is asked of an admin-token run only once the boundary
   bounds something and a unit with its own walls or a restriction exists.
+- GET /governance/boundary carries optional `save_held_for_approval`, true when the caller's save would be held for a second admin.
 - Restrictions are deny-only lists (domains, run limits, withheld credential kinds) that follow users, groups, user
   types or everyone into every unit they run in. A workspace can be pinned to an owning unit
   (`PUT /workspaces/{id}/owning-unit`, `wardyn workspace set-unit`).
@@ -262,6 +315,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   admin's narrowing applies at once and their widening is held for a second approver. A unit's `locked_knobs` fix a
   knob for every unit below (409 `unit_knob_locked`). Audit actions are `governance.unit_admin.grant` and
   `governance.unit_admin.revoke`; see [unit-admins.md](docs/operations/unit-admins.md).
+- `locked_knobs` can fix each desktop direction on its own: `desktop.paste_in`, `desktop.copy_out`, `desktop.upload` and
+  `desktop.download` (`desktop` alone fixes all four). The boundary's Desktop card gains "Lock for teams below" on each
+  row and "Lock the group for teams below", and its dry run lists the drafted locks. A team below a locked direction
+  cannot change it (409 `unit_knob_locked`), and the boundary's own locks stay as they are unless the page changes them
+  (#2967).
 - A run can pick which of its person's units to run in: `run_in` on `POST /runs`, preflight and the policy preview, and
   `wardyn run --run-in`. A unit the person is not in and an unknown unit both answer 403 `unit_not_a_context`.
   `PUT /governance/memberships/{id}` with a `unit_id` moves a membership and
@@ -272,8 +330,15 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   that changed each knob. A restated value or a clamped-away widening stays the parent's, and a pass-through unit is never named.
 - Policy field `harness_inner_walls` (`sandbox_mode`, `approvals`) chooses the harness's own walls inside Wardyn's.
   Omitted, each run keeps what its harness and lane give today. It only adds walls: a looser choice refuses the run
-  (`harness_inner_walls_looser`), and `sandbox_mode` takes `off` only (`workspace-write` and `read-only` answer
-  `harness_sandbox_unavailable`). A run whose policy sets it needs the proxy image from this release.
+  (`harness_inner_walls_looser`). A run whose policy sets it needs the proxy image from this release.
+  - `sandbox_mode` is `off`, `read-only` or `workspace-write`. A mode launches a Codex run inside Codex's own sandbox:
+    Wardyn delivers `/etc/codex/requirements.toml`, which the agent cannot rewrite and which binds every `codex` in the
+    sandbox to the mode and refuses its bypass flag, and sets `WARDYN_HARNESS_SANDBOX` for the image's `agent-run`. It
+    starts at CC3 in both modes and at CC2 only for `workspace-write` on a background run; any other class and mode is
+    refused `harness_sandbox_unavailable` at create. A runner that cannot place the file where the agent cannot rewrite
+    it (no managed files, krun) fails the run. A mode on a run that is not a Codex run, or whose agent is a custom image
+    or an exec run, is refused `harness_inner_walls_unmet`.
+  - `approvals: harness` on a seeded interactive run turns `seed_auto_tools` off and says so.
 - An `ssh_key` grant clones through the run's proxy, which holds the key and signs SSH sign-in requests only. The key
   file is not placed in the sandbox, but any process there can have a sign-in signed until the agent closes (the
   `claude-code` image closes it before the agent starts). There is no switch. A custom image that mints the key
@@ -288,8 +353,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   always has it on. It needs the proxy image from this release.
 - `WARDYN_PROXY_RESPONSE_SCRUB` is `false` by default. Set it to `true` and each run's proxy replaces a credential it
   added with `<secret-hidden>` when a response echoes it, in headers and body.
-- `WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY` is off by default. Set it to `true` and each run's proxy on the Docker
-  substrate serves only callers on the run's own network and closes others before reading a byte.
+- `WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY` is on by default. Each run's proxy on the Docker substrate serves only
+  callers on the run's own network and closes others before reading a byte. Set it to `false` to keep the old
+  behaviour (any peer); boot logs it.
 - `WARDYN_ENV_SECRET_PLACEHOLDERS` and `WARDYN_FILE_SECRET_PLACEHOLDERS` are `false` by default. Set one to `true` and
   an `env_secret` (or `file_secret`) grant whose scope names a `host` puts `wardyn-placeholder:<id>` in the variable
   (or file), and the run's proxy fills the `Authorization` header to that host. Off, the value is placed in the
@@ -297,21 +363,44 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - `WARDYN_GIT_PAT_BROKER_OFF_REFUSED` is `false` by default. Set it to `true` and, while `WARDYN_GIT_PAT_BROKER` is
   `off`, an administrator's run that would hold a `git_pat` token in the sandbox is refused too. A member's run is
   refused either way.
-- `WARDYN_EGRESS_HOST_PORT_GRANTS_INERT` is `false` by default. Off, listing grants warns on each stored `egress_host`
-  allow grant whose value carries a port. Set it to `true` and such a grant is inert: `GET /api/v1/permissions` marks
-  it and it grants nothing. Re-save each warned grant first.
-- `WARDYN_GOVERNANCE_PROFILE_PUT_EXISTING_ONLY` is `false` by default. Off, a `PUT /api/v1/governance/profiles/{id}`
-  that creates a profile is logged. Set it to `true` and that call answers `404 governance_profile_not_found`; create
-  with `POST /api/v1/governance/profiles`.
-- `WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL` is `false` by default. Off, each match of an allow grant on a caller's
-  email is logged at INFO. Set it to `true` and such a grant matches only when sign-in vouches for the email; deny
-  grants bind either way.
+- `WARDYN_EGRESS_HOST_PORT_GRANTS_INERT` is on by default. A stored `egress_host` allow grant whose value carries a
+  port is inert: `GET /api/v1/permissions` marks it and it grants nothing. Set it to `false` to keep the old behaviour,
+  and listing grants warns on each such grant; boot logs it.
+- `WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY` is on by default. A `PUT /api/v1/governance/units/{id}` naming an id no
+  unit holds answers `404 governance_unit_not_found`; create with `POST /api/v1/governance/units`. Set it to `false`
+  to keep the old behaviour, and each create by PUT is logged; boot logs it.
+- `WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL` is on by default. An allow grant on a caller's email matches only when
+  sign-in vouches for the email; deny grants bind either way. Set it to `false` to keep the old behaviour, and each
+  match on an unvouched email is logged at INFO; boot logs it.
 - `WARDYN_COMPUTER_FOLDERS` is `false` by default. Set it to `true` and a run can take a folder from its creator's
   own folder-only runner (`wardyn-runnerd serve --substrate folders`). Off, New Run shows "Your computer" as blocked
   and `local_folder.runner_id` is refused with `computer_folders_off`.
 - `WARDYN_OIDC_BACKCHANNEL_LOGOUT` is `false` by default. Set it to `true` and `POST /auth/backchannel-logout` accepts
   a logout token your identity provider signed and ends that person's console sessions. Off, the route does not
   exist.
+- A `local_model` model provider (#2957) is a model server you run on a laptop's host or an organisation node, such as
+  Ollama, a llama.cpp server, LM Studio or vLLM. Add it in Settings › Model providers (Local model server) or through
+  `/api/v1/model-providers`. A run reaches it only through its proxy's brokered LLM route: `base_url` is `http://` or
+  `https://` with no path or credential and not a loopback address, and `local.models` (1 to 64 exact names, tag
+  included, none with a `/` or a `:cloud` or `-cloud` tag) is the allowlist the request's `model` must be on. Other
+  methods and paths are refused `403 egress_denied`, a model inventory is filtered to the allowlist, and
+  `local.max_context`, `local.max_output` and `local.keep_alive_seconds` cap those request fields when a request
+  supplies them (unset caps mean 32768, 32768 and 1800 seconds); a request that omits one keeps the model server's own
+  default. A run never pulls, pushes, creates, copies or deletes a model, and the prompt is never rewritten. The
+  proxy lifts its private-address guard for the registered host and port alone; every other lane refuses that host.
+  With no provider of this kind, nothing changes. Move the proxy image pin with `wardynd`, image first, before adding
+  one: an older proxy refuses the `local_models` key it writes.
+- A `local_model` provider can set `local.allow_on_laptop_runners` (off by default; the console's local model server
+  editor has a switch for it): a run on a person's own Docker runner then uses the model server on that computer, with
+  `base_url` on `host.docker.internal` (any other host is refused at write). The runner relays that one port to its
+  loopback, only to the proxies of flagged runs and only while one is going, and the run's proxy admits only that
+  address and keeps the route table, model allowlist and caps; management routes stay refused (#2957). The person
+  allows the port on their own runner with `wardyn-runnerd serve --local-model-port` (`local_model_port` in
+  `runnerd.json`, `WARDYN_LOCAL_MODEL_PORT`, or the `LocalModelPort` managed preference); unset allows none, and a run
+  on another port is refused at create with `runner_local_model_port_not_allowed`. An older wardyn-runnerd or a
+  Kubernetes runner refuses it with `runner_proxy_setting_unsupported` naming `local_model_relay`, and the
+  organisation's own runner refuses it as before. On native Linux Docker, bind the model server to `127.0.0.1`: a
+  server bound to every address already holds the port on the bridge, and the run is refused at create.
 
 - A runner that could not connect, or could not start, reports why when it next connects: the first and last failure,
   the stage and a redacted reason. The runner's read shows it as `offline_summary`, and each report writes a
@@ -352,9 +441,34 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   working, and running setup again moves its settings into the file.
 - A service token's `GET /me` answers 503 `roster_unreadable` when the site configuration cannot be read, as
   `GET /workspaces` does, and 500 when its presets or workspaces cannot be listed.
+- An address the console does not know now shows a "Page not found" card at the typed address, with "Back to Runs",
+  instead of redirecting to Runs (#2884). Under `/admin` the button returns to the admin Runs list.
+- Setup shows the full step rail, 200 px wide, from a 1024 px window up, not an icon-only rail (#2844). The "Host
+  status" bar is gone: one "Re-check" sits at the right end of every step's heading row (#2847).
+- A disabled filled button (primary, destructive, info) turns muted grey in the dark theme, where opacity alone left it
+  reading as live (#2865).
+- On a run in focus mode, the approvals that hold the run have their own row under the session, outside the dock panel,
+  and stay open and keep their in-flight Approve or Deny across entering and leaving focus. The dock, the request row
+  and the strip fit a phone's width (#2912).
+- A resolve of an Azure DevOps token served from the token cache no longer reads the stored sign-in, so it writes no
+  `ado-refresh` `secret.read` row; the injected token's own `secret.read` row is still written. Each redemption that
+  fills the cache reads the sign-in and records `secret.read` with purpose `ado-refresh` (#2140). A
+  cached token is now served for at most one hour after the redemption that filled it, whatever lifetime the authority
+  gave it, and never within ten minutes of its expiry.
 
 ### Fixed
 
+- A run create that needs one AWS SSO credential no longer waits out the renewal of another of the same person's (a
+  `bedrock_sso` provider, the AWS CLI session), up to about 21 seconds, before it serves the token it had. Renewals now
+  hold a lock per stored credential, not per person (#2137). A renewal the authority refuses (`invalid_grant`) after
+  another writer redeemed the same refresh token first runs once more on that writer's pair, which usually serves it
+  instead of asking the person to sign in again.
+- A desktop recording's gap no longer ends early when two take overs, or a take over and a desktop sign-in, overlap on
+  one run: each holds the gap open until its own end. A hand back or a sign-in's end on another replica now resumes the
+  recording on the replica that holds it, and a take over's gap still open when the run's last desktop connection
+  closes after the run ended gets its `desktop.recording.resume` row.
+- A take over keeps the person's screen out of the recording on every replica and after a restart: a desktop opened
+  while a take over is open keeps no frames until the hand back, and one whose take over cannot be read is refused.
 - Sign-in and probe runs under a boundary (#3446): a member whose profile denies every placement, under a hard-limits
   boundary, can again run the sign-in and probe runs the placement rule always exempted (it answered 500).
 - The Approvals page cards and the run's Approvals tab now turn Approve and Deny off, and say why, once the server refuses a person with `capability_egress_host` (an admin withholds that host). Before, they kept live buttons and only showed an error after each click. The live approvals strip already did this.
@@ -382,6 +496,16 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   at most the pass's 2 minutes, and a cut pass stops the sandbox. After two cut passes in a row that save nothing, the
   sandbox is stopped, and the pass's record and its `run.folder.transfer` audit name how many changed files were not
   brought back. `wardyn sync` also saves what a cut pass finished, so its next pass starts after it.
+- `wardyn sync --pull-deletes` no longer moves a laptop file to the Trash because its name holds a backslash or a
+  control character. Such a laptop file is now refused, with a report row, as not a plain file name instead of pushed,
+  and never counts as deleted.
+- `wardyn runner upgrade` that rolls back to a 0.9 runner no longer fails putting it back: `--org-ca-file` is passed only
+  to a runner that has it. The rollback also puts the old runner's service files back as they were, so it keeps its
+  trusted CA file and image pin.
+- A run whose desktop is swapped to the sign-in image records that image on the run, not the one it asked for.
+- The Recording tab and the take over strip say "Recording off" for a run its policy, its organisation or its runner did
+  not record, instead of naming a level. A take over on a run whose runner declined still says it is recorded: the
+  console and SSH sessions it opens are.
 
 ## [0.9.8] — 2026-10-21
 

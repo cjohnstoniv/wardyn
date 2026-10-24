@@ -43,7 +43,7 @@ func TestDesktopRecording_PauseGapRow(t *testing.T) {
 	sess := uiSession{Run: run.ID, App: desktopApp, Principal: "alice"}
 
 	sandbox, relay := net.Pipe()
-	conn := srv.recordDesktopConn(run, sess, relay)
+	conn := srv.recordDesktopConn(run, sess, relay, nil)
 	if conn == relay {
 		t.Fatal("a screen_actions desktop connection was not recorded")
 	}
@@ -121,7 +121,7 @@ func TestDesktopRecording_OnlyScreenActionsDesktops(t *testing.T) {
 	screen := types.AgentRun{ID: uuid.New(), RecordingLevel: types.RecordingScreenActions}
 	on := New(Config{Audit: &recRecorder{}, AdminToken: adminToken, RecordingStore: fsRecordingStore(t)})
 	declined := types.AgentRun{ID: uuid.New(), RecordingLevel: types.RecordingScreenActions, NotRecorded: types.NotRecordedRunnerDeclined}
-	if on.recordDesktopConn(declined, uiSession{Run: declined.ID, App: desktopApp}, relay) == relay {
+	if on.recordDesktopConn(declined, uiSession{Run: declined.ID, App: desktopApp}, relay, nil) == relay {
 		t.Error("runner declined: the desktop connection was not recorded")
 	}
 	off := New(Config{Audit: &recRecorder{}, AdminToken: adminToken})
@@ -136,7 +136,7 @@ func TestDesktopRecording_OnlyScreenActionsDesktops(t *testing.T) {
 		{"store off", off, screen, desktopApp},
 		{"another app", on, screen, "code-server"},
 	} {
-		if got := tc.srv.recordDesktopConn(tc.run, uiSession{Run: tc.run.ID, App: tc.app}, relay); got != relay {
+		if got := tc.srv.recordDesktopConn(tc.run, uiSession{Run: tc.run.ID, App: tc.app}, relay, nil); got != relay {
 			t.Errorf("%s: the connection was wrapped", tc.name)
 		}
 	}

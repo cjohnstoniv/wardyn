@@ -14,7 +14,6 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
-	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -121,7 +120,8 @@ func TestSidecarPolicyDropsRecording(t *testing.T) {
 }
 
 // TestSiteConfigRecording_Put: a level that is not one is refused; locking a minimum while the
-// organisation keeps no recordings is refused with the board's sentence; with a store it saves.
+// organisation keeps no recordings is a change, so it is PUT /governance/recording's, which refuses
+// it with the board's sentence (TestPutSiteConfigNeverChangesTheRecordingLevel).
 func TestSiteConfigRecording_Put(t *testing.T) {
 	fake := &fakeSiteConfigStore{}
 	srv, _ := newSiteConfigHarness(t, fake)
@@ -131,20 +131,10 @@ func TestSiteConfigRecording_Put(t *testing.T) {
 	}
 	srv.cfg.RecordingStore = nil
 	w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, `{"recording":{"level":"terminal","locked":true}}`)
-	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), runnerpool.RecordingSaveStoreOffMsg()) {
-		t.Errorf("locked minimum with no store = %d %s, want 422 with the save refusal", w.Code, w.Body.String())
+	if w.Code != http.StatusBadRequest || errorReason(w) != reasonSiteConfigRecordingViaOwnRoute {
+		t.Errorf("locked minimum with no store = %d %s, want 400 %s", w.Code, w.Body.String(), reasonSiteConfigRecordingViaOwnRoute)
 	}
 	if fake.putSeen != nil {
 		t.Errorf("refused saves wrote %+v", fake.putSeen)
-	}
-	if w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, `{"recording":{"level":"off","locked":true}}`); w.Code != http.StatusOK {
-		t.Errorf("locking off with no store = %d %s, want 200", w.Code, w.Body.String())
-	}
-	srv.cfg.RecordingStore = fsRecordingStore(t)
-	if w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, `{"recording":{"level":"screen_actions","locked":true}}`); w.Code != http.StatusOK {
-		t.Errorf("locked minimum with a store = %d %s, want 200", w.Code, w.Body.String())
-	}
-	if fake.putSeen == nil || fake.putSeen.Recording == nil || *fake.putSeen.Recording != (types.SiteRecording{Level: types.RecordingScreenActions, Locked: true}) {
-		t.Errorf("saved %+v", fake.putSeen)
 	}
 }

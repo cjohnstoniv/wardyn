@@ -8,7 +8,9 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,6 +19,7 @@ import (
 
 	"github.com/sigstore/sigstore-go/pkg/root"
 
+	"github.com/cjohnstoniv/wardyn/internal/certbundle"
 	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/releasesig"
 	"github.com/cjohnstoniv/wardyn/internal/releasesig/releasesigtest"
@@ -68,6 +71,7 @@ func (r *installRig) fakeRunner(version string, starts bool) []byte {
 	dst := installedRunnerd()
 	return []byte(fmt.Sprintf(`#!/bin/sh
 [ "$1" = --version ] && { [ -n "%[1]s" ] || exit 1; echo "wardyn-runnerd version %[1]s"; exit 0; }
+case "%[1]s" in 0.9.*) case "$*" in *--org-ca-file*) echo "unknown flag: --org-ca-file" >&2; exit 1;; esac;; esac
 echo "%[1]s $*" >> %[2]s/calls
 if ! /usr/bin/cmp -s "$0" %[3]s; then
   /bin/cp "$0" %[3]s.tmp
@@ -148,6 +152,94 @@ func TestRunnerUpgradeRollsBackAFailedStart(t *testing.T) {
 	}
 	if calls := r.record("calls"); calls != "0.10.1 setup --org "+r.srv.URL+"\n0.10.0 setup --org "+r.srv.URL+"\n" {
 		t.Fatalf("calls = %q, want the new setup then the previous one's", calls)
+	}
+}
+
+// The rollback runs the previous binary, which may predate --org-ca-file (a 0.9 runner upgraded to 0.10 on
+// an install with a stored organisation CA): it must get the flags that version has.
+func TestRunnerUpgradeRollsBackAnOlderRunnerWithoutOrgCAFile(t *testing.T) {
+	r := newInstallRig(t)
+	old, broken := r.fakeRunner("0.9.8", true), r.fakeRunner("0.10.0", false)
+	r.installed(old)
+	r.publish("0.10.0", broken, releaseSigner("0.10.0"), nil)
+	anchor, _, err := anchorFile(r.srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(anchor), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// The test server's own certificate: the download then trusts the stored anchor, as a real one would.
+	if err := os.WriteFile(anchor, certbundle.Encode([]*x509.Certificate{r.srv.Certificate()}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := r.cli("upgrade", "--version", "0.10.0")
+	if err == nil || !strings.Contains(err.Error(), "so the runner is back on 0.9.8") {
+		t.Fatalf("a runner that did not start: err = %v\n%s", err, out)
+	}
+	if !r.installedIs(old) {
+		t.Fatalf("the previous runner was not put back:\n%s", out)
+	}
+	if calls := r.record("calls"); calls != "0.10.0 setup --org "+r.srv.URL+" --org-ca-file "+anchor+"\n0.9.8 setup --org "+r.srv.URL+"\n" {
+		t.Fatalf("calls = %q, want the new setup with the anchor then the older one's without", calls)
+	}
+}
+
+// A 0.9 runner keeps its trusted CA and image pin in the service's environment file, which the new setup
+// moves into runnerd.json: the rollback puts the file back as it was, and removes runnerd.json, before the
+// older setup, which reads only that file, runs.
+func TestRunnerUpgradeRollbackPutsTheServiceFilesBack(t *testing.T) {
+	r := newInstallRig(t)
+	envFile := filepath.Join(r.home, ".config", "wardyn", "runnerd.env")
+	config := filepath.Join(r.home, ".config", "wardyn", "runnerd.json")
+	seen := filepath.Join(r.rec, "seen")
+	// The older setup notes whether it finds the CA line; the new one migrates, then does not start.
+	old := []byte(string(r.fakeRunner("0.9.8", true)) + fmt.Sprintf("grep -q '^WARDYN_TRUSTED_CA_FILE=' %s && echo saw-ca >> %s\n", envFile, seen))
+	broken := []byte(string(r.fakeRunner("0.10.0", false)) +
+		fmt.Sprintf("printf '{\"trusted_ca_file\":\"/etc/wardyn/run-ca.pem\"}' > %s && rm %s && echo migrated >> %s\n", config, envFile, seen))
+	r.installed(old)
+	env := "WARDYN_RUNNER_ORG_URL=" + r.srv.URL + "\nWARDYN_PROXY_IMAGE=registry.example/wardyn-proxy:pinned\nWARDYN_PROXY_IMAGE_PINNED=1\n" +
+		"WARDYN_TRUSTED_CA_FILE=/etc/wardyn/run-ca.pem\n"
+	if err := os.WriteFile(envFile, []byte(env), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(envFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.publish("0.10.0", broken, releaseSigner("0.10.0"), nil)
+	out, err := r.cli("upgrade", "--version", "0.10.0")
+	if err == nil || !strings.Contains(err.Error(), "so the runner is back on 0.9.8") {
+		t.Fatalf("a runner that did not start: err = %v\n%s", err, out)
+	}
+	if got := r.record("seen"); got != "migrated\nsaw-ca\n" {
+		t.Fatalf("seen = %q, want the new setup to migrate and the older one to find the CA line", got)
+	}
+	got, err := os.ReadFile(envFile)
+	if err != nil || string(got) != env || !strings.Contains(string(got), "\nWARDYN_TRUSTED_CA_FILE=/etc/wardyn/run-ca.pem\n") {
+		t.Fatalf("environment file after the rollback = %q (%v), want %q", got, err, env)
+	}
+	if after, err := os.Stat(envFile); err != nil || after.Mode().Perm() != before.Mode().Perm() {
+		t.Fatalf("environment file after the rollback: %v (%v), want mode %v", after, err, before.Mode().Perm())
+	}
+	if _, err := os.Stat(config); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("runnerd.json is there after the rollback (%v), but there was none before", err)
+	}
+}
+
+// A development runnerd reports build metadata after a "+", which must not hide that it predates the flag;
+// a release candidate of the first release that takes it keeps it.
+func TestTakesOrgCAFileReadsTheReleaseCore(t *testing.T) {
+	for v, want := range map[string]bool{
+		"0.9.8":                 false,
+		"0.9.8+abc123def-dirty": false,
+		"0.10.0":                true,
+		"0.10.0-rc.1":           true,
+		"0.10.0+abc":            true,
+	} {
+		if got := takesOrgCAFile(v); got != want {
+			t.Errorf("takesOrgCAFile(%q) = %v, want %v", v, got, want)
+		}
 	}
 }
 

@@ -296,11 +296,11 @@ func (s *Server) unitWritePrecheck(w http.ResponseWriter, r *http.Request, id uu
 }
 
 // writeUnitInScope is store.WriteGovernanceUnit for a unit admin: the same graph-locked write, on a
-// transaction whose build re-checks their scope (scopedUnitBuild).
-func (s *Server) writeUnitInScope(ctx context.Context, id uuid.UUID, build store.GovernanceUnitBuild) (types.GovernanceUnit, error) {
+// transaction q whose build, handed q, re-checks their scope (scopedUnitBuild).
+func (s *Server) writeUnitInScope(ctx context.Context, id uuid.UUID, build func(store.Querier) store.GovernanceUnitBuild) (types.GovernanceUnit, error) {
 	var out types.GovernanceUnit
 	err := s.writeGovernance(ctx, func(q store.Querier) (err error) {
-		out, err = store.WriteGovernanceUnitQ(ctx, q, id, s.scopedUnitBuild(ctx, q, id, build))
+		out, err = store.WriteGovernanceUnitQ(ctx, q, id, s.scopedUnitBuild(ctx, q, id, build(q)))
 		return err
 	})
 	return out, err
@@ -369,44 +369,99 @@ func (s *Server) deleteUnitInScope(w http.ResponseWriter, r *http.Request, id uu
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// subjectBelongsInScope reports whether the subject (type and value) holds a membership, other than
-// except, in a unit the caller governs: "people who already belong" (§5.1). A group subject belongs by
-// a group row of the same group.
-func (s *Server) subjectBelongsInScope(ctx context.Context, ms []types.GovernanceMembership, st types.CapabilitySubjectType,
-	subject string, except uuid.UUID, scope func(uuid.UUID) (bool, error)) (bool, error) {
+// subjectUnitsInScope is the units, once each, of the subject's (type and value) memberships other than
+// except that scope admits: where it already belongs, "people who already belong" (§5.1). A group
+// subject belongs by a group row of the same group.
+func subjectUnitsInScope(ms []types.GovernanceMembership, st types.CapabilitySubjectType, subject string, except uuid.UUID,
+	scope func(uuid.UUID) (bool, error)) ([]uuid.UUID, error) {
+	var units []uuid.UUID
 	for _, m := range ms {
-		if m.ID == except || m.SubjectType != st || m.Subject != subject {
+		if m.ID == except || m.SubjectType != st || m.Subject != subject || slices.Contains(units, m.UnitID) {
 			continue
 		}
 		in, err := scope(m.UnitID)
-		if err != nil || in {
-			return in, err
+		if err != nil {
+			return nil, err
+		}
+		if in {
+			units = append(units, m.UnitID)
 		}
 	}
-	return false, nil
+	return units, nil
+}
+
+// governingRoots is the units the caller holds a grant on at or above any of units, once each, in the
+// tree read on q, or on a transaction of its own for a nil q: the roots of their units a subject
+// belongs in, which a held change records for its decision (heldBelongsStale).
+func (s *Server) governingRoots(ctx context.Context, q store.Querier, units []uuid.UUID) ([]uuid.UUID, error) {
+	grants, err := s.callerUnitGrants(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var all []types.GovernanceUnit
+	if q != nil {
+		all, err = store.ListGovernanceUnitsQ(ctx, q)
+	} else {
+		all, err = s.unitTreeRows(ctx)
+	}
+	if err != nil {
+		return nil, err
+	}
+	granted := make([]uuid.UUID, 0, len(grants))
+	for _, g := range grants {
+		granted = append(granted, g.UnitID)
+	}
+	return rootsOver(all, units, granted), nil
+}
+
+// rootsOver is the units of roots that any of units lies at or below in the tree all, once each,
+// walking each unit's current parent links.
+func rootsOver(all []types.GovernanceUnit, units, roots []uuid.UUID) []uuid.UUID {
+	byID := unitsByID(all)
+	var out []uuid.UUID
+	for _, u := range units {
+		seen := map[uuid.UUID]bool{}
+		for cur := &u; cur != nil && !seen[*cur]; {
+			seen[*cur] = true
+			if slices.Contains(roots, *cur) && !slices.Contains(out, *cur) {
+				out = append(out, *cur)
+			}
+			row, ok := byID[*cur]
+			if !ok {
+				break
+			}
+			cur = row.ParentID
+		}
+	}
+	return out
 }
 
 // membershipAddInScope is a unit admin's scope over a membership add: the unit is one they govern and
-// the subject already belongs in their units. The add itself is always held (unitWriteMode).
-func (s *Server) membershipAddInScope(w http.ResponseWriter, r *http.Request, a types.GovernanceMembership) bool {
+// the subject already belongs in their units. The add itself is always held (unitWriteMode); belongsBy
+// is the units they are granted that the subject belongs below (governingRoots), which the decision
+// reads again (heldBelongsStale). A subject no root is found for is refused, as one outside them.
+func (s *Server) membershipAddInScope(w http.ResponseWriter, r *http.Request, a types.GovernanceMembership) (belongsBy []uuid.UUID, ok bool) {
 	ctx := r.Context()
 	if !s.requireUnitsInScope(w, r, "governance.membership", false, a.UnitID) {
-		return false
+		return nil, false
 	}
 	ms, err := s.cfg.Store.ListGovernanceMemberships(ctx)
-	var belongs bool
 	if err == nil {
-		belongs, err = s.subjectBelongsInScope(ctx, ms, a.SubjectType, a.Subject, uuid.Nil,
+		belongsBy, err = subjectUnitsInScope(ms, a.SubjectType, a.Subject, uuid.Nil,
 			func(u uuid.UUID) (bool, error) { return s.unitScope(ctx, u, false) })
+	}
+	if err == nil && len(belongsBy) > 0 {
+		belongsBy, err = s.governingRoots(ctx, nil, belongsBy)
 	}
 	if err != nil {
 		writeServerError(w, r, "read unit scope", err)
-		return false
+		return nil, false
 	}
-	if !belongs {
+	if len(belongsBy) == 0 {
 		s.refuseOutsideScope(w, r, "governance.membership")
+		return nil, false
 	}
-	return belongs
+	return belongsBy, true
 }
 
 // deleteMembershipInScope is a unit admin's membership delete: the membership is in a unit they govern
@@ -416,6 +471,7 @@ func (s *Server) membershipAddInScope(w http.ResponseWriter, r *http.Request, a 
 func (s *Server) deleteMembershipInScope(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
 	ctx := r.Context()
 	var removed types.GovernanceMembership
+	var keepsIn []uuid.UUID
 	err := s.writeGovernance(ctx, func(q store.Querier) error {
 		row, err := lockedMembershipQ(ctx, q, id)
 		if err != nil {
@@ -428,28 +484,33 @@ func (s *Server) deleteMembershipInScope(w http.ResponseWriter, r *http.Request,
 		if err != nil {
 			return err
 		}
-		keeps, err := s.subjectBelongsInScope(ctx, all, row.SubjectType, row.Subject, row.ID,
+		keepsIn, err = subjectUnitsInScope(all, row.SubjectType, row.Subject, row.ID,
 			func(u uuid.UUID) (bool, error) { return s.unitScopeQ(ctx, q, u, false) })
 		if err != nil {
 			return err
 		}
-		if !keeps {
+		if len(keepsIn) == 0 {
 			return errOutsideScope
 		}
-		if row.Legacy {
-			units, err := store.ListGovernanceUnitsQ(ctx, q)
-			if err != nil {
+		activates, err := deleteActivationsQ(ctx, q, row)
+		if err != nil {
+			return err
+		}
+		if len(activates) > 0 {
+			// Held: the decision reads again that the subject keeps a membership below these roots.
+			if keepsIn, err = s.governingRoots(ctx, q, keepsIn); err != nil {
 				return err
 			}
-			if len(legacyActivations(row, all, units)) > 0 {
-				return errHoldForApproval
+			if len(keepsIn) == 0 {
+				return errOutsideScope
 			}
+			return errHoldForApproval
 		}
 		removed = row
 		return store.DeleteGovernanceMembershipQ(ctx, q, id)
 	})
 	if errors.Is(err, errHoldForApproval) {
-		s.holdMembershipDelete(w, r, id)
+		s.holdMembershipDelete(w, r, id, keepsIn)
 		return
 	}
 	if s.answerOutsideScope(w, r, "governance.membership", err) || writeMembershipTreeError(w, r, "delete governance assignment", err) {
@@ -463,7 +524,8 @@ func (s *Server) deleteMembershipInScope(w http.ResponseWriter, r *http.Request,
 
 // moveMembershipInScope is a unit admin's membership move: from a unit they govern to another, read
 // under the locks the move takes. A move whose destination's walls are Leq the source's applies
-// directly; any other is held, whatever the second-human switch says.
+// directly, except a legacy row whose move would let another legacy row take over (H3); any other is
+// held, whatever the second-human switch says.
 func (s *Server) moveMembershipInScope(w http.ResponseWriter, r *http.Request, id, to uuid.UUID) {
 	ctx := r.Context()
 	var from, moved types.GovernanceMembership
@@ -480,6 +542,13 @@ func (s *Server) moveMembershipInScope(w http.ResponseWriter, r *http.Request, i
 			return err
 		}
 		if !narrows {
+			return errHoldForApproval
+		}
+		shift, err := moveShiftQ(ctx, q, row, to)
+		if err != nil {
+			return err
+		}
+		if len(shift.activates) > 0 || len(shift.vacates) > 0 {
 			return errHoldForApproval
 		}
 		from, moved, err = moveMembershipQ(ctx, q, id, to)

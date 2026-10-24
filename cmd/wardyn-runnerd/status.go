@@ -20,10 +20,10 @@ import (
 const statusFile = "status.json"
 
 // runnerStatus is what statusFile holds: the link state, when it began, the last error with its
-// time, the stage the last failed connect or start stopped at and whether the run relay answers. It
-// holds no token, key or proxy credential: the error text is cleaned of any user name and password
-// (cleanStatusError), a failure's reason is scrubbed as the offline summary's is, and nothing else
-// comes from the environment.
+// time, the stage the last failed connect or start stopped at, whether the run relay answers and the
+// proxy image, if any, that refused peers-only. It holds no token, key or proxy credential: the error
+// text is cleaned of any user name and password (cleanStatusError), a failure's reason is scrubbed as
+// the offline summary's is, and nothing else comes from the environment but a pinned proxy image's name.
 type runnerStatus struct {
 	State       string     `json:"state"` // starting, connected, offline or stopped
 	PID         int        `json:"pid"`
@@ -37,6 +37,10 @@ type runnerStatus struct {
 	// Relay is types.RelayReachable or types.RelayUnreachable; empty when no relay is probed.
 	Relay     string    `json:"relay,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// PeersOnlyRefusedBy is the organisation's proxy image that refused allowed_peers at the last
+	// proxy start, so run proxies serve any peer (WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY on only by
+	// default); empty once one takes them.
+	PeersOnlyRefusedBy string `json:"peers_only_refused_by,omitempty"`
 }
 
 // statusPath is statusFile in stateDir.
@@ -139,6 +143,18 @@ func (w *statusWriter) relayChanged(state string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.cur.Relay, w.cur.UpdatedAt = state, w.now()
+	w.write()
+}
+
+// peersOnlyChanged records the proxy image whose runs serve any peer because it refused allowed_peers,
+// "" once one takes them. A nil writer records nothing.
+func (w *statusWriter) peersOnlyChanged(image string) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.cur.PeersOnlyRefusedBy, w.cur.UpdatedAt = image, w.now()
 	w.write()
 }
 

@@ -50,6 +50,8 @@ export interface GovernanceChangeDiff {
   changed: string[];
   // Advisory sentences the server wrote about the proposed change (a profile's omission warnings); absent when none.
   notes?: string[];
-  // A legacy membership delete: the units whose legacy memberships may become someone's context.
+  // A legacy membership delete or move: the units whose legacy memberships may become someone's context.
   activates?: { unit_id: string; unit_name: string }[];
+  // A legacy membership move: the units it may take someone out of.
+  vacates?: { unit_id: string; unit_name: string }[];
 }

@@ -321,6 +321,15 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonDesktopRulesUnreadable, desktopRulesUnreadableMsg)
 		return
 	}
+	// A recorded run's stream keeps no frames while the run's row says its agent is paused to sign in or
+	// a take over is open, from the first frame and at each vmSignInRecheck after; a mark or take over
+	// that cannot be read refuses the stream rather than record it.
+	signIn, err := s.watchVMSignIn(r.Context(), sess.Run)
+	if err != nil {
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonDesktopSignInsUnavailable, desktopSignInsUnreadableMsg)
+		return
+	}
+	defer signIn.stop()
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{"binary"}})
 	if err != nil {
 		return // Accept answered the request
@@ -330,6 +339,7 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 	// stream can tell the viewer why before it goes.
 	ctx, cancel := context.WithDeadline(r.Context(), time.Unix(sess.Expires, 0))
 	defer cancel()
+	go signIn.watch(ctx) // from here on, so a pause during the dial is held before the first frame
 	untrack := s.trackDesktop(sess, cancel)
 	defer untrack()
 	// A Close here between this request's decode and trackDesktop cancelled nothing of this stream.

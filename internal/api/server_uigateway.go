@@ -42,4 +42,8 @@ type uiGatewayState struct {
 	uiDesktop uiDesktopSessions
 	// uiDesktopClosedEvery, when set, replaces uiDesktopClosedRecheck (tests shorten it).
 	uiDesktopClosedEvery time.Duration
+	// vmSignInTick, when set, replaces a recorded VM desktop stream's vmSignInRecheck ticker (tests):
+	// each channel sent on it is one recheck of the run's sign-in mark, closed once it is done
+	// (vmSignInWatch.recheck).
+	vmSignInTick chan chan struct{}
 }

@@ -37,7 +37,9 @@ type Server struct {
 	// outlives an agent restart and a reboot clears it.
 	MarkerDir string
 	// Swaps is the kernel's swap list (/proc/swaps in a guest): Init refuses a guest with any swap
-	// on, so the sign-in store never leaves memory. Empty skips the check (tests only).
+	// on, so the sign-in store (a tmpfs) stays in the guest's memory. The host may still page that
+	// memory to its own disk (docs/operations/linux-vm-sandboxes.md, "Host memory"). Empty skips
+	// the check (tests only).
 	Swaps string
 	// SignInStore mounts the sign-in store (MountSignInStore); off makes it read-only. Nil reports
 	// no store (tests only).

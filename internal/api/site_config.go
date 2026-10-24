@@ -706,9 +706,6 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigInvalid, "invalid site config: "+err.Error())
 		return
 	}
-	if s.refuseSiteRecordingWithoutStore(w, cfg.Recording) {
-		return
-	}
 	// The logo file (#1215) is read and checked BEFORE anything is written, so a
 	// bad file refuses the apply whole — after the shape rule above, and before
 	// the lock, since a read of the host filesystem has no business inside it.
@@ -773,14 +770,9 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	if !s.admitGovernanceMaxDepth(w, r, &cfg, existing) { // under the lock, after the carry-forward
 		return
 	}
-	// The egress baseline lowers grades, so it has a stricter writer than this door: the egress block
-	// and the set of baseline-marked internal hosts must come back as stored, whoever is asking.
-	carryForwardInternalHostMarks(&cfg, existing)
-	if msg := inlineBaselineRefusal(cfg, existing); msg != "" {
-		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigEgressViaOwnRoute, msg)
+	if !carryOwnRouteBlocks(w, &cfg, existing) {
 		return
 	}
-	cfg.Egress = existing.Egress
 	// After the carry-forward: the roster's defaults are checked against the
 	// providers this document will actually hold, whichever side was named; the
 	// sign-in help link against the stored one (signInHelpURLHTTPS).

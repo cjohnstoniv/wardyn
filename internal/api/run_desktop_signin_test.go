@@ -803,6 +803,15 @@ func TestDispatchDesktopSigninsFollowTheTarget(t *testing.T) {
 			if fr.createCalls != 1 || st.state != types.RunRunning {
 				t.Errorf("creates %d state %s, want the run started", fr.createCalls, st.state)
 			}
+			// The row names the image the sandbox ran: the sign-in variant
+			// when swapped, and untouched (the create path wrote it) otherwise.
+			wantRow := ""
+			if tc.signins {
+				wantRow = variant
+			}
+			if got, _ := st.GetRun(context.Background(), run.ID); got.Image != wantRow {
+				t.Errorf("run row image %q, want %q", got.Image, wantRow)
+			}
 		})
 	}
 }

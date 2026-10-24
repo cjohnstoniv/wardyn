@@ -312,7 +312,14 @@
 # docs/AUDIT-ACTIONS.md 53495 = ours 53486 + theirs 53418 - base 53409 at the 0.10 W7 merge of DESK-LOCKS.
 # docs/AUDIT-ACTIONS.md 53481 adds 72 over 53409, measured (0.10 DESK-SIGNIN, #2972): the desktop.sign_in.pause row and agent_provider.write's desktop_sign_ins_off field.
 # docs/AUDIT-ACTIONS.md 53567 = ours 53495 + theirs 53481 - base 53409 at the 0.10 W7 merge of DESK-SIGNIN.
-docs/AUDIT-ACTIONS.md=53567 share=8
+# docs/AUDIT-ACTIONS.md 53626 adds 59 over 53567, measured (#2967 DESK-LOCKS row 5): the governance.recording.write row.
+# docs/AUDIT-ACTIONS.md 53607 adds 40 over 53567, measured (0.10 VM sign-ins): desktop.recording.pause on a VM desktop open on another replica, and on one whose sign-in mark cannot be read.
+# docs/AUDIT-ACTIONS.md 53668 = ours 53626 + theirs 53607 - base 53567 at the 0.10 follow-up merge of the VM sign-in fixes, plus 2 measured where both edited one paragraph.
+# docs/AUDIT-ACTIONS.md 53642 adds 35 over 53607, measured (0.10 VM sign-ins): desktop.sign_in.pause failure stages record and lock_lost, and superseded_by.
+# docs/AUDIT-ACTIONS.md 53703 = ours 53668 + theirs 53642 - base 53607 at the 0.10 follow-up merge of the VM sign-in findings.
+# docs/AUDIT-ACTIONS.md 53660 adds 18 over 53642, measured (0.10 VM sign-ins): the desktop.sign_in.pause restop stage.
+# docs/AUDIT-ACTIONS.md 53721 = ours 53703 + theirs 53660 - base 53642 at the 0.10 follow-up merge of the restop stage.
+docs/AUDIT-ACTIONS.md=53721 share=8
 # docs/AUDIT-ACTIONS.md 50827 = ours 50175 + theirs 50556 - base 49904 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.

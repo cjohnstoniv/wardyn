@@ -286,6 +286,10 @@ func statusStage(path string) doctor.Stage {
 	if st.LastError != "" && st.LastErrorAt != nil {
 		last = fmt.Sprintf("; last error at %s: %s", st.LastErrorAt.UTC().Format(time.RFC3339), st.LastError)
 	}
+	if st.PeersOnlyRefusedBy != "" {
+		last += "; warning: peers-only not in effect: organisation older (its proxy image " + st.PeersOnlyRefusedBy +
+			" refused allowed_peers, so run proxies serve any peer until it is upgraded)"
+	}
 	since := st.Since.UTC().Format(time.RFC3339)
 	// A failure is a runner that is not connected and either stopped at a stage or is offline. An error left
 	// from an earlier drop, on a runner that has since started or stopped cleanly, is history.

@@ -123,6 +123,14 @@ func (l *offlineLog) relayChanged(state string) {
 	}
 }
 
+// peersOnlyChanged is docker.Config.PeersOnlyFallback: the proxy image whose runs serve any peer, or ""
+// once one takes allowed_peers again, goes to status.json.
+func (l *offlineLog) peersOnlyChanged(image string) {
+	if l != nil {
+		l.status.peersOnlyChanged(image)
+	}
+}
+
 // startFailed records a refusal of serve's start and keeps it on disk; an error without a stage is
 // not one the summary names.
 func (l *offlineLog) startFailed(err error) {

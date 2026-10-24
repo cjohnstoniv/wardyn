@@ -19,6 +19,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -205,6 +207,7 @@ var governanceChangeKinds = map[string]govKind{
 	govKindRestriction:         {approver: securityApprover, apply: applyRestrictionChange},
 	govKindWorkspaceOwningUnit: {approver: securityApprover, apply: applyWorkspaceOwningUnitChange},
 	govKindApprovalRule:        {approver: securityApprover, apply: applyApprovalRuleChange},
+	govKindRecording:           {approver: securityApprover, apply: applyRecordingChange},
 }
 
 // forChange is the kind as it decides one held change. A remote-hosted runner add to or removal from an
@@ -254,8 +257,11 @@ type govProposal struct {
 	notes []string
 	// baseState is the target as the proposal saw it; its hash is what an approval compares.
 	baseState any
-	// activates are the units a legacy membership delete may make someone's context (H3).
-	activates []unitActivation
+	// shift is what a legacy membership delete or move may do to whose row wins (H3).
+	shift legacyShift
+	// belongsBy is, for a unit admin's membership add or delete, the units they are granted that its
+	// subject holds another membership below (governingRoots, heldBelongsStale).
+	belongsBy []uuid.UUID
 }
 
 // proposeGovernanceChange stores p as pending and answers 202 with the pending change. A live change
@@ -270,7 +276,7 @@ func (s *Server) proposeGovernanceChange(w http.ResponseWriter, r *http.Request,
 	ch := types.GovernanceChange{
 		TargetKind: p.kind, Op: p.op, TargetKey: p.key,
 		Payload:         payload,
-		Diff:            renderGovernanceDiff(p.before, p.after, p.changed, p.notes, p.activates...),
+		Diff:            renderGovernanceDiff(p.before, p.after, p.changed, p.notes, heldReads{shift: p.shift, belongsBy: p.belongsBy}),
 		BaseHash:        computeETag(p.baseState),
 		DeploymentHash:  computeETag(s.cfg.DefaultPolicy),
 		ProposedBy:      proposer,
@@ -321,14 +327,30 @@ type governanceDiffBody struct {
 	Changed []string        `json:"changed"`
 	// Notes are advisory, never a refusal: what a write would have returned as warnings had it not been held.
 	Notes []string `json:"notes,omitempty"`
-	// Activates lists the units a legacy membership delete may make someone's context.
+	// Activates lists the units a legacy membership delete or move may make someone's context.
 	Activates []unitActivation `json:"activates,omitempty"`
+	// Vacates lists the units a legacy membership move may take someone out of.
+	Vacates []unitActivation `json:"vacates,omitempty"`
+	// BelongsBy lists, for a unit admin's membership add or delete, the units they are granted that its
+	// subject holds another membership below.
+	BelongsBy []uuid.UUID `json:"belongs_by,omitempty"`
+}
+
+// heldReads is what a held change records for its decision to read again: a legacy shift (H3), and
+// the units a unit admin's add or delete was admitted by (heldBelongsStale).
+type heldReads struct {
+	shift     legacyShift
+	belongsBy []uuid.UUID
 }
 
 // renderGovernanceDiff is the diff stored with a change: the redacted before and after views and the
 // changed field paths, rendered by the server so the console and the CLI never compute their own.
-func renderGovernanceDiff(before, after any, changed, notes []string, activates ...unitActivation) json.RawMessage {
-	body := governanceDiffBody{Changed: changed, Notes: notes, Activates: activates}
+// held is a change's heldReads (none for a change that records none).
+func renderGovernanceDiff(before, after any, changed, notes []string, held ...heldReads) json.RawMessage {
+	body := governanceDiffBody{Changed: changed, Notes: notes}
+	if len(held) > 0 {
+		body.Activates, body.Vacates, body.BelongsBy = held[0].shift.activates, held[0].shift.vacates, held[0].belongsBy
+	}
 	if body.Changed == nil {
 		body.Changed = []string{}
 	}

@@ -229,7 +229,12 @@ func (s *Server) recheckApprover(ctx context.Context, r *http.Request, q store.Q
 			s.refuseStaleRoleStamp(w, r, t)
 		}}
 	}
-	fresh := withUnitScopeTx(withHumanIdentity(ctx, t.Principal, t.Email, t.Role, t.UserType, t.Groups, t.GroupsTruncated == nil || *t.GroupsTruncated), q)
+	// A cli_access token publishes the role user whatever the row holds, as apiTokenAuth clamps it.
+	role := t.Role
+	if t.Kind == types.APITokenKindCLIAccess {
+		role = oidc.RoleUser
+	}
+	fresh := withUnitScopeTx(withHumanIdentity(ctx, t.Principal, t.Email, role, t.UserType, t.Groups, t.GroupsTruncated == nil || *t.GroupsTruncated), q)
 	if !kind.approver.allowed(s, r.WithContext(fresh)) {
 		return s.denyApprover(kind)
 	}
