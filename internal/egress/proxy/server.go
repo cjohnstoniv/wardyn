@@ -47,6 +47,8 @@ type Server struct {
 	allowedPeers []netip.Prefix
 	// signinListen is Config.SigninListen: the person's sign-in lane, "" = none.
 	signinListen string
+	// onListening, when set, runs once the main listener is bound (see OnListening).
+	onListening func()
 }
 
 // NewServer wires a Proxy from a validated Config and dependencies. It mints
@@ -414,6 +416,9 @@ func (s *Server) ListenAndServe() error {
 	}
 	ln, err := s.listen(cmp.Or(s.http.Addr, ":http"))
 	if err == nil {
+		if s.onListening != nil {
+			s.onListening()
+		}
 		err = s.http.Serve(ln)
 	}
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -421,6 +426,14 @@ func (s *Server) ListenAndServe() error {
 	}
 	return nil
 }
+
+// ReadyMarker is the line a sidecar prints on stdout once its listener is bound. A runner reads it off
+// the container's attach stream, which works on any engine, to know the agent may start.
+const ReadyMarker = "wardyn-proxy: ready"
+
+// OnListening sets fn to run once the main listener is bound, before the first connection is
+// accepted. Call it before ListenAndServe.
+func (s *Server) OnListening(fn func()) { s.onListening = fn }
 
 // listen opens addr, serving only AllowedPeers when they are set.
 func (s *Server) listen(addr string) (net.Listener, error) {

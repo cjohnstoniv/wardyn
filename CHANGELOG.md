@@ -11,6 +11,21 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Before you upgrade
+
+- The proxy-ready fix on Docker spans three pieces: wardyn-runnerd, the wardyn-proxy image and the agent images. Upgrade
+  the proxy image with the runner: a runner waits up to 10 seconds for the proxy to report it is listening, and an older
+  proxy image never does, so every run it starts fails with a named proxy-not-ready error. An older runner with the new
+  images works as before. The agent images wait for the proxy on their own and need no runner change.
+
+### Fixed
+
+- On Docker, a run's agent can no longer start before its proxy is listening. The runner now holds the agent back until
+  the proxy reports it has bound its port, and fails the run with a named reason if it does not within 10 seconds. The
+  agent images also wait up to 10 seconds for the proxy before they run the task, and carry on with one stderr line if
+  it never answers. Before, an exec run's first requests, or a very short run's recording upload, could be refused with
+  "connection refused".
+
 ## [0.10.0-rc.1] — 2026-10-24
 
 ### Before you upgrade

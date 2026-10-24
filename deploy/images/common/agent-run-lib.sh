@@ -10,6 +10,27 @@
 #
 # Requires `set -euo pipefail` and bash (matches agent-run itself).
 
+# wait_for_proxy — hold until the run's proxy accepts connections, for at most
+# WARDYN_PROXY_WAIT_SECS (default 10). The runner starts the agent only after the
+# proxy has said it is listening; this is the belt for a runner that does not
+# (an older one), where the first requests would otherwise be refused. It fails
+# OPEN: on the bound it prints one line and carries on, which is what an agent
+# did before this wait existed. A proxy host that does not resolve is not a
+# proxied run, so it returns at once.
+wait_for_proxy() {
+    local url="${WARDYN_PROXY_URL:-http://wardyn-proxy:3128}" hp host port max i
+    hp="${url#*://}"; hp="${hp%%/*}"; host="${hp%:*}"; port="${hp##*:}"
+    [[ "$port" =~ ^[0-9]+$ ]] || return 0
+    getent hosts "$host" >/dev/null 2>&1 || return 0
+    max="${WARDYN_PROXY_WAIT_SECS:-10}"
+    for ((i = 0; i < max * 5; i++)); do
+        if (exec 3<>"/dev/tcp/$host/$port") 2>/dev/null; then return 0; fi
+        sleep 0.2
+    done
+    echo "agent-run: the proxy at $host:$port did not accept connections within ${max}s; continuing, so early requests may be refused" >&2
+    return 0
+}
+
 # ── What the agent CLI fetches on its OWN behalf, OFF ────────────────────────
 # Each of these parks a first_use_approval against the shipped default policy
 # (examples/policies/default.json) before the operator has asked the agent to do

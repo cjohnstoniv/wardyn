@@ -30,6 +30,8 @@ import (
 	"github.com/moby/moby/api/types/system"
 	"github.com/moby/moby/api/types/volume"
 	"github.com/moby/moby/client"
+
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 )
 
 // fakeNotFound is a Docker-shaped not-found error: the driver's isNotFound now
@@ -328,13 +330,13 @@ type fakeDocker struct {
 	olderProxyRefuses string
 	logOpts           []client.ContainerLogsOptions // every ContainerLogs call's options, in order
 
-	// startedAtOverride, keyed by container name, overrides ContainerStart's
-	// default (real, current-time) StartedAt for that container — used to
-	// simulate a daemon whose clock lags the host's (L1): a test sets an
-	// in-the-past value before Start to prove watchProxyExit measures its
-	// settle window from the watch's own start, never from a skewed
-	// StartedAt (driver_proxy_revive.go's proxySettleSince).
-	startedAtOverride map[string]time.Time
+	// proxyReadyDelay holds back the ready marker a started proxy prints on its attach stream, and
+	// proxyNeverReady withholds it (the proxy stays up and silent). proxyReadyAt is when the marker was
+	// delivered and createdAt when each container was created, so a test can order the two.
+	proxyReadyDelay time.Duration
+	proxyNeverReady bool
+	proxyReadyAt    time.Time
+	createdAt       map[string]time.Time
 
 	// exportTar is what ContainerExport streams (a VM image's filesystem); exports counts the calls.
 	exportTar []byte
@@ -389,7 +391,8 @@ type fakeAttach struct {
 	started bool
 }
 
-// ContainerAttach hands back a connection whose writes land in f.stdin[id].
+// ContainerAttach hands back a connection whose writes land in f.stdin[id] and whose reads are the
+// container's stdout: for a wardyn-proxy, the ready marker (see fakeStdinConn.Read).
 func (f *fakeDocker) ContainerAttach(_ context.Context, id string, opts client.ContainerAttachOptions) (client.ContainerAttachResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -399,15 +402,18 @@ func (f *fakeDocker) ContainerAttach(_ context.Context, id string, opts client.C
 	}
 	f.attached = append(f.attached, fakeAttach{id: id, started: c.state != nil && c.state.Running})
 	return client.ContainerAttachResult{
-		HijackedResponse: client.NewHijackedResponse(&fakeStdinConn{f: f, id: id}, "application/vnd.docker.raw-stream"),
+		HijackedResponse: client.NewHijackedResponse(&fakeStdinConn{f: f, id: id, closed: make(chan struct{})}, "application/vnd.docker.raw-stream"),
 	}, nil
 }
 
 // fakeStdinConn is an attach connection that records what is written to it.
 type fakeStdinConn struct {
 	fakeConn
-	f  *fakeDocker
-	id string
+	f      *fakeDocker
+	id     string
+	closed chan struct{}
+	once   sync.Once
+	sent   bool
 }
 
 func (c *fakeStdinConn) Write(b []byte) (int, error) {
@@ -415,6 +421,41 @@ func (c *fakeStdinConn) Write(b []byte) (int, error) {
 	defer c.f.mu.Unlock()
 	c.f.stdin[c.id] = append(c.f.stdin[c.id], b...)
 	return len(b), nil
+}
+
+// Read is the proxy's stdout. After the config was written a proxy that stays up prints the ready
+// marker (late when proxyReadyDelay is set, never when proxyNeverReady is), then the stream stays
+// open until Close, as a live container's does. A proxy scripted to exit (exitAfterInspects,
+// olderProxyRefuses) prints nothing and its stream ends. Any other container's stream ends at once.
+func (c *fakeStdinConn) Read(p []byte) (int, error) {
+	c.f.mu.Lock()
+	ct := c.f.containers[c.id]
+	_, exits := c.f.exitAfterInspects[c.id]
+	refuses := c.f.olderProxyRefuses != "" && bytes.Contains(c.f.stdin[c.id], []byte(`"`+c.f.olderProxyRefuses+`"`))
+	delay, never := c.f.proxyReadyDelay, c.f.proxyNeverReady
+	c.f.mu.Unlock()
+	if ct == nil || !strings.HasPrefix(ct.name, "wardyn-proxy-") || exits || refuses {
+		return 0, io.EOF
+	}
+	if !c.sent && !never {
+		select {
+		case <-time.After(delay):
+		case <-c.closed:
+			return 0, io.EOF
+		}
+		c.sent = true
+		c.f.mu.Lock()
+		c.f.proxyReadyAt = time.Now()
+		c.f.mu.Unlock()
+		return copy(p, muxFrame(1, proxy.ReadyMarker+"\n")), nil
+	}
+	<-c.closed
+	return 0, io.EOF
+}
+
+func (c *fakeStdinConn) Close() error {
+	c.once.Do(func() { close(c.closed) })
+	return nil
 }
 
 func (c *fakeStdinConn) CloseWrite() error { return nil }
@@ -674,6 +715,10 @@ func (f *fakeDocker) ContainerCreate(ctx context.Context, opts client.ContainerC
 		state: &container.State{Status: "created"},
 	}
 	f.containers[name] = c
+	if f.createdAt == nil {
+		f.createdAt = map[string]time.Time{}
+	}
+	f.createdAt[name] = time.Now()
 	id := name
 	if f.createIDOverride != "" {
 		id = f.createIDOverride
@@ -815,18 +860,7 @@ func (f *fakeDocker) containerStart(id string) (client.ContainerStartResult, err
 		// this fast would leave ContainerWait to observe.
 		c.state = &container.State{Status: "exited", ExitCode: int(f.probeExitCode)}
 	} else {
-		// StartedAt defaults to real, current time — a Driver's proxySettle
-		// defaults to 0 for every fake-backed test driver (newWithClient),
-		// so the settle check is trivially satisfied regardless of this value
-		// UNLESS a test explicitly sets proxySettle back to a real duration,
-		// in which case the true current time is exactly what a real daemon
-		// would report. startedAtOverride lets a specific test (the L1 clock-
-		// skew regression) simulate a daemon whose clock lags the host's.
-		startedAt := time.Now()
-		if t, ok := f.startedAtOverride[id]; ok {
-			startedAt = t
-		}
-		c.state = &container.State{Status: "running", Running: true, StartedAt: startedAt.Format(time.RFC3339Nano)}
+		c.state = &container.State{Status: "running", Running: true, StartedAt: time.Now().Format(time.RFC3339Nano)}
 	}
 	f.startedNames = append(f.startedNames, id)
 	return client.ContainerStartResult{}, nil

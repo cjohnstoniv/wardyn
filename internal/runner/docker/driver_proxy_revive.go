@@ -6,11 +6,13 @@
 package docker
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/netip"
@@ -32,34 +34,15 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// proxyStartWatch/proxyStartWatchInterval bound how long startProxy waits to
-// see whether a just-started proxy stays up, versus exiting right back out
-// because it refused its own rendered config. Kept short: this sits on the
-// create-latency path for every run, and a HEALTHY proxy reaches a STABLE
-// Running well inside it — the watch exists to catch the FAST config-load
-// failure, not to babysit a slow one.
-//
-// proxyStartSettle is how long Running must have HELD before the watch trusts
-// it (Driver.proxySettle's production value, set by New()). Docker flips
-// container.State.Running to true the INSTANT ContainerStart returns — well
-// before the sidecar's own process has read and decoded its config. Against a
-// real daemon, a real wardyn-proxy given an unknown config key was observed
-// dying 47-451ms after that first Running sighting, and a watch that returned
-// on the FIRST Running observation (no settle check) caught that failure only
-// ~2/10 times. Any exit inside the settle window is reported with the SAME
-// fixed cause string below: from the driver's side, a proxy that never
-// stayed up long enough to matter IS a config-load failure, whatever
-// actually killed it.
-//
-// The settle window is measured from max(the container's own StartedAt, the
-// watch's own start), never from StartedAt alone: a daemon whose clock lags
-// the host's can report a StartedAt already several seconds in the past on
-// the very FIRST inspect, which would let that inspect look already settled.
-// See proxySettleSince.
+// proxyReadyWait bounds how long startProxy waits for a started proxy to print proxy.ReadyMarker, which it does
+// once it has loaded its config and bound its listener. The wait ends at once when the proxy exits first
+// (it refused its own config: a strict-decode error, an unreadable MITM key, ...), so this bound is only
+// ever spent on a proxy that stays up and never says it is listening. proxyExitPoll is how often the exit
+// code is read after the stream ended.
 const (
-	proxyStartWatch         = 3 * time.Second
-	proxyStartWatchInterval = 200 * time.Millisecond
-	proxyStartSettle        = 1 * time.Second
+	proxyReadyWait = 10 * time.Second
+	proxyExitPoll  = 100 * time.Millisecond
+	proxyExitLook  = 3 * time.Second
 )
 
 // proxyConfigStdinEnv tells the proxy sidecar its config arrives on stdin:
@@ -320,56 +303,62 @@ func (d *Driver) startProxyOn(ctx context.Context, image string, runID uuid.UUID
 		remove()
 		return "", fmt.Errorf("docker: connect proxy to %s: %w", d.cfg.InternalNetwork, err)
 	}
-	if err := d.startWithConfig(ctx, runID, resp.ID, cfgJSON); err != nil {
+	att, err := d.startWithConfig(ctx, runID, resp.ID, cfgJSON)
+	if err != nil {
 		remove()
 		return "", err
 	}
+	defer att.Close()
 	if err := d.openLocalModels(ctx, runID, resp.ID, prep.localModelPorts); err != nil {
 		remove()
 		return "", err
 	}
-	// Watch briefly for the proxy exiting right back out — the shape of it
-	// refusing its own rendered config at boot (a strict-decode error, an
-	// unreadable MITM key, …). Without this, CreateSandbox pressed straight on
-	// to the IP lookup, which found no IP on a dead container and reported
-	// the generic "proxy has no IP…" instead of the proxy's own named cause.
+	// Wait for the proxy's ready marker: it is printed once the listener is bound, so the agent is
+	// never started into "connection refused", and a proxy that exits first (it refused its own
+	// config) is named here instead of surfacing as the generic "proxy has no IP...".
 	//
-	// On a watch failure the container is deliberately NOT removed here: on
-	// the CreateSandbox path the caller removes it after also rolling back
-	// the per-run network; on the ReplaceProxy path it stays so its logs
-	// still name the cause, and the next revive removes it by name.
-	if err := d.watchProxyExit(ctx, resp.ID); err != nil {
+	// On a failure the container is deliberately NOT removed here: on the CreateSandbox path the
+	// caller removes it after also rolling back the per-run network; on the ReplaceProxy path it
+	// stays so its logs still name the cause, and the next revive removes it by name.
+	if err := d.awaitProxyReady(ctx, resp.ID, att); err != nil {
 		d.closeLocalModels(runID) // an exited proxy's addresses are free for another container
 		return resp.ID, err
 	}
 	return resp.ID, nil
 }
 
-// startWithConfig attaches to the created proxy's stdin, starts it, writes
-// cfgJSON there and closes it: the proxy reads its config to EOF. Attaching
-// before the start is what `docker run -i` does, so no byte is written before
-// the proxy's stdin exists. The config's listen address is first bound to the
-// proxy's own address on runID's per-run network (see listenOnRunNetwork).
-func (d *Driver) startWithConfig(ctx context.Context, runID uuid.UUID, id string, cfgJSON []byte) error {
-	att, err := d.cli.ContainerAttach(ctx, id, client.ContainerAttachOptions{Stream: true, Stdin: true})
+// startWithConfig attaches to the created proxy's stdin and stdout, starts it, writes cfgJSON to
+// stdin and closes it: the proxy reads its config to EOF. Attaching before the start is what
+// `docker run -i` does, so no byte is written before the proxy's stdin exists, and none of its
+// stdout is missed. The stream is returned open for awaitProxyReady, which reads the proxy's ready
+// marker from it: the attach is the engine's own channel to the process, so it needs no host route
+// to the container (none exists on Docker Desktop for Mac) and no log driver that keeps logs. The
+// config's listen address is first bound to the proxy's own address on runID's per-run network (see
+// listenOnRunNetwork).
+func (d *Driver) startWithConfig(ctx context.Context, runID uuid.UUID, id string, cfgJSON []byte) (att client.ContainerAttachResult, err error) {
+	att, err = d.cli.ContainerAttach(ctx, id, client.ContainerAttachOptions{Stream: true, Stdin: true, Stdout: true})
 	if err != nil {
-		return fmt.Errorf("docker: attach proxy stdin: %w", err)
+		return att, fmt.Errorf("docker: attach proxy stdin: %w", err)
 	}
-	defer att.Close()
-	if _, err := d.cli.ContainerStart(ctx, id, client.ContainerStartOptions{}); err != nil {
-		return fmt.Errorf("docker: start proxy: %w", err)
+	defer func() {
+		if err != nil {
+			att.Close()
+		}
+	}()
+	if _, err = d.cli.ContainerStart(ctx, id, client.ContainerStartOptions{}); err != nil {
+		return att, fmt.Errorf("docker: start proxy: %w", err)
 	}
 	if cfgJSON, err = d.listenOnRunNetwork(ctx, runID, id, cfgJSON); err != nil {
-		return err
+		return att, err
 	}
 	_ = att.Conn.SetWriteDeadline(time.Now().Add(proxyConfigWriteTimeout))
-	if _, err := att.Conn.Write(cfgJSON); err != nil {
-		return fmt.Errorf("docker: write proxy config: %w", err)
+	if _, err = att.Conn.Write(cfgJSON); err != nil {
+		return att, fmt.Errorf("docker: write proxy config: %w", err)
 	}
-	if err := att.CloseWrite(); err != nil {
-		return fmt.Errorf("docker: close proxy stdin: %w", err)
+	if err = att.CloseWrite(); err != nil {
+		return att, fmt.Errorf("docker: close proxy stdin: %w", err)
 	}
-	return nil
+	return att, nil
 }
 
 // listenOnRunNetwork returns cfgJSON with its listen address set to the
@@ -411,62 +400,85 @@ func (d *Driver) listenOnRunNetwork(ctx context.Context, runID uuid.UUID, id str
 	return json.Marshal(data)
 }
 
-// watchProxyExit polls id for up to proxyStartWatch, returning a named error
-// the moment it observes the container exited with a non-zero code (it
-// refused its config at start) and nil once it has observed Running held for
-// at least d.proxySettle (the common case) or once the window elapses without
-// either — a proxy still mid-start at that point is left to the caller's own
-// next step (the IP lookup, or a subsequent ProxyConfig read) rather than
-// this watch inventing a second timeout.
-func (d *Driver) watchProxyExit(ctx context.Context, id string) error {
-	watchStart := time.Now()
-	deadline := watchStart.Add(proxyStartWatch)
+// proxyNotReadyMessage is what a proxy that stays up but never prints its ready marker is reported as.
+// It is the exit-at-config-load wording, reused until the owner settles copy for this case.
+const proxyNotReadyMessage = "docker: proxy exited at config load"
+
+// proxyNotReadyError is a proxy that was still running when the ready bound ran out. An image older
+// than this runner never prints the marker, so the same failure also names that cause.
+type proxyNotReadyError struct{ tail string }
+
+func (e *proxyNotReadyError) Error() string { return proxyNotReadyMessage + ": " + e.tail }
+
+// awaitProxyReady reads the proxy's stdout from att until proxy.ReadyMarker, for at most
+// d.proxyReadyBound(). A proxy that exits first ends the stream; its exit code and log tail come back
+// as the same config-load error the exit-watch gave, and one still running at the bound is a
+// *proxyNotReadyError. The stream is read here and not with ContainerLogs because the attach was
+// open before the start, so the marker cannot be missed whatever the log driver keeps.
+func (d *Driver) awaitProxyReady(ctx context.Context, id string, att client.ContainerAttachResult) error {
+	pr, pw := io.Pipe()
+	defer pr.Close()
+	go func() {
+		// The proxy sets no TTY, so the stream is stdcopy-multiplexed. Anything it logs after the
+		// marker is read and dropped until the caller closes att.
+		_, err := stdcopy.StdCopy(pw, io.Discard, att.Reader)
+		pw.CloseWithError(err)
+	}()
+	ready := make(chan bool, 1)
+	go func() {
+		sc := bufio.NewScanner(pr)
+		sc.Buffer(make([]byte, 0, 64<<10), 1<<20)
+		for sc.Scan() {
+			if strings.TrimSpace(sc.Text()) == proxy.ReadyMarker {
+				ready <- true
+				return
+			}
+		}
+		ready <- false
+	}()
+	timer := time.NewTimer(d.proxyReadyBound())
+	defer timer.Stop()
+	select {
+	case ok := <-ready:
+		if ok {
+			return nil
+		}
+		return d.proxyExitedBeforeReady(ctx, id)
+	case <-timer.C:
+		return &proxyNotReadyError{tail: d.proxyExitLogTail(ctx, id)}
+	case <-ctx.Done():
+		return fmt.Errorf("docker: waiting for the proxy to be ready: %w", ctx.Err())
+	}
+}
+
+// proxyExitedBeforeReady names why a proxy's output ended without the marker: it exited, so its exit
+// code and log tail say why. The code can lag the stream, so it is read for up to proxyExitLook.
+func (d *Driver) proxyExitedBeforeReady(ctx context.Context, id string) error {
+	deadline := time.Now().Add(proxyExitLook)
 	for {
 		res, err := d.cli.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
 		if err != nil {
-			// Can't observe it — leave the verdict to whatever inspects next.
-			return nil
+			return fmt.Errorf("docker: the proxy's output ended before it was ready, and it cannot be inspected: %w", err)
 		}
-		st := res.Container.State
-		if st != nil {
-			// Checked BEFORE the Running/settle branch, and regardless of
-			// Running: a container that has already exited is never also
-			// reported Running, so there is no ordering ambiguity — but
-			// checking the terminal state first keeps that true even if a
-			// future daemon/fake ever reported both transiently.
-			if st.ExitCode != 0 {
-				return proxyConfigLoadError(st.ExitCode, d.proxyExitLogTail(ctx, id))
-			}
-			if st.Running && time.Since(proxySettleSince(st, watchStart)) >= d.proxySettle {
-				return nil
-			}
+		if st := res.Container.State; st != nil && !st.Running {
+			return proxyConfigLoadError(st.ExitCode, d.proxyExitLogTail(ctx, id))
 		}
 		if time.Now().After(deadline) {
-			return nil
+			return &proxyNotReadyError{tail: d.proxyExitLogTail(ctx, id)}
 		}
 		select {
 		case <-ctx.Done():
-			return nil
-		case <-time.After(proxyStartWatchInterval):
+			return fmt.Errorf("docker: waiting for the proxy to be ready: %w", ctx.Err())
+		case <-time.After(proxyExitPoll):
 		}
 	}
 }
 
-// proxySettleSince resolves the moment watchProxyExit measures its settle
-// window from: the LATER of the container's own StartedAt (Docker's
-// RFC3339Nano timestamp) and watchStart, never earlier than watchStart. A
-// missing/unparseable StartedAt leaves watchStart standing; the case this
-// guards is a PARSEABLE StartedAt further in the past than watchStart, which
-// a clock-skewed daemon can report on the very first inspect — using it
-// directly would let that inspect already look "settled". max() refuses to
-// count any time before the watch itself began, so a skewed StartedAt can
-// only make the wait LONGER or be ignored, never shorter.
-func proxySettleSince(st *container.State, watchStart time.Time) time.Time {
-	since := watchStart
-	if t, err := time.Parse(time.RFC3339Nano, st.StartedAt); err == nil && t.After(since) {
-		since = t
+func (d *Driver) proxyReadyBound() time.Duration {
+	if d.proxyReady > 0 {
+		return d.proxyReady
 	}
-	return since
+	return proxyReadyWait
 }
 
 // proxyExitLogTail reads the last ~20 lines the proxy wrote before dying, so
