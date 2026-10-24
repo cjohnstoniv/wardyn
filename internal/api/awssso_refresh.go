@@ -652,46 +652,7 @@ func (s *Server) renewAWSSSOBlob(parent context.Context, scope awsSSOScope, blob
 
 	resp, attempts, afterLostReply, err := s.createAWSSSOTokenWithRetry(ctx, blob)
 	if err != nil {
-		spent := errors.Is(err, errAWSSSOCredentialSpent)
-		if spent {
-			s.markAWSSSOTokenSpent(ctx, fingerprint, scope.owner)
-			// The blob was re-read under the lock, so it is the stored one: a
-			// copy that predated a rotation would delete the pair that rotation
-			// persisted, which is why a failed re-read returns above.
-			//
-			// Detached from the lock's context and guarded by the revision read
-			// under it, like the Put: a holder that lost the lock must not delete
-			// the newer pair another replica stored.
-			dctx := context.WithoutCancel(ctx)
-			if guarded {
-				dctx = secretstore.WithIfRevision(dctx, rev)
-			}
-			s.deleteSpentAWSSSOBlob(dctx, scope, afterLostReply)
-		}
-		slog.ErrorContext(ctx, "wardynd: renewing the captured AWS SSO credential failed",
-			slog.Bool("credential_spent", spent), slog.Bool("after_lost_reply", afterLostReply), slog.Any("err", err))
-		s.auditAWSSSORenewalFailure(ctx, scope, blob, spent, err, attempts, afterLostReply)
-		if spent {
-			s.metrics.ssoRefreshRecorded(ssoRefreshOutcomeSpent)
-			if retry != nil && guarded {
-				*retry = s.storedPairSinceSpent(ctx, scope, blob, rev)
-			}
-			return blob, awsSSORefreshSpentSentence
-		}
-		// A TRANSIENT failure is not a reason to stop using a token we still hold.
-		// needsRefresh fires a whole skew window (10 min) AHEAD of expiry, so most
-		// renewals run against a still-valid access token — failing the lane there
-		// would turn one AWS throttle into a dead credential for a run that had
-		// minutes of headroom, and (until the dispatch-time mechanism gate lands)
-		// let it cross silently to the api-key placeholder. Serve the token; the
-		// next dispatch renews it, and the failure is audited either way.
-		if !blob.expired(s.cfg.Now()) {
-			slog.WarnContext(ctx, "wardynd: renewing the captured AWS SSO credential failed, but the current token is still valid; serving it")
-			s.metrics.ssoRefreshRecorded(ssoRefreshOutcomeTransportError)
-			return blob, ""
-		}
-		s.metrics.ssoRefreshRecorded(ssoRefreshOutcomeUnavailable)
-		return blob, awsSSOExpiredFailure(err)
+		return s.renewalRedeemFailed(ctx, scope, blob, err, attempts, afterLostReply, fingerprint, rev, guarded, retry)
 	}
 	s.metrics.ssoRefreshRecorded(ssoRefreshOutcomeSuccess)
 	s.clearAWSSSORefused(ctx, fingerprint)
@@ -772,6 +733,53 @@ func (s *Server) renewAWSSSOBlob(parent context.Context, scope awsSSOScope, blob
 		}
 	}
 	return next, ""
+}
+
+// renewalRedeemFailed answers a renewal whose CreateToken failed (err), under
+// the lock renewAWSSSOBlob holds: carved out of it for gocyclo. A spent answer
+// sets *retry as renewAWSSSOBlob's doc says.
+func (s *Server) renewalRedeemFailed(ctx context.Context, scope awsSSOScope, blob awsSSOBlob, err error, attempts int,
+	afterLostReply bool, fingerprint, rev string, guarded bool, retry **awsSSOBlob) (awsSSOBlob, string) {
+	spent := errors.Is(err, errAWSSSOCredentialSpent)
+	if spent {
+		s.markAWSSSOTokenSpent(ctx, fingerprint, scope.owner)
+		// The blob was re-read under the lock, so it is the stored one: a
+		// copy that predated a rotation would delete the pair that rotation
+		// persisted, which is why a failed re-read returns above.
+		//
+		// Detached from the lock's context and guarded by the revision read
+		// under it, like the Put: a holder that lost the lock must not delete
+		// the newer pair another replica stored.
+		dctx := context.WithoutCancel(ctx)
+		if guarded {
+			dctx = secretstore.WithIfRevision(dctx, rev)
+		}
+		s.deleteSpentAWSSSOBlob(dctx, scope, afterLostReply)
+	}
+	slog.ErrorContext(ctx, "wardynd: renewing the captured AWS SSO credential failed",
+		slog.Bool("credential_spent", spent), slog.Bool("after_lost_reply", afterLostReply), slog.Any("err", err))
+	s.auditAWSSSORenewalFailure(ctx, scope, blob, spent, err, attempts, afterLostReply)
+	if spent {
+		s.metrics.ssoRefreshRecorded(ssoRefreshOutcomeSpent)
+		if retry != nil && guarded {
+			*retry = s.storedPairSinceSpent(ctx, scope, blob, rev)
+		}
+		return blob, awsSSORefreshSpentSentence
+	}
+	// A TRANSIENT failure is not a reason to stop using a token we still hold.
+	// needsRefresh fires a whole skew window (10 min) AHEAD of expiry, so most
+	// renewals run against a still-valid access token — failing the lane there
+	// would turn one AWS throttle into a dead credential for a run that had
+	// minutes of headroom, and (until the dispatch-time mechanism gate lands)
+	// let it cross silently to the api-key placeholder. Serve the token; the
+	// next dispatch renews it, and the failure is audited either way.
+	if !blob.expired(s.cfg.Now()) {
+		slog.WarnContext(ctx, "wardynd: renewing the captured AWS SSO credential failed, but the current token is still valid; serving it")
+		s.metrics.ssoRefreshRecorded(ssoRefreshOutcomeTransportError)
+		return blob, ""
+	}
+	s.metrics.ssoRefreshRecorded(ssoRefreshOutcomeUnavailable)
+	return blob, awsSSOExpiredFailure(err)
 }
 
 // storedPairSinceSpent is a spent answer's one second chance. The authority
