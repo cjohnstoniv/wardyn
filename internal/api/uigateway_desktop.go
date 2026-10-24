@@ -339,6 +339,7 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 	// stream can tell the viewer why before it goes.
 	ctx, cancel := context.WithDeadline(r.Context(), time.Unix(sess.Expires, 0))
 	defer cancel()
+	go signIn.watch(ctx) // from here on, so a pause during the dial is held before the first frame
 	untrack := s.trackDesktop(sess, cancel)
 	defer untrack()
 	// A Close here between this request's decode and trackDesktop cancelled nothing of this stream.
@@ -392,12 +393,6 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 	defer tick.Stop()
 	closedTick := time.NewTicker(cmp.Or(s.uiDesktopClosedEvery, uiDesktopClosedRecheck))
 	defer closedTick.Stop()
-	var signInTick <-chan time.Time
-	if signIn != nil && s.vmSignInTick == nil {
-		recheck := time.NewTicker(vmSignInRecheck)
-		defer recheck.Stop()
-		signInTick = recheck.C
-	}
 	for {
 		select {
 		case <-done:
@@ -420,12 +415,6 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 				_ = c.Close(code, why)
 				return
 			}
-		case <-signInTick:
-			// A read that fails holds the recording until one answers.
-			_ = signIn.sync(ctx)
-		case reread := <-s.vmSignInTick:
-			_ = signIn.sync(ctx)
-			close(reread)
 		}
 	}
 }

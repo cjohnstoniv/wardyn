@@ -47,8 +47,8 @@ const auditDesktopSignIn = "desktop.sign_in.pause"
 const (
 	desktopSignInsOffMsg         = "Your admin doesn't allow sign-ins in this desktop while this agent runs"
 	desktopSignInsUnavailableMsg = "This run's desktop has no sign-in store: its runner or its guest image is older than sign-ins"
-	desktopResumeUnrecordedMsg   = "the agent was resumed, but that could not be recorded; try again"
-	desktopSignInsUnreadableMsg  = "the desktop's sign-ins could not be read; try again"
+	desktopResumeUnrecordedMsg   = "The agent was resumed, but that could not be recorded; try again"
+	desktopSignInsUnreadableMsg  = "The desktop's sign-ins could not be read; try again"
 )
 
 // desktopSignInsView is GET /runs/{id}/desktop/sign-ins and the pause and resume answers. Store is
@@ -337,9 +337,15 @@ func vmSignInHolds(run uuid.UUID) string {
 	return "vm-sign-in:" + run.String() + ":"
 }
 
-// vmSignInRecheck is how often a recorded VM desktop stream re-reads its run's sign-in mark, so a
-// pause or resume answered on another replica holds or frees its recording within this bound.
-const vmSignInRecheck = 2 * time.Second
+// vmSignInRecheck is how often a recorded VM desktop stream re-reads its run's sign-in mark, and
+// vmSignInReadWait bounds each re-read, under it. A re-read that fails, has not answered by its
+// deadline, or is still in flight at the next recheck leaves the mark unknown, and holds the
+// recording until one answers. So a pause answered on another replica holds an open stream within
+// vmSignInRecheck plus vmSignInReadWait, under the 2 seconds the docs promise.
+const (
+	vmSignInRecheck  = time.Second
+	vmSignInReadWait = 900 * time.Millisecond
+)
 
 // vmSignInWatch keeps one recorded VM desktop stream's recording held while its run's row says the
 // agent is paused to sign in, or cannot be read. The hold a pause takes lives in the memory of the
@@ -351,6 +357,10 @@ type vmSignInWatch struct {
 	st  store.DesktopVMSignInStore
 	// unread is this stream's own hold while the row cannot be read.
 	unread string
+
+	mu      sync.Mutex
+	reading bool // a re-read is in flight
+	stopped bool // the stream has closed: unread is held no more
 }
 
 // watchVMSignIn reads the sign-in mark of a desktop stream about to open on runID, holding its
@@ -393,7 +403,7 @@ func (w *vmSignInWatch) sync(ctx context.Context) error {
 	row, found, err := w.st.DesktopVMSignIns(ctx, run.ID)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: a VM desktop's sign-in mark could not be read; its recording keeps no frames until it is", "run_id", run.ID, "err", err)
-		s.PauseDesktopRecording(bg, run, desktopPauseSignin, w.unread)
+		w.holdUnread(true)
 		return err
 	}
 	current := ""
@@ -406,16 +416,95 @@ func (w *vmSignInWatch) sync(ctx context.Context) error {
 			s.ResumeDesktopRecording(bg, run, h)
 		}
 	}
-	s.ResumeDesktopRecording(bg, run, w.unread)
+	w.holdUnread(false)
 	return nil
+}
+
+// watch rechecks the row every vmSignInRecheck until ctx ends, on a goroutine of its own, so nothing
+// else the stream waits on delays it. s.vmSignInTick, when set, replaces the ticker (tests).
+func (w *vmSignInWatch) watch(ctx context.Context) {
+	if w == nil {
+		return
+	}
+	var tick <-chan time.Time
+	if w.s.vmSignInTick == nil {
+		t := time.NewTicker(vmSignInRecheck)
+		defer t.Stop()
+		tick = t.C
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick:
+			w.recheck(ctx, nil)
+		case done := <-w.s.vmSignInTick:
+			w.recheck(ctx, done)
+		}
+	}
+}
+
+// recheck re-reads the row on a goroutine of its own, bounded by vmSignInReadWait, so a read that
+// stalls never keeps the stream recording: one still unanswered at the next recheck holds the
+// recording, as a failed one does, until a re-read answers. done, when set, is closed once this
+// recheck's read has answered, or at once when one was still in flight (tests).
+func (w *vmSignInWatch) recheck(ctx context.Context, done chan struct{}) {
+	finish := func() {
+		if done != nil {
+			close(done)
+		}
+	}
+	w.mu.Lock()
+	stalled := w.reading
+	w.reading = true
+	w.mu.Unlock()
+	if stalled {
+		w.holdUnread(true)
+		finish()
+		return
+	}
+	go func() {
+		defer finish()
+		rctx, cancel := context.WithTimeout(ctx, vmSignInReadWait)
+		defer cancel()
+		_ = w.sync(rctx)
+		w.mu.Lock()
+		w.reading = false
+		w.mu.Unlock()
+	}()
+}
+
+// holdUnread takes or ends the stream's own hold. One taken as the stream closes is ended again, so
+// it never outlives the stream. mu is never held across the recording's own calls, which write audit
+// rows: the watch must not wait on them.
+func (w *vmSignInWatch) holdUnread(hold bool) {
+	bg := w.s.cfg.BaseCtx
+	if !hold || w.isStopped() {
+		w.s.ResumeDesktopRecording(bg, w.run, w.unread)
+		return
+	}
+	w.s.PauseDesktopRecording(bg, w.run, desktopPauseSignin, w.unread)
+	if w.isStopped() {
+		w.s.ResumeDesktopRecording(bg, w.run, w.unread)
+	}
+}
+
+func (w *vmSignInWatch) isStopped() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.stopped
 }
 
 // stop ends the stream's own hold as it closes. A pause's hold stays: it is the pause's, and its
 // resume ends it.
 func (w *vmSignInWatch) stop() {
-	if w != nil {
-		w.s.ResumeDesktopRecording(w.s.cfg.BaseCtx, w.run, w.unread)
+	if w == nil {
+		return
 	}
+	w.mu.Lock()
+	w.stopped = true
+	w.mu.Unlock()
+	w.holdUnread(false)
 }
 
 // handleResumeDesktopAgent continues the agent and writes the session's one desktop.sign_in.pause row. It is

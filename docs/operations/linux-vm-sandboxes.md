@@ -56,8 +56,8 @@
 - Each pause-to-resume writes one `desktop.sign_in.pause` audit row, "paused the agent to sign in inside the desktop". It names who paused and when, never a secret.
 - The pause is the person's choice. A sign-in made without it is neither paused nor audited.
 - On a run whose desktop screen is recorded, the recording keeps no frames while the pause is open. A desktop that connects while it is open, after a restart too, keeps none from its first frame.
-- A desktop open on another `wardynd` replica re-reads the pause every 2 seconds, so it starts and stops keeping frames up to 2 seconds after the pause and the resume.
-- A recorded desktop that cannot read whether the agent is paused is refused (`503` `desktop_sign_ins_unavailable`). One already open keeps no frames until it can read it again.
+- A desktop open on another `wardynd` replica re-reads the pause every second. It stops keeping frames within 2 seconds of the pause, also when a re-read fails or does not answer, and keeps them again once a re-read after the resume answers.
+- A recorded desktop that cannot read whether the agent is paused is refused (`503` `desktop_sign_ins_unavailable`).
 - A process the agent moved out of its process group (`setsid`) is not stopped.
 - If `wardynd` crashes after the guest agent stopped the agent but before the pause was recorded, the agent stays stopped and the run page offers the pause again. Press it, which records the pause (the agent is already stopped), then "Resume the agent".
 
