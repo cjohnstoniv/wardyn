@@ -49,6 +49,13 @@ type (
 		// to a run over the runner's local socket. Absent (an older organisation) or false: the runner
 		// opens no socket; an older runner ignores the field.
 		LocalAttach bool `json:"local_attach,omitempty"`
+		// PerRunCPUMillis and PerRunMemoryMiB are the most CPU (milli-CPU) and memory (MiB) one run may
+		// take on this runner, from the limits its owner or administrator declared (wardyn runner set), so
+		// a runner can size what it builds for one run (a macOS VM). Re-sent on every connect; 0 or absent
+		// (no limits declared, or an older organisation) means the runner sizes as it did before; an older
+		// runner ignores them.
+		PerRunCPUMillis int64 `json:"per_run_cpu_millis,omitempty"`
+		PerRunMemoryMiB int64 `json:"per_run_memory_mib,omitempty"`
 	}
 	// Reason is the payload of REVOKED and GOAWAY.
 	Reason struct {
