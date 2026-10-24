@@ -84,6 +84,13 @@ type Config struct {
 	// only callers on the run's own network, on create and on revive (proxy
 	// Config.AllowedPeers).
 	ProxyServesAnyPeer bool
+	// ProxyPeersOnlyByDefault (wardyn-runnerd, WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY unset) has a proxy
+	// image that refuses allowed_peers, one older than this runner, started again without them: it serves
+	// any peer, as it did before peers-only. The zero value, and the switch set on, refuse that run.
+	ProxyPeersOnlyByDefault bool
+	// PeersOnlyFallback, when set, is told the proxy image whose runs serve any peer because it refused
+	// allowed_peers, and "" once a proxy takes them again; each change once.
+	PeersOnlyFallback func(image string)
 	// UserDriveHostRoots is the deployment's WARDYN_USER_DRIVE_HOST_ROOTS
 	// ceiling over host_path USER DRIVES, parsed once at boot and handed to
 	// the substrate constructor, so the driver's bind-time re-check and the
@@ -220,6 +227,12 @@ type Driver struct {
 
 	// proxyImg, once set by SetProxyImage, replaces Config.ProxyImage for every later sidecar.
 	proxyImg atomic.Pointer[string]
+
+	// peersMu guards peersFallback, the image of the last proxy start that refused allowed_peers ("" once
+	// one took them), and peersWarned, the images a warning has named (notePeersOnly).
+	peersMu       sync.Mutex
+	peersFallback string
+	peersWarned   map[string]bool
 
 	// vmCfg, set by EnableVM (wardyn-runnerd only), turns Linux VM sandboxes on; vms maps a VM's
 	// ref to its *vmRun; notVMs holds the refs found to be containers, until their teardown;

@@ -323,6 +323,9 @@ type fakeDocker struct {
 	exitAfterInspects map[string]int
 	inspectCounts     map[string]int
 	logs              map[string][]byte
+	// olderProxyRefuses, when set, is a config key a proxy image older than the runner does not know: a
+	// proxy whose stdin carries it is exited(1) from its next inspect, logging the strict decode's refusal.
+	olderProxyRefuses string
 	logOpts           []client.ContainerLogsOptions // every ContainerLogs call's options, in order
 
 	// startedAtOverride, keyed by container name, overrides ContainerStart's
@@ -853,6 +856,13 @@ func (f *fakeDocker) ContainerInspect(ctx context.Context, id string, _ client.C
 		if count >= n {
 			c.state = &container.State{Status: "exited", ExitCode: 1}
 		}
+	}
+	if k := f.olderProxyRefuses; k != "" && strings.HasPrefix(c.name, "wardyn-proxy-") && bytes.Contains(f.stdin[id], []byte(`"`+k+`"`)) {
+		c.state = &container.State{Status: "exited", ExitCode: 1}
+		if f.logs == nil {
+			f.logs = map[string][]byte{}
+		}
+		f.logs[id] = muxFrame(2, `ERROR wardyn-proxy: load config failed err="parse config: json: unknown field \"`+k+`\""`)
 	}
 	// Synthesize NetworkSettings from the container's known networks (primary
 	// NetworkMode + explicit endpoints + NetworkConnect'd nets) with a

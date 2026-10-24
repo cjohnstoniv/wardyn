@@ -218,8 +218,19 @@ func (s *Server) handlePauseDesktopAgent(w http.ResponseWriter, r *http.Request)
 		writeErrorReason(w, status, reasonDesktopSignInsPauseFailed, "the agent could not be paused; it keeps running")
 		return
 	}
+	// The desktop's screen recording keeps no frames from here until the resume ends this hold, as a
+	// container's sign-in does. A run that ends while paused drops the hold with its last connection
+	// (forgetEndedDesktopPause).
+	if s.desktopRecorded(run) {
+		s.PauseDesktopRecording(ctx, run, desktopPauseSignin, vmSignInHold(run))
+	}
 	v.Paused, v.PausedAt = true, &now
 	writeJSON(w, http.StatusOK, v)
+}
+
+// vmSignInHold is a VM sign-in pause's hold on the run's desktop recording: a run has at most one.
+func vmSignInHold(run types.AgentRun) string {
+	return "vm-sign-in:" + run.ID.String()
 }
 
 // handleResumeDesktopAgent continues the agent and writes the session's one desktop.sign_in.pause row. It is
@@ -252,6 +263,7 @@ func (s *Server) handleResumeDesktopAgent(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if cleared {
+		s.endDesktopHold(ctx, run, vmSignInHold(run))
 		s.recordAudit(ctx, s.auditEvent(&run.ID, at, principal, auditDesktopSignIn, run.ID.String(), "success",
 			mustJSON(map[string]any{"paused_by": by, "paused_at": pausedAt, "resumed_at": now, "paused_seconds": int(now.Sub(pausedAt).Seconds())})))
 	}

@@ -209,6 +209,34 @@ func TestDesktopSignIns_PauseStopsTheAgentAndResumeAuditsTheSession(t *testing.T
 	}
 }
 
+// On a run whose desktop screen is recorded, the pause holds the recording paused while the person
+// signs in, so no frame of what they type is kept, and the resume releases it.
+func TestDesktopSignIns_PauseHoldsTheDesktopRecordingUntilTheResume(t *testing.T) {
+	f := newVMSignInFixture(t, "memory")
+	f.srv.cfg.RecordingStore = fsRecordingStore(t)
+	f.run.RecordingLevel = types.RecordingScreenActions
+	f.st.putRun(f.run)
+	hold := vmSignInHold(f.run)
+	if code, _, body := f.do(t, http.MethodPost, "/pause"); code != http.StatusOK {
+		t.Fatalf("pause = %d %s", code, body)
+	}
+	if !f.srv.desktopRecs.holds(f.run.ID, hold) {
+		t.Fatal("the desktop recording is not held paused while the sign-in is open")
+	}
+	if p, r := desktopRows(f.h.audit); p != 1 || r != 0 {
+		t.Fatalf("after the pause: %d desktop.recording.pause and %d .resume rows, want 1 and 0", p, r)
+	}
+	if code, _, body := f.do(t, http.MethodPost, "/resume"); code != http.StatusOK {
+		t.Fatalf("resume = %d %s", code, body)
+	}
+	if f.srv.desktopRecs.holds(f.run.ID, hold) {
+		t.Fatal("the resume left the desktop recording paused")
+	}
+	if p, r := desktopRows(f.h.audit); p != 1 || r != 1 {
+		t.Fatalf("after the resume: %d desktop.recording.pause and %d .resume rows, want 1 and 1", p, r)
+	}
+}
+
 // Not allowed is refused at the server, not only hidden: on a run whose desktop keeps none, and on
 // one the admin turned off after it started. Nothing reaches the runner.
 func TestDesktopSignIns_OffIsRefusedServerSide(t *testing.T) {
