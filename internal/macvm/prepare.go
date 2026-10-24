@@ -507,12 +507,14 @@ func (p *prep) provisionAndBootstrap(ctx context.Context, spec MachineSpec) (Boo
 	return res, nil
 }
 
-// waitPort dials the guest's port until it answers or wait passes.
+// waitPort dials the guest's port until it answers or wait passes. Only the
+// wait passing means macOS wants setup by hand; prepare being cancelled
+// returns the cancellation.
 func waitPort(ctx context.Context, nw PrepNetwork, port int, wait time.Duration) error {
-	ctx, cancel := context.WithTimeout(ctx, wait)
+	wctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 	for {
-		dctx, dcancel := context.WithTimeout(ctx, 5*time.Second)
+		dctx, dcancel := context.WithTimeout(wctx, 5*time.Second)
 		c, err := nw.DialGuest(dctx, port)
 		dcancel()
 		if err == nil {
@@ -520,7 +522,10 @@ func waitPort(ctx context.Context, nw PrepNetwork, port int, wait time.Duration)
 			return nil
 		}
 		select {
-		case <-ctx.Done():
+		case <-wctx.Done():
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			return ErrManualSetup
 		case <-time.After(time.Second):
 		}

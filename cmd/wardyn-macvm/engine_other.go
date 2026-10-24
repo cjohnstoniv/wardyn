@@ -11,6 +11,8 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
 )
 
+const vzLinked = false
+
 func platformEngine() (macvm.Engine, error) {
 	return nil, errors.New("macOS VMs need macOS on Apple silicon, and a helper built with cgo")
 }

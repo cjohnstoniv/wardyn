@@ -9,6 +9,7 @@
 //	wardyn-macvm status --dir <run-dir>  print a running helper's status (JSON)
 //	wardyn-macvm prepare --root <dir> --cpus N --memory-mib M
 //	                                     build this Mac's macOS base image
+//	wardyn-macvm probe                   say (JSON) whether this Mac and build can run macOS VMs
 //	wardyn-macvm version
 //
 // It is the only Wardyn binary that uses Virtualization.framework (and the
@@ -33,6 +34,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
 	"github.com/cjohnstoniv/wardyn/internal/macvm/admission"
 	"github.com/cjohnstoniv/wardyn/internal/version"
+	"golang.org/x/sys/unix"
 )
 
 // deps are what main wires and tests replace.
@@ -44,6 +46,11 @@ type deps struct {
 	// prepare supplies prepare's first-boot provisioner, prep network and
 	// stage 1, which other parts of the build provide.
 	prepare func(*macvm.PrepareOptions) error
+	// firstBoot is the provisioning first boot (macvm.NewProvisioner); nil
+	// until that is linked.
+	firstBoot macvm.FirstBooter
+	// fstat replaces fstat(2) in the ledger's ownership checks (tests).
+	fstat func(fd int, name string) (unix.Stat_t, error)
 }
 
 func main() {
@@ -57,7 +64,7 @@ func main() {
 
 func run(ctx context.Context, args []string, d deps) int {
 	if len(args) == 0 {
-		fmt.Fprintln(d.stderr, "usage: wardyn-macvm run|status|prepare|version [flags]")
+		fmt.Fprintln(d.stderr, "usage: wardyn-macvm run|status|prepare|probe|version [flags]")
 		return 2
 	}
 	switch args[0] {
@@ -70,6 +77,8 @@ func run(ctx context.Context, args []string, d deps) int {
 		return cmdStatus(ctx, args[1:], d)
 	case "prepare":
 		return cmdPrepare(ctx, args[1:], d)
+	case "probe":
+		return cmdProbe(d)
 	}
 	fmt.Fprintf(d.stderr, "wardyn-macvm: unknown command %q\n", args[0])
 	return 2
@@ -98,7 +107,12 @@ func cmdRun(ctx context.Context, args []string, d deps) int {
 	}
 	err = macvm.Run(ctx, macvm.RunOptions{
 		Engine: eng, RunDir: *dir, Log: log,
-		Claim:         func(c macvm.RunConfig) error { return claim(c, d.host) },
+		Claim: func(c macvm.RunConfig) error {
+			if c.LedgerEntry == "" || c.RunnerID == "" {
+				return errors.New("run.json names no admission entry")
+			}
+			return claim(c, d)
+		},
 		HoldIdleSleep: holdIdleSleep,
 	})
 	if err != nil && !errors.Is(err, context.Canceled) {
@@ -110,16 +124,14 @@ func cmdRun(ctx context.Context, args []string, d deps) int {
 }
 
 // claim records this helper in its admission entry before the VM is built.
-// A run config without an entry is refused: every macOS VM holds one.
-func claim(c macvm.RunConfig, host admission.Host) error {
-	if c.LedgerEntry == "" || c.RunnerID == "" {
-		return errors.New("run.json names no admission entry")
-	}
+// Every macOS VM holds one; callers refuse a missing entry in their own words.
+func claim(c macvm.RunConfig, d deps) error {
+	host := d.host
 	dir := c.LedgerDir
 	if dir == "" {
 		dir = admission.DefaultDir
 	}
-	l, err := admission.Open(admission.Config{Dir: dir, UID: os.Getuid(), RunnerID: c.RunnerID, Host: host})
+	l, err := admission.Open(admission.Config{Dir: dir, UID: os.Getuid(), RunnerID: c.RunnerID, Host: host, Fstat: d.fstat})
 	if err != nil {
 		return err
 	}
@@ -205,7 +217,10 @@ func cmdPrepare(ctx context.Context, args []string, d deps) int {
 		// runnerd took the entry; the helper claims it before any VM exists,
 		// and runnerd releases it after verified destruction.
 		Admit: func(context.Context) (func(), error) {
-			err := claim(macvm.RunConfig{RunnerID: *runner, LedgerEntry: *entry, LedgerDir: *ledgerDir}, d.host)
+			if *runner == "" || *entry == "" {
+				return nil, errors.New("prepare needs --runner-id and --ledger-entry: runnerd takes the admission entry before it starts prepare")
+			}
+			err := claim(macvm.RunConfig{RunnerID: *runner, LedgerEntry: *entry, LedgerDir: *ledgerDir}, d)
 			return func() {}, err
 		},
 	}
@@ -228,4 +243,48 @@ func prepareDeps(o *macvm.PrepareOptions) error {
 		return errors.New("this build has no guest provisioning, prep network or stage 1 yet; prepare is not available")
 	}
 	return nil
+}
+
+// probeReport is what probe prints.
+type probeReport struct {
+	Supported     bool   `json:"supported"`
+	GOOS          string `json:"goos"`
+	GOARCH        string `json:"goarch"`
+	Cgo           bool   `json:"cgo"`
+	VZ            bool   `json:"vz"` // the Virtualization-framework engine is linked
+	HelperVersion string `json:"helper_version"`
+	Host          string `json:"host"`         // "ok" or why this Mac cannot
+	Provisioning  string `json:"provisioning"` // "ok" or why first boot cannot
+}
+
+// cmdProbe prints whether this Mac and this build can run macOS VMs, and
+// exits 0 only when they can.
+func cmdProbe(d deps) int {
+	r := probeReport{GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, Cgo: cgoEnabled, VZ: vzLinked, HelperVersion: version.String()}
+	hostErr := errors.New("no engine")
+	if eng, err := d.engine(); err != nil {
+		hostErr = err
+	} else {
+		hostErr = eng.HostCheck()
+	}
+	provErr := errors.New("this build has no guest provisioning")
+	if d.firstBoot != nil {
+		provErr = d.firstBoot.Supported()
+	}
+	r.Host, r.Provisioning = okOr(hostErr), okOr(provErr)
+	r.Supported = hostErr == nil && provErr == nil
+	enc := json.NewEncoder(d.stdout)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(r)
+	if !r.Supported {
+		return 1
+	}
+	return 0
+}
+
+func okOr(err error) string {
+	if err != nil {
+		return err.Error()
+	}
+	return "ok"
 }

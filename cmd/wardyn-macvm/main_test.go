@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
 	"github.com/cjohnstoniv/wardyn/internal/macvm/admission"
 	"github.com/cjohnstoniv/wardyn/internal/macvm/macvmtest"
+	"golang.org/x/sys/unix"
 )
 
 // host is this test process as the only process on a roomy Mac.
@@ -29,12 +31,39 @@ func (host) Processes() ([]admission.Proc, error) {
 	return []admission.Proc{{PID: os.Getpid(), UID: os.Getuid(), Start: 7, Name: "wardyn-macvm"}}, nil
 }
 
+// rootFstat reports every file as root's, as the runner package installs
+// the ledger.
+func rootFstat(fd int, _ string) (unix.Stat_t, error) {
+	var st unix.Stat_t
+	err := unix.Fstat(fd, &st)
+	st.Uid = 0
+	return st, err
+}
+
 func testDeps(eng *macvmtest.Engine) (deps, *bytes.Buffer, *bytes.Buffer) {
 	var out, errb bytes.Buffer
 	return deps{
 		engine: func() (macvm.Engine, error) { return eng, nil }, host: host{}, stdout: &out, stderr: &errb,
-		prepare: prepareDeps,
+		prepare: prepareDeps, fstat: rootFstat,
 	}, &out, &errb
+}
+
+// makeLedger lays out the installed ledger under root and returns its
+// entries dir.
+func makeLedger(t *testing.T, root string) string {
+	t.Helper()
+	top := filepath.Join(root, "Wardyn")
+	ledger := filepath.Join(top, "macos-vm-admission")
+	if err := os.MkdirAll(ledger, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Chmod(top, 0o755)
+	_ = os.Chmod(ledger, os.ModeSticky|0o777)
+	if err := os.WriteFile(filepath.Join(top, "admission.lock"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Chmod(filepath.Join(top, "admission.lock"), 0o644)
+	return ledger
 }
 
 func TestUsage(t *testing.T) {
@@ -67,15 +96,8 @@ func TestPlatformEngineOffMac(t *testing.T) {
 // configured identifier's hash.
 func TestRunClaimsEntryAndStatusReportsIdentity(t *testing.T) {
 	root := t.TempDir()
-	ledger := filepath.Join(root, "ledger")
-	if err := os.Mkdir(ledger, 0o777); err != nil {
-		t.Fatal(err)
-	}
-	_ = os.Chmod(ledger, os.ModeSticky|0o777)
-	if err := os.WriteFile(filepath.Join(ledger, "admission.lock"), nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	l, err := admission.Open(admission.Config{Dir: ledger, UID: os.Getuid(), RunnerID: "r1", Host: host{}})
+	ledger := makeLedger(t, root)
+	l, err := admission.Open(admission.Config{Dir: ledger, UID: os.Getuid(), RunnerID: "r1", Host: host{}, Fstat: rootFstat})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +166,51 @@ func TestRunRefusedWithoutEntry(t *testing.T) {
 	dir := layout.RunDir("r")
 	_ = macvm.WriteRunConfig(dir, macvm.RunConfig{RunID: "r", BaseDir: base, CPUs: 2, MemoryMiB: 4096, Identity: macvm.IdentityFresh})
 	d, _, errb := testDeps(&macvmtest.Engine{})
-	if code := run(context.Background(), []string{"run", "--dir", dir}, d); code != 1 || !strings.Contains(errb.String(), "admission") {
+	if code := run(context.Background(), []string{"run", "--dir", dir}, d); code != 1 || !strings.Contains(errb.String(), "run.json names no admission entry") {
 		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+}
+
+// prepare without an entry says what prepare is missing, not run.json.
+func TestPrepareRefusedWithoutEntry(t *testing.T) {
+	d, _, errb := testDeps(&macvmtest.Engine{})
+	d.prepare = func(o *macvm.PrepareOptions) error { o.FirstBoot = &macvmtest.FirstBoot{}; return nil }
+	code := run(context.Background(), []string{"prepare", "--root", t.TempDir(), "--cpus", "4", "--memory-mib", "8192"}, d)
+	if code != 1 || !strings.Contains(errb.String(), "prepare needs --runner-id and --ledger-entry") || strings.Contains(errb.String(), "run.json") {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+}
+
+func TestProbe(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		hostErr   error
+		firstBoot macvm.FirstBooter
+		want      int
+	}{
+		{"supported", nil, &macvmtest.FirstBoot{}, 0},
+		{"old macOS", errors.New("macOS VMs need macOS 27 or later"), &macvmtest.FirstBoot{}, 1},
+		{"no provisioning linked", nil, nil, 1},
+		{"provisioning unsupported", nil, &macvmtest.FirstBoot{Unsupported: errors.New("too old")}, 1},
+	} {
+		d, out, _ := testDeps(&macvmtest.Engine{HostErr: tc.hostErr})
+		d.firstBoot = tc.firstBoot
+		code := run(context.Background(), []string{"probe"}, d)
+		var r probeReport
+		if err := json.Unmarshal(out.Bytes(), &r); err != nil {
+			t.Fatalf("%s: %v %q", tc.name, err, out.String())
+		}
+		if code != tc.want || r.Supported != (tc.want == 0) || r.GOOS == "" || r.HelperVersion == "" {
+			t.Fatalf("%s: exit %d, report %+v", tc.name, code, r)
+		}
+		if tc.hostErr != nil && r.Host != tc.hostErr.Error() {
+			t.Fatalf("%s: host %q", tc.name, r.Host)
+		}
+	}
+	d, out, _ := testDeps(nil)
+	d.engine = platformEngine
+	d.firstBoot = &macvmtest.FirstBoot{}
+	if code := run(context.Background(), []string{"probe"}, d); vzLinked == (code == 1 && strings.Contains(out.String(), `"vz": false`)) {
+		t.Fatalf("probe on this build: exit %d %s", code, out.String())
 	}
 }
