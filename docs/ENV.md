@@ -635,6 +635,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - On Kubernetes with recordings on there is no direct stdout to keep: once such a run ends, with `WARDYN_RUN_OUTPUT_PERSIST` on, the available recording is recovered into a masked tail marked `source` `recording` and always `incomplete`.
 - Or a `capture_gap` when the recording is missing, invalid or cannot be proven masked, and only the run's owner or an operator is served it.
 - A read while the run is live, with persistence off, or by a caller who may see the run but is neither, answers `409` (`run_output_not_captured`)).
+- With persistence off, the owner or an operator reading an ended run whose recording never arrived gets `409` (`run_output_not_kept`).
 - Readable through `GET /api/v1/runs/{id}/output` by the run's owner or an admin (flag `-exec-output-tail`).
 - Independent of `WARDYN_RECORDING_STORE`: it works with recordings `off`.
 - `off` (or any false value) keeps none and refuses rows stored earlier, and the route then answers `409` (`run_output_off`).

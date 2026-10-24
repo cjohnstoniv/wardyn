@@ -18,6 +18,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
@@ -349,7 +350,8 @@ type runOutputResponse struct {
 // only, a run whose recording-derived output was erased (410, recording_erased);
 // an interactive run (409, which is also what a pane snapshot's non-reader
 // gets: only recordingReader's callers are served one); a run on a runner that
-// cannot capture output (409, run_output_not_captured); a runner whose capabilities
+// cannot capture output whose recording can hold it (409, run_output_not_captured:
+// recordingMayHoldOutput); a runner whose capabilities
 // cannot be read (409, run_output_not_kept); a run that ended longer ago than the retention
 // window (410); otherwise not kept (409).
 func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
@@ -481,7 +483,7 @@ func (s *Server) refuseNoRunOutput(w http.ResponseWriter, r *http.Request, run t
 		writeErrorReason(w, http.StatusGone, reasonRecordingErased, "recordings for this run have been erased")
 	case run.Interactive:
 		writeErrorReason(w, http.StatusConflict, reasonRunOutputInteractive, s.interactiveNothingKept(run, reader))
-	case uncaptured:
+	case uncaptured && s.recordingMayHoldOutput(r.Context(), run, reader):
 		writeErrorReason(w, http.StatusConflict, reasonRunOutputNotCaptured,
 			"Output isn't captured for Kubernetes runs yet. The run's recording has it.")
 	case !captureKnown:
@@ -493,6 +495,23 @@ func (s *Server) refuseNoRunOutput(w http.ResponseWriter, r *http.Request, run t
 	default:
 		writeErrorReason(w, http.StatusConflict, reasonRunOutputNotKept, "no output is kept for this run")
 	}
+}
+
+// recordingMayHoldOutput is whether run_output_not_captured's pointer at the run's recording can
+// hold for a read of run on a runner that does not capture output. A live run's recording is still
+// to come. An ended run's is read from the store, for recordingReader's callers only: anyone else
+// is answered the same whether a recording was kept or not, so the answer never tells them which.
+// A store that cannot say keeps the pointer; only a recording known to be absent drops it, and the
+// read then answers as a run that kept no output.
+func (s *Server) recordingMayHoldOutput(ctx context.Context, run types.AgentRun, reader bool) bool {
+	if !reader || !run.State.IsTerminal() {
+		return true
+	}
+	if s.cfg.RecordingStore == nil {
+		return false
+	}
+	_, _, err := s.cfg.RecordingStore.StatAndTail(ctx, run.ID.String(), 0)
+	return !errors.Is(err, recording.ErrNotFound) && !errors.Is(err, recording.ErrErased)
 }
 
 // interactiveNothingKept is the 409 sentence for an interactive run with no

@@ -27,6 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -329,13 +330,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 				SecurityContext:          restrictedSecurityContext(),
 				Resources:                proxyResources(len(spec.ProxyConfig.AzureGates) > 0),
 				TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
-				// The proxy binds its listener only after its startup resolve has succeeded, so a
-				// connect to it is that proof: without a probe the container is Ready as soon as it
-				// runs, and waitPodIP can return before a failing resolve exits it.
-				ReadinessProbe: &corev1.Probe{
-					ProbeHandler:  corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(runner.ProxyListenPort)}},
-					PeriodSeconds: 1,
-				},
+				ReadinessProbe:           proxyReadinessProbe(d.runnerMode()),
 			}},
 			Volumes: []corev1.Volume{
 				{
@@ -784,6 +779,21 @@ func (d *Driver) runnerdPeerRules() []networkingv1.NetworkPolicyEgressRule {
 			PodSelector:       &metav1.LabelSelector{MatchLabels: maps.Clone(p.PodLabels)},
 		}},
 	}}
+}
+
+// proxyReadinessProbe is the proxy container's readiness, which waitPodIP waits on before the
+// agent pod exists. The proxy binds its listener only after its startup resolve has succeeded, so
+// a connect to it is that proof: without a probe the container is Ready as soon as it runs, and
+// waitPodIP can return before a failing resolve exits it. A runner's proxy (self_lapse) is also
+// closed, refusing every agent request, until its first renew succeeds, which can be a retry
+// later: it is Ready only once proxy.ReadyPath answers, so no agent starts against it closed. A
+// short run would otherwise end inside that window, its recording upload refused.
+func proxyReadinessProbe(runnerMode bool) *corev1.Probe {
+	h := corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(runner.ProxyListenPort)}}
+	if runnerMode {
+		h = corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: proxy.ReadyPath, Port: intstr.FromInt32(runner.ProxyListenPort)}}
+	}
+	return &corev1.Probe{ProbeHandler: h, PeriodSeconds: 1}
 }
 
 // runnerProxyConfig adds the runner-only proxy config keys (runner mode): runnerd's own CA bundle

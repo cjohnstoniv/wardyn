@@ -11,6 +11,16 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- A short command run on a Kubernetes runner (wardyn-runnerd) no longer loses its recording. The run's proxy refuses
+  every request until its first token renew succeeds, but its pod read as ready once it listened, so the agent could
+  start, finish and have its recording upload refused inside that window. The proxy pod is now ready only once it
+  serves. Upgrade the runner's proxy image with wardyn-runnerd: an older proxy never reads as ready.
+- `GET /runs/{id}/output` no longer points the run's owner or an operator at a recording that was never received.
+  With run output persistence off, an ended run on a runner that does not capture output, and whose recording never
+  arrived, answers `409` `run_output_not_kept`.
+
 ## [0.10.0-rc.1] — 2026-10-24
 
 ### Before you upgrade
