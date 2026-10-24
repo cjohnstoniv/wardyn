@@ -95,22 +95,13 @@ func preconditions(t *testing.T, step string, perRunGiB int) fits {
 	if err != nil {
 		t.Fatalf("host memory: %v", err)
 	}
-	tomb := map[string]bool{}
-	for _, lf := range fs {
-		if lf.Tomb {
-			tomb[strings.TrimSuffix(lf.Name, ".tombstone")] = true
-		}
-	}
 	f := fits{Licence: admission.LicenceCap - counted(fs), Counted: int64(counted(fs)), HeldDiskBytes: heldDisk(fs), Source: "settings",
 		NextGuest: uint64(perRunGiB) * gib, NextOverhead: admission.DefaultOverheadBytes, NextDocker: uint64(cfg.dockerMemGiB) * gib,
 		NextDisk: admission.RunDiskReservation(int64(cfg.runDiskGiB) * gib)}
 	docker := map[int]uint64{}
 	var used uint64
 	var newest time.Time
-	for _, lf := range fs {
-		if lf.Tomb || tomb[lf.Name] {
-			continue
-		}
+	for _, lf := range countedFiles(fs) {
 		e := lf.Entry
 		used += e.GuestMemory + e.Overhead
 		docker[lf.UID] = max(docker[lf.UID], e.DockerMemory)
@@ -122,6 +113,8 @@ func preconditions(t *testing.T, step string, perRunGiB int) fits {
 	if f.NextGuest+f.NextOverhead == 0 || f.NextDisk <= 0 {
 		t.Fatalf("the next run's size from the %s is zero (guest %d, disk %d)", f.Source, f.NextGuest, f.NextDisk)
 	}
+	// As the ledger's memoryBudget: this login's Docker counts at the larger of its entries' and its
+	// configured DockerMemoryBytes, which the ledger writes into each new entry (NextDocker).
 	reserved := admission.MacOSReserveBytes + max(docker[os.Getuid()], f.NextDocker)
 	for uid, d := range docker {
 		if uid != os.Getuid() {

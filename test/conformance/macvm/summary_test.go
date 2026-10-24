@@ -19,6 +19,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/macvm/admission"
 )
 
 const (
@@ -184,8 +186,12 @@ func summarizeRow(dir, row string) (rowResult, []detail) {
 	}
 	r := rowResult{Row: row}
 	if len(ds) == 0 {
-		r.Outcome, r.Reason = "NOT_RUN", fmt.Sprintf("no events for the row (exit %d)", code)
-		r.BlockNotRun = hasBlock(row)
+		// A binary that died before its first test is a failure, never a row that did not run.
+		r.Outcome, r.Reason = "NOT_RUN", "no events for the row (exit 0)"
+		if code != 0 {
+			r.Outcome, r.Reason = "FAIL", fmt.Sprintf("exit %d with no failing test (no events for the row)", code)
+		}
+		r.BlockNotRun = r.Outcome == "NOT_RUN" && hasBlock(row)
 		return r, nil
 	}
 	var block, fail, skipped []string
@@ -364,6 +370,8 @@ func TestSummaryMapping(t *testing.T) {
 	p4, p5, p6, p7, p8 := "TestP04_WarmStartAndIdentity", "TestP05_AgentSession", "TestP06_NetworkPositive", "TestP07_NetworkNegative", "TestP08_Throughput"
 	p9, p10, p12, p13, p17 := "TestP09_Desktop", "TestP10_CleanupBoundary", "TestP12_CapSlotsAndLogins", "TestP13_RunnerRestart", "TestP17_DiskBound"
 	p18, p19, p21, p22 := "TestP18_ThermalAndPower", "TestP19_TeardownHygiene", "TestP21_GuestClock", "TestP22_DistinctIdentities"
+	p11, p14 := "TestP11_CAAndTools", "TestP14_PkgUpgrade"
+	failUntested := p14 + "/protocol_mismatch_and_tools_update"
 	nic, stop := p7+"/one_filehandle_nic", p12+"/phase3_stop_loops/stop_from_guest"
 	// p08's failure is also written into p04's and p10's files: a row reads its own events only.
 	p8fail := []event{a(p8, "run"), o(p8, "    x.go:1: LIMIT: tok-p08"), a(p8, "fail")}
@@ -375,6 +383,9 @@ func TestSummaryMapping(t *testing.T) {
 	writeEvents(t, dir, p8, 1, p8fail...)
 	writeEvents(t, dir, p9, 0)             // an empty file: no events
 	writeEvents(t, dir, p10, 0, p8fail...) // another row's events only
+	writeEvents(t, dir, p11, 2)            // the binary died before its first test
+	writeEvents(t, dir, p14, 1, a(p14, "run"), a(failUntested, "run"), o(failUntested, "    x.go:1: "+untestedMarker+"tok-p14u"),
+		o(failUntested, "    x.go:2: tok-p14"), a(failUntested, "fail"), a(p14, "fail")) // a FAIL with an UNTESTED line is FAIL
 	writeEvents(t, dir, p12, 0, a(p12, "run"), a(p12+"/phase1_cap", "run"), o(p12+"/phase1_cap", "    x.go:1: "+notRunMarker+"tok-p12a"), a(p12+"/phase1_cap", "skip"),
 		a(stop, "run"), o(stop, "    x.go:1: "+untestedMarker+"tok-p12u"), a(stop, "skip"), a(p12, "pass"))
 	writeEvents(t, dir, p13, 1, a(p13, "run"), a(p13, "pass"))
@@ -396,9 +407,9 @@ func TestSummaryMapping(t *testing.T) {
 		t.Fatalf("%d summary rows, want one per declared TestP function (%d)", len(rows), len(declared))
 	}
 	want := map[string]string{p4: "PASS", p5: "BLOCK", p6: "NOT_RUN", p7: "PASS", p8: "FAIL", p9: "NOT_RUN", p10: "NOT_RUN",
-		p12: "NOT_RUN", p13: "FAIL", p17: "FAIL", p18: "NOT_RUN", p19: "NOT_RUN", p21: "FAIL", p22: "BLOCK"}
+		p11: "FAIL", p12: "NOT_RUN", p13: "FAIL", p14: "FAIL", p17: "FAIL", p18: "NOT_RUN", p19: "NOT_RUN", p21: "FAIL", p22: "BLOCK"}
 	reason := map[string]string{p4: "tok-p04", p5: "tok-p05", p6: "tok-p06", p8: "tok-p08", p9: "no events", p10: "no events",
-		p12: "tok-p12a", p13: "exit 1", p17: "tok-p17", p18: "no result", p19: "tok-p19", p21: "exit 1", p22: "tok-p22"}
+		p11: "exit 2 with no failing test", p12: "tok-p12a", p13: "exit 1", p14: "tok-p14", p17: "tok-p17", p18: "no result", p19: "tok-p19", p21: "exit 1", p22: "tok-p22"}
 	toks := regexp.MustCompile(`tok-p\d+[a-z]?`)
 	n := map[string]int{}
 	for _, row := range declared {
@@ -413,13 +424,13 @@ func TestSummaryMapping(t *testing.T) {
 			t.Errorf("%s: reason %q lacks %q, from its own events", row, why, r)
 		}
 		for _, tok := range toks.FindAllString(why, -1) {
-			if tok != reason[row] {
+			if tok != reason[row] && !(row == p14 && tok == "tok-p14u") {
 				t.Errorf("%s: reason %q carries %s, which is not from its own events", row, why, tok)
 			}
 		}
 	}
-	if n["PASS"] != 2 || n["FAIL"] != 4 || n["BLOCK"] != 2 || n["NOT_RUN"] != len(declared)-8 {
-		t.Errorf("counts %v, want PASS 2 FAIL 4 BLOCK 2 NOT_RUN %d", n, len(declared)-8)
+	if n["PASS"] != 2 || n["FAIL"] != 6 || n["BLOCK"] != 2 || n["NOT_RUN"] != len(declared)-10 {
+		t.Errorf("counts %v, want PASS 2 FAIL 6 BLOCK 2 NOT_RUN %d", n, len(declared)-10)
 	}
 	if !strings.Contains(out.String(), "BLOCK NOT RUN") {
 		t.Errorf("the BLOCK NOT RUN line is missing:\n%s", out.String())
@@ -430,10 +441,17 @@ func TestSummaryMapping(t *testing.T) {
 		t.Errorf("the listed-untested section is missing, wrong or before the rows:\n%s", out.String())
 	}
 	det := readTSV(t, filepath.Join(dir, "detail.tsv"))
-	for test, st := range map[string]string{p6 + "/git_clone": "NOT_RUN", p19: "SKIP", nic: "UNTESTED", stop: "UNTESTED"} {
+	for test, st := range map[string]string{p6 + "/git_clone": "NOT_RUN", p19: "SKIP", nic: "UNTESTED", stop: "UNTESTED", failUntested: "FAIL"} {
 		if d := det[test]; len(d) < 1 || d[0] != st {
 			t.Errorf("detail of %s = %v, want %s", test, d, st)
 		}
+	}
+	// A binary that dies before its first test changes the status on its own.
+	died := t.TempDir()
+	writeEvents(t, died, p4, 2)
+	var o2 strings.Builder
+	if code := runSummary(died, &o2); code != 1 {
+		t.Errorf("a row whose binary died before its first test: status %d, want 1 (FAIL)\n%s", code, o2.String())
 	}
 }
 
@@ -607,5 +625,37 @@ func TestMessagesMatchProduct(t *testing.T) {
 	}
 	if !msg["signInsOff"].Match(m[1]) || msg["placementAny"].Match(m[1]) {
 		t.Errorf("the suite's sign-in refusal does not match the product's %q, or placementAny takes it", m[1])
+	}
+}
+
+// TestTombstonable pins the ledger's tombstone condition as the harness applies it, and that an
+// entry stays counted under a tombstone the ledger would not honour.
+func TestTombstonable(t *testing.T) {
+	const uid, boot = 502, int64(1000)
+	e := admission.Entry{Kind: admission.KindRun, BootTime: boot, OwnerPID: 10, OwnerStart: 1, HelperPID: 20, HelperStart: 2}
+	vz := admission.Proc{PID: 30, Start: 3, UID: uid, Name: admission.VirtualizationProcess[:16]}
+	for name, c := range map[string]struct {
+		e    admission.Entry
+		ps   []admission.Proc
+		want bool
+	}{
+		"helper gone, nothing left":     {e, nil, true},
+		"helper alive":                  {e, []admission.Proc{{PID: 20, Start: 2, UID: uid, Name: admission.HelperProcess}}, false},
+		"pid reused by another process": {e, []admission.Proc{{PID: 20, Start: 9, UID: 0, Name: "launchd"}}, true},
+		"a VM process of the uid":       {e, []admission.Proc{vz}, false},
+		"a helper process of the uid":   {e, []admission.Proc{{PID: 40, Start: 4, UID: uid, Name: admission.HelperProcess}}, false},
+		"a VM process of another uid":   {e, []admission.Proc{{PID: 30, Start: 3, UID: 501, Name: vz.Name}}, true},
+		"an earlier boot":               {func() admission.Entry { x := e; x.BootTime = 1; return x }(), nil, false},
+		"leaked":                        {func() admission.Entry { x := e; x.Kind = admission.KindLeaked; return x }(), nil, false},
+		"no helper yet, owner alive": {func() admission.Entry { x := e; x.HelperPID, x.HelperStart = 0, 0; return x }(),
+			[]admission.Proc{{PID: 10, Start: 1, UID: 0, Name: "wardyn-runnerd"}}, false},
+	} {
+		if got := tombstonable(c.e, uid, boot, c.ps); got != c.want {
+			t.Errorf("%s: tombstonable %v, want %v", name, got, c.want)
+		}
+	}
+	fs := []ledgerFile{{Name: "e-a.json"}, {Name: "e-a.json.tombstone", Tomb: true}, {Name: "e-b.json"}, {Name: "e-b.json.tombstone", Tomb: true, Honoured: true}}
+	if got := countedFiles(fs); len(got) != 1 || got[0].Name != "e-a.json" {
+		t.Errorf("counted %v, want only e-a.json (its tombstone is not honoured)", got)
 	}
 }

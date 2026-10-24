@@ -774,11 +774,38 @@ func helloAfter(t *testing.T, id string, within time.Duration) (time.Time, bool)
 // ledgerFile is one file in the admission ledger dir, read without the ledger's lock: the suite
 // only observes.
 type ledgerFile struct {
-	Name  string
-	UID   int
-	Mode  os.FileMode
-	Tomb  bool
-	Entry admission.Entry
+	Name string
+	UID  int
+	Mode os.FileMode
+	Tomb bool
+	// Honoured is set on a tombstone the ledger would honour now (tombstonable); any other
+	// tombstone leaves its entry counted.
+	Honoured bool
+	Entry    admission.Entry
+}
+
+// tombstonable is the ledger's tombstone condition (internal/macvm/admission/tombstone.go): an
+// entry of this boot, not leaked, whose helper (or, with none yet, its owner) is gone while uid has
+// no Virtualization process and no helper process.
+func tombstonable(e admission.Entry, uid int, boot int64, ps []admission.Proc) bool {
+	alive := func(pid int, start int64) bool {
+		return slices.ContainsFunc(ps, func(p admission.Proc) bool { return p.PID == pid && p.Start == start })
+	}
+	count := func(name string) int {
+		n := 0
+		for _, p := range ps {
+			if p.UID == uid && p.Name != "" && strings.HasPrefix(name, p.Name) {
+				n++
+			}
+		}
+		return n
+	}
+	gone := !alive(e.OwnerPID, e.OwnerStart)
+	if e.HelperPID != 0 {
+		gone = !alive(e.HelperPID, e.HelperStart)
+	}
+	return e.BootTime == boot && e.Kind != admission.KindLeaked && gone &&
+		count(admission.VirtualizationProcess) == 0 && count(admission.HelperProcess) == 0
 }
 
 func ledger(t *testing.T) []ledgerFile {
@@ -806,25 +833,45 @@ func ledger(t *testing.T) []ledgerFile {
 		}
 		out = append(out, lf)
 	}
+	host := admission.SystemHost()
+	boot, berr := host.BootTime()
+	ps, perr := host.Processes()
+	if berr != nil || perr != nil {
+		t.Logf("ledger: boot time or processes unreadable (%v, %v): no tombstone is honoured", berr, perr)
+	}
+	byName := map[string]ledgerFile{}
+	for _, lf := range out {
+		if !lf.Tomb {
+			byName[lf.Name] = lf
+		}
+	}
+	for i, lf := range out {
+		if e, ok := byName[strings.TrimSuffix(lf.Name, ".tombstone")]; lf.Tomb && ok && berr == nil && perr == nil {
+			out[i].Honoured = tombstonable(e.Entry, e.UID, boot, ps)
+		}
+	}
 	return out
 }
 
-// counted is the ledger's live entries: every non-tombstone entry not tombstoned.
-func counted(fs []ledgerFile) int {
+// countedFiles is the ledger's live entries: every entry whose tombstone, if any, the ledger
+// would not honour now.
+func countedFiles(fs []ledgerFile) []ledgerFile {
 	tomb := map[string]bool{}
 	for _, f := range fs {
-		if f.Tomb {
+		if f.Tomb && f.Honoured {
 			tomb[strings.TrimSuffix(f.Name, ".tombstone")] = true
 		}
 	}
-	n := 0
+	var out []ledgerFile
 	for _, f := range fs {
 		if !f.Tomb && !tomb[f.Name] {
-			n++
+			out = append(out, f)
 		}
 	}
-	return n
+	return out
 }
+
+func counted(fs []ledgerFile) int { return len(countedFiles(fs)) }
 
 // heldDisk is the disk every entry in the ledger reserves, tombstoned ones included: a tombstone
 // frees a slot and memory but its disk stays held until its owner returns.

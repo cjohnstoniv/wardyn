@@ -236,6 +236,7 @@ func TestP05_AgentSession(t *testing.T) {
 		}
 		record(t, "pty", m[1])
 		record(t, "pty_size", m[2])
+		t.Log("RECORD pty_size is a record only: SIZE=0 0 (a piped client sends no window size) is accepted")
 	})
 	t.Run("pause_resume", func(t *testing.T) {
 		needPerson(t, "the automated suite's run (pause and resume need a desktop sign-in)")
