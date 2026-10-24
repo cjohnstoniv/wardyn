@@ -180,15 +180,20 @@ func summarizeRow(dir, row string) (rowResult, []detail) {
 		}
 		ds = append(ds, d)
 	}
-	code := 0
-	if b, err := os.ReadFile(filepath.Join(dir, row+".exit")); err == nil {
-		code, _ = strconv.Atoi(strings.TrimSpace(string(b)))
+	// A missing or unreadable exit status is never taken as 0.
+	code, exitErr := -1, error(nil)
+	if b, err := os.ReadFile(filepath.Join(dir, row+".exit")); err != nil {
+		exitErr = err
+	} else if code, err = strconv.Atoi(strings.TrimSpace(string(b))); err != nil {
+		code, exitErr = -1, err
 	}
 	r := rowResult{Row: row}
 	if len(ds) == 0 {
 		// A binary that died before its first test is a failure, never a row that did not run.
 		r.Outcome, r.Reason = "NOT_RUN", "no events for the row (exit 0)"
-		if code != 0 {
+		if exitErr != nil {
+			r.Outcome, r.Reason = "FAIL", "no exit status recorded (no events for the row)"
+		} else if code != 0 {
 			r.Outcome, r.Reason = "FAIL", fmt.Sprintf("exit %d with no failing test (no events for the row)", code)
 		}
 		r.BlockNotRun = r.Outcome == "NOT_RUN" && hasBlock(row)
@@ -220,6 +225,8 @@ func summarizeRow(dir, row string) (rowResult, []detail) {
 		r.Outcome, r.Reason = "BLOCK", clean(strings.Join(block, " || "))
 	case len(fail) > 0:
 		r.Outcome, r.Reason = "FAIL", clean(strings.Join(fail, " || "))
+	case exitErr != nil:
+		r.Outcome, r.Reason = "FAIL", "no exit status recorded"
 	case code != 0:
 		r.Outcome, r.Reason = "FAIL", fmt.Sprintf("exit %d with no failing test", code)
 	case !topDone:
@@ -453,6 +460,29 @@ func TestSummaryMapping(t *testing.T) {
 	if code := runSummary(died, &o2); code != 1 {
 		t.Errorf("a row whose binary died before its first test: status %d, want 1 (FAIL)\n%s", code, o2.String())
 	}
+	// A passing row with no .exit file, and an empty one: FAIL, never read as exit 0.
+	noExit := t.TempDir()
+	writeEvents(t, noExit, p4, 0, a(p4, "run"), a(p4, "pass"))
+	writeEvents(t, noExit, p8, 0)
+	for _, row := range []string{p4, p8} {
+		if err := os.Remove(filepath.Join(noExit, row+".exit")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeEvents(t, noExit, p13, 0, a(p13, "run"), a(p13, "pass"))
+	if err := os.WriteFile(filepath.Join(noExit, p13+".exit"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var o3 strings.Builder
+	if code := runSummary(noExit, &o3); code != 1 {
+		t.Errorf("rows with no exit status: status %d, want 1 (FAIL)\n%s", code, o3.String())
+	}
+	ne := readTSV(t, filepath.Join(noExit, "summary.tsv"))
+	for _, row := range []string{p4, p8, p13} {
+		if ne[row][0] != "FAIL" || !strings.Contains(ne[row][1], "no exit status recorded") {
+			t.Errorf("%s with no exit status: %v, want FAIL for no exit status recorded", row, ne[row])
+		}
+	}
 }
 
 // TestRunSh runs run.sh against a fake suite binary whose summary step is this test binary: the
@@ -668,8 +698,47 @@ func TestTombstonable(t *testing.T) {
 			t.Errorf("%s: tombstonable %v, want %v", name, got, c.want)
 		}
 	}
-	fs := []ledgerFile{{Name: "e-a.json"}, {Name: "e-a.json.tombstone", Tomb: true}, {Name: "e-b.json"}, {Name: "e-b.json.tombstone", Tomb: true, Honoured: true}}
+	fs := []ledgerFile{{Name: "e-a.json", ThisBoot: true}, {Name: "e-a.json.tombstone", Tomb: true}, {Name: "e-b.json", ThisBoot: true}, {Name: "e-b.json.tombstone", Tomb: true, Honoured: true}}
 	if got := countedFiles(fs); len(got) != 1 || got[0].Name != "e-a.json" {
 		t.Errorf("counted %v, want only e-a.json (its tombstone is not honoured)", got)
+	}
+}
+
+// TestLedgerBoot: as the ledger, the harness ignores entries of an earlier boot (another login's
+// pre-restart entry), counts an unparsable file only when written since boot, and holds disk for
+// this boot's entries only.
+func TestLedgerBoot(t *testing.T) {
+	const boot = int64(5_000_000_000_000)
+	since, before := time.UnixMicro(boot+1), time.UnixMicro(boot-1)
+	e := func(id string, b int64) admission.Entry {
+		return admission.Entry{ID: id, Kind: admission.KindRun, BootTime: b, DiskReserve: 10, HelperPID: 9, HelperStart: 9}
+	}
+	fs := []ledgerFile{
+		{Name: "e-now.json", UID: 501, Parsed: true, Entry: e("now", boot)},
+		{Name: "e-old.json", UID: 502, Parsed: true, Entry: e("old", boot-7)},
+		{Name: "e-old.json.tombstone", UID: 501, Tomb: true},
+		{Name: "e-bad-new.json", UID: 502, ModTime: since},
+		{Name: "e-bad-old.json", UID: 502, ModTime: before},
+	}
+	markLedger(fs, boot, true, nil, true)
+	if n := counted(fs); n != 2 {
+		t.Errorf("counted %d, want 2 (this boot's entry and the unparsable file since boot)", n)
+	}
+	if got := countedFiles(fs); len(got) != 1 || got[0].Name != "e-now.json" {
+		t.Errorf("live entries %v, want only e-now.json", got)
+	}
+	if fs[2].Honoured {
+		t.Error("a tombstone on an earlier boot's entry was honoured")
+	}
+	if d := heldDisk(fs); d != 10 {
+		t.Errorf("held disk %d, want 10 (this boot's entry only)", d)
+	}
+	// With no boot time, every entry counts.
+	for i := range fs {
+		fs[i].ThisBoot, fs[i].Unknown, fs[i].Honoured = false, false, false
+	}
+	markLedger(fs, 0, false, nil, true)
+	if n := counted(fs); n != 4 {
+		t.Errorf("with no boot time counted %d, want all 4 entries", n)
 	}
 }

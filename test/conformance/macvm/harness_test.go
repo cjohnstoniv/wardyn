@@ -792,8 +792,16 @@ type ledgerFile struct {
 	// Honoured is set on a tombstone the ledger would honour now (tombstonable); any other
 	// tombstone leaves its entry counted.
 	Honoured bool
-	Entry    admission.Entry
+	// Parsed is an entry the ledger can read (a regular file of at most 64 KiB, JSON, with an id).
+	// ThisBoot is a parsed entry of this boot; Unknown is an unparsable one written since boot,
+	// which the ledger counts as a live VM. The ledger ignores every other entry.
+	Parsed, ThisBoot, Unknown bool
+	ModTime                   time.Time
+	Entry                     admission.Entry
 }
+
+// maxEntryFile is the ledger's bound on an entry file it parses.
+const maxEntryFile = 64 << 10
 
 // tombstonable is the ledger's tombstone condition (internal/macvm/admission/tombstone.go): an
 // entry of this boot, not leaked, whose helper (or, with none yet, its owner) is gone while uid has
@@ -835,12 +843,14 @@ func ledger(t *testing.T) []ledgerFile {
 		if err != nil {
 			continue
 		}
-		lf := ledgerFile{Name: n, Mode: fi.Mode(), Tomb: strings.HasSuffix(n, ".tombstone")}
+		lf := ledgerFile{Name: n, Mode: fi.Mode(), Tomb: strings.HasSuffix(n, ".tombstone"), ModTime: fi.ModTime()}
 		if st, ok := fi.Sys().(*unix.Stat_t); ok {
 			lf.UID = int(st.Uid)
 		}
-		if b, err := os.ReadFile(filepath.Join(admission.DefaultDir, n)); err == nil {
-			_ = json.Unmarshal(b, &lf.Entry)
+		if fi.Mode().IsRegular() && fi.Size() <= maxEntryFile {
+			if b, err := os.ReadFile(filepath.Join(admission.DefaultDir, n)); err == nil {
+				lf.Parsed = json.Unmarshal(b, &lf.Entry) == nil && lf.Entry.ID != ""
+			}
 		}
 		out = append(out, lf)
 	}
@@ -848,24 +858,40 @@ func ledger(t *testing.T) []ledgerFile {
 	boot, berr := host.BootTime()
 	ps, perr := host.Processes()
 	if berr != nil || perr != nil {
-		t.Logf("ledger: boot time or processes unreadable (%v, %v): no tombstone is honoured", berr, perr)
+		t.Logf("ledger: boot time or processes unreadable (%v, %v): every entry counts and no tombstone is honoured", berr, perr)
 	}
-	byName := map[string]ledgerFile{}
-	for _, lf := range out {
-		if !lf.Tomb {
-			byName[lf.Name] = lf
-		}
-	}
-	for i, lf := range out {
-		if e, ok := byName[strings.TrimSuffix(lf.Name, ".tombstone")]; lf.Tomb && ok && berr == nil && perr == nil {
-			out[i].Honoured = tombstonable(e.Entry, e.UID, boot, ps)
-		}
-	}
+	markLedger(out, boot, berr == nil, ps, perr == nil)
 	return out
 }
 
-// countedFiles is the ledger's live entries: every entry whose tombstone, if any, the ledger
-// would not honour now.
+// markLedger sets what the ledger itself would make of each file: entries of this boot, unparsable
+// files written since boot (counted as live VMs), and the tombstones it would honour. With no boot
+// time every entry counts; with no process list no tombstone is honoured.
+func markLedger(fs []ledgerFile, boot int64, bootOK bool, ps []admission.Proc, procsOK bool) {
+	byName := map[string]ledgerFile{}
+	for i, lf := range fs {
+		if lf.Tomb {
+			continue
+		}
+		switch {
+		case !bootOK:
+			fs[i].ThisBoot, fs[i].Unknown = lf.Parsed, !lf.Parsed
+		case lf.Parsed:
+			fs[i].ThisBoot = lf.Entry.BootTime == boot
+		default:
+			fs[i].Unknown = lf.ModTime.UnixMicro() >= boot
+		}
+		byName[lf.Name] = fs[i]
+	}
+	for i, lf := range fs {
+		if e, ok := byName[strings.TrimSuffix(lf.Name, ".tombstone")]; lf.Tomb && ok && e.ThisBoot && bootOK && procsOK {
+			fs[i].Honoured = tombstonable(e.Entry, e.UID, boot, ps)
+		}
+	}
+}
+
+// countedFiles is the ledger's live entries: every parsed entry of this boot whose tombstone, if
+// any, the ledger would not honour now.
 func countedFiles(fs []ledgerFile) []ledgerFile {
 	tomb := map[string]bool{}
 	for _, f := range fs {
@@ -875,21 +901,30 @@ func countedFiles(fs []ledgerFile) []ledgerFile {
 	}
 	var out []ledgerFile
 	for _, f := range fs {
-		if !f.Tomb && !tomb[f.Name] {
+		if !f.Tomb && f.ThisBoot && !tomb[f.Name] {
 			out = append(out, f)
 		}
 	}
 	return out
 }
 
-func counted(fs []ledgerFile) int { return len(countedFiles(fs)) }
+// counted is the ledger's count of live VMs: its live entries and its unparsable files since boot.
+func counted(fs []ledgerFile) int {
+	n := len(countedFiles(fs))
+	for _, f := range fs {
+		if f.Unknown {
+			n++
+		}
+	}
+	return n
+}
 
-// heldDisk is the disk every entry in the ledger reserves, tombstoned ones included: a tombstone
+// heldDisk is the disk every entry of this boot reserves, tombstoned ones included: a tombstone
 // frees a slot and memory but its disk stays held until its owner returns.
 func heldDisk(fs []ledgerFile) int64 {
 	var n int64
 	for _, f := range fs {
-		if !f.Tomb {
+		if !f.Tomb && f.ThisBoot {
 			n += f.Entry.DiskReserve
 		}
 	}
