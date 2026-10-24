@@ -21,45 +21,20 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clienttesting "k8s.io/client-go/testing"
-
-	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 )
 
 // TestRunnerCreateSandbox_NoAgentPodWhileItsProxyRefuses pins the cause of a short k8s runner run
-// losing its recording. A runner's proxy (self_lapse) binds its listener and then refuses every
-// agent request with 503 until its first renew succeeds; this proxy stand-in is that window held
-// open, its listener bound and every answer a 503 (TestSelfLapse_ClosedBeforeFirstRenew pins the
-// real proxy's). A kubelet stand-in marks the proxy pod Ready by the readiness probe CreateSandbox
-// declares on it. The agent pod must not be created while the proxy refuses: an agent started there
-// has its requests refused, a short run's recording upload among them.
+// losing its recording. A runner's proxy (self_lapse) refuses every agent request until its first
+// renew succeeds, and so listens only from then (TestSelfLapse_ListensOnlyOnceOpen pins the real
+// proxy's); this proxy stand-in is that window held open, nothing listening at its address. A
+// kubelet stand-in marks the proxy pod Ready by the readiness probe CreateSandbox declares on it.
+// The agent pod must not be created before the proxy serves: an agent started there has its
+// requests refused, a short run's recording upload among them.
 func TestRunnerCreateSandbox_NoAgentPodWhileItsProxyRefuses(t *testing.T) {
-	var refused atomic.Int32
-	px := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		refused.Add(1)
-		http.Error(w, "wardyn: this run's egress is closed", http.StatusServiceUnavailable)
-	}))
-	defer px.Close()
-
 	h := newRunnerHarness(t)
 	h.d.cfg.Sink = &fakeSink{h: h}
 	h.d.cfg.ControlPlaneRelay = func(*url.URL) (string, error) { return "10.96.0.40", nil }
-	h.cs.PrependReactor("get", "pods", func(action clienttesting.Action) (bool, runtime.Object, error) {
-		ga := action.(clienttesting.GetAction)
-		if !strings.HasPrefix(ga.GetName(), "wardyn-proxy-") {
-			return false, nil, nil
-		}
-		obj, err := h.cs.Tracker().Get(podsGVR, action.GetNamespace(), ga.GetName())
-		if err != nil {
-			return true, nil, err
-		}
-		pod := obj.(*corev1.Pod).DeepCopy()
-		pod.Status.PodIP, pod.Status.Phase = "10.244.0.7", corev1.PodRunning
-		ready := probeSucceeds(px, pod.Spec.Containers[0].ReadinessProbe)
-		pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
-			Name: proxyContainerName, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}, Ready: ready,
-		}}
-		return true, pod, nil
-	})
+	installProbedProxyReactor(h, unusedAddr(t), nil)
 	installAgentRunningReactor(t, h.cs)
 	var agentCreated atomic.Bool
 	h.cs.PrependReactor("create", "pods", func(action clienttesting.Action) (bool, runtime.Object, error) {
@@ -75,19 +50,44 @@ func TestRunnerCreateSandbox_NoAgentPodWhileItsProxyRefuses(t *testing.T) {
 	defer cancel()
 	_, err := h.d.CreateSandbox(ctx, spec)
 	if agentCreated.Load() {
-		t.Fatalf("the agent pod was created while its proxy answered every request 503 (CreateSandbox: %v)", err)
+		t.Fatalf("the agent pod was created before its proxy served (CreateSandbox: %v)", err)
 	}
 	if err == nil {
-		t.Fatal("CreateSandbox succeeded while its proxy refused every request")
+		t.Fatal("CreateSandbox succeeded while its proxy never served")
 	}
 }
 
-// TestRunnerCreateSandbox_OlderProxyImageKeepsTheTCPProbe: a runner whose proxy image is a known
-// release older than proxyReadyRelease answers proxy.ReadyPath 404, so probing there would fail
-// every run at the start deadline. Its pods keep the TCP probe, and the driver warns once naming
-// the image and the fix. A current release, a digest pin and a development tag are probed on
-// proxy.ReadyPath.
-func TestRunnerCreateSandbox_OlderProxyImageKeepsTheTCPProbe(t *testing.T) {
+// TestRunnerCreateSandbox_PinnedOlderProxyStarts: an older proxy named by digest or by a tag that
+// is not a release number starts as it did before this release. The runner cannot read its
+// release; the proxy stand-in is such a proxy, open, which listens at once and knows no readiness
+// route, answering 404 to every path. Its pod must read Ready and CreateSandbox succeed well inside
+// the start deadline.
+func TestRunnerCreateSandbox_PinnedOlderProxyStarts(t *testing.T) {
+	px := httptest.NewServer(http.NotFoundHandler())
+	defer px.Close()
+	for _, image := range []string{"ghcr.io/cjohnstoniv/wardyn-proxy@sha256:" + strings.Repeat("b", 64), "registry.example/wardyn-proxy:pinned"} {
+		h := newRunnerHarness(t)
+		h.d.cfg.ProxyImage = image
+		h.d.cfg.Sink = &fakeSink{h: h}
+		h.d.cfg.ControlPlaneRelay = func(*url.URL) (string, error) { return "10.96.0.40", nil }
+		installProbedProxyReactor(h, px.Listener.Addr().String(), nil)
+		installAgentRunningReactor(t, h.cs)
+		spec := testSandboxSpec()
+		spec.RunID = h.runID
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_, err := h.d.CreateSandbox(ctx, spec)
+		cancel()
+		if err != nil {
+			t.Fatalf("%s: an older proxy pinned this way never started its run: %v", image, err)
+		}
+	}
+}
+
+// TestRunnerCreateSandbox_OlderProxyImageWarnsOnce: every proxy pod is probed by a connect, which
+// this release's proxy passes only once it serves and an older one as soon as it listens, as
+// before. A known release older than proxyReadyRelease also gets one warning naming the image and
+// the fix; a current release, a digest pin and a development tag get none.
+func TestRunnerCreateSandbox_OlderProxyImageWarnsOnce(t *testing.T) {
 	var buf strings.Builder
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
@@ -95,14 +95,14 @@ func TestRunnerCreateSandbox_OlderProxyImageKeepsTheTCPProbe(t *testing.T) {
 	const repo = "ghcr.io/cjohnstoniv/wardyn-proxy"
 	for _, tc := range []struct {
 		image string
-		http  bool
+		older bool
 	}{
-		{repo + ":0.10.0-rc.1", false},
-		{repo + ":0.9.8", false},
-		{repo + ":" + proxyReadyRelease, true},
-		{repo + ":0.10.0", true},
-		{repo + "@sha256:" + strings.Repeat("a", 64), true},
-		{"wardyn/wardyn-proxy:dev", true},
+		{repo + ":0.10.0-rc.1", true},
+		{repo + ":0.9.8", true},
+		{repo + ":" + proxyReadyRelease, false},
+		{repo + ":0.10.0", false},
+		{repo + "@sha256:" + strings.Repeat("a", 64), false},
+		{"wardyn/wardyn-proxy:dev", false},
 	} {
 		buf.Reset()
 		h := newRunnerHarness(t)
@@ -120,22 +120,58 @@ func TestRunnerCreateSandbox_OlderProxyImageKeepsTheTCPProbe(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			probe := pod.Spec.Containers[0].ReadinessProbe
-			if gotHTTP := probe.HTTPGet != nil && probe.HTTPGet.Path == proxy.ReadyPath; gotHTTP != tc.http || !tc.http && probe.TCPSocket == nil {
-				t.Fatalf("%s: readiness probe %+v, want HTTP on the ready path = %v (else TCP)", tc.image, probe.ProbeHandler, tc.http)
+			if probe := pod.Spec.Containers[0].ReadinessProbe; probe == nil || probe.TCPSocket == nil || probe.HTTPGet != nil {
+				t.Fatalf("%s: readiness probe %+v, want a TCP connect", tc.image, probe)
 			}
 		}
 		warned := strings.Count(buf.String(), "the proxy image is older than this runner")
-		if tc.http && warned != 0 || !tc.http && (warned != 1 || !strings.Contains(buf.String(), tc.image)) {
-			t.Fatalf("%s: warned %d times, want %d naming the image:\n%s", tc.image, warned, map[bool]int{true: 0, false: 1}[tc.http], buf.String())
+		if !tc.older && warned != 0 || tc.older && (warned != 1 || !strings.Contains(buf.String(), tc.image)) {
+			t.Fatalf("%s: warned %d times, want %d naming the image:\n%s", tc.image, warned, map[bool]int{true: 1, false: 0}[tc.older], buf.String())
 		}
 	}
 }
 
-// probeSucceeds runs probe as a kubelet does against the proxy stand-in: a TCP probe passes once
-// the listener accepts, an HTTP probe only on a 2xx or 3xx answer at its path.
-func probeSucceeds(px *httptest.Server, probe *corev1.Probe) bool {
-	addr := px.Listener.Addr().String()
+// installProbedProxyReactor is the kubelet stand-in: a get of the proxy pod reads it Running, and
+// Ready only when the readiness probe CreateSandbox declares on it succeeds against addr. seen, when
+// set, sees each probe's result.
+func installProbedProxyReactor(h *runnerHarness, addr string, seen func(ready bool)) {
+	h.cs.PrependReactor("get", "pods", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		ga := action.(clienttesting.GetAction)
+		if !strings.HasPrefix(ga.GetName(), "wardyn-proxy-") {
+			return false, nil, nil
+		}
+		obj, err := h.cs.Tracker().Get(podsGVR, action.GetNamespace(), ga.GetName())
+		if err != nil {
+			return true, nil, err
+		}
+		pod := obj.(*corev1.Pod).DeepCopy()
+		pod.Status.PodIP, pod.Status.Phase = "10.244.0.7", corev1.PodRunning
+		ready := probeSucceeds(addr, pod.Spec.Containers[0].ReadinessProbe)
+		if seen != nil {
+			seen(ready)
+		}
+		pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+			Name: proxyContainerName, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}, Ready: ready,
+		}}
+		return true, pod, nil
+	})
+}
+
+// unusedAddr is a loopback address nothing listens on.
+func unusedAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+	return addr
+}
+
+// probeSucceeds runs probe as a kubelet does against the proxy stand-in at addr: a TCP probe passes
+// once the listener accepts, an HTTP probe only on a 2xx or 3xx answer at its path.
+func probeSucceeds(addr string, probe *corev1.Probe) bool {
 	switch {
 	case probe == nil:
 		return true
