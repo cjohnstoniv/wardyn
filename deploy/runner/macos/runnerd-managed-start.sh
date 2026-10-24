@@ -34,4 +34,5 @@ if [ -z "$org" ]; then
   echo "wardyn-runnerd: the com.wardyn.runnerd profile sets no OrgURL; the managed agent stays idle"
   exit 0
 fi
-exec "$bin" serve
+# serve rotates its own log (--log-file); this redirect keeps anything printed before it opens it.
+exec "$bin" serve --log-file "$log"

@@ -789,6 +789,8 @@ type Server struct {
 	fleet fleetSnapshot
 	// revokedEndRetry spaces out the queue sweep's retries of a run it could not end (runner_revoke.go).
 	revokedEndRetry revokedEndRetry
+	// exitRetry spaces out the runner exit sweep's retries of each receipt, and parks one (runner_exits.go).
+	exitRetry runnerExitRetry
 	// inventoryHoldAudit spaces one runner's runner.inventory.hold rows (runner_state.go).
 	inventoryHoldAudit inventoryHoldAudit
 	// privIPRefusals caches the private_ip_refusals row's audit read (setup_private_ip_refusals.go).

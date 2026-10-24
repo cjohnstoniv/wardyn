@@ -33,6 +33,22 @@ matching terminal transition and audit. Pending receipts and incomplete cleanup
 block another generation. The worker retries shared terminal effects after
 restart; checked stream callbacks never wait for same-peer teardown RPCs.
 
+The worker runs every 5 seconds, but a receipt that failed waits its own delay
+before its next try: 5 seconds, doubling to a 5-minute cap. An identical error
+is logged once per such interval, with `repeated` counting the lines left out.
+A restart retries every pending receipt at once. A receipt the organisation
+refuses as a foreign, stale or incomplete incarnation on 8 tries in a row
+(about ten minutes) is parked (migration `0231_runner_exit_parked.sql`): the
+row is kept with `parked_at` set and still blocks another generation, a
+`runner.exit.park` audit row records the tries and the error, and the worker
+no longer retries it. `wardyn doctor` on the runner's computer reports it as
+a failed `runner-exits` stage.
+
+The runner retries failed containment every second until it holds, and logs
+its `runner containment will retry` error, and the replay loop's warnings, the
+same way: an identical line once per interval, 5 seconds growing to 5 minutes,
+with a `repeated` count.
+
 Live activity uses a separate, bounded per-run marker under the proxy-only state
 mount. Admission captures a fresh connection epoch; reconnect invalidates it.
 Only a new admitted decision from the current epoch may send an unbuffered

@@ -1,0 +1,82 @@
+// Copyright 2026 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package main
+
+import (
+	"bytes"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func fileSize(t *testing.T, path string) int64 {
+	t.Helper()
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st.Size()
+}
+
+// Ten caps' worth of lines leave the live file under the cap, three full rotated files, and no fourth:
+// the log on disk is bounded however long a failure lasts.
+func TestRotatingLogCapsItsFiles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "Logs", "wardyn", "runnerd.log")
+	l, err := openRotatingLog(path, 1000, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := append(bytes.Repeat([]byte("x"), 99), '\n')
+	for range 100 {
+		if _, err := l.Write(line); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := fileSize(t, path); got == 0 || got > 1000 {
+		t.Errorf("runnerd.log is %d bytes, want at most the 1000-byte cap", got)
+	}
+	for _, n := range []string{".1", ".2", ".3"} {
+		if got := fileSize(t, path+n); got != 1000 {
+			t.Errorf("runnerd.log%s is %d bytes, want a full 1000", n, got)
+		}
+	}
+	if _, err := os.Stat(path + ".4"); !os.IsNotExist(err) {
+		t.Errorf("runnerd.log.4 exists (%v): more than 3 older files are kept", err)
+	}
+}
+
+// A log already over the cap when serve starts (an older runnerd's, which never rotated) is moved to .1
+// before the first line, and a write appends to what an earlier start left under the cap.
+func TestRotatingLogRotatesAnOversizedLogAtStart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runnerd.log")
+	if err := os.WriteFile(path, bytes.Repeat([]byte("o"), 5000), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	l, err := openRotatingLog(path, 1000, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Write([]byte("new\n")); err != nil {
+		t.Fatal(err)
+	}
+	_ = l.Close()
+	if got := fileSize(t, path); got != 4 {
+		t.Errorf("runnerd.log is %d bytes after start, want only the new line", got)
+	}
+	if got := fileSize(t, path+".1"); got != 5000 {
+		t.Errorf("runnerd.log.1 is %d bytes, want the old log", got)
+	}
+	l, err = openRotatingLog(path, 1000, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = l.Write([]byte("again\n"))
+	_ = l.Close()
+	if got := fileSize(t, path); got != 10 {
+		t.Errorf("runnerd.log is %d bytes after a second start, want both lines", got)
+	}
+}

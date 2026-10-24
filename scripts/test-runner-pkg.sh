@@ -66,7 +66,7 @@ grep -q 'sets no OrgURL' "$H/Library/Logs/wardyn/runnerd.log" || fail "the launc
 mkdir -p "$PREFS/$(id -un)"; : >"$PREFS/$(id -un)/com.wardyn.runnerd.plist"
 echo https://wardyn.example >"$PREFS/com.wardyn.runnerd.plist"
 launch || fail "the launcher failed when registered"
-[ "$(cat "$STUB_LOG")" = "started: serve" ] || fail "a blank per-user OrgURL hid the device profile's, or serve did not start: $(cat "$STUB_LOG")"
+[ "$(cat "$STUB_LOG")" = "started: serve --log-file $H/Library/Logs/wardyn/runnerd.log" ] || fail "a blank per-user OrgURL hid the device profile's, or serve did not start: $(cat "$STUB_LOG")"
 
 # ---- pre/postinstall -------------------------------------------------------------------------------
 TB="${WORK}/tbin"; mkdir -p "$TB"

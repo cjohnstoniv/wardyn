@@ -10,6 +10,8 @@
     <string>serve</string>
     <string>--config</string>
     <string>/Users/me/Library/Application Support/wardyn/runnerd.json</string>
+    <string>--log-file</string>
+    <string>/Users/me/Library/Logs/wardyn/runnerd.log</string>
   </array>
   <key>RunAtLoad</key>
   <true/>

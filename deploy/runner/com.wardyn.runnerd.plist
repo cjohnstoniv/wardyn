@@ -18,6 +18,11 @@
   replaced. Every setting is in the settings file (runnerd.json, mode 0600); this plist is readable by every
   local account, so it holds none. Committed as-is it is still valid, parseable plist XML — see
   scripts/test-runner-units.sh.
+
+  serve writes its own log to __WARDYN_LOG__ (its log-file flag), rotated at 10 MiB with 3 older files kept:
+  launchd cannot rotate StandardOutPath, and newsyslog needs root. StandardOutPath and
+  StandardErrorPath stay on the same file so a panic, or anything printed before serve opens its log,
+  is still kept there.
 -->
 <plist version="1.0">
 <dict>
@@ -29,6 +34,8 @@
     <string>serve</string>
     <string>--config</string>
     <string>__WARDYN_CONFIG__</string>
+    <string>--log-file</string>
+    <string>__WARDYN_LOG__</string>
   </array>
   <key>RunAtLoad</key>
   <true/>

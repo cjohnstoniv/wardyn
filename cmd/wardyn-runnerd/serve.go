@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -87,10 +88,18 @@ func (o serveOptions) localAttachEnabled() (bool, error) {
 }
 
 func newServeCommand(build runnerHooksBuilder) *cobra.Command {
-	var org, stateDir, configPath string
+	var org, stateDir, configPath, logFile string
 	var opts serveOptions
 	cmd := &cobra.Command{Use: "serve", Short: "Connect this registered runner to its organisation", Args: cobra.NoArgs}
 	cmd.RunE = func(cmd *cobra.Command, _ []string) (retErr error) {
+		if logFile != "" {
+			w, err := openRotatingLog(logFile, logFileMax, logFileKeep)
+			if err != nil {
+				return err
+			}
+			log.SetOutput(w) // slog's default handler writes through the log package
+			defer func() { log.SetOutput(os.Stderr); _ = w.Close() }()
+		}
 		cfg, err := serveConfig(cmd, configPath)
 		if err != nil {
 			return err
@@ -200,6 +209,7 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&org, "org", "", "organisation public HTTPS URL used at registration (default: the OrgURL managed preference, else org_url in runnerd.json)")
 	cmd.Flags().StringVar(&configPath, "config", "", "the runner's settings file (default: <user configuration directory>/wardyn/runnerd.json, which may be absent); the file never holds a credential")
+	cmd.Flags().StringVar(&logFile, "log-file", "", "write the log to this file, not stderr, rotated at 10 MiB with 3 older files kept (the LaunchAgent sets it: launchd cannot rotate its own)")
 	cmd.Flags().StringVar(&stateDir, "state-dir", "", "private runner state directory (defaults to the user configuration directory)")
 	cmd.Flags().StringVar(&opts.proxyImage, "proxy-image", "", "Wardyn proxy image matching this daemon version (defaults to the image the organisation named at registration, else the release image on a release build)")
 	cmd.Flags().StringVar(&opts.relayListen, "relay-listen", "", "address the run relay listens on: loopback, the native Docker bridge's gateway or Rancher Desktop's veth-rd-wsl address (found by a probe container when left out)")

@@ -11,6 +11,15 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Changed
+
+- A failing retry no longer floods the logs. The organisation retries a runner exit receipt after 5 seconds, doubling
+  to 5 minutes, and logs an identical error once per interval with a `repeated` count; a receipt refused on 8 tries in
+  a row as a foreign, stale or incomplete incarnation is parked (migration `0231_runner_exit_parked`): kept, audited as
+  `runner.exit.park`, no longer retried, and failed by `wardyn doctor`'s new `runner-exits` stage. The runner logs its
+  containment and replay retries the same way, and on macOS writes `~/Library/Logs/wardyn/runnerd.log` itself, rotated
+  at 10 MiB with three older files kept; `wardyn runner upgrade` rewrites the LaunchAgent to pass `--log-file`.
+
 ## [0.10.0-rc.1] — 2026-10-24
 
 ### Before you upgrade
