@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"net"
+	"os"
 	"testing"
 	"time"
 )
@@ -64,7 +65,7 @@ func feed(t *testing.T, pause time.Duration, chunks ...[]byte) (flight, error) {
 			}
 		}
 	}()
-	return readFlight(relay)
+	return readFlight(relay, 443)
 }
 
 func TestReadFlight(t *testing.T) {
@@ -119,4 +120,39 @@ func TestReadFlight(t *testing.T) {
 			t.Fatalf("kind %v err %v", fl.kind, err)
 		}
 	})
+}
+
+// silentConn is a guest that never speaks: Read times out at once, and the
+// first read deadline readFlight sets is kept.
+type silentConn struct {
+	net.Conn
+	deadline time.Time
+}
+
+func (c *silentConn) SetReadDeadline(t time.Time) error {
+	if c.deadline.IsZero() {
+		c.deadline = t
+	}
+	return nil
+}
+
+func (c *silentConn) Read([]byte) (int, error) { return 0, os.ErrDeadlineExceeded }
+
+// The first-byte wait is the long one on 443 only; a silent flow on any other
+// port is tunnelled after a short one.
+func TestReadFlightWaitsByPort(t *testing.T) {
+	for port, want := range map[uint16]time.Duration{443: firstWait, 3306: firstWaitOther, 25: firstWaitOther, 8443: firstWaitOther} {
+		c := &silentConn{}
+		start := time.Now()
+		fl, err := readFlight(c, port)
+		if err != nil || fl.kind != flightNone {
+			t.Fatalf(":%d: kind %v err %v, want a silent flight", port, fl.kind, err)
+		}
+		if got := c.deadline.Sub(start); got < want || got > want+time.Second {
+			t.Errorf(":%d: first-byte wait %v, want %v", port, got, want)
+		}
+	}
+	if firstWaitOther > 2*time.Second {
+		t.Errorf("firstWaitOther = %v: a server-speaks-first client times out its handshake at 10 s", firstWaitOther)
+	}
 }

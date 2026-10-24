@@ -56,7 +56,8 @@ type signinLaneRig struct {
 	checks                atomic.Int32
 }
 
-func newSigninLaneRig(t *testing.T) *signinLaneRig {
+// newSigninLaneRig builds the rig; each with edits the proxy's options first.
+func newSigninLaneRig(t *testing.T, with ...func(*Options)) *signinLaneRig {
 	t.Helper()
 	rig := &signinLaneRig{logs: &lockedBuf{}, upstream: captureUpstream(t, true, "site-ok")}
 	rig.goodCred = base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))
@@ -79,7 +80,7 @@ func newSigninLaneRig(t *testing.T) *signinLaneRig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := newProxy(Options{
+	opts := Options{
 		RunID:  uuid.New(),
 		Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"site.test"}}),
 		Sink:   &decisionSink{out: rig.logs, ch: make(chan egress.DecisionLog, 64)},
@@ -91,7 +92,11 @@ func newSigninLaneRig(t *testing.T) *signinLaneRig {
 		ControlPlaneURL: "https://wardynd.test:8080", RunToken: newTokenSource("RUNTOK"),
 		TLSClientConfig: testInsecureTLSConfig,
 		ControlTLS:      testInsecureTLSConfig,
-	})
+	}
+	for _, edit := range with {
+		edit(&opts)
+	}
+	p := newProxy(opts)
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(rig.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
@@ -250,6 +255,42 @@ func TestSigninLane_PolicyStillDecidesByHost(t *testing.T) {
 	rig := newSigninLaneRig(t)
 	if _, _, status := rig.connect(t, rig.signinAddr, "other.test:443", signinAuth(rig.goodCred)); status != http.StatusForbidden {
 		t.Fatalf("sign-in CONNECT to a refused host = %d, want 403", status)
+	}
+}
+
+// TestSigninLane_DoorHostsStayRefused: a host the agent reaches only through a
+// checked door (here the kubectl row's API server and an AWS re-signed host)
+// is refused on the sign-in listener too, by the door's own refusal, while an
+// allowed sign-in host still tunnels.
+func TestSigninLane_DoorHostsStayRefused(t *testing.T) {
+	rig := newSigninLaneRig(t, func(o *Options) {
+		o.Policy = CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"site.test", "k8s.test:6443", sigv4S3 + ":443"}})
+		o.KubeAPI = &KubeAPIGrant{Host: "k8s.test", Port: 6443, Namespaces: []string{"team-a"}}
+		o.AWSSigV4 = &AWSSigV4Config{GrantID: uuid.New(), PortalHost: sigv4Portal, AccountID: sigv4Account, RoleName: sigv4Role,
+			Hosts: []string{sigv4S3}}
+	})
+	for target, door := range map[string]func(*http.Response, string) bool{
+		"k8s.test:6443":  func(_ *http.Response, body string) bool { return strings.Contains(body, kubeAPIRefused) },
+		sigv4S3 + ":443": func(resp *http.Response, _ string) bool { return resp.Header.Get("X-Wardyn-Reason") == awsSigV4Scope },
+	} {
+		c, err := net.Dial("tcp", rig.signinAddr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.WriteString(c, "CONNECT "+target+" HTTP/1.1\r\nHost: "+target+"\r\nProxy-Authorization: "+
+			signinAuth(rig.goodCred)+"\r\n\r\n")
+		resp, err := http.ReadResponse(bufio.NewReader(c), &http.Request{Method: http.MethodConnect})
+		if err != nil {
+			t.Fatalf("read CONNECT %s response: %v", target, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = c.Close()
+		if resp.StatusCode != http.StatusForbidden || !door(resp, string(body)) {
+			t.Errorf("sign-in CONNECT %s = %d %q, want the door's 403 refusal", target, resp.StatusCode, body)
+		}
+	}
+	if _, _, status := rig.connect(t, rig.signinAddr, "site.test:443", signinAuth(rig.goodCred)); status != http.StatusOK {
+		t.Fatalf("sign-in CONNECT to an allowed host = %d, want 200", status)
 	}
 }
 

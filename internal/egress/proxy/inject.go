@@ -523,8 +523,9 @@ func (i *injector) apply(req *http.Request, host string, port int) {
 		}
 		return
 	}
-	// Strip always, inject only where the rule's PIN allows — same two decisions the MITM lane makes,
-	// or the pin is bypassable by skipping TLS.
+	// A host-owned rule: strip always, inject only where the rule's PIN allows — same two decisions the
+	// MITM lane makes, or the pin is bypassable by skipping TLS. A placeholder replacement (above)
+	// deliberately keeps the scheme and the other headers.
 	stripSandboxCredentials(req.Header, h.name)
 	if !i.allowsInjection(host, req.Method, req.URL.Path, req.URL.RawQuery) {
 		return

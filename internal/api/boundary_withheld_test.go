@@ -395,3 +395,31 @@ func TestBoundaryMintRefusesWithheldGrants(t *testing.T) {
 		}
 	}
 }
+
+// TestSinkWithheldUnreadAuditTarget: the injection door's secret.read failure for an unread
+// boundary names the grant, not the organisation's secret, when the grant is shared, as the
+// sink's own read does (injectionRead.auditTarget); an unshared grant's row names its secret.
+func TestSinkWithheldUnreadAuditTarget(t *testing.T) {
+	const unshared = `{"host":"org-api.example","require_tls":true,"secret_name":"org-tool-token"}`
+	for name, scope := range map[string]string{"shared": sharedScope, "unshared": unshared} {
+		t.Run(name, func(t *testing.T) {
+			h, _ := newSecretsHarness(t)
+			run := types.AgentRun{ID: uuid.New()}
+			grant := types.CredentialGrant{ID: uuid.New(), RunID: run.ID, Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: json.RawMessage(scope)}}
+			ast := newAuthzStore()
+			ast.runs[run.ID] = run
+			h.srv.cfg.Store = mintBoundaryStore{grantStore: grantStore{authzStore: ast, grants: []types.CredentialGrant{grant}}, err: errors.New("down")}
+			rr := do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+grant.ID.String(), h.mintRunToken(t, run.ID), "")
+			if rr.Code != http.StatusServiceUnavailable || !strings.Contains(rr.Body.String(), reasonSinkStoreUnavailable) {
+				t.Fatalf("code %d body %s, want 503 %s", rr.Code, rr.Body.String(), reasonSinkStoreUnavailable)
+			}
+			want := sharedSecretName
+			if name == "shared" {
+				want = grant.ID.String()
+			}
+			if ev := lastAuditEvent(t, h.audit.events, "secret.read"); ev.Outcome != "failure" || ev.Target != want {
+				t.Errorf("audit = %s target %q, want a failure naming %q", ev.Outcome, ev.Target, want)
+			}
+		})
+	}
+}
