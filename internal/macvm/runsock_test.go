@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
 	"github.com/cjohnstoniv/wardyn/internal/macvm/macvmtest"
@@ -115,7 +116,11 @@ func TestRunListeningOnTheToolsPortFailsBeforeInit(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.attach(t)
-	err = <-r.done
+	select {
+	case err = <-r.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the run went on with a VM listening on the tools port")
+	}
 	if !errors.Is(err, macvm.ErrToolsModeRun) {
 		t.Fatalf("run: %v, want ErrToolsModeRun", err)
 	}

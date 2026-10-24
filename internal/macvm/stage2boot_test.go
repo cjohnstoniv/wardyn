@@ -215,7 +215,10 @@ func TestStage2BootTakesNetFDAndReachesToolsMode(t *testing.T) {
 func TestStage2BootWithoutNetFDStartsNothing(t *testing.T) {
 	eng := &macvmtest.Engine{}
 	cfg := macvm.Stage2BootConfig{Engine: eng, SockRoot: macvmtest.SockRoot(t), SockKey: "0123456789ab", SockFstat: macvmtest.SockFstat, NetWait: 100 * time.Millisecond}
-	if _, _, err := cfg.ToolsBoot()(context.Background(), macvm.MachineSpec{}); err == nil || !strings.Contains(err.Error(), "network descriptor") {
+	dir := t.TempDir()
+	spec := macvm.MachineSpec{CPUs: 4, MemoryBytes: 8 << 30, MinCPUs: 2, MinMemoryBytes: 4 << 30, HardwareModel: []byte("hw"),
+		MachineIdentifier: []byte("id"), DiskPath: filepath.Join(dir, macvm.DiskFile), AuxPath: filepath.Join(dir, macvm.AuxFile)}
+	if _, _, err := cfg.ToolsBoot()(context.Background(), spec); err == nil || !strings.Contains(err.Error(), "network descriptor") {
 		t.Fatalf("got %v", err)
 	}
 	if len(eng.Machines()) != 0 {
