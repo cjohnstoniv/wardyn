@@ -177,10 +177,11 @@ q="$(ls -d "$R"/Users/Shared/.wardyn-quarantine.?????? 2>/dev/null | head -1 || 
 # 0600 file planted at the name just before the script's first stat of it. That file must keep its mode and
 # owner, and the hardlink must be moved aside, not made the base.
 fresh type-switch; mkdir "$(B)"; echo secret >"$R/secret"; chmod 600 "$R/secret"; mark "$R/secret"
-SWAP_PATH="$(B)" SWAP_TO="$R/secret" post || { cat "${WORK}/out" >&2; fail "postinstall failed (type-switch)"; }
+rc=0; SWAP_PATH="$(B)" SWAP_TO="$R/secret" post || rc=$?
 [ -e "$(B).swapped" ] || fail "the type switch never happened"
 [ "$(mode "$R/secret")" = 600 ] && root_owned "$R/secret" && [ "$(cat "$R/secret")" = secret ] \
-  || fail "the type switch changed the root-owned file: $(mode "$R/secret")"
+  || fail "the type switch changed the root-owned file: mode 0600 -> $(mode "$R/secret") (postinstall exit $rc)"
+[ "$rc" = 0 ] || { cat "${WORK}/out" >&2; fail "postinstall failed (type-switch)"; }
 check_ledger "a type switch"; [ "$(ino "$(B)")" != "$(ino "$R/secret")" ] || fail "the hardlink became the base"
 
 echo "test-pkg-postinstall: ok"
