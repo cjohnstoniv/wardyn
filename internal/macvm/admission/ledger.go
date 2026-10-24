@@ -7,10 +7,23 @@
 // two macOS VMs, the host memory budget and a worst-case disk reservation,
 // and frees a slot only once the VM is verifiably gone.
 //
-// Layout: one directory (the runner package's postinstall makes
-// /Users/Shared/Wardyn/macos-vm-admission, mode 1777: world-writable and
-// sticky, like /tmp) holding a root-owned admission.lock (0644) and one file
-// per entry, e-<random>.json, mode 0644: readable by every login's runner so
+// Layout (the runner package's postinstall makes all three, as root):
+//
+//	/Users/Shared/Wardyn/                     root:wheel 0755
+//	/Users/Shared/Wardyn/admission.lock       root:wheel 0644
+//	/Users/Shared/Wardyn/macos-vm-admission/  root:wheel 1777 (sticky, like /tmp)
+//
+// The lock sits outside the world-writable entries directory, so no login
+// can plant, rename or unlink it. A runner opens it walking from / one
+// component at a time (openat with O_NOFOLLOW, then fstat): every directory
+// on the way must be root-owned and either not group- or other-writable or
+// sticky, the lock's own directory must not be group- or other-writable at
+// all, and the lock must be a root-owned regular file that is not group- or
+// other-writable. After taking the flock it checks the path still names the
+// file it locked. Anything else is refused with the fix named, so a
+// directory a user made before the install fails closed. The entries
+// directory must be root-owned and sticky. It holds one file per entry,
+// e-<random>.json, mode 0644: readable by every login's runner so
 // all of them count it, writable only by the login that created it, and
 // (sticky bit) removable only by it. Every write goes to an exclusive temp
 // file in the same dir and is renamed into place, so a reader never sees half
@@ -204,7 +217,11 @@ const HelperProcess = "wardyn-macvm"
 const OfferRecompute = 15 * time.Second
 
 // DefaultDir is the ledger directory the runner package's postinstall makes.
+// Its lock is admission.lock in its parent directory.
 const DefaultDir = "/Users/Shared/Wardyn/macos-vm-admission"
+
+// DefaultLockPath is DefaultDir's lock.
+const DefaultLockPath = "/Users/Shared/Wardyn/admission.lock"
 
 const (
 	lockFile   = "admission.lock"
@@ -228,12 +245,14 @@ type Config struct {
 	Host          Host
 	// FileOwner returns a ledger file's owner uid; nil reads it from the stat.
 	FileOwner func(os.FileInfo) int
-	// AllowUnstickyDir skips the check that Dir is sticky (tests only).
-	AllowUnstickyDir bool
+	// Fstat, if set, replaces fstat(2) in the lock and directory checks;
+	// name is the path the descriptor was opened at (tests).
+	Fstat func(fd int, name string) (unix.Stat_t, error)
 	// LockWait overrides LockWait (tests).
 	LockWait time.Duration
 
-	created func(name string) // tests: told of each file this ledger creates
+	created    func(name string) // tests: told of each file this ledger creates
+	afterFlock func()            // tests: runs once the flock is held
 }
 
 // Ledger is one runner's handle on the host ledger.
@@ -256,17 +275,142 @@ func Open(c Config) (*Ledger, error) {
 	if c.LockWait == 0 {
 		c.LockWait = LockWait
 	}
-	fi, err := os.Stat(c.Dir)
+	c.Dir = filepath.Clean(c.Dir)
+	l := &Ledger{c: c}
+	if err := l.checkEntriesDir(); err != nil {
+		return nil, err
+	}
+	f, err := l.openLock()
 	if err != nil {
-		return nil, fmt.Errorf("admission: the macOS VM ledger is missing (the runner package creates it): %w", err)
+		return nil, err
 	}
-	if !fi.IsDir() || (!c.AllowUnstickyDir && fi.Mode()&os.ModeSticky == 0) {
-		return nil, fmt.Errorf("admission: %s must be a sticky directory (mode 1777)", c.Dir)
+	_ = f.Close()
+	return l, nil
+}
+
+// notInstalled is a refusal of the ledger's layout, naming the fix.
+func notInstalled(format string, a ...any) error {
+	return fmt.Errorf("admission: %s; reinstall the Wardyn runner package, whose installer creates it (a runner never does)", fmt.Sprintf(format, a...))
+}
+
+// lockPath is admission.lock in the entries directory's parent.
+func (l *Ledger) lockPath() string { return filepath.Join(filepath.Dir(l.c.Dir), lockFile) }
+
+func (l *Ledger) fstat(fd int, name string) (unix.Stat_t, error) {
+	if l.c.Fstat != nil {
+		return l.c.Fstat(fd, name)
 	}
-	if _, err := os.Stat(filepath.Join(c.Dir, lockFile)); err != nil {
-		return nil, fmt.Errorf("admission: %s is missing; reinstall the Wardyn runner package, whose installer creates it (a runner never does): %w", filepath.Join(c.Dir, lockFile), err)
+	var st unix.Stat_t
+	err := unix.Fstat(fd, &st)
+	return st, err
+}
+
+const groupOtherWrite = 0o022
+
+// walkDir opens dir from / one component at a time, never following a
+// symlink, and fstats each: every directory must be root-owned and either
+// not group- or other-writable or sticky (so no other user can replace its
+// root-owned child). It returns dir's descriptor.
+func (l *Ledger) walkDir(dir string) (int, error) {
+	if !filepath.IsAbs(dir) {
+		return -1, fmt.Errorf("admission: %s is not an absolute path", dir)
 	}
-	return &Ledger{c: c}, nil
+	fd, err := unix.Open("/", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return -1, err
+	}
+	cur := "/"
+	for _, name := range append([]string{""}, strings.Split(strings.TrimPrefix(dir, "/"), "/")...) {
+		if name != "" {
+			nfd, err := unix.Openat(fd, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+			_ = unix.Close(fd)
+			cur = filepath.Join(cur, name)
+			if err != nil {
+				return -1, notInstalled("%s is not a directory this runner can open (%v)", cur, err)
+			}
+			fd = nfd
+		}
+		st, err := l.fstat(fd, cur)
+		if err != nil {
+			_ = unix.Close(fd)
+			return -1, err
+		}
+		mode := uint32(st.Mode)
+		switch {
+		case st.Uid != 0:
+			err = notInstalled("%s is not owned by root", cur)
+		case mode&unix.S_IFMT != unix.S_IFDIR:
+			err = notInstalled("%s is not a directory", cur)
+		case mode&groupOtherWrite != 0 && mode&unix.S_ISVTX == 0:
+			err = notInstalled("%s is writable by other users and not sticky", cur)
+		}
+		if err != nil {
+			_ = unix.Close(fd)
+			return -1, err
+		}
+	}
+	return fd, nil
+}
+
+// openLock opens admission.lock through walkDir and checks it and its
+// directory by fstat: the directory not group- or other-writable at all, the
+// lock a root-owned regular file that is not group- or other-writable.
+func (l *Ledger) openLock() (*os.File, error) {
+	path := l.lockPath()
+	dfd, err := l.walkDir(filepath.Dir(path))
+	if err != nil {
+		return nil, err
+	}
+	defer unix.Close(dfd)
+	if st, err := l.fstat(dfd, filepath.Dir(path)); err != nil {
+		return nil, err
+	} else if uint32(st.Mode)&groupOtherWrite != 0 {
+		return nil, notInstalled("%s, which holds the lock, is writable by other users", filepath.Dir(path))
+	}
+	fd, err := unix.Openat(dfd, lockFile, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, notInstalled("%s cannot be opened (%v)", path, err)
+	}
+	st, err := l.fstat(fd, path)
+	if err == nil {
+		mode := uint32(st.Mode)
+		switch {
+		case st.Uid != 0:
+			err = notInstalled("%s is not owned by root", path)
+		case mode&unix.S_IFMT != unix.S_IFREG:
+			err = notInstalled("%s is not a regular file", path)
+		case mode&groupOtherWrite != 0:
+			err = notInstalled("%s is writable by other users", path)
+		}
+	}
+	if err != nil {
+		_ = unix.Close(fd)
+		return nil, err
+	}
+	return os.NewFile(uintptr(fd), path), nil
+}
+
+// checkEntriesDir checks the entries directory by fstat: root-owned and
+// sticky, so a login can remove only its own entries.
+func (l *Ledger) checkEntriesDir() error {
+	pfd, err := l.walkDir(filepath.Dir(l.c.Dir))
+	if err != nil {
+		return err
+	}
+	defer unix.Close(pfd)
+	fd, err := unix.Openat(pfd, filepath.Base(l.c.Dir), unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return notInstalled("the macOS VM ledger %s is missing (%v)", l.c.Dir, err)
+	}
+	defer unix.Close(fd)
+	st, err := l.fstat(fd, l.c.Dir)
+	if err != nil {
+		return err
+	}
+	if st.Uid != 0 || uint32(st.Mode)&unix.S_ISVTX == 0 {
+		return notInstalled("%s must be a root-owned sticky directory (mode 1777)", l.c.Dir)
+	}
+	return nil
 }
 
 func statOwner(fi os.FileInfo) int {
@@ -318,7 +462,7 @@ type tomb struct {
 }
 
 func (l *Ledger) withLock(fn func() error) error {
-	f, err := os.Open(filepath.Join(l.c.Dir, lockFile))
+	f, err := l.openLock()
 	if err != nil {
 		return err
 	}
@@ -338,6 +482,18 @@ func (l *Ledger) withLock(fn func() error) error {
 		time.Sleep(20 * time.Millisecond)
 	}
 	defer unix.Flock(int(f.Fd()), unix.LOCK_UN)
+	if l.c.afterFlock != nil {
+		l.c.afterFlock()
+	}
+	// The path must still name the file locked: a rename or unlink between
+	// the open and the flock would leave two runners on two locks.
+	var held, now unix.Stat_t
+	if err := unix.Fstat(int(f.Fd()), &held); err != nil {
+		return err
+	}
+	if err := unix.Lstat(l.lockPath(), &now); err != nil || now.Dev != held.Dev || now.Ino != held.Ino {
+		return notInstalled("%s changed while this runner locked it", l.lockPath())
+	}
 	return fn()
 }
 

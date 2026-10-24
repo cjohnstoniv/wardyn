@@ -95,12 +95,16 @@ func (s *ipswServer) sha() string {
 // prepNet is a fake in-helper relay: DialGuest reaches the guest unless dialErr.
 type prepNet struct {
 	dialErr error
+	onDial  func() // called on each dial
 	closed  chan struct{}
 	once    sync.Once
 }
 
 func (n *prepNet) Serve(*os.File) error { <-n.closed; return nil }
 func (n *prepNet) DialGuest(context.Context, int) (net.Conn, error) {
+	if n.onDial != nil {
+		n.onDial()
+	}
 	if n.dialErr != nil {
 		return nil, n.dialErr
 	}
@@ -384,6 +388,21 @@ func TestPrepareManualSetupWhenRemoteLoginStaysSilent(t *testing.T) {
 	f.opts.RemoteLoginWait = 100 * time.Millisecond
 	if _, err := macvm.Prepare(context.Background(), f.opts); !errors.Is(err, macvm.ErrManualSetup) {
 		t.Fatalf("got %v, want ErrManualSetup", err)
+	}
+}
+
+// Cancelling prepare while it waits for Remote Login is a cancellation, not
+// a request for setup by hand.
+func TestPrepareCancelWhileWaitingIsNotManualSetup(t *testing.T) {
+	f := newPrep(t)
+	f.net.dialErr = errors.New("connection refused")
+	f.opts.RemoteLoginWait = time.Minute
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f.net.onDial = cancel
+	_, err := macvm.Prepare(ctx, f.opts)
+	if !errors.Is(err, context.Canceled) || errors.Is(err, macvm.ErrManualSetup) {
+		t.Fatalf("got %v, want context.Canceled", err)
 	}
 }
 
