@@ -131,8 +131,7 @@ func (p *Proxy) serveSignin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The hosts the agent reaches only through a checked door stay refused here too.
-	if p.refuseADOTunnel(w, r, host, port) || p.refuseAzureTunnel(w, r, host, port) || p.refusePATAPITunnel(w, r, host, port) ||
-		p.refuseGitHubAPITunnel(w, r, host, port) || p.refuseAzureARMTunnel(w, r, host, port) {
+	if p.refuseGrantHostTunnel(w, r, host, port) {
 		return
 	}
 	p.openTunnel(w, r, host, port, target, log, nil)
