@@ -95,9 +95,9 @@ test.describe("Desktop replay", () => {
     // Play runs the clock; Pause stops it.
     await expect(playhead).toHaveAttribute("data-ms", "0");
     await replay.getByRole("button", { name: "4×" }).click();
-    await replay.getByRole("button", { name: C.PLAY }).click();
+    await replay.getByRole("button", { name: C.PLAY, exact: true }).click();
     await expect.poll(async () => Number(await playhead.getAttribute("data-ms"))).toBeGreaterThan(0);
-    await replay.getByRole("button", { name: C.PAUSE }).click();
+    await replay.getByRole("button", { name: C.PAUSE, exact: true }).click();
 
     // The frames up to the playhead are drawn: the screen's canvas holds the stream's orange rectangle.
     const painted = () =>
