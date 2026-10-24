@@ -226,7 +226,7 @@ jobs:
   # let that path through with no gate at all.
   preflight-green:
     name: Preflight — required contexts + newest dispatched nightly green on the tag's tree
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -394,7 +394,7 @@ jobs:
 
   images:
     name: build, push, sign (${{ matrix.name }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: preflight-green
     if: needs.preflight-green.outputs.path == 'build'
     # 60, not 30: the three agent rows run their apt-get/npm/installer steps
@@ -683,7 +683,7 @@ jobs:
     name: build, push, sign (${{ matrix.name }})
     needs: [preflight-green, images]
     if: needs.preflight-green.outputs.path == 'build'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Same 60-minute floor as `images`, for the same reason (novnc alone is
     # 1.22 GB across two platforms, one pass under arm64 emulation).
     timeout-minutes: 60
@@ -821,7 +821,7 @@ jobs:
     name: build, push, sign (${{ matrix.name }})
     needs: [preflight-green, images-ui-sandbox]
     if: needs.preflight-green.outputs.path == 'build' && inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       contents: read
@@ -853,7 +853,7 @@ jobs:
   # still finished, because promote is idempotent and a re-run redoes them.
   promote:
     name: promote and sign the images
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: preflight-green
     if: needs.preflight-green.outputs.path == 'promote'
     timeout-minutes: 30
@@ -1123,7 +1123,7 @@ jobs:
   # runner-pkg and release-assets read.
   binaries:
     name: CLI binaries
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: preflight-green
     timeout-minutes: 20
     permissions:
@@ -1304,7 +1304,7 @@ jobs:
   # charts, so this is a package + push.
   chart:
     name: Publish the Helm chart (OCI)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: preflight-green
     timeout-minutes: 10
     permissions:
@@ -1369,7 +1369,7 @@ jobs:
     # choice; any job that FAILED still stops it.
     if: ${{ !cancelled() && !failure() && inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v') }}
     needs: [preflight-green, images, images-ui-sandbox, images-ui-sandbox-signin, promote, chart, binaries, runner-pkg]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: write   # gh release upload
