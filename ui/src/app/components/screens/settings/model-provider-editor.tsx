@@ -486,7 +486,7 @@ function ProviderFields({
             htmlFor="mp-base-url"
             hint={
               <>
-                {laptopBad && <span className="mb-1 block text-destructive">{LOCAL_MODEL_EDITOR.LAPTOP_BASE_URL}</span>}
+                {laptopBad && <span className="mb-1 block text-danger">{LOCAL_MODEL_EDITOR.LAPTOP_BASE_URL}</span>}
                 {LOCAL_MODEL_EDITOR.BASE_URL_HINT}
               </>
             }
