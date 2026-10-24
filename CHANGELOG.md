@@ -28,6 +28,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   fields after it up a place. This control plane never sends such a record. A control plane that sends only the
   single-repository variables (`WARDYN_REPO_URL`, `WARDYN_REPO_SLUG`) got no git broker rewrite, and a record with
   an empty middle field lost its branch. Empty fields now stay in place.
+- A unit delete, move or rename no longer scans every membership per affected person (migration
+  `0233_governance_memberships_subject` adds an index on the membership subject).
 
 ## [0.10.0-rc.1] — 2026-10-24
 
