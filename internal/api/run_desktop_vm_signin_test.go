@@ -41,6 +41,36 @@ type vmSignInTestStore struct {
 	// returns runs once that read has taken its answer, before the answer is returned: writes landing
 	// just before and just after.
 	onRead func(ctx context.Context) (after func())
+	// takeovers holds the run's take overs (the takeoverApprovals CAS's rows), read as Postgres reads
+	// the approvals table; takeoverErr fails OpenTakeovers.
+	takeovers   *authzApprovals
+	takeoverErr error
+}
+
+func (s *vmSignInTestStore) setTakeovers(a *authzApprovals, err error) {
+	s.vmu.Lock()
+	defer s.vmu.Unlock()
+	s.takeovers, s.takeoverErr = a, err
+}
+
+var _ store.OpenTakeoverStore = (*vmSignInTestStore)(nil)
+
+func (s *vmSignInTestStore) OpenTakeovers(_ context.Context, runID uuid.UUID) ([]uuid.UUID, error) {
+	s.vmu.Lock()
+	a, err := s.takeovers, s.takeoverErr
+	s.vmu.Unlock()
+	if err != nil || a == nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var open []uuid.UUID
+	for id, ap := range a.byID {
+		if ap.RunID == runID && ap.Kind == types.ApprovalHumanTakeover && ap.State == types.ApprovalApproved && ap.HandedBackAt == nil {
+			open = append(open, id)
+		}
+	}
+	return open, nil
 }
 
 func (s *vmSignInTestStore) setReadErr(err error) {
@@ -1024,6 +1054,7 @@ func TestDesktopSignIns_ResumeThatCannotRetakeItsLockLeavesTheMark(t *testing.T)
 type vmSignInDesktopStore struct {
 	*desktopClosedStore
 	store.DesktopVMSignInStore
+	store.OpenTakeoverStore
 }
 
 type vmSignInDesktopRunner struct {
@@ -1048,7 +1079,8 @@ func newVMSignInDesktop(t *testing.T, row store.DesktopVMSignIns) *vmSignInDeskt
 	d := &vmSignInDesktop{h: h, dr: dr, send: send, recheck: make(chan chan struct{}),
 		st:    &vmSignInTestStore{uiMemStore: h.store, rows: map[uuid.UUID]store.DesktopVMSignIns{h.run.ID: row}},
 		guest: &pauseFakeRunner{sshFakeRunner: h.runner, stopped: row.PausedAt != nil}}
-	h.srv.cfg.Store = vmSignInDesktopStore{desktopClosedStore: h.srv.cfg.Store.(*desktopClosedStore), DesktopVMSignInStore: d.st}
+	h.srv.cfg.Store = vmSignInDesktopStore{desktopClosedStore: h.srv.cfg.Store.(*desktopClosedStore), DesktopVMSignInStore: d.st,
+		OpenTakeoverStore: d.st}
 	h.srv.cfg.Runner = vmSignInDesktopRunner{desktopFakeRunner: dr, AgentPauser: d.guest}
 	h.srv.vmSignInTick = d.recheck
 	return d

@@ -321,9 +321,9 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonDesktopRulesUnreadable, desktopRulesUnreadableMsg)
 		return
 	}
-	// A recorded run's stream keeps no frames while the run's row says its agent is paused to sign in,
-	// from the first frame and at each vmSignInRecheck after; a mark that cannot be read refuses the
-	// stream rather than record it.
+	// A recorded run's stream keeps no frames while the run's row says its agent is paused to sign in or
+	// a take over is open, from the first frame and at each vmSignInRecheck after; a mark or take over
+	// that cannot be read refuses the stream rather than record it.
 	signIn, err := s.watchVMSignIn(r.Context(), sess.Run)
 	if err != nil {
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonDesktopSignInsUnavailable, desktopSignInsUnreadableMsg)
