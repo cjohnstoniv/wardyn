@@ -260,8 +260,7 @@ func TestDesktopRequests(t *testing.T) {
 	}}
 	d := vncSettings(t, r)
 	d.Console = fakeConsole{uid: 502}
-	mux := http.NewServeMux()
-	d.Register(mux)
+	mux := (&Tools{Desktop: d}).ToolsHandler()
 	get := func(path string) *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
@@ -274,11 +273,11 @@ func TestDesktopRequests(t *testing.T) {
 	if w := get("/v1/desktop/credential"); w.Code != http.StatusNotFound || strings.Contains(w.Body.String(), "Abcd2345") {
 		t.Errorf("credential = %d %q, want no such request", w.Code, w.Body.String())
 	}
-	if w := get("/v1/desktop/pointer"); w.Code != 200 || !strings.Contains(w.Body.String(), `"x":100`) {
+	if w := get("/v1/tools/pointer"); w.Code != 200 || !strings.Contains(w.Body.String(), `"x":100`) {
 		t.Errorf("pointer = %d %q", w.Code, w.Body.String())
 	}
 	d.Console = fakeConsole{err: ErrNoConsoleUser}
-	if w := get("/v1/desktop/pointer"); w.Code != http.StatusConflict {
+	if w := get("/v1/tools/pointer"); w.Code != http.StatusConflict {
 		t.Errorf("pointer with nobody at the console = %d", w.Code)
 	}
 }

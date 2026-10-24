@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -86,18 +87,25 @@ type DesktopPasswordResult struct {
 // ErrToolsRefused is a push destination or an exec argv tools mode does not allow.
 var ErrToolsRefused = errors.New("guestagent: tools mode refuses")
 
-// ToolsExecAllowed says whether tools mode may run argv as root. argv[0] must be softwareupdate or
-// launchctl; touch or rm on MacCLTTrigger only (touch T, rm -f T); exactly CLTGitArgv; or a regular file
-// (not a link) directly in binDir, a pushed CLI's version check. A path is compared as given, so the
-// same binary by a relative path, a ".." component or a link is refused, and nothing names a shell.
+// cltLabel is the one form of label `softwareupdate -i` may install: a Command Line Tools label as
+// `softwareupdate -l` lists it, which cannot read as an option.
+var cltLabel = regexp.MustCompile(`^Command Line Tools[A-Za-z0-9 ._()-]{0,96}$`)
+
+// ToolsExecAllowed says whether tools mode may run argv as root: softwareupdate as `-l` or as
+// `-i <label>` with a cltLabel label; touch or rm on MacCLTTrigger only (touch T, rm -f T); exactly
+// CLTGitArgv; or a regular file (not a link) directly in binDir, a pushed CLI's version check. A path
+// is compared as given, so the same binary by a relative path, a ".." component or a link is refused,
+// and nothing names a shell or launchctl.
 func ToolsExecAllowed(argv []string, binDir string) error {
 	if len(argv) == 0 {
 		return fmt.Errorf("%w: an exec needs argv", ErrToolsRefused)
 	}
 	name := argv[0]
 	switch name {
-	case "/usr/sbin/softwareupdate", "/bin/launchctl":
-		return nil
+	case "/usr/sbin/softwareupdate":
+		if (len(argv) == 2 && argv[1] == "-l") || (len(argv) == 3 && argv[1] == "-i" && cltLabel.MatchString(argv[2])) {
+			return nil
+		}
 	case "/usr/bin/touch":
 		if len(argv) == 2 && argv[1] == MacCLTTrigger {
 			return nil
@@ -167,8 +175,8 @@ func (t *Tools) handlePush(w http.ResponseWriter, r *http.Request) {
 	size, serr := strconv.ParseInt(q.Get("size"), 10, 64)
 	want, herr := hex.DecodeString(q.Get("sha256"))
 	switch {
-	case merr != nil || mode&^0o777 != 0:
-		http.Error(w, "a push's mode is permission bits in octal", http.StatusBadRequest)
+	case merr != nil || mode&^0o777 != 0 || mode&0o022 != 0:
+		http.Error(w, "a push's mode is permission bits in octal, writable by its owner only", http.StatusBadRequest)
 		return
 	case serr != nil || size < 0 || size > maxToolsPush || (r.ContentLength >= 0 && r.ContentLength != size):
 		http.Error(w, "a push's size is missing, too large, or not its body's", http.StatusBadRequest)

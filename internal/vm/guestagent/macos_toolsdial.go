@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -88,8 +89,9 @@ func (r *ToolsDialRecord) Get() ToolsDial {
 func (r *ToolsDialRecord) ServeHTTP(w http.ResponseWriter, _ *http.Request) { writeJSONAny(w, r.Get()) }
 
 // ServeTools serves h (Tools.ToolsHandler) on the tools port as ServeVsock serves the control port, and
-// records how each dial ends in rec: each dial gets toolsDialTimeout, a session the host opens with its
-// hello is connected, and one that ends before the hello is a transport failure.
+// records how each dial ends in rec: each dial and its hello get toolsDialTimeout, a session the host
+// opens with its hello is connected, an open one with no hello in time is a timeout, and one that ends
+// before the hello is a transport failure.
 func ServeTools(ctx context.Context, dial DialFunc, h http.Handler, rec *ToolsDialRecord) error {
 	return serveTools(ctx, dial, h, rec, redialWait, toolsDialTimeout)
 }
@@ -113,12 +115,20 @@ func serveTools(ctx context.Context, dial DialFunc, h http.Handler, rec *ToolsDi
 			sleep(ctx, wait)
 			continue
 		}
+		// Connected, so no class until the hello (or its lack) decides; the hello gets the dial's timeout.
+		rec.set("", nil)
+		_ = conn.SetReadDeadline(time.Now().Add(timeout))
 		helloed := false
-		serveSession(ctx, conn, h, &protocols, func() {
+		herr := serveSession(ctx, conn, h, &protocols, func() {
+			_ = conn.SetReadDeadline(time.Time{})
 			helloed = true
 			rec.set(DialConnected, nil)
 		})
-		if !helloed && ctx.Err() == nil {
+		switch {
+		case helloed || ctx.Err() != nil:
+		case errors.Is(herr, os.ErrDeadlineExceeded):
+			rec.set(DialTimeout, errors.New("no hello from the host within the dial's timeout"))
+		default:
 			rec.set(DialTransportFailure, errors.New("the tools session ended before the host's hello"))
 		}
 		sleep(ctx, wait)
