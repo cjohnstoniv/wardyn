@@ -16,6 +16,8 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 )
 
+var testPeers = []netip.Prefix{netip.MustParsePrefix("172.20.0.0/24")}
+
 const shippedPath = "../../../deploy/macos-guest/prep-allowlist.json"
 
 // pinnedHosts is this test's own copy of the shipped list. Changing
@@ -92,7 +94,7 @@ func TestConfigIsAllowlistOnly(t *testing.T) {
 }
 
 func TestConfigRefusesEverythingElse(t *testing.T) {
-	raw, err := Config(shipped(t), 3128, nil)
+	raw, err := Config(shipped(t), 3128, testPeers)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,8 +140,16 @@ func TestParseAllowlistRefuses(t *testing.T) {
 		if _, err := ParseAllowlist([]byte(in)); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
-		if _, err := Config([]byte(in), 3128, nil); err == nil {
+		if _, err := Config([]byte(in), 3128, testPeers); err == nil {
 			t.Errorf("%s: Config accepted", name)
+		}
+	}
+}
+
+func TestConfigRequiresPeers(t *testing.T) {
+	for _, peers := range [][]netip.Prefix{nil, {}} {
+		if _, err := Config(shipped(t), 3128, peers); err == nil {
+			t.Errorf("Config accepted peers %v", peers)
 		}
 	}
 }
