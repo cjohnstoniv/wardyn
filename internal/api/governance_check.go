@@ -193,7 +193,9 @@ func (s *Server) checkScope(w http.ResponseWriter, r *http.Request, q contextQue
 // within is a check's answer as a unit admin may read it: the contexts, dormant memberships and
 // workspace groups in the units they govern, the home context's fields only when it is one of those,
 // and the effective walls only of a context that is. The restrictions are left out, as GET
-// /governance leaves them out for a unit admin (scopeGovernanceRead).
+// /governance leaves them out for a unit admin (scopeGovernanceRead), and so is the name of one that
+// set a knob: the walls' provenance says only that a restriction did, so it names no more than the
+// provenance GET /governance gives them (wallsProvenance).
 func (c governanceCheckResponse) within(scope map[uuid.UUID]bool, runIn uuid.UUID, home contextPick) governanceCheckResponse {
 	if !scope[c.UnitID] {
 		c.governancePreviewResponse = governancePreviewResponse{}
@@ -204,6 +206,12 @@ func (c governanceCheckResponse) within(scope map[uuid.UUID]bool, runIn uuid.UUI
 	c.Workspaces = slices.DeleteFunc(c.Workspaces, func(x checkWorkspaceGroup) bool { return x.UnitID == nil || !scope[*x.UnitID] })
 	if asked := cmp.Or(runIn, home.unit.ID); !scope[asked] {
 		c.Effective = nil
+	} else if c.Effective != nil {
+		for k, p := range c.Effective.Provenance {
+			if p.Layer == policyref.LayerRestriction {
+				c.Effective.Provenance[k] = policyref.Provenance{Layer: p.Layer}
+			}
+		}
 	}
 	return c
 }

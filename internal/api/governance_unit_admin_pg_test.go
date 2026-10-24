@@ -379,7 +379,9 @@ func TestUnitAdminReadsNoPathProvenance(t *testing.T) {
 
 // TestUnitAdminCheckWithinScope: a unit admin's POST /governance/check carries no restrictions (no spec,
 // limits or contact) and of the person's workspaces only the group pinned to a unit they govern, so
-// no unit outside their units is named; a security admin's check carries all of it.
+// no unit outside their units is named; a security admin's check carries all of it. The effective
+// walls' provenance is no richer than GET /governance's: the knob the restriction set says only that
+// a restriction did, where a security admin's names it.
 func TestUnitAdminCheckWithinScope(t *testing.T) {
 	e := newUnitAdminEnv(t, false)
 	person := e.fresh("sub-ua-person")
@@ -431,6 +433,13 @@ func TestUnitAdminCheckWithinScope(t *testing.T) {
 		}
 		if !slices.Equal(names, want) || strings.Contains(w.Body.String(), `"ua-b"`) != tc.want {
 			t.Errorf("check as %s: workspaces %v, want %v and ua-b named = %v", tc.who, names, want, tc.want)
+		}
+		wantRec := policyref.Provenance{Layer: policyref.LayerRestriction}
+		if tc.want {
+			wantRec.Name = r.Name
+		}
+		if got.Effective == nil || got.Effective.Provenance["denied_domains"] != wantRec || strings.Contains(w.Body.String(), r.Name) != tc.want {
+			t.Errorf("check as %s: denied_domains provenance %+v, want %+v and the restriction named = %v", tc.who, got.Effective, wantRec, tc.want)
 		}
 	}
 }
