@@ -176,7 +176,7 @@
 - Wardyn brokers some credential kinds: the proxy injects them into a request in Docker, and the value never enters the guest.
 - Other kinds do enter the guest. A secret that arrives as an environment variable or a file, and an SSH key, are in the guest's memory and on its disk while the run lives.
 - A delivered value is in the guest's memory while the run lives. On the Mac's disk, the copies are inside the run's clone disk in the Mac user's home. Wardyn deletes the disk at the end of the run, which is not secure erasure (above).
-- **The desktop's VNC password.** It is 8 random characters generated on the Mac, per run (once per base if the guest cannot change it per run). It is used only between the helper and the guest over a virtual socket, and is not sent to the organisation or the browser.
+- **The desktop's VNC password.** It is 8 random characters generated on the Mac per run, or once per base if the guest cannot change it per run. The runner hands it to the guest at start, and the helper signs in to Screen Sharing with it. It is not sent to the organisation or the browser.
 - The Mac's own user can read a live run's disk, as the owner of a Docker laptop runner controls the engine. Posture does not constrain a root developer.
 - A person may sign in to websites and apps in the desktop. Those sign-ins enter the sandbox and are kept on the run's virtual disk, because a macOS guest has swap and keeps its keychain and browser profiles on disk. The Linux promise that they live only in memory does not hold here.
 - An agent set "Sign-ins in a desktop: Not allowed" is refused a macOS desktop, because a macOS keychain cannot be made read-only in this release.
