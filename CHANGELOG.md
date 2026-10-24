@@ -25,8 +25,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   the organisation named at registration: when that is an older release, its runs keep working as before, without the
   fix, and the runner logs a warning once. Have the organisation name this release's proxy image, or run setup with
   `--proxy-image` set to it.
-  A proxy image named by digest or by a tag that is not a release number is taken to be this release, so an older
-  image named that way never becomes ready and its runs fail at the start deadline.
+  A proxy image named by digest or by a tag that is not a release number starts its runs as before, whatever its
+  release: this release's proxy gets the fix that way too, and an older one keeps working without it. The runner
+  cannot read such an image's release, so it logs no warning for it; name a release tag to have it checked.
 - The proxy-ready fix on Docker spans three pieces: wardyn-runnerd, the wardyn-proxy image and the agent images.
   Upgrade the organisation before its runners, as always. A runner that follows an older organisation's proxy image
   keeps starting runs as before and logs once that the image does not announce when it is listening, so the fix does not
@@ -64,8 +65,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   predates it.
 - A short command run on a Kubernetes runner (wardyn-runnerd) no longer loses its recording. The run's proxy refuses
   every request until its first token renew succeeds, but its pod read as ready once it listened, so the agent could
-  start, finish and have its recording upload refused inside that window. The proxy pod is now ready only once it
-  serves.
+  start, finish and have its recording upload refused inside that window. The proxy now listens only once its first
+  renew has succeeded, so its pod is ready only once it serves.
 - `GET /runs/{id}/output` no longer points the run's owner or an operator at a recording that was never received.
   With run output persistence off, an ended run on a runner that does not capture output, and whose recording never
   arrived, answers `409` `run_output_not_kept`.

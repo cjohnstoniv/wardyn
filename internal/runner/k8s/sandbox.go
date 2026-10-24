@@ -29,7 +29,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
-	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -259,6 +258,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if proxyJSON, err = d.runnerProxyConfig(ctx, spec.RunID, proxyJSON); err != nil {
 		return fail(err)
 	}
+	d.warnOlderProxy()
 	secretData := map[string][]byte{proxyConfigSecretKey: proxyJSON}
 	// The agent's credential-bearing env rides this SAME Secret (see
 	// runner.SandboxSpec.SecretEnv), via a secretKeyRef per variable rather
@@ -332,7 +332,15 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 				SecurityContext:          restrictedSecurityContext(),
 				Resources:                proxyResources(len(spec.ProxyConfig.AzureGates) > 0),
 				TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
-				ReadinessProbe:           proxyReadinessProbe(d.probesProxyReady()),
+				// The proxy binds its listener only once it serves: after its startup resolve has
+				// succeeded and, on a runner (self_lapse), after its first renew. A connect to it is that
+				// proof: without a probe the container is Ready as soon as it runs, and waitPodIP can
+				// return before a failing resolve exits it, or start an agent whose requests the proxy
+				// still refuses, a short run's recording upload among them.
+				ReadinessProbe: &corev1.Probe{
+					ProbeHandler:  corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(runner.ProxyListenPort)}},
+					PeriodSeconds: 1,
+				},
 			}},
 			Volumes: []corev1.Volume{
 				{
@@ -783,43 +791,25 @@ func (d *Driver) runnerdPeerRules() []networkingv1.NetworkPolicyEgressRule {
 	}}
 }
 
-// proxyReadinessProbe is the proxy container's readiness, which waitPodIP waits on before the
-// agent pod exists. The proxy binds its listener only after its startup resolve has succeeded, so
-// a connect to it is that proof: without a probe the container is Ready as soon as it runs, and
-// waitPodIP can return before a failing resolve exits it. A runner's proxy (self_lapse) is also
-// closed, refusing every agent request, until its first renew succeeds, which can be a retry
-// later: it is Ready only once proxy.ReadyPath answers, so no agent starts against it closed. A
-// short run would otherwise end inside that window, its recording upload refused.
-func proxyReadinessProbe(runnerMode bool) *corev1.Probe {
-	h := corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(runner.ProxyListenPort)}}
-	if runnerMode {
-		h = corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: proxy.ReadyPath, Port: intstr.FromInt32(runner.ProxyListenPort)}}
-	}
-	return &corev1.Probe{ProbeHandler: h, PeriodSeconds: 1}
-}
-
-// proxyReadyRelease is the first release whose proxy answers proxy.ReadyPath.
+// proxyReadyRelease is the first release whose runner proxy listens only once it serves.
 const proxyReadyRelease = "0.10.0-rc.2"
 
-// probesProxyReady is whether the proxy pod is probed on proxy.ReadyPath: in runner mode, unless the
-// proxy image is a known release older than proxyReadyRelease, which answers that path 404 and would
-// never read Ready. Such an image keeps the TCP probe, as before, and with it the window in which a
-// short run's recording upload can be refused; the driver says so once. An image whose release
-// cannot be read (a digest pin, a development build) is taken to be current.
-func (d *Driver) probesProxyReady() bool {
+// warnOlderProxy says once, in runner mode, that the proxy image is a known release older than
+// proxyReadyRelease: that proxy listens while it still refuses every request, so its pod reads Ready
+// before it serves and a short run's recording upload can be refused. Its runs start as before. An
+// image whose release cannot be read (a digest pin, a development build) is not judged.
+func (d *Driver) warnOlderProxy() {
 	if !d.runnerMode() {
-		return false
+		return
 	}
-	tag := imageReleaseTag(d.cfg.ProxyImage)
-	if tag == "" || !releaseOlder(tag, proxyReadyRelease) {
-		return true
+	if tag := imageReleaseTag(d.cfg.ProxyImage); tag == "" || !releaseOlder(tag, proxyReadyRelease) {
+		return
 	}
 	d.olderProxyWarned.Do(func() {
-		slog.Warn("k8s: the proxy image is older than this runner; its runs keep the TCP readiness probe, so a short run's recording can be lost",
+		slog.Warn("k8s: the proxy image is older than this runner; its pod reads ready before it serves, so a short run's recording can be lost",
 			slog.String("image", d.cfg.ProxyImage), slog.String("needs", proxyReadyRelease),
 			slog.String("fix", "have the organisation name this release's proxy image, or run setup with --proxy-image set to it"))
 	})
-	return false
 }
 
 // releaseTagRE is a release (X.Y.Z) or a release candidate (X.Y.Z-rc.N) image tag.

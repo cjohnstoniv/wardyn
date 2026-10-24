@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"math"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -45,43 +46,102 @@ func TestSelfLapse_ClosedBeforeFirstRenew(t *testing.T) {
 	}
 }
 
-// TestSelfLapse_ReadyPathFollowsTheGate: ReadyPath answers only while the proxy serves, so a k8s
-// runner's proxy is not Ready (its probe) while closed. Closed before its first renew, the proxy
-// refuses the probe and a short run's recording upload alike and forwards nothing; once open, the
-// probe answers and the upload reaches the control plane; lapsed, the probe is refused again. A
-// proxy with no gate (Docker, server) is ready at once.
-func TestSelfLapse_ReadyPathFollowsTheGate(t *testing.T) {
+// TestSelfLapse_ListensOnlyOnceOpen: a self-lapsing proxy binds its listener only on its first
+// renew, so a k8s runner's TCP readiness probe reads its pod Ready only once it serves. Closed, the
+// proxy accepts no connection, so no agent can start and a short run's recording upload is never
+// refused there; once open, the upload reaches the control plane; lapsed, the listener stays bound
+// and refuses. Lapsed before its first renew, it never listens, and Shutdown still ends it. A proxy
+// with no gate (Docker, server) listens at once.
+func TestSelfLapse_ListensOnlyOnceOpen(t *testing.T) {
 	var landed atomic.Int32
 	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		landed.Add(1)
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer cp.Close()
-	p, _ := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(cp), nil, nil)
-	serve := func(method, path, body string) int {
-		rec := httptest.NewRecorder()
-		p.ServeHTTP(rec, mustLocalReq(t, method, path, strings.NewReader(body)))
-		return rec.Code
+	serve := func(gate *lapseGate) (*Server, string, chan error) {
+		p, _ := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(cp), nil, nil)
+		p.lapse = gate
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		addr := ln.Addr().String()
+		_ = ln.Close()
+		s := &Server{proxy: p, http: &http.Server{Addr: addr, Handler: p}}
+		served := make(chan error, 1)
+		go func() { served <- s.ListenAndServe() }()
+		t.Cleanup(func() { _ = s.http.Shutdown(context.Background()) })
+		return s, addr, served
 	}
-	ready := func() int { return serve(http.MethodGet, ReadyPath, "") }
-	upload := func() int { return serve(http.MethodPut, routeRecordings+p.runID.String(), "{\"version\": 2}\n") }
-	if got := ready(); got != http.StatusNoContent {
-		t.Fatalf("ungated proxy: ready = %d, want 204", got)
+	listening := func(addr string, within time.Duration) bool {
+		for end := time.Now().Add(within); ; time.Sleep(10 * time.Millisecond) {
+			if c, err := net.Dial("tcp", addr); err == nil {
+				_ = c.Close()
+				return true
+			}
+			if time.Now().After(end) {
+				return false
+			}
+		}
 	}
+	upload := func(p *Proxy, addr string) int {
+		req, err := http.NewRequest(http.MethodPut, "http://"+addr+routeRecordings+p.runID.String(), strings.NewReader("{\"version\": 2}\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("upload: %v", err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	if _, addr, _ := serve(nil); !listening(addr, 5*time.Second) {
+		t.Fatal("ungated proxy never listened")
+	}
+
 	clock := &fakeBoot{}
-	p.lapse = newLapseGate(clock, testLapseTTL)
-	if r, u := ready(), upload(); r != http.StatusServiceUnavailable || u != http.StatusServiceUnavailable || landed.Load() != 0 {
-		t.Fatalf("closed proxy: ready %d, upload %d, %d forwarded; want 503, 503, none", r, u, landed.Load())
+	s, addr, _ := serve(newLapseGate(clock, testLapseTTL))
+	p := s.proxy
+	if listening(addr, 300*time.Millisecond) || landed.Load() != 0 {
+		t.Fatalf("closed proxy accepted a connection (%d forwarded); a probe would read it Ready before it serves", landed.Load())
 	}
 	if !p.lapse.renewed(clock.Now(), func() {}) {
 		t.Fatal("first renew did not apply")
 	}
-	if r, u := ready(), upload(); r != http.StatusNoContent || u != http.StatusNoContent || landed.Load() != 1 {
-		t.Fatalf("open proxy: ready %d, upload %d, %d forwarded; want 204, 204, one", r, u, landed.Load())
+	if !listening(addr, 5*time.Second) {
+		t.Fatal("open proxy never listened")
+	}
+	if got := upload(p, addr); got != http.StatusNoContent || landed.Load() != 1 {
+		t.Fatalf("open proxy: upload %d, %d forwarded; want 204, one", got, landed.Load())
 	}
 	clock.advance(testLapseTTL)
-	if got := ready(); got != http.StatusServiceUnavailable {
-		t.Fatalf("lapsed proxy: ready = %d, want 503", got)
+	if got := upload(p, addr); got != http.StatusServiceUnavailable || landed.Load() != 1 {
+		t.Fatalf("lapsed proxy: upload %d, %d forwarded; want 503, still one", got, landed.Load())
+	}
+
+	s, addr, served := serve(newLapseGate(clock, testLapseTTL))
+	s.proxy.lapse.lapse(LapseRenewRefused)
+	if listening(addr, 300*time.Millisecond) {
+		t.Fatal("a proxy lapsed before its first renew listened")
+	}
+	// ListenAndServe registers its Shutdown hook on its own goroutine, so Shutdown is repeated
+	// until it has been seen.
+	for end := time.Now().Add(5 * time.Second); ; {
+		_ = s.http.Shutdown(context.Background())
+		select {
+		case err := <-served:
+			if err != nil || listening(addr, 0) {
+				t.Fatalf("a proxy shut down before its first renew: ListenAndServe %v, listening %v", err, listening(addr, 0))
+			}
+			return
+		case <-time.After(20 * time.Millisecond):
+		}
+		if time.Now().After(end) {
+			t.Fatal("a proxy shut down before its first renew never returned from ListenAndServe")
+		}
 	}
 }
 

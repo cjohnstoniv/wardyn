@@ -20,6 +20,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -402,6 +403,9 @@ func startRunTokenRenewer(out *Server, p *Proxy, ts *tokenSource, cfg *Config, c
 
 // ListenAndServe starts serving and blocks until the server stops.
 func (s *Server) ListenAndServe() error {
+	if !s.awaitOpen() {
+		return nil
+	}
 	// The sign-in lane listens first, so a port it cannot have fails the start.
 	if s.signinListen != "" {
 		ln, err := s.listen(s.signinListen)
@@ -444,6 +448,25 @@ func (s *Server) listen(addr string) (net.Listener, error) {
 		return ln, err
 	}
 	return &peerListener{Listener: ln, allowed: s.allowedPeers}, nil
+}
+
+// awaitOpen holds a self-lapsing proxy (k8s runner) off its listeners until its first renew: it
+// refuses every request until then, so it listens only once it serves, and a connect to it (the
+// runner's readiness probe) is proof of that for this proxy and an older one alike. False when
+// Shutdown comes first, which a lapse before that renew ends in too. A gate-less proxy goes on at once.
+func (s *Server) awaitOpen() bool {
+	g := s.proxy.lapse
+	if g == nil {
+		return true
+	}
+	stop := make(chan struct{})
+	s.http.RegisterOnShutdown(sync.OnceFunc(func() { close(stop) }))
+	select {
+	case <-g.open:
+		return true
+	case <-stop:
+		return false
+	}
 }
 
 // shutdownDrainReserve is the most of Shutdown's deadline held back for the sink drain.

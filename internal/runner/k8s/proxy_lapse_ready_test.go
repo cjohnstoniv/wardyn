@@ -8,6 +8,7 @@ package k8s
 import (
 	"context"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -15,31 +16,27 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"testing"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	clienttesting "k8s.io/client-go/testing"
 
-	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 )
 
-// TestRunnerCreateSandbox_ShortRunRecordingLandsOnceTheProxyServes: a k8s runner's proxy binds
-// its listener at once but refuses every agent request until its first renew succeeds, which can
-// be a retry later. The agent pod must not exist before the proxy serves: a short run ends inside
-// that window, and wardyn-rec's recording upload, its last act, is refused and lost.
+// TestRunnerCreateSandbox_ShortRunRecordingLandsOnceTheProxyServes: a k8s runner's proxy refuses
+// every agent request until its first renew succeeds, which can be a retry later, and listens only
+// from then. The agent pod must not exist before the proxy serves: a short run ends inside that
+// window, and wardyn-rec's recording upload, its last act, is refused and lost.
 //
 // A kubelet stand-in marks the proxy pod Ready by the readiness probe CreateSandbox declares on it,
-// against a proxy stand-in that answers as wardyn-proxy does (TestSelfLapse_ReadyPathFollowsTheGate
-// pins those answers on the real proxy): 503 to everything while closed, 204 on proxy.ReadyPath
-// once open, and a recording upload kept in a real recording store, standing in for the control
-// plane behind it. The moment CreateSandbox returns, the agent runs: the real wardyn-rec, on the
-// exact argv Exec puts on the ephemeral container, around a short command that prints a marker.
-// The recording is then read back from the store and must hold that marker.
+// against a proxy stand-in that behaves as wardyn-proxy does (TestSelfLapse_ListensOnlyOnceOpen
+// pins that on the real proxy): nothing listening while closed, then a listener that keeps a
+// recording upload in a real recording store, standing in for the control plane behind it. The
+// moment CreateSandbox returns, the agent runs: the real wardyn-rec, on the exact argv Exec puts on
+// the ephemeral container, around a short command that prints a marker. The recording is then read
+// back from the store and must hold that marker.
 func TestRunnerCreateSandbox_ShortRunRecordingLandsOnceTheProxyServes(t *testing.T) {
 	const marker = "wardyn-short-run-marker-7f3a"
 	rec := buildWardynRec(t)
@@ -47,50 +44,41 @@ func TestRunnerCreateSandbox_ShortRunRecordingLandsOnceTheProxyServes(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	var open atomic.Bool
-	px := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case !open.Load():
-			http.Error(w, "wardyn: this run's egress is closed", http.StatusServiceUnavailable)
-		case r.Method == http.MethodGet && r.URL.Path == proxy.ReadyPath:
-			w.WriteHeader(http.StatusNoContent)
-		case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/wardyn/v1/recordings/"):
-			if err := store.SaveCast(r.Context(), strings.TrimPrefix(r.URL.Path, "/wardyn/v1/recordings/"), r.Body); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			w.WriteHeader(http.StatusNoContent)
-		default:
+	px := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || !strings.HasPrefix(r.URL.Path, "/wardyn/v1/recordings/") {
 			http.NotFound(w, r)
+			return
 		}
+		if err := store.SaveCast(r.Context(), strings.TrimPrefix(r.URL.Path, "/wardyn/v1/recordings/"), r.Body); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}))
+	addr := px.Listener.Addr().String()
+	_ = px.Listener.Close()
 	defer px.Close()
 
 	h := newRunnerHarness(t)
 	h.d.cfg.Record = true
 	h.d.cfg.Sink = &fakeSink{h: h}
 	h.d.cfg.ControlPlaneRelay = func(*url.URL) (string, error) { return "10.96.0.40", nil }
-	h.cs.PrependReactor("get", "pods", func(action clienttesting.Action) (bool, runtime.Object, error) {
-		ga := action.(clienttesting.GetAction)
-		if !strings.HasPrefix(ga.GetName(), "wardyn-proxy-") {
-			return false, nil, nil
+	var opened sync.Once
+	installProbedProxyReactor(h, addr, func(ready bool) {
+		if ready {
+			return
 		}
-		obj, err := h.cs.Tracker().Get(podsGVR, action.GetNamespace(), ga.GetName())
-		if err != nil {
-			return true, nil, err
-		}
-		pod := obj.(*corev1.Pod).DeepCopy()
-		pod.Status.PodIP, pod.Status.Phase = "10.244.0.7", corev1.PodRunning
-		ready := probeSucceeds(px, pod.Spec.Containers[0].ReadinessProbe)
-		if !ready {
-			// The first renew failed; its retry opens the proxy, but only once a probe has seen it
-			// closed, so a probe that cannot see the window lets the agent run inside it every time.
-			open.Store(true)
-		}
-		pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
-			Name: proxyContainerName, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}, Ready: ready,
-		}}
-		return true, pod, nil
+		// The first renew failed; its retry opens the proxy, but only once a probe has seen it
+		// closed, so a probe that cannot see the window lets the agent run inside it every time.
+		opened.Do(func() {
+			ln, err := net.Listen("tcp", addr)
+			if err != nil {
+				t.Errorf("proxy stand-in: %v", err)
+				return
+			}
+			px.Listener = ln
+			px.Start()
+		})
 	})
 	installAgentRunningReactor(t, h.cs)
 
