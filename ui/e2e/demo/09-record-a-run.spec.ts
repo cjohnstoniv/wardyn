@@ -780,15 +780,13 @@ test("B4 — evidence becomes policy", async () => {
   await expect(allowedDomains).not.toContainText("Allow all");
   await expect(sheet.getByText("First-use approval", { exact: true }).locator("xpath=..")).toContainText("Ask");
 
-  // "Save as is" skips the name dialog entirely — profile-review.tsx's
-  // saveAsIs() posts straight to POST /policies under suggestedName
-  // (policyNameFor(workspace, session), the same derivation the dialog path
-  // used to only PRE-FILL) and calls onClose() itself. One fewer dialog; the
-  // name is still the honest, derived one — now spoken on the button's own
-  // label instead of behind a second click.
-  const saveAsIsBtn = sheet.getByTestId("profile-save-as-is");
-  await expect(saveAsIsBtn).toContainText(POLICY_NAME);
-  await act(page, saveAsIsBtn, "Now turn that into a policy.");
+  // One Save as policy opens the dialog (#2514): the name is the honest derived one
+  // (policyNameFor(workspace, session)) pre-filled, and under it Available to, which starts at
+  // Everyone, as Policies → New policy does.
+  const saveDialog = page.getByRole("dialog").filter({ hasText: "Persist the synthesized inline_policy" });
+  await act(page, sheet.getByRole("button", { name: /^Save as policy$/ }), "Now turn that into a policy.");
+  await expect(saveDialog.getByLabel("Policy name")).toHaveValue(POLICY_NAME);
+  await act(page, saveDialog.getByRole("button", { name: "Save policy" }));
   await expect(sheetTitle).toBeHidden({ timeout: 30_000 });
   await caption(page, "The allow-all switch — which would skip the allowlist entirely — stays off.");
   await beat(page, PACE.read);

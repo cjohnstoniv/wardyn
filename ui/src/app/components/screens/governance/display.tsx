@@ -30,7 +30,7 @@ export const withMono = makeMono(["WARDYN_DEFAULT_POLICY", "task_mode=exec"]);
 // ponytail: the same ten lines permissions.tsx keeps locally, plus the amber
 // arm this screen needs. Two copies beat a shared primitive nobody else asks
 // for; hoist to wardyn/states.tsx when a third screen wants one.
-export type NoteTone = "plain" | "red" | "amber";
+export type NoteTone = "plain" | "red" | "amber" | "info";
 
 // Exported so a dialog can wear the same note WITHOUT a nested <div>: Radix's
 // AlertDialogDescription renders a <p> and is what gives the dialog its
@@ -43,7 +43,9 @@ export function noteClass(tone: NoteTone = "plain"): string {
       ? "bg-danger-subtle text-danger"
       : tone === "amber"
         ? "bg-warning-subtle text-warning"
-        : "bg-muted text-muted-foreground",
+        : tone === "info"
+          ? "bg-info-subtle text-info"
+          : "bg-muted text-muted-foreground",
   );
 }
 

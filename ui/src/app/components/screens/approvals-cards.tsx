@@ -333,7 +333,7 @@ export function ApprovalCard({
           connection in front of you. The scope words above are canon and
           not paraphrased, so this is its own line. */}
       {item.kind === "egress_domain" && (
-        <p className="mt-2.5 max-w-[72ch] text-xs text-muted-foreground">{APPROVAL.HOST_WIDE_NOTE}</p>
+        <p className="mt-2.5 text-xs text-muted-foreground">{APPROVAL.HOST_WIDE_NOTE}</p>
       )}
 
       {/* B4 — the decision pair is GONE, not merely disabled, once the run has
@@ -342,7 +342,7 @@ export function ApprovalCard({
           answer". */}
       <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border/60 pt-3">
         {runEnded ? (
-          <p className="max-w-[72ch] text-xs text-muted-foreground">{APPROVAL.CANCELLED_BODY}</p>
+          <p className="text-xs text-muted-foreground">{APPROVAL.CANCELLED_BODY}</p>
         ) : (
           item.kind === "credential_reauth" ? (
           /* A door, not a decision (UX round B3). The pair is removed, not
@@ -382,8 +382,8 @@ export function ApprovalCard({
           and that a grant would still not hand this member the Always scope. */}
       {hostUngranted && host && (
         <>
-          <p className="mt-2.5 max-w-[72ch] text-xs text-muted-foreground">{DENIED.APPROVE_BODY(host)}</p>
-          <p className="mt-1.5 max-w-[72ch] text-xs text-muted-foreground">{DENIED.ALWAYS_STILL_ADMIN}</p>
+          <p className="mt-2.5 text-xs text-muted-foreground">{DENIED.APPROVE_BODY(host)}</p>
+          <p className="mt-1.5 text-xs text-muted-foreground">{DENIED.ALWAYS_STILL_ADMIN}</p>
         </>
       )}
     </div>

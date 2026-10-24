@@ -753,6 +753,17 @@ describe("ApprovalsScreen — an egress approval says it is host-wide", () => {
     expect(await screen.findByText(APPROVAL.HOST_WIDE_NOTE)).toBeInTheDocument();
   });
 
+  // #2859: the note runs the card's width; no 72-character cap left "on it." alone on a line.
+  it("lets the host-wide note use the card's width", async () => {
+    mockPendingKind = "egress_domain";
+    render(
+      <MemoryRouter>
+        <ApprovalsScreen />
+      </MemoryRouter>,
+    );
+    expect((await screen.findByText(APPROVAL.HOST_WIDE_NOTE)).className).not.toMatch(/max-w-/);
+  });
+
   it("says nothing of the sort on a credential card, where it would be false", async () => {
     mockPendingKind = "credential";
     render(

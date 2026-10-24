@@ -509,7 +509,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
           the proxy until decided; every OTHER tool_call approval is still
           the record-only kind deriveBanner's tool_call case describes. */}
       {anyToolCall && (
-        <p className="mb-4 max-w-[72ch] text-xs text-muted-foreground">{ADO.TOOL_CALL_NOTE}</p>
+        <p className="mb-4 text-xs text-muted-foreground">{ADO.TOOL_CALL_NOTE}</p>
       )}
 
       <Tabs value={filter} onValueChange={(v) => setFilterParam(v as Filter)} className="mb-4">

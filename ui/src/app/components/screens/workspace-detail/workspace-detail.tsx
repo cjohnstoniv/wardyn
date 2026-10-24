@@ -35,8 +35,9 @@ import { DeleteConfirmDialog } from "../../wardyn/delete-confirm-dialog";
 import { EmptyState, ErrorState, TableSkeleton } from "../../wardyn/states";
 import { useCanMutate, useOperator, useSecurityOperator } from "../../wardyn/operator-context";
 import { KIND_META, kindMetaOf, workspaceImage } from "../workspaces";
-import { compositionSummary, resolvedModelProviders, workspaceUnavailableToCaller } from "../new-run-flow/checks/workspace-availability";
+import { compositionSummary, resolvedModelProviders, workspaceModelProviderUnavailable, workspaceUnavailableToCaller } from "../new-run-flow/checks/workspace-availability";
 import { ProfileReview } from "../profile-review";
+import { llmCredLabel, WorkspaceLLMCredDialog } from "../workspace-llm-cred";
 import { DetailSectionCard } from "./section-card";
 import { AllowedHostsCard } from "./allowed-hosts-card";
 import { DeniedHostsCard } from "./denied-hosts-card";
@@ -104,6 +105,7 @@ export function WorkspaceDetailScreen() {
   const [hostClasses, setHostClasses] = React.useState<ConfinementClass[] | null>(null);
   const [rebuilding, setRebuilding] = React.useState(false);
   const [confirmDelete, setConfirmDelete] = React.useState(false);
+  const [changingProvider, setChangingProvider] = React.useState(false);
 
   // F5-F7: this component is REUSED across a workspace-to-workspace
   // navigation (react-router keeps the same element mounted, only `id`
@@ -371,6 +373,10 @@ export function WorkspaceDetailScreen() {
   // model-provider arm (unlike New Run, it has no run-type context of its
   // own), so `isAgent=true` keeps that unconditional.
   const workspaceUnavailable = workspaceUnavailableToCaller(ws, caps, resolvedModelProviders(shellStatus), true);
+  // The pinned provider's id is not this caller's to see: the server sent provider_unavailable in its place, or (for
+  // a non-admin) their own list lacks it. An admin always sees the stored id, so a dead binding can be cleared.
+  const providerHidden =
+    !!ws.llm_cred?.provider_unavailable || (!operator && workspaceModelProviderUnavailable(ws, resolvedModelProviders(shellStatus)));
 
   return (
     <PageContainer width="form">
@@ -444,6 +450,26 @@ export function WorkspaceDetailScreen() {
             </Button>
           )}
         </div>
+
+        {/* #2588: the binding is a provider reference, never a credential. Change is the admin flag the dialog
+            reads (the server's write is admin-only), not canMutate, which also admits the workspace's owner. */}
+        <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-border bg-surface-2/60 px-3 py-2.5">
+          <div className="min-w-0 flex-1">
+            <p className="text-xs text-foreground">
+              Model provider{" "}
+              <span className="font-mono">{providerHidden ? "—" : llmCredLabel(ws.llm_cred, resolvedModelProviders(shellStatus))}</span>
+            </p>
+            <p className="mt-0.5 text-meta text-muted-foreground">
+              {providerHidden
+                ? DENIED.WORKSPACE_NOT_AVAILABLE
+                : "A run that picks this workspace/container uses this model provider unless it chooses one itself."}
+            </p>
+          </div>
+          <Button size="sm" variant="outline" disabled={!operator} onClick={() => setChangingProvider(true)}>
+            Change
+          </Button>
+        </div>
+        {!operator && <p className="mt-1.5 text-xs text-muted-foreground">{OPERATOR_ONLY_REASON}</p>}
       </div>
 
       <div className="mt-4 flex flex-col gap-4">
@@ -495,6 +521,15 @@ export function WorkspaceDetailScreen() {
         onOpenChange={(o) => !o && setConfirmDelete(false)}
         onDelete={() => workspacesApi.deleteWorkspace(ws.id)}
         onDeleted={() => navigate("/workspaces")}
+      />
+
+      <WorkspaceLLMCredDialog
+        workspace={changingProvider ? ws : null}
+        onOpenChange={(o) => !o && setChangingProvider(false)}
+        onSaved={(w) => {
+          setWs(w);
+          setChangingProvider(false);
+        }}
       />
 
       <ProfileReview runId={profileRunId} suggestedName={profileName} onClose={() => setProfileRunId(null)} />

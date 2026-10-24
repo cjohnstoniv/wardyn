@@ -23,6 +23,7 @@ import {
 } from "../draft/field-homes";
 import type { NewRunLocation } from "../draft/new-run-url";
 import type { RunIntent } from "../draft/run-intent";
+import { setupDoor } from "../lenses/tools-lens";
 import { APP_PROBLEM_CODES, type AppProblemCode, type StepIssue, type StepIssueCode } from "../lenses/step-issues";
 import { appIssueText } from "../steps/run/app-issue-text";
 
@@ -38,6 +39,8 @@ export interface Blocker {
   field?: string;
   /** A second line under the text: what else the person can do. */
   hint?: string;
+  /** A missing secret the person can store here: the door Tools has (an add-secret fix that names the secret). */
+  addSecret?: SetupItem;
 }
 
 /** The screen a field's fix lives on. Review and excluded fields have none to link to. */
@@ -128,7 +131,7 @@ export function buildBlockers(input: BlockerInput): Blocker[] {
     out.push({ id: "refusal", kind: "refusal", text: input.refusal.text, to: locationOfHome(homeOfReason(input.refusal.reason)), ...(field && { field }) });
   }
   for (const item of input.setupItems) {
-    out.push({ id: `setup:${item.id}`, kind: "setup_item", text: item.detail || item.label, to: { screen: "step", step: "tools" } });
+    out.push({ id: `setup:${item.id}`, kind: "setup_item", text: item.detail || item.label, to: { screen: "step", step: "tools" }, ...(setupDoor(item) === "add" && { addSecret: item }) });
   }
   if (input.gatewayOff) {
     out.push({ id: "gateway_off", kind: "gateway_off", text: NR_REVIEW.BLOCKER_GATEWAY_OFF, to: { screen: "step", step: "run" }, field: "inline_policy.ui_apps" });
