@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"io"
 	"net"
 	"strconv"
 	"strings"
@@ -113,6 +114,14 @@ func NewRFBRecorder(now func() time.Time) *RFBRecorder {
 	return &RFBRecorder{now: now, start: now()}
 }
 
+// NewRFBFrameRecorder starts a recording at now() of a stream that is WebSocket frames from its first
+// byte, with no HTTP upgrade before them: a Linux VM's display as the UI gateway frames it.
+func NewRFBFrameRecorder(now func() time.Time) *RFBRecorder {
+	r := NewRFBRecorder(now)
+	r.startFrames()
+	return r
+}
+
 func (r *RFBRecorder) ms() int64 { return r.now().Sub(r.start).Milliseconds() }
 
 // Write takes bytes read from the sandbox. It always reports them all taken.
@@ -173,9 +182,7 @@ func (r *RFBRecorder) readHeader(p []byte) []byte {
 	r.hdr = nil
 	status, fields, _ := strings.Cut(head, "\r\n")
 	if parts := strings.Fields(status); len(parts) >= 2 && parts[1] == "101" {
-		r.state, r.stream = rfbFrames, newRFBStream()
-		r.stream.boundary = r.boundary
-		r.pending, r.inited, r.dropping = nil, false, false
+		r.startFrames()
 		return rest
 	}
 	r.state = rfbScan
@@ -195,6 +202,13 @@ func (r *RFBRecorder) readHeader(p []byte) []byte {
 		r.state = rfbHeader
 	}
 	return rest
+}
+
+// startFrames begins a fresh RFB stream read from WebSocket frames.
+func (r *RFBRecorder) startFrames() {
+	r.state, r.stream = rfbFrames, newRFBStream()
+	r.stream.boundary = r.boundary
+	r.pending, r.inited, r.dropping = nil, false, false
 }
 
 // readFrames consumes WebSocket frames, keeping each complete data message.
@@ -386,26 +400,39 @@ func (r *RFBRecorder) Playback() (doc []byte, hadFrames bool) {
 // ReadSideConn tees every byte read from c (the sandbox side) into rec, and runs onClose once when
 // the connection closes. Write is c's own: what the browser sends is never seen here.
 func ReadSideConn(c net.Conn, rec *RFBRecorder, onClose func()) net.Conn {
-	return &readSideConn{Conn: c, rec: rec, onClose: onClose}
+	return &readSideConn{Conn: c, side: readSide{ReadWriteCloser: c, rec: rec, onClose: onClose}}
+}
+
+// ReadSide is ReadSideConn on a stream that is not a net.Conn (a Linux VM's display).
+func ReadSide(c io.ReadWriteCloser, rec *RFBRecorder, onClose func()) io.ReadWriteCloser {
+	return &readSide{ReadWriteCloser: c, rec: rec, onClose: onClose}
 }
 
 type readSideConn struct {
 	net.Conn
+	side readSide
+}
+
+func (c *readSideConn) Read(p []byte) (int, error) { return c.side.Read(p) }
+func (c *readSideConn) Close() error               { return c.side.Close() }
+
+type readSide struct {
+	io.ReadWriteCloser
 	rec     *RFBRecorder
 	once    sync.Once
 	onClose func()
 }
 
-func (c *readSideConn) Read(p []byte) (int, error) {
-	n, err := c.Conn.Read(p)
+func (c *readSide) Read(p []byte) (int, error) {
+	n, err := c.ReadWriteCloser.Read(p)
 	if n > 0 {
 		_, _ = c.rec.Write(p[:n])
 	}
 	return n, err
 }
 
-func (c *readSideConn) Close() error {
-	err := c.Conn.Close()
+func (c *readSide) Close() error {
+	err := c.ReadWriteCloser.Close()
 	c.once.Do(c.onClose)
 	return err
 }
