@@ -266,7 +266,7 @@ func TestSSHGateway_SyncEnvIgnoredOnOtherChannels(t *testing.T) {
 		}
 		syncEcho(t, in, out, "x")
 		argv, env := f.fr.lastCall()
-		if want := []string{sftpServerPath, "-e"}; !slices.Equal(argv, want) || containsPrefix(env, "WARDYN_SYNC_") {
+		if want := []string{sftpServerPath, "-e", "-d", "%d"}; !slices.Equal(argv, want) || containsPrefix(env, "WARDYN_SYNC_") {
 			t.Errorf("sftp argv = %v env = %v; the sync directory must not reach a plain sftp", argv, env)
 		}
 		_ = in.Close()

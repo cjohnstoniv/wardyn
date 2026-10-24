@@ -88,14 +88,17 @@ func (o *sftpOutput) Read(p []byte) (int, error) {
 }
 
 // bridgeSSHSFTP runs the sandbox's own sftp-server as the subsystem's backing
-// process — no SFTP protocol reimplementation.
+// process — no SFTP protocol reimplementation. `-d %d` starts it in the
+// sandbox user's home directory from its passwd entry, as sshd does, so
+// relative paths resolve from $HOME; sftp-server stays in the image's working
+// directory when it cannot enter that directory (#3549).
 func (s *Server) bridgeSSHSFTP(ctx context.Context, runID uuid.UUID, principal string, channel ssh.Channel) {
 	run, msg := s.sshFreshRun(ctx, runID, principal)
 	if msg != "" {
 		sendChannelError(channel, msg)
 		return
 	}
-	sess, reason, err := s.execSFTPServer(ctx, run)
+	sess, reason, err := s.execSFTPServer(ctx, run, "-d", "%d")
 	if err != nil {
 		s.recordStreamAudit(ctx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.sftp.transfer",
 			runID.String(), "failure", mustJSON(map[string]any{"error": err.Error()})))
