@@ -5,18 +5,23 @@
 
 // Package macvmlive is the macOS VM live conformance suite: the proofs P4-P22 of the rented-Mac
 // window, run on a Mac with the org stack up on loopback, the runner package installed and a ready
-// base. It builds nothing and installs nothing. Every test skips unless it runs on darwin/arm64 with
-// WARDYN_MACVM_LIVE=1, so hosted CI compiles it and runs it to a clean skip.
+// base. It builds nothing and installs nothing. Every P-test skips unless it runs on darwin/arm64
+// with WARDYN_MACVM_LIVE=1, so hosted CI compiles it and runs it to a clean skip; the summary
+// self-tests (summary_test.go) run everywhere.
 //
 // The suite drives runs through the wardyn CLI, whose session the operator makes for the window
 // (`wardyn login` as the window's test admin); it never reads a credential file, a password or a
 // one-time code, and never asks for one. A step only a person can do is a prompt on /dev/tty that
 // waits with a timeout and records the answer; with WARDYN_MACVM_PROMPTS unset, tests that need
-// one skip and say which slot of the window runs them.
+// one skip and say when the window runs them.
 //
-// The runner's and the desktop's command names are assumed where their lanes had not landed when
-// this was written; each sits in one variable below (assumed*), so a different name is a one-line
-// fix. Evidence beyond the test log goes under WARDYN_MACVM_OUT/<test>/.
+// Outcomes are explicit. A proof that cannot be witnessed calls notRun, which logs the NOT_RUN
+// marker and skips; run.sh's summary counts every skip inside a P-row as NOT_RUN, never as PASS.
+// A test whose failure blocks the release calls block and is listed in blockItems.
+//
+// Names of lanes that had not merged when this was written sit in the assumed* variables below, so
+// a different name is a one-line fix. Evidence beyond the test log goes under
+// WARDYN_MACVM_EVIDENCE/<test>/.
 package macvmlive
 
 import (
@@ -45,34 +50,32 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/macvm/admission"
 )
 
-// Assumed command lines of lanes that had not merged (RUNNER, DESKTOP, PKG-CI). The helper's
-// own subcommands come from cmd/wardyn-macvm on this base, except probe and describe.
 var (
-	// assumedRunnerdStatus prints the runner's macOS VM state as JSON.
+	// assumedRunnerdStatus prints the runner's macOS VM state as JSON (the RUNNER lane's
+	// `wardyn-runnerd macos-vm status`). Only statusKeys are ever read from it.
 	assumedRunnerdStatus = []string{"macos-vm", "status", "--json"}
-	// assumedIdentity switches the identity strategy runnerd gives new runs (both are kept until
-	// P4/P22 pick one). The suite checks the switch took through each helper's status.
-	assumedIdentity = func(s macvm.IdentityStrategy) []string { return []string{"macos-vm", "identity", string(s)} }
-	// assumedDescribe lists a running VM's devices as JSON: {"nics":[{"type":"filehandle"}], ...}.
-	assumedDescribe = func(runDir string) []string { return []string{"describe", "--dir", runDir} }
 	// assumedRunnerdLabel is runnerd's LaunchAgent label (deploy/runner/macos).
 	assumedRunnerdLabel = env("WARDYN_MACVM_RUNNERD_LABEL", "com.wardyn.runnerd.managed")
-	// assumedGuestStop stops the guest from inside (P12's guest stop path). The exec user is
-	// assumed to have password-less sudo for shutdown in the base.
-	assumedGuestStop = env("WARDYN_MACVM_GUEST_STOP", "sudo -n /sbin/shutdown -h now")
 	// assumedGuestAgent is the guest agent's process name in the guest (cmd/wardyn-guest-agent).
 	assumedGuestAgent = "wardyn-guest-agent"
 )
 
-// Messages the suite matches, loosely: the final words come from the approved mock catalogue
-// (the approved mock catalogue), and the ledger's own reasons are in internal/macvm/admission.
+// statusKeys are the only keys of runnerd's status the suite reads, logs or keeps.
+var statusKeys = []string{"state", "phase", "base", "desktop", "harnesses", "thermal", "max", "identity", "held_disk_bytes", "leaked", "error"}
+
+// Sentences the suite matches. Placement's come from internal/api/run_placement_capabilities.go,
+// the ledger's from internal/macvm/admission; console copy may still change with the approved mock.
 var msg = map[string]*regexp.Regexp{
-	"licence":   regexp.MustCompile(`(?i)already runs \d+ macOS VMs|licence|most it may|at its macOS VM limit`),
-	"preparing": regexp.MustCompile(`(?i)preparing macOS.*slot|preparing uses a slot`),
-	"disk":      regexp.MustCompile(`(?i)free disk|GiB free for another macOS VM|GB free`),
-	"posture":   regexp.MustCompile(`(?i)posture`),
-	"managed":   regexp.MustCompile(`(?i)company-managed|managed_device`),
-	"memory":    regexp.MustCompile(`(?i)memory`),
+	"licence": regexp.MustCompile(`This Mac already runs 2 macOS VMs, the most Apple's licence allows`),
+	"noRoom":  regexp.MustCompile(`This Mac has no room for another macOS VM right now`),
+	// ledgerDisk is the runner ledger's own disk refusal.
+	"ledgerDisk": regexp.MustCompile(`this Mac needs \d+ GiB free for another macOS VM`),
+	"preparing":  regexp.MustCompile(`This Mac is preparing macOS, which uses one of its 2 VM slots`),
+	"posture":    regexp.MustCompile("This Mac has no MDM posture file saying it is managed"),
+	"managedOp":  regexp.MustCompile("This Mac is not marked as company-managed. A security operator marks it with `wardyn runner trust"),
+	"managedMem": regexp.MustCompile(`This Mac is not marked as company-managed. Ask a security operator to mark it`),
+	// placementAny is any placement refusal: a create that failed without one is a CLI failure.
+	"placementAny": regexp.MustCompile(`placement_|runner_posture_unmet|This Mac |macOS virtual machines|macOS VM|does not allow sign-ins`),
 }
 
 func env(k, def string) string {
@@ -82,32 +85,32 @@ func env(k, def string) string {
 	return def
 }
 
-// cfg is read once from the environment. Only WARDYN_MACVM_LIVE and WARDYN_MACVM_RUNNER are
-// required; the URLs are what each network proof needs and its test skips without them.
+// cfg is read once from the environment. WARDYN_MACVM_LIVE, WARDYN_MACVM_RUNNER and
+// WARDYN_MACVM_EVIDENCE are required on the rental; the URLs are what each network proof needs.
 var cfg = struct {
 	live, prompts, twoLogins, localWindow bool
-	out, runner, runDoc                   string
-	wardyn, runnerd, helper               string
+	evidence, runner, runDoc              string
+	identityCmd                           string
+	wardyn, runnerd                       string
 	allowedURL, deniedHost, gitURL        string
 	bigURL, cookieURL                     string
 	upgradePkg                            string
 	clockFor, clockEvery                  time.Duration
 	promptWait                            time.Duration
 	baseMinMemGiB, dockerMemGiB           int
-	runDiskGiB                            int
-	slotBases                             int
+	runDiskGiB, slotBases                 int
 	stopLoops, warmTravel, warmFresh      int
 }{
 	live:          os.Getenv("WARDYN_MACVM_LIVE") == "1",
 	prompts:       os.Getenv("WARDYN_MACVM_PROMPTS") == "1",
 	twoLogins:     os.Getenv("WARDYN_MACVM_TWO_LOGINS") == "1",
 	localWindow:   os.Getenv("WARDYN_MACVM_LOCAL_WINDOW") == "1",
-	out:           env("WARDYN_MACVM_OUT", "macvm-evidence"),
+	evidence:      os.Getenv("WARDYN_MACVM_EVIDENCE"),
 	runner:        os.Getenv("WARDYN_MACVM_RUNNER"),
 	runDoc:        os.Getenv("WARDYN_MACVM_RUN_DOC"),
+	identityCmd:   os.Getenv("WARDYN_MACVM_IDENTITY_CMD"),
 	wardyn:        env("WARDYN_MACVM_WARDYN", "wardyn"),
 	runnerd:       env("WARDYN_MACVM_RUNNERD", "wardyn-runnerd"),
-	helper:        env("WARDYN_MACVM_HELPER", "wardyn-macvm"),
 	allowedURL:    os.Getenv("WARDYN_MACVM_ALLOWED_URL"),
 	deniedHost:    os.Getenv("WARDYN_MACVM_DENIED_HOST"),
 	gitURL:        os.Getenv("WARDYN_MACVM_GIT_URL"),
@@ -147,11 +150,29 @@ func live(t *testing.T) {
 		t.Skipf("not darwin/arm64 (%s/%s): macOS VM live proofs run only on the rented Mac", runtime.GOOS, runtime.GOARCH)
 	}
 	if !cfg.live {
-		t.Skip("WARDYN_MACVM_LIVE is not 1: no rental window (the window's run sets it)")
+		t.Skip("WARDYN_MACVM_LIVE is not 1: no rental window")
 	}
-	if cfg.runner == "" {
-		t.Fatal("WARDYN_MACVM_RUNNER is empty: name the window's runner (id or name)")
+	if cfg.runner == "" || cfg.evidence == "" {
+		t.Fatal("WARDYN_MACVM_RUNNER and WARDYN_MACVM_EVIDENCE must name the window's runner and evidence dir")
 	}
+}
+
+// notRun records that a proof could not be witnessed, with why, and skips. The summary maps the
+// marker to NOT_RUN; it is never a pass.
+func notRun(t *testing.T, format string, args ...any) {
+	t.Helper()
+	t.Skip(notRunMarker + fmt.Sprintf(format, args...))
+}
+
+// block marks t as a BLOCK item: its failure holds macOS VMs out of the release. t must be listed
+// in blockItems (summary_test.go), which the summary uses even when t skipped before calling this.
+// Mark the narrowest test: a parent's own failure is attributed to its failed children.
+func block(t *testing.T) {
+	t.Helper()
+	if !isBlock(t.Name()) {
+		t.Fatalf("block(%s): not in blockItems", t.Name())
+	}
+	t.Log(blockMarker)
 }
 
 // needPerson skips a test whose steps need a person unless prompts are on.
@@ -165,7 +186,7 @@ func needPerson(t *testing.T, slot string) {
 func need(t *testing.T, v, name string) {
 	t.Helper()
 	if v == "" {
-		t.Skipf("%s is empty: this proof needs it", name)
+		notRun(t, "%s is empty: this proof needs it", name)
 	}
 }
 
@@ -175,14 +196,14 @@ var ttyMu sync.Mutex
 
 // ask puts a question to the person on /dev/tty and returns the line they type. It never asks for
 // a secret: questions name a step to do or an observation to report. No answer within the wait is
-// NOT RUN, never a guess.
+// NOT_RUN, never a guess.
 func ask(t *testing.T, q string) string {
 	t.Helper()
 	ttyMu.Lock()
 	defer ttyMu.Unlock()
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
-		t.Fatalf("NOT RUN: no terminal for the prompt %q: %v", q, err)
+		notRun(t, "no terminal for the prompt %q: %v", q, err)
 	}
 	defer tty.Close()
 	fmt.Fprintf(tty, "\n[%s] %s\n(answer within %s) > ", t.Name(), q, cfg.promptWait)
@@ -196,7 +217,7 @@ func ask(t *testing.T, q string) string {
 		t.Logf("PROMPT %q -> %q", q, a)
 		return a
 	case <-time.After(cfg.promptWait):
-		t.Fatalf("NOT RUN: no answer within %s to %q", cfg.promptWait, q)
+		notRun(t, "no answer within %s to %q", cfg.promptWait, q)
 		return ""
 	}
 }
@@ -214,7 +235,7 @@ func confirm(t *testing.T, q string) bool {
 	}
 }
 
-// doStep asks the person to do something and waits for "done"; "skip" records the step NOT RUN.
+// doStep asks the person to do something and waits for "done"; "skip" is NOT_RUN.
 func doStep(t *testing.T, step string) {
 	t.Helper()
 	for {
@@ -222,7 +243,7 @@ func doStep(t *testing.T, step string) {
 		case "done":
 			return
 		case "skip":
-			t.Skipf("NOT RUN: the person could not do %q", step)
+			notRun(t, "the person could not do %q", step)
 		}
 	}
 }
@@ -231,7 +252,7 @@ func doStep(t *testing.T, step string) {
 
 func evidenceDir(t *testing.T) string {
 	t.Helper()
-	d := filepath.Join(cfg.out, strings.NewReplacer("/", "_", " ", "_").Replace(t.Name()))
+	d := filepath.Join(cfg.evidence, strings.NewReplacer("/", "_", " ", "_").Replace(t.Name()))
 	if err := os.MkdirAll(d, 0o700); err != nil {
 		t.Fatalf("evidence dir: %v", err)
 	}
@@ -304,38 +325,105 @@ func shIn(t *testing.T, timeout time.Duration, stdin []byte, name string, args .
 func mustOK(t *testing.T, r result, what string) string {
 	t.Helper()
 	if r.code != 0 {
-		t.Fatalf("%s: exit %d: %s", what, r.code, strings.TrimSpace(r.err))
+		t.Fatalf("%s: exit %d: %s", what, r.code, strings.TrimSpace(r.err+" "+r.out))
 	}
 	return r.out
 }
 
 func wardyn(t *testing.T, args ...string) result { return sh(t, 2*time.Minute, cfg.wardyn, args...) }
 
-// runnerdStatus is the runner's macOS VM state as JSON. Only named keys are read from it.
+// runnerdStatus is the allowlisted part of runnerd's macOS VM status. Nothing else from it is read
+// or logged, so a one-time code or any later field never reaches the evidence.
 func runnerdStatus(t *testing.T) map[string]any {
 	t.Helper()
 	var m map[string]any
 	if err := json.Unmarshal([]byte(mustOK(t, sh(t, time.Minute, cfg.runnerd, assumedRunnerdStatus...), "runnerd status")), &m); err != nil {
 		t.Fatalf("runnerd status JSON: %v", err)
 	}
-	// The status may carry a one-time setup code while Setup Assistant waits; it is dropped
-	// before anything is logged or kept.
-	delete(m, "setup_code")
-	delete(m, "one_time_code")
-	return m
+	out := map[string]any{}
+	for _, k := range statusKeys {
+		if v, ok := m[k]; ok {
+			out[k] = v
+		}
+	}
+	return out
 }
 
-// setIdentity switches the strategy for new runs; checkIdentity proves a run got it.
+// setIdentity switches the identity strategy for new runs through the command the RUNNER lane
+// exposes (WARDYN_MACVM_IDENTITY_CMD, with {strategy} in it). Without one, switching is NOT_RUN.
 func setIdentity(t *testing.T, s macvm.IdentityStrategy) {
 	t.Helper()
-	mustOK(t, sh(t, 2*time.Minute, cfg.runnerd, assumedIdentity(s)...), "switch the identity strategy to "+string(s))
+	if cfg.identityCmd == "" {
+		notRun(t, "no identity-strategy switch is exposed (WARDYN_MACVM_IDENTITY_CMD is empty), so %s cannot be selected", s)
+	}
+	mustOK(t, sh(t, 2*time.Minute, "sh", "-c", strings.ReplaceAll(cfg.identityCmd, "{strategy}", string(s))), "switch the identity strategy to "+string(s))
 }
 
 func checkIdentity(t *testing.T, st macvm.Status, s macvm.IdentityStrategy) {
 	t.Helper()
 	if st.Identity != s {
-		t.Fatalf("run %s was configured with identity %q, want %q: the runner did not switch", st.RunID, st.Identity, s)
+		t.Fatalf("run %s was configured with identity %q, want %q: the switch did not take", st.RunID, st.Identity, s)
 	}
+}
+
+// ---- the window runner ----
+
+type amounts struct {
+	CPUMillis int64 `json:"cpu_millis"`
+	MemoryMiB int64 `json:"memory_mib"`
+	DiskMiB   int64 `json:"disk_mib"`
+}
+
+type tally struct {
+	Runs      int   `json:"runs"`
+	CPUMillis int64 `json:"cpu_millis"`
+	MemoryMiB int64 `json:"memory_mib"`
+	DiskMiB   int64 `json:"disk_mib"`
+}
+
+// runnerView is the part of `wardyn runner list --json` the suite reads.
+type runnerView struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	TrustClass string `json:"trust_class"`
+	Limits     *struct {
+		RunsAtOnce int     `json:"runs_at_once"`
+		Total      amounts `json:"total"`
+		PerRun     amounts `json:"per_run"`
+	} `json:"limits"`
+	Usage struct {
+		InUse     tally `json:"in_use"`
+		Available tally `json:"available"`
+	} `json:"usage"`
+}
+
+func runnerRow(t *testing.T) runnerView {
+	t.Helper()
+	var rows []runnerView
+	if err := json.Unmarshal([]byte(mustOK(t, wardyn(t, "runner", "list", "--json"), "runner list")), &rows); err != nil {
+		t.Fatalf("runner list JSON: %v", err)
+	}
+	for _, r := range rows {
+		if r.ID == cfg.runner || r.Name == cfg.runner {
+			return r
+		}
+	}
+	t.Fatalf("runner %q is not in runner list", cfg.runner)
+	return runnerView{}
+}
+
+var runnerIDCache string
+
+// runnerID is the window runner's id, resolved from WARDYN_MACVM_RUNNER (an id or a name).
+func runnerID(t *testing.T) string {
+	t.Helper()
+	if runnerIDCache == "" {
+		runnerIDCache = runnerRow(t).ID
+	}
+	if runnerIDCache == "" {
+		t.Fatal("the window runner has no id")
+	}
+	return runnerIDCache
 }
 
 // ---- runs ----
@@ -352,19 +440,19 @@ func (r run) terminal() bool {
 	return slices.Contains([]string{"FAILED", "KILLED", "COMPLETED", "STOPPED", "ARCHIVED"}, r.State)
 }
 
-// runDocument is the kind: Run document every run starts from: WARDYN_MACVM_RUN_DOC when set,
-// else an interactive run with no harness. intent gets machine_kind and the caller's fields.
-func runDocument(t *testing.T, intent map[string]any) []byte {
+// runDocument is the kind: Run document a run starts from: path when set, else an interactive run
+// with no harness. intent gets machine_kind, the pin to the window runner and the caller's fields.
+func runDocument(t *testing.T, path string, intent map[string]any) []byte {
 	t.Helper()
 	doc := map[string]any{"api_version": "wardyn/v1", "kind": "Run", "intent": map[string]any{"agent": "none", "interactive": true}}
-	if cfg.runDoc != "" {
-		b, err := os.ReadFile(cfg.runDoc)
+	if path != "" {
+		b, err := os.ReadFile(path)
 		if err != nil {
-			t.Fatalf("WARDYN_MACVM_RUN_DOC: %v", err)
+			t.Fatalf("run document %s: %v", path, err)
 		}
 		doc = nil
 		if err := json.Unmarshal(b, &doc); err != nil {
-			t.Fatalf("WARDYN_MACVM_RUN_DOC must be JSON: %v", err)
+			t.Fatalf("run document %s must be JSON: %v", path, err)
 		}
 	}
 	in, _ := doc["intent"].(map[string]any)
@@ -373,6 +461,8 @@ func runDocument(t *testing.T, intent map[string]any) []byte {
 		doc["intent"] = in
 	}
 	in["machine_kind"] = "macos_vm"
+	in["placement"] = "local"
+	in["runner_id"] = runnerID(t)
 	for k, v := range intent {
 		in[k] = v
 	}
@@ -380,19 +470,44 @@ func runDocument(t *testing.T, intent map[string]any) []byte {
 	return b
 }
 
-// create asks for one macOS VM run. A refusal at create (placement) is returned as an error with
-// the server's sentence; the caller decides whether that is the expected outcome.
-func create(t *testing.T, intent map[string]any) (string, error) {
+// spec is one ask for a run: its intent fields, the document it starts from (default
+// WARDYN_MACVM_RUN_DOC), and the test that owns it (the run is ended when that test ends; default
+// the asking test). A run that must outlive a subtest is owned by the parent.
+type spec struct {
+	intent map[string]any
+	doc    string
+	owner  *testing.T
+}
+
+// errPlacement is a create the server refused at placement, with its sentence.
+type errPlacement struct{ text string }
+
+func (e errPlacement) Error() string { return "refused at placement: " + e.text }
+
+// create asks for one run. A placement refusal is returned as errPlacement; any other failure of
+// the CLI fails the test with its output.
+func create(t *testing.T, s spec) (string, error) {
 	t.Helper()
-	r := shIn(t, 2*time.Minute, runDocument(t, intent), cfg.wardyn, "run", "--file", "-", "--json", "--title", "macvm-live "+t.Name())
+	if s.doc == "" {
+		s.doc = cfg.runDoc
+	}
+	owner := s.owner
+	if owner == nil {
+		owner = t
+	}
+	r := shIn(t, 2*time.Minute, runDocument(t, s.doc, s.intent), cfg.wardyn, "run", "--file", "-", "--json", "--title", "macvm-live "+t.Name())
 	if r.code != 0 {
-		return "", fmt.Errorf("refused at create: %s", strings.TrimSpace(r.err+" "+r.out))
+		text := strings.TrimSpace(r.err + " " + r.out)
+		if msg["placementAny"].MatchString(text) {
+			return "", errPlacement{text}
+		}
+		t.Fatalf("create failed without a placement refusal: exit %d: %s", r.code, text)
 	}
 	var v run
 	if err := json.Unmarshal([]byte(r.out), &v); err != nil || v.ID == "" {
 		t.Fatalf("create: no run id in %q", r.out)
 	}
-	t.Cleanup(func() { end(t, v.ID) })
+	owner.Cleanup(func() { end(owner, v.ID) })
 	return v.ID, nil
 }
 
@@ -418,39 +533,64 @@ func wait(t *testing.T, id string, timeout time.Duration) run {
 	}
 }
 
-// start creates a run and waits for RUNNING, failing the test otherwise.
-func start(t *testing.T, intent map[string]any) string {
+// pinned fails the test if a run landed anywhere but the window runner.
+func pinned(t *testing.T, v run) {
 	t.Helper()
-	id, err := create(t, intent)
+	if v.RunnerID != "" && v.RunnerID != runnerID(t) {
+		t.Fatalf("run %s landed on runner %s, not the window runner %s", v.ID, v.RunnerID, runnerID(t))
+	}
+}
+
+// start creates a run and waits for RUNNING on the window runner, failing the test otherwise.
+func start(t *testing.T, s spec) string {
+	t.Helper()
+	id, err := create(t, s)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v := wait(t, id, 5*time.Minute); v.State != "RUNNING" {
+	v := wait(t, id, 5*time.Minute)
+	if v.State != "RUNNING" {
 		t.Fatalf("run %s is %s, not RUNNING: %s", id, v.State, v.FailureHint)
 	}
+	if v.RunnerID == "" {
+		t.Fatalf("run %s is RUNNING with no runner_id", id)
+	}
+	pinned(t, v)
 	return id
 }
 
 // refusal is how an ask that should be refused ended: at placement (create), by the runner (the
-// run failed with a reason, the ledger's among them), or not refused at all.
+// run failed with a reason, the ledger's among them), or not at all ("none").
 type refusal struct {
-	By, Reason, RunID string
+	By, Reason, RunID, State string
 }
 
-func askRefused(t *testing.T, intent map[string]any) refusal {
+func askRefused(t *testing.T, s spec) refusal {
 	t.Helper()
-	id, err := create(t, intent)
-	if err != nil {
-		return refusal{By: "placement", Reason: err.Error()}
+	id, err := create(t, s)
+	var ep errPlacement
+	if errors.As(err, &ep) {
+		return refusal{By: "placement", Reason: ep.text}
 	}
 	v := wait(t, id, 3*time.Minute)
+	pinned(t, v)
+	if v.terminal() {
+		return refusal{By: "runner", Reason: v.FailureHint, RunID: id, State: v.State}
+	}
+	return refusal{By: "none", Reason: v.FailureHint, RunID: id, State: v.State}
+}
+
+// mustRefuse records a refusal and asserts it came from `by` with a sentence matching re.
+func mustRefuse(t *testing.T, r refusal, by string, re *regexp.Regexp) {
+	t.Helper()
+	t.Logf("RECORD refused_by=%s reason=%q state=%s", r.By, r.Reason, r.State)
 	switch {
-	case v.State == "RUNNING":
-		return refusal{By: "none", RunID: id}
-	case v.terminal():
-		return refusal{By: "runner", Reason: v.FailureHint, RunID: id}
-	default:
-		return refusal{By: "none (" + v.State + ")", Reason: v.FailureHint, RunID: id}
+	case r.By == "none":
+		t.Fatalf("not refused: run %s is %s", r.RunID, r.State)
+	case r.By != by:
+		t.Fatalf("refused by %s, want %s: %q", r.By, by, r.Reason)
+	case !re.MatchString(r.Reason):
+		t.Fatalf("refused by %s without the expected sentence (%s): %q", r.By, re, r.Reason)
 	}
 }
 
@@ -495,13 +635,18 @@ func layout(t *testing.T) macvm.Layout {
 
 func runDir(t *testing.T, id string) string { return layout(t).RunDir(id) }
 
+func dialHelper(ctx context.Context, t *testing.T, id string) (*macvm.ControlClient, error) {
+	t.Helper()
+	return macvm.DialControl(ctx, filepath.Join(runDir(t, id), macvm.ControlSock))
+}
+
 // helperStatus asks the run's helper over its ctl.sock. The helper serves each connection on its
 // own, so this does not disturb runnerd's.
 func helperStatus(t *testing.T, id string) macvm.Status {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	cc, err := macvm.DialControl(ctx, filepath.Join(runDir(t, id), macvm.ControlSock))
+	cc, err := dialHelper(ctx, t, id)
 	if err != nil {
 		t.Fatalf("ctl.sock of run %s: %v", id, err)
 	}
@@ -513,14 +658,27 @@ func helperStatus(t *testing.T, id string) macvm.Status {
 	return st
 }
 
+// helperStop asks the run's helper to stop its VM (gracefully first: the guest is asked to shut
+// down), the stop path that bypasses the org.
+func helperStop(t *testing.T, id string) error {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cc, err := dialHelper(ctx, t, id)
+	if err != nil {
+		return err
+	}
+	defer cc.Close()
+	return cc.Stop(ctx, true, 30*time.Second)
+}
+
 // helloAfter waits for the helper's guest_agent event and returns when it came.
 func helloAfter(t *testing.T, id string, within time.Duration) (time.Time, bool) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), within)
 	defer cancel()
-	sock := filepath.Join(runDir(t, id), macvm.ControlSock)
 	for {
-		cc, err := macvm.DialControl(ctx, sock)
+		cc, err := dialHelper(ctx, t, id)
 		if err == nil {
 			defer cc.Close()
 			ev, err := cc.Events(ctx)
@@ -597,6 +755,18 @@ func counted(fs []ledgerFile) int {
 	return n
 }
 
+// heldDisk is the disk every entry in the ledger reserves, tombstoned ones included: a tombstone
+// frees a slot and memory but its disk stays held until its owner returns.
+func heldDisk(fs []ledgerFile) int64 {
+	var n int64
+	for _, f := range fs {
+		if !f.Tomb {
+			n += f.Entry.DiskReserve
+		}
+	}
+	return n
+}
+
 // procs counts processes whose executable's base name starts with prefix, for uid (or any, -1).
 func procs(t *testing.T, prefix string, uid int) int {
 	t.Helper()
@@ -626,6 +796,36 @@ func freeBytes(t *testing.T, path string) int64 {
 }
 
 const gib = 1 << 30
+
+// snapshotDate is the date tmutil names a local snapshot by; nothing else is passed to delete.
+var snapshotDate = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}-\d{6}$`)
+
+// takeSnapshot makes one host local snapshot and returns its date.
+func takeSnapshot(t *testing.T) string {
+	t.Helper()
+	out := mustOK(t, sh(t, 5*time.Minute, "tmutil", "localsnapshot"), "tmutil localsnapshot")
+	f := strings.Fields(out)
+	if len(f) == 0 || !snapshotDate.MatchString(f[len(f)-1]) {
+		t.Fatalf("tmutil localsnapshot printed no snapshot date: %q", out)
+	}
+	return f[len(f)-1]
+}
+
+// deleteSnapshot deletes the window's own snapshot by its date, or asks the person to.
+func deleteSnapshot(t *testing.T, date string) {
+	t.Helper()
+	if !snapshotDate.MatchString(date) {
+		t.Fatalf("refusing to delete %q: not a snapshot date", date)
+	}
+	if sh(t, 10*time.Minute, "tmutil", "deletelocalsnapshots", date).code == 0 {
+		return
+	}
+	if cfg.prompts {
+		doStep(t, "Run: sudo tmutil deletelocalsnapshots "+date)
+		return
+	}
+	t.Errorf("the window's snapshot %s is still there: delete it by hand (sudo tmutil deletelocalsnapshots %s)", date, date)
+}
 
 // ---- statistics ----
 
@@ -664,8 +864,8 @@ func readGuestIdentity(t *testing.T, id string) guestIdentity {
 
 // trackingCheck is P4's check: the guest's identity follows the configured identifier if it is the
 // same across the travel series and different across the fresh series. It cannot hold when either
-// series did not boot. It is recorded as evidence only: it never qualifies a
-// strategy for two concurrent VMs.
+// series did not boot. It is recorded as evidence only: it never qualifies a strategy for two
+// concurrent VMs.
 func trackingCheck(travel, fresh []guestIdentity) (holds bool, why string) {
 	if len(travel) < 2 || len(fresh) < 2 {
 		return false, "a series did not boot at least twice"
@@ -685,11 +885,10 @@ func trackingCheck(travel, fresh []guestIdentity) (holds bool, why string) {
 	return true, "travel identical, fresh all distinct"
 }
 
-// qualifies is P22's rule for two concurrent VMs: only distinct configured
-// identifiers qualify, so fresh qualifies when its two VMs' configured hashes differ and their
-// guests report a different serial number and UUID. travel shares one identifier per base, so it
-// is capped at one VM per slot base and qualifies for two only across two slot bases, by the same
-// test.
+// qualifies is P22's rule for two concurrent VMs: only distinct configured identifiers qualify, so
+// fresh qualifies when its two VMs' configured hashes differ and their guests report a different
+// serial number and UUID. travel shares one identifier per base, so it is capped at one VM per slot
+// base and qualifies for two only across two slot bases, by the same test.
 func qualifies(hashes [2]string, ids [2]guestIdentity) (bool, string) {
 	switch {
 	case hashes[0] == "" || hashes[0] == hashes[1]:

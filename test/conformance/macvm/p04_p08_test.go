@@ -31,7 +31,7 @@ func marker() string {
 	return "wardyn-live-" + hex.EncodeToString(b)
 }
 
-// helperLogTime is the time of the first helper.log line whose msg is msg.
+// helperLogTime is the time of the first helper.log line whose msg is msgText.
 func helperLogTime(t *testing.T, id, msgText string) (time.Time, bool) {
 	t.Helper()
 	f, err := os.Open(filepath.Join(runDir(t, id), macvm.HelperLog))
@@ -83,7 +83,72 @@ type p4Result struct {
 	Why      string                          `json:"tracking_check_why"`
 }
 
-func p4Path() string { return filepath.Join(cfg.out, "p4-result.json") }
+// p4Path is where P4 leaves its result for P22, in the window's evidence dir.
+func p4Path() string { return filepath.Join(cfg.evidence, "p4-result.json") }
+
+// warmSeries starts n runs one after another, checks the budgets, and returns each guest's
+// identity. want is the strategy the runs must have been configured with ("" takes the runner's).
+func warmSeries(t *testing.T, n int, want macvm.IdentityStrategy) ([]guestIdentity, bool) {
+	t.Helper()
+	var clone, hello, running []time.Duration
+	var ids []guestIdentity
+	for i := range n {
+		t0 := time.Now()
+		id, err := create(t, spec{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		helloAt, ok := helloAfter(t, id, 3*time.Minute)
+		if !ok {
+			keepHelperLog(t, id)
+			t.Errorf("does not boot: run %d (%s) had no guest agent hello within 3 minutes; recorded, not retried", i, id)
+			end(t, id)
+			return ids, false
+		}
+		v := wait(t, id, 2*time.Minute)
+		if v.State != "RUNNING" {
+			t.Fatalf("run %s is %s after hello: %s", id, v.State, v.FailureHint)
+		}
+		pinned(t, v)
+		running = append(running, time.Since(t0))
+		st := helperStatus(t, id)
+		if want != "" {
+			checkIdentity(t, st, want)
+		}
+		// Clone time is bounded above by run.json's write (runnerd, before it starts the
+		// helper) to "identity configured", which the helper logs right after the clone.
+		fi, err := os.Stat(filepath.Join(runDir(t, id), macvm.RunConfigFile))
+		if err != nil {
+			t.Fatalf("run %s: %v", id, err)
+		}
+		if cfgAt, ok := helperLogTime(t, id, "macvm: identity configured"); ok {
+			clone = append(clone, cfgAt.Sub(fi.ModTime()))
+			hello = append(hello, helloAt.Sub(cfgAt))
+		} else {
+			t.Errorf("run %s: no \"identity configured\" line in helper.log", id)
+		}
+		g := readGuestIdentity(t, id)
+		ids = append(ids, g)
+		t.Logf("RECORD run=%s identity=%s machine_id_sha256=%s guest_serial=%s guest_uuid=%s vz_rss_kib=%d",
+			id, st.Identity, st.MachineIDSHA256, g.Serial, g.UUID, vzFootprintKiB(t))
+		keepHelperLog(t, id)
+		end(t, id)
+	}
+	record(t, "clone_upper_bound_max", percentile(clone, 100))
+	record(t, "hello_p50", percentile(hello, 50))
+	record(t, "hello_p95", percentile(hello, 95))
+	record(t, "create_to_running_p95", percentile(running, 95))
+	if c := percentile(clone, 100); c > 2*time.Second {
+		t.Errorf("clone upper bound %s (run.json to \"identity configured\") is over the 2s budget; helper.log has the detail", c)
+	}
+	if p := percentile(hello, 50); p > 60*time.Second {
+		t.Errorf("hello p50 %s, budget 60s", p)
+	}
+	if p := percentile(hello, 95); p > 90*time.Second {
+		t.Errorf("hello p95 %s, budget 90s", p)
+	}
+	return ids, true
+}
 
 // TestP04_WarmStartAndIdentity: sequential warm starts for both identity strategies, with each
 // run's configured-identifier hash and the guest's serial number and platform UUID.
@@ -91,85 +156,40 @@ func TestP04_WarmStartAndIdentity(t *testing.T) {
 	live(t)
 	res := p4Result{Booted: map[macvm.IdentityStrategy]bool{}}
 	ids := map[macvm.IdentityStrategy][]guestIdentity{}
-	base := layout(t).BaseDir(0)
-	record(t, "base_physical_du", strings.Fields(sh(t, 5*time.Minute, "du", "-sh", base).out + " ?")[0])
+	record(t, "base_physical_du", strings.Fields(sh(t, 5*time.Minute, "du", "-sh", layout(t).BaseDir(0)).out + " ?")[0])
+	defer func() {
+		res.Tracking, res.Why = trackingCheck(ids[macvm.IdentityTravel], ids[macvm.IdentityFresh])
+		t.Logf("RECORD tracking_check_holds=%v (%s); evidence only, never qualification", res.Tracking, res.Why)
+		keepJSON(t, "identities.json", ids)
+		b, _ := json.MarshalIndent(res, "", "  ")
+		_ = os.MkdirAll(cfg.evidence, 0o700)
+		if err := os.WriteFile(p4Path(), b, 0o600); err != nil {
+			t.Errorf("p4 result: %v", err)
+		}
+	}()
+	if cfg.identityCmd == "" {
+		// No switch: the budgets are still measured under whatever strategy the runner uses.
+		t.Run("runner_strategy", func(t *testing.T) { warmSeries(t, cfg.warmTravel, "") })
+	}
 	for _, series := range []struct {
 		s macvm.IdentityStrategy
 		n int
 	}{{macvm.IdentityTravel, cfg.warmTravel}, {macvm.IdentityFresh, cfg.warmFresh}} {
 		t.Run(string(series.s), func(t *testing.T) {
 			setIdentity(t, series.s)
-			var clone, hello, running []time.Duration
-			for i := range series.n {
-				t0 := time.Now()
-				id, err := create(t, nil)
-				if err != nil {
-					t.Fatal(err)
-				}
-				helloAt, ok := helloAfter(t, id, 3*time.Minute)
-				if !ok {
-					keepHelperLog(t, id)
-					record(t, string(series.s)+"_boots", false)
-					t.Errorf("strategy %s does not boot: run %d (%s) had no guest agent hello within 3 minutes; recorded, not retried", series.s, i, id)
-					end(t, id)
-					return
-				}
-				v := wait(t, id, 2*time.Minute)
-				if v.State != "RUNNING" {
-					t.Fatalf("run %s is %s after hello: %s", id, v.State, v.FailureHint)
-				}
-				running = append(running, time.Since(t0))
-				st := helperStatus(t, id)
-				checkIdentity(t, st, series.s)
-				// Clone time is bounded above by run.json's write (runnerd, before it starts the
-				// helper) to "identity configured", which the helper logs right after the clone.
-				fi, err := os.Stat(filepath.Join(runDir(t, id), macvm.RunConfigFile))
-				if err != nil {
-					t.Fatalf("run %s: %v", id, err)
-				}
-				if cfgAt, ok := helperLogTime(t, id, "macvm: identity configured"); ok {
-					clone = append(clone, cfgAt.Sub(fi.ModTime()))
-					hello = append(hello, helloAt.Sub(cfgAt))
-				} else {
-					t.Errorf("run %s: no \"identity configured\" line in helper.log", id)
-				}
-				g := readGuestIdentity(t, id)
-				ids[series.s] = append(ids[series.s], g)
-				t.Logf("RECORD run=%s strategy=%s machine_id_sha256=%s guest_serial=%s guest_uuid=%s vz_rss_kib=%d",
-					id, series.s, st.MachineIDSHA256, g.Serial, g.UUID, vzFootprintKiB(t))
-				keepHelperLog(t, id)
-				end(t, id)
-			}
-			res.Booted[series.s] = true
-			record(t, string(series.s)+"_clone_max", percentile(clone, 100))
-			record(t, string(series.s)+"_hello_p50", percentile(hello, 50))
-			record(t, string(series.s)+"_hello_p95", percentile(hello, 95))
-			record(t, string(series.s)+"_create_to_running_p95", percentile(running, 95))
-			if c := percentile(clone, 100); c > 2*time.Second {
-				t.Errorf("clone upper bound %s (run.json to \"identity configured\") is over the 2s budget; helper.log has the detail", c)
-			}
-			if p := percentile(hello, 50); p > 60*time.Second {
-				t.Errorf("hello p50 %s, budget 60s", p)
-			}
-			if p := percentile(hello, 95); p > 90*time.Second {
-				t.Errorf("hello p95 %s, budget 90s", p)
-			}
+			g, booted := warmSeries(t, series.n, series.s)
+			ids[series.s], res.Booted[series.s] = g, booted
+			record(t, string(series.s)+"_boots", booted)
 		})
-	}
-	res.Tracking, res.Why = trackingCheck(ids[macvm.IdentityTravel], ids[macvm.IdentityFresh])
-	t.Logf("RECORD tracking_check_holds=%v (%s); evidence only, never qualification", res.Tracking, res.Why)
-	keepJSON(t, "identities.json", ids)
-	b, _ := json.MarshalIndent(res, "", "  ")
-	if err := os.MkdirAll(cfg.out, 0o700); err == nil {
-		_ = os.WriteFile(p4Path(), b, 0o600)
 	}
 }
 
-// TestP05_AgentSession: Init, exec, output follow and a PTY over the guest's vsock. Pause and resume
-// are reached through a desktop sign-in, so they are a person's step.
+// TestP05_AgentSession: Init, exec and output follow over the guest's vsock. Pause and resume are
+// reached through a desktop sign-in, so they are a person's step.
 func TestP05_AgentSession(t *testing.T) {
 	live(t)
-	id := start(t, nil) // RUNNING means Init passed: the runner waits for it.
+	block(t)
+	id := start(t, spec{}) // RUNNING means Init passed: the runner waits for it.
 	t.Run("exec", func(t *testing.T) {
 		m := marker()
 		if out := mustGuest(t, id, "echo "+m+"; echo err >&2; exit 0"); !strings.Contains(out, m) {
@@ -197,16 +217,11 @@ func TestP05_AgentSession(t *testing.T) {
 		}
 	})
 	t.Run("pty", func(t *testing.T) {
-		// script(1) gives the CLI's ssh a terminal; the guest must report one back.
-		r := sh(t, 2*time.Minute, "script", "-q", "/dev/null", cfg.wardyn, "run", "ssh", id, "--", "tty")
-		if !strings.Contains(r.out, "/dev/tty") {
-			t.Fatalf("no PTY in the guest: %q", r.out)
-		}
+		notRun(t, "no CLI path opens a PTY for a command: `wardyn run exec` has no terminal flag and `wardyn run ssh` takes no command")
 	})
 	t.Run("pause_resume", func(t *testing.T) {
 		needPerson(t, "the automated suite's run (pause and resume need a desktop sign-in)")
-		before := mustGuest(t, id, "ps -axo pid=,stat=,comm= | grep -v ' ps$'")
-		keep(t, "ps-before.txt", []byte(before))
+		keep(t, "ps-before.txt", []byte(mustGuest(t, id, "ps -axo pid=,stat=,comm=")))
 		doStep(t, fmt.Sprintf("In the console, open a desktop sign-in for run %s (it pauses the agent). Leave it open.", id))
 		keep(t, "ps-paused.txt", []byte(mustGuest(t, id, "ps -axo pid=,stat=,comm=")))
 		doStep(t, "End the sign-in (it resumes the agent).")
@@ -220,12 +235,13 @@ func TestP05_AgentSession(t *testing.T) {
 // TestP06_NetworkPositive: the fixed DHCP lease, an allowed HTTPS host, git through the broker.
 func TestP06_NetworkPositive(t *testing.T) {
 	live(t)
+	block(t)
 	need(t, cfg.allowedURL, "WARDYN_MACVM_ALLOWED_URL")
 	intent := map[string]any{}
 	if cfg.gitURL != "" {
 		intent["repo"] = cfg.gitURL
 	}
-	id := start(t, intent)
+	id := start(t, spec{intent: intent})
 	t.Run("lease", func(t *testing.T) {
 		pkt := mustGuest(t, id, `ipconfig getpacket "$(route -n get default | awk '/interface:/{print $2}')"`)
 		keep(t, "packet.txt", []byte(pkt))
@@ -236,8 +252,9 @@ func TestP06_NetworkPositive(t *testing.T) {
 		}
 	})
 	t.Run("allowed_https", func(t *testing.T) {
-		if code := strings.TrimSpace(mustGuest(t, id, "curl -sS -o /dev/null -w '%{http_code}' --max-time 30 '"+cfg.allowedURL+"'")); code[0] != '2' && code[0] != '3' {
-			t.Fatalf("allowed host answered %s", code)
+		code := strings.TrimSpace(mustGuest(t, id, "curl -sS -o /dev/null -w '%{http_code}' --max-time 30 '"+cfg.allowedURL+"'"))
+		if !regexp.MustCompile(`^[23]\d\d$`).MatchString(code) {
+			t.Fatalf("allowed host answered %q", code)
 		}
 	})
 	t.Run("git_clone", func(t *testing.T) {
@@ -306,14 +323,44 @@ func runLogs(t *testing.T, id string) string {
 	var all strings.Builder
 	for _, name := range []string{"wardyn-vmnet-" + id, "wardyn-proxy-" + id} {
 		r := sh(t, time.Minute, "docker", "logs", name)
+		if r.code != 0 {
+			t.Fatalf("docker logs %s: exit %d: %s", name, r.code, r.err)
+		}
 		all.WriteString(r.out + r.err)
 	}
 	return all.String()
 }
 
-// TestP07_NetworkNegative: controls first, then every probe from the guest fails and is logged.
+// probe is one negative probe from the guest. Its script runs inside a wrapper that prints the
+// probe's own exit status, so a failed exec is never read as a refused probe.
+type probe struct {
+	name, script string
+	reached      string // stdout that means the target answered
+	refused      string // output or status text that shows the guest-side refusal or timeout
+	logIP        string // the probe's own destination, which its log line must name...
+	logPort      string // ...with its own port ("" for ICMP or a named host)
+	udp          bool   // the relay logs no UDP: guest-side evidence only
+}
+
+var probeRC = regexp.MustCompile(`(?m)^PROBE_RC=(\d+)$`)
+
+// logExplains reports whether one log line names the probe's own destination (and port).
+func logExplains(logs string, p probe) bool {
+	ip := regexp.MustCompile(`(^|[^0-9a-fA-F:.])` + regexp.QuoteMeta(p.logIP) + `($|[^0-9a-fA-F:.])`)
+	port := regexp.MustCompile(`(^|\D)` + regexp.QuoteMeta(p.logPort) + `($|\D)`)
+	for _, l := range strings.Split(logs, "\n") {
+		if ip.MatchString(l) && (p.logPort == "" || port.MatchString(l)) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestP07_NetworkNegative: controls first, then every probe from the guest fails on the guest's
+// side and, for TCP, IPv6 and named hosts, a relay or proxy line names that probe's own flow.
 func TestP07_NetworkNegative(t *testing.T) {
 	live(t)
+	block(t)
 	need(t, cfg.allowedURL, "WARDYN_MACVM_ALLOWED_URL")
 	need(t, cfg.deniedHost, "WARDYN_MACVM_DENIED_HOST")
 	lan := env("WARDYN_MACVM_HOST_LAN_IP", strings.TrimSpace(sh(t, 10*time.Second, "ipconfig", "getifaddr", "en0").out))
@@ -341,7 +388,10 @@ func TestP07_NetworkNegative(t *testing.T) {
 			c.Close()
 		}
 	})
-	id := start(t, nil)
+	id := start(t, spec{})
+	t.Run("tools", func(t *testing.T) {
+		mustGuest(t, id, "for c in nc dig curl ping6 route ifconfig; do command -v $c >/dev/null || { echo missing $c >&2; exit 1; }; done")
+	})
 	allowed := func(t *testing.T, when string) {
 		if r := guest(t, id, "curl -sS -o /dev/null --max-time 30 '"+cfg.allowedURL+"'", time.Minute); r.code != 0 {
 			t.Errorf("allowed-path control %s the probes failed: %s", when, r.err)
@@ -352,64 +402,67 @@ func TestP07_NetworkNegative(t *testing.T) {
 	_, udpPort, _ := net.SplitHostPort(udpLAN)
 	tcpHost, tcpPort, _ := net.SplitHostPort(tcpLAN)
 	ifc := `"$(route -n get default | awk '/interface:/{print $2}')"`
-	probes := []struct {
-		name, script, reached, logKey string
-	}{
-		{"lan_tcp", fmt.Sprintf("nc -G 5 -w 5 %s %s </dev/null", tcpHost, tcpPort), m, tcpHost},
-		{"lan_udp", fmt.Sprintf("printf ping | nc -u -w 3 %s %s", tcpHost, udpPort), m, tcpHost},
-		{"host_loopback_via_gateway", fmt.Sprintf("nc -G 5 -w 5 10.0.2.2 %s </dev/null", loPort), m, "10.0.2.2"},
-		{"metadata", "curl -sS --max-time 5 -o /dev/null -w 'HTTP%{http_code}' http://169.254.169.254/", "HTTP[1-5]", "169.254.169.254"},
-		{"dns_direct_udp", "dig @1.1.1.1 example.com +time=3 +tries=1", "ANSWER SECTION", "1.1.1.1"},
-		{"dns_direct_tcp", "dig +tcp @1.1.1.1 example.com +time=3 +tries=1", "ANSWER SECTION", "1.1.1.1"},
-		{"https_direct_ip", "curl -sk --max-time 5 -o /dev/null -w 'HTTP%{http_code}' https://8.8.8.8/", "HTTP[1-5]", "8.8.8.8"},
-		{"ipv6_global", "curl -6 -sk --max-time 5 -o /dev/null -w 'HTTP%{http_code}' 'https://[2606:4700:4700::1111]/'", "HTTP[1-5]", "ipv6"},
-		{"ipv6_link_local", "ping6 -c 2 -i 1 ff02::1%" + ifc + " | grep 'bytes from' | grep -v \"$(ifconfig " + ifc + " | awk '/inet6 fe80/{print $2}' | cut -d% -f1)\"", "bytes from", "ipv6"},
-		{"denied_host", "curl -sS --max-time 10 -o /dev/null -w 'HTTP%{http_code}' 'https://" + cfg.deniedHost + "/'", "HTTP[23]", cfg.deniedHost},
+	curlRefused := `curl: \((6|7|28|35|52|56)\)|Failed to connect|timed out|Connection refused|CONNECT tunnel failed|reset by peer|Empty reply`
+	ncRefused := `Connection refused|Operation timed out|timed out|failed|No route to host`
+	probes := []probe{
+		{"lan_tcp", fmt.Sprintf("nc -v -G 5 -w 5 %s %s </dev/null", tcpHost, tcpPort), m, ncRefused, tcpHost, tcpPort, false},
+		{"lan_udp", fmt.Sprintf("printf ping | nc -u -w 3 %s %s; echo udp-done", tcpHost, udpPort), m, "udp-done", tcpHost, udpPort, true},
+		{"host_loopback_via_gateway", fmt.Sprintf("nc -v -G 5 -w 5 10.0.2.2 %s </dev/null", loPort), m, ncRefused, "10.0.2.2", loPort, false},
+		{"metadata", "curl -sS --max-time 5 -o /dev/null -w 'HTTP%{http_code}' http://169.254.169.254/", "HTTP[1-5]", curlRefused, "169.254.169.254", "80", false},
+		{"dns_direct_udp", "dig @1.1.1.1 example.com +time=3 +tries=1", "ANSWER SECTION", "connection timed out|no servers could be reached|communications error", "1.1.1.1", "53", true},
+		{"dns_direct_tcp", "dig +tcp @1.1.1.1 example.com +time=3 +tries=1", "ANSWER SECTION", "connection timed out|no servers could be reached|communications error|connection refused", "1.1.1.1", "53", false},
+		{"https_direct_ip", "curl -sk --max-time 5 -o /dev/null -w 'HTTP%{http_code}' https://8.8.8.8/", "HTTP[1-5]", curlRefused, "8.8.8.8", "443", false},
+		{"ipv6_global", "curl -6 -sSk --max-time 5 -o /dev/null -w 'HTTP%{http_code}' 'https://[2606:4700:4700::1111]/'", "HTTP[1-5]", curlRefused + `|Could not resolve|Network is unreachable|No route`, "2606:4700:4700::1111", "443", false},
+		{"ipv6_link_local", "own=$(ifconfig " + ifc + " | awk '/inet6 fe80/{print $2}' | cut -d% -f1); ping6 -c 2 -i 1 ff02::1%" + ifc + " | grep 'bytes from' | grep -v \"$own\"; echo ll-done", "bytes from", "ll-done", "ff02::1", "", false},
+		{"denied_host", "curl -sS --max-time 10 -o /dev/null -w 'HTTP%{http_code}' 'https://" + cfg.deniedHost + "/'", "HTTP[23]", curlRefused + `|HTTP403`, cfg.deniedHost, "", false},
 	}
 	for _, p := range probes {
 		t.Run(p.name, func(t *testing.T) {
-			r := guest(t, id, p.script, time.Minute)
-			if regexp.MustCompile(p.reached).MatchString(r.out) {
+			r := guest(t, id, "out=$( ("+p.script+") 2>&1); rc=$?; printf 'PROBE_RC=%d\\n%s\\n' $rc \"$out\"", time.Minute)
+			mm := probeRC.FindStringSubmatch(r.out)
+			if r.code != 0 || mm == nil {
+				t.Fatalf("the exec failed (exit %d), so the probe proves nothing: %s", r.code, strings.TrimSpace(r.err))
+			}
+			keep(t, "probe.txt", []byte(r.out))
+			if regexp.MustCompile(p.reached).MatchString(probeRC.ReplaceAllString(r.out, "")) {
 				t.Fatalf("probe reached its target: %q", strings.TrimSpace(r.out))
+			}
+			if !regexp.MustCompile(p.refused).MatchString(r.out) {
+				t.Fatalf("probe exit %s with no refusal or timeout in its output: %q", mm[1], strings.TrimSpace(r.out))
+			}
+			if p.udp {
+				t.Log("EVIDENCE: guest-side only (the relay logs no UDP)")
 			}
 		})
 	}
 	allowed(t, "after")
-	logs := runLogs(t, id)
-	keep(t, "relay-and-proxy.log", []byte(logs))
-	for _, p := range probes {
-		if !strings.Contains(strings.ToLower(logs), strings.ToLower(p.logKey)) {
-			t.Errorf("probe %s failed with no relay or proxy line naming %s: unexplained, which fails P7 until explained", p.name, p.logKey)
+	t.Run("logged", func(t *testing.T) {
+		logs := runLogs(t, id)
+		keep(t, "relay-and-proxy.log", []byte(logs))
+		for _, p := range probes {
+			if !p.udp && !logExplains(logs, p) {
+				t.Errorf("probe %s: no relay or proxy line names %s %s: unexplained, which fails P7 until explained", p.name, p.logIP, p.logPort)
+			}
 		}
-	}
+	})
 	t.Run("one_filehandle_nic", func(t *testing.T) {
-		var d struct {
-			NICs []struct {
-				Type string `json:"type"`
-			} `json:"nics"`
-		}
-		out := mustOK(t, sh(t, time.Minute, cfg.helper, assumedDescribe(runDir(t, id))...), "wardyn-macvm describe")
-		keep(t, "describe.json", []byte(out))
-		if err := json.Unmarshal([]byte(out), &d); err != nil {
-			t.Fatalf("describe JSON: %v", err)
-		}
-		if len(d.NICs) != 1 || !strings.EqualFold(d.NICs[0].Type, "filehandle") {
-			t.Fatalf("NICs %+v, want exactly one FileHandle", d.NICs)
-		}
+		notRun(t, "neither ctl.sock status nor helper.log carries the NIC type; the helper's config-builder unit test pins one FileHandle NIC")
 	})
 }
 
-// TestP08_Throughput: the same object from an allowed host in a VM run and in a container run.
+// TestP08_Throughput: the same object from an allowed host in a VM run and in a container run, both
+// on the window's runner.
 func TestP08_Throughput(t *testing.T) {
 	live(t)
 	need(t, cfg.bigURL, "WARDYN_MACVM_1G_URL")
 	speed := func(t *testing.T, kind string) float64 {
-		id := start(t, map[string]any{"machine_kind": kind})
-		out := strings.TrimSpace(mustGuest(t, id, "curl -sS -o /dev/null -w '%{speed_download}' --max-time 1200 '"+cfg.bigURL+"'"))
+		id := start(t, spec{intent: map[string]any{"machine_kind": kind}})
+		out := mustGuest(t, id, "curl -sS -o /dev/null -w '%{http_code} %{speed_download}' --max-time 1200 '"+cfg.bigURL+"'")
 		end(t, id)
-		bps, err := strconv.ParseFloat(out, 64)
-		if err != nil {
-			t.Fatalf("speed %q: %v", out, err)
+		var code int
+		var bps float64
+		if _, err := fmt.Sscan(out, &code, &bps); err != nil || code/100 != 2 {
+			t.Fatalf("download %q: %v", out, err)
 		}
 		return bps * 8 / 1e6
 	}
