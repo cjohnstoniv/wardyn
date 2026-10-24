@@ -132,7 +132,7 @@ func TestVMDesktopRecording_YieldsACastWithThePauseGap(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	v := openVMDesktop(t, ctx, h, dr)
-	if !h.srv.PauseDesktopRecording(ctx, h.run, desktopPauseSignin) {
+	if !h.srv.PauseDesktopRecording(ctx, h.run, desktopPauseSignin, desktopPauseSignin) {
 		t.Fatal("pause refused")
 	}
 	send <- vmFBU // sent while paused: the viewer sees it, the recording does not
