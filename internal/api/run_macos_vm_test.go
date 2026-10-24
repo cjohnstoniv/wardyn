@@ -4,6 +4,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -83,6 +84,7 @@ func TestPlacementCapability_MacOSVM(t *testing.T) {
 		mounts  int
 		want    string // "" means the run is placed
 		wantNot string
+		reason  placement.Reason // the refusal's code; placement_capability when unset
 	}{
 		{name: "ready managed Mac", mc: mac(nil), ctx: member},
 		{name: "the exact minimum size", mc: mac(nil), ctx: member, ask: macOSVMAsk{CPUMillis: 4000, MemoryMiB: 8192}},
@@ -94,9 +96,9 @@ func TestPlacementCapability_MacOSVM(t *testing.T) {
 		{name: "not marked managed, security operator", mc: mac(nil), row: func(r *types.Runner) { r.TrustClass = types.RunnerTrustPersonal }, ctx: operator,
 			want: "managed_device`."},
 		{name: "posture from the OS probe", mc: mac(nil), row: func(r *types.Runner) { r.Posture.Evidence = types.PostureEvidenceOSProbe }, ctx: member,
-			want: "no MDM posture file"},
+			want: "no MDM posture file", reason: placement.ReasonRunnerPostureUnmet},
 		{name: "posture not MDM managed", mc: mac(nil), row: func(r *types.Runner) { r.Posture.MDMManaged = false }, ctx: member,
-			want: "no MDM posture file"},
+			want: "no MDM posture file", reason: placement.ReasonRunnerPostureUnmet},
 		{name: "base preparing", mc: mac(func(m *runnerwire.MacVMCaps) {
 			m.Base = runnerwire.MacVMBase{State: runnerwire.MacVMBasePreparing, Progress: 40}
 		}), ctx: member, want: "still preparing macOS (40%)"},
@@ -123,9 +125,10 @@ func TestPlacementCapability_MacOSVM(t *testing.T) {
 				}
 				return
 			}
-			if ref == nil || ref.status != http.StatusUnprocessableEntity || ref.body.Reason != string(placement.ReasonPlacementCapability) ||
+			reason := cmp.Or(tc.reason, placement.ReasonPlacementCapability)
+			if ref == nil || ref.status != http.StatusUnprocessableEntity || ref.body.Reason != string(reason) ||
 				!strings.Contains(ref.body.Error, tc.want) || (tc.wantNot != "" && strings.Contains(ref.body.Error, tc.wantNot)) {
-				t.Fatalf("refusal = %+v, want 422 placement_capability naming %q", ref, tc.want)
+				t.Fatalf("refusal = %+v, want 422 %s naming %q", ref, reason, tc.want)
 			}
 		})
 	}
@@ -266,6 +269,14 @@ func TestMacOSHostGate(t *testing.T) {
 		}
 		if _, ref := macOSHostGate(rn, false); ref == nil || strings.Contains(ref.Detail, "wardyn runner trust") || !strings.Contains(ref.Detail, "Ask a security operator") {
 			t.Errorf("trust %q, member: refusal = %+v", class, ref)
+		}
+	}
+	// A missing posture is runner_posture_unmet, not placement_capability: the console keys its words by code.
+	for _, posture := range []types.RunnerPosture{{}, {MDMManaged: true, Evidence: types.PostureEvidenceOSProbe}} {
+		rn := managed
+		rn.Posture = posture
+		if _, ref := macOSHostGate(rn, false); ref == nil || ref.Reason != placement.ReasonRunnerPostureUnmet || !strings.Contains(ref.Detail, "no MDM posture file") {
+			t.Errorf("posture %+v: refusal = %+v", posture, ref)
 		}
 	}
 	// Trust is checked first: a personal runner with no posture is told about trust.

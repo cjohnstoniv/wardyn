@@ -223,7 +223,11 @@ type VMCaps struct {
 // MacVMCaps is what a Mac runner's macOS VM sandboxes can be given right now. The org reads it through
 // one function (macOSVMOffer), so no surface keeps a readiness story of its own.
 type MacVMCaps struct {
-	// Max is how many more macOS VMs the Mac's host ledger can admit now (at most 2, Apple's licence).
+	// Max is this runner's allowance: its own live macOS VM runs plus the host's free headroom, the
+	// smallest of the licence cap (2) left, the VMs at the per-run limit that fit the memory budget and
+	// those that fit the disk reservation. Other logins' VMs, prepare and a leaked slot are already
+	// out of the headroom. The org compares it with the runner's own live count (placement refuses at
+	// live >= Max); the host ledger, not Max, is the authority at admission.
 	Max int `json:"max"`
 	// MinCPUs and MinMemoryMiB are the base image's minimum guest size; 0 when it has not said.
 	MinCPUs      int `json:"min_cpus,omitempty"`

@@ -447,12 +447,14 @@ func macOSHostGate(rn types.Runner, operator bool) (evidence []string, refusal *
 		return nil, macOSRefusal("machine_kind", detail)
 	}
 	if !rn.Posture.MDMManaged || rn.Posture.Evidence != types.PostureEvidenceMDMFile {
-		return nil, macOSRefusal("machine_kind", "This Mac has no MDM posture file saying it is managed (`/Library/Application Support/Wardyn/posture.json`).")
+		// runner_posture_unmet, not placement_capability: the console keys its copy by reason code.
+		return nil, &placement.Refusal{Reason: placement.ReasonRunnerPostureUnmet, Field: "machine_kind",
+			Detail: "This Mac has no MDM posture file saying it is managed (`/Library/Application Support/Wardyn/posture.json`)."}
 	}
 	return []string{"managed_device (set by an administrator)", "MDM posture file", "no MDM device-certificate check yet"}, nil
 }
 
-// macOSVMRefusal is the placement_capability refusal of a macOS VM run on runner id, or nil when the
+// macOSVMRefusal is the refusal (placement_capability, or runner_posture_unmet from the gate) of a macOS VM run on runner id, or nil when the
 // Mac offers it and the run's harnesses and size fit what the Mac's base can give.
 func (s *Server) macOSVMRefusal(ctx context.Context, id uuid.UUID, pc placementCaps, ask macOSVMAsk) (*placement.Refusal, error) {
 	var caps runnerwire.Caps
