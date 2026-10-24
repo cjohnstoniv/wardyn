@@ -436,14 +436,12 @@ func (s *Server) deleteMembershipInScope(w http.ResponseWriter, r *http.Request,
 		if !keeps {
 			return errOutsideScope
 		}
-		if row.Legacy {
-			units, err := store.ListGovernanceUnitsQ(ctx, q)
-			if err != nil {
-				return err
-			}
-			if len(legacyActivations(row, all, units)) > 0 {
-				return errHoldForApproval
-			}
+		activates, err := deleteActivationsQ(ctx, q, row)
+		if err != nil {
+			return err
+		}
+		if len(activates) > 0 {
+			return errHoldForApproval
 		}
 		removed = row
 		return store.DeleteGovernanceMembershipQ(ctx, q, id)

@@ -452,6 +452,10 @@ func (s *Server) holdMembershipMove(w http.ResponseWriter, r *http.Request, p me
 	var moved types.GovernanceMembership
 	var shift legacyShift
 	err := s.cfg.Store.DryRunGovernance(ctx, func(q store.Querier) (err error) {
+		// The graph lock before the reads, so the state and the shift are read as the move would apply.
+		if err = store.LockGovernanceGraph(ctx, q); err != nil {
+			return err
+		}
 		if st, err = readMembershipTreeState(ctx, q, p, false); err != nil {
 			return err
 		}
@@ -505,7 +509,7 @@ func (s *Server) holdMembershipPromote(w http.ResponseWriter, r *http.Request, i
 
 // applyMembershipTreeChange applies a held move or promotion inside the decision transaction, which
 // already holds the graph and key locks. A move whose legacy shift is no longer the one it was held
-// with is stale (moveShiftCurrentQ).
+// with is stale (heldShiftStale).
 func applyMembershipTreeChange(ctx context.Context, q store.Querier, ch types.GovernanceChange) (govApplied, error) {
 	var p membershipTreePayload
 	if err := json.Unmarshal(ch.Payload, &p); err != nil {
@@ -525,8 +529,14 @@ func applyMembershipTreeChange(ctx context.Context, q store.Querier, ch types.Go
 		}
 		return govApplied{action: "governance.membership.promote", target: promoted.ID.String(), data: membershipWriteAuditData(promoted)}, nil
 	}
-	if err := moveShiftCurrentQ(ctx, q, ch, st.row, p.UnitID); err != nil {
-		return govApplied{}, err
+	if st.row.Legacy {
+		shift, err := moveShiftQ(ctx, q, st.row, p.UnitID)
+		if err == nil {
+			err = heldShiftStale(ch, shift)
+		}
+		if err != nil {
+			return govApplied{}, err
+		}
 	}
 	from, moved, err := moveMembershipQ(ctx, q, p.ID, p.UnitID)
 	if err != nil {
@@ -571,39 +581,85 @@ type legacyShift struct {
 	activates, vacates []unitActivation
 }
 
-// legacyMoveShift is what a move of legacy row d to unit to may do to whose legacy row wins (H3). A
-// move changes only d's unit name in the store's precedence, so whose legacy row wins changes only for
-// a person who matches d and another legacy row l whose order with d that name decides
-// (nameOrdersPair). Such a person matching just the two is the one whose selection the move can
-// change: for each l, their winner before the move and after it (legacyFirst). A winner that changes
-// to a row in another unit activates that unit: l's when it overtakes d, unit to when d overtakes l,
-// which also vacates l's unit. A person who goes from d's unit to unit to is the move's own change,
-// which pathNarrowsQ proves.
-func legacyMoveShift(d types.GovernanceMembership, to uuid.UUID, all []types.GovernanceMembership, units []types.GovernanceUnit) legacyShift {
-	var shift legacyShift
-	if !d.Legacy {
-		return shift
+// moveShiftQ is what moving legacy row row to unit to does to whose legacy row wins (legacyShiftQ),
+// for each person row and another legacy row may both place whose order the move can change
+// (nameOrdersPair); nothing for a row that is not legacy. The caller holds the graph lock.
+func moveShiftQ(ctx context.Context, q store.Querier, row types.GovernanceMembership, to uuid.UUID) (legacyShift, error) {
+	if !row.Legacy {
+		return legacyShift{}, nil
 	}
-	byID := unitsByID(units)
-	add := func(list []unitActivation, id uuid.UUID) []unitActivation {
-		if slices.ContainsFunc(list, func(a unitActivation) bool { return a.UnitID == id }) {
+	return legacyShiftQ(ctx, q, row, to, nameOrdersPair, func() error {
+		_, _, err := moveMembershipQ(ctx, q, row.ID, to)
+		return err
+	})
+}
+
+// deleteActivationsQ is the units deleting legacy row row may make someone's context (legacyShiftQ),
+// for each person row and another legacy row may both place; none for a row that is not legacy. The
+// caller holds the graph lock.
+func deleteActivationsQ(ctx context.Context, q store.Querier, row types.GovernanceMembership) ([]unitActivation, error) {
+	if !row.Legacy {
+		return nil, nil
+	}
+	shift, err := legacyShiftQ(ctx, q, row, uuid.Nil, nil, func() error { return store.DeleteGovernanceMembershipQ(ctx, q, row.ID) })
+	return shift.activates, err
+}
+
+// legacyShiftQ is what change, a move of legacy row d to unit to or its delete (to nil), does to whose
+// legacy row wins (H3), in the resolver's own order (legacyWinnersQ), never a copy of it: names sort
+// under the database's collation. For each person d and another legacy row l may both place (pair,
+// nil for every l), with the claims that place them (claimsPlacing), it reads the winner before the
+// change and after it, the change applied in a savepoint and rolled back. A winner in another unit
+// activates that unit, and a winner d overtakes vacates its unit. A person who goes from d's unit to
+// unit to is the move's own change, which pathNarrowsQ proves.
+func legacyShiftQ(ctx context.Context, q store.Querier, d types.GovernanceMembership, to uuid.UUID,
+	pair func(d, l types.GovernanceMembership) bool, change func() error) (legacyShift, error) {
+	all, err := store.ListGovernanceMembershipsQ(ctx, q)
+	if err != nil {
+		return legacyShift{}, err
+	}
+	people := legacyPeople(d, all, pair)
+	if len(people) == 0 {
+		return legacyShift{}, nil
+	}
+	was, err := legacyWinnersQ(ctx, q, people)
+	if err != nil {
+		return legacyShift{}, err
+	}
+	if _, err := q.Exec(ctx, `SAVEPOINT legacy_shift`); err != nil {
+		return legacyShift{}, fmt.Errorf("api: savepoint for a legacy shift: %w", err)
+	}
+	var now []store.MembershipMatch
+	if err = change(); err == nil {
+		now, err = legacyWinnersQ(ctx, q, people)
+	}
+	if _, rerr := q.Exec(ctx, `ROLLBACK TO SAVEPOINT legacy_shift`); err == nil && rerr != nil {
+		err = fmt.Errorf("api: roll back a legacy shift: %w", rerr)
+	}
+	if err != nil {
+		return legacyShift{}, err
+	}
+	return shiftBetween(d, to, was, now), nil
+}
+
+// shiftBetween is legacyShiftQ's answer from each person's winner before the change (was) and after
+// it (now).
+func shiftBetween(d types.GovernanceMembership, to uuid.UUID, was, now []store.MembershipMatch) legacyShift {
+	var shift legacyShift
+	add := func(list []unitActivation, u types.GovernanceUnit) []unitActivation {
+		if slices.ContainsFunc(list, func(a unitActivation) bool { return a.UnitID == u.ID }) {
 			return list
 		}
-		return append(list, unitActivation{UnitID: id, UnitName: byID[id].Name})
+		return append(list, unitActivation{UnitID: u.ID, UnitName: u.Name})
 	}
-	moved := d
-	moved.UnitID = to
-	for _, l := range all {
-		if !l.Legacy || l.ID == d.ID || !nameOrdersPair(d, l) {
+	for i := range was {
+		b, a := was[i], now[i]
+		if a.Membership.ID == uuid.Nil || b.Unit.ID == a.Unit.ID || (b.Unit.ID == d.UnitID && a.Unit.ID == to) {
 			continue
 		}
-		was, now := legacyFirst(d, l, byID), legacyFirst(moved, l, byID)
-		if was.UnitID == now.UnitID || (was.UnitID == d.UnitID && now.UnitID == to) {
-			continue
-		}
-		shift.activates = add(shift.activates, now.UnitID)
-		if was.ID == l.ID { // d overtakes l, which sat in a unit other than d's (else the move's own change)
-			shift.vacates = add(shift.vacates, l.UnitID)
+		shift.activates = add(shift.activates, a.Unit)
+		if a.Membership.ID == d.ID {
+			shift.vacates = add(shift.vacates, b.Unit)
 		}
 	}
 	for _, list := range [][]unitActivation{shift.activates, shift.vacates} {
@@ -612,64 +668,91 @@ func legacyMoveShift(d types.GovernanceMembership, to uuid.UUID, all []types.Gov
 	return shift
 }
 
+// legacyClaims is a person's claims as store.ListMembershipsForQ matches them.
+type legacyClaims struct {
+	users, groups []string
+	userType      string
+}
+
+// claimsPlacing is the claims of the person legacy rows d and l both place and no other subject does,
+// d's user subject first: of a sub and an email only the person's claims order the two, and with d's
+// first, d ranks before l. ok is false when no one person matches both (two user types).
+func claimsPlacing(d, l types.GovernanceMembership) (c legacyClaims, ok bool) {
+	for _, m := range []types.GovernanceMembership{d, l} {
+		switch m.SubjectType {
+		case types.CapabilitySubjectUser:
+			if !slices.Contains(c.users, m.Subject) {
+				c.users = append(c.users, m.Subject)
+			}
+		case types.CapabilitySubjectGroup:
+			if !slices.Contains(c.groups, m.Subject) {
+				c.groups = append(c.groups, m.Subject)
+			}
+		case types.CapabilitySubjectUserType:
+			if c.userType != "" && c.userType != m.Subject {
+				return c, false
+			}
+			c.userType = m.Subject
+		}
+	}
+	slices.Sort(c.groups)
+	return c, true
+}
+
+// legacyPeople is the claims of each person legacy row d and another legacy row of all both place
+// (pair, nil for every row), once each.
+func legacyPeople(d types.GovernanceMembership, all []types.GovernanceMembership, pair func(d, l types.GovernanceMembership) bool) []legacyClaims {
+	var out []legacyClaims
+	seen := map[string]bool{}
+	for _, l := range all {
+		if !l.Legacy || l.ID == d.ID || (pair != nil && !pair(d, l)) {
+			continue
+		}
+		c, ok := claimsPlacing(d, l)
+		if key := fmt.Sprintf("%q %q %q", c.users, c.groups, c.userType); ok && !seen[key] {
+			seen[key] = true
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// legacyWinnersQ is each person's winning legacy row on q as the resolver picks it: the legacy row
+// activeMemberships keeps of store.ListMembershipsForQ's rows, in its ORDER BY. The zero match for a
+// person no legacy row places.
+func legacyWinnersQ(ctx context.Context, q store.Querier, people []legacyClaims) ([]store.MembershipMatch, error) {
+	out := make([]store.MembershipMatch, len(people))
+	for i, c := range people {
+		ms, err := store.ListMembershipsForQ(ctx, q, c.users, c.groups, c.userType)
+		if err != nil {
+			return nil, err
+		}
+		for _, m := range activeMemberships(ms) {
+			if m.Membership.Legacy {
+				out[i] = m
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
 // nameOrdersPair reports whether one person may match legacy rows a and b with their order decided at
-// or after the unit name: rows of one tier, and two group rows or two rows naming one subject. A sub
-// and an email are ordered by the person's claims and two user types match no one person.
+// or after the unit name, the one key of the order a move changes: rows of one tier, and two group rows
+// or two rows naming one subject. A sub and an email are ordered by the person's claims and two user
+// types match no one person.
 func nameOrdersPair(a, b types.GovernanceMembership) bool {
 	return a.SubjectType == b.SubjectType && (a.SubjectType == types.CapabilitySubjectGroup || a.Subject == b.Subject)
 }
 
-// legacyFirst is the one of legacy rows a and b that wins for a person matching both, when
-// nameOrdersPair holds: the store's precedence from there on, priority DESC, unit name ASC, subject ASC.
-func legacyFirst(a, b types.GovernanceMembership, byID map[uuid.UUID]types.GovernanceUnit) types.GovernanceMembership {
-	if a.Priority != b.Priority {
-		if a.Priority > b.Priority {
-			return a
-		}
-		return b
-	}
-	if an, bn := byID[a.UnitID].Name, byID[b.UnitID].Name; an != bn {
-		if an < bn {
-			return a
-		}
-		return b
-	}
-	if a.Subject <= b.Subject {
-		return a
-	}
-	return b
-}
-
-// moveShiftQ is legacyMoveShift for row moving to unit to, over the rows and units read on q; nothing
-// for a row that is not legacy.
-func moveShiftQ(ctx context.Context, q store.Querier, row types.GovernanceMembership, to uuid.UUID) (legacyShift, error) {
-	if !row.Legacy {
-		return legacyShift{}, nil
-	}
-	all, err := store.ListGovernanceMembershipsQ(ctx, q)
-	if err != nil {
-		return legacyShift{}, err
-	}
-	units, err := store.ListGovernanceUnitsQ(ctx, q)
-	if err != nil {
-		return legacyShift{}, err
-	}
-	return legacyMoveShift(row, to, all, units), nil
-}
-
-// moveShiftCurrentQ answers stale for held move ch of row to unit to when the units the move would
-// activate or vacate, read on q under the decision's graph lock, are not the ones the change was held
-// with (H3). Its approver was authorised over the stored units (unitChangeScope), and the change's base
-// covers only the row and the two chains, so an edit of another legacy row since must not let it
-// apply over different ones.
-func moveShiftCurrentQ(ctx context.Context, q store.Querier, ch types.GovernanceChange, row types.GovernanceMembership, to uuid.UUID) error {
+// heldShiftStale answers stale when now, what held change ch's delete or move of a legacy row would
+// do as read on the decision's transaction under its graph lock, is not what ch was held with (H3).
+// Its approver was authorised over the stored units (unitChangeScope), and its base covers only the
+// row and its unit chains, so an edit of another legacy row since must not let it apply over others.
+func heldShiftStale(ch types.GovernanceChange, now legacyShift) error {
 	var held governanceDiffBody
 	if err := json.Unmarshal(ch.Diff, &held); err != nil {
 		return fmt.Errorf("governance change %s: diff: %w", ch.ID, err)
-	}
-	now, err := moveShiftQ(ctx, q, row, to)
-	if err != nil {
-		return err
 	}
 	if !sameUnits(now.activates, held.Activates) || !sameUnits(now.vacates, held.Vacates) {
 		return store.ErrGovernanceChangeStale

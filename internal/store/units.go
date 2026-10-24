@@ -545,18 +545,24 @@ type MembershipMatch struct {
 //
 // userType is the caller's one type id; "" matches no row.
 func (s PG) ListMembershipsFor(ctx context.Context, userSubjects, groups []string, userType string) ([]MembershipMatch, error) {
+	return ListMembershipsForQ(ctx, s.Pool, userSubjects, groups, userType)
+}
+
+// ListMembershipsForQ is ListMembershipsFor on q, so a transaction reads the precedence over its own
+// writes.
+func ListMembershipsForQ(ctx context.Context, q Querier, userSubjects, groups []string, userType string) ([]MembershipMatch, error) {
 	if userSubjects == nil {
 		userSubjects = []string{}
 	}
 	if groups == nil {
 		groups = []string{}
 	}
-	q := `SELECT m.id, m.subject_type, m.subject, m.unit_id, m.priority, m.created_at, m.created_by, m.home, m.legacy, ` + governanceUnitColsP + `
+	stmt := `SELECT m.id, m.subject_type, m.subject, m.unit_id, m.priority, m.created_at, m.created_by, m.home, m.legacy, ` + governanceUnitColsP + `
 		FROM governance_memberships m
 		JOIN governance_units p ON p.id = m.unit_id
 		WHERE ` + subjectMatch("m") + `
 		ORDER BY ` + subjectPrecedence("m", "p")
-	rows, err := s.Pool.Query(ctx, q, userSubjects, groups, userType)
+	rows, err := q.Query(ctx, stmt, userSubjects, groups, userType)
 	if err != nil {
 		return nil, fmt.Errorf("store: list governance memberships for a caller: %w", err)
 	}

@@ -142,14 +142,14 @@ func (s *Server) treeDryRun(w http.ResponseWriter, r *http.Request, target strin
 				if err := s.requireUnitScopeQ(r.Context(), q, false, row.UnitID, req.UnitID); err != nil {
 					return err
 				}
+				if shift, err = moveShiftQ(r.Context(), q, row, req.UnitID); err != nil {
+					return err
+				}
 			}
 			_, _, err := moveMembershipQ(r.Context(), q, req.ID, req.UnitID)
 			return err
 		}
-		touched = func(before, _ treeSnapshot) (units []uuid.UUID) {
-			units, shift = moveTouched(before, req.ID, req.UnitID)
-			return units
-		}
+		touched = func(before, _ treeSnapshot) []uuid.UUID { return moveTouched(before, req.ID, req.UnitID, shift) }
 	default:
 		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody,
 			fmt.Sprintf("target: %q is not a dry-run target — use boundary, unit or membership_move", target))
@@ -184,20 +184,18 @@ func (s *Server) treeDryRun(w http.ResponseWriter, r *http.Request, target strin
 }
 
 // moveTouched is the units an approver of membership id's move to unit to would have to govern
-// (unitChangeScope's rule: its unit, unit to and the units a legacy row's move may activate or vacate)
-// and that shift, from the state before the move; none for a membership that is not there.
-func moveTouched(before treeSnapshot, id, to uuid.UUID) ([]uuid.UUID, legacyShift) {
+// (unitChangeScope's rule): its unit, unit to and the units shift, the move's legacy shift, activates
+// or vacates; none for a membership that is not there.
+func moveTouched(before treeSnapshot, id, to uuid.UUID, shift legacyShift) []uuid.UUID {
 	i := slices.IndexFunc(before.memberships, func(m types.GovernanceMembership) bool { return m.ID == id })
 	if i < 0 {
-		return nil, legacyShift{}
+		return nil
 	}
-	row := before.memberships[i]
-	shift := legacyMoveShift(row, to, before.memberships, before.units)
-	units := []uuid.UUID{row.UnitID, to}
+	units := []uuid.UUID{before.memberships[i].UnitID, to}
 	for _, a := range slices.Concat(shift.activates, shift.vacates) {
 		units = append(units, a.UnitID)
 	}
-	return units, shift
+	return units
 }
 
 // strictJSON decodes raw into dst as decodeStrict decodes a body, returning the message it would.

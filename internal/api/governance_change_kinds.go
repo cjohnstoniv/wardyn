@@ -638,15 +638,10 @@ func (s *Server) holdMembershipDelete(w http.ResponseWriter, r *http.Request, id
 		if err != nil {
 			return err
 		}
-		if st, err = readMembershipState(ctx, q, row.UnitID, string(row.SubjectType), row.Subject, false); err != nil || !row.Legacy {
+		if st, err = readMembershipState(ctx, q, row.UnitID, string(row.SubjectType), row.Subject, false); err != nil {
 			return err
 		}
-		all, err := store.ListGovernanceMembershipsQ(ctx, q)
-		if err != nil {
-			return err
-		}
-		units, err := store.ListGovernanceUnitsQ(ctx, q)
-		activates = legacyActivations(row, all, units)
+		activates, err = deleteActivationsQ(ctx, q, row)
 		return err
 	})
 	if notFoundIf(w, err, "governance assignment", reasonGovernanceMembershipNotFound) {
@@ -698,6 +693,15 @@ func applyMembershipChange(s *Server, r *http.Request, q store.Querier, ch types
 		}
 		if st.hash() != ch.BaseHash {
 			return govApplied{}, store.ErrGovernanceChangeStale
+		}
+		if st.current != nil && st.current.Legacy {
+			activates, err := deleteActivationsQ(ctx, q, *st.current)
+			if err == nil {
+				err = heldShiftStale(ch, legacyShift{activates: activates})
+			}
+			if err != nil {
+				return govApplied{}, err
+			}
 		}
 		if err := store.DeleteGovernanceMembershipQ(ctx, q, p.ID); err != nil {
 			if errors.Is(err, store.ErrNotFound) {
