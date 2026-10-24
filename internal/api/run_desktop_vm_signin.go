@@ -322,10 +322,12 @@ func (s *Server) desktopRelock(base context.Context, run types.AgentRun, st stor
 // an error. It sends under the run's lock, and the continue is cancelled if that lock is lost during it
 // (lockBound). With the lock lost before or during it, unlock releases the lost hold, the lock is taken
 // again and the row read again: newer is the row of a pause that has marked it since, which owns the
-// stopped agent and whose resume continues it. ok is false when the lock could not be taken again:
-// nothing more is sent.
+// stopped agent and whose resume continues it. A continue sent before the loss was seen may land after
+// that pause's stop, so the agent is stopped again, under the lock that pause's resume needs. ok is
+// false when the lock could not be taken again: nothing more is sent.
 func (s *Server) continueStoppedAgent(base, lockCtx, bg context.Context, p runner.AgentPauser, run types.AgentRun,
 	st store.DesktopVMSignInStore, unlock func()) (newer *store.DesktopVMSignIns, ok bool) {
+	sent := false
 	if s.lockHeld(bg) == nil {
 		send, stop := lockBound(lockCtx, bg)
 		_ = p.ResumeAgent(send, run.SandboxRef)
@@ -333,6 +335,7 @@ func (s *Server) continueStoppedAgent(base, lockCtx, bg context.Context, p runne
 		if s.lockHeld(bg) == nil {
 			return nil, true
 		}
+		sent = true
 	}
 	unlock()
 	lctx, cur, relocked, ok := s.desktopRelock(base, run, st)
@@ -341,6 +344,9 @@ func (s *Server) continueStoppedAgent(base, lockCtx, bg context.Context, p runne
 	}
 	defer relocked()
 	if cur.PausedAt != nil {
+		if sent {
+			_ = p.PauseAgent(lctx, run.SandboxRef) // stopping a stopped agent changes nothing
+		}
 		return &cur, true
 	}
 	_ = p.ResumeAgent(lctx, run.SandboxRef)

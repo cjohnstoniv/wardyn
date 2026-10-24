@@ -61,7 +61,8 @@
 - A process the agent moved out of its process group (`setsid`) is not stopped.
 - If `wardynd` crashes after the guest agent stopped the agent but before the pause was recorded, the agent stays stopped and the run page offers the pause again. Press it, which records the pause (the agent is already stopped), then "Resume the agent".
 - A stop that reaches the guest only after a failed pause has continued the agent leaves it stopped the same way, and is recovered the same way.
-- A failed pause continues the agent. If `wardynd` loses the run's lock meanwhile, it cancels that continue, but one the guest agent already received still lands. If another pause stopped the agent in between, the agent then runs while the run page says paused: press "Resume the agent", then pause again.
+- A failed pause continues the agent. If `wardynd` loses the run's lock meanwhile, it cancels that continue. Once it holds the lock again and finds another pause's mark, it stops the agent again, as a continue the guest agent already received may have landed.
+- A `wardynd` that exits, or cannot take the lock again, before then leaves such a continue in place: the agent runs while the run page says paused. Press "Resume the agent", then pause again.
 
 ### Host memory
 
