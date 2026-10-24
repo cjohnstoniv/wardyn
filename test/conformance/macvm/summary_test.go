@@ -560,32 +560,46 @@ type signalWriter chan struct{}
 
 func (s signalWriter) Write(b []byte) (int, error) { s <- struct{}{}; return len(b), nil }
 
-// TestAskDropsLateAnswers: one reader serves every prompt, a prompt that times out is NOT_RUN,
-// and a line typed after that is never taken as the next prompt's answer.
+// TestAskDropsLateAnswers: one reader serves every prompt, and a line typed before a prompt is
+// never taken as its answer.
 func TestAskDropsLateAnswers(t *testing.T) {
 	pr, pw := io.Pipe()
 	defer pw.Close()
-	lines := lineReader(pr)
 	w := signalWriter(make(chan struct{}, 4))
-	var first *testing.T
-	t.Run("timeout", func(t *testing.T) {
-		first = t
-		askFrom(t, w, lines, "q1", 20*time.Millisecond)
-		t.Error("askFrom returned with no answer")
-	})
-	if !first.Skipped() {
-		t.Fatal("a prompt with no answer was not NOT_RUN")
-	}
-	<-w
-	fmt.Fprintln(pw, "late")
-	for deadline := time.Now().Add(5 * time.Second); len(lines) == 0; time.Sleep(time.Millisecond) {
+	p := &prompts{w: w, lines: lineReader(pr)}
+	fmt.Fprintln(pw, "early")
+	for deadline := time.Now().Add(5 * time.Second); len(p.lines) == 0; time.Sleep(time.Millisecond) {
 		if time.Now().After(deadline) {
-			t.Fatal("the late line never reached the reader")
+			t.Fatal("the early line never reached the reader")
 		}
 	}
 	go func() { <-w; fmt.Fprintln(pw, "fresh") }()
-	if got := askFrom(t, w, lines, "q2", 5*time.Second); got != "fresh" {
-		t.Errorf("the next prompt took %q, want the answer typed after it (fresh)", got)
+	if got := p.ask(t, "q1", 5*time.Second); got != "fresh" {
+		t.Errorf("the prompt took %q, want the answer typed after it (fresh)", got)
+	}
+}
+
+// TestAskAfterTimeout: prompt 1 times out and its answer arrives once prompt 2 has rendered (or
+// would have); prompt 2 never takes it, and is NOT_RUN.
+func TestAskAfterTimeout(t *testing.T) {
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	w := signalWriter(make(chan struct{}, 4))
+	p := &prompts{w: w, lines: lineReader(pr)}
+	var first, second *testing.T
+	t.Run("q1", func(t *testing.T) { first = t; p.ask(t, "q1", 20*time.Millisecond) })
+	<-w // q1 rendered
+	go func() {
+		select {
+		case <-w: // q2 rendered
+		case <-time.After(200 * time.Millisecond):
+		}
+		fmt.Fprintln(pw, "late answer to q1")
+	}()
+	var got string
+	t.Run("q2", func(t *testing.T) { second = t; got = p.ask(t, "q2", 2*time.Second) })
+	if !first.Skipped() || !second.Skipped() || got != "" {
+		t.Errorf("q1 NOT_RUN %v, q2 NOT_RUN %v, q2 took %q: a late answer must never reach the next prompt", first.Skipped(), second.Skipped(), got)
 	}
 }
 

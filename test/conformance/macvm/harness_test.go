@@ -206,10 +206,17 @@ func need(t *testing.T, v, name string) {
 // left behind by a prompt that timed out.
 var tty struct {
 	sync.Mutex
-	once  sync.Once
-	w     io.Writer
-	lines chan string
-	err   error
+	once sync.Once
+	p    *prompts
+	err  error
+}
+
+// prompts is one prompt stream. Once a prompt times out, no answer can be bound to the prompt
+// after it (the person may still be typing the late one), so every later prompt is NOT_RUN.
+type prompts struct {
+	w        io.Writer
+	lines    chan string
+	timedOut string // the prompt that timed out, if one did
 }
 
 // lineReader sends each line read from r, trimmed, and closes the channel at EOF.
@@ -238,39 +245,43 @@ func ask(t *testing.T, q string) string {
 			tty.err = err
 			return
 		}
-		tty.w, tty.lines = f, lineReader(f)
+		tty.p = &prompts{w: f, lines: lineReader(f)}
 	})
 	if tty.err != nil {
 		notRun(t, "no terminal for the prompt %q: %v", q, tty.err)
 	}
-	return askFrom(t, tty.w, tty.lines, q, cfg.promptWait)
+	return tty.p.ask(t, q, cfg.promptWait)
 }
 
-// askFrom is ask over any prompt stream. A line typed after an earlier prompt timed out is
-// discarded, never taken as this prompt's answer.
-func askFrom(t *testing.T, w io.Writer, lines chan string, q string, wait time.Duration) string {
+// ask is one prompt on the stream. A line typed before the prompt is discarded, never taken as its
+// answer.
+func (p *prompts) ask(t *testing.T, q string, wait time.Duration) string {
 	t.Helper()
+	if p.timedOut != "" {
+		notRun(t, "no prompt is put after %q timed out: its late answer could be taken for %q", p.timedOut, q)
+	}
 	for drained := false; !drained; {
 		select {
-		case l, ok := <-lines:
+		case l, ok := <-p.lines:
 			if !ok {
 				notRun(t, "the terminal closed before the prompt %q", q)
 			}
-			t.Logf("PROMPT discarded a late answer %q", l)
+			t.Logf("PROMPT discarded a line typed before %q: %q", q, l)
 		default:
 			drained = true
 		}
 	}
-	fmt.Fprintf(w, "\n[%s] %s\n(answer within %s) > ", t.Name(), q, wait)
+	fmt.Fprintf(p.w, "\n[%s] %s\n(answer within %s) > ", t.Name(), q, wait)
 	select {
-	case a, ok := <-lines:
+	case a, ok := <-p.lines:
 		if !ok {
 			notRun(t, "the terminal closed before an answer to %q", q)
 		}
 		t.Logf("PROMPT %q -> %q", q, a)
 		return a
 	case <-time.After(wait):
-		notRun(t, "no answer within %s to %q", wait, q)
+		p.timedOut = q
+		notRun(t, "no answer within %s to %q; no further prompt is put this run", wait, q)
 		return ""
 	}
 }
