@@ -46,10 +46,12 @@ A unit admin's widening is always held for a second human, whatever `WARDYN_GOVE
 | adding a membership | — | always |
 | deleting a membership | the person keeps another membership in the unit admin's units | a legacy row that may make another unit someone's context |
 | moving a membership | the destination path narrows the source path, and the move activates or vacates no other legacy context | otherwise, for an approver who governs every unit involved |
+| renaming a unit | the rename changes no person's legacy context, and the unit ties in priority with no other group's unit | otherwise, for an approver who governs every unit it activates or vacates |
 | granting or revoking a unit admin | — | always |
 
 - A security admin's writes, grants included, follow `WARDYN_GOVERNANCE_SECOND_HUMAN` unchanged. A single-admin install can create unit admins.
 - A held change may be decided by a security admin, or by a unit admin who governs every unit it touches. For a grant that means strictly above the granted unit.
+- A held change is checked again when decided; if what let it in has changed since, it answers stale and changes nothing.
 - Nobody grants on their own unit, so a unit admin cannot mint a peer to approve their own widening.
 - The change read and the dry-run report list `approvers`: who could decide it, the proposer left out.
 

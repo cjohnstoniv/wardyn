@@ -37,11 +37,14 @@ func TestPG_DesktopVMSignIns(t *testing.T) {
 	if err != nil || !found || row.Store != "memory" || row.PausedBy != "alice" || row.PausedAt == nil || !row.PausedAt.Equal(at) {
 		t.Fatalf("paused row = %+v %v %v", row, found, err)
 	}
-	by, pausedAt, ok, err := st.ResumeDesktopVMAgent(ctx, run.ID)
+	if _, _, ok, err := st.ResumeDesktopVMAgent(ctx, run.ID, at.Add(time.Second)); err != nil || ok {
+		t.Fatalf("a resume of another pause = %v %v, want nothing cleared", ok, err)
+	}
+	by, pausedAt, ok, err := st.ResumeDesktopVMAgent(ctx, run.ID, at)
 	if err != nil || !ok || by != "alice" || !pausedAt.Equal(at) {
 		t.Fatalf("resume = %q %v %v %v, want the pause it cleared", by, pausedAt, ok, err)
 	}
-	if _, _, ok, _ := st.ResumeDesktopVMAgent(ctx, run.ID); ok {
+	if _, _, ok, _ := st.ResumeDesktopVMAgent(ctx, run.ID, at); ok {
 		t.Fatal("a second resume saw the pause again")
 	}
 	if row, _, _ := st.DesktopVMSignIns(ctx, run.ID); row.PausedAt != nil || row.PausedBy != "" {

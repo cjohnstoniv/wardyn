@@ -253,7 +253,7 @@ func (rl *Relay) handleTCP(r *tcp.ForwarderRequest) {
 		return
 	}
 	defer gc.Close()
-	fl, err := readFlight(gc)
+	fl, err := readFlight(gc, port)
 	var reason, detail string
 	switch {
 	case errors.Is(err, errSNIMissing):

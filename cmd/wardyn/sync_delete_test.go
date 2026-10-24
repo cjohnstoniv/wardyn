@@ -158,6 +158,40 @@ func TestSyncGateway_SandboxDeletesNeedPullDeletes(t *testing.T) {
 	}
 }
 
+// A laptop name the sandbox listing refuses (a backslash, a control
+// character) is skipped on both sides, so --pull-deletes never reads it as
+// deleted in the sandbox and never moves it to Trash.
+func TestSyncGateway_PullDeletesKeepNamesTheListingRefuses(t *testing.T) {
+	g := newSyncRig(t)
+	box := g.mkSandboxDir(syncRemote)
+	sy, _, root := g.syncer(syncRemote, true)
+	sy.Opts.PullDeletes, sy.Opts.MaxPullDeletes, sy.Opts.Trash = true, 5, t.TempDir()
+	names := []string{`back\slash.txt`, "tab\there.txt"}
+	for _, n := range names {
+		putSyncFile(t, filepath.Join(root, n), "mine", 0o644)
+	}
+	putSyncFile(t, filepath.Join(root, "keep.txt"), "k", 0o644)
+	for pass := 1; pass <= 2; pass++ {
+		if rep := mustPass(t, sy); len(rep.DeletedLocal) != 0 {
+			t.Fatalf("pass %d deleted %v on the laptop", pass, rep.DeletedLocal)
+		}
+	}
+	for _, n := range names {
+		if got := getSyncFile(t, filepath.Join(root, n)); got != "mine" {
+			t.Errorf("%q on the laptop = %q, want it untouched", n, got)
+		}
+		if _, err := os.Stat(filepath.Join(box, n)); err == nil {
+			t.Errorf("%q was pushed to the sandbox", n)
+		}
+	}
+	if got := getSyncFile(t, filepath.Join(box, "keep.txt")); got != "k" {
+		t.Errorf("keep.txt in the sandbox = %q", got)
+	}
+	if ents, _ := os.ReadDir(sy.Opts.Trash); len(ents) != 0 {
+		t.Errorf("Trash holds %d entries, want none", len(ents))
+	}
+}
+
 func TestSyncGateway_PullDeletesAreBoundedPerPass(t *testing.T) {
 	g := newSyncRig(t)
 	box := g.mkSandboxDir(syncRemote)

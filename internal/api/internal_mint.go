@@ -344,19 +344,18 @@ func mintWithheldUnread(w http.ResponseWriter, r *http.Request) func(liveGrant, 
 
 // sinkWithheldUnread is the injection door's: the sink's own audited refusal, a secret.read failure
 // row and 503 run_unreadable when the run could not be read (store_unavailable for its grants,
-// profile or the boundary), so no delivery is refused unaudited.
+// profile or the boundary), so no delivery is refused unaudited. The row's target is the sink's
+// own (injectionRead.auditTarget): the grant for a shared grant or one whose scope was not read.
 func (s *Server) sinkWithheldUnread(w http.ResponseWriter, r *http.Request, claims *identity.Claims, grantID uuid.UUID) func(liveGrant, error) {
 	return func(lg liveGrant, err error) {
 		reason := reasonSinkStoreUnavailable
 		if errors.Is(err, errRunUnread) {
 			reason = reasonRunUnreadable
 		}
-		target := grantID.String()
-		if rule, rerr := injectionRuleFromScope(lg.spec.Scope); rerr == nil && rule.SecretName != "" {
-			target = rule.SecretName
-		}
+		rule, rerr := injectionRuleFromScope(lg.spec.Scope)
+		read := injectionRead{shared: apiKeyScopeShared(lg.spec.Scope), unknown: rerr != nil || rule.SecretName == ""}
 		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-			"secret.read", target, "failure", mustJSON(map[string]any{"reason": reason, "grant_id": grantID})))
+			"secret.read", read.auditTarget(rule.SecretName, grantID), "failure", mustJSON(map[string]any{"reason": reason, "grant_id": grantID})))
 		writeErrorReason(w, http.StatusServiceUnavailable, reason, loggedMsg(r.Context(), withheldUnreadMsg, err))
 	}
 }

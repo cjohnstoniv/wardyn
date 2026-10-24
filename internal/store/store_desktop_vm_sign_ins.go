@@ -30,9 +30,10 @@ type DesktopVMSignInStore interface {
 	// PauseDesktopVMAgent marks the agent paused by who at at, on a 'memory' run not already paused;
 	// false when nothing changed.
 	PauseDesktopVMAgent(ctx context.Context, runID uuid.UUID, by string, at time.Time) (bool, error)
-	// ResumeDesktopVMAgent clears the mark and answers what it was; found is false when the agent
-	// was not marked paused, so only one resume of a pause sees it.
-	ResumeDesktopVMAgent(ctx context.Context, runID uuid.UUID) (by string, at time.Time, found bool, err error)
+	// ResumeDesktopVMAgent clears the mark of the pause at pausedAt and answers what it was; found is
+	// false when the agent was not marked paused at pausedAt, so only one resume of a pause sees it and
+	// none clears a newer pause's mark.
+	ResumeDesktopVMAgent(ctx context.Context, runID uuid.UUID, pausedAt time.Time) (by string, at time.Time, found bool, err error)
 }
 
 var _ DesktopVMSignInStore = PG{}
@@ -75,12 +76,12 @@ func (s PG) PauseDesktopVMAgent(ctx context.Context, runID uuid.UUID, by string,
 }
 
 // ResumeDesktopVMAgent — see DesktopVMSignInStore.
-func (s PG) ResumeDesktopVMAgent(ctx context.Context, runID uuid.UUID) (string, time.Time, bool, error) {
+func (s PG) ResumeDesktopVMAgent(ctx context.Context, runID uuid.UUID, pausedAt time.Time) (string, time.Time, bool, error) {
 	var by string
 	var at time.Time
 	err := s.Pool.QueryRow(ctx, `UPDATE desktop_vm_sign_ins d SET paused_by = NULL, paused_at = NULL
-		FROM desktop_vm_sign_ins old WHERE d.run_id = $1 AND old.run_id = d.run_id AND d.paused_at IS NOT NULL
-		RETURNING old.paused_by, old.paused_at`, runID).Scan(&by, &at)
+		FROM desktop_vm_sign_ins old WHERE d.run_id = $1 AND old.run_id = d.run_id AND d.paused_at = $2
+		RETURNING old.paused_by, old.paused_at`, runID, pausedAt).Scan(&by, &at)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", time.Time{}, false, nil
 	}

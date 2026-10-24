@@ -238,9 +238,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A Linux VM's desktop keeps sign-ins in the machine's memory, gone when it shuts down, and the run page says so (#2972).
   "Pause the agent to sign in" stops the agent's processes inside the guest while the desktop stays live; "Resume the
   agent" continues them, and each pause-to-resume is one `desktop.sign_in.pause` audit row. On a recorded desktop the
-  pause holds the screen recording on every replica within about 2 seconds, a desktop that connects after a `wardynd`
+  pause holds the screen recording on every replica within 2 seconds, a desktop that connects after a `wardynd`
   restart records nothing while the sign-in is open, and a desktop whose sign-in state cannot be read is refused rather
-  than recorded. The run page says plainly that
+  than recorded, or, already open, keeps no frames until it is read. The run page says plainly that
   the resumed agent can use those sign-ins and read saved files. An admin can set an agent's "Sign-ins in a desktop" to
   Not allowed: its desktops keep none, and the pause is refused at the server.
 - `GET /api/v1/runs/{id}/desktop/sign-ins` reads a VM desktop's sign-in store (`memory` or `none`) and whether its agent
@@ -276,6 +276,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   - Every renewal rotates the secret and re-checks revokes, sessions cuts, deactivation, the role stamp and the
     `api_token` feature. An old secret presented again ends the session. A revoke, Sign out everywhere, a console
     sign-out and a per-computer sign-out end it at once, with its tokens.
+  - A renewed token carries the role, groups and role-stamp age of the person's last console sign-in, so a renewal
+    never resets the `WARDYN_ROLE_STAMP_TTL` clock.
   - An admin's CLI acts as role `user`; `wardyn login --admin` gives a 1-hour admin token, never renewed.
   - Routes: `POST /api/v1/cli/sign-ins`, `POST /api/v1/cli/sign-ins/{id}/token`, `POST /api/v1/cli/sessions/{id}/refresh`,
     `GET /api/v1/me/cli-sign-ins/{id}` with `/approve` and `/deny`, `GET /api/v1/me/cli-sessions` and
@@ -382,8 +384,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `https://` with no path or credential and not a loopback address, and `local.models` (1 to 64 exact names, tag
   included, none with a `/` or a `:cloud` or `-cloud` tag) is the allowlist the request's `model` must be on. Other
   methods and paths are refused `403 egress_denied`, a model inventory is filtered to the allowlist, and
-  `local.max_context`, `local.max_output` and `local.keep_alive_seconds` cap a request (unset means 32768, 32768 and
-  1800 seconds). A run never pulls, pushes, creates, copies or deletes a model, and the prompt is never rewritten. The
+  `local.max_context`, `local.max_output` and `local.keep_alive_seconds` cap those request fields when a request
+  supplies them (unset caps mean 32768, 32768 and 1800 seconds); a request that omits one keeps the model server's own
+  default. A run never pulls, pushes, creates, copies or deletes a model, and the prompt is never rewritten. The
   proxy lifts its private-address guard for the registered host and port alone; every other lane refuses that host.
   With no provider of this kind, nothing changes. Move the proxy image pin with `wardynd`, image first, before adding
   one: an older proxy refuses the `local_models` key it writes.
@@ -491,6 +494,16 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   at most the pass's 2 minutes, and a cut pass stops the sandbox. After two cut passes in a row that save nothing, the
   sandbox is stopped, and the pass's record and its `run.folder.transfer` audit name how many changed files were not
   brought back. `wardyn sync` also saves what a cut pass finished, so its next pass starts after it.
+- `wardyn sync --pull-deletes` no longer moves a laptop file to the Trash because its name holds a backslash or a
+  control character. Such a laptop file is now refused, with a report row, as not a plain file name instead of pushed,
+  and never counts as deleted.
+- `wardyn runner upgrade` that rolls back to a 0.9 runner no longer fails putting it back: `--org-ca-file` is passed only
+  to a runner that has it. The rollback also puts the old runner's service files back as they were, so it keeps its
+  trusted CA file and image pin.
+- A run whose desktop is swapped to the sign-in image records that image on the run, not the one it asked for.
+- The Recording tab and the take over strip say "Recording off" for a run its policy, its organisation or its runner did
+  not record, instead of naming a level. A take over on a run whose runner declined still says it is recorded: the
+  console and SSH sessions it opens are.
 
 ## [0.9.8] — 2026-10-21
 

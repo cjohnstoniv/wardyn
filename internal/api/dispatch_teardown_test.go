@@ -81,6 +81,14 @@ func (s *dispatchTestStore) SetRunDiskMiB(_ context.Context, _ uuid.UUID, mib in
 	s.run.DiskMiB = mib
 	return nil
 }
+
+// SetRunImage records onto run, so GetRun shows the image dispatch persisted.
+func (s *dispatchTestStore) SetRunImage(_ context.Context, _ uuid.UUID, image string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.run.Image = image
+	return nil
+}
 func (s *dispatchTestStore) SetRunAgentExecID(context.Context, uuid.UUID, string) error {
 	return nil
 }

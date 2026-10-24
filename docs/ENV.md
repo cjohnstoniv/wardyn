@@ -1815,6 +1815,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The oldest an API token's or console session's role stamp may be (flag `-role-stamp-ttl`).
 - **Tokens:** a `wdn_` token whose `api_tokens.identity_stamped_at` (migration `0115`, set at mint and at every sign-in of its owner) is older is refused `401` `role_stamp_stale` with an `authz.denied` row.
 - Until its owner signs in again, which re-stamps it with their current role and groups.
+- A CLI renewal's new token keeps its session's stamp, so only a console sign-in resets the clock.
 - A token never stamped counts as stale.
 - **Sessions:** a console session whose issued-at is older is sent through sign-in (`auth.fail` reason `role_stamp_stale`); a cookie with no issued-at counts as older than any TTL.
 - With `WARDYN_OIDC_SESSION_TTL` unset, a session already ends at the IdP ID token's expiry ([`internal/auth/oidc/oidc_callback.go`](../internal/auth/oidc/oidc_callback.go)); with it set, at that TTL after sign-in.

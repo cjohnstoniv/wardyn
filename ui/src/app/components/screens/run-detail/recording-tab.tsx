@@ -29,6 +29,7 @@ import {
   RECORDING_MISSING_SESSION_BODY,
 } from "./recording-tab-copy";
 import { RECORDING_REPLAY, RECORDING_STRIP, recordingLevelLabel } from "../../wardyn/copy/recording-level";
+import { RUN_RECORDING } from "../../wardyn/copy/runners";
 import { clockTime } from "../../../lib/format";
 import { DesktopReplay, desktopSessions } from "./desktop-replay";
 
@@ -36,8 +37,8 @@ import { DesktopReplay, desktopSessions } from "./desktop-replay";
 function LevelStrip({ level, notRecorded, storeOff }: { level?: RecordingLevel; notRecorded?: RunNotRecorded; storeOff: boolean }) {
   const [title, note] = storeOff
     ? [RECORDING_STRIP.UNAVAILABLE, RECORDING_DISABLED_TITLE]
-    : notRecorded === "policy_off"
-      ? [RECORDING_STRIP.OFF, RECORDING_STRIP.OFF_NOTE]
+    : notRecorded
+      ? [RECORDING_STRIP.OFF, notRecorded === "policy_off" ? RECORDING_STRIP.OFF_NOTE : RUN_RECORDING[notRecorded]]
       : level === "screen_actions"
         ? [RECORDING_STRIP.ON(recordingLevelLabel(level)), ""]
         : [RECORDING_STRIP.TERMINAL_ONLY, RECORDING_STRIP.TERMINAL_ONLY_NOTE];

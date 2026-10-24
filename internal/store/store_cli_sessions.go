@@ -297,18 +297,34 @@ func (s PG) GetCLISession(ctx context.Context, id uuid.UUID) (CLISessionRow, err
 	return scanCLISession(s.Pool.QueryRow(ctx, `SELECT `+cliSessionCols+` FROM cli_sessions WHERE id = $1`, id))
 }
 
-// RotateCLISession is the refresh's write.
+// RotateCLISession is the refresh's write. The new access token's identity is the session row's,
+// read under the row lock the generation check takes, not tok's snapshot: a sign-in that re-stamped
+// the session after the caller read it is carried onto the token (RefreshAPITokenIdentity locks the
+// same row first). A changed identity is not a reused secret, so it never reads as ErrConflict.
 func (s PG) RotateCLISession(ctx context.Context, id uuid.UUID, generation int64, newSecret string, now time.Time, tok types.APIToken, raw string) (types.APIToken, error) {
 	var out types.APIToken
 	err := s.cliTx(ctx, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `
-			UPDATE cli_sessions SET secret_sha256 = $3, generation = generation + 1, last_refresh_at = $4
-			WHERE id = $1 AND generation = $2 AND ended_at IS NULL`, id, generation, hashToken(newSecret), now)
-		if err != nil {
-			return fmt.Errorf("store: rotate cli session: %w", err)
-		}
-		if tag.RowsAffected() != 1 {
+		var groups []byte
+		var stamped time.Time
+		err := tx.QueryRow(ctx, `
+			SELECT role, user_type, groups, groups_truncated, identity_stamped_at FROM cli_sessions
+			WHERE id = $1 AND generation = $2 AND ended_at IS NULL FOR UPDATE`, id, generation).
+			Scan(&tok.Role, &tok.UserType, &groups, &tok.GroupsTruncated, &stamped)
+		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrConflict
+		} else if err != nil {
+			return fmt.Errorf("store: read cli session identity: %w", err)
+		}
+		tok.Groups = nil
+		if groups != nil {
+			if err := json.Unmarshal(groups, &tok.Groups); err != nil {
+				return fmt.Errorf("store: scan cli session groups: %w", err)
+			}
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE cli_sessions SET secret_sha256 = $2, generation = generation + 1, last_refresh_at = $3
+			WHERE id = $1`, id, hashToken(newSecret), now); err != nil {
+			return fmt.Errorf("store: rotate cli session: %w", err)
 		}
 		// The new access token replaces the old: a session holds one live cli_access token, so a
 		// rotation is count-neutral under the per-person token cap and a rotated-past token stops at
@@ -318,7 +334,16 @@ func (s PG) RotateCLISession(ctx context.Context, id uuid.UUID, generation int64
 			return fmt.Errorf("store: revoke rotated cli token: %w", err)
 		}
 		out, err = s.insertAPIToken(ctx, tx, tok, raw)
-		return err
+		if err != nil {
+			return err
+		}
+		// The insert stamps now(); the token carries the session's stamp so the role-stamp TTL
+		// counts from the sign-in, not from the rotation.
+		if _, err := tx.Exec(ctx, `UPDATE api_tokens SET identity_stamped_at = $2 WHERE id = $1`, out.ID, stamped); err != nil {
+			return fmt.Errorf("store: stamp rotated cli token: %w", err)
+		}
+		out.IdentityStampedAt = &stamped
+		return nil
 	})
 	return out, err
 }

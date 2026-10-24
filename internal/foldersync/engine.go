@@ -597,6 +597,11 @@ func (sy *Syncer) walkLocal(rep *Report) (files map[string]syncFile, dirs []stri
 		case syncInvisible(d.Name()):
 			rep.refuse(rel, "invisible character in the name")
 			return skipIf(d.IsDir())
+		case syncEntryName(d.Name()) != nil:
+			// The remote walk refuses this name too; a file pushed here would
+			// read as deleted there under --pull-deletes.
+			rep.refuse(rel, "not a plain file name")
+			return skipIf(d.IsDir())
 		case sy.ig.orgDenied(rel, d.IsDir()):
 			rep.refuse(rel, "organisation rule")
 			return skipIf(d.IsDir())
@@ -661,6 +666,8 @@ func (sy *Syncer) walkRemote(ctx context.Context, rep *Report) (*remoteView, err
 			name := fi.Name()
 			if err := syncEntryName(name); err != nil {
 				rep.refuse(path.Join(rel, "?"), err.Error())
+				// Met, so a laptop file of that name is never read as gone.
+				v.seen[path.Join(rel, name)] = true
 				continue
 			}
 			childRel := path.Join(rel, name)
