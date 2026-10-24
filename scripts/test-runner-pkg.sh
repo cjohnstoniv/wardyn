@@ -33,10 +33,16 @@ AGENT="${SRC}/com.wardyn.runnerd.managed.plist"
 [ "$(plist_get "$AGENT" 'd["KeepAlive"]["SuccessfulExit"]')" = False ] || fail "the agent must restart only after a failure, or it loops while unregistered"
 grep -q 'com.wardyn.runnerd.managed' "${SRC}/pkg-scripts/postinstall" "${SRC}/pkg-scripts/preinstall" || fail "the pkg scripts do not name the agent"
 MC="${SRC}/wardyn-runnerd.mobileconfig"
-[ "$(plist_get "$MC" 'd["PayloadContent"][0]["PayloadType"]')" = "$(sed -n 's/^const prefsDomain = "\(.*\)"$/\1/p' "${REPO_ROOT}/cmd/wardyn-runnerd/managed_prefs.go")" ] || fail "the profile's payload type is not the domain runnerd reads"
-want_keys="$(grep -ho 'managed: "[A-Za-z]*"' "${REPO_ROOT}"/cmd/wardyn-runnerd/runnerconfig.go | sed 's/.*"\([A-Za-z]*\)".*/\1/' | sort -u | tr '\n' ' ')"
+# runnerd and the CLI both read the domain internal/managedprefs names.
+domain="$(sed -n 's/^const Domain = "\(.*\)"$/\1/p' "${REPO_ROOT}/internal/managedprefs/managedprefs.go")"
+[ -n "$domain" ] && [ "$(plist_get "$MC" 'd["PayloadContent"][0]["PayloadType"]')" = "$domain" ] || fail "the profile's payload type is not the domain internal/managedprefs names"
+grep -qx 'const prefsDomain = managedprefs.Domain' "${REPO_ROOT}/cmd/wardyn-runnerd/managed_prefs.go" || fail "runnerd does not read the domain internal/managedprefs names"
+# The keys: runnerconfig.go's managed: tags, and each key the CLI reads with managedprefs.Read.
+cli_keys="$(grep -ho 'managedprefs\.Domain, "[A-Za-z]*"' "${REPO_ROOT}"/cmd/wardyn/*.go | sed 's/.*"\([A-Za-z]*\)"$/\1/')"
+[ -n "$cli_keys" ] || fail "found no preference the CLI reads (the extractor is scanning nothing)"
+want_keys="$({ grep -ho 'managed: "[A-Za-z]*"' "${REPO_ROOT}"/cmd/wardyn-runnerd/runnerconfig.go | sed 's/.*"\([A-Za-z]*\)".*/\1/'; echo "$cli_keys"; } | sort -u | tr '\n' ' ')"
 have_keys="$(plist_get "$MC" '" ".join(sorted(k for k in d["PayloadContent"][0] if not k.startswith("Payload")))')"
-[ "$want_keys" = "$have_keys " ] || fail "the profile's keys ($have_keys) are not the preferences runnerconfig.go reads ($want_keys)"
+[ "$want_keys" = "$have_keys " ] || fail "the profile's keys ($have_keys) are not the preferences runnerconfig.go and the CLI read ($want_keys)"
 
 # ---- the launcher ---------------------------------------------------------------------------------
 H="${WORK}/home"; mkdir -p "$H"

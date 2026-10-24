@@ -60,6 +60,8 @@
       <string></string>
       <key>DockerHost</key>
       <string></string>
+      <key>ArtifactBase</key>
+      <string></string>
     </dict>
   </array>
   <key>PayloadDisplayName</key>

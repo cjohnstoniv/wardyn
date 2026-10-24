@@ -256,6 +256,26 @@ Both run `serve --config <path to runnerd.json>` and hold no setting themselves.
 - To upgrade, see [Upgrading a runner](#upgrading-a-runner).
 - Org runners keep the operator's `--token-file` path.
 
+### `wardyn runner install` and `wardyn runner upgrade`
+
+`wardyn runner install` is `wardyn runner setup` with the runner taken from a signed release instead of the copy this CLI pins. It takes setup's flags and `--version` (this CLI's own release when left out). On a computer that already runs a runner it is `upgrade`, so running it again with a newer `--version` upgrades.
+
+| Step | What it does |
+|---|---|
+| Download | `SHA256SUMS`, `SHA256SUMS.sigstore.json` and `wardyn-runnerd-<os>-<arch>` from `<base>/v<version>/`, through your proxy settings and the roots `wardyn ca` holds. The base is `--artifact-base` (then saved in `cli.json`), the macOS managed preference `ArtifactBase`, the saved one, `/healthz.cli_artifact_base`, else the release |
+| Signature | The bundle must sign `SHA256SUMS` with a certificate for `https://github.com/cjohnstoniv/wardyn/.github/workflows/release.yml@refs/tags/v<version>`, issuer `https://token.actions.githubusercontent.com`, source repository `https://github.com/cjohnstoniv/wardyn`, and carry a transparency-log entry |
+| Checksum | The runner's SHA-256 must be the one the verified `SHA256SUMS` lists |
+| Swap | `upgrade` runs the verified runner's `setup --org <the service's organisation>`: it stages the file beside the installed one, stops the service, keeps the old file as `wardyn-runnerd.previous`, renames the new one into place and starts the service |
+| Wait | Up to 60 s for the runner's `status.json` to say a service started after the swap is connected. Otherwise `.previous` is put back the same way, and the command fails naming both versions |
+
+- Verification is offline: the bundle carries the log entry and its inclusion proof, and the CLI embeds the Sigstore public-good trust root. `scripts/refresh-sigstore-root.sh` refreshes that root, and the next CLI release carries it. Nothing calls Fulcio, Rekor or the TUF repository.
+- A refused signature, identity, checksum or download leaves the installed runner as it was. There is no fallback to an unsigned download.
+- A release without `SHA256SUMS.sigstore.json` fails with "signature bundle missing". Releases before 0.10.0 publish none, so this command cannot install them: use `wardyn runner setup` or the manual check in [Verify the release assets](VERIFY.md#5-verify-the-release-assets).
+- A mirror must carry `SHA256SUMS`, its bundle and this platform's runner. A mirror without the runner fails with "asset missing on mirror". The pinned identity means a mirror cannot substitute a binary.
+- A runner already at `--version` is left alone, and nothing is downloaded.
+- `wardyn login` and `wardyn whoami` say once a day when this computer's runner is older than its organisation, and name the `upgrade` line.
+- The first CLI has no pin of its own yet: install it from the signed macOS package, or over TLS from the release with the `SHA256SUMS` check above. A later pin change, such as a renamed workflow, ships in the next CLI release.
+
 ### Upgrading a runner
 
 Upgrade the organisation before its runners. A runner installed with `setup` upgrades by running `wardyn runner setup` again, or the new release's `wardyn-runnerd setup` with the same flags: it renames a new file over its own copy and restarts the service. Installing a new `wardyn-runnerd.pkg` upgrades only a runner the package's managed agent runs (one set up with `register`); it stops that agent first. A `setup`-installed runner keeps its own copy, so a new package alone leaves it on the old version. Never copy a new binary over the running one: on macOS the system can stop a process whose binary is overwritten in place.
