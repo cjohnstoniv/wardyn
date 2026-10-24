@@ -312,7 +312,7 @@ func TestRunOutput_NotCapturedNamesARecordingOnlyWhenOneCanHoldIt(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv, _, seed := runOutputServer(t, func(c *Config) { c.Runner = rr; c.RecordingStore = fs; c.RunOutputPersistOff = true })
+	srv, clock, seed := runOutputServer(t, func(c *Config) { c.Runner = rr; c.RecordingStore = fs; c.RunOutputPersistOff = true })
 	id := seed(types.AgentRun{})
 	sec := ssoSession(t, secAdminSub, secAdminMail, oidc.RoleSecurityAdmin)
 	const notCaptured = "Output isn't captured for Kubernetes runs yet. The run's recording has it."
@@ -324,6 +324,13 @@ func TestRunOutput_NotCapturedNamesARecordingOnlyWhenOneCanHoldIt(t *testing.T) 
 	}
 	read("owner, no recording", outputOwnerCookie(t), reasonRunOutputNotKept, "no output is kept for this run")
 	read("security admin, no recording", sec, reasonRunOutputNotCaptured, notCaptured)
+	// Past the retention window too: what was never kept did not expire.
+	ended := clock.Now().Add(-48 * time.Hour)
+	srv.cfg.RunOutputRetention = time.Hour
+	old := seed(types.AgentRun{EndedAt: &ended})
+	if code, _, refusal := getRunOutput(t, srv, old, "", outputOwnerCookie(t)); code != http.StatusConflict || refusal.Reason != reasonRunOutputNotKept {
+		t.Fatalf("owner, no recording, past retention: %d %+v, want 409 %s", code, refusal, reasonRunOutputNotKept)
+	}
 	saveOutputCast(t, fs, id, "{\"version\": 2}\n[0.1, \"o\", \"hi\\r\\n\"]\n")
 	read("owner, recording kept", outputOwnerCookie(t), reasonRunOutputNotCaptured, notCaptured)
 	read("security admin, recording kept", sec, reasonRunOutputNotCaptured, notCaptured)

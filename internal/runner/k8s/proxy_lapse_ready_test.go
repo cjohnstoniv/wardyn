@@ -82,6 +82,11 @@ func TestRunnerCreateSandbox_ShortRunRecordingLandsOnceTheProxyServes(t *testing
 		pod := obj.(*corev1.Pod).DeepCopy()
 		pod.Status.PodIP, pod.Status.Phase = "10.244.0.7", corev1.PodRunning
 		ready := probeSucceeds(px, pod.Spec.Containers[0].ReadinessProbe)
+		if !ready {
+			// The first renew failed; its retry opens the proxy, but only once a probe has seen it
+			// closed, so a probe that cannot see the window lets the agent run inside it every time.
+			open.Store(true)
+		}
 		pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
 			Name: proxyContainerName, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}, Ready: ready,
 		}}
@@ -89,11 +94,6 @@ func TestRunnerCreateSandbox_ShortRunRecordingLandsOnceTheProxyServes(t *testing
 	})
 	installAgentRunningReactor(t, h.cs)
 
-	// The first renew failed; its retry opens the proxy a little later.
-	go func() {
-		time.Sleep(300 * time.Millisecond)
-		open.Store(true)
-	}()
 	spec := testSandboxSpec()
 	spec.RunID = h.runID
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -126,6 +126,7 @@ func TestRunnerCreateSandbox_ShortRunRecordingLandsOnceTheProxyServes(t *testing
 func buildWardynRec(t *testing.T) string {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "wardyn-rec")
+	// The real recorder, not a stand-in: what it uploads, and when, is what the test reads back.
 	build := exec.Command("go", "build", "-o", bin, "github.com/cjohnstoniv/wardyn/cmd/wardyn-rec")
 	build.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if out, err := build.CombinedOutput(); err != nil {

@@ -11,12 +11,20 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Before you upgrade
+
+- A Kubernetes runner (wardyn-runnerd) needs a proxy image of its own release. Its proxy pod now reads as ready only
+  once the proxy answers `/wardyn/v1/ready`, which an older proxy answers 404: every run then fails at the start
+  deadline. The Helm chart pins the proxy tag to the runner's, so a Helm install is safe. A runner started without Helm
+  and not pinned uses the proxy image the organisation named at registration: it logs a warning at startup when that
+  image is an older release, with the fix (`--proxy-image` set to this release's proxy image).
+
 ### Fixed
 
 - A short command run on a Kubernetes runner (wardyn-runnerd) no longer loses its recording. The run's proxy refuses
   every request until its first token renew succeeds, but its pod read as ready once it listened, so the agent could
   start, finish and have its recording upload refused inside that window. The proxy pod is now ready only once it
-  serves. Upgrade the runner's proxy image with wardyn-runnerd: an older proxy never reads as ready.
+  serves.
 - `GET /runs/{id}/output` no longer points the run's owner or an operator at a recording that was never received.
   With run output persistence off, an ended run on a runner that does not capture output, and whose recording never
   arrived, answers `409` `run_output_not_kept`.

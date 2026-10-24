@@ -486,6 +486,8 @@ func (s *Server) refuseNoRunOutput(w http.ResponseWriter, r *http.Request, run t
 	case uncaptured && s.recordingMayHoldOutput(r.Context(), run, reader):
 		writeErrorReason(w, http.StatusConflict, reasonRunOutputNotCaptured,
 			"Output isn't captured for Kubernetes runs yet. The run's recording has it.")
+	case uncaptured: // nothing was captured and no recording arrived, so nothing expired either
+		writeErrorReason(w, http.StatusConflict, reasonRunOutputNotKept, "no output is kept for this run")
 	case !captureKnown:
 		writeErrorReason(w, http.StatusConflict, reasonRunOutputNotKept,
 			"no output is kept for this run: the runner's capture capability could not be read")

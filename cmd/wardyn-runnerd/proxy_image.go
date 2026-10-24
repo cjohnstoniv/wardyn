@@ -6,7 +6,9 @@ package main
 import (
 	"context"
 	"log/slog"
+	"math"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -82,6 +84,46 @@ func warnPinnedProxyImageSkew(pinned, runnerVersion string) {
 	}
 	slog.WarnContext(context.Background(), "the pinned proxy image is a different release than this runner; runs may fail to start",
 		"pinned", pinned, "runner", runnerVersion, "fix", "run setup with --proxy-image set to the image the organisation names, or remove the pin (--proxy-image and WARDYN_PROXY_IMAGE_PINNED) to follow the organisation")
+}
+
+// warnOlderProxyImage says, at startup, when the proxy image a k8s runner follows unpinned (the
+// organisation's, named at registration) is an older release than this binary. The k8s driver waits
+// for its proxy pod to answer proxy.ReadyPath, which an older proxy answers 404: the pod never reads
+// Ready and every run fails at the start deadline. warnPinnedProxyImageSkew covers a pinned image.
+func warnOlderProxyImage(image, runnerVersion string) {
+	tag := imageReleaseTag(image)
+	if tag == "" || !releaseVersion.MatchString(runnerVersion) || !releaseOlder(tag, runnerVersion) {
+		return
+	}
+	slog.WarnContext(context.Background(), "the proxy image is an older release than this k8s runner; its pods never read ready, so every run fails to start",
+		"image", image, "runner", runnerVersion, "fix", "run setup with --proxy-image "+releaseProxyRepo+":"+runnerVersion+" (or its mirror), or have the organisation name this release's proxy image")
+}
+
+// releaseOlder reports whether release a is older than release b, both matching releaseVersion: a
+// release candidate is older than its release.
+func releaseOlder(a, b string) bool {
+	pa, pb := releaseParts(a), releaseParts(b)
+	for i := range pa {
+		if pa[i] != pb[i] {
+			return pa[i] < pb[i]
+		}
+	}
+	return false
+}
+
+// releaseParts is X, Y, Z and the candidate number of a release, a final release's candidate number
+// being above every candidate's.
+func releaseParts(v string) [4]int {
+	var p [4]int
+	core, rc, isRC := strings.Cut(v, "-rc.")
+	for i, n := range strings.SplitN(core, ".", 3) {
+		p[i], _ = strconv.Atoi(n)
+	}
+	p[3] = math.MaxInt
+	if isRC {
+		p[3], _ = strconv.Atoi(rc)
+	}
+	return p
 }
 
 // followOrgProxyImage is the hook that takes the proxy image the organisation answers at each connect,
