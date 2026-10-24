@@ -52,6 +52,7 @@
 | **v0.9.6** | A fix release: own Azure DevOps tokens on a person's own runner, clearer refusals, runner connection diagnostics, recordings without typed input. | **Shipped (pre-alpha)** — `v0.9.6`, 2026-10-20 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.9.7** | A fix release: minted Azure DevOps tokens on a person's own runner, and credential delivery writes the server cannot build are refused. | **Shipped (pre-alpha)** — `v0.9.7`, 2026-10-20 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.9.8** | A fix release: private-address refusals name the internal_hosts remedy, wrapped base images say what works instead, and credential delivery rows the server cannot build are listed. | **Shipped (pre-alpha)** — `v0.9.8`, 2026-10-21 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.10.0-rc.1** | rc.1: Linux VM sandboxes networked through the run's proxy, organisation units with their own walls and admins, local model servers as providers, folders from your computer, and desktop recording and clipboard controls. | **Shipped (pre-alpha)** — `v0.10.0-rc.1`, 2026-10-24 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ## Shipped detail
 
