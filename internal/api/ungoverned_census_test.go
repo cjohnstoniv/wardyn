@@ -89,6 +89,7 @@ var ungovernedCallerCensus = map[string]struct {
 	"recording.go:recordingReader":                             {1, "authz-only: recording read reach"},
 	"run_attention.go:handleMeAttention":                       {1, "authz-only: a list scope"},
 	"run_containment.go:handleGetRunContainment":               {2, "authz-only: a read"},
+	"run_desktop_vm_signin.go:mayPauseDesktopAgent":            {1, "authz-only: a VM desktop's agent pause and resume reach (mayEnterRun); the pause holds deny_ui_apps and deny_interactive for every caller"},
 	"run_end_create.go:resolveCreateEnd":                       {1, "E: an ungoverned run's end is capped by the boundary when it names a maximum"},
 	"run_entry.go:admitRunEntry":                               {2, "authz-only: the interactive entry rule an attach ticket and a takeover share"},
 	"run_entry.go:getRunForEntry":                              {1, "authz-only: run reach"},

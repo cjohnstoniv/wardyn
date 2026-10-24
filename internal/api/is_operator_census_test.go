@@ -37,6 +37,9 @@ var isOperatorCensus = map[string]int{
 	"attach.go:refuseAttachEntry":         1,
 	"run_entry.go:getRunForEntry":         1,
 	"sshkeys.go:handleAddSSHKey":          1,
+	// A VM desktop's agent pause and resume: the entry rule (mayEnterRun) and the super admin's
+	// 403 on a run that is not theirs. The pause then holds deny_ui_apps and deny_interactive for every caller.
+	"run_desktop_vm_signin.go:mayPauseDesktopAgent": 1,
 	// The interactive entry rule an attach ticket and a takeover share: the owner rule's
 	// super-admin arm, and the super admin's 403 on a run that is not theirs.
 	"run_entry.go:admitRunEntry": 2,
