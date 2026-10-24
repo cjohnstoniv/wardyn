@@ -454,6 +454,9 @@ func (s PG) AddRunnerPoolExecutor(ctx context.Context, id uuid.UUID, executor st
 		if err := LockGovernanceTarget(ctx, q, types.GovernanceTargetRunnerPoolUsePolicy, id.String()); err != nil {
 			return err
 		}
+		if err := LockRemoteRunnerPoolMembershipQ(ctx, q, executor); err != nil {
+			return err
+		}
 		if refuseGoverned {
 			governed, err := executorGovernedElsewhereQ(ctx, q, id, executor)
 			if err != nil {
@@ -468,6 +471,17 @@ func (s PG) AddRunnerPoolExecutor(ctx context.Context, id uuid.UUID, executor st
 		return err
 	})
 	return m, added, rev, err
+}
+
+// remoteRunnerPoolMembershipLock is the lock kind of LockRemoteRunnerPoolMembershipQ.
+const remoteRunnerPoolMembershipLock = "remote_runner_pool_membership"
+
+// LockRemoteRunnerPoolMembershipQ takes the transaction-scoped lock on remote-hosted runner executor's
+// pool memberships. Every attach and detach of it, direct or held, takes it after its pool's target
+// lock and before any pool row lock, so each reads the pools holding executor after the one before it
+// committed: two attaches to different pools cannot each miss the other's member row. q must be a pgx.Tx.
+func LockRemoteRunnerPoolMembershipQ(ctx context.Context, q Querier, executor string) error {
+	return LockGovernanceTarget(ctx, q, remoteRunnerPoolMembershipLock, executor)
 }
 
 // executorGovernedElsewhereQ reports whether a live pool other than id that holds remote-hosted runner
@@ -540,6 +554,9 @@ func errOrNotFound(err error) error {
 func (s PG) RemoveRunnerPoolExecutor(ctx context.Context, id uuid.UUID, executor string, refuseGoverned bool) (removed bool, rev int64, err error) {
 	err = s.inTx(ctx, func(q Querier) error {
 		if err := LockGovernanceTarget(ctx, q, types.GovernanceTargetRunnerPoolUsePolicy, id.String()); err != nil {
+			return err
+		}
+		if err := LockRemoteRunnerPoolMembershipQ(ctx, q, executor); err != nil {
 			return err
 		}
 		if refuseGoverned {
