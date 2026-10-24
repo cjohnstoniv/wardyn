@@ -10,7 +10,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -348,21 +350,42 @@ func (e *env) kubelet(t *testing.T) string {
 	return n.Status.NodeInfo.KubeletVersion
 }
 
-// casePodIPReuse: after a normal stop the next proxy on the node may receive the
-// freed IP and still starts (the refusal was released at witness save); a run still pending keeps
-// its refusal, so a proxy that receives a pending run's IP is refused with relay_ip_fenced.
+// casePodIPReuse: after a normal stop the next proxy on the node may receive the freed IP and still
+// starts (the refusal was released at witness save); a run still pending keeps its refusal, so a
+// proxy that receives a pending run's IP is refused with relay_ip_fenced. In each half the IP under
+// test is the only address the runs pool can hand out, so the next proxy must receive it.
 func casePodIPReuse(t *testing.T, e *env) {
 	if e.stoppedIP == "" {
 		inconclusive(t, "normal-stop left no stopped proxy IP")
 	}
 	e.setSched(t, e.pin)
-	var missed []string
-	if !e.reuseIP(t, e.stoppedIP, false) {
-		missed = append(missed, fmt.Sprintf("no later proxy on %s received the stopped IP %s in %d runs", e.pin, e.stoppedIP, reuseRuns))
+	release := e.onlyIP(t, e.stoppedIP)
+	id := uuid.New()
+	e.cleanupRun(t, id)
+	done := make(chan error, 1)
+	go func() { _, err := e.main.CreateSandbox(bg, e.spec(id)); done <- err }()
+	got := ""
+	if err := poll(bg, createWait, func(ctx context.Context) (bool, error) {
+		if p, err := e.admin.CoreV1().Pods(e.runsNS).Get(ctx, proxyName(id), metav1.GetOptions{}); err == nil {
+			got = p.Status.PodIP
+		}
+		return got != "" || len(done) > 0, nil
+	}); err != nil {
+		t.Fatalf("the next proxy had no IP within %s: is %s held outside the case?", createWait, e.stoppedIP)
 	}
+	release() // the agent pod needs an address of its own
+	if err := <-done; err != nil {
+		t.Fatalf("the next proxy (IP %q) did not start: %v", got, err)
+	}
+	if got != e.stoppedIP {
+		t.Fatalf("the next proxy received %s, not the stopped IP %s, the only address left", got, e.stoppedIP)
+	}
+	note(t, "the next proxy received the stopped IP %s and started", got)
+	e.stopRun(t, id)
+
 	// A pending run: a third party strips the proxy's finalizer and force-deletes it, so the object is
 	// gone without a witness. NotFound is not evidence, so the run stays pending and fenced.
-	id := uuid.New()
+	id = uuid.New()
 	e.cleanupRun(t, id)
 	if _, err := e.main.CreateSandbox(bg, e.spec(id)); err != nil {
 		t.Fatalf("CreateSandbox: %v", err)
@@ -384,50 +407,75 @@ func casePodIPReuse(t *testing.T, e *env) {
 	if !e.fences.fenced(ip) {
 		t.Fatalf("the pending run's IP %s is not refused", ip)
 	}
-	if !e.reuseIP(t, ip, true) {
-		missed = append(missed, fmt.Sprintf("no later proxy received the pending run's IP %s in %d runs", ip, reuseRuns))
+	release = e.onlyIP(t, ip)
+	next := uuid.New()
+	e.cleanupRun(t, next)
+	_, err := e.main.CreateSandbox(bg, e.spec(next))
+	release()
+	if !errors.Is(err, runner.ErrRelayIPFenced) || !strings.Contains(err.Error(), ip) {
+		t.Fatalf("the next proxy, with the pending run's IP %s the only address left: %v, want the relay fence's refusal", ip, err)
 	}
-	if len(missed) > 0 {
-		inconclusive(t, strings.Join(missed, "; "))
-	}
+	note(t, "the next proxy received the pending run's IP %s and was refused: %v", ip, err)
+	e.waitRunGone(t, next, goneWait)
 }
 
-// reuseRuns bounds reuseIP. The harness gives the runs namespace a 16-address Calico block and
-// each run takes two addresses, so the block wraps within 8 runs.
-const reuseRuns = 12
+// k6OnlyIP names the case's IP reservation.
+const k6OnlyIP = "k6-only-ip"
 
-// reuseIP creates runs on the pin node until a proxy receives ip (at most reuseRuns). With refused false
-// that run must start; with refused true it must fail with the relay fence. It reports whether
-// the IP came back at all.
-func (e *env) reuseIP(t *testing.T, ip string, refused bool) bool {
+// onlyIP reserves every address of the runs namespace's Calico pool but ip, so the next pod there
+// can receive ip and nothing else: Calico IPAM never hands out a reserved address, and while ip is
+// still held the pod's sandbox finds none free and the kubelet retries it. release drops the
+// reservation; it also runs at cleanup, so a failed case never starves the cases after it.
+func (e *env) onlyIP(t *testing.T, ip string) (release func()) {
 	t.Helper()
-	for i := range reuseRuns {
-		id := uuid.New()
-		e.cleanupRun(t, id)
-		_, err := e.main.CreateSandbox(bg, e.spec(id))
-		got := ""
-		if p := e.evidence(t, id).Pods[proxyComponent]; p != nil {
-			got = p.PodIP
-		}
-		switch {
-		case err != nil && strings.Contains(err.Error(), ip) && refused:
-			note(t, "run %d's proxy received the pending run's IP %s and was refused: %v", i, ip, err)
-			e.waitRunGone(t, id, goneWait)
-			return true
-		case err != nil && strings.Contains(err.Error(), ip):
-			t.Fatalf("run %d: the next proxy received the stopped run's IP %s and was refused: %v", i, ip, err)
-		case err != nil:
-			t.Fatalf("run %d: CreateSandbox: %v", i, err)
-		case got == ip && refused:
-			t.Fatalf("run %d: a proxy on the pending run's IP %s started", i, ip)
-		case got == ip:
-			note(t, "run %d's proxy reused the stopped IP %s and started", i, ip)
-			e.stopRun(t, id)
-			return true
-		}
-		e.stopRun(t, id)
+	target, err := netip.ParseAddr(ip)
+	if err != nil {
+		t.Fatalf("pod IP %q: %v", ip, err)
 	}
-	return false
+	ns, err := e.admin.CoreV1().Namespaces().Get(bg, e.runsNS, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ann := ns.Annotations["cni.projectcalico.org/ipv4pools"]
+	var pools []string
+	if err := json.Unmarshal([]byte(ann), &pools); err != nil || len(pools) != 1 {
+		t.Fatalf("namespace %s names the Calico pools %q, want one (scripts/k6-kind-conformance.sh sets it)", e.runsNS, ann)
+	}
+	if rl, err := e.admin.Discovery().ServerResourcesForGroupVersion("crd.projectcalico.org/v1"); err != nil ||
+		!slices.ContainsFunc(rl.APIResources, func(r metav1.APIResource) bool { return r.Name == "ipreservations" }) {
+		t.Fatalf("Calico < v3.22: IPReservation CRD missing (crd.projectcalico.org/v1 ipreservations; K6_CALICO_VERSION): %v", err)
+	}
+	kc := os.Getenv("K6_ADMIN_KUBECONFIG")
+	cidr := strings.TrimSpace(sh(t, "kubectl", "--kubeconfig", kc, "get", "ippools.crd.projectcalico.org", pools[0], "-o", "jsonpath={.spec.cidr}"))
+	pool, err := netip.ParsePrefix(cidr)
+	if err != nil || !pool.Contains(target) {
+		t.Fatalf("Calico pool %s (%q) does not hold %s: %v", pools[0], cidr, ip, err)
+	}
+	var reserved []string
+	for a := pool.Masked().Addr(); pool.Contains(a); a = a.Next() {
+		if a != target {
+			reserved = append(reserved, a.String())
+		}
+	}
+	doc, err := json.Marshal(map[string]any{"apiVersion": "crd.projectcalico.org/v1", "kind": "IPReservation",
+		"metadata": map[string]any{"name": k6OnlyIP}, "spec": map[string]any{"reservedCIDRs": reserved}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := filepath.Join(t.TempDir(), "reservation.json")
+	if err := os.WriteFile(f, doc, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sh(t, "kubectl", "--kubeconfig", kc, "apply", "-f", f)
+	released := false
+	release = func() {
+		if !released { // set only once the delete succeeded, so the cleanup retries a failed one
+			sh(t, "kubectl", "--kubeconfig", kc, "delete", "ipreservations.crd.projectcalico.org", k6OnlyIP, "--ignore-not-found")
+			released = true
+		}
+	}
+	t.Cleanup(release)
+	return release
 }
 
 func caseH1Window(t *testing.T, e *env) {
