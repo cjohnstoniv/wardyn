@@ -20,6 +20,13 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   no grant changes.
 - During a rolling control-plane upgrade, a desktop sign-in pause can stay paused until it is resumed from an upgraded server.
 
+### Added
+
+- macOS VM sandboxes on an Apple silicon Mac's runner, off unless the Mac's operator turns them on (`wardyn-runnerd
+  setup --macos-vm on`, `WARDYN_RUNNER_MACOS_VM=1` or the managed preference `MacOSVM`). `wardyn-runnerd macos-vm
+  prepare`, `status` and `remove` build, show and delete the Mac's macOS base. The runner offers as many VMs as the
+  Mac's shared ledger and memory leave room for, and ends its newest one when the disk drops below 5 GiB free.
+
 ### Fixed
 
 - A continue that reaches a Linux VM's guest agent after a later "Pause the agent to sign in", as one delayed past a

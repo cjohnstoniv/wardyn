@@ -291,6 +291,12 @@ func (p setupPlan) runnerFile() runnerFile {
 	}
 	f.RelayListen, f.RelayHostTarget, f.TrustedCAFile, f.OrgCAFile = p.relayListen, p.relayHostTarget, p.trustedCAFile, p.orgCAFile
 	f.RunnerProxy, f.RunnerNoProxy = carriedValue(p.proxy, "HTTPS_PROXY", "https_proxy"), carriedValue(p.proxy, "NO_PROXY", "no_proxy")
+	switch p.macOSVM {
+	case "on":
+		f.MacOSVM = "1"
+	case "off":
+		f.MacOSVM = ""
+	}
 	return f
 }
 
