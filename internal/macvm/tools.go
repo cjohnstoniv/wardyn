@@ -560,8 +560,9 @@ func NeedsToolsUpdate(baseDir string, t Tooling, agentVersion string, now time.T
 // baseLockPath is the lock on one base: shared while a run is cloned from it,
 // exclusive only around an update's swap. updateLockPath serialises updates
 // for their whole run. Both sit beside the base dir, which an update swaps out
-// from under any lock inside it.
-func baseLockPath(baseDir string) string   { return baseDir + ".lock" }
+// from under any lock inside it. Their suffixes differ in full, so the base
+// lock of the staging dir <base>.update is never <base>'s update lock.
+func baseLockPath(baseDir string) string   { return baseDir + ".base.lock" }
 func updateLockPath(baseDir string) string { return baseDir + ".update.lock" }
 
 // UpdateOptions configures UpdateTools.
@@ -586,6 +587,7 @@ type UpdateOptions struct {
 	HelperVersion string
 	PowerPoll     time.Duration
 	Progress      func(PrepareEvent)
+	Log           *slog.Logger
 	// Now is the clock (nil: time.Now).
 	Now func() time.Time
 }
@@ -611,12 +613,18 @@ func UpdateTools(ctx context.Context, o UpdateOptions) (Manifest, bool, error) {
 	if o.Now == nil {
 		o.Now = time.Now
 	}
+	if o.Log == nil {
+		o.Log = slog.New(slog.NewJSONHandler(io.Discard, nil))
+	}
 	base := o.Layout.BaseDir(o.Slot)
-	nb, done, err := beginUpdate(ctx, base)
+	nb, done, err := beginUpdate(ctx, base, o.Log)
 	if err != nil {
 		return Manifest{}, false, err
 	}
-	defer done()
+	// The admission entry is released last, after done has deleted the old
+	// generation that entry reserves disk for.
+	release := func() {}
+	defer func() { done(); release() }()
 	m, err := ReadyBase(base)
 	if err != nil {
 		return m, false, err
@@ -634,11 +642,11 @@ func UpdateTools(ctx context.Context, o UpdateOptions) (Manifest, bool, error) {
 		return m, false, err
 	}
 	if o.Admit != nil {
-		release, err := o.Admit(ctx)
+		r, err := o.Admit(ctx)
 		if err != nil {
 			return m, false, err
 		}
-		defer release()
+		release = r
 	}
 	// Like prepare's later steps: starts only on AC, never paused.
 	d := &downloader{power: o.Power, poll: o.PowerPoll, paused: func(on bool) {
@@ -692,7 +700,13 @@ func UpdateTools(ctx context.Context, o UpdateOptions) (Manifest, bool, error) {
 // to build. It returns the staging dir; done deletes it (after a swap, the old
 // generation, so that goes once the base lock is released) and then drops the
 // update lock.
-func beginUpdate(ctx context.Context, base string) (staging string, done func(), err error) {
+//
+// A delete that fails is logged and the dir left, as a crash leaves it: one
+// staging dir per slot that no ledger entry reserves. It occupies live free
+// space, which admission reads at every start, so it only makes admission
+// refuse sooner, until the next prepare, tools update or runnerd start
+// deletes it.
+func beginUpdate(ctx context.Context, base string, log *slog.Logger) (staging string, done func(), err error) {
 	staging = base + ".update"
 	unlock, err := lockFile(ctx, updateLockPath(base), true)
 	if err != nil {
@@ -702,7 +716,12 @@ func beginUpdate(ctx context.Context, base string) (staging string, done func(),
 		unlock()
 		return "", nil, err
 	}
-	return staging, func() { _ = os.RemoveAll(staging); unlock() }, nil
+	return staging, func() {
+		if err := os.RemoveAll(staging); err != nil {
+			log.Warn("macvm: the update's staging dir was not deleted; the next update sweeps it", "path", staging, "err", err.Error())
+		}
+		unlock()
+	}, nil
 }
 
 // swapBase exchanges the updated base nb with base while holding base's lock

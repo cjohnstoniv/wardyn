@@ -138,8 +138,9 @@ const provisionUser = "wardyn-admin"
 // anyway (power loss, restart, the helper dies), the next Prepare discards
 // the partial base and restarts from create with the cached restore image.
 //
-// A re-prepare (o.Reprepare with a ready base) never writes under the live
-// base. Like a tools update it holds the base's update lock for its whole run,
+// A re-prepare (o.Reprepare with a ready base), and a prepare that replaces a
+// complete base in a format this helper does not run, never write under the
+// live base. Like a tools update it holds the base's update lock for its whole run,
 // builds the new base in the staging dir <base>.update, and swaps it in with
 // one exchange under the base's lock; runs keep cloning the old base
 // meanwhile, and the old generation is deleted after the exchange. Cut short,
@@ -211,26 +212,33 @@ func (p *prep) run(ctx context.Context) (Manifest, error) {
 			return Manifest{}, err
 		}
 	}
-	staging, done, err := beginUpdate(ctx, p.base)
+	staging, done, err := beginUpdate(ctx, p.base, p.Log)
 	if err != nil {
 		return Manifest{}, err
 	}
-	defer done()
-	// A first prepare builds in place: until its manifest is ready nothing
-	// clones it. A re-prepare builds in the staging dir.
+	// The admission entry is released last, after done has deleted the old
+	// generation that entry reserves disk for.
+	release := func() {}
+	defer func() { done(); release() }()
+	// A first prepare, or one after an interrupted install, builds in place:
+	// until its manifest is ready nothing clones it. A re-prepare, and the
+	// replacement of a complete base in another format, build in the staging
+	// dir and leave the old base as it is until the swap.
 	live := p.base
 	if m, err := ReadyBase(live); err == nil {
 		if !p.Reprepare {
 			return m, nil // another prepare finished it while this one waited
 		}
 		p.base = staging
+	} else if finishedBase(live) {
+		p.base = staging
 	}
 	if p.Admit != nil {
-		release, err := p.Admit(ctx)
+		r, err := p.Admit(ctx)
 		if err != nil {
 			return Manifest{}, err
 		}
-		defer release()
+		release = r
 	}
 	if err := mkdirPrivate(p.base); err != nil {
 		return Manifest{}, err
@@ -326,6 +334,16 @@ func (p *prep) stage2(ctx context.Context, spec MachineSpec, res *BootstrapResul
 	}
 	res.Harnesses = tr.Harnesses
 	return writeToolsRecord(p.base, tr, res.AgentVersion, time.Now())
+}
+
+// finishedBase says whether dir holds a base whose install finished, in any
+// format: no install marker, and a manifest that parses and says ready.
+func finishedBase(dir string) bool {
+	if _, err := os.Stat(filepath.Join(dir, installingMarker)); !os.IsNotExist(err) {
+		return false
+	}
+	m, err := ReadManifest(dir)
+	return err == nil && m.State == BaseReady
 }
 
 // discardInterrupted removes a base whose install started but never reached a

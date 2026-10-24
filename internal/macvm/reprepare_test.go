@@ -5,6 +5,8 @@ package macvm_test
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"maps"
 	"os"
 	"path/filepath"
@@ -316,4 +318,119 @@ func boolWord(b bool) string {
 		return "yes"
 	}
 	return "no"
+}
+
+// A complete base in a format this helper does not run is replaced through the
+// staging dir: a failed install leaves it exactly as it was (and still not
+// runnable), and a later prepare swaps the new base in and deletes the old.
+func TestPrepareKeepsACompleteOldFormatBaseUntilTheSwap(t *testing.T) {
+	f, _, _ := stage2Prep(t)
+	if _, err := macvm.Prepare(context.Background(), f.opts); err != nil {
+		t.Fatal(err)
+	}
+	base := f.opts.Layout.BaseDir(0)
+	old, err := macvm.ReadManifest(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old.Format = macvm.BaseFormat - 1
+	b, err := json.Marshal(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, macvm.ManifestFile), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	want := stamps(t, base)
+	for _, name := range []string{macvm.DiskFile, macvm.AuxFile, macvm.MachineIDFile, macvm.ManifestFile, macvm.ToolsRecordFile} {
+		if _, ok := want[name]; !ok {
+			t.Fatalf("the old base has no %s", name)
+		}
+	}
+	f.eng.InstallFunc = func(context.Context, *macvmtest.Machine, string, func(float64)) error {
+		return errors.New("restore failed")
+	}
+	if _, err := macvm.Prepare(context.Background(), f.opts); err == nil {
+		t.Fatal("prepare with a failing restore succeeded")
+	}
+	if got := stamps(t, base); !maps.Equal(got, want) {
+		t.Fatalf("a failed replacement changed the old base:\n got %v\nwant %v", got, want)
+	}
+	if _, err := macvm.ReadyBase(base); err == nil {
+		t.Fatal("the old-format base became runnable")
+	}
+	f.eng.InstallFunc = nil
+	m, err := macvm.Prepare(context.Background(), f.opts)
+	if err != nil || m.Format != macvm.BaseFormat {
+		t.Fatalf("replacement prepare: %+v %v", m, err)
+	}
+	if got, err := macvm.ReadyBase(base); err != nil || !got.CreatedAt.Equal(m.CreatedAt) {
+		t.Fatalf("base after the replacement: %+v %v", got, err)
+	}
+	if _, err := os.Stat(base + ".update"); !os.IsNotExist(err) {
+		t.Fatalf("the old generation outlived the replacement: %v", err)
+	}
+}
+
+// A staging dir that cannot be deleted after a swap is logged with its path and
+// error and left for the next update to sweep; the re-prepare itself succeeded.
+func TestStagingDeleteFailureIsLogged(t *testing.T) {
+	f, _, _ := stage2Prep(t)
+	if _, err := macvm.Prepare(context.Background(), f.opts); err != nil {
+		t.Fatal(err)
+	}
+	base := f.opts.Layout.BaseDir(0)
+	staging := base + ".update"
+	// A dir this user cannot empty goes with the old generation into staging.
+	stuck := filepath.Join(base, "stuck")
+	if err := os.MkdirAll(filepath.Join(stuck, "inner"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(stuck, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(filepath.Join(staging, "stuck"), 0o700) })
+	f.opts.Reprepare = true
+	if _, err := macvm.Prepare(context.Background(), f.opts); err != nil {
+		t.Fatalf("re-prepare: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(staging, "stuck")); err != nil {
+		t.Fatalf("the undeletable old generation is gone: %v", err)
+	}
+	logs := f.logs.String()
+	if !strings.Contains(logs, `"level":"WARN"`) || !strings.Contains(logs, "staging dir was not deleted") ||
+		!strings.Contains(logs, staging) || !strings.Contains(logs, "permission denied") {
+		t.Fatalf("no warning with the path and the error:\n%s", logs)
+	}
+}
+
+// The admission entry of a re-prepare and of a tools update is released only
+// after the old generation it reserves disk for is deleted.
+func TestAdmissionReleasedAfterOldGenerationIsDeleted(t *testing.T) {
+	f, tf, _ := stage2Prep(t)
+	if _, err := macvm.Prepare(context.Background(), f.opts); err != nil {
+		t.Fatal(err)
+	}
+	staging := f.opts.Layout.BaseDir(0) + ".update"
+	released := 0
+	admit := func(context.Context) (func(), error) {
+		return func() {
+			released++
+			if _, err := os.Stat(staging); !os.IsNotExist(err) {
+				t.Errorf("admission released while the old generation is still at %s: %v", staging, err)
+			}
+		}, nil
+	}
+	f.opts.Reprepare, f.opts.Admit = true, admit
+	if _, err := macvm.Prepare(context.Background(), f.opts); err != nil {
+		t.Fatal(err)
+	}
+	o := updateOpts(f, tf, newGuest(), "")
+	o.Force, o.Admit = true, admit
+	if _, changed, err := macvm.UpdateTools(context.Background(), o); err != nil || !changed {
+		t.Fatalf("update: changed %v err %v", changed, err)
+	}
+	if released != 2 {
+		t.Fatalf("admission released %d times, want 2", released)
+	}
 }
