@@ -276,6 +276,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   - Every renewal rotates the secret and re-checks revokes, sessions cuts, deactivation, the role stamp and the
     `api_token` feature. An old secret presented again ends the session. A revoke, Sign out everywhere, a console
     sign-out and a per-computer sign-out end it at once, with its tokens.
+  - A renewed token carries the role, groups and role-stamp age of the person's last console sign-in, so a renewal
+    never resets the `WARDYN_ROLE_STAMP_TTL` clock.
   - An admin's CLI acts as role `user`; `wardyn login --admin` gives a 1-hour admin token, never renewed.
   - Routes: `POST /api/v1/cli/sign-ins`, `POST /api/v1/cli/sign-ins/{id}/token`, `POST /api/v1/cli/sessions/{id}/refresh`,
     `GET /api/v1/me/cli-sign-ins/{id}` with `/approve` and `/deny`, `GET /api/v1/me/cli-sessions` and
