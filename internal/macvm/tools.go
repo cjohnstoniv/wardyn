@@ -26,6 +26,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	macosguest "github.com/cjohnstoniv/wardyn/deploy/macos-guest"
 )
 
 // Harness ids, as the harness catalog and placement know them. "none" ("Your
@@ -112,6 +114,11 @@ func ParseTooling(b []byte) (Tooling, error) {
 		seen[p.ID] = true
 	}
 	return t, nil
+}
+
+// ShippedTooling parses the tooling.json compiled into this binary.
+func ShippedTooling() (Tooling, error) {
+	return ParseTooling(macosguest.ToolingJSON)
 }
 
 // ToolsGuest is a booted base in stage 2, reached through the guest agent.
@@ -209,11 +216,19 @@ var _ Stage2 = (*ToolsStage)(nil)
 // stops the VM. A failure of one tool withholds that harness; only a guest that
 // cannot be reached, or a cancelled ctx, is an error.
 func (s *ToolsStage) Run(ctx context.Context, in Stage2Input) (ToolsResult, error) {
+	shipped, err := ShippedTooling()
+	if err != nil {
+		return ToolsResult{}, err
+	}
+	o := s.ToolsOptions
+	if o.Tooling.Version == 0 {
+		o.Tooling = shipped
+	}
 	g, stop, err := s.Boot(ctx, in.Spec)
 	if err != nil {
 		return ToolsResult{}, fmt.Errorf("macvm: stage 2 boot: %w", err)
 	}
-	res, err := s.onGuest(ctx, g, in)
+	res, err := onGuest(ctx, g, in, o)
 	sctx, cancel := context.WithTimeout(context.Background(), DefaultStopTimeout)
 	defer cancel()
 	if serr := stop(sctx); err == nil && serr != nil {
@@ -224,18 +239,18 @@ func (s *ToolsStage) Run(ctx context.Context, in Stage2Input) (ToolsResult, erro
 
 // onGuest reads the guest agent's tools-port dial, runs the control check
 // when asked, then installs the tools.
-func (s *ToolsStage) onGuest(ctx context.Context, g ToolsGuest, in Stage2Input) (ToolsResult, error) {
+func onGuest(ctx context.Context, g ToolsGuest, in Stage2Input, o ToolsOptions) (ToolsResult, error) {
 	dial, err := g.ToolsDial(ctx)
 	if err != nil || !ValidToolsDial(dial) {
 		dial = ToolsDialTransport
 	}
 	desktop := ""
 	if in.ControlCheck {
-		if desktop, err = controlCheck(ctx, g, s.Desktop); err != nil {
+		if desktop, err = controlCheck(ctx, g, o.Desktop); err != nil {
 			return ToolsResult{ToolsDial: dial}, err
 		}
 	}
-	res, err := installTools(ctx, g, s.ToolsOptions)
+	res, err := installTools(ctx, g, o)
 	res.Desktop, res.ToolsDial = desktop, dial
 	return res, err
 }
