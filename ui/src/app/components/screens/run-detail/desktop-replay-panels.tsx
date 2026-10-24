@@ -31,7 +31,7 @@ export function ReplayActionLog({ actions, gaps, active, duration, onJump, onGoA
   return (
     <section aria-label={C.ACTION_LOG} className="rounded-xl border border-border bg-card">
       <div className="flex items-center gap-2 border-b border-border px-3.5 py-2.5">
-        <span className="flex-1 text-[11px] font-semibold uppercase tracking-[.06em]">{C.ACTION_LOG}</span>
+        <span className="label-eyebrow flex-1">{C.ACTION_LOG}</span>
         <span className="text-meta text-muted-foreground">{C.ACTION_LOG_HINT}</span>
       </div>
       {shown.map((a) => (
@@ -101,7 +101,7 @@ export function ReplayChain({ runId, recKey, from, gaps, audit }: {
   return (
     <section aria-label={C.LOG_TITLE} className="rounded-xl border border-border bg-card" data-testid="desktop-replay-chain">
       <div className="flex items-center gap-2 border-b border-border px-3.5 py-2.5">
-        <span className="flex-1 text-[11px] font-semibold uppercase tracking-[.06em]">{C.LOG_TITLE}</span>
+        <span className="label-eyebrow flex-1">{C.LOG_TITLE}</span>
         {typeof chain === "object" && (
           <Chip tone={chain.ok ? "success" : "danger"} dot>
             {chain.ok ? C.CHAIN_OK : C.CHAIN_BROKEN}

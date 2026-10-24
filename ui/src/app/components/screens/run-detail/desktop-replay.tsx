@@ -94,6 +94,16 @@ function Player({ runId, recKey, doc, audit, onGoAudit }: {
   msNow.current = ms;
   const [screenFailed, setScreenFailed] = React.useState(false);
   const frames = React.useMemo(() => decodeFrames(pb.frames), [pb.frames]);
+  // A decoder that throws (a stream or a browser noVNC refuses) drops the screen, never the replay:
+  // the feed goes, so no later seek can throw again inside an effect.
+  const seek = React.useCallback((at: number) => {
+    try {
+      feed.current?.seek(at);
+    } catch {
+      feed.current = undefined;
+      setScreenFailed(true);
+    }
+  }, []);
 
   // The decoder loads once per recording; each seek back gives it a fresh RFB on the same element.
   React.useEffect(() => {
@@ -111,18 +121,21 @@ function Player({ runId, recKey, doc, audit, onGoAudit }: {
           rfb.focusOnClick = false;
           return { push: (b) => sock.push(b), close: () => rfb.disconnect() };
         });
-        feed.current.seek(msNow.current);
+        seek(msNow.current);
       })
-      .catch(() => alive && setScreenFailed(true));
+      .catch(() => {
+        feed.current = undefined;
+        if (alive) setScreenFailed(true);
+      });
     return () => {
       alive = false;
       feed.current?.close();
       feed.current = undefined;
     };
-  }, [frames]);
+  }, [frames, seek]);
   React.useEffect(() => {
-    feed.current?.seek(ms);
-  }, [ms]);
+    seek(ms);
+  }, [ms, seek]);
 
   React.useEffect(() => {
     if (!playing) return;
