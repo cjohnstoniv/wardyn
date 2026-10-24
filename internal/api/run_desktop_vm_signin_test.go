@@ -744,16 +744,23 @@ func TestDesktopSignIns_PauseThatCannotRetakeItsLockSendsNothing(t *testing.T) {
 
 // A failed pause's continue is cancelled when the run's lock is lost during it: another pause may take
 // the lock and stop the agent, and a continue landing after that would run the agent under its mark.
-// The first pause takes the lock again, finds that newer mark and sends nothing more, so the newer
-// pause's agent stays stopped under its mark.
+// The first pause takes the lock again and finds that newer mark. As its continue was sent, it stops
+// the agent once more, under the lock it holds again, and sends nothing else, so the newer pause's
+// agent stays stopped under its mark.
 func TestDesktopSignIns_AContinueThatLosesItsLockIsCancelled(t *testing.T) {
 	f := newVMSignInFixture(t, "memory")
 	drop := f.loseLocks()
 	f.rn.pauseErr = errors.New("guestagent: 502 Bad Gateway")
 	var first atomic.Bool
-	var cause error
+	var cause, restopLock error
 	var newer vmSignInAnswer
+	newerDone, restops := false, 0
 	f.rn.during = func(ctx context.Context, call string) {
+		if call == "pause" && newerDone { // the first pause's stop, once the newer pause has answered
+			restops++
+			restopLock = f.srv.lockHeld(ctx)
+			return
+		}
 		if call != "resume" || !first.CompareAndSwap(false, true) {
 			return
 		}
@@ -767,6 +774,7 @@ func TestDesktopSignIns_AContinueThatLosesItsLockIsCancelled(t *testing.T) {
 		f.rn.pauseErr = nil
 		f.rn.pmu.Unlock()
 		newer.code, newer.v, newer.body = f.do(t, http.MethodPost, "/pause")
+		newerDone = true
 	}
 	code, v, body := f.do(t, http.MethodPost, "/pause")
 	if !errors.Is(cause, db.ErrLockLost) {
@@ -778,8 +786,11 @@ func TestDesktopSignIns_AContinueThatLosesItsLockIsCancelled(t *testing.T) {
 	if code != http.StatusOK || v.PausedAt == nil || !v.PausedAt.Equal(*newer.v.PausedAt) {
 		t.Fatalf("the failed pause = %d %s, want the newer pause's mark", code, body)
 	}
-	if got := f.rn.seen(); !slices.Equal(got, []string{"pause vm-1", "resume vm-1", "pause vm-1"}) {
-		t.Fatalf("runner calls = %v, want the failed pause, its cancelled continue and the newer pause", got)
+	if got := f.rn.seen(); !slices.Equal(got, []string{"pause vm-1", "resume vm-1", "pause vm-1", "pause vm-1"}) {
+		t.Fatalf("runner calls = %v, want the failed pause, its cancelled continue, the newer pause and one stop again", got)
+	}
+	if restops != 1 || restopLock != nil {
+		t.Fatalf("stops after the newer pause = %d, run lock %v: want one, sent under the lock taken again", restops, restopLock)
 	}
 	if !f.rn.agentStopped() {
 		t.Fatal("the newer pause's agent is not stopped")
