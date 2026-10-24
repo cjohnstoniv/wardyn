@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -153,6 +154,84 @@ func TestOwningUnitWriteFourEyes(t *testing.T) {
 	}
 	if w := off.call(off.alice, http.MethodPut, pinPath(ws2), pinBody(nil)); w.Code != http.StatusOK {
 		t.Errorf("switch off unpin: %d %s, want direct", w.Code, w.Body)
+	}
+}
+
+// overlapAtTargetLock runs write while another writer holds governance target kind/key and has made
+// edit on its transaction: write reads the state before edit commits, waits at the target lock, and
+// returns once edit has committed. Its answer is returned.
+func overlapAtTargetLock(t *testing.T, e *govEnv, kind, key string, edit func(q store.Querier) error, write func() *httptest.ResponseRecorder) *httptest.ResponseRecorder {
+	t.Helper()
+	ctx := t.Context()
+	other, err := testutil.PGConn(t, e.pool).Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Rollback(ctx) //nolint:errcheck // committed below; a no-op then
+	if err := store.LockGovernanceTarget(ctx, other, kind, key); err != nil {
+		t.Fatal(err)
+	}
+	if err := edit(other); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- write() }()
+	for deadline := time.Now().Add(15 * time.Second); ; {
+		var n int
+		if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()
+			AND wait_event_type = 'Lock' AND wait_event = 'advisory'`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n > 0 {
+			break
+		}
+		select {
+		case w := <-done:
+			t.Fatalf("the write answered %d %s without waiting for the other writer", w.Code, w.Body)
+		case <-time.After(10 * time.Millisecond):
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the write never waited at the target lock")
+		}
+	}
+	if err := other.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	return <-done
+}
+
+// TestOwningUnitOverlappingMoves: a move judged narrowing on the pin it read is judged again on the
+// pin as it stands when it writes. With the workspace pinned to ow-top, a move to ow-kid below it
+// overlaps one to ow-other that commits first: from ow-other the move to ow-kid no longer only
+// narrows, so it is held, never applied directly, and the pin stays ow-other until it is approved.
+func TestOwningUnitOverlappingMoves(t *testing.T) {
+	e := newGovEnv(t)
+	top := treeChild(t, e, `{"name":"ow-top","mode":"pass_through","parent_id":"`+store.DefaultUnitID.String()+`"}`)
+	kid := treeChild(t, e, `{"name":"ow-kid","mode":"pass_through","parent_id":"`+top.ID.String()+`"}`)
+	other := treeChild(t, e, `{"name":"ow-other","mode":"pass_through","parent_id":"`+store.DefaultUnitID.String()+`"}`)
+	ws := seedPinnableWorkspace(t, e, "ow-ws")
+	if w := e.call(e.alice, http.MethodPut, pinPath(ws), pinBody(&top.ID)); w.Code != http.StatusOK {
+		t.Fatalf("pin ow-top: %d %s", w.Code, w.Body)
+	}
+	pinOf := func() *uuid.UUID {
+		got, err := e.pg.GetWorkspace(context.Background(), ws.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got.OwningUnitID
+	}
+	w := overlapAtTargetLock(t, e, govKindWorkspaceOwningUnit, ws.ID.String(),
+		func(q store.Querier) error { return store.SetWorkspaceOwningUnitQ(t.Context(), q, ws.ID, &other.ID) },
+		func() *httptest.ResponseRecorder {
+			return e.call(e.alice, http.MethodPut, pinPath(ws), pinBody(&kid.ID))
+		})
+	ch := e.pending(w)
+	if got := pinOf(); got == nil || *got != other.ID {
+		t.Fatalf("the pin is %v after the overlapping move, want ow-other until approval", got)
+	}
+	e.approve(ch.ID)
+	if got := pinOf(); got == nil || *got != kid.ID {
+		t.Errorf("the approved move left %v, want ow-kid", got)
 	}
 }
 

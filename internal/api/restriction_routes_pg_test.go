@@ -152,6 +152,56 @@ func TestRestrictionWriteFourEyes(t *testing.T) {
 	}
 }
 
+// TestRestrictionOverlappingReplacements: a replacement judged at least as strict as the restriction
+// it read is judged again on the restriction as it stands when it writes. Over members ov-a, one that
+// adds ov-b overlaps one that adds ov-c and commits first: ov-a and ov-b drop ov-c, so the first is
+// held, never applied directly, and the members stay ov-a and ov-c until it is approved. The held
+// change is based on what it found, so its approval applies.
+func TestRestrictionOverlappingReplacements(t *testing.T) {
+	e := newGovEnv(t)
+	base := types.RestrictionWrite{Name: "ov-r", Spec: types.RestrictionSpec{DeniedDomains: strs("a.example")},
+		Members: []types.RestrictionMember{userMember("sub-ov-a")}}
+	w := e.call(e.alice, http.MethodPost, "/api/v1/governance/restrictions", restrictionJSON(t, base))
+	var created types.Restriction
+	if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &created) != nil {
+		t.Fatalf("create: %d %s", w.Code, w.Body)
+	}
+	with := func(subs ...string) types.RestrictionWrite {
+		next := base
+		next.Members = nil
+		for _, s := range subs {
+			next.Members = append(next.Members, userMember(s))
+		}
+		return next
+	}
+	members := func() []types.RestrictionMember {
+		got, err := e.pg.GetRestriction(context.Background(), created.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sortRestrictionMembers(got.Members)
+		return got.Members
+	}
+	ac, ab := with("sub-ov-a", "sub-ov-c"), with("sub-ov-a", "sub-ov-b")
+	w = overlapAtTargetLock(t, e, govKindRestriction, created.ID.String(),
+		func(q store.Querier) error {
+			_, err := store.PutRestrictionQ(t.Context(), q, types.Restriction{ID: created.ID, Name: ac.Name, Spec: ac.Spec,
+				Limits: ac.Limits, Contact: ac.Contact, Members: ac.Members}, "sub-other-writer")
+			return err
+		},
+		func() *httptest.ResponseRecorder {
+			return e.call(e.alice, http.MethodPut, "/api/v1/governance/restrictions/"+created.ID.String(), restrictionJSON(t, ab))
+		})
+	ch := e.pending(w)
+	if got := members(); !slices.Equal(got, ac.Members) {
+		t.Fatalf("members after the overlapping replacement: %v, want ov-a and ov-c until approval", got)
+	}
+	e.approve(ch.ID)
+	if got := members(); !slices.Equal(got, ab.Members) {
+		t.Errorf("members after the approval: %v, want ov-a and ov-b", got)
+	}
+}
+
 // TestRestrictionNotAContext: a restriction is never one of a person's contexts, and cannot be run_in.
 func TestRestrictionNotAContext(t *testing.T) {
 	e := newGovEnvOn(t, throwawayPGPool(t))
