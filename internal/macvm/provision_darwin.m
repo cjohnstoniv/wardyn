@@ -15,6 +15,7 @@
 #import <Virtualization/Virtualization.h>
 #import <objc/message.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -117,7 +118,7 @@ static VZVirtualMachineConfiguration *wardynConfig(const char *disk, const char 
 		return nil;
 	}
 
-	int nicFD = dup(fd);
+	int nicFD = fcntl(fd, F_DUPFD_CLOEXEC, 0); // close-on-exec: the helper runs pmset while this VM runs
 	if (nicFD < 0) {
 		*errOut = [NSString stringWithFormat:@"duplicate the network socket: %s", strerror(errno)];
 		return nil;
@@ -127,7 +128,7 @@ static VZVirtualMachineConfiguration *wardynConfig(const char *disk, const char 
 	nic.attachment = [[VZFileHandleNetworkDeviceAttachment alloc] initWithFileHandle:nicHandle];
 
 	VZMacGraphicsDeviceConfiguration *graphics = [VZMacGraphicsDeviceConfiguration new];
-	graphics.displays = @[ [[VZMacGraphicsDisplayConfiguration alloc] initWithWidthInPixels:1920 heightInPixels:1200 pixelsPerInch:80] ];
+	graphics.displays = @[ [[VZMacGraphicsDisplayConfiguration alloc] initWithWidthInPixels:1920 heightInPixels:1080 pixelsPerInch:80] ];
 
 	VZVirtualMachineConfiguration *cfg = [VZVirtualMachineConfiguration new];
 	cfg.platform = platform;
