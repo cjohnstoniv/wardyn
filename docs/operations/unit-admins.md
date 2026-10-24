@@ -46,6 +46,7 @@ A unit admin's widening is always held for a second human, whatever `WARDYN_GOVE
 | adding a membership | — | always |
 | deleting a membership | the person keeps another membership in the unit admin's units | a legacy row that may make another unit someone's context |
 | moving a membership | the destination path narrows the source path, and the move activates or vacates no other legacy context | otherwise, for an approver who governs every unit involved |
+| renaming a unit | the rename changes no person's legacy context | otherwise, for an approver who governs every unit it activates or vacates |
 | granting or revoking a unit admin | — | always |
 
 - A security admin's writes, grants included, follow `WARDYN_GOVERNANCE_SECOND_HUMAN` unchanged. A single-admin install can create unit admins.
