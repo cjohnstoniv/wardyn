@@ -35,6 +35,10 @@ const (
 	PhaseBootstrap = "bootstrap"
 	PhaseShutdown  = "shutdown"
 	PhaseReady     = "ready"
+	// PhaseSetupByHand: macOS asked for its setup by hand, and the one-time
+	// code is in Layout.SetupCode() on this Mac. Its event carries no
+	// detail: an event's detail is logged, and the code is never logged.
+	PhaseSetupByHand = "setup_by_hand"
 )
 
 // PrepareEvent is one progress report.
@@ -47,6 +51,9 @@ type PrepareEvent struct {
 	BytesPerSec float64 `json:"bytes_per_sec,omitempty"`
 	Paused      bool    `json:"paused,omitempty"`
 	Detail      string  `json:"detail,omitempty"`
+	// ToolsDial is the guest agent's classified tools-port dial, recorded
+	// once per stage-2 boot.
+	ToolsDial string `json:"tools_dial,omitempty"`
 }
 
 // PrepNetwork is the in-helper relay prepare's VM uses (MACVM-NET): it serves
@@ -67,6 +74,12 @@ type BootstrapInput struct {
 	Dial     func(ctx context.Context, port int) (net.Conn, error)
 	Username string
 	Password string
+	// NewPassword, when set, means Password is the one-time code the Mac's
+	// person gave the account in Setup Assistant (setup by hand): stage 1's
+	// first SSH step replaces it with NewPassword (a random 32-byte one held
+	// in memory only) and then calls Replaced, before anything else.
+	NewPassword string
+	Replaced    func()
 }
 
 // BootstrapResult is what stage 1 found.
@@ -119,6 +132,11 @@ type PrepareOptions struct {
 	DownloadRange int64
 	// RemoteLoginWait bounds the wait for the provisioned guest's Remote Login.
 	RemoteLoginWait time.Duration
+	// SetupByHandWait, when set, turns on setup by hand: if Remote Login
+	// stays silent, prepare writes a one-time code to Layout.SetupCode() and
+	// waits this long for the Mac's person to finish Setup Assistant with it
+	// and turn Remote Login on. Zero stops with ErrManualSetup instead.
+	SetupByHandWait time.Duration
 }
 
 // ErrManualSetup means the provisioned first boot did not come up with Remote
@@ -188,7 +206,7 @@ func newPrep(o PrepareOptions) (*prep, error) {
 }
 
 func (p *prep) emit(ev PrepareEvent) {
-	p.Log.Info("macvm: prepare", "phase", ev.Phase, "fraction", ev.Fraction, "bytes", ev.Bytes, "total", ev.Total, "paused", ev.Paused, "detail", ev.Detail)
+	p.Log.Info("macvm: prepare", "phase", ev.Phase, "fraction", ev.Fraction, "bytes", ev.Bytes, "total", ev.Total, "paused", ev.Paused, "detail", ev.Detail, "tools_dial", ev.ToolsDial)
 	p.Progress(ev)
 }
 
@@ -325,12 +343,18 @@ func (p *prep) stage2(ctx context.Context, spec MachineSpec, res *BootstrapResul
 		return err
 	}
 	p.emit(PrepareEvent{Phase: PhaseTools})
-	tr, err := p.Stage2.Run(ctx, Stage2Input{Spec: spec, Dir: p.base})
+	tr, err := p.Stage2.Run(ctx, Stage2Input{Spec: spec, Dir: p.base, ControlCheck: true})
+	if tr.ToolsDial != "" {
+		p.emit(PrepareEvent{Phase: PhaseTools, ToolsDial: tr.ToolsDial})
+	}
 	if err != nil {
 		return fmt.Errorf("macvm: stage 2: %w", err)
 	}
 	if tr.AgentVersion != "" {
 		res.AgentVersion = tr.AgentVersion
+	}
+	if tr.Desktop != "" {
+		res.Desktop = tr.Desktop
 	}
 	res.Harnesses = tr.Harnesses
 	return writeToolsRecord(p.base, tr, res.AgentVersion, time.Now())
@@ -362,6 +386,7 @@ func (p *prep) discardInterrupted() error {
 			return err
 		}
 	}
+	p.removeSetupCode()
 	return nil
 }
 
@@ -560,7 +585,18 @@ func (p *prep) provisionAndBootstrap(ctx context.Context, spec MachineSpec) (Boo
 		case <-wctx.Done():
 		}
 	}()
-	if err := waitPort(wctx, nw, 22, p.RemoteLoginWait); err != nil {
+	login, replace := password, ""
+	err = waitPort(wctx, nw, 22, p.RemoteLoginWait)
+	if errors.Is(err, ErrManualSetup) && p.SetupByHandWait > 0 {
+		// The code goes with this prepare: replaced by stage 1, or useless
+		// once the base it was typed into is discarded.
+		defer p.removeSetupCode()
+		var code string
+		if code, err = p.setupByHand(wctx, nw); err == nil {
+			login, replace = code, password
+		}
+	}
+	if err != nil {
 		select {
 		case e := <-early:
 			stopped = true
@@ -573,7 +609,11 @@ func (p *prep) provisionAndBootstrap(ctx context.Context, spec MachineSpec) (Boo
 		return BootstrapResult{}, err
 	}
 	p.emit(PrepareEvent{Phase: PhaseBootstrap})
-	res, err := p.Bootstrap.Bootstrap(wctx, BootstrapInput{Dial: nw.DialGuest, Username: provisionUser, Password: password})
+	in := BootstrapInput{Dial: nw.DialGuest, Username: provisionUser, Password: login}
+	if replace != "" {
+		in.NewPassword, in.Replaced = replace, p.removeSetupCode
+	}
+	res, err := p.Bootstrap.Bootstrap(wctx, in)
 	if err != nil {
 		return BootstrapResult{}, fmt.Errorf("macvm: stage 1: %w", err)
 	}
