@@ -21,8 +21,9 @@
 
   serve writes its own log to __WARDYN_LOG__ (its log-file flag), rotated at 10 MiB with 3 older files kept:
   launchd cannot rotate StandardOutPath, and newsyslog needs root. StandardOutPath and
-  StandardErrorPath stay on the same file so a panic, or anything printed before serve opens its log,
-  is still kept there.
+  StandardErrorPath name a separate __WARDYN_CRASH_LOG__, which only takes what serve prints outside its
+  log: a panic or fatal error, or a failure before it opens the log. launchd keeps that file open by
+  inode, so pointing it at the rotated log would send a crash into a rotated or deleted file.
 -->
 <plist version="1.0">
 <dict>
@@ -44,8 +45,8 @@
   <key>ThrottleInterval</key>
   <integer>10</integer>
   <key>StandardOutPath</key>
-  <string>__WARDYN_LOG__</string>
+  <string>__WARDYN_CRASH_LOG__</string>
   <key>StandardErrorPath</key>
-  <string>__WARDYN_LOG__</string>
+  <string>__WARDYN_CRASH_LOG__</string>
 </dict>
 </plist>

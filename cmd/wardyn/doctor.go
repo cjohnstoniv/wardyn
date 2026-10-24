@@ -166,5 +166,5 @@ func parkedExitStage(ctx context.Context, c *sdk.Client, runner uuid.UUID) docto
 	}
 	return doctor.FailStage("runner-exits", fmt.Sprintf("the organisation parked %d of this runner's exit receipts: it refused each on every try as a foreign, stale "+
 		"or incomplete incarnation, keeps it and no longer retries it, so its run keeps the state the organisation last recorded", view.ParkedExits), "",
-		"ask an administrator to read the run's runner.exit.park audit row")
+		"ask an administrator to read the run's runner.exit.park audit row and, to start the run again, follow docs/runner-offline.md#a-parked-exit-receipt")
 }

@@ -34,5 +34,7 @@ if [ -z "$org" ]; then
   echo "wardyn-runnerd: the com.wardyn.runnerd profile sets no OrgURL; the managed agent stays idle"
   exit 0
 fi
-# serve rotates its own log (--log-file); this redirect keeps anything printed before it opens it.
+# serve rotates its own log (--log-file). What it prints outside that log (a panic, or a failure before
+# it opens it) goes to a separate crash log: a rotated log would carry it off to a renamed file.
+exec >>"${log%.log}.crash.log" 2>&1
 exec "$bin" serve --log-file "$log"

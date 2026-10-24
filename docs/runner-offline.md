@@ -39,10 +39,33 @@ is logged once per such interval, with `repeated` counting the lines left out.
 A restart retries every pending receipt at once. A receipt the organisation
 refuses as a foreign, stale or incomplete incarnation on 8 tries in a row
 (about ten minutes) is parked (migration `0232_runner_exit_parked.sql`): the
-row is kept with `parked_at` set and still blocks another generation, a
-`runner.exit.park` audit row records the tries and the error, and the worker
-no longer retries it. `wardyn doctor` on the runner's computer reports it as
-a failed `runner-exits` stage.
+row is kept with `parked_at` set, a `runner.exit.park` audit row records the
+tries and the error, and the worker no longer retries it. `wardyn doctor` on
+the runner's computer reports it as a failed `runner-exits` stage.
+
+## A parked exit receipt
+
+A parked receipt is never completed, so the organisation refuses every later
+generation of its run: the run cannot be started or given a new incarnation
+on any runner, and it keeps the state the organisation last recorded.
+
+To release the run:
+
+1. Read the run's `runner.exit.park` audit row, and check that the refusal it
+   names is permanent: the runner was revoked, or the run moved on.
+2. Stop anything of that run still running on the runner by hand, and settle
+   the run's state if it needs settling: releasing the receipt runs none of its
+   terminal effects (the transition if the exit was never accepted, the
+   sandbox teardown).
+3. As the database owner, mark the receipt complete:
+
+   ```sql
+   UPDATE runner_execution_exits SET tail_complete = true
+    WHERE run_id = '<run id>' AND parked_at IS NOT NULL;
+   ```
+
+The receipt stays, still marked parked, for the record. A later generation
+of the run can start, and `wardyn doctor` no longer counts it.
 
 The runner retries failed containment on every pass of its 1-second loop, with
 no added backoff, until it holds. A run whose replay to the organisation fails

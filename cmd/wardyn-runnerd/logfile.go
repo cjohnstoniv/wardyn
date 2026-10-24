@@ -42,9 +42,7 @@ func openRotatingLog(path string, max int64, keep int) (*rotatingLog, error) {
 		return nil, err
 	}
 	if l.size >= max {
-		if err := l.rotate(); err != nil {
-			return nil, err
-		}
+		_ = l.rotate() // as in Write: a failed rotation keeps the current file
 	}
 	return l, nil
 }
@@ -64,29 +62,34 @@ func (l *rotatingLog) open() error {
 }
 
 // rotate moves path.1 to path.2 and so on, the oldest over the one past keep, then path to path.1, and
-// starts path afresh.
+// starts path afresh. The renames happen while path is still open, so a rename or open that fails
+// leaves the current file in use: only that rotation is lost, and the next is tried once another max
+// bytes are written.
 func (l *rotatingLog) rotate() error {
-	if err := l.f.Close(); err != nil {
-		return err
-	}
-	for i := l.keep - 1; i >= 1; i-- {
-		if err := os.Rename(fmt.Sprintf("%s.%d", l.path, i), fmt.Sprintf("%s.%d", l.path, i+1)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	old := l.f
+	err := func() error {
+		for i := l.keep - 1; i >= 1; i-- {
+			if err := os.Rename(fmt.Sprintf("%s.%d", l.path, i), fmt.Sprintf("%s.%d", l.path, i+1)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
+		}
+		if err := os.Rename(l.path, l.path+".1"); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
-	}
-	if err := os.Rename(l.path, l.path+".1"); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return l.open()
+	}()
+	if err != nil {
+		l.f, l.size = old, 0
 		return err
 	}
-	return l.open()
+	return old.Close()
 }
 
 func (l *rotatingLog) Write(p []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.size > 0 && l.size+int64(len(p)) > l.max {
-		if err := l.rotate(); err != nil {
-			return 0, err
-		}
+		_ = l.rotate() // a failed rotation keeps the current file; the line still lands
 	}
 	n, err := l.f.Write(p)
 	l.size += int64(n)

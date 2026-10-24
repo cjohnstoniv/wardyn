@@ -64,9 +64,10 @@ func (s PG) ParkRunnerExit(ctx context.Context, runnerID, runID, generation uuid
 	return true, nil
 }
 
-// ParkedRunnerExits counts runnerID's parked exit receipts.
+// ParkedRunnerExits counts runnerID's parked exit receipts that still block their run: one an
+// administrator released (tail_complete set, docs/runner-offline.md) no longer counts.
 func (s PG) ParkedRunnerExits(ctx context.Context, runnerID uuid.UUID) (int, error) {
 	var n int
-	err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM runner_execution_exits WHERE runner_id=$1 AND parked_at IS NOT NULL`, runnerID).Scan(&n)
+	err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM runner_execution_exits WHERE runner_id=$1 AND parked_at IS NOT NULL AND NOT tail_complete`, runnerID).Scan(&n)
 	return n, err
 }

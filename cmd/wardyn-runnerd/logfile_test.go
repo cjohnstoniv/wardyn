@@ -80,3 +80,38 @@ func TestRotatingLogRotatesAnOversizedLogAtStart(t *testing.T) {
 		t.Errorf("runnerd.log is %d bytes after a second start, want both lines", got)
 	}
 }
+
+// A rotation that cannot rename (here runnerd.log.1 is a directory) costs only that rotation: every write
+// still lands in the live file, and once the obstacle is gone a later rotation succeeds.
+func TestRotatingLogSurvivesAFailedRotation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runnerd.log")
+	if err := os.MkdirAll(filepath.Join(path+".1", "in-the-way"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	l, err := openRotatingLog(path, 100, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	line := append(bytes.Repeat([]byte("x"), 59), '\n')
+	for i := range 3 {
+		if n, err := l.Write(line); err != nil || n != len(line) {
+			t.Fatalf("write %d after a failed rotation: %d, %v", i, n, err)
+		}
+	}
+	if got := fileSize(t, path); got != 180 {
+		t.Fatalf("runnerd.log is %d bytes, want all 3 lines kept while it could not rotate", got)
+	}
+	if err := os.RemoveAll(path + ".1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Write(line); err != nil {
+		t.Fatal(err)
+	}
+	if got := fileSize(t, path+".1"); got != 180 {
+		t.Errorf("runnerd.log.1 is %d bytes, want the old lines once a rotation could rename", got)
+	}
+	if got := fileSize(t, path); got != 60 {
+		t.Errorf("runnerd.log is %d bytes after the rotation, want under the cap", got)
+	}
+}

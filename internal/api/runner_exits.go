@@ -75,7 +75,9 @@ func (s *Server) SweepRunnerExits(ctx context.Context) error {
 			}
 			wait, refused := s.exitRetry.failed(key, err, now)
 			if refused >= runnerExitParkAfter {
-				parked, perr := st.ParkRunnerExit(ctx, row.RunnerID, row.RunID, row.Exit.Generation, refused, err.Error(), s.cfg.RunnerAuditPrepare)
+				bounded, cancel := context.WithTimeout(ctx, 30*time.Second)
+				parked, perr := st.ParkRunnerExit(bounded, row.RunnerID, row.RunID, row.Exit.Generation, refused, err.Error(), s.cfg.RunnerAuditPrepare)
+				cancel()
 				if perr == nil {
 					s.exitRetry.forget(key)
 					if parked {

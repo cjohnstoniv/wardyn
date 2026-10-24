@@ -19,7 +19,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `runner.exit.park`, no longer retried, and failed by `wardyn doctor`'s new `runner-exits` stage. The runner backs off
   each run's failing replay on its own, without holding up the others, logs its containment and replay retries the
   same way (containment is still tried on every pass), and on macOS writes `~/Library/Logs/wardyn/runnerd.log` itself, rotated
-  at 10 MiB with three older files kept; `wardyn runner upgrade` rewrites the LaunchAgent to pass `--log-file`.
+  at 10 MiB with three older files kept (a crash goes to `runnerd.crash.log`); `wardyn runner upgrade` rewrites the LaunchAgent to pass `--log-file`.
 
 ## [0.10.0-rc.1] — 2026-10-24
 

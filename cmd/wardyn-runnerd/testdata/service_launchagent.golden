@@ -20,8 +20,8 @@
   <key>ThrottleInterval</key>
   <integer>10</integer>
   <key>StandardOutPath</key>
-  <string>/Users/me/Library/Logs/wardyn/runnerd.log</string>
+  <string>/Users/me/Library/Logs/wardyn/runnerd.crash.log</string>
   <key>StandardErrorPath</key>
-  <string>/Users/me/Library/Logs/wardyn/runnerd.log</string>
+  <string>/Users/me/Library/Logs/wardyn/runnerd.crash.log</string>
 </dict>
 </plist>
