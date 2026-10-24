@@ -107,13 +107,11 @@ func (r *runner) run(ctx context.Context) error {
 	if err := thermalGate(r.o.Engine); err != nil {
 		return err
 	}
-	man, err := ReadyBase(r.cfg.BaseDir)
+	man, id, err := cloneReadyBase(r.o.Engine, r.cfg.BaseDir, r.o.RunDir, r.cfg.Identity)
 	if err != nil {
 		return err
 	}
-	if r.id, err = CloneRun(r.o.Engine, r.cfg.BaseDir, r.o.RunDir, r.cfg.Identity); err != nil {
-		return err
-	}
+	r.id = id
 	r.mu.Lock()
 	r.st.MachineID, r.st.MachineIDSHA256 = r.id.Encoded(), IDHash(r.id.MachineIdentifier)
 	r.mu.Unlock()
