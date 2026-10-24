@@ -11,6 +11,25 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Before you upgrade
+
+- **Upgrade wardyn-runnerd and rebuild the Linux VM guest image (`vm-linux`) to order a desktop sign-in's pause and
+  resume.** A run on an older wardyn-runnerd or guest image is not refused: its pause and resume work as before, its
+  `desktop.sign_in.pause` row says `fenced` false, and a continue that reaches its guest late can still run the agent
+  while the run page says paused. Migration `0231_desktop_vm_pause_generation` adds a column to `desktop_vm_sign_ins`;
+  no grant changes.
+- During a rolling control-plane upgrade, a desktop sign-in pause can stay paused until it is resumed from an upgraded server.
+
+### Fixed
+
+- A continue that reaches a Linux VM's guest agent after a later "Pause the agent to sign in", as one delayed past a
+  lost run lock can, no longer runs the agent while the person signs in. Each pause takes the run's next pause
+  generation, kept in the database (migration `0231_desktop_vm_pause_generation`), and every stop and continue carries
+  one to the guest agent, which drops a request out of order and answers `409`: one older than the newest it has
+  seen, or a stop after its own generation's continue. The order outlives a restart of the guest agent's service. Each
+  pause-to-resume's `desktop.sign_in.pause` row records `fenced`, false when the run's wardyn-runnerd or guest image
+  predates it.
+
 ## [0.10.0-rc.1] — 2026-10-24
 
 ### Before you upgrade

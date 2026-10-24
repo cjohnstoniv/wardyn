@@ -54,6 +54,14 @@ Console UI primitives
 The primitives under ui/src/app/components/ui/ are derived from shadcn/ui, MIT
 licensed, Copyright (c) 2023 shadcn — https://ui.shadcn.com
 
+macOS VM helper
+---------------
+The macOS runner package's wardyn-macvm helper links github.com/Code-Hex/vz/v3
+(MIT licensed, Copyright (c) 2025 codehex) and its dependency
+github.com/Code-Hex/go-infinity-channel (MIT licensed, Copyright (c) 2023
+codehex) as Go module dependencies; neither is vendored. Only darwin builds
+import them, so the notices generated from the Linux build do not list them.
+
 GPL components in the published container images
 ------------------------------------------------
 The agent images apt-install `asciinema` (GPL-3.0), which `wardyn-rec` executes as

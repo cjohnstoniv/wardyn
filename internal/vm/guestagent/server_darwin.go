@@ -40,13 +40,17 @@ type Server struct {
 	User string
 	// OutDir holds detached execs' output files. macOS clears /var/run at boot.
 	OutDir string
-	// MarkerDir holds the marker of this boot's Init (/var/run: the marker outlives an agent restart
-	// and a reboot clears it).
+	// MarkerDir holds the marker of this boot's Init and the order of its pauses (PauseFence)
+	// (/var/run: both outlive an agent restart and a reboot clears them).
 	MarkerDir string
 	// Desktop is the guest's Screen Sharing; nil serves no desktop requests (tests only).
 	Desktop *Desktop
 
+	// signal signals a process group; nil is kill(2) (tests hold or fail it).
+	signal func(pgid int, sig unix.Signal) error
+
 	mu      sync.Mutex
+	fence   PauseFence // the order of pauses and resumes, as the marker directory keeps it
 	inited  bool
 	env     []string // Init's Env and SecretEnv, KEY=VALUE
 	execs   map[string]*detached
@@ -89,6 +93,13 @@ func (s *Server) Handler() (http.Handler, error) {
 	if s.MarkerDir == "" {
 		return nil, errors.New("the guest agent has no marker directory")
 	}
+	fence, err := readFence(s.MarkerDir)
+	if err != nil {
+		return nil, fmt.Errorf("the guest agent's pause order: %w", err)
+	}
+	s.mu.Lock()
+	s.fence = fence
+	s.mu.Unlock()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/ready", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, Ready{Version: s.Version}) })
 	mux.HandleFunc("POST /v1/init", s.handleInit)
@@ -104,8 +115,8 @@ func (s *Server) Handler() (http.Handler, error) {
 	if s.Desktop != nil {
 		s.Desktop.Register(mux)
 	}
-	mux.HandleFunc("POST /v1/agent/pause", func(w http.ResponseWriter, _ *http.Request) { s.signalAgent(w, unix.SIGSTOP) })
-	mux.HandleFunc("POST /v1/agent/resume", func(w http.ResponseWriter, _ *http.Request) { s.signalAgent(w, unix.SIGCONT) })
+	mux.HandleFunc("POST /v1/agent/pause", func(w http.ResponseWriter, r *http.Request) { s.signalAgent(w, r, unix.SIGSTOP) })
+	mux.HandleFunc("POST /v1/agent/resume", func(w http.ResponseWriter, r *http.Request) { s.signalAgent(w, r, unix.SIGCONT) })
 	mux.HandleFunc("GET /v1/agent", func(w http.ResponseWriter, _ *http.Request) {
 		s.mu.Lock()
 		d := s.execs[s.latest]
@@ -148,7 +159,7 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 0.10.0 cannot make a macOS keychain read-only, so a run that wants no sign-ins kept gets no
-	// desktop: no password, no credential, and the tunnel refuses. It still runs agent-only. This is
+	// desktop: no password is set, and the tunnel refuses. It still runs agent-only. This is
 	// first, so an Init that fails while writing leaves the desktop off.
 	if in.SignInsOff && s.Desktop != nil {
 		s.Desktop.Disable()
@@ -160,6 +171,9 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = marker.Close()
 	res := InitResult{SignIns: SignInsRunDisk}
+	if s.Desktop != nil {
+		res.DesktopPasswordSet = new(bool)
+	}
 	for _, f := range in.Files {
 		if err := s.writeFile(f); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -175,7 +189,7 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 	}
 	s.env = initEnv(in.Env, in.SecretEnv, ca)
 	if s.Desktop != nil {
-		s.initDesktop(r.Context(), ca, !in.SignInsOff)
+		*res.DesktopPasswordSet = s.initDesktop(r.Context(), ca, in.DesktopPassword, !in.SignInsOff)
 	}
 	s.inited = true
 	writeJSON(w, res)
@@ -191,35 +205,119 @@ func (s *Server) buildCA(files []File) error {
 	return nil
 }
 
-// initDesktop sets the run's VNC password and the CA variables in the desktop session. Neither fails the
-// Init: a run without them is agent-only or sees certificate errors in GUI apps, and the desktop's
-// requests say which (no credential, a 404). The log lines name the step and never the password.
-func (s *Server) initDesktop(ctx context.Context, ca []string, password bool) {
-	if password {
-		if err := s.Desktop.SetRunPassword(ctx); err != nil {
+// initDesktop sets the run's VNC password (pw, from Init) and the CA variables in the desktop session,
+// and says whether the password is set. Neither fails the Init: a run without them is agent-only or
+// sees certificate errors in GUI apps, and InitResult.DesktopPasswordSet says which. The log lines name
+// the step and never the password.
+func (s *Server) initDesktop(ctx context.Context, ca []string, pw string, desktop bool) bool {
+	set := false
+	if desktop {
+		if err := s.Desktop.SetRunPassword(ctx, pw); err != nil {
 			slog.Warn("guest agent: no desktop password for this run", "err", err)
+		} else {
+			set = true
 		}
 	}
 	if err := s.Desktop.SetSessionEnv(ctx, ca); err != nil {
 		slog.Warn("guest agent: CA variables not set in the desktop session", "err", err)
 	}
+	return set
 }
 
 // signalAgent sends sig to the latest detached exec's process group: the harness and every process
-// it started that stayed in its group. A process that left the group (setsid) is not reached.
-func (s *Server) signalAgent(w http.ResponseWriter, sig unix.Signal) {
+// it started that stayed in its group. A process that left the group (setsid) is not reached. A request
+// the fence drops (PauseFence) is answered 409 and signals nothing, as on Linux.
+func (s *Server) signalAgent(w http.ResponseWriter, r *http.Request, sig unix.Signal) {
+	var in AgentSignal
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<10)).Decode(&in); err != nil && !errors.Is(err, io.EOF) {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if code, msg := s.signalLatest(in.Generation, sig); code != http.StatusOK {
+		http.Error(w, msg, code)
+		return
+	}
+	writeJSON(w, AgentSignalResult{FencedPause: in.Generation > 0})
+}
+
+// signalLatest holds one lock from the choice of the exec through the fence's check, its write and the
+// signal, so no other pause or resume, and no new exec, comes between them. The fence is written before
+// the signal: once a generation is let through, an older request stays dropped even when its signal
+// fails, and the same request sent again acts.
+func (s *Server) signalLatest(gen int64, sig unix.Signal) (int, string) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	d := s.execs[s.latest]
-	s.mu.Unlock()
 	if d == nil || !d.state().Running {
-		http.Error(w, "no agent is running", http.StatusNotFound)
-		return
+		return http.StatusNotFound, "no agent is running"
 	}
-	if err := unix.Kill(-d.pid, sig); err != nil {
-		http.Error(w, "signal the agent: "+err.Error(), http.StatusInternalServerError)
-		return
+	next := s.fence
+	if !next.Admit(gen, sig == unix.SIGCONT) {
+		if gen == 0 {
+			return http.StatusConflict, ReasonStaleUnfencedResume + ": a resume with no generation came after one with a generation; the agent stays paused"
+		}
+		return http.StatusConflict, "a newer pause or resume has reached the agent"
 	}
-	writeJSON(w, struct{}{})
+	if gen == 0 && next.Generation > 0 {
+		slog.Warn("guest agent: obeyed a pause with no generation after one with a generation", "generation", next.Generation)
+	}
+	if next != s.fence {
+		if err := writeFence(s.MarkerDir, next); err != nil {
+			return http.StatusInternalServerError, "keep the order of pauses: " + err.Error()
+		}
+		s.fence = next
+	}
+	signal := s.signal
+	if signal == nil {
+		signal = func(pgid int, sig unix.Signal) error { return unix.Kill(-pgid, sig) }
+	}
+	if err := signal(d.pid, sig); err != nil {
+		return http.StatusInternalServerError, "signal the agent: " + err.Error()
+	}
+	return http.StatusOK, ""
+}
+
+// fenceFile, in the marker directory, keeps the PauseFence across a restart of the agent's service.
+const fenceFile = "wardyn-pause-fence"
+
+// readFence reads the fence the marker directory keeps; none is the zero fence of a fresh boot.
+func readFence(dir string) (PauseFence, error) {
+	var f PauseFence
+	fh, err := os.OpenFile(filepath.Join(dir, fenceFile), os.O_RDONLY|unix.O_NOFOLLOW, 0)
+	if errors.Is(err, os.ErrNotExist) {
+		return f, nil
+	}
+	if err != nil {
+		return f, err
+	}
+	defer fh.Close()
+	return f, json.NewDecoder(io.LimitReader(fh, 1<<10)).Decode(&f)
+}
+
+// writeFence replaces the kept fence with f, whole or not at all.
+func writeFence(dir string, f PauseFence) error {
+	b, err := json.Marshal(f)
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(dir, fenceFile)
+	tmp := path + ".tmp"
+	_ = os.Remove(tmp)
+	fh, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return err
+	}
+	_, err = fh.Write(b)
+	if cerr := fh.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		_ = os.Remove(tmp)
+	}
+	return err
 }
 
 // writeFile writes a managed file: created fresh (an existing one is replaced, never followed), root's

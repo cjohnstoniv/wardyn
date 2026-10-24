@@ -830,3 +830,47 @@ func postDesktopClose(gw http.Handler, h *uiHarness, c *http.Cookie) *httptest.R
 	gw.ServeHTTP(rec, req)
 	return rec
 }
+
+// desktopSiteStore answers the site config a test sets.
+type desktopSiteStore struct {
+	*desktopClosedStore
+	sc  types.SiteConfig
+	err error
+}
+
+func (s *desktopSiteStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return s.sc, s.err
+}
+
+// A macOS VM's desktop opens as a Linux VM's does, except for an agent whose admin set "Sign-ins in a
+// desktop: Not allowed", or when the roster cannot be read: a macOS keychain cannot be made read-only,
+// so that desktop is refused where a Linux one keeps no sign-ins.
+func TestDesktopEnterRefusesAMacOSDesktopWhoseSignInsAreOff(t *testing.T) {
+	h, _ := newDesktopHarness(t)
+	h.run.Agent, h.run.MachineKind = "claude-code", types.MachineMacOSVM
+	h.store.putRun(h.run)
+	st := &desktopSiteStore{desktopClosedStore: h.srv.cfg.Store.(*desktopClosedStore)}
+	h.srv.cfg.Store = st
+	if rec := h.enterDesktop(h.ticket(h.run.ID, h.owner, oidc.RoleUser)); rec.Code != http.StatusFound {
+		t.Fatalf("a macOS VM's desktop = %d %s, want it opened", rec.Code, rec.Body.String())
+	}
+	off := types.SiteConfig{AgentProviders: &types.AgentProviders{Agents: []types.AgentProvider{{ID: "claude-code", DesktopSignInsOff: true}}}}
+	for name, c := range map[string]struct {
+		sc  types.SiteConfig
+		err error
+	}{"Not allowed": {sc: off}, "an unreadable roster": {err: errors.New("pool closed")}} {
+		st.sc, st.err = c.sc, c.err
+		rec := h.enterDesktop(h.ticket(h.run.ID, h.owner, oidc.RoleUser))
+		var body errorBody
+		_ = json.Unmarshal(rec.Body.Bytes(), &body)
+		if rec.Code != http.StatusForbidden || body.Reason != reasonDesktopSignInsOff || body.Error != desktopSignInsOffMsg {
+			t.Fatalf("%s: a macOS VM's desktop = %d %+v, want 403 %s", name, rec.Code, body, reasonDesktopSignInsOff)
+		}
+	}
+	h.run.MachineKind = types.MachineLinuxVM
+	h.store.putRun(h.run)
+	st.sc, st.err = off, nil
+	if rec := h.enterDesktop(h.ticket(h.run.ID, h.owner, oidc.RoleUser)); rec.Code != http.StatusFound {
+		t.Fatalf("a Linux VM's desktop under Not allowed = %d %s, want it opened (it keeps no sign-ins)", rec.Code, rec.Body.String())
+	}
+}

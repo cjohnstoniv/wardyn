@@ -41,6 +41,8 @@ func vmMachine(handler string) types.VMMachine {
 // does not honour in this release (the Docker runner's table: no drives, no recording).
 func (d *Driver) refuseVMSpec(spec runner.SandboxSpec) error {
 	switch {
+	case spec.MachineKind.IsMacOSVM():
+		return errors.New("k8s: a macos_vm sandbox runs on a registered Mac runner only, never on Kubernetes")
 	case !d.linuxVM.Load():
 		return fmt.Errorf("k8s: a %q sandbox runs only on a registered runner that offers it", spec.MachineKind)
 	case spec.MachineKind != types.MachineLinuxVM:

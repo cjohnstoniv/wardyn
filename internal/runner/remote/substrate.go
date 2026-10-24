@@ -34,6 +34,9 @@ import (
 // shares one into the guest (virtiofs): the org's placement says it at create, and here at dispatch.
 const VMNoFolderShare = "this runner cannot share a folder into a Linux VM sandbox: its version predates folder shares into VMs, or its QEMU image has no working virtiofsd"
 
+// MacOSVMNotOffered refuses a macOS VM run on a runner whose caps carry no MacOSVM.
+const MacOSVMNotOffered = "this runner does not offer macOS VM sandboxes: it is older than 0.10, or its operator has not turned them on"
+
 var (
 	errOffline = fmt.Errorf("%w: no session", runner.ErrRunnerOffline)
 
@@ -188,6 +191,31 @@ func (s *Substrate) refCall(ctx context.Context, method, ref string, result any)
 	return s.call(ctx, method, runnerwire.RefArgs{Ref: ref}, result)
 }
 
+// checkVMCaps refuses a VM spec for a runner whose last caps do not offer that kind. A VM is asked of
+// no runner that has not said it starts VMs of that kind: an older one would refuse create_vm anyway,
+// but this refusal names the reason and makes no call.
+func (s *Substrate) checkVMCaps(spec runner.SandboxSpec) error {
+	c, ok := s.Caps()
+	if spec.MachineKind.IsMacOSVM() {
+		if !ok || c.MacOSVM == nil {
+			return runnerwire.Refuse(MacOSVMNotOffered)
+		}
+		// A macOS VM shares no folder in this release.
+		if len(spec.Mounts) > 0 {
+			return runnerwire.Refuse(VMNoFolderShare)
+		}
+		return nil
+	}
+	if !ok || c.LinuxVM == nil {
+		return runnerwire.Refuse("this runner does not offer Linux VM sandboxes: it is older than 0.10, or its operator has not turned them on")
+	}
+	// Nor a VM that carries a folder of a runner that cannot share one into the guest.
+	if len(spec.Mounts) > 0 && !c.LinuxVM.Virtiofs {
+		return runnerwire.Refuse(VMNoFolderShare)
+	}
+	return nil
+}
+
 // CreateSandbox sends the spec minus OnWaiting and ExecOutput. `waiting` events
 // call spec.NotifyWaiting on this goroutine, in order, before it returns.
 func (s *Substrate) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (runner.Sandbox, error) {
@@ -208,15 +236,8 @@ func (s *Substrate) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) 
 	}
 	method := runnerwire.MethodCreateSandbox
 	if spec.MachineKind.IsVM() {
-		// Asked of no runner that has not said it starts VMs: an older one would refuse create_vm
-		// anyway, but this refusal names the reason and makes no call.
-		c, ok := s.Caps()
-		if !ok || c.LinuxVM == nil {
-			return runner.Sandbox{}, runnerwire.Refuse("this runner does not offer Linux VM sandboxes: it is older than 0.10, or its operator has not turned them on")
-		}
-		// Nor a VM that carries a folder of a runner that cannot share one into the guest.
-		if len(spec.Mounts) > 0 && !c.LinuxVM.Virtiofs {
-			return runner.Sandbox{}, runnerwire.Refuse(VMNoFolderShare)
+		if err := s.checkVMCaps(spec); err != nil {
+			return runner.Sandbox{}, err
 		}
 		method = runnerwire.MethodCreateVM
 	}
