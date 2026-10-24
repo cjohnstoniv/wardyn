@@ -4,6 +4,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"log/slog"
@@ -649,6 +650,49 @@ func (w *vmSignInWatch) stop() {
 	w.stopped = true
 	w.mu.Unlock()
 	w.holdUnread(false)
+}
+
+// sweepEndedDesktopVMPauses writes the session's one desktop.sign_in.pause row for a pause whose run
+// ended before anyone resumed it, as success with ended_paused and the run's own end time, and no
+// resumed_at: the agent was never continued. A resume is refused once the run is not running, so
+// nothing else would write it. The mark is cleared first, by the pause's own paused_at, so one pass
+// on one replica writes the row. One pass of the reconciler.
+func (s *Server) sweepEndedDesktopVMPauses(ctx context.Context) error {
+	st, ok := s.cfg.Store.(store.DesktopVMSignInStore)
+	if !ok {
+		return nil
+	}
+	ctx, end, ok := s.beginLeaderSweep(ctx)
+	if !ok {
+		return nil
+	}
+	defer end()
+	paused, err := st.PausedDesktopVMAgents(ctx)
+	if err != nil {
+		return err
+	}
+	for _, p := range paused {
+		run, err := s.cfg.Store.GetRun(ctx, p.RunID)
+		if err != nil || (!run.State.IsTerminal() && !runIsKept(run)) {
+			continue
+		}
+		// A lease-ended run stays RUNNING while it is kept, so its end is LostAt, not EndedAt.
+		endedAt := s.cfg.Now().UTC()
+		if t := cmp.Or(run.EndedAt, run.LostAt); t != nil {
+			endedAt = t.UTC()
+		}
+		if p.PausedAt.After(endedAt) {
+			endedAt = p.PausedAt
+		}
+		by, pausedAt, cleared, err := st.ResumeDesktopVMAgent(ctx, p.RunID, p.PausedAt)
+		if err != nil || !cleared {
+			continue
+		}
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", auditDesktopSignIn, run.ID.String(), "success",
+			mustJSON(map[string]any{"paused_by": by, "paused_at": pausedAt, "ended_paused": true, "ended_at": endedAt,
+				"paused_seconds": int(endedAt.Sub(pausedAt).Seconds())})))
+	}
+	return nil
 }
 
 // handleResumeDesktopAgent continues the agent and writes the session's one desktop.sign_in.pause row. It is
