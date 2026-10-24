@@ -778,9 +778,8 @@ type Server struct {
 	router        chi.Router
 	// metrics holds the /metrics scrape counters (see metrics.go). Zero value is ready to use.
 	metrics metrics
-	// recordingChainWalk lets one recording range check (recording_chain.go) walk the audit log at a
-	// time on this replica: the walk hashes the org's whole log over the run's lifetime, so a second
-	// check is refused, not queued. Zero value is ready to use.
+	// recordingChainWalk lets one recording range check (recording_chain.go) walk the audit log at a time on this replica:
+	// the walk hashes the org's whole log over the run's lifetime, so a second check is refused, not queued. Zero value is ready to use.
 	recordingChainWalk sync.Mutex
 	// sshUnbound is set by MarkSSHGatewayUnbound when the SSH gateway could not bind at boot; /healthz then omits ssh.
 	sshUnbound atomic.Bool
