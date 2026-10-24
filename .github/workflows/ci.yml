@@ -1573,7 +1573,7 @@ jobs:
           key: go-conformance-docker-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
 
   # ── Linux VM sandboxes (machine_kind=linux_vm) under real QEMU/KVM ──
-  # NOT a required check. Hosted ubuntu-24.04 exposes /dev/kvm; GitHub's documented udev rule
+  # NOT a required check. Hosted ubuntu-26.04 exposes /dev/kvm; GitHub's documented udev rule
   # opens it to the runner's user, and the QEMU container gets it as an unprivileged user. Builds
   # the QEMU image and the reference guest image, then boots the guest through the real Docker
   # driver (test/conformance/vm: probe, boot, exec, terminal, shared folder, the network relay and
@@ -1619,7 +1619,7 @@ jobs:
   # a live daemon (validates the pushedBaseRef assumption in builder.go). The
   # target provisions its own throwaway registry + runner-tools dir. The build
   # container reaches the test's host-loopback git daemon + published registry
-  # only via HOST networking, and only because ubuntu-24.04 runs a host-native
+  # only via HOST networking, and only because ubuntu-26.04 runs a host-native
   # dockerd that shares the host network namespace. The test already defaults to
   # "host"; the env below is set explicitly to document the requirement. This job
   # requires a host-native dockerd — it cannot pass against a VM-based daemon like

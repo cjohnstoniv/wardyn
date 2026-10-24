@@ -2115,7 +2115,7 @@ jobs:
   # PR that breaks them; PRs that conflict with an earlier one are set aside
   # and listed. Also flags any open PR stacked on a branch that is no longer
   # open (merged/closed) and so should have been retargeted to main. psql
-  # (preinstalled on ubuntu-24.04) resets the database between check runs.
+  # (preinstalled on ubuntu-26.04) resets the database between check runs.
   #
   # Informational: it never merges or pushes anything for real, only reports.
   # No measured baseline yet (new job) — 180 min budgets for about 30 check
