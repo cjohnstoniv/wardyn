@@ -48,7 +48,7 @@ func TestDefaultPool_ReaperTickBesideLifetimeLocks(t *testing.T) {
 
 	var release func()
 	for release == nil && ctx.Err() == nil {
-		if r, ok := reapTickLock(pool)(ctx); ok {
+		if r, ok := reapTickLock(pool, false)(ctx); ok {
 			release = r
 		} else {
 			time.Sleep(50 * time.Millisecond) // another test holds the reaper key for a moment

@@ -178,7 +178,8 @@
 # 0.10 SI-POLICY: docs/ENV.md 42332 adds 143 over 42189: the WARDYN_APPROVAL_RULES row and section, measured.
 # docs/ENV.md 43813 = ours 43670 + theirs 42332 - base 42189 at the 0.10 W4f merge of SI-POLICY onto the train.
 # docs/ENV.md 44623 = ours 44446 + theirs 43813 - base 43636 at the 0.10 W4c merge of W4f a55a58e89 into the W4X train.
-docs/ENV.md=44623 share=5 # tightened from 43019 to the measured count at the 0.10 W4d merge; +18 (0.10 RENAME), measured: 43005 + 42207 - 42189
+# IDP-FRONT: docs/ENV.md 44842 adds 219 over 44623 (the WARDYN_OIDC_FRONTCHANNEL_LOGOUT row and section, then the r2 retry, session-end and shared-sid sentences), measured.
+docs/ENV.md=44842 share=5 # tightened from 43019 to the measured count at the 0.10 W4d merge; +18 (0.10 RENAME), measured: 43005 + 42207 - 42189
 # docs/ENV.md 42259 = ours + theirs - base at the 0.10 HYB-C merge of main onto VM-A, measured.
 # docs/ENV.md 41191 adds 520 over 40671 (0.10 FEAT-1MCP), measured: the WARDYN_MCP_LOCAL_SERVERS row and details with its before-you-upgrade lines and its setup-status feature bit, and the WARDYN_MCP_STDIO_TOML row and details, which the env-doc guard requires.
 # docs/ENV.md 41208 adds 17 over 41191 (0.10 FEAT-1MCP review): the npx pin applies to the npx form only; an absolute program is trusted as the image is.

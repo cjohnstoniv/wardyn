@@ -339,6 +339,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_OIDC_LOGIN_HINT` | bool | `false` | a browser that signed in sends that account as `login_hint` on its next sign-in (flag `-oidc-login-hint`). `false` changes nothing. [Details](#wardyn_oidc_login_hint) |
 | `WARDYN_OIDC_BROWSER_SESSION_COOKIE` | bool | `false` | sends the console session cookie without an expiry, so the browser drops it when it closes (flag `-oidc-browser-session-cookie`). `false` changes nothing. [Details](#wardyn_oidc_browser_session_cookie) |
 | `WARDYN_OIDC_BACKCHANNEL_LOGOUT` | bool | `false` | serves `POST /auth/backchannel-logout`, where the provider's signed logout token ends that person's console sessions (flag `-oidc-backchannel-logout`). `false` changes nothing. [Details](#wardyn_oidc_backchannel_logout) |
+| `WARDYN_OIDC_FRONTCHANNEL_LOGOUT` | bool | `false` | records each sign-in's provider `sid` and serves `GET /auth/frontchannel-logout`, where the provider's `iss` and `sid` end that person's console sessions (flag `-oidc-frontchannel-logout`). `false` changes nothing. [Details](#wardyn_oidc_frontchannel_logout) |
 | `WARDYN_UI_SANDBOX_LISTEN` | string | (unset) | UI-sandbox gateway listen address, e.g. `:8081` (flag `-ui-sandbox-listen`); empty means off, with no listener. It must differ from `WARDYN_LISTEN` and boot refuses if it does not. [Details](#wardyn_ui_sandbox_listen) |
 | `WARDYN_UI_SANDBOX_ADVERTISE` | string | (unset) | externally-reachable base URL of that gateway, e.g. `https://wardyn-ui.example.com` (flag `-ui-sandbox-advertise`); purely advisory copy, the gateway binds `WARDYN_UI_SANDBOX_LISTEN`, not this; unset logs a boot warning. [Details](#wardyn_ui_sandbox_advertise) |
 | `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` | string | (unset) | optional per-run origin for the UI-sandbox gateway, e.g. `https://run-{run}.ui.example.com` (flag `-ui-sandbox-origin-template`); needs wildcard DNS and a wildcard certificate. [Details](#wardyn_ui_sandbox_origin_template) |
@@ -1878,7 +1879,21 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Past five tokens that fail to verify, then one a second per process, a POST gets `429` before verification, so forged tokens cannot drive unbounded key fetches.
   - While that lasts, the provider's genuine logout gets `429` too; sign-out and admin revocation still cut sessions.
 - Each cut is a `session.revoke` row with `source` `idp_back_channel_logout`.
-- Front-channel logout, which Entra ID offers, is not supported, and a person set up by Entra object id before first sign-in is not reached by `sub`.
+- A person set up by Entra object id before first sign-in is not reached by `sub`; Entra ID offers front-channel logout instead ([below](#wardyn_oidc_frontchannel_logout)).
+
+### `WARDYN_OIDC_FRONTCHANNEL_LOGOUT`
+
+- Serves `GET /auth/frontchannel-logout` for OpenID Connect Front-Channel Logout (flag `-oidc-frontchannel-logout`); off, the route does not exist and no `sid` is recorded.
+- Register `https://<your Wardyn host>/auth/frontchannel-logout` as the client's front-channel logout URL, with `frontchannel_logout_session_required`, so the provider sends `iss` and `sid`.
+- While on, each sign-in records its ID token's `sid` against the person in `oidc_session_sids`, kept until that session ends.
+- This issuer and a recorded `sid` end that person's console sessions as their sign-out does, then the row is deleted; a failed cut keeps it, so the provider's reloaded sign-out page retries. Tokens, keys and runs keep working.
+- The `sid` finds the session, not the `SameSite=Lax` cookie, which a browser never sends to the provider's cross-site frame; third-party cookie blocking changes nothing.
+- Only the issuer's origin may frame its answers; every other route keeps `frame-ancestors 'none'`.
+- It needs the person's browser to load the provider's sign-out page, and a sign-in with a `sid`.
+- No `iss` or `sid`, or another issuer, gets `400`; an unknown `sid` gets `200` and ends nothing; a failed lookup or cut gets `503`; all `no-store`.
+- The `sid` is the same in every application's ID token for that provider session, so any other application the person is signed into there can end their Wardyn sessions with it.
+- Unsigned, a forged request can only sign someone out. Past five requests that end nothing, then one a second per process, it gets `429`, the provider's genuine one too.
+- Each cut is a `session.revoke` row with `source` `idp_front_channel_logout`.
 
 ### `WARDYN_OIDC_BROWSER_SESSION_COOKIE`
 
