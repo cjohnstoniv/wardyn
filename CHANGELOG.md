@@ -11,6 +11,16 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- A Linux VM run that ends while its agent is paused to sign in now writes its `desktop.sign_in.pause` audit row, marked
+  `ended_paused` with the run's own end time and no `resumed_at`. Before, the pause had no row at all, because a resume
+  is refused once the run is not running.
+- A desktop recording's replay no longer shows a failed clipboard or file action read as an empty action log. It shows
+  the replay's load failure with its retry.
+- Retrying a team drive save that stored one group's allocation and failed on another now also removes a group the
+  admin took out of the editor since. Before, that group's allocation stayed.
+
 ## [0.10.0-rc.1] — 2026-10-24
 
 ### Before you upgrade
