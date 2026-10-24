@@ -56,6 +56,7 @@
 - Each pause-to-resume writes one `desktop.sign_in.pause` audit row, "paused the agent to sign in inside the desktop". It names who paused and when, never a secret.
 - The pause is the person's choice. A sign-in made without it is neither paused nor audited.
 - A process the agent moved out of its process group (`setsid`) is not stopped.
+- If `wardynd` crashes after the guest agent stopped the agent but before the pause was recorded, the agent stays stopped and the run page offers the pause again. Press it, which records the pause (the agent is already stopped), then "Resume the agent".
 
 ### Host memory
 

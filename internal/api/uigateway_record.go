@@ -75,6 +75,7 @@ func (s *Server) recordVMDisplay(run types.AgentRun, sess uiSession, display io.
 // closes, stores it (desktop.recording.write) and lets the run's entry go.
 func (s *Server) trackDesktopRecording(run types.AgentRun, sess uiSession, rec *recording.RFBRecorder) func() {
 	session := desktopRecordingSuffix + uuid.NewString()
+	s.holdOpenVMSignIn(run)
 	s.desktopRecs.add(run.ID, rec)
 	return func() {
 		s.desktopRecs.remove(run.ID, rec)
