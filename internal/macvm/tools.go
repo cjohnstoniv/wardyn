@@ -246,7 +246,11 @@ func onGuest(ctx context.Context, g ToolsGuest, in Stage2Input, o ToolsOptions) 
 	}
 	desktop := ""
 	if in.ControlCheck {
-		if desktop, err = controlCheck(ctx, g, o.Desktop); err != nil {
+		probe := o.Desktop
+		if dp, ok := g.(DesktopProbe); ok && probe == nil {
+			probe = dp // the stage-2 boot's own RFB client
+		}
+		if desktop, err = controlCheck(ctx, g, probe); err != nil {
 			return ToolsResult{ToolsDial: dial}, err
 		}
 	}

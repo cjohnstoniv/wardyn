@@ -208,8 +208,18 @@ func TestProbe(t *testing.T) {
 		if tc.hostErr != nil && r.Host != tc.hostErr.Error() {
 			t.Fatalf("%s: host %q", tc.name, r.Host)
 		}
+		if r.Thermal != "nominal" {
+			t.Fatalf("%s: thermal %q", tc.name, r.Thermal)
+		}
 	}
-	d, out, _ := testDeps(nil)
+	// runnerd reads the thermal state from probe: a hot Mac says so.
+	d, out, _ := testDeps(&macvmtest.Engine{Thermal: macvm.ThermalSerious})
+	d.firstBoot = &macvmtest.FirstBoot{}
+	_ = run(context.Background(), []string{"probe"}, d)
+	if !strings.Contains(out.String(), `"thermal": "serious"`) {
+		t.Fatalf("probe on a hot Mac: %s", out.String())
+	}
+	d, out, _ = testDeps(nil)
 	d.engine = platformEngine
 	d.firstBoot = &macvmtest.FirstBoot{}
 	if code := run(context.Background(), []string{"probe"}, d); vzLinked == (code == 1 && strings.Contains(out.String(), `"vz": false`)) {
