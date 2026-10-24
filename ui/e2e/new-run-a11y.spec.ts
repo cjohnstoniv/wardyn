@@ -162,6 +162,12 @@ for (const width of WIDTHS) {
     const audit = async (step: string, reach: RegExp) => {
       // Let the step settle: fonts, the server's reads and the focus move the heading takes.
       await page.waitForLoadState("networkidle");
+      // And the colour transitions in flight: a button that has just turned enabled fades in from the disabled
+      // grey (#2865), and a frame read mid-fade is a contrast nobody rests on. Transitions only: a spinner or a
+      // pulse never finishes.
+      await page.evaluate(() =>
+        Promise.all(document.getAnimations().filter((a) => a instanceof CSSTransition).map((a) => a.finished.catch(() => undefined))),
+      );
       const facts = await page.evaluate(readPage);
       // The audit must have looked at something: a page read that finds nothing proves nothing.
       if (facts.graded < 5 || facts.controls < 2) findings.push(`${step}: the audit read ${facts.graded} text nodes and ${facts.controls} controls`);
