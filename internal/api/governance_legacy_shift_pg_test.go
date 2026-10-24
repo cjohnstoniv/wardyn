@@ -244,7 +244,7 @@ func TestLegacyShiftBoundMatchesEveryPair(t *testing.T) {
 // over every pair names. Each kind shifts someone in some set, and some rename's answer needs a person
 // two different groups place, the pairs the rivals read stands in for. In the fixed set ua-a1's ua-g1
 // ranks first outside ua-a1 at 9, so of its two groups tied with ua-b's ua-g3 only ua-g2's person
-// trades ua-a1 for ua-b on a rename past ua-b.
+// trades ua-a1 for ua-b on a rename past ua-b, and no person of one subject does.
 func TestLegacyShiftMatchesEveryPairOverRandomTies(t *testing.T) {
 	e := newUnitAdminEnv(t, false)
 	ctx := context.Background()
@@ -263,7 +263,7 @@ func TestLegacyShiftMatchesEveryPairOverRandomTies(t *testing.T) {
 	}
 	sets := [][]legacyRowSpec{{
 		{e.a1, group, "ua-g1", 5}, {e.a1, group, "ua-g2", 5}, {e.a, group, "ua-g1", 9}, {e.b, group, "ua-g3", 5},
-		{e.a1, user, "sub-ua-r1", 5}, {e.b, user, "sub-ua-r1", 5}, {e.a2, userType, "ut-ua-1", 5}, {e.a1, userType, "ut-ua-1", 5},
+		{e.a2, user, "sub-ua-r1", 5}, {e.b, user, "sub-ua-r1", 5}, {e.a2, userType, "ut-ua-1", 5}, {e.a1, userType, "ut-ua-1", 5},
 	}}
 	rng := rand.New(rand.NewPCG(1, 2))
 	for range 6 {
