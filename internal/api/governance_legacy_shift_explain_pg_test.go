@@ -61,6 +61,25 @@ func (n planNode) membershipRowsExamined() float64 {
 	return sum
 }
 
+// membershipRowsReturned is the membership rows n's scans of governance_memberships returned over all
+// their loops: for a winners read, each person's own matching rows plus the winner's re-read.
+func (n planNode) membershipRowsReturned() float64 {
+	var sum float64
+	n.walk(0, func(n planNode, _ int) {
+		if n.Relation == "governance_memberships" {
+			sum += n.Rows * n.Loops
+		}
+	})
+	return sum
+}
+
+// usesIndex reports whether any node of n reads through index.
+func (n planNode) usesIndex(index string) bool {
+	var found bool
+	n.walk(0, func(n planNode, _ int) { found = found || n.Index == index })
+	return found
+}
+
 // repeatedMembershipSeqScan is a sequential scan of governance_memberships n runs more than once (a
 // parallel scan's loops are its workers), "" for none.
 func (n planNode) repeatedMembershipSeqScan() string {
@@ -110,11 +129,46 @@ func (x *explainingQuerier) explain(ctx context.Context, sql string, args []any)
 	if len(fields) == 0 || !strings.Contains(" SELECT WITH INSERT UPDATE DELETE ", " "+strings.ToUpper(fields[0])+" ") {
 		return // SAVEPOINT and ROLLBACK TO have no plan
 	}
-	if _, err := x.Querier.Exec(ctx, `SAVEPOINT explain_probe`); err != nil {
-		x.t.Fatalf("savepoint for EXPLAIN: %v", err)
+	s := explainedStatement{label: strings.Join(fields, " ")}
+	s.plan, s.execMS = x.plan(ctx, `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) `+sql, args)
+	switch {
+	case strings.Contains(sql, "WITH ORDINALITY AS c(p, i)"):
+		s.label = "LegacyWinnersQ"
+		var claims []json.RawMessage
+		b, ok := args[0].([]byte)
+		if !ok || json.Unmarshal(b, &claims) != nil {
+			x.t.Fatalf("LegacyWinnersQ claims argument %T is not a JSON array", args[0])
+		}
+		s.people = len(claims)
+		x.stmts = append(x.stmts, s)
+		// pgx's default exec mode prepares a statement once per connection, and from its sixth run
+		// Postgres may keep a generic plan, one made without $1's value: read that plan too.
+		x.exec(ctx, `PREPARE explain_generic(jsonb) AS `+sql)
+		g := s
+		g.label = "LegacyWinnersQ (generic plan)"
+		g.plan, g.execMS = x.plan(ctx, `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) EXECUTE explain_generic('`+strings.ReplaceAll(string(b), "'", "''")+`')`,
+			nil, `SET LOCAL plan_cache_mode = force_generic_plan`)
+		x.exec(ctx, `DEALLOCATE explain_generic`)
+		x.stmts = append(x.stmts, g)
+		return
+	case strings.Contains(sql, "row_number() OVER"):
+		s.label = "LegacyRenameRivalsQ"
+	case len(s.label) > 90:
+		s.label = s.label[:90] + "..."
+	}
+	x.stmts = append(x.stmts, s)
+}
+
+// plan runs setup and then explain, an EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON), in a savepoint it rolls
+// back, and returns the plan and its execution time.
+func (x *explainingQuerier) plan(ctx context.Context, explain string, args []any, setup ...string) (planNode, float64) {
+	x.t.Helper()
+	x.exec(ctx, `SAVEPOINT explain_probe`)
+	for _, st := range setup {
+		x.exec(ctx, st)
 	}
 	var raw []byte
-	err := x.Querier.QueryRow(ctx, `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) `+sql, args...).Scan(&raw)
+	err := x.Querier.QueryRow(ctx, explain, args...).Scan(&raw)
 	if _, rerr := x.Querier.Exec(ctx, `ROLLBACK TO SAVEPOINT explain_probe`); err == nil && rerr != nil {
 		err = rerr
 	}
@@ -122,7 +176,7 @@ func (x *explainingQuerier) explain(ctx context.Context, sql string, args []any)
 		err = rerr
 	}
 	if err != nil {
-		x.t.Fatalf("EXPLAIN %s: %v", strings.Join(fields, " "), err)
+		x.t.Fatalf("%s: %v", strings.Join(strings.Fields(explain), " "), err)
 	}
 	var out []struct {
 		Plan   planNode `json:"Plan"`
@@ -131,22 +185,23 @@ func (x *explainingQuerier) explain(ctx context.Context, sql string, args []any)
 	if err := json.Unmarshal(raw, &out); err != nil || len(out) != 1 {
 		x.t.Fatalf("decode EXPLAIN JSON (%v): %s", err, raw)
 	}
-	s := explainedStatement{label: strings.Join(fields, " "), plan: out[0].Plan, execMS: out[0].ExecMS}
-	switch {
-	case strings.Contains(sql, "WITH ORDINALITY AS c(p, i)"):
-		s.label = "LegacyWinnersQ"
-		var claims []json.RawMessage
-		if b, ok := args[0].([]byte); !ok || json.Unmarshal(b, &claims) != nil {
-			x.t.Fatalf("LegacyWinnersQ claims argument %T is not a JSON array", args[0])
-		}
-		s.people = len(claims)
-	case strings.Contains(sql, "row_number() OVER"):
-		s.label = "LegacyRenameRivalsQ"
-	case len(s.label) > 90:
-		s.label = s.label[:90] + "..."
-	}
-	x.stmts = append(x.stmts, s)
+	return out[0].Plan, out[0].ExecMS
 }
+
+// exec sends stmt, which takes no arguments, past the EXPLAIN.
+func (x *explainingQuerier) exec(ctx context.Context, stmt string) {
+	x.t.Helper()
+	if _, err := x.Querier.Exec(ctx, stmt); err != nil {
+		x.t.Fatalf("%s: %v", stmt, err)
+	}
+}
+
+// subjectIndex is the index a person's membership lookup reads (migration 0233).
+const subjectIndex = "governance_memberships_subject"
+
+// indexedFrom is the table size from which the plan rules on the index hold: below it the planner may
+// rightly prefer a scan of a few pages.
+const indexedFrom = 3000
 
 // explainTies is the size of the probe's tie group, the same at every size: the people a move or a
 // rename of the probe unit reads stay fixed while the table grows around them.
@@ -225,7 +280,9 @@ func logShift(t *testing.T, head string, stmts []explainedStatement) {
 	for _, s := range stmts {
 		fmt.Fprintf(&b, "%s | %s", head, s.label)
 		if s.people > 0 {
-			fmt.Fprintf(&b, " people=%d", s.people)
+			fmt.Fprintf(&b, " people=%d examined_per_person=%.1f returned_per_person=%.1f uses_%s=%v", s.people,
+				s.plan.membershipRowsExamined()/float64(s.people), s.plan.membershipRowsReturned()/float64(s.people),
+				subjectIndex, s.plan.usesIndex(subjectIndex))
 		}
 		fmt.Fprintf(&b, " exec=%.3fms memberships_examined=%.0f\n", s.execMS, s.plan.membershipRowsExamined())
 		s.plan.walk(1, func(n planNode, depth int) {
@@ -273,9 +330,11 @@ func costOf(stmts []explainedStatement) (c shiftCost, repeated string) {
 //   - its shared blocks per person likewise, plus 16 for a btree gaining a level;
 //   - every other statement (the membership list, LegacyRenameRivalsQ, the change itself) examines at
 //     most 3× the table's rows: one pass over it, plus a primary-key lookup for each row it returns;
-//   - at 10 000 rows or more, no statement runs a sequential scan of governance_memberships more than
-//     once (once per person is the quadratic shape). Below that size the planner may rightly prefer a
-//     scan of a few pages, so the rule is not applied there.
+//   - at 3000 rows or more (indexedFrom; below it the planner may rightly prefer a scan of a few
+//     pages): no statement runs a sequential scan of governance_memberships more than once (once per
+//     person is the quadratic shape), and each LegacyWinnersQ, under its custom plan and under a forced
+//     generic plan alike, reads governance_memberships_subject and examines at most twice the rows it
+//     returns plus two per person: about each person's own rows.
 func TestLegacyShiftLockedWorkIsBounded(t *testing.T) {
 	sizes := []int{40, 300}
 	if os.Getenv("WARDYN_EXPLAIN_SCALE") == "1" {
@@ -316,10 +375,19 @@ func TestLegacyShiftLockedWorkIsBounded(t *testing.T) {
 			}
 			logShift(t, fmt.Sprintf("units=%d rows=%d %s", n, rows, sh.name), x.stmts)
 			c, repeated := costOf(x.stmts)
-			if rows >= 10000 && repeated != "" {
+			if rows >= indexedFrom && repeated != "" {
 				t.Errorf("%s at %d rows: %s", sh.name, rows, repeated)
 			}
 			for _, s := range x.stmts {
+				if s.people > 0 && rows >= indexedFrom {
+					if !s.plan.usesIndex(subjectIndex) {
+						t.Errorf("%s at %d rows: %s does not read %s", sh.name, rows, s.label, subjectIndex)
+					}
+					if e, r := s.plan.membershipRowsExamined(), s.plan.membershipRowsReturned(); e > 2*r+2*float64(s.people) {
+						t.Errorf("%s at %d rows: %s examined %.0f membership rows to return %.0f over %d people, want about each person's own rows",
+							sh.name, rows, s.label, e, r, s.people)
+					}
+				}
 				if e := s.plan.membershipRowsExamined(); s.people == 0 && e > 3*float64(rows)+100 {
 					t.Errorf("%s: %s examined %.0f membership rows of %d, want one pass", sh.name, s.label, e, rows)
 				}

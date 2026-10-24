@@ -11,6 +11,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- A unit delete, move or rename no longer scans every membership per affected person (migration
+  `0233_governance_memberships_subject` adds an index on the membership subject).
+
 ## [0.10.0-rc.1] — 2026-10-24
 
 ### Before you upgrade
