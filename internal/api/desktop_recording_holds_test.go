@@ -144,7 +144,7 @@ func TestDesktopRecording_AnEndedRunsForgottenPauseWritesItsResume(t *testing.T)
 	ast.mu.Unlock()
 	srv.PauseDesktopRecording(context.Background(), run, desktopPauseTakeover, uuid.NewString())
 	sandbox, relay := net.Pipe()
-	conn := srv.recordDesktopConn(run, uiSession{Run: run.ID, App: desktopApp, Principal: "alice"}, relay)
+	conn := srv.recordDesktopConn(run, uiSession{Run: run.ID, App: desktopApp, Principal: "alice"}, relay, nil)
 	_ = sandbox.Close()
 	_ = conn.Close()
 	if p, r := desktopRows(h.audit); p != 1 || r != 1 {

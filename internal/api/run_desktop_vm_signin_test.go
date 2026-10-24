@@ -37,9 +37,10 @@ type vmSignInTestStore struct {
 	// markErr fails PauseDesktopVMAgent; readErr fails DesktopVMSignIns.
 	markErr error
 	readErr error
-	// onRead, when set, runs as each DesktopVMSignIns begins, and what it returns runs once that read
-	// has taken its answer, before the answer is returned: writes landing just before and just after.
-	onRead func() (after func())
+	// onRead, when set, runs as each DesktopVMSignIns begins, with the read's context, and what it
+	// returns runs once that read has taken its answer, before the answer is returned: writes landing
+	// just before and just after.
+	onRead func(ctx context.Context) (after func())
 }
 
 func (s *vmSignInTestStore) setReadErr(err error) {
@@ -48,7 +49,7 @@ func (s *vmSignInTestStore) setReadErr(err error) {
 	s.readErr = err
 }
 
-func (s *vmSignInTestStore) setOnRead(f func() func()) {
+func (s *vmSignInTestStore) setOnRead(f func(context.Context) func()) {
 	s.vmu.Lock()
 	defer s.vmu.Unlock()
 	s.onRead = f
@@ -67,13 +68,13 @@ func (s *vmSignInTestStore) RecordDesktopVMSignIns(_ context.Context, runID uuid
 	return nil
 }
 
-func (s *vmSignInTestStore) DesktopVMSignIns(_ context.Context, runID uuid.UUID) (store.DesktopVMSignIns, bool, error) {
+func (s *vmSignInTestStore) DesktopVMSignIns(ctx context.Context, runID uuid.UUID) (store.DesktopVMSignIns, bool, error) {
 	s.vmu.Lock()
 	onRead := s.onRead
 	s.vmu.Unlock()
 	var after func()
 	if onRead != nil {
-		after = onRead()
+		after = onRead(ctx)
 	}
 	s.vmu.Lock()
 	row, ok := s.rows[runID]
@@ -103,11 +104,11 @@ func (s *vmSignInTestStore) PauseDesktopVMAgent(_ context.Context, runID uuid.UU
 	return true, nil
 }
 
-func (s *vmSignInTestStore) ResumeDesktopVMAgent(_ context.Context, runID uuid.UUID) (string, time.Time, bool, error) {
+func (s *vmSignInTestStore) ResumeDesktopVMAgent(_ context.Context, runID uuid.UUID, pausedAt time.Time) (string, time.Time, bool, error) {
 	s.vmu.Lock()
 	defer s.vmu.Unlock()
 	row, ok := s.rows[runID]
-	if !ok || row.PausedAt == nil {
+	if !ok || row.PausedAt == nil || !row.PausedAt.Equal(pausedAt) {
 		return "", time.Time{}, false, nil
 	}
 	by, at := row.PausedBy, *row.PausedAt
@@ -600,6 +601,37 @@ func TestDesktopSignIns_UnrecordedPauseContinuesTheAgent(t *testing.T) {
 	}
 }
 
+// A mark that changes nothing means another pause marked the row first. That pause owns the stopped
+// agent, so this one does not continue it, and answers with that pause's row.
+func TestDesktopSignIns_APauseMarkedFirstElsewhereIsNotContinued(t *testing.T) {
+	f := newVMSignInFixture(t, "memory")
+	other := time.Now().UTC().Add(-time.Second).Truncate(time.Microsecond)
+	f.rn.during = func(_ context.Context, call string) {
+		if call != "pause" {
+			return
+		}
+		// Another pause commits its mark while this one's runner call is open.
+		if ok, err := f.st.PauseDesktopVMAgent(context.Background(), f.run.ID, "someone-else", other); err != nil || !ok {
+			t.Errorf("the other pause's mark = %v %v", ok, err)
+		}
+	}
+	code, v, body := f.do(t, http.MethodPost, "/pause")
+	if code != http.StatusOK || !v.Paused || v.PausedAt == nil || !v.PausedAt.Equal(other) {
+		t.Fatalf("pause = %d %s, want the other pause's mark", code, body)
+	}
+	if got := f.rn.seen(); !slices.Equal(got, []string{"pause vm-1"}) || !f.rn.agentStopped() {
+		t.Fatalf("runner calls = %v, want the pause and no continue", got)
+	}
+	if row, _, _ := f.st.DesktopVMSignIns(context.Background(), f.run.ID); row.PausedAt == nil || !row.PausedAt.Equal(other) || row.PausedBy != "someone-else" {
+		t.Fatalf("row = %+v, want the other pause's mark", row)
+	}
+	rows := f.signInRows()
+	if len(rows) != 1 {
+		t.Fatalf("rows = %+v, want only this pause's failure", rows)
+	}
+	wantSuperseded(t, rows, other)
+}
+
 // The pause is the row, not this process's memory: after a restart the GET still says paused, and
 // the resume continues the agent and writes the session's row.
 func TestDesktopSignIns_PauseSurvivesARestart(t *testing.T) {
@@ -628,7 +660,8 @@ func TestDesktopSignIns_PauseSurvivesARestart(t *testing.T) {
 // A pause that loses the run's lock during its runner call, as one whose database session died does,
 // acts on the agent no more: another pause took the lock, stopped the agent and marked the row, and
 // that agent is its to continue. The first takes the lock again, finds the newer mark and sends
-// nothing, so the agent stays stopped under the mark its resume will clear.
+// nothing, so the agent stays stopped under the mark its resume will clear. Its failure row names the
+// pause that superseded it.
 func TestDesktopSignIns_PauseThatLostItsLockLeavesANewerPauseAlone(t *testing.T) {
 	f := newVMSignInFixture(t, "memory")
 	drop := f.loseLocks()
@@ -656,8 +689,28 @@ func TestDesktopSignIns_PauseThatLostItsLockLeavesANewerPauseAlone(t *testing.T)
 	if row, _, _ := f.st.DesktopVMSignIns(context.Background(), f.run.ID); row.PausedAt == nil || !row.PausedAt.Equal(*newer.v.PausedAt) {
 		t.Fatalf("row = %+v, want the newer pause's mark", row)
 	}
-	if rows := f.signInRows(); len(rows) != 0 {
-		t.Fatalf("rows = %+v, want none until the resume", rows)
+	rows := f.signInRows()
+	if len(rows) != 1 {
+		t.Fatalf("rows = %+v, want only the superseded pause's failure until the resume", rows)
+	}
+	wantSuperseded(t, rows, *newer.v.PausedAt)
+}
+
+// wantSuperseded fails t unless rows hold one failure, stage lock_lost, superseded by the pause at at.
+func wantSuperseded(t *testing.T, rows []types.AuditEvent, at time.Time) {
+	t.Helper()
+	n := 0
+	for _, ev := range rows {
+		var d struct {
+			Stage        string     `json:"stage"`
+			SupersededBy *time.Time `json:"superseded_by"`
+		}
+		if ev.Outcome == "failure" && json.Unmarshal(ev.Data, &d) == nil && d.Stage == "lock_lost" && d.SupersededBy != nil && d.SupersededBy.Equal(at) {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("desktop.sign_in.pause rows = %+v, want one lock_lost failure superseded by the pause at %v", rows, at)
 	}
 }
 
@@ -689,9 +742,61 @@ func TestDesktopSignIns_PauseThatCannotRetakeItsLockSendsNothing(t *testing.T) {
 	}
 }
 
+// A failed pause's continue is cancelled when the run's lock is lost during it: another pause may take
+// the lock and stop the agent, and a continue landing after that would run the agent under its mark.
+// The first pause takes the lock again, finds that newer mark and sends nothing more, so the newer
+// pause's agent stays stopped under its mark.
+func TestDesktopSignIns_AContinueThatLosesItsLockIsCancelled(t *testing.T) {
+	f := newVMSignInFixture(t, "memory")
+	drop := f.loseLocks()
+	f.rn.pauseErr = errors.New("guestagent: 502 Bad Gateway")
+	var first atomic.Bool
+	var cause error
+	var newer vmSignInAnswer
+	f.rn.during = func(ctx context.Context, call string) {
+		if call != "resume" || !first.CompareAndSwap(false, true) {
+			return
+		}
+		drop(false)
+		select {
+		case <-ctx.Done():
+			cause = context.Cause(ctx)
+		case <-time.After(5 * time.Second):
+		}
+		f.rn.pmu.Lock()
+		f.rn.pauseErr = nil
+		f.rn.pmu.Unlock()
+		newer.code, newer.v, newer.body = f.do(t, http.MethodPost, "/pause")
+	}
+	code, v, body := f.do(t, http.MethodPost, "/pause")
+	if !errors.Is(cause, db.ErrLockLost) {
+		t.Fatalf("the continue's context ended with %v, want it cancelled with the lost lock", cause)
+	}
+	if newer.code != http.StatusOK || !newer.v.Paused || newer.v.PausedAt == nil {
+		t.Fatalf("the newer pause = %d %s", newer.code, newer.body)
+	}
+	if code != http.StatusOK || v.PausedAt == nil || !v.PausedAt.Equal(*newer.v.PausedAt) {
+		t.Fatalf("the failed pause = %d %s, want the newer pause's mark", code, body)
+	}
+	if got := f.rn.seen(); !slices.Equal(got, []string{"pause vm-1", "resume vm-1", "pause vm-1"}) {
+		t.Fatalf("runner calls = %v, want the failed pause, its cancelled continue and the newer pause", got)
+	}
+	if !f.rn.agentStopped() {
+		t.Fatal("the newer pause's agent is not stopped")
+	}
+	if row, _, _ := f.st.DesktopVMSignIns(context.Background(), f.run.ID); row.PausedAt == nil || !row.PausedAt.Equal(*newer.v.PausedAt) {
+		t.Fatalf("row = %+v, want the newer pause's mark intact", row)
+	}
+	rows := f.signInRows()
+	if len(rows) != 1 {
+		t.Fatalf("rows = %+v, want only the failed pause's row", rows)
+	}
+	wantSuperseded(t, rows, *newer.v.PausedAt)
+}
+
 // A resume that loses the run's lock after its runner call clears no mark but its own: the session was
 // resumed from another tab and a newer pause has marked the row since, so that mark stays for its own
-// resume, and the newer pause's agent stays stopped.
+// resume, and the newer pause's agent stays stopped. Its failure row names the pause that superseded it.
 func TestDesktopSignIns_ResumeThatLostItsLockLeavesANewerPauseAlone(t *testing.T) {
 	f := newVMSignInFixture(t, "memory")
 	if code, _, body := f.do(t, http.MethodPost, "/pause"); code != http.StatusOK {
@@ -722,8 +827,39 @@ func TestDesktopSignIns_ResumeThatLostItsLockLeavesANewerPauseAlone(t *testing.T
 	if !f.rn.agentStopped() {
 		t.Fatal("the newer pause's agent is not stopped")
 	}
-	if rows := f.signInRows(); len(rows) != 1 || rows[0].Outcome != "success" {
-		t.Fatalf("rows = %+v, want the other tab's one success", rows)
+	rows := f.signInRows()
+	if len(rows) != 2 || rows[0].Outcome != "success" {
+		t.Fatalf("rows = %+v, want the other tab's success and this resume's failure", rows)
+	}
+	wantSuperseded(t, rows, *newer.v.PausedAt)
+}
+
+// A resume that loses the run's lock after its runner call and cannot take it again clears nothing:
+// the mark stays for a resume that can record it, the failure is audited as lock_lost, and the answer
+// is 503.
+func TestDesktopSignIns_ResumeThatCannotRetakeItsLockLeavesTheMark(t *testing.T) {
+	f := newVMSignInFixture(t, "memory")
+	code, paused, body := f.do(t, http.MethodPost, "/pause")
+	if code != http.StatusOK || paused.PausedAt == nil {
+		t.Fatalf("pause = %d %s", code, body)
+	}
+	drop := f.loseLocks()
+	f.rn.during = func(_ context.Context, call string) {
+		if call == "resume" {
+			drop(true)
+		}
+	}
+	code, _, body = f.do(t, http.MethodPost, "/resume")
+	if code != http.StatusServiceUnavailable || !strings.Contains(body, reasonDesktopSignInsResumeFailed) {
+		t.Fatalf("resume = %d %s, want 503 %s", code, body, reasonDesktopSignInsResumeFailed)
+	}
+	if row, _, _ := f.st.DesktopVMSignIns(context.Background(), f.run.ID); row.PausedAt == nil || !row.PausedAt.Equal(*paused.PausedAt) {
+		t.Fatalf("row = %+v, want the pause's mark intact", row)
+	}
+	rows := f.signInRows()
+	var d map[string]any
+	if len(rows) != 1 || rows[0].Outcome != "failure" || json.Unmarshal(rows[0].Data, &d) != nil || d["stage"] != "lock_lost" {
+		t.Fatalf("rows = %+v, want one lock_lost failure", rows)
 	}
 }
 
@@ -902,6 +1038,37 @@ func TestDesktopSignIns_AnUnreadableMarkRefusesTheDesktop(t *testing.T) {
 	}
 }
 
+// A Linux VM run's declared noVNC app shows the same screen as its display and is admitted as the
+// display is: a server that never saw the pause, as after a restart, holds the app relay's recording
+// from the first frame while the row marks one, so nothing the desktop sends then is recorded.
+func TestDesktopSignIns_AVMsNoVNCAppHoldsAPersistedPause(t *testing.T) {
+	offered, pasted := make(chan string, 1), make(chan []byte, 1)
+	h := desktopHarness(t, rfbDesktopBackend(t, offered, pasted, false), nil)
+	h.run.MachineKind, h.run.RecordingLevel = types.MachineLinuxVM, types.RecordingScreenActions
+	h.store.putRun(h.run)
+	h.srv.cfg.RecordingStore = fsRecordingStore(t)
+	at := time.Now().UTC()
+	h.srv.cfg.Store = &vmSignInTestStore{uiMemStore: h.store,
+		rows: map[uuid.UUID]store.DesktopVMSignIns{h.run.ID: {Store: "memory", PausedBy: "someone", PausedAt: &at}}}
+	ds := openDesktop(t, h, desktopApp)
+	if ds.resp.StatusCode != http.StatusSwitchingProtocols {
+		body, _ := io.ReadAll(ds.resp.Body)
+		t.Fatalf("upgrade = %d %s, want 101", ds.resp.StatusCode, body)
+	}
+	<-offered
+	if next, err := readWSFrame(ds.br); err != nil || string(next) != "\x02" {
+		t.Fatalf("after ServerInit the browser got %q (err %v), want the Bell", next, err)
+	}
+	_ = ds.conn.Close()
+	_, pb, kept := storedVMRecording(t, h)
+	if kept != vmHandshake() {
+		t.Errorf("recorded frames = %q, want only the handshake: the Bell came while the pause was open", kept)
+	}
+	if len(pb.Gaps) != 1 || pb.Gaps[0].Reason != desktopPauseSignin {
+		t.Errorf("playback gaps = %+v, want one %q gap", pb.Gaps, desktopPauseSignin)
+	}
+}
+
 // An open stream whose re-read of the row fails keeps no frames until a re-read answers: it never
 // records on a state nobody read.
 func TestDesktopSignIns_AnUnreadableMarkMidStreamHoldsTheRecording(t *testing.T) {
@@ -940,7 +1107,7 @@ func TestDesktopSignIns_AStalledReReadHoldsTheRecording(t *testing.T) {
 	defer cancel()
 	v := openVMDesktop(t, ctx, h, d.dr)
 	entered, release := make(chan struct{}), make(chan struct{})
-	d.st.setOnRead(func() func() {
+	d.st.setOnRead(func(context.Context) func() {
 		d.st.setOnRead(nil)
 		close(entered)
 		<-release // a read that ignores its deadline, as a wedged pool might
@@ -969,6 +1136,37 @@ func TestDesktopSignIns_AStalledReReadHoldsTheRecording(t *testing.T) {
 	}
 }
 
+// A re-read the store answers only after its deadline counts as unread, whatever it says: a pause may
+// have marked the row since. The recording stays held until a re-read answers in time.
+func TestDesktopSignIns_AReReadAnsweredPastItsDeadlineHoldsTheRecording(t *testing.T) {
+	d := newVMSignInDesktop(t, store.DesktopVMSignIns{Store: "memory"})
+	h := d.h
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	v := openVMDesktop(t, ctx, h, d.dr)
+	d.st.setOnRead(func(rctx context.Context) func() {
+		d.st.setOnRead(nil)
+		<-rctx.Done() // released only once the read's own deadline has passed; it then answers unpaused
+		return nil
+	})
+	d.reread(t)
+	if !signInHeld(h.srv, h.run.ID) {
+		t.Fatal("a re-read answered past its deadline let the stream keep recording")
+	}
+	d.send <- vmFBU // sent while the mark is unknown
+	v.read(len(vmFBU))
+	d.reread(t) // answers in time, unpaused
+	if signInHeld(h.srv, h.run.ID) {
+		t.Fatal("a re-read that answered in time left the recording held")
+	}
+	d.send <- []byte("\x02\x02")
+	v.read(2)
+	endVMDesktop(t, h, v, d.send)
+	if _, _, kept := storedVMRecording(t, h); kept != vmHandshake()+"\x02\x02" {
+		t.Errorf("recorded frames = %q, want only the handshake and the Bells once a re-read answered in time", kept)
+	}
+}
+
 // A resume that clears the mark between the stream's first read of it and the hold that read takes
 // leaves the stream unheld: the second read ends the hold of the pause that is over.
 func TestDesktopSignIns_AResumeRacingTheOpeningHoldEndsUnheld(t *testing.T) {
@@ -976,7 +1174,7 @@ func TestDesktopSignIns_AResumeRacingTheOpeningHoldEndsUnheld(t *testing.T) {
 	d := newVMSignInDesktop(t, store.DesktopVMSignIns{Store: "memory", PausedBy: "someone", PausedAt: &at})
 	h := d.h
 	reads := 0
-	d.st.setOnRead(func() func() {
+	d.st.setOnRead(func(context.Context) func() {
 		if reads++; reads != 1 {
 			return nil
 		}
@@ -1011,7 +1209,7 @@ func TestDesktopSignIns_AStaleReadNeverEndsANewerPausesHold(t *testing.T) {
 	d := newVMSignInDesktop(t, store.DesktopVMSignIns{Store: "memory", PausedBy: "someone", PausedAt: &at})
 	h := d.h
 	reads := 0
-	d.st.setOnRead(func() func() {
+	d.st.setOnRead(func(context.Context) func() {
 		if reads++; reads != 2 {
 			return nil
 		}

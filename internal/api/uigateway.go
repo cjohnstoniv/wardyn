@@ -769,7 +769,13 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	if sess.App == desktopSigninApp {
 		return s.desktopSigninDial(ctx, run, sess, release)
 	}
+	stopSignIn, err := s.watchDesktopApp(ctx, run, sess)
+	if err != nil {
+		release()
+		return nil, err
+	}
 	if err := s.uiEnsureApp(ctx, run, sess); err != nil {
+		stopSignIn()
 		release()
 		return nil, err
 	}
@@ -778,6 +784,7 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 		Argv: []string{"socat", "-", fmt.Sprintf("TCP:127.0.0.1:%d", sess.Port)},
 	})
 	if err != nil {
+		stopSignIn()
 		release()
 		return nil, uiFail(ctx, http.StatusBadGateway, reasonUIGatewayExecFailed, uiExecFailMsg(ctx, "start ui relay exec", err))
 	}
@@ -806,7 +813,7 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 		release()
 		s.auditUISession(sess, "ui.close", fmt.Sprintf("127.0.0.1:%d", sess.Port), "success",
 			map[string]any{"app": sess.App, "port": sess.Port, "duration_sec": int(s.cfg.Now().Sub(opened).Seconds())})
-	}}), nil
+	}}, stopSignIn), nil
 }
 
 // on-demand launcher
