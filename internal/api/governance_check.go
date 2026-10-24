@@ -190,15 +190,18 @@ func (s *Server) checkScope(w http.ResponseWriter, r *http.Request, q contextQue
 	return scope, true
 }
 
-// within is a check's answer as a unit admin may read it: the contexts and dormant memberships in the
-// units they govern, the home context's fields only when it is one of those, and the effective walls
-// only of a context that is.
+// within is a check's answer as a unit admin may read it: the contexts, dormant memberships and
+// workspace groups in the units they govern, the home context's fields only when it is one of those,
+// and the effective walls only of a context that is. The restrictions are left out, as GET
+// /governance leaves them out for a unit admin (scopeGovernanceRead).
 func (c governanceCheckResponse) within(scope map[uuid.UUID]bool, runIn uuid.UUID, home contextPick) governanceCheckResponse {
 	if !scope[c.UnitID] {
 		c.governancePreviewResponse = governancePreviewResponse{}
 	}
 	c.Contexts = slices.DeleteFunc(c.Contexts, func(x checkContext) bool { return !scope[x.UnitID] })
 	c.Dormant = slices.DeleteFunc(c.Dormant, func(x checkDormant) bool { return !scope[x.UnitID] })
+	c.Restrictions = nil
+	c.Workspaces = slices.DeleteFunc(c.Workspaces, func(x checkWorkspaceGroup) bool { return x.UnitID == nil || !scope[*x.UnitID] })
 	if asked := cmp.Or(runIn, home.unit.ID); !scope[asked] {
 		c.Effective = nil
 	}
