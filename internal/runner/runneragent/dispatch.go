@@ -69,6 +69,10 @@ type Config struct {
 	// LinuxVM says the substrate starts Linux VM sandboxes, as the runner's
 	// caps say; false refuses create_vm before any intent is recorded.
 	LinuxVM bool
+	// MacOSVM is LinuxVM for macOS VM sandboxes (Caps.MacOSVM): false refuses a create_vm for
+	// machine_kind macos_vm. Each kind has its own switch, so a runner that offers one starts none of
+	// the other.
+	MacOSVM bool
 }
 
 type Dispatcher struct {
@@ -160,13 +164,15 @@ func (d *Dispatcher) create(ctx context.Context, peer *runnerwire.Peer, id uint3
 	if err := a.Spec.MachineKind.Validate(); err != nil {
 		return nil, runnerwire.Refuse("%v", err)
 	}
-	switch vm := a.Spec.MachineKind.IsVM(); {
-	case method == runnerwire.MethodCreateSandbox && a.Spec.MachineKind.Normalize() != "":
-		return nil, runnerwire.Refuse("create_sandbox starts containers only; a %s sandbox needs create_vm", a.Spec.MachineKind)
-	case method == runnerwire.MethodCreateVM && !vm:
-		return nil, runnerwire.Refuse("create_vm starts Linux VM sandboxes only")
-	case vm && !d.cfg.LinuxVM:
+	switch kind := a.Spec.MachineKind; {
+	case method == runnerwire.MethodCreateSandbox && kind.Normalize() != "":
+		return nil, runnerwire.Refuse("create_sandbox starts containers only; a %s sandbox needs create_vm", kind)
+	case method == runnerwire.MethodCreateVM && !kind.IsVM():
+		return nil, runnerwire.Refuse("create_vm starts VM sandboxes only")
+	case kind == types.MachineLinuxVM && !d.cfg.LinuxVM:
 		return nil, runnerwire.Refuse("this runner does not offer Linux VM sandboxes")
+	case kind.IsMacOSVM() && !d.cfg.MacOSVM:
+		return nil, runnerwire.Refuse("this runner does not offer macOS VM sandboxes")
 	}
 	if err := d.cfg.BeforeCreate(ctx, a.Spec); err != nil {
 		return nil, err
