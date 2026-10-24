@@ -4,6 +4,7 @@
 package macvm_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -164,6 +165,32 @@ func TestStage2BootTakesNetFDAndReachesToolsMode(t *testing.T) {
 	}
 	if set, err := b.g.DesktopPassword(tctx, []byte("Abcd2345")); err != nil || !set || agent.passwords[0] != "Abcd2345" {
 		t.Fatalf("desktop_password: %v %v", set, err)
+	}
+	// The control check's RFB client: VncAuth over the desktop path with the
+	// password just set, then one PointerEvent to the set point.
+	pointer := make(chan []byte, 1)
+	go func() {
+		c, err := m.DialGuest(macvm.DesktopPort)
+		if err != nil {
+			pointer <- nil
+			return
+		}
+		defer c.Close()
+		open := make([]byte, 1)
+		if _, err := io.ReadFull(c, open); err != nil || open[0] != macvm.DesktopOpenByte {
+			pointer <- nil
+			return
+		}
+		appleFake{version: "RFB 003.008\n", offered: []byte{2}, password: "Abcd2345"}.serve(t, c)
+		ev := make([]byte, 6)
+		_, _ = io.ReadFull(c, ev)
+		pointer <- ev
+	}()
+	if err := b.g.(macvm.DesktopProbe).MovePointer(tctx, []byte("Abcd2345"), 960, 540); err != nil {
+		t.Fatalf("move pointer: %v", err)
+	}
+	if ev := <-pointer; !bytes.Equal(ev, []byte{5, 0, 0x03, 0xc0, 0x02, 0x1c}) {
+		t.Fatalf("pointer event %v", ev)
 	}
 	if x, y, err := b.g.Pointer(tctx); err != nil || x != 960 || y != 540 {
 		t.Fatalf("pointer %d,%d %v", x, y, err)
