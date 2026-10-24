@@ -22,7 +22,8 @@ func TestPauseAgentNeedsTheRunnersSignInsCaps(t *testing.T) {
 		advertiseVM(t, rig, &runnerwire.VMCaps{MachineType: "pc-q35-10.0", CPUModel: "Haswell-v4", QEMUVersion: "10.0.13", Desktop: true, SignIns: signIns})
 		sb, _ := create(t, rig, nil)
 		calls := len(rig.Fake.Calls)
-		perr, rerr := rig.Sub.PauseAgent(ctxT(t), sb.Ref), rig.Sub.ResumeAgent(ctxT(t), sb.Ref)
+		_, perr := rig.Sub.PauseAgent(ctxT(t), sb.Ref, 1)
+		_, rerr := rig.Sub.ResumeAgent(ctxT(t), sb.Ref, 1)
 		got := rig.Fake.Calls[calls:]
 		if !signIns {
 			if !errors.Is(perr, runner.ErrAgentPauseUnsupported) || !errors.Is(rerr, runner.ErrAgentPauseUnsupported) || len(got) != 0 {
@@ -36,6 +37,26 @@ func TestPauseAgentNeedsTheRunnersSignInsCaps(t *testing.T) {
 		}
 		if perr != nil || rerr != nil || !slices.Equal(verbs, []string{"pause_agent", "resume_agent"}) {
 			t.Fatalf("with the caps: pause %v, resume %v, calls %v", perr, rerr, got)
+		}
+	}
+}
+
+// The pause's generation reaches the runner, and the guest agent's fenced_pause comes back. A runner
+// or guest image that predates the generation answers nothing, which reads as unfenced and is not
+// refused: the pause and resume go through as before.
+func TestPauseAgentCarriesTheGenerationAndTheGuestsAnswer(t *testing.T) {
+	for _, fenced := range []bool{false, true} {
+		rig := runnertest.NewRig(t, rid)
+		advertiseVM(t, rig, &runnerwire.VMCaps{MachineType: "pc-q35-10.0", CPUModel: "Haswell-v4", QEMUVersion: "10.0.13", Desktop: true, SignIns: true})
+		rig.Fake.FencedPause = fenced
+		sb, _ := create(t, rig, nil)
+		pf, perr := rig.Sub.PauseAgent(ctxT(t), sb.Ref, 7)
+		rf, rerr := rig.Sub.ResumeAgent(ctxT(t), sb.Ref, 7)
+		if perr != nil || rerr != nil || pf != fenced || rf != fenced {
+			t.Fatalf("guest fenced %v: pause %v %v, resume %v %v", fenced, pf, perr, rf, rerr)
+		}
+		if !slices.Equal(rig.Fake.PauseGens, []int64{7, 7}) {
+			t.Fatalf("generations the runner got = %v, want 7 and 7", rig.Fake.PauseGens)
 		}
 	}
 }
