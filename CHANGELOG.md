@@ -87,6 +87,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   the replay's load failure with its retry.
 - Retrying a team drive save that stored one group's allocation and failed on another now also removes a group the
   admin took out of the editor since. Before, that group's allocation stayed.
+- The setup checklist's model-access row now reports `resident_file` for a run served by an AWS sign-in, whose session
+  file is held in the sandbox, instead of `proxy_injected`, so it agrees with the `model_credential` the same
+  response carries.
 
 ## [0.10.0-rc.1] — 2026-10-24
 
