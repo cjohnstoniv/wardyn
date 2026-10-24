@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -21,7 +22,17 @@ type controlHandler interface {
 	stop(graceful bool, timeout time.Duration) error
 	netFD(f *os.File) error
 	subscribe() (<-chan Event, func())
+	// desktopPassword is the run's VNC password; ErrNoDesktopPassword without one.
+	desktopPassword() (string, error)
 }
+
+// controlOwnerUID is the uid a desktop_password peer must have: the helper's own (runnerd's, which
+// started it). Settable so a test can make the peer a stranger.
+var controlOwnerUID = func() *atomic.Int64 {
+	var v atomic.Int64
+	v.Store(int64(os.Getuid()))
+	return &v
+}()
 
 // maxControlLine bounds one request line; ctl.sock is 0700 inside a 0700 run
 // dir, so only the user's own processes reach it, but a runaway line still
@@ -117,6 +128,22 @@ func serveControlConn(c *net.UnixConn, h controlHandler) {
 					_ = f.Close()
 					r = ControlReply{Error: err.Error()}
 				}
+				if !reply(r) {
+					return
+				}
+			case OpDesktopPassword:
+				// ctl.sock is 0700 already; the peer's uid is checked as well, because this one
+				// answer is a secret.
+				if uid, err := peerUID(c); err != nil || int64(uid) != controlOwnerUID.Load() {
+					reply(ControlReply{Error: "desktop_password: the peer is not this helper's user"})
+					return
+				}
+				r := ControlReply{OK: true}
+				pw, err := h.desktopPassword()
+				if err != nil {
+					r = ControlReply{Error: err.Error()}
+				}
+				r.DesktopPassword = pw
 				if !reply(r) {
 					return
 				}

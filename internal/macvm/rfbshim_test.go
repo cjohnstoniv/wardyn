@@ -8,9 +8,12 @@ import (
 	"context"
 	"crypto/des"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -262,4 +265,37 @@ func TestRFBShimEndsTheSessionOnAMessageItDoesNotKnow(t *testing.T) {
 	r.handshake(t)
 	_, _ = r.apple.Write(append([]byte{0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1}, be32(-308)...))
 	ended(t, r.viewer, "the viewer")
+}
+
+// Each run's password is 8 characters (all VncAuth keys on) from crypto/rand, and the secret prints
+// redacted however it is formatted.
+func TestNewDesktopSecret(t *testing.T) {
+	seen := map[string]bool{}
+	for range 50 {
+		s, err := macvm.NewDesktopSecret()
+		if err != nil {
+			t.Fatal(err)
+		}
+		pw, err := s.Credential(context.Background())
+		if err != nil || len(pw) != 8 {
+			t.Fatalf("password of %d characters, %v", len(pw), err)
+		}
+		for _, c := range pw {
+			if !(c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '2' && c <= '9') {
+				t.Fatalf("password has %q, outside the printable alphabet", c)
+			}
+		}
+		for _, out := range []string{fmt.Sprint(s), fmt.Sprintf("%+v %#v %s", s, s, s)} {
+			if strings.Contains(out, pw) {
+				t.Fatalf("the secret printed as %q", out)
+			}
+		}
+		if b, _ := json.Marshal(s); strings.Contains(string(b), pw) {
+			t.Fatalf("the secret marshalled as %s", b)
+		}
+		seen[pw] = true
+	}
+	if len(seen) < 49 {
+		t.Errorf("50 passwords made %d distinct", len(seen))
+	}
 }

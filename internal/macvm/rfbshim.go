@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/des"
+	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -54,10 +55,71 @@ func rfbShimKeeps(e int32) bool {
 	return (e >= -256 && e <= -247) || (e >= -32 && e <= -23)
 }
 
+// desktopPasswordLen is the run's VNC password length. VncAuth keys DES on the password's first
+// eight bytes only (RFC 6143 7.2.2), so a ninth would add nothing.
+const desktopPasswordLen = 8
+
+// desktopPasswordAlphabet is printable and needs no quoting in kickstart's arguments.
+const desktopPasswordAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+
+// DesktopSecret is a run's VNC password. The helper makes it when the run starts and holds it only
+// in memory: ctl.sock gives it to runnerd for the guest agent's Init, and the shim logs in with it,
+// so it never reaches wardynd or a browser. It is never logged or written to the run dir; it prints
+// as [redacted], and Wipe zeroes it, best effort, when the run ends.
+type DesktopSecret struct {
+	mu sync.Mutex
+	b  []byte
+}
+
+// NewDesktopSecret makes a run's password: desktopPasswordLen characters from crypto/rand.
+func NewDesktopSecret() (*DesktopSecret, error) {
+	b := make([]byte, desktopPasswordLen)
+	if _, err := rand.Read(b); err != nil {
+		return nil, err
+	}
+	for i := range b {
+		// 256 is not a multiple of the alphabet's length, so drop the bias by redrawing.
+		for int(b[i]) >= 256-256%len(desktopPasswordAlphabet) {
+			if _, err := rand.Read(b[i : i+1]); err != nil {
+				return nil, err
+			}
+		}
+		b[i] = desktopPasswordAlphabet[int(b[i])%len(desktopPasswordAlphabet)]
+	}
+	return &DesktopSecret{b: b}, nil
+}
+
+// ErrNoDesktopPassword is a run without a password, or one whose run has ended.
+var ErrNoDesktopPassword = errors.New("macvm: this run has no desktop password")
+
+// Credential is the password, for RFBShim.Credential.
+func (s *DesktopSecret) Credential(context.Context) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.b) == 0 {
+		return "", ErrNoDesktopPassword
+	}
+	return string(s.b), nil
+}
+
+// Wipe zeroes the password and forgets it. Copies already handed out as strings stay until the
+// garbage collector takes them; that is the best Go allows.
+func (s *DesktopSecret) Wipe() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	clear(s.b)
+	s.b = nil
+}
+
+func (s *DesktopSecret) String() string               { return "[redacted]" }
+func (s *DesktopSecret) GoString() string             { return "[redacted]" }
+func (s *DesktopSecret) LogValue() slog.Value         { return slog.StringValue("[redacted]") }
+func (s *DesktopSecret) MarshalJSON() ([]byte, error) { return []byte(`"[redacted]"`), nil }
+
 // RFBShim is the helper's DesktopShim.
 type RFBShim struct {
-	// Credential returns the run's VNC password (the guest agent's GET /v1/desktop/credential). An
-	// error refuses the session before either side's handshake: a run whose desktop is off has none.
+	// Credential returns the run's VNC password (DesktopSecret.Credential). An error refuses the
+	// session before either side's handshake.
 	Credential func(ctx context.Context) (string, error)
 	// Log gets one line per refused or ended session, never the password; nil is slog.Default().
 	Log *slog.Logger
