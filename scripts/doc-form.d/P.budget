@@ -60,7 +60,8 @@
 # docs/POLICIES.md 19694 = ours 19691 + theirs 19600 - base 19597 at the 0.10 W4f merge of POL-MOUNT onto the train.
 # docs/POLICIES.md 19691 = ours 19659 + theirs 19629 - base 19597 at the 0.10 W4f merge of RUL-API onto the train.
 # docs/POLICIES.md 20162 = ours 20127 + theirs 19694 - base 19659 at the 0.10 W4c merge of W4f a55a58e89 into the W4X train.
-docs/POLICIES.md=20162 share=12
+# docs/POLICIES.md 20204 adds 42 over 20162, measured: a take over keeps no screen frames on every replica and after a restart, and the restart leaves one pause row unpaired.
+docs/POLICIES.md=20204 share=12
 # docs/POLICIES.md 19597 = ours 19378 + theirs 19511 - base 19292 at the 0.10 W4b merge of the CTL-B fix onto the train.
 # docs/POLICIES.md 19511 adds 219 (0.10 CTL-B): the recording knob (#2968).
 # 0.9.4 W1 merge +3: L8 and an earlier W1 lane both edited the README; the merged text measures 3 over the sum.
