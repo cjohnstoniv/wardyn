@@ -311,22 +311,71 @@ func TestAStopAfterItsOwnContinueIsDropped(t *testing.T) {
 	}
 }
 
-// Once a request with a generation has acted, one without (from a runner or wardynd that predates it)
-// is dropped: it cannot undo a fenced pause, nor stop an agent a fenced resume ran.
-func TestAnUnfencedRequestAfterAFencedOneIsDropped(t *testing.T) {
+// Once a request with a generation has acted, a pause without one (from a runner or wardynd that
+// predates it) is still obeyed: a pause only ever protects a sign-in. It moves nothing, so the fenced
+// resume that follows still runs the agent.
+func TestAnUnfencedPauseAfterAFencedOneIsObeyed(t *testing.T) {
+	r := newRig(t)
+	c := r.client(t)
+	pid := startGroup(t, r, c)
+	signal(t, c, true, 1)
+	signal(t, c, false, 1)
+	waitGroup(t, pid, 2, false)
+	if err := c.do(ctxT(t), http.MethodPost, "/v1/agent/pause", nil, nil); err != nil {
+		t.Fatalf("pause with no generation after a fenced resume = %v, want it obeyed", err)
+	}
+	waitGroup(t, pid, 2, true)
+	if !signal(t, c, false, 1) {
+		t.Fatal("the fenced resume after an unfenced pause was dropped")
+	}
+	waitGroup(t, pid, 2, false)
+}
+
+// Once a request with a generation has acted, a resume without one is dropped with its reason: it
+// cannot undo a fenced pause, and the agent stays stopped until a resume with a generation comes.
+func TestAnUnfencedResumeAfterAFencedPauseIsDropped(t *testing.T) {
 	r := newRig(t)
 	c := r.client(t)
 	pid := startGroup(t, r, c)
 	signal(t, c, true, 1)
 	waitGroup(t, pid, 2, true)
-	for _, path := range []string{"/v1/agent/resume", "/v1/agent/pause"} {
-		if err := c.do(ctxT(t), http.MethodPost, path, nil, nil); err == nil || !strings.Contains(err.Error(), "409") {
-			t.Fatalf("%s with no generation after a fenced pause = %v, want 409", path, err)
-		}
-		waitGroup(t, pid, 2, true)
+	const want = `409 Conflict: "stale_unfenced_resume: a resume with no generation came after one with a generation; the agent stays paused"`
+	if _, err := c.ResumeAgent(ctxT(t), 0); err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("resume with no generation after a fenced pause = %v, want the guest's %s", err, want)
 	}
+	waitGroup(t, pid, 2, true)
 	signal(t, c, false, 1)
 	waitGroup(t, pid, 2, false)
+}
+
+// A stop with no generation that acts after a restart of the agent's service leaves the kept order as
+// it was, so the fenced continue that follows still runs the agent.
+func TestAnUnfencedStopAfterARestartLeavesTheKeptOrder(t *testing.T) {
+	boot := t.TempDir()
+	r := newRigAt(t, boot)
+	c := r.client(t)
+	startGroup(t, r, c)
+	signal(t, c, true, 1)
+	signal(t, c, false, 1)
+	kept, err := os.ReadFile(filepath.Join(boot, fenceFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	restarted := newRigAt(t, boot)
+	rc := restarted.client(t)
+	rpid := startGroup(t, restarted, rc)
+	if err := rc.do(ctxT(t), http.MethodPost, "/v1/agent/pause", nil, nil); err != nil {
+		t.Fatalf("pause with no generation after a restart = %v, want it obeyed", err)
+	}
+	waitGroup(t, rpid, 2, true)
+	if now, err := os.ReadFile(filepath.Join(boot, fenceFile)); err != nil || string(now) != string(kept) {
+		t.Fatalf("kept order after the unfenced stop = %q %v, want %q", now, err, kept)
+	}
+	if !signal(t, rc, false, 1) {
+		t.Fatal("the fenced continue after an unfenced stop was dropped")
+	}
+	waitGroup(t, rpid, 2, false)
 }
 
 // The order outlives a restart of the guest agent's service, whose processes may outlive it too: the

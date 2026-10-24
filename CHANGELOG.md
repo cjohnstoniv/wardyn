@@ -18,6 +18,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `desktop.sign_in.pause` row says `fenced` false, and a continue that reaches its guest late can still run the agent
   while the run page says paused. Migration `0231_desktop_vm_pause_generation` adds a column to `desktop_vm_sign_ins`;
   no grant changes.
+- During a rolling control-plane upgrade, a desktop sign-in pause can stay paused until it is resumed from an upgraded server.
 
 ### Fixed
 

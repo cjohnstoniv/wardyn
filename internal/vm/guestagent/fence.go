@@ -14,8 +14,14 @@ package guestagent
 //   - equal: a continue, or a stop again before the continue, acts; a stop after the continue is
 //     dropped;
 //   - newer: acts, and becomes the newest;
-//   - 0 (none, from a runner or wardynd that predates it): acts as before while no generation has been
-//     seen, and moves nothing; once one has, it is dropped.
+//   - 0 (none, from a runner or wardynd that predates it) moves nothing. A stop acts: a pause only ever
+//     protects a sign-in. A continue acts while no generation has been seen; once one has, it is
+//     dropped, and the agent stays stopped until a continue with a generation comes.
+//
+// A mixed-version wardynd rollout, a wardynd rollback or a runner downgrade mid-run sends requests with
+// none. A resume from the older side is then answered 409 and the run stays paused until a resume from
+// an upgraded wardynd, or a VM reboot, which clears the fence. The older side's stop acts and keeps the
+// old order, which the newer side's stop again narrows and does not close.
 //
 // The guest agent keeps it in its marker directory, a tmpfs, written before each signal: a restart of
 // the agent's service keeps it, as the processes it signalled may outlive that restart, and the guest's
@@ -31,7 +37,7 @@ type PauseFence struct {
 func (f *PauseFence) Admit(gen int64, cont bool) bool {
 	switch {
 	case gen == 0:
-		return f.Generation == 0
+		return !cont || f.Generation == 0
 	case gen < f.Generation:
 		return false
 	case gen == f.Generation:

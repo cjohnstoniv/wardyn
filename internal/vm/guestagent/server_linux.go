@@ -227,7 +227,13 @@ func (s *Server) signalLatest(gen int64, sig unix.Signal) (int, string) {
 	}
 	next := s.fence
 	if !next.Admit(gen, sig == unix.SIGCONT) {
+		if gen == 0 {
+			return http.StatusConflict, ReasonStaleUnfencedResume + ": a resume with no generation came after one with a generation; the agent stays paused"
+		}
 		return http.StatusConflict, "a newer pause or resume has reached the agent"
+	}
+	if gen == 0 && next.Generation > 0 {
+		slog.Warn("guest agent: obeyed a pause with no generation after one with a generation", "generation", next.Generation)
 	}
 	if next != s.fence {
 		if err := writeFence(s.MarkerDir, next); err != nil {

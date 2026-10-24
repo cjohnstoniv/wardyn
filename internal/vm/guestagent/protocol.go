@@ -76,6 +76,12 @@ type AgentSignalResult struct {
 	FencedPause bool `json:"fenced_pause,omitempty"`
 }
 
+// ReasonStaleUnfencedResume opens the 409 body of a resume with no generation that the guest drops
+// because one with a generation came first. Only a wardynd or runner that predates the generation sends
+// such a resume; the body reaches it unchanged in the runner's error, which its resume's failure audit
+// row keeps.
+const ReasonStaleUnfencedResume = "stale_unfenced_resume"
+
 // The sign-in store (#2972): a desktop's keychain and browser profiles, each a tmpfs the agent mounts
 // over its path under AgentHome at Init, before any exec. The guest has no swap (Init refuses one), so
 // what is kept there lives in the guest's memory and is gone when the guest shuts down.
