@@ -8,7 +8,6 @@ package k8s
 import (
 	"context"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -163,29 +162,4 @@ func runAgentLocally(t *testing.T, rec string, px *httptest.Server, command []st
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("agent: %v\n%s", err, out)
 	}
-}
-
-// probeSucceeds runs probe as a kubelet does against the proxy stand-in: a TCP probe passes once
-// the listener accepts, an HTTP probe only on a 2xx or 3xx answer at its path.
-func probeSucceeds(px *httptest.Server, probe *corev1.Probe) bool {
-	addr := px.Listener.Addr().String()
-	switch {
-	case probe == nil:
-		return true
-	case probe.HTTPGet != nil:
-		resp, err := http.Get("http://" + addr + probe.HTTPGet.Path)
-		if err != nil {
-			return false
-		}
-		_ = resp.Body.Close()
-		return resp.StatusCode >= 200 && resp.StatusCode < 400
-	case probe.TCPSocket != nil:
-		c, err := net.Dial("tcp", addr)
-		if err != nil {
-			return false
-		}
-		_ = c.Close()
-		return true
-	}
-	return false
 }
