@@ -381,7 +381,8 @@ func TestUnitAdminReadsNoPathProvenance(t *testing.T) {
 // limits or contact) and of the person's workspaces only the group pinned to a unit they govern, so
 // no unit outside their units is named; a security admin's check carries all of it. The effective
 // walls' provenance is no richer than GET /governance's: the knob the restriction set says only that
-// a restriction did, where a security admin's names it.
+// a restriction did, where a security admin's names it. A context's path is GET's shape too: an admin
+// of a unit two below ua-a reads the path up to ua-a1, the parent of their unit, and no unit above.
 func TestUnitAdminCheckWithinScope(t *testing.T) {
 	e := newUnitAdminEnv(t, false)
 	person := e.fresh("sub-ua-person")
@@ -440,6 +441,35 @@ func TestUnitAdminCheckWithinScope(t *testing.T) {
 		}
 		if got.Effective == nil || got.Effective.Provenance["denied_domains"] != wantRec || strings.Contains(w.Body.String(), r.Name) != tc.want {
 			t.Errorf("check as %s: denied_domains provenance %+v, want %+v and the restriction named = %v", tc.who, got.Effective, wantRec, tc.want)
+		}
+	}
+	mid := e.child(e.a1)
+	leaf := e.child(mid)
+	deep, admin := e.fresh("sub-ua-deep"), e.fresh("sub-ua-mid-admin")
+	treeMember(t, e.govEnv, leaf, types.CapabilitySubjectUser, deep, 1, false)
+	e.grant(mid, types.CapabilitySubjectUser, admin)
+	for _, tc := range []struct {
+		who  string
+		c    *http.Cookie
+		want []uuid.UUID
+	}{
+		{"the admin of the unit below ua-a1", uaSession(t, admin, []string{}, false), []uuid.UUID{leaf.ID, mid.ID, e.a1.ID}},
+		{"a security admin", e.alice, []uuid.UUID{leaf.ID, mid.ID, e.a1.ID, e.a.ID}},
+	} {
+		w := e.call(tc.c, http.MethodPost, "/api/v1/governance/check", `{"user_subjects":["`+deep+`"]}`)
+		var got governanceCheckResponse
+		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &got) != nil || len(got.Contexts) != 1 {
+			t.Fatalf("check as %s = %d %s, want 200 and one context", tc.who, w.Code, w.Body)
+		}
+		var path []uuid.UUID
+		for _, l := range got.Contexts[0].Path {
+			path = append(path, l.ID)
+		}
+		if len(path) < len(tc.want) || !slices.Equal(path[:len(tc.want)], tc.want) || (tc.c != e.alice && len(path) != len(tc.want)) {
+			t.Errorf("check as %s: path %v, want it to open with %v (and end there below a security admin)", tc.who, path, tc.want)
+		}
+		if named := strings.Contains(w.Body.String(), `"ua-a"`); named != (tc.c == e.alice) {
+			t.Errorf("check as %s names ua-a = %v", tc.who, named)
 		}
 	}
 }
