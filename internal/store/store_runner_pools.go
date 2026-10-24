@@ -38,7 +38,7 @@ type RunnerPoolStore interface {
 	DeleteRunnerPool(ctx context.Context, id uuid.UUID) (RunnerPoolDeletion, error)
 	DeleteRunnerPoolsByOwner(ctx context.Context, owner string) ([]RunnerPoolDeletion, error)
 
-	AddRunnerPoolExecutor(ctx context.Context, id uuid.UUID, executor string) (m types.RunnerPoolMember, added bool, revision int64, err error)
+	AddRunnerPoolExecutor(ctx context.Context, id uuid.UUID, executor string, refuseGoverned bool) (m types.RunnerPoolMember, added bool, revision int64, err error)
 	RemoveRunnerPoolExecutor(ctx context.Context, id uuid.UUID, executor string, refuseGoverned bool) (removed bool, revision int64, err error)
 	AddOwnRunnerToPool(ctx context.Context, id, runnerID uuid.UUID, owner, orgURLSHA256 string) (m types.RunnerPoolMember, added bool, revision int64, err error)
 	RemoveOwnRunnerFromPool(ctx context.Context, id, runnerID uuid.UUID, owner string) (removed bool, revision int64, err error)
@@ -60,7 +60,8 @@ var _ RunnerPoolStore = PG{}
 var (
 	// ErrRunnerPoolStale: the caller's revision is not the pool's.
 	ErrRunnerPoolStale = errors.New("store: runner pool revision is stale")
-	// ErrRunnerPoolGoverned: a detach that was decided as direct met a use policy under the locks.
+	// ErrRunnerPoolGoverned: a detach or attach that was decided as direct met a use policy under the
+	// locks (the pool's own for a detach, another pool's holding the executor for an attach).
 	ErrRunnerPoolGoverned = errors.New("store: runner pool now has a use policy, so the detach must be held")
 	// ErrRunnerPoolLimit: the organisation is at RunnerPoolsMax pools, or the owner at RunnerPoolsPerOwnerMax.
 	ErrRunnerPoolLimit = errors.New("store: too many runner pools")
@@ -441,8 +442,10 @@ func clearOrgDefaultSlotsQ(ctx context.Context, q Querier, id uuid.UUID, out *Ru
 // AddRunnerPoolExecutor adds a remote-hosted runner (executor is its id) to a live organization pool;
 // added is false when it was already a member (no revision change). revision is the pool's revision
 // after the call, read under the pool lock. ErrNotFound: no such live organization pool, or no such
-// remote-hosted runner row.
-func (s PG) AddRunnerPoolExecutor(ctx context.Context, id uuid.UUID, executor string) (types.RunnerPoolMember, bool, int64, error) {
+// remote-hosted runner row. The caller decided on a catalogue read taken before the locks whether the
+// attach is held; refuseGoverned says it decided "not held", and ErrRunnerPoolGoverned answers a use
+// policy on another pool holding the executor that was approved in between (executorGovernedElsewhereQ).
+func (s PG) AddRunnerPoolExecutor(ctx context.Context, id uuid.UUID, executor string, refuseGoverned bool) (types.RunnerPoolMember, bool, int64, error) {
 	var m types.RunnerPoolMember
 	var added bool
 	var rev int64
@@ -451,11 +454,44 @@ func (s PG) AddRunnerPoolExecutor(ctx context.Context, id uuid.UUID, executor st
 		if err := LockGovernanceTarget(ctx, q, types.GovernanceTargetRunnerPoolUsePolicy, id.String()); err != nil {
 			return err
 		}
+		if refuseGoverned {
+			governed, err := executorGovernedElsewhereQ(ctx, q, id, executor)
+			if err != nil {
+				return err
+			}
+			if governed {
+				return ErrRunnerPoolGoverned
+			}
+		}
 		var err error
 		m, added, rev, err = AddRunnerPoolExecutorQ(ctx, q, id, executor)
 		return err
 	})
 	return m, added, rev, err
+}
+
+// executorGovernedElsewhereQ reports whether a live pool other than id that holds remote-hosted runner
+// executor carries a use policy, read under the row locks of pool id and of every other pool holding
+// it. A use-policy write or approval takes its pool's row lock (LockLivePoolQ) before it reads or
+// writes the policy, so one in flight on such a pool commits before this read, and none starts until
+// the attach commits. The rows are locked in one statement in id order, FOR UPDATE throughout: two
+// attaches that each find the other's pool holding their executor take them in the same order, where a
+// share lock later raised on the pool's own row could deadlock.
+func executorGovernedElsewhereQ(ctx context.Context, q Querier, id uuid.UUID, executor string) (bool, error) {
+	if _, err := q.Exec(ctx, `SELECT p.id FROM runner_pools p
+		WHERE p.id = $1 OR p.id IN (SELECT pool_id FROM runner_pool_members WHERE remote_runner_id = $2)
+		ORDER BY p.id FOR UPDATE`, id, executor); err != nil {
+		return false, fmt.Errorf("store: lock the pools holding a remote-hosted runner: %w", err)
+	}
+	var governed bool
+	err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runner_pool_members m
+		JOIN runner_pools p ON p.id = m.pool_id
+		JOIN runner_pool_use_policies u ON u.pool_id = p.id
+		WHERE m.remote_runner_id = $2 AND p.id <> $1 AND p.state <> 'deleted')`, id, executor).Scan(&governed)
+	if err != nil {
+		return false, fmt.Errorf("store: read the use policies over a remote-hosted runner: %w", err)
+	}
+	return governed, nil
 }
 
 // AddRunnerPoolExecutorQ is AddRunnerPoolExecutor's statement on q (a pgx.Tx), which a held change
