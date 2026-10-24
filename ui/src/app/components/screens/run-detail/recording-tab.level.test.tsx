@@ -34,6 +34,7 @@ vi.mock("@novnc/novnc", () => ({
   },
 }));
 
+import { RUN_RECORDING } from "../../wardyn/copy/runners";
 import { RecordingTab } from "./recording-tab";
 
 const RUN = "11111111-1111-4111-8111-111111111111";
@@ -62,6 +63,17 @@ describe("RecordingTab levels (#2968, M7 RunStrip, Replay, States 8)", () => {
       "Recording offNothing is captured. The audit log still shows what happened.",
     );
     expect(screen.getByText("This run's policy set recording to Off. The audit log still shows what happened.")).toBeInTheDocument();
+  });
+
+  it.each([
+    ["runner_declined", RUN_RECORDING.runner_declined],
+    ["org_off", RUN_RECORDING.org_off],
+  ] as const)("a run with not_recorded=%s says it was not recorded, whatever its level", (notRecorded, note) => {
+    tab({ level: "terminal", notRecorded });
+    const strip = screen.getByTestId("recording-level-strip");
+    expect(strip).toHaveTextContent("Recording off");
+    expect(strip).toHaveTextContent(note);
+    expect(strip).not.toHaveTextContent("Terminal only");
   });
 
   it("a desktop recording marks its gap, jumps from the action log and shows the chain verdict", async () => {
