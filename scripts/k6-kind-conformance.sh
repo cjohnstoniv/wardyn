@@ -268,10 +268,17 @@ api() {
 }
 
 # patch_https_probes DEPLOYMENT NS: the org serves its runner URL over TLS on the probed port.
+# The deployment controller can update the object between the get and the replace (a Conflict),
+# so the read-modify-replace is retried on a fresh read.
 patch_https_probes() {
-  kubectl -n "$2" get deployment "$1" -o json | jq '.spec.template.spec.containers[0] |=
-    ((.livenessProbe.httpGet.scheme, .readinessProbe.httpGet.scheme, .startupProbe.httpGet.scheme) = "HTTPS")' |
-    kubectl replace -f - >/dev/null
+  local i
+  for i in 1 2 3 4 5; do
+    kubectl -n "$2" get deployment "$1" -o json | jq '.spec.template.spec.containers[0] |=
+      ((.livenessProbe.httpGet.scheme, .readinessProbe.httpGet.scheme, .startupProbe.httpGet.scheme) = "HTTPS")' |
+      kubectl replace -f - >/dev/null && return 0
+    sleep "$i"
+  done
+  return 1
 }
 
 # deploy_org stands up postgres and wardynd in $ORG_NS and seeds the security operator's token.
