@@ -210,6 +210,9 @@ type VMCaps struct {
 	Virtiofs    bool   `json:"virtiofs,omitempty"`
 	// Desktop says the runner opens a VM's display (dial_desktop). A runner without it is never asked.
 	Desktop bool `json:"desktop,omitempty"`
+	// SignIns says the runner hands each VM its sign-in store and pauses its agent (pause_agent,
+	// resume_agent) (#2972). A runner without it is never asked.
+	SignIns bool `json:"sign_ins,omitempty"`
 }
 
 // Waiting is the `waiting` event's data.

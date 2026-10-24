@@ -194,10 +194,10 @@ func TestReadyAndInitOnce(t *testing.T) {
 	dir := t.TempDir()
 	in := Init{Env: map[string]string{"A": "1", "SHADOW": "init"}, SecretEnv: map[string]string{"B": "2"},
 		Files: []File{{Path: filepath.Join(dir, "etc", "managed.json"), Mode: 0o644, Content: []byte(`{"x":1}`)}}}
-	if err := c.Init(ctxT(t), in); err != nil {
+	if _, err := c.Init(ctxT(t), in); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Init(ctxT(t), in); err == nil || !strings.Contains(err.Error(), "already initialised") {
+	if _, err := c.Init(ctxT(t), in); err == nil || !strings.Contains(err.Error(), "already initialised") {
 		t.Fatalf("second init = %v, want refused", err)
 	}
 	st, err := os.Stat(filepath.Join(dir, "etc", "managed.json"))
@@ -220,10 +220,10 @@ func TestReadyAndInitOnce(t *testing.T) {
 func TestInitRefusedAfterAnAgentRestart(t *testing.T) {
 	boot := t.TempDir()
 	in := Init{Files: []File{{Path: filepath.Join(t.TempDir(), "managed.json"), Mode: 0o644}}}
-	if err := newRigAt(t, boot).client(t).Init(ctxT(t), in); err != nil {
+	if _, err := newRigAt(t, boot).client(t).Init(ctxT(t), in); err != nil {
 		t.Fatalf("first init on an empty marker dir = %v", err)
 	}
-	if err := newRigAt(t, boot).client(t).Init(ctxT(t), in); err == nil || !strings.Contains(err.Error(), `409 Conflict: "the sandbox is already initialised"`) {
+	if _, err := newRigAt(t, boot).client(t).Init(ctxT(t), in); err == nil || !strings.Contains(err.Error(), `409 Conflict: "the sandbox is already initialised"`) {
 		t.Fatalf("init after a restart = %v, want refused", err)
 	}
 	if st, err := os.Stat(filepath.Join(boot, "wardyn-guest-init")); err != nil || st.Mode().Perm() != 0o600 {
@@ -234,11 +234,11 @@ func TestInitRefusedAfterAnAgentRestart(t *testing.T) {
 func TestPartWayFailedInitStaysRefused(t *testing.T) {
 	boot := t.TempDir()
 	bad := Init{Files: []File{{Path: "relative/managed.json", Mode: 0o644}}}
-	if err := newRigAt(t, boot).client(t).Init(ctxT(t), bad); err == nil || strings.Contains(err.Error(), "already initialised") {
+	if _, err := newRigAt(t, boot).client(t).Init(ctxT(t), bad); err == nil || strings.Contains(err.Error(), "already initialised") {
 		t.Fatalf("init with a bad file path = %v, want it to fail after the marker", err)
 	}
 	good := Init{Files: []File{{Path: filepath.Join(t.TempDir(), "managed.json"), Mode: 0o644}}}
-	if err := newRigAt(t, boot).client(t).Init(ctxT(t), good); err == nil || !strings.Contains(err.Error(), `409 Conflict: "the sandbox is already initialised"`) {
+	if _, err := newRigAt(t, boot).client(t).Init(ctxT(t), good); err == nil || !strings.Contains(err.Error(), `409 Conflict: "the sandbox is already initialised"`) {
 		t.Fatalf("init after a part-way failure = %v, want refused", err)
 	}
 }

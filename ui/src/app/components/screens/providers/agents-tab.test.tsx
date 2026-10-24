@@ -133,6 +133,35 @@ describe("AgentsTab", () => {
     expect(body.agents.every((a: object) => Object.keys(a).join() === "id")).toBe(true);
   });
 
+  // #2972 (board R11-2972-DesktopSignIns): one field after Default model provider, Allowed by default, saved
+  // with the tab's Save; Not allowed rides the row as desktop_sign_ins_off, and Allowed drops the key.
+  it("sign-ins in a desktop: Allowed by default, Not allowed saves desktop_sign_ins_off on that row only", async () => {
+    putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"s1"' });
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    const row = await screen.findByTestId("agent-row-claude-code");
+    const group = within(row).getByRole("group", { name: "Sign-ins in a desktop — Claude Code" });
+    expect(within(row).getByText("Sign-ins in a desktop")).toBeInTheDocument();
+    expect(
+      within(row).getByText(
+        "Allowed: a sign-in made in a desktop is kept in that machine's memory until it shuts down, and the agent can use it. Not allowed: a desktop running this agent keeps no sign-ins.",
+      ),
+    ).toBeInTheDocument();
+    expect(within(group).getByRole("button", { name: "Allowed" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(group).getByRole("button", { name: "Not allowed" })).toHaveAttribute("aria-pressed", "false");
+    await userEvent.click(within(group).getByRole("button", { name: "Not allowed" }));
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    const [body] = putAgentProvidersMock.mock.calls[0];
+    expect(body.agents.find((a: { id: string }) => a.id === "claude-code")).toEqual({ id: "claude-code", desktop_sign_ins_off: true });
+    expect(body.agents.find((a: { id: string }) => a.id === "codex-cli")).toEqual({ id: "codex-cli" });
+  });
+
+  it("sign-ins in a desktop is read-only to a non-admin", async () => {
+    render(<AgentsTab harnesses={HARNESSES} operator={false} onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    const row = await screen.findByTestId("agent-row-claude-code");
+    const group = within(row).getByRole("group", { name: "Sign-ins in a desktop — Claude Code" });
+    expect(within(group).getByRole("button", { name: "Not allowed" })).toBeDisabled();
+  });
+
   it("a disabled row renders disabled with its reason, never hidden", async () => {
     getAgentProvidersMock.mockResolvedValue({
       providers: { agents: [{ id: "codex-cli", disabled: true }] },

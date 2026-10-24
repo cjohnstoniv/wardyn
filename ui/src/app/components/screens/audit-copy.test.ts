@@ -6,6 +6,8 @@
 import { describe, expect, it } from "vitest";
 import type { AuditEvent } from "../../lib/types";
 import { describeAction, describeEvent } from "./audit-copy";
+// The run page's Audit tab and the Audit screen read the lib table.
+import { describeAction as describeTabAction } from "../../lib/audit-copy";
 
 const ev = (action: string, target = "", extra: Partial<AuditEvent> = {}): AuditEvent =>
   ({ id: "e", time: new Date().toISOString(), actor_type: "system", actor: "x", action, outcome: "success", target, ...extra }) as AuditEvent;
@@ -19,6 +21,11 @@ describe("audit sentences", () => {
     expect(describeEvent(ev("egress.deny"))).toBe("Denied egress to an unknown host");
     expect(describeAction(ev("llm.scan.flag", "h"))).toBe("LLM content scan (flag)");
     expect(describeEvent(ev("llm.scan.flag", "h"))).toBe("LLM content scan (flag) for h");
+  });
+
+  // #2972: one row per Pause-to-Resume session in a VM's desktop, labelled as the board lists it.
+  it("labels a desktop sign-in session as pausing the agent to sign in inside the desktop", () => {
+    expect(describeTabAction(ev("desktop.sign_in.pause", "r1"))).toBe("Paused the agent to sign in inside the desktop");
   });
 
   it("falls back to the raw key for an action it does not know", () => {

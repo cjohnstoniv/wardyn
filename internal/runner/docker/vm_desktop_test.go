@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 	"github.com/cjohnstoniv/wardyn/internal/vm/qemu"
 )
 
@@ -51,5 +52,55 @@ func TestVMDialDesktopReachesQEMUsDisplaySocket(t *testing.T) {
 	seedSandbox(r.f, id)
 	if _, err := r.d.DialDesktop(ctx, agentContainerName(id)); !errors.Is(err, runner.ErrDesktopUnsupported) {
 		t.Fatalf("a container's desktop = %v, want ErrDesktopUnsupported", err)
+	}
+}
+
+// The run's sign-in choice reaches the guest at Init, and what the guest made of its sign-in store
+// comes back on the sandbox (#2972).
+func TestVMSignInStoreRidesInitAndComesBack(t *testing.T) {
+	for _, off := range []bool{false, true} {
+		r := newVMRig(t)
+		spec := vmSpec()
+		spec.DesktopSignInsOff = off
+		sb, err := r.d.CreateSandbox(context.Background(), spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.mu.Lock()
+		got := r.init.SignInsOff
+		r.mu.Unlock()
+		want := map[bool]string{false: guestagent.SignInsMemory, true: guestagent.SignInsNone}[off]
+		if got != off || sb.SignIns != want {
+			t.Fatalf("off=%v: init carried %v, sandbox says %q; want %q", off, got, sb.SignIns, want)
+		}
+	}
+}
+
+// Pause and resume reach the guest agent of a VM's running agent; a container is refused.
+func TestVMPauseAgentReachesTheGuestAgent(t *testing.T) {
+	r := newVMRig(t)
+	ctx := context.Background()
+	sb, err := r.d.CreateSandbox(ctx, vmSpec())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.d.PauseAgent(ctx, sb.Ref); !errors.Is(err, guestagent.ErrNoExec) {
+		t.Fatalf("pause before the agent started = %v, want ErrNoExec", err)
+	}
+	if _, err := r.d.Exec(ctx, sb.Ref, []string{"sleep", "5"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.d.PauseAgent(ctx, sb.Ref); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.d.ResumeAgent(ctx, sb.Ref); err != nil {
+		t.Fatal(err)
+	}
+	id := uuid.New()
+	seedSandbox(r.f, id)
+	for _, f := range []func(context.Context, string) error{r.d.PauseAgent, r.d.ResumeAgent} {
+		if err := f(ctx, agentContainerName(id)); !errors.Is(err, runner.ErrAgentPauseUnsupported) {
+			t.Fatalf("a container's agent = %v, want ErrAgentPauseUnsupported", err)
+		}
 	}
 }

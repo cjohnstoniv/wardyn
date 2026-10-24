@@ -760,7 +760,11 @@ func (s *Server) recordStartedSandbox(ctx context.Context, run types.AgentRun, s
 	if err := s.recordSandboxRef(ctx, run.ID, sb.Ref); err != nil {
 		return err
 	}
-	return s.recordVMMachine(ctx, run, sb)
+	if err := s.recordVMMachine(ctx, run, sb); err != nil {
+		return err
+	}
+	s.recordDesktopVMSignIns(ctx, run, sb)
+	return nil
 }
 
 // recordVMMachine writes the virtual hardware a VM run was started with (#2996). A VM whose machine is

@@ -57,6 +57,10 @@ const (
 	// MethodDialDesktop opens a `desktop` stream to a VM sandbox's display (QEMU's RFB socket) on a
 	// runner whose caps carry LinuxVM.Desktop; an older runner never gets the call.
 	MethodDialDesktop = "dial_desktop"
+	// MethodPauseAgent and MethodResumeAgent stop and continue a VM sandbox's agent inside the guest
+	// (runner.AgentPauser), on a runner whose caps carry LinuxVM.SignIns; an older one never gets them.
+	MethodPauseAgent  = "pause_agent"
+	MethodResumeAgent = "resume_agent"
 	// The local attach calls are sent only to a runner that advertises Caps.LocalAttach.
 	// MethodLocalAttach opens a pty_tee stream and answers its id; MethodLocalAttachMode changes the
 	// session's writer/observer mode and is answered once the runner has applied it;

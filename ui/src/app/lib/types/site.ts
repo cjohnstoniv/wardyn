@@ -246,6 +246,8 @@ export interface AgentProvider {
   // agent; that provider may be turned off, which makes this default's runs
   // refused rather than moved. Absent is today.
   default_provider?: string;
+  // "Sign-ins in a desktop: Not allowed" (#2972). Negative-sense: absent is Allowed.
+  desktop_sign_ins_off?: boolean;
 }
 
 // The org's model-provider configuration. Hand-maintained mirror of Go's

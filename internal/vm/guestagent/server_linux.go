@@ -36,6 +36,12 @@ type Server struct {
 	// MarkerDir holds the marker of this boot's Init. In a guest it is /run, a tmpfs: the marker
 	// outlives an agent restart and a reboot clears it.
 	MarkerDir string
+	// Swaps is the kernel's swap list (/proc/swaps in a guest): Init refuses a guest with any swap
+	// on, so the sign-in store never leaves memory. Empty skips the check (tests only).
+	Swaps string
+	// SignInStore mounts the sign-in store (MountSignInStore); off makes it read-only. Nil reports
+	// no store (tests only).
+	SignInStore func(off bool) error
 
 	mu      sync.Mutex
 	inited  bool
@@ -47,6 +53,7 @@ type Server struct {
 
 type detached struct {
 	id   string
+	pid  int // its own session and process group (Setsid), which pause and resume signal
 	path string
 	mu   sync.Mutex
 	done bool
@@ -91,6 +98,8 @@ func (s *Server) Handler() (http.Handler, error) {
 		http.Error(w, "no such exec", http.StatusNotFound)
 	})
 	mux.HandleFunc("GET /v1/exec/{id}/output", s.handleOutput)
+	mux.HandleFunc("POST /v1/agent/pause", func(w http.ResponseWriter, _ *http.Request) { s.signalAgent(w, unix.SIGSTOP) })
+	mux.HandleFunc("POST /v1/agent/resume", func(w http.ResponseWriter, _ *http.Request) { s.signalAgent(w, unix.SIGCONT) })
 	mux.HandleFunc("GET /v1/agent", func(w http.ResponseWriter, _ *http.Request) {
 		s.mu.Lock()
 		d := s.execs[s.latest]
@@ -127,12 +136,29 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "the sandbox is already initialised", http.StatusConflict)
 		return
 	}
+	if s.Swaps != "" {
+		if err := CheckNoSwap(s.Swaps); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
 	marker, err := os.OpenFile(filepath.Join(s.MarkerDir, "wardyn-guest-init"), os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0o600)
 	if err != nil {
 		http.Error(w, "the sandbox is already initialised", http.StatusConflict)
 		return
 	}
 	_ = marker.Close()
+	var res InitResult
+	if s.SignInStore != nil {
+		if err := s.SignInStore(in.SignInsOff); err != nil {
+			http.Error(w, "the sign-in store: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		res.SignIns = SignInsMemory
+		if in.SignInsOff {
+			res.SignIns = SignInsNone
+		}
+	}
 	for _, f := range in.Files {
 		if err := s.writeFile(f); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -156,6 +182,23 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.inited = true
+	writeJSON(w, res)
+}
+
+// signalAgent sends sig to the latest detached exec's process group: the harness and every process
+// it started that stayed in its group. A process that left the group (setsid) is not reached.
+func (s *Server) signalAgent(w http.ResponseWriter, sig unix.Signal) {
+	s.mu.Lock()
+	d := s.execs[s.latest]
+	s.mu.Unlock()
+	if d == nil || !d.state().Running {
+		http.Error(w, "no agent is running", http.StatusNotFound)
+		return
+	}
+	if err := unix.Kill(-d.pid, sig); err != nil {
+		http.Error(w, "signal the agent: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, struct{}{})
 }
 
@@ -412,7 +455,7 @@ func (s *Server) startDetached(cmd *exec.Cmd) (string, error) {
 		return "", err
 	}
 	pw.Close()
-	d := &detached{id: id, path: path, changed: make(chan struct{})}
+	d := &detached{id: id, pid: cmd.Process.Pid, path: path, changed: make(chan struct{})}
 	s.mu.Lock()
 	if s.execs == nil {
 		s.execs = map[string]*detached{}

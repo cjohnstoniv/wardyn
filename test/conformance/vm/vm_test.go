@@ -428,6 +428,51 @@ func TestLinuxVMSandbox(t *testing.T) {
 		}
 	})
 
+	// The sign-in store (#2972): the guest runs no swap and no zram, and each keychain and browser profile
+	// path is a tmpfs the agent user may write, so what is kept there is in the guest's memory only.
+	t.Run("NoSwapOrZram", func(t *testing.T) {
+		if code, o := run(t, d, sb.Ref, "cat /proc/swaps"); code != 0 || len(strings.Split(strings.TrimSpace(o), "\n")) != 1 {
+			t.Errorf("/proc/swaps = %d %q, want its header only", code, o)
+		}
+	})
+	t.Run("SignInStoreIsTmpfs", func(t *testing.T) {
+		for _, rel := range guestagent.SignInPaths {
+			p := guestagent.AgentHome + "/" + rel
+			if code, o := run(t, d, sb.Ref, "[ \"$(stat -f -c %T "+p+")\" = tmpfs ] && touch "+p+"/probe"); code != 0 {
+				t.Errorf("%s = %d %q, want a tmpfs the agent user writes", p, code, o)
+			}
+		}
+	})
+	// "Pause the agent to sign in" stops the agent's processes in the guest, and the guest (and so its
+	// desktop) keeps running: a terminal exec still answers while the agent is stopped.
+	t.Run("PauseAgentStopsOnlyTheAgent", func(t *testing.T) {
+		if _, err := d.Exec(ctx, sb.Ref, []string{"sleep", "600"}); err != nil {
+			t.Fatal(err)
+		}
+		state := func() string {
+			_, o := run(t, d, sb.Ref, "sleep 0.5; ps -eo stat=,args=")
+			for _, l := range strings.Split(o, "\n") {
+				if f := strings.Fields(l); len(f) == 3 && f[1] == "sleep" && f[2] == "600" {
+					return f[0]
+				}
+			}
+			t.Logf("no sleep 600 in the guest's processes:\n%s", o)
+			return ""
+		}
+		if err := d.PauseAgent(ctx, sb.Ref); err != nil {
+			t.Fatal(err)
+		}
+		if st := state(); !strings.HasPrefix(st, "T") {
+			t.Errorf("the paused agent's state = %q, want T", st)
+		}
+		if err := d.ResumeAgent(ctx, sb.Ref); err != nil {
+			t.Fatal(err)
+		}
+		if st := state(); strings.HasPrefix(st, "T") || st == "" {
+			t.Errorf("the resumed agent's state = %q, want running or sleeping", st)
+		}
+	})
+
 	// Stop, then nothing of the run is left.
 	if err := d.StopSandbox(ctx, sb.Ref); err != nil {
 		t.Fatal(err)

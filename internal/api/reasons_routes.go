@@ -933,3 +933,11 @@ const (
 	reasonDesktopSigninCredentialRefused = "desktop_signin_credential_refused" // the proxy's check: not an open sign-in's credential
 	reasonDesktopSigninResumeFailed      = "desktop_signin_resume_failed"      // run.kill: a failed begin's agent could not be continued, so the run was killed
 )
+
+// Sign-ins in a Linux VM's desktop (run_desktop_vm_signin.go).
+const (
+	reasonDesktopSignInsOff          = "desktop_sign_ins_off"           // the admin set Not allowed for the run's agent, or the run's desktop keeps none
+	reasonDesktopSignInsUnavailable  = "desktop_sign_ins_unavailable"   // the run has no sign-in store, or it could not be read
+	reasonDesktopSignInsPauseFailed  = "desktop_sign_ins_pause_failed"  // the agent was not paused; it keeps running
+	reasonDesktopSignInsResumeFailed = "desktop_sign_ins_resume_failed" // the agent was not resumed, or its resume was not recorded
+)

@@ -17,6 +17,8 @@
 //	GET  /v1/exec/{id}                  ExecState
 //	GET  /v1/exec/{id}/output?offset=N  a detached exec's output from N, following until it exits
 //	GET  /v1/agent                      ExecState of the latest detached exec
+//	POST /v1/agent/pause                stop the latest detached exec's process group (SIGSTOP)
+//	POST /v1/agent/resume               continue it (SIGCONT)
 package guestagent
 
 import (
@@ -46,11 +48,40 @@ type Ready struct {
 // Init is POST /v1/init: what the sandbox holds before its first exec. Env and SecretEnv reach every
 // exec (SecretEnv is held in the agent's memory only, never written to the guest's disk); Files are
 // written as root before the answer; Mounts are virtiofs shares mounted at their targets.
+// SignInsOff makes the sign-in store read-only, so a desktop keeps no sign-ins (#2972).
 type Init struct {
-	Env       map[string]string `json:"env,omitempty"`
-	SecretEnv map[string]string `json:"secret_env,omitempty"`
-	Files     []File            `json:"files,omitempty"`
-	Mounts    []Mount           `json:"mounts,omitempty"`
+	Env        map[string]string `json:"env,omitempty"`
+	SecretEnv  map[string]string `json:"secret_env,omitempty"`
+	Files      []File            `json:"files,omitempty"`
+	Mounts     []Mount           `json:"mounts,omitempty"`
+	SignInsOff bool              `json:"sign_ins_off,omitempty"`
+}
+
+// InitResult is POST /v1/init's answer. SignIns says what the agent made of the sign-in store:
+// SignInsMemory, SignInsNone, or empty from an agent that has no store (an older one answers {}).
+type InitResult struct {
+	SignIns string `json:"sign_ins,omitempty"`
+}
+
+// The sign-in store (#2972): a desktop's keychain and browser profiles, each a tmpfs the agent mounts
+// over its path under AgentHome at Init, before any exec. The guest has no swap (Init refuses one), so
+// what is kept there lives in the guest's memory and is gone when the guest shuts down.
+const (
+	// SignInsMemory: each path is a writable tmpfs.
+	SignInsMemory = "memory"
+	// SignInsNone: each path is an empty read-only tmpfs, so nothing signed in is kept there.
+	SignInsNone = "none"
+)
+
+// SignInPaths are the sign-in store's paths under AgentHome: the Secret Service keyrings (GNOME
+// Keyring, KWallet) and the Firefox, Chromium and Chrome profiles.
+var SignInPaths = []string{
+	".local/share/keyrings",
+	".local/share/kwalletd",
+	".mozilla",
+	".config/mozilla",
+	".config/chromium",
+	".config/google-chrome",
 }
 
 // File is one managed file. AgentOwned files belong to the agent user; the rest to root.

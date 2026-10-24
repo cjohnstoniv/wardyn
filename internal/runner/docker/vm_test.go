@@ -133,7 +133,7 @@ func (r *vmRig) start(t *testing.T, c *createdContainer) {
 
 func (r *vmRig) serveAgent(t *testing.T, path string) {
 	home := t.TempDir()
-	srv := &guestagent.Server{Version: "test", Home: home, OutDir: t.TempDir(), MarkerDir: t.TempDir(), Mount: func(m guestagent.Mount) error {
+	srv := &guestagent.Server{Version: "test", Home: home, OutDir: t.TempDir(), MarkerDir: t.TempDir(), SignInStore: func(bool) error { return nil }, Mount: func(m guestagent.Mount) error {
 		r.mu.Lock()
 		r.mounts = append(r.mounts, m)
 		r.mu.Unlock()

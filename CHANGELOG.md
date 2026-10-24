@@ -67,6 +67,14 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Split-role installs as above: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `desktop_signins`,
   `desktop_signin_shares` and `desktop_signin_runs` (migration `0220_desktop_signins`). Without it a desktop run starts
   without sign-ins, a desktop sign-in cannot begin, and the sweep that ends one cannot read it.
+- **Sign-ins in a Linux VM's desktop are allowed by default** (#2972). Admin view › Providers › Agents gains "Sign-ins in
+  a desktop" per agent (`agent_providers.agents[].desktop_sign_ins_off`, absent is Allowed). A VM's guest now mounts an
+  empty tmpfs over its keychain and browser profile paths (`/home/agent/.local/share/keyrings`, `.mozilla`,
+  `.config/chromium` and the rest in [Linux VM sandboxes](docs/operations/linux-vm-sandboxes.md#sign-ins-in-the-desktop)),
+  read-only for an agent set Not allowed, so anything a custom guest image baked there is hidden. A guest with any swap
+  or zram on now fails to start. Upgrade wardyn-runnerd and rebuild the guest image together. Split-role installs: grant
+  the app role `SELECT, INSERT, UPDATE, DELETE` on `desktop_vm_sign_ins` (migration `0230_desktop_vm_sign_ins`).
+  Without it a VM's run page says nothing about sign-ins and offers no pause.
 - **Desktop sign-ins are new and off** (`WARDYN_DESKTOP_SIGNINS`, default `off`). Turned on, a run's creator can sign
   in to websites inside the run's desktop while the agent is stopped, and share one site's login with the agent. The
   person's browser is a different uid in the same sandbox, not a sandbox of its own, and after a share the agent holds
@@ -192,6 +200,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
+- A Linux VM's desktop keeps sign-ins in the machine's memory, gone when it shuts down, and the run page says so (#2972).
+  "Pause the agent to sign in" stops the agent's processes inside the guest while the desktop stays live; "Resume the
+  agent" continues them, and each pause-to-resume is one `desktop.sign_in.pause` audit row. The run page says plainly that
+  the resumed agent can use those sign-ins and read saved files. An admin can set an agent's "Sign-ins in a desktop" to
+  Not allowed: its desktops keep none, and the pause is refused at the server.
 - A Linux VM sandbox on a Docker runner now has a network: a relay (`wardyn-vmnet`, built into the proxy image) on the
   run's internal network hands connections to allowed hosts to the run's proxy and refuses raw IP addresses, outside DNS
   resolvers and IPv6. The reference guest image addresses its NIC for the relay. Kubernetes VM pods are unchanged.

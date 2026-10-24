@@ -6,6 +6,8 @@
 # contract it meets (docs/operations/linux-vm-sandboxes.md): one /boot/vmlinuz-* and /boot/initrd.img-*, root
 # on /dev/vda, systemd, qemu-guest-agent, the Wardyn guest agent with its unit, the CA install unit,
 # the agent user (uid 1000, home /home/agent), and /usr/lib/openssh/sftp-server for folder syncs.
+# No swap and no zram (#2972): the guest agent refuses to initialise a guest with any swap on, because
+# the desktop's sign-in store (keychain and browser profiles) is a tmpfs that must stay in memory.
 FROM --platform=$BUILDPLATFORM golang:1.27.2@sha256:5bc7f572bbaa98885a3a1fd9c0aa76b59e3e14e8628bfc316bbfd0c701e4818c AS builder
 WORKDIR /build
 ENV GOTOOLCHAIN=local

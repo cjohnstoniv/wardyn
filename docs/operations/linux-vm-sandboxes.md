@@ -19,9 +19,49 @@
 | Confinement | The VM boundary, which the runner treats as the `CC3` family (hardware virtualisation). The run's recorded `confinement_class` stays the one it asked for |
 | Network | On a Docker runner, QEMU's only link is the network relay (`wardyn-vmnet`), which hands connections to allowed hosts to the run's proxy. A Kubernetes VM pod has no relay yet |
 | Refused traffic | A port or host not allowed, a raw IP or an outside DNS resolver: a deny decision each. Dropped IPv6 and ICMP frames: one row a second per kind, with a repeat count. Global IPv6 connects find no route |
+| Sign-ins | The desktop's keychain and browser profiles are kept in the guest's memory and are gone when the guest shuts down ([Sign-ins in the desktop](#sign-ins-in-the-desktop)) |
 
 - Not in this release: drives, session recording, reviving a stopped VM, replacing its proxy, and recovering its output after the VM is gone. Each is refused with a reason.
 - A VM's terminal is a plain shell. Opening it in the agent CLI (`interactive_start: agent`) and watching or taking over the agent's terminal are refused too.
+
+## Sign-ins in the desktop
+
+- A person may sign in to websites and apps inside a VM's desktop. Those sign-ins enter the sandbox: they are kept, time-limited and audited, not kept out.
+- At Init, before any exec, the guest agent mounts an empty tmpfs, the agent user's and mode `0700`, over each path in the table below.
+- The guest has no swap, so the tmpfs stays in the guest's memory. It is gone when the guest shuts down: at the run's end, a kill, or a full-spool stop.
+- The run's disk, kept for `WARDYN_ENDED_RUN_GRACE` after the run ends, holds none of it. A file the person saves elsewhere is on that disk, where the agent can read it.
+- While the run goes on, the agent can use every session the person opened. Closing the desktop tab removes nothing.
+
+| Path under `/home/agent` | What keeps sign-ins there |
+|---|---|
+| `.local/share/keyrings` | The Secret Service keychain (GNOME Keyring) |
+| `.local/share/kwalletd` | KWallet |
+| `.mozilla`, `.config/mozilla` | Firefox profiles |
+| `.config/chromium`, `.config/google-chrome` | Chromium and Chrome profiles |
+
+| Admin view › Providers › Agents | What a VM desktop running that agent does |
+|---|---|
+| Sign-ins in a desktop: Allowed (the default) | The paths are writable tmpfs. The run page offers "Pause the agent to sign in" |
+| Sign-ins in a desktop: Not allowed | The paths are empty, read-only tmpfs, so the desktop keeps no sign-ins. The pause is refused (`403` `desktop_sign_ins_off`) |
+
+- The setting is read when the run starts. An agent set Not allowed later keeps its running desktops' store, and its pause is refused from then on.
+- A run whose runner or guest image predates the store reports none, and the run page says nothing about sign-ins.
+
+### Pause the agent to sign in
+
+1. The person presses "Pause the agent to sign in" on the run page. The guest agent stops the agent's process group (`SIGSTOP`).
+2. The desktop keeps running, so the person signs in. This is not the run's freeze, which would stop the desktop too.
+3. The person presses "Resume the agent". The guest agent continues the agent's process group (`SIGCONT`).
+
+- Each pause-to-resume writes one `desktop.sign_in.pause` audit row, "paused the agent to sign in inside the desktop". It names who paused and when, never a secret.
+- The pause is the person's choice. A sign-in made without it is neither paused nor audited.
+- A process the agent moved out of its process group (`setsid`) is not stopped.
+
+### Host memory
+
+- QEMU does not lock guest memory (`mem-lock`): the runner starts it unprivileged, with no locked-memory allowance to pin a whole guest.
+- So the runner host may page guest memory, the sign-in store with it, to its own swap or hibernation file. On a personal runner that is the developer's own disk.
+- To keep guest memory off a host's disk, run VMs on a host with no swap and no hibernation.
 
 ## On a Kubernetes runner
 
@@ -105,6 +145,8 @@
 
 - A run's image is an ordinary OCI image. The reference image is [`deploy/images/vm-linux`](../../deploy/images/vm-linux/Dockerfile) (Debian 13, no desktop).
 - It holds exactly one `/boot/vmlinuz-*` and one `/boot/initrd.img-*`, with virtio, ext4 and `qemu_fw_cfg` available. The root filesystem is `/dev/vda`.
+- It turns on no swap device, swap file or zram: `/proc/swaps` holds only its header. The guest agent refuses to initialise a guest with any swap on, and the run fails to start.
+- Its keychain and browsers keep their data at the sign-in store's paths ([Sign-ins in the desktop](#sign-ins-in-the-desktop)), none of them a symbolic link. The guest agent mounts a tmpfs over each.
 - It runs systemd, `qemu-guest-agent` (with `hwclock`, which sets the guest clock), and the Wardyn guest agent at `/usr/local/bin/wardyn-guest-agent` with its unit enabled.
 - Rebuild the image, and so its guest agent, with each runner upgrade: an image older than the runner fails to boot, because its guest agent does not answer the runner's session handshake.
 - It has the user `agent` (uid 1000, home `/home/agent`), as a container agent image does, and `/usr/lib/openssh/sftp-server`, which a folder sync writes through.
