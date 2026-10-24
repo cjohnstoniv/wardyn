@@ -335,24 +335,10 @@ describe("Evidence — 'Use this' per row, NO_PROXY carries the note instead", (
     expect(screen.getAllByRole("button", { name: /^use this$/i })).toHaveLength(1);
   });
 
-  // This block's own "Re-check" must trigger the orchestrator's full recheck
-  // (status + site-config), not merely reload site-config (reloadSiteConfig),
-  // which carries no host-proxy detection at all — otherwise the rows above
-  // it can never actually refresh from the button sitting right there.
-  // onRecheck is that full recheck, the same one the persistent host-status
-  // strip's identically-labelled button already calls.
-  it("Re-check calls the orchestrator's full recheck, not merely reloadSiteConfig", async () => {
-    const onRecheck = vi.fn();
-    renderStep({ onRecheck });
-    await userEvent.click(screen.getByRole("button", { name: /^re-check$/i }));
-    expect(onRecheck).toHaveBeenCalledTimes(1);
-  });
-
-  it("falls back to reloadSiteConfig when onRecheck is omitted (standalone/test renders)", async () => {
-    const { reloadSiteConfig } = renderStep();
-    reloadSiteConfig.mockClear(); // drop the mount-effect call, isolate the button click
-    await userEvent.click(screen.getByRole("button", { name: /^re-check$/i }));
-    expect(reloadSiteConfig).toHaveBeenCalledTimes(1);
+  // #2847: the step's one Re-check is in its header row (setup-layout), so this block carries none.
+  it("the evidence block has no Re-check button of its own", () => {
+    renderStep({});
+    expect(screen.queryByRole("button", { name: /re-check/i })).not.toBeInTheDocument();
   });
 });
 

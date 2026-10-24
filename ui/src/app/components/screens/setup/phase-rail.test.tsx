@@ -75,14 +75,7 @@ const DONE: Record<SetupStepId, boolean> = {
 // BADGES/DONE are keyed that way.
 const FULL_ORDER = Object.keys(BADGES) as SetupStepId[];
 
-// The compact icon rail (lg-only) renders every step unconditionally (CSS-hidden,
-// not DOM-absent — jsdom doesn't apply Tailwind's responsive `hidden`), so its
-// buttons share accessible names with the full rail's. Scope queries to the full
-// rail's nav landmark, same as production CSS would at xl+. Both rails carry the
-// "Setup steps" nav landmark (ui-setup-5) and so share an accessible name — CSS
-// makes only one visible at a time in a real browser; jsdom renders both, so pick
-// the full rail explicitly: it's the SECOND "Setup steps" nav in DOM order (the
-// compact rail is declared first in PhaseRail's JSX).
+// #2844: there is ONE "Setup steps" nav, the full rail, at every width from lg up (the icon-only rail is gone).
 function renderRail(current: SetupStepId, onSelect = vi.fn()) {
   cleanup(); // some tests render twice (collapsed vs. expanded) to compare
   render(<PhaseRail current={current} badges={BADGES} done={DONE} onSelect={onSelect} order={FULL_ORDER} />);
@@ -91,13 +84,17 @@ function renderRail(current: SetupStepId, onSelect = vi.fn()) {
 }
 
 describe("PhaseRail", () => {
-  // ui-setup-5: only the full rail carried the nav/aria-label landmark; the
-  // compact (lg-only) icon rail was a bare div, invisible to landmark
-  // navigation for a screen-reader operator on that breakpoint.
-  it("ui-setup-5: the compact icon rail also carries its own Setup steps nav landmark", () => {
+  // #2844: the 1024-1279 band used to render a 56px icon-only rail whose names lived in a title and sr-only text. The
+  // one rail now carries visible step names at every width, so there is exactly one landmark.
+  it("#2844: there is exactly one Setup steps nav, and its step names are visible text, not title or sr-only", () => {
     cleanup();
-    render(<PhaseRail current="environment" badges={BADGES} done={DONE} onSelect={vi.fn()} />);
-    expect(screen.getAllByRole("navigation", { name: /setup steps/i })).toHaveLength(2);
+    render(<PhaseRail current="environment" badges={BADGES} done={DONE} onSelect={vi.fn()} order={FULL_ORDER} />);
+    const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
+    expect(navs).toHaveLength(1);
+    const nav = within(navs[0]);
+    expect(nav.getByText("Optional setup")).toBeVisible();
+    expect(nav.queryByText(/./, { selector: ".sr-only" })).toBeNull();
+    expect(navs[0].querySelector("[title]")).toBeNull();
   });
 
   it("a full-rail step button carries both the frozen label and its badge text", () => {
@@ -161,12 +158,9 @@ describe("PhaseRail", () => {
   // F3-F3: the rail is the SAME crossing predicate the footer's Next button
   // already renders disabled — without this, a rail click past an ungated
   // corp_network read as a live, clickable step whose onSelect just silently
-  // no-oped (a dead click, not a disabled one). Wired identically on both
-  // rails (compact + full). #497: the reason is never title-only — the full
-  // rail shows it as visible text, the icon-only compact rail (no room for a
-  // caption) folds it into the button's accessible name and keeps the title
-  // for a sighted mouse user (in the lg band it is the only rail rendered).
-  it("a step refused by refuseNext renders disabled, its reason visible/accessible — never title-only, on both rails", () => {
+  // no-oped (a dead click, not a disabled one). #497: the reason is never
+  // title-only — the rail shows a short caption as visible text.
+  it("a step refused by refuseNext renders disabled, its reason visible/accessible — never title-only, ", () => {
     // ticket: F3-F3
     cleanup();
     const refuseNext = (next: SetupStepId) =>
@@ -183,32 +177,19 @@ describe("PhaseRail", () => {
     );
     const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
     const fullRail = within(navs[navs.length - 1]);
-    const compactRail = within(navs[0]);
-    for (const rail of [fullRail, compactRail]) {
-      expect(rail.getByRole("button", { name: /workspaces/i })).toBeDisabled();
-    }
+    expect(fullRail.getByRole("button", { name: /workspaces/i })).toBeDisabled();
     expect(fullRail.getByRole("button", { name: /workspaces/i })).not.toHaveAttribute("title");
-    expect(compactRail.getByRole("button", { name: /workspaces/i })).toHaveAttribute(
-      "title",
-      "Prove network access first.",
-    );
     // Full rail: a short fixed caption under the badge of each refused step
     // (#2838), never the gate's full paragraph, which the footer carries.
     expect(fullRail.getAllByText("Locked until Network is tested")).toHaveLength(2);
     expect(fullRail.queryByText("Prove network access first.")).not.toBeInTheDocument();
-    // Compact rail: no caption room — the reason is in the accessible name.
-    expect(
-      compactRail.getByRole("button", { name: /workspaces.*prove network access first\./i }),
-    ).toBeInTheDocument();
     // Negative control: an earlier step (environment, at-or-before current)
     // and a demo step (never gated by the crossing predicate) both stay live.
-    for (const rail of [fullRail, compactRail]) {
-      expect(rail.getByRole("button", { name: /^environment/i })).not.toBeDisabled();
-      expect(rail.getByRole("button", { name: /record a policy/i })).not.toBeDisabled();
-    }
+    expect(fullRail.getByRole("button", { name: /^environment/i })).not.toBeDisabled();
+    expect(fullRail.getByRole("button", { name: /record a policy/i })).not.toBeDisabled();
   });
 
-  it("negative control: with no refuseNext, no button in either rail is ever disabled", () => {
+  it("negative control: with no refuseNext, no rail button is ever disabled", () => {
     // ticket: F3-F3
     renderRail("environment");
     for (const btn of screen.getAllByRole("button")) {

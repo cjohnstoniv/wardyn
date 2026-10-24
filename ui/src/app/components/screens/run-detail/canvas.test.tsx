@@ -671,6 +671,16 @@ describe("RunCanvas — the fill rule stretches a widget's root card, not a widg
     expect(fillTargets(document.body)).not.toContain(block);
   });
 
+  // #2912: the decision part of the session column is its own context field; the canvas still shows it in the
+  // terminal tile, straight after the terminal pane, so the run page reads as it always did.
+  it("renders the decision pane after the terminal pane in the terminal tile", async () => {
+    render(<RunCanvas ctx={ctx({ decisionPane: <div data-testid="decision-pane">held</div> })} />);
+    const decision = await screen.findByTestId("decision-pane");
+    const session = screen.getByText("the session");
+    expect(session.compareDocumentPosition(decision) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(session.closest("[data-widget]")).toBe(decision.closest("[data-widget]"));
+  });
+
   it("still stretches a widget that IS a single card", async () => {
     render(<RunCanvas ctx={ctx({ terminalPane: paneWithFailureBlock })} />);
     const card = (await screen.findByRole("heading", { name: "Egress" })).closest("section");

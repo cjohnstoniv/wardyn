@@ -541,10 +541,11 @@ test.describe("the unreachable banner sees a store outage", () => {
 // M-1b: /integrations died a second time — the Settings-consolidation
 // redirect X2-F23 pinned is itself deleted now, clean break, no alias
 // (admin-member-modes-design.md §2.3), since its target (/settings) is also
-// gone. A stale link falls to the member catch-all instead.
-test.describe("dead routes redirect", () => {
-  test("/integrations falls through to Runs", async ({ page }) => {
+// gone. A stale link falls to the catch-all, which says so (#2884).
+test.describe("dead routes show Page not found", () => {
+  test("/integrations keeps its address and shows the card, not Runs", async ({ page }) => {
     await page.goto("/integrations");
-    await expect(page).toHaveURL(/\/runs$/);
+    await expect(page.getByRole("region", { name: "Page not found" })).toBeVisible();
+    await expect(page).toHaveURL(/\/integrations$/);
   });
 });

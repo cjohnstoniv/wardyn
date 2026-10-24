@@ -52,7 +52,10 @@ export function FocusMode({ ctx, onExit }: { ctx: WidgetContext; onExit: () => v
   );
   const first = dockable[0] ?? null;
   // ONE piece of state, not an open flag plus a selection: null IS closed.
-  const [dockSelection, setDockSelection] = React.useState<WidgetId | null>(first);
+  // #2912: below 768px the session needs the width, so the dock starts closed and a tap on the rail opens a panel.
+  const [dockSelection, setDockSelection] = React.useState<WidgetId | null>(() =>
+    typeof window.matchMedia === "function" && window.matchMedia("(max-width: 767px)").matches ? null : first,
+  );
   // F1-F6: a widget can stop being dockable out from under an open selection
   // (ssh, once the run it belongs to finishes) — clamp rather than let the
   // rail's glass panel keep rendering a widget that can no longer place a
@@ -134,6 +137,14 @@ export function FocusMode({ ctx, onExit }: { ctx: WidgetContext; onExit: () => v
         <Dock ctx={ctx} ids={dockable} open={dock} onOpen={setDockSelection} />
       </div>
 
+      {/* #2912: the approvals that hold the run get their own full-width row, outside the box the dock panel is
+          positioned in, so no panel can cover Approve and Deny. Nothing pending renders nothing. */}
+      <div className="shrink-0 pb-1 pl-4 pr-[4.75rem]">
+        <ErrorBoundary region={RUN_WIDGETS.terminal.label} resetKey={ctx.run.id}>
+          {ctx.decisionPane}
+        </ErrorBoundary>
+      </div>
+
       <Strip ctx={ctx} />
     </div>,
     document.body,
@@ -161,7 +172,7 @@ function Dock({
         <section
           aria-label={def.label}
           className={cn(
-            "absolute bottom-3 right-[4.5rem] top-16 flex w-[min(26rem,55vw)] flex-col rounded-xl p-3 shadow-floating",
+            "absolute bottom-3 right-[4.5rem] top-16 flex w-[min(26rem,55vw)] flex-col rounded-xl p-3 shadow-floating max-sm:left-4 max-sm:w-auto",
             GLASS,
           )}
         >
@@ -240,8 +251,8 @@ function Strip({ ctx }: { ctx: WidgetContext }) {
   ).length;
 
   return (
-    <div className="flex h-9 shrink-0 items-center gap-4 border-t border-border bg-card/80 px-5 font-mono text-meta backdrop-blur">
-      <span className="text-muted-foreground">
+    <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-t border-border bg-card/80 px-5 py-2 font-mono text-meta backdrop-blur">
+      <span className="whitespace-nowrap text-muted-foreground">
         {RUN_COCKPIT.egress} <span className="text-success">{RUN_COCKPIT.allow(allow)}</span> ·{" "}
         <span className="text-warning">{RUN_COCKPIT.held(held)}</span> ·{" "}
         <span className="text-danger">{RUN_COCKPIT.deny(deny)}</span>
@@ -253,14 +264,14 @@ function Strip({ ctx }: { ctx: WidgetContext }) {
         )}
         {ctx.auditGap && <span title={RUN_COCKPIT.countsFloorTitle}> · {RUN_COCKPIT.countsFloor}</span>}
       </span>
-      <span className="text-muted-foreground">
+      <span className="whitespace-nowrap text-muted-foreground">
         {RUN_COCKPIT.credentials} <span>{RUN_COCKPIT.eligible(ctx.grants.length)}</span> ·{" "}
         <span className="text-info">{RUN_COCKPIT.brokered(brokered)}</span>
       </span>
       {/* The Fence/Wall/Vault metal ramp, via the one chip that owns it — never
           the teal accent, which means "action" everywhere else in this
           console. */}
-      <span className="flex items-center gap-2">
+      <span className="flex items-center gap-2 whitespace-nowrap">
         <ConfinementChip value={ctx.run.confinement_class} />
         {/* A local run names its computer where the bare substrate word was. */}
         <span className="text-muted-foreground">
@@ -271,7 +282,7 @@ function Strip({ ctx }: { ctx: WidgetContext }) {
           drawn by Kbd, which spells the modifier for the platform, so a Windows
           or Linux operator is no longer told to press a key their keyboard does
           not have. Still only the two chords this file actually binds. */}
-      <span className="ml-auto flex shrink-0 items-center gap-3 text-muted-foreground">
+      <span className="ml-auto hidden shrink-0 items-center gap-3 whitespace-nowrap text-muted-foreground sm:flex">
         <span className="flex items-center gap-1.5">
           <Kbd keys={[MOD, "\\"]} />
           {RUN_COCKPIT.shortcutDock}

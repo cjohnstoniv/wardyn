@@ -638,3 +638,13 @@ describe("App — the Templates route table", () => {
     expect(roleCanReach("/admin/templates", "user")).toBe(false);
   });
 });
+
+// #2884: the two catch-alls keep the address and say there is no page there, in place of a silent redirect to Runs.
+describe("App — an unknown address", () => {
+  it.each(["/definitely/not/a/page", "/admin/definitely-not", "/integrations"])("%s shows Page not found at that address", async (path) => {
+    const { fetch } = mockFetch({});
+    vi.stubGlobal("fetch", fetch);
+    renderApp(path);
+    expect(await screen.findByRole("region", { name: "Page not found" })).toHaveTextContent(`There's no page at ${path}.`);
+  });
+});

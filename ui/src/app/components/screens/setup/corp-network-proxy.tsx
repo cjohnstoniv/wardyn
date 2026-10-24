@@ -155,14 +155,12 @@ function EvidenceBlock({
   rows,
   showUse,
   onUse,
-  onRecheck,
   operator,
   hostProxyCheck,
 }: {
   rows: EvidenceRow[];
   showUse: boolean;
   onUse: (row: EvidenceRow) => void;
-  onRecheck: () => void;
   operator: boolean;
   /** The server's graded host_proxy check (see HostProxyCheckNote above) — absent on a fixture-compat older daemon. */
   hostProxyCheck?: SetupCheck;
@@ -171,10 +169,6 @@ function EvidenceBlock({
     <div className="space-y-3 rounded-xl border border-border bg-card p-3.5">
       <div className="flex items-center gap-2">
         <BlockLabel>{T.EVIDENCE_HEAD}</BlockLabel>
-        <span className="flex-1" />
-        <Button size="sm" variant="outline" onClick={onRecheck}>
-          Re-check
-        </Button>
       </div>
       <p className="max-w-[560px] text-meta leading-snug text-muted-foreground">{T.EVIDENCE_EXPLAIN}</p>
       {rows.length === 0 ? (
@@ -364,7 +358,6 @@ export function HostProxyTab({
         rows={rows}
         showUse={showUse}
         onUse={(row) => (row.hasCredentials || hasUserinfo(row.useValue!) ? setUrl(row.useValue!) : saveUrl(row.useValue!))}
-        onRecheck={onRecheck}
         operator={operator}
         hostProxyCheck={hostProxyCheck}
       />

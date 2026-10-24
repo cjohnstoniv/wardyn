@@ -14,7 +14,7 @@ import { type ReactNode, useId, useState } from "react";
 import { ArrowLeft, ArrowRight, Eye, X } from "lucide-react";
 import { Button } from "../../ui/button";
 import { cn } from "../../ui/utils";
-import { HostStatusBar } from "./host-status-bar";
+import { HostRecheck } from "./host-recheck";
 import {
   OPTIONAL_STEPS,
   STEP_HEADING,
@@ -171,8 +171,8 @@ export function SetupLayout({
         </section>
       )}
 
-      {/* Two-column grid: rail + content. Rail collapses to icon-only at lg, expands at xl. */}
-      <div className="grid grid-cols-1 gap-8 lg:grid-cols-[56px_minmax(0,1fr)] xl:grid-cols-[240px_minmax(0,1fr)]">
+      {/* Two-column grid: rail + content. The rail is the full one from lg up (200px, 240px at xl), never icon-only (#2844). */}
+      <div className="grid grid-cols-1 gap-8 lg:grid-cols-[200px_minmax(0,1fr)] xl:grid-cols-[240px_minmax(0,1fr)]">
         {/* F2-F7/F3-F1: a sticky box is clamped by its containing block, so a
             rail taller than the viewport had no way to reach its own bottom
             (the phase rail's later steps). Bounded to the viewport with its
@@ -188,13 +188,8 @@ export function SetupLayout({
         </aside>
 
         <div className="min-w-0">
-          <HostStatusBar
-            checking={checking}
-            lastCheckedLabel={lastCheckedLabel}
-            onRecheck={onRecheck}
-            className="mb-6"
-          />
-          <div className="mb-2 label-eyebrow">
+          <div className="mb-2 flex items-start justify-between gap-4">
+          <div className="label-eyebrow">
             {isOptional ? (
               <>
                 <div>Optional</div>
@@ -212,6 +207,8 @@ export function SetupLayout({
                 )}
               </>
             )}
+          </div>
+          <HostRecheck checking={checking} lastCheckedLabel={lastCheckedLabel} onRecheck={onRecheck} />
           </div>
           <div className="mb-4 flex items-baseline gap-3">
             <h2>{STEP_HEADING[current]}</h2>

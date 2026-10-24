@@ -19,3 +19,22 @@ describe("Button focus ring", () => {
     expect(cls.filter((c) => /ring-(?!ring\b|\[|offset)/.test(c) && /focus-visible:/.test(c))).toEqual([]);
   });
 });
+
+// #2865: in dark, a disabled filled button fading to 50% still reads as solid, so the filled variants swap to the
+// muted pair. Outline, secondary, ghost and link carry a foreground colour, not a fill, and keep the plain fade.
+describe("Button disabled treatment in dark", () => {
+  it.each(["default", "destructive", "info"] as const)("%s turns grey in dark when disabled", (variant) => {
+    render(<Button variant={variant} disabled>Go</Button>);
+    const cls = screen.getByRole("button", { name: "Go" }).className.split(/\s+/);
+    expect(cls).toContain("dark:disabled:bg-muted");
+    expect(cls).toContain("dark:disabled:text-muted-foreground");
+    expect(cls).toContain("disabled:opacity-50");
+  });
+
+  it.each(["outline", "secondary", "ghost", "link"] as const)("%s keeps the plain fade", (variant) => {
+    render(<Button variant={variant} disabled>Go</Button>);
+    const cls = screen.getByRole("button", { name: "Go" }).className.split(/\s+/);
+    expect(cls.filter((c) => c.startsWith("dark:disabled:"))).toEqual([]);
+    expect(cls).toContain("disabled:opacity-50");
+  });
+});

@@ -111,6 +111,11 @@ export type WidgetContext = {
    *  The registry only PLACES it; teaching this table to build it would drag
    *  the whole recording/attach fetch graph into a data file. */
   terminalPane: React.ReactNode;
+  /** The decision part of the session column: the approvals that hold the run and the viewer note that goes with
+   *  them. Its own field (#2912) so focus mode can seat it where the dock panel cannot cover it; the terminal
+   *  widget renders it straight after `terminalPane`, so the run page reads as it always did. Undefined or null
+   *  renders nothing. */
+  decisionPane?: React.ReactNode;
 };
 
 /** What the evidence endpoints answered, read once for the status strip and the Files gate. null = nothing to read. */
@@ -150,7 +155,7 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
   terminal: {
     label: "Terminal",
     Icon: SquareTerminal,
-    component: (ctx) => ctx.terminalPane,
+    component: (ctx) => React.createElement(React.Fragment, null, ctx.terminalPane, ctx.decisionPane),
     defaultLayout: { w: 8, h: 12, minW: 4, minH: 4 },
     presets: {
       // Live: the phase-1 cockpit exactly — session down the left, evidence
