@@ -1765,6 +1765,10 @@ jobs:
         run: |
           set -euo pipefail
           go test -count=1 -timeout 15m ./internal/macvm/... ./cmd/wardyn-macvm/ ./cmd/wardyn-guest-agent/
+          # The lock-open refusal again as root, the installer's uid: its socket case is one root still hits.
+          go test -c -o "$RUNNER_TEMP/admission.test" ./internal/macvm/admission/
+          sudo env TMPDIR=/private/tmp "$RUNNER_TEMP/admission.test" -test.count=1 -test.v -test.run '^TestSetupLockOpenErrorFailsClosed$' | tee "$RUNNER_TEMP/admission-root.out"
+          grep -q -- '--- PASS: TestSetupLockOpenErrorFailsClosed/socket' "$RUNNER_TEMP/admission-root.out"
           # -v: prove the darwin-native guest agent tests (server_darwin_test.go) ran, not just compiled.
           go test -count=1 -timeout 10m -v ./internal/vm/guestagent/ | tee "$RUNNER_TEMP/guestagent.out"
           grep -q -- '^--- PASS: TestDarwin' "$RUNNER_TEMP/guestagent.out"

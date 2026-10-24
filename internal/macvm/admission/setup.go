@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -24,9 +25,12 @@ type SetupConfig struct {
 	// Fstat and Chown replace fstat(2) and fchown(fd, 0, 0) (tests).
 	Fstat func(fd int, name string) (unix.Stat_t, error)
 	Chown func(f *os.File) error
+	// Logf reports a directory skipped or an entry quarantined; nil: standard error.
+	Logf func(format string, a ...any)
 
 	afterFlock func()                 // tests: runs once the old lock's flock is held
 	beforeMove func(dst string) error // tests: runs before each entry is moved
+	afterSock  func()                 // tests: runs once sock/ is swept
 }
 
 const (
@@ -46,11 +50,12 @@ const (
 // the end, so no helper is inside an admission while the lock or the entries
 // move; a helper that opened the old lock refuses at its recheck once it gets
 // the flock. Nothing found already there is chowned or chmodded: a base that
-// is not exact is moved into a quarantine beside it and made again, a child
-// that is not exact is replaced, and every entry it can find (in the entries
-// directory, in a staging directory or quarantine an earlier run left) moves
-// to the new entries directory, or it refuses: it never ends with fewer
-// entries than it found. It touches nothing outside Base and its
+// is not exact is moved into a quarantine beside it and made again, and a
+// child that is not exact is replaced. Every entry it can find in a staging
+// directory or quarantine an earlier run left moves into an exact entries
+// directory, which is never emptied, or with the entries directory's own into
+// a new one, or it refuses: the entries directory never ends with fewer
+// entries than it held. It touches nothing outside Base and its
 // .wardyn-quarantine.* siblings.
 func Setup(c SetupConfig) error {
 	if c.LockWait == 0 {
@@ -59,7 +64,11 @@ func Setup(c SetupConfig) error {
 	if c.Chown == nil {
 		c.Chown = func(f *os.File) error { return f.Chown(0, 0) }
 	}
-	s := &setup{c: c, l: &Ledger{c: Config{Dir: filepath.Join(c.Base, entriesName), Fstat: c.Fstat, LockWait: c.LockWait}}}
+	if c.Logf == nil {
+		c.Logf = func(format string, a ...any) { fmt.Fprintf(os.Stderr, "admission: "+format+"\n", a...) }
+	}
+	s := &setup{c: c, l: &Ledger{c: Config{Dir: filepath.Join(c.Base, entriesName), Fstat: c.Fstat, LockWait: c.LockWait}}, swept: map[string][2]uint64{}}
+	defer s.closeAll()
 	base, err := s.l.walkDir(c.Base)
 	if err != nil {
 		return err
@@ -93,6 +102,9 @@ func Setup(c SetupConfig) error {
 	if err := s.sock(from); err != nil {
 		return err
 	}
+	if s.c.afterSock != nil {
+		s.c.afterSock()
+	}
 	if !keepLock {
 		if err := s.newLock(); err != nil {
 			return err
@@ -102,9 +114,18 @@ func Setup(c SetupConfig) error {
 }
 
 type setup struct {
-	c  SetupConfig
-	l  *Ledger
-	id [2]uint64 // the base's dev and inode
+	c     SetupConfig
+	l     *Ledger
+	id    [2]uint64            // the base's dev and inode
+	base  *os.File             // the base, opened again for the entries
+	files []*os.File           // every directory opened for the entries
+	swept map[string][2]uint64 // sock/ children the sweep kept: dev and inode
+}
+
+func (s *setup) closeAll() {
+	for _, f := range s.files {
+		f.Close()
+	}
 }
 
 // exact: the type, root:wheel and exactly that mode.
@@ -201,93 +222,252 @@ func (s *setup) made(mkErr error, path string, perm os.FileMode) error {
 	return f.Chmod(perm)
 }
 
-// entries makes Base's entries directory exact. Unless it already is and no
-// entry is anywhere else, every entry found moves into a staging directory
-// that stays root-only 0700 until all are in it and counted, which then
-// becomes 1777 and takes the final name in one rename.
+// source is a directory that may hold entries, opened from its parent's
+// descriptor without following a link.
+type source struct {
+	f      *os.File
+	parent *os.File // nil: Base's entries directory, never removed
+	name   string   // its name in parent
+	names  []string // its entries
+}
+
+// entries makes Base's entries directory exact. An exact one is never
+// drained: every other source's entries merge into it. Otherwise every entry
+// found moves into a staging directory that stays root-only 0700 until all
+// are in it and counted, which then becomes 1777 and takes the final name in
+// one rename. A source left empty is removed.
 func (s *setup) entries() error {
-	dst := filepath.Join(s.c.Base, entriesName)
-	srcs, names, total, err := s.entrySources()
+	dst, exactDst, srcs, err := s.entrySources()
 	if err != nil {
 		return err
 	}
-	if s.isExact(dst, unix.S_IFDIR, 0o1777) && len(names[dst]) == total {
-		return nil
+	if exactDst {
+		err = s.merge(dst, srcs)
+	} else {
+		err = s.stage(dst, srcs)
 	}
-	tmp, err := os.MkdirTemp(s.c.Base, "."+entriesName+".")
 	if err != nil {
 		return err
 	}
 	for _, src := range srcs {
-		if err := s.moveAll(src, names[src], tmp); err != nil {
-			return err
+		_ = unix.Unlinkat(int(src.parent.Fd()), src.name, unix.AT_REMOVEDIR) // rmdir: only an empty one
+	}
+	return nil
+}
+
+// merge moves each source's entries into dst, an exact entries directory, one
+// renameat each, never over a name: dst only ever gains. A copy whose name dst
+// holds already goes to a root-only quarantine (dst's copy counts), and one
+// gone when its move comes (its owner removed it) is skipped. Any other error
+// stops the merge with dst holding at least what it held.
+func (s *setup) merge(dst *source, srcs []*source) error {
+	for _, src := range srcs {
+		for _, n := range src.names {
+			err := s.move(src, n, dst.f)
+			if errors.Is(err, unix.EEXIST) {
+				err = s.quarantineEntry(src, n, dst.f.Name())
+			}
+			if err != nil && !errors.Is(err, unix.ENOENT) {
+				return err
+			}
 		}
 	}
-	if got, err := readNames(tmp); err != nil || len(got) != total {
-		return notInstalled("moving the macOS VM entries found %d of %d (%v)", len(got), total, err)
+	return nil
+}
+
+// quarantineEntry moves src's entry n into a new root-only directory in Base.
+func (s *setup) quarantineEntry(src *source, n, dst string) error {
+	q, err := os.MkdirTemp(s.c.Base, ".wardyn-quarantine.")
+	if err != nil {
+		return err
 	}
-	if _, err := os.Lstat(dst); err == nil {
-		if err := quarantineIn(s.c.Base, dst); err != nil {
+	qf, _, err := s.openDir(int(s.base.Fd()), filepath.Base(q), q)
+	if err != nil {
+		return err
+	}
+	defer qf.Close()
+	s.c.Logf("%s holds %s already; the copy in %s moves to %s", dst, n, src.f.Name(), q)
+	return renameNoReplace(int(src.f.Fd()), n, int(qf.Fd()), n)
+}
+
+// stage moves dst's entries (dst is nil when there is no entries directory to
+// open) and every source's into a new root-only directory, counts them, and
+// gives it dst's name.
+func (s *setup) stage(dst *source, srcs []*source) error {
+	path := filepath.Join(s.c.Base, entriesName)
+	tmp, err := os.MkdirTemp(s.c.Base, "."+entriesName+".")
+	if err != nil {
+		return err
+	}
+	tf, _, err := s.openDir(int(s.base.Fd()), filepath.Base(tmp), tmp)
+	if err != nil {
+		return err
+	}
+	s.files = append(s.files, tf)
+	if dst != nil {
+		srcs = append([]*source{dst}, srcs...)
+	}
+	moved := 0
+	for _, src := range srcs {
+		for _, n := range src.names {
+			switch err := s.move(src, n, tf); {
+			case err == nil:
+				moved++
+			case errors.Is(err, unix.ENOENT): // its owner removed it
+			case errors.Is(err, unix.EEXIST):
+				return notInstalled("two macOS VM entries are named %s (%s)", n, src.f.Name())
+			default:
+				return err
+			}
+		}
+	}
+	if got, err := readNames(tmp); err != nil || len(got) != moved {
+		return notInstalled("moving the macOS VM entries found %d of %d (%v)", len(got), moved, err)
+	}
+	if _, err := os.Lstat(path); err == nil {
+		if err := quarantineIn(s.c.Base, path); err != nil {
 			return err
 		}
 	}
 	if err := s.made(nil, tmp, os.ModeSticky|0o777); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, dst); err != nil {
-		return err
-	}
-	for _, src := range srcs[1:] {
-		_ = os.Remove(src) // an emptied staging directory; a quarantine's stays
-	}
-	return nil
+	return os.Rename(tmp, path)
 }
 
-// entrySources lists every root-owned directory that may hold entries, Base's
-// entries directory first: staging directories a failed run left, and the
-// entries directories in earlier quarantines, in Base and beside it (a rebuilt
-// base's). It returns each one's entries and their total.
-func (s *setup) entrySources() ([]string, map[string][]string, int, error) {
-	dirs := []string{filepath.Join(s.c.Base, entriesName)}
-	for _, pat := range []string{
-		filepath.Join(s.c.Base, "."+entriesName+".*"),
-		filepath.Join(s.c.Base, ".wardyn-quarantine.*", entriesName),
-		filepath.Join(filepath.Dir(s.c.Base), ".wardyn-quarantine.*", filepath.Base(s.c.Base), entriesName),
-	} {
-		m, _ := filepath.Glob(pat)
-		dirs = append(dirs, m...)
-	}
-	names := map[string][]string{}
-	var srcs []string
-	total := 0
-	for i, d := range dirs {
-		if i > 0 && !s.rootDir(d) {
-			continue // a login's (a planted base, quarantined): not entries
+// move renames src's entry n into to, never over a name there (EEXIST).
+func (s *setup) move(src *source, n string, to *os.File) error {
+	if s.c.beforeMove != nil {
+		if err := s.c.beforeMove(filepath.Join(to.Name(), n)); err != nil {
+			return err
 		}
-		n, err := readNames(d)
-		if err != nil {
-			return nil, nil, 0, err
-		}
-		srcs, names[d] = append(srcs, d), n
-		total += len(n)
 	}
-	return srcs, names, total, nil
+	return renameNoReplace(int(src.f.Fd()), n, int(to.Fd()), n)
 }
 
-// rootDir: path and its parent are root-owned real directories.
-func (s *setup) rootDir(path string) bool {
-	for _, p := range []string{path, filepath.Dir(path)} {
-		fd, err := unix.Open(p, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
-		if err != nil {
-			return false
-		}
-		st, err := s.l.fstat(fd, p)
-		_ = unix.Close(fd)
-		if err != nil || st.Uid != 0 {
-			return false
+// entrySources opens Base's entries directory (nil if it does not open as a
+// directory; exact says whether it is) and every other directory that may
+// hold entries: staging directories a failed run left, and the entries
+// directories in earlier quarantines, in Base and beside it (a rebuilt
+// base's). Each is opened from its parent's descriptor one component at a
+// time, never through a link, and every component must be a root-owned
+// directory by its fstat; one whose device and inode were seen already
+// (Base's entries directory first) is skipped.
+func (s *setup) entrySources() (*source, bool, []*source, error) {
+	bfd, err := s.l.walkDir(s.c.Base)
+	if err != nil {
+		return nil, false, nil, err
+	}
+	s.base = os.NewFile(uintptr(bfd), s.c.Base)
+	s.files = append(s.files, s.base)
+	if st, err := s.l.fstat(bfd, s.c.Base); err != nil || [2]uint64{uint64(st.Dev), st.Ino} != s.id {
+		return nil, false, nil, notInstalled("%s changed while the installer set it up", s.c.Base)
+	}
+	pfd, err := s.l.walkDir(filepath.Dir(s.c.Base))
+	if err != nil {
+		return nil, false, nil, err
+	}
+	parent := os.NewFile(uintptr(pfd), filepath.Dir(s.c.Base))
+	s.files = append(s.files, parent)
+
+	seen := map[[2]uint64]bool{}
+	var dst *source
+	exactDst := false
+	if f, st, err := s.openDir(bfd, entriesName, filepath.Join(s.c.Base, entriesName)); err == nil {
+		s.files = append(s.files, f)
+		dst, exactDst = &source{f: f}, exact(st, unix.S_IFDIR, 0o1777)
+		seen[[2]uint64{uint64(st.Dev), st.Ino}] = true
+		if dst.names, err = f.Readdirnames(-1); err != nil {
+			return nil, false, nil, err
 		}
 	}
-	return true
+	var srcs []*source
+	var readErr error
+	add := func(at *os.File, name string) {
+		f, id := s.rootDir(at, name)
+		switch {
+		case f == nil:
+		case seen[id]:
+			s.c.Logf("skipped %s: the same directory as one already read", f.Name())
+		default:
+			seen[id] = true
+			names, err := f.Readdirnames(-1)
+			if err != nil && readErr == nil {
+				readErr = err
+			}
+			srcs = append(srcs, &source{f: f, parent: at, name: name, names: names})
+		}
+	}
+	for _, n := range dirNames(s.base) {
+		switch {
+		case strings.HasPrefix(n, "."+entriesName+"."):
+			add(s.base, n)
+		case strings.HasPrefix(n, quarantinePrefix):
+			if q, _ := s.rootDir(s.base, n); q != nil {
+				add(q, entriesName)
+			}
+		}
+	}
+	for _, n := range dirNames(parent) {
+		if !strings.HasPrefix(n, quarantinePrefix) {
+			continue
+		}
+		if q, _ := s.rootDir(parent, n); q != nil {
+			if w, _ := s.rootDir(q, filepath.Base(s.c.Base)); w != nil {
+				add(w, entriesName)
+			}
+		}
+	}
+	return dst, exactDst, srcs, readErr
+}
+
+const quarantinePrefix = ".wardyn-quarantine."
+
+// dirNames lists the directory open at f, sorted.
+func dirNames(f *os.File) []string {
+	names, _ := f.Readdirnames(-1)
+	sort.Strings(names)
+	return names
+}
+
+// rootDir opens name in at, never following a link, and returns it with its
+// device and inode if it is a root-owned directory by its fstat. Anything
+// else (a link, a login's directory) is skipped and logged; nothing there is
+// skipped quietly.
+func (s *setup) rootDir(at *os.File, name string) (*os.File, [2]uint64) {
+	path := filepath.Join(at.Name(), name)
+	f, st, err := s.openDir(int(at.Fd()), name, path)
+	if err == nil && st.Uid != 0 {
+		f.Close()
+		err = errors.New("not owned by root")
+	}
+	if err != nil {
+		if !errors.Is(err, unix.ENOENT) {
+			s.c.Logf("skipped %s: not a root-owned directory (%v)", path, err)
+		}
+		return nil, [2]uint64{}
+	}
+	s.files = append(s.files, f)
+	return f, [2]uint64{uint64(st.Dev), st.Ino}
+}
+
+// openDir opens name in the directory at without following a link, and
+// fstats it: it must be a directory.
+func (s *setup) openDir(at int, name, path string) (*os.File, unix.Stat_t, error) {
+	fd, err := unix.Openat(at, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, unix.Stat_t{}, err
+	}
+	f := os.NewFile(uintptr(fd), path)
+	st, err := s.l.fstat(fd, path)
+	if err == nil && uint32(st.Mode)&unix.S_IFMT != unix.S_IFDIR {
+		err = unix.ENOTDIR
+	}
+	if err != nil {
+		f.Close()
+		return nil, st, err
+	}
+	return f, st, nil
 }
 
 // readNames lists dir if it is a real directory; anything else has none.
@@ -353,7 +533,13 @@ func (s *setup) sock(from string) error {
 	if err := s.made(nil, tmp, os.ModeSticky|0o777); err != nil {
 		return err
 	}
-	return os.Rename(tmp, dst)
+	if err := os.Rename(tmp, dst); err != nil {
+		return err
+	}
+	for _, n := range keep {
+		s.keep(dst, n)
+	}
+	return nil
 }
 
 // sweepSock quarantines every child of dir that is not a sound u<uid>.
@@ -367,9 +553,19 @@ func (s *setup) sweepSock(dir string) error {
 			if err := quarantineIn(s.c.Base, filepath.Join(dir, n)); err != nil {
 				return err
 			}
+			continue
 		}
+		s.keep(dir, n)
 	}
 	return nil
+}
+
+// keep records dir/n, a sock/ child the sweep kept, by device and inode.
+func (s *setup) keep(dir, n string) {
+	var st unix.Stat_t
+	if unix.Lstat(filepath.Join(dir, n), &st) == nil {
+		s.swept[n] = [2]uint64{uint64(st.Dev), st.Ino}
+	}
 }
 
 // sockChild: dir/n is u<uid> (canonical decimal), a real directory owned by
@@ -424,7 +620,9 @@ func (s *setup) isExact(path string, typ, perm uint32) bool {
 }
 
 // verify walks to Base again, checks it is the directory set up (dev and
-// inode), and checks the whole layout.
+// inode), and checks the whole layout. Of sock/'s children it judges only
+// those the sweep kept and that are still the same inode: sock/ is 1777, so
+// one a login makes or replaces after the sweep is left for the next sweep.
 func (s *setup) verify() error {
 	base, err := s.l.walkDir(s.c.Base)
 	if err != nil {
@@ -446,11 +644,15 @@ func (s *setup) verify() error {
 	case !s.isExact(filepath.Join(s.c.Base, sockName), unix.S_IFDIR, 0o1777):
 		return notInstalled("%s is not root:wheel 1777", filepath.Join(s.c.Base, sockName))
 	}
-	names, err := readNames(filepath.Join(s.c.Base, sockName))
-	for _, n := range names {
-		if err == nil && !s.sockChild(filepath.Join(s.c.Base, sockName), n) {
-			err = notInstalled("%s holds %s, which is not a login's own 0700 directory", filepath.Join(s.c.Base, sockName), n)
+	sock := filepath.Join(s.c.Base, sockName)
+	for n, id := range s.swept {
+		var st unix.Stat_t
+		if unix.Lstat(filepath.Join(sock, n), &st) != nil || [2]uint64{uint64(st.Dev), st.Ino} != id {
+			continue // gone or replaced since the sweep
+		}
+		if !s.sockChild(sock, n) {
+			return notInstalled("%s holds %s, which is not a login's own 0700 directory", sock, n)
 		}
 	}
-	return err
+	return nil
 }
