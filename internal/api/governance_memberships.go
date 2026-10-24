@@ -624,25 +624,19 @@ func legacyShiftQ(ctx context.Context, q store.Querier, d types.GovernanceMember
 }
 
 // renameShiftQ is what renaming unit id to name does to whose legacy row wins (H3), in the resolver's
-// own order (winnersAroundQ): the name breaks a tie between legacy rows of one tier and priority. For
-// each person a legacy row of the unit and a legacy row of another unit may both place with their
-// order decided at the name (nameTiesPair), it reads the winner before the rename and after it; none
-// is read when no such pair exists, renameMaySelect's test. A winner in another
-// unit activates that unit, and the unit's winning over another unit vacates that one. The caller holds
-// the graph lock.
+// own order (winnersAroundQ): the name breaks a tie between legacy rows of one tier and priority. A
+// person's winner can move only between their first legacy row in the unit and their first elsewhere
+// when the two tie up to the name (nameTiesPair), and which way depends on the other row's unit alone.
+// So it reads, before the rename and after it, one person for each legacy row of another unit tied
+// with a row of the unit (store.LegacyRenameRivalsQ), not one for each tied pair; none when no such
+// pair exists, renameMaySelect's test. A winner in another unit activates that unit, and the unit's
+// winning over another unit vacates that one. The caller holds the graph lock.
 func renameShiftQ(ctx context.Context, q store.Querier, id uuid.UUID, name string) (legacyShift, error) {
-	all, err := store.ListGovernanceMembershipsQ(ctx, q)
+	rivals, err := store.LegacyRenameRivalsQ(ctx, q, id)
 	if err != nil {
 		return legacyShift{}, err
 	}
-	var rows []types.GovernanceMembership
-	for _, m := range all {
-		if m.Legacy && m.UnitID == id {
-			rows = append(rows, m)
-		}
-	}
-	pair := func(d, l types.GovernanceMembership) bool { return l.UnitID != id && nameTiesPair(d, l) }
-	was, now, err := winnersAroundQ(ctx, q, legacyPeople(rows, all, pair), func() error {
+	was, now, err := winnersAroundQ(ctx, q, peoplePlacing(rivals), func() error {
 		return store.RenameGovernanceUnitQ(ctx, q, id, name)
 	})
 	if err != nil {
@@ -744,20 +738,28 @@ func claimsPlacing(d, l types.GovernanceMembership) (c legacyClaims, ok bool) {
 }
 
 // legacyPeople is the claims of each person a legacy row of ds and another legacy row of all both place
-// (pair, nil for every row), once each.
+// (pair, nil for every row), once each (peoplePlacing).
 func legacyPeople(ds, all []types.GovernanceMembership, pair func(d, l types.GovernanceMembership) bool) []legacyClaims {
-	var out []legacyClaims
-	seen := map[string]bool{}
+	var pairs [][2]types.GovernanceMembership
 	for _, d := range ds {
 		for _, l := range all {
-			if !l.Legacy || l.ID == d.ID || (pair != nil && !pair(d, l)) {
-				continue
+			if l.Legacy && l.ID != d.ID && (pair == nil || pair(d, l)) {
+				pairs = append(pairs, [2]types.GovernanceMembership{d, l})
 			}
-			c, ok := claimsPlacing(d, l)
-			if key := fmt.Sprintf("%q %q %q", c.users, c.groups, c.userType); ok && !seen[key] {
-				seen[key] = true
-				out = append(out, c)
-			}
+		}
+	}
+	return peoplePlacing(pairs)
+}
+
+// peoplePlacing is the claims of the person each pair's two rows both place (claimsPlacing), once each.
+func peoplePlacing(pairs [][2]types.GovernanceMembership) []legacyClaims {
+	var out []legacyClaims
+	seen := map[string]bool{}
+	for _, p := range pairs {
+		c, ok := claimsPlacing(p[0], p[1])
+		if key := fmt.Sprintf("%q %q %q", c.users, c.groups, c.userType); ok && !seen[key] {
+			seen[key] = true
+			out = append(out, c)
 		}
 	}
 	return out
