@@ -256,9 +256,15 @@ cmd_up() {
   local agent_images='{"claude-code":"wardyn/agent-claude-code:local"}'
   agent_images="${WARDYN_AGENT_IMAGES:-${agent_images}}"
   log "Starting wardynd (runner=${runner_sel}) on ${ADDR} → ${BASE_URL}, DB ${PG_DBNAME}"
+  # Any exit before the backend is seeded (die, set -e, INT/TERM) stops the wardynd started below: a
+  # failed `up` must never leave a backend holding the port. Cleared once `up` succeeds.
+  trap 'exit 143' INT TERM HUP
+  trap '_up_abort' EXIT
+  # setsid: its own process group, so `down` stops it and anything it spawned together. 8>&- 9>&-: the
+  # gate wrapper's lock fds (gate.sh) must not outlive the gate in this long-lived child.
   WARDYN_PG_DSN="${DSN}" WARDYN_ADMIN_TOKEN="${TOKEN}" WARDYN_AGE_KEY="${AGE_KEY}" \
     WARDYN_RUNNER_TARGET=docker WARDYN_AGENT_IMAGES="${agent_images}" \
-    "${daemon_bin}" \
+    setsid "${daemon_bin}" \
       -runner "${runner_sel}" \
       -listen "${ADDR}" \
       -ui-sandbox-listen "${UI_ADDR}" \
@@ -266,7 +272,7 @@ cmd_up() {
       -internal-listen "${INTERNAL_ADDR}" \
       -ui-dir "${REPO_ROOT}/ui/dist-e2e" \
       -default-policy "${REPO_ROOT}/examples/policies/demo.json" \
-      >"${LOG_FILE}" 2>&1 &
+      >"${LOG_FILE}" 2>&1 8>&- 9>&- &
   echo $! > "${PID_FILE}"
   cmd_wait
   if [[ -n "${BASE_PATH}" ]]; then
@@ -283,6 +289,15 @@ cmd_up() {
     log "  proxy: $(e2e_base_url "${PROXY_ADDR}")${BASE_PATH}/"
   fi
   log "  logs:  ${LOG_FILE}"
+  trap - EXIT INT TERM HUP
+}
+
+# EXIT trap of a running `up` (cleared on success): stop what this run started.
+_up_abort() {
+  local rc=$?
+  trap - EXIT
+  cmd_down_quiet || true
+  exit "${rc}"
 }
 
 cmd_down_quiet() {
@@ -309,20 +324,22 @@ cmd_down_quiet() {
   # PID_FILE — never a port-based kill (no `fuser -k`). A port-based kill can
   # hit an unrelated process that happens to be listening on the same number,
   # which on a shared box is someone else's session, not this run's backend.
-  # wardynd is a single process with no children, so once IT exits, the
-  # kernel releases every socket it held (ADDR, UI_ADDR, INTERNAL_ADDR)
-  # together — there is nothing left to free port-by-port.
-  kill -TERM "${pid}" 2>/dev/null || true
+  # `up` starts wardynd under setsid, so when it leads a group of its own (pgid == pid) the signal goes
+  # to the whole group; a pid file from before that change signals the pid alone, never our own group.
+  local target="${pid}" pgid
+  pgid="$(ps -o pgid= -p "${pid}" 2>/dev/null | tr -d ' ' || true)"
+  [[ "${pgid}" != "${pid}" ]] || target="-${pid}"
+  kill -TERM -- "${target}" 2>/dev/null || true
 
   # WAIT for the process itself to exit, rather than guessing or polling the
-  # port. This was `sleep 0.3`, and run-ui-e2e.sh brings a fresh backend up
-  # per spec file on the SAME port, so the next `up` raced a socket the TERM
-  # had not finished releasing. Escalate to KILL after 5s so a wedged process
-  # cannot wedge the next `up` forever.
+  # port: run-ui-e2e.sh brings a fresh backend up per spec file on the SAME
+  # port, so the next `up` would race a socket the TERM had not finished
+  # releasing. Escalate to KILL after 10s so a wedged process cannot wedge
+  # the next `up` forever.
   local waited=0
   while kill -0 "${pid}" 2>/dev/null; do
-    if [[ ${waited} -ge 50 ]]; then
-      kill -KILL "${pid}" 2>/dev/null || true
+    if [[ ${waited} -ge 100 ]]; then
+      kill -KILL -- "${target}" 2>/dev/null || true
       break
     fi
     sleep 0.1
