@@ -8,12 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
@@ -526,6 +528,65 @@ func TestDesktopSignIns_PauseSurvivesARestart(t *testing.T) {
 	}
 	if rows := f.signInRows(); len(rows) != 1 || rows[0].Outcome != "success" {
 		t.Fatalf("rows = %+v, want the session's one success", rows)
+	}
+}
+
+// vmSignInDesktopStore is the desktop harness's store with VM sign-in rows; vmSignInDesktopRunner is its
+// runner with a guest agent that stops and continues the agent.
+type vmSignInDesktopStore struct {
+	*desktopClosedStore
+	store.DesktopVMSignInStore
+}
+
+type vmSignInDesktopRunner struct {
+	*desktopFakeRunner
+	runner.AgentPauser
+}
+
+// A pause's hold on the desktop recording is one process's memory; the row's mark is not. A server that
+// never saw the pause, as after a restart, holds a desktop that connects while the row says paused: what
+// the VM sends is not recorded until the resume, and is recorded again after it.
+func TestDesktopSignIns_RestartedServerHoldsANewDesktopUntilTheResume(t *testing.T) {
+	h, dr, send, _ := vmDesktopRun(t)
+	at := time.Now().UTC()
+	h.srv.cfg.Store = vmSignInDesktopStore{
+		desktopClosedStore: h.srv.cfg.Store.(*desktopClosedStore),
+		DesktopVMSignInStore: &vmSignInTestStore{uiMemStore: h.store,
+			rows: map[uuid.UUID]store.DesktopVMSignIns{h.run.ID: {Store: "memory", PausedBy: h.owner, PausedAt: &at}}},
+	}
+	guest := &pauseFakeRunner{sshFakeRunner: h.runner, stopped: true}
+	h.srv.cfg.Runner = vmSignInDesktopRunner{desktopFakeRunner: dr, AgentPauser: guest}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	v := openVMDesktop(t, ctx, h, dr)
+	hold := vmSignInHold(h.run)
+	if !h.srv.desktopRecs.holds(h.run.ID, hold) {
+		t.Fatal("a desktop that connected while the row says paused is not held")
+	}
+	send <- vmFBU // sent while the sign-in pause is open: the viewer sees it, the recording does not
+	v.read(len(vmFBU))
+
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs/"+h.run.ID.String()+"/desktop/sign-ins/resume", nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", h.run.ID.String())
+	w := httptest.NewRecorder()
+	h.srv.handleResumeDesktopAgent(w, r.WithContext(context.WithValue(withOIDCHuman(r.Context(), h.owner), chi.RouteCtxKey, rctx)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("resume = %d %s", w.Code, w.Body.String())
+	}
+	if guest.agentStopped() || h.srv.desktopRecs.holds(h.run.ID, hold) {
+		t.Fatal("the resume left the agent stopped or the desktop recording held")
+	}
+	send <- []byte("\x02\x02") // two Bells, after the resume
+	v.read(2)
+	endVMDesktop(t, h, v, send)
+
+	_, pb, kept := storedVMRecording(t, h)
+	if want := vmHandshake() + "\x02\x02"; kept != want {
+		t.Errorf("recorded frames = %q, want the handshake and the Bells after the resume %q", kept, want)
+	}
+	if len(pb.Gaps) != 1 || pb.Gaps[0].Reason != desktopPauseSignin || pb.Gaps[0].EndMS == 0 {
+		t.Errorf("playback gaps = %+v, want one closed %q gap", pb.Gaps, desktopPauseSignin)
 	}
 }
 

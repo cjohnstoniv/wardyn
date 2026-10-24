@@ -270,6 +270,32 @@ func vmSignInHold(run types.AgentRun) string {
 	return "vm-sign-in:" + run.ID.String()
 }
 
+// holdOpenVMSignIn takes vmSignInHold for a recording that starts while the run's row says its agent is
+// paused. The hold the pause took lives in one process's memory, so after a restart, or on another
+// replica, this read of the row is what keeps a new desktop connection from recording the sign-in;
+// the resume ends it as it ends the pause's own. The second read undoes a hold taken just after a
+// resume cleared the mark, which that resume's endDesktopHold ran too early to end.
+func (s *Server) holdOpenVMSignIn(run types.AgentRun) {
+	hold := vmSignInHold(run)
+	st, ok := s.cfg.Store.(store.DesktopVMSignInStore)
+	if !ok || !run.MachineKind.IsVM() || s.desktopRecs.holds(run.ID, hold) {
+		return
+	}
+	ctx := s.cfg.BaseCtx
+	row, found, err := st.DesktopVMSignIns(ctx, run.ID)
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: a VM desktop's recording could not read whether its agent is paused to sign in; it records", "run_id", run.ID, "err", err)
+		return
+	}
+	if !found || row.PausedAt == nil {
+		return
+	}
+	s.PauseDesktopRecording(ctx, run, desktopPauseSignin, hold)
+	if row, found, err = st.DesktopVMSignIns(ctx, run.ID); err == nil && (!found || row.PausedAt == nil) {
+		s.ResumeDesktopRecording(ctx, run, hold)
+	}
+}
+
 // handleResumeDesktopAgent continues the agent and writes the session's one desktop.sign_in.pause row. It is
 // never refused for policy: an agent is not left stopped because the setting changed. A pause in flight
 // holds the run's lock, so a resume waits for its answer rather than overtaking it.
