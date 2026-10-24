@@ -320,13 +320,14 @@ func (s *Server) desktopRelock(base context.Context, run types.AgentRun, st stor
 	return ctx, row, relocked, true
 }
 
-// continueStoppedAgent continues the agent a failed pause may have stopped, so it is never left
-// stopped with no mark, which no resume would continue: a stop can land even when the runner answers
-// an error. It sends under the run's lock, and the continue is cancelled once that lock is seen lost
-// during it (lockBound). With the lock lost before or during it, unlock releases the lost hold, the lock is taken
-// again and the row read again (reconcileLostLock): newer is the row of a pause that has marked it
-// since, which owns the stopped agent and whose resume continues it. ok is false when the lock could not
-// be taken again: nothing more is sent. restop is the error of a stop again that failed (reconcileLostLock).
+// continueStoppedAgent continues the agent a failed pause may have stopped, so it is not left stopped
+// with no mark, which no resume would continue: a stop can land even when the runner answers an error.
+// It sends under the run's lock, and the continue is cancelled once that lock is seen lost during it
+// (lockBound). With the lock seen lost before or after it, unlock releases the lost hold, the lock is
+// taken again and the row read again (reconcileLostLock): newer is the row of a pause that has marked
+// it since, which owns the stopped agent and whose resume continues it. This narrows the gap a lost
+// lock opens and does not close it (docs/operations/linux-vm-sandboxes.md). ok is false when the lock
+// could not be taken again: nothing more is sent. restop is the error of a stop again that failed.
 func (s *Server) continueStoppedAgent(base, lockCtx, bg context.Context, p runner.AgentPauser, run types.AgentRun,
 	st store.DesktopVMSignInStore, unlock func()) (newer *store.DesktopVMSignIns, restop error, ok bool) {
 	sent := false
@@ -356,8 +357,9 @@ func (s *Server) continueStoppedAgent(base, lockCtx, bg context.Context, p runne
 // under it (desktopRelock). A mark other than own (the pause a resume read; nil for a pause) is a newer
 // pause's, which owns the stopped agent. When this request's continue may have reached the runner
 // (sent), it may land after that pause's stop, so the agent is stopped again here, under the lock that
-// pause's resume needs: stopping a stopped agent changes nothing. restop is that stop's error, which
-// nothing retries (restopFailed).
+// pause's resume needs: stopping a stopped agent changes nothing. The guest agent does not order the
+// signals it receives, so a continue it already has may still take effect after this stop too. restop
+// is that stop's error, which nothing retries (restopFailed).
 func (s *Server) reconcileLostLock(base context.Context, p runner.AgentPauser, run types.AgentRun, st store.DesktopVMSignInStore,
 	own *time.Time, sent bool) (ctx context.Context, row store.DesktopVMSignIns, relocked func(), restop error, ok bool) {
 	ctx, row, relocked, ok = s.desktopRelock(base, run, st)
@@ -370,8 +372,8 @@ func (s *Server) reconcileLostLock(base context.Context, p runner.AgentPauser, r
 // lockBound is bg, cancelled too, with db.ErrLockLost, once the run's lock that lockCtx carries is seen
 // lost, and never by the person's closed tab. A lock's context the tab ended first keeps that cause for
 // good (db.LockHeld), so from then on the lock itself is asked, every db.LockWatchInterval. A call the
-// runner already received still lands: the lock check after the call and reconcileLostLock deal with
-// that. stop releases it.
+// runner already received still lands: the lock check after the call and reconcileLostLock narrow that
+// gap and do not close it. stop releases it.
 func (s *Server) lockBound(lockCtx, bg context.Context) (context.Context, func()) {
 	ctx, cancel := context.WithCancelCause(bg)
 	after := context.AfterFunc(lockCtx, func() {
