@@ -685,7 +685,7 @@ repo_scan_ok() {
 # This only chooses WHAT gets exec'd, and it deliberately skips the LLM auth
 # wiring (a plain command needs no model). A harness image's agent-run does its
 # full prep (MITM CA, clone, brokered creds, recording) before this call; the
-# base image's stub does the workspace prep only when the run carries a workspace.
+# base image's stub does the workspace prep only when the run clones a repository or names a starting folder.
 # The command's exit code propagates to the caller (0 -> COMPLETED, else FAILED).
 maybe_exec_task_mode() {
     # Several agents in one run (agent-run-set --tasks): this launcher's shared prep

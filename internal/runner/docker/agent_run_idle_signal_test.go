@@ -296,27 +296,31 @@ fi
 	return dir, log
 }
 
-// An exec task whose run carries a workspace (repos to clone, but no starting folder) gets the workspace
-// prep a harness run does: the git helper secret is provisioned and exported before the clone, and the clone
-// is the workspace's own URL into the workspace folder through the lib's clone_one, with no other git call
-// naming a host. A run with no workspace gets no helper and no clone.
+// An exec task whose run clones a repository (WARDYN_REPOS, or the legacy WARDYN_REPO_URL) but names no
+// starting folder gets the workspace prep a harness run does: git is first pointed at the proxy broker, the
+// git helper secret is provisioned and exported before the clone, and the clone is the workspace's own URL
+// into the workspace folder through the lib's clone_one, with no other git call naming a host. A run with
+// no workspace gets no helper, no clone and no git call at all.
 func TestAgentBaseExecTaskClonesTheWorkspace(t *testing.T) {
 	script := baseRunnableAgentRun(t)
 	const url = "https://github.com/acme/app.git"
-	run := func(withWorkspace bool) (home, pwd, gitLog string) {
+	const broker = "http://wardyn-proxy:3128/wardyn/gh/acme/app"
+	run := func(mode string) (home, pwd, gitLog string) {
 		t.Helper()
 		home = t.TempDir()
 		bin, glog := fakeGitDir(t)
-		repos := ""
-		if withWorkspace {
-			repos = url + "\t" + filepath.Join(home, "work", "app") + "\tacme/app\t"
+		env := []string{"HOME=" + home, "PATH=" + bin + ":" + os.Getenv("PATH"), "WARDYN_TASK_MODE=exec",
+			"WARDYN_START_FOLDER=", "WARDYN_REPOS=", "WARDYN_REPO_URL=", "WARDYN_MITM_CA_PEM=",
+			"WARDYN_GITHUB_GRANT_ID=grant-1"}
+		switch mode {
+		case "repos":
+			env = append(env, "WARDYN_REPOS="+url+"\t"+filepath.Join(home, "work", "app")+"\tacme/app\t")
+		case "repo_url":
+			env = append(env, "WARDYN_REPO_URL="+url, "WARDYN_REPO_SLUG=acme/app")
 		}
-		launch := t.TempDir()
 		cmd := exec.Command("bash", script, "pwd -P")
-		cmd.Dir = launch
-		cmd.Env = append(os.Environ(), "HOME="+home, "PATH="+bin+":"+os.Getenv("PATH"), "WARDYN_TASK_MODE=exec",
-			"WARDYN_START_FOLDER=", "WARDYN_REPOS="+repos, "WARDYN_REPO_URL=", "WARDYN_MITM_CA_PEM=",
-			"WARDYN_GITHUB_GRANT_ID=grant-1")
+		cmd.Dir = t.TempDir()
+		cmd.Env = append(os.Environ(), env...)
 		out, err := cmd.Output()
 		if err != nil {
 			t.Fatalf("agent-run exec task: %v", err)
@@ -325,47 +329,63 @@ func TestAgentBaseExecTaskClonesTheWorkspace(t *testing.T) {
 		return home, strings.TrimSpace(string(out)), string(b)
 	}
 
-	// 1. With a workspace: checkout made, helper ready before it, task runs in it.
-	home, pwd, gitLog := run(true)
-	dest, _ := filepath.EvalSymlinks(filepath.Join(home, "work", "app"))
-	if _, err := os.Stat(filepath.Join(dest, ".git")); err != nil {
-		t.Errorf("exec task with a workspace has no checkout at %s: %v", dest, err)
-	}
-	if _, err := os.Stat(filepath.Join(home, ".wardyn", "git-helper.secret")); err != nil {
-		t.Errorf("exec task with a workspace has no git helper secret: %v", err)
-	}
-	if pwd != dest {
-		t.Errorf("exec task with a workspace ran in %q, want the clone %q", pwd, dest)
-	}
-	// 3. git is asked to clone only the workspace, with the helper secret exported, and every host it is
-	// told about is the workspace's own or the run's proxy broker (the insteadOf rewrites) -- no new host.
-	var clones int
-	for _, line := range strings.Split(strings.TrimSpace(gitLog), "\n") {
-		if strings.Contains(line, " clone ") {
-			clones++
-			if want := "secret=set clone --depth 1 -- " + url + " " + filepath.Join(home, "work", "app"); line != want {
-				t.Errorf("git call %q, want %q", line, want)
+	for _, mode := range []string{"repos", "repo_url"} {
+		t.Run(mode, func(t *testing.T) {
+			// 1. With a workspace: checkout made, helper ready before it, task runs in it.
+			home, pwd, gitLog := run(mode)
+			dest, _ := filepath.EvalSymlinks(filepath.Join(home, "work", "app"))
+			if _, err := os.Stat(filepath.Join(dest, ".git")); err != nil {
+				t.Errorf("exec task with a workspace has no checkout at %s: %v", dest, err)
 			}
-		}
-		for _, m := range gitHostRE.FindAllStringSubmatch(line, -1) {
-			if h := m[1]; h != "github.com" && h != "wardyn-proxy:3128" {
-				t.Errorf("git was told about host %q, which is neither the workspace's nor the proxy broker: %s", h, line)
+			if _, err := os.Stat(filepath.Join(home, ".wardyn", "git-helper.secret")); err != nil {
+				t.Errorf("exec task with a workspace has no git helper secret: %v", err)
 			}
-		}
-	}
-	if clones != 1 {
-		t.Errorf("clones: %d, want exactly the workspace clone\n%s", clones, gitLog)
+			if pwd != dest {
+				t.Errorf("exec task with a workspace ran in %q, want the clone %q", pwd, dest)
+			}
+			// 3. git is asked to clone only the workspace, with the helper secret exported, after it was pointed at
+			// the proxy broker; every host it is told about is the workspace's own or the broker -- no new host.
+			rewrite := "secret= config --global url." + broker + ".insteadOf https://github.com/acme/app"
+			rewriteAt, cloneAt, clones := -1, -1, 0
+			for n, line := range strings.Split(strings.TrimSpace(gitLog), "\n") {
+				if line == rewrite {
+					rewriteAt = n
+				}
+				if strings.Contains(line, " clone ") {
+					clones++
+					cloneAt = n
+					if want := "secret=set clone --depth 1 -- " + url + " " + filepath.Join(home, "work", "app"); line != want {
+						t.Errorf("git call %q, want %q", line, want)
+					}
+				}
+				for _, m := range gitHostRE.FindAllStringSubmatch(line, -1) {
+					if h := m[1]; h != "github.com" && h != "wardyn-proxy:3128" {
+						t.Errorf("git was told about host %q, which is neither the workspace's nor the proxy broker: %s", h, line)
+					}
+				}
+			}
+			if clones != 1 {
+				t.Errorf("clones: %d, want exactly the workspace clone\n%s", clones, gitLog)
+			}
+			// The legacy single-URL form gets no rewrite from configure_git_broker_insteadof on any image, so only
+			// WARDYN_REPOS is held to it.
+			if mode == "repos" && (rewriteAt < 0 || rewriteAt > cloneAt) {
+				t.Errorf("the broker rewrite %q must be set before the clone (rewrite at %d, clone at %d)\n%s", rewrite, rewriteAt, cloneAt, gitLog)
+			}
+		})
 	}
 
 	// 2. Without one: no helper, no clone, no git call at all, as before.
-	home, _, gitLog = run(false)
-	if _, err := os.Stat(filepath.Join(home, ".wardyn", "git-helper.secret")); err == nil {
-		t.Error("exec task with no workspace provisioned a git helper secret")
-	}
-	if _, err := os.Stat(filepath.Join(home, "work")); err == nil {
-		t.Error("exec task with no workspace made a work folder")
-	}
-	if strings.Contains(gitLog, "clone") {
-		t.Errorf("exec task with no workspace cloned:\n%s", gitLog)
-	}
+	t.Run("none", func(t *testing.T) {
+		home, _, gitLog := run("none")
+		if _, err := os.Stat(filepath.Join(home, ".wardyn", "git-helper.secret")); err == nil {
+			t.Error("exec task with no workspace provisioned a git helper secret")
+		}
+		if _, err := os.Stat(filepath.Join(home, "work")); err == nil {
+			t.Error("exec task with no workspace made a work folder")
+		}
+		if gitLog != "" {
+			t.Errorf("exec task with no workspace called git:\n%s", gitLog)
+		}
+	})
 }
