@@ -560,7 +560,7 @@ jobs:
         if: >-
           needs.changes.outputs.code == 'true' && needs.changes.outputs.backend == 'true' &&
           needs.changes.outputs.ui == 'true' && needs.changes.outputs.images == 'true' &&
-          needs.changes.outputs.notices == 'true' &&
+          needs.changes.outputs.notices == 'true' && needs.changes.outputs.macos == 'true' &&
           needs.image-scope.outputs.wardynd == 'true' &&
           needs.image-scope.outputs.wardynd-fips == 'true' &&
           needs.image-scope.outputs.wardyn-proxy == 'true' &&
@@ -1791,6 +1791,42 @@ jobs:
           echo "probe exit status: $rc"
           [ "$rc" -le 1 ]
           jq -e '.vz == true and (.host | type == "string")' "$RUNNER_TEMP/probe.json"
+      # The real postinstall under the runner's passwordless sudo, against a temp root, read back with BSD stat.
+      # %Mp%Lp, not %Lp alone: %Lp drops the sticky bit.
+      - name: Package postinstall makes the admission ledger (real root, BSD tools)
+        run: |
+          set -euo pipefail
+          post=deploy/runner/macos/pkg-scripts/postinstall
+          ledger() {
+            b="$1/Users/Shared/Wardyn"
+            [ "$(stat -f '%Su:%Sg %Mp%Lp %HT' "$b")" = 'root:wheel 0755 Directory' ]
+            [ "$(stat -f '%Su:%Sg %Mp%Lp %HT' "$b/admission.lock")" = 'root:wheel 0644 Regular File' ]
+            [ "$(stat -f '%Su:%Sg %Mp%Lp %HT' "$b/macos-vm-admission")" = 'root:wheel 1777 Directory' ]
+          }
+          fresh() {
+            r="$RUNNER_TEMP/$1"
+            sudo rm -rf "$r"
+            mkdir -p "$r/Users/Shared" "$r/usr/local/wardyn/bin"
+            sudo chown root:wheel "$r/Users/Shared"
+            sudo chmod 1777 "$r/Users/Shared"
+            : >"$r/usr/local/wardyn/bin/wardyn-macvm"
+          }
+          fresh pkgroot
+          sudo env WARDYN_PKG_ROOT="$RUNNER_TEMP/pkgroot" sh "$post"
+          ledger "$RUNNER_TEMP/pkgroot"
+          # A login's own Wardyn directory, with a link at macos-vm-admission: replaced, and the target untouched.
+          fresh planted
+          b="$RUNNER_TEMP/planted/Users/Shared/Wardyn"
+          mkdir -m 0777 "$b" "$RUNNER_TEMP/victim"
+          chmod 0700 "$RUNNER_TEMP/victim"
+          ln -s "$RUNNER_TEMP/victim" "$b/macos-vm-admission"
+          before="$(stat -f '%Su:%Sg %Mp%Lp' "$RUNNER_TEMP/victim")"
+          sudo env WARDYN_PKG_ROOT="$RUNNER_TEMP/planted" sh "$post"
+          ledger "$RUNNER_TEMP/planted"
+          [ "$(stat -f '%Su:%Sg %Mp%Lp' "$RUNNER_TEMP/victim")" = "$before" ]
+          [ -z "$(ls -A "$RUNNER_TEMP/victim")" ]
+          sudo ls -la "$RUNNER_TEMP/planted/Users/Shared"
+          sudo sh -c 'ls -d "$1"/.wardyn-quarantine.*/Wardyn' _ "$RUNNER_TEMP/planted/Users/Shared"
       - name: Packaged live suite (it skips, since no VM boots on a hosted Mac)
         run: |
           set -euo pipefail
@@ -1810,11 +1846,13 @@ jobs:
   # The macOS 27 SDK check for provision_darwin.m's run-time lookups (scripts/check-macvm-selectors.sh):
   # every class and selector it names must be declared in the Virtualization headers of a macOS 27 SDK.
   # `xcode-27` is a public-preview image, so this is its own job: a preview-image outage must not turn the
-  # macos job red. Not a required check.
+  # macos job red. Informational: continue-on-error keeps a red here out of the run's conclusion, so it is
+  # never release evidence (green-by-tree reads that conclusion). Not a required check.
   macos-xcode-27:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.macos != 'false' }}
     runs-on: xcode-27
+    continue-on-error: true
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

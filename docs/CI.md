@@ -452,6 +452,8 @@ gh run list -R cjohnstoniv/wardyn --workflow ci.yml --status completed --limit 6
 - `release.yml`'s `runner-pkg` job (macOS) builds `wardyn-runnerd.pkg` with [`scripts/build-runner-pkg.sh`](../scripts/build-runner-pkg.sh). Each signing step runs only when its `APPLE_DEVELOPER_ID_*` or `APPLE_NOTARY_*` secrets are set, and logs a skip line otherwise; [`scripts/test-runner-pkg.sh`](../scripts/test-runner-pkg.sh) covers the script on Linux.
 - The same job builds the macOS VM helper with cgo and signs it ad hoc with its one virtualization entitlement even without secrets. It then checks that entitlement, and that the package holds no macOS image.
 - The non-required `macos` job compiles and tests the helper and the darwin guest agent on a hosted Mac. `macos-xcode-27` checks the macOS 27 selector names. Neither boots a VM.
+  - `macos` is not a required check, but a red `macos` makes the run unusable as release evidence (green-by-tree reads the run's conclusion). It also runs the package postinstall as root against a temp root and reads the ledger back.
+  - `macos-xcode-27` runs on a public-preview image with `continue-on-error`, so it is informational and never release evidence.
 
 ### Incremental CI
 
@@ -560,7 +562,7 @@ So:
   - `notify-flaky` skips when both `ui-e2e` shards said their flaky list was empty, and runs on any other answer, including none.
 - `compose`, `dco`, `diagrams` and `gates (…)` do not read the classification and run on every change.
   - (`helm` stays on `backend`, not on the chart's own paths: `make helm-lint` also renders [`examples/policies/demo.json`](../examples/policies/demo.json) and [`cmd/wardynd/testdata/values-0.7.yaml`](../cmd/wardynd/testdata/values-0.7.yaml).)
-- Only a run whose five outputs and nine `image-scope` answers are all `true` uploads the `ci-full-tree-<tree>` marker that [`scripts/green-by-tree.sh`](../scripts/green-by-tree.sh) accepts as release evidence.
+- Only a run whose six outputs and nine `image-scope` answers are all `true` uploads the `ci-full-tree-<tree>` marker that [`scripts/green-by-tree.sh`](../scripts/green-by-tree.sh) accepts as release evidence.
   - A run that narrowed anything did not test everything, even where every check it reported is green.
   - `build` writes the marker, because only after `image-scope` can it know whether a scan was narrowed.
 
