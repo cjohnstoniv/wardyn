@@ -7,10 +7,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -304,7 +308,7 @@ func TestMacOSVMDiskCheckEndsNewestBelowFloor(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go m.watchDisk(ctx, 5*time.Millisecond, func() (int64, error) { return free.Load(), nil },
-		func(context.Context) (string, error) { ended.Add(1); return "run-1", nil })
+		func(context.Context, int64) (string, error) { ended.Add(1); return "run-1", nil })
 	time.Sleep(50 * time.Millisecond)
 	if n := ended.Load(); n != 0 {
 		t.Fatalf("ended %d run(s) with 6 GiB free", n)
@@ -349,8 +353,31 @@ func TestMacOSVMRemoveDeletesBasesAndCacheOnly(t *testing.T) {
 	}
 }
 
-// prepare excludes the VM directory from Time Machine, then runs the helper's prepare with this
-// runner's entry and --keep-ipsw passed through; a helper that ends without claiming the entry frees it.
+// fakeHelper is a wardyn-macvm that appends each call's arguments to a file and answers probe with
+// probeExit; it claims no entry. It answers the args file.
+func fakeHelper(t *testing.T, probeExit int) (helper, args string) {
+	t.Helper()
+	bin := t.TempDir()
+	args = filepath.Join(bin, "args")
+	helper = filepath.Join(bin, "wardyn-macvm")
+	script := "#!/bin/sh\necho \"$@\" >>" + args + "\nif [ \"$1\" = probe ]; then echo '{\"host\":\"ok\",\"provisioning\":\"this build has no guest provisioning\",\"thermal\":\"nominal\"}'; exit " +
+		strconv.Itoa(probeExit) + "; fi\n"
+	if err := os.WriteFile(helper, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return helper, args
+}
+
+// calls is the fake helper's calls so far, one line each.
+func calls(t *testing.T, args string) []string {
+	t.Helper()
+	b, _ := os.ReadFile(args)
+	return strings.Split(strings.TrimSpace(string(b)), "\n")
+}
+
+// prepare runs the helper's probe, then excludes the VM directory from Time Machine and runs the helper's
+// prepare with this runner's entry and --keep-ipsw passed through; a helper that ends without claiming
+// the entry frees it. On a ready base, plain prepare starts nothing, and --new-image re-prepares.
 func TestMacOSVMPrepareExcludesAndPassesKeepIPSW(t *testing.T) {
 	r := newMacLedgerRig(t)
 	m := r.open(t)
@@ -360,59 +387,95 @@ func TestMacOSVMPrepareExcludesAndPassesKeepIPSW(t *testing.T) {
 	excludeFromBackups = func(dir string) error { excluded = append(excluded, dir); return nil }
 	prepareClaimWait = 2 * time.Second
 	t.Cleanup(func() { excludeFromBackups, prepareClaimWait = prevEx, prevWait })
-	bin := t.TempDir()
-	args := filepath.Join(bin, "args")
-	helper := filepath.Join(bin, "wardyn-macvm")
-	if err := os.WriteFile(helper, []byte("#!/bin/sh\necho \"$@\" >"+args+"\n"), 0o700); err != nil {
-		t.Fatal(err)
+	helper, args := fakeHelper(t, 0)
+	a := prepareArgs{helper: helper, runnerID: "runner-a", cpus: 4, memoryMiB: 8192, keepIPSW: true}
+	if err := m.startPrepare(context.Background(), a); !errors.Is(err, errMacOSBaseReady) {
+		t.Fatalf("plain prepare on a ready base: %v", err)
 	}
-	err := m.startPrepare(context.Background(), prepareArgs{helper: helper, runnerID: "runner-a", cpus: 4, memoryMiB: 8192, keepIPSW: true})
-	if err == nil || !strings.Contains(err.Error(), "ended at once") {
-		t.Fatalf("prepare with a helper that claims nothing: %v", err)
+	if _, err := os.Stat(args); !os.IsNotExist(err) {
+		t.Fatalf("plain prepare on a ready base ran the helper: %q", calls(t, args))
 	}
-	if len(excluded) != 1 || excluded[0] != r.root {
-		t.Fatalf("Time Machine exclusion %v, want [%s]", excluded, r.root)
-	}
-	b, _ := os.ReadFile(args)
-	got := strings.Fields(string(b))
-	for _, want := range []string{"prepare", "--keep-ipsw", "--runner-id", "--ledger-entry", "--cpus", "--memory-mib"} {
-		if !slices.Contains(got, want) {
-			t.Fatalf("helper args %q lack %s", got, want)
+	for _, newImage := range []bool{true, false} {
+		if !newImage {
+			_ = os.Remove(filepath.Join(m.layout.BaseDir(0), macvm.ManifestFile))
 		}
+		_ = os.Remove(args)
+		a.newImage = newImage
+		err := m.startPrepare(context.Background(), a)
+		if err == nil || !strings.Contains(err.Error(), "ended at once") {
+			t.Fatalf("new image %v: prepare with a helper that claims nothing: %v", newImage, err)
+		}
+		got := calls(t, args)
+		if len(got) != 2 || got[0] != "probe" {
+			t.Fatalf("new image %v: helper calls %q, want probe then prepare", newImage, got)
+		}
+		fields := strings.Fields(got[1])
+		for _, want := range []string{"prepare", "--keep-ipsw", "--runner-id", "--ledger-entry", "--cpus", "--memory-mib"} {
+			if !slices.Contains(fields, want) {
+				t.Fatalf("helper args %q lack %s", fields, want)
+			}
+		}
+		if slices.Contains(fields, "--reprepare") != newImage {
+			t.Fatalf("new image %v: helper args %q", newImage, fields)
+		}
+	}
+	if len(excluded) != 2 || excluded[0] != r.root {
+		t.Fatalf("Time Machine exclusion %v, want [%s %s]", excluded, r.root, r.root)
 	}
 	if counted, _ := m.ledger.Counted(); len(counted) != 0 {
 		t.Fatalf("an unclaimed prepare entry stayed: %+v", counted)
 	}
 }
 
-// status shows the setup-by-hand steps with the one-time code (which nothing logs), a newer macOS, and
-// the base's desktop mode.
-func TestMacOSVMStatusShowsSetupByHandNewerAndDesktop(t *testing.T) {
+// status never shows the one-time setup code, in text or JSON, whatever prepare.log holds: it names the
+// owner-only file the helper left it in, and a file anyone else could read is not named. Nothing logs it.
+// The JSON's keys are pinned.
+func TestMacOSVMStatusNeverShowsTheSetupCode(t *testing.T) {
 	r := newMacLedgerRig(t)
 	m := r.open(t)
+	m.helper, _ = fakeHelper(t, 0)
 	man := `{"format":1,"state":"ready","guest_os":"macOS 27.0","build_version":"26A428","min_cpus":4,"min_memory_mib":8192,"desktop":"observe","harnesses":["none"]}`
 	_ = os.WriteFile(filepath.Join(m.layout.BaseDir(0), macvm.ManifestFile), []byte(man), 0o600)
-	_ = os.WriteFile(filepath.Join(r.root, latestFile), []byte(`{"guest_os":"macOS 27.0.1","build_version":"26A434"}`), 0o600)
-	_ = os.WriteFile(m.layout.PrepareLog(), []byte(`{"phase":"install","fraction":1}`+"\n"+`{"phase":"setup_by_hand","detail":"K7MP2QXR"}`+"\n"), 0o600)
+	const code = "K7MP2QXR"
+	_ = os.WriteFile(m.layout.PrepareLog(), []byte(`{"phase":"install","fraction":1}`+"\n"+`{"phase":"setup_by_hand","detail":"`+code+`"}`+"\n"), 0o600)
+	codeFile := filepath.Join(r.root, setupCodeFile)
 	var logs strings.Builder
 	var mu sync.Mutex
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(lockedWriter{&mu, &logs}, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	var out strings.Builder
-	err := m.writeStatus(&out)
-	slog.SetDefault(prev)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{"create the account wardyn-admin with the code K7MP2QXR as its password, and turn on Remote Login",
-		"A newer macOS is available (macOS 27.0.1)", "desktop: view only"} {
-		if !strings.Contains(out.String(), want) {
-			t.Fatalf("status lacks %q:\n%s", want, out.String())
+	defer slog.SetDefault(prev)
+	for _, mode := range []os.FileMode{0o644, 0o600} {
+		_ = os.WriteFile(codeFile, []byte(code+"\n"), mode)
+		_ = os.Chmod(codeFile, mode)
+		st, err := m.status(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var text strings.Builder
+		st.writeText(&text)
+		js, _ := json.Marshal(st)
+		for _, out := range []string{text.String(), string(js)} {
+			if strings.Contains(out, code) {
+				t.Fatalf("mode %o: the one-time code is in the status:\n%s", mode, out)
+			}
+		}
+		if named := strings.Contains(text.String(), "with the one-time code in "+codeFile); named != (mode == 0o600) {
+			t.Fatalf("mode %o: code file named %v:\n%s", mode, named, text.String())
+		}
+		if !strings.Contains(text.String(), "desktop: view only") || st.Thermal != "nominal" {
+			t.Fatalf("mode %o: status %+v\n%s", mode, st, text.String())
+		}
+		var keys map[string]any
+		_ = json.Unmarshal(js, &keys)
+		got := slices.Sorted(maps.Keys(keys))
+		want := []string{"base", "desktop", "error", "harnesses", "held_disk_bytes", "identity", "leaked", "max", "phase", "state", "thermal"}
+		if !slices.Equal(got, want) {
+			t.Fatalf("status JSON keys %v, want %v", got, want)
 		}
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if strings.Contains(logs.String(), "K7MP2QXR") {
+	if strings.Contains(logs.String(), code) {
 		t.Fatalf("the one-time code was logged:\n%s", logs.String())
 	}
 }

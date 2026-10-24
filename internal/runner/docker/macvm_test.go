@@ -476,7 +476,7 @@ func TestMacVMDesktopPasswordNeverLoggedOrWritten(t *testing.T) {
 // and the teardown deletes it as any other.
 func TestMacVMEndNewestForLowDisk(t *testing.T) {
 	r := newMacRig(t)
-	if run, err := r.d.EndNewestMacVM(context.Background()); run != "" || err != nil {
+	if run, err := r.d.EndNewestMacVM(context.Background(), 3<<30); run != "" || err != nil {
 		t.Fatalf("with no VM: %q %v", run, err)
 	}
 	spec := macSpec()
@@ -484,10 +484,10 @@ func TestMacVMEndNewestForLowDisk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run, err := r.d.EndNewestMacVM(context.Background()); run != spec.RunID.String() || err != nil {
+	if run, err := r.d.EndNewestMacVM(context.Background(), 3<<30); run != spec.RunID.String() || err != nil {
 		t.Fatalf("ended %q, %v", run, err)
 	}
-	if st, err := r.d.Status(context.Background(), sb.Ref); err != nil || st.State != types.RunStopped || st.Message != macVMLowDisk {
+	if st, err := r.d.Status(context.Background(), sb.Ref); err != nil || st.State != types.RunStopped || st.Message != "This Mac ran low on disk (3 GB free), so the macOS VM was stopped." {
 		t.Fatalf("status %+v %v", st, err)
 	}
 	if err := r.d.StopSandbox(context.Background(), sb.Ref); err != nil {

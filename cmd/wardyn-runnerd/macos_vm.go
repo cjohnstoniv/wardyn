@@ -53,11 +53,16 @@ const (
 	macOSVMDiskFloor = 5 << 30
 )
 
-// The refusals the runner's caps carry when it offers no macOS VM.
-const (
-	macOSVMLedgerDamaged = "This Mac's macOS VM ledger is missing or damaged. Reinstall the Wardyn runner package."
-	macOSVMNoHelper      = "This Mac's Wardyn runner has no macOS VM helper. Reinstall the Wardyn runner package."
-)
+// macOSVMLedgerDamaged is the refusal the runner's caps carry when its ledger is missing or damaged.
+// Every other reason it offers no macOS VM (no helper, a failed probe) stays on this Mac, in the log and
+// in `macos-vm status`, and the caps carry no refusal of their own.
+const macOSVMLedgerDamaged = "This Mac's macOS VM ledger is missing or damaged. Reinstall the Wardyn runner package."
+
+// macOSVMNoHelper is why a runner with no helper beside it offers no macOS VM (log and status only).
+const macOSVMNoHelper = "This Mac's Wardyn runner has no macOS VM helper. Reinstall the Wardyn runner package."
+
+// macOSVMIdentity is the machine-identifier strategy every macOS VM run uses.
+const macOSVMIdentity = macvm.IdentityFresh
 
 // macOSVMs is this runner's handle on the Mac's macOS VMs: the ledger, the base, and the caps last built.
 type macOSVMs struct {
@@ -65,16 +70,24 @@ type macOSVMs struct {
 	host     admission.Host
 	layout   macvm.Layout
 	runnerID string
-	// refusal, when set, is why this runner offers no macOS VM at all.
-	refusal string
+	// refusal, when set, is the refusal the caps carry; why, when set, is why this runner offers no macOS
+	// VM at all (either one turns them off).
+	refusal, why string
+	// helper is the wardyn-macvm beside this runner.
+	helper string
+	// perRunMemory is the runner's per-run memory limit in bytes, which every guest gets; 0 is unknown,
+	// and a guest then gets the base's minimum.
+	perRunMemory uint64
 	// version is the guest agent this runner ships; a base whose agent differs needs a tools update.
 	version string
-	// toolsUpdate starts that update (design 3.4, guest agent drift); nil only says so in the log.
-	toolsUpdate func(have, want string)
+	// toolsUpdate starts that update (design 3.4, guest agent drift) for the base whose manifest it is
+	// given; nil only says so in the log.
+	toolsUpdate func(macvm.Manifest)
 	// reclaim reconciles this runner's run entries whose VM and run directory are gone (the driver's).
 	reclaim func() error
-	// endNewest ends this runner's newest macOS VM run (the driver's), for the free-space check.
-	endNewest func(context.Context) (string, error)
+	// endNewest ends this runner's newest macOS VM run (the driver's), for the free-space check, given
+	// the free bytes the check read.
+	endNewest func(ctx context.Context, freeBytes int64) (string, error)
 	interval  time.Duration
 	kick      chan struct{}
 
@@ -87,7 +100,7 @@ type macOSVMs struct {
 type macOSVMSetup struct {
 	ledgerDir, root, runnerID, version string
 	uid                                int
-	dockerMemory                       uint64
+	dockerMemory, perRunMemory         uint64
 	host                               admission.Host
 	owner                              func(os.FileInfo) (int, bool)
 	// fstat replaces fstat(2) in the ledger's root-ownership checks (tests); nil is the real one.
@@ -98,7 +111,8 @@ type macOSVMSetup struct {
 // ledger itself checks the directory, its ancestors and its lock are root's, and creates or repairs
 // none of them) makes a handle that offers no macOS VM and names the fix.
 func openMacOSVMs(s macOSVMSetup) *macOSVMs {
-	m := &macOSVMs{host: s.host, layout: macvm.Layout{Root: s.root}, runnerID: s.runnerID, version: s.version, interval: macOSVMRecompute, kick: make(chan struct{}, 1)}
+	m := &macOSVMs{host: s.host, layout: macvm.Layout{Root: s.root}, runnerID: s.runnerID, version: s.version, perRunMemory: s.perRunMemory,
+		interval: macOSVMRecompute, kick: make(chan struct{}, 1)}
 	if err := os.MkdirAll(s.root, 0o700); err != nil {
 		slog.Warn("macOS VM sandboxes are off on this runner: no VM directory", "error", err.Error())
 		m.refusal = macOSVMLedgerDamaged
@@ -164,9 +178,21 @@ func (m *macOSVMs) run(ctx context.Context, resend func()) {
 	}
 }
 
+// start runs the recompute and, with the driver's end, the free-space check, until ctx ends; resend
+// sends the caps after a change. A nil handle (macOS VMs off) starts nothing.
+func (m *macOSVMs) start(ctx context.Context, resend func()) {
+	if m == nil {
+		return
+	}
+	if m.endNewest != nil {
+		go m.watchDisk(ctx, macOSVMDiskEvery, func() (int64, error) { return m.host.FreeDiskBytes(m.layout.Root) }, m.endNewest)
+	}
+	go m.run(ctx, resend)
+}
+
 // watchDisk is the free-space check until ctx ends: free reads the VM volume's free bytes, and end ends
 // this runner's newest macOS VM run (the driver's EndNewestMacVM), one per check while space stays low.
-func (m *macOSVMs) watchDisk(ctx context.Context, every time.Duration, free func() (int64, error), end func(context.Context) (string, error)) {
+func (m *macOSVMs) watchDisk(ctx context.Context, every time.Duration, free func() (int64, error), end func(context.Context, int64) (string, error)) {
 	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
@@ -183,7 +209,7 @@ func (m *macOSVMs) watchDisk(ctx context.Context, every time.Duration, free func
 		if n >= macOSVMDiskFloor {
 			continue
 		}
-		run, err := end(ctx)
+		run, err := end(ctx, n)
 		switch {
 		case err != nil:
 			slog.Warn("macOS VM free-space check: end the newest macOS VM run", "run_id", run, "free_bytes", n, "error", err.Error())
@@ -209,8 +235,10 @@ func (m *macOSVMs) recompute() bool {
 }
 
 // build is one pass: the tombstone pass first (the ledger's Sweep), so another login's dead VM stops
-// holding a slot, then this runner's own reconciles, then the offer (own live runs plus the host's
-// headroom) and the base. A ledger read that fails keeps the last max, as the organisation already has it.
+// holding a slot, then this runner's own reconciles, then the base and the offer (own live runs plus the
+// host's headroom, for guests at the per-run memory, or the base's minimum when that is more). With no
+// base ready it offers none. A ledger read that fails keeps the last max, as the organisation already
+// has it.
 func (m *macOSVMs) build(last *runnerwire.MacVMCaps) runnerwire.MacVMCaps {
 	c := runnerwire.MacVMCaps{SignIns: true, Base: runnerwire.MacVMBase{State: runnerwire.MacVMBaseNone}}
 	if m.ledger == nil {
@@ -228,12 +256,13 @@ func (m *macOSVMs) build(last *runnerwire.MacVMCaps) runnerwire.MacVMCaps {
 	}
 	man, base := m.base()
 	c.Base = base
-	if base.State == runnerwire.MacVMBaseReady {
-		c.MinCPUs, c.MinMemoryMiB = man.MinCPUs, int(man.MinMemoryMiB)
-		c.Harnesses, c.Desktop = slices.Clone(man.Harnesses), man.Desktop
-		m.checkAgent(man)
+	if base.State != runnerwire.MacVMBaseReady {
+		return c
 	}
-	off, err := m.ledger.Offer(man.MinMemoryMiB<<20, admission.RunDiskReservation(cmp.Or(man.DiskBytes, macvm.BaseDiskBytes)))
+	c.MinCPUs, c.MinMemoryMiB = man.MinCPUs, int(man.MinMemoryMiB)
+	c.Harnesses, c.Desktop = slices.Clone(man.Harnesses), man.Desktop
+	m.checkAgent(man)
+	off, err := m.ledger.Offer(m.guestMemory(man), admission.RunDiskReservation(cmp.Or(man.DiskBytes, macvm.BaseDiskBytes)))
 	switch {
 	case err == nil:
 		c.Max = off.Max
@@ -242,6 +271,12 @@ func (m *macOSVMs) build(last *runnerwire.MacVMCaps) runnerwire.MacVMCaps {
 		c.Max = last.Max
 	}
 	return c
+}
+
+// guestMemory is what one guest of this base takes: the per-run memory, or the base's minimum when that
+// is more (a run below it is refused at start).
+func (m *macOSVMs) guestMemory(man macvm.Manifest) uint64 {
+	return max(m.perRunMemory, man.MinMemoryMiB<<20)
 }
 
 // base is the base image's state for the caps.
@@ -282,7 +317,7 @@ func (m *macOSVMs) checkAgent(man macvm.Manifest) {
 	}
 	slog.Warn("macOS VM base: its guest agent is not this runner's; a tools update replaces it", "base_agent", man.AgentVersion, "runner", m.version)
 	if m.toolsUpdate != nil {
-		m.toolsUpdate(man.AgentVersion, m.version)
+		m.toolsUpdate(man)
 	}
 }
 
@@ -380,36 +415,21 @@ func prepareFailure(log string) string {
 	return msg
 }
 
-// phaseSetupByHand is the helper's prepare event when the guest's first boot asked for Setup Assistant;
-// its detail is the one-time code the account is created with.
-const phaseSetupByHand = "setup_by_hand"
+// setupCodeFile, in the VM directory, is where the helper leaves the one-time code macOS's Setup
+// Assistant asks for: owner-only (0600), read on this Mac by the person at it. The runner never reads the
+// code: it only says where the file is, so the code is in no log, no status and nothing sent to the
+// organisation.
+const setupCodeFile = "setup-code"
 
-// setupByHandCode is that code when prepare's last event asks for setup by hand, else "".
-func setupByHandCode(log string) string {
-	var ev macvm.PrepareEvent
-	if json.Unmarshal([]byte(lastLine(log)), &ev) != nil || ev.Phase != phaseSetupByHand {
+// setupCodeWaiting is the setup code's file when the helper left one (a non-empty 0600 regular file),
+// else "".
+func setupCodeWaiting(root string) string {
+	p := filepath.Join(root, setupCodeFile)
+	fi, err := os.Lstat(p)
+	if err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm() != 0o600 || fi.Size() == 0 {
 		return ""
 	}
-	return ev.Detail
-}
-
-// latestFile, in the VM directory, is the helper's last read of Apple's newest supported restore image.
-const latestFile = "latest.json"
-
-// newerMacOS names Apple's newer macOS when the helper found one the base is not built from, else "".
-func newerMacOS(root string, man macvm.Manifest) string {
-	b, err := os.ReadFile(filepath.Join(root, latestFile))
-	if err != nil {
-		return ""
-	}
-	var latest struct {
-		GuestOS      string `json:"guest_os"`
-		BuildVersion string `json:"build_version"`
-	}
-	if json.Unmarshal(b, &latest) != nil || latest.BuildVersion == "" || latest.BuildVersion == man.BuildVersion {
-		return ""
-	}
-	return cmp.Or(latest.GuestOS, latest.BuildVersion)
+	return p
 }
 
 // desktopMode is the base's desktop in status's words.
@@ -481,19 +501,122 @@ type prepareArgs struct {
 	cpus                        int
 	memoryMiB                   uint64
 	keepIPSW                    bool
+	// newImage builds a new base from Apple's newest restore image even when one is ready (the helper's
+	// --reprepare); without it, a ready base needs no prepare.
+	newImage bool
 }
 
-// startPrepare takes prepare's ledger entry (the tombstone pass first) and starts the helper's prepare in
-// its own session, its output appended to prepare.log, then waits until the helper has claimed the
-// entry, so the entry never outlives both. The helper releases nothing: once it exits, the runner's
-// recompute reconciles the entry.
+// errMacOSBaseReady is startPrepare's answer for a ready base and no request for a new image.
+var errMacOSBaseReady = errors.New("this Mac's macOS base is ready; pass --new-image to build a new one from Apple's newest restore image")
+
+// probeReport is the part of `wardyn-macvm probe`'s JSON the runner reads. Thermal is read when the helper
+// reports it.
+type probeReport struct {
+	Host         string `json:"host"`
+	Provisioning string `json:"provisioning"`
+	Thermal      string `json:"thermal"`
+}
+
+// probeWait bounds the helper's probe.
+var probeWait = 30 * time.Second
+
+// probeHelper runs `wardyn-macvm probe`, which exits 0 only when this Mac and this build can run macOS
+// VMs. Any other end is the reason the runner offers none and starts no prepare.
+func probeHelper(ctx context.Context, helper string) (probeReport, error) {
+	ctx, cancel := context.WithTimeout(ctx, probeWait)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, helper, "probe").Output()
+	var r probeReport
+	_ = json.Unmarshal(out, &r)
+	if err != nil {
+		why := err.Error()
+		for _, s := range []string{r.Host, r.Provisioning} {
+			if s != "" && s != "ok" {
+				why = s
+				break
+			}
+		}
+		return r, fmt.Errorf("the macOS VM helper's probe: %s", why)
+	}
+	return r, nil
+}
+
+// gate runs the helper's probe and turns macOS VMs off on this runner unless it passes. The caps then
+// carry no refusal of their own: the reason stays in the log and in `macos-vm status`.
+func (m *macOSVMs) gate(ctx context.Context) {
+	if m.ledger == nil {
+		return
+	}
+	if _, err := probeHelper(ctx, m.helper); err != nil {
+		slog.WarnContext(ctx, "macOS VM sandboxes are off on this runner", "reason", err.Error())
+		m.ledger, m.why = nil, err.Error()
+	}
+}
+
+// helperJob is one helper run that holds a ledger entry of its own: a prepare or a tools update.
+type helperJob struct {
+	kind   admission.Kind
+	disk   int64
+	log    string
+	sub    string // the helper's command
+	helper string
+	cpus   int
+	memMiB uint64
+	runner string
+	ledger string // the ledger directory ("" is the package's)
+	extra  []string
+	descr  string // the job in the error words: "prepare" or "tools update"
+}
+
+// startPrepare starts the helper's prepare (see startJob), or with newImage and a ready base its
+// re-prepare; a ready base and no newImage starts nothing (errMacOSBaseReady). The helper's probe must
+// pass first.
 func (m *macOSVMs) startPrepare(ctx context.Context, a prepareArgs) error {
 	if m.ledger == nil {
-		return errors.New(m.refusal)
+		return errors.New(cmp.Or(m.refusal, m.why))
+	}
+	var extra []string
+	if _, err := macvm.ReadyBase(m.layout.BaseDir(0)); err == nil {
+		if !a.newImage {
+			return errMacOSBaseReady
+		}
+		extra = append(extra, "--reprepare")
+	}
+	if a.keepIPSW {
+		extra = append(extra, "--keep-ipsw")
+	}
+	if _, err := probeHelper(ctx, a.helper); err != nil {
+		return err
 	}
 	if err := excludeFromBackups(m.layout.Root); err != nil {
 		slog.Warn("macOS VM directory: Time Machine exclusion", "error", err.Error())
 	}
+	return m.startJob(ctx, helperJob{kind: admission.KindPrepare, disk: admission.PrepareDiskReservation(macvm.BaseDiskBytes),
+		log: m.layout.PrepareLog(), sub: "prepare", helper: a.helper, cpus: a.cpus, memMiB: a.memoryMiB, runner: a.runnerID,
+		ledger: a.ledgerDir, extra: extra, descr: "prepare"})
+}
+
+// toolsUpdateLog, in the VM directory, is a tools update's output.
+const toolsUpdateLog = "tools-update.log"
+
+// startToolsUpdate starts the helper's tools update of the base whose manifest is man (design 3.4, 3.12):
+// its own ledger entry, a guest at the base's minimum CPUs and the per-run memory (or the minimum), and
+// the helper's `update-tools`, which takes the base's update lock, works on a staging copy and swaps it
+// in, so runs keep cloning the old base meanwhile.
+func (m *macOSVMs) startToolsUpdate(ctx context.Context, man macvm.Manifest) error {
+	if m.ledger == nil {
+		return errors.New(cmp.Or(m.refusal, m.why))
+	}
+	return m.startJob(ctx, helperJob{kind: admission.KindToolsUpdate, disk: admission.RunDiskReservation(cmp.Or(man.DiskBytes, macvm.BaseDiskBytes)),
+		log: filepath.Join(m.layout.Root, toolsUpdateLog), sub: "update-tools", helper: m.helper, cpus: max(man.MinCPUs, 1),
+		memMiB: m.guestMemory(man) >> 20, runner: m.runnerID, descr: "tools update"})
+}
+
+// startJob takes the job's ledger entry (the tombstone pass first) and starts the helper in its own
+// session, its output appended to the job's log, then waits until the helper has claimed the entry, so
+// the entry never outlives both. The helper releases nothing: once it exits, the runner's recompute
+// reconciles the entry.
+func (m *macOSVMs) startJob(ctx context.Context, j helperJob) error {
 	if _, err := m.ledger.Sweep(); err != nil {
 		return err
 	}
@@ -502,8 +625,8 @@ func (m *macOSVMs) startPrepare(ctx context.Context, a prepareArgs) error {
 	if err != nil {
 		return err
 	}
-	e, err := m.ledger.Admit(admission.Request{Kind: admission.KindPrepare, GuestCPUs: a.cpus, GuestMemory: a.memoryMiB << 20,
-		DiskReserve: admission.PrepareDiskReservation(macvm.BaseDiskBytes), OwnerPID: self, OwnerStart: start})
+	e, err := m.ledger.Admit(admission.Request{Kind: j.kind, GuestCPUs: j.cpus, GuestMemory: j.memMiB << 20,
+		DiskReserve: j.disk, OwnerPID: self, OwnerStart: start})
 	if err != nil {
 		return err
 	}
@@ -511,20 +634,17 @@ func (m *macOSVMs) startPrepare(ctx context.Context, a prepareArgs) error {
 		// The VM never started: the entry goes at once.
 		return errors.Join(err, m.ledger.Release(e.ID, admission.Destroyed{Stopped: true}))
 	}
-	logf, err := os.OpenFile(m.layout.PrepareLog(), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	logf, err := os.OpenFile(j.log, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {
 		return never(err)
 	}
 	defer logf.Close()
-	args := []string{"prepare", "--root", m.layout.Root, "--cpus", strconv.Itoa(a.cpus), "--memory-mib", strconv.FormatUint(a.memoryMiB, 10),
-		"--runner-id", a.runnerID, "--ledger-entry", e.ID}
-	if a.ledgerDir != "" {
-		args = append(args, "--ledger-dir", a.ledgerDir)
+	args := []string{j.sub, "--root", m.layout.Root, "--cpus", strconv.Itoa(j.cpus), "--memory-mib", strconv.FormatUint(j.memMiB, 10),
+		"--runner-id", j.runner, "--ledger-entry", e.ID}
+	if j.ledger != "" {
+		args = append(args, "--ledger-dir", j.ledger)
 	}
-	if a.keepIPSW {
-		args = append(args, "--keep-ipsw")
-	}
-	cmd := exec.Command(a.helper, args...)
+	cmd := exec.Command(j.helper, append(args, j.extra...)...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Stdout, cmd.Stderr = logf, logf
 	if err := cmd.Start(); err != nil {
@@ -533,45 +653,50 @@ func (m *macOSVMs) startPrepare(ctx context.Context, a prepareArgs) error {
 	exited := make(chan struct{})
 	go func() { _ = cmd.Wait(); close(exited) }()
 	m.changed()
-	// A helper that never claimed its entry never built a VM (it claims first), so the entry goes.
+	return m.awaitClaim(ctx, e.ID, j, cmd, exited, never)
+}
+
+// awaitClaim is startJob's wait: a helper that never claimed its entry never built a VM (it claims
+// first), so the entry goes.
+func (m *macOSVMs) awaitClaim(ctx context.Context, id string, j helperJob, cmd *exec.Cmd, exited chan struct{}, never func(error) error) error {
 	for deadline := time.Now().Add(prepareClaimWait); ; {
 		if counted, err := m.ledger.Counted(); err == nil {
-			i := slices.IndexFunc(counted, func(x admission.Entry) bool { return x.ID == e.ID })
+			i := slices.IndexFunc(counted, func(x admission.Entry) bool { return x.ID == id })
 			if i >= 0 && counted[i].HelperPID != 0 {
 				return nil
 			}
 		}
 		select {
 		case <-exited:
-			if err := m.claimed(e.ID); err != nil {
+			if err := m.claimed(id, j); err != nil {
 				return err
 			}
-			return never(errors.New("the macOS VM helper's prepare ended at once; see " + m.layout.PrepareLog()))
+			return never(fmt.Errorf("the macOS VM helper's %s ended at once; see %s", j.descr, j.log))
 		case <-time.After(50 * time.Millisecond):
 		}
 		if time.Now().After(deadline) || ctx.Err() != nil {
 			_ = cmd.Process.Kill()
 			<-exited
-			if err := m.claimed(e.ID); err != nil {
+			if err := m.claimed(id, j); err != nil {
 				return err
 			}
-			return never(errors.New("the macOS VM helper did not take its ledger entry; see " + m.layout.PrepareLog()))
+			return never(fmt.Errorf("the macOS VM helper did not take its ledger entry; see %s", j.log))
 		}
 	}
 }
 
-// prepareClaimWait bounds startPrepare's wait for the helper to claim its entry.
+// prepareClaimWait bounds startJob's wait for the helper to claim its entry.
 var prepareClaimWait = time.Minute
 
 // claimed is nil when entry id is not claimed by a helper (the entry may go), else why it stays: a helper
 // that claimed it is the VM's, and the recompute reconciles it once that helper has gone.
-func (m *macOSVMs) claimed(id string) error {
+func (m *macOSVMs) claimed(id string, j helperJob) error {
 	counted, err := m.ledger.Counted()
 	if err != nil {
 		return err
 	}
 	if i := slices.IndexFunc(counted, func(x admission.Entry) bool { return x.ID == id }); i >= 0 && counted[i].HelperPID != 0 {
-		return errors.New("the macOS VM helper's prepare ended; see " + m.layout.PrepareLog())
+		return fmt.Errorf("the macOS VM helper's %s ended; see %s", j.descr, j.log)
 	}
 	return nil
 }
@@ -602,130 +727,8 @@ func macHostOS() string {
 	return out
 }
 
-// newMacOSVMCommand is `wardyn-runnerd macos-vm`: this Mac's macOS VM state, its base's preparation, and
-// the base's removal.
-func newMacOSVMCommand() *cobra.Command {
-	cmd := &cobra.Command{Use: "macos-vm", Short: "Show, prepare or remove this Mac's macOS VM base", Args: cobra.NoArgs}
-	open := func(cmd *cobra.Command) (*macOSVMs, string, error) {
-		cfg, err := serveConfig(cmd, "")
-		if err != nil {
-			return nil, "", err
-		}
-		stateDir := cfg.get("state_dir")
-		if stateDir == "" {
-			if stateDir, err = runneridentity.DefaultDir(); err != nil {
-				return nil, "", err
-			}
-		}
-		id, err := runneridentity.Load(stateDir, cfg.get("org_url"))
-		if err != nil {
-			return nil, "", err
-		}
-		root, err := macvm.DefaultRoot()
-		if err != nil {
-			return nil, "", err
-		}
-		m := openMacOSVMs(macOSVMSetup{ledgerDir: admission.DefaultDir, root: root, runnerID: id.RunnerID.String(), uid: os.Getuid(),
-			host: admission.SystemHost(), owner: fileOwner})
-		if !macOSVMOn(cfg.get("macos_vm")) {
-			fmt.Fprintln(cmd.OutOrStdout(), "macOS VM sandboxes are off on this runner (setting macos_vm, from "+cfg.field("macos_vm").Source+").")
-		}
-		return m, id.RunnerID.String(), nil
-	}
-	status := &cobra.Command{Use: "status", Short: "Show this Mac's macOS VM base, ledger and offer", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		m, _, err := open(cmd)
-		if err != nil {
-			return err
-		}
-		return m.writeStatus(cmd.OutOrStdout())
-	}}
-	var cpu float64
-	var memGB int64
-	var keep bool
-	prepare := &cobra.Command{Use: "prepare", Short: "Build this Mac's macOS base image from Apple's restore image (hours; it continues in the background)", Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			if cpu < 1 || memGB < 1 {
-				return errors.New("pass --per-run-cpu and --per-run-memory: the runner's per-run limits, which prepare's own VM uses and never raises")
-			}
-			m, runnerID, err := open(cmd)
-			if err != nil {
-				return err
-			}
-			helper, err := macVMHelperPath()
-			if err != nil {
-				return err
-			}
-			if err := m.startPrepare(cmd.Context(), prepareArgs{helper: helper, runnerID: runnerID, cpus: int(cpu), memoryMiB: uint64(memGB) << 10, keepIPSW: keep}); err != nil {
-				return err
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Preparing this Mac's macOS base in the background; progress is in %s and in `wardyn-runnerd macos-vm status`.\n", m.layout.PrepareLog())
-			return nil
-		}}
-	prepare.Flags().Float64Var(&cpu, "per-run-cpu", 0, "the runner's per-run CPUs")
-	prepare.Flags().Int64Var(&memGB, "per-run-memory", 0, "the runner's per-run memory in GB")
-	prepare.Flags().BoolVar(&keep, "keep-ipsw", false, "keep Apple's restore image after the base is ready")
-	remove := &cobra.Command{Use: "remove", Short: "Delete this Mac's macOS base images and download cache", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		m, _, err := open(cmd)
-		if err != nil {
-			return err
-		}
-		return m.remove(cmd.OutOrStdout())
-	}}
-	cmd.AddCommand(status, prepare, remove)
-	return cmd
-}
-
-// writeStatus prints the ledger, the base and the offer, for `macos-vm status`.
-func (m *macOSVMs) writeStatus(out io.Writer) error {
-	if m.ledger == nil {
-		fmt.Fprintln(out, m.refusal)
-		return nil
-	}
-	m.recompute()
-	c := m.current()
-	fmt.Fprintf(out, "base: %s", c.Base.State)
-	if c.Base.GuestOS != "" {
-		fmt.Fprintf(out, ", %s", c.Base.GuestOS)
-	}
-	if c.Base.State == runnerwire.MacVMBasePreparing {
-		fmt.Fprintf(out, ", %d%%", c.Base.Progress)
-	}
-	if c.Base.Error != "" {
-		fmt.Fprintf(out, ": %s", c.Base.Error)
-	}
-	fmt.Fprintln(out)
-	if code := setupByHandCode(m.layout.PrepareLog()); code != "" {
-		// Shown here, never logged: the account's password until the helper's first login replaces it.
-		fmt.Fprintf(out, "macOS asked for setup by hand. Open the macOS window on this Mac, create the account wardyn-admin with the code %s as its password, and turn on Remote Login.\n", code)
-	}
-	if c.Base.State == runnerwire.MacVMBaseReady {
-		fmt.Fprintf(out, "harnesses: %s; desktop: %s; guest minimum: %d CPUs, %d MiB\n", strings.Join(c.Harnesses, ", "), desktopMode(c.Desktop), c.MinCPUs, c.MinMemoryMiB)
-		if man, err := macvm.ReadManifest(m.layout.BaseDir(0)); err == nil {
-			if newer := newerMacOS(m.layout.Root, man); newer != "" {
-				fmt.Fprintf(out, "A newer macOS is available (%s). Run `wardyn-runnerd macos-vm prepare` again to update this Mac's base.\n", newer)
-			}
-		}
-	}
-	counted, err := m.ledger.Counted()
-	if err != nil {
-		return err
-	}
-	debts, err := m.ledger.Debts()
-	if err != nil {
-		return err
-	}
-	fmt.Fprintf(out, "macOS VMs on this Mac (every login): %d; this runner offers %d at once\n", len(counted), c.Max)
-	var held int64
-	for _, e := range debts {
-		held += e.DiskReserve
-	}
-	if held > 0 {
-		fmt.Fprintf(out, "disk held for ended logins' VMs until they log in again: %d GB\n", held>>30)
-	}
-	return nil
-}
-
-// remove deletes the bases, the download cache and prepare's log, never while this runner holds a VM.
+// remove deletes the bases and the download cache, never while this runner holds a VM. Prepare's log,
+// the ledger and the VM directory stay.
 func (m *macOSVMs) remove(out io.Writer) error {
 	if m.ledger != nil {
 		counted, err := m.ledger.Counted()

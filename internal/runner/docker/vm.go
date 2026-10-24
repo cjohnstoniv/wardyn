@@ -174,6 +174,9 @@ func (d *Driver) vmLookup(ctx context.Context, ref string) (*vmRun, error) {
 	}
 	vc := d.vmConfig()
 	if vc == nil {
+		if d.macVMConfig() != nil {
+			d.notVMs.Store(ref, struct{}{}) // no run directory: a container, looked up once
+		}
 		return nil, nil
 	}
 	res, err := d.cli.ContainerInspect(ctx, ref, client.ContainerInspectOptions{})

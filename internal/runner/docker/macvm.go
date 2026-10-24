@@ -157,24 +157,41 @@ func (d *Driver) macVMLookup(ref string) *vmRun {
 		return nil
 	}
 	dir := c.runDir(id)
-	cfg, err := macvm.ReadRunConfig(dir)
-	if err != nil || cfg.RunID != id.String() {
+	if _, err := readMacRun(dir, id); err != nil {
 		return nil
 	}
-	v, _ := d.vms.LoadOrStore(ref, newMacVMRun(id, dir))
+	if v, ok := d.vms.Load(ref); ok {
+		return v.(*vmRun)
+	}
+	nv := newMacVMRun(id, dir)
+	v, loaded := d.vms.LoadOrStore(ref, nv)
+	if loaded { // another caller stored it first: this one's context and client go
+		nv.stop()
+		nv.agent.Close()
+	}
 	return v.(*vmRun)
+}
+
+// readMacRun reads a run directory's run.json and checks it names runID in full: the directory's name is
+// only the run id's first 12 hex digits, so every open checks the whole id.
+func readMacRun(dir string, runID uuid.UUID) (macvm.RunConfig, error) {
+	cfg, err := macvm.ReadRunConfig(dir)
+	if err == nil && cfg.RunID != runID.String() {
+		err = fmt.Errorf("docker: the macOS VM run directory %s belongs to run %s, not %s", dir, cfg.RunID, runID)
+	}
+	return cfg, err
 }
 
 // macDesktopSock is where a macOS VM's helper serves the guest's display.
 func macDesktopSock(dir string) string { return filepath.Join(dir, macvm.DesktopSock) }
 
-// The texts a macOS VM run ends or is refused with.
+// The texts a macOS VM run ends with. A helper that is gone for no reason the runner knows, or a VM that
+// stopped with no error, ends with no text of its own: the organisation's own words for a stopped run.
 const (
 	macVMLostNetwork = "The macOS VM lost its network"
 	macVMRestarted   = "The Mac restarted; the macOS VM was lost"
-	macVMHelperGone  = "The macOS VM's helper stopped"
-	macVMUpgraded    = "This Mac's runner was upgraded while the macOS VM ran"
-	macVMLowDisk     = "This Mac ran low on disk"
+	macVMUpgraded    = "This Mac's runner was upgraded while the macOS VM ran, so the run was ended."
+	macVMLowDisk     = "This Mac ran low on disk (%d GB free), so the macOS VM was stopped."
 )
 
 // refuseMacVMSpec refuses, before anything is created, what a macOS VM cannot honour, and a run that a
@@ -213,14 +230,15 @@ func macVMFits(spec runner.SandboxSpec, man macvm.Manifest) error {
 			return fmt.Errorf("This Mac's macOS base can't run %s right now.", h)
 		}
 	}
+	// The size refusals say the shortfall only: how to raise a limit is the organisation's to word.
 	if cpus := int(spec.Resources.CPUMillis / 1000); spec.Resources.CPUMillis > 0 && cpus < man.MinCPUs {
 		//lint:ignore ST1005 as above
-		return fmt.Errorf("Per-run CPUs on this runner are %d; a macOS VM needs at least %d. Re-register the runner with --per-run-cpu %d or more.", cpus, man.MinCPUs, man.MinCPUs)
+		return fmt.Errorf("Per-run CPUs on this runner are %d; a macOS VM needs at least %d.", cpus, man.MinCPUs)
 	}
 	if mem := uint64(max(spec.Resources.MemoryMiB, 0)); spec.Resources.MemoryMiB > 0 && mem < man.MinMemoryMiB {
 		need := (man.MinMemoryMiB + 1023) / 1024
 		//lint:ignore ST1005 as above
-		return fmt.Errorf("Per-run memory on this runner is %d GB; a macOS VM needs at least %d GB. Re-register the runner with --per-run-memory %d or more.", mem/1024, need, need)
+		return fmt.Errorf("Per-run memory on this runner is %d GB; a macOS VM needs at least %d GB.", mem/1024, need)
 	}
 	return nil
 }
@@ -239,6 +257,9 @@ func macGuestInit(spec runner.SandboxSpec, trustedPEM string) guestagent.Init {
 		}
 		env[k] = v
 	}
+	// The pinned harness CLIs are root's under /usr/local/bin, so the run's agent user cannot update them:
+	// an update comes only from a new pin (a tools update), as on the Linux images.
+	env["DISABLE_AUTOUPDATER"] = "1"
 	in := guestagent.Init{Env: env, SecretEnv: spec.SecretEnv, SignInsOff: spec.DesktopSignInsOff}
 	for _, f := range spec.ManagedFiles {
 		in.Files = append(in.Files, guestagent.File{Path: f.Path, Mode: f.Mode, AgentOwned: f.AgentOwned, Content: f.Content})
@@ -273,10 +294,6 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 		return runner.Sandbox{}, err
 	}
 	c := d.macVMConfig()
-	dir := c.runDir(spec.RunID)
-	if _, err := os.Lstat(dir); err == nil {
-		return runner.Sandbox{}, fmt.Errorf("docker: a macOS VM run directory is already at %s", dir)
-	}
 	cpus := cmp.Or(int(spec.Resources.CPUMillis/1000), man.MinCPUs)
 	memMiB := cmp.Or(uint64(max(spec.Resources.MemoryMiB, 0)), man.MinMemoryMiB)
 	self := os.Getpid()
@@ -292,9 +309,14 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 		}
 		return runner.Sandbox{}, err
 	}
-	_, proxyIP, undoNet, err := d.runNetworkAndProxy(ctx, spec)
+	dir, err := c.makeRunDir(spec.RunID)
 	if err != nil {
 		return runner.Sandbox{}, err
+	}
+	rollback = append(rollback, func() { _ = os.RemoveAll(dir) })
+	_, proxyIP, undoNet, err := d.runNetworkAndProxy(ctx, spec)
+	if err != nil {
+		return fail(err)
 	}
 	rollback = append(rollback, undoNet)
 	entry, err := c.admitMacVM(admission.Request{Kind: admission.KindRun, RunID: spec.RunID.String(), GuestCPUs: cpus,
@@ -369,9 +391,26 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 	signIns := res.SignIns
 	machine := &types.VMMachine{Accelerator: types.MacVMAccelerator, MachineType: types.MacVMMachineType,
 		GuestOS: cmp.Or(man.GuestOS, "macOS "+man.BuildVersion), HostOS: c.HostOS}
+	d.notVMs.Delete(ref)
 	d.vms.Store(ref, v)
 	d.keepExecOutput(ref, spec.ExecOutput)
 	return runner.Sandbox{Ref: ref, Driver: driverName, EnforcedClass: types.CC3, Machine: machine, SignIns: signIns}, nil
+}
+
+// makeRunDir creates a run's directory, new: a directory already there (another run's whose id shares
+// the first 12 hex digits, or one a crash left) is refused, never reused.
+func (c *MacVMConfig) makeRunDir(runID uuid.UUID) (string, error) {
+	if err := os.MkdirAll(c.Layout.RunsDir(), 0o700); err != nil {
+		return "", fmt.Errorf("docker: macOS VM run directory: %w", err)
+	}
+	dir := c.runDir(runID)
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return "", fmt.Errorf("docker: a macOS VM run directory is already at %s", dir)
+		}
+		return "", fmt.Errorf("docker: macOS VM run directory: %w", err)
+	}
+	return dir, nil
 }
 
 // waitMacVMRunning waits for the helper to report the VM running.
@@ -434,8 +473,9 @@ func (d *Driver) bootMacVM(ctx context.Context, v *vmRun, cc *macvm.ControlClien
 // desktop stays off for the run, across a runner restart too. It holds nothing.
 const macDesktopOffFile = "desktop-off"
 
-// errMacDesktopOff is DialDesktop's refusal for such a run.
-var errMacDesktopOff = errors.New("docker: this macOS VM's desktop is off for this run: its guest did not take the desktop password")
+// errMacDesktopOff is DialDesktop's refusal for such a run: the runner's own words for a sandbox with no
+// desktop.
+var errMacDesktopOff = runner.ErrDesktopUnsupported
 
 // macDesktopOff reports a run whose desktop is off.
 func macDesktopOff(dir string) bool {
@@ -505,8 +545,9 @@ func attachFile(h client.HijackedResponse) (*os.File, error) {
 // macVMStatus is Status for a macOS VM: what its helper says. A helper nobody answers for is gone (the
 // Mac restarted, or the helper died), and one that speaks another control protocol is ended cleanly.
 func (d *Driver) macVMStatus(ctx context.Context, v *vmRun) (runner.Status, error) {
-	if _, err := os.Lstat(filepath.Join(v.dir, macLowDiskFile)); err == nil {
-		return runner.Status{State: types.RunStopped, Message: macVMLowDisk}, nil
+	if b, err := os.ReadFile(filepath.Join(v.dir, macLowDiskFile)); err == nil {
+		gb, _ := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
+		return runner.Status{State: types.RunStopped, Message: fmt.Sprintf(macVMLowDisk, gb)}, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -530,18 +571,20 @@ func (d *Driver) macVMStatus(ctx context.Context, v *vmRun) (runner.Status, erro
 	case st.Network == macvm.NetLost:
 		return runner.Status{State: types.RunStopped, Message: macVMLostNetwork}, nil
 	case st.State == macvm.StateStopped || st.State == macvm.StateError:
-		return runner.Status{State: types.RunStopped, Message: cmp.Or(st.Error, "The macOS VM stopped")}, nil
+		return runner.Status{State: types.RunStopped, Message: st.Error}, nil
 	}
 	return runner.Status{State: types.RunRunning}, nil
 }
 
-// macLowDiskFile, in a run directory, marks a run the runner's low-disk check ended. It holds nothing.
+// macLowDiskFile, in a run directory, marks a run the runner's low-disk check ended. It holds the free
+// GB the check read.
 const macLowDiskFile = "ended-low-disk"
 
 // EndNewestMacVM ends this runner's newest running macOS VM, for wardyn-runnerd's free-space check: the
 // helper stops the VM hard, the run reports macVMLowDisk, and its teardown deletes it as any other. It
-// answers the run's id, "" when no macOS VM of this runner runs.
-func (d *Driver) EndNewestMacVM(ctx context.Context) (string, error) {
+// answers the run's id, "" when no macOS VM of this runner runs. freeBytes is the free space the check
+// read, which the run's end reports.
+func (d *Driver) EndNewestMacVM(ctx context.Context, freeBytes int64) (string, error) {
 	c := d.macVMConfig()
 	if c == nil {
 		return "", nil
@@ -551,20 +594,26 @@ func (d *Driver) EndNewestMacVM(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("docker: the macOS VM ledger: %w", err)
 	}
 	var newest *admission.Entry
+	var runID uuid.UUID
 	for i, e := range counted {
-		if e.RunnerID == c.RunnerID && e.Kind == admission.KindRun && !c.vmGone(e) && (newest == nil || e.Created.After(newest.Created)) {
-			newest = &counted[i]
+		if e.RunnerID != c.RunnerID || e.Kind != admission.KindRun || c.vmGone(e) || newest != nil && !e.Created.After(newest.Created) {
+			continue
 		}
+		id, err := uuid.Parse(e.RunID)
+		if err != nil {
+			continue
+		}
+		// A reserved entry whose create has not written its run directory yet has no VM to end.
+		if _, err := readMacRun(c.runDir(id), id); err != nil {
+			continue
+		}
+		newest, runID = &counted[i], id
 	}
 	if newest == nil {
 		return "", nil
 	}
-	runID, err := uuid.Parse(newest.RunID)
-	if err != nil {
-		return "", fmt.Errorf("docker: macOS VM ledger entry %s names no run", newest.ID)
-	}
 	dir := c.runDir(runID)
-	if err := os.WriteFile(filepath.Join(dir, macLowDiskFile), nil, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, macLowDiskFile), []byte(strconv.FormatInt(max(freeBytes, 0)>>30, 10)), 0o600); err != nil {
 		return runID.String(), fmt.Errorf("docker: macOS VM run directory: %w", err)
 	}
 	cc, err := macvm.DialControl(ctx, filepath.Join(dir, macvm.ControlSock))
@@ -582,16 +631,16 @@ func (d *Driver) EndNewestMacVM(ctx context.Context) (string, error) {
 // macVMGoneReason says why a helper is gone: a ledger entry from an earlier boot means the Mac restarted.
 func (d *Driver) macVMGoneReason(v *vmRun) string {
 	c := d.macVMConfig()
-	cfg, err := macvm.ReadRunConfig(v.dir)
+	cfg, err := readMacRun(v.dir, v.runID)
 	if c == nil || err != nil {
-		return macVMHelperGone
+		return ""
 	}
 	if e, ok := c.entry(cfg.LedgerEntry); ok {
 		if boot, err := c.Host.BootTime(); err == nil && e.BootTime != boot {
 			return macVMRestarted
 		}
 	}
-	return macVMHelperGone
+	return ""
 }
 
 // entry is one of this runner's ledger entries, counted or held as a disk debt.
@@ -635,7 +684,7 @@ func (c *MacVMConfig) alive(pid int, start int64) bool {
 // endMacVMHelper signals the run's helper, found by the pid and start time its ledger entry holds.
 func (d *Driver) endMacVMHelper(v *vmRun, sig syscall.Signal) {
 	c := d.macVMConfig()
-	cfg, err := macvm.ReadRunConfig(v.dir)
+	cfg, err := readMacRun(v.dir, v.runID)
 	if c == nil || err != nil {
 		return
 	}
@@ -649,7 +698,7 @@ func (d *Driver) endMacVMHelper(v *vmRun, sig syscall.Signal) {
 // macVMStop is the macOS VM's part of a stop or a lease end: the VM is stopped (gracefully first when
 // asked) and destroyed, since a macOS VM keeps no disk past its run.
 func (d *Driver) macVMStop(ctx context.Context, v *vmRun, graceful bool) {
-	cfg, err := macvm.ReadRunConfig(v.dir)
+	cfg, err := readMacRun(v.dir, v.runID)
 	if err != nil {
 		return // already destroyed
 	}
@@ -658,9 +707,10 @@ func (d *Driver) macVMStop(ctx context.Context, v *vmRun, graceful bool) {
 
 // destroyMacVM ends a macOS VM in the design's teardown order: the helper stops the VM (asking the guest
 // first when graceful, then hard), the helper exits (or is killed), the run directory is deleted, and only
-// then is the ledger entry released, by the helper's stop report or, without one, by the ledger's own
-// check that no VM process of this user can still be it. A step that fails leaves the entry held, and
-// the next orphan sweep retries it.
+// then is the ledger entry released, by the helper's stop report, or with no helper ever having claimed
+// it (the helper claims before it builds a VM, and a claim after the release finds no entry), or else by
+// the ledger's own check that no VM process of this user can still be it. A step that fails leaves the
+// entry held, and the next orphan sweep retries it.
 func (d *Driver) destroyMacVM(ctx context.Context, v *vmRun, entryID string, graceful bool) {
 	c := d.macVMConfig()
 	if c == nil {
@@ -690,7 +740,7 @@ func (d *Driver) destroyMacVM(ctx context.Context, v *vmRun, entryID string, gra
 		return
 	}
 	var err error
-	if stopped {
+	if e, ok := c.entry(entryID); stopped || ok && e.HelperPID == 0 {
 		err = c.Ledger.Release(entryID, admission.Destroyed{Stopped: true, RunDir: v.dir})
 	} else {
 		err = c.Ledger.ReclaimOwn(entryID, v.dir)
@@ -721,11 +771,13 @@ func (d *Driver) teardownMacVM(ctx context.Context, runID uuid.UUID) bool {
 		return false
 	}
 	dir := c.runDir(runID)
-	cfg, err := macvm.ReadRunConfig(dir)
-	if err != nil || cfg.RunID != runID.String() {
+	cfg, err := readMacRun(dir, runID)
+	if err != nil {
 		return false
 	}
-	d.destroyMacVM(ctx, newMacVMRun(runID, dir), cfg.LedgerEntry, false)
+	v := newMacVMRun(runID, dir)
+	defer func() { v.stop(); v.agent.Close() }()
+	d.destroyMacVM(ctx, v, cfg.LedgerEntry, false)
 	return true
 }
 

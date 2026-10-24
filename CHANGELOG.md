@@ -22,9 +22,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
-- macOS VM sandboxes on an Apple silicon Mac's runner, off unless the Mac's operator turns them on (`wardyn-runnerd
-  setup --macos-vm on`, `WARDYN_RUNNER_MACOS_VM=1` or the managed preference `MacOSVM`). `wardyn-runnerd macos-vm
-  prepare`, `status` and `remove` build, show and delete the Mac's macOS base. The runner offers as many VMs as the
+- macOS virtual machines (preview, off by default). A Mac on macOS 27 or later can run up to two macOS VM sandboxes,
+  installed on that Mac from Apple's own restore image. Wardyn does not ship macOS. Turn it on with `WARDYN_MACOS_VMS`
+  in the organisation and, on the Mac, `WARDYN_RUNNER_MACOS_VM=1`, the managed preference `MacOSVM` or
+  `wardyn-runnerd setup --macos-vm on`. `wardyn-runnerd macos-vm prepare`, `status` (`--json` for one JSON object) and
+  `remove` build, show and delete the Mac's macOS base; `prepare --new-image` builds a new one from Apple's newest
+  restore image. The runner offers macOS VMs only when its helper's `wardyn-macvm probe` passes, offers as many as the
   Mac's shared ledger and memory leave room for, and ends its newest one when the disk drops below 5 GiB free.
 
 ### Fixed

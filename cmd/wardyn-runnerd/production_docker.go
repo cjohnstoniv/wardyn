@@ -613,18 +613,7 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		},
 	}
 	run := func(ctx context.Context) error {
-		if m := extra.macOSVM; m != nil {
-			if m.endNewest != nil {
-				go m.watchDisk(ctx, macOSVMDiskEvery, func() (int64, error) { return m.host.FreeDiskBytes(m.layout.Root) }, m.endNewest)
-			}
-			go m.run(ctx, func() {
-				if peer := online.Load(); peer != nil {
-					if err := sendCaps(ctx, peer, false, true); err != nil {
-						slog.WarnContext(ctx, "runner caps after a macOS VM change failed", "error", err)
-					}
-				}
-			})
-		}
+		extra.macOSVM.start(ctx, func() { resendCaps(ctx, online.Load(), sendCaps, "runner caps after a macOS VM change failed") })
 		if w := extra.report.relay; w != nil {
 			go w.run(ctx, func() {
 				if peer := online.Load(); peer != nil {
@@ -910,9 +899,22 @@ func (d *dockerSink) extras(sub *docker.Driver, ev *evidenceForwarder) runtimeEx
 	}
 }
 
+// resendCaps sends the caps again to peer, when online, and logs failed when that fails.
+func resendCaps(ctx context.Context, peer *runnerwire.Peer, send func(context.Context, *runnerwire.Peer, bool, bool) error, failed string) {
+	if peer == nil {
+		return
+	}
+	if err := send(ctx, peer, false, true); err != nil {
+		slog.WarnContext(ctx, failed, "error", err)
+	}
+}
+
 // enableMacOSVM turns macOS VM sandboxes on when the operator asked for them on an Apple silicon Mac,
-// and returns the handle that builds the caps' macos_vm. Off by default. A Mac whose ledger or helper is
-// missing offers none and says why in its caps; container runs are untouched either way.
+// and returns the handle that builds the caps' macos_vm. Off by default. A Mac whose ledger is missing or
+// damaged offers none and says why in its caps; one with no helper beside wardyn-runnerd, or whose
+// helper's probe does not pass, offers none and says why in its log. Container runs are untouched
+// either way. The runner does not know its per-run memory here (the organisation keeps the limits), so
+// the offer sizes each guest at the base's minimum until it does.
 func enableMacOSVM(ctx context.Context, sub *docker.Driver, runnerID string, on bool) *macOSVMs {
 	if !on {
 		return nil
@@ -932,22 +934,30 @@ func enableMacOSVM(ctx context.Context, sub *docker.Driver, runnerID string, on 
 	}
 	m := openMacOSVMs(macOSVMSetup{ledgerDir: admission.DefaultDir, root: root, runnerID: runnerID, version: version.String(), uid: os.Getuid(),
 		dockerMemory: uint64(max(measured.MemoryMiB, 0)) << 20, host: admission.SystemHost(), owner: fileOwner})
-	helper, err := macVMHelperPath()
+	m.helper, err = macVMHelperPath()
 	if err == nil {
-		_, err = os.Stat(helper)
+		_, err = os.Stat(m.helper)
 	}
 	if m.ledger != nil && err != nil {
 		slog.WarnContext(ctx, "macOS VM sandboxes are off on this runner: no helper beside wardyn-runnerd", "error", err.Error())
-		m.ledger, m.refusal = nil, macOSVMNoHelper
+		m.ledger, m.why = nil, macOSVMNoHelper
 	}
+	m.gate(ctx)
 	if m.ledger != nil {
-		cfg := &docker.MacVMConfig{Layout: m.layout, Helper: helper, Identity: macvm.IdentityFresh,
+		cfg := &docker.MacVMConfig{Layout: m.layout, Helper: m.helper, Identity: macOSVMIdentity,
 			Ledger: m.ledger, Host: m.host, RunnerID: runnerID, HostOS: macHostOS(), Changed: m.changed}
 		if err := sub.EnableMacVM(cfg); err != nil {
 			slog.WarnContext(ctx, "macOS VM sandboxes are off on this runner", "reason", err.Error())
 			m.ledger, m.refusal = nil, macOSVMLedgerDamaged
 		} else {
 			m.reclaim, m.endNewest = sub.ReclaimMacVMs, sub.EndNewestMacVM
+			m.toolsUpdate = func(man macvm.Manifest) {
+				go func() {
+					if err := m.startToolsUpdate(context.WithoutCancel(ctx), man); err != nil {
+						slog.WarnContext(ctx, "macOS VM base: the tools update did not start", "error", err.Error())
+					}
+				}()
+			}
 			slog.InfoContext(ctx, "macOS VM sandboxes are on", "dir", root, "identity", string(cfg.Identity))
 		}
 	}
