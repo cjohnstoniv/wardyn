@@ -11,19 +11,23 @@
 #   /Users/Shared/Wardyn                        root:wheel 0755
 #   /Users/Shared/Wardyn/admission.lock         root:wheel 0644
 #   /Users/Shared/Wardyn/macos-vm-admission/    root:wheel 1777 (sticky, like /tmp): the entries live here
-# This script is the only thing that creates any of them. A runner that made the lock would own it and
+# The installer is the only thing that creates any of them. A runner that made the lock would own it and
 # could delete it, and a replaced inode ends mutual exclusion, so a runner that finds one missing or
 # wrong offers no macOS VMs.
 #
 # /Users/Shared is world-writable and sticky, and a login can plant a link, a file or a directory there at
 # any moment, during this script too. So the base is made with mkdir(2), which never follows a link and fails
-# on anything already there. Anything found there must already be exactly the base: one lstat snapshot of
-# its type, owner and mode, compared whole, since separate lookups leave a gap a login can switch the object
-# in. Anything else goes into a fresh root-only quarantine directory (mktemp), and mkdir is tried again,
-# three times at most; then the script stops and macOS VMs stay off. Only an object this run's mkdir made
-# gets its owner and mode set; nothing found already there is ever chowned or chmodded. Once the base
-# verifies, the sticky bit stops any other login renaming or replacing it, and its 0755 mode stops them
-# writing in it, so inside it a child that is not exact is removed and made again.
+# on anything already there. Anything found there is judged on one lstat snapshot of its type, owner and
+# mode, compared whole, since separate lookups leave a gap a login can switch the object in. A root-owned
+# directory nobody else may write is kept for the helper below; anything else goes into a fresh root-only
+# quarantine directory (mktemp), and mkdir is tried again, three times at most; then the script stops and
+# macOS VMs stay off. Only a base this run's mkdir made gets its owner and mode set here.
+#
+# The rest is `wardyn-macvm ledger-setup`, run from the payload as root (internal/macvm/admission, Setup). It
+# walks to the base from / as the helper does, takes the existing lock's flock so no helper is inside an
+# admission, and under it makes the lock and the entries directory exact and moves every entry across; a
+# base that is not exact it moves aside and makes again. It never chmods what it found. sh has no flock,
+# and one implementation of the lock lives in Go.
 #
 # The lock sits outside the world-writable entries directory so no login can unlink it; the helper walks to
 # it from / and refuses anything else (internal/macvm/admission).
@@ -31,12 +35,13 @@
 # WARDYN_PKG_ROOT is a path prefix for the tests (scripts/test-pkg-postinstall.sh); the installer never sets it.
 set -eu
 R="${WARDYN_PKG_ROOT:-}"
-DIR755="Directory 0:0 0755"
-DIR1777="Directory 0:0 1777"
-FILE644="Regular File 0:0 0644"
 
 # snap <path>: type, uid:gid and mode of the path itself (BSD stat never follows a link), in one lstat.
 snap() { stat -f '%HT %u:%g %Mp%Lp' "$1" 2>/dev/null || true; }
+
+# kept <snapshot>: a root-owned directory no group or other may write. ledger-setup checks it again and
+# rebuilds it if it is not exactly root:wheel 0755.
+kept() { case "$1" in "Directory 0:"*" "[0-7][0-7][0145][0145]) return 0 ;; esac; return 1; }
 
 # quarantine <path>: move whatever is at the path into a new root-only directory with a random name. The
 # trailing slash names that directory, which no other login can reach, so a planted name is never followed.
@@ -45,33 +50,19 @@ quarantine() {
   mv "$1" "$q/" 2>/dev/null || rmdir "$q"
 }
 
-# owned <path> <mode>: give an object this run just made its owner and mode.
-owned() { chown -h root:wheel "$1" && chmod -h "$2" "$1"; }
-
 # make_ledger runs as the left side of ||, where sh ignores set -e, so every step checks its own status.
 make_ledger() {
   base="$R/Users/Shared/Wardyn"
-  ents="$base/macos-vm-admission"
-  lock="$base/admission.lock"
+  [ "$(snap "$R/Users/Shared")" = "Directory 0:0 1777" ] || { echo "postinstall: $R/Users/Shared is not root:wheel 1777" >&2; return 1; }
   n=0
   made=0
-  until { mkdir -m 0755 "$base" 2>/dev/null && made=1; } || [ "$(snap "$base")" = "$DIR755" ]; do
+  until { mkdir -m 0755 "$base" 2>/dev/null && made=1; } || kept "$(snap "$base")"; do
     n=$((n + 1))
-    [ "$n" -lt 3 ] || { echo "postinstall: $base is not a root:wheel 0755 directory after $n attempts" >&2; return 1; }
+    [ "$n" -lt 3 ] || { echo "postinstall: $base is not a root-owned directory after $n attempts" >&2; return 1; }
     quarantine "$base" || return 1
   done
-  [ "$made" = 0 ] || owned "$base" 0755 || return 1
-  [ "$(snap "$base")" = "$DIR755" ] || { echo "postinstall: $base did not verify" >&2; return 1; }
-  # Only root writes in the base. An upgrade keeps exact children, and the lock's inode with it: a replaced
-  # lock would end mutual exclusion with a live helper. Anything else is removed and made again.
-  if [ "$(snap "$ents")" != "$DIR1777" ]; then
-    rm -rf "$ents" && mkdir -m 1777 "$ents" && owned "$ents" 1777 || return 1
-  fi
-  if [ "$(snap "$lock")" != "$FILE644" ]; then
-    rm -rf "$lock" && (set -C; : >"$lock") && owned "$lock" 0644 || return 1
-  fi
-  [ "$(snap "$base")" = "$DIR755" ] && [ "$(snap "$ents")" = "$DIR1777" ] && [ "$(snap "$lock")" = "$FILE644" ] \
-    || { echo "postinstall: the ledger under $base did not verify" >&2; return 1; }
+  if [ "$made" = 1 ]; then chown -h root:wheel "$base" && chmod -h 0755 "$base" || return 1; fi
+  "$R/usr/local/wardyn/bin/wardyn-macvm" ledger-setup "$base"
 }
 
 mkdir -p "$R/usr/local/bin"

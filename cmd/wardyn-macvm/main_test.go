@@ -31,12 +31,12 @@ func (host) Processes() ([]admission.Proc, error) {
 	return []admission.Proc{{PID: os.Getpid(), UID: os.Getuid(), Start: 7, Name: "wardyn-macvm"}}, nil
 }
 
-// rootFstat reports every file as root's, as the runner package installs
+// rootFstat reports every file as root:wheel's, as the runner package installs
 // the ledger.
 func rootFstat(fd int, _ string) (unix.Stat_t, error) {
 	var st unix.Stat_t
 	err := unix.Fstat(fd, &st)
-	st.Uid = 0
+	st.Uid, st.Gid = 0, 0
 	return st, err
 }
 
@@ -212,5 +212,25 @@ func TestProbe(t *testing.T) {
 	d.firstBoot = &macvmtest.FirstBoot{}
 	if code := run(context.Background(), []string{"probe"}, d); vzLinked == (code == 1 && strings.Contains(out.String(), `"vz": false`)) {
 		t.Fatalf("probe on this build: exit %d %s", code, out.String())
+	}
+}
+
+// ledger-setup runs only as root, with one base path.
+func TestLedgerSetupRefusesNonRoot(t *testing.T) {
+	d, _, errb := testDeps(&macvmtest.Engine{})
+	base := filepath.Join(t.TempDir(), "Wardyn")
+	if err := os.Mkdir(base, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	d.getuid = func() int { return 501 }
+	if rc := run(context.Background(), []string{"ledger-setup", base}, d); rc != 1 || !strings.Contains(errb.String(), "must run as root") {
+		t.Fatalf("non-root ledger-setup: rc %d, %q", rc, errb.String())
+	}
+	if des, _ := os.ReadDir(base); len(des) != 0 {
+		t.Fatalf("a refused ledger-setup changed %s: %v", base, des)
+	}
+	d.getuid = func() int { return 0 }
+	if rc := run(context.Background(), []string{"ledger-setup"}, d); rc != 2 {
+		t.Fatalf("ledger-setup with no base: rc %d", rc)
 	}
 }

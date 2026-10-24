@@ -80,7 +80,7 @@ func (l *Ledger) walkDir(dir string) (int, error) {
 
 // openLock opens admission.lock through walkDir and checks it and its
 // directory by fstat: the directory not group- or other-writable at all, the
-// lock a root-owned regular file that is not group- or other-writable.
+// lock exactly what the installer makes (Setup): a root:wheel 0644 regular file.
 func (l *Ledger) openLock() (*os.File, error) {
 	path := l.lockPath()
 	dfd, err := l.walkDir(filepath.Dir(path))
@@ -101,12 +101,12 @@ func (l *Ledger) openLock() (*os.File, error) {
 	if err == nil {
 		mode := uint32(st.Mode)
 		switch {
-		case st.Uid != 0:
-			err = notInstalled("%s is not owned by root", path)
+		case st.Uid != 0 || st.Gid != 0:
+			err = notInstalled("%s is not owned by root:wheel", path)
 		case mode&unix.S_IFMT != unix.S_IFREG:
 			err = notInstalled("%s is not a regular file", path)
-		case mode&groupOtherWrite != 0:
-			err = notInstalled("%s is writable by other users", path)
+		case mode&0o7777 != 0o644:
+			err = notInstalled("%s is not mode 0644", path)
 		}
 	}
 	if err != nil {
@@ -145,19 +145,8 @@ func (l *Ledger) withLock(fn func() error) error {
 		return err
 	}
 	defer f.Close()
-	deadline := time.Now().Add(l.c.LockWait)
-	for {
-		err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB)
-		if err == nil {
-			break
-		}
-		if !errors.Is(err, unix.EWOULDBLOCK) {
-			return err
-		}
-		if time.Now().After(deadline) {
-			return ErrBusy
-		}
-		time.Sleep(20 * time.Millisecond)
+	if err := flockWait(f, l.c.LockWait); err != nil {
+		return err
 	}
 	defer unix.Flock(int(f.Fd()), unix.LOCK_UN)
 	if l.c.afterFlock != nil {
@@ -173,4 +162,22 @@ func (l *Ledger) withLock(fn func() error) error {
 		return notInstalled("%s changed while this runner locked it", l.lockPath())
 	}
 	return fn()
+}
+
+// flockWait takes f's exclusive flock, waiting wait at most (ErrBusy).
+func flockWait(f *os.File, wait time.Duration) error {
+	deadline := time.Now().Add(wait)
+	for {
+		err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, unix.EWOULDBLOCK) {
+			return err
+		}
+		if time.Now().After(deadline) {
+			return ErrBusy
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }

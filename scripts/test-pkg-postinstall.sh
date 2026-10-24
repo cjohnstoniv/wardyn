@@ -3,12 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Checks the runner package's postinstall ledger setup (deploy/runner/macos/pkg-scripts/postinstall) against
-# a temp root (WARDYN_PKG_ROOT), without root or macOS. What it pins: the three ledger objects are made from
-# nothing; a pre-planted user-owned /Users/Shared/Wardyn is moved aside and replaced; a pre-planted lock is
-# replaced; root-owned objects that are not exactly the layout are moved aside or replaced, never chmodded;
-# a symlinked Wardyn dir, entries dir or lock is never followed; a login racing the script with links and
-# directories never gets a victim's mode or owner changed; a predicted quarantine name is never used; and a
-# directory switched for a hardlink to a root-owned file between two lookups never gets that file chmodded.
+# a temp root (WARDYN_PKG_ROOT), without root or macOS: the shell's base steps. What it pins: the base is made
+# from nothing and handed to `wardyn-macvm ledger-setup`; a pre-planted user-owned or writable Wardyn is moved
+# aside and replaced; a symlinked one is never followed; a root-owned base a helper may hold is left to
+# ledger-setup, unmoved and unchmodded; /Users/Shared must be root:wheel 1777; a login racing the script with
+# links and directories never gets a victim's mode or owner changed; a predicted quarantine name is never
+# used; and a directory switched for a hardlink to a root-owned file between two lookups never gets that
+# file chmodded. The lock and entries directory are ledger-setup's, tested in Go.
 #
 # What it cannot check unprivileged: real root:wheel ownership. Stub stat, chown, mkdir, mktemp and install
 # stand in, and keep a shadow table of the inodes the script made or chowned (root-owned; anything else
@@ -55,32 +56,35 @@ stub install 'args=(); dir=0; while [ $# -gt 0 ]; do case "$1" in -o|-g) shift 2
 if [ "$dir" = 1 ]; then /usr/bin/install -d "${args[@]}"; else /usr/bin/install "${args[@]}"; fi; mark "$(readlink -f "${args[-1]}")"'
 stub launchctl 'exit 0'
 
-# fresh <name>: a new temp root that carries the helper binary, so the package would install the ledger.
-fresh() { R="${WORK}/$1"; rm -rf "$R"; mkdir -p "$R/Users/Shared" "$R/usr/local/wardyn/bin"; chmod 1777 "$R/Users/Shared"; : >"$R/usr/local/wardyn/bin/wardyn-macvm"; find "$OWN" -type f -delete; }
+# fresh <name>: a new temp root that carries the helper, so the package would install the ledger. The helper
+# is a stand-in that records its arguments: what ledger-setup does inside the base is tested in Go
+# (internal/macvm/admission/setup_test.go); this harness tests the shell's base steps.
+fresh() {
+  R="${WORK}/$1"; rm -rf "$R"; find "$OWN" -type f -delete
+  mkdir -p "$R/Users/Shared" "$R/usr/local/wardyn/bin"; chmod 1777 "$R/Users/Shared"; mark "$R/Users/Shared"
+  printf '#!/bin/sh\nr="${0%%/usr/local/wardyn/bin/wardyn-macvm}"\necho "$*" >>"$r/ledger-setup.args"\n[ ! -e "$r/helper.rc" ] || exit "$(cat "$r/helper.rc")"\n' \
+    >"$R/usr/local/wardyn/bin/wardyn-macvm"
+  chmod +x "$R/usr/local/wardyn/bin/wardyn-macvm"
+}
 post() { env -i PATH="$T:/usr/bin:/bin" OWN="$OWN" WARDYN_PKG_ROOT="$R" SWAP_PATH="${SWAP_PATH:-}" SWAP_TO="${SWAP_TO:-}" sh "$POST" >"${WORK}/out" 2>&1; }
 run() { post || { cat "${WORK}/out" >&2; fail "postinstall failed ($1)"; }; }
 ino() { /usr/bin/stat -c %i "$1"; }
 root_owned() { [ -e "$OWN/$(ino "$1")" ]; }
 mark() { : >"$OWN/$(ino "$1")"; }
 mode() { /usr/bin/stat -c %a "$1"; }
-# user_owns <path>: the shadow table forgets the path, so the stub stat reads it as a login's file again.
-user_owns() { rm -f "$OWN/$(ino "$1")"; }
 B() { echo "$R/Users/Shared/Wardyn"; }
-check_ledger() { # check_ledger <what>
+# check_ledger <what> [mode]: Wardyn is a root-owned directory (0755, or the mode a kept base had), and
+# ledger-setup ran on it, last.
+check_ledger() {
   local b; b="$(B)"
-  [ -d "$b" ] && [ ! -L "$b" ] && root_owned "$b" && [ "$(mode "$b")" = 755 ] || fail "$1: Wardyn is not a root-owned 0755 directory"
-  [ -d "$b/macos-vm-admission" ] && [ ! -L "$b/macos-vm-admission" ] && root_owned "$b/macos-vm-admission" && [ "$(mode "$b/macos-vm-admission")" = 1777 ] \
-    || fail "$1: the entries directory is not a root-owned 1777 directory"
-  [ -f "$b/admission.lock" ] && [ ! -L "$b/admission.lock" ] && root_owned "$b/admission.lock" && [ "$(mode "$b/admission.lock")" = 644 ] \
-    || fail "$1: admission.lock is not a root-owned regular 0644 file"
-  [ ! -e "$b/macos-vm-admission/admission.lock" ] || fail "$1: a second lock sits in the entries directory"
+  [ -d "$b" ] && [ ! -L "$b" ] && root_owned "$b" && [ "$(mode "$b")" = "${2:-755}" ] || fail "$1: Wardyn is not a root-owned ${2:-755} directory"
+  [ "$(tail -1 "$R/ledger-setup.args" 2>/dev/null)" = "ledger-setup $b" ] || fail "$1: ledger-setup did not run on $b"
 }
 
-# 1. From nothing, and again over a sound ledger: the lock keeps its inode.
+# 1. From nothing, and again over a sound base: the base keeps its inode and ledger-setup runs again.
 fresh nothing; run nothing; check_ledger "from nothing"
-echo held >"$(B)/admission.lock"; ino="$(/usr/bin/stat -c %i "$(B)/admission.lock")"
-run again; check_ledger "an upgrade"
-[ "$(/usr/bin/stat -c %i "$(B)/admission.lock")" = "$ino" ] && [ "$(cat "$(B)/admission.lock")" = held ] || fail "an upgrade replaced a sound lock"
+ino="$(ino "$(B)")"; run again; check_ledger "an upgrade"
+[ "$(ino "$(B)")" = "$ino" ] && [ "$(wc -l <"$R/ledger-setup.args")" = 2 ] || fail "an upgrade replaced a sound base"
 
 # 2. A pre-planted user-owned Wardyn directory (with a lock of its own and a world-writable mode).
 fresh planted-dir; mkdir -p "$(B)/macos-vm-admission"; : >"$(B)/admission.lock"; : >"$(B)/evil"; chmod 777 "$(B)"
@@ -90,42 +94,32 @@ q="$(ls -d "$R"/Users/Shared/.wardyn-quarantine.* 2>/dev/null | head -1 || true)
 [ -n "$q" ] && [ -e "$q/Wardyn/evil" ] || fail "the planted directory was not moved aside"
 [ "$(mode "$q")" = 700 ] && root_owned "$q" || fail "the quarantine is not root-only"
 
-# 3. A pre-planted lock: user-owned, and root-owned but writable.
-fresh planted-lock; run first; echo planted >"$(B)/admission.lock.new"; rm "$(B)/admission.lock"; mv "$(B)/admission.lock.new" "$(B)/admission.lock"; user_owns "$(B)/admission.lock"
-run planted-lock; check_ledger "a planted lock"
-[ ! -s "$(B)/admission.lock" ] || fail "the planted lock's content survived"
-# The inode may be reused once freed, so the planted content, not the inode number, shows a replacement.
-chmod 666 "$(B)/admission.lock"; echo planted >"$(B)/admission.lock"
-run writable-lock; check_ledger "a writable lock"
-[ ! -s "$(B)/admission.lock" ] || fail "a group/other-writable lock was kept"
+# 3. A root-owned directory others may write, sticky or not, is moved aside too.
+fresh writable-base; mkdir "$(B)"; mark "$(B)"; chmod 1777 "$(B)"; : >"$(B)/evil"
+run writable-base; check_ledger "a root-owned 1777 base"; [ ! -e "$(B)/evil" ] || fail "a root-owned writable base was kept"
 
-# 4. Symlinks are never followed.
+# 4. A symlinked Wardyn directory is never followed.
 fresh link-dir; mkdir "$R/elsewhere"; echo keep >"$R/elsewhere/f"; chmod 700 "$R/elsewhere"; ln -s "$R/elsewhere" "$(B)"
 mark "$(B)" # even a link that reads as root-owned is replaced, not followed
 run link-dir; check_ledger "a symlinked Wardyn directory"
 [ "$(mode "$R/elsewhere")" = 700 ] && ! root_owned "$R/elsewhere" && [ "$(cat "$R/elsewhere/f")" = keep ] && [ -z "$(ls "$R/elsewhere" | grep -v '^f$')" ] \
   || fail "the symlink's target was changed"
-fresh link-lock; run first; rm "$(B)/admission.lock"; echo keep >"$R/target"; chmod 666 "$R/target"; ln -s "$R/target" "$(B)/admission.lock"; mark "$(B)/admission.lock"; mark "$R/target"
-run link-lock; check_ledger "a symlinked lock"
-[ "$(cat "$R/target")" = keep ] && [ "$(mode "$R/target")" = 666 ] || fail "the lock symlink's target was changed"
-fresh link-ents; run first; rm -rf "$(B)/macos-vm-admission"; mkdir "$R/ents-target"; ln -s "$R/ents-target" "$(B)/macos-vm-admission"
-run link-ents; check_ledger "a symlinked entries directory"
-[ -z "$(ls -A "$R/ents-target")" ] || fail "the entries symlink's target was written to"
 
-# 5. Nothing found existing is chmodded. A root-owned base that is not exact is moved aside and made again;
-# inside a sound base, children that are not exact are replaced.
-fresh not-exact-base; run first; chmod 700 "$(B)"; : >"$(B)/marker"
-run not-exact-base; check_ledger "a root-owned 0700 base"
-[ ! -e "$(B)/marker" ] && [ -n "$(ls -d "$R"/Users/Shared/.wardyn-quarantine.*/Wardyn/marker 2>/dev/null || true)" ] \
-  || fail "a root-owned base that was not exact was kept"
-fresh not-exact-children; run first; chmod 755 "$(B)/macos-vm-admission"; : >"$(B)/macos-vm-admission/e-1.json"
-chmod 600 "$(B)/admission.lock"; echo held >"$(B)/admission.lock"
-run not-exact-children; check_ledger "children that are not exact"
-[ ! -e "$(B)/macos-vm-admission/e-1.json" ] && [ ! -s "$(B)/admission.lock" ] || fail "a child that was not exact was kept"
+# 5. A root-owned base no other login may write but not exactly 0755 is a base a helper may be using: the
+# shell neither moves nor chmods it, and leaves it to ledger-setup, which rebuilds it under the old lock.
+fresh kept-base; run first; chmod 711 "$(B)"; ino="$(ino "$(B)")"
+run kept-base; check_ledger "a root-owned 0711 base" 711; [ "$(ino "$(B)")" = "$ino" ] || fail "the shell moved a base a helper may hold"
 
 # 6. A package without the helper makes no ledger.
 fresh nohelper; rm "$R/usr/local/wardyn/bin/wardyn-macvm"; run nohelper
 [ ! -e "$(B)" ] || fail "a package without the helper made the ledger"
+
+# 6b. ledger-setup failing, or /Users/Shared not root:wheel 1777, fails closed with the one message.
+fresh helper-fails; echo 1 >"$R/helper.rc"
+! post || fail "postinstall succeeded when ledger-setup failed"; grep -q 'macOS VMs stay off' "${WORK}/out" || fail "no fail-closed message"
+fresh shared-not-sticky; chmod 777 "$R/Users/Shared"
+! post || fail "postinstall succeeded over a non-sticky /Users/Shared"
+[ ! -e "$(B)" ] && [ ! -e "$R/ledger-setup.args" ] || fail "postinstall touched a non-sticky /Users/Shared"
 
 # victim <name>: a login's directory and file the script must never change; prints their state.
 victim_state() { printf '%s %s %s %s\n' "$(mode "$R/victim")" "$(root_owned "$R/victim" && echo root || echo user)" \

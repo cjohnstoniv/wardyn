@@ -1791,8 +1791,9 @@ jobs:
           echo "probe exit status: $rc"
           [ "$rc" -le 1 ]
           jq -e '.vz == true and (.host | type == "string")' "$RUNNER_TEMP/probe.json"
-      # The real postinstall under the runner's passwordless sudo, against a temp root, read back with BSD stat.
-      # %Mp%Lp, not %Lp alone: %Lp drops the sticky bit.
+      # The real postinstall, and the signed helper's ledger-setup it runs, under the runner's passwordless
+      # sudo against a temp root, read back with BSD stat. %Mp%Lp, not %Lp alone: %Lp drops the sticky bit.
+      # The roots sit under /private/tmp, so every directory the helper walks from / is root-owned.
       - name: Package postinstall makes the admission ledger (real root, BSD tools)
         run: |
           set -euo pipefail
@@ -1804,29 +1805,39 @@ jobs:
             [ "$(stat -f '%Su:%Sg %Mp%Lp %HT' "$b/macos-vm-admission")" = 'root:wheel 1777 Directory' ]
           }
           fresh() {
-            r="$RUNNER_TEMP/$1"
-            sudo rm -rf "$r"
-            mkdir -p "$r/Users/Shared" "$r/usr/local/wardyn/bin"
-            sudo chown root:wheel "$r/Users/Shared"
+            r="$(sudo mktemp -d /private/tmp/wardyn-pkgroot.XXXXXX)"
+            sudo chmod 0755 "$r"
+            sudo mkdir -p "$r/Users/Shared" "$r/usr/local/wardyn/bin"
             sudo chmod 1777 "$r/Users/Shared"
-            : >"$r/usr/local/wardyn/bin/wardyn-macvm"
+            sudo install -m 0755 "$RUNNER_TEMP/wardyn-macvm" "$r/usr/local/wardyn/bin/wardyn-macvm"
           }
-          fresh pkgroot
-          sudo env WARDYN_PKG_ROOT="$RUNNER_TEMP/pkgroot" sh "$post"
-          ledger "$RUNNER_TEMP/pkgroot"
+          fresh
+          sudo env WARDYN_PKG_ROOT="$r" sh "$post"
+          ledger "$r"
+          # A second install changes nothing: the lock keeps its inode.
+          lock="$r/Users/Shared/Wardyn/admission.lock"
+          ino="$(stat -f %i "$lock")"
+          sudo env WARDYN_PKG_ROOT="$r" sh "$post"
+          ledger "$r"
+          [ "$(stat -f %i "$lock")" = "$ino" ]
+          # A 0444 lock (the old helper rule accepted it) is replaced by an exact one.
+          sudo chmod 0444 "$lock"
+          sudo env WARDYN_PKG_ROOT="$r" sh "$post"
+          ledger "$r"
+          [ "$(stat -f %i "$lock")" != "$ino" ]
           # A login's own Wardyn directory, with a link at macos-vm-admission: replaced, and the target untouched.
-          fresh planted
-          b="$RUNNER_TEMP/planted/Users/Shared/Wardyn"
+          fresh
+          b="$r/Users/Shared/Wardyn"
           mkdir -m 0777 "$b" "$RUNNER_TEMP/victim"
           chmod 0700 "$RUNNER_TEMP/victim"
           ln -s "$RUNNER_TEMP/victim" "$b/macos-vm-admission"
           before="$(stat -f '%Su:%Sg %Mp%Lp' "$RUNNER_TEMP/victim")"
-          sudo env WARDYN_PKG_ROOT="$RUNNER_TEMP/planted" sh "$post"
-          ledger "$RUNNER_TEMP/planted"
+          sudo env WARDYN_PKG_ROOT="$r" sh "$post"
+          ledger "$r"
           [ "$(stat -f '%Su:%Sg %Mp%Lp' "$RUNNER_TEMP/victim")" = "$before" ]
           [ -z "$(ls -A "$RUNNER_TEMP/victim")" ]
-          sudo ls -la "$RUNNER_TEMP/planted/Users/Shared"
-          sudo sh -c 'ls -d "$1"/.wardyn-quarantine.*/Wardyn' _ "$RUNNER_TEMP/planted/Users/Shared"
+          sudo ls -la "$r/Users/Shared"
+          sudo sh -c 'ls -d "$1"/.wardyn-quarantine.*/Wardyn' _ "$r/Users/Shared"
       - name: Packaged live suite (it skips, since no VM boots on a hosted Mac)
         run: |
           set -euo pipefail

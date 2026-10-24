@@ -142,6 +142,8 @@ ENT="${SRC}/wardyn-macvm.entitlements"
 echo macvm >"${WORK}/macvm"; EXTRA=(--macvm "${WORK}/macvm")
 build "${WORK}/mv.pkg"
 grep -qx "payload ./usr/local/wardyn/bin/wardyn-macvm" "$STUB_LOG" || fail "the payload lacks the helper"
+# The postinstall runs ledger-setup from that payload path, as root.
+grep -qF '"$R/usr/local/wardyn/bin/wardyn-macvm" ledger-setup "$base"' "${SRC}/pkg-scripts/postinstall" || fail "postinstall does not run ledger-setup from the payload's helper"
 grep -q "^codesign --force --entitlements ${ENT} --sign - .*/usr/local/wardyn/bin/wardyn-macvm\$" "$STUB_LOG" || fail "the helper was not signed ad hoc with its entitlement"
 grep -q 'signed the wardyn-macvm helper ad hoc' "${WORK}/build.out" || fail "the ad hoc helper signing did not log"
 build "${WORK}/mv-full.pkg" APPLE_DEVELOPER_ID_INSTALLER_P12_BASE64="$CERT" APPLE_DEVELOPER_ID_INSTALLER_P12_PASSWORD=pw "APPLE_DEVELOPER_ID_INSTALLER_IDENTITY=Developer ID Installer: Test (TEAM)" \
