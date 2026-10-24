@@ -64,7 +64,8 @@ no_vendored_novnc() {
   if jq -e '((.dependencies // {}) + (.devDependencies // {})) | has("patch-package")' ui/package.json >/dev/null 2>&1; then
     bad+=" ui/package.json depends on patch-package;"
   fi
-  if grep -qE '^patchedDependencies:' ui/pnpm-lock.yaml && grep -A20 -E '^patchedDependencies:' ui/pnpm-lock.yaml | grep -q '@novnc/novnc'; then
+  if grep -qE '^patchedDependencies:' ui/pnpm-lock.yaml \
+    && grep -q '@novnc/novnc' <<<"$(grep -A20 -E '^patchedDependencies:' ui/pnpm-lock.yaml)"; then
     bad+=" ui/pnpm-lock.yaml patches @novnc/novnc;"
   fi
   local copied
