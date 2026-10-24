@@ -181,6 +181,22 @@ func TestRunnerUpgradeRollsBackAnOlderRunnerWithoutOrgCAFile(t *testing.T) {
 	}
 }
 
+// A development runnerd reports build metadata after a "+", which must not hide that it predates the flag;
+// a release candidate of the first release that takes it keeps it.
+func TestTakesOrgCAFileReadsTheReleaseCore(t *testing.T) {
+	for v, want := range map[string]bool{
+		"0.9.8":                 false,
+		"0.9.8+abc123def-dirty": false,
+		"0.10.0":                true,
+		"0.10.0-rc.1":           true,
+		"0.10.0+abc":            true,
+	} {
+		if got := takesOrgCAFile(v); got != want {
+			t.Errorf("takesOrgCAFile(%q) = %v, want %v", v, got, want)
+		}
+	}
+}
+
 func TestRunnerUpgradeAtTheSameVersionIsANoOp(t *testing.T) {
 	r := newInstallRig(t)
 	current := r.fakeRunner("0.10.1", true)
