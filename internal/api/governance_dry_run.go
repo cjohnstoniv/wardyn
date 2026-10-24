@@ -58,8 +58,10 @@ type treeDryRunReport struct {
 	LiveRuns []uuid.UUID        `json:"live_runs"`
 	// Approvers is who could decide the write were it held, the caller left out (approversFor).
 	Approvers []changeApprover `json:"approvers"`
-	// Activates lists the units a legacy membership move may make someone's context (H3).
+	// Activates lists the units a legacy membership move may make someone's context, Vacates the
+	// units it may take someone out of (H3).
 	Activates []unitActivation `json:"activates,omitempty"`
+	Vacates   []unitActivation `json:"vacates,omitempty"`
 }
 
 // treeDryRunPerson is one membership, the context it is (from_unit) and would be (unit), and the knobs
@@ -83,7 +85,7 @@ func (s *Server) treeDryRun(w http.ResponseWriter, r *http.Request, target strin
 	// touched is the units an approver of the write would have to govern (unitChangeScope's rule), from
 	// the states either side of it; none means only a security admin could decide it.
 	var touched func(before, after treeSnapshot) []uuid.UUID
-	var activates []unitActivation
+	var shift legacyShift
 	switch target {
 	case dryRunTargetUnit:
 		var req unitDryRunRequest
@@ -145,7 +147,7 @@ func (s *Server) treeDryRun(w http.ResponseWriter, r *http.Request, target strin
 			return err
 		}
 		touched = func(before, _ treeSnapshot) (units []uuid.UUID) {
-			units, activates = moveTouched(before, req.ID, req.UnitID)
+			units, shift = moveTouched(before, req.ID, req.UnitID)
 			return units
 		}
 	default:
@@ -177,25 +179,25 @@ func (s *Server) treeDryRun(w http.ResponseWriter, r *http.Request, target strin
 	if units := touched(before, after); len(units) > 0 {
 		report.Approvers = s.approversFor(r.Context(), units, false, principalFromRequest(r), oidcEmailFromContext(r.Context()))
 	}
-	report.Activates = activates
+	report.Activates, report.Vacates = shift.activates, shift.vacates
 	writeJSON(w, http.StatusOK, report)
 }
 
 // moveTouched is the units an approver of membership id's move to unit to would have to govern
-// (unitChangeScope's rule: its unit, unit to and the units a legacy row's move may activate) and those
-// activations, from the state before the move; none for a membership that is not there.
-func moveTouched(before treeSnapshot, id, to uuid.UUID) ([]uuid.UUID, []unitActivation) {
+// (unitChangeScope's rule: its unit, unit to and the units a legacy row's move may activate or vacate)
+// and that shift, from the state before the move; none for a membership that is not there.
+func moveTouched(before treeSnapshot, id, to uuid.UUID) ([]uuid.UUID, legacyShift) {
 	i := slices.IndexFunc(before.memberships, func(m types.GovernanceMembership) bool { return m.ID == id })
 	if i < 0 {
-		return nil, nil
+		return nil, legacyShift{}
 	}
 	row := before.memberships[i]
-	activates := legacyMoveActivations(row, to, before.memberships, before.units)
+	shift := legacyMoveShift(row, to, before.memberships, before.units)
 	units := []uuid.UUID{row.UnitID, to}
-	for _, a := range activates {
+	for _, a := range slices.Concat(shift.activates, shift.vacates) {
 		units = append(units, a.UnitID)
 	}
-	return units, activates
+	return units, shift
 }
 
 // strictJSON decodes raw into dst as decodeStrict decodes a body, returning the message it would.

@@ -378,7 +378,7 @@ func unitChangeScope(ch types.GovernanceChange) (units []uuid.UUID, strict, ok b
 			}
 			units = append(units, p.UnitID)
 		}
-		for _, a := range diff.Activates { // a legacy row's delete or move (H3)
+		for _, a := range slices.Concat(diff.Activates, diff.Vacates) { // a legacy row's delete or move (H3)
 			units = append(units, a.UnitID)
 		}
 		return units, false, true

@@ -5,6 +5,8 @@ package api
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -108,13 +110,23 @@ func TestUnitAdminApproverScopeRereadInTx(t *testing.T) {
 	// A cli_access token publishes the role user whatever role its row holds, at the door and in the
 	// re-check alike: its stored security-admin role is no approval after its grant is revoked.
 	cliAccess := func(sub string) string {
+		pub, _, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		now, notTruncated := time.Now().UTC(), false
+		exp := now.Add(time.Hour)
+		email := sub + "@corp.example"
+		sess := store.CLISessionRow{ID: uuid.New(), Identity: store.CLIIdentity{Principal: sub, Email: email, Role: oidc.RoleSecurityAdmin,
+			UserType: types.UserTypeStandard, GroupsTruncated: &notTruncated, RevSeq: 1},
+			IdentityStampedAt: now, Machine: "laptop", Store: types.CLIStoreKeychain, PublicKey: pub, CreatedAt: now, ExpiresAt: now.Add(24 * time.Hour)}
 		raw := apiTokenPrefix + strings.ReplaceAll(uuid.NewString(), "-", "")
-		notTruncated := false
-		if _, err := e.pg.CreateAPIToken(context.Background(), types.APIToken{
-			ID: uuid.New(), Principal: sub, Email: sub + "@corp.example", Role: oidc.RoleSecurityAdmin, UserType: types.UserTypeStandard,
-			Name: "approver", GroupsTruncated: &notTruncated, Kind: types.APITokenKindCLIAccess,
+		if _, err := e.pg.CreateCLISession(context.Background(), sess, "wdc_"+uuid.NewString(), types.APIToken{
+			ID: uuid.New(), Principal: sub, Email: email, Role: oidc.RoleSecurityAdmin, UserType: types.UserTypeStandard,
+			Name: "CLI: laptop", GroupsTruncated: &notTruncated, CreatedAt: now, ExpiresAt: &exp,
+			Kind: types.APITokenKindCLIAccess, CLISessionID: &sess.ID,
 		}, raw); err != nil {
-			t.Fatalf("mint cli_access token: %v", err)
+			t.Fatalf("seed a CLI session with a cli_access token: %v", err)
 		}
 		return raw
 	}
