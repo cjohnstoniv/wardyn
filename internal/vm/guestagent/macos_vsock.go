@@ -43,7 +43,7 @@ func serveVsock(ctx context.Context, dial DialFunc, h http.Handler, wait time.Du
 			sleep(ctx, wait)
 			continue
 		}
-		serveSession(ctx, conn, h, &protocols, nil)
+		_ = serveSession(ctx, conn, h, &protocols, nil)
 		sleep(ctx, wait)
 	}
 	return nil
@@ -60,20 +60,20 @@ func sleep(ctx context.Context, d time.Duration) {
 
 // serveSession waits on conn for the host's hello (the connection is idle until the helper pairs it),
 // answers it, and serves h to that session until it ends. onHello, when set, is called once the hello
-// is answered.
-func serveSession(ctx context.Context, conn net.Conn, h http.Handler, protocols *http.Protocols, onHello func()) {
+// is answered. The error is the hello's read or echo error: nil once the session was served.
+func serveSession(ctx context.Context, conn net.Conn, h http.Handler, protocols *http.Protocols, onHello func()) error {
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
 	rc := newRecordConn(conn)
 	hello, err := readHostHello(rc)
 	if err != nil {
 		_ = conn.Close()
-		return
+		return err
 	}
 	hello[0] = helloVersion // the echo: the host's nonce, this agent's version
 	if _, err := conn.Write(appendRecord([]byte{0}, recHello, hello)); err != nil {
 		_ = conn.Close()
-		return
+		return err
 	}
 	if onHello != nil {
 		onHello()
@@ -85,6 +85,7 @@ func serveSession(ctx context.Context, conn net.Conn, h http.Handler, protocols 
 		_ = srv.Close()
 	}()
 	_ = srv.Serve(l)
+	return nil
 }
 
 // readHostHello reads records until the first hello and returns its body. The records before it are

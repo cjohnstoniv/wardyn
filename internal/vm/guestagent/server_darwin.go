@@ -43,7 +43,7 @@ type Server struct {
 	// MarkerDir holds the marker of this boot's Init and the order of its pauses (PauseFence)
 	// (/var/run: both outlive an agent restart and a reboot clears them).
 	MarkerDir string
-	// Desktop is the guest's Screen Sharing; nil serves no desktop requests (tests only).
+	// Desktop is the guest's Screen Sharing; nil sets none up (tests only).
 	Desktop *Desktop
 	// ToolsDial is how the agent's tools-port dial ended (ServeTools), answered as GET /v1/dial/tools;
 	// nil serves no such request. The tools requests themselves are never served here.
@@ -115,9 +115,6 @@ func (s *Server) Handler() (http.Handler, error) {
 		http.Error(w, "no such exec", http.StatusNotFound)
 	})
 	mux.HandleFunc("GET /v1/exec/{id}/output", s.handleOutput)
-	if s.Desktop != nil {
-		s.Desktop.Register(mux)
-	}
 	if s.ToolsDial != nil {
 		mux.Handle("GET /v1/dial/tools", s.ToolsDial)
 	}
