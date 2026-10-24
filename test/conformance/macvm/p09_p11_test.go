@@ -8,9 +8,11 @@ package macvmlive
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -225,7 +227,14 @@ func TestP10_CleanupBoundary(t *testing.T) {
 		t.Run("not_allowed_agent", func(t *testing.T) {
 			agent := os.Getenv("WARDYN_MACVM_NO_SIGNIN_AGENT")
 			need(t, agent, "WARDYN_MACVM_NO_SIGNIN_AGENT (an agent that does not allow sign-ins)")
-			mustRefuse(t, askRefused(t, spec{intent: map[string]any{"agent": agent}}), "placement", regexp.MustCompile(`does not allow sign-ins in a desktop`))
+			// Placement admits the run; the refusal is the 403 at desktop open (and at the sign-in
+			// pause), which only the console reaches: no CLI opens a run's desktop.
+			id := start(t, spec{intent: map[string]any{"agent": agent}})
+			needPerson(t, "the desktop refusal shows in the console only")
+			got := ask(t, fmt.Sprintf("In the console, open run %s's desktop. Paste the message it refuses with (or type opened if it opened):", id))
+			if !msg["signInsOff"].MatchString(got) {
+				t.Errorf("opening the desktop of an agent that does not allow sign-ins was not refused with %q: %q", msg["signInsOff"], got)
+			}
 		})
 	})
 	t.Run("snapshot_findings", func(t *testing.T) {
@@ -261,6 +270,11 @@ func TestP11_CAAndTools(t *testing.T) {
 		r := guest(t, id, c.script, 2*time.Minute)
 		works := r.code == 0 && regexp.MustCompile(c.ok).MatchString(strings.TrimSpace(r.out))
 		matrix[c.name] = map[bool]string{true: "works", false: fmt.Sprintf("fails: exit %d %s", r.code, clean(r.out+" "+r.err))}[works]
+	}
+	if !slices.Contains(slices.Collect(maps.Values(matrix)), "works") {
+		b, _ := json.MarshalIndent(matrix, "", "  ")
+		keep(t, "matrix.json", b)
+		notRun(t, "every tool failed, curl too: the door or the network is down, so the matrix shows nothing about the CA")
 	}
 	t.Run("safari", func(t *testing.T) {
 		if !cfg.prompts {

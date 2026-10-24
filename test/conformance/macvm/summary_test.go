@@ -18,11 +18,13 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 const (
-	notRunMarker = "NOT_RUN: "
-	blockMarker  = "BLOCK_ITEM"
+	notRunMarker   = "NOT_RUN: "
+	untestedMarker = "UNTESTED: "
+	blockMarker    = "BLOCK_ITEM"
 )
 
 // pRows are the proof rows the window reports, one top-level test each. The summary has exactly one
@@ -90,7 +92,8 @@ type event struct {
 	Action, Test, Output string
 }
 
-// detail is one test or subtest: PASS, FAIL, SKIP or NOT_RUN.
+// detail is one test or subtest: PASS, FAIL, SKIP, NOT_RUN or UNTESTED (listed untested: a
+// sub-property the window cannot observe, which never decides its row).
 type detail struct {
 	Test, Status string
 	Block        bool
@@ -163,6 +166,9 @@ func summarizeRow(dir, row string) (rowResult, []detail) {
 				if i := strings.Index(l, notRunMarker); i >= 0 {
 					d.Status, d.Reason = "NOT_RUN", clean(l[i+len(notRunMarker):])
 				}
+				if i := strings.Index(l, untestedMarker); i >= 0 {
+					d.Status, d.Reason = "UNTESTED", clean(l[i+len(untestedMarker):])
+				}
 			}
 			if d.Status == "SKIP" && len(lines) > 0 {
 				d.Reason = clean(lines[len(lines)-1])
@@ -177,6 +183,11 @@ func summarizeRow(dir, row string) (rowResult, []detail) {
 		code, _ = strconv.Atoi(strings.TrimSpace(string(b)))
 	}
 	r := rowResult{Row: row}
+	if len(ds) == 0 {
+		r.Outcome, r.Reason = "NOT_RUN", fmt.Sprintf("no events for the row (exit %d)", code)
+		r.BlockNotRun = hasBlock(row)
+		return r, nil
+	}
 	var block, fail, skipped []string
 	for _, d := range ds {
 		switch d.Status {
@@ -211,6 +222,13 @@ func summarizeRow(dir, row string) (rowResult, []detail) {
 		r.Outcome, r.Reason = "NOT_RUN", clean(strings.Join(skipped, " || "))
 	default:
 		r.Outcome = "PASS"
+		var ev []string
+		for _, d := range ds {
+			if d.Status == "PASS" && d.Reason != "" {
+				ev = append(ev, d.Reason)
+			}
+		}
+		r.Reason = clean(strings.Join(ev, " "))
 	}
 	r.BlockNotRun = r.Outcome == "NOT_RUN" && hasBlock(row)
 	return r, ds
@@ -224,8 +242,14 @@ func runSummary(dir string, w io.Writer) int {
 	det.WriteString("test\tstatus\tblock\treason\n")
 	n := map[string]int{}
 	blockNotRun := 0
+	var untested []string
 	for _, row := range pRows {
 		r, ds := summarizeRow(dir, row)
+		for _, d := range ds {
+			if d.Status == "UNTESTED" {
+				untested = append(untested, fmt.Sprintf("UNTESTED %s: %s", d.Test, d.Reason))
+			}
+		}
 		n[r.Outcome]++
 		if r.BlockNotRun {
 			blockNotRun++
@@ -244,6 +268,9 @@ func runSummary(dir string, w io.Writer) int {
 		return 3
 	}
 	fmt.Fprint(w, sum.String())
+	if len(untested) > 0 {
+		fmt.Fprintf(w, "Listed untested (never a pass, not an outcome):\n%s\n", strings.Join(untested, "\n"))
+	}
 	fmt.Fprintf(w, "PASS %d FAIL %d BLOCK %d NOT_RUN %d of %d P-rows\n", n["PASS"], n["FAIL"], n["BLOCK"], n["NOT_RUN"], len(pRows))
 	if n["PASS"]+n["FAIL"]+n["BLOCK"]+n["NOT_RUN"] != len(pRows) {
 		fmt.Fprintln(w, "summary: the counts do not add up to the P-rows")
@@ -263,8 +290,9 @@ func runSummary(dir string, w io.Writer) int {
 
 // ---- self-tests: these run everywhere, with no Mac ----
 
-// TestSummaryRowsMatchTests pins pRows to the package's TestP functions: 20 rows, no more, no less.
-func TestSummaryRowsMatchTests(t *testing.T) {
+// declaredRows is the TestP functions the package declares.
+func declaredRows(t *testing.T) []string {
+	t.Helper()
 	files, _ := filepath.Glob("*_test.go")
 	re := regexp.MustCompile(`(?m)^func (TestP\w+)\(t \*testing\.T\)`)
 	var got []string
@@ -278,6 +306,12 @@ func TestSummaryRowsMatchTests(t *testing.T) {
 		}
 	}
 	slices.Sort(got)
+	return got
+}
+
+// TestSummaryRowsMatchTests pins pRows to the package's TestP functions: 20 rows, no more, no less.
+func TestSummaryRowsMatchTests(t *testing.T) {
+	got := declaredRows(t)
 	want := slices.Sorted(slices.Values(pRows))
 	if !slices.Equal(got, want) || len(pRows) != 20 {
 		t.Fatalf("TestP functions %v\npRows %v (want the same 20)", got, want)
@@ -320,64 +354,91 @@ func readTSV(t *testing.T, path string) map[string][]string {
 	return rows
 }
 
-// TestSummaryMapping feeds fake test2json events and pins each mapping, and that PASS + FAIL +
-// BLOCK + NOT_RUN is the 20 P-rows.
+// TestSummaryMapping feeds fake test2json events and pins each mapping: every row's outcome and
+// that its reason comes from its own events only, one summary row per declared TestP function,
+// and the listed-untested section.
 func TestSummaryMapping(t *testing.T) {
 	dir := t.TempDir()
 	o := func(test, s string) event { return event{Action: "output", Test: test, Output: s + "\n"} }
 	a := func(test, act string) event { return event{Action: act, Test: test} }
-	p4, p5, p6, p8 := "TestP04_WarmStartAndIdentity", "TestP05_AgentSession", "TestP06_NetworkPositive", "TestP08_Throughput"
-	p13, p17, p18, p19 := "TestP13_RunnerRestart", "TestP17_DiskBound", "TestP18_ThermalAndPower", "TestP19_TeardownHygiene"
-	p21, p22 := "TestP21_GuestClock", "TestP22_DistinctIdentities"
-	writeEvents(t, dir, p4, 0, a(p4, "run"), a(p4, "pass"))
-	writeEvents(t, dir, p5, 1, a(p5, "run"), a(p5+"/exec", "run"), o(p5+"/exec", "    x.go:1: exec status 1"), a(p5+"/exec", "fail"), a(p5, "fail"))
-	writeEvents(t, dir, p6, 0, a(p6, "run"), a(p6+"/git_clone", "run"), o(p6+"/git_clone", "    x.go:1: "+notRunMarker+"no git URL"), a(p6+"/git_clone", "skip"), a(p6, "pass"))
-	writeEvents(t, dir, p8, 1, a(p8, "run"), o(p8, "    x.go:1: LIMIT: slow"), a(p8, "fail"))
+	p4, p5, p6, p7, p8 := "TestP04_WarmStartAndIdentity", "TestP05_AgentSession", "TestP06_NetworkPositive", "TestP07_NetworkNegative", "TestP08_Throughput"
+	p9, p10, p12, p13, p17 := "TestP09_Desktop", "TestP10_CleanupBoundary", "TestP12_CapSlotsAndLogins", "TestP13_RunnerRestart", "TestP17_DiskBound"
+	p18, p19, p21, p22 := "TestP18_ThermalAndPower", "TestP19_TeardownHygiene", "TestP21_GuestClock", "TestP22_DistinctIdentities"
+	nic, stop := p7+"/one_filehandle_nic", p12+"/phase3_stop_loops/stop_from_guest"
+	// p08's failure is also written into p04's and p10's files: a row reads its own events only.
+	p8fail := []event{a(p8, "run"), o(p8, "    x.go:1: LIMIT: tok-p08"), a(p8, "fail")}
+	writeEvents(t, dir, p4, 0, append([]event{a(p4, "run"), o(p4, "    x.go:1: EVIDENCE: tok-p04"), a(p4, "pass")}, p8fail...)...)
+	writeEvents(t, dir, p5, 1, a(p5, "run"), a(p5+"/exec", "run"), o(p5+"/exec", "    x.go:1: tok-p05"), a(p5+"/exec", "fail"), a(p5, "fail"))
+	writeEvents(t, dir, p6, 0, a(p6, "run"), a(p6+"/git_clone", "run"), o(p6+"/git_clone", "    x.go:1: "+notRunMarker+"tok-p06"), a(p6+"/git_clone", "skip"), a(p6, "pass"))
+	writeEvents(t, dir, p7, 0, a(p7, "run"), a(p7+"/lan_tcp", "run"), a(p7+"/lan_tcp", "pass"),
+		a(nic, "run"), o(nic, "    x.go:1: "+untestedMarker+"tok-p07u"), a(nic, "skip"), a(p7, "pass"))
+	writeEvents(t, dir, p8, 1, p8fail...)
+	writeEvents(t, dir, p9, 0)             // an empty file: no events
+	writeEvents(t, dir, p10, 0, p8fail...) // another row's events only
+	writeEvents(t, dir, p12, 0, a(p12, "run"), a(p12+"/phase1_cap", "run"), o(p12+"/phase1_cap", "    x.go:1: "+notRunMarker+"tok-p12a"), a(p12+"/phase1_cap", "skip"),
+		a(stop, "run"), o(stop, "    x.go:1: "+untestedMarker+"tok-p12u"), a(stop, "skip"), a(p12, "pass"))
 	writeEvents(t, dir, p13, 1, a(p13, "run"), a(p13, "pass"))
 	writeEvents(t, dir, p17, 1, a(p17, "run"), a(p17+"/a_floor", "run"), a(p17+"/a_floor", "pass"),
-		a(p17+"/c_newest_ends", "run"), o(p17+"/c_newest_ends", "    x.go:1: LIMIT (c)"), a(p17+"/c_newest_ends", "fail"), a(p17, "fail"))
-	writeEvents(t, dir, p19, 0, a(p19, "run"), o(p19, "    x.go:1: WARDYN_MACVM_LIVE is not 1"), a(p19, "skip"))
+		a(p17+"/c_newest_ends", "run"), o(p17+"/c_newest_ends", "    x.go:1: LIMIT tok-p17"), a(p17+"/c_newest_ends", "fail"), a(p17, "fail"))
 	writeEvents(t, dir, p18, 0, a(p18, "run"), o(p18, "    x.go:1: sampling")) // no result, exit 0: not run
+	writeEvents(t, dir, p19, 0, a(p19, "run"), o(p19, "    x.go:1: tok-p19"), a(p19, "skip"))
 	writeEvents(t, dir, p21, 1, a(p21, "run"), o(p21, "    x.go:1: sampling")) // no result, exit 1: a crash
 	writeEvents(t, dir, p22, 1, a(p22, "run"), a(p22+"/fresh", "run"), a(p22+"/fresh", "pass"),
-		a(p22+"/two_concurrent", "run"), o(p22+"/two_concurrent", "    x.go:1: neither qualifies"), a(p22+"/two_concurrent", "fail"), a(p22, "fail"))
+		a(p22+"/two_concurrent", "run"), o(p22+"/two_concurrent", "    x.go:1: tok-p22"), a(p22+"/two_concurrent", "fail"), a(p22, "fail"))
 
 	var out strings.Builder
 	if code := runSummary(dir, &out); code != 2 {
 		t.Fatalf("status %d, want 2 (a BLOCK row)\n%s", code, out.String())
 	}
+	declared := declaredRows(t)
 	rows := readTSV(t, filepath.Join(dir, "summary.tsv"))
-	if len(rows) != len(pRows) {
-		t.Fatalf("%d summary rows, want %d", len(rows), len(pRows))
+	if len(rows) != len(declared) {
+		t.Fatalf("%d summary rows, want one per declared TestP function (%d)", len(rows), len(declared))
 	}
-	want := map[string]string{p4: "PASS", p5: "BLOCK", p6: "NOT_RUN", p8: "FAIL", p13: "FAIL", p17: "FAIL", p18: "NOT_RUN", p19: "NOT_RUN", p21: "FAIL", p22: "BLOCK"}
+	want := map[string]string{p4: "PASS", p5: "BLOCK", p6: "NOT_RUN", p7: "PASS", p8: "FAIL", p9: "NOT_RUN", p10: "NOT_RUN",
+		p12: "NOT_RUN", p13: "FAIL", p17: "FAIL", p18: "NOT_RUN", p19: "NOT_RUN", p21: "FAIL", p22: "BLOCK"}
+	reason := map[string]string{p4: "tok-p04", p5: "tok-p05", p6: "tok-p06", p8: "tok-p08", p9: "no events", p10: "no events",
+		p12: "tok-p12a", p13: "exit 1", p17: "tok-p17", p18: "no result", p19: "tok-p19", p21: "exit 1", p22: "tok-p22"}
+	toks := regexp.MustCompile(`tok-p\d+[a-z]?`)
 	n := map[string]int{}
-	for _, row := range pRows {
-		got := rows[row][0]
+	for _, row := range declared {
+		got, why := rows[row][0], rows[row][1]
 		n[got]++
 		if w, ok := want[row]; ok && got != w {
-			t.Errorf("%s: %s, want %s (%s)", row, got, w, rows[row][1])
-		} else if !ok && got != "NOT_RUN" {
-			t.Errorf("%s with no output: %s, want NOT_RUN", row, got)
+			t.Errorf("%s: %s, want %s (%s)", row, got, w, why)
+		} else if !ok && (got != "NOT_RUN" || why != "no output: not run") {
+			t.Errorf("%s with no file: %s %q, want NOT_RUN for no output", row, got, why)
+		}
+		if r, ok := reason[row]; ok && !strings.Contains(why, r) {
+			t.Errorf("%s: reason %q lacks %q, from its own events", row, why, r)
+		}
+		for _, tok := range toks.FindAllString(why, -1) {
+			if tok != reason[row] {
+				t.Errorf("%s: reason %q carries %s, which is not from its own events", row, why, tok)
+			}
 		}
 	}
-	if n["PASS"] != 1 || n["FAIL"] != 4 || n["BLOCK"] != 2 || n["NOT_RUN"] != 13 || n["PASS"]+n["FAIL"]+n["BLOCK"]+n["NOT_RUN"] != 20 {
-		t.Errorf("counts %v, want PASS 1 FAIL 4 BLOCK 2 NOT_RUN 13 = 20", n)
+	if n["PASS"] != 2 || n["FAIL"] != 4 || n["BLOCK"] != 2 || n["NOT_RUN"] != len(declared)-8 {
+		t.Errorf("counts %v, want PASS 2 FAIL 4 BLOCK 2 NOT_RUN %d", n, len(declared)-8)
 	}
-	if !strings.Contains(rows[p6][1], "no git URL") || !strings.Contains(out.String(), "BLOCK NOT RUN") {
-		t.Errorf("the NOT_RUN reason or the BLOCK NOT RUN line is missing:\n%s", out.String())
+	if !strings.Contains(out.String(), "BLOCK NOT RUN") {
+		t.Errorf("the BLOCK NOT RUN line is missing:\n%s", out.String())
+	}
+	// The listed-untested section: after the rows, exactly the two items, never in summary.tsv.
+	sec := "Listed untested (never a pass, not an outcome):\nUNTESTED " + nic + ": tok-p07u\nUNTESTED " + stop + ": tok-p12u\nPASS "
+	if i, j := strings.Index(out.String(), sec), strings.Index(out.String(), p22+"\t"); i < 0 || i < j {
+		t.Errorf("the listed-untested section is missing, wrong or before the rows:\n%s", out.String())
 	}
 	det := readTSV(t, filepath.Join(dir, "detail.tsv"))
-	if d := det[p6+"/git_clone"]; len(d) < 1 || d[0] != "NOT_RUN" {
-		t.Errorf("detail of %s/git_clone = %v, want NOT_RUN", p6, d)
-	}
-	if d := det[p19]; len(d) < 1 || d[0] != "SKIP" {
-		t.Errorf("detail of %s = %v, want SKIP", p19, d)
+	for test, st := range map[string]string{p6 + "/git_clone": "NOT_RUN", p19: "SKIP", nic: "UNTESTED", stop: "UNTESTED"} {
+		if d := det[test]; len(d) < 1 || d[0] != st {
+			t.Errorf("detail of %s = %v, want %s", test, d, st)
+		}
 	}
 }
 
 // TestRunSh runs run.sh against a fake suite binary whose summary step is this test binary: the
-// guards, P19 last, and the summary and exit status it ends with.
+// guards, P19 last, each test's own exit status, and the summary and exit status it ends with.
 func TestRunSh(t *testing.T) {
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("no go on PATH for test2json")
@@ -392,16 +453,17 @@ func TestRunSh(t *testing.T) {
 if [ -n "$WARDYN_MACVM_SUMMARIZE" ]; then exec "$REAL" -test.run '^$'; fi
 while [ $# -gt 0 ]; do
   case "$1" in
-    -test.list) [ "$2" = "^TestP" ] && printf 'TestP19_TeardownHygiene\nTestP04_WarmStartAndIdentity\nTestP08_Throughput\n'; exit 0 ;;
+    -test.list) [ "$2" = "^TestP" ] && printf 'TestP19_TeardownHygiene\nTestP04_WarmStartAndIdentity\nTestP08_Throughput\nTestP13_RunnerRestart\n'; exit 0 ;;
     -test.run) name=$(printf %s "$2" | tr -d '^$'); shift ;;
   esac
   shift
 done
 echo "$name" >> "$ORDER"
 echo "=== RUN   $name"
-if [ "$name" = TestP08_Throughput ]; then
-  echo "    x.go:1: LIMIT: slow"; echo "--- FAIL: $name (0.00s)"; echo FAIL; exit 1
-fi
+case "$name" in
+  TestP08_Throughput) echo "    x.go:1: LIMIT: slow"; echo "--- FAIL: $name (0.00s)"; echo FAIL; exit 1 ;;
+  TestP13_RunnerRestart) echo "--- PASS: $name (0.00s)"; echo PASS; exit 3 ;;
+esac
 echo "--- PASS: $name (0.00s)"; echo PASS
 `
 	if err := os.WriteFile(fake, []byte(script), 0o700); err != nil {
@@ -409,7 +471,9 @@ echo "--- PASS: $name (0.00s)"; echo PASS
 	}
 	runSh := func(live string, args ...string) (int, string) {
 		c := exec.Command("bash", append([]string{"run.sh", fake}, args...)...)
-		c.Env = append(os.Environ(), "REAL="+real, "ORDER="+filepath.Join(dir, "order"), "WARDYN_MACVM_LIVE="+live, "WARDYN_MACVM_SUMMARIZE=")
+		// An inherited WARDYN_MACVM_SUMMARIZE must not turn the test runs into summaries.
+		c.Env = append(os.Environ(), "REAL="+real, "ORDER="+filepath.Join(dir, "order"), "WARDYN_MACVM_LIVE="+live,
+			"WARDYN_MACVM_SUMMARIZE="+filepath.Join(dir, "inherited"))
 		b, _ := c.CombinedOutput()
 		return c.ProcessState.ExitCode(), string(b)
 	}
@@ -419,23 +483,129 @@ echo "--- PASS: $name (0.00s)"; echo PASS
 	if code, out := runSh("1", filepath.Join(dir, "b"), "^NoSuch"); code != 2 || !strings.Contains(out, "no test matches") {
 		t.Errorf("run.sh with no tests listed: exit %d, want 2 with the reason:\n%s", code, out)
 	}
+	used := filepath.Join(dir, "used")
+	if err := os.MkdirAll(used, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(used, "TestP04_WarmStartAndIdentity.json"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code, out := runSh("1", used); code != 2 || !strings.Contains(out, "is not empty") {
+		t.Errorf("run.sh into a used out dir: exit %d, want 2 with the reason:\n%s", code, out)
+	}
 	if _, err := os.Stat(filepath.Join(dir, "order")); err == nil {
 		t.Fatal("a guarded run.sh still ran tests")
 	}
-	code, out := runSh("1", filepath.Join(dir, "c"))
+	c := filepath.Join(dir, "c")
+	code, out := runSh("1", c)
 	if code != 1 {
-		t.Fatalf("run.sh exited %d, want 1 (one FAIL, no BLOCK):\n%s", code, out)
+		t.Fatalf("run.sh exited %d, want 1 (FAILs, no BLOCK):\n%s", code, out)
 	}
 	order, _ := os.ReadFile(filepath.Join(dir, "order"))
-	if lines := strings.Fields(string(order)); len(lines) != 3 || lines[2] != "TestP19_TeardownHygiene" {
-		t.Errorf("run order %v, want P19 last", lines)
+	if lines := strings.Fields(string(order)); len(lines) != 4 || lines[3] != "TestP19_TeardownHygiene" {
+		t.Errorf("run order %v, want the 4 listed with P19 last", lines)
 	}
-	rows := readTSV(t, filepath.Join(dir, "c", "summary.tsv"))
+	if b, _ := os.ReadFile(filepath.Join(c, "TestP13_RunnerRestart.exit")); strings.TrimSpace(string(b)) != "3" {
+		t.Errorf("TestP13's .exit is %q, want its own status 3", b)
+	}
+	rows := readTSV(t, filepath.Join(c, "summary.tsv"))
 	if len(rows) != 20 || rows["TestP04_WarmStartAndIdentity"][0] != "PASS" || rows["TestP08_Throughput"][0] != "FAIL" ||
+		rows["TestP13_RunnerRestart"][0] != "FAIL" || !strings.Contains(rows["TestP13_RunnerRestart"][1], "exit 3") ||
 		rows["TestP19_TeardownHygiene"][0] != "PASS" || rows["TestP05_AgentSession"][0] != "NOT_RUN" {
 		t.Errorf("summary rows %v", rows)
 	}
-	if !strings.Contains(out, "PASS 2 FAIL 1 BLOCK 0 NOT_RUN 17 of 20 P-rows") {
+	if !strings.Contains(out, "PASS 2 FAIL 2 BLOCK 0 NOT_RUN 16 of 20 P-rows") {
 		t.Errorf("run.sh output lacks the counts:\n%s", out)
+	}
+}
+
+// TestStatusAllowlist: only the named keys of runnerd's status are kept, and no failure echoes
+// any of the body.
+func TestStatusAllowlist(t *testing.T) {
+	const secret = "SECRET-7f3a"
+	m, err := allowStatus([]byte(`{"state":"ready","max":2,"one_time_code":"` + secret + `","note":"` + secret + `"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m) != 2 || m["state"] != "ready" || m["max"] != float64(2) || strings.Contains(fmt.Sprint(m), secret) {
+		t.Errorf("kept %v, want only state and max", m)
+	}
+	for _, body := range []string{secret + " not json", `{"state": ` + secret + `}`, `["` + secret + `"]`} {
+		if _, err := allowStatus([]byte(body)); err == nil || strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "7f3a") {
+			t.Errorf("allowStatus(%q) = %v, want an error that names no part of the body", body, err)
+		}
+	}
+}
+
+// signalWriter reports each prompt written.
+type signalWriter chan struct{}
+
+func (s signalWriter) Write(b []byte) (int, error) { s <- struct{}{}; return len(b), nil }
+
+// TestAskDropsLateAnswers: one reader serves every prompt, a prompt that times out is NOT_RUN,
+// and a line typed after that is never taken as the next prompt's answer.
+func TestAskDropsLateAnswers(t *testing.T) {
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	lines := lineReader(pr)
+	w := signalWriter(make(chan struct{}, 4))
+	var first *testing.T
+	t.Run("timeout", func(t *testing.T) {
+		first = t
+		askFrom(t, w, lines, "q1", 20*time.Millisecond)
+		t.Error("askFrom returned with no answer")
+	})
+	if !first.Skipped() {
+		t.Fatal("a prompt with no answer was not NOT_RUN")
+	}
+	<-w
+	fmt.Fprintln(pw, "late")
+	for deadline := time.Now().Add(5 * time.Second); len(lines) == 0; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the late line never reached the reader")
+		}
+	}
+	go func() { <-w; fmt.Fprintln(pw, "fresh") }()
+	if got := askFrom(t, w, lines, "q2", 5*time.Second); got != "fresh" {
+		t.Errorf("the next prompt took %q, want the answer typed after it (fresh)", got)
+	}
+}
+
+// TestIsolate: a witness stands only when the named limit alone refuses, sized from the ledger.
+func TestIsolate(t *testing.T) {
+	ok := fits{Licence: 1, RunnerRuns: 1, RunnerCPU: 1, RunnerMemory: 1, RunnerDisk: 1, HostMemory: 1, LiveMemory: 1, Disk: 0, Source: "ledger"}
+	for name, c := range map[string]struct {
+		f    fits
+		skip bool
+	}{
+		"only disk":          {ok, false},
+		"host memory too":    {func() fits { f := ok; f.HostMemory = 0; return f }(), true},
+		"live memory too":    {func() fits { f := ok; f.LiveMemory = 0; return f }(), true},
+		"runner runs too":    {func() fits { f := ok; f.RunnerRuns = 0; return f }(), true},
+		"licence too":        {func() fits { f := ok; f.Licence = 0; return f }(), true},
+		"disk still fits":    {func() fits { f := ok; f.Disk = 1; return f }(), true},
+		"sized from setting": {func() fits { f := ok; f.Source = "settings"; return f }(), true},
+	} {
+		var sub *testing.T
+		t.Run(name, func(t *testing.T) { sub = t; c.f.isolate(t, "disk") })
+		if sub.Skipped() != c.skip {
+			t.Errorf("%s: NOT_RUN %v, want %v", name, sub.Skipped(), c.skip)
+		}
+	}
+}
+
+// TestMessagesMatchProduct reads the sign-in refusal from the API source (no build of it) and pins
+// that the suite matches it there and never as a placement refusal.
+func TestMessagesMatchProduct(t *testing.T) {
+	b, err := os.ReadFile("../../../internal/api/run_desktop_vm_signin.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`desktopSignInsOffMsg\s*=\s*"([^"]+)"`).FindSubmatch(b)
+	if m == nil {
+		t.Fatal("no desktopSignInsOffMsg in the API source")
+	}
+	if !msg["signInsOff"].Match(m[1]) || msg["placementAny"].Match(m[1]) {
+		t.Errorf("the suite's sign-in refusal does not match the product's %q, or placementAny takes it", m[1])
 	}
 }

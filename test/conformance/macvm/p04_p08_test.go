@@ -217,7 +217,25 @@ func TestP05_AgentSession(t *testing.T) {
 		}
 	})
 	t.Run("pty", func(t *testing.T) {
-		notRun(t, "no CLI path opens a PTY for a command: `wardyn run exec` has no terminal flag and `wardyn run ssh` takes no command")
+		// The console's terminal door: `wardyn attach` mints the same attach ticket the console's
+		// terminal uses and, with piped input, sends it and exits once the shell does.
+		probe := `echo "TTY=$(tty) SIZE=$(stty size)"`
+		r := shIn(t, 2*time.Minute, []byte(probe+"\nexit\n"), cfg.wardyn, "attach", id)
+		keep(t, "attach.txt", []byte(r.out+"\n--- stderr\n"+r.err))
+		got := r.out
+		if r.code != 0 || !ptyLine.MatchString(got) {
+			t.Logf("RECORD attach_path=no pty line (exit %d): %s", r.code, clean(r.err))
+			if !cfg.prompts {
+				t.Fatalf("`wardyn attach` showed no pty (exit %d) and no person can open the console's terminal: %s", r.code, clean(r.err+" "+r.out))
+			}
+			got = ask(t, fmt.Sprintf("In the console, open run %s's terminal, run exactly: %s  and paste the line it prints:", id, probe))
+		}
+		m := ptyLine.FindStringSubmatch(got)
+		if m == nil {
+			t.Fatalf("the terminal is not a pty: %q", clean(got))
+		}
+		record(t, "pty", m[1])
+		record(t, "pty_size", m[2])
 	})
 	t.Run("pause_resume", func(t *testing.T) {
 		needPerson(t, "the automated suite's run (pause and resume need a desktop sign-in)")
@@ -342,6 +360,9 @@ type probe struct {
 	udp          bool   // the relay logs no UDP: guest-side evidence only
 }
 
+// ptyLine is the terminal probe's answer: a real pty and its size.
+var ptyLine = regexp.MustCompile(`TTY=(/dev/ttys?\d+) SIZE=(\d+ \d+)`)
+
 var probeRC = regexp.MustCompile(`(?m)^PROBE_RC=(\d+)$`)
 
 // logExplains reports whether one log line names the probe's own destination (and port).
@@ -402,6 +423,11 @@ func TestP07_NetworkNegative(t *testing.T) {
 	_, udpPort, _ := net.SplitHostPort(udpLAN)
 	tcpHost, tcpPort, _ := net.SplitHostPort(tcpLAN)
 	ifc := `"$(route -n get default | awk '/interface:/{print $2}')"`
+	// The guest's own link-local address, so its own echo reply is not read as a neighbour's.
+	own := strings.TrimSpace(guest(t, id, "ifconfig "+ifc+" | awk '/inet6 fe80/{print $2; exit}' | cut -d% -f1", time.Minute).out)
+	if !regexp.MustCompile(`^fe80:[0-9a-f:]+$`).MatchString(own) {
+		own = ""
+	}
 	curlRefused := `curl: \((6|7|28|35|52|56)\)|Failed to connect|timed out|Connection refused|CONNECT tunnel failed|reset by peer|Empty reply`
 	ncRefused := `Connection refused|Operation timed out|timed out|failed|No route to host`
 	probes := []probe{
@@ -413,11 +439,14 @@ func TestP07_NetworkNegative(t *testing.T) {
 		{"dns_direct_tcp", "dig +tcp @1.1.1.1 example.com +time=3 +tries=1", "ANSWER SECTION", "connection timed out|no servers could be reached|communications error|connection refused", "1.1.1.1", "53", false},
 		{"https_direct_ip", "curl -sk --max-time 5 -o /dev/null -w 'HTTP%{http_code}' https://8.8.8.8/", "HTTP[1-5]", curlRefused, "8.8.8.8", "443", false},
 		{"ipv6_global", "curl -6 -sSk --max-time 5 -o /dev/null -w 'HTTP%{http_code}' 'https://[2606:4700:4700::1111]/'", "HTTP[1-5]", curlRefused + `|Could not resolve|Network is unreachable|No route`, "2606:4700:4700::1111", "443", false},
-		{"ipv6_link_local", "own=$(ifconfig " + ifc + " | awk '/inet6 fe80/{print $2}' | cut -d% -f1); ping6 -c 2 -i 1 ff02::1%" + ifc + " | grep 'bytes from' | grep -v \"$own\"; echo ll-done", "bytes from", "ll-done", "ff02::1", "", false},
+		{"ipv6_link_local", "ping6 -c 2 -i 1 ff02::1%" + ifc + " | grep 'bytes from' | grep -v '" + own + "'; echo ll-done", "bytes from", "ll-done", "ff02::1", "", false},
 		{"denied_host", "curl -sS --max-time 10 -o /dev/null -w 'HTTP%{http_code}' 'https://" + cfg.deniedHost + "/'", "HTTP[23]", curlRefused + `|HTTP403`, cfg.deniedHost, "", false},
 	}
 	for _, p := range probes {
 		t.Run(p.name, func(t *testing.T) {
+			if p.name == "ipv6_link_local" && own == "" {
+				notRun(t, "the guest shows no link-local address of its own, so a neighbour's reply cannot be told from its own")
+			}
 			r := guest(t, id, "out=$( ("+p.script+") 2>&1); rc=$?; printf 'PROBE_RC=%d\\n%s\\n' $rc \"$out\"", time.Minute)
 			mm := probeRC.FindStringSubmatch(r.out)
 			if r.code != 0 || mm == nil {
@@ -446,7 +475,7 @@ func TestP07_NetworkNegative(t *testing.T) {
 		}
 	})
 	t.Run("one_filehandle_nic", func(t *testing.T) {
-		notRun(t, "neither ctl.sock status nor helper.log carries the NIC type; the helper's config-builder unit test pins one FileHandle NIC")
+		untested(t, "the NIC kind is not observable from outside the helper")
 	})
 }
 

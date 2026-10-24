@@ -164,6 +164,16 @@ func TestP16_WedgedGuest(t *testing.T) {
 	waitCounted(t, 0, 2*time.Minute)
 }
 
+// runReserve is the disk the ledger holds for run id.
+func runReserve(t *testing.T, id string) int64 {
+	t.Helper()
+	e, ok := entryFor(t, id)
+	if !ok || e.Entry.DiskReserve <= 0 {
+		t.Fatalf("run %s has no ledger entry with a disk reservation", id)
+	}
+	return e.Entry.DiskReserve
+}
+
 // sampler records the volume's free space every second until stopped.
 type sampler struct {
 	mu   sync.Mutex
@@ -224,13 +234,14 @@ func filler(t, owner *testing.T, name string, n int64) {
 func TestP17_DiskBound(t *testing.T) {
 	live(t)
 	vol := layout(t).Root
-	reserve := int64(cfg.runDiskGiB)*gib + admission.DiskExtraBytes
 	parent := t
 	var id string
 	t.Run("a_floor", func(t *testing.T) {
 		block(t)
-		filler(t, parent, "a", freeBytes(t, vol)-(reserve+admission.DiskFloorBytes+gib))
 		id = start(t, spec{owner: parent})
+		// Free space is then the run's own reservation, the floor and 1 GiB: a guest filling its disk
+		// presses the floor only if the reservation is short.
+		filler(t, parent, "a", freeBytes(t, vol)-(runReserve(t, id)+admission.DiskFloorBytes+gib))
 		s := sample(vol)
 		r := guest(t, id, "dd if=/dev/zero of=$HOME/p17-fill bs=1m; sync; df -k /", 2*time.Hour)
 		low := s.end(t, "a-free.csv")
@@ -250,10 +261,8 @@ func TestP17_DiskBound(t *testing.T) {
 		}
 		f := preconditions(t, "p17b", cfg.baseMinMemGiB)
 		r := askRefused(t, spec{})
-		if r.By == "placement" && f.Disk >= 1 {
-			t.Logf("RECORD b refused_by=%s reason=%q", r.By, r.Reason)
-			notRun(t, "placement's refusal cannot be put down to disk: the preconditions say one more run's disk fits")
-		}
+		t.Logf("RECORD b refused_by=%s reason=%q", r.By, r.Reason)
+		f.isolate(t, "disk")
 		if r.By == "placement" {
 			mustRefuse(t, r, "placement", msg["noRoom"])
 		} else {
@@ -296,6 +305,7 @@ func TestP17_DiskBound(t *testing.T) {
 			}
 		}()
 		record(t, "snapshot", date)
+		reserve := runReserve(t, id)
 		filler(t, t, "d", freeBytes(t, vol)-(reserve+admission.DiskFloorBytes+5*gib))
 		f0 := freeBytes(t, vol)
 		mustOK(t, guest(t, id, "dd if=/dev/urandom of=$HOME/p17-random bs=1m count=10240 conv=notrunc && sync", time.Hour), "rewrite 10 GiB")
@@ -306,10 +316,8 @@ func TestP17_DiskBound(t *testing.T) {
 		}
 		f := preconditions(t, "p17d", cfg.baseMinMemGiB)
 		r := askRefused(t, spec{})
-		if r.By == "placement" && f.Disk >= 1 {
-			t.Logf("RECORD d refused_by=%s reason=%q", r.By, r.Reason)
-			notRun(t, "placement's refusal cannot be put down to disk: the preconditions say one more run's disk fits")
-		}
+		t.Logf("RECORD d refused_by=%s reason=%q", r.By, r.Reason)
+		f.isolate(t, "disk")
 		if r.By == "placement" {
 			mustRefuse(t, r, "placement", msg["noRoom"])
 		} else {
@@ -501,13 +509,17 @@ func TestP22_DistinctIdentities(t *testing.T) {
 	verdict := map[macvm.IdentityStrategy]bool{}
 	for _, s := range []macvm.IdentityStrategy{macvm.IdentityFresh, macvm.IdentityTravel} {
 		t.Run(string(s), func(t *testing.T) {
+			if s == macvm.IdentityTravel {
+				// Travel keeps one identifier per base, so two concurrent travel VMs need two slot bases.
+				t.Logf("RECORD precondition travel_slot_bases: need 2, have %d (WARDYN_MACVM_SLOT_BASES)", cfg.slotBases)
+				if cfg.slotBases < 2 {
+					notRun(t, "precondition not met: travel needs 2 slot bases (one VM per base) and this Mac has %d", cfg.slotBases)
+				}
+			}
 			if booted, ok := p4.Booted[s]; !ok {
 				notRun(t, "P4 has no %s series (%s)", s, p4Path())
 			} else if !booted {
 				notRun(t, "%s did not boot in P4", s)
-			}
-			if s == macvm.IdentityTravel && cfg.slotBases < 2 {
-				notRun(t, "travel is capped at one VM per slot base and this Mac has one (WARDYN_MACVM_SLOT_BASES): it cannot qualify for two")
 			}
 			setIdentity(t, s)
 			var ids [2]string

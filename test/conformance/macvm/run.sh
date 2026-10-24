@@ -14,6 +14,8 @@
 # Exit status: the summary's (2 when any row is BLOCK, 1 when any is FAIL, else 0), or 2 when
 # nothing could be run.
 set -uo pipefail
+# Only the last step summarizes; one inherited from the caller would turn every test run into a summary.
+unset WARDYN_MACVM_SUMMARIZE
 
 bin=${1:?usage: run.sh <macvm_live.test> <out-dir> [test regex]}
 out=${2:?usage: run.sh <macvm_live.test> <out-dir> [test regex]}
@@ -25,6 +27,11 @@ if [[ "${WARDYN_MACVM_LIVE:-}" != 1 ]]; then
 fi
 command -v go >/dev/null || { echo "run.sh: no go on PATH: test2json cannot convert the output" >&2; exit 2; }
 
+# A used dir would mix an earlier window's rows into this summary.
+if [[ -e "$out" && -n "$(ls -A "$out" 2>/dev/null)" ]]; then
+  echo "run.sh: $out is not empty: give each run its own out dir" >&2
+  exit 2
+fi
 mkdir -p "$out"
 export WARDYN_MACVM_EVIDENCE=${WARDYN_MACVM_EVIDENCE:-$out/evidence}
 

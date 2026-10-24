@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/user"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -26,26 +27,52 @@ func setLimits(t *testing.T, total, perRun int) {
 		fmt.Sprintf("runner set %d / %d", total, perRun))
 }
 
-// fits is how many more runs of the runner's per-run size each independent limit admits, recorded
-// before a step so the refusal that fires can be attributed.
+// fits is how many more runs each independent limit admits, recorded before a step so the refusal
+// that fires can be attributed. The next run's size comes from a live ledger entry of this login
+// (Source "ledger"); with none, from the window's settings (Source "settings"), which no witness
+// accepts.
 type fits struct {
-	Licence                                            int // the licence cap less the ledger's counted entries
-	RunnerRuns, RunnerCPU, RunnerMemory, RunnerDisk    int // the runner's runs at once and its totals left
-	HostMemory                                         int // the host memory budget left
-	Disk                                               int // live free space less the floor and the reservations held
-	HeldDiskBytes, HostBudgetBytes, FreeBytes, Counted int64
+	Licence                                         int // the licence cap less the ledger's counted entries
+	RunnerRuns, RunnerCPU, RunnerMemory, RunnerDisk int // the runner's runs at once and its totals left
+	HostMemory                                      int // the ledger's host memory budget left
+	LiveMemory                                      int // 1 when memory free now covers the guest and the margin
+	Disk                                            int // live free space less the floor and every reservation held
+	Source                                          string
+	NextGuest, NextOverhead, NextDocker             uint64
+	NextDisk, HeldDiskBytes, HostBudgetBytes        int64
+	FreeBytes, Counted                              int64
 }
 
-// others reports whether any limit other than the licence cap would refuse one more run.
-func (f fits) others() string {
+func (f fits) limits() map[string]int {
+	return map[string]int{"licence": f.Licence, "runner runs": f.RunnerRuns, "runner CPU": f.RunnerCPU, "runner memory": f.RunnerMemory,
+		"runner disk": f.RunnerDisk, "host memory": f.HostMemory, "live memory": f.LiveMemory, "disk": f.Disk}
+}
+
+// except names every limit but the given ones that would refuse one more run.
+func (f fits) except(names ...string) string {
 	var by []string
-	for name, n := range map[string]int{"runner runs": f.RunnerRuns, "runner CPU": f.RunnerCPU, "runner memory": f.RunnerMemory,
-		"runner disk": f.RunnerDisk, "host memory": f.HostMemory, "disk": f.Disk} {
-		if n < 1 {
+	for name, n := range f.limits() {
+		if n < 1 && !slices.Contains(names, name) {
 			by = append(by, name)
 		}
 	}
+	slices.Sort(by)
 	return strings.Join(by, ", ")
+}
+
+// isolate is NOT_RUN unless only is the one limit that refuses one more run, measured with the
+// size of a live ledger entry: otherwise the refusal cannot be put down to it.
+func (f fits) isolate(t *testing.T, only string) {
+	t.Helper()
+	if f.Source != "ledger" {
+		notRun(t, "no live ledger entry of this login gives the next run's size (the preconditions used the %s)", f.Source)
+	}
+	if o := f.except(only); o != "" {
+		notRun(t, "%s is not the only limit at this ask: %s would also refuse", only, o)
+	}
+	if n := f.limits()[only]; n >= 1 {
+		notRun(t, "by the preconditions %s still fits %d more, so a refusal cannot be put down to it", only, n)
+	}
 }
 
 func left(avail, per int64) int {
@@ -55,30 +82,59 @@ func left(avail, per int64) int {
 	return int(avail / per)
 }
 
-// preconditions records every independent resource and run-count precondition before a step: the
-// licence count, the runner's runs at once, CPU, memory and disk, the host memory budget, and the
-// live free disk with the reservations already held. perRunGiB is the per-run memory just set.
+// preconditions records every independent resource and run-count precondition before a step, the
+// way the ledger computes them: the licence count, the runner's runs at once, CPU, memory and
+// disk, the host memory budget after macOS and every login's Docker, memory free now, and live
+// free disk less the floor and every reservation held (tombstoned entries' included). perRunGiB
+// is the runner's per-run memory, used only when no live entry gives the next run's size.
 func preconditions(t *testing.T, step string, perRunGiB int) fits {
 	t.Helper()
 	fs := ledger(t)
-	memsize, _ := strconv.ParseInt(strings.TrimSpace(sh(t, 10*time.Second, "sysctl", "-n", "hw.memsize").out), 10, 64)
-	docker := map[int]uint64{os.Getuid(): uint64(cfg.dockerMemGiB) * gib}
-	var reserved uint64
-	for _, f := range fs {
-		if !f.Tomb {
-			docker[f.UID] = max(docker[f.UID], f.Entry.DockerMemory)
-			reserved += f.Entry.GuestMemory + f.Entry.Overhead
+	host := admission.SystemHost()
+	total, err := host.MemoryBytes()
+	if err != nil {
+		t.Fatalf("host memory: %v", err)
+	}
+	tomb := map[string]bool{}
+	for _, lf := range fs {
+		if lf.Tomb {
+			tomb[strings.TrimSuffix(lf.Name, ".tombstone")] = true
 		}
 	}
-	var dockerSum uint64
-	for _, d := range docker {
-		dockerSum += d
+	f := fits{Licence: admission.LicenceCap - counted(fs), Counted: int64(counted(fs)), HeldDiskBytes: heldDisk(fs), Source: "settings",
+		NextGuest: uint64(perRunGiB) * gib, NextOverhead: admission.DefaultOverheadBytes, NextDocker: uint64(cfg.dockerMemGiB) * gib,
+		NextDisk: admission.RunDiskReservation(int64(cfg.runDiskGiB) * gib)}
+	docker := map[int]uint64{}
+	var used uint64
+	var newest time.Time
+	for _, lf := range fs {
+		if lf.Tomb || tomb[lf.Name] {
+			continue
+		}
+		e := lf.Entry
+		used += e.GuestMemory + e.Overhead
+		docker[lf.UID] = max(docker[lf.UID], e.DockerMemory)
+		if lf.UID == os.Getuid() && e.Kind == admission.KindRun && e.Created.After(newest) {
+			newest, f.Source = e.Created, "ledger"
+			f.NextGuest, f.NextOverhead, f.NextDocker, f.NextDisk = e.GuestMemory, e.Overhead, e.DockerMemory, e.DiskReserve
+		}
 	}
-	f := fits{Licence: admission.LicenceCap - counted(fs), Counted: int64(counted(fs)), HeldDiskBytes: heldDisk(fs)}
-	f.HostBudgetBytes = int64(memsize) - int64(dockerSum) - int64(admission.MacOSReserveBytes) - int64(reserved)
-	f.HostMemory = int(max(f.HostBudgetBytes, 0) / (int64(perRunGiB)*gib + int64(admission.DefaultOverheadBytes)))
+	if f.NextGuest+f.NextOverhead == 0 || f.NextDisk <= 0 {
+		t.Fatalf("the next run's size from the %s is zero (guest %d, disk %d)", f.Source, f.NextGuest, f.NextDisk)
+	}
+	reserved := admission.MacOSReserveBytes + max(docker[os.Getuid()], f.NextDocker)
+	for uid, d := range docker {
+		if uid != os.Getuid() {
+			reserved += d
+		}
+	}
+	f.HostBudgetBytes = int64(total) - int64(reserved) - int64(used)
+	f.HostMemory = int(max(f.HostBudgetBytes, 0) / int64(f.NextGuest+f.NextOverhead))
+	if avail, err := host.AvailableMemoryBytes(); err == nil && avail >= f.NextGuest+admission.LiveMemoryMarginBytes {
+		f.LiveMemory = 1 // memory free now; unreadable counts as refusing, so it is never isolated past
+	}
 	f.FreeBytes = freeBytes(t, layout(t).Root)
-	f.Disk = int(max(f.FreeBytes-admission.DiskFloorBytes-f.HeldDiskBytes, 0) / (int64(cfg.runDiskGiB)*gib + admission.DiskExtraBytes))
+	f.Disk = int(max(f.FreeBytes-admission.DiskFloorBytes-f.HeldDiskBytes, 0) / f.NextDisk)
 	rv := runnerRow(t)
 	f.RunnerRuns, f.RunnerCPU, f.RunnerMemory, f.RunnerDisk = 1<<20, 1<<20, 1<<20, 1<<20
 	if rv.Limits != nil {
@@ -86,9 +142,9 @@ func preconditions(t *testing.T, step string, perRunGiB int) fits {
 		f.RunnerRuns = av.Runs
 		f.RunnerCPU, f.RunnerMemory, f.RunnerDisk = left(av.CPUMillis, per.CPUMillis), left(av.MemoryMiB, per.MemoryMiB), left(av.DiskMiB, per.DiskMiB)
 	}
-	keepJSON(t, "pre-"+step+".json", map[string]any{"fits": f, "runner": rv, "hw_memsize": memsize, "docker_bytes_by_uid": docker, "runnerd_status": runnerdStatus(t)})
-	t.Logf("RECORD %s more runs fit: licence=%d runner_runs=%d runner_cpu=%d runner_memory=%d runner_disk=%d host_memory=%d disk=%d (held disk %d bytes)",
-		step, f.Licence, f.RunnerRuns, f.RunnerCPU, f.RunnerMemory, f.RunnerDisk, f.HostMemory, f.Disk, f.HeldDiskBytes)
+	keepJSON(t, "pre-"+step+".json", map[string]any{"fits": f, "runner": rv, "hw_memsize": total, "docker_bytes_by_uid": docker, "runnerd_status": runnerdStatus(t)})
+	t.Logf("RECORD %s more runs fit: licence=%d runner_runs=%d runner_cpu=%d runner_memory=%d runner_disk=%d host_memory=%d live_memory=%d disk=%d (next run sized from the %s: guest %d disk %d; held disk %d bytes)",
+		step, f.Licence, f.RunnerRuns, f.RunnerCPU, f.RunnerMemory, f.RunnerDisk, f.HostMemory, f.LiveMemory, f.Disk, f.Source, f.NextGuest, f.NextDisk, f.HeldDiskBytes)
 	return f
 }
 
@@ -157,12 +213,10 @@ func TestP12_CapSlotsAndLogins(t *testing.T) {
 			t.Fatalf("the 3rd macOS VM was not refused (run %s is %s)", r.RunID, r.State)
 		}
 		t.Run("licence_witness", func(t *testing.T) {
-			if o := f.others(); o != "" {
-				notRun(t, "the licence cap is not the only limit at the 3rd ask (%s would also refuse); the refusal is recorded above", o)
-			}
 			if f.Licence != 0 {
 				t.Fatalf("the ledger counts %d entries before the 3rd ask, not 2", f.Counted)
 			}
+			f.isolate(t, "licence")
 			// Placement refuses from the ledger's offer: the runner's max is its own live runs plus
 			// the ledger's headroom, which the licence cap alone has brought to zero.
 			mustRefuse(t, r, "placement", msg["licence"])
@@ -176,10 +230,8 @@ func TestP12_CapSlotsAndLogins(t *testing.T) {
 		start(t, spec{})
 		f := preconditions(t, "phase2-second", 7)
 		r := askRefused(t, spec{})
-		if f.Licence < 1 || f.HostMemory < 1 || f.Disk < 1 || f.RunnerMemory >= 1 {
-			t.Logf("RECORD phase2 refused_by=%s reason=%q", r.By, r.Reason)
-			notRun(t, "the runner's memory total is not the only limit at the 2nd ask (licence=%d host_memory=%d disk=%d runner_memory=%d)", f.Licence, f.HostMemory, f.Disk, f.RunnerMemory)
-		}
+		t.Logf("RECORD phase2 refused_by=%s reason=%q", r.By, r.Reason)
+		f.isolate(t, "runner memory")
 		mustRefuse(t, r, "placement", regexp.MustCompile(msg["noRoom"].String()+`|[Mm]emory`))
 		t.Logf("RECORD phase2 ledger_cap=%d (unchanged)", admission.LicenceCap)
 		noLeak(t)
@@ -212,7 +264,7 @@ func TestP12_CapSlotsAndLogins(t *testing.T) {
 			})
 		}
 		t.Run("stop_from_guest", func(t *testing.T) {
-			notRun(t, "no guest-side shutdown path: exec runs as the agent user with no sudoers rule and the guest agent has no shutdown op; the helper's graceful stop asks the guest instead")
+			untested(t, "the guest has no shutdown op; covered by a fake-engine unit test")
 		})
 	})
 	t.Run("phase3_other_login_cannot_remove", func(t *testing.T) { otherLoginCannotRemove(t) })

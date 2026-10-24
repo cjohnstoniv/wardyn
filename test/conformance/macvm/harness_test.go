@@ -31,6 +31,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"os/exec"
@@ -74,8 +75,10 @@ var msg = map[string]*regexp.Regexp{
 	"posture":    regexp.MustCompile("This Mac has no MDM posture file saying it is managed"),
 	"managedOp":  regexp.MustCompile("This Mac is not marked as company-managed. A security operator marks it with `wardyn runner trust"),
 	"managedMem": regexp.MustCompile(`This Mac is not marked as company-managed. Ask a security operator to mark it`),
+	// signInsOff is the 403 at desktop open and at the sign-in pause (internal/api), never placement's.
+	"signInsOff": regexp.MustCompile(`Your admin doesn't allow sign-ins in this desktop while this agent runs`),
 	// placementAny is any placement refusal: a create that failed without one is a CLI failure.
-	"placementAny": regexp.MustCompile(`placement_|runner_posture_unmet|This Mac |macOS virtual machines|macOS VM|does not allow sign-ins`),
+	"placementAny": regexp.MustCompile(`placement_|runner_posture_unmet|This Mac |macOS virtual machines|macOS VM`),
 }
 
 func env(k, def string) string {
@@ -164,6 +167,13 @@ func notRun(t *testing.T, format string, args ...any) {
 	t.Skip(notRunMarker + fmt.Sprintf(format, args...))
 }
 
+// untested lists a sub-property the window cannot observe at all, with why, and skips. The summary
+// prints it under "Listed untested"; it is never a pass and never decides its row's outcome.
+func untested(t *testing.T, reason string) {
+	t.Helper()
+	t.Skip(untestedMarker + reason)
+}
+
 // block marks t as a BLOCK item: its failure holds macOS VMs out of the release. t must be listed
 // in blockItems (summary_test.go), which the summary uses even when t skipped before calling this.
 // Mark the narrowest test: a parent's own failure is attributed to its failed children.
@@ -192,32 +202,75 @@ func need(t *testing.T, v, name string) {
 
 // ---- prompts ----
 
-var ttyMu sync.Mutex
+// The terminal is opened once and read by one goroutine for the process's life, so no reader is
+// left behind by a prompt that timed out.
+var tty struct {
+	sync.Mutex
+	once  sync.Once
+	w     io.Writer
+	lines chan string
+	err   error
+}
+
+// lineReader sends each line read from r, trimmed, and closes the channel at EOF.
+func lineReader(r io.Reader) chan string {
+	lines := make(chan string, 16)
+	go func() {
+		defer close(lines)
+		sc := bufio.NewScanner(r)
+		for sc.Scan() {
+			lines <- strings.TrimSpace(sc.Text())
+		}
+	}()
+	return lines
+}
 
 // ask puts a question to the person on /dev/tty and returns the line they type. It never asks for
 // a secret: questions name a step to do or an observation to report. No answer within the wait is
 // NOT_RUN, never a guess.
 func ask(t *testing.T, q string) string {
 	t.Helper()
-	ttyMu.Lock()
-	defer ttyMu.Unlock()
-	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
-	if err != nil {
-		notRun(t, "no terminal for the prompt %q: %v", q, err)
+	tty.Lock()
+	defer tty.Unlock()
+	tty.once.Do(func() {
+		f, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+		if err != nil {
+			tty.err = err
+			return
+		}
+		tty.w, tty.lines = f, lineReader(f)
+	})
+	if tty.err != nil {
+		notRun(t, "no terminal for the prompt %q: %v", q, tty.err)
 	}
-	defer tty.Close()
-	fmt.Fprintf(tty, "\n[%s] %s\n(answer within %s) > ", t.Name(), q, cfg.promptWait)
-	line := make(chan string, 1)
-	go func() {
-		s, _ := bufio.NewReader(tty).ReadString('\n')
-		line <- strings.TrimSpace(s)
-	}()
+	return askFrom(t, tty.w, tty.lines, q, cfg.promptWait)
+}
+
+// askFrom is ask over any prompt stream. A line typed after an earlier prompt timed out is
+// discarded, never taken as this prompt's answer.
+func askFrom(t *testing.T, w io.Writer, lines chan string, q string, wait time.Duration) string {
+	t.Helper()
+	for drained := false; !drained; {
+		select {
+		case l, ok := <-lines:
+			if !ok {
+				notRun(t, "the terminal closed before the prompt %q", q)
+			}
+			t.Logf("PROMPT discarded a late answer %q", l)
+		default:
+			drained = true
+		}
+	}
+	fmt.Fprintf(w, "\n[%s] %s\n(answer within %s) > ", t.Name(), q, wait)
 	select {
-	case a := <-line:
+	case a, ok := <-lines:
+		if !ok {
+			notRun(t, "the terminal closed before an answer to %q", q)
+		}
 		t.Logf("PROMPT %q -> %q", q, a)
 		return a
-	case <-time.After(cfg.promptWait):
-		notRun(t, "no answer within %s to %q", cfg.promptWait, q)
+	case <-time.After(wait):
+		notRun(t, "no answer within %s to %q", wait, q)
 		return ""
 	}
 }
@@ -336,17 +389,35 @@ func wardyn(t *testing.T, args ...string) result { return sh(t, 2*time.Minute, c
 // or logged, so a one-time code or any later field never reaches the evidence.
 func runnerdStatus(t *testing.T) map[string]any {
 	t.Helper()
-	var m map[string]any
-	if err := json.Unmarshal([]byte(mustOK(t, sh(t, time.Minute, cfg.runnerd, assumedRunnerdStatus...), "runnerd status")), &m); err != nil {
-		t.Fatalf("runnerd status JSON: %v", err)
+	r := sh(t, time.Minute, cfg.runnerd, assumedRunnerdStatus...)
+	if r.code != 0 {
+		t.Fatalf("runnerd status: exit %d (its output is not logged)", r.code)
+	}
+	m, err := allowStatus([]byte(r.out))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+// allowStatus keeps only statusKeys from a status body. Its errors name the field it looked for,
+// never any of the body.
+func allowStatus(b []byte) (map[string]any, error) {
+	var raw map[string]json.RawMessage
+	if json.Unmarshal(b, &raw) != nil {
+		return nil, fmt.Errorf("runnerd status: not one JSON object, so none of %v could be read", statusKeys)
 	}
 	out := map[string]any{}
 	for _, k := range statusKeys {
-		if v, ok := m[k]; ok {
-			out[k] = v
+		if v, ok := raw[k]; ok {
+			var x any
+			if json.Unmarshal(v, &x) != nil {
+				return nil, fmt.Errorf("runnerd status: field %q is not JSON", k)
+			}
+			out[k] = x
 		}
 	}
-	return out
+	return out, nil
 }
 
 // setIdentity switches the identity strategy for new runs through the command the RUNNER lane
