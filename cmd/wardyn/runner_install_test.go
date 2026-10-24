@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -181,6 +182,48 @@ func TestRunnerUpgradeRollsBackAnOlderRunnerWithoutOrgCAFile(t *testing.T) {
 	}
 	if calls := r.record("calls"); calls != "0.10.0 setup --org "+r.srv.URL+" --org-ca-file "+anchor+"\n0.9.8 setup --org "+r.srv.URL+"\n" {
 		t.Fatalf("calls = %q, want the new setup with the anchor then the older one's without", calls)
+	}
+}
+
+// A 0.9 runner keeps its trusted CA and image pin in the service's environment file, which the new setup
+// moves into runnerd.json: the rollback puts the file back as it was, and removes runnerd.json, before the
+// older setup, which reads only that file, runs.
+func TestRunnerUpgradeRollbackPutsTheServiceFilesBack(t *testing.T) {
+	r := newInstallRig(t)
+	envFile := filepath.Join(r.home, ".config", "wardyn", "runnerd.env")
+	config := filepath.Join(r.home, ".config", "wardyn", "runnerd.json")
+	seen := filepath.Join(r.rec, "seen")
+	// The older setup notes whether it finds the CA line; the new one migrates, then does not start.
+	old := []byte(string(r.fakeRunner("0.9.8", true)) + fmt.Sprintf("grep -q '^WARDYN_TRUSTED_CA_FILE=' %s && echo saw-ca >> %s\n", envFile, seen))
+	broken := []byte(string(r.fakeRunner("0.10.0", false)) +
+		fmt.Sprintf("printf '{\"trusted_ca_file\":\"/etc/wardyn/run-ca.pem\"}' > %s && rm %s && echo migrated >> %s\n", config, envFile, seen))
+	r.installed(old)
+	env := "WARDYN_RUNNER_ORG_URL=" + r.srv.URL + "\nWARDYN_PROXY_IMAGE=registry.example/wardyn-proxy:pinned\nWARDYN_PROXY_IMAGE_PINNED=1\n" +
+		"WARDYN_TRUSTED_CA_FILE=/etc/wardyn/run-ca.pem\n"
+	if err := os.WriteFile(envFile, []byte(env), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(envFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.publish("0.10.0", broken, releaseSigner("0.10.0"), nil)
+	out, err := r.cli("upgrade", "--version", "0.10.0")
+	if err == nil || !strings.Contains(err.Error(), "so the runner is back on 0.9.8") {
+		t.Fatalf("a runner that did not start: err = %v\n%s", err, out)
+	}
+	if got := r.record("seen"); got != "migrated\nsaw-ca\n" {
+		t.Fatalf("seen = %q, want the new setup to migrate and the older one to find the CA line", got)
+	}
+	got, err := os.ReadFile(envFile)
+	if err != nil || string(got) != env || !strings.Contains(string(got), "\nWARDYN_TRUSTED_CA_FILE=/etc/wardyn/run-ca.pem\n") {
+		t.Fatalf("environment file after the rollback = %q (%v), want %q", got, err, env)
+	}
+	if after, err := os.Stat(envFile); err != nil || after.Mode().Perm() != before.Mode().Perm() {
+		t.Fatalf("environment file after the rollback: %v (%v), want mode %v", after, err, before.Mode().Perm())
+	}
+	if _, err := os.Stat(config); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("runnerd.json is there after the rollback (%v), but there was none before", err)
 	}
 }
 

@@ -121,7 +121,8 @@ func installedRunnerd() string { return filepath.Join(installedRunnerdDir(), "wa
 // runRunnerUpgrade replaces the installed runner with version's verified one. wardyn-runnerd setup stages the
 // file beside the installed one, stops the service, keeps the old file as .previous, renames the new one into
 // place and starts the service; the runner's status then has to say it started and connected. A runner that
-// does not is replaced by .previous the same way. A runner already at version is left alone.
+// does not is replaced by .previous the same way, after its service files are put back as they were. A runner
+// already at version is left alone.
 func runRunnerUpgrade(cmd *cobra.Command, version, flagBase string) error {
 	ctx, out := cmd.Context(), cmd.OutOrStdout()
 	installed := installedRunnerd()
@@ -151,6 +152,12 @@ func runRunnerUpgrade(cmd *cobra.Command, version, flagBase string) error {
 	fmt.Fprintf(out, copyUpgradeSwapping+"\n", from, version)
 	prev := installed + ".previous"
 	prevBefore, _ := os.Stat(prev)
+	// The new setup moves the old one's settings out of the service files into runnerd.json, where an older
+	// setup does not look, so a rollback puts the files back as they are now.
+	kept, err := keepServiceFiles(serviceFiles())
+	if err != nil {
+		return err
+	}
 	started := time.Now()
 	failure := runRunnerdSetup(cmd, bin, org, "", "")
 	if failure == nil {
@@ -165,6 +172,9 @@ func runRunnerUpgrade(cmd *cobra.Command, version, flagBase string) error {
 		return fmt.Errorf(errUpgradeNotReplaced, version, failure)
 	}
 	fmt.Fprintf(out, copyUpgradeRollingBack+"\n", version, failure, from)
+	if err := restoreServiceFiles(kept); err != nil {
+		return fmt.Errorf(errUpgradeRollbackFailed, version, failure, from, err, restoreLine(from, prev, org))
+	}
 	started = time.Now()
 	if err := runRunnerdSetup(cmd, prev, org, "", ""); err != nil {
 		return fmt.Errorf(errUpgradeRollbackFailed, version, failure, from, err, restoreLine(from, prev, org))
@@ -173,6 +183,71 @@ func runRunnerUpgrade(cmd *cobra.Command, version, flagBase string) error {
 		return fmt.Errorf(errUpgradeRollbackFailed, version, failure, from, err, restoreLine(from, prev, org))
 	}
 	return fmt.Errorf(errUpgradeRolledBack, version, failure, from)
+}
+
+// keptFile is a service file as it was before an upgrade: its bytes and mode, or that it was absent.
+type keptFile struct {
+	path   string
+	data   []byte
+	mode   os.FileMode
+	absent bool
+}
+
+// serviceFiles are the files the installed runner's service takes its settings from: the environment file
+// (Linux) or LaunchAgent (macOS) a setup before 0.10 wrote, the environment file a macOS --no-service wrote,
+// and runnerd.json, where wardyn-runnerd setup keeps them since.
+func serviceFiles() []string {
+	home, _ := os.UserHomeDir()
+	if setupGOOS == "darwin" {
+		data := filepath.Join(home, "Library", "Application Support", "wardyn")
+		return []string{filepath.Join(home, "Library", "LaunchAgents", "com.wardyn.runnerd.plist"),
+			filepath.Join(data, "runnerd.env"), filepath.Join(data, "runnerd.json")}
+	}
+	cfg := filepath.Join(home, ".config")
+	return []string{filepath.Join(cfg, "wardyn", "runnerd.env"), filepath.Join(cmp.Or(os.Getenv("XDG_CONFIG_HOME"), cfg), "wardyn", "runnerd.json")}
+}
+
+// keepServiceFiles reads each of paths as it is now; one that is not there is kept as absent.
+func keepServiceFiles(paths []string) ([]keptFile, error) {
+	kept := make([]keptFile, 0, len(paths))
+	for _, path := range paths {
+		k := keptFile{path: path}
+		fi, err := os.Stat(path)
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			k.absent = true
+		case err != nil:
+			return nil, err
+		default:
+			k.mode = fi.Mode().Perm()
+			if k.data, err = os.ReadFile(path); err != nil {
+				return nil, err
+			}
+		}
+		kept = append(kept, k)
+	}
+	return kept, nil
+}
+
+// restoreServiceFiles puts each kept file back byte for byte with its old mode, and removes one that was
+// absent.
+func restoreServiceFiles(kept []keptFile) error {
+	for _, k := range kept {
+		if k.absent {
+			if err := os.Remove(k.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+			continue
+		}
+		// writeFileAtomic keeps the mode of a file already there, so that file takes the old mode first.
+		if err := os.Chmod(k.path, k.mode); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err := writeFileAtomic(k.path, k.data, k.mode); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // signedRunnerd is the runner of release f.release (design #3312): SHA256SUMS and its Sigstore bundle are
