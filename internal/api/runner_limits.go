@@ -141,15 +141,27 @@ func (s *Server) updateRunnerLimits(w http.ResponseWriter, r *http.Request, kind
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), actor, placement.ActionRunnerUpdate, id.String(), "success",
 		mustJSON(map[string]any{"limits": map[string]*types.RunnerLimits{"before": before, "after": row.Limits}})))
 	s.kickQueue()
-	// The per-run limits ride AUTH_OK, so a connected runner would learn the new ones only on a reconnect
-	// with no bound: end its session and the fresh one carries them. A runner on another replica, or
-	// offline, reads them when it next connects.
-	if err := s.runnerHub(rs).Goaway(r.Context(), id); err != nil {
-		slog.WarnContext(r.Context(), "wardynd: a runner's new limits wait for its next session", slog.String("runner_id", id.String()), slog.Any("err", err))
+	// The per-run CPU and memory ride AUTH_OK, so a connected runner would learn a changed pair only on a
+	// reconnect with no bound: end its session and the fresh one carries it. Only a changed pair does, so
+	// an update of the runs at once, the totals or the disk, or a repeat of the same limits, leaves the
+	// session (and its streams) alone. A runner on another replica is ended by that replica's stored-row
+	// recheck, and one offline reads the pair when it next connects.
+	if perRunPairChanged(before, row.Limits) {
+		if err := s.runnerHub(rs).Goaway(r.Context(), id); err != nil {
+			slog.WarnContext(r.Context(), "wardynd: a runner's new limits wait for its next session", slog.String("runner_id", id.String()), slog.Any("err", err))
+		}
 	}
 	if views, ok := s.runnerViews(w, r, rs, []types.Runner{row}, kind == types.RunnerOwnerOrg); ok {
 		writeJSON(w, http.StatusOK, views[0])
 	}
+}
+
+// perRunPairChanged says whether the per-run CPU or memory differs between two limit sets (nil: none declared).
+func perRunPairChanged(before, after *types.RunnerLimits) bool {
+	if before == nil || after == nil {
+		return before != after
+	}
+	return before.PerRun.CPUMillis != after.PerRun.CPUMillis || before.PerRun.MemoryMiB != after.PerRun.MemoryMiB
 }
 
 // pastReported refuses a total past what the runner last reported it has, where this replica holds its

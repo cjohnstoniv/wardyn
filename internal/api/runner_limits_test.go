@@ -305,72 +305,105 @@ func TestRunnerCapsUpdateTheArch(t *testing.T) {
 	}
 }
 
-// Changing a connected runner's limits ends its session (GOAWAY), so the fresh one carries the new
-// per-run pair in AUTH_OK; without it the runner would keep the old pair for as long as it stayed up.
-func TestRunnerLimitsUpdateEndsTheRunnersSession(t *testing.T) {
-	srv, f, _ := newRunnerRegistrationServer(t)
-	row := f.addRunner(srv, "alice", "laptop", types.RunnerClaimed, time.Hour)
-	pub, key, _ := ed25519.GenerateKey(rand.Reader)
-	row.PublicKey = pub
-	f.lock.Lock()
-	f.rows[row.ID] = row
-	f.lock.Unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	srv.cfg.RunnerHub.Connected = func(context.Context, uuid.UUID) error { return nil }
-	srv.cfg.RunnerHub.Admit = func(context.Context, types.Runner) (remote.Admission, error) {
-		link := &remote.Link{}
-		return remote.Admission{Substrate: remote.New(row.ID.String(), link, remote.Options{}), Link: link,
-			Pending:        func(context.Context) ([]runnerwire.PendingAction, error) { return nil, nil },
-			BeginInventory: func(context.Context, string) error { return nil },
-			StatePage:      func(context.Context, string, runnerwire.StatePage) error { return nil },
-			Event:          func(context.Context, runnerwire.Event) error { return nil },
-		}, nil
+// Changing a connected runner's per-run pair ends its session (GOAWAY), so the fresh one carries the new
+// pair in AUTH_OK; without it the runner would keep the old pair for as long as it stayed up. An update
+// that leaves the pair as it was (the same limits again, or only the runs at once) leaves the session,
+// and the streams on it, alone.
+func TestRunnerLimitsUpdateEndsTheRunnersSessionOnlyForAChangedPerRunPair(t *testing.T) {
+	cases := []struct {
+		name   string
+		start  *types.RunnerLimits
+		update func(types.RunnerLimits) types.RunnerLimits
+		endsIt bool
+	}{
+		{"limits declared for the first time", nil, func(l types.RunnerLimits) types.RunnerLimits { return l }, true},
+		{"a new per-run memory", testRunnerLimits(), func(l types.RunnerLimits) types.RunnerLimits { l.PerRun.MemoryMiB = 2048; return l }, true},
+		{"a new per-run CPU", testRunnerLimits(), func(l types.RunnerLimits) types.RunnerLimits { l.PerRun.CPUMillis = 1000; return l }, true},
+		{"the same limits again", testRunnerLimits(), func(l types.RunnerLimits) types.RunnerLimits { return l }, false},
+		{"only the runs at once", testRunnerLimits(), func(l types.RunnerLimits) types.RunnerLimits { l.RunsAtOnce = 1; return l }, false},
+		{"only the totals and the disk", testRunnerLimits(), func(l types.RunnerLimits) types.RunnerLimits {
+			l.Total.MemoryMiB, l.PerRun.DiskMiB = 16384, 25600
+			return l
+		}, false},
 	}
-	hub := srv.runnerHub(f)
-	ready := make(chan struct{}, 1)
-	client, err := runnerwire.NewClient(runnerwire.ClientConfig{OrgURL: srv.cfg.RunnerOrgURL, RunnerID: row.ID.String(), PrivateKey: key,
-		Hooks: runnerwire.RunnerHooks{
-			Call:    func(context.Context, *runnerwire.Peer, uint32, string, json.RawMessage) (any, error) { return nil, nil },
-			Open:    func(*runnerwire.Peer, *runnerwire.Stream, runnerwire.Open) error { return runnerwire.ErrNotReady },
-			Clock:   func(runnerwire.Hello, time.Time) error { return nil },
-			Pending: func(context.Context, *runnerwire.Peer, []runnerwire.PendingAction) error { return nil },
-			StatePages: func(_ context.Context, send func(runnerwire.StatePage) error) error {
-				return send(runnerwire.StatePage{InventoryID: uuid.New(), Final: true})
-			},
-			Replay:      func(context.Context, *runnerwire.Peer) error { return nil },
-			BeforeReady: func(context.Context, *runnerwire.Peer, bool) error { return nil },
-			Lease:       func(context.Context, runnerwire.Lease) error { return nil },
-			Revoked:     func(context.Context) error { return nil },
-			Offline:     func(context.Context) {},
-			Online:      func(*runnerwire.Peer, bool) { ready <- struct{}{} },
-		},
-		Dial: func(context.Context) (runnerwire.Conn, error) {
-			org, run := runnerwire.Loopback()
-			go func() { _ = hub.Serve(ctx, org, row.ID) }()
-			return run, nil
-		}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ended := make(chan error, 1)
-	go func() { ended <- client.Connect(ctx) }()
-	select {
-	case <-ready:
-	case <-ctx.Done():
-		t.Fatal("the runner never reached READY")
-	}
-	body, _ := json.Marshal(types.RunnerUpdateRequest{Limits: testRunnerLimits()})
-	alice := memberModeSSOSession(t, "alice", "alice@example.com", oidc.RoleUser, false)
-	if w := doSSO(t, srv, http.MethodPut, "/api/v1/me/runners/"+row.ID.String(), alice, string(body)); w.Code != http.StatusOK {
-		t.Fatalf("owner update = %d %s", w.Code, w.Body.String())
-	}
-	select {
-	case err := <-ended:
-		if !errors.Is(err, runnerwire.ErrGoaway) {
-			t.Fatalf("the runner's session ended with %v, want a GOAWAY", err)
-		}
-	case <-ctx.Done():
-		t.Fatal("updating the limits did not end the runner's session")
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			srv, f, _ := newRunnerRegistrationServer(t)
+			row := f.addRunner(srv, "alice", "laptop", types.RunnerClaimed, time.Hour)
+			pub, key, _ := ed25519.GenerateKey(rand.Reader)
+			row.PublicKey, row.Limits = pub, c.start
+			f.lock.Lock()
+			f.rows[row.ID] = row
+			f.lock.Unlock()
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			srv.cfg.RunnerHub.Connected = func(context.Context, uuid.UUID) error { return nil }
+			srv.cfg.RunnerHub.Admit = func(context.Context, types.Runner) (remote.Admission, error) {
+				link := &remote.Link{}
+				return remote.Admission{Substrate: remote.New(row.ID.String(), link, remote.Options{}), Link: link,
+					Pending:        func(context.Context) ([]runnerwire.PendingAction, error) { return nil, nil },
+					BeginInventory: func(context.Context, string) error { return nil },
+					StatePage:      func(context.Context, string, runnerwire.StatePage) error { return nil },
+					Event:          func(context.Context, runnerwire.Event) error { return nil },
+				}, nil
+			}
+			hub := srv.runnerHub(f)
+			ready := make(chan struct{}, 1)
+			client, err := runnerwire.NewClient(runnerwire.ClientConfig{OrgURL: srv.cfg.RunnerOrgURL, RunnerID: row.ID.String(), PrivateKey: key,
+				Hooks: runnerwire.RunnerHooks{
+					Call:    func(context.Context, *runnerwire.Peer, uint32, string, json.RawMessage) (any, error) { return nil, nil },
+					Open:    func(*runnerwire.Peer, *runnerwire.Stream, runnerwire.Open) error { return runnerwire.ErrNotReady },
+					Clock:   func(runnerwire.Hello, time.Time) error { return nil },
+					Pending: func(context.Context, *runnerwire.Peer, []runnerwire.PendingAction) error { return nil },
+					StatePages: func(_ context.Context, send func(runnerwire.StatePage) error) error {
+						return send(runnerwire.StatePage{InventoryID: uuid.New(), Final: true})
+					},
+					Replay:      func(context.Context, *runnerwire.Peer) error { return nil },
+					BeforeReady: func(context.Context, *runnerwire.Peer, bool) error { return nil },
+					Lease:       func(context.Context, runnerwire.Lease) error { return nil },
+					Revoked:     func(context.Context) error { return nil },
+					Offline:     func(context.Context) {},
+					Online:      func(*runnerwire.Peer, bool) { ready <- struct{}{} },
+				},
+				Dial: func(context.Context) (runnerwire.Conn, error) {
+					org, run := runnerwire.Loopback()
+					go func() { _ = hub.Serve(ctx, org, row.ID) }()
+					return run, nil
+				}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ended := make(chan error, 1)
+			go func() { ended <- client.Connect(ctx) }()
+			select {
+			case <-ready:
+			case <-ctx.Done():
+				t.Fatal("the runner never reached READY")
+			}
+			start := testRunnerLimits()
+			if c.start != nil {
+				start = *c.start
+			}
+			body, _ := json.Marshal(types.RunnerUpdateRequest{Limits: ptr(c.update(start))})
+			alice := memberModeSSOSession(t, "alice", "alice@example.com", oidc.RoleUser, false)
+			if w := doSSO(t, srv, http.MethodPut, "/api/v1/me/runners/"+row.ID.String(), alice, string(body)); w.Code != http.StatusOK {
+				t.Fatalf("owner update = %d %s", w.Code, w.Body.String())
+			}
+			// The GOAWAY is written before the handler answers, so a session left alone shows nothing here.
+			wait := 300 * time.Millisecond
+			if c.endsIt {
+				wait = 5 * time.Second
+			}
+			select {
+			case err := <-ended:
+				if !c.endsIt || !errors.Is(err, runnerwire.ErrGoaway) {
+					t.Fatalf("the runner's session ended with %v (should end: %v, as a GOAWAY)", err, c.endsIt)
+				}
+			case <-time.After(wait):
+				if c.endsIt {
+					t.Fatal("updating the per-run pair did not end the runner's session")
+				}
+			}
+		})
 	}
 }
