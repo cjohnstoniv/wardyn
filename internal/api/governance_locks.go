@@ -27,18 +27,25 @@ import (
 )
 
 // lockableKnobs is every knob a lock may name: the JSON names of a unit overlay's policy knobs and of
-// its limits (DESIGN-TREE §3).
+// its limits (DESIGN-TREE §3), and each desktop direction on its own (desktop.copy_out, #2967).
 var lockableKnobs = func() map[string]bool {
 	out := map[string]bool{}
-	for _, t := range []reflect.Type{reflect.TypeFor[types.CeilingOverlay](), reflect.TypeFor[types.LimitsOverlay]()} {
+	for _, t := range []reflect.Type{reflect.TypeFor[types.CeilingOverlay](), reflect.TypeFor[types.LimitsOverlay](), reflect.TypeFor[types.DesktopControls]()} {
+		prefix := ""
+		if t == reflect.TypeFor[types.DesktopControls]() {
+			prefix = desktopKnobPrefix
+		}
 		for i := range t.NumField() {
 			if name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ","); name != "" && name != "-" {
-				out[name] = true
+				out[prefix+name] = true
 			}
 		}
 	}
 	return out
 }()
+
+// desktopKnobPrefix starts the name of one desktop direction's knob.
+const desktopKnobPrefix = "desktop."
 
 // boundaryLocker is the locker name a boundary lock's refusal and provenance carry.
 const boundaryLocker = "the Wardyn boundary"
@@ -60,7 +67,8 @@ func normalizeLockedKnobs(knobs []string) ([]string, string) {
 	return out, ""
 }
 
-// jsonFields is v's JSON object as raw fields by name; absent fields are ones v leaves unset.
+// jsonFields is v's JSON object as raw fields by name; absent fields are ones v leaves unset. A desktop
+// also gives each direction it names as its own knob.
 func jsonFields(vs ...any) map[string]json.RawMessage {
 	out := map[string]json.RawMessage{}
 	for _, v := range vs {
@@ -77,6 +85,49 @@ func jsonFields(vs ...any) map[string]json.RawMessage {
 				out[k] = f
 			}
 		}
+		var d types.DesktopControls
+		if raw, ok := m["desktop"]; ok && json.Unmarshal(raw, &d) == nil {
+			maps.Copy(out, desktopKnobs(d))
+		}
+	}
+	return out
+}
+
+// desktopKnobs is each direction d names, by its knob name.
+func desktopKnobs(d types.DesktopControls) map[string]json.RawMessage {
+	out := map[string]json.RawMessage{}
+	for k, f := range jsonObject(d) {
+		out[desktopKnobPrefix+k] = f
+	}
+	return out
+}
+
+// jsonObject is v's JSON object as raw fields by name.
+func jsonObject(v any) map[string]json.RawMessage {
+	var m map[string]json.RawMessage
+	if raw, err := json.Marshal(v); err == nil {
+		_ = json.Unmarshal(raw, &m)
+	}
+	return m
+}
+
+// resolvedKnobs is res's effective value of every knob, its desktop directions as the rules they are
+// held to: one no layer names is at its default.
+func resolvedKnobs(res *ResolvedUnit) map[string]json.RawMessage {
+	if res == nil {
+		return nil
+	}
+	out := jsonFields(res.Ceiling, res.Limits)
+	maps.Copy(out, desktopKnobs(res.Ceiling.Desktop.Effective()))
+	return out
+}
+
+// boundaryKnobs is the boundary's own value of every knob it names. A desktop it names holds each
+// direction it leaves unset to that direction's default, as the meet does.
+func boundaryKnobs(b types.Boundary) map[string]json.RawMessage {
+	out := jsonFields(b.Spec, b.Limits)
+	if b.Spec.Desktop != nil {
+		maps.Copy(out, desktopKnobs(b.Spec.Desktop.Effective()))
 	}
 	return out
 }
@@ -117,10 +168,7 @@ func (s *Server) locksOver(all []types.GovernanceUnit, parent *uuid.UUID, b type
 		}
 		seen[*cur] = true
 		if len(row.LockedKnobs) > 0 {
-			var eff map[string]json.RawMessage
-			if res := s.resolveForDiff(all, row.ID); res != nil {
-				eff = jsonFields(res.Ceiling, res.Limits)
-			}
+			eff := resolvedKnobs(s.resolveForDiff(all, row.ID))
 			for _, k := range row.LockedKnobs {
 				if _, held := out[k]; !held {
 					out[k] = knobLock{locker: row.Name, contact: nonZeroContact(row.Contact), value: eff[k]}
@@ -130,7 +178,7 @@ func (s *Server) locksOver(all []types.GovernanceUnit, parent *uuid.UUID, b type
 		cur = row.ParentID
 	}
 	if b.HardLimits() {
-		own := jsonFields(b.Spec, b.Limits)
+		own := boundaryKnobs(b)
 		for _, k := range b.LockedKnobs {
 			if _, held := out[k]; !held {
 				out[k] = knobLock{locker: boundaryLocker, contact: nonZeroContact(b.Contact), value: own[k]}
@@ -210,10 +258,7 @@ func (s *Server) checkUnitLocks(p types.GovernanceUnit, res *ResolvedUnit, all [
 	if exists {
 		before = cur.LockedKnobs
 	}
-	var eff map[string]json.RawMessage
-	if res != nil {
-		eff = jsonFields(res.Ceiling, res.Limits)
-	}
+	eff := resolvedKnobs(res)
 	for _, k := range p.LockedKnobs {
 		if slices.Contains(before, k) {
 			continue
@@ -238,7 +283,7 @@ func boundaryLockConflicts(units []types.GovernanceUnit, before, after types.Bou
 	if !after.HardLimits() {
 		return nil
 	}
-	own := jsonFields(after.Spec, after.Limits)
+	own := boundaryKnobs(after)
 	var out []string
 	for _, k := range after.LockedKnobs {
 		if before.HardLimits() && slices.Contains(before.LockedKnobs, k) {

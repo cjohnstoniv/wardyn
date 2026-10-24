@@ -15,7 +15,7 @@
 // the terminal shows, echoed characters included, is output, and a recorded run keeps it:
 // recording.pause marks the gap, but no terminal recorder acts on recording_gap yet. A recorded
 // desktop keeps no screen frames from take over to hand back (PauseDesktopRecording) on the replica
-// that answers the take over.
+// that answers the take over, and a hand back on another replica ends it there over the live bus.
 package api
 
 import (
@@ -161,8 +161,9 @@ func (s *Server) takeoverRecorded(run types.AgentRun) bool {
 }
 
 // recordingGap writes recording.pause or recording.resume (the gap's start or end, with its reason,
-// in the tamper-evident log) and tells every replica's recorder over the live bus. Nothing consumes
-// the notice yet, so a terminal's output in the gap is still recorded.
+// in the tamper-evident log) and tells every replica's recorder over the live bus. Only a desktop's
+// recorder consumes the notice (onRecordingGapNotice: a resume ends the take over's desktop hold on
+// the replica that holds it), so a terminal's output in the gap is still recorded.
 func (s *Server) recordingGap(ctx context.Context, ap types.ApprovalRequest, paused bool, data map[string]any) {
 	action := "recording.resume"
 	if paused {
@@ -170,14 +171,18 @@ func (s *Server) recordingGap(ctx context.Context, ap types.ApprovalRequest, pau
 	}
 	data["approval_id"], data["reason"] = ap.ID, recordingGapReason
 	s.recordAudit(ctx, s.auditEvent(&ap.RunID, types.ActorSystem, "wardyn", action, ap.RunID.String(), "success", mustJSON(data)))
-	s.publishNotice(livebus.KindRecordingGap, ap.RunID, recordingGapNotice{ApprovalID: ap.ID, Paused: paused, Reason: recordingGapReason})
+	s.publishNotice(livebus.KindRecordingGap, ap.RunID, recordingGapNotice{ApprovalID: ap.ID, Paused: paused, Reason: recordingGapReason,
+		DesktopHold: ap.ID.String()})
 }
 
-// recordingGapNotice is the live-bus body of a recording pause or resume.
+// recordingGapNotice is the live-bus body of a recording pause or resume. DesktopHold is the take
+// over's or desktop sign-in's id, the hold it opens or ends on a desktop recording (a sign-in's notice
+// carries no approval).
 type recordingGapNotice struct {
-	ApprovalID uuid.UUID `json:"approval_id"`
-	Paused     bool      `json:"paused"`
-	Reason     string    `json:"reason"`
+	ApprovalID  uuid.UUID `json:"approval_id"`
+	Paused      bool      `json:"paused"`
+	Reason      string    `json:"reason"`
+	DesktopHold string    `json:"desktop_hold,omitempty"`
 }
 
 // writeTakeoverError answers a failed take over or hand back.
@@ -232,7 +237,7 @@ func (s *Server) handleTakeOverApproval(w http.ResponseWriter, r *http.Request) 
 		s.recordingGap(r.Context(), got, true, map[string]any{})
 	}
 	if prev == "" && s.desktopRecorded(run) {
-		s.PauseDesktopRecording(r.Context(), run, desktopPauseTakeover)
+		s.PauseDesktopRecording(r.Context(), run, desktopPauseTakeover, got.ID.String())
 	}
 	writeJSON(w, http.StatusOK, takeoverResponse{ApprovalRequest: got, Surface: surface})
 }
@@ -267,7 +272,7 @@ func (s *Server) handleHandBackApproval(w http.ResponseWriter, r *http.Request) 
 	if s.takeoverRecorded(run) {
 		s.recordingGap(r.Context(), got, false, map[string]any{"gap_ms": held})
 	}
-	s.ResumeDesktopRecording(r.Context(), run, desktopPauseTakeover)
+	s.ResumeDesktopRecording(r.Context(), run, got.ID.String())
 	s.recordAudit(r.Context(), s.auditEvent(&got.RunID, actorType, principal, "takeover.close", got.ID.String(), "success",
 		mustJSON(map[string]any{"approval_id": got.ID, "held_ms": held})))
 	writeJSON(w, http.StatusOK, takeoverResponse{ApprovalRequest: got, Surface: s.takeoverSurface(r.Context(), run)})
