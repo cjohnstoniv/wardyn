@@ -253,7 +253,7 @@ describe("BoundaryScreen", () => {
     expect(within(report).getByRole("row", { name: new RegExp(`^${BOUNDARY_DESKTOP.LOCKS}`) })).toHaveTextContent(
       `${BOUNDARY_DESKTOP.LOCKS}${BOUNDARY_DESKTOP.NO_LOCKS}Copy out`,
     );
-    await user.click(await within(report).findByRole("button", { name: BOUNDARY_DRY_RUN.SUBMIT }));
+    await user.click(await within(report).findByRole("button", { name: BOUNDARY_DRY_RUN.SUBMIT_SAVE }));
     expect(putMock).toHaveBeenCalledWith(
       { mode: "hard_limits", spec: {}, limits: {}, locked_knobs: ["allowed_domains", "desktop.copy_out"] },
       '"b1"',
