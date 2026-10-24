@@ -247,7 +247,7 @@ func (s *Server) handlePauseDesktopAgent(w http.ResponseWriter, r *http.Request)
 		// so it is not continued here, and that pause's row is the answer.
 		if cur, _, rerr := st.DesktopVMSignIns(bg, run.ID); rerr == nil && cur.PausedAt != nil {
 			unlock()
-			writeJSON(w, http.StatusOK, s.desktopSignInsView(bg, run, cur))
+			s.supersededBy(bg, w, run, at, principal, cur, map[string]any{"error": err.Error()})
 			return
 		}
 	}
@@ -262,7 +262,7 @@ func (s *Server) handlePauseDesktopAgent(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		if newer != nil {
-			writeJSON(w, http.StatusOK, s.desktopSignInsView(bg, run, *newer))
+			s.supersededBy(bg, w, run, at, principal, *newer, map[string]any{"error": err.Error()})
 			return
 		}
 		s.recordAudit(bg, s.auditEvent(&run.ID, at, principal, auditDesktopSignIn, run.ID.String(), "failure",
@@ -358,6 +358,15 @@ func lockBound(lockCtx, bg context.Context) (context.Context, func()) {
 		}
 	})
 	return ctx, func() { after(); cancel(nil) }
+}
+
+// supersededBy answers a pause or resume that lost to a newer pause whose mark (cur) stands: its
+// failure row, stage lock_lost with superseded_by that pause's paused_at, then that pause's view.
+func (s *Server) supersededBy(ctx context.Context, w http.ResponseWriter, run types.AgentRun, at types.ActorType, principal string,
+	cur store.DesktopVMSignIns, data map[string]any) {
+	data["stage"], data["superseded_by"] = "lock_lost", cur.PausedAt
+	s.recordAudit(ctx, s.auditEvent(&run.ID, at, principal, auditDesktopSignIn, run.ID.String(), "failure", mustJSON(data)))
+	writeJSON(w, http.StatusOK, s.desktopSignInsView(ctx, run, cur))
 }
 
 // errDesktopSignInUnmarked is an acked pause whose row was no longer a 'memory' row with no mark.
@@ -603,9 +612,8 @@ func (s *Server) handleResumeDesktopAgent(w http.ResponseWriter, r *http.Request
 		}
 		defer relocked()
 		if cur.PausedAt == nil || !cur.PausedAt.Equal(*row.PausedAt) {
-			current := s.desktopSignInsView(lctx, run, cur)
 			relocked()
-			writeJSON(w, http.StatusOK, current)
+			s.resumeOvertaken(bg, w, run, at, principal, row, cur)
 			return
 		}
 		write = lctx
@@ -626,7 +634,7 @@ func (s *Server) handleResumeDesktopAgent(w http.ResponseWriter, r *http.Request
 			writeErrorReason(w, http.StatusServiceUnavailable, reasonDesktopSignInsUnavailable, desktopSignInsUnreadableMsg)
 			return
 		}
-		writeJSON(w, http.StatusOK, s.desktopSignInsView(bg, run, cur))
+		s.resumeOvertaken(bg, w, run, at, principal, row, cur)
 		return
 	}
 	s.endDesktopHold(bg, run, vmSignInHold(run.ID, pausedAt))
@@ -636,4 +644,15 @@ func (s *Server) handleResumeDesktopAgent(w http.ResponseWriter, r *http.Request
 		mustJSON(map[string]any{"paused_by": by, "paused_at": pausedAt, "resumed_at": now, "paused_seconds": int(now.Sub(pausedAt).Seconds())})))
 	row.PausedBy, row.PausedAt = "", nil
 	writeJSON(w, http.StatusOK, s.desktopSignInsView(bg, run, row))
+}
+
+// resumeOvertaken answers a resume whose pause (row) the row no longer marks (cur): another resume
+// cleared it, or a newer pause marked it since, which supersedes this resume.
+func (s *Server) resumeOvertaken(ctx context.Context, w http.ResponseWriter, run types.AgentRun, at types.ActorType, principal string,
+	row, cur store.DesktopVMSignIns) {
+	if cur.PausedAt != nil && !cur.PausedAt.Equal(*row.PausedAt) {
+		s.supersededBy(ctx, w, run, at, principal, cur, map[string]any{"paused_by": row.PausedBy, "paused_at": row.PausedAt})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.desktopSignInsView(ctx, run, cur))
 }

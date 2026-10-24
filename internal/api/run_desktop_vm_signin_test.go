@@ -625,6 +625,11 @@ func TestDesktopSignIns_APauseMarkedFirstElsewhereIsNotContinued(t *testing.T) {
 	if row, _, _ := f.st.DesktopVMSignIns(context.Background(), f.run.ID); row.PausedAt == nil || !row.PausedAt.Equal(other) || row.PausedBy != "someone-else" {
 		t.Fatalf("row = %+v, want the other pause's mark", row)
 	}
+	rows := f.signInRows()
+	if len(rows) != 1 {
+		t.Fatalf("rows = %+v, want only this pause's failure", rows)
+	}
+	wantSuperseded(t, rows, other)
 }
 
 // The pause is the row, not this process's memory: after a restart the GET still says paused, and
@@ -655,7 +660,8 @@ func TestDesktopSignIns_PauseSurvivesARestart(t *testing.T) {
 // A pause that loses the run's lock during its runner call, as one whose database session died does,
 // acts on the agent no more: another pause took the lock, stopped the agent and marked the row, and
 // that agent is its to continue. The first takes the lock again, finds the newer mark and sends
-// nothing, so the agent stays stopped under the mark its resume will clear.
+// nothing, so the agent stays stopped under the mark its resume will clear. Its failure row names the
+// pause that superseded it.
 func TestDesktopSignIns_PauseThatLostItsLockLeavesANewerPauseAlone(t *testing.T) {
 	f := newVMSignInFixture(t, "memory")
 	drop := f.loseLocks()
@@ -683,8 +689,28 @@ func TestDesktopSignIns_PauseThatLostItsLockLeavesANewerPauseAlone(t *testing.T)
 	if row, _, _ := f.st.DesktopVMSignIns(context.Background(), f.run.ID); row.PausedAt == nil || !row.PausedAt.Equal(*newer.v.PausedAt) {
 		t.Fatalf("row = %+v, want the newer pause's mark", row)
 	}
-	if rows := f.signInRows(); len(rows) != 0 {
-		t.Fatalf("rows = %+v, want none until the resume", rows)
+	rows := f.signInRows()
+	if len(rows) != 1 {
+		t.Fatalf("rows = %+v, want only the superseded pause's failure until the resume", rows)
+	}
+	wantSuperseded(t, rows, *newer.v.PausedAt)
+}
+
+// wantSuperseded fails t unless rows hold one failure, stage lock_lost, superseded by the pause at at.
+func wantSuperseded(t *testing.T, rows []types.AuditEvent, at time.Time) {
+	t.Helper()
+	n := 0
+	for _, ev := range rows {
+		var d struct {
+			Stage        string     `json:"stage"`
+			SupersededBy *time.Time `json:"superseded_by"`
+		}
+		if ev.Outcome == "failure" && json.Unmarshal(ev.Data, &d) == nil && d.Stage == "lock_lost" && d.SupersededBy != nil && d.SupersededBy.Equal(at) {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("desktop.sign_in.pause rows = %+v, want one lock_lost failure superseded by the pause at %v", rows, at)
 	}
 }
 
@@ -761,11 +787,16 @@ func TestDesktopSignIns_AContinueThatLosesItsLockIsCancelled(t *testing.T) {
 	if row, _, _ := f.st.DesktopVMSignIns(context.Background(), f.run.ID); row.PausedAt == nil || !row.PausedAt.Equal(*newer.v.PausedAt) {
 		t.Fatalf("row = %+v, want the newer pause's mark intact", row)
 	}
+	rows := f.signInRows()
+	if len(rows) != 1 {
+		t.Fatalf("rows = %+v, want only the failed pause's row", rows)
+	}
+	wantSuperseded(t, rows, *newer.v.PausedAt)
 }
 
 // A resume that loses the run's lock after its runner call clears no mark but its own: the session was
 // resumed from another tab and a newer pause has marked the row since, so that mark stays for its own
-// resume, and the newer pause's agent stays stopped.
+// resume, and the newer pause's agent stays stopped. Its failure row names the pause that superseded it.
 func TestDesktopSignIns_ResumeThatLostItsLockLeavesANewerPauseAlone(t *testing.T) {
 	f := newVMSignInFixture(t, "memory")
 	if code, _, body := f.do(t, http.MethodPost, "/pause"); code != http.StatusOK {
@@ -796,9 +827,11 @@ func TestDesktopSignIns_ResumeThatLostItsLockLeavesANewerPauseAlone(t *testing.T
 	if !f.rn.agentStopped() {
 		t.Fatal("the newer pause's agent is not stopped")
 	}
-	if rows := f.signInRows(); len(rows) != 1 || rows[0].Outcome != "success" {
-		t.Fatalf("rows = %+v, want the other tab's one success", rows)
+	rows := f.signInRows()
+	if len(rows) != 2 || rows[0].Outcome != "success" {
+		t.Fatalf("rows = %+v, want the other tab's success and this resume's failure", rows)
 	}
+	wantSuperseded(t, rows, *newer.v.PausedAt)
 }
 
 // A resume that loses the run's lock after its runner call and cannot take it again clears nothing:
