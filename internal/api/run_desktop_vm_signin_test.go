@@ -801,6 +801,35 @@ func TestDesktopSignIns_ResumeThatLostItsLockLeavesANewerPauseAlone(t *testing.T
 	}
 }
 
+// A resume that loses the run's lock after its runner call and cannot take it again clears nothing:
+// the mark stays for a resume that can record it, the failure is audited as lock_lost, and the answer
+// is 503.
+func TestDesktopSignIns_ResumeThatCannotRetakeItsLockLeavesTheMark(t *testing.T) {
+	f := newVMSignInFixture(t, "memory")
+	code, paused, body := f.do(t, http.MethodPost, "/pause")
+	if code != http.StatusOK || paused.PausedAt == nil {
+		t.Fatalf("pause = %d %s", code, body)
+	}
+	drop := f.loseLocks()
+	f.rn.during = func(_ context.Context, call string) {
+		if call == "resume" {
+			drop(true)
+		}
+	}
+	code, _, body = f.do(t, http.MethodPost, "/resume")
+	if code != http.StatusServiceUnavailable || !strings.Contains(body, reasonDesktopSignInsResumeFailed) {
+		t.Fatalf("resume = %d %s, want 503 %s", code, body, reasonDesktopSignInsResumeFailed)
+	}
+	if row, _, _ := f.st.DesktopVMSignIns(context.Background(), f.run.ID); row.PausedAt == nil || !row.PausedAt.Equal(*paused.PausedAt) {
+		t.Fatalf("row = %+v, want the pause's mark intact", row)
+	}
+	rows := f.signInRows()
+	var d map[string]any
+	if len(rows) != 1 || rows[0].Outcome != "failure" || json.Unmarshal(rows[0].Data, &d) != nil || d["stage"] != "lock_lost" {
+		t.Fatalf("rows = %+v, want one lock_lost failure", rows)
+	}
+}
+
 // vmSignInDesktopStore is the desktop harness's store with VM sign-in rows; vmSignInDesktopRunner is its
 // runner with a guest agent that stops and continues the agent.
 type vmSignInDesktopStore struct {
