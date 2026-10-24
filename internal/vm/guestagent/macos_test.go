@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -86,24 +85,6 @@ func TestInitEnvCAVariablesWinOverInit(t *testing.T) {
 	// Without a run CA nothing is overridden.
 	if got := initEnv(env, nil, nil); !slices.Contains(got, "SSL_CERT_FILE=/tmp/wardyn/ca-bundle.pem") {
 		t.Errorf("Init's variable was dropped without a CA: %v", got)
-	}
-}
-
-func TestWriteCAFullIsSystemRootsThenTheRunCA(t *testing.T) {
-	dir := t.TempDir()
-	roots := filepath.Join(dir, "cert.pem")
-	if err := os.WriteFile(roots, []byte("ROOTS"), 0o644); err != nil { // no trailing newline
-		t.Fatal(err)
-	}
-	dst := filepath.Join(dir, "ca-bundle.pem")
-	if err := writeCAFull(roots, []byte("RUNCA\n"), dst); err != nil {
-		t.Fatal(err)
-	}
-	if b, _ := os.ReadFile(dst); string(b) != "ROOTS\nRUNCA\n" {
-		t.Errorf("bundle = %q", b)
-	}
-	if err := writeCAFull(filepath.Join(dir, "missing"), []byte("x"), dst); err == nil {
-		t.Error("a missing system roots file was accepted")
 	}
 }
 
@@ -370,7 +351,7 @@ func TestServeVsockIdleUntilTheHostSaysHello(t *testing.T) {
 	}
 }
 
-func allowAll() bool { return true }
+func allowAll(io.Closer) (func(), bool) { return func() {}, true }
 
 func TestSpliceDesktopRefusesWhenTheDesktopIsOff(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -379,7 +360,7 @@ func TestSpliceDesktopRefusesWhenTheDesktopIsOff(t *testing.T) {
 	lb := newBroker()
 	d := &Desktop{}
 	d.Disable()
-	go func() { _ = spliceDesktop(ctx, hb.dial, lb.dial, d.Enabled, 10*time.Millisecond) }()
+	go func() { _ = spliceDesktop(ctx, hb.dial, lb.dial, d.Track, 10*time.Millisecond) }()
 	host := hb.next(t)
 	_, _ = host.Write([]byte{DesktopOpenByte})
 	select {
@@ -388,6 +369,36 @@ func TestSpliceDesktopRefusesWhenTheDesktopIsOff(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 	}
 	hb.next(t) // refused: the agent closed it and dialled again
+}
+
+func TestDisableClosesAnOpenTunnel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	hb := newBroker()
+	lb := newBroker()
+	d := &Desktop{}
+	go func() { _ = spliceDesktop(ctx, hb.dial, lb.dial, d.Track, 10*time.Millisecond) }()
+	host := hb.next(t)
+	_, _ = host.Write([]byte{DesktopOpenByte})
+	local := lb.next(t)
+	go local.Write([]byte("x"))
+	if _, err := io.ReadFull(host, make([]byte, 1)); err != nil {
+		t.Fatal(err) // the tunnel carries traffic
+	}
+	// The tunnel is tracked just after the dial; Disable must reach it whenever that is.
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		d.mu.Lock()
+		n := len(d.open)
+		d.mu.Unlock()
+		if n > 0 || time.Now().After(deadline) {
+			break
+		}
+	}
+	d.Disable()
+	local.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := local.Read(make([]byte, 1)); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Errorf("Screen Sharing's side stayed open after Disable: %v", err)
+	}
 }
 
 func TestSpliceDesktopWaitsForTheOpenByte(t *testing.T) {

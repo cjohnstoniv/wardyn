@@ -145,14 +145,15 @@ func (c *trackedConn) Close() error {
 
 // SpliceDesktop carries the desktop tunnel: it keeps one idle connection to the host open, and when the
 // host writes DesktopOpenByte (a viewer has connected) it dials local and copies both ways until either
-// side ends, then starts over. allow is asked when the open byte comes and a false closes the connection
-// (a run whose desktop is off). local is the guest's own Screen Sharing and nothing the host sends
+// side ends, then starts over. track registers the open tunnel (Desktop.Track): it reports false for a
+// run whose desktop is off, which closes the connection, and a Disable closes a tunnel already open.
+// local is the guest's own Screen Sharing and nothing the host sends
 // changes where it dials; a first byte that is not the open byte closes the connection.
-func SpliceDesktop(ctx context.Context, host, local DialFunc, allow func() bool) error {
-	return spliceDesktop(ctx, host, local, allow, redialWait)
+func SpliceDesktop(ctx context.Context, host, local DialFunc, track func(io.Closer) (func(), bool)) error {
+	return spliceDesktop(ctx, host, local, track, redialWait)
 }
 
-func spliceDesktop(ctx context.Context, host, local DialFunc, allow func() bool, wait time.Duration) error {
+func spliceDesktop(ctx context.Context, host, local DialFunc, track func(io.Closer) (func(), bool), wait time.Duration) error {
 	for ctx.Err() == nil {
 		hc, err := host(ctx)
 		if err != nil {
@@ -160,13 +161,13 @@ func spliceDesktop(ctx context.Context, host, local DialFunc, allow func() bool,
 			sleep(ctx, wait)
 			continue
 		}
-		spliceOne(ctx, hc, local, allow)
+		spliceOne(ctx, hc, local, track)
 		sleep(ctx, wait)
 	}
 	return nil
 }
 
-func spliceOne(ctx context.Context, hc net.Conn, local DialFunc, allow func() bool) {
+func spliceOne(ctx context.Context, hc net.Conn, local DialFunc, track func(io.Closer) (func(), bool)) {
 	defer hc.Close()
 	stop := context.AfterFunc(ctx, func() { _ = hc.Close() })
 	defer stop()
@@ -174,15 +175,22 @@ func spliceOne(ctx context.Context, hc net.Conn, local DialFunc, allow func() bo
 	if _, err := io.ReadFull(hc, b[:]); err != nil || b[0] != DesktopOpenByte {
 		return
 	}
-	if !allow() {
+	release, ok := track(hc)
+	if !ok {
 		return
 	}
+	release() // only to check: the tunnel is tracked below, once both ends are open
 	lc, err := local(ctx)
 	if err != nil {
 		slog.Warn("guest agent: reach Screen Sharing", "err", err)
 		return
 	}
 	defer lc.Close()
+	release, ok = track(pair{hc, lc})
+	if !ok {
+		return
+	}
+	defer release()
 	done := make(chan struct{}, 2)
 	cp := func(dst, src net.Conn) {
 		_, _ = io.Copy(dst, src)
@@ -197,3 +205,11 @@ type vsockAddr struct{}
 
 func (vsockAddr) Network() string { return "vsock" }
 func (vsockAddr) String() string  { return "vsock" }
+
+// pair closes both ends of a tunnel.
+type pair struct{ a, b net.Conn }
+
+func (p pair) Close() error {
+	_ = p.a.Close()
+	return p.b.Close()
+}

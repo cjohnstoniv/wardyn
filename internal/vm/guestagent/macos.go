@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"slices"
 	"strconv"
@@ -97,29 +96,6 @@ func initEnv(env, secret map[string]string, ca []string) []string {
 		}
 	}
 	return append(out, ca...)
-}
-
-// writeCAFull writes dst as the file at roots followed by ca, 0644 and root's: every exec reads it.
-func writeCAFull(roots string, ca []byte, dst string) error {
-	sys, err := os.ReadFile(roots)
-	if err != nil {
-		return fmt.Errorf("the system roots: %w", err)
-	}
-	var b bytes.Buffer
-	b.Write(sys)
-	if !bytes.HasSuffix(sys, []byte("\n")) {
-		b.WriteByte('\n')
-	}
-	b.Write(ca)
-	tmp := dst + ".wardyn-tmp"
-	if err := os.WriteFile(tmp, b.Bytes(), 0o644); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, dst); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return nil
 }
 
 // CmdRunner runs one command to completion and returns its stdout. The darwin code reaches launchctl,

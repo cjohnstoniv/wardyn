@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"math"
 	"math/big"
@@ -69,22 +70,48 @@ type Desktop struct {
 	mu       sync.Mutex
 	password string
 	disabled bool
+	open     map[io.Closer]struct{}
 }
 
-// Disable turns the run's desktop off: no password is set, the credential request answers 404 and the
-// tunnel refuses. Called at Init for a run whose sign-ins cannot be kept (SignInsOff), which has no
-// desktop on macOS; the desktop is on until then, because prepare's control check needs it.
+// Disable turns the run's desktop off: no password is set, the credential request answers 404, the
+// tunnel refuses, and a tunnel already open is closed. Called at Init for a run whose sign-ins cannot
+// be kept (SignInsOff), which has no desktop on macOS; the desktop is on until then, because
+// prepare's control check needs it.
 func (d *Desktop) Disable() {
 	d.mu.Lock()
 	d.disabled = true
+	open := d.open
+	d.open = nil
 	d.mu.Unlock()
+	for c := range open {
+		_ = c.Close()
+	}
 }
 
-// Enabled says whether the tunnel may open.
+// Enabled says whether the desktop is on.
 func (d *Desktop) Enabled() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return !d.disabled
+}
+
+// Track registers c as an open tunnel, so Disable closes it; release forgets it. It reports false, and
+// registers nothing, once the desktop is disabled.
+func (d *Desktop) Track(c io.Closer) (release func(), ok bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.disabled {
+		return nil, false
+	}
+	if d.open == nil {
+		d.open = map[io.Closer]struct{}{}
+	}
+	d.open[c] = struct{}{}
+	return func() {
+		d.mu.Lock()
+		delete(d.open, c)
+		d.mu.Unlock()
+	}, true
 }
 
 // ErrNoConsoleUser is a guest with nobody logged in at the console (the login window).

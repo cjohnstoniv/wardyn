@@ -147,6 +147,12 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "a macOS guest does not mount folder shares", http.StatusUnprocessableEntity)
 		return
 	}
+	// 0.10.0 cannot make a macOS keychain read-only, so a run that wants no sign-ins kept gets no
+	// desktop: no password, no credential, and the tunnel refuses. It still runs agent-only. This is
+	// first, so an Init that fails while writing leaves the desktop off.
+	if in.SignInsOff && s.Desktop != nil {
+		s.Desktop.Disable()
+	}
 	marker, err := os.OpenFile(filepath.Join(s.MarkerDir, "wardyn-guest-init"), os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0o600)
 	if err != nil {
 		http.Error(w, "the sandbox is already initialised", http.StatusConflict)
@@ -159,11 +165,6 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-	}
-	// 0.10.0 cannot make a macOS keychain read-only, so a run that wants no sign-ins kept gets no
-	// desktop: no password, no credential, and the tunnel refuses. It still runs agent-only.
-	if in.SignInsOff && s.Desktop != nil {
-		s.Desktop.Disable()
 	}
 	ca := caEnvFor(in.Files)
 	if ca != nil {

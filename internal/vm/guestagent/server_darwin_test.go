@@ -87,3 +87,14 @@ func TestDarwinInitSignInsOffRunsAgentOnlyWithNoDesktop(t *testing.T) {
 		t.Errorf("credential = %d", w.Code)
 	}
 }
+
+func TestDarwinInitSignInsOffDisablesTheDesktopEvenIfWritingFails(t *testing.T) {
+	s, _, h := newDarwinServer(t)
+	w := postInit(h, Init{SignInsOff: true, Files: []File{{Path: "relative/path", Mode: 0o600}}})
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("Init = %d, want the file write to fail", w.Code)
+	}
+	if s.Desktop.Enabled() {
+		t.Error("the desktop stayed on after a failed Init")
+	}
+}

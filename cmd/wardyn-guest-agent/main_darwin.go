@@ -66,7 +66,7 @@ func run(out string) error {
 	}()
 	go func() {
 		defer wg.Done()
-		_ = guestagent.SpliceDesktop(ctx, hostDialer(guestagent.VsockDesktopPort), screenSharing, desktop.Enabled)
+		_ = guestagent.SpliceDesktop(ctx, hostDialer(guestagent.VsockDesktopPort), screenSharing, desktop.Track)
 	}()
 	wg.Wait()
 	return nil
