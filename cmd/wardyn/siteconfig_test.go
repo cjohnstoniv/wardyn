@@ -555,6 +555,49 @@ func TestSiteConfigSet_WarnsTheEgressBaselineWasNotApplied(t *testing.T) {
 	}
 }
 
+// TestSiteConfigSet_WarnsTheRecordingLevelWasNotApplied: the SDK sends the document without the
+// recording block (PUT /site-config refuses a body that changes it), so a captured level the server
+// does not already hold does not land. `set` says so, and stays quiet when the server's own level is
+// the file's.
+func TestSiteConfigSet_WarnsTheRecordingLevelWasNotApplied(t *testing.T) {
+	const captured = `{"recording":{"level":"screen_actions"}}`
+
+	var got types.SiteConfig
+	_, stderr, err := runSiteConfigSet(t, applyServer(t, &got).URL, captured)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if got.Recording != nil {
+		t.Errorf("wire body = %+v, want it without the recording block", got)
+	}
+	if !strings.Contains(stderr, "recording level in this file was not applied") {
+		t.Errorf("stderr = %q, want a warning that the file's recording level was not applied", stderr)
+	}
+
+	// A file silent about the level asserts nothing, so it is never reported.
+	var plain types.SiteConfig
+	_, quietPlain, err := runSiteConfigSet(t, applyServer(t, &plain).URL, `{"scm_hosts":["gitlab.corp"]}`)
+	if err != nil {
+		t.Fatalf("apply of a file with no recording block: %v", err)
+	}
+	if strings.Contains(quietPlain, "recording level") {
+		t.Errorf("stderr = %q, want silence for a file that names no recording block", quietPlain)
+	}
+
+	holds := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(captured))
+	}))
+	t.Cleanup(holds.Close)
+	_, quiet, err := runSiteConfigSet(t, holds.URL, captured)
+	if err != nil {
+		t.Fatalf("apply against a server that holds the level: %v", err)
+	}
+	if strings.Contains(quiet, "recording level") {
+		t.Errorf("stderr = %q, want silence when the stored level is the file's", quiet)
+	}
+}
+
 // TestSiteConfigFieldsAfter066MatchesServer pins #2325: the CLI's copy of the
 // carry-forward list had drifted to 4 keys against the server's 10, so `set`
 // printed no "left as the server already has it" note for the other six. The

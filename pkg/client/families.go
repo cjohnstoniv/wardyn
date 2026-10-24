@@ -256,7 +256,8 @@ func (c *Client) GetSiteConfig(ctx context.Context) (types.SiteConfig, error) {
 //
 // The egress baseline is NOT stripped: a body that changes it is refused 400
 // site_config_egress_via_own_route, because only PUT /governance/egress-baseline may change it.
-// PutSiteConfigResult is the one that drops the baseline, for restoring a captured document.
+// Nor is the recording block (400 site_config_recording_via_own_route; PUT /governance/recording).
+// PutSiteConfigResult is the one that drops both, for restoring a captured document.
 func (c *Client) PutSiteConfig(ctx context.Context, cfg types.SiteConfig) (
 	out types.SiteConfig, danglingSecretRefs []string, onboardingMarkIgnored bool, err error,
 ) {
@@ -283,6 +284,10 @@ type SiteConfigPutResult struct {
 	// one, and PutSiteConfigResult did not send it. A document that names no egress block is never
 	// reported (an older file is silent about the baseline). Only PUT /governance/egress-baseline writes it.
 	EgressBaselineIgnored bool `json:"-"`
+	// RecordingIgnored is set by the SDK, not the server, on the same terms: the document named a
+	// recording block that differs from the stored one, and PutSiteConfigResult did not send it. Only
+	// PUT /governance/recording writes it.
+	RecordingIgnored bool `json:"-"`
 	// ModelProviderWarnings are advisories on the model_providers block, such as an azure_foundry
 	// endpoint that resolves to a private address no internal_hosts entry covers.
 	ModelProviderWarnings []string `json:"model_provider_warnings,omitempty"`
@@ -295,8 +300,10 @@ type SiteConfigPutResult struct {
 // internal_hosts entry are sent as nothing, and the server carries the stored ones forward. It
 // refuses a body that changes the baseline (only PUT /governance/egress-baseline may), so a
 // document captured before a reset, or before the security tier moved the baseline, would
-// otherwise be refused whole. The server's refusal stays for PutSiteConfig and every other caller;
-// EgressBaselineIgnored reports a baseline in cfg that the stored one does not match.
+// otherwise be refused whole. The recording block is stripped on the same terms (only
+// PUT /governance/recording may change it). The server's refusals stay for PutSiteConfig and every
+// other caller; EgressBaselineIgnored and RecordingIgnored report a baseline or recording block in cfg
+// that the stored one does not match.
 func (c *Client) PutSiteConfigResult(ctx context.Context, cfg types.SiteConfig) (SiteConfigPutResult, error) {
 	return c.PutSiteConfigClearing(ctx, cfg, nil)
 }
@@ -326,6 +333,7 @@ func (c *Client) PutSiteConfigClearing(ctx context.Context, cfg types.SiteConfig
 	cfg.Integrations = nil
 	cfg.Runners = nil
 	cfg.Egress = nil
+	cfg.Recording = nil
 	cfg.InternalHosts = slices.Clone(cfg.InternalHosts)
 	for i := range cfg.InternalHosts {
 		cfg.InternalHosts[i].Baseline = false
@@ -349,6 +357,7 @@ func (c *Client) PutSiteConfigClearing(ctx context.Context, cfg types.SiteConfig
 	err := c.do(ctx, http.MethodPut, "/api/v1/site-config", body, &resp)
 	if err == nil {
 		resp.EgressBaselineIgnored = baselineAsserted(sent, resp.SiteConfig)
+		resp.RecordingIgnored = recordingAsserted(sent, resp.SiteConfig)
 	}
 	return resp, err
 }
@@ -378,6 +387,19 @@ func baselineAsserted(sent, stored types.SiteConfig) bool {
 		}
 	}
 	return false
+}
+
+// recordingAsserted reports whether sent names a recording block that stored does not hold. An unset
+// block reads as its zero value, as the server compares them; a document silent about it asserts nothing.
+func recordingAsserted(sent, stored types.SiteConfig) bool {
+	if sent.Recording == nil {
+		return false
+	}
+	var have types.SiteRecording
+	if stored.Recording != nil {
+		have = *stored.Recording
+	}
+	return *sent.Recording != have
 }
 
 // normalizedHost lowercases a host name and drops a trailing dot. The server's normalizeHostName
