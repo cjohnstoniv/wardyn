@@ -467,6 +467,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   one run: each holds the gap open until its own end. A hand back or a sign-in's end on another replica now resumes the
   recording on the replica that holds it, and a take over's gap still open when the run's last desktop connection
   closes after the run ended gets its `desktop.recording.resume` row.
+- A take over keeps the person's screen out of the recording on every replica and after a restart: a desktop opened
+  while a take over is open keeps no frames until the hand back, and one whose take over cannot be read is refused.
 - Sign-in and probe runs under a boundary (#3446): a member whose profile denies every placement, under a hard-limits
   boundary, can again run the sign-in and probe runs the placement rule always exempted (it answered 500).
 - The Approvals page cards and the run's Approvals tab now turn Approve and Deny off, and say why, once the server refuses a person with `capability_egress_host` (an admin withholds that host). Before, they kept live buttons and only showed an error after each click. The live approvals strip already did this.
