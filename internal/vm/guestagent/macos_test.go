@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -129,32 +130,55 @@ func TestLookupAgentIDsRefusesRootAndAdmins(t *testing.T) {
 	}
 }
 
-func TestSetRunPasswordRunsKickstartAndHoldsIt(t *testing.T) {
+// vncSettings is a Desktop whose settings file is in a test directory.
+func vncSettings(t *testing.T, r CmdRunner) *Desktop {
+	return &Desktop{Run: r, VNCSettings: filepath.Join(t.TempDir(), "com.apple.VNCSettings.txt")}
+}
+
+// noArgvHolds fails if any command the agent ran carries pw: any guest process can read another's
+// arguments with ps.
+func noArgvHolds(t *testing.T, r *fakeRunner, pw string) {
+	t.Helper()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, argv := range r.calls {
+		if strings.Contains(strings.Join(argv, "\x00"), pw) {
+			t.Errorf("a command carries the password: %v", argv[0])
+		}
+	}
+}
+
+func TestSetRunPasswordWritesTheSettingsFileAndHoldsIt(t *testing.T) {
 	r := &fakeRunner{}
-	d := &Desktop{Run: r}
+	d := vncSettings(t, r)
 	if _, ok := d.Password(); ok {
 		t.Fatal("a password before SetRunPassword")
 	}
 	if err := d.SetRunPassword(context.Background(), "Abcd2345"); err != nil {
 		t.Fatal(err)
 	}
-	want := append([]string{kickstart}, KickstartArgs("Abcd2345")...)
-	if len(r.calls) != 1 || !slices.Equal(r.calls[0], want) {
-		t.Errorf("calls = %v, want %v", r.calls, want)
+	noArgvHolds(t, r, "Abcd2345")
+	got, err := os.ReadFile(d.VNCSettings)
+	if err != nil || string(got) != "5656320AB99BF1D7FF1C39567390ADCA\n" {
+		t.Errorf("settings file = %q, %v", got, err)
+	}
+	if fi, err := os.Lstat(d.VNCSettings); err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm() != 0o600 {
+		t.Errorf("settings file = %v; want a 0600 file", err)
 	}
 	if pw, ok := d.Password(); !ok || pw != "Abcd2345" {
 		t.Errorf("Password() = %q, %v", pw, ok)
 	}
+	// Setting the password runs no command at all.
+	if len(r.calls) != 0 {
+		t.Errorf("setting the password ran %v", r.calls)
+	}
 }
 
 func TestSetRunPasswordFailureKeepsNoPasswordAndLeaksNone(t *testing.T) {
-	r := &fakeRunner{out: func(a []string) ([]byte, error) {
-		return nil, errors.New("kickstart failed on " + strings.Join(a, " "))
-	}}
-	d := &Desktop{Run: r}
+	d := &Desktop{Run: &fakeRunner{}, VNCSettings: filepath.Join(t.TempDir(), "missing", "com.apple.VNCSettings.txt")}
 	err := d.SetRunPassword(context.Background(), "Abcd2345")
 	if err == nil {
-		t.Fatal("kickstart failed and SetRunPassword did not")
+		t.Fatal("the settings write failed and SetRunPassword did not")
 	}
 	if strings.Contains(err.Error(), "Abcd2345") {
 		t.Errorf("the error holds the password: %v", err)
@@ -234,7 +258,8 @@ func TestDesktopRequests(t *testing.T) {
 		}
 		return nil, nil
 	}}
-	d := &Desktop{Run: r, Console: fakeConsole{uid: 502}}
+	d := vncSettings(t, r)
+	d.Console = fakeConsole{uid: 502}
 	mux := http.NewServeMux()
 	d.Register(mux)
 	get := func(path string) *httptest.ResponseRecorder {
@@ -432,14 +457,17 @@ func TestSpliceDesktopRefusesAnotherFirstByte(t *testing.T) {
 // The password comes from Init, so SetRunPassword takes only one VncAuth can key on: 1 to 8 bytes.
 func TestSetRunPasswordRefusesWhatVncAuthCannotUse(t *testing.T) {
 	r := &fakeRunner{}
-	d := &Desktop{Run: r}
+	d := vncSettings(t, r)
 	for _, pw := range []string{"", "Abcd23456"} {
 		if err := d.SetRunPassword(context.Background(), pw); err == nil || (pw != "" && strings.Contains(err.Error(), pw)) {
 			t.Errorf("password of %d bytes: err = %v", len(pw), err)
 		}
 	}
 	if len(r.calls) != 0 {
-		t.Errorf("kickstart ran: %v", r.calls)
+		t.Errorf("a command ran: %v", r.calls)
+	}
+	if _, err := os.Stat(d.VNCSettings); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a refused password was written: %v", err)
 	}
 	if _, ok := d.Password(); ok {
 		t.Error("a refused password was kept")
