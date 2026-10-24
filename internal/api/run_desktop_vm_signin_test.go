@@ -777,16 +777,23 @@ func (d *vmSignInDesktop) signIn(srv *Server, action string) *httptest.ResponseR
 	return w
 }
 
-// reread has the open stream re-read the row once, as its vmSignInRecheck ticker does, and waits for it.
-func (d *vmSignInDesktop) reread(t *testing.T) {
+// startReread has the open stream recheck the row once, as its vmSignInRecheck ticker does: done is
+// closed once that read has answered, or at once when one was still in flight.
+func (d *vmSignInDesktop) startReread(t *testing.T) (done chan struct{}) {
 	t.Helper()
-	done := make(chan struct{})
+	done = make(chan struct{})
 	select {
 	case d.recheck <- done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("no desktop stream took the re-read")
 	}
-	recvSlotEvent(t, done, "the stream's re-read")
+	return done
+}
+
+// reread is startReread, waiting for its answer.
+func (d *vmSignInDesktop) reread(t *testing.T) {
+	t.Helper()
+	recvSlotEvent(t, d.startReread(t), "the stream's re-read")
 }
 
 // signInHeld reports whether srv holds run's desktop recording paused for a sign-in or an unread mark.
@@ -920,6 +927,45 @@ func TestDesktopSignIns_AnUnreadableMarkMidStreamHoldsTheRecording(t *testing.T)
 	endVMDesktop(t, h, v, d.send)
 	if _, _, kept := storedVMRecording(t, h); kept != vmHandshake()+"\x02\x02" {
 		t.Errorf("recorded frames = %q, want only the handshake and the Bells once the mark was read", kept)
+	}
+}
+
+// A re-read that stalls never keeps the stream recording: at the next recheck, with it still
+// unanswered, the mark is unknown, so nothing the VM sends is kept until a re-read answers, and once
+// one answers unpaused the frames are kept again.
+func TestDesktopSignIns_AStalledReReadHoldsTheRecording(t *testing.T) {
+	d := newVMSignInDesktop(t, store.DesktopVMSignIns{Store: "memory"})
+	h := d.h
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	v := openVMDesktop(t, ctx, h, d.dr)
+	entered, release := make(chan struct{}), make(chan struct{})
+	d.st.setOnRead(func() func() {
+		d.st.setOnRead(nil)
+		close(entered)
+		<-release // a read that ignores its deadline, as a wedged pool might
+		return nil
+	})
+	unstall := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(unstall)
+	stalled := d.startReread(t)
+	recvSlotEvent(t, entered, "the re-read reaching the store")
+	d.reread(t) // the next recheck finds it unanswered
+	if !signInHeld(h.srv, h.run.ID) {
+		t.Fatal("a stream whose re-read stalled kept recording")
+	}
+	d.send <- vmFBU // sent while the mark is unknown
+	v.read(len(vmFBU))
+	unstall()
+	recvSlotEvent(t, stalled, "the stalled re-read's answer")
+	if signInHeld(h.srv, h.run.ID) {
+		t.Fatal("a re-read that answered unpaused left the recording held")
+	}
+	d.send <- []byte("\x02\x02")
+	v.read(2)
+	endVMDesktop(t, h, v, d.send)
+	if _, _, kept := storedVMRecording(t, h); kept != vmHandshake()+"\x02\x02" {
+		t.Errorf("recorded frames = %q, want only the handshake and the Bells once a re-read answered", kept)
 	}
 }
 
