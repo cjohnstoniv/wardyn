@@ -9,11 +9,16 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/runnerspool"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+	"github.com/google/uuid"
 )
 
 // downEngineStop is StopProxy against an engine that does not answer: every call fails the same way, and
@@ -91,9 +96,10 @@ func (s *refStop) StopProxy(_ context.Context, ref string) error {
 	return nil
 }
 
-// One run's containment fails on every tick for ten minutes of fake time. It is still tried on every
-// tick, a run that lapses five minutes in is first contained on the very next tick, inheriting no wait
-// from the other's failures, and the repeated ERROR line stays a handful of lines, not one a second.
+// One run's containment fails on every pass for ten minutes of fake time. It is still tried on every
+// pass; a run that lapses five minutes in gets its first containment within one controlled fake-clock
+// iteration, with no added backoff from the other's failures (not a wall-clock guarantee: a pass can
+// wait on its backend's timeouts); and the repeated ERROR line stays a handful of lines.
 func TestContainmentFailureDelaysNoOtherRunAndLogsBounded(t *testing.T) {
 	var buf bytes.Buffer
 	prev := slog.Default()
@@ -141,7 +147,7 @@ func TestContainmentFailureDelaysNoOtherRunAndLogsBounded(t *testing.T) {
 	}
 	first, ok := stop.first[lapsingRef]
 	if !ok || first.Sub(base) != lapseAt*time.Second {
-		t.Fatalf("the run that lapsed at %ds was first contained at %v (tried=%v), want on that same pass", lapseAt, first.Sub(base), ok)
+		t.Fatalf("the run that lapsed at %ds was first contained at %v (tried=%v), want within that fake-clock iteration", lapseAt, first.Sub(base), ok)
 	}
 	var lines int
 	for line := range strings.Lines(buf.String()) {
@@ -152,5 +158,91 @@ func TestContainmentFailureDelaysNoOtherRunAndLogsBounded(t *testing.T) {
 	}
 	if lines == 0 || lines > 10 {
 		t.Errorf("%d ERROR lines over %d s of the same failure, want a handful", lines, total)
+	}
+}
+
+// replaySendStub is the peer's EventsAck with one run's events never acknowledged: it records, on the
+// fake clock, each run's sends.
+type replaySendStub struct {
+	failing uuid.UUID
+	now     func() time.Time
+	mu      sync.Mutex
+	calls   map[uuid.UUID]int
+	first   map[uuid.UUID]time.Time
+}
+
+func (s *replaySendStub) send(_ context.Context, evs []runnerwire.Event) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id := *evs[0].RunID
+	s.calls[id]++
+	if id == s.failing {
+		return errors.New("the organisation did not acknowledge")
+	}
+	if _, ok := s.first[id]; !ok {
+		s.first[id] = s.now()
+	}
+	return nil
+}
+
+// One run's replay fails on every try for ten minutes of fake time. A run after it is still replayed
+// and acknowledged in the first fake-clock iteration; the failing run waits its own doubling delay
+// between tries rather than going on every pass; and its WARN line stays a handful of lines.
+func TestReplayFailureBlocksNoLaterRunAndLogsBounded(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	m, _, _, org := managerFixture(t)
+	failing := createLocalAs(t, m, org, uuid.MustParse("00000000-0000-4000-8000-000000000001"))
+	later := createLocalAs(t, m, org, uuid.MustParse("ffffffff-0000-4000-8000-000000000002"))
+	for _, id := range []uuid.UUID{failing, later} {
+		spool, err := runnerspool.Open(filepath.Join(m.dir, "spools", id.String()), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		appendDecision(t, spool, id)
+		appendDecision(t, spool, id)
+		if err := spool.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var seconds atomic.Int64
+	base := time.Now()
+	now := func() time.Time { return base.Add(time.Duration(seconds.Load()) * time.Second) }
+	stub := &replaySendStub{failing: failing, now: now, calls: map[uuid.UUID]int{}, first: map[uuid.UUID]time.Time{}}
+	const total = 600
+	ticks := make(chan time.Time)
+	m.mu.Lock()
+	m.now, m.ticks, m.replayTicks, m.replaySend = now, make(chan time.Time), ticks, stub.send
+	m.replayTick = func() { seconds.Add(1) } // each pass starts one fake second after the last
+	m.peer, m.online, m.replayReady = &runnerwire.Peer{}, true, true
+	m.mu.Unlock()
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error)
+	go func() { done <- m.Run(ctx) }()
+	for range total - 1 {
+		ticks <- time.Time{}
+	}
+	ticks <- time.Time{} // returns once the last pass has run
+	cancel()
+	<-done
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	if first, ok := stub.first[later]; !ok || first.Sub(base) != time.Second {
+		t.Errorf("the later run was first acknowledged at %v (sent=%v), want in the first fake-clock iteration, at 1s", first.Sub(base), ok)
+	}
+	if n := stub.calls[failing]; n < 2 || n > 15 {
+		t.Errorf("the failing run was tried %d times in %d passes, want a backed-off handful", n, total)
+	}
+	var lines int
+	for line := range strings.Lines(buf.String()) {
+		var r map[string]any
+		if json.Unmarshal([]byte(line), &r) == nil && r["level"] == "WARN" && r["msg"] == "runner audit replay will retry" {
+			lines++
+		}
+	}
+	if lines == 0 || lines > 15 {
+		t.Errorf("%d WARN lines over %d s of the same failure, want a handful", lines, total)
 	}
 }

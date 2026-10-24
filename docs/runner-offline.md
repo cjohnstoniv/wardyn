@@ -44,10 +44,12 @@ row is kept with `parked_at` set and still blocks another generation, a
 no longer retries it. `wardyn doctor` on the runner's computer reports it as
 a failed `runner-exits` stage.
 
-The runner retries failed containment every second until it holds, and logs
-its `runner containment will retry` error, and the replay loop's warnings, the
-same way: an identical line once per interval, 5 seconds growing to 5 minutes,
-with a `repeated` count.
+The runner retries failed containment on every pass of its 1-second loop, with
+no added backoff, until it holds. A run whose replay to the organisation fails
+waits its own delay, 5 seconds doubling to 5 minutes, and never holds up the
+other runs' replay. The `runner containment will retry` error and the replay
+loop's warnings are logged like the exit sweep's: an identical line once per
+interval, 5 seconds growing to 5 minutes, with a `repeated` count.
 
 Live activity uses a separate, bounded per-run marker under the proxy-only state
 mount. Admission captures a fresh connection epoch; reconnect invalidates it.
