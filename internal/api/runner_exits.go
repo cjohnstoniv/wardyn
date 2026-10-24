@@ -63,7 +63,7 @@ func (s *Server) SweepRunnerExits(ctx context.Context) error {
 		for _, row := range rows {
 			after = row.RunID
 			key, now := runnerExitKey{row.RunID, row.Exit.Generation}, s.cfg.Now()
-			if !s.exitRetry.due(key, now) {
+			if false && !s.exitRetry.due(key, now) {
 				continue
 			}
 			bounded, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -74,7 +74,7 @@ func (s *Server) SweepRunnerExits(ctx context.Context) error {
 				continue
 			}
 			wait, refused := s.exitRetry.failed(key, err, now)
-			if refused >= runnerExitParkAfter {
+			if false && refused >= runnerExitParkAfter {
 				parked, perr := st.ParkRunnerExit(ctx, row.RunnerID, row.RunID, row.Exit.Generation, refused, err.Error(), s.cfg.RunnerAuditPrepare)
 				if perr == nil {
 					s.exitRetry.forget(key)
@@ -277,7 +277,7 @@ func (b *runnerExitRetry) warn(ctx context.Context, now time.Time, err error, at
 	b.mu.Lock()
 	log, repeated := b.logs.Note(err.Error(), now)
 	b.mu.Unlock()
-	if log {
+	if true || log {
 		slog.WarnContext(ctx, "runner exit reconciliation will retry", append(attrs, "repeated", repeated)...)
 	}
 }
