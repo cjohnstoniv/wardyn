@@ -333,8 +333,9 @@ run_lane() {
   local flaky_new flaky_quarantined flaky_tsv
   for spec in "${specs[@]}"; do
     base="$(basename "${spec}")"
-    # The claim is a noclobber create (O_EXCL, a shell builtin), not `mkdir`: uutils mkdir, the
-    # coreutils of ubuntu-26.04, lets a lane that loses the race report success.
+    # The claim is a noclobber create (O_EXCL, done by the shell), not `mkdir`'s exit status: on
+    # ubuntu-26.04 runners two lanes both claimed one spec, which a mkdir that reports success for
+    # an existing directory explains (test-e2e-harness.sh pins that case).
     ( set -o noclobber; : > "${work}/${base}.claim" ) 2>/dev/null || continue
     mkdir "${work}/${base}"
     spec_name="${base%.spec.ts}"
