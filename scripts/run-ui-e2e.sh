@@ -265,7 +265,7 @@ if [[ -z "${LIVE_BASE_URL}" ]]; then
 fi
 
 # Scratch for this run: one directory per spec, created by the lane that
-# claims it (mkdir is atomic, so two lanes never run the same spec) and
+# claims it (an O_EXCL create is atomic, so two lanes never run the same spec) and
 # holding that spec's result line. Removed on exit by cleanup_all below.
 work="$(mktemp -d)"
 
@@ -333,7 +333,10 @@ run_lane() {
   local flaky_new flaky_quarantined flaky_tsv
   for spec in "${specs[@]}"; do
     base="$(basename "${spec}")"
-    mkdir "${work}/${base}" 2>/dev/null || continue
+    # The claim is a noclobber create (O_EXCL, a shell builtin), not `mkdir`: uutils mkdir, the
+    # coreutils of ubuntu-26.04, lets a lane that loses the race report success.
+    ( set -o noclobber; : > "${work}/${base}.claim" ) 2>/dev/null || continue
+    mkdir "${work}/${base}"
     spec_name="${base%.spec.ts}"
     if [[ "${spec_name}" == cockpit-terminal-tmux-* ]]; then export WARDYN_E2E_TMUX=1; else unset WARDYN_E2E_TMUX; fi
     # Playwright is run from ui/, so its argument is the spec path with the "ui/"
