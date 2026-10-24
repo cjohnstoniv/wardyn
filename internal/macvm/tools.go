@@ -618,6 +618,11 @@ func UpdateTools(ctx context.Context, o UpdateOptions) (Manifest, bool, error) {
 		return Manifest{}, false, err
 	}
 	defer unlock()
+	// Sweep what a crashed update left (a half-built staging copy, or an old
+	// generation after a swap), whether or not this call goes on to update.
+	if err := os.RemoveAll(nb); err != nil {
+		return Manifest{}, false, err
+	}
 	m, err := ReadyBase(base)
 	if err != nil {
 		return m, false, err
@@ -653,9 +658,6 @@ func UpdateTools(ctx context.Context, o UpdateOptions) (Manifest, bool, error) {
 		return m, false, err
 	}
 	o.Progress(PrepareEvent{Phase: PhaseTools})
-	if err := os.RemoveAll(nb); err != nil { // an earlier update's leftover
-		return m, false, err
-	}
 	id, err := cloneRun(o.Engine, base, nb, IdentityTravel)
 	if err != nil {
 		return m, false, err

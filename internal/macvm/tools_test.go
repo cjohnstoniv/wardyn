@@ -791,3 +791,26 @@ func TestDownloadRefusesRedirectToHTTP(t *testing.T) {
 		t.Fatalf("withheld = %v, plain hits %d", res.Withheld, plainHits.Load())
 	}
 }
+
+// What a crashed update left behind is swept by the next call under the update
+// lock, even when that call finds nothing to update.
+func TestUpdateToolsSweepsLeftoversEvenWhenCurrent(t *testing.T) {
+	f, tf, _ := stage2Prep(t)
+	if _, err := macvm.Prepare(context.Background(), f.opts); err != nil {
+		t.Fatal(err)
+	}
+	base := f.opts.Layout.BaseDir(0)
+	if err := os.MkdirAll(base+".update", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base+".update", macvm.DiskFile), []byte("old generation"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	g := newGuest()
+	if _, changed, err := macvm.UpdateTools(context.Background(), updateOpts(f, tf, g, "0.10.0")); err != nil || changed || len(g.runs) != 0 {
+		t.Fatalf("update of a current base: changed %v err %v runs %d", changed, err, len(g.runs))
+	}
+	if _, err := os.Stat(base + ".update"); !os.IsNotExist(err) {
+		t.Fatalf("leftover generation kept: %v", err)
+	}
+}
