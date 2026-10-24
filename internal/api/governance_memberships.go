@@ -554,9 +554,9 @@ type unitActivation struct {
 	UnitName string    `json:"unit_name"`
 }
 
-// legacyShift is what a legacy row's delete or move, or a unit's rename, may do to whose row wins
-// (H3): the units it may make someone's context, and for a move or a rename the units it may take
-// someone out of.
+// legacyShift is what a legacy row's delete, move or priority re-post, or a unit's rename, may do to
+// whose row wins (H3): the units it may make someone's context, and for any but a delete the units it
+// may take someone out of.
 type legacyShift struct {
 	activates, vacates []unitActivation
 }
@@ -570,6 +570,20 @@ func moveShiftQ(ctx context.Context, q store.Querier, row types.GovernanceMember
 	}
 	return legacyShiftQ(ctx, q, row, to, nameOrdersPair, func() error {
 		_, _, err := moveMembershipQ(ctx, q, row.ID, to)
+		return err
+	})
+}
+
+// upsertShiftQ is what writing a over legacy row cur, the row a's key already names, does to whose
+// legacy row wins (legacyShiftQ): a new priority reorders cur against each legacy row it was tied or
+// ordered with by priority or name (nameOrdersPair). Nothing for a new row (cur nil), which is never
+// legacy, or a cur that is not legacy.
+func upsertShiftQ(ctx context.Context, q store.Querier, cur *types.GovernanceMembership, a types.GovernanceMembership) (legacyShift, error) {
+	if cur == nil || !cur.Legacy {
+		return legacyShift{}, nil
+	}
+	return legacyShiftQ(ctx, q, *cur, uuid.Nil, nameOrdersPair, func() error {
+		_, err := store.UpsertGovernanceMembershipQ(ctx, q, a)
 		return err
 	})
 }
@@ -763,9 +777,9 @@ func legacyWinnersQ(ctx context.Context, q store.Querier, people []legacyClaims)
 }
 
 // nameOrdersPair reports whether one person may match legacy rows a and b with their order decided at
-// or after the unit name, the one key of the order a move changes: rows of one tier, and two group rows
-// or two rows naming one subject. A sub and an email are ordered by the person's claims and two user
-// types match no one person.
+// or after the priority, which a priority re-post changes, and so at the unit name, the one key a move
+// or a rename changes: rows of one tier, and two group rows or two rows naming one subject. A sub and
+// an email are ordered by the person's claims and two user types match no one person.
 func nameOrdersPair(a, b types.GovernanceMembership) bool {
 	return a.SubjectType == b.SubjectType && (a.SubjectType == types.CapabilitySubjectGroup || a.Subject == b.Subject)
 }

@@ -729,6 +729,134 @@ func TestLegacyRenameHeldGoesStale(t *testing.T) {
 	}
 }
 
+// legacyRepost seeds legacy rows of two groups one person is in, ua-eng in ua-a1 at priority a1 and
+// ua-research in ua-b at priority b, and has ua-a1's admin re-post the ua-a1 row at priority to. It
+// returns the answer and that person.
+func (e *unitAdminEnv) legacyRepost(a1, b, to int) (*httptest.ResponseRecorder, context.Context) {
+	e.t.Helper()
+	group := types.CapabilitySubjectGroup
+	setLegacy(e.t, e.govEnv, treeMember(e.t, e.govEnv, e.a1, group, "ua-eng", a1, false).ID,
+		treeMember(e.t, e.govEnv, e.b, group, "ua-research", b, false).ID)
+	body, _ := json.Marshal(map[string]any{"subject_type": group, "subject": "ua-eng", "unit_id": e.a1.ID, "priority": to})
+	return e.call(e.adminA1, http.MethodPost, "/api/v1/governance/memberships", string(body)),
+		treeCtx("sub-ua-tie", []string{"ua-eng", "ua-research"}, "")
+}
+
+// shiftUnits is the units a held change's diff records as activated and vacated.
+func shiftUnits(t *testing.T, ch types.GovernanceChange) []uuid.UUID {
+	t.Helper()
+	var d governanceDiffBody
+	if err := json.Unmarshal(ch.Diff, &d); err != nil {
+		t.Fatal(err)
+	}
+	var out []uuid.UUID
+	for _, a := range slices.Concat(d.Activates, d.Vacates) {
+		out = append(out, a.UnitID)
+	}
+	return out
+}
+
+// TestLegacyRepostUnitAdmin: a legacy row's priority orders it against another legacy row, so a unit
+// admin's re-post of a person's ua-a1 row at a new priority can hand them ua-b (lowered below the ua-b
+// row) or take them out of it (raised above it). Either is held with ua-b recorded, ua-a1's peer
+// admin, who does not govern ua-b, is refused, and an admin of both ua-a1 and ua-b approves. A re-post
+// that keeps the order, the same priority included, is held with nothing recorded and decided over
+// ua-a1 alone: its peer admin approves.
+func TestLegacyRepostUnitAdmin(t *testing.T) {
+	for _, tc := range []struct {
+		what          string
+		a1, b, to     int
+		before, after string
+	}{
+		{"lowered below the ua-b row", 5, 5, 1, "ua-a1", "ua-b"},
+		{"raised above the ua-b row", 5, 6, 9, "ua-b", "ua-a1"},
+		{"raised with the order kept", 5, 5, 7, "ua-a1", "ua-a1"},
+		{"re-posted at the same priority", 5, 5, 5, "ua-a1", "ua-a1"},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			e := newUnitAdminEnv(t, false)
+			w, who := e.legacyRepost(tc.a1, tc.b, tc.to)
+			names := map[uuid.UUID]string{e.a1.ID: "ua-a1", e.b.ID: "ua-b"}
+			selected := func() string {
+				t.Helper()
+				return names[unitIDOf(treeCeiling(t, e.govEnv, who))]
+			}
+			ch := e.pending(w)
+			shifts := tc.before != tc.after
+			if got := shiftUnits(t, ch); slices.Contains(got, e.b.ID) != shifts || (!shifts && len(got) > 0) {
+				t.Errorf("the held re-post records %v, want ua-b recorded = %v and nothing else without a shift", got, shifts)
+			}
+			if got := selected(); got != tc.before {
+				t.Errorf("selected by %s before approval, want %s", got, tc.before)
+			}
+			approver := e.peerA1
+			if shifts {
+				if w := e.call(e.peerA1, http.MethodPost, approvePath(ch.ID), ""); !scopeRefused(t, w) {
+					t.Errorf("ua-a1's peer admin approving = %d %s, want 403 unit_scope_denied", w.Code, w.Body)
+				}
+				both := e.fresh("sub-ua-admin-ab")
+				e.grant(e.a1, types.CapabilitySubjectUser, both)
+				e.grant(e.b, types.CapabilitySubjectUser, both)
+				approver = uaSession(t, both, []string{}, false)
+			}
+			if w := e.call(approver, http.MethodPost, approvePath(ch.ID), ""); w.Code != http.StatusOK {
+				t.Fatalf("approving = %d %s, want 200", w.Code, w.Body)
+			}
+			if got, p := selected(), e.rowOf("ua-eng", e.a1).Priority; got != tc.after || p != tc.to {
+				t.Errorf("after approval selected by %s with the row at priority %d, want %s and %d", got, p, tc.after, tc.to)
+			}
+		})
+	}
+}
+
+// TestLegacyRepostHeldGoesStale: a held re-post is decided over the units it would activate when held
+// (the ua-a1 row lowered below the ua-b row at one priority, so ua-b). An edit since that changes what
+// the re-post would do makes the approval stale, even a security admin's, and keeps the priority: the
+// ua-b row lowered below the re-posted priority, or ua-b renamed to sort before ua-a1, which hands the
+// person ua-b already. An unrelated edit since leaves the approval to apply.
+func TestLegacyRepostHeldGoesStale(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		edit  func(e *unitAdminEnv)
+		stale bool
+	}{
+		{"the ua-b row lowered below the re-posted priority", func(e *unitAdminEnv) {
+			if _, err := e.pool.Exec(context.Background(), `UPDATE governance_memberships SET priority = 0 WHERE id = $1`, e.rowOf("ua-research", e.b).ID); err != nil {
+				e.t.Fatalf("lower the ua-b row's priority: %v", err)
+			}
+		}, true},
+		{"ua-b renamed to sort before ua-a1", func(e *unitAdminEnv) {
+			if w := e.admin(http.MethodPut, "/api/v1/governance/units/"+e.b.ID.String(), e.restate(e.b, map[string]any{"name": "ua-0"})); w.Code != http.StatusOK {
+				e.t.Fatalf("rename ua-b = %d %s", w.Code, w.Body)
+			}
+		}, true},
+		{"an unrelated unit edited", func(e *unitAdminEnv) {
+			if w := e.admin(http.MethodPut, "/api/v1/governance/units/"+e.a2.ID.String(),
+				e.restate(e.a2, map[string]any{"overlay_limits": map[string]any{"deny_interactive": true}})); w.Code != http.StatusOK {
+				e.t.Fatalf("edit ua-a2 = %d %s", w.Code, w.Body)
+			}
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newUnitAdminEnv(t, false)
+			w, _ := e.legacyRepost(5, 5, 1)
+			ch := e.pending(w)
+			tc.edit(e)
+			w = e.call(e.alice, http.MethodPost, approvePath(ch.ID), "")
+			p := e.rowOf("ua-eng", e.a1).Priority
+			if tc.stale {
+				if w.Code != http.StatusConflict || wireReason(t, w) != reasonGovernanceChangeStale || p != 5 {
+					t.Fatalf("approving = %d %s with the row at priority %d, want 409 %s and 5 kept", w.Code, w.Body, p, reasonGovernanceChangeStale)
+				}
+				return
+			}
+			if w.Code != http.StatusOK || p != 1 {
+				t.Fatalf("approving = %d %s with the row at priority %d, want 200 and 1", w.Code, w.Body, p)
+			}
+		})
+	}
+}
+
 // TestUnitLockRefusesBothWays: locking a knob that a unit below states otherwise is refused, naming
 // those units, and their values are kept. Once a knob is locked, a write below that changes it is
 // refused, a narrowing included and for a security admin too; adding a lock applies directly, and a

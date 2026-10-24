@@ -474,6 +474,33 @@ func TestUnitAdminCheckWithinScope(t *testing.T) {
 	}
 }
 
+// TestUnitAdminCheckRunInOutsideScope: a unit admin's run_in of a unit they do not govern answers as a
+// unit that is not the person's does, so the check does not tell them whether the person is in it.
+// ua-a's admin naming ua-b for a person in ua-a1 and ua-b, for one in ua-a1 only, and naming a unit no
+// one holds reads the same status and body; naming ua-a1, which they govern, answers 200.
+func TestUnitAdminCheckRunInOutsideScope(t *testing.T) {
+	e := newUnitAdminEnv(t, false)
+	user, both, only := types.CapabilitySubjectUser, e.fresh("sub-ua-both"), e.fresh("sub-ua-only")
+	treeMember(t, e.govEnv, e.a1, user, both, 1, false)
+	treeMember(t, e.govEnv, e.b, user, both, 2, false)
+	treeMember(t, e.govEnv, e.a1, user, only, 1, false)
+	check := func(person, runIn string) *httptest.ResponseRecorder {
+		return e.call(e.adminA, http.MethodPost, "/api/v1/governance/check", `{"user_subjects":["`+person+`"],"run_in":"`+runIn+`"}`)
+	}
+	in, out, none := check(both, "ua-b"), check(only, "ua-b"), check(both, "ua-nowhere")
+	if in.Code != http.StatusForbidden || wireReason(t, in) != reasonUnitNotAContext {
+		t.Fatalf("run_in ua-b for a person in it = %d %s, want 403 %s", in.Code, in.Body, reasonUnitNotAContext)
+	}
+	for what, w := range map[string]*httptest.ResponseRecorder{"a person not in it": out, "a unit no one holds": none} {
+		if w.Code != in.Code || w.Body.String() != in.Body.String() {
+			t.Errorf("run_in for %s = %d %s, want byte for byte the answer for a person in it: %d %s", what, w.Code, w.Body, in.Code, in.Body)
+		}
+	}
+	if w := check(both, "ua-a1"); w.Code != http.StatusOK {
+		t.Errorf("run_in ua-a1, a unit they govern = %d %s, want 200", w.Code, w.Body)
+	}
+}
+
 // TestUnitAdminHeldChangeRedactsSecrets: a held change's diff reads at its reader's tier, as GET
 // /governance does. A unit admin lists and reads a held unit change and a held membership change on
 // ua-a1 with the secret refs and secret names of each ceiling redacted, the ceiling of ua-a1 in each
