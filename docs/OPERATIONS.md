@@ -4055,6 +4055,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0228` (`0228_governance_unit_admins`) creates `governance_unit_admins` (the people and IdP groups who administer a unit and the units below it) and adds `locked_knobs` to `governance_units` and `governance_boundary` (a constant-default array, so no row is rewritten); a split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `governance_unit_admins`.
 - `0229` (`0229_oidc_session_sids`) creates `oidc_session_sids`, the identity provider's `sid` of each sign-in while `WARDYN_OIDC_FRONTCHANNEL_LOGOUT` is on; a split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `oidc_session_sids`.
 - `0231` (`0231_desktop_vm_pause_generation`) adds `pause_generation` to `desktop_vm_sign_ins` (`0230`'s table): the count of a VM run's sign-in pauses, which orders each stop and continue in its guest. A constant default, so no row is rewritten and no grant changes.
+- `0234` (`0234_macos_vm_kind`) admits `macos_vm` in `agent_runs.machine_kind`'s CHECK (`0001`'s table) and `run_disk` in `desktop_vm_sign_ins.store`'s CHECK; no row or grant changes.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
