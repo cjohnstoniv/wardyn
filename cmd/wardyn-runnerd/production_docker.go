@@ -73,6 +73,9 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 		return runnerRuntime{}, err
 	}
 	relay := newLocalRelay(ctx)
+	if relay.sources, err = parseRelaySources(os.Getenv(envRelaySources)); err != nil {
+		return runnerRuntime{}, err
+	}
 	// The decision sink before the runtime: its startup containment stops the runs' proxies, and one
 	// still running delivers what it holds while it stops only if the sink already listens.
 	sink, err := newDockerSink(ctx, stateDir, eng)

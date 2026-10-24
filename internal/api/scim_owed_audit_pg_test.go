@@ -9,6 +9,7 @@ import (
 	"maps"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -109,5 +110,65 @@ func TestSCIMOwedRefusalRowReplaysTheSameEvent(t *testing.T) {
 		if strings.HasPrefix(j.Step, store.JobStepRefusalAudit) && !j.Done {
 			t.Errorf("the owed row %+v is still pending after the completion write worked", j)
 		}
+	}
+}
+
+// refusalRowsStored counts the person.deprovision refusal rows in the audit table itself.
+func refusalRowsStored(t *testing.T, e *scimEnv) int {
+	t.Helper()
+	var n int
+	if err := e.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM audit_events WHERE action = 'person.deprovision' AND outcome <> 'success'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// Written through the store, one owed obligation whose completion write keeps failing lands one audit
+// row however many drains replay it, and the obligation completes once the write works.
+func TestSCIMOwedRefusalRowLandsOnceWhileItsCompletionFails(t *testing.T) {
+	e, id, _ := ambiguousLeaver(t)
+	led := &failFinishOwed{PG: e.st}
+	led.fail.Store(true)
+	n := e.node(func(c *Config) { c.Store, c.Audit = led, store.Recorder{Pool: e.pool} })
+	for range 3 {
+		e.sweepAs(n, id)
+	}
+	if got := refusalRowsStored(t, e); got != 1 {
+		t.Fatalf("%d refusal rows stored after three drains with a failing completion write, want 1", got)
+	}
+	led.fail.Store(false)
+	e.sweepAs(n, id)
+	if got := refusalRowsStored(t, e); got != 1 {
+		t.Fatalf("%d refusal rows stored after the completion write worked, want 1", got)
+	}
+}
+
+// Two replicas draining the same owed obligation at once, from the same read of the ledger, land one
+// audit row between them.
+func TestSCIMOwedRefusalRowLandsOnceForTwoDrainers(t *testing.T) {
+	e, id, _ := ambiguousLeaver(t)
+	ctx := context.Background()
+	ident, err := e.st.GetIdentity(ctx, uuid.MustParse(id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs := e.ledger(id)
+	nodes := []*scimNode{e.node(func(c *Config) { c.Audit = store.Recorder{Pool: e.pool} }), e.node(func(c *Config) { c.Audit = store.Recorder{Pool: e.pool} })}
+	var wg sync.WaitGroup
+	errs := make([]error, len(nodes))
+	for i, n := range nodes {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[i] = n.srv.drainRefusalAudits(ctx, e.st, ident, store.JobKindSuspend, jobs)
+		}()
+	}
+	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
+		t.Fatal(err)
+	}
+	if got := refusalRowsStored(t, e); got != 1 {
+		t.Fatalf("%d refusal rows stored by two drainers of one obligation, want 1", got)
 	}
 }

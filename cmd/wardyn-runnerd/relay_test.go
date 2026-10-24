@@ -358,3 +358,59 @@ func TestRunnerRelayCapCountsOnlyConnectionsYetToSpeak(t *testing.T) {
 		}
 	}
 }
+
+// WARDYN_RELAY_ALLOWED_SOURCES is off unless set: no list admits every source. With a list, a
+// connection from outside it is closed before it can open a relay stream, and one from inside relays.
+func TestRunnerRelayAllowedSourcesNarrowOnlyWhenSet(t *testing.T) {
+	if got, err := parseRelaySources(""); err != nil || got != nil {
+		t.Fatalf("unset = %v, %v; want no list (every source admitted)", got, err)
+	}
+	if got, err := parseRelaySources(" 172.18.0.0/16, 10.1.2.3 "); err != nil ||
+		!slices.Equal(got, []netip.Prefix{netip.MustParsePrefix("172.18.0.0/16"), netip.MustParsePrefix("10.1.2.3/32")}) {
+		t.Fatalf("parse = %v, %v", got, err)
+	}
+	if _, err := parseRelaySources("172.18.0.0/16,not-an-address"); err == nil {
+		t.Fatal("a value that is neither a prefix nor an address was accepted")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for _, tc := range []struct {
+		list  string
+		relay bool
+	}{{"", true}, {"10.0.0.0/8", false}, {"10.0.0.0/8,127.0.0.0/8", true}} {
+		opened := make(chan *runnerwire.Stream, 1)
+		r, addr := onlineRelay(ctx, t, 0, opened)
+		src, err := parseRelaySources(tc.list)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.mu.Lock()
+		r.sources = src
+		r.mu.Unlock()
+		c, err := net.Dial("tcp", addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tc.relay {
+			if _, err := c.Write([]byte("x")); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-opened:
+			case <-ctx.Done():
+				t.Fatalf("list %q: a connection from loopback opened no relay stream", tc.list)
+			}
+		} else {
+			_ = c.SetReadDeadline(time.Now().Add(3 * time.Second))
+			if _, err := c.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+				t.Fatalf("list %q: a connection from outside the list was held open: %v", tc.list, err)
+			}
+			select {
+			case <-opened:
+				t.Fatalf("list %q: a connection from outside the list opened a relay stream", tc.list)
+			default:
+			}
+		}
+		_ = c.Close()
+	}
+}

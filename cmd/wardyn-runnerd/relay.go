@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -52,6 +53,48 @@ type localRelay struct {
 	waiting   int                           // connections in conns yet to send their first byte
 	refused   int                           // closed at the cap since capWarnAt
 	capWarnAt time.Time
+	// sources is WARDYN_RELAY_ALLOWED_SOURCES: when set, a connection from outside every prefix is
+	// closed before a byte is read. Empty admits every source.
+	sources    []netip.Prefix
+	srcRefused int // closed for their source since srcWarnAt
+	srcWarnAt  time.Time
+}
+
+// envRelaySources is the opt-in source list for the Docker local relay (off when unset).
+const envRelaySources = "WARDYN_RELAY_ALLOWED_SOURCES"
+
+// parseRelaySources reads envRelaySources' comma-separated prefixes (a bare address is its own /32 or
+// /128). An empty value is no list.
+func parseRelaySources(v string) ([]netip.Prefix, error) {
+	var out []netip.Prefix
+	for _, f := range strings.Split(v, ",") {
+		if f = strings.TrimSpace(f); f == "" {
+			continue
+		}
+		p, err := netip.ParsePrefix(f)
+		if err != nil {
+			a, aerr := netip.ParseAddr(f)
+			if aerr != nil {
+				return nil, fmt.Errorf("%s: %q is neither a prefix nor an address", envRelaySources, f)
+			}
+			p = netip.PrefixFrom(a.Unmap(), a.Unmap().BitLen())
+		}
+		out = append(out, p.Masked())
+	}
+	return out, nil
+}
+
+// admitsSource reports whether c's source may use the relay: always with no list. r.mu is held.
+func (r *localRelay) admitsSource(c net.Conn) bool {
+	if len(r.sources) == 0 {
+		return true
+	}
+	ap, err := netip.ParseAddrPort(c.RemoteAddr().String())
+	if err != nil {
+		return false
+	}
+	a := ap.Addr().Unmap()
+	return slices.ContainsFunc(r.sources, func(p netip.Prefix) bool { return p.Contains(a) })
 }
 
 // relayBind admits only Docker's host-gateway address held by the Docker
@@ -153,6 +196,12 @@ func (r *localRelay) serve(ln net.Listener) {
 // the connection is closed at once; the proxy's own retry recovers.
 func (r *localRelay) forward(c net.Conn) {
 	r.mu.Lock()
+	if !r.admitsSource(c) {
+		r.warnSource(c)
+		r.mu.Unlock()
+		_ = c.Close()
+		return
+	}
 	peer := r.peer
 	full := r.waiting >= maxLocalRelays
 	if full {
@@ -191,6 +240,21 @@ func (r *localRelay) warnAtCap() {
 	slog.Warn("relay: local connection closed at the cap on connections yet to send a first byte",
 		slog.Int("limit", maxLocalRelays), slog.Int("refused", r.refused))
 	r.refused, r.capWarnAt = 0, time.Now()
+}
+
+// warnSource counts a connection closed for its source and warns at most every relayCapWarnEvery.
+// The runner's own reachability dial (answers) comes from the bind and is not counted. r.mu is held.
+func (r *localRelay) warnSource(c net.Conn) {
+	if ap, err := netip.ParseAddrPort(c.RemoteAddr().String()); err == nil && ap.Addr().Unmap() == r.pair.bind.Unmap() {
+		return
+	}
+	r.srcRefused++
+	if time.Since(r.srcWarnAt) < relayCapWarnEvery {
+		return
+	}
+	slog.Warn("relay: local connection closed: its source is outside "+envRelaySources,
+		slog.String("source", c.RemoteAddr().String()), slog.Int("refused", r.srcRefused))
+	r.srcRefused, r.srcWarnAt = 0, time.Now()
 }
 
 // readFirstByte reads c's first byte within wait. A relay stream opens only once c has sent one.
