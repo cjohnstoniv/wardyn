@@ -51,6 +51,7 @@ A unit admin's widening is always held for a second human, whatever `WARDYN_GOVE
 
 - A security admin's writes, grants included, follow `WARDYN_GOVERNANCE_SECOND_HUMAN` unchanged. A single-admin install can create unit admins.
 - A held change may be decided by a security admin, or by a unit admin who governs every unit it touches. For a grant that means strictly above the granted unit.
+- A held change is checked again when decided; if what let it in has changed since, it answers stale and changes nothing.
 - Nobody grants on their own unit, so a unit admin cannot mint a peer to approve their own widening.
 - The change read and the dry-run report list `approvers`: who could decide it, the proposer left out.
 

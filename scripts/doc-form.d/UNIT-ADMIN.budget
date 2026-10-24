@@ -3,4 +3,5 @@
 # docs/operations/unit-admins.md 728 adds 14 over 714, measured (#2967): the desktop direction lock names.
 # docs/operations/unit-admins.md 746 adds 18 over 728, measured: the legacy move rule (activates or vacates, approver governs every unit).
 # docs/operations/unit-admins.md 768 adds 22 over 746, measured (0.10 rc1): the unit-rename approval row.
-docs/operations/unit-admins.md=768 share=35
+# docs/operations/unit-admins.md 790 adds 22 over 768, measured (0.10 rc1): a held change is checked again when decided.
+docs/operations/unit-admins.md=790 share=35
