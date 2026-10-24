@@ -11,6 +11,13 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Changed
+
+- On `agent-base`, an exec-mode run (`workload.kind: command`) that carries a workspace now gets the same workspace prep
+  a harness run does: the repos are cloned into `/home/agent/work` and the git credential helper is ready, where the
+  clone was skipped and the folder left empty unless the run also had a starting folder. A run with no workspace
+  is unchanged.
+
 ## [0.10.0-rc.1] — 2026-10-24
 
 ### Before you upgrade

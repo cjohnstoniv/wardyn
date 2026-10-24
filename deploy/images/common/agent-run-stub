@@ -36,9 +36,9 @@ if [[ "${1:-}" == "--boot-seed" ]]; then
     echo "agent-run: the run's startup command exited $rc; it is not restarted" >&2
     exec bash
 fi
-# ponytail: an exec task does no workspace prep unless it was given a starting
-# folder (WARDYN_START_FOLDER, handled below); the setup connectivity probe has none
-# and its policy grants no clone or credential. --idle (below) does the full workspace
+# ponytail: an exec task does no workspace prep unless the run carries a workspace
+# (a starting folder or a repo to clone, handled below); the setup connectivity probe has
+# none and its policy grants no clone or credential. --idle (below) does the full workspace
 # prep, as the harness images do. install_mitm_ca
 # IS called: it is a no-op unless dispatch delivered a WARDYN_MITM_CA_PEM bundle, and when it did (a corporate
 # CA via WARDYN_TRUSTED_CA_FILE, or intercept_tls) dispatch also pointed
@@ -85,11 +85,13 @@ if [[ "${1:-}" == "--idle" ]]; then
     trap 'exit 130' INT
     while :; do sleep 3600 & wait $! || :; done
 fi
-# An exec task with an accepted starting folder (WARDYN_START_FOLDER) runs there, after the same workspace
+# An exec task whose run carries a workspace (an accepted starting folder, WARDYN_START_FOLDER,
+# or a repo to clone, WARDYN_REPOS / WARDYN_REPO_URL) runs there, after the same workspace
 # prep --idle does (artifact config and the git helper secret before the clones). Without one (the
 # connectivity probe) it runs where the launcher put it, untouched. ssh_key grants are provisioned by
 # a harness image's own agent-run, which this stub is replaced by; this image only closes the agent.
-if [[ "${WARDYN_TASK_MODE:-}" == "exec" && -n "${WARDYN_START_FOLDER:-}" ]]; then
+if [[ "${WARDYN_TASK_MODE:-}" == "exec" ]] \
+    && [[ -n "${WARDYN_START_FOLDER:-}" || -n "${WARDYN_REPOS:-}" || -n "${WARDYN_REPO_URL:-}" ]]; then
     : "${HOME:=/home/agent}"; export HOME
     install_artifact_config
     provision_git_helper_secret
