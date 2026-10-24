@@ -142,7 +142,7 @@ func (s *vmSignInTestStore) PauseDesktopVMAgent(_ context.Context, runID uuid.UU
 		return false, s.markErr
 	}
 	row, ok := s.rows[runID]
-	if !ok || row.Store != "memory" || row.PausedAt != nil || row.PauseGeneration != gen {
+	if !ok || !signInsKept(row.Store) || row.PausedAt != nil || row.PauseGeneration != gen { // as the store's SQL: memory or run_disk
 		return false, nil
 	}
 	row.PausedBy, row.PausedAt = by, &at
