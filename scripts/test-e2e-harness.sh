@@ -185,7 +185,7 @@ run_wrapper() {
   [[ -z "$(find .e2e-bin -name 'token-*' -print -quit)" ]] || die "down retained a bearer file"
 }
 check_events() {
-  python3 - "$@" <<'PY'
+  python3 - "$@" <<'PY' || { cat "${tmp}/wrapper.log"; die "unexpected client events"; }
 import hashlib
 import json
 import os
@@ -196,17 +196,27 @@ expected_clients, expected_dbs, prefix, host = sys.argv[1:]
 events = Path(os.environ["E2E_TEST_EVENTS"])
 clients = [json.loads(p.read_text()) for p in events.glob("client-*.json")]
 binds = [json.loads(p.read_text()) for p in events.glob("bind-*.json")]
-assert len(clients) == int(expected_clients), clients
-assert len({c["db"] for c in clients}) == int(expected_dbs), clients
-tokens = {c["token_hash"] for c in clients}
-if os.environ.get("WARDYN_E2E_TOKEN"):
-    assert tokens == {hashlib.sha256(os.environ["WARDYN_E2E_TOKEN"].encode()).hexdigest()}
-else:
-    assert len(tokens) == len(clients), "token reused across ups or lanes"
-assert tokens == {b["token_hash"] for b in binds if not b["proxy"]}
-assert all(c["url"].endswith(prefix + "/api/v1/runs") for c in clients), clients
-assert len([b for b in binds if b["proxy"]]) == (len(clients) if prefix else 0)
-assert all(addr[0] == host for b in binds for addr in b["listeners"]), binds
+def check(clients, binds):
+    assert len(clients) == int(expected_clients), clients
+    assert len({c["db"] for c in clients}) == int(expected_dbs), clients
+    tokens = {c["token_hash"] for c in clients}
+    if os.environ.get("WARDYN_E2E_TOKEN"):
+        assert tokens == {hashlib.sha256(os.environ["WARDYN_E2E_TOKEN"].encode()).hexdigest()}
+    else:
+        assert len(tokens) == len(clients), "token reused across ups or lanes"
+    assert tokens == {b["token_hash"] for b in binds if not b["proxy"]}
+    assert all(c["url"].endswith(prefix + "/api/v1/runs") for c in clients), clients
+    assert len([b for b in binds if b["proxy"]]) == (len(clients) if prefix else 0)
+    assert all(addr[0] == host for b in binds for addr in b["listeners"]), binds
+
+try:
+    check(clients, binds)
+except AssertionError:
+    # Name what ran, so a red says which spec ran twice and on which database.
+    for p in sorted(events.glob("client-*.json")):
+        c = json.loads(p.read_text())
+        print(f"  {p.name}: spec={c['spec']} db={c['db']}", file=sys.stderr)
+    raise
 PY
 }
 
@@ -278,9 +288,28 @@ for shard in 1/2 2/2 1/3; do
     2/2) want="e2e/four.spec.ts e2e/six.spec.ts e2e/two.spec.ts" ;;
     *) want="e2e/five.spec.ts e2e/six.spec.ts" ;;
   esac
-  [[ "$(ran_specs)" == "${want}" ]] || die "shard ${shard} ran [$(ran_specs)], want [${want}]"
+  [[ "$(ran_specs)" == "${want}" ]] || { cat "${tmp}/shard.log"; die "shard ${shard} ran [$(ran_specs)], want [${want}]"; }
   log "shard ${shard} runs its own specs and no other"
 done
+
+# Concurrent lanes claim a spec by creating its marker, and the claim must not rest on mkdir's exit
+# status: uutils mkdir (the coreutils of ubuntu-26.04) reports success for a directory a sibling lane
+# just created, so every lane then ran the spec. This stub is that behaviour at its limit — mkdir
+# succeeds for an existing directory — so each spec runs once only if the claim itself is exclusive.
+real_mkdir="$(command -v mkdir)"
+mkdir -p "${tmp}/racy-bin"
+cat > "${tmp}/racy-bin/mkdir" <<SH
+#!/usr/bin/env bash
+if [[ "\$1" != -* && -d "\$1" ]]; then exit 0; fi
+exec "${real_mkdir}" "\$@"
+SH
+chmod +x "${tmp}/racy-bin/mkdir"
+rm -f "${E2E_TEST_EVENTS}"/*
+PATH="${tmp}/racy-bin:${PATH}" WARDYN_E2E_LANES=3 WARDYN_E2E_SHARD=1/2 ./scripts/run-ui-e2e.sh > "${tmp}/shard.log" 2>&1 \
+  || { cat "${tmp}/shard.log"; die "three lanes under a lenient mkdir failed"; }
+[[ "$(ran_specs)" == "e2e/five.spec.ts e2e/one.spec.ts e2e/three.spec.ts" ]] \
+  || { cat "${tmp}/shard.log"; die "a lenient mkdir let a spec run twice: [$(ran_specs)]"; }
+log "three lanes run each spec once even when mkdir reports success for an existing directory"
 
 # A shard that holds no spec must refuse, not report a green run that ran
 # nothing — and must refuse before any build, database or backend work.

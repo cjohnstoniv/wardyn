@@ -84,7 +84,7 @@ jobs:
   # eight two-minute scans (run 37403763766: conformance queued 98 s, go
   # (unit) 90 s).
   changes:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     outputs:
       code: ${{ steps.classify.outputs.code }}
@@ -172,7 +172,7 @@ jobs:
   # needs `changes` would queue behind the long jobs that became ready with it
   # (see `changes`). Nothing here reads the classification.
   image-scope:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     outputs:
       wardynd: ${{ steps.scope.outputs.wardynd }}
@@ -244,7 +244,7 @@ jobs:
     name: go (${{ matrix.suite }})
     needs: changes
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 40
     strategy:
       fail-fast: false
@@ -378,7 +378,7 @@ jobs:
     name: go (lint)
     needs: changes
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -481,7 +481,7 @@ jobs:
   build:
     needs: [changes, go, go-lint, image-scope]
     if: ${{ always() }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - name: Every go leg passed
@@ -589,7 +589,7 @@ jobs:
   # Validate every fenced mermaid diagram in the public docs (syntax + label-
   # truth). Needs the ui node_modules (mermaid-cli), so it installs UI deps first.
   diagrams:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -642,7 +642,7 @@ jobs:
   ui:
     needs: changes
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -755,7 +755,7 @@ jobs:
     name: ui-e2e (${{ matrix.shard }}/2)
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 25
     strategy:
       fail-fast: false
@@ -912,7 +912,7 @@ jobs:
   helm:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
@@ -983,7 +983,7 @@ jobs:
   helm-install-test:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -1234,7 +1234,7 @@ jobs:
   conformance-k8s:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     # 35, not 25: the Makefile recipe's own `-timeout` is 25m since the eviction case
     # gained its second fill target AND a margin for the rest of the suite
     # (TestEphemeralCaseBudgetFitsTheMakefileTimeout), and a job timeout at or below it
@@ -1355,7 +1355,7 @@ jobs:
 
   # ── deploy: docker-compose config validation ──────────────────────────────
   compose:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
@@ -1386,7 +1386,7 @@ jobs:
   runner-units:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
@@ -1467,7 +1467,7 @@ jobs:
   conformance:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     # Two image builds (one of them a trixie + node + `npm install -g` layer)
     # in front of a suite whose own `go test -timeout` is 20m, plus the ~6m
     # key-service leg.
@@ -1573,7 +1573,7 @@ jobs:
           key: go-conformance-docker-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
 
   # ── Linux VM sandboxes (machine_kind=linux_vm) under real QEMU/KVM ──
-  # NOT a required check. Hosted ubuntu-24.04 exposes /dev/kvm; GitHub's documented udev rule
+  # NOT a required check. Hosted ubuntu-26.04 exposes /dev/kvm; GitHub's documented udev rule
   # opens it to the runner's user, and the QEMU container gets it as an unprivileged user. Builds
   # the QEMU image and the reference guest image, then boots the guest through the real Docker
   # driver (test/conformance/vm: probe, boot, exec, terminal, shared folder, the network relay and
@@ -1581,7 +1581,7 @@ jobs:
   vm:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -1619,7 +1619,7 @@ jobs:
   # a live daemon (validates the pushedBaseRef assumption in builder.go). The
   # target provisions its own throwaway registry + runner-tools dir. The build
   # container reaches the test's host-loopback git daemon + published registry
-  # only via HOST networking, and only because ubuntu-24.04 runs a host-native
+  # only via HOST networking, and only because ubuntu-26.04 runs a host-native
   # dockerd that shares the host network namespace. The test already defaults to
   # "host"; the env below is set explicitly to document the requirement. This job
   # requires a host-native dockerd — it cannot pass against a VM-based daemon like
@@ -1627,7 +1627,7 @@ jobs:
   envbuild-integration:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -1695,7 +1695,7 @@ jobs:
   vm-conformance:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -1745,7 +1745,7 @@ jobs:
     name: test-pg-shard (${{ matrix.shard }})
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
       packages: read
@@ -1878,7 +1878,7 @@ jobs:
   test-pg:
     needs: [changes, test-pg-shard]
     if: ${{ always() && needs.changes.outputs.backend != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - name: Every Postgres shard passed
@@ -1945,7 +1945,7 @@ jobs:
     name: trivy (wardynd)
     needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.wardynd != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 40
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -2062,7 +2062,7 @@ jobs:
     name: trivy (wardynd-fips)
     needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.wardynd-fips != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 40
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -2075,7 +2075,7 @@ jobs:
     name: trivy (wardyn-proxy)
     needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.wardyn-proxy != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 40
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -2088,7 +2088,7 @@ jobs:
     name: trivy (wardyn-runnerd)
     needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.wardyn-runnerd != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 40
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -2101,7 +2101,7 @@ jobs:
     name: trivy (agent-base)
     needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.agent-base != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 40
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -2114,7 +2114,7 @@ jobs:
     name: trivy (agent-codex-cli)
     needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.agent-codex-cli != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 40
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -2127,7 +2127,7 @@ jobs:
     name: trivy (agent-aws-sso)
     needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.agent-aws-sso != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 40
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -2140,7 +2140,7 @@ jobs:
     name: trivy (agent-vscode)
     needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.agent-vscode != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 40
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -2153,7 +2153,7 @@ jobs:
     name: trivy (agent-novnc)
     needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.agent-novnc != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 40
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -2166,7 +2166,7 @@ jobs:
     name: trivy (agent-novnc-signin)
     needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.agent-novnc-signin != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 50
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -2218,7 +2218,7 @@ jobs:
   notices:
     needs: [changes, diagrams] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() && needs.changes.outputs.notices != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -2278,7 +2278,7 @@ jobs:
   gates:
     needs: [changes, diagrams] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -2338,7 +2338,7 @@ jobs:
 
   # ── supply-chain: DCO sign-off ─────────────────────────────────────────────
   dco:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -2438,7 +2438,7 @@ jobs:
       && github.event.pull_request.head.repo.full_name == github.repository
       && github.actor != 'dependabot[bot]'
       && !startsWith(github.head_ref, 'train/') && !startsWith(github.head_ref, 'prep/') }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       actions: write
@@ -2461,7 +2461,7 @@ jobs:
       && github.event.pull_request.head.repo.full_name == github.repository
       && github.actor != 'dependabot[bot]'
       && !startsWith(github.head_ref, 'train/') && !startsWith(github.head_ref, 'prep/') }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       actions: write
@@ -2475,7 +2475,7 @@ jobs:
       && github.event.pull_request.head.repo.full_name == github.repository
       && github.actor != 'dependabot[bot]'
       && !startsWith(github.head_ref, 'train/') && !startsWith(github.head_ref, 'prep/') }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       actions: write
@@ -2489,7 +2489,7 @@ jobs:
       && github.event.pull_request.head.repo.full_name == github.repository
       && github.actor != 'dependabot[bot]'
       && !startsWith(github.head_ref, 'train/') && !startsWith(github.head_ref, 'prep/') }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       actions: write
@@ -2503,7 +2503,7 @@ jobs:
       && github.event.pull_request.head.repo.full_name == github.repository
       && github.actor != 'dependabot[bot]'
       && !startsWith(github.head_ref, 'train/') && !startsWith(github.head_ref, 'prep/') }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       actions: write
@@ -2517,7 +2517,7 @@ jobs:
       && github.event.pull_request.head.repo.full_name == github.repository
       && github.actor != 'dependabot[bot]'
       && !startsWith(github.head_ref, 'train/') && !startsWith(github.head_ref, 'prep/') }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       actions: write
@@ -2529,7 +2529,7 @@ jobs:
   # as Expected on such a pull request instead. It does nothing else.
   ci-ran:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - name: The pull_request workflow ran
@@ -2558,7 +2558,7 @@ jobs:
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       (startsWith(github.head_ref, 'train/') || startsWith(github.head_ref, 'prep/'))
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 180
     permissions:
       actions: write
@@ -2593,7 +2593,7 @@ jobs:
   train-gate:
     needs: train-suites
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - name: A train head needs the candidate suites green
@@ -2625,7 +2625,7 @@ jobs:
       && (needs.ui-e2e.outputs.flaky_1 != 'false' || needs.ui-e2e.outputs.flaky_2 != 'false')
       && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     continue-on-error: true
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       issues: write
@@ -2713,7 +2713,7 @@ jobs:
       - gates
       - dco
     if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       issues: write
@@ -2748,7 +2748,7 @@ jobs:
   # seconds of download in the jobs that run them.
   go-modules:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     outputs:
       saved: ${{ steps.saved.outputs.key }}
@@ -2791,7 +2791,7 @@ jobs:
   # never marks a `gotools-` entry as superseded, so it leaves these alone.
   go-gate-tools:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -2837,7 +2837,7 @@ jobs:
   go-cache-prune:
     needs: [go-modules, go, go-lint, ui-e2e, conformance-k8s, conformance, envbuild-integration, test-pg-shard, notices, gates]
     if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       actions: write
