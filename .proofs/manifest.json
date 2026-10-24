@@ -1,0 +1,95 @@
+{
+  "keyed_sha": "c7fc8916a226e90b84ed3cda58c87bc59475c25a",
+  "proofs": [
+    {
+      "name": "fence-api-failed-record-sends-nothing",
+      "package": "./internal/api",
+      "run": "^TestDesktopSignIns_APauseWithNoGenerationSendsNothing$",
+      "tags": "",
+      "files": {
+        "internal/api/run_desktop_vm_signin.go": ".proofs/files/fence-api-failed-record-sends-nothing/internal/api/run_desktop_vm_signin.go"
+      },
+      "want_fail": "--- FAIL: TestDesktopSignIns_APauseWithNoGenerationSendsNothing"
+    },
+    {
+      "name": "fence-api-stop-again-takes-own-generation",
+      "package": "./internal/api",
+      "run": "^TestDesktopSignIns_ALateContinueNeverRunsANewerPausesAgent$",
+      "tags": "",
+      "files": {
+        "internal/api/run_desktop_vm_signin.go": ".proofs/files/fence-api-stop-again-takes-own-generation/internal/api/run_desktop_vm_signin.go"
+      },
+      "want_fail": "--- FAIL: TestDesktopSignIns_ALateContinueNeverRunsANewerPausesAgent"
+    },
+    {
+      "name": "b1-outage-old-guard",
+      "package": "./internal/api",
+      "run": "^TestDesktopSignIns_AnOutageLostRunKeepsItsPause$",
+      "tags": "",
+      "files": {
+        "internal/api/run_desktop_vm_signin.go": ".proofs/files/b1-outage-old-guard/internal/api/run_desktop_vm_signin.go"
+      },
+      "want_fail": "--- FAIL: TestDesktopSignIns_AnOutageLostRunKeepsItsPause"
+    },
+    {
+      "name": "b1-drop-reboot-ended",
+      "package": "./internal/api",
+      "run": "^TestDesktopSignIns_ARunThatEndsPausedWritesItsOneRow$",
+      "tags": "",
+      "files": {
+        "internal/api/run_desktop_vm_signin.go": ".proofs/files/b1-drop-reboot-ended/internal/api/run_desktop_vm_signin.go"
+      },
+      "want_fail": "--- FAIL: TestDesktopSignIns_ARunThatEndsPausedWritesItsOneRow"
+    },
+    {
+      "name": "b2-aws-signin-row-resident",
+      "package": "./internal/api",
+      "run": "^TestDeriveSetupItems_AWSSignInLLMAccessIsResident$",
+      "tags": "",
+      "files": {
+        "internal/api/compose_setup.go": ".proofs/files/b2-aws-signin-row-resident/internal/api/compose_setup.go"
+      },
+      "want_fail": "--- FAIL: TestDeriveSetupItems_AWSSignInLLMAccessIsResident"
+    },
+    {
+      "name": "b3-volume-probe-fixed-buffer",
+      "package": "./internal/api",
+      "run": "^TestAuditSpoolRewriteMemoryIsFlatInTheBacklog$",
+      "tags": "",
+      "files": {
+        "internal/api/auditspool.go": ".proofs/files/b3-volume-probe-fixed-buffer/internal/api/auditspool.go"
+      },
+      "want_fail": "--- FAIL: TestAuditSpoolRewriteMemoryIsFlatInTheBacklog"
+    },
+    {
+      "name": "b3-compact-fixed-buffer",
+      "package": "./internal/api",
+      "run": "^TestAuditSpoolRewriteMemoryIsFlatInTheBacklog$",
+      "tags": "",
+      "files": {
+        "internal/api/auditspool.go": ".proofs/files/b3-compact-fixed-buffer/internal/api/auditspool.go"
+      },
+      "want_fail": "--- FAIL: TestAuditSpoolRewriteMemoryIsFlatInTheBacklog"
+    },
+    {
+      "name": "renewcause-k8s-start-error-names-cause",
+      "package": "./internal/runner/k8s",
+      "run": "^TestRunnerCreateSandbox_ProxyThatCannotRenewNamesTheCause$",
+      "tags": "k8s",
+      "files": {
+        "internal/runner/k8s/sandbox.go": ".proofs/files/renewcause-k8s-start-error-names-cause/internal/runner/k8s/sandbox.go"
+      },
+      "want_fail": "--- FAIL: TestRunnerCreateSandbox_ProxyThatCannotRenewNamesTheCause"
+    },
+    {
+      "name": "renewcause-proxy-gives-up-after-a-minute",
+      "package": "./internal/egress/proxy",
+      "run": "^TestSelfLapse_NeverRenewedLapsesWithItsCause$",
+      "tags": "",
+      "files": {
+        "internal/egress/proxy/self_lapse.go": ".proofs/files/renewcause-proxy-gives-up-after-a-minute/internal/egress/proxy/self_lapse.go"
+      },
+      "want_fail": "--- FAIL: TestSelfLapse_NeverRenewedLapsesWithItsCause"
+    }
+  ]
+}
