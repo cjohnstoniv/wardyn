@@ -43,8 +43,8 @@ import (
 // in-flight pause and then continues the agent that pause stopped.
 //
 // Each pause takes the run's next pause generation before it asks the runner (migration 0231), and
-// every stop and continue carries a generation to the guest agent, which drops one older than the
-// newest it has seen (guestagent.PauseFence). A stop or continue that reaches the guest late, after
+// every stop and continue carries a generation to the guest agent, which drops one out of order
+// (guestagent.PauseFence). A stop or continue that reaches the guest late, after
 // the lock was lost, so cannot undo a newer pause. A runner or guest image that predates it signals each
 // request as it arrives, as before: the session's audit row then says fenced false.
 
@@ -372,16 +372,20 @@ func (s *Server) continueStoppedAgent(base, lockCtx, bg context.Context, p runne
 // reconcileLostLock takes the run's lock again for a pause or resume that lost it, and reads the row
 // under it (desktopRelock). A mark other than own (the pause a resume read; nil for a pause) is a newer
 // pause's, which owns the stopped agent. When this request's continue may have reached the runner
-// (sent), it may land after that pause's stop, so the agent is stopped again here, with the row's
-// generation, under the lock that pause's resume needs: stopping a stopped agent changes nothing. A
-// guest agent that orders requests by generation drops that continue whenever it lands after either
-// stop; one that predates it does not, so a continue it already has may still take effect after this
-// stop too. restop is that stop's error, which nothing retries (restopFailed).
+// (sent), it may land after that pause's stop, so the agent is stopped again here, under the lock that
+// pause's resume needs: stopping a stopped agent changes nothing. The stop again takes the run's next
+// generation, which that pause's resume then reads, so a guest agent that orders requests by generation
+// drops that continue whenever it lands, and never takes the stop again for a duplicate of a stop its
+// own resume has passed. One that predates it does not, so a continue it already has may still take
+// effect after this stop too. restop is that stop's error, which nothing retries (restopFailed).
 func (s *Server) reconcileLostLock(base context.Context, p runner.AgentPauser, run types.AgentRun, st store.DesktopVMSignInStore,
 	own *time.Time, sent bool) (ctx context.Context, row store.DesktopVMSignIns, relocked func(), restop error, ok bool) {
 	ctx, row, relocked, ok = s.desktopRelock(base, run, st)
 	if ok && sent && row.PausedAt != nil && (own == nil || !row.PausedAt.Equal(*own)) {
-		_, restop = p.PauseAgent(ctx, run.SandboxRef, row.PauseGeneration)
+		var gen int64
+		if gen, restop = st.NextDesktopVMPauseGeneration(ctx, run.ID); restop == nil {
+			_, restop = p.PauseAgent(ctx, run.SandboxRef, gen)
+		}
 	}
 	return ctx, row, relocked, restop, ok
 }

@@ -64,8 +64,8 @@ type InitResult struct {
 }
 
 // AgentSignal is the body of POST /v1/agent/pause and /v1/agent/resume. Generation orders them
-// (PauseFence): the agent answers 409 to one older than the newest it has seen and signals nothing. An
-// empty body, from a runner that predates it, is generation 0.
+// (PauseFence): the agent answers 409 to one the fence drops and signals nothing. An empty body, from
+// a runner that predates it, is generation 0.
 type AgentSignal struct {
 	Generation int64 `json:"generation,omitempty"`
 }

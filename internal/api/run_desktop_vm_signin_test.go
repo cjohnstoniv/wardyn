@@ -242,20 +242,19 @@ func (f *pauseFakeRunner) ResumeAgent(ctx context.Context, ref string, gen int64
 // errGuestDropped is the guest agent's answer to a stop or continue older than the newest it has seen.
 var errGuestDropped = errors.New("guestagent: 409 Conflict: \"a newer pause or resume has reached the agent\"")
 
-// signal lands one stop or continue through the guest agent's fence; false when it was dropped.
+// signal lands one stop or continue through the guest agent's fence, under one lock; false when it
+// was dropped.
 func (f *pauseFakeRunner) signal(gen int64, stop bool) bool {
 	f.pmu.Lock()
+	defer f.pmu.Unlock()
 	if f.unfenced {
 		gen = 0
 	}
-	f.pmu.Unlock()
-	landed, _ := f.fence.Do(gen, func() error {
-		f.pmu.Lock()
-		f.stopped = stop
-		f.pmu.Unlock()
-		return nil
-	})
-	return landed
+	if !f.fence.Admit(gen, !stop) {
+		return false
+	}
+	f.stopped = stop
+	return true
 }
 
 func (f *pauseFakeRunner) seenGens() []int64 {
@@ -865,15 +864,16 @@ func TestDesktopSignIns_ALateContinueNeverRunsANewerPausesAgent(t *testing.T) {
 	if !f.rn.agentStopped() {
 		t.Fatal("a continue delivered after the newer pause's stop ran the agent while the run says paused")
 	}
-	// The failed pause's stop and continue, the newer pause's stop, and the stop again under its mark.
-	if got := f.rn.seenGens(); !slices.Equal(got, []int64{1, 1, 2, 2}) {
-		t.Fatalf("generations = %v, want 1, 1, 2, 2", got)
+	// The failed pause's stop and continue, the newer pause's stop, and the stop again under its mark,
+	// at a generation of its own.
+	if got := f.rn.seenGens(); !slices.Equal(got, []int64{1, 1, 2, 3}) {
+		t.Fatalf("generations = %v, want 1, 1, 2, 3", got)
 	}
 	if code, rv, body := f.do(t, http.MethodPost, "/resume"); code != http.StatusOK || rv.Paused {
 		t.Fatalf("the newer pause's resume = %d %s", code, body)
 	}
-	if got := f.rn.seenGens(); got[len(got)-1] != 2 || f.rn.agentStopped() {
-		t.Fatalf("generations = %v, stopped = %v: want the resume at 2 to run the agent", got, f.rn.agentStopped())
+	if got := f.rn.seenGens(); got[len(got)-1] != 3 || f.rn.agentStopped() {
+		t.Fatalf("generations = %v, stopped = %v: want the resume at 3 to run the agent", got, f.rn.agentStopped())
 	}
 }
 

@@ -470,7 +470,7 @@ type DesktopDialer interface {
 // guest and its desktop keep running. It is not Freezer, which would freeze the desktop too.
 //
 // gen is the run's pause generation (migration 0231): a guest agent that orders requests by it drops
-// one older than the newest it has seen, so a continue delivered after a later pause's stop does not
+// one out of order (guestagent.PauseFence), so a continue delivered after a later pause's stop does not
 // run the agent. fenced says the request was ordered so; it is false from a runner or guest image that
 // predates the generation, which signals each request as it arrives.
 type AgentPauser interface {

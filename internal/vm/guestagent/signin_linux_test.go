@@ -279,3 +279,83 @@ func TestReferenceImageConfiguresNoSwap(t *testing.T) {
 		t.Fatal("the reference guest image no longer installs the guest agent that refuses swap")
 	}
 }
+
+// Within one generation the stop comes before the continue. A stop again before the continue (wardynd
+// stopping a still marked pause again, or a duplicate) acts; a stop delivered after its own pause's
+// continue is dropped, so it never stops an agent whose pause was resumed; a continue sent again acts.
+// A stop delayed past its own failed pause's continue is dropped the same way, leaving the agent run.
+func TestAStopAfterItsOwnContinueIsDropped(t *testing.T) {
+	r := newRig(t)
+	c := r.client(t)
+	pid := startGroup(t, r, c)
+	for i, step := range []struct {
+		pause   bool
+		gen     int64
+		applied bool
+		stopped bool
+	}{
+		{true, 1, true, true},   // pause 1
+		{true, 1, true, true},   // its stop again, or a duplicate
+		{false, 1, true, false}, // its resume
+		{true, 1, false, false}, // a duplicate stop, delivered after the resume
+		{false, 1, true, false}, // a duplicate continue
+		{false, 2, true, false}, // pause 2 failed: its continue reached the agent first
+		{true, 2, false, false}, // and its stop only after
+		{true, 3, true, true},   // pause 3
+		{false, 3, true, false}, // its resume
+	} {
+		if got := signal(t, c, step.pause, step.gen); got != step.applied {
+			t.Fatalf("step %d: pause=%v generation %d applied = %v, want %v", i, step.pause, step.gen, got, step.applied)
+		}
+		waitGroup(t, pid, 2, step.stopped)
+	}
+}
+
+// Once a request with a generation has acted, one without (from a runner or wardynd that predates it)
+// is dropped: it cannot undo a fenced pause, nor stop an agent a fenced resume ran.
+func TestAnUnfencedRequestAfterAFencedOneIsDropped(t *testing.T) {
+	r := newRig(t)
+	c := r.client(t)
+	pid := startGroup(t, r, c)
+	signal(t, c, true, 1)
+	waitGroup(t, pid, 2, true)
+	for _, path := range []string{"/v1/agent/resume", "/v1/agent/pause"} {
+		if err := c.do(ctxT(t), http.MethodPost, path, nil, nil); err == nil || !strings.Contains(err.Error(), "409") {
+			t.Fatalf("%s with no generation after a fenced pause = %v, want 409", path, err)
+		}
+		waitGroup(t, pid, 2, true)
+	}
+	signal(t, c, false, 1)
+	waitGroup(t, pid, 2, false)
+}
+
+// The order outlives a restart of the guest agent's service, whose processes may outlive it too: the
+// marker directory keeps it. A new boot, whose processes are new, starts it afresh.
+func TestThePauseOrderOutlivesAServiceRestartNotABoot(t *testing.T) {
+	boot := t.TempDir()
+	r := newRigAt(t, boot)
+	c := r.client(t)
+	pid := startGroup(t, r, c)
+	signal(t, c, true, 2)
+	signal(t, c, false, 2)
+	waitGroup(t, pid, 2, false)
+
+	restarted := newRigAt(t, boot)
+	rc := restarted.client(t)
+	rpid := startGroup(t, restarted, rc)
+	if signal(t, rc, true, 2) {
+		t.Fatal("after a service restart, a stop delivered after its own pause's continue acted")
+	}
+	if signal(t, rc, false, 1) {
+		t.Fatal("after a service restart, a continue older than the newest pause acted")
+	}
+	waitGroup(t, rpid, 2, false)
+
+	booted := newRigAt(t, t.TempDir())
+	bc := booted.client(t)
+	bpid := startGroup(t, booted, bc)
+	if !signal(t, bc, true, 1) {
+		t.Fatal("a new boot's first pause was dropped")
+	}
+	waitGroup(t, bpid, 2, true)
+}

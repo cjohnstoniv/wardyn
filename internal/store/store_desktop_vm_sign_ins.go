@@ -15,8 +15,8 @@ import (
 
 // DesktopVMSignIns is a VM run's sign-in store (migration 0230): what its guest made of the store at
 // boot, and who paused the agent to sign in, since when, while it is paused. PauseGeneration is the
-// generation the run's latest pause took (migration 0231; 0 before its first), which each stop and
-// continue carries to the guest so it drops one older than the newest it has seen.
+// generation the run's latest pause or stop again took (migration 0231; 0 before its first), which
+// each stop and continue carries to the guest so it drops one out of order.
 type DesktopVMSignIns struct {
 	Store           string // "memory" or "none"
 	PausedBy        string
