@@ -727,9 +727,6 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigInvalid, "invalid site config: "+err.Error())
 		return
 	}
-	if s.refuseSiteRecordingWithoutStore(w, cfg.Recording) {
-		return
-	}
 	// The logo file (#1215) is read and checked BEFORE anything is written, so a
 	// bad file refuses the apply whole — after the shape rule above, and before
 	// the lock, since a read of the host filesystem has no business inside it.

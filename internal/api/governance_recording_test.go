@@ -137,3 +137,19 @@ func TestPutSiteConfigNeverChangesTheRecordingLevel(t *testing.T) {
 		}
 	}
 }
+
+// TestPutSiteConfigRoundTripsALockedLevelWithNoStore: a locked minimum stored while the organisation
+// kept recordings still round-trips through PUT /site-config after the store is gone, since this door
+// cannot change the block; PUT /governance/recording is the one that refuses it.
+func TestPutSiteConfigRoundTripsALockedLevelWithNoStore(t *testing.T) {
+	stored := types.SiteConfig{Recording: &types.SiteRecording{Level: types.RecordingTerminal, Locked: true}}
+	srv, fake, _ := egressBaselineServer(t, stored)
+	srv.cfg.RecordingStore = nil
+	body := `{"recording":{"level":"terminal","locked":true}}`
+	if w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, body); w.Code != http.StatusOK {
+		t.Fatalf("PUT %s with no recording store = %d %s, want 200", body, w.Code, w.Body)
+	}
+	if fake.cfg.Recording == nil || *fake.cfg.Recording != *stored.Recording {
+		t.Fatalf("after the round trip the stored recording = %+v, want it as it was", fake.cfg.Recording)
+	}
+}
