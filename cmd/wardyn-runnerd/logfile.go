@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -31,6 +32,20 @@ type rotatingLog struct {
 	keep int
 	f    *os.File
 	size int64
+}
+
+// logToFile points the log package, which slog's default handler writes through, at the rotated file
+// path names; the returned func puts stderr back and closes the file. An empty path changes nothing.
+func logToFile(path string) (func(), error) {
+	if path == "" {
+		return func() {}, nil
+	}
+	w, err := openRotatingLog(path, logFileMax, logFileKeep)
+	if err != nil {
+		return nil, err
+	}
+	log.SetOutput(w)
+	return func() { log.SetOutput(os.Stderr); _ = w.Close() }, nil
 }
 
 func openRotatingLog(path string, max int64, keep int) (*rotatingLog, error) {

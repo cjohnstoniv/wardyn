@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -92,14 +91,11 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 	var opts serveOptions
 	cmd := &cobra.Command{Use: "serve", Short: "Connect this registered runner to its organisation", Args: cobra.NoArgs}
 	cmd.RunE = func(cmd *cobra.Command, _ []string) (retErr error) {
-		if logFile != "" {
-			w, err := openRotatingLog(logFile, logFileMax, logFileKeep)
-			if err != nil {
-				return err
-			}
-			log.SetOutput(w) // slog's default handler writes through the log package
-			defer func() { log.SetOutput(os.Stderr); _ = w.Close() }()
+		restoreLog, err := logToFile(logFile)
+		if err != nil {
+			return err
 		}
+		defer restoreLog()
 		cfg, err := serveConfig(cmd, configPath)
 		if err != nil {
 			return err
