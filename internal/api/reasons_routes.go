@@ -454,6 +454,12 @@ const (
 	reasonModelProviderCredentialStoreUnavailable = "model_provider_credential_store_unavailable" // the secret store did not answer (transient)
 )
 
+// GET /api/v1/runs/{id}/recording-chain (recording_chain.go): a recording's stretch of the audit chain.
+const (
+	reasonRecordingChainKeyRequired = "recording_chain_key_required" // the check named no recording key
+	reasonRecordingChainBusy        = "recording_chain_busy"         // another recording's range check is walking the log on this replica
+)
+
 // /api/v1/admin/audit (audit.go): the security tier's audit-log query,
 // export and chain-verification doors.
 const (

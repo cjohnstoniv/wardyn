@@ -181,6 +181,7 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `@floating-ui/utils` | 0.2.12 | MIT |
 | `@fontsource/inter` | 5.3.0 | OFL-1.1 |
 | `@fontsource/jetbrains-mono` | 5.3.0 | OFL-1.1 |
+| `@novnc/novnc` | 1.7.0 | MPL-2.0 |
 | `@radix-ui/number` | 1.1.3 | MIT |
 | `@radix-ui/primitive` | 1.2.0 | MIT |
 | `@radix-ui/react-alert-dialog` | 1.2.1 | MIT |
@@ -289,6 +290,15 @@ canonical text for that licence is in `licenses/texts/common/`.
 | package | version | declared licence | copyright holder |
 |---|---|---|---|
 | `react-remove-scroll-bar` | 2.3.8 | MIT | Anton Korzunov |
+
+## Components bundled inside UI packages
+
+Third-party code a UI package ships inside its own tarball. Its licence text is in
+`licenses/texts/npm/<package>/<component>-LICENSE` (list: `licenses/bundled-in-ui-packages.tsv`).
+
+| package | component | version | licence |
+|---|---|---|---|
+| `@novnc/novnc` | pako | 1.0.3, the ES-module port noVNC vendors | MIT |
 
 ## In-tree components derived from third-party projects
 

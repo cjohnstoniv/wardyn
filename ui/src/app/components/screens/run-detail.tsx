@@ -421,6 +421,7 @@ function RunDetailPage({ id }: { id: string }) {
                 setRecState("idle");
               }}
               onRetry={() => setRecState("idle")}
+              onGoAudit={() => setTab("audit")}
             />
           </TabsContent>
 
