@@ -96,7 +96,9 @@ type PrepareOptions struct {
 	FirstBoot FirstBooter
 	PrepNet   func() (PrepNetwork, error)
 	Bootstrap Bootstrapper
-	HTTP      *http.Client
+	// Stage2 installs the developer tools (nil: the base serves "none" only).
+	Stage2 Stage2
+	HTTP   *http.Client
 	// CPUs and MemoryMiB are the runner's per-run limits. Prepare's VM uses
 	// them as they are; below the image's minimum, prepare stops.
 	CPUs      int
@@ -245,6 +247,11 @@ func (p *prep) run(ctx context.Context) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, err
 	}
+	// Stage 2 runs while the install marker is still down: cut short, the
+	// whole base is discarded and the next Prepare restarts from create.
+	if err := p.stage2(ctx, spec, &res); err != nil {
+		return Manifest{}, err
+	}
 
 	m := Manifest{
 		Format: BaseFormat, State: BaseReady, GuestOS: fmt.Sprintf("macOS %s (%s)", img.OSVersion, img.BuildVersion),
@@ -265,6 +272,28 @@ func (p *prep) run(ctx context.Context) (Manifest, error) {
 	return m, nil
 }
 
+// stage2 installs the developer tools and records which harnesses the base can
+// serve. Like every step after the download it starts only on AC and is never
+// paused.
+func (p *prep) stage2(ctx context.Context, spec MachineSpec, res *BootstrapResult) error {
+	if p.Stage2 == nil {
+		return nil
+	}
+	if err := p.waitAC(ctx, PhaseTools); err != nil {
+		return err
+	}
+	p.emit(PrepareEvent{Phase: PhaseTools})
+	tr, err := p.Stage2.Run(ctx, Stage2Input{Spec: spec, Dir: p.base})
+	if err != nil {
+		return fmt.Errorf("macvm: stage 2: %w", err)
+	}
+	if tr.AgentVersion != "" {
+		res.AgentVersion = tr.AgentVersion
+	}
+	res.Harnesses = tr.Harnesses
+	return writeToolsRecord(p.base, tr, res.AgentVersion)
+}
+
 // discardInterrupted removes a base whose install started but never reached a
 // ready manifest (the marker is still there, or the files exist without a
 // ready manifest). The cached restore image is kept.
@@ -276,7 +305,7 @@ func (p *prep) discardInterrupted() error {
 		return nil
 	}
 	p.Log.Warn("macvm: discarding an install that did not finish", "base", p.base)
-	for _, f := range []string{DiskFile, AuxFile, MachineIDFile, ManifestFile, installingMarker} {
+	for _, f := range []string{DiskFile, AuxFile, MachineIDFile, ManifestFile, ToolsRecordFile, installingMarker} {
 		if err := os.Remove(filepath.Join(p.base, f)); err != nil && !os.IsNotExist(err) {
 			return err
 		}
