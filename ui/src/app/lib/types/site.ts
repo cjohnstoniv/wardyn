@@ -246,6 +246,8 @@ export interface AgentProvider {
   // agent; that provider may be turned off, which makes this default's runs
   // refused rather than moved. Absent is today.
   default_provider?: string;
+  // "Sign-ins in a desktop: Not allowed" (#2972). Negative-sense: absent is Allowed.
+  desktop_sign_ins_off?: boolean;
 }
 
 // The org's model-provider configuration. Hand-maintained mirror of Go's
@@ -311,6 +313,9 @@ export interface LocalModelSettings {
   max_context?: number;
   max_output?: number;
   keep_alive_seconds?: number;
+  // Admin-set through the API (no console control yet): runs on a person's own
+  // runner may use this server on that computer.
+  allow_on_laptop_runners?: boolean;
 }
 
 // Go's types.DefaultLocal* and the API's maxLocalModels, maxLocalBound and

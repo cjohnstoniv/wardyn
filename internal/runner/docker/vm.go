@@ -351,14 +351,15 @@ func (d *Driver) createVM(ctx context.Context, spec runner.SandboxSpec) (runner.
 	}
 	v := d.newVMRun(spec.RunID, dir)
 	rollback = append(rollback, func() { v.stop(); v.agent.Close() })
-	if err := d.bootVM(ctx, v, name, spec, guestMounts); err != nil {
+	signIns, err := d.bootVM(ctx, v, name, spec, guestMounts)
+	if err != nil {
 		return fail(err)
 	}
 	machine := &types.VMMachine{MachineType: vc.MachineType, CPUModel: vc.CPUModel, Accelerator: "kvm", QEMUVersion: vc.QEMUVersion}
 	d.vms.Store(name, v)
 	d.keepExecOutput(name, spec.ExecOutput)
 	// A hardware VM boundary: the CC3 family, as Kata and krun microVMs are.
-	return runner.Sandbox{Ref: name, Driver: driverName, EnforcedClass: types.CC3, Machine: machine}, nil
+	return runner.Sandbox{Ref: name, Driver: driverName, EnforcedClass: types.CC3, Machine: machine, SignIns: signIns}, nil
 }
 
 func (c VMConfig) user() string { return strconv.Itoa(c.UID) + ":" + strconv.Itoa(c.GID) }
@@ -672,13 +673,14 @@ func waitForSocket(ctx context.Context, path string, limit time.Duration) error 
 
 // bootVM waits for the guest agent, sets the guest clock through qemu-ga, checks that the running
 // VM is under KVM, then hands the guest agent the sandbox's env, managed files and mounts.
-func (d *Driver) bootVM(ctx context.Context, v *vmRun, ref string, spec runner.SandboxSpec, mounts []guestagent.Mount) error {
+// bootVM boots the guest and hands it its sandbox; it answers what the guest made of its sign-in store.
+func (d *Driver) bootVM(ctx context.Context, v *vmRun, ref string, spec runner.SandboxSpec, mounts []guestagent.Mount) (string, error) {
 	vc := d.vmConfig()
 	ctx, cancel := context.WithTimeout(ctx, vc.BootTimeout)
 	defer cancel()
 	ctl := filepath.Join(v.dir, "ctl")
 	if err := waitForSocket(ctx, filepath.Join(ctl, qemu.AgentSocket), 30*time.Second); err != nil {
-		return fmt.Errorf("docker: the VM did not start: %w%s", err, d.vmLogTail(ref))
+		return "", fmt.Errorf("docker: the VM did not start: %w%s", err, d.vmLogTail(ref))
 	}
 	spec.NotifyWaiting("vm: booting")
 	for {
@@ -689,37 +691,38 @@ func (d *Driver) bootVM(ctx context.Context, v *vmRun, ref string, spec runner.S
 			break
 		}
 		if st, serr := d.Status(ctx, ref); serr == nil && st.State != types.RunRunning {
-			return fmt.Errorf("docker: the VM stopped while booting%s", d.vmLogTail(ref))
+			return "", fmt.Errorf("docker: the VM stopped while booting%s", d.vmLogTail(ref))
 		}
 		if ctx.Err() != nil {
-			return fmt.Errorf("docker: the VM's guest agent did not answer within %s: %w%s", vc.BootTimeout, err, d.vmLogTail(ref))
+			return "", fmt.Errorf("docker: the VM's guest agent did not answer within %s: %w%s", vc.BootTimeout, err, d.vmLogTail(ref))
 		}
 	}
 	qgaConn, err := d.dialUnix(ctx, filepath.Join(ctl, qemu.QGASocket))
 	if err != nil {
-		return fmt.Errorf("docker: the VM's qemu-ga: %w", err)
+		return "", fmt.Errorf("docker: the VM's qemu-ga: %w", err)
 	}
 	qga, err := qemu.NewQGA(ctx, qgaConn)
 	if err != nil {
 		_ = qgaConn.Close()
-		return fmt.Errorf("docker: the VM's qemu-ga: %w", err)
+		return "", fmt.Errorf("docker: the VM's qemu-ga: %w", err)
 	}
 	err = qga.SetTime(ctx, time.Now())
 	_ = qga.Close()
 	if err != nil {
-		return fmt.Errorf("docker: set the VM's clock: %w", err)
+		return "", fmt.Errorf("docker: set the VM's clock: %w", err)
 	}
 	if err := d.vmUnderKVM(ctx, ctl); err != nil {
-		return err
+		return "", err
 	}
-	in := guestagent.Init{Env: spec.Env, SecretEnv: spec.SecretEnv, Mounts: mounts}
+	in := guestagent.Init{Env: spec.Env, SecretEnv: spec.SecretEnv, Mounts: mounts, SignInsOff: spec.DesktopSignInsOff}
 	for _, f := range spec.ManagedFiles {
 		in.Files = append(in.Files, guestagent.File{Path: f.Path, Mode: f.Mode, AgentOwned: f.AgentOwned, Content: f.Content})
 	}
-	if err := v.agent.Init(ctx, in); err != nil {
-		return fmt.Errorf("docker: hand the VM its sandbox: %w", err)
+	res, err := v.agent.Init(ctx, in)
+	if err != nil {
+		return "", fmt.Errorf("docker: hand the VM its sandbox: %w", err)
 	}
-	return nil
+	return res.SignIns, nil
 }
 
 // vmUnderKVM asks the running VM's QMP whether KVM backs it: a VM never runs under emulation.

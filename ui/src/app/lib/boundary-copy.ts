@@ -70,9 +70,9 @@ export const BOUNDARY = {
   FETCH_FAILED_TITLE: "Couldn't load the Wardyn boundary",
 } as const;
 
-// The Desktop group card (board M7-Knobs-B, approved 2026-10-20 as Option B), in the boundary's hard limits.
-// The board's group also holds Recording ("5 settings"), which the boundary does not hold yet, so the count is
-// the rows shown; the per-setting locks and "Lock the group for teams below" are not on this page yet.
+// The Desktop group card (board M7-Knobs-B, approved 2026-10-20 as Option B), in the boundary's hard limits,
+// with a lock per setting and one for the group. The board's group also holds Recording ("5 settings"), which
+// the boundary does not hold yet, so the count is the rows shown.
 export const BOUNDARY_DESKTOP = {
   TITLE: "Desktop",
   /** not on the boards: the board's "5 settings" counts Recording too. */
@@ -83,6 +83,12 @@ export const BOUNDARY_DESKTOP = {
   BLOCKED: "Blocked",
   BELOW: "Teams below may only block more.",
   ENFORCED: "Enforced at the desktop relay, outside the sandbox. Every use is logged by direction, size and hash. Never the content.",
+  LOCK_ROW: "Lock for teams below",
+  LOCK_GROUP: "Lock the group for teams below",
+  /** not on the boards: the dry run's row for the drafted locks. */
+  LOCKS: "Desktop locks",
+  /** not on the boards: no desktop setting is locked. */
+  NO_LOCKS: "None",
   ROWS: [
     { key: "paste_in", short: "Paste in", label: "Paste into the desktop" },
     { key: "copy_out", short: "Copy out", label: "Copy out of the desktop" },

@@ -491,7 +491,8 @@ func TestGovCovHoldProfileWriteStoresTheProposal(t *testing.T) {
 
 	t.Run("a create is held with only an after view", func(t *testing.T) {
 		st := &govCovStore{proposeSaved: saved}
-		s, h := govCovServer(t, st)
+		// A create at the id the PUT names: the switch off (WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY=false) only.
+		s, h := govCovServer(t, st, func(c *Config) { c.GovernanceUnitPutCreates = true })
 		w := doSSO(t, s, http.MethodPut, path, super, govCovProfileBody("fresh", "pypi.org"))
 		ch := govCovHoldAnswer(t, w, st)
 		if ch.TargetKind != govKindUnit || ch.Op != "create" || ch.TargetKey != govCovPID.String() || ch.ProposedBy != "sub-super" {
@@ -549,7 +550,7 @@ func TestGovCovHoldProfileWriteStoresTheProposal(t *testing.T) {
 	})
 
 	t.Run("the admin token writes directly and records the break-glass row", func(t *testing.T) {
-		st := &govCovStore{}
+		st := &govCovStore{profiles: govCovPIDStored()}
 		s, h := govCovServer(t, st)
 		w := do(t, s, http.MethodPut, path, adminToken, govCovProfileBody("p", "pypi.org"))
 		if w.Code != http.StatusOK || len(st.proposed) != 0 {

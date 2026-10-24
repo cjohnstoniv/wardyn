@@ -166,7 +166,10 @@ var errPodUIDChanged = errors.New("k8s: the pod under this name is not the recor
 // a first read of a pod with no record (r6 L3), the after-list right after the first bound read,
 // the pod and host IPs and container IDs, an anchor list right after a read that recorded a new
 // baseline, and the closing list right after the first read showing a deletion mark. Every new
-// reuse generation is persisted before this returns.
+// reuse generation is persisted before this returns. A bound pod with no after-list yet takes it on
+// any later read too: runnerd stopped between the first bound read's save and its after-list
+// (#3545), and without it no arm can ever hold. That late after-list is the same one a pod that
+// bound while runnerd was down gets.
 func (d *Driver) observePod(ctx context.Context, runID uuid.UUID, component string, pod *corev1.Pod) (*runEvidence, error) {
 	var needAfter, needAnchor, needClosing bool
 	ev, err := d.mutate(runID, func(ev *runEvidence) (bool, error) {
@@ -180,8 +183,9 @@ func (d *Driver) observePod(ctx context.Context, runID uuid.UUID, component stri
 		}
 		if pe.NodeName == "" && pod.Spec.NodeName != "" {
 			pe.NodeName, changed = pod.Spec.NodeName, true
-			needAfter = true
 		}
+		// The first bound read, or a later one after a stop lost its after-list (see above).
+		needAfter = pe.NodeName != "" && pe.PostBind == nil
 		nb, c := pe.recordIdentity(pod)
 		changed = changed || c
 		needAnchor = pe.NodeName != "" && (nb || hasUnanchored(pe))

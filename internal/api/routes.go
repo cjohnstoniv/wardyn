@@ -58,6 +58,8 @@ func (s *Server) routes() chi.Router {
 		if s.cfg.OIDC.BackchannelLogoutEnabled() {
 			r.Post("/auth/backchannel-logout", s.backchannelLogout())
 		}
+		// Its front-channel twin, absent unless WARDYN_OIDC_FRONTCHANNEL_LOGOUT is on (signin_denied.go).
+		s.mountFrontchannelLogout(r)
 	}
 
 	// SCIM Users (scim_users.go): its own bearer, outside /api/v1 and every human gate.
@@ -219,6 +221,7 @@ func (s *Server) routes() chi.Router {
 			r.Get("/runs/{id}/desktop/files", s.handleListDesktopFiles)
 			r.Put("/runs/{id}/desktop/files/{name}", s.handleUploadDesktopFile)
 			r.Get("/runs/{id}/desktop/files/{name}", s.handleDownloadDesktopFile)
+			s.mountDesktopSignInRoutes(r) // sign-ins in a VM's desktop (#2972)
 			// The run's Azure DevOps tokens: owner or admin; not on the delegation list.
 			r.Get("/runs/{id}/ado-tokens", s.handleListRunADOTokens)
 			// Resume a paused run (#572): owner or SUPER admin — handleResumeRun.
@@ -645,14 +648,7 @@ func (s *Server) routes() chi.Router {
 			// (user_drives_reclaim.go) joins the family's two halves.
 			s.mountUserDriveFamily(r, operatorOnly, securityOps)
 
-			// Recording replay: GET /api/v1/runs/{id}/recording/{id}. Owner-or-admin:
-			// recordingAuthorizer is the SAME ownership rule
-			// getRunAuthorized enforces, applied INSIDE the handler (the outer {id}
-			// here only selects a chi sub-route, so the authorization decision
-			// belongs to the mounted handler, not this registration).
-			if s.cfg.RecordingStore != nil {
-				r.Mount("/runs/{id}/recording", recording.Handler(s.cfg.RecordingStore, s.recordingAuthorizer))
-			}
+			s.mountRecordingRoutes(r)
 		})
 
 		// Interactive attach (WebSocket). Its own group: browsers cannot put
@@ -692,6 +688,21 @@ func (s *Server) routes() chi.Router {
 
 	s.mountUI(r)
 	return r
+}
+
+// mountRecordingRoutes registers a run's recording replay and its audit-chain
+// check on r — carved out of routes() purely for funlen.
+func (s *Server) mountRecordingRoutes(r chi.Router) {
+	// Recording replay: GET /api/v1/runs/{id}/recording/{id}. Owner-or-admin:
+	// recordingAuthorizer is the SAME ownership rule
+	// getRunAuthorized enforces, applied INSIDE the handler (the outer {id}
+	// here only selects a chi sub-route, so the authorization decision
+	// belongs to the mounted handler, not this registration).
+	if s.cfg.RecordingStore != nil {
+		r.Mount("/runs/{id}/recording", recording.Handler(s.cfg.RecordingStore, s.recordingAuthorizer))
+	}
+	// A desktop recording's stretch of the audit chain verifies (recording_chain.go): the recording's readers.
+	r.Get("/runs/{id}/recording-chain", s.handleRecordingChain)
 }
 
 // mountRenamedRunRoutes registers the 0.8 names for three routes issue #658

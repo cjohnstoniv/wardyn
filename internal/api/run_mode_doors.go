@@ -76,9 +76,11 @@ var backgroundDoors = []backgroundDoor{
 	// gateway above. Its routes here are the Files panel, which moves files in and
 	// out of the graphical desktop (desktopRun), and the person's sign-in inside it
 	// (#2972): signinRun is the one read every sign-in route makes before it acts.
-	{Door: "desktop", Owner: "CTL-A (desktop Files panel), CTL-C (desktop sign-ins)", Symbols: []string{"desktopRun", "signinRun"},
+	// A VM desktop's pause and resume (#2972) refuse in mayPauseDesktopAgent.
+	{Door: "desktop", Owner: "CTL-A (desktop Files panel), CTL-C (desktop sign-ins)", Symbols: []string{"desktopRun", "signinRun", "mayPauseDesktopAgent"},
 		Routes: []string{"GET /runs/{id}/desktop/files", "PUT /runs/{id}/desktop/files/{name}", "GET /runs/{id}/desktop/files/{name}",
-			"POST /runs/{id}/desktop-signin", "POST /runs/{id}/desktop-signin/shares", "POST /runs/{id}/desktop-signin/end"}, Enforced: true},
+			"POST /runs/{id}/desktop-signin", "POST /runs/{id}/desktop-signin/shares", "POST /runs/{id}/desktop-signin/end",
+			"POST /runs/{id}/desktop/sign-ins/pause", "POST /runs/{id}/desktop/sign-ins/resume"}, Enforced: true},
 }
 
 // passiveRunRoutes are the /runs/{id} routes that are not interactive doors: they
@@ -89,6 +91,7 @@ var passiveRunRoutes = map[string]string{
 	"GET /runs/{id}/attach-holder":       "read who holds the terminal; opens nothing",
 	"GET /runs/{id}/attach/holder":       "read who holds the terminal; opens nothing",
 	"GET /runs/{id}/containment":         "read the containment hold; opens nothing",
+	"GET /runs/{id}/desktop/sign-ins":    "read the desktop's sign-in store; opens nothing",
 	"GET /runs/{id}/events":              "read",
 	"GET /runs/{id}/launch-intent":       "read the setup the run was launched with; opens nothing",
 	"GET /runs/{id}/files":               "read",
@@ -98,6 +101,7 @@ var passiveRunRoutes = map[string]string{
 	"GET /runs/{id}/resources":           "read",
 	"GET /runs/{id}/sign-in":             "read",
 	"MOUNT /runs/{id}/recording":         "replay of a finished recording",
+	"GET /runs/{id}/recording-chain":     "the audit chain check of a recording's range",
 	"PATCH /runs/{id}":                   "lifecycle: end and wait",
 	"PATCH /runs/{id}/title":             "lifecycle: title",
 	"POST /runs/{id}/kill":               "lifecycle: kill",

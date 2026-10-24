@@ -56,6 +56,27 @@ func (p *ptySession) Resize(ctx context.Context, cols, rows uint16) error {
 	return p.sess.Call(ctx, runnerwire.MethodResize, runnerwire.ResizeArgs{Stream: p.st.ID(), Cols: cols, Rows: rows}, nil)
 }
 
+// PauseAgent stops a VM sandbox's agent inside the guest (runner.AgentPauser). A runner whose caps do
+// not offer it is refused here, so a runner that predates the call never sees it.
+func (s *Substrate) PauseAgent(ctx context.Context, ref string) error {
+	return s.agentPauseCall(ctx, runnerwire.MethodPauseAgent, ref)
+}
+
+// ResumeAgent continues it; see PauseAgent.
+func (s *Substrate) ResumeAgent(ctx context.Context, ref string) error {
+	return s.agentPauseCall(ctx, runnerwire.MethodResumeAgent, ref)
+}
+
+func (s *Substrate) agentPauseCall(ctx context.Context, method, ref string) error {
+	if err := s.own(ref); err != nil {
+		return err
+	}
+	if c, ok := s.Caps(); !ok || c.LinuxVM == nil || !c.LinuxVM.SignIns {
+		return runner.ErrAgentPauseUnsupported
+	}
+	return s.refCall(ctx, method, ref, nil)
+}
+
 // DialDesktop opens a VM sandbox's display on the runner (runner.DesktopDialer). A runner whose caps do
 // not offer it is refused here, so a runner that predates the call never sees it.
 func (s *Substrate) DialDesktop(ctx context.Context, ref string) (io.ReadWriteCloser, error) {

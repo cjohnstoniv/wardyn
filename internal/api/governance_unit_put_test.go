@@ -15,14 +15,14 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// With WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY on, PUT updates a profile
-// that exists and answers 404 for an id no row holds; off, it still creates.
+// With WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY on (GovernanceUnitPutCreates false), PUT updates a
+// profile that exists and answers 404 for an id no row holds; off, it still creates.
 func TestGovernanceUnitPut_CreatesOnlyWithTheSwitchOff(t *testing.T) {
 	existing := types.GovernanceUnit{ID: uuid.New(), Name: "interns"}
 	for _, on := range []bool{false, true} {
 		st := &govCrudStore{profiles: []types.GovernanceUnit{existing}}
 		srv, _ := govCrudServer(t, st)
-		srv.cfg.GovernanceUnitPutExistingOnly = on
+		srv.cfg.GovernanceUnitPutCreates = !on
 
 		absent := uuid.New()
 		w := do(t, srv, http.MethodPut, "/api/v1/governance/units/"+absent.String(), adminToken, `{"name":"new","ceiling":{"min_confinement_class":"CC2"}}`)
@@ -38,8 +38,8 @@ func TestGovernanceUnitPut_CreatesOnlyWithTheSwitchOff(t *testing.T) {
 	}
 }
 
-// A PUT that creates a profile is logged once the write has stored it, not before: a write the store fails
-// created nothing, and an update to an existing id was never a create.
+// With the switch off, a PUT that creates a profile is logged once the write has stored it, not before: a
+// write the store fails created nothing, and an update to an existing id was never a create.
 func TestGovernanceUnitPut_CreateIsLoggedOnlyOnceStored(t *testing.T) {
 	const logLine = "a PUT created a governance profile"
 	existing := types.GovernanceUnit{ID: uuid.New(), Name: "interns"}
@@ -51,6 +51,7 @@ func TestGovernanceUnitPut_CreateIsLoggedOnlyOnceStored(t *testing.T) {
 			st.upsertProfileErr = errors.New("store: down")
 		}
 		srv, _ := govCrudServer(t, st)
+		srv.cfg.GovernanceUnitPutCreates = true // the switch off: only then can a PUT create
 		var logged lockedBuffer
 		prev := slog.Default()
 		slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
@@ -67,5 +68,17 @@ func TestGovernanceUnitPut_CreateIsLoggedOnlyOnceStored(t *testing.T) {
 	}
 	if code, logged := run(t, existing.ID, false); code != http.StatusOK || strings.Contains(logged, logLine) {
 		t.Errorf("an update to an existing id: code %d, logged %v, want 200 and no log line", code, strings.Contains(logged, logLine))
+	}
+}
+
+// WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY unset is on: a server whose Config leaves
+// GovernanceUnitPutCreates at its zero value answers a PUT to an absent id 404 and stores nothing.
+func TestGovernanceUnitPut_DefaultRefusesCreateAtID(t *testing.T) {
+	st := &govCrudStore{}
+	srv, _ := govCrudServer(t, st)
+	absent := uuid.New()
+	w := do(t, srv, http.MethodPut, "/api/v1/governance/units/"+absent.String(), adminToken, `{"name":"new","ceiling":{"min_confinement_class":"CC2"}}`)
+	if w.Code != http.StatusNotFound || errorReason(w) != reasonGovernanceUnitNotFoundByID || st.lastProfile.ID == absent {
+		t.Errorf("default: PUT to an absent id = %d %s (stored %s), want 404 %s and no row", w.Code, w.Body.String(), st.lastProfile.ID, reasonGovernanceUnitNotFoundByID)
 	}
 }

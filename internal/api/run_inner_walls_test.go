@@ -6,6 +6,7 @@ package api
 import (
 	"bytes"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -52,7 +53,10 @@ func TestInnerWalls_AbsentKeepsEveryRunAsToday(t *testing.T) {
 			if warn := applyInnerWallsHold(&req, spec); warn != "" || req.ToolApprovals != tc.req.ToolApprovals {
 				t.Errorf("%s: derived %q (%q) with no choice", name, req.ToolApprovals, warn)
 			}
-			got, refusal := innerWallsFor(req, spec, nil)
+			if warn := applyInnerWallsSeed(&req, spec); warn != "" || req.SeedAutoTools != tc.req.SeedAutoTools {
+				t.Errorf("%s: derived seed_auto_tools %v (%q) with no choice", name, req.SeedAutoTools, warn)
+			}
+			got, refusal := innerWallsFor(req, spec, nil, types.CC1)
 			if refusal != nil {
 				t.Errorf("%s: refused with no choice: %+v", name, refusal.body)
 			}
@@ -86,7 +90,10 @@ func TestInnerWalls_EveryPairMeetsOrIsRefused(t *testing.T) {
 		{"off/harness on a claude interactive run", innerClaudeAttach, innerWalls(off, harness), ok, false},
 		{"none on a claude interactive run", innerClaudeAttach, innerWalls("", none), looser, false},
 		{"wardyn on a claude interactive run", innerClaudeAttach, innerWalls("", wardyn), unmet, false},
-		{"harness on a seed_auto_tools run", innerClaudeSeeded, innerWalls("", harness), unmet, false},
+		{"read-only on a claude background run", innerClaudeAuto, innerWalls(types.InnerSandboxReadOnly, ""), unmet, false},
+		{"read-only on a codex background run at CC1", innerCodexAuto, innerWalls(types.InnerSandboxReadOnly, ""), reasonHarnessSandboxUnavailable, false},
+		{"harness on a seed_auto_tools run", innerClaudeSeeded, innerWalls("", harness), ok, false},
+		{"harness on a codex seed_auto_tools run", innerCodexSeeded, innerWalls("", harness), ok, false},
 		{"none on a seed_auto_tools run", innerClaudeSeeded, innerWalls(off, none), ok, false},
 		{"off/none on a codex background run", innerCodexAuto, innerWalls(off, none), ok, false},
 		{"wardyn on a codex background run", innerCodexAuto, innerWalls("", wardyn), unmet, false},
@@ -98,10 +105,11 @@ func TestInnerWalls_EveryPairMeetsOrIsRefused(t *testing.T) {
 	} {
 		req, spec := tc.req, types.RunPolicySpec{HarnessInnerWalls: tc.want}
 		applyInnerWallsHold(&req, spec)
+		applyInnerWallsSeed(&req, spec)
 		if got := req.ToolApprovals == "hold" && tc.req.ToolApprovals != "hold"; got != tc.hold {
 			t.Errorf("%s: derived hold %v, want %v", tc.name, got, tc.hold)
 		}
-		walls, refusal := innerWallsFor(req, spec, nil)
+		walls, refusal := innerWallsFor(req, spec, nil, types.CC1)
 		switch {
 		case tc.reason == ok && refusal != nil:
 			t.Errorf("%s: refused %+v", tc.name, refusal.body)
@@ -120,10 +128,10 @@ func TestInnerWalls_EveryPairMeetsOrIsRefused(t *testing.T) {
 func TestInnerWalls_ExtraHarnessMustMeetTheChoiceToo(t *testing.T) {
 	spec := types.RunPolicySpec{HarnessInnerWalls: innerWalls(types.InnerSandboxOff, "")}
 	set := []types.RunHarness{{Harness: "claude-code", Starts: true}, {Harness: "codex-cli"}}
-	if _, refusal := innerWallsFor(innerClaudeAttach, spec, set); refusal == nil || refusal.body.Reason != reasonHarnessInnerWallsLooser {
+	if _, refusal := innerWallsFor(innerClaudeAttach, spec, set, types.CC1); refusal == nil || refusal.body.Reason != reasonHarnessInnerWallsLooser {
 		t.Fatalf("refusal %+v, want %s for Codex's own sandbox", refusal, reasonHarnessInnerWallsLooser)
 	}
-	if _, refusal := innerWallsFor(innerClaudeAttach, spec, set[:1]); refusal != nil {
+	if _, refusal := innerWallsFor(innerClaudeAttach, spec, set[:1], types.CC1); refusal != nil {
 		t.Fatalf("Claude Code alone refused: %+v", refusal.body)
 	}
 }
@@ -147,27 +155,87 @@ func TestInnerWalls_WardynApprovalsLaunchUnderTheGatedDocument(t *testing.T) {
 	}
 }
 
-// TestInnerWalls_PolicyValues: the closed values store, the harness's own sandbox modes are
-// refused with their own reason, and anything else is a plain invalid policy.
+// TestInnerWalls_PolicyValues: the closed values store, the harness's own sandbox modes included
+// (the create door decides whether a run can start one), and anything else is a plain invalid policy.
 func TestInnerWalls_PolicyValues(t *testing.T) {
 	spec := func(w *types.HarnessInnerWalls) types.RunPolicySpec {
 		return types.RunPolicySpec{MinConfinementClass: types.CC2, HarnessInnerWalls: w}
 	}
 	for _, w := range []*types.HarnessInnerWalls{nil, {}, innerWalls(types.InnerSandboxOff, types.InnerApprovalsHarness),
-		innerWalls("", types.InnerApprovalsWardyn), innerWalls("", types.InnerApprovalsNone)} {
+		innerWalls("", types.InnerApprovalsWardyn), innerWalls("", types.InnerApprovalsNone),
+		innerWalls(types.InnerSandboxWorkspaceWrite, ""), innerWalls(types.InnerSandboxReadOnly, types.InnerApprovalsNone)} {
 		if err := validatePolicySpec(spec(w)); err != nil {
 			t.Errorf("%+v refused: %v", w, err)
-		}
-	}
-	for _, sandbox := range []string{types.InnerSandboxWorkspaceWrite, types.InnerSandboxReadOnly} {
-		err := validatePolicySpec(spec(innerWalls(sandbox, "")))
-		if err == nil || specRefusalReason(err, "bucket") != reasonHarnessSandboxUnavailable {
-			t.Errorf("sandbox %s: %v, want %s", sandbox, err, reasonHarnessSandboxUnavailable)
 		}
 	}
 	for _, w := range []*types.HarnessInnerWalls{innerWalls("on", ""), innerWalls("", "always")} {
 		if err := validatePolicySpec(spec(w)); err == nil || specRefusalReason(err, "bucket") != "bucket" {
 			t.Errorf("%+v: %v, want a plain invalid policy", w, err)
+		}
+	}
+}
+
+// TestInnerWalls_HarnessApprovalsTurnASeedsAutoToolsOff: approvals in the harness on a seeded
+// interactive run turn seed_auto_tools off and say so; the run then launches asking at its prompt.
+func TestInnerWalls_HarnessApprovalsTurnASeedsAutoToolsOff(t *testing.T) {
+	spec := types.RunPolicySpec{HarnessInnerWalls: innerWalls("", types.InnerApprovalsHarness)}
+	for _, seeded := range []createRunRequest{innerClaudeSeeded, innerCodexSeeded} {
+		req := seeded
+		warn := applyInnerWallsSeed(&req, spec)
+		if req.SeedAutoTools || !strings.Contains(warn, "seed_auto_tools was turned off") {
+			t.Errorf("%s: seed_auto_tools %v, warn %q, want it turned off and said", seeded.Agent, req.SeedAutoTools, warn)
+		}
+		if walls, refusal := innerWallsFor(req, spec, nil, types.CC1); refusal != nil || walls.Approvals != types.InnerApprovalsHarness {
+			t.Errorf("%s: walls %+v refusal %+v, want approvals in the harness", seeded.Agent, walls, refusal)
+		}
+	}
+	for _, other := range []createRunRequest{innerClaudeAttach, innerClaudeAuto} {
+		req := other
+		if warn := applyInnerWallsSeed(&req, spec); warn != "" || req.SeedAutoTools != other.SeedAutoTools {
+			t.Errorf("%+v: derived %q on a run with no seed that skips approvals", other, warn)
+		}
+	}
+}
+
+// TestInnerWalls_CodexSandboxStartsOnlyWhereMeasured: a Codex sandbox choice launches bound to the
+// mode where the class starts it, on a background run or an interactive one at CC3, and is refused
+// everywhere else: harness_sandbox_unavailable for a Codex run at a class that cannot start it,
+// unmet for a harness or launch Wardyn does not bind.
+func TestInnerWalls_CodexSandboxStartsOnlyWhereMeasured(t *testing.T) {
+	ro, ww := types.InnerSandboxReadOnly, types.InnerSandboxWorkspaceWrite
+	none, harness := types.InnerApprovalsNone, types.InnerApprovalsHarness
+	unavailable, unmet := reasonHarnessSandboxUnavailable, reasonHarnessInnerWallsUnmet
+	codexExec := createRunRequest{Agent: "codex-cli", Task: "t", TaskMode: "exec"}
+	for _, tc := range []struct {
+		name   string
+		req    createRunRequest
+		mode   string
+		class  types.ConfinementClass
+		set    []types.RunHarness
+		want   *types.HarnessInnerWalls
+		reason string
+	}{
+		{"read-only, background, CC3", innerCodexAuto, ro, types.CC3, nil, innerWalls(ro, none), ""},
+		{"workspace-write, background, CC3", innerCodexAuto, ww, types.CC3, nil, innerWalls(ww, none), ""},
+		{"workspace-write, background, CC2", innerCodexAuto, ww, types.CC2, nil, innerWalls(ww, none), ""},
+		{"read-only, interactive, CC3", innerCodexAttach, ro, types.CC3, nil, innerWalls(ro, harness), ""},
+		{"read-only, background, CC2", innerCodexAuto, ro, types.CC2, nil, nil, unavailable},
+		{"workspace-write, interactive, CC2", innerCodexAttach, ww, types.CC2, nil, nil, unavailable},
+		{"read-only, background, CC1", innerCodexAuto, ro, types.CC1, nil, nil, unavailable},
+		{"workspace-write, background, CC1", innerCodexAuto, ww, types.CC1, nil, nil, unavailable},
+		{"read-only, seed_auto_tools, CC3", innerCodexSeeded, ro, types.CC3, nil, nil, unmet},
+		{"read-only, exec run, CC3", codexExec, ro, types.CC3, nil, nil, unmet},
+		{"read-only, Claude Code, CC3", innerClaudeAuto, ro, types.CC3, nil, nil, unmet},
+		{"read-only, Codex beside Claude Code, CC3", innerCodexAuto, ro, types.CC3,
+			[]types.RunHarness{{Harness: "codex-cli", Starts: true}, {Harness: "claude-code", Task: "t"}}, nil, unmet},
+	} {
+		spec := types.RunPolicySpec{HarnessInnerWalls: innerWalls(tc.mode, "")}
+		walls, refusal := innerWallsFor(tc.req, spec, tc.set, tc.class)
+		switch {
+		case tc.reason == "" && (refusal != nil || walls == nil || *walls != *tc.want):
+			t.Errorf("%s: walls %+v refusal %+v, want %+v", tc.name, walls, refusal, tc.want)
+		case tc.reason != "" && (refusal == nil || refusal.body.Reason != tc.reason):
+			t.Errorf("%s: walls %+v refusal %+v, want %s", tc.name, walls, refusal, tc.reason)
 		}
 	}
 }

@@ -241,6 +241,25 @@ describe("BoundaryScreen", () => {
     expect(await within(await screen.findByTestId("boundary-dry-run")).findByText(BOUNDARY_DRY_RUN.NO_CHANGE)).toBeInTheDocument();
   });
 
+  it("a desktop lock drafts into the dry run and the PUT, keeping the stored locks it does not touch", async () => {
+    getMock.mockResolvedValue({ ...hardLimits, locked_knobs: ["allowed_domains"] });
+    putMock.mockResolvedValue({ ...hardLimits, locked_knobs: ["allowed_domains", "desktop.copy_out"] });
+    const user = userEvent.setup();
+    renderScreen();
+    const copyOut = await screen.findByRole("group", { name: "Copy out of the desktop" });
+    await user.click(within(copyOut).getByRole("checkbox", { name: BOUNDARY_DESKTOP.LOCK_ROW }));
+    await user.click(screen.getByRole("button", { name: BOUNDARY.REVIEW }));
+    const report = await screen.findByTestId("boundary-dry-run");
+    expect(within(report).getByRole("row", { name: new RegExp(`^${BOUNDARY_DESKTOP.LOCKS}`) })).toHaveTextContent(
+      `${BOUNDARY_DESKTOP.LOCKS}${BOUNDARY_DESKTOP.NO_LOCKS}Copy out`,
+    );
+    await user.click(await within(report).findByRole("button", { name: BOUNDARY_DRY_RUN.SUBMIT_SAVE }));
+    expect(putMock).toHaveBeenCalledWith(
+      { mode: "hard_limits", spec: {}, limits: {}, locked_knobs: ["allowed_domains", "desktop.copy_out"] },
+      '"b1"',
+    );
+  });
+
   it("Submit sends the draft with the ETag it read, and a refused write reads in the server's words", async () => {
     getMock.mockResolvedValue(hardLimits);
     putMock.mockRejectedValue(new HttpError(400, REFUSED, "boundary_invalid"));

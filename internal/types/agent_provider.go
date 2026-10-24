@@ -52,4 +52,8 @@ type AgentProvider struct {
 	// later disabled, the default becomes a sentinel whose runs are refused,
 	// never silently moved to another provider.
 	DefaultProvider string `json:"default_provider,omitempty"`
+	// DesktopSignInsOff is "Sign-ins in a desktop: Not allowed" (#2972): a Linux VM desktop running
+	// this agent keeps no sign-ins, and its run page offers no "Pause the agent to sign in".
+	// Negative-sense, so the zero value (and an install with no roster) is Allowed.
+	DesktopSignInsOff bool `json:"desktop_sign_ins_off,omitempty"`
 }

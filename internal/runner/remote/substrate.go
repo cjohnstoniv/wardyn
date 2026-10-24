@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"reflect"
 	"slices"
@@ -297,7 +298,29 @@ func (s *Substrate) checkProxySettings(pc runner.ProxyConfig) error {
 			return &ProxySettingError{Setting: setting}
 		}
 	}
+	if !runnerwire.LocalModelRelayNeeded(pc) {
+		return nil
+	}
+	if !slices.Contains(c.ProxySettings, runnerwire.ProxySettingLocalModelRelay) {
+		return &ProxySettingError{Setting: runnerwire.ProxySettingLocalModelRelay}
+	}
+	for _, raw := range slices.Sorted(maps.Keys(pc.LocalModels)) {
+		if !pc.LocalModels[raw].AllowOnLaptopRunners {
+			continue
+		}
+		if port, err := types.LaptopModelPort(raw); err != nil || !slices.Contains(c.LocalModelPorts, port) {
+			return &LocalModelPortError{Port: port}
+		}
+	}
 	return nil
+}
+
+// LocalModelPortError refuses a CreateSandbox whose laptop local model is on a port the person has not
+// allowed on their runner (wardyn-runnerd --local-model-port); none is allowed until they set one.
+type LocalModelPortError struct{ Port uint16 }
+
+func (e *LocalModelPortError) Error() string {
+	return fmt.Sprintf("this runner does not allow the local model server's port %d; its person allows it with wardyn-runnerd --local-model-port %d", e.Port, e.Port)
 }
 
 // refuseResident fails the create when any leaf of the spec (a string, a

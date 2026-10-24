@@ -44,8 +44,9 @@ const (
 	KindAttachEvict = "attach_evict"
 	// KindAttachFree: a run's attach lease was released; observers queued on any replica may take it.
 	KindAttachFree = "attach_free"
-	// KindRecordingGap: a "Needs you" takeover began or ended on a recorded run, for a recorder to mark
-	// the gap. No recorder acts on it yet.
+	// KindRecordingGap: a "Needs you" takeover began or ended on a recorded run, or a desktop sign-in
+	// ended, for a recorder to mark the gap. Only a desktop recorder acts on it: a resume ends the
+	// desktop hold it names on the replica that holds it.
 	KindRecordingGap = "recording_gap"
 )
 

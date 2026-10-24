@@ -1533,7 +1533,7 @@ lose access now, do not wait for it:
 - **Role changes that are not SCIM group removals** at the identity provider still lag until the person signs in
   again. A group removal also lags for API tokens when the sign-in's groups claim carries names, not the object ids
   the group's `externalId` holds ("Turn it on", step 5): it then cuts sessions only.
-- **Identity-provider logout is opt-in, and back-channel only.** Signing out at the identity provider does not end a Wardyn session unless `WARDYN_OIDC_BACKCHANNEL_LOGOUT` is on and the provider posts its logout token to `/auth/backchannel-logout` ([ENV.md](ENV.md#wardyn_oidc_backchannel_logout)). Wardyn has no front-channel logout, which is what Entra ID offers, and SCIM deprovisioning is a separate revocation. A person's own sign-out ends their console sessions only (`session.revoke` with `sessions_only`, [AUDIT-ACTIONS](AUDIT-ACTIONS.md)).
+- **Identity-provider logout is opt-in.** Signing out at the identity provider does not end a Wardyn session unless `WARDYN_OIDC_BACKCHANNEL_LOGOUT` is on and the provider posts its logout token to `/auth/backchannel-logout` ([ENV.md](ENV.md#wardyn_oidc_backchannel_logout)), or `WARDYN_OIDC_FRONTCHANNEL_LOGOUT` is on and the provider's sign-out page loads `/auth/frontchannel-logout` with `iss` and `sid` ([ENV.md](ENV.md#wardyn_oidc_frontchannel_logout)), which is what Entra ID offers. SCIM deprovisioning is a separate revocation. A person's own sign-out ends their console sessions only (`session.revoke` with `sessions_only`, [AUDIT-ACTIONS](AUDIT-ACTIONS.md)).
 - **Shared computers.** After an SSO sign-out the console tells the person to sign out of the identity provider too. That session stays live, so the next person could press Sign in with SSO and arrive as them.
 - **Long-lived connections.** A suspension kills every live run, which ends its attach and SSH sessions. Other
   console streams end at their next authentication check or reconnect.
@@ -3373,6 +3373,7 @@ No provider of this kind registered means today's behaviour, unchanged.
 | `local.max_context` | Cap on a request's `options.num_ctx` | 0 = 32768 |
 | `local.max_output` | Cap on `max_tokens`, `max_completion_tokens`, `max_output_tokens` and `options.num_predict` | 0 = 32768 |
 | `local.keep_alive_seconds` | Cap on `keep_alive`; a negative ("forever") value is capped too | 0 = 1800, at most 86400 |
+| `local.allow_on_laptop_runners` | Runs on a person's own runner may use the server on that computer | Default `false`; `true` needs `base_url` on `host.docker.internal` |
 | `auth` | How each person's own token is sent, when the server wants one | Unset = no credential at all |
 | `harnesses[].model` | The model that agent asks for | Required; one of `local.models` |
 
@@ -3398,7 +3399,19 @@ What a run may call on the server (every other method and path is refused `403 e
 - The private-address guard is lifted for this route and this address alone: the registered host and port may answer on the Docker bridge's gateway address (the Docker host). The control plane, loopback and link-local stay refused.
 - With `auth` set, each person's own token rides as a custom endpoint's does, and the host joins the run's allowlist so the token can be attached. Over `http://` it crosses the network unencrypted, so a write with `auth` over `http://` is refused unless the host is `host.docker.internal`, `gateway.docker.internal` or a private IPv4 address (10/8, 172.16/12, 192.168/16, 100.64/10): use `https://` to send a token off this machine.
 - Claude Code gets the allowlisted model for every tier (`ANTHROPIC_MODEL` and the opus, sonnet and haiku defaults), so no background call names another.
-- A run placed on your own runner is refused (`ProxyConfig.LocalModels`): the runner path is a later release.
+- A run placed on a person's own runner is refused (`ProxyConfig.LocalModels`) unless `local.allow_on_laptop_runners` is `true`.
+
+#### On a person's own runner
+
+With `local.allow_on_laptop_runners: true` (API only for now; off by default), a run on a person's own runner uses the model server on that computer, such as Ollama on `127.0.0.1:11434`.
+
+- What it opens: on native Docker, a listener on the Docker bridge's gateway at that one port, forwarded to the computer's loopback at the same port. It opens with the first flagged run and closes when the last one ends or the runner stops.
+- To whom: only the proxies of those flagged runs, by their container addresses. Any other container or process that reaches the gateway is closed before a byte is relayed.
+- The person allows the port on their own runner: `wardyn-runnerd --local-model-port 11434` (or `local_model_port` in `runnerd.json`). Until they do, the run is refused with `runner_local_model_port_not_allowed`.
+- Only a run granted the provider reaches it: its proxy admits the relay address for that host and port alone, with the same routes, allowlist and caps as above.
+- An organisation's runner is refused (`ProxyConfig.LLMUpstreams`). A wardyn-runnerd without the relay refuses the run with `runner_proxy_setting_unsupported`, naming `local_model_relay`.
+- On Docker Desktop and other VM-backed engines the engine already routes to the computer's loopback, so the flag opens nothing there; any container on that engine reaches the loopback as before.
+- A server bound to every address already holds that port there, so the run is refused at create: bind it to `127.0.0.1`.
 
 > [!IMPORTANT]
 > **Upgrade note.** Move the proxy image pin with wardynd, image first, before you add a `local_model` provider.
@@ -4040,6 +4053,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0226` (`0226_governance_change_tree_ops`) admits held-change ops `move` and `promote`; no row or grant changes.
 - `0227` (`0227_governance_restrictions`): a split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `governance_restrictions` and `governance_restriction_members`.
 - `0228` (`0228_governance_unit_admins`) creates `governance_unit_admins` (the people and IdP groups who administer a unit and the units below it) and adds `locked_knobs` to `governance_units` and `governance_boundary` (a constant-default array, so no row is rewritten); a split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `governance_unit_admins`.
+- `0229` (`0229_oidc_session_sids`) creates `oidc_session_sids`, the identity provider's `sid` of each sign-in while `WARDYN_OIDC_FRONTCHANNEL_LOGOUT` is on; a split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `oidc_session_sids`.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
@@ -5507,8 +5521,10 @@ What the switch needs, and refuses to render or boot without:
     - a sweep never waits for it, it skips a locked run until the next pass),
   - the **site-config** and **capability-enforcement** writers, the **audit chain verify sweep**, and the **AWS SSO** and
     **Azure DevOps sign-in refresh** single-flights, which keep one rotating refresh token from being redeemed twice.
+    The AWS SSO one is per stored credential, so one person's sessions renew independently; a capture and the
+    credential erase also take the person's AWS SSO lock, and the erase then takes every credential's.
 - They are taken in one order (run operation, run-token mint,
-  AWS SSO, Azure DevOps sign-in, the organisation MCP server key, the document locks, the audit sweep last), each
+  the person's AWS SSO lock, then each AWS SSO credential's in a fixed order, Azure DevOps sign-in, the organisation MCP server key, the document locks, the audit sweep last), each
   nested lock shares its caller's connection, and none proceeds unlocked.
 - A lock
   that cannot be taken answers `503` `lock_unavailable` and is retried.

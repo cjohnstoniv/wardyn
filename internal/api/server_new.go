@@ -35,10 +35,11 @@ func New(cfg Config) *Server {
 		cfg.BaseCtx = context.Background()
 	}
 	s := &Server{cfg: cfg, signInCaptureKillGrace: signInCaptureKillGrace,
-		branchLimiter:      principalLimiter{rate: branchListRatePerSec, burst: branchListBurst, max: branchListMaxPeople},
-		backchannelLimiter: principalLimiter{rate: backchannelLogoutRatePerSec, burst: backchannelLogoutBurst, max: 1},
-		deviceRouteState:   newDeviceRouteState(),
-		cliSignInState:     newCLISignInState(),
+		branchLimiter:       principalLimiter{rate: branchListRatePerSec, burst: branchListBurst, max: branchListMaxPeople},
+		backchannelLimiter:  principalLimiter{rate: backchannelLogoutRatePerSec, burst: backchannelLogoutBurst, max: 1},
+		frontchannelLimiter: principalLimiter{rate: backchannelLogoutRatePerSec, burst: backchannelLogoutBurst, max: 1},
+		deviceRouteState:    newDeviceRouteState(),
+		cliSignInState:      newCLISignInState(),
 	}
 	s.scimState = newSCIMState()
 	s.defaultRunnerHooks()

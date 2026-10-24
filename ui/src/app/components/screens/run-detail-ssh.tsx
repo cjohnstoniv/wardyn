@@ -44,6 +44,7 @@ import { DESKTOP } from "../wardyn/copy/desktop";
 import { useOperator, useOperatorResolved, usePrincipal } from "../wardyn/operator-context";
 import { Chip, WidgetCard } from "../wardyn/primitives";
 import { DesktopFilesPanel } from "./run-detail/desktop-files-panel";
+import { DesktopPausedNote, DesktopSignInButton, DesktopSignInsNote, useDesktopSignIns } from "./run-detail/desktop-sign-ins";
 import { cn } from "../ui/utils";
 import { CliLane, GetTheCli } from "./run-detail/get-the-cli";
 import { orgCAFingerprints } from "../../lib/cli-install";
@@ -112,6 +113,8 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
   // (scoped to one app — the other rows stay untouched per the mock's S5).
   const [openingApp, setOpeningApp] = React.useState<string | null>(null);
   const [appError, setAppError] = React.useState<{ app: string; message: string } | null>(null);
+  // #2972: a VM desktop's sign-ins, once the gateway can open it.
+  const signIns = useDesktopSignIns(run.id, mayAttach && running && run.machine_kind === "linux_vm" && !!uiSandbox?.enabled);
 
   React.useEffect(() => {
     if (!mayAttach || !running) return; // nothing to show either way — skip the fetch
@@ -230,7 +233,12 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
         <section aria-label={DESKTOP.title} className="mb-4 rounded-[10px] border border-border p-3">
           <div className="flex items-center justify-between gap-3">
             <p className="text-xs font-medium text-foreground">{DESKTOP.title}</p>
-            {healthAnswered && <Chip tone={uiSandboxOn ? "success" : "neutral"}>{uiSandboxOn ? DESKTOP.ready : DESKTOP.statusOff}</Chip>}
+            {healthAnswered &&
+              (uiSandboxOn && signIns.view?.paused ? (
+                <Chip tone="warning">{DESKTOP.agentPaused}</Chip>
+              ) : (
+                <Chip tone={uiSandboxOn ? "success" : "neutral"}>{uiSandboxOn ? DESKTOP.ready : DESKTOP.statusOff}</Chip>
+              ))}
           </div>
           <p className="mt-0.5 text-meta text-muted-foreground">{DESKTOP.kind}</p>
           {healthAnswered && !uiSandboxOn && (
@@ -238,14 +246,19 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
           )}
           {uiSandboxOn && (
             <>
-              <Button size="sm" className="mt-2" disabled={openingApp === DESKTOP_APP.name} onClick={() => openApp(DESKTOP_APP)}>
-                {openingApp === DESKTOP_APP.name ? UI_APPS_LANE.ctaBusy : UI_APPS_LANE.cta("desktop")}
-              </Button>
+              <DesktopPausedNote s={signIns} />
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Button size="sm" disabled={openingApp === DESKTOP_APP.name} onClick={() => openApp(DESKTOP_APP)}>
+                  {openingApp === DESKTOP_APP.name ? UI_APPS_LANE.ctaBusy : UI_APPS_LANE.cta("desktop")}
+                </Button>
+                <DesktopSignInButton s={signIns} />
+              </div>
               {appError?.app === DESKTOP_APP.name && (
                 <p role="alert" className="mt-2 font-mono text-meta leading-relaxed text-muted-foreground">{appError.message}</p>
               )}
               <p className="mt-2 text-meta leading-relaxed text-muted-foreground sm:hidden">{DESKTOP.phoneBefore}</p>
               <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{UI_APPS_LANE.newTab}</p>
+              <DesktopSignInsNote s={signIns} />
             </>
           )}
         </section>

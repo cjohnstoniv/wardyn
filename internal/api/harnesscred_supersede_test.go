@@ -665,7 +665,7 @@ func (s *toctouRunStore) kill() {
 }
 
 // killOnReadSecrets fires that switch from INSIDE the critical section: the
-// once-only guard's read is taken under lockAWSSSOOwner, after the handler's
+// once-only guard's read is taken under lockAWSSSOCapture, after the handler's
 // top-of-route KILLED check has already passed. Hooking the kill here is what
 // puts it in the window rather than before or after it.
 type killOnReadSecrets struct {

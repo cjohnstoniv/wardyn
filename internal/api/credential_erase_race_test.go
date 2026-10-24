@@ -254,7 +254,7 @@ func TestAWSRefresh_FailedReReadPersistsNothing(t *testing.T) {
 // and still has a servable token serves it from memory and writes nothing.
 func TestAWSRefresh_TryLockDuringEraseServesInMemory(t *testing.T) {
 	s, blob, calls := refreshFixture(t, awsSSOTestFixedNow.Add(8*time.Minute)) // inside the skew, above the serve floor
-	_, unlock, err := s.lockAWSSSOOwner(context.Background(), awsSSOTestOwner)
+	_, unlock, err := s.lockAWSSSOEveryCredential(context.Background(), awsSSOTestOwner)
 	if err != nil {
 		t.Fatal(err)
 	}

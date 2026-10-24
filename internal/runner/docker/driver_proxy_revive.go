@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/netip"
 	"net/url"
@@ -23,6 +24,7 @@ import (
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
 
+	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -75,6 +77,8 @@ var _ runner.SandboxStarter = (*Driver)(nil)
 type proxyPrep struct {
 	extraHosts []string
 	cfgJSON    []byte
+	// localModelPorts are the laptop local model ports the relay serves this proxy once it runs.
+	localModelPorts []uint16
 }
 
 // prepareProxy computes runID's proxyPrep from the control plane's cfgJSON, marked vm for a desktop VM
@@ -113,7 +117,11 @@ func (d *Driver) prepareProxy(ctx context.Context, runID uuid.UUID, cfgJSON []by
 	if err != nil {
 		return proxyPrep{}, err
 	}
-	if d.cfg.ProxySandboxPeersOnly {
+	cfgJSON, modelPorts, err := d.withRunnerLocalModels(cfgJSON)
+	if err != nil {
+		return proxyPrep{}, err
+	}
+	if !d.cfg.ProxyServesAnyPeer {
 		subnets, err := d.runSubnets(ctx, runID)
 		if err != nil {
 			return proxyPrep{}, err
@@ -125,11 +133,19 @@ func (d *Driver) prepareProxy(ctx context.Context, runID uuid.UUID, cfgJSON []by
 			return proxyPrep{}, err
 		}
 	}
-	return proxyPrep{extraHosts: hosts, cfgJSON: cfgJSON}, nil
+	return proxyPrep{extraHosts: hosts, cfgJSON: cfgJSON, localModelPorts: modelPorts}, nil
 }
 
-// EnvProxySandboxPeersOnly is Config.ProxySandboxPeersOnly's switch.
+// EnvProxySandboxPeersOnly is the inverse of Config.ProxyServesAnyPeer: on unless set off.
 const EnvProxySandboxPeersOnly = "WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY"
+
+// ProxyServesAnyPeerFromEnv is Config.ProxyServesAnyPeer from EnvProxySandboxPeersOnly, which defaults
+// on; a value that is not a boolean exits 2 naming it. It logs the switch's state, so call it once at boot.
+func ProxyServesAnyPeerFromEnv() bool {
+	on := cliutil.EnvBool(EnvProxySandboxPeersOnly, true)
+	slog.Info("docker: run proxy peers", EnvProxySandboxPeersOnly, on)
+	return !on
+}
 
 // runSubnets are the subnets of runID's own network.
 func (d *Driver) runSubnets(ctx context.Context, runID uuid.UUID) ([]netip.Prefix, error) {
@@ -239,6 +255,10 @@ func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[str
 		remove()
 		return "", err
 	}
+	if err := d.openLocalModels(ctx, runID, resp.ID, prep.localModelPorts); err != nil {
+		remove()
+		return "", err
+	}
 	// Watch briefly for the proxy exiting right back out — the shape of it
 	// refusing its own rendered config at boot (a strict-decode error, an
 	// unreadable MITM key, …). Without this, CreateSandbox pressed straight on
@@ -250,6 +270,7 @@ func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[str
 	// the per-run network; on the ReplaceProxy path it stays so its logs
 	// still name the cause, and the next revive removes it by name.
 	if err := d.watchProxyExit(ctx, resp.ID); err != nil {
+		d.closeLocalModels(runID) // an exited proxy's addresses are free for another container
 		return resp.ID, err
 	}
 	return resp.ID, nil

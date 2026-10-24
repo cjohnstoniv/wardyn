@@ -230,6 +230,12 @@ export const AGENTS = {
   AGENTS_LEAD:
     "Which coding agents this Wardyn offers, and the model provider each one uses by default. Every credential is each person's own.",
   AGENT_ROW_DISABLED_HINT: "Off: runs naming this agent are refused, and it shows as unavailable in New run.",
+  // Sign-ins in a desktop (#2972, board R11-2972-DesktopSignIns).
+  FIELD_DESKTOP_SIGN_INS: "Sign-ins in a desktop",
+  DESKTOP_SIGN_INS_ALLOWED: "Allowed",
+  DESKTOP_SIGN_INS_NOT_ALLOWED: "Not allowed",
+  DESKTOP_SIGN_INS_HINT:
+    "Allowed: a sign-in made in a desktop is kept in that machine's memory until it shuts down, and the agent can use it. Not allowed: a desktop running this agent keeps no sign-ins.",
   MECHANISM_NONE: "None — the image brings its own",
   MECHANISM_BEDROCK_BEARER: "Bearer key",
   MECHANISM_BEDROCK_SSO: "SSO sign-in",

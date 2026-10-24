@@ -280,20 +280,20 @@ type Config struct {
 	// UNAFFECTED either way (legacy, still boot-warned separately — see
 	// buildOptionalFeatures).
 	AllowEmailMappings bool
-	// CapabilityGrantsVerifiedEmail is WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL: a
-	// capability ALLOW row written for a person's email matches them only when
-	// sign-in vouches for the email (unverifiedEmailSubject). Default false keeps
-	// the match and logs it. Deny rows match the email either way.
-	CapabilityGrantsVerifiedEmail bool
-	// GovernanceUnitPutExistingOnly is WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY:
-	// PUT /governance/units/{id} replaces an existing profile only, and a
-	// new one is created through POST. Default false keeps create-at-id and logs it.
-	GovernanceUnitPutExistingOnly bool
-	// EgressHostPortGrantsInert is WARDYN_EGRESS_HOST_PORT_GRANTS_INERT: a stored
-	// egress_host ALLOW row whose value carries a ":port" (written before the
-	// write boundary stored the host alone) is inert, marked and never matched.
-	// Default false keeps matching it by host and logs it. Deny rows keep matching.
-	EgressHostPortGrantsInert bool
+	// UnverifiedEmailCapGrantsMatch is WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL set
+	// off: a capability ALLOW row written for a person's email still matches when
+	// sign-in does not vouch for it (unverifiedEmailSubject), logged. The zero value
+	// (the default) grants nothing through it. Deny rows match the email either way.
+	UnverifiedEmailCapGrantsMatch bool
+	// GovernanceUnitPutCreates is WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY set off:
+	// PUT /governance/units/{id} naming an id no profile holds creates one there,
+	// logged. The zero value (the default) answers it 404; create through POST.
+	GovernanceUnitPutCreates bool
+	// EgressHostPortGrantsMatch is WARDYN_EGRESS_HOST_PORT_GRANTS_INERT set off: a
+	// stored egress_host ALLOW row whose value carries a ":port" (written before
+	// the write boundary stored the host alone) still matches by host, logged. The
+	// zero value (the default) leaves it inert, marked and never matched. Deny rows keep matching.
+	EgressHostPortGrantsMatch bool
 	// UserMounts is the operator/MDM-set posture for MEMBER-authored local_dir
 	// binds (WARDYN_USER_WORKSPACE_ROOTS + _MAP + WARDYN_USER_WRITABLE_ROOTS
 	// + _DENY, parsed at boot by runner.ParseUserMountPolicy). The ZERO VALUE
@@ -778,6 +778,9 @@ type Server struct {
 	router        chi.Router
 	// metrics holds the /metrics scrape counters (see metrics.go). Zero value is ready to use.
 	metrics metrics
+	// recordingChainWalk lets one recording range check (recording_chain.go) walk the audit log at a time on this replica:
+	// the walk hashes the org's whole log over the run's lifetime, so a second check is refused, not queued. Zero value is ready to use.
+	recordingChainWalk sync.Mutex
 	// sshUnbound is set by MarkSSHGatewayUnbound when the SSH gateway could not bind at boot; /healthz then omits ssh.
 	sshUnbound atomic.Bool
 	// viaOrg is the organisation's via_org egress state (via_org_streams.go).
@@ -921,8 +924,9 @@ type Server struct {
 	// branchLimiter rate-bounds GET /workspaces/{id}/branches per person (workspace_branches.go): each
 	// call can use a forge credential. memberDriveLimiter bounds member drive changes (member_drives.go).
 	branchLimiter, memberDriveLimiter principalLimiter
-	// backchannelLimiter bounds the logout tokens that fail to verify on POST /auth/backchannel-logout (signin_denied.go).
-	backchannelLimiter principalLimiter
+	// backchannelLimiter bounds the logout tokens that fail to verify on POST /auth/backchannel-logout, and
+	// frontchannelLimiter the requests that cut nothing on GET /auth/frontchannel-logout (signin_denied.go).
+	backchannelLimiter, frontchannelLimiter principalLimiter
 	// preflightLimiter rate-bounds POST /runs/preflight per person
 	// (preflight.go); nil when Config.PreflightRatePerMin is 0 (off).
 	preflightLimiter     *principalLimiter

@@ -56,6 +56,7 @@ A unit admin's widening is always held for a second human, whatever `WARDYN_GOVE
 ## Locks
 
 - A unit's `locked_knobs`, and the boundary's, name knobs no unit below may change, a narrowing included.
+- `desktop.paste_in`, `desktop.copy_out`, `desktop.upload` and `desktop.download` each lock one desktop direction at the locker's rule.
 - A write that changes a locked knob is `409` `unit_knob_locked`: "`<knob>` is locked by `<locker>`; ask `<contact>`".
 - Locking a knob a unit below sets to another value is the same `409`, listing those units. Their values are never cleared for you.
 - A unit's own admins, or anyone above them, may lock it. Only a security admin locks on the boundary, whose locks bind while it is in `hard_limits`.

@@ -454,6 +454,12 @@ const (
 	reasonModelProviderCredentialStoreUnavailable = "model_provider_credential_store_unavailable" // the secret store did not answer (transient)
 )
 
+// GET /api/v1/runs/{id}/recording-chain (recording_chain.go): a recording's stretch of the audit chain.
+const (
+	reasonRecordingChainKeyRequired = "recording_chain_key_required" // the check named no recording key
+	reasonRecordingChainBusy        = "recording_chain_busy"         // another recording's range check is walking the log on this replica
+)
+
 // /api/v1/admin/audit (audit.go): the security tier's audit-log query,
 // export and chain-verification doors.
 const (
@@ -926,4 +932,12 @@ const (
 	reasonDesktopSigninUnavailable       = "desktop_signin_unavailable"        // the sign-in store could not be read or written
 	reasonDesktopSigninCredentialRefused = "desktop_signin_credential_refused" // the proxy's check: not an open sign-in's credential
 	reasonDesktopSigninResumeFailed      = "desktop_signin_resume_failed"      // run.kill: a failed begin's agent could not be continued, so the run was killed
+)
+
+// Sign-ins in a Linux VM's desktop (run_desktop_vm_signin.go).
+const (
+	reasonDesktopSignInsOff          = "desktop_sign_ins_off"           // the admin set Not allowed for the run's agent, or the run's desktop keeps none
+	reasonDesktopSignInsUnavailable  = "desktop_sign_ins_unavailable"   // the run has no sign-in store, or it could not be read
+	reasonDesktopSignInsPauseFailed  = "desktop_sign_ins_pause_failed"  // the agent was not paused; it keeps running
+	reasonDesktopSignInsResumeFailed = "desktop_sign_ins_resume_failed" // the agent was not resumed, or its resume was not recorded
 )

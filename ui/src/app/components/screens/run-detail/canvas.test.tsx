@@ -8,7 +8,7 @@
 // and not a failure, a save sends the wire shape the server validates, a
 // deployment that cannot persist degrades to this session instead of erroring,
 // and the terminal survives every route by which a layout could lose it.
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -61,7 +61,17 @@ vi.mock("sonner", () => ({
   },
 }));
 
+// Focus mode is the shell's state; a test outside <AppShell> drives it directly, then re-renders the canvas.
+const focusState = vi.hoisted(() => ({ on: false }));
+vi.mock("../app-shell", () => ({ useFocusMode: () => ({ focus: focusState.on, setFocus: () => {} }) }));
+const listApprovalsMock = vi.hoisted(() => vi.fn());
+vi.mock("../../../lib/api/approvals", () => ({
+  approvals: { listApprovals: (...a: unknown[]) => listApprovalsMock(...a), approve: vi.fn(), deny: vi.fn() },
+}));
+
 import { HttpError } from "../../../lib/api/core";
+import { LiveApprovals } from "../../wardyn/live-approvals";
+import { makeApproval } from "../../../../test/factories";
 import { RUN_COCKPIT } from "../../wardyn/copy";
 import { RunCanvas, canvasRowHeight } from "./canvas";
 import { OperatorProvider } from "../../wardyn/operator-context";
@@ -701,5 +711,33 @@ describe("canvasRowHeight", () => {
   });
   it("is unchanged for a tall pane", () => {
     expect(canvasRowHeight(900)).toBe(64);
+  });
+});
+
+// #2912: the decision row sits in its own persistent host, so entering or leaving focus mode moves it instead of
+// remounting LiveApprovals, which would collapse "Show all N" and drop the in-flight Approve/Deny state.
+describe("RunCanvas — the decision row survives focus mode", () => {
+  afterEach(() => {
+    focusState.on = false;
+  });
+
+  it("keeps \"Show all\" open across entering and leaving focus", async () => {
+    listApprovalsMock.mockResolvedValue(
+      [1, 2, 3].map((n) =>
+        makeApproval({ id: `a${n}`, run_id: "run-1", kind: "egress_domain", requested_scope: { host: `h${n}.example` }, state: "PENDING", requested_at: "" }),
+      ),
+    );
+    const decision = ctx({ decisionPane: <LiveApprovals runId="run-1" /> });
+    const { rerender } = render(<RunCanvas ctx={decision} />);
+    await userEvent.click(await screen.findByTestId("live-approvals-show-all"));
+    expect(screen.getByTestId("live-approvals-show-all")).toHaveTextContent("Show fewer");
+
+    focusState.on = true;
+    rerender(<RunCanvas ctx={decision} />);
+    expect(await screen.findByTestId("live-approvals-show-all")).toHaveTextContent("Show fewer");
+
+    focusState.on = false;
+    rerender(<RunCanvas ctx={decision} />);
+    expect(await screen.findByTestId("live-approvals-show-all")).toHaveTextContent("Show fewer");
   });
 });

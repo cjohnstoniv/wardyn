@@ -129,7 +129,7 @@ func TestDesktopSignin_PauseLeavesNoTypedBytesInTheRecording(t *testing.T) {
 func TestDesktopRecording_ResumeEndsOnlyItsOwnPause(t *testing.T) {
 	srv := New(Config{Audit: &recRecorder{}, AdminToken: adminToken, RecordingStore: fsRecordingStore(t)})
 	run := types.AgentRun{ID: uuid.New(), RecordingLevel: types.RecordingScreenActions}
-	if !srv.PauseDesktopRecording(context.Background(), run, desktopPauseTakeover) {
+	if !srv.PauseDesktopRecording(context.Background(), run, desktopPauseTakeover, desktopPauseTakeover) {
 		t.Fatal("pause refused")
 	}
 	if srv.ResumeDesktopRecording(context.Background(), run, desktopPauseSignin) {
@@ -155,11 +155,11 @@ func TestDesktopRecording_OverlappingPausesHoldOneGap(t *testing.T) {
 			run := types.AgentRun{ID: uuid.New(), RecordingLevel: types.RecordingScreenActions}
 			rec := liveDesktopRecorder(srv, run.ID)
 			first, second := order[0], order[1]
-			if !srv.PauseDesktopRecording(ctx, run, first) {
+			if !srv.PauseDesktopRecording(ctx, run, first, first) {
 				t.Fatal("the first pause did not open the gap")
 			}
 			_, _ = rec.Write(desktopFrame(desktopUpdate("typedsecret!")))
-			if srv.PauseDesktopRecording(ctx, run, second) {
+			if srv.PauseDesktopRecording(ctx, run, second, second) {
 				t.Error("a second pause opened another gap")
 			}
 			if srv.ResumeDesktopRecording(ctx, run, first) {
@@ -219,7 +219,7 @@ func TestDesktopRecording_AnEndedRunsPauseIsForgotten(t *testing.T) {
 		_ = sandbox.Close()
 		_ = conn.Close()
 	}
-	srv.PauseDesktopRecording(context.Background(), run, desktopPauseTakeover)
+	srv.PauseDesktopRecording(context.Background(), run, desktopPauseTakeover, desktopPauseTakeover)
 	closeOne()
 	if !held() {
 		t.Fatal("a live run's pause was dropped when its connection closed")

@@ -286,9 +286,13 @@ func derefBool(p *bool) bool { return p != nil && *p }
 func trimJoin(xs []string) string { return strings.Join(xs, ",") }
 
 // validInnerWalls is the harness_inner_walls values a policy may choose: the API's
-// validateHarnessInnerWalls, whose refusal of the harness's own sandbox modes says why they are not here.
+// validateHarnessInnerWalls.
 func validInnerWalls(w types.HarnessInnerWalls) bool {
-	sandbox := w.SandboxMode == "" || w.SandboxMode == types.InnerSandboxOff
+	var sandbox bool
+	switch w.SandboxMode {
+	case "", types.InnerSandboxOff, types.InnerSandboxWorkspaceWrite, types.InnerSandboxReadOnly:
+		sandbox = true
+	}
 	switch w.Approvals {
 	case "", types.InnerApprovalsHarness, types.InnerApprovalsWardyn, types.InnerApprovalsNone:
 		return sandbox

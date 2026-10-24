@@ -386,7 +386,7 @@ func (s *Server) handleBeginDesktopSignin(w http.ResponseWriter, r *http.Request
 	// 2. The person's display, with the lane credential on stdin. The desktop's screen recording keeps
 	// no frames from here until the sign-in closes (closeDesktopSignin), a failed start included.
 	if s.desktopRecorded(run) {
-		s.PauseDesktopRecording(ctx, run, desktopPauseSignin)
+		s.PauseDesktopRecording(ctx, run, desktopPauseSignin, si.ID.String())
 	}
 	startCfg, _ := json.Marshal(map[string]string{"credential": cred, "proxy": signinProxyAddr})
 	if _, err := s.signinExec(ctx, run.SandboxRef, true, startCfg, 64<<10, "start"); err != nil {
@@ -649,7 +649,7 @@ func (s *Server) closeDesktopSignin(ctx context.Context, st store.DesktopSigninS
 	if !ended {
 		return nil
 	}
-	s.ResumeDesktopRecording(ctx, run, desktopPauseSignin)
+	s.endDesktopHold(ctx, run, si.ID.String())
 	shares, _ := st.CountDesktopSigninShares(ctx, si.ID)
 	s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "desktop_signin.close", run.ID.String(), "success",
 		mustJSON(map[string]any{"signin_id": si.ID, "reason": reason, "shares": shares, "agent_resumed": resumed})))

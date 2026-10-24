@@ -51,7 +51,7 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[policyref.Contact]():    strings.Fields("Owner Email RequestURL RequestText"),
 	reflect.TypeFor[policyref.Provenance](): strings.Fields("Layer Name Contact Locked"),
 	reflect.TypeFor[types.ADOEntraConfig](): strings.Fields("TenantID ClientID CapabilityCeiling DefaultProfile TokenMode PATMaxHours PATMaxDays RESTAPI RunnerResident RunnerResidentSandbox"),
-	reflect.TypeFor[types.AgentProvider]():  strings.Fields("ID Disabled DefaultProvider"),
+	reflect.TypeFor[types.AgentProvider]():  strings.Fields("ID Disabled DefaultProvider DesktopSignInsOff"),
 	reflect.TypeFor[types.AgentProviders](): strings.Fields("Agents"),
 	//lint:ignore SA1019 the legacy override type is still a SiteConfig field, so its manifest is required
 	reflect.TypeFor[types.ArtifactOverride]():    strings.Fields("BaseURL TokenSecretRef"),
@@ -68,7 +68,7 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.IntegrationSecret]():   strings.Fields("Role SecretName Delivery"),
 	reflect.TypeFor[types.MemberDrivePolicy]():   strings.Fields("Enabled KeepMainDrive MaxPerPerson SizeMiB StorageClass"),
 	reflect.TypeFor[types.ModelProvider]():       strings.Fields("ID UID Name Kind Disabled BaseURL Auth Bedrock Azure Local Harnesses"),
-	reflect.TypeFor[types.LocalModelSettings]():  strings.Fields("Models MaxContext MaxOutput KeepAliveSeconds"),
+	reflect.TypeFor[types.LocalModelSettings]():  strings.Fields("Models MaxContext MaxOutput KeepAliveSeconds AllowOnLaptopRunners"),
 	reflect.TypeFor[types.ModelProviders]():      strings.Fields("Providers"),
 	reflect.TypeFor[types.ProviderAuth]():        strings.Fields("Header Format"),
 	reflect.TypeFor[types.ProviderHarness]():     strings.Fields("Harness Model FastModel Path AuthHeader AuthFormat"),

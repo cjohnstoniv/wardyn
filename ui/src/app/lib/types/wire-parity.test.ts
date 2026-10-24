@@ -372,6 +372,17 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(new Set(tsInterfaceTopKeys(outTs, "RunAgentState"))).toEqual(new Set(goTags));
   });
 
+  // A desktop recording's stretch of the audit chain (#2968, the replay's tamper-evident log).
+  it.each([
+    ["AuditChainRange", 7],
+    ["AuditChainMark", 2],
+  ])("%s (GET /runs/{id}/recording-chain): full parity with the TS mirror", (name, min) => {
+    const goTags = goJSONTags(readFileSync(join(root, "internal/store/auditchain_range.go"), "utf8"), name);
+    expect(goTags.length).toBeGreaterThanOrEqual(min);
+    const recTs = readFileSync(join(root, "ui/src/app/lib/api/recordings.ts"), "utf8");
+    expect(new Set(tsInterfaceTopKeys(recTs, name))).toEqual(new Set(goTags));
+  });
+
   it("SetupFeatures (GET /setup/status features): full parity with the TS SetupStatus.features inline type", () => {
     const goTags = goJSONTags(readFileSync(join(root, "internal/api/setup.go"), "utf8"), "SetupFeatures");
     expect(goTags).toContain("multi_agent_tasks");

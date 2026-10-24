@@ -319,7 +319,7 @@ func TestPG_AWSRefresh_LostLockDoesNotOverwriteANewerToken(t *testing.T) {
 	fakeOIDC(t, func(w http.ResponseWriter, _ map[string]string, _ int) {
 		// The redemption is in flight, under the lock. The lock's connection
 		// dies, and another replica refreshes and stores its pair.
-		killLockHolder(t, p.poolA, db.AWSSSOLockClass)
+		killLockHolder(t, p.poolA, db.AWSSSOCredentialLockClass)
 		storeSSOBlob(t, p.b, newer)
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"accessToken": "stale-access-token-abcdefghij", "expiresIn": 3600, "refreshToken": "stale-refresh-token-abcdefghij"})
@@ -360,7 +360,7 @@ func TestPG_AWSRefresh_LostLockCancelsTheRedemption(t *testing.T) {
 		// The body is read first: the server only watches for a client that went
 		// away once the handler has consumed it.
 		_, _ = io.Copy(io.Discard, r.Body)
-		killLockHolder(t, p.poolA, db.AWSSSOLockClass)
+		killLockHolder(t, p.poolA, db.AWSSSOCredentialLockClass)
 		select {
 		case <-time.After(5 * time.Second):
 		case <-r.Context().Done():
@@ -454,9 +454,10 @@ func TestPG_ADOEntraRefresh_LostLockDoesNotOverwriteANewerToken(t *testing.T) {
 }
 
 // A refresh the authority answers invalid_grant to, whose lock was lost while
-// the call was in flight, does not delete the newer pair another replica stored:
-// the delete is the same compare-and-set as the Put.
-func TestPG_AWSRefresh_LostLockSpentAnswerKeepsANewerToken(t *testing.T) {
+// the call was in flight, does not delete the newer pair another replica stored
+// (the delete is the same compare-and-set as the Put), and serves that pair
+// rather than the sign-in door (#2137).
+func TestPG_AWSRefresh_LostLockSpentAnswerServesTheNewerToken(t *testing.T) {
 	old := db.LockWatchInterval
 	db.LockWatchInterval = time.Hour // the watcher stays out of it: the compare-and-set is under test
 	t.Cleanup(func() { db.LockWatchInterval = old })
@@ -467,14 +468,14 @@ func TestPG_AWSRefresh_LostLockSpentAnswerKeepsANewerToken(t *testing.T) {
 	newer.AccessToken, newer.RefreshToken = "newer-access-token-1234567890", "newer-refresh-token-1234567890"
 	newer.ExpiresAt = awsSSOTestFixedNow.Add(2 * time.Hour)
 	fakeOIDC(t, func(w http.ResponseWriter, _ map[string]string, _ int) {
-		killLockHolder(t, p.poolA, db.AWSSSOLockClass)
+		killLockHolder(t, p.poolA, db.AWSSSOCredentialLockClass)
 		storeSSOBlob(t, p.b, newer)
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(map[string]any{"error": "invalid_grant", "error_description": "refresh token is invalid"})
 	})
 
-	if _, msg := p.a.refreshAWSSSOBlob(context.Background(), awsSSOTestScope(), blob); msg != awsSSORefreshSpentSentence {
-		t.Fatalf("refresh answered %q, want the spent sentence", msg)
+	if got, msg := p.a.refreshAWSSSOBlob(context.Background(), awsSSOTestScope(), blob); msg != "" || got.AccessToken != newer.AccessToken {
+		t.Fatalf("refresh = %q %q, want the newer stored pair served with no sign-in door", got.AccessToken, msg)
 	}
 	b, found, err := p.b.readAWSSSOBlob(context.Background(), awsSSOTestScope())
 	if err != nil || !found {

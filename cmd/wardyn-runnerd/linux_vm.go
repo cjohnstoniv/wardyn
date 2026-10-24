@@ -50,9 +50,10 @@ func enableLinuxVM(ctx context.Context, sub *docker.Driver, stateDir string, get
 }
 
 // vmCaps is what the runner's caps offer for the VMs the probe found it can start. Desktop: the driver
-// opens every VM's display (docker.Driver.DialDesktop).
+// opens every VM's display (docker.Driver.DialDesktop). SignIns: it hands every VM its sign-in store
+// and pauses its agent (docker.Driver.PauseAgent).
 func vmCaps(c docker.VMConfig) *runnerwire.VMCaps {
-	return &runnerwire.VMCaps{MachineType: c.MachineType, CPUModel: c.CPUModel, QEMUVersion: c.QEMUVersion, Virtiofs: c.Virtiofs, Desktop: true}
+	return &runnerwire.VMCaps{MachineType: c.MachineType, CPUModel: c.CPUModel, QEMUVersion: c.QEMUVersion, Virtiofs: c.Virtiofs, Desktop: true, SignIns: true}
 }
 
 // endVMsOnFullSpool puts the full-spool rule behind the Linux VM switch: only a runner that offers VM

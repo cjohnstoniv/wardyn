@@ -540,3 +540,61 @@ func TestRunnerSweepHoldsCandidateAcrossRetries(t *testing.T) {
 		t.Fatalf("NetworkPolicies dropped %d times once the stop was proven, want 1", n)
 	}
 }
+
+// TestRunnerSweepRetakesAfterListLostToRestart (#3545): runnerd stops after the first bound read
+// saved the proxy's node name but before the after-list that follows it, as the k6 org case's
+// scale-down mid-create does. The restarted runnerd takes that after-list on its next read, so the
+// kubelet's terminal status binds and the org's sweep rolls the run back; the NetworkPolicies go
+// only after the witness is saved and the finalizer is off. Without the retake no arm ever holds.
+func TestRunnerSweepRetakesAfterListLostToRestart(t *testing.T) {
+	h := newRunnerHarness(t)
+	ctx := context.Background()
+	h.node(t, "n1", "uid-n1", "m1", "s1", "10.0.0.5")
+	pod := h.proxyPod("n1")
+	b := &bracket{d: h.d, runID: h.runID, component: componentProxy}
+	if err := b.before(ctx, pod.Name); err != nil {
+		t.Fatal(err)
+	}
+	created, err := h.cs.CoreV1().Pods(testNamespace).Create(ctx, pod, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.created(created); err != nil {
+		t.Fatal(err)
+	}
+	// SIGTERM cancels the start wait's context between the bound read's save and its after-list.
+	stopped := true
+	h.cs.PrependReactor("list", "nodes", func(clienttesting.Action) (bool, runtime.Object, error) {
+		if stopped {
+			stopped = false
+			return true, nil, context.Canceled
+		}
+		return false, nil, nil
+	})
+	if _, err := h.d.observePod(ctx, h.runID, componentProxy, created); !errors.Is(err, context.Canceled) {
+		t.Fatalf("the interrupted bound read: %v", err)
+	}
+	if pe := h.ev.get(t, h.runID).Pods[componentProxy]; pe.NodeName != "n1" || pe.PostBind != nil {
+		t.Fatalf("setup: node %q post-bind %+v, want the node saved and no after-list", pe.NodeName, pe.PostBind)
+	}
+	// The restarted runnerd holds only the record. The kubelet stops the proxy on the sweep's delete.
+	h.onDelete = func(p *corev1.Pod) { terminate(p, "containerd://p1") }
+	var dropped, proven bool // the first drop's view: a later one cannot mask an early one
+	h.cs.PrependReactor("delete-collection", "networkpolicies", func(clienttesting.Action) (bool, runtime.Object, error) {
+		if !dropped {
+			pe := h.ev.get(t, h.runID).Pods[componentProxy]
+			dropped, proven = true, pe.Witness != nil && pe.FinalizerOff
+		}
+		return false, nil, nil
+	})
+	if swept, err := h.d.SweepOrphanedSandboxes(ctx, 0, alwaysOrphan); swept != 1 || err != nil {
+		t.Fatalf("sweep after the restart: swept %d, err %v", swept, err)
+	}
+	pe := h.ev.get(t, h.runID).Pods[componentProxy]
+	if pe.Assoc != assocCausal || pe.Witness == nil || pe.Witness.Arm != armTerminal || pe.Witness.Containers[0].Tier != tier1 {
+		t.Fatalf("assoc %q witness %+v, want causal and terminal on tier 1", pe.Assoc, pe.Witness)
+	}
+	if !proven {
+		t.Fatal("the NetworkPolicies were dropped before the proxy's witness and finalizer removal")
+	}
+}

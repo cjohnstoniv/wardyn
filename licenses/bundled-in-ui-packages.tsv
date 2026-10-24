@@ -1,0 +1,4 @@
+# Third-party components a UI package bundles inside itself, whose own licence text must ship beside the
+# package's (scripts/third-party-notices.sh copies it, scripts/check-ui-licenses.sh requires it).
+# Tab-separated: package, licence file inside the package, component, version, licence id (bare allowlist only).
+@novnc/novnc	vendor/pako/LICENSE	pako	1.0.3, the ES-module port noVNC vendors	MIT

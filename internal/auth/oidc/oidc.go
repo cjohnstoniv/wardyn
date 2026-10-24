@@ -134,6 +134,11 @@ type Config struct {
 	// BackchannelLogout is WARDYN_OIDC_BACKCHANNEL_LOGOUT: mount the identity provider's back-channel
 	// logout endpoint (backchannel.go). Off by default, and then the route does not exist.
 	BackchannelLogout bool
+	// FrontchannelLogout is WARDYN_OIDC_FRONTCHANNEL_LOGOUT: record each sign-in's sid in SessionSIDs
+	// and mount the front-channel logout endpoint (frontchannel.go). Off by default, and then nothing
+	// is recorded and the route does not exist.
+	FrontchannelLogout bool
+	SessionSIDs        SessionSIDs
 
 	// OnLogin, when set, is called synchronously after an APPROVED login with what that login
 	// established (LoginFacts). A failure inside it must never fail the login; nil is a no-op.

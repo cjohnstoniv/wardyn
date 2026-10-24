@@ -93,6 +93,7 @@ type callbackClaims struct {
 	// issuer, tid, oid: the Subject a pre-created Entra person is keyed by
 	// (resolvePerson). tid/oid are empty when absent or not strings.
 	issuer, tid, oid string
+	sid              string // the provider's session id, for front-channel logout (frontchannel.go)
 }
 
 // decodeCallbackClaims reads the login claims off a verified id_token. Only the
@@ -170,8 +171,14 @@ func decodeCallbackClaims(idToken *gooidc.IDToken) (callbackClaims, error) {
 		PreferredUsername string `json:"preferred_username"`
 	}
 	_ = idToken.Claims(&hc)
+	// The provider's session id, which front-channel logout names (frontchannel.go); tolerant too.
+	var sc struct {
+		Sid string `json:"sid"`
+	}
+	_ = idToken.Claims(&sc)
 	return callbackClaims{
 		issuer:        idToken.Issuer,
+		sid:           sc.Sid,
 		tid:           ec.Tid,
 		oid:           ec.Oid,
 		email:         claims.Email,
@@ -341,6 +348,7 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserve
 		return
 	}
 	a.RecordAttach(r, sess)
+	a.recordSessionSID(r.Context(), cc, sess)
 	http.SetCookie(w, cookie)
 	a.rememberDevice(w, cc)
 	http.Redirect(w, r, a.consumeReturnTo(w, r), http.StatusFound)

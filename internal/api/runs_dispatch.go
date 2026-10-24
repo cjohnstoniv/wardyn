@@ -188,7 +188,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	applyUserDriveEnv(sandboxEnv, p.Drives)
 	// The agent-side half of this run's autonomy level — see agentPolicyFor.
 	agentPolicy, apErr := s.agentPolicyFor(ctx, run, p.Harnesses, p.holdLane(), ceiling.agentGuardrailLocks, p.attendedToolRules())
-	if apErr != nil {
+	// Codex's own sandbox, when the run's walls froze one (#2822).
+	codexFiles, cxErr := s.codexSandbox(ctx, run, sandboxEnv)
+	if apErr = cmp.Or(apErr, cxErr); apErr != nil {
 		// apErr wraps s.cfg.Runner.Capabilities' own error, which can carry
 		// driver/substrate text (a Docker daemon socket error, a k8s API
 		// error) — logged here for the operator, never handed to the member
@@ -410,7 +412,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		Image:            p.Image,
 		ConfinementClass: run.ConfinementClass,
 		MachineKind:      run.MachineKind,
-		Env:              sandboxEnv,
+		// "Sign-ins in a desktop" for the run's agent (run_desktop_vm_signin.go); only a VM reads it.
+		DesktopSignInsOff: desktopSignInsOff(siteCfg, siteCfgErr, run.Agent),
+		Env:               sandboxEnv,
 		// The credential half (SandboxSpec.SecretEnv states the driver
 		// obligations). Nil for a run with no env_secret grant and no resident
 		// Bedrock credential, which is most of them.
@@ -420,7 +424,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		// The managed settings this run's autonomy level generates and the
 		// started harness's approval credential; nil for a run with neither, or
 		// on a runner that cannot deliver them.
-		ManagedFiles: slices.Concat(agentPolicy.files, credFiles, mcp.files),
+		ManagedFiles: slices.Concat(agentPolicy.files, codexFiles, credFiles, mcp.files),
 		// nil for an operator run (the driver then behaves exactly as it does
 		// today); non-nil marks a member-owned-workspace run whose MEMBER-AUTHORED
 		// binds (stamped above by buildRunMounts) the driver re-checks against

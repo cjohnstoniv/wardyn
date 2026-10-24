@@ -161,6 +161,9 @@ type accessInputs struct {
 	// level is the autonomy level the fold resolved, which picks an
 	// interactive run's managed settings (attendedDefaultReasons).
 	level types.AutonomyLevel
+	// class is the confinement class the fold enforces, which decides whether
+	// Codex's own sandbox starts (innerWallsSandbox).
+	class types.ConfinementClass
 }
 
 // reSigned is awsReSigned, false when unset.
@@ -200,7 +203,7 @@ func (s *Server) accessDecider(ctx context.Context) (string, error) {
 		return "", err
 	}
 	allows := slices.DeleteFunc(slices.Clone(b.byKind[capEgressHost]), func(g types.CapabilityGrant) bool {
-		return g.Effect != types.CapabilityAllow || (s.cfg.EgressHostPortGrantsInert && egressHostPortAllow(g))
+		return g.Effect != types.CapabilityAllow || (!s.cfg.EgressHostPortGrantsMatch && egressHostPortAllow(g))
 	})
 	switch {
 	case slices.ContainsFunc(allows, func(g types.CapabilityGrant) bool { return strings.TrimSpace(g.Value) == "*" }):
@@ -434,8 +437,12 @@ func (b *accessBuilder) toolPolicyFact(harness string) client.ToolPolicyFact {
 	}
 	fact.RuleEffects = toolEffectOptions(policyDefault, forRule, "policy_stricter_tool")
 	started := harness == req.Agent
+	sandbox := ""
+	if started {
+		sandbox = innerWallsSandbox(req, b.in.spec, b.in.class)
+	}
 	if walls, ok := agentpolicy.InnerWalls(harness, requestIsInteractive(req), started && holdLane(false, req.ToolApprovals, req.TaskMode),
-		started && innerWallsSeedSkips(req)); ok && req.TaskMode != "exec" {
+		started && innerWallsSeedSkips(req), sandbox); ok && req.TaskMode != "exec" {
 		fact.InnerWalls = &walls
 	}
 	return fact

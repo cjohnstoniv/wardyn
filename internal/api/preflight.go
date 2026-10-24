@@ -443,7 +443,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		credentialChecked: true, autonomyResolved: true,
 	}, resp.GitCredential)
 	access, err := s.accessFor(r, accessInputs{req: f.req, spec: f.spec, prov: f.prov, source: f.source,
-		scmSite: f.scmSite, mpChoice: f.mpChoice, comps: f.comps, facts: resp.Components, level: f.autonomy.Level})
+		scmSite: f.scmSite, mpChoice: f.mpChoice, comps: f.comps, facts: resp.Components, level: f.autonomy.Level, class: f.enforced})
 	if err != nil {
 		writeServerError(w, r, "resolve capability", err)
 		return

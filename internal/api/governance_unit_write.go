@@ -390,10 +390,10 @@ func unitPutCreatesAtID(id uuid.UUID, status int, all []types.GovernanceUnit) bo
 
 // unitPutCreateRefusal answers a PUT that would create at the id it named. A run keeps the id of the
 // profile it was created under, so a profile created at a deleted one's id would govern that profile's
-// runs: with Config.GovernanceUnitPutExistingOnly the PUT is a 404 and a new profile comes through POST,
-// which mints its id. Off, the create goes through and is logged once it has stored.
+// runs: by default the PUT is a 404 and a new profile comes through POST, which mints its id. With
+// Config.GovernanceUnitPutCreates the create goes through and is logged once it has stored.
 func (s *Server) unitPutCreateRefusal(creates bool) *unitWriteError {
-	if creates && s.cfg.GovernanceUnitPutExistingOnly {
+	if creates && !s.cfg.GovernanceUnitPutCreates {
 		return &unitWriteError{status: http.StatusNotFound, reason: reasonGovernanceUnitNotFoundByID,
 			msg: "governance profile not found; create a profile with POST /api/v1/governance/units"}
 	}
@@ -745,7 +745,7 @@ func (s *Server) handleCreateGovernanceUnit(w http.ResponseWriter, r *http.Reque
 // handleUpdateGovernanceUnit replaces the profile at {id} (200), rename
 // included — renaming has to work, because ON DELETE RESTRICT makes
 // delete-and-recreate impossible for a profile that is actually assigned. A PUT
-// naming an id no row holds creates it there, which is what PUT means.
+// naming an id no row holds is a 404 unless Config.GovernanceUnitPutCreates.
 // operatorOnly (routes.go).
 func (s *Server) handleUpdateGovernanceUnit(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "governance profile")

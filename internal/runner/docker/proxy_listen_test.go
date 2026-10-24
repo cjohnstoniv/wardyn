@@ -32,7 +32,8 @@ func deliveredListen(t *testing.T, f *fakeDocker, name string) string {
 }
 
 // sameConfigExceptListen reports whether two proxy configs are equal once
-// their listen address is set aside.
+// the keys the driver writes itself are set aside: the listen address and the
+// run's own subnet as allowed_peers (TestProxySandboxPeersOnly_OnCreateAndRevive).
 func sameConfigExceptListen(t *testing.T, a, b []byte) bool {
 	t.Helper()
 	var ma, mb map[string]any
@@ -42,8 +43,10 @@ func sameConfigExceptListen(t *testing.T, a, b []byte) bool {
 	if err := json.Unmarshal(b, &mb); err != nil {
 		t.Fatalf("decode config: %v", err)
 	}
-	delete(ma, "listen")
-	delete(mb, "listen")
+	for _, k := range []string{"listen", "allowed_peers"} {
+		delete(ma, k)
+		delete(mb, k)
+	}
 	return reflect.DeepEqual(ma, mb)
 }
 

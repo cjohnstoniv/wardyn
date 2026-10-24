@@ -221,6 +221,15 @@ func (s *Server) refMethod(ctx context.Context, method string, args json.RawMess
 			return nil, runner.ErrEndUnsupported
 		}
 		return nil, e.EndSandbox(ctx, ref)
+	case runnerwire.MethodPauseAgent, runnerwire.MethodResumeAgent:
+		p, ok := s.sub.(runner.AgentPauser)
+		if !ok {
+			return nil, runner.ErrAgentPauseUnsupported
+		}
+		if method == runnerwire.MethodPauseAgent {
+			return nil, p.PauseAgent(ctx, ref)
+		}
+		return nil, p.ResumeAgent(ctx, ref)
 	case runnerwire.MethodStopProxy:
 		p, ok := s.sub.(runner.ProxyStopper)
 		if !ok {

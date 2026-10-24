@@ -79,10 +79,11 @@ type Config struct {
 	// controller missing/not delegated). OFF by default — an untrusted
 	// sandbox must not run uncapped. Set only on a trusted host.
 	AllowUnenforceableCaps bool
-	// ProxySandboxPeersOnly (WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY, default off)
-	// has each run's proxy serve only callers on the run's own network, on
-	// create and on revive (proxy Config.AllowedPeers).
-	ProxySandboxPeersOnly bool
+	// ProxyServesAnyPeer (WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY set off) has
+	// each run's proxy serve any caller. The zero value (the default) serves
+	// only callers on the run's own network, on create and on revive (proxy
+	// Config.AllowedPeers).
+	ProxyServesAnyPeer bool
 	// UserDriveHostRoots is the deployment's WARDYN_USER_DRIVE_HOST_ROOTS
 	// ceiling over host_path USER DRIVES, parsed once at boot and handed to
 	// the substrate constructor, so the driver's bind-time re-check and the
@@ -104,6 +105,10 @@ type Config struct {
 	// the target, so the proxy's control-plane clamp covers one address, and an
 	// IP-literal URL (which no hosts entry can remap) refuses the create.
 	ControlPlaneRelay func(controlPlaneURL *url.URL) (target string, err error)
+	// LocalModelRelay, set only by wardyn-runnerd beside ControlPlaneRelay, serves a laptop local
+	// model's port at the relay target to a flagged run's proxy alone, forwarded to this computer's
+	// loopback at that port (withRunnerLocalModels). Nil refuses a run that needs one.
+	LocalModelRelay LocalModelRelay
 	// TrustedCAPEM, set only by wardyn-runnerd, is the runner's own validated
 	// corporate CA bundle (--trusted-ca-file, runner.TrustedCABundle). It
 	// becomes every proxy's trusted_ca_pem, on create and on revive, in place

@@ -219,7 +219,7 @@ const (
 	reasonToolApprovalsHoldInteractiveConflict = "tool_approvals_hold_interactive_conflict" // tool_approvals=hold on an interactive run, whose tool use is already supervised in the attach pane
 	reasonHarnessInnerWallsLooser              = "harness_inner_walls_looser"               // the policy's harness_inner_walls is looser than the walls the run's harness launches with
 	reasonHarnessInnerWallsUnmet               = "harness_inner_walls_unmet"                // the run cannot launch with the policy's harness_inner_walls on its harness and lane
-	reasonHarnessSandboxUnavailable            = "harness_sandbox_unavailable"              // harness_inner_walls.sandbox names a harness sandbox mode, which cannot start inside Wardyn's sandbox
+	reasonHarnessSandboxUnavailable            = "harness_sandbox_unavailable"              // harness_inner_walls.sandbox_mode names a harness sandbox mode, which cannot start at the run's confinement class
 	reasonDesktopTransferBlocked               = "desktop_transfer_blocked"                 // the run's desktop rules block this file direction
 	reasonDesktopTransferTooLarge              = "desktop_transfer_too_large"               // the upload is over the desktop upload limit
 	reasonDesktopTransferBadRequest            = "desktop_transfer_bad_request"             // the file name is not a plain name, or the upload has no Content-Length
@@ -625,6 +625,10 @@ const (
 // A run refused at create because it sets a run proxy setting its runner's wardyn-runnerd does not
 // carry (sandboxCreateFailure, remote.ProxySettingError): the run.create failure row's reason.
 const reasonRunnerProxySetting = "runner_proxy_setting_unsupported"
+
+// A run refused at create because its laptop local model is on a port the runner's person has not allowed
+// (sandboxCreateFailure, remote.LocalModelPortError): the run.create failure row's reason.
+const reasonRunnerLocalModelPort = "runner_local_model_port_not_allowed"
 
 // A request with no session and no bearer on a deployment with single sign-on and no admin token
 // (sessionRejectionResponse): the caller has to sign in.

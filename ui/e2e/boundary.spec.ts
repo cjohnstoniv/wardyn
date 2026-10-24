@@ -6,7 +6,8 @@
 // Policies -> Wardyn boundary against the real server: a security admin reaches the page from Policies, a fresh
 // install's boundary is seeded in hard_limits (#3238), so the page opens on the Hard limits mode with its list,
 // and nothing is offered for review until something changes. No second-admin claim is made before a submit. The
-// Desktop group card (M7-Knobs-B, #2967) shows the value each direction is held to and drafts into the dry run.
+// Desktop group card (M7-Knobs-B, #2967) shows the value each direction is held to and drafts into the dry run,
+// with a lock per direction and one for the group.
 import { test, expect, asRealSecurityAdmin, consoleAPI, gotoConsole, navTo } from "./fixtures";
 import { BOUNDARY, BOUNDARY_DESKTOP, BOUNDARY_DRY_RUN } from "../src/app/lib/boundary-copy";
 
@@ -120,9 +121,46 @@ test.describe("Policies: the Wardyn boundary", () => {
       await page.getByRole("button", { name: BOUNDARY.REVIEW, exact: true }).click();
       const report = page.getByTestId("boundary-dry-run");
       await expect(report).toBeVisible();
-      await expect(report.getByRole("row", { name: new RegExp(`^${BOUNDARY_DESKTOP.TITLE}`) })).toContainText("Copy out blocked");
+      // The Desktop row, not DESK-LOCKS's "Desktop locks" row below it: its first cell is the title exactly.
+      const desktopRow = report.getByRole("row").filter({ has: page.getByText(BOUNDARY_DESKTOP.TITLE, { exact: true }) });
+      await expect(desktopRow).toContainText("Copy out blocked");
       const stored = await consoleAPI(page, "GET", path);
       expect(JSON.parse(stored.text).spec.desktop).toEqual({ copy_out: "allowed" });
+    } finally {
+      const back = await consoleAPI(page, "PUT", path, { mode, spec, limits });
+      expect(back.status, back.text).toBe(200);
+    }
+  });
+
+  test("the Desktop card locks a direction for teams below, and the group lock locks all four, into the dry run", async ({ page }) => {
+    await asRealSecurityAdmin(page);
+    const path = "/api/v1/governance/boundary";
+    const original = await consoleAPI(page, "GET", path);
+    expect(original.status, original.text).toBe(200);
+    const { mode, spec, limits, locked_knobs } = JSON.parse(original.text);
+    const set = await consoleAPI(page, "PUT", path, { mode: "hard_limits", spec, limits });
+    expect(set.status, set.text).toBe(200);
+    try {
+      await gotoConsole(page, "admin");
+      await navTo(page, "Policies");
+      await page.getByRole("link", { name: BOUNDARY.TITLE, exact: true }).click();
+      const card = page.getByTestId("boundary-desktop");
+      await expect(card).toBeVisible();
+      const lock = (name: string) => card.getByRole("group", { name }).getByRole("checkbox", { name: BOUNDARY_DESKTOP.LOCK_ROW });
+      const group = card.getByRole("checkbox", { name: BOUNDARY_DESKTOP.LOCK_GROUP });
+      await lock("Copy out of the desktop").check();
+      await expect(lock("Copy out of the desktop")).toBeChecked();
+      await expect(group).not.toBeChecked();
+      await group.check();
+      for (const r of BOUNDARY_DESKTOP.ROWS) await expect(lock(r.label)).toBeChecked();
+
+      await page.getByRole("button", { name: BOUNDARY.REVIEW, exact: true }).click();
+      const report = page.getByTestId("boundary-dry-run");
+      await expect(report.getByRole("row", { name: new RegExp(`^${BOUNDARY_DESKTOP.LOCKS}`) })).toContainText(
+        "Paste in, Copy out, Upload, Download",
+      );
+      const stored = await consoleAPI(page, "GET", path);
+      expect(JSON.parse(stored.text).locked_knobs ?? []).toEqual(locked_knobs ?? []);
     } finally {
       const back = await consoleAPI(page, "PUT", path, { mode, spec, limits });
       expect(back.status, back.text).toBe(200);

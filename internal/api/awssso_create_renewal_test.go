@@ -300,7 +300,7 @@ func TestCreateRenewal_EraseDuringPutRetryWinsAndBootstrapFailsClosed(t *testing
 	heldAtEveryPut.Store(true)
 	f.srv.cfg.Secrets = putScript{Store: f.secrets, only: providerSecretName(reauthProviderUID, providerSSOPart), n: new(atomic.Int32),
 		hook: func(n int) error {
-			if _, release, ok, _ := f.srv.tryLockAWSSSOOwner(context.Background(), "alice@example.com"); ok {
+			if _, release, ok, _ := f.srv.tryLockAWSSSOCredential(context.Background(), reauthScope("alice@example.com")); ok {
 				release()
 				heldAtEveryPut.Store(false)
 			}
@@ -348,7 +348,7 @@ func supersededCreateFixture(t *testing.T, during func(p *replicaPair)) (*Server
 	srv.locks.override = db.NewPGLocker(p.poolA, 2)
 	storeSSOBlobFor(t, srv, createRenewalOwner, createRenewalBlob())
 	fakeOIDC(t, func(w http.ResponseWriter, _ map[string]string, _ int) {
-		killLockHolder(t, p.poolA, db.AWSSSOLockClass)
+		killLockHolder(t, p.poolA, db.AWSSSOCredentialLockClass)
 		during(p)
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"accessToken": "fresh-access-token-abcdefghij", "expiresIn": 3600,
@@ -401,10 +401,10 @@ func TestCreateRenewal_SupersededByNewerPairLaunchesOnTheStoredPair(t *testing.T
 	}
 }
 
-// Every call of storeAWSSSOBlob is made with the owner lock held: its only
+// Every call of storeAWSSSOBlob is made with the credential lock held: its only
 // callers are the renewal's persist step and the provider sign-in store, and
 // each is reached only after the lock is taken in its own function.
-func TestStoreAWSSSOBlobCallersHoldTheOwnerLock(t *testing.T) {
+func TestStoreAWSSSOBlobCallersHoldTheCredentialLock(t *testing.T) {
 	fset := token.NewFileSet()
 	paths, err := filepath.Glob("*.go")
 	if err != nil {
@@ -439,7 +439,7 @@ func TestStoreAWSSSOBlobCallersHoldTheOwnerLock(t *testing.T) {
 					return true
 				}
 				switch name := sel.Sel.Name; name {
-				case "lockAWSSSOOwner", "tryLockAWSSSOOwner", "lockAWSSSORenewal":
+				case "lockAWSSSOCapture", "lockAWSSSOCredential", "tryLockAWSSSOCredential", "lockAWSSSORenewal":
 					locks[fn.Name.Name] = append(locks[fn.Name.Name], c.Pos())
 				case "storeAWSSSOBlob", "persistRenewedAWSSSOBlob", "storeProviderSignIn", "storeCLISignIn":
 					calls = append(calls, call{fn.Name.Name, name, c.Pos()})
@@ -450,7 +450,7 @@ func TestStoreAWSSSOBlobCallersHoldTheOwnerLock(t *testing.T) {
 	}
 	for callee, want := range map[string][]string{
 		"storeAWSSSOBlob":          {"persistRenewedAWSSSOBlob", "storeProviderSignIn", "storeCLISignIn"},
-		"persistRenewedAWSSSOBlob": {"refreshAWSSSOBlob"},
+		"persistRenewedAWSSSOBlob": {"renewAWSSSOBlob"},
 		"storeProviderSignIn":      {"handleUploadSSOToken"},
 		"storeCLISignIn":           {"handleUploadSSOToken"},
 	} {
@@ -461,7 +461,7 @@ func TestStoreAWSSSOBlobCallersHoldTheOwnerLock(t *testing.T) {
 			}
 		}
 		if !sameSet(got, want) {
-			t.Errorf("%s is called from %v, want %v: a new caller must hold lockAWSSSOOwner and be added here", callee, got, want)
+			t.Errorf("%s is called from %v, want %v: a new caller must hold the credential's lock and be added here", callee, got, want)
 		}
 	}
 	// The callers of the two entry points take the lock before they call.
@@ -474,7 +474,7 @@ func TestStoreAWSSSOBlobCallersHoldTheOwnerLock(t *testing.T) {
 			locked = locked || p < c.pos
 		}
 		if !locked {
-			t.Errorf("%s calls %s before taking the owner lock", c.fn, c.callee)
+			t.Errorf("%s calls %s before taking the credential's lock", c.fn, c.callee)
 		}
 	}
 }

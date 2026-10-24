@@ -55,9 +55,14 @@ const (
 	// DevOps run token. Reserved for ha-l2.4, which takes it; named here so the
 	// order below is one list.
 	ADORunTokenLockClass int32 = 0x57415254 // ASCII "WART"
-	// AWSSSOLockClass is the AWS SSO refresh single-flight: obj = the
-	// secret-store namespace the credential lives in.
+	// AWSSSOLockClass is one person's AWS SSO capture and whole-person erase
+	// lock: obj = the secret-store namespace the credentials live in.
 	AWSSSOLockClass int32 = 0x57415753 // ASCII "WAWS"
+	// AWSSSOCredentialLockClass is one AWS SSO credential's renewal
+	// single-flight: obj = the namespace and the credential's secret name. The
+	// one class several keys of which may be held at once, taken in ascending
+	// Obj (the whole-person erase takes every credential's).
+	AWSSSOCredentialLockClass int32 = 0x57415343 // ASCII "WASC"
 	// ADOSignInLockClass is the Entra sign-in refresh single-flight (Azure
 	// DevOps and Azure AI Foundry): obj = person and provider row.
 	ADOSignInLockClass int32 = 0x5741444F // ASCII "WADO"
@@ -81,14 +86,16 @@ const (
 // held (the same key again is re-entrant and always allowed).
 //
 //	run operation, then the Azure DevOps run-token mint/revoke, then the AWS
-//	SSO refresh, then the Azure DevOps sign-in refresh (the order the credential
-//	erase takes its two), then the organisation MCP server key lock (held
+//	SSO person lock, then the AWS SSO credential locks (in ascending Obj), then
+//	the Azure DevOps sign-in refresh (the order the credential erase takes
+//	them), then the organisation MCP server key lock (held
 //	around a component save's row lock), then the document locks, and the
 //	audit sweep last.
 var LockOrder = []int32{
 	RunOpLockClass,
 	ADORunTokenLockClass,
 	AWSSSOLockClass,
+	AWSSSOCredentialLockClass,
 	ADOSignInLockClass,
 	ComponentKeyLockClass,
 	SiteConfigLockClass,
@@ -206,7 +213,8 @@ func checkLockOrder(held []LockKey, k LockKey) (reentrant bool, err error) {
 		return false, fmt.Errorf("%w: class %#x is not in LockOrder", ErrLockOrder, uint32(k.Class))
 	}
 	for _, h := range held {
-		if lockRank(h.Class) >= rank {
+		r := lockRank(h.Class)
+		if r > rank || r == rank && (k.Class != AWSSSOCredentialLockClass || h.Obj >= k.Obj) {
 			return false, fmt.Errorf("%w: %v taken while holding %v", ErrLockOrder, k, h)
 		}
 	}

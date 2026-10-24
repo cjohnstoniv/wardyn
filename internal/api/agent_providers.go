@@ -338,8 +338,11 @@ func (s *Server) handlePutAgentProviders(w http.ResponseWriter, r *http.Request)
 // provider each one defaults to.
 func agentProviderAuditData(block types.AgentProviders) map[string]any {
 	ids, disabled := []string{}, []string{}
-	var defaults []string
+	var defaults, signInsOff []string
 	for _, row := range block.Agents {
+		if row.DesktopSignInsOff {
+			signInsOff = append(signInsOff, row.ID)
+		}
 		ids = append(ids, row.ID)
 		if row.DefaultProvider != "" {
 			defaults = append(defaults, row.ID+":"+row.DefaultProvider)
@@ -356,6 +359,10 @@ func agentProviderAuditData(block types.AgentProviders) map[string]any {
 	if len(defaults) > 0 {
 		slices.Sort(defaults)
 		datum["defaults"] = defaults
+	}
+	if len(signInsOff) > 0 {
+		slices.Sort(signInsOff)
+		datum["desktop_sign_ins_off"] = signInsOff
 	}
 	return datum
 }

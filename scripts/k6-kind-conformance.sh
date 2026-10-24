@@ -525,9 +525,12 @@ EOF
   kubectl -n "$OWN_NS" scale "deployment/$DEPLOY" --replicas=0 >/dev/null
   [ -n "${P_DEPLOY:-}" ] && kubectl -n "$P_OWN_NS" scale "deployment/$P_DEPLOY" --replicas=0 >/dev/null
   kubectl -n "$OWN_NS" wait --for=delete pod -l "app.kubernetes.io/instance=$RELEASE" --timeout=120s >/dev/null 2>&1 || true
+  # A killed inproc run skips the Go cleanups: drop pod-ip-reuse-after-stop's IP reservation so a kept
+  # cluster never starts starved (Calico before v3.22 has no such resource; the case names that).
+  kubectl delete ipreservations.crd.projectcalico.org k6-only-ip --ignore-not-found >/dev/null 2>&1 || true
   # A 16-address Calico pool for the runs namespace, applied after runnerd's boot checks so the
-  # relay probe runs on the default pool. Calico reuses a freed address only after the
-  # rest of its block, so pod-ip-reuse-after-stop needs a small block to see a stopped proxy's IP again.
+  # relay probe runs on the default pool. pod-ip-reuse-after-stop reserves every address of it but the
+  # one the next proxy must receive (an IPReservation; test/k6 onlyIP), so the reuse is deterministic.
   kubectl apply -f - >/dev/null <<'POOL'
 apiVersion: crd.projectcalico.org/v1
 kind: IPPool

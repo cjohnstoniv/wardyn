@@ -121,14 +121,14 @@ function useCanvasSize() {
 /** Where the terminal shows right now: the cockpit tile or the focus overlay.
  *  It renders only an empty box and moves the run's one host element into it,
  *  so the terminal itself is never remounted by moving between the two. */
-function TerminalSlot({ host }: { host: HTMLElement }) {
+function TerminalSlot({ host, className = "flex min-h-0 flex-1 flex-col" }: { host: HTMLElement; className?: string }) {
   const attach = React.useCallback(
     (box: HTMLDivElement | null) => {
       if (box) box.appendChild(host);
     },
     [host],
   );
-  return <div ref={attach} className="flex min-h-0 flex-1 flex-col" />;
+  return <div ref={attach} className={className} />;
 }
 
 const sameLayout = (a: { widget: string; x: number; y: number; w: number; h: number }[], b: typeof a) =>
@@ -185,15 +185,34 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
     return el;
   }, [runId]);
   React.useEffect(() => () => host.remove(), [host]);
+  // The decision row gets the same persistent host, so entering or leaving focus mode moves its element instead of
+  // remounting LiveApprovals (which would reset "Show all N" and the in-flight Approve/Deny state).
+  const decisionHost = React.useMemo(() => {
+    const el = document.createElement("div");
+    el.className = "shrink-0";
+    el.dataset.runId = runId;
+    return el;
+  }, [runId]);
+  React.useEffect(() => () => decisionHost.remove(), [decisionHost]);
   const slotCtx = React.useMemo(
-    () => ({ ...ctx, terminalPane: <TerminalSlot host={host} /> }),
-    [ctx, host],
+    () => ({
+      ...ctx,
+      terminalPane: <TerminalSlot host={host} />,
+      decisionPane: <TerminalSlot host={decisionHost} className="shrink-0" />,
+    }),
+    [ctx, host, decisionHost],
   );
   const terminalPortal = createPortal(
     <ErrorBoundary region={RUN_WIDGETS.terminal.label} resetKey={runId}>
       {ctx.terminalPane}
     </ErrorBoundary>,
     host,
+  );
+  const decisionPortal = createPortal(
+    <ErrorBoundary region={RUN_WIDGETS.terminal.label} resetKey={runId}>
+      {ctx.decisionPane}
+    </ErrorBoundary>,
+    decisionHost,
   );
 
   // A row is one twelfth of the visible pane, so a preset that adds up to
@@ -283,6 +302,7 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
     return (
       <>
         {terminalPortal}
+        {decisionPortal}
         <FocusMode ctx={slotCtx} onExit={exitFocus} />
       </>
     );
@@ -291,6 +311,7 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
   return (
     <>
       {terminalPortal}
+      {decisionPortal}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <div
           ref={ref}

@@ -66,8 +66,8 @@ export const RECORDING_REPLAY = {
   REASON: "Reason",
   WRITTEN_BY: "Written by",
   WRITTEN_BY_VALUE: "Wardyn, not the desktop",
-  // Not on the boards: the console has no screen player yet.
-  PLAYER_PENDING: "Download the recording to watch it in noVNC's playback page.",
+  // Not on the boards: the decoder could not load, so only the download is left.
+  SCREEN_FAILED: "The screen could not be drawn here. Download the recording to watch it in noVNC's playback page.",
   // Not on the boards: the picker's row for a desktop recording.
   SESSION_OPTION: (ended: string) => `Screen and actions · ended ${ended}`,
   LOADING: "Loading the captured session…",
@@ -76,6 +76,41 @@ export const RECORDING_REPLAY = {
   EMPTY_TITLE: "No recording available",
   // M7-States 8, with the run's policy in the walls' place.
   OFF_BY_POLICY: "This run's policy set recording to Off. The audit log still shows what happened.",
+  // The player (M7-Replay).
+  SKIP_GAP: "Skip the gap",
+  SHOW_GAP: "Show it on the timeline",
+  SPEED: "Playback speed",
+  LEGEND_ACTION: "Action",
+  LEGEND_BLOCKED: "Clipboard or file blocked",
+  LEGEND_PAUSED: "Paused",
+  ACTION_LOG: "Action log",
+  ACTION_LOG_HINT: "Click a row to jump there",
+  SHOWING: (n: number, m: number) => `Showing ${n} of ${m} rows`,
+  OPEN_AUDIT: "Open in Audit",
+  ACT_PASTE: "pasted into the desktop",
+  ACT_COPY_TRIED: "tried to copy out of the desktop",
+  ACT_UPLOAD: "uploaded a file to the desktop",
+  ACT_PAUSED: "paused the screen recording",
+  ACT_PAUSED_DETAIL: (reason: string) => `reason: ${reason}`,
+  ACT_RESUMED: "resumed the screen recording",
+  ACT_RESUMED_DETAIL: (d: string) => `gap ${d}`,
+  CHAIN_OK: "Chain intact",
+  CHAIN_RANGE: (first: number, last: number) =>
+    `Entries ${first.toLocaleString("en-US")} to ${last.toLocaleString("en-US")} are chained and none is missing.`,
+  ENTRY_AT: (seq: number, time: string) => `Entry ${seq.toLocaleString("en-US")} · ${time}`,
+  // Not on the boards: the other directions and outcomes of the same rows.
+  ACT_PASTE_TRIED: "tried to paste into the desktop",
+  ACT_COPY: "copied out of the desktop",
+  ACT_UPLOAD_TRIED: "tried to upload a file to the desktop",
+  ACT_DOWNLOAD: "downloaded a file from the desktop",
+  ACT_DOWNLOAD_TRIED: "tried to download a file from the desktop",
+  // Not on the boards: the controls' names, and the chain check's other answers.
+  PLAY: "Play",
+  PAUSE: "Pause",
+  CHAIN_CHECKING: "Checking the chain…",
+  CHAIN_BROKEN: "Chain broken",
+  CHAIN_BROKEN_BODY: (seq: number, reason: string) => `Entry ${seq.toLocaleString("en-US")} does not verify: ${reason}.`,
+  CHAIN_UNAVAILABLE: "The chain could not be checked for this recording.",
 } as const;
 
 /** "2 min 14 s", the boards' duration form. */

@@ -149,6 +149,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_RUNNER` | string | `none` | runner substrate: `none` or a registered confinement substrate (`docker` in `-tags docker` builds, `k8s` in `-tags k8s` builds — both may be registered in a `-tags docker,k8s` build; unknown/uncompiled names fail closed at boot) (flag `-runner`) |
 | `WARDYN_INTERNAL_NETWORK` | string | `wardyn-internal` | the docker network the runner attaches each run's proxy sidecar to; must match the compose control-plane network name (both derive from the compose namespace) or the sidecar lands on the wrong bridge (or `runnerd.json` field `internal_network`) |
 | `WARDYN_RELAY_LISTEN` | string | (unset: probed) | **`wardyn-runnerd serve` and `setup`** (flag `--relay-listen`): the run relay's address. Only loopback, the native Docker bridge's gateway or Rancher Desktop's `veth-rd-wsl` address (`admitRelayBind`); setup writes it on a VM-backed engine (or `runnerd.json` field `relay_listen`) |
+| `WARDYN_LOCAL_MODEL_PORT` | string | (unset: none) | **`wardyn-runnerd serve`** (flag `--local-model-port`): the port, or comma-separated ports, of a model server on this computer that runs here may use when the organisation allows it (`local.allow_on_laptop_runners`); unset, none may (or `runnerd.json` field `local_model_port`) |
 | `WARDYN_RELAY_HOST_TARGET` | string | (unset: probed) | **`wardyn-runnerd serve` and `setup`** (flag `--relay-host-target`): what a run's proxy reaches the relay at, `host-gateway` or an IP (`parseRelayTarget`); setup writes it on a VM-backed engine (or `runnerd.json` field `relay_host_target`) |
 | `WARDYN_RELAY_ALLOWED_SOURCES` | string (CIDR list) | (unset: every source) | **`wardyn-runnerd serve`, Docker substrate**: comma-separated prefixes or addresses; a local relay connection from outside them is closed unread. Narrows only. A list that refuses a run's proxy cuts that run off from decisions, approvals and token renewal; see [Requirements](runner-registration.md#requirements) |
 | `WARDYN_ORG_CA_FILE` | string (path) | (unset) | **`wardyn-runnerd serve`, `setup` and `register`** (flag `--org-ca-file`, profile key `OrgCAFile`): roots for the runner's own organisation connection only, never a sandbox or run proxy; refused when writable by others, expired or not a CA (or `runnerd.json` field `org_ca_file`). (lock: `lock_security_settings`) |
@@ -160,7 +161,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_RUNNERD_HARD_DENY_CIDRS` | CIDR list | (unset) | **`serve --substrate k8s`**, chart-set: further in-cluster CIDRs (pod and Service ranges) every proxy hard-denies |
 | `WARDYN_RUNNERD_POD_SELECTOR` | JSON object | (required) | **`serve --substrate k8s`**, chart-set: runnerd's own pod labels, which each run's proxy NetworkPolicy admits for the relay and sink ports |
 | `WARDYN_RUNNERD_ARCH` | `amd64` or `arm64` | (required for k8s) | **`register`, `serve --substrate k8s`**, `--arch`'s twin, chart `sandbox.arch`: run pods get this `kubernetes.io/arch` node selector and the runner reports it. Another selector arch refuses boot; Docker refuses it. Mixed clusters install one release per arch |
-| `WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY` | bool | off | **`wardynd` and `wardyn-runnerd`, Docker substrate**: each run's proxy serves only callers on the run's own network; others are closed before a byte is read |
+| `WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY` | bool | on | **`wardynd` and `wardyn-runnerd`, Docker substrate**: each run's proxy serves only callers on the run's own network; others are closed before a byte is read. Proven on Docker; not tested on Podman |
 | `WARDYN_DOCKER_RUN_SUBNET_POOL` | IPv4 CIDR | (unset) | **`wardynd` and `wardyn-runnerd`, Docker substrate**: the range each run's network takes its own small subnet from, so runs stop using up the daemon's `default-address-pools`. Unset, the daemon picks each subnet. A full range refuses the run, naming this setting. [Details](OPERATIONS.md#docker-host-one-subnet-per-run) |
 | `WARDYN_DOCKER_RUN_SUBNET_SIZE` | int | `28` | **same**: the prefix length of each run's subnet in `WARDYN_DOCKER_RUN_SUBNET_POOL`, from the range's own length to `29`. Set without the pool, it refuses boot |
 | `WARDYN_ALLOW_UNENFORCEABLE_CAPS` | bool | off | escape hatch: allow a run to start on a host where the resource caps (memory/pids/cpu) can't actually be enforced. Off by default, the gate fails closed; it applies to sandbox launches only. [Details](#wardyn_allow_unenforceable_caps) |
@@ -243,7 +244,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_OIDC_ROLE_MAP` | CSV (`value=role` pairs) | (unset = role derivation off unless a console-managed mapping actually contributes to the merged map) | Maps an Entra App Role, `groups` claim entry or email to `admin`, `security_admin`, `user` or a user type id (flag `-oidc-role-map`); the only way to `security_admin`; a group deny against a partial snapshot fails closed. [Details](#wardyn_oidc_role_map) |
 | `WARDYN_OIDC_DEFAULT_ROLE` | string (`admin`\|`user`\|a user type id; `security_admin` is refused at boot; the pre-0.8 `member` has been refused at boot since 0.9) | (unset = **deny the login**, this applies once the merged map — chart or console — is non-empty) | Role assigned when a signed-in human's roles, groups or email matched none of the merged map's entries; unset denies that login (flag `-oidc-default-role`). Not applied when the IdP withheld the claims. [Details](#wardyn_oidc_default_role) |
 | `WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS` | bool | `false` | Opt-in for an email-shaped value on a console People-step role mapping only; refused by default (`EMAIL_KEY_REFUSED`, [`internal/api/access.go`](../internal/api/access.go)) (flag `-oidc-allow-email-mappings`). [Details](#wardyn_oidc_allow_email_mappings) |
-| `WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL` | bool | `false` | an allow grant written for a caller's email matches only when sign-in vouches for the email (flag `-capability-grants-verified-email`); deny grants match it either way. [Details](#wardyn_capability_grants_verified_email) |
+| `WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL` | bool | `true` | an allow grant written for a caller's email matches only when sign-in vouches for the email (flag `-capability-grants-verified-email`); deny grants match it either way. [Details](#wardyn_capability_grants_verified_email) |
 | `WARDYN_DIRECTORY_PROVIDER` | string (`entra`) | (unset = **off**) | Identity-directory connector behind the console's "who" autocomplete; unset is the whole feature off. Setting it grants wardynd read of the whole directory (flag `-directory-provider`). [Details](#wardyn_directory_provider) |
 | `WARDYN_DIRECTORY_TENANT` | string | (unset = derived from `WARDYN_OIDC_ISSUER`) | Entra tenant id or verified domain for the connector; unset, it is derived from a commercial-cloud issuer such as `https://login.microsoftonline.com/<tenant>/v2.0`, and any other issuer is a boot refusal (flag `-directory-tenant`). [Details](#wardyn_directory_tenant) |
 | `WARDYN_DIRECTORY_CLIENT_ID` | string | (unset = reuses `WARDYN_OIDC_CLIENT_ID`) | Client id of a dedicated, least-privilege app registration for the directory read; the three directory vars are set together or not at all (flag `-directory-client-id`). [Details](#wardyn_directory_client_id) |
@@ -294,8 +295,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_CAPABILITY_SECOND_HUMAN` | bool | (unset) | four-eyes on Azure DevOps capability escalations: the human who DECIDES one must not be the human who created the run. **Local mode REFUSES it**, and the `admin-token` principal BYPASSES it. [Details](#wardyn_capability_second_human) |
 | `WARDYN_GOVERNANCE_SECOND_HUMAN` | bool | (unset) | four-eyes on governance writes: a human's write to a governance profile, a capability grant, a key-domain assignment or `local_credential_delivery` is stored as a pending change. A second, distinct human must approve it. [Details](#wardyn_governance_second_human) |
 | `WARDYN_GOVERNANCE_CHANGE_TTL` | duration | `72h` | how long a governance change held for a second human waits for approval (flag `-governance-change-ttl`); past it the change reads as `expired` and cannot be approved. [Details](#wardyn_governance_change_ttl) |
-| `WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY` | bool | `false` | `PUT /governance/units/{id}` updates an existing profile only; an id no profile holds answers `404` (flag `-governance-unit-put-existing-only`). [Details](#wardyn_governance_unit_put_existing_only) |
-| `WARDYN_EGRESS_HOST_PORT_GRANTS_INERT` | bool | `false` | a stored `egress_host` allow grant whose value carries a port is inert: marked so and never matched (flag `-egress-host-port-grants-inert`). [Details](#wardyn_egress_host_port_grants_inert) |
+| `WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY` | bool | `true` | `PUT /governance/units/{id}` updates an existing profile only; an id no profile holds answers `404` (flag `-governance-unit-put-existing-only`). [Details](#wardyn_governance_unit_put_existing_only) |
+| `WARDYN_EGRESS_HOST_PORT_GRANTS_INERT` | bool | `true` | a stored `egress_host` allow grant whose value carries a port is inert: marked so and never matched (flag `-egress-host-port-grants-inert`). [Details](#wardyn_egress_host_port_grants_inert) |
 | `WARDYN_HA` | bool | `false` | multi-replica mode (flag `-ha`): skip the single-instance lock so several wardynd replicas can serve one database; refused at boot unless the runner is the Kubernetes substrate. [Details](#wardyn_ha) |
 | `WARDYN_GOVERN_ADMIN_RUNS` | bool | (unset) | constrained-admin mode: govern every run an SSO admin or an admin-role personal API token launches, like a member's (flag `-govern-admin-runs`). **With OIDC unset the switch binds nobody**, and boot WARNs it (`warnGovernAdminRunsUnbound`, [`cmd/wardynd/boot_posture.go`](../cmd/wardynd/boot_posture.go)). [Details](#wardyn_govern_admin_runs) |
 | `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT` | CSV | (unset) | the lanes left ungoverned under `WARDYN_GOVERN_ADMIN_RUNS`; the only value is `recording` (flag `-govern-admin-runs-exempt`). [Details](#wardyn_govern_admin_runs_exempt) |
@@ -339,6 +340,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_OIDC_LOGIN_HINT` | bool | `false` | a browser that signed in sends that account as `login_hint` on its next sign-in (flag `-oidc-login-hint`). `false` changes nothing. [Details](#wardyn_oidc_login_hint) |
 | `WARDYN_OIDC_BROWSER_SESSION_COOKIE` | bool | `false` | sends the console session cookie without an expiry, so the browser drops it when it closes (flag `-oidc-browser-session-cookie`). `false` changes nothing. [Details](#wardyn_oidc_browser_session_cookie) |
 | `WARDYN_OIDC_BACKCHANNEL_LOGOUT` | bool | `false` | serves `POST /auth/backchannel-logout`, where the provider's signed logout token ends that person's console sessions (flag `-oidc-backchannel-logout`). `false` changes nothing. [Details](#wardyn_oidc_backchannel_logout) |
+| `WARDYN_OIDC_FRONTCHANNEL_LOGOUT` | bool | `false` | records each sign-in's provider `sid` and serves `GET /auth/frontchannel-logout`, where the provider's `iss` and `sid` end that person's console sessions (flag `-oidc-frontchannel-logout`). `false` changes nothing. [Details](#wardyn_oidc_frontchannel_logout) |
 | `WARDYN_UI_SANDBOX_LISTEN` | string | (unset) | UI-sandbox gateway listen address, e.g. `:8081` (flag `-ui-sandbox-listen`); empty means off, with no listener. It must differ from `WARDYN_LISTEN` and boot refuses if it does not. [Details](#wardyn_ui_sandbox_listen) |
 | `WARDYN_UI_SANDBOX_ADVERTISE` | string | (unset) | externally-reachable base URL of that gateway, e.g. `https://wardyn-ui.example.com` (flag `-ui-sandbox-advertise`); purely advisory copy, the gateway binds `WARDYN_UI_SANDBOX_LISTEN`, not this; unset logs a boot warning. [Details](#wardyn_ui_sandbox_advertise) |
 | `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` | string | (unset) | optional per-run origin for the UI-sandbox gateway, e.g. `https://run-{run}.ui.example.com` (flag `-ui-sandbox-origin-template`); needs wildcard DNS and a wildcard certificate. [Details](#wardyn_ui_sandbox_origin_template) |
@@ -1232,10 +1234,10 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 ### `WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL`
 
-- Off (the default): a capability allow grant whose subject is the caller's email matches as before, and each such match is logged at INFO as one the switch would stop.
-- On: that grant matches only when sign-in vouches for the email: `WARDYN_OIDC_EMAIL_DOMAINS` or `WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED` is set, or `WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS` is on. A grant on the caller's sub or group is unaffected.
+- On (the default since 0.10.0): a capability allow grant whose subject is the caller's email matches only when sign-in vouches for the email: `WARDYN_OIDC_EMAIL_DOMAINS` or `WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED` is set, or `WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS` is on. A grant on the caller's sub, a group, a user type or everyone is unaffected, and sign-in itself is unchanged.
+- An Entra ID token usually omits `email_verified`, so on Entra such email grants stop granting. Boot WARNs with how many stored allow grants are keyed to an email while sign-in does not vouch for it.
 - A deny grant on the email binds either way.
-- Before you turn it on, read the INFO lines and re-key each named grant to the person's sub or a group (flag `-capability-grants-verified-email`).
+- Remedy: re-grant each to the person's user id (sub) or a group, or set it to `false` (flag `-capability-grants-verified-email=false`), which keeps the match and logs each one at INFO.
 
 ### `WARDYN_DIRECTORY_PROVIDER`
 
@@ -1535,16 +1537,16 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 ### `WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY`
 
-- Off (the default): `PUT /api/v1/governance/units/{id}` naming an id no profile holds creates one there. A direct write is logged at INFO as a create the switch would refuse; one held for a second person is not.
-- On: that PUT answers `404 governance_unit_not_found`; create a profile with `POST /api/v1/governance/units`, which mints the id (flag `-governance-unit-put-existing-only`).
+- On (the default since 0.10.0): `PUT /api/v1/governance/units/{id}` naming an id no profile holds answers `404 governance_unit_not_found`; create a profile with `POST /api/v1/governance/units`, which mints the id.
+- Off (`false`): that PUT creates a profile at the id. A direct write is logged at INFO as a create the switch would refuse; one held for a second person is not (flag `-governance-unit-put-existing-only=false`).
 - Renamed in 0.10.0 from `WARDYN_GOVERNANCE_PROFILE_PUT_EXISTING_ONLY`; wardynd refuses to boot while the old name is set, naming this one.
 
 ### `WARDYN_EGRESS_HOST_PORT_GRANTS_INERT`
 
-- The write boundary stores an `egress_host` grant's host alone; an older row may still carry `host:port`, and the resolver matches it on the host for every port.
-- Off (the default): such allow rows match as before, and listing the grants WARNs with each one and the remedy.
-- On: such an allow row is inert: `GET /api/v1/permissions` marks it `inert` and it grants nothing. A deny row with a port keeps binding.
-- Before you turn it on, re-save each WARNed row through `POST /api/v1/permissions/grants`, then delete the old row (flag `-egress-host-port-grants-inert`).
+- The write boundary stores an `egress_host` grant's host alone; an older row may still carry `host:port`, which, with this switch off, the resolver matches on the host for every port.
+- On (the default since 0.10.0): such an allow row is inert: `GET /api/v1/permissions` marks it `inert` and it grants nothing. A deny row with a port keeps binding. Boot logs how many rows went inert.
+- Off (`false`): such allow rows match as before, and listing the grants WARNs with each one and the remedy.
+- To keep a row working, re-save it through `POST /api/v1/permissions/grants`, which stores the host alone, then delete the old row (flag `-egress-host-port-grants-inert=false` turns the switch off).
 
 ### `WARDYN_HA`
 
@@ -1878,7 +1880,21 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Past five tokens that fail to verify, then one a second per process, a POST gets `429` before verification, so forged tokens cannot drive unbounded key fetches.
   - While that lasts, the provider's genuine logout gets `429` too; sign-out and admin revocation still cut sessions.
 - Each cut is a `session.revoke` row with `source` `idp_back_channel_logout`.
-- Front-channel logout, which Entra ID offers, is not supported, and a person set up by Entra object id before first sign-in is not reached by `sub`.
+- A person set up by Entra object id before first sign-in is not reached by `sub`; Entra ID offers front-channel logout instead ([below](#wardyn_oidc_frontchannel_logout)).
+
+### `WARDYN_OIDC_FRONTCHANNEL_LOGOUT`
+
+- Serves `GET /auth/frontchannel-logout` for OpenID Connect Front-Channel Logout (flag `-oidc-frontchannel-logout`); off, the route does not exist and no `sid` is recorded.
+- Register `https://<your Wardyn host>/auth/frontchannel-logout` as the client's front-channel logout URL, with `frontchannel_logout_session_required`, so the provider sends `iss` and `sid`.
+- While on, each sign-in records its ID token's `sid` against the person in `oidc_session_sids`, kept until that session ends.
+- This issuer and a recorded `sid` end that person's console sessions as their sign-out does, then the row is deleted; a failed cut keeps it, so the provider's reloaded sign-out page retries. Tokens, keys and runs keep working.
+- The `sid` finds the session, not the `SameSite=Lax` cookie, which a browser never sends to the provider's cross-site frame; third-party cookie blocking changes nothing.
+- Only the issuer's origin may frame its answers; every other route keeps `frame-ancestors 'none'`.
+- It needs the person's browser to load the provider's sign-out page, and a sign-in with a `sid`.
+- No `iss` or `sid`, or another issuer, gets `400`; an unknown `sid` gets `200` and ends nothing; a failed lookup or cut gets `503`; all `no-store`.
+- The `sid` is the same in every application's ID token for that provider session, so any other application the person is signed into there can end their Wardyn sessions with it.
+- Unsigned, a forged request can only sign someone out. Past five requests that end nothing, then one a second per process, it gets `429`, the provider's genuine one too.
+- Each cut is a `session.revoke` row with `source` `idp_front_channel_logout`.
 
 ### `WARDYN_OIDC_BROWSER_SESSION_COOKIE`
 
@@ -2330,6 +2346,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_MCP_SERVERS_JSON` 🔒 | string (JSON) | (unset) | a `codex-cli` run's MCP servers as `{"<server key>":"<broker URL>"}`, set only when a server is on for Codex CLI; each URL carries Codex's own broker token, so it rides the secret env (`dispatchMCP`, [`internal/api/run_mcp.go`](../internal/api/run_mcp.go)). [Details](#wardyn_mcp_servers_json) |
 | `WARDYN_MCP_STDIO_TOML` | string (TOML) | (unset) | a `codex-cli` run's MCP servers that run in the sandbox, as the `[mcp_servers.<key>]` tables its agent-run adds to `config.toml`; set only when such a server is on for Codex CLI ([`WARDYN_MCP_LOCAL_SERVERS`](#wardyn_mcp_local_servers)). No credential, so plain env (`codexLocalTOML`, [`internal/api/run_mcp.go`](../internal/api/run_mcp.go)). [Details](#wardyn_mcp_stdio_toml) |
 | `WARDYN_TOOL_APPROVALS` | string | (unset) | `hold` routes an AUTONOMOUS (non-interactive) Claude Code run's own tool calls to a Wardyn approval instead of running unsupervised; unset/`auto` is today's `--dangerously-skip-permissions` behavior. Never set for an interactive run or for codex-cli. [Details](#wardyn_tool_approvals) |
+| `WARDYN_HARNESS_SANDBOX` | string | (unset) | `read-only` / `workspace-write`: a background `codex-cli` run's `codex exec` runs in Codex's own sandbox in that mode, after a check that it starts; set from the run's `harness_inner_walls`, beside `/etc/codex/requirements.toml`. Unset is today's launch. |
 | `WARDYN_TOOLGATE_CREDENTIAL` | secret | (unset) | The started harness's approval credential (two or more harnesses), sent by `wardyn-toolgate` as a Bearer. Not container env: the file `/run/wardyn/secrets/wardyn-toolgate-<harness>` its launch reads; Docker 0400 agent uid, Kubernetes 0440 fsGroup 1000 from the run Secret. Never set by hand |
 | `WARDYN_AUTONOMY_LEVEL` | string | (unset) | the run's RESOLVED autonomy level (`L0` attended, `L1` gated, `L2` unattended, `L3`), frozen on the run row by the launch gate. An ANNOUNCEMENT, never the mechanism. [Details](#wardyn_autonomy_level) |
 | `WARDYN_RECORDING` | bool | (unset) | `1` tells the sandbox that session recording is configured, stamped into the agent container's env by the docker driver when its Record config is on. [Details](#wardyn_recording) |

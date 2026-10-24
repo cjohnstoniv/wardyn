@@ -456,10 +456,10 @@ func TestCapAllowedMatrix(t *testing.T) {
 			ctx:    memberCtx(nil), kind: capEgressHost, value: "pypi.org", want: true,
 		},
 		{
-			name:   "allow on the caller's email — the identity an admin can actually write down",
+			name:   "allow on the caller's email grants nothing by default: sign-in does not vouch for it",
 			grants: []types.CapabilityGrant{grant(types.CapabilitySubjectUser, capEmail, capEgressHost, "pypi.org", allow)},
 			enf:    map[string]bool{capEgressHost: true},
-			ctx:    memberCtx(nil), kind: capEgressHost, value: "pypi.org", want: true,
+			ctx:    memberCtx(nil), kind: capEgressHost, value: "pypi.org", want: false,
 		},
 		{
 			name:   "allow on a group from the login snapshot",
@@ -499,7 +499,7 @@ func TestCapAllowedMatrix(t *testing.T) {
 		{
 			name: "a USER allow does not override a GROUP deny — there is no user-wins rule",
 			grants: []types.CapabilityGrant{
-				grant(types.CapabilitySubjectUser, capEmail, capEgressHost, "pypi.org", allow),
+				grant(types.CapabilitySubjectUser, capSub, capEgressHost, "pypi.org", allow),
 				grant(types.CapabilitySubjectGroup, "eng", capEgressHost, "pypi.org", deny),
 			},
 			enf: map[string]bool{capEgressHost: true},
@@ -538,10 +538,10 @@ func TestCapAllowedMatrix(t *testing.T) {
 			ctx:    memberCtx(nil), kind: capEgressHost, value: "api.example.com:443", want: true,
 		},
 		{
-			name:   "egress_host: a port on the GRANT does not dodge the match either",
+			name:   "egress_host: an allow GRANT stored with a port is inert by default",
 			grants: []types.CapabilityGrant{grant(types.CapabilitySubjectAll, "", capEgressHost, "pypi.org:443", allow)},
 			enf:    map[string]bool{capEgressHost: true},
-			ctx:    memberCtx(nil), kind: capEgressHost, value: "pypi.org", want: true,
+			ctx:    memberCtx(nil), kind: capEgressHost, value: "pypi.org", want: false,
 		},
 		{
 			name:   "egress_host: a suffix grant does not cover an unrelated host",
@@ -594,7 +594,7 @@ func TestCapAllowedMatrix(t *testing.T) {
 		},
 		{
 			name:   "...but their USER grants still work, which is the escape hatch to tell them about",
-			grants: []types.CapabilityGrant{grant(types.CapabilitySubjectUser, capEmail, capEgressHost, "pypi.org", allow)},
+			grants: []types.CapabilityGrant{grant(types.CapabilitySubjectUser, capSub, capEgressHost, "pypi.org", allow)},
 			enf:    map[string]bool{capEgressHost: true},
 			ctx:    memberCtx(nil), kind: capEgressHost, value: "pypi.org", want: true,
 		},

@@ -63,7 +63,8 @@
 # docs/operations/governance-writes.md 3513 = ours 3478 + theirs 3206 - base 3171 at the 0.10 W4c merge of W4f a55a58e89 into the W4X train.
 # docs/operations/api-tokens.md 6034 = ours 5948 + theirs 6034 - base 5948 at the 0.10 W4c merge of W4f a55a58e89 into the W4X train.
 # docs/operations/denials.md 5525 = ours 5520 + theirs 5497 - base 5492 at the 0.10 W4c merge of W4f a55a58e89 into the W4X train.
-docs/operations/who-gets-in.md=1938 share=35
+# IDP-FRONT: who-gets-in.md 1952 adds 14 over 1938 (the front-channel logout row), measured.
+docs/operations/who-gets-in.md=1952 share=35
 # docs/operations/admin-only-writes.md 3173 measured after F-1511-1510 merge.
 # docs/operations/admin-only-writes.md 3182 measured after the F-1508-author merge (human_author; four-eyes on service-identity create and sponsor change).
 # docs/operations/admin-only-writes.md 3299 adds 117 over 3182 (0.9 F-1508-M3): the invitation, service-identity and token-move tier rows.
@@ -168,7 +169,8 @@ docs/operations/api-tokens.md=6034 share=35 # +86 (lane SI-DOCS), measured
 # docs/operations/denials.md 5331 measured (0.10 BOUNDARY): the boundary provenance layer.
 # docs/operations/denials.md 5527 adds 35 over 5492, measured (0.10 unit admins): the unit_scope_denied row.
 # docs/operations/denials.md 5560 = ours 5527 + theirs 5525 - base 5492 at the 0.10 UNIT-ADMIN merge of RESTRICT-PIN 35c385de1.
-docs/operations/denials.md=5560 share=35
+# docs/operations/denials.md 5579 adds 19 over 5560, measured (0.10 MDL-LAPTOP, #2957): runner_local_model_port_not_allowed.
+docs/operations/denials.md=5579 share=35
 # Round 1: docs/operations/who-gets-in.md measured 1453 after the split banner and heading cleanup.
 # Round 1: docs/operations/admin-only-writes.md measured 2869 after the split banner and heading cleanup.
 # Round 1: docs/operations/three-roles.md measured 4012 after the split banner and heading cleanup.

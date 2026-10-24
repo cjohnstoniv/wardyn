@@ -94,11 +94,11 @@ func (b blockingRevisions) For(owner string) secretstore.Store {
 	return blockingRevisions{b.Store.For(owner)}
 }
 
-// heldElsewhere holds the owner's renewal lock in this process, as another
+// heldElsewhere holds the credential's renewal lock in this process, as another
 // flight would, until the test ends.
 func heldElsewhere(t *testing.T, srv *Server) {
 	t.Helper()
-	_, unlock, err := srv.lockAWSSSOOwner(context.Background(), createRenewalScope().owner)
+	_, unlock, err := srv.lockAWSSSOCredential(context.Background(), createRenewalScope())
 	if err != nil {
 		t.Fatal(err)
 	}

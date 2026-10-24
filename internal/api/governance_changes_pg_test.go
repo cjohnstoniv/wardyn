@@ -284,7 +284,9 @@ func TestPG_GovernanceChanges_RepeatCreateNamesTheHeldOne(t *testing.T) {
 	if matches == nil || !*matches {
 		t.Errorf("a repeat of the same create: pending_change_matches = %v, want true", matches)
 	}
-	// A create at a caller-chosen id is the same name, so the same held create, with other content.
+	// A create at a caller-chosen id is the same name, so the same held create, with other content. Such a
+	// create exists only with WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY set off.
+	e.srv.cfg.GovernanceUnitPutCreates = true
 	if id := heldBy(e.call(e.carol, http.MethodPut, "/api/v1/governance/units/"+uuid.NewString(), profileBody("repeat-new", "pypi.org"))); id != first.ID {
 		t.Errorf("a create by PUT of the same name names %s, want %s", id, first.ID)
 	}
