@@ -7,10 +7,23 @@
 // two macOS VMs, the host memory budget and a worst-case disk reservation,
 // and frees a slot only once the VM is verifiably gone.
 //
-// Layout: one directory (the runner package's postinstall makes
-// /Users/Shared/Wardyn/macos-vm-admission, mode 1777: world-writable and
-// sticky, like /tmp) holding a root-owned admission.lock (0644) and one file
-// per entry, e-<random>.json, mode 0644: readable by every login's runner so
+// Layout (the runner package's postinstall makes all three, as root):
+//
+//	/Users/Shared/Wardyn/                     root:wheel 0755
+//	/Users/Shared/Wardyn/admission.lock       root:wheel 0644
+//	/Users/Shared/Wardyn/macos-vm-admission/  root:wheel 1777 (sticky, like /tmp)
+//
+// The lock sits outside the world-writable entries directory, so no login
+// can plant, rename or unlink it. A runner opens it walking from / one
+// component at a time (openat with O_NOFOLLOW, then fstat): every directory
+// on the way must be root-owned and either not group- or other-writable or
+// sticky, the lock's own directory must not be group- or other-writable at
+// all, and the lock must be a root-owned regular file that is not group- or
+// other-writable. After taking the flock it checks the path still names the
+// file it locked. Anything else is refused with the fix named, so a
+// directory a user made before the install fails closed. The entries
+// directory must be root-owned and sticky. It holds one file per entry,
+// e-<random>.json, mode 0644: readable by every login's runner so
 // all of them count it, writable only by the login that created it, and
 // (sticky bit) removable only by it. Every write goes to an exclusive temp
 // file in the same dir and is renamed into place, so a reader never sees half
@@ -204,7 +217,11 @@ const HelperProcess = "wardyn-macvm"
 const OfferRecompute = 15 * time.Second
 
 // DefaultDir is the ledger directory the runner package's postinstall makes.
+// Its lock is admission.lock in its parent directory.
 const DefaultDir = "/Users/Shared/Wardyn/macos-vm-admission"
+
+// DefaultLockPath is DefaultDir's lock.
+const DefaultLockPath = "/Users/Shared/Wardyn/admission.lock"
 
 const (
 	lockFile   = "admission.lock"
@@ -228,12 +245,14 @@ type Config struct {
 	Host          Host
 	// FileOwner returns a ledger file's owner uid; nil reads it from the stat.
 	FileOwner func(os.FileInfo) int
-	// AllowUnstickyDir skips the check that Dir is sticky (tests only).
-	AllowUnstickyDir bool
+	// Fstat, if set, replaces fstat(2) in the lock and directory checks;
+	// name is the path the descriptor was opened at (tests).
+	Fstat func(fd int, name string) (unix.Stat_t, error)
 	// LockWait overrides LockWait (tests).
 	LockWait time.Duration
 
-	created func(name string) // tests: told of each file this ledger creates
+	created    func(name string) // tests: told of each file this ledger creates
+	afterFlock func()            // tests: runs once the flock is held
 }
 
 // Ledger is one runner's handle on the host ledger.
@@ -256,17 +275,17 @@ func Open(c Config) (*Ledger, error) {
 	if c.LockWait == 0 {
 		c.LockWait = LockWait
 	}
-	fi, err := os.Stat(c.Dir)
+	c.Dir = filepath.Clean(c.Dir)
+	l := &Ledger{c: c}
+	if err := l.checkEntriesDir(); err != nil {
+		return nil, err
+	}
+	f, err := l.openLock()
 	if err != nil {
-		return nil, fmt.Errorf("admission: the macOS VM ledger is missing (the runner package creates it): %w", err)
+		return nil, err
 	}
-	if !fi.IsDir() || (!c.AllowUnstickyDir && fi.Mode()&os.ModeSticky == 0) {
-		return nil, fmt.Errorf("admission: %s must be a sticky directory (mode 1777)", c.Dir)
-	}
-	if _, err := os.Stat(filepath.Join(c.Dir, lockFile)); err != nil {
-		return nil, fmt.Errorf("admission: %s is missing; reinstall the Wardyn runner package, whose installer creates it (a runner never does): %w", filepath.Join(c.Dir, lockFile), err)
-	}
-	return &Ledger{c: c}, nil
+	_ = f.Close()
+	return l, nil
 }
 
 func statOwner(fi os.FileInfo) int {
@@ -315,30 +334,6 @@ type view struct {
 type tomb struct {
 	name  string
 	owner int
-}
-
-func (l *Ledger) withLock(fn func() error) error {
-	f, err := os.Open(filepath.Join(l.c.Dir, lockFile))
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	deadline := time.Now().Add(l.c.LockWait)
-	for {
-		err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB)
-		if err == nil {
-			break
-		}
-		if !errors.Is(err, unix.EWOULDBLOCK) {
-			return err
-		}
-		if time.Now().After(deadline) {
-			return ErrBusy
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	defer unix.Flock(int(f.Fd()), unix.LOCK_UN)
-	return fn()
 }
 
 // maxEntryFile bounds an entry file a reader parses.
@@ -411,57 +406,6 @@ func readEntry(path string, fi os.FileInfo) (Entry, bool) {
 		return e, false
 	}
 	return e, true
-}
-
-func (v *view) alive(pid int, start int64) bool {
-	for _, p := range v.procs {
-		if p.PID == pid && p.Start == start {
-			return true
-		}
-	}
-	return false
-}
-
-// vzCount is how many Virtualization processes uid has.
-func (v *view) vzCount(uid int) int { return v.count(uid, VirtualizationProcess) }
-
-// helperCount is how many helper processes uid has.
-func (v *view) helperCount(uid int) int { return v.count(uid, HelperProcess) }
-
-// count is how many of uid's processes have a (possibly truncated) name that
-// is a prefix of name.
-func (v *view) count(uid int, name string) int {
-	n := 0
-	for _, p := range v.procs {
-		if p.UID == uid && p.Name != "" && strings.HasPrefix(name, p.Name) {
-			n++
-		}
-	}
-	return n
-}
-
-// helperGone: the entry's helper (or, for an entry with no helper yet, its
-// owner runnerd) is no longer the process it was.
-func (v *view) helperGone(e Entry) bool {
-	if e.HelperPID != 0 {
-		return !v.alive(e.HelperPID, e.HelperStart)
-	}
-	return !v.alive(e.OwnerPID, e.OwnerStart)
-}
-
-// tombstonable is the tombstone condition: an entry of this boot, not
-// leaked, whose helper is gone while no Virtualization process and no helper
-// process of its uid remains. (A helper whose runnerd died before recording
-// it is still a helper process, so its entry is never tombstoned under it.)
-func (v *view) tombstonable(e Entry) bool {
-	return e.BootTime == v.boot && e.Kind != KindLeaked && v.helperGone(e) &&
-		v.vzCount(e.UID) == 0 && v.helperCount(e.UID) == 0
-}
-
-// tombstoned: a tombstone exists and the condition still holds now.
-func (v *view) tombstoned(e Entry) bool {
-	_, ok := v.tombs[e.file]
-	return ok && v.tombstonable(e)
 }
 
 func (l *Ledger) mine(e Entry) bool { return e.UID == l.c.UID && e.RunnerID == l.c.RunnerID }
@@ -688,101 +632,6 @@ func (l *Ledger) Release(id string, d Destroyed) error {
 	})
 }
 
-// ReclaimOwn removes one of this runner's entries whose helper died without
-// reporting a stop, or that another login tombstoned: allowed once the helper
-// is gone, this uid has no more Virtualization or helper processes than its
-// other counted entries with a live helper (so none of them can be this
-// entry's VM), and the run dir (empty: none) is gone. That last step is the
-// owner's reconcile, which frees a tombstoned entry's disk debt.
-func (l *Ledger) ReclaimOwn(id, runDir string) error {
-	return l.withLock(func() error {
-		v, err := l.load()
-		if err != nil {
-			return err
-		}
-		e, err := l.own(v, id)
-		if err != nil {
-			return err
-		}
-		if e.BootTime == v.boot {
-			if e.Kind == KindLeaked {
-				return errors.New("admission: a leaked slot clears only when the Mac restarts")
-			}
-			if !v.helperGone(e) {
-				return errors.New("admission: the helper is still running")
-			}
-			others := 0
-			for _, o := range v.counted {
-				if o.ID != e.ID && o.UID == e.UID && o.HelperPID != 0 && v.alive(o.HelperPID, o.HelperStart) {
-					others++
-				}
-			}
-			if v.vzCount(e.UID) > others || v.helperCount(e.UID) > others {
-				return errors.New("admission: a Virtualization or helper process of this user may still be this VM")
-			}
-		}
-		if runDir != "" {
-			if _, err := os.Lstat(runDir); !os.IsNotExist(err) {
-				return errors.New("admission: the run directory is not gone yet")
-			}
-		}
-		return l.remove(e)
-	})
-}
-
-// Sweep tidies this login's files and tombstones other logins' dead entries
-// (helper gone and no Virtualization process of that uid), never a leaked
-// one. It never deletes another login's file. It returns how many
-// tombstones it wrote.
-func (l *Ledger) Sweep() (int, error) {
-	n := 0
-	err := l.withLock(func() error {
-		v, err := l.load()
-		if err != nil {
-			return err
-		}
-		l.tidy(v)
-		for _, e := range v.all {
-			if e.UID == l.c.UID || !v.tombstonable(e) {
-				continue
-			}
-			if _, ok := v.tombs[e.file]; ok {
-				continue
-			}
-			if err := l.writeFile(e.file+tombSuffix, tombstoneBody(e)); err != nil {
-				return err
-			}
-			n++
-		}
-		return nil
-	})
-	return n, err
-}
-
-// tidy runs in each writing transaction: this login deletes its own entries
-// from an earlier boot, and its own tombstones whose entry is gone or from an
-// earlier boot. Its own tombstoned entries stay until ReclaimOwn reconciles
-// them, since their disk is a debt until the run files are gone.
-func (l *Ledger) tidy(v *view) {
-	byFile := map[string]Entry{}
-	for _, e := range v.all {
-		byFile[e.file] = e
-		if e.UID == l.c.UID && e.BootTime != v.boot {
-			if os.Remove(filepath.Join(l.c.Dir, e.file)) == nil {
-				delete(byFile, e.file)
-			}
-		}
-	}
-	for entry, t := range v.tombs {
-		if t.owner != l.c.UID {
-			continue
-		}
-		if e, ok := byFile[entry]; !ok || e.BootTime != v.boot {
-			_ = os.Remove(filepath.Join(l.c.Dir, t.name))
-		}
-	}
-}
-
 // Offer is what this runner advertises: Max is its own live runs plus the
 // host's headroom (the smallest of the cap left, the VMs at the per-run size
 // the memory budget still fits, and those the disk still fits). Reason says
@@ -856,30 +705,6 @@ func (l *Ledger) Watch(ctx context.Context, interval time.Duration, perRunMemory
 		case <-t.C:
 		}
 	}
-}
-
-// tombstoneBody records the tombstone's state: the slot and memory are
-// recovered, the disk and the owner's files are not.
-func tombstoneBody(e Entry) []byte {
-	b, _ := json.Marshal(map[string]any{
-		"entry": e.ID, "capacity": "recovered", "owner_cleanup": "pending", "disk_debt_bytes": e.DiskReserve,
-	})
-	return append(b, '\n')
-}
-
-// Debts returns the honoured-tombstoned entries whose disk is still held
-// (owner-file cleanup pending).
-func (l *Ledger) Debts() ([]Entry, error) {
-	var out []Entry
-	err := l.withLock(func() error {
-		v, err := l.load()
-		if err != nil {
-			return err
-		}
-		out = v.debts
-		return nil
-	})
-	return out, err
 }
 
 // Counted returns the entries counted toward host capacity now.

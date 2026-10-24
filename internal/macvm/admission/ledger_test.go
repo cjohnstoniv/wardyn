@@ -61,27 +61,77 @@ func bigMac() *fakeHost { return &fakeHost{boot: 1, mem: 64 * gib, avail: 48 * g
 // OS user, so file owners are simulated: a file belongs to the login whose
 // ledger created it, and any other file (a forgery) to uid 666.
 type rig struct {
-	dir    string
+	dir    string // the entries dir, <tmp>/Wardyn/macos-vm-admission
 	h      *fakeHost
 	mu     sync.Mutex
 	owners map[string]int
+	fs     fakeFS
+}
+
+// fakeFS stands in for root ownership: fstat reports every path as owned by
+// root, except those in uid, and with the permission bits in perm replaced.
+type fakeFS struct {
+	mu   sync.Mutex
+	uid  map[string]uint32
+	perm map[string]uint32
+}
+
+func (f *fakeFS) fstat(fd int, name string) (unix.Stat_t, error) {
+	var st unix.Stat_t
+	if err := unix.Fstat(fd, &st); err != nil {
+		return st, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	st.Uid = f.uid[name]
+	if p, ok := f.perm[name]; ok {
+		setPerm(&st.Mode, p)
+	}
+	return st, nil
+}
+
+func (f *fakeFS) set(name string, uid uint32, perm ...uint32) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.uid == nil {
+		f.uid, f.perm = map[string]uint32{}, map[string]uint32{}
+	}
+	f.uid[name] = uid
+	if len(perm) > 0 {
+		f.perm[name] = perm[0]
+	}
+}
+
+// makeLayout builds the installed layout under a temp dir and returns the
+// entries dir.
+func makeLayout(t *testing.T) string {
+	t.Helper()
+	top := filepath.Join(t.TempDir(), "Wardyn")
+	dir := filepath.Join(top, "macos-vm-admission")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Chmod(top, 0o755)
+	if err := os.Chmod(dir, os.ModeSticky|0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(top, lockFile), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Chmod(filepath.Join(top, lockFile), 0o644)
+	return dir
 }
 
 func newRig(t *testing.T, h *fakeHost) *rig {
 	t.Helper()
-	dir := t.TempDir()
-	if err := os.Chmod(dir, os.ModeSticky|0o777); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, lockFile), nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return &rig{dir: dir, h: h, owners: map[string]int{}}
+	return &rig{dir: makeLayout(t), h: h, owners: map[string]int{}}
 }
+
+func (r *rig) lock() string { return filepath.Join(filepath.Dir(r.dir), lockFile) }
 
 func (r *rig) open(t *testing.T, uid int, runner string, mod ...func(*Config)) *Ledger {
 	t.Helper()
-	c := Config{Dir: r.dir, UID: uid, RunnerID: runner, DockerMemoryBytes: 8 * gib, Volume: r.dir, Host: r.h,
+	c := Config{Dir: r.dir, UID: uid, RunnerID: runner, DockerMemoryBytes: 8 * gib, Volume: r.dir, Host: r.h, Fstat: r.fs.fstat,
 		FileOwner: func(fi os.FileInfo) int {
 			r.mu.Lock()
 			defer r.mu.Unlock()
@@ -519,7 +569,7 @@ func TestEntryFileModeAndOwner(t *testing.T) {
 func TestLockWaitIsBounded(t *testing.T) {
 	r := newRig(t, bigMac())
 	a := r.open(t, 501, "a", func(c *Config) { c.LockWait = 100 * time.Millisecond })
-	f, err := os.Open(filepath.Join(r.dir, lockFile))
+	f, err := os.Open(r.lock())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -541,10 +591,103 @@ func TestLockWaitIsBounded(t *testing.T) {
 }
 
 func TestOpenRefusesUnstickyDir(t *testing.T) {
-	dir := t.TempDir()
-	_ = os.WriteFile(filepath.Join(dir, lockFile), nil, 0o644)
-	if _, err := Open(Config{Dir: dir, UID: 1, RunnerID: "r", Host: bigMac()}); err == nil {
-		t.Fatal("opened a ledger dir without the sticky bit")
+	r := newRig(t, bigMac())
+	r.fs.set(r.dir, 0, 0o777)
+	if _, err := Open(Config{Dir: r.dir, UID: 1, RunnerID: "r", Host: bigMac(), Fstat: r.fs.fstat}); err == nil || !strings.Contains(err.Error(), "reinstall the Wardyn runner package") {
+		t.Fatalf("opened a ledger dir without the sticky bit: %v", err)
+	}
+}
+
+// openErr opens r's ledger as login 501 and returns the error.
+func (r *rig) openErr() error {
+	_, err := Open(Config{Dir: r.dir, UID: 501, RunnerID: "a", Host: r.h, Fstat: r.fs.fstat})
+	return err
+}
+
+func wantNotInstalled(t *testing.T, err error, what string) {
+	t.Helper()
+	if err == nil || !strings.Contains(err.Error(), "reinstall the Wardyn runner package") {
+		t.Fatalf("%s: got %v, want a refusal naming the fix", what, err)
+	}
+}
+
+// A lock some login made (or one others can write) is refused.
+func TestPlantedLockRefused(t *testing.T) {
+	r := newRig(t, bigMac())
+	r.fs.set(r.lock(), 501)
+	wantNotInstalled(t, r.openErr(), "user-owned lock")
+	r.fs.set(r.lock(), 0, 0o664)
+	wantNotInstalled(t, r.openErr(), "group-writable lock")
+	r.fs.set(r.lock(), 0, 0o644)
+	if err := r.openErr(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A directory some login made before the install is refused, at the lock's
+// own directory, at the entries directory, and at any ancestor.
+func TestPlantedDirRefused(t *testing.T) {
+	r := newRig(t, bigMac())
+	top := filepath.Dir(r.dir)
+	r.fs.set(top, 501)
+	wantNotInstalled(t, r.openErr(), "user-owned Wardyn dir")
+	r.fs.set(top, 0, 0o1777)
+	wantNotInstalled(t, r.openErr(), "world-writable sticky lock dir")
+	r.fs.set(top, 0, 0o755)
+	r.fs.set(r.dir, 501)
+	wantNotInstalled(t, r.openErr(), "user-owned entries dir")
+	r.fs.set(r.dir, 0)
+	anc := filepath.Dir(top)
+	r.fs.set(anc, 501)
+	wantNotInstalled(t, r.openErr(), "user-owned ancestor")
+	r.fs.set(anc, 0, 0o777)
+	wantNotInstalled(t, r.openErr(), "writable non-sticky ancestor")
+	r.fs.set(anc, 0, 0o1777) // like /Users/Shared: sticky, its child root-owned
+	if err := r.openErr(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A symlinked lock, or a symlink anywhere on the way, is never followed.
+func TestSymlinkedLockRefused(t *testing.T) {
+	r := newRig(t, bigMac())
+	real := filepath.Join(t.TempDir(), "elsewhere.lock")
+	_ = os.WriteFile(real, nil, 0o644)
+	_ = os.Remove(r.lock())
+	if err := os.Symlink(real, r.lock()); err != nil {
+		t.Fatal(err)
+	}
+	wantNotInstalled(t, r.openErr(), "symlinked lock")
+
+	r2 := newRig(t, bigMac())
+	top := filepath.Dir(r2.dir)
+	moved := top + ".real"
+	_ = os.Rename(top, moved)
+	if err := os.Symlink(moved, top); err != nil {
+		t.Fatal(err)
+	}
+	wantNotInstalled(t, r2.openErr(), "symlinked Wardyn dir")
+}
+
+// A lock renamed away between a runner's open and its flock: the path no
+// longer names the file it locked, so it refuses rather than admit while
+// another runner may hold the new file's lock.
+func TestLockRenamedUnderHeldFlock(t *testing.T) {
+	r := newRig(t, bigMac())
+	a := r.open(t, 501, "a")
+	swapped := false
+	a.c.afterFlock = func() {
+		if !swapped {
+			swapped = true
+			_ = os.Rename(r.lock(), r.lock()+".old")
+			_ = os.WriteFile(r.lock(), nil, 0o644)
+		}
+	}
+	if _, err := a.Admit(runReq(8 * gib)); err == nil || !strings.Contains(err.Error(), "changed while this runner locked it") {
+		t.Fatalf("admitted on a lock that was renamed away: %v", err)
+	}
+	if n := len(entryFiles(t, r.dir)); n != 0 {
+		t.Fatalf("%d entries written", n)
 	}
 }
 
@@ -744,13 +887,10 @@ func TestUnparsableEntryCountsUntilBootChanges(t *testing.T) {
 
 // A missing lock is refused with a named fix and never created.
 func TestMissingLockRefusedNeverCreated(t *testing.T) {
-	dir := t.TempDir()
-	_ = os.Chmod(dir, os.ModeSticky|0o777)
-	_, err := Open(Config{Dir: dir, UID: 1, RunnerID: "r", Host: bigMac()})
-	if err == nil || !strings.Contains(err.Error(), "reinstall the Wardyn runner package") {
-		t.Fatalf("missing lock: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(dir, lockFile)); !os.IsNotExist(err) {
+	r := newRig(t, bigMac())
+	_ = os.Remove(r.lock())
+	wantNotInstalled(t, r.openErr(), "missing lock")
+	if _, err := os.Stat(r.lock()); !os.IsNotExist(err) {
 		t.Fatal("the lock was created")
 	}
 }
@@ -832,3 +972,6 @@ func TestTombstoneDiskDebt(t *testing.T) {
 		t.Fatalf("disk not freed after reconcile: %v", err)
 	}
 }
+
+// setPerm replaces the permission bits of a Stat_t mode (uint16 on darwin).
+func setPerm[T ~uint16 | ~uint32](m *T, p uint32) { *m = (*m &^ 0o7777) | T(p) }

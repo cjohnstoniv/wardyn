@@ -10,4 +10,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/macvm/vzengine"
 )
 
+const vzLinked = true
+
 func platformEngine() (macvm.Engine, error) { return vzengine.New(), nil }
