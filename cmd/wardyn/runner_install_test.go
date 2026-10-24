@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"fmt"
 	"os"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/sigstore/sigstore-go/pkg/root"
 
+	"github.com/cjohnstoniv/wardyn/internal/certbundle"
 	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/releasesig"
 	"github.com/cjohnstoniv/wardyn/internal/releasesig/releasesigtest"
@@ -166,7 +168,8 @@ func TestRunnerUpgradeRollsBackAnOlderRunnerWithoutOrgCAFile(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(anchor), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(anchor, []byte("pem"), 0o600); err != nil {
+	// The test server's own certificate: the download then trusts the stored anchor, as a real one would.
+	if err := os.WriteFile(anchor, certbundle.Encode([]*x509.Certificate{r.srv.Certificate()}), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	out, err := r.cli("upgrade", "--version", "0.10.0")
