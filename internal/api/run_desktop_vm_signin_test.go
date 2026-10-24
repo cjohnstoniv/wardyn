@@ -198,9 +198,11 @@ func (l runLockWaits) Lock(ctx context.Context, k db.LockKey, wait time.Duration
 }
 
 // droppingLocker is the in-process locker with a run lock a test can lose, as a Postgres session's lock
-// is lost with its connection: drop releases the first hold of a run's lock taken through it, so
-// another request takes the lock, ends that hold's context with db.ErrLockLost, and from then on
-// lockHeld answers ErrLockLost for it. refuse makes every later take of a run's lock refuse at once.
+// is lost with its connection: drop ends the first hold of a run's lock taken through it with
+// db.ErrLockLost, as the Postgres lock's watch does, then releases it, so another request takes the
+// lock, and from then on lockHeld answers ErrLockLost for it. The end comes first: the in-process
+// release ends the context with context.Canceled, a cause it would then keep. refuse makes every later
+// take of a run's lock refuse at once.
 type droppingLocker struct {
 	db.Locker
 	mu     sync.Mutex
@@ -223,7 +225,7 @@ func (l *droppingLocker) Lock(ctx context.Context, k db.LockKey, wait time.Durat
 	lost := new(atomic.Bool)
 	cctx, cancel := context.WithCancelCause(context.WithValue(lctx, lostHoldKey{}, lost))
 	release := sync.OnceFunc(unlock)
-	l.drop = func() { lost.Store(true); release(); cancel(db.ErrLockLost) }
+	l.drop = func() { lost.Store(true); cancel(db.ErrLockLost); release() }
 	return cctx, release, nil
 }
 
