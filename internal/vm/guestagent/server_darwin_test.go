@@ -8,7 +8,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strings"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 // Native darwin tests: they run on the train's hosted macOS job, not on Linux.
@@ -96,5 +100,133 @@ func TestDarwinInitSignInsOffDisablesTheDesktopEvenIfWritingFails(t *testing.T) 
 	}
 	if s.Desktop.Enabled() {
 		t.Error("the desktop stayed on after a failed Init")
+	}
+}
+
+// signalRig is a darwin Server whose latest exec is running and whose signals are recorded, not sent.
+type signalRig struct {
+	s    *Server
+	h    http.Handler
+	sent []unix.Signal
+}
+
+func newSignalRig(t *testing.T, markerDir string) *signalRig {
+	t.Helper()
+	r := &signalRig{s: &Server{Version: "t", Home: t.TempDir(), User: "agent", OutDir: t.TempDir(), MarkerDir: markerDir}}
+	h, err := r.s.Handler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.h = h
+	r.s.mu.Lock()
+	r.s.execs = map[string]*detached{"a": {id: "a", pid: 4242, changed: make(chan struct{})}}
+	r.s.latest = "a"
+	r.s.signal = func(pgid int, sig unix.Signal) error {
+		if pgid != 4242 {
+			t.Errorf("signalled process group %d, want the agent's 4242", pgid)
+		}
+		r.sent = append(r.sent, sig)
+		return nil
+	}
+	r.s.mu.Unlock()
+	return r
+}
+
+// post sends one pause or resume with body and returns its status, its body, and whether the agent
+// answered it ordered (fenced_pause).
+func (r *signalRig) post(t *testing.T, pause bool, body string) (int, string, bool) {
+	t.Helper()
+	path := "/v1/agent/resume"
+	if pause {
+		path = "/v1/agent/pause"
+	}
+	w := httptest.NewRecorder()
+	r.h.ServeHTTP(w, httptest.NewRequest("POST", path, strings.NewReader(body)))
+	var res AgentSignalResult
+	if w.Code == http.StatusOK {
+		_ = json.Unmarshal(w.Body.Bytes(), &res)
+	}
+	return w.Code, w.Body.String(), res.FencedPause
+}
+
+func (r *signalRig) signals() []unix.Signal {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	return slices.Clone(r.sent)
+}
+
+func gen(n int) string { b, _ := json.Marshal(AgentSignal{Generation: int64(n)}); return string(b) }
+
+// The macOS guest orders pauses and resumes by their generation exactly as the Linux guest does
+// (PauseFence): a late continue after a newer stop, and a stop after its own continue, are answered
+// 409 and signal nothing; a resume with no generation after a fenced pause is the stale_unfenced_resume
+// 409; a pause with none is still obeyed.
+func TestDarwinPauseAndResumeHonourTheGeneration(t *testing.T) {
+	r := newSignalRig(t, t.TempDir())
+	for i, step := range []struct {
+		pause  bool
+		body   string
+		status int
+	}{
+		{true, gen(2), 200},  // pause 2's stop
+		{false, gen(1), 409}, // pause 1's continue, delivered late
+		{false, gen(2), 200}, // pause 2's resume
+		{true, gen(2), 409},  // pause 2's stop again, after its continue
+		{true, gen(3), 200},  // pause 3
+		{false, "", 409},     // a resume from a side that predates the generation
+		{true, "", 200},      // a pause from one is obeyed
+		{false, gen(3), 200}, // pause 3's resume still runs the agent
+	} {
+		code, body, fenced := r.post(t, step.pause, step.body)
+		if code != step.status {
+			t.Fatalf("step %d: pause=%v %q = %d %s, want %d", i, step.pause, step.body, code, body, step.status)
+		}
+		if code == 200 && fenced != (step.body != "") {
+			t.Fatalf("step %d: fenced_pause = %v for body %q", i, fenced, step.body)
+		}
+		if step.body == "" && code == 409 && !strings.Contains(body, ReasonStaleUnfencedResume) {
+			t.Fatalf("step %d: the unfenced resume's 409 = %q, want %s", i, body, ReasonStaleUnfencedResume)
+		}
+	}
+	want := []unix.Signal{unix.SIGSTOP, unix.SIGCONT, unix.SIGSTOP, unix.SIGSTOP, unix.SIGCONT}
+	if got := r.signals(); !slices.Equal(got, want) {
+		t.Fatalf("signals sent = %v, want %v", got, want)
+	}
+}
+
+// A guest image's agent before the generation got empty bodies; on a fresh boot they act as before.
+func TestDarwinPauseWithNoGenerationIsSignalledAsBefore(t *testing.T) {
+	r := newSignalRig(t, t.TempDir())
+	for _, pause := range []bool{true, false, true, false} {
+		if code, body, fenced := r.post(t, pause, ""); code != 200 || fenced {
+			t.Fatalf("pause=%v with no generation = %d %s fenced %v, want applied unfenced", pause, code, body, fenced)
+		}
+	}
+	if got := r.signals(); !slices.Equal(got, []unix.Signal{unix.SIGSTOP, unix.SIGCONT, unix.SIGSTOP, unix.SIGCONT}) {
+		t.Fatalf("signals sent = %v", got)
+	}
+}
+
+// The order outlives a restart of the agent's service (the marker directory keeps it), not a boot.
+func TestDarwinThePauseOrderOutlivesAServiceRestartNotABoot(t *testing.T) {
+	boot := t.TempDir()
+	r := newSignalRig(t, boot)
+	r.post(t, true, gen(2))
+	r.post(t, false, gen(2))
+
+	restarted := newSignalRig(t, boot)
+	if code, _, _ := restarted.post(t, true, gen(2)); code != 409 {
+		t.Fatalf("after a service restart, a stop after its own continue = %d, want 409", code)
+	}
+	if code, _, _ := restarted.post(t, false, gen(1)); code != 409 {
+		t.Fatalf("after a service restart, an older continue = %d, want 409", code)
+	}
+	if got := restarted.signals(); len(got) != 0 {
+		t.Fatalf("the restarted agent signalled %v", got)
+	}
+
+	booted := newSignalRig(t, t.TempDir())
+	if code, body, _ := booted.post(t, true, gen(1)); code != 200 {
+		t.Fatalf("a new boot's first pause = %d %s", code, body)
 	}
 }
