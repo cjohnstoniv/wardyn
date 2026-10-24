@@ -6,6 +6,7 @@ toolchain go1.26.10
 
 require (
 	filippo.io/age v1.3.2
+	github.com/Code-Hex/vz/v3 v3.8.0
 	github.com/aws/aws-sdk-go-v2 v1.47.3
 	github.com/aws/aws-sdk-go-v2/config v1.33.9
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.9
@@ -56,6 +57,7 @@ require (
 
 require (
 	filippo.io/hpke v0.4.0 // indirect
+	github.com/Code-Hex/go-infinity-channel v1.0.0 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.20.3 // indirect
