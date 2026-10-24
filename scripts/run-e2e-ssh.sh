@@ -99,6 +99,8 @@ REGISTRY_PORT="${WARDYN_REGISTRY_PORT:-$(pick_free_port)}"
 AGENT_IMAGE="${PROJECT}/agent-claude-code:pinned"
 WARDYND_IMAGE="wardyn/wardynd:${PROJECT}"
 PROXY_IMAGE="wardyn/wardyn-proxy:${PROJECT}"
+EDITORS_IMAGE="wardyn/editors:${PROJECT}"
+EDITORS_VOLUME="${PROJECT}-editors-cache"
 
 compose() {
   COMPOSE_PROJECT_NAME="${PROJECT}" WARDYN_NS="${PROJECT}" \
@@ -148,7 +150,8 @@ teardown() {
   compose down --volumes >/dev/null 2>&1 || true
   # All three are this run's own per-project tags -- named by variable, never
   # a pattern sweep. Removing a tag leaves the build cache, so reruns stay cheap.
-  docker rmi -f "${AGENT_IMAGE}" "${WARDYND_IMAGE}" "${PROXY_IMAGE}" >/dev/null 2>&1 || true
+  docker rmi -f "${AGENT_IMAGE}" "${WARDYND_IMAGE}" "${PROXY_IMAGE}" "${EDITORS_IMAGE}" >/dev/null 2>&1 || true
+  docker volume rm -f "${EDITORS_VOLUME}" >/dev/null 2>&1 || true
   rm -rf "${TMPDIR}"
 }
 # An explicit namespace may name an earlier invocation. Never adopt or clean it.
@@ -250,6 +253,21 @@ done
 [[ "${state}" == "RUNNING" ]] || die "run ${RUN_ID} did not reach RUNNING in time (last state=${state})"
 pass "run ${RUN_ID} is RUNNING"
 log "created run container IDs: $(docker ps -aq --no-trunc --filter "label=wardyn.run-id=${RUN_ID}" | tr '\n' ' ')"
+
+# ── editors mode (make test-e2e-ssh-editors): real editor clients, in a
+#    container, against this run's gateway; replaces the checks below ─────────
+if [[ "${WARDYN_E2E_SSH_EDITORS:-}" == "1" ]]; then
+  docker build -q -t "${EDITORS_IMAGE}" "${ROOT}/test/editors" >/dev/null || die "build ${EDITORS_IMAGE} failed"
+  # Host network: the gateway is published on the host's loopback.
+  # Downloaded IDE archives land in a per-project volume, removed at teardown; an
+  # absolute WARDYN_E2E_EDITORS_CACHE path keeps them across local reruns instead.
+  EDITORS_CACHE="${WARDYN_E2E_EDITORS_CACHE:-${EDITORS_VOLUME}}"
+  docker run --rm --network host -v "${TMPDIR}/owner_key:/keys/owner_key:ro" -v "${EDITORS_CACHE}:/cache" \
+    -e GW_HOST=127.0.0.1 -e GW_PORT="${SSH_PORT}" -e GW_USER="${RUN_ID}" \
+    "${EDITORS_IMAGE}" ${WARDYN_E2E_SSH_EDITOR_CLIENTS:-mutagen jetbrains} || fail "an editor client check failed"
+  [[ "${FAILED}" -eq 0 ]] && log "SSH EDITORS: PASS" || printf '\033[1;31m[error]\033[0m SSH EDITORS: FAIL\n' >&2
+  exit "${FAILED}"
+fi
 
 SSH_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8)
 ssh_run() { ssh "${SSH_OPTS[@]}" -i "${TMPDIR}/owner_key" -p "${SSH_PORT}" "${RUN_ID}@127.0.0.1" "$@"; }

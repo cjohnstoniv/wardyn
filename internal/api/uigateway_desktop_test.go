@@ -23,6 +23,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
+	xhtml "golang.org/x/net/html"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -278,6 +279,49 @@ func TestDesktopLinkWorksOnce(t *testing.T) {
 }
 
 func htmlAttr(s string) string { return strings.ReplaceAll(s, `"`, "&#34;") }
+
+// The viewer's data sits in a double-quoted attribute, and json.Marshal writes its own quotes and a
+// `\"` inside a string as they are: html.EscapeString is what keeps the data inside the attribute.
+// Words carrying " ' < > & come back exactly once the page is parsed as a browser parses it, and
+// the html element keeps its two attributes, followed by the head.
+func TestDesktopViewerDataSurvivesItsAttribute(t *testing.T) {
+	h, _ := newDesktopHarness(t)
+	said := `"><script>alert('x')</script><b a="1"> & it's &amp; done`
+	rec := httptest.NewRecorder()
+	if !h.srv.serveDesktopRefusal(rec, httptest.NewRequest(http.MethodGet, desktopPath(h, "/"), nil), h.run.ID, said) {
+		t.Fatal("no viewer page was served")
+	}
+	z := xhtml.NewTokenizer(rec.Body)
+	for z.Next() != xhtml.ErrorToken {
+		tok := z.Token()
+		if tok.Type != xhtml.StartTagToken || tok.Data != "html" {
+			continue
+		}
+		var keys []string
+		var data string
+		for _, a := range tok.Attr {
+			keys = append(keys, a.Key)
+			if a.Key == "data-wardyn-desktop" {
+				data = a.Val
+			}
+		}
+		if strings.Join(keys, " ") != "lang data-wardyn-desktop" {
+			t.Fatalf("the html element's attributes are %q, want lang and data-wardyn-desktop", keys)
+		}
+		var got map[string]string
+		if err := json.Unmarshal([]byte(data), &got); err != nil {
+			t.Fatalf("data-wardyn-desktop %q is not the viewer's JSON: %v", data, err)
+		}
+		if len(got) != 2 || got["state"] != "refused" || got["said"] != said {
+			t.Fatalf("the viewer reads %q, want state refused and said %q", got, said)
+		}
+		if z.Next() != xhtml.StartTagToken || z.Token().Data != "head" {
+			t.Fatalf("the html element is not followed by its head: %s", rec.Body.String())
+		}
+		return
+	}
+	t.Fatalf("no html element: %v", z.Err())
+}
 
 // The stream carries the display both ways through the runner, and Close ends the session: the open
 // stream is told why and cut, and the cookie, wherever it was copied, opens nothing more.

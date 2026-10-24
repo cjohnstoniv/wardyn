@@ -319,6 +319,51 @@ jobs:
           path: test/reports/e2e/ssh-e2e.log
           if-no-files-found: error
 
+  # Real editor clients against the SSH gateway: Mutagen 0.18.1 (sync create + flush) and
+  # the JetBrains remote-dev-server bootstrap (IntelliJ IDEA 2026.2.3), run in a container
+  # (test/editors/Dockerfile), never on the runner. Versions and sha256 are pinned there.
+  # docs/SSH.md's "Editors over the gateway" table cites this job by name, so a rename
+  # changes that table too. It reuses run-e2e-ssh.sh's dedicated stack in its editors mode.
+  #
+  # NEVER RUN BEFORE on a hosted runner: NOTIFY_EXEMPT_UNTIL (scripts/test-repo-guards.sh),
+  # kept out of notify-new-lanes' needs and release.yml's watched= until it has gone green
+  # on a real scheduled run. Not a required check.
+  ssh-editors-live:
+    if: inputs.scope != 'candidate'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim)@'
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          suite: unit
+      - name: Docker available
+        run: docker --version
+      - name: Editor clients against the SSH gateway (dedicated compose stack)
+        env:
+          WARDYN_TEST_DOCKER: "1"
+        shell: bash
+        run: |
+          mkdir -p test/reports/e2e
+          make test-e2e-ssh-editors 2>&1 | tee test/reports/e2e/ssh-editors.log
+      - name: Upload e2e results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ssh-editors-live-results
+          path: test/reports/e2e/ssh-editors.log
+          if-no-files-found: error
+
   # The guided governance test-drive — the walkthrough the docs point a new
   # operator at (clone + governed egress, egress deny, metadata block, first-use
   # approval, brokered git, kill cascade, recording). It ran in NO automation, so
@@ -1552,6 +1597,34 @@ jobs:
           name: k6-kind-conformance-results-${{ matrix.kubelet }}-${{ matrix.suite }}
           path: test/reports/e2e/
           if-no-files-found: error
+
+  # Each k6 leg's failure rate over the last 30 scheduled nightlies, from the job history (#3538), in
+  # this run's summary. A failed leg costs a full rerun, so a leg that keeps failing shows as a number.
+  # It reads history, so it needs no `needs:` (this run is not counted until it completes), and it
+  # must not turn the nightly red, so a gh error is not a failure. actions: read is all it asks for.
+  k6-rerun-rate:
+    if: inputs.scope != 'candidate'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    permissions:
+      contents: read # checkout
+      actions: read # gh run list / gh run view
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Write each k6 leg's failure rate to the job summary
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### k6-kind-conformance: failure rate per leg, last 30 scheduled nightlies"
+            echo
+            ./scripts/k6-rerun-rate.sh 30
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # The acceptance walks that had no caller (#3110): kind-components-walk (a header secret absent from
   # the sandbox's environment and files, a file secret 0440 root:fsGroup, the audit rows, and the docker

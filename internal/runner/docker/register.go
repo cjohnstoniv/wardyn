@@ -62,7 +62,12 @@ func init() {
 		// joins; empty keeps "wardyn-internal". A shared multi-job host sets a
 		// per-project name so concurrent stacks don't share one network — it MUST
 		// match the compose network's name (both derive from WARDYN_NS).
-		s, err := New(buildConfig(d, recordingMount))
+		cfg := buildConfig(d, recordingMount)
+		var err error
+		if cfg.RunSubnetPool, cfg.RunSubnetBits, err = RunSubnetPoolFromEnv(os.Getenv); err != nil {
+			return nil, err
+		}
+		s, err := New(cfg)
 		if err != nil {
 			return nil, err
 		}
