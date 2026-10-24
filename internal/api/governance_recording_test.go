@@ -145,8 +145,21 @@ func TestPutSiteConfigRoundTripsALockedLevelWithNoStore(t *testing.T) {
 	stored := types.SiteConfig{Recording: &types.SiteRecording{Level: types.RecordingTerminal, Locked: true}}
 	srv, fake, _ := egressBaselineServer(t, stored)
 	srv.cfg.RecordingStore = nil
-	// The echo carries an unrelated edit, as a console save does.
-	body := `{"recording":{"level":"terminal","locked":true},"sign_in_help_text":"Ask the platform team."}`
+	// A console save: GET the document, change one unrelated field, PUT the whole of it back.
+	get := do(t, srv, http.MethodGet, "/api/v1/site-config", adminToken, "")
+	if get.Code != http.StatusOK {
+		t.Fatalf("GET /site-config = %d %s", get.Code, get.Body)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(get.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("GET /site-config body: %v", err)
+	}
+	if _, ok := doc["recording"]; !ok {
+		t.Fatalf("GET /site-config carries no recording block to echo: %s", get.Body)
+	}
+	doc["sign_in_help_text"] = "Ask the platform team."
+	raw, _ := json.Marshal(doc)
+	body := string(raw)
 	if w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, body); w.Code != http.StatusOK {
 		t.Fatalf("PUT %s with no recording store = %d %s, want 200", body, w.Code, w.Body)
 	}
