@@ -18,6 +18,7 @@ const ALLOWED: Record<string, string> = {
   "components/screens/top-bar.tsx": "a Chip's own uppercase",
   "components/screens/providers/entra-editor.tsx": "a pill, not a section label",
   "components/screens/profile-review.tsx": "the warning-coloured label",
+  "components/screens/settings/model-provider-laptop.tsx": "the warning-coloured laptop disclosure heading",
   "components/screens/runners/pools/pools-tab.tsx": "a ::before label inside a Tailwind variant",
   "components/screens/new-run-flow/steps/run/pool-summary.tsx": "mock-pinned New Run metric label",
   "components/screens/new-run-flow/steps/run/question-block.tsx": "mock-pinned 'Required' annotation",
