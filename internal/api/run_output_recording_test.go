@@ -329,6 +329,37 @@ func TestRunOutput_NotCapturedNamesARecordingOnlyWhenOneCanHoldIt(t *testing.T) 
 	read("security admin, recording kept", sec, reasonRunOutputNotCaptured, notCaptured)
 }
 
+// TestRunOutput_UnrecordedRunPromisesNoRecording: a run that is not recorded (its level off, or no
+// recording store in the organisation) has no recording to point at, so on a runner that captures
+// output only under the recorder, an ended run with nothing kept answers that no output is kept,
+// to its owner and to anyone else who may see it, never naming a recording.
+func TestRunOutput_UnrecordedRunPromisesNoRecording(t *testing.T) {
+	rr := newRecoveringRunner()
+	rr.execOutputUncaptured = true
+	fs, err := recording.NewFSStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sec := ssoSession(t, secAdminSub, secAdminMail, oidc.RoleSecurityAdmin)
+	for _, tc := range []struct {
+		name  string
+		store recording.Store
+		mark  types.RunNotRecorded
+	}{
+		{"recording level off", fs, types.NotRecordedPolicyOff},
+		{"organisation keeps no recordings", nil, types.NotRecordedOrgOff},
+	} {
+		srv, _, seed := runOutputServer(t, func(c *Config) { c.Runner = rr; c.RecordingStore = tc.store; c.RunOutputPersistOff = true })
+		id := seed(types.AgentRun{NotRecorded: tc.mark})
+		for who, cookie := range map[string]*http.Cookie{"owner": outputOwnerCookie(t), "security admin": sec} {
+			if code, _, refusal := getRunOutput(t, srv, id, "", cookie); code != http.StatusConflict ||
+				refusal.Reason != reasonRunOutputNotKept || refusal.Error != "no output is kept for this run" {
+				t.Fatalf("%s, %s: %d %+v, want 409 %s with no recording named", tc.name, who, code, refusal, reasonRunOutputNotKept)
+			}
+		}
+	}
+}
+
 // A recovered row is audited as a success that says it is incomplete; only a
 // gap is the failed capture. The gap row adds the failing step (#3236) beside
 // its fields, every one of them unchanged; the success row has no step.
