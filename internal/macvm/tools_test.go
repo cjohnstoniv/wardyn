@@ -23,6 +23,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
 )
@@ -305,7 +306,7 @@ func TestStage2ReplacesGuestAgent(t *testing.T) {
 func TestParseToolingRefusesLoosePins(t *testing.T) {
 	good := func(mut func(p *macvm.ToolPin)) error {
 		p := macvm.ToolPin{ID: "claude-code", Version: "2.1.310", URL: "https://example.test/c", SHA256: strings.Repeat("a", 64), Size: 10,
-			Dest: "/usr/local/bin/claude", VersionArgv: []string{"claude", "--version"}}
+			Dest: "/usr/local/bin/claude", VersionArgv: []string{"/usr/local/bin/claude", "--version"}}
 		mut(&p)
 		_, err := macvm.ParseTooling([]byte(fmt.Sprintf(`{"version":1,"harnesses":[%s]}`, mustJSON(t, p))))
 		return err
@@ -314,17 +315,18 @@ func TestParseToolingRefusesLoosePins(t *testing.T) {
 		t.Fatalf("a good pin: %v", err)
 	}
 	for name, mut := range map[string]func(*macvm.ToolPin){
-		"latest":      func(p *macvm.ToolPin) { p.Version = "latest" },
-		"range":       func(p *macvm.ToolPin) { p.Version = "2.1" },
-		"no sha":      func(p *macvm.ToolPin) { p.SHA256 = "" },
-		"upper sha":   func(p *macvm.ToolPin) { p.SHA256 = strings.Repeat("A", 64) },
-		"http":        func(p *macvm.ToolPin) { p.URL = "http://example.test/c" },
-		"unknown id":  func(p *macvm.ToolPin) { p.ID = "latest" },
-		"no size":     func(p *macvm.ToolPin) { p.Size = 0 },
-		"relative":    func(p *macvm.ToolPin) { p.Dest = "bin/claude" },
-		"no check":    func(p *macvm.ToolPin) { p.VersionArgv = nil },
-		"traversal":   func(p *macvm.ToolPin) { p.Dest = "/usr/local/../etc/x" },
-		"none is not": func(p *macvm.ToolPin) { p.ID = "none" },
+		"latest":        func(p *macvm.ToolPin) { p.Version = "latest" },
+		"range":         func(p *macvm.ToolPin) { p.Version = "2.1" },
+		"no sha":        func(p *macvm.ToolPin) { p.SHA256 = "" },
+		"upper sha":     func(p *macvm.ToolPin) { p.SHA256 = strings.Repeat("A", 64) },
+		"http":          func(p *macvm.ToolPin) { p.URL = "http://example.test/c" },
+		"unknown id":    func(p *macvm.ToolPin) { p.ID = "latest" },
+		"no size":       func(p *macvm.ToolPin) { p.Size = 0 },
+		"relative":      func(p *macvm.ToolPin) { p.Dest = "bin/claude" },
+		"no check":      func(p *macvm.ToolPin) { p.VersionArgv = nil },
+		"traversal":     func(p *macvm.ToolPin) { p.Dest = "/usr/local/../etc/x" },
+		"none is not":   func(p *macvm.ToolPin) { p.ID = "none" },
+		"argv not dest": func(p *macvm.ToolPin) { p.VersionArgv = []string{"/usr/bin/true", "--version"} },
 	} {
 		if err := good(mut); err == nil {
 			t.Errorf("%s: accepted", name)
@@ -396,11 +398,11 @@ func TestPrepareRunsStage2(t *testing.T) {
 		t.Fatalf("manifest harnesses = %v", m.Harnesses)
 	}
 	base := f.opts.Layout.BaseDir(0)
-	if macvm.NeedsToolsUpdate(base, tf.tooling, "0.10.0") {
+	if macvm.NeedsToolsUpdate(base, tf.tooling, "0.10.0", time.Now()) {
 		t.Fatal("a base stage 2 just finished wants an update")
 	}
 	tf.tooling.Harnesses[0].Version = "2.1.311"
-	if !macvm.NeedsToolsUpdate(base, tf.tooling, "0.10.0") || !macvm.NeedsToolsUpdate(base, tf.tooling, "0.10.1") {
+	if !macvm.NeedsToolsUpdate(base, tf.tooling, "0.10.0", time.Now()) || !macvm.NeedsToolsUpdate(base, tf.tooling, "0.10.1", time.Now()) {
 		t.Fatal("a changed pin or agent build was not noticed")
 	}
 	if !f.ev.has(macvm.PhaseTools) {
@@ -509,10 +511,10 @@ func TestUpdateToolsClonesAndSwaps(t *testing.T) {
 	if got, err := macvm.ReadyBase(base); err != nil || got.AgentVersion != "0.10.1" {
 		t.Fatalf("base after swap: %+v %v", got, err)
 	}
-	if macvm.NeedsToolsUpdate(base, tf.tooling, "0.10.1") {
+	if macvm.NeedsToolsUpdate(base, tf.tooling, "0.10.1", time.Now()) {
 		t.Fatal("an updated base still wants an update")
 	}
-	for _, leftover := range []string{base + ".update", base + ".old"} {
+	for _, leftover := range []string{base + ".update"} {
 		if _, err := os.Stat(leftover); !os.IsNotExist(err) {
 			t.Fatalf("%s left behind", leftover)
 		}
@@ -547,4 +549,268 @@ func (e *events) has(phase string) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return slices.ContainsFunc(e.evs, func(ev macvm.PrepareEvent) bool { return ev.Phase == phase })
+}
+
+// hookStage is a Stage2 that runs fn.
+type hookStage func(ctx context.Context, in macvm.Stage2Input) (macvm.ToolsResult, error)
+
+func (h hookStage) Run(ctx context.Context, in macvm.Stage2Input) (macvm.ToolsResult, error) {
+	return h(ctx, in)
+}
+
+var noneOnly = macvm.ToolsResult{Harnesses: []string{macvm.HarnessNone}}
+
+// A harness stage 2 withheld is recorded with its reason and not as installed,
+// so it is tried again: by an automatic update after the delay, at once when
+// its pin changes, and by any update that is asked for.
+func TestWithheldHarnessIsRetried(t *testing.T) {
+	f, tf, _ := stage2Prep(t)
+	good := tf.claude
+	tf.claude = []byte("claude-binary-2.1.399") // not what the pin says
+	m, err := macvm.Prepare(context.Background(), f.opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"none", "codex-cli"}; !slices.Equal(m.Harnesses, want) {
+		t.Fatalf("harnesses = %v", m.Harnesses)
+	}
+	base := f.opts.Layout.BaseDir(0)
+	rec, err := macvm.ReadToolsRecord(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := rec.Pins["claude-code"]; ok || rec.Withheld["claude-code"].Reason == "" || rec.Withheld["claude-code"].Version != "2.1.310" || rec.Pins["codex-cli"].Version == "" {
+		t.Fatalf("record = %+v", rec)
+	}
+	tried := rec.TriedAt
+	if macvm.NeedsToolsUpdate(base, tf.tooling, "0.10.0", tried.Add(10*time.Minute)) {
+		t.Fatal("a withheld harness was retried inside the delay")
+	}
+	if !macvm.NeedsToolsUpdate(base, tf.tooling, "0.10.0", tried.Add(macvm.ToolsRetryAfter+time.Minute)) {
+		t.Fatal("a withheld harness is never retried")
+	}
+	bumped := tf.tooling
+	bumped.Harnesses = slices.Clone(tf.tooling.Harnesses)
+	bumped.Harnesses[0].Version = "2.1.311"
+	if !macvm.NeedsToolsUpdate(base, bumped, "0.10.0", tried.Add(time.Minute)) {
+		t.Fatal("a new pin for a withheld harness waited out the delay")
+	}
+	// The artifact is fixed. Inside the delay an automatic update does nothing...
+	tf.claude = good
+	o := updateOpts(f, tf, newGuest(), "0.10.0")
+	o.Now = func() time.Time { return tried.Add(10 * time.Minute) }
+	if _, changed, err := macvm.UpdateTools(context.Background(), o); err != nil || changed {
+		t.Fatalf("update inside the delay: changed %v err %v", changed, err)
+	}
+	// ...and one that is asked for retries it.
+	o.Force = true
+	m, changed, err := macvm.UpdateTools(context.Background(), o)
+	if err != nil || !changed || !slices.Equal(m.Harnesses, []string{"none", "claude-code", "codex-cli"}) {
+		t.Fatalf("forced update: %+v changed %v err %v", m, changed, err)
+	}
+	if rec, _ := macvm.ReadToolsRecord(base); len(rec.Withheld) != 0 || rec.Pins["claude-code"].Version != "2.1.310" {
+		t.Fatalf("record after retry = %+v", rec)
+	}
+}
+
+// A clone that starts while an update is in stage 2 does not wait for it: it
+// takes the old base at once.
+func TestCloneDuringUpdateTakesOldBase(t *testing.T) {
+	f, tf, _ := stage2Prep(t)
+	if _, err := macvm.Prepare(context.Background(), f.opts); err != nil {
+		t.Fatal(err)
+	}
+	base := f.opts.Layout.BaseDir(0)
+	for n, c := range map[string]string{macvm.DiskFile: "gen1-disk", macvm.AuxFile: "gen1-aux"} {
+		if err := os.WriteFile(filepath.Join(base, n), []byte(c), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runDir := filepath.Join(t.TempDir(), "run")
+	o := updateOpts(f, tf, newGuest(), "")
+	o.Force = true
+	o.Stage = hookStage(func(_ context.Context, in macvm.Stage2Input) (macvm.ToolsResult, error) {
+		_ = os.WriteFile(in.Spec.DiskPath, []byte("gen2-disk"), 0o600)
+		_ = os.WriteFile(in.Spec.AuxPath, []byte("gen2-aux"), 0o600)
+		cloned := make(chan error, 1)
+		go func() {
+			_, err := macvm.CloneRun(f.eng, base, runDir, macvm.IdentityFresh)
+			cloned <- err
+		}()
+		select {
+		case err := <-cloned:
+			if err != nil {
+				t.Errorf("clone during stage 2: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Error("a clone waited for the update's stage 2")
+		}
+		return noneOnly, nil
+	})
+	if _, changed, err := macvm.UpdateTools(context.Background(), o); err != nil || !changed {
+		t.Fatalf("update: changed %v err %v", changed, err)
+	}
+	d, _ := os.ReadFile(filepath.Join(runDir, macvm.DiskFile))
+	a, _ := os.ReadFile(filepath.Join(runDir, macvm.AuxFile))
+	if string(d) != "gen1-disk" || string(a) != "gen1-aux" {
+		t.Fatalf("clone saw disk %q aux %q, want the old base", d, a)
+	}
+	if d, _ := os.ReadFile(filepath.Join(base, macvm.DiskFile)); string(d) != "gen2-disk" {
+		t.Fatalf("base after the update holds %q", d)
+	}
+	// A clone after the swap gets the new generation.
+	after := filepath.Join(t.TempDir(), "run2")
+	if _, err := macvm.CloneRun(f.eng, base, after, macvm.IdentityFresh); err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := os.ReadFile(filepath.Join(after, macvm.DiskFile)); string(d) != "gen2-disk" {
+		t.Fatalf("clone after the swap saw %q", d)
+	}
+	if _, err := os.Stat(base + ".update"); !os.IsNotExist(err) {
+		t.Fatal("the old generation was left behind")
+	}
+}
+
+// Two updates of one base run one after the other.
+func TestConcurrentUpdatesSerialise(t *testing.T) {
+	f, tf, _ := stage2Prep(t)
+	if _, err := macvm.Prepare(context.Background(), f.opts); err != nil {
+		t.Fatal(err)
+	}
+	var cur, peak, runs atomic.Int64
+	stage := hookStage(func(context.Context, macvm.Stage2Input) (macvm.ToolsResult, error) {
+		n := cur.Add(1)
+		for p := peak.Load(); n > p && !peak.CompareAndSwap(p, n); p = peak.Load() {
+		}
+		runs.Add(1)
+		time.Sleep(100 * time.Millisecond)
+		cur.Add(-1)
+		return noneOnly, nil
+	})
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			o := updateOpts(f, tf, newGuest(), "")
+			o.Force, o.Stage = true, stage
+			_, _, err := macvm.UpdateTools(context.Background(), o)
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if peak.Load() != 1 || runs.Load() != 2 {
+		t.Fatalf("peak concurrency %d over %d runs", peak.Load(), runs.Load())
+	}
+}
+
+func TestUpdateToolsRefusesWhatItCannotDo(t *testing.T) {
+	f, tf, _ := stage2Prep(t)
+	if _, err := macvm.Prepare(context.Background(), f.opts); err != nil {
+		t.Fatal(err)
+	}
+	base := f.opts.Layout.BaseDir(0)
+	before, _ := os.ReadFile(filepath.Join(base, macvm.ToolsRecordFile))
+	// No power source: refused, not a panic.
+	o := updateOpts(f, tf, newGuest(), "")
+	o.Power, o.Force = nil, true
+	if _, _, err := macvm.UpdateTools(context.Background(), o); err == nil {
+		t.Fatal("a nil power source was accepted")
+	}
+	// A guest agent build the stage has no binary for.
+	var boots, stops atomic.Int64
+	o = updateOpts(f, tf, newGuest(), "0.10.1")
+	o.Stage = tf.stage(newGuest(), &boots, &stops)
+	if _, _, err := macvm.UpdateTools(context.Background(), o); err == nil || boots.Load() != 0 {
+		t.Fatalf("an agent build with nothing to install: err %v", err)
+	}
+	// A stage that does not report the build it was asked for.
+	o.Stage = hookStage(func(context.Context, macvm.Stage2Input) (macvm.ToolsResult, error) { return noneOnly, nil })
+	if _, changed, err := macvm.UpdateTools(context.Background(), o); err == nil || changed {
+		t.Fatalf("a stage that skipped the agent: changed %v err %v", changed, err)
+	}
+	if after, _ := os.ReadFile(filepath.Join(base, macvm.ToolsRecordFile)); !bytes.Equal(before, after) {
+		t.Fatal("a refused update changed the base")
+	}
+}
+
+func TestUpdateToolsReportsWaitingForAC(t *testing.T) {
+	f, tf, _ := stage2Prep(t)
+	if _, err := macvm.Prepare(context.Background(), f.opts); err != nil {
+		t.Fatal(err)
+	}
+	f.power.set(false)
+	ev := &events{}
+	ev.on = func(e macvm.PrepareEvent) {
+		if e.Phase == macvm.PhaseTools && e.Paused {
+			go f.power.set(true)
+		}
+	}
+	o := updateOpts(f, tf, newGuest(), "")
+	o.Force, o.Progress = true, ev.add
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, changed, err := macvm.UpdateTools(ctx, o)
+	ev.mu.Lock()
+	defer ev.mu.Unlock()
+	if !slices.ContainsFunc(ev.evs, func(e macvm.PrepareEvent) bool {
+		return e.Phase == macvm.PhaseTools && e.Paused && e.Detail == "waiting for AC power"
+	}) {
+		t.Fatalf("changed %v err %v events = %+v", changed, err, ev.evs)
+	}
+}
+
+// A download never follows a redirect off https.
+func TestDownloadRefusesRedirectToHTTP(t *testing.T) {
+	var plainHits atomic.Int64
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		plainHits.Add(1)
+		_, _ = w.Write([]byte("claude-binary-2.1.310"))
+	}))
+	t.Cleanup(plain.Close)
+	tlsSrv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, plain.URL+"/claude", http.StatusFound)
+	}))
+	t.Cleanup(tlsSrv.Close)
+	body := []byte("claude-binary-2.1.310")
+	pin := macvm.ToolPin{ID: macvm.HarnessClaudeCode, Version: "2.1.310", URL: tlsSrv.URL + "/claude", SHA256: shaHex(body), Size: int64(len(body)),
+		Dest: "/usr/local/bin/claude", VersionArgv: []string{"/usr/local/bin/claude", "--version"}}
+	st := &macvm.ToolsStage{ToolsOptions: macvm.ToolsOptions{Tooling: macvm.Tooling{Version: 1, Harnesses: []macvm.ToolPin{pin}}, Cache: t.TempDir(), HTTP: tlsSrv.Client()},
+		Boot: func(context.Context, macvm.MachineSpec) (macvm.ToolsGuest, func(context.Context) error, error) {
+			return newGuest(), func(context.Context) error { return nil }, nil
+		}}
+	res := runStage(t, st)
+	if err := res.Withheld[macvm.HarnessClaudeCode]; err == nil || !strings.Contains(err.Error(), "redirect") || plainHits.Load() != 0 {
+		t.Fatalf("withheld = %v, plain hits %d", res.Withheld, plainHits.Load())
+	}
+}
+
+// What a crashed update left behind is swept by the next call under the update
+// lock, even when that call finds nothing to update.
+func TestUpdateToolsSweepsLeftoversEvenWhenCurrent(t *testing.T) {
+	f, tf, _ := stage2Prep(t)
+	if _, err := macvm.Prepare(context.Background(), f.opts); err != nil {
+		t.Fatal(err)
+	}
+	base := f.opts.Layout.BaseDir(0)
+	if err := os.MkdirAll(base+".update", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base+".update", macvm.DiskFile), []byte("old generation"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	g := newGuest()
+	if _, changed, err := macvm.UpdateTools(context.Background(), updateOpts(f, tf, g, "0.10.0")); err != nil || changed || len(g.runs) != 0 {
+		t.Fatalf("update of a current base: changed %v err %v runs %d", changed, err, len(g.runs))
+	}
+	if _, err := os.Stat(base + ".update"); !os.IsNotExist(err) {
+		t.Fatalf("leftover generation kept: %v", err)
+	}
 }
