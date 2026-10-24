@@ -17,11 +17,13 @@
 #
 # /Users/Shared is world-writable and sticky, and a login can plant a link, a file or a directory there at
 # any moment, during this script too. So the base is made with mkdir(2), which never follows a link and fails
-# on anything already there. Anything there that is not a root-owned directory nobody else may write goes
-# into a fresh root-only quarantine directory (mktemp), and mkdir is tried again, three times at most; then
-# the script stops and macOS VMs stay off. Nothing inside the base is touched before it is verified. Once it
-# is, the sticky bit stops any other login renaming or replacing it, and its 0755 mode stops them writing
-# in it, so the steps inside cannot race. They still use chown -h and chmod -h only.
+# on anything already there. Anything found there must already be exactly the base: one lstat snapshot of
+# its type, owner and mode, compared whole, since separate lookups leave a gap a login can switch the object
+# in. Anything else goes into a fresh root-only quarantine directory (mktemp), and mkdir is tried again,
+# three times at most; then the script stops and macOS VMs stay off. Only an object this run's mkdir made
+# gets its owner and mode set; nothing found already there is ever chowned or chmodded. Once the base
+# verifies, the sticky bit stops any other login renaming or replacing it, and its 0755 mode stops them
+# writing in it, so inside it a child that is not exact is removed and made again.
 #
 # The lock sits outside the world-writable entries directory so no login can unlink it; the helper walks to
 # it from / and refuses anything else (internal/macvm/admission).
@@ -29,22 +31,12 @@
 # WARDYN_PKG_ROOT is a path prefix for the tests (scripts/test-pkg-postinstall.sh); the installer never sets it.
 set -eu
 R="${WARDYN_PKG_ROOT:-}"
+DIR755="Directory 0:0 0755"
+DIR1777="Directory 0:0 1777"
+FILE644="Regular File 0:0 0644"
 
-# ledger_ok <path> <what>: true when the path is a real, root-owned object of that kind that nobody else may
-# write. BSD stat reads the path itself, never a link's target.
-ledger_ok() {
-  [ ! -L "$1" ] || return 1
-  case "$2" in dir) [ -d "$1" ] ;; file) [ -f "$1" ] ;; esac || return 1
-  [ "$(stat -f %u "$1")" = 0 ] || return 1
-  [ $((0$(stat -f %Lp "$1") & 022)) = 0 ]
-}
-
-# exact <path> <kind> <mode>: true when the path is that kind, root:wheel, with exactly that mode.
-exact() {
-  [ ! -L "$1" ] || return 1
-  case "$2" in dir) [ -d "$1" ] ;; file) [ -f "$1" ] ;; esac || return 1
-  [ "$(stat -f %u:%g "$1")" = 0:0 ] && [ "$(stat -f %Mp%Lp "$1")" = "$3" ]
-}
+# snap <path>: type, uid:gid and mode of the path itself (BSD stat never follows a link), in one lstat.
+snap() { stat -f '%HT %u:%g %Mp%Lp' "$1" 2>/dev/null || true; }
 
 # quarantine <path>: move whatever is at the path into a new root-only directory with a random name. The
 # trailing slash names that directory, which no other login can reach, so a planted name is never followed.
@@ -53,31 +45,32 @@ quarantine() {
   mv "$1" "$q/" 2>/dev/null || rmdir "$q"
 }
 
+# owned <path> <mode>: give an object this run just made its owner and mode.
+owned() { chown -h root:wheel "$1" && chmod -h "$2" "$1"; }
+
 # make_ledger runs as the left side of ||, where sh ignores set -e, so every step checks its own status.
 make_ledger() {
   base="$R/Users/Shared/Wardyn"
   ents="$base/macos-vm-admission"
   lock="$base/admission.lock"
   n=0
-  until mkdir -m 0755 "$base" 2>/dev/null || ledger_ok "$base" dir; do
+  made=0
+  until { mkdir -m 0755 "$base" 2>/dev/null && made=1; } || [ "$(snap "$base")" = "$DIR755" ]; do
     n=$((n + 1))
-    [ "$n" -lt 3 ] || { echo "postinstall: $base is not a root-owned directory after $n attempts" >&2; return 1; }
+    [ "$n" -lt 3 ] || { echo "postinstall: $base is not a root:wheel 0755 directory after $n attempts" >&2; return 1; }
     quarantine "$base" || return 1
   done
-  # Root-owned now, so no other login can move it: repair the owner and mode, then check before going in.
-  chown -h root:wheel "$base" && chmod -h 0755 "$base" || return 1
-  exact "$base" dir 0755 || { echo "postinstall: $base did not verify" >&2; return 1; }
-  # Only root writes in the base, so anything here is root's; a link or the wrong kind of object is replaced.
-  if [ -L "$ents" ] || { [ -e "$ents" ] && [ ! -d "$ents" ]; }; then rm -rf "$ents" || return 1; fi
-  [ -d "$ents" ] || mkdir -m 1777 "$ents" || return 1
-  chown -h root:wheel "$ents" && chmod -h 1777 "$ents" || return 1
-  # An upgrade keeps a sound lock: a replaced inode would end mutual exclusion with a live helper. One that
-  # anybody else could write is replaced, since a login could hold it open.
-  if ! ledger_ok "$lock" file; then
-    rm -rf "$lock" && (set -C; : >"$lock") || return 1
+  [ "$made" = 0 ] || owned "$base" 0755 || return 1
+  [ "$(snap "$base")" = "$DIR755" ] || { echo "postinstall: $base did not verify" >&2; return 1; }
+  # Only root writes in the base. An upgrade keeps exact children, and the lock's inode with it: a replaced
+  # lock would end mutual exclusion with a live helper. Anything else is removed and made again.
+  if [ "$(snap "$ents")" != "$DIR1777" ]; then
+    rm -rf "$ents" && mkdir -m 1777 "$ents" && owned "$ents" 1777 || return 1
   fi
-  chown -h root:wheel "$lock" && chmod -h 0644 "$lock" || return 1
-  exact "$base" dir 0755 && exact "$ents" dir 1777 && exact "$lock" file 0644 \
+  if [ "$(snap "$lock")" != "$FILE644" ]; then
+    rm -rf "$lock" && (set -C; : >"$lock") && owned "$lock" 0644 || return 1
+  fi
+  [ "$(snap "$base")" = "$DIR755" ] && [ "$(snap "$ents")" = "$DIR1777" ] && [ "$(snap "$lock")" = "$FILE644" ] \
     || { echo "postinstall: the ledger under $base did not verify" >&2; return 1; }
 }
 

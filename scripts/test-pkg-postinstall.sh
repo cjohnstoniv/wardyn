@@ -5,13 +5,15 @@
 # Checks the runner package's postinstall ledger setup (deploy/runner/macos/pkg-scripts/postinstall) against
 # a temp root (WARDYN_PKG_ROOT), without root or macOS. What it pins: the three ledger objects are made from
 # nothing; a pre-planted user-owned /Users/Shared/Wardyn is moved aside and replaced; a pre-planted lock is
-# replaced; kept root-owned objects are repaired to the exact layout; a symlinked Wardyn dir, entries dir or
-# lock is never followed; a login racing the script with links and directories never gets a victim's mode or
-# owner changed; and a predicted quarantine name is never used.
+# replaced; root-owned objects that are not exactly the layout are moved aside or replaced, never chmodded;
+# a symlinked Wardyn dir, entries dir or lock is never followed; a login racing the script with links and
+# directories never gets a victim's mode or owner changed; a predicted quarantine name is never used; and a
+# directory switched for a hardlink to a root-owned file between two lookups never gets that file chmodded.
 #
 # What it cannot check unprivileged: real root:wheel ownership. Stub stat, chown, mkdir, mktemp and install
 # stand in, and keep a shadow table of the inodes the script made or chowned (root-owned; anything else
-# reads as uid 501). chown and chmod follow a link unless given -h, as the BSD tools do. That the real BSD
+# reads as uid 501). chown and chmod follow a link unless given -h, as the BSD tools do. The stub reads
+# `stat -f '%HT %u:%g %Mp%Lp'` from one GNU lstat, as BSD stat takes one snapshot. That the real BSD
 # tools accept the same calls is proven on the hosted `macos` job (ci.yml) and P1 on the rented Mac.
 #
 # Usage: scripts/test-pkg-postinstall.sh
@@ -28,7 +30,14 @@ T="${WORK}/tools"; OWN="${WORK}/owners"; mkdir -p "$T" "$OWN"
 export OWN
 stub() { printf '#!/bin/bash\nmark() { local i; i="$(/usr/bin/stat -c %%i "$1" 2>/dev/null)" && : >"$OWN/$i"; }\nis_root() { local i; i="$(/usr/bin/stat -c %%i "$1" 2>/dev/null)" && [ -e "$OWN/$i" ]; }\n%s\n' "$2" >"$T/$1"; chmod +x "$T/$1"; }
 # BSD `stat -f <fmt> <path>` reads the path itself (lstat), from GNU stat and the shadow owner table.
-stub stat 'p="$3"; [ -e "$p" ] || [ -L "$p" ] || exit 1; case "$2" in
+# SWAP_PATH/SWAP_TO: the first stat of SWAP_PATH first swaps it for a hardlink to SWAP_TO, as a login winning
+# the gap before that lookup would.
+stub stat 'p="$3"; if [ -n "${SWAP_PATH:-}" ] && [ "$p" = "$SWAP_PATH" ] && [ ! -e "$SWAP_PATH.swapped" ]; then
+  /bin/mv "$p" "$p.away"; /bin/ln "$SWAP_TO" "$p"; : >"$SWAP_PATH.swapped"; fi
+[ -e "$p" ] || [ -L "$p" ] || exit 1; case "$2" in
+  "%HT %u:%g %Mp%Lp") IFS="|" read -r t i m < <(/usr/bin/stat -c "%F|%i|%a" "$p")
+    case "$t" in directory) t=Directory ;; "regular file"|"regular empty file") t="Regular File" ;; "symbolic link") t="Symbolic Link" ;; esac
+    if [ -e "$OWN/$i" ]; then o=0:0; else o=501:20; fi; printf "%s %s %04o\n" "$t" "$o" "0$m" ;;
   %u) if is_root "$p"; then echo 0; else echo 501; fi ;;
   %u:%g) if is_root "$p"; then echo 0:0; else echo 501:20; fi ;;
   %Lp) /usr/bin/stat -c %a "$p" ;;
@@ -48,7 +57,7 @@ stub launchctl 'exit 0'
 
 # fresh <name>: a new temp root that carries the helper binary, so the package would install the ledger.
 fresh() { R="${WORK}/$1"; rm -rf "$R"; mkdir -p "$R/Users/Shared" "$R/usr/local/wardyn/bin"; chmod 1777 "$R/Users/Shared"; : >"$R/usr/local/wardyn/bin/wardyn-macvm"; find "$OWN" -type f -delete; }
-post() { env -i PATH="$T:/usr/bin:/bin" OWN="$OWN" WARDYN_PKG_ROOT="$R" sh "$POST" >"${WORK}/out" 2>&1; }
+post() { env -i PATH="$T:/usr/bin:/bin" OWN="$OWN" WARDYN_PKG_ROOT="$R" SWAP_PATH="${SWAP_PATH:-}" SWAP_TO="${SWAP_TO:-}" sh "$POST" >"${WORK}/out" 2>&1; }
 run() { post || { cat "${WORK}/out" >&2; fail "postinstall failed ($1)"; }; }
 ino() { /usr/bin/stat -c %i "$1"; }
 root_owned() { [ -e "$OWN/$(ino "$1")" ]; }
@@ -69,9 +78,9 @@ check_ledger() { # check_ledger <what>
 
 # 1. From nothing, and again over a sound ledger: the lock keeps its inode.
 fresh nothing; run nothing; check_ledger "from nothing"
-ino="$(/usr/bin/stat -c %i "$(B)/admission.lock")"
+echo held >"$(B)/admission.lock"; ino="$(/usr/bin/stat -c %i "$(B)/admission.lock")"
 run again; check_ledger "an upgrade"
-[ "$(/usr/bin/stat -c %i "$(B)/admission.lock")" = "$ino" ] || fail "an upgrade replaced a sound lock"
+[ "$(/usr/bin/stat -c %i "$(B)/admission.lock")" = "$ino" ] && [ "$(cat "$(B)/admission.lock")" = held ] || fail "an upgrade replaced a sound lock"
 
 # 2. A pre-planted user-owned Wardyn directory (with a lock of its own and a world-writable mode).
 fresh planted-dir; mkdir -p "$(B)/macos-vm-admission"; : >"$(B)/admission.lock"; : >"$(B)/evil"; chmod 777 "$(B)"
@@ -103,11 +112,16 @@ fresh link-ents; run first; rm -rf "$(B)/macos-vm-admission"; mkdir "$R/ents-tar
 run link-ents; check_ledger "a symlinked entries directory"
 [ -z "$(ls -A "$R/ents-target")" ] || fail "the entries symlink's target was written to"
 
-# 5. Kept root-owned objects are repaired to the exact layout; the lock keeps its inode.
-fresh repair; run first; chmod 700 "$(B)"; chmod 755 "$(B)/macos-vm-admission"; chmod 600 "$(B)/admission.lock"
-echo held >"$(B)/admission.lock"; ino="$(ino "$(B)/admission.lock")"
-run repair; check_ledger "a repaired ledger"
-[ "$(ino "$(B)/admission.lock")" = "$ino" ] && [ "$(cat "$(B)/admission.lock")" = held ] || fail "the repair replaced a sound lock"
+# 5. Nothing found existing is chmodded. A root-owned base that is not exact is moved aside and made again;
+# inside a sound base, children that are not exact are replaced.
+fresh not-exact-base; run first; chmod 700 "$(B)"; : >"$(B)/marker"
+run not-exact-base; check_ledger "a root-owned 0700 base"
+[ ! -e "$(B)/marker" ] && [ -n "$(ls -d "$R"/Users/Shared/.wardyn-quarantine.*/Wardyn/marker 2>/dev/null || true)" ] \
+  || fail "a root-owned base that was not exact was kept"
+fresh not-exact-children; run first; chmod 755 "$(B)/macos-vm-admission"; : >"$(B)/macos-vm-admission/e-1.json"
+chmod 600 "$(B)/admission.lock"; echo held >"$(B)/admission.lock"
+run not-exact-children; check_ledger "children that are not exact"
+[ ! -e "$(B)/macos-vm-admission/e-1.json" ] && [ ! -s "$(B)/admission.lock" ] || fail "a child that was not exact was kept"
 
 # 6. A package without the helper makes no ledger.
 fresh nohelper; rm "$R/usr/local/wardyn/bin/wardyn-macvm"; run nohelper
@@ -158,5 +172,15 @@ check_ledger "a predicted quarantine name"
 [ -z "$(ls -A "$R/victim")" ] && [ "$(mode "$R/victim")" = 700 ] && ! root_owned "$R/victim" || fail "the moved-aside directory landed in the predicted name's target"
 q="$(ls -d "$R"/Users/Shared/.wardyn-quarantine.?????? 2>/dev/null | head -1 || true)"
 [ -n "$q" ] && [ -e "$q/Wardyn/evil" ] && [ "$(mode "$q")" = 700 ] && root_owned "$q" || fail "the directory was not moved into a random root-only quarantine"
+
+# 9. A type switch between lookups: a login's Wardyn directory is renamed away and a hardlink to a root-owned
+# 0600 file planted at the name just before the script's first stat of it. That file must keep its mode and
+# owner, and the hardlink must be moved aside, not made the base.
+fresh type-switch; mkdir "$(B)"; echo secret >"$R/secret"; chmod 600 "$R/secret"; mark "$R/secret"
+SWAP_PATH="$(B)" SWAP_TO="$R/secret" post || { cat "${WORK}/out" >&2; fail "postinstall failed (type-switch)"; }
+[ -e "$(B).swapped" ] || fail "the type switch never happened"
+[ "$(mode "$R/secret")" = 600 ] && root_owned "$R/secret" && [ "$(cat "$R/secret")" = secret ] \
+  || fail "the type switch changed the root-owned file: $(mode "$R/secret")"
+check_ledger "a type switch"; [ "$(ino "$(B)")" != "$(ino "$R/secret")" ] || fail "the hardlink became the base"
 
 echo "test-pkg-postinstall: ok"
