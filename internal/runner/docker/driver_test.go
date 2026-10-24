@@ -532,6 +532,36 @@ func TestCreateSandbox_OlderProxyImageNamesTheFix(t *testing.T) {
 	}
 }
 
+// TestCreateSandbox_ProxyExitsAtConfigLoad_ClockSkew pins L1 (PR #1051's
+// second review): a daemon whose clock lags the host's — a remote daemon, or
+// Docker Desktop's VM clock after the host sleeps — can report a StartedAt
+// already SEVERAL SECONDS in the past on the very first inspect. Measuring the
+// settle window from that skewed StartedAt alone would make the proxy look
+// already "settled" immediately, reopening F1 exactly the way a genuinely-fast
+// exit does. watchProxyExit must measure from max(StartedAt, the watch's own
+// start) instead, so a skewed clock never counts time before the watch itself
+// began.
+func TestCreateSandbox_ProxyExitsAtConfigLoad_ClockSkew(t *testing.T) {
+	f := newFakeDocker()
+	f.images["busybox:latest"] = true
+	d := newTestDriver(f)
+	d.proxySettle = proxyStartSettle                                // exercise the real settle window
+	f.legacyProxyImages = map[string]bool{"wardyn-proxy:dev": true} // the exit-watch is the path for an image without the marker
+	runID := testSpec().RunID
+	name := proxyContainerName(runID)
+	f.startedAtOverride = map[string]time.Time{name: time.Now().Add(-5 * time.Second)}
+	f.exitAfterInspects = map[string]int{name: 2} // the listen lookup, then Running once, then exited
+	f.logs = map[string][]byte{name: muxFrame(1, `unknown field "z"`)}
+
+	_, err := d.CreateSandbox(context.Background(), testSpec())
+	if err == nil {
+		t.Fatal("expected the proxy's config-load failure despite a clock-skewed StartedAt")
+	}
+	if !strings.Contains(err.Error(), "proxy exited at config load (exit 1)") {
+		t.Errorf("error = %v; want the named cause", err)
+	}
+}
+
 func TestTeardown_Idempotent(t *testing.T) {
 	f := newFakeDocker()
 	f.images["busybox:latest"] = true

@@ -2333,7 +2333,6 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 |---|---|---|---|
 | `WARDYN_PROXY_URL` | string | (unset) | egress proxy address inside the sandbox (`internal/sidecar`, `internal/runner/docker`) |
 | `WARDYN_RUN_ID` | string | (unset) | this run's id, injected into sidecar/sandbox |
-| `WARDYN_PROXY_WAIT_SECS` | int | `10` | how many seconds an agent image's `agent-run` waits for `WARDYN_PROXY_URL` to accept a connection before it carries on with one stderr line; set by no run, read by the image tests |
 | `WARDYN_REPO_URL` | string | (unset) | repo clone URL for the run |
 | `WARDYN_REPO_SLUG` | string | (unset) | repo slug for the run |
 | `WARDYN_REPOS` | string (JSON) | (unset) | multi-repo spec for the run |
@@ -2653,6 +2652,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 | Variable | Type | Default | Notes |
 |---|---|---|---|
+| `WARDYN_PROXY_WAIT_SECS` | int | `10` | how many seconds an agent image's `agent-run` waits for `WARDYN_PROXY_URL` to accept a connection before it carries on with one stderr line; shell-only; no run sets it |
 | `WARDYN_AGENT_ARCH` | string | (unset = `uname -m`) | [`scripts/stage-agent-binary.sh`](../scripts/stage-agent-binary.sh) only, build-time: the architecture to stage, `amd64` or `arm64`. `--arch` beats it. |
 | `WARDYN_AWS_SSO_LOGIN_COMMAND` | string | fixed literal | the `aws-sso` image's chained login+upload command ([`deploy/images/aws-sso/login-hint.sh`](../deploy/images/aws-sso/login-hint.sh)), exported into `signin-pane.sh`'s self-run pane and printed on both the hint and the failure path. Not operator-settable — a constant, not a knob |
 | `WARDYN_AWS_SSO_SELFRUN_BANNER`, `WARDYN_AWS_SSO_SELFRUN_DONE`, `WARDYN_AWS_SSO_SELFRUN_FAILED`, `WARDYN_AWS_SSO_SELFRUN_PREP_STUCK` | string | fixed literal | the aws-sso self-run pane's own status lines (`login-hint.sh` → `signin-pane.sh`), one per phase of the device-code flow. Not operator-settable — message constants, not knobs |

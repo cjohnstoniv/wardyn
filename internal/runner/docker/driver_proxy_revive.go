@@ -34,6 +34,36 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// proxyStartWatch/proxyStartWatchInterval bound how long startProxy waits to
+// see whether a just-started proxy stays up, versus exiting right back out
+// because it refused its own rendered config. Kept short: this sits on the
+// create-latency path for every run, and a HEALTHY proxy reaches a STABLE
+// Running well inside it — the watch exists to catch the FAST config-load
+// failure, not to babysit a slow one.
+//
+// proxyStartSettle is how long Running must have HELD before the watch trusts
+// it (Driver.proxySettle's production value, set by New()). Docker flips
+// container.State.Running to true the INSTANT ContainerStart returns — well
+// before the sidecar's own process has read and decoded its config. Against a
+// real daemon, a real wardyn-proxy given an unknown config key was observed
+// dying 47-451ms after that first Running sighting, and a watch that returned
+// on the FIRST Running observation (no settle check) caught that failure only
+// ~2/10 times. Any exit inside the settle window is reported with the SAME
+// fixed cause string below: from the driver's side, a proxy that never
+// stayed up long enough to matter IS a config-load failure, whatever
+// actually killed it.
+//
+// The settle window is measured from max(the container's own StartedAt, the
+// watch's own start), never from StartedAt alone: a daemon whose clock lags
+// the host's can report a StartedAt already several seconds in the past on
+// the very FIRST inspect, which would let that inspect look already settled.
+// See proxySettleSince.
+const (
+	proxyStartWatch         = 3 * time.Second
+	proxyStartWatchInterval = 200 * time.Millisecond
+	proxyStartSettle        = 1 * time.Second
+)
+
 // proxyReadyWait bounds how long startProxy waits for a started proxy to print proxy.ReadyMarker, which it does
 // once it has loaded its config and bound its listener. The wait ends at once when the proxy exits first
 // (it refused its own config: a strict-decode error, an unreadable MITM key, ...), so this bound is only
@@ -303,7 +333,10 @@ func (d *Driver) startProxyOn(ctx context.Context, image string, runID uuid.UUID
 		remove()
 		return "", fmt.Errorf("docker: connect proxy to %s: %w", d.cfg.InternalNetwork, err)
 	}
-	att, err := d.startWithConfig(ctx, runID, resp.ID, cfgJSON)
+	// An image that predates the ready marker never prints it: wait for it only from an image that
+	// says it does, and watch such a proxy for an early exit as before.
+	marker := d.proxyPrintsReadyMarker(ctx, image)
+	att, err := d.startWithConfig(ctx, runID, resp.ID, cfgJSON, marker)
 	if err != nil {
 		remove()
 		return "", err
@@ -315,19 +348,26 @@ func (d *Driver) startProxyOn(ctx context.Context, image string, runID uuid.UUID
 	}
 	// Wait for the proxy's ready marker: it is printed once the listener is bound, so the agent is
 	// never started into "connection refused", and a proxy that exits first (it refused its own
-	// config) is named here instead of surfacing as the generic "proxy has no IP...".
+	// config) is named here instead of surfacing as the generic "proxy has no IP...". A proxy image
+	// without the marker is only watched briefly for exiting right back out, as before.
 	//
 	// On a failure the container is deliberately NOT removed here: on the CreateSandbox path the
 	// caller removes it after also rolling back the per-run network; on the ReplaceProxy path it
 	// stays so its logs still name the cause, and the next revive removes it by name.
-	if err := d.awaitProxyReady(ctx, resp.ID, att); err != nil {
+	var waitErr error
+	if marker {
+		waitErr = d.awaitProxyReady(ctx, resp.ID, att)
+	} else {
+		waitErr = d.watchProxyExit(ctx, resp.ID)
+	}
+	if err := waitErr; err != nil {
 		d.closeLocalModels(runID) // an exited proxy's addresses are free for another container
 		return resp.ID, err
 	}
 	return resp.ID, nil
 }
 
-// startWithConfig attaches to the created proxy's stdin and stdout, starts it, writes cfgJSON to
+// startWithConfig attaches to the created proxy's stdin (and stdout, when stdout is set), starts it, writes cfgJSON to
 // stdin and closes it: the proxy reads its config to EOF. Attaching before the start is what
 // `docker run -i` does, so no byte is written before the proxy's stdin exists, and none of its
 // stdout is missed. The stream is returned open for awaitProxyReady, which reads the proxy's ready
@@ -335,8 +375,8 @@ func (d *Driver) startProxyOn(ctx context.Context, image string, runID uuid.UUID
 // to the container (none exists on Docker Desktop for Mac) and no log driver that keeps logs. The
 // config's listen address is first bound to the proxy's own address on runID's per-run network (see
 // listenOnRunNetwork).
-func (d *Driver) startWithConfig(ctx context.Context, runID uuid.UUID, id string, cfgJSON []byte) (att client.ContainerAttachResult, err error) {
-	att, err = d.cli.ContainerAttach(ctx, id, client.ContainerAttachOptions{Stream: true, Stdin: true, Stdout: true})
+func (d *Driver) startWithConfig(ctx context.Context, runID uuid.UUID, id string, cfgJSON []byte, stdout bool) (att client.ContainerAttachResult, err error) {
+	att, err = d.cli.ContainerAttach(ctx, id, client.ContainerAttachOptions{Stream: true, Stdin: true, Stdout: stdout})
 	if err != nil {
 		return att, fmt.Errorf("docker: attach proxy stdin: %w", err)
 	}
@@ -401,11 +441,11 @@ func (d *Driver) listenOnRunNetwork(ctx context.Context, runID uuid.UUID, id str
 }
 
 // proxyNotReadyMessage is what a proxy that stays up but never prints its ready marker is reported as.
-// It is the exit-at-config-load wording, reused until the owner settles copy for this case.
+// The failure reason shows in the console, so it keeps the exit-at-config-load wording until the owner
+// settles copy for this case: the text does not say the proxy exited.
 const proxyNotReadyMessage = "docker: proxy exited at config load"
 
-// proxyNotReadyError is a proxy that was still running when the ready bound ran out. An image older
-// than this runner never prints the marker, so the same failure also names that cause.
+// proxyNotReadyError is a proxy that was still running when the ready bound ran out.
 type proxyNotReadyError struct{ tail string }
 
 func (e *proxyNotReadyError) Error() string { return proxyNotReadyMessage + ": " + e.tail }
@@ -474,11 +514,88 @@ func (d *Driver) proxyExitedBeforeReady(ctx context.Context, id string) error {
 	}
 }
 
+// proxyReadyLabel is the label wardyn-proxy images carry from the release that prints proxy.ReadyMarker.
+const proxyReadyLabel = "io.wardyn.proxy.ready-marker"
+
+// proxyPrintsReadyMarker reports whether image says it prints the ready marker. An organisation's proxy
+// image can be older than this runner (the peers-only fallback is built for that), and such an image
+// never prints it, so a label it lacks, or an image that cannot be read, means the older exit-watch
+// alone, logged once for each image.
+func (d *Driver) proxyPrintsReadyMarker(ctx context.Context, image string) bool {
+	res, err := d.cli.ImageInspect(ctx, image)
+	if err == nil && res.InspectResponse.Config != nil && res.InspectResponse.Config.Labels[proxyReadyLabel] == "1" {
+		return true
+	}
+	if _, seen := d.legacyProxyWarned.LoadOrStore(image, true); !seen {
+		slog.Warn("docker: the proxy image does not announce when it is listening, so a run's agent starts without waiting for it; "+
+			"upgrade the organisation's proxy image to this runner's release", "image", image)
+	}
+	return false
+}
+
 func (d *Driver) proxyReadyBound() time.Duration {
 	if d.proxyReady > 0 {
 		return d.proxyReady
 	}
 	return proxyReadyWait
+}
+
+// watchProxyExit polls id for up to proxyStartWatch, returning a named error
+// the moment it observes the container exited with a non-zero code (it
+// refused its config at start) and nil once it has observed Running held for
+// at least d.proxySettle (the common case) or once the window elapses without
+// either — a proxy still mid-start at that point is left to the caller's own
+// next step (the IP lookup, or a subsequent ProxyConfig read) rather than
+// this watch inventing a second timeout.
+func (d *Driver) watchProxyExit(ctx context.Context, id string) error {
+	watchStart := time.Now()
+	deadline := watchStart.Add(proxyStartWatch)
+	for {
+		res, err := d.cli.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
+		if err != nil {
+			// Can't observe it — leave the verdict to whatever inspects next.
+			return nil
+		}
+		st := res.Container.State
+		if st != nil {
+			// Checked BEFORE the Running/settle branch, and regardless of
+			// Running: a container that has already exited is never also
+			// reported Running, so there is no ordering ambiguity — but
+			// checking the terminal state first keeps that true even if a
+			// future daemon/fake ever reported both transiently.
+			if st.ExitCode != 0 {
+				return proxyConfigLoadError(st.ExitCode, d.proxyExitLogTail(ctx, id))
+			}
+			if st.Running && time.Since(proxySettleSince(st, watchStart)) >= d.proxySettle {
+				return nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(proxyStartWatchInterval):
+		}
+	}
+}
+
+// proxySettleSince resolves the moment watchProxyExit measures its settle
+// window from: the LATER of the container's own StartedAt (Docker's
+// RFC3339Nano timestamp) and watchStart, never earlier than watchStart. A
+// missing/unparseable StartedAt leaves watchStart standing; the case this
+// guards is a PARSEABLE StartedAt further in the past than watchStart, which
+// a clock-skewed daemon can report on the very first inspect — using it
+// directly would let that inspect already look "settled". max() refuses to
+// count any time before the watch itself began, so a skewed StartedAt can
+// only make the wait LONGER or be ignored, never shorter.
+func proxySettleSince(st *container.State, watchStart time.Time) time.Time {
+	since := watchStart
+	if t, err := time.Parse(time.RFC3339Nano, st.StartedAt); err == nil && t.After(since) {
+		since = t
+	}
+	return since
 }
 
 // proxyExitLogTail reads the last ~20 lines the proxy wrote before dying, so

@@ -428,7 +428,9 @@ func (s *Server) ListenAndServe() error {
 }
 
 // ReadyMarker is the line a sidecar prints on stdout once its listener is bound. A runner reads it off
-// the container's attach stream, which works on any engine, to know the agent may start.
+// the container's attach stream, which works on any engine, to know the agent may start. It means
+// "listening", nothing more: if a Docker proxy ever self-lapses (Config self_lapse), the marker must
+// move to after the first token renewal, or the agent starts behind a proxy that will refuse it.
 const ReadyMarker = "wardyn-proxy: ready"
 
 // OnListening sets fn to run once the main listener is bound, before the first connection is

@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/image"
 	"github.com/moby/moby/api/types/jsonstream"
@@ -335,8 +336,16 @@ type fakeDocker struct {
 	// delivered and createdAt when each container was created, so a test can order the two.
 	proxyReadyDelay time.Duration
 	proxyNeverReady bool
-	proxyReadyAt    time.Time
-	createdAt       map[string]time.Time
+	// legacyProxyImages are proxy images from before the ready marker: they carry no label and
+	// their proxy prints no marker. A tag the fake has not seen is a current image.
+	legacyProxyImages map[string]bool
+	proxyReadyAt      time.Time
+	createdAt         map[string]time.Time
+
+	// startedAtOverride, keyed by container name, overrides ContainerStart's default (real, current-time)
+	// StartedAt for that container: it simulates a daemon whose clock lags the host's, to prove
+	// watchProxyExit measures its settle window from the watch's own start, never from a skewed StartedAt.
+	startedAtOverride map[string]time.Time
 
 	// exportTar is what ContainerExport streams (a VM image's filesystem); exports counts the calls.
 	exportTar []byte
@@ -401,8 +410,12 @@ func (f *fakeDocker) ContainerAttach(_ context.Context, id string, opts client.C
 		return client.ContainerAttachResult{}, fakeNotFound{msg: "no such container: " + id}
 	}
 	f.attached = append(f.attached, fakeAttach{id: id, started: c.state != nil && c.state.Running})
+	// The stream's behaviour is fixed here, under the lock, so a test changing the knobs between calls
+	// cannot race a stream still being read.
+	conn := &fakeStdinConn{f: f, id: id, closed: make(chan struct{}), delay: f.proxyReadyDelay, never: f.proxyNeverReady,
+		legacy: c.cfg != nil && f.legacyProxyImages[c.cfg.Image]}
 	return client.ContainerAttachResult{
-		HijackedResponse: client.NewHijackedResponse(&fakeStdinConn{f: f, id: id, closed: make(chan struct{})}, "application/vnd.docker.raw-stream"),
+		HijackedResponse: client.NewHijackedResponse(conn, "application/vnd.docker.raw-stream"),
 	}, nil
 }
 
@@ -414,6 +427,9 @@ type fakeStdinConn struct {
 	closed chan struct{}
 	once   sync.Once
 	sent   bool
+	// delay, never and legacy are the proxy's output script, taken at attach.
+	delay         time.Duration
+	never, legacy bool
 }
 
 func (c *fakeStdinConn) Write(b []byte) (int, error) {
@@ -428,13 +444,17 @@ func (c *fakeStdinConn) Write(b []byte) (int, error) {
 // open until Close, as a live container's does. A proxy scripted to exit (exitAfterInspects,
 // olderProxyRefuses) prints nothing and its stream ends. Any other container's stream ends at once.
 func (c *fakeStdinConn) Read(p []byte) (int, error) {
+	if c.sent { // the marker went out: the stream only waits for Close, and reads nothing of the fake's
+		<-c.closed
+		return 0, io.EOF
+	}
 	c.f.mu.Lock()
 	ct := c.f.containers[c.id]
 	_, exits := c.f.exitAfterInspects[c.id]
 	refuses := c.f.olderProxyRefuses != "" && bytes.Contains(c.f.stdin[c.id], []byte(`"`+c.f.olderProxyRefuses+`"`))
-	delay, never := c.f.proxyReadyDelay, c.f.proxyNeverReady
 	c.f.mu.Unlock()
-	if ct == nil || !strings.HasPrefix(ct.name, "wardyn-proxy-") || exits || refuses {
+	delay, never := c.delay, c.never
+	if ct == nil || !strings.HasPrefix(ct.name, "wardyn-proxy-") || exits || refuses || c.legacy {
 		return 0, io.EOF
 	}
 	if !c.sent && !never {
@@ -517,8 +537,13 @@ func (f *fakeDocker) ImageInspect(ctx context.Context, imageID string, _ ...clie
 	defer f.mu.Unlock()
 	if f.images[imageID] {
 		m := f.imageMeta[imageID]
-		return client.ImageInspectResult{InspectResponse: image.InspectResponse{ID: imageID, Architecture: f.imageArch[imageID],
-			RepoDigests: m.RepoDigests, Os: m.Os, Variant: m.Variant, Descriptor: m.Descriptor}}, nil
+		resp := image.InspectResponse{ID: imageID, Architecture: f.imageArch[imageID],
+			RepoDigests: m.RepoDigests, Os: m.Os, Variant: m.Variant, Descriptor: m.Descriptor}
+		if !f.legacyProxyImages[imageID] {
+			resp.Config = &dockerspec.DockerOCIImageConfig{}
+			resp.Config.Labels = map[string]string{proxyReadyLabel: "1"}
+		}
+		return client.ImageInspectResult{InspectResponse: resp}, nil
 	}
 	return client.ImageInspectResult{}, fakeNotFound{msg: "no such image: " + imageID}
 }
@@ -860,7 +885,14 @@ func (f *fakeDocker) containerStart(id string) (client.ContainerStartResult, err
 		// this fast would leave ContainerWait to observe.
 		c.state = &container.State{Status: "exited", ExitCode: int(f.probeExitCode)}
 	} else {
-		c.state = &container.State{Status: "running", Running: true, StartedAt: time.Now().Format(time.RFC3339Nano)}
+		// StartedAt defaults to real, current time; a Driver's proxySettle defaults to 0 for every
+		// fake-backed test driver (newWithClient), so the settle check is trivially satisfied
+		// unless a test sets proxySettle to a real duration.
+		startedAt := time.Now()
+		if t, ok := f.startedAtOverride[id]; ok {
+			startedAt = t
+		}
+		c.state = &container.State{Status: "running", Running: true, StartedAt: startedAt.Format(time.RFC3339Nano)}
 	}
 	f.startedNames = append(f.startedNames, id)
 	return client.ContainerStartResult{}, nil
