@@ -110,6 +110,29 @@ func TestStatusStageConnectedReportsAnOldErrorWithoutFailing(t *testing.T) {
 	}
 }
 
+// While the docker driver serves any peer because the organisation's proxy image refused allowed_peers
+// (docker.Config.PeersOnlyFallback), status.json names that image and doctor's status stage says peers-only
+// is not in effect, without failing; once a proxy takes allowed_peers again the warning is gone.
+func TestStatusStageSaysPeersOnlyIsNotInEffectWhileTheOrganisationIsOlder(t *testing.T) {
+	r := newRig(t)
+	dir := filepath.Join(r.home, ".config", "wardyn", "runner")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	l := newOfflineLog(dir, nil)
+	l.reportTo(newStatusWriter(dir))
+	const image = releaseProxyRepo + ":0.9.8"
+	l.peersOnlyChanged(image)
+	s := stage(t, r.run(doctorOptions{}), "status")
+	if s.Status != doctor.StatusOK || !strings.Contains(s.Detail, "peers-only not in effect: organisation older") || !strings.Contains(s.Detail, image) {
+		t.Errorf("status = %s %q, want ok that says peers-only is not in effect and names %s", s.Status, s.Detail, image)
+	}
+	l.peersOnlyChanged("")
+	if s := stage(t, r.run(doctorOptions{}), "status"); strings.Contains(s.Detail, "peers-only") {
+		t.Errorf("status = %s %q, want no peers-only warning once a proxy takes allowed_peers", s.Status, s.Detail)
+	}
+}
+
 // TestStatusStageStoppedOrStartingAfterAnOldDropIsNotAFailure: linkChanged keeps the last error across a
 // reconnect and a clean shutdown records no stage, so a runner that dropped once and later stopped cleanly
 // (or is starting again) must not be told to change its organisation address.

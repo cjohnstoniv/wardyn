@@ -9,11 +9,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/netip"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -79,6 +81,8 @@ type proxyPrep struct {
 	cfgJSON    []byte
 	// localModelPorts are the laptop local model ports the relay serves this proxy once it runs.
 	localModelPorts []uint16
+	// allowedPeers says cfgJSON carries allowed_peers (Config.ProxyServesAnyPeer off).
+	allowedPeers bool
 }
 
 // prepareProxy computes runID's proxyPrep from the control plane's cfgJSON, marked vm for a desktop VM
@@ -133,7 +137,7 @@ func (d *Driver) prepareProxy(ctx context.Context, runID uuid.UUID, cfgJSON []by
 			return proxyPrep{}, err
 		}
 	}
-	return proxyPrep{extraHosts: hosts, cfgJSON: cfgJSON, localModelPorts: modelPorts}, nil
+	return proxyPrep{extraHosts: hosts, cfgJSON: cfgJSON, localModelPorts: modelPorts, allowedPeers: !d.cfg.ProxyServesAnyPeer}, nil
 }
 
 // EnvProxySandboxPeersOnly is the inverse of Config.ProxyServesAnyPeer: on unless set off.
@@ -145,6 +149,12 @@ func ProxyServesAnyPeerFromEnv() bool {
 	on := cliutil.EnvBool(EnvProxySandboxPeersOnly, true)
 	slog.Info("docker: run proxy peers", EnvProxySandboxPeersOnly, on)
 	return !on
+}
+
+// ProxyPeersOnlyByDefaultFromEnv is Config.ProxyPeersOnlyByDefault: EnvProxySandboxPeersOnly unset, so
+// peers-only is on by its default and not because an operator set it.
+func ProxyPeersOnlyByDefaultFromEnv() bool {
+	return strings.TrimSpace(os.Getenv(EnvProxySandboxPeersOnly)) == ""
 }
 
 // runSubnets are the subnets of runID's own network.
@@ -163,15 +173,74 @@ func (d *Driver) runSubnets(ctx context.Context, runID uuid.UUID) ([]netip.Prefi
 	return out, nil
 }
 
-// startProxy creates the wardyn-proxy sidecar for runID on the per-run
+// startProxy starts runID's proxy on the current proxy image (startProxyOn). An image that refuses
+// allowed_peers at config load is older than this runner. With peers-only on only by default
+// (Config.ProxyPeersOnlyByDefault) that proxy is removed and started again without them, so it serves
+// any peer as it did before peers-only; otherwise the refusal stands. The refusal comes before the
+// proxy serves anything: on create no agent exists yet, and on revive the agent has no proxy until this
+// returns.
+func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[string]string, env []string, prep proxyPrep, ip netip.Addr) (string, error) {
+	image := d.proxyImage()
+	id, err := d.startProxyOn(ctx, image, runID, labels, env, prep, ip)
+	var refused *refusedSettingError
+	switch {
+	case err == nil:
+		if prep.allowedPeers {
+			d.notePeersOnly(image, false)
+		}
+		return id, nil
+	case !prep.allowedPeers || !d.cfg.ProxyPeersOnlyByDefault || !errors.As(err, &refused) || refused.setting != "allowed_peers":
+		return id, err
+	}
+	if err := d.removeProxy(ctx, runID); err != nil {
+		return "", fmt.Errorf("docker: remove the proxy that refused allowed_peers: %w", err)
+	}
+	if prep.cfgJSON, err = withoutProxyConfigKey(prep.cfgJSON, "allowed_peers"); err != nil {
+		return "", err
+	}
+	prep.allowedPeers = false
+	if id, err = d.startProxyOn(ctx, image, runID, labels, env, prep, ip); err != nil {
+		return id, err
+	}
+	d.notePeersOnly(image, true)
+	return id, nil
+}
+
+// notePeersOnly records whether image's proxy just took allowed_peers or, fellBack, refused them and
+// serves any peer: a warning the first time an image falls back, and Config.PeersOnlyFallback on each change.
+func (d *Driver) notePeersOnly(image string, fellBack bool) {
+	d.peersMu.Lock()
+	defer d.peersMu.Unlock()
+	cur := ""
+	if fellBack {
+		cur = image
+		if !d.peersWarned[image] {
+			if d.peersWarned == nil {
+				d.peersWarned = map[string]bool{}
+			}
+			d.peersWarned[image] = true
+			slog.Warn("docker: peers-only not in effect: the organisation's proxy image is older than this runner and refused allowed_peers, "+
+				"so its run proxies serve any peer until the organisation is upgraded; set "+EnvProxySandboxPeersOnly+"=true to refuse those runs instead",
+				"image", image)
+		}
+	}
+	if cur != d.peersFallback {
+		d.peersFallback = cur
+		if d.cfg.PeersOnlyFallback != nil {
+			d.cfg.PeersOnlyFallback(cur)
+		}
+	}
+}
+
+// startProxyOn creates the wardyn-proxy sidecar for runID from image on the per-run
 // network, joins it to the control-plane-facing network, starts it and hands
 // it prep's config on stdin. ip, when valid, is the address it must take on the
 // per-run network (the one the agent's hosts entry pins). On any failure it
 // removes what it created.
-func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[string]string, env []string, prep proxyPrep, ip netip.Addr) (string, error) {
+func (d *Driver) startProxyOn(ctx context.Context, image string, runID uuid.UUID, labels map[string]string, env []string, prep proxyPrep, ip netip.Addr) (string, error) {
 	cfgJSON := prep.cfgJSON
 	cfg := &container.Config{
-		Image:    d.proxyImage(),
+		Image:    image,
 		Hostname: "wardyn-proxy",
 		Labels:   labels,
 		Env:      env,
@@ -422,6 +491,13 @@ func (d *Driver) proxyExitLogTail(ctx context.Context, id string) string {
 // (`unknown field "x"`, or with the quotes escaped inside a log attribute), on one line and bounded.
 var unknownConfigField = regexp.MustCompile(`unknown field \\?"([^"\\\n]{1,80})\\?"`)
 
+// refusedSettingError is a proxy's refusal at config load of setting, one its image does not know.
+type refusedSettingError struct {
+	setting, msg string
+}
+
+func (e *refusedSettingError) Error() string { return e.msg }
+
 // proxyConfigLoadError names the cause of a proxy that exited at config load. A proxy image older
 // than this runner refuses the settings it does not know, so that refusal names its fix first; the
 // proxy's own output always follows.
@@ -429,9 +505,9 @@ var unknownConfigField = regexp.MustCompile(`unknown field \\?"([^"\\\n]{1,80})\
 // never removes one; a removal would make a newer proxy refuse an older runner's setting the same way.
 func proxyConfigLoadError(exitCode int, tail string) error {
 	if m := unknownConfigField.FindStringSubmatch(tail); m != nil {
-		return fmt.Errorf("docker: the proxy image is older than this runner (it refused setting %s): upgrade the organisation "+
+		return &refusedSettingError{setting: m[1], msg: fmt.Sprintf("docker: the proxy image is older than this runner (it refused setting %s): upgrade the organisation "+
 			"before its runners, or pin a proxy image at least as new as this runner; proxy exited at config load (exit %d): %s",
-			m[1], exitCode, tail)
+			m[1], exitCode, tail)}
 	}
 	return fmt.Errorf("docker: proxy exited at config load (exit %d): %s", exitCode, tail)
 }

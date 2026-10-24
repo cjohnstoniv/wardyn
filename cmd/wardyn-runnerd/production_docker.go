@@ -96,6 +96,7 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 		ControlPlaneRelay: relay.Ensure, LocalModelRelay: relay, TrustedCAPEM: opts.trustedCA, TrustedCAFile: opts.trustedCAPath, UpstreamProxyURL: opts.upstreamProxy,
 		DecisionSink: sinkAdapter{s: sink.spoolSink, url: sink.proxyURL}, Evidence: ev,
 		ProxyServesAnyPeer: docker.ProxyServesAnyPeerFromEnv(), UserDriveHostRoots: driveRoots,
+		ProxyPeersOnlyByDefault: docker.ProxyPeersOnlyByDefaultFromEnv(), PeersOnlyFallback: opts.offline.peersOnlyChanged,
 		RunSubnetPool: runSubnets, RunSubnetBits: runSubnetBits})
 	if err != nil {
 		return runnerRuntime{}, errors.Join(err, sink.Close())
