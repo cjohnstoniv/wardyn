@@ -6,7 +6,9 @@ package guestagent
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -127,35 +129,13 @@ func TestLookupAgentIDsRefusesRootAndAdmins(t *testing.T) {
 	}
 }
 
-func TestNewVNCPassword(t *testing.T) {
-	seen := map[string]bool{}
-	for range 50 {
-		pw, err := NewVNCPassword()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(pw) != 8 {
-			t.Fatalf("password %q is %d characters, VncAuth reads 8", pw, len(pw))
-		}
-		for _, c := range pw {
-			if !strings.ContainsRune(vncAlphabet, c) {
-				t.Fatalf("password %q has %q outside the alphabet", pw, c)
-			}
-		}
-		seen[pw] = true
-	}
-	if len(seen) < 49 {
-		t.Errorf("50 passwords made %d distinct", len(seen))
-	}
-}
-
 func TestSetRunPasswordRunsKickstartAndHoldsIt(t *testing.T) {
 	r := &fakeRunner{}
-	d := &Desktop{Run: r, NewPassword: func() (string, error) { return "Abcd2345", nil }}
+	d := &Desktop{Run: r}
 	if _, ok := d.Password(); ok {
 		t.Fatal("a password before SetRunPassword")
 	}
-	if err := d.SetRunPassword(context.Background()); err != nil {
+	if err := d.SetRunPassword(context.Background(), "Abcd2345"); err != nil {
 		t.Fatal(err)
 	}
 	want := append([]string{kickstart}, KickstartArgs("Abcd2345")...)
@@ -171,8 +151,8 @@ func TestSetRunPasswordFailureKeepsNoPasswordAndLeaksNone(t *testing.T) {
 	r := &fakeRunner{out: func(a []string) ([]byte, error) {
 		return nil, errors.New("kickstart failed on " + strings.Join(a, " "))
 	}}
-	d := &Desktop{Run: r, NewPassword: func() (string, error) { return "Abcd2345", nil }}
-	err := d.SetRunPassword(context.Background())
+	d := &Desktop{Run: r}
+	err := d.SetRunPassword(context.Background(), "Abcd2345")
 	if err == nil {
 		t.Fatal("kickstart failed and SetRunPassword did not")
 	}
@@ -254,7 +234,7 @@ func TestDesktopRequests(t *testing.T) {
 		}
 		return nil, nil
 	}}
-	d := &Desktop{Run: r, Console: fakeConsole{uid: 502}, NewPassword: func() (string, error) { return "Abcd2345", nil }}
+	d := &Desktop{Run: r, Console: fakeConsole{uid: 502}}
 	mux := http.NewServeMux()
 	d.Register(mux)
 	get := func(path string) *httptest.ResponseRecorder {
@@ -262,14 +242,12 @@ func TestDesktopRequests(t *testing.T) {
 		mux.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
 		return w
 	}
-	if w := get("/v1/desktop/credential"); w.Code != http.StatusNotFound {
-		t.Errorf("credential before Init = %d", w.Code)
-	}
-	if err := d.SetRunPassword(context.Background()); err != nil {
+	if err := d.SetRunPassword(context.Background(), "Abcd2345"); err != nil {
 		t.Fatal(err)
 	}
-	if w := get("/v1/desktop/credential"); w.Code != 200 || !strings.Contains(w.Body.String(), `"password":"Abcd2345"`) || w.Header().Get("Cache-Control") != "no-store" {
-		t.Errorf("credential = %d %q %v", w.Code, w.Body.String(), w.Header())
+	// The password is the host's: the agent never serves it back.
+	if w := get("/v1/desktop/credential"); w.Code != http.StatusNotFound || strings.Contains(w.Body.String(), "Abcd2345") {
+		t.Errorf("credential = %d %q, want no such request", w.Code, w.Body.String())
 	}
 	if w := get("/v1/desktop/pointer"); w.Code != 200 || !strings.Contains(w.Body.String(), `"x":100`) {
 		t.Errorf("pointer = %d %q", w.Code, w.Body.String())
@@ -451,24 +429,42 @@ func TestSpliceDesktopRefusesAnotherFirstByte(t *testing.T) {
 	hb.next(t) // the agent closed it and dialled again
 }
 
-// The credential request is the one place the password leaves the agent: it must not be logged.
-func TestCredentialRequestLogsNoPassword(t *testing.T) {
-	var buf bytes.Buffer
-	old := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	defer slog.SetDefault(old)
-	d := &Desktop{Run: &fakeRunner{}, NewPassword: func() (string, error) { return "Abcd2345", nil }}
-	if err := d.SetRunPassword(context.Background()); err != nil {
-		t.Fatal(err)
+// The password comes from Init, so SetRunPassword takes only one VncAuth can key on: 1 to 8 bytes.
+func TestSetRunPasswordRefusesWhatVncAuthCannotUse(t *testing.T) {
+	r := &fakeRunner{}
+	d := &Desktop{Run: r}
+	for _, pw := range []string{"", "Abcd23456"} {
+		if err := d.SetRunPassword(context.Background(), pw); err == nil || (pw != "" && strings.Contains(err.Error(), pw)) {
+			t.Errorf("password of %d bytes: err = %v", len(pw), err)
+		}
 	}
-	mux := http.NewServeMux()
-	d.Register(mux)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, httptest.NewRequest("GET", "/v1/desktop/credential", nil))
-	if !strings.Contains(w.Body.String(), "Abcd2345") {
-		t.Fatalf("the request did not answer the password: %q", w.Body.String())
+	if len(r.calls) != 0 {
+		t.Errorf("kickstart ran: %v", r.calls)
 	}
-	if strings.Contains(buf.String(), "Abcd2345") {
-		t.Errorf("the password was logged: %s", buf.String())
+	if _, ok := d.Password(); ok {
+		t.Error("a refused password was kept")
+	}
+}
+
+// Init's secrets never print: %v, %+v, %#v and %s show them redacted, and the wire form keeps them.
+func TestInitPrintsWithItsSecretsRedacted(t *testing.T) {
+	in := Init{Env: map[string]string{"A": "visible"}, SecretEnv: map[string]string{"TOKEN": "s3cret-env"}, DesktopPassword: "Abcd2345"}
+	for _, f := range []string{"%v", "%+v", "%#v", "%s"} {
+		out := fmt.Sprintf(f, in)
+		if strings.Contains(out, "Abcd2345") || strings.Contains(out, "s3cret-env") || !strings.Contains(out, "visible") || !strings.Contains(out, "TOKEN") {
+			t.Errorf("%s printed %q", f, out)
+		}
+	}
+	var logged bytes.Buffer
+	slog.New(slog.NewJSONHandler(&logged, nil)).Info("init", "in", in)
+	if strings.Contains(logged.String(), "Abcd2345") || strings.Contains(logged.String(), "s3cret-env") {
+		t.Errorf("slog's JSON handler logged %s", logged.String())
+	}
+	b, _ := json.Marshal(in)
+	if !strings.Contains(string(b), `"desktop_password":"Abcd2345"`) {
+		t.Errorf("the wire form lost the password: %s", b)
+	}
+	if in.DesktopPassword != "Abcd2345" || in.SecretEnv["TOKEN"] != "s3cret-env" {
+		t.Error("printing changed the Init")
 	}
 }

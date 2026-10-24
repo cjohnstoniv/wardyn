@@ -159,7 +159,7 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 0.10.0 cannot make a macOS keychain read-only, so a run that wants no sign-ins kept gets no
-	// desktop: no password, no credential, and the tunnel refuses. It still runs agent-only. This is
+	// desktop: no password is set, and the tunnel refuses. It still runs agent-only. This is
 	// first, so an Init that fails while writing leaves the desktop off.
 	if in.SignInsOff && s.Desktop != nil {
 		s.Desktop.Disable()
@@ -171,6 +171,9 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = marker.Close()
 	res := InitResult{SignIns: SignInsRunDisk}
+	if s.Desktop != nil {
+		res.DesktopPasswordSet = new(bool)
+	}
 	for _, f := range in.Files {
 		if err := s.writeFile(f); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -186,7 +189,7 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 	}
 	s.env = initEnv(in.Env, in.SecretEnv, ca)
 	if s.Desktop != nil {
-		s.initDesktop(r.Context(), ca, !in.SignInsOff)
+		*res.DesktopPasswordSet = s.initDesktop(r.Context(), ca, in.DesktopPassword, !in.SignInsOff)
 	}
 	s.inited = true
 	writeJSON(w, res)
@@ -202,18 +205,23 @@ func (s *Server) buildCA(files []File) error {
 	return nil
 }
 
-// initDesktop sets the run's VNC password and the CA variables in the desktop session. Neither fails the
-// Init: a run without them is agent-only or sees certificate errors in GUI apps, and the desktop's
-// requests say which (no credential, a 404). The log lines name the step and never the password.
-func (s *Server) initDesktop(ctx context.Context, ca []string, password bool) {
-	if password {
-		if err := s.Desktop.SetRunPassword(ctx); err != nil {
+// initDesktop sets the run's VNC password (pw, from Init) and the CA variables in the desktop session,
+// and says whether the password is set. Neither fails the Init: a run without them is agent-only or
+// sees certificate errors in GUI apps, and InitResult.DesktopPasswordSet says which. The log lines name
+// the step and never the password.
+func (s *Server) initDesktop(ctx context.Context, ca []string, pw string, desktop bool) bool {
+	set := false
+	if desktop {
+		if err := s.Desktop.SetRunPassword(ctx, pw); err != nil {
 			slog.Warn("guest agent: no desktop password for this run", "err", err)
+		} else {
+			set = true
 		}
 	}
 	if err := s.Desktop.SetSessionEnv(ctx, ca); err != nil {
 		slog.Warn("guest agent: CA variables not set in the desktop session", "err", err)
 	}
+	return set
 }
 
 // signalAgent sends sig to the latest detached exec's process group: the harness and every process

@@ -6,6 +6,7 @@ package guestagent
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -21,7 +22,7 @@ func newDarwinServer(t *testing.T) (*Server, *fakeRunner, http.Handler) {
 	t.Helper()
 	r := &fakeRunner{}
 	s := &Server{Version: "t", Home: t.TempDir(), User: "agent", OutDir: t.TempDir(), MarkerDir: t.TempDir(),
-		Desktop: &Desktop{Run: r, Console: fakeConsole{uid: 502}, NewPassword: func() (string, error) { return "Abcd2345", nil }}}
+		Desktop: &Desktop{Run: r, Console: fakeConsole{uid: 502}}}
 	h, err := s.Handler()
 	if err != nil {
 		t.Fatal(err)
@@ -38,18 +39,18 @@ func postInit(h http.Handler, in Init) *httptest.ResponseRecorder {
 
 func TestDarwinInitRunDiskDesktopAndCA(t *testing.T) {
 	s, r, h := newDarwinServer(t)
-	w := postInit(h, Init{Env: map[string]string{"A": "b"}})
+	w := postInit(h, Init{Env: map[string]string{"A": "b"}, DesktopPassword: "Abcd2345"})
 	if w.Code != 200 {
 		t.Fatalf("init = %d %s", w.Code, w.Body)
 	}
 	var res InitResult
-	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil || res.SignIns != SignInsRunDisk {
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil || res.SignIns != SignInsRunDisk || res.DesktopPasswordSet == nil || !*res.DesktopPasswordSet {
 		t.Errorf("InitResult = %+v, %v", res, err)
 	}
 	if pw, ok := s.Desktop.Password(); !ok || pw != "Abcd2345" {
 		t.Errorf("no run password after Init: %q %v", pw, ok)
 	}
-	if len(r.calls) == 0 || r.calls[0][0] != kickstart {
+	if len(r.calls) == 0 || !slices.Equal(r.calls[0], append([]string{kickstart}, KickstartArgs("Abcd2345")...)) {
 		t.Errorf("Init did not set the VNC password: %v", r.calls)
 	}
 	if w := postInit(h, Init{}); w.Code != http.StatusConflict {
@@ -71,8 +72,9 @@ func TestDarwinInitRefusesWhatMacOSCannotDo(t *testing.T) {
 
 func TestDarwinInitSignInsOffRunsAgentOnlyWithNoDesktop(t *testing.T) {
 	s, r, h := newDarwinServer(t)
-	if w := postInit(h, Init{SignInsOff: true}); w.Code != 200 {
-		t.Fatalf("Init = %d %s", w.Code, w.Body)
+	w0 := postInit(h, Init{SignInsOff: true, DesktopPassword: "Abcd2345"})
+	if w0.Code != 200 || !strings.Contains(w0.Body.String(), `"desktop_password_set":false`) {
+		t.Fatalf("Init = %d %s, want desktop_password_set false", w0.Code, w0.Body)
 	}
 	if s.Desktop.Enabled() {
 		t.Error("the desktop stayed on")
@@ -84,11 +86,6 @@ func TestDarwinInitSignInsOffRunsAgentOnlyWithNoDesktop(t *testing.T) {
 		if c[0] == kickstart {
 			t.Errorf("kickstart ran: %v", c)
 		}
-	}
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest("GET", "/v1/desktop/credential", nil))
-	if w.Code != http.StatusNotFound {
-		t.Errorf("credential = %d", w.Code)
 	}
 }
 
@@ -228,5 +225,38 @@ func TestDarwinThePauseOrderOutlivesAServiceRestartNotABoot(t *testing.T) {
 	booted := newSignalRig(t, t.TempDir())
 	if code, body, _ := booted.post(t, true, gen(1)); code != 200 {
 		t.Fatalf("a new boot's first pause = %d %s", code, body)
+	}
+}
+
+// Init sets the host's password in Screen Sharing and says whether it did: an Init with none (from a
+// runner that predates it), and one whose kickstart fails, answer desktop_password_set false, so the
+// helper's shim cannot log in and refuses the desktop. The agent never makes a password of its own.
+func TestDarwinInitReportsWhetherTheDesktopPasswordIsSet(t *testing.T) {
+	s, r, h := newDarwinServer(t)
+	if w := postInit(h, Init{}); w.Code != 200 || !strings.Contains(w.Body.String(), `"desktop_password_set":false`) {
+		t.Fatalf("Init with no password = %d %s", w.Code, w.Body)
+	}
+	if _, ok := s.Desktop.Password(); ok {
+		t.Error("the agent made a password of its own")
+	}
+	for _, c := range r.calls {
+		if c[0] == kickstart {
+			t.Errorf("kickstart ran with no password: %v", c)
+		}
+	}
+
+	s, r, h = newDarwinServer(t)
+	r.out = func(a []string) ([]byte, error) {
+		if a[0] == kickstart {
+			return nil, errors.New("not permitted")
+		}
+		return nil, nil
+	}
+	w := postInit(h, Init{DesktopPassword: "Abcd2345"})
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"desktop_password_set":false`) || strings.Contains(w.Body.String(), "Abcd2345") {
+		t.Fatalf("Init whose kickstart fails = %d %s", w.Code, w.Body)
+	}
+	if _, ok := s.Desktop.Password(); ok {
+		t.Error("a password that was not set is held")
 	}
 }
