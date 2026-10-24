@@ -60,7 +60,7 @@ The macOS runner package's wardyn-macvm helper links github.com/Code-Hex/vz/v3
 (MIT licensed, Copyright (c) 2025 codehex) and its dependency
 github.com/Code-Hex/go-infinity-channel (MIT licensed, Copyright (c) 2023
 codehex) as Go module dependencies; neither is vendored. Only darwin builds
-import them, so the notices generated from the Linux build do not list them.
+import them, so THIRD-PARTY-NOTICES.md lists them from a separate darwin/arm64 pass.
 
 GPL components in the published container images
 ------------------------------------------------

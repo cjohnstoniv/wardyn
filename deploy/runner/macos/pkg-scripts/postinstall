@@ -2,13 +2,72 @@
 # Copyright 2026 The Wardyn Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Pkg postinstall (runs as root): link the CLI onto PATH and load the managed agent into the logged-in
-# person's session now, rather than at their next login. Nobody logged in is fine: launchd loads
-# /Library/LaunchAgents at login. The agent stays idle until the person is registered.
+# Pkg postinstall (runs as root): link the CLI onto PATH, make the host-wide macOS VM admission ledger,
+# and load the managed agent into the logged-in person's session now, rather than at their next login.
+# Nobody logged in is fine: launchd loads /Library/LaunchAgents at login. The agent stays idle until the
+# person is registered.
+#
+# The ledger, when the package carries the macOS VM helper:
+#   /Users/Shared/Wardyn                        root:wheel 0755
+#   /Users/Shared/Wardyn/admission.lock         root:wheel 0644
+#   /Users/Shared/Wardyn/macos-vm-admission/    root:wheel 1777 (sticky, like /tmp): the entries live here
+# This script is the only thing that creates any of them. A runner that made the lock would own it and
+# could delete it, and a replaced inode ends mutual exclusion, so a runner that finds one missing or
+# wrong offers no macOS VMs. /Users/Shared is world-writable, so a login may have planted a link, a file
+# or a directory where these belong: a link is removed (never followed), anything else not root-owned or
+# group/other-writable is moved aside to a root-only name and replaced.
+#
+# The lock sits outside the world-writable entries directory so no login can unlink it; the helper walks to
+# it from / and refuses anything else (internal/macvm/admission).
+#
+# WARDYN_PKG_ROOT is a path prefix for the tests (scripts/test-pkg-postinstall.sh); the installer never sets it.
 set -u
-mkdir -p /usr/local/bin
-ln -sf /usr/local/wardyn/bin/wardyn-runnerd /usr/local/bin/wardyn-runnerd
-ln -sf /usr/local/wardyn/bin/wardyn /usr/local/bin/wardyn
+R="${WARDYN_PKG_ROOT:-}"
+
+# ledger_ok <path> <what>: true when the path is a real, root-owned object of that kind that nobody else may write.
+ledger_ok() {
+  [ ! -L "$1" ] || return 1
+  case "$2" in dir) [ -d "$1" ] ;; file) [ -f "$1" ] ;; esac || return 1
+  [ "$(stat -f %u "$1")" = 0 ] || return 1
+  [ $((0$(stat -f %Lp "$1") & 022)) = 0 ]
+}
+
+# quarantine <path>: a link is removed; anything else moves to a root-only name beside it.
+quarantine() {
+  if [ -L "$1" ]; then
+    rm -f "$1"
+    return
+  fi
+  [ -e "$1" ] || return 0
+  q="$(dirname "$1")/.wardyn-quarantine-$(date +%s)-$$"
+  mv "$1" "$q"
+  chown -h root:wheel "$q"
+  chmod -h 0700 "$q"
+}
+
+make_ledger() {
+  base="$R/Users/Shared/Wardyn"
+  ents="$base/macos-vm-admission"
+  lock="$base/admission.lock"
+  ledger_ok "$base" dir || quarantine "$base"
+  [ -d "$base" ] || install -d -o root -g wheel -m 0755 "$base"
+  # Under a root-owned 0755 base only root writes, so what is left in it is root's; a link or a
+  # wrong kind of object there is still replaced.
+  if [ -L "$ents" ] || { [ -e "$ents" ] && [ ! -d "$ents" ]; }; then rm -rf "$ents"; fi
+  [ -d "$ents" ] || install -d -o root -g wheel -m 1777 "$ents"
+  chown root:wheel "$ents"
+  chmod 1777 "$ents"
+  # An upgrade keeps a sound lock: a replaced inode would end mutual exclusion with a live helper.
+  ledger_ok "$lock" file || rm -rf "$lock"
+  [ -e "$lock" ] || install -o root -g wheel -m 0644 /dev/null "$lock"
+}
+
+mkdir -p "$R/usr/local/bin"
+ln -sf /usr/local/wardyn/bin/wardyn-runnerd "$R/usr/local/bin/wardyn-runnerd"
+ln -sf /usr/local/wardyn/bin/wardyn "$R/usr/local/bin/wardyn"
+if [ -e "$R/usr/local/wardyn/bin/wardyn-macvm" ]; then
+  make_ledger
+fi
 uid=$(stat -f %u /dev/console 2>/dev/null || echo 0)
 if [ "$uid" != 0 ]; then
   launchctl bootstrap "gui/$uid" /Library/LaunchAgents/com.wardyn.runnerd.managed.plist >/dev/null 2>&1 || true

@@ -93,10 +93,11 @@ stub uuidgen 'echo 00000000-0000-0000-0000-000000000000'
 stub xcrun 'echo "xcrun $1 $2" >>"$STUB_LOG"'
 echo arm >"${WORK}/arm64"; echo amd >"${WORK}/amd64"; echo cli-arm >"${WORK}/cli-arm64"; echo cli-amd >"${WORK}/cli-amd64"
 CERT="$(printf 'SECRETBLOB' | base64 -w0)"
+EXTRA=() # more build-runner-pkg.sh arguments
 build() { # build <out> [VAR=value ...]
   local out="$1"; shift
   : >"$STUB_LOG"
-  env -i PATH="$T:$PATH" STUB_LOG="$STUB_LOG" HOME="$WORK" "$@" "$BUILD" --version 0.9.3-rc.1 --arm64 "${WORK}/arm64" --amd64 "${WORK}/amd64" --cli-arm64 "${WORK}/cli-arm64" --cli-amd64 "${WORK}/cli-amd64" --out "$out" >"${WORK}/build.out" 2>&1 || { cat "${WORK}/build.out" >&2; fail "build failed ($*)"; }
+  env -i PATH="$T:$PATH" STUB_LOG="$STUB_LOG" HOME="$WORK" "$@" "$BUILD" --version 0.9.3-rc.1 --arm64 "${WORK}/arm64" --amd64 "${WORK}/amd64" --cli-arm64 "${WORK}/cli-arm64" --cli-amd64 "${WORK}/cli-amd64" "${EXTRA[@]}" --out "$out" >"${WORK}/build.out" 2>&1 || { cat "${WORK}/build.out" >&2; fail "build failed ($*)"; }
 }
 
 build "${WORK}/unsigned.pkg"
@@ -134,6 +135,26 @@ for b in wardyn-runnerd wardyn; do
 done
 grep -q 'notarized and stapled' "${WORK}/build.out" || fail "no notarization line"
 if grep -rq 'pw-secret\|np-secret\|SECRETBLOB' "${WORK}/build.out"; then fail "the build log printed a secret"; fi
+
+# The macOS VM helper rides in the payload and is signed with its entitlement, with or without a Developer ID.
+ENT="${SRC}/wardyn-macvm.entitlements"
+[ "$(plist_get "$ENT" 'list(d.items())')" = "[('com.apple.security.virtualization', True)]" ] || fail "the helper's entitlements are not exactly the virtualization key"
+echo macvm >"${WORK}/macvm"; EXTRA=(--macvm "${WORK}/macvm")
+build "${WORK}/mv.pkg"
+grep -qx "payload ./usr/local/wardyn/bin/wardyn-macvm" "$STUB_LOG" || fail "the payload lacks the helper"
+grep -q "^codesign --force --entitlements ${ENT} --sign - .*/usr/local/wardyn/bin/wardyn-macvm\$" "$STUB_LOG" || fail "the helper was not signed ad hoc with its entitlement"
+grep -q 'signed the wardyn-macvm helper ad hoc' "${WORK}/build.out" || fail "the ad hoc helper signing did not log"
+build "${WORK}/mv-full.pkg" APPLE_DEVELOPER_ID_INSTALLER_P12_BASE64="$CERT" APPLE_DEVELOPER_ID_INSTALLER_P12_PASSWORD=pw "APPLE_DEVELOPER_ID_INSTALLER_IDENTITY=Developer ID Installer: Test (TEAM)" \
+  APPLE_DEVELOPER_ID_APPLICATION_P12_BASE64="$CERT" APPLE_DEVELOPER_ID_APPLICATION_P12_PASSWORD=pw "APPLE_DEVELOPER_ID_APPLICATION_IDENTITY=Developer ID Application: Test (TEAM)"
+grep -q "^codesign --force --options runtime --timestamp --entitlements ${ENT} --sign Developer ID Application: Test (TEAM) .*/usr/local/wardyn/bin/wardyn-macvm\$" "$STUB_LOG" || fail "the helper was not signed with the Developer ID and its entitlement"
+grep -q -- '--sign -' "$STUB_LOG" && fail "the helper was signed ad hoc beside a Developer ID"
+for b in wardyn-runnerd wardyn; do
+  grep -q -- "--entitlements.*/usr/local/wardyn/bin/${b}\$" "$STUB_LOG" && fail "${b} carries the virtualization entitlement"
+done
+EXTRA=()
+: >"$STUB_LOG"
+if env -i PATH="$T:$PATH" STUB_LOG="$STUB_LOG" "$BUILD" --version 0.9.3 --arm64 "${WORK}/arm64" --amd64 "${WORK}/amd64" --cli-arm64 "${WORK}/cli-arm64" --cli-amd64 "${WORK}/cli-amd64" --macvm "${WORK}/nope" --out "${WORK}/z.pkg" >/dev/null 2>&1; then fail "a missing helper file was accepted"; fi
+[ ! -s "$STUB_LOG" ] || fail "a tool ran for a missing helper file"
 
 # A build without the CLI is refused before any tool runs: the package always carries it.
 : >"$STUB_LOG"

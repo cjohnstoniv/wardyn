@@ -372,6 +372,8 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 | `build` | – | pending | pending | 10 |
 | `conformance-k8s` | 58 | 11.2 | 12.8 | 35 |
 | `vm-conformance` (not required) | – | pending | pending | 30 |
+| `macos` (not required) | – | pending | pending | 30 |
+| `macos-xcode-27` (not required) | – | pending | pending | 10 |
 | `ui-e2e` (1/2, 2/2 matrix) | 1 | 7.0 | 7.0 | 25 |
 | `test-pg-shard` (api-1, api-2, store, race) | – | pending | pending | 20 |
 | `test-pg` (aggregator) | – | pending | pending | 10 |
@@ -448,6 +450,8 @@ gh run list -R cjohnstoniv/wardyn --workflow ci.yml --status completed --limit 6
   - A run counts only once `git diff --quiet origin/main...<head sha> -- ':(exclude).proofs'` exits 0 locally, so the workflow and script were main's.
 - `release.yml` has one group per ref and cancels nothing, so a dispatch and the tag push cannot publish at once.
 - `release.yml`'s `runner-pkg` job (macOS) builds `wardyn-runnerd.pkg` with [`scripts/build-runner-pkg.sh`](../scripts/build-runner-pkg.sh). Each signing step runs only when its `APPLE_DEVELOPER_ID_*` or `APPLE_NOTARY_*` secrets are set, and logs a skip line otherwise; [`scripts/test-runner-pkg.sh`](../scripts/test-runner-pkg.sh) covers the script on Linux.
+- The same job builds the macOS VM helper with cgo and signs it ad hoc with its one virtualization entitlement even without secrets. It then checks that entitlement, and that the package holds no macOS image.
+- The non-required `macos` job compiles and tests the helper and the darwin guest agent on a hosted Mac. `macos-xcode-27` checks the macOS 27 selector names. Neither boots a VM.
 
 ### Incremental CI
 

@@ -40,7 +40,7 @@ concurrency:
 # maximum, with a ten-minute floor (docs/CI.md); raise it with the measurement.
 jobs:
   # ── which jobs a change can affect (#932) ─────────────────────────────────
-  # Classifies the changed paths once. Five outputs, each 'true' or 'false':
+  # Classifies the changed paths once. Six outputs, each 'true' or 'false':
   #   code    — something outside the docs changed. The docs are docs/**,
   #             threatmodel/** and the *.md files at the repository root, less
   #             LICENSING.md. A .md anywhere else is classed by its directory.
@@ -51,6 +51,7 @@ jobs:
   #             image compiles Go from this tree (`COPY . .`), so only a test
   #             file cannot change what trivy finds in one
   #   notices — images, or a UI dependency manifest, or THIRD-PARTY-NOTICES.md
+  #   macos   — a path the macOS VM helper, its guest agent or the macOS runner package builds from
   # Push, merge_group and train/* pull requests are always 'true': they run
   # everything. The rules fail closed: a path in no class counts as backend, so
   # a new directory runs every job until someone decides otherwise. The Go
@@ -92,6 +93,7 @@ jobs:
       ui: ${{ steps.classify.outputs.ui }}
       images: ${{ steps.classify.outputs.images }}
       notices: ${{ steps.classify.outputs.notices }}
+      macos: ${{ steps.classify.outputs.macos }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -108,14 +110,14 @@ jobs:
           set -euo pipefail
           if [ "$EVENT" != pull_request ] || [[ "$HEAD_REF" == train/* ]] || [[ "$BASE_REF" == release/* ]]; then
             echo "$EVENT${HEAD_REF:+ from $HEAD_REF}: running everything"
-            printf 'code=true\nbackend=true\nui=true\nimages=true\nnotices=true\n' >> "$GITHUB_OUTPUT"
+            printf 'code=true\nbackend=true\nui=true\nimages=true\nnotices=true\nmacos=true\n' >> "$GITHUB_OUTPUT"
             exit 0
           fi
           # An assignment, not `< <(git diff …)`: set -e ignores a failing
           # process substitution, which would read an unreadable diff as
           # "nothing changed" and skip everything.
           changed="$(git diff --name-only --no-renames HEAD^1 HEAD)"
-          code=false backend=false ui=false images=false notices=false
+          code=false backend=false ui=false images=false notices=false macos=false
           while IFS= read -r f; do
             [ -n "$f" ] || continue
             # Where a file lives decides its class before its extension does.
@@ -135,6 +137,9 @@ jobs:
             case "$f" in
               Makefile|.github/workflows/ci.yml) ui=true ;;
             esac
+            case "$f" in
+              internal/macvm/*|cmd/wardyn-macvm/*|internal/vm/guestagent/*|cmd/wardyn-guest-agent/*|cmd/wardyn-runnerd/*|test/conformance/macvm/*|deploy/runner/macos/*|scripts/build-runner-pkg.sh|scripts/check-macvm-selectors.sh|go.mod|go.sum|.github/workflows/ci.yml) macos=true ;;
+            esac
             if [ "$class" = backend ]; then
               case "$f" in *_test.go) ;; *) images=true ;; esac
             fi
@@ -144,8 +149,8 @@ jobs:
             echo "$class  $f"
           done <<< "$changed"
           if [ "$images" = true ]; then notices=true; fi
-          echo "code=$code backend=$backend ui=$ui images=$images notices=$notices"
-          printf 'code=%s\nbackend=%s\nui=%s\nimages=%s\nnotices=%s\n' "$code" "$backend" "$ui" "$images" "$notices" >> "$GITHUB_OUTPUT"
+          echo "code=$code backend=$backend ui=$ui images=$images notices=$notices macos=$macos"
+          printf 'code=%s\nbackend=%s\nui=%s\nimages=%s\nnotices=%s\nmacos=%s\n' "$code" "$backend" "$ui" "$images" "$notices" "$macos" >> "$GITHUB_OUTPUT"
 
   # ── image-scope: which of the ten trivy scans does this change need? ──────
   # `changes` sets images=true for any non-test backend path, which is nearly
@@ -1719,6 +1724,109 @@ jobs:
         env:
           WARDYN_TEST_VM: '1'
         run: go test -tags vm -count=1 -timeout 25m -v ./test/vmconformance/
+
+  # ── macOS VM helper and guest agent on a hosted Mac (not a required check) ─────
+  # The Linux jobs cross-build the darwin runnerd with CGO_ENABLED=0 and cannot compile the cgo helper
+  # (Virtualization.framework) or run the darwin guest agent's tests. This job does, on macos-26. No VM boots
+  # on a hosted Mac (nested virtualization is unsupported), so the engine tests use the fake engine and the
+  # packaged suite skips; only the rented Mac proves a real guest.
+  #   - cgo build, vet and tests of the helper, its library and the guest agent, darwin-native tests included
+  #   - the darwin runnerd build
+  #   - the helper signed ad hoc with its one entitlement, read back with codesign
+  #   - the packaged live suite command, once test/conformance/macvm exists
+  # It runs when one of those paths changes (the `macos` output of `changes`) and always on push, merge_group,
+  # train/* and release/* pull requests. Not a required check and not in `gates`.
+  macos:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.macos != 'false' }}
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      CGO_ENABLED: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          go version
+      # Bounded retry of the module fetch only; go.sum verifies each module.
+      - run: for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done
+      - name: cgo build and vet
+        run: |
+          set -euo pipefail
+          go build ./internal/macvm/... ./cmd/wardyn-macvm/ ./internal/vm/guestagent/ ./cmd/wardyn-guest-agent/
+          go vet ./internal/macvm/... ./cmd/wardyn-macvm/ ./internal/vm/guestagent/ ./cmd/wardyn-guest-agent/
+      - name: Tests
+        run: |
+          set -euo pipefail
+          go test -count=1 -timeout 15m ./internal/macvm/... ./cmd/wardyn-macvm/ ./cmd/wardyn-guest-agent/
+          # -v: prove the darwin-native guest agent tests (server_darwin_test.go) ran, not just compiled.
+          go test -count=1 -timeout 10m -v ./internal/vm/guestagent/ | tee "$RUNNER_TEMP/guestagent.out"
+          grep -q -- '^--- PASS: TestDarwin' "$RUNNER_TEMP/guestagent.out"
+      - name: Build the darwin runnerd
+        run: CGO_ENABLED=0 go build -tags docker -trimpath -o "$RUNNER_TEMP/wardyn-runnerd" ./cmd/wardyn-runnerd
+      - name: Sign the helper ad hoc with its entitlement and read it back
+        run: |
+          set -euo pipefail
+          helper="$RUNNER_TEMP/wardyn-macvm"
+          go build -trimpath -o "$helper" ./cmd/wardyn-macvm
+          codesign --force --sign - --entitlements deploy/runner/macos/wardyn-macvm.entitlements "$helper"
+          codesign --verify --strict "$helper"
+          info="$(codesign -dv "$helper" 2>&1)"
+          grep -q 'Signature=adhoc' <<<"$info"
+          codesign -d --entitlements :- "$helper" 2>/dev/null | plutil -convert json -o - - \
+            | jq -e '. == {"com.apple.security.virtualization": true}'
+          # The signed binary starts: a bad signature or a missing entitlement would not get this far.
+          "$helper" version
+          # Not a gate on support: a hosted Mac cannot run a macOS guest, so probe may exit 1 with its reason.
+          # It must still print JSON and report the Virtualization engine linked, and exit 0 or 1, not crash.
+          rc=0
+          "$helper" probe >"$RUNNER_TEMP/probe.json" || rc=$?
+          cat "$RUNNER_TEMP/probe.json"
+          echo "probe exit status: $rc"
+          [ "$rc" -le 1 ]
+          jq -e '.vz == true and (.host | type == "string")' "$RUNNER_TEMP/probe.json"
+      - name: Packaged live suite (it skips, since no VM boots on a hosted Mac)
+        run: |
+          set -euo pipefail
+          if [ ! -d test/conformance/macvm ]; then
+            echo "::notice::test/conformance/macvm does not exist on this tree yet, so the packaged suite command was not run"
+            exit 0
+          fi
+          go test -c -tags macvm_live -o "$RUNNER_TEMP/macvm_live.test" ./test/conformance/macvm
+          # Go's own test2json converts the raw output; the testing package has no -test.json flag.
+          rc=0
+          "$RUNNER_TEMP/macvm_live.test" -test.v=test2json >"$RUNNER_TEMP/suite.raw" 2>"$RUNNER_TEMP/suite.err" || rc=$?
+          cat "$RUNNER_TEMP/suite.err"
+          [ "$rc" -eq 0 ] || { echo "::error::the packaged suite exited $rc"; exit 1; }
+          go tool test2json <"$RUNNER_TEMP/suite.raw" >"$RUNNER_TEMP/suite.json"
+          jq -es 'length > 0' "$RUNNER_TEMP/suite.json"
+
+  # The macOS 27 SDK check for provision_darwin.m's run-time lookups (scripts/check-macvm-selectors.sh):
+  # every class and selector it names must be declared in the Virtualization headers of a macOS 27 SDK.
+  # `xcode-27` is a public-preview image, so this is its own job: a preview-image outage must not turn the
+  # macos job red. Not a required check.
+  macos-xcode-27:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.macos != 'false' }}
+    runs-on: xcode-27
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: The SDK is macOS 27 or later
+        run: |
+          ver="$(xcrun --sdk macosx --show-sdk-version)"
+          echo "macOS SDK $ver"
+          [ "${ver%%.*}" -ge 27 ]
+      - name: Selector check against the SDK headers
+        run: |
+          scripts/check-macvm-selectors.sh --selftest
+          scripts/check-macvm-selectors.sh --sdk
 
   # ── Postgres-backed invariant proofs (approval-mint + audit invariants) ───
   # Runs the WARDYN_TEST_PG-gated suite (store/db/secretstore/broker/api +
