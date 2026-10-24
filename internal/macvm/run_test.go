@@ -85,11 +85,15 @@ func TestCloneRunIdentityStrategies(t *testing.T) {
 	}
 }
 
+// testRunID is the run id startRun uses; its run key is 6f1c2a3b4d5e.
+const testRunID = "6f1c2a3b-4d5e-4f60-8a71-9b0c1d2e3f40"
+
 // runRig runs one helper on the fake engine.
 type runRig struct {
 	eng    *macvmtest.Engine
 	layout macvm.Layout
 	dir    string
+	sock   string // the run's socket directory
 	done   chan error
 	cancel context.CancelFunc
 	cc     *macvm.ControlClient
@@ -100,13 +104,18 @@ func startRun(t *testing.T, eng *macvmtest.Engine, mod func(*macvm.RunConfig, *m
 	t.Helper()
 	r := &runRig{eng: eng, layout: macvm.Layout{Root: t.TempDir()}, done: make(chan error, 1)}
 	base := makeBase(t, r.layout)
-	r.dir = r.layout.RunDir("run-1")
-	cfg := macvm.RunConfig{RunID: "run-1", BaseDir: base, CPUs: 4, MemoryMiB: 8192, Identity: macvm.IdentityFresh}
+	cfg := macvm.RunConfig{RunID: testRunID, BaseDir: base, CPUs: 4, MemoryMiB: 8192, Identity: macvm.IdentityFresh,
+		SockRoot: macvmtest.SockRoot(t)}
 	listening := make(chan struct{})
-	o := macvm.RunOptions{Engine: eng, RunDir: r.dir, NetWait: 5 * time.Second, Listening: func() { close(listening) }}
+	o := macvm.RunOptions{Engine: eng, NetWait: 5 * time.Second, Listening: func() { close(listening) }, SockFstat: macvmtest.SockFstat}
 	if mod != nil {
 		mod(&cfg, &o)
 	}
+	r.dir = r.layout.RunDir(cfg.RunID)
+	if o.RunDir == "" {
+		o.RunDir = r.dir
+	}
+	r.sock = macvm.SockDir(cfg.SockRoot, cfg.RunID)
 	if err := macvm.WriteRunConfig(r.dir, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +131,7 @@ func startRun(t *testing.T, eng *macvmtest.Engine, mod func(*macvm.RunConfig, *m
 	case <-time.After(5 * time.Second):
 		t.Fatal("ctl.sock never listened")
 	}
-	cc, err := macvm.DialControl(ctx, filepath.Join(r.dir, macvm.ControlSock))
+	cc, err := macvm.DialControl(ctx, filepath.Join(r.sock, macvm.ControlSock))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +187,7 @@ func TestRunLifecycle(t *testing.T) {
 	if len(eng.Machines()) != 1 || eng.Machines()[0].State() != macvm.StateStopped {
 		t.Fatal("the VM started before its network was attached")
 	}
-	evc, err := macvm.DialControl(context.Background(), filepath.Join(r.dir, macvm.ControlSock))
+	evc, err := macvm.DialControl(context.Background(), filepath.Join(r.sock, macvm.ControlSock))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +224,7 @@ func TestRunLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	host, err := net.Dial("unix", filepath.Join(r.dir, macvm.AgentSock))
+	host, err := net.Dial("unix", filepath.Join(r.sock, macvm.AgentSock))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +234,7 @@ func TestRunLifecycle(t *testing.T) {
 		t.Fatalf("guest got %q %v", line, err)
 	}
 	_ = host.Close()
-	if fi, err := os.Stat(filepath.Join(r.dir, macvm.ControlSock)); err != nil || fi.Mode().Perm() != 0o600 {
+	if fi, err := os.Stat(filepath.Join(r.sock, macvm.ControlSock)); err != nil || fi.Mode().Perm() != 0o600 {
 		t.Fatalf("ctl.sock mode %v %v", fi, err)
 	}
 	if m.Listening(macvm.DesktopPort) {

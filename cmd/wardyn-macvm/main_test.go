@@ -44,7 +44,7 @@ func testDeps(eng *macvmtest.Engine) (deps, *bytes.Buffer, *bytes.Buffer) {
 	var out, errb bytes.Buffer
 	return deps{
 		engine: func() (macvm.Engine, error) { return eng, nil }, host: host{}, stdout: &out, stderr: &errb,
-		prepare: prepareDeps, fstat: rootFstat,
+		prepare: prepareDeps, fstat: rootFstat, sockFstat: macvmtest.SockFstat,
 	}, &out, &errb
 }
 
@@ -113,9 +113,10 @@ func TestRunClaimsEntryAndStatusReportsIdentity(t *testing.T) {
 		_ = os.WriteFile(filepath.Join(base, n), []byte(b), 0o600)
 	}
 	_ = os.WriteFile(filepath.Join(base, macvm.ManifestFile), []byte(`{"format":1,"state":"ready","hardware_model":"aHc="}`), 0o600)
-	dir := layout.RunDir("run-9")
-	cfg := macvm.RunConfig{RunID: "run-9", BaseDir: base, CPUs: 2, MemoryMiB: 4096, Identity: macvm.IdentityTravel,
-		RunnerID: "r1", LedgerEntry: e.ID, LedgerDir: ledger}
+	const runID = "0a1b2c3d-4e5f-4061-8273-8495a6b7c8d9"
+	dir := layout.RunDir(runID)
+	cfg := macvm.RunConfig{RunID: runID, BaseDir: base, CPUs: 2, MemoryMiB: 4096, Identity: macvm.IdentityTravel,
+		RunnerID: "r1", LedgerEntry: e.ID, LedgerDir: ledger, SockRoot: macvmtest.SockRoot(t)}
 	if err := macvm.WriteRunConfig(dir, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +139,7 @@ func TestRunClaimsEntryAndStatusReportsIdentity(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &st); err != nil {
 		t.Fatal(err)
 	}
-	if st.RunID != "run-9" || st.Identity != macvm.IdentityTravel || st.MachineIDSHA256 != macvm.IDHash([]byte("base-id")) {
+	if st.RunID != runID || st.Identity != macvm.IdentityTravel || st.MachineIDSHA256 != macvm.IDHash([]byte("base-id")) {
 		t.Fatalf("status %+v", st)
 	}
 	es, _ := l.Counted()
@@ -164,7 +165,8 @@ func TestRunRefusedWithoutEntry(t *testing.T) {
 	}
 	_ = os.WriteFile(filepath.Join(base, macvm.ManifestFile), []byte(`{"format":1,"state":"ready","hardware_model":"aHc="}`), 0o600)
 	dir := layout.RunDir("r")
-	_ = macvm.WriteRunConfig(dir, macvm.RunConfig{RunID: "r", BaseDir: base, CPUs: 2, MemoryMiB: 4096, Identity: macvm.IdentityFresh})
+	_ = macvm.WriteRunConfig(dir, macvm.RunConfig{RunID: "r", BaseDir: base, CPUs: 2, MemoryMiB: 4096, Identity: macvm.IdentityFresh,
+		SockRoot: macvmtest.SockRoot(t)})
 	d, _, errb := testDeps(&macvmtest.Engine{})
 	if code := run(context.Background(), []string{"run", "--dir", dir}, d); code != 1 || !strings.Contains(errb.String(), "run.json names no admission entry") {
 		t.Fatalf("exit %d: %s", code, errb.String())

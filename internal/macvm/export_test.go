@@ -38,3 +38,11 @@ func lockFree(path string, exclusive bool) bool {
 	unlock()
 	return true
 }
+
+// SetRunExtraPorts makes every run boot also register ports (tests of the
+// listener check).
+func SetRunExtraPorts(ports ...uint32) (restore func()) {
+	old := runExtraPorts
+	runExtraPorts = ports
+	return func() { runExtraPorts = old }
+}

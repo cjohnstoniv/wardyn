@@ -738,6 +738,41 @@ func swapBase(ctx context.Context, nb, base string) error {
 		}
 		return fmt.Errorf("macvm: swapping in the updated base: %w", err)
 	}
+	// The post-swap file-set check, still under the exclusive lock: the new
+	// base holds only a base's own files, so nothing a stage-2 boot left
+	// (a boot configuration, a socket, a log) reaches a run's clone. If it
+	// holds anything else, the old generation is swapped back.
+	if err := checkBaseFiles(base); err != nil {
+		if berr := swapFn(nb, base); berr != nil {
+			return fmt.Errorf("%w; swapping the old base back failed too: %v", err, berr)
+		}
+		return fmt.Errorf("%w; the old base was kept", err)
+	}
+	return nil
+}
+
+// baseFiles are the files a base dir holds; tools.json only after stage 2.
+var baseFiles = []string{DiskFile, AuxFile, MachineIDFile, ManifestFile, ToolsRecordFile}
+
+// checkBaseFiles fails unless dir holds the base's own files only, each a
+// regular file, with the disk, aux storage, identifier and manifest present.
+func checkBaseFiles(dir string) error {
+	des, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	seen := map[string]bool{}
+	for _, de := range des {
+		if !slices.Contains(baseFiles, de.Name()) || !de.Type().IsRegular() {
+			return fmt.Errorf("macvm: the new macOS base holds %q, which is not a base file", de.Name())
+		}
+		seen[de.Name()] = true
+	}
+	for _, f := range baseFiles[:4] {
+		if !seen[f] {
+			return fmt.Errorf("macvm: the new macOS base has no %s", f)
+		}
+	}
 	return nil
 }
 

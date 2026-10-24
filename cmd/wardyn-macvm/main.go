@@ -53,6 +53,8 @@ type deps struct {
 	fstat func(fd int, name string) (unix.Stat_t, error)
 	// getuid replaces os.Getuid (tests).
 	getuid func() int
+	// sockFstat replaces fstat(2) in the socket directory checks (tests).
+	sockFstat func(fd int, name string) (unix.Stat_t, error)
 }
 
 func main() {
@@ -132,7 +134,7 @@ func cmdRun(ctx context.Context, args []string, d deps) int {
 		return 1
 	}
 	err = macvm.Run(ctx, macvm.RunOptions{
-		Engine: eng, RunDir: *dir, Log: log,
+		Engine: eng, RunDir: *dir, Log: log, SockFstat: d.sockFstat,
 		Claim: func(c macvm.RunConfig) error {
 			if c.LedgerEntry == "" || c.RunnerID == "" {
 				return errors.New("run.json names no admission entry")
@@ -190,7 +192,17 @@ func cmdStatus(ctx context.Context, args []string, d deps) int {
 		fmt.Fprintln(d.stderr, "wardyn-macvm status: --dir is required")
 		return 2
 	}
-	cc, err := macvm.DialControl(ctx, filepath.Join(*dir, macvm.ControlSock))
+	cfg, err := macvm.ReadRunConfig(*dir)
+	if err != nil {
+		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
+		return 1
+	}
+	sock, err := macvm.RunSockDir(cfg, d.sockFstat)
+	if err != nil {
+		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
+		return 1
+	}
+	cc, err := macvm.DialControl(ctx, filepath.Join(sock, macvm.ControlSock))
 	if err != nil {
 		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
 		return 1
