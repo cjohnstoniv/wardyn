@@ -579,10 +579,12 @@ func TestRunnerSweepRetakesAfterListLostToRestart(t *testing.T) {
 	}
 	// The restarted runnerd holds only the record. The kubelet stops the proxy on the sweep's delete.
 	h.onDelete = func(p *corev1.Pod) { terminate(p, "containerd://p1") }
-	var proven bool
+	var dropped, proven bool // the first drop's view: a later one cannot mask an early one
 	h.cs.PrependReactor("delete-collection", "networkpolicies", func(clienttesting.Action) (bool, runtime.Object, error) {
-		pe := h.ev.get(t, h.runID).Pods[componentProxy]
-		proven = pe.Witness != nil && pe.FinalizerOff
+		if !dropped {
+			pe := h.ev.get(t, h.runID).Pods[componentProxy]
+			dropped, proven = true, pe.Witness != nil && pe.FinalizerOff
+		}
 		return false, nil, nil
 	})
 	if swept, err := h.d.SweepOrphanedSandboxes(ctx, 0, alwaysOrphan); swept != 1 || err != nil {
