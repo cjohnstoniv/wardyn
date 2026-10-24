@@ -10,6 +10,27 @@
 #
 # Requires `set -euo pipefail` and bash (matches agent-run itself).
 
+# wait_for_proxy — hold until the run's proxy accepts connections, for at most
+# WARDYN_PROXY_WAIT_SECS (default 10). The runner starts the agent only after the
+# proxy has said it is listening; this is the belt for a runner that does not
+# (an older one), where the first requests would otherwise be refused. It fails
+# OPEN: on the bound it prints one line and carries on, which is what an agent
+# did before this wait existed. A proxy host that does not resolve is not a
+# proxied run, so it returns at once.
+wait_for_proxy() {
+    local url="${WARDYN_PROXY_URL:-http://wardyn-proxy:3128}" hp host port max i
+    hp="${url#*://}"; hp="${hp%%/*}"; host="${hp%:*}"; port="${hp##*:}"
+    [[ "$port" =~ ^[0-9]+$ ]] || return 0
+    getent hosts "$host" >/dev/null 2>&1 || return 0
+    max="${WARDYN_PROXY_WAIT_SECS:-10}"
+    for ((i = 0; i < max * 5; i++)); do
+        if (exec 3<>"/dev/tcp/$host/$port") 2>/dev/null; then return 0; fi
+        sleep 0.2
+    done
+    echo "agent-run: the proxy at $host:$port did not accept connections within ${max}s; continuing, so early requests may be refused" >&2
+    return 0
+}
+
 # ── What the agent CLI fetches on its OWN behalf, OFF ────────────────────────
 # Each of these parks a first_use_approval against the shipped default policy
 # (examples/policies/default.json) before the operator has asked the agent to do
@@ -397,11 +418,10 @@ configure_git_broker_insteadof() {
     [[ -n "$records" ]] || return 0
     local have_ssh=0
     [[ -n "${WARDYN_SSH_GRANTS:-}" && "${WARDYN_SSH_GRANTS}" != "{}" ]] && have_ssh=1
-    local _u _d slug _ref broker
-    # 4th field (ref, W9-S1-3) is read but unused here — must still be named or
-    # a record with one collapses onto `slug` (read's overflow-into-last-var
-    # behavior), corrupting the slug this function actually cares about.
-    while IFS=$'\t' read -r _u _d slug _ref; do
+    local rec _u _d slug _ref broker
+    # The url, dest and ref fields are not used here, only named so the split fills them.
+    while IFS= read -r rec; do
+        repo_record_fields "$rec" _u _d slug _ref
         slug="${slug%.git}"
         # A full https github URL names the SAME repo as its bare slug, and the
         # control plane derives the broker key from either (gitBrokerKeyFromSlug),
@@ -588,6 +608,17 @@ clone_one() {  # $1=url  $2=dest  $3=slug  $4=ref (optional: branch/tag/sha; "" 
     fi
 }
 
+# repo_record_fields <record> <url> <dest> <slug> <ref> — splits one tab-separated
+# WARDYN_REPOS record into the four named variables, keeping EMPTY fields. `read`
+# with a tab IFS treats tab as whitespace, so consecutive tabs collapse and every
+# field after an empty one moves up a place (an empty slug let the ref take its
+# slot, and the legacy "\t\t<slug>" record read as a url). Tabs are swapped for a
+# non-whitespace delimiter first, which `read` splits on exactly. A short record
+# (no ref, from an older control plane) leaves the missing fields empty.
+repo_record_fields() {
+    IFS=$'\x1f' read -r "${@:2}" <<< "${1//$'\t'/$'\x1f'}" || :
+}
+
 # dispatch_repo_clones — runs clone_one over WARDYN_REPOS (preferred) or falls
 # back to the legacy single WARDYN_REPO_URL. Reads/writes the caller's
 # `workdir` global (must be set before calling); MUST be called directly (not
@@ -595,8 +626,10 @@ clone_one() {  # $1=url  $2=dest  $3=slug  $4=ref (optional: branch/tag/sha; "" 
 # itself to reflect any legacy single-repo naming — it does not mutate
 # `workdir` itself, only uses it to compute clone destinations.
 dispatch_repo_clones() {
+    local rec r_url r_dest r_slug r_ref
     if [[ -n "${WARDYN_REPOS:-}" ]]; then
-        while IFS=$'\t' read -r r_url r_dest r_slug r_ref; do
+        while IFS= read -r rec; do
+            repo_record_fields "$rec" r_url r_dest r_slug r_ref
             [[ -n "$r_url" ]] || continue
             clone_one "$r_url" "$r_dest" "$r_slug" "$r_ref"
         done <<< "$WARDYN_REPOS"
@@ -682,9 +715,10 @@ repo_scan_ok() {
 # maybe_exec_task_mode "<task>" — exec task mode (BYOA/CI lane): when the
 # control plane set WARDYN_TASK_MODE=exec, run the task as a plain shell
 # command INSTEAD of the agent harness and never return. No-op otherwise.
-# Everything before this call (MITM CA, clone, brokered creds, recording) is
-# identical to a harness run — this only chooses WHAT gets exec'd, and it
-# deliberately skips the LLM auth wiring (a plain command needs no model).
+# This only chooses WHAT gets exec'd, and it deliberately skips the LLM auth
+# wiring (a plain command needs no model). A harness image's agent-run does its
+# full prep (MITM CA, clone, brokered creds, recording) before this call; the
+# base image's stub does the workspace prep only when the run clones a repository or names a starting folder.
 # The command's exit code propagates to the caller (0 -> COMPLETED, else FAILED).
 maybe_exec_task_mode() {
     # Several agents in one run (agent-run-set --tasks): this launcher's shared prep

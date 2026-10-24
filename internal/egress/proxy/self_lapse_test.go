@@ -7,8 +7,10 @@ import (
 	"context"
 	"encoding/json"
 	"math"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -41,6 +43,105 @@ func TestSelfLapse_ClosedBeforeFirstRenew(t *testing.T) {
 	}
 	if !p.lapse.renewed(clock.Now(), func() {}) || !p.lapse.serving() {
 		t.Fatal("first successful renew did not open the proxy")
+	}
+}
+
+// TestSelfLapse_ListensOnlyOnceOpen: a self-lapsing proxy binds its listener only on its first
+// renew, so a k8s runner's TCP readiness probe reads its pod Ready only once it serves. Closed, the
+// proxy accepts no connection, so no agent can start and a short run's recording upload is never
+// refused there; once open, the upload reaches the control plane; lapsed, the listener stays bound
+// and refuses. Lapsed before its first renew, it never listens, and Shutdown still ends it. A proxy
+// with no gate (Docker, server) listens at once.
+func TestSelfLapse_ListensOnlyOnceOpen(t *testing.T) {
+	var landed atomic.Int32
+	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		landed.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer cp.Close()
+	serve := func(gate *lapseGate) (*Server, string, chan error) {
+		p, _ := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(cp), nil, nil)
+		p.lapse = gate
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		addr := ln.Addr().String()
+		_ = ln.Close()
+		s := &Server{proxy: p, http: &http.Server{Addr: addr, Handler: p}}
+		served := make(chan error, 1)
+		go func() { served <- s.ListenAndServe() }()
+		t.Cleanup(func() { _ = s.http.Shutdown(context.Background()) })
+		return s, addr, served
+	}
+	listening := func(addr string, within time.Duration) bool {
+		for end := time.Now().Add(within); ; time.Sleep(10 * time.Millisecond) {
+			if c, err := net.Dial("tcp", addr); err == nil {
+				_ = c.Close()
+				return true
+			}
+			if time.Now().After(end) {
+				return false
+			}
+		}
+	}
+	upload := func(p *Proxy, addr string) int {
+		req, err := http.NewRequest(http.MethodPut, "http://"+addr+routeRecordings+p.runID.String(), strings.NewReader("{\"version\": 2}\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("upload: %v", err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	if _, addr, _ := serve(nil); !listening(addr, 5*time.Second) {
+		t.Fatal("ungated proxy never listened")
+	}
+
+	clock := &fakeBoot{}
+	s, addr, _ := serve(newLapseGate(clock, testLapseTTL))
+	p := s.proxy
+	if listening(addr, 300*time.Millisecond) || landed.Load() != 0 {
+		t.Fatalf("closed proxy accepted a connection (%d forwarded); a probe would read it Ready before it serves", landed.Load())
+	}
+	if !p.lapse.renewed(clock.Now(), func() {}) {
+		t.Fatal("first renew did not apply")
+	}
+	if !listening(addr, 5*time.Second) {
+		t.Fatal("open proxy never listened")
+	}
+	if got := upload(p, addr); got != http.StatusNoContent || landed.Load() != 1 {
+		t.Fatalf("open proxy: upload %d, %d forwarded; want 204, one", got, landed.Load())
+	}
+	clock.advance(testLapseTTL)
+	if got := upload(p, addr); got != http.StatusServiceUnavailable || landed.Load() != 1 {
+		t.Fatalf("lapsed proxy: upload %d, %d forwarded; want 503, still one", got, landed.Load())
+	}
+
+	s, addr, served := serve(newLapseGate(clock, testLapseTTL))
+	s.proxy.lapse.lapse(LapseRenewRefused)
+	if listening(addr, 300*time.Millisecond) {
+		t.Fatal("a proxy lapsed before its first renew listened")
+	}
+	// ListenAndServe registers its Shutdown hook on its own goroutine, so Shutdown is repeated
+	// until it has been seen.
+	for end := time.Now().Add(5 * time.Second); ; {
+		_ = s.http.Shutdown(context.Background())
+		select {
+		case err := <-served:
+			if err != nil || listening(addr, 0) {
+				t.Fatalf("a proxy shut down before its first renew: ListenAndServe %v, listening %v", err, listening(addr, 0))
+			}
+			return
+		case <-time.After(20 * time.Millisecond):
+		}
+		if time.Now().After(end) {
+			t.Fatal("a proxy shut down before its first renew never returned from ListenAndServe")
+		}
 	}
 }
 

@@ -328,7 +328,7 @@ A service identity is automation that runs under its own name. It is not a perso
 | `wardyn service-identity retire <name>` | security tier | end it for good. |
 | `wardyn service-identity token list <name>`, `token revoke <name> <token-id>` | the sponsor | read and revoke its tokens, never their values. |
 
-- **No CLI mint.** The sponsor mints in the console, signed in, from Account under "Service identities I sponsor", in the show-once dialog.
+- **No CLI mint.** The sponsor mints in the console, signed in, from Account under "Service identities I sponsor", in the show-once dialog. The sponsor must be in admin view to mint: in member mode the mint answers `409` `api_token_member_mode_mint`.
 - **Four-eyes.**
   - With `WARDYN_GOVERNANCE_SECOND_HUMAN` on, a create and any `PATCH` that changes the sponsor are held as governance change kind `service_identity` until a distinct human on the security tier approves ([governance writes](governance-writes.md)).
   - The `PATCH` is held whole. Description, suspend, resume and retire stay direct.
