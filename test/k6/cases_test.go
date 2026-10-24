@@ -441,6 +441,10 @@ func (e *env) onlyIP(t *testing.T, ip string) (release func()) {
 	if err := json.Unmarshal([]byte(ann), &pools); err != nil || len(pools) != 1 {
 		t.Fatalf("namespace %s names the Calico pools %q, want one (scripts/k6-kind-conformance.sh sets it)", e.runsNS, ann)
 	}
+	if rl, err := e.admin.Discovery().ServerResourcesForGroupVersion("crd.projectcalico.org/v1"); err != nil ||
+		!slices.ContainsFunc(rl.APIResources, func(r metav1.APIResource) bool { return r.Name == "ipreservations" }) {
+		t.Fatalf("Calico < v3.22: IPReservation CRD missing (crd.projectcalico.org/v1 ipreservations; K6_CALICO_VERSION): %v", err)
+	}
 	kc := os.Getenv("K6_ADMIN_KUBECONFIG")
 	cidr := strings.TrimSpace(sh(t, "kubectl", "--kubeconfig", kc, "get", "ippools.crd.projectcalico.org", pools[0], "-o", "jsonpath={.spec.cidr}"))
 	pool, err := netip.ParsePrefix(cidr)
@@ -465,9 +469,9 @@ func (e *env) onlyIP(t *testing.T, ip string) (release func()) {
 	sh(t, "kubectl", "--kubeconfig", kc, "apply", "-f", f)
 	released := false
 	release = func() {
-		if !released {
-			released = true
+		if !released { // set only once the delete succeeded, so the cleanup retries a failed one
 			sh(t, "kubectl", "--kubeconfig", kc, "delete", "ipreservations.crd.projectcalico.org", k6OnlyIP, "--ignore-not-found")
+			released = true
 		}
 	}
 	t.Cleanup(release)
