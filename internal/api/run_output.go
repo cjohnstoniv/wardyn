@@ -483,7 +483,7 @@ func (s *Server) refuseNoRunOutput(w http.ResponseWriter, r *http.Request, run t
 		writeErrorReason(w, http.StatusGone, reasonRecordingErased, "recordings for this run have been erased")
 	case run.Interactive:
 		writeErrorReason(w, http.StatusConflict, reasonRunOutputInteractive, s.interactiveNothingKept(run, reader))
-	case uncaptured && s.recordingMayHoldOutput(r.Context(), run, reader):
+	case uncaptured:
 		writeErrorReason(w, http.StatusConflict, reasonRunOutputNotCaptured,
 			"Output isn't captured for Kubernetes runs yet. The run's recording has it.")
 	case !captureKnown:

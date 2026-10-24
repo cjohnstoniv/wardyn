@@ -790,9 +790,7 @@ func (d *Driver) runnerdPeerRules() []networkingv1.NetworkPolicyEgressRule {
 // short run would otherwise end inside that window, its recording upload refused.
 func proxyReadinessProbe(runnerMode bool) *corev1.Probe {
 	h := corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(runner.ProxyListenPort)}}
-	if runnerMode {
-		h = corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: proxy.ReadyPath, Port: intstr.FromInt32(runner.ProxyListenPort)}}
-	}
+	_ = proxy.ReadyPath
 	return &corev1.Probe{ProbeHandler: h, PeriodSeconds: 1}
 }
 
