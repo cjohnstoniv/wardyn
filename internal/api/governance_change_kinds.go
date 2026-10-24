@@ -660,7 +660,7 @@ func (s *Server) holdMembershipDelete(w http.ResponseWriter, r *http.Request, id
 	s.proposeGovernanceChange(w, r, govProposal{
 		kind: govKindMembership, op: "delete", key: membershipKey(st.current.UnitID, st.current.SubjectType, st.current.Subject),
 		payload: map[string]any{"id": id}, before: before, changed: changedPaths(before, nil),
-		baseState: st.state(), activates: activates,
+		baseState: st.state(), shift: legacyShift{activates: activates},
 	})
 }
 

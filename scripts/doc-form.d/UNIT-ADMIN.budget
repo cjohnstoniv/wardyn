@@ -1,4 +1,5 @@
 # Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the measured prose words of the page, so growth fails.
 # docs/operations/unit-admins.md 714 measured: who holds a grant, the scoped routes, four-eyes, locks and the grant steps.
 # docs/operations/unit-admins.md 728 adds 14 over 714, measured (#2967): the desktop direction lock names.
-docs/operations/unit-admins.md=728 share=35
+# docs/operations/unit-admins.md 746 adds 18 over 728, measured: the legacy move rule (activates or vacates, approver governs every unit).
+docs/operations/unit-admins.md=746 share=35

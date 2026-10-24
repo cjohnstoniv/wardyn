@@ -255,8 +255,8 @@ type govProposal struct {
 	notes []string
 	// baseState is the target as the proposal saw it; its hash is what an approval compares.
 	baseState any
-	// activates are the units a legacy membership delete or move may make someone's context (H3).
-	activates []unitActivation
+	// shift is what a legacy membership delete or move may do to whose row wins (H3).
+	shift legacyShift
 }
 
 // proposeGovernanceChange stores p as pending and answers 202 with the pending change. A live change
@@ -271,7 +271,7 @@ func (s *Server) proposeGovernanceChange(w http.ResponseWriter, r *http.Request,
 	ch := types.GovernanceChange{
 		TargetKind: p.kind, Op: p.op, TargetKey: p.key,
 		Payload:         payload,
-		Diff:            renderGovernanceDiff(p.before, p.after, p.changed, p.notes, p.activates...),
+		Diff:            renderGovernanceDiff(p.before, p.after, p.changed, p.notes, p.shift),
 		BaseHash:        computeETag(p.baseState),
 		DeploymentHash:  computeETag(s.cfg.DefaultPolicy),
 		ProposedBy:      proposer,
@@ -324,12 +324,18 @@ type governanceDiffBody struct {
 	Notes []string `json:"notes,omitempty"`
 	// Activates lists the units a legacy membership delete or move may make someone's context.
 	Activates []unitActivation `json:"activates,omitempty"`
+	// Vacates lists the units a legacy membership move may take someone out of.
+	Vacates []unitActivation `json:"vacates,omitempty"`
 }
 
 // renderGovernanceDiff is the diff stored with a change: the redacted before and after views and the
 // changed field paths, rendered by the server so the console and the CLI never compute their own.
-func renderGovernanceDiff(before, after any, changed, notes []string, activates ...unitActivation) json.RawMessage {
-	body := governanceDiffBody{Changed: changed, Notes: notes, Activates: activates}
+// shift is a legacy membership delete's or move's (none for any other change).
+func renderGovernanceDiff(before, after any, changed, notes []string, shift ...legacyShift) json.RawMessage {
+	body := governanceDiffBody{Changed: changed, Notes: notes}
+	if len(shift) > 0 {
+		body.Activates, body.Vacates = shift[0].activates, shift[0].vacates
+	}
 	if body.Changed == nil {
 		body.Changed = []string{}
 	}

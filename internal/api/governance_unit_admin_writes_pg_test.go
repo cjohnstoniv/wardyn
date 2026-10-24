@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -178,22 +179,27 @@ type legacyRow struct {
 }
 
 // legacyMove seeds legacy rows moved and other and has ua-a's admin move moved to a new, narrower unit
-// below its own named name, which it returns with the answer.
-func (e *unitAdminEnv) legacyMove(moved, other legacyRow, name string) (*httptest.ResponseRecorder, types.GovernanceUnit) {
+// below its own named name, which it returns with the answer and the two rows.
+func (e *unitAdminEnv) legacyMove(moved, other legacyRow, name string) (*httptest.ResponseRecorder, types.GovernanceUnit, [2]types.GovernanceMembership) {
 	e.t.Helper()
-	row := treeMember(e.t, e.govEnv, moved.unit, moved.st, moved.subject, moved.priority, false)
-	setLegacy(e.t, e.govEnv, row.ID, treeMember(e.t, e.govEnv, other.unit, other.st, other.subject, other.priority, false).ID)
+	rows := [2]types.GovernanceMembership{
+		treeMember(e.t, e.govEnv, moved.unit, moved.st, moved.subject, moved.priority, false),
+		treeMember(e.t, e.govEnv, other.unit, other.st, other.subject, other.priority, false),
+	}
+	setLegacy(e.t, e.govEnv, rows[0].ID, rows[1].ID)
 	to := treeChild(e.t, e.govEnv, uaUnitBody(name, moved.unit.ID, uaDomains("pypi.org"), nil))
-	return e.call(e.adminA, http.MethodPut, "/api/v1/governance/memberships/"+row.ID.String(), `{"unit_id":"`+to.ID.String()+`"}`), to
+	return e.call(e.adminA, http.MethodPut, "/api/v1/governance/memberships/"+rows[0].ID.String(), `{"unit_id":"`+to.ID.String()+`"}`), to, rows
 }
 
 // TestLegacyMoveUnitAdmin: a unit admin's narrowing move of a legacy row is held when it changes which
 // legacy row a person is selected by, and applies directly when no selection changes but the row's own
 // move. Every case seeds the moved row in a unit of ua-a's and the other in ua-b. The rows are two
 // groups one person is in, or one person's two rows; at equal priority the unit name breaks the tie,
-// so the destination's name decides. When the moved row falls behind, ua-b takes over and only an
-// approver who governs it may decide: ua-a's peer admin is refused and a security admin approves.
-// When the moved row takes over, its destination is the unit activated, and ua-a's peer admin approves.
+// so the destination's name decides. When the moved row falls behind, ua-b takes over; when it takes
+// over, the person leaves ua-b. Either way only an approver who governs ua-b too may decide: ua-a's
+// peer admin is refused, and a security admin (behind) or an admin of both ua-a and ua-b (takes over)
+// approves. In the witness ua-a1 refuses exec runs and ua-b does not: the person's runs keep the
+// refusal until the approval.
 func TestLegacyMoveUnitAdmin(t *testing.T) {
 	group, user := types.CapabilitySubjectGroup, types.CapabilitySubjectUser
 	for _, tc := range []struct {
@@ -203,11 +209,12 @@ func TestLegacyMoveUnitAdmin(t *testing.T) {
 		moved, other  legacyRow
 		to            string
 		held, behind  bool
+		denyExec      bool   // ua-a1 refuses exec runs
 		before, after string // the unit names the person is selected by before and after the move
 	}{
 		{name: "overlapping groups, the moved row falls behind (the witness)",
 			moved: legacyRow{st: group, subject: "ua-eng", priority: 5}, other: legacyRow{st: group, subject: "ua-research", priority: 5},
-			to: "ua-zeta", held: true, behind: true, before: "ua-a1", after: "ua-b"},
+			to: "ua-zeta", held: true, behind: true, denyExec: true, before: "ua-a1", after: "ua-b"},
 		{name: "overlapping groups, the moved row still selected",
 			moved: legacyRow{st: group, subject: "ua-eng", priority: 5}, other: legacyRow{st: group, subject: "ua-research", priority: 5},
 			to: "ua-a1-leaf", before: "ua-a1", after: "ua-a1-leaf"},
@@ -233,6 +240,12 @@ func TestLegacyMoveUnitAdmin(t *testing.T) {
 			if tc.belowC {
 				tc.moved.unit = treeChild(t, e.govEnv, uaUnitBody("ua-c-from", e.a.ID, uaDomains("pypi.org", "github.com"), nil))
 			}
+			if tc.denyExec {
+				if w := e.admin(http.MethodPut, "/api/v1/governance/units/"+e.a1.ID.String(),
+					e.restate(e.a1, map[string]any{"overlay_limits": map[string]any{"deny_task_mode_exec": true}})); w.Code != http.StatusOK {
+					t.Fatalf("ua-a1 refusing exec runs = %d %s", w.Code, w.Body)
+				}
+			}
 			who := treeCtx("sub-ua-tie", []string{tc.moved.subject, tc.other.subject}, "")
 			if tc.moved.st == user {
 				who = treeCtx("sub-ua-tie", nil, "")
@@ -242,7 +255,7 @@ func TestLegacyMoveUnitAdmin(t *testing.T) {
 				t.Helper()
 				return names[unitIDOf(treeCeiling(t, e.govEnv, who))]
 			}
-			w, to := e.legacyMove(tc.moved, tc.other, tc.to)
+			w, to, _ := e.legacyMove(tc.moved, tc.other, tc.to)
 			names[to.ID] = to.Name
 			if !tc.held {
 				if w.Code != http.StatusOK || e.pendingCount() != 0 {
@@ -257,18 +270,86 @@ func TestLegacyMoveUnitAdmin(t *testing.T) {
 			if got := selected(); got != tc.before {
 				t.Errorf("selected by %s before approval, want %s", got, tc.before)
 			}
-			approver := e.peerA // the moved row taking over activates only its destination, a unit of ua-a's
-			if tc.behind {
-				if w := e.call(e.peerA, http.MethodPost, approvePath(ch.ID), ""); !scopeRefused(t, w) {
-					t.Errorf("ua-a's peer admin approving = %d %s, want 403 unit_scope_denied", w.Code, w.Body)
-				}
-				approver = e.alice
+			if tc.denyExec && !treeCeiling(t, e.govEnv, who).Limits.DenyTaskModeExec {
+				t.Errorf("before approval the person's runs are not refused exec")
+			}
+			if w := e.call(e.peerA, http.MethodPost, approvePath(ch.ID), ""); !scopeRefused(t, w) {
+				t.Errorf("ua-a's peer admin approving = %d %s, want 403 unit_scope_denied", w.Code, w.Body)
+			}
+			approver := e.alice
+			if !tc.behind {
+				both := e.fresh("sub-ua-admin-ab")
+				e.grant(e.a, types.CapabilitySubjectUser, both)
+				e.grant(e.b, types.CapabilitySubjectUser, both)
+				approver = uaSession(t, both, []string{}, false)
 			}
 			if w := e.call(approver, http.MethodPost, approvePath(ch.ID), ""); w.Code != http.StatusOK {
 				t.Fatalf("approving = %d %s, want 200", w.Code, w.Body)
 			}
 			if got := selected(); got != tc.after {
 				t.Errorf("selected by %s after approval, want %s", got, tc.after)
+			}
+			if tc.denyExec && treeCeiling(t, e.govEnv, who).Limits.DenyTaskModeExec {
+				t.Errorf("after approval the person's runs are still refused exec, want ua-b's walls")
+			}
+		})
+	}
+}
+
+// TestLegacyMoveHeldGoesStale: a held legacy move is decided over the units it would activate when
+// held, ua-b in each case (the witness: groups in ua-a1 and ua-b at one priority, the ua-a1 row moved
+// below it to ua-zeta). An edit since that changes what the move would do makes the approval stale,
+// even a security admin's, and leaves the row where it was: the ua-b row moved to ua-s, which sorts
+// between ua-b and ua-zeta, or raised above the moved row's priority. An unrelated edit since leaves
+// the approval to apply.
+func TestLegacyMoveHeldGoesStale(t *testing.T) {
+	group := types.CapabilitySubjectGroup
+	for _, tc := range []struct {
+		name  string
+		edit  func(e *unitAdminEnv, other types.GovernanceMembership)
+		stale bool
+	}{
+		{"the ua-b row moved to a unit the move now activates", func(e *unitAdminEnv, other types.GovernanceMembership) {
+			s := treeChild(e.t, e.govEnv, uaUnitBody("ua-s", store.DefaultUnitID, uaDomains("pypi.org"), nil))
+			if w := e.admin(http.MethodPut, "/api/v1/governance/memberships/"+other.ID.String(), `{"unit_id":"`+s.ID.String()+`"}`); w.Code != http.StatusOK {
+				e.t.Fatalf("move the ua-b row to ua-s = %d %s", w.Code, w.Body)
+			}
+		}, true},
+		{"the ua-b row's priority raised above the moved row's", func(e *unitAdminEnv, other types.GovernanceMembership) {
+			if _, err := e.pool.Exec(context.Background(), `UPDATE governance_memberships SET priority = 9 WHERE id = $1`, other.ID); err != nil {
+				e.t.Fatalf("raise the ua-b row's priority: %v", err)
+			}
+		}, true},
+		{"an unrelated unit edited", func(e *unitAdminEnv, _ types.GovernanceMembership) {
+			if w := e.admin(http.MethodPut, "/api/v1/governance/units/"+e.a2.ID.String(),
+				e.restate(e.a2, map[string]any{"overlay_limits": map[string]any{"deny_interactive": true}})); w.Code != http.StatusOK {
+				e.t.Fatalf("edit ua-a2 = %d %s", w.Code, w.Body)
+			}
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newUnitAdminEnv(t, false)
+			w, _, rows := e.legacyMove(legacyRow{unit: e.a1, st: group, subject: "ua-eng", priority: 5},
+				legacyRow{unit: e.b, st: group, subject: "ua-research", priority: 5}, "ua-zeta")
+			ch := e.pending(w)
+			tc.edit(e, rows[1])
+			w = e.call(e.alice, http.MethodPost, approvePath(ch.ID), "")
+			ms, err := e.pg.ListGovernanceMemberships(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			i := slices.IndexFunc(ms, func(m types.GovernanceMembership) bool { return m.ID == rows[0].ID })
+			if tc.stale {
+				if w.Code != http.StatusConflict || wireReason(t, w) != reasonGovernanceChangeStale {
+					t.Fatalf("approving = %d %s, want 409 %s", w.Code, w.Body, reasonGovernanceChangeStale)
+				}
+				if i < 0 || ms[i].UnitID != e.a1.ID {
+					t.Errorf("the stale approval moved the row: %+v", ms)
+				}
+				return
+			}
+			if w.Code != http.StatusOK || i < 0 || ms[i].UnitID == e.a1.ID {
+				t.Fatalf("approving = %d %s with the row moved = %v, want 200 and the row moved", w.Code, w.Body, i >= 0 && ms[i].UnitID != e.a1.ID)
 			}
 		})
 	}

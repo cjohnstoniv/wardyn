@@ -483,11 +483,11 @@ func (s *Server) moveMembershipInScope(w http.ResponseWriter, r *http.Request, i
 		if !narrows {
 			return errHoldForApproval
 		}
-		activates, err := moveActivationsQ(ctx, q, row, to)
+		shift, err := moveShiftQ(ctx, q, row, to)
 		if err != nil {
 			return err
 		}
-		if len(activates) > 0 {
+		if len(shift.activates) > 0 || len(shift.vacates) > 0 {
 			return errHoldForApproval
 		}
 		from, moved, err = moveMembershipQ(ctx, q, id, to)

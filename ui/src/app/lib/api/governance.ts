@@ -454,6 +454,10 @@ export interface TreeDryRunReport {
   live_runs: string[];
   // Who could decide the write were it held, the caller left out.
   approvers: GovernanceChangeApprover[];
+  // A legacy membership move: the units it may make someone's context, and the units it may take
+  // someone out of; absent when none.
+  activates?: { unit_id: string; unit_name: string }[];
+  vacates?: { unit_id: string; unit_name: string }[];
 }
 
 // The server composes a grant-bound refusal as "invalid ceiling: " + the
