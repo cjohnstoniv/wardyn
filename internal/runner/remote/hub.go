@@ -561,4 +561,7 @@ func (h *Hub) orgChoices(ok *runnerwire.AuthOK, current types.Runner) {
 	if h.cfg.LocalAttach != nil {
 		ok.LocalAttach = h.cfg.LocalAttach(current)
 	}
+	if l := current.Limits; l != nil {
+		ok.PerRunCPUMillis, ok.PerRunMemoryMiB = l.PerRun.CPUMillis, l.PerRun.MemoryMiB
+	}
 }
