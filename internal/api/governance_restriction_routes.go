@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -244,14 +245,22 @@ func (s *Server) writeRestriction(w http.ResponseWriter, r *http.Request, id uui
 		}
 	}
 	if mode == govQueue && !create && !restrictionAtLeastAsStrict(cur, body) {
-		op, key := "update", id.String()
-		s.proposeGovernanceChange(w, r, govProposal{kind: govKindRestriction, op: op, key: key,
-			payload: restrictionChangePayload{ID: id, Write: &body},
-			before:  restrictionState(cur), after: body, changed: changedPaths(restrictionState(cur), body), baseState: restrictionState(cur)})
+		s.holdRestrictionWrite(w, r, id, cur, body)
 		return
 	}
-	saved, err := rs.PutRestriction(r.Context(), types.Restriction{ID: id, Name: body.Name, Spec: body.Spec, Limits: body.Limits,
-		Contact: body.Contact, Members: body.Members}, principalFromRequest(r))
+	var saved types.Restriction
+	err := s.writeGovernance(r.Context(), func(q store.Querier) (err error) {
+		saved, err = putRestrictionQ(r.Context(), q, id, create, mode == govQueue, &cur, body, principalFromRequest(r))
+		return err
+	})
+	if errors.Is(err, errHoldForApproval) {
+		// The restriction changed since it was read, and this write is no longer as strict as it now is.
+		s.holdRestrictionWrite(w, r, id, cur, body)
+		return
+	}
+	if notFoundIf(w, err, "restriction", reasonRestrictionNotFound) {
+		return
+	}
 	if errors.Is(err, store.ErrConflict) {
 		writeErrorReason(w, http.StatusConflict, reasonRestrictionInvalid, fmt.Sprintf("a restriction named %q already exists", body.Name))
 		return
@@ -274,6 +283,37 @@ func (s *Server) writeRestriction(w http.ResponseWriter, r *http.Request, id uui
 		status = http.StatusCreated
 	}
 	writeJSON(w, status, saved)
+}
+
+// holdRestrictionWrite stores the replacement of restriction id, cur as the proposal saw it, by body as
+// a pending change.
+func (s *Server) holdRestrictionWrite(w http.ResponseWriter, r *http.Request, id uuid.UUID, cur types.Restriction, body types.RestrictionWrite) {
+	s.proposeGovernanceChange(w, r, govProposal{kind: govKindRestriction, op: "update", key: id.String(),
+		payload: restrictionChangePayload{ID: id, Write: &body},
+		before:  restrictionState(cur), after: body, changed: changedPaths(restrictionState(cur), body), baseState: restrictionState(cur)})
+}
+
+// putRestrictionQ is a direct restriction write on q, under the target lock a held change's approval
+// takes. A replacement reads the restriction and its members as they now stand into cur, and with held
+// writes on (queue) answers errHoldForApproval unless body is still at least as strict as that, not
+// only as what the handler read before the transaction.
+func putRestrictionQ(ctx context.Context, q store.Querier, id uuid.UUID, create, queue bool, cur *types.Restriction,
+	body types.RestrictionWrite, by string) (types.Restriction, error) {
+	if err := store.LockGovernanceTarget(ctx, q, govKindRestriction, id.String()); err != nil {
+		return types.Restriction{}, err
+	}
+	if !create {
+		now, err := store.GetRestrictionQ(ctx, q, id)
+		if err != nil {
+			return types.Restriction{}, err
+		}
+		*cur = now
+		if queue && !restrictionAtLeastAsStrict(now, body) {
+			return types.Restriction{}, errHoldForApproval
+		}
+	}
+	return store.PutRestrictionQ(ctx, q, types.Restriction{ID: id, Name: body.Name, Spec: body.Spec, Limits: body.Limits,
+		Contact: body.Contact, Members: body.Members}, by)
 }
 
 func restrictionAuditData(saved types.Restriction, before any, after types.RestrictionWrite) map[string]any {

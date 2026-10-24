@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -107,22 +108,31 @@ func (s *Server) handleSetWorkspaceOwningUnit(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if mode == govQueue && !owningUnitNarrows(units, ws.OwningUnitID, body.UnitID) {
-		s.proposeGovernanceChange(w, r, govProposal{kind: govKindWorkspaceOwningUnit, op: "set", key: id.String(),
-			payload: owningUnitChange{WorkspaceID: id, UnitID: body.UnitID},
-			before:  owningUnitState(ws.OwningUnitID), after: owningUnitState(body.UnitID),
-			changed:   []string{"owning_unit_id"},
-			baseState: owningUnitState(ws.OwningUnitID)})
+		s.holdOwningUnit(w, r, id, ws.OwningUnitID, body.UnitID)
 		return
 	}
-	_, err = s.cfg.Store.SetWorkspaceOwningUnit(r.Context(), id, body.UnitID)
-	if notFoundIf(w, err, "workspace", reasonWorkspaceNotFound) {
+	var from *uuid.UUID
+	err = s.writeGovernance(r.Context(), func(q store.Querier) (err error) {
+		from, err = setOwningUnitQ(r.Context(), q, id, body.UnitID, mode == govQueue)
+		return err
+	})
+	var refusal *unitWriteError
+	switch {
+	case errors.Is(err, errHoldForApproval):
+		// The pin moved since it was read, and this move no longer only narrows the one it found.
+		s.holdOwningUnit(w, r, id, from, body.UnitID)
 		return
-	} else if err != nil {
+	case errors.As(err, &refusal):
+		writeErrorReason(w, refusal.status, refusal.reason, refusal.msg)
+		return
+	case notFoundIf(w, err, "workspace", reasonWorkspaceNotFound):
+		return
+	case err != nil:
 		writeServerError(w, r, "set workspace owning unit", err)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		workspaceOwningUnitAction, id.String(), "success", mustJSON(map[string]any{"from": ws.OwningUnitID, "to": body.UnitID})))
+		workspaceOwningUnitAction, id.String(), "success", mustJSON(map[string]any{"from": from, "to": body.UnitID})))
 	if mode == govBypass {
 		s.recordGovernanceBypass(r, govKindWorkspaceOwningUnit, id.String(), "success", nil)
 	}
@@ -132,6 +142,43 @@ func (s *Server) handleSetWorkspaceOwningUnit(w http.ResponseWriter, r *http.Req
 		return
 	}
 	writeJSON(w, http.StatusOK, saved)
+}
+
+// holdOwningUnit stores the move of workspace id's pin from from to unit as a pending change, from
+// being the pin the proposal saw.
+func (s *Server) holdOwningUnit(w http.ResponseWriter, r *http.Request, id uuid.UUID, from, unit *uuid.UUID) {
+	s.proposeGovernanceChange(w, r, govProposal{kind: govKindWorkspaceOwningUnit, op: "set", key: id.String(),
+		payload: owningUnitChange{WorkspaceID: id, UnitID: unit},
+		before:  owningUnitState(from), after: owningUnitState(unit),
+		changed:   []string{"owning_unit_id"},
+		baseState: owningUnitState(from)})
+}
+
+// setOwningUnitQ is a direct pin write on q, under the graph lock and the target lock a held move's
+// approval takes: the pin and the units as they now stand, the unit checked again, and with held
+// writes on (queue) errHoldForApproval unless the move still only narrows that pin, not only the one
+// the handler read before the transaction. from is the pin as it now stands.
+func setOwningUnitQ(ctx context.Context, q store.Querier, id uuid.UUID, unit *uuid.UUID, queue bool) (from *uuid.UUID, err error) {
+	if err = store.LockGovernanceGraph(ctx, q); err != nil {
+		return nil, err
+	}
+	if err = store.LockGovernanceTarget(ctx, q, govKindWorkspaceOwningUnit, id.String()); err != nil {
+		return nil, err
+	}
+	if from, err = store.WorkspaceOwningUnitQ(ctx, q, id); err != nil {
+		return nil, err
+	}
+	units, err := store.ListGovernanceUnitsQ(ctx, q)
+	if err != nil {
+		return from, err
+	}
+	if e := owningUnitRefusal(units, unit); e != nil {
+		return from, e
+	}
+	if queue && !owningUnitNarrows(units, from, unit) {
+		return from, errHoldForApproval
+	}
+	return from, store.SetWorkspaceOwningUnitQ(ctx, q, id, unit)
 }
 
 // applyWorkspaceOwningUnitChange applies a held pin move inside the decision transaction: the target
