@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -321,4 +322,120 @@ func TestSelfLapse_FarFutureClockSaturates(t *testing.T) {
 	if g.serving() || g.reason != LapseDeadline {
 		t.Fatalf("serving on a far-future clock (reason %q)", g.reason)
 	}
+}
+
+// TestSelfLapse_NeverRenewedLapsesWithItsCause: a proxy whose first renew keeps failing keeps
+// trying until its next try would land past firstRenewWithin, then lapses, closed all along, with
+// its last renew error as the termination message a k8s runner names the failed start by. That
+// error keeps its class and the organisation's host:port, never the token, the URL's user info or
+// query. An open proxy failing as long does not lapse before its deadline; a permanent refusal
+// lapses at once with its own cause.
+func TestSelfLapse_NeverRenewedLapsesWithItsCause(t *testing.T) {
+	const tok = "SEEDTOK-abc123"
+	run := func(t *testing.T, base string, client *http.Client, g *lapseGate) {
+		t.Helper()
+		go runSelfLapseRenewer(t.Context(), newTokenSource(tok), base, client, g, lapseTestTuning())
+	}
+	lapsed := func(g *lapseGate, within time.Duration) bool {
+		select {
+		case <-g.Done():
+			return true
+		case <-time.After(within):
+			return false
+		}
+	}
+	readCause := func(t *testing.T, g *lapseGate) string {
+		t.Helper()
+		path := t.TempDir() + "/termination-log"
+		if err := (&Server{proxy: &Proxy{lapse: g}}).WriteLapseCause(path); err != nil {
+			t.Fatal(err)
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+
+	t.Run("unreachable", func(t *testing.T) {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		hostPort := ln.Addr().String()
+		_ = ln.Close()
+		clock := &fakeBoot{}
+		g := newLapseGate(clock, testLapseTTL)
+		run(t, "http://user:hunter2@"+hostPort+"/?sig="+tok, http.DefaultClient, g)
+		if lapsed(g, 200*time.Millisecond) {
+			t.Fatal("lapsed before its first renew's bound")
+		}
+		clock.set(firstRenewWithin)
+		if !lapsed(g, 5*time.Second) {
+			t.Fatal("a proxy failing its first renew past its bound never lapsed")
+		}
+		if g.serving() || g.reason != LapseDeadline {
+			t.Fatalf("serving=%v reason=%q", g.serving(), g.reason)
+		}
+		cause := readCause(t, g)
+		for _, want := range []string{"http://" + hostPort, "connection refused"} {
+			if !strings.Contains(cause, want) {
+				t.Errorf("cause %q lacks %q", cause, want)
+			}
+		}
+		for _, leak := range []string{tok, "hunter2", "sig=", "token/renew"} {
+			if strings.Contains(cause, leak) {
+				t.Errorf("cause %q leaks %q", cause, leak)
+			}
+		}
+	})
+
+	t.Run("refused", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "token "+strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")+" not valid\n"+strings.Repeat("x", 2*maxRenewCause), http.StatusUnauthorized)
+		}))
+		defer srv.Close()
+		clock := &fakeBoot{}
+		g := newLapseGate(clock, testLapseTTL)
+		run(t, srv.URL, srv.Client(), g)
+		clock.set(firstRenewWithin)
+		if !lapsed(g, 5*time.Second) {
+			t.Fatal("never lapsed")
+		}
+		cause := readCause(t, g)
+		if !strings.HasPrefix(cause, "renew status 401: token [redacted] not valid x") || strings.Contains(cause, tok) ||
+			strings.Contains(cause, "\n") || len(cause) > maxRenewCause+len("…") {
+			t.Fatalf("cause %q (%d bytes)", cause, len(cause))
+		}
+	})
+
+	t.Run("open", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "blip", http.StatusServiceUnavailable)
+		}))
+		defer srv.Close()
+		clock := &fakeBoot{}
+		g := newLapseGate(clock, testLapseTTL)
+		g.renewed(0, func() {})
+		clock.set(firstRenewWithin)
+		run(t, srv.URL, srv.Client(), g)
+		if lapsed(g, 200*time.Millisecond) {
+			t.Fatal("an open proxy lapsed before its deadline")
+		}
+	})
+
+	t.Run("permanent", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "run terminal", http.StatusForbidden)
+		}))
+		defer srv.Close()
+		g := newLapseGate(&fakeBoot{}, testLapseTTL)
+		run(t, srv.URL, srv.Client(), g)
+		if !lapsed(g, 5*time.Second) || g.reason != LapseRenewRefused {
+			t.Fatalf("reason %q", g.reason)
+		}
+		if cause := readCause(t, g); cause != "refused for good: renew status 403: run terminal" {
+			t.Fatalf("cause %q", cause)
+		}
+	})
 }
