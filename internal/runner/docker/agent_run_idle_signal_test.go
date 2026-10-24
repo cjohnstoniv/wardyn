@@ -367,9 +367,7 @@ func TestAgentBaseExecTaskClonesTheWorkspace(t *testing.T) {
 			if clones != 1 {
 				t.Errorf("clones: %d, want exactly the workspace clone\n%s", clones, gitLog)
 			}
-			// The legacy single-URL form gets no rewrite from configure_git_broker_insteadof on any image, so only
-			// WARDYN_REPOS is held to it.
-			if mode == "repos" && (rewriteAt < 0 || rewriteAt > cloneAt) {
+			if rewriteAt < 0 || rewriteAt > cloneAt {
 				t.Errorf("the broker rewrite %q must be set before the clone (rewrite at %d, clone at %d)\n%s", rewrite, rewriteAt, cloneAt, gitLog)
 			}
 		})
@@ -388,4 +386,25 @@ func TestAgentBaseExecTaskClonesTheWorkspace(t *testing.T) {
 			t.Errorf("exec task with no workspace called git:\n%s", gitLog)
 		}
 	})
+}
+
+// A WARDYN_REPOS record keeps its empty fields: with the slug empty, the ref stays the ref (tab-IFS `read`
+// collapsed the tabs and moved the ref into the slug's place, so the clone lost its branch).
+func TestAgentBaseExecTaskRepoRecordKeepsEmptyFields(t *testing.T) {
+	script := baseRunnableAgentRun(t)
+	home := t.TempDir()
+	bin, glog := fakeGitDir(t)
+	dest := filepath.Join(home, "work", "app")
+	cmd := exec.Command("bash", script, "true")
+	cmd.Dir = t.TempDir()
+	cmd.Env = append(os.Environ(), "HOME="+home, "PATH="+bin+":"+os.Getenv("PATH"), "WARDYN_TASK_MODE=exec",
+		"WARDYN_START_FOLDER=", "WARDYN_REPO_URL=", "WARDYN_MITM_CA_PEM=", "WARDYN_GITHUB_GRANT_ID=",
+		"WARDYN_REPOS=https://github.com/acme/app.git\t"+dest+"\t\tmain")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("agent-run exec task: %v\n%s", err, out)
+	}
+	b, _ := os.ReadFile(glog)
+	if want := "clone --depth 1 --branch main -- https://github.com/acme/app.git " + dest; !strings.Contains(string(b), want) {
+		t.Errorf("git log lacks %q:\n%s", want, b)
+	}
 }

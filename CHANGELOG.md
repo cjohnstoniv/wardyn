@@ -18,6 +18,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   credential helper is ready, where the clone was skipped and the folder left empty unless the run also had a
   starting folder. A run with neither is unchanged.
 
+### Fixed
+
+- The image launcher split each `WARDYN_REPOS` clone record with a tab as whitespace, so an empty field moved the
+  fields after it up a place: a record with no slug lost its branch, and a run that named only the single repository
+  (`WARDYN_REPO_URL`) was never pointed at the git broker. Empty fields now stay in place.
+
 ## [0.10.0-rc.1] — 2026-10-24
 
 ### Before you upgrade
