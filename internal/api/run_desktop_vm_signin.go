@@ -274,7 +274,7 @@ func (s *Server) handlePauseDesktopAgent(w http.ResponseWriter, r *http.Request)
 		s.recordAudit(bg, s.auditEvent(&run.ID, at, principal, auditDesktopSignIn, run.ID.String(), "failure",
 			mustJSON(map[string]any{"stage": stage, "error": err.Error()})))
 		if stage == "record" {
-			writeErrorReason(w, http.StatusConflict, reasonDesktopSignInsPauseFailed, "the agent's pause could not be recorded; try again")
+			writeErrorReason(w, http.StatusConflict, reasonDesktopSignInsPauseFailed, "The agent's pause could not be recorded; try again")
 			return
 		}
 		status := http.StatusBadGateway
