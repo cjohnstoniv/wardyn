@@ -787,14 +787,12 @@ type Server struct {
 	viaOrg viaOrgState
 	// fleet is the 15-second capacity snapshot behind the /metrics capacity gauges (metrics_fleet.go).
 	fleet fleetSnapshot
-	// revokedEndRetry spaces out the queue sweep's retries of a run it could not end (runner_revoke.go).
+	// revokedEndRetry and exitRetry space out the retries of the queue sweep (a run it could not end, runner_revoke.go) and of the runner exit sweep (each receipt, which it may park; runner_exits.go).
 	revokedEndRetry revokedEndRetry
-	// exitRetry spaces out the runner exit sweep's retries of each receipt, and parks one (runner_exits.go).
-	exitRetry runnerExitRetry
-	// inventoryHoldAudit spaces one runner's runner.inventory.hold rows (runner_state.go).
+	exitRetry       runnerExitRetry
+	// inventoryHoldAudit spaces one runner's runner.inventory.hold rows (runner_state.go); privIPRefusals caches the private_ip_refusals row's audit read (setup_private_ip_refusals.go).
 	inventoryHoldAudit inventoryHoldAudit
-	// privIPRefusals caches the private_ip_refusals row's audit read (setup_private_ip_refusals.go).
-	privIPRefusals privateIPRefusalCache
+	privIPRefusals     privateIPRefusalCache
 	// capRowsScanned counts capability-grant rows compared inside capBatch (see capabilities.go). It is
 	// INSTRUMENTATION, read by nothing on any request path: the per-request cost of the capability seam is
 	// chosen partly by the member's own request body (spec.AllowedDomains), so "how much work did one request
