@@ -101,6 +101,10 @@ type RunnerView struct {
 	// only, and absent until a runner that sends them has.
 	OfflineSummary *RunnerOfflineSummary `json:"offline_summary,omitempty"`
 	RelayStatus    *RunnerRelayStatus    `json:"relay_status,omitempty"`
+	// ParkedExits counts the runner's exit receipts the organisation parked: refused as a foreign, stale
+	// or incomplete incarnation on every try for about ten minutes, kept, and no longer retried. Set on a
+	// one-runner read only; absent for none.
+	ParkedExits int `json:"parked_exits,omitempty"`
 }
 
 // MaxRunnerReason bounds the reason of an offline summary or a relay status, in bytes, and
