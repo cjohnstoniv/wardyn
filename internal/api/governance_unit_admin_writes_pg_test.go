@@ -217,6 +217,59 @@ func TestUnitAdminAddRechecksBelonging(t *testing.T) {
 	}
 }
 
+// TestHeldAddBelongsByReadAtFullTierOnly: ua-a's admin's held add of a person in ua-a1 to ua-a2 is
+// stored with the unit that admitted it, ua-a, which the decision reads again. A reader below the super
+// admin tier, an admin granted on ua-a2 alone or a security admin, reads the change, on its own and in
+// the list, without it; a super admin reads it with it.
+func TestHeldAddBelongsByReadAtFullTierOnly(t *testing.T) {
+	const person = "sub-ua-placed"
+	e := newUnitAdminEnv(t, false)
+	treeMember(t, e.govEnv, e.a1, types.CapabilitySubjectUser, person, 1, false)
+	ch := e.pending(e.call(e.adminA, http.MethodPost, "/api/v1/governance/memberships", membershipBody(person, e.a2.ID)))
+	hasBelongsBy := func(diff json.RawMessage) bool {
+		t.Helper()
+		var body map[string]json.RawMessage
+		if err := json.Unmarshal(diff, &body); err != nil {
+			t.Fatalf("diff %s: %v", diff, err)
+		}
+		_, ok := body["belongs_by"]
+		return ok
+	}
+	if stored, err := e.pg.GetGovernanceChange(context.Background(), ch.ID); err != nil || !hasBelongsBy(stored.Diff) {
+		t.Fatalf("the stored change = %s (%v), want its diff to carry belongs_by", stored.Diff, err)
+	}
+	onA2 := e.fresh("sub-ua-admin-a2")
+	e.grant(e.a2, types.CapabilitySubjectUser, onA2)
+	for _, tc := range []struct {
+		who  string
+		c    *http.Cookie
+		want bool
+	}{
+		{"an admin of ua-a2 alone", uaSession(t, onA2, []string{}, false), false},
+		{"a security admin", e.alice, false},
+		{"a super admin", e.super, true},
+	} {
+		var one types.GovernanceChange
+		if w := e.call(tc.c, http.MethodGet, "/api/v1/governance/changes/"+ch.ID.String(), ""); w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &one) != nil {
+			t.Fatalf("%s reading the change = %d %s, want 200", tc.who, w.Code, w.Body)
+		}
+		var list []types.GovernanceChange
+		if w := e.call(tc.c, http.MethodGet, "/api/v1/governance/changes", ""); w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &list) != nil {
+			t.Fatalf("%s listing changes = %d %s, want 200", tc.who, w.Code, w.Body)
+		}
+		i := slices.IndexFunc(list, func(c types.GovernanceChange) bool { return c.ID == ch.ID })
+		if i < 0 {
+			t.Fatalf("%s's list has no change %s", tc.who, ch.ID)
+		}
+		if got := hasBelongsBy(one.Diff); got != tc.want {
+			t.Errorf("%s reads belongs_by in the change = %v, want %v: %s", tc.who, got, tc.want, one.Diff)
+		}
+		if got := hasBelongsBy(list[i].Diff); got != tc.want {
+			t.Errorf("%s reads belongs_by in the list = %v, want %v: %s", tc.who, got, tc.want, list[i].Diff)
+		}
+	}
+}
+
 // TestSecurityAddFirstPlacementApplies: a security admin's held add may place a person who holds no
 // membership yet. It is not admitted by belonging, so its approval applies with nothing to recheck.
 func TestSecurityAddFirstPlacementApplies(t *testing.T) {
