@@ -18,6 +18,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   the organisation named at registration: when that is an older release, its runs keep working as before, without the
   fix, and the runner logs a warning once. Have the organisation name this release's proxy image, or run setup with
   `--proxy-image` set to it.
+  A proxy image named by digest or by a tag that is not a release number is taken to be this release, so an older
+  image named that way never becomes ready and its runs fail at the start deadline.
 
 ### Fixed
 
