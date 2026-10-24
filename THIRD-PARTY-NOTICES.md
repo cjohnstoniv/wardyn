@@ -147,8 +147,8 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `golang.org/x/text` | BSD-3-Clause | https://cs.opensource.google/go/x/text/+/v0.43.0:LICENSE |
 | `golang.org/x/time/rate` | BSD-3-Clause | https://cs.opensource.google/go/x/time/+/v0.15.0:LICENSE |
 | `google.golang.org/genproto/googleapis/api` | Apache-2.0 | https://github.com/googleapis/go-genproto/blob/3dc84a4a5aaa/googleapis/api/LICENSE |
-| `google.golang.org/genproto/googleapis/rpc/status` | Apache-2.0 | https://github.com/googleapis/go-genproto/blob/0a33c5d7ca68/googleapis/rpc/LICENSE |
-| `google.golang.org/grpc` | Apache-2.0 | https://github.com/grpc/grpc-go/blob/v1.82.1/LICENSE |
+| `google.golang.org/genproto/googleapis/rpc/status` | Apache-2.0 | https://github.com/googleapis/go-genproto/blob/3dc84a4a5aaa/googleapis/rpc/LICENSE |
+| `google.golang.org/grpc` | Apache-2.0 | https://github.com/grpc/grpc-go/blob/v1.83.2/LICENSE |
 | `google.golang.org/protobuf` | BSD-3-Clause | https://github.com/protocolbuffers/protobuf-go/blob/v1.36.12/LICENSE |
 | `gopkg.in/evanphx/json-patch.v4` | BSD-3-Clause | https://github.com/evanphx/json-patch/blob/v4.13.0/LICENSE |
 | `gopkg.in/inf.v0` | BSD-3-Clause | https://github.com/go-inf/inf/blob/v0.9.1/LICENSE |
