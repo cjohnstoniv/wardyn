@@ -498,7 +498,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   control character. Such a laptop file is now refused, with a report row, as not a plain file name instead of pushed,
   and never counts as deleted.
 - `wardyn runner upgrade` that rolls back to a 0.9 runner no longer fails putting it back: `--org-ca-file` is passed only
-  to a runner that has it.
+  to a runner that has it. The rollback also puts the old runner's service files back as they were, so it keeps its
+  trusted CA file and image pin.
 - A run whose desktop is swapped to the sign-in image records that image on the run, not the one it asked for.
 - The Recording tab and the take over strip say "Recording off" for a run its policy, its organisation or its runner did
   not record, instead of naming a level. A take over on a run whose runner declined still says it is recorded: the
