@@ -296,6 +296,7 @@ const (
 	reasonSiteConfigInvalid                 = "site_config_invalid"                    // the submitted config fails one of validateAgentProviders/validateSiteConfig/validateModelProviders/validateDefaultProviders/validateModelProviderImagePrereqs
 	reasonSiteConfigStale                   = "site_config_stale"                      // If-Match does not match the current site-config ETag
 	reasonSiteConfigEgressViaOwnRoute       = "site_config_egress_via_own_route"       // a changed egress block was named inline instead of through PUT /governance/egress-baseline
+	reasonSiteConfigRecordingViaOwnRoute    = "site_config_recording_via_own_route"    // a changed recording block was named inline instead of through PUT /governance/recording
 	reasonSiteConfigRunnersViaOwnRoute      = "site_config_runners_via_own_route"      // a changed runners.enabled was named inline instead of through PUT /runners/settings
 
 	// Any write carrying the console's X-Wardyn-Expected-Principal header (expected_principal.go).

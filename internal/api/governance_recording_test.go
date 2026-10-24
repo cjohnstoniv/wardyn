@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
@@ -107,5 +108,32 @@ func TestGovernanceRecordingReplacementByAHumanIsHeld(t *testing.T) {
 	st.proposed = nil
 	if w := doSSO(t, srv, http.MethodPut, governanceRecordingPath, sec, `{"level":"keystrokes"}`); w.Code != http.StatusBadRequest || len(st.proposed) != 0 {
 		t.Errorf("bad level = %d with %d held, want 400 and none", w.Code, len(st.proposed))
+	}
+}
+
+// TestPutSiteConfigNeverChangesTheRecordingLevel: PUT /site-config passes the stored recording block back
+// (a body silent about it, or a round trip of GET) and refuses any change, writing nothing: the block is
+// PUT /governance/recording's, as the egress baseline is PUT /governance/egress-baseline's.
+func TestPutSiteConfigNeverChangesTheRecordingLevel(t *testing.T) {
+	stored := types.SiteConfig{Recording: &types.SiteRecording{Level: types.RecordingScreenActions}}
+	srv, fake, _ := egressBaselineServer(t, stored)
+	for _, body := range []string{`{}`, `{"recording":{"level":"screen_actions"}}`} {
+		if w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, body); w.Code != http.StatusOK {
+			t.Fatalf("PUT %s = %d %s, want 200", body, w.Code, w.Body)
+		}
+		if fake.cfg.Recording == nil || *fake.cfg.Recording != *stored.Recording {
+			t.Fatalf("after PUT %s the stored recording = %+v, want it as it was", body, fake.cfg.Recording)
+		}
+	}
+	for _, body := range []string{`{"recording":{"level":"off"}}`, `{"recording":{"level":"terminal"}}`, `{"recording":{}}`} {
+		fake.putSeen = nil
+		w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, body)
+		if w.Code != http.StatusBadRequest || errorReason(w) != reasonSiteConfigRecordingViaOwnRoute ||
+			!strings.Contains(w.Body.String(), "PUT /governance/recording") {
+			t.Errorf("PUT %s = %d %s, want 400 %s naming PUT /governance/recording", body, w.Code, w.Body, reasonSiteConfigRecordingViaOwnRoute)
+		}
+		if fake.putSeen != nil || fake.cfg.Recording == nil || *fake.cfg.Recording != *stored.Recording {
+			t.Errorf("refused PUT %s wrote %+v", body, fake.putSeen)
+		}
 	}
 }
