@@ -563,12 +563,12 @@ type legacyShift struct {
 
 // moveShiftQ is what moving legacy row row to unit to does to whose legacy row wins (legacyShiftQ),
 // for each person row and another legacy row may both place whose order the move can change
-// (nameOrdersPair); nothing for a row that is not legacy. The caller holds the graph lock.
+// (nameTiesPair); nothing for a row that is not legacy. The caller holds the graph lock.
 func moveShiftQ(ctx context.Context, q store.Querier, row types.GovernanceMembership, to uuid.UUID) (legacyShift, error) {
 	if !row.Legacy {
 		return legacyShift{}, nil
 	}
-	return legacyShiftQ(ctx, q, row, to, nameOrdersPair, func() error {
+	return legacyShiftQ(ctx, q, row, to, nameTiesPair, func() error {
 		_, _, err := moveMembershipQ(ctx, q, row.ID, to)
 		return err
 	})
@@ -576,26 +576,31 @@ func moveShiftQ(ctx context.Context, q store.Querier, row types.GovernanceMember
 
 // upsertShiftQ is what writing a over legacy row cur, the row a's key already names, does to whose
 // legacy row wins (legacyShiftQ): a new priority reorders cur against each legacy row it was tied or
-// ordered with by priority or name (nameOrdersPair). Nothing for a new row (cur nil), which is never
-// legacy, or a cur that is not legacy.
+// ordered with by priority or name (nameOrdersPair) whose priority lies from cur's old priority to its
+// new one; any other keeps its order. Nothing for a new row (cur nil), which is never legacy, a cur
+// that is not legacy, or one that keeps its priority: home is no key of the order.
 func upsertShiftQ(ctx context.Context, q store.Querier, cur *types.GovernanceMembership, a types.GovernanceMembership) (legacyShift, error) {
-	if cur == nil || !cur.Legacy {
+	if cur == nil || !cur.Legacy || cur.Priority == a.Priority {
 		return legacyShift{}, nil
 	}
-	return legacyShiftQ(ctx, q, *cur, uuid.Nil, nameOrdersPair, func() error {
+	lo, hi := min(cur.Priority, a.Priority), max(cur.Priority, a.Priority)
+	pair := func(d, l types.GovernanceMembership) bool {
+		return l.Priority >= lo && l.Priority <= hi && nameOrdersPair(d, l)
+	}
+	return legacyShiftQ(ctx, q, *cur, uuid.Nil, pair, func() error {
 		_, err := store.UpsertGovernanceMembershipQ(ctx, q, a)
 		return err
 	})
 }
 
 // deleteActivationsQ is the units deleting legacy row row may make someone's context (legacyShiftQ),
-// for each person row and another legacy row may both place; none for a row that is not legacy. The
-// caller holds the graph lock.
+// for each person row and another legacy row that may rank after it may both place (mayFollowPair);
+// none for a row that is not legacy. The caller holds the graph lock.
 func deleteActivationsQ(ctx context.Context, q store.Querier, row types.GovernanceMembership) ([]unitActivation, error) {
 	if !row.Legacy {
 		return nil, nil
 	}
-	shift, err := legacyShiftQ(ctx, q, row, uuid.Nil, nil, func() error { return store.DeleteGovernanceMembershipQ(ctx, q, row.ID) })
+	shift, err := legacyShiftQ(ctx, q, row, uuid.Nil, mayFollowPair, func() error { return store.DeleteGovernanceMembershipQ(ctx, q, row.ID) })
 	return shift.activates, err
 }
 
@@ -620,8 +625,9 @@ func legacyShiftQ(ctx context.Context, q store.Querier, d types.GovernanceMember
 
 // renameShiftQ is what renaming unit id to name does to whose legacy row wins (H3), in the resolver's
 // own order (winnersAroundQ): the name breaks a tie between legacy rows of one tier and priority. For
-// each person a legacy row of the unit and another legacy row may both place with their order decided
-// at the name (nameOrdersPair), it reads the winner before the rename and after it. A winner in another
+// each person a legacy row of the unit and a legacy row of another unit may both place with their
+// order decided at the name (nameTiesPair), it reads the winner before the rename and after it; none
+// is read when no such pair exists, renameMaySelect's test. A winner in another
 // unit activates that unit, and the unit's winning over another unit vacates that one. The caller holds
 // the graph lock.
 func renameShiftQ(ctx context.Context, q store.Querier, id uuid.UUID, name string) (legacyShift, error) {
@@ -635,7 +641,8 @@ func renameShiftQ(ctx context.Context, q store.Querier, id uuid.UUID, name strin
 			rows = append(rows, m)
 		}
 	}
-	was, now, err := winnersAroundQ(ctx, q, legacyPeople(rows, all, nameOrdersPair), func() error {
+	pair := func(d, l types.GovernanceMembership) bool { return l.UnitID != id && nameTiesPair(d, l) }
+	was, now, err := winnersAroundQ(ctx, q, legacyPeople(rows, all, pair), func() error {
 		return store.RenameGovernanceUnitQ(ctx, q, id, name)
 	})
 	if err != nil {
@@ -757,23 +764,15 @@ func legacyPeople(ds, all []types.GovernanceMembership, pair func(d, l types.Gov
 }
 
 // legacyWinnersQ is each person's winning legacy row on q as the resolver picks it: the legacy row
-// activeMemberships keeps of store.ListMembershipsForQ's rows, in its ORDER BY. The zero match for a
-// person no legacy row places.
+// activeMemberships keeps of store.ListMembershipsForQ's rows, its first in that ORDER BY
+// (store.LegacyWinnersQ, one statement for every person). The zero match for a person no legacy row
+// places.
 func legacyWinnersQ(ctx context.Context, q store.Querier, people []legacyClaims) ([]store.MembershipMatch, error) {
-	out := make([]store.MembershipMatch, len(people))
+	claims := make([]store.MembershipClaims, len(people))
 	for i, c := range people {
-		ms, err := store.ListMembershipsForQ(ctx, q, c.users, c.groups, c.userType)
-		if err != nil {
-			return nil, err
-		}
-		for _, m := range activeMemberships(ms) {
-			if m.Membership.Legacy {
-				out[i] = m
-				break
-			}
-		}
+		claims[i] = store.MembershipClaims{Users: c.users, Groups: c.groups, UserType: c.userType}
 	}
-	return out, nil
+	return store.LegacyWinnersQ(ctx, q, claims)
 }
 
 // nameOrdersPair reports whether one person may match legacy rows a and b with their order decided at
@@ -782,6 +781,22 @@ func legacyWinnersQ(ctx context.Context, q store.Querier, people []legacyClaims)
 // an email are ordered by the person's claims and two user types match no one person.
 func nameOrdersPair(a, b types.GovernanceMembership) bool {
 	return a.SubjectType == b.SubjectType && (a.SubjectType == types.CapabilitySubjectGroup || a.Subject == b.Subject)
+}
+
+// nameTiesPair is nameOrdersPair for rows of one priority, the pairs whose order is decided at the
+// unit name. A move or a rename changes no other key, so only these can trade places: a person whose
+// winner changes has the old and the new winner tied up to the name, and the person those two alone
+// place reads the same two winners, as their rows are a subset of this person's.
+func nameTiesPair(a, b types.GovernanceMembership) bool {
+	return a.Priority == b.Priority && nameOrdersPair(a, b)
+}
+
+// mayFollowPair reports whether legacy row b may rank after legacy row a for some person: all but a
+// row nameOrdersPair orders with a at a higher priority, which ranks before a for anyone. Deleting a
+// hands a person their next row only where a won, and the person a and that row alone place reads the
+// same two winners.
+func mayFollowPair(a, b types.GovernanceMembership) bool {
+	return !nameOrdersPair(a, b) || b.Priority <= a.Priority
 }
 
 // heldShiftStale answers stale when now, what held change ch's delete or move of a legacy row or its

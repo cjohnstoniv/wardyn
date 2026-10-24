@@ -149,6 +149,8 @@ function Player({ runId, recKey, doc, audit, onGoAudit }: {
   const started = Date.parse(pb.started_at);
   const at = (m: number) => clockTime(new Date(started + m).toISOString());
   const gap = gapAt(gaps, ms);
+  // A recording past its size cap, or one whose stream the recorder lost, keeps its head only: say where the screen ends.
+  const stoppedMs = pb.stopped_ms ?? (pb.truncated ? (frames[frames.length - 1]?.ms ?? 0) : undefined);
   const download = () => {
     const url = URL.createObjectURL(new Blob([doc.raw], { type: "application/json" }));
     const a = document.createElement("a");
@@ -172,6 +174,11 @@ function Player({ runId, recKey, doc, audit, onGoAudit }: {
             {C.DOWNLOAD}
           </Button>
         </div>
+        {stoppedMs !== undefined && (
+          <p role="status" className="border-b border-border px-3.5 py-2 text-meta text-muted-foreground" data-testid="desktop-replay-stopped">
+            {C.STOPPED_AT(at(stoppedMs))}
+          </p>
+        )}
         <div className="relative p-3.5">
           <div ref={screen} className="h-[400px] overflow-hidden rounded-lg border border-border bg-background" data-testid="desktop-replay-screen" />
           {screenFailed && (
