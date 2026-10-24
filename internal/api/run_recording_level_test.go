@@ -121,7 +121,8 @@ func TestSidecarPolicyDropsRecording(t *testing.T) {
 }
 
 // TestSiteConfigRecording_Put: a level that is not one is refused; locking a minimum while the
-// organisation keeps no recordings is refused with the board's sentence; with a store it saves.
+// organisation keeps no recordings is refused with the board's sentence; any other change is
+// PUT /governance/recording's (TestPutSiteConfigNeverChangesTheRecordingLevel).
 func TestSiteConfigRecording_Put(t *testing.T) {
 	fake := &fakeSiteConfigStore{}
 	srv, _ := newSiteConfigHarness(t, fake)
@@ -136,15 +137,5 @@ func TestSiteConfigRecording_Put(t *testing.T) {
 	}
 	if fake.putSeen != nil {
 		t.Errorf("refused saves wrote %+v", fake.putSeen)
-	}
-	if w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, `{"recording":{"level":"off","locked":true}}`); w.Code != http.StatusOK {
-		t.Errorf("locking off with no store = %d %s, want 200", w.Code, w.Body.String())
-	}
-	srv.cfg.RecordingStore = fsRecordingStore(t)
-	if w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, `{"recording":{"level":"screen_actions","locked":true}}`); w.Code != http.StatusOK {
-		t.Errorf("locked minimum with a store = %d %s, want 200", w.Code, w.Body.String())
-	}
-	if fake.putSeen == nil || fake.putSeen.Recording == nil || *fake.putSeen.Recording != (types.SiteRecording{Level: types.RecordingScreenActions, Locked: true}) {
-		t.Errorf("saved %+v", fake.putSeen)
 	}
 }

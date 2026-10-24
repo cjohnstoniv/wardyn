@@ -296,6 +296,7 @@ const (
 	reasonSiteConfigInvalid                 = "site_config_invalid"                    // the submitted config fails one of validateAgentProviders/validateSiteConfig/validateModelProviders/validateDefaultProviders/validateModelProviderImagePrereqs
 	reasonSiteConfigStale                   = "site_config_stale"                      // If-Match does not match the current site-config ETag
 	reasonSiteConfigEgressViaOwnRoute       = "site_config_egress_via_own_route"       // a changed egress block was named inline instead of through PUT /governance/egress-baseline
+	reasonSiteConfigRecordingViaOwnRoute    = "site_config_recording_via_own_route"    // a changed recording block was named inline instead of through PUT /governance/recording
 	reasonSiteConfigRunnersViaOwnRoute      = "site_config_runners_via_own_route"      // a changed runners.enabled was named inline instead of through PUT /runners/settings
 
 	// Any write carrying the console's X-Wardyn-Expected-Principal header (expected_principal.go).
@@ -304,6 +305,10 @@ const (
 	// GET/PUT /governance/egress-baseline.
 	reasonEgressBaselineInvalid = "egress_baseline_invalid" // a baseline host is not an exact hostname, or the set is too large
 	reasonEgressBaselineStale   = "egress_baseline_stale"   // If-Match does not match the current baseline ETag
+
+	// GET/PUT /governance/recording.
+	reasonRecordingInvalid = "recording_level_invalid" // the recording level is not one (off, terminal or screen_actions)
+	reasonRecordingStale   = "recording_level_stale"   // If-Match does not match the current recording ETag
 
 	// GET/PUT /governance/boundary, POST /governance/dry-run, and the boundary's own refusals.
 	reasonBoundaryInvalid = "boundary_invalid" // the boundary document has no mode, or names a knob it cannot hold, or a value that knob refuses

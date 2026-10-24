@@ -218,6 +218,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
+- `GET` and `PUT /api/v1/governance/recording`, on the security tier, read and set the organisation's recording level
+  and whether it is a locked minimum, the Wardyn boundary's recording row (#2967). The `PUT` writes that block and no
+  other field, is held for a second human under `WARDYN_GOVERNANCE_SECOND_HUMAN`, and is audited as
+  `governance.recording.write`.
 - A Linux VM's desktop keeps sign-ins in the machine's memory, gone when it shuts down, and the run page says so (#2972).
   "Pause the agent to sign in" stops the agent's processes inside the guest while the desktop stays live; "Resume the
   agent" continues them, and each pause-to-resume is one `desktop.sign_in.pause` audit row. The run page says plainly that

@@ -781,6 +781,13 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg.Egress = existing.Egress
+	// The recording level is the security tier's governance write as well (governance_recording.go): the
+	// block must come back as stored, so a round trip of GET passes and a change is refused.
+	if recordingState(cfg) != recordingState(existing) {
+		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigRecordingViaOwnRoute,
+			"recording is a governance write: change it with PUT /governance/recording, not PUT /site-config")
+		return
+	}
 	// After the carry-forward: the roster's defaults are checked against the
 	// providers this document will actually hold, whichever side was named; the
 	// sign-in help link against the stored one (signInHelpURLHTTPS).

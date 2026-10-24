@@ -205,6 +205,7 @@ var governanceChangeKinds = map[string]govKind{
 	govKindRestriction:         {approver: securityApprover, apply: applyRestrictionChange},
 	govKindWorkspaceOwningUnit: {approver: securityApprover, apply: applyWorkspaceOwningUnitChange},
 	govKindApprovalRule:        {approver: securityApprover, apply: applyApprovalRuleChange},
+	govKindRecording:           {approver: securityApprover, apply: applyRecordingChange},
 }
 
 // forChange is the kind as it decides one held change. A remote-hosted runner add to or removal from an

@@ -444,6 +444,7 @@ export const CHANGES = {
     governance_boundary: "Wardyn boundary",
     governance_restriction: "Restriction",
     workspace_owning_unit: "Workspace unit",
+    org_recording: "Recording level",
   } as Record<string, string>,
   // By op. An op this console predates shows its raw name.
   OP: {
