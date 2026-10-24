@@ -168,7 +168,8 @@ docs/operations/api-tokens.md=6034 share=35 # +86 (lane SI-DOCS), measured
 # docs/operations/denials.md 5331 measured (0.10 BOUNDARY): the boundary provenance layer.
 # docs/operations/denials.md 5527 adds 35 over 5492, measured (0.10 unit admins): the unit_scope_denied row.
 # docs/operations/denials.md 5560 = ours 5527 + theirs 5525 - base 5492 at the 0.10 UNIT-ADMIN merge of RESTRICT-PIN 35c385de1.
-docs/operations/denials.md=5560 share=35
+# docs/operations/denials.md 5579 adds 19 over 5560, measured (0.10 MDL-LAPTOP, #2957): runner_local_model_port_not_allowed.
+docs/operations/denials.md=5579 share=35
 # Round 1: docs/operations/who-gets-in.md measured 1453 after the split banner and heading cleanup.
 # Round 1: docs/operations/admin-only-writes.md measured 2869 after the split banner and heading cleanup.
 # Round 1: docs/operations/three-roles.md measured 4012 after the split banner and heading cleanup.
