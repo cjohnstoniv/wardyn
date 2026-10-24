@@ -242,6 +242,15 @@ func (s *Server) handlePauseDesktopAgent(w http.ResponseWriter, r *http.Request)
 			}
 		}
 	}
+	if errors.Is(err, errDesktopSignInUnmarked) {
+		// A mark that changed nothing: another pause marked the row first and owns the stopped agent,
+		// so it is not continued here, and that pause's row is the answer.
+		if cur, _, rerr := st.DesktopVMSignIns(bg, run.ID); rerr == nil && cur.PausedAt != nil {
+			unlock()
+			writeJSON(w, http.StatusOK, s.desktopSignInsView(bg, run, cur))
+			return
+		}
+	}
 	if err != nil {
 		newer, ok := s.continueStoppedAgent(base, r.Context(), bg, p, run, st, unlock)
 		unlock()

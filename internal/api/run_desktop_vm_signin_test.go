@@ -601,6 +601,32 @@ func TestDesktopSignIns_UnrecordedPauseContinuesTheAgent(t *testing.T) {
 	}
 }
 
+// A mark that changes nothing means another pause marked the row first. That pause owns the stopped
+// agent, so this one does not continue it, and answers with that pause's row.
+func TestDesktopSignIns_APauseMarkedFirstElsewhereIsNotContinued(t *testing.T) {
+	f := newVMSignInFixture(t, "memory")
+	other := time.Now().UTC().Add(-time.Second).Truncate(time.Microsecond)
+	f.rn.during = func(_ context.Context, call string) {
+		if call != "pause" {
+			return
+		}
+		// Another pause commits its mark while this one's runner call is open.
+		if ok, err := f.st.PauseDesktopVMAgent(context.Background(), f.run.ID, "someone-else", other); err != nil || !ok {
+			t.Errorf("the other pause's mark = %v %v", ok, err)
+		}
+	}
+	code, v, body := f.do(t, http.MethodPost, "/pause")
+	if code != http.StatusOK || !v.Paused || v.PausedAt == nil || !v.PausedAt.Equal(other) {
+		t.Fatalf("pause = %d %s, want the other pause's mark", code, body)
+	}
+	if got := f.rn.seen(); !slices.Equal(got, []string{"pause vm-1"}) || !f.rn.agentStopped() {
+		t.Fatalf("runner calls = %v, want the pause and no continue", got)
+	}
+	if row, _, _ := f.st.DesktopVMSignIns(context.Background(), f.run.ID); row.PausedAt == nil || !row.PausedAt.Equal(other) || row.PausedBy != "someone-else" {
+		t.Fatalf("row = %+v, want the other pause's mark", row)
+	}
+}
+
 // The pause is the row, not this process's memory: after a restart the GET still says paused, and
 // the resume continues the agent and writes the session's row.
 func TestDesktopSignIns_PauseSurvivesARestart(t *testing.T) {
