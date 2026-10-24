@@ -28,6 +28,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   every request until its first token renew succeeds, but its pod read as ready once it listened, so the agent could
   start, finish and have its recording upload refused inside that window. The proxy now listens only once its first
   renew has succeeded, so its pod is ready only once it serves.
+- A run on a Kubernetes runner (wardyn-runnerd) whose proxy cannot renew its run token, for example because a
+  firewall blocks the organisation, now fails naming the cause: "the run's proxy could not renew its run token with
+  the organisation:" and the proxy's last renew error, without the token or the URL's path and query. Before, its
+  start waited out the start timeout and said only that the proxy pod never became ready. A proxy that has never
+  renewed now gives up about a minute after it starts; a refused renew still ends it at once, with the same sentence.
 - `GET /runs/{id}/output` no longer points the run's owner or an operator at a recording that was never received.
   With run output persistence off, an ended run on a runner that does not capture output, and whose recording never
   arrived, answers `409` `run_output_not_kept`.
