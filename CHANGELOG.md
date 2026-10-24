@@ -11,6 +11,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- The setup checklist's model-access row now reports `resident_file` for a run served by an AWS sign-in, whose session
+  file is held in the sandbox, instead of `proxy_injected`, so it agrees with the `model_credential` the same
+  response carries.
+
 ## [0.10.0-rc.1] — 2026-10-24
 
 ### Before you upgrade
