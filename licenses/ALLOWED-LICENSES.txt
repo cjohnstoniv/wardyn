@@ -32,6 +32,8 @@ OFL-1.1
 MPL-2.0 @novnc/novnc
 # Owner ruling 2026-10-24: core/crypto/des.js inside @novnc/novnc is accepted as shipped. Its three
 # notices (AT&T, Widget Workshop, Jef Poskanzer) ship verbatim as texts/npm/@novnc/novnc/des-NOTICE,
-# which is the text LicenseRef-noVNC-des names; X11 covers core/input/keysymdef.js (from keysymdef.h).
+# which is the text LicenseRef-noVNC-des names. core/input/keysymdef.js is generated from X.Org keysymdef.h, whose
+# Open Group (MIT-open-group) and DEC (HPND) notices ship verbatim as texts/npm/@novnc/novnc/keysymdef-NOTICE.
 LicenseRef-noVNC-des @novnc/novnc
-X11 @novnc/novnc
+MIT-open-group @novnc/novnc
+HPND @novnc/novnc

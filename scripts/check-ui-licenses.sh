@@ -75,17 +75,31 @@ no_vendored_novnc() {
   [ -z "$bad" ] || { echo "ERROR: @novnc/novnc must ship unmodified:$bad"; return 1; }
 }
 
+# expr_ok <expression> <package> -> true when every id in a non-empty expression is on the bare allowlist or
+# scoped to that package. Whole ids, never substrings: "MIT-open-group" is not MIT.
+expr_ok() {
+  local id seen=""
+  for id in ${1//[()]/ }; do
+    case "$id" in AND|OR|WITH) continue ;; esac
+    seen=1
+    grep -vE '^[[:space:]]*(#|$)' "$ALLOWED_LICENSES_FILE" | awk 'NF == 1' | grep -qxF -- "$id" || scoped_ok "$id" "$2" || return 1
+  done
+  [ -n "$seen" ]
+}
+
 # bundled_texts_present -> fails unless every component a UI package bundles (licenses/bundled-in-ui-packages.tsv)
 # is under an allowlisted licence (or one scoped to that package) and has its text, the same bytes as the package's
-# (a whole licence file, a header's line range, or for "-" the licence's canonical text), and its notices row.
+# (a whole licence file, a header's line range, a checked-in repo: notice, or for "-" the licence's canonical
+# text), and its notices row.
 bundled_texts_present() {
-  local bad="" pkg path comp lic txt src r lines
+  local bad="" pkg path comp lic txt src lines
   while IFS=$'\t' read -r pkg path comp _ lic; do
     case "$pkg" in ''|'#'*) continue ;; esac
-    r=$(residue "$lic")
-    [ -z "$r" ] || scoped_ok "$r" "$pkg" || bad+=" $comp ($pkg) is $lic, not on the allowlist;"
+    expr_ok "$lic" "$pkg" || bad+=" $comp ($pkg) is $lic, not on the allowlist;"
     src="ui/node_modules/$pkg/${path%:*}"
     case "$path" in
+      repo:*) txt="licenses/texts/npm/$pkg/$comp-NOTICE"
+         cmp -s "${path#repo:}" "$txt" || bad+=" $comp ($pkg) has no $txt matching ${path#repo:};" ;;
       -) for txt in $(sed -E 's/ (AND|OR) / /g' <<<"$lic"); do
            [ -f "licenses/texts/common/$txt.txt" ] || bad+=" $comp ($pkg) has no licenses/texts/common/$txt.txt;"
          done ;;
@@ -122,11 +136,17 @@ if [ "${1:-}" = "--self-test" ]; then
   scope "MPL-2.0 OR GPL-3.0" "@novnc/novnc" reject
   scope "GPL-3.0" "@novnc/novnc" reject
   # des.js and keysymdef.js inside @novnc/novnc (owner ruling 2026-10-24), and only there.
-  scope "$(residue "BSD-2-Clause AND LicenseRef-noVNC-des")" "@novnc/novnc" allow
-  scope "LicenseRef-noVNC-des" "some-other-package" reject
-  scope "X11" "@novnc/novnc" allow
-  scope "X11" "some-other-package" reject
-  [ "$fail" -eq 0 ] && echo "check-ui-licenses --self-test: PASS (29 expressions)" || exit 1
+  expr() { # expr <expression> <package> <allow|reject>
+    if expr_ok "$1" "$2"; then got=allow; else got=reject; fi
+    [ "$got" = "$3" ] || { echo "SELF-TEST FAIL: '$1' for '$2' should be ${3^^}ED"; fail=1; }
+  }
+  expr "BSD-2-Clause AND LicenseRef-noVNC-des" "@novnc/novnc" allow
+  expr "LicenseRef-noVNC-des" "some-other-package" reject
+  expr "MIT-open-group AND HPND" "@novnc/novnc" allow
+  expr "MIT-open-group AND HPND" "some-other-package" reject
+  expr "HPND OR GPL-3.0" "@novnc/novnc" reject
+  expr "" "@novnc/novnc" reject
+  [ "$fail" -eq 0 ] && echo "check-ui-licenses --self-test: PASS (31 expressions)" || exit 1
   exit 0
 fi
 

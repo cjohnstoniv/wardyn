@@ -78,15 +78,18 @@ done < "$tmp/ui.tsv"
 
 # Components a UI package bundles inside itself carry their own licence text too. The TSV's tabs become
 # \x1f before the read, as for ui.tsv above: a tab IFS would merge an empty field into the next.
-# A "<file>:<from>-<to>" path is a notice in a source file's header, shipped as <component>-NOTICE; a "-" path
-# ships nothing here, the licence's canonical text below covers it.
+# A "<file>:<from>-<to>" path is a notice in a source file's header, shipped as <component>-NOTICE, and a
+# "repo:<path>" one a notice the package does not carry, checked in at <path>; a "-" path ships nothing here,
+# the licence's canonical text below covers it.
 while IFS=$'\x1f' read -r pkg path comp _ _; do
   case "$pkg" in ''|'#'*) continue ;; esac
   [ "$path" = - ] && continue
   src="ui/node_modules/$pkg/${path%:*}"
+  case "$path" in repo:*) src=${path#repo:} ;; esac
   [ -f "$src" ] || { echo "ERROR: $comp (bundled in $pkg): licence text $src is missing. Failing closed."; exit 1; }
   mkdir -p "$tmp/out/npm/$pkg"
   case "$path" in
+    repo:*) cp "$src" "$tmp/out/npm/$pkg/$comp-NOTICE" ;;
     *:*-*) lines=${path##*:}; sed -n "${lines%-*},${lines#*-}p" "$src" > "$tmp/out/npm/$pkg/$comp-NOTICE" ;;
     *) cp "$src" "$tmp/out/npm/$pkg/$comp-LICENSE" ;;
   esac
