@@ -903,6 +903,37 @@ func TestDesktopSignIns_AnUnreadableMarkRefusesTheDesktop(t *testing.T) {
 	}
 }
 
+// A Linux VM run's declared noVNC app shows the same screen as its display and is admitted as the
+// display is: a server that never saw the pause, as after a restart, holds the app relay's recording
+// from the first frame while the row marks one, so nothing the desktop sends then is recorded.
+func TestDesktopSignIns_AVMsNoVNCAppHoldsAPersistedPause(t *testing.T) {
+	offered, pasted := make(chan string, 1), make(chan []byte, 1)
+	h := desktopHarness(t, rfbDesktopBackend(t, offered, pasted, false), nil)
+	h.run.MachineKind, h.run.RecordingLevel = types.MachineLinuxVM, types.RecordingScreenActions
+	h.store.putRun(h.run)
+	h.srv.cfg.RecordingStore = fsRecordingStore(t)
+	at := time.Now().UTC()
+	h.srv.cfg.Store = &vmSignInTestStore{uiMemStore: h.store,
+		rows: map[uuid.UUID]store.DesktopVMSignIns{h.run.ID: {Store: "memory", PausedBy: "someone", PausedAt: &at}}}
+	ds := openDesktop(t, h, desktopApp)
+	if ds.resp.StatusCode != http.StatusSwitchingProtocols {
+		body, _ := io.ReadAll(ds.resp.Body)
+		t.Fatalf("upgrade = %d %s, want 101", ds.resp.StatusCode, body)
+	}
+	<-offered
+	if next, err := readWSFrame(ds.br); err != nil || string(next) != "\x02" {
+		t.Fatalf("after ServerInit the browser got %q (err %v), want the Bell", next, err)
+	}
+	_ = ds.conn.Close()
+	_, pb, kept := storedVMRecording(t, h)
+	if kept != vmHandshake() {
+		t.Errorf("recorded frames = %q, want only the handshake: the Bell came while the pause was open", kept)
+	}
+	if len(pb.Gaps) != 1 || pb.Gaps[0].Reason != desktopPauseSignin {
+		t.Errorf("playback gaps = %+v, want one %q gap", pb.Gaps, desktopPauseSignin)
+	}
+}
+
 // An open stream whose re-read of the row fails keeps no frames until a re-read answers: it never
 // records on a state nobody read.
 func TestDesktopSignIns_AnUnreadableMarkMidStreamHoldsTheRecording(t *testing.T) {
