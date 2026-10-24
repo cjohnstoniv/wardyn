@@ -141,6 +141,12 @@ func (s *Server) updateRunnerLimits(w http.ResponseWriter, r *http.Request, kind
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), actor, placement.ActionRunnerUpdate, id.String(), "success",
 		mustJSON(map[string]any{"limits": map[string]*types.RunnerLimits{"before": before, "after": row.Limits}})))
 	s.kickQueue()
+	// The per-run limits ride AUTH_OK, so a connected runner would learn the new ones only on a reconnect
+	// with no bound: end its session and the fresh one carries them. A runner on another replica, or
+	// offline, reads them when it next connects.
+	if err := s.runnerHub(rs).Goaway(r.Context(), id); err != nil {
+		slog.WarnContext(r.Context(), "wardynd: a runner's new limits wait for its next session", slog.String("runner_id", id.String()), slog.Any("err", err))
+	}
 	if views, ok := s.runnerViews(w, r, rs, []types.Runner{row}, kind == types.RunnerOwnerOrg); ok {
 		writeJSON(w, http.StatusOK, views[0])
 	}

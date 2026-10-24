@@ -9,6 +9,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/federation"
+	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -300,5 +302,75 @@ func TestRunnerCapsUpdateTheArch(t *testing.T) {
 	sec := memberModeSSOSession(t, "sam", "sam@example.com", oidc.RoleSecurityAdmin, false)
 	if v := viewIDs(runnerViewsOf(t, doSSO(t, srv, http.MethodGet, "/api/v1/runners", sec, "")))[row.ID]; v.Arch != "arm64" {
 		t.Fatalf("admin view arch = %q", v.Arch)
+	}
+}
+
+// Changing a connected runner's limits ends its session (GOAWAY), so the fresh one carries the new
+// per-run pair in AUTH_OK; without it the runner would keep the old pair for as long as it stayed up.
+func TestRunnerLimitsUpdateEndsTheRunnersSession(t *testing.T) {
+	srv, f, _ := newRunnerRegistrationServer(t)
+	row := f.addRunner(srv, "alice", "laptop", types.RunnerClaimed, time.Hour)
+	pub, key, _ := ed25519.GenerateKey(rand.Reader)
+	row.PublicKey = pub
+	f.lock.Lock()
+	f.rows[row.ID] = row
+	f.lock.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	srv.cfg.RunnerHub.Connected = func(context.Context, uuid.UUID) error { return nil }
+	srv.cfg.RunnerHub.Admit = func(context.Context, types.Runner) (remote.Admission, error) {
+		link := &remote.Link{}
+		return remote.Admission{Substrate: remote.New(row.ID.String(), link, remote.Options{}), Link: link,
+			Pending:        func(context.Context) ([]runnerwire.PendingAction, error) { return nil, nil },
+			BeginInventory: func(context.Context, string) error { return nil },
+			StatePage:      func(context.Context, string, runnerwire.StatePage) error { return nil },
+			Event:          func(context.Context, runnerwire.Event) error { return nil },
+		}, nil
+	}
+	hub := srv.runnerHub(f)
+	ready := make(chan struct{}, 1)
+	client, err := runnerwire.NewClient(runnerwire.ClientConfig{OrgURL: srv.cfg.RunnerOrgURL, RunnerID: row.ID.String(), PrivateKey: key,
+		Hooks: runnerwire.RunnerHooks{
+			Call:    func(context.Context, *runnerwire.Peer, uint32, string, json.RawMessage) (any, error) { return nil, nil },
+			Open:    func(*runnerwire.Peer, *runnerwire.Stream, runnerwire.Open) error { return runnerwire.ErrNotReady },
+			Clock:   func(runnerwire.Hello, time.Time) error { return nil },
+			Pending: func(context.Context, *runnerwire.Peer, []runnerwire.PendingAction) error { return nil },
+			StatePages: func(_ context.Context, send func(runnerwire.StatePage) error) error {
+				return send(runnerwire.StatePage{InventoryID: uuid.New(), Final: true})
+			},
+			Replay:      func(context.Context, *runnerwire.Peer) error { return nil },
+			BeforeReady: func(context.Context, *runnerwire.Peer, bool) error { return nil },
+			Lease:       func(context.Context, runnerwire.Lease) error { return nil },
+			Revoked:     func(context.Context) error { return nil },
+			Offline:     func(context.Context) {},
+			Online:      func(*runnerwire.Peer, bool) { ready <- struct{}{} },
+		},
+		Dial: func(context.Context) (runnerwire.Conn, error) {
+			org, run := runnerwire.Loopback()
+			go func() { _ = hub.Serve(ctx, org, row.ID) }()
+			return run, nil
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ended := make(chan error, 1)
+	go func() { ended <- client.Connect(ctx) }()
+	select {
+	case <-ready:
+	case <-ctx.Done():
+		t.Fatal("the runner never reached READY")
+	}
+	body, _ := json.Marshal(types.RunnerUpdateRequest{Limits: testRunnerLimits()})
+	alice := memberModeSSOSession(t, "alice", "alice@example.com", oidc.RoleUser, false)
+	if w := doSSO(t, srv, http.MethodPut, "/api/v1/me/runners/"+row.ID.String(), alice, string(body)); w.Code != http.StatusOK {
+		t.Fatalf("owner update = %d %s", w.Code, w.Body.String())
+	}
+	select {
+	case err := <-ended:
+		if !errors.Is(err, runnerwire.ErrGoaway) {
+			t.Fatalf("the runner's session ended with %v, want a GOAWAY", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("updating the limits did not end the runner's session")
 	}
 }
