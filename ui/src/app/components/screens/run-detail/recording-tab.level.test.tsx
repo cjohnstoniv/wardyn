@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { AuditEvent } from "../../../lib/types";
+import { clockTime } from "../../../lib/format";
 
 const getDesktopRecording = vi.fn();
 const verifyChain = vi.fn();
@@ -170,6 +171,31 @@ describe("RecordingTab levels (#2968, M7 RunStrip, Replay, States 8)", () => {
     } finally {
       rfbThrows.on = false;
     }
+  });
+
+  it("a truncated or stopped recording says where the screen ends, and a whole one says nothing", async () => {
+    verifyChain.mockResolvedValue({ ok: true, first_seq: 1, last_seq: 2, checked: 2, marks: [] });
+    const audit = [ev("desktop.recording.write", { key: KEY }, KEY)];
+    const doc = (extra: Record<string, unknown>) => ({
+      raw: "{}",
+      playback: { version: 1, format: "novnc-playback", encoding: "base64", started_at: "2026-10-20T10:40:00Z", frames: ["{0{AA==", "{60000{AA=="], ...extra },
+    });
+    const clock = (ms: number) => clockTime(new Date(Date.parse("2026-10-20T10:40:00Z") + ms).toISOString());
+
+    getDesktopRecording.mockResolvedValue(doc({ truncated: true }));
+    const first = tab({ level: "screen_actions", recordingAudit: audit, selected: KEY });
+    expect(await screen.findByTestId("desktop-replay-stopped")).toHaveTextContent(`Screen recording stopped at ${clock(60_000)}; the action log continues.`);
+    first.unmount();
+
+    getDesktopRecording.mockResolvedValue(doc({ stopped_ms: 30_000 }));
+    const second = tab({ level: "screen_actions", recordingAudit: audit, selected: KEY });
+    expect(await screen.findByTestId("desktop-replay-stopped")).toHaveTextContent(`Screen recording stopped at ${clock(30_000)};`);
+    second.unmount();
+
+    getDesktopRecording.mockResolvedValue(doc({}));
+    tab({ level: "screen_actions", recordingAudit: audit, selected: KEY });
+    await screen.findByTestId("desktop-replay");
+    expect(screen.queryByTestId("desktop-replay-stopped")).toBeNull();
   });
 
   it("a broken range says which entry does not verify", async () => {
