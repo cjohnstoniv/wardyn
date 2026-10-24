@@ -76,13 +76,14 @@ while IFS=$'\x1f' read -r name vers lic author home path; do
   fi
 done < "$tmp/ui.tsv"
 
-# Components a UI package bundles inside itself carry their own licence text too.
-while IFS=$'\t' read -r pkg path comp _ _; do
+# Components a UI package bundles inside itself carry their own licence text too. The TSV's tabs become
+# \x1f before the read, as for ui.tsv above: a tab IFS would merge an empty field into the next.
+while IFS=$'\x1f' read -r pkg path comp _ _; do
   case "$pkg" in ''|'#'*) continue ;; esac
   src="ui/node_modules/$pkg/$path"
   [ -f "$src" ] || { echo "ERROR: $comp (bundled in $pkg): licence text $src is missing. Failing closed."; exit 1; }
   mkdir -p "$tmp/out/npm/$pkg"; cp "$src" "$tmp/out/npm/$pkg/$comp-LICENSE"
-done < licenses/bundled-in-ui-packages.tsv
+done < <(tr '\t' '\037' < licenses/bundled-in-ui-packages.tsv)
 
 # Canonical text for every licence id in use, so a package with no own text is
 # still fully covered. Sourced from licenses/canonical/ (checked in, offline).
@@ -152,7 +153,7 @@ done < <( { cut -d, -f3 "$tmp/go.csv"; jq -r '.[][] | .license // empty' "$tmp/u
   echo
   echo "| package | component | version | licence |"
   echo "|---|---|---|---|"
-  grep -vE '^[[:space:]]*(#|$)' licenses/bundled-in-ui-packages.tsv | while IFS=$'\t' read -r pkg _ comp vers lic; do
+  grep -vE '^[[:space:]]*(#|$)' licenses/bundled-in-ui-packages.tsv | tr '\t' '\037' | while IFS=$'\x1f' read -r pkg _ comp vers lic; do
     printf '| `%s` | %s | %s | %s |\n' "$pkg" "$comp" "$vers" "$lic"
   done
   echo
