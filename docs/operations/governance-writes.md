@@ -173,6 +173,7 @@ Then set `WARDYN_GOVERNANCE_SECOND_HUMAN` (and, if `72h` is wrong, `WARDYN_GOVER
 | Service identity create, and a PATCH that changes the sponsor | always (the PATCH whole) | security admin or super admin |
 | Egress baseline (`PUT /governance/egress-baseline`) | always | security admin or super admin |
 | The Wardyn boundary (`PUT /governance/boundary`, see [boundary.md](boundary.md)) | always | security admin or super admin |
+| The recording level (`PUT /governance/recording`) | always | security admin or super admin |
 | A restriction delete or loosening; a unit pin moved off its branch | always | security admin or super admin |
 | An approval rule (`PUT /governance/approval-rules/{name}`, see [approval-rules.md](approval-rules.md)); a `DELETE` is never held | always, an edit included | security admin or super admin |
 | Credential delivery policy (`PUT /governance/credential-delivery`) | always | security admin or super admin |

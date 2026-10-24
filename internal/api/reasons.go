@@ -305,6 +305,10 @@ const (
 	reasonEgressBaselineInvalid = "egress_baseline_invalid" // a baseline host is not an exact hostname, or the set is too large
 	reasonEgressBaselineStale   = "egress_baseline_stale"   // If-Match does not match the current baseline ETag
 
+	// GET/PUT /governance/recording.
+	reasonRecordingInvalid = "recording_level_invalid" // the recording level is not one (off, terminal or screen_actions)
+	reasonRecordingStale   = "recording_level_stale"   // If-Match does not match the current recording ETag
+
 	// GET/PUT /governance/boundary, POST /governance/dry-run, and the boundary's own refusals.
 	reasonBoundaryInvalid = "boundary_invalid" // the boundary document has no mode, or names a knob it cannot hold, or a value that knob refuses
 	// POST/PUT/DELETE /governance/restrictions, PUT /workspaces/{id}/owning-unit, and the restriction refusals at a launch.
