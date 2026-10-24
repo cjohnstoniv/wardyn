@@ -163,6 +163,19 @@ func (s *vmSignInTestStore) ResumeDesktopVMAgent(_ context.Context, runID uuid.U
 	return by, at, true, nil
 }
 
+func (s *vmSignInTestStore) PausedDesktopVMAgents(context.Context) ([]store.PausedDesktopVMAgent, error) {
+	s.vmu.Lock()
+	defer s.vmu.Unlock()
+	var out []store.PausedDesktopVMAgent
+	for id, row := range s.rows {
+		if row.PausedAt != nil {
+			out = append(out, store.PausedDesktopVMAgent{RunID: id, PausedBy: row.PausedBy, PausedAt: *row.PausedAt,
+				PauseGeneration: row.PauseGeneration})
+		}
+	}
+	return out, nil
+}
+
 // pauseFakeRunner is the guest agent behind runner.AgentPauser: it records each call, its generation
 // and whether the agent is stopped. A pause's stop lands even when it answers pauseErr, or the call's
 // context has ended, as one whose answer was lost. Each stop and continue lands through the guest
@@ -1772,5 +1785,86 @@ func TestDesktopSignIns_RecordedOnlyFromTheGuestsReport(t *testing.T) {
 		if _, ok, _ := f.st.DesktopVMSignIns(ctx, c.run.ID); ok {
 			t.Fatalf("run %+v with sandbox %+v got a row", c.run.MachineKind, c.sb)
 		}
+	}
+}
+
+// A run that ends while its agent is paused is never resumed, and a resume is refused once the run is
+// not running, so the reconciler writes the pause's one row: success, ended_paused, the run's own end
+// time and no resumed_at, and clears the mark so it writes once.
+func TestDesktopSignIns_ARunThatEndsPausedWritesItsOneRow(t *testing.T) {
+	for name, end := range map[string]func(*types.AgentRun, time.Time){
+		"killed": func(r *types.AgentRun, at time.Time) { r.State, r.EndedAt = types.RunKilled, &at },
+		"kept":   func(r *types.AgentRun, at time.Time) { r.LostAt, r.LostReason = &at, types.LostEnded },
+		"reboot": func(r *types.AgentRun, at time.Time) { r.LostAt, r.LostReason = &at, types.LostReboot },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newVMSignInFixture(t, "memory")
+			if code, v, body := f.do(t, http.MethodPost, "/pause"); code != http.StatusOK || !v.Paused {
+				t.Fatalf("pause = %d %s", code, body)
+			}
+			if err := f.srv.sweepEndedDesktopVMPauses(context.Background()); err != nil || len(f.signInRows()) != 0 {
+				t.Fatalf("a live paused run: sweep = %v, rows %d, want no row", err, len(f.signInRows()))
+			}
+			endedAt := time.Now().UTC().Add(time.Minute).Truncate(time.Second)
+			end(&f.run, endedAt)
+			f.st.putRun(f.run)
+			for range 2 {
+				if err := f.srv.sweepEndedDesktopVMPauses(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			rows := f.signInRows()
+			if len(rows) != 1 || rows[0].Outcome != "success" || rows[0].Target != f.run.ID.String() {
+				t.Fatalf("desktop.sign_in.pause rows = %+v, want one success", rows)
+			}
+			var d map[string]any
+			if err := json.Unmarshal(rows[0].Data, &d); err != nil {
+				t.Fatal(err)
+			}
+			got, _ := time.Parse(time.RFC3339Nano, d["ended_at"].(string))
+			if d["paused_by"] != signinOwner || d["paused_at"] == nil || d["ended_paused"] != true || !got.Equal(endedAt) {
+				t.Fatalf("row data = %s, want paused_by, paused_at, ended_paused and ended_at %v", rows[0].Data, endedAt)
+			}
+			if _, resumed := d["resumed_at"]; resumed {
+				t.Fatalf("row data = %s: the agent was never resumed", rows[0].Data)
+			}
+			if row, _, _ := f.st.DesktopVMSignIns(context.Background(), f.run.ID); row.PausedAt != nil {
+				t.Fatalf("the mark stands after the run ended: %+v", row)
+			}
+			if got := f.rn.seen(); !slices.Equal(got, []string{"pause vm-1"}) {
+				t.Fatalf("runner calls = %v, want the pause alone", got)
+			}
+		})
+	}
+}
+
+// A run lost to an outage keeps its agent running and can be revived, so its pause is not over: the
+// sweep writes no row and leaves the mark.
+func TestDesktopSignIns_AnOutageLostRunKeepsItsPause(t *testing.T) {
+	f := newVMSignInFixture(t, "memory")
+	if code, v, body := f.do(t, http.MethodPost, "/pause"); code != http.StatusOK || !v.Paused {
+		t.Fatalf("pause = %d %s", code, body)
+	}
+	lostAt := time.Now().UTC().Add(time.Minute)
+	f.run.LostAt, f.run.LostReason = &lostAt, types.LostOutage
+	f.st.putRun(f.run)
+	if err := f.srv.sweepEndedDesktopVMPauses(context.Background()); err != nil || len(f.signInRows()) != 0 {
+		t.Fatalf("sweep = %v, rows %d, want no row", err, len(f.signInRows()))
+	}
+	if row, _, _ := f.st.DesktopVMSignIns(context.Background(), f.run.ID); row.PausedAt == nil {
+		t.Fatalf("the mark was cleared for a run that can be revived: %+v", row)
+	}
+}
+
+// A pause that was resumed before its run ended has its row already: the end writes no second one.
+func TestDesktopSignIns_AResumedPauseIsNotClosedAgainWhenItsRunEnds(t *testing.T) {
+	f := newVMSignInFixture(t, "memory")
+	f.do(t, http.MethodPost, "/pause")
+	f.do(t, http.MethodPost, "/resume")
+	endedAt := time.Now().UTC().Add(time.Minute)
+	f.run.State, f.run.EndedAt = types.RunKilled, &endedAt
+	f.st.putRun(f.run)
+	if err := f.srv.sweepEndedDesktopVMPauses(context.Background()); err != nil || len(f.signInRows()) != 1 {
+		t.Fatalf("sweep = %v, rows %d, want the resume's one row", err, len(f.signInRows()))
 	}
 }

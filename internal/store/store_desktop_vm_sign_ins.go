@@ -24,6 +24,14 @@ type DesktopVMSignIns struct {
 	PauseGeneration int64
 }
 
+// PausedDesktopVMAgent is a run whose agent is marked paused to sign in, with the pause's generation.
+type PausedDesktopVMAgent struct {
+	RunID           uuid.UUID
+	PausedBy        string
+	PausedAt        time.Time
+	PauseGeneration int64
+}
+
 // DesktopVMSignInStore keeps it.
 type DesktopVMSignInStore interface {
 	// RecordDesktopVMSignIns writes the run's store at boot.
@@ -39,6 +47,8 @@ type DesktopVMSignInStore interface {
 	// false when the agent was not marked paused at pausedAt with generation gen, so only one resume of
 	// a pause sees it and none clears a newer pause's mark.
 	ResumeDesktopVMAgent(ctx context.Context, runID uuid.UUID, pausedAt time.Time, gen int64) (by string, at time.Time, found bool, err error)
+	// PausedDesktopVMAgents lists every run whose agent is marked paused.
+	PausedDesktopVMAgents(ctx context.Context) ([]PausedDesktopVMAgent, error)
 }
 
 var _ DesktopVMSignInStore = PG{}
@@ -104,4 +114,29 @@ func (s PG) ResumeDesktopVMAgent(ctx context.Context, runID uuid.UUID, pausedAt 
 		return "", time.Time{}, false, fmt.Errorf("store: resume desktop VM agent: %w", err)
 	}
 	return by, at, true, nil
+}
+
+// PausedDesktopVMAgents — see DesktopVMSignInStore.
+func (s PG) PausedDesktopVMAgents(ctx context.Context) ([]PausedDesktopVMAgent, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT run_id, paused_by, paused_at, pause_generation FROM desktop_vm_sign_ins WHERE paused_at IS NOT NULL`)
+	if err != nil {
+		return nil, fmt.Errorf("store: paused desktop VM agents: %w", err)
+	}
+	defer rows.Close()
+	var out []PausedDesktopVMAgent
+	for rows.Next() {
+		var p PausedDesktopVMAgent
+		var by *string
+		if err := rows.Scan(&p.RunID, &by, &p.PausedAt, &p.PauseGeneration); err != nil {
+			return nil, fmt.Errorf("store: paused desktop VM agents: %w", err)
+		}
+		if by != nil {
+			p.PausedBy = *by
+		}
+		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: paused desktop VM agents: %w", err)
+	}
+	return out, nil
 }
