@@ -169,6 +169,111 @@ func TestLegacyDeleteUnitAdminOutOfScope(t *testing.T) {
 	}
 }
 
+// legacyRow is a legacy membership a move test seeds.
+type legacyRow struct {
+	unit     types.GovernanceUnit
+	st       types.CapabilitySubjectType
+	subject  string
+	priority int
+}
+
+// legacyMove seeds legacy rows moved and other and has ua-a's admin move moved to a new, narrower unit
+// below its own named name, which it returns with the answer.
+func (e *unitAdminEnv) legacyMove(moved, other legacyRow, name string) (*httptest.ResponseRecorder, types.GovernanceUnit) {
+	e.t.Helper()
+	row := treeMember(e.t, e.govEnv, moved.unit, moved.st, moved.subject, moved.priority, false)
+	setLegacy(e.t, e.govEnv, row.ID, treeMember(e.t, e.govEnv, other.unit, other.st, other.subject, other.priority, false).ID)
+	to := treeChild(e.t, e.govEnv, uaUnitBody(name, moved.unit.ID, uaDomains("pypi.org"), nil))
+	return e.call(e.adminA, http.MethodPut, "/api/v1/governance/memberships/"+row.ID.String(), `{"unit_id":"`+to.ID.String()+`"}`), to
+}
+
+// TestLegacyMoveUnitAdmin: a unit admin's narrowing move of a legacy row is held when it changes which
+// legacy row a person is selected by, and applies directly when no selection changes but the row's own
+// move. Every case seeds the moved row in a unit of ua-a's and the other in ua-b. The rows are two
+// groups one person is in, or one person's two rows; at equal priority the unit name breaks the tie,
+// so the destination's name decides. When the moved row falls behind, ua-b takes over and only an
+// approver who governs it may decide: ua-a's peer admin is refused and a security admin approves.
+// When the moved row takes over, its destination is the unit activated, and ua-a's peer admin approves.
+func TestLegacyMoveUnitAdmin(t *testing.T) {
+	group, user := types.CapabilitySubjectGroup, types.CapabilitySubjectUser
+	for _, tc := range []struct {
+		name string
+		// from is the moved row's unit, ua-a1 unless set (a unit below ua-a named ua-c-from).
+		belowC        bool
+		moved, other  legacyRow
+		to            string
+		held, behind  bool
+		before, after string // the unit names the person is selected by before and after the move
+	}{
+		{name: "overlapping groups, the moved row falls behind (the witness)",
+			moved: legacyRow{st: group, subject: "ua-eng", priority: 5}, other: legacyRow{st: group, subject: "ua-research", priority: 5},
+			to: "ua-zeta", held: true, behind: true, before: "ua-a1", after: "ua-b"},
+		{name: "overlapping groups, the moved row still selected",
+			moved: legacyRow{st: group, subject: "ua-eng", priority: 5}, other: legacyRow{st: group, subject: "ua-research", priority: 5},
+			to: "ua-a1-leaf", before: "ua-a1", after: "ua-a1-leaf"},
+		{name: "overlapping groups, the moved row takes over", belowC: true,
+			moved: legacyRow{st: group, subject: "ua-x", priority: 5}, other: legacyRow{st: group, subject: "ua-y", priority: 5},
+			to: "ua-a-to", held: true, before: "ua-b", after: "ua-a-to"},
+		{name: "overlapping groups, the moved row still behind", belowC: true,
+			moved: legacyRow{st: group, subject: "ua-x", priority: 5}, other: legacyRow{st: group, subject: "ua-y", priority: 5},
+			to: "ua-d-to", before: "ua-b", after: "ua-b"},
+		{name: "an equal-priority tie the unit name breaks, the moved row falls behind",
+			moved: legacyRow{st: user, subject: "sub-ua-tie", priority: 5}, other: legacyRow{st: user, subject: "sub-ua-tie", priority: 5},
+			to: "ua-zeta", held: true, behind: true, before: "ua-a1", after: "ua-b"},
+		{name: "an equal-priority tie the unit name breaks, the moved row still selected",
+			moved: legacyRow{st: user, subject: "sub-ua-tie", priority: 5}, other: legacyRow{st: user, subject: "sub-ua-tie", priority: 5},
+			to: "ua-a1-leaf", before: "ua-a1", after: "ua-a1-leaf"},
+		{name: "a lower priority, the moved row behind on both sides",
+			moved: legacyRow{st: group, subject: "ua-eng", priority: 1}, other: legacyRow{st: group, subject: "ua-research", priority: 5},
+			to: "ua-zeta", before: "ua-b", after: "ua-b"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newUnitAdminEnv(t, false)
+			tc.moved.unit, tc.other.unit = e.a1, e.b
+			if tc.belowC {
+				tc.moved.unit = treeChild(t, e.govEnv, uaUnitBody("ua-c-from", e.a.ID, uaDomains("pypi.org", "github.com"), nil))
+			}
+			who := treeCtx("sub-ua-tie", []string{tc.moved.subject, tc.other.subject}, "")
+			if tc.moved.st == user {
+				who = treeCtx("sub-ua-tie", nil, "")
+			}
+			names := map[uuid.UUID]string{e.a1.ID: "ua-a1", e.b.ID: "ua-b", tc.moved.unit.ID: tc.moved.unit.Name}
+			selected := func() string {
+				t.Helper()
+				return names[unitIDOf(treeCeiling(t, e.govEnv, who))]
+			}
+			w, to := e.legacyMove(tc.moved, tc.other, tc.to)
+			names[to.ID] = to.Name
+			if !tc.held {
+				if w.Code != http.StatusOK || e.pendingCount() != 0 {
+					t.Fatalf("move = %d %s with %d pending, want 200 and none", w.Code, w.Body, e.pendingCount())
+				}
+				if got := selected(); got != tc.after {
+					t.Errorf("selected by %s after the move, want %s", got, tc.after)
+				}
+				return
+			}
+			ch := e.pending(w)
+			if got := selected(); got != tc.before {
+				t.Errorf("selected by %s before approval, want %s", got, tc.before)
+			}
+			approver := e.peerA // the moved row taking over activates only its destination, a unit of ua-a's
+			if tc.behind {
+				if w := e.call(e.peerA, http.MethodPost, approvePath(ch.ID), ""); !scopeRefused(t, w) {
+					t.Errorf("ua-a's peer admin approving = %d %s, want 403 unit_scope_denied", w.Code, w.Body)
+				}
+				approver = e.alice
+			}
+			if w := e.call(approver, http.MethodPost, approvePath(ch.ID), ""); w.Code != http.StatusOK {
+				t.Fatalf("approving = %d %s, want 200", w.Code, w.Body)
+			}
+			if got := selected(); got != tc.after {
+				t.Errorf("selected by %s after approval, want %s", got, tc.after)
+			}
+		})
+	}
+}
+
 // TestUnitLockRefusesBothWays: locking a knob that a unit below states otherwise is refused, naming
 // those units, and their values are kept. Once a knob is locked, a write below that changes it is
 // refused, a narrowing included and for a security admin too; adding a lock applies directly, and a

@@ -463,7 +463,8 @@ func (s *Server) deleteMembershipInScope(w http.ResponseWriter, r *http.Request,
 
 // moveMembershipInScope is a unit admin's membership move: from a unit they govern to another, read
 // under the locks the move takes. A move whose destination's walls are Leq the source's applies
-// directly; any other is held, whatever the second-human switch says.
+// directly, except a legacy row whose move would let another legacy row take over (H3); any other is
+// held, whatever the second-human switch says.
 func (s *Server) moveMembershipInScope(w http.ResponseWriter, r *http.Request, id, to uuid.UUID) {
 	ctx := r.Context()
 	var from, moved types.GovernanceMembership
@@ -480,6 +481,13 @@ func (s *Server) moveMembershipInScope(w http.ResponseWriter, r *http.Request, i
 			return err
 		}
 		if !narrows {
+			return errHoldForApproval
+		}
+		activates, err := moveActivationsQ(ctx, q, row, to)
+		if err != nil {
+			return err
+		}
+		if len(activates) > 0 {
 			return errHoldForApproval
 		}
 		from, moved, err = moveMembershipQ(ctx, q, id, to)
