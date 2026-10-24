@@ -51,6 +51,8 @@ type deps struct {
 	firstBoot macvm.FirstBooter
 	// fstat replaces fstat(2) in the ledger's ownership checks (tests).
 	fstat func(fd int, name string) (unix.Stat_t, error)
+	// getuid replaces os.Getuid (tests).
+	getuid func() int
 }
 
 func main() {
@@ -64,7 +66,7 @@ func main() {
 
 func run(ctx context.Context, args []string, d deps) int {
 	if len(args) == 0 {
-		fmt.Fprintln(d.stderr, "usage: wardyn-macvm run|status|prepare|probe|version [flags]")
+		fmt.Fprintln(d.stderr, "usage: wardyn-macvm run|status|prepare|probe|ledger-setup|version [flags]")
 		return 2
 	}
 	switch args[0] {
@@ -79,9 +81,33 @@ func run(ctx context.Context, args []string, d deps) int {
 		return cmdPrepare(ctx, args[1:], d)
 	case "probe":
 		return cmdProbe(d)
+	case "ledger-setup":
+		return cmdLedgerSetup(args[1:], d)
 	}
 	fmt.Fprintf(d.stderr, "wardyn-macvm: unknown command %q\n", args[0])
 	return 2
+}
+
+// cmdLedgerSetup is the runner package postinstall's step, as root: make the
+// macOS VM admission ledger under the base directory exact (admission.Setup).
+func cmdLedgerSetup(args []string, d deps) int {
+	if len(args) != 1 {
+		fmt.Fprintln(d.stderr, "usage: wardyn-macvm ledger-setup <base directory>")
+		return 2
+	}
+	uid := os.Getuid
+	if d.getuid != nil {
+		uid = d.getuid
+	}
+	if uid() != 0 {
+		fmt.Fprintln(d.stderr, "wardyn-macvm ledger-setup: must run as root (the runner package's installer runs it)")
+		return 1
+	}
+	if err := admission.Setup(admission.SetupConfig{Base: args[0], Fstat: d.fstat}); err != nil {
+		fmt.Fprintf(d.stderr, "wardyn-macvm ledger-setup: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 func cmdRun(ctx context.Context, args []string, d deps) int {

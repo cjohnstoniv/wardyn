@@ -664,6 +664,8 @@ lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size + mig
 	@echo "Running Helm template-file gate (scripts/check-helm-templates.sh)..."
 	./scripts/check-helm-templates.sh
 	./scripts/check-helm-templates.sh deploy/helm/wardyn-runnerd
+	@echo "Running macOS VM selector gate (scripts/check-macvm-selectors.sh)..."
+	./scripts/check-macvm-selectors.sh --selftest
 	@echo "Running migration-numbering gate (scripts/check-migration-numbers.sh)..."
 	./scripts/check-migration-numbers.sh
 	@echo "Running actionlint $(ACTIONLINT_VERSION) (workflow YAML)..."
@@ -706,6 +708,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-runner-units.sh
 	./scripts/test-runner-pkg.sh
 	./scripts/test-runner-pkg-dry-run.sh
+	./scripts/test-pkg-postinstall.sh
 	./scripts/test-runner-limits.sh
 	./scripts/test-stage-agent-binary.sh
 	./scripts/test-doc-form.sh
