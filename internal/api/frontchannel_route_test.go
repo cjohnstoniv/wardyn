@@ -35,12 +35,18 @@ func (m *memSessionSIDs) RecordOIDCSessionSID(_ context.Context, issuer, sid, su
 	return nil
 }
 
-func (m *memSessionSIDs) TakeOIDCSessionSID(_ context.Context, issuer, sid string) (string, bool, error) {
+func (m *memSessionSIDs) LookupOIDCSessionSID(_ context.Context, issuer, sid string) (string, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	sub, ok := m.rows[issuer+" "+sid]
-	delete(m.rows, issuer+" "+sid)
 	return sub, ok, nil
+}
+
+func (m *memSessionSIDs) ForgetOIDCSessionSID(_ context.Context, issuer, sid string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.rows, issuer+" "+sid)
+	return nil
 }
 
 // frontchannelAuthenticator builds an Authenticator over a test identity provider with front-channel

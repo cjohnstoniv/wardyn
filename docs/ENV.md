@@ -1884,12 +1884,13 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 - Serves `GET /auth/frontchannel-logout` for OpenID Connect Front-Channel Logout (flag `-oidc-frontchannel-logout`); off, the route does not exist and no `sid` is recorded.
 - Register `https://<your Wardyn host>/auth/frontchannel-logout` as the client's front-channel logout URL, with `frontchannel_logout_session_required`, so the provider sends `iss` and `sid`.
-- While on, each sign-in records its ID token's `sid` against the person in `oidc_session_sids`, pruned after a day.
-- This issuer and a recorded `sid` end that person's console sessions as their sign-out does, and consume the row; tokens, keys and runs keep working.
+- While on, each sign-in records its ID token's `sid` against the person in `oidc_session_sids`, kept until that session ends.
+- This issuer and a recorded `sid` end that person's console sessions as their sign-out does, then the row is deleted; a failed cut keeps it, so the provider's reloaded sign-out page retries. Tokens, keys and runs keep working.
 - The `sid` finds the session, not the `SameSite=Lax` cookie, which a browser never sends to the provider's cross-site frame; third-party cookie blocking changes nothing.
 - Only the issuer's origin may frame its answers; every other route keeps `frame-ancestors 'none'`.
 - It needs the person's browser to load the provider's sign-out page, and a sign-in with a `sid`.
 - No `iss` or `sid`, or another issuer, gets `400`; an unknown `sid` gets `200` and ends nothing; a failed lookup or cut gets `503`; all `no-store`.
+- The `sid` is the same in every application's ID token for that provider session, so any other application the person is signed into there can end their Wardyn sessions with it.
 - Unsigned, a forged request can only sign someone out. Past five requests that end nothing, then one a second per process, it gets `429`, the provider's genuine one too.
 - Each cut is a `session.revoke` row with `source` `idp_front_channel_logout`.
 

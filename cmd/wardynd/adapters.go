@@ -586,7 +586,7 @@ func (l lifecycleStore) ListRunningWithPolicy(ctx context.Context) ([]lifecycle.
 // a prune racing the idle-run scan on the shared pool is harmless (different
 // table, no shared lock). Best-effort — a prune failure never fails the tick
 // or blocks reaping.
-func reapTickLock(pool *pgxpool.Pool) func(context.Context) (func(), bool) {
+func reapTickLock(pool *pgxpool.Pool, frontchannelLogout bool) func(context.Context) (func(), bool) {
 	return func(ctx context.Context) (func(), bool) {
 		release, ok, err := db.TryAdvisoryLock(ctx, pool, db.ReaperAdvisoryLockKey)
 		if err != nil {
@@ -596,7 +596,9 @@ func reapTickLock(pool *pgxpool.Pool) func(context.Context) (func(), bool) {
 		if ok {
 			pruneAWSSSOSpentTokens(ctx, pool)
 			pruneAWSSSORefusedTokens(ctx, pool)
-			pruneOIDCSessionSIDs(ctx, pool)
+			if frontchannelLogout { // off, nothing is recorded and a split-role install may lack the 0229 grant
+				pruneOIDCSessionSIDs(ctx, pool)
+			}
 			pruneUIDesktopClosed(ctx, pool)
 		}
 		return release, ok

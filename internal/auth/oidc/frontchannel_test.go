@@ -5,6 +5,7 @@ package oidc_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -23,10 +24,25 @@ func (m memSIDs) RecordOIDCSessionSID(_ context.Context, issuer, sid, sub string
 	return nil
 }
 
-func (m memSIDs) TakeOIDCSessionSID(_ context.Context, issuer, sid string) (string, bool, error) {
+func (m memSIDs) LookupOIDCSessionSID(_ context.Context, issuer, sid string) (string, bool, error) {
 	sub, ok := m[issuer+" "+sid]
-	delete(m, issuer+" "+sid)
 	return sub, ok, nil
+}
+
+func (m memSIDs) ForgetOIDCSessionSID(_ context.Context, issuer, sid string) error {
+	delete(m, issuer+" "+sid)
+	return nil
+}
+
+// sidExpiries remembers how long each recorded sid row is kept.
+type sidExpiries struct {
+	memSIDs
+	until map[string]time.Time
+}
+
+func (s sidExpiries) RecordOIDCSessionSID(ctx context.Context, issuer, sid, sub string, expiresAt time.Time) error {
+	s.until[sid] = expiresAt
+	return s.memSIDs.RecordOIDCSessionSID(ctx, issuer, sid, sub, expiresAt)
 }
 
 func frontchannelAuth(t *testing.T, env *idpEnv, rev writoidc.SessionRevocations, sids writoidc.SessionSIDs, on bool) *writoidc.Authenticator {
@@ -131,5 +147,56 @@ func TestFrontchannelLogoutIsOffByDefault(t *testing.T) {
 	}
 	if !frontchannelAuth(t, env, &cutLedger{}, sids, true).FrontchannelLogoutEnabled() {
 		t.Error("FrontchannelLogout set but the route is reported off")
+	}
+}
+
+// A failed cut keeps the sid row: the logout answers 503, the provider's reloaded sign-out page
+// repeats it, and that second request cuts the person's sessions and only then deletes the row.
+func TestFrontchannelLogoutAFailedCutKeepsTheRowSoARetryEndsTheSession(t *testing.T) {
+	env := newIdPEnv(t)
+	rev, sids := &cutLedger{seq: 10, cutErr: errors.New("revocation store down")}, memSIDs{}
+	auth := frontchannelAuth(t, env, rev, sids, true)
+	cookie := signedInWithSID(t, env, auth, "idp-session-7")
+	h := auth.FrontchannelLogoutHandler(nil)
+	q := url.Values{"iss": {env.httpSrv.URL}, "sid": {"idp-session-7"}}
+
+	if w := getFrontchannel(h, q); w.Code != http.StatusServiceUnavailable || len(sids) != 1 {
+		t.Fatalf("failed cut = %d, sid rows %v; want 503 and the row kept", w.Code, sids)
+	}
+	if live, reason := replay(auth, cookie); !live {
+		t.Fatalf("the session ended though the cut failed: %q", reason)
+	}
+	rev.cutErr = nil
+	if w := getFrontchannel(h, q); w.Code != http.StatusOK || rev.cutCalls != 1 || len(sids) != 0 {
+		t.Fatalf("retry = %d, cuts %d, sid rows %v; want 200, one cut and the row deleted", w.Code, rev.cutCalls, sids)
+	}
+	if live, reason := replay(auth, cookie); live || reason != "revoked_session" {
+		t.Errorf("a cookie after the retry = live %v, %q; want it revoked", live, reason)
+	}
+}
+
+// A session that outlasts a day still finds its sid: the row is kept until the session's own
+// expiry (a WARDYN_OIDC_SESSION_TTL longer than 24h), or until the renewal cap past sign-in when a
+// renewal reaches further than the session's first expiry.
+func TestFrontchannelLogoutKeepsTheRowForAsLongAsTheSessionLives(t *testing.T) {
+	for name, tc := range map[string]struct {
+		ttl, renewCap, wantAtLeast time.Duration
+	}{
+		"session longer than 24h": {ttl: 30 * time.Hour, wantAtLeast: 30 * time.Hour},
+		"renewal reaches 24h":     {ttl: time.Hour, renewCap: 24 * time.Hour, wantAtLeast: 24 * time.Hour},
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := newIdPEnv(t)
+			sids := sidExpiries{memSIDs: memSIDs{}, until: map[string]time.Time{}}
+			auth := env.newRoleMappingAuth(t, nil, "", nil, nil, func(cfg *writoidc.Config) {
+				cfg.Revocations, cfg.SessionSIDs, cfg.FrontchannelLogout = &cutLedger{seq: 10}, sids, true
+				cfg.SessionTTL, cfg.SessionRenewCap = tc.ttl, tc.renewCap
+			})
+			start := time.Now()
+			signedInWithSID(t, env, auth, "idp-session-7")
+			if got := sids.until["idp-session-7"]; got.Before(start.Add(tc.wantAtLeast)) {
+				t.Errorf("sid row kept until %s, %s after sign-in; want at least %s", got.Format(time.RFC3339), got.Sub(start).Round(time.Minute), tc.wantAtLeast)
+			}
+		})
 	}
 }

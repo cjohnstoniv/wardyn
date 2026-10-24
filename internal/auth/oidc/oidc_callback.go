@@ -348,7 +348,7 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserve
 		return
 	}
 	a.RecordAttach(r, sess)
-	a.recordSessionSID(r.Context(), cc, sess.Sub)
+	a.recordSessionSID(r.Context(), cc, sess)
 	http.SetCookie(w, cookie)
 	a.rememberDevice(w, cc)
 	http.Redirect(w, r, a.consumeReturnTo(w, r), http.StatusFound)

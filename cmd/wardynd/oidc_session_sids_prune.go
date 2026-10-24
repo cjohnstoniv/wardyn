@@ -13,12 +13,12 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/store"
 )
 
-// pruneOIDCSessionSIDs deletes the front-channel logout sid rows (migration 0229) of sign-ins older
-// than maxOIDCSessionTTL, the longest a session setting lets a console session last (an ID token that
-// itself lasts longer keeps its session past the row). Best-effort, under the reap advisory lock, as
+// pruneOIDCSessionSIDs deletes the front-channel logout sid rows (migration 0229) whose session has
+// ended: each row carries the latest its session can be live. Called only with
+// WARDYN_OIDC_FRONTCHANNEL_LOGOUT on. Best-effort, under the reap advisory lock, as
 // pruneAWSSSORefusedTokens.
 func pruneOIDCSessionSIDs(ctx context.Context, pool *pgxpool.Pool) {
-	n, err := store.NewPG(pool).PruneOIDCSessionSIDs(ctx, time.Now().Add(-maxOIDCSessionTTL))
+	n, err := store.NewPG(pool).PruneOIDCSessionSIDs(ctx, time.Now())
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: pruning oidc session sids failed", slog.Any("err", err))
 		return
