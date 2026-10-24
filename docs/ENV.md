@@ -2333,6 +2333,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 |---|---|---|---|
 | `WARDYN_PROXY_URL` | string | (unset) | egress proxy address inside the sandbox (`internal/sidecar`, `internal/runner/docker`) |
 | `WARDYN_RUN_ID` | string | (unset) | this run's id, injected into sidecar/sandbox |
+| `WARDYN_PROXY_WAIT_SECS` | int | `10` | how many seconds an agent image's `agent-run` waits for `WARDYN_PROXY_URL` to accept a connection before it carries on with one stderr line; set by no run, read by the image tests |
 | `WARDYN_REPO_URL` | string | (unset) | repo clone URL for the run |
 | `WARDYN_REPO_SLUG` | string | (unset) | repo slug for the run |
 | `WARDYN_REPOS` | string (JSON) | (unset) | multi-repo spec for the run |
