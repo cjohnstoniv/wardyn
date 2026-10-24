@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -41,6 +42,46 @@ func TestSelfLapse_ClosedBeforeFirstRenew(t *testing.T) {
 	}
 	if !p.lapse.renewed(clock.Now(), func() {}) || !p.lapse.serving() {
 		t.Fatal("first successful renew did not open the proxy")
+	}
+}
+
+// TestSelfLapse_ReadyPathFollowsTheGate: ReadyPath answers only while the proxy serves, so a k8s
+// runner's proxy is not Ready (its probe) while closed. Closed before its first renew, the proxy
+// refuses the probe and a short run's recording upload alike and forwards nothing; once open, the
+// probe answers and the upload reaches the control plane; lapsed, the probe is refused again. A
+// proxy with no gate (Docker, server) is ready at once.
+func TestSelfLapse_ReadyPathFollowsTheGate(t *testing.T) {
+	var landed atomic.Int32
+	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		landed.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer cp.Close()
+	p, _ := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(cp), nil, nil)
+	serve := func(method, path, body string) int {
+		rec := httptest.NewRecorder()
+		p.ServeHTTP(rec, mustLocalReq(t, method, path, strings.NewReader(body)))
+		return rec.Code
+	}
+	ready := func() int { return serve(http.MethodGet, ReadyPath, "") }
+	upload := func() int { return serve(http.MethodPut, routeRecordings+p.runID.String(), "{\"version\": 2}\n") }
+	if got := ready(); got != http.StatusNoContent {
+		t.Fatalf("ungated proxy: ready = %d, want 204", got)
+	}
+	clock := &fakeBoot{}
+	p.lapse = newLapseGate(clock, testLapseTTL)
+	if r, u := ready(), upload(); r != http.StatusServiceUnavailable || u != http.StatusServiceUnavailable || landed.Load() != 0 {
+		t.Fatalf("closed proxy: ready %d, upload %d, %d forwarded; want 503, 503, none", r, u, landed.Load())
+	}
+	if !p.lapse.renewed(clock.Now(), func() {}) {
+		t.Fatal("first renew did not apply")
+	}
+	if r, u := ready(), upload(); r != http.StatusNoContent || u != http.StatusNoContent || landed.Load() != 1 {
+		t.Fatalf("open proxy: ready %d, upload %d, %d forwarded; want 204, 204, one", r, u, landed.Load())
+	}
+	clock.advance(testLapseTTL)
+	if got := ready(); got != http.StatusServiceUnavailable {
+		t.Fatalf("lapsed proxy: ready = %d, want 503", got)
 	}
 }
 

@@ -20,6 +20,13 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   while the run page says paused. Migration `0231_desktop_vm_pause_generation` adds a column to `desktop_vm_sign_ins`;
   no grant changes.
 - During a rolling control-plane upgrade, a desktop sign-in pause can stay paused until it is resumed from an upgraded server.
+- A Kubernetes runner (wardyn-runnerd) gets the short-run recording fix below only with a proxy image of this release.
+  The Helm chart pins the proxy tag to the runner's. A runner started without Helm and not pinned uses the proxy image
+  the organisation named at registration: when that is an older release, its runs keep working as before, without the
+  fix, and the runner logs a warning once. Have the organisation name this release's proxy image, or run setup with
+  `--proxy-image` set to it.
+  A proxy image named by digest or by a tag that is not a release number is taken to be this release, so an older
+  image named that way never becomes ready and its runs fail at the start deadline.
 
 ### Changed
 
@@ -50,6 +57,13 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   seen, or a stop after its own generation's continue. The order outlives a restart of the guest agent's service. Each
   pause-to-resume's `desktop.sign_in.pause` row records `fenced`, false when the run's wardyn-runnerd or guest image
   predates it.
+- A short command run on a Kubernetes runner (wardyn-runnerd) no longer loses its recording. The run's proxy refuses
+  every request until its first token renew succeeds, but its pod read as ready once it listened, so the agent could
+  start, finish and have its recording upload refused inside that window. The proxy pod is now ready only once it
+  serves.
+- `GET /runs/{id}/output` no longer points the run's owner or an operator at a recording that was never received.
+  With run output persistence off, an ended run on a runner that does not capture output, and whose recording never
+  arrived, answers `409` `run_output_not_kept`.
 
 ## [0.10.0-rc.1] — 2026-10-24
 

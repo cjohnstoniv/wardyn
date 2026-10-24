@@ -540,6 +540,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.serveSignin(w, r)
 		return
 	}
+	// Before the spool: a readiness probe is not an agent request and leaves no decision.
+	if r.Method == http.MethodGet && r.URL != nil && r.URL.Host == "" && r.URL.Path == ReadyPath {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	// A via_org destination is the organisation's to decide: no spool row, no
 	// hold and no decision here (design 0.9 §7.3).
 	if route, authority, ok := p.viaOrgRouteFor(r); ok {

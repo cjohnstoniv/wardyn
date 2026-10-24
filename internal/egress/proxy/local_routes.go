@@ -44,6 +44,10 @@ const (
 	// routeSSOToken carries the AWS SSO session captured by an `aws sso login`
 	// container-login run. Same brokered shape as the scan result upload.
 	routeSSOToken = "/wardyn/v1/sso-token/"
+	// ReadyPath (GET) answers 204 once the proxy serves agent requests. A k8s
+	// runner's proxy is closed until its first renew while its listener is
+	// already bound, so its readiness probe asks this rather than the port.
+	ReadyPath = "/wardyn/v1/ready"
 
 	// rule_source values emitted for the brokered routes (audit pipeline).
 	ruleSourceMint        = "brokered:mint"
