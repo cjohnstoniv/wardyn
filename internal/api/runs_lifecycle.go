@@ -663,10 +663,11 @@ type runFailureHintSetter interface {
 // handleKillRun is the kill-switch: it cascades in a FIXED order — WIN the KILLED
 // terminal CAS first, THEN runner teardown, identity revocation, broker credential
 // revocation — then audits run.kill. The order matters: winning the CAS first means
-// a kill that loses to a concurrent forward-transition 409s WITHOUT revoking, so it
-// can never strip a still-live run's credentials; once the transition is ours
-// we tear the sandbox down (so it cannot use a credential it holds) and deny any
-// future mints (identity + broker).
+// a kill that loses it revokes nothing, so it can never strip a still-live run's
+// credentials; once the transition is ours we tear the sandbox down (so it cannot
+// use a credential it holds) and deny any future mints (identity + broker). A CAS
+// lost to a move between live states is re-read and tried again (killLiveRun);
+// only a run that ended under the kill answers 409.
 //
 // Idempotency / terminal guard: a run in a NON-KILLED terminal state
 // (COMPLETED/FAILED/STOPPED/ARCHIVED) is NOT re-killed — blindly writing KILLED
@@ -708,16 +709,15 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 	cascadeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
 	defer cancel()
 
-	applied, killData, serr := s.killRunCascade(cascadeCtx, run, killerType, killer, nil)
+	applied, killData, serr := s.killLiveRun(cascadeCtx, run, killerType, killer)
 	if serr != nil {
 		writeServerError(w, r, "update run state", serr)
 		return
 	}
 	if !applied {
-		// The run moved to another state between our read and our write (a concurrent
-		// terminal transition, or a dispatch forward-transition). Report the conflict
-		// WITHOUT revoking — the run legitimately advanced, and a losing kill must not
-		// strip a still-live run's credentials.
+		// The run ended between our read and our write (a concurrent terminal
+		// transition, or another kill). Report the conflict WITHOUT revoking: the
+		// outcome it recorded stands.
 		writeErrorReason(w, http.StatusConflict, reasonRunKillStateChanged,
 			"run state changed concurrently; not overwriting with KILLED")
 		return
@@ -737,6 +737,26 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusAccepted, map[string]any{"id": id, "state": types.RunKilled})
+}
+
+// killCASAttempts bounds handleKillRun's re-reads: one per forward move a live run can make under the
+// kill (QUEUED->PENDING->STARTING->RUNNING) and the attempt that lands.
+const killCASAttempts = 4
+
+// killLiveRun is killRunCascade for a person's kill: a CAS lost to a move between live states (a queue
+// promotion, a dispatch claim, the sandbox coming up) is re-read and claimed from the state the run now
+// holds, sandbox ref included, because the run the caller asked to end is still live. A run that ended
+// under the kill, or that another kill took, is left as it is: applied is false and nothing is revoked.
+func (s *Server) killLiveRun(ctx context.Context, run types.AgentRun, killerType types.ActorType, killer string) (bool, map[string]any, error) {
+	for attempt := 1; ; attempt++ {
+		applied, killData, err := s.killRunCascade(ctx, run, killerType, killer, nil)
+		if err != nil || applied || attempt == killCASAttempts {
+			return applied, killData, err
+		}
+		if run, err = s.cfg.Store.GetRun(ctx, run.ID); err != nil || isTerminalRunState(run.State) {
+			return false, nil, err
+		}
+	}
 }
 
 // killRunCascade is the kill itself, with no HTTP in it: the CAS, the approval
