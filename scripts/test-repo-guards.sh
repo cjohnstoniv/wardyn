@@ -94,6 +94,8 @@
 #      sign/attest/attach, build provenance, gh release or gh api writes, helm push, notarization) is
 #      guarded by an un-negated startsWith(github.ref, 'refs/tags/v') ANDed into its own or its job's
 #      `if`, its `with.push`, or its own DRY_RUN/PUBLISH env that its script reads; never by job env.
+#  30. no workflow job runs on `ubuntu-latest`: that label moved to ubuntu-26.04 under a green main and
+#      broke every PR's compose job, so each job names the image its runs were proven on.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -953,6 +955,17 @@ if [ -n "$loud" ]; then
     bad "shell tests that run git init/clone/commit without maintenance.auto and gc.auto off:${loud} — export GIT_CONFIG_COUNT/KEY/VALUE for maintenance.auto=false, gc.auto=0 and gc.autoDetach=false (see scripts/test-kind-follow-main.sh)"
 else
     ok "every scripts/test-*.sh that runs git init/clone/commit turns auto-maintenance off"
+fi
+
+# ── 30. every workflow job names its runner image ───────────────────────────
+# `ubuntu-latest` is a moving label: it went from ubuntu-24.04 to ubuntu-26.04 between two runs
+# and the new systemd failed test-desktop-profile.sh on every PR. A job names the image instead.
+floating="$(grep -nE '^[[:space:]]*runs-on:.*ubuntu-latest' .github/workflows/*.yml || true)"
+if [ -n "$floating" ]; then
+    bad "workflow jobs on the moving ubuntu-latest label (name the image, e.g. ubuntu-24.04):
+${floating}"
+else
+    ok "every workflow job names its runner image (no ubuntu-latest)"
 fi
 
 # Guards 26-29 (release.yml and nightly.yml) are in test-repo-guards-release.sh, sourced so they
