@@ -474,6 +474,7 @@ that ceiling down; each run receives only the minimal subset its task needs.
 | Guest agent ↔ runner | Guest-initiated vsock; the same session parser as Linux VMs | #96 |
 | Desktop ↔ gateway | A runner-side RFB shim on a socket only the helper reaches; the existing ticket, clipboard filter and recording | #96 |
 | Other local accounts ↔ the VM ledger | A root-owned, sticky ledger: it can deny service, never admit past the cap | #96 |
+| Other local accounts ↔ a run's sockets | A login-made `0700` folder under a root-owned sticky parent, checked on every use: a planted name denies that login's VMs, never access | #96 |
 | Guest secrets ↔ the Mac's volume | The run's clone disk is deleted at the end, which is not secure erasure | #96 |
 
 ---
@@ -2922,7 +2923,8 @@ hiding them would repeat the failure mode we are designed to avoid.
     - Wardyn deletes the clone when the run ends. That is not secure erasure: the Mac's local APFS snapshots (Time Machine takes one about hourly and keeps it for 24 hours, and no folder can be excluded), freed blocks, and a backup tool that ignores Wardyn's Time Machine exclusion may keep a copy. Wardyn changes no backup or snapshot setting beyond excluding its own directory.
     - Sign-ins in a macOS desktop are on the run's disk, not in memory as in a Linux VM. An agent set "Sign-ins in a desktop: Not allowed" is refused a macOS desktop. The Mac's own user can read a live run's disk (#69).
     - The gate is two assertions, `managed_device` (#90) and the MDM posture file, so it does not constrain a root developer. The MDM device-certificate proof is the next patch.
-    - Every local account can write the shared admission ledger. It can hold this Mac's macOS VM slots, memory or disk, or the lock, and so stop macOS VMs until it stops or the Mac restarts. It cannot admit a VM past the cap, and a runner refuses with a named reason after 10 seconds. An account that can do this can already exhaust the Mac directly.
+    - Every local account can write the shared admission ledger. It can hold this Mac's macOS VM slots, memory or disk, or the lock, and so stop macOS VMs until it stops or the Mac restarts. It cannot admit a VM past the cap, and a runner refuses with a named reason after 10 seconds. An account that can do this can already exhaust the Mac directly. It can also make a package install fail closed by holding the lock for over 10 seconds.
+    - A runner frees its own ledger entry early in one stated case: a process-count heuristic that errs toward keeping the entry. Apple's cap of two is the backstop.
     - Disk reserved per VM is its worst case on the live volume. Space that local snapshots hold is outside it, so macOS VMs can use more disk than they reserved.
     - In the guest, tools that use the macOS keychain do not trust the run's proxy certificate, so hosts the proxy inspects show certificate errors there.
 

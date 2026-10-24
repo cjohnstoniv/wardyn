@@ -74,7 +74,7 @@
 
 ## Preparing the base image
 
-`wardyn-runnerd macos-vm prepare` builds the Mac's base image. It is unattended and takes a while beyond the download. It runs once per Mac, and again for a newer macOS.
+`wardyn-runnerd macos-vm prepare` builds the Mac's base image. It is unattended and takes a while beyond the download. It runs once per Mac. A newer macOS needs a re-prepare (see Newer macOS below).
 
 | Step | What happens |
 |---|---|
@@ -94,7 +94,9 @@
   - If a later step is interrupted anyway, by a power loss, a restart or a crashed helper, Wardyn discards the partial base and restarts from the install once the Mac is on power. The downloaded image is kept.
 - **Setup by hand.** If the guest's Remote Login has not answered after 10 minutes, preparing stops and says macOS asked for setup by hand. The Mac's person then finishes it once in the local window and turns on Remote Login. The steps and a short one-time code are in `wardyn-runnerd macos-vm status`.
 - **The desktop.** Apple has said Screen Sharing turned on from the command line may let a viewer only watch. Preparing ends with a control check, and `status` reports whether the desktop is `control`, `observe` or `none`. With `observe`, macOS VMs still run agent-only, and the desktop is not offered until a person turns on control for the base.
-- **Newer macOS.** When Apple's current image is newer than the base, `status` says so. Run `prepare` again; runs keep using the old base until the new one is ready, then it is deleted.
+- **Newer macOS.** Wardyn does not tell you that Apple has a newer image. To move to one, run `wardyn-runnerd macos-vm prepare --reprepare`; a plain `prepare` keeps a ready base and does nothing.
+  - The new base is built beside the old one, which runs keep using until the new one is ready. Then the old one is replaced and deleted.
+  - A re-prepare holds one of the two slots while it runs.
 
 ## How many VMs a Mac offers
 
@@ -140,20 +142,34 @@
 | `/Users/Shared/Wardyn` | `root:wheel` `0755` | The ledger's parent |
 | `/Users/Shared/Wardyn/admission.lock` | `root` `0644` | The lock every change takes |
 | `/Users/Shared/Wardyn/macos-vm-admission` | `root` `1777`, sticky like `/tmp` | One small file per VM, mode `0644`, owned by the runner that made it |
+| `/Users/Shared/Wardyn/sock/` | `root:wheel` `1777`, sticky | One folder per login, `u<uid>/`, made by that login with mode `0700`; each run's sockets sit in a folder inside it |
 
-- The package's installer creates these and replaces a pre-planted directory or lock. A runner never creates them: if they are missing or not owned by root, the Mac offers no macOS VMs and says to reinstall the package.
+- The package's installer creates these. A runner never creates them: if they are missing or not owned by root, the Mac offers no macOS VMs and says to reinstall the package.
+- **A pre-planted name is moved, not changed.** A path that is already there and not exactly as above is moved into a new root-only `.wardyn-quarantine.*` folder beside `/Users/Shared/Wardyn`.
+  - The installer makes the path again and moves the entries across. It never changes the owner or mode of what it found, and never deletes it.
+  - An admin can inspect and delete a quarantine folder as root.
+- **The installer waits for the lock.** If any login holds the admission lock for more than 10 seconds, the installation fails closed: macOS VMs stay off. Reinstall the package to retry once nobody holds it.
 - A runner deletes only its own entries. The sticky bit stops another login's runner from removing them.
+- **The socket folder.** A Unix socket path holds only about 100 bytes, which a path under a home folder can exceed. So a run's control, agent and desktop sockets sit in `/Users/Shared/Wardyn/sock/u<uid>/<run-key>/`, about 56 bytes.
+  - The login makes `u<uid>/` itself. On every use it checks that this is a real directory, owned by that login, with mode `0700`.
+  - Anything else there refuses that login's macOS VMs with a named reason: a planted name, a link, or a folder with a different owner or mode.
+  - It is a denial of service for that login's macOS VMs, never access to a socket. An admin removes the planted name as root.
+  - The run's disks and `run.json` stay in the run directory in the person's home. Deleting the run directory deletes its socket folder with it.
 - **Other local accounts can deny service.** Every local account can write the ledger directory and open the lock. A local user can add entries that hold this Mac's slots, memory or disk, or hold the lock, and stop macOS VMs until they stop or the Mac restarts. Forged entries cannot be cleared reliably.
   - It is a denial of service for macOS VMs only. A forged entry cannot admit a VM past the cap, and the framework's own cap stays the backstop.
   - A runner waits at most 10 seconds for the lock, then refuses, saying the ledger is busy.
   - A local user who can do this can already exhaust the Mac's memory or disk directly.
+- **When a slot is released.** A runner frees an entry only once the helper reported the VM stopped, the helper exited and the run directory is gone. There is one exception, a heuristic: a runner may free its own entry for a helper that was killed without that report.
+  - It does so when the helper's process no longer exists, the login has no more Virtualization and `wardyn-macvm` processes than its other entries that have a live helper, and the run directory is gone.
+  - The count cannot say which VM a process belongs to, so it errs toward keeping the entry. It can free an entry too early in one case: this VM's process outlived its helper while another entry's helper is live but has not started its VM yet.
+  - Then the Virtualization framework's own cap of two is the backstop.
 - **A login that ended with a VM live.** Another login's runner can free its slot and memory once the helper is gone.
   - Its disk stays reserved, because the run's files are in that person's private directory, which no other login can read or delete.
   - The runner reports the held space apart from the freed capacity.
   - It is released when that person next logs in and their runner removes the files. A restart also drops it.
 - **Leftovers.** Entries, tombstones and temporary files from an earlier boot are never counted, but only their owner or root can delete them.
   - If a person never logs in again, their small ledger files and their run directories stay.
-  - An admin removes them as root: the files under `/Users/Shared/Wardyn/macos-vm-admission`, and `runs/` under `~/Library/Application Support/Wardyn/macos-vm.noindex/` in that person's home.
+  - An admin removes them as root: the files under `/Users/Shared/Wardyn/macos-vm-admission`, that person's `/Users/Shared/Wardyn/sock/u<uid>/`, and `runs/` under `~/Library/Application Support/Wardyn/macos-vm.noindex/` in that person's home.
   - A root cleanup service is not in this release.
 - **A leaked slot.** Apple's framework can hold a VM slot after a VM ended. The runner then lowers `max` by one and reports that the Mac needs a restart. A restart is the only recovery reported.
 
@@ -192,13 +208,18 @@
 | Desktop | One fixed 1920 x 1080 display. An `observe` result (see above) leaves macOS VMs agent-only |
 | Clipboard | Paste in is allowed and copy out is blocked by default, as for other desktops, if Apple's Screen Sharing carries the standard clipboard messages. Otherwise nothing is copied either way |
 | Heat and battery | New VMs are refused at serious or critical thermal state. Battery use and lid-close sleep on MacBooks were not measured |
-| Guest patching | The guest's automatic updates are off, so a run's OS is predictable. Prepare again to move to a newer macOS |
+| Guest patching | The guest's automatic updates are off, so a run's OS is predictable. Re-prepare to move to a newer macOS |
+
+- **Not tested on a Mac.** Two checks cannot be witnessed independently there, and unit tests cover them:
+  - that the VM has exactly one network device of the expected kind;
+  - that a VM shut down from inside the guest frees its slot.
+- The test summary lists them as untested, never as passed.
 
 ## Upgrades
 
 - An upgrade of the runner package does not repeat the macOS install.
 - When the guest agent in the base differs from the runner's, the runner runs a tools update: it clones the base, boots it, applies the new agent and pins, and keeps the result. It takes one slot like any VM, for minutes.
-- A base the new runner cannot accept is marked "update needed", and the Mac offers no macOS VMs until it is prepared again.
+- A base the new runner cannot accept is marked "update needed", and the Mac offers no macOS VMs until it is re-prepared (`prepare --reprepare`).
 
 ## Remove it
 
@@ -214,11 +235,14 @@
 | No Mac in the pool offers macOS VMs | No runner in the pool has a ready base, or the pool mixes runners that do not. Run `status` on each Mac |
 | Not offered after a restart | Nobody has logged in since the restart, and FileVault is on |
 | The runner says the ledger is missing or damaged | Reinstall the runner package |
+| The runner refuses macOS VMs and names a socket folder | Something other than the login's own `0700` folder is at that name under `/Users/Shared/Wardyn/sock/`. Remove it as root ([The shared ledger](#the-shared-ledger)) |
+| Installing the package failed and macOS VMs stay off | A login held the admission lock for over 10 seconds. Reinstall the package |
 | The runner says the ledger is busy | Another account holds the lock, or the ledger is crowded with entries. See [The shared ledger](#the-shared-ledger) |
 | A third VM refused | The Mac already runs two, or preparing holds one |
 | `max` is 0 | Docker's memory or the runner's limits leave no room ([How many VMs a Mac offers](#how-many-vms-a-mac-offers)) |
 | A run ended because the Mac ran low on disk | Free space fell below 5 GiB, possibly held by snapshots ([Disk](#disk)) |
 | The runner says the Mac needs a restart | The framework still holds a slot. Restart the Mac |
+| A newer macOS is out | Run `wardyn-runnerd macos-vm prepare --reprepare` ([Preparing the base image](#preparing-the-base-image)) |
 | Preparing waits | For AC power or for Docker to start |
 | Preparing stopped because macOS asked for setup by hand | Finish setup once in the local window, as `status` describes |
 
@@ -226,7 +250,8 @@
 
 | On the Mac | Who can use it |
 |---|---|
-| `macos-vm.noindex/runs/<run>/` (disk, auxiliary storage, control, agent and desktop sockets, helper log) | The logged-in user only (mode `0700`) |
+| `macos-vm.noindex/runs/<run>/` (disk, auxiliary storage, `run.json`, helper log) | The logged-in user only (mode `0700`) |
+| `/Users/Shared/Wardyn/sock/u<uid>/<run-key>/` (control, agent and desktop sockets) | The logged-in user only (mode `0700`) |
 | `macos-vm.noindex/bases/` and `cache/` | The logged-in user only |
 | `macos-vm.noindex/prepare.log` | The logged-in user. No password or secret value is logged |
 
