@@ -20,6 +20,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/coder/websocket"
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/federation"
@@ -55,6 +56,10 @@ type setupFixture struct {
 	id          uuid.UUID
 	refuseClaim bool
 	otherPool   *sdk.RunnerPool
+	// stripUpgrade makes the stream route see its request without the upgrade headers, as a gateway that strips them does.
+	stripUpgrade bool
+	// healthz answers /healthz in place of a healthy report, when set.
+	healthz func(http.ResponseWriter)
 }
 
 func newSetupFixture(t *testing.T, goos string) *setupFixture {
@@ -149,6 +154,18 @@ func (f *setupFixture) serve(w http.ResponseWriter, r *http.Request) {
 	f.calls = append(f.calls, r.Method+" "+r.URL.Path)
 	reply := func(v any) { _ = json.NewEncoder(w).Encode(v) }
 	switch {
+	case r.URL.Path == "/healthz" && f.healthz != nil:
+		f.healthz(w)
+	case r.URL.Path == "/healthz":
+		reply(map[string]string{"status": "ok", "version": "0.10.0"})
+	case strings.HasSuffix(r.URL.Path, "/stream"):
+		if f.stripUpgrade {
+			r.Header.Del("Connection")
+			r.Header.Del("Upgrade")
+		}
+		if c, err := websocket.Accept(w, r, nil); err == nil {
+			_ = c.CloseNow()
+		}
 	case r.URL.Path == "/api/v1/runners/register":
 		var req types.RunnerRegisterRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)

@@ -7,6 +7,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -36,7 +38,10 @@ type doctorRig struct {
 	noNet     bool
 	netErr    error
 	orgPool   *x509.CertPool
-	org       string
+	cert      *x509.Certificate
+	// routed leaves the route to the settings doctor resolves, instead of a direct one.
+	routed bool
+	org    string
 	// stripUpgrade makes the organisation see the stream route's request without its upgrade headers, the way
 	// a gateway that strips them does.
 	stripUpgrade bool
@@ -66,6 +71,7 @@ func newRig(t *testing.T) *doctorRig {
 	t.Cleanup(srv.Close)
 	pool := x509.NewCertPool()
 	pool.AddCert(srv.Certificate())
+	rig.cert = srv.Certificate()
 	rig.env, rig.orgPool, rig.org = map[string]string{"WARDYN_RUNNER_ORG_URL": srv.URL}, pool, srv.URL
 	return rig
 }
@@ -100,9 +106,12 @@ func (r *doctorRig) run(o doctorOptions) doctor.Report {
 			r.relayRan = true
 			return relayPair{bind: netip.MustParseAddr("172.17.0.1"), target: hostGateway}, r.relayErr
 		}}
-	return runDoctor(context.Background(), h, o, func(k string) string { return r.env[k] }, doctor.Network{
-		LookupHost: func(context.Context, string) ([]string, error) { return []string{"203.0.113.7"}, nil },
-		ProxyFor:   func(*http.Request) (*url.URL, error) { return nil, nil }, SystemRoots: r.orgPool})
+	net := doctor.Network{LookupHost: func(context.Context, string) ([]string, error) { return []string{"203.0.113.7"}, nil },
+		ProxyFor: func(*http.Request) (*url.URL, error) { return nil, nil }, SystemRoots: r.orgPool}
+	if r.routed {
+		net.ProxyFor = nil
+	}
+	return runDoctor(context.Background(), h, o, func(k string) string { return r.env[k] }, net)
 }
 
 func stage(t *testing.T, rep doctor.Report, name string) doctor.Stage {
@@ -323,5 +332,126 @@ func TestRunnerDoctorPlainOutputGolden(t *testing.T) {
 	}
 	if got != string(want) {
 		t.Errorf("plain output differs from testdata/doctor_runner.golden:\n%s", got)
+	}
+}
+
+// TestDoctorReadsWhatSetupRecordedInRunnerJSON pins that the runner stages read runnerd.json, where a current
+// setup records the organisation and the CA bundles, beside the legacy service definition and this shell: the
+// organisation's certificate is trusted by no system root, only by the recorded bundle.
+func TestDoctorReadsWhatSetupRecordedInRunnerJSON(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		file  func(org, ca string) runnerFile
+		shell bool
+		stage string
+		in    string
+	}{
+		{"org_url", func(org, _ string) runnerFile { return runnerFile{OrgURL: org} }, false, "org-url", "WARDYN_RUNNER_ORG_URL in the service's settings"},
+		{"trusted_ca_file", func(_, ca string) runnerFile { return runnerFile{TrustedCAFile: ca} }, true, "trusted-ca", "1 certificate(s) from ca.pem"},
+		{"org_ca_file", func(_, ca string) runnerFile { return runnerFile{OrgCAFile: ca} }, true, "org-ca", "1 certificate(s) from ca.pem"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRig(t)
+			if tc.shell {
+				r.orgPool = x509.NewCertPool() // only the recorded bundle trusts the certificate
+			}
+			ca := writeFile(t, filepath.Join(t.TempDir(), "ca.pem"), string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: r.cert.Raw})))
+			if !tc.shell {
+				// The organisation is only in runnerd.json, and the system pool trusts its certificate.
+				delete(r.env, "WARDYN_RUNNER_ORG_URL")
+			}
+			p, err := (setupHost{goos: "linux", home: r.home}).paths()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Dir(p.configFile()), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := json.Marshal(tc.file(r.org, ca))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p.configFile(), raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			rep := r.run(doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"})
+			if s := stage(t, rep, tc.stage); s.Status != doctor.StatusOK || !strings.Contains(s.Detail, tc.in) {
+				t.Errorf("%s = %s %q, want ok naming %q", tc.stage, s.Status, s.Detail, tc.in)
+			}
+			if s := stage(t, rep, "tls"); s.Status != doctor.StatusOK {
+				t.Errorf("tls = %s %q %q, want ok", s.Status, s.Detail, s.Fix)
+			}
+		})
+	}
+}
+
+// writeRunnerJSON records f where setup does, for the rig's home.
+func (r *doctorRig) writeRunnerJSON(t *testing.T, f runnerFile) {
+	t.Helper()
+	p, err := (setupHost{goos: "linux", home: r.home}).paths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(p.configFile()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.configFile(), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Doctor resolves a setting as serve does: the environment outranks runnerd.json. Here the environment names a
+// bundle that does not exist and the file a good one, so the stage fails on the environment's.
+func TestDoctorResolvesSettingsAsServeDoes(t *testing.T) {
+	r := newRig(t)
+	ca := writeFile(t, filepath.Join(t.TempDir(), "ca.pem"), string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: r.cert.Raw})))
+	r.writeRunnerJSON(t, runnerFile{TrustedCAFile: ca})
+	r.env["WARDYN_TRUSTED_CA_FILE"] = "/nonexistent/env-ca.pem"
+	rep := r.run(doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"})
+	if s := stage(t, rep, "trusted-ca"); s.Status != doctor.StatusFail || !strings.Contains(s.Detail, "/nonexistent/env-ca.pem") {
+		t.Errorf("trusted-ca = %s %q, want a failure naming the environment's bundle, which outranks the file's", s.Status, s.Detail)
+	}
+}
+
+// The runner's connection uses the HTTPS_PROXY serve exports, which is runnerd.json's runner_proxy when the
+// environment sets none: doctor's route follows it, not only this shell.
+func TestDoctorRoutesThroughTheRecordedRunnerProxy(t *testing.T) {
+	r := newRig(t)
+	r.routed = true
+	proxy := newConnectProxy(t, strings.TrimPrefix(r.org, "https://"), false)
+	r.env["WARDYN_RUNNER_ORG_URL"] = "https://example.com:" + strings.Split(r.org, ":")[2]
+	r.writeRunnerJSON(t, runnerFile{RunnerProxy: proxy.URL.String()})
+	rep := r.run(doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"})
+	if s := stage(t, rep, "proxy"); s.Status != doctor.StatusOK || !strings.Contains(s.Detail, "via proxy "+proxy.URL.Host) {
+		t.Errorf("proxy = %s %q, want the recorded proxy", s.Status, s.Detail)
+	}
+	if hosts, _ := proxy.connects(); len(hosts) == 0 {
+		t.Error("the check never went through the recorded proxy")
+	}
+	if s := stage(t, rep, "wire"); s.Status != doctor.StatusOK {
+		t.Errorf("wire = %s %q", s.Status, s.Detail)
+	}
+}
+
+// An unreadable runnerd.json is a failed stage of its own, not a silent fall back to other settings.
+func TestDoctorFailsAnUnreadableRunnerJSON(t *testing.T) {
+	r := newRig(t)
+	p, err := (setupHost{goos: "linux", home: r.home}).paths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(p.configFile()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.configFile(), []byte(`{"bogus_field": 1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rep := r.run(doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"})
+	if s := stage(t, rep, "config"); s.Status != doctor.StatusFail || !strings.Contains(s.Detail, "bogus_field") || rep.OK() {
+		t.Errorf("config = %s %q, report ok %v; want a failure naming the field", s.Status, s.Detail, rep.OK())
 	}
 }

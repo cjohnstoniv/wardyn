@@ -57,6 +57,8 @@ type setupHost struct {
 	// hasNetwork says whether the named Docker network exists, read-only, for doctor.
 	hasNetwork func(ctx context.Context, name string) (bool, error)
 	relay      func(ctx context.Context, image, network string, eng dockerEngine, want relayPair) (relayPair, error)
+	// network is what a test replaces in the connection stages: the resolver, the proxy function, the trust store.
+	network doctor.Network
 }
 
 func osSetupHost() (setupHost, error) {

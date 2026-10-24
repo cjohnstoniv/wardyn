@@ -199,3 +199,31 @@ func TestNoWireStageUnlessAsked(t *testing.T) {
 		t.Errorf("the stream route was asked %d times", len(*seen))
 	}
 }
+
+// A plain error at /healthz is still a failure of doctor's own, and doctor still skips the wire stage after it;
+// only a command that asks to go on past it (setup) gets the wire stage too.
+func TestPlainHealthzErrorFailsDoctorAndMaySkipTheWire(t *testing.T) {
+	o := newOrg(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/stream") {
+			if c, err := websocket.Accept(w, r, nil); err == nil {
+				_ = c.CloseNow()
+			}
+			return
+		}
+		http.NotFound(w, r)
+	})
+	n := runnerNet(o)
+	stages := n.Run(context.Background())
+	if h, w := byName(t, stages, "healthz"), byName(t, stages, "wire"); h.Status != StatusFail || !h.Advisory || w.Status != StatusSkip || (Report{Stages: stages}).OK() {
+		t.Errorf("doctor: healthz = %s advisory %v, wire = %s, ok %v; want a failed advisory healthz, a skipped wire and a failed report", h.Status, h.Advisory, w.Status, Report{Stages: stages}.OK())
+	}
+	n = runnerNet(o)
+	n.WireDespiteHealthz = true
+	stages = n.Run(context.Background())
+	if w := byName(t, stages, "wire"); w.Status != StatusOK {
+		t.Errorf("with WireDespiteHealthz wire = %s %s; want ok", w.Status, w.Detail)
+	}
+	if _, blocked := (Report{Stages: stages}).FirstBlocking("healthz", "wire"); blocked {
+		t.Error("an advisory healthz failure blocks")
+	}
+}

@@ -293,25 +293,31 @@ An install from before the file keeps working: its environment file or LaunchAge
 
 | Stage | Checks | A failure names |
 |---|---|---|
+| `config` | Shown only on failure: `runnerd.json` loads, as `serve` loads it, with no unknown field or bad value | the field the line names |
 | `trusted-ca` | The CA bundle loads, as `setup` checks it, and warns of an expired or writable file | `WARDYN_TRUSTED_CA_FILE` |
+| `org-ca` | Shown only when set: the bundle of roots this runner's own connection to the organisation trusts loads | `WARDYN_ORG_CA_FILE` |
 | `org-url` | The organisation address is HTTPS, as `setup` requires, and where it came from | `WARDYN_RUNNER_ORG_URL` |
 | `dns` | The name resolves; with a proxy, the proxy's name | `WARDYN_RUNNER_ORG_URL` or `HTTPS_PROXY` |
 | `proxy` | The route in effect, as Go resolves `HTTPS_PROXY` and `NO_PROXY` | `HTTPS_PROXY` |
 | `tls` | The handshake: the issuer presented and the trust store that verified it (`system` or `WARDYN_TRUSTED_CA_FILE`); a proxy's 407 or 403 | `WARDYN_TRUSTED_CA_FILE`, `HTTPS_PROXY` |
 | `healthz` | `/healthz` answers as Wardyn, and the server version | `WARDYN_RUNNER_ORG_URL` |
+| `wire` | The runner stream's WebSocket upgrade gets through every proxy and gateway on the route (101); a proxy or gateway that strips it | `WARDYN_RUNNER_ORG_URL`, `HTTPS_PROXY` |
 | `engine` | The engine answers at `DOCKER_HOST`, and its version | `DOCKER_HOST` |
 | `proxy-image` | The image is on the engine or in its registry; a pinned image of another release than the organisation's is a version-skew failure | `WARDYN_PROXY_IMAGE` |
 | `relay` | The relay address is allowed and a probe container reaches it, through `setup`'s own check; the proxy network exists | `WARDYN_RELAY_LISTEN`, `WARDYN_INTERNAL_NETWORK` (missing network) |
+| `service` | The installed service, and on Linux whether systemd reports it running | |
+| `status` | The state and last error the service recorded in `status.json`, and the stage it stopped at | `WARDYN_RUNNER_STATE_DIR`, or the setting of that stage |
 
-- Each setting is read as the service reads it: a flag, else the settings `setup` recorded, else this shell. The flags are `--org`, `--state-dir`, `--proxy-image`, `--relay-listen`, `--relay-host-target` and `--trusted-ca-file`. The organisation address alone takes the `OrgURL` managed preference (macOS, set by an MDM profile) after `--org` and before the recorded settings; the line shows which one it came from.
+- Each setting is read as `serve` resolves it: a flag, the managed preference, the environment, then `runnerd.json`, where `setup` records them. The environment is the service's (the definition of a setup before `runnerd.json`), else this shell's. The flags are `--org`, `--state-dir`, `--proxy-image`, `--relay-listen`, `--relay-host-target` and `--trusted-ca-file`. The organisation address alone takes the `OrgURL` managed preference (macOS, set by an MDM profile) after `--org` and before the recorded settings; the line shows which one it came from.
 - It writes nothing and changes no setting. It never creates the proxy bridge, never pulls an image and never connects to the organisation as the runner.
 - The `wire` stage asks the organisation's runner stream route for a WebSocket upgrade as no runner and hangs up, and that probe counts against the runner handshake rate.
 - The relay stage starts one throwaway container, removed afterwards, and only when the proxy image is already on the engine; otherwise it says `skip`.
 - Names are shown and values are not: no token, password or proxy credential appears in either format, and a proxy is shown as its host and port.
 - Beside the link state and last error, `status.json` in the state directory holds `stage` and `stage_at` (the stage above that the last failed connect or start stopped at, and when; empty once connected or after a clean shutdown, kept after a refusal at start until a connect succeeds) and `relay` (`reachable` or `unreachable`; absent when no relay is probed). It holds no token, key or proxy credential.
-- The proxy stage reads this shell's environment. An installed service does not inherit it, so the line says so ([a runner behind a corporate proxy](#a-runner-behind-a-corporate-proxy)).
+- The proxy stage routes by the `HTTPS_PROXY` and `NO_PROXY` the runner's connection uses: the environment's, else `runner_proxy` and `runner_no_proxy` in `runnerd.json`. When they come from this shell and a service is installed, the line says the service does not receive them ([a runner behind a corporate proxy](#a-runner-behind-a-corporate-proxy)).
 - `wardyn doctor` runs the same network stages for the CLI, adds who `/api/v1/me` says you are, and runs this command's engine, image and relay stages when a runner is installed on the computer.
-- Not checked yet: the service's own state and a proxy that strips the WebSocket upgrade. The runner's last error reaches the organisation once it connects ([what the organisation sees](#what-the-organisation-sees-when-a-runner-cannot-connect)). Read the log for those ([a runner that never connected](#a-runner-that-never-connected)).
+- `wardyn-runnerd setup` runs the `trusted-ca`, `org-ca` (when set), `org-url`, `dns`, `proxy`, `tls`, `healthz`, `wire`, `service` and `status` stages first, against the settings it is about to install, and prints their lines. The proxy stage routes by the `HTTPS_PROXY` and `NO_PROXY` the service will get (this shell's, without a user name or password, else the earlier setup's) and not by this shell's own, and says so. When this shell's `HTTPS_PROXY` names that same proxy host and port with a user name and password, the check sends that credential to that proxy and nowhere else and never prints it; setup warns that the service needs it through the drop-in below. A proxy that answers 407 to a check with no credential stops setup, with a message that points at the drop-in; on Linux, if `runnerd-proxy.env` already exists beside `runnerd.json`, that 407 is a warning instead, because setup assumes the service gets the credential from it (setup checks that the file exists and never opens it, and has not verified the credential). A failed `org-url`, `dns`, `proxy`, `tls`, `healthz` or `wire` stage stops it before the token is spent, with the message `doctor` prints; a failure of any other stage is a warning. `healthz` stops it only for a proxy's 407, a redirect, an answer that is not Wardyn's health report or no connection: the runner never calls `/healthz`, so a plain 404, 403 or 5xx there is a warning, and `wire` and the registration decide. Its engine and relay checks are the ones `doctor` runs.
+- The runner's last error also reaches the organisation once it connects ([what the organisation sees](#what-the-organisation-sees-when-a-runner-cannot-connect)).
 
 ## What the organisation sees when a runner cannot connect
 
