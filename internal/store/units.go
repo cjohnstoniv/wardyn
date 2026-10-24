@@ -244,6 +244,24 @@ func upsertGovernanceUnitTx(ctx context.Context, tx Querier, p types.GovernanceU
 	return out, nil
 }
 
+// RenameGovernanceUnitQ sets unit id's name on q and nothing else, for a caller that reads what the
+// name alone changes and rolls it back: ErrConflict when UNIQUE(name) rejects it, ErrNotFound when no
+// row matched.
+func RenameGovernanceUnitQ(ctx context.Context, q Querier, id uuid.UUID, name string) error {
+	tag, err := q.Exec(ctx, `UPDATE governance_units SET name = $2 WHERE id = $1`, id, name)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return ErrConflict
+		}
+		return fmt.Errorf("store: rename governance unit: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // marshalOverlays is the two overlay columns of a composed row. An empty overlay_limits is stored
 // NULL, never as an empty object.
 func marshalOverlays(p types.GovernanceUnit) (overlay, overlayLimits any, err error) {

@@ -475,6 +475,123 @@ func TestLegacyMoveFollowsTheDatabaseOrder(t *testing.T) {
 	}
 }
 
+// legacyRename seeds two legacy rows at priority 5, one in ua-a1 and one in ua-b, of two groups one
+// person is in or of one person (st), and has ua-a1's admin rename ua-a1 to name. It returns the
+// answer and that person.
+func (e *unitAdminEnv) legacyRename(st types.CapabilitySubjectType, name string) (*httptest.ResponseRecorder, context.Context) {
+	e.t.Helper()
+	subjects, who := [2]string{"ua-eng", "ua-research"}, treeCtx("sub-ua-tie", []string{"ua-eng", "ua-research"}, "")
+	if st == types.CapabilitySubjectUser {
+		subjects, who = [2]string{"sub-ua-tie", "sub-ua-tie"}, treeCtx("sub-ua-tie", nil, "")
+	}
+	setLegacy(e.t, e.govEnv, treeMember(e.t, e.govEnv, e.a1, st, subjects[0], 5, false).ID,
+		treeMember(e.t, e.govEnv, e.b, st, subjects[1], 5, false).ID)
+	return e.call(e.adminA1, http.MethodPut, "/api/v1/governance/units/"+e.a1.ID.String(), e.restate(e.a1, map[string]any{"name": name})), who
+}
+
+// TestLegacyRenameUnitAdmin: at equal priority the unit name breaks a tie between legacy rows, so a
+// unit admin's rename of ua-a1 past ua-b hands the person ua-b. It is held, with the rows two groups
+// the person is in or the person's own two rows, and ua-a1's peer admin, who does not govern ua-b, is
+// refused; a security admin approves. A rename that keeps the order is decided over ua-a1 alone: its
+// peer admin approves the groups' rename, held as an equal-priority group tie, and the person's own
+// rows' rename applies directly.
+func TestLegacyRenameUnitAdmin(t *testing.T) {
+	group, user := types.CapabilitySubjectGroup, types.CapabilitySubjectUser
+	for _, tc := range []struct {
+		what         string
+		st           types.CapabilitySubjectType
+		name         string
+		held, shifts bool
+	}{
+		{"overlapping groups renamed past ua-b (the witness)", group, "ua-zeta", true, true},
+		{"one person's two rows renamed past ua-b", user, "ua-zeta", true, true},
+		{"overlapping groups renamed with the order kept", group, "ua-a0", true, false},
+		{"one person's two rows renamed with the order kept", user, "ua-a0", false, false},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			e := newUnitAdminEnv(t, false)
+			w, who := e.legacyRename(tc.st, tc.name)
+			selected := func() uuid.UUID {
+				t.Helper()
+				return unitIDOf(treeCeiling(t, e.govEnv, who))
+			}
+			want := e.a1.ID
+			if tc.shifts {
+				want = e.b.ID
+			}
+			if !tc.held {
+				if w.Code != http.StatusOK || e.pendingCount() != 0 || e.profile(e.a1.ID).Name != tc.name {
+					t.Fatalf("rename = %d %s with %d pending, want 200, none and the name %s", w.Code, w.Body, e.pendingCount(), tc.name)
+				}
+				if got := selected(); got != want {
+					t.Errorf("selected by %s after the rename, want ua-a1", got)
+				}
+				return
+			}
+			ch := e.pending(w)
+			if got := selected(); got != e.a1.ID || e.profile(e.a1.ID).Name != "ua-a1" {
+				t.Fatalf("before approval the person is selected by %s with ua-a1 named %q, want ua-a1 unrenamed", got, e.profile(e.a1.ID).Name)
+			}
+			approver := e.peerA1
+			if tc.shifts {
+				if w := e.call(e.peerA1, http.MethodPost, approvePath(ch.ID), ""); !scopeRefused(t, w) {
+					t.Errorf("ua-a1's peer admin approving = %d %s, want 403 unit_scope_denied", w.Code, w.Body)
+				}
+				approver = e.alice
+			}
+			if w := e.call(approver, http.MethodPost, approvePath(ch.ID), ""); w.Code != http.StatusOK {
+				t.Fatalf("approving = %d %s, want 200", w.Code, w.Body)
+			}
+			if got := selected(); got != want || e.profile(e.a1.ID).Name != tc.name {
+				t.Errorf("after approval the person is selected by %s with ua-a1 named %q, want %s and %s", got, e.profile(e.a1.ID).Name, want, tc.name)
+			}
+		})
+	}
+}
+
+// TestLegacyRenameHeldGoesStale: a held rename is decided over the units it would activate when held
+// (the witness: groups in ua-a1 and ua-b at one priority, ua-a1 renamed ua-zeta, so ua-b). An edit
+// since that changes what the rename would do makes the approval stale, even a security admin's, and
+// keeps the name: the ua-b row raised above the ua-a1 row's priority. An unrelated edit since leaves
+// the approval to apply.
+func TestLegacyRenameHeldGoesStale(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		edit  func(e *unitAdminEnv)
+		stale bool
+	}{
+		{"the ua-b row's priority raised above the ua-a1 row's", func(e *unitAdminEnv) {
+			if _, err := e.pool.Exec(context.Background(), `UPDATE governance_memberships SET priority = 9 WHERE id = $1`, e.rowOf("ua-research", e.b).ID); err != nil {
+				e.t.Fatalf("raise the ua-b row's priority: %v", err)
+			}
+		}, true},
+		{"an unrelated unit edited", func(e *unitAdminEnv) {
+			if w := e.admin(http.MethodPut, "/api/v1/governance/units/"+e.a2.ID.String(),
+				e.restate(e.a2, map[string]any{"overlay_limits": map[string]any{"deny_interactive": true}})); w.Code != http.StatusOK {
+				e.t.Fatalf("edit ua-a2 = %d %s", w.Code, w.Body)
+			}
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newUnitAdminEnv(t, false)
+			w, _ := e.legacyRename(types.CapabilitySubjectGroup, "ua-zeta")
+			ch := e.pending(w)
+			tc.edit(e)
+			w = e.call(e.alice, http.MethodPost, approvePath(ch.ID), "")
+			name := e.profile(e.a1.ID).Name
+			if tc.stale {
+				if w.Code != http.StatusConflict || wireReason(t, w) != reasonGovernanceChangeStale || name != "ua-a1" {
+					t.Fatalf("approving = %d %s with ua-a1 named %q, want 409 %s and the name kept", w.Code, w.Body, name, reasonGovernanceChangeStale)
+				}
+				return
+			}
+			if w.Code != http.StatusOK || name != "ua-zeta" {
+				t.Fatalf("approving = %d %s with ua-a1 named %q, want 200 and ua-zeta", w.Code, w.Body, name)
+			}
+		})
+	}
+}
+
 // TestUnitLockRefusesBothWays: locking a knob that a unit below states otherwise is refused, naming
 // those units, and their values are kept. Once a knob is locked, a write below that changes it is
 // refused, a narrowing included and for a security admin too; adding a lock applies directly, and a

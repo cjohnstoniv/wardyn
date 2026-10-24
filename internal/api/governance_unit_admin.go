@@ -357,6 +357,9 @@ func unitChangeScope(ch types.GovernanceChange) (units []uuid.UUID, strict, ok b
 		if ch.Op == "update" {
 			_ = json.Unmarshal(diff.Before, &before)
 			units = append(units, id)
+			for _, a := range slices.Concat(diff.Activates, diff.Vacates) { // a rename that reorders legacy rows (H3)
+				units = append(units, a.UnitID)
+			}
 			if sameJSON(before.ParentID, after.ParentID) {
 				return units, false, true
 			}

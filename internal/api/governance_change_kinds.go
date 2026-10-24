@@ -320,6 +320,19 @@ func (s *Server) holdUnitWrite(w http.ResponseWriter, r *http.Request, id uuid.U
 		kind: govKindUnit, op: op, key: id.String(), payload: heldProfilePayload(req, h.keep),
 		after: after, baseState: unitBaseState(h.all, id, h.row.ParentID),
 	}
+	if exists && cur.Name != row.Name {
+		shift, err := s.renameShift(r.Context(), id, row.Name)
+		if errors.Is(err, store.ErrConflict) {
+			writeErrorReason(w, http.StatusConflict, reasonGovernanceUnitNameConflict,
+				fmt.Sprintf("a governance profile named %q already exists", req.Name))
+			return
+		}
+		if err != nil {
+			writeServerError(w, r, "hold governance profile", err)
+			return
+		}
+		p.shift = shift
+	}
 	var beforeStored *unitDiffStored
 	if before != nil {
 		p.before, beforeStored = before, &before.unitDiffStored
@@ -335,6 +348,20 @@ func (s *Server) holdUnitWrite(w http.ResponseWriter, r *http.Request, id uuid.U
 		p.notes = append(p.notes, posture)
 	}
 	s.proposeGovernanceChange(w, r, p)
+}
+
+// renameShift is renameShiftQ for a held rename of unit id to name, read under the graph lock on a
+// rolled-back transaction once the write's own has ended. A snapshot that moves on before the decision
+// fails safe: the decision reads it again (applyUnitChange) and answers stale.
+func (s *Server) renameShift(ctx context.Context, id uuid.UUID, name string) (shift legacyShift, err error) {
+	err = s.cfg.Store.DryRunGovernance(ctx, func(q store.Querier) error {
+		if err := store.LockGovernanceGraph(ctx, q); err != nil {
+			return err
+		}
+		shift, err = renameShiftQ(ctx, q, id, name)
+		return err
+	})
+	return shift, err
 }
 
 // holdUnitDelete stores a profile delete as a pending change, after a dry run of the delete has
@@ -397,7 +424,15 @@ func applyUnitChange(s *Server, r *http.Request, q store.Querier, ch types.Gover
 		}
 		p, res, _, err := s.buildGovernanceUnit(ch.ProposedBy, s.isOperator(ctx), id, req, all, b, limit)
 		effective = res
-		return p, err
+		if err != nil {
+			return p, err
+		}
+		// A rename's legacy shift as it stands now (H3): what the change was held and scoped with.
+		shift, err := unitRenameShiftQ(ctx, q, all, id, p.Name)
+		if err != nil {
+			return p, err
+		}
+		return p, heldShiftStale(ch, shift)
 	})
 	var tier *mountTierRefusal
 	if errors.As(err, &tier) {

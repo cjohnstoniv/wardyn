@@ -258,6 +258,28 @@ func (req *governanceUnitRequest) parseComposition() string {
 	return ""
 }
 
+// writeUnit is store.WriteGovernanceUnit for a security caller, whose build is handed no transaction.
+func (s *Server) writeUnit(ctx context.Context, id uuid.UUID, build func(store.Querier) store.GovernanceUnitBuild) (types.GovernanceUnit, error) {
+	return s.cfg.Store.WriteGovernanceUnit(ctx, id, build(nil))
+}
+
+// unitWriteApplies reports whether a write build accepted applies without a second human: the
+// exemption (unitWriteExempt) judged on the assignments the write commits beside, and for a unit
+// admin's write, whose transaction q is handed in, no rename that changes whose legacy row wins
+// (unitRenameShiftQ, H3), since the unit it hands a person may be outside their units. A security
+// caller's write (q nil) is judged by the exemption alone.
+func (s *Server) unitWriteApplies(ctx context.Context, q store.Querier, all []types.GovernanceUnit, assignments []types.GovernanceMembership,
+	p types.GovernanceUnit, res *ResolvedUnit) (bool, error) {
+	if !s.unitWriteExempt(withGovernanceMemberships(ctx, assignments), all, p, res) {
+		return false, nil
+	}
+	if q == nil {
+		return true, nil
+	}
+	shift, err := unitRenameShiftQ(ctx, q, all, p.ID, p.Name)
+	return len(shift.activates)+len(shift.vacates) == 0, err
+}
+
 // writeGovernanceUnit is the shared body of POST and PUT: build the row under the graph lock,
 // persist, audit, and answer with the saved row plus warnings. id is the row to write (a fresh one
 // for POST, the path's for PUT) and status the success code.
@@ -279,7 +301,7 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 		writeErrorReason(w, http.StatusBadRequest, reasonGovernanceOverlayInvalid, msg)
 		return
 	}
-	write, unitAdmin := s.cfg.Store.WriteGovernanceUnit, s.isUnitAdminCaller(r.Context())
+	write, unitAdmin := s.writeUnit, s.isUnitAdminCaller(r.Context())
 	if unitAdmin {
 		if !s.unitWritePrecheck(w, r, id, status, req) {
 			return
@@ -311,8 +333,8 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 	putCreates := false
 	createdBy := principalFromRequest(r)
 	heldReq := req
-	saved, err := write(r.Context(), id,
-		func(all []types.GovernanceUnit, assignments []types.GovernanceMembership) (types.GovernanceUnit, error) {
+	saved, err := write(r.Context(), id, func(q store.Querier) store.GovernanceUnitBuild {
+		return func(all []types.GovernanceUnit, assignments []types.GovernanceMembership) (types.GovernanceUnit, error) {
 			putCreates = unitPutCreatesAtID(id, status, all)
 			if refusal := s.unitPutCreateRefusal(putCreates); refusal != nil {
 				return types.GovernanceUnit{}, refusal
@@ -324,15 +346,19 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 			heldReq = kept
 			p, res, keep, err := s.buildGovernanceUnit(createdBy, s.isOperator(r.Context()), id, kept, all, b, limit)
 			effective = res
-			exemptCtx := withGovernanceMemberships(r.Context(), assignments)
 			// A unit admin's new unit is empty, so it binds nobody and applies directly (DESIGN-TREE §5.2).
 			newUnit := !slices.ContainsFunc(all, func(x types.GovernanceUnit) bool { return x.ID == id })
-			if err == nil && mode == govQueue && !(unitAdmin && newUnit) && !s.unitWriteExempt(exemptCtx, all, p, res) {
+			if err != nil || mode != govQueue || (unitAdmin && newUnit) {
+				return p, err
+			}
+			applies, err := s.unitWriteApplies(r.Context(), q, all, assignments, p, res)
+			if err == nil && !applies {
 				held = &heldUnitWrite{all: all, row: p, res: res, keep: keep}
 				return p, errHoldForApproval
 			}
 			return p, err
-		})
+		}
+	})
 	if held != nil && errors.Is(err, errHoldForApproval) {
 		s.holdUnitWrite(w, r, id, heldReq, *held)
 		return
