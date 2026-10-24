@@ -441,8 +441,8 @@ func (d *Driver) listenOnRunNetwork(ctx context.Context, runID uuid.UUID, id str
 }
 
 // proxyNotReadyMessage is what a proxy that stays up but never prints its ready marker is reported as.
-// The failure reason shows in the console, so it keeps the exit-at-config-load wording until the owner
-// settles copy for this case: the text does not say the proxy exited.
+// The failure reason shows in the console, so it reuses the exit-at-config-load text until new copy is
+// settled for this case, although such a proxy has not exited.
 const proxyNotReadyMessage = "docker: proxy exited at config load"
 
 // proxyNotReadyError is a proxy that was still running when the ready bound ran out.
