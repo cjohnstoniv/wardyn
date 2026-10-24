@@ -849,6 +849,41 @@ func TestDesktopSignIns_ResumeThatLostItsLockLeavesANewerPauseAlone(t *testing.T
 	wantSuperseded(t, rows, *newer.v.PausedAt)
 }
 
+// A failed pause's continue is cancelled when the run's lock is lost even after the person's tab has
+// closed: the lock's context then keeps the tab's cause, so the lock itself is asked. Holding the lock
+// again with the row unmarked, the pause sends the continue once more.
+func TestDesktopSignIns_AContinueIsCancelledOnALockLostAfterTheTabClosed(t *testing.T) {
+	f := newVMSignInFixture(t, "memory")
+	drop := f.loseLocks()
+	f.rn.pauseErr = errors.New("guestagent: 502 Bad Gateway")
+	tab, closeTab := context.WithCancel(context.Background())
+	defer closeTab()
+	var first atomic.Bool
+	var cause error
+	f.rn.during = func(ctx context.Context, call string) {
+		if call != "resume" || !first.CompareAndSwap(false, true) {
+			return
+		}
+		closeTab()
+		drop(false)
+		select {
+		case <-ctx.Done():
+			cause = context.Cause(ctx)
+		case <-time.After(5 * time.Second):
+		}
+	}
+	w := doSSOCtx(t, f.srv, tab, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/desktop/sign-ins/pause", f.cookie, "")
+	if !errors.Is(cause, db.ErrLockLost) {
+		t.Fatalf("the continue's context ended with %v, want it cancelled with the lost lock", cause)
+	}
+	if w.Code != http.StatusBadGateway || !strings.Contains(w.Body.String(), reasonDesktopSignInsPauseFailed) {
+		t.Fatalf("pause = %d %s, want the failed pause's 502", w.Code, w.Body.String())
+	}
+	if got := f.rn.seen(); !slices.Equal(got, []string{"pause vm-1", "resume vm-1", "resume vm-1"}) || f.rn.agentStopped() {
+		t.Fatalf("runner calls = %v, want the failed pause, its cancelled continue and one under the lock taken again", got)
+	}
+}
+
 // A resume whose continue answers an error, with the run's lock lost during it, is reconciled as one
 // that answered: a newer pause has marked the row since, and the continue may have landed after its
 // stop. The resume takes the lock again, stops the agent once more under it, and leaves that pause's

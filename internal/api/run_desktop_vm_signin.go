@@ -319,8 +319,8 @@ func (s *Server) desktopRelock(base context.Context, run types.AgentRun, st stor
 
 // continueStoppedAgent continues the agent a failed pause may have stopped, so it is never left
 // stopped with no mark, which no resume would continue: a stop can land even when the runner answers
-// an error. It sends under the run's lock, and the continue is cancelled if that lock is lost during it
-// (lockBound). With the lock lost before or during it, unlock releases the lost hold, the lock is taken
+// an error. It sends under the run's lock, and the continue is cancelled once that lock is seen lost
+// during it (lockBound). With the lock lost before or during it, unlock releases the lost hold, the lock is taken
 // again and the row read again (reconcileLostLock): newer is the row of a pause that has marked it
 // since, which owns the stopped agent and whose resume continues it. ok is false when the lock could not
 // be taken again: nothing more is sent.
@@ -328,7 +328,7 @@ func (s *Server) continueStoppedAgent(base, lockCtx, bg context.Context, p runne
 	st store.DesktopVMSignInStore, unlock func()) (newer *store.DesktopVMSignIns, ok bool) {
 	sent := false
 	if s.lockHeld(bg) == nil {
-		send, stop := lockBound(lockCtx, bg)
+		send, stop := s.lockBound(lockCtx, bg)
 		_ = p.ResumeAgent(send, run.SandboxRef)
 		stop()
 		if s.lockHeld(bg) == nil {
@@ -363,14 +363,30 @@ func (s *Server) reconcileLostLock(base context.Context, p runner.AgentPauser, r
 	return ctx, row, relocked, ok
 }
 
-// lockBound is bg, cancelled too, with db.ErrLockLost, once lockCtx's lock is lost, but not when
-// lockCtx ends otherwise (the person's tab closed). A call the runner already received still lands.
-// stop releases it.
-func lockBound(lockCtx, bg context.Context) (context.Context, func()) {
+// lockBound is bg, cancelled too, with db.ErrLockLost, once the run's lock that lockCtx carries is seen
+// lost, and never by the person's closed tab. A lock's context the tab ended first keeps that cause for
+// good (db.LockHeld), so from then on the lock itself is asked, every db.LockWatchInterval. A call the
+// runner already received still lands: the lock check after the call and reconcileLostLock deal with
+// that. stop releases it.
+func (s *Server) lockBound(lockCtx, bg context.Context) (context.Context, func()) {
 	ctx, cancel := context.WithCancelCause(bg)
 	after := context.AfterFunc(lockCtx, func() {
 		if cause := context.Cause(lockCtx); errors.Is(cause, db.ErrLockLost) {
 			cancel(cause)
+			return
+		}
+		t := time.NewTicker(db.LockWatchInterval)
+		defer t.Stop()
+		for {
+			if err := s.lockHeld(bg); err != nil {
+				cancel(err)
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
 		}
 	})
 	return ctx, func() { after(); cancel(nil) }
