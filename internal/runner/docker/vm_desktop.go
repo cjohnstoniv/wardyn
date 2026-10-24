@@ -31,26 +31,29 @@ func (d *Driver) DialDesktop(ctx context.Context, ref string) (io.ReadWriteClose
 }
 
 // PauseAgent implements runner.AgentPauser: the guest agent stops the agent's process group, and the
-// guest and its display keep running. A container has no guest agent, so it is refused.
-func (d *Driver) PauseAgent(ctx context.Context, ref string) error {
+// guest and its display keep running. A container has no guest agent, so it is refused. fenced is the
+// guest agent's own answer: false from a guest image that predates the generation.
+func (d *Driver) PauseAgent(ctx context.Context, ref string, gen int64) (bool, error) {
 	v := d.vmFor(ctx, ref)
 	if v == nil {
-		return runner.ErrAgentPauseUnsupported
+		return false, runner.ErrAgentPauseUnsupported
 	}
-	if err := v.agent.PauseAgent(ctx); err != nil {
-		return fmt.Errorf("docker: pause the VM's agent: %w", err)
+	fenced, err := v.agent.PauseAgent(ctx, gen)
+	if err != nil {
+		return false, fmt.Errorf("docker: pause the VM's agent: %w", err)
 	}
-	return nil
+	return fenced, nil
 }
 
 // ResumeAgent implements runner.AgentPauser: the guest agent continues the agent's process group.
-func (d *Driver) ResumeAgent(ctx context.Context, ref string) error {
+func (d *Driver) ResumeAgent(ctx context.Context, ref string, gen int64) (bool, error) {
 	v := d.vmFor(ctx, ref)
 	if v == nil {
-		return runner.ErrAgentPauseUnsupported
+		return false, runner.ErrAgentPauseUnsupported
 	}
-	if err := v.agent.ResumeAgent(ctx); err != nil {
-		return fmt.Errorf("docker: resume the VM's agent: %w", err)
+	fenced, err := v.agent.ResumeAgent(ctx, gen)
+	if err != nil {
+		return false, fmt.Errorf("docker: resume the VM's agent: %w", err)
 	}
-	return nil
+	return fenced, nil
 }

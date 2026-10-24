@@ -23,6 +23,9 @@ type RunOptions struct {
 	Log    *slog.Logger
 	// Desktop serves desktop.sock; nil leaves it unserved.
 	Desktop DesktopShim
+	// DesktopPassword is the run's VNC password, served on ctl.sock (OpDesktopPassword) and wiped
+	// when Run returns; nil is a run with no desktop.
+	DesktopPassword *DesktopSecret
 	// NetWait bounds the wait for runnerd's net_fd before the VM starts.
 	NetWait time.Duration
 	// HoldIdleSleep, if set, is started once the VM runs and its stop func
@@ -77,6 +80,9 @@ func Run(ctx context.Context, o RunOptions) error {
 	}
 	if o.NetWait == 0 {
 		o.NetWait = 2 * time.Minute
+	}
+	if o.DesktopPassword != nil {
+		defer o.DesktopPassword.Wipe()
 	}
 	cfg, err := ReadRunConfig(o.RunDir)
 	if err != nil {
@@ -345,6 +351,13 @@ func (r *runner) stop(graceful bool, timeout time.Duration) error {
 		return fmt.Errorf("macvm: VM is %s after stop", st.State)
 	}
 	return nil
+}
+
+func (r *runner) desktopPassword() (string, error) {
+	if r.o.DesktopPassword == nil {
+		return "", ErrNoDesktopPassword
+	}
+	return r.o.DesktopPassword.Credential(context.Background())
 }
 
 func (r *runner) netFD(f *os.File) error {
