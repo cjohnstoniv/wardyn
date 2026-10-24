@@ -1,0 +1,115 @@
+{
+  "keyed_sha": "561b585f250b30b99eea216a92c0d4f13db2426f",
+  "proofs": [
+    {
+      "name": "ad3-proxy-listens-only-once-open",
+      "package": "./internal/egress/proxy",
+      "run": "^TestSelfLapse_ListensOnlyOnceOpen$",
+      "tags": "",
+      "files": {
+        "internal/egress/proxy/server.go": ".proofs/files/ad3-proxy-listens-only-once-open/internal/egress/proxy/server.go"
+      },
+      "want_fail": "--- FAIL: TestSelfLapse_ListensOnlyOnceOpen"
+    },
+    {
+      "name": "ad3-k8s-no-agent-pod-while-proxy-refuses",
+      "package": "./internal/runner/k8s",
+      "run": "^TestRunnerCreateSandbox_NoAgentPodWhileItsProxyRefuses$",
+      "tags": "k8s",
+      "files": {
+        "internal/runner/k8s/sandbox.go": ".proofs/files/ad3-k8s-no-agent-pod-while-proxy-refuses/internal/runner/k8s/sandbox.go"
+      },
+      "want_fail": "--- FAIL: TestRunnerCreateSandbox_NoAgentPodWhileItsProxyRefuses"
+    },
+    {
+      "name": "ad3-k8s-older-proxy-warns-once",
+      "package": "./internal/runner/k8s",
+      "run": "^TestRunnerCreateSandbox_OlderProxyImageWarnsOnce$",
+      "tags": "k8s",
+      "files": {
+        "internal/runner/k8s/sandbox.go": ".proofs/files/ad3-k8s-older-proxy-warns-once/internal/runner/k8s/sandbox.go"
+      },
+      "want_fail": "--- FAIL: TestRunnerCreateSandbox_OlderProxyImageWarnsOnce"
+    },
+    {
+      "name": "ad3-api-unrecorded-run-promises-no-recording",
+      "package": "./internal/api",
+      "run": "^TestRunOutput_UnrecordedRunPromisesNoRecording$",
+      "tags": "",
+      "files": {
+        "internal/api/run_output.go": ".proofs/files/ad3-api-unrecorded-run-promises-no-recording/internal/api/run_output.go"
+      },
+      "want_fail": "--- FAIL: TestRunOutput_UnrecordedRunPromisesNoRecording"
+    },
+    {
+      "name": "ad4-api-exit-retry-doubles",
+      "package": "./internal/api",
+      "run": "^TestRunnerExitRetryWaitsDoublingAndCountsRefusalsInARow$",
+      "tags": "",
+      "files": {
+        "internal/api/runner_exits.go": ".proofs/files/ad4-api-exit-retry-doubles/internal/api/runner_exits.go"
+      },
+      "want_fail": "--- FAIL: TestRunnerExitRetryWaitsDoublingAndCountsRefusalsInARow"
+    },
+    {
+      "name": "ad4-api-exit-retry-logs-once",
+      "package": "./internal/api",
+      "run": "^TestRunnerExitRetryLogsAnIdenticalErrorOncePerInterval$",
+      "tags": "",
+      "files": {
+        "internal/api/runner_exits.go": ".proofs/files/ad4-api-exit-retry-logs-once/internal/api/runner_exits.go"
+      },
+      "want_fail": "--- FAIL: TestRunnerExitRetryLogsAnIdenticalErrorOncePerInterval"
+    },
+    {
+      "name": "ad4-doctor-reports-parked-exits",
+      "package": "./cmd/wardyn",
+      "run": "^TestDoctorRunnerExitsStageSaysWhenReceiptsAreParked$",
+      "tags": "",
+      "files": {
+        "cmd/wardyn/doctor.go": ".proofs/files/ad4-doctor-reports-parked-exits/cmd/wardyn/doctor.go"
+      },
+      "want_fail": "--- FAIL: TestDoctorRunnerExitsStageSaysWhenReceiptsAreParked"
+    },
+    {
+      "name": "fence-api-failed-record-sends-nothing",
+      "package": "./internal/api",
+      "run": "^TestDesktopSignIns_APauseWithNoGenerationSendsNothing$",
+      "tags": "",
+      "files": {
+        "internal/api/run_desktop_vm_signin.go": ".proofs/files/fence-api-failed-record-sends-nothing/internal/api/run_desktop_vm_signin.go"
+      },
+      "want_fail": "--- FAIL: TestDesktopSignIns_APauseWithNoGenerationSendsNothing"
+    },
+    {
+      "name": "fence-api-stop-again-takes-own-generation",
+      "package": "./internal/api",
+      "run": "^TestDesktopSignIns_ALateContinueNeverRunsANewerPausesAgent$",
+      "tags": "",
+      "files": {
+        "internal/api/run_desktop_vm_signin.go": ".proofs/files/fence-api-stop-again-takes-own-generation/internal/api/run_desktop_vm_signin.go"
+      },
+      "want_fail": "--- FAIL: TestDesktopSignIns_ALateContinueNeverRunsANewerPausesAgent"
+    },
+    {
+      "name": "fence-guest-unfenced-resume-dropped",
+      "package": "./internal/vm/guestagent",
+      "run": "^TestAnUnfencedResumeAfterAFencedPauseIsDropped$",
+      "tags": "",
+      "files": {
+        "internal/vm/guestagent/fence.go": ".proofs/files/fence-guest-unfenced-resume-dropped/internal/vm/guestagent/fence.go"
+      },
+      "want_fail": "--- FAIL: TestAnUnfencedResumeAfterAFencedPauseIsDropped"
+    },
+    {
+      "name": "fence-runner-relays-pause-generation",
+      "package": "./internal/runner/runneragent",
+      "run": "^TestDispatcherRelaysThePauseGeneration$",
+      "tags": "",
+      "files": {
+        "internal/runner/runneragent/dispatch.go": ".proofs/files/fence-runner-relays-pause-generation/internal/runner/runneragent/dispatch.go"
+      },
+      "want_fail": "--- FAIL: TestDispatcherRelaysThePauseGeneration"
+    }
+  ]
+}
