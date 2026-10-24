@@ -1,0 +1,301 @@
+// Copyright 2026 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// Package stage1test is a fake macOS guest's Remote Login for stage 1's
+// tests: an in-process SSH server (x/crypto/ssh) that records every exec's
+// command line and stdin, and acts out the few commands whose effect a later
+// step depends on (sudo's password line, dscl's password change, dd's file
+// write, shasum, Remote Login off). Dial stands in for the prep relay.
+package stage1test
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"io"
+	"net"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+
+	"golang.org/x/crypto/ssh"
+)
+
+// Exec is one command the guest ran.
+type Exec struct {
+	Line  string
+	Argv  []string
+	Stdin []byte
+}
+
+// Server is the fake guest.
+type Server struct {
+	// Fail, when it returns true for an argv (sudo stripped), makes that
+	// command exit 1 and echo its stdin on stderr, as a careless tool might.
+	Fail func(argv []string) bool
+	// DropOnOff ends the session of Remote Login off with no exit status.
+	DropOnOff bool
+	// StaysOn keeps Remote Login answering after it was turned off.
+	StaysOn bool
+	// KeyboardOnly takes the password through keyboard-interactive (PAM)
+	// only, as one hidden prompt.
+	KeyboardOnly bool
+
+	mu       sync.Mutex
+	user     string
+	password string
+	key      ssh.Signer
+	on       bool
+	execs    []Exec
+	files    map[string][]byte
+	dials    []int
+	ln       net.Listener
+}
+
+// New starts a guest whose account user has password, with Remote Login on.
+func New(t testing.TB, user, password string) *Server {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{user: user, password: password, on: true, files: map[string][]byte{}, ln: ln}
+	s.NewHostKey(t)
+	t.Cleanup(func() { _ = ln.Close() })
+	go s.accept()
+	return s
+}
+
+// NewHostKey gives the guest a new host key for every later connection.
+func (s *Server) NewHostKey(t testing.TB) ssh.PublicKey {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	s.key = k
+	s.mu.Unlock()
+	return k.PublicKey()
+}
+
+// Dial is the prep relay's DialGuest: refused unless Remote Login is on and
+// port is 22.
+func (s *Server) Dial(ctx context.Context, port int) (net.Conn, error) {
+	s.mu.Lock()
+	s.dials = append(s.dials, port)
+	on := s.on
+	s.mu.Unlock()
+	if !on || port != 22 {
+		return nil, errors.New("connection refused")
+	}
+	var d net.Dialer
+	return d.DialContext(ctx, "tcp", s.ln.Addr().String())
+}
+
+// SetPassword sets the account's password, as the provisioning boot does.
+func (s *Server) SetPassword(pw string) {
+	s.mu.Lock()
+	s.password = pw
+	s.mu.Unlock()
+}
+
+// Execs is every command run so far.
+func (s *Server) Execs() []Exec {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]Exec(nil), s.execs...)
+}
+
+// Dials is every port dialled so far.
+func (s *Server) Dials() []int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]int(nil), s.dials...)
+}
+
+// Password is the account's password now.
+func (s *Server) Password() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.password
+}
+
+// File is what dd wrote to path.
+func (s *Server) File(path string) []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.files[path]
+}
+
+// RemoteLogin says whether Remote Login is on.
+func (s *Server) RemoteLogin() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.on
+}
+
+func (s *Server) accept() {
+	for {
+		c, err := s.ln.Accept()
+		if err != nil {
+			return
+		}
+		go s.serve(c)
+	}
+}
+
+func (s *Server) serve(c net.Conn) {
+	defer func() { _ = c.Close() }()
+	s.mu.Lock()
+	check := func(user, pw string) (*ssh.Permissions, error) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if user == s.user && pw == s.password {
+			return nil, nil
+		}
+		return nil, errors.New("wrong password")
+	}
+	cfg := &ssh.ServerConfig{}
+	if s.KeyboardOnly {
+		cfg.KeyboardInteractiveCallback = func(m ssh.ConnMetadata, ask ssh.KeyboardInteractiveChallenge) (*ssh.Permissions, error) {
+			a, err := ask(m.User(), "", []string{"Password:"}, []bool{false})
+			if err != nil || len(a) != 1 {
+				return nil, errors.New("no answer")
+			}
+			return check(m.User(), a[0])
+		}
+	} else {
+		cfg.PasswordCallback = func(m ssh.ConnMetadata, pw []byte) (*ssh.Permissions, error) { return check(m.User(), string(pw)) }
+	}
+	cfg.AddHostKey(s.key)
+	s.mu.Unlock()
+	_, chans, reqs, err := ssh.NewServerConn(c, cfg)
+	if err != nil {
+		return
+	}
+	go ssh.DiscardRequests(reqs)
+	for nc := range chans {
+		if nc.ChannelType() != "session" {
+			_ = nc.Reject(ssh.UnknownChannelType, "session only")
+			continue
+		}
+		ch, creqs, err := nc.Accept()
+		if err != nil {
+			return
+		}
+		go s.session(ch, creqs)
+	}
+}
+
+func (s *Server) session(ch ssh.Channel, reqs <-chan *ssh.Request) {
+	defer func() { _ = ch.Close() }()
+	for r := range reqs {
+		if r.Type != "exec" {
+			_ = r.Reply(false, nil)
+			continue
+		}
+		var p struct{ Line string }
+		if err := ssh.Unmarshal(r.Payload, &p); err != nil {
+			_ = r.Reply(false, nil)
+			return
+		}
+		_ = r.Reply(true, nil)
+		stdin, _ := io.ReadAll(ch)
+		code, stdout, stderr, drop := s.exec(p.Line, stdin)
+		_, _ = ch.Write(stdout)
+		_, _ = ch.Stderr().Write(stderr)
+		if drop {
+			return
+		}
+		_, _ = ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{uint32(code)}))
+		return
+	}
+}
+
+var sudo = []string{"/usr/bin/sudo", "-k", "-S", "-p", "", "--"}
+
+func (s *Server) exec(line string, stdin []byte) (code int, stdout, stderr []byte, drop bool) {
+	argv := Split(line)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.execs = append(s.execs, Exec{Line: line, Argv: argv, Stdin: stdin})
+	rest := stdin
+	if len(argv) >= len(sudo) && slices.Equal(argv[:len(sudo)], sudo) {
+		pw, after, _ := bytes.Cut(stdin, []byte("\n"))
+		if string(pw) != s.password {
+			return 1, nil, []byte("Sorry, try again.\n"), false
+		}
+		argv, rest = argv[len(sudo):], after
+	}
+	if s.Fail != nil && s.Fail(argv) {
+		return 1, nil, append([]byte("failed; stdin was: "), stdin...), false
+	}
+	switch {
+	case slices.Equal(argv, []string{"/usr/bin/dscl", "."}):
+		f := strings.Fields(strings.TrimSpace(string(rest)))
+		if len(f) != 4 || f[0] != "passwd" || f[1] != "/Users/"+s.user || f[2] != s.password {
+			return 1, nil, append([]byte("passwd: DS error: eDSAuthFailed; input: "), rest...), false
+		}
+		s.password = f[3]
+	case len(argv) == 2 && argv[0] == "/bin/dd" && strings.HasPrefix(argv[1], "of="):
+		s.files[strings.TrimPrefix(argv[1], "of=")] = append([]byte(nil), rest...)
+	case len(argv) == 4 && argv[0] == "/usr/bin/shasum":
+		sum := sha256.Sum256(s.files[argv[3]])
+		return 0, []byte(hex.EncodeToString(sum[:]) + "  " + argv[3] + "\n"), nil, false
+	case len(argv) == 4 && argv[0] == "/usr/sbin/systemsetup" && argv[2] == "-setremotelogin" && argv[3] == "off":
+		s.on = s.StaysOn
+		return 0, nil, nil, s.DropOnOff
+	}
+	return 0, nil, nil, false
+}
+
+// Split is a command line's words: blanks separate them, and '...' quotes
+// (a quote inside is written quote, backslash, quote, quote), the only quoting stage 1 writes.
+func Split(line string) []string {
+	var out []string
+	var w strings.Builder
+	inWord, quoted := false, false
+	r := bufio.NewReader(strings.NewReader(line))
+	for {
+		c, err := r.ReadByte()
+		if err != nil {
+			break
+		}
+		switch {
+		case quoted && c == '\'':
+			quoted = false
+		case quoted:
+			w.WriteByte(c)
+		case c == '\'':
+			quoted, inWord = true, true
+		case c == '\\':
+			if n, err := r.ReadByte(); err == nil {
+				w.WriteByte(n)
+				inWord = true
+			}
+		case c == ' ':
+			if inWord {
+				out = append(out, w.String())
+				w.Reset()
+				inWord = false
+			}
+		default:
+			w.WriteByte(c)
+			inWord = true
+		}
+	}
+	if inWord {
+		out = append(out, w.String())
+	}
+	return out
+}
