@@ -31,7 +31,7 @@
 |---|---|
 | The Mac | Apple silicon, macOS 27 or later. Apple's unattended setup of the guest needs macOS 27 on the host |
 | Docker | A running engine on the Mac, such as Docker Desktop. The guest's network relay and proxy run in it, and the runner needs it to start |
-| Disk | About 85 GB free to prepare, then about 107 GB free to start a second VM ([Disk](#disk)) |
+| Disk | About 85 GiB free to prepare, then about 107 GiB free to start a second VM ([Disk](#disk)) |
 | Power | On AC power to start preparing ([Preparing the base image](#preparing-the-base-image)) |
 | A login | Someone logged in on the Mac ([Logins, FileVault and restarts](#logins-filevault-and-restarts)) |
 | Company-managed | The Mac's trust class is `managed_device` and its posture file says `mdm_managed` ([Which Macs qualify](#which-macs-qualify)) |
@@ -59,7 +59,7 @@
 ## Which Macs qualify
 
 - A macOS VM runs only on a Mac that both of these hold for:
-  - its trust class is `managed_device`, which only a security operator sets (`wardyn runner trust <runner-id> managed_device`), held for a second person under four-eyes;
+  - its trust class is `managed_device`, which only a security operator sets (`wardyn runner trust <runner-id> managed_device --reason "<why>"`), held for a second person under four-eyes;
   - its posture says `mdm_managed`, with the MDM's root-owned posture file as the evidence (`/Library/Application Support/Wardyn/posture.json`).
 - Both are assertions. Wardyn does not yet check the Mac's MDM device certificate; that arrives in the next patch.
 - A Mac not marked `managed_device` is refused `placement_capability`. A Mac whose posture is missing or unmet is refused `runner_posture_unmet`.
@@ -67,7 +67,7 @@
 
 ## Apple's licence and the two-VM limit
 
-- Apple's licence allows at most two additional macOS instances on a Mac for this use, and the framework refuses a third. Wardyn counts first.
+- Apple's licence allows up to two additional copies or instances of macOS on a Mac for development, testing, macOS Server or personal non-commercial use. The framework refuses a third. Wardyn counts first.
 - One ledger on the Mac counts every macOS VM, whichever login or purpose: a run, preparing the base, and a tools update. Preparing holds one of the two slots.
 - A third VM is refused with the reason. Docker's own Linux VM does not count.
 - Nothing in a Wardyn release contains macOS. The restore image comes from Apple to the Mac that uses it, and it is never uploaded, exported or stored in a registry.
@@ -98,18 +98,18 @@
 
 ## How many VMs a Mac offers
 
-- The Mac offers a number, `max`, of at most 2. It is the runner's own live macOS VM runs plus how many more the Mac's ledger can admit now. The runner recomputes it every 10 seconds.
+- The Mac offers a number, `max`, of at most 2. It is the runner's own live macOS VM runs plus how many more the Mac's ledger can admit now. The runner recomputes it every 15 seconds.
 - Two limits apply, and both can set it to 0:
   - The runner's declared memory totals. Docker's memory setting decides them: a total cannot pass the memory Docker reports, and a per-run limit cannot pass its total.
   - The Mac's memory budget: its memory, minus what Docker reports, minus 4 GiB for macOS. Each VM costs its guest memory plus about 1 GiB of host overhead.
 - Left at the defaults, a runner's total is half of Docker's memory, shared among its runs. That is usually below one macOS guest's minimum, so set the limits when you register (`--total-memory`, `--per-run-memory`, `--total-cpu`, `--per-run-cpu`).
 - `wardyn-runnerd setup` shows this arithmetic with the Mac's own numbers and names what to change.
 
-| Mac | Docker memory | Limits | `max` |
+| Mac memory | Docker memory | Limits (GiB) | `max` |
 |---|---|---|---|
-| 32 GB | 12 GB | `--total-memory 12 --per-run-memory 6` | 2: the runner's total holds 2 x 6, and the budget (32 - 12 - 4 = 16) holds 2 x (6 + 1) |
-| 16 GB | 4 GB | `--total-memory 4 --per-run-memory 4` | 1: the budget is 8, one guest needs 5 and two need 10 |
-| 16 GB | 8 GB | Any | 0 if the base's minimum is over 3 GB: the budget is 4 |
+| 32 GiB | 12 GiB | `--total-memory 12 --per-run-memory 6` | 2: the runner's total holds 2 x 6, and the budget (32 - 12 - 4 = 16) holds 2 x (6 + 1) |
+| 16 GiB | 4 GiB | `--total-memory 4 --per-run-memory 4` | 1: the budget is 8, one guest needs 5 and two need 10 |
+| 16 GiB | 8 GiB | Any | 0 if the base's minimum is over 3 GiB: the budget is 4 |
 
 - A run whose applied CPU or memory is below the base's minimum is refused, naming the minimum. The server keeps a run within the runner's per-run limits and never raises them.
 - A start is also refused when the Mac's available memory is under the guest's plus 2 GiB, and when the Mac is too hot.
@@ -117,7 +117,7 @@
 
 ## Disk
 
-- Preparing needs about 85 GB free. Starting a VM reserves its disk's logical size plus 1 GiB (51 GiB), and needs that much free plus a 5 GiB floor. A second VM therefore needs about 107 GB free when it starts.
+- Preparing needs about 85 GiB free. Starting a VM reserves its disk's logical size plus 1 GiB (51 GiB), and needs that much free plus a 5 GiB floor. A second VM therefore needs about 107 GiB free when it starts.
 - The reservation bounds each VM's growth on the live volume, because a clone's private blocks cannot pass the disk's logical size.
 - **What it does not bound.** Space held by the Mac's own APFS snapshots, such as Time Machine's hourly local snapshots, is outside the reservation.
   - While a snapshot keeps a clone's earlier blocks, rewriting them uses new space, and a deleted run's blocks stay allocated until the snapshot goes.
@@ -175,7 +175,8 @@
 
 - Wardyn brokers some credential kinds: the proxy injects them into a request in Docker, and the value never enters the guest.
 - Other kinds do enter the guest. A secret that arrives as an environment variable or a file, and an SSH key, are in the guest's memory and on its disk while the run lives.
-- On the Mac, the only copies are inside the run's clone disk in the Mac user's home. Wardyn deletes the disk at the end of the run, which is not secure erasure (above).
+- A delivered value is in the guest's memory while the run lives. On the Mac's disk, the copies are inside the run's clone disk in the Mac user's home. Wardyn deletes the disk at the end of the run, which is not secure erasure (above).
+- **The desktop's VNC password.** It is 8 random characters generated on the Mac, per run (once per base if the guest cannot change it per run). It is used only between the helper and the guest over a virtual socket, and is not sent to the organisation or the browser.
 - The Mac's own user can read a live run's disk, as the owner of a Docker laptop runner controls the engine. Posture does not constrain a root developer.
 - A person may sign in to websites and apps in the desktop. Those sign-ins enter the sandbox and are kept on the run's virtual disk, because a macOS guest has swap and keeps its keychain and browser profiles on disk. The Linux promise that they live only in memory does not hold here.
 - An agent set "Sign-ins in a desktop: Not allowed" is refused a macOS desktop, because a macOS keychain cannot be made read-only in this release.

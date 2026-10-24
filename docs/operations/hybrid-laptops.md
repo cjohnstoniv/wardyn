@@ -215,7 +215,7 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 | `/Library/LaunchAgents/com.wardyn.runnerd.managed.plist` | starts the runner at login, like the agent `setup` writes |
 | `/usr/local/wardyn/bin/runnerd-managed-start` | the agent's launcher: idle until the person is registered |
 | `/usr/local/wardyn/share/wardyn-runnerd.mobileconfig` | the profile template |
-| `/usr/local/wardyn/bin/wardyn-macvm` | the macOS VM helper (Apple silicon packages only); unused unless [macOS VMs](macos-vms.md) are turned on |
+| `/usr/local/wardyn/bin/wardyn-macvm` | the macOS VM helper (the helper runs on Apple silicon only); unused unless [macOS VMs](macos-vms.md) are turned on |
 | `/Users/Shared/Wardyn/` | the shared macOS VM ledger the package creates, root-owned: see [The shared ledger](macos-vms.md#the-shared-ledger) |
 
 1. Fill in the profile template (`OrgURL`, two fresh UUIDs, your organisation name) and push it from your MDM as a **custom settings** profile.
@@ -257,14 +257,14 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 - A Mac can run macOS VM sandboxes (`machine_kind: macos_vm`) when both its switch and the organisation's are on. [macOS VM sandboxes](macos-vms.md) has the requirements, the base image and the limits.
 - The Mac must be company-managed in the two ways the page names: a security operator marks it `managed_device`, and your MDM delivers the posture file.
 
-1. Push the package as above. Its helper and ledger need the Apple silicon package and macOS 27 or later.
+1. Push the package as above. The VM helper runs on Apple silicon only, and macOS VMs need macOS 27 or later.
 2. Add the `MacOSVM` key to the profile, set to `true`.
 3. Push the posture file to `/Library/Application Support/Wardyn/posture.json`, with `mdm_managed` true.
 4. Have a security operator run `wardyn runner trust <runner-id> managed_device --reason "<why>"`.
 5. Ask the Mac's person to run `wardyn-runnerd macos-vm prepare` while on power, with Docker running.
 
 - The Mac offers macOS VMs only while someone is logged in. With FileVault on, that is after a login following each restart.
-- A pool must have every runner offer them: a mixed pool refuses macOS VMs, as it does Linux VMs.
+- macOS VMs need a pool where every runner offers them; a mixed pool refuses them. This matches Linux VMs.
 
 ## A folder on your computer for a remote sandbox
 
