@@ -77,6 +77,8 @@ var _ runner.SandboxStarter = (*Driver)(nil)
 type proxyPrep struct {
 	extraHosts []string
 	cfgJSON    []byte
+	// localModelPorts are the laptop local model ports the relay serves this proxy once it runs.
+	localModelPorts []uint16
 }
 
 // prepareProxy computes runID's proxyPrep from the control plane's cfgJSON, marked vm for a desktop VM
@@ -115,6 +117,10 @@ func (d *Driver) prepareProxy(ctx context.Context, runID uuid.UUID, cfgJSON []by
 	if err != nil {
 		return proxyPrep{}, err
 	}
+	cfgJSON, modelPorts, err := d.withRunnerLocalModels(cfgJSON)
+	if err != nil {
+		return proxyPrep{}, err
+	}
 	if !d.cfg.ProxyServesAnyPeer {
 		subnets, err := d.runSubnets(ctx, runID)
 		if err != nil {
@@ -127,7 +133,7 @@ func (d *Driver) prepareProxy(ctx context.Context, runID uuid.UUID, cfgJSON []by
 			return proxyPrep{}, err
 		}
 	}
-	return proxyPrep{extraHosts: hosts, cfgJSON: cfgJSON}, nil
+	return proxyPrep{extraHosts: hosts, cfgJSON: cfgJSON, localModelPorts: modelPorts}, nil
 }
 
 // EnvProxySandboxPeersOnly is the inverse of Config.ProxyServesAnyPeer: on unless set off.
@@ -249,6 +255,10 @@ func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[str
 		remove()
 		return "", err
 	}
+	if err := d.openLocalModels(ctx, runID, resp.ID, prep.localModelPorts); err != nil {
+		remove()
+		return "", err
+	}
 	// Watch briefly for the proxy exiting right back out — the shape of it
 	// refusing its own rendered config at boot (a strict-decode error, an
 	// unreadable MITM key, …). Without this, CreateSandbox pressed straight on
@@ -260,6 +270,7 @@ func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[str
 	// the per-run network; on the ReplaceProxy path it stays so its logs
 	// still name the cause, and the next revive removes it by name.
 	if err := d.watchProxyExit(ctx, resp.ID); err != nil {
+		d.closeLocalModels(runID) // an exited proxy's addresses are free for another container
 		return resp.ID, err
 	}
 	return resp.ID, nil

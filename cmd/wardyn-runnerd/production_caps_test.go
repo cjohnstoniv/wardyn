@@ -27,6 +27,20 @@ import (
 // refuses a run that sets one a runner does not name, so a runner that dropped them would refuse
 // those runs on every version.
 func TestRunnerRuntimeAdvertisesEveryProxySetting(t *testing.T) {
+	if got := composedCaps(t, runtimeExtras{noPosture: true, arch: "amd64"}).ProxySettings; !slices.Equal(got, runnerwire.ProxySettings) {
+		t.Fatalf("caps advertise proxy settings %v, want %v", got, runnerwire.ProxySettings)
+	}
+	// The Docker runtime relays a laptop local model (#2957), and says so; the org sends one to no
+	// runner that does not.
+	want := append(slices.Clone(runnerwire.ProxySettings), runnerwire.ProxySettingLocalModelRelay)
+	if got := composedCaps(t, runtimeExtras{noPosture: true, arch: "amd64", localModelRelay: true}).ProxySettings; !slices.Equal(got, want) {
+		t.Fatalf("with the local model relay, caps advertise proxy settings %v, want %v", got, want)
+	}
+}
+
+// composedCaps is the caps event the composed runtime with extra sends the organisation.
+func composedCaps(t *testing.T, extra runtimeExtras) runnerwire.Caps {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	pub, key, err := ed25519.GenerateKey(rand.Reader)
@@ -35,7 +49,7 @@ func TestRunnerRuntimeAdvertisesEveryProxySetting(t *testing.T) {
 	}
 	identity := runneridentity.Identity{RunnerID: uuid.New(), PrivateKey: key}
 	runtime, err := runnerRuntimeWith(ctx, identity, t.TempDir(), runnertest.NewFake(), func(id uuid.UUID) string { return "fake-" + id.String() },
-		newLocalRelay(ctx), unsized, runtimeExtras{noPosture: true, arch: "amd64"})
+		newLocalRelay(ctx), unsized, extra)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +93,8 @@ func TestRunnerRuntimeAdvertisesEveryProxySetting(t *testing.T) {
 		}
 	}
 	caps, ok := remoteSub.Caps()
-	if !ok || !slices.Equal(caps.ProxySettings, runnerwire.ProxySettings) {
-		t.Fatalf("caps (ok=%v) advertise proxy settings %v, want %v", ok, caps.ProxySettings, runnerwire.ProxySettings)
+	if !ok {
+		t.Fatal("no caps")
 	}
+	return caps
 }

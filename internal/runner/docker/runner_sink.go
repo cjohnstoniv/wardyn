@@ -119,6 +119,7 @@ func (d *Driver) drainSink(ctx context.Context, runID uuid.UUID) {
 // removed container's process has ended, which is completion evidence. A failed remove is an error to
 // retry, and settles nothing.
 func (d *Driver) removeProxy(ctx context.Context, runID uuid.UUID) error {
+	d.closeLocalModels(runID) // before the remove frees the proxy's addresses
 	if _, err := d.cli.ContainerRemove(ctx, proxyContainerName(runID), client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
 		return fmt.Errorf("docker: remove proxy: %w", err)
 	}

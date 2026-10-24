@@ -107,7 +107,10 @@ type Caps struct {
 	Support substrate.ClassSupport `json:"support"`
 	placement.Capacity
 	AllowedRoots []string `json:"allowed_roots,omitempty"`
-	Version      string   `json:"version"`
+	// LocalModelPorts are the laptop local model ports the person allows on this runner
+	// (--local-model-port): a run whose model server is on another port is refused before it is sent.
+	LocalModelPorts []uint16 `json:"local_model_ports,omitempty"`
+	Version         string   `json:"version"`
 	// MachineName is the host's own name (os.Hostname), stored as the runner's machine_name.
 	MachineName string `json:"machine_name,omitempty"`
 	// Arch is the Docker engine's CPU architecture ("amd64" or "arm64"), stored as the runner's arch;
@@ -162,6 +165,23 @@ const (
 	ProxySettingKubeAPI        = "kube_api"
 	ProxySettingCanonicalRepos = "canonical_push_repos"
 )
+
+// ProxySettingLocalModelRelay is no proxy.Config field: a Docker runner names it when it relays a
+// laptop local model (LocalModelSettings.AllowOnLaptopRunners) from its own computer to its run's proxy.
+// The org refuses such a create on a runner that does not name it (LocalModelRelayNeeded); it is not in
+// ProxySettings, which every runner substrate carries.
+const ProxySettingLocalModelRelay = "local_model_relay"
+
+// LocalModelRelayNeeded reports whether pc has a laptop local model, which only a runner naming
+// ProxySettingLocalModelRelay serves.
+func LocalModelRelayNeeded(pc runner.ProxyConfig) bool {
+	for _, s := range pc.LocalModels {
+		if s.AllowOnLaptopRunners {
+			return true
+		}
+	}
+	return false
+}
 
 // ProxySettings is every run proxy setting this build's runner carries through to its proxy, in the
 // order ProxySettingsSet tests them.

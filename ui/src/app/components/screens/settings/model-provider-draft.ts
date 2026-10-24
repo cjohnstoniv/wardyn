@@ -62,6 +62,8 @@ export interface ProviderDraft {
   // local_model only. `useToken` is the "This server asks for a token" switch (auth is
   // sent only while it is on); the three limits are text, empty meaning the default.
   useToken: boolean;
+  // local_model only: local.allow_on_laptop_runners, the "Let runs on a person's own computer…" switch.
+  laptopRunners: boolean;
   models: string[];
   maxContext: string;
   maxOutput: string;
@@ -122,6 +124,7 @@ export function newDraft(kind: EditorKind, harnesses: HarnessRow[]): ProviderDra
     ssoAccountId: "",
     ssoRoleName: "",
     useToken: false,
+    laptopRunners: false,
     models: [],
     maxContext: "",
     maxOutput: "",
@@ -149,6 +152,7 @@ export function draftFrom(p: ModelProvider, harnesses: HarnessRow[]): ProviderDr
     ssoAccountId: p.bedrock?.sso_account_id ?? "",
     ssoRoleName: p.bedrock?.sso_role_name ?? "",
     useToken: !!p.auth,
+    laptopRunners: !!p.local?.allow_on_laptop_runners,
     models: p.local?.models ?? [],
     maxContext: p.local?.max_context ? String(p.local.max_context) : "",
     maxOutput: p.local?.max_output ? String(p.local.max_output) : "",
@@ -211,6 +215,7 @@ export function providerFrom(draft: ProviderDraft, base: ModelProvider | null, t
           max_context: limit(draft.maxContext),
           max_output: limit(draft.maxOutput),
           keep_alive_seconds: limit(draft.keepAlive),
+          allow_on_laptop_runners: draft.laptopRunners || undefined,
         }
       : undefined,
     // Anything the editor doesn't show (a custom Bedrock endpoint override) is
@@ -246,6 +251,17 @@ const header = (p: ModelProvider) =>
 // orphans every credential given under the old one. Owner ruling 2026-09-25
 // (PR #1038 review): the existing confirm covers it verbatim — no new string,
 // no new dialog.
+// laptopBaseUrlRefused: the switch is on and Base URL names a host other than host.docker.internal, which
+// the server refuses (mp400LocalLaptopHost); the editor says so under Base URL before Save.
+export function laptopBaseUrlRefused(draft: ProviderDraft): boolean {
+  if (!isLocal(draft.kind) || !draft.laptopRunners || !draft.baseUrl.trim()) return false;
+  try {
+    return new URL(draft.baseUrl.trim()).hostname.toLowerCase().replace(/\.$/, "") !== "host.docker.internal";
+  } catch {
+    return true;
+  }
+}
+
 export function addressChanged(a: ModelProvider, b: ModelProvider): boolean {
   if (
     a.kind !== b.kind ||

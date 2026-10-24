@@ -57,6 +57,7 @@ import { useDiscardReload } from "../../wardyn/use-discard-reload";
 import { useRovingRadio } from "../../wardyn/use-roving-radio";
 import { useDeferredBusy } from "../../../lib/use-deferred-busy";
 import { ModelChips } from "./model-chips";
+import { LaptopRunnersSwitch } from "./model-provider-laptop";
 import {
   EDITOR_KINDS,
   addressChanged,
@@ -69,6 +70,7 @@ import {
   newDraft,
   providerFrom,
   refusedField,
+  laptopBaseUrlRefused,
   refusedHarness,
   refusedModel,
   vendorHost,
@@ -380,6 +382,7 @@ function ProviderFields({
   const endpoint = isEndpoint(draft.kind);
   const local = isLocal(draft.kind);
   const badField = refusedField(refused);
+  const laptopBad = laptopBaseUrlRefused(draft);
   const bedrock = isBedrock(draft.kind);
   const sso = draft.kind === "bedrock_sso";
   const routeThrough = draft.kind === "anthropic_api_key" || draft.kind === "openai_api_key";
@@ -478,11 +481,20 @@ function ProviderFields({
 
       {local && (
         <>
-          <Field label={PROVIDER_EDITOR.BASE_URL} htmlFor="mp-base-url" hint={LOCAL_MODEL_EDITOR.BASE_URL_HINT}>
+          <Field
+            label={PROVIDER_EDITOR.BASE_URL}
+            htmlFor="mp-base-url"
+            hint={
+              <>
+                {laptopBad && <span className="mb-1 block text-destructive">{LOCAL_MODEL_EDITOR.LAPTOP_BASE_URL}</span>}
+                {LOCAL_MODEL_EDITOR.BASE_URL_HINT}
+              </>
+            }
+          >
             <Input
               id="mp-base-url"
               className="font-mono"
-              aria-invalid={badField === "base_url" || undefined}
+              aria-invalid={badField === "base_url" || laptopBad || undefined}
               value={draft.baseUrl}
               onChange={(e) => set({ baseUrl: e.target.value })}
             />
@@ -512,6 +524,7 @@ function ProviderFields({
               <p className="text-xs leading-snug text-muted-foreground">{LOCAL_MODEL_EDITOR.TOKEN_OFF_HINT}</p>
             )}
           </div>
+          <LaptopRunnersSwitch on={draft.laptopRunners} onChange={(laptopRunners) => set({ laptopRunners })} />
           <Field label={LOCAL_MODEL_EDITOR.MODELS} htmlFor="mp-models">
             <ModelChips
               id="mp-models"

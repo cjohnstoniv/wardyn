@@ -60,6 +60,9 @@ type localModel struct {
 	plaintext bool // the server speaks http://
 	models    map[string]bool
 	bounds    types.LocalModelSettings
+	// relayed: Config.RunnerLocalModels names it, so the server is on the runner's own computer
+	// and answers at the runner's relay address (vetTrustedHost).
+	relayed bool
 }
 
 func localModelKey(host string, port int) string {
@@ -70,7 +73,7 @@ func localModelKey(host string, port int) string {
 // pair the brokered route dials (llmUpstream). An entry that does not parse is
 // dropped, so its route has no gate entry and is never dialled in cleartext
 // (Config.validateLocalModels refuses it at load).
-func compileLocalModels(in map[string]types.LocalModelSettings) map[string]*localModel {
+func compileLocalModels(in map[string]types.LocalModelSettings, relayed []string) map[string]*localModel {
 	out := make(map[string]*localModel, len(in))
 	for raw, s := range in {
 		u, err := url.Parse(raw)
@@ -84,7 +87,7 @@ func compileLocalModels(in map[string]types.LocalModelSettings) map[string]*loca
 		if n, err := strconv.Atoi(u.Port()); err == nil && n > 0 {
 			port = n
 		}
-		lm := &localModel{plaintext: u.Scheme == "http", models: map[string]bool{}, bounds: s.LocalModelBounds()}
+		lm := &localModel{plaintext: u.Scheme == "http", models: map[string]bool{}, bounds: s.LocalModelBounds(), relayed: slices.Contains(relayed, raw)}
 		for _, m := range s.Models {
 			if !types.LocalModelNameRefused(m) {
 				lm.models[m] = true
@@ -110,6 +113,11 @@ func (c *Config) validateLocalModels() error {
 			return fmt.Errorf("config: local_models[%q]: not an llm_upstreams address", raw)
 		case len(s.Models) == 0 || slices.ContainsFunc(s.Models, types.LocalModelNameRefused):
 			return fmt.Errorf("config: local_models[%q]: models must list at least one model, none with a \"/\" or a cloud tag", raw)
+		}
+	}
+	for _, raw := range c.RunnerLocalModels {
+		if s, ok := c.LocalModels[raw]; !ok || !s.AllowOnLaptopRunners {
+			return fmt.Errorf("config: runner_local_models: %q is not a local_models entry allowed on laptop runners", raw)
 		}
 	}
 	return nil

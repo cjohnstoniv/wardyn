@@ -422,11 +422,18 @@ func (p *Proxy) gatewayTarget(host string, port int) (string, error) {
 // The one lift: a registered local model server (localModelAt — exactly the
 // host and port the control plane wrote) may answer on the first address of
 // one of this proxy's own subnets, which on a Docker bridge network is the
-// Docker host itself. No other own-subnet address, and never the control plane.
+// Docker host itself. No other own-subnet address, and never the control plane,
+// except on a runner for a server it relays (localModel.relayed): there the
+// control-plane name and host.docker.internal both resolve to the runner's relay
+// address, and this host and port alone may answer there.
 func (p *Proxy) vetTrustedHost(host string, port int) (string, error) {
 	h := strings.TrimSuffix(strings.ToLower(host), ".")
-	local := p.localModelAt(h, port) != nil
+	lm := p.localModelAt(h, port)
+	local := lm != nil
 	refused := func(ip net.IP) bool {
+		if local && lm.relayed && !p.exclusionUnknown && slices.ContainsFunc(p.controlPlaneIPs, ip.Equal) {
+			return ipguard.GatewayIPRefused(ip)
+		}
 		if local && p.ownSubnetGateway(ip) && !p.onControlPlane(ip) {
 			return ipguard.GatewayIPRefused(ip)
 		}

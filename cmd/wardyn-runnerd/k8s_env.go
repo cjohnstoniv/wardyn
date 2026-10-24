@@ -195,6 +195,9 @@ func checkSubstrateFlags(substrate string, changed func(string) bool) error {
 	if substrate != "docker" && changed("drive-root") {
 		return errors.New("--drive-root applies only to --substrate=docker")
 	}
+	if substrate != "docker" && changed("local-model-port") {
+		return errors.New("--local-model-port applies only to --substrate=docker")
+	}
 	switch substrate {
 	case "folders":
 		for _, f := range append([]string{"relay-listen", "relay-host-target", "internal-network"}, k8sServeFlags...) {

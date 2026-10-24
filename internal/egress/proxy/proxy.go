@@ -395,7 +395,7 @@ func newProxy(opts Options) *Proxy {
 		exclusionUnknown:     opts.ExclusionUnknown,
 		llmUpstreams:         llmUpstreams,
 		llmUnavailableDetail: opts.LLMUnavailableDetail,
-		localModels:          compileLocalModels(opts.LocalModels),
+		localModels:          compileLocalModels(opts.LocalModels, opts.RunnerLocalModels),
 		pushHolds:            pushHolds{unattended: opts.Unattended},
 		scrubResponses:       opts.ScrubResponses,
 		canonicalPushRepos:   opts.CanonicalPushRepos,
