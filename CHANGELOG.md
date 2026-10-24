@@ -11,6 +11,20 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Changed
+
+- On `agent-base`, an exec-mode run (`workload.kind: command`) that clones a repository or names a starting folder
+  now gets the same workspace prep a harness run does: the repos are cloned into `/home/agent/work` and the git
+  credential helper is ready, where the clone was skipped and the folder left empty unless the run also had a
+  starting folder. A run with neither is unchanged.
+
+### Fixed
+
+- The image launcher split each `WARDYN_REPOS` clone record with a tab as whitespace, so an empty field moved the
+  fields after it up a place. This control plane never sends such a record. A control plane that sends only the
+  single-repository variables (`WARDYN_REPO_URL`, `WARDYN_REPO_SLUG`) got no git broker rewrite, and a record with
+  an empty middle field lost its branch. Empty fields now stay in place.
+
 ## [0.10.0-rc.1] — 2026-10-24
 
 ### Before you upgrade
