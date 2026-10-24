@@ -1608,7 +1608,8 @@ func TestDesktopSignIns_RecordedOnlyFromTheGuestsReport(t *testing.T) {
 func TestDesktopSignIns_ARunThatEndsPausedWritesItsOneRow(t *testing.T) {
 	for name, end := range map[string]func(*types.AgentRun, time.Time){
 		"killed": func(r *types.AgentRun, at time.Time) { r.State, r.EndedAt = types.RunKilled, &at },
-		"kept":   func(r *types.AgentRun, at time.Time) { r.LostAt = &at },
+		"kept":   func(r *types.AgentRun, at time.Time) { r.LostAt, r.LostReason = &at, types.LostEnded },
+		"reboot": func(r *types.AgentRun, at time.Time) { r.LostAt, r.LostReason = &at, types.LostReboot },
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newVMSignInFixture(t, "memory")
@@ -1648,6 +1649,24 @@ func TestDesktopSignIns_ARunThatEndsPausedWritesItsOneRow(t *testing.T) {
 				t.Fatalf("runner calls = %v, want the pause alone", got)
 			}
 		})
+	}
+}
+
+// A run lost to an outage keeps its agent running and can be revived, so its pause is not over: the
+// sweep writes no row and leaves the mark.
+func TestDesktopSignIns_AnOutageLostRunKeepsItsPause(t *testing.T) {
+	f := newVMSignInFixture(t, "memory")
+	if code, v, body := f.do(t, http.MethodPost, "/pause"); code != http.StatusOK || !v.Paused {
+		t.Fatalf("pause = %d %s", code, body)
+	}
+	lostAt := time.Now().UTC().Add(time.Minute)
+	f.run.LostAt, f.run.LostReason = &lostAt, types.LostOutage
+	f.st.putRun(f.run)
+	if err := f.srv.sweepEndedDesktopVMPauses(context.Background()); err != nil || len(f.signInRows()) != 0 {
+		t.Fatalf("sweep = %v, rows %d, want no row", err, len(f.signInRows()))
+	}
+	if row, _, _ := f.st.DesktopVMSignIns(context.Background(), f.run.ID); row.PausedAt == nil {
+		t.Fatalf("the mark was cleared for a run that can be revived: %+v", row)
 	}
 }
 

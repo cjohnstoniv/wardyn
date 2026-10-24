@@ -673,7 +673,9 @@ func (s *Server) sweepEndedDesktopVMPauses(ctx context.Context) error {
 	}
 	for _, p := range paused {
 		run, err := s.cfg.Store.GetRun(ctx, p.RunID)
-		if err != nil || (!run.State.IsTerminal() && !runIsKept(run)) {
+		// A kept run whose lease ended or whose container exited is over. A kept run lost to an outage
+		// still has its agent running and may be revived, so its pause stands.
+		if err != nil || (!run.State.IsTerminal() && !(run.LostAt != nil && (run.LostReason == types.LostEnded || run.LostReason == types.LostReboot))) {
 			continue
 		}
 		// A lease-ended run stays RUNNING while it is kept, so its end is LostAt, not EndedAt.
@@ -691,6 +693,7 @@ func (s *Server) sweepEndedDesktopVMPauses(ctx context.Context) error {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", auditDesktopSignIn, run.ID.String(), "success",
 			mustJSON(map[string]any{"paused_by": by, "paused_at": pausedAt, "ended_paused": true, "ended_at": endedAt,
 				"paused_seconds": int(endedAt.Sub(pausedAt).Seconds())})))
+		s.endDesktopHold(ctx, run, vmSignInHold(run.ID, pausedAt))
 	}
 	return nil
 }
