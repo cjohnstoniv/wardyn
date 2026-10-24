@@ -10,6 +10,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -64,5 +65,92 @@ func TestContainmentRetryErrorIsLoggedOncePerInterval(t *testing.T) {
 	}
 	if lines != 1 {
 		t.Fatalf("%d ERROR lines for %d identical failures within 5 s, want 1:\n%s", lines, calls.Load(), buf.String())
+	}
+}
+
+// refStop fails StopProxy for one ref every time and records, on the fake clock, when each other ref
+// was first stopped.
+type refStop struct {
+	failing string
+	now     func() time.Time
+	mu      sync.Mutex
+	calls   map[string]int
+	first   map[string]time.Time
+}
+
+func (s *refStop) StopProxy(_ context.Context, ref string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls[ref]++
+	if ref == s.failing {
+		return errors.New("docker unreachable")
+	}
+	if _, ok := s.first[ref]; !ok {
+		s.first[ref] = s.now()
+	}
+	return nil
+}
+
+// One run's containment fails on every tick for ten minutes of fake time. It is still tried on every
+// tick, a run that lapses five minutes in is first contained on the very next tick, inheriting no wait
+// from the other's failures, and the repeated ERROR line stays a handful of lines, not one a second.
+func TestContainmentFailureDelaysNoOtherRunAndLogsBounded(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	m, _, _, org := managerFixture(t)
+	failing, lapsing := createLocal(t, m, org), createLocal(t, m, org)
+	var seconds atomic.Int64
+	base := time.Now()
+	now := func() time.Time { return base.Add(time.Duration(seconds.Load()) * time.Second) }
+	stop := &refStop{now: now, calls: map[string]int{}, first: map[string]time.Time{}}
+	const lapseAt, total = 300, 600
+	ticks := make(chan time.Time)
+	m.mu.Lock()
+	r := m.state.Runs[failing]
+	r.FailedCreation = true
+	m.state.Runs[failing] = r
+	stop.failing = r.Ref
+	lapsingRef := m.state.Runs[lapsing].Ref
+	m.now, m.stopper, m.ticks = now, stop, ticks
+	// Each pass starts one fake second after the last; the second run lapses at lapseAt.
+	m.tick = func(context.Context) {
+		if seconds.Add(1) == lapseAt {
+			m.mu.Lock()
+			r := m.state.Runs[lapsing]
+			r.FailedCreation = true
+			m.state.Runs[lapsing] = r
+			m.mu.Unlock()
+		}
+	}
+	m.mu.Unlock()
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error)
+	go func() { done <- m.Run(ctx) }()
+	for range total - 1 {
+		ticks <- time.Time{}
+	}
+	ticks <- time.Time{} // returns once the last pass has run
+	cancel()
+	<-done
+	stop.mu.Lock()
+	defer stop.mu.Unlock()
+	if got := stop.calls[stop.failing]; got < total {
+		t.Errorf("the failing run was tried %d times in %d ticks, want every tick", got, total)
+	}
+	first, ok := stop.first[lapsingRef]
+	if !ok || first.Sub(base) != lapseAt*time.Second {
+		t.Fatalf("the run that lapsed at %ds was first contained at %v (tried=%v), want on that same pass", lapseAt, first.Sub(base), ok)
+	}
+	var lines int
+	for line := range strings.Lines(buf.String()) {
+		var r map[string]any
+		if json.Unmarshal([]byte(line), &r) == nil && r["level"] == "ERROR" && r["msg"] == "runner containment will retry" {
+			lines++
+		}
+	}
+	if lines == 0 || lines > 10 {
+		t.Errorf("%d ERROR lines over %d s of the same failure, want a handful", lines, total)
 	}
 }

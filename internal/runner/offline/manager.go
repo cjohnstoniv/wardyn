@@ -68,6 +68,8 @@ type Manager struct {
 	observer     runner.ProxyObserver
 	lastObserved time.Time
 	tick         func(context.Context)
+	// ticks replaces Run's 1 s ticker, a fake-clock test seam; nil is the real ticker.
+	ticks <-chan time.Time
 }
 
 // Options are the manager's substrate-specific behaviours.
@@ -546,8 +548,14 @@ func (m *Manager) Run(ctx context.Context) error {
 	stopped := make(chan struct{})
 	go func() { defer close(stopped); m.replayLoop(replayCtx) }()
 	defer func() { cancel(); <-stopped }()
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
+	// Every tick runs the whole pass, whatever failed on the last: a failure never delays containment
+	// of another run, or of itself. Only the repeated ERROR line is spaced out (logRetry).
+	ticks := m.ticks
+	if ticks == nil {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		ticks = ticker.C
+	}
 	for {
 		safety, done := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		m.mu.Lock()
@@ -564,7 +572,7 @@ func (m *Manager) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker.C:
+		case <-ticks:
 		}
 	}
 }

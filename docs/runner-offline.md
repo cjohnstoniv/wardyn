@@ -38,7 +38,7 @@ before its next try: 5 seconds, doubling to a 5-minute cap. An identical error
 is logged once per such interval, with `repeated` counting the lines left out.
 A restart retries every pending receipt at once. A receipt the organisation
 refuses as a foreign, stale or incomplete incarnation on 8 tries in a row
-(about ten minutes) is parked (migration `0231_runner_exit_parked.sql`): the
+(about ten minutes) is parked (migration `0232_runner_exit_parked.sql`): the
 row is kept with `parked_at` set and still blocks another generation, a
 `runner.exit.park` audit row records the tries and the error, and the worker
 no longer retries it. `wardyn doctor` on the runner's computer reports it as
