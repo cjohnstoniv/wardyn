@@ -105,6 +105,10 @@ type PrepareOptions struct {
 	MemoryMiB uint64
 	DiskBytes int64 // 0: BaseDiskBytes
 	KeepIPSW  bool
+	// Reprepare builds a whole new base even when one is ready (a newer
+	// restore image, or the operator asked) and swaps it in for the old one.
+	// Without it a ready base is returned as it is.
+	Reprepare bool
 	// HelperVersion goes into the manifest.
 	HelperVersion string
 	Progress      func(PrepareEvent)
@@ -133,6 +137,14 @@ const provisionUser = "wardyn-admin"
 // stopping the installer is undefined behaviour. If such a step is cut short
 // anyway (power loss, restart, the helper dies), the next Prepare discards
 // the partial base and restarts from create with the cached restore image.
+//
+// A re-prepare (o.Reprepare with a ready base) never writes under the live
+// base. Like a tools update it holds the base's update lock for its whole run,
+// builds the new base in the staging dir <base>.update, and swaps it in with
+// one exchange under the base's lock; runs keep cloning the old base
+// meanwhile, and the old generation is deleted after the exchange. Cut short,
+// it leaves the live base as it was, and the next update or re-prepare sweeps
+// the staging dir.
 func Prepare(ctx context.Context, o PrepareOptions) (Manifest, error) {
 	p, err := newPrep(o)
 	if err != nil {
@@ -190,9 +202,28 @@ func (p *prep) run(ctx context.Context) (Manifest, error) {
 	if err := thermalGate(p.Engine); err != nil {
 		return Manifest{}, err
 	}
-	// A ready base is kept; an update prepares into another slot's dir.
-	if m, err := ReadyBase(p.base); err == nil {
+	// A ready base is kept unless a re-prepare was asked for.
+	if m, err := ReadyBase(p.base); err == nil && !p.Reprepare {
 		return m, nil
+	}
+	for _, d := range []string{p.Layout.Root, p.cache, filepath.Dir(p.base)} {
+		if err := mkdirPrivate(d); err != nil {
+			return Manifest{}, err
+		}
+	}
+	staging, done, err := beginUpdate(ctx, p.base)
+	if err != nil {
+		return Manifest{}, err
+	}
+	defer done()
+	// A first prepare builds in place: until its manifest is ready nothing
+	// clones it. A re-prepare builds in the staging dir.
+	live := p.base
+	if m, err := ReadyBase(live); err == nil {
+		if !p.Reprepare {
+			return m, nil // another prepare finished it while this one waited
+		}
+		p.base = staging
 	}
 	if p.Admit != nil {
 		release, err := p.Admit(ctx)
@@ -201,10 +232,8 @@ func (p *prep) run(ctx context.Context) (Manifest, error) {
 		}
 		defer release()
 	}
-	for _, d := range []string{p.Layout.Root, p.cache, filepath.Dir(p.base), p.base} {
-		if err := mkdirPrivate(d); err != nil {
-			return Manifest{}, err
-		}
+	if err := mkdirPrivate(p.base); err != nil {
+		return Manifest{}, err
 	}
 	if err := p.discardInterrupted(); err != nil {
 		return Manifest{}, err
@@ -264,6 +293,11 @@ func (p *prep) run(ctx context.Context) (Manifest, error) {
 	}
 	if err := os.Remove(filepath.Join(p.base, installingMarker)); err != nil {
 		return Manifest{}, err
+	}
+	if p.base != live {
+		if err := swapBase(ctx, p.base, live); err != nil {
+			return Manifest{}, err
+		}
 	}
 	if !p.KeepIPSW {
 		_ = os.Remove(ipsw)

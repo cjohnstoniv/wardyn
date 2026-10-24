@@ -612,17 +612,11 @@ func UpdateTools(ctx context.Context, o UpdateOptions) (Manifest, bool, error) {
 		o.Now = time.Now
 	}
 	base := o.Layout.BaseDir(o.Slot)
-	nb := base + ".update"
-	unlock, err := lockFile(ctx, updateLockPath(base), true)
+	nb, done, err := beginUpdate(ctx, base)
 	if err != nil {
 		return Manifest{}, false, err
 	}
-	defer unlock()
-	// Sweep what a crashed update left (a half-built staging copy, or an old
-	// generation after a swap), whether or not this call goes on to update.
-	if err := os.RemoveAll(nb); err != nil {
-		return Manifest{}, false, err
-	}
+	defer done()
 	m, err := ReadyBase(base)
 	if err != nil {
 		return m, false, err
@@ -662,7 +656,6 @@ func UpdateTools(ctx context.Context, o UpdateOptions) (Manifest, bool, error) {
 	if err != nil {
 		return m, false, err
 	}
-	defer os.RemoveAll(nb) // the failed clone; after a swap, the old base
 	spec := MachineSpec{
 		CPUs: o.CPUs, MemoryBytes: o.MemoryMiB * mib, MinCPUs: m.MinCPUs, MinMemoryBytes: m.MinMemoryMiB * mib,
 		HardwareModel: m.HardwareModel, MachineIdentifier: id.MachineIdentifier,
@@ -691,6 +684,25 @@ func UpdateTools(ctx context.Context, o UpdateOptions) (Manifest, bool, error) {
 	}
 	o.Progress(PrepareEvent{Phase: PhaseReady, Fraction: 1})
 	return m, true, nil
+}
+
+// beginUpdate takes base's update lock for a tools update or a re-prepare and
+// sweeps what a crashed one left in the staging dir <base>.update (a half-built
+// base, or an old generation after a swap), whether or not the caller goes on
+// to build. It returns the staging dir; done deletes it (after a swap, the old
+// generation, so that goes once the base lock is released) and then drops the
+// update lock.
+func beginUpdate(ctx context.Context, base string) (staging string, done func(), err error) {
+	staging = base + ".update"
+	unlock, err := lockFile(ctx, updateLockPath(base), true)
+	if err != nil {
+		return "", nil, err
+	}
+	if err := os.RemoveAll(staging); err != nil {
+		unlock()
+		return "", nil, err
+	}
+	return staging, func() { _ = os.RemoveAll(staging); unlock() }, nil
 }
 
 // swapBase exchanges the updated base nb with base while holding base's lock

@@ -177,6 +177,7 @@ func cmdPrepare(ctx context.Context, args []string, d deps) int {
 	cpus := fs.Int("cpus", 0, "the runner's per-run CPU limit (never raised)")
 	memMiB := fs.Uint64("memory-mib", 0, "the runner's per-run memory limit in MiB (never raised)")
 	keep := fs.Bool("keep-ipsw", false, "keep the downloaded restore image")
+	reprepare := fs.Bool("reprepare", false, "build a new base even when one is ready (a newer restore image), and swap it in")
 	runner := fs.String("runner-id", "", "the runner whose admission entry this prepare holds")
 	entry := fs.String("ledger-entry", "", "the admission entry runnerd took for this prepare")
 	ledgerDir := fs.String("ledger-dir", "", "the admission ledger directory (default: the package's)")
@@ -200,7 +201,7 @@ func cmdPrepare(ctx context.Context, args []string, d deps) int {
 	enc := json.NewEncoder(d.stdout)
 	o := macvm.PrepareOptions{
 		Engine: eng, Layout: macvm.Layout{Root: *root}, Slot: *slot, Power: macvm.PmsetPower{},
-		CPUs: *cpus, MemoryMiB: *memMiB, KeepIPSW: *keep, HelperVersion: version.String(),
+		CPUs: *cpus, MemoryMiB: *memMiB, KeepIPSW: *keep, Reprepare: *reprepare, HelperVersion: version.String(),
 		Progress: func(ev macvm.PrepareEvent) { _ = enc.Encode(ev) },
 		// runnerd took the entry; the helper claims it before any VM exists,
 		// and runnerd releases it after verified destruction.
