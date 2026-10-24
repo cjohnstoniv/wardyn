@@ -354,12 +354,14 @@ if command -v systemd-analyze >/dev/null 2>&1; then
   _t="$(mktemp -d)"
   sed "s#__WARDYN_DESKTOP_SH__#${DESK_DIR}/wardyn-desktop.sh#" "${UNIT}" > "${_t}/wardyn.service"
   cp "${TIMER}" "${_t}/wardyn.timer"
-  # Filter this HOST's unrelated unit warnings; only our two files' verdict counts.
+  # Keep only lines about our two units; the host's own units warn too, and
+  # which ones changes with the runner image (ubuntu-26.04's systemd flags
+  # CPUAccounting= in xfs_scrub and walinuxagent units).
   # CAPTURE, THEN MATCH — never `grep | grep -q` under `pipefail`: `grep -q`
   # exits on its first match while systemd-analyze/the upstream grep are still
   # writing, the upstream takes SIGPIPE, and pipefail reports the pipeline
   # failed even on a clean (matching) verdict.
-  _verify_warnings="$(systemd-analyze verify "${_t}/wardyn.service" "${_t}/wardyn.timer" 2>&1 | grep -vE 'docker\.socket|legacy directory' || true)"
+  _verify_warnings="$(systemd-analyze verify "${_t}/wardyn.service" "${_t}/wardyn.timer" 2>&1 | grep -E 'wardyn\.(service|timer)' || true)"
   if ! grep -q . <<<"${_verify_warnings}"; then
     :  # no output => clean
   else
