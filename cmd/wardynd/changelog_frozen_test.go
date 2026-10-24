@@ -20,14 +20,22 @@ import (
 	"testing"
 )
 
-// changelogVersionHeading matches one "## [X.Y.Z]" release heading, capturing
-// the version. "## [Unreleased]" never matches — there is no tag to compare
-// it against.
-var changelogVersionHeading = regexp.MustCompile(`(?m)^## \[(\d+\.\d+\.\d+)\]`)
+// changelogVersion is the one version grammar the heading and the tag share: a
+// final "X.Y.Z" or a release candidate "X.Y.Z-rc.N" (RELEASING.md).
+const changelogVersion = `\d+\.\d+\.\d+(?:-rc\.\d+)?`
+
+// changelogVersionHeading matches one "## [X.Y.Z]" or "## [X.Y.Z-rc.N]" release
+// heading, capturing the version. "## [Unreleased]" never matches — there is no
+// tag to compare it against.
+var changelogVersionHeading = regexp.MustCompile(`(?m)^## \[(` + changelogVersion + `)\]`)
+
+// changelogTag matches a release tag, final or candidate, capturing the version.
+var changelogTag = regexp.MustCompile(`^v(` + changelogVersion + `)$`)
 
 // changelogSections splits a CHANGELOG.md text into one body per released
 // heading, from the heading line up to (not including) the next "## ["
-// heading or EOF, keyed by version.
+// heading — a release candidate's included, so it ends the section above it —
+// or EOF, keyed by version.
 func changelogSections(doc string) map[string]string {
 	lines := strings.Split(doc, "\n")
 	out := map[string]string{}
@@ -63,6 +71,8 @@ var changelogPreexistingCorrections = map[string]string{
 	"0.4.1": "66aa886f2a0703c8c05435cd205d42e3c850a7f6", // (same commit)
 	"0.4.2": "66aa886f2a0703c8c05435cd205d42e3c850a7f6", // (same commit)
 	"0.6.2": "7fc9d85f68b10169a9077ac82a66497dae7ff6a1", // fix(sbom): merge the UI lockfile, and correct what 0.6.2 claimed
+	// rc.1 cited docs/build-images.md, which had moved to docs/operations/.
+	"0.9.3-rc.1": "565fd76784b3802175db427c2ebf048ca3326ec1", // docs(changelog): rc.1 line cites docs/operations/build-images.md (#2464)
 	// #461 dropped both sections' private ~/.claude / local/ review-ledger
 	// citations (the R1-R7 hardening-pass table, the 0.7.2 triage-sheet
 	// references) in favour of prose and one Known-gaps list — an
@@ -186,30 +196,88 @@ func allChangelogSections(t *testing.T) map[string]changelogSection {
 	return sections
 }
 
-// TestChangelogEveryTaggedReleaseHasASection fails when a final release tag
-// from v0.4.0 on has no section in CHANGELOG.md or docs/releases/: the freeze
-// compares only the sections that are present, so a section lost in a move
-// would otherwise go unnoticed. Tags this checkout does not carry are not
-// listed, so a shallow clone checks fewer.
+// changelogTagsMissingSection returns the release tags, final or candidate,
+// from v0.4.0 on that have no section in sections. Tags older than v0.4.0 live
+// in CHANGELOG-ARCHIVE.md, and anything that is not a release tag is ignored.
+func changelogTagsMissingSection(tags []string, sections map[string]changelogSection) []string {
+	var missing []string
+	for _, tag := range tags {
+		m := changelogTag.FindStringSubmatch(tag)
+		if m == nil {
+			continue
+		}
+		var major, minor int
+		_, _ = fmt.Sscanf(m[1], "%d.%d.", &major, &minor)
+		if major == 0 && minor < 4 {
+			continue // older than v0.4.0: CHANGELOG-ARCHIVE.md
+		}
+		if _, ok := sections[m[1]]; !ok {
+			missing = append(missing, tag)
+		}
+	}
+	return missing
+}
+
+// TestChangelogEveryTaggedReleaseHasASection fails when a release tag, final or
+// candidate, from v0.4.0 on has no section in CHANGELOG.md or docs/releases/:
+// the freeze compares only the sections that are present, so a section lost in
+// a move would otherwise go unnoticed. Tags this checkout does not carry are
+// not listed, so a shallow clone checks fewer.
 func TestChangelogEveryTaggedReleaseHasASection(t *testing.T) {
 	out, err := exec.Command("git", "-C", repoRoot(t), "tag", "-l", "v*").Output()
 	if err != nil {
 		t.Fatalf("git tag -l: %v", err)
 	}
-	sections := allChangelogSections(t)
-	final := regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
-	for _, tag := range strings.Fields(string(out)) {
-		var major, minor, patch int
-		if !final.MatchString(tag) {
-			continue // a release candidate
-		}
-		_, _ = fmt.Sscanf(tag, "v%d.%d.%d", &major, &minor, &patch)
-		if major == 0 && minor < 4 {
-			continue // older than v0.4.0: CHANGELOG-ARCHIVE.md
-		}
-		if _, ok := sections[tag[1:]]; !ok {
-			t.Errorf("tag %s has no \"## [%s]\" section in CHANGELOG.md or docs/releases/*.md — a released section was dropped", tag, tag[1:])
-		}
+	for _, tag := range changelogTagsMissingSection(strings.Fields(string(out)), allChangelogSections(t)) {
+		t.Errorf("tag %s has no \"## [%s]\" section in CHANGELOG.md or docs/releases/*.md — a released section was dropped", tag, tag[1:])
+	}
+}
+
+// changelogFixture is a CHANGELOG.md in miniature: a final above its own
+// release candidate, so the candidate's heading is the boundary under the final.
+const changelogFixture = `## [Unreleased]
+
+## [1.2.3] — 2026-01-02
+
+Final notes.
+
+## [1.2.3-rc.1] — 2026-01-01
+
+Candidate notes.
+`
+
+// TestChangelogRCSectionsAreSectionsAndFrozen proves the guard's own logic on
+// the fixture: a release candidate is a section boundary, a changed candidate
+// section differs from the tag's, and a candidate tag without a section is
+// reported — while finals, pre-0.4.0 tags and non-release tags stay quiet.
+func TestChangelogRCSectionsAreSectionsAndFrozen(t *testing.T) {
+	got := changelogSections(changelogFixture)
+	if len(got) != 2 {
+		t.Fatalf("fixture yields %d sections, want the final and the candidate: %v", len(got), got)
+	}
+	if strings.Contains(got["1.2.3"], "Candidate notes.") {
+		t.Errorf("the candidate heading did not end the final's section above it: %q", got["1.2.3"])
+	}
+	if !strings.Contains(got["1.2.3-rc.1"], "Candidate notes.") {
+		t.Errorf("the candidate has no section of its own: %q", got["1.2.3-rc.1"])
+	}
+
+	edited := changelogSections(strings.Replace(changelogFixture, "Candidate notes.", "Candidate notes, edited.", 1))
+	if edited["1.2.3-rc.1"] == got["1.2.3-rc.1"] {
+		t.Error("an edited candidate section reads the same as the tag's, so the freeze would not red")
+	}
+	if edited["1.2.3"] != got["1.2.3"] {
+		t.Error("editing the candidate changed the final's section")
+	}
+
+	have := map[string]changelogSection{"1.2.3": {}, "1.2.3-rc.1": {}}
+	tags := []string{"v1.2.3", "v1.2.3-rc.1", "v0.3.9", "v0.3.9-rc.1", "v1.2.3-beta.1", "latest"}
+	if missing := changelogTagsMissingSection(tags, have); len(missing) != 0 {
+		t.Errorf("tags with sections, pre-0.4.0 tags or non-release tags reported missing: %v", missing)
+	}
+	delete(have, "1.2.3-rc.1")
+	if missing := changelogTagsMissingSection(tags, have); len(missing) != 1 || missing[0] != "v1.2.3-rc.1" {
+		t.Errorf("a candidate tag without a section: missing = %v, want [v1.2.3-rc.1]", missing)
 	}
 }
 
