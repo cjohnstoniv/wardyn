@@ -10,6 +10,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -264,4 +265,86 @@ func TestPG_CLISignIn_CreatePrunesLongExpiredRequests(t *testing.T) {
 			t.Errorf("the request %s = %v, want kept", name, err)
 		}
 	}
+}
+
+// rotateTok is a refresh's token as the handler builds it from its snapshot of the session.
+func rotateTok(sess store.CLISessionRow, groups []string) types.APIToken {
+	now := time.Now().UTC()
+	exp := now.Add(time.Hour)
+	return types.APIToken{ID: uuid.New(), Principal: sess.Identity.Principal, Email: sess.Identity.Email, Role: "admin", UserType: types.UserTypeStandard,
+		Groups: groups, Name: "CLI: laptop", CreatedAt: now, ExpiresAt: &exp, Kind: types.APITokenKindCLIAccess, CLISessionID: &sess.ID}
+}
+
+// wantTokenIdentity fails unless the live token for raw carries the session's identity.
+func wantTokenIdentity(t *testing.T, st store.PG, sess store.CLISessionRow, raw string) {
+	t.Helper()
+	ctx := context.Background()
+	got, err := st.GetCLISession(ctx, sess.ID)
+	if err != nil || got.EndedAt != nil {
+		t.Fatalf("session = %+v, %v; want it live", got, err)
+	}
+	tok, err := st.GetAPITokenByRaw(ctx, raw)
+	if err != nil {
+		t.Fatalf("token lookup: %v", err)
+	}
+	if tok.Role != got.Identity.Role || tok.UserType != got.Identity.UserType || !slices.Equal(tok.Groups, got.Identity.Groups) ||
+		(tok.GroupsTruncated == nil) != (got.Identity.GroupsTruncated == nil) ||
+		(tok.GroupsTruncated != nil && *tok.GroupsTruncated != *got.Identity.GroupsTruncated) ||
+		tok.IdentityStampedAt == nil || !tok.IdentityStampedAt.Equal(got.IdentityStampedAt) {
+		t.Fatalf("token identity = %s/%s %v trunc=%v at %v; session = %s/%s %v trunc=%v at %v; want them equal",
+			tok.Role, tok.UserType, tok.Groups, tok.GroupsTruncated != nil, tok.IdentityStampedAt,
+			got.Identity.Role, got.Identity.UserType, got.Identity.Groups, got.Identity.GroupsTruncated != nil, got.IdentityStampedAt)
+	}
+}
+
+// A rotation whose caller read the session before a sign-in re-stamped it mints the session's identity,
+// not its snapshot's, and does not end the session: a changed identity is not a reused secret.
+func TestPG_CLISession_RotateCarriesSessionIdentity(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	t.Run("unchanged identity", func(t *testing.T) {
+		st := store.NewPG(runsPGPoolIsolated(t))
+		sess, _, _ := seedCLISession(t, st, "sub-a", "a@corp.example")
+		snap, _ := st.GetCLISession(ctx, sess.ID)
+		raw := "wdn_" + uuid.NewString()
+		if _, err := st.RotateCLISession(ctx, sess.ID, snap.Generation, "wdc_new", now, rotateTok(sess, nil), raw); err != nil {
+			t.Fatalf("rotate: %v", err)
+		}
+		wantTokenIdentity(t, st, sess, raw)
+	})
+
+	t.Run("restamp first", func(t *testing.T) {
+		st := store.NewPG(runsPGPoolIsolated(t))
+		sess, _, _ := seedCLISession(t, st, "sub-a", "a@corp.example")
+		snap, _ := st.GetCLISession(ctx, sess.ID)
+		if err := st.RefreshAPITokenIdentity(ctx, "sub-a", "user", "standard", []string{"eng"}, false); err != nil {
+			t.Fatal(err)
+		}
+		raw := "wdn_" + uuid.NewString()
+		if _, err := st.RotateCLISession(ctx, sess.ID, snap.Generation, "wdc_new", now, rotateTok(snap, []string{"old"}), raw); err != nil {
+			t.Fatalf("rotate from a stale snapshot: %v", err)
+		}
+		wantTokenIdentity(t, st, sess, raw)
+		if tok, _ := st.GetAPITokenByRaw(ctx, raw); tok.Role != "user" || !slices.Equal(tok.Groups, []string{"eng"}) {
+			t.Fatalf("token = %s %v; want the re-stamped user [eng]", tok.Role, tok.Groups)
+		}
+	})
+
+	t.Run("rotation first", func(t *testing.T) {
+		st := store.NewPG(runsPGPoolIsolated(t))
+		sess, _, _ := seedCLISession(t, st, "sub-a", "a@corp.example")
+		snap, _ := st.GetCLISession(ctx, sess.ID)
+		raw := "wdn_" + uuid.NewString()
+		if _, err := st.RotateCLISession(ctx, sess.ID, snap.Generation, "wdc_new", now, rotateTok(snap, []string{"old"}), raw); err != nil {
+			t.Fatalf("rotate: %v", err)
+		}
+		if err := st.RefreshAPITokenIdentity(ctx, "sub-a", "user", "standard", []string{"eng"}, false); err != nil {
+			t.Fatal(err)
+		}
+		wantTokenIdentity(t, st, sess, raw)
+		if tok, _ := st.GetAPITokenByRaw(ctx, raw); tok.Role != "user" || !slices.Equal(tok.Groups, []string{"eng"}) {
+			t.Fatalf("token = %s %v; want the rotation's token re-stamped to user [eng]", tok.Role, tok.Groups)
+		}
+	})
 }
