@@ -215,6 +215,19 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   (#3549).** A script that runs `ssh <run-id> <command>` with a relative path, or copies with `scp` or `sftp` to a
   relative path, now resolves it from `$HOME` (`/home/agent` on Wardyn's images). Use an absolute path, such as
   `/home/agent/work/...`, to keep the old place. `wardyn sync` and `wardyn-sync` still use the directory they name.
+- **`wardyn runner install` and `wardyn runner upgrade` check the release's Sigstore bundle (`SHA256SUMS.sigstore.json`) before installing anything.** This is a clean break: a CLI from this release refuses a release published before 0.10.0, because those carry no bundle. A mirror must serve `SHA256SUMS.sigstore.json` beside `SHA256SUMS`.
+- During a rolling upgrade, a person may be asked to sign in to AWS again once.
+- A person set up by Entra object id who has already signed in keeps that principal, even if items later appear under
+  their raw sign-in id (their pairwise `sub`). Before, that next sign-in was refused (`sign_in_refused`) because the
+  identity was already bound to the person.
+- `WARDYN_RUNNER_SECRET_PLACEHOLDERS` is new and off by default, so nothing changes until you set it to `true`. Then a
+  `runner_resident` `env_secret` or `file_secret` grant whose scope names a `host` is no longer delivered to the
+  runner: the sandbox holds `wardyn-placeholder:<id>`, and requests to that host go through the organisation's egress,
+  which fills the placeholder in the `Authorization` header. Those requests then leave from the organisation's
+  network, not the laptop's, so a host only the laptop can reach stops working for that grant. A grant without a
+  `host`, a host that is not an exact allowlist entry or already carries a credential, and a value that spans lines
+  are delivered to the runner as before. Without `WARDYN_PROXY_RESPONSE_SCRUB`, a host that echoes the value can
+  return it to the sandbox. No runner upgrade is needed.
 
 ### Added
 
@@ -286,6 +299,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   starts in `hard_limits` with nothing listed and floor `CC1`, which narrows nothing; an upgraded install stays in
   `no_limits`. Break-glass (`wardyn run --break-glass-reason`) is asked of an admin-token run only once the boundary
   bounds something and a unit with its own walls or a restriction exists.
+- GET /governance/boundary carries optional `save_held_for_approval`, true when the caller's save would be held for a second admin.
 - Restrictions are deny-only lists (domains, run limits, withheld credential kinds) that follow users, groups, user
   types or everyone into every unit they run in. A workspace can be pinned to an owning unit
   (`PUT /workspaces/{id}/owning-unit`, `wardyn workspace set-unit`).
@@ -359,6 +373,17 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - `WARDYN_OIDC_BACKCHANNEL_LOGOUT` is `false` by default. Set it to `true` and `POST /auth/backchannel-logout` accepts
   a logout token your identity provider signed and ends that person's console sessions. Off, the route does not
   exist.
+- A `local_model` model provider (#2957) is a model server you run on a laptop's host or an organisation node, such as
+  Ollama, a llama.cpp server, LM Studio or vLLM. Add it in Settings › Model providers (Local model server) or through
+  `/api/v1/model-providers`. A run reaches it only through its proxy's brokered LLM route: `base_url` is `http://` or
+  `https://` with no path or credential and not a loopback address, and `local.models` (1 to 64 exact names, tag
+  included, none with a `/` or a `:cloud` or `-cloud` tag) is the allowlist the request's `model` must be on. Other
+  methods and paths are refused `403 egress_denied`, a model inventory is filtered to the allowlist, and
+  `local.max_context`, `local.max_output` and `local.keep_alive_seconds` cap a request (unset means 32768, 32768 and
+  1800 seconds). A run never pulls, pushes, creates, copies or deletes a model, and the prompt is never rewritten. The
+  proxy lifts its private-address guard for the registered host and port alone; every other lane refuses that host.
+  With no provider of this kind, nothing changes. Move the proxy image pin with `wardynd`, image first, before adding
+  one: an older proxy refuses the `local_models` key it writes.
 - A `local_model` provider can set `local.allow_on_laptop_runners` (off by default; the console's local model server
   editor has a switch for it): a run on a person's own Docker runner then uses the model server on that computer, with
   `base_url` on `host.docker.internal` (any other host is refused at write). The runner relays that one port to its
@@ -431,10 +456,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   hold a lock per stored credential, not per person (#2137). A renewal the authority refuses (`invalid_grant`) after
   another writer redeemed the same refresh token first runs once more on that writer's pair, which usually serves it
   instead of asking the person to sign in again.
-- A desktop recording's gap no longer ends early when two take overs, or a take over and a sign-in, overlap on one run:
-  each holds the gap open until its own end. A hand back or a sign-in's end on another replica now resumes the
-  recording on the replica that holds it, and every gap has its `desktop.recording.resume` row, including one a run's
-  end closes.
+- A desktop recording's gap no longer ends early when two take overs, or a take over and a desktop sign-in, overlap on
+  one run: each holds the gap open until its own end. A hand back or a sign-in's end on another replica now resumes the
+  recording on the replica that holds it, and a take over's gap still open when the run's last desktop connection
+  closes after the run ended gets its `desktop.recording.resume` row.
 - Sign-in and probe runs under a boundary (#3446): a member whose profile denies every placement, under a hard-limits
   boundary, can again run the sign-in and probe runs the placement rule always exempted (it answered 500).
 - The Approvals page cards and the run's Approvals tab now turn Approve and Deny off, and say why, once the server refuses a person with `capability_egress_host` (an admin withholds that host). Before, they kept live buttons and only showed an error after each click. The live approvals strip already did this.

@@ -3403,7 +3403,7 @@ What a run may call on the server (every other method and path is refused `403 e
 
 #### On a person's own runner
 
-With `local.allow_on_laptop_runners: true` (API only for now; off by default), a run on a person's own runner uses the model server on that computer, such as Ollama on `127.0.0.1:11434`.
+With `local.allow_on_laptop_runners: true` (off by default; set it with the switch on the Local model server form in Settings › Model providers, or in the API), a run on a person's own runner uses the model server on that computer, such as Ollama on `127.0.0.1:11434`.
 
 - What it opens: on native Docker, a listener on the Docker bridge's gateway at that one port, forwarded to the computer's loopback at the same port. It opens with the first flagged run and closes when the last one ends or the runner stops.
 - To whom: only the proxies of those flagged runs, by their container addresses. Any other container or process that reaches the gateway is closed before a byte is relayed.
