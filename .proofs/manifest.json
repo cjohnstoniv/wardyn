@@ -1,0 +1,15 @@
+{
+ "keyed_sha": "561b585f250b30b99eea216a92c0d4f13db2426f",
+ "proofs": [
+  {
+   "name": "ad3-api-unrecorded-both-guards",
+   "package": "./internal/api",
+   "run": "^TestRunOutput_UnrecordedRunPromisesNoRecording$",
+   "tags": "",
+   "files": {
+    "internal/api/run_output.go": ".proofs/files/ad3-api-unrecorded-both-guards/internal/api/run_output.go"
+   },
+   "want_fail": "--- FAIL: TestRunOutput_UnrecordedRunPromisesNoRecording"
+  }
+ ]
+}
