@@ -354,6 +354,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_RUNNER_LINUX_VM` | `1` | (unset, **off**) | **`wardyn-runnerd serve`**: `1` offers Linux VM sandboxes (`machine_kind: linux_vm`) once the start-up probe passes, else logs its fix. On Kubernetes the chart's `k8s.linuxVM` sets it and a `CC3` RuntimeClass pin must resolve. [Linux VM sandboxes](operations/linux-vm-sandboxes.md) |
 | `WARDYN_RUNNER_VM_QEMU_IMAGE` | string (image) | (unset) | **`wardyn-runnerd serve`**: the QEMU image (built from `deploy/runner/vm-qemu`) every VM container starts from; required with `WARDYN_RUNNER_LINUX_VM=1` |
 | `WARDYN_RUNNER_VM_CPU_MODEL` | string | `Haswell-v4` | **`wardyn-runnerd serve`**: the named QEMU CPU model every VM gets, started with `enforce`; recorded on each run |
+| `WARDYN_RUNNER_MACOS_VM` | `1` | (unset, **off**) | **`wardyn-runnerd serve`**, on a Mac (macOS 27 or later): `1` offers macOS VM sandboxes (`machine_kind: macos_vm`) once its checks pass, else logs the fix. The `MacOSVM` managed preference sets it too, and the organisation's [`WARDYN_MACOS_VMS`](#wardyn_macos_vms) must be on. [Details](operations/macos-vms.md) |
 | `WARDYN_DAEMON_PROXY_URL` | string (URL) | (unset = direct) | the forward proxy wardynd's own outbound HTTP calls traverse (flag `-daemon-proxy-url`; `installDaemonProxy`, [`cmd/wardynd/daemon_proxy.go`](../cmd/wardynd/daemon_proxy.go)); a malformed value refuses boot. [Details](#wardyn_daemon_proxy_url) |
 | `WARDYN_DAEMON_NO_PROXY` | string (CSV) | (unset) | destinations `WARDYN_DAEMON_PROXY_URL` must not be used for, in `NO_PROXY` spelling (flag `-daemon-no-proxy`; `x/net/http/httpproxy` semantics). Wardynd appends `KUBERNETES_SERVICE_HOST`, any `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` or `WARDYN_OIDC_INTERNAL_ISSUER` host, and the AWS link-local credential endpoints. Ignored when the proxy URL is unset |
 | `WARDYN_DAEMON_PROXY_SECRET` | string (path) | (unset) | path to a file holding one forward-proxy URL that MAY embed `user:pass@` (flag `-daemon-proxy-secret-file`; `installDaemonProxySecret`, [`cmd/wardynd/daemon_proxy.go`](../cmd/wardynd/daemon_proxy.go)); a group- or world-writable file refuses boot. [Details](#wardyn_daemon_proxy_secret) |
@@ -1457,6 +1458,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A macOS VM takes no folder mount, and a Kubernetes runner refuses the kind.
 - `GET /setup/status` publishes it as `features.macos_vms`, present only when on.
 - Needs migration `0234_macos_vm_kind`, which widens two CHECK constraints and changes no row.
+- [macOS VM sandboxes](operations/macos-vms.md) covers the Mac side: its switch, base image, limits and cleanup.
 - A value that is not a bool exits 2 at boot.
 
 ### `WARDYN_MCP_LOCAL_SERVERS`

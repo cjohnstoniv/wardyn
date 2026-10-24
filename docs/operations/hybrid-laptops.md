@@ -215,6 +215,8 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 | `/Library/LaunchAgents/com.wardyn.runnerd.managed.plist` | starts the runner at login, like the agent `setup` writes |
 | `/usr/local/wardyn/bin/runnerd-managed-start` | the agent's launcher: idle until the person is registered |
 | `/usr/local/wardyn/share/wardyn-runnerd.mobileconfig` | the profile template |
+| `/usr/local/wardyn/bin/wardyn-macvm` | the macOS VM helper (Apple silicon packages only); unused unless [macOS VMs](macos-vms.md) are turned on |
+| `/Users/Shared/Wardyn/` | the shared macOS VM ledger the package creates, root-owned: see [The shared ledger](macos-vms.md#the-shared-ledger) |
 
 1. Fill in the profile template (`OrgURL`, two fresh UUIDs, your organisation name) and push it from your MDM as a **custom settings** profile.
 2. Push `wardyn-runnerd.pkg` with the same MDM, as a policy or script that runs `installer -pkg wardyn-runnerd.pkg -target /` as root (see above).
@@ -243,11 +245,26 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 | `RecordingStore` | `--recording-store` | `pg`, `fs` or `off` |
 | `DockerHost` | `DOCKER_HOST` | the engine's socket, when it is not the default |
 | `ArtifactBase` | `wardyn runner install --artifact-base` | read by the `wardyn` CLI, not `serve`: the release mirror for `wardyn runner install`, `upgrade` and `setup`, ahead of the one saved in `cli.json` |
+| `MacOSVM` | `WARDYN_RUNNER_MACOS_VM` | a boolean, off by default: offers [macOS VM sandboxes](macos-vms.md) from this Mac. The organisation's `WARDYN_MACOS_VMS` must be on as well |
 | `lock_security_settings` | none: profile only | a boolean, off by default; `true` locks the five security keys, as the bullets below say |
 
 - With the lock on, `OrgURL`, `ProxyImage`, `TrustedCAFile`, `OrgCAFile` and `RecordingStore` in the profile win over a flag, and `serve` and `setup` refuse a flag or environment variable that disagrees, naming `lock_security_settings`.
 - A value other than true, false, 1 or 0, or a profile that cannot be read, refuses start. Only a macOS profile can set it: there is no flag, variable or file twin.
 - A key the profile leaves empty, and every other key, keeps the order above.
+
+### macOS VM sandboxes on a managed Mac
+
+- A Mac can run macOS VM sandboxes (`machine_kind: macos_vm`) when both its switch and the organisation's are on. [macOS VM sandboxes](macos-vms.md) has the requirements, the base image and the limits.
+- The Mac must be company-managed in the two ways the page names: a security operator marks it `managed_device`, and your MDM delivers the posture file.
+
+1. Push the package as above. Its helper and ledger need the Apple silicon package and macOS 27 or later.
+2. Add the `MacOSVM` key to the profile, set to `true`.
+3. Push the posture file to `/Library/Application Support/Wardyn/posture.json`, with `mdm_managed` true.
+4. Have a security operator run `wardyn runner trust <runner-id> managed_device --reason "<why>"`.
+5. Ask the Mac's person to run `wardyn-runnerd macos-vm prepare` while on power, with Docker running.
+
+- The Mac offers macOS VMs only while someone is logged in. With FileVault on, that is after a login following each restart.
+- A pool must have every runner offer them: a mixed pool refuses macOS VMs, as it does Linux VMs.
 
 ## A folder on your computer for a remote sandbox
 
