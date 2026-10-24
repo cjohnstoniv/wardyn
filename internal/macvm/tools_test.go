@@ -613,9 +613,9 @@ func TestWithheldHarnessIsRetried(t *testing.T) {
 	}
 }
 
-// A clone that starts while an update runs waits for it, then sees the new
-// base whole: disk and aux from the same generation.
-func TestCloneWaitsForUpdateAndSeesOneBase(t *testing.T) {
+// A clone that starts while an update is in stage 2 does not wait for it: it
+// takes the old base at once.
+func TestCloneDuringUpdateTakesOldBase(t *testing.T) {
 	f, tf, _ := stage2Prep(t)
 	if _, err := macvm.Prepare(context.Background(), f.opts); err != nil {
 		t.Fatal(err)
@@ -627,34 +627,47 @@ func TestCloneWaitsForUpdateAndSeesOneBase(t *testing.T) {
 		}
 	}
 	runDir := filepath.Join(t.TempDir(), "run")
-	cloned := make(chan error, 1)
 	o := updateOpts(f, tf, newGuest(), "")
 	o.Force = true
 	o.Stage = hookStage(func(_ context.Context, in macvm.Stage2Input) (macvm.ToolsResult, error) {
 		_ = os.WriteFile(in.Spec.DiskPath, []byte("gen2-disk"), 0o600)
 		_ = os.WriteFile(in.Spec.AuxPath, []byte("gen2-aux"), 0o600)
+		cloned := make(chan error, 1)
 		go func() {
 			_, err := macvm.CloneRun(f.eng, base, runDir, macvm.IdentityFresh)
 			cloned <- err
 		}()
 		select {
 		case err := <-cloned:
-			t.Errorf("a clone ran while the update held the base (err %v)", err)
-			cloned <- err
-		case <-time.After(200 * time.Millisecond):
+			if err != nil {
+				t.Errorf("clone during stage 2: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Error("a clone waited for the update's stage 2")
 		}
 		return noneOnly, nil
 	})
 	if _, changed, err := macvm.UpdateTools(context.Background(), o); err != nil || !changed {
 		t.Fatalf("update: changed %v err %v", changed, err)
 	}
-	if err := <-cloned; err != nil {
-		t.Fatal(err)
-	}
 	d, _ := os.ReadFile(filepath.Join(runDir, macvm.DiskFile))
 	a, _ := os.ReadFile(filepath.Join(runDir, macvm.AuxFile))
-	if string(d) != "gen2-disk" || string(a) != "gen2-aux" {
-		t.Fatalf("clone saw disk %q aux %q", d, a)
+	if string(d) != "gen1-disk" || string(a) != "gen1-aux" {
+		t.Fatalf("clone saw disk %q aux %q, want the old base", d, a)
+	}
+	if d, _ := os.ReadFile(filepath.Join(base, macvm.DiskFile)); string(d) != "gen2-disk" {
+		t.Fatalf("base after the update holds %q", d)
+	}
+	// A clone after the swap gets the new generation.
+	after := filepath.Join(t.TempDir(), "run2")
+	if _, err := macvm.CloneRun(f.eng, base, after, macvm.IdentityFresh); err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := os.ReadFile(filepath.Join(after, macvm.DiskFile)); string(d) != "gen2-disk" {
+		t.Fatalf("clone after the swap saw %q", d)
+	}
+	if _, err := os.Stat(base + ".update"); !os.IsNotExist(err) {
+		t.Fatal("the old generation was left behind")
 	}
 }
 

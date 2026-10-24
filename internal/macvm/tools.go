@@ -24,6 +24,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // Harness ids, as the harness catalog and placement know them. "none" ("Your
@@ -555,9 +557,12 @@ func NeedsToolsUpdate(baseDir string, t Tooling, agentVersion string, now time.T
 	return false
 }
 
-// baseLockPath is the lock on one base. It sits beside the base dir, which an
-// update swaps out from under any lock inside it.
-func baseLockPath(baseDir string) string { return baseDir + ".lock" }
+// baseLockPath is the lock on one base: shared while a run is cloned from it,
+// exclusive only around an update's swap. updateLockPath serialises updates
+// for their whole run. Both sit beside the base dir, which an update swaps out
+// from under any lock inside it.
+func baseLockPath(baseDir string) string   { return baseDir + ".lock" }
+func updateLockPath(baseDir string) string { return baseDir + ".update.lock" }
 
 // UpdateOptions configures UpdateTools.
 type UpdateOptions struct {
@@ -587,9 +592,10 @@ type UpdateOptions struct {
 
 // UpdateTools brings a ready base up to the current pins and guest agent: it
 // clones the base, runs stage 2 on the clone, and swaps the clone in as the
-// base with one atomic exchange. The whole run holds the base's lock
-// exclusively, so two updates serialise, and CloneRun (which holds it shared)
-// waits and then sees the old base or the new one, never a mix. A failed or
+// base with one atomic exchange. The whole run holds the update lock, so two
+// updates serialise; runs keep cloning the old base meanwhile. Only the
+// exchange holds the base's lock exclusively, so a clone (which holds it
+// shared) sees the old base or the new one, never a mix. A failed or
 // interrupted update leaves the old base as it was. It reports whether
 // anything changed.
 func UpdateTools(ctx context.Context, o UpdateOptions) (Manifest, bool, error) {
@@ -607,7 +613,7 @@ func UpdateTools(ctx context.Context, o UpdateOptions) (Manifest, bool, error) {
 	}
 	base := o.Layout.BaseDir(o.Slot)
 	nb := base + ".update"
-	unlock, err := lockFile(ctx, baseLockPath(base), true)
+	unlock, err := lockFile(ctx, updateLockPath(base), true)
 	if err != nil {
 		return Manifest{}, false, err
 	}
@@ -678,9 +684,30 @@ func UpdateTools(ctx context.Context, o UpdateOptions) (Manifest, bool, error) {
 	if err := writeJSONAtomic(filepath.Join(nb, ManifestFile), m, 0o600); err != nil {
 		return m, false, err
 	}
-	if err := swapDirs(nb, base); err != nil {
-		return m, false, fmt.Errorf("macvm: swapping in the updated base: %w", err)
+	if err := swapBase(ctx, nb, base); err != nil {
+		return m, false, err
 	}
 	o.Progress(PrepareEvent{Phase: PhaseReady, Fraction: 1})
 	return m, true, nil
 }
+
+// swapBase exchanges the updated base nb with base while holding base's lock
+// exclusively; nb then holds the old generation.
+func swapBase(ctx context.Context, nb, base string) error {
+	unlock, err := lockFile(ctx, baseLockPath(base), true)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if err := swapFn(nb, base); err != nil {
+		if errors.Is(err, unix.EINVAL) || errors.Is(err, unix.ENOTSUP) || errors.Is(err, unix.ENOSYS) {
+			return fmt.Errorf("macvm: the macOS VM directory must be on an APFS volume, which can swap two directories at once (%v); the base was left as it was", err)
+		}
+		return fmt.Errorf("macvm: swapping in the updated base: %w", err)
+	}
+	return nil
+}
+
+// swapFn is swapDirs; tests replace it to force a failing exchange. There is
+// no fallback to two renames: a base that is half swapped is not a base.
+var swapFn = swapDirs

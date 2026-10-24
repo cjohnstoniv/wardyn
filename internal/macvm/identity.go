@@ -81,6 +81,22 @@ func CloneRun(e Engine, baseDir, runDir string, s IdentityStrategy) (Identity, e
 	return cloneRun(e, baseDir, runDir, s)
 }
 
+// cloneReadyBase reads the base's manifest and clones the base under one hold
+// of its lock, so both come from the same generation.
+func cloneReadyBase(e Engine, baseDir, runDir string, s IdentityStrategy) (Manifest, Identity, error) {
+	unlock, err := lockFile(context.Background(), baseLockPath(baseDir), false)
+	if err != nil {
+		return Manifest{}, Identity{}, err
+	}
+	defer unlock()
+	m, err := ReadyBase(baseDir)
+	if err != nil {
+		return m, Identity{}, err
+	}
+	id, err := cloneRun(e, baseDir, runDir, s)
+	return m, id, err
+}
+
 // cloneRun is CloneRun for a caller that already holds the base's lock.
 func cloneRun(e Engine, baseDir, runDir string, s IdentityStrategy) (Identity, error) {
 	if !s.Valid() {
