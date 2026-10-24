@@ -15,9 +15,11 @@ source "${REPO_ROOT}/scripts/lib/common.sh"
 tmp="$(mktemp -d)"
 fail() { echo "test-e2e-backend-down: FAIL ${*}" >&2; exit 1; }
 cleanup() {
-  local f
+  local f p
   for f in "${tmp}/repo/.e2e-bin/"*.pid "${tmp}/events/"stub-*; do
-    [[ -f "${f}" ]] && kill -KILL -- "-$(cat "${f}" 2>/dev/null || echo 0)" 2>/dev/null || true
+    p="$(cat "${f}" 2>/dev/null || true)"
+    # Only a real pid above 1: an empty or unreadable file must never become `kill -- -0` (our own group).
+    [[ "${p}" =~ ^[0-9]+$ && "${p}" -gt 1 ]] && kill -KILL -- "-${p}" 2>/dev/null || true
   done
   rm -rf "${tmp}"
 }
