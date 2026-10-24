@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -28,6 +29,8 @@ type vmSignInTestStore struct {
 	vmu  sync.Mutex
 	rows map[uuid.UUID]store.DesktopVMSignIns
 	sc   types.SiteConfig
+	// markErr fails PauseDesktopVMAgent.
+	markErr error
 }
 
 var _ store.DesktopVMSignInStore = (*vmSignInTestStore)(nil)
@@ -53,6 +56,9 @@ func (s *vmSignInTestStore) DesktopVMSignIns(_ context.Context, runID uuid.UUID)
 func (s *vmSignInTestStore) PauseDesktopVMAgent(_ context.Context, runID uuid.UUID, by string, at time.Time) (bool, error) {
 	s.vmu.Lock()
 	defer s.vmu.Unlock()
+	if s.markErr != nil {
+		return false, s.markErr
+	}
 	row, ok := s.rows[runID]
 	if !ok || row.Store != "memory" || row.PausedAt != nil {
 		return false, nil
@@ -75,20 +81,32 @@ func (s *vmSignInTestStore) ResumeDesktopVMAgent(_ context.Context, runID uuid.U
 	return by, at, true, nil
 }
 
-// pauseFakeRunner is the guest agent behind runner.AgentPauser: it records each call.
+// pauseFakeRunner is the guest agent behind runner.AgentPauser: it records each call and whether the
+// agent is stopped. A pause's stop lands even when it answers pauseErr, as one whose answer was lost.
 type pauseFakeRunner struct {
 	*sshFakeRunner
 	pmu      sync.Mutex
 	calls    []string
 	pauseErr error
+	stopped  bool
+	// hold, when set, keeps each PauseAgent inside the call until it is closed, after telling inPause.
+	inPause chan struct{}
+	hold    chan struct{}
 }
 
 var _ runner.AgentPauser = (*pauseFakeRunner)(nil)
 
 func (f *pauseFakeRunner) PauseAgent(_ context.Context, ref string) error {
 	f.pmu.Lock()
-	defer f.pmu.Unlock()
 	f.calls = append(f.calls, "pause "+ref)
+	f.pmu.Unlock()
+	if f.hold != nil {
+		f.inPause <- struct{}{}
+		<-f.hold
+	}
+	f.pmu.Lock()
+	defer f.pmu.Unlock()
+	f.stopped = true
 	return f.pauseErr
 }
 
@@ -96,6 +114,7 @@ func (f *pauseFakeRunner) ResumeAgent(_ context.Context, ref string) error {
 	f.pmu.Lock()
 	defer f.pmu.Unlock()
 	f.calls = append(f.calls, "resume "+ref)
+	f.stopped = false
 	return nil
 }
 
@@ -105,6 +124,26 @@ func (f *pauseFakeRunner) seen() []string {
 	return slices.Clone(f.calls)
 }
 
+func (f *pauseFakeRunner) agentStopped() bool {
+	f.pmu.Lock()
+	defer f.pmu.Unlock()
+	return f.stopped
+}
+
+// runLockWaits tells waits as each take of a run's operation lock begins, so a test knows a request
+// has reached the lock another holds.
+type runLockWaits struct {
+	db.Locker
+	waits chan struct{}
+}
+
+func (l runLockWaits) Lock(ctx context.Context, k db.LockKey, wait time.Duration) (context.Context, func(), error) {
+	if k.Class == db.RunOpLockClass {
+		l.waits <- struct{}{}
+	}
+	return l.Locker.Lock(ctx, k, wait)
+}
+
 type vmSignInFixture struct {
 	srv    *Server
 	h      *harness
@@ -112,6 +151,8 @@ type vmSignInFixture struct {
 	rn     *pauseFakeRunner
 	run    types.AgentRun
 	cookie *http.Cookie
+	// lockWaits is told of each request that reaches the run's lock, once pauseInFlight is called.
+	lockWaits chan struct{}
 }
 
 func newVMSignInFixture(t *testing.T, kept string) *vmSignInFixture {
@@ -122,10 +163,17 @@ func newVMSignInFixture(t *testing.T, kept string) *vmSignInFixture {
 	st := &vmSignInTestStore{uiMemStore: newUIMemStore(), rows: map[uuid.UUID]store.DesktopVMSignIns{run.ID: {Store: kept}}}
 	st.putRun(run)
 	rn := &pauseFakeRunner{sshFakeRunner: &sshFakeRunner{}}
-	cfg := baseTestConfig(h, st)
-	cfg.Runner, cfg.OIDC = rn, &oidc.Authenticator{}
-	return &vmSignInFixture{srv: New(cfg), h: h, st: st, rn: rn, run: run,
-		cookie: ssoSession(t, signinOwner, "owner@corp.example", oidc.RoleUser)}
+	f := &vmSignInFixture{h: h, st: st, rn: rn, run: run, cookie: ssoSession(t, signinOwner, "owner@corp.example", oidc.RoleUser)}
+	f.restart()
+	return f
+}
+
+// restart is a new wardynd over the same database and runner: nothing the old one held in memory, its
+// locks included, carries over.
+func (f *vmSignInFixture) restart() {
+	cfg := baseTestConfig(f.h, f.st)
+	cfg.Runner, cfg.OIDC = f.rn, &oidc.Authenticator{}
+	f.srv = New(cfg)
 }
 
 func (f *vmSignInFixture) do(t *testing.T, method, path string) (int, desktopSignInsView, string) {
@@ -134,6 +182,44 @@ func (f *vmSignInFixture) do(t *testing.T, method, path string) (int, desktopSig
 	var v desktopSignInsView
 	_ = json.Unmarshal(w.Body.Bytes(), &v)
 	return w.Code, v, w.Body.String()
+}
+
+type vmSignInAnswer struct {
+	code int
+	v    desktopSignInsView
+	body string
+}
+
+// goDo is do on a goroutine of its own: its answer arrives on the channel.
+func (f *vmSignInFixture) goDo(t *testing.T, method, path string) <-chan vmSignInAnswer {
+	ch := make(chan vmSignInAnswer, 1)
+	go func() {
+		code, v, body := f.do(t, method, path)
+		ch <- vmSignInAnswer{code, v, body}
+	}()
+	return ch
+}
+
+// pauseInFlight starts a pause and returns once the runner holds it inside PauseAgent, with the run's
+// lock taken: release lets the runner answer, and the pause's answer arrives on the channel.
+func (f *vmSignInFixture) pauseInFlight(t *testing.T) (release func(), answer <-chan vmSignInAnswer) {
+	t.Helper()
+	f.lockWaits = make(chan struct{}, 4)
+	f.srv.locks.override = runLockWaits{Locker: f.srv.locker(), waits: f.lockWaits}
+	f.rn.inPause, f.rn.hold = make(chan struct{}), make(chan struct{})
+	answer = f.goDo(t, http.MethodPost, "/pause")
+	recvSlotEvent(t, f.lockWaits, "the pause taking the run's lock")
+	recvSlotEvent(t, f.rn.inPause, "the pause reaching the runner")
+	release = sync.OnceFunc(func() { close(f.rn.hold) })
+	t.Cleanup(release)
+	return release, answer
+}
+
+func (f *vmSignInFixture) recordDesktop(t *testing.T) {
+	t.Helper()
+	f.srv.cfg.RecordingStore = fsRecordingStore(t)
+	f.run.RecordingLevel = types.RecordingScreenActions
+	f.st.putRun(f.run)
 }
 
 func (f *vmSignInFixture) signInRows() []types.AuditEvent {
@@ -213,9 +299,7 @@ func TestDesktopSignIns_PauseStopsTheAgentAndResumeAuditsTheSession(t *testing.T
 // signs in, so no frame of what they type is kept, and the resume releases it.
 func TestDesktopSignIns_PauseHoldsTheDesktopRecordingUntilTheResume(t *testing.T) {
 	f := newVMSignInFixture(t, "memory")
-	f.srv.cfg.RecordingStore = fsRecordingStore(t)
-	f.run.RecordingLevel = types.RecordingScreenActions
-	f.st.putRun(f.run)
+	f.recordDesktop(t)
 	hold := vmSignInHold(f.run)
 	if code, _, body := f.do(t, http.MethodPost, "/pause"); code != http.StatusOK {
 		t.Fatalf("pause = %d %s", code, body)
@@ -282,6 +366,166 @@ func TestDesktopSignIns_FailedPauseResumesAndLeavesNoMark(t *testing.T) {
 	}
 	if rows := f.signInRows(); len(rows) != 1 || rows[0].Outcome != "failure" {
 		t.Fatalf("rows = %+v, want one failure", rows)
+	}
+}
+
+// While the runner has not answered a pause, the run is not paused: the GET says so and the desktop
+// recording is not held. Both change only once the runner has stopped the agent.
+func TestDesktopSignIns_GETSaysPausedOnlyOnceTheRunnerAnswers(t *testing.T) {
+	f := newVMSignInFixture(t, "memory")
+	f.recordDesktop(t)
+	hold := vmSignInHold(f.run)
+	release, paused := f.pauseInFlight(t)
+	if code, v, body := f.do(t, http.MethodGet, ""); code != http.StatusOK || v.Paused || v.PausedAt != nil {
+		t.Fatalf("GET while the runner has not answered the pause = %d %s, want not paused", code, body)
+	}
+	if f.srv.desktopRecs.holds(f.run.ID, hold) {
+		t.Fatal("the desktop recording was held before the runner stopped the agent")
+	}
+	release()
+	if a := recvSlotEvent(t, paused, "the pause's answer"); a.code != http.StatusOK || !a.v.Paused {
+		t.Fatalf("pause = %d %s", a.code, a.body)
+	}
+	if _, v, _ := f.do(t, http.MethodGet, ""); !v.Paused {
+		t.Fatal("GET after the runner's answer does not say paused")
+	}
+	if !f.srv.desktopRecs.holds(f.run.ID, hold) {
+		t.Fatal("the desktop recording is not held once the agent is paused")
+	}
+}
+
+// A second pause while the first's runner call is open waits for that call, then answers paused
+// without a second call: it never says paused before the runner has.
+func TestDesktopSignIns_SecondPauseWaitsForTheFirst(t *testing.T) {
+	f := newVMSignInFixture(t, "memory")
+	release, first := f.pauseInFlight(t)
+	second := f.goDo(t, http.MethodPost, "/pause")
+	recvSlotEvent(t, f.lockWaits, "the second pause reaching the run's lock")
+	select {
+	case a := <-second:
+		t.Fatalf("the second pause answered %d %s while the first's runner call was open", a.code, a.body)
+	default:
+	}
+	release()
+	for name, ch := range map[string]<-chan vmSignInAnswer{"first": first, "second": second} {
+		if a := recvSlotEvent(t, ch, "the "+name+" pause's answer"); a.code != http.StatusOK || !a.v.Paused {
+			t.Fatalf("%s pause = %d %s", name, a.code, a.body)
+		}
+	}
+	if got := f.rn.seen(); !slices.Equal(got, []string{"pause vm-1"}) {
+		t.Fatalf("runner calls = %v, want one pause", got)
+	}
+}
+
+// A resume from another tab while a pause's runner call is open waits for it and then continues the
+// agent that pause stopped: it never overtakes the pause and leaves the agent stopped with no mark.
+func TestDesktopSignIns_ResumeWaitsForAnInFlightPause(t *testing.T) {
+	f := newVMSignInFixture(t, "memory")
+	release, paused := f.pauseInFlight(t)
+	resumed := f.goDo(t, http.MethodPost, "/resume")
+	recvSlotEvent(t, f.lockWaits, "the resume reaching the run's lock")
+	release()
+	if a := recvSlotEvent(t, paused, "the pause's answer"); a.code != http.StatusOK || !a.v.Paused {
+		t.Fatalf("pause = %d %s", a.code, a.body)
+	}
+	if a := recvSlotEvent(t, resumed, "the resume's answer"); a.code != http.StatusOK || a.v.Paused {
+		t.Fatalf("resume = %d %s", a.code, a.body)
+	}
+	if got := f.rn.seen(); !slices.Equal(got, []string{"pause vm-1", "resume vm-1"}) {
+		t.Fatalf("runner calls = %v, want the pause then the resume", got)
+	}
+	if f.rn.agentStopped() {
+		t.Fatal("the agent is left stopped after the resume")
+	}
+	if _, v, _ := f.do(t, http.MethodGet, ""); v.Paused {
+		t.Fatal("GET after the resume says paused")
+	}
+	if rows := f.signInRows(); len(rows) != 1 || rows[0].Outcome != "success" {
+		t.Fatalf("rows = %+v, want the session's one success", rows)
+	}
+}
+
+// A pause whose runner call fails leaves no mark at any point: the GET and a resume queued behind it
+// see none, the agent is continued, and no desktop recording hold is left.
+func TestDesktopSignIns_FailedPauseInFlightLeavesTheAgentRunning(t *testing.T) {
+	f := newVMSignInFixture(t, "memory")
+	f.recordDesktop(t)
+	f.rn.pauseErr = errors.New("guestagent: context deadline exceeded")
+	release, paused := f.pauseInFlight(t)
+	if _, v, _ := f.do(t, http.MethodGet, ""); v.Paused {
+		t.Fatal("GET says paused while the pause's runner call is open")
+	}
+	resumed := f.goDo(t, http.MethodPost, "/resume")
+	recvSlotEvent(t, f.lockWaits, "the resume reaching the run's lock")
+	release()
+	if a := recvSlotEvent(t, paused, "the pause's answer"); a.code != http.StatusBadGateway || !strings.Contains(a.body, reasonDesktopSignInsPauseFailed) {
+		t.Fatalf("pause = %d %s", a.code, a.body)
+	}
+	if a := recvSlotEvent(t, resumed, "the resume's answer"); a.code != http.StatusOK || a.v.Paused {
+		t.Fatalf("resume = %d %s", a.code, a.body)
+	}
+	if got := f.rn.seen(); !slices.Equal(got, []string{"pause vm-1", "resume vm-1"}) {
+		t.Fatalf("runner calls = %v, want the failed pause's own continue and nothing from the resume", got)
+	}
+	if f.rn.agentStopped() {
+		t.Fatal("the failed pause left the agent stopped")
+	}
+	if _, v, _ := f.do(t, http.MethodGet, ""); v.Paused {
+		t.Fatal("a failed pause left the agent marked paused")
+	}
+	if f.srv.desktopRecs.holds(f.run.ID, vmSignInHold(f.run)) {
+		t.Fatal("a failed pause left the desktop recording held")
+	}
+	if rows := f.signInRows(); len(rows) != 1 || rows[0].Outcome != "failure" {
+		t.Fatalf("rows = %+v, want one failure", rows)
+	}
+}
+
+// A pause the runner made but the row could not record is undone: the agent is continued, so nothing
+// is left stopped that no resume would continue.
+func TestDesktopSignIns_UnrecordedPauseContinuesTheAgent(t *testing.T) {
+	f := newVMSignInFixture(t, "memory")
+	f.recordDesktop(t)
+	f.st.markErr = errors.New("store: pool closed")
+	if code, _, body := f.do(t, http.MethodPost, "/pause"); code != http.StatusConflict || !strings.Contains(body, reasonDesktopSignInsPauseFailed) {
+		t.Fatalf("pause = %d %s", code, body)
+	}
+	if got := f.rn.seen(); !slices.Equal(got, []string{"pause vm-1", "resume vm-1"}) {
+		t.Fatalf("runner calls = %v, want the pause then a continue", got)
+	}
+	if f.rn.agentStopped() {
+		t.Fatal("an unrecorded pause left the agent stopped")
+	}
+	if f.srv.desktopRecs.holds(f.run.ID, vmSignInHold(f.run)) {
+		t.Fatal("an unrecorded pause left the desktop recording held")
+	}
+	if rows := f.signInRows(); len(rows) != 1 || rows[0].Outcome != "failure" {
+		t.Fatalf("rows = %+v, want one failure", rows)
+	}
+}
+
+// The pause is the row, not this process's memory: after a restart the GET still says paused, and
+// the resume continues the agent and writes the session's row.
+func TestDesktopSignIns_PauseSurvivesARestart(t *testing.T) {
+	f := newVMSignInFixture(t, "memory")
+	if code, _, body := f.do(t, http.MethodPost, "/pause"); code != http.StatusOK {
+		t.Fatalf("pause = %d %s", code, body)
+	}
+	f.restart()
+	if _, v, _ := f.do(t, http.MethodGet, ""); !v.Paused || v.PausedAt == nil {
+		t.Fatal("after a restart, GET does not say paused")
+	}
+	if code, v, body := f.do(t, http.MethodPost, "/resume"); code != http.StatusOK || v.Paused {
+		t.Fatalf("resume after a restart = %d %s", code, body)
+	}
+	if got := f.rn.seen(); !slices.Equal(got, []string{"pause vm-1", "resume vm-1"}) {
+		t.Fatalf("runner calls = %v, want the pause then the resume", got)
+	}
+	if f.rn.agentStopped() {
+		t.Fatal("the agent is left stopped after the resume")
+	}
+	if rows := f.signInRows(); len(rows) != 1 || rows[0].Outcome != "success" {
+		t.Fatalf("rows = %+v, want the session's one success", rows)
 	}
 }
 

@@ -23,10 +23,11 @@ func (s PG) RecordOIDCSessionSID(ctx context.Context, issuer, sid, sub string, e
 	return nil
 }
 
-// LookupOIDCSessionSID returns issuer's sid row's person; ok is false with no row.
+// LookupOIDCSessionSID returns issuer's sid row's person; ok is false with no row, and with one whose
+// session has ended but the prune has not yet removed, so that row cuts no sessions.
 func (s PG) LookupOIDCSessionSID(ctx context.Context, issuer, sid string) (string, bool, error) {
 	var sub string
-	err := s.Pool.QueryRow(ctx, `SELECT sub FROM oidc_session_sids WHERE issuer = $1 AND sid = $2`, issuer, sid).Scan(&sub)
+	err := s.Pool.QueryRow(ctx, `SELECT sub FROM oidc_session_sids WHERE issuer = $1 AND sid = $2 AND expires_at > now()`, issuer, sid).Scan(&sub)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", false, nil
 	}

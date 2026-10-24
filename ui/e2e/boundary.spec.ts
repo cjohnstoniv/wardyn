@@ -41,7 +41,7 @@ test.describe("Policies: the Wardyn boundary", () => {
     const path = "/api/v1/governance/boundary";
     const original = await consoleAPI(page, "GET", path);
     expect(original.status, original.text).toBe(200);
-    const { mode, spec, limits } = JSON.parse(original.text);
+    const { mode, spec, limits, contact } = JSON.parse(original.text);
     const off = await consoleAPI(page, "PUT", path, { mode: "no_limits", spec: {}, limits: {} });
     expect(off.status, off.text).toBe(200);
     try {
@@ -60,7 +60,7 @@ test.describe("Policies: the Wardyn boundary", () => {
       const stored = await consoleAPI(page, "GET", path);
       expect(JSON.parse(stored.text).mode).toBe("no_limits");
     } finally {
-      const back = await consoleAPI(page, "PUT", path, { mode, spec, limits });
+      const back = await consoleAPI(page, "PUT", path, { mode, spec, limits, contact });
       expect(back.status, back.text).toBe(200);
     }
   });
@@ -80,7 +80,7 @@ test.describe("Policies: the Wardyn boundary", () => {
     );
     const path = "/api/v1/governance/boundary";
     const original = await consoleAPI(page, "GET", path);
-    const { mode, spec, limits } = JSON.parse(original.text);
+    const { mode, spec, limits, contact } = JSON.parse(original.text);
     const off = await consoleAPI(page, "PUT", path, { mode: "no_limits", spec: {}, limits: {} });
     expect(off.status, off.text).toBe(200);
     try {
@@ -93,7 +93,7 @@ test.describe("Policies: the Wardyn boundary", () => {
       await expect(report.getByText(BOUNDARY_DRY_RUN.OTHER_ASSIGNMENTS)).toBeVisible();
       await expect(report.getByText(BOUNDARY_DRY_RUN.ASSIGNMENT_ROW("all", "", "Platform team"))).toBeVisible();
     } finally {
-      const back = await consoleAPI(page, "PUT", path, { mode, spec, limits });
+      const back = await consoleAPI(page, "PUT", path, { mode, spec, limits, contact });
       expect(back.status, back.text).toBe(200);
     }
   });
@@ -103,7 +103,7 @@ test.describe("Policies: the Wardyn boundary", () => {
     const path = "/api/v1/governance/boundary";
     const original = await consoleAPI(page, "GET", path);
     expect(original.status, original.text).toBe(200);
-    const { mode, spec, limits } = JSON.parse(original.text);
+    const { mode, spec, limits, contact } = JSON.parse(original.text);
     const set = await consoleAPI(page, "PUT", path, { mode: "hard_limits", spec: { ...spec, desktop: { copy_out: "allowed" } }, limits });
     expect(set.status, set.text).toBe(200);
     try {
@@ -127,7 +127,7 @@ test.describe("Policies: the Wardyn boundary", () => {
       const stored = await consoleAPI(page, "GET", path);
       expect(JSON.parse(stored.text).spec.desktop).toEqual({ copy_out: "allowed" });
     } finally {
-      const back = await consoleAPI(page, "PUT", path, { mode, spec, limits });
+      const back = await consoleAPI(page, "PUT", path, { mode, spec, limits, contact });
       expect(back.status, back.text).toBe(200);
     }
   });
@@ -137,7 +137,7 @@ test.describe("Policies: the Wardyn boundary", () => {
     const path = "/api/v1/governance/boundary";
     const original = await consoleAPI(page, "GET", path);
     expect(original.status, original.text).toBe(200);
-    const { mode, spec, limits, locked_knobs } = JSON.parse(original.text);
+    const { mode, spec, limits, locked_knobs, contact } = JSON.parse(original.text);
     const set = await consoleAPI(page, "PUT", path, { mode: "hard_limits", spec, limits });
     expect(set.status, set.text).toBe(200);
     try {
@@ -162,7 +162,7 @@ test.describe("Policies: the Wardyn boundary", () => {
       const stored = await consoleAPI(page, "GET", path);
       expect(JSON.parse(stored.text).locked_knobs ?? []).toEqual(locked_knobs ?? []);
     } finally {
-      const back = await consoleAPI(page, "PUT", path, { mode, spec, limits });
+      const back = await consoleAPI(page, "PUT", path, { mode, spec, limits, contact });
       expect(back.status, back.text).toBe(200);
     }
   });

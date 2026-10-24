@@ -105,6 +105,20 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - `WARDYN_GOVERNANCE_PROFILE_PUT_EXISTING_ONLY` is now `WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY`. wardynd refuses
   to start while the old name is set, and names the new one. A notify route keyed `profiles` is now `units`; the
   old key is refused when the config is read.
+- **Four hardening switches are now on by default.** Set one to `false` to keep its old behaviour; boot logs each
+  one's state.
+  - `WARDYN_EGRESS_HOST_PORT_GRANTS_INERT`: re-save each `egress_host` allow grant whose value carries a port through
+    `POST /api/v1/permissions/grants`, which stores the host alone, then delete the old row. Boot logs how many
+    rows are inert.
+  - `WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY`: switch callers that create a unit by `PUT` to
+    `POST /api/v1/governance/units`.
+  - `WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL`: check that each allow grant matched on an email has a sign-in that
+    vouches for it (`WARDYN_OIDC_EMAIL_DOMAINS` or `WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED` set, or
+    `WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS` on). An Entra ID token usually carries no `email_verified`, so on Entra
+    those grants stop granting; boot warns with how many. Re-grant each to the person's user id (sub) or a group.
+  - `WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY`: a caller of a run's proxy from outside the run's own network is now
+    refused. A runner that is newer than its organisation keeps the old behaviour (any peer) until the organisation
+    is upgraded, and logs that it did.
 - Migration `0207_governance_units` renames the governance tables and their columns, keeping every row, grant and
   foreign key, so a split-role install needs no grant change. A governance change proposed before the upgrade reads
   as stale once and is proposed again.
@@ -289,8 +303,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   always has it on. It needs the proxy image from this release.
 - `WARDYN_PROXY_RESPONSE_SCRUB` is `false` by default. Set it to `true` and each run's proxy replaces a credential it
   added with `<secret-hidden>` when a response echoes it, in headers and body.
-- `WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY` is off by default. Set it to `true` and each run's proxy on the Docker
-  substrate serves only callers on the run's own network and closes others before reading a byte.
+- `WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY` is on by default. Each run's proxy on the Docker substrate serves only
+  callers on the run's own network and closes others before reading a byte. Set it to `false` to keep the old
+  behaviour (any peer); boot logs it.
 - `WARDYN_ENV_SECRET_PLACEHOLDERS` and `WARDYN_FILE_SECRET_PLACEHOLDERS` are `false` by default. Set one to `true` and
   an `env_secret` (or `file_secret`) grant whose scope names a `host` puts `wardyn-placeholder:<id>` in the variable
   (or file), and the run's proxy fills the `Authorization` header to that host. Off, the value is placed in the
@@ -298,15 +313,15 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - `WARDYN_GIT_PAT_BROKER_OFF_REFUSED` is `false` by default. Set it to `true` and, while `WARDYN_GIT_PAT_BROKER` is
   `off`, an administrator's run that would hold a `git_pat` token in the sandbox is refused too. A member's run is
   refused either way.
-- `WARDYN_EGRESS_HOST_PORT_GRANTS_INERT` is `false` by default. Off, listing grants warns on each stored `egress_host`
-  allow grant whose value carries a port. Set it to `true` and such a grant is inert: `GET /api/v1/permissions` marks
-  it and it grants nothing. Re-save each warned grant first.
-- `WARDYN_GOVERNANCE_PROFILE_PUT_EXISTING_ONLY` is `false` by default. Off, a `PUT /api/v1/governance/profiles/{id}`
-  that creates a profile is logged. Set it to `true` and that call answers `404 governance_profile_not_found`; create
-  with `POST /api/v1/governance/profiles`.
-- `WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL` is `false` by default. Off, each match of an allow grant on a caller's
-  email is logged at INFO. Set it to `true` and such a grant matches only when sign-in vouches for the email; deny
-  grants bind either way.
+- `WARDYN_EGRESS_HOST_PORT_GRANTS_INERT` is on by default. A stored `egress_host` allow grant whose value carries a
+  port is inert: `GET /api/v1/permissions` marks it and it grants nothing. Set it to `false` to keep the old behaviour,
+  and listing grants warns on each such grant; boot logs it.
+- `WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY` is on by default. A `PUT /api/v1/governance/units/{id}` naming an id no
+  unit holds answers `404 governance_unit_not_found`; create with `POST /api/v1/governance/units`. Set it to `false`
+  to keep the old behaviour, and each create by PUT is logged; boot logs it.
+- `WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL` is on by default. An allow grant on a caller's email matches only when
+  sign-in vouches for the email; deny grants bind either way. Set it to `false` to keep the old behaviour, and each
+  match on an unvouched email is logged at INFO; boot logs it.
 - `WARDYN_COMPUTER_FOLDERS` is `false` by default. Set it to `true` and a run can take a folder from its creator's
   own folder-only runner (`wardyn-runnerd serve --substrate folders`). Off, New Run shows "Your computer" as blocked
   and `local_folder.runner_id` is refused with `computer_folders_off`.
