@@ -596,6 +596,7 @@ func (a *AuditSpool) compact(head [][]byte, tailStart, size int64) error {
 	}
 	if err := a.stageRewrite(tf, head, tailStart, size); err != nil {
 		tf.Close()
+		_ = os.Remove(tmp)
 		return err
 	}
 	// The cursor is retired BEFORE the rename: a crash between them would
@@ -620,8 +621,8 @@ func (a *AuditSpool) compact(head [][]byte, tailStart, size int64) error {
 // memory does not grow with the backlog.
 const spoolCopyChunk = 64 << 10
 
-// stageRewrite writes head, then the spool's bytes from tailStart to size, to tf and syncs it,
-// through one fixed-size buffer. Caller must hold a.mu.
+// stageRewrite writes head, then the spool's bytes from tailStart to size, to tf and syncs it.
+// The tail goes through the writer's ReadFrom, so memory does not grow with the backlog. Caller must hold a.mu.
 func (a *AuditSpool) stageRewrite(tf *os.File, head [][]byte, tailStart, size int64) error {
 	w := bufio.NewWriterSize(tf, spoolCopyChunk)
 	for _, line := range head {
@@ -638,7 +639,7 @@ func (a *AuditSpool) stageRewrite(tf *os.File, head [][]byte, tailStart, size in
 			return err
 		}
 		defer rf.Close()
-		n, err := io.CopyBuffer(w, io.NewSectionReader(rf, tailStart, size-tailStart), make([]byte, spoolCopyChunk))
+		n, err := io.Copy(w, io.NewSectionReader(rf, tailStart, size-tailStart))
 		if err != nil {
 			return err
 		}
