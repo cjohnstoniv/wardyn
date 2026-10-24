@@ -72,7 +72,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   empty tmpfs over its keychain and browser profile paths (`/home/agent/.local/share/keyrings`, `.mozilla`,
   `.config/chromium` and the rest in [Linux VM sandboxes](docs/operations/linux-vm-sandboxes.md#sign-ins-in-the-desktop)),
   read-only for an agent set Not allowed, so anything a custom guest image baked there is hidden. A guest with any swap
-  or zram on now fails to start. Upgrade wardyn-runnerd and rebuild the guest image together.
+  or zram on now fails to start. Upgrade wardyn-runnerd and rebuild the guest image together. A sign-in pause stops the
+  agent and pauses the desktop recording while it is open.
 - Split-role installs as above: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `desktop_vm_sign_ins`
   (migration `0230_desktop_vm_sign_ins`). Without it a VM's run page says nothing about sign-ins and offers no pause.
 - Split-role installs as above: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `oidc_session_sids` (migration
