@@ -30,6 +30,9 @@ const (
 	OpNetFD = "net_fd"
 	// OpEvents turns the connection into a one-way stream of events.
 	OpEvents = "events"
+	// OpDesktopPassword reads the run's VNC password (ControlReply.DesktopPassword), which runnerd
+	// sends in the guest agent's Init. Only a peer of the helper's own uid is answered.
+	OpDesktopPassword = "desktop_password"
 )
 
 // ControlRequest is one JSON line from runnerd to the helper.
@@ -47,6 +50,8 @@ type ControlReply struct {
 	Proto  int     `json:"proto,omitempty"`
 	Status *Status `json:"status,omitempty"`
 	Event  *Event  `json:"event,omitempty"`
+	// DesktopPassword answers OpDesktopPassword. Never log a reply that carries it.
+	DesktopPassword string `json:"desktop_password,omitempty"`
 }
 
 // Network states in Status.
@@ -177,6 +182,19 @@ func (cc *ControlClient) Status(ctx context.Context) (Status, error) {
 		return Status{}, errors.New("macvm: status reply without a status")
 	}
 	return *r.Status, nil
+}
+
+// DesktopPassword reads the run's VNC password, for the guest agent's Init (Init.DesktopPassword).
+// It fails for a run with no desktop. Never log or store the value.
+func (cc *ControlClient) DesktopPassword(ctx context.Context) (string, error) {
+	r, err := cc.call(ctx, ControlRequest{Op: OpDesktopPassword}, nil)
+	if err != nil {
+		return "", err
+	}
+	if r.DesktopPassword == "" {
+		return "", errors.New("macvm: desktop_password reply without a password")
+	}
+	return r.DesktopPassword, nil
 }
 
 // Stop asks the helper to stop the VM (gracefully first when graceful, for at

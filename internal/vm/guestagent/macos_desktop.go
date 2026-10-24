@@ -4,49 +4,29 @@
 package guestagent
 
 import (
+	"cmp"
 	"context"
-	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"math"
-	"math/big"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
 )
 
-// The macOS desktop is the guest's own Screen Sharing. The agent owns three things about it: the
-// per-run VNC password, the pointer-position read the prepare control check uses, and the desktop
-// session's environment.
+// The macOS desktop is the guest's own Screen Sharing. The agent owns three things about it: setting
+// the per-run VNC password the host's helper made (Init.DesktopPassword), the pointer-position read
+// the prepare control check uses, and the desktop session's environment.
 
-// Kickstart is Apple's remote-management tool.
-const kickstart = "/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart"
-
-// vncPasswordLen is VncAuth's key size: it uses at most eight characters (RFC 6143 7.2.2).
+// vncPasswordLen is VncAuth's key size: it uses at most eight characters (RFC 6143 7.2.2), so a
+// longer password would not be the one the host's shim logs in with.
 const vncPasswordLen = 8
-
-// vncAlphabet is printable and needs no quoting anywhere it travels. Eight characters of it are about
-// 47 bits, which is enough for what the password is: a lock on a door only the host's helper can
-// reach over vsock, not the security boundary.
-const vncAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
-
-// NewVNCPassword is vncPasswordLen random characters of vncAlphabet.
-func NewVNCPassword() (string, error) {
-	max := big.NewInt(int64(len(vncAlphabet)))
-	b := make([]byte, vncPasswordLen)
-	for i := range b {
-		n, err := rand.Int(rand.Reader, max)
-		if err != nil {
-			return "", err
-		}
-		b[i] = vncAlphabet[n.Int64()]
-	}
-	return string(b), nil
-}
 
 // ConsoleUser names who owns the GUI session on the guest's console.
 type ConsoleUser interface {
@@ -64,8 +44,8 @@ type Pointer struct {
 type Desktop struct {
 	Run     CmdRunner
 	Console ConsoleUser
-	// NewPassword makes a run's password; nil is NewVNCPassword. A seam for tests.
-	NewPassword func() (string, error)
+	// VNCSettings is the settings file SetPassword writes; "" is MacVNCSettingsPath.
+	VNCSettings string
 
 	mu       sync.Mutex
 	password string
@@ -73,10 +53,9 @@ type Desktop struct {
 	open     map[io.Closer]struct{}
 }
 
-// Disable turns the run's desktop off: no password is set, the credential request answers 404, the
-// tunnel refuses, and a tunnel already open is closed. Called at Init for a run whose sign-ins cannot
-// be kept (SignInsOff), which has no desktop on macOS; the desktop is on until then, because
-// prepare's control check needs it.
+// Disable turns the run's desktop off: no password is set, the tunnel refuses, and a tunnel already
+// open is closed. Called at Init for a run whose sign-ins cannot be kept (SignInsOff), which has no
+// desktop on macOS; the desktop is on until then, because prepare's control check needs it.
 func (d *Desktop) Disable() {
 	d.mu.Lock()
 	d.disabled = true
@@ -117,27 +96,55 @@ func (d *Desktop) Track(c io.Closer) (release func(), ok bool) {
 // ErrNoConsoleUser is a guest with nobody logged in at the console (the login window).
 var ErrNoConsoleUser = errors.New("guestagent: nobody is logged in at the guest's console")
 
-// KickstartArgs is the command line that sets Screen Sharing's legacy VNC password. That the setting
-// exists on a macOS 27 guest, and that root can change it per run, are unproven (MAC-PROOF P9).
-func KickstartArgs(password string) []string {
-	return []string{"-configure", "-clientopts", "-setvnclegacy", "-vnclegacy", "yes", "-setvncpw", "-vncpw", password}
+// MacVNCSettingsPath is where Screen Sharing keeps its legacy VNC password: VNCSettingsLine's text,
+// root-owned, mode 0600.
+const MacVNCSettingsPath = "/Library/Preferences/com.apple.VNCSettings.txt"
+
+// vncSettingsKey is the fixed key Screen Sharing XORs its stored VNC password with.
+var vncSettingsKey = [16]byte{0x17, 0x34, 0x51, 0x6E, 0x8B, 0xA8, 0xC5, 0xE2, 0xFF, 0x1C, 0x39, 0x56, 0x73, 0x90, 0xAD, 0xCA}
+
+// VNCSettingsLine is the settings file's text for password: each of the key's 16 bytes XORed with the
+// password's (zero past its end), in upper-case hex, and a newline. kickstart -setvncpw writes the same
+// text; that the guest's Screen Sharing reads a password written here is unproven (MAC-PROOF P9).
+func VNCSettingsLine(password string) []byte {
+	var b [16]byte
+	for i, k := range vncSettingsKey {
+		if i < len(password) {
+			k ^= password[i]
+		}
+		b[i] = k
+	}
+	return []byte(strings.ToUpper(hex.EncodeToString(b[:])) + "\n")
 }
 
-// SetRunPassword makes this run's VNC password and sets it in the guest. The password is held in the
-// agent's memory and in the guest's own Screen Sharing setting, which lives on the run's clone disk
-// and goes with it; the agent never logs it or writes it anywhere else. It is called once, at Init.
-// On failure the run has no desktop password (Password reports none) and the error holds none.
-func (d *Desktop) SetRunPassword(ctx context.Context) error {
-	gen := d.NewPassword
-	if gen == nil {
-		gen = NewVNCPassword
+// SetPassword sets Screen Sharing's VNC password to pw by writing the settings file itself, through a
+// temp file and a rename (replaceFile), so the password is on no command line: any guest process,
+// the agent user's included, can read another process's arguments. Nothing holds pw afterwards, and
+// the error holds none of it. Init's run password and tools mode's desktop_password step both set it
+// here.
+func (d *Desktop) SetPassword(pw string) error {
+	if pw == "" || len(pw) > vncPasswordLen {
+		return fmt.Errorf("the desktop password is %d bytes, not 1 to %d", len(pw), vncPasswordLen)
 	}
-	pw, err := gen()
-	if err != nil {
+	path := cmp.Or(d.VNCSettings, MacVNCSettingsPath)
+	err := replaceFile(path, 0o600, func(f *os.File) error {
+		_, err := f.Write(VNCSettingsLine(pw))
 		return err
-	}
-	if _, err := d.Run.Run(ctx, kickstart, KickstartArgs(pw)...); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("set the VNC password: %w", redact(err, pw))
+	}
+	return nil
+}
+
+// SetRunPassword sets pw, the run's VNC password from Init, in the guest (SetPassword) and holds it.
+// The password is held in the agent's memory and in the guest's Screen Sharing settings file, which
+// lives on the run's clone disk and goes with it; the agent never logs it or writes it anywhere else.
+// It is called once, at Init. On failure the run has no desktop password (Password reports none) and
+// the error holds none.
+func (d *Desktop) SetRunPassword(_ context.Context, pw string) error {
+	if err := d.SetPassword(pw); err != nil {
+		return err
 	}
 	d.mu.Lock()
 	d.password = pw
@@ -234,41 +241,28 @@ func (d *Desktop) SetSessionEnv(ctx context.Context, env []string) error {
 	return nil
 }
 
-// Register adds the desktop's two requests to mux:
+// Register adds the desktop's request to mux:
 //
-//	GET /v1/desktop/credential   the run's VNC password, for the helper's RFB shim; 404 without one
 //	GET /v1/desktop/pointer      Pointer, read in the console user's session
 //
-// The agent's only client is the host's helper over vsock; the password is never logged.
+// The password is never served back: the host's helper made it and logs in with it itself.
 func (d *Desktop) Register(mux *http.ServeMux) {
-	mux.HandleFunc("GET /v1/desktop/credential", func(w http.ResponseWriter, _ *http.Request) {
-		pw, ok := d.Password()
-		if !ok {
-			http.Error(w, "this run has no desktop password", http.StatusNotFound)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Cache-Control", "no-store")
-		_ = json.NewEncoder(w).Encode(DesktopCredential{Password: pw})
-	})
-	mux.HandleFunc("GET /v1/desktop/pointer", func(w http.ResponseWriter, r *http.Request) {
-		p, err := d.Pointer(r.Context())
-		if err != nil {
-			slog.Warn("guest agent: pointer read", "err", err)
-			status := http.StatusInternalServerError
-			if errors.Is(err, ErrNoConsoleUser) {
-				status = http.StatusConflict
-			}
-			http.Error(w, err.Error(), status)
-			return
-		}
-		writeJSONAny(w, p)
-	})
+	mux.HandleFunc("GET /v1/desktop/pointer", d.servePointer)
 }
 
-// DesktopCredential is GET /v1/desktop/credential's answer.
-type DesktopCredential struct {
-	Password string `json:"password"`
+// servePointer answers the pointer position (Pointer); 409 with nobody at the console.
+func (d *Desktop) servePointer(w http.ResponseWriter, r *http.Request) {
+	p, err := d.Pointer(r.Context())
+	if err != nil {
+		slog.Warn("guest agent: pointer read", "err", err)
+		status := http.StatusInternalServerError
+		if errors.Is(err, ErrNoConsoleUser) {
+			status = http.StatusConflict
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	writeJSONAny(w, p)
 }
 
 func writeJSONAny(w http.ResponseWriter, v any) {

@@ -107,13 +107,10 @@ func startRun(t *testing.T, eng *macvmtest.Engine, mod func(*macvm.RunConfig, *m
 	cfg := macvm.RunConfig{RunID: testRunID, BaseDir: base, CPUs: 4, MemoryMiB: 8192, Identity: macvm.IdentityFresh,
 		SockRoot: macvmtest.SockRoot(t)}
 	listening := make(chan struct{})
-	o := macvm.RunOptions{Engine: eng, NetWait: 5 * time.Second, Listening: func() { close(listening) }, SockFstat: macvmtest.SockFstat}
+	r.dir = r.layout.RunDir(cfg.RunID)
+	o := macvm.RunOptions{Engine: eng, RunDir: r.dir, NetWait: 5 * time.Second, Listening: func() { close(listening) }, SockFstat: macvmtest.SockFstat}
 	if mod != nil {
 		mod(&cfg, &o)
-	}
-	r.dir = r.layout.RunDir(cfg.RunID)
-	if o.RunDir == "" {
-		o.RunDir = r.dir
 	}
 	r.sock = macvm.SockDir(cfg.SockRoot, cfg.RunID)
 	if err := macvm.WriteRunConfig(r.dir, cfg); err != nil {
