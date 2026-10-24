@@ -62,7 +62,7 @@ declare -A ALLOWLIST=(
   ["ui/src/app/components/screens/approvals-lists.test.tsx"]=2 # display only: a decided row's requested and decided times
   ["ui/src/app/components/screens/permissions.test.tsx"]=1 # display only: a deactivated person's deactivated_at
   ["ui/e2e/recording-level.spec.ts"]=4 # passthrough only: stubbed audit rows and a recording's started_at, rendered as given, never compared to the clock
-  ["ui/src/app/components/screens/run-detail/recording-tab.level.test.tsx"]=3 # passthrough only: audit rows' time and a gap's start/end, never compared to the clock
+  ["ui/src/app/components/screens/run-detail/recording-tab.level.test.tsx"]=21 # passthrough only: audit rows' time, a gap's start/end and a playback's started_at, never compared to the clock
   ["cmd/wardyn-aws-sso/main_test.go"]=2
   ["cmd/wardyn/commands_test.go"]=6
   ["cmd/wardyn/runner_limits_test.go"]=2 # display only: runner list prints LastSeenAt as given, never compared to the clock
@@ -212,6 +212,13 @@ declare -A ALLOWLIST=(
   ["ui/src/app/lib/schedule.test.ts"]=32
   # 0.10 W4f: SESS-M12's signedInUntil tests pass a fixed instant in as the clock (now) and compare only to it.
   ["ui/src/app/lib/session-continuity-copy.test.ts"]=3 # injected clock only: signedInUntil(at, now), never compared to the wall clock
+  # 0.10 DESK-PLAYER: a recorded desktop's started_at and the chain check's from bound, fixed instants the replay and
+  # the range read only echo or offset from; audit rows' time is passthrough (partitions key on recorded_at). None is
+  # compared to the wall clock.
+  ["internal/api/recording_chain_test.go"]=5
+  ["internal/store/auditchain_range_pg_test.go"]=1
+  ["ui/e2e/desktop-replay.spec.ts"]=1
+  ["ui/src/app/lib/desktop-replay-timeline.test.ts"]=1
 )
 
 fail=0
