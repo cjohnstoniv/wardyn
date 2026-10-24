@@ -74,6 +74,11 @@ export const SIGNIN = {
   OIDC_REFUSED:
     "Your identity provider didn't complete the sign-in. If you declined a prompt, try again; otherwise ask your Wardyn admin whether you are assigned to Wardyn in your identity provider.",
   AUTH_FAILED: "Sign-in failed. Try again, or ask your Wardyn admin.",
+  // auth_error=sign_in_expired (r11 #2775): the callback's state cookie was gone or replaced. A notice, not a
+  // refusal. "Usually": a sign-out in between, a flow that crossed origins and dropped cookies land here too.
+  SIGN_IN_EXPIRED:
+    "That sign-in ran out or was replaced, usually because it took more than 10 minutes or a newer one was started in another tab.",
+  SIGN_IN_AGAIN: "Sign in again",
 } as const;
 
 // #484 — the two pieces of the admin-written request-access help the sign-in

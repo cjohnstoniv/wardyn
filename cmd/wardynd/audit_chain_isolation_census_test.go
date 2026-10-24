@@ -72,7 +72,7 @@ func (s txSite) pinned() bool {
 // together and prove nothing.
 var auditWriterPins = map[string]string{
 	"internal/store/store_runner_exit.go:PG.AcceptRunnerExit": "runner exit transition, durable receipt and chained audit commit atomically at READ COMMITTED",
-	"internal/store/store.go:InsertAuditEvent":                "the control plane's audit writer: pool.BeginTx(pgx.ReadCommitted), then the chain lock, then the INSERT",
+	"internal/store/store_audit_insert.go:InsertAuditEvent":   "the control plane's audit writer: pool.BeginTx(pgx.ReadCommitted), then the chain lock, then the INSERT",
 	"internal/broker/pgx.go:PgxStore.BeginReadCommitted":      "the broker's mint transaction: broker.mint opens it through the TxBeginner interface's ONLY opener, BeginReadCommitted (R3 HANDOFF-1), whose first statement is SET TRANSACTION ISOLATION LEVEL READ COMMITTED with a fail-closed rollback; insertAuditEventTx chains the mint's audit row inside it. The interface carries no bare Begin any more, so every caller of the seam is pinned by construction",
 	"internal/db/db.go:beginReadCommitted":                    "the boot chain canary, which INSERTs a synthetic audit row and rolls it back",
 }

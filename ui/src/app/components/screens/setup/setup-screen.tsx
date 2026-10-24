@@ -921,9 +921,6 @@ export function SetupScreen({
           <ReviewStep
             status={status}
             readiness={readiness}
-            onRecheck={forceRecheck}
-            rechecking={rechecking}
-            lastCheckedAt={lastCheckedAt}
             onJump={selectStep}
             onSwitchToUser={() => void finishSwitchToUser()}
             switchDisabled={!!finishGate}

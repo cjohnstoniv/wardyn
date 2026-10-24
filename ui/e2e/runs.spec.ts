@@ -127,7 +127,7 @@ test.describe("Runs landing — the seeded 9-fixture backend", () => {
 
     await expect(async () => {
       await search.fill("zzz-no-such-run-zzz");
-      await expect(page.getByText("No runs match these filters.")).toBeVisible({ timeout: 3_000 });
+      await expect(page.getByText("No runs match these filters", { exact: true })).toBeVisible({ timeout: 3_000 });
     }).toPass({ timeout: 15_000 });
     await expect(total).toHaveText(before ?? "");
   });
@@ -139,7 +139,7 @@ test.describe("Runs landing — the seeded 9-fixture backend", () => {
     await expect(async () => {
       await search.fill("zzz-no-such-run-zzz");
       await expect(search).toHaveValue("zzz-no-such-run-zzz");
-      await expect(page.getByText("No runs match these filters.")).toBeVisible({ timeout: 3_000 });
+      await expect(page.getByText("No runs match these filters", { exact: true })).toBeVisible({ timeout: 3_000 });
     }).toPass({ timeout: 15_000 });
     await expect(page.getByText("Try a different search term or filter.")).toBeVisible();
 

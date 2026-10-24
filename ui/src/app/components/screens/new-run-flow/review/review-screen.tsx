@@ -18,7 +18,9 @@ import { NR_SAVE } from "../../../wardyn/copy/new-run/save";
 import { NR_SHAPE } from "../../../wardyn/copy/new-run/shape";
 import { NR_TEMPLATES } from "../../../wardyn/copy/new-run/templates";
 import { useUIGateway } from "../../../../lib/hooks/use-ui-gateway";
-import type { PreflightResult } from "../../../../lib/types/preflight";
+import type { PreflightResult, SetupItem } from "../../../../lib/types/preflight";
+import { cn } from "../../../ui/utils";
+import { NR_TOOLS } from "../../../wardyn/copy/new-run/tools";
 import type { Template, TemplateKind, TemplatePublish } from "../../../../lib/types/templates";
 import { harnessIds } from "../lenses/lens-keys";
 import { intentToWire } from "../draft/intent-to-wire";
@@ -35,6 +37,7 @@ import { StepShell, useAnnounce } from "../steps/step-shell";
 import { BLOCKERS_ID, BlockerList } from "./blocker-list";
 import { buildBlockers, groupsBlockedBy, missingSetup } from "./blockers";
 import { localMcpConflicts, useHarnessNames } from "../steps/tools/local-mcp";
+import { AddTokenDialog, DISABLED_FILL } from "../steps/tools/setup-needed";
 import { EffectivePolicyCard } from "./effective-policy-card";
 import { AccessGroup } from "./groups/access-group";
 import { LimitsGroup } from "./groups/limits-group";
@@ -157,6 +160,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
     void checks.preview.retry();
   };
 
+  const [addingSecret, setAddingSecret] = React.useState<SetupItem | null>(null);
   const [saveKind, setSaveKind] = React.useState<TemplateKind | null>(null);
   const [publish, setPublish] = React.useState<TemplatePublish | null>(null);
   const openSave = (kind: TemplateKind) => {
@@ -178,7 +182,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
       eyebrow={NR_REVIEW.EYEBROW}
       title={NR_REVIEW.TITLE}
       lede={NR_REVIEW.LEDE}
-      primary={{ label: NR_REVIEW.LAUNCH_RUN, onActivate: () => onLaunch?.(), disabled: !open, describedBy: BLOCKERS_ID, arrow: false, className: "max-sm:order-3 max-sm:col-span-2 max-sm:h-11" }}
+      primary={{ label: NR_REVIEW.LAUNCH_RUN, onActivate: () => onLaunch?.(), disabled: !open, describedBy: BLOCKERS_ID, arrow: false, className: cn(DISABLED_FILL, "max-sm:order-3 max-sm:col-span-2 max-sm:h-11") }}
       phoneBar
       headingAside={
         <div role="group" aria-label={NR_REVIEW.VIEW_ARIA}>
@@ -212,7 +216,15 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
       }}
     >
       <Notices poolName={pool} slots={pre?.runner_pool_slots} applied={pre?.resources_applied} askedByYou={changedFromOrigin(draft, ["resources"])} warnings={pre?.warnings} diskCut={!!pre?.main_drive?.clamped_by && pre.main_drive.clamped_by !== "policy"} />
-      <BlockerList blockers={blockers} go={(loc: NewRunLocation) => go(loc)} onCheckAgain={issues.length ? undefined : checkAgain} />
+      <BlockerList blockers={blockers} go={(loc: NewRunLocation) => go(loc)} onCheckAgain={issues.length ? undefined : checkAgain} onAdd={setAddingSecret} />
+      {addingSecret && (
+        <AddTokenDialog
+          item={addingSecret}
+          onClose={() => setAddingSecret(null)}
+          // As Tools does after a door: say it, then ask the server again. The blocker goes when the server reports the secret stored.
+          onSaved={() => { announce(NR_TOOLS.TOKEN_SAVED); setAddingSecret(null); checkAgain(); }}
+        />
+      )}
       {view === "pretty" ? (
         <div className="grid items-start gap-3.5 lg:grid-cols-[minmax(0,1.7fr)_minmax(280px,0.8fr)]">
           {/* #3044: Review's groups are flat rows in the one section card the guided steps use. A blocker that names a

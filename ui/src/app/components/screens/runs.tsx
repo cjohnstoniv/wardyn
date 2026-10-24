@@ -296,7 +296,7 @@ export function RunsScreen() {
             <div className="mt-4 overflow-hidden rounded-xl border border-border bg-card">
               <EmptyState
                 icon={FilterX}
-                title="No runs match these filters."
+                title="No runs match these filters"
                 description={RUNS_NO_MATCH_BODY}
                 action={
                   <Button variant="outline" onClick={clearFilters}>

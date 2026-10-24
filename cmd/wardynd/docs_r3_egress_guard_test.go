@@ -206,12 +206,12 @@ func TestUpstreamGuardResidualIsDocumented(t *testing.T) {
 
 	// The lane's own release note is the one user-facing place the residual
 	// count is stated; it must carry the same TWO §4.2 now carries.
-	cl := readDoc(t, "CHANGELOG.md")
-	mustSay(t, cl, "CHANGELOG.md",
+	cl := readDoc(t, "docs/releases/0.7.md")
+	mustSay(t, cl, "docs/releases/0.7.md",
 		"with the two residuals stated in `threatmodel/THREAT-MODEL.md` §4.2: a name this proxy cannot resolve at all is forwarded unvetted",
 		"a name that answers differently to this proxy and the corp proxy is bound at check time only",
 	)
-	mustNotSay(t, cl, "CHANGELOG.md",
+	mustNotSay(t, cl, "docs/releases/0.7.md",
 		"with the one residual",
 	)
 

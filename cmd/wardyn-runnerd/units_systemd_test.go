@@ -7,6 +7,9 @@ package main
 
 import (
 	"crypto/ed25519"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,14 +17,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/runneridentity"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 )
-
-const unitOrg = "http://127.0.0.1:9"
 
 // run runs a command and returns its trimmed output; systemctl exits non-zero
 // for "inactive", so callers that expect that read the output and ignore err.
@@ -74,8 +76,24 @@ func TestRunnerdUserUnitStartsAndStops(t *testing.T) {
 		t.Fatalf("build wardyn-runnerd: %v\n%s", err, out)
 	}
 
-	// A registered identity bound to an unreachable organisation: serve keeps
-	// retrying, so the unit must stay up rather than exit.
+	// The organisation answers setup's connection check (/healthz, and the
+	// runner stream's upgrade, which it hangs up at once) and goes away when
+	// install.sh is done: a registered identity bound to an unreachable
+	// organisation, so serve keeps retrying and the unit must stay up rather than exit.
+	org := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/healthz":
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "version": "0.10.0"})
+		case strings.HasSuffix(r.URL.Path, "/stream"):
+			if c, err := websocket.Accept(w, r, nil); err == nil {
+				_ = c.CloseNow()
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(org.Close)
+	unitOrg := org.URL
 	key, err := runneridentity.Generate(stateDir)
 	if err != nil {
 		t.Fatal(err)
@@ -96,6 +114,7 @@ func TestRunnerdUserUnitStartsAndStops(t *testing.T) {
 	if out, err := run(t, "bash", script, "--org", unitOrg, "--binary", bin, "--proxy-image", proxyImage); err != nil {
 		t.Fatalf("install.sh: %v\n%s", err, out)
 	}
+	org.Close()
 
 	state := func() string { s, _ := run(t, "systemctl", "--user", "is-active", "wardyn-runnerd"); return s }
 	mainPID := func() string {

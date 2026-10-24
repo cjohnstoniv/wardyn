@@ -18,6 +18,7 @@ From 0.9 the control plane places runs on a claimed runner through its owner's u
 | Rancher Desktop, containerd (nerdctl) mode | Unsupported: it has no Docker API. Switch Rancher Desktop to the dockerd (moby) engine. |
 | `DOCKER_HOST` | `runnerd` follows `DOCKER_HOST`, else a selected docker context that is a local unix socket; a tcp, ssh or TLS context is refused. Point `DOCKER_HOST` at the engine's socket, for example `unix://$HOME/.rd/docker.sock` for Rancher Desktop (expected) or `unix://$HOME/.colima/default/docker.sock` for Colima (expected). |
 | An explicit relay flag | `--relay-listen` accepts loopback on any engine, the native bridge gateway, or the `veth-rd-wsl` address. It never accepts `0.0.0.0` or another interface's address. The startup check still has to pass. |
+| A relay source list | `WARDYN_RELAY_ALLOWED_SOURCES`, off by default. Native Linux Docker: list the subnets a run's proxy dials from (`docker network inspect`). VM-backed engines: proxies arrive from loopback or the VM's forwarder, so a list either refuses every proxy or admits every local process. |
 | The relay's port | The port of the org's `WARDYN_CONTROL_PLANE_URL` (`8443` by default), not the org URL's. No control plane may listen on that loopback port on the same computer. |
 | A privileged port | For a runner installed as a user service, the control-plane URL's port must be 1024 or higher. A user service cannot bind a port such as `:443`, so it cannot be relayed; this fails at the first run, not at the startup check. |
 | Internal network | `serve` creates the `--internal-network` bridge (default `wardyn-internal`) when it is missing. |
@@ -256,6 +257,26 @@ Both run `serve --config <path to runnerd.json>` and hold no setting themselves.
 - To upgrade, see [Upgrading a runner](#upgrading-a-runner).
 - Org runners keep the operator's `--token-file` path.
 
+### `wardyn runner install` and `wardyn runner upgrade`
+
+`wardyn runner install` is `wardyn runner setup` with the runner taken from a signed release instead of the copy this CLI pins. It takes setup's flags and `--version` (this CLI's own release when left out). On a computer that already runs a runner it is `upgrade`, so running it again with a newer `--version` upgrades.
+
+| Step | What it does |
+|---|---|
+| Download | `SHA256SUMS`, `SHA256SUMS.sigstore.json` and `wardyn-runnerd-<os>-<arch>` from `<base>/v<version>/`, through your proxy settings and the roots `wardyn ca` holds. The base is `--artifact-base` (then saved in `cli.json`), the macOS managed preference `ArtifactBase`, the saved one, `/healthz.cli_artifact_base`, else the release |
+| Signature | The bundle must sign `SHA256SUMS` with a certificate for `https://github.com/cjohnstoniv/wardyn/.github/workflows/release.yml@refs/tags/v<version>`, issuer `https://token.actions.githubusercontent.com`, source repository `https://github.com/cjohnstoniv/wardyn`, and carry a transparency-log entry |
+| Checksum | The runner's SHA-256 must be the one the verified `SHA256SUMS` lists |
+| Swap | `upgrade` runs the verified runner's `setup --org <the service's organisation>`: it stages the file beside the installed one, stops the service, keeps the old file as `wardyn-runnerd.previous`, renames the new one into place and starts the service |
+| Wait | Up to 60 s for the runner's `status.json` to say a service started after the swap is connected. Otherwise `.previous` is put back the same way, and the command fails naming both versions |
+
+- Verification is offline: the bundle carries the log entry and its inclusion proof, and the CLI embeds the Sigstore public-good trust root. `scripts/refresh-sigstore-root.sh` refreshes that root, and the next CLI release carries it. Nothing calls Fulcio, Rekor or the TUF repository.
+- A refused signature, identity, checksum or download leaves the installed runner as it was. There is no fallback to an unsigned download.
+- A release without `SHA256SUMS.sigstore.json` fails with "signature bundle missing". Releases before 0.10.0 publish none, so this command cannot install them: use `wardyn runner setup` or the manual check in [Verify the release assets](VERIFY.md#5-verify-the-release-assets).
+- A mirror must carry `SHA256SUMS`, its bundle and this platform's runner. A mirror without the runner fails with "asset missing on mirror". The pinned identity means a mirror cannot substitute a binary.
+- A runner already at `--version` is left alone, and nothing is downloaded.
+- `wardyn login` and `wardyn whoami` say once a day when this computer's runner is older than its organisation, and name the `upgrade` line.
+- The first CLI has no pin of its own yet: install it from the signed macOS package, or over TLS from the release with the `SHA256SUMS` check above. A later pin change, such as a renamed workflow, ships in the next CLI release.
+
 ### Upgrading a runner
 
 Upgrade the organisation before its runners. A runner installed with `setup` upgrades by running `wardyn runner setup` again, or the new release's `wardyn-runnerd setup` with the same flags: it renames a new file over its own copy and restarts the service. Installing a new `wardyn-runnerd.pkg` upgrades only a runner the package's managed agent runs (one set up with `register`); it stops that agent first. A `setup`-installed runner keeps its own copy, so a new package alone leaves it on the old version. Never copy a new binary over the running one: on macOS the system can stop a process whose binary is overwritten in place.
@@ -293,25 +314,31 @@ An install from before the file keeps working: its environment file or LaunchAge
 
 | Stage | Checks | A failure names |
 |---|---|---|
+| `config` | Shown only on failure: `runnerd.json` loads, as `serve` loads it, with no unknown field or bad value | the field the line names |
 | `trusted-ca` | The CA bundle loads, as `setup` checks it, and warns of an expired or writable file | `WARDYN_TRUSTED_CA_FILE` |
+| `org-ca` | Shown only when set: the bundle of roots this runner's own connection to the organisation trusts loads | `WARDYN_ORG_CA_FILE` |
 | `org-url` | The organisation address is HTTPS, as `setup` requires, and where it came from | `WARDYN_RUNNER_ORG_URL` |
 | `dns` | The name resolves; with a proxy, the proxy's name | `WARDYN_RUNNER_ORG_URL` or `HTTPS_PROXY` |
 | `proxy` | The route in effect, as Go resolves `HTTPS_PROXY` and `NO_PROXY` | `HTTPS_PROXY` |
 | `tls` | The handshake: the issuer presented and the trust store that verified it (`system` or `WARDYN_TRUSTED_CA_FILE`); a proxy's 407 or 403 | `WARDYN_TRUSTED_CA_FILE`, `HTTPS_PROXY` |
 | `healthz` | `/healthz` answers as Wardyn, and the server version | `WARDYN_RUNNER_ORG_URL` |
+| `wire` | The runner stream's WebSocket upgrade gets through every proxy and gateway on the route (101); a proxy or gateway that strips it | `WARDYN_RUNNER_ORG_URL`, `HTTPS_PROXY` |
 | `engine` | The engine answers at `DOCKER_HOST`, and its version | `DOCKER_HOST` |
 | `proxy-image` | The image is on the engine or in its registry; a pinned image of another release than the organisation's is a version-skew failure | `WARDYN_PROXY_IMAGE` |
 | `relay` | The relay address is allowed and a probe container reaches it, through `setup`'s own check; the proxy network exists | `WARDYN_RELAY_LISTEN`, `WARDYN_INTERNAL_NETWORK` (missing network) |
+| `service` | The installed service, and on Linux whether systemd reports it running | |
+| `status` | The state and last error the service recorded in `status.json`, and the stage it stopped at | `WARDYN_RUNNER_STATE_DIR`, or the setting of that stage |
 
-- Each setting is read as the service reads it: a flag, else the settings `setup` recorded, else this shell. The flags are `--org`, `--state-dir`, `--proxy-image`, `--relay-listen`, `--relay-host-target` and `--trusted-ca-file`. The organisation address alone takes the `OrgURL` managed preference (macOS, set by an MDM profile) after `--org` and before the recorded settings; the line shows which one it came from.
+- Each setting is read as `serve` resolves it: a flag, the managed preference, the environment, then `runnerd.json`, where `setup` records them. The environment is the service's (the definition of a setup before `runnerd.json`), else this shell's. The flags are `--org`, `--state-dir`, `--proxy-image`, `--relay-listen`, `--relay-host-target` and `--trusted-ca-file`. The organisation address alone takes the `OrgURL` managed preference (macOS, set by an MDM profile) after `--org` and before the recorded settings; the line shows which one it came from.
 - It writes nothing and changes no setting. It never creates the proxy bridge, never pulls an image and never connects to the organisation as the runner.
 - The `wire` stage asks the organisation's runner stream route for a WebSocket upgrade as no runner and hangs up, and that probe counts against the runner handshake rate.
 - The relay stage starts one throwaway container, removed afterwards, and only when the proxy image is already on the engine; otherwise it says `skip`.
 - Names are shown and values are not: no token, password or proxy credential appears in either format, and a proxy is shown as its host and port.
 - Beside the link state and last error, `status.json` in the state directory holds `stage` and `stage_at` (the stage above that the last failed connect or start stopped at, and when; empty once connected or after a clean shutdown, kept after a refusal at start until a connect succeeds) and `relay` (`reachable` or `unreachable`; absent when no relay is probed). It holds no token, key or proxy credential.
-- The proxy stage reads this shell's environment. An installed service does not inherit it, so the line says so ([a runner behind a corporate proxy](#a-runner-behind-a-corporate-proxy)).
+- The proxy stage routes by the `HTTPS_PROXY` and `NO_PROXY` the runner's connection uses: the environment's, else `runner_proxy` and `runner_no_proxy` in `runnerd.json`. When they come from this shell and a service is installed, the line says the service does not receive them ([a runner behind a corporate proxy](#a-runner-behind-a-corporate-proxy)).
 - `wardyn doctor` runs the same network stages for the CLI, adds who `/api/v1/me` says you are, and runs this command's engine, image and relay stages when a runner is installed on the computer.
-- Not checked yet: the service's own state and a proxy that strips the WebSocket upgrade. The runner's last error reaches the organisation once it connects ([what the organisation sees](#what-the-organisation-sees-when-a-runner-cannot-connect)). Read the log for those ([a runner that never connected](#a-runner-that-never-connected)).
+- `wardyn-runnerd setup` runs the `trusted-ca`, `org-ca` (when set), `org-url`, `dns`, `proxy`, `tls`, `healthz`, `wire`, `service` and `status` stages first, against the settings it is about to install, and prints their lines. The proxy stage routes by the `HTTPS_PROXY` and `NO_PROXY` the service will get (this shell's, without a user name or password, else the earlier setup's) and not by this shell's own, and says so. When this shell's `HTTPS_PROXY` names that same proxy host and port with a user name and password, the check sends that credential to that proxy and nowhere else and never prints it; setup warns that the service needs it through the drop-in below. A proxy that answers 407 to a check with no credential stops setup, with a message that points at the drop-in; on Linux, if `runnerd-proxy.env` already exists beside `runnerd.json`, that 407 is a warning instead, because setup assumes the service gets the credential from it (setup checks that the file exists and never opens it, and has not verified the credential). A failed `org-url`, `dns`, `proxy`, `tls`, `healthz` or `wire` stage stops it before the token is spent, with the message `doctor` prints; a failure of any other stage is a warning. `healthz` stops it only for a proxy's 407, a redirect, an answer that is not Wardyn's health report or no connection: the runner never calls `/healthz`, so a plain 404, 403 or 5xx there is a warning, and `wire` and the registration decide. Its engine and relay checks are the ones `doctor` runs.
+- The runner's last error also reaches the organisation once it connects ([what the organisation sees](#what-the-organisation-sees-when-a-runner-cannot-connect)).
 
 ## What the organisation sees when a runner cannot connect
 

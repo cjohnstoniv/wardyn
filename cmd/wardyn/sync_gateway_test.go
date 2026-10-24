@@ -144,8 +144,8 @@ type syncRunner struct {
 }
 
 func (r *syncRunner) ExecStream(ctx context.Context, _ string, spec runner.ExecSpec) (*runner.ExecSession, error) {
-	if len(spec.Argv) == 3 && spec.Argv[0] == "/bin/sh" {
-		return r.hostShell(ctx, spec.Argv[2])
+	if len(spec.Argv) >= 3 && spec.Argv[0] == "/bin/sh" && spec.Argv[1] == "-c" {
+		return r.hostShell(ctx, spec.Argv[2:])
 	}
 	start := "/"
 	if i := slices.Index(spec.Argv, "-d"); i >= 0 && i+1 < len(spec.Argv) {
@@ -189,10 +189,15 @@ func (r *syncRunner) ExecStream(ctx context.Context, _ string, spec runner.ExecS
 	}, nil
 }
 
-// hostShell runs an SSH exec's command on the host, with every sandbox path
-// moved under the sandbox directory, as the sandbox's own shell would.
-func (r *syncRunner) hostShell(ctx context.Context, script string) (*runner.ExecSession, error) {
-	cmd := exec.CommandContext(ctx, "sh", "-c", strings.ReplaceAll(script, "/home/agent", filepath.Join(r.sandbox, "home/agent")))
+// hostShell runs an SSH exec's `/bin/sh -c` arguments on the host — the
+// gateway's $HOME wrapper and the client's command after it — with every
+// sandbox path moved under the sandbox directory, as the sandbox's own shell would.
+func (r *syncRunner) hostShell(ctx context.Context, args []string) (*runner.ExecSession, error) {
+	argv := []string{"-c"}
+	for _, a := range args {
+		argv = append(argv, strings.ReplaceAll(a, "/home/agent", filepath.Join(r.sandbox, "home/agent")))
+	}
+	cmd := exec.CommandContext(ctx, "sh", argv...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err

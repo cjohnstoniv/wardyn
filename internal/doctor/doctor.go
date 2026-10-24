@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -32,6 +33,11 @@ type Stage struct {
 	Detail  string `json:"detail"`
 	Setting string `json:"setting,omitempty"`
 	Fix     string `json:"fix,omitempty"`
+	// Advisory marks a failure that does not by itself stop a connection: the command diagnosed never makes
+	// the call that failed. It is not part of the output.
+	Advisory bool `json:"-"`
+	// ProxyAuth marks a failure that is a proxy's 407.
+	ProxyAuth bool `json:"-"`
 }
 
 // Report is a run's stages in order.
@@ -49,14 +55,29 @@ func (r Report) OK() bool {
 	return true
 }
 
+// Message is the detail and, for a failure, the fix: the text `doctor` prints and `setup` refuses with.
+func (s Stage) Message() string {
+	if s.Fix == "" {
+		return s.Detail
+	}
+	return s.Detail + "; " + s.Fix
+}
+
+// FirstBlocking is the first failed stage among those named (any stage, when none is named) that is not
+// advisory.
+func (r Report) FirstBlocking(names ...string) (Stage, bool) {
+	for _, s := range r.Stages {
+		if s.Status == StatusFail && !s.Advisory && (len(names) == 0 || slices.Contains(names, s.Name)) {
+			return s, true
+		}
+	}
+	return Stage{}, false
+}
+
 // WriteText prints one line per stage: the status, the name, the detail, and for a failure the fix.
 func (r Report) WriteText(w io.Writer) error {
 	for _, s := range r.Stages {
-		line := fmt.Sprintf("%-4s  %-12s %s", s.Status, s.Name, s.Detail)
-		if s.Fix != "" {
-			line += "; " + s.Fix
-		}
-		if _, err := fmt.Fprintln(w, line); err != nil {
+		if _, err := fmt.Fprintf(w, "%-4s  %-12s %s\n", s.Status, s.Name, s.Message()); err != nil {
 			return err
 		}
 	}

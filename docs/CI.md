@@ -410,7 +410,7 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 | `go-modules` | – | pending | pending | 15 |
 | `go-gate-tools` | – | pending | pending | 15 |
 | `go-cache-prune` | – | pending | pending | 10 |
-| `multi-arch build (agent-claude-code)`, nightly | 60 | 3.5 | 3.8 | 45 |
+| `multi-arch build (agent-claude-code, amd64\|arm64)`, nightly | – | pending | pending | 30 |
 | `multi-arch build (wardynd)`, nightly | 60 | 3.1 | 3.5 | 45 |
 | `multi-arch build (agent-aws-sso)`, nightly | 60 | 2.9 | 4.0 | 45 |
 

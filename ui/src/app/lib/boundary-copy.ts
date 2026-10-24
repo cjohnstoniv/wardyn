@@ -58,8 +58,11 @@ export const BOUNDARY = {
 
   // The pinned footer.
   // The board's footer is "Every save shows a dry run first. Changing the mode needs a second admin."; the
-  // second sentence is true only when the deployment requires a second person, which the console can't read.
+  // second sentence is true only when the deployment requires a second person, which the read says
+  // (save_held_for_approval), so the footer, the report's After column and its submit button follow it.
   FOOTER: "Every save shows a dry run first.",
+  /** not on the boards: the board's second sentence, worded for a save of any kind being held. */
+  FOOTER_SECOND_HUMAN: "Every save shows a dry run first, then waits for a second admin to approve it.",
   DISCARD: "Discard",
   REVIEW: "Review changes",
 
@@ -97,6 +100,8 @@ export const BOUNDARY_DRY_RUN = {
   CHANGE: "The change",
   TODAY: "Today",
   AFTER: "After approval",
+  /** not on the boards: the column when no second person is required and a save applies at once. */
+  AFTER_SAVE: "After saving",
   MODE: "Mode",
   // Tile labels. T4's are "team below narrows" and "people narrow"; the other forms are not on the boards.
   TILE_TEAMS: (n: number) => (n === 1 ? "team below narrows" : "teams below narrow"),
@@ -117,6 +122,8 @@ export const BOUNDARY_DRY_RUN = {
   COMPARED: "Compared with Wardyn's walls only. Your organisation's boundary isn't included.",
   BACK: "Back to editing",
   SUBMIT: "Submit for approval",
+  /** not on the boards: the button when no second person is required and a save applies at once. */
+  SUBMIT_SAVE: "Save changes",
   /** not on the boards: the report's own failure (M1's approved wording, before the tree rename). */
   FAILED_TITLE: "Couldn't build the report",
   /** not on the boards. */

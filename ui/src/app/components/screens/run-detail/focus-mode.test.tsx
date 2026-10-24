@@ -303,7 +303,7 @@ describe("Focus mode — the bottom strip states the facts", () => {
   // Scoped to the strip on purpose: the dock's Egress widget states "1 held"
   // too, and the strip's whole claim is that you can read the facts WITHOUT
   // opening the widget that holds them.
-  const strip = () => within(screen.getByText(RUN_COCKPIT.shortcutExitFocus).closest("div.flex.h-9")!);
+  const strip = () => within(screen.getByText(RUN_COCKPIT.shortcutExitFocus).closest("div.border-t")!);
 
   it("reads egress, credentials and the barrier without opening anything", () => {
     render(
@@ -436,5 +436,72 @@ describe("Focus mode — the bottom strip states the facts", () => {
     expect(screen.getByText(RUN_COCKPIT.shortcutExitFocus)).toBeInTheDocument();
     // ⌘K / ⌘1..4 / ⇧⌘F are on the board's strip and are NOT wired here.
     for (const cap of caps) expect(cap.textContent).not.toMatch(/⌘K|⌘1|⇧⌘F/);
+  });
+});
+
+// #2912: the approvals that hold the run must never sit under the dock panel, so focus mode seats the context's
+// decisionPane in its own row, outside the box the panel is positioned in.
+describe("Focus mode — the decision row", () => {
+  const decision = <div data-testid="decision">Sandbox is waiting</div>;
+
+  it("seats the decision pane between the session area and the strip, not inside the dock's box", () => {
+    render(<FocusMode ctx={ctx({ decisionPane: decision })} onExit={() => {}} />);
+    const row = screen.getByTestId("decision");
+    // The Egress panel is open by default and the row is not inside it, nor inside the box it floats over.
+    expect(screen.getByRole("region", { name: "Egress" })).not.toContainElement(row);
+    const overlay = row.closest(".fixed")!;
+    const session = screen.getByText("the session");
+    const box = session.closest(".relative")!;
+    expect(box).not.toContainElement(row);
+    expect(box.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const strip = screen.getByText(RUN_COCKPIT.shortcutDock).closest(".border-t")!;
+    expect(overlay).toContainElement(strip as HTMLElement);
+    expect(row.compareDocumentPosition(strip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("the terminal widget renders the decision pane right after the terminal pane, so the run page is unchanged", async () => {
+    const { RUN_WIDGETS } = await import("./widget-registry");
+    const { container } = render(<>{RUN_WIDGETS.terminal.component(ctx({ decisionPane: decision }))}</>);
+    const text = container.textContent;
+    expect(text).toBe("the sessionSandbox is waiting");
+  });
+
+  it("renders nothing for a context with no decision pane", () => {
+    render(<FocusMode ctx={ctx()} onExit={() => {}} />);
+    expect(screen.queryByTestId("decision")).toBeNull();
+  });
+});
+
+describe("Focus mode — narrow widths", () => {
+  const narrow = (matches: boolean) =>
+    vi.stubGlobal("matchMedia", (q: string) => ({ matches: matches && q === "(max-width: 767px)", media: q }));
+
+  it("starts with the dock closed below 768px, and a tap on the rail still opens a panel", async () => {
+    narrow(true);
+    const user = userEvent.setup();
+    render(<FocusMode ctx={ctx()} onExit={() => {}} />);
+    expect(screen.queryByRole("heading", { name: "Egress" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: RUN_COCKPIT.showWidget("Egress") }));
+    expect(screen.getByRole("heading", { name: "Egress" })).toBeInTheDocument();
+  });
+
+  it("starts with the dock open at 768px and wider", () => {
+    narrow(false);
+    render(<FocusMode ctx={ctx()} onExit={() => {}} />);
+    expect(screen.getByRole("heading", { name: "Egress" })).toBeInTheDocument();
+  });
+
+  it("lets the open panel span to the session's left edge below 640px", () => {
+    render(<FocusMode ctx={ctx()} onExit={() => {}} />);
+    expect(screen.getByRole("region", { name: "Egress" })).toHaveClass("max-sm:left-4", "max-sm:w-auto");
+  });
+
+  it("wraps the strip by group, and hides the two key hints below 640px", () => {
+    render(<FocusMode ctx={ctx()} onExit={() => {}} />);
+    const strip = screen.getByText(RUN_COCKPIT.shortcutDock).closest(".border-t") as HTMLElement;
+    expect(strip).toHaveClass("flex-wrap");
+    expect(strip).not.toHaveClass("h-9");
+    expect(screen.getByText(RUN_COCKPIT.shortcutDock).closest("span.ml-auto")).toHaveClass("hidden", "sm:flex");
+    expect(screen.getByText(RUN_COCKPIT.held(0)).parentElement).toHaveClass("whitespace-nowrap");
   });
 });

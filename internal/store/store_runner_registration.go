@@ -66,16 +66,42 @@ func (s PG) MintRunnerRegistrationToken(ctx context.Context, raw string, token t
 }
 
 // ConsumeRunnerRegistrationToken atomically spends a token bound to this org URL.
-// Unknown, expired, consumed and differently bound tokens share the same refusal.
+// Unknown, expired, consumed and differently bound tokens share the same refusal. A person's token whose
+// owner is deactivated, purged or cut is refused with ErrIdentityDeactivated and left unspent: the spend
+// reads the owner's identity rows FOR SHARE in its own transaction (checkIdentityGuard), before it writes.
 func (s PG) ConsumeRunnerRegistrationToken(ctx context.Context, raw, orgHash string, now time.Time) (types.RunnerRegistrationToken, bool, error) {
-	const q = `UPDATE runner_registration_tokens SET consumed_at=$3
- WHERE token_sha256=$1 AND org_url_sha256=$2 AND consumed_at IS NULL AND expires_at>$3
- RETURNING ` + runnerRegistrationCols
-	token, err := scanRunnerRegistrationToken(s.Pool.QueryRow(ctx, q, hashToken(raw), orgHash, now))
-	if errors.Is(err, ErrNotFound) {
+	since, err := ReadRevocationSeq(ctx, s.Pool)
+	if err != nil {
+		return types.RunnerRegistrationToken{}, false, err
+	}
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return types.RunnerRegistrationToken{}, false, fmt.Errorf("store: begin runner registration token spend: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	var owner string
+	err = tx.QueryRow(ctx, `SELECT owner FROM runner_registration_tokens
+ WHERE token_sha256=$1 AND org_url_sha256=$2 AND consumed_at IS NULL AND expires_at>$3 FOR UPDATE`, hashToken(raw), orgHash, now).Scan(&owner)
+	if errors.Is(err, pgx.ErrNoRows) {
 		return types.RunnerRegistrationToken{}, false, nil
 	}
-	return token, err == nil, err
+	if err != nil {
+		return types.RunnerRegistrationToken{}, false, fmt.Errorf("store: read runner registration token: %w", err)
+	}
+	if owner != "" { // an organisation's token names no person
+		if err := checkIdentityGuard(ctx, tx, IdentityGuard{Principal: owner, Epoch: -1}, since); err != nil {
+			return types.RunnerRegistrationToken{}, false, err
+		}
+	}
+	token, err := scanRunnerRegistrationToken(tx.QueryRow(ctx, `UPDATE runner_registration_tokens SET consumed_at=$2
+ WHERE token_sha256=$1 RETURNING `+runnerRegistrationCols, hashToken(raw), now))
+	if err != nil {
+		return types.RunnerRegistrationToken{}, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return types.RunnerRegistrationToken{}, false, fmt.Errorf("store: commit runner registration token spend: %w", err)
+	}
+	return token, true, nil
 }
 
 // GetRunnerRegistrationToken reads one token by id, spent or not. ErrNotFound when there is none.

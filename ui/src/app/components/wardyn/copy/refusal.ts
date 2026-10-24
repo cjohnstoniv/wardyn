@@ -22,3 +22,12 @@ export const RUN_NOT_FOUND = {
   CAN_CHANGE: "Check the link, or go back to your runs.",
   CTA: "Back to your runs",
 } as const;
+
+// #2884: the card an address the console does not know gets, in place of a silent redirect to Runs. The path is the
+// router's own location, rendered as text beside BODY_BEFORE and BODY_AFTER; the chip, rows and button reuse the run card's.
+export const PAGE_NOT_FOUND = {
+  TITLE: "Page not found",
+  BODY_BEFORE: "There's no page at ",
+  BODY_AFTER: ".",
+  CTA: "Back to Runs",
+} as const;

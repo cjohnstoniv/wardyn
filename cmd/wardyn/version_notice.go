@@ -72,6 +72,9 @@ func versionNotice(ctx context.Context, w io.Writer, origin, server string) {
 	if line := noticeLine(cli, origin, server); line != "" {
 		fmt.Fprintln(w, line)
 	}
+	if line := runnerOfferLine(ctx, server); line != "" {
+		fmt.Fprintln(w, line)
+	}
 }
 
 // noticeLine is the notice for a CLI at cli and an organisation at server, "" when they are the same

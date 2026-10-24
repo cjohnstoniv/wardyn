@@ -547,19 +547,21 @@ export function LiveApprovals({
           return <ReauthRow key={a.id} request={a} adminView={adminView} runId={runId} />;
         }
         return (
-          <div key={a.id} className="flex items-center gap-2" data-testid="live-approval-row">
+          <div key={a.id} className="flex flex-wrap items-center gap-2" data-testid="live-approval-row">
             {held ? (
               <Clock className="size-3.5 shrink-0 text-warning" aria-label="request held live" />
             ) : (
               <ShieldAlert className="size-3.5 shrink-0 text-warning" />
             )}
-            <span className="flex min-w-0 flex-1 items-baseline gap-2">
+            {/* #2912: under 640px the title takes its own line, whole, and the verdict controls sit under it at the right. */}
+            <span className="flex min-w-0 flex-1 items-baseline gap-2 max-sm:basis-full">
               {/* #3030: the Approvals screen's own title (deriveTitle), so a request reads the same on the card and the strip. */}
-              <span className="min-w-0 truncate text-sm text-foreground" title={title}>
+              <span className="min-w-0 text-sm text-foreground sm:truncate" title={title}>
                 {clip(title)}
               </span>
               {asker(a) && <span className="text-xs text-muted-foreground">{APPROVAL_ASKED.STRIP(agentName(asker(a)!))}</span>}
             </span>
+            <div className="flex items-center gap-2 max-sm:ml-auto">
             {telemetry && (
               <Chip tone="neutral" className="h-5 shrink-0 px-1.5" title={TELEMETRY_TAG.title}>
                 {TELEMETRY_TAG.label}
@@ -624,6 +626,7 @@ export function LiveApprovals({
                 onPick={(scope, until) => setDenyTarget({ request: a, scope, until })}
               />
             )}
+            </div>
           </div>
         );
       })}

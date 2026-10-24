@@ -26,7 +26,9 @@
 # ── Stage 1: Go builder ───────────────────────────────────────────────────────
 # --platform=$BUILDPLATFORM: runs on the BUILDER's arch and cross-compiles to
 # $TARGETARCH below. Every binary here is pure Go (CGO_ENABLED=0), so this stage
-# never needs QEMU. Stage 2 does (apt + npm run as the target arch).
+# never needs QEMU. Stage 2's RUN steps (apt, npm, gh, the AWS CLI) run as the target
+# arch and each picks its own artifact and checksum by TARGETARCH, so build each arch
+# on a builder of that arch (nightly.yml does) and nothing is emulated.
 # Module-download seed: empty unless a build passes `--build-context gomodcache=<dir>`
 # (nightly.yml's multi-arch build and scripts/lib/image-build.sh do), so a CI job's
 # already-filled module cache feeds `go mod download` below instead of the network.
@@ -276,6 +278,16 @@ RUN set -eu; \
         npm config delete proxy https-proxy; \
         echo "installed claude $CLAUDE_CODE_VERSION via npm"; \
     fi
+# Architecture assertion, for every install path: the claude that ended up in the image must be the
+# TARGET arch's native ELF (byte 18: 0x3e amd64, 0xb7 arm64). It reads the file instead of running it, so
+# it holds on a cross build too, where `claude --version` could not run. The nightly builds each
+# architecture on a runner of that architecture and runs `claude --version` and `agent-run --selftest`
+# in the result. A file that is not ELF (a script-form release) is not judged here.
+RUN set -eu; \
+    want="${TARGETARCH:-$(dpkg --print-architecture)}"; \
+    bin="$(readlink -f /usr/local/bin/claude)"; \
+    case "$(od -An -tx1 -N4 "$bin" | tr -d ' ')$(od -An -tx1 -j18 -N1 "$bin" | tr -d ' ')" in 7f454c463e) have=amd64;; 7f454c46b7) have=arm64;; *) have=unknown;; esac; \
+    [ "$have" = unknown ] || [ "$have" = "$want" ] || { echo "installed claude is $have but this image builds for $want" >&2; exit 1; }
 
 # ── GitHub CLI (gh) ──────────────────────────────────────────────────────────
 # The versioned .deb from the cli/cli release, checked against its sha256 per

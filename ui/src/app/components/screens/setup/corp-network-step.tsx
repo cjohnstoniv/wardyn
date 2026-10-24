@@ -94,12 +94,9 @@ export function CorpNetworkStep({
   onGateChange: (
     patch: Partial<Pick<CorpNetworkState, "proxyProbe" | "probeRunning" | "customDraft" | "redirectProbes">>,
   ) => void;
-  /** The evidence block's own "Re-check" button (host-proxy detection only) —
-   *  the orchestrator's FULL recheck (status + site-config), the SAME one the
-   *  persistent host-status strip already calls, so both buttons named
-   *  "Re-check" actually refresh the same host_proxy detection. Falls back to
-   *  reloadSiteConfig (site-config only — detection never changes) for
-   *  standalone/test renders that don't wire the orchestrator up. */
+  /** Run after a save changes the proxy, so the evidence and graded check re-read: the orchestrator's FULL recheck
+   *  (status + site-config). The step's one visible Re-check is in the layout's header row (#2847). Falls back to
+   *  reloadSiteConfig (site-config only) for standalone/test renders that don't wire the orchestrator up. */
   onRecheck?: () => void;
   registerActions?: (a: CorpStepActions | null) => void;
   /** Controlled sub-tab (the orchestrator owns it so the FOOTER can walk the

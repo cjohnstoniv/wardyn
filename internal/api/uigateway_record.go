@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net"
 	"slices"
 	"sync"
@@ -55,13 +56,30 @@ func (s *Server) recordDesktopConn(run types.AgentRun, sess uiSession, conn net.
 		return conn
 	}
 	rec := recording.NewRFBRecorder(s.cfg.Now)
+	return recording.ReadSideConn(conn, rec, s.trackDesktopRecording(run, sess, rec))
+}
+
+// recordVMDisplay is recordDesktopConn on a Linux VM's display, framed as the clipboard filter reads it
+// (wsFramed): the same rules, pauses and stored recording, with the viewer's side never read.
+func (s *Server) recordVMDisplay(run types.AgentRun, sess uiSession, display io.ReadWriteCloser) io.ReadWriteCloser {
+	if !s.desktopRecorded(run) {
+		return display
+	}
+	rec := recording.NewRFBFrameRecorder(s.cfg.Now)
+	return recording.ReadSide(display, rec, s.trackDesktopRecording(run, sess, rec))
+}
+
+// trackDesktopRecording is the hook both desktop relays share: rec joins the run's live recordings,
+// so a pause open now or later reaches it, and the returned func, run once when its connection
+// closes, stores it (desktop.recording.write) and lets the run's entry go.
+func (s *Server) trackDesktopRecording(run types.AgentRun, sess uiSession, rec *recording.RFBRecorder) func() {
 	session := desktopRecordingSuffix + uuid.NewString()
 	s.desktopRecs.add(run.ID, rec)
-	return recording.ReadSideConn(conn, rec, func() {
+	return func() {
 		s.desktopRecs.remove(run.ID, rec)
 		s.saveDesktopRecording(s.cfg.BaseCtx, run, sess, session, rec)
 		s.forgetEndedDesktopPause(s.cfg.BaseCtx, run.ID)
-	})
+	}
 }
 
 // desktopRecorded reports whether run's desktop screen is recorded: the run records screen_actions and

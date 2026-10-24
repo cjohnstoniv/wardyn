@@ -50,6 +50,9 @@ const STILL_CHECKING_AFTER_READS = 3;
 export const TOKEN_LABEL = "Admin token";
 export const SSO_SIGN_IN = "Sign in with SSO";
 
+// internal/auth/oidc's authErrorSignInExpired: the state cookie came back missing or replaced.
+const SIGN_IN_EXPIRED_CODE = "sign_in_expired";
+
 // The signed-out warning and the error box: one shape, two tones.
 const NOTE_BOX = "flex items-start gap-2 rounded-md border px-3 py-2 text-xs";
 
@@ -135,6 +138,8 @@ export function SignIn({
   // SIGNIN_HELP_REFUSALS, beneath Wardyn's own sentence, never instead of it.
   const [help, setHelp] = React.useState<{ text?: string; url?: string }>({});
   const [refusalCode, setRefusalCode] = React.useState<string | null>(null);
+  // auth_error=sign_in_expired: nothing was refused, the person only has to start again (r11 #2775).
+  const [expired, setExpired] = React.useState(false);
   // #457: whether /healthz has EVER answered (as opposed to the {} R4/F027
   // already treats as "no answer" — see refreshSso below). Before the first
   // real answer neither door is known, so neither renders (Q457-1) — a
@@ -189,8 +194,11 @@ export function SignIn({
     const params = new URLSearchParams(window.location.search);
     const code = params.get("auth_error");
     if (!code) return;
-    setError(authErrorMessage(code));
-    setRefusalCode(code);
+    if (code === SIGN_IN_EXPIRED_CODE) setExpired(true);
+    else {
+      setError(authErrorMessage(code));
+      setRefusalCode(code);
+    }
     params.delete("auth_error");
     const qs = params.toString();
     window.history.replaceState(
@@ -322,6 +330,13 @@ export function SignIn({
             </div>
           )}
 
+          {expired && (
+            <div role="status" className={`mb-4 ${NOTE_BOX} ${NOTICE_TONE.info.box}`}>
+              <Info className="mt-0.5 size-4 shrink-0" />
+              <p>{SIGNIN.SIGN_IN_EXPIRED}</p>
+            </div>
+          )}
+
           {/* #457 (Q457-1): before /healthz has answered even once, neither
               door is known to exist — no token field, no SSO button, no claim
               either way, just an honest "checking" row. After
@@ -353,7 +368,7 @@ export function SignIn({
               >
                 <a href={signInURL()} aria-describedby="sso-hint">
                   <DoorOpen className="size-4" aria-hidden="true" />
-                  {SIGNIN.SSO_MICROSOFT}
+                  {expired ? SIGNIN.SIGN_IN_AGAIN : SIGNIN.SSO_MICROSOFT}
                 </a>
               </Button>
               <p
@@ -368,7 +383,7 @@ export function SignIn({
               <Button asChild variant="outline" className={`w-full ${quietSignIn}`}>
                 <a href={signInURL()}>
                   <DoorOpen className="size-4" aria-hidden="true" />
-                  {SSO_SIGN_IN}
+                  {expired ? SIGNIN.SIGN_IN_AGAIN : SSO_SIGN_IN}
                 </a>
               </Button>
             )

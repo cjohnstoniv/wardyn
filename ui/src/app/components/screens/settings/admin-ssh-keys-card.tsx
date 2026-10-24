@@ -32,7 +32,7 @@ import { Chip } from "../../wardyn/primitives";
 import { EmptyState, ErrorState, TableSkeleton } from "../../wardyn/states";
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { absoluteTime, relativeTime } from "../../../lib/format";
-import { AddSSHKeyDialog, RemoveSSHKeyDialog } from "../ssh-keys";
+import { AddSSHKeyDialog, RemoveSSHKeyDialog, SshKeyChipNotes } from "../ssh-keys";
 
 // The key in its gold tile (#2873, owner ruling). The one place that colours it: dropping this constant's value
 // to "" returns the tile to the standard grey.
@@ -119,12 +119,7 @@ export function AdminSshKeysCard() {
                     <span className="inline-flex items-center gap-2">
                       <KeyRound className="size-3.5 text-cyan" />
                       {k.name || <span className="text-muted-foreground">(unnamed)</span>}
-                      <Chip
-                        tone="warning"
-                        title="Registered while you were an admin, so this key reaches runs you do not own. Refreshed automatically each time you sign in, and expires on its own if you don't; delete and re-register the key to drop the override immediately."
-                      >
-                        Admin override
-                      </Chip>
+                      <Chip tone="warning">Admin override</Chip>
                     </span>
                   </TableCell>
                   <TableCell>
@@ -154,6 +149,7 @@ export function AdminSshKeysCard() {
           </Table>
         )}
       </div>
+      {status === "ready" && <SshKeyChipNotes keys={adminKeys} />}
 
       <AddSSHKeyDialog open={addOpen} onOpenChange={setAddOpen} onAdded={load} />
       <RemoveSSHKeyDialog keyToDelete={toDelete} onOpenChange={(o) => !o && setToDelete(null)} onRemoved={load} />

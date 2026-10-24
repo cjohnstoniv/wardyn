@@ -933,6 +933,10 @@ minimum.") and `DELIVERY.OS_MIN_INVALID`, each marked pending in `governance-cop
 | `DELIVERY.RESIDENT_FLOOR` | A run whose barrier floor covers this credential still can't use it on a runner: a runner's barrier is reported, not verified. |
 | `DELIVERY.NOT_IN_RELEASE` | Not used in this release |
 | `DELIVERY.RUNNERS_OFF_NOTE` | Runners are off, so nothing here applies yet. You can set it now; it takes effect when runners are turned on. |
+| `DELIVERY.EXCEPTIONS_NOTE` | Each row is the default for every runner. A trust class can have an exception, shown under its row; on that class's runners the exception wins. |
+| `DELIVERY.EXCEPTION_CHIP` | Exception |
+| `DELIVERY.EXCEPTION_KEPT` | Kept as stored when you save. This screen can't change exceptions yet. |
+| `DELIVERY.EXCEPTION_PEOPLE_SEE(trust, outcome)` | {trust}: {outcome} |
 | `DELIVERY.CLASS.api_key` | Header API keys |
 | `DELIVERY.CLASS_HINT.api_key` | Model and service keys sent in a header. |
 | `DELIVERY.CLASS.bedrock_bearer` | Shared Amazon Bedrock API keys |

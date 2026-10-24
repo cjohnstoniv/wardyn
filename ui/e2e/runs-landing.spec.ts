@@ -308,7 +308,7 @@ test.describe("Runs landing — page states (design.md §6 L3 row)", () => {
 
     const search = page.getByLabel("Search runs", { exact: true });
     await search.fill("zzz-no-such-run");
-    await expect(page.getByText("No runs match these filters.")).toBeVisible();
+    await expect(page.getByText("No runs match these filters", { exact: true })).toBeVisible();
     await expect(page.getByText("Try a different search term or filter.")).toBeVisible();
 
     await page.getByRole("button", { name: "Clear filters" }).click();

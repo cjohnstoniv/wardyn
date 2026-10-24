@@ -231,7 +231,7 @@ export function PushContentCard({
 
       <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border/60 pt-3">
         {runEnded ? (
-          <p className="max-w-[72ch] text-xs text-muted-foreground">{APPROVAL.CANCELLED_BODY}</p>
+          <p className="text-xs text-muted-foreground">{APPROVAL.CANCELLED_BODY}</p>
         ) : securityOperator ? (
           <>
             <Button size="sm" variant="info" disabled={busy !== null} onClick={onApprove}>
@@ -251,10 +251,10 @@ export function PushContentCard({
 
       {!runEnded && (
         <>
-          <p className="mt-2.5 max-w-[72ch] text-xs text-muted-foreground">
+          <p className="mt-2.5 text-xs text-muted-foreground">
             {held ? PUSH.HELD_NOTE : PUSH.HELD_EXPIRED}
           </p>
-          {securityOperator && <p className="mt-1 max-w-[72ch] text-xs text-muted-foreground">{PUSH.APPROVE_NOTE}</p>}
+          {securityOperator && <p className="mt-1 text-xs text-muted-foreground">{PUSH.APPROVE_NOTE}</p>}
         </>
       )}
     </div>

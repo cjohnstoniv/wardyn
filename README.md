@@ -7,9 +7,9 @@
 - [docs/CREDENTIALS.md](docs/CREDENTIALS.md) says how each kind of credential reaches a run, and which ones the sandbox can read.
 - Coding agents are the flagship use.
 
-![An isometric compound where one outer wall surrounds a datacentre and people's devices, each sandbox sits behind Wardyn's inner wall, and the org control plane links by policy and audit.](docs/img/wardyn-walls.webp)
+![An isometric compound where one outer wall surrounds a datacentre and people's devices, each sandbox sits behind Wardyn's inner wall, and the org control plane links by runs and audit.](docs/img/wardyn-walls.svg)
 
-![One outer wall surrounds the cloud zone and people's devices; each sandbox has its own inner wall and proxy, nothing connects in, and the proxy adds keys to outbound requests.](docs/img/wardyn-places.webp)
+![One outer wall surrounds the cloud zone and people's devices; each sandbox has its own inner wall and proxy, nothing connects in, and the proxy adds keys to outbound requests.](docs/img/wardyn-places.svg)
 
 ## Before you start
 

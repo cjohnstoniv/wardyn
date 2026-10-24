@@ -169,19 +169,22 @@ describe("YourAccountScreen — Your SSH keys, the S-2 strings", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows 'User access' (not 'Member access') on a capped key, with the rewritten tooltip", async () => {
+  it("shows 'User access' (not 'Member access') on a capped key, with the rewritten note", async () => {
     listKeysMock.mockResolvedValue([
       { fingerprint: "SHA256:aaa", name: "laptop", public_key: "", role: "user", capped: true, created_at: new Date().toISOString() },
     ]);
     renderScreen();
     await screen.findByRole("heading", { name: startsWith("Your SSH keys"), level: 3 });
     await expandCard("Your SSH keys");
-    const chip = await screen.findByText("User access");
+    expect(await screen.findByText("User access", { selector: "tr *" })).toBeInTheDocument();
     expect(screen.queryByText("Member access")).not.toBeInTheDocument();
-    expect(chip.closest("[title]")).toHaveAttribute(
-      "title",
-      "Added in the user view, so it keeps user rights. To reach other people's runs over SSH, add a key in Settings in the admin view.",
-    );
+    // r11 #2244: the sentence is visible text under the table, not a title.
+    expect(
+      screen.getByText(
+        "Added in the user view, so it keeps user rights. To reach other people's runs over SSH, add a key in Settings in the admin view.",
+      ),
+    ).toBeVisible();
+    expect(document.querySelector("[title*='Added in the user view']")).toBeNull();
   });
 
   // review R2-L1: the packet has no error row for this card, and the

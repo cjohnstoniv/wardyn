@@ -88,6 +88,37 @@ describe("BoundaryScreen", () => {
     expect(putMock).not.toHaveBeenCalled();
   });
 
+  it("sits in the shared form column (#3058), not a page of its own width", async () => {
+    renderScreen();
+    const title = await screen.findByRole("heading", { level: 1, name: BOUNDARY.TITLE });
+    expect(title.closest("[data-page-width]")).toHaveAttribute("data-page-width", "form");
+  });
+
+  it("with no second person required, the report says After saving and the button says Save changes; the read's flag switches both and the footer (#3389)", async () => {
+    const user = userEvent.setup();
+    const { unmount } = renderScreen();
+    await screen.findByText(BOUNDARY.ORG_PANEL);
+    await user.click(hardRadio());
+    expect(screen.getByText(BOUNDARY.FOOTER)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: BOUNDARY.REVIEW }));
+    const report = await screen.findByTestId("boundary-dry-run");
+    expect(within(report).getByRole("columnheader", { name: BOUNDARY_DRY_RUN.AFTER_SAVE })).toBeInTheDocument();
+    expect(within(report).getByRole("button", { name: BOUNDARY_DRY_RUN.SUBMIT_SAVE })).toBeInTheDocument();
+    expect(within(report).queryByText(BOUNDARY_DRY_RUN.SUBMIT)).toBeNull();
+    unmount();
+
+    getMock.mockResolvedValue({ ...noLimits, save_held_for_approval: true });
+    renderScreen();
+    await screen.findByText(BOUNDARY.ORG_PANEL);
+    await user.click(hardRadio());
+    expect(screen.getByText(BOUNDARY.FOOTER_SECOND_HUMAN)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: BOUNDARY.REVIEW }));
+    const held = await screen.findByTestId("boundary-dry-run");
+    expect(within(held).getByRole("columnheader", { name: BOUNDARY_DRY_RUN.AFTER })).toBeInTheDocument();
+    expect(within(held).getByRole("button", { name: BOUNDARY_DRY_RUN.SUBMIT })).toBeInTheDocument();
+    expect(within(held).queryByText(BOUNDARY_DRY_RUN.SUBMIT_SAVE)).toBeNull();
+  });
+
   it("no second-admin claim before a submit, and no New installs chip", async () => {
     renderScreen();
     await screen.findByText(BOUNDARY.ORG_PANEL);
@@ -218,14 +249,14 @@ describe("BoundaryScreen", () => {
     await draftHosts("paste.example.org");
     await user.click(screen.getByRole("button", { name: BOUNDARY.REVIEW }));
     const report = await screen.findByTestId("boundary-dry-run");
-    await user.click(await within(report).findByRole("button", { name: BOUNDARY_DRY_RUN.SUBMIT }));
+    await user.click(await within(report).findByRole("button", { name: BOUNDARY_DRY_RUN.SUBMIT_SAVE }));
     expect(putMock).toHaveBeenCalledWith({ mode: "hard_limits", spec: { denied_domains: ["paste.example.org"] }, limits: {} }, '"b1"');
     expect(await within(report).findByText(BASELINE.REFUSED_TITLE)).toBeInTheDocument();
     expect(within(report).getByText(REFUSED)).toBeInTheDocument();
   });
 
   it("a held write is the submitted note and Submit goes off until the draft changes", async () => {
-    getMock.mockResolvedValue(hardLimits);
+    getMock.mockResolvedValue({ ...hardLimits, save_held_for_approval: true });
     putMock.mockRejectedValue(new PendingChangeError({ id: "c1" } as GovernanceChange));
     const user = userEvent.setup();
     renderScreen();
@@ -247,7 +278,7 @@ describe("BoundaryScreen", () => {
     await user.click(screen.getByRole("button", { name: BOUNDARY.REVIEW }));
     const report = await screen.findByTestId("boundary-dry-run");
     expect(await within(report).findByText(BOUNDARY_DRY_RUN.FAILED_TITLE)).toBeInTheDocument();
-    expect(within(report).getByRole("button", { name: BOUNDARY_DRY_RUN.SUBMIT })).toBeDisabled();
+    expect(within(report).getByRole("button", { name: BOUNDARY_DRY_RUN.SUBMIT_SAVE })).toBeDisabled();
     await user.click(within(report).getByRole("button", { name: BOUNDARY_DRY_RUN.RETRY }));
     await waitFor(() => expect(dryRunMock).toHaveBeenCalledTimes(2));
     expect(await within(report).findByText(BOUNDARY_DRY_RUN.NO_CHANGE)).toBeInTheDocument();
@@ -260,7 +291,7 @@ describe("BoundaryScreen", () => {
     renderScreen();
     await draftHosts("x.example");
     await user.click(screen.getByRole("button", { name: BOUNDARY.REVIEW }));
-    await user.click(await within(await screen.findByTestId("boundary-dry-run")).findByRole("button", { name: BOUNDARY_DRY_RUN.SUBMIT }));
+    await user.click(await within(await screen.findByTestId("boundary-dry-run")).findByRole("button", { name: BOUNDARY_DRY_RUN.SUBMIT_SAVE }));
     expect(await screen.findByText(DELIVERY.SAVED)).toBeInTheDocument();
     expect(screen.getByTestId("boundary-org")).toBeInTheDocument();
   });

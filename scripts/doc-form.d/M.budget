@@ -44,7 +44,8 @@ docs/USERS.md=4903 share=35
 # docs/SSH.md 6703 = ours 6566 + theirs 6373 - base 6236 at the 0.10 W4a merge of ATT-CLI onto the train.
 # 0.10 HYB-C: docs/SSH.md 6721 adds 18 over 6703, measured: a Linux VM sandbox is held and synced the same way.
 # 0.10 EDITORS: docs/SSH.md 6876 adds 155 over 6721, measured: the editors table rows, how they are tested, the Mutagen link and the image needs.
-docs/SSH.md=6876 share=35
+# 0.10 GW-HOME (#3549): docs/SSH.md 6924 adds 48 over 6876 at the merge of main onto the lane, measured: where a shell, a command and an sftp session start.
+docs/SSH.md=6924 share=35
 # docs/UI-SANDBOXES.md 5341 measured after C-mode-doors merge.
 # docs/UI-SANDBOXES.md 5472 adds 131 over 5341 (0.9.3 lane B): the reasons table for a refusal an SDK reads.
 # docs/UI-SANDBOXES.md 5477 adds 5 (0.9.3 lane B review): the AWS no-credential 404 in the reasons table.

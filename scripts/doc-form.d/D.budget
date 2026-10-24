@@ -12,4 +12,5 @@
 # 0.9.4 W1 merge +3: L4b and L12 both edited the desktop doc; the merged text measures 3 over the sum.
 # 0.9.4 L8: docs/DESKTOP.md 7468 adds 95 over 7373: tier rows, the legacy-figure note and the rollback warning.
 # 0.9.4 W1 merge +3 again (L8): the merged text measures 3 over the sum.
-docs/DESKTOP.md=7550 share=35
+# #2819 +5, measured: the Topology alt and caption now describe the client-mode runner figure (board R11-2819 strings).
+docs/DESKTOP.md=7555 share=35

@@ -7,7 +7,7 @@
 // drift in them fails this suite. Both /healthz forms (CLI sign-in on and off) are pinned: neither may show
 // `serve`, `--proxy-image`, `wdn_` or `WARDYN_TOKEN=`.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { health } from "../../lib/api/health";
 import { AddComputerBlock } from "./add-computer-block";
@@ -169,7 +169,8 @@ describe("Add this computer: where focus goes after Try again", () => {
     expect(screen.getByRole("button", { name: "Try again" })).toHaveFocus();
     release({ version: "0.10.0", cli_sign_in: true });
     await screen.findByText(SH);
-    expect(screen.getByRole("heading", { name: "Install the CLI" })).toHaveFocus();
+    // The focus move runs in the effect after the steps render, so it is waited for, not read in the same tick.
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Install the CLI" })).toHaveFocus());
   });
 
   it("success after focus moved elsewhere leaves it there", async () => {

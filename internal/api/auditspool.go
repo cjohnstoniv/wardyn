@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
 )
@@ -351,7 +352,8 @@ func (a *AuditSpool) Drain(ctx context.Context, rec audit.Recorder, batch int) (
 			drop[i] = true
 			continue
 		}
-		if err := rec.Record(passCtx, ev); err != nil {
+		// A line whose event already landed (a write that committed after its caller gave up) adds no row.
+		if err := rec.Record(store.WithAuditReplay(passCtx), ev); err != nil {
 			replayErr = err
 			// A timeout is NOT a rejection: the store never answered, so this
 			// line has proved nothing about itself and must not earn a strike

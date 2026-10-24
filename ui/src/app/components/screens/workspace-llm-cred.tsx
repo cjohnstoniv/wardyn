@@ -29,7 +29,7 @@ import { useOperator } from "../wardyn/operator-context";
 // chooses its provider itself. Pass the fetched providers when you have them to
 // show the provider's display name; without them the id itself is the honest
 // label (it is what Model providers shows and audit logs carry).
-export function llmCredLabel(cred?: WorkspaceLLMCred, providers?: ModelProvider[]): string {
+export function llmCredLabel(cred?: WorkspaceLLMCred, providers?: readonly { id: string; name?: string }[]): string {
   const ref = cred?.provider_ref;
   if (!ref) return "None";
   return providers?.find((p) => p.id === ref)?.name ?? ref;

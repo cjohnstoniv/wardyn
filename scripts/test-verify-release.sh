@@ -75,7 +75,7 @@ case "$1 $2" in
     # The licence tarball exists from 0.9.4.
     if [ "$(printf '%s\n' "${VER%%-*}" 0.9.4 | sort -V | head -1)" = 0.9.4 ]; then cat "${DIR}/want.txt"; else grep -vx 'wardyn-licenses.tar.gz' "${DIR}/want.txt"; fi > "${DIR}/want-ver0.txt"
     # The CLI installers exist from 0.10.0 (and a test can leave them out).
-    if [ -n "${NO_INSTALL_CLI:-}" ] || [ "$(printf '%s\n' "${VER%%-*}" 0.10.0 | sort -V | head -1)" != 0.10.0 ]; then grep -v '^install-cli\.' "${DIR}/want-ver0.txt"; else cat "${DIR}/want-ver0.txt"; fi > "${DIR}/want-ver.txt"
+    if [ -n "${NO_INSTALL_CLI:-}" ] || [ "$(printf '%s\n' "${VER%%-*}" 0.10.0 | sort -V | head -1)" != 0.10.0 ]; then grep -vE '^(install-cli\.|SHA256SUMS\.sigstore\.json$)' "${DIR}/want-ver0.txt"; else cat "${DIR}/want-ver0.txt"; fi > "${DIR}/want-ver.txt"
     if [ -n "${NO_PKG:-}" ] || [ "$(printf '%s\n' "${VER%%-*}" 0.9.3 | sort -V | head -1)" != 0.9.3 ] || [ "${VER}" = 0.9.3-rc.1 ] || [ "${VER}" = 0.9.3-rc.2 ]; then grep -vx 'wardyn-runnerd.pkg' "${DIR}/want-ver.txt"; else cat "${DIR}/want-ver.txt"; fi
     echo "wardyn-${VER}.tgz" ;;
   "release download")
@@ -83,7 +83,7 @@ case "$1 $2" in
     echo binary > "${out}/wardyn-linux-amd64"
     ( cd "${out}" && sha256sum wardyn-linux-amd64 > SHA256SUMS )
     echo "releases/download/v${VER}/install.sh" > "${out}/install.sh"
-    if [ "${SIGFORM}" = bundle ]; then echo b > "${out}/SHA256SUMS.bundle"
+    if [ "${SIGFORM}" = bundle ]; then echo b > "${out}/SHA256SUMS.sigstore.json"
     else echo s > "${out}/SHA256SUMS.sig"; echo p > "${out}/SHA256SUMS.pem"; fi ;;
   *) echo "gh: mutating or unexpected verb: $*" >&2; exit 99 ;;
 esac
@@ -123,7 +123,7 @@ for form in bundle sigpem; do
     || fail "(${form}) verify-blob did not pin the exact identity + OIDC issuer: $(grep verify-blob "${dir}/log")"
   ! grep -q -- '-regexp' "${dir}/log" || fail "(${form}) a -regexp identity form still reaches cosign: $(grep -- -regexp "${dir}/log" | head -1)"
   case "${form}" in
-    bundle) grep -q '^cosign verify-blob .*--bundle' "${dir}/log" || fail "the bundle branch did not run verify-blob --bundle" ;;
+    bundle) grep -q '^cosign verify-blob .*--bundle .*/SHA256SUMS\.sigstore\.json ' "${dir}/log" || fail "the bundle branch did not run verify-blob --bundle on SHA256SUMS.sigstore.json" ;;
     sigpem) grep -q '^cosign verify-blob .*--signature' "${dir}/log" || fail "the sig+pem branch did not run verify-blob --signature" ;;
   esac
 
