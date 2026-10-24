@@ -47,6 +47,8 @@ export interface Boundary {
   locked_knobs?: string[];
   updated_by?: string;
   updated_at?: string;
+  /** This caller's save would be held for a second human; absent when it applies at once. */
+  save_held_for_approval?: boolean;
 }
 
 /** The document with the ETag the response carried, which the next PUT sends back as If-Match. */

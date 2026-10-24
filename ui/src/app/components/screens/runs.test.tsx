@@ -309,7 +309,7 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
     await screen.findByText("Fix flaky auth tests");
     const search = await screen.findByLabelText("Search runs");
     fireEvent.change(search, { target: { value: "zzz-no-match" } });
-    await screen.findByText("No runs match these filters.");
+    await screen.findByText("No runs match these filters");
     fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
     await screen.findByText("Fix flaky auth tests");
   });
@@ -443,7 +443,7 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
     getSetupStatusMock.mockResolvedValue(baseStatus({ has_runs: false }));
     renderScreen("user", "/runs?owner=me");
     await screen.findByText("Runs you launch appear here");
-    expect(screen.queryByText("No runs match these filters.")).not.toBeInTheDocument();
+    expect(screen.queryByText("No runs match these filters")).not.toBeInTheDocument();
   });
 
   it("group-by section ids never collide, even when two titles would slugify the same", async () => {

@@ -125,6 +125,7 @@ func (s *Server) handleGetBoundary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("ETag", computeETag(boundaryState(b)))
+	b.SaveHeldForApproval = governanceSaveHeld(r)
 	writeJSON(w, http.StatusOK, b)
 }
 
