@@ -37,9 +37,10 @@ type vmSignInTestStore struct {
 	// markErr fails PauseDesktopVMAgent; readErr fails DesktopVMSignIns.
 	markErr error
 	readErr error
-	// onRead, when set, runs as each DesktopVMSignIns begins, and what it returns runs once that read
-	// has taken its answer, before the answer is returned: writes landing just before and just after.
-	onRead func() (after func())
+	// onRead, when set, runs as each DesktopVMSignIns begins, with the read's context, and what it
+	// returns runs once that read has taken its answer, before the answer is returned: writes landing
+	// just before and just after.
+	onRead func(ctx context.Context) (after func())
 }
 
 func (s *vmSignInTestStore) setReadErr(err error) {
@@ -48,7 +49,7 @@ func (s *vmSignInTestStore) setReadErr(err error) {
 	s.readErr = err
 }
 
-func (s *vmSignInTestStore) setOnRead(f func() func()) {
+func (s *vmSignInTestStore) setOnRead(f func(context.Context) func()) {
 	s.vmu.Lock()
 	defer s.vmu.Unlock()
 	s.onRead = f
@@ -67,13 +68,13 @@ func (s *vmSignInTestStore) RecordDesktopVMSignIns(_ context.Context, runID uuid
 	return nil
 }
 
-func (s *vmSignInTestStore) DesktopVMSignIns(_ context.Context, runID uuid.UUID) (store.DesktopVMSignIns, bool, error) {
+func (s *vmSignInTestStore) DesktopVMSignIns(ctx context.Context, runID uuid.UUID) (store.DesktopVMSignIns, bool, error) {
 	s.vmu.Lock()
 	onRead := s.onRead
 	s.vmu.Unlock()
 	var after func()
 	if onRead != nil {
-		after = onRead()
+		after = onRead(ctx)
 	}
 	s.vmu.Lock()
 	row, ok := s.rows[runID]
@@ -940,7 +941,7 @@ func TestDesktopSignIns_AStalledReReadHoldsTheRecording(t *testing.T) {
 	defer cancel()
 	v := openVMDesktop(t, ctx, h, d.dr)
 	entered, release := make(chan struct{}), make(chan struct{})
-	d.st.setOnRead(func() func() {
+	d.st.setOnRead(func(context.Context) func() {
 		d.st.setOnRead(nil)
 		close(entered)
 		<-release // a read that ignores its deadline, as a wedged pool might
@@ -969,6 +970,37 @@ func TestDesktopSignIns_AStalledReReadHoldsTheRecording(t *testing.T) {
 	}
 }
 
+// A re-read the store answers only after its deadline counts as unread, whatever it says: a pause may
+// have marked the row since. The recording stays held until a re-read answers in time.
+func TestDesktopSignIns_AReReadAnsweredPastItsDeadlineHoldsTheRecording(t *testing.T) {
+	d := newVMSignInDesktop(t, store.DesktopVMSignIns{Store: "memory"})
+	h := d.h
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	v := openVMDesktop(t, ctx, h, d.dr)
+	d.st.setOnRead(func(rctx context.Context) func() {
+		d.st.setOnRead(nil)
+		<-rctx.Done() // released only once the read's own deadline has passed; it then answers unpaused
+		return nil
+	})
+	d.reread(t)
+	if !signInHeld(h.srv, h.run.ID) {
+		t.Fatal("a re-read answered past its deadline let the stream keep recording")
+	}
+	d.send <- vmFBU // sent while the mark is unknown
+	v.read(len(vmFBU))
+	d.reread(t) // answers in time, unpaused
+	if signInHeld(h.srv, h.run.ID) {
+		t.Fatal("a re-read that answered in time left the recording held")
+	}
+	d.send <- []byte("\x02\x02")
+	v.read(2)
+	endVMDesktop(t, h, v, d.send)
+	if _, _, kept := storedVMRecording(t, h); kept != vmHandshake()+"\x02\x02" {
+		t.Errorf("recorded frames = %q, want only the handshake and the Bells once a re-read answered in time", kept)
+	}
+}
+
 // A resume that clears the mark between the stream's first read of it and the hold that read takes
 // leaves the stream unheld: the second read ends the hold of the pause that is over.
 func TestDesktopSignIns_AResumeRacingTheOpeningHoldEndsUnheld(t *testing.T) {
@@ -976,7 +1008,7 @@ func TestDesktopSignIns_AResumeRacingTheOpeningHoldEndsUnheld(t *testing.T) {
 	d := newVMSignInDesktop(t, store.DesktopVMSignIns{Store: "memory", PausedBy: "someone", PausedAt: &at})
 	h := d.h
 	reads := 0
-	d.st.setOnRead(func() func() {
+	d.st.setOnRead(func(context.Context) func() {
 		if reads++; reads != 1 {
 			return nil
 		}
@@ -1011,7 +1043,7 @@ func TestDesktopSignIns_AStaleReadNeverEndsANewerPausesHold(t *testing.T) {
 	d := newVMSignInDesktop(t, store.DesktopVMSignIns{Store: "memory", PausedBy: "someone", PausedAt: &at})
 	h := d.h
 	reads := 0
-	d.st.setOnRead(func() func() {
+	d.st.setOnRead(func(context.Context) func() {
 		if reads++; reads != 2 {
 			return nil
 		}

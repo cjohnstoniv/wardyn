@@ -382,18 +382,21 @@ func (s *Server) watchVMSignIn(ctx context.Context, runID uuid.UUID) (*vmSignInW
 	}
 	w := &vmSignInWatch{s: s, run: run, st: st, unread: "vm-sign-in-unread:" + runID.String() + ":" + uuid.NewString()}
 	if err := w.sync(ctx); err != nil {
-		w.stop()
 		return nil, err
 	}
 	// The second read ends a hold the first took of a pause whose resume has since cleared it: that
-	// resume's endDesktopHold ran before the hold was taken.
-	_ = w.sync(ctx)
+	// resume's endDesktopHold ran before the hold was taken. One that fails holds the recording until
+	// a re-read answers.
+	if err := w.sync(ctx); err != nil {
+		w.holdUnread(true)
+	}
 	return w, nil
 }
 
-// sync holds the recording while the row marks a pause, and while it cannot be read, and ends this
-// replica's hold of a pause the row has since moved past. It ends only holds taken before its read:
-// one taken after is of a pause the read may not have seen.
+// sync holds the recording while the row marks a pause, and ends this replica's hold of a pause the
+// row has since moved past and the stream's own hold. It ends only holds taken before its read: one
+// taken after is of a pause the read may not have seen. A read that fails, or answers only after ctx
+// has ended, changes nothing and is an error: the caller holds the recording or refuses the stream.
 func (w *vmSignInWatch) sync(ctx context.Context) error {
 	if w == nil {
 		return nil
@@ -401,9 +404,11 @@ func (w *vmSignInWatch) sync(ctx context.Context) error {
 	s, run, bg := w.s, w.run, w.s.cfg.BaseCtx
 	before := s.desktopRecs.heldWith(run.ID, vmSignInHolds(run.ID))
 	row, found, err := w.st.DesktopVMSignIns(ctx, run.ID)
+	if err == nil && ctx.Err() != nil {
+		err = ctx.Err() // answered past its deadline: a pause may have marked the row since
+	}
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: a VM desktop's sign-in mark could not be read; its recording keeps no frames until it is", "run_id", run.ID, "err", err)
-		w.holdUnread(true)
 		return err
 	}
 	current := ""
@@ -446,8 +451,9 @@ func (w *vmSignInWatch) watch(ctx context.Context) {
 
 // recheck re-reads the row on a goroutine of its own, bounded by vmSignInReadWait, so a read that
 // stalls never keeps the stream recording: one still unanswered at the next recheck holds the
-// recording, as a failed one does, until a re-read answers. done, when set, is closed once this
-// recheck's read has answered, or at once when one was still in flight (tests).
+// recording, as a failed or late one does, until a re-read answers. A stream closing (ctx ended) takes
+// no hold. done, when set, is closed once this recheck's read has answered, or at once when one was
+// still in flight (tests).
 func (w *vmSignInWatch) recheck(ctx context.Context, done chan struct{}) {
 	finish := func() {
 		if done != nil {
@@ -459,7 +465,9 @@ func (w *vmSignInWatch) recheck(ctx context.Context, done chan struct{}) {
 	w.reading = true
 	w.mu.Unlock()
 	if stalled {
-		w.holdUnread(true)
+		if ctx.Err() == nil {
+			w.holdUnread(true)
+		}
 		finish()
 		return
 	}
@@ -467,7 +475,9 @@ func (w *vmSignInWatch) recheck(ctx context.Context, done chan struct{}) {
 		defer finish()
 		rctx, cancel := context.WithTimeout(ctx, vmSignInReadWait)
 		defer cancel()
-		_ = w.sync(rctx)
+		if err := w.sync(rctx); err != nil && ctx.Err() == nil {
+			w.holdUnread(true)
+		}
 		w.mu.Lock()
 		w.reading = false
 		w.mu.Unlock()
