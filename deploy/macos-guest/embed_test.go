@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net/netip"
 	"os"
 	"testing"
 
@@ -38,13 +39,13 @@ func TestShippedToolingParses(t *testing.T) {
 }
 
 func TestPrepProxyConfigAcceptsShippedAllowlist(t *testing.T) {
-	if _, err := prepproxy.Config(macosguest.PrepAllowlistJSON, 3128, nil); err != nil {
+	if _, err := prepproxy.Config(macosguest.PrepAllowlistJSON, 3128, []netip.Prefix{netip.MustParsePrefix("172.20.0.0/24")}); err != nil {
 		t.Fatal(err)
 	}
 }
 
 // Stage 2 starts by checking the shipped pins: with no Tooling of its own it runs them,
-// and it boots nothing when they are bad (the bad case is the revert proof's overlay).
+// and it boots nothing when they are bad (TestStage2BootsNothingOnBadShippedTooling).
 func TestStage2StartsOnShippedTooling(t *testing.T) {
 	boots := 0
 	st := &macvm.ToolsStage{Boot: func(context.Context, macvm.MachineSpec) (macvm.ToolsGuest, func(context.Context) error, error) {
@@ -54,5 +55,19 @@ func TestStage2StartsOnShippedTooling(t *testing.T) {
 	_, err := st.Run(context.Background(), macvm.Stage2Input{})
 	if boots != 1 || err == nil {
 		t.Fatalf("boots = %d, err = %v: stage 2 did not reach its boot on the shipped tooling", boots, err)
+	}
+}
+
+func TestStage2BootsNothingOnBadShippedTooling(t *testing.T) {
+	saved := macosguest.ToolingJSON
+	t.Cleanup(func() { macosguest.ToolingJSON = saved })
+	macosguest.ToolingJSON = []byte("{")
+	boots := 0
+	st := &macvm.ToolsStage{Boot: func(context.Context, macvm.MachineSpec) (macvm.ToolsGuest, func(context.Context) error, error) {
+		boots++
+		return nil, nil, errors.New("stop here")
+	}}
+	if _, err := st.Run(context.Background(), macvm.Stage2Input{}); boots != 0 || err == nil {
+		t.Fatalf("boots = %d, err = %v: stage 2 booted on bad shipped tooling", boots, err)
 	}
 }

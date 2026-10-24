@@ -4,7 +4,9 @@
 // Package prepproxy renders the wardyn-proxy configuration for stage 2 of a
 // macOS base's preparation ("Installing developer tools"). That proxy is the
 // guest's only network: it allows Apple's software-update hosts on port 443 and
-// nothing else, holds no credential, and terminates no TLS.
+// nothing else, holds no credential, and terminates no TLS. The tunnel is opaque:
+// the relay checks the SNI or HTTP Host of a flow's first flight, and the proxy
+// does not assert TLS inside it, so what is enforced is port 443 only.
 //
 // It is the same wardyn-proxy a run uses, configured the way a run's is (JSON on
 // the sidecar's stdin, WARDYN_PROXY_CONFIG_STDIN=1); this package only builds
@@ -14,6 +16,7 @@ package prepproxy
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/netip"
 	"strconv"
@@ -77,13 +80,16 @@ func ParseAllowlist(raw []byte) ([]string, error) {
 
 // Config is the wardyn-proxy config for the stage-2 prep proxy: allowlistJSON is
 // the contents of prep-allowlist.json, port the proxy's listen port, and peers
-// the networks it serves (nil serves any peer; the runner passes the prep
-// network's subnet). Each host is allowed on port 443 only (an entry written
+// the networks it serves (required: the runner passes the prep network's
+// subnet, and an empty list is refused rather than serving every interface). Each host is allowed on port 443 only (an entry written
 // host:443), every other host and port is refused, and the config carries no
 // injection rule, grant or MITM key. vm is set because the guest's only client
 // is wardyn-vmnet. The result is loaded through the proxy's own strict loader
 // before it is returned.
 func Config(allowlistJSON []byte, port int, peers []netip.Prefix) ([]byte, error) {
+	if len(peers) == 0 {
+		return nil, errors.New("prepproxy: the prep network's peers are required")
+	}
 	hosts, err := ParseAllowlist(allowlistJSON)
 	if err != nil {
 		return nil, err
