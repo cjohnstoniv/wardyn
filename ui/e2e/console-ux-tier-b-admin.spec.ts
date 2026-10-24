@@ -285,6 +285,11 @@ test.describe("Tier B computed styles", () => {
     const dialog = page.getByRole("dialog").filter({ hasText: "stored write-only" });
     const save = dialog.getByRole("button", { name: "Save secret" });
     await expect(save).toBeVisible();
+    // An empty form leaves Save disabled, and a disabled filled button is the muted grey in dark (#2865), so the
+    // fill is read once the form can be saved. Nothing is saved.
+    await dialog.getByLabel("Name", { exact: true }).fill("tier-b-colour-probe");
+    await dialog.getByLabel("Value", { exact: true }).fill("x");
+    await expect(save).toBeEnabled();
     const fill = await save.evaluate((el) => getComputedStyle(el).backgroundColor);
     expect(fill).toBe(await tokenColour(page, "backgroundColor", "--primary"));
   });
