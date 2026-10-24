@@ -492,6 +492,15 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   at most the pass's 2 minutes, and a cut pass stops the sandbox. After two cut passes in a row that save nothing, the
   sandbox is stopped, and the pass's record and its `run.folder.transfer` audit name how many changed files were not
   brought back. `wardyn sync` also saves what a cut pass finished, so its next pass starts after it.
+- `wardyn sync --pull-deletes` no longer moves a laptop file to the Trash because its name holds a backslash or a
+  control character. Such a laptop file is now refused, with a report row, as not a plain file name instead of pushed,
+  and never counts as deleted.
+- `wardyn runner upgrade` that rolls back to a 0.9 runner no longer fails putting it back: `--org-ca-file` is passed only
+  to a runner that has it.
+- A run whose desktop is swapped to the sign-in image records that image on the run, not the one it asked for.
+- The Recording tab and the take over strip say "Recording off" for a run its policy, its organisation or its runner did
+  not record, instead of naming a level. A take over on a run whose runner declined still says it is recorded: the
+  console and SSH sessions it opens are.
 
 ## [0.9.8] — 2026-10-21
 
