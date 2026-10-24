@@ -36,7 +36,7 @@
 # marks (combining accents) are kept, as GitHub keeps them; Python's \w would
 # drop them, so the filter tests the character category instead.
 #
-# Frozen files (CHANGELOG.md, CHANGELOG-ARCHIVE.md, THIRD-PARTY-NOTICES.md,
+# Frozen files (CHANGELOG.md, CHANGELOG-ARCHIVE.md, docs/releases/*.md, THIRD-PARTY-NOTICES.md,
 # deploy/images/THIRD-PARTY*.md, deploy/images/third-party-gpl-historical.md)
 # are history: their dead links are counted and shown, never failed.
 #
@@ -105,7 +105,7 @@ listed_must = args[1:split]
 extra_must = args[split + 1:]
 
 FROZEN_GLOBS = [
-    'CHANGELOG.md', 'CHANGELOG-ARCHIVE.md', 'THIRD-PARTY-NOTICES.md',
+    'CHANGELOG.md', 'CHANGELOG-ARCHIVE.md', 'docs/releases/*.md', 'THIRD-PARTY-NOTICES.md',
     'deploy/images/THIRD-PARTY*.md', 'deploy/images/third-party-gpl-historical.md',
 ]
 POLICY_HELP_TS = 'ui/src/app/components/wardyn/policy-field-help.ts'

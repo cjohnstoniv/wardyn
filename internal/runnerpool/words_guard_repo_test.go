@@ -17,8 +17,8 @@ import (
 
 // retiredEverywhere are the phrases no command, console string or user doc may use any more: a runner is
 // self-hosted or remote-hosted, a pool is an organization pool or a user pool, and a pool's limits come from
-// its runners. docs/design/ (history), docs/adoption/ (a reply quoting a third party's brief) and CHANGELOG.md
-// (which names the old words to explain the upgrade) are outside the guard.
+// its runners. docs/design/ (history), docs/adoption/ (a reply quoting a third party's brief), CHANGELOG.md and
+// docs/releases/ (which name the old words to explain the upgrade) are outside the guard.
 var retiredEverywhere = regexp.MustCompile(`(?i)executor|remote[ -]provided|self-hosted pool|no pool limit`)
 
 // codeSpan matches an inline code span; a doc may name a Go symbol or a retired wire field inside one.
@@ -38,7 +38,7 @@ func TestRetiredPoolWordsAbsentFromCommandsConsoleAndDocs(t *testing.T) {
 				return err
 			}
 			if d.IsDir() {
-				if d.Name() == "node_modules" || (dir == "docs" && (path == filepath.Join(root, "docs", "design") || path == filepath.Join(root, "docs", "adoption"))) {
+				if d.Name() == "node_modules" || (dir == "docs" && (path == filepath.Join(root, "docs", "design") || path == filepath.Join(root, "docs", "adoption") || path == filepath.Join(root, "docs", "releases"))) {
 					return filepath.SkipDir
 				}
 				return nil
