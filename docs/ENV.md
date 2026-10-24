@@ -160,7 +160,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_RUNNERD_HARD_DENY_CIDRS` | CIDR list | (unset) | **`serve --substrate k8s`**, chart-set: further in-cluster CIDRs (pod and Service ranges) every proxy hard-denies |
 | `WARDYN_RUNNERD_POD_SELECTOR` | JSON object | (required) | **`serve --substrate k8s`**, chart-set: runnerd's own pod labels, which each run's proxy NetworkPolicy admits for the relay and sink ports |
 | `WARDYN_RUNNERD_ARCH` | `amd64` or `arm64` | (required for k8s) | **`register`, `serve --substrate k8s`**, `--arch`'s twin, chart `sandbox.arch`: run pods get this `kubernetes.io/arch` node selector and the runner reports it. Another selector arch refuses boot; Docker refuses it. Mixed clusters install one release per arch |
-| `WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY` | bool | off | **`wardynd` and `wardyn-runnerd`, Docker substrate**: each run's proxy serves only callers on the run's own network; others are closed before a byte is read |
+| `WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY` | bool | on | **`wardynd` and `wardyn-runnerd`, Docker substrate**: each run's proxy serves only callers on the run's own network; others are closed before a byte is read. Proven on Docker; not tested on Podman |
 | `WARDYN_DOCKER_RUN_SUBNET_POOL` | IPv4 CIDR | (unset) | **`wardynd` and `wardyn-runnerd`, Docker substrate**: the range each run's network takes its own small subnet from, so runs stop using up the daemon's `default-address-pools`. Unset, the daemon picks each subnet. A full range refuses the run, naming this setting. [Details](OPERATIONS.md#docker-host-one-subnet-per-run) |
 | `WARDYN_DOCKER_RUN_SUBNET_SIZE` | int | `28` | **same**: the prefix length of each run's subnet in `WARDYN_DOCKER_RUN_SUBNET_POOL`, from the range's own length to `29`. Set without the pool, it refuses boot |
 | `WARDYN_ALLOW_UNENFORCEABLE_CAPS` | bool | off | escape hatch: allow a run to start on a host where the resource caps (memory/pids/cpu) can't actually be enforced. Off by default, the gate fails closed; it applies to sandbox launches only. [Details](#wardyn_allow_unenforceable_caps) |
@@ -243,7 +243,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_OIDC_ROLE_MAP` | CSV (`value=role` pairs) | (unset = role derivation off unless a console-managed mapping actually contributes to the merged map) | Maps an Entra App Role, `groups` claim entry or email to `admin`, `security_admin`, `user` or a user type id (flag `-oidc-role-map`); the only way to `security_admin`; a group deny against a partial snapshot fails closed. [Details](#wardyn_oidc_role_map) |
 | `WARDYN_OIDC_DEFAULT_ROLE` | string (`admin`\|`user`\|a user type id; `security_admin` is refused at boot; the pre-0.8 `member` has been refused at boot since 0.9) | (unset = **deny the login**, this applies once the merged map — chart or console — is non-empty) | Role assigned when a signed-in human's roles, groups or email matched none of the merged map's entries; unset denies that login (flag `-oidc-default-role`). Not applied when the IdP withheld the claims. [Details](#wardyn_oidc_default_role) |
 | `WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS` | bool | `false` | Opt-in for an email-shaped value on a console People-step role mapping only; refused by default (`EMAIL_KEY_REFUSED`, [`internal/api/access.go`](../internal/api/access.go)) (flag `-oidc-allow-email-mappings`). [Details](#wardyn_oidc_allow_email_mappings) |
-| `WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL` | bool | `false` | an allow grant written for a caller's email matches only when sign-in vouches for the email (flag `-capability-grants-verified-email`); deny grants match it either way. [Details](#wardyn_capability_grants_verified_email) |
+| `WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL` | bool | `true` | an allow grant written for a caller's email matches only when sign-in vouches for the email (flag `-capability-grants-verified-email`); deny grants match it either way. [Details](#wardyn_capability_grants_verified_email) |
 | `WARDYN_DIRECTORY_PROVIDER` | string (`entra`) | (unset = **off**) | Identity-directory connector behind the console's "who" autocomplete; unset is the whole feature off. Setting it grants wardynd read of the whole directory (flag `-directory-provider`). [Details](#wardyn_directory_provider) |
 | `WARDYN_DIRECTORY_TENANT` | string | (unset = derived from `WARDYN_OIDC_ISSUER`) | Entra tenant id or verified domain for the connector; unset, it is derived from a commercial-cloud issuer such as `https://login.microsoftonline.com/<tenant>/v2.0`, and any other issuer is a boot refusal (flag `-directory-tenant`). [Details](#wardyn_directory_tenant) |
 | `WARDYN_DIRECTORY_CLIENT_ID` | string | (unset = reuses `WARDYN_OIDC_CLIENT_ID`) | Client id of a dedicated, least-privilege app registration for the directory read; the three directory vars are set together or not at all (flag `-directory-client-id`). [Details](#wardyn_directory_client_id) |
@@ -294,8 +294,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_CAPABILITY_SECOND_HUMAN` | bool | (unset) | four-eyes on Azure DevOps capability escalations: the human who DECIDES one must not be the human who created the run. **Local mode REFUSES it**, and the `admin-token` principal BYPASSES it. [Details](#wardyn_capability_second_human) |
 | `WARDYN_GOVERNANCE_SECOND_HUMAN` | bool | (unset) | four-eyes on governance writes: a human's write to a governance profile, a capability grant, a key-domain assignment or `local_credential_delivery` is stored as a pending change. A second, distinct human must approve it. [Details](#wardyn_governance_second_human) |
 | `WARDYN_GOVERNANCE_CHANGE_TTL` | duration | `72h` | how long a governance change held for a second human waits for approval (flag `-governance-change-ttl`); past it the change reads as `expired` and cannot be approved. [Details](#wardyn_governance_change_ttl) |
-| `WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY` | bool | `false` | `PUT /governance/units/{id}` updates an existing profile only; an id no profile holds answers `404` (flag `-governance-unit-put-existing-only`). [Details](#wardyn_governance_unit_put_existing_only) |
-| `WARDYN_EGRESS_HOST_PORT_GRANTS_INERT` | bool | `false` | a stored `egress_host` allow grant whose value carries a port is inert: marked so and never matched (flag `-egress-host-port-grants-inert`). [Details](#wardyn_egress_host_port_grants_inert) |
+| `WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY` | bool | `true` | `PUT /governance/units/{id}` updates an existing profile only; an id no profile holds answers `404` (flag `-governance-unit-put-existing-only`). [Details](#wardyn_governance_unit_put_existing_only) |
+| `WARDYN_EGRESS_HOST_PORT_GRANTS_INERT` | bool | `true` | a stored `egress_host` allow grant whose value carries a port is inert: marked so and never matched (flag `-egress-host-port-grants-inert`). [Details](#wardyn_egress_host_port_grants_inert) |
 | `WARDYN_HA` | bool | `false` | multi-replica mode (flag `-ha`): skip the single-instance lock so several wardynd replicas can serve one database; refused at boot unless the runner is the Kubernetes substrate. [Details](#wardyn_ha) |
 | `WARDYN_GOVERN_ADMIN_RUNS` | bool | (unset) | constrained-admin mode: govern every run an SSO admin or an admin-role personal API token launches, like a member's (flag `-govern-admin-runs`). **With OIDC unset the switch binds nobody**, and boot WARNs it (`warnGovernAdminRunsUnbound`, [`cmd/wardynd/boot_posture.go`](../cmd/wardynd/boot_posture.go)). [Details](#wardyn_govern_admin_runs) |
 | `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT` | CSV | (unset) | the lanes left ungoverned under `WARDYN_GOVERN_ADMIN_RUNS`; the only value is `recording` (flag `-govern-admin-runs-exempt`). [Details](#wardyn_govern_admin_runs_exempt) |
@@ -1233,10 +1233,10 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 ### `WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL`
 
-- Off (the default): a capability allow grant whose subject is the caller's email matches as before, and each such match is logged at INFO as one the switch would stop.
-- On: that grant matches only when sign-in vouches for the email: `WARDYN_OIDC_EMAIL_DOMAINS` or `WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED` is set, or `WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS` is on. A grant on the caller's sub or group is unaffected.
+- On (the default since 0.10.0): a capability allow grant whose subject is the caller's email matches only when sign-in vouches for the email: `WARDYN_OIDC_EMAIL_DOMAINS` or `WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED` is set, or `WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS` is on. A grant on the caller's sub, a group, a user type or everyone is unaffected, and sign-in itself is unchanged.
+- An Entra ID token usually omits `email_verified`, so on Entra such email grants stop granting. Boot WARNs with how many stored allow grants are keyed to an email while sign-in does not vouch for it.
 - A deny grant on the email binds either way.
-- Before you turn it on, read the INFO lines and re-key each named grant to the person's sub or a group (flag `-capability-grants-verified-email`).
+- Remedy: re-grant each to the person's user id (sub) or a group, or set it to `false` (flag `-capability-grants-verified-email=false`), which keeps the match and logs each one at INFO.
 
 ### `WARDYN_DIRECTORY_PROVIDER`
 
@@ -1536,16 +1536,16 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 ### `WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY`
 
-- Off (the default): `PUT /api/v1/governance/units/{id}` naming an id no profile holds creates one there. A direct write is logged at INFO as a create the switch would refuse; one held for a second person is not.
-- On: that PUT answers `404 governance_unit_not_found`; create a profile with `POST /api/v1/governance/units`, which mints the id (flag `-governance-unit-put-existing-only`).
+- On (the default since 0.10.0): `PUT /api/v1/governance/units/{id}` naming an id no profile holds answers `404 governance_unit_not_found`; create a profile with `POST /api/v1/governance/units`, which mints the id.
+- Off (`false`): that PUT creates a profile at the id. A direct write is logged at INFO as a create the switch would refuse; one held for a second person is not (flag `-governance-unit-put-existing-only=false`).
 - Renamed in 0.10.0 from `WARDYN_GOVERNANCE_PROFILE_PUT_EXISTING_ONLY`; wardynd refuses to boot while the old name is set, naming this one.
 
 ### `WARDYN_EGRESS_HOST_PORT_GRANTS_INERT`
 
-- The write boundary stores an `egress_host` grant's host alone; an older row may still carry `host:port`, and the resolver matches it on the host for every port.
-- Off (the default): such allow rows match as before, and listing the grants WARNs with each one and the remedy.
-- On: such an allow row is inert: `GET /api/v1/permissions` marks it `inert` and it grants nothing. A deny row with a port keeps binding.
-- Before you turn it on, re-save each WARNed row through `POST /api/v1/permissions/grants`, then delete the old row (flag `-egress-host-port-grants-inert`).
+- The write boundary stores an `egress_host` grant's host alone; an older row may still carry `host:port`, which, with this switch off, the resolver matches on the host for every port.
+- On (the default since 0.10.0): such an allow row is inert: `GET /api/v1/permissions` marks it `inert` and it grants nothing. A deny row with a port keeps binding. Boot logs how many rows went inert.
+- Off (`false`): such allow rows match as before, and listing the grants WARNs with each one and the remedy.
+- To keep a row working, re-save it through `POST /api/v1/permissions/grants`, which stores the host alone, then delete the old row (flag `-egress-host-port-grants-inert=false` turns the switch off).
 
 ### `WARDYN_HA`
 

@@ -187,8 +187,9 @@ func TestGovernanceCRUD_ProfileWriteCreatesUpdatesAndAudits(t *testing.T) {
 		t.Error("the store was not told who wrote the profile")
 	}
 
-	// PUT names its id in the path: the row stored is that id, answered 200.
-	id := uuid.New()
+	// PUT names an existing profile's id in the path: the row stored is that id, answered 200.
+	st.profiles = append(st.profiles, created.Unit.GovernanceUnit)
+	id := created.Unit.ID
 	w = do(t, srv, http.MethodPut, "/api/v1/governance/units/"+id.String(), adminToken, `{"name":"interns-2","ceiling":{"min_confinement_class":"CC2"}}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("PUT = %d %s, want 200", w.Code, w.Body.String())

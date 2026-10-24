@@ -119,8 +119,8 @@ func TestInlinePolicy_EgressHostGrantDoesNotCoverAPrivateLiteral(t *testing.T) {
 	for name, enf := range map[string]map[string]bool{"unenforced": nil, "enforced and granted": {capEgressHost: true}} {
 		t.Run(name, func(t *testing.T) {
 			h := capPolicyServer(t, []types.CapabilityGrant{
-				grant(types.CapabilitySubjectUser, capEmail, capEgressHost, "10.0.0.5", types.CapabilityAllow),
-				grant(types.CapabilitySubjectUser, capEmail, capEgressHost, "pypi.org", types.CapabilityAllow),
+				grant(types.CapabilitySubjectUser, capSub, capEgressHost, "10.0.0.5", types.CapabilityAllow),
+				grant(types.CapabilitySubjectUser, capSub, capEgressHost, "pypi.org", types.CapabilityAllow),
 			}, enf)
 			h.srv.cfg.DefaultPolicy = allowAllCeiling()
 			got, warns := resolveInline(t, h, types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"10.0.0.5", "pypi.org"}})

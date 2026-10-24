@@ -88,7 +88,11 @@ func TestRenameMap(t *testing.T) {
 	pool := throwawayPGPool(t)
 	ctx := context.Background()
 	h := newHarness(t)
-	srv := New(baseTestConfig(h, store.NewPG(pool)))
+	cfg := baseTestConfig(h, store.NewPG(pool))
+	// The origin corpus was recorded on 0.9, where "update unknown" (a PUT to an id no unit holds) created
+	// one: WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY set off reproduces it.
+	cfg.GovernanceUnitPutCreates = true
+	srv := New(cfg)
 
 	ids := map[string]string{}
 	type rawStep struct {

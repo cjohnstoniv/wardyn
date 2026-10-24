@@ -280,20 +280,20 @@ type Config struct {
 	// UNAFFECTED either way (legacy, still boot-warned separately — see
 	// buildOptionalFeatures).
 	AllowEmailMappings bool
-	// CapabilityGrantsVerifiedEmail is WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL: a
-	// capability ALLOW row written for a person's email matches them only when
-	// sign-in vouches for the email (unverifiedEmailSubject). Default false keeps
-	// the match and logs it. Deny rows match the email either way.
-	CapabilityGrantsVerifiedEmail bool
-	// GovernanceUnitPutExistingOnly is WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY:
-	// PUT /governance/units/{id} replaces an existing profile only, and a
-	// new one is created through POST. Default false keeps create-at-id and logs it.
-	GovernanceUnitPutExistingOnly bool
-	// EgressHostPortGrantsInert is WARDYN_EGRESS_HOST_PORT_GRANTS_INERT: a stored
-	// egress_host ALLOW row whose value carries a ":port" (written before the
-	// write boundary stored the host alone) is inert, marked and never matched.
-	// Default false keeps matching it by host and logs it. Deny rows keep matching.
-	EgressHostPortGrantsInert bool
+	// UnverifiedEmailCapGrantsMatch is WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL set
+	// off: a capability ALLOW row written for a person's email still matches when
+	// sign-in does not vouch for it (unverifiedEmailSubject), logged. The zero value
+	// (the default) grants nothing through it. Deny rows match the email either way.
+	UnverifiedEmailCapGrantsMatch bool
+	// GovernanceUnitPutCreates is WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY set off:
+	// PUT /governance/units/{id} naming an id no profile holds creates one there,
+	// logged. The zero value (the default) answers it 404; create through POST.
+	GovernanceUnitPutCreates bool
+	// EgressHostPortGrantsMatch is WARDYN_EGRESS_HOST_PORT_GRANTS_INERT set off: a
+	// stored egress_host ALLOW row whose value carries a ":port" (written before
+	// the write boundary stored the host alone) still matches by host, logged. The
+	// zero value (the default) leaves it inert, marked and never matched. Deny rows keep matching.
+	EgressHostPortGrantsMatch bool
 	// UserMounts is the operator/MDM-set posture for MEMBER-authored local_dir
 	// binds (WARDYN_USER_WORKSPACE_ROOTS + _MAP + WARDYN_USER_WRITABLE_ROOTS
 	// + _DENY, parsed at boot by runner.ParseUserMountPolicy). The ZERO VALUE

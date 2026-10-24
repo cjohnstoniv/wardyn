@@ -344,10 +344,10 @@ func TestServiceIdentity_SponsorAttachFollowsTheGrant(t *testing.T) {
 	refused(t, e.sponsor, "a * allow, asked again")
 	e.ungrant(t, wild)
 
-	person := e.grant(t, "user", "sponsor@corp.example", "allow", featureServiceAttach)
+	person := e.grant(t, "user", svcSponsor, "allow", featureServiceAttach)
 	allowed(t, e.sponsor, "a person grant")
 	// Someone who is not the sponsor reaches nothing through the sponsor's grant.
-	e.grant(t, "user", "other@corp.example", "allow", featureServiceAttach)
+	e.grant(t, "user", "other-sub", "allow", featureServiceAttach)
 	if w := e.mintTicket(t, e.other, run); !refusedAsForeign(w) {
 		t.Errorf("a granted non-sponsor: %d %s, want the foreign-run 404", w.Code, w.Body.String())
 	}
@@ -365,7 +365,7 @@ func TestServiceIdentity_SponsorAttachFollowsTheGrant(t *testing.T) {
 	refused(t, e.sponsor, "the user-type grant withdrawn")
 
 	// A user-type deny walls out a person allow.
-	e.grant(t, "user", "sponsor@corp.example", "allow", featureServiceAttach)
+	e.grant(t, "user", svcSponsor, "allow", featureServiceAttach)
 	deny := e.grant(t, "user_type", types.UserTypeStandard, "deny", featureServiceAttach)
 	refused(t, e.sponsor, "a user-type deny beside a person allow")
 	e.ungrant(t, deny)
@@ -387,8 +387,8 @@ func TestServiceIdentity_SponsorAttachKeepsTheDoors(t *testing.T) {
 		t.Fatal(err)
 	}
 	walled := func(r *types.AgentRun) { r.UnitID = &profile.ID }
-	e.grant(t, "user", "boss@corp.example", "allow", featureServiceAttach)
-	e.grant(t, "user", "sponsor@corp.example", "allow", featureServiceAttach)
+	e.grant(t, "user", bossSub, "allow", featureServiceAttach)
+	e.grant(t, "user", svcSponsor, "allow", featureServiceAttach)
 	attach := func(run types.AgentRun, tok string) *httptest.ResponseRecorder {
 		return do(t, e.h.srv, http.MethodGet, "/api/v1/runs/"+run.ID.String()+"/attach?ticket="+tok, "", "")
 	}
@@ -433,7 +433,7 @@ func TestServiceIdentity_SponsorAttachKeepsTheDoors(t *testing.T) {
 // with the service identity and entry=sponsor, and the ticket is stamped member whatever the minter's role.
 func TestServiceIdentity_SponsorAttachRecordsTheSponsor(t *testing.T) {
 	e := newSponsorEnv(t)
-	e.grant(t, "user", "boss@corp.example", "allow", featureServiceAttach)
+	e.grant(t, "user", bossSub, "allow", featureServiceAttach)
 	run := e.seedRun(t, bossPrn, nil)
 	tok := ticketOf(t, e.mintTicket(t, e.boss, run))
 	ts := httptest.NewServer(panicFails(t, e.h.srv.Handler()))
@@ -468,7 +468,7 @@ func TestServiceIdentity_SponsorAttachRecordsTheSponsor(t *testing.T) {
 // the same instant window. A withdrawn grant refuses the next ticket and ends nothing already minted.
 func TestServiceIdentity_SponsorEntryEndsWithSponsorship(t *testing.T) {
 	e := newSponsorEnv(t)
-	grant := e.grant(t, "user", "sponsor@corp.example", "allow", featureServiceAttach)
+	grant := e.grant(t, "user", svcSponsor, "allow", featureServiceAttach)
 	run := e.seedRun(t, svcPrin, nil)
 	attach := func(tok string) int {
 		return do(t, e.h.srv, http.MethodGet, "/api/v1/runs/"+run.ID.String()+"/attach?ticket="+tok, "", "").Code
@@ -480,7 +480,7 @@ func TestServiceIdentity_SponsorEntryEndsWithSponsorship(t *testing.T) {
 	if got := attach(live); got != http.StatusUpgradeRequired {
 		t.Errorf("a minted ticket after the grant was withdrawn: %d, want 426 (the grant is asked at the mint only)", got)
 	}
-	e.grant(t, "user", "sponsor@corp.example", "allow", featureServiceAttach)
+	e.grant(t, "user", svcSponsor, "allow", featureServiceAttach)
 
 	// Sponsor change A to B and back to A: the person is the sponsor again, but not the one the ticket was
 	// admitted under, so the redemption is refused. The authority time is the ticket's.
@@ -514,7 +514,7 @@ func TestServiceIdentity_SponsorEntryEndsWithSponsorship(t *testing.T) {
 	}
 
 	// Suspension.
-	e.grant(t, "user", "sponsor2@corp.example", "allow", featureServiceAttach)
+	e.grant(t, "user", svcSponsor2, "allow", featureServiceAttach)
 	suspended := ticketOf(t, e.mintTicket(t, e.sponsor2, run))
 	if w := doSSO(t, e.h.srv, http.MethodPatch, "/api/v1/service-identities/"+svcName, e.sec, `{"suspended":true}`); w.Code != http.StatusOK {
 		t.Fatalf("suspend: %d %s", w.Code, w.Body.String())
@@ -546,8 +546,8 @@ func sshKeyFor(t *testing.T) ssh.PublicKey { _, pub := mustSSHKeypair(t); return
 // SSH into a service identity's run is refused run_owner_only, and the failure row carries no sponsor-entry data.
 func TestServiceIdentity_SSHRefusesSponsorEntry(t *testing.T) {
 	e := newSponsorEnv(t)
-	e.grant(t, "user", "sponsor@corp.example", "allow", featureServiceAttach)
-	e.grant(t, "user", "boss@corp.example", "allow", featureServiceAttach)
+	e.grant(t, "user", svcSponsor, "allow", featureServiceAttach)
+	e.grant(t, "user", bossSub, "allow", featureServiceAttach)
 	fresh := time.Now()
 	for _, c := range []struct {
 		name, principal, role, owner string
@@ -651,7 +651,7 @@ func TestServiceIdentity_SponsoredRunNeedsNoActionFromTheSponsor(t *testing.T) {
 // in effect rather than looking like a probe of someone else's run.
 func TestServiceIdentity_SponsorNotYetInEffectIsAuditedAsNotEntitled(t *testing.T) {
 	e := newSponsorEnv(t)
-	e.grant(t, "user", "sponsor@corp.example", "allow", featureServiceAttach)
+	e.grant(t, "user", svcSponsor, "allow", featureServiceAttach)
 	if _, err := e.pool.Exec(context.Background(), `UPDATE service_identities SET sponsor_since = now() + interval '1 hour'`); err != nil {
 		t.Fatalf("move the sponsorship into the future: %v", err)
 	}

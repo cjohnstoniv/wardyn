@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/netip"
 	"net/url"
@@ -23,6 +24,7 @@ import (
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
 
+	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -113,7 +115,7 @@ func (d *Driver) prepareProxy(ctx context.Context, runID uuid.UUID, cfgJSON []by
 	if err != nil {
 		return proxyPrep{}, err
 	}
-	if d.cfg.ProxySandboxPeersOnly {
+	if !d.cfg.ProxyServesAnyPeer {
 		subnets, err := d.runSubnets(ctx, runID)
 		if err != nil {
 			return proxyPrep{}, err
@@ -128,8 +130,16 @@ func (d *Driver) prepareProxy(ctx context.Context, runID uuid.UUID, cfgJSON []by
 	return proxyPrep{extraHosts: hosts, cfgJSON: cfgJSON}, nil
 }
 
-// EnvProxySandboxPeersOnly is Config.ProxySandboxPeersOnly's switch.
+// EnvProxySandboxPeersOnly is the inverse of Config.ProxyServesAnyPeer: on unless set off.
 const EnvProxySandboxPeersOnly = "WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY"
+
+// ProxyServesAnyPeerFromEnv is Config.ProxyServesAnyPeer from EnvProxySandboxPeersOnly, which defaults
+// on; a value that is not a boolean exits 2 naming it. It logs the switch's state, so call it once at boot.
+func ProxyServesAnyPeerFromEnv() bool {
+	on := cliutil.EnvBool(EnvProxySandboxPeersOnly, true)
+	slog.Info("docker: run proxy peers", EnvProxySandboxPeersOnly, on)
+	return !on
+}
 
 // runSubnets are the subnets of runID's own network.
 func (d *Driver) runSubnets(ctx context.Context, runID uuid.UUID) ([]netip.Prefix, error) {
