@@ -4,6 +4,7 @@
 package macvm
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -68,7 +69,20 @@ func IDHash(id []byte) string {
 // CloneRun makes a run's disk and aux storage as copy-on-write clones of the
 // base's, and gives it a machine identifier by strategy. The base is only
 // ever read. A run dir that already holds a disk is refused.
+//
+// It holds the base's lock shared while it reads, so a tools update's swap
+// (which holds it exclusively) is never half seen.
 func CloneRun(e Engine, baseDir, runDir string, s IdentityStrategy) (Identity, error) {
+	unlock, err := lockFile(context.Background(), baseLockPath(baseDir), false)
+	if err != nil {
+		return Identity{}, err
+	}
+	defer unlock()
+	return cloneRun(e, baseDir, runDir, s)
+}
+
+// cloneRun is CloneRun for a caller that already holds the base's lock.
+func cloneRun(e Engine, baseDir, runDir string, s IdentityStrategy) (Identity, error) {
 	if !s.Valid() {
 		return Identity{}, fmt.Errorf("macvm: unknown identity strategy %q", s)
 	}

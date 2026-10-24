@@ -104,6 +104,8 @@ func ParseTooling(b []byte) (Tooling, error) {
 			return Tooling{}, fmt.Errorf("macvm: tooling: %s destination %q is not an absolute guest path", p.ID, p.Dest)
 		case len(p.VersionArgv) == 0:
 			return Tooling{}, fmt.Errorf("macvm: tooling: %s has no version check", p.ID)
+		case p.VersionArgv[0] != p.Dest:
+			return Tooling{}, fmt.Errorf("macvm: tooling: %s version check runs %q, not the file it pushes (%s)", p.ID, p.VersionArgv[0], p.Dest)
 		}
 		seen[p.ID] = true
 	}
@@ -139,7 +141,10 @@ type ToolsResult struct {
 	Withheld     map[string]error
 	CLT          bool
 	AgentVersion string // set when the guest agent was replaced
-	Pins         map[string]PinRecord
+	// Pins are the pins that installed and passed their version check; Tried
+	// are all the pins this run attempted.
+	Pins  map[string]PinRecord
+	Tried map[string]PinRecord
 }
 
 // PinRecord is a pin as stage 2 applied it.
@@ -208,9 +213,9 @@ func installTools(ctx context.Context, g ToolsGuest, o ToolsOptions) (ToolsResul
 	if o.Log == nil {
 		o.Log = slog.New(slog.NewJSONHandler(io.Discard, nil))
 	}
-	res := ToolsResult{Harnesses: []string{HarnessNone}, Withheld: map[string]error{}, Pins: map[string]PinRecord{}}
+	res := ToolsResult{Harnesses: []string{HarnessNone}, Withheld: map[string]error{}, Pins: map[string]PinRecord{}, Tried: map[string]PinRecord{}}
 	for _, p := range o.Tooling.Harnesses {
-		res.Pins[p.ID] = PinRecord{Version: p.Version, SHA256: p.SHA256}
+		res.Tried[p.ID] = PinRecord{Version: p.Version, SHA256: p.SHA256}
 	}
 	if o.Agent != nil {
 		f, err := os.Open(o.Agent.Path)
@@ -253,6 +258,7 @@ func installTools(ctx context.Context, g ToolsGuest, o ToolsOptions) (ToolsResul
 			continue
 		}
 		res.Harnesses = append(res.Harnesses, p.ID)
+		res.Pins[p.ID] = res.Tried[p.ID]
 	}
 	return res, nil
 }
@@ -323,16 +329,15 @@ func cmpVersionLabel(a, b string) int {
 
 // installPin downloads and checks one CLI, pushes it and runs its version check.
 func installPin(ctx context.Context, g ToolsGuest, o ToolsOptions, p ToolPin) error {
-	file, err := fetchPinned(ctx, o.HTTP, p, o.Cache)
+	f, err := fetchPinned(ctx, o.HTTP, p, o.Cache)
 	if err != nil {
 		return err
 	}
-	r, size, err := openPinned(file, p)
-	if err != nil {
-		return err
+	r, size, err := pinnedBytes(f, p) // closes f on error
+	if err == nil {
+		err = g.Push(ctx, p.Dest, 0o755, r, size)
+		_ = r.Close()
 	}
-	err = g.Push(ctx, p.Dest, 0o755, r, size)
-	_ = r.Close()
 	if err != nil {
 		return fmt.Errorf("pushing %s: %w", p.ID, err)
 	}
@@ -348,50 +353,87 @@ func installPin(ctx context.Context, g ToolsGuest, o ToolsOptions, p ToolPin) er
 	return nil
 }
 
-// fetchPinned returns the path of p's download in dir, checked against its
-// SHA-256. A file already there is reused only if it still matches. A
-// download that does not match is deleted and refused.
-func fetchPinned(ctx context.Context, c *http.Client, p ToolPin, dir string) (string, error) {
+// httpsOnly is a client that refuses a redirect to anything but https.
+func httpsOnly(c *http.Client) *http.Client {
+	cc := *c
+	prev := c.CheckRedirect
+	cc.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if req.URL.Scheme != "https" {
+			return fmt.Errorf("refusing a redirect to %s", req.URL.Redacted())
+		}
+		if prev != nil {
+			return prev(req, via)
+		}
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		return nil
+	}
+	return &cc
+}
+
+// fetchPinned returns p's download in dir as an open file at offset 0, checked
+// against its SHA-256 through that same handle, so what is pushed is what was
+// checked. A file already in the cache is reused only if it still matches. A
+// download that does not match is deleted and refused. The caller closes it.
+func fetchPinned(ctx context.Context, c *http.Client, p ToolPin, dir string) (*os.File, error) {
 	if err := mkdirPrivate(dir); err != nil {
-		return "", err
+		return nil, err
 	}
 	final := filepath.Join(dir, p.ID+"-"+p.Version+".download")
-	if sum, err := fileSHA256(final); err == nil {
-		if sum == p.SHA256 {
-			return final, nil
+	if f, err := os.Open(final); err == nil {
+		if ok, herr := hasSHA256(f, p.SHA256); herr == nil && ok {
+			return f, nil
 		}
+		_ = f.Close()
 		_ = os.Remove(final)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.URL, nil)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	resp, err := c.Do(req)
+	resp, err := httpsOnly(c).Do(req)
 	if err != nil {
-		return "", fmt.Errorf("downloading %s: %w", p.ID, err)
+		return nil, fmt.Errorf("downloading %s: %w", p.ID, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("downloading %s: %s", p.ID, resp.Status)
+		return nil, fmt.Errorf("downloading %s: %s", p.ID, resp.Status)
 	}
 	part := final + ".part"
-	f, err := os.OpenFile(part, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	f, err := os.OpenFile(part, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer os.Remove(part)
 	h := sha256.New()
 	n, err := io.Copy(io.MultiWriter(f, h), io.LimitReader(resp.Body, p.Size+1))
-	if cerr := f.Close(); err == nil {
-		err = cerr
+	if err == nil && (n > p.Size || hex.EncodeToString(h.Sum(nil)) != p.SHA256) {
+		err = fmt.Errorf("%w: %s %s", ErrPinMismatch, p.ID, p.Version)
+	} else if err != nil {
+		err = fmt.Errorf("downloading %s: %w", p.ID, err)
+	}
+	if err == nil {
+		err = os.Rename(part, final) // f still names the checked inode
+	}
+	if err == nil {
+		_, err = f.Seek(0, io.SeekStart)
 	}
 	if err != nil {
-		return "", fmt.Errorf("downloading %s: %w", p.ID, err)
+		_ = f.Close()
+		return nil, err
 	}
-	if n > p.Size || hex.EncodeToString(h.Sum(nil)) != p.SHA256 {
-		return "", fmt.Errorf("%w: %s %s", ErrPinMismatch, p.ID, p.Version)
+	return f, nil
+}
+
+// hasSHA256 hashes f from the start and leaves it at offset 0.
+func hasSHA256(f *os.File, want string) (bool, error) {
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return false, err
 	}
-	return final, os.Rename(part, final)
+	_, err := f.Seek(0, io.SeekStart)
+	return hex.EncodeToString(h.Sum(nil)) == want, err
 }
 
 type pinnedReader struct {
@@ -409,13 +451,9 @@ func (r pinnedReader) Close() error {
 	return first
 }
 
-// openPinned opens the bytes to push: the file, or the one tar.gz member p
-// names.
-func openPinned(file string, p ToolPin) (io.ReadCloser, int64, error) {
-	f, err := os.Open(file)
-	if err != nil {
-		return nil, 0, err
-	}
+// pinnedBytes is the bytes to push from the checked file f: the file itself,
+// or the one tar.gz member p names. Closing the result closes f.
+func pinnedBytes(f *os.File, p ToolPin) (io.ReadCloser, int64, error) {
 	if p.Extract == "" {
 		fi, err := f.Stat()
 		if err != nil {
@@ -449,39 +487,77 @@ func openPinned(file string, p ToolPin) (io.ReadCloser, int64, error) {
 	}
 }
 
-// ToolsRecord is tools.json: what a base's stage 2 applied.
-type ToolsRecord struct {
-	AgentVersion string               `json:"agent_version,omitempty"`
-	Pins         map[string]PinRecord `json:"pins"`
-	Harnesses    []string             `json:"harnesses"`
+// ToolsRetryAfter is how long an automatic tools update waits before trying a
+// harness again that stage 2 withheld. Any update that does run tries every
+// pin again.
+const ToolsRetryAfter = time.Hour
+
+// WithheldRecord says which pin a harness was withheld at, and why.
+type WithheldRecord struct {
+	PinRecord
+	Reason string `json:"reason"`
 }
 
-func writeToolsRecord(dir string, r ToolsResult, agentVersion string) error {
-	return writeJSONAtomic(filepath.Join(dir, ToolsRecordFile),
-		ToolsRecord{AgentVersion: agentVersion, Pins: r.Pins, Harnesses: r.Harnesses}, 0o600)
+// ToolsRecord is tools.json: what a base's stage 2 applied. Pins are only
+// those that installed and passed their version check; Withheld holds the rest
+// with the reason, for the status the drawer reads.
+type ToolsRecord struct {
+	AgentVersion string                    `json:"agent_version,omitempty"`
+	Pins         map[string]PinRecord      `json:"pins"`
+	Withheld     map[string]WithheldRecord `json:"withheld,omitempty"`
+	Harnesses    []string                  `json:"harnesses"`
+	TriedAt      time.Time                 `json:"tried_at"`
+}
+
+// ReadToolsRecord reads a base's tools.json.
+func ReadToolsRecord(baseDir string) (ToolsRecord, error) {
+	var rec ToolsRecord
+	b, err := os.ReadFile(filepath.Join(baseDir, ToolsRecordFile))
+	if err != nil {
+		return rec, err
+	}
+	return rec, json.Unmarshal(b, &rec)
+}
+
+func writeToolsRecord(dir string, r ToolsResult, agentVersion string, at time.Time) error {
+	rec := ToolsRecord{AgentVersion: agentVersion, Pins: r.Pins, Harnesses: r.Harnesses, TriedAt: at.UTC()}
+	for id, err := range r.Withheld {
+		if rec.Withheld == nil {
+			rec.Withheld = map[string]WithheldRecord{}
+		}
+		rec.Withheld[id] = WithheldRecord{PinRecord: r.Tried[id], Reason: err.Error()}
+	}
+	return writeJSONAtomic(filepath.Join(dir, ToolsRecordFile), rec, 0o600)
 }
 
 // NeedsToolsUpdate says whether the base in baseDir lacks the pins in t or
-// the guest agent build agentVersion ("" skips the agent check).
-func NeedsToolsUpdate(baseDir string, t Tooling, agentVersion string) bool {
-	b, err := os.ReadFile(filepath.Join(baseDir, ToolsRecordFile))
+// the guest agent build agentVersion ("" skips the agent check). A harness
+// withheld at the current pin does not count for ToolsRetryAfter after the
+// attempt; a new pin counts at once.
+func NeedsToolsUpdate(baseDir string, t Tooling, agentVersion string, now time.Time) bool {
+	rec, err := ReadToolsRecord(baseDir)
 	if err != nil {
-		return true
-	}
-	var rec ToolsRecord
-	if json.Unmarshal(b, &rec) != nil {
 		return true
 	}
 	if agentVersion != "" && rec.AgentVersion != agentVersion {
 		return true
 	}
 	for _, p := range t.Harnesses {
-		if rec.Pins[p.ID] != (PinRecord{Version: p.Version, SHA256: p.SHA256}) {
-			return true
+		want := PinRecord{Version: p.Version, SHA256: p.SHA256}
+		if rec.Pins[p.ID] == want {
+			continue
 		}
+		if w, ok := rec.Withheld[p.ID]; ok && w.PinRecord == want && now.Sub(rec.TriedAt) < ToolsRetryAfter {
+			continue
+		}
+		return true
 	}
 	return false
 }
+
+// baseLockPath is the lock on one base. It sits beside the base dir, which an
+// update swaps out from under any lock inside it.
+func baseLockPath(baseDir string) string { return baseDir + ".lock" }
 
 // UpdateOptions configures UpdateTools.
 type UpdateOptions struct {
@@ -496,39 +572,58 @@ type UpdateOptions struct {
 	// Tooling and AgentVersion are what the base should end up with.
 	Tooling      Tooling
 	AgentVersion string
+	// Force runs the update even when the base looks current or a withheld
+	// harness is inside its retry delay: an update someone asked for.
+	Force bool
 	// CPUs and MemoryMiB are the runner's per-run limits, never raised.
 	CPUs          int
 	MemoryMiB     uint64
 	HelperVersion string
 	PowerPoll     time.Duration
 	Progress      func(PrepareEvent)
+	// Now is the clock (nil: time.Now).
+	Now func() time.Time
 }
 
 // UpdateTools brings a ready base up to the current pins and guest agent: it
 // clones the base, runs stage 2 on the clone, and swaps the clone in as the
-// base. The old base stays until the swap, so a failed or interrupted update
-// leaves it as it was. Callers must not clone runs from the slot meanwhile.
-// It reports whether anything changed.
+// base with one atomic exchange. The whole run holds the base's lock
+// exclusively, so two updates serialise, and CloneRun (which holds it shared)
+// waits and then sees the old base or the new one, never a mix. A failed or
+// interrupted update leaves the old base as it was. It reports whether
+// anything changed.
 func UpdateTools(ctx context.Context, o UpdateOptions) (Manifest, bool, error) {
-	base := o.Layout.BaseDir(o.Slot)
-	nb, old := base+".update", base+".old"
-	if _, err := os.Stat(base); os.IsNotExist(err) {
-		if _, oerr := os.Stat(old); oerr == nil { // a swap died half way
-			_ = os.Rename(old, base)
-		}
-	}
-	m, err := ReadyBase(base)
-	if err != nil {
-		return m, false, err
-	}
-	if !NeedsToolsUpdate(base, o.Tooling, o.AgentVersion) {
-		return m, false, nil
+	if o.Engine == nil || o.Power == nil || o.Stage == nil || o.Layout.Root == "" {
+		return Manifest{}, false, errors.New("macvm: a tools update needs an engine, a power source, a stage 2 and a root")
 	}
 	if o.Progress == nil {
 		o.Progress = func(PrepareEvent) {}
 	}
 	if o.PowerPoll == 0 {
 		o.PowerPoll = 2 * time.Second
+	}
+	if o.Now == nil {
+		o.Now = time.Now
+	}
+	base := o.Layout.BaseDir(o.Slot)
+	nb := base + ".update"
+	unlock, err := lockFile(ctx, baseLockPath(base), true)
+	if err != nil {
+		return Manifest{}, false, err
+	}
+	defer unlock()
+	m, err := ReadyBase(base)
+	if err != nil {
+		return m, false, err
+	}
+	if !o.Force && !NeedsToolsUpdate(base, o.Tooling, o.AgentVersion, o.Now()) {
+		return m, false, nil
+	}
+	drifted := o.AgentVersion != "" && m.AgentVersion != o.AgentVersion
+	// An agent build stage 2 cannot install would leave the base "drifted"
+	// for ever, and every start would reboot it: refuse before booting.
+	if ts, ok := o.Stage.(*ToolsStage); ok && drifted && (ts.Agent == nil || ts.Agent.Version != o.AgentVersion) {
+		return m, false, fmt.Errorf("macvm: the guest agent build is %s but this update has no such build to install", o.AgentVersion)
 	}
 	if err := thermalGate(o.Engine); err != nil {
 		return m, false, err
@@ -541,19 +636,25 @@ func UpdateTools(ctx context.Context, o UpdateOptions) (Manifest, bool, error) {
 		defer release()
 	}
 	// Like prepare's later steps: starts only on AC, never paused.
-	d := &downloader{power: o.Power, poll: o.PowerPoll}
+	d := &downloader{power: o.Power, poll: o.PowerPoll, paused: func(on bool) {
+		ev := PrepareEvent{Phase: PhaseTools, Paused: on}
+		if on {
+			ev.Detail = "waiting for AC power"
+		}
+		o.Progress(ev)
+	}}
 	if err := d.waitAC(ctx); err != nil {
 		return m, false, err
 	}
 	o.Progress(PrepareEvent{Phase: PhaseTools})
-	if err := os.RemoveAll(nb); err != nil {
+	if err := os.RemoveAll(nb); err != nil { // an earlier update's leftover
 		return m, false, err
 	}
-	id, err := CloneRun(o.Engine, base, nb, IdentityTravel)
+	id, err := cloneRun(o.Engine, base, nb, IdentityTravel)
 	if err != nil {
 		return m, false, err
 	}
-	defer os.RemoveAll(nb) // gone after a swap; the leftover of a failed update otherwise
+	defer os.RemoveAll(nb) // the failed clone; after a swap, the old base
 	spec := MachineSpec{
 		CPUs: o.CPUs, MemoryBytes: o.MemoryMiB * mib, MinCPUs: m.MinCPUs, MinMemoryBytes: m.MinMemoryMiB * mib,
 		HardwareModel: m.HardwareModel, MachineIdentifier: id.MachineIdentifier,
@@ -563,28 +664,23 @@ func UpdateTools(ctx context.Context, o UpdateOptions) (Manifest, bool, error) {
 	if err != nil {
 		return m, false, err
 	}
+	if drifted && res.AgentVersion != o.AgentVersion {
+		return m, false, fmt.Errorf("macvm: stage 2 did not install guest agent build %s", o.AgentVersion)
+	}
 	agent := m.AgentVersion
 	if res.AgentVersion != "" {
 		agent = res.AgentVersion
 	}
 	m.AgentVersion, m.Harnesses, m.HelperVersion = agent, res.Harnesses, o.HelperVersion
-	if err := writeToolsRecord(nb, res, agent); err != nil {
+	if err := writeToolsRecord(nb, res, agent, o.Now()); err != nil {
 		return m, false, err
 	}
 	if err := writeJSONAtomic(filepath.Join(nb, ManifestFile), m, 0o600); err != nil {
 		return m, false, err
 	}
-	if err := os.RemoveAll(old); err != nil {
-		return m, false, err
+	if err := swapDirs(nb, base); err != nil {
+		return m, false, fmt.Errorf("macvm: swapping in the updated base: %w", err)
 	}
-	if err := os.Rename(base, old); err != nil {
-		return m, false, err
-	}
-	if err := os.Rename(nb, base); err != nil {
-		_ = os.Rename(old, base)
-		return m, false, err
-	}
-	_ = os.RemoveAll(old)
 	o.Progress(PrepareEvent{Phase: PhaseReady, Fraction: 1})
 	return m, true, nil
 }

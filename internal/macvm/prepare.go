@@ -291,7 +291,7 @@ func (p *prep) stage2(ctx context.Context, spec MachineSpec, res *BootstrapResul
 		res.AgentVersion = tr.AgentVersion
 	}
 	res.Harnesses = tr.Harnesses
-	return writeToolsRecord(p.base, tr, res.AgentVersion)
+	return writeToolsRecord(p.base, tr, res.AgentVersion, time.Now())
 }
 
 // discardInterrupted removes a base whose install started but never reached a
