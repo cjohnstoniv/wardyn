@@ -985,10 +985,9 @@ The match is exact, so it would never fire and would silently read as enforcemen
 
 **What it is.**
 
-- Wardyn's walls surround the run: egress, credentials, confinement and the audit trail.
-- The harness inside it, Claude Code or Codex, has walls of its own: its sandbox, and a prompt that asks before a tool runs.
-- `harness_inner_walls` lets a policy choose those inner walls. Omitted, each run keeps what its harness and lane give today.
-- It only adds walls. A choice looser than what the run launches with refuses the run (`harness_inner_walls_looser`), and so does one the run's harness and lane cannot express (`harness_inner_walls_unmet`).
+- Wardyn's walls surround the run. Its harness (Claude Code or Codex) has its own: a sandbox, and a prompt before a tool runs.
+- `harness_inner_walls` chooses those. Omitted, a run keeps what its harness and lane give today.
+- It only adds walls: a looser choice refuses the run (`harness_inner_walls_looser`), as does an unmet one (`harness_inner_walls_unmet`).
 
 ```json
 { "harness_inner_walls": { "sandbox_mode": "off", "approvals": "wardyn" } }
@@ -996,8 +995,8 @@ The match is exact, so it would never fire and would silently read as enforcemen
 
 | Field | Type | Values | What it does |
 |---|---|---|---|
-| `sandbox_mode` | `string` | `off` | The harness's own sandbox stays off, as Wardyn launches it today. `workspace-write` and `read-only` are refused with `harness_sandbox_unavailable`: both harnesses' sandboxes need user namespaces, which Wardyn's sandbox does not grant. |
-| `approvals` | `string` | `harness` / `wardyn` / `none` | `harness`: the harness asks the person at its prompt (interactive runs; refuses `seed_auto_tools`). `wardyn`: a background Claude Code run goes on the tool-approval hold lane, as `tool_approvals: hold` does. `none`: only where the run already asks nothing. |
+| `sandbox_mode` | `string` | `off` / `workspace-write` / `read-only` | `off`: as today. A mode: Codex runs in its own sandbox (below). |
+| `approvals` | `string` | `harness` / `wardyn` / `none` | `harness`: the harness asks at its prompt (interactive runs; turns `seed_auto_tools` off). `wardyn`: a background Claude Code run takes the hold lane (`tool_approvals: hold`). `none`: only where the run asks nothing. |
 
 **What each run launches with.**
 
@@ -1005,13 +1004,19 @@ The match is exact, so it would never fire and would silently read as enforcemen
 |---|---|---|
 | Claude Code, background | `off` | `none`, or `wardyn` on the hold lane |
 | Claude Code, interactive | `off` | `harness`, or `none` with `seed_auto_tools` |
-| Codex, background | `off` | `none` |
-| Codex, interactive | Codex's own default | `harness`, or `off` and `none` with `seed_auto_tools` |
+| Codex, background | `off`, or the mode | `none` |
+| Codex, interactive | Codex's default, or the mode | `harness`, or `off` and `none` with `seed_auto_tools` |
 
-- An exec run, and a custom image's agent, launch no harness whose walls Wardyn sets, so a policy that sets `harness_inner_walls` refuses them.
-- A member's inline policy keeps every axis the operator's ceiling chooses.
-- The walls a run launched with are on the run (`inner_walls`) and on New Run's Review.
-- A run whose policy sets `harness_inner_walls` needs the proxy image from the same release: an older proxy refuses the key.
+**Codex's own sandbox.**
+
+- `read-only` writes nothing; `workspace-write` only the workspace, on the run's network.
+- `/etc/codex/requirements.toml`, which the agent cannot rewrite, binds every `codex`, refusing the bypass flag.
+- It needs user namespaces: CC3 (Kata) starts both modes, CC2 background `workspace-write`, CC1 neither (`harness_sandbox_unavailable`). krun fails at launch.
+- Claude Code's image has no sandbox; Codex's MCP servers run outside it.
+- An exec run, or a custom image's agent, has no walls Wardyn sets, so the policy refuses it.
+- The operator ceiling's axes bind a member's inline policy.
+- Review and the run (`inner_walls`) show the walls it launched with.
+- Setting it needs this release's proxy image (older ones refuse the key); a Codex sandbox mode, this release's runner.
 
 ## `push_rules` — `PushRulesSpec`
 

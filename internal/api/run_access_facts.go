@@ -161,6 +161,9 @@ type accessInputs struct {
 	// level is the autonomy level the fold resolved, which picks an
 	// interactive run's managed settings (attendedDefaultReasons).
 	level types.AutonomyLevel
+	// class is the confinement class the fold enforces, which decides whether
+	// Codex's own sandbox starts (innerWallsSandbox).
+	class types.ConfinementClass
 }
 
 // reSigned is awsReSigned, false when unset.
@@ -434,8 +437,12 @@ func (b *accessBuilder) toolPolicyFact(harness string) client.ToolPolicyFact {
 	}
 	fact.RuleEffects = toolEffectOptions(policyDefault, forRule, "policy_stricter_tool")
 	started := harness == req.Agent
+	sandbox := ""
+	if started {
+		sandbox = innerWallsSandbox(req, b.in.spec, b.in.class)
+	}
 	if walls, ok := agentpolicy.InnerWalls(harness, requestIsInteractive(req), started && holdLane(false, req.ToolApprovals, req.TaskMode),
-		started && innerWallsSeedSkips(req)); ok && req.TaskMode != "exec" {
+		started && innerWallsSeedSkips(req), sandbox); ok && req.TaskMode != "exec" {
 		fact.InnerWalls = &walls
 	}
 	return fact

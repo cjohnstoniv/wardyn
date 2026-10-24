@@ -491,12 +491,15 @@ func (s *Server) stepAutonomy(f *runFold, rec *foldRecorder) bool {
 // it, already allows the tool. An interactive Claude Code run's default, and
 // every tool name it carries, is held to what its managed settings can say
 // first, as step 5 greys it. Last, the policy's harness_inner_walls: approvals
-// in Wardyn put a background Claude Code run on the gated lane, and walls the
-// run cannot meet refuse it (innerWallsFor).
+// in Wardyn put a background Claude Code run on the gated lane, approvals in the
+// harness turn a seed's seed_auto_tools off, and walls the run cannot meet
+// refuse it (innerWallsFor).
 func (s *Server) stepToolPolicy(f *runFold, rec *foldRecorder) bool {
 	before := f.spec
-	if warn := applyInnerWallsHold(f.req, f.spec); warn != "" {
-		f.policyWarns = append(f.policyWarns, warn)
+	for _, warn := range []string{applyInnerWallsHold(f.req, f.spec), applyInnerWallsSeed(f.req, f.spec)} {
+		if warn != "" {
+			f.policyWarns = append(f.policyWarns, warn)
+		}
 	}
 	s.applyToolPosture(f.req, &f.spec)
 	recordSpecAdds(rec, before, f.spec, provSource{Kind: provKindPosture})
@@ -508,7 +511,7 @@ func (s *Server) stepToolPolicy(f *runFold, rec *foldRecorder) bool {
 		return false
 	}
 	var refusal *runRefusal
-	f.innerWalls, refusal = innerWallsFor(*f.req, f.spec, f.harnesses)
+	f.innerWalls, refusal = innerWallsFor(*f.req, f.spec, f.harnesses, f.enforced)
 	return !refusal.write(s, f.w, f.r)
 }
 

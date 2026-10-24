@@ -238,8 +238,8 @@ type HarnessInnerWalls struct {
 }
 
 // The inner-wall values. InnerSandboxWorkspaceWrite and InnerSandboxReadOnly name the harness's
-// own sandbox modes, which cannot start inside Wardyn's sandbox today, so a policy may not choose
-// them yet (the policy validator says why).
+// own sandbox modes; Wardyn binds Codex to them where its sandbox starts (CC2 workspace-write on a
+// background run, CC3 both), and the create door refuses them anywhere else.
 const (
 	InnerSandboxOff            = "off"
 	InnerSandboxWorkspaceWrite = "workspace-write"

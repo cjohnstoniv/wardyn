@@ -258,9 +258,6 @@ func specRefusalReason(err error, bucket string) string {
 	if errors.Is(err, errRepoURLUserinfo) {
 		return reasonRepoURLCredentials
 	}
-	if errors.Is(err, errHarnessSandboxUnavailable) {
-		return reasonHarnessSandboxUnavailable
-	}
 	return bucket
 }
 
