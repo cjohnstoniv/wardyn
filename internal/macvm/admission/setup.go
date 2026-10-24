@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -23,16 +25,21 @@ type SetupConfig struct {
 	Fstat func(fd int, name string) (unix.Stat_t, error)
 	Chown func(f *os.File) error
 
-	afterFlock func() // tests: runs once the old lock's flock is held
+	afterFlock func()                 // tests: runs once the old lock's flock is held
+	beforeMove func(dst string) error // tests: runs before each entry is moved
 }
 
-const entriesName = "macos-vm-admission"
+const (
+	entriesName = "macos-vm-admission"
+	sockName    = "sock" // the logins' socket directories, sock/u<uid>/
+)
 
 // Setup makes the ledger under Base exact, and leaves an exact one as it is:
 //
 //	Base                     root:wheel 0755
 //	Base/admission.lock      root:wheel 0644, a regular file
 //	Base/macos-vm-admission  root:wheel 1777
+//	Base/sock                root:wheel 1777, holding only u<uid>: uid's 0700 directory
 //
 // It walks to Base from / as the helper does. Before it changes anything it
 // takes the existing lock's flock, waiting LockWait at most, and holds it to
@@ -40,9 +47,11 @@ const entriesName = "macos-vm-admission"
 // move; a helper that opened the old lock refuses at its recheck once it gets
 // the flock. Nothing found already there is chowned or chmodded: a base that
 // is not exact is moved into a quarantine beside it and made again, a child
-// that is not exact is replaced, and every entry moves to the new entries
-// directory. It touches nothing outside Base and its .wardyn-quarantine.*
-// siblings.
+// that is not exact is replaced, and every entry it can find (in the entries
+// directory, in a staging directory or quarantine an earlier run left) moves
+// to the new entries directory, or it refuses: it never ends with fewer
+// entries than it found. It touches nothing outside Base and its
+// .wardyn-quarantine.* siblings.
 func Setup(c SetupConfig) error {
 	if c.LockWait == 0 {
 		c.LockWait = LockWait
@@ -78,7 +87,10 @@ func Setup(c SetupConfig) error {
 		}
 		keepLock = false
 	}
-	if err := s.entries(from); err != nil {
+	if err := s.entries(); err != nil {
+		return err
+	}
+	if err := s.sock(from); err != nil {
 		return err
 	}
 	if !keepLock {
@@ -107,8 +119,11 @@ func exact(st unix.Stat_t, typ, perm uint32) bool {
 func (s *setup) lockOld(base int) (*os.File, bool, error) {
 	path := filepath.Join(s.c.Base, lockFile)
 	fd, err := unix.Openat(base, lockFile, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
-	if err != nil {
+	if errors.Is(err, unix.ENOENT) {
 		return nil, false, nil // nothing a helper could hold
+	}
+	if err != nil { // a link, a socket, or an open that failed: never replaced unlocked
+		return nil, false, notInstalled("%s cannot be opened (%v)", path, err)
 	}
 	f := os.NewFile(uintptr(fd), path)
 	st, err := s.l.fstat(fd, path)
@@ -131,8 +146,11 @@ func (s *setup) lockOld(base int) (*os.File, bool, error) {
 }
 
 // quarantine moves path into a new root-only directory beside it.
-func (s *setup) quarantine(path string) error {
-	q, err := os.MkdirTemp(filepath.Dir(path), ".wardyn-quarantine.")
+func (s *setup) quarantine(path string) error { return quarantineIn(filepath.Dir(path), path) }
+
+// quarantineIn moves path into a new root-only directory in dir.
+func quarantineIn(dir, path string) error {
+	q, err := os.MkdirTemp(dir, ".wardyn-quarantine.")
 	if err != nil {
 		return err
 	}
@@ -183,51 +201,192 @@ func (s *setup) made(mkErr error, path string, perm os.FileMode) error {
 	return f.Chmod(perm)
 }
 
-// entries makes Base's entries directory exact, moving every entry from
-// from's entries directory (from is Base itself, or the quarantined old base).
-func (s *setup) entries(from string) error {
+// entries makes Base's entries directory exact. Unless it already is and no
+// entry is anywhere else, every entry found moves into a staging directory
+// that stays root-only 0700 until all are in it and counted, which then
+// becomes 1777 and takes the final name in one rename.
+func (s *setup) entries() error {
 	dst := filepath.Join(s.c.Base, entriesName)
-	src := filepath.Join(from, entriesName)
-	if from == s.c.Base && s.isExact(dst, unix.S_IFDIR, 0o1777) {
+	srcs, names, total, err := s.entrySources()
+	if err != nil {
+		return err
+	}
+	if s.isExact(dst, unix.S_IFDIR, 0o1777) && len(names[dst]) == total {
 		return nil
 	}
 	tmp, err := os.MkdirTemp(s.c.Base, "."+entriesName+".")
 	if err != nil {
 		return err
 	}
+	for _, src := range srcs {
+		if err := s.moveAll(src, names[src], tmp); err != nil {
+			return err
+		}
+	}
+	if got, err := readNames(tmp); err != nil || len(got) != total {
+		return notInstalled("moving the macOS VM entries found %d of %d (%v)", len(got), total, err)
+	}
+	if _, err := os.Lstat(dst); err == nil {
+		if err := quarantineIn(s.c.Base, dst); err != nil {
+			return err
+		}
+	}
 	if err := s.made(nil, tmp, os.ModeSticky|0o777); err != nil {
 		return err
 	}
-	if err := moveEntries(src, tmp); err != nil {
+	if err := os.Rename(tmp, dst); err != nil {
 		return err
 	}
-	if from == s.c.Base {
-		if _, err := os.Lstat(src); err == nil {
-			if err := s.quarantine(src); err != nil {
+	for _, src := range srcs[1:] {
+		_ = os.Remove(src) // an emptied staging directory; a quarantine's stays
+	}
+	return nil
+}
+
+// entrySources lists every root-owned directory that may hold entries, Base's
+// entries directory first: staging directories a failed run left, and the
+// entries directories in earlier quarantines, in Base and beside it (a rebuilt
+// base's). It returns each one's entries and their total.
+func (s *setup) entrySources() ([]string, map[string][]string, int, error) {
+	dirs := []string{filepath.Join(s.c.Base, entriesName)}
+	for _, pat := range []string{
+		filepath.Join(s.c.Base, "."+entriesName+".*"),
+		filepath.Join(s.c.Base, ".wardyn-quarantine.*", entriesName),
+		filepath.Join(filepath.Dir(s.c.Base), ".wardyn-quarantine.*", filepath.Base(s.c.Base), entriesName),
+	} {
+		m, _ := filepath.Glob(pat)
+		dirs = append(dirs, m...)
+	}
+	names := map[string][]string{}
+	var srcs []string
+	total := 0
+	for i, d := range dirs {
+		if i > 0 && !s.rootDir(d) {
+			continue // a login's (a planted base, quarantined): not entries
+		}
+		n, err := readNames(d)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		srcs, names[d] = append(srcs, d), n
+		total += len(n)
+	}
+	return srcs, names, total, nil
+}
+
+// rootDir: path and its parent are root-owned real directories.
+func (s *setup) rootDir(path string) bool {
+	for _, p := range []string{path, filepath.Dir(path)} {
+		fd, err := unix.Open(p, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		if err != nil {
+			return false
+		}
+		st, err := s.l.fstat(fd, p)
+		_ = unix.Close(fd)
+		if err != nil || st.Uid != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// readNames lists dir if it is a real directory; anything else has none.
+func readNames(dir string) ([]string, error) {
+	d, err := os.OpenFile(dir, os.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, nil
+	}
+	defer d.Close()
+	return d.Readdirnames(-1)
+}
+
+// moveAll renames each of names from src into dst, never over something there.
+func (s *setup) moveAll(src string, names []string, dst string) error {
+	for _, n := range names {
+		to := filepath.Join(dst, n)
+		if _, err := os.Lstat(to); err == nil {
+			return notInstalled("two macOS VM entries are named %s (%s)", n, src)
+		}
+		if s.c.beforeMove != nil {
+			if err := s.c.beforeMove(to); err != nil {
 				return err
 			}
 		}
-	}
-	return os.Rename(tmp, dst)
-}
-
-// moveEntries renames every entry of src, if src is a real directory, into dst.
-func moveEntries(src, dst string) error {
-	d, err := os.OpenFile(src, os.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW, 0)
-	if err != nil {
-		return nil // no directory there (missing, a link or a file): no entries
-	}
-	defer d.Close()
-	names, err := d.Readdirnames(-1)
-	if err != nil {
-		return err
-	}
-	for _, n := range names {
-		if err := os.Rename(filepath.Join(src, n), filepath.Join(dst, n)); err != nil {
+		if err := os.Rename(filepath.Join(src, n), to); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// sock makes Base/sock exact: a sound one keeps its sound u<uid> directories
+// and loses the rest to a quarantine; otherwise the sound ones move from
+// from's sock into a new one, built root-only as entries is.
+func (s *setup) sock(from string) error {
+	dst := filepath.Join(s.c.Base, sockName)
+	if from == s.c.Base && s.isExact(dst, unix.S_IFDIR, 0o1777) {
+		return s.sweepSock(dst)
+	}
+	tmp, err := os.MkdirTemp(s.c.Base, "."+sockName+".")
+	if err != nil {
+		return err
+	}
+	src := filepath.Join(from, sockName)
+	names, err := readNames(src)
+	if err != nil {
+		return err
+	}
+	var keep []string
+	for _, n := range names {
+		if s.sockChild(src, n) {
+			keep = append(keep, n)
+		}
+	}
+	if err := s.moveAll(src, keep, tmp); err != nil {
+		return err
+	}
+	if _, err := os.Lstat(dst); err == nil {
+		if err := quarantineIn(s.c.Base, dst); err != nil {
+			return err
+		}
+	}
+	if err := s.made(nil, tmp, os.ModeSticky|0o777); err != nil {
+		return err
+	}
+	return os.Rename(tmp, dst)
+}
+
+// sweepSock quarantines every child of dir that is not a sound u<uid>.
+func (s *setup) sweepSock(dir string) error {
+	names, err := readNames(dir)
+	if err != nil {
+		return err
+	}
+	for _, n := range names {
+		if !s.sockChild(dir, n) {
+			if err := quarantineIn(s.c.Base, filepath.Join(dir, n)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// sockChild: dir/n is u<uid> (canonical decimal), a real directory owned by
+// that uid, mode 0700.
+func (s *setup) sockChild(dir, n string) bool {
+	uid, err := strconv.ParseUint(strings.TrimPrefix(n, "u"), 10, 32)
+	if err != nil || n != "u"+strconv.FormatUint(uid, 10) {
+		return false
+	}
+	p := filepath.Join(dir, n)
+	fd, err := unix.Open(p, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return false
+	}
+	defer unix.Close(fd)
+	st, err := s.l.fstat(fd, p)
+	return err == nil && uint64(st.Uid) == uid && uint32(st.Mode)&unix.S_IFMT == unix.S_IFDIR && uint32(st.Mode)&0o7777 == 0o700
 }
 
 // newLock replaces the lock with a new exact one, in one rename; anything
@@ -284,6 +443,14 @@ func (s *setup) verify() error {
 		return notInstalled("%s is not a root:wheel 0644 file", filepath.Join(s.c.Base, lockFile))
 	case !s.isExact(filepath.Join(s.c.Base, entriesName), unix.S_IFDIR, 0o1777):
 		return notInstalled("%s is not root:wheel 1777", filepath.Join(s.c.Base, entriesName))
+	case !s.isExact(filepath.Join(s.c.Base, sockName), unix.S_IFDIR, 0o1777):
+		return notInstalled("%s is not root:wheel 1777", filepath.Join(s.c.Base, sockName))
 	}
-	return nil
+	names, err := readNames(filepath.Join(s.c.Base, sockName))
+	for _, n := range names {
+		if err == nil && !s.sockChild(filepath.Join(s.c.Base, sockName), n) {
+			err = notInstalled("%s holds %s, which is not a login's own 0700 directory", filepath.Join(s.c.Base, sockName), n)
+		}
+	}
+	return err
 }

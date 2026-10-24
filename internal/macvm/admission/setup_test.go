@@ -5,6 +5,7 @@ package admission
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -92,6 +93,9 @@ func TestSetupIdempotent(t *testing.T) {
 	if err := os.WriteFile(r.lock(), []byte("held"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := Setup(r.setupCfg()); err != nil { // the rig has no sock/ yet
+		t.Fatal(err)
+	}
 	before := tree(t, filepath.Dir(r.dir))
 	if err := Setup(r.setupCfg()); err != nil {
 		t.Fatal(err)
@@ -177,8 +181,9 @@ func TestSetupRebuildsBase(t *testing.T) {
 }
 
 // Children planted or damaged inside a sound base (from an older install): a
-// login's lock, a symlinked lock, a lock that is a directory, a symlinked
-// entries directory. Each is replaced, and no link is followed.
+// login's lock, a lock that is a directory, a symlinked entries directory are
+// replaced; a symlinked lock is refused (only ENOENT means no lock). No link
+// is followed.
 func TestSetupReplacesPlantedChildren(t *testing.T) {
 	r := newRig(t, bigMac())
 	old := ino(t, r.lock())
@@ -207,12 +212,14 @@ func TestSetupReplacesPlantedChildren(t *testing.T) {
 	if err := os.Symlink(target, r.lock()); err != nil {
 		t.Fatal(err)
 	}
-	if err := Setup(r.setupCfg()); err != nil {
-		t.Fatal(err)
-	}
+	wantNotInstalled(t, Setup(r.setupCfg()), "a symlinked lock")
 	if readFile(t, target) != "keep" || perm(t, target) != 0o666 {
 		t.Fatal("the lock symlink's target was changed")
 	}
+	if fi, err := os.Lstat(r.lock()); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("a refused Setup replaced the symlinked lock")
+	}
+	_ = os.Remove(r.lock())
 
 	_ = os.Remove(r.lock())
 	if err := os.Mkdir(r.lock(), 0o755); err != nil {
@@ -367,4 +374,228 @@ func readFile(t *testing.T, p string) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+// admitN admits n logins (uids 501...) and returns the entry names.
+func admitN(t *testing.T, r *rig, n int) []string {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		if _, err := r.open(t, 501+i, fmt.Sprintf("r%d", i)).Admit(runReq(8 * gib)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return entryFiles(t, r.dir)
+}
+
+// wantEntries: dst holds every one of names.
+func wantEntries(t *testing.T, r *rig, names []string, what string) {
+	t.Helper()
+	for _, n := range names {
+		if _, err := os.Lstat(filepath.Join(r.dir, n)); err != nil {
+			t.Fatalf("%s: entry %s lost (%v)", what, n, err)
+		}
+	}
+}
+
+// everyEntry counts each of names wherever it is under base's parent.
+func everyEntry(t *testing.T, r *rig, names []string) int {
+	t.Helper()
+	found := 0
+	_ = filepath.Walk(filepath.Dir(filepath.Dir(r.dir)), func(p string, fi os.FileInfo, err error) error {
+		if err == nil && fi.Mode().IsRegular() {
+			for _, n := range names {
+				if filepath.Base(p) == n {
+					found++
+				}
+			}
+		}
+		return nil
+	})
+	return found
+}
+
+// Fable R4 M1: the staging directory stays root-only while entries move into
+// it, so a name planted in it as soon as it can be reached (its chown) is too
+// late to block a move. Setup, retried once if it fails, ends with every entry.
+func TestSetupStagingRootOnlyDuringMove(t *testing.T) {
+	r := newRig(t, bigMac())
+	names := admitN(t, r, 2)
+	_ = os.Chmod(r.dir, 0o755)
+	plant := func(c *SetupConfig) {
+		c.Chown = func(f *os.File) error {
+			if strings.HasPrefix(filepath.Base(f.Name()), "."+entriesName+".") {
+				for _, n := range names {
+					_ = os.Mkdir(filepath.Join(f.Name(), n), 0o755) // a login planting another's entry name
+				}
+			}
+			return nil
+		}
+	}
+	if err := Setup(r.setupCfg(plant)); err != nil {
+		if err := Setup(r.setupCfg()); err != nil {
+			t.Fatalf("the retry: %v", err)
+		}
+	}
+	wantEntries(t, r, names, "a name planted in the staging directory")
+	wantLayout(t, r)
+}
+
+// The witness for a name planted mid-move: the move fails; a retry refuses
+// (two things share that name) with every entry still on disk; once root
+// clears the planted name, a retry carries every entry forward.
+func TestSetupRetryCarriesEveryEntry(t *testing.T) {
+	r := newRig(t, bigMac())
+	names := admitN(t, r, 2)
+	_ = os.Chmod(r.dir, 0o755)
+	calls, planted := 0, ""
+	mid := func(c *SetupConfig) {
+		c.beforeMove = func(dst string) error {
+			if calls++; calls == 2 {
+				planted = dst
+				return os.Mkdir(dst, 0o755)
+			}
+			return nil
+		}
+	}
+	if err := Setup(r.setupCfg(mid)); err == nil {
+		t.Fatal("a move onto a planted name succeeded")
+	}
+	if n := everyEntry(t, r, names); n != len(names) {
+		t.Fatalf("after the failed move %d of %d entries are on disk", n, len(names))
+	}
+	if err := Setup(r.setupCfg()); err == nil {
+		t.Fatal("a retry succeeded while a planted name shadows an entry")
+	} else if n := everyEntry(t, r, names); n != len(names) {
+		t.Fatalf("after the refused retry %d of %d entries are on disk", n, len(names))
+	}
+	if err := os.Remove(planted); err != nil {
+		t.Fatal(err)
+	}
+	if err := Setup(r.setupCfg()); err != nil {
+		t.Fatal(err)
+	}
+	wantEntries(t, r, names, "the retry after a failed move")
+	wantLayout(t, r)
+}
+
+// Two entries of one name (a staging leftover and the entries directory):
+// Setup refuses and overwrites neither.
+func TestSetupNeverOverwritesAnEntry(t *testing.T) {
+	r := newRig(t, bigMac())
+	stage := filepath.Join(filepath.Dir(r.dir), "."+entriesName+".1")
+	if err := os.Mkdir(stage, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for d, body := range map[string]string{stage: "a", r.dir: "b"} {
+		if err := os.WriteFile(filepath.Join(d, "e-x.json"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wantNotInstalled(t, Setup(r.setupCfg()), "two entries of one name")
+	bodies := map[string]bool{}
+	_ = filepath.Walk(filepath.Dir(r.dir), func(p string, fi os.FileInfo, err error) error {
+		if err == nil && fi.Name() == "e-x.json" {
+			bodies[readFile(t, p)] = true
+		}
+		return nil
+	})
+	if !bodies["a"] || !bodies["b"] {
+		t.Fatalf("an entry was overwritten: bodies left %v", bodies)
+	}
+}
+
+// Entries in an earlier quarantine (in the base, or a rebuilt base's beside it)
+// are carried forward; a quarantined login's base is not entries.
+func TestSetupCarriesQuarantinedEntries(t *testing.T) {
+	r := newRig(t, bigMac())
+	base := filepath.Dir(r.dir)
+	mk := func(dir string, uid uint32) {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		r.fs.set(dir, uid)
+		r.fs.set(filepath.Dir(dir), uid)
+	}
+	inBase := filepath.Join(base, ".wardyn-quarantine.a", entriesName)
+	beside := filepath.Join(filepath.Dir(base), ".wardyn-quarantine.b", "Wardyn", entriesName)
+	planted := filepath.Join(filepath.Dir(base), ".wardyn-quarantine.c", "Wardyn", entriesName)
+	mk(inBase, 0)
+	mk(beside, 0)
+	mk(planted, 501)
+	for d, n := range map[string]string{inBase: "e-1.json", beside: "e-2.json", planted: "e-forged.json"} {
+		if err := os.WriteFile(filepath.Join(d, n), []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := Setup(r.setupCfg()); err != nil {
+		t.Fatal(err)
+	}
+	wantEntries(t, r, []string{"e-1.json", "e-2.json"}, "quarantined entries")
+	if _, err := os.Lstat(filepath.Join(r.dir, "e-forged.json")); err == nil {
+		t.Fatal("an entry from a login's quarantined base was carried")
+	}
+	wantLayout(t, r)
+}
+
+// Fable R4 L1: a lock open failing for any reason but ENOENT fails closed.
+func TestSetupLockOpenErrorFailsClosed(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root opens a mode-0 file")
+	}
+	r := newRig(t, bigMac())
+	_ = os.Chmod(r.lock(), 0)
+	defer os.Chmod(r.lock(), 0o644)
+	was := ino(t, r.lock())
+	wantNotInstalled(t, Setup(r.setupCfg()), "a lock that cannot be opened")
+	if ino(t, r.lock()) != was {
+		t.Fatal("a lock that could not be locked was replaced")
+	}
+}
+
+// ERRATA-r6 E1: sock/ is made exact; its children must each be u<uid>, a real
+// 0700 directory owned by that uid, or they go to a quarantine.
+func TestSetupSockChildren(t *testing.T) {
+	r := newRig(t, bigMac())
+	if err := Setup(r.setupCfg()); err != nil {
+		t.Fatal(err)
+	}
+	sock := filepath.Join(filepath.Dir(r.dir), sockName)
+	if perm(t, sock) != os.ModeSticky|0o777 {
+		t.Fatalf("sock is %v", perm(t, sock))
+	}
+	dir := func(n string, uid uint32, mode os.FileMode) string {
+		p := filepath.Join(sock, n)
+		if err := os.Mkdir(p, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		_ = os.Chmod(p, mode)
+		r.fs.set(p, uid)
+		return p
+	}
+	good := dir("u501", 501, 0o700)
+	goodIno := ino(t, good)
+	dir("u502", 501, 0o700)  // another uid's name
+	dir("u503", 503, 0o755)  // not 0700
+	dir("u0504", 504, 0o700) // not canonical
+	if err := os.Symlink(t.TempDir(), filepath.Join(sock, "u505")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sock, "junk"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Setup(r.setupCfg()); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := readNames(sock)
+	if len(got) != 1 || got[0] != "u501" || ino(t, good) != goodIno {
+		t.Fatalf("sock holds %v after Setup, want only the sound u501, kept", got)
+	}
+	// A sock that is not exact is made again, its sound children moved across.
+	_ = os.Chmod(sock, 0o755)
+	if err := Setup(r.setupCfg()); err != nil {
+		t.Fatal(err)
+	}
+	if perm(t, sock) != os.ModeSticky|0o777 || ino(t, filepath.Join(sock, "u501")) != goodIno {
+		t.Fatal("a sock that was not exact was not rebuilt with its sound child")
+	}
 }
