@@ -78,6 +78,29 @@ func (s PG) HandBackApproval(ctx context.Context, id uuid.UUID, holder string, a
 	return types.ApprovalRequest{}, ErrAlreadyDecided
 }
 
+// OpenTakeoverStore reads a run's open take overs, so a desktop that connects on any replica, or after a
+// restart, keeps no frames while one is held: the hold a take over takes lives in the memory of the
+// replica that answered it.
+type OpenTakeoverStore interface {
+	// OpenTakeovers is the id of every human_takeover approval on runID that someone has control of:
+	// APPROVED and not yet handed back.
+	OpenTakeovers(ctx context.Context, runID uuid.UUID) ([]uuid.UUID, error)
+}
+
+var _ OpenTakeoverStore = PG{}
+
+// OpenTakeovers — see OpenTakeoverStore. approvals_run_idx serves the run bound; the rest is a row
+// filter over one run's few rows.
+func (s PG) OpenTakeovers(ctx context.Context, runID uuid.UUID) ([]uuid.UUID, error) {
+	const q = `
+		SELECT id FROM approvals
+		WHERE run_id = $1 AND kind = 'human_takeover' AND state = 'APPROVED' AND handed_back_at IS NULL`
+	return collect(ctx, s.Pool, "list", "open takeovers", q, []any{runID}, func(row pgx.Row) (uuid.UUID, error) {
+		var id uuid.UUID
+		return id, row.Scan(&id)
+	})
+}
+
 // decidedOrMissing tells a row that exists in the wrong state (ErrAlreadyDecided) from an absent one.
 func (s PG) decidedOrMissing(ctx context.Context, id uuid.UUID) error {
 	var exists bool

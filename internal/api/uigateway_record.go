@@ -74,13 +74,14 @@ func (s *Server) recordsDesktopApp(run types.AgentRun, sess uiSession) bool {
 	return sess.App == desktopApp && s.desktopRecorded(run)
 }
 
-// watchDesktopApp admits a recorded desktop app connection on a Linux VM as the VM's display is
-// admitted (serveDesktopRFB): the recording is held from the first frame while the run's sign-in row
-// marks a pause, and a row that cannot be read refuses the connection (503). The watch starts now,
-// before the dial, so a pause on another replica during the dial is held within the same bound. stop
-// ends it, once the connection's recording is stored; it is a no-op for any other connection.
+// watchDesktopApp admits a recorded desktop app connection as a Linux VM's display is admitted
+// (serveDesktopRFB): the recording is held from the first frame while the run has an open take over or,
+// on a Linux VM, its sign-in row marks a pause, and either read failing refuses the connection (503).
+// The watch starts now, before the dial, so a pause or take over on another replica during the dial is
+// held within the same bound. stop ends it, once the connection's recording is stored; it is a no-op
+// for any other connection.
 func (s *Server) watchDesktopApp(ctx context.Context, run types.AgentRun, sess uiSession) (stop func(), err error) {
-	if !run.MachineKind.IsVM() || !s.recordsDesktopApp(run, sess) {
+	if !s.recordsDesktopApp(run, sess) {
 		return func() {}, nil
 	}
 	signIn, err := s.watchVMSignIn(ctx, run.ID)

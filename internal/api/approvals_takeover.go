@@ -172,8 +172,19 @@ func (s *Server) recordingGap(ctx context.Context, ap types.ApprovalRequest, pau
 	data["approval_id"], data["reason"] = ap.ID, recordingGapReason
 	s.recordAudit(ctx, s.auditEvent(&ap.RunID, types.ActorSystem, "wardyn", action, ap.RunID.String(), "success", mustJSON(data)))
 	s.publishNotice(livebus.KindRecordingGap, ap.RunID, recordingGapNotice{ApprovalID: ap.ID, Paused: paused, Reason: recordingGapReason,
-		DesktopHold: ap.ID.String()})
+		DesktopHold: takeoverHold(ap.ID)})
 }
+
+// takeoverHold is a take over's hold on its run's desktop recording. The replica that answered the take
+// over takes it, and so does every recorded desktop stream that reads the take over open
+// (vmSignInWatch.sync), under the same id: one replica holds one gap, and the hand back's resume, or
+// its recording_gap notice, ends it.
+func takeoverHold(id uuid.UUID) string {
+	return takeoverHolds + id.String()
+}
+
+// takeoverHolds starts every takeoverHold.
+const takeoverHolds = "takeover:"
 
 // recordingGapNotice is the live-bus body of a recording pause or resume. DesktopHold is the take
 // over's or desktop sign-in's id, the hold it opens or ends on a desktop recording (a sign-in's notice
@@ -237,7 +248,7 @@ func (s *Server) handleTakeOverApproval(w http.ResponseWriter, r *http.Request) 
 		s.recordingGap(r.Context(), got, true, map[string]any{})
 	}
 	if prev == "" && s.desktopRecorded(run) {
-		s.PauseDesktopRecording(r.Context(), run, desktopPauseTakeover, got.ID.String())
+		s.PauseDesktopRecording(r.Context(), run, desktopPauseTakeover, takeoverHold(got.ID))
 	}
 	writeJSON(w, http.StatusOK, takeoverResponse{ApprovalRequest: got, Surface: surface})
 }
@@ -272,7 +283,7 @@ func (s *Server) handleHandBackApproval(w http.ResponseWriter, r *http.Request) 
 	if s.takeoverRecorded(run) {
 		s.recordingGap(r.Context(), got, false, map[string]any{"gap_ms": held})
 	}
-	s.ResumeDesktopRecording(r.Context(), run, got.ID.String())
+	s.ResumeDesktopRecording(r.Context(), run, takeoverHold(got.ID))
 	s.recordAudit(r.Context(), s.auditEvent(&got.RunID, actorType, principal, "takeover.close", got.ID.String(), "success",
 		mustJSON(map[string]any{"approval_id": got.ID, "held_ms": held})))
 	writeJSON(w, http.StatusOK, takeoverResponse{ApprovalRequest: got, Surface: s.takeoverSurface(r.Context(), run)})

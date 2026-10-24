@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -446,40 +447,52 @@ const (
 	vmSignInReadWait = 900 * time.Millisecond
 )
 
-// vmSignInWatch keeps one recorded VM desktop stream's recording held while its run's row says the
-// agent is paused to sign in, or cannot be read. The hold a pause takes lives in the memory of the
-// replica that answered it, so after a restart, or on another replica, this read of the row is what
-// keeps the stream from recording the sign-in.
+// vmSignInWatch keeps one recorded desktop stream's recording held while its run has an open take over,
+// or, on a Linux VM, its row says the agent is paused to sign in, or either cannot be read. The hold a
+// take over or pause takes lives in the memory of the replica that answered it, so after a restart, or
+// on another replica, these reads are what keep the stream from recording the person's session.
 type vmSignInWatch struct {
 	s   *Server
 	run types.AgentRun
-	st  store.DesktopVMSignInStore
-	// unread is this stream's own hold while the row cannot be read.
-	unread string
+	st  store.DesktopVMSignInStore // nil off a Linux VM: only a VM has sign-in rows
+	tk  store.OpenTakeoverStore    // nil for a store that keeps no take overs
+	// unread is this stream's own hold while a read fails, and unreadReason the gap it opens.
+	unread       string
+	unreadReason string
 
 	mu      sync.Mutex
 	reading bool // a re-read is in flight
 	stopped bool // the stream has closed: unread is held no more
 }
 
-// watchVMSignIn reads the sign-in mark of a desktop stream about to open on runID, holding its
-// recording from the first frame while the row marks a pause. It is nil for a run whose screen is not
-// recorded or whose store keeps no sign-ins. A run or row that cannot be read is an error: the stream
-// is refused, never recorded on a state nobody read.
+// watchVMSignIn reads the open take overs and, on a Linux VM, the sign-in mark of a desktop stream
+// about to open on runID, holding its recording from the first frame while one is open or the row
+// marks a pause. It is nil for a run whose screen is not recorded or whose store keeps neither. A run,
+// row or take over that cannot be read is an error: the stream is refused, never recorded on a state
+// nobody read.
 func (s *Server) watchVMSignIn(ctx context.Context, runID uuid.UUID) (*vmSignInWatch, error) {
-	st, ok := s.cfg.Store.(store.DesktopVMSignInStore)
-	if !ok {
+	st, signIns := s.cfg.Store.(store.DesktopVMSignInStore)
+	tk, takeovers := s.cfg.Store.(store.OpenTakeoverStore)
+	if !signIns && !takeovers {
 		return nil, nil
 	}
 	run, err := s.cfg.Store.GetRun(ctx, runID)
 	if err != nil {
-		slog.WarnContext(ctx, "wardynd: a VM desktop's run could not be read for its sign-in mark; the stream is refused", "run_id", runID, "err", err)
+		slog.WarnContext(ctx, "wardynd: a desktop's run could not be read for its sign-in mark and take overs; the stream is refused", "run_id", runID, "err", err)
 		return nil, err
 	}
-	if !run.MachineKind.IsVM() || !s.desktopRecorded(run) {
+	if !run.MachineKind.IsVM() {
+		st = nil
+	}
+	if (st == nil && tk == nil) || !s.desktopRecorded(run) {
 		return nil, nil
 	}
-	w := &vmSignInWatch{s: s, run: run, st: st, unread: "vm-sign-in-unread:" + runID.String() + ":" + uuid.NewString()}
+	unreadReason := desktopPauseSignin
+	if st == nil {
+		unreadReason = desktopPauseTakeover
+	}
+	w := &vmSignInWatch{s: s, run: run, st: st, tk: tk, unreadReason: unreadReason,
+		unread: "vm-sign-in-unread:" + runID.String() + ":" + uuid.NewString()}
 	if err := w.sync(ctx); err != nil {
 		return nil, err
 	}
@@ -492,22 +505,23 @@ func (s *Server) watchVMSignIn(ctx context.Context, runID uuid.UUID) (*vmSignInW
 	return w, nil
 }
 
-// sync holds the recording while the row marks a pause, and ends this replica's hold of a pause the
-// row has since moved past and the stream's own hold. It ends only holds taken before its read: one
-// taken after is of a pause the read may not have seen. A read that fails, or answers only after ctx
-// has ended, changes nothing and is an error: the caller holds the recording or refuses the stream.
+// sync holds the recording while the row marks a pause or a take over is open, and ends this
+// replica's hold of a pause the row has since moved past, of a take over handed back elsewhere, and
+// the stream's own hold. A take over's hold carries its id (takeoverHold), the one the replica that
+// answered it holds: taking it again joins that hold, so a replica keeps one gap and one pause row,
+// which the hand back's one resume ends. It ends only holds taken before its read: one taken after is
+// of a pause or take over the read may not have seen. A read that fails, or answers only after ctx has ended, changes nothing and
+// is an error: the caller holds the recording or refuses the stream.
 func (w *vmSignInWatch) sync(ctx context.Context) error {
 	if w == nil {
 		return nil
 	}
 	s, run, bg := w.s, w.run, w.s.cfg.BaseCtx
 	before := s.desktopRecs.heldWith(run.ID, vmSignInHolds(run.ID))
-	row, found, err := w.st.DesktopVMSignIns(ctx, run.ID)
-	if err == nil && ctx.Err() != nil {
-		err = ctx.Err() // answered past its deadline: a pause may have marked the row since
-	}
+	tookBefore := s.desktopRecs.heldWith(run.ID, takeoverHolds)
+	row, found, open, err := w.read(ctx)
 	if err != nil {
-		slog.WarnContext(ctx, "wardynd: a VM desktop's sign-in mark could not be read; its recording keeps no frames until it is", "run_id", run.ID, "err", err)
+		slog.WarnContext(ctx, "wardynd: a desktop's sign-in mark or take overs could not be read; its recording keeps no frames until they are", "run_id", run.ID, "err", err)
 		return err
 	}
 	current := ""
@@ -515,13 +529,38 @@ func (w *vmSignInWatch) sync(ctx context.Context) error {
 		current = vmSignInHold(run.ID, *row.PausedAt)
 		s.PauseDesktopRecording(bg, run, desktopPauseSignin, current)
 	}
+	held := make([]string, 0, len(open))
+	for _, id := range open {
+		held = append(held, takeoverHold(id))
+		s.PauseDesktopRecording(bg, run, desktopPauseTakeover, takeoverHold(id))
+	}
 	for _, h := range before {
 		if h != current {
 			s.ResumeDesktopRecording(bg, run, h)
 		}
 	}
+	for _, h := range tookBefore {
+		if !slices.Contains(held, h) {
+			s.ResumeDesktopRecording(bg, run, h)
+		}
+	}
 	w.holdUnread(false)
 	return nil
+}
+
+// read is the run's sign-in row and open take overs, each where the watch keeps it. One answered only
+// after ctx has ended is an error: a pause or take over may have landed since.
+func (w *vmSignInWatch) read(ctx context.Context) (row store.DesktopVMSignIns, found bool, open []uuid.UUID, err error) {
+	if w.st != nil {
+		row, found, err = w.st.DesktopVMSignIns(ctx, w.run.ID)
+	}
+	if err == nil && w.tk != nil {
+		open, err = w.tk.OpenTakeovers(ctx, w.run.ID)
+	}
+	if err == nil && ctx.Err() != nil {
+		err = ctx.Err()
+	}
+	return row, found, open, err
 }
 
 // watch rechecks the row every vmSignInRecheck until ctx ends, on a goroutine of its own, so nothing
@@ -592,7 +631,7 @@ func (w *vmSignInWatch) holdUnread(hold bool) {
 		w.s.ResumeDesktopRecording(bg, w.run, w.unread)
 		return
 	}
-	w.s.PauseDesktopRecording(bg, w.run, desktopPauseSignin, w.unread)
+	w.s.PauseDesktopRecording(bg, w.run, w.unreadReason, w.unread)
 	if w.isStopped() {
 		w.s.ResumeDesktopRecording(bg, w.run, w.unread)
 	}
