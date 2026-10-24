@@ -444,8 +444,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - On a run in focus mode, the approvals that hold the run have their own row under the session, outside the dock panel,
   and stay open and keep their in-flight Approve or Deny across entering and leaving focus. The dock, the request row
   and the strip fit a phone's width (#2912).
-- A resolve of an Azure DevOps token served from the token cache no longer reads the stored sign-in and no longer
-  writes a `secret.read` row; each redemption that fills the cache still does, with purpose `ado-refresh` (#2140). A
+- A resolve of an Azure DevOps token served from the token cache no longer reads the stored sign-in, so it writes no
+  `ado-refresh` `secret.read` row; the injected token's own `secret.read` row is still written. Each redemption that
+  fills the cache reads the sign-in and records `secret.read` with purpose `ado-refresh` (#2140). A
   cached token is now served for at most one hour after the redemption that filled it, whatever lifetime the authority
   gave it, and never within ten minutes of its expiry.
 
