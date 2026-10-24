@@ -627,7 +627,7 @@ func readMembershipState(ctx context.Context, q store.Querier, unitID uuid.UUID,
 
 // holdMembershipUpsert stores a validated assignment upsert as a pending change, after a dry run of
 // the upsert has shown the store would accept it (an unknown profile is the direct write's own 404).
-func (s *Server) holdMembershipUpsert(w http.ResponseWriter, r *http.Request, a types.GovernanceMembership) {
+func (s *Server) holdMembershipUpsert(w http.ResponseWriter, r *http.Request, a types.GovernanceMembership, belongsBy []uuid.UUID) {
 	ctx := r.Context()
 	var st membershipState
 	var beforeChain []types.GovernanceUnit
@@ -653,6 +653,7 @@ func (s *Server) holdMembershipUpsert(w http.ResponseWriter, r *http.Request, a 
 		payload:   governanceMembershipRequest{SubjectType: a.SubjectType, Subject: a.Subject, UnitID: a.UnitID, Priority: a.Priority, Home: a.Home},
 		after:     after,
 		baseState: st.state(),
+		belongsBy: belongsBy,
 	}
 	var before *membershipDiffView
 	if st.current != nil {
@@ -663,8 +664,39 @@ func (s *Server) holdMembershipUpsert(w http.ResponseWriter, r *http.Request, a 
 	s.proposeGovernanceChange(w, r, p)
 }
 
-// holdMembershipDelete stores an assignment delete as a pending change.
-func (s *Server) holdMembershipDelete(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
+// heldBelongsStale answers stale when held change ch, a membership add or delete admitted for a unit
+// admin because its subject already belonged in their units (membershipAddInScope) or kept another
+// membership there (deleteMembershipInScope), finds the subject's memberships other than except in
+// none of the units it recorded, read on the decision's transaction under its graph and key locks.
+// The base covers only the target row and its unit chain, so the membership that admitted the change
+// may since have gone. A change that records none, a security caller's, is not rechecked; one that
+// still has another of its units applies.
+func heldBelongsStale(ctx context.Context, q store.Querier, ch types.GovernanceChange, st types.CapabilitySubjectType, subject string, except uuid.UUID) error {
+	var held governanceDiffBody
+	if err := json.Unmarshal(ch.Diff, &held); err != nil {
+		return fmt.Errorf("governance change %s: diff: %w", ch.ID, err)
+	}
+	if len(held.BelongsBy) == 0 {
+		return nil
+	}
+	ms, err := store.ListGovernanceMembershipsQ(ctx, q)
+	if err != nil {
+		return err
+	}
+	units, err := subjectUnitsInScope(ms, st, subject, except,
+		func(u uuid.UUID) (bool, error) { return slices.Contains(held.BelongsBy, u), nil })
+	if err != nil {
+		return err
+	}
+	if len(units) == 0 {
+		return store.ErrGovernanceChangeStale
+	}
+	return nil
+}
+
+// holdMembershipDelete stores an assignment delete as a pending change. keepsIn is, for a unit admin's
+// delete, the units of theirs the subject keeps another membership in (heldBelongsStale).
+func (s *Server) holdMembershipDelete(w http.ResponseWriter, r *http.Request, id uuid.UUID, keepsIn []uuid.UUID) {
 	ctx := r.Context()
 	var st membershipState
 	var activates []unitActivation
@@ -690,8 +722,46 @@ func (s *Server) holdMembershipDelete(w http.ResponseWriter, r *http.Request, id
 	s.proposeGovernanceChange(w, r, govProposal{
 		kind: govKindMembership, op: "delete", key: membershipKey(st.current.UnitID, st.current.SubjectType, st.current.Subject),
 		payload: map[string]any{"id": id}, before: before, changed: changedPaths(before, nil),
-		baseState: st.state(), shift: legacyShift{activates: activates},
+		baseState: st.state(), shift: legacyShift{activates: activates}, belongsBy: keepsIn,
 	})
+}
+
+// applyMembershipDelete is applyMembershipChange's delete, under its graph and key locks: the base, the
+// memberships that admitted a unit admin's delete (heldBelongsStale) and a legacy row's shift (H3) as
+// they stand now, then the delete.
+func applyMembershipDelete(ctx context.Context, q store.Querier, ch types.GovernanceChange, unitID uuid.UUID, subjectType, subject string) (govApplied, error) {
+	var p struct {
+		ID uuid.UUID `json:"id"`
+	}
+	if err := json.Unmarshal(ch.Payload, &p); err != nil {
+		return govApplied{}, fmt.Errorf("governance change %s: payload: %w", ch.ID, err)
+	}
+	st, err := readMembershipState(ctx, q, unitID, subjectType, subject, true)
+	if err != nil {
+		return govApplied{}, err
+	}
+	if st.hash() != ch.BaseHash {
+		return govApplied{}, store.ErrGovernanceChangeStale
+	}
+	if err := heldBelongsStale(ctx, q, ch, types.CapabilitySubjectType(subjectType), subject, p.ID); err != nil {
+		return govApplied{}, err
+	}
+	if st.current != nil && st.current.Legacy {
+		activates, err := deleteActivationsQ(ctx, q, *st.current)
+		if err == nil {
+			err = heldShiftStale(ch, legacyShift{activates: activates})
+		}
+		if err != nil {
+			return govApplied{}, err
+		}
+	}
+	if err := store.DeleteGovernanceMembershipQ(ctx, q, p.ID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return govApplied{}, writeRefusal(http.StatusNotFound, reasonGovernanceMembershipNotFound, "governance assignment not found")
+		}
+		return govApplied{}, err
+	}
+	return govApplied{action: "governance.membership.delete", target: p.ID.String()}, nil
 }
 
 // applyMembershipChange applies a held assignment change inside the decision transaction. It takes
@@ -716,35 +786,7 @@ func applyMembershipChange(s *Server, r *http.Request, q store.Querier, ch types
 		return applyMembershipTreeChange(ctx, q, ch)
 	}
 	if ch.Op == "delete" {
-		var p struct {
-			ID uuid.UUID `json:"id"`
-		}
-		if err := json.Unmarshal(ch.Payload, &p); err != nil {
-			return govApplied{}, fmt.Errorf("governance change %s: payload: %w", ch.ID, err)
-		}
-		st, err := readMembershipState(ctx, q, unitID, subjectType, subject, true)
-		if err != nil {
-			return govApplied{}, err
-		}
-		if st.hash() != ch.BaseHash {
-			return govApplied{}, store.ErrGovernanceChangeStale
-		}
-		if st.current != nil && st.current.Legacy {
-			activates, err := deleteActivationsQ(ctx, q, *st.current)
-			if err == nil {
-				err = heldShiftStale(ch, legacyShift{activates: activates})
-			}
-			if err != nil {
-				return govApplied{}, err
-			}
-		}
-		if err := store.DeleteGovernanceMembershipQ(ctx, q, p.ID); err != nil {
-			if errors.Is(err, store.ErrNotFound) {
-				return govApplied{}, writeRefusal(http.StatusNotFound, reasonGovernanceMembershipNotFound, "governance assignment not found")
-			}
-			return govApplied{}, err
-		}
-		return govApplied{action: "governance.membership.delete", target: p.ID.String()}, nil
+		return applyMembershipDelete(ctx, q, ch, unitID, subjectType, subject)
 	}
 	var req governanceMembershipRequest
 	dec := json.NewDecoder(bytes.NewReader(ch.Payload))
@@ -771,6 +813,9 @@ func applyMembershipChange(s *Server, r *http.Request, q store.Querier, ch types
 	}
 	if st.hash() != ch.BaseHash {
 		return govApplied{}, store.ErrGovernanceChangeStale
+	}
+	if err := heldBelongsStale(ctx, q, ch, a.SubjectType, a.Subject, uuid.Nil); err != nil {
+		return govApplied{}, err
 	}
 	a.ID = uuid.New()
 	a.CreatedBy = ch.ProposedBy

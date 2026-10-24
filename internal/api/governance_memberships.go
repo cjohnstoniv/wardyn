@@ -131,15 +131,18 @@ func (s *Server) handleUpsertGovernanceMembership(w http.ResponseWriter, r *http
 	if !s.userTypeSubjectExists(w, r, a.SubjectType, a.Subject) {
 		return
 	}
-	if s.isUnitAdminCaller(r.Context()) && !s.membershipAddInScope(w, r, a) {
-		return
+	var belongsBy []uuid.UUID
+	if s.isUnitAdminCaller(r.Context()) {
+		if belongsBy, ok = s.membershipAddInScope(w, r, a); !ok {
+			return
+		}
 	}
 	a.ID = uuid.New()
 	a.CreatedBy = principalFromRequest(r)
 	if mode == govQueue {
 		// Every assignment change is held: a repoint can widen its subjects, and nothing here is
 		// proven narrowing.
-		s.holdMembershipUpsert(w, r, a)
+		s.holdMembershipUpsert(w, r, a, belongsBy)
 		return
 	}
 	saved, err := s.cfg.Store.UpsertGovernanceMembership(r.Context(), a)
@@ -183,7 +186,7 @@ func (s *Server) handleDeleteGovernanceMembership(w http.ResponseWriter, r *http
 	}
 	if mode == govQueue {
 		// Deleting an assignment widens its subjects back to the deployment ceiling: never exempt.
-		s.holdMembershipDelete(w, r, id)
+		s.holdMembershipDelete(w, r, id, nil)
 		return
 	}
 	// The audit names the row the delete removed, not one read beside it.
