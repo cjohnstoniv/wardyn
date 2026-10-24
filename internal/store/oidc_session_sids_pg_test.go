@@ -63,3 +63,21 @@ func TestPG_OIDCSessionSIDs_RecordLookupForgetPrune(t *testing.T) {
 		t.Errorf("prune past the session's expiry = %d, %v, want 1 (sid-30h)", n, err)
 	}
 }
+
+// A row whose session has ended, not yet pruned, looks up as no row, so the front-channel logout that
+// names its sid cuts none of that person's sessions.
+func TestPG_OIDCSessionSIDs_ExpiredRowLooksUpAsNone(t *testing.T) {
+	pool := throwawayDatabase(t)
+	ctx := context.Background()
+	if err := db.Migrate(ctx, pool); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	pg := store.NewPG(pool)
+	const iss = "https://idp.example"
+	if err := pg.RecordOIDCSessionSID(ctx, iss, "sid-ended", "first", time.Now().UTC().Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if sub, ok, err := pg.LookupOIDCSessionSID(ctx, iss, "sid-ended"); err != nil || ok {
+		t.Errorf("lookup of an ended session's row = (%q, %v, %v), want no row", sub, ok, err)
+	}
+}
