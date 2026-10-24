@@ -19,6 +19,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -372,6 +373,64 @@ func TestUnitAdminReadsNoPathProvenance(t *testing.T) {
 			if got := strings.Contains(w.Body.String(), `"path_provenance"`); got != tc.want {
 				t.Errorf("%s %s as %s carries path_provenance = %v, want %v", req[0], req[1], tc.who, got, tc.want)
 			}
+		}
+	}
+}
+
+// TestUnitAdminCheckWithinScope: a unit admin's POST /governance/check carries no restrictions (no spec,
+// limits or contact) and of the person's workspaces only the group pinned to a unit they govern, so
+// no unit outside their units is named; a security admin's check carries all of it.
+func TestUnitAdminCheckWithinScope(t *testing.T) {
+	e := newUnitAdminEnv(t, false)
+	person := e.fresh("sub-ua-person")
+	treeMember(t, e.govEnv, e.a1, types.CapabilitySubjectUser, person, 1, false)
+	r := types.RestrictionWrite{Name: "ua-check-r", Spec: types.RestrictionSpec{DeniedDomains: strs("denied.ua.example")},
+		Contact: &policyref.Contact{Email: "restrictions@ua.example"}, Members: []types.RestrictionMember{userMember(person)}}
+	if w := e.call(e.alice, http.MethodPost, "/api/v1/governance/restrictions", restrictionJSON(t, r)); w.Code != http.StatusCreated {
+		t.Fatalf("create the restriction = %d %s", w.Code, w.Body)
+	}
+	for name, unit := range map[string]uuid.UUID{"ua-ws-in": e.a1.ID, "ua-ws-out": e.b.ID} {
+		ws, err := e.pg.CreateWorkspace(context.Background(), types.Workspace{
+			ID: uuid.New(), Name: name, OwnedBy: person, Status: types.WorkspaceScanned,
+			Sources:   []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeEphemeral, Target: "/home/agent/work"}},
+			CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+		})
+		if err == nil {
+			_, err = e.pg.SetWorkspaceOwningUnit(context.Background(), ws.ID, &unit)
+		}
+		if err != nil {
+			t.Fatalf("seed workspace %s: %v", name, err)
+		}
+	}
+	check := `{"user_subjects":["` + person + `"]}`
+	for _, tc := range []struct {
+		who  string
+		c    *http.Cookie
+		want bool
+	}{
+		{"ua-a's admin", e.adminA, false},
+		{"a security admin", e.alice, true},
+	} {
+		w := e.call(tc.c, http.MethodPost, "/api/v1/governance/check", check)
+		var got governanceCheckResponse
+		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &got) != nil {
+			t.Fatalf("check as %s = %d %s", tc.who, w.Code, w.Body)
+		}
+		whole := len(got.Restrictions) == 1 && got.Restrictions[0].Spec.DeniedDomains != nil &&
+			got.Restrictions[0].Contact != nil && got.Restrictions[0].Contact.Email == "restrictions@ua.example"
+		if whole != tc.want || (!tc.want && strings.Contains(w.Body.String(), `"restrictions":`)) {
+			t.Errorf("check as %s: restrictions %+v, want them whole = %v", tc.who, got.Restrictions, tc.want)
+		}
+		var names []string
+		for _, g := range got.Workspaces {
+			names = append(names, g.UnitName+":"+strings.Join(g.Names, ","))
+		}
+		want := []string{"ua-a1:ua-ws-in"}
+		if tc.want {
+			want = append(want, "ua-b:ua-ws-out")
+		}
+		if !slices.Equal(names, want) || strings.Contains(w.Body.String(), `"ua-b"`) != tc.want {
+			t.Errorf("check as %s: workspaces %v, want %v and ua-b named = %v", tc.who, names, want, tc.want)
 		}
 	}
 }

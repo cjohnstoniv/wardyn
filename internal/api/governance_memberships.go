@@ -450,8 +450,12 @@ func (s *Server) holdMembershipMove(w http.ResponseWriter, r *http.Request, p me
 	ctx := r.Context()
 	var st membershipTreeState
 	var moved types.GovernanceMembership
+	var activates []unitActivation
 	err := s.cfg.Store.DryRunGovernance(ctx, func(q store.Querier) (err error) {
 		if st, err = readMembershipTreeState(ctx, q, p, false); err != nil {
+			return err
+		}
+		if activates, err = moveActivationsQ(ctx, q, st.row, p.UnitID); err != nil {
 			return err
 		}
 		_, moved, err = moveMembershipQ(ctx, q, p.ID, p.UnitID)
@@ -464,6 +468,7 @@ func (s *Server) holdMembershipMove(w http.ResponseWriter, r *http.Request, p me
 	s.proposeGovernanceChange(w, r, govProposal{
 		kind: govKindMembership, op: "move", key: membershipKey(st.row.UnitID, st.row.SubjectType, st.row.Subject),
 		payload: p, before: before, after: after, changed: changedPaths(before, after), baseState: st.state(),
+		activates: activates,
 	})
 }
 
@@ -554,6 +559,81 @@ func legacyActivations(d types.GovernanceMembership, all []types.GovernanceMembe
 	}
 	slices.SortFunc(out, func(a, b unitActivation) int { return strings.Compare(a.UnitName, b.UnitName) })
 	return out
+}
+
+// legacyMoveActivations is the units a move of legacy row d to unit to may make someone's context (H3).
+// A move changes only d's unit name in the store's precedence, so whose legacy row wins changes only
+// for a person who matches d and another legacy row l whose order with d that name decides
+// (nameOrdersPair). Such a person matching just the two is the one whose selection the move can
+// change: for each l, their winner before the move and after it (legacyFirst). A winner that changes
+// to a row in another unit activates that unit: l's when it overtakes d, unit to when d overtakes l.
+// A person who goes from d's unit to unit to is the move's own change, which pathNarrowsQ proves.
+func legacyMoveActivations(d types.GovernanceMembership, to uuid.UUID, all []types.GovernanceMembership, units []types.GovernanceUnit) []unitActivation {
+	if !d.Legacy {
+		return nil
+	}
+	byID := unitsByID(units)
+	moved := d
+	moved.UnitID = to
+	var out []unitActivation
+	for _, l := range all {
+		if !l.Legacy || l.ID == d.ID || !nameOrdersPair(d, l) {
+			continue
+		}
+		was, now := legacyFirst(d, l, byID), legacyFirst(moved, l, byID)
+		if was.UnitID == now.UnitID || (was.UnitID == d.UnitID && now.UnitID == to) ||
+			slices.ContainsFunc(out, func(a unitActivation) bool { return a.UnitID == now.UnitID }) {
+			continue
+		}
+		out = append(out, unitActivation{UnitID: now.UnitID, UnitName: byID[now.UnitID].Name})
+	}
+	slices.SortFunc(out, func(a, b unitActivation) int { return strings.Compare(a.UnitName, b.UnitName) })
+	return out
+}
+
+// nameOrdersPair reports whether one person may match legacy rows a and b with their order decided at
+// or after the unit name: rows of one tier, and two group rows or two rows naming one subject. A sub
+// and an email are ordered by the person's claims and two user types match no one person.
+func nameOrdersPair(a, b types.GovernanceMembership) bool {
+	return a.SubjectType == b.SubjectType && (a.SubjectType == types.CapabilitySubjectGroup || a.Subject == b.Subject)
+}
+
+// legacyFirst is the one of legacy rows a and b that wins for a person matching both, when
+// nameOrdersPair holds: the store's precedence from there on, priority DESC, unit name ASC, subject ASC.
+func legacyFirst(a, b types.GovernanceMembership, byID map[uuid.UUID]types.GovernanceUnit) types.GovernanceMembership {
+	if a.Priority != b.Priority {
+		if a.Priority > b.Priority {
+			return a
+		}
+		return b
+	}
+	if an, bn := byID[a.UnitID].Name, byID[b.UnitID].Name; an != bn {
+		if an < bn {
+			return a
+		}
+		return b
+	}
+	if a.Subject <= b.Subject {
+		return a
+	}
+	return b
+}
+
+// moveActivationsQ is legacyMoveActivations for row moving to unit to, over the rows and units read on
+// q; none for a row that is not legacy.
+func moveActivationsQ(ctx context.Context, q store.Querier, row types.GovernanceMembership, to uuid.UUID) ([]unitActivation, error) {
+	if !row.Legacy {
+		return nil, nil
+	}
+	all, err := store.ListGovernanceMembershipsQ(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	units, err := store.ListGovernanceUnitsQ(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	return legacyMoveActivations(row, to, all, units), nil
 }
 
 // subjectTier is a membership's tier in the store's precedence order (store.subjectTierOrder).

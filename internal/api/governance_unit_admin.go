@@ -371,17 +371,15 @@ func unitChangeScope(ch types.GovernanceChange) (units []uuid.UUID, strict, ok b
 			return nil, false, false
 		}
 		units = []uuid.UUID{unit}
-		switch ch.Op {
-		case "move":
+		if ch.Op == "move" {
 			var p membershipTreePayload
 			if json.Unmarshal(ch.Payload, &p) != nil || p.UnitID == uuid.Nil {
 				return nil, false, false
 			}
 			units = append(units, p.UnitID)
-		case "delete":
-			for _, a := range diff.Activates {
-				units = append(units, a.UnitID)
-			}
+		}
+		for _, a := range diff.Activates { // a legacy row's delete or move (H3)
+			units = append(units, a.UnitID)
 		}
 		return units, false, true
 	case govKindUnitAdmin:

@@ -7,6 +7,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -102,6 +103,47 @@ func TestUnitAdminApproverScopeRereadInTx(t *testing.T) {
 		ch := e.heldOn(e.a2)
 		hook = revoke(g)
 		refusedPending(t, "token grant revoked", ch, do(t, e.srv, http.MethodPost, approvePath(ch.ID), raw, ""))
+	})
+
+	// A cli_access token publishes the role user whatever role its row holds, at the door and in the
+	// re-check alike: its stored security-admin role is no approval after its grant is revoked.
+	cliAccess := func(sub string) string {
+		raw := apiTokenPrefix + strings.ReplaceAll(uuid.NewString(), "-", "")
+		notTruncated := false
+		if _, err := e.pg.CreateAPIToken(context.Background(), types.APIToken{
+			ID: uuid.New(), Principal: sub, Email: sub + "@corp.example", Role: oidc.RoleSecurityAdmin, UserType: types.UserTypeStandard,
+			Name: "approver", GroupsTruncated: &notTruncated, Kind: types.APITokenKindCLIAccess,
+		}, raw); err != nil {
+			t.Fatalf("mint cli_access token: %v", err)
+		}
+		return raw
+	}
+	added := func(ch types.GovernanceChange) bool {
+		unit, _, subject, _ := splitMembershipKey(ch.TargetKey)
+		ms, err := e.pg.ListGovernanceMemberships(context.Background())
+		if err != nil {
+			t.Fatalf("list memberships: %v", err)
+		}
+		return slices.ContainsFunc(ms, func(m types.GovernanceMembership) bool { return m.UnitID == unit && m.Subject == subject })
+	}
+
+	t.Run("cli_access token with an elevated role, grant revoked", func(t *testing.T) {
+		sub, g := approver()
+		raw := cliAccess(sub)
+		ch := e.heldOn(e.a2)
+		hook = revoke(g)
+		refusedPending(t, "cli_access grant revoked", ch, do(t, e.srv, http.MethodPost, approvePath(ch.ID), raw, ""))
+		if added(ch) {
+			t.Fatalf("cli_access grant revoked: the held membership was written")
+		}
+	})
+
+	t.Run("cli_access token with an elevated role, in scope", func(t *testing.T) {
+		sub, _ := approver()
+		ch := e.heldOn(e.a2)
+		if w := do(t, e.srv, http.MethodPost, approvePath(ch.ID), cliAccess(sub), ""); w.Code != http.StatusOK || !added(ch) {
+			t.Fatalf("cli_access approve in scope = %d %s, want 200 and the membership written", w.Code, w.Body)
+		}
 	})
 
 	t.Run("in scope applies", func(t *testing.T) {

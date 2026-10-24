@@ -255,7 +255,7 @@ type govProposal struct {
 	notes []string
 	// baseState is the target as the proposal saw it; its hash is what an approval compares.
 	baseState any
-	// activates are the units a legacy membership delete may make someone's context (H3).
+	// activates are the units a legacy membership delete or move may make someone's context (H3).
 	activates []unitActivation
 }
 
@@ -322,7 +322,7 @@ type governanceDiffBody struct {
 	Changed []string        `json:"changed"`
 	// Notes are advisory, never a refusal: what a write would have returned as warnings had it not been held.
 	Notes []string `json:"notes,omitempty"`
-	// Activates lists the units a legacy membership delete may make someone's context.
+	// Activates lists the units a legacy membership delete or move may make someone's context.
 	Activates []unitActivation `json:"activates,omitempty"`
 }
 
