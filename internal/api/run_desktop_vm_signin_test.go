@@ -104,11 +104,11 @@ func (s *vmSignInTestStore) PauseDesktopVMAgent(_ context.Context, runID uuid.UU
 	return true, nil
 }
 
-func (s *vmSignInTestStore) ResumeDesktopVMAgent(_ context.Context, runID uuid.UUID) (string, time.Time, bool, error) {
+func (s *vmSignInTestStore) ResumeDesktopVMAgent(_ context.Context, runID uuid.UUID, pausedAt time.Time) (string, time.Time, bool, error) {
 	s.vmu.Lock()
 	defer s.vmu.Unlock()
 	row, ok := s.rows[runID]
-	if !ok || row.PausedAt == nil {
+	if !ok || row.PausedAt == nil || !row.PausedAt.Equal(pausedAt) {
 		return "", time.Time{}, false, nil
 	}
 	by, at := row.PausedBy, *row.PausedAt
@@ -687,6 +687,53 @@ func TestDesktopSignIns_PauseThatCannotRetakeItsLockSendsNothing(t *testing.T) {
 	var d map[string]any
 	if len(rows) != 1 || rows[0].Outcome != "failure" || json.Unmarshal(rows[0].Data, &d) != nil || d["stage"] != "lock_lost" {
 		t.Fatalf("rows = %+v, want one lock_lost failure", rows)
+	}
+}
+
+// A failed pause's continue is cancelled when the run's lock is lost during it: another pause may take
+// the lock and stop the agent, and a continue landing after that would run the agent under its mark.
+// The first pause takes the lock again, finds that newer mark and sends nothing more, so the newer
+// pause's agent stays stopped under its mark.
+func TestDesktopSignIns_AContinueThatLosesItsLockIsCancelled(t *testing.T) {
+	f := newVMSignInFixture(t, "memory")
+	drop := f.loseLocks()
+	f.rn.pauseErr = errors.New("guestagent: 502 Bad Gateway")
+	var first atomic.Bool
+	var cause error
+	var newer vmSignInAnswer
+	f.rn.during = func(ctx context.Context, call string) {
+		if call != "resume" || !first.CompareAndSwap(false, true) {
+			return
+		}
+		drop(false)
+		select {
+		case <-ctx.Done():
+			cause = context.Cause(ctx)
+		case <-time.After(5 * time.Second):
+		}
+		f.rn.pmu.Lock()
+		f.rn.pauseErr = nil
+		f.rn.pmu.Unlock()
+		newer.code, newer.v, newer.body = f.do(t, http.MethodPost, "/pause")
+	}
+	code, v, body := f.do(t, http.MethodPost, "/pause")
+	if !errors.Is(cause, db.ErrLockLost) {
+		t.Fatalf("the continue's context ended with %v, want it cancelled with the lost lock", cause)
+	}
+	if newer.code != http.StatusOK || !newer.v.Paused || newer.v.PausedAt == nil {
+		t.Fatalf("the newer pause = %d %s", newer.code, newer.body)
+	}
+	if code != http.StatusOK || v.PausedAt == nil || !v.PausedAt.Equal(*newer.v.PausedAt) {
+		t.Fatalf("the failed pause = %d %s, want the newer pause's mark", code, body)
+	}
+	if got := f.rn.seen(); !slices.Equal(got, []string{"pause vm-1", "resume vm-1", "pause vm-1"}) {
+		t.Fatalf("runner calls = %v, want the failed pause, its cancelled continue and the newer pause", got)
+	}
+	if !f.rn.agentStopped() {
+		t.Fatal("the newer pause's agent is not stopped")
+	}
+	if row, _, _ := f.st.DesktopVMSignIns(context.Background(), f.run.ID); row.PausedAt == nil || !row.PausedAt.Equal(*newer.v.PausedAt) {
+		t.Fatalf("row = %+v, want the newer pause's mark intact", row)
 	}
 }
 

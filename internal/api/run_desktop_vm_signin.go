@@ -243,38 +243,23 @@ func (s *Server) handlePauseDesktopAgent(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	if err != nil {
-		// Never leave the agent stopped with no mark, which no resume would continue: a stop can land
-		// even when the runner answers an error, so continue it, under the run's lock. One lost since
-		// the call is taken again and the row read again: a pause that has marked it since owns the
-		// stopped agent, which its resume continues.
-		send, relocked := bg, func() {}
-		if s.lockHeld(bg) != nil {
-			unlock()
-			var lctx context.Context
-			var cur store.DesktopVMSignIns
-			if lctx, cur, relocked, ok = s.desktopRelock(base, run, st); !ok {
-				s.recordAudit(bg, s.auditEvent(&run.ID, at, principal, auditDesktopSignIn, run.ID.String(), "failure",
-					mustJSON(map[string]any{"stage": "lock_lost", "error": err.Error()})))
-				w.Header().Set("Retry-After", "5")
-				writeErrorReason(w, http.StatusServiceUnavailable, reasonLockUnavailable, lockUnavailableMsg)
-				return
-			}
-			defer relocked()
-			if cur.PausedAt != nil {
-				newer := s.desktopSignInsView(lctx, run, cur)
-				relocked()
-				writeJSON(w, http.StatusOK, newer)
-				return
-			}
-			send = lctx
-		}
-		_ = p.ResumeAgent(send, run.SandboxRef)
-		relocked()
+		newer, ok := s.continueStoppedAgent(base, r.Context(), bg, p, run, st, unlock)
 		unlock()
+		if !ok {
+			s.recordAudit(bg, s.auditEvent(&run.ID, at, principal, auditDesktopSignIn, run.ID.String(), "failure",
+				mustJSON(map[string]any{"stage": "lock_lost", "error": err.Error()})))
+			w.Header().Set("Retry-After", "5")
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonLockUnavailable, lockUnavailableMsg)
+			return
+		}
+		if newer != nil {
+			writeJSON(w, http.StatusOK, s.desktopSignInsView(bg, run, *newer))
+			return
+		}
 		s.recordAudit(bg, s.auditEvent(&run.ID, at, principal, auditDesktopSignIn, run.ID.String(), "failure",
 			mustJSON(map[string]any{"stage": stage, "error": err.Error()})))
 		if stage == "record" {
-			writeErrorReason(w, http.StatusConflict, reasonDesktopSignInsPauseFailed, "the agent's pause could not be recorded; try again")
+			writeErrorReason(w, http.StatusConflict, reasonDesktopSignInsPauseFailed, "The agent's pause could not be recorded; try again")
 			return
 		}
 		status := http.StatusBadGateway
@@ -321,6 +306,49 @@ func (s *Server) desktopRelock(base context.Context, run types.AgentRun, st stor
 		return nil, row, nil, false
 	}
 	return ctx, row, relocked, true
+}
+
+// continueStoppedAgent continues the agent a failed pause may have stopped, so it is never left
+// stopped with no mark, which no resume would continue: a stop can land even when the runner answers
+// an error. It sends under the run's lock, and the continue is cancelled if that lock is lost during it
+// (lockBound). With the lock lost before or during it, unlock releases the lost hold, the lock is taken
+// again and the row read again: newer is the row of a pause that has marked it since, which owns the
+// stopped agent and whose resume continues it. ok is false when the lock could not be taken again:
+// nothing more is sent.
+func (s *Server) continueStoppedAgent(base, lockCtx, bg context.Context, p runner.AgentPauser, run types.AgentRun,
+	st store.DesktopVMSignInStore, unlock func()) (newer *store.DesktopVMSignIns, ok bool) {
+	if s.lockHeld(bg) == nil {
+		send, stop := lockBound(lockCtx, bg)
+		_ = p.ResumeAgent(send, run.SandboxRef)
+		stop()
+		if s.lockHeld(bg) == nil {
+			return nil, true
+		}
+	}
+	unlock()
+	lctx, cur, relocked, ok := s.desktopRelock(base, run, st)
+	if !ok {
+		return nil, false
+	}
+	defer relocked()
+	if cur.PausedAt != nil {
+		return &cur, true
+	}
+	_ = p.ResumeAgent(lctx, run.SandboxRef)
+	return nil, true
+}
+
+// lockBound is bg, cancelled too, with db.ErrLockLost, once lockCtx's lock is lost, but not when
+// lockCtx ends otherwise (the person's tab closed). A call the runner already received still lands.
+// stop releases it.
+func lockBound(lockCtx, bg context.Context) (context.Context, func()) {
+	ctx, cancel := context.WithCancelCause(bg)
+	after := context.AfterFunc(lockCtx, func() {
+		if cause := context.Cause(lockCtx); errors.Is(cause, db.ErrLockLost) {
+			cancel(cause)
+		}
+	})
+	return ctx, func() { after(); cancel(nil) }
 }
 
 // errDesktopSignInUnmarked is an acked pause whose row was no longer a 'memory' row with no mark.
@@ -574,20 +602,29 @@ func (s *Server) handleResumeDesktopAgent(w http.ResponseWriter, r *http.Request
 		write = lctx
 	}
 	now := time.Now().UTC()
-	by, pausedAt, cleared, err := st.ResumeDesktopVMAgent(write, run.ID)
+	by, pausedAt, cleared, err := st.ResumeDesktopVMAgent(write, run.ID, *row.PausedAt)
 	if err != nil {
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonDesktopSignInsResumeFailed, desktopResumeUnrecordedMsg)
 		return
 	}
-	if cleared {
-		s.endDesktopHold(bg, run, vmSignInHold(run.ID, pausedAt))
+	if !cleared {
+		// The row no longer marks the pause this resume read: another resume cleared it, or a newer
+		// pause marked it since, whose mark stays for its own resume. The answer is what it says.
+		cur, _, err := st.DesktopVMSignIns(write, run.ID)
+		relocked()
+		unlock()
+		if err != nil {
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonDesktopSignInsUnavailable, desktopSignInsUnreadableMsg)
+			return
+		}
+		writeJSON(w, http.StatusOK, s.desktopSignInsView(bg, run, cur))
+		return
 	}
+	s.endDesktopHold(bg, run, vmSignInHold(run.ID, pausedAt))
 	relocked()
 	unlock()
-	if cleared {
-		s.recordAudit(bg, s.auditEvent(&run.ID, at, principal, auditDesktopSignIn, run.ID.String(), "success",
-			mustJSON(map[string]any{"paused_by": by, "paused_at": pausedAt, "resumed_at": now, "paused_seconds": int(now.Sub(pausedAt).Seconds())})))
-	}
+	s.recordAudit(bg, s.auditEvent(&run.ID, at, principal, auditDesktopSignIn, run.ID.String(), "success",
+		mustJSON(map[string]any{"paused_by": by, "paused_at": pausedAt, "resumed_at": now, "paused_seconds": int(now.Sub(pausedAt).Seconds())})))
 	row.PausedBy, row.PausedAt = "", nil
 	writeJSON(w, http.StatusOK, s.desktopSignInsView(bg, run, row))
 }

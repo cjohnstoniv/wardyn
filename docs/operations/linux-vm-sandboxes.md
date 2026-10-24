@@ -60,6 +60,8 @@
 - A recorded desktop that cannot read whether the agent is paused is refused (`503` `desktop_sign_ins_unavailable`).
 - A process the agent moved out of its process group (`setsid`) is not stopped.
 - If `wardynd` crashes after the guest agent stopped the agent but before the pause was recorded, the agent stays stopped and the run page offers the pause again. Press it, which records the pause (the agent is already stopped), then "Resume the agent".
+- A stop that reaches the guest only after a failed pause has continued the agent leaves it stopped the same way, and is recovered the same way.
+- A failed pause continues the agent. If `wardynd` loses the run's lock meanwhile, it cancels that continue, but one the guest agent already received still lands. If another pause stopped the agent in between, the agent then runs while the run page says paused: press "Resume the agent", then pause again.
 
 ### Host memory
 
