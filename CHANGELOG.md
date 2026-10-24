@@ -21,8 +21,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Fixed
 
 - The image launcher split each `WARDYN_REPOS` clone record with a tab as whitespace, so an empty field moved the
-  fields after it up a place: a record with no slug lost its branch, and a run that named only the single repository
-  (`WARDYN_REPO_URL`) was never pointed at the git broker. Empty fields now stay in place.
+  fields after it up a place. This control plane never sends such a record. A control plane that sends only the
+  single-repository variables (`WARDYN_REPO_URL`, `WARDYN_REPO_SLUG`) got no git broker rewrite, and a record with
+  an empty middle field lost its branch. Empty fields now stay in place.
 
 ## [0.10.0-rc.1] — 2026-10-24
 
