@@ -145,13 +145,14 @@ func (c *trackedConn) Close() error {
 
 // SpliceDesktop carries the desktop tunnel: it keeps one idle connection to the host open, and when the
 // host writes DesktopOpenByte (a viewer has connected) it dials local and copies both ways until either
-// side ends, then starts over. local is the guest's own Screen Sharing and nothing the host sends
+// side ends, then starts over. allow is asked when the open byte comes and a false closes the connection
+// (a run whose desktop is off). local is the guest's own Screen Sharing and nothing the host sends
 // changes where it dials; a first byte that is not the open byte closes the connection.
-func SpliceDesktop(ctx context.Context, host, local DialFunc) error {
-	return spliceDesktop(ctx, host, local, redialWait)
+func SpliceDesktop(ctx context.Context, host, local DialFunc, allow func() bool) error {
+	return spliceDesktop(ctx, host, local, allow, redialWait)
 }
 
-func spliceDesktop(ctx context.Context, host, local DialFunc, wait time.Duration) error {
+func spliceDesktop(ctx context.Context, host, local DialFunc, allow func() bool, wait time.Duration) error {
 	for ctx.Err() == nil {
 		hc, err := host(ctx)
 		if err != nil {
@@ -159,18 +160,21 @@ func spliceDesktop(ctx context.Context, host, local DialFunc, wait time.Duration
 			sleep(ctx, wait)
 			continue
 		}
-		spliceOne(ctx, hc, local)
+		spliceOne(ctx, hc, local, allow)
 		sleep(ctx, wait)
 	}
 	return nil
 }
 
-func spliceOne(ctx context.Context, hc net.Conn, local DialFunc) {
+func spliceOne(ctx context.Context, hc net.Conn, local DialFunc, allow func() bool) {
 	defer hc.Close()
 	stop := context.AfterFunc(ctx, func() { _ = hc.Close() })
 	defer stop()
 	var b [1]byte
 	if _, err := io.ReadFull(hc, b[:]); err != nil || b[0] != DesktopOpenByte {
+		return
+	}
+	if !allow() {
 		return
 	}
 	lc, err := local(ctx)

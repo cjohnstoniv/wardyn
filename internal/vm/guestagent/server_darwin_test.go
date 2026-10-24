@@ -17,7 +17,7 @@ func newDarwinServer(t *testing.T) (*Server, *fakeRunner, http.Handler) {
 	t.Helper()
 	r := &fakeRunner{}
 	s := &Server{Version: "t", Home: t.TempDir(), User: "agent", OutDir: t.TempDir(), MarkerDir: t.TempDir(),
-		Desktop: &Desktop{Run: r, Console: fakeConsole{uid: 502, name: "agent"}, NewPassword: func() (string, error) { return "Abcd2345", nil }}}
+		Desktop: &Desktop{Run: r, Console: fakeConsole{uid: 502}, NewPassword: func() (string, error) { return "Abcd2345", nil }}}
 	h, err := s.Handler()
 	if err != nil {
 		t.Fatal(err)
@@ -55,16 +55,35 @@ func TestDarwinInitRunDiskDesktopAndCA(t *testing.T) {
 
 func TestDarwinInitRefusesWhatMacOSCannotDo(t *testing.T) {
 	_, _, h := newDarwinServer(t)
-	for name, in := range map[string]Init{
-		"read-only sign-ins": {SignInsOff: true},
-		"folder mount":       {Mounts: []Mount{{Tag: "wardyn0", Target: "/Users/agent/work"}}},
-	} {
-		if w := postInit(h, in); w.Code != http.StatusUnprocessableEntity {
-			t.Errorf("%s: Init = %d", name, w.Code)
-		}
+	in := Init{Mounts: []Mount{{Tag: "wardyn0", Target: "/Users/agent/work"}}}
+	if w := postInit(h, in); w.Code != http.StatusUnprocessableEntity {
+		t.Errorf("folder mount: Init = %d", w.Code)
 	}
 	// A refusal leaves the boot's Init available.
 	if w := postInit(h, Init{}); w.Code != 200 {
 		t.Errorf("Init after refusals = %d", w.Code)
+	}
+}
+
+func TestDarwinInitSignInsOffRunsAgentOnlyWithNoDesktop(t *testing.T) {
+	s, r, h := newDarwinServer(t)
+	if w := postInit(h, Init{SignInsOff: true}); w.Code != 200 {
+		t.Fatalf("Init = %d %s", w.Code, w.Body)
+	}
+	if s.Desktop.Enabled() {
+		t.Error("the desktop stayed on")
+	}
+	if _, ok := s.Desktop.Password(); ok {
+		t.Error("a password was set")
+	}
+	for _, c := range r.calls {
+		if c[0] == kickstart {
+			t.Errorf("kickstart ran: %v", c)
+		}
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/v1/desktop/credential", nil))
+	if w.Code != http.StatusNotFound {
+		t.Errorf("credential = %d", w.Code)
 	}
 }

@@ -4,12 +4,16 @@
 package guestagent
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -36,22 +40,21 @@ func (f *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte
 }
 
 type fakeConsole struct {
-	uid  uint32
-	name string
-	err  error
+	uid uint32
+	err error
 }
 
-func (f fakeConsole) Console(context.Context) (uint32, string, error) { return f.uid, f.name, f.err }
+func (f fakeConsole) Console(context.Context) (uint32, error) { return f.uid, f.err }
 
-func TestCAEnvPointsEveryVariableAtTheBundle(t *testing.T) {
-	env := CAEnv(MacCABundlePath)
-	for _, k := range []string{"SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE", "AWS_CA_BUNDLE", "GIT_SSL_CAINFO", "CURL_CA_BUNDLE"} {
-		if !slices.Contains(env, k+"="+"/Users/agent/.wardyn/ca.pem") {
-			t.Errorf("%s is not set to the bundle: %v", k, env)
+func TestCAEnvReplacingVariablesNameTheFullBundle(t *testing.T) {
+	env := CAEnv(MacCABundlePath, MacCAFullPath)
+	for _, k := range []string{"SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "AWS_CA_BUNDLE", "GIT_SSL_CAINFO"} {
+		if !slices.Contains(env, k+"=/Users/agent/.wardyn/ca-bundle.pem") {
+			t.Errorf("%s is not the full bundle: %v", k, env)
 		}
 	}
-	if len(env) != 6 {
-		t.Errorf("got %d variables, want 6", len(env))
+	if !slices.Contains(env, "NODE_EXTRA_CA_CERTS=/Users/agent/.wardyn/ca.pem") || len(env) != 6 {
+		t.Errorf("NODE_EXTRA_CA_CERTS must add the CA alone: %v", env)
 	}
 }
 
@@ -61,6 +64,46 @@ func TestCAEnvForNeedsTheBundleFile(t *testing.T) {
 	}
 	if got := caEnvFor([]File{{Path: "/etc/other"}, {Path: MacCABundlePath}}); len(got) != 6 {
 		t.Errorf("the bundle file set %d variables, want 6", len(got))
+	}
+}
+
+// The dispatcher puts Linux paths for these same variables in Init's Env: the agent's must win.
+func TestInitEnvCAVariablesWinOverInit(t *testing.T) {
+	ca := CAEnv(MacCABundlePath, MacCAFullPath)
+	env := map[string]string{"SSL_CERT_FILE": "/tmp/wardyn/ca-bundle.pem", "NODE_EXTRA_CA_CERTS": "/tmp/wardyn/mitm-ca.pem", "KEEP": "1"}
+	secret := map[string]string{"GIT_SSL_CAINFO": "/tmp/wardyn/x", "TOKEN": "t"}
+	got := initEnv(env, secret, ca)
+	for _, kv := range got {
+		if strings.Contains(kv, "/tmp/wardyn") {
+			t.Errorf("Init's CA path survived: %s", kv)
+		}
+	}
+	for _, want := range append([]string{"KEEP=1", "TOKEN=t"}, ca...) {
+		if !slices.Contains(got, want) {
+			t.Errorf("%s missing from %v", want, got)
+		}
+	}
+	// Without a run CA nothing is overridden.
+	if got := initEnv(env, nil, nil); !slices.Contains(got, "SSL_CERT_FILE=/tmp/wardyn/ca-bundle.pem") {
+		t.Errorf("Init's variable was dropped without a CA: %v", got)
+	}
+}
+
+func TestWriteCAFullIsSystemRootsThenTheRunCA(t *testing.T) {
+	dir := t.TempDir()
+	roots := filepath.Join(dir, "cert.pem")
+	if err := os.WriteFile(roots, []byte("ROOTS"), 0o644); err != nil { // no trailing newline
+		t.Fatal(err)
+	}
+	dst := filepath.Join(dir, "ca-bundle.pem")
+	if err := writeCAFull(roots, []byte("RUNCA\n"), dst); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(dst); string(b) != "ROOTS\nRUNCA\n" {
+		t.Errorf("bundle = %q", b)
+	}
+	if err := writeCAFull(filepath.Join(dir, "missing"), []byte("x"), dst); err == nil {
+		t.Error("a missing system roots file was accepted")
 	}
 }
 
@@ -85,6 +128,21 @@ func TestLookupAgentIDs(t *testing.T) {
 	gone := &fakeRunner{out: func([]string) ([]byte, error) { return nil, errors.New("no such user") }}
 	if _, err := LookupAgentIDs(context.Background(), gone, "agent"); err == nil {
 		t.Error("a missing account was accepted")
+	}
+}
+
+func TestLookupAgentIDsRefusesRootAndAdmins(t *testing.T) {
+	for name, ids := range map[string][3]string{
+		"root":          {"0", "20", "20"},
+		"admin primary": {"502", "80", "80"},
+		"admin member":  {"502", "20", "20 80 61"},
+	} {
+		r := &fakeRunner{out: func(a []string) ([]byte, error) {
+			return []byte(map[string]string{"-u": ids[0], "-g": ids[1], "-G": ids[2]}[a[1]]), nil
+		}}
+		if _, err := LookupAgentIDs(context.Background(), r, "agent"); !errors.Is(err, ErrAgentPrivileged) {
+			t.Errorf("%s: err = %v", name, err)
+		}
 	}
 }
 
@@ -146,8 +204,8 @@ func TestSetRunPasswordFailureKeepsNoPasswordAndLeaksNone(t *testing.T) {
 }
 
 func TestPointerCommandRunsInTheConsoleUsersSession(t *testing.T) {
-	name, args := PointerCommand(502, "agent")
-	want := []string{"asuser", "502", "/usr/bin/sudo", "-u", "agent", "/usr/bin/osascript", "-l", "JavaScript", "-e", pointerScript}
+	name, args := PointerCommand(502)
+	want := []string{"asuser", "502", "/usr/bin/sudo", "-u", "#502", "/usr/bin/osascript", "-l", "JavaScript", "-e", pointerScript}
 	if name != "/bin/launchctl" || !slices.Equal(args, want) {
 		t.Errorf("command = %s %v\nwant launchctl %v", name, args, want)
 	}
@@ -155,7 +213,7 @@ func TestPointerCommandRunsInTheConsoleUsersSession(t *testing.T) {
 
 func TestPointerReadsThroughTheConsoleUser(t *testing.T) {
 	r := &fakeRunner{out: func([]string) ([]byte, error) { return []byte("960 540\n"), nil }}
-	d := &Desktop{Run: r, Console: fakeConsole{uid: 502, name: "agent"}}
+	d := &Desktop{Run: r, Console: fakeConsole{uid: 502}}
 	p, err := d.Pointer(context.Background())
 	if err != nil || p != (Pointer{X: 960, Y: 540}) {
 		t.Fatalf("Pointer = %+v, %v", p, err)
@@ -191,7 +249,7 @@ func TestParsePointer(t *testing.T) {
 
 func TestSetSessionEnvCommandLines(t *testing.T) {
 	r := &fakeRunner{}
-	d := &Desktop{Run: r, Console: fakeConsole{uid: 502, name: "agent"}}
+	d := &Desktop{Run: r, Console: fakeConsole{uid: 502}}
 	if err := d.SetSessionEnv(context.Background(), []string{"SSL_CERT_FILE=/x", "A=b=c"}); err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +273,7 @@ func TestDesktopRequests(t *testing.T) {
 		}
 		return nil, nil
 	}}
-	d := &Desktop{Run: r, Console: fakeConsole{uid: 502, name: "agent"}, NewPassword: func() (string, error) { return "Abcd2345", nil }}
+	d := &Desktop{Run: r, Console: fakeConsole{uid: 502}, NewPassword: func() (string, error) { return "Abcd2345", nil }}
 	mux := http.NewServeMux()
 	d.Register(mux)
 	get := func(path string) *httptest.ResponseRecorder {
@@ -312,12 +370,32 @@ func TestServeVsockIdleUntilTheHostSaysHello(t *testing.T) {
 	}
 }
 
+func allowAll() bool { return true }
+
+func TestSpliceDesktopRefusesWhenTheDesktopIsOff(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	hb := newBroker()
+	lb := newBroker()
+	d := &Desktop{}
+	d.Disable()
+	go func() { _ = spliceDesktop(ctx, hb.dial, lb.dial, d.Enabled, 10*time.Millisecond) }()
+	host := hb.next(t)
+	_, _ = host.Write([]byte{DesktopOpenByte})
+	select {
+	case <-lb.hosts:
+		t.Fatal("Screen Sharing was dialled for a run whose desktop is off")
+	case <-time.After(200 * time.Millisecond):
+	}
+	hb.next(t) // refused: the agent closed it and dialled again
+}
+
 func TestSpliceDesktopWaitsForTheOpenByte(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	hb := newBroker()
 	lb := newBroker()
-	go func() { _ = spliceDesktop(ctx, hb.dial, lb.dial, 10*time.Millisecond) }()
+	go func() { _ = spliceDesktop(ctx, hb.dial, lb.dial, allowAll, 10*time.Millisecond) }()
 
 	host := hb.next(t)
 	select {
@@ -351,7 +429,7 @@ func TestSpliceDesktopRefusesAnotherFirstByte(t *testing.T) {
 	defer cancel()
 	hb := newBroker()
 	lb := newBroker()
-	go func() { _ = spliceDesktop(ctx, hb.dial, lb.dial, 10*time.Millisecond) }()
+	go func() { _ = spliceDesktop(ctx, hb.dial, lb.dial, allowAll, 10*time.Millisecond) }()
 	host := hb.next(t)
 	_, _ = host.Write([]byte{'R'})
 	select {
@@ -360,4 +438,26 @@ func TestSpliceDesktopRefusesAnotherFirstByte(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 	}
 	hb.next(t) // the agent closed it and dialled again
+}
+
+// The credential request is the one place the password leaves the agent: it must not be logged.
+func TestCredentialRequestLogsNoPassword(t *testing.T) {
+	var buf bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	defer slog.SetDefault(old)
+	d := &Desktop{Run: &fakeRunner{}, NewPassword: func() (string, error) { return "Abcd2345", nil }}
+	if err := d.SetRunPassword(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	d.Register(mux)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/v1/desktop/credential", nil))
+	if !strings.Contains(w.Body.String(), "Abcd2345") {
+		t.Fatalf("the request did not answer the password: %q", w.Body.String())
+	}
+	if strings.Contains(buf.String(), "Abcd2345") {
+		t.Errorf("the password was logged: %s", buf.String())
+	}
 }

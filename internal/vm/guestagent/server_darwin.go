@@ -142,12 +142,7 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "the sandbox is already initialised", http.StatusConflict)
 		return
 	}
-	// Refused before the marker, so a corrected Init can follow. 0.10.0 cannot make a macOS keychain
-	// read-only, so a request for it fails closed.
-	if in.SignInsOff {
-		http.Error(w, "a macOS guest cannot keep sign-ins read-only", http.StatusUnprocessableEntity)
-		return
-	}
+	// Refused before the marker, so a corrected Init can follow.
 	if len(in.Mounts) > 0 {
 		http.Error(w, "a macOS guest does not mount folder shares", http.StatusUnprocessableEntity)
 		return
@@ -165,27 +160,44 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// The CA variables come first, so a variable Init names itself wins.
+	// 0.10.0 cannot make a macOS keychain read-only, so a run that wants no sign-ins kept gets no
+	// desktop: no password, no credential, and the tunnel refuses. It still runs agent-only.
+	if in.SignInsOff && s.Desktop != nil {
+		s.Desktop.Disable()
+	}
 	ca := caEnvFor(in.Files)
-	s.env = append(s.env[:0], ca...)
-	for _, m := range []map[string]string{in.Env, in.SecretEnv} {
-		for k, v := range m {
-			s.env = append(s.env, k+"="+v)
+	if ca != nil {
+		if err := s.buildCA(in.Files); err != nil {
+			http.Error(w, "the CA bundle: "+err.Error(), http.StatusInternalServerError)
+			return
 		}
 	}
+	s.env = initEnv(in.Env, in.SecretEnv, ca)
 	if s.Desktop != nil {
-		s.initDesktop(r.Context(), ca)
+		s.initDesktop(r.Context(), ca, !in.SignInsOff)
 	}
 	s.inited = true
 	writeJSON(w, res)
 }
 
+// buildCA writes MacCAFullPath from the system roots and the CA Init has just written.
+func (s *Server) buildCA(files []File) error {
+	for _, f := range files {
+		if f.Path == MacCABundlePath {
+			return writeCAFull(MacSystemRoots, f.Content, MacCAFullPath)
+		}
+	}
+	return nil
+}
+
 // initDesktop sets the run's VNC password and the CA variables in the desktop session. Neither fails the
 // Init: a run without them is agent-only or sees certificate errors in GUI apps, and the desktop's
 // requests say which (no credential, a 404). The log lines name the step and never the password.
-func (s *Server) initDesktop(ctx context.Context, ca []string) {
-	if err := s.Desktop.SetRunPassword(ctx); err != nil {
-		slog.Warn("guest agent: no desktop password for this run", "err", err)
+func (s *Server) initDesktop(ctx context.Context, ca []string, password bool) {
+	if password {
+		if err := s.Desktop.SetRunPassword(ctx); err != nil {
+			slog.Warn("guest agent: no desktop password for this run", "err", err)
+		}
 	}
 	if err := s.Desktop.SetSessionEnv(ctx, ca); err != nil {
 		slog.Warn("guest agent: CA variables not set in the desktop session", "err", err)

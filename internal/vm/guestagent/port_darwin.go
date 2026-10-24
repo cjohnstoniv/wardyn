@@ -16,7 +16,7 @@ import (
 // DialHost opens a vsock stream from the guest to the host on port. The host side is the helper's
 // VZVirtioSocketDevice listener; whether a macOS 27 guest's dial reaches it is MAC-PROOF P5.
 func DialHost(ctx context.Context, port uint32) (net.Conn, error) {
-	fd, err := unix.Socket(unix.AF_VSOCK, unix.SOCK_STREAM, 0)
+	fd, err := cloexecSocket(unix.AF_VSOCK, unix.SOCK_STREAM, 0)
 	if err != nil {
 		return nil, fmt.Errorf("vsock socket: %w", err)
 	}

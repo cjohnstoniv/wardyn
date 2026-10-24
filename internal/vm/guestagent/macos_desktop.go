@@ -49,7 +49,7 @@ func NewVNCPassword() (string, error) {
 
 // ConsoleUser names who owns the GUI session on the guest's console.
 type ConsoleUser interface {
-	Console(ctx context.Context) (uid uint32, name string, err error)
+	Console(ctx context.Context) (uid uint32, err error)
 }
 
 // Pointer is the pointer position in the console session's screen points, origin at the bottom left
@@ -68,6 +68,23 @@ type Desktop struct {
 
 	mu       sync.Mutex
 	password string
+	disabled bool
+}
+
+// Disable turns the run's desktop off: no password is set, the credential request answers 404 and the
+// tunnel refuses. Called at Init for a run whose sign-ins cannot be kept (SignInsOff), which has no
+// desktop on macOS; the desktop is on until then, because prepare's control check needs it.
+func (d *Desktop) Disable() {
+	d.mu.Lock()
+	d.disabled = true
+	d.mu.Unlock()
+}
+
+// Enabled says whether the tunnel may open.
+func (d *Desktop) Enabled() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return !d.disabled
 }
 
 // ErrNoConsoleUser is a guest with nobody logged in at the console (the login window).
@@ -122,25 +139,26 @@ const pointerScript = `ObjC.import('AppKit'); var p = $.NSEvent.mouseLocation; M
 // asUser is the command line that runs argv in the console user's GUI session as that user. A root
 // daemon outside the session reads the wrong pointer, so launchctl moves the command into the
 // session's bootstrap namespace and sudo drops it to the user's own identity.
-func asUser(uid uint32, name string, argv ...string) (string, []string) {
-	args := []string{"asuser", strconv.FormatUint(uint64(uid), 10), "/usr/bin/sudo", "-u", name}
+func asUser(uid uint32, argv ...string) (string, []string) {
+	// sudo takes a numeric uid as #uid, so the account's name is never looked up or quoted.
+	args := []string{"asuser", strconv.FormatUint(uint64(uid), 10), "/usr/bin/sudo", "-u", "#" + strconv.FormatUint(uint64(uid), 10)}
 	return "/bin/launchctl", append(args, argv...)
 }
 
 // PointerCommand is the command that reads the pointer in the console user's session.
-func PointerCommand(uid uint32, name string) (string, []string) {
-	return asUser(uid, name, "/usr/bin/osascript", "-l", "JavaScript", "-e", pointerScript)
+func PointerCommand(uid uint32) (string, []string) {
+	return asUser(uid, "/usr/bin/osascript", "-l", "JavaScript", "-e", pointerScript)
 }
 
 // Pointer reads the pointer position in the console user's session, for the prepare control check: the
 // helper's own RFB client moves the pointer to a set point and compares. That osascript needs no
 // permission for this is unproven (MAC-PROOF P9).
 func (d *Desktop) Pointer(ctx context.Context) (Pointer, error) {
-	uid, name, err := d.Console.Console(ctx)
+	uid, err := d.Console.Console(ctx)
 	if err != nil {
 		return Pointer{}, err
 	}
-	cmd, args := PointerCommand(uid, name)
+	cmd, args := PointerCommand(uid)
 	out, err := d.Run.Run(ctx, cmd, args...)
 	if err != nil {
 		return Pointer{}, fmt.Errorf("read the pointer: %w", err)
@@ -171,7 +189,7 @@ func (d *Desktop) SetSessionEnv(ctx context.Context, env []string) error {
 	if len(env) == 0 {
 		return nil
 	}
-	uid, _, err := d.Console.Console(ctx)
+	uid, err := d.Console.Console(ctx)
 	if err != nil {
 		return err
 	}

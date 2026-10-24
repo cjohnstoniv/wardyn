@@ -43,6 +43,7 @@ func run(out string) error {
 	if err := os.MkdirAll(out, 0o700); err != nil {
 		return err
 	}
+	desktop := &guestagent.Desktop{Run: runner, Console: guestagent.ConsoleOwner{}}
 	srv := &guestagent.Server{
 		Version:   version.String(),
 		Cred:      &syscall.Credential{Uid: ids.UID, Gid: ids.GID, Groups: ids.Groups},
@@ -50,7 +51,7 @@ func run(out string) error {
 		User:      guestagent.MacAgentUser,
 		OutDir:    out,
 		MarkerDir: "/var/run",
-		Desktop:   &guestagent.Desktop{Run: runner, Console: guestagent.ConsoleOwner{Run: runner}},
+		Desktop:   desktop,
 	}
 	h, err := srv.Handler()
 	if err != nil {
@@ -65,7 +66,7 @@ func run(out string) error {
 	}()
 	go func() {
 		defer wg.Done()
-		_ = guestagent.SpliceDesktop(ctx, hostDialer(guestagent.VsockDesktopPort), screenSharing)
+		_ = guestagent.SpliceDesktop(ctx, hostDialer(guestagent.VsockDesktopPort), screenSharing, desktop.Enabled)
 	}()
 	wg.Wait()
 	return nil

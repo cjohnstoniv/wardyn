@@ -6,8 +6,11 @@ package guestagent
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -20,9 +23,18 @@ const (
 	MacAgentUser = "agent"
 	MacAgentHome = "/Users/agent"
 
-	// MacCABundlePath is where a run's proxy CA bundle lands in a macOS guest. A managed file at this
-	// path in Init makes the agent point the TLS tools' environment at it (CAEnv).
+	// MacCABundlePath is where a run's proxy CA certificates land in a macOS guest. A managed file at
+	// this path in Init makes the agent build MacCAFullPath and point the TLS tools' environment at
+	// the two (CAEnv).
 	MacCABundlePath = MacAgentHome + "/.wardyn/ca.pem"
+	// MacCAFullPath is the system roots followed by MacCABundlePath, built at Init, for the tools whose
+	// variable replaces their trust store rather than adding to it.
+	MacCAFullPath = MacAgentHome + "/.wardyn/ca-bundle.pem"
+	// MacSystemRoots is the macOS system root bundle.
+	MacSystemRoots = "/etc/ssl/cert.pem"
+
+	// MacAdminGID is macOS's admin group.
+	MacAdminGID = 80
 
 	// VsockCIDHost is the host's address for a guest-initiated vsock connection.
 	VsockCIDHost = 2
@@ -38,26 +50,74 @@ const (
 	DesktopOpenByte = 0x01
 )
 
-// caEnvNames are the variables the common TLS stacks read for an extra or replacement CA file. macOS
-// has no supported way to add a root to the system trust programmatically, so a tool that reads the
-// keychain (Safari, Go-built CLIs, Swift tools) does not see the file.
-var caEnvNames = []string{"SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE", "AWS_CA_BUNDLE", "GIT_SSL_CAINFO", "CURL_CA_BUNDLE"}
+// caReplaceEnv are the variables whose value replaces the tool's trust store, so they name the full
+// bundle (system roots plus the run's CA); caAddEnv adds to the tool's roots, so it names the CA alone.
+// macOS has no supported way to add a root to the system trust programmatically, so a tool that reads
+// the keychain (Safari, Go-built CLIs, Swift tools) does not see either file.
+var (
+	caReplaceEnv = []string{"SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "AWS_CA_BUNDLE", "GIT_SSL_CAINFO"}
+	caAddEnv     = "NODE_EXTRA_CA_CERTS"
+)
 
-// CAEnv is KEY=VALUE for every variable in caEnvNames, pointing at path.
-func CAEnv(path string) []string {
-	out := make([]string, len(caEnvNames))
-	for i, k := range caEnvNames {
-		out[i] = k + "=" + path
+// CAEnv is KEY=VALUE for every CA variable: the replacing ones at fullPath, NODE_EXTRA_CA_CERTS at caPath.
+func CAEnv(caPath, fullPath string) []string {
+	out := []string{caAddEnv + "=" + caPath}
+	for _, k := range caReplaceEnv {
+		out = append(out, k+"="+fullPath)
 	}
 	return out
 }
 
-// caEnvFor is CAEnv(MacCABundlePath) when files holds the CA bundle, else nil.
+// isCAKey says whether k is one of the variables CAEnv sets.
+func isCAKey(k string) bool {
+	return k == caAddEnv || slices.Contains(caReplaceEnv, k)
+}
+
+// caEnvFor is CAEnv for the run's CA when files holds it, else nil.
 func caEnvFor(files []File) []string {
 	for _, f := range files {
 		if f.Path == MacCABundlePath {
-			return CAEnv(MacCABundlePath)
+			return CAEnv(MacCABundlePath, MacCAFullPath)
 		}
+	}
+	return nil
+}
+
+// initEnv is the environment Init gives every exec: env, then secret, then ca. The dispatcher already
+// names these variables in Init's Env, with Linux guest paths, and on macOS they would point at files
+// that are not there; so when ca is set, its values win over Init's for exactly the CA variables.
+func initEnv(env, secret map[string]string, ca []string) []string {
+	var out []string
+	for _, m := range []map[string]string{env, secret} {
+		for k, v := range m {
+			if len(ca) > 0 && isCAKey(k) {
+				continue
+			}
+			out = append(out, k+"="+v)
+		}
+	}
+	return append(out, ca...)
+}
+
+// writeCAFull writes dst as the file at roots followed by ca, 0644 and root's: every exec reads it.
+func writeCAFull(roots string, ca []byte, dst string) error {
+	sys, err := os.ReadFile(roots)
+	if err != nil {
+		return fmt.Errorf("the system roots: %w", err)
+	}
+	var b bytes.Buffer
+	b.Write(sys)
+	if !bytes.HasSuffix(sys, []byte("\n")) {
+		b.WriteByte('\n')
+	}
+	b.Write(ca)
+	tmp := dst + ".wardyn-tmp"
+	if err := os.WriteFile(tmp, b.Bytes(), 0o644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		_ = os.Remove(tmp)
+		return err
 	}
 	return nil
 }
@@ -90,7 +150,7 @@ type AgentIDs struct {
 }
 
 // LookupAgentIDs asks id(1) for the account: os/user without cgo reads /etc/passwd, which does not
-// hold a macOS account.
+// hold a macOS account. It refuses an account that is uid 0 or in the admin group.
 func LookupAgentIDs(ctx context.Context, r CmdRunner, user string) (AgentIDs, error) {
 	var ids AgentIDs
 	for _, flag := range []string{"-u", "-g", "-G"} {
@@ -116,8 +176,15 @@ func LookupAgentIDs(ctx context.Context, r CmdRunner, user string) (AgentIDs, er
 			}
 		}
 	}
+	if ids.UID == 0 || ids.GID == MacAdminGID || slices.Contains(ids.Groups, MacAdminGID) {
+		return AgentIDs{}, fmt.Errorf("%w: %q is uid %d, groups %v", ErrAgentPrivileged, user, ids.UID, append([]uint32{ids.GID}, ids.Groups...))
+	}
 	return ids, nil
 }
+
+// ErrAgentPrivileged is a guest whose agent account is root or an administrator: every exec runs as it,
+// so the agent refuses to start rather than run untrusted work with that.
+var ErrAgentPrivileged = errors.New("guestagent: the agent account is root or an administrator")
 
 func parseIDs(s string) ([]uint32, error) {
 	var out []uint32
