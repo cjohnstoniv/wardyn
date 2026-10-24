@@ -395,3 +395,88 @@ func TestTakeover_AContainersNoVNCAppHoldsAnOpenTakeOver(t *testing.T) {
 		t.Errorf("playback gaps = %+v, want one %q gap", pb.Gaps, desktopPauseTakeover)
 	}
 }
+
+// TestTakeover_AContainersNoVNCAppPassesFramesWithoutAnOpenTakeOver is the holding test's twin: a
+// container run's noVNC app whose take overs are all waiting or handed back, or that has none, opens,
+// holds nothing, stays open across the watch's re-reads (driven through vmSignInTick, which replaces
+// the container watch's ticker as it does a VM's) and records every frame after the handshake.
+func TestTakeover_AContainersNoVNCAppPassesFramesWithoutAnOpenTakeOver(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		seed bool
+	}{
+		{"a waiting and a handed-back take over", true},
+		{"no take overs", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			offered, pasted := make(chan string, 1), make(chan []byte, 1)
+			h := desktopHarness(t, rfbDesktopBackend(t, offered, pasted, false), nil)
+			h.run.RecordingLevel = types.RecordingScreenActions
+			h.store.putRun(h.run)
+			h.srv.cfg.RecordingStore = fsRecordingStore(t)
+			aap := takeoverApprovals{newAuthzApprovals(newAuthzStore())}
+			if c.seed {
+				seedTakeover(aap, h.run.ID, types.ApprovalPending, "")
+				back := seedTakeover(aap, h.run.ID, types.ApprovalApproved, h.owner)
+				aap.mu.Lock()
+				ap := aap.byID[back]
+				at := time.Now().UTC()
+				ap.HandedBackAt = &at
+				aap.byID[back] = ap
+				aap.mu.Unlock()
+			}
+			st := &vmSignInTestStore{uiMemStore: h.store}
+			st.setTakeovers(aap.authzApprovals, nil)
+			h.srv.cfg.Store = st
+			tick := make(chan chan struct{})
+			h.srv.vmSignInTick = tick
+			ds := openDesktop(t, h, desktopApp)
+			if ds.resp.StatusCode != http.StatusSwitchingProtocols {
+				body, _ := io.ReadAll(ds.resp.Body)
+				t.Fatalf("upgrade = %d %s, want 101", ds.resp.StatusCode, body)
+			}
+			if held := h.srv.desktopRecs.heldWith(h.run.ID, ""); len(held) != 0 {
+				t.Fatalf("holds on a desktop with no open take over = %v, want none", held)
+			}
+			<-offered
+			if next, err := readWSFrame(ds.br); err != nil || string(next) != "\x02" {
+				t.Fatalf("after ServerInit the browser got %q (err %v), want the Bell", next, err)
+			}
+			for i := 1; i <= 3; i++ {
+				done := make(chan struct{})
+				select {
+				case tick <- done:
+				case <-time.After(5 * time.Second):
+					t.Fatalf("re-read %d: no desktop stream took it", i)
+				}
+				recvSlotEvent(t, done, "the stream's re-read")
+			}
+			if held := h.srv.desktopRecs.heldWith(h.run.ID, ""); len(held) != 0 {
+				t.Fatalf("holds after three re-reads = %v, want none", held)
+			}
+			paste := rfbCut(6, pasteSentinel)
+			if _, err := ds.conn.Write(wsFrame(paste, true)); err != nil {
+				t.Fatalf("paste write: %v", err)
+			}
+			select {
+			case got := <-pasted:
+				if !bytes.Equal(got, paste) {
+					t.Fatalf("the desktop got %x, want the paste %x", got, paste)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("a frame written after the re-reads never reached the desktop: the stream closed")
+			}
+			_ = ds.conn.Close()
+			_, pb, kept := storedVMRecording(t, h)
+			if want := vmHandshake() + "\x02"; kept != want {
+				t.Errorf("recorded frames = %q, want the handshake and the Bell %q", kept, want)
+			}
+			if len(pb.Gaps) != 0 {
+				t.Errorf("playback gaps = %+v, want none", pb.Gaps)
+			}
+			if p, r := uiDesktopRows(h); p != 0 || r != 0 {
+				t.Errorf("desktop.recording rows: %d pause, %d resume, want none", p, r)
+			}
+		})
+	}
+}
