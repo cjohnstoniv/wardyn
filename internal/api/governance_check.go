@@ -149,6 +149,9 @@ func (s *Server) handleGovernanceCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	runIn, err := s.runInFromRequest(r.Context(), createRunRequest{RunIn: req.RunIn})
+	if err == nil && scope != nil && runIn != uuid.Nil {
+		err = s.runInWithinScope(r.Context(), runIn)
+	}
 	if err == nil {
 		resp.Effective, err = s.checkEffective(r.Context(), q, contextChoice{RunIn: runIn})
 	}
@@ -164,6 +167,17 @@ func (s *Server) handleGovernanceCheck(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// runInWithinScope refuses a unit admin's run_in of a unit they do not govern with errUnitNotAContext,
+// the answer for a unit that does not exist or is not the person's: whether the person is in a unit
+// outside the caller's units is not theirs to learn, so all three read the same.
+func (s *Server) runInWithinScope(ctx context.Context, unit uuid.UUID) error {
+	in, err := s.unitScope(ctx, unit, false)
+	if err == nil && !in {
+		err = errUnitNotAContext
+	}
+	return err
 }
 
 // trimContextPaths cuts each of a unit admin's contexts' paths to what GET /governance shows them of
