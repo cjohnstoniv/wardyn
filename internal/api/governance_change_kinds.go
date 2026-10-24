@@ -666,11 +666,12 @@ func (s *Server) holdMembershipUpsert(w http.ResponseWriter, r *http.Request, a 
 
 // heldBelongsStale answers stale when held change ch, a membership add or delete admitted for a unit
 // admin because its subject already belonged in their units (membershipAddInScope) or kept another
-// membership there (deleteMembershipInScope), finds the subject's memberships other than except in
-// none of the units it recorded, read on the decision's transaction under its graph and key locks.
-// The base covers only the target row and its unit chain, so the membership that admitted the change
-// may since have gone. A change that records none, a security caller's, is not rechecked; one that
-// still has another of its units applies.
+// membership there (deleteMembershipInScope), finds no membership of the subject other than except in
+// a unit that now lies at or below one of the granted units it recorded (governingRoots), read on the
+// decision's transaction under its graph and key locks. The base covers only the target row and its
+// unit chain, so the membership that admitted the change may since have gone, or its unit moved out
+// from under them. Any such membership lets it apply, not only the one that admitted it. A change
+// that records none, a security caller's, is not rechecked.
 func heldBelongsStale(ctx context.Context, q store.Querier, ch types.GovernanceChange, st types.CapabilitySubjectType, subject string, except uuid.UUID) error {
 	var held governanceDiffBody
 	if err := json.Unmarshal(ch.Diff, &held); err != nil {
@@ -679,12 +680,17 @@ func heldBelongsStale(ctx context.Context, q store.Querier, ch types.GovernanceC
 	if len(held.BelongsBy) == 0 {
 		return nil
 	}
+	all, err := store.ListGovernanceUnitsQ(ctx, q)
+	if err != nil {
+		return err
+	}
 	ms, err := store.ListGovernanceMembershipsQ(ctx, q)
 	if err != nil {
 		return err
 	}
-	units, err := subjectUnitsInScope(ms, st, subject, except,
-		func(u uuid.UUID) (bool, error) { return slices.Contains(held.BelongsBy, u), nil })
+	units, err := subjectUnitsInScope(ms, st, subject, except, func(u uuid.UUID) (bool, error) {
+		return len(rootsOver(all, []uuid.UUID{u}, held.BelongsBy)) > 0, nil
+	})
 	if err != nil {
 		return err
 	}
@@ -695,7 +701,7 @@ func heldBelongsStale(ctx context.Context, q store.Querier, ch types.GovernanceC
 }
 
 // holdMembershipDelete stores an assignment delete as a pending change. keepsIn is, for a unit admin's
-// delete, the units of theirs the subject keeps another membership in (heldBelongsStale).
+// delete, the units they are granted that the subject keeps another membership below (heldBelongsStale).
 func (s *Server) holdMembershipDelete(w http.ResponseWriter, r *http.Request, id uuid.UUID, keepsIn []uuid.UUID) {
 	ctx := r.Context()
 	var st membershipState

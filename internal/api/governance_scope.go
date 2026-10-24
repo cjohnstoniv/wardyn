@@ -390,9 +390,56 @@ func subjectUnitsInScope(ms []types.GovernanceMembership, st types.CapabilitySub
 	return units, nil
 }
 
+// governingRoots is the units the caller holds a grant on at or above any of units, once each, in the
+// tree read on q, or on a transaction of its own for a nil q: the roots of their units a subject
+// belongs in, which a held change records for its decision (heldBelongsStale).
+func (s *Server) governingRoots(ctx context.Context, q store.Querier, units []uuid.UUID) ([]uuid.UUID, error) {
+	grants, err := s.callerUnitGrants(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var all []types.GovernanceUnit
+	if q != nil {
+		all, err = store.ListGovernanceUnitsQ(ctx, q)
+	} else {
+		all, err = s.unitTreeRows(ctx)
+	}
+	if err != nil {
+		return nil, err
+	}
+	granted := make([]uuid.UUID, 0, len(grants))
+	for _, g := range grants {
+		granted = append(granted, g.UnitID)
+	}
+	return rootsOver(all, units, granted), nil
+}
+
+// rootsOver is the units of roots that any of units lies at or below in the tree all, once each,
+// walking each unit's current parent links.
+func rootsOver(all []types.GovernanceUnit, units, roots []uuid.UUID) []uuid.UUID {
+	byID := unitsByID(all)
+	var out []uuid.UUID
+	for _, u := range units {
+		seen := map[uuid.UUID]bool{}
+		for cur := &u; cur != nil && !seen[*cur]; {
+			seen[*cur] = true
+			if slices.Contains(roots, *cur) && !slices.Contains(out, *cur) {
+				out = append(out, *cur)
+			}
+			row, ok := byID[*cur]
+			if !ok {
+				break
+			}
+			cur = row.ParentID
+		}
+	}
+	return out
+}
+
 // membershipAddInScope is a unit admin's scope over a membership add: the unit is one they govern and
 // the subject already belongs in their units. The add itself is always held (unitWriteMode); belongsBy
-// is the units of theirs the subject belongs in, which the decision reads again (heldBelongsStale).
+// is the units they are granted that the subject belongs below (governingRoots), which the decision
+// reads again (heldBelongsStale). A subject no root is found for is refused, as one outside them.
 func (s *Server) membershipAddInScope(w http.ResponseWriter, r *http.Request, a types.GovernanceMembership) (belongsBy []uuid.UUID, ok bool) {
 	ctx := r.Context()
 	if !s.requireUnitsInScope(w, r, "governance.membership", false, a.UnitID) {
@@ -402,6 +449,9 @@ func (s *Server) membershipAddInScope(w http.ResponseWriter, r *http.Request, a 
 	if err == nil {
 		belongsBy, err = subjectUnitsInScope(ms, a.SubjectType, a.Subject, uuid.Nil,
 			func(u uuid.UUID) (bool, error) { return s.unitScope(ctx, u, false) })
+	}
+	if err == nil && len(belongsBy) > 0 {
+		belongsBy, err = s.governingRoots(ctx, nil, belongsBy)
 	}
 	if err != nil {
 		writeServerError(w, r, "read unit scope", err)
@@ -447,6 +497,13 @@ func (s *Server) deleteMembershipInScope(w http.ResponseWriter, r *http.Request,
 			return err
 		}
 		if len(activates) > 0 {
+			// Held: the decision reads again that the subject keeps a membership below these roots.
+			if keepsIn, err = s.governingRoots(ctx, q, keepsIn); err != nil {
+				return err
+			}
+			if len(keepsIn) == 0 {
+				return errOutsideScope
+			}
 			return errHoldForApproval
 		}
 		removed = row

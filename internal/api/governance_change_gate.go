@@ -259,8 +259,8 @@ type govProposal struct {
 	baseState any
 	// shift is what a legacy membership delete or move may do to whose row wins (H3).
 	shift legacyShift
-	// belongsBy is, for a unit admin's membership add or delete, the units of theirs its subject
-	// holds another membership in (heldBelongsStale).
+	// belongsBy is, for a unit admin's membership add or delete, the units they are granted that its
+	// subject holds another membership below (governingRoots, heldBelongsStale).
 	belongsBy []uuid.UUID
 }
 
@@ -331,8 +331,8 @@ type governanceDiffBody struct {
 	Activates []unitActivation `json:"activates,omitempty"`
 	// Vacates lists the units a legacy membership move may take someone out of.
 	Vacates []unitActivation `json:"vacates,omitempty"`
-	// BelongsBy lists, for a unit admin's membership add or delete, the units of theirs its subject
-	// holds another membership in.
+	// BelongsBy lists, for a unit admin's membership add or delete, the units they are granted that its
+	// subject holds another membership below.
 	BelongsBy []uuid.UUID `json:"belongs_by,omitempty"`
 }
 
