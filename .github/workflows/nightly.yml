@@ -71,7 +71,7 @@ concurrency:
 jobs:
   e2e-live:
     if: inputs.scope != 'candidate'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -122,7 +122,7 @@ jobs:
   # key not available in CI. On native docker the proxy->control-plane egress
   # callback routes, so the recording-replay synthesis allowlist is populated too.
   task-e2e-live:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -186,7 +186,7 @@ jobs:
   # into a red job instead of a green one that proved runc again. No KVM is
   # needed: runsc's default systrap platform runs in an ordinary VM.
   gvisor-cc2-live:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       RUNSC_RELEASE: "20260601"
@@ -282,7 +282,7 @@ jobs:
   # uniquely-namespaced compose stack and builds its own agent image, so it
   # must not share a runner with the e2e jobs above.
   ssh-e2e-live:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -319,6 +319,51 @@ jobs:
           path: test/reports/e2e/ssh-e2e.log
           if-no-files-found: error
 
+  # Real editor clients against the SSH gateway: Mutagen 0.18.1 (sync create + flush) and
+  # the JetBrains remote-dev-server bootstrap (IntelliJ IDEA 2026.2.3), run in a container
+  # (test/editors/Dockerfile), never on the runner. Versions and sha256 are pinned there.
+  # docs/SSH.md's "Editors over the gateway" table cites this job by name, so a rename
+  # changes that table too. It reuses run-e2e-ssh.sh's dedicated stack in its editors mode.
+  #
+  # NEVER RUN BEFORE on a hosted runner: NOTIFY_EXEMPT_UNTIL (scripts/test-repo-guards.sh),
+  # kept out of notify-new-lanes' needs and release.yml's watched= until it has gone green
+  # on a real scheduled run. Not a required check.
+  ssh-editors-live:
+    if: inputs.scope != 'candidate'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim)@'
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          suite: unit
+      - name: Docker available
+        run: docker --version
+      - name: Editor clients against the SSH gateway (dedicated compose stack)
+        env:
+          WARDYN_TEST_DOCKER: "1"
+        shell: bash
+        run: |
+          mkdir -p test/reports/e2e
+          make test-e2e-ssh-editors 2>&1 | tee test/reports/e2e/ssh-editors.log
+      - name: Upload e2e results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ssh-editors-live-results
+          path: test/reports/e2e/ssh-editors.log
+          if-no-files-found: error
+
   # The guided governance test-drive — the walkthrough the docs point a new
   # operator at (clone + governed egress, egress deny, metadata block, first-use
   # approval, brokered git, kill cascade, recording). It ran in NO automation, so
@@ -328,7 +373,7 @@ jobs:
   # claude-code agent image (AGENT=claude-code in the script), which the compose
   # `up` does not build.
   test-drive:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -353,7 +398,7 @@ jobs:
   # waits, collects artifacts, tears down. Also asserts exit-code propagation:
   # a task that exits 3 must fail the script with exit 3.
   ci-mode-dogfood:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -407,7 +452,7 @@ jobs:
   # gone green on a real scheduled run, the same promotion rule kind-survival-walk had.
   ci-mode-dogfood-model-fake:
     if: inputs.scope != 'candidate'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -469,7 +514,7 @@ jobs:
   # those cases (internal/runner/docker network/integration tests,
   # internal/envbuild's integration_test.go) actually exercise a live daemon.
   docker-tagged-live:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -558,7 +603,7 @@ jobs:
   # 2026-09-28, run 36393687863), so it is now in notify-new-lanes.needs +
   # release.yml's watched= (guard 13) rather than NOTIFY_EXEMPT.
   provider-subscription-docker-pg:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: read
@@ -639,7 +684,7 @@ jobs:
   # control plane's own shared-host concurrency safety (scripts/test-concurrent.sh).
   test-e2e-concurrent:
     if: inputs.scope != 'candidate'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -674,7 +719,7 @@ jobs:
   # one up, the same way ci.yml's helm-install-test does in its desktop-envelope
   # half.
   byoi-e2e-live:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -723,7 +768,7 @@ jobs:
   # to invoke it — but for that reason it must not share a runner with the jobs
   # above.
   ui-sandbox-e2e-live:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -788,7 +833,7 @@ jobs:
   # build break.
   buildx-smoke:
     name: multi-arch build (${{ matrix.name }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
       contents: read
@@ -938,7 +983,7 @@ jobs:
     name: multi-arch build (${{ matrix.name }})
     needs: buildx-smoke
     if: github.event_name == 'workflow_dispatch' && inputs.publish
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
       contents: read
@@ -1021,7 +1066,7 @@ jobs:
     name: multi-arch build (${{ matrix.name }})
     needs: buildx-smoke-ui-sandbox
     if: github.event_name == 'workflow_dispatch' && inputs.publish
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
       contents: read
@@ -1089,7 +1134,7 @@ jobs:
   # actually reached its own PASS line and reported at least one executed
   # spec file — belt and suspenders, neither one a grep of the skip message.
   kind-sso-walk:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -1244,7 +1289,7 @@ jobs:
   # (the self-skip happens before the script dispatches to the ado profile, so
   # the message names only "the AWS SSO walk" — that's expected, not a bug).
   kind-sso-ado-walk:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
       WARDYN_QUICKSTART_CLUSTER: wardyn-ado
@@ -1323,7 +1368,7 @@ jobs:
   # kind-sso-walk builds, built fresh in this job (nightly jobs run on separate
   # runners, so there is nothing to reuse from the job above).
   compose-sso-roles:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -1406,7 +1451,7 @@ jobs:
   # so it is in notify-new-lanes' needs and release.yml's watched= (guard 13), and runs under
   # scope=candidate: a watched job must never be skipped.
   kind-survival-walk:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -1487,7 +1532,7 @@ jobs:
   # the other three.
   k6-kind-conformance:
     name: k6-kind-conformance (${{ matrix.kubelet }}, ${{ matrix.suite }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -1553,6 +1598,34 @@ jobs:
           path: test/reports/e2e/
           if-no-files-found: error
 
+  # Each k6 leg's failure rate over the last 30 scheduled nightlies, from the job history (#3538), in
+  # this run's summary. A failed leg costs a full rerun, so a leg that keeps failing shows as a number.
+  # It reads history, so it needs no `needs:` (this run is not counted until it completes), and it
+  # must not turn the nightly red, so a gh error is not a failure. actions: read is all it asks for.
+  k6-rerun-rate:
+    if: inputs.scope != 'candidate'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    continue-on-error: true
+    permissions:
+      contents: read # checkout
+      actions: read # gh run list / gh run view
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Write each k6 leg's failure rate to the job summary
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### k6-kind-conformance: failure rate per leg, last 30 scheduled nightlies"
+            echo
+            ./scripts/k6-rerun-rate.sh 30
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # The acceptance walks that had no caller (#3110): kind-components-walk (a header secret absent from
   # the sandbox's environment and files, a file secret 0440 root:fsGroup, the audit rows, and the docker
   # half of the file-mode proof) and kind-run-output-walk in both modes (a run's output surviving a
@@ -1562,7 +1635,7 @@ jobs:
   # requires every "kind-acceptance-walks (<walk>)" leg (#3439).
   kind-acceptance-walks:
     name: kind-acceptance-walks (${{ matrix.walk }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -1636,7 +1709,7 @@ jobs:
   # nothing between jobs). Green on a real scheduled run (39782025578), so watched like
   # kind-survival-walk above.
   hybrid-walk:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -1716,7 +1789,7 @@ jobs:
   # ghcr.io packages (the chart + wardynd images), hence packages: read below.
   # Green on a real scheduled run (39782025578), so watched like the jobs above.
   kind-upgrade-walk:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     permissions:
       contents: read
@@ -1779,7 +1852,7 @@ jobs:
   # Released binaries come from the release assets, released images from ghcr.io
   # (both public); the candidate images are built here from the tree.
   runner-compat-walk:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -1835,7 +1908,7 @@ jobs:
   # the same pins; the kind leg installs Vault from its Helm chart and logs in
   # with Kubernetes auth and a projected service-account token.
   kek-conformance:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -1883,7 +1956,7 @@ jobs:
   # run 36377937351) — now in notify-new-lanes.needs AND release.yml's
   # watched= (guard 13), per PR #1245 review F2's own promotion rule.
   daemon-proxy-secret-kind:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -1913,7 +1986,7 @@ jobs:
   # does not verify must never decode into a session. Every PR runs the seed
   # corpus as an ordinary test; this lane searches past it.
   fuzz:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
@@ -1971,7 +2044,7 @@ jobs:
   # PR that breaks them; PRs that conflict with an earlier one are set aside
   # and listed. Also flags any open PR stacked on a branch that is no longer
   # open (merged/closed) and so should have been retargeted to main. psql
-  # (preinstalled on ubuntu-latest) resets the database between check runs.
+  # (preinstalled on ubuntu-24.04) resets the database between check runs.
   #
   # Informational: it never merges or pushes anything for real, only reports.
   # No measured baseline yet (new job) — 180 min budgets for about 30 check
@@ -1979,7 +2052,7 @@ jobs:
   # each); re-measure and tighten once nightly runs exist (docs/CI.md).
   migration-merge-check:
     if: inputs.scope != 'candidate'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 180
     permissions:
       packages: read
@@ -2034,7 +2107,7 @@ jobs:
   # 36786358051, so it is in notify-new-lanes.needs and release.yml's watched= like the
   # other lanes.
   managed-settings-drift:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -2076,7 +2149,7 @@ jobs:
   published-image-scan:
     if: inputs.scope != 'candidate'
     name: published-image-scan (${{ matrix.name }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read # checkout (.trivyignore) and `gh release list`; the images are public
@@ -2151,7 +2224,7 @@ jobs:
     needs: [published-image-scan]
     # main only: a workflow_dispatch on any other branch must not post to the main-health issue.
     if: failure() && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       issues: write
@@ -2185,7 +2258,7 @@ jobs:
     needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, buildx-smoke-ui-sandbox, buildx-smoke-ui-sandbox-signin, kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg, managed-settings-drift, runner-compat-walk, kind-survival-walk, k6-kind-conformance, kind-acceptance-walks, hybrid-walk, kind-upgrade-walk]
     # main only: a workflow_dispatch on any other branch must not post to the main-health issue.
     if: failure() && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       issues: write

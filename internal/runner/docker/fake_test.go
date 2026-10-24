@@ -118,6 +118,10 @@ type fakeDocker struct {
 	// else the first free 10.N.0.0/16 from N=88, as the daemon picks one. A
 	// create asking for a subnet another network holds fails on the overlap.
 	subnets map[string]netip.Prefix
+	// netCreated is when each network was created (NetworkList's Created), so a
+	// sweep test can backdate one; networkLists counts NetworkList calls.
+	netCreated   map[string]time.Time
+	networkLists int
 	// onNetworkCreate, when set, runs INSIDE NetworkCreate before the network
 	// is recorded, so a test can have another network take a subnet first.
 	// Called without f.mu held.
@@ -369,6 +373,7 @@ func newFakeDocker() *fakeDocker {
 		imageMeta:  map[string]image.InspectResponse{},
 		networks:   map[string]client.NetworkCreateOptions{},
 		subnets:    map[string]netip.Prefix{},
+		netCreated: map[string]time.Time{},
 		containers: map[string]*createdContainer{},
 		volumes:    map[string]client.VolumeCreateOptions{},
 		stdin:      map[string][]byte{},
@@ -511,7 +516,25 @@ func (f *fakeDocker) NetworkCreate(ctx context.Context, name string, opts client
 	}
 	f.networks[name] = opts
 	f.subnets[name] = subnet
+	f.netCreated[name] = time.Now()
 	return client.NetworkCreateResult{ID: name}, nil
+}
+
+// NetworkList answers every network, its labels, creation time and subnet. Like
+// ContainerList, the filter is not applied: the sweep's own label checks are
+// what the tests drive.
+func (f *fakeDocker) NetworkList(_ context.Context, _ client.NetworkListOptions) (client.NetworkListResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.networkLists++
+	var res client.NetworkListResult
+	for name, opts := range f.networks {
+		var n network.Summary
+		n.Name, n.ID, n.Labels, n.Created = name, name, opts.Labels, f.netCreated[name]
+		n.IPAM.Config = []network.IPAMConfig{{Subnet: f.subnets[name]}}
+		res.Items = append(res.Items, n)
+	}
+	return res, nil
 }
 
 func (f *fakeDocker) NetworkInspect(ctx context.Context, networkID string, _ client.NetworkInspectOptions) (client.NetworkInspectResult, error) {
@@ -565,6 +588,7 @@ func (f *fakeDocker) NetworkRemove(ctx context.Context, networkID string, _ clie
 	}
 	delete(f.networks, networkID)
 	delete(f.subnets, networkID)
+	delete(f.netCreated, networkID)
 	return client.NetworkRemoveResult{}, nil
 }
 
