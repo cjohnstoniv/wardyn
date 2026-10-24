@@ -487,11 +487,7 @@ func (s *Server) watchVMSignIn(ctx context.Context, runID uuid.UUID) (*vmSignInW
 	if (st == nil && tk == nil) || !s.desktopRecorded(run) {
 		return nil, nil
 	}
-	unreadReason := desktopPauseSignin
-	if st == nil {
-		unreadReason = desktopPauseTakeover
-	}
-	w := &vmSignInWatch{s: s, run: run, st: st, tk: tk, unreadReason: unreadReason,
+	w := &vmSignInWatch{s: s, run: run, st: st, tk: tk, unreadReason: desktopPauseUnread,
 		unread: "vm-sign-in-unread:" + runID.String() + ":" + uuid.NewString()}
 	if err := w.sync(ctx); err != nil {
 		return nil, err

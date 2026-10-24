@@ -1397,8 +1397,12 @@ func TestDesktopSignIns_AnUnreadableMarkMidStreamHoldsTheRecording(t *testing.T)
 	d.send <- []byte("\x02\x02")
 	v.read(2)
 	endVMDesktop(t, h, v, d.send)
-	if _, _, kept := storedVMRecording(t, h); kept != vmHandshake()+"\x02\x02" {
+	_, pb, kept := storedVMRecording(t, h)
+	if kept != vmHandshake()+"\x02\x02" {
 		t.Errorf("recorded frames = %q, want only the handshake and the Bells once the mark was read", kept)
+	}
+	if want := "Wardyn could not read whether you had taken over"; len(pb.Gaps) != 1 || pb.Gaps[0].Reason != want {
+		t.Errorf("playback gaps = %+v, want one %q gap", pb.Gaps, want)
 	}
 }
 
