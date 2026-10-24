@@ -4,6 +4,7 @@
 package api
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1251,6 +1252,122 @@ func TestDesktopSignIns_AVMsNoVNCAppHoldsAPersistedPause(t *testing.T) {
 	_, pb, kept := storedVMRecording(t, h)
 	if kept != vmHandshake() {
 		t.Errorf("recorded frames = %q, want only the handshake: the Bell came while the pause was open", kept)
+	}
+	if len(pb.Gaps) != 1 || pb.Gaps[0].Reason != desktopPauseSignin {
+		t.Errorf("playback gaps = %+v, want one %q gap", pb.Gaps, desktopPauseSignin)
+	}
+}
+
+// A Linux VM run's noVNC app whose sign-in mark cannot be read is refused with the display's 503
+// before any exec: neither the app's launcher probe (uiEnsureApp) nor the relay's dial runs on a mark
+// nobody read.
+func TestDesktopSignIns_AnUnreadableMarkRefusesAVMsNoVNCApp(t *testing.T) {
+	offered, pasted := make(chan string, 1), make(chan []byte, 1)
+	h := desktopHarness(t, rfbDesktopBackend(t, offered, pasted, false), nil)
+	h.run.MachineKind, h.run.RecordingLevel = types.MachineLinuxVM, types.RecordingScreenActions
+	h.store.putRun(h.run)
+	h.srv.cfg.RecordingStore = fsRecordingStore(t)
+	st := &vmSignInTestStore{uiMemStore: h.store, rows: map[uuid.UUID]store.DesktopVMSignIns{h.run.ID: {Store: "memory"}}}
+	h.srv.cfg.Store = st
+	cookie := h.openAppSession(desktopApp)
+	var execs atomic.Int32
+	h.runner.mu.Lock()
+	next := h.runner.execFn
+	h.runner.execFn = func(spec runner.ExecSpec) (*runner.ExecSession, error) {
+		execs.Add(1)
+		return next(spec)
+	}
+	h.runner.mu.Unlock()
+	st.setReadErr(errors.New("store: pool closed"))
+	ds := upgradeAppWith(t, h, desktopApp, cookie)
+	body, _ := io.ReadAll(ds.resp.Body)
+	if ds.resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(body), reasonDesktopSignInsUnavailable) {
+		t.Fatalf("upgrade = %d %s, want 503 %s", ds.resp.StatusCode, body, reasonDesktopSignInsUnavailable)
+	}
+	if n := execs.Load(); n != 0 {
+		t.Fatalf("%d exec(s) issued with the sign-in mark unreadable, want none", n)
+	}
+	select {
+	case got := <-offered:
+		t.Fatalf("the desktop saw an upgrade (offer %q) with the sign-in mark unreadable", got)
+	default:
+	}
+}
+
+// rfbAppBackend is rfbDesktopBackend's desktop with nothing after ServerInit until the test sends it:
+// each message on send is one server frame, and the desktop closes when send does.
+func rfbAppBackend(t *testing.T, send <-chan []byte) http.Handler {
+	t.Helper()
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Errorf("backend hijack: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, err := io.WriteString(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n"); err != nil {
+			return
+		}
+		br := bufio.NewReader(conn)
+		for _, msg := range [][]byte{[]byte("RFB 003.008\n"), {1, 1}, {0, 0, 0, 0}} {
+			if _, err := conn.Write(wsFrame(msg, false)); err != nil {
+				return
+			}
+			if _, err := readWSFrame(br); err != nil {
+				return
+			}
+		}
+		if _, err := conn.Write(wsFrame(rfbServerInit(), false)); err != nil {
+			return
+		}
+		for m := range send {
+			if _, err := conn.Write(wsFrame(m, false)); err != nil {
+				return
+			}
+		}
+	})
+}
+
+// A Linux VM run's noVNC app opened unpaused is held by a pause answered on another replica at the
+// relay's next re-read of the row, as the display is: what the desktop sends before the pause is
+// recorded, and what it sends after the re-read is not.
+func TestDesktopSignIns_APauseOnAnotherReplicaHoldsAnOpenVMNoVNCApp(t *testing.T) {
+	send := make(chan []byte, 4)
+	h := desktopHarness(t, rfbAppBackend(t, send), nil)
+	h.run.MachineKind, h.run.RecordingLevel = types.MachineLinuxVM, types.RecordingScreenActions
+	h.store.putRun(h.run)
+	h.srv.cfg.RecordingStore = fsRecordingStore(t)
+	d := &vmSignInDesktop{h: h, recheck: make(chan chan struct{}),
+		st:    &vmSignInTestStore{uiMemStore: h.store, rows: map[uuid.UUID]store.DesktopVMSignIns{h.run.ID: {Store: "memory"}}},
+		guest: &pauseFakeRunner{sshFakeRunner: h.runner}}
+	h.srv.cfg.Store, h.srv.cfg.Runner = d.st, d.guest
+	h.srv.vmSignInTick = d.recheck
+	other := New(h.srv.cfg) // another replica over the same database and runner
+	ds := openDesktop(t, h, desktopApp)
+	if ds.resp.StatusCode != http.StatusSwitchingProtocols {
+		body, _ := io.ReadAll(ds.resp.Body)
+		t.Fatalf("upgrade = %d %s, want 101", ds.resp.StatusCode, body)
+	}
+	send <- []byte{2} // a Bell before the pause
+	if next, err := readWSFrame(ds.br); err != nil || string(next) != "\x02" {
+		t.Fatalf("before the pause the browser got %q (err %v), want the Bell", next, err)
+	}
+	if w := d.signIn(other, "pause"); w.Code != http.StatusOK {
+		t.Fatalf("pause on the other replica = %d %s", w.Code, w.Body.String())
+	}
+	d.reread(t)
+	if !signInHeld(h.srv, h.run.ID) {
+		t.Fatal("a pause answered on another replica did not hold this replica's open noVNC app at its re-read")
+	}
+	send <- vmFBU // sent after the re-read: the viewer sees it, the recording does not
+	if next, err := readWSFrame(ds.br); err != nil || string(next) != string(vmFBU) {
+		t.Fatalf("after the re-read the browser got %q (err %v), want the FramebufferUpdate", next, err)
+	}
+	close(send)
+	_ = ds.conn.Close()
+	_, pb, kept := storedVMRecording(t, h)
+	if want := vmHandshake() + "\x02"; kept != want {
+		t.Errorf("recorded frames = %q, want the handshake and the Bell before the pause %q", kept, want)
 	}
 	if len(pb.Gaps) != 1 || pb.Gaps[0].Reason != desktopPauseSignin {
 		t.Errorf("playback gaps = %+v, want one %q gap", pb.Gaps, desktopPauseSignin)
