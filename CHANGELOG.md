@@ -33,6 +33,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - A desktop recording that stopped early, because the desktop sent a message the recorder could not follow, was saved
   as an ordinary success. Its save record now says how far in the recording ends, and wardynd logs a warning.
+- A desktop recording's audit chain check passed when the oldest rows of the audit log had been deleted and nothing
+  came before the recording's own rows. It now fails there, as the whole-log check does.
 
 ## [0.10.0-rc.2] — 2026-10-25
 

@@ -92,3 +92,27 @@ func TestPG_RecordingAuditRange(t *testing.T) {
 		t.Fatalf("the row before the range removed: %+v %v, want broken at the range's first row %d", rng, err, lo)
 	}
 }
+
+// TestPG_RecordingAuditRangeFirstRowRemoved: a range with no row before it starts at the log's oldest
+// retained row, which must chain to nothing (no retention drop): the oldest rows deleted leave the
+// range's first row carrying a prev_hash, and the range breaks there as the whole sweep does.
+func TestPG_RecordingAuditRangeFirstRowRemoved(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	run, other := uuid.New(), uuid.New()
+	t0 := time.Date(2026, 10, 20, 10, 40, 0, 0, time.UTC)
+	key := run.String() + "~desktop-" + uuid.NewString()
+
+	appendRunRow(t, pool, &other, t0.Add(-time.Second), "test.other", "")
+	lo := appendRunRow(t, pool, &run, t0.Add(time.Second), "ui.clipboard.transfer", "paste_in")
+	appendRunRow(t, pool, &run, t0.Add(2*time.Second), "desktop.recording.write", key)
+
+	if rng, found, err := pg.VerifyRecordingAuditRange(ctx, run, key, t0); err != nil || !found || !rng.OK {
+		t.Fatalf("intact: %+v found=%v err=%v, want ok", rng, found, err)
+	}
+	tamperAudit(t, pool, `DELETE FROM audit_events WHERE seq < $1`, lo)
+	if rng, found, err := pg.VerifyRecordingAuditRange(ctx, run, key, t0); err != nil || !found || rng.OK || rng.BrokenSeq != lo {
+		t.Fatalf("the log's oldest rows removed: %+v found=%v err=%v, want broken at the range's first row %d", rng, found, err, lo)
+	}
+}

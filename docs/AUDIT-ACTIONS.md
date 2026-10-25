@@ -40,6 +40,7 @@ CI enforces doc↔emit parity in both directions:
 - They are action-independent, and they ride the **audit-sink stream** (webhook/syslog/file) whenever the Postgres write that computes them succeeded, which is what puts a head hash in your SIEM.
 - An event spooled during a store outage streams *without* them and is not re-streamed when the spool drains ([OPERATIONS.md, "The audit log can't quietly rot"](OPERATIONS.md#the-audit-log-cant-quietly-rot)).
 - `GET /audit` and `GET /audit/export` do not select them, so they are absent there, and neither is filterable; the chain is checked through `GET /api/v1/audit/chain/verify`, not by reading rows back.
+- A recording's chain check (`GET /api/v1/runs/{id}/recording-chain`) walks the one chain, so its `broken_seq` and `reason` can name another run's row to a member. This is by design.
 - The sweep emits no audit action of its own — writing an integrity finding into the log the finding is *about* would record it in the one place already under suspicion.
 
 **Runner stream metadata.** Web terminal, SSH shell/exec/sftp/forward/sync, UI gateway,
