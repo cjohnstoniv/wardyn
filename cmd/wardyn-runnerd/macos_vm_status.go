@@ -175,6 +175,7 @@ func splitFailure(msg string) (failure, cause string) {
 	for _, p := range []struct{ prefix, failure string }{
 		{macvm.InstallFailurePrefix, runnerwire.MacVMFailureInstall},
 		{macvm.DownloadFailurePrefix, runnerwire.MacVMFailureDownload},
+		{macvm.NoDesktopFailurePrefix, runnerwire.MacVMFailureNoDesktop},
 	} {
 		if !strings.HasPrefix(msg, p.prefix) {
 			continue

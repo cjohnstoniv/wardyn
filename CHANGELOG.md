@@ -40,6 +40,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - A macOS VM's prepare now refuses a base that holds another local account than `wardyn-admin` and `agent`, and names
   the extra one, so an account made by hand during setup no longer ships in every VM cloned from the base.
+- `wardyn-runnerd macos-vm status --json` has a `failure` key when the base has one, and a setup by hand the helper
+  refused because it cannot reach the Mac's desktop (over SSH, under sudo, or with no one signed in) is
+  `no_desktop`, with the state `failed`; before, only the error text said so. A console that does not know the code
+  shows the error text as before.
 
 ### Fixed
 

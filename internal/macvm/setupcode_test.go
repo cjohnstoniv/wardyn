@@ -202,7 +202,7 @@ func TestSetupByHandWithoutAWindowStops(t *testing.T) {
 }
 
 // errNoDesktopOverSSH is what a Mac's window check says over SSH.
-var errNoDesktopOverSSH = fmt.Errorf("macvm: this process has no window-server session: %w", macvm.ErrNoDesktopSession)
+var errNoDesktopOverSSH = fmt.Errorf("this process has no window-server session: %w", macvm.ErrNoDesktopSession)
 
 // A prepare that will need setup by hand (no guest provisioning) and cannot show the guest's window, with no
 // desktop session or as root, stops at its check: no download, no boot, nothing written under the root.
@@ -224,6 +224,9 @@ func TestPrepareWithoutADesktopStopsAtItsCheck(t *testing.T) {
 			if !errors.Is(err, macvm.ErrNoDesktopSession) || !strings.Contains(err.Error(), tc.want) ||
 				!strings.Contains(err.Error(), "run prepare in Terminal on the Mac, signed in at its desktop, not over SSH") {
 				t.Fatalf("got %v, want the desktop refusal (%s)", err, tc.want)
+			}
+			if !strings.HasPrefix(err.Error(), macvm.NoDesktopFailurePrefix) {
+				t.Fatalf("got %q, want the %q failure prefix", err, macvm.NoDesktopFailurePrefix)
 			}
 			if f.srv.reqs.Load() != 0 || f.fb.Boots() != 0 || f.eng.Installs() != 0 {
 				t.Fatalf("downloaded %d, booted %d, installed %d", f.srv.reqs.Load(), f.fb.Boots(), f.eng.Installs())
@@ -265,8 +268,8 @@ func TestSetupByHandFallbackWithoutADesktopStopsAtOnce(t *testing.T) {
 	f.fb.NoScreen = errNoDesktopOverSSH
 	f.opts.SetupByHandWait = time.Hour // waiting it out would time the test out
 	_, err := macvm.Prepare(context.Background(), f.opts)
-	if !errors.Is(err, macvm.ErrNoDesktopSession) {
-		t.Fatalf("got %v, want the desktop refusal", err)
+	if !errors.Is(err, macvm.ErrNoDesktopSession) || !strings.HasPrefix(err.Error(), macvm.NoDesktopFailurePrefix) {
+		t.Fatalf("got %v, want the desktop refusal with the %q failure prefix", err, macvm.NoDesktopFailurePrefix)
 	}
 	if args := f.fb.Last(); f.fb.Boots() != 1 || args.Username != "wardyn-admin" {
 		t.Fatalf("first boot %d times as %q; want one provisioned boot", f.fb.Boots(), args.Username)
