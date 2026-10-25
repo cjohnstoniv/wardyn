@@ -69,7 +69,18 @@ func TestP13_RunnerRestart(t *testing.T) {
 	live(t)
 	id := start(t, spec{})
 	pid := helperStatus(t, id).HelperPID
+	before := runnerdPID(t)
+	if before == 0 {
+		t.Fatalf("launchd label %s has no running process: runnerd is not served under it (set WARDYN_MACVM_RUNNERD_LABEL)", assumedRunnerdLabel)
+	}
 	mustOK(t, sh(t, 2*time.Minute, "launchctl", "kickstart", "-k", fmt.Sprintf("gui/%d/%s", os.Getuid(), assumedRunnerdLabel)), "kickstart runnerd")
+	deadline := time.Now().Add(time.Minute)
+	for after := runnerdPID(t); after == 0 || after == before; after = runnerdPID(t) {
+		if time.Now().After(deadline) {
+			t.Fatalf("runnerd's pid is still %d (or none) a minute after the kick: it did not restart", after)
+		}
+		time.Sleep(time.Second)
+	}
 	time.Sleep(10 * time.Second)
 	stillWorks(t, id, pid)
 }

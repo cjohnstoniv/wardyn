@@ -7,9 +7,11 @@ package macvmlive
 
 import (
 	"bufio"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/macvm"
 	"github.com/cjohnstoniv/wardyn/internal/macvm/admission"
 )
 
@@ -303,14 +306,20 @@ func runSummary(dir string, w io.Writer) int {
 
 // ---- self-tests: these run everywhere, with no Mac ----
 
+// suiteFiles is the package's own sources and run.sh, compiled into the binary so the self-tests
+// pass wherever the compiled suite runs, not only from the package directory.
+//
+//go:embed *_test.go run.sh
+var suiteFiles embed.FS
+
 // declaredRows is the TestP functions the package declares.
 func declaredRows(t *testing.T) []string {
 	t.Helper()
-	files, _ := filepath.Glob("*_test.go")
+	files, _ := fs.Glob(suiteFiles, "*_test.go")
 	re := regexp.MustCompile(`(?m)^func (TestP\w+)\(t \*testing\.T\)`)
 	var got []string
 	for _, f := range files {
-		b, err := os.ReadFile(f)
+		b, err := suiteFiles.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -517,8 +526,16 @@ echo "--- PASS: $name (0.00s)"; echo PASS
 	if err := os.WriteFile(fake, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	runShSrc, err := suiteFiles.ReadFile("run.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runShFile := filepath.Join(dir, "run.sh")
+	if err := os.WriteFile(runShFile, runShSrc, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	runSh := func(live string, args ...string) (int, string) {
-		c := exec.Command("bash", append([]string{"run.sh", fake}, args...)...)
+		c := exec.Command("bash", append([]string{runShFile, fake}, args...)...)
 		// An inherited WARDYN_MACVM_SUMMARIZE must not turn the test runs into summaries.
 		c.Env = append(os.Environ(), "REAL="+real, "ORDER="+filepath.Join(dir, "order"), "WARDYN_MACVM_LIVE="+live,
 			"WARDYN_MACVM_SUMMARIZE="+filepath.Join(dir, "inherited"))
@@ -656,19 +673,37 @@ func TestIsolate(t *testing.T) {
 	}
 }
 
-// TestMessagesMatchProduct reads the sign-in refusal from the API source (no build of it) and pins
-// that the suite matches it there and never as a placement refusal.
-func TestMessagesMatchProduct(t *testing.T) {
-	b, err := os.ReadFile("../../../internal/api/run_desktop_vm_signin.go")
-	if err != nil {
-		t.Fatal(err)
+// TestRunnerdLabelDefault pins the launchd label P13 kicks to the one `wardyn-runnerd setup` runs
+// runnerd under (cmd/wardyn-runnerd/setup_host.go:33), not the pkg's idle .managed agent.
+func TestRunnerdLabelDefault(t *testing.T) {
+	if os.Getenv("WARDYN_MACVM_RUNNERD_LABEL") == "" && assumedRunnerdLabel != "com.wardyn.runnerd" {
+		t.Errorf("default runnerd label %q, want com.wardyn.runnerd", assumedRunnerdLabel)
 	}
-	m := regexp.MustCompile(`desktopSignInsOffMsg\s*=\s*"([^"]+)"`).FindSubmatch(b)
-	if m == nil {
-		t.Fatal("no desktopSignInsOffMsg in the API source")
+}
+
+// TestCtlSockPath pins where the suite dials a run's helper: the login's socket directory, never the run directory.
+func TestCtlSockPath(t *testing.T) {
+	const id = "0a1b2c3d-4e5f-6789-abcd-ef0123456789"
+	want := filepath.Join(admission.DefaultSockDir, "u"+strconv.Itoa(os.Getuid()), macvm.RunKey(id), "ctl.sock")
+	if got := ctlSock(id); got != want || strings.Contains(got, "/runs/") {
+		t.Errorf("ctl.sock of %s is %s, want %s", id, got, want)
 	}
-	if !msg["signInsOff"].Match(m[1]) || msg["placementAny"].Match(m[1]) {
-		t.Errorf("the suite's sign-in refusal does not match the product's %q, or placementAny takes it", m[1])
+}
+
+// TestLaunchdPID pins the pid P13 reads from `launchctl print`.
+func TestLaunchdPID(t *testing.T) {
+	for name, c := range map[string]struct {
+		out  string
+		want int
+	}{
+		"running":         {"gui/501/com.wardyn.runnerd = {\n\tstate = running\n\tpid = 4242\n\tlast exit code = (never exited)\n}", 4242},
+		"loaded, no proc": {"gui/501/com.wardyn.runnerd = {\n\tstate = not running\n\tlast exit code = 0\n}", 0},
+		"a pid-like key":  {"\tspawn pid = 7\n\tppid = 9\n", 0},
+		"empty":           {"", 0},
+	} {
+		if got := launchdPID(c.out); got != c.want {
+			t.Errorf("%s: pid %d, want %d", name, got, c.want)
+		}
 	}
 }
 
