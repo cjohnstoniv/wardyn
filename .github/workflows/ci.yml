@@ -40,7 +40,7 @@ concurrency:
 # maximum, with a ten-minute floor (docs/CI.md); raise it with the measurement.
 jobs:
   # ── which jobs a change can affect (#932) ─────────────────────────────────
-  # Classifies the changed paths once. Five outputs, each 'true' or 'false':
+  # Classifies the changed paths once. Six outputs, each 'true' or 'false':
   #   code    — something outside the docs changed. The docs are docs/**,
   #             threatmodel/** and the *.md files at the repository root, less
   #             LICENSING.md. A .md anywhere else is classed by its directory.
@@ -51,6 +51,7 @@ jobs:
   #             image compiles Go from this tree (`COPY . .`), so only a test
   #             file cannot change what trivy finds in one
   #   notices — images, or a UI dependency manifest, or THIRD-PARTY-NOTICES.md
+  #   macos   — a path the macOS VM helper, its guest agent or the macOS runner package builds from
   # Push, merge_group and train/* pull requests are always 'true': they run
   # everything. The rules fail closed: a path in no class counts as backend, so
   # a new directory runs every job until someone decides otherwise. The Go
@@ -92,6 +93,7 @@ jobs:
       ui: ${{ steps.classify.outputs.ui }}
       images: ${{ steps.classify.outputs.images }}
       notices: ${{ steps.classify.outputs.notices }}
+      macos: ${{ steps.classify.outputs.macos }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -108,14 +110,14 @@ jobs:
           set -euo pipefail
           if [ "$EVENT" != pull_request ] || [[ "$HEAD_REF" == train/* ]] || [[ "$BASE_REF" == release/* ]]; then
             echo "$EVENT${HEAD_REF:+ from $HEAD_REF}: running everything"
-            printf 'code=true\nbackend=true\nui=true\nimages=true\nnotices=true\n' >> "$GITHUB_OUTPUT"
+            printf 'code=true\nbackend=true\nui=true\nimages=true\nnotices=true\nmacos=true\n' >> "$GITHUB_OUTPUT"
             exit 0
           fi
           # An assignment, not `< <(git diff …)`: set -e ignores a failing
           # process substitution, which would read an unreadable diff as
           # "nothing changed" and skip everything.
           changed="$(git diff --name-only --no-renames HEAD^1 HEAD)"
-          code=false backend=false ui=false images=false notices=false
+          code=false backend=false ui=false images=false notices=false macos=false
           while IFS= read -r f; do
             [ -n "$f" ] || continue
             # Where a file lives decides its class before its extension does.
@@ -135,6 +137,9 @@ jobs:
             case "$f" in
               Makefile|.github/workflows/ci.yml) ui=true ;;
             esac
+            case "$f" in
+              internal/macvm/*|internal/vmnet/*|cmd/wardyn-macvm/*|internal/vm/guestagent/*|cmd/wardyn-guest-agent/*|cmd/wardyn-runnerd/*|test/conformance/macvm/*|deploy/runner/macos/*|scripts/build-runner-pkg.sh|scripts/check-macvm-selectors.sh|go.mod|go.sum|.github/workflows/ci.yml) macos=true ;;
+            esac
             if [ "$class" = backend ]; then
               case "$f" in *_test.go) ;; *) images=true ;; esac
             fi
@@ -144,8 +149,8 @@ jobs:
             echo "$class  $f"
           done <<< "$changed"
           if [ "$images" = true ]; then notices=true; fi
-          echo "code=$code backend=$backend ui=$ui images=$images notices=$notices"
-          printf 'code=%s\nbackend=%s\nui=%s\nimages=%s\nnotices=%s\n' "$code" "$backend" "$ui" "$images" "$notices" >> "$GITHUB_OUTPUT"
+          echo "code=$code backend=$backend ui=$ui images=$images notices=$notices macos=$macos"
+          printf 'code=%s\nbackend=%s\nui=%s\nimages=%s\nnotices=%s\nmacos=%s\n' "$code" "$backend" "$ui" "$images" "$notices" "$macos" >> "$GITHUB_OUTPUT"
 
   # ── image-scope: which of the ten trivy scans does this change need? ──────
   # `changes` sets images=true for any non-test backend path, which is nearly
@@ -555,7 +560,7 @@ jobs:
         if: >-
           needs.changes.outputs.code == 'true' && needs.changes.outputs.backend == 'true' &&
           needs.changes.outputs.ui == 'true' && needs.changes.outputs.images == 'true' &&
-          needs.changes.outputs.notices == 'true' &&
+          needs.changes.outputs.notices == 'true' && needs.changes.outputs.macos == 'true' &&
           needs.image-scope.outputs.wardynd == 'true' &&
           needs.image-scope.outputs.wardynd-fips == 'true' &&
           needs.image-scope.outputs.wardyn-proxy == 'true' &&
@@ -1719,6 +1724,221 @@ jobs:
         env:
           WARDYN_TEST_VM: '1'
         run: go test -tags vm -count=1 -timeout 25m -v ./test/vmconformance/
+
+  # ── macOS VM helper and guest agent on a hosted Mac (not a required check) ─────
+  # The Linux jobs cross-build the darwin runnerd with CGO_ENABLED=0 and cannot compile the cgo helper
+  # (Virtualization.framework) or run the darwin guest agent's tests. This job does, on macos-26. No VM boots
+  # on a hosted Mac (nested virtualization is unsupported), so the engine tests use the fake engine and the
+  # packaged suite skips; only the rented Mac proves a real guest.
+  #   - cgo build, vet and tests of the helper, its library and the guest agent, darwin-native tests included
+  #   - the darwin runnerd build
+  #   - the helper signed ad hoc with its one entitlement, read back with codesign
+  #   - the packaged live suite command, once test/conformance/macvm exists
+  # It runs when one of those paths changes (the `macos` output of `changes`) and always on push, merge_group,
+  # train/* and release/* pull requests. Not a required check and not in `gates`.
+  macos:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.macos != 'false' }}
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      CGO_ENABLED: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          go version
+      # Bounded retry of the module fetch only; go.sum verifies each module.
+      - run: for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done
+      # Each package on its own, and every later step runs after a failure: one run lists every darwin error.
+      - name: cgo build and vet
+        run: |
+          fail=0
+          pkgs=$(go list ./internal/macvm/... ./internal/vmnet/... ./cmd/wardyn-macvm/ ./internal/vm/guestagent/ ./cmd/wardyn-guest-agent/) || fail=1
+          [ -n "$pkgs" ] || fail=1
+          for p in $pkgs; do
+            go build -o /dev/null "$p" || fail=1
+            go vet "$p" || fail=1
+          done
+          exit "$fail"
+      - name: Tests
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          # The ledger walks every directory from / without following a link, and the runner's TMPDIR
+          # (/var/folders/...) goes through the /var link: test under /private/tmp, as user and as root.
+          export TMPDIR=/private/tmp
+          go test -count=1 -timeout 15m ./internal/macvm/... ./internal/vmnet/... ./cmd/wardyn-macvm/ ./cmd/wardyn-guest-agent/
+          # The lock-open refusal again as root, the installer's uid: its socket case is one root still hits.
+          go test -c -o "$RUNNER_TEMP/admission.test" ./internal/macvm/admission/
+          sudo env TMPDIR="$TMPDIR" "$RUNNER_TEMP/admission.test" -test.count=1 -test.v -test.run '^TestSetupLockOpenErrorFailsClosed$' | tee "$RUNNER_TEMP/admission-root.out"
+          grep -q -- '--- PASS: TestSetupLockOpenErrorFailsClosed/socket' "$RUNNER_TEMP/admission-root.out"
+          # -v: prove the darwin-native guest agent tests (server_darwin_test.go) ran, not just compiled.
+          go test -count=1 -timeout 10m -v ./internal/vm/guestagent/ | tee "$RUNNER_TEMP/guestagent.out"
+          grep -q -- '^--- PASS: TestDarwin' "$RUNNER_TEMP/guestagent.out"
+      - name: Live suite self-tests (its P-rows skip on a hosted Mac)
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          export TMPDIR=/private/tmp
+          go test -count=1 -tags macvm_live ./test/conformance/macvm/
+      - name: Build the darwin runnerd
+        if: ${{ !cancelled() }}
+        run: CGO_ENABLED=0 go build -tags docker -trimpath -o "$RUNNER_TEMP/wardyn-runnerd" ./cmd/wardyn-runnerd
+      - name: Sign the helper ad hoc with its entitlement and read it back
+        id: sign
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          helper="$RUNNER_TEMP/wardyn-macvm"
+          go build -trimpath -o "$helper" ./cmd/wardyn-macvm
+          codesign --force --sign - --entitlements deploy/runner/macos/wardyn-macvm.entitlements "$helper"
+          codesign --verify --strict "$helper"
+          info="$(codesign -dv "$helper" 2>&1)"
+          grep -q 'Signature=adhoc' <<<"$info"
+          codesign -d --entitlements :- "$helper" 2>/dev/null | plutil -convert json -o - - \
+            | jq -e '. == {"com.apple.security.virtualization": true}'
+          # The signed binary starts: a bad signature or a missing entitlement would not get this far.
+          "$helper" version
+          # Not a gate on support: a hosted Mac cannot run a macOS guest, so probe may exit 1 with its reason.
+          # It must still print JSON and report the Virtualization engine linked, and exit 0 or 1, not crash.
+          rc=0
+          "$helper" probe >"$RUNNER_TEMP/probe.json" || rc=$?
+          cat "$RUNNER_TEMP/probe.json"
+          echo "probe exit status: $rc"
+          [ "$rc" -le 1 ]
+          jq -e '.vz == true and (.host | type == "string")' "$RUNNER_TEMP/probe.json"
+      # The helper installs this into the guest and labels it with its own version; nothing at run time reads the
+      # agent's. Neither is stamped here, so both read the same checkout's commit from the build info.
+      - name: Build the guest agent, sign it ad hoc with no entitlement and read it back
+        id: agent
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          agent="$RUNNER_TEMP/wardyn-guest-agent"
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -o "$agent" ./cmd/wardyn-guest-agent
+          codesign --force --sign - "$agent"
+          codesign --verify --strict "$agent"
+          grep -q 'Signature=adhoc' <<<"$(codesign -dv "$agent" 2>&1)"
+          [ -z "$(codesign -d --entitlements :- "$agent" 2>/dev/null)" ]
+      # The real postinstall, and the signed helper's ledger-setup it runs, under the runner's passwordless
+      # sudo against a temp root, read back with BSD stat. %Mp%Lp, not %Lp alone: %Lp drops the sticky bit.
+      # The roots sit under /private/tmp, so every directory the helper walks from / is root-owned.
+      # It runs the signed helper as root: only once the sign step proved that helper.
+      - name: Package postinstall makes the admission ledger (real root, BSD tools)
+        if: ${{ !cancelled() && steps.sign.outcome == 'success' && steps.agent.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          post=deploy/runner/macos/pkg-scripts/postinstall
+          ledger() {
+            b="$1/Users/Shared/Wardyn"
+            [ "$(stat -f '%Su:%Sg %Mp%Lp %HT' "$b")" = 'root:wheel 0755 Directory' ]
+            [ "$(stat -f '%Su:%Sg %Mp%Lp %HT' "$b/admission.lock")" = 'root:wheel 0644 Regular File' ]
+            [ "$(stat -f '%Su:%Sg %Mp%Lp %HT' "$b/macos-vm-admission")" = 'root:wheel 1777 Directory' ]
+            [ "$(stat -f '%Su:%Sg %Mp%Lp %HT' "$b/sock")" = 'root:wheel 1777 Directory' ]
+          }
+          fresh() {
+            r="$(sudo mktemp -d /private/tmp/wardyn-pkgroot.XXXXXX)"
+            sudo chmod 0755 "$r"
+            sudo mkdir -p "$r/Users/Shared" "$r/usr/local/wardyn/bin"
+            sudo chmod 1777 "$r/Users/Shared"
+            sudo install -m 0755 "$RUNNER_TEMP/wardyn-macvm" "$r/usr/local/wardyn/bin/wardyn-macvm"
+            sudo install -m 0755 "$RUNNER_TEMP/wardyn-guest-agent" "$r/usr/local/wardyn/bin/wardyn-guest-agent"
+          }
+          fresh
+          sudo env WARDYN_PKG_ROOT="$r" sh "$post"
+          ledger "$r"
+          # The guest agent is where the helper reads it, executable and still validly signed after the install.
+          installed="$r/usr/local/wardyn/bin/wardyn-guest-agent"
+          [ -x "$installed" ]
+          codesign --verify --strict "$installed"
+          # The helper refuses an agent of another version, so the pair must carry the same stamp: the commit
+          # and ldflags in each binary's build info (not cgo, which differs on purpose). Empty would match vacuously.
+          stamp() { go version -m "$1" | grep -E '^[[:space:]]+build[[:space:]]+(-ldflags|vcs\.revision|vcs\.modified)=' || true; }
+          want="$(stamp "$r/usr/local/wardyn/bin/wardyn-macvm")"
+          grep -q 'vcs.revision=' <<<"$want"
+          [ "$(stamp "$installed")" = "$want" ]
+          # A second install changes nothing: the lock keeps its inode.
+          lock="$r/Users/Shared/Wardyn/admission.lock"
+          ino="$(stat -f %i "$lock")"
+          sudo env WARDYN_PKG_ROOT="$r" sh "$post"
+          ledger "$r"
+          [ "$(stat -f %i "$lock")" = "$ino" ]
+          # A 0444 lock (the old helper rule accepted it) is replaced by an exact one.
+          sudo chmod 0444 "$lock"
+          sudo env WARDYN_PKG_ROOT="$r" sh "$post"
+          ledger "$r"
+          [ "$(stat -f %i "$lock")" != "$ino" ]
+          # sock/ keeps a login's own u<uid> (0700) and moves anything else aside, such as a u<N> another uid made.
+          sock="$r/Users/Shared/Wardyn/sock"
+          own="$sock/u$(id -u)"
+          mkdir -m 0700 "$own"
+          mkdir -m 0700 "$sock/u4242"
+          own_ino="$(stat -f %i "$own")"
+          sudo env WARDYN_PKG_ROOT="$r" sh "$post"
+          ledger "$r"
+          [ "$(stat -f %i "$own")" = "$own_ino" ]
+          [ "$(ls -A "$sock")" = "u$(id -u)" ]
+          # A login's own Wardyn directory, with a link at macos-vm-admission: replaced, and the target untouched.
+          fresh
+          b="$r/Users/Shared/Wardyn"
+          mkdir -m 0777 "$b" "$RUNNER_TEMP/victim"
+          chmod 0700 "$RUNNER_TEMP/victim"
+          ln -s "$RUNNER_TEMP/victim" "$b/macos-vm-admission"
+          before="$(stat -f '%Su:%Sg %Mp%Lp' "$RUNNER_TEMP/victim")"
+          sudo env WARDYN_PKG_ROOT="$r" sh "$post"
+          ledger "$r"
+          [ "$(stat -f '%Su:%Sg %Mp%Lp' "$RUNNER_TEMP/victim")" = "$before" ]
+          [ -z "$(ls -A "$RUNNER_TEMP/victim")" ]
+          sudo ls -la "$r/Users/Shared"
+          sudo sh -c 'ls -d "$1"/.wardyn-quarantine.*/Wardyn' _ "$r/Users/Shared"
+      - name: Packaged live suite (it skips, since no VM boots on a hosted Mac)
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          if [ ! -d test/conformance/macvm ]; then
+            echo "::notice::test/conformance/macvm does not exist on this tree yet, so the packaged suite command was not run"
+            exit 0
+          fi
+          go test -c -tags macvm_live -o "$RUNNER_TEMP/macvm_live.test" ./test/conformance/macvm
+          # Go's own test2json converts the raw output; the testing package has no -test.json flag.
+          rc=0
+          # From /, as an operator on the rented Mac would run it: the suite must not lean on the checkout.
+          (cd / && "$RUNNER_TEMP/macvm_live.test" -test.v=test2json) >"$RUNNER_TEMP/suite.raw" 2>"$RUNNER_TEMP/suite.err" || rc=$?
+          cat "$RUNNER_TEMP/suite.err"
+          # On a failure, show which test failed: its output is in suite.raw, not on the console.
+          [ "$rc" -eq 0 ] || { tail -n 200 "$RUNNER_TEMP/suite.raw"; echo "::error::the packaged suite exited $rc"; exit 1; }
+          go tool test2json <"$RUNNER_TEMP/suite.raw" >"$RUNNER_TEMP/suite.json"
+          jq -es 'length > 0' "$RUNNER_TEMP/suite.json"
+
+  # The macOS 27 SDK check for provision_darwin.m's run-time lookups (scripts/check-macvm-selectors.sh):
+  # every class and selector it names must be declared in the Virtualization headers of a macOS 27 SDK.
+  # `xcode-27` is a public-preview image, so this is its own job: a preview-image outage must not turn the
+  # macos job red. Informational: continue-on-error keeps a red here out of the run's conclusion, so it is
+  # never release evidence (green-by-tree reads that conclusion). Not a required check.
+  macos-xcode-27:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.macos != 'false' }}
+    runs-on: xcode-27
+    continue-on-error: true
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: The SDK is macOS 27 or later
+        run: |
+          ver="$(xcrun --sdk macosx --show-sdk-version)"
+          echo "macOS SDK $ver"
+          [ "${ver%%.*}" -ge 27 ]
+      - name: Selector check against the SDK headers
+        run: |
+          scripts/check-macvm-selectors.sh --selftest
+          scripts/check-macvm-selectors.sh --sdk
 
   # ── Postgres-backed invariant proofs (approval-mint + audit invariants) ───
   # Runs the WARDYN_TEST_PG-gated suite (store/db/secretstore/broker/api +

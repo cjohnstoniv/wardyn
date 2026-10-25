@@ -48,6 +48,16 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   same way (containment is still tried on every pass), and on macOS writes `~/Library/Logs/wardyn/runnerd.log` itself, rotated
   at 10 MiB with three older files kept (a crash goes to `runnerd.crash.log`); `wardyn runner upgrade` rewrites the LaunchAgent to pass `--log-file`.
 
+### Added
+
+- macOS virtual machines (preview, off by default). A Mac on macOS 27 or later can run up to two macOS VM sandboxes,
+  installed on that Mac from Apple's own restore image. Wardyn does not ship macOS. Turn it on with `WARDYN_MACOS_VMS`
+  in the organisation and, on the Mac, `WARDYN_RUNNER_MACOS_VM=1`, the managed preference `MacOSVM` or
+  `wardyn-runnerd setup --macos-vm on`. `wardyn-runnerd macos-vm prepare`, `status` (`--json` for one JSON object) and
+  `remove` build, show and delete the Mac's macOS base; `prepare --new-image` builds a new one from Apple's newest
+  restore image. The runner offers macOS VMs only when its helper's `wardyn-macvm probe` passes, offers as many as the
+  Mac's shared ledger and memory leave room for, and ends its newest one when the disk drops below 5 GiB free.
+
 ### Fixed
 
 - The image launcher split each `WARDYN_REPOS` clone record with a tab as whitespace, so an empty field moved the

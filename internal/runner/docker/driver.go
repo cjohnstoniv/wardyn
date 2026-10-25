@@ -243,6 +243,7 @@ type Driver struct {
 	// ref to its *vmRun; notVMs holds the refs found to be containers, until their teardown;
 	// vmDial, a test hook, replaces the unix dial to a VM's sockets.
 	vmCfg  atomic.Pointer[VMConfig]
+	macCfg atomic.Pointer[MacVMConfig] // EnableMacVM: macOS VM sandboxes, whose refs vms holds too
 	vms    sync.Map
 	notVMs sync.Map
 	vmDial func(ctx context.Context, path string) (net.Conn, error)

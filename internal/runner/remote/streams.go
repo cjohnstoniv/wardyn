@@ -13,6 +13,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // pin is the session a new stream is opened, claimed and controlled on (Link.pinSession). A transport that
@@ -72,12 +73,40 @@ func (s *Substrate) agentPauseCall(ctx context.Context, method, ref string, gen 
 	if err := s.own(ref); err != nil {
 		return false, err
 	}
-	if c, ok := s.Caps(); !ok || c.LinuxVM == nil || !c.LinuxVM.SignIns {
+	if c, ok := s.Caps(); !ok || !offersSignIns(c, s.vmKind(ref)) {
 		return false, runner.ErrAgentPauseUnsupported
 	}
 	var res runnerwire.AgentPauseResult
 	err := s.call(ctx, method, runnerwire.AgentPauseArgs{Ref: ref, Generation: gen}, &res)
 	return res.FencedPause, err
+}
+
+// offersSignIns says the runner pauses the agent of a VM of kind k for a desktop sign-in: a Linux VM's
+// by its Linux caps, a macOS VM's by its macOS caps. A ref of no known kind (created before this
+// process started) takes either; the runner matches the ref with its VM.
+func offersSignIns(c runnerwire.Caps, k types.MachineKind) bool {
+	linux := c.LinuxVM != nil && c.LinuxVM.SignIns
+	mac := c.MacOSVM != nil && c.MacOSVM.SignIns
+	return byKind(k, linux, mac)
+}
+
+// offersDesktop says the runner opens the display of a VM of kind k: a Linux VM's by its Linux caps, a
+// macOS VM's only when its Mac's Screen Sharing can be controlled (observe-only or absent offers none).
+func offersDesktop(c runnerwire.Caps, k types.MachineKind) bool {
+	linux := c.LinuxVM != nil && c.LinuxVM.Desktop
+	mac := c.MacOSVM != nil && c.MacOSVM.Desktop == runnerwire.MacVMDesktopControl
+	return byKind(k, linux, mac)
+}
+
+// byKind picks the cap of k's kind; a ref of no known kind takes either.
+func byKind(k types.MachineKind, linux, mac bool) bool {
+	switch k {
+	case types.MachineLinuxVM:
+		return linux
+	case types.MachineMacOSVM:
+		return mac
+	}
+	return linux || mac
 }
 
 // DialDesktop opens a VM sandbox's display on the runner (runner.DesktopDialer). A runner whose caps do
@@ -86,7 +115,7 @@ func (s *Substrate) DialDesktop(ctx context.Context, ref string) (io.ReadWriteCl
 	if err := s.own(ref); err != nil {
 		return nil, err
 	}
-	if c, ok := s.Caps(); !ok || c.LinuxVM == nil || !c.LinuxVM.Desktop {
+	if c, ok := s.Caps(); !ok || !offersDesktop(c, s.vmKind(ref)) {
 		return nil, runner.ErrDesktopUnsupported
 	}
 	sess, err := s.pin()

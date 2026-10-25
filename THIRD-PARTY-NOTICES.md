@@ -8,12 +8,14 @@ The licence cell is go-licenses' single-id classification of each module's LICEN
 
 ## Go modules (compiled into the shipped binaries)
 
-Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
+Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`, and from `./cmd/wardyn-macvm` built for darwin/arm64 with cgo (the macOS VM helper).
 
 | module | licence | source |
 |---|---|---|
 | `filippo.io/age` | BSD-3-Clause | https://github.com/FiloSottile/age/blob/v1.3.2/LICENSE |
 | `filippo.io/hpke` | BSD-3-Clause | https://github.com/FiloSottile/hpke/blob/v0.4.0/LICENSE |
+| `github.com/Code-Hex/go-infinity-channel` | MIT | https://github.com/Code-Hex/go-infinity-channel/blob/v1.0.0/LICENSE |
+| `github.com/Code-Hex/vz/v3` | MIT | https://github.com/Code-Hex/vz/blob/v3.8.0/LICENSE |
 | `github.com/asaskevich/govalidator` | MIT | https://github.com/asaskevich/govalidator/blob/a9d515a09cc2/LICENSE |
 | `github.com/aws/aws-sdk-go-v2` | Apache-2.0 | https://github.com/aws/aws-sdk-go-v2/blob/v1.47.3/LICENSE.txt |
 | `github.com/aws/aws-sdk-go-v2/config` | Apache-2.0 | https://github.com/aws/aws-sdk-go-v2/blob/config/v1.33.9/config/LICENSE.txt |

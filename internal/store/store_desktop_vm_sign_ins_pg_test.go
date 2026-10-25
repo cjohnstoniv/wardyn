@@ -1,7 +1,7 @@
 // Copyright 2026 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Sign-ins in a VM's desktop (migrations 0230 and 0231) against a real Postgres. Guarded by WARDYN_TEST_PG.
+// Sign-ins in a VM's desktop (migrations 0230, 0231 and 0234) against a real Postgres. Guarded by WARDYN_TEST_PG.
 package store_test
 
 import (
@@ -91,6 +91,25 @@ func TestPG_DesktopVMSignIns(t *testing.T) {
 		t.Fatalf("pause on a store that keeps none = %v %v, want nothing changed", ok, err)
 	}
 	if err := st.RecordDesktopVMSignIns(ctx, none.ID, "disk"); err == nil {
-		t.Fatal("a store other than memory or none was recorded")
+		t.Fatal("a store other than memory, run_disk or none was recorded")
+	}
+
+	// A macOS VM keeps its sign-ins on the run's disk: its row is recorded and its agent paused.
+	mac, err := st.CreateRun(ctx, newRun(types.RunRunning))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RecordDesktopVMSignIns(ctx, mac.ID, "run_disk"); err != nil {
+		t.Fatalf("record run_disk: %v", err)
+	}
+	gen, err := st.NextDesktopVMPauseGeneration(ctx, mac.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := st.PauseDesktopVMAgent(ctx, mac.ID, "alice", at, gen); err != nil || !ok {
+		t.Fatalf("pause on a run_disk store = %v %v, want marked", ok, err)
+	}
+	if row, _, err := st.DesktopVMSignIns(ctx, mac.ID); err != nil || row.Store != "run_disk" || row.PausedBy != "alice" {
+		t.Fatalf("run_disk row = %+v %v", row, err)
 	}
 }

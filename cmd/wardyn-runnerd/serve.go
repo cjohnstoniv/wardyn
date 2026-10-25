@@ -60,6 +60,8 @@ type serveOptions struct {
 	driveRoots []string
 	// localModelPorts is --local-model-port (parseLocalModelPorts): the laptop local model ports the person allows.
 	localModelPorts string
+	// macOSVM is the macos_vm setting: macOS VM sandboxes on a Mac (off by default).
+	macOSVM bool
 }
 
 func (o serveOptions) recordingEnabled() (bool, error) {
@@ -253,4 +255,5 @@ func (c runnerConfig) applyTo(org, stateDir *string, o *serveOptions) {
 	o.relayListen, o.relayHostTarget, o.network = c.get("relay_listen"), c.get("relay_host_target"), c.get("internal_network")
 	o.trustedCAFile, o.upstreamProxy, o.recording = c.get("trusted_ca_file"), c.get("upstream_proxy"), c.get("recording_store")
 	o.orgCAFile, o.localModelPorts = c.get("org_ca_file"), c.get("local_model_port")
+	o.macOSVM = macOSVMOn(c.get("macos_vm"))
 }

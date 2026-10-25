@@ -46,7 +46,11 @@ func (s PG) StageRunnerExit(ctx context.Context, runnerID, runID uuid.UUID, exit
 	if err != nil {
 		return err
 	}
-	if current.RunnerID != runnerID || current.Generation != exit.Generation || run.SandboxRef != exit.Ref {
+	// A finalize clears a terminal run's ref, and the runner's exit for the same generation can land
+	// after it: with no ref left, the generation is the binding. Refused, the exit is never
+	// acknowledged and is replayed on every reconnect, so no session of the runner would last.
+	refCleared := run.State.IsTerminal() && run.SandboxRef == ""
+	if current.RunnerID != runnerID || current.Generation != exit.Generation || (run.SandboxRef != exit.Ref && !refCleared) {
 		return ErrRunnerExecutionRefused
 	}
 	// The org already settled this run (terminal, or ended at its lease): the

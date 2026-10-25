@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 )
 
 // PortName is the virtio-serial port the agent serves; in the guest it is /dev/virtio-ports/PortName.
@@ -55,12 +56,47 @@ type Init struct {
 	Files      []File            `json:"files,omitempty"`
 	Mounts     []Mount           `json:"mounts,omitempty"`
 	SignInsOff bool              `json:"sign_ins_off,omitempty"`
+	// DesktopPassword is a macOS run's VNC password, which the host's helper made (its ctl.sock
+	// desktop_password read); the guest agent sets it in Screen Sharing. A secret: Init prints with it
+	// and SecretEnv's values redacted. A Linux guest ignores it.
+	DesktopPassword string `json:"desktop_password,omitempty"`
 }
+
+// initPrint is Init without its String method, so printing it does not recurse.
+type initPrint Init
+
+// redacted is in with its secrets replaced, for printing.
+func (in Init) redacted() initPrint {
+	p := initPrint(in)
+	if p.DesktopPassword != "" {
+		p.DesktopPassword = "[redacted]"
+	}
+	if len(p.SecretEnv) > 0 {
+		p.SecretEnv = make(map[string]string, len(in.SecretEnv))
+		for k := range in.SecretEnv {
+			p.SecretEnv[k] = "[redacted]"
+		}
+	}
+	return p
+}
+
+// String, GoString and LogValue print Init with its secrets redacted, so a debug print or a %v in a log line
+// never carries them. The wire form (JSON) is unchanged.
+func (in Init) String() string   { return fmt.Sprintf("%+v", in.redacted()) }
+func (in Init) GoString() string { return fmt.Sprintf("%#v", in.redacted()) }
+
+// LogValue is the same for slog, whose JSON handler would otherwise marshal the secrets.
+func (in Init) LogValue() slog.Value { return slog.StringValue(in.String()) }
 
 // InitResult is POST /v1/init's answer. SignIns says what the agent made of the sign-in store:
 // SignInsMemory, SignInsNone, or empty from an agent that has no store (an older one answers {}).
 type InitResult struct {
 	SignIns string `json:"sign_ins,omitempty"`
+	// DesktopPasswordSet is a macOS guest's answer to Init.DesktopPassword: true once Screen Sharing
+	// holds it, false when it could not be set (or none was sent, or the run has no desktop), and
+	// absent from a Linux guest or an agent that predates it. The helper's shim then fails to log in
+	// and refuses each session with a log line.
+	DesktopPasswordSet *bool `json:"desktop_password_set,omitempty"`
 }
 
 // AgentSignal is the body of POST /v1/agent/pause and /v1/agent/resume. Generation orders them
@@ -90,6 +126,9 @@ const (
 	SignInsMemory = "memory"
 	// SignInsNone: each path is an empty read-only tmpfs, so nothing signed in is kept there.
 	SignInsNone = "none"
+	// SignInsRunDisk: a macOS guest keeps its keychain and browser profiles on the run's own disk,
+	// which goes with the run's clone. It is not secure erasure.
+	SignInsRunDisk = "run_disk"
 )
 
 // SignInPaths are the sign-in store's paths under AgentHome: the Secret Service keyrings (GNOME

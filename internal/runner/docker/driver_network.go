@@ -31,6 +31,9 @@ import (
 //
 //nolint:funlen // Deliberate: one linear container-assembly sequence whose teardown-on-failure compensations must stay in one scope; low branching, just long.
 func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (runner.Sandbox, error) {
+	if spec.MachineKind.IsMacOSVM() {
+		return d.createMacVM(ctx, spec)
+	}
 	if spec.MachineKind.Normalize() != "" {
 		return d.createVM(ctx, spec)
 	}

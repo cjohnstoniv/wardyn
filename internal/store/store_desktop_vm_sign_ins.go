@@ -18,7 +18,7 @@ import (
 // generation the run's latest pause or stop again took (migration 0231; 0 before its first), which
 // each stop and continue carries to the guest so it drops one out of order.
 type DesktopVMSignIns struct {
-	Store           string // "memory" or "none"
+	Store           string // "memory", "run_disk" (a macOS VM) or "none"
 	PausedBy        string
 	PausedAt        *time.Time
 	PauseGeneration int64
@@ -40,8 +40,9 @@ type DesktopVMSignInStore interface {
 	DesktopVMSignIns(ctx context.Context, runID uuid.UUID) (row DesktopVMSignIns, found bool, err error)
 	// NextDesktopVMPauseGeneration takes the run's next pause generation and answers it; the first is 1.
 	NextDesktopVMPauseGeneration(ctx context.Context, runID uuid.UUID) (int64, error)
-	// PauseDesktopVMAgent marks the agent paused by who at at, on a 'memory' run not already paused
-	// whose generation is still gen; false when nothing changed.
+	// PauseDesktopVMAgent marks the agent paused by who at at, on a run whose store keeps sign-ins
+	// ('memory' or 'run_disk'), not already paused, whose generation is still gen; false when nothing
+	// changed.
 	PauseDesktopVMAgent(ctx context.Context, runID uuid.UUID, by string, at time.Time, gen int64) (bool, error)
 	// ResumeDesktopVMAgent clears the mark of the pause at pausedAt and answers what it was; found is
 	// false when the agent was not marked paused at pausedAt with generation gen, so only one resume of
@@ -93,7 +94,7 @@ func (s PG) NextDesktopVMPauseGeneration(ctx context.Context, runID uuid.UUID) (
 // PauseDesktopVMAgent — see DesktopVMSignInStore.
 func (s PG) PauseDesktopVMAgent(ctx context.Context, runID uuid.UUID, by string, at time.Time, gen int64) (bool, error) {
 	tag, err := s.Pool.Exec(ctx, `UPDATE desktop_vm_sign_ins SET paused_by = $2, paused_at = $3
-		WHERE run_id = $1 AND store = 'memory' AND paused_at IS NULL AND pause_generation = $4`, runID, by, at, gen)
+		WHERE run_id = $1 AND store IN ('memory', 'run_disk') AND paused_at IS NULL AND pause_generation = $4`, runID, by, at, gen)
 	if err != nil {
 		return false, fmt.Errorf("store: pause desktop VM agent: %w", err)
 	}
