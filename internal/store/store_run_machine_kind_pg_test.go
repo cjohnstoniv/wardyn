@@ -86,6 +86,11 @@ func TestPG_MacOSVMKindAndHolders(t *testing.T) {
 	if err != nil || len(held) != 2 || held[mac.ID] != 2 || held[other.ID] != 1 {
 		t.Fatalf("holders = %v (%v), want 2 on the Mac, 1 on the other and nothing for an unknown runner", held, err)
 	}
+	// RunnerUsage counts the same macos_vm runs among each runner's slot-holders, in its one query.
+	used, err := pg.RunnerUsage(ctx, []uuid.UUID{mac.ID, other.ID}, nil, uuid.Nil)
+	if err != nil || used[mac.ID.String()].Runs != 4 || used[mac.ID.String()].MacOSVMRuns != held[mac.ID] || used[other.ID.String()].MacOSVMRuns != held[other.ID] {
+		t.Fatalf("usage = %+v (%v), want 4 runs on the Mac, 2 of them macOS VMs, and 1 on the other", used, err)
+	}
 
 	m := types.VMMachine{MachineType: types.MacVMMachineType, Accelerator: types.MacVMAccelerator, GuestOS: "macOS 27.0.1 (26A434)", HostOS: "macOS 27.0 (26A400)"}
 	if err := pg.SetRunVMMachine(ctx, first.ID, m); err != nil {

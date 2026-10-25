@@ -298,6 +298,39 @@ export interface RunnerPoolCatalogueEntry extends RunnerPoolChoice {
   state?: RunnerPoolState;
   revision?: number;
   pool_limits?: RunnerPoolLimits;
+  /** What the pool's runners offer a macOS VM run now; absent on a manage-only row and while macOS VMs are switched off. */
+  macos_vm?: PoolMacOSVM;
+}
+
+/**
+ * Go: client.PoolMacOSVM. `offered` only when every eligible runner offers a macOS VM; then the guest build
+ * they all hold (absent when they differ), the largest minimum and the harnesses every base serves. `runner`
+ * names the runner when the pool has exactly one; `refusals` names each runner that cannot take one now.
+ */
+export interface PoolMacOSVM {
+  offered: boolean;
+  guest_os?: string;
+  min_cpus?: number;
+  min_memory_mib?: number;
+  harnesses?: string[];
+  runner?: string;
+  refusals?: PoolMacOSVMRefusal[];
+}
+
+/** Go: client.MacOSVMWhy*. */
+export type PoolMacOSVMWhy = "not_offered" | "preparing" | "at_limit" | "no_room" | "not_managed" | "no_posture" | "no_base";
+
+/**
+ * Go: client.PoolMacOSVMRefusal. `progress` is set for preparing, `error` for no_base when the runner said one,
+ * `runner_id` on not_managed for a security operator only; `detail` is the org's sentence.
+ */
+export interface PoolMacOSVMRefusal {
+  runner: string;
+  runner_id?: string;
+  why: PoolMacOSVMWhy;
+  progress?: number;
+  error?: string;
+  detail: string;
 }
 
 /**

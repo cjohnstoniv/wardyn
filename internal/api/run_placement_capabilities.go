@@ -387,6 +387,8 @@ type macOSOffer struct {
 	Max       int
 	Harnesses []string
 	Desktop   string
+	// Why is the refusal's client.MacOSVMWhy* code, for the pool list; "" when Offered.
+	Why string
 	// Evidence is what the managed-Mac gate rested on, for the run page's "Where it ran".
 	Evidence []string
 }
@@ -405,32 +407,35 @@ func macOSRefusal(field, detail string) *placement.Refusal {
 func macOSVMOffer(rn types.Runner, caps runnerwire.Caps, haveCaps bool, live int, operator bool) macOSOffer {
 	mc := caps.MacOSVM
 	if !haveCaps || mc == nil {
-		return macOSOffer{Refusal: macOSRefusal("machine_kind", remote.MacOSVMNotOffered)}
+		return macOSOffer{Refusal: macOSRefusal("machine_kind", remote.MacOSVMNotOffered), Why: client.MacOSVMWhyNotOffered}
 	}
 	out := macOSOffer{Max: mc.Max, Harnesses: mc.Harnesses, Desktop: mc.Desktop}
 	if mc.Refusal != "" {
-		out.Refusal = macOSRefusal("machine_kind", mc.Refusal)
+		out.Refusal, out.Why = macOSRefusal("machine_kind", mc.Refusal), client.MacOSVMWhyNotOffered
 		return out
 	}
 	evidence, refusal := macOSHostGate(rn, operator)
 	if refusal != nil {
-		out.Refusal = refusal
+		out.Refusal, out.Why = refusal, client.MacOSVMWhyNotManaged
+		if refusal.Reason == placement.ReasonRunnerPostureUnmet {
+			out.Why = client.MacOSVMWhyNoPosture
+		}
 		return out
 	}
 	out.Evidence = evidence
 	switch {
 	case mc.Base.State == runnerwire.MacVMBasePreparing:
-		out.Refusal = macOSRefusal("machine_kind", fmt.Sprintf("This Mac is still preparing macOS (%d%%).", mc.Base.Progress))
+		out.Refusal, out.Why = macOSRefusal("machine_kind", fmt.Sprintf("This Mac is still preparing macOS (%d%%).", mc.Base.Progress)), client.MacOSVMWhyPreparing
 	case mc.Base.State != runnerwire.MacVMBaseReady:
 		detail := "This Mac has no macOS base image ready."
 		if mc.Base.Error != "" {
 			detail += " " + mc.Base.Error
 		}
-		out.Refusal = macOSRefusal("machine_kind", detail)
+		out.Refusal, out.Why = macOSRefusal("machine_kind", detail), client.MacOSVMWhyNoBase
 	case live >= mc.Max && mc.Max >= 2:
-		out.Refusal = macOSRefusal("machine_kind", "This Mac already runs 2 macOS VMs, the most Apple's licence allows.")
+		out.Refusal, out.Why = macOSRefusal("machine_kind", "This Mac already runs 2 macOS VMs, the most Apple's licence allows."), client.MacOSVMWhyAtLimit
 	case live >= mc.Max:
-		out.Refusal = macOSRefusal("machine_kind", "This Mac has no room for another macOS VM right now.")
+		out.Refusal, out.Why = macOSRefusal("machine_kind", "This Mac has no room for another macOS VM right now."), client.MacOSVMWhyNoRoom
 	}
 	out.Offered = out.Refusal == nil
 	return out
