@@ -291,8 +291,8 @@ func TestStepPlacementCapability_MacOSVMAskIsTheRunsOwn(t *testing.T) {
 	}{
 		{"agent served, size fits", "claude-code", nil, applied(4000, 8192), ""},
 		{"harness set served", "", []types.RunHarness{{Harness: "claude-code", Starts: true}, {Harness: "none"}}, applied(4000, 8192), ""},
-		{"agent not served", "codex-cli", nil, applied(4000, 8192), "can't run codex-cli"},
-		{"one harness of a set not served", "claude-code", []types.RunHarness{{Harness: "claude-code"}, {Harness: "codex-cli"}}, applied(4000, 8192), "can't run codex-cli"},
+		{"agent not served", "codex-cli", nil, applied(4000, 8192), "can't run Codex CLI"},
+		{"one harness of a set not served", "claude-code", []types.RunHarness{{Harness: "claude-code"}, {Harness: "codex-cli"}}, applied(4000, 8192), "can't run Codex CLI"},
 		{"applied memory under the minimum", "claude-code", nil, applied(4000, 2048), "Per-run memory"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
