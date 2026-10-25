@@ -54,9 +54,11 @@ const (
 	macOSVMDiskFloor = 5 << 30
 )
 
-// macOSVMLedgerDamaged is the refusal the runner's caps carry when its ledger is missing or damaged.
-// Every other reason it offers no macOS VM (no helper, a failed probe) stays on this Mac, in the log and
-// in `macos-vm status`, and the caps carry no refusal of their own.
+// macOSVMLedgerDamaged is the refusal the runner's caps carry, in words, when its ledger is missing or
+// damaged. Every reason it offers no macOS VM, or can't start or prepare one now, also goes to its own
+// organisation as a code with numbers (MacVMCaps.Reason and NoSession; MacVMBase.Step, Wait, Failure).
+// Nothing sent names a person or an account; the base's error goes with this login's home as ~ and the
+// uid in a socket path as <uid>. The full text, with paths, stays on this Mac, in the log and prepare.log.
 const macOSVMLedgerDamaged = "This Mac's macOS VM ledger is missing or damaged. Reinstall the Wardyn runner package."
 
 // macOSVMIdentity is the machine-identifier strategy every macOS VM run uses.
@@ -75,6 +77,12 @@ type macOSVMs struct {
 	// refusal, when set, is the refusal the caps carry; why, when set, is why this runner offers no macOS
 	// VM at all (either one turns them off).
 	refusal, why string
+	// reason, hostOSVersion and hostReason are the codes for why this runner offers no macOS VM at all
+	// (MacVMCaps.Reason, HostOSVersion, HostReason); noSession and thermal are the session check's and
+	// the probe's last answers (macos_vm_status.go). thermal is under mu; ticks counts run's ticks.
+	reason, hostOSVersion, hostReason, thermal string
+	noSession                                  bool
+	ticks                                      int
 	// helper is the wardyn-macvm beside this runner.
 	helper string
 	// perRunMemory is the runner's per-run memory limit in bytes, which every guest gets, and perRunCPUs
@@ -134,7 +142,7 @@ func openMacOSVMs(s macOSVMSetup) *macOSVMs {
 	}
 	if err := os.MkdirAll(s.root, 0o700); err != nil {
 		slog.Warn("macOS VM sandboxes are off on this runner: no VM directory", "error", err.Error())
-		m.refusal = macOSVMLedgerDamaged
+		m.refusal, m.reason = macOSVMLedgerDamaged, runnerwire.MacVMReasonLedgerDamaged
 		return m
 	}
 	l, err := admission.Open(admission.Config{Dir: s.ledgerDir, UID: s.uid, RunnerID: s.runnerID, Host: s.host,
@@ -147,7 +155,7 @@ func openMacOSVMs(s macOSVMSetup) *macOSVMs {
 		}})
 	if err != nil {
 		slog.Warn("macOS VM sandboxes are off on this runner: the ledger is missing or damaged", "error", err.Error())
-		m.refusal = macOSVMLedgerDamaged
+		m.refusal, m.reason = macOSVMLedgerDamaged, runnerwire.MacVMReasonLedgerDamaged
 		return m
 	}
 	m.ledger = l
@@ -189,6 +197,7 @@ func (m *macOSVMs) run(ctx context.Context, resend func()) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			m.tick(ctx)
 		case <-m.kick:
 		}
 		if m.recompute() {
@@ -265,8 +274,10 @@ func (m *macOSVMs) recompute() bool {
 // has it.
 func (m *macOSVMs) build(last *runnerwire.MacVMCaps) runnerwire.MacVMCaps {
 	c := runnerwire.MacVMCaps{SignIns: true, Base: runnerwire.MacVMBase{State: runnerwire.MacVMBaseNone}}
+	reason, hostOS, hostReason, thermal, noSession := m.hostStatus()
+	c.NoSession = noSession
 	if m.ledger == nil {
-		c.Refusal = m.refusal
+		c.Refusal, c.Reason, c.HostOSVersion, c.HostReason = m.refusal, reason, hostOS, hostReason
 		return c
 	}
 	if _, err := m.ledger.Sweep(); err != nil {
@@ -282,17 +293,19 @@ func (m *macOSVMs) build(last *runnerwire.MacVMCaps) runnerwire.MacVMCaps {
 	man, base := m.base()
 	c.Base = base
 	if base.State != runnerwire.MacVMBaseReady {
+		m.reasonDiskShort(&c)
 		return c
 	}
 	c.MinCPUs, c.MinMemoryMiB = man.MinCPUs, int(man.MinMemoryMiB)
 	c.Harnesses, c.Desktop = slices.Clone(man.Harnesses), man.Desktop
 	m.checkAgent(man)
-	if why, refusal := m.belowMinimum(man); why != "" {
+	if why, refusal, belowReason := m.belowMinimum(man); why != "" {
 		// design 3.10: a per-run limit below the base's minimum offers none and names the flag to raise.
 		slog.Warn("macOS VM sandboxes: this runner offers none", "reason", why)
-		c.Refusal = refusal
+		c.Refusal, c.Reason = refusal, belowReason
 		return c
 	}
+	m.reasonsWhenReady(&c, man, thermal)
 	off, err := m.ledger.Offer(m.guestMemory(man), admission.RunDiskReservation(cmp.Or(man.DiskBytes, macvm.BaseDiskBytes)))
 	switch {
 	case err == nil:
@@ -321,7 +334,7 @@ const (
 
 // belowMinimum is why a per-run limit the organisation sent is below the base's minimum, naming the flag
 // to raise, for this Mac's log, and the caps' refusal (design 6, "Guest size below minimum"), else "".
-func (m *macOSVMs) belowMinimum(man macvm.Manifest) (why, refusal string) {
+func (m *macOSVMs) belowMinimum(man macvm.Manifest) (why, refusal, reason string) {
 	m.mu.Lock()
 	mem, cpus := m.perRunMemory, m.perRunCPUs
 	m.mu.Unlock()
@@ -330,12 +343,12 @@ func (m *macOSVMs) belowMinimum(man macvm.Manifest) (why, refusal string) {
 		gb := strconv.FormatFloat(math.Floor(float64(mem>>20)/1024*10)/10, 'f', -1, 64)
 		need := (man.MinMemoryMiB + 1023) >> 10
 		return fmt.Sprintf("the runner's per-run memory (%d MiB) is below the macOS base's minimum (%d MiB); raise --per-run-memory", mem>>20, man.MinMemoryMiB),
-			fmt.Sprintf(macOSVMMemoryBelowMinimum, gb, need, m.runnerID)
+			fmt.Sprintf(macOSVMMemoryBelowMinimum, gb, need, m.runnerID), runnerwire.MacVMReasonMemoryBelowMinimum
 	case cpus != 0 && cpus < man.MinCPUs:
 		return fmt.Sprintf("the runner's per-run CPUs (%d) are below the macOS base's minimum (%d); raise --per-run-cpu", cpus, man.MinCPUs),
-			fmt.Sprintf(macOSVMCPUBelowMinimum, cpus, man.MinCPUs, m.runnerID)
+			fmt.Sprintf(macOSVMCPUBelowMinimum, cpus, man.MinCPUs, m.runnerID), runnerwire.MacVMReasonCPUBelowMinimum
 	}
-	return "", ""
+	return "", "", ""
 }
 
 // setPerRunLimits is runnerwire.RunnerHooks.PerRunLimits: the per-run CPU (milli-CPU) and memory (MiB)
@@ -369,15 +382,25 @@ func (m *macOSVMs) base() (macvm.Manifest, runnerwire.MacVMBase) {
 		b.State = runnerwire.MacVMBaseUpdateNeeded
 	case err == nil && man.State == macvm.BaseReady:
 		b.State = runnerwire.MacVMBaseReady
+		if cause := toolsFailure(m.layout.BaseDir(0)); cause != "" {
+			b.Failure, b.Error = runnerwire.MacVMFailureTools, m.scrubError(cause)
+		}
 	case m.preparing():
 		b.State, b.Progress = runnerwire.MacVMBasePreparing, prepareProgress(m.layout.PrepareLog())
+		scanPrepare(m.layout.PrepareLog()).apply(&b, true)
+		if setupCodeWaiting(m.layout.Root) != "" {
+			b.Wait = runnerwire.MacVMWaitSetupByHand
+		}
 	case err == nil && man.State == macvm.BaseUpdateNeeded:
 		b.State = runnerwire.MacVMBaseUpdateNeeded
 	case err == nil && man.State == macvm.BaseFailed:
 		b.State = runnerwire.MacVMBaseFailed
+		scanPrepare(m.layout.PrepareLog()).apply(&b, false)
 	default:
 		if msg := prepareFailure(m.layout.PrepareLog()); msg != "" {
-			b.State, b.Error = runnerwire.MacVMBaseFailed, msg
+			failure, cause := splitFailure(msg)
+			b.State, b.Failure, b.Error = runnerwire.MacVMBaseFailed, failure, m.scrubError(cause)
+			scanPrepare(m.layout.PrepareLog()).apply(&b, false)
 		}
 	}
 	return man, b
@@ -596,6 +619,11 @@ type probeReport struct {
 	Host         string `json:"host"`
 	Provisioning string `json:"provisioning"`
 	Thermal      string `json:"thermal"`
+	// Cgo and VZ say the helper was built with cgo and the Virtualization-framework engine; Reason is its
+	// code for why first boot cannot (no_virtualization, no_provisioning), when the framework answered.
+	Cgo    bool   `json:"cgo"`
+	VZ     bool   `json:"vz"`
+	Reason string `json:"reason"`
 }
 
 // probeWait bounds the helper's probe.
@@ -623,15 +651,20 @@ func probeHelper(ctx context.Context, helper string) (probeReport, error) {
 }
 
 // gate runs the helper's probe and turns macOS VMs off on this runner unless it passes. The caps then
-// carry no refusal of their own: the reason stays in the log and in `macos-vm status`.
+// carry no refusal of their own, only a reason code (host_os_too_old or host_unsupported, when the probe
+// says which); the words stay in the log and in `macos-vm status`.
 func (m *macOSVMs) gate(ctx context.Context) {
 	if m.ledger == nil {
 		return
 	}
-	if _, err := probeHelper(ctx, m.helper); err != nil {
+	r, err := probeHelper(ctx, m.helper)
+	if err != nil {
 		slog.WarnContext(ctx, "macOS VM sandboxes are off on this runner", "reason", err.Error())
 		m.ledger, m.why = nil, err.Error()
+		m.explainProbe(r)
+		return
 	}
+	m.setThermal(r.Thermal)
 }
 
 // helperJob is one helper run that holds a ledger entry of its own: a prepare or a tools update.

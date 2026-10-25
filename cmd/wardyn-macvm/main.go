@@ -491,7 +491,16 @@ type probeReport struct {
 	// Thermal is the Mac's thermal state (nominal, fair, serious, critical;
 	// at serious and above no new VM starts), when the engine can read it.
 	Thermal string `json:"thermal,omitempty"`
+	// Reason says, as a code, why first boot cannot, when the Virtualization framework itself answered:
+	// no_virtualization or no_provisioning. Absent for a build without the framework (the stub's answer).
+	Reason string `json:"reason,omitempty"`
 }
+
+// Probe reasons.
+const (
+	probeNoVirtualization = "no_virtualization"
+	probeNoProvisioning   = "no_provisioning"
+)
 
 // cmdProbe prints whether this Mac and this build can run macOS VMs, and
 // exits 0 only when they can.
@@ -509,6 +518,12 @@ func cmdProbe(d deps) int {
 		provErr = d.firstBoot.Supported()
 	}
 	r.Host, r.Provisioning = okOr(hostErr), okOr(provErr)
+	if provErr != nil && d.firstBoot != nil && !errors.Is(provErr, macvm.ErrProvisionUnsupported) {
+		r.Reason = probeNoProvisioning
+		if errors.Is(provErr, macvm.ErrNoVirtualization) {
+			r.Reason = probeNoVirtualization
+		}
+	}
 	r.Supported = hostErr == nil && provErr == nil
 	enc := json.NewEncoder(d.stdout)
 	enc.SetIndent("", "  ")

@@ -539,9 +539,19 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 	}
 	checkLapsesAtStartup(ctx, manager)
 	var online atomic.Pointer[runnerwire.Peer]
+	// capsDirty: the caps changed while offline, or a send failed, since the org last took them.
+	var capsDirty atomic.Bool
 	// sendCaps reports the runner's caps on peer; reprobe re-checks the relay first, and always sends
 	// even when nothing in the report is new (a fresh session's caps are required).
-	sendCaps := func(ctx context.Context, peer *runnerwire.Peer, reprobe, always bool) error {
+	sendCaps := func(ctx context.Context, peer *runnerwire.Peer, reprobe, always bool) (err error) {
+		if capsDirty.Swap(false) {
+			always = true
+		}
+		defer func() {
+			if err != nil {
+				capsDirty.Store(true)
+			}
+		}()
 		caps, err := hostCaps(ctx, sub, extra.arch)
 		if err != nil {
 			return err
@@ -615,7 +625,10 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		},
 	}
 	run := func(ctx context.Context) error {
-		extra.macOSVM.start(ctx, func() { resendCaps(ctx, online.Load(), sendCaps, "runner caps after a macOS VM change failed") })
+		extra.macOSVM.start(ctx, func() {
+			capsDirty.Store(true) // a send takes it; a change that finds no peer leaves it for the next session
+			resendCaps(ctx, online.Load(), sendCaps, "runner caps after a macOS VM change failed")
+		})
 		if w := extra.report.relay; w != nil {
 			go w.run(ctx, func() {
 				if peer := online.Load(); peer != nil {
@@ -913,8 +926,8 @@ func resendCaps(ctx context.Context, peer *runnerwire.Peer, send func(context.Co
 
 // enableMacOSVM turns macOS VM sandboxes on when the operator asked for them on an Apple silicon Mac,
 // and returns the handle that builds the caps' macos_vm. Off by default. A Mac whose ledger is missing or
-// damaged offers none and says why in its caps; one with no helper beside wardyn-runnerd, or whose
-// helper's probe does not pass, offers none and says why in its log. Container runs are untouched
+// damaged offers none and says why in its caps, in words; one with no helper beside wardyn-runnerd, or
+// whose helper's probe does not pass, offers none and says why in its caps as a code, and in its log in words. Container runs are untouched
 // either way. The runner does not know its per-run memory here (the organisation keeps the limits), so
 // the offer sizes each guest at the base's minimum until it does.
 func enableMacOSVM(ctx context.Context, sub *docker.Driver, runnerID string, on bool) *macOSVMs {
@@ -942,7 +955,7 @@ func enableMacOSVM(ctx context.Context, sub *docker.Driver, runnerID string, on 
 	}
 	if m.ledger != nil && err != nil {
 		slog.WarnContext(ctx, "macOS VM sandboxes are off on this runner: no helper beside wardyn-runnerd", "error", err.Error())
-		m.ledger, m.why = nil, macOSVMNoHelper
+		m.ledger, m.why, m.reason = nil, macOSVMNoHelper, runnerwire.MacVMReasonNoHelper
 	}
 	m.gate(ctx)
 	if m.ledger != nil {
@@ -951,7 +964,7 @@ func enableMacOSVM(ctx context.Context, sub *docker.Driver, runnerID string, on 
 			ToolsDialFile: filepath.Join(root, runToolsDialFile), Ledger: m.ledger, Host: m.host, RunnerID: runnerID, HostOS: macHostOS(), Changed: m.changed}
 		if err := sub.EnableMacVM(cfg); err != nil {
 			slog.WarnContext(ctx, "macOS VM sandboxes are off on this runner", "reason", err.Error())
-			m.ledger, m.refusal = nil, macOSVMLedgerDamaged
+			m.ledger, m.refusal, m.reason = nil, macOSVMLedgerDamaged, runnerwire.MacVMReasonLedgerDamaged
 		} else {
 			m.reclaim, m.endNewest = sub.ReclaimMacVMs, sub.EndNewestMacVM
 			m.prepNet, m.prepSweep, m.prepRemove = sub.StartMacPrepNet, sub.SweepMacPrep, sub.RemoveMacPrepNet
@@ -965,6 +978,7 @@ func enableMacOSVM(ctx context.Context, sub *docker.Driver, runnerID string, on 
 			slog.InfoContext(ctx, "macOS VM sandboxes are on", "dir", root, "identity", string(cfg.Identity))
 		}
 	}
+	m.checkSession(ctx)
 	m.recompute()
 	return m
 }

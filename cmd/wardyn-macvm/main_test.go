@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -276,6 +277,34 @@ func TestProbe(t *testing.T) {
 	d.firstBoot = &macvmtest.FirstBoot{}
 	if code := run(context.Background(), []string{"probe"}, d); vzLinked == (code == 1 && strings.Contains(out.String(), `"vz": false`)) {
 		t.Fatalf("probe on this build: exit %d %s", code, out.String())
+	}
+}
+
+// probe says, as a code, why first boot cannot when the Virtualization framework itself answered: no
+// virtualization support or no provisioning. A build without the framework (the stub, or no first boot)
+// gives none, and a supported Mac gives none.
+func TestProbeReasonCode(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		firstBoot macvm.FirstBooter
+		want      string
+	}{
+		{"supported", &macvmtest.FirstBoot{}, ""},
+		{"no virtualization", &macvmtest.FirstBoot{Unsupported: fmt.Errorf("macvm provision: has no %w; needs macOS 27", macvm.ErrNoVirtualization)}, "no_virtualization"},
+		{"no provisioning", &macvmtest.FirstBoot{Unsupported: errors.New("macvm provision: no class VZMacGuestProvisioningOptions")}, "no_provisioning"},
+		{"stub", &macvmtest.FirstBoot{Unsupported: macvm.ErrProvisionUnsupported}, ""},
+		{"no first boot", nil, ""},
+	} {
+		d, out, _ := testDeps(&macvmtest.Engine{})
+		d.firstBoot = tc.firstBoot
+		_ = run(context.Background(), []string{"probe"}, d)
+		var r probeReport
+		if err := json.Unmarshal(out.Bytes(), &r); err != nil {
+			t.Fatalf("%s: %v %q", tc.name, err, out.String())
+		}
+		if r.Reason != tc.want {
+			t.Fatalf("%s: reason %q, want %q", tc.name, r.Reason, tc.want)
+		}
 	}
 }
 

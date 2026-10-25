@@ -33,7 +33,7 @@ import (
 )
 
 // MinHostMajor is the oldest macOS this engine runs on (provisioning needs 27).
-const MinHostMajor = 27
+const MinHostMajor = macvm.MinHostMajor
 
 // Engine is the Virtualization-framework engine.
 type Engine struct{}

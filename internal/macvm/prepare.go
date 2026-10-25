@@ -17,6 +17,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -55,7 +56,17 @@ type PrepareEvent struct {
 	// ToolsDial is the guest agent's classified tools-port dial, recorded
 	// once per stage-2 boot.
 	ToolsDial string `json:"tools_dial,omitempty"`
+	// Retry marks a download event for a range that failed and is fetched
+	// again; Bytes is that range's start.
+	Retry bool `json:"retry,omitempty"`
+	// Version is the restore image's macOS version: parsed from its file name
+	// on the download's first event, then read from the image by the second
+	// validate event, which also carries the file's size as Total.
+	Version string `json:"version,omitempty"`
 }
+
+// InstallFailurePrefix starts the error an install that failed ends with; the cause follows it.
+const InstallFailurePrefix = "macvm: install: "
 
 // PrepNetwork is the in-helper relay prepare's VM uses (MACVM-NET): it serves
 // the guest NIC with no proxy, so the guest reaches nothing, and it can dial
@@ -436,6 +447,12 @@ func (p *prep) restoreImage(ctx context.Context) (RestoreImage, string, string, 
 		p.emit(PrepareEvent{Phase: PhaseValidate})
 		img, err := p.Engine.LoadRestoreImage(final)
 		if err == nil {
+			// The first validate event is written before the load, so it cannot say what the image is.
+			var size int64
+			if fi, serr := os.Stat(final); serr == nil {
+				size = fi.Size()
+			}
+			p.emit(PrepareEvent{Phase: PhaseValidate, Total: size, Version: img.OSVersion})
 			sha, herr := fileSHA256(final)
 			if herr != nil {
 				return RestoreImage{}, "", "", herr
@@ -451,7 +468,7 @@ func (p *prep) restoreImage(ctx context.Context) (RestoreImage, string, string, 
 }
 
 func (p *prep) download(ctx context.Context, u, final string) error {
-	start := time.Now()
+	var start time.Time
 	var startBytes int64 = -1
 	d := &downloader{
 		client: p.HTTP, power: p.Power, poll: p.PowerPoll, rng: p.DownloadRange,
@@ -463,11 +480,12 @@ func (p *prep) download(ctx context.Context, u, final string) error {
 			p.emit(ev)
 		},
 		progress: func(done, total int64) {
-			if startBytes < 0 {
-				startBytes, start = 0, time.Now()
-			}
 			ev := PrepareEvent{Phase: PhaseDownload, Bytes: done, Total: total}
-			if s := time.Since(start).Seconds(); s > 0 {
+			// The rate counts the bytes after the first event, over the time since it: the first event
+			// has no earlier one, and a resumed download's bytes fetched before this run are not its speed.
+			if startBytes < 0 {
+				startBytes, start = done, time.Now()
+			} else if s := time.Since(start).Seconds(); s > 0 {
 				ev.BytesPerSec = float64(done-startBytes) / s
 			}
 			if total > 0 {
@@ -476,7 +494,10 @@ func (p *prep) download(ctx context.Context, u, final string) error {
 			p.emit(ev)
 		},
 	}
-	p.emit(PrepareEvent{Phase: PhaseDownload})
+	d.retrying = func(off, total int64) {
+		p.emit(PrepareEvent{Phase: PhaseDownload, Retry: true, Bytes: off, Total: max(total, 0)})
+	}
+	p.emit(PrepareEvent{Phase: PhaseDownload, Version: ipswVersion(path.Base(final))})
 	part := final + ".part"
 	if err := d.fetch(ctx, u, part); err != nil {
 		return err
@@ -546,7 +567,7 @@ func (p *prep) install(ctx context.Context, spec MachineSpec, ipsw string) error
 	if err := p.Engine.Install(ctx, m, ipsw, func(f float64) {
 		p.emit(PrepareEvent{Phase: PhaseInstall, Fraction: f})
 	}); err != nil {
-		return fmt.Errorf("macvm: install: %w", err)
+		return fmt.Errorf(InstallFailurePrefix+"%w", err)
 	}
 	return nil
 }
@@ -690,6 +711,17 @@ func randomPassword() (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// ipswNameVersion matches the restore image names Apple publishes: UniversalMac_<version>_<build>_Restore.ipsw.
+var ipswNameVersion = regexp.MustCompile(`^UniversalMac_(\d+(?:\.\d+){0,2})_[^_]+_Restore\.ipsw$`)
+
+// ipswVersion is the macOS version in a restore image's file name, or "" when the name has none.
+func ipswVersion(name string) string {
+	if m := ipswNameVersion.FindStringSubmatch(name); m != nil {
+		return m[1]
+	}
+	return ""
 }
 
 // ipswName is the cache file name for a restore image URL.

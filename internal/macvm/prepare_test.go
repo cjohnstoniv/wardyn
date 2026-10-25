@@ -47,6 +47,8 @@ type ipswServer struct {
 	reqs   atomic.Int64
 	// midRange, if set, runs half way through each range (by range index).
 	midRange func(i int64)
+	// fail, if set, answers the request with the index i with HTTP 500.
+	fail func(i int64) bool
 }
 
 func newIPSWServer(t *testing.T, size int) *ipswServer {
@@ -54,6 +56,10 @@ func newIPSWServer(t *testing.T, size int) *ipswServer {
 	s := &ipswServer{body: bytes.Repeat([]byte("macOS-restore-image!"), size/20)}
 	s.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		i := s.reqs.Add(1) - 1
+		if s.fail != nil && s.fail(i) {
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		}
 		var start, end int64
 		if _, err := fmt.Sscanf(r.Header.Get("Range"), "bytes=%d-%d", &start, &end); err != nil {
 			http.Error(w, "range required", http.StatusBadRequest)
@@ -437,5 +443,152 @@ func TestPrepareTakesAndReleasesItsAdmission(t *testing.T) {
 	g.opts.Admit = func(context.Context) (func(), error) { return nil, errors.New("full") }
 	if _, err := macvm.Prepare(context.Background(), g.opts); err == nil || g.srv.reqs.Load() != 0 {
 		t.Fatalf("prepare without admission: %v", err)
+	}
+}
+
+// progress are the download events that carry bytes (not a pause, not a retry).
+func (e *events) progress() []macvm.PrepareEvent {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	var out []macvm.PrepareEvent
+	for _, ev := range e.evs {
+		if ev.Phase == macvm.PhaseDownload && ev.Bytes > 0 && !ev.Retry && !ev.Paused {
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
+func (e *events) phase(phase string) []macvm.PrepareEvent {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	var out []macvm.PrepareEvent
+	for _, ev := range e.evs {
+		if ev.Phase == phase {
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
+// slowRanges makes each range take at least 50 ms, so a rate has a known ceiling: the bytes of the
+// ranges after the first event, over at least 50 ms for each of them.
+func slowRanges(f *prepFixture) {
+	f.srv.midRange = func(int64) { time.Sleep(50 * time.Millisecond) }
+}
+
+// The first progress event is written after the first range, so there is no earlier event to measure
+// against: it carries no rate. A later event's rate is the bytes after the first event over the time since
+// it, which one 1 KiB range per 50 ms bounds at 20480 B/s.
+func TestPrepareDownloadRateStartsAfterTheFirstEvent(t *testing.T) {
+	f := newPrep(t)
+	slowRanges(f)
+	if _, err := macvm.Prepare(context.Background(), f.opts); err != nil {
+		t.Fatal(err)
+	}
+	evs := f.ev.progress()
+	if len(evs) < 3 {
+		t.Fatalf("%d progress events", len(evs))
+	}
+	if evs[0].BytesPerSec != 0 {
+		t.Fatalf("the first progress event carries a rate: %v", evs[0].BytesPerSec)
+	}
+	for i, ev := range evs[1:] {
+		if ev.BytesPerSec <= 0 || ev.BytesPerSec > 20480 {
+			t.Fatalf("event %d: rate %v, want in (0, 20480]", i+1, ev.BytesPerSec)
+		}
+	}
+}
+
+// After a resume the rate counts only this run's bytes: 4 KiB are already on disk, and they are no part
+// of the speed.
+func TestPrepareDownloadRateAfterAResumeCountsThisRunOnly(t *testing.T) {
+	f := newPrep(t)
+	slowRanges(f)
+	part := filepath.Join(f.opts.Layout.CacheDir(), "UniversalMac_27.0_26A1_Restore.ipsw.part")
+	if err := os.MkdirAll(filepath.Dir(part), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(part, f.srv.body[:4096], 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := macvm.Prepare(context.Background(), f.opts); err != nil {
+		t.Fatal(err)
+	}
+	evs := f.ev.progress()
+	if len(evs) < 3 || evs[0].Bytes != 5120 || evs[0].BytesPerSec != 0 {
+		t.Fatalf("progress after a resume: %+v", evs)
+	}
+	for i, ev := range evs[1:] {
+		if ev.BytesPerSec <= 0 || ev.BytesPerSec > 20480 {
+			t.Fatalf("event %d after a resume: rate %v, want in (0, 20480]", i+1, ev.BytesPerSec)
+		}
+	}
+}
+
+// The download's first event carries the version its file name has, and a second validate event, written
+// once the image has loaded, carries the file's size and the image's own version. The first validate
+// event, written before the load, carries neither.
+func TestPrepareReportsTheImageVersionAndSize(t *testing.T) {
+	f := newPrep(t)
+	f.eng.Image.OSVersion = "27.0.1"
+	if _, err := macvm.Prepare(context.Background(), f.opts); err != nil {
+		t.Fatal(err)
+	}
+	if dl := f.ev.phase(macvm.PhaseDownload); dl[0].Version != "27.0" {
+		t.Fatalf("the download's first event: %+v", dl[0])
+	}
+	val := f.ev.phase(macvm.PhaseValidate)
+	if len(val) != 2 || val[0].Total != 0 || val[0].Version != "" || val[1].Total != int64(len(f.srv.body)) || val[1].Version != "27.0.1" {
+		t.Fatalf("validate events: %+v", val)
+	}
+}
+
+// A restore image URL whose file name is not Apple's gives no version on the start event.
+func TestPrepareNamesNoVersionForAnOtherwiseNamedImage(t *testing.T) {
+	for _, name := range []string{"restore.ipsw", "UniversalMac_27.0-beta_26A1_Restore.ipsw", "UniversalMac_x_26A1_Restore.ipsw"} {
+		f := newPrep(t)
+		f.eng.URL = f.srv.URL + "/x/" + name
+		if _, err := macvm.Prepare(context.Background(), f.opts); err != nil {
+			t.Fatal(err)
+		}
+		if dl := f.ev.phase(macvm.PhaseDownload); dl[0].Version != "" {
+			t.Fatalf("%s: version %q", name, dl[0].Version)
+		}
+	}
+}
+
+// A failed range sends one retry event at that range's offset, and the final failure sends none: three
+// ranges in a row end the download with its prefix, doubled.
+func TestPrepareDownloadRetryEvents(t *testing.T) {
+	f := newPrep(t)
+	f.srv.fail = func(i int64) bool { return i == 2 }
+	if _, err := macvm.Prepare(context.Background(), f.opts); err != nil {
+		t.Fatal(err)
+	}
+	var retries []macvm.PrepareEvent
+	for _, ev := range f.ev.phase(macvm.PhaseDownload) {
+		if ev.Retry {
+			retries = append(retries, ev)
+		}
+	}
+	if len(retries) != 1 || retries[0].Bytes != 2048 || retries[0].Total != int64(len(f.srv.body)) {
+		t.Fatalf("retry events after one failed range: %+v", retries)
+	}
+
+	f = newPrep(t)
+	f.srv.fail = func(i int64) bool { return i >= 2 }
+	_, err := macvm.Prepare(context.Background(), f.opts)
+	if err == nil || strings.Count(err.Error(), macvm.DownloadFailurePrefix) != 2 || !strings.HasSuffix(err.Error(), "HTTP 500") {
+		t.Fatalf("three failed ranges: %v", err)
+	}
+	n := 0
+	for _, ev := range f.ev.phase(macvm.PhaseDownload) {
+		if ev.Retry {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Fatalf("%d retry events for three failed ranges, want 2 (the last failure ends the download)", n)
 	}
 }
