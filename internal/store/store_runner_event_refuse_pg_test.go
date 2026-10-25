@@ -262,3 +262,68 @@ func TestPG_RefuseRunnerEventRacesTheReceipt(t *testing.T) {
 		}
 	}
 }
+
+// A refused spool record moves its run's cursor only when it is next in this runner's own stream (DR-0436): the
+// first record makes the cursor as ingest would, and nothing moves for a run that is not the runner's, past a gap,
+// over a repeat, on another spool, for an overflow summary or with no hash a receipt could name.
+func TestPG_RefuseRunnerEventMovesOnlyItsOwnNextSpoolCursor(t *testing.T) {
+	f := newActionFixture(t)
+	ctx := t.Context()
+	run := f.run(t)
+	other := claimed(t, f.st, ctx, "action-owner-2")
+	foreign := f.localRun(t, other, other.Owner)
+	spoolID, hash := uuid.New(), strings.Repeat("a", 64)
+	refuse := func(sp store.RunnerEventRefusalSpool) {
+		t.Helper()
+		r := store.RunnerEventRefusal{Kind: runnerwire.EventSpool, Code: runnerwire.RefusalStoreRefused, RunID: &sp.RunID, Spool: &sp}
+		if _, err := f.st.RefuseRunnerEvent(ctx, f.rn.ID, r, prepareSpoolTest); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cursor := func(runID uuid.UUID) (int, string) {
+		t.Helper()
+		var seq int
+		var at string
+		err := f.pool.QueryRow(ctx, `SELECT last_seq, COALESCE(recent_hashes->>(last_seq::text), '') FROM runner_spool_cursors WHERE run_id=$1`, runID).Scan(&seq, &at)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return -1, ""
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return seq, at
+	}
+	refuse(store.RunnerEventRefusalSpool{RunID: foreign.ID, SpoolID: spoolID, Seq: 1, Hash: hash})
+	for _, sp := range []store.RunnerEventRefusalSpool{
+		{RunID: run.ID, SpoolID: spoolID, Seq: 2, Hash: hash},
+		{RunID: run.ID, SpoolID: spoolID, Seq: 1, Hash: ""},
+		{RunID: run.ID, SpoolID: spoolID, Seq: 0, Hash: hash},
+	} {
+		refuse(sp)
+	}
+	if seq, _ := cursor(foreign.ID); seq != -1 {
+		t.Fatalf("a refusal made another runner's run a cursor at %d", seq)
+	}
+	if seq, _ := cursor(run.ID); seq != -1 {
+		t.Fatalf("a refusal out of place made a cursor at %d", seq)
+	}
+	refuse(store.RunnerEventRefusalSpool{RunID: run.ID, SpoolID: spoolID, Seq: 1, Hash: hash})
+	if seq, at := cursor(run.ID); seq != 1 || at != hash {
+		t.Fatalf("first record refused: cursor %d %q, want 1 %q", seq, at, hash)
+	}
+	second := strings.Repeat("b", 64)
+	for _, sp := range []store.RunnerEventRefusalSpool{
+		{RunID: run.ID, SpoolID: spoolID, Seq: 1, Hash: second},
+		{RunID: run.ID, SpoolID: spoolID, Seq: 3, Hash: second},
+		{RunID: run.ID, SpoolID: uuid.New(), Seq: 2, Hash: second},
+	} {
+		refuse(sp)
+	}
+	if seq, at := cursor(run.ID); seq != 1 || at != hash {
+		t.Fatalf("a repeat, gap or other spool moved the cursor to %d %q", seq, at)
+	}
+	refuse(store.RunnerEventRefusalSpool{RunID: run.ID, SpoolID: spoolID, Seq: 2, Hash: second})
+	if seq, at := cursor(run.ID); seq != 2 || at != second {
+		t.Fatalf("next record refused: cursor %d %q, want 2 %q", seq, at, second)
+	}
+}

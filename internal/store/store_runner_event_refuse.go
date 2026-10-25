@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
@@ -20,12 +21,20 @@ import (
 type RunnerEventRefusal struct {
 	Kind, Code, Sentinel string
 	RunID                *uuid.UUID
-	ActionID             *uuid.UUID // an action_result's action: settled as refused when it is this runner's and open
+	ActionID             *uuid.UUID               // an action_result's action: settled as refused when it is this runner's and open
+	Spool                *RunnerEventRefusalSpool // a spool record's place: the run's cursor moves past it when it is next
 	PayloadSHA256        string
 	PayloadBytes         int
 	Row                  bool                       // write the runner.event.refuse row (false: suppressed by the caller's bound)
 	Marker               bool                       // the row is the last of its window: it carries suppressed: true
 	Summary              *RunnerEventRefusalSummary // a previous window's summary row, when the caller owes one
+}
+
+// RunnerEventRefusalSpool is where a refused spool record says it sits in its run's stream, in the runner's word.
+type RunnerEventRefusalSpool struct {
+	RunID, SpoolID uuid.UUID
+	Seq            int64
+	Hash           string
 }
 
 // RunnerEventRefusalSummary is how many refusals a previous window left without a row of their own.
@@ -36,15 +45,16 @@ type RunnerEventRefusalSummary struct {
 
 // RefuseRunnerEvent records, in one READ COMMITTED transaction, an event the organisation refused for good, before
 // the event is acknowledged (DR-0436): an action_result's open action of this runner is settled as refused with its
-// runner.action.refuse receipt (reason org_refused:<code>), then the summary row the caller owes, then the event's
-// own runner.event.refuse row unless the caller's bound suppressed it. It takes the shared order runner, run, action
-// (lockRunnerActionRun), then the audit chain, as RecordRunnerActionResult does. It reports whether it settled an
-// action; with nothing to write and nothing to settle it returns (false, nil) without a transaction.
+// runner.action.refuse receipt (reason org_refused:<code>), a spool record next in its run's stream moves the run's
+// cursor past it, then the summary row the caller owes, then the event's own runner.event.refuse row unless the
+// caller's bound suppressed it. It takes the shared order runner, run, action (lockRunnerActionRun), the spool cursor
+// (as IngestRunnerDecision takes it after the run), then the audit chain. It reports whether it settled an action;
+// with nothing to write, settle or move it returns (false, nil) without a transaction.
 func (s PG) RefuseRunnerEvent(ctx context.Context, runnerID uuid.UUID, r RunnerEventRefusal, prepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (bool, error) {
 	if prepare == nil {
 		return false, errors.New("store: refuse runner event: no audit policy")
 	}
-	if r.ActionID == nil && !r.Row && r.Summary == nil {
+	if r.ActionID == nil && r.Spool == nil && !r.Row && r.Summary == nil {
 		return false, nil
 	}
 	tx, err := beginRunnerActionTx(ctx, s)
@@ -55,6 +65,24 @@ func (s PG) RefuseRunnerEvent(ctx context.Context, runnerID uuid.UUID, r RunnerE
 	settled := false
 	if r.ActionID != nil {
 		if settled, err = s.settleRefusedActionTx(ctx, tx, runnerID, *r.ActionID, "org_refused:"+r.Code, prepare); err != nil {
+			return false, err
+		}
+	}
+	// The runner acknowledges a refused record and deletes it, so a cursor left behind would refuse every later
+	// record as a gap and fall short of the runner's spool seal (runnerspool Seal). The CAS moves it only for the
+	// record right after it, on the cursor of this runner's run and spool; a gap, a repeat, a hash with no place in a
+	// receipt or another spool's record moves nothing. A missing cursor is made as ingest makes it (lockRunnerSpool),
+	// only for the stream's first record (the one next after none) and a run that is this runner's.
+	if sp := r.Spool; sp != nil && sp.Seq > 0 && len(sp.Hash) == 64 {
+		if sp.Seq == 1 {
+			if _, err := tx.Exec(ctx, `INSERT INTO runner_spool_cursors(run_id,runner_id,spool_id) SELECT $1::uuid,$2::uuid,$3::uuid
+ WHERE EXISTS (SELECT 1 FROM agent_runs WHERE id=$1::uuid AND runner_id=$2::uuid) ON CONFLICT(run_id) DO NOTHING`, sp.RunID, runnerID, sp.SpoolID); err != nil {
+				return false, err
+			}
+		}
+		if _, err := tx.Exec(ctx, `UPDATE runner_spool_cursors SET last_seq=$4::bigint,recent_hashes=recent_hashes||jsonb_build_object($5::text,$6::text)
+ WHERE run_id=$1::uuid AND runner_id=$2::uuid AND spool_id=$3::uuid AND last_seq=$7::bigint`,
+			sp.RunID, runnerID, sp.SpoolID, sp.Seq, strconv.FormatInt(sp.Seq, 10), sp.Hash, sp.Seq-1); err != nil {
 			return false, err
 		}
 	}
