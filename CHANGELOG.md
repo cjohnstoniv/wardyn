@@ -37,6 +37,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   with the run's capacity held, until the helper has exited.
 - A macOS VM run whose policy keeps no desktop sign-ins now starts agent-only. Its guest turns the desktop off and
   sets no desktop password, and the runner took that as the desktop password failure and ended the run.
+- A run on a runner could be refused with "no eligible runner" at the moment the runner was busy recording an idle
+  signal, though the runner was connected and ready. The runner now reads as connected throughout.
+- Stopping a run on a Docker runner no longer stops half-way when the organisation gives up on a slow stop and resets
+  the call. The stop finishes on its own time budget, so the run's proxy and network are not left for the clean-up
+  sweep.
 
 ## [0.10.0-rc.2] — 2026-10-25
 
