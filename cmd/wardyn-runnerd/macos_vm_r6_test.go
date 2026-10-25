@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"go/ast"
+	"go/build"
 	"go/parser"
 	"go/token"
 	"os"
@@ -102,12 +103,18 @@ func TestSetupRerunPrintsPrepareWithKeepIPSW(t *testing.T) {
 // stage 2.
 func TestMacOSVMPrepareOrderHoldsEveryHelperPhase(t *testing.T) {
 	dir := filepath.Join("..", "..", "internal", "macvm")
-	pkgs, err := parser.ParseDir(token.NewFileSet(), dir, func(fi os.FileInfo) bool { return !strings.HasSuffix(fi.Name(), "_test.go") }, 0)
+	mac := build.Default
+	mac.GOOS, mac.GOARCH, mac.CgoEnabled = "darwin", "arm64", true
+	pkg, err := mac.ImportDir(dir, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var phases []string
-	for _, f := range pkgs["macvm"].Files {
+	for _, name := range append(pkg.GoFiles, pkg.CgoFiles...) {
+		f, err := parser.ParseFile(token.NewFileSet(), filepath.Join(dir, name), nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
 		ast.Inspect(f, func(n ast.Node) bool {
 			vs, ok := n.(*ast.ValueSpec)
 			if !ok {
