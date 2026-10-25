@@ -98,7 +98,7 @@ export const MACVM_R = {
   /** MV-R51, too hot */
   R51: "This Mac is too hot to start another macOS VM. Try again when it cools down.",
   /** MV-R52, host macOS too old */
-  R52: (v: string) => `macOS virtual machines need macOS 27 or later on this Mac. It runs macOS ${v}.`,
+  R52: (v: string) => `macOS virtual machines need macOS 26 or later on this Mac. It runs macOS ${v}.`,
   /** MV-R53, host can't run VMs */
   R53: (reason: string) => `This Mac can't run macOS virtual machines: ${reason}.`,
   /** MV-R54, disk short (prepare) */

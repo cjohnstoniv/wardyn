@@ -273,16 +273,19 @@ func (a vsockAddr) String() string { return fmt.Sprintf("2:%d", uint32(a)) }
 
 // FirstBoot is a fake macvm.FirstBooter. Boot records its arguments and
 // returns a VM that runs until stop is called (or Shutdown, as if the guest
-// shut itself down).
+// shut itself down), and whose Screen counts the windows it opens and closes.
 type FirstBoot struct {
 	Unsupported error
 	BootErr     error
+	// ScreenErr makes Screen fail.
+	ScreenErr error
 
-	mu       sync.Mutex
-	boots    int
-	last     BootArgs
-	done     chan error
-	stopOnce sync.Once
+	mu             sync.Mutex
+	boots          int
+	last           BootArgs
+	done           chan error
+	stopOnce       sync.Once
+	opened, closed int
 }
 
 // BootArgs are the arguments of the last Boot.
@@ -298,22 +301,38 @@ var _ macvm.FirstBooter = (*FirstBoot)(nil)
 
 func (f *FirstBoot) Supported() error { return f.Unsupported }
 
-func (f *FirstBoot) Boot(disk, aux string, hw, mid []byte, cpus uint, mem uint64, nic *os.File, user, pass string) (<-chan error, func(context.Context) error, error) {
+func (f *FirstBoot) Boot(disk, aux string, hw, mid []byte, cpus uint, mem uint64, nic *os.File, user, pass string) (macvm.FirstBoot, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.boots++
 	if f.BootErr != nil {
-		return nil, nil, f.BootErr
+		return macvm.FirstBoot{}, f.BootErr
 	}
 	if nic == nil {
-		return nil, nil, errors.New("fake: no nic")
+		return macvm.FirstBoot{}, errors.New("fake: no nic")
 	}
 	f.last = BootArgs{disk, aux, hw, mid, cpus, mem, user, pass}
 	f.done = make(chan error, 1)
 	f.stopOnce = sync.Once{}
-	done := f.done
 	stop := func(context.Context) error { f.Shutdown(nil); return nil }
-	return done, stop, nil
+	return macvm.FirstBoot{Done: f.done, Stop: stop, Screen: f.screen}, nil
+}
+
+func (f *FirstBoot) screen() (func(), error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.ScreenErr != nil {
+		return nil, f.ScreenErr
+	}
+	f.opened++
+	return func() { f.mu.Lock(); f.closed++; f.mu.Unlock() }, nil
+}
+
+// Windows is how many windows Screen opened, and how many of them were closed.
+func (f *FirstBoot) Windows() (opened, closed int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.opened, f.closed
 }
 
 // Shutdown ends the provisioned VM with err (nil: the guest shut down).

@@ -257,11 +257,17 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 - A Mac can run macOS VM sandboxes (`machine_kind: macos_vm`) when both its switch and the organisation's are on. [macOS VM sandboxes](macos-vms.md) has the requirements, the base image and the limits.
 - The Mac must be company-managed in the two ways the page names: a security operator marks it `managed_device`, and your MDM delivers the posture file.
 
-1. Push the package as above. The VM helper runs on Apple silicon only, and macOS VMs need macOS 27 or later.
+1. Push the package as above. The VM helper runs on Apple silicon only, and macOS VMs need macOS 26 or later. On macOS 26 the first prepare needs [setup by hand](macos-vms.md#setup-by-hand) once.
 2. Add the `MacOSVM` key to the profile, set to `true`.
-3. Push the posture file to `/Library/Application Support/Wardyn/posture.json`, with `mdm_managed` true.
+3. Push the posture file to `/Library/Application Support/Wardyn/posture.json`, owned by root, writable by root only and at most 4 KiB. It holds these two keys and no other; an unknown key makes the runner ignore the file:
+
+   ```json
+   {"mdm_managed": true, "disk_encrypted": true}
+   ```
+
+   Set `disk_encrypted` to the Mac's real FileVault state. The file decides both, and a key left out reads false.
 4. Have a security operator run `wardyn runner trust <runner-id> managed_device --reason "<why>"`.
-5. Ask the Mac's person to run `wardyn-runnerd macos-vm prepare` (it uses the runner's saved per-run limits) while on power, with Docker running.
+5. Ask the Mac's person to run `wardyn-runnerd macos-vm prepare` in Terminal on the Mac (it uses the runner's saved per-run limits) while on power, with Docker running.
 
 - The Mac offers macOS VMs only while someone is logged in. With FileVault on, that is after a login following each restart.
 - macOS VMs need a pool where every runner offers them; a mixed pool refuses them. This matches Linux VMs.

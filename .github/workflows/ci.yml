@@ -1743,6 +1743,8 @@ jobs:
     timeout-minutes: 30
     env:
       CGO_ENABLED: '1'
+      # clang stamps a cgo binary with the image's own macOS as its floor; the helper must load on macOS 26.
+      MACOSX_DEPLOYMENT_TARGET: '26.0'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
@@ -1827,6 +1829,18 @@ jobs:
           codesign --verify --strict "$agent"
           grep -q 'Signature=adhoc' <<<"$(codesign -dv "$agent" 2>&1)"
           [ -z "$(codesign -d --entitlements :- "$agent" 2>/dev/null)" ]
+      # The release package asserts the same floor on what it ships (release.yml, runner-pkg).
+      - name: Every darwin binary loads on macOS 26 (minos 26.0 or lower)
+        if: ${{ !cancelled() && steps.sign.outcome == 'success' && steps.agent.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          above26() { awk -v m="$1" 'BEGIN { split(m, v, "."); exit !(v[1] + 0 > 26 || (v[1] + 0 == 26 && v[2] + 0 > 0)) }'; }
+          for f in "$RUNNER_TEMP/wardyn-macvm" "$RUNNER_TEMP/wardyn-guest-agent" "$RUNNER_TEMP/wardyn-runnerd"; do
+            mins="$(otool -arch all -l "$f" | awk '$1 == "minos" { print $2 }')"
+            echo "$f: minos $mins"
+            [ -n "$mins" ] || { echo "::error::$f has no LC_BUILD_VERSION"; exit 1; }
+            for m in $mins; do if above26 "$m"; then echo "::error::$f needs macOS $m; the floor is 26.0"; exit 1; fi; done
+          done
       # The real postinstall, and the signed helper's ledger-setup it runs, under the runner's passwordless
       # sudo against a temp root, read back with BSD stat. %Mp%Lp, not %Lp alone: %Lp drops the sticky bit.
       # The roots sit under /private/tmp, so every directory the helper walks from / is root-owned.

@@ -75,10 +75,12 @@ func (d deps) power() macvm.PowerSource {
 	return macvm.PmsetPower{}
 }
 
+// main runs the command off the main thread, which macvm.ServeScreens keeps for the guest's window
+// during a prepare's setup by hand.
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	os.Exit(run(ctx, os.Args[1:], mainDeps()))
+	os.Exit(macvm.ServeScreens(func() int { return run(ctx, os.Args[1:], mainDeps()) }))
 }
 
 // mainDeps are the helper's real deps.
@@ -445,8 +447,8 @@ func cmdUpdateTools(ctx context.Context, args []string, d deps) int {
 // prepareDeps wires prepare's first-boot provisioner (macvm.NewProvisioner),
 // prep network (internal/vmnet) and stage 1. Stage 1 installs the
 // wardyn-guest-agent that sits beside this helper. Where this build or host
-// cannot provision a first boot, prepare is refused with the provisioner's
-// reason.
+// cannot boot a first boot at all, prepare is refused with the provisioner's
+// reason; a host with no guest provisioning prepares with setup by hand.
 func prepareDeps(o *macvm.PrepareOptions, relayLog *slog.Logger) error {
 	if o.FirstBoot == nil {
 		o.FirstBoot = macvm.NewProvisioner()
@@ -461,7 +463,7 @@ func prepareDeps(o *macvm.PrepareOptions, relayLog *slog.Logger) error {
 		}
 		o.Bootstrap = stage1.New(stage1.Config{AgentPath: agent, AgentVersion: version.String()})
 	}
-	if err := o.FirstBoot.Supported(); err != nil {
+	if err := o.FirstBoot.Supported(); err != nil && !errors.Is(err, macvm.ErrNoProvisioning) {
 		return fmt.Errorf("%w; prepare is not available", err)
 	}
 	return nil
@@ -503,7 +505,7 @@ type probeReport struct {
 	VZ            bool   `json:"vz"` // the Virtualization-framework engine is linked
 	HelperVersion string `json:"helper_version"`
 	Host          string `json:"host"`         // "ok" or why this Mac cannot
-	Provisioning  string `json:"provisioning"` // "ok" or why first boot cannot
+	Provisioning  string `json:"provisioning"` // "ok" or why first boot cannot provision (then: setup by hand)
 	// GuestAgent is the wardyn-guest-agent beside this helper, which stage 1
 	// installs: "ok", "missing", or "mismatch" (another build than this
 	// helper's). It does not change Supported.
@@ -511,8 +513,9 @@ type probeReport struct {
 	// Thermal is the Mac's thermal state (nominal, fair, serious, critical;
 	// at serious and above no new VM starts), when the engine can read it.
 	Thermal string `json:"thermal,omitempty"`
-	// Reason says, as a code, why first boot cannot, when the Virtualization framework itself answered:
-	// no_virtualization or no_provisioning. Absent for a build without the framework (the stub's answer).
+	// Reason says, as a code, why first boot cannot provision, when the Virtualization framework itself
+	// answered: no_virtualization, or no_provisioning (still supported: the base is set up by hand).
+	// Absent for a build without the framework (the stub's answer).
 	Reason string `json:"reason,omitempty"`
 }
 
@@ -523,7 +526,8 @@ const (
 )
 
 // cmdProbe prints whether this Mac and this build can run macOS VMs, and
-// exits 0 only when they can.
+// exits 0 only when they can. A Mac without guest provisioning can: its
+// prepare asks for setup by hand.
 func cmdProbe(d deps) int {
 	r := probeReport{GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, Cgo: cgoEnabled, VZ: vzLinked, HelperVersion: version.String(), GuestAgent: guestAgentState()}
 	var hostErr error
@@ -544,7 +548,7 @@ func cmdProbe(d deps) int {
 			r.Reason = probeNoVirtualization
 		}
 	}
-	r.Supported = hostErr == nil && provErr == nil
+	r.Supported = hostErr == nil && (provErr == nil || errors.Is(provErr, macvm.ErrNoProvisioning))
 	enc := json.NewEncoder(d.stdout)
 	enc.SetIndent("", "  ")
 	_ = enc.Encode(r)

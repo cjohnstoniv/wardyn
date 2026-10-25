@@ -29,8 +29,8 @@
 
 | Requirement | Detail |
 |---|---|
-| The Mac | Apple silicon, macOS 27 or later. Apple's unattended setup of the guest needs macOS 27 on the host |
-| Docker | A running engine on the Mac, such as Docker Desktop. The guest's network relay and proxy run in it, and the runner needs it to start |
+| The Mac | Apple silicon, macOS 26 or later. On macOS 26 the first prepare needs [setup by hand](#setup-by-hand) once, about 10 minutes at the Mac. macOS 27 sets the guest up unattended |
+| Docker | A running engine on the Mac. The guest's network relay and proxy run in it, and the runner needs it to start ([Docker on the Mac](#docker-on-the-mac)) |
 | Disk | About 85 GiB free to prepare, then about 107 GiB free to start a second VM ([Disk](#disk)) |
 | Power | On AC power to start preparing ([Preparing the base image](#preparing-the-base-image)) |
 | A login | Someone logged in on the Mac ([Logins, FileVault and restarts](#logins-filevault-and-restarts)) |
@@ -46,7 +46,13 @@
 5. Prepare the base image: `wardyn-runnerd macos-vm prepare`, or answer yes to the setup question and let `setup` start it ([Preparing the base image](#preparing-the-base-image)).
 6. Check it with `wardyn-runnerd macos-vm status`. A run is placed on the Mac only when the base is ready.
 
-- Either switch off, and nothing changes: no capability is offered and no code path runs.
+- The two switches are separate gates. The organisation's decides whether a run may ask: with it off, create refuses `macos_vm`. The Mac's decides what its runner offers: with it off, the Mac offers no macOS VMs.
+
+## Docker on the Mac
+
+- The runner uses the engine that `DOCKER_HOST` names, else the selected Docker context, as the `docker` command does. It follows only a context that is a local socket, and refuses any other with the `DOCKER_HOST` to set.
+- Docker Desktop is the engine this page is written for. Rancher Desktop, Colima and other engines are untested with macOS VMs.
+- Docker's memory comes off the Mac's budget for macOS guests ([How many VMs a Mac offers](#how-many-vms-a-mac-offers)).
 
 ## Settings
 
@@ -86,7 +92,7 @@
 | 2. Download | Apple's current restore image, about 25 GB, in resumable 64 MiB ranges. The SHA-256 is recorded |
 | 3. Validate | The image is loaded and checked against what this Mac supports. A bad image is deleted and fetched once more |
 | 4. Install | macOS is installed into a sparse 50 GB disk |
-| 5. First boot | Apple's unattended setup creates the guest's setup account, `wardyn-admin`, with a random password made for this prepare, and turns on Remote Login. This happens exactly once per base |
+| 5. First boot | On macOS 27, Apple's unattended setup creates the guest's setup account, `wardyn-admin`, with a random password made for this prepare, and turns on Remote Login. On macOS 26 the Mac's person does it once ([Setup by hand](#setup-by-hand)) |
 | 6. Stage 1 | Over a network with no egress, Wardyn signs in over SSH. It installs the guest agent, creates the standard user `agent` and sets up Screen Sharing, sleep, lock and updates. Last it turns Remote Login off and proves it (below) |
 | 7. Stage 2 | Through a prep-only proxy ([The prep proxy](#the-prep-proxy)), the guest agent installs the Command Line Tools. The pinned harness CLIs and the helper's own guest agent build are pushed in, and the guest needs no egress for them |
 | 8. Finish | The manifest is written and the base is marked ready. The downloaded image is deleted unless `--keep-ipsw` is set |
@@ -101,11 +107,6 @@
   - Just after, a new connection to port 22 must be refused outright. A timeout, or a network that cannot reach the guest, proves nothing: stage 1 keeps trying for 30 seconds, then fails.
   - A refusal counts only from a guest shown live on the same boot: port 5900 still sends its banner and no new DHCP request arrived. A stopped, rebooted or reset guest also refuses port 22, so that case stops stage 1 at once.
   - Any failure stops preparing and no base is published.
-- **Setup by hand.**
-  - If the guest's Remote Login has not answered after 10 minutes, macOS wants its setup by hand. Preparing writes a fresh 8-character one-time code and waits up to an hour for Remote Login.
-  - The Mac's person opens the guest's window on the Mac, creates the account `wardyn-admin` with the code as its password, and turns on Remote Login.
-  - `wardyn-runnerd macos-vm status` and `doctor` name the file that holds the code and never print it. No log or event carries it.
-  - Stage 1's first step replaces the code with a random password, signs in again with that, and only then deletes the file. Preparing also deletes it when it discards the base or ends.
 - **The desktop.** Apple has said Screen Sharing turned on from the command line may let a viewer only watch. Preparing ends with a control check, and `status` reports whether the desktop is `control`, `observe` or `none`. With `observe`, macOS VMs still run agent-only, and the desktop is not offered until a person turns on control for the base.
 - **Newer macOS.** Wardyn does not tell you that Apple has a newer image. To move to one, run `wardyn-runnerd macos-vm prepare --new-image` with the per-run flags; a plain `prepare` keeps a ready base and says there is nothing to prepare.
   - The new base is built beside the old one, which runs keep using until the new one is ready. Then the old one is replaced and deleted.
@@ -113,6 +114,24 @@
 - **Stopping stage 2.** Stopping a stage-2 boot, preparing's or a tools update's, through its control socket ends it at any point, even partway through an install.
   - Calls in flight to the guest are cancelled, the VM is stopped and its socket folder is removed. The stop returns only after that.
   - Stage 2 then fails, and no base is published from that boot.
+
+## Setup by hand
+
+- macOS 26 has no unattended setup of a guest; Apple added it in macOS 27. So on a macOS 26 Mac, preparing boots the installed guest into macOS's Setup Assistant and waits for a person, once per base.
+- On macOS 27 this happens only when the guest's Remote Login has not answered 10 minutes after the first boot.
+- Before you start, `wardyn-runnerd macos-vm status` on a macOS 26 Mac says that its prepare needs setup by hand.
+- When the wait begins, preparing writes a fresh 8-character one-time code to `~/Library/Application Support/Wardyn/macos-vm.noindex/setup-code.json`, readable by you only. `status` and `doctor` name the file and never print the code. No log or event carries it.
+- It opens a window on the Mac, "Wardyn: set up this macOS VM", with the guest's screen in it. The window has no close button: it closes by itself when the wait ends.
+- Preparing waits up to an hour for the guest's Remote Login, then stops and publishes no base. Run `prepare` again to retry.
+
+1. Start `wardyn-runnerd macos-vm prepare` in Terminal on the Mac, in your own login, or let `setup` start it. The window needs the Mac's screen, so do not start it over SSH.
+2. Wait for the download and install. When the window opens, read the code: `cat ~/Library/Application\ Support/Wardyn/macos-vm.noindex/setup-code.json`. The password is the `code` value; the account is `wardyn-admin`.
+3. In the window, choose a country and language. The guest has no internet while preparing: when asked for a network, continue without one, and skip Migration Assistant and Apple Account.
+4. Create the account: any full name, account name exactly `wardyn-admin`, and the code as its password. Do not turn on FileVault in the guest. Skip the remaining screens.
+5. At the guest's desktop, open System Settings > General > Sharing and turn on Remote Login.
+6. Leave the window. Within seconds of Remote Login answering, the window closes and preparing continues alone, signing in over SSH.
+
+- Stage 1's first step replaces the code with a random password, signs in again with that, and only then deletes the file. Preparing also deletes it when it discards the base or ends.
 
 ## The prep proxy
 
@@ -129,6 +148,7 @@
 - Two limits apply, and both can set it to 0:
   - The runner's declared memory totals. Docker's memory setting decides them: a total cannot pass the memory Docker reports, and a per-run limit cannot pass its total.
   - The Mac's memory budget: its memory, minus what Docker reports, minus 4 GiB for macOS. Each VM costs its guest memory plus about 1 GiB of host overhead.
+  - To run two VMs, lower Docker's memory allowance in its settings. On a 32 GiB Mac, Docker at 20 GiB leaves a budget of 8 GiB, enough for one guest; at 12 GiB it leaves 16, as in the first row below.
 - Left at the defaults, a runner's total is half of Docker's memory, shared among its runs. That is usually below one macOS guest's minimum, so set the limits when you register (`--total-memory`, `--per-run-memory`, `--total-cpu`, `--per-run-cpu`).
 - `wardyn-runnerd setup` shows this arithmetic with the Mac's own numbers and names what to change.
 - **Per-run limits.** The organisation sends the runner's per-run CPUs and memory on every connect, and the runner then recomputes `max`.
@@ -255,7 +275,11 @@
 |---|---|
 | Apple's Screen Sharing answers port 5900 with an RFB banner on the provisioning boot, before any VNC password is set | Stage 1's proof that the guest is live. Without the banner stage 1 fails closed |
 | Port 22 is refused with a reset, not a dropped connection, once Remote Login is off | The proof that Remote Login is off. A silent drop reads as not refused and fails closed |
-| Each stage-1 command and setting name, and the auto-login password file format on macOS 27 | Stage 1 as a whole. A wrong name fails the step and publishes no base |
+| Each stage-1 command and setting name, and the auto-login password file format, on macOS 26 and 27 guests | Stage 1 as a whole. A wrong name fails the step and publishes no base |
+| The setup window opens on the Mac, shows the guest and takes its keyboard and mouse, on macOS 26 and 27 | Setup by hand. Without it nobody can finish the setup, and preparing stops after its hour |
+| A macOS 26 Mac boots its installed guest into Setup Assistant with no start options | The macOS 26 prepare |
+| `systemsetup -setremotelogin off` runs over SSH without Full Disk Access | Stage 1's Remote Login step. A refusal fails it and publishes no base |
+| A macOS 26 guest's agent reaches the runner over the virtual socket | Every run on a macOS 26 base |
 | A rebooted or reset guest sends a new DHCP request | The same-boot half of the Remote Login proof |
 | macOS's auto-login copy of the setup password is overwritten by stage 1 | Whether the guest holds that password in `/etc/kcpassword` |
 | The Command Line Tools install through the seven allowed hosts and no other | Stage 2's tools. Without them the Mac offers only the user's own tools |
@@ -298,7 +322,7 @@
 
 | What you see | Cause and fix |
 |---|---|
-| Not offered; the runner says macOS 27 is needed | The Mac runs an older macOS. Upgrade it |
+| Not offered; the runner says macOS 26 is needed | The Mac runs macOS 25 or older. Upgrade it to macOS 26 or later |
 | No Mac in the pool offers macOS VMs | No runner in the pool has a ready base, or the pool mixes runners that do not. Run `status` on each Mac |
 | Not offered after a restart | Nobody has logged in since the restart, and FileVault is on |
 | The runner says the ledger is missing or damaged | Reinstall the runner package |
@@ -311,7 +335,7 @@
 | The runner says the Mac needs a restart | The framework still holds a slot. Restart the Mac |
 | A newer macOS is out | Run `wardyn-runnerd macos-vm prepare --new-image` ([Preparing the base image](#preparing-the-base-image)) |
 | Preparing waits | For AC power, or up to 2 minutes for Docker to start; then preparing stops. Run `wardyn-runnerd macos-vm prepare` again once Docker is running. A tools update's wait for Docker is not reported in 0.10.0 |
-| Preparing is waiting for setup by hand | Finish setup once in the guest's window, as `status` describes. Preparing waits up to an hour |
+| Preparing is waiting for setup by hand | Finish it once in the window "Wardyn: set up this macOS VM" ([Setup by hand](#setup-by-hand)). Preparing waits up to an hour |
 | Preparing stopped at the Remote Login check | Port 22 did not refuse, or the guest was not shown live on the same boot. No base was published; run `prepare` again |
 | The runner logs that it offers none and names `--per-run-memory` or `--per-run-cpu` | A per-run limit is below the base's minimum. Raise it ([How many VMs a Mac offers](#how-many-vms-a-mac-offers)) |
 

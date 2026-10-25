@@ -82,11 +82,11 @@ func TestUsage(t *testing.T) {
 }
 
 // TestPrepareRefusedWhereProvisioningUnsupported: prepare is refused with
-// the provisioner's reason where this build or host cannot provision.
+// the provisioner's reason where this build or host cannot boot a first boot.
 func TestPrepareRefusedWhereProvisioningUnsupported(t *testing.T) {
 	sup := macvm.NewProvisioner().Supported()
-	if sup == nil {
-		t.Skip("this host can provision a first boot")
+	if sup == nil || errors.Is(sup, macvm.ErrNoProvisioning) {
+		t.Skip("this host can boot a first boot")
 	}
 	d, _, errb := testDeps(&macvmtest.Engine{})
 	code := run(context.Background(), []string{"prepare", "--root", t.TempDir(), "--cpus", "4", "--memory-mib", "8192"}, d)
@@ -96,8 +96,8 @@ func TestPrepareRefusedWhereProvisioningUnsupported(t *testing.T) {
 }
 
 // TestPrepareDepsWiresEveryPart: prepare gets macvm.NewProvisioner, the
-// vmnet prep network and stage 1, and is refused only where provisioning is
-// unsupported.
+// vmnet prep network and stage 1, and is refused only where no first boot
+// can run; a host with no guest provisioning prepares by hand.
 func TestPrepareDepsWiresEveryPart(t *testing.T) {
 	var o macvm.PrepareOptions
 	err := prepareDeps(&o, slog.New(slog.DiscardHandler))
@@ -107,12 +107,26 @@ func TestPrepareDepsWiresEveryPart(t *testing.T) {
 	if o.PrepNet == nil || o.Bootstrap == nil {
 		t.Fatalf("PrepNet or Bootstrap unset: %+v", o)
 	}
-	if sup := macvm.NewProvisioner().Supported(); sup == nil {
+	if sup := macvm.NewProvisioner().Supported(); sup == nil || errors.Is(sup, macvm.ErrNoProvisioning) {
 		if err != nil {
-			t.Fatalf("prepareDeps on a host that can provision: %v", err)
+			t.Fatalf("prepareDeps on a host that can boot a first boot: %v", err)
 		}
 	} else if err == nil || !strings.Contains(err.Error(), sup.Error()) {
 		t.Fatalf("prepareDeps: %v; want the provisioner's %q", err, sup)
+	}
+	// A macOS 26 host (no guest provisioning) is not refused; any other answer is.
+	for _, tc := range []struct {
+		sup    error
+		refuse bool
+	}{
+		{fmt.Errorf("macvm provision: no class VZMacGuestProvisioningOptions; %w needs macOS 27", macvm.ErrNoProvisioning), false},
+		{fmt.Errorf("macvm provision: has no %w", macvm.ErrNoVirtualization), true},
+		{macvm.ErrProvisionUnsupported, true},
+	} {
+		o := macvm.PrepareOptions{FirstBoot: &macvmtest.FirstBoot{Unsupported: tc.sup}}
+		if err := prepareDeps(&o, slog.New(slog.DiscardHandler)); (err != nil) != tc.refuse {
+			t.Errorf("%v: prepareDeps %v, want refused %v", tc.sup, err, tc.refuse)
+		}
 	}
 }
 
@@ -281,7 +295,8 @@ func TestProbe(t *testing.T) {
 		want      int
 	}{
 		{"supported", nil, &macvmtest.FirstBoot{}, 0},
-		{"old macOS", errors.New("macOS VMs need macOS 27 or later"), &macvmtest.FirstBoot{}, 1},
+		{"macOS 26: no guest provisioning, setup by hand", nil, &macvmtest.FirstBoot{Unsupported: fmt.Errorf("no class X; %w needs macOS 27", macvm.ErrNoProvisioning)}, 0},
+		{"old macOS", errors.New("macOS VMs need macOS 26 or later"), &macvmtest.FirstBoot{}, 1},
 		{"no provisioning linked", nil, nil, 1},
 		{"provisioning unsupported", nil, &macvmtest.FirstBoot{Unsupported: errors.New("too old")}, 1},
 	} {
@@ -295,7 +310,7 @@ func TestProbe(t *testing.T) {
 		if code != tc.want || r.Supported != (tc.want == 0) || r.GOOS == "" || r.HelperVersion == "" {
 			t.Fatalf("%s: exit %d, report %+v", tc.name, code, r)
 		}
-		if tc.want == 0 && r.Provisioning != "ok" {
+		if fb, _ := tc.firstBoot.(*macvmtest.FirstBoot); tc.want == 0 && (r.Provisioning == "ok") != (fb.Unsupported == nil) {
 			t.Fatalf("%s: provisioning %q", tc.name, r.Provisioning)
 		}
 		if tc.hostErr != nil && r.Host != tc.hostErr.Error() {
@@ -332,6 +347,7 @@ func TestProbeReasonCode(t *testing.T) {
 		{"supported", &macvmtest.FirstBoot{}, ""},
 		{"no virtualization", &macvmtest.FirstBoot{Unsupported: fmt.Errorf("macvm provision: has no %w; needs macOS 27", macvm.ErrNoVirtualization)}, "no_virtualization"},
 		{"no provisioning", &macvmtest.FirstBoot{Unsupported: errors.New("macvm provision: no class VZMacGuestProvisioningOptions")}, "no_provisioning"},
+		{"no provisioning, macOS 26", &macvmtest.FirstBoot{Unsupported: fmt.Errorf("no class X; %w needs macOS 27", macvm.ErrNoProvisioning)}, "no_provisioning"},
 		{"stub", &macvmtest.FirstBoot{Unsupported: macvm.ErrProvisionUnsupported}, ""},
 		{"no first boot", nil, ""},
 	} {

@@ -28,6 +28,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   release's wardyn-runnerd. With an older one the page says "Removing…" for 10 minutes after the run ends, then nothing
   about the disk. A saved "Finished" arrangement of the run page gains the "Attach from your terminal" tile at its
   bottom, once, where the disk line shows.
+- macOS VMs run on a Mac on macOS 26 as well as 27. macOS 26 has no unattended guest setup, so a 26 Mac's first
+  `wardyn-runnerd macos-vm prepare` stops after the install for setup by hand, once, about 10 minutes at the Mac;
+  `status` says so beforehand. On macOS 27 nothing changes. Setup by hand now opens the guest's window on the Mac,
+  "Wardyn: set up this macOS VM"; before, its instructions pointed at a window that did not exist, even on 27. The
+  helper is built for macOS 26, and the release checks that no binary in the package asks for a newer macOS.
 
 ## [0.10.0-rc.2] — 2026-10-25
 

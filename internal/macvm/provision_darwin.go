@@ -17,6 +17,7 @@ char *wardynProvisionWait(void *h);
 void wardynProvisionRequestStop(void *h);
 void wardynProvisionForceStop(void *h);
 void wardynProvisionFree(void *h);
+void *wardynProvisionMachine(void *h);
 */
 import "C"
 
@@ -38,25 +39,27 @@ type provisionDarwin struct{}
 func (provisionDarwin) Supported() error {
 	if m := C.wardynProvisionMissing(); m != nil {
 		defer C.free(unsafe.Pointer(m))
-		var missing error = errors.New(C.GoString(m))
-		if missing.Error() == ErrNoVirtualization.Error() {
-			missing = ErrNoVirtualization
+		missing := C.GoString(m)
+		if missing == ErrNoVirtualization.Error() {
+			return fmt.Errorf("macvm provision: this Mac's Virtualization framework has no %w", ErrNoVirtualization)
 		}
-		return fmt.Errorf("macvm provision: this Mac's Virtualization framework has no %w; guest provisioning needs macOS 27 or later", missing)
+		return fmt.Errorf("macvm provision: this Mac's Virtualization framework has no %s; %w needs macOS %d or later", missing, ErrNoProvisioning, ProvisionHostMajor)
 	}
 	return nil
 }
 
-func (p provisionDarwin) Boot(disk, aux string, hardwareModel, machineID []byte, cpus uint, memoryBytes uint64, nic *os.File, username, password string) (<-chan error, func(context.Context) error, error) {
-	if err := p.Supported(); err != nil {
-		return nil, nil, err
+// Boot with username "" is the plain boot of a host without guest provisioning; the C side then
+// starts the VM with no provisioning options.
+func (p provisionDarwin) Boot(disk, aux string, hardwareModel, machineID []byte, cpus uint, memoryBytes uint64, nic *os.File, username, password string) (FirstBoot, error) {
+	if err := p.Supported(); err != nil && (username != "" || !errors.Is(err, ErrNoProvisioning)) {
+		return FirstBoot{}, err
 	}
 	if len(hardwareModel) == 0 || len(machineID) == 0 {
-		return nil, nil, errors.New("macvm provision: the base has no hardware model or machine identifier")
+		return FirstBoot{}, errors.New("macvm provision: the base has no hardware model or machine identifier")
 	}
 	raw, err := nic.SyscallConn()
 	if err != nil {
-		return nil, nil, fmt.Errorf("macvm provision: network socket: %w", err)
+		return FirstBoot{}, fmt.Errorf("macvm provision: network socket: %w", err)
 	}
 	cs := []*C.char{C.CString(disk), C.CString(aux), C.CString(username), C.CString(password)}
 	defer func() {
@@ -73,15 +76,15 @@ func (p provisionDarwin) Boot(disk, aux string, hardwareModel, machineID []byte,
 			unsafe.Pointer(&machineID[0]), C.int(len(machineID)),
 			C.uint(cpus), C.ulonglong(memoryBytes), C.int(fd), cs[2], cs[3], &cErr)
 	}); err != nil {
-		return nil, nil, fmt.Errorf("macvm provision: network socket: %w", err)
+		return FirstBoot{}, fmt.Errorf("macvm provision: network socket: %w", err)
 	}
 	if h == nil {
-		return nil, nil, provisionCError("start", cErr)
+		return FirstBoot{}, provisionCError("start", cErr)
 	}
 
 	vm := &provisionVM{h: h, done: make(chan error, 1), exited: make(chan struct{})}
 	go vm.wait()
-	return vm.done, vm.stop, nil
+	return FirstBoot{Done: vm.done, Stop: vm.stop, Screen: vm.screen}, nil
 }
 
 // provisionVM owns one started VM. h is freed, under mu, once the VM stops.
@@ -113,6 +116,16 @@ func (v *provisionVM) stop(ctx context.Context) error {
 		<-v.exited
 	}
 	return v.result
+}
+
+// screen opens this VM's window (showScreen). The lock keeps the VM from being freed meanwhile.
+func (v *provisionVM) screen() (func(), error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.h == nil {
+		return nil, ErrGuestStopped
+	}
+	return showScreen(C.wardynProvisionMachine(v.h))
 }
 
 func (v *provisionVM) call(f func(unsafe.Pointer)) {
