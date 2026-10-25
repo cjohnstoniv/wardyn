@@ -263,6 +263,8 @@
 | A real `wardyn-proxy` that is attached through standard input only and watched for an early exit | The prep proxy that stage 2 depends on |
 | The VM has exactly one network device of the expected kind | The guest's only route being its own relay |
 | A VM shut down from inside the guest frees its slot | The two-VM count |
+| A full network buffer on the guest's side drops only the frames it refuses, and the guest's network stays up | The guest's network under a large download, such as the Command Line Tools. TCP resends what was dropped |
+| A guest that goes away is noticed by the helper's network relay | The relay ending instead of waiting; on Linux it ends at its next send |
 | A release's guest agent carries the same version stamp as its helper | The helper's check that the guest runs its own agent. Both are built in one step from one stamp, but nothing reads the agent's stamp back |
 
 - **Every other check that needs a real Mac** has also not run:
