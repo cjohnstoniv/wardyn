@@ -1325,8 +1325,8 @@ jobs:
           [ -n "$agent" ] && [ "$(wc -l <<<"$agent")" -eq 1 ] && [ -x "$agent" ]
           codesign --verify --strict "$agent"
           [ -z "$(codesign -d --entitlements :- "$agent" 2>/dev/null)" ]
-          # The helper refuses an agent of another version: the helper reports the bare release version, and the
-          # pair were built from the same commit.
+          # Nothing at run time compares the agent's version, so this proves provenance: the helper reports the
+          # bare release version, and the pair were built from the same commit.
           [ "$("$helper" version)" = "$version" ]
           stamp() { go version -m "$1" | grep -E '^[[:space:]]+build[[:space:]]+(-ldflags|vcs\.revision|vcs\.modified)=' || true; }
           want="$(stamp "$helper")"

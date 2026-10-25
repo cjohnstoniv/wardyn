@@ -1808,8 +1808,8 @@ jobs:
           echo "probe exit status: $rc"
           [ "$rc" -le 1 ]
           jq -e '.vz == true and (.host | type == "string")' "$RUNNER_TEMP/probe.json"
-      # The helper installs this into the guest and compares its version with its own. Neither is stamped here,
-      # so both read the same checkout's commit from the build info; the release job stamps both releaseBuild.
+      # The helper installs this into the guest and labels it with its own version; nothing at run time reads the
+      # agent's. Neither is stamped here, so both read the same checkout's commit from the build info.
       - name: Build the guest agent, sign it ad hoc with no entitlement and read it back
         id: agent
         if: ${{ !cancelled() }}
