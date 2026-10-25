@@ -64,6 +64,9 @@ type PrepNetwork interface {
 	// Serve relays the host side of the guest NIC until Close.
 	Serve(nic *os.File) error
 	DialGuest(ctx context.Context, port int) (net.Conn, error)
+	// DHCPRequests counts the guest's DHCP requests
+	// (vmnet.Relay.DHCPRequests): stage 1's boot epoch.
+	DHCPRequests() uint64
 	Close() error
 }
 
@@ -91,12 +94,6 @@ type BootstrapInput struct {
 	// liveness the helper has. Stage 1 counts a refused port 22 as Remote
 	// Login off only when the epoch is the same before and after.
 	GuestEpoch func() (uint64, error)
-}
-
-// LeaseCounter is a prep network that counts the guest's DHCP requests
-// (vmnet.Relay.DHCPRequests).
-type LeaseCounter interface {
-	DHCPRequests() uint64
 }
 
 // ErrGuestStopped means the provisioning VM stopped.
@@ -640,11 +637,7 @@ func (p *prep) provisionAndBootstrap(ctx context.Context, spec MachineSpec) (Boo
 			if vmStopped.Load() {
 				return 0, ErrGuestStopped
 			}
-			lc, ok := nw.(LeaseCounter)
-			if !ok {
-				return 0, errors.New("macvm: the prep network cannot show the guest's DHCP requests")
-			}
-			return lc.DHCPRequests(), nil
+			return nw.DHCPRequests(), nil
 		}}
 	if replace != "" {
 		in.NewPassword, in.Replaced = replace, p.removeSetupCode

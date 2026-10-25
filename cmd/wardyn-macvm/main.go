@@ -317,6 +317,11 @@ func (j jobFlags) stage2(eng macvm.Engine, d deps, relayLog *slog.Logger) (*macv
 	if err != nil {
 		return nil, err
 	}
+	// Refused here, before anything boots: an update that cannot install
+	// the agent would leave the base drifted, and every start would boot it.
+	if _, err := os.Stat(agent); err != nil {
+		return nil, fmt.Errorf("stage 2 needs the wardyn-guest-agent beside this helper: %w", err)
+	}
 	boot := macvm.Stage2BootConfig{Engine: eng, SockRoot: *j.sockRoot, SockKey: macvm.JobSockKey(*j.entry), SockFstat: d.sockFstat, Log: relayLog}
 	return &macvm.ToolsStage{Boot: boot.ToolsBoot(), ToolsOptions: macvm.ToolsOptions{
 		Tooling: t, Cache: filepath.Join(macvm.Layout{Root: *j.root}.CacheDir(), "tools"),

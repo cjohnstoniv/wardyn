@@ -85,15 +85,10 @@ func guestFD(t *testing.T, guest *os.File, fn func(fd int)) {
 	})
 }
 
-// TestPrepNetAnswersDHCPAndCountsLeases: the wired prep network is a
-// macvm.LeaseCounter, and a DHCP request on prepare's datagram NIC pair gets
+// TestPrepNetAnswersDHCPAndCountsLeases: a DHCP request on prepare's datagram NIC pair gets
 // a reply datagram and is counted.
 func TestPrepNetAnswersDHCPAndCountsLeases(t *testing.T) {
 	nw := wiredPrepNet(t, t.TempDir())
-	lc, ok := nw.(macvm.LeaseCounter)
-	if !ok {
-		t.Fatalf("%T is not a macvm.LeaseCounter", nw)
-	}
 	guest, host, err := macvm.NewNetPair()
 	if err != nil {
 		t.Fatal(err)
@@ -116,7 +111,7 @@ func TestPrepNetAnswersDHCPAndCountsLeases(t *testing.T) {
 	if ioErr != nil {
 		t.Fatalf("no DHCP reply datagram: %v", ioErr)
 	}
-	if got := lc.DHCPRequests(); got != 1 {
+	if got := nw.DHCPRequests(); got != 1 {
 		t.Fatalf("DHCPRequests = %d; want 1", got)
 	}
 }

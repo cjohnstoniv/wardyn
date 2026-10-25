@@ -47,7 +47,7 @@ func (n *relayNet) DialGuest(ctx context.Context, port int) (net.Conn, error) {
 	return n.srv.Dial(ctx, port)
 }
 
-// DHCPRequests makes relayNet a macvm.LeaseCounter, as vmnet.Relay is.
+// DHCPRequests is the fake relay's DHCP count, which tests bump.
 func (n *relayNet) DHCPRequests() uint64 { return n.dhcp.Load() }
 
 func stage1Prep(t *testing.T) (*prepFixture, *stage1test.Server) {
@@ -180,6 +180,15 @@ func TestPrepareStage1UnknownLivenessPublishesNoBase(t *testing.T) {
 		"port 22 refused, Screen Sharing silent": func(*prepFixture, *relayNet) func(context.Context, int) (net.Conn, error) {
 			return func(context.Context, int) (net.Conn, error) { return nil, stage1test.Refused() }
 		},
+		"port 22 refused, Screen Sharing mute": func(_ *prepFixture, rn *relayNet) func(context.Context, int) (net.Conn, error) {
+			return func(ctx context.Context, port int) (net.Conn, error) {
+				if port == 22 {
+					return nil, stage1test.Refused()
+				}
+				rn.srv.MuteRFB(true)
+				return rn.srv.Dial(ctx, port)
+			}
+		},
 		"port 22 times out": func(_ *prepFixture, rn *relayNet) func(context.Context, int) (net.Conn, error) {
 			return func(ctx context.Context, port int) (net.Conn, error) {
 				if port == 22 {
@@ -222,11 +231,12 @@ func TestPrepareStage1UnknownLivenessPublishesNoBase(t *testing.T) {
 // the VM runs, and once after it stopped.
 type epochProbe struct {
 	fb                 *macvmtest.FirstBoot
+	epoch              uint64
 	running, afterStop error
 }
 
 func (b *epochProbe) Bootstrap(ctx context.Context, in macvm.BootstrapInput) (macvm.BootstrapResult, error) {
-	_, b.running = in.GuestEpoch()
+	b.epoch, b.running = in.GuestEpoch()
 	b.fb.Shutdown(nil)
 	<-ctx.Done() // prepare has seen the stop
 	_, b.afterStop = in.GuestEpoch()
@@ -234,22 +244,14 @@ func (b *epochProbe) Bootstrap(ctx context.Context, in macvm.BootstrapInput) (ma
 }
 
 // TestPrepareGuestEpochFailsOnceTheVMStops: the epoch prepare hands stage 1
-// reads the relay's DHCP count while the VM runs, and fails once it stopped;
-// a prep network with no DHCP count gives no epoch at all.
+// reads the relay's DHCP count while the VM runs, and fails once it stopped.
 func TestPrepareGuestEpochFailsOnceTheVMStops(t *testing.T) {
-	f, _ := stage1PrepNet(t)
+	f, rn := stage1PrepNet(t)
+	rn.dhcp.Store(5)
 	b := &epochProbe{fb: f.fb}
 	f.opts.Bootstrap = b
 	_, _ = macvm.Prepare(context.Background(), f.opts)
-	if b.running != nil || !errors.Is(b.afterStop, macvm.ErrGuestStopped) {
-		t.Fatalf("epoch while running: %v; after the stop: %v", b.running, b.afterStop)
-	}
-
-	g := newPrep(t) // its prep network counts no DHCP
-	p := &epochProbe{fb: g.fb}
-	g.opts.Bootstrap = p
-	_, _ = macvm.Prepare(context.Background(), g.opts)
-	if p.running == nil {
-		t.Fatal("an epoch from a prep network that counts no DHCP")
+	if b.epoch != 5 || b.running != nil || !errors.Is(b.afterStop, macvm.ErrGuestStopped) {
+		t.Fatalf("epoch while running: %d %v; after the stop: %v", b.epoch, b.running, b.afterStop)
 	}
 }

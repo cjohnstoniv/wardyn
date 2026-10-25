@@ -16,12 +16,13 @@ import (
 )
 
 // prepNet is prepare's prep network: vmnet's no-egress preparation relay on
-// the guest NIC's datagram socket. The embedded relay's DHCPRequests makes it
-// a macvm.LeaseCounter.
+// the guest NIC's datagram socket. The embedded relay gives it DHCPRequests.
 type prepNet struct {
 	*vmnet.Relay
 	closeOnce sync.Once
 }
+
+var _ macvm.PrepNetwork = (*prepNet)(nil)
 
 // newPrepNet builds the relay, logging its refusals and drops to log.
 func newPrepNet(log *slog.Logger) (macvm.PrepNetwork, error) {
