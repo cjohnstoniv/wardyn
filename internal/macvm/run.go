@@ -41,6 +41,9 @@ type RunOptions struct {
 	Claim func(RunConfig) error
 	// SockFstat replaces fstat(2) in the socket directory checks (tests).
 	SockFstat func(fd int, name string) (unix.Stat_t, error)
+	// extraPorts are vsock ports this boot registers beyond a run's (tests
+	// of the listener check).
+	extraPorts []uint32
 }
 
 // DefaultStopTimeout is the graceful stop allowance when none is given.
@@ -213,11 +216,7 @@ func (r *runner) run(ctx context.Context) error {
 	r.machine = m
 	r.st.ReadBackSHA256 = readBack
 	r.mu.Unlock()
-	r.setState(StateRunning, "")
-	if r.o.HoldIdleSleep != nil {
-		defer r.o.HoldIdleSleep(os.Getpid())()
-	}
-
+	// Running only once the listener set is checked and agent.sock serves.
 	stopServing, err := r.serveGuest(m)
 	if err != nil {
 		r.setState(StateError, err.Error())
@@ -225,6 +224,10 @@ func (r *runner) run(ctx context.Context) error {
 		return err
 	}
 	defer stopServing()
+	r.setState(StateRunning, "")
+	if r.o.HoldIdleSleep != nil {
+		defer r.o.HoldIdleSleep(os.Getpid())()
+	}
 
 	select {
 	case <-m.Done():
@@ -268,7 +271,7 @@ func (r *runner) serveGuest(m Machine) (func(), error) {
 	if r.o.Desktop != nil {
 		ports = append(ports, guestPort{port: DesktopPort, sock: DesktopSock, open: []byte{DesktopOpenByte}, serve: r.o.Desktop.ServeDesktop})
 	}
-	for _, port := range runExtraPorts {
+	for _, port := range r.o.extraPorts {
 		ports = append(ports, guestPort{port: port, sock: "tools.sock", serve: splice})
 	}
 	listeners := make([]net.Listener, len(ports))
