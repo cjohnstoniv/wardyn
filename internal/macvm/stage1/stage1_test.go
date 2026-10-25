@@ -579,13 +579,19 @@ func TestOnlyTheAdminAndTheAgentMayBeAccounts(t *testing.T) {
 	})
 	t.Run("the listing cannot be read", func(t *testing.T) {
 		s := &session{username: admin}
-		for _, out := range []string{"", "wardyn-admin\n", "wardyn-admin 501 extra\n", "wardyn-admin abc\nagent 502\n", "agent 502\n", "wardyn-admin 501\n"} {
+		for _, out := range []string{"", "wardyn-admin 501 extra\n", "wardyn-admin abc\nagent 502\n", "agent 502\n", "wardyn-admin 501\n"} {
 			if err := s.checkAccounts(out); !errors.Is(err, ErrUnexpectedAccounts) {
 				t.Errorf("checkAccounts(%q) = %v, want a refusal", out, err)
 			}
 		}
 		if err := s.checkAccounts("root 0\nnobody -2\n_spotlight 89\nwardyn-admin 501\nagent 502\n"); err != nil {
 			t.Errorf("the two accounts among the system ones were refused: %v", err)
+		}
+		if err := s.checkAccounts("_nouid\nwardyn-admin 501\nagent 502\n"); err != nil {
+			t.Errorf("a record with no UniqueID was refused: %v", err)
+		}
+		if err := s.checkAccounts("wardyn-admin\nagent 502\n"); !errors.Is(err, ErrUnexpectedAccounts) {
+			t.Errorf("an admin with no UniqueID passed: %v", err)
 		}
 	})
 }

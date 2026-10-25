@@ -387,13 +387,17 @@ func (s *session) run(ctx context.Context, c command) error {
 	return nil
 }
 
-// checkAccounts reads dscl's "name UniqueID" lines strictly: a line that is not exactly two fields with a
-// numeric ID, or an output with none, is refused. The users of UniqueID 500 or more must be the admin and
+// checkAccounts reads dscl's "name UniqueID" lines strictly: a line that is not a name alone (a record with no
+// UniqueID cannot sign in, and a real Mac may hold one, so it is skipped) or exactly two fields with a numeric
+// ID, or an output with none, is refused. The users of UniqueID 500 or more must be the admin and
 // the agent and no one else.
 func (s *session) checkAccounts(listing string) error {
 	var found []string
 	for _, l := range strings.Split(strings.TrimSpace(listing), "\n") {
 		f := strings.Fields(l)
+		if len(f) == 1 {
+			continue
+		}
 		if len(f) != 2 {
 			return fmt.Errorf("%w: cannot read %q", ErrUnexpectedAccounts, l)
 		}
