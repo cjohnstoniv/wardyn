@@ -199,9 +199,17 @@ func readMacRun(dir string, runID uuid.UUID) (macvm.RunConfig, error) {
 const (
 	macVMLostNetwork = "The macOS VM lost its network"
 	macVMRestarted   = "The Mac restarted; the macOS VM was lost"
-	macVMUpgraded    = "This Mac's runner was upgraded while the macOS VM ran"
-	macVMLowDisk     = "This Mac ran low on disk"
+	macVMUpgraded    = "This Mac's runner was upgraded while the macOS VM ran, so the run was ended."
 )
+
+// macVMLowDisk is the text of a run the low-disk check ended; freeGB is what the check read (the run's
+// macLowDiskFile). A file that does not hold a number leaves the free space out rather than guess it.
+func macVMLowDisk(freeGB string) string {
+	if n, err := strconv.Atoi(strings.TrimSpace(freeGB)); err == nil {
+		return fmt.Sprintf("This Mac ran low on disk (%d GB free), so the macOS VM was stopped.", n)
+	}
+	return "This Mac ran low on disk, so the macOS VM was stopped."
+}
 
 // refuseMacVMSpec refuses, before anything is created, what a macOS VM cannot honour, and a run that a
 // stale cap let through: the base must be ready, serve every harness the run starts, and fit the run's
@@ -586,7 +594,8 @@ func attachFile(h client.HijackedResponse) (*os.File, error) {
 // Mac restarted, or the helper died), and one that speaks another control protocol is ended cleanly.
 func (d *Driver) macVMStatus(ctx context.Context, v *vmRun) (runner.Status, error) {
 	if _, err := os.Lstat(filepath.Join(v.dir, macLowDiskFile)); err == nil {
-		return runner.Status{State: types.RunStopped, Message: macVMLowDisk}, nil
+		free, _ := os.ReadFile(filepath.Join(v.dir, macLowDiskFile))
+		return runner.Status{State: types.RunStopped, Message: macVMLowDisk(string(free))}, nil
 	}
 	c := d.macVMConfig()
 	if c == nil {

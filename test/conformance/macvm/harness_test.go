@@ -70,16 +70,18 @@ var statusKeys = []string{"state", "phase", "base", "desktop", "harnesses", "the
 // Sentences the suite matches. Placement's come from internal/api/run_placement_capabilities.go,
 // the ledger's from internal/macvm/admission; console copy may still change with the approved mock.
 var msg = map[string]*regexp.Regexp{
-	"licence": regexp.MustCompile(`This Mac already runs 2 macOS VMs, the most Apple's licence allows`),
-	"noRoom":  regexp.MustCompile(`This Mac has no room for another macOS VM right now`),
+	"licence": regexp.MustCompile(`already runs 2 macOS VMs, the most Apple's licence allows`),
+	"noRoom":  regexp.MustCompile(`has no room for another macOS VM right now`),
 	// ledgerDisk is the runner ledger's own disk refusal.
 	"ledgerDisk": regexp.MustCompile(`this Mac needs \d+ GiB free for another macOS VM`),
 	"preparing":  regexp.MustCompile(`This Mac is preparing macOS, which uses one of its 2 VM slots`),
-	"posture":    regexp.MustCompile("This Mac has no MDM posture file saying it is managed"),
-	"managedOp":  regexp.MustCompile("This Mac is not marked as company-managed. A security operator marks it with `wardyn runner trust"),
-	"managedMem": regexp.MustCompile(`This Mac is not marked as company-managed. Ask a security operator to mark it`),
+	"posture":    regexp.MustCompile("has no MDM posture file saying it is managed"),
+	"managedOp":  regexp.MustCompile("is not marked as company-managed. Mark it with `wardyn runner trust"),
+	"managedMem": regexp.MustCompile(`is not marked as company-managed. Ask a security operator to mark it`),
 	// signInsOff is the 403 at desktop open and at the sign-in pause (internal/api), never placement's.
 	"signInsOff": regexp.MustCompile(`Your admin doesn't allow sign-ins in this desktop while this agent runs`),
+	// signInsOffMac is the same 403 at a macOS desktop's open, which says a macOS desktop cannot block them.
+	"signInsOffMac": regexp.MustCompile(`Your admin doesn't allow sign-ins in a desktop while .+ runs, and a macOS desktop can't block them yet`),
 	// placementAny is any placement refusal: a create that failed without one is a CLI failure.
 	"placementAny": regexp.MustCompile(`placement_|runner_posture_unmet|This Mac |macOS virtual machines|macOS VM`),
 }

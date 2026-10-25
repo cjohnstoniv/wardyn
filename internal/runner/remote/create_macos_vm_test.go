@@ -55,13 +55,13 @@ func notSent(t *testing.T, rig *runnertest.Rig) {
 // Linux VMs alone, are refused with the reason and sent no call.
 func TestCreateMacOSVMNeedsTheRunnersMacOSVMCaps(t *testing.T) {
 	rig := runnertest.NewRig(t, rid)
-	if _, err := rig.Sub.CreateSandbox(ctxT(t), macSpec()); err == nil || !strings.Contains(err.Error(), remote.MacOSVMNotOffered) {
+	if _, err := rig.Sub.CreateSandbox(ctxT(t), macSpec()); err == nil || !strings.Contains(err.Error(), remote.MacOSVMNotOffered("This runner")) {
 		t.Fatalf("macOS VM create with no caps = %v, want the macos_vm refusal", err)
 	}
 	notSent(t, rig)
 
 	advertiseKinds(t, rig, &runnerwire.VMCaps{MachineType: "pc-q35-10.0", CPUModel: "Haswell-v4", QEMUVersion: "10.0.13", Virtiofs: true}, nil)
-	if _, err := rig.Sub.CreateSandbox(ctxT(t), macSpec()); err == nil || !strings.Contains(err.Error(), remote.MacOSVMNotOffered) {
+	if _, err := rig.Sub.CreateSandbox(ctxT(t), macSpec()); err == nil || !strings.Contains(err.Error(), remote.MacOSVMNotOffered("This runner")) {
 		t.Fatalf("macOS VM create on a Linux-VM-only runner = %v, want the macos_vm refusal", err)
 	}
 	notSent(t, rig)
@@ -91,7 +91,7 @@ func TestCreateMacOSVMTakesNoFolder(t *testing.T) {
 	notSent(t, rig)
 
 	_, err := rig.Sub.CreateSandbox(ctxT(t), macSpec())
-	if err == nil || strings.Contains(err.Error(), remote.MacOSVMNotOffered) || strings.Contains(err.Error(), remote.VMNoFolderShare) {
+	if err == nil || strings.Contains(err.Error(), remote.MacOSVMNotOffered("This runner")) || strings.Contains(err.Error(), remote.VMNoFolderShare) {
 		t.Fatalf("macOS VM with no folder = %v, want the org's checks passed and the runner's own answer", err)
 	}
 }
