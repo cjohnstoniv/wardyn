@@ -37,6 +37,13 @@ export const minimumFill = (intent: RunIntent, min: MacOSMinimum): NonNullable<G
   ...((intent.resources?.memory_mib ?? 0) < min.memoryMib && { memory_mib: min.memoryMib }),
 });
 
+/** The fill without one figure: a figure the person sets is theirs, even when they set it back to the number filled in. */
+export function disownFill(fill: GuidedFacts["macosFill"], key: "cpu_millis" | "memory_mib"): GuidedFacts["macosFill"] {
+  if (fill?.[key] === undefined) return fill;
+  const { [key]: _owned, ...rest } = fill;
+  return Object.keys(rest).length ? rest : undefined;
+}
+
 /** Leaving macOS takes back the figures the pre-fill added, and only while each is still the number it filled in. */
 export function dropMinimum(intent: RunIntent, fill: GuidedFacts["macosFill"]): RunIntent {
   const { cpu_millis: cpu, memory_mib: memory, ...rest } = intent.resources ?? {};

@@ -13,9 +13,11 @@ import { MemoryRouter } from "react-router-dom";
 import { SCENARIO_POOLS } from "../../../../../lib/new-run-fixtures/scenarios/pools";
 import type { SetupStatus } from "../../../../../lib/types/setup";
 import { NR_MACHINE } from "../../../../wardyn/copy/new-run/machine";
+import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
 import { NR_RUN } from "../../../../wardyn/copy/new-run/run";
 import { ModelAccessProvider } from "../../../../wardyn/model-access-context";
 import type { RunIntent } from "../../draft/run-intent";
+import { LimitsGroup } from "../../review/groups/limits-group";
 import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft } from "../../new-run-route";
 import { MacOSOfferContext, type MacOSOffer, type MacOSRefusal } from "./macos-offer";
 import { RunStep } from "./run-step";
@@ -38,7 +40,12 @@ function Seeded({ intent, children }: { intent: RunIntent; children: React.React
 const Probe = () => <p data-testid="intent">{JSON.stringify(useNewRunDraft().intent)}</p>;
 const intentNow = (): RunIntent => JSON.parse(screen.getByTestId("intent").textContent ?? "{}");
 
-function show(intent: RunIntent, status: SetupStatus | null, offer?: MacOSOffer) {
+// Review's Limits group on the same draft as the step, for the edit that happens between choosing macOS and leaving it.
+function Limits() {
+  return <LimitsGroup draft={useNewRunDraft()} pre={null} preview={null} docRows={[]} go={vi.fn()} dispatch={useNewRunDispatch()} />;
+}
+
+function show(intent: RunIntent, status: SetupStatus | null, offer?: MacOSOffer, extra?: React.ReactNode) {
   render(
     <MemoryRouter>
       <ModelAccessProvider status={status} onRefresh={() => {}}>
@@ -47,6 +54,7 @@ function show(intent: RunIntent, status: SetupStatus | null, offer?: MacOSOffer)
             <Seeded intent={intent}>
               <RunStep location={{ screen: "step", step: "run" }} go={vi.fn()} startFromScratch={() => {}} deps={{ load: vi.fn(async () => SCENARIO_POOLS.member) }} />
               <Probe />
+              {extra}
             </Seeded>
           </NewRunDraftProvider>
         </MacOSOfferContext.Provider>
@@ -137,6 +145,24 @@ describe("OS row: macOS chosen (frame 2, M-N2 frame 1)", () => {
     expect(intentNow().resources).toEqual({ cpu_millis: 4000, memory_mib: 8192 });
     await userEvent.click(within(osGroup()).getByRole("button", { name: NR_MACHINE.OS_LINUX }));
     expect(intentNow()).toMatchObject({ machine_kind: "linux_vm", resources: { cpu_millis: 4000, memory_mib: 8192 } });
+  });
+
+  it("keeps a CPU the person edited away and back to the filled number, and still takes back the untouched memory fill", async () => {
+    show(AGENT, ON, READY, <Limits />);
+    await chooseVM();
+    await userEvent.click(macosButton());
+    expect(intentNow().resources).toEqual({ cpu_millis: 4000, memory_mib: 8192 });
+    await userEvent.click(screen.getByRole("button", { name: `${NR_REVIEW.CHANGE} ${NR_REVIEW.GROUP_LIMITS}` }));
+    const cpu = screen.getByRole("textbox", { name: NR_REVIEW.CPU_LABEL });
+    await userEvent.clear(cpu);
+    await userEvent.type(cpu, "5");
+    expect(intentNow().resources).toEqual({ cpu_millis: 5000, memory_mib: 8192 });
+    await userEvent.clear(cpu);
+    await userEvent.type(cpu, "4");
+    expect(intentNow().resources).toEqual({ cpu_millis: 4000, memory_mib: 8192 });
+    await userEvent.click(within(osGroup()).getByRole("button", { name: NR_MACHINE.OS_LINUX }));
+    expect(intentNow().machine_kind).toBe("linux_vm");
+    expect(intentNow().resources).toEqual({ cpu_millis: 4000 });
   });
 
   it("takes back the pre-fill when the pool stops offering macOS before Linux is chosen again", async () => {
