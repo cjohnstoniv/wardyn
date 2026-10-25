@@ -140,6 +140,22 @@ type macOSVMSetup struct {
 	fstat func(fd int, name string) (unix.Stat_t, error)
 }
 
+// macVMDriver is what the macOS VM handle takes from the Docker driver; enableMacOSVM hands it the driver.
+type macVMDriver interface {
+	ReclaimMacVMs() error
+	EndNewestMacVM(ctx context.Context, freeBytes int64) (string, error)
+	StartMacPrepNet(ctx context.Context, entryID string) (*os.File, func(), error)
+	SweepMacPrep(ctx context.Context, keep []string) (int, error)
+	RemoveMacPrepNet(ctx context.Context, entryID string) error
+}
+
+// useDriver wires the handle to the driver. Without prepSweep a crash leaves stage-2 networks, prep proxies
+// and relays that nothing removes, so a test holds every hook it sets.
+func (m *macOSVMs) useDriver(d macVMDriver) {
+	m.reclaim, m.endNewest = d.ReclaimMacVMs, d.EndNewestMacVM
+	m.prepNet, m.prepSweep, m.prepRemove = d.StartMacPrepNet, d.SweepMacPrep, d.RemoveMacPrepNet
+}
+
 // openMacOSVMs opens the ledger and the VM directory. A ledger the package did not install whole (the
 // ledger itself checks the directory, its ancestors and its lock are root's, and creates or repairs
 // none of them) makes a handle that offers no macOS VM and names the fix.
