@@ -19,12 +19,16 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// kindRun is a run on the fixture's runner whose row says kind, with its sandbox created and its report
+// kindRun is a run on the fixture's runner whose row says kind, leased, with its sandbox created and its report
 // set on the runner's fake.
 func (f *runnerLeaseFixture) kindRun(t *testing.T, kind types.MachineKind) types.AgentRun {
 	t.Helper()
 	run := f.localRun(t, 0)
 	if _, err := f.st.Pool.Exec(f.ctx, `UPDATE agent_runs SET machine_kind = $2 WHERE id = $1`, run.ID, string(kind)); err != nil {
+		t.Fatal(err)
+	}
+	// As dispatch does, the run is leased to its runner before its sandbox is created.
+	if _, err := f.srv.leaseRunOnRunner(f.ctx, run); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.create(t, &run); err != nil {
