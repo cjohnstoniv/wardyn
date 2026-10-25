@@ -215,7 +215,7 @@ declare -A ALLOWLIST=(
   # 0.10 DESK-PLAYER: a recorded desktop's started_at and the chain check's from bound, fixed instants the replay and
   # the range read only echo or offset from; audit rows' time is passthrough (partitions key on recorded_at). None is
   # compared to the wall clock.
-  ["internal/api/recording_chain_test.go"]=5
+  ["internal/api/recording_chain_test.go"]=8
   ["internal/store/auditchain_range_pg_test.go"]=1
   ["ui/e2e/desktop-replay.spec.ts"]=1
   ["ui/src/app/lib/desktop-replay-timeline.test.ts"]=1
