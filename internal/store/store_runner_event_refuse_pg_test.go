@@ -168,6 +168,15 @@ func TestPG_RefuseRunnerEventSettlesOwnOpenAction(t *testing.T) {
 		openAction(b.ID) != 1 || eventRows(other.ID) != 1 {
 		t.Fatalf("another runner's action: settled=%v err=%v open=%d rows=%d", settled, err, openAction(b.ID), eventRows(other.ID))
 	}
+	// run2 is f.rn's, so other's row stays out of its trail and names other, keeping the claim in its data.
+	if n := f.count(t, `SELECT count(*) FROM audit_events WHERE action='runner.event.refuse' AND actor=$1 AND run_id IS NULL AND target=$2 AND data->>'claimed_run_id'=$3`,
+		"runner:"+other.ID.String(), other.ID.String(), run2.ID.String()); n != 1 {
+		t.Fatalf("a refusal naming another runner's run: %d run-less rows naming the runner, want 1", n)
+	}
+	if n := f.count(t, `SELECT count(*) FROM audit_events WHERE action='runner.event.refuse' AND actor=$1 AND run_id=$2 AND target=$2::text AND data->>'claimed_run_id' IS NULL`,
+		"runner:"+f.rn.ID.String(), run.ID); n != 2 {
+		t.Fatalf("own run's refusal rows: %d in its trail, want 2", n)
+	}
 
 	asserted := f.insertAssertedKill(t)
 	if settled, err := f.st.RefuseRunnerEvent(ctx, f.rn.ID, eventRefusal(nil, &asserted), prepareSpoolTest); err != nil || !settled ||

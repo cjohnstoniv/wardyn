@@ -61,9 +61,19 @@ func (s PG) RefuseRunnerEvent(ctx context.Context, runnerID uuid.UUID, r RunnerE
 	if _, err := tx.Exec(ctx, db.AuditChainLockTimeoutSQL()); err != nil {
 		return false, err
 	}
-	target := runnerID.String()
-	if r.RunID != nil {
-		target = r.RunID.String()
+	// The run id is the runner's word: the row joins a run's trail only when that run is this runner's, else it
+	// names the runner and keeps the claim in its data.
+	target, runID, claimed := runnerID.String(), r.RunID, ""
+	if runID != nil {
+		var own bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM agent_runs WHERE id = $1 AND runner_id = $2)`, *runID, runnerID).Scan(&own); err != nil {
+			return false, err
+		}
+		if own {
+			target = runID.String()
+		} else {
+			runID, claimed = nil, runID.String()
+		}
 	}
 	var rows []types.AuditEvent
 	write := func(fields map[string]any) error {
@@ -71,11 +81,14 @@ func (s PG) RefuseRunnerEvent(ctx context.Context, runnerID uuid.UUID, r RunnerE
 		if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&at); err != nil {
 			return err
 		}
+		if claimed != "" {
+			fields["claimed_run_id"] = claimed
+		}
 		data, err := json.Marshal(fields)
 		if err != nil {
 			return err
 		}
-		ev, err := prepare(ctx, types.AuditEvent{ID: uuid.New(), RunID: r.RunID, Time: at, ActorType: types.ActorSystem,
+		ev, err := prepare(ctx, types.AuditEvent{ID: uuid.New(), RunID: runID, Time: at, ActorType: types.ActorSystem,
 			Actor: "runner:" + runnerID.String(), Action: "runner.event.refuse", Target: target, Outcome: "denied", Data: data})
 		if err != nil {
 			return err
