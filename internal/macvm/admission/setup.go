@@ -364,11 +364,18 @@ func (s *setup) relink(dst *source) error {
 
 // discard empties and removes name, a linkPrefix directory in Base.
 func (s *setup) discard(name string) {
-	f, _ := s.rootDir(s.base, name)
+	f, _, err := s.rootDir(s.base, name)
 	if f == nil {
+		if err != nil {
+			s.c.Logf("left %s: %v", filepath.Join(s.base.Name(), name), err)
+		}
 		return
 	}
-	for _, n := range dirNames(f) {
+	names, err := dirNames(f)
+	if err != nil {
+		s.c.Logf("left some of %s: %v", f.Name(), err)
+	}
+	for _, n := range names {
 		if err := unix.Unlinkat(int(f.Fd()), n, 0); err != nil {
 			s.c.Logf("left %s: %v", filepath.Join(f.Name(), n), err)
 		}
@@ -474,9 +481,15 @@ func (s *setup) entrySources() (*source, []*source, error) {
 		return nil, nil, notInstalled("%s cannot be inspected (%v)", path, err)
 	}
 	var srcs []*source
-	var readErr error
+	var readErr error // the first source that cannot be inspected or read
+	keep := func(err error) {
+		if err != nil && readErr == nil {
+			readErr = err
+		}
+	}
 	add := func(at *os.File, name string) {
-		f, id := s.rootDir(at, name)
+		f, id, err := s.rootDir(at, name)
+		keep(err)
 		switch {
 		case f == nil:
 		case seen[id]:
@@ -484,32 +497,41 @@ func (s *setup) entrySources() (*source, []*source, error) {
 		default:
 			seen[id] = true
 			names, err := f.Readdirnames(-1)
-			if err != nil && readErr == nil {
-				readErr = err
-			}
+			keep(err)
 			srcs = append(srcs, &source{f: f, parent: at, name: name, names: names})
 		}
 	}
-	for _, n := range dirNames(s.base) {
+	names, err := dirNames(s.base)
+	keep(err)
+	for _, n := range names {
 		switch {
 		case strings.HasPrefix(n, linkPrefix):
 			s.discard(n)
 		case strings.HasPrefix(n, "."+entriesName+"."):
 			add(s.base, n)
 		case strings.HasPrefix(n, quarantinePrefix):
-			if q, _ := s.rootDir(s.base, n); q != nil {
+			q, _, err := s.rootDir(s.base, n)
+			keep(err)
+			if q != nil {
 				add(q, entriesName)
 			}
 		}
 	}
-	for _, n := range dirNames(parent) {
+	names, err = dirNames(parent)
+	keep(err)
+	for _, n := range names {
 		if !strings.HasPrefix(n, quarantinePrefix) {
 			continue
 		}
-		if q, _ := s.rootDir(parent, n); q != nil {
-			if w, _ := s.rootDir(q, filepath.Base(s.c.Base)); w != nil {
-				add(w, entriesName)
-			}
+		q, _, err := s.rootDir(parent, n)
+		keep(err)
+		if q == nil {
+			continue
+		}
+		w, _, err := s.rootDir(q, filepath.Base(s.c.Base))
+		keep(err)
+		if w != nil {
+			add(w, entriesName)
 		}
 	}
 	return dst, srcs, readErr
@@ -518,31 +540,34 @@ func (s *setup) entrySources() (*source, []*source, error) {
 const quarantinePrefix = ".wardyn-quarantine."
 
 // dirNames lists the directory open at f, sorted.
-func dirNames(f *os.File) []string {
-	names, _ := f.Readdirnames(-1)
+func dirNames(f *os.File) ([]string, error) {
+	names, err := f.Readdirnames(-1)
 	sort.Strings(names)
-	return names
+	return names, err
 }
 
 // rootDir opens name in at, never following a link, and returns it with its
-// device and inode if it is a root-owned directory by its fstat. Anything
-// else (a link, a login's directory) is skipped and logged; nothing there is
-// skipped quietly.
-func (s *setup) rootDir(at *os.File, name string) (*os.File, [2]uint64) {
+// device and inode if it is a root-owned directory by its fstat. Nothing
+// there is skipped quietly; anything else (a link, a login's directory, not
+// a directory) is skipped and logged. One that cannot be opened or fstatted
+// for any other reason may hold entries, so it is an error, not a skip.
+func (s *setup) rootDir(at *os.File, name string) (*os.File, [2]uint64, error) {
 	path := filepath.Join(at.Name(), name)
 	f, st, err := s.openDir(int(at.Fd()), name, path)
-	if err == nil && st.Uid != 0 {
+	switch {
+	case err == nil && st.Uid != 0:
 		f.Close()
-		err = errors.New("not owned by root")
+		s.c.Logf("skipped %s: not a root-owned directory (not owned by root)", path)
+	case err == nil:
+		s.files = append(s.files, f)
+		return f, [2]uint64{uint64(st.Dev), st.Ino}, nil
+	case errors.Is(err, unix.ENOENT):
+	case errors.Is(err, unix.ENOTDIR), errors.Is(err, unix.ELOOP):
+		s.c.Logf("skipped %s: not a root-owned directory (%v)", path, err)
+	default:
+		return nil, [2]uint64{}, notInstalled("%s cannot be inspected (%v)", path, err)
 	}
-	if err != nil {
-		if !errors.Is(err, unix.ENOENT) {
-			s.c.Logf("skipped %s: not a root-owned directory (%v)", path, err)
-		}
-		return nil, [2]uint64{}
-	}
-	s.files = append(s.files, f)
-	return f, [2]uint64{uint64(st.Dev), st.Ino}
+	return nil, [2]uint64{}, nil
 }
 
 // openDir opens name in the directory at without following a link, and

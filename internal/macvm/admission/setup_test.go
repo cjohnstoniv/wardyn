@@ -1108,6 +1108,7 @@ func TestSetupEntriesInspectErrorFailsClosed(t *testing.T) {
 	if got := entryFiles(t, r.dir); len(got) != len(names) {
 		t.Fatalf("the entries directory holds %v, not %v", got, names)
 	}
+	wantEntries(t, r, names, "a refused Setup")
 	if n := counted(t, r); n != 2 {
 		t.Fatalf("before the retry a fresh helper counts %d of 2 entries", n)
 	}
@@ -1153,4 +1154,89 @@ func TestSetupReplacesEntriesThatAreNotADirectory(t *testing.T) {
 		}
 		wantLayout(t, r)
 	}
+}
+
+// A migration source that cannot be inspected (EIO on its fstat) may hold
+// entries, so Setup refuses rather than skip it. The witness: a base that is
+// not exact is rebuilt, its entries directory now in a quarantine beside it.
+// Before the retry a fresh helper refuses (the new base has no lock yet), never
+// counting 0; the retry carries both entries.
+func TestSetupSourceInspectErrorFailsClosed(t *testing.T) {
+	r := newRig(t, bigMac())
+	names := admitN(t, r, 2)
+	base := filepath.Dir(r.dir)
+	oldBase := ino(t, base)
+	failed := false
+	cfg := func(eio bool) func(*SetupConfig) {
+		return func(c *SetupConfig) {
+			c.Fstat = func(fd int, name string) (unix.Stat_t, error) {
+				st, err := r.fs.fstat(fd, name)
+				if name == base && st.Ino == oldBase {
+					setPerm(&st.Mode, 0o700) // root-only, but not the exact 0755
+				}
+				q := filepath.Base(filepath.Dir(filepath.Dir(name)))
+				if eio && !failed && filepath.Base(name) == entriesName && strings.HasPrefix(q, quarantinePrefix) {
+					failed = true
+					return unix.Stat_t{}, unix.EIO
+				}
+				return st, err
+			}
+		}
+	}
+	if err := Setup(r.setupCfg(cfg(true))); err == nil || !failed {
+		t.Fatalf("Setup with a source's fstat failing: %v (failed %v)", err, failed)
+	}
+	if err := r.openErr(); err == nil {
+		if n := counted(t, r); n != 2 {
+			t.Fatalf("before the retry a fresh helper counts %d of 2 entries", n)
+		}
+	}
+	if n := everyEntry(t, r, names); n != 2 {
+		t.Fatalf("after the refused Setup %d copies of 2 entries are on disk", n)
+	}
+	if err := Setup(r.setupCfg(cfg(false))); err != nil {
+		t.Fatal(err)
+	}
+	if n := counted(t, r); n != 2 {
+		t.Fatalf("after the retry a helper counts %d of 2 entries", n)
+	}
+	wantEntries(t, r, names, "the retry after a failed source inspection")
+	wantLayout(t, r)
+}
+
+// Untrusted preplants are still skipped, not errors: a link and a file at a
+// quarantine's entries name, and a login's quarantine beside the base.
+func TestSetupSkipsUntrustedSources(t *testing.T) {
+	r := newRig(t, bigMac())
+	base := filepath.Dir(r.dir)
+	elsewhere := t.TempDir()
+	if err := os.WriteFile(filepath.Join(elsewhere, "e-link.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{".wardyn-quarantine.a", ".wardyn-quarantine.b"} {
+		if err := os.Mkdir(filepath.Join(base, q), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(elsewhere, filepath.Join(base, ".wardyn-quarantine.a", entriesName)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, ".wardyn-quarantine.b", entriesName), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	login := filepath.Join(filepath.Dir(base), ".wardyn-quarantine.c", "Wardyn", entriesName)
+	if err := os.MkdirAll(login, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r.fs.set(filepath.Dir(filepath.Dir(login)), 501)
+	if err := os.WriteFile(filepath.Join(login, "e-login.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Setup(r.setupCfg()); err != nil {
+		t.Fatalf("untrusted sources failed the install: %v", err)
+	}
+	if got := entryFiles(t, r.dir); len(got) != 0 {
+		t.Fatalf("entries carried from untrusted sources: %v", got)
+	}
+	wantLayout(t, r)
 }
