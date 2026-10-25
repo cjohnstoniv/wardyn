@@ -22,6 +22,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- A Linux VM whose guest agent never becomes ready before the boot timeout now reports the last error the agent
+  gave (for example a refusal) instead of only the context deadline (#3495).
 - The host's connection to a desktop VM's guest agent no longer keeps every connection it has ever redialled, and
   reads at most 64 KiB of response headers from the guest; a frame cut off after its header now reads as an unexpected
   end of stream rather than a clean one (#3388).

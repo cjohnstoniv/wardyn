@@ -416,3 +416,38 @@ func TestClientBoundsAGuestsResponseHeaders(t *testing.T) {
 		t.Fatal("a response with headers over the bound was accepted")
 	}
 }
+
+func TestWaitReadyReportsTheCauseNotTheDeadline(t *testing.T) {
+	var calls atomic.Int32
+	c := rawGuest(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			http.Error(w, "agent refuses the host", http.StatusForbidden)
+			return
+		}
+		<-r.Context().Done() // later tries hang until the boot deadline cuts them
+	}))
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	err := c.WaitReady(ctx, 100*time.Millisecond, func() bool { return false })
+	if err == nil || errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "refuses the host") {
+		t.Fatalf("WaitReady = %v, want the agent's refusal and not the deadline", err)
+	}
+}
+
+func TestWaitReadyStopsWhenTheVMIsGone(t *testing.T) {
+	c := rawGuest(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "no", http.StatusServiceUnavailable)
+	}))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := c.WaitReady(ctx, time.Second, func() bool { return true }); !errors.Is(err, ErrStopped) {
+		t.Fatalf("WaitReady = %v, want ErrStopped", err)
+	}
+}
+
+func TestWaitReadyReturnsOnceTheAgentAnswers(t *testing.T) {
+	c := rawGuest(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{}`)) }))
+	if err := c.WaitReady(context.Background(), time.Second, func() bool { return false }); err != nil {
+		t.Fatal(err)
+	}
+}

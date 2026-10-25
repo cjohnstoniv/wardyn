@@ -691,19 +691,15 @@ func (d *Driver) bootVM(ctx context.Context, v *vmRun, ref string, spec runner.S
 		return "", fmt.Errorf("docker: the VM did not start: %w%s", err, d.vmLogTail(ref))
 	}
 	spec.NotifyWaiting("vm: booting")
-	for {
-		attempt, stop := context.WithTimeout(ctx, 20*time.Second)
-		_, err := v.agent.Ready(attempt)
-		stop()
-		if err == nil {
-			break
-		}
-		if st, serr := d.Status(ctx, ref); serr == nil && st.State != types.RunRunning {
-			return "", fmt.Errorf("docker: the VM stopped while booting%s", d.vmLogTail(ref))
-		}
-		if ctx.Err() != nil {
-			return "", fmt.Errorf("docker: the VM's guest agent did not answer within %s: %w%s", vc.BootTimeout, err, d.vmLogTail(ref))
-		}
+	err := v.agent.WaitReady(ctx, 20*time.Second, func() bool {
+		st, serr := d.Status(ctx, ref)
+		return serr == nil && st.State != types.RunRunning
+	})
+	switch {
+	case errors.Is(err, guestagent.ErrStopped):
+		return "", fmt.Errorf("docker: the VM stopped while booting%s", d.vmLogTail(ref))
+	case err != nil:
+		return "", fmt.Errorf("docker: the VM's guest agent did not answer within %s: %w%s", vc.BootTimeout, err, d.vmLogTail(ref))
 	}
 	qgaConn, err := d.dialUnix(ctx, filepath.Join(ctl, qemu.QGASocket))
 	if err != nil {
