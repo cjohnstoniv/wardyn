@@ -32,8 +32,12 @@ if [ "$var" != D ] || [ -z "$str" ]; then
     echo "check-release-stamp: $bin has no stamped ${SYM##*/} (symbol type '${var:-absent}', value symbol '${str:-absent}'): it was not built with the release -ldflags" >&2
     exit 1
 fi
-got="$(dd if="$bin" bs=1 skip=$((0x$str - BASE)) count=4 2>/dev/null || true)"
-if [ "$got" != true ]; then
+# The variable is a string header (data pointer, length; 8 bytes each, little-endian) in __DATA. Read
+# the stored length and bytes, so only exactly "true" passes and a longer value starting with it fails.
+addr="$(awk -v s="$SYM" '$3 == s { print $1 }' <<<"$nm")"
+read -r ptr len < <(od -An -v -t u8 -j $((0x$addr - BASE)) -N 16 "$bin")
+got="$(dd if="$bin" bs=1 skip=$((ptr - BASE)) count="$len" 2>/dev/null || true)"
+if [ "$len" != 4 ] || [ "$got" != true ]; then
     echo "check-release-stamp: $bin carries ${SYM##*/}='${got}', want 'true'" >&2
     exit 1
 fi
