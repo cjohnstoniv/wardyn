@@ -502,32 +502,9 @@ var prepareOrder = []string{macvm.PhaseCheck, macvm.PhaseDownload, macvm.PhaseVa
 // helperFailurePrefix starts the helper's own error line in a job's log.
 const helperFailurePrefix = "wardyn-macvm: "
 
-// lastHelperLines is the last progress event in the log at path, and its last line that is the helper's
-// own (a progress event or a helperFailurePrefix error). Any other line is skipped: AppKit, while the
-// setup-by-hand window is up, writes to the same stderr. The log is small: one job's lines, appended.
-func lastHelperLines(path string) (ev macvm.PrepareEvent, haveEvent bool, last string) {
-	f, err := os.Open(path)
-	if err != nil {
-		return ev, false, ""
-	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		l := strings.TrimSpace(sc.Text())
-		var e macvm.PrepareEvent
-		switch {
-		case strings.HasPrefix(l, helperFailurePrefix):
-			last = l
-		case strings.HasPrefix(l, "{") && json.Unmarshal([]byte(l), &e) == nil && e.Phase != "":
-			ev, haveEvent, last = e, true, l
-		}
-	}
-	return ev, haveEvent, last
-}
-
 // prepareProgress is the overall percentage of the last progress event in prepare.log.
 func prepareProgress(log string) int {
-	ev, ok, _ := lastHelperLines(log)
+	ev, ok, _, _ := lastHelperLines(log)
 	if !ok {
 		return 0
 	}
@@ -542,7 +519,10 @@ func prepareProgress(log string) int {
 // its progress lines, as "wardyn-macvm: <error>". Its last own line decides, so an earlier prepare's
 // error in the same log is not this one's.
 func prepareFailure(log string) string {
-	_, _, last := lastHelperLines(log)
+	_, _, last, err := lastHelperLines(log)
+	if err != nil {
+		return "the prepare log could not be read to its end: " + err.Error()
+	}
 	msg, ok := strings.CutPrefix(last, helperFailurePrefix)
 	if !ok {
 		return ""

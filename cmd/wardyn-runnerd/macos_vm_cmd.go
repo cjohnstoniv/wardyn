@@ -156,7 +156,7 @@ func (m *macOSVMs) status(ctx context.Context) (macOSVMStatus, error) {
 	if c.Base.State == runnerwire.MacVMBaseReady {
 		st.Desktop, st.Harnesses, st.minCPUs, st.minMemoryMiB = cmp.Or(c.Desktop, "none"), append(st.Harnesses, c.Harnesses...), c.MinCPUs, c.MinMemoryMiB
 	}
-	if ev, ok, _ := lastHelperLines(m.layout.PrepareLog()); ok {
+	if ev, ok, _, _ := lastHelperLines(m.layout.PrepareLog()); ok {
 		st.Phase = ev.Phase
 	}
 	if st.setupCode = setupCodeWaiting(m.layout.Root); st.setupCode != "" {
