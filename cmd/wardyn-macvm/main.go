@@ -56,7 +56,8 @@ type deps struct {
 	// network's log.
 	prepare func(o *macvm.PrepareOptions, relayLog *slog.Logger) error
 	// firstBoot is the provisioning first boot (macvm.NewProvisioner), which
-	// probe asks whether this host can run it.
+	// probe asks whether this host can run it, and prepare whether its setup
+	// by hand could show the guest's window, before it writes anything.
 	firstBoot macvm.FirstBooter
 	// fstat replaces fstat(2) in the ledger's ownership checks (tests).
 	fstat func(fd int, name string) (unix.Stat_t, error)
@@ -363,6 +364,14 @@ func cmdPrepare(ctx context.Context, args []string, d deps) int {
 	byHand := fs.Duration("setup-by-hand-wait", macvm.DefaultSetupByHandWait, "how long to wait for macOS's setup by hand (0: stop instead)")
 	if code := j.parse(fs, args, d); code != 0 {
 		return code
+	}
+	// A setup by hand this process could not show stops before anything is written, the relay log under
+	// root included. d.firstBoot is the same provisioner prepareDeps wires; Prepare checks again.
+	if d.firstBoot != nil {
+		if err := macvm.SetupByHandReady(d.firstBoot, *byHand); err != nil {
+			fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
+			return 1
+		}
 	}
 	relayLog, closeLog, err := openRelayLog(*j.root)
 	if err != nil {

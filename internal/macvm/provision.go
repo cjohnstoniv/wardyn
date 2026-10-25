@@ -27,6 +27,10 @@ type Provisioner interface {
 	// framework cannot run a VM at all.
 	Supported() error
 
+	// ScreenReady is nil when Boot's Screen can open the guest's window on
+	// this Mac (FirstBooter.ScreenReady).
+	ScreenReady() error
+
 	// Boot starts the installed base once. With a username it turns guest
 	// provisioning on: account username/password (also the full name),
 	// automatic login, and Remote Login. With username "" the base boots as
@@ -72,6 +76,8 @@ var ErrProvisionUnsupported = errors.New("macvm provision: guest provisioning ne
 type provisionStub struct{}
 
 func (provisionStub) Supported() error { return ErrProvisionUnsupported }
+
+func (provisionStub) ScreenReady() error { return ErrProvisionUnsupported }
 
 func (provisionStub) Boot(string, string, []byte, []byte, uint, uint64, *os.File, string, string) (FirstBoot, error) {
 	return FirstBoot{}, ErrProvisionUnsupported

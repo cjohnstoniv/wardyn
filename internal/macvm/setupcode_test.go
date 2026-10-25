@@ -200,3 +200,78 @@ func TestSetupByHandWithoutAWindowStops(t *testing.T) {
 		t.Fatalf("the setup-code file outlived prepare: %v", err)
 	}
 }
+
+// noDesktop is what a Mac's window check says over SSH.
+var noDesktop = fmt.Errorf("macvm: this process has no window-server session: %w", macvm.ErrNoDesktopSession)
+
+// A prepare that will need setup by hand (no guest provisioning) and cannot show the guest's window, with no
+// desktop session or as root, stops at its check: no download, no boot, nothing written under the root.
+func TestPrepareWithoutADesktopStopsAtItsCheck(t *testing.T) {
+	for name, tc := range map[string]struct {
+		noScreen error
+		euid     int
+		want     string
+	}{
+		"over SSH": {noDesktop, 501, "no window-server session"},
+		"as root":  {nil, 0, "prepare runs as root"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			defer macvm.SetGeteuid(tc.euid)()
+			f := newPrep(t)
+			f.fb.Unsupported, f.fb.NoScreen = noProvisioning, tc.noScreen
+			f.opts.SetupByHandWait = time.Hour
+			_, err := macvm.Prepare(context.Background(), f.opts)
+			if !errors.Is(err, macvm.ErrNoDesktopSession) || !strings.Contains(err.Error(), tc.want) ||
+				!strings.Contains(err.Error(), "run prepare in Terminal on the Mac, signed in at its desktop, not over SSH") {
+				t.Fatalf("got %v, want the desktop refusal (%s)", err, tc.want)
+			}
+			if f.srv.reqs.Load() != 0 || f.fb.Boots() != 0 || f.eng.Installs() != 0 {
+				t.Fatalf("downloaded %d, booted %d, installed %d", f.srv.reqs.Load(), f.fb.Boots(), f.eng.Installs())
+			}
+			if left, _ := os.ReadDir(f.opts.Layout.Root); len(left) != 0 {
+				t.Fatalf("the refused prepare wrote %v under the root", left)
+			}
+			for _, ev := range f.ev.evs {
+				if ev.Phase != macvm.PhaseCheck {
+					t.Fatalf("the refused prepare reached %s", ev.Phase)
+				}
+			}
+		})
+	}
+}
+
+// A host with guest provisioning (macOS 27) needs no desktop session, nor a user that is not root: its
+// prepare provisions as before and opens no window, since its setup by hand never runs.
+func TestPrepareWithProvisioningNeedsNoDesktop(t *testing.T) {
+	defer macvm.SetGeteuid(0)()
+	f := newPrep(t)
+	f.fb.NoScreen = noDesktop
+	f.opts.SetupByHandWait = time.Hour
+	if _, err := macvm.Prepare(context.Background(), f.opts); err != nil {
+		t.Fatal(err)
+	}
+	if args := f.fb.Last(); f.fb.Boots() != 1 || args.Username != "wardyn-admin" {
+		t.Fatalf("first boot %d times as %q; want one provisioned boot", f.fb.Boots(), args.Username)
+	}
+	if opened, _ := f.fb.Windows(); opened != 0 {
+		t.Fatalf("a provisioned prepare opened %d windows", opened)
+	}
+}
+
+// On macOS 27, a provisioned boot that falls back to setup by hand where no window can open stops at once,
+// not after the hour, and deletes the code: the check is the window's own.
+func TestSetupByHandFallbackWithoutADesktopStopsAtOnce(t *testing.T) {
+	f, _, _ := handPrep(t)
+	f.fb.NoScreen = noDesktop
+	f.opts.SetupByHandWait = time.Hour // waiting it out would time the test out
+	_, err := macvm.Prepare(context.Background(), f.opts)
+	if !errors.Is(err, macvm.ErrNoDesktopSession) {
+		t.Fatalf("got %v, want the desktop refusal", err)
+	}
+	if args := f.fb.Last(); f.fb.Boots() != 1 || args.Username != "wardyn-admin" {
+		t.Fatalf("first boot %d times as %q; want one provisioned boot", f.fb.Boots(), args.Username)
+	}
+	if _, err := os.Stat(f.opts.Layout.SetupCode()); !os.IsNotExist(err) {
+		t.Fatalf("the setup-code file outlived prepare: %v", err)
+	}
+}

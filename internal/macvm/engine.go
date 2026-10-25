@@ -70,6 +70,10 @@ type FirstBooter interface {
 	// whose framework has no guest provisioning (macOS 26) wraps
 	// ErrNoProvisioning, and Boot still starts the base plain.
 	Supported() error
+	// ScreenReady is nil when Boot's Screen can open a window on this Mac:
+	// this process serves AppKit and runs in the desktop's window-server
+	// session. Without one it wraps ErrNoDesktopSession.
+	ScreenReady() error
 	// Boot starts the base once and returns once it has started: with
 	// provisioning on for username/password, or plain when username is "".
 	Boot(disk, aux string, hardwareModel, machineID []byte, cpus uint, memoryBytes uint64, nic *os.File, username, password string) (FirstBoot, error)

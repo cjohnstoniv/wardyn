@@ -14,9 +14,24 @@
 // The window has no close button: it closes when setup by hand ends.
 
 #import <AppKit/AppKit.h>
+#import <CoreGraphics/CoreGraphics.h>
 #import <Virtualization/Virtualization.h>
+#include <stdatomic.h>
 
 static NSWindow *wardynScreenWindow; // main thread only
+// 1 once the window and its view are up, -1 if they could not be made, 0 before (and after a close).
+static _Atomic int wardynScreenState;
+
+// wardynScreenSession is 1 when this process is in a window-server (GUI) session, else 0: over SSH, or
+// outside the signed-in login, there is none and AppKit must not start.
+int wardynScreenSession(void) {
+	CFDictionaryRef d = CGSessionCopyCurrentDictionary();
+	if (d == NULL) {
+		return 0;
+	}
+	CFRelease(d);
+	return 1;
+}
 
 // wardynScreenRun starts AppKit on the main thread. It does not return.
 void wardynScreenRun(void) {
@@ -66,8 +81,12 @@ void wardynScreenShow(void *vm) {
 		}
 		[wardynScreenWindow makeKeyAndOrderFront:nil];
 		[NSApp activate];
+		atomic_store(&wardynScreenState, wardynScreenWindow != nil && wardynScreenWindow.contentView != nil ? 1 : -1);
 	});
 }
+
+// wardynScreenUp is wardynScreenState, for the Go side's wait.
+int wardynScreenUp(void) { return atomic_load(&wardynScreenState); }
 
 // wardynScreenClose closes the window and lets go of its VM.
 void wardynScreenClose(void) {
@@ -75,5 +94,6 @@ void wardynScreenClose(void) {
 		[wardynScreenWindow orderOut:nil];
 		wardynScreenWindow.contentView = nil;
 		wardynScreenWindow = nil;
+		atomic_store(&wardynScreenState, 0);
 	});
 }

@@ -499,27 +499,36 @@ func (m *macOSVMs) reconcilePrepare() {
 var prepareOrder = []string{macvm.PhaseCheck, macvm.PhaseDownload, macvm.PhaseValidate, macvm.PhaseCreate,
 	macvm.PhaseInstall, macvm.PhaseProvision, macvm.PhaseSetupByHand, macvm.PhaseBootstrap, macvm.PhaseShutdown, macvm.PhaseTools}
 
-// lastLine is the last non-empty line of the file at path (prepare.log is small: progress lines only).
-func lastLine(path string) string {
+// helperFailurePrefix starts the helper's own error line in a job's log.
+const helperFailurePrefix = "wardyn-macvm: "
+
+// lastHelperLines is the last progress event in the log at path, and its last line that is the helper's
+// own (a progress event or a helperFailurePrefix error). Any other line is skipped: AppKit, while the
+// setup-by-hand window is up, writes to the same stderr. The log is small: one job's lines, appended.
+func lastHelperLines(path string) (ev macvm.PrepareEvent, haveEvent bool, last string) {
 	f, err := os.Open(path)
 	if err != nil {
-		return ""
+		return ev, false, ""
 	}
 	defer f.Close()
-	var last string
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
-		if l := strings.TrimSpace(sc.Text()); l != "" {
+		l := strings.TrimSpace(sc.Text())
+		var e macvm.PrepareEvent
+		switch {
+		case strings.HasPrefix(l, helperFailurePrefix):
 			last = l
+		case strings.HasPrefix(l, "{") && json.Unmarshal([]byte(l), &e) == nil && e.Phase != "":
+			ev, haveEvent, last = e, true, l
 		}
 	}
-	return last
+	return ev, haveEvent, last
 }
 
-// prepareProgress is the overall percentage of the last progress line in prepare.log.
+// prepareProgress is the overall percentage of the last progress event in prepare.log.
 func prepareProgress(log string) int {
-	var ev macvm.PrepareEvent
-	if json.Unmarshal([]byte(lastLine(log)), &ev) != nil {
+	ev, ok, _ := lastHelperLines(log)
+	if !ok {
 		return 0
 	}
 	i := slices.Index(prepareOrder, ev.Phase)
@@ -530,9 +539,11 @@ func prepareProgress(log string) int {
 }
 
 // prepareFailure is the helper's error when its last prepare ended with one: the helper writes it, after
-// its progress lines, as "wardyn-macvm: <error>".
+// its progress lines, as "wardyn-macvm: <error>". Its last own line decides, so an earlier prepare's
+// error in the same log is not this one's.
 func prepareFailure(log string) string {
-	msg, ok := strings.CutPrefix(lastLine(log), "wardyn-macvm: ")
+	_, _, last := lastHelperLines(log)
+	msg, ok := strings.CutPrefix(last, helperFailurePrefix)
 	if !ok {
 		return ""
 	}
@@ -715,7 +726,11 @@ func (m *macOSVMs) startPrepare(ctx context.Context, a prepareArgs) error {
 	if a.keepIPSW {
 		extra = append(extra, "--"+macvm.FlagKeepIPSW)
 	}
-	if _, err := probeHelper(ctx, a.helper); err != nil {
+	r, err := probeHelper(ctx, a.helper)
+	if err != nil {
+		return err
+	}
+	if err := m.setupByHandHere(ctx, r); err != nil {
 		return err
 	}
 	if err := excludeFromBackups(m.layout.Root); err != nil {
@@ -724,6 +739,24 @@ func (m *macOSVMs) startPrepare(ctx context.Context, a prepareArgs) error {
 	return m.startJob(ctx, helperJob{kind: admission.KindPrepare, disk: admission.PrepareDiskReservation(macvm.BaseDiskBytes),
 		log: m.layout.PrepareLog(), sub: macvm.PrepareCommand, helper: a.helper, cpus: a.cpus, memMiB: a.memoryMiB, runner: a.runnerID,
 		ledger: a.ledgerDir, extra: extra, descr: "prepare"})
+}
+
+// processEUID is os.Geteuid (tests replace it).
+var processEUID = os.Geteuid
+
+// setupByHandHere refuses a prepare that will need setup by hand (the probe says this Mac has no guest
+// provisioning) from where the guest's window cannot open: outside the desktop's GUI session
+// (checkSession), or as root. The helper checks the same before it writes anything; this answer stays on
+// the command line (`macos-vm prepare`, `setup`) and is not sent anywhere.
+func (m *macOSVMs) setupByHandHere(ctx context.Context, r probeReport) error {
+	if r.Reason != runnerwire.MacVMHostNoProvisioning {
+		return nil
+	}
+	m.checkSession(ctx)
+	if _, _, _, _, noSession := m.hostStatus(); noSession || processEUID() == 0 {
+		return fmt.Errorf("this Mac's macOS has no guest provisioning, so its prepare needs setup by hand: %w", macvm.ErrNoDesktopSession)
+	}
+	return nil
 }
 
 // toolsUpdateLog, in the VM directory, is a tools update's output.

@@ -427,3 +427,22 @@ func TestProbeReportsGuestAgent(t *testing.T) {
 		}
 	}
 }
+
+// A prepare that needs setup by hand and cannot show the guest's window (here: no desktop session) stops
+// with the Terminal words before it writes anything: the root, even the prep relay's log, is not made.
+func TestPrepareWithoutADesktopWritesNothing(t *testing.T) {
+	d, _, errb := testDeps(&macvmtest.Engine{})
+	d.firstBoot = &macvmtest.FirstBoot{
+		Unsupported: fmt.Errorf("no class X; %w needs macOS 27", macvm.ErrNoProvisioning),
+		NoScreen:    fmt.Errorf("macvm: this process has no window-server session: %w", macvm.ErrNoDesktopSession),
+	}
+	d.prepare = func(*macvm.PrepareOptions, *slog.Logger) error { t.Fatal("prepare was wired"); return nil }
+	root := filepath.Join(t.TempDir(), "root")
+	code := run(context.Background(), []string{"prepare", "--root", root, "--cpus", "4", "--memory-mib", "8192"}, d)
+	if code != 1 || !strings.Contains(errb.String(), "run prepare in Terminal on the Mac, signed in at its desktop, not over SSH") {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatalf("the refused prepare made its root: %v", err)
+	}
+}

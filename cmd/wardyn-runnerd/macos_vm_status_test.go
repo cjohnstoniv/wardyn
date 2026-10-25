@@ -748,3 +748,84 @@ func TestMacOSVMOfferedOnMacOS26(t *testing.T) {
 		t.Fatalf("macOS 25: %+v", c)
 	}
 }
+
+// MAC26: on a Mac whose probe says no guest provisioning, `macos-vm prepare` (and setup's prepare) refuses
+// up front, before the helper's prepare, the Time Machine exclusion or the job's log, when the runner is
+// not in the desktop's GUI session or runs as root: the guest's window could not open. In the desktop it
+// starts; on a Mac with provisioning, no session is needed.
+func TestMacOSVMPrepareNeedsTheDesktopForSetupByHand(t *testing.T) {
+	const probe26 = `{"host":"ok","provisioning":"no class X; guest provisioning needs macOS 27 or later","cgo":true,"vz":true,"reason":"no_provisioning","thermal":"nominal"}`
+	const probe27 = `{"host":"ok","provisioning":"ok","cgo":true,"vz":true,"thermal":"nominal"}`
+	prevL, prevE, prevEx, prevWait := launchctlPath, processEUID, excludeFromBackups, prepareClaimWait
+	t.Cleanup(func() {
+		launchctlPath, processEUID, excludeFromBackups, prepareClaimWait = prevL, prevE, prevEx, prevWait
+	})
+	prepareClaimWait = 2 * time.Second
+	for _, tc := range []struct {
+		name, probe, manager string
+		euid                 int
+		refused              bool
+	}{
+		{"macOS 26 over SSH", probe26, "Background", 501, true},
+		{"macOS 26 as root", probe26, "Aqua", 0, true},
+		{"macOS 26 at the desktop", probe26, "Aqua", 501, false},
+		{"macOS 27 over SSH", probe27, "Background", 501, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			launchctlPath = fakeTool(t, "launchctl", tc.manager)
+			processEUID = func() int { return tc.euid }
+			excluded := 0
+			excludeFromBackups = func(string) error { excluded++; return nil }
+			r := newMacLedgerRig(t)
+			r.host.setProcs(admission.Proc{PID: os.Getpid(), UID: 501, Start: 3, Name: "wardyn-runnerd"})
+			m := r.open(t)
+			_ = os.Remove(filepath.Join(m.layout.BaseDir(0), macvm.ManifestFile))
+			helper, args := probeScript(t, tc.probe, 0)
+			err := m.startPrepare(context.Background(), prepareArgs{helper: helper, runnerID: "runner-a", cpus: 4, memoryMiB: 8192})
+			got := calls(t, args)
+			if !tc.refused {
+				if errors.Is(err, macvm.ErrNoDesktopSession) || len(got) != 2 || !strings.HasPrefix(got[1], "prepare") {
+					t.Fatalf("not refused: %v, helper calls %q", err, got)
+				}
+				return
+			}
+			if !errors.Is(err, macvm.ErrNoDesktopSession) || !strings.Contains(err.Error(), "run prepare in Terminal on the Mac, signed in at its desktop, not over SSH") {
+				t.Fatalf("got %v, want the desktop refusal", err)
+			}
+			if len(got) != 1 || got[0] != "probe" || excluded != 0 {
+				t.Fatalf("refused, yet helper calls %q and %d exclusions", got, excluded)
+			}
+			if _, err := os.Stat(m.layout.PrepareLog()); !os.IsNotExist(err) {
+				t.Fatalf("refused, yet the job's log was made: %v", err)
+			}
+		})
+	}
+}
+
+// MAC26: the setup-by-hand window's AppKit writes to the helper's stderr, which is prepare.log. A foreign
+// line after the helper's own keeps the progress and the failure; the helper's own last line decides
+// whether its prepare ended with an error.
+func TestPrepareLogSkipsForeignLines(t *testing.T) {
+	const appKit = "2026-10-25 13:00:00.123 wardyn-macvm[4242:77] WARNING: Secure coding is not enabled for restorable state!"
+	write := func(lines ...string) string {
+		p := filepath.Join(t.TempDir(), "prepare.log")
+		if err := os.WriteFile(p, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	ev := `{"phase":"setup_by_hand"}`
+	want := prepareProgress(write(`{"phase":"check"}`, ev))
+	if want == 0 {
+		t.Fatal("no progress from a setup_by_hand event")
+	}
+	if got := prepareProgress(write(`{"phase":"check"}`, ev, appKit, "")); got != want {
+		t.Fatalf("progress %d after an AppKit line, want %d", got, want)
+	}
+	if got := prepareFailure(write(ev, "wardyn-macvm: macvm: stage 1: boom", appKit)); got != "macvm: stage 1: boom" {
+		t.Fatalf("failure %q after an AppKit line", got)
+	}
+	if got := prepareFailure(write("wardyn-macvm: an earlier prepare's error", `{"phase":"download","fraction":0.5}`, appKit)); got != "" {
+		t.Fatalf("a running prepare reads as failed: %q", got)
+	}
+}

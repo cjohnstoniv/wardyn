@@ -7,6 +7,7 @@
 package macvmtest
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -279,6 +280,8 @@ type FirstBoot struct {
 	BootErr     error
 	// ScreenErr makes Screen fail.
 	ScreenErr error
+	// NoScreen is ScreenReady's answer, and Screen's first, as on a Mac with no desktop session.
+	NoScreen error
 
 	mu             sync.Mutex
 	boots          int
@@ -301,6 +304,8 @@ var _ macvm.FirstBooter = (*FirstBoot)(nil)
 
 func (f *FirstBoot) Supported() error { return f.Unsupported }
 
+func (f *FirstBoot) ScreenReady() error { return f.NoScreen }
+
 func (f *FirstBoot) Boot(disk, aux string, hw, mid []byte, cpus uint, mem uint64, nic *os.File, user, pass string) (macvm.FirstBoot, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -321,8 +326,8 @@ func (f *FirstBoot) Boot(disk, aux string, hw, mid []byte, cpus uint, mem uint64
 func (f *FirstBoot) screen() (func(), error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.ScreenErr != nil {
-		return nil, f.ScreenErr
+	if err := cmp.Or(f.NoScreen, f.ScreenErr); err != nil {
+		return nil, err
 	}
 	f.opened++
 	return func() { f.mu.Lock(); f.closed++; f.mu.Unlock() }, nil

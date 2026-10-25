@@ -48,6 +48,8 @@ func (provisionDarwin) Supported() error {
 	return nil
 }
 
+func (provisionDarwin) ScreenReady() error { return screenReady() }
+
 // Boot with username "" is the plain boot of a host without guest provisioning; the C side then
 // starts the VM with no provisioning options.
 func (p provisionDarwin) Boot(disk, aux string, hardwareModel, machineID []byte, cpus uint, memoryBytes uint64, nic *os.File, username, password string) (FirstBoot, error) {

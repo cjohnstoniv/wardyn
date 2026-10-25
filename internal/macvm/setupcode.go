@@ -6,9 +6,11 @@ package macvm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -27,6 +29,22 @@ func (l Layout) SetupCode() string { return filepath.Join(l.Root, SetupCodeFile)
 type SetupCodeRecord struct {
 	Account string `json:"account"`
 	Code    string `json:"code"`
+}
+
+// geteuid is os.Geteuid (tests replace it).
+var geteuid = os.Geteuid
+
+// SetupByHandReady is nil unless prepare's first boot is certain to be a setup by hand (fb's host has no
+// guest provisioning and setupByHandWait is on) and this process cannot open the guest's window for it:
+// it runs as root, or fb.ScreenReady says why. Prepare checks it before it downloads or writes anything.
+func SetupByHandReady(fb FirstBooter, setupByHandWait time.Duration) error {
+	if setupByHandWait == 0 || !errors.Is(fb.Supported(), ErrNoProvisioning) {
+		return nil
+	}
+	if geteuid() == 0 {
+		return fmt.Errorf("macvm: prepare runs as root: %w", ErrNoDesktopSession)
+	}
+	return fb.ScreenReady()
 }
 
 // setupByHand writes a fresh one-time code to the setup-code file, emits

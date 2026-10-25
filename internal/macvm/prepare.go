@@ -256,6 +256,9 @@ func (p *prep) run(ctx context.Context) (Manifest, error) {
 		if !errors.Is(err, ErrNoProvisioning) || p.SetupByHandWait == 0 {
 			return Manifest{}, err
 		}
+		if err := SetupByHandReady(p.FirstBoot, p.SetupByHandWait); err != nil {
+			return Manifest{}, err
+		}
 		p.byHand = true
 	}
 	if err := thermalGate(p.Engine); err != nil {
