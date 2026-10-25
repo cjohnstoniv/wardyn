@@ -181,7 +181,12 @@
 # IDP-FRONT: docs/ENV.md 44842 adds 219 over 44623 (the WARDYN_OIDC_FRONTCHANNEL_LOGOUT row and section, then the r2 retry, session-end and shared-sid sentences), measured.
 # docs/ENV.md 45029 adds 187 over IDP-FRONT's 44842 at the 0.10 W7 train (DEFAULTS-ON's flipped-default rows, MDL-LAPTOP's and HRN-REST's rows), measured.
 # docs/ENV.md 45100 adds 17 over 45083, measured (0.10 CLI sign-in): a CLI renewal keeps its session's role stamp.
-docs/ENV.md=45352 share=5 # +252 measured (the WARDYN_MACOS_VMS row and details); before that: tightened from 43019 to the measured count at the 0.10 W4d merge; +18 (0.10 RENAME), measured: 43005 + 42207 - 42189; +54 (the WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY details: a runner newer than its organisation)
+# docs/ENV.md 45115 adds 15 over 45100, measured (0.10 rc2 AD-4): wardyn doctor's runner-exits stage.
+# docs/ENV.md 45119 adds 19 over 45100, measured: an ended run on a runner that does not capture output, whose recording never arrived, reads as not kept to its owner or an operator with persistence off.
+# docs/ENV.md 45134 = ours 45115 + theirs 45119 - base 45100 at the 0.10 rc2 wave-1 train merge of the run-output lane.
+# docs/ENV.md 45168 = ours 45134 + theirs 45134 - base 45100 at the 0.10 rc2 wave-1 train merge of the proxy-ready lane; tightened to 45164, measured.
+# docs/ENV.md 45416 = ours 45352 + theirs 45164 - base 45100 at the 0.10 merge of main (rc2 wave 1) into the macOS VM runner lane.
+docs/ENV.md=45416 share=5 # +252 measured (the WARDYN_MACOS_VMS row and details); before that: tightened from 43019 to the measured count at the 0.10 W4d merge; +18 (0.10 RENAME), measured: 43005 + 42207 - 42189; +54 (the WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY details: a runner newer than its organisation); +34 (the WARDYN_PROXY_WAIT_SECS row)
 # docs/ENV.md 42259 = ours + theirs - base at the 0.10 HYB-C merge of main onto VM-A, measured.
 # docs/ENV.md 41191 adds 520 over 40671 (0.10 FEAT-1MCP), measured: the WARDYN_MCP_LOCAL_SERVERS row and details with its before-you-upgrade lines and its setup-status feature bit, and the WARDYN_MCP_STDIO_TOML row and details, which the env-doc guard requires.
 # docs/ENV.md 41208 adds 17 over 41191 (0.10 FEAT-1MCP review): the npx pin applies to the npx form only; an absolute program is trusted as the image is.

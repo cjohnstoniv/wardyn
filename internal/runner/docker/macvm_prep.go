@@ -134,8 +134,12 @@ func (d *Driver) startPrepProxy(ctx context.Context, id uuid.UUID, labels map[st
 	}); err != nil {
 		return resp.ID, fmt.Errorf("docker: connect the macOS prep proxy to %s: %w", d.cfg.InternalNetwork, err)
 	}
-	if err := d.startWithConfig(ctx, id, resp.ID, cfgJSON); err != nil {
+	// Nothing here reads the prep proxy's stdout, so the attach is stdin only and the start is watched
+	// for an early exit, as startProxyOn does for a proxy image without the ready marker.
+	att, err := d.startWithConfig(ctx, id, resp.ID, cfgJSON, false)
+	if err != nil {
 		return resp.ID, err
 	}
+	defer att.Close()
 	return resp.ID, d.watchProxyExit(ctx, resp.ID)
 }

@@ -48,13 +48,14 @@ type lapseGate struct {
 	state    lapseState
 	deadline time.Duration
 	reason   string
+	open     chan struct{} // closes on the first successful renew
 	done     chan struct{}
 	onLapse  func(reason string)
 }
 
 func newLapseGate(clock bootClock, ttl time.Duration) *lapseGate {
 	// Closed from start: until a renew succeeds the bound is process start + TTL.
-	return &lapseGate{clock: clock, ttl: ttl, deadline: addSat(clock.Now(), ttl), done: make(chan struct{})}
+	return &lapseGate{clock: clock, ttl: ttl, deadline: addSat(clock.Now(), ttl), open: make(chan struct{}), done: make(chan struct{})}
 }
 
 // addSat adds without wrapping: a far-future clock reading (the fail-closed
@@ -102,6 +103,9 @@ func (g *lapseGate) renewed(sent time.Duration, apply func()) bool {
 		return false
 	}
 	apply()
+	if g.state == lapseClosed {
+		close(g.open)
+	}
 	g.state, g.deadline = lapseOpen, addSat(sent, g.ttl)
 	return true
 }

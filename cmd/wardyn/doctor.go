@@ -15,10 +15,12 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/doctor"
+	"github.com/cjohnstoniv/wardyn/internal/federation"
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
@@ -35,7 +37,8 @@ func doctorCmd(client func() *sdk.Client) *cobra.Command {
 		Long: `Run the connection checks in order and print one line per stage: the organisation URL and where it came from,
 name resolution, the proxy route, the TLS handshake (the issuer presented and which trust store verified it),
 /healthz and the server version, and who /api/v1/me says you are. When a runner is installed on this computer, its
-own stages follow (its engine, proxy image and relay). A failing stage names the setting that fixes it.
+own stages follow (its engine, proxy image and relay), then whether the organisation parked any of its exit
+receipts. A failing stage names the setting that fixes it.
 
 Names are shown, values are not: no token, password or proxy credential appears in either format. doctor writes
 nothing and changes no setting. It exits 0 when no stage failed and 1 otherwise; --json prints the same stages as data.`,
@@ -46,6 +49,7 @@ nothing and changes no setting. It exits 0 when no stage failed and 1 otherwise;
 				ExtraCASource: "WARDYN_TRUSTED_CA_FILE", ExtraCA: trustedCAPool(os.Getenv("WARDYN_TRUSTED_CA_FILE"))}
 			report := doctor.Report{Stages: net.Run(cmd.Context())}
 			report.Stages = append(report.Stages, runnerStages(cmd.Context(), net.ServerVersion)...)
+			report.Stages = append(report.Stages, parkedExitStages(cmd.Context(), c)...)
 			report = report.Scrubbed()
 			write := report.WriteText
 			if asJSON {
@@ -137,4 +141,30 @@ func runnerStages(ctx context.Context, serverVersion string) []doctor.Stage {
 		return []doctor.Stage{doctor.FailStage("runner", fmt.Sprintf("the installed runner (%s) did not report its stages: %v", path, errors.Join(runErr, err)), "", fmt.Sprintf("the installed wardyn-runnerd at %[1]s is older than this CLI or failed; re-run `wardyn-runnerd setup` with this release, or run `%[1]s doctor` to see why", path))}
 	}
 	return report.Stages
+}
+
+// parkedExitStages is the runner-exits stage for the runner whose identity is on this computer and
+// registered with this organisation; nothing when there is none.
+func parkedExitStages(ctx context.Context, c *sdk.Client) []doctor.Stage {
+	local, err := findRunnerIdentity()
+	if err != nil || local.dir == "" || local.id.RunnerID == uuid.Nil || local.id.OrgURLSHA256 != federation.OrgURLSHA256(c.BaseURL) {
+		return nil
+	}
+	return []doctor.Stage{parkedExitStage(ctx, c, local.id.RunnerID)}
+}
+
+// parkedExitStage says whether the organisation parked any of the runner's exit receipts: refused on
+// every try for about ten minutes as a foreign, stale or incomplete incarnation, kept, and no longer
+// retried. Only an administrator can look further, so it names no setting.
+func parkedExitStage(ctx context.Context, c *sdk.Client, runner uuid.UUID) doctor.Stage {
+	view, err := c.GetMyRunner(ctx, runner)
+	if err != nil {
+		return doctor.SkipStage("runner-exits", "could not read this runner from the organisation: "+err.Error())
+	}
+	if view.ParkedExits == 0 {
+		return doctor.OKStage("runner-exits", "the organisation has parked none of this runner's exit receipts")
+	}
+	return doctor.FailStage("runner-exits", fmt.Sprintf("the organisation parked %d of this runner's exit receipts: it refused each on every try as a foreign, stale "+
+		"or incomplete incarnation, keeps it and no longer retries it, so its run keeps the state the organisation last recorded", view.ParkedExits), "",
+		"ask an administrator to read the run's runner.exit.park audit row and, to start the run again, follow docs/runner-offline.md#a-parked-exit-receipt")
 }

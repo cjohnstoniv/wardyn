@@ -300,6 +300,73 @@ func TestRecordingOutput_PrivacyIncludesGapsErasureAndDisabledBackend(t *testing
 	}
 }
 
+// TestRunOutput_NotCapturedNamesARecordingOnlyWhenOneCanHoldIt: with persistence off an ended run on
+// a runner that does not capture output gets no recording-derived row, so its read reaches the 409.
+// The owner (a recordingReader) is pointed at the recording only when the store holds one; with none
+// received the run kept no output, and the read answers so. A caller who may see the run but not its
+// recording gets the same answer either way: it never learns whether a recording was kept.
+func TestRunOutput_NotCapturedNamesARecordingOnlyWhenOneCanHoldIt(t *testing.T) {
+	rr := newRecoveringRunner()
+	rr.execOutputUncaptured = true
+	fs, err := recording.NewFSStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, clock, seed := runOutputServer(t, func(c *Config) { c.Runner = rr; c.RecordingStore = fs; c.RunOutputPersistOff = true })
+	id := seed(types.AgentRun{})
+	sec := ssoSession(t, secAdminSub, secAdminMail, oidc.RoleSecurityAdmin)
+	const notCaptured = "Output isn't captured for Kubernetes runs yet. The run's recording has it."
+	read := func(who string, cookie *http.Cookie, reason, msg string) {
+		t.Helper()
+		if code, _, refusal := getRunOutput(t, srv, id, "", cookie); code != http.StatusConflict || refusal.Reason != reason || refusal.Error != msg {
+			t.Fatalf("%s: %d %+v, want 409 %s %q", who, code, refusal, reason, msg)
+		}
+	}
+	read("owner, no recording", outputOwnerCookie(t), reasonRunOutputNotKept, "no output is kept for this run")
+	read("security admin, no recording", sec, reasonRunOutputNotCaptured, notCaptured)
+	// Past the retention window too: what was never kept did not expire.
+	ended := clock.Now().Add(-48 * time.Hour)
+	srv.cfg.RunOutputRetention = time.Hour
+	old := seed(types.AgentRun{EndedAt: &ended})
+	if code, _, refusal := getRunOutput(t, srv, old, "", outputOwnerCookie(t)); code != http.StatusConflict || refusal.Reason != reasonRunOutputNotKept {
+		t.Fatalf("owner, no recording, past retention: %d %+v, want 409 %s", code, refusal, reasonRunOutputNotKept)
+	}
+	saveOutputCast(t, fs, id, "{\"version\": 2}\n[0.1, \"o\", \"hi\\r\\n\"]\n")
+	read("owner, recording kept", outputOwnerCookie(t), reasonRunOutputNotCaptured, notCaptured)
+	read("security admin, recording kept", sec, reasonRunOutputNotCaptured, notCaptured)
+}
+
+// TestRunOutput_UnrecordedRunPromisesNoRecording: a run that is not recorded (its level off, or no
+// recording store in the organisation) has no recording to point at, so on a runner that captures
+// output only under the recorder, an ended run with nothing kept answers that no output is kept,
+// to its owner and to anyone else who may see it, never naming a recording.
+func TestRunOutput_UnrecordedRunPromisesNoRecording(t *testing.T) {
+	rr := newRecoveringRunner()
+	rr.execOutputUncaptured = true
+	fs, err := recording.NewFSStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sec := ssoSession(t, secAdminSub, secAdminMail, oidc.RoleSecurityAdmin)
+	for _, tc := range []struct {
+		name  string
+		store recording.Store
+		mark  types.RunNotRecorded
+	}{
+		{"recording level off", fs, types.NotRecordedPolicyOff},
+		{"organisation keeps no recordings", nil, types.NotRecordedOrgOff},
+	} {
+		srv, _, seed := runOutputServer(t, func(c *Config) { c.Runner = rr; c.RecordingStore = tc.store; c.RunOutputPersistOff = true })
+		id := seed(types.AgentRun{NotRecorded: tc.mark})
+		for who, cookie := range map[string]*http.Cookie{"owner": outputOwnerCookie(t), "security admin": sec} {
+			if code, _, refusal := getRunOutput(t, srv, id, "", cookie); code != http.StatusConflict ||
+				refusal.Reason != reasonRunOutputNotKept || refusal.Error != "no output is kept for this run" {
+				t.Fatalf("%s, %s: %d %+v, want 409 %s with no recording named", tc.name, who, code, refusal, reasonRunOutputNotKept)
+			}
+		}
+	}
+}
+
 // A recovered row is audited as a success that says it is incomplete; only a
 // gap is the failed capture. The gap row adds the failing step (#3236) beside
 // its fields, every one of them unchanged; the success row has no step.
