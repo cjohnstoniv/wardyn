@@ -125,7 +125,7 @@
 - Preparing waits up to an hour for the guest's Remote Login, then stops and publishes no base. Run `prepare` again to retry.
 - The window needs the Mac's desktop. On macOS 26, `prepare`, and the prepare that `setup` starts, refuse at once, before any download, when started over SSH, outside the signed-in desktop, or with sudo. They say: run prepare in Terminal on the Mac, signed in at its desktop, not over SSH and not with sudo.
 
-1. Run `wardyn-runnerd macos-vm prepare`, or `setup`, in Terminal on the Mac, signed in at its desktop. Not over SSH, and not with sudo.
+1. Run `wardyn-runnerd macos-vm prepare`, or `wardyn-runnerd setup`, in Terminal on the Mac, signed in at its desktop. Not over SSH, and not with sudo.
 2. Wait for the download and install. The window has no Dock icon and may open behind Terminal: move Terminal aside if you do not see it. When it opens, read the code: `cat ~/Library/Application\ Support/Wardyn/macos-vm.noindex/setup-code.json`. The password is the `code` value; the account is `wardyn-admin`.
 3. In the window, choose a country and language. The guest has no internet while preparing: when asked for a network, continue without one, and skip Migration Assistant and Apple Account.
 4. Create the account: any full name, account name exactly `wardyn-admin`, and the code as its password. Do not turn on FileVault in the guest. Skip the remaining screens.
