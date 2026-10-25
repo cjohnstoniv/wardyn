@@ -13,6 +13,10 @@ import type { EffectiveLimit } from "../../../../../lib/types/runner-pools";
 import { parseCpuMillis, parseMemoryMib, setCpu, setMemory } from "../../lenses/limits-lens";
 import { draftSource } from "../provenance";
 import { cpuNumber, memoryNumber, resolvedLifetime, resolvedLifetimeText } from "../format";
+import { Chip } from "../../../../wardyn/primitives";
+import { NR_MACHINE } from "../../../../wardyn/copy/new-run/machine";
+import { atMinimum } from "../../lenses/limits-lens";
+import { macOSMinimumOf, macOSMinimumSentence, useMacOSOffer } from "../../steps/run/macos-offer";
 import { ReviewGroup } from "../review-group";
 import type { GroupProps } from "./group-props";
 
@@ -70,16 +74,23 @@ export function LimitsGroup({ draft, pre, docRows, dispatch }: GroupProps) {
   const value = size && (lifetime === undefined
     ? NR_SHARED.JOIN(NR_SHARED.CPU(size[0]), NR_SHARED.MIB(size[1]))
     : NR_REVIEW.LIMITS_VALUE(size[0], size[1], lifetime));
+  // A macOS VM's pre-filled ask carries the macOS minimum mark until it is raised; an ask under it says so.
+  const offer = useMacOSOffer();
+  const min = macOSMinimumOf(draft.intent, offer);
+  const below = macOSMinimumSentence(draft.intent, offer);
   const source = applied?.cpu_millis.source_name || applied?.memory_mib.source_name;
   return (
     <ReviewGroup
       id="limits"
       label={NR_REVIEW.GROUP_LIMITS}
       value={value}
+      mark={min && atMinimum(draft.intent, min) ? <Chip>{NR_MACHINE.MACOS_MINIMUM_MARK}</Chip> : undefined}
       detail={NR_REVIEW.LIMITS_DETAIL}
       provenance={source || draftSource(draft, ["resources"], NR_REVIEW.PROV_SELECTED)}
       docRows={docRows}
       editor={(close) => <LimitsEditor cpuMillis={requested?.cpu_millis} memoryMib={requested?.memory_mib} pre={pre} dispatch={dispatch} close={close} />}
-    />
+    >
+      {below && <p className="text-sm text-danger">{below}</p>}
+    </ReviewGroup>
   );
 }

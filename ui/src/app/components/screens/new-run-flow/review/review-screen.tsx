@@ -30,6 +30,7 @@ import { useDraftIdentity, useIntentChecks } from "../draft/use-intent-checks";
 import { isServer } from "../lenses/apps-lens";
 import { useLocalIssues, useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../new-run-route";
 import { combinationReason, loadRoster } from "../steps/harnesses/roster";
+import { macOSMinimumSentence, useMacOSOffer } from "../steps/run/macos-offer";
 import { useDriveCatalogue } from "../steps/files/file-sources";
 import { templateSource } from "../steps/shape/shape-sources";
 import { useLoaded } from "../steps/shape/use-loaded";
@@ -121,6 +122,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
   // Harnesses no declared image carries together: the Harnesses step refuses them, and a draft that got here another way is held too.
   const roster = useLoaded(loadRoster);
   const ids = harnessIds(draft.intent);
+  const macOSOffer = useMacOSOffer();
   const combination = roster.status === "ready" ? combinationReason(roster.value, ids, ids[0]) : undefined;
 
   const gate = (blockers: number) =>
@@ -134,6 +136,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
     keepLimit: keepAsked && create?.reason === "limit_reached" ? { text: NR_FILES.KEEP_LIMIT(create.count, create.limit), hint: NR_FILES.KEEP_LIMIT_HINT } : undefined,
     unsupported: wire.unsupported,
     combination,
+    macOSMinimum: macOSMinimumSentence(draft.intent, macOSOffer),
     templateNeeds: template.needs,
     templateUnread: template.unread,
     // A credential refusal is not a blocker: Launch's own refusal opens the provider's sign-in door.
