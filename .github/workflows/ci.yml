@@ -1756,12 +1756,19 @@ jobs:
           go version
       # Bounded retry of the module fetch only; go.sum verifies each module.
       - run: for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done
+      # Each package on its own, and every later step runs after a failure: one run lists every darwin error.
       - name: cgo build and vet
         run: |
-          set -euo pipefail
-          go build ./internal/macvm/... ./cmd/wardyn-macvm/ ./internal/vm/guestagent/ ./cmd/wardyn-guest-agent/
-          go vet ./internal/macvm/... ./cmd/wardyn-macvm/ ./internal/vm/guestagent/ ./cmd/wardyn-guest-agent/
+          fail=0
+          pkgs=$(go list ./internal/macvm/... ./cmd/wardyn-macvm/ ./internal/vm/guestagent/ ./cmd/wardyn-guest-agent/) || fail=1
+          [ -n "$pkgs" ] || fail=1
+          for p in $pkgs; do
+            go build -o /dev/null "$p" || fail=1
+            go vet "$p" || fail=1
+          done
+          exit "$fail"
       - name: Tests
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           # The ledger walks every directory from / without following a link, and the runner's TMPDIR
@@ -1776,8 +1783,11 @@ jobs:
           go test -count=1 -timeout 10m -v ./internal/vm/guestagent/ | tee "$RUNNER_TEMP/guestagent.out"
           grep -q -- '^--- PASS: TestDarwin' "$RUNNER_TEMP/guestagent.out"
       - name: Build the darwin runnerd
+        if: ${{ !cancelled() }}
         run: CGO_ENABLED=0 go build -tags docker -trimpath -o "$RUNNER_TEMP/wardyn-runnerd" ./cmd/wardyn-runnerd
       - name: Sign the helper ad hoc with its entitlement and read it back
+        id: sign
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           helper="$RUNNER_TEMP/wardyn-macvm"
@@ -1801,7 +1811,9 @@ jobs:
       # The real postinstall, and the signed helper's ledger-setup it runs, under the runner's passwordless
       # sudo against a temp root, read back with BSD stat. %Mp%Lp, not %Lp alone: %Lp drops the sticky bit.
       # The roots sit under /private/tmp, so every directory the helper walks from / is root-owned.
+      # It runs the signed helper as root: only once the sign step proved that helper.
       - name: Package postinstall makes the admission ledger (real root, BSD tools)
+        if: ${{ !cancelled() && steps.sign.outcome == 'success' }}
         run: |
           set -euo pipefail
           post=deploy/runner/macos/pkg-scripts/postinstall
@@ -1857,6 +1869,7 @@ jobs:
           sudo ls -la "$r/Users/Shared"
           sudo sh -c 'ls -d "$1"/.wardyn-quarantine.*/Wardyn' _ "$r/Users/Shared"
       - name: Packaged live suite (it skips, since no VM boots on a hosted Mac)
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           if [ ! -d test/conformance/macvm ]; then
