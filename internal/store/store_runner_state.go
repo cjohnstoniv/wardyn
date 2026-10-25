@@ -92,9 +92,10 @@ func (s PG) MarkRunnerRunLost(ctx context.Context, runnerID, runID uuid.UUID, ex
 }
 
 // RunnerSandboxGoneAfter is how long a run's sandbox must stay reported absent, from its first absent
-// report to the start of a later fresh session's inventory that still reports it absent, before the
-// run is ended lost (gone). A refused runner reconnects at 1 s doubling (runnerwire reconnectDelay),
-// so the sixth session at the latest is past it; one report never is.
+// report to a later one that still reports it absent, before the run is ended lost (gone). The later
+// report is timed by when it began: a fresh session's inventory (goneConfirmedSQL), or the database time
+// read before a status check (probeConfirmedSQL). A refused runner reconnects at 1 s doubling (runnerwire
+// reconnectDelay), so the sixth session at the latest is past it; one report never is.
 const RunnerSandboxGoneAfter = 30 * time.Second
 
 // goneClaimableSQL is TRUE for an agent_runs row (alias a) a gone mark may land on: RUNNING and holding
@@ -158,6 +159,80 @@ func (s PG) MarkRunnerRunGone(ctx context.Context, runnerID, runID uuid.UUID, ex
 	}
 	tag, err := tx.Exec(ctx, `UPDATE agent_runs a SET lost_at=$3, lost_reason=$4, paused_at=NULL, paused_reason=''
 		WHERE a.id=$5 AND a.runner_id=$1 AND `+goneConfirmedSQL, runnerID, RunnerSandboxGoneAfter.String(), at, string(types.LostGone), runID)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, tx.Commit(ctx)
+}
+
+// probeSessionSQL is TRUE for an agent_runs row (alias a) whose runner's current session began its
+// inventory at or before $4, the database time read before a status check of the run's sandbox
+// (RunnerProbeClock). Every check over the current session passes: every call over a session follows
+// its BeginInventory (remote Hub.start runs fresh before AttachSession), and a resumed session keeps the
+// row it began with. A check issued before it went over a superseded session, so its late reply, on this
+// replica or another, records nothing.
+const probeSessionSQL = `EXISTS (SELECT 1 FROM runner_inventories i WHERE i.runner_id=a.runner_id AND i.created_at <= $4::timestamptz)`
+
+// probeConfirmedSQL is goneConfirmedSQL for a status check: TRUE for an agent_runs row (alias a) first
+// reported absent at least $5 (RunnerSandboxGoneAfter) before $4, the database time read before the
+// check that found it absent again over the runner's current session, that a gone mark may land on.
+const probeConfirmedSQL = `a.sandbox_absent_at IS NOT NULL AND $4::timestamptz >= a.sandbox_absent_at + $5::interval AND ` + probeSessionSQL + ` AND ` + goneClaimableSQL
+
+// RunnerProbeClock reads the database clock before a status check of a runner's sandbox (api
+// probeRunnerSandbox). The check observes after it, so a report timed here is never later than what
+// it saw, on the clock the absent stamp and the runner's inventories use.
+func (s PG) RunnerProbeClock(ctx context.Context) (time.Time, error) {
+	var at time.Time
+	err := s.Pool.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&at)
+	return at, err
+}
+
+// NoteRunnerSandboxProbe records one status check of runner runnerID's run runID under ref, issued at
+// database time issued (RunnerProbeClock). Absent with no exit code, over the runner's current session,
+// on a run a gone mark may land on, it stamps agent_runs.sandbox_absent_at once (as runnerSandboxGoneTx
+// does) and answers stamped, and due once the stamp is at least RunnerSandboxGoneAfter older than
+// issued (MarkRunnerRunGoneProbed confirms). Any other answer over the current session clears the stamp,
+// and a check over a superseded session changes nothing. A failed check is never recorded: the caller
+// passes only an answer.
+func (s PG) NoteRunnerSandboxProbe(ctx context.Context, runnerID, runID uuid.UUID, ref string, absent bool, issued time.Time) (due, stamped bool, err error) {
+	if absent {
+		err = s.Pool.QueryRow(ctx, `UPDATE agent_runs a SET sandbox_absent_at=COALESCE(a.sandbox_absent_at, clock_timestamp())
+			WHERE a.id=$1 AND a.runner_id=$2 AND a.sandbox_ref=$3 AND a.placement='local' AND `+probeSessionSQL+` AND `+goneClaimableSQL+`
+			RETURNING $4::timestamptz >= a.sandbox_absent_at + $5::interval`, runID, runnerID, ref, issued, RunnerSandboxGoneAfter.String()).Scan(&due)
+		if err == nil {
+			return due, true, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return false, false, err
+		}
+	}
+	_, err = s.Pool.Exec(ctx, `UPDATE agent_runs a SET sandbox_absent_at=NULL
+		WHERE a.id=$1 AND a.runner_id=$2 AND a.sandbox_ref=$3 AND a.sandbox_absent_at IS NOT NULL AND `+probeSessionSQL, runID, runnerID, ref, issued)
+	return false, false, err
+}
+
+// MarkRunnerRunGoneProbed is MarkRunnerRunGone for a confirmation by a status check: the mark lands only
+// while probeConfirmedSQL holds for issued, the database time read before the check that found the
+// sandbox absent again. The lock order is MarkRunnerRunLost's.
+func (s PG) MarkRunnerRunGoneProbed(ctx context.Context, runnerID, runID uuid.UUID, expectedRef string, issued, at time.Time) (bool, error) {
+	if _, err := s.Pool.Exec(ctx, `SELECT 1 FROM agent_runs WHERE id = $1 FOR UPDATE`, runID); err != nil {
+		return false, err
+	}
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // committed tx is already closed
+	run, err := runnerExecutionRun(ctx, tx, runnerID, runID)
+	if err != nil {
+		return false, err
+	}
+	if expectedRef == "" || run.SandboxRef != expectedRef {
+		return false, ErrRunnerExecutionRefused
+	}
+	tag, err := tx.Exec(ctx, `UPDATE agent_runs a SET lost_at=$6, lost_reason=$7, paused_at=NULL, paused_reason=''
+		WHERE a.id=$1 AND a.runner_id=$2 AND a.sandbox_ref=$3 AND a.placement='local' AND `+probeConfirmedSQL,
+		runID, runnerID, expectedRef, issued, RunnerSandboxGoneAfter.String(), at, string(types.LostGone))
 	if err != nil {
 		return false, err
 	}

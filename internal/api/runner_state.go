@@ -157,7 +157,9 @@ func (s *Server) endGoneRunnerRuns(ctx context.Context, st store.PG, runnerID uu
 			return err
 		}
 		for _, run := range rows {
-			s.endGoneRun(ctx, st, runnerID, run)
+			s.endGoneRun(ctx, st, run, func(ctx context.Context, at time.Time) (bool, error) {
+				return st.MarkRunnerRunGone(ctx, runnerID, run.ID, run.SandboxRef, at)
+			})
 			after = run.ID
 		}
 		if len(rows) < 100 || ctx.Err() != nil {
@@ -167,35 +169,37 @@ func (s *Server) endGoneRunnerRuns(ctx context.Context, st store.PG, runnerID uu
 }
 
 // endGoneRun marks run lost (gone) and ends it FAILED with the revoke cascade and teardown
-// (stopKeptRun): its sandbox is gone with no exit code, so nothing is left to keep or revive. The
-// claim rechecks the runner's authority and the confirmation (store.PG.MarkRunnerRunGone). A revive in
-// flight, or another pass holding the run's lock, leaves it to the next sweep; a mark whose end did
-// not land is finished by the lease sweep (leaseRun).
-func (s *Server) endGoneRun(ctx context.Context, st store.PG, runnerID uuid.UUID, run types.AgentRun) {
+// (stopKeptRun): its sandbox is gone with no exit code, so nothing is left to keep or revive. claim lands
+// the mark and rechecks the runner's authority and the confirmation: store.PG.MarkRunnerRunGone for the
+// runner's STATE, MarkRunnerRunGoneProbed for a status check. A revive in flight, or another pass holding
+// the run's lock, leaves it to a later pass; a mark whose end did not land is finished by the lease
+// sweep (leaseRun). It answers whether the mark landed.
+func (s *Server) endGoneRun(ctx context.Context, st store.PG, run types.AgentRun, claim func(context.Context, time.Time) (bool, error)) bool {
 	if _, busy := s.reviving.Load(run.ID); busy {
-		return
+		return false
 	}
 	ctx, unlock, locked := s.tryLockRunOp(ctx, run.ID)
 	if !locked {
-		return
+		return false
 	}
 	defer unlock()
 	ctx, cancel := context.WithTimeout(ctx, reconcileFinalizeTimeout)
 	defer cancel()
 	at := s.cfg.Now()
-	applied, err := st.MarkRunnerRunGone(ctx, runnerID, run.ID, run.SandboxRef, at)
+	applied, err := claim(ctx, at)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: marking a gone runner run lost failed",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
-		return
+		return false
 	}
 	if !applied {
-		return
+		return false
 	}
 	// The mark freed the run's slot (HoldsSandboxSQL): a waiting run may start.
 	s.kickQueue()
 	run.LostAt, run.LostReason = &at, types.LostGone
 	s.stopKeptRun(ctx, st, run, types.RunFailed, "run.lost", map[string]any{"reason": string(types.LostGone), "kept": false})
+	return true
 }
 
 // runnerOfflineSweeps runs OfflineFromRunner off the Hub's session slot: at

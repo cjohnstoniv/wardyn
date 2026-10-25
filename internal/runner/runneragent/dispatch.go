@@ -34,6 +34,11 @@ type Config struct {
 	// and durably holds. Any other ref reaches the substrate only when the
 	// substrate proves it a sandbox created for this runner.
 	HoldsSandbox func(string) bool
+	// Covered reports whether Status can observe a local ref's sandbox now: false for a run whose
+	// machine kind the substrate cannot enumerate now (macOS VMs off). Status and AgentStatus of such a
+	// ref answer errUnobservable, never the substrate's "not found", which the org would read as gone.
+	// Nil covers every ref.
+	Covered func(localRef string) bool
 	// BeforeCreate durably establishes a unique creation intent and live lease.
 	// Nil proves a NEW run; every existing or ambiguous intent must refuse.
 	BeforeCreate func(context.Context, runner.SandboxSpec) error
@@ -74,6 +79,11 @@ type Config struct {
 	// the other.
 	MacOSVM bool
 }
+
+// errUnobservable is Status's and AgentStatus's answer for a sandbox Covered says this runner cannot
+// observe now. It is internal on the wire (runnerwire.ErrorFor), so the org reads it as unknown: never
+// runner.ErrSandboxGone, never runner.ErrRunnerOffline.
+var errUnobservable = errors.New("runner: this sandbox's machine kind cannot be observed on this runner now (macOS VMs are off)")
 
 type Dispatcher struct {
 	cfg Config
@@ -359,6 +369,9 @@ func (d *Dispatcher) dispatchRef(ctx context.Context, method, ref string, a refA
 		code, err := sub.Wait(ctx, ref)
 		return runnerwire.WaitResult{ExitCode: code}, err
 	case runnerwire.MethodStatus:
+		if d.cfg.Covered != nil && !d.cfg.Covered(ref) {
+			return nil, errUnobservable
+		}
 		return sub.Status(ctx, ref)
 	case runnerwire.MethodPauseAgent, runnerwire.MethodResumeAgent:
 		p, ok := sub.(runner.AgentPauser)
@@ -372,6 +385,9 @@ func (d *Dispatcher) dispatchRef(ctx context.Context, method, ref string, a refA
 		fenced, err := call(ctx, ref, a.Generation)
 		return runnerwire.AgentPauseResult{FencedPause: fenced}, err
 	case runnerwire.MethodAgentStatus:
+		if d.cfg.Covered != nil && !d.cfg.Covered(ref) {
+			return nil, errUnobservable
+		}
 		return sub.AgentStatus(ctx, ref, a.AgentExecID)
 	case runnerwire.MethodStop:
 		d.selftests.Delete(ref)
