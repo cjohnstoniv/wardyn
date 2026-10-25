@@ -89,10 +89,15 @@ func (provisionStub) Boot(string, string, []byte, []byte, uint, uint64, *os.File
 // limit refusal: the C side sees the NSError's domain and code, the Go side only this text.
 const provisionVMLimitMark = "vm-limit: "
 
-// classifyProvisionStart wraps ErrVMLimit around a start error that carries provisionVMLimitMark, so the
-// provisioning boot is told apart as a run's or a stage-2 boot's start is.
+// provisionVMLimitPrefix is where that mark sits in the error the darwin start path returns: provisionCError
+// puts "macvm provision: start: " ahead of the C side's text.
+const provisionVMLimitPrefix = "macvm provision: start: " + provisionVMLimitMark
+
+// classifyProvisionStart wraps ErrVMLimit around a start error whose text begins with provisionVMLimitPrefix,
+// not one that mentions the mark elsewhere in a description, so the provisioning boot is told apart as a
+// run's or a stage-2 boot's start is.
 func classifyProvisionStart(err error) error {
-	if err != nil && strings.Contains(err.Error(), provisionVMLimitMark) {
+	if err != nil && strings.HasPrefix(err.Error(), provisionVMLimitPrefix) {
 		return fmt.Errorf("%w: %w", ErrVMLimit, err)
 	}
 	return err
