@@ -32,18 +32,20 @@ export function DesktopReplay({ runId, recKey, audit, onGoAudit }: { runId: stri
   React.useEffect(() => {
     let alive = true;
     setState("loading");
-    recordings
-      .getDesktopRecording(runId, recKey)
-      .then((d) => {
+    // The recording and both action feeds load together: a feed that fails is a failed load (the
+    // retry below), never an empty action log that reads as "no actions".
+    void Promise.all([
+      recordings.getDesktopRecording(runId, recKey),
+      auditApi.listAudit(runId, { actionPrefix: "ui.clipboard" }),
+      auditApi.listAudit(runId, { actionPrefix: "desktop.file" }),
+    ])
+      .then(([d, a, b]) => {
         if (!alive) return;
         setDoc(d);
+        setMoves([...a, ...b]);
         setState("ready");
       })
       .catch(() => alive && setState("error"));
-    void Promise.all([
-      auditApi.listAudit(runId, { actionPrefix: "ui.clipboard" }).catch(() => []),
-      auditApi.listAudit(runId, { actionPrefix: "desktop.file" }).catch(() => []),
-    ]).then(([a, b]) => alive && setMoves([...a, ...b]));
     return () => {
       alive = false;
     };

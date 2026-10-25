@@ -726,6 +726,9 @@ func proxyStartFailure(pod *corev1.Pod) error {
 		if t == nil || (cs.Name == stageProxyConfigInitName && t.ExitCode == 0) {
 			continue
 		}
+		if cs.Name == proxyContainerName && t.ExitCode == proxyExitLapsed {
+			return proxyRenewFailure(t.Message)
+		}
 		return fmt.Errorf("proxy container %s exited before the proxy was ready (exit code %d, %s): %s", cs.Name, t.ExitCode, t.Reason, t.Message)
 	}
 	return nil
