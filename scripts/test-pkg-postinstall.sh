@@ -48,7 +48,10 @@ esac'
 stub chown 'h=0; for a; do case "$a" in -h) h=1 ;; root:wheel) ;; *) if [ "$h" = 1 ]; then mark "$a"; else mark "$(readlink -f "$a")"; fi ;; esac; done'
 stub chmod 'h=0; args=(); for a; do if [ "$a" = -h ]; then h=1; else args+=("$a"); fi; done
 [ "$h" = 1 ] && [ -L "${args[-1]}" ] && exit 0; exec /bin/chmod "${args[@]}"'
-stub mkdir '/bin/mkdir "$@" || exit; mark "${@: -1}"'
+# mkdir -m is one mkdir(2), as BSD mkdir is. A host mkdir(1) may exit 0 when it loses the race to a directory or
+# a link to one (uutils before 0.11, Ubuntu 26.04's default), and mark would then make the login's object root's.
+stub mkdir 'if [ "$1" = -m ]; then perl -e "mkdir(\$ARGV[1], oct(\$ARGV[0])) or exit 1" "$2" "$3" || exit; else /bin/mkdir "$@" || exit; fi
+mark "${@: -1}"'
 stub mktemp 'd="$(/usr/bin/mktemp "$@")" || exit; mark "$d"; echo "$d"'
 # rm forgets the inodes it frees, so a reused inode never reads as root-owned.
 stub rm 'for a; do case "$a" in -*) ;; *) find "$a" -printf "%i\n" 2>/dev/null | while read -r i; do /bin/rm -f "$OWN/$i"; done ;; esac; done; exec /bin/rm "$@"'
