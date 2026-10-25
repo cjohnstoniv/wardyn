@@ -81,9 +81,6 @@ func (s PG) RefuseRunnerEvent(ctx context.Context, runnerID uuid.UUID, r RunnerE
 		if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&at); err != nil {
 			return err
 		}
-		if claimed != "" {
-			fields["claimed_run_id"] = claimed
-		}
 		data, err := json.Marshal(fields)
 		if err != nil {
 			return err
@@ -110,6 +107,9 @@ func (s PG) RefuseRunnerEvent(ctx context.Context, runnerID uuid.UUID, r RunnerE
 			"payload_bytes": r.PayloadBytes}
 		if r.Marker {
 			fields["suppressed"] = true
+		}
+		if claimed != "" {
+			fields["claimed_run_id"] = claimed
 		}
 		if err := write(fields); err != nil {
 			return false, err
