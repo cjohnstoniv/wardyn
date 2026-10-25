@@ -51,6 +51,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   as an ordinary success. Its save record now says how far in the recording ends, and wardynd logs a warning.
 - A desktop recording's audit chain check passed when the oldest rows of the audit log had been deleted and nothing
   came before the recording's own rows. It now fails there, as the whole-log check does.
+- In local mode with the second-admin switch on, the boundary editor no longer says "Submit for approval" for a save
+  that is refused. The save is refused in local mode, so the editor now words it as a plain save.
+- Over the SSH gateway, a command run in a bring-your-own image whose `HOME` is relative (resolved through `CDPATH`)
+  or is `-` no longer starts its output with a stray directory line. The output is the command's alone, as under
+  OpenSSH.
 
 ## [0.10.0-rc.2] — 2026-10-25
 

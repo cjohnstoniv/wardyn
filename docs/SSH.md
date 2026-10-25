@@ -647,6 +647,8 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
   path and touches neither binary.
 - Install both if you want full parity with
   the built-in images.
+- Keep the image's `ENV HOME` equal to the sandbox user's passwd home. An exec channel takes `$HOME` from the
+  sandbox environment and an sftp session takes the passwd home, so a mismatch starts them in different directories.
 
 ## Recording
 
