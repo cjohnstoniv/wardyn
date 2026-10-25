@@ -18,6 +18,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -80,7 +81,26 @@ type BootstrapInput struct {
 	// in memory only) and then calls Replaced, before anything else.
 	NewPassword string
 	Replaced    func()
+	// Progress reports each stage-1 step as a PhaseBootstrap event. Its
+	// detail carries no secret.
+	Progress func(PrepareEvent)
+	// GuestEpoch identifies the guest's current boot as the helper sees it
+	// without SSH: it fails once the VM has stopped, and otherwise counts the
+	// DHCP requests the prep relay saw, which a reboot or a reset network
+	// adds to. The provisioning boot has no vsock, so this is the strongest
+	// liveness the helper has. Stage 1 counts a refused port 22 as Remote
+	// Login off only when the epoch is the same before and after.
+	GuestEpoch func() (uint64, error)
 }
+
+// LeaseCounter is a prep network that counts the guest's DHCP requests
+// (vmnet.Relay.DHCPRequests).
+type LeaseCounter interface {
+	DHCPRequests() uint64
+}
+
+// ErrGuestStopped means the provisioning VM stopped.
+var ErrGuestStopped = errors.New("macvm: the provisioning VM stopped")
 
 // BootstrapResult is what stage 1 found.
 type BootstrapResult struct {
@@ -138,6 +158,10 @@ type PrepareOptions struct {
 	// and turn Remote Login on. Zero stops with ErrManualSetup instead.
 	SetupByHandWait time.Duration
 }
+
+// DefaultSetupByHandWait is the helper's setup-by-hand wait: owner packet 1
+// D1: (a) with (c) as the fallback; 0 = (a) only.
+const DefaultSetupByHandWait = time.Hour
 
 // ErrManualSetup means the provisioned first boot did not come up with Remote
 // Login: macOS asked for its setup by hand.
@@ -577,9 +601,11 @@ func (p *prep) provisionAndBootstrap(ctx context.Context, spec MachineSpec) (Boo
 	wctx, wcancel := context.WithCancel(ctx)
 	defer wcancel()
 	early := make(chan error, 1)
+	var vmStopped atomic.Bool
 	go func() {
 		select {
 		case err := <-done:
+			vmStopped.Store(true)
 			early <- err
 			wcancel()
 		case <-wctx.Done():
@@ -609,7 +635,17 @@ func (p *prep) provisionAndBootstrap(ctx context.Context, spec MachineSpec) (Boo
 		return BootstrapResult{}, err
 	}
 	p.emit(PrepareEvent{Phase: PhaseBootstrap})
-	in := BootstrapInput{Dial: nw.DialGuest, Username: provisionUser, Password: login}
+	in := BootstrapInput{Dial: nw.DialGuest, Username: provisionUser, Password: login, Progress: p.emit,
+		GuestEpoch: func() (uint64, error) {
+			if vmStopped.Load() {
+				return 0, ErrGuestStopped
+			}
+			lc, ok := nw.(LeaseCounter)
+			if !ok {
+				return 0, errors.New("macvm: the prep network cannot show the guest's DHCP requests")
+			}
+			return lc.DHCPRequests(), nil
+		}}
 	if replace != "" {
 		in.NewPassword, in.Replaced = replace, p.removeSetupCode
 	}

@@ -25,10 +25,6 @@ const ToolsPort uint32 = 1026
 // listeners are a stage-2 boot's.
 var ErrToolsModeRun = errors.New("macvm: This macOS VM started in tools mode")
 
-// runExtraPorts are vsock ports a run boot registers beyond its own: none.
-// Tests set it to show the listener check fails closed.
-var runExtraPorts []uint32
-
 // checkRunListeners is the listener-set check before Init: a run boot's VM
 // listens on the agent port and at most the desktop port, and nothing else.
 func checkRunListeners(ports []uint32) error {
@@ -82,9 +78,18 @@ func makeRunSockDir(o RunOptions, cfg RunConfig) (string, error) {
 	return sc.MakeRunDir(key)
 }
 
-// sockResidue says whether the socket directory key is a gone run's: its run
-// directory is gone and nothing answers on its ctl.sock.
+// sockSweepGrace is how long a new socket directory is never swept: a
+// starting helper makes its directory, then binds its ctl.sock in it, and a
+// stage-2 boot's job key has no run directory at all.
+const sockSweepGrace = time.Minute
+
+// sockResidue says whether the socket directory key is a gone run's: older
+// than sockSweepGrace, its run directory gone, nothing answering on its
+// ctl.sock.
 func sockResidue(runsDir, userDir, key string) bool {
+	if fi, err := os.Lstat(filepath.Join(userDir, key)); err != nil || time.Since(fi.ModTime()) < sockSweepGrace {
+		return false
+	}
 	if _, err := os.Lstat(filepath.Join(runsDir, key)); !os.IsNotExist(err) {
 		return false
 	}

@@ -32,11 +32,12 @@ import (
 	"path/filepath"
 	"runtime"
 	"syscall"
-	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
 	"github.com/cjohnstoniv/wardyn/internal/macvm/admission"
+	"github.com/cjohnstoniv/wardyn/internal/macvm/stage1"
 	"github.com/cjohnstoniv/wardyn/internal/version"
+	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 	"golang.org/x/sys/unix"
 )
 
@@ -49,8 +50,8 @@ type deps struct {
 	// prepare supplies prepare's first-boot provisioner, prep network and
 	// stage 1, which other parts of the build provide.
 	prepare func(*macvm.PrepareOptions) error
-	// firstBoot is the provisioning first boot (macvm.NewProvisioner); nil
-	// until that is linked.
+	// firstBoot is the provisioning first boot (macvm.NewProvisioner), which
+	// probe asks whether this host can run it.
 	firstBoot macvm.FirstBooter
 	// fstat replaces fstat(2) in the ledger's ownership checks (tests).
 	fstat func(fd int, name string) (unix.Stat_t, error)
@@ -72,10 +73,15 @@ func (d deps) power() macvm.PowerSource {
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	os.Exit(run(ctx, os.Args[1:], deps{
+	os.Exit(run(ctx, os.Args[1:], mainDeps()))
+}
+
+// mainDeps are the helper's real deps.
+func mainDeps() deps {
+	return deps{
 		engine: platformEngine, host: admission.SystemHost(), stdout: os.Stdout, stderr: os.Stderr,
-		prepare: prepareDeps,
-	}))
+		prepare: prepareDeps, firstBoot: macvm.NewProvisioner(),
+	}
 }
 
 func run(ctx context.Context, args []string, d deps) int {
@@ -303,9 +309,16 @@ func (j jobFlags) stage2(eng macvm.Engine, d deps) (*macvm.ToolsStage, error) {
 	if err != nil {
 		return nil, err
 	}
+	agent, err := guestAgentPath()
+	if err != nil {
+		return nil, err
+	}
 	boot := macvm.Stage2BootConfig{Engine: eng, SockRoot: *j.sockRoot, SockKey: macvm.JobSockKey(*j.entry), SockFstat: d.sockFstat}
 	return &macvm.ToolsStage{Boot: boot.ToolsBoot(), ToolsOptions: macvm.ToolsOptions{
 		Tooling: t, Cache: filepath.Join(macvm.Layout{Root: *j.root}.CacheDir(), "tools"),
+		// Stage 2 replaces the guest agent where stage 1 installed it, with
+		// the build beside this helper (§3.4, guest agent drift).
+		Agent: &macvm.AgentPin{Version: version.String(), Path: agent, Dest: guestagent.MacAgentBinaryPath},
 	}}, nil
 }
 
@@ -315,7 +328,7 @@ func cmdPrepare(ctx context.Context, args []string, d deps) int {
 	j := newJobFlags(fs)
 	keep := fs.Bool(macvm.FlagKeepIPSW, false, "keep the downloaded restore image")
 	reprepare := fs.Bool(macvm.FlagReprepare, false, "build a new base even when one is ready (a newer restore image), and swap it in")
-	byHand := fs.Duration("setup-by-hand-wait", time.Hour, "how long to wait for macOS's setup by hand (0: stop instead)")
+	byHand := fs.Duration("setup-by-hand-wait", macvm.DefaultSetupByHandWait, "how long to wait for macOS's setup by hand (0: stop instead)")
 	if code := j.parse(fs, args, d); code != 0 {
 		return code
 	}
@@ -375,7 +388,7 @@ func cmdUpdateTools(ctx context.Context, args []string, d deps) int {
 	enc := json.NewEncoder(d.stdout)
 	o := macvm.UpdateOptions{
 		Engine: eng, Layout: macvm.Layout{Root: *j.root}, Slot: *j.slot, Power: d.power(), Admit: j.admit(macvm.UpdateToolsCommand, d),
-		Stage: st, Tooling: st.Tooling, Force: *force, CPUs: *j.cpus, MemoryMiB: *j.memMiB, HelperVersion: version.String(),
+		Stage: st, Tooling: st.Tooling, AgentVersion: version.String(), Force: *force, CPUs: *j.cpus, MemoryMiB: *j.memMiB, HelperVersion: version.String(),
 		Progress: func(ev macvm.PrepareEvent) { _ = enc.Encode(ev) },
 		// The staging-cleanup warning goes to the job's log (runnerd's tools-update.log), not nowhere.
 		Log: slog.New(slog.NewTextHandler(d.stderr, nil)),
@@ -388,13 +401,38 @@ func cmdUpdateTools(ctx context.Context, args []string, d deps) int {
 }
 
 // prepareDeps wires prepare's first-boot provisioner (macvm.NewProvisioner),
-// prep network (internal/vmnet) and stage 1. They arrive from their own
-// lanes; until they are merged this build refuses prepare by name.
+// prep network (internal/vmnet) and stage 1. Stage 1 installs the
+// wardyn-guest-agent that sits beside this helper. Where this build or host
+// cannot provision a first boot, prepare is refused with the provisioner's
+// reason.
 func prepareDeps(o *macvm.PrepareOptions) error {
-	if o.FirstBoot == nil || o.PrepNet == nil || o.Bootstrap == nil {
-		return errors.New("this build has no guest provisioning, prep network or stage 1 yet; prepare is not available")
+	if o.FirstBoot == nil {
+		o.FirstBoot = macvm.NewProvisioner()
+	}
+	if o.PrepNet == nil {
+		o.PrepNet = newPrepNet
+	}
+	if o.Bootstrap == nil {
+		agent, err := guestAgentPath()
+		if err != nil {
+			return err
+		}
+		o.Bootstrap = stage1.New(stage1.Config{AgentPath: agent, AgentVersion: version.String()})
+	}
+	if err := o.FirstBoot.Supported(); err != nil {
+		return fmt.Errorf("%w; prepare is not available", err)
 	}
 	return nil
+}
+
+// guestAgentPath is the darwin/arm64 wardyn-guest-agent beside this helper:
+// stage 1 installs it, and stage 2 replaces the guest's copy with it.
+func guestAgentPath() (string, error) {
+	self, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("this helper's own path: %w", err)
+	}
+	return filepath.Join(filepath.Dir(self), "wardyn-guest-agent"), nil
 }
 
 // probeReport is what probe prints.
@@ -416,7 +454,7 @@ type probeReport struct {
 // exits 0 only when they can.
 func cmdProbe(d deps) int {
 	r := probeReport{GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, Cgo: cgoEnabled, VZ: vzLinked, HelperVersion: version.String()}
-	hostErr := errors.New("no engine")
+	var hostErr error
 	if eng, err := d.engine(); err != nil {
 		hostErr = err
 	} else {

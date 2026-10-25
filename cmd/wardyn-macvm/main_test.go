@@ -10,6 +10,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -78,11 +79,58 @@ func TestUsage(t *testing.T) {
 	}
 }
 
-func TestPrepareRefusedUntilWired(t *testing.T) {
+// TestPrepareRefusedWhereProvisioningUnsupported: prepare is refused with
+// the provisioner's reason where this build or host cannot provision.
+func TestPrepareRefusedWhereProvisioningUnsupported(t *testing.T) {
+	sup := macvm.NewProvisioner().Supported()
+	if sup == nil {
+		t.Skip("this host can provision a first boot")
+	}
 	d, _, errb := testDeps(&macvmtest.Engine{})
 	code := run(context.Background(), []string{"prepare", "--root", t.TempDir(), "--cpus", "4", "--memory-mib", "8192"}, d)
-	if code != 1 || !strings.Contains(errb.String(), "prepare is not available") {
+	if code != 1 || !strings.Contains(errb.String(), sup.Error()+"; prepare is not available") {
 		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+}
+
+// TestPrepareDepsWiresEveryPart: prepare gets macvm.NewProvisioner, the
+// vmnet prep network and stage 1, and is refused only where provisioning is
+// unsupported.
+func TestPrepareDepsWiresEveryPart(t *testing.T) {
+	var o macvm.PrepareOptions
+	err := prepareDeps(&o)
+	if reflect.TypeOf(o.FirstBoot) != reflect.TypeOf(macvm.NewProvisioner()) {
+		t.Fatalf("FirstBoot = %T; want %T", o.FirstBoot, macvm.NewProvisioner())
+	}
+	if o.PrepNet == nil || o.Bootstrap == nil {
+		t.Fatalf("PrepNet or Bootstrap unset: %+v", o)
+	}
+	if sup := macvm.NewProvisioner().Supported(); sup == nil {
+		if err != nil {
+			t.Fatalf("prepareDeps on a host that can provision: %v", err)
+		}
+	} else if err == nil || !strings.Contains(err.Error(), sup.Error()) {
+		t.Fatalf("prepareDeps: %v; want the provisioner's %q", err, sup)
+	}
+}
+
+// TestMainDepsProbeProvisioning: the helper's own probe asks
+// macvm.NewProvisioner, so it reports provisioning truthfully.
+func TestMainDepsProbeProvisioning(t *testing.T) {
+	d := mainDeps()
+	if reflect.TypeOf(d.firstBoot) != reflect.TypeOf(macvm.NewProvisioner()) {
+		t.Fatalf("firstBoot = %T; want %T", d.firstBoot, macvm.NewProvisioner())
+	}
+	var out bytes.Buffer
+	d.engine = func() (macvm.Engine, error) { return &macvmtest.Engine{}, nil }
+	d.stdout = &out
+	_ = run(context.Background(), []string{"probe"}, d)
+	var r probeReport
+	if err := json.Unmarshal(out.Bytes(), &r); err != nil {
+		t.Fatalf("%v %q", err, out.String())
+	}
+	if want := okOr(macvm.NewProvisioner().Supported()); r.Provisioning != want {
+		t.Fatalf("provisioning %q; want %q", r.Provisioning, want)
 	}
 }
 
@@ -204,6 +252,9 @@ func TestProbe(t *testing.T) {
 		}
 		if code != tc.want || r.Supported != (tc.want == 0) || r.GOOS == "" || r.HelperVersion == "" {
 			t.Fatalf("%s: exit %d, report %+v", tc.name, code, r)
+		}
+		if tc.want == 0 && r.Provisioning != "ok" {
+			t.Fatalf("%s: provisioning %q", tc.name, r.Provisioning)
 		}
 		if tc.hostErr != nil && r.Host != tc.hostErr.Error() {
 			t.Fatalf("%s: host %q", tc.name, r.Host)
