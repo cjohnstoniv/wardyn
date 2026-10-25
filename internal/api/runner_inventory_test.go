@@ -795,6 +795,35 @@ func TestRunnerViewPassesTheMacOSVMCapsThroughAndCountsItsMacOSVMRuns(t *testing
 	}
 }
 
+// A Mac that refuses macOS VMs reaches the console as its reason code and numbers, not as the runner's
+// own sentence (#3653); the runner's last caps still hold the sentence, which placement reads.
+func TestRunnerViewSendsAMacsRefusalAsItsReasonNotItsWords(t *testing.T) {
+	srv, f, _ := newRunnerRegistrationServer(t)
+	mac := f.addRunner(srv, "alice", "mac-studio", types.RunnerClaimed, time.Hour)
+	words := "Per-run memory on this runner is 6 GB; a macOS VM needs at least 8 GB."
+	data, err := json.Marshal(runnerwire.Caps{MacOSVM: &runnerwire.MacVMCaps{MinCPUs: 4, MinMemoryMiB: 8192,
+		Base: runnerwire.MacVMBase{State: runnerwire.MacVMBaseReady}, Refusal: words, Reason: runnerwire.MacVMReasonMemoryBelowMinimum}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.runnerStreams.subs = map[uuid.UUID]runnerEndpoint{}
+	sub := remote.New(mac.ID.String(), &capsTransport{online: true}, remote.Options{})
+	sub.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: data})
+	srv.runnerStreams.subs[mac.ID] = runnerEndpoint{sub: sub, link: &remote.Link{}}
+	alice := memberModeSSOSession(t, "alice", "alice@example.com", oidc.RoleUser, false)
+	w := doSSO(t, srv, http.MethodGet, "/api/v1/me/runners", alice, "")
+	var caps map[string]any
+	if err := json.Unmarshal(viewIDs(runnerViewsOf(t, w))[mac.ID].MacOSVM, &caps); err != nil {
+		t.Fatal(err)
+	}
+	if _, has := caps["refusal"]; has || caps["reason"] != runnerwire.MacVMReasonMemoryBelowMinimum || caps["min_memory_mib"] != float64(8192) {
+		t.Fatalf("macos_vm = %v, want the reason and the minimum and no refusal", caps)
+	}
+	if got, _ := srv.runnerLastCaps(mac.ID); got.MacOSVM == nil || got.MacOSVM.Refusal != words {
+		t.Fatalf("the runner's last caps lost their refusal: %+v", got.MacOSVM)
+	}
+}
+
 func TestMeRunnersKeepARunnerSomeoneElseRevokedForAWeek(t *testing.T) {
 	srv, f, _ := newRunnerRegistrationServer(t)
 	now := time.Now().UTC()

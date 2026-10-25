@@ -49,7 +49,7 @@ describe("M-R2 runner card badge", () => {
   });
   it("4: not offered on a refusal, a base that is not ready or a per-run size under the minimum", () => {
     const text = "macOS VMs · not offered";
-    expect(macVMBadge({ ...ready, refusal: "This Mac's macOS VM ledger is missing or damaged. Reinstall the Wardyn runner package." }, 0, perRun)?.text).toBe(text);
+    expect(macVMBadge({ ...ready, reason: "ledger_damaged" }, 0, perRun)?.text).toBe(text);
     expect(macVMBadge({ max: 0, base: { state: "failed", error: "x" } }, 0)?.text).toBe(text);
     expect(macVMBadge({ max: 0, base: { state: "update_needed" } }, 0)?.text).toBe(text);
     expect(macVMBadge(ready, 0, { ...perRun, memory_mib: 6144 })?.text).toBe(text);
@@ -110,11 +110,11 @@ describe("M-R1 runner drawer section", () => {
     expect(container.textContent).toContain("Per-run memory on this runner is 6 GB; a macOS VM needs at least 8 GB. Its owner raises it to 8 GB or more in Your account → My runner, or with wardyn runner set mac-studio-07 --per-run-memory 8.");
     expect(container.textContent).toContain("Per-run CPU on this runner is 2 CPUs; a macOS VM needs at least 4. Its owner raises it to 4 or more in Your account → My runner, or with wardyn runner set mac-studio-07 --per-run-cpu 4.");
   });
-  it("19 / R10: not offered shows the runner's refusal as it sent it", () => {
-    const refusal = "This Mac's macOS VM ledger is missing or damaged. Reinstall the Wardyn runner package.";
-    section({ max: 0, refusal, base: { state: "none" } });
+  it("19 / R10: not offered words the ledger reason from the approved text, not the runner's sentence", () => {
+    const { container } = section({ max: 0, reason: "ledger_damaged", refusal: "a sentence only the runner wrote", base: { state: "none" } });
     expect(screen.getByText("Not offered")).toBeInTheDocument();
-    expect(screen.getByText(refusal)).toBeInTheDocument();
+    expect(screen.getByText("This Mac's macOS VM ledger is missing or damaged. Reinstall the Wardyn runner package.")).toBeInTheDocument();
+    expect(container.textContent).not.toContain("a sentence only the runner wrote");
   });
 });
 
