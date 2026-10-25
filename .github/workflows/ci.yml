@@ -1764,7 +1764,14 @@ jobs:
       - name: Tests
         run: |
           set -euo pipefail
+          # The ledger walks every directory from / without following a link, and the runner's TMPDIR
+          # (/var/folders/...) goes through the /var link: test under /private/tmp, as user and as root.
+          export TMPDIR=/private/tmp
           go test -count=1 -timeout 15m ./internal/macvm/... ./cmd/wardyn-macvm/ ./cmd/wardyn-guest-agent/
+          # The lock-open refusal again as root, the installer's uid: its socket case is one root still hits.
+          go test -c -o "$RUNNER_TEMP/admission.test" ./internal/macvm/admission/
+          sudo env TMPDIR="$TMPDIR" "$RUNNER_TEMP/admission.test" -test.count=1 -test.v -test.run '^TestSetupLockOpenErrorFailsClosed$' | tee "$RUNNER_TEMP/admission-root.out"
+          grep -q -- '--- PASS: TestSetupLockOpenErrorFailsClosed/socket' "$RUNNER_TEMP/admission-root.out"
           # -v: prove the darwin-native guest agent tests (server_darwin_test.go) ran, not just compiled.
           go test -count=1 -timeout 10m -v ./internal/vm/guestagent/ | tee "$RUNNER_TEMP/guestagent.out"
           grep -q -- '^--- PASS: TestDarwin' "$RUNNER_TEMP/guestagent.out"
@@ -1803,6 +1810,7 @@ jobs:
             [ "$(stat -f '%Su:%Sg %Mp%Lp %HT' "$b")" = 'root:wheel 0755 Directory' ]
             [ "$(stat -f '%Su:%Sg %Mp%Lp %HT' "$b/admission.lock")" = 'root:wheel 0644 Regular File' ]
             [ "$(stat -f '%Su:%Sg %Mp%Lp %HT' "$b/macos-vm-admission")" = 'root:wheel 1777 Directory' ]
+            [ "$(stat -f '%Su:%Sg %Mp%Lp %HT' "$b/sock")" = 'root:wheel 1777 Directory' ]
           }
           fresh() {
             r="$(sudo mktemp -d /private/tmp/wardyn-pkgroot.XXXXXX)"
@@ -1825,6 +1833,16 @@ jobs:
           sudo env WARDYN_PKG_ROOT="$r" sh "$post"
           ledger "$r"
           [ "$(stat -f %i "$lock")" != "$ino" ]
+          # sock/ keeps a login's own u<uid> (0700) and moves anything else aside, such as a u<N> another uid made.
+          sock="$r/Users/Shared/Wardyn/sock"
+          own="$sock/u$(id -u)"
+          mkdir -m 0700 "$own"
+          mkdir -m 0700 "$sock/u4242"
+          own_ino="$(stat -f %i "$own")"
+          sudo env WARDYN_PKG_ROOT="$r" sh "$post"
+          ledger "$r"
+          [ "$(stat -f %i "$own")" = "$own_ino" ]
+          [ "$(ls -A "$sock")" = "u$(id -u)" ]
           # A login's own Wardyn directory, with a link at macos-vm-admission: replaced, and the target untouched.
           fresh
           b="$r/Users/Shared/Wardyn"
