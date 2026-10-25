@@ -122,11 +122,10 @@ func (m *macOSVMs) handNet(ctx context.Context, e admission.Entry) {
 			held, aerr := m.jobNetAttached(chk, e.ID)
 			cancel()
 			if aerr != nil {
-				// Unknown: leave the network to the helper's wait or the next start's sweep.
-				slog.Warn("macOS VM base: the stage-2 network is left, the boot could not be asked", "error", aerr.Error())
-				return
-			}
-			if !held {
+				// Unknown: the helper may hold it, so keep it while the VM lives (the hold loop below
+				// removes it once the VM is gone); nothing else would, before the next start's sweep.
+				slog.Warn("macOS VM base: the stage-2 network is kept, the boot could not be asked", "error", aerr.Error())
+			} else if !held {
 				undo()
 				return
 			}

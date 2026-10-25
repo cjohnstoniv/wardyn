@@ -21,14 +21,15 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/macvm/macvmtest"
 )
 
+// jobSockPoll is set once, before any test goroutine runs: a test that wrote it would race a watcher an
+// earlier test left reading it.
+func init() { jobSockPoll = 10 * time.Millisecond }
+
 // claimedStage2Job is a tools update whose helper (pid stage2HelperPID) lives, with no ctl.sock.
 func claimedStage2Job(t *testing.T, r *macLedgerRig, m *macOSVMs) admission.Entry {
 	t.Helper()
 	r.host.setProcs(admission.Proc{PID: os.Getpid(), UID: 501, Start: 3, Name: "wardyn-runnerd"},
 		admission.Proc{PID: stage2HelperPID, UID: 501, Start: 9, Name: admission.HelperProcess})
-	prevPoll := jobSockPoll
-	jobSockPoll = 10 * time.Millisecond
-	t.Cleanup(func() { jobSockPoll = prevPoll })
 	e, err := m.ledger.Admit(admission.Request{Kind: admission.KindToolsUpdate, GuestCPUs: 4, GuestMemory: 8 << 30,
 		DiskReserve: admission.RunDiskReservation(macvm.BaseDiskBytes), OwnerPID: os.Getpid(), OwnerStart: 3})
 	if err != nil {
@@ -148,18 +149,18 @@ func fakeStage2Helper(t *testing.T, m *macOSVMs, id, mode string) {
 }
 
 // A net_fd send that fails after the helper took the descriptor must not undo the network the
-// helper holds; one that failed before it did is undone; one that cannot be told is left for the
-// helper's own wait or the next start's sweep.
+// helper holds; one that failed before it did is undone; one that cannot be told is kept while the
+// VM lives and removed once it is gone.
 func TestMacOSVMFailedSendUndoesTheNetworkOnlyWhenTheHelperHoldsNone(t *testing.T) {
 	for _, tc := range []struct {
 		mode            string
 		undone, removed int
 		up              bool
-		holds           bool
+		lives           bool
 	}{
 		{"lost", 0, 1, false, true}, // held: the hand-off stands, the network goes when the helper does
 		{"refuse", 1, 0, false, false},
-		{"gone", 0, 0, true, false},
+		{"gone", 0, 1, false, true}, // cannot be asked: kept, then removed when the VM goes
 	} {
 		t.Run(tc.mode, func(t *testing.T) {
 			r := newMacLedgerRig(t)
@@ -170,11 +171,11 @@ func TestMacOSVMFailedSendUndoesTheNetworkOnlyWhenTheHelperHoldsNone(t *testing.
 			fakeStage2Helper(t, m, e.ID, tc.mode)
 			done := make(chan struct{})
 			go func() { defer close(done); m.handNet(context.Background(), e) }()
-			if tc.holds {
+			if tc.lives {
 				time.Sleep(300 * time.Millisecond)
 				select {
 				case <-done:
-					t.Fatal("handNet returned while the helper holds the network")
+					t.Fatal("handNet returned while the VM lives")
 				default:
 				}
 				r.host.setProcs(admission.Proc{PID: os.Getpid(), UID: 501, Start: 3, Name: "wardyn-runnerd"})
