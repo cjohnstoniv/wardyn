@@ -13,6 +13,7 @@ import { isVMKind } from "../../../../../lib/types/machine-kind";
 import type { RunnerPoolRunType } from "../../../../../lib/types/runner-pools";
 import { useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../../new-run-route";
 import type { RunIntent } from "../../draft/run-intent";
+import { harnessIds } from "../../lenses/lens-keys";
 import { stepIssues } from "../../lenses/local-issues";
 import { addApp, appsOf, chooseAppKind, commandOf, editApp, isServer, removeApp, setCommand } from "../../lenses/apps-lens";
 import type { MachineKind } from "../../../../../lib/types/machine-kind";
@@ -90,7 +91,7 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
         />
       )}
       <QuestionBlock label={NR_RUN.WHERE_LABEL}>
-        <MachineKindSection kind={intent.machine_kind ?? "container"} onChoose={chooseKind} />
+        <MachineKindSection kind={intent.machine_kind ?? "container"} agents={harnessIds(intent)} onChoose={chooseKind} />
         <PoolSection state={pools} runType={runType} intent={intent} onChoose={(id) => edit((i) => choosePool(i, id))} />
         {!vm && <BarrierSection pool={chosen} chosen={intent.confinement_class} onChoose={(cc) => edit((i) => chooseBarrier(i, cc))} />}
       </QuestionBlock>

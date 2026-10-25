@@ -16,6 +16,9 @@ import {
   RUN_START_OVERDUE_SLACK_MS,
   startOverdueMs,
   RUN_STARTUP,
+  RUN_STARTUP_MACOS,
+  MACOS_START,
+  macOSStartOf,
   runStartupView,
   STATUS_REASON_BUILDING,
   type StartupLastStep,
@@ -446,6 +449,37 @@ describe("runStartupView: mirrors of the Go sources", () => {
   it("STATUS_REASON_BUILDING equals Go's statusReasonBuilding", () => {
     expect(goBuilding).not.toBeNull();
     expect(STATUS_REASON_BUILDING).toBe(goBuilding![1]);
+  });
+
+  // Each macOS VM start token, by name and value: runner.MacOS<Name> is MACOS_START's same token.
+  const macGo = go("internal/runner/macos_start.go");
+  it("MACOS_START equals Go's runner.MacOS* start tokens, all of them", () => {
+    const goTokens = Object.fromEntries([...macGo.matchAll(/^\t(MacOS[A-Za-z]+)\s*=\s*"(MacOS[A-Za-z]+)"/gm)].map((m) => [m[1], m[2]]));
+    expect(Object.values(MACOS_START).sort()).toEqual(Object.values(goTokens).sort());
+    for (const v of Object.values(MACOS_START)) expect(goTokens[v]).toBe(v);
+    expect(/MacOSStartComponent\s*=\s*"macos"/.test(macGo)).toBe(true);
+  });
+});
+
+describe("macOS VM start lines", () => {
+  it("macOSStartOf reads each token, and the disk figures off the message", () => {
+    expect(macOSStartOf("macos: MacOSCloning", "MacOSCloning")).toEqual({ phase: "clone" });
+    expect(macOSStartOf("macos: MacOSStarting")).toEqual({ phase: "start" });
+    expect(macOSStartOf("macos: MacOSConnecting")).toEqual({ phase: "connect" });
+    expect(macOSStartOf("macos: MacOSCloneFailed")).toEqual({ phase: "clone", failure: "" });
+    expect(macOSStartOf("macos: MacOSStartFailed")).toEqual({ phase: "start", failure: "" });
+    expect(macOSStartOf("macos: MacOSConnectFailed")).toEqual({ phase: "connect", failure: "" });
+    expect(macOSStartOf("macos: MacOSDiskShort: 85 GB reserved, 40 GB free", "MacOSDiskShort")).toEqual({ phase: "start", failure: RUN_STARTUP_MACOS.DISK_SHORT("85", "40") });
+    expect(macOSStartOf("macos: MacOSDiskShort", "MacOSDiskShort")).toEqual({ phase: "start", failure: "" });
+    expect(macOSStartOf("agent: ContainerCreating")).toBeUndefined();
+  });
+  it("the header and the board say the phase, never the raw token", () => {
+    expect(statusDetailSentence("macos: MacOSStarting", "MacOSStarting")).toBe(RUN_STARTUP_MACOS.STEP_START);
+    expect(statusDetailChip("macos: MacOSConnecting", "MacOSConnecting")).toBe(RUN_STARTUP_MACOS.STEP_CONNECT);
+    expect(statusDetailSentence("macos: MacOSConnectFailed", "MacOSConnectFailed")).toBe(RUN_STARTUP_MACOS.STEP_CONNECT_FAILED);
+    const short = "macos: MacOSDiskShort: 85 GB reserved, 40 GB free";
+    expect(statusDetailSentence(short, "MacOSDiskShort")).toBe(RUN_STARTUP_MACOS.DISK_SHORT("85", "40"));
+    expect(statusDetailChip(short, "MacOSDiskShort")).toBe(RUN_STARTUP_MACOS.STEP_START_FAILED);
   });
 });
 

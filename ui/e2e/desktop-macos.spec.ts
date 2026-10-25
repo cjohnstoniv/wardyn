@@ -92,4 +92,24 @@ test.describe("Run detail: a macOS desktop", () => {
     await expect(desk.getByText(DESKTOP.signInsNoteRunDisk, { exact: true })).toBeVisible();
     await expect(desk.getByText(DESKTOP.signInsNote, { exact: true })).toHaveCount(0);
   });
+
+  test("a Mac whose Screen Sharing is view only: the run's macos field turns the desktop Off, with no Open desktop", async ({ page }) => {
+    const id = runIdByTask(RUN_TASK);
+    await page.route(`**/api/v1/runs/${id}`, async (route) => {
+      const res = await route.fetch();
+      await route.fulfill({ response: res, body: JSON.stringify({ ...(await res.json()), machine_kind: "macos_vm", macos: { desktop: "observe" } }) });
+    });
+    await page.route(`**/api/v1/runs/${id}/desktop/sign-ins`, (route) =>
+      route.fulfill({ json: { store: "run_disk", paused: false, can_pause: true, agent: "Claude Code" } }),
+    );
+    await gotoConsole(page);
+    await page.goto(`/runs/${id}`);
+    await expect(page.getByRole("heading", { name: RUN_TASK, level: 1 })).toBeVisible();
+    const desk = page.getByRole("region", { name: DESKTOP.title });
+    await desk.scrollIntoViewIfNeeded();
+    await expect(desk.getByText(DESKTOP.kindMacOS)).toBeVisible();
+    await expect(desk.getByText(DESKTOP.observeOnlyMacOS)).toBeVisible();
+    await expect(desk.getByText(DESKTOP.statusOff)).toBeVisible();
+    await expect(desk.getByRole("button")).toHaveCount(0);
+  });
 });

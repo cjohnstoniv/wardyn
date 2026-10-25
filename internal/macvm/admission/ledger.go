@@ -306,8 +306,14 @@ type Request struct {
 	OwnerStart  int64
 }
 
-// Refusal is an admission refused for capacity, with the reason in words.
-type Refusal struct{ Reason string }
+// Refusal is an admission refused for capacity, with the reason in words. A refusal for disk also
+// carries its figures: what the run needs free (its reservation plus the floor) and what is free
+// beyond the reservations already held; both are zero on every other refusal.
+type Refusal struct {
+	Reason       string
+	DiskNeeded   int64
+	DiskFreeLeft int64
+}
 
 func (r *Refusal) Error() string { return "admission: " + r.Reason }
 
@@ -491,7 +497,8 @@ func (l *Ledger) Admit(req Request) (Entry, error) {
 			return err
 		}
 		if free-u.disk < req.DiskReserve+DiskFloorBytes {
-			return &Refusal{Reason: fmt.Sprintf("this Mac needs %d GiB free for another macOS VM", (req.DiskReserve+DiskFloorBytes+u.disk)>>30)}
+			return &Refusal{Reason: fmt.Sprintf("this Mac needs %d GiB free for another macOS VM", (req.DiskReserve+DiskFloorBytes+u.disk)>>30),
+				DiskNeeded: req.DiskReserve + DiskFloorBytes, DiskFreeLeft: free - u.disk}
 		}
 		slot := 0
 		for slot < LicenceCap-1 && u.slotsUsed[slot] {

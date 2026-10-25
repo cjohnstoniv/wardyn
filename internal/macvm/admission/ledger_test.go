@@ -305,8 +305,15 @@ func TestDiskReservation(t *testing.T) {
 	if _, err := l.Admit(runReq(8 * gib)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := l.Admit(runReq(8 * gib)); !IsRefusal(err) {
+	_, err := l.Admit(runReq(8 * gib))
+	var r *Refusal
+	if !errors.As(err, &r) {
 		t.Fatalf("second run with 106 GiB free: %v, want a refusal", err)
+	}
+	// The figures the run page states: the run's reservation plus the floor, against what the first
+	// run's reservation leaves of the 106 GiB.
+	if need, left := RunDiskReservation(50*gib)+DiskFloorBytes, 106*gib-RunDiskReservation(50*gib); r.DiskNeeded != need || r.DiskFreeLeft != left {
+		t.Fatalf("disk refusal figures %d needed, %d free; want %d, %d", r.DiskNeeded, r.DiskFreeLeft, need, left)
 	}
 	h.free = 107 * gib
 	if _, err := l.Admit(runReq(8 * gib)); err != nil {

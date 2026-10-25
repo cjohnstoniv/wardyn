@@ -11,7 +11,7 @@ import * as React from "react";
 import type { AgentRun, SetupStatus } from "../../../lib/types";
 import { ProgressSteps } from "../../wardyn/progress-steps";
 import { setup as setupApi } from "../../../lib/api/setup";
-import { runStartupView, startOverdueMs, STATUS_REASON_BUILDING, type MacOSStart, type StartupLastStep } from "../run-status-detail";
+import { macOSStartOf, runStartupView, startOverdueMs, STATUS_REASON_BUILDING, type MacOSStart, type StartupLastStep } from "../run-status-detail";
 
 // Fast enough that the 60 s hint and the overdue bounds land within a second
 // of their deadline, without waiting for the next 4 s run poll.
@@ -25,7 +25,7 @@ export function StartupProgress({
 }: {
   run: AgentRun;
   lastStep: StartupLastStep;
-  // A macOS VM's start phase, once the runner reports one; its rows replace the container's.
+  // A macOS VM's start phase; its rows replace the container's. Read off the run's status line when not given.
   macOS?: MacOSStart;
   // Drawn inside the same dark-scoped column, under the list (state 9's note).
   children?: React.ReactNode;
@@ -67,7 +67,7 @@ export function StartupProgress({
     lastStep,
     sawBuilding: sawNow || buildingNow,
     startOverdueMs: startOverdueMs(sandboxStart),
-    macOS,
+    macOS: macOS ?? macOSStartOf(run.status_detail, run.status_reason),
   });
   if (!view) return null;
   return (

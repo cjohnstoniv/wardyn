@@ -4,9 +4,11 @@
  */
 
 // What the run page says about a macOS VM beyond a Linux one's desktop block (mock M-D1): that the Mac only
-// lets the desktop be watched, and where the removal of the VM's disk stands at the run's end. The console
-// has no wire field for either yet, so the block takes them as props and says nothing without them.
+// lets the desktop be watched, and where the removal of the VM's disk stands at the run's end. The view-only
+// desktop comes from GET /runs/{id}'s macos (macOSRunFactsOf); the disk's removal has no wire field yet, so it
+// enters as a prop and the block says nothing of it without one.
 import { Check } from "lucide-react";
+import type { RunDetail } from "../../../lib/types";
 import { DESKTOP } from "../../wardyn/copy/desktop";
 
 export interface MacOSRunFacts {
@@ -15,6 +17,10 @@ export interface MacOSRunFacts {
   /** The helper's word on the VM's disk; absent while the run goes on. */
   disk?: { state: "removing" } | { state: "removed"; at: string } | { state: "failed"; reason: string };
 }
+
+/** The facts GET /runs/{id} carries for a macOS VM run: today only a desktop the Mac lets be watched alone. */
+export const macOSRunFactsOf = (run: Pick<RunDetail, "macos">): MacOSRunFacts | undefined =>
+  run.macos?.desktop === "observe" ? { desktop: "observe" } : undefined;
 
 export function MacOSDiskNote({ disk }: { disk: MacOSRunFacts["disk"] }) {
   if (!disk) return null;

@@ -61,6 +61,23 @@ describe("StartupProgress: macOS VM", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Not enough free disk to start a macOS VM safely: it reserves 51 GB and this Mac has 38 GB free.");
   });
 
+  it("reads the phase off the run's own status line, as the server sends it", () => {
+    vi.useFakeTimers({ now: T0 + 3000 });
+    render(<StartupProgress lastStep="task" run={{ ...run, status_detail: "macos: MacOSConnecting", status_reason: "MacOSConnecting" }} />);
+    expect(rows().map((r) => r[1])).toEqual(["done", "done", "active", "pending"]);
+  });
+
+  it("reads a disk refusal's figures off the status line and stops at Starting macOS", () => {
+    vi.useFakeTimers({ now: T0 + 3000 });
+    const detail = "macos: MacOSDiskShort: 51 GB reserved, 38 GB free";
+    render(<StartupProgress lastStep="terminal" run={{ ...run, status_detail: detail, status_reason: "MacOSDiskShort" }} />);
+    expect(rows()).toEqual([
+      [RUN_STARTUP_MACOS.STEP_CLONE, "done"],
+      [RUN_STARTUP_MACOS.STEP_START_FAILED, "failed"],
+    ]);
+    expect(screen.getByRole("alert")).toHaveTextContent(RUN_STARTUP_MACOS.DISK_SHORT("51", "38"));
+  });
+
   it("keeps the container rows for a run with no macOS phase", () => {
     vi.useFakeTimers({ now: T0 + 3000 });
     render(<StartupProgress lastStep="terminal" run={run} />);

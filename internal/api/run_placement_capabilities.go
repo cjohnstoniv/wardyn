@@ -334,7 +334,7 @@ func (s *Server) placementCapabilityRefusalFor(ctx context.Context, req createRu
 		return runError(placement.ReasonPlacementCapability.Status(), string(placement.ReasonPlacementCapability), linuxVMOnRemote)
 	}
 	if demands.MacOSVM && p != types.PlacementLocal {
-		return runError(placement.ReasonPlacementCapability.Status(), string(placement.ReasonPlacementCapability), macOSVMOnRemote)
+		return placementRunRefusal(&placement.Refusal{Reason: placement.ReasonPlacementCapability, Field: "machine_kind"}, macOSVMOnRemote)
 	}
 	if demands.LinuxVM && requestIsInteractive(req) && req.InteractiveStart == "agent" {
 		return runError(placement.ReasonPlacementCapability.Status(), string(placement.ReasonPlacementCapability), linuxVMAgentStart)
@@ -363,10 +363,19 @@ func (s *Server) placementCapabilityRefusalFor(ctx context.Context, req createRu
 			}
 		}
 		if ref != nil {
-			return runError(ref.Reason.Status(), string(ref.Reason), ref.Error())
+			return placementRunRefusal(ref, ref.Error())
 		}
 	}
 	return nil
+}
+
+// placementRunRefusal is a placement refusal as the run's refusal, saying msg and naming the request
+// field it is about (errorBody.Field) when it names one, so the console takes the person to where
+// that field is changed.
+func placementRunRefusal(ref *placement.Refusal, msg string) *runRefusal {
+	f := runError(ref.Reason.Status(), string(ref.Reason), msg)
+	f.body.Field = ref.Field
+	return f
 }
 
 // macOSVMAsk is what one run asks of a Mac beyond its kind: the harnesses it starts and the CPU and

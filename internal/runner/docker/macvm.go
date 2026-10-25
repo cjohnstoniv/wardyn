@@ -312,7 +312,17 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 	}
 
 	var rollback []func()
+	// failed is the failure token of the start phase the create is in (runner.MacOS*Failed): an error
+	// says the start stopped there, as the run's last status line, before anything is rolled back.
+	failed := ""
+	phase := func(reason, failure string) {
+		spec.NotifyWaiting(runner.MacOSStartDetail(reason))
+		failed = failure
+	}
 	fail := func(err error) (runner.Sandbox, error) {
+		if failed != "" {
+			spec.NotifyWaiting(runner.MacOSStartDetail(failed))
+		}
 		for i := len(rollback) - 1; i >= 0; i-- {
 			rollback[i]()
 		}
@@ -323,6 +333,7 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 		return runner.Sandbox{}, err
 	}
 	rollback = append(rollback, func() { _ = os.RemoveAll(dir) })
+	phase(runner.MacOSCloning, runner.MacOSCloneFailed)
 	_, proxyIP, undoNet, err := d.runNetworkAndProxy(ctx, spec)
 	if err != nil {
 		return fail(err)
@@ -331,6 +342,10 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 	entry, err := c.admitMacVM(admission.Request{Kind: admission.KindRun, RunID: spec.RunID.String(), GuestCPUs: cpus,
 		GuestMemory: memMiB << 20, DiskReserve: admission.RunDiskReservation(cmp.Or(man.DiskBytes, macvm.BaseDiskBytes)), OwnerPID: self, OwnerStart: start})
 	if err != nil {
+		if short := (*admission.Refusal)(nil); errors.As(err, &short) && short.DiskNeeded > 0 {
+			spec.NotifyWaiting(runner.MacOSDiskShortMessage(short.DiskNeeded, short.DiskFreeLeft))
+			failed = ""
+		}
 		return fail(err)
 	}
 	v := newMacVMRun(c, spec.RunID, dir)
@@ -358,6 +373,7 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 		return fail(fmt.Errorf("docker: the macOS VM helper: %w", err))
 	}
 	defer cc.Close()
+	phase(runner.MacOSStarting, runner.MacOSStartFailed)
 	// The guest's only network: the run's relay, whose attach stream the helper bridges. The VM starts
 	// only once the helper holds it.
 	attach, err := d.startMacVMNet(ctx, spec, proxyIP)
@@ -378,7 +394,7 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 		slog.Warn("docker: mark a macOS VM running in the ledger", slog.String("run_id", spec.RunID.String()), slog.String("err", err.Error()))
 	}
 	c.changed()
-	spec.NotifyWaiting("vm: booting")
+	phase(runner.MacOSConnecting, runner.MacOSConnectFailed)
 	// The desktop's per-run password: from the helper to the guest agent, in memory only (never logged,
 	// never written). A base with a desktop publishes the run ready only once the guest set it (ERRATA E5):
 	// a helper that gives none, or a guest that did not set it, is the run's named failure

@@ -7,6 +7,7 @@ package docker
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -42,12 +43,14 @@ const macHelperPID = 4242
 type macTestHost struct {
 	mu    sync.Mutex
 	procs map[int]admission.Proc
+	// freeDisk is the volume's free space; zero is 500 GiB.
+	freeDisk int64
 }
 
 func (h *macTestHost) BootTime() (int64, error)              { return 1, nil }
 func (h *macTestHost) MemoryBytes() (uint64, error)          { return 64 << 30, nil }
 func (h *macTestHost) AvailableMemoryBytes() (uint64, error) { return 48 << 30, nil }
-func (h *macTestHost) FreeDiskBytes(string) (int64, error)   { return 500 << 30, nil }
+func (h *macTestHost) FreeDiskBytes(string) (int64, error)   { return cmp.Or(h.freeDisk, 500<<30), nil }
 func (h *macTestHost) Processes() ([]admission.Proc, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
