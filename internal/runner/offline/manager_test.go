@@ -125,6 +125,45 @@ func createLocalAs(t *testing.T, m *Manager, org time.Time, id uuid.UUID) uuid.U
 	}
 	return id
 }
+func TestCreatedRecordsMachineKind(t *testing.T) {
+	m, sub, _, org := managerFixture(t)
+	ctx := context.Background()
+	create := func(kind types.MachineKind) uuid.UUID {
+		id := uuid.New()
+		if err := m.Lease(ctx, runnerwire.Lease{RunID: id, TokenRenewedAt: org, EndsAt: org.Add(3 * time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+		spec := runner.SandboxSpec{RunID: id, MachineKind: kind}
+		if err := m.BeforeCreate(ctx, spec); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.Created(ctx, spec, id.String()); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	container, vm := create(types.MachineContainer), create(types.MachineMacOSVM)
+	kinds := func(m *Manager) (types.MachineKind, types.MachineKind) {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return m.state.Runs[container].MachineKind, m.state.Runs[vm].MachineKind
+	}
+	if c, v := kinds(m); c != "" || v != types.MachineMacOSVM {
+		t.Fatalf("recorded kinds: container=%q vm=%q", c, v)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput, noErase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if c, v := kinds(reopened); c != "" || v != types.MachineMacOSVM {
+		t.Fatalf("kinds after reopen: container=%q vm=%q", c, v)
+	}
+}
+
 func TestOfflineKeepsAgentUntilMonotonicProxyLapse(t *testing.T) {
 	m, sub, elapsed, org := managerFixture(t)
 	id := createLocal(t, m, org)
