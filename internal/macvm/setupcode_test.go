@@ -140,15 +140,15 @@ func TestCheckHostVersionFloorIs26(t *testing.T) {
 	}
 }
 
-// noProvisioning is what a macOS 26 host's provisioning check says.
-var noProvisioning = fmt.Errorf("macvm provision: this Mac's Virtualization framework has no class VZMacGuestProvisioningOptions; %w needs macOS 27 or later", macvm.ErrNoProvisioning)
+// errHostNoProvisioning is what a macOS 26 host's provisioning check says.
+var errHostNoProvisioning = fmt.Errorf("macvm provision: this Mac's Virtualization framework has no class VZMacGuestProvisioningOptions; %w needs macOS 27 or later", macvm.ErrNoProvisioning)
 
 // On a host without guest provisioning, prepare boots the base plain and goes to setup by hand at once:
 // no account in the boot, the code written before any dial of the guest (no Remote Login wait), the
 // guest's window opened and closed again, and stage 1 logging in with the code.
 func TestPrepareWithoutProvisioningGoesStraightToSetupByHand(t *testing.T) {
 	f, b, seen := handPrep(t)
-	f.fb.Unsupported = noProvisioning
+	f.fb.Unsupported = errHostNoProvisioning
 	f.opts.RemoteLoginWait = time.Hour // waiting it out would time the test out
 	var early atomic.Int32
 	byHand := f.net.onDial
@@ -178,7 +178,7 @@ func TestPrepareWithoutProvisioningGoesStraightToSetupByHand(t *testing.T) {
 // Without provisioning and with setup by hand off, prepare stops at its check, before any download or boot.
 func TestPrepareWithoutProvisioningNeedsSetupByHand(t *testing.T) {
 	f := newPrep(t)
-	f.fb.Unsupported = noProvisioning
+	f.fb.Unsupported = errHostNoProvisioning
 	if _, err := macvm.Prepare(context.Background(), f.opts); !errors.Is(err, macvm.ErrNoProvisioning) {
 		t.Fatalf("got %v, want ErrNoProvisioning", err)
 	}
@@ -190,7 +190,7 @@ func TestPrepareWithoutProvisioningNeedsSetupByHand(t *testing.T) {
 // A window that cannot open stops setup by hand at once and deletes the code: nobody could finish it.
 func TestSetupByHandWithoutAWindowStops(t *testing.T) {
 	f, _, _ := handPrep(t)
-	f.fb.Unsupported = noProvisioning
+	f.fb.Unsupported = errHostNoProvisioning
 	f.fb.ScreenErr = errors.New("no window server")
 	_, err := macvm.Prepare(context.Background(), f.opts)
 	if err == nil || !strings.Contains(err.Error(), "no window server") {
@@ -201,8 +201,8 @@ func TestSetupByHandWithoutAWindowStops(t *testing.T) {
 	}
 }
 
-// noDesktop is what a Mac's window check says over SSH.
-var noDesktop = fmt.Errorf("macvm: this process has no window-server session: %w", macvm.ErrNoDesktopSession)
+// errNoDesktopOverSSH is what a Mac's window check says over SSH.
+var errNoDesktopOverSSH = fmt.Errorf("macvm: this process has no window-server session: %w", macvm.ErrNoDesktopSession)
 
 // A prepare that will need setup by hand (no guest provisioning) and cannot show the guest's window, with no
 // desktop session or as root, stops at its check: no download, no boot, nothing written under the root.
@@ -212,13 +212,13 @@ func TestPrepareWithoutADesktopStopsAtItsCheck(t *testing.T) {
 		euid     int
 		want     string
 	}{
-		"over SSH": {noDesktop, 501, "no window-server session"},
+		"over SSH": {errNoDesktopOverSSH, 501, "no window-server session"},
 		"as root":  {nil, 0, "prepare runs as root"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			defer macvm.SetGeteuid(tc.euid)()
 			f := newPrep(t)
-			f.fb.Unsupported, f.fb.NoScreen = noProvisioning, tc.noScreen
+			f.fb.Unsupported, f.fb.NoScreen = errHostNoProvisioning, tc.noScreen
 			f.opts.SetupByHandWait = time.Hour
 			_, err := macvm.Prepare(context.Background(), f.opts)
 			if !errors.Is(err, macvm.ErrNoDesktopSession) || !strings.Contains(err.Error(), tc.want) ||
@@ -245,7 +245,7 @@ func TestPrepareWithoutADesktopStopsAtItsCheck(t *testing.T) {
 func TestPrepareWithProvisioningNeedsNoDesktop(t *testing.T) {
 	defer macvm.SetGeteuid(0)()
 	f := newPrep(t)
-	f.fb.NoScreen = noDesktop
+	f.fb.NoScreen = errNoDesktopOverSSH
 	f.opts.SetupByHandWait = time.Hour
 	if _, err := macvm.Prepare(context.Background(), f.opts); err != nil {
 		t.Fatal(err)
@@ -262,7 +262,7 @@ func TestPrepareWithProvisioningNeedsNoDesktop(t *testing.T) {
 // not after the hour, and deletes the code: the check is the window's own.
 func TestSetupByHandFallbackWithoutADesktopStopsAtOnce(t *testing.T) {
 	f, _, _ := handPrep(t)
-	f.fb.NoScreen = noDesktop
+	f.fb.NoScreen = errNoDesktopOverSSH
 	f.opts.SetupByHandWait = time.Hour // waiting it out would time the test out
 	_, err := macvm.Prepare(context.Background(), f.opts)
 	if !errors.Is(err, macvm.ErrNoDesktopSession) {

@@ -247,21 +247,27 @@ func (p *prep) emit(ev PrepareEvent) {
 	p.Progress(ev)
 }
 
-func (p *prep) run(ctx context.Context) (Manifest, error) {
-	p.emit(PrepareEvent{Phase: PhaseCheck})
+// check is PhaseCheck: the host, then provisioning or the setup by hand that
+// replaces it, then the heat.
+func (p *prep) check() error {
 	if err := p.Engine.HostCheck(); err != nil {
-		return Manifest{}, err
+		return err
 	}
 	if err := p.FirstBoot.Supported(); err != nil {
 		if !errors.Is(err, ErrNoProvisioning) || p.SetupByHandWait == 0 {
-			return Manifest{}, err
+			return err
 		}
 		if err := SetupByHandReady(p.FirstBoot, p.SetupByHandWait); err != nil {
-			return Manifest{}, err
+			return err
 		}
 		p.byHand = true
 	}
-	if err := thermalGate(p.Engine); err != nil {
+	return thermalGate(p.Engine)
+}
+
+func (p *prep) run(ctx context.Context) (Manifest, error) {
+	p.emit(PrepareEvent{Phase: PhaseCheck})
+	if err := p.check(); err != nil {
 		return Manifest{}, err
 	}
 	// A ready base is kept unless a re-prepare was asked for.
