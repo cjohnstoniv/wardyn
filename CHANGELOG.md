@@ -29,6 +29,17 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   about the disk. A saved "Finished" arrangement of the run page gains the "Attach from your terminal" tile at its
   bottom, once, where the disk line shows.
 
+### Fixed
+
+- A macOS VM run stuck in one start phase, such as connecting to the VM, now shows the same overdue advice as any
+  other start once the macOS start time has passed. Before, the phase row kept its spinner and said nothing. A start
+  that failed still shows its failure.
+- Choosing Linux again after macOS in New Run no longer drops a CPU or memory value you had set to exactly the Mac
+  minimum before choosing macOS. Only the figures that choosing macOS filled in are taken back, and only while they are
+  still at the minimum.
+- In New Run, a Mac pool that was preparing or at capacity when the page opened offers macOS once it recovers, when
+  you move to another step. Before, it stayed unavailable until the page was reloaded, and the draft is kept either way.
+
 ## [0.10.0-rc.2] — 2026-10-25
 
 ### Before you upgrade
@@ -139,14 +150,6 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   response carries.
 - A runner whose event the organisation refused for good no longer reconnects and drops every second: the refusal is
   acknowledged and audited (`runner.event.refuse`), and a refused action result closes its action (#3648).
-- A macOS VM run stuck in one start phase, such as connecting to the VM, now shows the same overdue advice as any
-  other start once the macOS start time has passed. Before, the phase row kept its spinner and said nothing. A start
-  that failed still shows its failure.
-- Choosing Linux again after macOS in New Run no longer drops a CPU or memory value you had set to exactly the Mac
-  minimum before choosing macOS. Only the figures that choosing macOS filled in are taken back, and only while they are
-  still at the minimum.
-- In New Run, a Mac pool that was preparing or at capacity when the page opened offers macOS once it recovers, when
-  you move to another step. Before, it stayed unavailable until the page was reloaded, and the draft is kept either way.
 
 ## [0.10.0-rc.1] — 2026-10-24
 
