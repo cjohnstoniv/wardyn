@@ -66,6 +66,8 @@
       <string></string>
       <key>LocalModelPort</key>
       <string></string>
+      <key>MacOSVM</key>
+      <string></string>
     </dict>
   </array>
   <key>PayloadDisplayName</key>

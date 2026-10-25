@@ -23,7 +23,14 @@ func (d *Driver) DialDesktop(ctx context.Context, ref string) (io.ReadWriteClose
 	if v == nil {
 		return nil, runner.ErrDesktopUnsupported
 	}
-	c, err := d.dialUnix(ctx, filepath.Join(v.dir, "ctl", qemu.VNCSocket))
+	sock := filepath.Join(v.dir, "ctl", qemu.VNCSocket)
+	if v.mac {
+		if macDesktopOff(v.dir) {
+			return nil, errMacDesktopOff
+		}
+		sock = macDesktopSock(v.dir)
+	}
+	c, err := d.dialUnix(ctx, sock)
 	if err != nil {
 		return nil, fmt.Errorf("docker: VM desktop: %w", err)
 	}

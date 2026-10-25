@@ -87,16 +87,20 @@ type Substrate struct {
 	t    Transport
 	opts Options
 
-	mu                         sync.Mutex
-	caps                       *runnerwire.Caps
-	outputs                    map[uuid.UUID]*outputSink
-	resident                   map[uuid.UUID]leafHashes // SHA-256 of what DeliverResident delivered; never the value
+	mu       sync.Mutex
+	caps     *runnerwire.Caps
+	outputs  map[uuid.UUID]*outputSink
+	resident map[uuid.UUID]leafHashes // SHA-256 of what DeliverResident delivered; never the value
+	// vmKinds is the machine kind of each VM sandbox this substrate created, so a desktop or a pause is
+	// gated by that kind's caps; a ref missing from it (created before a restart) is gated by either.
+	vmKinds                    map[string]types.MachineKind
 	requireExecutionGeneration bool
 }
 
 // New builds the substrate of runnerID over t.
 func New(runnerID string, t Transport, opts Options) *Substrate {
-	s := &Substrate{id: runnerID, t: t, opts: opts, outputs: map[uuid.UUID]*outputSink{}, resident: map[uuid.UUID]leafHashes{}}
+	s := &Substrate{id: runnerID, t: t, opts: opts, outputs: map[uuid.UUID]*outputSink{}, resident: map[uuid.UUID]leafHashes{},
+		vmKinds: map[string]types.MachineKind{}}
 	t.SetHandler(s)
 	return s
 }
@@ -273,6 +277,11 @@ func (s *Substrate) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) 
 		}
 		return runner.Sandbox{}, err
 	}
+	if spec.MachineKind.IsVM() {
+		s.mu.Lock()
+		s.vmKinds[res.Sandbox.Ref] = spec.MachineKind
+		s.mu.Unlock()
+	}
 	return res.Sandbox, nil
 }
 
@@ -446,7 +455,20 @@ func (s *Substrate) KillSandbox(ctx context.Context, ref string) error {
 }
 
 func (s *Substrate) EndSandbox(ctx context.Context, ref string) error {
-	return s.teardown(ctx, runnerwire.MethodEnd, types.RunnerActionEnd, ref)
+	err := s.teardown(ctx, runnerwire.MethodEnd, types.RunnerActionEnd, ref)
+	if err == nil {
+		s.mu.Lock()
+		delete(s.vmKinds, ref)
+		s.mu.Unlock()
+	}
+	return err
+}
+
+// vmKind is the machine kind ref was created with here, "" when this substrate did not create it.
+func (s *Substrate) vmKind(ref string) types.MachineKind {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.vmKinds[ref]
 }
 
 func (s *Substrate) StopProxy(ctx context.Context, ref string) error {

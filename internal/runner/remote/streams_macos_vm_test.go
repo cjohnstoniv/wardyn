@@ -8,8 +8,10 @@ import (
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire/runnertest"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // A runner that offers macOS VMs alone is asked to pause the agent when its caps keep sign-ins, and to
@@ -42,6 +44,49 @@ func TestPauseAndDesktopFollowTheMacOSVMCaps(t *testing.T) {
 			}
 			if refused := errors.Is(derr, runner.ErrDesktopUnsupported); refused == tc.desktop {
 				t.Fatalf("dial desktop = %v, want refused %v", derr, !tc.desktop)
+			}
+		})
+	}
+}
+
+// The desktop and the pause are gated by the caps of the ref's own kind: a runner whose Linux VMs have a
+// desktop and whose Mac's Screen Sharing is observe-only opens a Linux VM's desktop and refuses a macOS
+// VM's, and the reverse.
+func TestDesktopAndPauseGatedByTheRefsKind(t *testing.T) {
+	for name, tc := range map[string]struct {
+		linux        runnerwire.VMCaps
+		mac          runnerwire.MacVMCaps
+		linuxDesktop bool
+		macDesktop   bool
+		linuxPause   bool
+		macPause     bool
+	}{
+		"linux desktop, mac observe": {linux: runnerwire.VMCaps{Desktop: true, SignIns: true}, mac: runnerwire.MacVMCaps{Max: 2, Desktop: runnerwire.MacVMDesktopObserve},
+			linuxDesktop: true, linuxPause: true},
+		"mac control, linux none": {mac: runnerwire.MacVMCaps{Max: 2, Desktop: runnerwire.MacVMDesktopControl, SignIns: true},
+			macDesktop: true, macPause: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rig := runnertest.NewRig(t, rid)
+			advertiseKinds(t, rig, &tc.linux, &tc.mac)
+			for kind, want := range map[types.MachineKind][2]bool{
+				types.MachineLinuxVM: {tc.linuxDesktop, tc.linuxPause},
+				types.MachineMacOSVM: {tc.macDesktop, tc.macPause},
+			} {
+				// The fake runner creates containers only; the ref is recorded as a VM of kind as a VM
+				// create's success records it.
+				sb, _ := create(t, rig, nil)
+				remote.SetVMKind(rig.Sub, sb.Ref, kind)
+				d, derr := rig.Sub.DialDesktop(ctxT(t), sb.Ref)
+				if d != nil {
+					_ = d.Close()
+				}
+				if refused := errors.Is(derr, runner.ErrDesktopUnsupported); refused == want[0] {
+					t.Fatalf("%s: dial desktop = %v, want refused %v", kind, derr, !want[0])
+				}
+				if _, perr := rig.Sub.PauseAgent(ctxT(t), sb.Ref, 1); errors.Is(perr, runner.ErrAgentPauseUnsupported) == want[1] {
+					t.Fatalf("%s: pause = %v, want refused %v", kind, perr, !want[1])
+				}
 			}
 		})
 	}
