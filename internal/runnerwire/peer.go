@@ -196,11 +196,13 @@ func (p *Peer) fail(err error) {
 	p.streams, p.parked, p.byCall = map[uint32]*Stream{}, map[uint32]*Stream{}, map[uint32][]uint32{}
 	p.mu.Unlock()
 	close(p.done)
-	p.cancel()
 	p.connSend.Close()
+	// Every stream's context is a child of p.ctx: reset them first so whoever wakes on a stream's
+	// context finds the reconnect reset already recorded, and a Close in reaction cannot replace it.
 	for _, s := range streams {
 		s.abort(ResetReconnect)
 	}
+	p.cancel()
 	for _, c := range cancels {
 		c()
 	}
