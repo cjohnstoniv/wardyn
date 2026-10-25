@@ -84,8 +84,9 @@ func isAdminTokenCaller(r *http.Request) bool {
 
 // governanceSaveHeld reports whether a covered write by this caller would be held for a second human: the
 // switch is on and the caller is not the admin token, which governanceWriteMode lets through as govBypass.
-func governanceSaveHeld(r *http.Request) bool {
-	return envEnabled(envGovernanceSecondHuman) && !isAdminTokenCaller(r)
+// Local mode never holds a write: governanceWriteMode refuses it there, so the editor must not word it as held.
+func (s *Server) governanceSaveHeld(r *http.Request) bool {
+	return envEnabled(envGovernanceSecondHuman) && !isAdminTokenCaller(r) && !s.cfg.LocalMode
 }
 
 // unitWriteMode is governanceWriteMode for the routes a unit admin may use (governance_scope.go): a

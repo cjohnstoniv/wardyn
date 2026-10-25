@@ -29,6 +29,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   about the disk. A saved "Finished" arrangement of the run page gains the "Attach from your terminal" tile at its
   bottom, once, where the disk line shows.
 
+### Fixed
+
+- In local mode with the second-admin switch on, the boundary editor no longer says "Submit for approval" for a save
+  that is refused. The save is refused in local mode, so the editor now words it as a plain save.
+
 ## [0.10.0-rc.2] — 2026-10-25
 
 ### Before you upgrade
