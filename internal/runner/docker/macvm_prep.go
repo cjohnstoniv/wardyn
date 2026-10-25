@@ -7,6 +7,7 @@ package docker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"os"
@@ -23,7 +24,8 @@ import (
 
 // componentMacPrep labels a macOS base job's stage-2 network, prep proxy and relay. It is none of the
 // components the orphan sweeps key on: a job is not a run, and the organisation's isOrphan would call its
-// id one. runnerd removes them when the job's helper exits (StartMacPrepNet's undo).
+// id one. runnerd removes them when the job's helper exits (StartMacPrepNet's undo), and at its start
+// what a crash left (SweepMacPrep).
 const componentMacPrep = "macos-prep"
 
 // macPrepID names the Docker objects of the stage-2 network of the job holding ledger entry entryID.
@@ -39,7 +41,7 @@ func macPrepID(entryID string) uuid.UUID {
 // and the undo that removes all three. On an error it has already undone them.
 func (d *Driver) StartMacPrepNet(ctx context.Context, entryID string) (*os.File, func(), error) {
 	id := macPrepID(entryID)
-	labels := d.labels(id, componentMacPrep, nil)
+	labels := d.labels(id, componentMacPrep, map[string]string{runner.LabelRunnerID: d.cfg.RunnerID})
 	var rollback []func()
 	undo := func() {
 		for i := len(rollback) - 1; i >= 0; i-- {
@@ -142,4 +144,52 @@ func (d *Driver) startPrepProxy(ctx context.Context, id uuid.UUID, labels map[st
 	}
 	defer att.Close()
 	return resp.ID, d.watchProxyExit(ctx, resp.ID)
+}
+
+// SweepMacPrep removes what a crashed runnerd left of its jobs' stage-2 networks: this runner's and this
+// deployment's macos-prep containers, then their networks, except those of a job whose ledger entry is in
+// keep. runnerd runs it once at start, before it hands any job a network. It answers how many it removed.
+func (d *Driver) SweepMacPrep(ctx context.Context, keep []string) (int, error) {
+	kept := make(map[string]bool, len(keep))
+	for _, e := range keep {
+		kept[macPrepID(e).String()] = true
+	}
+	stale := func(l map[string]string) bool {
+		return l[labelComponent] == componentMacPrep && l[labelManaged] == "true" && l[runner.LabelRunnerID] == d.cfg.RunnerID &&
+			!d.otherDeployment(l) && !kept[l[labelRun]]
+	}
+	filters := client.Filters{}.Add("label", labelComponent+"="+componentMacPrep)
+	var errs []error
+	swept := 0
+	if lister, ok := d.cli.(containerListerAPI); ok {
+		res, err := lister.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: filters})
+		if err != nil {
+			return 0, fmt.Errorf("docker: list leftover macOS prep containers: %w", err)
+		}
+		for _, c := range res.Items {
+			if !stale(c.Labels) {
+				continue
+			}
+			if _, err := d.cli.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
+				errs = append(errs, fmt.Errorf("docker: remove leftover macOS prep container %s: %w", c.ID, err))
+				continue
+			}
+			swept++
+		}
+	}
+	res, err := d.cli.NetworkList(ctx, client.NetworkListOptions{Filters: filters})
+	if err != nil {
+		return swept, errors.Join(append(errs, fmt.Errorf("docker: list leftover macOS prep networks: %w", err))...)
+	}
+	for _, n := range res.Items {
+		if !stale(n.Labels) {
+			continue
+		}
+		if _, err := d.cli.NetworkRemove(ctx, n.ID, client.NetworkRemoveOptions{}); err != nil && !isNotFound(err) {
+			errs = append(errs, fmt.Errorf("docker: remove leftover macOS prep network %s: %w", n.Name, err))
+			continue
+		}
+		swept++
+	}
+	return swept, errors.Join(errs...)
 }
