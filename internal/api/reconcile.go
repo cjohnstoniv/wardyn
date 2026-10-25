@@ -544,6 +544,11 @@ func (s *Server) sweepRunWatchers(ctx context.Context) error {
 			continue
 		}
 		st, serr := s.probeAgent(ctx, run.SandboxRef, run.AgentExecID)
+		if errors.Is(serr, runner.ErrRunnerOffline) && onRunner(run.SandboxRef) {
+			// No live session to the run's runner here (another replica may hold it). Attach no
+			// watcher: the claim's lease goes stale, and a later sweep, maybe on that replica, adopts it.
+			continue
+		}
 		// A genuinely-gone sandbox/agent reports a terminal STATE (RunStopped), not
 		// an error — an error means the probe couldn't determine liveness (a docker
 		// daemon blip). Do NOT finalize a possibly-healthy run on a transient error;
@@ -552,6 +557,15 @@ func (s *Server) sweepRunWatchers(ctx context.Context) error {
 		if serr == nil && isTerminalRunState(st.State) {
 			// An interactive run whose container exited under it (a reboot) is
 			// kept, not finalized (run_lost.go).
+			switch s.probeRunnerSandbox(ctx, run, run.SandboxRef, st) {
+			case runnerProbeEnded:
+				finalized++
+				continue
+			case runnerProbeAbsent:
+				s.goBackground(func() { s.reconcileWatch(base, run.ID, run.SandboxRef, run.AgentExecID) })
+				reattached++
+				continue
+			}
 			if s.keepRebootedRun(ctx, run, st) {
 				continue
 			}
@@ -839,6 +853,12 @@ func (s *Server) reconcileWatch(ctx context.Context, runID uuid.UUID, ref, agent
 				// healthy RUNNING run on a daemon blip or a >60s loaded-dockerd restart.
 				// BACK OFF and keep the sandbox alive; only give up
 				// after a generous wall-clock ceiling for a genuinely-wedged ref.
+				if errors.Is(err, runner.ErrRunnerOffline) && onRunner(ref) {
+					// No live session to the run's runner here (another replica may hold it): stop, and
+					// leave the lease to expire, so a later sweep, maybe on that replica, adopts the run.
+					// A runner run is never finalized here (reconcileFinalize), so nothing is lost.
+					return
+				}
 				if firstErr.IsZero() {
 					firstErr = s.cfg.Now()
 				}
@@ -856,8 +876,16 @@ func (s *Server) reconcileWatch(ctx context.Context, runID uuid.UUID, ref, agent
 				tick.Reset(baseInterval)
 			}
 			if isTerminalRunState(st.State) {
-				if run, gerr := s.cfg.Store.GetRun(ctx, runID); gerr == nil && s.keepRebootedRun(ctx, run, st) {
-					return
+				if run, gerr := s.cfg.Store.GetRun(ctx, runID); gerr == nil {
+					switch s.probeRunnerSandbox(ctx, run, ref, st) {
+					case runnerProbeEnded:
+						return
+					case runnerProbeAbsent:
+						continue // not yet confirmed: the next tick checks again, due within store.RunnerSandboxGoneAfter
+					}
+					if s.keepRebootedRun(ctx, run, st) {
+						return
+					}
 				}
 				final := types.RunFailed
 				if st.ExitCode != nil && *st.ExitCode == 0 {

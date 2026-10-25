@@ -520,7 +520,7 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		}
 	}
 	dispatcher, err := runneragent.New(runneragent.Config{
-		RunnerID: identity.RunnerID.String(), Substrate: sub, HoldsSandbox: manager.HoldsSandbox,
+		RunnerID: identity.RunnerID.String(), Substrate: sub, HoldsSandbox: manager.HoldsSandbox, Covered: manager.CoversRef,
 		BeforeCreate: manager.BeforeCreate, Created: manager.Created, CreateFailed: manager.CreateFailed,
 		BeforeRefCall: func(ctx context.Context, method, ref string, generation uuid.UUID) error {
 			if method == runnerwire.MethodKill || method == runnerwire.MethodEnd {
