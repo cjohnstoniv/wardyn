@@ -367,9 +367,9 @@ func accept(r *tcp.ForwarderRequest) *gonet.TCPConn {
 }
 
 // opaqueIdle is how long an opaque tunnel may carry no byte in either direction
-// before the relay closes it. It is generous, so a quiet but live session (an
-// idle shell, a pooled database connection) is not cut, and a variable only so
-// tests can shorten it.
+// before the relay closes it: a tunnel silent both ways for this long is closed,
+// even if both peers are still alive (an idle shell or a pooled database
+// connection goes with it). It is a variable only so tests can shorten it.
 var opaqueIdle = 30 * time.Minute
 
 // guestConn is the guest side of a tunnel: a stream with a write half-close.
