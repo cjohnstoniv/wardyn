@@ -86,7 +86,7 @@ func TestMacOSVMJobArgvIsTheHelpersFlags(t *testing.T) {
 		t.Fatalf("helper jobs %q", jobs)
 	}
 	sub, set := helperFlags(t, jobs[0])
-	if sub != macvm.UpdateToolsCommand || set[macvm.FlagForce] != "true" || set[macvm.FlagSockRoot] != m.sockRoot ||
+	if sub != macvm.UpdateToolsCommand || set[macvm.FlagForce] != "" || set[macvm.FlagLedgerDir] != r.dir || set[macvm.FlagSockRoot] != m.sockRoot ||
 		set[macvm.FlagRoot] != r.root || set[macvm.FlagLedgerEntry] == "" || set[macvm.FlagMemoryMiB] != "8192" {
 		t.Fatalf("tools update %s %v", sub, set)
 	}
@@ -186,7 +186,7 @@ func TestMacOSVMPerRunZeroIsUnsetNotNoRuns(t *testing.T) {
 	if g := m.guestMemory(man); g != man.MinMemoryMiB<<20 {
 		t.Fatalf("guest after (0, 0): %d bytes, want the base's minimum", g)
 	}
-	if why := m.belowMinimum(man); why != "" {
+	if why, _ := m.belowMinimum(man); why != "" {
 		t.Fatalf("(0, 0) read as a limit: %s", why)
 	}
 }
@@ -254,7 +254,14 @@ func TestMacOSVMHandsTheJobItsNetwork(t *testing.T) {
 		mu.Lock()
 		asked = append(asked, id)
 		mu.Unlock()
-		return os.NewFile(uintptr(fds[0]), "relay"), func() { close(undone) }, nil
+		return os.NewFile(uintptr(fds[0]), "relay"), func() { t.Error("a handed-off network was undone") }, nil
+	}
+	m.prepRemove = func(_ context.Context, id string) error {
+		if id != e.ID {
+			t.Errorf("removed the stage-2 network of %s", id)
+		}
+		close(undone)
+		return nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

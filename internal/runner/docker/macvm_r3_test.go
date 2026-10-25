@@ -235,3 +235,48 @@ func TestMacPrepSweepRemovesACrashsLeftovers(t *testing.T) {
 		t.Fatal("swept another deployment's prep network")
 	}
 }
+
+// A runnerd that stopped or crashed after its hand-off leaves the job's stage-2 network: the next one
+// adopts it (cmd/wardyn-runnerd handNet) and removes it by the job's names once the helper has gone, and
+// one that builds it again first clears what is left, so no name collides on a daemon that refuses a
+// name in use.
+func TestMacPrepNetNamesNeverCollide(t *testing.T) {
+	r := newMacRig(t)
+	ctx := context.Background()
+	const entry = "0123456789abcdef01234567"
+	id := macPrepID(entry)
+	inUse := func(name string) bool {
+		r.f.mu.Lock()
+		defer r.f.mu.Unlock()
+		c := r.f.containers[name]
+		_, net := r.f.networks[name]
+		return (c != nil && !c.removed) || net
+	}
+	r.f.onCreate = func(name string) {
+		if inUse(name) {
+			t.Errorf("container name %s is in use", name)
+		}
+	}
+	r.f.onNetworkCreate = func(name string, _ client.NetworkCreateOptions) {
+		if inUse(name) {
+			t.Errorf("network name %s is in use", name)
+		}
+	}
+	for range 2 { // the first runnerd's undo never runs
+		attach, _, err := r.d.StartMacPrepNet(ctx, entry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = attach.Close()
+	}
+	for range 2 { // removing what is gone is no error
+		if err := r.d.RemoveMacPrepNet(ctx, entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{internalNetName(id), proxyContainerName(id), vmnetName(id)} {
+		if inUse(name) {
+			t.Fatalf("%s outlived RemoveMacPrepNet", name)
+		}
+	}
+}

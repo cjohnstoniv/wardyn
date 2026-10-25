@@ -37,7 +37,7 @@ func (m *macOSVMs) watchJobs() {
 	m.mu.Lock()
 	ctx := m.ctx
 	m.mu.Unlock()
-	if ctx == nil || m.prepNet == nil {
+	if ctx == nil || m.prepNet == nil || m.prepRemove == nil {
 		return
 	}
 	for _, k := range []admission.Kind{admission.KindPrepare, admission.KindToolsUpdate} {
@@ -64,15 +64,18 @@ func (m *macOSVMs) watchJobs() {
 // handNet is a prepare's or a tools update's stage-2 network (design 3.6): once the helper's stage-2
 // boot listens on the job's ctl.sock (macvm.JobControlSock of its ledger entry), the prep network comes
 // up and its relay's attach descriptor goes to the helper as net_fd (SCM_RIGHTS); the helper waits 2
-// minutes for it. The network goes when the helper has gone.
+// minutes for it. A boot that already has its network got it from a runnerd that has since stopped or
+// crashed: that network is adopted as it is, and the helper is never sent a second. The network goes,
+// by the job's names, when the helper has gone; never when this runnerd stops, as the helper outlives it
+// (its own session) and the next runnerd adopts the network.
 func (m *macOSVMs) handNet(ctx context.Context, e admission.Entry) {
 	defer func() { m.mu.Lock(); delete(m.nets, e.ID); m.mu.Unlock() }()
-	gone := func() bool {
+	wait := func() bool {
 		select {
 		case <-ctx.Done():
-			return true
+			return false
 		case <-time.After(jobSockPoll):
-			return m.vmGone(e)
+			return true
 		}
 	}
 	sock := macvm.JobControlSock(m.sockRoot, e.ID)
@@ -80,37 +83,46 @@ func (m *macOSVMs) handNet(ctx context.Context, e admission.Entry) {
 		if _, err := os.Lstat(sock); err == nil {
 			break
 		}
-		if gone() {
+		if !wait() || m.vmGone(e) {
 			return
 		}
 	}
-	attach, undo, err := m.prepNet(ctx, e.ID)
+	attached, err := m.jobNetAttached(ctx, e.ID)
 	if err != nil {
-		slog.Warn("macOS VM base: the stage-2 network did not start", "error", err.Error())
-		return
+		slog.Warn("macOS VM base: ask the stage-2 boot for its network", "error", err.Error())
+		return // the next recompute asks again; nothing is built or removed meanwhile
 	}
-	defer undo()
-	err = m.sendJobNet(ctx, e.ID, attach)
-	_ = attach.Close()
-	if err != nil {
-		slog.Warn("macOS VM base: hand the stage-2 boot its network", "error", err.Error())
-		return
+	if !attached {
+		attach, undo, err := m.prepNet(ctx, e.ID)
+		if err != nil {
+			slog.Warn("macOS VM base: the stage-2 network did not start", "error", err.Error())
+			return
+		}
+		err = m.sendJobNet(ctx, e.ID, attach)
+		_ = attach.Close()
+		if err != nil {
+			undo()
+			slog.Warn("macOS VM base: hand the stage-2 boot its network", "error", err.Error())
+			return
+		}
 	}
-	for {
-		if gone() {
+	for wait() {
+		if m.vmGone(e) {
+			if err := m.prepRemove(context.WithoutCancel(ctx), e.ID); err != nil {
+				slog.Warn("macOS VM base: remove the stage-2 network", "error", err.Error())
+			}
 			return
 		}
 	}
 }
 
-// sendJobNet dials the job's ctl.sock in its checked socket directory (this login's, 0700, not a link)
-// and sends attach as net_fd.
-func (m *macOSVMs) sendJobNet(ctx context.Context, entryID string, attach *os.File) error {
+// dialJob dials the job's ctl.sock in its checked socket directory (this login's, 0700, not a link).
+func (m *macOSVMs) dialJob(ctx context.Context, entryID string) (*macvm.ControlClient, error) {
 	sc := macvm.SockConfig(m.sockRoot)
 	sc.Fstat = m.sockFstat
 	dir, err := sc.CheckRunDir(macvm.JobSockKey(entryID))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var cc *macvm.ControlClient
 	for i := range jobDialTries {
@@ -122,6 +134,23 @@ func (m *macOSVMs) sendJobNet(ctx context.Context, entryID string, attach *os.Fi
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+	return cc, err
+}
+
+// jobNetAttached reports whether the job's stage-2 boot already has its network.
+func (m *macOSVMs) jobNetAttached(ctx context.Context, entryID string) (bool, error) {
+	cc, err := m.dialJob(ctx, entryID)
+	if err != nil {
+		return false, err
+	}
+	defer cc.Close()
+	st, err := cc.Status(ctx)
+	return st.Network == macvm.NetAttached, err
+}
+
+// sendJobNet sends attach to the job's stage-2 boot as net_fd.
+func (m *macOSVMs) sendJobNet(ctx context.Context, entryID string, attach *os.File) error {
+	cc, err := m.dialJob(ctx, entryID)
 	if err != nil {
 		return err
 	}

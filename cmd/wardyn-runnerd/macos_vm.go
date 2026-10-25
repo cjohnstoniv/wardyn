@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -70,6 +71,10 @@ type macOSVMs struct {
 	host     admission.Host
 	layout   macvm.Layout
 	runnerID string
+	// uid is this login's (os.Getuid()); ledgerDir is the ledger's directory when it is not the
+	// package's, which a job's helper is then pointed at.
+	uid       int
+	ledgerDir string
 	// refusal, when set, is the refusal the caps carry; why, when set, is why this runner offers no macOS
 	// VM at all (either one turns them off).
 	refusal, why string
@@ -82,11 +87,13 @@ type macOSVMs struct {
 	perRunCPUs                        int
 	// sockRoot is the socket root ("" is admission.DefaultSockDir) and sockFstat replaces fstat(2) in its
 	// checks (tests); prepNet brings up a base job's stage-2 network (the driver's StartMacPrepNet), and
-	// prepSweep removes those a crash left, but the ones of the ledger entries it keeps (SweepMacPrep).
-	sockRoot  string
-	sockFstat func(fd int, name string) (unix.Stat_t, error)
-	prepNet   func(ctx context.Context, entryID string) (*os.File, func(), error)
-	prepSweep func(ctx context.Context, keep []string) (int, error)
+	// prepSweep removes those a crash left, but the ones of the ledger entries it keeps (SweepMacPrep);
+	// prepRemove removes one job's by its names (RemoveMacPrepNet).
+	sockRoot   string
+	sockFstat  func(fd int, name string) (unix.Stat_t, error)
+	prepNet    func(ctx context.Context, entryID string) (*os.File, func(), error)
+	prepSweep  func(ctx context.Context, keep []string) (int, error)
+	prepRemove func(ctx context.Context, entryID string) error
 	// version is the guest agent this runner ships; a base whose agent differs needs a tools update.
 	version string
 	// toolsUpdate starts that update (design 3.4, guest agent drift) for the base whose manifest it is
@@ -123,8 +130,11 @@ type macOSVMSetup struct {
 // ledger itself checks the directory, its ancestors and its lock are root's, and creates or repairs
 // none of them) makes a handle that offers no macOS VM and names the fix.
 func openMacOSVMs(s macOSVMSetup) *macOSVMs {
-	m := &macOSVMs{host: s.host, layout: macvm.Layout{Root: s.root}, runnerID: s.runnerID, version: s.version, perRunMemory: s.perRunMemory,
+	m := &macOSVMs{host: s.host, layout: macvm.Layout{Root: s.root}, runnerID: s.runnerID, uid: s.uid, version: s.version, perRunMemory: s.perRunMemory,
 		defaultPerRunMemory: s.perRunMemory, interval: macOSVMRecompute, kick: make(chan struct{}, 1)}
+	if s.ledgerDir != admission.DefaultDir {
+		m.ledgerDir = s.ledgerDir
+	}
 	if err := os.MkdirAll(s.root, 0o700); err != nil {
 		slog.Warn("macOS VM sandboxes are off on this runner: no VM directory", "error", err.Error())
 		m.refusal = macOSVMLedgerDamaged
@@ -280,9 +290,10 @@ func (m *macOSVMs) build(last *runnerwire.MacVMCaps) runnerwire.MacVMCaps {
 	c.MinCPUs, c.MinMemoryMiB = man.MinCPUs, int(man.MinMemoryMiB)
 	c.Harnesses, c.Desktop = slices.Clone(man.Harnesses), man.Desktop
 	m.checkAgent(man)
-	if why := m.belowMinimum(man); why != "" {
-		// design 3.10: a per-run limit below the base's minimum offers none; the flag is named on this Mac.
+	if why, refusal := m.belowMinimum(man); why != "" {
+		// design 3.10: a per-run limit below the base's minimum offers none and names the flag to raise.
 		slog.Warn("macOS VM sandboxes: this runner offers none", "reason", why)
+		c.Refusal = refusal
 		return c
 	}
 	off, err := m.ledger.Offer(m.guestMemory(man), admission.RunDiskReservation(cmp.Or(man.DiskBytes, macvm.BaseDiskBytes)))
@@ -305,18 +316,22 @@ func (m *macOSVMs) guestMemory(man macvm.Manifest) uint64 {
 }
 
 // belowMinimum is why a per-run limit the organisation sent is below the base's minimum, naming the flag
-// to raise, else "".
-func (m *macOSVMs) belowMinimum(man macvm.Manifest) string {
+// to raise, for this Mac's log, and the caps' refusal (design 6, "Guest size below minimum"), else "".
+func (m *macOSVMs) belowMinimum(man macvm.Manifest) (why, refusal string) {
 	m.mu.Lock()
 	mem, cpus := m.perRunMemory, m.perRunCPUs
 	m.mu.Unlock()
 	switch {
 	case mem != 0 && mem < man.MinMemoryMiB<<20:
-		return fmt.Sprintf("the runner's per-run memory (%d MiB) is below the macOS base's minimum (%d MiB); raise --per-run-memory", mem>>20, man.MinMemoryMiB)
+		gb := strconv.FormatFloat(math.Floor(float64(mem>>20)/1024*10)/10, 'f', -1, 64)
+		need := (man.MinMemoryMiB + 1023) >> 10
+		return fmt.Sprintf("the runner's per-run memory (%d MiB) is below the macOS base's minimum (%d MiB); raise --per-run-memory", mem>>20, man.MinMemoryMiB),
+			fmt.Sprintf("Per-run memory on this runner is %s GB; a macOS VM needs at least %d GB. Re-register the runner with --per-run-memory %d or more.", gb, need, need)
 	case cpus != 0 && cpus < man.MinCPUs:
-		return fmt.Sprintf("the runner's per-run CPUs (%d) are below the macOS base's minimum (%d); raise --per-run-cpu", cpus, man.MinCPUs)
+		return fmt.Sprintf("the runner's per-run CPUs (%d) are below the macOS base's minimum (%d); raise --per-run-cpu", cpus, man.MinCPUs),
+			fmt.Sprintf("Per-run CPU on this runner is %d CPUs; a macOS VM needs at least %d. Re-register the runner with --per-run-cpu %d or more.", cpus, man.MinCPUs, man.MinCPUs)
 	}
-	return ""
+	return "", ""
 }
 
 // setPerRunLimits is runnerwire.RunnerHooks.PerRunLimits: the per-run CPU (milli-CPU) and memory (MiB)
@@ -398,7 +413,9 @@ func (m *macOSVMs) own(k admission.Kind) []admission.Entry {
 	return out
 }
 
-func (m *macOSVMs) mine(e admission.Entry) bool { return e.RunnerID == m.runnerID }
+// mine: e is this runner's and its file is this login's. The entries directory is shared (ERRATA E1), so
+// another login can write an entry that names this runner.
+func (m *macOSVMs) mine(e admission.Entry) bool { return e.RunnerID == m.runnerID && e.UID == m.uid }
 
 // preparing reports a live prepare of this runner's.
 func (m *macOSVMs) preparing() bool {
@@ -660,15 +677,16 @@ const toolsUpdateLog = "tools-update.log"
 // startToolsUpdate starts the helper's tools update of the base whose manifest is man (design 3.4, 3.12):
 // its own ledger entry, a guest at the base's minimum CPUs and the per-run memory (or the minimum), and
 // the helper's `update-tools`, which takes the base's update lock, works on a staging copy and swaps it
-// in, so runs keep cloning the old base meanwhile. It passes --force: runnerd starts it only once it found
-// the base's agent is not its own, and the helper's own check knows no agent version to compare.
+// in, so runs keep cloning the old base meanwhile. It is an automatic update, so it passes no --force,
+// which is for an update someone asks for (design 3.12, "an update someone asks for retries every pin"):
+// the helper compares the base's agent with its own build (macvm.NeedsToolsUpdate) and pushes its own.
 func (m *macOSVMs) startToolsUpdate(ctx context.Context, man macvm.Manifest) error {
 	if m.ledger == nil {
 		return errors.New(cmp.Or(m.refusal, m.why))
 	}
 	return m.startJob(ctx, helperJob{kind: admission.KindToolsUpdate, disk: admission.RunDiskReservation(cmp.Or(man.DiskBytes, macvm.BaseDiskBytes)),
 		log: filepath.Join(m.layout.Root, toolsUpdateLog), sub: macvm.UpdateToolsCommand, helper: m.helper, cpus: max(man.MinCPUs, 1),
-		memMiB: m.guestMemory(man) >> 20, runner: m.runnerID, extra: []string{"--" + macvm.FlagForce}, descr: "tools update"})
+		memMiB: m.guestMemory(man) >> 20, runner: m.runnerID, ledger: m.ledgerDir, descr: "tools update"})
 }
 
 // startJob takes the job's ledger entry (the tombstone pass first) and starts the helper in its own
