@@ -29,10 +29,11 @@ type SetupConfig struct {
 	// Logf reports a directory skipped or an entry quarantined; nil: standard error.
 	Logf func(format string, a ...any)
 
-	afterFlock func()                 // tests: runs once the old lock's flock is held
-	beforeMove func(dst string) error // tests: runs before each entry is moved
-	afterSock  func()                 // tests: runs once sock/ is swept
-	afterSwap  func(old string)       // tests: runs once relink swapped the new entries directory in; old is where the old one now is
+	afterFlock func()                           // tests: runs once the old lock's flock is held
+	beforeMove func(dst string) error           // tests: runs before each entry is moved
+	afterSock  func()                           // tests: runs once sock/ is swept
+	afterSwap  func(old string)                 // tests: runs once relink swapped the new entries directory in; old is where the old one now is
+	fault      func(op, dir, name string) error // tests: an error here replaces the step op ("stat", "readdir", "quarantine") on dir's name
 }
 
 const (
@@ -306,7 +307,26 @@ func (s *setup) quarantineName(from *os.File, n, why string) error {
 	}
 	defer qf.Close()
 	s.c.Logf("%s moves to %s", why, q)
-	return renameNoReplace(int(from.Fd()), n, int(qf.Fd()), n)
+	if err = s.faulted("quarantine", from.Name(), n); err == nil {
+		err = renameNoReplace(int(from.Fd()), n, int(qf.Fd()), n)
+	}
+	return err
+}
+
+// faulted is the error a test plants in step op on dir's name, else nil.
+func (s *setup) faulted(op, dir, name string) error {
+	if s.c.fault == nil {
+		return nil
+	}
+	return s.c.fault(op, dir, name)
+}
+
+// statName is the lstat of dir's entry n.
+func (s *setup) statName(dir *os.File, n string) (st unix.Stat_t, err error) {
+	if err = s.faulted("stat", dir.Name(), n); err != nil {
+		return st, err
+	}
+	return st, unix.Fstatat(int(dir.Fd()), n, &st, unix.AT_SYMLINK_NOFOLLOW)
 }
 
 // linkPrefix names the directory relink builds a replacement in, and where
@@ -415,7 +435,10 @@ func (s *setup) discard(name string) {
 func (s *setup) keepUnpublished(name string) bool {
 	f, _, err := s.rootDir(s.base, name)
 	if f == nil {
-		return true // discard says why
+		if err != nil { // a second open in discard that works would skip the proof
+			s.c.Logf("left %s: %v", filepath.Join(s.base.Name(), name), err)
+		}
+		return err == nil // skipped or gone: discard says why
 	}
 	held, err := s.publishedInodes()
 	names, nerr := dirNames(f)
@@ -425,8 +448,16 @@ func (s *setup) keepUnpublished(name string) bool {
 	}
 	ok := true
 	for _, n := range names {
-		var st unix.Stat_t
-		if unix.Fstatat(int(f.Fd()), n, &st, unix.AT_SYMLINK_NOFOLLOW) != nil || held[[2]uint64{uint64(st.Dev), st.Ino}] {
+		st, err := s.statName(f, n)
+		if errors.Is(err, unix.ENOENT) {
+			continue // its owner removed it
+		}
+		if err != nil { // no inode to compare: keep the name, and so the directory
+			s.c.Logf("left %s: %v", filepath.Join(f.Name(), n), err)
+			ok = false
+			continue
+		}
+		if held[[2]uint64{uint64(st.Dev), st.Ino}] {
 			continue
 		}
 		why := fmt.Sprintf("%s holds %s, which the entries directory does not", f.Name(), n)
@@ -446,13 +477,16 @@ func (s *setup) publishedInodes() (map[[2]uint64]bool, error) {
 	}
 	defer f.Close()
 	names, err := f.Readdirnames(-1)
+	if err == nil {
+		err = s.faulted("readdir", f.Name(), "")
+	}
 	if err != nil {
 		return nil, err
 	}
 	held := make(map[[2]uint64]bool, len(names))
 	for _, n := range names {
-		var st unix.Stat_t
-		if err := unix.Fstatat(int(f.Fd()), n, &st, unix.AT_SYMLINK_NOFOLLOW); err == nil {
+		// A name that cannot be statted stays out of held, so its twin in the old directory is quarantined.
+		if st, err := s.statName(f, n); err == nil {
 			held[[2]uint64{uint64(st.Dev), st.Ino}] = true
 		}
 	}
@@ -584,7 +618,10 @@ func (s *setup) entrySources() (*source, []*source, error) {
 	for _, n := range names {
 		switch {
 		case strings.HasPrefix(n, linkPrefix):
-			s.discard(n)
+			// A directory an earlier run kept after a failed quarantine holds names the discard must not unlink.
+			if s.keepUnpublished(n) {
+				s.discard(n)
+			}
 		case strings.HasPrefix(n, "."+entriesName+"."):
 			add(s.base, n)
 		case strings.HasPrefix(n, quarantinePrefix):
