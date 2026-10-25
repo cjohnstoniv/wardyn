@@ -101,7 +101,7 @@ func TestPG_RecordingAuditRangeFirstRowRemoved(t *testing.T) {
 	ctx := context.Background()
 	pg := store.NewPG(pool)
 	run, other := uuid.New(), uuid.New()
-	t0 := time.Date(2026, 10, 20, 10, 40, 0, 0, time.UTC)
+	t0 := time.Now().UTC().Truncate(time.Second)
 	key := run.String() + "~desktop-" + uuid.NewString()
 
 	appendRunRow(t, pool, &other, t0.Add(-time.Second), "test.other", "")

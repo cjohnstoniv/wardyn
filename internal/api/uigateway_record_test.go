@@ -127,7 +127,7 @@ func TestDesktopRecording_StoppedEarlyIsOnTheWriteRow(t *testing.T) {
 	write := func(t *testing.T, messages ...string) map[string]any {
 		t.Helper()
 		audit := &recRecorder{}
-		now := time.Date(2026, 10, 20, 10, 42, 18, 0, time.UTC)
+		now := time.Now().UTC()
 		srv := New(Config{Audit: audit, AdminToken: adminToken, RecordingStore: fsRecordingStore(t)})
 		srv.cfg.Now = func() time.Time { now = now.Add(time.Second); return now }
 		run := types.AgentRun{ID: uuid.New(), RecordingLevel: types.RecordingScreenActions}
