@@ -23,8 +23,21 @@ import (
 	"time"
 )
 
+// fakeUpdateList is a `softwareupdate -l` output: two CLT labels (one in the pre-"Label:" form) and an
+// OS update.
+const fakeUpdateList = `Software Update Tool
+
+Finding available software
+Software Update found the following new or updated software:
+* Label: Command Line Tools for Xcode-16.0
+	Title: Command Line Tools for Xcode, Version: 16.0, Size: 751216KiB, Recommended: YES,
+* Command Line Tools (macOS High Sierra version 10.13) for Xcode-10.1
+* Label: macOS Sequoia 15.1-24B83
+	Title: macOS Sequoia 15.1, Version: 15.1, Size: 3021586KiB, Recommended: YES, Action: restart,
+`
+
 // toolsRig is a Tools whose bin dir, agent files and settings file are in a test directory, and whose
-// exec records instead of running.
+// exec records instead of running (`softwareupdate -l` answers fakeUpdateList).
 type toolsRig struct {
 	t     *Tools
 	bin   string
@@ -45,6 +58,9 @@ func newToolsRig(t *testing.T) *toolsRig {
 			rig.mu.Lock()
 			rig.ran = append(rig.ran, argv)
 			rig.mu.Unlock()
+			if slices.Equal(argv, []string{"/usr/sbin/softwareupdate", "-l"}) {
+				return []byte(fakeUpdateList), 0, nil
+			}
 			return []byte("git version 2.50.1 (Apple Git-155)\n"), 0, nil
 		}}
 	return rig
@@ -117,12 +133,17 @@ func TestToolsExecAllowsExactlyTheCLTGitVersion(t *testing.T) {
 		{"/usr/sbin/softwareupdate", "-i", "macOS Sequoia 15.1-24B83"},
 		{"/usr/sbin/softwareupdate", "-i", "-a"},
 		{"/usr/sbin/softwareupdate", "-i", "Command Line Tools\n--all"},
+		{"/usr/sbin/softwareupdate", "-i", "--all Command Line Tools"},
 		{"/usr/sbin/softwareupdate", "--install-rosetta"},
 		{"/usr/sbin/softwareupdate", "--schedule", "on"},
 		{filepath.Join(rig.bin, "missing"), "--version"},
 		{filepath.Join(rig.bin, "sub", "claude"), "--version"},
 	}
 	for _, argv := range refused {
+		// ToolsExecAllowed alone too: handleExec's listed-label check would mask a loosened cltLabel.
+		if err := ToolsExecAllowed(argv, rig.bin); !errors.Is(err, ErrToolsRefused) {
+			t.Errorf("ToolsExecAllowed(%q) = %v, want ErrToolsRefused", argv, err)
+		}
 		if w := rig.exec(argv...); w.Code != http.StatusForbidden {
 			t.Errorf("%q = %d %s, want 403", argv, w.Code, w.Body)
 		}
@@ -149,6 +170,38 @@ func TestToolsExecAllowsExactlyTheCLTGitVersion(t *testing.T) {
 	w := rig.exec(CLTGitArgv...)
 	if !strings.Contains(w.Body.String(), `"output":"git version 2.50.1`) || !strings.Contains(w.Body.String(), `"exit_code":0`) {
 		t.Errorf("the CLT check's answer = %s", w.Body)
+	}
+}
+
+// softwareupdate -i installs only a label this process's own `softwareupdate -l` listed: an -i before
+// any -l, and an -i of a well-formed label that -l did not list, are refused before anything runs.
+func TestToolsExecInstallsOnlyAListedCLTLabel(t *testing.T) {
+	rig := newToolsRig(t)
+	install := func(label string) []string { return []string{"/usr/sbin/softwareupdate", "-i", label} }
+	if w := rig.exec(install("Command Line Tools for Xcode-16.0")...); w.Code != http.StatusForbidden {
+		t.Errorf("-i before any -l = %d %s, want 403", w.Code, w.Body)
+	}
+	if len(rig.ran) != 0 {
+		t.Fatalf("a refused -i ran: %q", rig.ran)
+	}
+	list := []string{"/usr/sbin/softwareupdate", "-l"}
+	if w := rig.exec(list...); w.Code != 200 {
+		t.Fatalf("-l = %d %s", w.Code, w.Body)
+	}
+	for _, label := range []string{"Command Line Tools for Xcode-16.4", "Command Line Tools for Xcode-16", "Command Line Tools"} {
+		if w := rig.exec(install(label)...); w.Code != http.StatusForbidden {
+			t.Errorf("-i of the unlisted %q = %d %s, want 403", label, w.Code, w.Body)
+		}
+	}
+	allowed := [][]string{list, install("Command Line Tools for Xcode-16.0"),
+		install("Command Line Tools (macOS High Sierra version 10.13) for Xcode-10.1")}
+	for _, argv := range allowed[1:] {
+		if w := rig.exec(argv...); w.Code != 200 {
+			t.Errorf("%q after -l = %d %s, want 200", argv, w.Code, w.Body)
+		}
+	}
+	if !slices.EqualFunc(rig.ran, allowed, slices.Equal) {
+		t.Errorf("ran %q, want %q", rig.ran, allowed)
 	}
 }
 
@@ -333,7 +386,9 @@ func TestServeToolsClassifiesItsDial(t *testing.T) {
 	rig := newToolsRig(t)
 	rec := &ToolsDialRecord{}
 	b := newBroker()
-	go func() { _ = serveTools(ctx, b.dial, rig.t.ToolsHandler(), rec, 5*time.Millisecond, time.Second) }()
+	// A short dial timeout, outlived below: a served session must outlive the hello's read deadline.
+	const timeout = 100 * time.Millisecond
+	go func() { _ = serveTools(ctx, b.dial, rig.t.ToolsHandler(), rec, 5*time.Millisecond, timeout) }()
 	host := b.next(t)
 	if d := rec.Get(); d.Class != "" {
 		t.Errorf("a dial waiting for its hello already reads %q", d.Class)
@@ -347,6 +402,7 @@ func TestServeToolsClassifiesItsDial(t *testing.T) {
 	if d := rec.Get(); d.Class != DialConnected || d.Error != "" {
 		t.Errorf("record = %+v, want connected", d)
 	}
+	time.Sleep(3 * timeout)
 	if _, _, err := cl.ToolsRun(ctx, []string{"/bin/sh", "-c", "id"}); err == nil {
 		t.Error("a shell over the tools session was not refused")
 	}

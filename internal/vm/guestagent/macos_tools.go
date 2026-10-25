@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 
 	"golang.org/x/sys/unix"
 )
@@ -92,7 +93,7 @@ var ErrToolsRefused = errors.New("guestagent: tools mode refuses")
 var cltLabel = regexp.MustCompile(`^Command Line Tools[A-Za-z0-9 ._()-]{0,96}$`)
 
 // ToolsExecAllowed says whether tools mode may run argv as root: softwareupdate as `-l` or as
-// `-i <label>` with a cltLabel label; touch or rm on MacCLTTrigger only (touch T, rm -f T); exactly
+// `-i <label>` with a cltLabel label (handleExec also requires a label this process's `-l` listed); touch or rm on MacCLTTrigger only (touch T, rm -f T); exactly
 // CLTGitArgv; or a regular file (not a link) directly in binDir, a pushed CLI's version check. A path
 // is compared as given, so the same binary by a relative path, a ".." component or a link is refused,
 // and nothing names a shell or launchctl.
@@ -140,6 +141,11 @@ type Tools struct {
 
 	// run runs an allowed argv as root; nil is runCombined (tests record).
 	run func(ctx context.Context, argv []string) ([]byte, int, error)
+
+	// cltListed is the Command Line Tools labels this process's own `softwareupdate -l` runs printed,
+	// in memory only, so a boot installs only what that boot listed; nil until a `-l` has run.
+	mu        sync.Mutex
+	cltListed map[string]bool
 }
 
 // ToolsHandler serves the requests the tools-mode comment above lists, and nothing else.
@@ -225,6 +231,12 @@ func (t *Tools) handleExec(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
+	update := in.Argv[0] == "/usr/sbin/softwareupdate"
+	if update && in.Argv[1] == "-i" && !t.cltWasListed(in.Argv[2]) {
+		http.Error(w, fmt.Sprintf("%v: softwareupdate -i %q, a label no softwareupdate -l of this boot listed",
+			ErrToolsRefused, in.Argv[2]), http.StatusForbidden)
+		return
+	}
 	run := t.run
 	if run == nil {
 		run = runCombined
@@ -234,7 +246,37 @@ func (t *Tools) handleExec(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if update && in.Argv[1] == "-l" {
+		t.listCLTLabels(string(out))
+	}
 	writeJSONAny(w, ToolsExecResult{Output: string(out), ExitCode: code})
+}
+
+// listCLTLabels records the Command Line Tools labels in a `softwareupdate -l` output, parsed as the
+// host picks one (internal/macvm pickCLTLabel): a "* " line, less any "Label:" prefix, naming them.
+func (t *Tools) listCLTLabels(list string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.cltListed == nil {
+		t.cltListed = map[string]bool{}
+	}
+	for _, line := range strings.Split(list, "\n") {
+		l, ok := strings.CutPrefix(strings.TrimSpace(line), "* ")
+		if !ok {
+			continue
+		}
+		l = strings.TrimSpace(strings.TrimPrefix(l, "Label:"))
+		if strings.Contains(l, "Command Line Tools") {
+			t.cltListed[l] = true
+		}
+	}
+}
+
+// cltWasListed says whether a `softwareupdate -l` of this process listed label.
+func (t *Tools) cltWasListed(label string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.cltListed[label]
 }
 
 func (t *Tools) handleDesktopPassword(w http.ResponseWriter, r *http.Request) {
