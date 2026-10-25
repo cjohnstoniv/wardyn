@@ -38,9 +38,6 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Changed
 
-- A unit admin deciding a held membership change no longer sees, in its diff, the other units the person holds
-  memberships under (`belongs_by`). Super admins and security admins still see them; the decision's recheck is
-  unchanged.
 - Changing a runner's per-run CPU or memory now ends its connected session, so the runner reconnects with the new
   pair. Before, it kept the old pair until it next reconnected. A runner offline at the time reads the pair when it
   next connects. Other limit changes leave the session alone.
@@ -70,6 +67,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- A unit admin deciding a held membership change no longer sees, in its diff, the other units the person holds
+  memberships under (`belongs_by`). Super admins and security admins still see them; the decision's recheck is
+  unchanged.
 - A headless run on a runner could be marked lost (reboot) when a check landed between its agent's exit and the
   runner's exit receipt; the receipt was then refused and the run never recorded `run.complete`. The runner's exit
   receipt now ends such a run (#3665).
@@ -77,8 +77,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   SSH key for <host>". The proxy signs the sign-in and no key file enters the sandbox.
 - The desktop replay shows where a screen recording stopped, at its size cap or at a stream the recorder could not
   follow. Before, it froze on the last frame with no notice.
-- A VM run lost to an outage keeps its desktop sign-in pause, since its agent may still be running. A run whose
-  lease ended or whose host rebooted ends the pause and its recording hold.
+- A VM run lost to an outage keeps its desktop sign-in pause, since its agent may still be running. A run lost because
+  its lease ended or its agent's container exited ends the pause and its recording hold.
 - The image launcher split each `WARDYN_REPOS` clone record with a tab as whitespace, so an empty field moved the
   fields after it up a place. This control plane never sends such a record. A control plane that sends only the
   single-repository variables (`WARDYN_REPO_URL`, `WARDYN_REPO_SLUG`) got no git broker rewrite, and a record with
