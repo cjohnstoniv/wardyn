@@ -4,6 +4,7 @@
 package main
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
@@ -16,7 +17,7 @@ import (
 // installing the wardyn-guest-agent beside this helper.
 func TestPrepareDepsWiresStage1(t *testing.T) {
 	var o macvm.PrepareOptions
-	_ = prepareDeps(&o) // refused where this build cannot provision
+	_ = prepareDeps(&o, slog.New(slog.DiscardHandler)) // refused where this build cannot provision
 	if _, ok := o.Bootstrap.(*stage1.Bootstrapper); !ok {
 		t.Fatalf("Bootstrap = %T; want *stage1.Bootstrapper", o.Bootstrap)
 	}

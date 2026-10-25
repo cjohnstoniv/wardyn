@@ -87,6 +87,14 @@ func checkSocketPaths(dir string) error {
 }
 func (l Layout) PrepareLog() string { return filepath.Join(l.Root, "prepare.log") }
 
+// PrepRelayLogFile is the log of the in-helper relays a prepare or tools
+// update boots its VM on (their refusals and drops), beside prepare.log in
+// the root. It is never the helper's stdout or stderr: runnerd reads
+// prepare.log's last line as progress.
+const PrepRelayLogFile = "prep-relay.log"
+
+func (l Layout) PrepRelayLog() string { return filepath.Join(l.Root, PrepRelayLogFile) }
+
 // File names inside a base or run directory.
 const (
 	DiskFile      = "disk.img"

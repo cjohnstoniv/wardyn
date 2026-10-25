@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -98,7 +99,7 @@ func TestPrepareRefusedWhereProvisioningUnsupported(t *testing.T) {
 // unsupported.
 func TestPrepareDepsWiresEveryPart(t *testing.T) {
 	var o macvm.PrepareOptions
-	err := prepareDeps(&o)
+	err := prepareDeps(&o, slog.New(slog.DiscardHandler))
 	if reflect.TypeOf(o.FirstBoot) != reflect.TypeOf(macvm.NewProvisioner()) {
 		t.Fatalf("FirstBoot = %T; want %T", o.FirstBoot, macvm.NewProvisioner())
 	}
@@ -224,7 +225,7 @@ func TestRunRefusedWithoutEntry(t *testing.T) {
 // prepare without an entry says what prepare is missing, not run.json.
 func TestPrepareRefusedWithoutEntry(t *testing.T) {
 	d, _, errb := testDeps(&macvmtest.Engine{})
-	d.prepare = func(o *macvm.PrepareOptions) error { o.FirstBoot = &macvmtest.FirstBoot{}; return nil }
+	d.prepare = func(o *macvm.PrepareOptions, _ *slog.Logger) error { o.FirstBoot = &macvmtest.FirstBoot{}; return nil }
 	code := run(context.Background(), []string{"prepare", "--root", t.TempDir(), "--cpus", "4", "--memory-mib", "8192"}, d)
 	if code != 1 || !strings.Contains(errb.String(), "prepare needs --runner-id and --ledger-entry") || strings.Contains(errb.String(), "run.json") {
 		t.Fatalf("exit %d: %s", code, errb.String())
@@ -295,5 +296,49 @@ func TestLedgerSetupRefusesNonRoot(t *testing.T) {
 	d.getuid = func() int { return 0 }
 	if rc := run(context.Background(), []string{"ledger-setup"}, d); rc != 2 {
 		t.Fatalf("ledger-setup with no base: rc %d", rc)
+	}
+}
+
+// TestProbeReportsGuestAgent: probe's guest_agent says whether the agent
+// beside the helper is missing, another build, or this build.
+func TestProbeReportsGuestAgent(t *testing.T) {
+	p, err := guestAgentPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameBuild, err := os.ReadFile(self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(p) })
+	for _, tc := range []struct {
+		name  string
+		agent []byte // nil: no file
+		want  string
+	}{
+		{"no agent", nil, "missing"},
+		{"another build", []byte("not this helper's build"), "mismatch"},
+		{"this build", sameBuild, "ok"},
+	} {
+		_ = os.Remove(p)
+		if tc.agent != nil {
+			if err := os.WriteFile(p, tc.agent, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		d, out, _ := testDeps(&macvmtest.Engine{})
+		d.firstBoot = &macvmtest.FirstBoot{}
+		_ = run(context.Background(), []string{"probe"}, d)
+		var r probeReport
+		if err := json.Unmarshal(out.Bytes(), &r); err != nil {
+			t.Fatalf("%s: %v %q", tc.name, err, out.String())
+		}
+		if r.GuestAgent != tc.want || !strings.Contains(out.String(), `"guest_agent": "`+tc.want+`"`) {
+			t.Fatalf("%s: guest_agent %q; want %q", tc.name, r.GuestAgent, tc.want)
+		}
 	}
 }

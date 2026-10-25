@@ -182,7 +182,12 @@ func (rl *Relay) DialGuest(ctx context.Context, port uint16) (net.Conn, error) {
 	if !rl.prep {
 		return nil, ErrNotPrep
 	}
-	return gonet.DialContextTCP(ctx, rl.stack, tcpip.FullAddress{NIC: nicID, Addr: guestIP, Port: port}, ipv4.ProtocolNumber)
+	c, err := gonet.DialContextTCP(ctx, rl.stack, tcpip.FullAddress{NIC: nicID, Addr: guestIP, Port: port}, ipv4.ProtocolNumber)
+	if err != nil {
+		// gonet's nil *TCPConn would make a non-nil net.Conn whose Close panics.
+		return nil, err
+	}
+	return c, nil
 }
 
 // DHCPRequests is how many DHCP requests the guest has sent this relay.
