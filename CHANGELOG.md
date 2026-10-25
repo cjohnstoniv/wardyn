@@ -24,6 +24,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   does not evict existing connections, and lower process or container resource limits can bind first. The relay now
   sends TCP keepalive probes toward both the guest and the proxy, so a peer that vanished is noticed; the
   proxy-to-origin leg is unchanged (#3489).
+- The runner inventory's macOS VM capabilities no longer carry the runner's own `refusal` sentence. Read `reason`
+  (with `min_cpus` and `min_memory_mib`) instead; the console words the refusal from those.
 
 ### Fixed
 
