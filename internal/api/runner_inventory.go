@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -91,16 +92,10 @@ func (s *Server) runnerView(row types.Runner, used types.RunnerTally, admin bool
 	return v
 }
 
-// runnerMacOSVM is the macos_vm object of the runner's last caps event, re-encoded whole, read like
-// runnerReportedCaps; nil when the runner has not reported one.
+// runnerMacOSVM is the macos_vm object of the runner's last caps event, re-encoded whole; nil when the
+// runner has not reported one.
 func (s *Server) runnerMacOSVM(id uuid.UUID) json.RawMessage {
-	s.runnerStreams.subsMu.Lock()
-	ep, ok := s.runnerStreams.subs[id]
-	s.runnerStreams.subsMu.Unlock()
-	if !ok {
-		return nil
-	}
-	caps, ok := ep.sub.Caps()
+	caps, ok := s.runnerLastCaps(id)
 	if !ok || caps.MacOSVM == nil {
 		return nil
 	}
@@ -109,6 +104,17 @@ func (s *Server) runnerMacOSVM(id uuid.UUID) json.RawMessage {
 		return nil
 	}
 	return b
+}
+
+// runnerLastCaps is the runner's last caps event as this process holds it, read like runnerReportedCaps.
+func (s *Server) runnerLastCaps(id uuid.UUID) (runnerwire.Caps, bool) {
+	s.runnerStreams.subsMu.Lock()
+	ep, ok := s.runnerStreams.subs[id]
+	s.runnerStreams.subsMu.Unlock()
+	if !ok {
+		return runnerwire.Caps{}, false
+	}
+	return ep.sub.Caps()
 }
 
 // runnerSharesFolders is the runner's last caps event's folders flag, read like runnerReportedCaps.
