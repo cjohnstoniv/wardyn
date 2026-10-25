@@ -156,12 +156,26 @@ func TestHubOnlineStaysTrueWhileACurrentActivityCheckHoldsTheSession(t *testing.
 		t.Fatal("the activity lookup ran outside the session lock")
 	}
 	online := h.Online(row.ID)
+	// A revoke waiting behind the lookup reads the runner offline again.
+	revoked := make(chan error, 1)
+	go func() { revoked <- h.Revoke(ctx, row.ID) }()
+	pending := false
+	for !pending && ctx.Err() == nil {
+		pending = !h.Online(row.ID)
+		time.Sleep(time.Millisecond)
+	}
 	close(release)
 	if err := awaitValue(t, ctx, done); err != nil {
 		t.Fatal(err)
 	}
+	if err := awaitValue(t, ctx, revoked); err != nil {
+		t.Fatal(err)
+	}
 	if !online {
 		t.Error("a ready runner on a live peer reads offline during an activity lookup")
+	}
+	if !pending {
+		t.Error("a runner with a revoke waiting behind the activity lookup still reads online")
 	}
 	if s.activityPeer.Load() != nil {
 		t.Error("the activity check left its peer set after it returned")

@@ -76,6 +76,7 @@ func (h *Hub) endWithControl(ctx context.Context, id uuid.UUID, kind runnerwire.
 	if !s.mu.TryLock() {
 		// An admission holds the slot, perhaps stalled on a durable call or a dead link: end it now rather
 		// than after its own timeouts.
+		s.activityPeer.Store(nil) // a pending revoke reads offline, as it did before an activity check could hold the slot
 		if abort := s.abort.Load(); abort != nil {
 			(*abort)()
 		}

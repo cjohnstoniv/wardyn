@@ -359,8 +359,9 @@ func (d *Driver) daemonSubnet(ctx context.Context, name string, opts client.Netw
 }
 
 // stopSandboxBudget bounds a StopSandbox, which runs apart from the call that asked for it: the agent's
-// stop, the proxy's drain and stop, and the removals, with room for a slow daemon.
-const stopSandboxBudget = 2 * time.Minute
+// stop, the proxy's drain and stop, and the removals. It is 60 s, the bound the local callers put on a
+// teardown (boundedTeardown, teardownCtx), which the detached context would otherwise drop.
+const stopSandboxBudget = 60 * time.Second
 
 // StopSandbox is the graceful path: SIGTERM, then SIGKILL after the timeout,
 // then remove. Idempotent on a missing sandbox. It runs on a context cut loose from the call's,
