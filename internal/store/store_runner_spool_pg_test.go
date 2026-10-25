@@ -21,6 +21,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -351,7 +352,14 @@ func TestPG_RunnerSpoolTransientRunnerReadIsNotARefusal(t *testing.T) {
 	db.AuditChainLockTimeout = 400 * time.Millisecond
 	t.Cleanup(func() { db.AuditChainLockTimeout = restore })
 
-	holder, err := pool.Begin(ctx)
+	// The holder has its own connection, so the ingest below takes no second one from a goroutine already
+	// holding one.
+	conn, err := pgx.Connect(ctx, pool.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx) //nolint:errcheck // test teardown
+	holder, err := conn.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
