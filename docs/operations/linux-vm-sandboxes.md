@@ -55,6 +55,7 @@
 3. The person presses "Resume the agent". The guest agent continues the agent's process group (`SIGCONT`).
 
 - Each pause-to-resume writes one `desktop.sign_in.pause` audit row, "paused the agent to sign in inside the desktop". It names who paused and when, never a secret.
+- A run that ends while its agent is still paused gets that one row too, on the reconciler's next pass: marked as ended while paused, with the time the run ended. The agent was never resumed.
 - The pause is the person's choice. A sign-in made without it is neither paused nor audited.
 - On a run whose desktop screen is recorded, the recording keeps no frames while the pause is open. A desktop that connects while it is open, after a restart too, keeps none from its first frame.
 - A desktop open on another `wardynd` replica re-reads the pause every second. It stops keeping frames within 2 seconds of the pause, also when a re-read fails or does not answer, and keeps them again once a re-read after the resume answers.

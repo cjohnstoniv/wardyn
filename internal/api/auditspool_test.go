@@ -10,6 +10,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -593,5 +594,59 @@ func TestAuditSpoolAppendCountsALineWhoseSyncFailed(t *testing.T) {
 	}
 	if got := sp.Lines(); got != 1 {
 		t.Fatalf("Lines() = %d after a Write that landed and a Sync that failed, want 1", got)
+	}
+}
+
+// spoolBigTail writes a spool of about 24 MiB of short lines and returns it with its size.
+func spoolBigTail(t *testing.T) (*AuditSpool, int64) {
+	t.Helper()
+	sp, err := NewAuditSpool(filepath.Join(t.TempDir(), "audit-spool.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { sp.f.Close() })
+	line := bytes.Repeat([]byte{'x'}, 1023)
+	line = append(line, '\n')
+	if _, err := sp.f.Write(bytes.Repeat(line, 24<<10)); err != nil {
+		t.Fatal(err)
+	}
+	return sp, int64(len(line)) * (24 << 10)
+}
+
+// allocatedBy returns the heap bytes f allocates.
+func allocatedBy(f func()) uint64 {
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	f()
+	runtime.ReadMemStats(&after)
+	return after.TotalAlloc - before.TotalAlloc
+}
+
+// Compaction and the volume probe move the spool through fixed-size buffers: what they allocate
+// must not grow with the backlog (a recovery after a long outage is where the spool is largest).
+func TestAuditSpoolRewriteMemoryIsFlatInTheBacklog(t *testing.T) {
+	sp, size := spoolBigTail(t)
+	const bound = 4 << 20 // far under the 24 MiB backlog, far over the fixed buffers
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	var ok bool
+	if got := allocatedBy(func() { ok = sp.volumeWritable() }); !ok || got > bound {
+		t.Errorf("volumeWritable = %v, allocated %d bytes for a %d-byte spool, want true and <= %d", ok, got, size, bound)
+	}
+	head := [][]byte{[]byte(`{"kept":1}`), []byte(`{"kept":2}`)}
+	const tailStart = 1 << 20
+	var err error
+	if got := allocatedBy(func() { err = sp.compact(head, tailStart, size) }); err != nil || got > bound {
+		t.Errorf("compact: err %v, allocated %d bytes for a %d-byte tail, want nil and <= %d", err, got, size-tailStart, bound)
+	}
+	b, rerr := os.ReadFile(sp.path)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	if want := int64(len(`{"kept":1}`)+len(`{"kept":2}`)+2) + size - tailStart; int64(len(b)) != want {
+		t.Errorf("compacted spool is %d bytes, want %d", len(b), want)
+	}
+	if !bytes.HasPrefix(b, []byte("{\"kept\":1}\n{\"kept\":2}\nxxx")) || b[len(b)-1] != '\n' {
+		t.Errorf("compacted spool lost its kept lines or its tail: starts %q", b[:40])
 	}
 }

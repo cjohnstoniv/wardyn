@@ -50,6 +50,10 @@ func TestPG_DesktopVMSignIns(t *testing.T) {
 		row.PauseGeneration != 2 {
 		t.Fatalf("paused row = %+v %v %v", row, found, err)
 	}
+	if got, err := st.PausedDesktopVMAgents(ctx); err != nil || len(got) != 1 || got[0].RunID != run.ID || got[0].PausedBy != "alice" || !got[0].PausedAt.Equal(at) ||
+		got[0].PauseGeneration != 2 {
+		t.Fatalf("paused agents = %+v %v, want the one paused run at generation 2", got, err)
+	}
 	if _, _, ok, err := st.ResumeDesktopVMAgent(ctx, run.ID, at.Add(time.Second), 2); err != nil || ok {
 		t.Fatalf("a resume of another pause = %v %v, want nothing cleared", ok, err)
 	}
@@ -59,6 +63,9 @@ func TestPG_DesktopVMSignIns(t *testing.T) {
 	by, pausedAt, ok, err := st.ResumeDesktopVMAgent(ctx, run.ID, at, 2)
 	if err != nil || !ok || by != "alice" || !pausedAt.Equal(at) {
 		t.Fatalf("resume = %q %v %v %v, want the pause it cleared", by, pausedAt, ok, err)
+	}
+	if got, err := st.PausedDesktopVMAgents(ctx); err != nil || len(got) != 0 {
+		t.Fatalf("paused agents after the resume = %+v %v, want none", got, err)
 	}
 	if _, _, ok, _ := st.ResumeDesktopVMAgent(ctx, run.ID, at, 2); ok {
 		t.Fatal("a second resume saw the pause again")

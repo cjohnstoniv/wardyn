@@ -192,3 +192,60 @@ func probeSucceeds(addr string, probe *corev1.Probe) bool {
 	}
 	return false
 }
+
+// TestRunnerCreateSandbox_ProxyThatCannotRenewNamesTheCause: a runner's proxy whose first renew
+// keeps failing (the organisation unreachable from the cluster) never listens, then lapses: it
+// exits 3 with its last renew error, redacted, as its termination message. CreateSandbox fails as
+// soon as that exit shows, well inside the start deadline, naming the cause rather than "did not
+// start within"; an older proxy's message (its log tail) is cut to one capped line.
+func TestRunnerCreateSandbox_ProxyThatCannotRenewNamesTheCause(t *testing.T) {
+	const cause = "Post https://org.example:8443: dial tcp 10.0.0.1:8443: i/o timeout"
+	for _, tc := range []struct{ message, want string }{
+		{cause, "the run's proxy could not renew its run token with the organisation: " + cause},
+		{"line one\n" + strings.Repeat("y", 2*maxProxyRenewCause), "the run's proxy could not renew its run token with the organisation: line one yyy"},
+	} {
+		h := newRunnerHarness(t)
+		h.d.cfg.StartTimeout = time.Minute
+		h.d.cfg.Sink = &fakeSink{h: h}
+		h.d.cfg.ControlPlaneRelay = func(*url.URL) (string, error) { return "10.96.0.40", nil }
+		var polls atomic.Int32
+		h.cs.PrependReactor("get", "pods", func(action clienttesting.Action) (bool, runtime.Object, error) {
+			ga := action.(clienttesting.GetAction)
+			if !strings.HasPrefix(ga.GetName(), "wardyn-proxy-") {
+				return false, nil, nil
+			}
+			obj, err := h.cs.Tracker().Get(podsGVR, action.GetNamespace(), ga.GetName())
+			if err != nil {
+				return true, nil, err
+			}
+			pod := obj.(*corev1.Pod).DeepCopy()
+			pod.Status.PodIP = "10.244.0.7"
+			state := corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}
+			if polls.Add(1) > 2 {
+				pod.Status.Phase = corev1.PodFailed
+				state = corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 3, Reason: "Error", Message: tc.message}}
+			}
+			pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: proxyContainerName, State: state}}
+			return true, pod, nil
+		})
+		spec := testSandboxSpec()
+		spec.RunID = h.runID
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		began := time.Now()
+		_, err := h.d.CreateSandbox(ctx, spec)
+		cancel()
+		if err == nil {
+			t.Fatal("CreateSandbox succeeded with a proxy that never renewed")
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, tc.want) || strings.Contains(msg, "did not start within") || strings.Contains(msg, "\n") {
+			t.Fatalf("CreateSandbox error %q, want it to contain %q", msg, tc.want)
+		}
+		if _, after, _ := strings.Cut(msg, "with the organisation: "); len(after) > maxProxyRenewCause+len("…") {
+			t.Fatalf("cause not capped: %d bytes", len(after))
+		}
+		if d := time.Since(began); d > 20*time.Second {
+			t.Fatalf("failed after %s, not when the proxy exited", d)
+		}
+	}
+}

@@ -162,6 +162,10 @@ export function DriveEditor({
   const [writeTouched, setWriteTouched] = React.useState(false);
   // A drive this editor created: the next save updates it rather than creating it again.
   const savedId = React.useRef(drive?.id);
+  // The allocations this editor has stored or removed so far. A save that fails part way is retried
+  // from the same editor, whose `grants` still predate them: they join the retry's baseline, so a
+  // group the operator removes after its allocation was stored is taken off.
+  const written = React.useRef(new Map<string, UserDriveGrant>());
   const teamUI = teamDrives && team;
   const [reclaim, setReclaim] = React.useState<DriveReclaim>(drive?.reclaim ?? "retain");
   // M10: the drive's second place, a person's own runner. A save sends it only for a share.
@@ -237,7 +241,10 @@ export function DriveEditor({
         ? await api.updateDrive(savedId.current, input, confirmRehome)
         : await api.createDrive(input);
       savedId.current = saved.id;
-      if (teamUI) await syncTeamGroups(saved.id, groups, writeUnknown && team || (drive?.team && !writeTouched) ? null : writable, known, writeUnknown ? false : writable, grants);
+      if (teamUI) {
+        const withWritten = (list: UserDriveGrant[]) => [...new Map([...list, ...written.current.values()].map((g) => [g.id, g])).values()];
+        await syncTeamGroups(saved.id, groups, writeUnknown && team || (drive?.team && !writeTouched) ? null : writable, withWritten(known), writeUnknown ? false : writable, withWritten(grants), written.current);
+      }
       onSaved();
     } catch (e) {
       // A 409 on an edit (never on create — there is no prior row to re-home)

@@ -43,8 +43,8 @@ type SetupItem struct {
 	// a value and hands it directly to the in-sandbox git-credential helper at
 	// task time, internal.go handleInternalMint), "resident_env" (an env_secret
 	// grant — the value is in the sandbox environment for the whole run), or
-	// "resident_file" (a file_secret grant — the value is a file in the sandbox
-	// for the whole run). Empty when not applicable (workspace/egress/backend
+	// "resident_file" (a file_secret grant, or an AWS sign-in's session file — the
+	// value is a file in the sandbox for the whole run). Empty when not applicable (workspace/egress/backend
 	// rows carry no single credential).
 	Residency string `json:"residency,omitempty"`
 }
@@ -178,8 +178,10 @@ func withoutProfileKeys(raw json.RawMessage, keys ...string) json.RawMessage {
 // banner. ok=false for a non-LLM/unknown agent (llmAccess is nil): nothing to
 // check, no row.
 //
-// Residency is always proxy_injected: every LLM-backed run brokers its credential
-// at the proxy and it never leaves it. A legacy policy's resident .claude mount
+// Residency is proxy_injected for every LLM-backed run except one served by an
+// AWS sign-in (bedrock_sso), whose session file lands in the sandbox
+// (resident_file, as kindResidency says): the proxy brokers every other
+// credential and it never leaves it. A legacy policy's resident .claude mount
 // is stripped at dispatch (runs_dispatch_provider.go), so no run holds one.
 func (s *Server) setupLLMAccessItem(agent string, llmAccess *composeLLMAccess, spec types.RunPolicySpec) (SetupItem, bool) {
 	if llmAccess == nil {
@@ -197,10 +199,13 @@ func (s *Server) setupLLMAccessItem(agent string, llmAccess *composeLLMAccess, s
 		Status:     status,
 		Detail:     llmAccess.Note,
 	}
-	// Every LLM-backed run brokers its credential at the proxy: dispatch strips a
-	// legacy policy's resident .claude mount (runs_dispatch_provider.go), so a
-	// spec carrying one never reaches a run as a resident mount.
+	// Dispatch strips a legacy policy's resident .claude mount
+	// (runs_dispatch_provider.go), so a spec carrying one never reaches a run as
+	// a resident mount; an AWS sign-in is the one credential the sandbox holds.
 	it.Residency = "proxy_injected"
+	if llmAccess.sandboxResident {
+		it.Residency = "resident_file"
+	}
 	if !llmAccess.Provisioned {
 		if p, ok := s.llmProviderFor(agent); ok {
 			// Name the run's ACTUAL resolved

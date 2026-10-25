@@ -77,6 +77,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   every request until its first token renew succeeds, but its pod read as ready once it listened, so the agent could
   start, finish and have its recording upload refused inside that window. The proxy now listens only once its first
   renew has succeeded, so its pod is ready only once it serves.
+- A run on a Kubernetes runner (wardyn-runnerd) whose proxy cannot renew its run token, for example because a
+  firewall blocks the organisation, now fails naming the cause: "the run's proxy could not renew its run token with
+  the organisation:" and the proxy's last renew error, without the token or the URL's path and query. Before, its
+  start waited out the start timeout and said only that the proxy pod never became ready. A proxy that has never
+  renewed now gives up about a minute after it starts; a refused renew still ends it at once, with the same sentence.
 - `GET /runs/{id}/output` no longer points the run's owner or an operator at a recording that was never received.
   With run output persistence off, an ended run on a runner that does not capture output, and whose recording never
   arrived, answers `409` `run_output_not_kept`.
@@ -85,6 +90,16 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   agent images also wait up to 10 seconds for the proxy before they run the task, and carry on with one stderr line if
   it never answers. Before, an exec run's first requests, or a very short run's recording upload, could be refused with
   "connection refused".
+- A Linux VM run that ends while its agent is paused to sign in now writes its `desktop.sign_in.pause` audit row, marked
+  `ended_paused` with the run's own end time and no `resumed_at`. Before, the pause had no row at all, because a resume
+  is refused once the run is not running.
+- A desktop recording's replay no longer shows a failed clipboard or file action read as an empty action log. It shows
+  the replay's load failure with its retry.
+- Retrying a team drive save that stored one group's allocation and failed on another now also removes a group the
+  admin took out of the editor since. Before, that group's allocation stayed.
+- The setup checklist's model-access row now reports `resident_file` for a run served by an AWS sign-in, whose session
+  file is held in the sandbox, instead of `proxy_injected`, so it agrees with the `model_credential` the same
+  response carries.
 
 ## [0.10.0-rc.1] — 2026-10-24
 
