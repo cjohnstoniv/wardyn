@@ -34,6 +34,7 @@ import type { RunLayoutPreset, RunLayoutWidget } from "../../../lib/api/run-layo
 import type { ConsoleView } from "../../wardyn/console-view";
 import { createRequestFromAudit } from "../../../lib/api/audit";
 import { mayEnterRunOrUnknown } from "../../../lib/run-entry";
+import { isMacOSVM } from "../../../lib/types/machine-kind";
 import { ConnectSSHCard } from "../run-detail-ssh";
 import {
   CredentialsWidget,
@@ -257,14 +258,15 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
     // absent (owner-only), and with free placement an absent tile leaves a
     // hole — at the bottom of the rail that hole costs nothing, between two
     // widgets it is a visible gap on every run you did not start.
-    presets: { live: { x: 8, y: 20, w: 4, h: 5 } },
-    // ConnectSSHCard's mayEnterRun gate, plus the RUNNING check.
+    presets: { live: { x: 8, y: 20, w: 4, h: 5 }, finished: { x: 6, y: 12, w: 6, h: 5 } },
+    // ConnectSSHCard's mayEnterRun gate, plus the RUNNING check, or a finished macOS VM run with a disk line.
     // M-7: AND the user view — the admin monitor carries no Connect-via-SSH
     // door at all, even on the admin's own run (admin-member-modes-design.md
     // §4.6, §6).
+    // A finished macOS VM run keeps the tile while its disk's removal has something to say (mock M-D1 9-11).
     available: (ctx) =>
       ctx.view === "user" &&
-      ctx.run.state === "RUNNING" &&
+      (ctx.run.state === "RUNNING" || (isMacOSVM(ctx.run) && !!ctx.run.macos_disk)) &&
       mayEnterRunOrUnknown(ctx.run, ctx.principal, ctx.operator, ctx.operatorResolved ?? true),
   },
 };

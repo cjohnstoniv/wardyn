@@ -528,6 +528,8 @@ export interface RunDetail extends AgentRun {
   agents?: RunDetailAgent[];
   // A macOS VM run's desktop as its Mac offers it (GET /runs/{id} only); see RunMacOS.
   macos?: RunMacOS;
+  // Where a macOS VM run's disk stands on its Mac at the run's end (GET /runs/{id} only); see RunMacOSDisk.
+  macos_disk?: RunMacOSDisk;
 }
 
 // GET /runs/{id}'s macos (runMacOSView, internal/api/run_macos_view.go): whether the Mac's Screen Sharing
@@ -535,6 +537,14 @@ export interface RunDetail extends AgentRun {
 // and while the runner's caps are unknown.
 export interface RunMacOS {
   desktop: "control" | "observe";
+}
+
+// GET /runs/{id}'s macos_disk (runMacOSDiskView, internal/api/run_macos_disk.go): "removing" while no report
+// has come (for 10 minutes after the end), "removed" with at, or "kept" with the runner's reason code ("" for none).
+export interface RunMacOSDisk {
+  state: "removing" | "removed" | "kept";
+  at?: string;
+  reason?: string;
 }
 
 // One agent of a run with several agents (runDetailAgent, internal/api/run_multi_agent.go).

@@ -487,3 +487,146 @@ func TestPG_RunnerSandboxGoneThenExitIsReceipt(t *testing.T) {
 		t.Fatalf("late exit receipt_only=%v %v", receipt, err)
 	}
 }
+
+// probeRig is goneRig for a status check (#3667 F1): a present page opens the runner's session, and
+// clock and note are RunnerProbeClock and NoteRunnerSandboxProbe for the rig's run.
+type probeRig struct{ *goneRig }
+
+func newProbeRig(t *testing.T) probeRig {
+	t.Helper()
+	g := probeRig{newGoneRig(t)}
+	g.page(g.present)
+	return g
+}
+
+func (g probeRig) clock() time.Time {
+	g.t.Helper()
+	at, err := g.st.RunnerProbeClock(g.t.Context())
+	if err != nil {
+		g.t.Fatal(err)
+	}
+	return at
+}
+
+func (g probeRig) note(runnerID uuid.UUID, ref string, absent bool, issued time.Time) (due, stamped bool) {
+	g.t.Helper()
+	due, stamped, err := g.st.NoteRunnerSandboxProbe(g.t.Context(), runnerID, g.run.ID, ref, absent, issued)
+	if err != nil {
+		g.t.Fatal(err)
+	}
+	return due, stamped
+}
+
+func (g probeRig) claimProbed(issued time.Time) (bool, error) {
+	return g.st.MarkRunnerRunGoneProbed(g.t.Context(), g.rn.ID, g.run.ID, g.ref, issued, time.Now())
+}
+
+func sameStamp(a, b *time.Time) bool { return a != nil && b != nil && a.Equal(*b) }
+
+func TestPG_RunnerSandboxProbeConfirmsOnDatabaseTime(t *testing.T) {
+	g := newProbeRig(t)
+	if due, stamped := g.note(g.rn.ID, g.ref, true, g.clock()); due || !stamped {
+		t.Fatalf("first absent check: due=%v stamped=%v", due, stamped)
+	}
+	v := g.stamp()
+	if v == nil {
+		t.Fatal("first absent check left no stamp")
+	}
+	if due, stamped := g.note(g.rn.ID, g.ref, true, g.clock()); due || !stamped || !sameStamp(g.stamp(), v) {
+		t.Fatalf("second absent check at once: due=%v stamped=%v stamp=%v want %v", due, stamped, g.stamp(), v)
+	}
+	if ok, err := g.claimProbed(g.clock()); ok || err != nil {
+		t.Fatalf("two checks at once confirmed gone: %v %v", ok, err)
+	}
+	g.ageStamp()
+	issued := g.clock()
+	if due, stamped := g.note(g.rn.ID, g.ref, true, issued); !due || !stamped {
+		t.Fatalf("checks 31 s apart: due=%v stamped=%v", due, stamped)
+	}
+	if ok, err := g.claimProbed(issued); !ok || err != nil {
+		t.Fatalf("confirmed claim: %v %v", ok, err)
+	}
+	got, err := g.st.GetRun(t.Context(), g.run.ID)
+	if err != nil || got.State != types.RunRunning || got.LostReason != types.LostGone || got.LostAt == nil || got.PausedAt != nil {
+		t.Fatalf("marked run: %+v %v", got, err)
+	}
+	if slots, _ := g.holders(); slots != 0 {
+		t.Fatalf("a gone run still holds a slot: %d", slots)
+	}
+	if ok, err := g.claimProbed(g.clock()); ok || err != nil {
+		t.Fatalf("second claim: %v %v", ok, err)
+	}
+}
+
+func TestPG_RunnerSandboxProbeIgnoresASupersededSession(t *testing.T) {
+	g := newProbeRig(t)
+	stale := g.clock()
+	g.page(g.present)
+	if due, stamped := g.note(g.rn.ID, g.ref, true, stale); due || stamped || g.stamp() != nil {
+		t.Fatalf("a check over a superseded session stamped: due=%v stamped=%v stamp=%v", due, stamped, g.stamp())
+	}
+	g.exec(`UPDATE agent_runs SET sandbox_absent_at=now()-interval '31 seconds' WHERE id=$1`, g.run.ID)
+	v := g.stamp()
+	if g.note(g.rn.ID, g.ref, false, stale); !sameStamp(g.stamp(), v) {
+		t.Fatalf("a check over a superseded session cleared the stamp: %v want %v", g.stamp(), v)
+	}
+	if ok, err := g.claimProbed(stale); ok || err != nil {
+		t.Fatalf("a check over a superseded session claimed: %v %v", ok, err)
+	}
+	if ok, err := g.claimProbed(g.clock()); !ok || err != nil {
+		t.Fatalf("a check over the current session did not claim: %v %v", ok, err)
+	}
+}
+
+func TestPG_RunnerSandboxProbeGuards(t *testing.T) {
+	cases := map[string]func(g probeRig) (runnerID uuid.UUID, ref string){
+		"another_runner": func(g probeRig) (uuid.UUID, string) { return uuid.New(), g.ref },
+		"stale_ref":      func(g probeRig) (uuid.UUID, string) { return g.rn.ID, g.ref + "-stale" },
+		"not_running": func(g probeRig) (uuid.UUID, string) {
+			g.exec(`UPDATE agent_runs SET state='STARTING' WHERE id=$1`, g.run.ID)
+			return g.rn.ID, g.ref
+		},
+		"containment_pending_row": func(g probeRig) (uuid.UUID, string) {
+			g.exec(`INSERT INTO run_containment_pending (run_id, runner_id, kind, since) VALUES ($1, $2, 'agent_only', now())`, g.run.ID, g.rn.ID)
+			return g.rn.ID, g.ref
+		},
+		"unfinished_staged_exit": func(g probeRig) (uuid.UUID, string) {
+			g.exec(`INSERT INTO runner_execution_exits (run_id, generation, runner_id, payload, payload_hash) VALUES ($1, $2, $3, '{}', 'h')`, g.run.ID, uuid.New(), g.rn.ID)
+			return g.rn.ID, g.ref
+		},
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			g := newProbeRig(t)
+			runnerID, ref := setup(g)
+			if _, stamped := g.note(runnerID, ref, true, g.clock()); stamped || g.stamp() != nil {
+				t.Fatalf("stamped under a guard: stamped=%v stamp=%v", stamped, g.stamp())
+			}
+		})
+	}
+	t.Run("clears_when_not_claimable", func(t *testing.T) {
+		g := newProbeRig(t)
+		g.exec(`UPDATE agent_runs SET sandbox_absent_at=now()-interval '31 seconds' WHERE id=$1`, g.run.ID)
+		g.exec(`INSERT INTO runner_execution_exits (run_id, generation, runner_id, payload, payload_hash) VALUES ($1, $2, $3, '{}', 'h')`, g.run.ID, uuid.New(), g.rn.ID)
+		if g.note(g.rn.ID, g.ref, true, g.clock()); g.stamp() != nil {
+			t.Fatalf("an absent check on a run a gone mark may not land on kept the stamp: %v", g.stamp())
+		}
+	})
+}
+
+func TestPG_RunnerRunGoneProbedAuthority(t *testing.T) {
+	g := newProbeRig(t)
+	ctx := t.Context()
+	g.exec(`UPDATE agent_runs SET sandbox_absent_at=now()-interval '31 seconds' WHERE id=$1`, g.run.ID)
+	for name, c := range map[string]struct {
+		runner uuid.UUID
+		ref    string
+	}{"another_runner": {uuid.New(), g.ref}, "empty_ref": {g.rn.ID, ""}, "stale_ref": {g.rn.ID, g.ref + "-stale"}} {
+		if ok, err := g.st.MarkRunnerRunGoneProbed(ctx, c.runner, g.run.ID, c.ref, g.clock(), time.Now()); ok || !errors.Is(err, store.ErrRunnerExecutionRefused) {
+			t.Errorf("%s: %v %v", name, ok, err)
+		}
+	}
+	if ok, err := g.claimProbed(g.clock()); !ok || err != nil {
+		t.Fatalf("authorised claim: %v %v", ok, err)
+	}
+}

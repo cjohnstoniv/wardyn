@@ -6,6 +6,7 @@ package admission
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -55,7 +56,8 @@ const (
 // directory or quarantine an earlier run left moves into an exact entries
 // directory, which is never emptied, or with the entries directory's own into
 // a new one, or it refuses: the entries directory never ends with fewer
-// entries than it held. It touches nothing outside Base and its
+// entries than it held. One a helper accepts is never emptied either, even by
+// a run that fails or dies: its replacement is built from second links. It touches nothing outside Base and its
 // .wardyn-quarantine.* siblings.
 func Setup(c SetupConfig) error {
 	if c.LockWait == 0 {
@@ -147,7 +149,11 @@ func (s *setup) lockOld(base int) (*os.File, bool, error) {
 	}
 	f := os.NewFile(uintptr(fd), path)
 	st, err := s.l.fstat(fd, path)
-	if err != nil || uint32(st.Mode)&unix.S_IFMT != unix.S_IFREG {
+	if err != nil {
+		f.Close()
+		return nil, false, err
+	}
+	if uint32(st.Mode)&unix.S_IFMT != unix.S_IFREG {
 		return f, false, nil
 	}
 	if err := flockWait(f, s.c.LockWait); err != nil {
@@ -228,21 +234,29 @@ type source struct {
 	parent *os.File // nil: Base's entries directory, never removed
 	name   string   // its name in parent
 	names  []string // its entries
+	st     unix.Stat_t
 }
 
 // entries makes Base's entries directory exact. An exact one is never
-// drained: every other source's entries merge into it. Otherwise every entry
-// found moves into a staging directory that stays root-only 0700 until all
-// are in it and counted, which then becomes 1777 and takes the final name in
-// one rename. A source left empty is removed.
+// drained: every other source's entries merge into it. One a helper accepts
+// (root-owned and sticky) is never drained either: the sources merge into it
+// and relink replaces it. Otherwise (no helper counts it) every entry found
+// moves into a staging directory that stays root-only 0700 until all are in
+// it and counted, which then becomes 1777 and takes the final name in one
+// rename. A source left empty is removed.
 func (s *setup) entries() error {
-	dst, exactDst, srcs, err := s.entrySources()
+	dst, srcs, err := s.entrySources()
 	if err != nil {
 		return err
 	}
-	if exactDst {
+	switch {
+	case dst != nil && exact(dst.st, unix.S_IFDIR, 0o1777):
 		err = s.merge(dst, srcs)
-	} else {
+	case dst != nil && dst.st.Uid == 0 && uint32(dst.st.Mode)&unix.S_ISVTX != 0: // checkEntriesDir's rule
+		if err = s.merge(dst, srcs); err == nil {
+			err = s.relink(dst)
+		}
+	default:
 		err = s.stage(dst, srcs)
 	}
 	if err != nil {
@@ -287,6 +301,86 @@ func (s *setup) quarantineEntry(src *source, n, dst string) error {
 	defer qf.Close()
 	s.c.Logf("%s holds %s already; the copy in %s moves to %s", dst, n, src.f.Name(), q)
 	return renameNoReplace(int(src.f.Fd()), n, int(qf.Fd()), n)
+}
+
+// linkPrefix names the directory relink builds a replacement in, and where
+// the replaced directory lands. It only ever holds second links to entries
+// the entries directory holds, or held until their owners released them, so
+// every run discards it and none carries it forward. Earlier installers do
+// not read it: it does not start with "."+entriesName+".".
+const linkPrefix = "." + entriesName + "-link."
+
+// relink replaces dst, an entries directory a helper accepts that is not
+// exact, without taking an entry out of it: each is hard-linked into a new
+// root-only directory, which, once all are in it and counted, becomes 1777
+// and swaps with dst in one rename. Until the swap every helper, of any
+// release, counts dst whole; after it the same files are in the new one. A
+// run that fails or dies first leaves dst as it was. The old directory, now
+// under linkPrefix, is discarded.
+func (s *setup) relink(dst *source) error {
+	tmp, err := os.MkdirTemp(s.c.Base, linkPrefix)
+	if err != nil {
+		return err
+	}
+	tf, _, err := s.openDir(int(s.base.Fd()), filepath.Base(tmp), tmp)
+	if err != nil {
+		return err
+	}
+	s.files = append(s.files, tf)
+	if _, err := dst.f.Seek(0, io.SeekStart); err != nil { // the merge added names
+		return err
+	}
+	names, err := dst.f.Readdirnames(-1)
+	if err != nil {
+		return err
+	}
+	linked := 0
+	for _, n := range names {
+		if s.c.beforeMove != nil {
+			if err := s.c.beforeMove(filepath.Join(tmp, n)); err != nil {
+				return err
+			}
+		}
+		switch err := unix.Linkat(int(dst.f.Fd()), n, int(tf.Fd()), n, 0); {
+		case err == nil:
+			linked++
+		case errors.Is(err, unix.ENOENT): // its owner removed it
+		default:
+			return fmt.Errorf("admission: linking %s into %s: %w", filepath.Join(dst.f.Name(), n), tmp, err)
+		}
+	}
+	if got, err := readNames(tmp); err != nil || len(got) != linked {
+		return notInstalled("linking the macOS VM entries found %d of %d (%v)", len(got), linked, err)
+	}
+	if err := s.made(nil, tmp, os.ModeSticky|0o777); err != nil {
+		return err
+	}
+	if err := renameSwap(int(s.base.Fd()), filepath.Base(tmp), entriesName); err != nil {
+		return err
+	}
+	s.discard(filepath.Base(tmp))
+	return nil
+}
+
+// discard empties and removes name, a linkPrefix directory in Base.
+func (s *setup) discard(name string) {
+	f, _, err := s.rootDir(s.base, name)
+	if f == nil {
+		if err != nil {
+			s.c.Logf("left %s: %v", filepath.Join(s.base.Name(), name), err)
+		}
+		return
+	}
+	names, err := dirNames(f)
+	if err != nil {
+		s.c.Logf("left some of %s: %v", f.Name(), err)
+	}
+	for _, n := range names {
+		if err := unix.Unlinkat(int(f.Fd()), n, 0); err != nil {
+			s.c.Logf("left %s: %v", filepath.Join(f.Name(), n), err)
+		}
+	}
+	_ = unix.Unlinkat(int(s.base.Fd()), name, unix.AT_REMOVEDIR)
 }
 
 // stage moves dst's entries (dst is nil when there is no entries directory to
@@ -344,46 +438,58 @@ func (s *setup) move(src *source, n string, to *os.File) error {
 	return renameNoReplace(int(src.f.Fd()), n, int(to.Fd()), n)
 }
 
-// entrySources opens Base's entries directory (nil if it does not open as a
-// directory; exact says whether it is) and every other directory that may
-// hold entries: staging directories a failed run left, and the entries
-// directories in earlier quarantines, in Base and beside it (a rebuilt
-// base's). Each is opened from its parent's descriptor one component at a
-// time, never through a link, and every component must be a root-owned
-// directory by its fstat; one whose device and inode were seen already
-// (Base's entries directory first) is skipped.
-func (s *setup) entrySources() (*source, bool, []*source, error) {
+// entrySources opens Base's entries directory (nil if what is there is not a
+// directory, a link, or nothing; any other failure to open or fstat it is an
+// error) and every other directory that may hold entries: staging
+// directories a failed run left, and the entries directories in earlier
+// quarantines, in Base and beside it (a rebuilt base's). A linkPrefix
+// directory holds none, and is discarded. Each is opened from its parent's
+// descriptor one component at a time, never through a link, and every
+// component must be a root-owned directory by its fstat; one whose device
+// and inode were seen already (Base's entries directory first) is skipped.
+func (s *setup) entrySources() (*source, []*source, error) {
 	bfd, err := s.l.walkDir(s.c.Base)
 	if err != nil {
-		return nil, false, nil, err
+		return nil, nil, err
 	}
 	s.base = os.NewFile(uintptr(bfd), s.c.Base)
 	s.files = append(s.files, s.base)
 	if st, err := s.l.fstat(bfd, s.c.Base); err != nil || [2]uint64{uint64(st.Dev), st.Ino} != s.id {
-		return nil, false, nil, notInstalled("%s changed while the installer set it up", s.c.Base)
+		return nil, nil, notInstalled("%s changed while the installer set it up", s.c.Base)
 	}
 	pfd, err := s.l.walkDir(filepath.Dir(s.c.Base))
 	if err != nil {
-		return nil, false, nil, err
+		return nil, nil, err
 	}
 	parent := os.NewFile(uintptr(pfd), filepath.Dir(s.c.Base))
 	s.files = append(s.files, parent)
 
 	seen := map[[2]uint64]bool{}
 	var dst *source
-	exactDst := false
-	if f, st, err := s.openDir(bfd, entriesName, filepath.Join(s.c.Base, entriesName)); err == nil {
+	path := filepath.Join(s.c.Base, entriesName)
+	switch f, st, err := s.openDir(bfd, entriesName, path); {
+	case err == nil:
 		s.files = append(s.files, f)
-		dst, exactDst = &source{f: f}, exact(st, unix.S_IFDIR, 0o1777)
+		dst = &source{f: f, st: st}
 		seen[[2]uint64{uint64(st.Dev), st.Ino}] = true
 		if dst.names, err = f.Readdirnames(-1); err != nil {
-			return nil, false, nil, err
+			return nil, nil, err
 		}
+	case errors.Is(err, unix.ENOENT), errors.Is(err, unix.ENOTDIR), errors.Is(err, unix.ELOOP):
+		// none, or not a directory (a file, a link): stage replaces it
+	default: // one that cannot be read may hold entries: never replaced
+		return nil, nil, notInstalled("%s cannot be inspected (%v)", path, err)
 	}
 	var srcs []*source
-	var readErr error
+	var readErr error // the first source that cannot be inspected or read
+	keep := func(err error) {
+		if err != nil && readErr == nil {
+			readErr = err
+		}
+	}
 	add := func(at *os.File, name string) {
-		f, id := s.rootDir(at, name)
+		f, id, err := s.rootDir(at, name)
+		keep(err)
 		switch {
 		case f == nil:
 		case seen[id]:
@@ -391,63 +497,77 @@ func (s *setup) entrySources() (*source, bool, []*source, error) {
 		default:
 			seen[id] = true
 			names, err := f.Readdirnames(-1)
-			if err != nil && readErr == nil {
-				readErr = err
-			}
+			keep(err)
 			srcs = append(srcs, &source{f: f, parent: at, name: name, names: names})
 		}
 	}
-	for _, n := range dirNames(s.base) {
+	names, err := dirNames(s.base)
+	keep(err)
+	for _, n := range names {
 		switch {
+		case strings.HasPrefix(n, linkPrefix):
+			s.discard(n)
 		case strings.HasPrefix(n, "."+entriesName+"."):
 			add(s.base, n)
 		case strings.HasPrefix(n, quarantinePrefix):
-			if q, _ := s.rootDir(s.base, n); q != nil {
+			q, _, err := s.rootDir(s.base, n)
+			keep(err)
+			if q != nil {
 				add(q, entriesName)
 			}
 		}
 	}
-	for _, n := range dirNames(parent) {
+	names, err = dirNames(parent)
+	keep(err)
+	for _, n := range names {
 		if !strings.HasPrefix(n, quarantinePrefix) {
 			continue
 		}
-		if q, _ := s.rootDir(parent, n); q != nil {
-			if w, _ := s.rootDir(q, filepath.Base(s.c.Base)); w != nil {
-				add(w, entriesName)
-			}
+		q, _, err := s.rootDir(parent, n)
+		keep(err)
+		if q == nil {
+			continue
+		}
+		w, _, err := s.rootDir(q, filepath.Base(s.c.Base))
+		keep(err)
+		if w != nil {
+			add(w, entriesName)
 		}
 	}
-	return dst, exactDst, srcs, readErr
+	return dst, srcs, readErr
 }
 
 const quarantinePrefix = ".wardyn-quarantine."
 
 // dirNames lists the directory open at f, sorted.
-func dirNames(f *os.File) []string {
-	names, _ := f.Readdirnames(-1)
+func dirNames(f *os.File) ([]string, error) {
+	names, err := f.Readdirnames(-1)
 	sort.Strings(names)
-	return names
+	return names, err
 }
 
 // rootDir opens name in at, never following a link, and returns it with its
-// device and inode if it is a root-owned directory by its fstat. Anything
-// else (a link, a login's directory) is skipped and logged; nothing there is
-// skipped quietly.
-func (s *setup) rootDir(at *os.File, name string) (*os.File, [2]uint64) {
+// device and inode if it is a root-owned directory by its fstat. Nothing
+// there is skipped quietly; anything else (a link, a login's directory, not
+// a directory) is skipped and logged. One that cannot be opened or fstatted
+// for any other reason may hold entries, so it is an error, not a skip.
+func (s *setup) rootDir(at *os.File, name string) (*os.File, [2]uint64, error) {
 	path := filepath.Join(at.Name(), name)
 	f, st, err := s.openDir(int(at.Fd()), name, path)
-	if err == nil && st.Uid != 0 {
+	switch {
+	case err == nil && st.Uid != 0:
 		f.Close()
-		err = errors.New("not owned by root")
+		s.c.Logf("skipped %s: not a root-owned directory (not owned by root)", path)
+	case err == nil:
+		s.files = append(s.files, f)
+		return f, [2]uint64{uint64(st.Dev), st.Ino}, nil
+	case errors.Is(err, unix.ENOENT):
+	case errors.Is(err, unix.ENOTDIR), errors.Is(err, unix.ELOOP):
+		s.c.Logf("skipped %s: not a root-owned directory (%v)", path, err)
+	default:
+		return nil, [2]uint64{}, notInstalled("%s cannot be inspected (%v)", path, err)
 	}
-	if err != nil {
-		if !errors.Is(err, unix.ENOENT) {
-			s.c.Logf("skipped %s: not a root-owned directory (%v)", path, err)
-		}
-		return nil, [2]uint64{}
-	}
-	s.files = append(s.files, f)
-	return f, [2]uint64{uint64(st.Dev), st.Ino}
+	return nil, [2]uint64{}, nil
 }
 
 // openDir opens name in the directory at without following a link, and

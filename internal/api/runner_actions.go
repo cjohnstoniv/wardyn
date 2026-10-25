@@ -117,6 +117,7 @@ func (s *Server) runnerEndpoint(id uuid.UUID) runnerEndpoint {
 	ep.sub = remote.New(id.String(), ep.link, remote.Options{Queue: func(ctx context.Context, kind types.RunnerActionKind, ref string) error {
 		return s.queueRunnerTeardown(ctx, id, kind, ref)
 	}, Dispatch: s.runnersEnabled, Relay: s.acceptRelay, OutputAccepted: s.runnerOutputAccepted,
+		MacOSVMDisks: func(ctx context.Context, reports []runner.MacOSVMDisk) { s.runnerMacOSVMDisks(ctx, id, reports) },
 		ExecutionGeneration: func(ctx context.Context, method, ref string) (uuid.UUID, error) {
 			return s.dispatchedGeneration(ctx, id, method, ref)
 		}})

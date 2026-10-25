@@ -331,7 +331,8 @@
 # docs/AUDIT-ACTIONS.md 54053 adds 28 over 54025, measured (0.10 DR-0436 review fix): runner.event.refuse joins a run trail only for this runner's run; `claimed_run_id`.
 # docs/AUDIT-ACTIONS.md 54081 adds 28 over 54053, measured (0.10 DR-0436 r3): a refused spool record next in its stream moves the run's spool cursor.
 # docs/AUDIT-ACTIONS.md=54175 adds 94 over 54081, measured (0.10 SANDBOX-GONE, #3667): reason gone on the run.lost row and its endGoneRun citation.
-docs/AUDIT-ACTIONS.md=54175 share=8
+# docs/AUDIT-ACTIONS.md=54188 adds 13 over 54175, measured (0.10 SANDBOX-GONE-LIVE, #3667 F1): the run.lost gone reason also names the status check over a live session.
+docs/AUDIT-ACTIONS.md=54188 share=8
 # docs/AUDIT-ACTIONS.md 50827 = ours 50175 + theirs 50556 - base 49904 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.

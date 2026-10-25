@@ -374,8 +374,11 @@ func (l *Ledger) load() (*view, error) {
 			continue
 		}
 		fi, err := de.Info()
-		if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
 			continue // gone since the listing
+		}
+		if err != nil { // one that cannot be inspected may be live: never skipped
+			return nil, err
 		}
 		e, ok := readEntry(filepath.Join(l.c.Dir, name), fi)
 		if !ok {

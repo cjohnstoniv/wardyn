@@ -280,6 +280,8 @@ type SweepArgs struct {
 type SweepResult struct {
 	Candidates []uuid.UUID `json:"candidates,omitempty"`
 	Removed    int         `json:"removed"`
+	// MacOSVMDisks is every macOS VM disk report the runner still keeps; an older runner sends none.
+	MacOSVMDisks []runner.MacOSVMDisk `json:"macos_vm_disks,omitempty"`
 }
 
 // RecoverOutputArgs are recover_output's arguments. Gap says the org takes a copy whose first bytes

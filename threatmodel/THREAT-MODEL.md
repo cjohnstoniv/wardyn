@@ -1,6 +1,6 @@
 # Wardyn Published Threat Model
 
-**Version:** v2 (tracks the shipped codebase; last reviewed at v0.10.0-rc.1)
+**Version:** v2 (tracks the shipped codebase; last reviewed at v0.10.0-rc.2)
 **Status:** published alongside the codebase.
 
 **Implementation status markers.** Controls are tagged inline: **[shipped]**
@@ -2931,6 +2931,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     - The setup account and its random password stay in every run's guest. No one holds the password after preparing, and Remote Login is proved off. The guest may also hold it in its auto-login file until stage 1 overwrites that. A one-time code from a setup by hand is replaced by stage 1's first step.
     - A Mac runner reports its macOS VM status to its own organisation as fixed codes and numbers: the preparing step, percent and download rate; a wait, failure or host-check code with free GB; and whether it runs in a GUI login session, as yes or no. No user or account name is sent. The base's error is the one free text: the runner replaces its login's home folder with `~`, but an error from Apple's framework, `softwareupdate` or the guest may still name another path.
     - The macOS VM base's pinned guest tools are checked against SHA-256 values compiled into the runner, so the remaining trust is the supply chain at the time each pin was chosen.
+    - A macOS VM run's page says whether its disk was removed from the Mac, from its runner's report. The report is a state and a reason from closed code sets. It is kept only for that runner's own macOS VM runs and is shown as fixed console strings. It is the runner's word, so a compromised runner can claim a removal it did not make.
 
 97. **A runner can make its organisation write audit rows by sending events it will refuse; the rows are capped, and a refused event is acknowledged and not kept [0.10].** ([`internal/api/runner_event_refuse.go#Server.classifyRunnerEvent`](../internal/api/runner_event_refuse.go), [`internal/store/store_runner_event_refuse.go#PG.RefuseRunnerEvent`](../internal/store/store_runner_event_refuse.go).)
     - The cap is 32 `runner.event.refuse` rows per runner per hour on each replica, then one `suppressed` row; it is held in memory, so a restart re-arms it.

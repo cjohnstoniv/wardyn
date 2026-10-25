@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -915,4 +916,332 @@ func TestSetupRemovesEmptyStaging(t *testing.T) {
 	if m, _ := filepath.Glob(filepath.Join(filepath.Dir(r.dir), "."+entriesName+".*")); len(m) != 0 {
 		t.Fatalf("staging directories left: %v", m)
 	}
+}
+
+// drift makes r's entries directory one a helper accepts (root-owned, sticky)
+// that is not exact: root:wheel 03777, or root 01777 with group staff. It
+// returns the fstat Setup runs with.
+func drift(t *testing.T, r *rig, kind string) func(int, string) (unix.Stat_t, error) {
+	t.Helper()
+	was := ino(t, r.dir)
+	if kind == "03777" {
+		// macOS gives a new directory its parent's group (wheel under /private/tmp), and chmod drops setgid for
+		// a group the caller is not in; Linux already gives it the caller's own group.
+		if err := os.Chown(r.dir, -1, os.Getgid()); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(r.dir, os.ModeSticky|os.ModeSetgid|0o777); err != nil {
+			t.Fatal(err)
+		}
+		if fi, err := os.Lstat(r.dir); err != nil || fi.Mode()&os.ModeSetgid == 0 {
+			t.Fatalf("setgid did not stick on %s (%v)", r.dir, err)
+		}
+	}
+	return func(fd int, name string) (unix.Stat_t, error) {
+		st, err := r.fs.fstat(fd, name)
+		if kind == "group" && name == r.dir && st.Ino == was {
+			st.Gid = 20
+		}
+		return st, err
+	}
+}
+
+// setupDies runs Setup, which may end its goroutine mid-run (runtime.Goexit,
+// a process death: no error path runs, and closing its files drops the flock).
+func setupDies(c SetupConfig) (err error, died bool) {
+	done := make(chan struct{})
+	died = true
+	go func() {
+		defer close(done)
+		err = Setup(c)
+		died = false
+	}()
+	<-done
+	return err, died
+}
+
+// DR-0431 residual: a migration of a helper-accepted entries directory that is
+// not exact fails, or the installer dies, after one entry is moved. Before
+// any retry a fresh helper still counts both entries and refuses a third VM;
+// the retry then ends with each entry exactly once.
+func TestSetupFailedMigrationKeepsEveryEntryCounted(t *testing.T) {
+	for _, kind := range []string{"03777", "group"} {
+		for _, death := range []bool{false, true} {
+			what := fmt.Sprintf("%s, died %v", kind, death)
+			t.Run(what, func(t *testing.T) {
+				r := newRig(t, bigMac())
+				names := admitN(t, r, 2)
+				fstat := drift(t, r, kind)
+				calls := 0
+				cut := func(c *SetupConfig) {
+					c.Fstat = fstat
+					c.beforeMove = func(string) error {
+						if calls++; calls < 2 {
+							return nil
+						}
+						if death {
+							runtime.Goexit()
+						}
+						return errors.New("planted failure")
+					}
+				}
+				err, died := setupDies(r.setupCfg(cut))
+				if calls != 2 || died != death || (!death && err == nil) {
+					t.Fatalf("%s: Setup stopped after %d moves (died %v, err %v)", what, calls, died, err)
+				}
+				if n := counted(t, r); n != 2 {
+					t.Fatalf("%s: before the retry a fresh helper counts %d of 2 entries", what, n)
+				}
+				if _, err := r.open(t, 503, "fresh").Admit(runReq(8 * gib)); !IsRefusal(err) {
+					t.Fatalf("%s: before the retry a fresh helper admitted a third VM (%v)", what, err)
+				}
+				if err := Setup(r.setupCfg(func(c *SetupConfig) { c.Fstat = fstat })); err != nil {
+					t.Fatalf("%s: the retry: %v", what, err)
+				}
+				if n, m := counted(t, r), everyEntry(t, r, names); n != 2 || m != 2 {
+					t.Fatalf("%s: after the retry a helper counts %d, and %d copies of 2 entries are on disk", what, n, m)
+				}
+				if m, _ := filepath.Glob(filepath.Join(filepath.Dir(r.dir), "."+entriesName+"-link.*")); len(m) != 0 {
+					t.Fatalf("%s: link directories left: %v", what, m)
+				}
+				wantEntries(t, r, names, what)
+				wantLayout(t, r)
+			})
+		}
+	}
+}
+
+// DR-0431 residual: an entry its owner releases between a failed migration and
+// the retry stays released.
+func TestSetupRetryNeverResurrectsAReleasedEntry(t *testing.T) {
+	r := newRig(t, bigMac())
+	var ls []*Ledger
+	var es []Entry
+	for i := 0; i < 2; i++ {
+		l := r.open(t, 501+i, fmt.Sprintf("r%d", i))
+		e, err := l.Admit(runReq(8 * gib))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ls, es = append(ls, l), append(es, e)
+	}
+	fstat := drift(t, r, "03777")
+	first, calls := "", 0
+	fail := func(c *SetupConfig) {
+		c.Fstat = fstat
+		c.beforeMove = func(dst string) error {
+			if calls++; calls == 1 {
+				first = filepath.Base(dst)
+				return nil
+			}
+			return errors.New("planted failure")
+		}
+	}
+	if err := Setup(r.setupCfg(fail)); err == nil {
+		t.Fatal("Setup succeeded")
+	}
+	if n := counted(t, r); n != 2 {
+		t.Fatalf("before the release a helper counts %d of 2 entries", n)
+	}
+	gone, kept := 0, 1
+	if es[1].file == first {
+		gone, kept = 1, 0
+	}
+	if es[gone].file != first {
+		t.Fatalf("the first entry moved, %s, is neither admitted one", first)
+	}
+	if err := ls[gone].Release(es[gone].ID, Destroyed{Stopped: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Setup(r.setupCfg(func(c *SetupConfig) { c.Fstat = fstat })); err != nil {
+		t.Fatal(err)
+	}
+	if n := counted(t, r); n != 1 {
+		t.Fatalf("after the retry a helper counts %d, not the 1 entry left", n)
+	}
+	if n := everyEntry(t, r, []string{first}); n != 0 {
+		t.Fatalf("the released entry %s is back: %d copies on disk", first, n)
+	}
+	wantEntries(t, r, []string{es[kept].file}, "the entry still held")
+	wantLayout(t, r)
+}
+
+// Review DR-0431 note: an fstat of the lock that fails is an error, before
+// anything is replaced.
+func TestSetupLockFstatErrorFailsClosed(t *testing.T) {
+	r := newRig(t, bigMac())
+	was := ino(t, r.lock())
+	fail := func(c *SetupConfig) {
+		c.Fstat = func(fd int, name string) (unix.Stat_t, error) {
+			if name == r.lock() {
+				return unix.Stat_t{}, unix.EIO
+			}
+			return r.fs.fstat(fd, name)
+		}
+	}
+	if err := Setup(r.setupCfg(fail)); !errors.Is(err, unix.EIO) {
+		t.Fatalf("Setup with the lock's fstat failing: %v", err)
+	}
+	if ino(t, r.lock()) != was {
+		t.Fatal("Setup replaced the lock it could not fstat")
+	}
+}
+
+// DR-0440: an entries directory whose fstat fails once (EIO) may hold
+// entries, so Setup refuses before it changes anything; a fresh helper still
+// counts both entries, and the retry keeps them.
+func TestSetupEntriesInspectErrorFailsClosed(t *testing.T) {
+	r := newRig(t, bigMac())
+	names := admitN(t, r, 2)
+	dirIno, lockIno := ino(t, r.dir), ino(t, r.lock())
+	failed := false
+	once := func(c *SetupConfig) {
+		c.Fstat = func(fd int, name string) (unix.Stat_t, error) {
+			if name == r.dir && !failed {
+				failed = true
+				return unix.Stat_t{}, unix.EIO
+			}
+			return r.fs.fstat(fd, name)
+		}
+	}
+	if err := Setup(r.setupCfg(once)); err == nil || !failed {
+		t.Fatalf("Setup with the entries directory's fstat failing: %v (failed %v)", err, failed)
+	}
+	if ino(t, r.dir) != dirIno || ino(t, r.lock()) != lockIno {
+		t.Fatal("a refused Setup replaced the entries directory or the lock")
+	}
+	if got := entryFiles(t, r.dir); len(got) != len(names) {
+		t.Fatalf("the entries directory holds %v, not %v", got, names)
+	}
+	wantEntries(t, r, names, "a refused Setup")
+	if n := counted(t, r); n != 2 {
+		t.Fatalf("before the retry a fresh helper counts %d of 2 entries", n)
+	}
+	if _, err := r.open(t, 503, "fresh").Admit(runReq(8 * gib)); !IsRefusal(err) {
+		t.Fatalf("before the retry a fresh helper admitted a third VM (%v)", err)
+	}
+	if err := Setup(r.setupCfg()); err != nil {
+		t.Fatal(err)
+	}
+	if n := counted(t, r); n != 2 {
+		t.Fatalf("after the retry a helper counts %d of 2 entries", n)
+	}
+	wantEntries(t, r, names, "the retry after a failed inspection")
+	wantLayout(t, r)
+}
+
+// DR-0440: what is at the entries name and is not a directory (a file, a
+// link) is still replaced: it moves to a quarantine, nothing it names is
+// touched, and the layout is made.
+func TestSetupReplacesEntriesThatAreNotADirectory(t *testing.T) {
+	for _, kind := range []string{"file", "link"} {
+		r := newRig(t, bigMac())
+		target := filepath.Join(t.TempDir(), "target")
+		if err := os.WriteFile(target, []byte("keep"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_ = os.RemoveAll(r.dir)
+		var err error
+		if kind == "file" {
+			err = os.WriteFile(r.dir, []byte("planted"), 0o644)
+		} else {
+			err = os.Symlink(target, r.dir)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := Setup(r.setupCfg()); err != nil {
+			t.Fatalf("%s at the entries name: %v", kind, err)
+		}
+		q, _ := filepath.Glob(filepath.Join(filepath.Dir(r.dir), ".wardyn-quarantine.*", entriesName))
+		if len(q) != 1 || readFile(t, target) != "keep" {
+			t.Fatalf("%s at the entries name: quarantined %v, target %q", kind, q, readFile(t, target))
+		}
+		wantLayout(t, r)
+	}
+}
+
+// A migration source that cannot be inspected (EIO on its fstat) may hold
+// entries, so Setup refuses rather than skip it. The witness: a base that is
+// not exact is rebuilt, its entries directory now in a quarantine beside it.
+// Before the retry a fresh helper refuses (the new base has no lock yet), never
+// counting 0; the retry carries both entries.
+func TestSetupSourceInspectErrorFailsClosed(t *testing.T) {
+	r := newRig(t, bigMac())
+	names := admitN(t, r, 2)
+	base := filepath.Dir(r.dir)
+	oldBase := ino(t, base)
+	failed := false
+	cfg := func(eio bool) func(*SetupConfig) {
+		return func(c *SetupConfig) {
+			c.Fstat = func(fd int, name string) (unix.Stat_t, error) {
+				st, err := r.fs.fstat(fd, name)
+				if name == base && st.Ino == oldBase {
+					setPerm(&st.Mode, 0o700) // root-only, but not the exact 0755
+				}
+				q := filepath.Base(filepath.Dir(filepath.Dir(name)))
+				if eio && !failed && filepath.Base(name) == entriesName && strings.HasPrefix(q, quarantinePrefix) {
+					failed = true
+					return unix.Stat_t{}, unix.EIO
+				}
+				return st, err
+			}
+		}
+	}
+	if err := Setup(r.setupCfg(cfg(true))); err == nil || !failed {
+		t.Fatalf("Setup with a source's fstat failing: %v (failed %v)", err, failed)
+	}
+	if err := r.openErr(); err == nil {
+		if n := counted(t, r); n != 2 {
+			t.Fatalf("before the retry a fresh helper counts %d of 2 entries", n)
+		}
+	}
+	if n := everyEntry(t, r, names); n != 2 {
+		t.Fatalf("after the refused Setup %d copies of 2 entries are on disk", n)
+	}
+	if err := Setup(r.setupCfg(cfg(false))); err != nil {
+		t.Fatal(err)
+	}
+	if n := counted(t, r); n != 2 {
+		t.Fatalf("after the retry a helper counts %d of 2 entries", n)
+	}
+	wantEntries(t, r, names, "the retry after a failed source inspection")
+	wantLayout(t, r)
+}
+
+// Untrusted preplants are still skipped, not errors: a link and a file at a
+// quarantine's entries name, and a login's quarantine beside the base.
+func TestSetupSkipsUntrustedSources(t *testing.T) {
+	r := newRig(t, bigMac())
+	base := filepath.Dir(r.dir)
+	elsewhere := t.TempDir()
+	if err := os.WriteFile(filepath.Join(elsewhere, "e-link.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{".wardyn-quarantine.a", ".wardyn-quarantine.b"} {
+		if err := os.Mkdir(filepath.Join(base, q), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(elsewhere, filepath.Join(base, ".wardyn-quarantine.a", entriesName)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, ".wardyn-quarantine.b", entriesName), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	login := filepath.Join(filepath.Dir(base), ".wardyn-quarantine.c", "Wardyn", entriesName)
+	if err := os.MkdirAll(login, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r.fs.set(filepath.Dir(filepath.Dir(login)), 501)
+	if err := os.WriteFile(filepath.Join(login, "e-login.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Setup(r.setupCfg()); err != nil {
+		t.Fatalf("untrusted sources failed the install: %v", err)
+	}
+	if got := entryFiles(t, r.dir); len(got) != 0 {
+		t.Fatalf("entries carried from untrusted sources: %v", got)
+	}
+	wantLayout(t, r)
 }

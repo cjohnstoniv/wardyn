@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -39,6 +41,7 @@ type Fake struct {
 	// PauseGens is the generation of each pause_agent and resume_agent, and FencedPause their answer.
 	PauseGens   []int64
 	FencedPause bool
+	disks       map[string]runner.MacOSVMDisk // SetMacOSVMDisk's reports, by local ref
 }
 
 // NewFake offers CC1 and CC2.
@@ -46,6 +49,7 @@ func NewFake() *Fake {
 	return &Fake{
 		Support:   substrate.ClassSupport{Classes: []types.ConfinementClass{types.CC1, types.CC2}, StructuralEgress: true},
 		sandboxes: map[string]uuid.UUID{}, execed: map[string]bool{}, StoppedRef: map[string]bool{},
+		disks: map[string]runner.MacOSVMDisk{},
 	}
 }
 
@@ -58,7 +62,30 @@ var (
 	_ runner.DriveProber           = (*Fake)(nil)
 	_ runner.DriveLifecycleChecker = (*Fake)(nil)
 	_ runner.OutputRecoverer       = (*Fake)(nil)
+	_ runner.MacOSVMDiskReporter   = (*Fake)(nil)
 )
+
+// SetMacOSVMDisk stores ref's macOS VM disk report, as a driver's teardown or sweep would.
+func (f *Fake) SetMacOSVMDisk(ref string, d runner.MacOSVMDisk) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.disks[ref] = d
+}
+
+// MacOSVMDisk is runner.MacOSVMDiskReporter's: ref's report, left in place.
+func (f *Fake) MacOSVMDisk(ref string) (runner.MacOSVMDisk, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	d, ok := f.disks[ref]
+	return d, ok
+}
+
+// MacOSVMDisks is runner.MacOSVMDiskReporter's: every report set, nil when there is none.
+func (f *Fake) MacOSVMDisks() []runner.MacOSVMDisk {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Collect(maps.Values(f.disks))
+}
 
 func (f *Fake) note(verb, ref string) {
 	f.mu.Lock()

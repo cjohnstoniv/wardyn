@@ -85,6 +85,10 @@ type MacVMConfig struct {
 	// (macvm.SweepSockResidue); tests replace both.
 	sockFstat func(fd int, name string) (unix.Stat_t, error)
 	sweepSock func(l macvm.Layout, sockRoot string) ([]string, error)
+	// removeAll deletes a run directory (os.RemoveAll), and helperWait bounds the wait for a helper's exit
+	// (zero is macHelperExitWait); tests replace both.
+	removeAll  func(path string) error
+	helperWait time.Duration
 }
 
 // runDir is the run's directory, named by its run key (the run id's first 12 hex digits).
@@ -117,6 +121,9 @@ func (d *Driver) EnableMacVM(c *MacVMConfig) error {
 		}
 		if c.sweepSock == nil {
 			c.sweepSock = macvm.SweepSockResidue
+		}
+		if c.removeAll == nil {
+			c.removeAll = os.RemoveAll
 		}
 	}
 	d.macCfg.Store(c)
@@ -815,6 +822,7 @@ func (d *Driver) destroyMacVM(ctx context.Context, v *vmRun, entryID string, gra
 		log.Warn("docker: the macOS VM helper did not exit; killing it")
 		d.endMacVMHelper(v, syscall.SIGKILL)
 		if !d.waitMacVMHelperExit(ctx, c, e) {
+			d.recordMacOSVMDisk(v.runID, runner.MacOSVMDiskKept, runner.MacOSVMDiskHelperAlive)
 			if ctx.Err() != nil {
 				log.Error("docker: the macOS VM destroy ran out of time before the helper exited; its ledger entry stays held")
 			} else {
@@ -823,10 +831,12 @@ func (d *Driver) destroyMacVM(ctx context.Context, v *vmRun, entryID string, gra
 			return
 		}
 	}
-	if err := os.RemoveAll(v.dir); err != nil {
+	if err := c.removeAll(v.dir); err != nil {
 		log.Warn("docker: delete a macOS VM run directory (pending; the orphan sweep retries)", slog.String("err", err.Error()))
+		d.recordMacOSVMDisk(v.runID, runner.MacOSVMDiskKept, runner.MacOSVMDiskRemoveFailed)
 		return
 	}
+	d.recordMacOSVMDisk(v.runID, runner.MacOSVMDiskRemoved, "")
 	c.sweepSockResidue()
 	var err error
 	if e, ok := c.entry(entryID); stopped || ok && e.HelperPID == 0 {
@@ -842,7 +852,7 @@ func (d *Driver) destroyMacVM(ctx context.Context, v *vmRun, entryID string, gra
 
 // waitMacVMHelperExit waits for e's helper to leave the process table.
 func (d *Driver) waitMacVMHelperExit(ctx context.Context, c *MacVMConfig, e admission.Entry) bool {
-	deadline := time.Now().Add(macHelperExitWait)
+	deadline := time.Now().Add(cmp.Or(c.helperWait, macHelperExitWait))
 	for c.helperAlive(e) {
 		if time.Now().After(deadline) || ctx.Err() != nil {
 			return false
@@ -905,11 +915,12 @@ func (d *Driver) sweepMacVMOrphans(ctx context.Context, cutoff time.Time, isOrph
 			_ = cc.Close()
 			continue
 		}
-		if err := os.RemoveAll(dir); err != nil {
+		if err := c.removeAll(dir); err != nil {
 			errs = append(errs, fmt.Errorf("docker: remove orphaned macOS VM run directory %s: %w", runID, err))
 			continue
 		}
 		cleaned++
+		d.recordMacOSVMDisk(runID, runner.MacOSVMDiskRemoved, "") // a kept disk the sweep now removed
 		c.sweepSockResidue()
 		if err := c.Ledger.ReclaimOwn(cfg.LedgerEntry, dir); err != nil && !errors.Is(err, os.ErrNotExist) {
 			errs = append(errs, fmt.Errorf("docker: release orphaned macOS VM %s: %w", runID, err))
