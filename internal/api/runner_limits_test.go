@@ -380,7 +380,7 @@ func TestRunnerLimitsUpdateEndsTheRunnersSessionOnlyForAChangedPerRunPair(t *tes
 			case <-ctx.Done():
 				t.Fatal("the runner never reached READY")
 			}
-			start := testRunnerLimits()
+			start := *testRunnerLimits()
 			if c.start != nil {
 				start = *c.start
 			}
