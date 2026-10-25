@@ -139,6 +139,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   response carries.
 - A runner whose event the organisation refused for good no longer reconnects and drops every second: the refusal is
   acknowledged and audited (`runner.event.refuse`), and a refused action result closes its action (#3648).
+- A macOS VM run stuck in one start phase, such as connecting to the VM, now shows the same overdue advice as any
+  other start once the macOS start time has passed. Before, the phase row kept its spinner and said nothing. A start
+  that failed still shows its failure.
 
 ## [0.10.0-rc.1] — 2026-10-24
 
