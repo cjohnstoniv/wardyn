@@ -82,7 +82,10 @@ type Status struct {
 	MemoryMiB       uint64  `json:"memory_mib"`
 	Display         Display `json:"display"`
 	Network         string  `json:"network"`
-	Error           string  `json:"error,omitempty"`
+	// Listeners are the vsock ports the helper registered for this VM: a
+	// run's are 1024 and 1025 only; runnerd ends a run that shows another.
+	Listeners []uint32 `json:"vsock_listeners"`
+	Error     string   `json:"error,omitempty"`
 }
 
 // Event types.

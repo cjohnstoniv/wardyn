@@ -5,16 +5,19 @@
 # build-runner-pkg.sh — build the macOS installer package for the laptop runner (wardyn-runnerd).
 #
 #   scripts/build-runner-pkg.sh --version X.Y.Z[-rc.N] --arm64 <runnerd> --amd64 <runnerd> \
-#                               --cli-arm64 <wardyn> --cli-amd64 <wardyn> --out <file.pkg>
+#                               --cli-arm64 <wardyn> --cli-amd64 <wardyn> [--macvm <wardyn-macvm>] --out <file.pkg>
 #
 # Needs macOS (lipo, pkgbuild, productbuild; security, codesign, productsign and xcrun when signing),
 # so the release workflow runs it on a macOS runner. The package installs
 #   /usr/local/wardyn/bin/wardyn-runnerd           universal binary (+ /usr/local/bin symlink, by postinstall)
 #   /usr/local/wardyn/bin/wardyn                   the CLI, universal, signed like the runner (+ /usr/local/bin symlink)
+#   /usr/local/wardyn/bin/wardyn-macvm             the macOS VM helper (--macvm; arm64 only), carrying the one
+#                                                  com.apple.security.virtualization entitlement
 #   /usr/local/wardyn/bin/runnerd-managed-start    what the LaunchAgent runs
 #   /Library/LaunchAgents/com.wardyn.runnerd.managed.plist
 #   /usr/local/wardyn/share/wardyn-runnerd.mobileconfig   the managed-preferences profile template
 # from deploy/runner/macos/. It cannot register the runner: that needs a person's single-use token.
+# With --macvm, postinstall also makes the host-wide macOS VM admission ledger.
 #
 # SIGNING IS OPT-IN BY SECRET, each step on its own, and a missing secret logs a "skipped" line and goes on:
 #   binary   APPLE_DEVELOPER_ID_APPLICATION_P12_BASE64 + APPLE_DEVELOPER_ID_APPLICATION_P12_PASSWORD
@@ -24,6 +27,9 @@
 #   notarize APPLE_NOTARY_APPLE_ID + APPLE_NOTARY_TEAM_ID + APPLE_NOTARY_PASSWORD (an app-specific password);
 #            runs only when both certificates signed, then staples the ticket. DRY_RUN=true skips it (the
 #            package goes to Apple), and the release workflow sets that outside a vX.Y.Z tag run.
+# The helper is signed with its entitlement (deploy/runner/macos/wardyn-macvm.entitlements) either way: with the
+# Developer ID when the binary secrets are set, otherwise ad hoc (`codesign --sign -`), which the Virtualization
+# framework accepts for a local run. No IPSW or disk image is ever packaged.
 # Without them the package is unsigned: a person allows it in System Settings, Privacy & Security, Open
 # Anyway (macOS 15 and later; right-click, Open no longer works), and MDM can push it only through an
 # agent or script install (a Jamf or Kandji policy, `installer` run as root), not Apple's native app install.
@@ -31,7 +37,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC="${REPO_ROOT}/deploy/runner/macos"
-VERSION="" ARM64="" AMD64="" CLI_ARM64="" CLI_AMD64="" OUT=""
+VERSION="" ARM64="" AMD64="" CLI_ARM64="" CLI_AMD64="" MACVM="" OUT=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --version) VERSION="${2:?}"; shift 2 ;;
@@ -39,13 +45,18 @@ while [ $# -gt 0 ]; do
     --amd64) AMD64="${2:?}"; shift 2 ;;
     --cli-arm64) CLI_ARM64="${2:?}"; shift 2 ;;
     --cli-amd64) CLI_AMD64="${2:?}"; shift 2 ;;
+    --macvm) MACVM="${2:?}"; shift 2 ;;
     --out) OUT="${2:?}"; shift 2 ;;
-    *) echo "usage: $0 --version X.Y.Z[-rc.N] --arm64 <runnerd> --amd64 <runnerd> --cli-arm64 <wardyn> --cli-amd64 <wardyn> --out <file.pkg>" >&2; exit 2 ;;
+    *) echo "usage: $0 --version X.Y.Z[-rc.N] --arm64 <runnerd> --amd64 <runnerd> --cli-arm64 <wardyn> --cli-amd64 <wardyn> [--macvm <wardyn-macvm>] --out <file.pkg>" >&2; exit 2 ;;
   esac
 done
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]] || { echo "build-runner-pkg: --version must be X.Y.Z or X.Y.Z-rc.N" >&2; exit 2; }
 if [ ! -f "$ARM64" ] || [ ! -f "$AMD64" ] || [ ! -f "$CLI_ARM64" ] || [ ! -f "$CLI_AMD64" ] || [ -z "$OUT" ]; then
   echo "build-runner-pkg: --arm64, --amd64, --cli-arm64, --cli-amd64 (existing files) and --out are required" >&2
+  exit 2
+fi
+if [ -n "$MACVM" ] && [ ! -f "$MACVM" ]; then
+  echo "build-runner-pkg: --macvm must be an existing file" >&2
   exit 2
 fi
 PKG_VERSION="${VERSION%%-*}"   # pkgbuild versions are dotted numbers
@@ -90,6 +101,7 @@ install -m 0755 "${SRC}/runnerd-managed-start.sh" "${BIN}/runnerd-managed-start"
 install -m 0644 "${SRC}/com.wardyn.runnerd.managed.plist" "${ROOT}/Library/LaunchAgents/"
 install -m 0644 "${SRC}/wardyn-runnerd.mobileconfig" "${ROOT}/usr/local/wardyn/share/"
 chmod 0755 "${BIN}/wardyn-runnerd" "${BIN}/wardyn"
+[ -z "$MACVM" ] || install -m 0755 "$MACVM" "${BIN}/wardyn-macvm"
 # The licence and notices travel with the binary, in the images' /usr/share/doc/wardyn/ layout.
 DOC="${ROOT}/usr/local/wardyn/share/doc"
 mkdir -p "${DOC}/licenses"
@@ -102,10 +114,18 @@ if secret_set "${APP_SECRETS[@]}"; then
   for b in wardyn-runnerd wardyn; do
     codesign --force --options runtime --timestamp --sign "$APPLE_DEVELOPER_ID_APPLICATION_IDENTITY" "${BIN}/${b}"
   done
+  if [ -n "$MACVM" ]; then
+    codesign --force --options runtime --timestamp --entitlements "${SRC}/wardyn-macvm.entitlements" \
+      --sign "$APPLE_DEVELOPER_ID_APPLICATION_IDENTITY" "${BIN}/wardyn-macvm"
+  fi
   BIN_SIGNED=1
-  echo "build-runner-pkg: signed the wardyn-runnerd and wardyn binaries"
+  echo "build-runner-pkg: signed the wardyn-runnerd and wardyn binaries${MACVM:+ and the wardyn-macvm helper}"
 else
   echo "build-runner-pkg: binary signing skipped: APPLE_DEVELOPER_ID_APPLICATION_* secrets are not all set"
+  if [ -n "$MACVM" ]; then
+    codesign --force --entitlements "${SRC}/wardyn-macvm.entitlements" --sign - "${BIN}/wardyn-macvm"
+    echo "build-runner-pkg: signed the wardyn-macvm helper ad hoc, with its virtualization entitlement"
+  fi
 fi
 
 pkgbuild --root "$ROOT" --identifier com.wardyn.runnerd.pkg --version "$PKG_VERSION" \
