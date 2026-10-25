@@ -16,7 +16,7 @@ import (
 // installing the wardyn-guest-agent beside this helper.
 func TestPrepareDepsWiresStage1(t *testing.T) {
 	var o macvm.PrepareOptions
-	_ = prepareDeps(&o) // still refused: no prep network here
+	_ = prepareDeps(&o) // refused where this build cannot provision
 	if _, ok := o.Bootstrap.(*stage1.Bootstrapper); !ok {
 		t.Fatalf("Bootstrap = %T; want *stage1.Bootstrapper", o.Bootstrap)
 	}

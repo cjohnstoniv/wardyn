@@ -138,7 +138,7 @@ jobs:
               Makefile|.github/workflows/ci.yml) ui=true ;;
             esac
             case "$f" in
-              internal/macvm/*|cmd/wardyn-macvm/*|internal/vm/guestagent/*|cmd/wardyn-guest-agent/*|cmd/wardyn-runnerd/*|test/conformance/macvm/*|deploy/runner/macos/*|scripts/build-runner-pkg.sh|scripts/check-macvm-selectors.sh|go.mod|go.sum|.github/workflows/ci.yml) macos=true ;;
+              internal/macvm/*|internal/vmnet/*|cmd/wardyn-macvm/*|internal/vm/guestagent/*|cmd/wardyn-guest-agent/*|cmd/wardyn-runnerd/*|test/conformance/macvm/*|deploy/runner/macos/*|scripts/build-runner-pkg.sh|scripts/check-macvm-selectors.sh|go.mod|go.sum|.github/workflows/ci.yml) macos=true ;;
             esac
             if [ "$class" = backend ]; then
               case "$f" in *_test.go) ;; *) images=true ;; esac
@@ -1760,7 +1760,7 @@ jobs:
       - name: cgo build and vet
         run: |
           fail=0
-          pkgs=$(go list ./internal/macvm/... ./cmd/wardyn-macvm/ ./internal/vm/guestagent/ ./cmd/wardyn-guest-agent/) || fail=1
+          pkgs=$(go list ./internal/macvm/... ./internal/vmnet/... ./cmd/wardyn-macvm/ ./internal/vm/guestagent/ ./cmd/wardyn-guest-agent/) || fail=1
           [ -n "$pkgs" ] || fail=1
           for p in $pkgs; do
             go build -o /dev/null "$p" || fail=1
@@ -1774,7 +1774,7 @@ jobs:
           # The ledger walks every directory from / without following a link, and the runner's TMPDIR
           # (/var/folders/...) goes through the /var link: test under /private/tmp, as user and as root.
           export TMPDIR=/private/tmp
-          go test -count=1 -timeout 15m ./internal/macvm/... ./cmd/wardyn-macvm/ ./cmd/wardyn-guest-agent/
+          go test -count=1 -timeout 15m ./internal/macvm/... ./internal/vmnet/... ./cmd/wardyn-macvm/ ./cmd/wardyn-guest-agent/
           # The lock-open refusal again as root, the installer's uid: its socket case is one root still hits.
           go test -c -o "$RUNNER_TEMP/admission.test" ./internal/macvm/admission/
           sudo env TMPDIR="$TMPDIR" "$RUNNER_TEMP/admission.test" -test.count=1 -test.v -test.run '^TestSetupLockOpenErrorFailsClosed$' | tee "$RUNNER_TEMP/admission-root.out"
