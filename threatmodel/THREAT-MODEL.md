@@ -464,7 +464,7 @@ that ceiling down; each run receives only the minimal subset its task needs.
 - **[0.10, off by default]** A run with `machine_kind: macos_vm` is a macOS guest under Apple's Virtualization framework on a company-managed Mac ([`docs/operations/macos-vms.md`](../docs/operations/macos-vms.md)). B12 holds for it: the Mac's person is root there, and no control binds them.
 - **The boundary is Apple's hypervisor.** The guest's only NIC is wired to the run's own relay and proxy in Docker, with no NAT device. Egress, recording, the clipboard rules and audit are enforced outside the guest.
 - **What the guest can reach in our code.** Four bounded inputs: the guest agent session, the network bridge's frames, a strict RFB shim that ends the session on any server message it does not know, and a DHCP responder that answers one fixed lease. The helper runs as the logged-in user, never root, with one virtualization entitlement.
-- **Inside the guest.** The agent is a standard user, not an admin. The setup account stays in the base with a random password the helper held in memory only, and Remote Login is turned off and proved off on a live guest before the base is published. Screen Sharing is reachable only through the helper, by a person who already holds that run's desktop ticket. Nothing here relies on the guest's own protections.
+- **Inside the guest.** The agent is a standard user, not an admin. The setup account and its random password stay in every run's guest. The helper held the password in memory only, so no one holds it after preparing, and Remote Login is proved off on a live guest before the base is published. Screen Sharing is reachable only through the helper, by a person who already holds that run's desktop ticket. Nothing here relies on the guest's own protections.
 - **Managed-Mac gate.** The run is placed only on a runner whose trust class is `managed_device` and whose posture says `mdm_managed` from the MDM's file. Both are assertions, and no device-certificate check exists yet (residuals #90 and #96).
 - **Licence and image.** The guest comes only from Apple's restore image, on the Mac that uses it. No macOS image is in a release, a registry or the organisation.
 
@@ -2927,7 +2927,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     - A runner frees its own ledger entry early in one stated case: a process-count heuristic that errs toward keeping the entry. Apple's cap of two is the backstop.
     - Disk reserved per VM is its worst case on the live volume. Space that local snapshots hold is outside it, so macOS VMs can use more disk than they reserved.
     - In the guest, tools that use the macOS keychain do not trust the run's proxy certificate, so hosts the proxy inspects show certificate errors there.
-    - While a base is built, the setup account's password and, after a setup by hand, a one-time code are in the guest. They are scoped to preparing, and the code is replaced by stage 1's first step.
+    - The setup account and its random password stay in every run's guest. No one holds the password after preparing, and Remote Login is proved off. The guest may also hold it in its auto-login file until stage 1 overwrites that. A one-time code from a setup by hand is replaced by stage 1's first step.
 
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 

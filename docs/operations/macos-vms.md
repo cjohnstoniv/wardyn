@@ -78,7 +78,7 @@
 
 - It needs `--per-run-cpu` (CPUs) and `--per-run-memory` (GB): the runner's per-run limits, which the preparing VM uses and never raises.
 - `--keep-ipsw` keeps Apple's image after the base is ready, and `--new-image` is the re-prepare.
-- `wardyn-runnerd setup` starts the same preparing itself with the limits it just registered, unless the base is ready.
+- `wardyn-runnerd setup` starts the same preparing itself with the limits it just registered, on a first registration unless the base is ready. A rerun prints the prepare command instead.
 
 | Step | What happens |
 |---|---|
@@ -142,7 +142,7 @@
 | 16 GiB | 4 GiB | `--total-memory 4 --per-run-memory 4` | 1: the budget is 8, one guest needs 5 and two need 10 |
 | 16 GiB | 8 GiB | Any | 0 if the base's minimum is over 3 GiB: the budget is 4 |
 
-- A run whose applied CPU or memory is below the base's minimum is refused, naming the minimum. The server keeps a run within the runner's per-run limits and never raises them.
+- A runner whose per-run limit is below the base's minimum offers no macOS VMs at all. As a backstop, the organisation and then the runner each also refuse a run whose applied CPU or memory is below the minimum, saying the shortfall. The server keeps a run within the runner's per-run limits and never raises them.
 - A start is also refused when the Mac's available memory is under the guest's plus 2 GiB, and when the Mac is too hot.
 - **An idle login's Docker.** The ledger knows only logins that hold an entry. A second person's login that runs its own Docker with no macOS VM running is not subtracted from the budget. The live memory check above is the only guard in that case.
 
@@ -226,9 +226,10 @@
 - The Mac's own user can read a live run's disk, as the owner of a Docker laptop runner controls the engine. Posture does not constrain a root developer.
 - A person may sign in to websites and apps in the desktop. Those sign-ins enter the sandbox and are kept on the run's virtual disk, because a macOS guest has swap and keeps its keychain and browser profiles on disk. The Linux promise that they live only in memory does not hold here.
 - An agent set "Sign-ins in a desktop: Not allowed" is refused a macOS desktop, because a macOS keychain cannot be made read-only in this release.
-- **While the base is built, two secrets exist in the guest.** They are scoped to preparing and replaced or discarded; they are not run credentials.
-  - The setup account's password is random for each prepare. The helper holds it in memory, and it is not written to disk or a log, or sent to the organisation or the browser. It signs in over SSH, reachable only from the helper's own network with no egress.
-  - After a setup by hand, the one-time code is also in the guest as that account's password until stage 1 replaces it as its first step. Its file on the Mac is deleted once the new password has signed in.
+- **While the base is built, two secrets are made in the guest.** Neither is a run credential, and no one holds either once preparing ends.
+  - The setup account's password is random for each prepare. The helper holds it in memory only and discards it when preparing ends. It is not written to the Mac's disk or a log, or sent to the organisation or the browser. It signs in over SSH, reachable only from the helper's own network with no egress.
+  - The setup account keeps that password in the base and in every run made from it, and Remote Login is off. Only a setup by hand rotates it. Provisioning also turns on auto-login for the account, so the guest may hold the password in `/etc/kcpassword` until stage 1 overwrites that file.
+  - After a setup by hand, the one-time code is the account's password until stage 1 replaces it as its first step. Its file on the Mac is deleted once the new password has signed in.
   - Remote Login is turned off, and proved off on a live guest, before the base is published. The setup account itself stays in the base.
 - The guest's `agent` user is a standard user, not an admin. Its login password is random for each prepare and sits in the guest only in the root-only `/etc/kcpassword`, which auto-login reads.
 
@@ -254,15 +255,19 @@
 | Apple's Screen Sharing answers port 5900 with an RFB banner on the provisioning boot, before any VNC password is set | Stage 1's proof that the guest is live. Without the banner stage 1 fails closed |
 | Port 22 is refused with a reset, not a dropped connection, once Remote Login is off | The proof that Remote Login is off. A silent drop reads as not refused and fails closed |
 | Each stage-1 command and setting name, and the auto-login password file format on macOS 27 | Stage 1 as a whole. A wrong name fails the step and publishes no base |
+| A rebooted or reset guest sends a new DHCP request | The same-boot half of the Remote Login proof |
+| macOS's auto-login copy of the setup password is overwritten by stage 1 | Whether the guest holds that password in `/etc/kcpassword` |
+| The Command Line Tools install through the seven allowed hosts and no other | Stage 2's tools. Without them the Mac offers only the user's own tools |
 | A real stop of a stage-2 boot partway through an install | That the VM ends, its socket folder goes and no base is published |
 | A socket bind updates the socket folder's modification time on APFS | The one-minute grace before a socket folder can be swept as a gone run's |
 | A real `wardyn-proxy` that is attached through standard input only and watched for an early exit | The prep proxy that stage 2 depends on |
 | The VM has exactly one network device of the expected kind | The guest's only route being its own relay |
 | A VM shut down from inside the guest frees its slot | The two-VM count |
 
-- **Every other check in the rental plan** has also not run on a real Mac:
+- **Every other check that needs a real Mac** has also not run:
   - the signed helper running from the package;
   - cold prepare and its timings, and an interrupted download or install;
+  - stage-2 tools, and the hosts the prep proxy allowed and refused;
   - warm start, and the agent session and terminal over the virtual socket;
   - the network, allowed and refused, and its throughput;
   - the desktop's control, recording and clipboard;
