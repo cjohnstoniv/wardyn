@@ -7,7 +7,9 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -111,6 +113,64 @@ func TestDesktopRecording_PauseGapRow(t *testing.T) {
 	if len(pb.Frames) != 2 || pb.ClipboardOmitted != 1 || len(pb.Gaps) != 1 || pb.Gaps[0].Reason != "you took over to sign in" || pb.Gaps[0].EndMS == 0 {
 		t.Fatalf("stored playback = %+v", pb)
 	}
+}
+
+// TestDesktopRecording_StoppedEarlyIsOnTheWriteRow: a recorder that met a server message it cannot follow
+// stops keeping frames, and the desktop.recording.write row carries stopped_ms and a Warn is logged, so
+// the cast does not read as a complete success. A recording that ran to its end carries no stopped_ms.
+func TestDesktopRecording_StoppedEarlyIsOnTheWriteRow(t *testing.T) {
+	var logs lockedBuffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	write := func(t *testing.T, messages ...string) map[string]any {
+		t.Helper()
+		audit := &recRecorder{}
+		now := time.Date(2026, 10, 20, 10, 42, 18, 0, time.UTC)
+		srv := New(Config{Audit: audit, AdminToken: adminToken, RecordingStore: fsRecordingStore(t)})
+		srv.cfg.Now = func() time.Time { now = now.Add(time.Second); return now }
+		run := types.AgentRun{ID: uuid.New(), RecordingLevel: types.RecordingScreenActions}
+		sandbox, relay := net.Pipe()
+		conn := srv.recordDesktopConn(run, uiSession{Run: run.ID, App: desktopApp, Principal: "alice"}, relay, nil)
+		go func() {
+			up := "HTTP/1.1 101 Switching Protocols\r\n\r\n"
+			for _, b := range append([][]byte{[]byte(up), desktopFrame(desktopHello)}, desktopFrames(messages)...) {
+				_, _ = sandbox.Write(b)
+			}
+			_ = sandbox.Close()
+		}()
+		_, _ = io.Copy(io.Discard, conn)
+		_ = conn.Close()
+		for _, ev := range audit.snapshot() {
+			if ev.Action == "desktop.recording.write" {
+				return auditData(t, ev)
+			}
+		}
+		t.Fatal("no desktop.recording.write row")
+		return nil
+	}
+
+	// Message type 99 is not an RFB server message.
+	stopped := write(t, "\x63hunter2", desktopBell)
+	if ms, _ := stopped["stopped_ms"].(float64); ms <= 0 {
+		t.Fatalf("write row = %v, want stopped_ms > 0", stopped)
+	}
+	if got := logs.String(); !strings.Contains(got, "level=WARN") || !strings.Contains(got, "stopped early") || !strings.Contains(got, "stopped_ms=") {
+		t.Fatalf("log = %q, want a Warn naming the early stop", got)
+	}
+
+	if whole := write(t, desktopBell); whole["stopped_ms"] != nil {
+		t.Fatalf("a recording that ran to its end carries stopped_ms: %v", whole)
+	}
+}
+
+func desktopFrames(messages []string) [][]byte {
+	out := make([][]byte, 0, len(messages))
+	for _, m := range messages {
+		out = append(out, desktopFrame(m))
+	}
+	return out
 }
 
 // TestDesktopRecording_OnlyScreenActionsDesktops: every other connection is relayed untouched,

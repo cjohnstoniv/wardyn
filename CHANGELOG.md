@@ -29,6 +29,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   about the disk. A saved "Finished" arrangement of the run page gains the "Attach from your terminal" tile at its
   bottom, once, where the disk line shows.
 
+### Fixed
+
+- A desktop recording that stopped early, because the desktop sent a message the recorder could not follow, was saved
+  as an ordinary success. Its save record now says how far in the recording ends, and wardynd logs a warning.
+
 ## [0.10.0-rc.2] — 2026-10-25
 
 ### Before you upgrade
