@@ -10,3 +10,8 @@ import "golang.org/x/sys/unix"
 func renameNoReplace(fromfd int, from string, tofd int, to string) error {
 	return unix.Renameat2(fromfd, from, tofd, to, unix.RENAME_NOREPLACE)
 }
+
+// renameSwap exchanges a and b in dirfd, in one step.
+func renameSwap(dirfd int, a, b string) error {
+	return unix.Renameat2(dirfd, a, dirfd, b, unix.RENAME_EXCHANGE)
+}
