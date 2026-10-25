@@ -23,13 +23,16 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
 	"golang.org/x/crypto/ssh"
+	"gvisor.dev/gvisor/pkg/tcpip"
 )
 
 // guestAddr labels the guest for SSH: the prep relay's fixed lease. It is
@@ -40,9 +43,15 @@ var (
 	// ErrHostKeyChanged: the guest presented another host key than the one
 	// trusted on this boot's first connection.
 	ErrHostKeyChanged = errors.New("stage 1: the guest's SSH host key changed during this boot")
-	// ErrRemoteLoginStillOn: after Remote Login was turned off, the guest
-	// still answered on port 22.
-	ErrRemoteLoginStillOn = errors.New("stage 1: the guest still answers on port 22 after Remote Login was turned off")
+	// ErrRemoteLoginStillOn: after Remote Login was turned off, no fresh dial
+	// of the guest's port 22 was refused: one connected, or none got an
+	// answer at all.
+	ErrRemoteLoginStillOn = errors.New("stage 1: the guest's port 22 did not refuse a connection after Remote Login was turned off")
+	// ErrGuestLivenessUnknown: stage 1 could not show that the guest it
+	// turned Remote Login off in is the one that refused port 22: the VM
+	// stopped, its boot epoch changed (it asked for its lease again), or the
+	// helper cannot read the epoch. Unknown fails closed.
+	ErrGuestLivenessUnknown = errors.New("stage 1: could not show that the guest stayed up, on the same boot, while Remote Login was turned off and checked")
 	// ErrUnsafePassword: a password or code holds a character that stdin's
 	// line-based readers could split on.
 	ErrUnsafePassword = errors.New("stage 1: a password holds a character other than letters, digits, '-' or '_'")
@@ -86,15 +95,6 @@ func New(c Config) *Bootstrapper {
 // AgentPath is the guest agent stage 1 installs.
 func (b *Bootstrapper) AgentPath() string { return b.cfg.AgentPath }
 
-var stepNames = map[string]string{
-	"6 D1(c)": "replacing the one-time code",
-	"7a":      "installing the guest agent",
-	"7b":      "creating the agent user",
-	"7c":      "turning on Screen Sharing",
-	"7d":      "setting power, screen lock and updates",
-	"7e":      "turning Remote Login off",
-}
-
 // Bootstrap runs stage 1. Any failure stops it with a StepError or one of the
 // errors above, and prepare then publishes no base.
 func (b *Bootstrapper) Bootstrap(ctx context.Context, in macvm.BootstrapInput) (macvm.BootstrapResult, error) {
@@ -111,14 +111,17 @@ func (b *Bootstrapper) Bootstrap(ctx context.Context, in macvm.BootstrapInput) (
 		return macvm.BootstrapResult{}, err
 	}
 	defer func() { _ = s.client.Close() }()
-	step := ""
 	for i, c := range commands {
 		if c.OnlyWithCode && s.code == nil {
 			continue
 		}
-		if c.Step != step {
-			step = c.Step
-			s.emit(stepNames[step], float64(i)/float64(len(commands)))
+		if c.Event != "" {
+			s.emit(c.Event, float64(i)/float64(len(commands)))
+		}
+		if c.MayDropSession {
+			if err := s.beforeOff(ctx, b.cfg.OffWait); err != nil {
+				return macvm.BootstrapResult{}, err
+			}
 		}
 		if err := s.run(ctx, c); err != nil {
 			return macvm.BootstrapResult{}, &StepError{Step: c.Step, Command: c.ID, Err: err}
@@ -151,6 +154,33 @@ type session struct {
 	agentSHA string
 	pin      []byte // the host key trusted on this boot's first connection
 	client   *ssh.Client
+	epoch    uint64 // the guest's boot epoch just before Remote Login off
+}
+
+// guestEpoch is the guest's boot epoch (BootstrapInput.GuestEpoch); any
+// failure to read it is ErrGuestLivenessUnknown.
+func (s *session) guestEpoch() (uint64, error) {
+	if s.in.GuestEpoch == nil {
+		return 0, ErrGuestLivenessUnknown
+	}
+	e, err := s.in.GuestEpoch()
+	if err != nil {
+		return 0, fmt.Errorf("%w: %v", ErrGuestLivenessUnknown, err)
+	}
+	return e, nil
+}
+
+// sameBoot says whether the guest is still on the boot whose epoch was taken
+// before Remote Login off.
+func (s *session) sameBoot() error {
+	e, err := s.guestEpoch()
+	if err != nil {
+		return err
+	}
+	if e != s.epoch {
+		return fmt.Errorf("%w: the guest asked for its network lease again", ErrGuestLivenessUnknown)
+	}
+	return nil
 }
 
 func newSession(in macvm.BootstrapInput, agent []byte) (*session, error) {
@@ -254,18 +284,22 @@ func (s *session) connect(ctx context.Context) error {
 	return nil
 }
 
-// codeReplaced runs right after the one-time code is replaced: the code file
-// goes, and stage 1 signs in again with the new password, on the same pinned
-// host key.
+// codeReplaced runs after the rotate command: stage 1 signs in again with the
+// new password, on the same pinned host key, and only then is the code file
+// deleted. Interactive dscl can exit 0 on a failed passwd, so the sign-in is
+// the proof that the code was replaced.
 func (s *session) codeReplaced(ctx context.Context) error {
+	_ = s.client.Close()
 	clear(s.admin)
 	s.admin, s.next = s.next, nil
+	if err := s.connect(ctx); err != nil {
+		return &StepError{Step: "6 D1(c)", Command: "rotate-admin-password", Err: fmt.Errorf("the new password does not sign in: %w", err)}
+	}
 	if s.in.Replaced != nil {
 		s.in.Replaced()
 	}
 	s.emit("one-time code replaced", 0)
-	_ = s.client.Close()
-	return s.connect(ctx)
+	return nil
 }
 
 // stdin is c's stdin: sudo's password line first for a root command.
@@ -277,7 +311,13 @@ func (s *session) stdin(c command) []byte {
 	}
 	switch c.In {
 	case stdinRotate:
-		fmt.Fprintf(&b, "passwd /Users/%s %s %s\n", s.username, s.code, s.next)
+		// Written piece by piece: a formatted line would leave a copy of
+		// both secrets in fmt's buffer pool. The username passed safeWord.
+		b.WriteString("passwd /Users/" + s.username + " ")
+		b.Write(s.code)
+		b.WriteByte(' ')
+		b.Write(s.next)
+		b.WriteByte('\n')
 	case stdinAgent:
 		b.Write(s.agent)
 	case stdinPlist:
@@ -347,22 +387,109 @@ func (s *session) scrub(text string) string {
 	return text
 }
 
+// rfbBanner checks that the guest's port 5900 answers with Screen Sharing's
+// RFB banner: proof the guest is up and its network reaches this helper, on
+// the VM's own lease address, without SSH.
+func (s *session) rfbBanner(ctx context.Context) error {
+	dctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	c, err := s.in.Dial(dctx, 5900)
+	if err != nil {
+		return fmt.Errorf("%w: Screen Sharing did not answer: %v", ErrGuestLivenessUnknown, err)
+	}
+	defer func() { _ = c.Close() }()
+	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	b := make([]byte, len(rfbBanner))
+	if _, err := io.ReadFull(c, b); err != nil || string(b) != rfbBanner {
+		return fmt.Errorf("%w: Screen Sharing sent no RFB banner", ErrGuestLivenessUnknown)
+	}
+	return nil
+}
+
+// rfbBanner is how every RFB 3.x server's first message starts.
+const rfbBanner = "RFB 003."
+
+// beforeOff runs just before Remote Login off: Screen Sharing answers with
+// its banner, port 22 is open, and the guest's boot epoch is taken. Until
+// wait passes it keeps trying (Screen Sharing was loaded moments ago); then
+// it is unknown, and stage 1 stops with Remote Login still on.
+func (s *session) beforeOff(ctx context.Context, wait time.Duration) error {
+	wctx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	for {
+		err := s.rfbBanner(wctx)
+		if err == nil {
+			err = s.portOpen(wctx, 22)
+		}
+		if err == nil {
+			s.epoch, err = s.guestEpoch()
+		}
+		if err == nil || ctx.Err() != nil {
+			return s.stepErr(ctx, err)
+		}
+		select {
+		case <-wctx.Done():
+			return s.stepErr(ctx, err)
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
+func (s *session) stepErr(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if err == nil {
+		return nil
+	}
+	return &StepError{Step: "7e", Command: "check the guest before Remote Login off", Err: err}
+}
+
+func (s *session) portOpen(ctx context.Context, port int) error {
+	dctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	c, err := s.in.Dial(dctx, port)
+	if err != nil {
+		return fmt.Errorf("%w: port %d did not answer: %v", ErrGuestLivenessUnknown, port, err)
+	}
+	return c.Close()
+}
+
 // confirmOff checks that a fresh dial of the guest's port 22 is refused,
-// trying until wait passes.
+// trying until wait passes. Only a refusal proves Remote Login off: a dial
+// that times out, or a relay that can no longer dial the guest, proves
+// nothing, so stage 1 keeps trying and then fails. A refusal counts only
+// when the guest is on the same boot just before and just after it: a VM
+// that is down, rebooting or resetting its network can refuse too, and that
+// is unknown, which fails at once.
 func (s *session) confirmOff(ctx context.Context, wait time.Duration) error {
 	wctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 	for {
+		if err := s.sameBoot(); err != nil {
+			return &StepError{Step: "7e", Command: "confirm Remote Login is off", Err: err}
+		}
 		dctx, dcancel := context.WithTimeout(wctx, 5*time.Second)
 		c, err := s.in.Dial(dctx, 22)
 		dcancel()
-		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if refused(err) {
+			// The refusal counts only from a guest that is still up on the
+			// same boot: Screen Sharing answers, and the epoch is unchanged.
+			err := s.rfbBanner(ctx)
+			if err == nil {
+				err = s.sameBoot()
+			}
+			if err != nil {
+				return &StepError{Step: "7e", Command: "confirm Remote Login is off", Err: err}
 			}
 			return nil
 		}
-		_ = c.Close()
+		if c != nil {
+			_ = c.Close()
+		}
 		select {
 		case <-wctx.Done():
 			if ctx.Err() != nil {
@@ -372,6 +499,21 @@ func (s *session) confirmOff(ctx context.Context, wait time.Duration) error {
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
+}
+
+// refused says whether err is a dial refused by the guest: an RST, as the
+// relay's netstack reports it (gonet's connect error carrying
+// tcpip.ErrConnectionRefused), or ECONNREFUSED.
+func refused(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return true
+	}
+	var op *net.OpError
+	return errors.As(err, &op) && op.Op == "connect" && op.Err != nil &&
+		op.Err.Error() == (&tcpip.ErrConnectionRefused{}).String()
 }
 
 func (s *session) zero() {

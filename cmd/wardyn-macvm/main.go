@@ -37,6 +37,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/macvm/admission"
 	"github.com/cjohnstoniv/wardyn/internal/macvm/stage1"
 	"github.com/cjohnstoniv/wardyn/internal/version"
+	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 	"golang.org/x/sys/unix"
 )
 
@@ -303,9 +304,16 @@ func (j jobFlags) stage2(eng macvm.Engine, d deps) (*macvm.ToolsStage, error) {
 	if err != nil {
 		return nil, err
 	}
+	agent, err := guestAgentPath()
+	if err != nil {
+		return nil, err
+	}
 	boot := macvm.Stage2BootConfig{Engine: eng, SockRoot: *j.sockRoot, SockKey: macvm.JobSockKey(*j.entry), SockFstat: d.sockFstat}
 	return &macvm.ToolsStage{Boot: boot.ToolsBoot(), ToolsOptions: macvm.ToolsOptions{
 		Tooling: t, Cache: filepath.Join(macvm.Layout{Root: *j.root}.CacheDir(), "tools"),
+		// Stage 2 replaces the guest agent where stage 1 installed it, with
+		// the build beside this helper (§3.4, guest agent drift).
+		Agent: &macvm.AgentPin{Version: version.String(), Path: agent, Dest: guestagent.MacAgentBinaryPath},
 	}}, nil
 }
 
@@ -375,7 +383,7 @@ func cmdUpdateTools(ctx context.Context, args []string, d deps) int {
 	enc := json.NewEncoder(d.stdout)
 	o := macvm.UpdateOptions{
 		Engine: eng, Layout: macvm.Layout{Root: *j.root}, Slot: *j.slot, Power: d.power(), Admit: j.admit(macvm.UpdateToolsCommand, d),
-		Stage: st, Tooling: st.Tooling, Force: *force, CPUs: *j.cpus, MemoryMiB: *j.memMiB, HelperVersion: version.String(),
+		Stage: st, Tooling: st.Tooling, AgentVersion: version.String(), Force: *force, CPUs: *j.cpus, MemoryMiB: *j.memMiB, HelperVersion: version.String(),
 		Progress: func(ev macvm.PrepareEvent) { _ = enc.Encode(ev) },
 	}
 	if _, _, err := macvm.UpdateTools(ctx, o); err != nil {
@@ -392,18 +400,26 @@ func cmdUpdateTools(ctx context.Context, args []string, d deps) int {
 // refuses prepare by name.
 func prepareDeps(o *macvm.PrepareOptions) error {
 	if o.Bootstrap == nil {
-		self, err := os.Executable()
+		agent, err := guestAgentPath()
 		if err != nil {
-			return fmt.Errorf("this helper's own path: %w", err)
+			return err
 		}
-		o.Bootstrap = stage1.New(stage1.Config{
-			AgentPath: filepath.Join(filepath.Dir(self), "wardyn-guest-agent"), AgentVersion: version.String(),
-		})
+		o.Bootstrap = stage1.New(stage1.Config{AgentPath: agent, AgentVersion: version.String()})
 	}
 	if o.FirstBoot == nil || o.PrepNet == nil || o.Bootstrap == nil {
 		return errors.New("this build has no guest provisioning, prep network or stage 1 yet; prepare is not available")
 	}
 	return nil
+}
+
+// guestAgentPath is the darwin/arm64 wardyn-guest-agent beside this helper:
+// stage 1 installs it, and stage 2 replaces the guest's copy with it.
+func guestAgentPath() (string, error) {
+	self, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("this helper's own path: %w", err)
+	}
+	return filepath.Join(filepath.Dir(self), "wardyn-guest-agent"), nil
 }
 
 // probeReport is what probe prints.
