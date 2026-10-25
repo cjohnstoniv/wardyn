@@ -68,8 +68,8 @@ var sentenceConstFragments = map[string]string{
 
 // sentenceConstNotSentences are named string consts that #585 never covered
 // at all — its rule is "api + console" sentences, and these are something else
-// entirely, lower-case on purpose. May only shrink, same discipline as
-// sentenceConstFragments.
+// entirely, lower-case on purpose. Shrinks over time; the only additions allowed are brand
+// names that are always written lower-case (whyBrandMacOS).
 var sentenceConstNotSentences = map[string]string{
 	"EntraAuthorityOverrideWarn": `opens with the literal "wardynd: TEST HATCH ACTIVE" on purpose (own doc comment) — a boot log line, never rendered by the console or the API`,
 	"EntraAuthorityOverrideRefusal": "a Go error string returned from fmt.Errorf, not an HTTP/console sentence — " +
