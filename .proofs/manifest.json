@@ -1,0 +1,226 @@
+{
+ "keyed_sha": "e4ed00fe538fe48b1c2b0605248605104a2b620d",
+ "proofs": [
+  {
+   "name": "dr0435-k6-settled",
+   "package": "./internal/store",
+   "run": "^TestPG_RunnerExitAfterSettlementAcknowledgedWithoutTransition$/^failed-ref-cleared$",
+   "tags": "",
+   "files": {
+    "internal/store/store_runner_exit_stage.go": ".proofs/files/dr0435-k6-settled/internal/store/store_runner_exit_stage.go"
+   },
+   "want_fail": "--- FAIL: TestPG_RunnerExitAfterSettlementAcknowledgedWithoutTransition/failed-ref-cleared"
+  },
+  {
+   "name": "dr0436-a1-classify",
+   "package": "./internal/api",
+   "run": "^TestClassifyRunnerEvent$",
+   "tags": "",
+   "files": {
+    "internal/api/runner_actions.go": ".proofs/files/dr0436-a1-classify/internal/api/runner_actions.go"
+   },
+   "want_fail": "--- FAIL: TestClassifyRunnerEvent"
+  },
+  {
+   "name": "dr0436-a2-record",
+   "package": "./internal/api",
+   "run": "^TestRefusalRowBeforeAck$",
+   "tags": "",
+   "files": {
+    "internal/api/runner_event_refuse.go": ".proofs/files/dr0436-a2-record/internal/api/runner_event_refuse.go"
+   },
+   "want_fail": "--- FAIL: TestRefusalRowBeforeAck"
+  },
+  {
+   "name": "dr0436-a3-w2",
+   "package": "./internal/api",
+   "run": "^TestPG_RefusedExitDoesNotLivelock$",
+   "tags": "",
+   "files": {
+    "internal/runnerwire/peer.go": ".proofs/files/dr0436-a3-w2/internal/runnerwire/peer.go"
+   },
+   "want_fail": "--- FAIL: TestPG_RefusedExitDoesNotLivelock"
+  },
+  {
+   "name": "dr0436-a4-window",
+   "package": "./internal/api",
+   "run": "^TestRefusalRowsBounded$",
+   "tags": "",
+   "files": {
+    "internal/api/runner_event_refuse.go": ".proofs/files/dr0436-a4-window/internal/api/runner_event_refuse.go"
+   },
+   "want_fail": "--- FAIL: TestRefusalRowsBounded"
+  },
+  {
+   "name": "dr0436-a5-k6",
+   "package": "./internal/api",
+   "run": "^TestPG_TerminalRefClearedExitIsNotRefused$",
+   "tags": "",
+   "files": {
+    "internal/store/store_runner_exit_stage.go": ".proofs/files/dr0436-a5-k6/internal/store/store_runner_exit_stage.go"
+   },
+   "want_fail": "--- FAIL: TestPG_TerminalRefClearedExitIsNotRefused"
+  },
+  {
+   "name": "dr0436-lock-invert",
+   "package": "./internal/store",
+   "run": "^TestPG_RefuseRunnerEventRacesTheReceipt$",
+   "tags": "",
+   "files": {
+    "internal/store/store_runner_event_refuse.go": ".proofs/files/dr0436-lock-invert/internal/store/store_runner_event_refuse.go"
+   },
+   "want_fail": "--- FAIL: TestPG_RefuseRunnerEventRacesTheReceipt"
+  },
+  {
+   "name": "dr0436-p1-spool-starting",
+   "package": "./internal/store",
+   "run": "^TestPG_RunnerSpoolFromStartingThroughReviveHasNoGap$",
+   "tags": "",
+   "files": {
+    "internal/store/store_runner_spool.go": ".proofs/files/dr0436-p1-spool-starting/internal/store/store_runner_spool.go"
+   },
+   "want_fail": "--- FAIL: TestPG_RunnerSpoolFromStartingThroughReviveHasNoGap"
+  },
+  {
+   "name": "dr0436-p2-cursor",
+   "package": "./internal/api",
+   "run": "^TestPG_RefusedSpoolRecordMovesCursorAndSealMatches$",
+   "tags": "",
+   "files": {
+    "internal/store/store_runner_event_refuse.go": ".proofs/files/dr0436-p2-cursor/internal/store/store_runner_event_refuse.go"
+   },
+   "want_fail": "--- FAIL: TestPG_RefusedSpoolRecordMovesCursorAndSealMatches"
+  },
+  {
+   "name": "dr0436-r1-h1",
+   "package": "./internal/runner/remote",
+   "run": "^TestHubPendingActionsPrecedeStateAndReady$",
+   "tags": "",
+   "files": {
+    "internal/runner/remote/hub.go": ".proofs/files/dr0436-r1-h1/internal/runner/remote/hub.go"
+   },
+   "want_fail": "--- FAIL: TestHubPendingActionsPrecedeStateAndReady"
+  },
+  {
+   "name": "dr0436-s1-gone-run",
+   "package": "./internal/store",
+   "run": "^TestPG_StageRunnerExitGoneRunIsRefused$",
+   "tags": "",
+   "files": {
+    "internal/store/store_runner_exit_stage.go": ".proofs/files/dr0436-s1-gone-run/internal/store/store_runner_exit_stage.go"
+   },
+   "want_fail": "--- FAIL: TestPG_StageRunnerExitGoneRunIsRefused"
+  },
+  {
+   "name": "dr0436-s2-settle",
+   "package": "./internal/store",
+   "run": "^TestPG_RefuseRunnerEventSettlesOwnOpenAction$",
+   "tags": "",
+   "files": {
+    "internal/store/store_runner_event_refuse.go": ".proofs/files/dr0436-s2-settle/internal/store/store_runner_event_refuse.go"
+   },
+   "want_fail": "--- FAIL: TestPG_RefuseRunnerEventSettlesOwnOpenAction"
+  },
+  {
+   "name": "dr0436-s3-wraps",
+   "package": "./internal/store",
+   "run": "^TestPG_RecordRunnerActionResultWraps$",
+   "tags": "",
+   "files": {
+    "internal/store/store_runner_actions.go": ".proofs/files/dr0436-s3-wraps/internal/store/store_runner_actions.go",
+    "internal/store/store_runner_asserted.go": ".proofs/files/dr0436-s3-wraps/internal/store/store_runner_asserted.go"
+   },
+   "want_fail": "--- FAIL: TestPG_RecordRunnerActionResultWraps"
+  },
+  {
+   "name": "dr0436-t6-wire",
+   "package": "./internal/runnerwire",
+   "run": "^TestWireUnchangedSinceV098$",
+   "tags": "",
+   "files": {
+    "internal/runnerwire/session.go": ".proofs/files/dr0436-t6-wire/internal/runnerwire/session.go"
+   },
+   "want_fail": "--- FAIL: TestWireUnchangedSinceV098"
+  },
+  {
+   "name": "dr0436-w2-t1",
+   "package": "./internal/runnerwire",
+   "run": "^TestEventRefusalAcknowledgedKeepsSession$",
+   "tags": "",
+   "files": {
+    "internal/runnerwire/peer.go": ".proofs/files/dr0436-w2-t1/internal/runnerwire/peer.go"
+   },
+   "want_fail": "--- FAIL: TestEventRefusalAcknowledgedKeepsSession"
+  },
+  {
+   "name": "dr0436-w2-t3",
+   "package": "./internal/runnerwire",
+   "run": "^TestEventRefusalNotReplayedOnResume$",
+   "tags": "",
+   "files": {
+    "internal/runnerwire/peer.go": ".proofs/files/dr0436-w2-t3/internal/runnerwire/peer.go"
+   },
+   "want_fail": "--- FAIL: TestEventRefusalNotReplayedOnResume"
+  },
+  {
+   "name": "dr0436-w2-t5",
+   "package": "./internal/runnerwire",
+   "run": "^TestEventRefusalOldRunnerRawFrames$",
+   "tags": "",
+   "files": {
+    "internal/runnerwire/peer.go": ".proofs/files/dr0436-w2-t5/internal/runnerwire/peer.go"
+   },
+   "want_fail": "--- FAIL: TestEventRefusalOldRunnerRawFrames"
+  },
+  {
+   "name": "dr0436-x1-kept-receipt",
+   "package": "./internal/store",
+   "run": "^TestPG_RunnerKeptRebootExitIsReceiptReviveBegins$",
+   "tags": "",
+   "files": {
+    "internal/store/store_runner_exit_stage.go": ".proofs/files/dr0436-x1-kept-receipt/internal/store/store_runner_exit_stage.go"
+   },
+   "want_fail": "--- FAIL: TestPG_RunnerKeptRebootExitIsReceiptReviveBegins"
+  },
+  {
+   "name": "dr0436-x2-retire-receipt",
+   "package": "./internal/store",
+   "run": "^TestPG_RunnerKeptExitNamedByRetirementReceipt$",
+   "tags": "",
+   "files": {
+    "internal/store/store_runner_exit_stage.go": ".proofs/files/dr0436-x2-retire-receipt/internal/store/store_runner_exit_stage.go"
+   },
+   "want_fail": "--- FAIL: TestPG_RunnerKeptExitNamedByRetirementReceipt"
+  },
+  {
+   "name": "hub-old-fixture-ready-fatal",
+   "package": "./internal/runner/remote",
+   "run": "^TestHubInventoryOverBoundPageClosesSessionOnWire$/^loopback$",
+   "tags": "",
+   "files": {
+    "internal/runner/remote/hub_inventory_test.go": ".proofs/files/hub-old-fixture-ready-fatal/internal/runner/remote/hub_inventory_test.go"
+   },
+   "want_fail": "--- FAIL: TestHubInventoryOverBoundPageClosesSessionOnWire/loopback"
+  },
+  {
+   "name": "watch-t1-headless-runner",
+   "package": "./internal/api",
+   "run": "^TestLostRun_AHeadlessRunnerRunIsLeftForItsExitReceipt$",
+   "tags": "",
+   "files": {
+    "internal/api/run_lost.go": ".proofs/files/watch-t1-headless-runner/internal/api/run_lost.go"
+   },
+   "want_fail": "--- FAIL: TestLostRun_AHeadlessRunnerRunIsLeftForItsExitReceipt"
+  },
+  {
+   "name": "watch-t3-pg-reboot",
+   "package": "./internal/api",
+   "run": "^TestRunLostPG_ARebootedRunnerRunEndsByItsExitReceipt$",
+   "tags": "",
+   "files": {
+    "internal/api/run_lost.go": ".proofs/files/watch-t3-pg-reboot/internal/api/run_lost.go"
+   },
+   "want_fail": "--- FAIL: TestRunLostPG_ARebootedRunnerRunEndsByItsExitReceipt"
+  }
+ ]
+}
