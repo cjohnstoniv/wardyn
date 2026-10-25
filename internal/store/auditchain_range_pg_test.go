@@ -128,7 +128,7 @@ func TestPG_RecordingAuditRangeAtTheLogsStart(t *testing.T) {
 	key := run.String() + "~desktop-" + uuid.NewString()
 
 	t.Run("no drop", func(t *testing.T) {
-		pool := runsPGPoolIsolated(t)
+		pool := chainProbeDB(t) // no seed row: a fresh schema's governance.boundary.seed would sit before the range
 		lo := appendRunRow(t, pool, &run, t0.Add(time.Second), "ui.clipboard.transfer", "paste_in")
 		hi := appendRunRow(t, pool, &run, t0.Add(2*time.Second), "desktop.recording.write", key)
 		var before int
