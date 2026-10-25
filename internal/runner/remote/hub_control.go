@@ -48,13 +48,19 @@ func (h *Hub) GoawayAll(ctx context.Context) error {
 
 // Online reports whether id's current session reached its own READY and its
 // peer is still up. A session in transition holds its slot and reads offline
-// rather than making the caller wait for it.
+// rather than making the caller wait for it. A current-activity check also
+// holds the slot, across a store round trip, but moves nothing: the peer it
+// verified is read from activityPeer, so a connected runner stays online.
 func (h *Hub) Online(id uuid.UUID) bool {
 	h.mu.Lock()
 	s := h.sessions[id]
 	h.mu.Unlock()
-	if s == nil || !s.mu.TryLock() {
+	if s == nil {
 		return false
+	}
+	if !s.mu.TryLock() {
+		p := s.activityPeer.Load()
+		return p != nil && p.Online() && s.readyID.Load() != nil
 	}
 	defer s.mu.Unlock()
 	return s.peer != nil && s.peer.Online() && s.readyFor(s.id)
@@ -70,6 +76,7 @@ func (h *Hub) endWithControl(ctx context.Context, id uuid.UUID, kind runnerwire.
 	if !s.mu.TryLock() {
 		// An admission holds the slot, perhaps stalled on a durable call or a dead link: end it now rather
 		// than after its own timeouts.
+		s.activityPeer.Store(nil) // a pending revoke reads offline, as it did before an activity check could hold the slot
 		if abort := s.abort.Load(); abort != nil {
 			(*abort)()
 		}

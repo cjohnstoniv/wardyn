@@ -133,7 +133,7 @@ type PrepareOptions struct {
 	// Admit takes the host ledger entry once the host checks pass, and
 	// returns its release. Nil means the caller already holds one.
 	Admit func(ctx context.Context) (release func(), err error)
-	// FirstBoot runs the provisioning first boot (macvm.NewProvisioner()).
+	// FirstBoot runs the base's first boot (macvm.NewProvisioner()).
 	FirstBoot FirstBooter
 	PrepNet   func() (PrepNetwork, error)
 	Bootstrap Bootstrapper
@@ -161,9 +161,11 @@ type PrepareOptions struct {
 	// RemoteLoginWait bounds the wait for the provisioned guest's Remote Login.
 	RemoteLoginWait time.Duration
 	// SetupByHandWait, when set, turns on setup by hand: if Remote Login
-	// stays silent, prepare writes a one-time code to Layout.SetupCode() and
-	// waits this long for the Mac's person to finish Setup Assistant with it
-	// and turn Remote Login on. Zero stops with ErrManualSetup instead.
+	// stays silent, or at once on a host without guest provisioning, prepare
+	// writes a one-time code to Layout.SetupCode(), opens the guest's window
+	// (FirstBoot.Screen) and waits this long for the Mac's person to finish
+	// Setup Assistant with it and turn Remote Login on. Zero stops with
+	// ErrManualSetup instead, and refuses a host without provisioning.
 	SetupByHandWait time.Duration
 }
 
@@ -207,6 +209,9 @@ func Prepare(ctx context.Context, o PrepareOptions) (Manifest, error) {
 type prep struct {
 	PrepareOptions
 	base, cache string
+	// byHand: the host has no guest provisioning, so the first boot is plain
+	// and goes straight to setup by hand.
+	byHand bool
 }
 
 func newPrep(o PrepareOptions) (*prep, error) {
@@ -242,15 +247,27 @@ func (p *prep) emit(ev PrepareEvent) {
 	p.Progress(ev)
 }
 
-func (p *prep) run(ctx context.Context) (Manifest, error) {
-	p.emit(PrepareEvent{Phase: PhaseCheck})
+// check is PhaseCheck: the host, then provisioning or the setup by hand that
+// replaces it, then the heat.
+func (p *prep) check() error {
 	if err := p.Engine.HostCheck(); err != nil {
-		return Manifest{}, err
+		return err
 	}
 	if err := p.FirstBoot.Supported(); err != nil {
-		return Manifest{}, err
+		if !errors.Is(err, ErrNoProvisioning) || p.SetupByHandWait == 0 {
+			return err
+		}
+		if err := SetupByHandReady(p.FirstBoot, p.SetupByHandWait); err != nil {
+			return err
+		}
+		p.byHand = true
 	}
-	if err := thermalGate(p.Engine); err != nil {
+	return thermalGate(p.Engine)
+}
+
+func (p *prep) run(ctx context.Context) (Manifest, error) {
+	p.emit(PrepareEvent{Phase: PhaseCheck})
+	if err := p.check(); err != nil {
 		return Manifest{}, err
 	}
 	// A ready base is kept unless a re-prepare was asked for.
@@ -572,8 +589,8 @@ func (p *prep) install(ctx context.Context, spec MachineSpec, ipsw string) error
 	return nil
 }
 
-// provisionAndBootstrap runs the one provisioning first boot, waits for the
-// guest's Remote Login, runs stage 1 and shuts the VM down.
+// provisionAndBootstrap runs the one first boot, waits for the guest's Remote
+// Login (provisioned, or by hand), runs stage 1 and shuts the VM down.
 func (p *prep) provisionAndBootstrap(ctx context.Context, spec MachineSpec) (BootstrapResult, error) {
 	if p.PrepNet == nil || p.Bootstrap == nil {
 		return BootstrapResult{}, errors.New("macvm: prepare needs its prep network and stage 1")
@@ -598,8 +615,12 @@ func (p *prep) provisionAndBootstrap(ctx context.Context, spec MachineSpec) (Boo
 		return BootstrapResult{}, err
 	}
 	p.emit(PrepareEvent{Phase: PhaseProvision})
-	done, stop, err := p.FirstBoot.Boot(spec.DiskPath, spec.AuxPath, spec.HardwareModel, spec.MachineIdentifier,
-		uint(spec.CPUs), spec.MemoryBytes, guest, provisionUser, password)
+	user, pass := provisionUser, password
+	if p.byHand {
+		user, pass = "", "" // a plain boot: Setup Assistant
+	}
+	fb, err := p.FirstBoot.Boot(spec.DiskPath, spec.AuxPath, spec.HardwareModel, spec.MachineIdentifier,
+		uint(spec.CPUs), spec.MemoryBytes, guest, user, pass)
 	if err != nil {
 		return BootstrapResult{}, fmt.Errorf("macvm: provisioning boot: %w", err)
 	}
@@ -608,7 +629,7 @@ func (p *prep) provisionAndBootstrap(ctx context.Context, spec MachineSpec) (Boo
 		sctx, cancel := context.WithTimeout(context.Background(), DefaultStopTimeout)
 		defer cancel()
 		stopped = true
-		return stop(sctx)
+		return fb.Stop(sctx)
 	}
 	defer func() {
 		if !stopped {
@@ -622,7 +643,7 @@ func (p *prep) provisionAndBootstrap(ctx context.Context, spec MachineSpec) (Boo
 	var vmStopped atomic.Bool
 	go func() {
 		select {
-		case err := <-done:
+		case err := <-fb.Done:
 			vmStopped.Store(true)
 			early <- err
 			wcancel()
@@ -630,13 +651,16 @@ func (p *prep) provisionAndBootstrap(ctx context.Context, spec MachineSpec) (Boo
 		}
 	}()
 	login, replace := password, ""
-	err = waitPort(wctx, nw, 22, p.RemoteLoginWait)
+	err = ErrManualSetup // a plain boot waits for no provisioned Remote Login
+	if !p.byHand {
+		err = waitPort(wctx, nw, 22, p.RemoteLoginWait)
+	}
 	if errors.Is(err, ErrManualSetup) && p.SetupByHandWait > 0 {
 		// The code goes with this prepare: replaced by stage 1, or useless
 		// once the base it was typed into is discarded.
 		defer p.removeSetupCode()
 		var code string
-		if code, err = p.setupByHand(wctx, nw); err == nil {
+		if code, err = p.setupByHand(wctx, nw, fb.Screen); err == nil {
 			login, replace = code, password
 		}
 	}

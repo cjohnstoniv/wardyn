@@ -21,8 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -32,7 +30,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
 )
 
-// MinHostMajor is the oldest macOS this engine runs on (provisioning needs 27).
+// MinHostMajor is the oldest macOS this engine runs on.
 const MinHostMajor = macvm.MinHostMajor
 
 // Engine is the Virtualization-framework engine.
@@ -48,11 +46,7 @@ func (*Engine) HostCheck() error {
 	if err != nil {
 		return fmt.Errorf("vzengine: macOS version: %w", err)
 	}
-	major, _, _ := strings.Cut(v, ".")
-	if n, err := strconv.Atoi(major); err != nil || n < MinHostMajor {
-		return fmt.Errorf("macOS VMs need macOS %d or later on this Mac (it runs %s)", MinHostMajor, v)
-	}
-	return nil
+	return macvm.CheckHostVersion(v)
 }
 
 func (*Engine) LatestRestoreImageURL(context.Context) (string, error) {

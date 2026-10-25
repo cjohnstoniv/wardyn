@@ -102,12 +102,12 @@ func TestSetupRefusesWithDoctorsMessageWhenTheWireFails(t *testing.T) {
 				w.Header().Set("Location", "https://login.example.com/")
 				w.WriteHeader(http.StatusFound)
 			}
-		}, "healthz", "WARDYN_RUNNER_ORG_URL", "redirected (302) to login.example.com"},
+		}, "healthz", orgSetting, "redirected (302) to login.example.com"},
 		{"healthz answers 200 with a page", func(_ *testing.T, f *setupFixture) {
 			f.healthz = func(w http.ResponseWriter) { _, _ = w.Write([]byte("<html>welcome</html>")) }
-		}, "healthz", "WARDYN_RUNNER_ORG_URL", "not Wardyn's health report"},
+		}, "healthz", orgSetting, "not Wardyn's health report"},
 		{"a gateway strips the WebSocket upgrade", func(_ *testing.T, f *setupFixture) { f.stripUpgrade = true },
-			"wire", "WARDYN_RUNNER_ORG_URL", "answered 426 instead of switching to a WebSocket"},
+			"wire", orgSetting, "answered 426 instead of switching to a WebSocket"},
 		{"a proxy strips the WebSocket upgrade", func(t *testing.T, f *setupFixture) { proxyTo(t, f, stripsUpgrade) },
 			"wire", "HTTP_PROXY", "answered 426 instead of switching to a WebSocket"},
 	} {

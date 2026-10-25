@@ -319,12 +319,12 @@ An install from before the file keeps working: its environment file or LaunchAge
 | `config` | Shown only on failure: `runnerd.json` loads, as `serve` loads it, with no unknown field or bad value | the field the line names |
 | `trusted-ca` | The CA bundle loads, as `setup` checks it, and warns of an expired or writable file | `WARDYN_TRUSTED_CA_FILE` |
 | `org-ca` | Shown only when set: the bundle of roots this runner's own connection to the organisation trusts loads | `WARDYN_ORG_CA_FILE` |
-| `org-url` | The organisation address is HTTPS, as `setup` requires, and where it came from | `WARDYN_RUNNER_ORG_URL` |
-| `dns` | The name resolves; with a proxy, the proxy's name | `WARDYN_RUNNER_ORG_URL` or `HTTPS_PROXY` |
+| `org-url` | The organisation address is HTTPS, as `setup` requires, and where it came from | the organisation address (`--org`, the `OrgURL` managed preference, or `org_url` in `runnerd.json`) |
+| `dns` | The name resolves; with a proxy, the proxy's name | the organisation address (as for `org-url`) or `HTTPS_PROXY` |
 | `proxy` | The route in effect, as Go resolves `HTTPS_PROXY` and `NO_PROXY` | `HTTPS_PROXY` |
 | `tls` | The handshake: the issuer presented and the trust store that verified it (`system` or `WARDYN_TRUSTED_CA_FILE`); a proxy's 407 or 403 | `WARDYN_TRUSTED_CA_FILE`, `HTTPS_PROXY` |
-| `healthz` | `/healthz` answers as Wardyn, and the server version | `WARDYN_RUNNER_ORG_URL` |
-| `wire` | The runner stream's WebSocket upgrade gets through every proxy and gateway on the route (101); a proxy or gateway that strips it | `WARDYN_RUNNER_ORG_URL`, `HTTPS_PROXY` |
+| `healthz` | `/healthz` answers as Wardyn, and the server version | the organisation address (as for `org-url`) |
+| `wire` | The runner stream's WebSocket upgrade gets through every proxy and gateway on the route (101); a proxy or gateway that strips it | the organisation address (as for `org-url`), `HTTPS_PROXY` |
 | `engine` | The engine answers at `DOCKER_HOST`, and its version | `DOCKER_HOST` |
 | `proxy-image` | The image is on the engine or in its registry; a pinned image of another release than the organisation's is a version-skew failure | `WARDYN_PROXY_IMAGE` |
 | `relay` | The relay address is allowed and a probe container reaches it, through `setup`'s own check; the proxy network exists | `WARDYN_RELAY_LISTEN`, `WARDYN_INTERNAL_NETWORK` (missing network) |

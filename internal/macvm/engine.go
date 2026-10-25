@@ -6,8 +6,11 @@ package macvm
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
+	"strconv"
+	"strings"
 )
 
 // Engine is the boundary between the helper and the hypervisor. vzengine
@@ -55,24 +58,56 @@ type Machine interface {
 	MachineIdentifier() ([]byte, error)
 }
 
-// FirstBooter runs the one provisioning first boot of a freshly installed
-// base (Apple's guest-provisioning start option: an admin account, automatic
-// login, Remote Login). It is the one call above the engine that Code-Hex/vz
-// does not have; the MACVM-PROVISION lane's macvm.Provisioner (from
-// NewProvisioner) has exactly this method set, so it plugs in unchanged, and
-// an upstream vz start option (D3(c)) would sit behind the same two methods.
+// FirstBooter runs the one first boot of a freshly installed base: with
+// Apple's guest-provisioning start option (an admin account, automatic login,
+// Remote Login) where the host has it, else plain, for the base's setup by
+// hand. It is the one call above the engine that Code-Hex/vz does not have;
+// the MACVM-PROVISION lane's macvm.Provisioner (from NewProvisioner) has
+// exactly this method set, so it plugs in unchanged, and an upstream vz start
+// option (D3(c)) would sit behind the same two methods.
 type FirstBooter interface {
-	// Supported is nil when this host can run the provisioning boot.
+	// Supported is nil when this host can run the provisioning boot. A host
+	// whose framework has no guest provisioning (macOS 26) wraps
+	// ErrNoProvisioning, and Boot still starts the base plain.
 	Supported() error
-	// Boot starts the base once with provisioning on and returns once it has
-	// started. done delivers one value when the VM stops; stop asks for a
-	// shutdown, force-stops when ctx ends, and returns what done delivered.
-	Boot(disk, aux string, hardwareModel, machineID []byte, cpus uint, memoryBytes uint64, nic *os.File, username, password string) (done <-chan error, stop func(ctx context.Context) error, err error)
+	// ScreenReady is nil when Boot's Screen can open a window on this Mac:
+	// this process serves AppKit and runs in the desktop's window-server
+	// session. Without one it wraps ErrNoDesktopSession.
+	ScreenReady() error
+	// Boot starts the base once and returns once it has started: with
+	// provisioning on for username/password, or plain when username is "".
+	Boot(disk, aux string, hardwareModel, machineID []byte, cpus uint, memoryBytes uint64, nic *os.File, username, password string) (FirstBoot, error)
 }
 
-// MinHostMajor is the oldest macOS a Mac can run macOS VMs on (guest provisioning needs 27). It lives here,
-// in no build tag, so the runner reads it too; vzengine's HostCheck enforces it.
-const MinHostMajor = 27
+// FirstBoot is one started first boot.
+type FirstBoot struct {
+	// Done delivers one value when the VM stops.
+	Done <-chan error
+	// Stop asks for a shutdown, force-stops when ctx ends, and returns what
+	// Done delivered.
+	Stop func(ctx context.Context) error
+	// Screen shows the VM's screen in a window on this Mac, for its setup by
+	// hand, until closeWindow is called. Nil where no window can open.
+	Screen func() (closeWindow func(), err error)
+}
+
+// MinHostMajor is the oldest macOS a Mac can run macOS VMs on. It lives here, in no build tag, so the
+// runner reads it too; vzengine's HostCheck enforces it through CheckHostVersion.
+const MinHostMajor = 26
+
+// ProvisionHostMajor is the oldest macOS with Apple's guest provisioning, named in words only: the helper
+// looks the API up at run time, and a host without it sets up its base by hand.
+const ProvisionHostMajor = 27
+
+// CheckHostVersion says why a Mac running macOS version v (kern.osproductversion) cannot run macOS VMs,
+// or nil when its major is MinHostMajor or later.
+func CheckHostVersion(v string) error {
+	major, _, _ := strings.Cut(v, ".")
+	if n, err := strconv.Atoi(major); err != nil || n < MinHostMajor {
+		return fmt.Errorf("macOS VMs need macOS %d or later on this Mac (it runs %s)", MinHostMajor, v)
+	}
+	return nil
+}
 
 // VZErrorVMLimitExceeded is the Virtualization framework's code 6 in VZErrorDomain
 // (VZErrorVirtualMachineLimitExceeded): it refuses to start another macOS VM.

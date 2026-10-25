@@ -95,9 +95,27 @@ func (s doctorSettings) get(flagName, flag, key string) (value, source string) {
 		}
 		return "", ""
 	}
-	if !slices.Contains(f.env, key) {
-		f.env = append(slices.Clone(f.env), key) // WARDYN_RUNNER_ORG_URL, which serve has no variable for
+	return s.resolve(f, flagName, flag, key)
+}
+
+// org is the organisation's address and where it came from, resolved as serve does: --org, the OrgURL managed
+// preference, then org_url in runnerd.json. serve has no environment variable for it, so this shell's is never
+// read. An earlier install's unit passes --org ${WARDYN_RUNNER_ORG_URL} from its service definition (the env
+// file), so when all three are empty that definition, and only it, names the address.
+func (s doctorSettings) org(flag string) (value, source string) {
+	i := slices.IndexFunc(runnerFields, func(f runnerField) bool { return f.name == "org_url" })
+	if value, source = s.resolve(runnerFields[i], "org", flag, "org_url"); value != "" {
+		return value, source
 	}
+	const legacy = "WARDYN_RUNNER_ORG_URL"
+	if v := s.paths.setting(legacy); v != "" {
+		return v, legacy + " in the service's settings"
+	}
+	return "", ""
+}
+
+// resolve is f's value and source; key names it in a source that is no flag or managed preference.
+func (s doctorSettings) resolve(f runnerField, flagName, flag, key string) (value, source string) {
 	in := runnerInputs{getenv: func(k string) string { return cmp.Or(s.paths.setting(k), s.getenv(k)) },
 		managed: managedPref, lockRead: managedLockRead, file: s.file, filePath: s.paths.configFile()}
 	if flag != "" {
@@ -123,7 +141,7 @@ func (s doctorSettings) get(flagName, flag, key string) (value, source string) {
 // fieldFor is the runnerd.json field the environment variable key stands for.
 func fieldFor(key string) (runnerField, bool) {
 	i := slices.IndexFunc(runnerFields, func(f runnerField) bool {
-		return slices.Contains(f.env, key) || (key == "WARDYN_RUNNER_ORG_URL" && f.name == "org_url")
+		return slices.Contains(f.env, key)
 	})
 	if i < 0 {
 		return runnerField{}, false
@@ -150,7 +168,7 @@ func runDoctor(ctx context.Context, h setupHost, o doctorOptions, getenv func(st
 	s := doctorSettings{paths: paths, getenv: getenv}
 	var fileErr error
 	s.file, fileErr = loadRunnerFile(paths.configFile(), false)
-	org, orgSource := s.get("org", o.org, "WARDYN_RUNNER_ORG_URL")
+	org, orgSource := s.org(o.org)
 	conn := runnerConn{org: org, orgSource: orgSource}
 	conn.trustedCA, _ = s.get("trusted-ca-file", o.trustedCAFile, "WARDYN_TRUSTED_CA_FILE")
 	conn.orgCA, _ = s.get("", "", "WARDYN_ORG_CA_FILE")
@@ -229,7 +247,7 @@ func runnerNetwork(ctx context.Context, c runnerConn, net *doctor.Network) ([]do
 	if len(sources) > 0 {
 		net.ExtraCA, net.ExtraCASource = pool, strings.Join(sources, " and ")
 	}
-	net.OrgURL, net.Source, net.OrgSetting, net.Strict = c.org, c.orgSource, "WARDYN_RUNNER_ORG_URL", true
+	net.OrgURL, net.Source, net.OrgSetting, net.Strict = c.org, c.orgSource, orgSetting, true
 	if c.orgSource == "" {
 		net.Source = "nothing set"
 	}
@@ -262,12 +280,16 @@ func (h setupHost) serviceStage(ctx context.Context, p setupPaths) doctor.Stage 
 		"start it with `systemctl --user start "+serviceUnit+"`; `journalctl --user -u wardyn-runnerd` says why it stopped")
 }
 
+// orgSetting names where the organisation's address is set, for every hint that fixes it: the settings serve
+// reads, and no others.
+const orgSetting = "the organisation address (--org, the OrgURL managed preference, or org_url in runnerd.json)"
+
 // statusSetting is the setting, and what to set it to, that fixes a connection that failed at stage.
 var statusSetting = map[string][2]string{
-	types.RunnerStageDNS:        {"WARDYN_RUNNER_ORG_URL", "an address that resolves from this computer (or fix its DNS or VPN)"},
+	types.RunnerStageDNS:        {orgSetting, "an address that resolves from this computer (or fix its DNS or VPN)"},
 	types.RunnerStageProxy:      {"HTTPS_PROXY", "a proxy address the service environment can reach, or unset it (NO_PROXY lists hosts to reach directly)"},
 	types.RunnerStageTLS:        {"WARDYN_TRUSTED_CA_FILE", "a PEM file holding the root CA of the certificate the organisation presents"},
-	types.RunnerStageHealthz:    {"WARDYN_RUNNER_ORG_URL", "your organisation's public HTTPS address"},
+	types.RunnerStageHealthz:    {orgSetting, "your organisation's public HTTPS address"},
 	types.RunnerStageEngine:     {"DOCKER_HOST", "the engine's socket if it is not the default"},
 	types.RunnerStageProxyImage: {"WARDYN_PROXY_IMAGE", "an image this engine can pull for this computer's architecture"},
 	types.RunnerStageRelay:      {"WARDYN_RELAY_LISTEN", "an address of this host that the engine's containers reach"},
@@ -303,7 +325,7 @@ func statusStage(path string) doctor.Stage {
 			"register this runner again: the organisation refused the proof it signs with its stored key (revoked or unknown)")
 	}
 	if set[0] == "" {
-		set = [2]string{"WARDYN_RUNNER_ORG_URL", "your organisation's public HTTPS address"}
+		set = [2]string{orgSetting, "your organisation's public HTTPS address"}
 	}
 	return doctor.FailStage("status", fmt.Sprintf("%s since %s (stage %s)%s", st.State, since, cmp.Or(st.Stage, "none"), last), set[0], set[1])
 }

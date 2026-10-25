@@ -6,8 +6,10 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"slices"
@@ -146,6 +148,16 @@ func (s *Server) saveDesktopRecording(ctx context.Context, run types.AgentRun, s
 		"clipboard_omitted": rec.ClipboardOmitted()}
 	if err != nil {
 		outcome, data["error"] = "failure", err.Error()
+	}
+	// A recorder that met a message it could not follow stopped keeping frames: the stored cast is
+	// shorter than the session, so the write row says where it ends rather than reading as complete.
+	var stopped struct {
+		StoppedMS int64 `json:"stopped_ms"`
+	}
+	if json.Unmarshal(doc, &stopped) == nil && stopped.StoppedMS > 0 {
+		data["stopped_ms"] = stopped.StoppedMS
+		slog.WarnContext(ctx, "wardynd: desktop recording stopped early at a message it could not follow",
+			"run_id", run.ID, "session", session, "stopped_ms", stopped.StoppedMS)
 	}
 	s.auditUISession(sess, "desktop.recording.write", key, outcome, data)
 }

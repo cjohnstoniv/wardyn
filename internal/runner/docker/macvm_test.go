@@ -225,8 +225,10 @@ func (r *macRig) helper(ctx context.Context, dir string) {
 			r.mu.Lock()
 			r.init = &in
 			res := guestagent.InitResult{}
-			if in.DesktopPassword != "" {
-				set := r.setPassword
+			// As the guest agent does: a run with no sign-ins kept gets its desktop disabled, so no
+			// password is set.
+			if in.DesktopPassword != "" || in.SignInsOff {
+				set := r.setPassword && !in.SignInsOff
 				res.DesktopPasswordSet = &set
 			}
 			r.mu.Unlock()
@@ -496,6 +498,43 @@ func TestMacVMRunWithoutItsDesktopPasswordFailsByName(t *testing.T) {
 	}
 }
 
+// A create that fails once its helper runs leaves the run to its destruction: with the helper outliving its
+// kill, the run directory (and its run.json) and the ledger entry stay, so the teardown can still end the run.
+func TestMacVMFailedCreateKeepsTheRunOfALiveHelper(t *testing.T) {
+	r := newMacRig(t)
+	r.c.helperWait = 100 * time.Millisecond
+	r.setPassword = false
+	r.host.mu.Lock()
+	r.host.pinned = map[int]bool{macHelperPID: true}
+	r.host.mu.Unlock()
+	spec := macSpec()
+	if _, err := r.d.CreateSandbox(context.Background(), spec); !errors.Is(err, macvm.ErrDesktopPassword) {
+		t.Fatalf("create: %v, want the named desktop password failure", err)
+	}
+	if _, err := os.Lstat(filepath.Join(r.c.runDir(spec.RunID), macvm.RunConfigFile)); err != nil {
+		t.Fatalf("the run's config is gone with its helper alive: %v", err)
+	}
+	if counted, _ := r.c.Ledger.Counted(); len(counted) != 1 {
+		t.Fatalf("ledger entries %+v, want the run's kept", counted)
+	}
+	// Once the helper has exited, the teardown ends the run.
+	r.host.mu.Lock()
+	r.host.pinned = nil
+	r.host.mu.Unlock()
+	r.host.gone(macHelperPID)
+	if !r.d.teardownMacVM(context.Background(), spec.RunID) {
+		t.Fatal("the teardown did not take the run as a macOS VM")
+	}
+	if _, err := os.Lstat(r.c.runDir(spec.RunID)); !os.IsNotExist(err) {
+		t.Fatalf("run directory left after the teardown: %v", err)
+	}
+	counted, _ := r.c.Ledger.Counted()
+	debts, _ := r.c.Ledger.Debts()
+	if len(counted)+len(debts) != 0 {
+		t.Fatalf("entry left after the teardown: %+v %+v", counted, debts)
+	}
+}
+
 // A base with no desktop runs with its desktop off: nothing to set, so no failure.
 func TestMacVMDesktopOffOnABaseWithNoDesktop(t *testing.T) {
 	r := newMacRig(t)
@@ -509,6 +548,27 @@ func TestMacVMDesktopOffOnABaseWithNoDesktop(t *testing.T) {
 	}
 	if _, err := r.d.DialDesktop(context.Background(), sb.Ref); !errors.Is(err, errMacDesktopOff) {
 		t.Fatalf("desktop of a run with no desktop: %v", err)
+	}
+	if err := r.d.StopSandbox(context.Background(), sb.Ref); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A run whose policy keeps no desktop sign-ins runs agent-only on a base with a desktop: the guest disables
+// the desktop and sets no password, which is the run's expected state, not its desktop password failure.
+func TestMacVMSignInsOffRunsAgentOnly(t *testing.T) {
+	r := newMacRig(t)
+	spec := macSpec()
+	spec.DesktopSignInsOff = true
+	sb, err := r.d.CreateSandbox(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("the agent-only run did not start: %v", err)
+	}
+	if !r.init.SignInsOff || r.init.DesktopPassword != "" {
+		t.Fatalf("the guest's sandbox: SignInsOff=%v, a password sent=%v; want sign-ins off and no password", r.init.SignInsOff, r.init.DesktopPassword != "")
+	}
+	if _, err := r.d.DialDesktop(context.Background(), sb.Ref); !errors.Is(err, errMacDesktopOff) {
+		t.Fatalf("desktop of an agent-only run: %v", err)
 	}
 	if err := r.d.StopSandbox(context.Background(), sb.Ref); err != nil {
 		t.Fatal(err)

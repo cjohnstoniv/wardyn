@@ -20,7 +20,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `aws_sso_refused_tokens`, `cli_sign_ins`, `ui_desktop_closed`, `desktop_signins`, `desktop_signin_shares`,
   `desktop_signin_runs`, `approval_rules`, `governance_restrictions`, `governance_restriction_members`,
   `governance_unit_admins`, `oidc_session_sids` and `desktop_vm_sign_ins`. Also grant it `SELECT, INSERT, UPDATE` on
-  `runner_health`, `launch_preset_version_floor`, `cli_sessions` and `governance_boundary`.
+  `runner_health`, `launch_preset_version_floor`, `cli_sessions` and `governance_boundary`. If it turns on
+  `WARDYN_MULTI_AGENT_TASKS`, grant it `SELECT, INSERT, UPDATE` on `run_harnesses` as well.
 
 ### Added
 
@@ -28,6 +29,64 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   release's wardyn-runnerd. With an older one the page says "Removing…" for 10 minutes after the run ends, then nothing
   about the disk. A saved "Finished" arrangement of the run page gains the "Attach from your terminal" tile at its
   bottom, once, where the disk line shows.
+- macOS VMs run on a Mac on macOS 26 as well as 27. macOS 26 has no unattended guest setup, so on a 26 Mac each
+  `wardyn-runnerd macos-vm prepare` stops after the install for setup by hand, once per base, about 10 minutes at the
+  Mac; `status` says so beforehand. Started over SSH or with sudo, it refuses at once and says to run it in Terminal
+  at the Mac's desktop. On macOS 27 nothing changes. Setup by hand now opens the guest's window on the Mac,
+  "Wardyn: set up this macOS VM"; before, its instructions pointed at a window that did not exist, even on 27. The
+  helper is built for macOS 26, and the release checks that no binary in the package asks for a newer macOS.
+
+### Fixed
+
+- A macOS VM start that failed after its helper had started deleted the run's directory even when the helper
+  outlived its kill. The teardown and the orphan sweep need that directory to end the VM later, so it now stays,
+  with the run's capacity held, until the helper has exited.
+- A macOS VM run whose policy keeps no desktop sign-ins now starts agent-only. Its guest turns the desktop off and
+  sets no desktop password, and the runner took that as the desktop password failure and ended the run.
+- A run on a runner could be refused with "no eligible runner" at the moment the runner was busy recording an idle
+  signal, though the runner was connected and ready. The runner now reads as connected throughout.
+- Stopping a run on a Docker runner no longer stops half-way when the organisation gives up on a slow stop and resets
+  the call. The stop finishes on its own time budget, so the run's proxy and network are not left for the clean-up
+  sweep.
+- A runner upgrade that failed to start and was being rolled back no longer overwrites the kept copy of the old runner
+  with the broken one first, so a full disk at that moment cannot leave the computer with no copy of the old runner. A
+  rollback also keeps its own copy of the old runner to restore from.
+  An upgrade also stops, with the runner untouched, when it cannot tell whether a previous copy is there (for example
+  a permissions error), rather than assuming there is none.
+- A desktop recording that stopped early, because the desktop sent a message the recorder could not follow, was saved
+  as an ordinary success. Its save record now says how far in the recording ends, and wardynd logs a warning.
+- A desktop recording's audit chain check passed when the oldest rows of the audit log had been deleted and nothing
+  came before the recording's own rows. It now fails there, as the whole-log check does.
+- In local mode with the second-admin switch on, the boundary editor no longer says "Submit for approval" for a save
+  that is refused. The save is refused in local mode, so the editor now words it as a plain save.
+- Over the SSH gateway, a command run in a bring-your-own image whose `HOME` is relative (resolved through `CDPATH`)
+  or is `-` no longer starts its output with a stray directory line. The output is the command's alone, as under
+  OpenSSH.
+- `wardyn-runnerd doctor` finds the organisation address the way the service does: `--org`, the managed `OrgURL`
+  setting, then `org_url` in `runnerd.json`. It no longer reads a `WARDYN_RUNNER_ORG_URL` exported in your shell, which
+  the service never reads, so a check that passed on that variable no longer hides an address the service would not
+  find. The variable is read only from an earlier install's service settings, where its unit passes it to `--org`.
+  Its hints name the settings that work.
+- An admin's successful check of the audit chain over another person's desktop recording now leaves a `recording.read`
+  row in that run's audit, marked `chain_check`. The check reads only the recording's metadata, not its content. A check
+  of your own run still leaves nothing, and who may ask, and what a refused caller sees, are unchanged.
+- A macOS VM run stuck in one start phase, such as connecting to the VM, now shows the same overdue advice as any
+  other start once the macOS start time has passed. Before, the phase row kept its spinner and said nothing. A start
+  that failed still shows its failure.
+- Choosing Linux again after macOS in New Run no longer drops a CPU or memory value you had set to exactly the Mac
+  minimum before choosing macOS. Only the figures that choosing macOS filled in are taken back, and only while they are
+  still at the minimum.
+- In New Run, a Mac pool that was preparing or at capacity when the page opened offers macOS once it recovers, when
+  you move to another step. Before, it stayed unavailable until the page was reloaded, and the draft is kept either way.
+- A run on a runner whose sandbox disappears without an exit code now ends. When two reports at least 30 seconds
+  apart find the sandbox gone, the run is marked lost (`gone`) and ends FAILED, and its slot frees at once (#3667).
+  Before, it stayed running and held the runner's capacity until its token lapsed. Migration
+  `0235_run_sandbox_absent_at` adds a column to `agent_runs`; no grant changes.
+- An interrupted or failed reinstall of the runner package on a Mac no longer leaves it counting fewer running macOS
+  VMs than it has. The installer also stops, with the count untouched, when it cannot read the count's files, where
+  it used to start the count empty.
+- A brief database error while a runner replays its saved audit events no longer drops one of them from the audit
+  log. The event is kept for the next replay.
 
 ## [0.10.0-rc.2] — 2026-10-25
 

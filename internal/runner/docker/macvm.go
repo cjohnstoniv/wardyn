@@ -372,7 +372,14 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
-	rollback = append(rollback, func() { _ = os.RemoveAll(dir) })
+	// Until the VM's destruction joins the rollback, the run directory is this create's to delete. From then on
+	// destroyMacVM alone decides: it keeps the directory, and the ledger entry, while the helper may be alive.
+	destroys := false
+	rollback = append(rollback, func() {
+		if !destroys {
+			_ = os.RemoveAll(dir)
+		}
+	})
 	// The run's network and proxy are what the start hands the VM (MacOSStarting), so a failure here is
 	// the start's, said before any clone began.
 	failed = runner.MacOSStartFailed
@@ -394,6 +401,7 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 	v := newMacVMRun(c, spec.RunID, dir)
 	ref := agentContainerName(spec.RunID)
 	// From here the VM (or its helper) may exist: the rollback is the teardown's own destruction.
+	destroys = true
 	rollback = append(rollback, func() {
 		v.stop()
 		v.agent.Close()
@@ -441,9 +449,10 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 	// The desktop's per-run password: from the helper to the guest agent, in memory only (never logged,
 	// never written). A base with a desktop publishes the run ready only once the guest set it (ERRATA E5):
 	// a helper that gives none, or a guest that did not set it, is the run's named failure
-	// (macvm.ErrDesktopPassword), never a ready run without its password.
+	// (macvm.ErrDesktopPassword), never a ready run without its password. A run that wants no sign-ins
+	// kept has no desktop at all (the guest disables it and sets no password), so it runs agent-only.
 	var password string
-	desktop := man.Desktop != "" && man.Desktop != "none"
+	desktop := man.Desktop != "" && man.Desktop != "none" && !spec.DesktopSignInsOff
 	if desktop {
 		if password, err = cc.DesktopPassword(bctx); err != nil {
 			slog.Warn("docker: the macOS VM's helper gave no desktop password", slog.String("run_id", spec.RunID.String()), slog.String("err", err.Error()))
