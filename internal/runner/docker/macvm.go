@@ -44,6 +44,10 @@ import (
 // macHelperExitWait bounds the wait for a helper to exit after its VM stopped, before it is killed.
 const macHelperExitWait = 15 * time.Second
 
+// macDestroyTimeout bounds a macOS VM destroy, which runs apart from the call that asked for it: the stop
+// (its timeout, and one helper wait for the dial), then a helper wait before the kill and one after it.
+const macDestroyTimeout = macvm.DefaultStopTimeout + 3*macHelperExitWait
+
 // MacVMConfig turns macOS VM sandboxes on. wardyn-runnerd fills it on a Mac whose operator turned them on.
 type MacVMConfig struct {
 	// Layout is the user's macos-vm.noindex tree: the base in bases/0, run directories in runs/.
@@ -772,12 +776,15 @@ func (d *Driver) macVMStop(ctx context.Context, v *vmRun, graceful bool) {
 // then is the ledger entry released, by the helper's stop report, or with no helper ever having claimed
 // it (the helper claims before it builds a VM, and a claim after the release finds no entry), or else by
 // the ledger's own check that no VM process of this user can still be it. A step that fails leaves the
-// entry held, and the next orphan sweep retries it.
+// entry held, and the next orphan sweep retries it. It runs on a context cut loose from the call's, which
+// the organisation cancels when it gives up on a slow call, and bounded by macDestroyTimeout instead.
 func (d *Driver) destroyMacVM(ctx context.Context, v *vmRun, entryID string, graceful bool) {
 	c := d.macVMConfig()
 	if c == nil {
 		return
 	}
+	ctx, done := context.WithTimeout(context.WithoutCancel(ctx), macDestroyTimeout)
+	defer done()
 	log := slog.With(slog.String("run_id", v.runID.String()))
 	if _, err := c.Ledger.Update(entryID, func(e *admission.Entry) { e.State = admission.StateStopping }); err != nil && !errors.Is(err, os.ErrNotExist) {
 		log.Warn("docker: mark a macOS VM stopping in the ledger", slog.String("err", err.Error()))
@@ -793,7 +800,11 @@ func (d *Driver) destroyMacVM(ctx context.Context, v *vmRun, entryID string, gra
 		log.Warn("docker: the macOS VM helper did not exit; killing it")
 		d.endMacVMHelper(v, syscall.SIGKILL)
 		if !d.waitMacVMHelperExit(ctx, c, e) {
-			log.Error("docker: the macOS VM helper outlived SIGKILL; its ledger entry stays held")
+			if ctx.Err() != nil {
+				log.Error("docker: the macOS VM destroy ran out of time before the helper exited; its ledger entry stays held")
+			} else {
+				log.Error("docker: the macOS VM helper outlived SIGKILL; its ledger entry stays held")
+			}
 			return
 		}
 	}

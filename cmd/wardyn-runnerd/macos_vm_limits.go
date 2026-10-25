@@ -24,13 +24,20 @@ type savedLimits struct {
 	MemoryMiB int64 `json:"memory_mib"`
 }
 
-// saveLimits keeps the limits the organisation sent, when it sent both. A failed write is logged once and
-// never fails the connect.
+// saveLimits keeps the limits the organisation sent, when it sent both, and drops the saved ones when it
+// did not (it cleared them). A failed write or removal is logged once and never fails the connect.
 func (m *macOSVMs) saveLimits(cpuMillis, memoryMiB int64) {
-	if m.limitsFile == "" || cpuMillis <= 0 || memoryMiB <= 0 {
+	if m.limitsFile == "" {
 		return
 	}
-	err := writeLimits(m.limitsFile, savedLimits{CPUMillis: cpuMillis, MemoryMiB: memoryMiB})
+	var err error
+	if cpuMillis <= 0 || memoryMiB <= 0 {
+		if err = os.Remove(m.limitsFile); errors.Is(err, os.ErrNotExist) {
+			err = nil
+		}
+	} else {
+		err = writeLimits(m.limitsFile, savedLimits{CPUMillis: cpuMillis, MemoryMiB: memoryMiB})
+	}
 	if err != nil {
 		m.limitsWarn.Do(func() {
 			slog.Warn("macOS VM sandboxes: the per-run limits were not saved for `macos-vm prepare`", "error", err.Error())
@@ -83,7 +90,7 @@ func prepareLimits(file string, cpu float64, memGB int64) (cpus int, memMiB uint
 	if cpus < 1 || mem < 1<<10 {
 		msg := "pass --per-run-cpu and --per-run-memory: the runner's per-run limits, which prepare's own VM uses and never raises"
 		if !known {
-			msg += " (no per-run limits are saved yet: this runner has not connected to its organisation)"
+			msg += " (the organisation has sent no per-run limits)"
 		}
 		return 0, 0, errors.New(msg)
 	}
