@@ -92,14 +92,17 @@ func (s *Server) runnerView(row types.Runner, used types.RunnerTally, admin bool
 	return v
 }
 
-// runnerMacOSVM is the macos_vm object of the runner's last caps event, re-encoded whole; nil when the
-// runner has not reported one.
+// runnerMacOSVM is the macos_vm object of the runner's last caps event, re-encoded without Refusal;
+// nil when the runner has not reported one. Refusal is the runner's own sentence, kept for
+// placement: the console reads Reason and the numbers beside it and words them itself.
 func (s *Server) runnerMacOSVM(id uuid.UUID) json.RawMessage {
 	caps, ok := s.runnerLastCaps(id)
 	if !ok || caps.MacOSVM == nil {
 		return nil
 	}
-	b, err := json.Marshal(caps.MacOSVM)
+	view := *caps.MacOSVM
+	view.Refusal = ""
+	b, err := json.Marshal(view)
 	if err != nil {
 		return nil
 	}
