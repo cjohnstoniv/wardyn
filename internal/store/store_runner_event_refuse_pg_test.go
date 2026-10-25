@@ -173,8 +173,8 @@ func TestPG_RefuseRunnerEventSettlesOwnOpenAction(t *testing.T) {
 		"runner:"+other.ID.String(), other.ID.String(), run2.ID.String()); n != 1 {
 		t.Fatalf("a refusal naming another runner's run: %d run-less rows naming the runner, want 1", n)
 	}
-	if n := f.count(t, `SELECT count(*) FROM audit_events WHERE action='runner.event.refuse' AND actor=$1 AND run_id=$2 AND target=$2::text AND data->>'claimed_run_id' IS NULL`,
-		"runner:"+f.rn.ID.String(), run.ID); n != 2 {
+	if n := f.count(t, `SELECT count(*) FROM audit_events WHERE action='runner.event.refuse' AND actor=$1 AND run_id=$2 AND target=$3 AND data->>'claimed_run_id' IS NULL`,
+		"runner:"+f.rn.ID.String(), run.ID, run.ID.String()); n != 2 {
 		t.Fatalf("own run's refusal rows: %d in its trail, want 2", n)
 	}
 
