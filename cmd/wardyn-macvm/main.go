@@ -42,6 +42,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/version"
 	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 	"golang.org/x/sys/unix"
+	glog "gvisor.dev/gvisor/pkg/log"
 )
 
 // deps are what main wires and tests replace.
@@ -456,6 +457,8 @@ func openRelayLog(root string) (*slog.Logger, func(), error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("the prep relay's log: %w", err)
 	}
+	// gVisor's netstack logs to stderr by default; send it here too.
+	glog.SetTarget(glog.JSONEmitter{Writer: &glog.Writer{Next: f}})
 	return slog.New(slog.NewJSONHandler(f, nil)), func() { _ = f.Close() }, nil
 }
 
