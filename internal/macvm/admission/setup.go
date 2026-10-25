@@ -493,7 +493,9 @@ func (s *setup) stage(dst *source, srcs []*source) error {
 	if got, err := readNames(tmp); err != nil || len(got) != moved {
 		return notInstalled("moving the macOS VM entries found %d of %d (%v)", len(got), moved, err)
 	}
-	if _, err := os.Lstat(path); err == nil {
+	if used, err := occupied(path); err != nil {
+		return err
+	} else if used {
 		if err := quarantineIn(s.c.Base, path); err != nil {
 			return err
 		}
@@ -675,11 +677,27 @@ func readNames(dir string) ([]string, error) {
 	return d.Readdirnames(-1)
 }
 
+// occupied reports whether anything is at path. An Lstat error other than not-exist is returned, because the
+// rename that follows is no refusal: over an empty directory it succeeds and replaces it (nothing is lost, as
+// it is empty), so the step stops here instead.
+func occupied(path string) (bool, error) {
+	_, err := os.Lstat(path)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, os.ErrNotExist):
+		return false, nil
+	}
+	return false, err
+}
+
 // moveAll renames each of names from src into dst, never over something there.
 func (s *setup) moveAll(src string, names []string, dst string) error {
 	for _, n := range names {
 		to := filepath.Join(dst, n)
-		if _, err := os.Lstat(to); err == nil {
+		if used, err := occupied(to); err != nil {
+			return err
+		} else if used {
 			return notInstalled("two macOS VM entries are named %s (%s)", n, src)
 		}
 		if s.c.beforeMove != nil {
@@ -720,7 +738,9 @@ func (s *setup) sock(from string) error {
 	if err := s.moveAll(src, keep, tmp); err != nil {
 		return err
 	}
-	if _, err := os.Lstat(dst); err == nil {
+	if used, err := occupied(dst); err != nil {
+		return err
+	} else if used {
 		if err := quarantineIn(s.c.Base, dst); err != nil {
 			return err
 		}

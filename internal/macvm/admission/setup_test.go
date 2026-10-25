@@ -1251,9 +1251,7 @@ func TestSetupSourceInspectErrorFailsClosed(t *testing.T) {
 		t.Fatalf("Setup with a source's fstat failing: %v (failed %v)", err, failed)
 	}
 	if err := r.openErr(); err == nil {
-		if n := counted(t, r); n != 2 {
-			t.Fatalf("before the retry a fresh helper counts %d of 2 entries", n)
-		}
+		t.Fatal("before the retry a fresh helper opened the ledger; it must refuse until the new base has its lock")
 	}
 	if n := everyEntry(t, r, names); n != 2 {
 		t.Fatalf("after the refused Setup %d copies of 2 entries are on disk", n)
@@ -1303,4 +1301,27 @@ func TestSetupSkipsUntrustedSources(t *testing.T) {
 		t.Fatalf("entries carried from untrusted sources: %v", got)
 	}
 	wantLayout(t, r)
+}
+
+// An Lstat that fails for a reason other than not-exist is an error, not "nothing there": the rename after
+// it would replace an empty directory.
+func TestSetupOccupiedRefusesOnAnyOtherLstatError(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "d"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		path string
+		used bool
+		err  bool
+	}{
+		{filepath.Join(dir, "d"), true, false},
+		{filepath.Join(dir, "none"), false, false},
+		{filepath.Join(dir, strings.Repeat("x", 300)), false, true}, // ENAMETOOLONG
+	} {
+		used, err := occupied(tc.path)
+		if used != tc.used || (err != nil) != tc.err {
+			t.Errorf("occupied(%.40s): %v, %v; want %v, error %v", tc.path, used, err, tc.used, tc.err)
+		}
+	}
 }
