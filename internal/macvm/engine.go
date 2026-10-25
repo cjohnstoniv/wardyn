@@ -70,6 +70,10 @@ type FirstBooter interface {
 	Boot(disk, aux string, hardwareModel, machineID []byte, cpus uint, memoryBytes uint64, nic *os.File, username, password string) (done <-chan error, stop func(ctx context.Context) error, err error)
 }
 
+// MinHostMajor is the oldest macOS a Mac can run macOS VMs on (guest provisioning needs 27). It lives here,
+// in no build tag, so the runner reads it too; vzengine's HostCheck enforces it.
+const MinHostMajor = 27
+
 // RestoreImage is what LoadRestoreImage reads from a restore image.
 type RestoreImage struct {
 	Path          string

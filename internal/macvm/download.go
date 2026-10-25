@@ -23,6 +23,11 @@ const DownloadRange = 64 << 20
 // maxRangeFailures is how many failed ranges in a row end the download.
 const maxRangeFailures = 3
 
+// DownloadFailurePrefix starts the error a restore image download ends with; the cause follows it.
+// The download wraps its own cause in it twice over (fetch, then the range), and a caller strips it
+// until none is left.
+const DownloadFailurePrefix = "macvm: restore image download: "
+
 type downloader struct {
 	client *http.Client
 	power  PowerSource
@@ -31,6 +36,8 @@ type downloader struct {
 	// paused is told when the download pauses for battery (true) and resumes.
 	paused   func(bool)
 	progress func(done, total int64)
+	// retrying is told that the range at off failed and is fetched again; total is -1 until known.
+	retrying func(off, total int64)
 }
 
 // fetch downloads url into part, resuming from part's current size, one range
@@ -72,7 +79,10 @@ func (d *downloader) fetch(ctx context.Context, url, part string) error {
 				return ctx.Err()
 			}
 			if failures++; failures >= maxRangeFailures {
-				return fmt.Errorf("macvm: restore image download: %w", err)
+				return fmt.Errorf(DownloadFailurePrefix+"%w", err)
+			}
+			if d.retrying != nil {
+				d.retrying(off, total)
 			}
 			continue
 		}
@@ -139,7 +149,7 @@ func (d *downloader) fetchRange(ctx context.Context, url string, f *os.File, off
 	case http.StatusRequestedRangeNotSatisfiable:
 		return 0, off, nil // already complete
 	default:
-		return 0, -1, fmt.Errorf("macvm: restore image download: HTTP %d", resp.StatusCode)
+		return 0, -1, fmt.Errorf(DownloadFailurePrefix+"HTTP %d", resp.StatusCode)
 	}
 	n, err := io.Copy(f, io.LimitReader(resp.Body, end-off+1))
 	if err == nil && n != end-off+1 && (total < 0 || off+n < total) {

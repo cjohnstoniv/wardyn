@@ -38,7 +38,11 @@ type provisionDarwin struct{}
 func (provisionDarwin) Supported() error {
 	if m := C.wardynProvisionMissing(); m != nil {
 		defer C.free(unsafe.Pointer(m))
-		return fmt.Errorf("macvm provision: this Mac's Virtualization framework has no %s; guest provisioning needs macOS 27 or later", C.GoString(m))
+		var missing error = errors.New(C.GoString(m))
+		if missing.Error() == ErrNoVirtualization.Error() {
+			missing = ErrNoVirtualization
+		}
+		return fmt.Errorf("macvm provision: this Mac's Virtualization framework has no %w; guest provisioning needs macOS 27 or later", missing)
 	}
 	return nil
 }

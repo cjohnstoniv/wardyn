@@ -186,7 +186,7 @@ func TestMacOSVMPerRunZeroIsUnsetNotNoRuns(t *testing.T) {
 	if g := m.guestMemory(man); g != man.MinMemoryMiB<<20 {
 		t.Fatalf("guest after (0, 0): %d bytes, want the base's minimum", g)
 	}
-	if why, _ := m.belowMinimum(man); why != "" {
+	if why, _, _ := m.belowMinimum(man); why != "" {
 		t.Fatalf("(0, 0) read as a limit: %s", why)
 	}
 }

@@ -53,12 +53,17 @@ func NewProvisioner() Provisioner {
 // provisionPlatform is set by the darwin cgo build (provision_darwin.go).
 var provisionPlatform func() Provisioner
 
-var errProvisionUnsupported = errors.New("macvm provision: guest provisioning needs a cgo build for macOS on Apple silicon")
+// ErrNoVirtualization is what a Mac's provisioning check wraps when the Virtualization framework reports
+// no virtualization support (VZVirtualMachine.isSupported is false). Its text is the name the check gives.
+var ErrNoVirtualization = errors.New("virtualization support")
+
+// ErrProvisionUnsupported is what a build without the Virtualization framework answers.
+var ErrProvisionUnsupported = errors.New("macvm provision: guest provisioning needs a cgo build for macOS on Apple silicon")
 
 type provisionStub struct{}
 
-func (provisionStub) Supported() error { return errProvisionUnsupported }
+func (provisionStub) Supported() error { return ErrProvisionUnsupported }
 
 func (provisionStub) Boot(string, string, []byte, []byte, uint, uint64, *os.File, string, string) (<-chan error, func(context.Context) error, error) {
-	return nil, nil, errProvisionUnsupported
+	return nil, nil, ErrProvisionUnsupported
 }
