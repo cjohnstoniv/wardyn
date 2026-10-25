@@ -352,6 +352,10 @@ func TestClassifyProvisionStart(t *testing.T) {
 	if out := classifyProvisionStart(other); errors.Is(out, ErrVMLimit) || out != other {
 		t.Fatalf("another error was classified as %v", out)
 	}
+	elsewhere := errors.New("macvm provision: start: boom (" + provisionVMLimitMark + "not at the start)")
+	if out := classifyProvisionStart(elsewhere); errors.Is(out, ErrVMLimit) || out != elsewhere {
+		t.Fatalf("a mark elsewhere in the text was classified as %v", out)
+	}
 	if classifyProvisionStart(nil) != nil {
 		t.Fatal("nil was classified")
 	}
