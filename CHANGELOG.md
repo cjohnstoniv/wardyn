@@ -36,7 +36,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the `ALTER
   DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `macos_vm_disks`
   (migration `0236_macos_vm_disks`). Without it a macOS VM run's page never says whether its disk was removed from the
-  Mac.
+  Mac. An upgrade from 0.9.x also needs every grant the 0.10.0-rc.1 notes list: `SELECT, INSERT, UPDATE, DELETE` on
+  `aws_sso_refused_tokens`, `cli_sign_ins`, `ui_desktop_closed`, `desktop_signins`, `desktop_signin_shares`,
+  `desktop_signin_runs`, `approval_rules`, `governance_restrictions`, `governance_restriction_members`,
+  `governance_unit_admins`, `oidc_session_sids` and `desktop_vm_sign_ins`. Also grant it `SELECT, INSERT, UPDATE` on
+  `runner_health`, `launch_preset_version_floor`, `cli_sessions` and `governance_boundary`.
 
 ### Changed
 
