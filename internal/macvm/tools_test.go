@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
+	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 )
 
 func shaHex(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
@@ -849,5 +850,29 @@ func TestStage2StoppedThroughCtlSockFails(t *testing.T) {
 	}
 	if _, err := s.Run(context.Background(), macvm.Stage2Input{}); !errors.Is(err, macvm.ErrStage2Stopped) || strings.Contains(err.Error(), "shut down cleanly") {
 		t.Fatalf("run: %v, want ErrStage2Stopped as itself", err)
+	}
+}
+
+// Every command the Command Line Tools install issues must be one the guest
+// agent's tools mode runs as root; a drift is otherwise found only as a refusal
+// on a real guest.
+func TestStage2CLTCommandsPassTheGuestAgentAllowlist(t *testing.T) {
+	f, g := newTools(t), newGuest()
+	var boots, stops atomic.Int64
+	runStage(t, f.stage(g, &boots, &stops))
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	checked := 0
+	for _, argv := range g.runs {
+		if filepath.Dir(argv[0]) == guestagent.MacToolsBinDir {
+			continue // a pushed CLI's version check: the allowlist wants the file on disk
+		}
+		if err := guestagent.ToolsExecAllowed(argv, guestagent.MacToolsBinDir); err != nil {
+			t.Errorf("installCLT issued %q, which the guest agent refuses: %v", argv, err)
+		}
+		checked++
+	}
+	if checked != 5 { // touch, softwareupdate -l, softwareupdate -i, git --version, rm -f
+		t.Fatalf("checked %d guest commands, want the 5 of the CLT install: %q", checked, g.runs)
 	}
 }
