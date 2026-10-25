@@ -67,7 +67,7 @@ func Setup(c SetupConfig) error {
 	if c.Logf == nil {
 		c.Logf = func(format string, a ...any) { fmt.Fprintf(os.Stderr, "admission: "+format+"\n", a...) }
 	}
-	s := &setup{c: c, l: &Ledger{c: Config{Dir: filepath.Join(c.Base, entriesName), Fstat: c.Fstat, LockWait: c.LockWait}}, swept: map[string][2]uint64{}}
+	s := &setup{c: c, l: &Ledger{c: Config{Dir: filepath.Join(c.Base, entriesName), Fstat: c.Fstat, LockWait: c.LockWait}}}
 	defer s.closeAll()
 	base, err := s.l.walkDir(c.Base)
 	if err != nil {
@@ -116,10 +116,9 @@ func Setup(c SetupConfig) error {
 type setup struct {
 	c     SetupConfig
 	l     *Ledger
-	id    [2]uint64            // the base's dev and inode
-	base  *os.File             // the base, opened again for the entries
-	files []*os.File           // every directory opened for the entries
-	swept map[string][2]uint64 // sock/ children the sweep kept: dev and inode
+	id    [2]uint64  // the base's dev and inode
+	base  *os.File   // the base, opened again for the entries
+	files []*os.File // every directory opened for the entries
 }
 
 func (s *setup) closeAll() {
@@ -533,13 +532,7 @@ func (s *setup) sock(from string) error {
 	if err := s.made(nil, tmp, os.ModeSticky|0o777); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, dst); err != nil {
-		return err
-	}
-	for _, n := range keep {
-		s.keep(dst, n)
-	}
-	return nil
+	return os.Rename(tmp, dst)
 }
 
 // sweepSock quarantines every child of dir that is not a sound u<uid>.
@@ -553,19 +546,9 @@ func (s *setup) sweepSock(dir string) error {
 			if err := quarantineIn(s.c.Base, filepath.Join(dir, n)); err != nil {
 				return err
 			}
-			continue
 		}
-		s.keep(dir, n)
 	}
 	return nil
-}
-
-// keep records dir/n, a sock/ child the sweep kept, by device and inode.
-func (s *setup) keep(dir, n string) {
-	var st unix.Stat_t
-	if unix.Lstat(filepath.Join(dir, n), &st) == nil {
-		s.swept[n] = [2]uint64{uint64(st.Dev), st.Ino}
-	}
 }
 
 // sockChild: dir/n is u<uid> (canonical decimal), a real directory owned by
@@ -620,9 +603,8 @@ func (s *setup) isExact(path string, typ, perm uint32) bool {
 }
 
 // verify walks to Base again, checks it is the directory set up (dev and
-// inode), and checks the whole layout. Of sock/'s children it judges only
-// those the sweep kept and that are still the same inode: sock/ is 1777, so
-// one a login makes or replaces after the sweep is left for the next sweep.
+// inode), and checks the whole layout. sock/'s children are the sweep's to
+// judge: sock/ is 1777, so one a login makes after it waits for the next one.
 func (s *setup) verify() error {
 	base, err := s.l.walkDir(s.c.Base)
 	if err != nil {
@@ -643,16 +625,6 @@ func (s *setup) verify() error {
 		return notInstalled("%s is not root:wheel 1777", filepath.Join(s.c.Base, entriesName))
 	case !s.isExact(filepath.Join(s.c.Base, sockName), unix.S_IFDIR, 0o1777):
 		return notInstalled("%s is not root:wheel 1777", filepath.Join(s.c.Base, sockName))
-	}
-	sock := filepath.Join(s.c.Base, sockName)
-	for n, id := range s.swept {
-		var st unix.Stat_t
-		if unix.Lstat(filepath.Join(sock, n), &st) != nil || [2]uint64{uint64(st.Dev), st.Ino} != id {
-			continue // gone or replaced since the sweep
-		}
-		if !s.sockChild(sock, n) {
-			return notInstalled("%s holds %s, which is not a login's own 0700 directory", sock, n)
-		}
 	}
 	return nil
 }
