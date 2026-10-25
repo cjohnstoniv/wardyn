@@ -212,7 +212,7 @@ func (m *macOSVMs) scrubError(err string) string {
 	root := strings.TrimRight(cmp.Or(m.sockRoot, admission.DefaultSockDir), "/")
 	err = regexp.MustCompile(regexp.QuoteMeta(root)+`/u\d+`).ReplaceAllLiteralString(err, root+"/u<uid>")
 	if home, herr := os.UserHomeDir(); herr == nil && home != "" && home != "/" {
-		err = strings.ReplaceAll(err, home, "~")
+		err = strings.ReplaceAll(strings.ReplaceAll(err, "/System/Volumes/Data"+home, "~"), home, "~")
 	}
 	if len(err) > maxBaseError {
 		err = err[:maxBaseError]

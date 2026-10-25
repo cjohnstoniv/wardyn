@@ -17,12 +17,12 @@ func limitsRig(t *testing.T) (*macOSVMs, string) {
 	return &macOSVMs{limitsFile: file, kick: make(chan struct{}, 1)}, file
 }
 
-// A bare prepare on a runner that never connected has no limits to use and says so.
+// A bare prepare with no saved limits has none to use and says the organisation sent none.
 func TestPrepareLimitsRefuseWithNoFile(t *testing.T) {
 	_, file := limitsRig(t)
 	_, _, err := prepareLimits(file, 0, 0)
 	if err == nil || !strings.Contains(err.Error(), "pass --per-run-cpu and --per-run-memory") ||
-		!strings.HasSuffix(err.Error(), "(no per-run limits are saved yet: this runner has not connected to its organisation)") {
+		!strings.HasSuffix(err.Error(), " (the organisation has sent no per-run limits)") {
 		t.Fatalf("a bare prepare with no saved limits: %v", err)
 	}
 	if _, _, err := prepareLimits(file, 4, 0); err == nil {
@@ -51,8 +51,12 @@ func TestPrepareLimitsFromTheSavedFile(t *testing.T) {
 	if cpus, mem, err = prepareLimits(file, 5, 9); err != nil || cpus != 5 || mem != 9216 {
 		t.Fatalf("both flags: %d CPUs, %d MiB, %v", cpus, mem, err)
 	}
+	m.setPerRunLimits(4000, 1536)
+	if _, mem, err = prepareLimits(file, 0, 0); err != nil || mem != 1536 {
+		t.Fatalf("a limit that is not whole GB: %d MiB, %v", mem, err)
+	}
 	m.setPerRunLimits(4000, 512) // under 1 GB: nothing prepare can use, though the runner has connected
-	if _, _, err = prepareLimits(file, 0, 0); err == nil || strings.Contains(err.Error(), "not connected") {
+	if _, _, err = prepareLimits(file, 0, 0); err == nil || strings.Contains(err.Error(), "sent no per-run limits") {
 		t.Fatalf("saved limits too small to use: %v", err)
 	}
 	m.setPerRunLimits(8000, 16384)
@@ -72,6 +76,30 @@ func TestSetPerRunLimitsSavesOnlyBoth(t *testing.T) {
 	}
 	m.limitsFile = ""
 	m.setPerRunLimits(4000, 8192) // no file configured: nothing to write, nothing to fail
+}
+
+// An organisation that clears the limits drops the saved ones, so prepare no longer sizes from stale
+// numbers and says the organisation has sent none.
+func TestSetPerRunLimitsClearedDropsTheFile(t *testing.T) {
+	m, file := limitsRig(t)
+	m.setPerRunLimits(6000, 12288)
+	if _, err := os.Stat(file); err != nil {
+		t.Fatalf("the limits were not saved: %v", err)
+	}
+	m.setPerRunLimits(0, 0)
+	if _, err := os.Stat(file); !os.IsNotExist(err) {
+		t.Fatalf("0/0 left the saved limits (%v)", err)
+	}
+	m.setPerRunLimits(0, 0) // already gone: not an error
+	_, _, err := prepareLimits(file, 0, 0)
+	if err == nil || !strings.HasSuffix(err.Error(), " (the organisation has sent no per-run limits)") {
+		t.Fatalf("a bare prepare after the limits were cleared: %v", err)
+	}
+	m.setPerRunLimits(6000, 12288)
+	m.setPerRunLimits(4000, 0) // a half-set pair is cleared too
+	if _, err := os.Stat(file); !os.IsNotExist(err) {
+		t.Fatalf("4000/0 left the saved limits (%v)", err)
+	}
 }
 
 // A write that fails (the directory is gone) never fails setPerRunLimits.

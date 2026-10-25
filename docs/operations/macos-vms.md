@@ -76,7 +76,7 @@
 
 `wardyn-runnerd macos-vm prepare` builds the Mac's base image. It is unattended, continues in the background, and takes a while beyond the download. It runs once per Mac. A newer macOS needs a re-prepare (see Newer macOS below).
 
-- It sizes its VM at the runner's per-run limits and never raises them. A runner that has connected to its organisation has them saved, and `prepare` uses them. Before that, or to use others, pass `--per-run-cpu` (CPUs) and `--per-run-memory` (GB); a flag wins over the saved limit.
+- It sizes its VM at the runner's per-run limits and never raises them. A runner that has connected to an organisation that sets them has them saved, and `prepare` uses them. Before that, if the organisation sets none, or to use others, pass `--per-run-cpu` (CPUs) and `--per-run-memory` (GB); a flag wins over the saved limit.
 - `--keep-ipsw` keeps Apple's image after the base is ready, and `--new-image` is the re-prepare.
 - `wardyn-runnerd setup` starts the same preparing itself with the limits it just registered, on a first registration unless the base is ready. Given `--keep-ipsw`, setup passes it on to that prepare. A rerun prints the prepare command instead.
 
