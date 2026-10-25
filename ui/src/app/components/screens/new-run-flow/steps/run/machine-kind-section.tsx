@@ -21,7 +21,7 @@ const withCode = (text: string) => text.split("`").map((part, i) => (i % 2 ? <co
  * macOS joins it while the organisation's switch is on (mock M-N1), disabled with its reason when the pool's
  * Macs cannot take one.
  */
-export function MachineKindSection({ kind, onChoose }: { kind: MachineKind; onChoose: (kind: MachineKind) => void }) {
+export function MachineKindSection({ kind, agents = [], onChoose }: { kind: MachineKind; agents?: readonly string[]; onChoose: (kind: MachineKind) => void }) {
   const labelId = React.useId();
   const { status } = useShellSetupStatus();
   const offer = useMacOSOffer();
@@ -29,6 +29,9 @@ export function MachineKindSection({ kind, onChoose }: { kind: MachineKind; onCh
   const vm = isVMKind(kind);
   const macOS = kind === "macos_vm";
   const refused = macOSOn && offer && !offer.ok ? refusalText(offer.refusal) : undefined;
+  // The draft's first agent whose admin disallows sign-ins in a desktop (the setup status's own harness row):
+  // a macOS desktop cannot block them, so the panel says the run will be refused one.
+  const signInsOffFor = status?.harnesses?.find((h) => h.desktop_sign_ins_off && agents.includes(h.id))?.display;
   return (
     <div className="mb-[18px] flex flex-col gap-[18px]">
       <div role="group" aria-labelledby={labelId} className="flex flex-col gap-2">
@@ -69,7 +72,7 @@ export function MachineKindSection({ kind, onChoose }: { kind: MachineKind; onCh
               <dd>{NR_MACHINE.CHANGES_NETWORK_BODY}</dd>
               <dt className="text-muted-foreground">{NR_MACHINE.CHANGES_CLIPBOARD}</dt>
               <dd>{macOS ? NR_MACHINE.CHANGES_CLIPBOARD_MACOS_NONE : NR_MACHINE.CHANGES_CLIPBOARD_BODY}</dd>
-              {macOS && <MacOSChanges offer={offer} />}
+              {macOS && <MacOSChanges signInsOffFor={signInsOffFor} />}
             </dl>
           </section>
         </>
@@ -92,12 +95,11 @@ function MacOSLines({ on, chosen, offer }: { on: boolean; chosen: boolean; offer
 }
 
 /** The macOS rows of the changes panel (mock M-N2): where sign-ins live, and the Mac itself. */
-function MacOSChanges({ offer }: { offer: MacOSOffer | undefined }) {
-  const off = offer?.ok ? offer.signInsOffFor : undefined;
+function MacOSChanges({ signInsOffFor }: { signInsOffFor: string | undefined }) {
   return (
     <>
       <dt className="text-muted-foreground">{NR_MACHINE.CHANGES_SIGN_INS}</dt>
-      <dd>{off ? NR_MACHINE.CHANGES_SIGN_INS_OFF(off) : NR_MACHINE.CHANGES_SIGN_INS_RUN_DISK}</dd>
+      <dd>{signInsOffFor ? NR_MACHINE.CHANGES_SIGN_INS_OFF(signInsOffFor) : NR_MACHINE.CHANGES_SIGN_INS_RUN_DISK}</dd>
       <dt className="text-muted-foreground">{NR_MACHINE.CHANGES_MAC}</dt>
       <dd>{NR_MACHINE.CHANGES_MAC_MANAGED}</dd>
     </>

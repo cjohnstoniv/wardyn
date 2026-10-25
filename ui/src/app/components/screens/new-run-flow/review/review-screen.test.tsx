@@ -414,6 +414,29 @@ describe("Review blockers", () => {
     expect(group("where").getByText(NR_REVIEW.BADGE_ATTENTION)).toBeInTheDocument();
   });
 
+  // The server names the field (errorBody.field): the machine kind links to the Run step, a harness to Harnesses,
+  // and the run's size stays on Review, under Limits, with no link away. Without the field, placement_capability
+  // would send all three to Tools.
+  it.each<[field: string, step: string | null, group: string | null]>([
+    ["machine_kind", "step=run", "where"],
+    ["harness", "step=harnesses", null],
+    ["resources", null, "limits"],
+  ])("routes a macOS VM placement refusal naming %s to where that field is changed", async (field, step, group) => {
+    const user = userEvent.setup();
+    const text = "This Mac has no room for another macOS VM right now.";
+    checks.current = answered(SCENARIO_PREFLIGHT.member, 1000, { preflightError: text, preflightReason: "placement_capability", preflightField: field });
+    open(AGENT);
+    await ready();
+    await waitFor(() => expect(within(blockerList()).getAllByRole("listitem")).toHaveLength(1));
+    const blocked = Array.from(document.querySelectorAll("[data-review-group][data-blocked]")).map((g) => g.getAttribute("data-review-group"));
+    // A harness has no Review field of its own: its blocker marks the groups the Harnesses step edits.
+    expect(blocked).toEqual(group ? [group] : ["run", "tools"]);
+    const link = within(blockerList()).queryByRole("button", { name: text });
+    if (!step) return expect(link).toBeNull();
+    await user.click(link!);
+    await waitFor(() => expect(path()).toContain(step));
+  });
+
   it("holds Launch for harnesses no one image carries together, and links to the Harnesses step", async () => {
     const user = userEvent.setup();
     const status = {

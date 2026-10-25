@@ -44,7 +44,7 @@ import { RUN_SYNC } from "../wardyn/copy/runners";
 import { DESKTOP } from "../wardyn/copy/desktop";
 import { useOperator, useOperatorResolved, usePrincipal } from "../wardyn/operator-context";
 import { Chip, WidgetCard } from "../wardyn/primitives";
-import { MacOSDiskNote, type MacOSRunFacts } from "./run-detail/macos-run-facts";
+import { MacOSDiskNote, macOSRunFactsOf, type MacOSRunFacts } from "./run-detail/macos-run-facts";
 import { DesktopFilesPanel } from "./run-detail/desktop-files-panel";
 import { DesktopPausedNote, DesktopSignInButton, DesktopSignInsNote, useDesktopSignIns } from "./run-detail/desktop-sign-ins";
 import { cn } from "../ui/utils";
@@ -53,7 +53,8 @@ import { orgCAFingerprints } from "../../lib/cli-install";
 
 // Exported for run-detail-ssh.test.tsx: standalone-testable without mounting
 // the whole screen's run/grants/egress/approvals/audit/recording fetch graph.
-export function ConnectSSHCard({ run, macOS }: { run: RunDetail; macOS?: MacOSRunFacts }) {
+export function ConnectSSHCard({ run, macOS: given }: { run: RunDetail; macOS?: MacOSRunFacts }) {
+  const macOS = given ?? macOSRunFactsOf(run);
   const principal = usePrincipal();
   const operator = useOperator();
   const resolved = useOperatorResolved();

@@ -220,6 +220,9 @@ export function statusDetailSentence(raw: string | null | undefined, reason?: st
     return isTerminalStatusReason(d.reason) ? STARTING_RAW_PREFIX + d.reason : "";
   }
   const withMessage = (lead: string) => (d.message ? `${lead} ${stripCriWrapper(d.message)}` : lead);
+  const macOS = macOSStartOf(text, reason);
+  const macOSLine = macOS && macOSStartLine(macOS);
+  if (macOSLine) return macOSLine;
   switch (d.reason) {
     case "ContainerCreating":
     case "PodInitializing":
@@ -265,6 +268,9 @@ export function statusDetailChip(raw: string | null | undefined, reason?: string
   // Same defence as the sentence's: a terminal reason always gets a
   // chip, detail or no detail.
   if (!text && !isTerminalStatusReason(d.reason)) return "";
+  const macOS = macOSStartOf(text, reason);
+  const macOSLine = macOS && macOSStartLine(macOS, true);
+  if (macOSLine) return macOSLine;
   switch (d.reason) {
     case "Pulling":
       return CHIP_DOWNLOADING;
@@ -323,6 +329,53 @@ export type StartupLastStep = "terminal" | "task" | "command" | null;
 
 /** A macOS VM's start: the phase it is in, and the sentence that stopped it there (start or connect only). */
 export type MacOSStart = { phase: "clone" | "start" | "connect"; failure?: string };
+
+// Go's runner.MacOS* reason tokens (internal/runner/macos_start.go), by name and value: a macOS VM's start
+// phases, and the failures that stop one. Pinned by a parity test.
+export const MACOS_START = {
+  CLONING: "MacOSCloning",
+  STARTING: "MacOSStarting",
+  CONNECTING: "MacOSConnecting",
+  CLONE_FAILED: "MacOSCloneFailed",
+  START_FAILED: "MacOSStartFailed",
+  CONNECT_FAILED: "MacOSConnectFailed",
+  DISK_SHORT: "MacOSDiskShort",
+} as const;
+
+// MacOSDiskShort's message (Go: runner.MacOSDiskShortMessage).
+const MACOS_DISK_SHORT = /^(\d+) GB reserved, (\d+) GB free$/;
+
+/** The macOS VM start a run's status line names, or undefined for any other line. The disk refusal stops the
+ *  start at Starting macOS, as mock M-D1 frame 4 draws it. */
+export function macOSStartOf(raw: string | null | undefined, reason?: string | null): MacOSStart | undefined {
+  const d = parseStatusDetail(raw, reason);
+  switch (d.reason) {
+    case MACOS_START.CLONING: return { phase: "clone" };
+    case MACOS_START.STARTING: return { phase: "start" };
+    case MACOS_START.CONNECTING: return { phase: "connect" };
+    case MACOS_START.CLONE_FAILED: return { phase: "clone", failure: "" };
+    case MACOS_START.START_FAILED: return { phase: "start", failure: "" };
+    case MACOS_START.CONNECT_FAILED: return { phase: "connect", failure: "" };
+    case MACOS_START.DISK_SHORT: {
+      const m = MACOS_DISK_SHORT.exec(d.message);
+      return { phase: "start", failure: m ? RUN_STARTUP_MACOS.DISK_SHORT(m[1], m[2]) : "" };
+    }
+  }
+  return undefined;
+}
+
+/** A macOS VM start's line for the board (or, `chip`, the header's short register): its phase's row label, or the
+ *  sentence that stopped it. Undefined for a clone that failed with no sentence, whose row label would read as
+ *  still cloning. */
+function macOSStartLine(start: MacOSStart, chip = false): string | undefined {
+  if (start.failure && !chip) return start.failure;
+  const failed = start.failure !== undefined;
+  switch (start.phase) {
+    case "clone": return failed ? undefined : RUN_STARTUP_MACOS.STEP_CLONE;
+    case "start": return failed ? RUN_STARTUP_MACOS.STEP_START_FAILED : RUN_STARTUP_MACOS.STEP_START;
+    case "connect": return failed ? RUN_STARTUP_MACOS.STEP_CONNECT_FAILED : RUN_STARTUP_MACOS.STEP_CONNECT;
+  }
+}
 
 // A macOS VM's rows replace Starting the sandbox and Downloading the image (mock M-D1): the phases before the
 // current one are done, the current one runs or, with a failure, fails and says why, and the list stops there.

@@ -88,14 +88,24 @@ describe("ConnectSSHCard: macOS desktop", () => {
     expect(within(d).getByText(DESKTOP.signInsNoteRunDisk)).toBeInTheDocument();
   });
 
-  it("frame 7: a view-only Screen Sharing is Off, says so, and has no Open desktop", async () => {
-    renderCard({ desktop: "observe" });
+  it.each<[from: string, facts: MacOSRunFacts | undefined, over: Partial<RunDetail>]>([
+    ["a prop", { desktop: "observe" }, {}],
+    ["the run's own macos field", undefined, { macos: { desktop: "observe" } }],
+  ])("frame 7: a view-only Screen Sharing is Off, says so, and has no Open desktop (from %s)", async (_from, facts, over) => {
+    renderCard(facts, over);
     const d = await desk();
     expect(await within(d).findByText(DESKTOP.statusOff)).toBeInTheDocument();
     expect(within(d).getByText(DESKTOP.kindMacOS)).toBeInTheDocument();
     expect(within(d).getByText(DESKTOP.observeOnlyMacOS)).toBeInTheDocument();
     expect(within(d).queryByRole("button")).toBeNull();
     expect(within(d).queryByText(DESKTOP.off)).toBeNull();
+  });
+
+  it("a Mac whose Screen Sharing can be controlled keeps the Open desktop", async () => {
+    renderCard(undefined, { macos: { desktop: "control" } });
+    const d = await desk();
+    expect(await within(d).findByRole("button", { name: UI_APPS_LANE.cta("desktop") })).toBeInTheDocument();
+    expect(within(d).queryByText(DESKTOP.observeOnlyMacOS)).toBeNull();
   });
 
   it.each<[frame: string, disk: NonNullable<MacOSRunFacts["disk"]>, line: string]>([

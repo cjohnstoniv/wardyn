@@ -19,7 +19,7 @@ import { DRIVE_REFUSAL_REASON } from "../../../../lib/drive-refusals";
 import type { SetupItem } from "../../../../lib/types/preflight";
 import type { TemplateSetupNeed } from "../../../../lib/types/templates";
 import {
-  FIELD_HOME_OVERRIDES, FIELD_OF_REASON, groupOfPath, homeOfPath, homeOfReason, REVIEW_GROUP_OF_FIELD, type FieldHome, type ReviewGroupId,
+  FIELD_HOME_OVERRIDES, FIELD_OF_REASON, groupOfPath, homeOfPath, homeOfRefusal, REVIEW_GROUP_OF_FIELD, type FieldHome, type ReviewGroupId,
 } from "../draft/field-homes";
 import type { NewRunLocation } from "../draft/new-run-url";
 import type { RunIntent } from "../draft/run-intent";
@@ -91,8 +91,8 @@ export interface BlockerInput {
   templateNeeds: readonly TemplateSetupNeed[];
   /** The template's needs are unread or could not be read: fail closed with the stale line. */
   templateUnread?: boolean;
-  /** The server's refusal of this draft: its own sentence and reason. */
-  refusal: { text: string; reason: string } | null;
+  /** The server's refusal of this draft: its own sentence and reason, and the request field it names, if any. */
+  refusal: { text: string; reason: string; field?: string } | null;
   setupItems: readonly SetupItem[];
   /** A local MCP server on for a harness that cannot apply the rules it is under: the run would be refused. */
   localMcp?: readonly { harness: string; server: string }[];
@@ -130,8 +130,10 @@ export function buildBlockers(input: BlockerInput): Blocker[] {
     !(input.localMcp?.length && input.refusal.reason === "request_field_unavailable") &&
     !(input.keepLimit && input.refusal.reason === DRIVE_REFUSAL_REASON.MEMBER_LIMIT_REACHED)
   ) {
-    const field = (FIELD_OF_REASON as Record<string, string | undefined>)[input.refusal.reason];
-    out.push({ id: "refusal", kind: "refusal", text: input.refusal.text, to: locationOfHome(homeOfReason(input.refusal.reason)), ...(field && { field }) });
+    const { reason, field: named = "" } = input.refusal;
+    // The field the refusal names marks its Review group when Review shows that field (machine_kind, resources).
+    const field = (groupOfPath(named) && named) || (FIELD_OF_REASON as Record<string, string | undefined>)[reason];
+    out.push({ id: "refusal", kind: "refusal", text: input.refusal.text, to: locationOfHome(homeOfRefusal(reason, named)), ...(field && { field }) });
   }
   for (const item of input.setupItems) {
     out.push({ id: `setup:${item.id}`, kind: "setup_item", text: item.detail || item.label, to: { screen: "step", step: "tools" }, ...(setupDoor(item) === "add" && { addSecret: item }) });

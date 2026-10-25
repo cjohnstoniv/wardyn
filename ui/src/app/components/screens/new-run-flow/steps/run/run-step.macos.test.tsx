@@ -123,12 +123,21 @@ describe("OS row: macOS chosen (frame 2, M-N2 frame 1)", () => {
   });
 
   it("says an agent that disallows desktop sign-ins stops the run (M-N2 frame 3)", async () => {
-    show(AGENT, ON, { ...READY, signInsOffFor: "Release bot" });
+    // The setup status's own harness row says it: the draft's agent has "Sign-ins in a desktop: Not allowed".
+    const status = { ...ON, harnesses: [{ id: "release-bot", display: "Release bot", has_gateway: false, has_login: false, desktop_sign_ins_off: true }] } as SetupStatus;
+    show({ ...AGENT, tools: [{ kind: "harness", id: "release-bot" }] } as RunIntent, status, READY);
     await chooseVM();
     await userEvent.click(macosButton());
     const panel = within(changes());
     expect(panel.getByText(NR_MACHINE.CHANGES_SIGN_INS_OFF("Release bot"))).toBeInTheDocument();
     expect(panel.queryByText(NR_MACHINE.CHANGES_SIGN_INS_RUN_DISK)).toBeNull();
+    cleanup();
+
+    // Another agent of the same roster keeps the run-disk line.
+    show({ ...AGENT, tools: [{ kind: "harness", id: "claude-code" }] } as RunIntent, status, READY);
+    await chooseVM();
+    await userEvent.click(macosButton());
+    expect(within(changes()).getByText(NR_MACHINE.CHANGES_SIGN_INS_RUN_DISK)).toBeInTheDocument();
   });
 
   it("keeps the Linux panel as it is: no sign-ins or Mac row, and the Linux clipboard words (M-N2 frame 4)", async () => {

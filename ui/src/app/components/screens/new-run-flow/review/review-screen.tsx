@@ -140,7 +140,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
     templateNeeds: template.needs,
     templateUnread: template.unread,
     // A credential refusal is not a blocker: Launch's own refusal opens the provider's sign-in door.
-    refusal: checks.preflightError === null || checks.preflightRefusal ? null : { text: checks.preflightError, reason: checks.preflightReason },
+    refusal: checks.preflightError === null || checks.preflightRefusal ? null : { text: checks.preflightError, reason: checks.preflightReason, field: checks.preflightField },
     gatewayOff: isServer(draft.intent) && gateway === false,
     setupItems: missingSetup(pre ?? (checks.preflightRefusal && { setup_items: checks.preflightRefusal.setupItems }), checks.preview.result),
     localMcp: localMcpConflicts(pre?.access ?? checks.preview.result?.access, draft.intent),

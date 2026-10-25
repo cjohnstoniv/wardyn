@@ -37,8 +37,6 @@ export type MacOSOffer =
       harnesses: readonly string[];
       /** Set when the pool has exactly one Mac: the harness refusal names it, else it speaks for the pool. */
       runner?: string;
-      /** The agent whose admin disallows sign-ins in a desktop; a macOS desktop cannot block them, so create refuses. */
-      signInsOffFor?: string;
     }
   | { ok: false; refusal: MacOSRefusal };
 

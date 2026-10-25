@@ -190,6 +190,9 @@ func (s *Server) projectStatusDetailFor(r *http.Request, runs []types.AgentRun) 
 //   - FAILED with a "queue: <token>" end reason (never one of the queue's wait reasons: a run
 //     that waited and later failed for another cause must not be served the stale wait), or KILLED with "queue: runner_pool_removed": kept,
 //     plus its token. The queue writes these; the substrate-wait rules below do not apply to them.
+//   - FAILED with a macOS VM start failure ("macos: <token>", runner.IsMacOSStartFailure): kept,
+//     plus its token. It names the phase the start stopped in, which a reader who never saw STARTING
+//     would otherwise lose.
 //   - KILLED with a lifetime end reason ("lifetime: end_reached" or
 //     "lifetime: max_lifetime_reached", types.RunEndReason): kept, plus its token.
 //     Any other detail on a KILLED run is blanked.
@@ -221,6 +224,8 @@ func projectStatusDetail(runs []types.AgentRun) {
 			} else {
 				r.StatusDetail = ""
 			}
+		case r.State == types.RunFailed && runner.IsMacOSStartFailure(reason):
+			r.StatusReason = reason
 		case r.State == types.RunFailed:
 			if !runner.IsTerminalWaitingReason(reason) {
 				// The row may be missing the ending, or holding a stale one.

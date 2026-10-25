@@ -85,6 +85,7 @@ func TestPlacementCapability_MacOSVM(t *testing.T) {
 		want    string // "" means the run is placed
 		wantNot string
 		reason  placement.Reason // the refusal's code; placement_capability when unset
+		field   string           // the request field the refusal names; machine_kind when unset, "-" for none
 	}{
 		{name: "ready managed Mac", mc: mac(nil), ctx: member},
 		{name: "the exact minimum size", mc: mac(nil), ctx: member, ask: macOSVMAsk{CPUMillis: 4000, MemoryMiB: 8192}},
@@ -106,14 +107,14 @@ func TestPlacementCapability_MacOSVM(t *testing.T) {
 			want: "no macOS base image ready"},
 		{name: "no room", mc: mac(func(m *runnerwire.MacVMCaps) { m.Max = 0 }), ctx: member, want: "no room for another macOS VM"},
 		{name: "harness the base cannot serve, tools missing", mc: mac(func(m *runnerwire.MacVMCaps) { m.Harnesses = []string{"none"} }), ctx: member,
-			ask: macOSVMAsk{Harnesses: []string{"claude-code"}}, want: "only 'Your own tools'"},
+			ask: macOSVMAsk{Harnesses: []string{"claude-code"}}, want: "only 'Your own tools'", field: "harness"},
 		{name: "harness the base cannot serve", mc: mac(nil), ctx: member, ask: macOSVMAsk{Harnesses: []string{"claude-code", "codex-cli"}},
-			want: "can't run codex-cli right now"},
+			want: "can't run codex-cli right now", field: "harness"},
 		{name: "memory under the base minimum", mc: mac(nil), ctx: member, ask: macOSVMAsk{CPUMillis: 4000, MemoryMiB: 4096},
-			want: "Per-run memory on this runner is 4 GB; a macOS VM needs at least 8 GB. Re-register the runner with --per-run-memory 8 or more."},
+			want: "Per-run memory on this runner is 4 GB; a macOS VM needs at least 8 GB. Re-register the runner with --per-run-memory 8 or more.", field: "resources"},
 		{name: "CPUs under the base minimum", mc: mac(nil), ctx: member, ask: macOSVMAsk{CPUMillis: 2500, MemoryMiB: 8192},
-			want: "Per-run CPUs on this runner are 2; a macOS VM needs at least 4."},
-		{name: "a folder", mc: mac(nil), ctx: member, mounts: 1, want: remote.VMNoFolderShare},
+			want: "Per-run CPUs on this runner are 2; a macOS VM needs at least 4.", field: "resources"},
+		{name: "a folder", mc: mac(nil), ctx: member, mounts: 1, want: remote.VMNoFolderShare, field: "-"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := capsServer(&fakeRunner{})
@@ -129,6 +130,10 @@ func TestPlacementCapability_MacOSVM(t *testing.T) {
 			if ref == nil || ref.status != http.StatusUnprocessableEntity || ref.body.Reason != string(reason) ||
 				!strings.Contains(ref.body.Error, tc.want) || (tc.wantNot != "" && strings.Contains(ref.body.Error, tc.wantNot)) {
 				t.Fatalf("refusal = %+v, want 422 %s naming %q", ref, reason, tc.want)
+			}
+			// The field routes the refusal to the New Run step that changes it.
+			if field := strings.TrimPrefix(cmp.Or(tc.field, "machine_kind"), "-"); ref.body.Field != field {
+				t.Fatalf("refusal names field %q, want %q", ref.body.Field, field)
 			}
 		})
 	}
@@ -152,6 +157,9 @@ func TestPlacementCapability_MacOSVMKindsAreSeparate(t *testing.T) {
 		if ref == nil || ref.status != http.StatusUnprocessableEntity || ref.body.Reason != string(placement.ReasonPlacementCapability) ||
 			!strings.Contains(ref.body.Error, "macOS VM") {
 			t.Errorf("%s: refusal = %+v, want 422 placement_capability naming macOS VM sandboxes", name, ref)
+		}
+		if ref != nil && ref.body.Field != "machine_kind" {
+			t.Errorf("%s: refusal names field %q, want machine_kind", name, ref.body.Field)
 		}
 	}
 	linuxReq := createRunRequest{Placement: types.PlacementLocal, RunnerID: macOnly.String(), MachineKind: "linux_vm"}
@@ -385,5 +393,38 @@ func TestRecordVMMachine_PerKind(t *testing.T) {
 	}
 	if err := s.recordVMMachine(context.Background(), macRun, runner.Sandbox{Machine: mac}); err != nil || st.got[macRun.ID] != *mac {
 		t.Fatalf("macOS VM run: %v, wrote %v", err, st.got)
+	}
+}
+
+// A macOS VM run's view says the desktop its Mac offers, control or observe, from the runner's caps
+// now; it is absent for a Mac with no desktop, a runner with no macOS caps, a run on no runner and a
+// Linux VM run.
+func TestRunMacOSView(t *testing.T) {
+	s := capsServer(&fakeRunner{})
+	withDesktop := func(d string) *runnerwire.MacVMCaps { mc := readyMac(); mc.Desktop = d; return mc }
+	control := macRunner(t, s, readyMac(), nil)
+	observe := macRunner(t, s, withDesktop(runnerwire.MacVMDesktopObserve), nil)
+	none := macRunner(t, s, withDesktop(runnerwire.MacVMDesktopNone), nil)
+	noMac := macRunner(t, s, nil, nil)
+	for _, tc := range []struct {
+		name   string
+		kind   types.MachineKind
+		runner *uuid.UUID
+		want   string // "" means no view
+	}{
+		{"control", types.MachineMacOSVM, &control, runnerwire.MacVMDesktopControl},
+		{"observe", types.MachineMacOSVM, &observe, runnerwire.MacVMDesktopObserve},
+		{"no desktop", types.MachineMacOSVM, &none, ""},
+		{"no macOS caps", types.MachineMacOSVM, &noMac, ""},
+		{"no runner", types.MachineMacOSVM, nil, ""},
+		{"a Linux VM", types.MachineLinuxVM, &control, ""},
+	} {
+		got := "(none)"
+		if v := s.runMacOSView(types.AgentRun{MachineKind: tc.kind, RunnerID: tc.runner}); v != nil {
+			got = v.Desktop
+		}
+		if want := cmp.Or(tc.want, "(none)"); got != want {
+			t.Errorf("%s: desktop %q, want %q", tc.name, got, want)
+		}
 	}
 }

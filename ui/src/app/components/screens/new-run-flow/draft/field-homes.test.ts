@@ -10,7 +10,7 @@ import { RUN_MODE_REASON } from "../../../../lib/run-mode-refusals";
 import { RUNNER_POOL_REASONS } from "../../../../lib/runner-pool-refusals";
 import { TEMPLATE_POLICY_FIELDS, TEMPLATE_REQUEST_FIELDS } from "../../../../lib/template-fields";
 import { TEMPLATE_REASON } from "../../../../lib/template-refusals";
-import { FIELD_HOME, FIELD_HOME_OVERRIDES, HOME_OF_REASON, homeOfPath, homeOfReason, REVIEW_GROUP_OF_FIELD } from "./field-homes";
+import { FIELD_HOME, FIELD_HOME_OVERRIDES, HOME_OF_REASON, homeOfPath, homeOfReason, homeOfRefusal, REVIEW_GROUP_OF_FIELD } from "./field-homes";
 
 const REGISTRY = [
   ...TEMPLATE_REQUEST_FIELDS.map((r) => r.name),
@@ -21,6 +21,15 @@ const sortedKeys = (o: object) => Object.keys(o).sort();
 describe("field homes (U7)", () => {
   it("give every registry request field and every policy field exactly one home", () => {
     expect(sortedKeys(FIELD_HOME)).toEqual(REGISTRY);
+  });
+
+  it("home a refusal by the field it names before its reason, and by its reason without one", () => {
+    expect(homeOfRefusal("placement_capability", "machine_kind")).toBe("run");
+    expect(homeOfRefusal("placement_capability", "harness")).toBe("harnesses");
+    expect(homeOfRefusal("placement_capability", "resources")).toBe("review");
+    expect(homeOfRefusal("runner_posture_unmet", "machine_kind")).toBe("run");
+    expect(homeOfRefusal("placement_capability")).toBe(homeOfReason("placement_capability"));
+    expect(homeOfRefusal("placement_capability", "pause_idle_after_sec")).toBe(homeOfReason("placement_capability"));
   });
 
   it("give every registry field exactly one Review group", () => {

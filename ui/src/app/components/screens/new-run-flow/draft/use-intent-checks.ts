@@ -288,6 +288,7 @@ export function useIntentChecks(params: Params) {
   const result = preflightIsCurrent ? checked.result as PreflightResult | null : null;
   const error = checked.error;
   const reason = error instanceof HttpError ? error.reason : "";
+  const field = error instanceof HttpError ? error.field : "";
   const refused = checked.status >= 400 && checked.status < 500 && checked.status !== 401 && checked.status !== 429 && !NEVER_BLOCKS.has(reason);
   // A credential refusal is an answer that never holds Launch (NEVER_BLOCKS): the launch it lets through opens the
   // provider's sign-in door.
@@ -311,6 +312,8 @@ export function useIntentChecks(params: Params) {
     preflightErrorSeq: checked.errorSeq,
     /** The envelope's reason for preflight's refusal of this body, "" when it has none. */
     preflightReason: preflightIsCurrent ? reason : "",
+    /** The request field preflight's refusal names (machine_kind, harness, resources…), "" when it names none. */
+    preflightField: preflightIsCurrent ? field : "",
     preflightIsCurrent,
     preflightFresh,
     preflightBlock: preflightFresh && (refused || (autoCheck.backendArm && missing("backend")) || (autoCheck.modelArm && missing("llm_access"))),

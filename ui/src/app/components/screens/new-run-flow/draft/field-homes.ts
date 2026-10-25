@@ -125,6 +125,13 @@ export function groupOfPath(path: string): ReviewGroupId | undefined {
 export const homeOfReason = (reason: string): FieldHome =>
   (HOME_OF_REASON as Record<string, FieldHome>)[reason] ?? "review";
 
+/** The step that changes the request field a refusal names (the envelope's `field`), where it differs by field
+ *  within one reason: a macOS VM's placement refusal names the machine kind, a harness or the run's size. */
+export const HOME_OF_REFUSAL_FIELD: Record<string, FieldHome> = { machine_kind: "run", harness: "harnesses", resources: "review" };
+
+/** A refusal's step: its field's, when the console knows that field, else its reason's. */
+export const homeOfRefusal = (reason: string, field = ""): FieldHome => HOME_OF_REFUSAL_FIELD[field] ?? homeOfReason(reason);
+
 /** A document path's home: the longest known subpath, else its top-level field (or `inline_policy.<name>`). */
 export function homeOfPath(path: string): FieldHome | undefined {
   const parts = path.replace(/\[\d+\]|\.\d+(?=\.|$)/g, "[]").split(".");

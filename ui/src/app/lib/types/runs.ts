@@ -525,6 +525,15 @@ export interface RunDetail extends AgentRun {
   computer_folder?: RunComputerFolder;
   // Every agent of a background run with several, the run's own first; absent otherwise.
   agents?: RunDetailAgent[];
+  // A macOS VM run's desktop as its Mac offers it (GET /runs/{id} only); see RunMacOS.
+  macos?: RunMacOS;
+}
+
+// GET /runs/{id}'s macos (runMacOSView, internal/api/run_macos_view.go): whether the Mac's Screen Sharing
+// lets the desktop be controlled or only watched, read off the runner's live caps. Absent for any other run,
+// and while the runner's caps are unknown.
+export interface RunMacOS {
+  desktop: "control" | "observe";
 }
 
 // One agent of a run with several agents (runDetailAgent, internal/api/run_multi_agent.go).
