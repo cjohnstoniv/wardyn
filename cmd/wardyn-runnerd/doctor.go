@@ -98,11 +98,20 @@ func (s doctorSettings) get(flagName, flag, key string) (value, source string) {
 	return s.resolve(f, flagName, flag, key)
 }
 
-// org is the organisation's address and where it came from, resolved exactly as serve does: --org, the OrgURL
-// managed preference, then org_url in runnerd.json. serve has no environment variable for it, so none is read.
+// org is the organisation's address and where it came from, resolved as serve does: --org, the OrgURL managed
+// preference, then org_url in runnerd.json. serve has no environment variable for it, so this shell's is never
+// read. An earlier install's unit passes --org ${WARDYN_RUNNER_ORG_URL} from its service definition (the env
+// file), so when all three are empty that definition, and only it, names the address.
 func (s doctorSettings) org(flag string) (value, source string) {
 	i := slices.IndexFunc(runnerFields, func(f runnerField) bool { return f.name == "org_url" })
-	return s.resolve(runnerFields[i], "org", flag, "org_url")
+	if value, source = s.resolve(runnerFields[i], "org", flag, "org_url"); value != "" {
+		return value, source
+	}
+	const legacy = "WARDYN_RUNNER_ORG_URL"
+	if v := s.paths.setting(legacy); v != "" {
+		return v, legacy + " in the service's settings"
+	}
+	return "", ""
 }
 
 // resolve is f's value and source; key names it in a source that is no flag or managed preference.
@@ -273,7 +282,7 @@ func (h setupHost) serviceStage(ctx context.Context, p setupPaths) doctor.Stage 
 
 // orgSetting names where the organisation's address is set, for every hint that fixes it: the settings serve
 // reads, and no others.
-const orgSetting = "--org, the OrgURL managed preference or org_url in runnerd.json"
+const orgSetting = "the organisation address (--org, the OrgURL managed preference, or org_url in runnerd.json)"
 
 // statusSetting is the setting, and what to set it to, that fixes a connection that failed at stage.
 var statusSetting = map[string][2]string{

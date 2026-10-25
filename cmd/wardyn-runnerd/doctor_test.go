@@ -509,3 +509,24 @@ func TestDoctorManagedLockOutranksTheFlagAndTheFile(t *testing.T) {
 		t.Errorf("org-url = %s %q, want the locked managed address", s.Status, s.Detail)
 	}
 }
+
+// An earlier Linux install's unit runs `serve --org ${WARDYN_RUNNER_ORG_URL}` from its env file, with no
+// runnerd.json: the service definition names the organisation, so doctor reads it there (and not in the shell).
+func TestDoctorReadsTheOrganisationOfAnEarlierInstallsServiceDefinition(t *testing.T) {
+	r := newRig(t)
+	r.setOrg("")
+	p, err := (setupHost{goos: "linux", home: r.home}).paths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(p.noServiceEnvFile()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.noServiceEnvFile(), []byte("WARDYN_RUNNER_ORG_URL="+r.org+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := stage(t, r.run(doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}), "org-url")
+	if s.Status != doctor.StatusOK || !strings.Contains(s.Detail, r.org) || !strings.Contains(s.Detail, "WARDYN_RUNNER_ORG_URL in the service's settings") {
+		t.Errorf("org-url = %s %q, want the service definition's address", s.Status, s.Detail)
+	}
+}
