@@ -307,7 +307,7 @@ type MacVMBase struct {
 	StepPercent int `json:"step_percent,omitempty"`
 	// Wait is MacVMWait*; state preparing only.
 	Wait string `json:"wait,omitempty"`
-	// Failure is MacVMFailure*: download or install with state failed, tools with state ready.
+	// Failure is MacVMFailure*: download, install or no_desktop with state failed, tools with state ready.
 	Failure string `json:"failure,omitempty"`
 	// DownloadBytes is the restore image's size, once this prepare knows it.
 	DownloadBytes int64 `json:"download_bytes,omitempty"`
@@ -334,6 +334,8 @@ const (
 	MacVMFailureDownload = "download"
 	MacVMFailureInstall  = "install"
 	MacVMFailureTools    = "tools"
+	// MacVMFailureNoDesktop is a setup by hand the helper refused because it cannot reach the Mac's desktop.
+	MacVMFailureNoDesktop = "no_desktop"
 )
 
 // MacVMBase.State values. Only ready serves a run; update_needed is a base whose guest agent no longer

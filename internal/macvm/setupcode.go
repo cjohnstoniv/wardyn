@@ -42,9 +42,17 @@ func SetupByHandReady(fb FirstBooter, setupByHandWait time.Duration) error {
 		return nil
 	}
 	if geteuid() == 0 {
-		return fmt.Errorf("macvm: prepare runs as root: %w", ErrNoDesktopSession)
+		return fmt.Errorf(NoDesktopFailurePrefix+"prepare runs as root: %w", ErrNoDesktopSession)
 	}
-	return fb.ScreenReady()
+	return noDesktop(fb.ScreenReady())
+}
+
+// noDesktop is err with NoDesktopFailurePrefix in front when it is ErrNoDesktopSession, else err.
+func noDesktop(err error) error {
+	if errors.Is(err, ErrNoDesktopSession) {
+		return fmt.Errorf(NoDesktopFailurePrefix+"%w", err)
+	}
+	return err
 }
 
 // setupByHand writes a fresh one-time code to the setup-code file, emits
@@ -65,6 +73,9 @@ func (p *prep) setupByHand(ctx context.Context, nw PrepNetwork, screen func() (f
 	if screen != nil {
 		closeWindow, err := screen()
 		if err != nil {
+			if errors.Is(err, ErrNoDesktopSession) {
+				return "", fmt.Errorf(NoDesktopFailurePrefix+"setup by hand needs the guest's window on this Mac: %w", err)
+			}
 			return "", fmt.Errorf("macvm: setup by hand needs the guest's window on this Mac: %w", err)
 		}
 		defer closeWindow()
