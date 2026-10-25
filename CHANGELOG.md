@@ -32,7 +32,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Fixed
 
 - A runner upgrade that failed to start and was being rolled back no longer overwrites the kept copy of the old runner
-  with the broken one first, so a full disk at that moment cannot leave the computer with no copy of the old runner.
+  with the broken one first, so a full disk at that moment cannot leave the computer with no copy of the old runner. A
+  rollback also keeps its own copy of the old runner to restore from.
   An upgrade also stops, with the runner untouched, when it cannot tell whether a previous copy is there (for example
   a permissions error), rather than assuming there is none.
 
