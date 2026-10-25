@@ -169,6 +169,7 @@ func runDoctor(ctx context.Context, h setupHost, o doctorOptions, getenv func(st
 		serverVersion = o.serverVersion
 	}
 	stages = append(stages, h.engineStages(ctx, s, o, org, serverVersion)...)
+	stages = append(stages, macOSVMDoctorStages()...)
 	if fileErr != nil {
 		bad := doctor.FailStage("config", oneLine(fileErr.Error()), "", "fix that field, or remove the file and run `wardyn-runnerd setup` again")
 		stages = append([]doctor.Stage{bad}, stages...)

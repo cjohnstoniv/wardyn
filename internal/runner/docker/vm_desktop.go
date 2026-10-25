@@ -11,6 +11,7 @@ import (
 	"io"
 	"path/filepath"
 
+	"github.com/cjohnstoniv/wardyn/internal/macvm"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/vm/qemu"
 )
@@ -23,7 +24,21 @@ func (d *Driver) DialDesktop(ctx context.Context, ref string) (io.ReadWriteClose
 	if v == nil {
 		return nil, runner.ErrDesktopUnsupported
 	}
-	c, err := d.dialUnix(ctx, filepath.Join(v.dir, "ctl", qemu.VNCSocket))
+	sock := filepath.Join(v.dir, "ctl", qemu.VNCSocket)
+	if v.mac {
+		if macDesktopOff(v.dir) {
+			return nil, errMacDesktopOff
+		}
+		c := d.macVMConfig()
+		if c == nil {
+			return nil, runner.ErrDesktopUnsupported
+		}
+		var err error
+		if sock, err = c.sockPath(v.runID, macvm.DesktopSock); err != nil {
+			return nil, fmt.Errorf("docker: VM desktop: %w", err)
+		}
+	}
+	c, err := d.dialUnix(ctx, sock)
 	if err != nil {
 		return nil, fmt.Errorf("docker: VM desktop: %w", err)
 	}

@@ -341,6 +341,8 @@ export interface SetupStatus {
     multi_agent_tasks?: boolean;
     /** WARDYN_MCP_LOCAL_SERVERS: a component may define an MCP server that runs in the run's sandbox. Optional for fixtures. */
     mcp_local_servers?: boolean;
+    /** WARDYN_MACOS_VMS: a run may ask for a macOS virtual machine. Absent when off. */
+    macos_vms?: boolean;
   };
   checks: SetupCheck[];
   auth: {

@@ -33,6 +33,15 @@ export function makeRun(o: Partial<AgentRun> = {}): AgentRun {
   };
 }
 
+// A run in a macOS VM: ids and enums only (the machine words are Go's MacVMAccelerator and MacVMMachineType).
+export function makeMacOSVMRun(o: Partial<AgentRun> = {}): AgentRun {
+  return makeRun({
+    machine_kind: "macos_vm",
+    vm_machine: { machine_type: "vz-mac", cpu_model: "", accelerator: "vz", qemu_version: "", guest_os: "guest-build-1", host_os: "host-build-1" },
+    ...o,
+  });
+}
+
 export function makeWorkspace(o: Partial<Workspace> = {}): Workspace {
   return {
     id: "ws-1",
