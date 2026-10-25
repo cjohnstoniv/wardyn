@@ -91,7 +91,7 @@ docs/operations/console-branding.md=947 share=35
 # docs/operations/hybrid-laptops.md 5404, measured at the 0.10 W4c merge of OFFLINE-VM a359ef27b onto the train (two merge bases, VM-A 47c283334 and main 3cea1aa73, so no single base to subtract).
 # docs/operations/hybrid-laptops.md 5591 adds 11 over 5580, measured (0.10 rc2 AD-4): the runner log's rotation.
 # docs/operations/hybrid-laptops.md 5598 adds 7 over 5591, measured (0.10 rc2 AD-4): the separate crash log.
-docs/operations/hybrid-laptops.md=5824 share=35 # 5560 + 20 measured (0.10 RUNNER-INSTALL): the ArtifactBase managed-preference row; +226 (docs, ours + theirs - base)
+docs/operations/hybrid-laptops.md=5832 share=35 # 5560 + 20 measured (0.10 RUNNER-INSTALL): the ArtifactBase managed-preference row; +226 (docs, ours + theirs - base); +8 (docs, ours + theirs - base)
 # 0.10 HYB-C: docs/operations/hybrid-laptops.md 5269 adds 15 over 5254, measured: a Linux VM sandbox gets the folder the same way.
 # 0.10 OFFLINE-VM: docs/operations/hybrid-laptops.md 5308 adds 39 over 5269, measured: two offline-table rows for a Linux VM sandbox (creation refused, a full spool ends it).
 # docs/operations/hybrid-laptops.md 4024 adds 2 over 4022, measured: the control-plane restart row says the next restart kills an agent kept only for containment.
