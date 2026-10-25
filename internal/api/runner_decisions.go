@@ -13,7 +13,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/runnerspool"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
-	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
 )
@@ -22,26 +21,26 @@ import (
 // comes exclusively from H2's authenticated stored identity, never event data.
 // The store rechecks claimed ownership and revocation in the committing tx.
 func (s *Server) DecisionIngestFromRunner(ctx context.Context, runnerID uuid.UUID, event runnerwire.Event) error {
-	if event.Kind != runnerwire.EventSpool || event.RunID == nil || len(event.Data) > runnerspool.MaxRecordBytes || s.cfg.RunnerAuditPrepare == nil {
-		return store.ErrRunnerSpoolRefused
-	}
 	target, ok := s.cfg.Store.(interface {
 		IngestRunnerDecision(context.Context, uuid.UUID, runnerspool.Record, func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (bool, error)
 	})
-	if !ok {
-		return store.ErrRunnerSpoolRefused
+	if !ok || s.cfg.RunnerAuditPrepare == nil {
+		return errRunnerIngestUnavailable
+	}
+	if event.Kind != runnerwire.EventSpool || event.RunID == nil || len(event.Data) > runnerspool.MaxRecordBytes {
+		return errSpoolShape
 	}
 	var row runnerspool.Record
 	dec := json.NewDecoder(bytes.NewReader(event.Data))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&row); err != nil {
-		return store.ErrRunnerSpoolRefused
+		return errSpoolShape
 	}
 	if err := dec.Decode(new(any)); !errors.Is(err, io.EOF) {
-		return store.ErrRunnerSpoolRefused
+		return errSpoolShape
 	}
 	if row.Decision.Request.RunID != *event.RunID {
-		return store.ErrRunnerSpoolRefused
+		return errSpoolShape
 	}
 	first, err := target.IngestRunnerDecision(ctx, runnerID, row, s.cfg.RunnerAuditPrepare)
 	if err != nil || !first {

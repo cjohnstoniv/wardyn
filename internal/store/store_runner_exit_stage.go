@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -28,6 +29,11 @@ func (s PG) StageRunnerExit(ctx context.Context, runnerID, runID uuid.UUID, exit
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // committed tx is already closed
 	run, err := runnerExecutionRun(ctx, tx, runnerID, runID)
+	// Permanent, so refused (DR-0436): no production path deletes an agent_runs row, and the runner learns a
+	// run's id only after the run commits, so the same exit always meets the same missing run.
+	if errors.Is(err, ErrNotFound) {
+		return fmt.Errorf("%w: %w", ErrRunnerExecutionRefused, err)
+	}
 	if err != nil {
 		return err
 	}
@@ -43,6 +49,12 @@ func (s PG) StageRunnerExit(ctx context.Context, runnerID, runID uuid.UUID, exit
 		return err
 	}
 	current, err := readRunnerExecution(ctx, tx, runID)
+	// Permanent, so refused: the run is locked and present, its execution row is only ever upserted, never
+	// deleted (store_runner_execution.go BeginRunnerExecution), and it commits before the LEASE that carries its
+	// generation; no row means no generation was ever issued for this run, and a later one is a fresh uuid.New().
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("%w: %w", ErrRunnerExecutionRefused, err)
+	}
 	if err != nil {
 		return err
 	}
@@ -64,11 +76,21 @@ func (s PG) StageRunnerExit(ctx context.Context, runnerID, runID uuid.UUID, exit
 		}
 		return tx.Commit(ctx)
 	}
-	if run.State == types.RunRunning && run.LostAt != nil && run.LostReason == types.LostEnded {
-		return tx.Commit(ctx)
-	}
-	if run.State != types.RunRunning || (run.LostAt != nil && (run.Interactive || run.LostReason != types.LostOutage)) {
+	// Permanent, so refused: a run takes an exec id only from an Exec result, and Exec runs after its
+	// STARTING→RUNNING CAS, so no exit exists for a run that is not yet RUNNING and none ever will.
+	if run.State != types.RunRunning {
 		return ErrRunnerExecutionRefused
+	}
+	// A kept run that no exit can finish (ended at its lease, lost to a reboot, or an interactive outage):
+	// the exit is not a refusal (DR-0436). It is kept as a receipt-only row, so a later terminal
+	// retirement receipt names it, and tail_complete, so a revive's next generation is not blocked
+	// (BeginRunnerExecution); it never enters exit work, park, acceptance or the tail.
+	if run.LostAt != nil && (run.Interactive || run.LostReason != types.LostOutage) {
+		if _, err := tx.Exec(ctx, `INSERT INTO runner_execution_exits(run_id,generation,runner_id,payload,payload_hash,receipt_only,tail_complete) VALUES($1,$2,$3,$4,$5,true,true)
+ ON CONFLICT (run_id,generation) DO NOTHING`, runID, exit.Generation, runnerID, payload, hash); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO runner_execution_exits(run_id,generation,runner_id,payload,payload_hash) VALUES($1,$2,$3,$4,$5)`, runID, exit.Generation, runnerID, payload, hash)
 	if err != nil {

@@ -360,10 +360,20 @@ func (s PG) RecordRunnerActionResult(ctx context.Context, runnerID, runID, actio
 		return recordAssertedActionResultTx(ctx, tx, runnerID, runID, actionID, outcome, reason, observedAt, prepare)
 	}
 	owner, run, generation, err := lockRunnerActionRun(ctx, tx, runnerID, runID)
+	// Permanent, so refused (DR-0436): a runner leaves claimed only for revoked and never returns, its owner never
+	// changes (store_runners.go ClaimRunner, RevokeRunner), and no production path deletes an agent_runs row.
+	if errors.Is(err, ErrNotFound) {
+		return types.RunnerPendingAction{}, false, fmt.Errorf("%w: %w", ErrRunnerActionRefused, err)
+	}
 	if err != nil {
 		return types.RunnerPendingAction{}, false, err
 	}
 	a, err := scanAction(tx.QueryRow(ctx, `SELECT `+actionCols+` FROM runner_pending_actions WHERE id = $1 FOR UPDATE`, actionID))
+	// Permanent, so refused: the runner learns an action's id only from a committed row (PENDING), every insert
+	// mints a fresh uuid.New(), and a deleted row (PurgeAssertedRunnerSubjects) never comes back.
+	if errors.Is(err, ErrNotFound) {
+		return types.RunnerPendingAction{}, false, fmt.Errorf("%w: %w", ErrRunnerActionRefused, err)
+	}
 	if err != nil {
 		return types.RunnerPendingAction{}, false, err
 	}
@@ -371,8 +381,10 @@ func (s PG) RecordRunnerActionResult(ctx context.Context, runnerID, runID, actio
 		return types.RunnerPendingAction{}, false, ErrRunnerActionRefused
 	}
 	if a.AppliedAt != nil {
+		// Permanent, so refused: applied_at, outcome and observed_at are set once, by an UPDATE guarded by
+		// applied_at IS NULL, and never cleared, so the same changed repeat always meets the same first receipt.
 		if a.Outcome != outcome || !a.ObservedAt.Equal(observedAt) {
-			return types.RunnerPendingAction{}, false, ErrConflict
+			return types.RunnerPendingAction{}, false, fmt.Errorf("%w: %w", ErrRunnerActionRefused, ErrConflict)
 		}
 		return a, false, tx.Commit(ctx)
 	}

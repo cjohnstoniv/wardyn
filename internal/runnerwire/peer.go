@@ -313,7 +313,13 @@ func (p *Peer) handle(f Frame) error {
 		p.mu.Unlock()
 	}
 	if err := p.handleFrame(f); err != nil {
-		return err
+		var refusal *EventRefusal
+		if f.Type != TypeEvent || !p.cfg.Org || !errors.As(err, &refusal) {
+			return err
+		}
+		// The organisation refused the event for good and has recorded it: acknowledge, so the runner's replay
+		// buffer drops it, and keep the link. See EventRefusal.
+		slog.WarnContext(p.ctx, "runnerwire: event refused by the organisation and acknowledged", "seq", f.Seq, "code", refusal.Code)
 	}
 	if f.Type.Sequenced() {
 		p.acceptSequence(f)

@@ -751,6 +751,11 @@ commands are the ones in "Back them up" and "Restore them", and in
   - This widens that window in exchange for not fsyncing the whole backlog once per batch onto the volume the database
     is recovering on.
 
+- A runner's event the organisation can never accept is acknowledged only after its `runner.event.refuse` row commits,
+  so the runner stops resending it and nothing it sent is dropped without a row; a refused action result also closes
+  its action as `refused`; at most 32 such rows an hour are written per runner on one replica before one `suppressed`
+  row stands for the rest.
+
 ### The hash chain — what a rewritten row looks like
 
 - The triggers above stop `UPDATE`/`DELETE`/`TRUNCATE` *through Wardyn's schema*, and the role split hardens that

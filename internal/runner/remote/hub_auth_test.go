@@ -166,6 +166,18 @@ func TestHubPendingActionsPrecedeStateAndReady(t *testing.T) {
 	if err := cfg.OnControlChecked(state); !errors.Is(err, runnerwire.ErrBadFrame) {
 		t.Fatalf("failed durable action unblocked STATE: %v", err)
 	}
+	// A result the org refused for good and recorded (DR-0436) answers the action: the peer acknowledges it,
+	// and the session goes on to STATE.
+	recorded := &runnerwire.EventRefusal{Code: runnerwire.RefusalStoreRefused, Err: errors.New("generation moved on")}
+	a.Event = func(context.Context, runnerwire.Event) error { return recorded }
+	configureAdmission(context.Background(), &cfg, false, []runnerwire.PendingAction{action}, a, &hubSession{}, uuid.NewString(), func() *runnerwire.Peer { return nil })
+	var refusal *runnerwire.EventRefusal
+	if err := cfg.OnEventChecked(runnerwire.Event{Kind: runnerwire.EventActionResult, Data: data}); !errors.As(err, &refusal) {
+		t.Fatalf("refused pending result = %v, want the EventRefusal", err)
+	}
+	if err := cfg.OnControlChecked(state); err != nil {
+		t.Fatalf("STATE after a recorded refusal of the pending result: %v", err)
+	}
 }
 
 // A refused authentication is ErrAuth and names its cause, so the operator's log line can tell a runner
