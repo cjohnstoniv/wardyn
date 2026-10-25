@@ -513,6 +513,10 @@ func TestMacOSVMStatusScrubsTheError(t *testing.T) {
 	if b.Error != want || strings.Contains(string(raw), "dana-test") || strings.Contains(string(raw), "u501") {
 		t.Fatalf("error %q, want %q", b.Error, want)
 	}
+	// The data volume's spelling of the home is the home too.
+	if got := m.scrubError("open /System/Volumes/Data/Users/dana-test/x"); got != "open ~/x" {
+		t.Fatalf("data volume home: %q", got)
+	}
 	// A configured socket root is the anchor.
 	m.sockRoot = "/tmp/socks"
 	if got := m.scrubError("bind /tmp/socks/u502/k and /Users/Shared/Wardyn/sock/u502/k"); got != "bind /tmp/socks/u<uid>/k and /Users/Shared/Wardyn/sock/u502/k" {

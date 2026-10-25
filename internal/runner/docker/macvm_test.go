@@ -45,6 +45,8 @@ type macTestHost struct {
 	procs map[int]admission.Proc
 	// freeDisk is the volume's free space; zero is 500 GiB.
 	freeDisk int64
+	// onProcesses runs once, at the next process-table read (the next ledger operation).
+	onProcesses func()
 }
 
 func (h *macTestHost) BootTime() (int64, error)              { return 1, nil }
@@ -52,6 +54,13 @@ func (h *macTestHost) MemoryBytes() (uint64, error)          { return 64 << 30, 
 func (h *macTestHost) AvailableMemoryBytes() (uint64, error) { return 48 << 30, nil }
 func (h *macTestHost) FreeDiskBytes(string) (int64, error)   { return cmp.Or(h.freeDisk, 500<<30), nil }
 func (h *macTestHost) Processes() ([]admission.Proc, error) {
+	h.mu.Lock()
+	fn := h.onProcesses
+	h.onProcesses = nil
+	h.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	out := make([]admission.Proc, 0, len(h.procs))
@@ -317,6 +326,34 @@ func TestMacVMCreateAndTeardown(t *testing.T) {
 	debts, _ := r.c.Ledger.Debts()
 	if len(counted)+len(debts) != 0 {
 		t.Fatalf("entry left after teardown: %+v %+v", counted, debts)
+	}
+}
+
+// A call the organisation resets, which cancels its context, cannot cut the destroy short: the run
+// directory is still removed and the ledger entry released, not left for the orphan sweep.
+func TestMacVMDestroySurvivesACancelledCall(t *testing.T) {
+	r := newMacRig(t)
+	spec := macSpec()
+	sb, err := r.d.CreateSandbox(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r.host.mu.Lock()
+	r.host.onProcesses = cancel // the destroy's first ledger operation
+	r.host.mu.Unlock()
+	_ = r.d.StopSandbox(ctx, sb.Ref)
+	if ctx.Err() == nil {
+		t.Fatal("the call was never cancelled")
+	}
+	if _, err := os.Lstat(r.c.runDir(spec.RunID)); !os.IsNotExist(err) {
+		t.Fatalf("run directory left after a cancelled call: %v", err)
+	}
+	counted, _ := r.c.Ledger.Counted()
+	debts, _ := r.c.Ledger.Debts()
+	if len(counted)+len(debts) != 0 {
+		t.Fatalf("entry left after a cancelled call: %+v %+v", counted, debts)
 	}
 }
 
