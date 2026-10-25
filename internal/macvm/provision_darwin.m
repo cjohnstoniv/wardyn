@@ -105,7 +105,7 @@ static VZVirtualMachineConfiguration *wardynConfig(const char *disk, const char 
 		*errOut = @"the base's machine identifier is not valid";
 		return nil;
 	}
-	VZMacPlatformConfiguration *platform = [VZMacPlatformConfiguration new];
+	VZMacPlatformConfiguration *platform = [[VZMacPlatformConfiguration alloc] init];
 	platform.hardwareModel = model;
 	platform.machineIdentifier = ident;
 	platform.auxiliaryStorage = [[VZMacAuxiliaryStorage alloc] initWithURL:[NSURL fileURLWithPath:@(aux)]];
@@ -124,22 +124,22 @@ static VZVirtualMachineConfiguration *wardynConfig(const char *disk, const char 
 		return nil;
 	}
 	NSFileHandle *nicHandle = [[NSFileHandle alloc] initWithFileDescriptor:nicFD closeOnDealloc:YES];
-	VZVirtioNetworkDeviceConfiguration *nic = [VZVirtioNetworkDeviceConfiguration new];
+	VZVirtioNetworkDeviceConfiguration *nic = [[VZVirtioNetworkDeviceConfiguration alloc] init];
 	nic.attachment = [[VZFileHandleNetworkDeviceAttachment alloc] initWithFileHandle:nicHandle];
 
-	VZMacGraphicsDeviceConfiguration *graphics = [VZMacGraphicsDeviceConfiguration new];
+	VZMacGraphicsDeviceConfiguration *graphics = [[VZMacGraphicsDeviceConfiguration alloc] init];
 	graphics.displays = @[ [[VZMacGraphicsDisplayConfiguration alloc] initWithWidthInPixels:1920 heightInPixels:1080 pixelsPerInch:80] ];
 
 	VZVirtualMachineConfiguration *cfg = [VZVirtualMachineConfiguration new];
 	cfg.platform = platform;
-	cfg.bootLoader = [VZMacOSBootLoader new];
+	cfg.bootLoader = [[VZMacOSBootLoader alloc] init];
 	cfg.CPUCount = cpus;
 	cfg.memorySize = mem;
 	cfg.storageDevices = @[ [[VZVirtioBlockDeviceConfiguration alloc] initWithAttachment:diskAttachment] ];
 	cfg.networkDevices = @[ nic ];
 	cfg.graphicsDevices = @[ graphics ];
-	cfg.keyboards = @[ [VZUSBKeyboardConfiguration new] ];
-	cfg.pointingDevices = @[ [VZUSBScreenCoordinatePointingDeviceConfiguration new] ];
+	cfg.keyboards = @[ [[VZUSBKeyboardConfiguration alloc] init] ];
+	cfg.pointingDevices = @[ [[VZUSBScreenCoordinatePointingDeviceConfiguration alloc] init] ];
 	if (![cfg validateWithError:&err]) {
 		*errOut = [@"invalid VM configuration: " stringByAppendingString:err.localizedDescription];
 		return nil;
