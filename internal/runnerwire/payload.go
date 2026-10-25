@@ -249,7 +249,42 @@ type MacVMCaps struct {
 	Base    MacVMBase `json:"base"`
 	// Refusal is, in words, why the runner offers no macOS VM; empty when it offers them.
 	Refusal string `json:"refusal,omitempty"`
+	// Reason is why the runner offers no macOS VM, or can't start or prepare one now: MacVMReason*, the
+	// first that holds in the const order. Refusal keeps its words for placement.
+	Reason string `json:"reason,omitempty"`
+	// NoSession: the runner is not in a GUI login session, where Apple's framework runs. A boolean,
+	// nothing else.
+	NoSession bool `json:"no_session,omitempty"`
+	// HostOSVersion is this Mac's macOS, e.g. "26.4"; with Reason host_os_too_old only.
+	HostOSVersion string `json:"host_os_version,omitempty"`
+	// HostReason is MacVMHost*; with Reason host_unsupported only.
+	HostReason string `json:"host_reason,omitempty"`
+	// FreeGB and NeedGB are whole GiB: free disk (disk_short), or free and needed memory (low_memory).
+	// Absent is 0.
+	FreeGB int `json:"free_gb,omitempty"`
+	NeedGB int `json:"need_gb,omitempty"`
 }
+
+// MacVMCaps.Reason values, in priority order. An unknown value is a newer runner's, and decodes as itself.
+const (
+	MacVMReasonLedgerDamaged      = "ledger_damaged"
+	MacVMReasonNoHelper           = "no_helper"
+	MacVMReasonHostOSTooOld       = "host_os_too_old"
+	MacVMReasonHostUnsupported    = "host_unsupported"
+	MacVMReasonMemoryBelowMinimum = "memory_below_minimum"
+	MacVMReasonCPUBelowMinimum    = "cpu_below_minimum"
+	MacVMReasonDiskShort          = "disk_short"
+	MacVMReasonSlotLeaked         = "slot_leaked"
+	MacVMReasonLowMemory          = "low_memory"
+	MacVMReasonTooHot             = "too_hot"
+)
+
+// MacVMCaps.HostReason values.
+const (
+	MacVMHostNoVirtualization = "no_virtualization"
+	MacVMHostNoProvisioning   = "no_provisioning"
+	MacVMHostHelperBuild      = "helper_build"
+)
 
 // MacVMCaps.Desktop values.
 const (
@@ -259,13 +294,47 @@ const (
 )
 
 // MacVMBase is the Mac's one base image: State is MacVMBase*, GuestOS the build it holds, Progress the
-// percent done while it prepares, Error the last failure.
+// percent done while it prepares, Error the last failure. Error is the one free text: this login's home
+// is in it as "~", and with a Failure it holds the cause only.
 type MacVMBase struct {
 	State    string `json:"state"`
 	GuestOS  string `json:"guest_os,omitempty"`
 	Progress int    `json:"progress,omitempty"`
 	Error    string `json:"error,omitempty"`
+	// Step is MacVMStep*; state preparing or failed only.
+	Step string `json:"step,omitempty"`
+	// StepPercent is 0-100 within Step; download and install only. Absent is 0.
+	StepPercent int `json:"step_percent,omitempty"`
+	// Wait is MacVMWait*; state preparing only.
+	Wait string `json:"wait,omitempty"`
+	// Failure is MacVMFailure*: download or install with state failed, tools with state ready.
+	Failure string `json:"failure,omitempty"`
+	// DownloadBytes is the restore image's size, once this prepare knows it.
+	DownloadBytes int64 `json:"download_bytes,omitempty"`
+	// ImageVersion is its macOS, e.g. "27.0.1": digits and dots only (^\d+(\.\d+){0,2}$), or absent.
+	ImageVersion string `json:"image_version,omitempty"`
+	// BytesPerSec is the download rate; Step download with no Wait only.
+	BytesPerSec int64 `json:"bytes_per_sec,omitempty"`
 }
+
+// MacVMBase.Step, Wait and Failure values. An unknown value is a newer runner's, and decodes as itself.
+const (
+	MacVMStepCheck    = "check"
+	MacVMStepDownload = "download"
+	MacVMStepInstall  = "install"
+	MacVMStepSetup    = "setup"
+	MacVMStepTools    = "tools"
+
+	MacVMWaitACPower       = "ac_power"
+	MacVMWaitBattery       = "battery"
+	MacVMWaitDownloadRetry = "download_retry"
+	MacVMWaitSetupByHand   = "setup_by_hand"
+	MacVMWaitDocker        = "docker"
+
+	MacVMFailureDownload = "download"
+	MacVMFailureInstall  = "install"
+	MacVMFailureTools    = "tools"
+)
 
 // MacVMBase.State values. Only ready serves a run; update_needed is a base whose guest agent no longer
 // speaks the runner's session protocol.

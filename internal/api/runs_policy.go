@@ -285,6 +285,8 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		// ModelAllowlists (#3374) is the model allowlist each local model provider handed the run's proxy at
 		// its latest dispatch, {provider id: models}: what the run is held to, whatever the provider lists now.
 		ModelAllowlists map[string][]string `json:"model_allowlists,omitempty"`
+		// MacOS is a macOS VM run's desktop as its Mac offers it (run_macos_view.go); absent on every other run.
+		MacOS *runMacOSView `json:"macos,omitempty"`
 	}{
 		AgentRun: run, UIApps: apps, UserTypeName: s.runUserTypeName(r, run.UserType),
 		ModelProviderName: providerName, ModelProviderDeleted: providerDeleted,
@@ -296,6 +298,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		ComputerFolder:  s.computerFolderRunView(r.Context(), run.ID),
 		Agents:          s.runDetailAgents(r.Context(), run),
 		ModelAllowlists: s.runModelAllowlists(r.Context(), run.ID),
+		MacOS:           s.runMacOSView(run),
 	})
 }
 

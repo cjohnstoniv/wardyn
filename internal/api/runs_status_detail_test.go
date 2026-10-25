@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -254,6 +255,36 @@ func TestProjectStatusDetail_KilledKeepsOnlyAValidEndReason(t *testing.T) {
 			if runs[0].StatusDetail != tc.wantDetail || runs[0].StatusReason != tc.wantReason {
 				t.Errorf("(detail, reason) = (%q, %q), want (%q, %q)",
 					runs[0].StatusDetail, runs[0].StatusReason, tc.wantDetail, tc.wantReason)
+			}
+		})
+	}
+}
+
+// A macOS VM's start phase is served, with its token, while the run is STARTING; a FAILED run keeps the
+// phase its start stopped in (with the disk refusal's figures) and drops a phase it was only passing.
+func TestProjectStatusDetail_MacOSStart(t *testing.T) {
+	short := runner.MacOSDiskShortMessage(85<<30, 40<<30)
+	for _, tc := range []struct {
+		name               string
+		state              types.RunState
+		detail, wantReason string
+		wantDetail         string
+	}{
+		{"cloning", types.RunStarting, "macos: MacOSCloning", "MacOSCloning", "macos: MacOSCloning"},
+		{"starting", types.RunStarting, "macos: MacOSStarting", "MacOSStarting", "macos: MacOSStarting"},
+		{"connecting", types.RunStarting, "macos: MacOSConnecting", "MacOSConnecting", "macos: MacOSConnecting"},
+		{"clone failed", types.RunFailed, "macos: MacOSCloneFailed", "MacOSCloneFailed", "macos: MacOSCloneFailed"},
+		{"start failed", types.RunFailed, "macos: MacOSStartFailed", "MacOSStartFailed", "macos: MacOSStartFailed"},
+		{"connect failed", types.RunFailed, "macos: MacOSConnectFailed", "MacOSConnectFailed", "macos: MacOSConnectFailed"},
+		{"disk short", types.RunFailed, short, "MacOSDiskShort", short},
+		{"failed while connecting", types.RunFailed, "macos: MacOSConnecting", "", ""},
+		{"running after connecting", types.RunRunning, "macos: MacOSConnecting", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runs := []types.AgentRun{{ID: uuid.New(), State: tc.state, MachineKind: types.MachineMacOSVM, StatusDetail: tc.detail}}
+			projectStatusDetail(runs)
+			if runs[0].StatusDetail != tc.wantDetail || runs[0].StatusReason != tc.wantReason {
+				t.Errorf("(detail, reason) = (%q, %q), want (%q, %q)", runs[0].StatusDetail, runs[0].StatusReason, tc.wantDetail, tc.wantReason)
 			}
 		})
 	}

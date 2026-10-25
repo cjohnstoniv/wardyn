@@ -41,6 +41,10 @@ const (
 // PhaseTools is stage 2 of prepare, "Installing developer tools".
 const PhaseTools = "tools"
 
+// CLTFailurePrefix starts the reason a harness is withheld when the Command Line Tools did not install;
+// the cause follows it. The runner reads it from tools.json.
+const CLTFailurePrefix = "the Command Line Tools did not install: "
+
 // ToolsRecordFile sits in a base dir and says which tooling the base holds.
 const ToolsRecordFile = "tools.json"
 
@@ -307,7 +311,7 @@ func installTools(ctx context.Context, g ToolsGuest, o ToolsOptions) (ToolsResul
 	res.CLT = cltErr == nil
 	for _, p := range o.Tooling.Harnesses {
 		if cltErr != nil {
-			res.Withheld[p.ID] = fmt.Errorf("the Command Line Tools did not install: %w", cltErr)
+			res.Withheld[p.ID] = fmt.Errorf(CLTFailurePrefix+"%w", cltErr)
 			continue
 		}
 		err := installPin(ctx, g, o, p)

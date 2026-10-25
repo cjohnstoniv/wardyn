@@ -18,7 +18,7 @@ import (
 )
 
 // The runner offers macOS VMs only when the helper's probe exits 0. One that fails turns them off with
-// its reason kept on this Mac (the caps carry no refusal), and starts no prepare.
+// its words kept on this Mac (the caps carry no refusal, only a reason code), and starts no prepare.
 func TestMacOSVMOffersNoneUnlessTheProbePasses(t *testing.T) {
 	for _, exit := range []int{0, 1} {
 		r := newMacLedgerRig(t)

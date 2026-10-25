@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-// macOSVMNoHelper is why a runner with no helper beside it offers no macOS VM (log and status only).
+// macOSVMNoHelper is why a runner with no helper beside it offers no macOS VM: its caps carry the code no_helper, and the words stay in the log and status.
 const macOSVMNoHelper = "This Mac's Wardyn runner has no macOS VM helper. Reinstall the Wardyn runner package."
 
 // macHostOS is this Mac's build in the form a VM machine records, e.g. "macOS 27.0.1 (26A434)".

@@ -7,6 +7,7 @@ package docker
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -42,12 +43,14 @@ const macHelperPID = 4242
 type macTestHost struct {
 	mu    sync.Mutex
 	procs map[int]admission.Proc
+	// freeDisk is the volume's free space; zero is 500 GiB.
+	freeDisk int64
 }
 
 func (h *macTestHost) BootTime() (int64, error)              { return 1, nil }
 func (h *macTestHost) MemoryBytes() (uint64, error)          { return 64 << 30, nil }
 func (h *macTestHost) AvailableMemoryBytes() (uint64, error) { return 48 << 30, nil }
-func (h *macTestHost) FreeDiskBytes(string) (int64, error)   { return 500 << 30, nil }
+func (h *macTestHost) FreeDiskBytes(string) (int64, error)   { return cmp.Or(h.freeDisk, 500<<30), nil }
 func (h *macTestHost) Processes() ([]admission.Proc, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -526,7 +529,7 @@ func TestMacVMEndNewestForLowDisk(t *testing.T) {
 	if run, err := r.d.EndNewestMacVM(context.Background(), 3<<30); run != spec.RunID.String() || err != nil {
 		t.Fatalf("ended %q, %v", run, err)
 	}
-	if st, err := r.d.Status(context.Background(), sb.Ref); err != nil || st.State != types.RunStopped || st.Message != "This Mac ran low on disk" {
+	if st, err := r.d.Status(context.Background(), sb.Ref); err != nil || st.State != types.RunStopped || st.Message != "This Mac ran low on disk (3 GB free), so the macOS VM was stopped." {
 		t.Fatalf("status %+v %v", st, err)
 	}
 	if err := r.d.StopSandbox(context.Background(), sb.Ref); err != nil {

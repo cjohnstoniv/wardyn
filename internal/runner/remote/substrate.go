@@ -34,8 +34,11 @@ import (
 // shares one into the guest (virtiofs): the org's placement says it at create, and here at dispatch.
 const VMNoFolderShare = "this runner cannot share a folder into a Linux VM sandbox: its version predates folder shares into VMs, or its QEMU image has no working virtiofsd"
 
-// MacOSVMNotOffered refuses a macOS VM run on a runner whose caps carry no MacOSVM.
-const MacOSVMNotOffered = "this runner does not offer macOS VM sandboxes: it is older than 0.10, or its operator has not turned them on"
+// MacOSVMNotOffered refuses a macOS VM run on a runner whose caps carry no MacOSVM; runner is how the
+// sentence names it.
+func MacOSVMNotOffered(runner string) string {
+	return runner + " doesn't offer macOS VMs: it is older than 0.10, or macOS VMs aren't turned on for it."
+}
 
 var (
 	errOffline = fmt.Errorf("%w: no session", runner.ErrRunnerOffline)
@@ -202,7 +205,7 @@ func (s *Substrate) checkVMCaps(spec runner.SandboxSpec) error {
 	c, ok := s.Caps()
 	if spec.MachineKind.IsMacOSVM() {
 		if !ok || c.MacOSVM == nil {
-			return runnerwire.Refuse(MacOSVMNotOffered)
+			return runnerwire.Refuse("%s", MacOSVMNotOffered("This runner"))
 		}
 		// A macOS VM shares no folder in this release.
 		if len(spec.Mounts) > 0 {

@@ -194,14 +194,24 @@ func readMacRun(dir string, runID uuid.UUID) (macvm.RunConfig, error) {
 	return cfg, err
 }
 
-// The texts a macOS VM run ends with. A helper that is gone for no reason the runner knows, or a VM that
-// stopped with no error, ends with no text of its own: the organisation's own words for a stopped run.
+// The texts a macOS VM run ends with: a helper gone for no reason the runner knows is macVMHelperStopped,
+// and a VM that stopped with no error of its own is macVMStopped.
 const (
-	macVMLostNetwork = "The macOS VM lost its network"
-	macVMRestarted   = "The Mac restarted; the macOS VM was lost"
-	macVMUpgraded    = "This Mac's runner was upgraded while the macOS VM ran"
-	macVMLowDisk     = "This Mac ran low on disk"
+	macVMLostNetwork   = "The macOS VM lost its network."
+	macVMRestarted     = "The Mac restarted, so the macOS VM was lost."
+	macVMHelperStopped = "The macOS VM's helper stopped."
+	macVMStopped       = "The macOS VM stopped."
+	macVMUpgraded      = "This Mac's runner was upgraded while the macOS VM ran, so the run was ended."
 )
+
+// macVMLowDisk is the text of a run the low-disk check ended; freeGB is what the check read (the run's
+// macLowDiskFile). A file that does not hold a number leaves the free space out rather than guess it.
+func macVMLowDisk(freeGB string) string {
+	if n, err := strconv.Atoi(strings.TrimSpace(freeGB)); err == nil {
+		return fmt.Sprintf("This Mac ran low on disk (%d GB free), so the macOS VM was stopped.", n)
+	}
+	return "This Mac ran low on disk, so the macOS VM was stopped."
+}
 
 // refuseMacVMSpec refuses, before anything is created, what a macOS VM cannot honour, and a run that a
 // stale cap let through: the base must be ready, serve every harness the run starts, and fit the run's
@@ -212,13 +222,17 @@ func (d *Driver) refuseMacVMSpec(spec runner.SandboxSpec) (macvm.Manifest, error
 	case c == nil:
 		return macvm.Manifest{}, errors.New("docker: this runner does not offer macOS VM sandboxes")
 	case len(spec.Drives) > 0:
-		return macvm.Manifest{}, errors.New("docker: a macOS VM sandbox has no drives in this release")
+		//lint:ignore ST1005 the sentence the person reads, as written in the approved copy
+		return macvm.Manifest{}, errors.New("A macOS VM sandbox has no drives in this release.")
 	case len(spec.Mounts) > 0:
-		return macvm.Manifest{}, errors.New("docker: a macOS VM sandbox shares no folder in this release")
+		//lint:ignore ST1005 the sentence the person reads, as written in the approved copy
+		return macvm.Manifest{}, errors.New("A macOS VM sandbox shares no folder in this release.")
 	case spec.RecordWithin(d.cfg.Record):
-		return macvm.Manifest{}, errors.New("docker: a macOS VM sandbox's terminal is not recorded in this release; turn recording off for this run")
+		//lint:ignore ST1005 the sentence the person reads, as written in the approved copy
+		return macvm.Manifest{}, errors.New("A macOS VM sandbox's terminal isn't recorded in this release. Turn recording off for this run.")
 	case spec.Interactive && spec.Env[envInteractiveStart] == "agent":
-		return macvm.Manifest{}, errors.New("docker: a macOS VM sandbox's terminal opens a shell, not the agent CLI, in this release; set interactive_start to shell")
+		//lint:ignore ST1005 the sentence the person reads, as written in the approved copy
+		return macvm.Manifest{}, errors.New("A macOS VM sandbox's terminal opens a shell, not the agent CLI, in this release. Set the interactive start to shell.")
 	}
 	if err := d.preflightSpec(spec); err != nil {
 		return macvm.Manifest{}, err
@@ -312,7 +326,17 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 	}
 
 	var rollback []func()
+	// failed is the failure token of the start phase the create is in (runner.MacOS*Failed): an error
+	// says the start stopped there, as the run's last status line, before anything is rolled back.
+	failed := ""
+	phase := func(reason, failure string) {
+		spec.NotifyWaiting(runner.MacOSStartDetail(reason))
+		failed = failure
+	}
 	fail := func(err error) (runner.Sandbox, error) {
+		if failed != "" {
+			spec.NotifyWaiting(runner.MacOSStartDetail(failed))
+		}
 		for i := len(rollback) - 1; i >= 0; i-- {
 			rollback[i]()
 		}
@@ -323,14 +347,22 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 		return runner.Sandbox{}, err
 	}
 	rollback = append(rollback, func() { _ = os.RemoveAll(dir) })
+	// The run's network and proxy are what the start hands the VM (MacOSStarting), so a failure here is
+	// the start's, said before any clone began.
+	failed = runner.MacOSStartFailed
 	_, proxyIP, undoNet, err := d.runNetworkAndProxy(ctx, spec)
 	if err != nil {
 		return fail(err)
 	}
 	rollback = append(rollback, undoNet)
+	phase(runner.MacOSCloning, runner.MacOSCloneFailed)
 	entry, err := c.admitMacVM(admission.Request{Kind: admission.KindRun, RunID: spec.RunID.String(), GuestCPUs: cpus,
 		GuestMemory: memMiB << 20, DiskReserve: admission.RunDiskReservation(cmp.Or(man.DiskBytes, macvm.BaseDiskBytes)), OwnerPID: self, OwnerStart: start})
 	if err != nil {
+		if short := (*admission.Refusal)(nil); errors.As(err, &short) && short.DiskNeeded > 0 {
+			spec.NotifyWaiting(runner.MacOSDiskShortMessage(short.DiskNeeded, short.DiskFreeLeft))
+			failed = ""
+		}
 		return fail(err)
 	}
 	v := newMacVMRun(c, spec.RunID, dir)
@@ -358,6 +390,7 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 		return fail(fmt.Errorf("docker: the macOS VM helper: %w", err))
 	}
 	defer cc.Close()
+	phase(runner.MacOSStarting, runner.MacOSStartFailed)
 	// The guest's only network: the run's relay, whose attach stream the helper bridges. The VM starts
 	// only once the helper holds it.
 	attach, err := d.startMacVMNet(ctx, spec, proxyIP)
@@ -378,7 +411,7 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 		slog.Warn("docker: mark a macOS VM running in the ledger", slog.String("run_id", spec.RunID.String()), slog.String("err", err.Error()))
 	}
 	c.changed()
-	spec.NotifyWaiting("vm: booting")
+	phase(runner.MacOSConnecting, runner.MacOSConnectFailed)
 	// The desktop's per-run password: from the helper to the guest agent, in memory only (never logged,
 	// never written). A base with a desktop publishes the run ready only once the guest set it (ERRATA E5):
 	// a helper that gives none, or a guest that did not set it, is the run's named failure
@@ -570,7 +603,8 @@ func attachFile(h client.HijackedResponse) (*os.File, error) {
 // Mac restarted, or the helper died), and one that speaks another control protocol is ended cleanly.
 func (d *Driver) macVMStatus(ctx context.Context, v *vmRun) (runner.Status, error) {
 	if _, err := os.Lstat(filepath.Join(v.dir, macLowDiskFile)); err == nil {
-		return runner.Status{State: types.RunStopped, Message: macVMLowDisk}, nil
+		free, _ := os.ReadFile(filepath.Join(v.dir, macLowDiskFile))
+		return runner.Status{State: types.RunStopped, Message: macVMLowDisk(string(free))}, nil
 	}
 	c := d.macVMConfig()
 	if c == nil {
@@ -598,7 +632,7 @@ func (d *Driver) macVMStatus(ctx context.Context, v *vmRun) (runner.Status, erro
 	case st.Network == macvm.NetLost:
 		return runner.Status{State: types.RunStopped, Message: macVMLostNetwork}, nil
 	case st.State == macvm.StateStopped || st.State == macvm.StateError:
-		return runner.Status{State: types.RunStopped, Message: st.Error}, nil
+		return runner.Status{State: types.RunStopped, Message: cmp.Or(st.Error, macVMStopped)}, nil
 	}
 	return runner.Status{State: types.RunRunning}, nil
 }
@@ -655,19 +689,20 @@ func (d *Driver) EndNewestMacVM(ctx context.Context, freeBytes int64) (string, e
 	return runID.String(), nil
 }
 
-// macVMGoneReason says why a helper is gone: a ledger entry from an earlier boot means the Mac restarted.
+// macVMGoneReason says why a helper is gone: a ledger entry from an earlier boot means the Mac restarted;
+// any other gone helper simply stopped.
 func (d *Driver) macVMGoneReason(v *vmRun) string {
 	c := d.macVMConfig()
 	cfg, err := readMacRun(v.dir, v.runID)
 	if c == nil || err != nil {
-		return ""
+		return macVMHelperStopped
 	}
 	if e, ok := c.entry(cfg.LedgerEntry); ok {
 		if boot, err := c.Host.BootTime(); err == nil && e.BootTime != boot {
 			return macVMRestarted
 		}
 	}
-	return ""
+	return macVMHelperStopped
 }
 
 // entry is one of this runner's ledger entries, counted or held as a disk debt.

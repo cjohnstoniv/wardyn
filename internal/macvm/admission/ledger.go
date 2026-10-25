@@ -75,6 +75,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -306,8 +307,14 @@ type Request struct {
 	OwnerStart  int64
 }
 
-// Refusal is an admission refused for capacity, with the reason in words.
-type Refusal struct{ Reason string }
+// Refusal is an admission refused for capacity, with the reason in words. A refusal for disk also
+// carries its figures: what the run needs free (its reservation plus the floor) and what is free
+// beyond the reservations already held; both are zero on every other refusal.
+type Refusal struct {
+	Reason       string
+	DiskNeeded   int64
+	DiskFreeLeft int64
+}
 
 func (r *Refusal) Error() string { return "admission: " + r.Reason }
 
@@ -491,7 +498,8 @@ func (l *Ledger) Admit(req Request) (Entry, error) {
 			return err
 		}
 		if free-u.disk < req.DiskReserve+DiskFloorBytes {
-			return &Refusal{Reason: fmt.Sprintf("this Mac needs %d GiB free for another macOS VM", (req.DiskReserve+DiskFloorBytes+u.disk)>>30)}
+			return &Refusal{Reason: fmt.Sprintf("this Mac needs %d GiB free for another macOS VM", (req.DiskReserve+DiskFloorBytes+u.disk)>>30),
+				DiskNeeded: req.DiskReserve + DiskFloorBytes, DiskFreeLeft: free - u.disk}
 		}
 		slot := 0
 		for slot < LicenceCap-1 && u.slotsUsed[slot] {
@@ -513,15 +521,21 @@ func (l *Ledger) Admit(req Request) (Entry, error) {
 
 // AddLeaked records a framework slot the ledger cannot account for: the
 // framework refused a start while fewer entries than the cap were counted.
-// It holds one slot (no memory or disk) until the Mac restarts.
-func (l *Ledger) AddLeaked(ownerPID int, ownerStart int64) (Entry, error) {
+// It holds one slot (no memory or disk) until the Mac restarts. own is the
+// entry of the start the framework refused: it is still counted then, and
+// the refusal is checked without it. "" excludes nothing.
+func (l *Ledger) AddLeaked(own string, ownerPID int, ownerStart int64) (Entry, error) {
 	var out Entry
 	err := l.withLock(func() error {
 		v, err := l.load()
 		if err != nil {
 			return err
 		}
-		if l.usage(v).count >= l.c.HostCap {
+		count := l.usage(v).count
+		if own != "" && slices.ContainsFunc(v.counted, func(e Entry) bool { return e.ID == own }) {
+			count--
+		}
+		if count >= l.c.HostCap {
 			return &Refusal{Reason: "the framework's refusal is accounted for by counted entries"}
 		}
 		out = Entry{Kind: KindLeaked, State: StateLeaked, RunnerID: l.c.RunnerID, Slot: -1,

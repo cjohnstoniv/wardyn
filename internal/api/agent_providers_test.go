@@ -606,6 +606,26 @@ func TestSetupHarnessToolsCarryTheRoster(t *testing.T) {
 	}
 }
 
+// A roster row's "Sign-ins in a desktop: Not allowed" reaches its harness row, for a catalog agent and
+// a custom-image one alike, and no other row claims it; with no roster no row does.
+func TestSetupHarnessToolsCarryDesktopSignInsOff(t *testing.T) {
+	off := agentRow("claude-code")
+	off.DesktopSignInsOff = true
+	custom := agentRow("acme")
+	custom.DesktopSignInsOff = true
+	sc := types.SiteConfig{AgentProviders: agentBlock(off, agentRow("codex-cli"), custom)}
+	for _, tool := range setupHarnessTools(sc, map[string]string{"acme": "acme:1"}, nil) {
+		if want := tool.ID == "claude-code" || tool.ID == "acme"; tool.DesktopSignInsOff != want {
+			t.Errorf("%s desktop_sign_ins_off = %v, want %v", tool.ID, tool.DesktopSignInsOff, want)
+		}
+	}
+	for _, tool := range setupHarnessTools(types.SiteConfig{}, nil, nil) {
+		if tool.DesktopSignInsOff {
+			t.Errorf("%s says sign-ins are off with no roster", tool.ID)
+		}
+	}
+}
+
 // TestRedactSetupStatusKeepsTheRoster: a member sees every harness row and
 // whether it is on.
 func TestRedactSetupStatusKeepsTheRoster(t *testing.T) {

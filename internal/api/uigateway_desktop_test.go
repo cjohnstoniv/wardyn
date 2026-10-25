@@ -863,7 +863,7 @@ func TestDesktopEnterRefusesAMacOSDesktopWhoseSignInsAreOff(t *testing.T) {
 		rec := h.enterDesktop(h.ticket(h.run.ID, h.owner, oidc.RoleUser))
 		var body errorBody
 		_ = json.Unmarshal(rec.Body.Bytes(), &body)
-		if rec.Code != http.StatusForbidden || body.Reason != reasonDesktopSignInsOff || body.Error != desktopSignInsOffMsg {
+		if rec.Code != http.StatusForbidden || body.Reason != reasonDesktopSignInsOff || body.Error != "Your admin doesn't allow sign-ins in a desktop while Claude Code runs, and a macOS desktop can't block them yet." {
 			t.Fatalf("%s: a macOS VM's desktop = %d %+v, want 403 %s", name, rec.Code, body, reasonDesktopSignInsOff)
 		}
 	}
@@ -872,5 +872,21 @@ func TestDesktopEnterRefusesAMacOSDesktopWhoseSignInsAreOff(t *testing.T) {
 	st.sc, st.err = off, nil
 	if rec := h.enterDesktop(h.ticket(h.run.ID, h.owner, oidc.RoleUser)); rec.Code != http.StatusFound {
 		t.Fatalf("a Linux VM's desktop under Not allowed = %d %s, want it opened (it keeps no sign-ins)", rec.Code, rec.Body.String())
+	}
+}
+
+// The viewer's boot data names the run's machine kind, so a macOS desktop that is still starting is
+// named as one.
+func TestDesktopViewerBootNamesTheMachineKind(t *testing.T) {
+	h, _ := newDesktopHarness(t)
+	h.srv.cfg.Store = &desktopSiteStore{desktopClosedStore: h.srv.cfg.Store.(*desktopClosedStore)}
+	for _, kind := range []types.MachineKind{types.MachineLinuxVM, types.MachineMacOSVM} {
+		h.run.Agent, h.run.MachineKind = "claude-code", kind
+		h.store.putRun(h.run)
+		c := desktopCookie(t, h.enterDesktop(h.ticket(h.run.ID, h.owner, oidc.RoleUser)))
+		got := uiGet(h, desktopPath(h, "/"), c)
+		if want := `&#34;machine_kind&#34;:&#34;` + string(kind) + `&#34;`; got.Code != http.StatusOK || !strings.Contains(got.Body.String(), want) {
+			t.Fatalf("%s viewer = %d %s, want %s in its boot data", kind, got.Code, got.Body.String(), want)
+		}
 	}
 }

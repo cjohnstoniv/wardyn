@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -222,6 +223,46 @@ func TestRunRefusedWithoutEntry(t *testing.T) {
 	}
 }
 
+// leaked writes one leaked-slot entry for the runner, leaving the refused run's own entry out of the cap
+// check: the run and one other VM are the cap's two, and the framework's refusal is then a leaked slot.
+func TestLeakedRecordsOneEntryForTheRunner(t *testing.T) {
+	ledger := makeLedger(t, t.TempDir())
+	l, err := admission.Open(admission.Config{Dir: ledger, UID: os.Getuid(), RunnerID: "r1", Host: host{}, Fstat: rootFstat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := admission.Request{Kind: admission.KindRun, GuestMemory: 4 << 30, DiskReserve: 1 << 30, OwnerPID: os.Getpid(), OwnerStart: 7}
+	own, err := l.Admit(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Admit(req); err != nil {
+		t.Fatal(err)
+	}
+	d, _, _ := testDeps(&macvmtest.Engine{})
+	d.host = host{}
+	if err := leaked(macvm.RunConfig{RunnerID: "r1", LedgerEntry: own.ID, LedgerDir: ledger}, d); err != nil {
+		t.Fatal(err)
+	}
+	var kinds []admission.Kind
+	es, _ := l.Counted()
+	for _, e := range es {
+		kinds = append(kinds, e.Kind)
+		if e.Kind == admission.KindLeaked && e.RunnerID != "r1" {
+			t.Fatalf("leaked entry for runner %q", e.RunnerID)
+		}
+	}
+	n := 0
+	for _, k := range kinds {
+		if k == admission.KindLeaked {
+			n++
+		}
+	}
+	if n != 1 || len(es) != 3 {
+		t.Fatalf("counted entries %v, want the two runs and one leaked slot", kinds)
+	}
+}
+
 // prepare without an entry says what prepare is missing, not run.json.
 func TestPrepareRefusedWithoutEntry(t *testing.T) {
 	d, _, errb := testDeps(&macvmtest.Engine{})
@@ -276,6 +317,34 @@ func TestProbe(t *testing.T) {
 	d.firstBoot = &macvmtest.FirstBoot{}
 	if code := run(context.Background(), []string{"probe"}, d); vzLinked == (code == 1 && strings.Contains(out.String(), `"vz": false`)) {
 		t.Fatalf("probe on this build: exit %d %s", code, out.String())
+	}
+}
+
+// probe says, as a code, why first boot cannot when the Virtualization framework itself answered: no
+// virtualization support or no provisioning. A build without the framework (the stub, or no first boot)
+// gives none, and a supported Mac gives none.
+func TestProbeReasonCode(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		firstBoot macvm.FirstBooter
+		want      string
+	}{
+		{"supported", &macvmtest.FirstBoot{}, ""},
+		{"no virtualization", &macvmtest.FirstBoot{Unsupported: fmt.Errorf("macvm provision: has no %w; needs macOS 27", macvm.ErrNoVirtualization)}, "no_virtualization"},
+		{"no provisioning", &macvmtest.FirstBoot{Unsupported: errors.New("macvm provision: no class VZMacGuestProvisioningOptions")}, "no_provisioning"},
+		{"stub", &macvmtest.FirstBoot{Unsupported: macvm.ErrProvisionUnsupported}, ""},
+		{"no first boot", nil, ""},
+	} {
+		d, out, _ := testDeps(&macvmtest.Engine{})
+		d.firstBoot = tc.firstBoot
+		_ = run(context.Background(), []string{"probe"}, d)
+		var r probeReport
+		if err := json.Unmarshal(out.Bytes(), &r); err != nil {
+			t.Fatalf("%s: %v %q", tc.name, err, out.String())
+		}
+		if r.Reason != tc.want {
+			t.Fatalf("%s: reason %q, want %q", tc.name, r.Reason, tc.want)
+		}
 	}
 }
 

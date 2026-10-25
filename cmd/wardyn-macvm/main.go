@@ -176,6 +176,7 @@ func cmdRun(ctx context.Context, args []string, d deps) int {
 			}
 			return claim(c, d)
 		},
+		Leaked:        func(c macvm.RunConfig) error { return leaked(c, d) },
 		HoldIdleSleep: holdIdleSleep,
 	})
 	if err != nil && !errors.Is(err, context.Canceled) {
@@ -189,21 +190,40 @@ func cmdRun(ctx context.Context, args []string, d deps) int {
 // claim records this helper in its admission entry before the VM is built.
 // Every macOS VM holds one; callers refuse a missing entry in their own words.
 func claim(c macvm.RunConfig, d deps) error {
-	host := d.host
-	dir := c.LedgerDir
-	if dir == "" {
-		dir = admission.DefaultDir
-	}
-	l, err := admission.Open(admission.Config{Dir: dir, UID: os.Getuid(), RunnerID: c.RunnerID, Host: host, Fstat: d.fstat})
-	if err != nil {
-		return err
-	}
-	start, err := admission.Self(host, os.Getpid())
+	l, start, err := openRunLedger(c, d)
 	if err != nil {
 		return err
 	}
 	_, err = l.ClaimHelper(c.LedgerEntry, os.Getpid(), start)
 	return err
+}
+
+// leaked records the framework slot a refused start left behind (the VM limit, code 6, while the ledger
+// counts fewer VMs than the cap). The refused run's own entry, still counted, is left out of that check.
+func leaked(c macvm.RunConfig, d deps) error {
+	l, start, err := openRunLedger(c, d)
+	if err != nil {
+		return err
+	}
+	_, err = l.AddLeaked(c.LedgerEntry, os.Getpid(), start)
+	return err
+}
+
+// openRunLedger opens the run's ledger as this runner's helper, and reads this process's start time.
+func openRunLedger(c macvm.RunConfig, d deps) (*admission.Ledger, int64, error) {
+	dir := c.LedgerDir
+	if dir == "" {
+		dir = admission.DefaultDir
+	}
+	l, err := admission.Open(admission.Config{Dir: dir, UID: os.Getuid(), RunnerID: c.RunnerID, Host: d.host, Fstat: d.fstat})
+	if err != nil {
+		return nil, 0, err
+	}
+	start, err := admission.Self(d.host, os.Getpid())
+	if err != nil {
+		return nil, 0, err
+	}
+	return l, start, nil
 }
 
 // holdIdleSleep holds an idle-sleep assertion while the VM runs (macOS only).
@@ -491,7 +511,16 @@ type probeReport struct {
 	// Thermal is the Mac's thermal state (nominal, fair, serious, critical;
 	// at serious and above no new VM starts), when the engine can read it.
 	Thermal string `json:"thermal,omitempty"`
+	// Reason says, as a code, why first boot cannot, when the Virtualization framework itself answered:
+	// no_virtualization or no_provisioning. Absent for a build without the framework (the stub's answer).
+	Reason string `json:"reason,omitempty"`
 }
+
+// Probe reasons.
+const (
+	probeNoVirtualization = "no_virtualization"
+	probeNoProvisioning   = "no_provisioning"
+)
 
 // cmdProbe prints whether this Mac and this build can run macOS VMs, and
 // exits 0 only when they can.
@@ -509,6 +538,12 @@ func cmdProbe(d deps) int {
 		provErr = d.firstBoot.Supported()
 	}
 	r.Host, r.Provisioning = okOr(hostErr), okOr(provErr)
+	if provErr != nil && d.firstBoot != nil && !errors.Is(provErr, macvm.ErrProvisionUnsupported) {
+		r.Reason = probeNoProvisioning
+		if errors.Is(provErr, macvm.ErrNoVirtualization) {
+			r.Reason = probeNoVirtualization
+		}
+	}
 	r.Supported = hostErr == nil && provErr == nil
 	enc := json.NewEncoder(d.stdout)
 	enc.SetIndent("", "  ")

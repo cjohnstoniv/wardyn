@@ -33,7 +33,7 @@ import (
 )
 
 // MinHostMajor is the oldest macOS this engine runs on (provisioning needs 27).
-const MinHostMajor = 27
+const MinHostMajor = macvm.MinHostMajor
 
 // Engine is the Virtualization-framework engine.
 type Engine struct{}
@@ -289,9 +289,19 @@ func (m *machine) watch() {
 func (m *machine) Start(context.Context) error {
 	if err := m.vm.Start(); err != nil {
 		m.once.Do(func() { close(m.done) })
-		return err
+		return classifyStart(err)
 	}
 	return nil
+}
+
+// classifyStart wraps macvm.ErrVMLimit around a start error that is the framework's VM limit refusal,
+// matched by the NSError's domain and code; any other error is returned as it is.
+func classifyStart(err error) error {
+	var ns *vz.NSError
+	if errors.As(err, &ns) && macvm.IsVMLimit(ns.Domain, ns.Code) {
+		return fmt.Errorf("%w: %w", macvm.ErrVMLimit, err)
+	}
+	return err
 }
 
 func (m *machine) RequestStop() error {

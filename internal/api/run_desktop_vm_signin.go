@@ -116,6 +116,12 @@ func (s *Server) recordDesktopVMSignIns(ctx context.Context, run types.AgentRun,
 	}
 }
 
+// macOSDesktopSignInsOffMsg is the refusal of a macOS desktop whose agent's sign-ins are Not allowed
+// (desktopSignInsOffMsg is the Linux pause's), naming the agent by its display name.
+func macOSDesktopSignInsOffMsg(agent string) string {
+	return "Your admin doesn't allow sign-ins in a desktop while " + agentDisplay(agent) + " runs, and a macOS desktop can't block them yet."
+}
+
 func agentDisplay(agent string) string {
 	if d, ok := harnessByID(agent); ok {
 		return d.Display

@@ -14,7 +14,8 @@ import { DESKTOP } from "../app/components/wardyn/copy/desktop";
 import { keysymOf } from "./keysym";
 import { RfbClient, type RfbDisplay } from "./rfb";
 
-export type Boot = { state: "open"; expires: number; rfb: string; close: string } | { state: "refused"; said: string };
+// `machine_kind` is the run's (types.MachineKind); absent when the gateway could not read the run.
+export type Boot = { state: "open"; expires: number; rfb: string; close: string; machine_kind?: string } | { state: "refused"; said: string };
 
 /** What the gateway wrote on the page, or null when it wrote nothing usable. */
 export function readBoot(el: HTMLElement = document.documentElement): Boot | null {
@@ -164,15 +165,15 @@ function Desktop({ boot, connect, viewOnly }: { boot: Extract<Boot, { state: "op
           onContextMenu={(e) => e.preventDefault()}
           {...input}
         />
-        {phase !== "connected" && <Notice phase={phase} />}
+        {phase !== "connected" && <Notice phase={phase} macOS={boot.machine_kind === "macos_vm"} />}
       </main>
     </div>
   );
 }
 
-function Notice({ phase }: { phase: Exclude<Phase, "connected"> }) {
+function Notice({ phase, macOS }: { phase: Exclude<Phase, "connected">; macOS: boolean }) {
   const [title, body] =
-    phase === "starting" ? [DESKTOP.starting, DESKTOP.startingBody]
+    phase === "starting" ? [macOS ? DESKTOP.startingMacOS : DESKTOP.starting, DESKTOP.startingBody]
     : phase === "expired" ? [DESKTOP.sessionEnded, DESKTOP.sessionEndedBody]
     : phase === "run_ended" ? [DESKTOP.runEnded, undefined]
     : phase === "refused" ? [DESKTOP.sessionEnded, DESKTOP.refusedBody]

@@ -21,6 +21,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
 	"github.com/cjohnstoniv/wardyn/internal/macvm/admission"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -236,4 +237,51 @@ func TestMacVMRunBootCarriesNoToolsMode(t *testing.T) {
 		}
 	}
 	_ = r.d.StopSandbox(context.Background(), sb.Ref)
+}
+
+// A macOS VM's start says each phase as it enters it, and a failure says the phase it stopped in: the
+// clone (the helper never opened its socket), and the disk short of the run's reservation before the
+// clone began, with its figures.
+func TestMacVMStartReportsItsPhases(t *testing.T) {
+	detail := func(reason string) string { return runner.MacOSStartDetail(reason) }
+	run := func(t *testing.T, r *macRig) ([]string, error) {
+		t.Helper()
+		var said []string
+		spec := macSpec()
+		spec.OnWaiting = func(d string) { said = append(said, d) }
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, err := r.d.CreateSandbox(ctx, spec)
+		return said, err
+	}
+
+	r := newMacRig(t)
+	said, err := run(t, r)
+	if want := []string{detail(runner.MacOSCloning), detail(runner.MacOSStarting), detail(runner.MacOSConnecting)}; err != nil || !slices.Equal(said, want) {
+		t.Fatalf("a good start said %q (%v), want %q", said, err, want)
+	}
+
+	r = newMacRig(t)
+	r.c.spawn = func(string) error { return nil } // the helper never starts
+	said, err = run(t, r)
+	if want := []string{detail(runner.MacOSCloning), detail(runner.MacOSCloneFailed)}; err == nil || !slices.Equal(said, want) {
+		t.Fatalf("a helper that never starts said %q (%v), want %q", said, err, want)
+	}
+
+	r = newMacRig(t)
+	r.host.freeDisk = 30 << 30
+	said, err = run(t, r)
+	need := admission.RunDiskReservation(macvm.BaseDiskBytes) + admission.DiskFloorBytes
+	if want := []string{detail(runner.MacOSCloning), runner.MacOSDiskShortMessage(need, 30<<30)}; err == nil || !slices.Equal(said, want) {
+		t.Fatalf("a Mac short of disk said %q (%v), want %q", said, err, want)
+	}
+
+	// The run's network and proxy are the start's, not the clone's: their failure is said as the start's,
+	// before any clone began.
+	r = newMacRig(t)
+	r.f.networkCreateErr = errors.New("no network")
+	said, err = run(t, r)
+	if want := []string{detail(runner.MacOSStartFailed)}; err == nil || !slices.Equal(said, want) {
+		t.Fatalf("a run whose network failed said %q (%v), want %q", said, err, want)
+	}
 }
