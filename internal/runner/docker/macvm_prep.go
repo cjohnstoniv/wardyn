@@ -38,8 +38,12 @@ func macPrepID(entryID string) uuid.UUID {
 // prep-allowlist.json on 443 only, no credential, no MITM, serving only that network's subnet) on its
 // stdin, as startProxyOn configures a run's; and a wardyn-vmnet relay serving frames on stdio with -proxy
 // at that proxy. It answers the relay's attach descriptor, which runnerd hands the job's helper as net_fd,
-// and the undo that removes all three. On an error it has already undone them.
+// and the undo that removes all three. On an error it has already undone them. It first removes any of
+// the three a runnerd that stopped or crashed before its hand-off left, so their names never collide.
 func (d *Driver) StartMacPrepNet(ctx context.Context, entryID string) (*os.File, func(), error) {
+	if err := d.RemoveMacPrepNet(ctx, entryID); err != nil {
+		return nil, nil, err
+	}
 	id := macPrepID(entryID)
 	labels := d.labels(id, componentMacPrep, map[string]string{runner.LabelRunnerID: d.cfg.RunnerID})
 	var rollback []func()
@@ -144,6 +148,23 @@ func (d *Driver) startPrepProxy(ctx context.Context, id uuid.UUID, labels map[st
 	}
 	defer att.Close()
 	return resp.ID, d.watchProxyExit(ctx, resp.ID)
+}
+
+// RemoveMacPrepNet removes the stage-2 network of the job holding ledger entry entryID by its names,
+// whichever runnerd made it: the relay, the prep proxy, then the network; one already gone is no error.
+// runnerd removes a network it adopted from an earlier runnerd with it, once the job's helper has gone.
+func (d *Driver) RemoveMacPrepNet(ctx context.Context, entryID string) error {
+	id := macPrepID(entryID)
+	var errs []error
+	for _, name := range []string{vmnetName(id), proxyContainerName(id)} {
+		if _, err := d.cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
+			errs = append(errs, fmt.Errorf("docker: remove the macOS prep container %s: %w", name, err))
+		}
+	}
+	if _, err := d.cli.NetworkRemove(ctx, internalNetName(id), client.NetworkRemoveOptions{}); err != nil && !isNotFound(err) {
+		errs = append(errs, fmt.Errorf("docker: remove the macOS prep network %s: %w", internalNetName(id), err))
+	}
+	return errors.Join(errs...)
 }
 
 // SweepMacPrep removes what a crashed runnerd left of its jobs' stage-2 networks: this runner's and this

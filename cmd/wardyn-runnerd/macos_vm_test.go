@@ -280,7 +280,7 @@ func TestMacOSVMSettingResolves(t *testing.T) {
 func TestMacOSVMPrepareProgress(t *testing.T) {
 	log := filepath.Join(t.TempDir(), "prepare.log")
 	_ = os.WriteFile(log, []byte(`{"phase":"check","fraction":1}`+"\n"+`{"phase":"install","fraction":0.5}`+"\n"), 0o600)
-	if p := prepareProgress(log); p != 56 { // (4 + 0.5) of 8 phases
+	if p := prepareProgress(log); p != 45 { // (4 + 0.5) of 10 phases
 		t.Fatalf("progress %d", p)
 	}
 	_ = os.WriteFile(log, []byte(`{"phase":"install","fraction":0.5}`+"\nwardyn-macvm: no space left\n"), 0o600)

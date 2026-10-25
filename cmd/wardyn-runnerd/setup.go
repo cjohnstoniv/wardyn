@@ -51,6 +51,8 @@ type setupOptions struct {
 	limits  registerLimits
 	// macOSVM is --macos-vm: on or off; "" asks at a terminal on an Apple silicon Mac, else keeps the earlier answer.
 	macOSVM string
+	// keepIPSW is --keep-ipsw: the prepare setup starts keeps Apple's restore image.
+	keepIPSW bool
 }
 
 // newSetupCommand is the one command a person or device management runs to turn a downloaded
@@ -105,6 +107,7 @@ func newSetupCommand() *cobra.Command {
 	fl.StringVar(&o.pool, "pool", "", "with --claim, also put the runner in your user pool of this name (made if you have none by it)")
 	fl.BoolVar(&o.makeDefault, "default", false, "with --claim and --pool, also make that pool your default")
 	fl.StringVar(&o.macOSVM, "macos-vm", "", "on or off: macOS VM sandboxes on this Apple silicon Mac, whose base image it then starts to prepare (asked at a terminal when left out)")
+	fl.BoolVar(&o.keepIPSW, "keep-ipsw", false, "keep Apple's restore image after the base is ready")
 	o.limits.register(cmd)
 	return cmd
 }
