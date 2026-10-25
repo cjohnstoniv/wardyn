@@ -22,6 +22,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- The host's connection to a desktop VM's guest agent no longer keeps every connection it has ever redialled, and
+  reads at most 64 KiB of response headers from the guest; a frame cut off after its header now reads as an unexpected
+  end of stream rather than a clean one (#3388).
 - A Kubernetes run whose proxy container is running but never becomes ready now fails at the start deadline with a line
   naming the readiness probe and the proxy image, and saying to check the proxy's log and connectivity; on a runner it
   adds that the proxy may be waiting for its first run-token renewal with the organisation (#3612).

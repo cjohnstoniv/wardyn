@@ -363,3 +363,56 @@ func TestTheClientSeesARefusalNotAHang(t *testing.T) {
 		t.Fatal("ready hung on a guest that does not answer the hello")
 	}
 }
+
+func TestReadFrameOnlyReportsEOFAtAFrameBoundary(t *testing.T) {
+	if _, _, err := ReadFrame(bytes.NewReader(nil)); err != io.EOF {
+		t.Fatalf("empty stream = %v, want io.EOF", err)
+	}
+	for name, in := range map[string][]byte{
+		"half a header":          {FrameStdout, 0, 0},
+		"a header, no payload":   {FrameStdout, 0, 0, 0, 3},
+		"a header, half payload": {FrameStdout, 0, 0, 0, 3, 'a'},
+	} {
+		_, _, err := ReadFrame(bytes.NewReader(in))
+		if !errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+			t.Fatalf("%s: %v, want io.ErrUnexpectedEOF and not io.EOF", name, err)
+		}
+	}
+	if typ, p, err := ReadFrame(bytes.NewReader([]byte{FrameStdinClose, 0, 0, 0, 0})); err != nil || typ != FrameStdinClose || len(p) != 0 {
+		t.Fatalf("empty payload frame = %d %q %v", typ, p, err)
+	}
+}
+
+func TestClientForgetsConnectionsClosedByARedial(t *testing.T) {
+	c := rawGuest(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{}`)) }))
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	for range 4 {
+		if _, err := c.Ready(ctx); err != nil {
+			t.Fatal(err)
+		}
+		c.mu.Lock()
+		dead := slices.Clone(c.conns)
+		c.mu.Unlock()
+		for _, conn := range dead { // the guest's protocol error closes the connection; the next call redials
+			_ = conn.Close()
+		}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.conns) != 0 {
+		t.Fatalf("%d closed connections still tracked", len(c.conns))
+	}
+}
+
+func TestClientBoundsAGuestsResponseHeaders(t *testing.T) {
+	c := rawGuest(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Pad", strings.Repeat("a", 4*maxResponseHeader))
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if _, err := c.Ready(ctx); err == nil {
+		t.Fatal("a response with headers over the bound was accepted")
+	}
+}

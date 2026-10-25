@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"sync"
 )
@@ -37,19 +38,39 @@ func NewClient(dial func(ctx context.Context) (net.Conn, error)) *Client {
 	c.tr = &http.Transport{
 		Protocols:       &protocols,
 		MaxConnsPerHost: 1,
+		// The agent's answers are small JSON; the default (10 MB of headers) lets a guest make the host buffer far more.
+		MaxResponseHeaderBytes: maxResponseHeader,
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			conn, err := dialSession(ctx, dial, hostHello)
 			if err != nil {
 				return nil, err
 			}
+			tc := &dialedConn{Conn: conn, c: c}
 			c.mu.Lock()
-			c.conns = append(c.conns, conn)
+			c.conns = append(c.conns, tc)
 			c.mu.Unlock()
-			return conn, nil
+			return tc, nil
 		},
 	}
 	c.hc = &http.Client{Transport: c.tr}
 	return c
+}
+
+// maxResponseHeader bounds the response headers the host reads from a guest.
+const maxResponseHeader = 64 << 10
+
+// dialedConn removes itself from Client.conns when closed, so redials (a guest can force them with an
+// HTTP/2 protocol error) do not grow the list for the run's life.
+type dialedConn struct {
+	net.Conn
+	c *Client
+}
+
+func (t *dialedConn) Close() error {
+	t.c.mu.Lock()
+	t.c.conns = slices.DeleteFunc(t.c.conns, func(x net.Conn) bool { return x == net.Conn(t) })
+	t.c.mu.Unlock()
+	return t.Conn.Close()
 }
 
 // Close closes every connection the client made, in use or not.
