@@ -20,6 +20,7 @@ package main
 
 import (
 	"context"
+	"debug/buildinfo"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -31,6 +32,8 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
+	"strings"
 	"syscall"
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
@@ -48,8 +51,9 @@ type deps struct {
 	stdout io.Writer
 	stderr io.Writer
 	// prepare supplies prepare's first-boot provisioner, prep network and
-	// stage 1, which other parts of the build provide.
-	prepare func(*macvm.PrepareOptions) error
+	// stage 1, which other parts of the build provide; relayLog is the prep
+	// network's log.
+	prepare func(o *macvm.PrepareOptions, relayLog *slog.Logger) error
 	// firstBoot is the provisioning first boot (macvm.NewProvisioner), which
 	// probe asks whether this host can run it.
 	firstBoot macvm.FirstBooter
@@ -301,7 +305,7 @@ func (j jobFlags) admit(name string, d deps) func(context.Context) (func(), erro
 
 // stage2 is the job's stage 2: the shipped pins, applied over a stage-2 boot
 // whose ctl.sock (JobControlSock) takes runnerd's net_fd.
-func (j jobFlags) stage2(eng macvm.Engine, d deps) (*macvm.ToolsStage, error) {
+func (j jobFlags) stage2(eng macvm.Engine, d deps, relayLog *slog.Logger) (*macvm.ToolsStage, error) {
 	if *j.entry == "" {
 		return nil, fmt.Errorf("a stage-2 boot needs --%s: its socket directory is named by the entry", macvm.FlagLedgerEntry)
 	}
@@ -313,7 +317,7 @@ func (j jobFlags) stage2(eng macvm.Engine, d deps) (*macvm.ToolsStage, error) {
 	if err != nil {
 		return nil, err
 	}
-	boot := macvm.Stage2BootConfig{Engine: eng, SockRoot: *j.sockRoot, SockKey: macvm.JobSockKey(*j.entry), SockFstat: d.sockFstat}
+	boot := macvm.Stage2BootConfig{Engine: eng, SockRoot: *j.sockRoot, SockKey: macvm.JobSockKey(*j.entry), SockFstat: d.sockFstat, Log: relayLog}
 	return &macvm.ToolsStage{Boot: boot.ToolsBoot(), ToolsOptions: macvm.ToolsOptions{
 		Tooling: t, Cache: filepath.Join(macvm.Layout{Root: *j.root}.CacheDir(), "tools"),
 		// Stage 2 replaces the guest agent where stage 1 installed it, with
@@ -332,6 +336,12 @@ func cmdPrepare(ctx context.Context, args []string, d deps) int {
 	if code := j.parse(fs, args, d); code != 0 {
 		return code
 	}
+	relayLog, closeLog, err := openRelayLog(*j.root)
+	if err != nil {
+		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
+		return 1
+	}
+	defer closeLog()
 	eng, err := d.engine()
 	if err != nil {
 		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
@@ -346,14 +356,14 @@ func cmdPrepare(ctx context.Context, args []string, d deps) int {
 		Admit:           j.admit(macvm.PrepareCommand, d),
 	}
 	if *j.entry != "" {
-		st, err := j.stage2(eng, d)
+		st, err := j.stage2(eng, d, relayLog)
 		if err != nil {
 			fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
 			return 1
 		}
 		o.Stage2 = st
 	}
-	if err := d.prepare(&o); err != nil {
+	if err := d.prepare(&o, relayLog); err != nil {
 		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
 		return 1
 	}
@@ -375,12 +385,18 @@ func cmdUpdateTools(ctx context.Context, args []string, d deps) int {
 	if code := j.parse(fs, args, d); code != 0 {
 		return code
 	}
+	relayLog, closeLog, err := openRelayLog(*j.root)
+	if err != nil {
+		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
+		return 1
+	}
+	defer closeLog()
 	eng, err := d.engine()
 	if err != nil {
 		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
 		return 1
 	}
-	st, err := j.stage2(eng, d)
+	st, err := j.stage2(eng, d, relayLog)
 	if err != nil {
 		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
 		return 1
@@ -403,12 +419,12 @@ func cmdUpdateTools(ctx context.Context, args []string, d deps) int {
 // wardyn-guest-agent that sits beside this helper. Where this build or host
 // cannot provision a first boot, prepare is refused with the provisioner's
 // reason.
-func prepareDeps(o *macvm.PrepareOptions) error {
+func prepareDeps(o *macvm.PrepareOptions, relayLog *slog.Logger) error {
 	if o.FirstBoot == nil {
 		o.FirstBoot = macvm.NewProvisioner()
 	}
 	if o.PrepNet == nil {
-		o.PrepNet = newPrepNet
+		o.PrepNet = func() (macvm.PrepNetwork, error) { return newPrepNet(relayLog) }
 	}
 	if o.Bootstrap == nil {
 		agent, err := guestAgentPath()
@@ -421,6 +437,17 @@ func prepareDeps(o *macvm.PrepareOptions) error {
 		return fmt.Errorf("%w; prepare is not available", err)
 	}
 	return nil
+}
+
+// openRelayLog opens the in-helper relays' log, prep-relay.log in root
+// (macvm.PrepRelayLogFile), never stderr: runnerd reads prepare.log's last
+// line, which the helper's stdout and stderr fill, as progress.
+func openRelayLog(root string) (*slog.Logger, func(), error) {
+	f, err := macvm.OpenRotatingLog(macvm.Layout{Root: root}.PrepRelayLog(), macvm.HelperLogMax)
+	if err != nil {
+		return nil, nil, fmt.Errorf("the prep relay's log: %w", err)
+	}
+	return slog.New(slog.NewJSONHandler(f, nil)), func() { _ = f.Close() }, nil
 }
 
 // guestAgentPath is the darwin/arm64 wardyn-guest-agent beside this helper:
@@ -443,6 +470,10 @@ type probeReport struct {
 	HelperVersion string `json:"helper_version"`
 	Host          string `json:"host"`         // "ok" or why this Mac cannot
 	Provisioning  string `json:"provisioning"` // "ok" or why first boot cannot
+	// GuestAgent is the wardyn-guest-agent beside this helper, which stage 1
+	// installs: "ok", "missing", or "mismatch" (another build than this
+	// helper's). It does not change Supported.
+	GuestAgent string `json:"guest_agent"`
 	// Thermal is the Mac's thermal state (nominal, fair, serious, critical;
 	// at serious and above no new VM starts), when the engine can read it.
 	Thermal string `json:"thermal,omitempty"`
@@ -451,7 +482,7 @@ type probeReport struct {
 // cmdProbe prints whether this Mac and this build can run macOS VMs, and
 // exits 0 only when they can.
 func cmdProbe(d deps) int {
-	r := probeReport{GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, Cgo: cgoEnabled, VZ: vzLinked, HelperVersion: version.String()}
+	r := probeReport{GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, Cgo: cgoEnabled, VZ: vzLinked, HelperVersion: version.String(), GuestAgent: guestAgentState()}
 	var hostErr error
 	if eng, err := d.engine(); err != nil {
 		hostErr = err
@@ -472,6 +503,39 @@ func cmdProbe(d deps) int {
 		return 1
 	}
 	return 0
+}
+
+// guestAgentState is probe's guest_agent: whether the agent beside this
+// helper is there, executable, and the same build (buildID) as the helper.
+func guestAgentState() string {
+	p, err := guestAgentPath()
+	if err != nil {
+		return "missing"
+	}
+	if st, err := os.Stat(p); err != nil || !st.Mode().IsRegular() || st.Mode().Perm()&0o111 == 0 {
+		return "missing"
+	}
+	agent, err := buildinfo.ReadFile(p)
+	self, ok := debug.ReadBuildInfo()
+	if err != nil || !ok || buildID(agent) != buildID(self) {
+		return "mismatch"
+	}
+	return "ok"
+}
+
+// buildID is what version.String reads of a build, which the agent's binary
+// carries too: module version, commit, a dirty tree, and the release stamp.
+func buildID(bi *debug.BuildInfo) string {
+	id := []string{bi.Main.Version}
+	for _, s := range bi.Settings {
+		switch s.Key {
+		case "vcs.revision", "vcs.modified":
+			id = append(id, s.Key+"="+s.Value)
+		case "-ldflags":
+			id = append(id, fmt.Sprintf("release=%t", strings.Contains(s.Value, "internal/version.releaseBuild=true")))
+		}
+	}
+	return strings.Join(id, ";")
 }
 
 func okOr(err error) string {

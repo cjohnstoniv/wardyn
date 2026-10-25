@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 func testSpec(t *testing.T) MachineSpec {
@@ -162,6 +164,51 @@ func TestBridgeBothWays(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "relay says hi") {
 		t.Fatalf("stderr not passed on: %q", stderr.String())
+	}
+}
+
+// fullGuest is a guest NIC whose receive buffer is full for its first
+// write (ENOBUFS, as macOS returns), then takes frames.
+type fullGuest struct {
+	writes int
+	got    chan []byte
+	stop   chan struct{}
+}
+
+func (g *fullGuest) Read([]byte) (int, error) { <-g.stop; return 0, io.EOF }
+
+func (g *fullGuest) Write(p []byte) (int, error) {
+	if g.writes++; g.writes == 1 {
+		return 0, &os.PathError{Op: "write", Path: "guest-nic-host", Err: unix.ENOBUFS}
+	}
+	g.got <- append([]byte(nil), p...)
+	return len(p), nil
+}
+
+// A frame the guest's full receive buffer refuses is dropped; the bridge
+// goes on and the next frame reaches the guest.
+func TestBridgeDropsOnFullGuestBuffer(t *testing.T) {
+	g := &fullGuest{got: make(chan []byte, 1), stop: make(chan struct{})}
+	defer close(g.stop)
+	relaySide, attach := net.Pipe()
+	defer relaySide.Close()
+	b := &Bridge{Guest: g, Attach: attach}
+	errc := make(chan error, 1)
+	go func() { errc <- b.Run() }()
+	f1, f2 := frame(60, 0x01), frame(60, 0x02)
+	go func() {
+		_, _ = relaySide.Write(dockerChunk(streamStdout, lenFrame(f1)))
+		_, _ = relaySide.Write(dockerChunk(streamStdout, lenFrame(f2)))
+	}()
+	select {
+	case got := <-g.got:
+		if !bytes.Equal(got, f2) || b.dropped.Load() != 1 {
+			t.Fatalf("guest got %x, dropped %d", got[:1], b.dropped.Load())
+		}
+	case err := <-errc:
+		t.Fatalf("the bridge ended: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("no frame reached the guest")
 	}
 }
 

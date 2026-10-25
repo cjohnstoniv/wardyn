@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync/atomic"
 
 	"golang.org/x/sys/unix"
 )
@@ -51,6 +52,8 @@ type Bridge struct {
 	Attach io.ReadWriter // the hijacked attach connection
 	// Stderr gets the container's stderr bytes (the relay's log), if set.
 	Stderr io.Writer
+
+	dropped atomic.Uint64 // frames a full guest receive buffer refused
 }
 
 // Run moves frames both ways until either side ends, and returns why. The
@@ -97,6 +100,12 @@ func (b *Bridge) relayToGuest() error {
 			return fmt.Errorf("macvm: relay attach: %w", err)
 		}
 		if _, err := b.Guest.Write(buf[:n]); err != nil {
+			// A full guest receive buffer (ENOBUFS on macOS) drops this one
+			// frame, as a NIC would; TCP retransmits.
+			if errors.Is(err, unix.ENOBUFS) || errors.Is(err, unix.EAGAIN) {
+				b.dropped.Add(1)
+				continue
+			}
 			return fmt.Errorf("macvm: guest nic: %w", err)
 		}
 	}
