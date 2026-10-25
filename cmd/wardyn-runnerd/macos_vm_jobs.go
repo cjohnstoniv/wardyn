@@ -29,6 +29,8 @@ import (
 var (
 	jobSockPoll  = time.Second
 	jobDialTries = 20
+	// jobNetCheckWait bounds handNet's question to a boot whose net_fd send failed.
+	jobNetCheckWait = 10 * time.Second
 )
 
 // watchJobs starts handNet for each of this runner's claimed prepare and tools-update entries whose
@@ -112,9 +114,22 @@ func (m *macOSVMs) handNet(ctx context.Context, e admission.Entry) {
 		err = m.sendJobNet(ctx, e.ID, attach)
 		_ = attach.Close()
 		if err != nil {
-			undo()
 			slog.Warn("macOS VM base: hand the stage-2 boot its network", "error", err.Error())
-			return
+			// The send can fail after the helper took the descriptor (its reply lost, a stop of this
+			// runnerd), and tearing down a network the helper holds strands it until its own wait ends.
+			// So ask it, under a context a stop does not cancel: undo only when it says it has none.
+			chk, cancel := context.WithTimeout(context.WithoutCancel(ctx), jobNetCheckWait)
+			held, aerr := m.jobNetAttached(chk, e.ID)
+			cancel()
+			if aerr != nil {
+				// Unknown: leave the network to the helper's wait or the next start's sweep.
+				slog.Warn("macOS VM base: the stage-2 network is left, the boot could not be asked", "error", aerr.Error())
+				return
+			}
+			if !held {
+				undo()
+				return
+			}
 		}
 	}
 	m.markDockerWait(e.ID, false)

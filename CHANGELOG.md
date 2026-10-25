@@ -30,6 +30,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `end_reason` `run_ended`, and the server stops holding the pause. Before, the pause stayed open with no end row.
 - `wardyn-runnerd doctor` on a host whose service definition is still an earlier install's, which passes `--org`, now
   checks the organisation that service uses, as `serve` does, instead of the one in `runnerd.json`.
+- A macOS VM runner's stage-2 network is now removed when the job's VM goes away before its control socket appears, and
+  is no longer torn down when handing it to the helper fails after the helper already took it (#3641, #3642).
 
 ## [0.10.0-rc.3] — 2026-10-25
 
