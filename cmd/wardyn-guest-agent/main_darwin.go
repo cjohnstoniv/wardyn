@@ -27,7 +27,7 @@ import (
 
 func main() {
 	out := flag.String("out", "/var/run/wardyn-guest", "directory for detached execs' output (cleared at boot)")
-	plist := flag.String("plist", "/Library/LaunchDaemons/com.wardyn.guest-agent.plist", "this agent's LaunchDaemon plist, which tools mode may replace")
+	plist := flag.String("plist", guestagent.MacAgentPlistPath, "this agent's LaunchDaemon plist, which tools mode may replace")
 	flag.Parse()
 	if err := run(*out, *plist); err != nil {
 		slog.Error("wardyn-guest-agent", "err", err)

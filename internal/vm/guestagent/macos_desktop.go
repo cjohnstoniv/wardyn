@@ -241,16 +241,9 @@ func (d *Desktop) SetSessionEnv(ctx context.Context, env []string) error {
 	return nil
 }
 
-// Register adds the desktop's request to mux:
-//
-//	GET /v1/desktop/pointer      Pointer, read in the console user's session
-//
-// The password is never served back: the host's helper made it and logs in with it itself.
-func (d *Desktop) Register(mux *http.ServeMux) {
-	mux.HandleFunc("GET /v1/desktop/pointer", d.servePointer)
-}
-
-// servePointer answers the pointer position (Pointer); 409 with nobody at the console.
+// servePointer answers the pointer position (Pointer); 409 with nobody at the console. Only tools mode
+// serves it (GET /v1/tools/pointer); the control session has no desktop request, and the password is
+// never served back: the host's helper made it and logs in with it itself.
 func (d *Desktop) servePointer(w http.ResponseWriter, r *http.Request) {
 	p, err := d.Pointer(r.Context())
 	if err != nil {

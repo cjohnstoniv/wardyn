@@ -32,10 +32,10 @@ import (
 	"path/filepath"
 	"runtime"
 	"syscall"
-	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
 	"github.com/cjohnstoniv/wardyn/internal/macvm/admission"
+	"github.com/cjohnstoniv/wardyn/internal/macvm/stage1"
 	"github.com/cjohnstoniv/wardyn/internal/version"
 	"golang.org/x/sys/unix"
 )
@@ -315,7 +315,7 @@ func cmdPrepare(ctx context.Context, args []string, d deps) int {
 	j := newJobFlags(fs)
 	keep := fs.Bool(macvm.FlagKeepIPSW, false, "keep the downloaded restore image")
 	reprepare := fs.Bool(macvm.FlagReprepare, false, "build a new base even when one is ready (a newer restore image), and swap it in")
-	byHand := fs.Duration("setup-by-hand-wait", time.Hour, "how long to wait for macOS's setup by hand (0: stop instead)")
+	byHand := fs.Duration("setup-by-hand-wait", macvm.DefaultSetupByHandWait, "how long to wait for macOS's setup by hand (0: stop instead)")
 	if code := j.parse(fs, args, d); code != 0 {
 		return code
 	}
@@ -386,9 +386,20 @@ func cmdUpdateTools(ctx context.Context, args []string, d deps) int {
 }
 
 // prepareDeps wires prepare's first-boot provisioner (macvm.NewProvisioner),
-// prep network (internal/vmnet) and stage 1. They arrive from their own
-// lanes; until they are merged this build refuses prepare by name.
+// prep network (internal/vmnet) and stage 1. Stage 1 installs the
+// wardyn-guest-agent that sits beside this helper. The provisioner and the
+// prep network arrive from their own lanes; until they are merged this build
+// refuses prepare by name.
 func prepareDeps(o *macvm.PrepareOptions) error {
+	if o.Bootstrap == nil {
+		self, err := os.Executable()
+		if err != nil {
+			return fmt.Errorf("this helper's own path: %w", err)
+		}
+		o.Bootstrap = stage1.New(stage1.Config{
+			AgentPath: filepath.Join(filepath.Dir(self), "wardyn-guest-agent"), AgentVersion: version.String(),
+		})
+	}
 	if o.FirstBoot == nil || o.PrepNet == nil || o.Bootstrap == nil {
 		return errors.New("this build has no guest provisioning, prep network or stage 1 yet; prepare is not available")
 	}
