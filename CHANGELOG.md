@@ -85,6 +85,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- A macOS VM run whose policy keeps no desktop sign-ins now starts agent-only. Its guest turns the desktop off and
+  sets no desktop password, and the runner took that as the desktop password failure and ended the run.
 - A unit admin deciding a held membership change no longer sees, in its diff, the other units the person holds
   memberships under (`belongs_by`). Super admins and security admins still see them; the decision's recheck is
   unchanged.

@@ -225,8 +225,10 @@ func (r *macRig) helper(ctx context.Context, dir string) {
 			r.mu.Lock()
 			r.init = &in
 			res := guestagent.InitResult{}
-			if in.DesktopPassword != "" {
-				set := r.setPassword
+			// As the guest agent does: a run with no sign-ins kept gets its desktop disabled, so no
+			// password is set.
+			if in.DesktopPassword != "" || in.SignInsOff {
+				set := r.setPassword && !in.SignInsOff
 				res.DesktopPasswordSet = &set
 			}
 			r.mu.Unlock()
@@ -509,6 +511,27 @@ func TestMacVMDesktopOffOnABaseWithNoDesktop(t *testing.T) {
 	}
 	if _, err := r.d.DialDesktop(context.Background(), sb.Ref); !errors.Is(err, errMacDesktopOff) {
 		t.Fatalf("desktop of a run with no desktop: %v", err)
+	}
+	if err := r.d.StopSandbox(context.Background(), sb.Ref); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A run whose policy keeps no desktop sign-ins runs agent-only on a base with a desktop: the guest disables
+// the desktop and sets no password, which is the run's expected state, not its desktop password failure.
+func TestMacVMSignInsOffRunsAgentOnly(t *testing.T) {
+	r := newMacRig(t)
+	spec := macSpec()
+	spec.DesktopSignInsOff = true
+	sb, err := r.d.CreateSandbox(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("the agent-only run did not start: %v", err)
+	}
+	if !r.init.SignInsOff || r.init.DesktopPassword != "" {
+		t.Fatalf("the guest's sandbox: SignInsOff=%v, a password sent=%v; want sign-ins off and no password", r.init.SignInsOff, r.init.DesktopPassword != "")
+	}
+	if _, err := r.d.DialDesktop(context.Background(), sb.Ref); !errors.Is(err, errMacDesktopOff) {
+		t.Fatalf("desktop of an agent-only run: %v", err)
 	}
 	if err := r.d.StopSandbox(context.Background(), sb.Ref); err != nil {
 		t.Fatal(err)
