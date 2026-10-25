@@ -6,12 +6,13 @@
 // The "macOS virtual machines" section of a Mac runner's drawer, and its card badge (mocks M-R1, M-R2).
 // Only what the runner's caps say: off (a Mac that sends none), preparing with its percent, ready, update
 // needed, failed, and not offered (its refusal, or a per-run size under the base's minimum). Both take the
-// caps as a prop: RunnerView carries none yet. `active` is the runner's macOS VM runs now, which no wire
-// field gives per kind either.
+// caps (RunnerView.macos_vm) as a prop, and `active` is the runner's macOS VM runs now (usage.in_use.macos_vm_runs).
 import * as React from "react";
 import type { MacVMCaps } from "../../../lib/types/runner-macvm";
 import type { RunnerAmounts } from "../../../lib/types/runners";
 import { MACVM_R } from "../../wardyn/copy/runner-macvm";
+import { harnessDisplayNames } from "../../../lib/model-access";
+import { useShellSetupStatus } from "../../wardyn/model-access-context";
 import { DESKTOP } from "../../wardyn/copy/desktop";
 import { RES } from "../../wardyn/copy/runner-pools";
 import { RUNNER } from "../../wardyn/copy/runners";
@@ -19,9 +20,6 @@ import { Mono } from "../../wardyn/code-block";
 import { Chip } from "../../wardyn/primitives";
 import { Hint } from "./resource-table";
 import { macVMBadge, sizeShortfall } from "./macvm-view";
-
-/** Harness id to the name the New Run harness picker shows. */
-const HARNESS_NAME: Record<string, string> = { "claude-code": "Claude Code", "codex-cli": "Codex CLI", none: "Your own tools" };
 
 /** A string with `code` spans, the way the boards set `wardyn-runnerd setup`. */
 export function MacVMText({ text }: { text: string }) {
@@ -41,6 +39,7 @@ const fmt = (n: number) => String(Number(n.toFixed(1)));
 
 function Facts({ caps, active }: { caps: MacVMCaps; active: number | undefined }) {
   const { guest_os, state } = caps.base;
+  const { status: setup } = useShellSetupStatus();
   const harnesses = caps.harnesses ?? [];
   const rows: [string, React.ReactNode][] = [];
   if (guest_os) rows.push([MACVM_R.R20, guest_os]);
@@ -49,7 +48,7 @@ function Facts({ caps, active }: { caps: MacVMCaps; active: number | undefined }
     const parts = [caps.min_cpus && RES.CPUS(caps.min_cpus), caps.min_memory_mib && `${RES.GB(caps.min_memory_mib / 1024)} memory`].filter(Boolean);
     rows.push([MACVM_R.R21, parts.join(" · ")]);
   }
-  if (harnesses.length) rows.push([MACVM_R.R22, harnesses.map((h) => HARNESS_NAME[h] ?? h).join(", ")]);
+  if (harnesses.length) rows.push([MACVM_R.R22, harnesses.map((h) => harnessDisplayNames(setup, [h])).join(", ")]);
   if (caps.desktop === "control") rows.push([MACVM_R.R23, MACVM_R.R24]);
   return (
     <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1">

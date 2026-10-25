@@ -105,6 +105,14 @@ describe("OS row: macOS chosen (frame 2, M-N2 frame 1)", () => {
     expect(panel.getByText(NR_MACHINE.CHANGES_MAC_MANAGED)).toBeInTheDocument();
   });
 
+  it("leaves out the guest line when the pool's Macs hold different builds", async () => {
+    show(AGENT, ON, { ...READY, guestOS: "" });
+    await chooseVM();
+    await userEvent.click(macosButton());
+    expect(screen.getByText(NR_MACHINE.MACOS_SIZE("4", "8192"))).toBeInTheDocument();
+    expect(screen.queryByText(/set up on the Mac itself/)).toBeNull();
+  });
+
   it("keeps an ask already above the minimum, and takes back only an untouched pre-fill when Linux is chosen again", async () => {
     show({ ...AGENT, resources: { cpu_millis: 6000, memory_mib: 16384 } }, ON, READY);
     await chooseVM();

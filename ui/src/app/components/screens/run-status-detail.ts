@@ -149,6 +149,13 @@ export const RUN_START_OVERDUE_MS = 270_000;
 export const RUN_START_OVERDUE_SLACK_MS = 90_000;
 export const RUN_PENDING_OVERDUE_MS = 1_800_000;
 
+// A macOS VM boots on a longer bound than a Linux one, so its overdue bound keeps the Linux ratio: 270 s over the
+// Linux VM's 3 minute BootTimeout (internal/runner/docker/vm.go:118-119) is 1.5, applied to the macOS VM's
+// 10 minute BootTimeout (internal/runner/docker/macvm.go:104-105), 15 minutes. Pinned by a parity test.
+export const LINUX_VM_BOOT_MS = 180_000;
+export const MACOS_VM_BOOT_MS = 600_000;
+export const RUN_START_OVERDUE_MACOS_MS = (RUN_START_OVERDUE_MS * MACOS_VM_BOOT_MS) / LINUX_VM_BOOT_MS;
+
 // How long a STARTING run may take before the startup view calls it overdue, from the
 // deadlines /setup/status reports (runner.sandbox_start): the start budget plus the
 // capacity wait, which a run waiting for room is allowed to spend in full, plus slack.
@@ -411,6 +418,7 @@ export function runStartupView(
     admitted_at?: string | null;
     status_detail?: string | null;
     status_reason?: string | null;
+    machine_kind?: string;
   },
   now: number,
   opts: { lastStep: StartupLastStep; sawBuilding: boolean; startOverdueMs?: number; macOS?: MacOSStart },
@@ -469,7 +477,8 @@ export function runStartupView(
   }
 
   const pulling = stepReason === "Pulling";
-  const overdue = elapsed >= (starting ? (opts.startOverdueMs ?? RUN_START_OVERDUE_MS) : RUN_PENDING_OVERDUE_MS);
+  const startBound = run.machine_kind === "macos_vm" ? RUN_START_OVERDUE_MACOS_MS : (opts.startOverdueMs ?? RUN_START_OVERDUE_MS);
+  const overdue = elapsed >= (starting ? startBound : RUN_PENDING_OVERDUE_MS);
   // Past the overdue bound the active row loses its spinner: the substrate's
   // last word is no longer evidence that anything is happening.
   const active: StartupMark = overdue ? "pending" : "active";
