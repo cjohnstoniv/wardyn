@@ -829,3 +829,31 @@ func TestPrepareLogSkipsForeignLines(t *testing.T) {
 		t.Fatalf("a running prepare reads as failed: %q", got)
 	}
 }
+
+// A foreign line over bufio's 64 KiB default sits before the helper's error: the error is still read.
+func TestPrepareLogReadsPastALongForeignLine(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "prepare.log")
+	long := strings.Repeat("x", 200<<10)
+	body := `{"phase":"check"}` + "\n" + long + "\n" + "wardyn-macvm: macvm: stage 1: boom\n"
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := prepareFailure(p); got != "macvm: stage 1: boom" {
+		t.Fatalf("failure %q after a 200 KiB line, want the helper's error", got)
+	}
+	huge := `{"phase":"check"}` + "\n" + strings.Repeat("x", prepareLogLineMax+1) + "\n" + "wardyn-macvm: macvm: stage 1: boom\n"
+	if err := os.WriteFile(p, []byte(huge), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := prepareFailure(p); !strings.Contains(got, "could not be read to its end") {
+		t.Fatalf("failure %q after a line over the limit, want the read error", got)
+	}
+	// An error line read before the scan stopped is shown as before.
+	early := "wardyn-macvm: macvm: stage 1: boom\n" + strings.Repeat("x", prepareLogLineMax+1) + "\n"
+	if err := os.WriteFile(p, []byte(early), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := prepareFailure(p); got != "macvm: stage 1: boom" {
+		t.Fatalf("failure %q with the error line before the long one, want that line", got)
+	}
+}

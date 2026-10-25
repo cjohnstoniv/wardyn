@@ -36,6 +36,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   "Wardyn: set up this macOS VM"; before, its instructions pointed at a window that did not exist, even on 27. The
   helper is built for macOS 26, and the release checks that no binary in the package asks for a newer macOS.
 
+### Changed
+
+- A macOS VM's prepare now refuses a base that holds another local account than `wardyn-admin` and `agent`, and names
+  the extra one, so an account made by hand during setup no longer ships in every VM cloned from the base.
+
 ### Fixed
 
 - A macOS VM start that failed after its helper had started deleted the run's directory even when the helper

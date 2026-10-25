@@ -144,7 +144,7 @@ func scanPrepare(log string) prepareStatus {
 	}
 	defer f.Close()
 	sc := bufio.NewScanner(f)
-	sc.Buffer(nil, 1<<20)
+	sc.Buffer(nil, prepareLogLineMax)
 	for sc.Scan() {
 		var ev macvm.PrepareEvent
 		if json.Unmarshal(sc.Bytes(), &ev) == nil {

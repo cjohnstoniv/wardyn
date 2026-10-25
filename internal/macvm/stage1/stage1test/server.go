@@ -17,6 +17,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"slices"
@@ -47,6 +48,9 @@ type Server struct {
 	// RejectPasswd makes dscl's passwd fail the way interactive dscl does:
 	// an error on stderr, and exit 0 at the end of its input.
 	RejectPasswd bool
+	// ExtraAccounts are local users with a UniqueID of 500 or more beyond the
+	// admin and the agent, as a person's setup by hand could have left.
+	ExtraAccounts []string
 	// KeyboardOnly takes the password through keyboard-interactive (PAM)
 	// only, as one hidden prompt.
 	KeyboardOnly bool
@@ -60,6 +64,7 @@ type Server struct {
 	key      ssh.Signer
 	on       bool
 	execs    []Exec
+	users    []string // the accounts added by sysadminctl
 	files    map[string][]byte
 	dials    []int
 	ln       net.Listener
@@ -292,6 +297,14 @@ func (s *Server) exec(line string, stdin []byte) (code int, stdout, stderr []byt
 			return 0, nil, append([]byte("passwd: DS error: eDSAuthFailed; input: "), rest...), false
 		}
 		s.password = f[3]
+	case slices.Equal(argv, []string{"/usr/bin/dscl", ".", "-list", "/Users", "UniqueID"}):
+		out := "root 0\ndaemon 1\nnobody -2\n" + s.user + " 501\n"
+		for i, u := range append(slices.Clone(s.users), s.ExtraAccounts...) {
+			out += fmt.Sprintf("%s %d\n", u, 502+i)
+		}
+		return 0, []byte(out), nil, false
+	case len(argv) >= 3 && argv[0] == "/usr/sbin/sysadminctl" && argv[1] == "-addUser":
+		s.users = append(s.users, argv[2])
 	case len(argv) == 2 && argv[0] == "/bin/dd" && strings.HasPrefix(argv[1], "of="):
 		s.files[strings.TrimPrefix(argv[1], "of=")] = append([]byte(nil), rest...)
 	case len(argv) == 4 && argv[0] == "/usr/bin/shasum":

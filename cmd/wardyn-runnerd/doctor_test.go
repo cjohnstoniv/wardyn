@@ -530,3 +530,92 @@ func TestDoctorReadsTheOrganisationOfAnEarlierInstallsServiceDefinition(t *testi
 		t.Errorf("org-url = %s %q, want the service definition's address", s.Status, s.Detail)
 	}
 }
+
+// installUnitText puts text where the service's unit file is, as a setup would have left it.
+func (r *doctorRig) installUnitText(t *testing.T, text string) setupPaths {
+	t.Helper()
+	r.installUnit(t)
+	p, err := (setupHost{goos: "linux", home: r.home}).paths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.unitFile, []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// writeLegacyEnv writes the environment file an earlier setup's unit read.
+func writeLegacyEnv(t *testing.T, p setupPaths, org string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(p.noServiceEnvFile()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.noServiceEnvFile(), []byte("WARDYN_RUNNER_ORG_URL="+org+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+const (
+	legacyUnit = "[Service]\nExecStart=/bin/wardyn-runnerd serve --org ${WARDYN_RUNNER_ORG_URL} --state-dir ${WARDYN_RUNNER_STATE_DIR}\n"
+	modernUnit = "[Service]\nExecStart=/bin/wardyn-runnerd serve --config /home/x/.config/wardyn/runnerd.json\n"
+)
+
+// An earlier unit passes its stored value as a real --org, which serve ranks above runnerd.json, so a
+// conflicting file (setup writes it before it replaces the unit) never changes the address doctor checks.
+func TestDoctorRanksAnEarlierUnitsOrgArgumentAboveTheFile(t *testing.T) {
+	r := newRig(t)
+	r.setOrg("https://file.example.com")
+	writeLegacyEnv(t, r.installUnitText(t, legacyUnit), r.org)
+	s := stage(t, r.run(doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}), "org-url")
+	if s.Status != doctor.StatusOK || !strings.Contains(s.Detail, r.org) || strings.Contains(s.Detail, "file.example.com") || !strings.Contains(s.Detail, "WARDYN_RUNNER_ORG_URL in the service's settings") {
+		t.Errorf("org-url = %s %q, want the unit's address", s.Status, s.Detail)
+	}
+}
+
+// A unit that passes only --config consumes no environment file: a stale one beside it names nothing.
+func TestDoctorIgnoresAStaleEnvFileBesideAModernUnit(t *testing.T) {
+	r := newRig(t)
+	writeLegacyEnv(t, r.installUnitText(t, modernUnit), "https://stale.example.com")
+	s := stage(t, r.run(doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}), "org-url")
+	if s.Status != doctor.StatusOK || strings.Contains(s.Detail, "stale.example.com") || !strings.Contains(s.Detail, r.org) {
+		t.Errorf("org-url = %s %q, want the file's address", s.Status, s.Detail)
+	}
+}
+
+func TestDoctorReadsAnEarlierUnitsOrgWhenThereIsNoFile(t *testing.T) {
+	r := newRig(t)
+	r.setOrg("")
+	writeLegacyEnv(t, r.installUnitText(t, legacyUnit), r.org)
+	s := stage(t, r.run(doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}), "org-url")
+	if s.Status != doctor.StatusOK || !strings.Contains(s.Detail, r.org) || !strings.Contains(s.Detail, "WARDYN_RUNNER_ORG_URL in the service's settings") {
+		t.Errorf("org-url = %s %q, want the unit's address", s.Status, s.Detail)
+	}
+}
+
+// Doctor's own --org and the locked managed OrgURL still outrank an earlier unit's argument.
+func TestDoctorFlagAndManagedLockOutrankAnEarlierUnitsOrgArgument(t *testing.T) {
+	r := newRig(t)
+	writeLegacyEnv(t, r.installUnitText(t, legacyUnit), "https://unit.example.com")
+	rep := r.run(doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0", org: r.org})
+	if s := stage(t, rep, "org-url"); s.Status != doctor.StatusOK || !strings.Contains(s.Detail, "from --org") || strings.Contains(s.Detail, "unit.example.com") {
+		t.Errorf("org-url = %s %q, want the flag's address", s.Status, s.Detail)
+	}
+	withManagedPrefs(t, "darwin", map[string]string{lockSettingKey: "true", "OrgURL": r.org})
+	rep = r.run(doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"})
+	if s := stage(t, rep, "org-url"); s.Status != doctor.StatusOK || !strings.Contains(s.Detail, "the OrgURL managed preference") || strings.Contains(s.Detail, "unit.example.com") {
+		t.Errorf("org-url = %s %q, want the locked managed address", s.Status, s.Detail)
+	}
+}
+
+// A unit that passes only --config consumes no environment file: with runnerd.json naming no organisation,
+// a stale file beside it is not the organisation either, and doctor says there is none.
+func TestDoctorReportsNoOrganisationForAStaleEnvFileBesideAModernUnitAndNoOrg(t *testing.T) {
+	r := newRig(t)
+	r.setOrg("")
+	writeLegacyEnv(t, r.installUnitText(t, modernUnit), "https://stale.example.com")
+	s := stage(t, r.run(doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}), "org-url")
+	if s.Status != doctor.StatusFail || !strings.Contains(s.Detail, "no organisation") || strings.Contains(s.Detail, "stale.example.com") {
+		t.Errorf("org-url = %s %q, want FAIL with no organisation and no trace of the stale file", s.Status, s.Detail)
+	}
+}
