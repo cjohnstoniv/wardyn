@@ -863,7 +863,7 @@ func TestDesktopEnterRefusesAMacOSDesktopWhoseSignInsAreOff(t *testing.T) {
 		rec := h.enterDesktop(h.ticket(h.run.ID, h.owner, oidc.RoleUser))
 		var body errorBody
 		_ = json.Unmarshal(rec.Body.Bytes(), &body)
-		if rec.Code != http.StatusForbidden || body.Reason != reasonDesktopSignInsOff || body.Error != desktopSignInsOffMsg {
+		if rec.Code != http.StatusForbidden || body.Reason != reasonDesktopSignInsOff || body.Error != "Your admin doesn't allow sign-ins in a desktop while Claude Code runs, and a macOS desktop can't block them yet." {
 			t.Fatalf("%s: a macOS VM's desktop = %d %+v, want 403 %s", name, rec.Code, body, reasonDesktopSignInsOff)
 		}
 	}

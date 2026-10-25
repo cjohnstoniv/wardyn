@@ -232,8 +232,8 @@ func TestP10_CleanupBoundary(t *testing.T) {
 			id := start(t, spec{intent: map[string]any{"agent": agent}})
 			needPerson(t, "the desktop refusal shows in the console only")
 			got := ask(t, fmt.Sprintf("In the console, open run %s's desktop. Paste the message it refuses with (or type opened if it opened):", id))
-			if !msg["signInsOff"].MatchString(got) {
-				t.Errorf("opening the desktop of an agent that does not allow sign-ins was not refused with %q: %q", msg["signInsOff"], got)
+			if !msg["signInsOffMac"].MatchString(got) {
+				t.Errorf("opening the desktop of an agent that does not allow sign-ins was not refused with %q: %q", msg["signInsOffMac"], got)
 			}
 		})
 	})

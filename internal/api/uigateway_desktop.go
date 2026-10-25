@@ -202,7 +202,7 @@ func (s *Server) uiEnterDesktop(w http.ResponseWriter, r *http.Request, run type
 	if s.macOSDesktopSignInsOff(r.Context(), run) {
 		s.auditUI(&run.ID, types.ActorHuman, ta.principal, "ui.authorize", uiDesktopAppName, "denied",
 			ta.withVia(map[string]any{"reason": "the agent does not allow sign-ins in a desktop, which a macOS desktop cannot block"}))
-		writeErrorReason(w, http.StatusForbidden, reasonDesktopSignInsOff, desktopSignInsOffMsg)
+		writeErrorReason(w, http.StatusForbidden, reasonDesktopSignInsOff, macOSDesktopSignInsOffMsg(run.Agent))
 		return
 	}
 	if (!superAdmin || !s.adminDoorExempt(run)) && s.refuseInteractiveAttach(w, r.WithContext(withTicketActor(r.Context(), ta)), run) {

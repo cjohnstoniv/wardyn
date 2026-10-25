@@ -115,8 +115,10 @@ func TestMacVMTeardownSweepsSocketResidue(t *testing.T) {
 
 // The run's end texts are the canon's, verbatim (MV-D13, MV-D14; base 3c6ea5e08:176-177).
 func TestMacVMEndTextsAreCanon(t *testing.T) {
-	if macVMUpgraded != "This Mac's runner was upgraded while the macOS VM ran" || macVMLowDisk != "This Mac ran low on disk" {
-		t.Fatalf("end texts %q, %q", macVMUpgraded, macVMLowDisk)
+	if macVMUpgraded != "This Mac's runner was upgraded while the macOS VM ran, so the run was ended." ||
+		macVMLowDisk("12\n") != "This Mac ran low on disk (12 GB free), so the macOS VM was stopped." ||
+		macVMLowDisk("") != "This Mac ran low on disk, so the macOS VM was stopped." {
+		t.Fatalf("end texts %q, %q", macVMUpgraded, macVMLowDisk("12"))
 	}
 }
 
