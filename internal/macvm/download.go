@@ -55,6 +55,10 @@ func (d *downloader) fetch(ctx context.Context, url, part string) error {
 		return err
 	}
 	off, total := st.Size(), int64(-1)
+	// Writes land at the file position, which a fresh open leaves at 0: move it to the resume offset.
+	if _, err := f.Seek(off, io.SeekStart); err != nil {
+		return err
+	}
 	failures := 0
 	for total < 0 || off < total {
 		if err := d.waitAC(ctx); err != nil {

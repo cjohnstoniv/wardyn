@@ -101,12 +101,20 @@ func (s *ipswServer) sha() string {
 // prepNet is a fake in-helper relay: DialGuest reaches the guest unless dialErr.
 type prepNet struct {
 	dialErr error
-	onDial  func() // called on each dial
-	closed  chan struct{}
-	once    sync.Once
+	// serveErr, when set, is how Serve ends at once, as a relay whose device failed does.
+	serveErr error
+	onDial   func() // called on each dial
+	closed   chan struct{}
+	once     sync.Once
 }
 
-func (n *prepNet) Serve(*os.File) error { <-n.closed; return nil }
+func (n *prepNet) Serve(*os.File) error {
+	if n.serveErr != nil {
+		return n.serveErr
+	}
+	<-n.closed
+	return nil
+}
 func (n *prepNet) DHCPRequests() uint64 { return 0 }
 func (n *prepNet) DialGuest(context.Context, int) (net.Conn, error) {
 	if n.onDial != nil {
@@ -593,5 +601,54 @@ func TestPrepareDownloadRetryEvents(t *testing.T) {
 	}
 	if n != 2 {
 		t.Fatalf("%d retry events for three failed ranges, want 2 (the last failure ends the download)", n)
+	}
+}
+
+// A relay that stops with an error ends the prepare with that error, instead of leaving it to wait out the
+// guest's Remote Login on a network that is gone.
+func TestPrepareFailsWithTheRelaysError(t *testing.T) {
+	f := newPrep(t)
+	f.net.dialErr = errors.New("no route")
+	f.net.serveErr = errors.New("virtual NIC failed")
+	f.opts.RemoteLoginWait = time.Minute
+	start := time.Now()
+	_, err := macvm.Prepare(context.Background(), f.opts)
+	if err == nil || !strings.Contains(err.Error(), "virtual NIC failed") {
+		t.Fatalf("prepare error = %v, want the relay's", err)
+	}
+	if time.Since(start) > 30*time.Second {
+		t.Fatalf("prepare waited %v for a guest with no network", time.Since(start))
+	}
+}
+
+// A provisioning boot the framework refuses with its VM limit calls the Leaked hook once; any other boot
+// error does not; a failing hook is logged and the prepare still returns the boot error.
+func TestPrepareLeakedHook(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		bootErr   error
+		hookErr   error
+		wantCalls int
+	}{
+		{"vm limit", fmt.Errorf("%w: boom", macvm.ErrVMLimit), nil, 1},
+		{"other error", errors.New("boom"), nil, 0},
+		{"hook fails", fmt.Errorf("%w: boom", macvm.ErrVMLimit), errors.New("ledger busy"), 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newPrep(t)
+			f.fb.BootErr = tc.bootErr
+			calls := 0
+			f.opts.Leaked = func() error { calls++; return tc.hookErr }
+			_, err := macvm.Prepare(context.Background(), f.opts)
+			if err == nil || !errors.Is(err, tc.bootErr) {
+				t.Fatalf("Prepare returned %v, want the boot error", err)
+			}
+			if calls != tc.wantCalls {
+				t.Fatalf("Leaked calls: %d, want %d", calls, tc.wantCalls)
+			}
+			if tc.hookErr != nil && !strings.Contains(f.logs.String(), "ledger busy") {
+				t.Fatalf("the hook's error was not logged: %s", f.logs.String())
+			}
+		})
 	}
 }

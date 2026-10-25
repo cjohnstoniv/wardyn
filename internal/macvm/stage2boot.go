@@ -40,7 +40,10 @@ type Stage2BootConfig struct {
 	// GuestWait the wait for each guest agent session (0: 5 minutes).
 	NetWait   time.Duration
 	GuestWait time.Duration
-	Log       *slog.Logger
+	// Leaked, if set, runs when the VM's start is refused with ErrVMLimit: the helper records the framework's
+	// slot the ledger cannot account for (RunOptions.Leaked). Its failure is logged.
+	Leaked func() error
+	Log    *slog.Logger
 }
 
 // JobSockKey is the socket directory key of a prepare's or a tools update's
@@ -192,6 +195,7 @@ func (c Stage2BootConfig) boot(ctx context.Context, spec MachineSpec) (ToolsGues
 		v.mu.Unlock()
 	}
 	if err := m.Start(ctx); err != nil {
+		reportVMLimit(err, c.Leaked, c.Log)
 		return fail(fmt.Errorf("macvm: start the stage-2 VM: %w", err))
 	}
 	undo = append(undo, func() { _ = m.Stop() })

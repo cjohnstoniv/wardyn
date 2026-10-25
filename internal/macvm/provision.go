@@ -5,7 +5,9 @@ package macvm
 
 import (
 	"errors"
+	"fmt"
 	"os"
+	"strings"
 )
 
 // Provisioner runs the one first boot of a freshly installed macOS base. On
@@ -81,4 +83,17 @@ func (provisionStub) ScreenReady() error { return ErrProvisionUnsupported }
 
 func (provisionStub) Boot(string, string, []byte, []byte, uint, uint64, *os.File, string, string) (FirstBoot, error) {
 	return FirstBoot{}, ErrProvisionUnsupported
+}
+
+// provisionVMLimitMark starts the text of a provisioning boot's start error that was the framework's VM
+// limit refusal: the C side sees the NSError's domain and code, the Go side only this text.
+const provisionVMLimitMark = "vm-limit: "
+
+// classifyProvisionStart wraps ErrVMLimit around a start error that carries provisionVMLimitMark, so the
+// provisioning boot is told apart as a run's or a stage-2 boot's start is.
+func classifyProvisionStart(err error) error {
+	if err != nil && strings.Contains(err.Error(), provisionVMLimitMark) {
+		return fmt.Errorf("%w: %w", ErrVMLimit, err)
+	}
+	return err
 }

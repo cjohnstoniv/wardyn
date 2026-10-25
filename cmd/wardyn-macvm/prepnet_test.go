@@ -221,3 +221,17 @@ func TestGVisorLogGoesToPrepRelayLog(t *testing.T) {
 		t.Fatalf("stderr %q, prep-relay.log %q", out, logged)
 	}
 }
+
+// TestGVisorLogIsDiscardedOnceTheRelayLogCloses: closing the relays' log points gVisor's netstack log at
+// a discarding writer, not at the closed file.
+func TestGVisorLogIsDiscardedOnceTheRelayLogCloses(t *testing.T) {
+	_, closeLog, err := openRelayLog(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeLog()
+	e, ok := glog.Log().Emitter.(glog.JSONEmitter)
+	if !ok || e.Writer == nil || e.Writer.Next != io.Discard {
+		t.Fatalf("gVisor's log target after the close: %#v", glog.Log().Emitter)
+	}
+}
