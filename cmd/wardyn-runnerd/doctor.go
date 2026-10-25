@@ -101,15 +101,26 @@ func (s doctorSettings) get(flagName, flag, key string) (value, source string) {
 // org is the organisation's address and where it came from, resolved as serve does: --org, the OrgURL managed
 // preference, then org_url in runnerd.json. serve has no environment variable for it, so this shell's is never
 // read. An earlier install's unit passes --org ${WARDYN_RUNNER_ORG_URL} from its service definition (the env
-// file), so when all three are empty that definition, and only it, names the address.
+// file), and serve ranks that argument as a flag, so an installed definition that passes one is doctor's flag
+// when --org is not given. An environment file beside a unit that passes no --org is not read at all; only
+// with no installed definition does that file name the address.
 func (s doctorSettings) org(flag string) (value, source string) {
+	const legacy = "WARDYN_RUNNER_ORG_URL"
+	legacySource := ""
+	if v := s.paths.serviceOrgArg(); flag == "" && v != "" {
+		flag, legacySource = v, legacy+" in the service's settings"
+	}
 	i := slices.IndexFunc(runnerFields, func(f runnerField) bool { return f.name == "org_url" })
 	if value, source = s.resolve(runnerFields[i], "org", flag, "org_url"); value != "" {
+		if legacySource != "" && source == "--org" {
+			source = legacySource
+		}
 		return value, source
 	}
-	const legacy = "WARDYN_RUNNER_ORG_URL"
-	if v := s.paths.setting(legacy); v != "" {
-		return v, legacy + " in the service's settings"
+	if s.paths.installedService() == "" {
+		if v := s.paths.setting(legacy); v != "" {
+			return v, legacy + " in the service's settings"
+		}
 	}
 	return "", ""
 }
