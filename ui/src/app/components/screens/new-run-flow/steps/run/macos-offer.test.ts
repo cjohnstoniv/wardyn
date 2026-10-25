@@ -34,6 +34,22 @@ describe("macOSOfferOf", () => {
     expect(text(one({ why: "no_base", error: "disk full" }))).toBe("mac-studio-07 has no macOS base image ready yet: disk full.");
     expect(text(one({ why: "no_posture" }))).toContain("mac-studio-07 has no MDM posture file");
   });
+  it("a Mac that refused itself shows the canon line for its reason, with the numbers, and never its own text", () => {
+    const refused = (extra: Record<string, unknown>) => one({ why: "runner_refused" as PoolMacOSVMRefusal["why"], detail: "PLANTED runner text", ...extra } as Partial<PoolMacOSVMRefusal>);
+    expect(text(refused({ reason: "below_min_memory", have: 6, need: 8 }))).toBe(
+      "Per-run memory on this runner is 6 GB; a macOS VM needs at least 8 GB. Its owner raises it to 8 GB or more in Your account \u2192 My runner, or with `wardyn runner set mac-studio-07 --per-run-memory 8`.",
+    );
+    expect(text(refused({ reason: "below_min_cpu", have: 2, need: 4 }))).toBe(
+      "Per-run CPU on this runner is 2 CPUs; a macOS VM needs at least 4. Its owner raises it to 4 or more in Your account \u2192 My runner, or with `wardyn runner set mac-studio-07 --per-run-cpu 4`.",
+    );
+    const generic = "Every runner in this pool must be able to take a macOS VM, and at least one can't right now. Try again later, or choose another pool.";
+    expect(text(refused({ reason: "other" }))).toBe(generic);
+    expect(text(refused({ reason: "something_new" }))).toBe(generic);
+    expect(text(refused({}))).toBe(generic);
+  });
+  it("not_offered stays MV-E07, whatever detail it carries", () => {
+    expect(text(one({ why: "not_offered", detail: "PLANTED runner text" }))).toBe("mac-studio-07 doesn't offer macOS VMs: it is older than 0.10, or macOS VMs aren't turned on for it.");
+  });
   it("not managed names the trust command only when the wire gave the runner id (a security operator)", () => {
     expect(text(one({ why: "not_managed", runner_id: "r-1" }))).toBe("mac-studio-07 is not marked as company-managed. Mark it with `wardyn runner trust r-1 managed_device`.");
     expect(text(one({ why: "not_managed" }))).toBe("mac-studio-07 is not marked as company-managed. Ask a security operator to mark it.");
@@ -43,6 +59,7 @@ describe("macOSOfferOf", () => {
     expect(text({ offered: false, refusals: refusals("not_offered") })).toMatch(/^Every runner in this pool must offer macOS VMs/);
     expect(text({ offered: false, refusals: refusals("preparing", "not_offered") })).toMatch(/^Every runner in this pool must offer macOS VMs/);
     expect(text({ offered: false, refusals: refusals("preparing", "at_limit") })).toMatch(/^Every runner in this pool must be able to take a macOS VM/);
+    expect(text({ offered: false, refusals: [...refusals("preparing"), refusal({ why: "runner_refused" as PoolMacOSVMRefusal["why"], runner: "mac-9", detail: "x" })] })).toMatch(/^Every runner in this pool must be able to take a macOS VM/);
     // One refusal among several Macs is still the pool's: the single-Mac form needs the pool to name its one Mac.
     expect(text({ offered: false, refusals: refusals("at_limit") })).toMatch(/^Every runner in this pool must be able to take a macOS VM/);
   });

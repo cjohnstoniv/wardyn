@@ -12,13 +12,14 @@ import { macOSVMsEnabled } from "../../../../../lib/types/machine-kind";
 import { useShellSetupStatus } from "../../../../wardyn/model-access-context";
 import { useNewRunDraft } from "../../new-run-route";
 import { MacOSOfferContext, macOSOfferOf } from "./macos-offer";
-import { runTypeOf, selectedPoolId, usablePools } from "./pool-model";
+import { selectedPoolId, usablePools } from "./pool-model";
 import { loadPools, usePools, type LoadPools } from "./pool-source";
 
 export function MacOSOfferProvider({ load = loadPools, children }: { load?: LoadPools; children: React.ReactNode }) {
   const { intent } = useNewRunDraft();
   const { status } = useShellSetupStatus();
-  const pools = usePools(macOSVMsEnabled(status) ? load : undefined, runTypeOf(intent));
+  // What a pool's Macs offer does not depend on the run type, so the list is read once, not again on each change of it.
+  const pools = usePools(macOSVMsEnabled(status) ? load : undefined, undefined);
   const offer = React.useMemo(() => {
     if (pools.status !== "ready") return undefined;
     const id = selectedPoolId(intent, pools.list);

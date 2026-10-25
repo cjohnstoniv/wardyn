@@ -12,6 +12,9 @@ import {
   isTerminalStatusReason,
   RUN_PENDING_OVERDUE_MS,
   RUN_POLL_SLOW_START_MS,
+  LINUX_VM_BOOT_MS,
+  MACOS_VM_BOOT_MS,
+  RUN_START_OVERDUE_MACOS_MS,
   RUN_START_OVERDUE_MS,
   RUN_START_OVERDUE_SLACK_MS,
   startOverdueMs,
@@ -338,6 +341,16 @@ describe("runStartupView: the plan's table", () => {
     expect(late.hint).toBe(RUN_STARTUP.OVERDUE);
   });
 
+  it("a macOS VM keeps the Linux ratio: no warning just under 15 minutes, the warning just over; Linux stays at 4:30", () => {
+    expect(RUN_START_OVERDUE_MACOS_MS).toBe(15 * MIN);
+    const mac = { machine_kind: "macos_vm" };
+    expect(view(mk({ updatedAgo: RUN_START_OVERDUE_MS + S, ...mac }))!.hint).not.toBe(RUN_STARTUP.OVERDUE);
+    expect(view(mk({ updatedAgo: RUN_START_OVERDUE_MACOS_MS - S, ...mac }))!.hint).not.toBe(RUN_STARTUP.OVERDUE);
+    expect(view(mk({ updatedAgo: RUN_START_OVERDUE_MACOS_MS + S, ...mac }))!.hint).toBe(RUN_STARTUP.OVERDUE);
+    expect(view(mk({ updatedAgo: RUN_START_OVERDUE_MS - S, machine_kind: "linux_vm" }))!.hint).not.toBe(RUN_STARTUP.OVERDUE);
+    expect(view(mk({ updatedAgo: RUN_START_OVERDUE_MS + S, machine_kind: "linux_vm" }))!.hint).toBe(RUN_STARTUP.OVERDUE);
+  });
+
   it("overdue in PENDING: 29:59 is live, 30:00 drops the spinner (Building or not)", () => {
     const live = view(mk({ state: "PENDING", createdAgo: 30 * MIN - S, ...BUILDING }))!;
     expect(live.rows[0].mark).toBe("active");
@@ -423,6 +436,16 @@ describe("runStartupView: mirrors of the Go sources", () => {
       return Number(m![1]) * (m![2] === "Minute" ? MIN : S);
     };
     expect(RUN_START_OVERDUE_MS).toBe(dur("DefaultSandboxStartTimeout") + RUN_START_OVERDUE_SLACK_MS);
+  });
+
+  it("the macOS bound scales the Linux one by the two VM boot timeouts (internal/runner/docker/vm.go, macvm.go)", () => {
+    const boot = (file: string) => {
+      const m = /c\.BootTimeout = (\d+) \* time\.Minute/.exec(go(file));
+      expect(m, file).not.toBeNull();
+      return Number(m![1]) * MIN;
+    };
+    expect(boot("internal/runner/docker/vm.go")).toBe(LINUX_VM_BOOT_MS);
+    expect(boot("internal/runner/docker/macvm.go")).toBe(MACOS_VM_BOOT_MS);
   });
 
   it("the overdue bound follows /setup/status: start budget + capacity wait + slack", () => {
