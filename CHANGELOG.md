@@ -39,8 +39,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Fixed
 
 - A Kubernetes run whose proxy container is running but never becomes ready now fails at the start deadline with a line
-  naming the readiness probe and the proxy image, and saying the proxy opens its port only after its first run-token
-  renewal with the organisation succeeds (#3612).
+  naming the readiness probe and the proxy image, and saying to check the proxy's log and connectivity; on a runner it
+  adds that the proxy may be waiting for its first run-token renewal with the organisation (#3612).
 - A macOS VM start that failed after its helper had started deleted the run's directory even when the helper
   outlived its kill. The teardown and the orphan sweep need that directory to end the VM later, so it now stays,
   with the run's capacity held, until the helper has exited.

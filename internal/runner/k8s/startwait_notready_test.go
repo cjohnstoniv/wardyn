@@ -54,10 +54,24 @@ func TestProxyNotReadyDetailOnlyForRunningNotReady(t *testing.T) {
 		"another container running, not ready": {status(corev1.ContainerStatus{Name: "other", State: *running}), false},
 		"no container status":                  {status(), false},
 	} {
-		got := proxyNotReadyDetail(tc.pod, "img")
+		got := proxyNotReadyDetail(tc.pod, "img", false)
 		if (got != "") != tc.want || (tc.want && !strings.Contains(got, notReadyLine)) {
 			t.Errorf("%s: detail = %q, want a line: %v", name, got, tc.want)
 		}
+	}
+}
+
+// Only a runner's proxy waits for its first run-token renewal before it listens, so only runner mode names it.
+func TestProxyNotReadyDetailNamesTheRenewalOnlyInRunnerMode(t *testing.T) {
+	pod := &corev1.Pod{Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{
+		Name: proxyContainerName, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+	}}}}
+	const renewal = "first run-token renewal"
+	if got := proxyNotReadyDetail(pod, "img", true); !strings.Contains(got, renewal) || !strings.Contains(got, "check the proxy log") {
+		t.Errorf("runner mode: detail = %q, want the log hint and the renewal", got)
+	}
+	if got := proxyNotReadyDetail(pod, "img", false); strings.Contains(got, renewal) || !strings.Contains(got, "check the proxy log") {
+		t.Errorf("wardynd's driver: detail = %q, want the log hint and no renewal", got)
 	}
 }
 
