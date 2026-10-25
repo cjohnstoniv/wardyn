@@ -143,6 +143,18 @@ func (s *Server) classifyRunnerEvent(ctx context.Context, runnerID uuid.UUID, ev
 			r.ActionID = &named.ID
 		}
 	}
+	if ev.Kind == runnerwire.EventSpool && ev.RunID != nil {
+		// Lenient too: a record refused for its shape or its run still says where it sits in its run's stream, and
+		// the store moves the run's cursor past it only when it is next there.
+		var named struct {
+			SpoolID uuid.UUID `json:"spool_id"`
+			Seq     int64     `json:"seq"`
+			Hash    string    `json:"hash"`
+		}
+		if json.Unmarshal(ev.Data, &named) == nil && named.SpoolID != uuid.Nil {
+			r.Spool = &store.RunnerEventRefusalSpool{RunID: *ev.RunID, SpoolID: named.SpoolID, Seq: named.Seq, Hash: named.Hash}
+		}
+	}
 	now := s.cfg.Now()
 	r.Row, r.Marker, r.Summary = s.eventRefusals.plan(runnerID, now)
 	settled, werr := st.RefuseRunnerEvent(ctx, runnerID, r, s.cfg.RunnerAuditPrepare)
