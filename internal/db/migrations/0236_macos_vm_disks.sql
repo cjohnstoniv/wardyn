@@ -25,8 +25,13 @@ CREATE TABLE IF NOT EXISTS macos_vm_disks (
 -- gains one below everything else, where the console's own add puts it (x 0, width 4, height 5). It runs
 -- once, so a person who then removes the tile keeps it removed. Re-runnable: a layout with the tile, an
 -- empty one ("never saved") and every live one are left as they are. updated_at is not touched.
+-- A saved y or h is any non-negative Go int (the layout PUT bounds neither from above), so the bottom is
+-- summed as numeric, never int, and the new tile's y is capped where y + h still fits a 32-bit integer: a
+-- layout already that tall gets the tile at the cap instead of failing the migration and the boot with it.
 UPDATE ui_run_layouts
    SET layout = layout || jsonb_build_array(jsonb_build_object('widget', 'ssh', 'x', 0, 'w', 4, 'h', 5,
-       'y', (SELECT COALESCE(max((e->>'y')::int + (e->>'h')::int), 0) FROM jsonb_array_elements(layout) AS e)))
+       'y', (SELECT LEAST(COALESCE(ceil(max((e->>'y')::numeric + (e->>'h')::numeric)), 0), 2147483642)::bigint
+               FROM jsonb_array_elements(layout) AS e
+              WHERE jsonb_typeof(e->'y') = 'number' AND jsonb_typeof(e->'h') = 'number')))
  WHERE preset = 'finished' AND jsonb_typeof(layout) = 'array' AND layout <> '[]'::jsonb
    AND NOT layout @> '[{"widget": "ssh"}]'::jsonb;

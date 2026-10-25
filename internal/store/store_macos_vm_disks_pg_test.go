@@ -134,6 +134,9 @@ func TestPG_MacOSVMDiskMigrationAddsTheSSHTile(t *testing.T) {
 		"empty@example.com":  {"finished", `[]`},
 		"hasssh@example.com": {"finished", `[{"widget":"terminal","x":0,"y":0,"w":7,"h":8},{"widget":"ssh","x":6,"y":12,"w":6,"h":5}]`},
 		"live@example.com":   {"live", `[{"widget":"terminal","x":0,"y":0,"w":8,"h":20}]`},
+		// The layout PUT bounds y and h only from below, so a saved bottom can pass any SQL integer type.
+		"tall@example.com": {"finished", `[{"widget":"terminal","x":0,"y":9223372036854775806,"w":4,"h":9223372036854775807}]`},
+		"edge@example.com": {"finished", `[{"widget":"terminal","x":0,"y":2147483647,"w":4,"h":1}]`},
 	}
 	stamp := time.Now().UTC().Add(-24 * time.Hour).Truncate(time.Microsecond)
 	for principal, r := range rows {
@@ -180,6 +183,12 @@ func TestPG_MacOSVMDiskMigrationAddsTheSSHTile(t *testing.T) {
 		for i := range want {
 			if plain[i] != want[i] {
 				t.Fatalf("run %d: plain = %+v, want %+v", run, plain, want)
+			}
+		}
+		for _, principal := range []string{"tall@example.com", "edge@example.com"} {
+			got, _ := read(principal, "finished")
+			if n := len(got); n != 2 || got[1] != (widget{Widget: "ssh", X: 0, Y: 2147483642, W: 4, H: 5}) {
+				t.Fatalf("run %d: %s = %+v, want the ssh tile at the capped bottom", run, principal, got)
 			}
 		}
 		for _, k := range []struct{ principal, preset string }{
