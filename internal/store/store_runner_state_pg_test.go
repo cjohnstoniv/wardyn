@@ -388,6 +388,7 @@ func TestPG_RunnerSandboxGoneNeedsTwoSessionsThirtySecondsApart(t *testing.T) {
 
 func TestPG_RunnerSandboxGoneGuards(t *testing.T) {
 	cases := map[string]func(g *goneRig) runnerwire.RunState{
+		// Characterization: the row this report writes also blocks it (goneClaimableSQL's NOT EXISTS, store_runner_state.go:104).
 		"containment_pending_report": func(g *goneRig) runnerwire.RunState {
 			row := g.gone
 			row.ContainmentPending = &runnerwire.ContainmentPending{Kind: "agent_only", Since: time.Now()}
@@ -458,6 +459,7 @@ func TestPG_RunnerSandboxGoneAuthority(t *testing.T) {
 	}
 }
 
+// Characterization: main's terminal arm and DR-0436's arm B both keep the exit receipt_only (store_runner_exit_stage.go:72-77, :88-94).
 func TestPG_RunnerSandboxGoneThenExitIsReceipt(t *testing.T) {
 	g := newGoneRig(t)
 	ctx := t.Context()

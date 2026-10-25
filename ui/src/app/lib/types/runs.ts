@@ -299,7 +299,7 @@ export interface AgentRun {
   // and is kept stopped; "outage" = its token lapsed, so its proxy was removed
   // and its agent left running with no network (#574). "gone" = a runner
   // reported its sandbox gone with no exit code, so the run was ended FAILED
-  // (#3667). The run stays RUNNING meanwhile.
+  // (#3667). A kept run stays RUNNING meanwhile.
   lost_at?: string;
   lost_reason?: "ended" | "reboot" | "outage" | "gone";
   // The run's end time, stamped by the three state writers that move a run to

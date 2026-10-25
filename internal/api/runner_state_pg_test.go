@@ -237,10 +237,17 @@ func TestRunnerStatePG_OfflineSweepEndsGoneRunOnce(t *testing.T) {
 	}
 }
 
+// endingProbe is an offlineContainmentProbe that can keep an ended sandbox (runner.SandboxEnder), so
+// the lease sweep's kept-run arm settles a lost run instead of tearing it down as ErrEndUnsupported.
+type endingProbe struct{ *offlineContainmentProbe }
+
+func (endingProbe) EndSandbox(context.Context, string) error { return nil }
+
 func TestRunLeasePG_GoneMarkWithoutEndIsFinished(t *testing.T) {
 	g := newGoneAPIRig(t)
 	ctx := t.Context()
 	g.exec(`UPDATE agent_runs SET lost_at=now(), lost_reason='gone' WHERE id=$1`)
+	g.cfg.Runner = endingProbe{g.probe}
 	srv := New(g.cfg)
 	if err := srv.sweepRunLeases(ctx); err != nil {
 		t.Fatal(err)
