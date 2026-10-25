@@ -360,3 +360,23 @@ func TestRunnerOfferLine(t *testing.T) {
 		t.Fatalf("a current runner was offered an upgrade: %q", got)
 	}
 }
+
+// A .previous that cannot be examined (a link that loops answers ELOOP, not "no such file") is not "none
+// before": the upgrade is refused with the runner as it was, not run on a guess.
+func TestRunnerUpgradeRefusesAPreviousItCannotExamine(t *testing.T) {
+	r := newInstallRig(t)
+	old, next := r.fakeRunner("0.10.0", true), r.fakeRunner("0.10.1", true)
+	r.installed(old)
+	prev := installedRunnerd() + ".previous"
+	if err := os.Symlink(prev, prev); err != nil {
+		t.Fatal(err)
+	}
+	r.publish("0.10.1", next, releaseSigner("0.10.1"), nil)
+	out, err := r.cli("upgrade", "--version", "0.10.1")
+	if err == nil || !strings.Contains(err.Error(), "for the previous runner") {
+		t.Fatalf("err = %v\n%s", err, out)
+	}
+	if !r.installedIs(old) || r.record("calls") != "" {
+		t.Fatalf("the upgrade ran past a .previous it could not examine: calls %q\n%s", r.record("calls"), out)
+	}
+}

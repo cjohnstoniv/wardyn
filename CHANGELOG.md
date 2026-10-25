@@ -29,6 +29,13 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   about the disk. A saved "Finished" arrangement of the run page gains the "Attach from your terminal" tile at its
   bottom, once, where the disk line shows.
 
+### Fixed
+
+- A runner upgrade that failed to start and was being rolled back no longer overwrites the kept copy of the old runner
+  with the broken one first, so a full disk at that moment cannot leave the computer with no copy of the old runner.
+  An upgrade also stops, with the runner untouched, when it cannot tell whether a previous copy is there (for example
+  a permissions error), rather than assuming there is none.
+
 ## [0.10.0-rc.2] — 2026-10-25
 
 ### Before you upgrade
