@@ -1776,7 +1776,7 @@ jobs:
           # The ledger walks every directory from / without following a link, and the runner's TMPDIR
           # (/var/folders/...) goes through the /var link: test under /private/tmp, as user and as root.
           export TMPDIR=/private/tmp
-          go test -count=1 -timeout 15m ./internal/macvm/... ./internal/vmnet/... ./cmd/wardyn-macvm/ ./cmd/wardyn-guest-agent/
+          go test -race -count=1 -timeout 15m ./internal/macvm/... ./internal/vmnet/... ./cmd/wardyn-macvm/ ./cmd/wardyn-guest-agent/
           # The lock-open refusal again as root, the installer's uid: its socket case is one root still hits.
           go test -c -o "$RUNNER_TEMP/admission.test" ./internal/macvm/admission/
           sudo env TMPDIR="$TMPDIR" "$RUNNER_TEMP/admission.test" -test.count=1 -test.v -test.run '^TestSetupLockOpenErrorFailsClosed$' | tee "$RUNNER_TEMP/admission-root.out"

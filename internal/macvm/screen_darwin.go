@@ -60,11 +60,14 @@ func serveScreensDarwin(work func() int) int {
 	return <-code
 }
 
-// screenReady is nil when showScreen can open a window: the main thread serves AppKit, and the process
-// is in a window-server session (CoreGraphics' CGSessionCopyCurrentDictionary; none over SSH).
+// screenReady is nil when showScreen can open a window: the main thread serves AppKit, the process is not
+// root, and it has a window-server session (none with nobody at the desktop; runnerd's launchctl check refuses SSH).
 func screenReady() error {
 	if !screensServed.Load() {
 		return errNoScreen
+	}
+	if geteuid() == 0 {
+		return fmt.Errorf("macvm: prepare runs as root: %w", ErrNoDesktopSession)
 	}
 	if C.wardynScreenSession() == 0 {
 		return fmt.Errorf("macvm: this process has no window-server session: %w", ErrNoDesktopSession)
@@ -72,14 +75,16 @@ func screenReady() error {
 	return nil
 }
 
-// showScreen opens the window on vm (a VZVirtualMachine the caller keeps alive for this call) and
+// showScreen opens the window on vm (a VZVirtualMachine the caller keeps alive until unlock) and
 // returns its close. It refuses before AppKit starts when screenReady does. The window is made on the
 // main thread once AppKit runs there, and showScreen returns once it is up.
-func showScreen(vm unsafe.Pointer) (func(), error) {
+func showScreen(vm unsafe.Pointer, unlock func()) (func(), error) {
 	if err := screenReady(); err != nil {
+		unlock()
 		return nil, err
 	}
 	C.wardynScreenShow(vm)
+	unlock() // the window's block holds vm now
 	screenStartOnce.Do(func() { close(screenStart) })
 	var once sync.Once
 	closeWindow := func() { once.Do(func() { C.wardynScreenClose() }) }

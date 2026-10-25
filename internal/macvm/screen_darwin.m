@@ -22,8 +22,8 @@ static NSWindow *wardynScreenWindow; // main thread only
 // 1 once the window and its view are up, -1 if they could not be made, 0 before (and after a close).
 static _Atomic int wardynScreenState;
 
-// wardynScreenSession is 1 when this process is in a window-server (GUI) session, else 0: over SSH, or
-// outside the signed-in login, there is none and AppKit must not start.
+// wardynScreenSession is 1 when a window-server (GUI) session exists, else 0 (nobody at the desktop), and
+// AppKit must not start. Over SSH while someone is signed in it likely answers 1: runnerd refuses SSH.
 int wardynScreenSession(void) {
 	CFDictionaryRef d = CGSessionCopyCurrentDictionary();
 	if (d == NULL) {
