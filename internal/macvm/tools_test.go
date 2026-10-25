@@ -40,6 +40,12 @@ type guest struct {
 	sw func(argv []string) (string, int)
 	// version overrides a version check's output.
 	version map[string]string
+	// passwords are the desktop passwords set, in order; passwordSet, if set,
+	// answers whether the nth (1-based) was set.
+	passwords   []string
+	passwordSet func(n int) bool
+	// pointerX/Y is where the guest's pointer is.
+	pointerX, pointerY int
 }
 
 func newGuest() *guest { return &guest{files: map[string][]byte{}, version: map[string]string{}} }
@@ -81,6 +87,24 @@ func (g *guest) Run(_ context.Context, argv []string) (string, int, error) {
 	}
 	return "", 0, nil
 }
+
+func (g *guest) DesktopPassword(_ context.Context, pw []byte) (bool, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.passwords = append(g.passwords, string(pw))
+	if g.passwordSet != nil {
+		return g.passwordSet(len(g.passwords)), nil
+	}
+	return true, nil
+}
+
+func (g *guest) Pointer(context.Context) (int, int, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.pointerX, g.pointerY, nil
+}
+
+func (g *guest) ToolsDial(context.Context) (string, error) { return macvm.ToolsDialConnected, nil }
 
 func (g *guest) ran(prefix ...string) bool {
 	g.mu.Lock()
@@ -812,5 +836,18 @@ func TestUpdateToolsSweepsLeftoversEvenWhenCurrent(t *testing.T) {
 	}
 	if _, err := os.Stat(base + ".update"); !os.IsNotExist(err) {
 		t.Fatalf("leftover generation kept: %v", err)
+	}
+}
+
+// A stage 2 whose boot runnerd stopped through its ctl.sock fails with that,
+// however far the install got: no base is published from a stopped boot.
+func TestStage2StoppedThroughCtlSockFails(t *testing.T) {
+	f, g := newTools(t), newGuest()
+	s := f.stage(g, new(atomic.Int64), new(atomic.Int64))
+	s.Boot = func(context.Context, macvm.MachineSpec) (macvm.ToolsGuest, func(context.Context) error, error) {
+		return g, func(context.Context) error { return macvm.ErrStage2Stopped }, nil
+	}
+	if _, err := s.Run(context.Background(), macvm.Stage2Input{}); !errors.Is(err, macvm.ErrStage2Stopped) || strings.Contains(err.Error(), "shut down cleanly") {
+		t.Fatalf("run: %v, want ErrStage2Stopped as itself", err)
 	}
 }

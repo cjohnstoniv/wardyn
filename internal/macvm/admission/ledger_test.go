@@ -84,6 +84,7 @@ func (f *fakeFS) fstat(fd int, name string) (unix.Stat_t, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	st.Uid = f.uid[name]
+	st.Gid = st.Uid // root:wheel, or the login's own group
 	if p, ok := f.perm[name]; ok {
 		setPerm(&st.Mode, p)
 	}
@@ -618,6 +619,8 @@ func TestPlantedLockRefused(t *testing.T) {
 	wantNotInstalled(t, r.openErr(), "user-owned lock")
 	r.fs.set(r.lock(), 0, 0o664)
 	wantNotInstalled(t, r.openErr(), "group-writable lock")
+	r.fs.set(r.lock(), 0, 0o444)
+	wantNotInstalled(t, r.openErr(), "read-only 0444 lock (not the installer's exact 0644)")
 	r.fs.set(r.lock(), 0, 0o644)
 	if err := r.openErr(); err != nil {
 		t.Fatal(err)

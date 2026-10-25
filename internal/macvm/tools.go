@@ -128,6 +128,16 @@ type ToolsGuest interface {
 	// Run runs argv as root and returns its combined output and exit code.
 	// err is a transport failure, not a non-zero exit.
 	Run(ctx context.Context, argv []string) (out string, exit int, err error)
+	// DesktopPassword is tools mode's desktop_password step: it sets Screen
+	// Sharing's password by the same file write as Init's and answers only
+	// whether it was set. The password is never logged or kept.
+	DesktopPassword(ctx context.Context, password []byte) (set bool, err error)
+	// Pointer reads the pointer position in the console user's session
+	// (the control check's pointer read).
+	Pointer(ctx context.Context) (x, y int, err error)
+	// ToolsDial is the guest agent's own classified result for its dial of
+	// the tools port (a ToolsDial* class).
+	ToolsDial(ctx context.Context) (string, error)
 }
 
 // ToolsBoot boots the base with stage 2's network (the run-style NIC behind
@@ -139,6 +149,9 @@ type ToolsBoot func(ctx context.Context, spec MachineSpec) (g ToolsGuest, stop f
 type Stage2Input struct {
 	Spec MachineSpec
 	Dir  string
+	// ControlCheck runs the desktop control check first (prepare's stage 2;
+	// a tools update keeps the manifest's desktop value).
+	ControlCheck bool
 }
 
 // ToolsResult is what stage 2 left in the guest.
@@ -154,6 +167,10 @@ type ToolsResult struct {
 	// are all the pins this run attempted.
 	Pins  map[string]PinRecord
 	Tried map[string]PinRecord
+	// Desktop is the control check's result (empty when it did not run).
+	Desktop string
+	// ToolsDial is the guest agent's classified tools-port dial.
+	ToolsDial string
 }
 
 // PinRecord is a pin as stage 2 applied it.
@@ -182,6 +199,9 @@ type ToolsOptions struct {
 	HTTP  *http.Client
 	Agent *AgentPin
 	Log   *slog.Logger
+	// Desktop is the control check's RFB client (nil: the check finds
+	// observe).
+	Desktop DesktopProbe
 }
 
 // ToolsStage is the Stage2 that boots the base through Boot and applies Tooling.
@@ -208,12 +228,37 @@ func (s *ToolsStage) Run(ctx context.Context, in Stage2Input) (ToolsResult, erro
 	if err != nil {
 		return ToolsResult{}, fmt.Errorf("macvm: stage 2 boot: %w", err)
 	}
-	res, err := installTools(ctx, g, o)
+	res, err := onGuest(ctx, g, in, o)
 	sctx, cancel := context.WithTimeout(context.Background(), DefaultStopTimeout)
 	defer cancel()
-	if serr := stop(sctx); err == nil && serr != nil {
+	switch serr := stop(sctx); {
+	case errors.Is(serr, ErrStage2Stopped):
+		err = serr
+	case err == nil && serr != nil:
 		err = fmt.Errorf("macvm: the stage 2 VM did not shut down cleanly: %w", serr)
 	}
+	return res, err
+}
+
+// onGuest reads the guest agent's tools-port dial, runs the control check
+// when asked, then installs the tools.
+func onGuest(ctx context.Context, g ToolsGuest, in Stage2Input, o ToolsOptions) (ToolsResult, error) {
+	dial, err := g.ToolsDial(ctx)
+	if err != nil || !ValidToolsDial(dial) {
+		dial = ToolsDialTransport
+	}
+	desktop := ""
+	if in.ControlCheck {
+		probe := o.Desktop
+		if dp, ok := g.(DesktopProbe); ok && probe == nil {
+			probe = dp // the stage-2 boot's own RFB client
+		}
+		if desktop, err = controlCheck(ctx, g, probe); err != nil {
+			return ToolsResult{ToolsDial: dial}, err
+		}
+	}
+	res, err := installTools(ctx, g, o)
+	res.Desktop, res.ToolsDial = desktop, dial
 	return res, err
 }
 
@@ -685,6 +730,9 @@ func UpdateTools(ctx context.Context, o UpdateOptions) (Manifest, bool, error) {
 		DiskPath: filepath.Join(nb, DiskFile), AuxPath: filepath.Join(nb, AuxFile),
 	}
 	res, err := o.Stage.Run(ctx, Stage2Input{Spec: spec, Dir: nb})
+	if res.ToolsDial != "" {
+		o.Progress(PrepareEvent{Phase: PhaseTools, ToolsDial: res.ToolsDial})
+	}
 	if err != nil {
 		return m, false, err
 	}
@@ -752,6 +800,41 @@ func swapBase(ctx context.Context, nb, base string) error {
 			return fmt.Errorf("macvm: the macOS VM directory must be on an APFS volume, which can swap two directories at once (%v); the base was left as it was", err)
 		}
 		return fmt.Errorf("macvm: swapping in the updated base: %w", err)
+	}
+	// The post-swap file-set check, still under the exclusive lock: the new
+	// base holds only a base's own files, so nothing a stage-2 boot left
+	// (a boot configuration, a socket, a log) reaches a run's clone. If it
+	// holds anything else, the old generation is swapped back.
+	if err := checkBaseFiles(base); err != nil {
+		if berr := swapFn(nb, base); berr != nil {
+			return fmt.Errorf("%w; swapping the old base back failed too: %v", err, berr)
+		}
+		return fmt.Errorf("%w; the old base was kept", err)
+	}
+	return nil
+}
+
+// baseFiles are the files a base dir holds; tools.json only after stage 2.
+var baseFiles = []string{DiskFile, AuxFile, MachineIDFile, ManifestFile, ToolsRecordFile}
+
+// checkBaseFiles fails unless dir holds the base's own files only, each a
+// regular file, with the disk, aux storage, identifier and manifest present.
+func checkBaseFiles(dir string) error {
+	des, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	seen := map[string]bool{}
+	for _, de := range des {
+		if !slices.Contains(baseFiles, de.Name()) || !de.Type().IsRegular() {
+			return fmt.Errorf("macvm: the new macOS base holds %q, which is not a base file", de.Name())
+		}
+		seen[de.Name()] = true
+	}
+	for _, f := range baseFiles[:4] {
+		if !seen[f] {
+			return fmt.Errorf("macvm: the new macOS base has no %s", f)
+		}
 	}
 	return nil
 }

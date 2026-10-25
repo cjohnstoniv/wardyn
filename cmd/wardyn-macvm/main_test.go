@@ -31,12 +31,12 @@ func (host) Processes() ([]admission.Proc, error) {
 	return []admission.Proc{{PID: os.Getpid(), UID: os.Getuid(), Start: 7, Name: "wardyn-macvm"}}, nil
 }
 
-// rootFstat reports every file as root's, as the runner package installs
+// rootFstat reports every file as root:wheel's, as the runner package installs
 // the ledger.
 func rootFstat(fd int, _ string) (unix.Stat_t, error) {
 	var st unix.Stat_t
 	err := unix.Fstat(fd, &st)
-	st.Uid = 0
+	st.Uid, st.Gid = 0, 0
 	return st, err
 }
 
@@ -44,7 +44,7 @@ func testDeps(eng *macvmtest.Engine) (deps, *bytes.Buffer, *bytes.Buffer) {
 	var out, errb bytes.Buffer
 	return deps{
 		engine: func() (macvm.Engine, error) { return eng, nil }, host: host{}, stdout: &out, stderr: &errb,
-		prepare: prepareDeps, fstat: rootFstat,
+		prepare: prepareDeps, fstat: rootFstat, sockFstat: macvmtest.SockFstat,
 	}, &out, &errb
 }
 
@@ -113,9 +113,10 @@ func TestRunClaimsEntryAndStatusReportsIdentity(t *testing.T) {
 		_ = os.WriteFile(filepath.Join(base, n), []byte(b), 0o600)
 	}
 	_ = os.WriteFile(filepath.Join(base, macvm.ManifestFile), []byte(`{"format":1,"state":"ready","hardware_model":"aHc="}`), 0o600)
-	dir := layout.RunDir("run-9")
-	cfg := macvm.RunConfig{RunID: "run-9", BaseDir: base, CPUs: 2, MemoryMiB: 4096, Identity: macvm.IdentityTravel,
-		RunnerID: "r1", LedgerEntry: e.ID, LedgerDir: ledger}
+	const runID = "0a1b2c3d-4e5f-4061-8273-8495a6b7c8d9"
+	dir := layout.RunDir(runID)
+	cfg := macvm.RunConfig{RunID: runID, BaseDir: base, CPUs: 2, MemoryMiB: 4096, Identity: macvm.IdentityTravel,
+		RunnerID: "r1", LedgerEntry: e.ID, LedgerDir: ledger, SockRoot: macvmtest.SockRoot(t)}
 	if err := macvm.WriteRunConfig(dir, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +139,7 @@ func TestRunClaimsEntryAndStatusReportsIdentity(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &st); err != nil {
 		t.Fatal(err)
 	}
-	if st.RunID != "run-9" || st.Identity != macvm.IdentityTravel || st.MachineIDSHA256 != macvm.IDHash([]byte("base-id")) {
+	if st.RunID != runID || st.Identity != macvm.IdentityTravel || st.MachineIDSHA256 != macvm.IDHash([]byte("base-id")) {
 		t.Fatalf("status %+v", st)
 	}
 	es, _ := l.Counted()
@@ -164,7 +165,8 @@ func TestRunRefusedWithoutEntry(t *testing.T) {
 	}
 	_ = os.WriteFile(filepath.Join(base, macvm.ManifestFile), []byte(`{"format":1,"state":"ready","hardware_model":"aHc="}`), 0o600)
 	dir := layout.RunDir("r")
-	_ = macvm.WriteRunConfig(dir, macvm.RunConfig{RunID: "r", BaseDir: base, CPUs: 2, MemoryMiB: 4096, Identity: macvm.IdentityFresh})
+	_ = macvm.WriteRunConfig(dir, macvm.RunConfig{RunID: "r", BaseDir: base, CPUs: 2, MemoryMiB: 4096, Identity: macvm.IdentityFresh,
+		SockRoot: macvmtest.SockRoot(t)})
 	d, _, errb := testDeps(&macvmtest.Engine{})
 	if code := run(context.Background(), []string{"run", "--dir", dir}, d); code != 1 || !strings.Contains(errb.String(), "run.json names no admission entry") {
 		t.Fatalf("exit %d: %s", code, errb.String())
@@ -206,11 +208,41 @@ func TestProbe(t *testing.T) {
 		if tc.hostErr != nil && r.Host != tc.hostErr.Error() {
 			t.Fatalf("%s: host %q", tc.name, r.Host)
 		}
+		if r.Thermal != "nominal" {
+			t.Fatalf("%s: thermal %q", tc.name, r.Thermal)
+		}
 	}
-	d, out, _ := testDeps(nil)
+	// runnerd reads the thermal state from probe: a hot Mac says so.
+	d, out, _ := testDeps(&macvmtest.Engine{Thermal: macvm.ThermalSerious})
+	d.firstBoot = &macvmtest.FirstBoot{}
+	_ = run(context.Background(), []string{"probe"}, d)
+	if !strings.Contains(out.String(), `"thermal": "serious"`) {
+		t.Fatalf("probe on a hot Mac: %s", out.String())
+	}
+	d, out, _ = testDeps(nil)
 	d.engine = platformEngine
 	d.firstBoot = &macvmtest.FirstBoot{}
 	if code := run(context.Background(), []string{"probe"}, d); vzLinked == (code == 1 && strings.Contains(out.String(), `"vz": false`)) {
 		t.Fatalf("probe on this build: exit %d %s", code, out.String())
+	}
+}
+
+// ledger-setup runs only as root, with one base path.
+func TestLedgerSetupRefusesNonRoot(t *testing.T) {
+	d, _, errb := testDeps(&macvmtest.Engine{})
+	base := filepath.Join(t.TempDir(), "Wardyn")
+	if err := os.Mkdir(base, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	d.getuid = func() int { return 501 }
+	if rc := run(context.Background(), []string{"ledger-setup", base}, d); rc != 1 || !strings.Contains(errb.String(), "must run as root") {
+		t.Fatalf("non-root ledger-setup: rc %d, %q", rc, errb.String())
+	}
+	if des, _ := os.ReadDir(base); len(des) != 0 {
+		t.Fatalf("a refused ledger-setup changed %s: %v", base, des)
+	}
+	d.getuid = func() int { return 0 }
+	if rc := run(context.Background(), []string{"ledger-setup"}, d); rc != 2 {
+		t.Fatalf("ledger-setup with no base: rc %d", rc)
 	}
 }
