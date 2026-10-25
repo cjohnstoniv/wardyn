@@ -19,6 +19,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // rangeStore answers the recording range check with a fixed verdict and records what it was asked.
@@ -191,5 +192,94 @@ func TestRecordingChain_OneWalkAtATime(t *testing.T) {
 	}
 	if w := doSSO(t, srv, http.MethodGet, path, ses["owner"], ""); w.Code != http.StatusOK {
 		t.Fatalf("a check after the walk ended: %d %s, want 200", w.Code, w.Body.String())
+	}
+}
+
+// errRangeStore fails the recording range check.
+type errRangeStore struct{ store.Store }
+
+func (errRangeStore) VerifyRecordingAuditRange(context.Context, uuid.UUID, string, time.Time) (store.AuditChainRange, bool, error) {
+	return store.AuditChainRange{}, false, context.DeadlineExceeded
+}
+
+// chainReadRows is the recording.read rows the run's audit holds.
+func chainReadRows(rec *sshTestRecorder, runID uuid.UUID) []types.AuditEvent {
+	var out []types.AuditEvent
+	for _, ev := range rec.snapshot() {
+		if ev.Action == auditRecordingRead && ev.RunID != nil && *ev.RunID == runID {
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
+// TestRecordingChain_AnOperatorsCheckOfAnotherPersonsRunIsAudited: the check is a metadata read, and an
+// operator's successful one of a run another person created writes the recording read's row, marked
+// chain_check, with the recording's key as its target. The owner's check of their own run writes none.
+func TestRecordingChain_AnOperatorsCheckOfAnotherPersonsRunIsAudited(t *testing.T) {
+	srv, run, rec, ses := entryServer(t, false)
+	srv.cfg.Store = &rangeStore{Store: srv.cfg.Store, found: true, rng: store.AuditChainRange{OK: true}}
+	key := run.ID.String() + "~desktop-" + uuid.NewString()
+	path := "/api/v1/runs/" + run.ID.String() + "/recording-chain?key=" + url.QueryEscape(key) + "&from=2026-10-20T10:40:00Z"
+
+	if w := doSSO(t, srv, http.MethodGet, path, ses["owner"], ""); w.Code != http.StatusOK {
+		t.Fatalf("the owner: %d %s, want 200", w.Code, w.Body.String())
+	}
+	if got := chainReadRows(rec, run.ID); len(got) != 0 {
+		t.Fatalf("an owner's check of their own run was audited: %+v", got)
+	}
+	if w := doSSO(t, srv, http.MethodGet, path, ses["admin"], ""); w.Code != http.StatusOK {
+		t.Fatalf("a super admin: %d %s, want 200", w.Code, w.Body.String())
+	}
+	got := chainReadRows(rec, run.ID)
+	if len(got) != 1 || got[0].Target != key || got[0].Outcome != "success" || got[0].Actor == "" || !strings.Contains(string(got[0].Data), `"operation":"chain_check"`) {
+		t.Fatalf("recording.read rows = %+v, want one success row for the key marked chain_check", got)
+	}
+}
+
+// TestRecordingChain_OnlyASuccessfulCheckIsAudited: a refused caller, a missing key or time, a store with no
+// chain, a key with no recording, a failed walk and a check turned away as busy write no recording.read row.
+func TestRecordingChain_OnlyASuccessfulCheckIsAudited(t *testing.T) {
+	srv, run, rec, ses := entryServer(t, false)
+	base := srv.cfg.Store
+	path := "/api/v1/runs/" + run.ID.String() + "/recording-chain?key=k&from=2026-10-20T10:40:00Z"
+	none := func(what string, code int, w *httptest.ResponseRecorder) {
+		t.Helper()
+		if w.Code != code {
+			t.Fatalf("%s: %d %s, want %d", what, w.Code, w.Body.String(), code)
+		}
+		if got := chainReadRows(rec, run.ID); len(got) != 0 {
+			t.Fatalf("%s wrote a recording.read row: %+v", what, got)
+		}
+	}
+
+	srv.cfg.Store = &rangeStore{Store: base, found: true, rng: store.AuditChainRange{OK: true}}
+	none("a security admin", http.StatusNotFound, doSSO(t, srv, http.MethodGet, path, ses["security"], ""))
+	none("another member", http.StatusNotFound, doSSO(t, srv, http.MethodGet, path, ssoSession(t, "sub-other-member", "other@corp.example", oidc.RoleUser), ""))
+	none("no key", http.StatusBadRequest, doSSO(t, srv, http.MethodGet, strings.Replace(path, "key=k", "key=", 1), ses["admin"], ""))
+	none("no from", http.StatusBadRequest, doSSO(t, srv, http.MethodGet, strings.TrimSuffix(path, "&from=2026-10-20T10:40:00Z"), ses["admin"], ""))
+	srv.cfg.Store = &rangeStore{Store: base, found: false}
+	none("a key with no recording", http.StatusNotFound, doSSO(t, srv, http.MethodGet, path, ses["admin"], ""))
+	srv.cfg.Store = errRangeStore{Store: base}
+	none("a failed walk", http.StatusInternalServerError, doSSO(t, srv, http.MethodGet, path, ses["admin"], ""))
+	srv.cfg.Store = base
+	none("a store with no chain", http.StatusNotImplemented, doSSO(t, srv, http.MethodGet, path, ses["admin"], ""))
+
+	hs := &heldRangeStore{Store: base, walking: make(chan struct{}), release: make(chan struct{})}
+	srv.cfg.Store = hs
+	first := make(chan *httptest.ResponseRecorder)
+	go func() { first <- doSSO(t, srv, http.MethodGet, path, ses["admin"], "") }()
+	select {
+	case <-hs.walking:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the first check never reached the walk")
+	}
+	none("a check turned away as busy", http.StatusServiceUnavailable, doSSO(t, srv, http.MethodGet, path, ses["admin"], ""))
+	close(hs.release)
+	if w := <-first; w.Code != http.StatusOK {
+		t.Fatalf("the check that held the walk: %d %s, want 200", w.Code, w.Body.String())
+	}
+	if got := chainReadRows(rec, run.ID); len(got) != 1 {
+		t.Fatalf("recording.read rows after the one successful check = %+v, want exactly one", got)
 	}
 }
