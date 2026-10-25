@@ -41,8 +41,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A unit admin deciding a held membership change no longer sees, in its diff, the other units the person holds
   memberships under (`belongs_by`). Super admins and security admins still see them; the decision's recheck is
   unchanged.
-- Changing a runner's per-run limits now ends its session, so it reconnects with the new limits at once. Before, a
-  connected runner kept the old limits until it next reconnected.
+- Changing a runner's per-run CPU or memory now ends its connected session, so the runner reconnects with the new
+  pair. Before, it kept the old pair until it next reconnected. A runner offline at the time reads the pair when it
+  next connects. Other limit changes leave the session alone.
 - On `agent-base`, an exec-mode run (`workload.kind: command`) that clones a repository or names a starting folder
   now gets the same workspace prep a harness run does: the repos are cloned into `/home/agent/work` and the git
   credential helper is ready, where the clone was skipped and the folder left empty unless the run also had a
