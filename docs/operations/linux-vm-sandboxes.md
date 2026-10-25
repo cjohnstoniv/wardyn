@@ -22,6 +22,7 @@
 | Sign-ins | The desktop's keychain and browser profiles are kept in the guest's memory and are gone when the guest shuts down ([Sign-ins in the desktop](#sign-ins-in-the-desktop)) |
 
 - Not in this release: drives, session recording, reviving a stopped VM, replacing its proxy, and recovering its output after the VM is gone. Each is refused with a reason.
+- Linux VMs need a pool where every runner offers them; a mixed pool refuses them.
 - A VM's terminal is a plain shell. Opening it in the agent CLI (`interactive_start: agent`) and watching or taking over the agent's terminal are refused too.
 
 ## Sign-ins in the desktop

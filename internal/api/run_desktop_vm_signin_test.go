@@ -142,7 +142,7 @@ func (s *vmSignInTestStore) PauseDesktopVMAgent(_ context.Context, runID uuid.UU
 		return false, s.markErr
 	}
 	row, ok := s.rows[runID]
-	if !ok || row.Store != "memory" || row.PausedAt != nil || row.PauseGeneration != gen {
+	if !ok || !signInsKept(row.Store) || row.PausedAt != nil || row.PauseGeneration != gen { // as the store's SQL: memory or run_disk
 		return false, nil
 	}
 	row.PausedBy, row.PausedAt = by, &at
@@ -1748,6 +1748,25 @@ func TestDesktopSignIns_OnlyThePersonWhoMayEnter(t *testing.T) {
 	}
 	if len(f.rn.seen()) != 0 {
 		t.Fatalf("a stranger's pause reached the runner: %v", f.rn.seen())
+	}
+}
+
+// A macOS VM's guest keeps its sign-ins on the run's own disk: its report becomes the run's row, and
+// the run page offers the pause on it, unless the agent's admin has since set Not allowed.
+func TestDesktopSignIns_AMacOSVMKeepsThemOnTheRunDisk(t *testing.T) {
+	f := newVMSignInFixture(t, "run_disk")
+	ctx := context.Background()
+	mac := types.AgentRun{ID: uuid.New(), MachineKind: types.MachineMacOSVM}
+	f.srv.recordDesktopVMSignIns(ctx, mac, runner.Sandbox{SignIns: "run_disk"})
+	if row, ok, _ := f.st.DesktopVMSignIns(ctx, mac.ID); !ok || row.Store != "run_disk" {
+		t.Fatalf("macOS VM row = %+v %v, want run_disk", row, ok)
+	}
+	if code, v, body := f.do(t, http.MethodGet, ""); code != http.StatusOK || v.Store != "run_disk" || !v.CanPause {
+		t.Fatalf("GET = %d %s, want run_disk and can pause", code, body)
+	}
+	f.st.sc = types.SiteConfig{AgentProviders: &types.AgentProviders{Agents: []types.AgentProvider{{ID: "claude-code", DesktopSignInsOff: true}}}}
+	if code, v, body := f.do(t, http.MethodGet, ""); code != http.StatusOK || v.CanPause {
+		t.Fatalf("GET with Not allowed = %d %s, want no pause", code, body)
 	}
 }
 

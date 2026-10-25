@@ -488,7 +488,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 // a VM run, the machine its RuntimeClass boots.
 func podSandbox(spec runner.SandboxSpec, enforced types.ConfinementClass, runtimeHandler string) runner.Sandbox {
 	sb := runner.Sandbox{Ref: agentPodName(spec.RunID), Driver: driverName, EnforcedClass: enforced}
-	if spec.MachineKind.IsVM() {
+	if spec.MachineKind == types.MachineLinuxVM {
 		m := vmMachine(runtimeHandler)
 		sb.Machine = &m
 	}

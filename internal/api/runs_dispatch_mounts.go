@@ -180,9 +180,14 @@ func envEnabled(env string) bool {
 // envAllowAgentTelemetry lets agent-CLI telemetry through; see buildBaseSandboxEnv.
 const envAllowAgentTelemetry = "WARDYN_ALLOW_AGENT_TELEMETRY"
 
+// envMacOSVMs turns on macOS VM sandboxes (machine_kind macos_vm). Off, the default, create refuses the
+// kind (machineKindRefusal) and the console is told the option is off (SetupFeatures.MacOSVMs), so
+// nothing else about a run changes.
+const envMacOSVMs = "WARDYN_MACOS_VMS"
+
 // envToggles names every switch this package reads with envEnabled.
 // TestEnvTogglesListEveryEnvEnabledRead fails when a call site is missing here.
-var envToggles = []string{envEgressSecondHuman, envCapabilitySecondHuman, envGovernanceSecondHuman, envAllowMemberEnvSecret, envAllowAgentTelemetry, envGitPATAPIBitbucketServer, envScheduledRuns, envMCPLocalServers}
+var envToggles = []string{envEgressSecondHuman, envCapabilitySecondHuman, envGovernanceSecondHuman, envAllowMemberEnvSecret, envAllowAgentTelemetry, envGitPATAPIBitbucketServer, envScheduledRuns, envMCPLocalServers, envMacOSVMs}
 
 // ValidateEnvToggles reads each envToggles switch once, so a value that is
 // neither truthy nor falsey exits 2 at boot, in every auth mode, rather than
@@ -768,13 +773,13 @@ func (s *Server) recordStartedSandbox(ctx context.Context, run types.AgentRun, s
 }
 
 // recordVMMachine writes the virtual hardware a VM run was started with (#2996). A VM whose machine is
-// missing from the runner's answer, or cannot be written, never runs: it could not later be checked
-// against a move or a restore. A container run writes nothing.
+// missing from the runner's answer, incomplete for its kind (CompleteFor) or cannot be written never
+// runs: it could not later be checked against a move or a restore. A container run writes nothing.
 func (s *Server) recordVMMachine(ctx context.Context, run types.AgentRun, sb runner.Sandbox) error {
 	if !run.MachineKind.IsVM() {
 		return nil
 	}
-	if !sb.Machine.Complete() {
+	if !sb.Machine.CompleteFor(run.MachineKind) {
 		return errors.New("the runner did not say which machine it started the VM on")
 	}
 	st, ok := s.cfg.Store.(interface {

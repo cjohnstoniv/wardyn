@@ -59,12 +59,13 @@ const (
 )
 
 // desktopSignInsView is GET /runs/{id}/desktop/sign-ins and the pause and resume answers. Store is
-// "memory", "none", or "" for a run with no store (a container, or a VM that predates it).
+// "memory", "run_disk" (a macOS VM), "none", or "" for a run with no store (a container, or a VM that
+// predates it).
 type desktopSignInsView struct {
 	Store    string     `json:"store"`
 	Paused   bool       `json:"paused"`
 	PausedAt *time.Time `json:"paused_at,omitempty"`
-	// CanPause is false when the store is not "memory" or the admin has since set Not allowed.
+	// CanPause is false when the store keeps none or the admin has since set Not allowed.
 	CanPause bool `json:"can_pause"`
 	// Agent is the run's agent by its display name, for "while {agent} runs".
 	Agent string `json:"agent"`
@@ -80,11 +81,29 @@ func desktopSignInsOff(sc types.SiteConfig, scErr error, agent string) bool {
 	return ok && row.DesktopSignInsOff
 }
 
+// macOSDesktopSignInsOff says a macOS VM run gets no desktop: its agent's admin set "Sign-ins in a
+// desktop: Not allowed", or the roster could not be read. 0.10.0 cannot make a macOS keychain
+// read-only, so where a Linux desktop keeps no sign-ins a macOS one is refused (its guest turns the
+// desktop off as well).
+func (s *Server) macOSDesktopSignInsOff(ctx context.Context, run types.AgentRun) bool {
+	if !run.MachineKind.IsMacOSVM() {
+		return false
+	}
+	sc, err := s.cfg.Store.GetSiteConfig(ctx)
+	return desktopSignInsOff(sc, err, run.Agent)
+}
+
+// signInsKept is a store that keeps a desktop's sign-ins: a Linux guest's memory, or a macOS guest's
+// run disk, which the run's end removes from the Mac.
+func signInsKept(kind string) bool {
+	return kind == guestagent.SignInsMemory || kind == guestagent.SignInsRunDisk
+}
+
 // recordDesktopVMSignIns keeps what a VM's guest made of its sign-in store. A guest that reported
 // none gets no row, so the console claims nothing for it; a failed write is logged and the run goes
 // on with no row, the same.
 func (s *Server) recordDesktopVMSignIns(ctx context.Context, run types.AgentRun, sb runner.Sandbox) {
-	if !run.MachineKind.IsVM() || (sb.SignIns != guestagent.SignInsMemory && sb.SignIns != guestagent.SignInsNone) {
+	if !run.MachineKind.IsVM() || (!signInsKept(sb.SignIns) && sb.SignIns != guestagent.SignInsNone) {
 		return
 	}
 	st, ok := s.cfg.Store.(store.DesktopVMSignInStore)
@@ -105,7 +124,7 @@ func agentDisplay(agent string) string {
 
 func (s *Server) desktopSignInsView(ctx context.Context, run types.AgentRun, row store.DesktopVMSignIns) desktopSignInsView {
 	v := desktopSignInsView{Store: row.Store, Paused: row.PausedAt != nil, PausedAt: row.PausedAt, Agent: agentDisplay(run.Agent)}
-	if row.Store == guestagent.SignInsMemory {
+	if signInsKept(row.Store) {
 		sc, err := s.cfg.Store.GetSiteConfig(ctx)
 		v.CanPause = !desktopSignInsOff(sc, err, run.Agent)
 	}

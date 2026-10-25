@@ -72,12 +72,24 @@ func (s *Substrate) agentPauseCall(ctx context.Context, method, ref string, gen 
 	if err := s.own(ref); err != nil {
 		return false, err
 	}
-	if c, ok := s.Caps(); !ok || c.LinuxVM == nil || !c.LinuxVM.SignIns {
+	if c, ok := s.Caps(); !ok || !offersSignIns(c) {
 		return false, runner.ErrAgentPauseUnsupported
 	}
 	var res runnerwire.AgentPauseResult
 	err := s.call(ctx, method, runnerwire.AgentPauseArgs{Ref: ref, Generation: gen}, &res)
 	return res.FencedPause, err
+}
+
+// offersSignIns says the runner pauses a VM's agent for a desktop sign-in: a Linux VM's, or a macOS
+// VM's. The ref is the runner's to match with its VM.
+func offersSignIns(c runnerwire.Caps) bool {
+	return (c.LinuxVM != nil && c.LinuxVM.SignIns) || (c.MacOSVM != nil && c.MacOSVM.SignIns)
+}
+
+// offersDesktop says the runner opens a VM's display: a Linux VM's, or a macOS VM's whose Screen
+// Sharing its Mac can control. An observe-only or absent one offers no desktop.
+func offersDesktop(c runnerwire.Caps) bool {
+	return (c.LinuxVM != nil && c.LinuxVM.Desktop) || (c.MacOSVM != nil && c.MacOSVM.Desktop == runnerwire.MacVMDesktopControl)
 }
 
 // DialDesktop opens a VM sandbox's display on the runner (runner.DesktopDialer). A runner whose caps do
@@ -86,7 +98,7 @@ func (s *Substrate) DialDesktop(ctx context.Context, ref string) (io.ReadWriteCl
 	if err := s.own(ref); err != nil {
 		return nil, err
 	}
-	if c, ok := s.Caps(); !ok || c.LinuxVM == nil || !c.LinuxVM.Desktop {
+	if c, ok := s.Caps(); !ok || !offersDesktop(c) {
 		return nil, runner.ErrDesktopUnsupported
 	}
 	sess, err := s.pin()
