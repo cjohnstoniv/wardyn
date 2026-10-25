@@ -121,13 +121,160 @@ func TestDesktopRecording_AnotherReplicasEndResumesItHere(t *testing.T) {
 	}
 }
 
+// gapNoticeServer is a replica holding a sign-in's pause on run's screen recording, its store
+// holding run.
+func gapNoticeServer(t *testing.T, run types.AgentRun) (*Server, *authzStore, *recRecorder) {
+	t.Helper()
+	h := newHarness(t)
+	ast := newAuthzStore()
+	ast.runs[run.ID] = run
+	cfg := baseTestConfig(h, ast)
+	cfg.RecordingStore = fsRecordingStore(t)
+	return New(cfg), ast, h.audit
+}
+
+// deliverGapNotice hands srv another replica's recording_gap notice n for run. A notice without
+// RunEnded goes as an older replica sends it, with no run_ended key at all.
+func deliverGapNotice(t *testing.T, srv *Server, run uuid.UUID, n recordingGapNotice) {
+	t.Helper()
+	raw, err := json.Marshal(n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n.RunEnded == nil && bytes.Contains(raw, []byte("run_ended")) {
+		t.Fatalf("a notice with no disposition carries one: %s", raw)
+	}
+	srv.onRecordingGapNotice(livebus.Message{Kind: livebus.KindRecordingGap, Run: run, Origin: "replica-b", Data: raw})
+}
+
+// desktopResumeRows is the data of each desktop.recording.resume row audit holds.
+func desktopResumeRows(t *testing.T, audit *recRecorder) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	for _, ev := range audit.snapshot() {
+		if ev.Action == "desktop.recording.resume" {
+			out = append(out, auditData(t, ev))
+		}
+	}
+	return out
+}
+
+// TestDesktopRecording_AnEndNoticeDeliveredAfterAReviveStillSaysTheRunEnded: a sign-in pause the
+// leader ended because its outage-lost run's agent stop was confirmed (endStoppedAgentPause) tells the
+// replica holding the recording that the run was over. A notice that reaches it after a revive made
+// the run live again still writes the gap's resume row with end_reason run_ended: the disposition is
+// the one the notice carries, not the run read again.
+func TestDesktopRecording_AnEndNoticeDeliveredAfterAReviveStillSaysTheRunEnded(t *testing.T) {
+	ctx := context.Background()
+	lost := time.Now().UTC()
+	run := types.AgentRun{ID: uuid.New(), State: types.RunRunning, RecordingLevel: types.RecordingScreenActions,
+		LostAt: &lost, LostReason: types.LostOutage}
+	srv, ast, audit := gapNoticeServer(t, run)
+	hold := vmSignInHold(run.ID, lost)
+	srv.PauseDesktopRecording(ctx, run, desktopPauseSignin, hold)
+
+	revived := run
+	revived.LostAt, revived.LostReason = nil, ""
+	ast.mu.Lock()
+	ast.runs[run.ID] = revived
+	ast.mu.Unlock()
+	deliverGapNotice(t, srv, run.ID, recordingGapNotice{Reason: desktopSigninGapReason, DesktopHold: hold, RunEnded: new(true)})
+
+	if srv.desktopRecs.holds(run.ID, hold) {
+		t.Fatal("the notice did not end the sign-in's hold")
+	}
+	if rows := desktopResumeRows(t, audit); len(rows) != 1 || rows[0]["end_reason"] != signinEndRunEnded {
+		t.Fatalf("desktop.recording.resume rows = %v, want one with end_reason %q", rows, signinEndRunEnded)
+	}
+}
+
+// TestDesktopRecording_AnEndNoticeSaysWhatItsSenderKnew: a recording_gap notice that carries the run's
+// disposition is taken as given, so an ordinary resume writes no run_ended even once the run has
+// since ended; a notice without one, as an older replica sends it, has it read from the run as
+// before.
+func TestDesktopRecording_AnEndNoticeSaysWhatItsSenderKnew(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		runEnded *bool
+		over     bool // the run the receiving replica reads is over
+		want     bool // the resume row says run_ended
+	}{
+		{"an ordinary resume", new(false), false, false},
+		{"an ordinary resume, the run since over", new(false), true, false},
+		{"an older replica's notice, the run live", nil, false, false},
+		{"an older replica's notice, the run over", nil, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			run := types.AgentRun{ID: uuid.New(), State: types.RunRunning, RecordingLevel: types.RecordingScreenActions}
+			if tc.over {
+				run.State = types.RunCompleted
+			}
+			srv, _, audit := gapNoticeServer(t, run)
+			hold := uuid.NewString()
+			srv.PauseDesktopRecording(context.Background(), run, desktopPauseSignin, hold)
+			deliverGapNotice(t, srv, run.ID, recordingGapNotice{Reason: desktopSigninGapReason, DesktopHold: hold, RunEnded: tc.runEnded})
+			rows := desktopResumeRows(t, audit)
+			if len(rows) != 1 {
+				t.Fatalf("desktop.recording.resume rows = %v, want one", rows)
+			}
+			if got := rows[0]["end_reason"] == signinEndRunEnded; got != tc.want {
+				t.Errorf("resume row %v: run_ended %v, want %v", rows[0], got, tc.want)
+			}
+		})
+	}
+}
+
+// TestDesktopRecording_AnEndNoticeLeavesANewerHoldStanding: a notice that the run was over, for one
+// sign-in's hold, ends only that hold: a newer hold on the same gap keeps it open, and a notice for a
+// hold this replica does not have changes nothing.
+func TestDesktopRecording_AnEndNoticeLeavesANewerHoldStanding(t *testing.T) {
+	ctx := context.Background()
+	run := types.AgentRun{ID: uuid.New(), State: types.RunRunning, RecordingLevel: types.RecordingScreenActions}
+	srv, _, audit := gapNoticeServer(t, run)
+	older, newer := vmSignInHold(run.ID, time.Now().UTC()), vmSignInHold(run.ID, time.Now().UTC().Add(time.Minute))
+	srv.PauseDesktopRecording(ctx, run, desktopPauseSignin, older)
+	srv.PauseDesktopRecording(ctx, run, desktopPauseSignin, newer)
+
+	deliverGapNotice(t, srv, run.ID, recordingGapNotice{Reason: desktopSigninGapReason, DesktopHold: uuid.NewString(), RunEnded: new(true)})
+	deliverGapNotice(t, srv, run.ID, recordingGapNotice{Reason: desktopSigninGapReason, DesktopHold: older, RunEnded: new(true)})
+	if srv.desktopRecs.holds(run.ID, older) || !srv.desktopRecs.holds(run.ID, newer) {
+		t.Fatal("the notice did not end exactly the older hold")
+	}
+	if rows := desktopResumeRows(t, audit); len(rows) != 0 {
+		t.Fatalf("desktop.recording.resume rows = %v while a newer hold stands, want none", rows)
+	}
+}
+
+// TestDesktopRecording_AnOlderReplicaReadsANoticeThatCarriesTheDisposition: a notice with run_ended
+// decodes, as unmarshalNotice decodes every notice, into the notice an older replica knows, its
+// other fields intact: the field is additive.
+func TestDesktopRecording_AnOlderReplicaReadsANoticeThatCarriesTheDisposition(t *testing.T) {
+	hold := uuid.NewString()
+	raw, err := json.Marshal(recordingGapNotice{Reason: desktopSigninGapReason, DesktopHold: hold, RunEnded: new(true)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var old struct {
+		ApprovalID  uuid.UUID `json:"approval_id"`
+		Paused      bool      `json:"paused"`
+		Reason      string    `json:"reason"`
+		DesktopHold string    `json:"desktop_hold,omitempty"`
+	}
+	if err := unmarshalNotice(livebus.Message{Kind: livebus.KindRecordingGap, Data: raw}, &old); err != nil {
+		t.Fatalf("an older replica refuses %s: %v", raw, err)
+	}
+	if old.Paused || old.Reason != desktopSigninGapReason || old.DesktopHold != hold {
+		t.Errorf("an older replica read %+v from %s", old, raw)
+	}
+}
+
 // TestDesktopSignin_EndOnAReplicaHoldingNoPauseTellsTheOthers: a sign-in on a screen-recorded run,
 // ended on a replica that does not hold its pause, sends a recording_gap notice naming the hold.
 func TestDesktopSignin_EndOnAReplicaHoldingNoPauseTellsTheOthers(t *testing.T) {
 	srv, _ := miscCovBusServer(t, "replica-b")
 	srv.cfg.RecordingStore = fsRecordingStore(t)
 	logs := miscCovCaptureLogs(t)
-	srv.endDesktopHold(context.Background(), types.AgentRun{ID: uuid.New(), RecordingLevel: types.RecordingScreenActions}, uuid.NewString())
+	srv.endDesktopHold(context.Background(), types.AgentRun{ID: uuid.New(), RecordingLevel: types.RecordingScreenActions}, uuid.NewString(), nil)
 	srv.WaitBackground()
 	rec, ok := logs.find("a notice to the other replicas was not sent")
 	if !ok {

@@ -743,7 +743,7 @@ func (s *Server) sweepEndedDesktopVMPauses(ctx context.Context) error {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", auditDesktopSignIn, run.ID.String(), "success",
 			mustJSON(map[string]any{"paused_by": by, "paused_at": pausedAt, "ended_paused": true, "ended_at": endedAt,
 				"paused_seconds": int(endedAt.Sub(pausedAt).Seconds())})))
-		s.endDesktopHold(ctx, run, vmSignInHold(run.ID, pausedAt))
+		s.endDesktopHold(ctx, run, vmSignInHold(run.ID, pausedAt), new(true))
 	}
 	return nil
 }
@@ -804,7 +804,7 @@ func (s *Server) endStoppedAgentPause(ctx context.Context, st store.DesktopVMSig
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", auditDesktopSignIn, run.ID.String(), "success",
 		mustJSON(map[string]any{"paused_by": by, "paused_at": pausedAt, "ended_paused": true, "ended_at": endedAt,
 			"paused_seconds": int(endedAt.Sub(pausedAt).Seconds())})))
-	s.endDesktopHold(ctx, run, vmSignInHold(run.ID, pausedAt))
+	s.endDesktopHold(ctx, run, vmSignInHold(run.ID, pausedAt), new(true))
 }
 
 // handleResumeDesktopAgent continues the agent and writes the session's one desktop.sign_in.pause row. It is
@@ -895,7 +895,7 @@ func (s *Server) handleResumeDesktopAgent(w http.ResponseWriter, r *http.Request
 		s.resumeOvertaken(bg, w, run, at, principal, row, cur)
 		return
 	}
-	s.endDesktopHold(bg, run, vmSignInHold(run.ID, pausedAt))
+	s.endDesktopHold(bg, run, vmSignInHold(run.ID, pausedAt), new(false))
 	relocked()
 	unlock()
 	s.recordAudit(bg, s.auditEvent(&run.ID, at, principal, auditDesktopSignIn, run.ID.String(), "success",

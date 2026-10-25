@@ -277,8 +277,15 @@ func (s *Server) PauseDesktopRecording(ctx context.Context, run types.AgentRun, 
 // ResumeDesktopRecording ends hold's hold on the gap. When it was the last one, frames are kept
 // again and desktop.recording.resume is written with the whole gap: its start, end, length and the
 // reason that opened it. It reports whether the recording resumed, so one pause's end never ends
-// another's.
+// another's. Whether the gap closed once the run was over is read from the run (desktopPauseOver);
+// a caller that knows it says so (resumeDesktopHold).
 func (s *Server) ResumeDesktopRecording(ctx context.Context, run types.AgentRun, hold string) bool {
+	return s.resumeDesktopHold(ctx, run, hold, nil)
+}
+
+// resumeDesktopHold is ResumeDesktopRecording with the run's disposition, when ended is set, taken as
+// given rather than read again: the run read later may be one a revive has since made live again.
+func (s *Server) resumeDesktopHold(ctx context.Context, run types.AgentRun, hold string, ended *bool) bool {
 	d := &s.desktopRecs
 	d.mu.Lock()
 	r := d.byRun[run.ID]
@@ -300,16 +307,22 @@ func (s *Server) ResumeDesktopRecording(ctx context.Context, run types.AgentRun,
 		delete(d.byRun, run.ID)
 	}
 	d.mu.Unlock()
-	s.auditDesktopResume(ctx, run.ID, run.SandboxRef, p, s.desktopPauseOver(ctx, run))
+	if ended == nil {
+		ended = new(s.desktopPauseOver(ctx, run))
+	}
+	s.auditDesktopResume(ctx, run.ID, run.SandboxRef, p, *ended)
 	return true
 }
 
 // endDesktopHold ends a desktop sign-in's hold here and, on a screen-recorded run, over the live bus on
 // the replica that holds it: the leader's sweep may close a sign-in another replica began. A take
-// over's hand back tells the other replicas in its own recording_gap notice (recordingGap).
-func (s *Server) endDesktopHold(ctx context.Context, run types.AgentRun, hold string) {
-	if !s.ResumeDesktopRecording(ctx, run, hold) && s.desktopRecorded(run) {
-		s.publishNotice(livebus.KindRecordingGap, run.ID, recordingGapNotice{Reason: desktopSigninGapReason, DesktopHold: hold})
+// over's hand back tells the other replicas in its own recording_gap notice (recordingGap). ended,
+// when set, is whether the run was over when the sign-in ended, carried in the notice
+// (recordingGapNotice.RunEnded) so the replica holding the pause writes what this one knew; unset,
+// each replica reads it from the run (desktopPauseOver).
+func (s *Server) endDesktopHold(ctx context.Context, run types.AgentRun, hold string, ended *bool) {
+	if !s.resumeDesktopHold(ctx, run, hold, ended) && s.desktopRecorded(run) {
+		s.publishNotice(livebus.KindRecordingGap, run.ID, recordingGapNotice{Reason: desktopSigninGapReason, DesktopHold: hold, RunEnded: ended})
 	}
 }
 
@@ -317,7 +330,8 @@ func (s *Server) endDesktopHold(ctx context.Context, run types.AgentRun, hold st
 const desktopSigninGapReason = "desktop_signin"
 
 // onRecordingGapNotice ends another replica's resumed hold on this replica's desktop recording, when
-// this replica holds it.
+// this replica holds it, with the run's disposition the notice carries (RunEnded); a notice without
+// one, an older replica's, has it read from the run.
 func (s *Server) onRecordingGapNotice(m livebus.Message) {
 	var n recordingGapNotice
 	if m.Origin == s.replicaName() || unmarshalNotice(m, &n) != nil || n.Paused || n.DesktopHold == "" || !s.desktopRecs.holds(m.Run, n.DesktopHold) {
@@ -329,7 +343,7 @@ func (s *Server) onRecordingGapNotice(m livebus.Message) {
 			run = cur
 		}
 	}
-	s.ResumeDesktopRecording(s.cfg.BaseCtx, run, n.DesktopHold)
+	s.resumeDesktopHold(s.cfg.BaseCtx, run, n.DesktopHold, n.RunEnded)
 }
 
 // holds reports whether hold holds run's desktop recording paused here.
