@@ -51,6 +51,10 @@ func TestPrepareLimitsFromTheSavedFile(t *testing.T) {
 	if cpus, mem, err = prepareLimits(file, 5, 9); err != nil || cpus != 5 || mem != 9216 {
 		t.Fatalf("both flags: %d CPUs, %d MiB, %v", cpus, mem, err)
 	}
+	m.setPerRunLimits(4000, 1536)
+	if _, mem, err = prepareLimits(file, 0, 0); err != nil || mem != 1536 {
+		t.Fatalf("a limit that is not whole GB: %d MiB, %v", mem, err)
+	}
 	m.setPerRunLimits(4000, 512) // under 1 GB: nothing prepare can use, though the runner has connected
 	if _, _, err = prepareLimits(file, 0, 0); err == nil || strings.Contains(err.Error(), "sent no per-run limits") {
 		t.Fatalf("saved limits too small to use: %v", err)

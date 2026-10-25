@@ -83,7 +83,7 @@ func prepareLimits(file string, cpu float64, memGB int64) (cpus int, memMiB uint
 				cpus = int(l.CPUMillis / 1000)
 			}
 			if memGB < 1 {
-				mem = l.MemoryMiB >> 10 << 10
+				mem = l.MemoryMiB // in MiB, as a run is sized
 			}
 		}
 	}
