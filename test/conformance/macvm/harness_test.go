@@ -55,8 +55,11 @@ var (
 	// assumedRunnerdStatus prints the runner's macOS VM state as JSON (the RUNNER lane's
 	// `wardyn-runnerd macos-vm status`). Only statusKeys are ever read from it.
 	assumedRunnerdStatus = []string{"macos-vm", "status", "--json"}
-	// assumedRunnerdLabel is runnerd's LaunchAgent label (deploy/runner/macos).
-	assumedRunnerdLabel = env("WARDYN_MACVM_RUNNERD_LABEL", "com.wardyn.runnerd.managed")
+	// assumedRunnerdLabel is the LaunchAgent label runnerd runs under: `wardyn-runnerd setup`, which
+	// registers the window's runner, installs it as serviceLabel (cmd/wardyn-runnerd/setup_host.go:33).
+	// setup boots out the pkg's own agent, com.wardyn.runnerd.managed. A runner registered and kicked by
+	// hand runs under that one instead: set WARDYN_MACVM_RUNNERD_LABEL for it.
+	assumedRunnerdLabel = env("WARDYN_MACVM_RUNNERD_LABEL", "com.wardyn.runnerd")
 	// assumedGuestAgent is the guest agent's process name in the guest (cmd/wardyn-guest-agent).
 	assumedGuestAgent = "wardyn-guest-agent"
 )
@@ -396,6 +399,22 @@ func mustOK(t *testing.T, r result, what string) string {
 
 func wardyn(t *testing.T, args ...string) result { return sh(t, 2*time.Minute, cfg.wardyn, args...) }
 
+// launchdPID is the pid in `launchctl print` output, 0 when the job has none.
+func launchdPID(out string) int {
+	m := regexp.MustCompile(`(?m)^\s*pid = (\d+)\s*$`).FindStringSubmatch(out)
+	if m == nil {
+		return 0
+	}
+	n, _ := strconv.Atoi(m[1])
+	return n
+}
+
+// runnerdPID is the pid launchd runs assumedRunnerdLabel as, 0 when it runs none.
+func runnerdPID(t *testing.T) int {
+	t.Helper()
+	return launchdPID(sh(t, time.Minute, "launchctl", "print", fmt.Sprintf("gui/%d/%s", os.Getuid(), assumedRunnerdLabel)).out)
+}
+
 // runnerdStatus is the allowlisted part of runnerd's macOS VM status. Nothing else from it is read
 // or logged, so a one-time code or any later field never reaches the evidence.
 func runnerdStatus(t *testing.T) map[string]any {
@@ -717,9 +736,13 @@ func layout(t *testing.T) macvm.Layout {
 
 func runDir(t *testing.T, id string) string { return layout(t).RunDir(id) }
 
+// ctlSock is the run's ctl.sock. The helper serves it from the login's socket directory
+// (macvm.SockDir, under admission.DefaultSockDir), not from the run directory.
+func ctlSock(id string) string { return filepath.Join(macvm.SockDir("", id), macvm.ControlSock) }
+
 func dialHelper(ctx context.Context, t *testing.T, id string) (*macvm.ControlClient, error) {
 	t.Helper()
-	return macvm.DialControl(ctx, filepath.Join(runDir(t, id), macvm.ControlSock))
+	return macvm.DialControl(ctx, ctlSock(id))
 }
 
 // helperStatus asks the run's helper over its ctl.sock. The helper serves each connection on its
