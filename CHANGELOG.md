@@ -13,6 +13,26 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Before you upgrade
 
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the `ALTER
+  DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `macos_vm_disks`
+  (migration `0236_macos_vm_disks`). Without it a macOS VM run's page never says whether its disk was removed from the
+  Mac. An upgrade from 0.9.x also needs every grant the 0.10.0-rc.1 notes list: `SELECT, INSERT, UPDATE, DELETE` on
+  `aws_sso_refused_tokens`, `cli_sign_ins`, `ui_desktop_closed`, `desktop_signins`, `desktop_signin_shares`,
+  `desktop_signin_runs`, `approval_rules`, `governance_restrictions`, `governance_restriction_members`,
+  `governance_unit_admins`, `oidc_session_sids` and `desktop_vm_sign_ins`. Also grant it `SELECT, INSERT, UPDATE` on
+  `runner_health`, `launch_preset_version_floor`, `cli_sessions` and `governance_boundary`.
+
+### Added
+
+- A macOS VM run's page says when the run's disk was removed from the Mac, or why it could not be. It needs this
+  release's wardyn-runnerd. With an older one the page says "Removing…" for 10 minutes after the run ends, then nothing
+  about the disk. A saved "Finished" arrangement of the run page gains the "Attach from your terminal" tile at its
+  bottom, once, where the disk line shows.
+
+## [0.10.0-rc.2] — 2026-10-25
+
+### Before you upgrade
+
 - 0.10 can't be rolled back by redeploying 0.9.x: its migrations rename tables and change constraints. Take a database backup first.
 - **Upgrade wardyn-runnerd and rebuild the Linux VM guest image (`vm-linux`) to order a desktop sign-in's pause and
   resume.** A run on an older wardyn-runnerd or guest image is not refused: its pause and resume work as before, its
@@ -33,17 +53,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   keeps starting runs as before and logs once that the image does not announce when it is listening, so the fix does not
   reach those runs until the organisation is upgraded. The agent images wait for the proxy on their own and need no
   runner change.
-- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the `ALTER
-  DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `macos_vm_disks`
-  (migration `0236_macos_vm_disks`). Without it a macOS VM run's page never says whether its disk was removed from the
-  Mac. An upgrade from 0.9.x also needs every grant the 0.10.0-rc.1 notes list: `SELECT, INSERT, UPDATE, DELETE` on
-  `aws_sso_refused_tokens`, `cli_sign_ins`, `ui_desktop_closed`, `desktop_signins`, `desktop_signin_shares`,
-  `desktop_signin_runs`, `approval_rules`, `governance_restrictions`, `governance_restriction_members`,
-  `governance_unit_admins`, `oidc_session_sids` and `desktop_vm_sign_ins`. Also grant it `SELECT, INSERT, UPDATE` on
-  `runner_health`, `launch_preset_version_floor`, `cli_sessions` and `governance_boundary`.
 
 ### Changed
 
+- Changing a runner's per-run CPU or memory now ends its connected session, so the runner reconnects with the new
+  pair. Before, it kept the old pair until it next reconnected. A runner offline at the time reads the pair when it
+  next connects. Other limit changes leave the session alone.
 - On `agent-base`, an exec-mode run (`workload.kind: command`) that clones a repository or names a starting folder
   now gets the same workspace prep a harness run does: the repos are cloned into `/home/agent/work` and the git
   credential helper is ready, where the clone was skipped and the folder left empty unless the run also had a
@@ -64,14 +79,24 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `wardyn-runnerd setup --macos-vm on`. `wardyn-runnerd macos-vm prepare`, `status` (`--json` for one JSON object) and
   `remove` build, show and delete the Mac's macOS base; `prepare --new-image` builds a new one from Apple's newest
   restore image. The runner offers macOS VMs only when its helper's `wardyn-macvm probe` passes, offers as many as the
-  Mac's shared ledger and memory leave room for, and ends its newest one when the disk drops below 5 GiB free.
-- A macOS VM run's page says when the run's disk was removed from the Mac, or why it could not be. It needs this
-  release's wardyn-runnerd. With an older one the page says "Removing…" for 10 minutes after the run ends, then nothing
-  about the disk. A saved "Finished" arrangement of the run page gains the "Attach from your terminal" tile at its
-  bottom, once, where the disk line shows.
+  Mac's shared ledger and memory leave room for, and ends its newest one when the disk drops below 5 GiB free. Migration
+  `0234_macos_vm_kind` lets a run record the `macos_vm` kind. `wardyn-runnerd setup --keep-ipsw` keeps Apple's
+  restore image, as `prepare --keep-ipsw` does.
 
 ### Fixed
 
+- A unit admin deciding a held membership change no longer sees, in its diff, the other units the person holds
+  memberships under (`belongs_by`). Super admins and security admins still see them; the decision's recheck is
+  unchanged.
+- A headless run on a runner could be marked lost (reboot) when a check landed between its agent's exit and the
+  runner's exit receipt; the receipt was then refused and the run never recorded `run.complete`. The runner's exit
+  receipt now ends such a run (#3665).
+- An SSH key approval's title now says what happens: "Sign Git's SSH sign-in for <host>", where it said "Write an
+  SSH key for <host>". The proxy signs the sign-in and no key file enters the sandbox.
+- The desktop replay shows where a screen recording stopped, at its size cap or at a stream the recorder could not
+  follow. Before, it froze on the last frame with no notice.
+- A VM run lost to an outage keeps its desktop sign-in pause, since its agent may still be running. A run lost because
+  its lease ended or its agent's container exited ends the pause and its recording hold.
 - The image launcher split each `WARDYN_REPOS` clone record with a tab as whitespace, so an empty field moved the
   fields after it up a place. This control plane never sends such a record. A control plane that sends only the
   single-repository variables (`WARDYN_REPO_URL`, `WARDYN_REPO_SLUG`) got no git broker rewrite, and a record with
