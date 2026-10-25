@@ -95,10 +95,9 @@ export function macOSMinimumSentence(intent: RunIntent, offer: MacOSOffer | unde
 function runnerRefusal(r: PoolMacOSVMRefusal): MacOSRefusal {
   // "runner_refused" is the wire's `why` for a Mac that sent caps and refused itself, with `reason` (below_min_memory,
   // below_min_cpu or other), `have` and `need`. The sentence is canon by reason; `detail` is never shown.
-  if ((r.why as string) === "runner_refused") {
-    const w = r as PoolMacOSVMRefusal & { reason?: string; have?: number; need?: number };
-    const reason: RunnerRefusedReason = w.reason === "below_min_memory" || w.reason === "below_min_cpu" ? w.reason : "other";
-    return { why: "runner_refused", runner: r.runner, reason, have: w.have ?? 0, need: w.need ?? 0 };
+  if (r.why === "runner_refused") {
+    const reason: RunnerRefusedReason = r.reason === "below_min_memory" || r.reason === "below_min_cpu" ? r.reason : "other";
+    return { why: "runner_refused", runner: r.runner, reason, have: r.have ?? 0, need: r.need ?? 0 };
   }
   switch (r.why) {
     case "preparing": return { why: "preparing", runner: r.runner, percent: r.progress ?? 0 };
