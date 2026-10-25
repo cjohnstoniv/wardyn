@@ -1887,7 +1887,8 @@ jobs:
           rc=0
           "$RUNNER_TEMP/macvm_live.test" -test.v=test2json >"$RUNNER_TEMP/suite.raw" 2>"$RUNNER_TEMP/suite.err" || rc=$?
           cat "$RUNNER_TEMP/suite.err"
-          [ "$rc" -eq 0 ] || { echo "::error::the packaged suite exited $rc"; exit 1; }
+          # On a failure, show which test failed: its output is in suite.raw, not on the console.
+          [ "$rc" -eq 0 ] || { tail -n 200 "$RUNNER_TEMP/suite.raw"; echo "::error::the packaged suite exited $rc"; exit 1; }
           go tool test2json <"$RUNNER_TEMP/suite.raw" >"$RUNNER_TEMP/suite.json"
           jq -es 'length > 0' "$RUNNER_TEMP/suite.json"
 
