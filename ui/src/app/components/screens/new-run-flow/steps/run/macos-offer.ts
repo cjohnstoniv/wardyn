@@ -5,13 +5,15 @@
 
 // What the chosen pool's Macs offer for a macOS VM, as the OS row, the harness list and Review's Limits read it
 // (mock M-N1). The org settles this in one function (macOSVMOffer, internal/api/run_placement_capabilities.go) and
-// the pool list carries nothing of it yet, so no provider fills the context: without one the macOS option is offered
-// whenever the organisation switch is on and the server's own refusal speaks at Launch.
+// sends it on the pool list (`macos_vm`); MacOSOfferProvider reads the chosen pool's entry into this context. With
+// no pool chosen or the field absent there is no offer: the macOS option is offered whenever the organisation
+// switch is on and the server's own refusal speaks at Launch.
 
 import * as React from "react";
 import { NR_MACHINE } from "../../../../wardyn/copy/new-run/machine";
 import { belowMinimum, type MacOSMinimum } from "../../lenses/limits-lens";
 import type { RunIntent } from "../../draft/run-intent";
+import type { PoolMacOSVM, PoolMacOSVMRefusal } from "../../../../../lib/types/runner-pools";
 
 /** Why a pool's Macs cannot take a macOS VM. `runner` names the Mac only when the pool has exactly one. */
 export type MacOSRefusal =
@@ -74,4 +76,36 @@ export const macOSMinimumOf = (intent: RunIntent, offer: MacOSOffer | undefined)
 export function macOSMinimumSentence(intent: RunIntent, offer: MacOSOffer | undefined): string | undefined {
   const min = macOSMinimumOf(intent, offer);
   return min && belowMinimum(intent, min) ? NR_MACHINE.MACOS_BELOW_MINIMUM(String(min.cpuMillis / 1000), String(min.memoryMib)) : undefined;
+}
+
+/** One Mac's refusal, in the runner-specific form (MV-N06 to MV-N10, MV-E03 to MV-E05, MV-E07). */
+function runnerRefusal(r: PoolMacOSVMRefusal): MacOSRefusal {
+  switch (r.why) {
+    case "preparing": return { why: "preparing", runner: r.runner, percent: r.progress ?? 0 };
+    case "not_managed": return { why: "not_managed", runner: r.runner, markId: r.runner_id };
+    case "no_base": return { why: "no_base", runner: r.runner, error: r.error };
+    default: return { why: r.why, runner: r.runner };
+  }
+}
+
+/**
+ * The offer a pool's `macos_vm` makes, or undefined while it says nothing (no pool, or the field absent). A pool of
+ * one Mac names it (`runner`) and gets that Mac's own refusal; a pool of several gets the pool form, MV-N05 when any
+ * Mac does not offer macOS VMs at all, else MV-N14.
+ */
+export function macOSOfferOf(pool: PoolMacOSVM | undefined): MacOSOffer | undefined {
+  if (!pool) return undefined;
+  if (pool.offered) {
+    return {
+      ok: true,
+      guestOS: pool.guest_os ?? "",
+      minCPUs: pool.min_cpus ?? 0,
+      minMemoryMiB: pool.min_memory_mib ?? 0,
+      harnesses: pool.harnesses?.includes("none") ? pool.harnesses : ["none", ...(pool.harnesses ?? [])],
+      runner: pool.runner,
+    };
+  }
+  const refusals = pool.refusals ?? [];
+  if (pool.runner && refusals.length === 1) return { ok: false, refusal: runnerRefusal(refusals[0]) };
+  return { ok: false, refusal: { why: refusals.length > 0 && refusals.every((r) => r.why !== "not_offered") ? "pool_cant_now" : "pool_not_offered" } };
 }

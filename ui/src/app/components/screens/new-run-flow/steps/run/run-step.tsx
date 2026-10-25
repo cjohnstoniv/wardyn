@@ -10,7 +10,6 @@ import * as React from "react";
 import { NR_RUN } from "../../../../wardyn/copy/new-run/run";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { isVMKind } from "../../../../../lib/types/machine-kind";
-import type { RunnerPoolRunType } from "../../../../../lib/types/runner-pools";
 import { useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../../new-run-route";
 import type { RunIntent } from "../../draft/run-intent";
 import { harnessIds } from "../../lenses/lens-keys";
@@ -26,7 +25,7 @@ import { CommandSection } from "./command-section";
 import { MachineKindSection } from "./machine-kind-section";
 import { useMacOSOffer } from "./macos-offer";
 import { ModeSection } from "./mode-section";
-import { ledeOf, selectedPoolId, usablePools } from "./pool-model";
+import { ledeOf, runTypeOf, selectedPoolId, usablePools } from "./pool-model";
 import { PoolSection } from "./pool-section";
 import { QuestionBlock } from "./question-block";
 import { loadPools, usePools, type LoadPools } from "./pool-source";
@@ -51,7 +50,7 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
   React.useEffect(() => {
     if (unnamed) dispatch({ type: "edit", apply: (i) => chooseMode(i, fallback) });
   }, [unnamed, fallback, dispatch]);
-  const runType: RunnerPoolRunType | undefined = intent.experience ?? (unnamed ? (fallback === "autonomous" ? "background" : "interactive") : undefined);
+  const runType = runTypeOf(intent);
 
   const pools = usePools(deps?.load ?? loadPools, runType);
   const list = pools.status === "ready" ? pools.list : undefined;

@@ -10,6 +10,8 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { MacVMCaps } from "../../../lib/types/runner-macvm";
+import type { SetupStatus } from "../../../lib/types/setup";
+import { ModelAccessProvider } from "../../wardyn/model-access-context";
 import { MacVMBadge, MacVMSection } from "./macvm-section";
 import { macVMBadge } from "./macvm-view";
 
@@ -24,8 +26,14 @@ const ready: MacVMCaps = {
   base: { state: "ready", guest_os: "macOS 27.0.1 (26A434)" },
 };
 const perRun = { cpu_millis: 4000, memory_mib: 8192, disk_mib: 0 };
+// The harness names are the New Run picker's: the setup status roster's own display names.
+const status = { harnesses: [{ id: "claude-code", display: "Claude Code" }, { id: "codex-cli", display: "Codex CLI" }, { id: "none", display: "Your own tools" }] } as SetupStatus;
 const section = (caps: MacVMCaps | undefined, over: Partial<Parameters<typeof MacVMSection>[0]> = {}) =>
-  render(<MacVMSection caps={caps} mac active={1} perRun={perRun} runner="mac-studio-07" {...over} />);
+  render(
+    <ModelAccessProvider status={status} onRefresh={() => {}}>
+      <MacVMSection caps={caps} mac active={1} perRun={perRun} runner="mac-studio-07" {...over} />
+    </ModelAccessProvider>,
+  );
 
 describe("M-R2 runner card badge", () => {
   it("1: macOS VMs 1/2 with one run on it", () => {

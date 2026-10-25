@@ -9,6 +9,8 @@ import { NR_MACHINE } from "../src/app/components/wardyn/copy/new-run/machine";
 import { NR_SHAPE } from "../src/app/components/wardyn/copy/new-run/shape";
 import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
 import { DESKTOP } from "../src/app/components/wardyn/copy/desktop";
+import { SCENARIO_POOLS } from "../src/app/lib/new-run-fixtures/scenarios/pools";
+import type { PoolMacOSVM } from "../src/app/lib/types/runner-pools";
 
 // ============================================================================
 // A macOS VM (mocks M-N1, M-N2, M-D1): the New Run OS row with the organisation switch on, the changes panel
@@ -69,6 +71,42 @@ test.describe("New Run: the macOS option", () => {
     await os.getByRole("button", { name: NR_MACHINE.OS_LINUX }).click();
     await expect(changes.getByText(NR_MACHINE.CHANGES_CLIPBOARD_BODY)).toBeVisible();
     await expect(changes.getByText(NR_MACHINE.CHANGES_MAC_MANAGED)).toHaveCount(0);
+  });
+});
+
+/** GET /runner-pools with the chosen (default) pool carrying what its Macs offer a macOS VM (M-N1). */
+async function poolOffers(page: Page, macos_vm: PoolMacOSVM) {
+  const member = SCENARIO_POOLS.member;
+  await page.route("**/api/v1/runner-pools*", (route) =>
+    route.fulfill({ json: { ...member, pools: member.pools.map((p) => ({ ...p, macos_vm })) } }),
+  );
+}
+
+test.describe("New Run: what the chosen pool's Macs offer", () => {
+  test("an offering pool enables macOS, and choosing it names the guest and starts the ask at the minimum", async ({ page }) => {
+    await macosSwitch(page, true);
+    await poolOffers(page, { offered: true, guest_os: "macOS 27.0.1 (26A434)", min_cpus: 4, min_memory_mib: 8192, harnesses: ["none"], runner: "mac-studio-07" });
+    const os = await openVMStep(page);
+    await expect(os.getByRole("button", { name: NR_MACHINE.OS_MACOS })).toBeEnabled();
+    await os.getByRole("button", { name: NR_MACHINE.OS_MACOS }).click();
+    await expect(os.getByText(NR_MACHINE.MACOS_ABOUT("macOS 27.0.1 (26A434)"))).toBeVisible();
+    await expect(os.getByText(NR_MACHINE.MACOS_SIZE("4", "8192"))).toBeVisible();
+  });
+
+  test("a pool of one Mac that is still preparing disables macOS and names that Mac", async ({ page }) => {
+    await macosSwitch(page, true);
+    await poolOffers(page, { offered: false, runner: "mac-studio-07", refusals: [{ runner: "mac-studio-07", why: "preparing", progress: 42, detail: "" }] });
+    const os = await openVMStep(page);
+    await expect(os.getByRole("button", { name: NR_MACHINE.OS_MACOS })).toBeDisabled();
+    await expect(os.getByText(NR_MACHINE.MACOS_PREPARING("mac-studio-07", 42))).toBeVisible();
+  });
+
+  test("a pool of several Macs, one of which offers no macOS VMs, gets the pool's line", async ({ page }) => {
+    await macosSwitch(page, true);
+    await poolOffers(page, { offered: false, refusals: [{ runner: "mac-studio-07", why: "not_offered", detail: "" }] });
+    const os = await openVMStep(page);
+    await expect(os.getByRole("button", { name: NR_MACHINE.OS_MACOS })).toBeDisabled();
+    await expect(os.getByText(NR_MACHINE.MACOS_POOL_NOT_OFFERED)).toBeVisible();
   });
 });
 
