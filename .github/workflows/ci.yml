@@ -1763,7 +1763,7 @@ jobs:
           pkgs=$(go list ./internal/macvm/... ./cmd/wardyn-macvm/ ./internal/vm/guestagent/ ./cmd/wardyn-guest-agent/) || fail=1
           [ -n "$pkgs" ] || fail=1
           for p in $pkgs; do
-            go build "$p" || fail=1
+            go build -o /dev/null "$p" || fail=1
             go vet "$p" || fail=1
           done
           exit "$fail"
@@ -1786,6 +1786,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: CGO_ENABLED=0 go build -tags docker -trimpath -o "$RUNNER_TEMP/wardyn-runnerd" ./cmd/wardyn-runnerd
       - name: Sign the helper ad hoc with its entitlement and read it back
+        id: sign
         if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
@@ -1810,8 +1811,9 @@ jobs:
       # The real postinstall, and the signed helper's ledger-setup it runs, under the runner's passwordless
       # sudo against a temp root, read back with BSD stat. %Mp%Lp, not %Lp alone: %Lp drops the sticky bit.
       # The roots sit under /private/tmp, so every directory the helper walks from / is root-owned.
+      # It runs the signed helper as root: only once the sign step proved that helper.
       - name: Package postinstall makes the admission ledger (real root, BSD tools)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.sign.outcome == 'success' }}
         run: |
           set -euo pipefail
           post=deploy/runner/macos/pkg-scripts/postinstall
