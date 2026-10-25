@@ -28,6 +28,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	macosguest "github.com/cjohnstoniv/wardyn/deploy/macos-guest"
+	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 )
 
 // Harness ids, as the harness catalog and placement know them. "none" ("Your
@@ -266,12 +267,6 @@ func onGuest(ctx context.Context, g ToolsGuest, in Stage2Input, o ToolsOptions) 
 	return res, err
 }
 
-// cltTrigger is the file softwareupdate looks for to offer the Command Line
-// Tools to a non-interactive caller. Apple does not document it (P2b).
-const cltTrigger = "/tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress"
-
-const cltGit = "/Library/Developer/CommandLineTools/usr/bin/git"
-
 func installTools(ctx context.Context, g ToolsGuest, o ToolsOptions) (ToolsResult, error) {
 	if o.HTTP == nil {
 		o.HTTP = http.DefaultClient
@@ -330,7 +325,11 @@ func installTools(ctx context.Context, g ToolsGuest, o ToolsOptions) (ToolsResul
 }
 
 // installCLT installs the Command Line Tools through softwareupdate, the
-// non-interactive route Homebrew's installer takes, and checks git runs.
+// non-interactive route Homebrew's installer takes, and checks git runs. Every
+// command it issues is one the guest agent's tools mode allows as root
+// (guestagent.ToolsExecAllowed); the trigger file is the one softwareupdate
+// looks for before it offers the Tools to a non-interactive caller, which Apple
+// does not document (P2b).
 func installCLT(ctx context.Context, g ToolsGuest) error {
 	run := func(argv ...string) (string, error) {
 		out, exit, err := g.Run(ctx, argv)
@@ -339,10 +338,12 @@ func installCLT(ctx context.Context, g ToolsGuest) error {
 		}
 		return out, err
 	}
-	if _, err := run("/usr/bin/touch", cltTrigger); err != nil {
+	if _, err := run("/usr/bin/touch", guestagent.MacCLTTrigger); err != nil {
 		return err
 	}
-	defer func() { _, _, _ = g.Run(context.WithoutCancel(ctx), []string{"/bin/rm", "-f", cltTrigger}) }()
+	defer func() {
+		_, _, _ = g.Run(context.WithoutCancel(ctx), []string{"/bin/rm", "-f", guestagent.MacCLTTrigger})
+	}()
 	list, err := run("/usr/sbin/softwareupdate", "-l")
 	if err != nil {
 		return err
@@ -354,7 +355,7 @@ func installCLT(ctx context.Context, g ToolsGuest) error {
 	if _, err := run("/usr/sbin/softwareupdate", "-i", label); err != nil {
 		return err
 	}
-	_, err = run(cltGit, "--version")
+	_, err = run(guestagent.CLTGitArgv...)
 	return err
 }
 

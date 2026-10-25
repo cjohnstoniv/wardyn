@@ -19,9 +19,19 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   refused because it cannot reach the Mac's desktop (over SSH, under sudo, or with no one signed in) is
   `no_desktop`, with the state `failed`; before, only the error text said so. A console that does not know the code
   shows the error text as before.
+- A Linux or macOS VM run now refuses a new connection on a granted port other than 80 once it has 1,024 such
+  connections open at once, and reports the refusal through its denial report with the reason `tunnel-limit`; the cap
+  does not evict existing connections, and lower process or container resource limits can bind first. The relay now
+  sends TCP keepalive probes toward both the guest and the proxy, so a peer that vanished is noticed; the
+  proxy-to-origin leg is unchanged (#3489).
 
 ### Fixed
 
+- A Linux VM whose guest agent never becomes ready before the boot timeout now reports the last error the agent
+  gave (for example a refusal) instead of only the context deadline (#3495).
+- The host's connection to a desktop VM's guest agent no longer keeps every connection it has ever redialled, and
+  reads at most 64 KiB of response headers from the guest; a frame cut off after its header now reads as an unexpected
+  end of stream rather than a clean one (#3388).
 - A Kubernetes run whose proxy container is running but never becomes ready now fails at the start deadline with a line
   naming the readiness probe and the proxy image, and saying to check the proxy's log and connectivity; on a runner it
   adds that the proxy may be waiting for its first run-token renewal with the organisation (#3612).
