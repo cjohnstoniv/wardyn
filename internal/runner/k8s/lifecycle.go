@@ -92,6 +92,23 @@ func waitingDetail(pod *corev1.Pod) string {
 	return ""
 }
 
+// proxyNotReadyDetail is the extra start-failure line for a proxy container that is Running but not
+// Ready when the start deadline passes, else "": the readiness probe never passed, and an older proxy
+// image that does not answer it is the usual cause. image is named when it is known.
+func proxyNotReadyDetail(pod *corev1.Pod, image string) string {
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.Name != proxyContainerName || cs.State.Running == nil || cs.Ready {
+			continue
+		}
+		line := fmt.Sprintf("the proxy is running but its readiness probe (a connection to port %d) never passed; a proxy image older than this runner may not answer it", runner.ProxyListenPort)
+		if image != "" {
+			line += " (image " + image + ")"
+		}
+		return line
+	}
+	return ""
+}
+
 // waitingReason is what a starting pod is waiting ON, in one line, and unlike
 // waitingDetail it always has an answer: a pod NO NODE TOOK has no
 // ContainerStatuses, so it falls back to the PodScheduled condition. Same

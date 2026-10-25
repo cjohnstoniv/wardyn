@@ -706,7 +706,11 @@ func (d *Driver) waitPodIP(ctx context.Context, clock *startClock, podName strin
 	if errors.Is(err, context.DeadlineExceeded) && lastPod != nil {
 		// A container's own Waiting reason first: podStuckReason reads only the
 		// pod, and would call an init-blocked pod one "with no container status".
-		if why := cmp.Or(waitingDetail(lastPod), podStuckReason(lastPod)); why != "" {
+		why := cmp.Or(waitingDetail(lastPod), podStuckReason(lastPod))
+		if line := proxyNotReadyDetail(lastPod, d.cfg.ProxyImage); line != "" {
+			why = strings.Join(slices.DeleteFunc([]string{why, line}, func(s string) bool { return s == "" }), "; ")
+		}
+		if why != "" {
 			return "", fmt.Errorf("%w (%s)", err, why)
 		}
 	}
