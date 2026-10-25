@@ -329,3 +329,60 @@ func TestRelayDropsOversizedFrames(t *testing.T) {
 		t.Fatal("an oversized frame length did not end the connection")
 	}
 }
+
+// loopbackPair returns the two ends of a TCP connection.
+func loopbackPair(t *testing.T) (*net.TCPConn, *net.TCPConn) {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	acc := make(chan net.Conn, 1)
+	go func() { c, _ := l.Accept(); acc <- c }()
+	c, err := net.Dial("tcp", l.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := <-acc
+	t.Cleanup(func() { _ = c.Close(); _ = s.Close() })
+	return c.(*net.TCPConn), s.(*net.TCPConn)
+}
+
+// An opaque tunnel with no byte in either direction is closed once the idle
+// bound passes; traffic in either direction keeps it open.
+func TestSpliceClosesASilentTunnelAfterTheIdleBound(t *testing.T) {
+	old := opaqueIdle
+	opaqueIdle = 300 * time.Millisecond
+	t.Cleanup(func() { opaqueIdle = old })
+
+	guest, gc := loopbackPair(t) // guest is the VM's end; gc the relay's end
+	proxy, pc := loopbackPair(t) // pc is the relay's end; proxy the far end
+	done := make(chan struct{})
+	go func() { splice(gc, pc); close(done) }()
+
+	// A byte every 100ms from the far end only, for twice the bound: still open.
+	buf := make([]byte, 1)
+	for range 6 {
+		if _, err := proxy.Write([]byte("x")); err != nil {
+			t.Fatal(err)
+		}
+		_ = guest.SetReadDeadline(time.Now().Add(time.Second))
+		if _, err := io.ReadFull(guest, buf); err != nil {
+			t.Fatalf("tunnel closed while carrying traffic: %v", err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	select {
+	case <-done:
+		t.Fatal("tunnel closed while carrying traffic")
+	default:
+	}
+
+	// Then silence: the splice must end by itself.
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a silent tunnel stayed open past the idle bound")
+	}
+}
