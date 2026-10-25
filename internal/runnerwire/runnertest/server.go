@@ -212,15 +212,18 @@ func (s *Server) refMethod(ctx context.Context, method string, args json.RawMess
 	case runnerwire.MethodStatus:
 		return s.sub.Status(ctx, ref)
 	case runnerwire.MethodStop:
-		return nil, s.sub.StopSandbox(ctx, ref)
+		err = s.sub.StopSandbox(ctx, ref)
+		return runnerwire.TeardownReply(s.sub, ref), err
 	case runnerwire.MethodKill:
-		return nil, s.sub.KillSandbox(ctx, ref)
+		err = s.sub.KillSandbox(ctx, ref)
+		return runnerwire.TeardownReply(s.sub, ref), err
 	case runnerwire.MethodEnd:
 		e, ok := s.sub.(runner.SandboxEnder)
 		if !ok {
 			return nil, runner.ErrEndUnsupported
 		}
-		return nil, e.EndSandbox(ctx, ref)
+		err = e.EndSandbox(ctx, ref)
+		return runnerwire.TeardownReply(s.sub, ref), err
 	case runnerwire.MethodPauseAgent, runnerwire.MethodResumeAgent:
 		p, ok := s.sub.(runner.AgentPauser)
 		if !ok {
@@ -465,14 +468,14 @@ func (s *Server) sweep(ctx context.Context, args json.RawMessage) (any, error) {
 	if a.Remove == nil {
 		var seen []uuid.UUID
 		_, err := sw.SweepOrphanedSandboxes(ctx, a.MinAge, func(id uuid.UUID) bool { seen = append(seen, id); return false })
-		return runnerwire.SweepResult{Candidates: seen}, err
+		return runnerwire.SweepResult{Candidates: seen, MacOSVMDisks: runnerwire.SweepDisks(s.sub)}, err
 	}
 	rm := map[uuid.UUID]bool{}
 	for _, id := range a.Remove {
 		rm[id] = true
 	}
 	n, err := sw.SweepOrphanedSandboxes(ctx, a.MinAge, func(id uuid.UUID) bool { return rm[id] })
-	return runnerwire.SweepResult{Removed: n}, err
+	return runnerwire.SweepResult{Removed: n, MacOSVMDisks: runnerwire.SweepDisks(s.sub)}, err
 }
 
 type (

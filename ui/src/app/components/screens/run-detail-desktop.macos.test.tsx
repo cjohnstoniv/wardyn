@@ -25,6 +25,7 @@ import { OperatorProvider } from "../wardyn/operator-context";
 import { UI_APPS_LANE } from "../wardyn/copy";
 import { DESKTOP } from "../wardyn/copy/desktop";
 import { aheadByHours } from "../../lib/test-clock";
+import { shortTime } from "../../lib/format";
 
 const OWNER = "alice@example.com";
 const run: RunDetail = {
@@ -111,12 +112,24 @@ describe("ConnectSSHCard: macOS desktop", () => {
   it.each<[frame: string, disk: NonNullable<MacOSRunFacts["disk"]>, line: string]>([
     ["9", { state: "removing" }, DESKTOP.diskRemoving],
     ["10", { state: "removed", at: "14:32" }, DESKTOP.diskRemoved("14:32")],
-    ["11", { state: "failed", reason: "the run dir is still in use" }, DESKTOP.diskRemoveFailed("the run dir is still in use")],
+    ["11", { state: "failed", reason: DESKTOP.diskReasonInUse }, DESKTOP.diskRemoveFailed(DESKTOP.diskReasonInUse)],
   ])("frame %s: at the run's end the block is Off and carries the disk line alone", async (_frame, disk, line) => {
     renderCard({ disk }, { state: "COMPLETED" });
     const d = await desk();
     expect(within(d).getByText(DESKTOP.statusOff)).toBeInTheDocument();
     expect(within(d).getByText(DESKTOP.kindMacOS)).toBeInTheDocument();
+    expect(within(d).getByText(line)).toBeInTheDocument();
+    expect(within(d).queryByRole("button")).toBeNull();
+  });
+
+  const removedAt = aheadByHours(-1);
+  it.each<[frame: string, disk: NonNullable<RunDetail["macos_disk"]>, line: string]>([
+    ["10", { state: "removed", at: removedAt }, DESKTOP.diskRemoved(shortTime(removedAt))],
+    ["11", { state: "kept", reason: "helper_alive" }, DESKTOP.diskRemoveFailed(DESKTOP.diskReasonInUse)],
+  ])("frame %s: the disk line comes from the run's own macos_disk, with no prop", async (_frame, disk, line) => {
+    renderCard(undefined, { state: "COMPLETED", macos_disk: disk });
+    const d = await desk();
+    expect(within(d).getByText(DESKTOP.statusOff)).toBeInTheDocument();
     expect(within(d).getByText(line)).toBeInTheDocument();
     expect(within(d).queryByRole("button")).toBeNull();
   });

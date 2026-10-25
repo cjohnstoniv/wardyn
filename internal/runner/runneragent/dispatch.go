@@ -314,6 +314,9 @@ func (d *Dispatcher) refCall(ctx context.Context, method string, args json.RawMe
 	if err := d.cfg.AfterRefCall(persist, method, ref, execID, generation); err != nil {
 		return nil, err
 	}
+	if method == runnerwire.MethodStop || method == runnerwire.MethodKill || method == runnerwire.MethodEnd {
+		result = runnerwire.TeardownReply(d.cfg.Substrate, ref) // the run's macOS VM disk report, if any
+	}
 	return result, nil
 }
 
@@ -456,12 +459,12 @@ func (d *Dispatcher) sweep(ctx context.Context, args json.RawMessage) (any, erro
 			slog.WarnContext(ctx, "runner: orphan sweep listed its candidates with an error", slog.String("err", err.Error()))
 			err = nil
 		}
-		return runnerwire.SweepResult{Candidates: candidates}, err
+		return runnerwire.SweepResult{Candidates: candidates, MacOSVMDisks: runnerwire.SweepDisks(d.cfg.Substrate)}, err
 	}
 	remove := make(map[uuid.UUID]bool, len(a.Remove))
 	for _, id := range a.Remove {
 		remove[id] = true
 	}
 	n, err := sweep.SweepOrphanedSandboxes(ctx, a.MinAge, func(id uuid.UUID) bool { return remove[id] })
-	return runnerwire.SweepResult{Removed: n}, err
+	return runnerwire.SweepResult{Removed: n, MacOSVMDisks: runnerwire.SweepDisks(d.cfg.Substrate)}, err
 }
