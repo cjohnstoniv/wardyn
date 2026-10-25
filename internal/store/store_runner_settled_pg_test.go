@@ -199,11 +199,14 @@ func TestPG_RunnerSpoolAfterAcceptedExitIsAuditedHistory(t *testing.T) {
 // An agent exit for a run the org already settled is acknowledged with no
 // transition, and nothing is left for the exit sweeper.
 func TestPG_RunnerExitAfterSettlementAcknowledgedWithoutTransition(t *testing.T) {
-	for _, scenario := range []string{"lease-ended", "killed", "completed", "stopped"} {
+	for _, scenario := range []string{"lease-ended", "killed", "completed", "stopped", "failed-ref-cleared"} {
 		t.Run(scenario, func(t *testing.T) {
 			f := newSettledFixture(t)
 			ctx := context.Background()
 			switch scenario {
+			case "failed-ref-cleared":
+				// A finalize cleared the ref; the runner's exit still names it.
+				f.exec(t, `UPDATE agent_runs SET state='FAILED',sandbox_ref='' WHERE id=$1`)
 			case "lease-ended":
 				f.exec(t, `UPDATE agent_runs SET ends_at=now()-interval '1 minute' WHERE id=$1`)
 				if ok, err := f.st.MarkRunEnded(ctx, f.run.ID, time.Now()); err != nil || !ok {
