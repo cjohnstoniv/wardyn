@@ -93,12 +93,18 @@ const stage2HelperPID = 4343
 // attached is closed once the boot has its network.
 func liveStage2Job(t *testing.T, r *macLedgerRig, m *macOSVMs) (e admission.Entry, attached <-chan error) {
 	t.Helper()
+	return liveStage2JobOf(t, r, m, admission.KindToolsUpdate)
+}
+
+// liveStage2JobOf is liveStage2Job for a job of kind.
+func liveStage2JobOf(t *testing.T, r *macLedgerRig, m *macOSVMs, kind admission.Kind) (e admission.Entry, attached <-chan error) {
+	t.Helper()
 	r.host.setProcs(admission.Proc{PID: os.Getpid(), UID: 501, Start: 3, Name: "wardyn-runnerd"},
 		admission.Proc{PID: stage2HelperPID, UID: 501, Start: 9, Name: admission.HelperProcess})
 	prevPoll := jobSockPoll
 	jobSockPoll = 10 * time.Millisecond
 	t.Cleanup(func() { jobSockPoll = prevPoll })
-	e, err := m.ledger.Admit(admission.Request{Kind: admission.KindToolsUpdate, GuestCPUs: 4, GuestMemory: 8 << 30,
+	e, err := m.ledger.Admit(admission.Request{Kind: kind, GuestCPUs: 4, GuestMemory: 8 << 30,
 		DiskReserve: admission.RunDiskReservation(macvm.BaseDiskBytes), OwnerPID: os.Getpid(), OwnerStart: 3})
 	if err != nil {
 		t.Fatal(err)

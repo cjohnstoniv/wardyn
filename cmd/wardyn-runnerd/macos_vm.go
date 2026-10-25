@@ -99,6 +99,14 @@ type macOSVMs struct {
 	prepNet    func(ctx context.Context, entryID string) (*os.File, func(), error)
 	prepSweep  func(ctx context.Context, keep []string) (int, error)
 	prepRemove func(ctx context.Context, entryID string) error
+	// dockerUp says Docker answers (the check a caps send fails on); nil is unknown. dockerWait marks
+	// the jobs whose stage-2 network could not start while it did not (under mu): base() says wait docker.
+	dockerUp   func(ctx context.Context) bool
+	dockerWait map[string]bool
+	// limitsFile, when set, is where setPerRunLimits saves the organisation's limits for `macos-vm prepare`;
+	// limitsWarn logs a failed save once.
+	limitsFile string
+	limitsWarn sync.Once
 	// version is the guest agent this runner ships; a base whose agent differs needs a tools update.
 	version string
 	// toolsUpdate starts that update (design 3.4, guest agent drift) for the base whose manifest it is
@@ -123,6 +131,7 @@ type macOSVMs struct {
 // macOSVMSetup is what openMacOSVMs reads.
 type macOSVMSetup struct {
 	ledgerDir, root, runnerID, version string
+	limitsFile                         string
 	uid                                int
 	dockerMemory, perRunMemory         uint64
 	host                               admission.Host
@@ -135,7 +144,7 @@ type macOSVMSetup struct {
 // ledger itself checks the directory, its ancestors and its lock are root's, and creates or repairs
 // none of them) makes a handle that offers no macOS VM and names the fix.
 func openMacOSVMs(s macOSVMSetup) *macOSVMs {
-	m := &macOSVMs{host: s.host, layout: macvm.Layout{Root: s.root}, runnerID: s.runnerID, uid: s.uid, version: s.version, perRunMemory: s.perRunMemory,
+	m := &macOSVMs{host: s.host, layout: macvm.Layout{Root: s.root}, runnerID: s.runnerID, uid: s.uid, version: s.version, perRunMemory: s.perRunMemory, limitsFile: s.limitsFile,
 		defaultPerRunMemory: s.perRunMemory, interval: macOSVMRecompute, kick: make(chan struct{}, 1)}
 	if s.ledgerDir != admission.DefaultDir {
 		m.ledgerDir = s.ledgerDir
@@ -285,6 +294,7 @@ func (m *macOSVMs) build(last *runnerwire.MacVMCaps) runnerwire.MacVMCaps {
 	}
 	m.reconcilePrepare()
 	m.watchJobs()
+	m.pruneDockerWait()
 	if m.reclaim != nil {
 		if err := m.reclaim(); err != nil {
 			slog.Warn("macOS VM ledger: reconcile", "error", err.Error())
@@ -294,6 +304,7 @@ func (m *macOSVMs) build(last *runnerwire.MacVMCaps) runnerwire.MacVMCaps {
 	c.Base = base
 	if base.State != runnerwire.MacVMBaseReady {
 		m.reasonDiskShort(&c)
+		m.reasonSlotLeaked(&c)
 		return c
 	}
 	c.MinCPUs, c.MinMemoryMiB = man.MinCPUs, int(man.MinMemoryMiB)
@@ -305,6 +316,7 @@ func (m *macOSVMs) build(last *runnerwire.MacVMCaps) runnerwire.MacVMCaps {
 		c.Refusal, c.Reason = refusal, belowReason
 		return c
 	}
+	m.reasonSlotLeaked(&c)
 	m.reasonsWhenReady(&c, man, thermal)
 	off, err := m.ledger.Offer(m.guestMemory(man), admission.RunDiskReservation(cmp.Or(man.DiskBytes, macvm.BaseDiskBytes)))
 	switch {
@@ -370,6 +382,7 @@ func (m *macOSVMs) setPerRunLimits(cpuMillis, memoryMiB int64) {
 		m.perRunCPUs = int(cpuMillis / 1000)
 	}
 	m.mu.Unlock()
+	m.saveLimits(cpuMillis, memoryMiB)
 	m.changed()
 }
 
@@ -390,6 +403,9 @@ func (m *macOSVMs) base() (macvm.Manifest, runnerwire.MacVMBase) {
 		scanPrepare(m.layout.PrepareLog()).apply(&b, true)
 		if setupCodeWaiting(m.layout.Root) != "" {
 			b.Wait = runnerwire.MacVMWaitSetupByHand
+		}
+		if m.pruneDockerWait() {
+			b.Wait = runnerwire.MacVMWaitDocker
 		}
 	case err == nil && man.State == macvm.BaseUpdateNeeded:
 		b.State = runnerwire.MacVMBaseUpdateNeeded

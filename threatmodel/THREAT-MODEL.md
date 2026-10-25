@@ -2930,6 +2930,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     - In the guest, tools that use the macOS keychain do not trust the run's proxy certificate, so hosts the proxy inspects show certificate errors there.
     - The setup account and its random password stay in every run's guest. No one holds the password after preparing, and Remote Login is proved off. The guest may also hold it in its auto-login file until stage 1 overwrites that. A one-time code from a setup by hand is replaced by stage 1's first step.
     - A Mac runner reports its macOS VM status to its own organisation as fixed codes and numbers: the preparing step, percent and download rate; a wait, failure or host-check code with free GB; and whether it runs in a GUI login session, as yes or no. No user or account name is sent. The base's error is the one free text: the runner replaces its login's home folder with `~`, but an error from Apple's framework, `softwareupdate` or the guest may still name another path.
+    - The macOS VM base's pinned guest tools are checked against SHA-256 values compiled into the runner, so the remaining trust is the supply chain at the time each pin was chosen.
 
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 

@@ -336,7 +336,7 @@ func TestLeakedLowersMaxNeverTombstonedClearsOnNewBoot(t *testing.T) {
 	r := newRig(t, h)
 	l := r.open(t, 501, "r")
 	other := r.open(t, 502, "o")
-	if _, err := l.AddLeaked(10, 1); err != nil {
+	if _, err := l.AddLeaked("", 10, 1); err != nil {
 		t.Fatal(err)
 	}
 	if o := offer(t, l, 8*gib); o.Max != 1 {
@@ -985,3 +985,52 @@ func TestTombstoneDiskDebt(t *testing.T) {
 
 // setPerm replaces the permission bits of a Stat_t mode (uint16 on darwin).
 func setPerm[T ~uint16 | ~uint32](m *T, p uint32) { *m = (*m &^ 0o7777) | T(p) }
+
+// The run the framework refused is still counted when the leak is recorded, so AddLeaked leaves its own
+// entry out of the guard: with the cap at 2, the refused run and one other VM are one leaked slot; with a
+// third counted entry the refusal is accounted for.
+func TestAddLeakedLeavesOutTheRefusedRunsOwnEntry(t *testing.T) {
+	r := newRig(t, bigMac())
+	l := r.open(t, 501, "r")
+	other := r.open(t, 502, "o")
+	own, err := l.Admit(runReq(8 * gib))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := other.Admit(runReq(8 * gib)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.AddLeaked("", 10, 1); !IsRefusal(err) {
+		t.Fatalf("with no own entry, two counted at the cap: %v, want a refusal", err)
+	}
+	if _, err := l.AddLeaked(own.ID, 10, 1); err != nil {
+		t.Fatalf("own entry and one other counted: %v", err)
+	}
+	// The run's rollback releases its entry; the leaked slot and the other VM hold both.
+	if err := l.Release(own.ID, Destroyed{Stopped: true}); err != nil {
+		t.Fatal(err)
+	}
+	if o := offer(t, l, 8*gib); o.Max != 0 {
+		t.Fatalf("offer with a leaked slot and another VM: %+v, want 0", o)
+	}
+	// Own entry plus two others counted (the other VM and the leaked slot already recorded): the refusal is
+	// accounted for.
+	r2 := newRig(t, bigMac())
+	a, b := r2.open(t, 501, "r"), r2.open(t, 502, "o")
+	e, err := a.Admit(runReq(4 * gib))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Admit(runReq(4 * gib)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.AddLeaked(e.ID, 10, 1); err != nil {
+		t.Fatalf("own plus one: %v", err)
+	}
+	if _, err := a.AddLeaked(e.ID, 10, 1); !IsRefusal(err) {
+		t.Fatalf("own plus two others: %v, want a refusal", err)
+	}
+	if _, err := a.AddLeaked("not-counted", 10, 1); !IsRefusal(err) {
+		t.Fatalf("an own id that is not counted excludes nothing: %v, want a refusal", err)
+	}
+}

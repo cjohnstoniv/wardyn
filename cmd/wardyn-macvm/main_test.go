@@ -223,6 +223,46 @@ func TestRunRefusedWithoutEntry(t *testing.T) {
 	}
 }
 
+// leaked writes one leaked-slot entry for the runner, leaving the refused run's own entry out of the cap
+// check: the run and one other VM are the cap's two, and the framework's refusal is then a leaked slot.
+func TestLeakedRecordsOneEntryForTheRunner(t *testing.T) {
+	ledger := makeLedger(t, t.TempDir())
+	l, err := admission.Open(admission.Config{Dir: ledger, UID: os.Getuid(), RunnerID: "r1", Host: host{}, Fstat: rootFstat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := admission.Request{Kind: admission.KindRun, GuestMemory: 4 << 30, DiskReserve: 1 << 30, OwnerPID: os.Getpid(), OwnerStart: 7}
+	own, err := l.Admit(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Admit(req); err != nil {
+		t.Fatal(err)
+	}
+	d, _, _ := testDeps(&macvmtest.Engine{})
+	d.host = host{}
+	if err := leaked(macvm.RunConfig{RunnerID: "r1", LedgerEntry: own.ID, LedgerDir: ledger}, d); err != nil {
+		t.Fatal(err)
+	}
+	var kinds []admission.Kind
+	es, _ := l.Counted()
+	for _, e := range es {
+		kinds = append(kinds, e.Kind)
+		if e.Kind == admission.KindLeaked && e.RunnerID != "r1" {
+			t.Fatalf("leaked entry for runner %q", e.RunnerID)
+		}
+	}
+	n := 0
+	for _, k := range kinds {
+		if k == admission.KindLeaked {
+			n++
+		}
+	}
+	if n != 1 || len(es) != 3 {
+		t.Fatalf("counted entries %v, want the two runs and one leaked slot", kinds)
+	}
+}
+
 // prepare without an entry says what prepare is missing, not run.json.
 func TestPrepareRefusedWithoutEntry(t *testing.T) {
 	d, _, errb := testDeps(&macvmtest.Engine{})

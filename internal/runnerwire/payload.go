@@ -274,6 +274,7 @@ const (
 	MacVMReasonMemoryBelowMinimum = "memory_below_minimum"
 	MacVMReasonCPUBelowMinimum    = "cpu_below_minimum"
 	MacVMReasonDiskShort          = "disk_short"
+	MacVMReasonSlotLeaked         = "slot_leaked"
 	MacVMReasonLowMemory          = "low_memory"
 	MacVMReasonTooHot             = "too_hot"
 )
@@ -328,6 +329,7 @@ const (
 	MacVMWaitBattery       = "battery"
 	MacVMWaitDownloadRetry = "download_retry"
 	MacVMWaitSetupByHand   = "setup_by_hand"
+	MacVMWaitDocker        = "docker"
 
 	MacVMFailureDownload = "download"
 	MacVMFailureInstall  = "install"

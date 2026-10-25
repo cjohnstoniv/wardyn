@@ -261,7 +261,7 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 2. Add the `MacOSVM` key to the profile, set to `true`.
 3. Push the posture file to `/Library/Application Support/Wardyn/posture.json`, with `mdm_managed` true.
 4. Have a security operator run `wardyn runner trust <runner-id> managed_device --reason "<why>"`.
-5. Ask the Mac's person to run `wardyn-runnerd macos-vm prepare --per-run-cpu <CPUs> --per-run-memory <GB>` (the runner's per-run limits) while on power, with Docker running.
+5. Ask the Mac's person to run `wardyn-runnerd macos-vm prepare` (it uses the runner's saved per-run limits) while on power, with Docker running.
 
 - The Mac offers macOS VMs only while someone is logged in. With FileVault on, that is after a login following each restart.
 - macOS VMs need a pool where every runner offers them; a mixed pool refuses them. This matches Linux VMs.

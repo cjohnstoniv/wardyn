@@ -176,6 +176,7 @@ func cmdRun(ctx context.Context, args []string, d deps) int {
 			}
 			return claim(c, d)
 		},
+		Leaked:        func(c macvm.RunConfig) error { return leaked(c, d) },
 		HoldIdleSleep: holdIdleSleep,
 	})
 	if err != nil && !errors.Is(err, context.Canceled) {
@@ -189,21 +190,40 @@ func cmdRun(ctx context.Context, args []string, d deps) int {
 // claim records this helper in its admission entry before the VM is built.
 // Every macOS VM holds one; callers refuse a missing entry in their own words.
 func claim(c macvm.RunConfig, d deps) error {
-	host := d.host
-	dir := c.LedgerDir
-	if dir == "" {
-		dir = admission.DefaultDir
-	}
-	l, err := admission.Open(admission.Config{Dir: dir, UID: os.Getuid(), RunnerID: c.RunnerID, Host: host, Fstat: d.fstat})
-	if err != nil {
-		return err
-	}
-	start, err := admission.Self(host, os.Getpid())
+	l, start, err := openRunLedger(c, d)
 	if err != nil {
 		return err
 	}
 	_, err = l.ClaimHelper(c.LedgerEntry, os.Getpid(), start)
 	return err
+}
+
+// leaked records the framework slot a refused start left behind (the VM limit, code 6, while the ledger
+// counts fewer VMs than the cap). The refused run's own entry, still counted, is left out of that check.
+func leaked(c macvm.RunConfig, d deps) error {
+	l, start, err := openRunLedger(c, d)
+	if err != nil {
+		return err
+	}
+	_, err = l.AddLeaked(c.LedgerEntry, os.Getpid(), start)
+	return err
+}
+
+// openRunLedger opens the run's ledger as this runner's helper, and reads this process's start time.
+func openRunLedger(c macvm.RunConfig, d deps) (*admission.Ledger, int64, error) {
+	dir := c.LedgerDir
+	if dir == "" {
+		dir = admission.DefaultDir
+	}
+	l, err := admission.Open(admission.Config{Dir: dir, UID: os.Getuid(), RunnerID: c.RunnerID, Host: d.host, Fstat: d.fstat})
+	if err != nil {
+		return nil, 0, err
+	}
+	start, err := admission.Self(d.host, os.Getpid())
+	if err != nil {
+		return nil, 0, err
+	}
+	return l, start, nil
 }
 
 // holdIdleSleep holds an idle-sleep assertion while the VM runs (macOS only).

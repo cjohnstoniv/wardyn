@@ -49,7 +49,7 @@ func newMacOSVMCommand() *cobra.Command {
 			return nil, "", err
 		}
 		m := openMacOSVMs(macOSVMSetup{ledgerDir: admission.DefaultDir, root: root, runnerID: id.RunnerID.String(), uid: os.Getuid(),
-			host: admission.SystemHost(), owner: fileOwner})
+			host: admission.SystemHost(), owner: fileOwner, limitsFile: macOSVMLimitsFile(stateDir)})
 		if m.helper, err = macVMHelperPath(); err != nil {
 			return nil, "", err
 		}
@@ -82,14 +82,15 @@ func newMacOSVMCommand() *cobra.Command {
 	var keep, newImage bool
 	prepare := &cobra.Command{Use: "prepare", Short: "Build this Mac's macOS base image from Apple's restore image (hours; it continues in the background)", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if cpu < 1 || memGB < 1 {
-				return errors.New("pass --per-run-cpu and --per-run-memory: the runner's per-run limits, which prepare's own VM uses and never raises")
-			}
 			m, runnerID, err := open(cmd)
 			if err != nil {
 				return err
 			}
-			err = m.startPrepare(cmd.Context(), prepareArgs{helper: m.helper, runnerID: runnerID, cpus: int(cpu), memoryMiB: uint64(memGB) << 10, keepIPSW: keep, newImage: newImage})
+			cpus, memMiB, err := prepareLimits(m.limitsFile, cpu, memGB)
+			if err != nil {
+				return err
+			}
+			err = m.startPrepare(cmd.Context(), prepareArgs{helper: m.helper, runnerID: runnerID, cpus: cpus, memoryMiB: memMiB, keepIPSW: keep, newImage: newImage})
 			if errors.Is(err, errMacOSBaseReady) {
 				fmt.Fprintln(cmd.OutOrStdout(), "This Mac's macOS base is ready; nothing to prepare. `--new-image` builds a new one from Apple's newest restore image.")
 				return nil
@@ -100,8 +101,8 @@ func newMacOSVMCommand() *cobra.Command {
 			fmt.Fprintf(cmd.OutOrStdout(), "Preparing this Mac's macOS base in the background; progress is in %s and in `wardyn-runnerd macos-vm status`.\n", m.layout.PrepareLog())
 			return nil
 		}}
-	prepare.Flags().Float64Var(&cpu, "per-run-cpu", 0, "the runner's per-run CPUs")
-	prepare.Flags().Int64Var(&memGB, "per-run-memory", 0, "the runner's per-run memory in GB")
+	prepare.Flags().Float64Var(&cpu, "per-run-cpu", 0, "the runner's per-run CPUs (default: the limit its organisation last sent)")
+	prepare.Flags().Int64Var(&memGB, "per-run-memory", 0, "the runner's per-run memory in GB (default: the limit its organisation last sent)")
 	prepare.Flags().BoolVar(&keep, "keep-ipsw", false, "keep Apple's restore image after the base is ready")
 	prepare.Flags().BoolVar(&newImage, "new-image", false, "build a new base from Apple's newest restore image even when one is ready, and swap it in")
 	remove := &cobra.Command{Use: "remove", Short: "Delete this Mac's macOS base images and download cache", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {

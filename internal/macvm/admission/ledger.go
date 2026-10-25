@@ -75,6 +75,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -520,15 +521,21 @@ func (l *Ledger) Admit(req Request) (Entry, error) {
 
 // AddLeaked records a framework slot the ledger cannot account for: the
 // framework refused a start while fewer entries than the cap were counted.
-// It holds one slot (no memory or disk) until the Mac restarts.
-func (l *Ledger) AddLeaked(ownerPID int, ownerStart int64) (Entry, error) {
+// It holds one slot (no memory or disk) until the Mac restarts. own is the
+// entry of the start the framework refused: it is still counted then, and
+// the refusal is checked without it. "" excludes nothing.
+func (l *Ledger) AddLeaked(own string, ownerPID int, ownerStart int64) (Entry, error) {
 	var out Entry
 	err := l.withLock(func() error {
 		v, err := l.load()
 		if err != nil {
 			return err
 		}
-		if l.usage(v).count >= l.c.HostCap {
+		count := l.usage(v).count
+		if own != "" && slices.ContainsFunc(v.counted, func(e Entry) bool { return e.ID == own }) {
+			count--
+		}
+		if count >= l.c.HostCap {
 			return &Refusal{Reason: "the framework's refusal is accounted for by counted entries"}
 		}
 		out = Entry{Kind: KindLeaked, State: StateLeaked, RunnerID: l.c.RunnerID, Slot: -1,

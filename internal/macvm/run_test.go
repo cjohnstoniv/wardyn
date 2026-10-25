@@ -9,7 +9,9 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -369,5 +371,53 @@ func TestDialControlProtoMismatch(t *testing.T) {
 	var pe *macvm.ErrProto
 	if !errors.As(err, &pe) || pe.Helper != 99 {
 		t.Fatalf("got %v, want ErrProto{99}", err)
+	}
+}
+
+// IsVMLimit matches the framework's VM limit refusal by domain and code, nothing else.
+func TestIsVMLimit(t *testing.T) {
+	for _, tc := range []struct {
+		domain string
+		code   int
+		want   bool
+	}{{"VZErrorDomain", 6, true}, {"VZErrorDomain", 1, false}, {"NSPOSIXErrorDomain", 6, false}, {"", 6, false}} {
+		if got := macvm.IsVMLimit(tc.domain, tc.code); got != tc.want {
+			t.Errorf("IsVMLimit(%q, %d) = %v", tc.domain, tc.code, got)
+		}
+	}
+}
+
+// A start the framework refuses with its VM limit calls the Leaked hook once, with the run's config; any
+// other start error does not; a failing hook is logged and the run still returns the start error.
+func TestRunLeakedHook(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		startErr  error
+		hookErr   error
+		wantCalls int
+	}{
+		{"vm limit", fmt.Errorf("%w: boom", macvm.ErrVMLimit), nil, 1},
+		{"other error", errors.New("boom"), nil, 0},
+		{"hook fails", fmt.Errorf("%w: boom", macvm.ErrVMLimit), errors.New("ledger busy"), 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls []macvm.RunConfig
+			var logs bytes.Buffer
+			r := startRun(t, &macvmtest.Engine{StartErr: tc.startErr}, func(_ *macvm.RunConfig, o *macvm.RunOptions) {
+				o.Leaked = func(c macvm.RunConfig) error { calls = append(calls, c); return tc.hookErr }
+				o.Log = slog.New(slog.NewJSONHandler(&logs, nil))
+			})
+			r.attach(t)
+			err := <-r.done
+			if err == nil || !errors.Is(err, tc.startErr) {
+				t.Fatalf("Run returned %v, want the start error", err)
+			}
+			if len(calls) != tc.wantCalls || (len(calls) == 1 && calls[0].RunID != testRunID) {
+				t.Fatalf("Leaked calls: %+v, want %d", calls, tc.wantCalls)
+			}
+			if tc.hookErr != nil && !strings.Contains(logs.String(), "ledger busy") {
+				t.Fatalf("the hook's error was not logged: %s", logs.String())
+			}
+		})
 	}
 }

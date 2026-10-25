@@ -39,6 +39,10 @@ type RunOptions struct {
 	// in its admission entry (admission.Ledger.ClaimHelper) and does not
 	// start when that fails.
 	Claim func(RunConfig) error
+	// Leaked, if set, runs when the VM's start was refused with ErrVMLimit: the helper records the
+	// framework's slot the ledger cannot account for. Its failure is logged; the run still fails with the
+	// start error.
+	Leaked func(RunConfig) error
 	// SockFstat replaces fstat(2) in the socket directory checks (tests).
 	SockFstat func(fd int, name string) (unix.Stat_t, error)
 	// extraPorts are vsock ports this boot registers beyond a run's (tests
@@ -200,6 +204,11 @@ func (r *runner) run(ctx context.Context) error {
 	}
 	r.setState(StateStarting, "")
 	if err := m.Start(ctx); err != nil {
+		if errors.Is(err, ErrVMLimit) && r.o.Leaked != nil {
+			if lerr := r.o.Leaked(r.cfg); lerr != nil {
+				r.o.Log.Error("macvm: recording a leaked slot failed", "run_id", r.cfg.RunID, "err", lerr.Error())
+			}
+		}
 		r.setState(StateError, err.Error())
 		r.finish(nil, stopRequest{})
 		return fmt.Errorf("macvm: start VM: %w", err)

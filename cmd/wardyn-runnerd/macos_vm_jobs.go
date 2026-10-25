@@ -9,8 +9,10 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -84,6 +86,7 @@ func (m *macOSVMs) handNet(ctx context.Context, e admission.Entry) {
 			break
 		}
 		if !wait() || m.vmGone(e) {
+			m.markDockerWait(e.ID, false)
 			return
 		}
 	}
@@ -96,6 +99,8 @@ func (m *macOSVMs) handNet(ctx context.Context, e admission.Entry) {
 		attach, undo, err := m.prepNet(ctx, e.ID)
 		if err != nil {
 			slog.Warn("macOS VM base: the stage-2 network did not start", "error", err.Error())
+			// Docker being down is the one cause the drawer names; the next recompute tries again.
+			m.markDockerWait(e.ID, m.dockerUp != nil && !m.dockerUp(ctx))
 			return
 		}
 		err = m.sendJobNet(ctx, e.ID, attach)
@@ -106,6 +111,7 @@ func (m *macOSVMs) handNet(ctx context.Context, e admission.Entry) {
 			return
 		}
 	}
+	m.markDockerWait(e.ID, false)
 	for wait() {
 		if m.vmGone(e) {
 			if err := m.prepRemove(context.WithoutCancel(ctx), e.ID); err != nil {
@@ -114,6 +120,53 @@ func (m *macOSVMs) handNet(ctx context.Context, e admission.Entry) {
 			return
 		}
 	}
+}
+
+// markDockerWait sets or clears the job's mark (Docker was down when its stage-2 network was asked for),
+// and asks for a recompute when the mark changed, so the caps say so at once.
+func (m *macOSVMs) markDockerWait(id string, on bool) {
+	m.mu.Lock()
+	changed := m.dockerWait[id] != on
+	if on {
+		if m.dockerWait == nil {
+			m.dockerWait = map[string]bool{}
+		}
+		m.dockerWait[id] = true
+	} else {
+		delete(m.dockerWait, id)
+	}
+	m.mu.Unlock()
+	if changed {
+		m.changed()
+	}
+}
+
+// pruneDockerWait drops the marks of jobs whose helper has gone (their handler returns without clearing it
+// when Docker is down), and reports whether any job still waits for Docker.
+func (m *macOSVMs) pruneDockerWait() bool {
+	m.mu.Lock()
+	marked := slices.Collect(maps.Keys(m.dockerWait))
+	m.mu.Unlock()
+	if len(marked) == 0 {
+		return false
+	}
+	live := map[string]bool{}
+	for _, k := range []admission.Kind{admission.KindPrepare, admission.KindToolsUpdate} {
+		for _, e := range m.own(k) {
+			if e.HelperPID != 0 && !m.vmGone(e) {
+				live[e.ID] = true
+			}
+		}
+	}
+	any := false
+	for _, id := range marked {
+		if live[id] {
+			any = true
+		} else {
+			m.markDockerWait(id, false)
+		}
+	}
+	return any
 }
 
 // dialJob dials the job's ctl.sock in its checked socket directory (this login's, 0700, not a link).
