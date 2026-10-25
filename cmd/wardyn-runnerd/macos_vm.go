@@ -59,9 +59,6 @@ const (
 // in `macos-vm status`, and the caps carry no refusal of their own.
 const macOSVMLedgerDamaged = "This Mac's macOS VM ledger is missing or damaged. Reinstall the Wardyn runner package."
 
-// macOSVMNoHelper is why a runner with no helper beside it offers no macOS VM (log and status only).
-const macOSVMNoHelper = "This Mac's Wardyn runner has no macOS VM helper. Reinstall the Wardyn runner package."
-
 // macOSVMIdentity is the machine-identifier strategy every macOS VM run uses.
 const macOSVMIdentity = macvm.IdentityFresh
 
@@ -800,20 +797,6 @@ func macVMHelperPath() (string, error) {
 		exe = r
 	}
 	return filepath.Join(filepath.Dir(exe), "wardyn-macvm"), nil
-}
-
-// macHostOS is this Mac's build in the form a VM machine records, e.g. "macOS 27.0.1 (26A434)".
-func macHostOS() string {
-	v, err := exec.Command("/usr/bin/sw_vers", "-productVersion").Output()
-	if err != nil {
-		return ""
-	}
-	b, _ := exec.Command("/usr/bin/sw_vers", "-buildVersion").Output()
-	out := "macOS " + strings.TrimSpace(string(v))
-	if s := strings.TrimSpace(string(b)); s != "" {
-		out += " (" + s + ")"
-	}
-	return out
 }
 
 // remove deletes the bases and the download cache, never while this runner holds a VM. Prepare's log,
