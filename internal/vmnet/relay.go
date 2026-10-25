@@ -366,51 +366,18 @@ func accept(r *tcp.ForwarderRequest) *gonet.TCPConn {
 	return gonet.NewTCPConn(&wq, ep)
 }
 
-// opaqueIdle is how long an opaque tunnel may carry no byte in either direction
-// before the relay closes it. It is generous, so a quiet but live session (an
-// idle shell, a pooled database connection) is not cut, and a variable only so
-// tests can shorten it.
-var opaqueIdle = 30 * time.Minute
-
-// guestConn is the guest side of a tunnel: a stream with a write half-close.
-type guestConn interface {
-	net.Conn
-	CloseWrite() error
-}
-
-// idleReader restarts the tunnel's idle timer on every byte it reads.
-type idleReader struct {
-	r io.Reader
-	t *time.Timer
-}
-
-func (i idleReader) Read(p []byte) (int, error) {
-	n, err := i.r.Read(p)
-	if n > 0 {
-		i.t.Reset(opaqueIdle)
-	}
-	return n, err
-}
-
-// splice copies both ways, half-closing each side when the other finishes. A
-// tunnel with no byte in either direction for opaqueIdle is closed on both
-// sides, which ends both copies.
-func splice(gc guestConn, pc net.Conn) {
-	idle := time.AfterFunc(opaqueIdle, func() {
-		_ = gc.Close()
-		_ = pc.Close()
-	})
-	defer idle.Stop()
+// splice copies both ways, half-closing each side when the other finishes.
+func splice(gc *gonet.TCPConn, pc net.Conn) {
 	done := make(chan struct{}, 2)
 	go func() {
-		_, _ = io.Copy(pc, idleReader{gc, idle})
+		_, _ = io.Copy(pc, gc)
 		if cw, ok := pc.(interface{ CloseWrite() error }); ok {
 			_ = cw.CloseWrite()
 		}
 		done <- struct{}{}
 	}()
 	go func() {
-		_, _ = io.Copy(gc, idleReader{pc, idle})
+		_, _ = io.Copy(gc, pc)
 		_ = gc.CloseWrite()
 		done <- struct{}{}
 	}()
