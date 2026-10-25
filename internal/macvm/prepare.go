@@ -153,7 +153,10 @@ type PrepareOptions struct {
 	// HelperVersion goes into the manifest.
 	HelperVersion string
 	Progress      func(PrepareEvent)
-	Log           *slog.Logger
+	// Leaked, if set, runs when the provisioning boot is refused with ErrVMLimit: the helper records the
+	// framework's slot the ledger cannot account for (RunOptions.Leaked). Its failure is logged.
+	Leaked func() error
+	Log    *slog.Logger
 	// PowerPoll is how often power is checked while waiting or downloading.
 	PowerPoll time.Duration
 	// DownloadRange overrides DownloadRange (tests).
@@ -638,6 +641,7 @@ func (p *prep) provisionAndBootstrap(ctx context.Context, spec MachineSpec) (Boo
 	fb, err := p.FirstBoot.Boot(spec.DiskPath, spec.AuxPath, spec.HardwareModel, spec.MachineIdentifier,
 		uint(spec.CPUs), spec.MemoryBytes, guest, user, pass)
 	if err != nil {
+		reportVMLimit(err, p.Leaked, p.Log)
 		return BootstrapResult{}, fmt.Errorf("macvm: provisioning boot: %w", err)
 	}
 	stopped := false

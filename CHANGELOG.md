@@ -35,6 +35,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   it (#3684).
 - On macOS, a base preparation whose network relay stops on a virtual network device failure now fails with the relay's
   error, instead of waiting for a guest that has no network and leaving the reason only in `prep-relay.log` (#3643).
+- On macOS, a base preparation or a tools update whose VM macOS refuses to start for its VM limit now records the leaked
+  VM slot, as a run already did, so the slot is counted at once instead of when a run next hits it (#3659).
 
 ## [0.10.0-rc.3] — 2026-10-25
 

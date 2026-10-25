@@ -620,3 +620,35 @@ func TestPrepareFailsWithTheRelaysError(t *testing.T) {
 		t.Fatalf("prepare waited %v for a guest with no network", time.Since(start))
 	}
 }
+
+// A provisioning boot the framework refuses with its VM limit calls the Leaked hook once; any other boot
+// error does not; a failing hook is logged and the prepare still returns the boot error.
+func TestPrepareLeakedHook(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		bootErr   error
+		hookErr   error
+		wantCalls int
+	}{
+		{"vm limit", fmt.Errorf("%w: boom", macvm.ErrVMLimit), nil, 1},
+		{"other error", errors.New("boom"), nil, 0},
+		{"hook fails", fmt.Errorf("%w: boom", macvm.ErrVMLimit), errors.New("ledger busy"), 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newPrep(t)
+			f.fb.BootErr = tc.bootErr
+			calls := 0
+			f.opts.Leaked = func() error { calls++; return tc.hookErr }
+			_, err := macvm.Prepare(context.Background(), f.opts)
+			if err == nil || !errors.Is(err, tc.bootErr) {
+				t.Fatalf("Prepare returned %v, want the boot error", err)
+			}
+			if calls != tc.wantCalls {
+				t.Fatalf("Leaked calls: %d, want %d", calls, tc.wantCalls)
+			}
+			if tc.hookErr != nil && !strings.Contains(f.logs.String(), "ledger busy") {
+				t.Fatalf("the hook's error was not logged: %s", f.logs.String())
+			}
+		})
+	}
+}

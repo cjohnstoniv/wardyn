@@ -327,6 +327,13 @@ func (j jobFlags) admit(name string, d deps) func(context.Context) (func(), erro
 	}
 }
 
+// leaked is the hook that records the framework slot a refused VM start of this job left behind.
+func (j jobFlags) leaked(d deps) func() error {
+	return func() error {
+		return leaked(macvm.RunConfig{RunnerID: *j.runner, LedgerEntry: *j.entry, LedgerDir: *j.ledgerDir}, d)
+	}
+}
+
 // stage2Agent is what a stage-2 boot needs of this helper, checked before the job's root is written: the
 // ledger entry its socket directory is named by, and the wardyn-guest-agent beside the helper.
 func (j jobFlags) stage2Agent() (string, error) {
@@ -352,7 +359,8 @@ func (j jobFlags) stage2(eng macvm.Engine, d deps, relayLog *slog.Logger, agent 
 	if err != nil {
 		return nil, err
 	}
-	boot := macvm.Stage2BootConfig{Engine: eng, SockRoot: *j.sockRoot, SockKey: macvm.JobSockKey(*j.entry), SockFstat: d.sockFstat, Log: relayLog}
+	boot := macvm.Stage2BootConfig{Engine: eng, SockRoot: *j.sockRoot, SockKey: macvm.JobSockKey(*j.entry), SockFstat: d.sockFstat,
+		Leaked: j.leaked(d), Log: relayLog}
 	return &macvm.ToolsStage{Boot: boot.ToolsBoot(), ToolsOptions: macvm.ToolsOptions{
 		Tooling: t, Cache: filepath.Join(macvm.Layout{Root: *j.root}.CacheDir(), "tools"),
 		// Stage 2 replaces the guest agent where stage 1 installed it, with
@@ -405,6 +413,7 @@ func cmdPrepare(ctx context.Context, args []string, d deps) int {
 		SetupByHandWait: *byHand,
 		Progress:        func(ev macvm.PrepareEvent) { _ = enc.Encode(ev) },
 		Admit:           j.admit(macvm.PrepareCommand, d),
+		Leaked:          j.leaked(d),
 	}
 	if *j.entry != "" {
 		st, err := j.stage2(eng, d, relayLog, agent)

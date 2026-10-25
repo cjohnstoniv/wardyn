@@ -28,6 +28,15 @@ static char *wardynCopyError(NSError *err) {
 	return wardynCopyString(err.localizedDescription);
 }
 
+// A start error's text. The framework's VM limit refusal (VZErrorDomain code 6, macvm.IsVMLimit) starts with
+// "vm-limit: " (provisionVMLimitMark in provision.go), which is how the Go side tells it apart.
+static char *wardynCopyStartError(NSError *err) {
+	if ([err.domain isEqualToString:@"VZErrorDomain"] && err.code == 6) {
+		return wardynCopyString([@"vm-limit: " stringByAppendingString:err.localizedDescription ?: @"unknown error"]);
+	}
+	return wardynCopyError(err);
+}
+
 // The name of the first class or selector this host lacks, or nil.
 static NSString *wardynMissing(void) {
 	if (!VZVirtualMachine.isSupported) {
@@ -212,7 +221,7 @@ void *wardynProvisionStart(const char *disk, const char *aux, const void *hw, in
 		});
 		dispatch_semaphore_wait(started, DISPATCH_TIME_FOREVER);
 		if (startErr != nil) {
-			*errOut = wardynCopyError(startErr);
+			*errOut = wardynCopyStartError(startErr);
 			return NULL;
 		}
 		return (void *)CFBridgingRetain(h);

@@ -339,3 +339,20 @@ func TestParseContentRangeAndIPSWName(t *testing.T) {
 		}
 	}
 }
+
+// A provisioning start error carrying the C side's mark wraps ErrVMLimit, keeping its text; any other error is
+// returned as it was.
+func TestClassifyProvisionStart(t *testing.T) {
+	limit := errors.New("macvm provision: start: " + provisionVMLimitMark + "the limit")
+	got := classifyProvisionStart(limit)
+	if !errors.Is(got, ErrVMLimit) || !errors.Is(got, limit) {
+		t.Fatalf("the VM limit start was classified as %v", got)
+	}
+	other := errors.New("macvm provision: start: boom")
+	if out := classifyProvisionStart(other); errors.Is(out, ErrVMLimit) || out != other {
+		t.Fatalf("another error was classified as %v", out)
+	}
+	if classifyProvisionStart(nil) != nil {
+		t.Fatal("nil was classified")
+	}
+}
