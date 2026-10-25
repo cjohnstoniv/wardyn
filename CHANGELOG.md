@@ -29,6 +29,13 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   about the disk. A saved "Finished" arrangement of the run page gains the "Attach from your terminal" tile at its
   bottom, once, where the disk line shows.
 
+### Fixed
+
+- `wardyn-runnerd doctor` finds the organisation address the way the service does: `--org`, the managed `OrgURL`
+  setting, then `org_url` in `runnerd.json`. It no longer reads a `WARDYN_RUNNER_ORG_URL` exported in your shell, which
+  the service never reads, so a check that passed on that variable no longer hides an address the service would not
+  find. Its hints name the settings that work.
+
 ## [0.10.0-rc.2] — 2026-10-25
 
 ### Before you upgrade
