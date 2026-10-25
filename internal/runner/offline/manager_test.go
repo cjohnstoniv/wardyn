@@ -125,6 +125,7 @@ func createLocalAs(t *testing.T, m *Manager, org time.Time, id uuid.UUID) uuid.U
 	}
 	return id
 }
+
 func TestCreatedRecordsMachineKind(t *testing.T) {
 	m, sub, _, org := managerFixture(t)
 	ctx := context.Background()
