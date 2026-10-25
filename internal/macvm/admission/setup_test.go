@@ -925,6 +925,11 @@ func drift(t *testing.T, r *rig, kind string) func(int, string) (unix.Stat_t, er
 	t.Helper()
 	was := ino(t, r.dir)
 	if kind == "03777" {
+		// macOS gives a new directory its parent's group (wheel under /private/tmp), and chmod drops setgid for
+		// a group the caller is not in; Linux already gives it the caller's own group.
+		if err := os.Chown(r.dir, -1, os.Getgid()); err != nil {
+			t.Fatal(err)
+		}
 		if err := os.Chmod(r.dir, os.ModeSticky|os.ModeSetgid|0o777); err != nil {
 			t.Fatal(err)
 		}
