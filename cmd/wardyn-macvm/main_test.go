@@ -79,25 +79,38 @@ func TestUsage(t *testing.T) {
 	}
 }
 
-func TestPrepareRefusedUntilWired(t *testing.T) {
+// TestPrepareRefusedWhereProvisioningUnsupported: prepare is refused with
+// the provisioner's reason where this build or host cannot provision.
+func TestPrepareRefusedWhereProvisioningUnsupported(t *testing.T) {
+	sup := macvm.NewProvisioner().Supported()
+	if sup == nil {
+		t.Skip("this host can provision a first boot")
+	}
 	d, _, errb := testDeps(&macvmtest.Engine{})
 	code := run(context.Background(), []string{"prepare", "--root", t.TempDir(), "--cpus", "4", "--memory-mib", "8192"}, d)
-	if code != 1 || !strings.Contains(errb.String(), "prepare is not available") {
+	if code != 1 || !strings.Contains(errb.String(), sup.Error()+"; prepare is not available") {
 		t.Fatalf("exit %d: %s", code, errb.String())
 	}
 }
 
-// TestPrepareDepsWiresProvisioner: prepare's first boot is
-// macvm.NewProvisioner; this build still refuses prepare, naming the prep
-// network.
-func TestPrepareDepsWiresProvisioner(t *testing.T) {
+// TestPrepareDepsWiresEveryPart: prepare gets macvm.NewProvisioner, the
+// vmnet prep network and stage 1, and is refused only where provisioning is
+// unsupported.
+func TestPrepareDepsWiresEveryPart(t *testing.T) {
 	var o macvm.PrepareOptions
 	err := prepareDeps(&o)
 	if reflect.TypeOf(o.FirstBoot) != reflect.TypeOf(macvm.NewProvisioner()) {
 		t.Fatalf("FirstBoot = %T; want %T", o.FirstBoot, macvm.NewProvisioner())
 	}
-	if err == nil || !strings.Contains(err.Error(), "no prep network") {
-		t.Fatalf("prepareDeps: %v", err)
+	if o.PrepNet == nil || o.Bootstrap == nil {
+		t.Fatalf("PrepNet or Bootstrap unset: %+v", o)
+	}
+	if sup := macvm.NewProvisioner().Supported(); sup == nil {
+		if err != nil {
+			t.Fatalf("prepareDeps on a host that can provision: %v", err)
+		}
+	} else if err == nil || !strings.Contains(err.Error(), sup.Error()) {
+		t.Fatalf("prepareDeps: %v; want the provisioner's %q", err, sup)
 	}
 }
 

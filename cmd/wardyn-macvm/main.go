@@ -400,12 +400,15 @@ func cmdUpdateTools(ctx context.Context, args []string, d deps) int {
 
 // prepareDeps wires prepare's first-boot provisioner (macvm.NewProvisioner),
 // prep network (internal/vmnet) and stage 1. Stage 1 installs the
-// wardyn-guest-agent that sits beside this helper. A build whose provisioner
-// is unsupported keeps it: Prepare's host check refuses with its reason. The
-// prep network is not wired yet, so this build refuses prepare by name.
+// wardyn-guest-agent that sits beside this helper. Where this build or host
+// cannot provision a first boot, prepare is refused with the provisioner's
+// reason.
 func prepareDeps(o *macvm.PrepareOptions) error {
 	if o.FirstBoot == nil {
 		o.FirstBoot = macvm.NewProvisioner()
+	}
+	if o.PrepNet == nil {
+		o.PrepNet = newPrepNet
 	}
 	if o.Bootstrap == nil {
 		agent, err := guestAgentPath()
@@ -414,8 +417,8 @@ func prepareDeps(o *macvm.PrepareOptions) error {
 		}
 		o.Bootstrap = stage1.New(stage1.Config{AgentPath: agent, AgentVersion: version.String()})
 	}
-	if o.PrepNet == nil {
-		return errors.New("this build has no prep network yet; prepare is not available")
+	if err := o.FirstBoot.Supported(); err != nil {
+		return fmt.Errorf("%w; prepare is not available", err)
 	}
 	return nil
 }
