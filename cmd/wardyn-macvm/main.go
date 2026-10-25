@@ -448,6 +448,10 @@ func prepareDeps(o *macvm.PrepareOptions, relayLog *slog.Logger) error {
 // (macvm.PrepRelayLogFile), never stderr: runnerd reads prepare.log's last
 // line, which the helper's stdout and stderr fill, as progress.
 func openRelayLog(root string) (*slog.Logger, func(), error) {
+	// The root's parents are made 0700, as the base dir's are.
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return nil, nil, fmt.Errorf("the prep relay's log: %w", err)
+	}
 	f, err := macvm.OpenRotatingLog(macvm.Layout{Root: root}.PrepRelayLog(), macvm.HelperLogMax)
 	if err != nil {
 		return nil, nil, fmt.Errorf("the prep relay's log: %w", err)
