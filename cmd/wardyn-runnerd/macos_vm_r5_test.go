@@ -101,9 +101,6 @@ func liveStage2JobOf(t *testing.T, r *macLedgerRig, m *macOSVMs, kind admission.
 	t.Helper()
 	r.host.setProcs(admission.Proc{PID: os.Getpid(), UID: 501, Start: 3, Name: "wardyn-runnerd"},
 		admission.Proc{PID: stage2HelperPID, UID: 501, Start: 9, Name: admission.HelperProcess})
-	prevPoll := jobSockPoll
-	jobSockPoll = 10 * time.Millisecond
-	t.Cleanup(func() { jobSockPoll = prevPoll })
 	e, err := m.ledger.Admit(admission.Request{Kind: kind, GuestCPUs: 4, GuestMemory: 8 << 30,
 		DiskReserve: admission.RunDiskReservation(macvm.BaseDiskBytes), OwnerPID: os.Getpid(), OwnerStart: 3})
 	if err != nil {

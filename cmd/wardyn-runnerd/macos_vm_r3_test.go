@@ -231,9 +231,6 @@ func TestMacOSVMHandsTheJobItsNetwork(t *testing.T) {
 		admission.Proc{PID: helperPID, UID: 501, Start: 9, Name: admission.HelperProcess})
 	m := r.open(t)
 	m.sockRoot, m.sockFstat = macvmtest.SockRoot(t), macvmtest.SockFstat
-	prevPoll := jobSockPoll
-	jobSockPoll = 10 * time.Millisecond
-	t.Cleanup(func() { jobSockPoll = prevPoll })
 	e, err := m.ledger.Admit(admission.Request{Kind: admission.KindToolsUpdate, GuestCPUs: 4, GuestMemory: 8 << 30,
 		DiskReserve: admission.RunDiskReservation(macvm.BaseDiskBytes), OwnerPID: os.Getpid(), OwnerStart: 3})
 	if err != nil {
