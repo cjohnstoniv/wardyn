@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -328,5 +329,33 @@ func TestMacOSVMStatusShowsTheRunBootToolsDial(t *testing.T) {
 			strings.Contains(string(js), `"tools_dial":"refused"`) != (want != "") {
 			t.Fatalf("record %q: %q\n%s\n%s", content, st.ToolsDial, text.String(), js)
 		}
+	}
+}
+
+// runnerd's start sweeps the stage-2 networks a crash left before any job is handed one, keeping those of
+// every job still in the ledger.
+func TestMacOSVMStartSweepsLeftoverPrepNetsButLedgeredJobs(t *testing.T) {
+	r := newMacLedgerRig(t)
+	r.host.setProcs(admission.Proc{PID: os.Getpid(), UID: 501, Start: 3, Name: "wardyn-runnerd"})
+	m := r.open(t)
+	e, err := m.ledger.Admit(admission.Request{Kind: admission.KindPrepare, GuestCPUs: 4, GuestMemory: 8 << 30,
+		DiskReserve: admission.PrepareDiskReservation(macvm.BaseDiskBytes), OwnerPID: os.Getpid(), OwnerStart: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept [][]string
+	var handing bool
+	m.prepSweep = func(_ context.Context, keep []string) (int, error) {
+		m.mu.Lock()
+		handing = m.ctx != nil
+		m.mu.Unlock()
+		kept = append(kept, keep)
+		return 3, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // the run loop returns at once
+	m.start(ctx, func() {})
+	if len(kept) != 1 || !slices.Equal(kept[0], []string{e.ID}) || handing {
+		t.Fatalf("swept %d times keeping %v (jobs could be handed a network: %v); want once, keeping %s first", len(kept), kept, handing, e.ID)
 	}
 }

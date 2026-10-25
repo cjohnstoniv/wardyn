@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
@@ -189,5 +191,47 @@ func TestMacPrepNetIsTheAllowlistProxyOnly(t *testing.T) {
 	defer r.f.mu.Unlock()
 	if _, ok := r.f.networks[netName]; ok || !px.removed || !relay.removed {
 		t.Fatal("the undo left the prep network or a container")
+	}
+}
+
+// A crashed runnerd's prep proxy, relay and network go at its next start; those of a job whose ledger
+// entry is kept, another runner's and another deployment's stay.
+func TestMacPrepSweepRemovesACrashsLeftovers(t *testing.T) {
+	r := newMacRig(t)
+	r.d.cfg.RunnerID = "runner-a"
+	ctx := context.Background()
+	const dead, live = "0123456789abcdef01234567", "76543210fedcba9876543210"
+	for _, e := range []string{dead, live} {
+		attach, _, err := r.d.StartMacPrepNet(ctx, e) // its undo never runs: runnerd crashed
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = attach.Close()
+	}
+	otherRunner := r.d.labels(uuid.New(), componentMacPrep, map[string]string{runner.LabelRunnerID: "runner-b"})
+	otherDeployment := r.d.labels(uuid.New(), componentMacPrep, map[string]string{runner.LabelRunnerID: "runner-a"})
+	otherDeployment[labelDeployment] = "elsewhere"
+	r.f.mu.Lock()
+	for name, c := range r.f.containers {
+		r.f.listItems = append(r.f.listItems, container.Summary{ID: name, Labels: c.cfg.Labels})
+	}
+	r.f.listItems = append(r.f.listItems, container.Summary{ID: "other-runner", Labels: otherRunner})
+	r.f.networks["other-deployment"] = client.NetworkCreateOptions{Labels: otherDeployment}
+	r.f.mu.Unlock()
+	n, err := r.d.SweepMacPrep(ctx, []string{live})
+	if err != nil || n != 3 {
+		t.Fatalf("swept %d, %v; want the dead job's proxy, relay and network", n, err)
+	}
+	r.f.mu.Lock()
+	defer r.f.mu.Unlock()
+	for e, gone := range map[string]bool{dead: true, live: false} {
+		id := macPrepID(e)
+		_, hasNet := r.f.networks[internalNetName(id)]
+		if px, relay := r.f.containers[proxyContainerName(id)], r.f.containers[vmnetName(id)]; px.removed != gone || relay.removed != gone || hasNet == gone {
+			t.Fatalf("job %s: proxy removed %v, relay removed %v, network kept %v; want removed %v", e, px.removed, relay.removed, hasNet, gone)
+		}
+	}
+	if _, ok := r.f.networks["other-deployment"]; !ok {
+		t.Fatal("swept another deployment's prep network")
 	}
 }

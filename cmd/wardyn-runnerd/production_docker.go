@@ -953,7 +953,7 @@ func enableMacOSVM(ctx context.Context, sub *docker.Driver, runnerID string, on 
 			slog.WarnContext(ctx, "macOS VM sandboxes are off on this runner", "reason", err.Error())
 			m.ledger, m.refusal = nil, macOSVMLedgerDamaged
 		} else {
-			m.reclaim, m.endNewest, m.prepNet = sub.ReclaimMacVMs, sub.EndNewestMacVM, sub.StartMacPrepNet
+			m.reclaim, m.endNewest, m.prepNet, m.prepSweep = sub.ReclaimMacVMs, sub.EndNewestMacVM, sub.StartMacPrepNet, sub.SweepMacPrep
 			m.toolsUpdate = func(man macvm.Manifest) {
 				go func() {
 					if err := m.startToolsUpdate(context.WithoutCancel(ctx), man); err != nil {

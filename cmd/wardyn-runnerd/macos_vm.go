@@ -81,10 +81,12 @@ type macOSVMs struct {
 	perRunMemory, defaultPerRunMemory uint64
 	perRunCPUs                        int
 	// sockRoot is the socket root ("" is admission.DefaultSockDir) and sockFstat replaces fstat(2) in its
-	// checks (tests); prepNet brings up a base job's stage-2 network (the driver's StartMacPrepNet).
+	// checks (tests); prepNet brings up a base job's stage-2 network (the driver's StartMacPrepNet), and
+	// prepSweep removes those a crash left, but the ones of the ledger entries it keeps (SweepMacPrep).
 	sockRoot  string
 	sockFstat func(fd int, name string) (unix.Stat_t, error)
 	prepNet   func(ctx context.Context, entryID string) (*os.File, func(), error)
+	prepSweep func(ctx context.Context, keep []string) (int, error)
 	// version is the guest agent this runner ships; a base whose agent differs needs a tools update.
 	version string
 	// toolsUpdate starts that update (design 3.4, guest agent drift) for the base whose manifest it is
@@ -189,11 +191,13 @@ func (m *macOSVMs) run(ctx context.Context, resend func()) {
 }
 
 // start runs the recompute and, with the driver's end, the free-space check, until ctx ends; resend
-// sends the caps after a change. A nil handle (macOS VMs off) starts nothing.
+// sends the caps after a change. It first sweeps the stage-2 networks a crash left, before watchJobs can
+// hand any job one. A nil handle (macOS VMs off) starts nothing.
 func (m *macOSVMs) start(ctx context.Context, resend func()) {
 	if m == nil {
 		return
 	}
+	m.sweepPrep(ctx)
 	m.mu.Lock()
 	m.ctx = ctx
 	m.mu.Unlock()

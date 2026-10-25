@@ -129,6 +129,30 @@ func (m *macOSVMs) sendJobNet(ctx context.Context, entryID string, attach *os.Fi
 	return cc.SendNetFD(ctx, attach)
 }
 
+// sweepPrep removes the stage-2 networks a crashed runnerd left (design 3.4, crash recovery), keeping
+// those of every job still in the ledger: its helper may live, or wait for its network.
+func (m *macOSVMs) sweepPrep(ctx context.Context) {
+	if m.prepSweep == nil || m.ledger == nil {
+		return
+	}
+	counted, err := m.ledger.Counted()
+	if err != nil {
+		slog.Warn("macOS VM base: leftover stage-2 networks were not swept", "error", err.Error())
+		return
+	}
+	keep := make([]string, 0, len(counted))
+	for _, e := range counted {
+		keep = append(keep, e.ID)
+	}
+	n, err := m.prepSweep(ctx, keep)
+	if err != nil {
+		slog.Warn("macOS VM base: sweep leftover stage-2 networks", "error", err.Error())
+	}
+	if n > 0 {
+		slog.Info("macOS VM base: removed leftover stage-2 network objects", "count", n)
+	}
+}
+
 // updateLockSuffix is the tools update lock beside each base dir (internal/macvm/tools.go
 // updateLockPath): held for an update's or a re-prepare's whole run.
 const updateLockSuffix = ".update.lock"
