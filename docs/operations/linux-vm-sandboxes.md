@@ -18,6 +18,7 @@
 | Synced folders | A folder synced from another computer lands in the guest as in a container: through the guest agent and the image's `sftp-server`, as `agent`. The agent waits for the first sync |
 | Confinement | The VM boundary, which the runner treats as the `CC3` family (hardware virtualisation). The run's recorded `confinement_class` stays the one it asked for |
 | Network | On a Docker runner, QEMU's only link is the network relay (`wardyn-vmnet`), which hands connections to allowed hosts to the run's proxy. A Kubernetes VM pod has no relay yet |
+| Open connections | The relay holds at most 1,024 per run on granted ports other than 80. A new one past that is refused and reported with the reason `tunnel-limit`; open ones are never cut |
 | Refused traffic | A port or host not allowed, a raw IP or an outside DNS resolver: a deny decision each. Dropped IPv6 and ICMP frames: one row a second per kind, with a repeat count. Global IPv6 connects find no route |
 | Sign-ins | The desktop's keychain and browser profiles are kept in the guest's memory and are gone when the guest shuts down ([Sign-ins in the desktop](#sign-ins-in-the-desktop)) |
 

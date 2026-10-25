@@ -57,6 +57,27 @@ const (
 	nicID       = 1
 	linkMTU     = 1500
 	maxInFlight = 1024 // half-open guest SYNs the stack holds at once
+
+	// maxOpaqueTunnels is the most opaque guest tunnels a run's relay holds at
+	// once, pending ones included. It is a deliberate bound, cheap to raise if a
+	// real run ever hits it. Opaque is every granted port except 80, which takes
+	// the HTTP path (httpfwd.go) and is not counted. A tunnel past the bound is
+	// refused with reasonTunnelLimit; an established one is never cut.
+	maxOpaqueTunnels = 1024
+
+	// reasonTunnelLimit is the refusal reason for a tunnel past the bound. The
+	// proxy's closed set of relay reasons (vmnetReasons) names it too.
+	reasonTunnelLimit = "tunnel-limit"
+)
+
+// A guest tunnel can outlive its peer without a FIN: a guest that was killed,
+// a NAT that dropped the flow. Keepalive probes on both legs notice it, so the
+// copy ends and the tunnel's slot frees. The guest leg is a gVisor endpoint and
+// takes the probes below; the proxy leg is a native socket (proxyDialer).
+const (
+	keepaliveIdle     = 60 * time.Second
+	keepaliveInterval = 30 * time.Second
+	keepaliveCount    = 4
 )
 
 // Config is how a relay reaches its proxy.
@@ -77,6 +98,9 @@ type Config struct {
 	// Dial and Now are seams for tests; nil means net.Dialer and time.Now.
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
 	Now  func() time.Time
+
+	// maxOpaque overrides maxOpaqueTunnels; tests only.
+	maxOpaque int
 }
 
 // Relay is one VM's relay. It serves one QEMU connection at a time and keeps
@@ -95,6 +119,10 @@ type Relay struct {
 	// asks for its lease again, so prepare's stage 1 reads it as the boot's
 	// epoch.
 	dhcpSeen atomic.Uint64
+	// opaque counts the opaque tunnels this relay holds, from before the
+	// proxy ask until both copy directions have ended; maxOpaque is its bound.
+	opaque    atomic.Int64
+	maxOpaque int64
 }
 
 // New builds a relay's stack. Close releases it.
@@ -115,6 +143,11 @@ func New(cfg Config) (*Relay, error) {
 		stop:  make(chan struct{}),
 		dhcp:  cfg.DHCP || cfg.Prep,
 		prep:  cfg.Prep,
+
+		maxOpaque: maxOpaqueTunnels,
+	}
+	if cfg.maxOpaque > 0 {
+		rl.maxOpaque = int64(cfg.maxOpaque)
 	}
 	rl.rep = newReporter(now, log, func(r refusal) {
 		if rl.prep {
@@ -310,6 +343,15 @@ func (rl *Relay) handleTCP(r *tcp.ForwarderRequest) {
 		}
 		return
 	}
+	// Every path from here is an opaque tunnel (see maxOpaqueTunnels). The slot
+	// is taken before the ask and given back when this flow ends, after both
+	// copy directions in splice have finished, or on any earlier return.
+	if !rl.admit() {
+		r.Complete(true)
+		rl.rep.refuse(refusal{Flow: flow, Reason: reasonTunnelLimit, Host: name, Port: int(port)})
+		return
+	}
+	defer rl.opaque.Add(-1)
 	t0 := time.Now()
 	ok, status, err := rl.proxy.ask(name, port, flow)
 	if !ok {
@@ -354,7 +396,21 @@ func (rl *Relay) handleTCP(r *tcp.ForwarderRequest) {
 	splice(gc, pc)
 }
 
-// accept completes the guest's handshake.
+// admit takes one opaque-tunnel slot, or reports that the run is at its bound.
+func (rl *Relay) admit() bool {
+	for {
+		n := rl.opaque.Load()
+		if n >= rl.maxOpaque {
+			return false
+		}
+		if rl.opaque.CompareAndSwap(n, n+1) {
+			return true
+		}
+	}
+}
+
+// accept completes the guest's handshake and turns on TCP keepalive for the
+// guest leg.
 func accept(r *tcp.ForwarderRequest) *gonet.TCPConn {
 	var wq waiter.Queue
 	ep, err := r.CreateEndpoint(&wq)
@@ -363,7 +419,16 @@ func accept(r *tcp.ForwarderRequest) *gonet.TCPConn {
 		return nil
 	}
 	r.Complete(false)
+	setKeepalive(ep)
 	return gonet.NewTCPConn(&wq, ep)
+}
+
+func setKeepalive(ep tcpip.Endpoint) {
+	idle, interval := tcpip.KeepaliveIdleOption(keepaliveIdle), tcpip.KeepaliveIntervalOption(keepaliveInterval)
+	ep.SocketOptions().SetKeepAlive(true)
+	_ = ep.SetSockOpt(&idle)
+	_ = ep.SetSockOpt(&interval)
+	_ = ep.SetSockOptInt(tcpip.KeepaliveCountOption, keepaliveCount)
 }
 
 // splice copies both ways, half-closing each side when the other finishes.
