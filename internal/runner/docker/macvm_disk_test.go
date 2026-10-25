@@ -209,3 +209,21 @@ func TestMacVMDiskPruneKeepsAFreshReportStoredAfterItsRead(t *testing.T) {
 		t.Fatalf("report = %+v (%v), want the fresh removed one kept", v, ok)
 	}
 }
+
+// The same interleaving through the prune itself: MacOSVMDisks reads an expired report, and a sweep stores a
+// fresh one before the prune forgets it. The fresh report is still held afterwards.
+func TestMacVMDisksPruneKeepsAReportStoredBetweenItsReadAndItsForget(t *testing.T) {
+	d := newWithClient(newFakeDocker(), Config{ProxyImage: "wardyn-proxy:dev"})
+	id := uuid.New()
+	stale := runner.MacOSVMDisk{RunID: id, State: runner.MacOSVMDiskKept, At: time.Now().Add(-7 * time.Hour)}
+	fresh := runner.MacOSVMDisk{RunID: id, State: runner.MacOSVMDiskRemoved, At: time.Now()}
+	d.macDisks.Store(id, stale)
+	afterMacOSVMDiskRead = func() { d.macDisks.Store(id, fresh) }
+	t.Cleanup(func() { afterMacOSVMDiskRead = nil })
+	if all := d.MacOSVMDisks(); len(all) != 0 {
+		t.Fatalf("held reports %+v, want the expired one left out", all)
+	}
+	if v, ok := d.macDisks.Load(id); !ok || v.(runner.MacOSVMDisk) != fresh {
+		t.Fatalf("report = %+v (%v), want the fresh one kept", v, ok)
+	}
+}

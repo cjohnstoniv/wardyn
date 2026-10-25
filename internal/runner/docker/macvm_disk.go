@@ -50,6 +50,9 @@ func (d *Driver) MacOSVMDisks() []runner.MacOSVMDisk {
 	cutoff := time.Now().Add(-macOSVMDiskKeep)
 	d.macDisks.Range(func(k, v any) bool {
 		if r := v.(runner.MacOSVMDisk); r.At.Before(cutoff) {
+			if afterMacOSVMDiskRead != nil {
+				afterMacOSVMDiskRead()
+			}
 			d.forgetMacOSVMDisk(k, v)
 		} else {
 			out = append(out, r)
@@ -58,6 +61,9 @@ func (d *Driver) MacOSVMDisks() []runner.MacOSVMDisk {
 	})
 	return out
 }
+
+// afterMacOSVMDiskRead is a test's hook between the prune's read of an expired report and its forgetting it.
+var afterMacOSVMDiskRead func()
 
 // forgetMacOSVMDisk drops k's report only while it is still the expired one the prune saw: a sweep that stored
 // a fresh report for the run since then keeps it.
