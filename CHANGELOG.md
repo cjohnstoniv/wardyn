@@ -30,6 +30,14 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   about the disk. A saved "Finished" arrangement of the run page gains the "Attach from your terminal" tile at its
   bottom, once, where the disk line shows.
 
+### Fixed
+
+- A macOS VM start that failed after its helper had started deleted the run's directory even when the helper
+  outlived its kill. The teardown and the orphan sweep need that directory to end the VM later, so it now stays,
+  with the run's capacity held, until the helper has exited.
+- A macOS VM run whose policy keeps no desktop sign-ins now starts agent-only. Its guest turns the desktop off and
+  sets no desktop password, and the runner took that as the desktop password failure and ended the run.
+
 ## [0.10.0-rc.2] — 2026-10-25
 
 ### Before you upgrade
@@ -86,11 +94,6 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
-- A macOS VM start that failed after its helper had started deleted the run's directory even when the helper
-  outlived its kill. The teardown and the orphan sweep need that directory to end the VM later, so it now stays,
-  with the run's capacity held, until the helper has exited.
-- A macOS VM run whose policy keeps no desktop sign-ins now starts agent-only. Its guest turns the desktop off and
-  sets no desktop password, and the runner took that as the desktop password failure and ended the run.
 - A unit admin deciding a held membership change no longer sees, in its diff, the other units the person holds
   memberships under (`belongs_by`). Super admins and security admins still see them; the decision's recheck is
   unchanged.
