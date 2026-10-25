@@ -28,7 +28,7 @@ export function usePools(load: LoadPools | undefined, runType: RunnerPoolRunType
       (error: unknown) =>
         !controller.signal.aborted &&
         setAnswer((held) =>
-          held?.runType === runType && held.state.status === "ready"
+          held && held.runType === runType && held.state.status === "ready"
             ? held
             : { runType, state: { status: "error", message: error instanceof Error ? error.message : String(error) } },
         ),
