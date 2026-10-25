@@ -520,11 +520,11 @@ func prepareProgress(log string) int {
 // error in the same log is not this one's.
 func prepareFailure(log string) string {
 	_, _, last, err := lastHelperLines(log)
-	if err != nil {
-		return "the prepare log could not be read to its end: " + err.Error()
-	}
 	msg, ok := strings.CutPrefix(last, helperFailurePrefix)
 	if !ok {
+		if err != nil {
+			return "the prepare log could not be read to its end: " + err.Error()
+		}
 		return ""
 	}
 	return msg

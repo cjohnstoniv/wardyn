@@ -848,4 +848,12 @@ func TestPrepareLogReadsPastALongForeignLine(t *testing.T) {
 	if got := prepareFailure(p); !strings.Contains(got, "could not be read to its end") {
 		t.Fatalf("failure %q after a line over the limit, want the read error", got)
 	}
+	// An error line read before the scan stopped is shown as before.
+	early := "wardyn-macvm: macvm: stage 1: boom\n" + strings.Repeat("x", prepareLogLineMax+1) + "\n"
+	if err := os.WriteFile(p, []byte(early), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := prepareFailure(p); got != "macvm: stage 1: boom" {
+		t.Fatalf("failure %q with the error line before the long one, want that line", got)
+	}
 }
