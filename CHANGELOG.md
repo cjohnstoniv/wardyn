@@ -33,6 +33,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - On macOS, a base-image download that resumes a partial file now continues after the bytes already on disk instead of
   overwriting its start, so a restarted preparation no longer re-downloads the whole image after the check rejects
   it (#3684).
+- On macOS, a base preparation whose network relay stops on a virtual network device failure now fails with the relay's
+  error, instead of waiting for a guest that has no network and leaving the reason only in `prep-relay.log` (#3643).
 
 ## [0.10.0-rc.3] — 2026-10-25
 
