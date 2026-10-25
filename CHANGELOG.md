@@ -20,7 +20,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `aws_sso_refused_tokens`, `cli_sign_ins`, `ui_desktop_closed`, `desktop_signins`, `desktop_signin_shares`,
   `desktop_signin_runs`, `approval_rules`, `governance_restrictions`, `governance_restriction_members`,
   `governance_unit_admins`, `oidc_session_sids` and `desktop_vm_sign_ins`. Also grant it `SELECT, INSERT, UPDATE` on
-  `runner_health`, `launch_preset_version_floor`, `cli_sessions` and `governance_boundary`.
+  `runner_health`, `launch_preset_version_floor`, `cli_sessions` and `governance_boundary`. If it turns on
+  `WARDYN_MULTI_AGENT_TASKS`, grant it `SELECT, INSERT, UPDATE` on `run_harnesses` as well.
 
 ### Added
 
@@ -28,6 +29,14 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   release's wardyn-runnerd. With an older one the page says "Removing…" for 10 minutes after the run ends, then nothing
   about the disk. A saved "Finished" arrangement of the run page gains the "Attach from your terminal" tile at its
   bottom, once, where the disk line shows.
+
+### Fixed
+
+- A macOS VM start that failed after its helper had started deleted the run's directory even when the helper
+  outlived its kill. The teardown and the orphan sweep need that directory to end the VM later, so it now stays,
+  with the run's capacity held, until the helper has exited.
+- A macOS VM run whose policy keeps no desktop sign-ins now starts agent-only. Its guest turns the desktop off and
+  sets no desktop password, and the runner took that as the desktop password failure and ended the run.
 
 ## [0.10.0-rc.2] — 2026-10-25
 
