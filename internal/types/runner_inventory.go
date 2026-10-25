@@ -4,6 +4,7 @@
 package types
 
 import (
+	"encoding/json"
 	"strings"
 	"time"
 	"unicode"
@@ -75,6 +76,10 @@ type RunnerView struct {
 	// Folders says the runner shares folders on its computer with runs elsewhere (a folder-only
 	// runner, 0.10 on), read like Capacity.
 	Folders bool `json:"folders,omitempty"`
+	// MacOSVM is the macos_vm object of the runner's last caps event (runnerwire.MacVMCaps), read like
+	// Capacity and absent when the runner offers no macOS VM. It is raw JSON because runnerwire imports
+	// this package: whatever runnerwire.MacVMCaps carries reaches the console with no change here.
+	MacOSVM json.RawMessage `json:"macos_vm,omitempty"`
 	// Kind is always RunnerKindSelfHosted: the one shape both kinds' reads share.
 	Kind RunnerKind `json:"kind"`
 	// Limits is what the runner's owner declared, which only they change; nil when not all of them are

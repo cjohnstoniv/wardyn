@@ -4,6 +4,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"slices"
 	"time"
@@ -85,8 +86,29 @@ func (s *Server) runnerView(row types.Runner, used types.RunnerTally, admin bool
 	if row.State == types.RunnerClaimed {
 		v.Capacity, v.Classes, v.AllowedRoots = s.runnerReportedCaps(row.ID)
 		v.Folders = s.runnerSharesFolders(row.ID)
+		v.MacOSVM = s.runnerMacOSVM(row.ID)
 	}
 	return v
+}
+
+// runnerMacOSVM is the macos_vm object of the runner's last caps event, re-encoded whole, read like
+// runnerReportedCaps; nil when the runner has not reported one.
+func (s *Server) runnerMacOSVM(id uuid.UUID) json.RawMessage {
+	s.runnerStreams.subsMu.Lock()
+	ep, ok := s.runnerStreams.subs[id]
+	s.runnerStreams.subsMu.Unlock()
+	if !ok {
+		return nil
+	}
+	caps, ok := ep.sub.Caps()
+	if !ok || caps.MacOSVM == nil {
+		return nil
+	}
+	b, err := json.Marshal(caps.MacOSVM)
+	if err != nil {
+		return nil
+	}
+	return b
 }
 
 // runnerSharesFolders is the runner's last caps event's folders flag, read like runnerReportedCaps.
