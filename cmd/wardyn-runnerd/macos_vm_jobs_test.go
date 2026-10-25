@@ -21,14 +21,15 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/macvm/macvmtest"
 )
 
+// jobSockPoll is set once, before any test goroutine runs: a test that wrote it would race a watcher an
+// earlier test left reading it.
+func init() { jobSockPoll = 10 * time.Millisecond }
+
 // claimedStage2Job is a tools update whose helper (pid stage2HelperPID) lives, with no ctl.sock.
 func claimedStage2Job(t *testing.T, r *macLedgerRig, m *macOSVMs) admission.Entry {
 	t.Helper()
 	r.host.setProcs(admission.Proc{PID: os.Getpid(), UID: 501, Start: 3, Name: "wardyn-runnerd"},
 		admission.Proc{PID: stage2HelperPID, UID: 501, Start: 9, Name: admission.HelperProcess})
-	prevPoll := jobSockPoll
-	jobSockPoll = 10 * time.Millisecond
-	t.Cleanup(func() { jobSockPoll = prevPoll })
 	e, err := m.ledger.Admit(admission.Request{Kind: admission.KindToolsUpdate, GuestCPUs: 4, GuestMemory: 8 << 30,
 		DiskReserve: admission.RunDiskReservation(macvm.BaseDiskBytes), OwnerPID: os.Getpid(), OwnerStart: 3})
 	if err != nil {
