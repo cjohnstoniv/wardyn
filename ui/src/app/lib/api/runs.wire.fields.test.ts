@@ -208,7 +208,7 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
     expect(omitted).toEqual([]);
   });
 
-  it("RunDetail adds exactly ui_apps, user_type_name, the model provider's name and deleted flag, the launching portal's name, the allowlists its proxy was handed, the pool's name, the ended run's kept_until, the run's policy, its open sync sessions, its computer folder and its agents over AgentRun — " +
+  it("RunDetail adds exactly ui_apps, user_type_name, the model provider's name and deleted flag, the launching portal's name, the allowlists its proxy was handed, the pool's name, the ended run's kept_until, the run's policy, its open sync sessions, its computer folder, its agents and a macOS VM's desktop over AgentRun — " +
     "the fields only GET /runs/{id} sends (handleGetRun's anonymous wrapper struct, runs_policy.go)", () => {
     const runDetailOwnKeys = tsInterfaceKeys(runsTs, "RunDetail");
     expect(runDetailOwnKeys).toEqual([
@@ -224,7 +224,13 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
       "sync",
       "computer_folder",
       "agents",
+      "macos",
     ]);
+  });
+
+  it("RunMacOS's keys are exactly runMacOSView's json tags (GET /runs/{id} macos, run_macos_view.go)", () => {
+    const viewGo = readFileSync(join(root, "internal/api/run_macos_view.go"), "utf8");
+    expect(tsInterfaceKeys(runsTs, "RunMacOS").sort()).toEqual(goJSONTags(viewGo, "runMacOSView").sort());
   });
 
   it("RunDetailAgent's keys are exactly runDetailAgent's json tags (GET /runs/{id} agents, run_multi_agent.go)", () => {

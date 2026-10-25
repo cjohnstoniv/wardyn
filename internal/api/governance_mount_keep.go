@@ -221,9 +221,13 @@ func profilePayloadSetsHostPath(raw json.RawMessage) bool {
 	return false
 }
 
-// changeForRead is a served change with its diff as the reader may see it. Below the super admin tier
-// every workspace_mounts[].source anywhere in the diff is mountSourceWithheld. A change that sets a
-// host path is already hidden from that tier (canSeeGovernanceChange); this holds whatever the diff
+// changeForRead is a served change with its diff as the reader may see it. At the member tier (a unit
+// admin) the diff carries no belongs_by, the units its proposer was granted that the subject holds
+// another membership below: a reader whose scope covers only the target would learn of a membership
+// under a unit they do not govern. A security admin governs every unit, so reads it. The decision reads
+// the stored diff, not this one (heldBelongsStale). Below the super admin tier every
+// workspace_mounts[].source anywhere in the diff is mountSourceWithheld. A change
+// that sets a host path is already hidden from that tier (canSeeGovernanceChange); this holds whatever the diff
 // was rendered with. At the member tier (a unit admin) every ceiling in it also passes
 // redactSpecForUser and every overlay redactOverlayForUser, the step each read redaction adds there
 // over the security tier the diff was rendered at, so a held change's specs read as GET /governance
@@ -241,6 +245,9 @@ func (s *Server) changeForRead(r *http.Request, ch types.GovernanceChange) types
 	if dec.Decode(&doc) != nil || (tier == specReadMember && !redactCeilingsForUserIn(doc)) {
 		ch.Diff = json.RawMessage("null")
 		return ch
+	}
+	if body, ok := doc.(map[string]any); ok && tier == specReadMember {
+		delete(body, "belongs_by")
 	}
 	withholdMountSourcesIn(doc)
 	ch.Diff = mustJSON(doc)

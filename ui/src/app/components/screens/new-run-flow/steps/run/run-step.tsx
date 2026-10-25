@@ -9,19 +9,23 @@
 import * as React from "react";
 import { NR_RUN } from "../../../../wardyn/copy/new-run/run";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
-import type { RunnerPoolRunType } from "../../../../../lib/types/runner-pools";
+import { isVMKind } from "../../../../../lib/types/machine-kind";
 import { useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../../new-run-route";
 import type { RunIntent } from "../../draft/run-intent";
+import { harnessIds } from "../../lenses/lens-keys";
 import { stepIssues } from "../../lenses/local-issues";
 import { addApp, appsOf, chooseAppKind, commandOf, editApp, isServer, removeApp, setCommand } from "../../lenses/apps-lens";
+import type { MachineKind } from "../../../../../lib/types/machine-kind";
+import { dropMinimum, startAtMinimum } from "../../lenses/limits-lens";
 import { chooseBarrier, chooseMachineKind, chooseMode, choosePool } from "../../lenses/run-lens";
 import { modeOf, type RunMode } from "../../lenses/shape-lens";
 import { flowSteps, StepShell } from "../step-shell";
 import { BarrierSection } from "./barrier-section";
 import { CommandSection } from "./command-section";
 import { MachineKindSection } from "./machine-kind-section";
+import { useMacOSOffer } from "./macos-offer";
 import { ModeSection } from "./mode-section";
-import { ledeOf, selectedPoolId, usablePools } from "./pool-model";
+import { ledeOf, runTypeOf, selectedPoolId, usablePools } from "./pool-model";
 import { PoolSection } from "./pool-section";
 import { QuestionBlock } from "./question-block";
 import { loadPools, usePools, type LoadPools } from "./pool-source";
@@ -46,13 +50,22 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
   React.useEffect(() => {
     if (unnamed) dispatch({ type: "edit", apply: (i) => chooseMode(i, fallback) });
   }, [unnamed, fallback, dispatch]);
-  const runType: RunnerPoolRunType | undefined = intent.experience ?? (unnamed ? (fallback === "autonomous" ? "background" : "interactive") : undefined);
+  const runType = runTypeOf(intent);
 
   const pools = usePools(deps?.load ?? loadPools, runType);
   const list = pools.status === "ready" ? pools.list : undefined;
   const chosen = list && usablePools(list).find((p) => p.id === selectedPoolId(intent, list));
   // A VM is its own barrier: the container barriers give way to the VM's fixed line.
-  const vm = intent.machine_kind === "linux_vm";
+  const vm = isVMKind(intent.machine_kind);
+  // A macOS VM starts its CPU and memory ask at the base's minimum; leaving macOS takes that back.
+  const offer = useMacOSOffer();
+  const minimum = offer?.ok ? { cpuMillis: offer.minCPUs * 1000, memoryMib: offer.minMemoryMiB } : undefined;
+  const chooseKind = (kind: MachineKind) =>
+    edit((i) => {
+      const leaving = i.machine_kind === "macos_vm" && kind !== "macos_vm" && minimum ? dropMinimum(i, minimum) : i;
+      const next = chooseMachineKind(leaving, kind);
+      return kind === "macos_vm" && minimum ? startAtMinimum(next, minimum) : next;
+    });
 
   return (
     <StepShell
@@ -77,7 +90,7 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
         />
       )}
       <QuestionBlock label={NR_RUN.WHERE_LABEL}>
-        <MachineKindSection kind={vm ? "linux_vm" : "container"} onChoose={(kind) => edit((i) => chooseMachineKind(i, kind))} />
+        <MachineKindSection kind={intent.machine_kind ?? "container"} agents={harnessIds(intent)} onChoose={chooseKind} />
         <PoolSection state={pools} runType={runType} intent={intent} onChoose={(id) => edit((i) => choosePool(i, id))} />
         {!vm && <BarrierSection pool={chosen} chosen={intent.confinement_class} onChoose={(cc) => edit((i) => chooseBarrier(i, cc))} />}
       </QuestionBlock>

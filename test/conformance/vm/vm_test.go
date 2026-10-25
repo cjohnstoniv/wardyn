@@ -459,13 +459,13 @@ func TestLinuxVMSandbox(t *testing.T) {
 			t.Logf("no sleep 600 in the guest's processes:\n%s", o)
 			return ""
 		}
-		if err := d.PauseAgent(ctx, sb.Ref); err != nil {
+		if _, err := d.PauseAgent(ctx, sb.Ref, 1); err != nil {
 			t.Fatal(err)
 		}
 		if st := state(); !strings.HasPrefix(st, "T") {
 			t.Errorf("the paused agent's state = %q, want T", st)
 		}
-		if err := d.ResumeAgent(ctx, sb.Ref); err != nil {
+		if _, err := d.ResumeAgent(ctx, sb.Ref, 1); err != nil {
 			t.Fatal(err)
 		}
 		if st := state(); strings.HasPrefix(st, "T") || st == "" {

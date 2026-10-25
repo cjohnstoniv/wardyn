@@ -57,6 +57,8 @@ set -euo pipefail
 # compile had the box's module and build caches; a hosted job restores no cache
 # (the workflow's header says why), so it downloads and builds everything. Not
 # yet measured there: the cold allowance is 10 minutes and each proof gets 2.
+# The Postgres service's pull and start (about a minute) is inside the cold
+# allowance, so a PG-backed package needs no extra margin.
 COLD_MIN=${OVERLAY_PROOF_COLD_MIN:-10}
 PROOF_MIN=${OVERLAY_PROOF_PROOF_MIN:-2}
 

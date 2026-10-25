@@ -480,3 +480,45 @@ func TestTakeover_AContainersNoVNCAppPassesFramesWithoutAnOpenTakeOver(t *testin
 		})
 	}
 }
+
+// TestTakeover_AContainersNoVNCAppNamesAnUnreadableTakeOverInItsGap: a container's noVNC app whose
+// re-read of its take overs fails keeps no frames until one answers, and its gap says Wardyn could
+// not read whether the person had taken over, not that they took over.
+func TestTakeover_AContainersNoVNCAppNamesAnUnreadableTakeOverInItsGap(t *testing.T) {
+	offered, pasted := make(chan string, 1), make(chan []byte, 1)
+	h := desktopHarness(t, rfbDesktopBackend(t, offered, pasted, false), nil)
+	h.run.RecordingLevel = types.RecordingScreenActions
+	h.store.putRun(h.run)
+	h.srv.cfg.RecordingStore = fsRecordingStore(t)
+	aap := takeoverApprovals{newAuthzApprovals(newAuthzStore())}
+	st := &vmSignInTestStore{uiMemStore: h.store}
+	st.setTakeovers(aap.authzApprovals, nil)
+	h.srv.cfg.Store = st
+	tick := make(chan chan struct{})
+	h.srv.vmSignInTick = tick
+	ds := openDesktop(t, h, desktopApp)
+	if ds.resp.StatusCode != http.StatusSwitchingProtocols {
+		body, _ := io.ReadAll(ds.resp.Body)
+		t.Fatalf("upgrade = %d %s, want 101", ds.resp.StatusCode, body)
+	}
+	<-offered
+	if next, err := readWSFrame(ds.br); err != nil || string(next) != "\x02" {
+		t.Fatalf("after ServerInit the browser got %q (err %v), want the Bell", next, err)
+	}
+	st.setTakeovers(nil, errors.New("store: pool closed"))
+	done := make(chan struct{})
+	select {
+	case tick <- done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no desktop stream took the re-read")
+	}
+	recvSlotEvent(t, done, "the stream's re-read")
+	if held := h.srv.desktopRecs.heldWith(h.run.ID, ""); len(held) != 1 {
+		t.Fatalf("holds after a failed re-read = %v, want the stream's own", held)
+	}
+	_ = ds.conn.Close()
+	_, pb, _ := storedVMRecording(t, h)
+	if want := "Wardyn could not read whether you had taken over"; len(pb.Gaps) != 1 || pb.Gaps[0].Reason != want {
+		t.Errorf("playback gaps = %+v, want one %q gap", pb.Gaps, want)
+	}
+}

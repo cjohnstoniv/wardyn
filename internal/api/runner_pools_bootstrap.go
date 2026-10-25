@@ -90,7 +90,7 @@ func (s *Server) BootstrapRunnerPools(ctx context.Context) error {
 				proposals[id] = p
 				continue
 			}
-			slog.WarnContext(ctx, "wardynd: not every limit of a remote-hosted runner could be measured; one with no limits set takes no run until an administrator sets them",
+			slog.WarnContext(ctx, "wardynd: not every limit of a remote-hosted runner could be measured; one with no limits stored yet takes no run until an administrator sets them, and one that already has limits keeps them",
 				slog.String("remote_runner_id", id), slog.String("why", why), slog.Int64("cpu_millis", m.CPUMillis), slog.Int64("memory_mib", m.MemoryMiB), slog.Int64("disk_mib", m.DiskMiB))
 		}
 		made, proposed, err := rs.EnsureRemoteRunners(ctx, executors, proposals)

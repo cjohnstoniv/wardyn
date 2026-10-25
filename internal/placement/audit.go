@@ -28,12 +28,15 @@ const (
 	ActionRunnerRecoveryRequest = "runner.recovery.request"
 	// ActionRunnerOfflineSummary: a runner that connected again reported why it could not before.
 	ActionRunnerOfflineSummary = "runner.offline_summary.record"
+	// ActionRunnerEventRefuse: the organisation refused a runner's event for good and acknowledged it (DR-0436).
+	ActionRunnerEventRefuse = "runner.event.refuse"
 )
 
 // AuditActions lists them all.
 var AuditActions = []string{
 	ActionRunnerTokenCreate, ActionRunnerTokenRevoke, ActionRunnerEnrol, ActionRunnerClaim, ActionRunnerRevoke,
 	ActionRunnerConnect, ActionRunnerDisconnect, ActionRunnerActionRequest, ActionRunnerActionApply, ActionRunnerActionRefuse,
+	ActionRunnerEventRefuse,
 	ActionRunnerPostureRecord, ActionRunnerResidentErase, ActionCredentialDeliveryWrite,
 	ActionSSHSyncTransfer, ActionRunnersEnabledSet, ActionRunnerInventoryHold, ActionRunnerUpdate,
 	ActionRunnerTrustWrite, ActionRunnerRecoveryRequest, ActionRunnerOfflineSummary,

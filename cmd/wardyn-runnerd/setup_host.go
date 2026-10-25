@@ -97,6 +97,12 @@ type setupPaths struct {
 
 func (p setupPaths) identity() string { return filepath.Join(p.stateDir, "runner.json") }
 
+// crashLogFile is beside the log: the LaunchAgent's stdout and stderr, which take only what serve prints
+// outside its own rotated log (a panic, or a failure before it opens the log).
+func (p setupPaths) crashLogFile() string {
+	return strings.TrimSuffix(p.logFile, ".log") + ".crash.log"
+}
+
 // configFile is runnerd.json, where every setting the service runs with lives; the service definition
 // names only this path and the binary.
 func (p setupPaths) configFile() string { return filepath.Join(p.cliProfile, runnerConfigName) }
@@ -291,6 +297,12 @@ func (p setupPlan) runnerFile() runnerFile {
 	}
 	f.RelayListen, f.RelayHostTarget, f.TrustedCAFile, f.OrgCAFile = p.relayListen, p.relayHostTarget, p.trustedCAFile, p.orgCAFile
 	f.RunnerProxy, f.RunnerNoProxy = carriedValue(p.proxy, "HTTPS_PROXY", "https_proxy"), carriedValue(p.proxy, "NO_PROXY", "no_proxy")
+	switch p.macOSVM {
+	case "on":
+		f.MacOSVM = "1"
+	case "off":
+		f.MacOSVM = ""
+	}
 	return f
 }
 
@@ -447,6 +459,7 @@ func renderLaunchAgent(plan setupPlan) string {
 		"__WARDYN_RUNNERD__", html.EscapeString(plan.paths.installed),
 		"__WARDYN_CONFIG__", html.EscapeString(plan.paths.configFile()),
 		"__WARDYN_LOG__", html.EscapeString(plan.paths.logFile),
+		"__WARDYN_CRASH_LOG__", html.EscapeString(plan.paths.crashLogFile()),
 	).Replace(tpl)
 }
 

@@ -75,6 +75,19 @@ describe("DesktopViewer", () => {
     expect(screen.getByRole("button", { name: DESKTOP.actualSize })).toHaveAttribute("aria-pressed", "true");
   });
 
+  it("names a macOS desktop that is still starting, from the run's machine kind in the boot data", () => {
+    const el = document.createElement("html");
+    el.dataset.wardynDesktop = JSON.stringify({ ...OPEN, machine_kind: "macos_vm" });
+    const boot = readBoot(el);
+    expect(boot).toEqual({ ...OPEN, machine_kind: "macos_vm" });
+    render(<DesktopViewer boot={boot!} connect={() => new FakeSocket()} />);
+    expect(screen.getByRole("status")).toHaveTextContent(DESKTOP.startingMacOS);
+    expect(screen.getByText(DESKTOP.startingBody)).toBeInTheDocument();
+    cleanup();
+    render(<DesktopViewer boot={{ ...OPEN, machine_kind: "linux_vm" }} connect={() => new FakeSocket()} />);
+    expect(screen.getByRole("status")).toHaveTextContent(DESKTOP.starting);
+  });
+
   it("retries a desktop that is not reachable yet, on its own", () => {
     vi.useFakeTimers();
     const { sockets, connect } = open();

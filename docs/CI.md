@@ -372,6 +372,8 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 | `build` | – | pending | pending | 10 |
 | `conformance-k8s` | 58 | 11.2 | 12.8 | 35 |
 | `vm-conformance` (not required) | – | pending | pending | 30 |
+| `macos` (not required) | – | pending | pending | 30 |
+| `macos-xcode-27` (not required) | – | pending | pending | 10 |
 | `ui-e2e` (1/2, 2/2 matrix) | 1 | 7.0 | 7.0 | 25 |
 | `test-pg-shard` (api-1, api-2, store, race) | – | pending | pending | 20 |
 | `test-pg` (aggregator) | – | pending | pending | 10 |
@@ -446,8 +448,13 @@ gh run list -R cjohnstoniv/wardyn --workflow ci.yml --status completed --limit 6
   - Dispatch it on the bundle branch `proofs/<lane>-<sha12>`, one commit on `origin/main` adding `.proofs/`; on `main` every job skips.
   - Lane code can save cache entries under its run's ref whatever the token allows, and `ci.yml` restores `main`'s. So it never runs there, and it uses no cache.
   - A run counts only once `git diff --quiet origin/main...<head sha> -- ':(exclude).proofs'` exits 0 locally, so the workflow and script were main's.
+  - The `prove` job has the same Postgres service and `WARDYN_TEST_PG` as `test-pg-shard`, so a proof of a PG-backed test in `./internal/store` or `./internal/api` runs there instead of skipping.
 - `release.yml` has one group per ref and cancels nothing, so a dispatch and the tag push cannot publish at once.
 - `release.yml`'s `runner-pkg` job (macOS) builds `wardyn-runnerd.pkg` with [`scripts/build-runner-pkg.sh`](../scripts/build-runner-pkg.sh). Each signing step runs only when its `APPLE_DEVELOPER_ID_*` or `APPLE_NOTARY_*` secrets are set, and logs a skip line otherwise; [`scripts/test-runner-pkg.sh`](../scripts/test-runner-pkg.sh) covers the script on Linux.
+- The same job builds the macOS VM helper with cgo and signs it ad hoc with its one virtualization entitlement even without secrets. It then checks that entitlement, and that the package holds no macOS image.
+- The non-required `macos` job compiles and tests the helper and the darwin guest agent on a hosted Mac. `macos-xcode-27` checks the macOS 27 selector names. Neither boots a VM.
+  - `macos` is not a required check, but a red `macos` makes the run unusable as release evidence (green-by-tree reads the run's conclusion). It also runs the package postinstall as root against a temp root and reads the ledger back.
+  - `macos-xcode-27` runs on a public-preview image with `continue-on-error`, so it is informational and never release evidence.
 
 ### Incremental CI
 
@@ -556,7 +563,7 @@ So:
   - `notify-flaky` skips when both `ui-e2e` shards said their flaky list was empty, and runs on any other answer, including none.
 - `compose`, `dco`, `diagrams` and `gates (…)` do not read the classification and run on every change.
   - (`helm` stays on `backend`, not on the chart's own paths: `make helm-lint` also renders [`examples/policies/demo.json`](../examples/policies/demo.json) and [`cmd/wardynd/testdata/values-0.7.yaml`](../cmd/wardynd/testdata/values-0.7.yaml).)
-- Only a run whose five outputs and nine `image-scope` answers are all `true` uploads the `ci-full-tree-<tree>` marker that [`scripts/green-by-tree.sh`](../scripts/green-by-tree.sh) accepts as release evidence.
+- Only a run whose six outputs and nine `image-scope` answers are all `true` uploads the `ci-full-tree-<tree>` marker that [`scripts/green-by-tree.sh`](../scripts/green-by-tree.sh) accepts as release evidence.
   - A run that narrowed anything did not test everything, even where every check it reported is green.
   - `build` writes the marker, because only after `image-scope` can it know whether a scan was narrowed.
 

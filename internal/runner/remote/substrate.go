@@ -34,6 +34,12 @@ import (
 // shares one into the guest (virtiofs): the org's placement says it at create, and here at dispatch.
 const VMNoFolderShare = "this runner cannot share a folder into a Linux VM sandbox: its version predates folder shares into VMs, or its QEMU image has no working virtiofsd"
 
+// MacOSVMNotOffered refuses a macOS VM run on a runner whose caps carry no MacOSVM; runner is how the
+// sentence names it.
+func MacOSVMNotOffered(runner string) string {
+	return runner + " doesn't offer macOS VMs: it is older than 0.10, or macOS VMs aren't turned on for it."
+}
+
 var (
 	errOffline = fmt.Errorf("%w: no session", runner.ErrRunnerOffline)
 
@@ -84,16 +90,20 @@ type Substrate struct {
 	t    Transport
 	opts Options
 
-	mu                         sync.Mutex
-	caps                       *runnerwire.Caps
-	outputs                    map[uuid.UUID]*outputSink
-	resident                   map[uuid.UUID]leafHashes // SHA-256 of what DeliverResident delivered; never the value
+	mu       sync.Mutex
+	caps     *runnerwire.Caps
+	outputs  map[uuid.UUID]*outputSink
+	resident map[uuid.UUID]leafHashes // SHA-256 of what DeliverResident delivered; never the value
+	// vmKinds is the machine kind of each VM sandbox this substrate created, so a desktop or a pause is
+	// gated by that kind's caps; a ref missing from it (created before a restart) is gated by either.
+	vmKinds                    map[string]types.MachineKind
 	requireExecutionGeneration bool
 }
 
 // New builds the substrate of runnerID over t.
 func New(runnerID string, t Transport, opts Options) *Substrate {
-	s := &Substrate{id: runnerID, t: t, opts: opts, outputs: map[uuid.UUID]*outputSink{}, resident: map[uuid.UUID]leafHashes{}}
+	s := &Substrate{id: runnerID, t: t, opts: opts, outputs: map[uuid.UUID]*outputSink{}, resident: map[uuid.UUID]leafHashes{},
+		vmKinds: map[string]types.MachineKind{}}
 	t.SetHandler(s)
 	return s
 }
@@ -188,6 +198,31 @@ func (s *Substrate) refCall(ctx context.Context, method, ref string, result any)
 	return s.call(ctx, method, runnerwire.RefArgs{Ref: ref}, result)
 }
 
+// checkVMCaps refuses a VM spec for a runner whose last caps do not offer that kind. A VM is asked of
+// no runner that has not said it starts VMs of that kind: an older one would refuse create_vm anyway,
+// but this refusal names the reason and makes no call.
+func (s *Substrate) checkVMCaps(spec runner.SandboxSpec) error {
+	c, ok := s.Caps()
+	if spec.MachineKind.IsMacOSVM() {
+		if !ok || c.MacOSVM == nil {
+			return runnerwire.Refuse("%s", MacOSVMNotOffered("This runner"))
+		}
+		// A macOS VM shares no folder in this release.
+		if len(spec.Mounts) > 0 {
+			return runnerwire.Refuse(VMNoFolderShare)
+		}
+		return nil
+	}
+	if !ok || c.LinuxVM == nil {
+		return runnerwire.Refuse("this runner does not offer Linux VM sandboxes: it is older than 0.10, or its operator has not turned them on")
+	}
+	// Nor a VM that carries a folder of a runner that cannot share one into the guest.
+	if len(spec.Mounts) > 0 && !c.LinuxVM.Virtiofs {
+		return runnerwire.Refuse(VMNoFolderShare)
+	}
+	return nil
+}
+
 // CreateSandbox sends the spec minus OnWaiting and ExecOutput. `waiting` events
 // call spec.NotifyWaiting on this goroutine, in order, before it returns.
 func (s *Substrate) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (runner.Sandbox, error) {
@@ -208,15 +243,8 @@ func (s *Substrate) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) 
 	}
 	method := runnerwire.MethodCreateSandbox
 	if spec.MachineKind.IsVM() {
-		// Asked of no runner that has not said it starts VMs: an older one would refuse create_vm
-		// anyway, but this refusal names the reason and makes no call.
-		c, ok := s.Caps()
-		if !ok || c.LinuxVM == nil {
-			return runner.Sandbox{}, runnerwire.Refuse("this runner does not offer Linux VM sandboxes: it is older than 0.10, or its operator has not turned them on")
-		}
-		// Nor a VM that carries a folder of a runner that cannot share one into the guest.
-		if len(spec.Mounts) > 0 && !c.LinuxVM.Virtiofs {
-			return runner.Sandbox{}, runnerwire.Refuse(VMNoFolderShare)
+		if err := s.checkVMCaps(spec); err != nil {
+			return runner.Sandbox{}, err
 		}
 		method = runnerwire.MethodCreateVM
 	}
@@ -251,6 +279,11 @@ func (s *Substrate) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) 
 			s.mu.Unlock()
 		}
 		return runner.Sandbox{}, err
+	}
+	if spec.MachineKind.IsVM() {
+		s.mu.Lock()
+		s.vmKinds[res.Sandbox.Ref] = spec.MachineKind
+		s.mu.Unlock()
 	}
 	return res.Sandbox, nil
 }
@@ -425,7 +458,20 @@ func (s *Substrate) KillSandbox(ctx context.Context, ref string) error {
 }
 
 func (s *Substrate) EndSandbox(ctx context.Context, ref string) error {
-	return s.teardown(ctx, runnerwire.MethodEnd, types.RunnerActionEnd, ref)
+	err := s.teardown(ctx, runnerwire.MethodEnd, types.RunnerActionEnd, ref)
+	if err == nil {
+		s.mu.Lock()
+		delete(s.vmKinds, ref)
+		s.mu.Unlock()
+	}
+	return err
+}
+
+// vmKind is the machine kind ref was created with here, "" when this substrate did not create it.
+func (s *Substrate) vmKind(ref string) types.MachineKind {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.vmKinds[ref]
 }
 
 func (s *Substrate) StopProxy(ctx context.Context, ref string) error {

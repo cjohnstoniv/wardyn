@@ -4,6 +4,7 @@
 package types
 
 import (
+	"encoding/json"
 	"strings"
 	"time"
 	"unicode"
@@ -75,6 +76,10 @@ type RunnerView struct {
 	// Folders says the runner shares folders on its computer with runs elsewhere (a folder-only
 	// runner, 0.10 on), read like Capacity.
 	Folders bool `json:"folders,omitempty"`
+	// MacOSVM is the macos_vm object of the runner's last caps event (runnerwire.MacVMCaps), read like
+	// Capacity and absent when the runner offers no macOS VM. It is raw JSON because runnerwire imports
+	// this package: whatever runnerwire.MacVMCaps carries reaches the console with no change here.
+	MacOSVM json.RawMessage `json:"macos_vm,omitempty"`
 	// Kind is always RunnerKindSelfHosted: the one shape both kinds' reads share.
 	Kind RunnerKind `json:"kind"`
 	// Limits is what the runner's owner declared, which only they change; nil when not all of them are
@@ -101,6 +106,10 @@ type RunnerView struct {
 	// only, and absent until a runner that sends them has.
 	OfflineSummary *RunnerOfflineSummary `json:"offline_summary,omitempty"`
 	RelayStatus    *RunnerRelayStatus    `json:"relay_status,omitempty"`
+	// ParkedExits counts the runner's exit receipts the organisation parked: refused as a foreign, stale
+	// or incomplete incarnation on every try for about ten minutes, kept, and no longer retried. Set on a
+	// one-runner read only; absent for none.
+	ParkedExits int `json:"parked_exits,omitempty"`
 }
 
 // MaxRunnerReason bounds the reason of an offline summary or a relay status, in bytes, and

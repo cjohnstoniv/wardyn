@@ -19,7 +19,7 @@
 
 ## Topology
 
-![On a laptop runner, everyday work takes the normal path while each sandbox leaves only through its egress proxy, nothing connects in, and one outbound link brings runs from the organisation and carries audit back.](img/wardyn-laptop.svg)
+![On a laptop runner, everyday work takes the normal path while each sandbox leaves only through its egress proxy, nothing connects in, and one outbound link brings runs from the organisation and carries audit back.](img/wardyn-laptop.webp)
 
 The figure shows a client-mode runner. The diagram below shows the deprecated enrolled-daemon shape, where the laptop runs its own `wardynd` and takes policy from MDM. A client-mode runner runs no control plane: the organisation schedules its runs and writes its audit ([guide](operations/hybrid-laptops.md)).
 
@@ -683,8 +683,8 @@ sudo cp deploy/desktop/wardyn.env.example /etc/wardyn/wardyn.env
 # has. Substitute the current release's digests, or a published tag while you
 # are only smoke-testing.
 sudo sed -i '' -e 's/\$UPN/you@example.com/' \
-               -e 's|^WARDYN_WARDYND_IMAGE=.*|WARDYN_WARDYND_IMAGE=ghcr.io/cjohnstoniv/wardynd:0.9.8|' \
-               -e 's|^WARDYN_PROXY_IMAGE=.*|WARDYN_PROXY_IMAGE=ghcr.io/cjohnstoniv/wardyn-proxy:0.9.8|' \
+               -e 's|^WARDYN_WARDYND_IMAGE=.*|WARDYN_WARDYND_IMAGE=ghcr.io/cjohnstoniv/wardynd:0.10.0-rc.1|' \
+               -e 's|^WARDYN_PROXY_IMAGE=.*|WARDYN_PROXY_IMAGE=ghcr.io/cjohnstoniv/wardyn-proxy:0.10.0-rc.1|' \
                /etc/wardyn/wardyn.env
 sudo cp examples/policies/demo.json /etc/wardyn/policy.json
 

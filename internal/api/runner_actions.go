@@ -28,6 +28,13 @@ const maxActionResultBytes = runnerwire.MaxActionResultBytes
 
 var errRunnerEventUnsupported = errors.New("runner event kind has no org ingestion")
 
+// errRunnerIngestUnavailable is an organisation that cannot ingest runner events at all: a transient failure of
+// its own, never a verdict on the event (DR-0436).
+var errRunnerIngestUnavailable = errors.New("runner events: this organisation cannot ingest them (store or audit recorder not configured)")
+
+// errRunnerUnknownRun is an event naming a run this organisation no longer has.
+var errRunnerUnknownRun = errors.New("runner event names a run this organisation no longer has")
+
 // substrateRegistry is the orchestrator's runtime registration seam.
 type substrateRegistry interface {
 	Add(substrate.Substrate)
@@ -212,7 +219,7 @@ func (s *Server) admitRunner(_ context.Context, rn types.Runner) (remote.Admissi
 func (s *Server) BeginInventoryFromRunner(ctx context.Context, runnerID uuid.UUID, sessionID string) error {
 	st, ok := s.cfg.Store.(store.PG)
 	if !ok {
-		return store.ErrRunnerExecutionRefused
+		return errRunnerIngestUnavailable
 	}
 	if _, err := st.ReissueDeferredAssertedRunnerActions(ctx, runnerID, sessionID); err != nil {
 		return err
@@ -231,27 +238,28 @@ func (s *Server) EventFromRunner(ctx context.Context, runnerID uuid.UUID, ev run
 }
 
 // eventFromRunner is EventFromRunner for the connection whose fresh session is session ("" when it has
-// none), so a caps event settles only that session's runner.connect row.
+// none), so a caps event settles only that session's runner.connect row. Its error is classified: a refusal
+// for good is recorded and becomes the EventRefusal the peer acknowledges (classifyRunnerEvent).
 func (s *Server) eventFromRunner(ctx context.Context, runnerID uuid.UUID, session string, ev runnerwire.Event) error {
+	var err error
 	switch ev.Kind {
 	case runnerwire.EventActionResult:
-		return s.ActionResultFromRunner(ctx, runnerID, ev)
+		err = s.ActionResultFromRunner(ctx, runnerID, ev)
 	case runnerwire.EventAgentExit:
-		return s.ExitFromRunner(ctx, runnerID, ev)
+		err = s.ExitFromRunner(ctx, runnerID, ev)
 	case runnerwire.EventSpool:
-		return s.DecisionIngestFromRunner(ctx, runnerID, ev)
+		err = s.DecisionIngestFromRunner(ctx, runnerID, ev)
 	case runnerwire.EventPosture:
-		return s.PostureFromRunner(ctx, runnerID, ev)
+		err = s.PostureFromRunner(ctx, runnerID, ev)
 	case runnerwire.EventResidentErase:
-		return s.ResidentEraseFromRunner(ctx, runnerID, ev)
+		err = s.ResidentEraseFromRunner(ctx, runnerID, ev)
 	case runnerwire.EventCaps:
 		s.capsFromRunner(ctx, runnerID, session, ev)
-		return nil
 	case runnerwire.EventWaiting:
-		return nil
 	default:
-		return fmt.Errorf("%w: %s", errRunnerEventUnsupported, ev.Kind)
+		err = fmt.Errorf("%w: %s", errRunnerEventUnsupported, ev.Kind)
 	}
+	return s.classifyRunnerEvent(ctx, runnerID, ev, err)
 }
 
 // PendingFromRunner is the PENDING source of a fresh session: one bounded page
@@ -288,17 +296,20 @@ func (s *Server) PendingFromRunner(ctx context.Context, runnerID uuid.UUID) ([]r
 // and the action to it in the committing transaction.
 func (s *Server) ActionResultFromRunner(ctx context.Context, runnerID uuid.UUID, event runnerwire.Event) error {
 	st, ok := s.cfg.Store.(store.RunnerStore)
-	if !ok || event.Kind != runnerwire.EventActionResult || event.RunID == nil || len(event.Data) > maxActionResultBytes || s.cfg.RunnerAuditPrepare == nil {
-		return store.ErrRunnerActionRefused
+	if !ok || s.cfg.RunnerAuditPrepare == nil {
+		return errRunnerIngestUnavailable
+	}
+	if event.Kind != runnerwire.EventActionResult || event.RunID == nil || len(event.Data) > maxActionResultBytes {
+		return errActionResultShape
 	}
 	var result runnerwire.ActionResult
 	dec := json.NewDecoder(bytes.NewReader(event.Data))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&result); err != nil {
-		return store.ErrRunnerActionRefused
+		return errActionResultShape
 	}
 	if err := dec.Decode(new(any)); !errors.Is(err, io.EOF) {
-		return store.ErrRunnerActionRefused
+		return errActionResultShape
 	}
 	_, _, err := st.RecordRunnerActionResult(ctx, runnerID, *event.RunID, result.ID, result.Outcome, result.Reason, result.ObservedAt, s.cfg.RunnerAuditPrepare)
 	return err

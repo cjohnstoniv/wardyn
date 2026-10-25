@@ -125,7 +125,7 @@ export function deriveTitle(kind: ApprovalKind, scope: Scope): string {
       const ck = credentialKind(scope);
       const host = str(scope, "host");
       if (ck === "git_pat") return host ? `Hand git a token for ${host}` : "Hand git an access token";
-      if (ck === "ssh_key") return host ? `Write an SSH key for ${host}` : "Write a private SSH key to disk";
+      if (ck === "ssh_key") return host ? `Sign Git's SSH sign-in for ${host}` : "Sign Git's SSH sign-in";
       if (ck === "github_token") {
         const repos = scopeRepos(scope);
         return repos.length ? `Mint a GitHub token for ${repos[0]}` : "Mint a GitHub token";

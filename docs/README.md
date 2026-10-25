@@ -3,9 +3,9 @@
 - Start at the repo [README](../README.md) — it, the in-product Getting Started wizard — with its built-in demo steps — is the first-run path.
 - Everything here is the next question.
 
-![An isometric compound where one outer wall surrounds a datacentre and people's devices, each sandbox sits behind Wardyn's inner wall, and the org control plane links by runs and audit.](img/wardyn-walls.svg)
+![An isometric compound where one outer wall surrounds a datacentre and people's devices, each sandbox sits behind Wardyn's inner wall, and the org control plane links by runs and audit.](img/wardyn-walls.webp)
 
-![One outer wall surrounds the cloud zone and people's devices; each sandbox has its own inner wall and proxy, nothing connects in, and the proxy adds keys to outbound requests.](img/wardyn-places.svg)
+![One outer wall surrounds the cloud zone and people's devices; each sandbox has its own inner wall and proxy, nothing connects in, and the proxy adds keys to outbound requests.](img/wardyn-places.webp)
 
 ## Index
 
@@ -29,6 +29,7 @@
 | Run a local daemon on each developer's managed laptop (MDM envelope, and its ceiling) | [DESKTOP.md](DESKTOP.md) + [../deploy/desktop/](../deploy/desktop/) |
 | Register a self-hosted runner on a laptop, and what it does while offline | [runner-registration.md](runner-registration.md), [runner-offline.md](runner-offline.md), [operations/hybrid-laptops.md](operations/hybrid-laptops.md) |
 | Offer Linux VM sandboxes (QEMU/KVM) from a Linux runner host: requirements, the `/dev/kvm` step, the guest image contract | [operations/linux-vm-sandboxes.md](operations/linux-vm-sandboxes.md) |
+| Offer macOS VM sandboxes from a company-managed Mac: requirements, the base image, memory and disk limits, the shared ledger | [operations/macos-vms.md](operations/macos-vms.md) |
 | Run the organisation's own runner in a Kubernetes cluster (Helm chart, enrolment, claim, trust class, failure modes) | [operations/k8s-runners.md](operations/k8s-runners.md) + [design/0.9/k8s-runnerd.md](design/0.9/k8s-runnerd.md) + the `wardyn-k8s-runner-setup` Claude Code skill |
 | Set up SSO (Entra ID / OIDC) and admin/member RBAC on a cluster install | [operations/who-gets-in.md](operations/who-gets-in.md) + the `wardyn-k8s-setup` Claude Code skill |
 | Give each person their own Azure DevOps access | [AZURE-DEVOPS.md](AZURE-DEVOPS.md) |

@@ -12,6 +12,7 @@ import type { PolicyRef } from "../api/health";
 import type { PolicyContact } from "./site";
 import type { Experience, RunOverrides } from "./new-run-contract";
 import type { HarnessInnerWalls, RecordingLevel, RunPolicySpec } from "./policy";
+import type { VMKind } from "./machine-kind";
 import type { RunnerPoolSelection } from "./runner-pools";
 
 // The backend emits dotted agent ids like "claude-code" / "codex-cli".
@@ -360,7 +361,7 @@ export interface AgentRun {
   // AgentRun.MachineKind / VMMachine (migration 0217): "linux_vm" for a run
   // in a Linux VM, with the virtual hardware its runner started. Absent for a
   // container run. A named interface for the same line-scrape reason as above.
-  machine_kind?: "linux_vm";
+  machine_kind?: VMKind;
   vm_machine?: VMMachine;
 }
 
@@ -370,6 +371,9 @@ export interface VMMachine {
   cpu_model: string;
   accelerator: string;
   qemu_version: string;
+  // A macOS VM's guest build and its Mac's; absent on a Linux VM.
+  guest_os?: string;
+  host_os?: string;
 }
 
 export interface RunAttention {
@@ -521,6 +525,15 @@ export interface RunDetail extends AgentRun {
   computer_folder?: RunComputerFolder;
   // Every agent of a background run with several, the run's own first; absent otherwise.
   agents?: RunDetailAgent[];
+  // A macOS VM run's desktop as its Mac offers it (GET /runs/{id} only); see RunMacOS.
+  macos?: RunMacOS;
+}
+
+// GET /runs/{id}'s macos (runMacOSView, internal/api/run_macos_view.go): whether the Mac's Screen Sharing
+// lets the desktop be controlled or only watched, read off the runner's live caps. Absent for any other run,
+// and while the runner's caps are unknown.
+export interface RunMacOS {
+  desktop: "control" | "observe";
 }
 
 // One agent of a run with several agents (runDetailAgent, internal/api/run_multi_agent.go).

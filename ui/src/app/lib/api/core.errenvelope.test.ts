@@ -40,12 +40,12 @@ describe("errEnvelope / asJson — the envelope's machine-readable reason", () =
 
   it("a non-string reason is ignored, never rendered", async () => {
     const res = new Response(JSON.stringify({ error: "x", reason: 42 }), { status: 422 });
-    expect(await errEnvelope(res)).toEqual({ message: "x", reason: "", org: "", provider: "", kind: "", tool: "", cause: "" });
+    expect(await errEnvelope(res)).toEqual({ message: "x", reason: "", org: "", provider: "", kind: "", tool: "", cause: "", field: "" });
   });
 
   it("a raw (non-envelope) body carries no reason", async () => {
     const res = new Response("plain", { status: 500 });
-    expect(await errEnvelope(res)).toEqual({ message: "plain", reason: "", org: "", provider: "", kind: "", tool: "", cause: "" });
+    expect(await errEnvelope(res)).toEqual({ message: "plain", reason: "", org: "", provider: "", kind: "", tool: "", cause: "", field: "" });
   });
 
   it('{"error":"…","reason":"git_credential","org":"…"} -> an HttpError carrying the org', async () => {
@@ -61,7 +61,7 @@ describe("errEnvelope / asJson — the envelope's machine-readable reason", () =
 
   it("a non-string org is ignored, never rendered", async () => {
     const res = new Response(JSON.stringify({ error: "x", org: 42 }), { status: 422 });
-    expect(await errEnvelope(res)).toEqual({ message: "x", reason: "", org: "", provider: "", kind: "", tool: "", cause: "" });
+    expect(await errEnvelope(res)).toEqual({ message: "x", reason: "", org: "", provider: "", kind: "", tool: "", cause: "", field: "" });
   });
 
   it('{"error":"…","provider":"corp","kind":"custom_endpoint"} -> an HttpError naming the refused provider and kind (#532, #535, #543)', async () => {
@@ -81,6 +81,15 @@ describe("errEnvelope / asJson — the envelope's machine-readable reason", () =
     const err = (await asJson(res).catch((e: unknown) => e)) as HttpError;
     expect(err.tool).toBe("claude-code");
     expect(new HttpError(422, "x").tool).toBe("");
+  });
+
+  it('{"error":"…","field":"machine_kind"} -> an HttpError naming the request field the refusal is about', async () => {
+    const res = new Response(JSON.stringify({ error: "refused", reason: "placement_capability", field: "machine_kind" }), { status: 422 });
+    const err = (await asJson(res).catch((e: unknown) => e)) as HttpError;
+    expect(err.field).toBe("machine_kind");
+    const bad = new Response(JSON.stringify({ error: "refused", field: 7 }), { status: 422 });
+    expect(((await asJson(bad).catch((e: unknown) => e)) as HttpError).field).toBe("");
+    expect(new HttpError(422, "x").field).toBe("");
   });
 
   it("errText is the envelope's message, byte for byte", async () => {

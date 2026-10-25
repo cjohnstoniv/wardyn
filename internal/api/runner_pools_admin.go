@@ -239,22 +239,23 @@ func (s *Server) handleAddRunnerPoolExecutor(w http.ResponseWriter, r *http.Requ
 	if s.refuseRemoteMember(w, pool, executor) {
 		return
 	}
-	rows, ok := s.poolCatalogue(w, r, ps, false)
-	if !ok {
+	mode, governed, done := s.attachGovernance(w, r, ps, pool.ID, executor)
+	if done {
 		return
 	}
-	mode := govDirect
-	if executorUnderOtherPolicy(rows, pool.ID, executor) {
-		if mode, ok = s.governanceWriteMode(w, r); !ok {
+	m, added, rev, err := ps.AddRunnerPoolExecutor(r.Context(), pool.ID, executor, !governed)
+	if errors.Is(err, store.ErrRunnerPoolGoverned) {
+		// A use policy on another pool holding the executor was approved between the catalogue read and
+		// the locks: decide again on the catalogue as it now stands, which holds the attach.
+		if mode, governed, done = s.attachGovernance(w, r, ps, pool.ID, executor); done {
 			return
 		}
-		if mode == govQueue {
-			row, _ := catalogueRow(rows, pool.ID)
-			s.holdExecutorChange(w, r, row, executor, false)
+		m, added, rev, err = ps.AddRunnerPoolExecutor(r.Context(), pool.ID, executor, !governed)
+		if errors.Is(err, store.ErrRunnerPoolGoverned) {
+			writePoolRefusal(w, runnerpool.Refusal{Reason: runnerpool.ReasonStale, Name: pool.Name})
 			return
 		}
 	}
-	m, added, rev, err := ps.AddRunnerPoolExecutor(r.Context(), pool.ID, executor)
 	if errors.Is(err, store.ErrNotFound) {
 		writePoolNotFound(w)
 		return
@@ -270,6 +271,29 @@ func (s *Server) handleAddRunnerPoolExecutor(w http.ResponseWriter, r *http.Requ
 		}
 	}
 	writeJSON(w, http.StatusOK, m)
+}
+
+// attachGovernance decides how putting remote-hosted runner executor in the pool is written, on the
+// catalogue as it stands. governed: another live pool holding the runner has a use policy, so the
+// write mode was asked for. done: the answer is already written (the attach was held, or the mode
+// refused).
+func (s *Server) attachGovernance(w http.ResponseWriter, r *http.Request, ps store.RunnerPoolStore, poolID uuid.UUID, executor string) (mode govWriteMode, governed, done bool) {
+	rows, ok := s.poolCatalogue(w, r, ps, false)
+	if !ok {
+		return govDirect, false, true
+	}
+	if !executorUnderOtherPolicy(rows, poolID, executor) {
+		return govDirect, false, false
+	}
+	if mode, ok = s.governanceWriteMode(w, r); !ok {
+		return mode, true, true
+	}
+	if mode == govQueue {
+		row, _ := catalogueRow(rows, poolID)
+		s.holdExecutorChange(w, r, row, executor, false)
+		return mode, true, true
+	}
+	return mode, true, false
 }
 
 // executorUnderOtherPolicy reports whether a live pool other than poolID holds remote-hosted runner

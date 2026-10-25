@@ -4,7 +4,7 @@
  */
 
 // The one read the Run step makes: GET /runner-pools for the run type asked. A change of run type asks
-// again, and the answer for the other type is never shown meanwhile.
+// again (and no `load` asks nothing), and the answer for the other type is never shown meanwhile.
 
 import * as React from "react";
 import { runnerPools } from "../../../../../lib/api/runner-pools";
@@ -16,9 +16,10 @@ export const loadPools: LoadPools = (runType, signal) => runnerPools.list(runTyp
 
 export type PoolsState = { status: "loading" } | { status: "error"; message: string } | { status: "ready"; list: RunnerPoolList };
 
-export function usePools(load: LoadPools, runType: RunnerPoolRunType | undefined): PoolsState {
+export function usePools(load: LoadPools | undefined, runType: RunnerPoolRunType | undefined): PoolsState {
   const [answer, setAnswer] = React.useState<{ runType: RunnerPoolRunType | undefined; state: PoolsState }>();
   React.useEffect(() => {
+    if (!load) return;
     const controller = new AbortController();
     load(runType, controller.signal).then(
       (list) => !controller.signal.aborted && setAnswer({ runType, state: { status: "ready", list } }),

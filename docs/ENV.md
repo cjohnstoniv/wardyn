@@ -28,7 +28,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Unset or empty (`docker run -e VAR` / compose `VAR=`) keeps the default quietly.
 - Every boolean `wardynd` and the runner substrates read goes through that one parser (`1`/`true`/`yes`/`on`, `0`/`false`/`no`/`off`, anything else exits 2 at boot).
 - The exception is `WARDYN_ENVBUILD_REGISTRY_INSECURE`: it takes Go's `strconv.ParseBool` forms (`1`/`t`/`true`, `0`/`f`/`false`, no `yes` or `on`) and fails the build on anything else.
-- The eight `internal/api` switches read per request (`WARDYN_EGRESS_SECOND_HUMAN`, `WARDYN_CAPABILITY_SECOND_HUMAN`, `WARDYN_GOVERNANCE_SECOND_HUMAN`, `WARDYN_ALLOW_USER_ENV_SECRET`, `WARDYN_ALLOW_AGENT_TELEMETRY`, `WARDYN_GIT_PAT_API_BITBUCKET_SERVER`, `WARDYN_SCHEDULED_RUNS`, `WARDYN_MCP_LOCAL_SERVERS`) are also read once at boot so a bad value is refused there.
+- The nine `internal/api` switches read per request (`WARDYN_EGRESS_SECOND_HUMAN`, `WARDYN_CAPABILITY_SECOND_HUMAN`, `WARDYN_GOVERNANCE_SECOND_HUMAN`, `WARDYN_ALLOW_USER_ENV_SECRET`, `WARDYN_ALLOW_AGENT_TELEMETRY`, `WARDYN_GIT_PAT_API_BITBUCKET_SERVER`, `WARDYN_SCHEDULED_RUNS`, `WARDYN_MCP_LOCAL_SERVERS`, `WARDYN_MACOS_VMS`) are also read once at boot so a bad value is refused there.
 - So are `WARDYN_COMPONENT_ENV_RESERVE_EDITORS` and `WARDYN_KUBECTL_CLI`, read on every component check.
 - Two `wardyn-proxy` parsers are kept on purpose.
 - `WARDYN_LLM_SCAN` is a kill switch that can only disable.
@@ -291,6 +291,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_COMPONENT_ENV_RESERVE_EDITORS` | bool | off | reserves `EDITOR`, `VISUAL`, `PAGER`, `GIT_EDITOR`, `GIT_PAGER` and `GIT_SEQUENCE_EDITOR`: no component may set them. A stored component that does is refused at its next save or attach |
 | `WARDYN_ALLOW_USER_ENV_SECRET` | bool | (unset) | let MEMBERS hold `env_secret` and `file_secret` grants. Default-unset DROPS a member's `env_secret` or `file_secret` grant even when the operator's ceiling lists the exact pairing (`dropAdminOnlyEnvSecretGrants`, `inline_policy_bounds.go`). [Details](#wardyn_allow_user_env_secret) |
 | `WARDYN_MCP_LOCAL_SERVERS` | bool | off | Sandboxed MCP servers (`transport: stdio`). **Each has the agent's access; the harness applies tool rules.** Off: saving one, a new run, a queued run's admission and a revive refuse it; a run already running keeps it until it ends. [Details](#wardyn_mcp_local_servers) |
+| `WARDYN_MACOS_VMS` | bool | off | Lets a run ask for a macOS virtual machine (`machine_kind: macos_vm`) on a registered, company-managed Mac. Off: create refuses the kind with `400` `machine_kind_unknown`. A Mac also needs its own opt-in. [Details](#wardyn_macos_vms) |
 | `WARDYN_EGRESS_SECOND_HUMAN` | bool | (unset) | four-eyes on egress approvals: the human who DECIDES an `egress_domain` approval must not be the human who created the run (`requireSecondHuman`, `approvals_second_human.go`). **Local mode REFUSES it**, and the `admin-token` principal BYPASSES it. [Details](#wardyn_egress_second_human) |
 | `WARDYN_CAPABILITY_SECOND_HUMAN` | bool | (unset) | four-eyes on Azure DevOps capability escalations: the human who DECIDES one must not be the human who created the run. **Local mode REFUSES it**, and the `admin-token` principal BYPASSES it. [Details](#wardyn_capability_second_human) |
 | `WARDYN_GOVERNANCE_SECOND_HUMAN` | bool | (unset) | four-eyes on governance writes: a human's write to a governance profile, a capability grant, a key-domain assignment or `local_credential_delivery` is stored as a pending change. A second, distinct human must approve it. [Details](#wardyn_governance_second_human) |
@@ -353,6 +354,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_RUNNER_LINUX_VM` | `1` | (unset, **off**) | **`wardyn-runnerd serve`**: `1` offers Linux VM sandboxes (`machine_kind: linux_vm`) once the start-up probe passes, else logs its fix. On Kubernetes the chart's `k8s.linuxVM` sets it and a `CC3` RuntimeClass pin must resolve. [Linux VM sandboxes](operations/linux-vm-sandboxes.md) |
 | `WARDYN_RUNNER_VM_QEMU_IMAGE` | string (image) | (unset) | **`wardyn-runnerd serve`**: the QEMU image (built from `deploy/runner/vm-qemu`) every VM container starts from; required with `WARDYN_RUNNER_LINUX_VM=1` |
 | `WARDYN_RUNNER_VM_CPU_MODEL` | string | `Haswell-v4` | **`wardyn-runnerd serve`**: the named QEMU CPU model every VM gets, started with `enforce`; recorded on each run |
+| `WARDYN_RUNNER_MACOS_VM` | `1` | (unset, **off**) | **`wardyn-runnerd serve`**, on a Mac (macOS 27 or later): `1` offers macOS VM sandboxes (`machine_kind: macos_vm`) once its checks pass, else logs the fix. The `MacOSVM` managed preference sets it too, and the organisation's [`WARDYN_MACOS_VMS`](#wardyn_macos_vms) must be on. [Details](operations/macos-vms.md) |
 | `WARDYN_DAEMON_PROXY_URL` | string (URL) | (unset = direct) | the forward proxy wardynd's own outbound HTTP calls traverse (flag `-daemon-proxy-url`; `installDaemonProxy`, [`cmd/wardynd/daemon_proxy.go`](../cmd/wardynd/daemon_proxy.go)); a malformed value refuses boot. [Details](#wardyn_daemon_proxy_url) |
 | `WARDYN_DAEMON_NO_PROXY` | string (CSV) | (unset) | destinations `WARDYN_DAEMON_PROXY_URL` must not be used for, in `NO_PROXY` spelling (flag `-daemon-no-proxy`; `x/net/http/httpproxy` semantics). Wardynd appends `KUBERNETES_SERVICE_HOST`, any `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` or `WARDYN_OIDC_INTERNAL_ISSUER` host, and the AWS link-local credential endpoints. Ignored when the proxy URL is unset |
 | `WARDYN_DAEMON_PROXY_SECRET` | string (path) | (unset) | path to a file holding one forward-proxy URL that MAY embed `user:pass@` (flag `-daemon-proxy-secret-file`; `installDaemonProxySecret`, [`cmd/wardynd/daemon_proxy.go`](../cmd/wardynd/daemon_proxy.go)); a group- or world-writable file refuses boot. [Details](#wardyn_daemon_proxy_secret) |
@@ -635,6 +637,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - On Kubernetes with recordings on there is no direct stdout to keep: once such a run ends, with `WARDYN_RUN_OUTPUT_PERSIST` on, the available recording is recovered into a masked tail marked `source` `recording` and always `incomplete`.
 - Or a `capture_gap` when the recording is missing, invalid or cannot be proven masked, and only the run's owner or an operator is served it.
 - A read while the run is live, with persistence off, or by a caller who may see the run but is neither, answers `409` (`run_output_not_captured`)).
+- With persistence off, the owner or an operator reading an ended run whose recording never arrived gets `409` (`run_output_not_kept`).
 - Readable through `GET /api/v1/runs/{id}/output` by the run's owner or an admin (flag `-exec-output-tail`).
 - Independent of `WARDYN_RECORDING_STORE`: it works with recordings `off`.
 - `off` (or any false value) keeps none and refuses rows stored earlier, and the route then answers `409` (`run_output_off`).
@@ -1441,6 +1444,23 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Re-enable the agent CLI's own telemetry inside sandboxes.
 - Default-unset SUPPRESSES it (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, `DISABLE_TELEMETRY=1` in the sandbox env, `runs_dispatch_mounts.go`): the CLI's first-run phone-home is otherwise the FIRST pending egress approval a Confined pilot sees, before the host their task actually needs.
 - A value that is not a bool exits 2 at boot (`#202`; before that it was silently read as unset).
+
+### `WARDYN_MACOS_VMS`
+
+- Turns on macOS virtual machine sandboxes: a run with `machine_kind: macos_vm`, started by a registered runner on a Mac.
+- Off (the default): create refuses `macos_vm` with `400` `machine_kind_unknown`. Every other request and response reads as it did before the kind existed.
+- On, a run still lands only on a Mac runner that offers macOS VMs, has its own opt-in, and passes the managed-Mac gate:
+  - its trust class is `managed_device`, which only a security operator sets;
+  - its posture says `mdm_managed` from the MDM's posture file.
+- A Mac whose posture fails is refused with `runner_posture_unmet`; every other refusal here is `placement_capability`.
+- Placement refuses a Mac whose base image is not ready or that is at its limit of macOS VMs (at most 2).
+- macOS VMs need a pool where every runner offers them; a mixed pool refuses them. This matches Linux VMs.
+- It also refuses a harness the base cannot serve, and a CPU or memory below the base's minimum.
+- A macOS VM takes no folder mount, and a Kubernetes runner refuses the kind.
+- `GET /setup/status` publishes it as `features.macos_vms`, present only when on.
+- Needs migration `0234_macos_vm_kind`, which widens two CHECK constraints and changes no row.
+- [macOS VM sandboxes](operations/macos-vms.md) covers the Mac side: its switch, base image, limits and cleanup.
+- A value that is not a bool exits 2 at boot.
 
 ### `WARDYN_MCP_LOCAL_SERVERS`
 
@@ -2290,7 +2310,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Read-only checks of how the CLI reaches the organisation, one line per stage. They cover the URL (`--url`, `WARDYN_URL`, the profile) and its source, DNS and the proxy route (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`). They also cover the TLS issuer and trust store, `/healthz` and `/api/v1/me`.
 - It never prints a token or a proxy credential, writes nothing and exits 1 when a stage fails; `--json` gives the stages as data.
 - It reads `WARDYN_TRUSTED_CA_FILE` only to say whether that bundle would verify the server: the CLI trusts the system roots alone, and a runner trusts the bundle.
-- With a runner installed it appends that runner's stages ([details](runner-registration.md#check-a-runners-connection)).
+- With a runner installed it appends that runner's stages ([details](runner-registration.md#check-a-runners-connection)). Its `runner-exits` stage fails when the organisation parked one of that runner's exit receipts ([runner-offline.md](runner-offline.md)).
 
 ### `WARDYN_URL`
 
@@ -2660,6 +2680,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_CODEX_BIN_URL` 🔒 | string (URL) | (unset) | `scripts/stage-agent-binary.sh codex-cli` only, build-time: the native `codex` binary to stage for `CODEX_INSTALL=native`. Codex has no Wardyn-verified public download contract, so this one is staged-only and refuses to guess a URL. [Details](#wardyn_codex_bin_url) |
 | `WARDYN_IDLE_PID` | int (pid) | (unset = falls back to pid 1) | [`deploy/images/common/agent-run-lib.sh`](../deploy/images/common/agent-run-lib.sh)'s `start_wardyn_session`: **exported** to the boot pane so `boot_seed_wait_for_prep` can bound its wait on the exact `--idle` process. Handed over via `tmux set-environment` on the respawn path since the tmux server differs from the one that created the session |
 | `WARDYN_NOVNC_GEOMETRY` | string (`WxHxDEPTH`) | `1280x800x24` | the `novnc` image's X display geometry (`deploy/images/novnc/wardyn-ui-novnc`) |
+| `WARDYN_PROXY_WAIT_SECS` | int | `10` | how many seconds an agent image's `agent-run` waits for `WARDYN_PROXY_URL` to accept a connection before it carries on with one stderr line; shell-only; no run sets it |
 | `WARDYN_REC_WRAP` | internal (bash array) | empty | `boot_seed_rec_wrap` (`agent-run-lib.sh`) fills this **same-process, never-exported** array with the `wardyn-rec` prefix a boot-seed pane's argv runs under when `WARDYN_RECORDING=1`; both agent images' `--boot-seed` branches share the one function rather than each keeping their own copy |
 | `WARDYN_SESSION_START` | internal (shell var) | empty | `start_wardyn_session`'s own return signal (`created` / `respawned`), read back by the same `agent-run` invocation that set it — never exported, never read by another process |
 | `WARDYN_SSH_AGENT_DIR` | internal (path) | per `ssh` | `wardyn-git-helper ssh-exec` ([`cmd/wardyn-git-helper/sshagent.go`](../cmd/wardyn-git-helper/sshagent.go)) sets it for its `ssh`: the `0700` directory of the agent sockets `agent-run`'s ssh config names; removed when `ssh` exits |

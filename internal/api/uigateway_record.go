@@ -123,11 +123,12 @@ func (s *Server) desktopRecorded(run types.AgentRun) bool {
 		s.cfg.RecordingStore != nil && !runIsUnrecordable(run)
 }
 
-// Why Wardyn paused a desktop recording, as the gap names it: a "Needs you" takeover, or a desktop
-// sign-in (board M7-Replay's words).
+// Why Wardyn paused a desktop recording, as the gap names it: a "Needs you" takeover, a desktop
+// sign-in (board M7-Replay's words), or a desktop that could not read whether either is open.
 const (
 	desktopPauseTakeover = "you took over"
 	desktopPauseSignin   = "you took over to sign in"
+	desktopPauseUnread   = "Wardyn could not read whether you had taken over"
 )
 
 // saveDesktopRecording stores a closed connection's recording and writes desktop.recording.write.

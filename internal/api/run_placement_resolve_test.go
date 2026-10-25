@@ -295,6 +295,55 @@ func TestKindTargets_APinOnTheOwnRunnerOfADriveRunIsRefused(t *testing.T) {
 	}
 }
 
+// A macOS VM run never keeps the remote-hosted kind: not when no placement is asked (the pool would send
+// it there when the person's Macs have no room), not for drives or a waiting run's noLocal, and not when
+// its profile denies the person's own runners. Asked for remote, or in a pool of remote-hosted runners
+// only, it is refused as a macOS VM on remote.
+func TestKindTargets_MacOSVMNeverKeepsRemote(t *testing.T) {
+	s := &Server{}
+	laptop := uuid.New()
+	own := poolTarget{id: laptop.String(), runnerID: &laptop}
+	remote := poolTarget{id: "alpha", executor: "alpha"}
+	pool := types.RunnerPool{Name: "Mixed", Scope: types.RunnerPoolUser}
+	mac := func(asked types.Placement) *createRunRequest {
+		return &createRunRequest{Placement: asked, MachineKind: string(types.MachineMacOSVM)}
+	}
+	for _, tc := range []struct {
+		name string
+		in   placementInput
+	}{
+		{"unasked", placementInput{req: mac("")}},
+		{"drives", placementInput{req: mac(""), drives: true}},
+		{"no local", placementInput{req: mac(""), noLocal: true}},
+	} {
+		kinds, refusal := s.kindTargets(context.Background(), tc.in, pool, []poolTarget{own, remote})
+		if got := slices.Sorted(maps.Keys(kinds)); refusal != nil || !slices.Equal(got, []types.Placement{types.PlacementLocal}) {
+			t.Errorf("%s: kinds %v, refusal %+v; want the person's own runners only", tc.name, got, refusal)
+		}
+	}
+	for name, targets := range map[string][]poolTarget{"asked for remote": {own, remote}, "remote-hosted only": {remote}} {
+		in := placementInput{req: mac("")}
+		if name == "asked for remote" {
+			in.req = mac(types.PlacementRemote)
+		}
+		_, refusal := s.kindTargets(context.Background(), in, pool, targets)
+		if refusal == nil || refusal.body.Reason != string(placement.ReasonPlacementCapability) || refusal.body.Error != macOSVMOnRemote || refusal.body.Field != "machine_kind" {
+			t.Errorf("%s: refusal %+v, want placement_capability %q on machine_kind", name, refusal, macOSVMOnRemote)
+		}
+	}
+	ctx := withOIDCHuman(context.Background(), "alice")
+	denyLocal := governanceCeiling{Unit: &ResolvedUnit{Name: "walled"}, Limits: types.GovernanceLimits{DenyPlacements: []types.Placement{types.PlacementLocal}}}
+	if kinds, refusal := s.kindTargets(ctx, placementInput{req: mac(""), ceiling: denyLocal}, pool, []poolTarget{own, remote}); refusal == nil ||
+		refusal.body.Reason != string(placement.ReasonPlacementDenied) {
+		t.Errorf("own runners denied: kinds %v, refusal %+v; want placement_denied, never the remote-hosted kind", kinds, refusal)
+	}
+	// A container run keeps today's kinds.
+	if kinds, refusal := s.kindTargets(ctx, placementInput{req: &createRunRequest{}, ceiling: denyLocal}, pool, []poolTarget{own, remote}); refusal != nil ||
+		!slices.Equal(slices.Sorted(maps.Keys(kinds)), []types.Placement{types.PlacementRemote}) {
+		t.Errorf("container, own runners denied: kinds %v, refusal %+v; want remote", kinds, refusal)
+	}
+}
+
 // A store that cannot hold pools keeps today's unpooled behaviour: a run without a pool is created with
 // no binding, and a run that names a pool is refused in the pool vocabulary, never silently unpooled.
 func TestPlacement_StoreWithoutPoolsKeepsUnpooledBehaviour(t *testing.T) {

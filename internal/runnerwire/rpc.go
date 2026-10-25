@@ -58,7 +58,8 @@ const (
 	// runner whose caps carry LinuxVM.Desktop; an older runner never gets the call.
 	MethodDialDesktop = "dial_desktop"
 	// MethodPauseAgent and MethodResumeAgent stop and continue a VM sandbox's agent inside the guest
-	// (runner.AgentPauser), on a runner whose caps carry LinuxVM.SignIns; an older one never gets them.
+	// (runner.AgentPauser, AgentPauseArgs), on a runner whose caps carry LinuxVM.SignIns; an older one
+	// never gets them.
 	MethodPauseAgent  = "pause_agent"
 	MethodResumeAgent = "resume_agent"
 	// The local attach calls are sent only to a runner that advertises Caps.LocalAttach.
@@ -99,6 +100,20 @@ type CreateSandboxResult struct {
 type RefArgs struct {
 	ExecutionGeneration uuid.UUID `json:"execution_generation,omitempty"`
 	Ref                 string    `json:"ref"`
+}
+
+// AgentPauseArgs is pause_agent's and resume_agent's. Generation is the run's pause generation, which
+// the runner hands the guest agent (runner.AgentPauser). A runner that predates it reads only Ref, and a
+// wardynd that predates it sends none, which the guest agent reads as 0 and signals as before.
+type AgentPauseArgs struct {
+	Ref        string `json:"ref"`
+	Generation int64  `json:"generation,omitempty"`
+}
+
+// AgentPauseResult is their answer: FencedPause is the guest agent's. A runner that predates it
+// answers nothing, which reads as false.
+type AgentPauseResult struct {
+	FencedPause bool `json:"fenced_pause,omitempty"`
 }
 
 type ExecArgs struct {

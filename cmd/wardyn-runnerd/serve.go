@@ -60,6 +60,8 @@ type serveOptions struct {
 	driveRoots []string
 	// localModelPorts is --local-model-port (parseLocalModelPorts): the laptop local model ports the person allows.
 	localModelPorts string
+	// macOSVM is the macos_vm setting: macOS VM sandboxes on a Mac (off by default).
+	macOSVM bool
 }
 
 func (o serveOptions) recordingEnabled() (bool, error) {
@@ -87,10 +89,15 @@ func (o serveOptions) localAttachEnabled() (bool, error) {
 }
 
 func newServeCommand(build runnerHooksBuilder) *cobra.Command {
-	var org, stateDir, configPath string
+	var org, stateDir, configPath, logFile string
 	var opts serveOptions
 	cmd := &cobra.Command{Use: "serve", Short: "Connect this registered runner to its organisation", Args: cobra.NoArgs}
 	cmd.RunE = func(cmd *cobra.Command, _ []string) (retErr error) {
+		restoreLog, err := logToFile(logFile)
+		if err != nil {
+			return err
+		}
+		defer restoreLog()
 		cfg, err := serveConfig(cmd, configPath)
 		if err != nil {
 			return err
@@ -200,6 +207,7 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&org, "org", "", "organisation public HTTPS URL used at registration (default: the OrgURL managed preference, else org_url in runnerd.json)")
 	cmd.Flags().StringVar(&configPath, "config", "", "the runner's settings file (default: <user configuration directory>/wardyn/runnerd.json, which may be absent); the file never holds a credential")
+	cmd.Flags().StringVar(&logFile, "log-file", "", "write the log to this file, not stderr, rotated at 10 MiB with 3 older files kept (the LaunchAgent sets it: launchd cannot rotate its own)")
 	cmd.Flags().StringVar(&stateDir, "state-dir", "", "private runner state directory (defaults to the user configuration directory)")
 	cmd.Flags().StringVar(&opts.proxyImage, "proxy-image", "", "Wardyn proxy image matching this daemon version (defaults to the image the organisation named at registration, else the release image on a release build)")
 	cmd.Flags().StringVar(&opts.relayListen, "relay-listen", "", "address the run relay listens on: loopback, the native Docker bridge's gateway or Rancher Desktop's veth-rd-wsl address (found by a probe container when left out)")
@@ -247,4 +255,5 @@ func (c runnerConfig) applyTo(org, stateDir *string, o *serveOptions) {
 	o.relayListen, o.relayHostTarget, o.network = c.get("relay_listen"), c.get("relay_host_target"), c.get("internal_network")
 	o.trustedCAFile, o.upstreamProxy, o.recording = c.get("trusted_ca_file"), c.get("upstream_proxy"), c.get("recording_store")
 	o.orgCAFile, o.localModelPorts = c.get("org_ca_file"), c.get("local_model_port")
+	o.macOSVM = macOSVMOn(c.get("macos_vm"))
 }

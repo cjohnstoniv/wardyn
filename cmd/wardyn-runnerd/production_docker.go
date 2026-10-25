@@ -14,6 +14,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -25,6 +26,8 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/dockerutil"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/macvm"
+	"github.com/cjohnstoniv/wardyn/internal/macvm/admission"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/docker"
@@ -110,6 +113,7 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	watch.onChange = opts.offline.relayChanged
 	extras.report = connectReport{log: opts.offline, relay: watch}
 	extras.linuxVM = enableLinuxVM(ctx, sub, stateDir, os.Getenv)
+	extras.macOSVM = enableMacOSVM(ctx, sub, identity.RunnerID.String(), stateDir, opts.macOSVM)
 	extras.localAttach, extras.orgURL = local, opts.orgURL
 	endVMsOnFullSpool(sink.spoolSink, extras.linuxVM, sub.EndVM)
 	extras.driveRoots, extras.localModelRelay, extras.localModelPorts = driveRoots, true, modelPorts
@@ -395,6 +399,9 @@ type runtimeExtras struct {
 	// linuxVM, set when the operator turned Linux VM sandboxes on and the probe passed, is what the
 	// runner's caps offer; nil offers none and refuses create_vm.
 	linuxVM *runnerwire.VMCaps
+	// macOSVM, set when the operator turned macOS VM sandboxes on (enableMacOSVM), builds the caps'
+	// macos_vm and resends them when they change; nil offers none.
+	macOSVM *macOSVMs
 	// localAttach opens the local attach socket while the organisation allows it (--local-attach on,
 	// Docker only); orgURL is the organisation its pointer file names.
 	localAttach bool
@@ -525,36 +532,13 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		MutationFinished: manager.MutationFinished,
 		ExecutionResult:  manager.ExecutionResult,
 		Streams:          streams.Call, Output: streams.Output, BindOutput: streams.BindOutput, ForgetOutput: streams.ForgetOutput,
-		Resident: resident, LinuxVM: extra.linuxVM != nil,
+		Resident: resident, LinuxVM: extra.linuxVM != nil, MacOSVM: extra.macOSVM.enabled(),
 	})
 	if err != nil {
 		return runnerRuntime{}, err
 	}
 	checkLapsesAtStartup(ctx, manager)
-	var online atomic.Pointer[runnerwire.Peer]
-	// sendCaps reports the runner's caps on peer; reprobe re-checks the relay first, and always sends
-	// even when nothing in the report is new (a fresh session's caps are required).
-	sendCaps := func(ctx context.Context, peer *runnerwire.Peer, reprobe, always bool) error {
-		caps, err := hostCaps(ctx, sub, extra.arch)
-		if err != nil {
-			return err
-		}
-		caps.Capacity, caps.BYOISelftest, caps.Retire, caps.Resident = capacity(ctx), dispatcher.Selftests(), true, dispatcher.Residents()
-		caps.ProxySettings, caps.AllowedRoots, caps.LocalModelPorts = extra.proxySettings(), extra.driveRoots, extra.localModelPorts
-		caps.LinuxVM, caps.LocalAttach = extra.linuxVM, local != nil
-		if !extra.report.fill(ctx, &caps, reprobe) && !always {
-			return nil
-		}
-		data, err := runnerwire.Marshal(caps)
-		if err != nil {
-			return err
-		}
-		if err := peer.EventAck(ctx, runnerwire.Event{Kind: runnerwire.EventCaps, Data: data}); err != nil {
-			return err
-		}
-		extra.report.sent(caps)
-		return nil
-	}
+	caps := &capsReporter{sub: sub, extra: extra, capacity: capacity, dispatcher: dispatcher, hasLocal: local != nil}
 	hooks := runnerwire.RunnerHooks{
 		Call: dispatcher.Call,
 		// The org never opens a stream toward a runner: a relay is the
@@ -568,7 +552,7 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		// erase runs (lock order: Resident, then Manager).
 		Revoked: func(ctx context.Context) error { return errors.Join(manager.Revoked(ctx), resident.EraseAll(ctx)) },
 		Replay: func(ctx context.Context, peer *runnerwire.Peer) error {
-			if err := sendCaps(ctx, peer, true, true); err != nil {
+			if err := caps.send(ctx, peer, true, true); err != nil {
 				return err
 			}
 			// Posture only gates runner_resident delivery; a refused report
@@ -581,39 +565,28 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 			return manager.Replay(ctx, peer)
 		},
 		Online: func(peer *runnerwire.Peer, resumed bool) {
-			online.Store(peer)
+			caps.online.Store(peer)
 			manager.Online(peer)
 			streams.Online(peer)
 			relay.Online(peer)
-			if resumed {
-				// A resumed session sends no caps unless the relay check on this reconnect changed or a
-				// summary waits.
-				go func() {
-					if err := sendCaps(ctx, peer, true, false); err != nil {
-						slog.WarnContext(ctx, "runner caps after resume failed", "error", err)
-					}
-				}()
-			}
+			caps.afterOnline(ctx, peer, resumed)
 			if reporter != nil {
 				go reporter.Watch(peer, postureInterval)
 			}
 		},
 		LocalAttach: local.Set,
+		// The organisation's per-run limits, on every connect: each macOS guest is sized at them.
+		PerRunLimits: extra.macOSVM.setPerRunLimits,
 		StreamOffline: func(peer *runnerwire.Peer) {
-			online.CompareAndSwap(peer, nil)
+			caps.online.CompareAndSwap(peer, nil)
 			streams.Offline(peer)
 			relay.Offline(peer)
 		},
 	}
 	run := func(ctx context.Context) error {
+		extra.macOSVM.start(ctx, func() { caps.resendMacOS(ctx) })
 		if w := extra.report.relay; w != nil {
-			go w.run(ctx, func() {
-				if peer := online.Load(); peer != nil {
-					if err := sendCaps(ctx, peer, false, true); err != nil {
-						slog.WarnContext(ctx, "runner caps after a relay change failed", "error", err)
-					}
-				}
-			})
+			go w.run(ctx, func() { caps.resendRelay(ctx) })
 		}
 		go func() {
 			if manager.IsRevoked() {
@@ -889,4 +862,64 @@ func (d *dockerSink) extras(sub *docker.Driver, ev *evidenceForwarder) runtimeEx
 		},
 		closeAlso: d.Close,
 	}
+}
+
+// enableMacOSVM turns macOS VM sandboxes on when the operator asked for them on an Apple silicon Mac,
+// and returns the handle that builds the caps' macos_vm. Off by default. A Mac whose ledger is missing or
+// damaged offers none and says why in its caps, in words; one with no helper beside wardyn-runnerd, or
+// whose helper's probe does not pass, offers none and says why in its caps as a code, and in its log in words. Container runs are untouched
+// either way. The runner does not know its per-run memory here (the organisation keeps the limits), so
+// the offer sizes each guest at the base's minimum until it does.
+func enableMacOSVM(ctx context.Context, sub *docker.Driver, runnerID, stateDir string, on bool) *macOSVMs {
+	if !on {
+		return nil
+	}
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		slog.WarnContext(ctx, "macOS VM sandboxes are off on this runner: they need an Apple silicon Mac")
+		return nil
+	}
+	root, err := macvm.DefaultRoot()
+	if err != nil {
+		slog.WarnContext(ctx, "macOS VM sandboxes are off on this runner", "reason", err.Error())
+		return nil
+	}
+	measured, err := measureHost(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "macOS VM sandboxes: Docker did not report its memory; the ledger subtracts none", "error", err.Error())
+	}
+	m := openMacOSVMs(macOSVMSetup{ledgerDir: admission.DefaultDir, root: root, runnerID: runnerID, version: version.String(), uid: os.Getuid(), limitsFile: macOSVMLimitsFile(stateDir),
+		dockerMemory: uint64(max(measured.MemoryMiB, 0)) << 20, host: admission.SystemHost(), owner: fileOwner})
+	m.helper, err = macVMHelperPath()
+	if err == nil {
+		_, err = os.Stat(m.helper)
+	}
+	if m.ledger != nil && err != nil {
+		slog.WarnContext(ctx, "macOS VM sandboxes are off on this runner: no helper beside wardyn-runnerd", "error", err.Error())
+		m.ledger, m.why, m.reason = nil, macOSVMNoHelper, runnerwire.MacVMReasonNoHelper
+	}
+	m.gate(ctx)
+	m.dockerUp = func(ctx context.Context) bool { _, err := sub.Classes(ctx); return err == nil }
+	if m.ledger != nil {
+		m.sweepStaging()
+		cfg := &docker.MacVMConfig{Layout: m.layout, Helper: m.helper, Identity: macOSVMIdentity, SockRoot: m.sockRoot,
+			ToolsDialFile: filepath.Join(root, runToolsDialFile), Ledger: m.ledger, Host: m.host, RunnerID: runnerID, HostOS: macHostOS(), Changed: m.changed}
+		if err := sub.EnableMacVM(cfg); err != nil {
+			slog.WarnContext(ctx, "macOS VM sandboxes are off on this runner", "reason", err.Error())
+			m.ledger, m.refusal, m.reason = nil, macOSVMLedgerDamaged, runnerwire.MacVMReasonLedgerDamaged
+		} else {
+			m.reclaim, m.endNewest = sub.ReclaimMacVMs, sub.EndNewestMacVM
+			m.prepNet, m.prepSweep, m.prepRemove = sub.StartMacPrepNet, sub.SweepMacPrep, sub.RemoveMacPrepNet
+			m.toolsUpdate = func(man macvm.Manifest) {
+				go func() {
+					if err := m.startToolsUpdate(context.WithoutCancel(ctx), man); err != nil {
+						slog.WarnContext(ctx, "macOS VM base: the tools update did not start", "error", err.Error())
+					}
+				}()
+			}
+			slog.InfoContext(ctx, "macOS VM sandboxes are on", "dir", root, "identity", string(cfg.Identity))
+		}
+	}
+	m.checkSession(ctx)
+	m.recompute()
+	return m
 }

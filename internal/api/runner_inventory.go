@@ -4,6 +4,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"slices"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -85,8 +87,34 @@ func (s *Server) runnerView(row types.Runner, used types.RunnerTally, admin bool
 	if row.State == types.RunnerClaimed {
 		v.Capacity, v.Classes, v.AllowedRoots = s.runnerReportedCaps(row.ID)
 		v.Folders = s.runnerSharesFolders(row.ID)
+		v.MacOSVM = s.runnerMacOSVM(row.ID)
 	}
 	return v
+}
+
+// runnerMacOSVM is the macos_vm object of the runner's last caps event, re-encoded whole; nil when the
+// runner has not reported one.
+func (s *Server) runnerMacOSVM(id uuid.UUID) json.RawMessage {
+	caps, ok := s.runnerLastCaps(id)
+	if !ok || caps.MacOSVM == nil {
+		return nil
+	}
+	b, err := json.Marshal(caps.MacOSVM)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
+// runnerLastCaps is the runner's last caps event as this process holds it, read like runnerReportedCaps.
+func (s *Server) runnerLastCaps(id uuid.UUID) (runnerwire.Caps, bool) {
+	s.runnerStreams.subsMu.Lock()
+	ep, ok := s.runnerStreams.subs[id]
+	s.runnerStreams.subsMu.Unlock()
+	if !ok {
+		return runnerwire.Caps{}, false
+	}
+	return ep.sub.Caps()
 }
 
 // runnerSharesFolders is the runner's last caps event's folders flag, read like runnerReportedCaps.
@@ -300,6 +328,12 @@ func (s *Server) getRunnerView(w http.ResponseWriter, r *http.Request, owner str
 		views[0].OfflineSummary, views[0].RelayStatus, err = hs.RunnerHealth(r.Context(), id)
 		if err != nil {
 			writeServerError(w, r, "read runner health", err)
+			return
+		}
+	}
+	if ps, ok := s.cfg.Store.(parkedExitStore); ok {
+		if views[0].ParkedExits, err = ps.ParkedRunnerExits(r.Context(), id); err != nil {
+			writeServerError(w, r, "read parked runner exits", err)
 			return
 		}
 	}

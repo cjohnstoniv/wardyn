@@ -125,7 +125,9 @@ func runnerSpoolRun(ctx context.Context, tx pgx.Tx, runnerID, runID uuid.UUID) (
 	if run.RunnerID == nil || *run.RunnerID != runnerID || run.Placement != types.PlacementLocal || !runnerReportsOn(kind, owner, run.CreatedBy) {
 		return run, ErrRunnerSpoolRefused
 	}
-	if run.State != types.RunRunning && !run.State.IsTerminal() {
+	// STARTING too: the run's proxy, and so its spool, exists from the sandbox create, before the
+	// STARTING→RUNNING CAS (DR-0436). Ingest is audit only, so no lifecycle state is touched.
+	if run.State != types.RunStarting && run.State != types.RunRunning && !run.State.IsTerminal() {
 		return run, ErrRunnerSpoolRefused
 	}
 	return run, nil

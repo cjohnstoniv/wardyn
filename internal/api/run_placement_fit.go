@@ -28,6 +28,9 @@ import (
 type runnerFit struct {
 	limits *types.RunnerLimits
 	used   types.RunnerTally
+	// runner is a self-hosted runner's row (trust class and posture, for the pool list's macOS VM
+	// offer); zero for a remote-hosted one.
+	runner types.Runner
 }
 
 // runnerFits is every runner the caller's runs could be placed on, by target id: the caller's own
@@ -50,7 +53,7 @@ func (s *Server) runnerFits(ctx context.Context) (map[string]runnerFit, error) {
 			}
 			for _, r := range runners {
 				ids = append(ids, r.ID)
-				out[r.ID.String()] = runnerFit{limits: r.Limits}
+				out[r.ID.String()] = runnerFit{limits: r.Limits, runner: r}
 			}
 		}
 	}
@@ -63,7 +66,7 @@ func (s *Server) runnerFits(ctx context.Context) (map[string]runnerFit, error) {
 		for _, r := range runners {
 			if r.OwnerKind == types.RunnerOwnerOrg && r.State == types.RunnerClaimed {
 				ids = append(ids, r.ID)
-				out[r.ID.String()] = runnerFit{limits: r.Limits}
+				out[r.ID.String()] = runnerFit{limits: r.Limits, runner: r}
 			}
 		}
 	}

@@ -31,6 +31,7 @@ set -euo pipefail
 # provision_git_helper_secret, clone_one, dispatch_repo_clones,
 # resolve_workdir) — identical across every agent image's agent-run.
 source /usr/local/bin/agent-run-lib.sh
+wait_for_proxy
 
 # WARDYN_AWS_SSO_LOGIN_COMMAND — the chained login+upload command, defined once
 # (and printed by the attach shell that sources the same file). Sourcing it here

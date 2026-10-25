@@ -226,7 +226,7 @@ jobs:
   # let that path through with no gate at all.
   preflight-green:
     name: Preflight — required contexts + newest dispatched nightly green on the tag's tree
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -394,7 +394,7 @@ jobs:
 
   images:
     name: build, push, sign (${{ matrix.name }})
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     needs: preflight-green
     if: needs.preflight-green.outputs.path == 'build'
     # 60, not 30: the three agent rows run their apt-get/npm/installer steps
@@ -683,7 +683,7 @@ jobs:
     name: build, push, sign (${{ matrix.name }})
     needs: [preflight-green, images]
     if: needs.preflight-green.outputs.path == 'build'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     # Same 60-minute floor as `images`, for the same reason (novnc alone is
     # 1.22 GB across two platforms, one pass under arm64 emulation).
     timeout-minutes: 60
@@ -821,7 +821,7 @@ jobs:
     name: build, push, sign (${{ matrix.name }})
     needs: [preflight-green, images-ui-sandbox]
     if: needs.preflight-green.outputs.path == 'build' && inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     permissions:
       contents: read
@@ -853,7 +853,7 @@ jobs:
   # still finished, because promote is idempotent and a re-run redoes them.
   promote:
     name: promote and sign the images
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     needs: preflight-green
     if: needs.preflight-green.outputs.path == 'promote'
     timeout-minutes: 30
@@ -1123,7 +1123,7 @@ jobs:
   # runner-pkg and release-assets read.
   binaries:
     name: CLI binaries
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     needs: preflight-green
     timeout-minutes: 20
     permissions:
@@ -1248,9 +1248,14 @@ jobs:
   # With none set the package is unsigned: a person allows it in System Settings (Privacy & Security, Open
   # Anyway), and only an MDM agent or script install can push it (Apple's own app-install command needs a
   # Developer ID Installer signature).
+  #
+  # The package also carries wardyn-macvm, the macOS VM helper. It needs cgo and the Virtualization
+  # framework, so it is built here, on the arm64 macos-26 image, not cross-built with the binaries above.
+  # It is signed with its one entitlement (deploy/runner/macos/wardyn-macvm.entitlements) even with no
+  # Developer ID secrets, ad hoc, and the payload check below reads that entitlement back from the package.
   runner-pkg:
     name: macOS runner package (.pkg)
-    runs-on: macos-14
+    runs-on: macos-26
     needs: [preflight-green, binaries]
     timeout-minutes: 30
     permissions:
@@ -1262,6 +1267,22 @@ jobs:
           pattern: "cli-darwin-*"
           merge-multiple: true
           path: bin
+      # cache: false: release builds start from a clean Go cache.
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      # The helper installs the guest agent into the VM and refuses one whose version differs from its own, so both
+      # are built here with the one ldflags value. (-trimpath makes Go drop -ldflags from `go version -m`, so the
+      # pair's equality is by construction; the package step reads back the helper's version and the build commit.)
+      - name: Build the macOS VM helper (cgo, arm64) and its guest agent
+        run: |
+          set -euo pipefail
+          ldflags="-X github.com/cjohnstoniv/wardyn/internal/version.releaseBuild=true"
+          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "$ldflags" \
+            -o bin/wardyn-macvm ./cmd/wardyn-macvm
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "$ldflags" \
+            -o bin/wardyn-guest-agent ./cmd/wardyn-guest-agent
       - name: Build, sign and notarize (each only with its secrets)
         env:
           # Notarization submits the package to Apple, so it runs only for a real release tag run.
@@ -1281,7 +1302,7 @@ jobs:
           DRY_RUN="$DRY_RUN" scripts/build-runner-pkg.sh --version "$version" \
             --arm64 bin/wardyn-runnerd-darwin-arm64 --amd64 bin/wardyn-runnerd-darwin-amd64 \
             --cli-arm64 bin/wardyn-darwin-arm64 --cli-amd64 bin/wardyn-darwin-amd64 \
-            --out wardyn-runnerd.pkg
+            --macvm bin/wardyn-macvm --guest-agent bin/wardyn-guest-agent --out wardyn-runnerd.pkg
           # An unsigned package has no signature to check; a signed one must verify.
           pkgutil --check-signature wardyn-runnerd.pkg || true
           payload="$(pkgutil --payload-files wardyn-runnerd.pkg)"
@@ -1289,6 +1310,28 @@ jobs:
           grep -Eq '(^|/)usr/local/wardyn/bin/wardyn$' <<<"$payload"
           grep -q 'usr/local/wardyn/share/doc/LICENSE' <<<"$payload"
           grep -q 'usr/local/wardyn/share/doc/THIRD-PARTY-NOTICES.md' <<<"$payload"
+          # The helper is in the package, no macOS image ever is,
+          # and the helper carries exactly the virtualization entitlement.
+          grep -Eq '(^|/)usr/local/wardyn/bin/wardyn-macvm$' <<<"$payload"
+          grep -Eq '(^|/)usr/local/wardyn/bin/wardyn-guest-agent$' <<<"$payload"
+          if grep -Eiq '\.(ipsw|img)$' <<<"$payload"; then echo "::error::the package payload lists a macOS image"; exit 1; fi
+          pkgutil --expand-full wardyn-runnerd.pkg "$RUNNER_TEMP/pkg"
+          helper="$(find "$RUNNER_TEMP/pkg" -path '*/Payload/usr/local/wardyn/bin/wardyn-macvm' -type f)"
+          [ -n "$helper" ] && [ "$(wc -l <<<"$helper")" -eq 1 ]
+          codesign -d --entitlements :- "$helper" 2>/dev/null | plutil -convert json -o - - \
+            | jq -e '. == {"com.apple.security.virtualization": true}'
+          # The guest agent is in the package once, signed, and carries no entitlement.
+          agent="$(find "$RUNNER_TEMP/pkg" -path '*/Payload/usr/local/wardyn/bin/wardyn-guest-agent' -type f)"
+          [ -n "$agent" ] && [ "$(wc -l <<<"$agent")" -eq 1 ] && [ -x "$agent" ]
+          codesign --verify --strict "$agent"
+          [ -z "$(codesign -d --entitlements :- "$agent" 2>/dev/null)" ]
+          # Nothing at run time compares the agent's version, so this proves provenance: the helper reports the
+          # bare release version, and the pair were built from the same commit.
+          [ "$("$helper" version)" = "$version" ]
+          stamp() { go version -m "$1" | grep -E '^[[:space:]]+build[[:space:]]+(-ldflags|vcs\.revision|vcs\.modified)=' || true; }
+          want="$(stamp "$helper")"
+          grep -q 'vcs.revision=' <<<"$want"
+          [ "$(stamp "$agent")" = "$want" ]
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: runner-pkg
@@ -1304,7 +1347,7 @@ jobs:
   # charts, so this is a package + push.
   chart:
     name: Publish the Helm chart (OCI)
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     needs: preflight-green
     timeout-minutes: 10
     permissions:
@@ -1369,7 +1412,7 @@ jobs:
     # choice; any job that FAILED still stops it.
     if: ${{ !cancelled() && !failure() && inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v') }}
     needs: [preflight-green, images, images-ui-sandbox, images-ui-sandbox-signin, promote, chart, binaries, runner-pkg]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
       contents: write   # gh release upload
