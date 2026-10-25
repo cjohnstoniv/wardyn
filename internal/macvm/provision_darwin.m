@@ -3,7 +3,7 @@
 
 //go:build darwin && arm64 && cgo
 
-// The one provisioning first boot of a macOS base (see provision.go).
+// The one first boot of a macOS base, provisioned or plain (see provision.go).
 //
 // VZMacGuestProvisioningOptions and the validated start-option setter are
 // macOS 27 API. They are looked up at run time so this file builds against
@@ -174,12 +174,15 @@ static VZMacOSVirtualMachineStartOptions *wardynStartOptions(const char *user, c
 }
 
 // wardynProvisionStart builds and starts the VM, blocking until the start
-// completes. It returns a retained handle, or NULL with *errOut set (free it).
+// completes. An empty user starts it with no provisioning options, for a
+// setup by hand. It returns a retained handle, or NULL with *errOut set (free
+// it).
 void *wardynProvisionStart(const char *disk, const char *aux, const void *hw, int hwLen, const void *mid, int midLen,
                            unsigned cpus, unsigned long long mem, int fd, const char *user, const char *pass, char **errOut) {
 	@autoreleasepool {
 		NSString *msg = nil;
-		VZMacOSVirtualMachineStartOptions *opts = wardynStartOptions(user, pass, &msg);
+		VZMacOSVirtualMachineStartOptions *opts =
+		    user[0] == '\0' ? [VZMacOSVirtualMachineStartOptions new] : wardynStartOptions(user, pass, &msg);
 		if (opts == nil) {
 			*errOut = wardynCopyString(msg);
 			return NULL;
@@ -253,4 +256,11 @@ void wardynProvisionForceStop(void *p) {
 
 void wardynProvisionFree(void *p) {
 	CFBridgingRelease(p);
+}
+
+// wardynProvisionMachine is the handle's VM, unretained, for its window
+// (screen_darwin.m). The caller holds the handle while it uses it.
+void *wardynProvisionMachine(void *p) {
+	WardynProvisionVM *h = (__bridge WardynProvisionVM *)p;
+	return (__bridge void *)h.vm;
 }

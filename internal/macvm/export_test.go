@@ -42,3 +42,10 @@ func lockFree(path string, exclusive bool) bool {
 // RunExtraPorts makes o's run boot also register ports (tests of the
 // listener check).
 func RunExtraPorts(o *RunOptions, ports ...uint32) { o.extraPorts = ports }
+
+// SetGeteuid makes prepare see euid as its effective user id. restore undoes it.
+func SetGeteuid(euid int) (restore func()) {
+	old := geteuid
+	geteuid = func() int { return euid }
+	return func() { geteuid = old }
+}

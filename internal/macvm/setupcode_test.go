@@ -7,8 +7,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -73,6 +76,13 @@ func TestSetupByHandCodeLivesOnlyInItsFile(t *testing.T) {
 	if seen.Account != "wardyn-admin" || len(seen.Code) != 8 {
 		t.Fatalf("setup-code record %+v", seen)
 	}
+	// A host with provisioning (macOS 27) provisions first; setup by hand is its fallback, in a window.
+	if args := f.fb.Last(); f.fb.Boots() != 1 || args.Username != "wardyn-admin" || len(args.Password) < 40 {
+		t.Fatalf("first boot %d times as %q; want one provisioned boot", f.fb.Boots(), args.Username)
+	}
+	if opened, closed := f.fb.Windows(); opened != 1 || closed != 1 {
+		t.Fatalf("windows opened %d, closed %d; want 1 and 1", opened, closed)
+	}
 	if b.in.Password != seen.Code || len(b.in.NewPassword) < 32 || b.in.NewPassword == seen.Code || b.fileAfter {
 		t.Fatalf("stage 1 got password=code %v, a new password %v, file after replace %v",
 			b.in.Password == seen.Code, len(b.in.NewPassword) >= 32, b.fileAfter)
@@ -113,5 +123,155 @@ func TestSetupByHandUnfinishedOrOffLeavesNoCode(t *testing.T) {
 	g.ev.on = func(ev macvm.PrepareEvent) { wrote = wrote || ev.Phase == macvm.PhaseSetupByHand }
 	if _, err := macvm.Prepare(context.Background(), g.opts); !errors.Is(err, macvm.ErrManualSetup) || wrote {
 		t.Fatalf("setup by hand off: %v, setup_by_hand emitted %v", err, wrote)
+	}
+}
+
+// The host floor is macOS 26: a 26 host runs macOS VMs (its base is set up by hand), a 25 host is
+// refused with the reason, and a version that does not parse is refused too.
+func TestCheckHostVersionFloorIs26(t *testing.T) {
+	for v, ok := range map[string]bool{"26.0": true, "26.7": true, "27.0.1": true, "25.6": false, "15.4": false, "": false, "x.1": false} {
+		err := macvm.CheckHostVersion(v)
+		if (err == nil) != ok {
+			t.Errorf("%q: %v", v, err)
+		}
+		if err != nil && !strings.Contains(err.Error(), "macOS VMs need macOS 26 or later") {
+			t.Errorf("%q: the refusal %q does not name the floor", v, err)
+		}
+	}
+}
+
+// noProvisioning is what a macOS 26 host's provisioning check says.
+var noProvisioning = fmt.Errorf("macvm provision: this Mac's Virtualization framework has no class VZMacGuestProvisioningOptions; %w needs macOS 27 or later", macvm.ErrNoProvisioning)
+
+// On a host without guest provisioning, prepare boots the base plain and goes to setup by hand at once:
+// no account in the boot, the code written before any dial of the guest (no Remote Login wait), the
+// guest's window opened and closed again, and stage 1 logging in with the code.
+func TestPrepareWithoutProvisioningGoesStraightToSetupByHand(t *testing.T) {
+	f, b, seen := handPrep(t)
+	f.fb.Unsupported = noProvisioning
+	f.opts.RemoteLoginWait = time.Hour // waiting it out would time the test out
+	var early atomic.Int32
+	byHand := f.net.onDial
+	f.net.onDial = func() {
+		if _, err := os.Stat(f.opts.Layout.SetupCode()); err != nil {
+			early.Add(1)
+		}
+		byHand()
+	}
+	if _, err := macvm.Prepare(context.Background(), f.opts); err != nil {
+		t.Fatal(err)
+	}
+	if args := f.fb.Last(); f.fb.Boots() != 1 || args.Username != "" || args.Password != "" {
+		t.Fatalf("first boot %d times, account %q, password set %v; want one plain boot", f.fb.Boots(), args.Username, args.Password != "")
+	}
+	if n := early.Load(); n != 0 {
+		t.Fatalf("%d dials of the guest before the setup code existed: prepare waited for a provisioned Remote Login", n)
+	}
+	if b.in.Password != seen.Code || len(seen.Code) != 8 || len(b.in.NewPassword) < 32 {
+		t.Fatalf("stage 1 got the code %v, a new password %v", b.in.Password == seen.Code, len(b.in.NewPassword) >= 32)
+	}
+	if opened, closed := f.fb.Windows(); opened != 1 || closed != 1 {
+		t.Fatalf("windows opened %d, closed %d; want 1 and 1", opened, closed)
+	}
+}
+
+// Without provisioning and with setup by hand off, prepare stops at its check, before any download or boot.
+func TestPrepareWithoutProvisioningNeedsSetupByHand(t *testing.T) {
+	f := newPrep(t)
+	f.fb.Unsupported = noProvisioning
+	if _, err := macvm.Prepare(context.Background(), f.opts); !errors.Is(err, macvm.ErrNoProvisioning) {
+		t.Fatalf("got %v, want ErrNoProvisioning", err)
+	}
+	if f.srv.reqs.Load() != 0 || f.fb.Boots() != 0 {
+		t.Fatalf("downloaded %d times, booted %d times", f.srv.reqs.Load(), f.fb.Boots())
+	}
+}
+
+// A window that cannot open stops setup by hand at once and deletes the code: nobody could finish it.
+func TestSetupByHandWithoutAWindowStops(t *testing.T) {
+	f, _, _ := handPrep(t)
+	f.fb.Unsupported = noProvisioning
+	f.fb.ScreenErr = errors.New("no window server")
+	_, err := macvm.Prepare(context.Background(), f.opts)
+	if err == nil || !strings.Contains(err.Error(), "no window server") {
+		t.Fatalf("got %v, want the window's error", err)
+	}
+	if _, err := os.Stat(f.opts.Layout.SetupCode()); !os.IsNotExist(err) {
+		t.Fatalf("the setup-code file outlived prepare: %v", err)
+	}
+}
+
+// noDesktop is what a Mac's window check says over SSH.
+var noDesktop = fmt.Errorf("macvm: this process has no window-server session: %w", macvm.ErrNoDesktopSession)
+
+// A prepare that will need setup by hand (no guest provisioning) and cannot show the guest's window, with no
+// desktop session or as root, stops at its check: no download, no boot, nothing written under the root.
+func TestPrepareWithoutADesktopStopsAtItsCheck(t *testing.T) {
+	for name, tc := range map[string]struct {
+		noScreen error
+		euid     int
+		want     string
+	}{
+		"over SSH": {noDesktop, 501, "no window-server session"},
+		"as root":  {nil, 0, "prepare runs as root"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			defer macvm.SetGeteuid(tc.euid)()
+			f := newPrep(t)
+			f.fb.Unsupported, f.fb.NoScreen = noProvisioning, tc.noScreen
+			f.opts.SetupByHandWait = time.Hour
+			_, err := macvm.Prepare(context.Background(), f.opts)
+			if !errors.Is(err, macvm.ErrNoDesktopSession) || !strings.Contains(err.Error(), tc.want) ||
+				!strings.Contains(err.Error(), "run prepare in Terminal on the Mac, signed in at its desktop, not over SSH") {
+				t.Fatalf("got %v, want the desktop refusal (%s)", err, tc.want)
+			}
+			if f.srv.reqs.Load() != 0 || f.fb.Boots() != 0 || f.eng.Installs() != 0 {
+				t.Fatalf("downloaded %d, booted %d, installed %d", f.srv.reqs.Load(), f.fb.Boots(), f.eng.Installs())
+			}
+			if left, _ := os.ReadDir(f.opts.Layout.Root); len(left) != 0 {
+				t.Fatalf("the refused prepare wrote %v under the root", left)
+			}
+			for _, ev := range f.ev.evs {
+				if ev.Phase != macvm.PhaseCheck {
+					t.Fatalf("the refused prepare reached %s", ev.Phase)
+				}
+			}
+		})
+	}
+}
+
+// A host with guest provisioning (macOS 27) needs no desktop session, nor a user that is not root: its
+// prepare provisions as before and opens no window, since its setup by hand never runs.
+func TestPrepareWithProvisioningNeedsNoDesktop(t *testing.T) {
+	defer macvm.SetGeteuid(0)()
+	f := newPrep(t)
+	f.fb.NoScreen = noDesktop
+	f.opts.SetupByHandWait = time.Hour
+	if _, err := macvm.Prepare(context.Background(), f.opts); err != nil {
+		t.Fatal(err)
+	}
+	if args := f.fb.Last(); f.fb.Boots() != 1 || args.Username != "wardyn-admin" {
+		t.Fatalf("first boot %d times as %q; want one provisioned boot", f.fb.Boots(), args.Username)
+	}
+	if opened, _ := f.fb.Windows(); opened != 0 {
+		t.Fatalf("a provisioned prepare opened %d windows", opened)
+	}
+}
+
+// On macOS 27, a provisioned boot that falls back to setup by hand where no window can open stops at once,
+// not after the hour, and deletes the code: the check is the window's own.
+func TestSetupByHandFallbackWithoutADesktopStopsAtOnce(t *testing.T) {
+	f, _, _ := handPrep(t)
+	f.fb.NoScreen = noDesktop
+	f.opts.SetupByHandWait = time.Hour // waiting it out would time the test out
+	_, err := macvm.Prepare(context.Background(), f.opts)
+	if !errors.Is(err, macvm.ErrNoDesktopSession) {
+		t.Fatalf("got %v, want the desktop refusal", err)
+	}
+	if args := f.fb.Last(); f.fb.Boots() != 1 || args.Username != "wardyn-admin" {
+		t.Fatalf("first boot %d times as %q; want one provisioned boot", f.fb.Boots(), args.Username)
+	}
+	if _, err := os.Stat(f.opts.Layout.SetupCode()); !os.IsNotExist(err) {
+		t.Fatalf("the setup-code file outlived prepare: %v", err)
 	}
 }

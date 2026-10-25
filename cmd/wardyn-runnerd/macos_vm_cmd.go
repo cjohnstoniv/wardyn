@@ -134,6 +134,8 @@ type macOSVMStatus struct {
 
 	progress, counted, minCPUs, minMemoryMiB int
 	setupCode                                string
+	// byHand: the helper's probe says this Mac has no guest provisioning, so its prepare needs setup by hand.
+	byHand bool
 }
 
 // status reads the ledger, the base, the offer and the helper's probe.
@@ -144,7 +146,7 @@ func (m *macOSVMs) status(ctx context.Context) (macOSVMStatus, error) {
 		return st, nil
 	}
 	pr, perr := probeHelper(ctx, m.helper)
-	st.Thermal = pr.Thermal
+	st.Thermal, st.byHand = pr.Thermal, perr == nil && pr.Reason == runnerwire.MacVMHostNoProvisioning
 	m.recompute()
 	c := m.current()
 	st.State, st.Base, st.Max, st.progress, st.Error = c.Base.State, c.Base.GuestOS, c.Max, c.Base.Progress, c.Base.Error
@@ -154,8 +156,7 @@ func (m *macOSVMs) status(ctx context.Context) (macOSVMStatus, error) {
 	if c.Base.State == runnerwire.MacVMBaseReady {
 		st.Desktop, st.Harnesses, st.minCPUs, st.minMemoryMiB = cmp.Or(c.Desktop, "none"), append(st.Harnesses, c.Harnesses...), c.MinCPUs, c.MinMemoryMiB
 	}
-	var ev macvm.PrepareEvent
-	if json.Unmarshal([]byte(lastLine(m.layout.PrepareLog())), &ev) == nil {
+	if ev, ok, _ := lastHelperLines(m.layout.PrepareLog()); ok {
 		st.Phase = ev.Phase
 	}
 	if st.setupCode = setupCodeWaiting(m.layout.Root); st.setupCode != "" {
@@ -196,7 +197,9 @@ func (st macOSVMStatus) writeText(out io.Writer) {
 	}
 	fmt.Fprintln(out)
 	if st.setupCode != "" {
-		fmt.Fprintf(out, "macOS asked for setup by hand. Open the macOS window on this Mac, create the account wardyn-admin with the one-time code in %s as its password, and turn on Remote Login.\n", st.setupCode)
+		fmt.Fprintf(out, "macOS asked for setup by hand. In the window %q on this Mac, create the account wardyn-admin with the one-time code in %s as its password, and turn on Remote Login.\n", macOSVMSetupWindow, st.setupCode)
+	} else if st.byHand && st.State != runnerwire.MacVMBaseReady {
+		fmt.Fprintf(out, "This Mac's macOS has no guest provisioning (macOS %d has it), so preparing its base needs setup by hand once: after the install, the window %q opens on this Mac.\n", macvm.ProvisionHostMajor, macOSVMSetupWindow)
 	}
 	if st.State == runnerwire.MacVMBaseReady {
 		fmt.Fprintf(out, "harnesses: %s; desktop: %s; guest minimum: %d CPUs, %d MiB\n", strings.Join(st.Harnesses, ", "), desktopMode(st.Desktop), st.minCPUs, st.minMemoryMiB)
@@ -215,6 +218,9 @@ func (st macOSVMStatus) writeText(out io.Writer) {
 		fmt.Fprintf(out, "disk held for ended logins' VMs until they log in again: %d GB\n", st.HeldDiskBytes>>30)
 	}
 }
+
+// macOSVMSetupWindow is the title of the setup-by-hand window the helper opens (internal/macvm wardynScreenShow).
+const macOSVMSetupWindow = "Wardyn: set up this macOS VM"
 
 // runToolsDialFile, in the VM directory, is the driver's record of how the last run boot's guest agent
 // dial of the tools port ended (docker.MacVMConfig.ToolsDialFile).
@@ -237,7 +243,7 @@ func macOSVMDoctorStages() []doctor.Stage {
 		return nil
 	}
 	if p := setupCodeWaiting(root); p != "" {
-		return []doctor.Stage{doctor.SkipStage("macos-vm", "macOS asked for setup by hand; the one-time code is in "+p)}
+		return []doctor.Stage{doctor.SkipStage("macos-vm", "macOS asked for setup by hand in the window \""+macOSVMSetupWindow+"\"; the one-time code is in "+p)}
 	}
 	return nil
 }

@@ -6,8 +6,11 @@ package macvm
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -28,10 +31,29 @@ type SetupCodeRecord struct {
 	Code    string `json:"code"`
 }
 
+// geteuid is os.Geteuid (tests replace it).
+var geteuid = os.Geteuid
+
+// SetupByHandReady is nil unless prepare's first boot is certain to be a setup by hand (fb's host has no
+// guest provisioning and setupByHandWait is on) and this process cannot open the guest's window for it:
+// it runs as root, or fb.ScreenReady says why. Prepare checks it before it downloads or writes anything.
+func SetupByHandReady(fb FirstBooter, setupByHandWait time.Duration) error {
+	if setupByHandWait == 0 || !errors.Is(fb.Supported(), ErrNoProvisioning) {
+		return nil
+	}
+	if geteuid() == 0 {
+		return fmt.Errorf("macvm: prepare runs as root: %w", ErrNoDesktopSession)
+	}
+	return fb.ScreenReady()
+}
+
 // setupByHand writes a fresh one-time code to the setup-code file, emits
-// setup_by_hand with no detail, and waits for the guest's Remote Login. It
-// returns the code, for stage 1's first login.
-func (p *prep) setupByHand(ctx context.Context, nw PrepNetwork) (string, error) {
+// setup_by_hand with no detail, opens the guest's window with screen (nil:
+// none, as in a build without AppKit) and waits for the guest's Remote Login,
+// closing the window when the wait ends. A window that cannot open stops
+// prepare: nobody could finish the setup. It returns the code, for stage 1's
+// first login.
+func (p *prep) setupByHand(ctx context.Context, nw PrepNetwork, screen func() (func(), error)) (string, error) {
 	code, err := randomCode(8)
 	if err != nil {
 		return "", err
@@ -40,6 +62,13 @@ func (p *prep) setupByHand(ctx context.Context, nw PrepNetwork) (string, error) 
 		return "", err
 	}
 	p.emit(PrepareEvent{Phase: PhaseSetupByHand})
+	if screen != nil {
+		closeWindow, err := screen()
+		if err != nil {
+			return "", fmt.Errorf("macvm: setup by hand needs the guest's window on this Mac: %w", err)
+		}
+		defer closeWindow()
+	}
 	if err := waitPort(ctx, nw, 22, p.SetupByHandWait); err != nil {
 		return "", err
 	}

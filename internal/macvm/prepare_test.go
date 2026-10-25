@@ -230,6 +230,9 @@ func TestPrepareHappyPath(t *testing.T) {
 	if f.boot.in.Password != args.Password {
 		t.Fatal("stage 1 did not get the provisioned password")
 	}
+	if opened, _ := f.fb.Windows(); opened != 0 {
+		t.Fatalf("a provisioned prepare opened %d windows", opened)
+	}
 	if strings.Contains(f.logs.String(), args.Password) {
 		t.Fatal("the admin password reached the log")
 	}

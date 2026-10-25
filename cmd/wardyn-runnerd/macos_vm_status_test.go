@@ -331,10 +331,10 @@ func TestMacOSVMStatusReason(t *testing.T) {
 		t.Fatalf("helper: %+v", c)
 	}
 
-	// An old macOS: the probe fails and sw_vers says 26.4.
-	withSwVers(t, "26.4")
-	hostFails := `{"host":"macOS VMs need macOS 27 or later","provisioning":"ok","cgo":true,"vz":true}`
-	if c := reasonOf(t, hostFails, 1); c.Reason != "host_os_too_old" || c.HostOSVersion != "26.4" || c.HostReason != "" || c.Refusal != "" {
+	// An old macOS: the probe fails and sw_vers says 25.4.
+	withSwVers(t, "25.4")
+	hostFails := `{"host":"macOS VMs need macOS 26 or later","provisioning":"ok","cgo":true,"vz":true}`
+	if c := reasonOf(t, hostFails, 1); c.Reason != "host_os_too_old" || c.HostOSVersion != "25.4" || c.HostReason != "" || c.Refusal != "" {
 		t.Fatalf("old macOS: %+v", c)
 	}
 	// A new macOS and a probe that fails for the framework's own answer.
@@ -353,8 +353,8 @@ func TestMacOSVMStatusReason(t *testing.T) {
 	if c := reasonOf(t, "not json", 1); c.Reason != "" {
 		t.Fatalf("silent probe: %+v", c)
 	}
-	// The earlier code wins when two hold: a Mac on macOS 26 whose helper also lacks the framework.
-	withSwVers(t, "26.4")
+	// The earlier code wins when two hold: a Mac on macOS 25 whose helper also lacks the framework.
+	withSwVers(t, "25.4")
 	if c := reasonOf(t, `{"host":"x","provisioning":"x","cgo":false,"vz":false}`, 1); c.Reason != "host_os_too_old" {
 		t.Fatalf("old macOS and no framework: %+v", c)
 	}
@@ -543,10 +543,10 @@ func TestMacOSVMStatusScrubsTheError(t *testing.T) {
 // A macOS version or an image version outside ^\d+(\.\d+){0,2}$ is dropped, and an image version that
 // matched earlier is kept.
 func TestMacOSVMStatusVersionPattern(t *testing.T) {
-	withSwVers(t, "26.4-beta")
+	withSwVers(t, "25.4-beta")
 	c := reasonOf(t, `{"host":"x","provisioning":"ok","cgo":true,"vz":true}`, 1)
 	if c.Reason != "host_os_too_old" || c.HostOSVersion != "" {
-		t.Fatalf("26.4-beta: %+v", c)
+		t.Fatalf("25.4-beta: %+v", c)
 	}
 	good := ev(t, macvm.PrepareEvent{Phase: macvm.PhaseDownload, Version: "27.0"})
 	for _, bad := range []string{"27.0.1-rc", "../x", strings.Repeat("9", 200), "1.2.3.4", ""} {
@@ -708,4 +708,124 @@ func TestMacOSVMStatusDockerWaitEndsWithTheHelper(t *testing.T) {
 		}
 	}
 	t.Fatalf("the wait outlived the job's helper: %+v", m.current().Base)
+}
+
+// MAC26: a Mac on macOS 26, whose helper's probe passes with no guest provisioning, is offered macOS VMs once
+// its base is ready, and `status` says its prepare needs setup by hand while it has no base; a Mac on macOS 25
+// is refused with host_os_too_old and its version.
+func TestMacOSVMOfferedOnMacOS26(t *testing.T) {
+	withSwVers(t, "26.7")
+	const probe26 = `{"host":"ok","provisioning":"macvm provision: this Mac's Virtualization framework has no class VZMacGuestProvisioningOptions; guest provisioning needs macOS 27 or later","cgo":true,"vz":true,"reason":"no_provisioning","thermal":"nominal"}`
+	r := newMacLedgerRig(t)
+	r.host.setProcs(admission.Proc{PID: os.Getpid(), UID: 501, Start: 3, Name: "wardyn-runnerd"})
+	m := r.open(t)
+	m.helper, _ = probeScript(t, probe26, 0)
+	m.gate(context.Background())
+	m.recompute()
+	if c := m.current(); !m.enabled() || c.Reason != "" || c.Max == 0 || m.why != "" {
+		t.Fatalf("macOS 26 with a ready base: enabled %v, caps %+v, why %q", m.enabled(), c, m.why)
+	}
+	text := func() string {
+		st, err := m.status(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var b strings.Builder
+		st.writeText(&b)
+		return b.String()
+	}
+	if got := text(); strings.Contains(got, "setup by hand") {
+		t.Fatalf("a ready base still asks for setup by hand:\n%s", got)
+	}
+	_ = os.Remove(filepath.Join(m.layout.BaseDir(0), macvm.ManifestFile))
+	if got := text(); !strings.Contains(got, "needs setup by hand once") || !strings.Contains(got, macOSVMSetupWindow) {
+		t.Fatalf("no base on macOS 26: status does not say setup by hand:\n%s", got)
+	}
+
+	withSwVers(t, "25.6")
+	c := reasonOf(t, `{"host":"macOS VMs need macOS 26 or later on this Mac (it runs 25.6)","provisioning":"x","cgo":true,"vz":true,"reason":"no_provisioning"}`, 1)
+	if c.Reason != "host_os_too_old" || c.HostOSVersion != "25.6" {
+		t.Fatalf("macOS 25: %+v", c)
+	}
+}
+
+// MAC26: on a Mac whose probe says no guest provisioning, `macos-vm prepare` (and setup's prepare) refuses
+// up front, before the helper's prepare, the Time Machine exclusion or the job's log, when the runner is
+// not in the desktop's GUI session or runs as root: the guest's window could not open. In the desktop it
+// starts; on a Mac with provisioning, no session is needed.
+func TestMacOSVMPrepareNeedsTheDesktopForSetupByHand(t *testing.T) {
+	const probe26 = `{"host":"ok","provisioning":"no class X; guest provisioning needs macOS 27 or later","cgo":true,"vz":true,"reason":"no_provisioning","thermal":"nominal"}`
+	const probe27 = `{"host":"ok","provisioning":"ok","cgo":true,"vz":true,"thermal":"nominal"}`
+	prevL, prevE, prevEx, prevWait := launchctlPath, processEUID, excludeFromBackups, prepareClaimWait
+	t.Cleanup(func() {
+		launchctlPath, processEUID, excludeFromBackups, prepareClaimWait = prevL, prevE, prevEx, prevWait
+	})
+	prepareClaimWait = 2 * time.Second
+	for _, tc := range []struct {
+		name, probe, manager string
+		euid                 int
+		refused              bool
+	}{
+		{"macOS 26 over SSH", probe26, "Background", 501, true},
+		{"macOS 26 as root", probe26, "Aqua", 0, true},
+		{"macOS 26 at the desktop", probe26, "Aqua", 501, false},
+		{"macOS 27 over SSH", probe27, "Background", 501, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			launchctlPath = fakeTool(t, "launchctl", tc.manager)
+			processEUID = func() int { return tc.euid }
+			excluded := 0
+			excludeFromBackups = func(string) error { excluded++; return nil }
+			r := newMacLedgerRig(t)
+			r.host.setProcs(admission.Proc{PID: os.Getpid(), UID: 501, Start: 3, Name: "wardyn-runnerd"})
+			m := r.open(t)
+			_ = os.Remove(filepath.Join(m.layout.BaseDir(0), macvm.ManifestFile))
+			helper, args := probeScript(t, tc.probe, 0)
+			err := m.startPrepare(context.Background(), prepareArgs{helper: helper, runnerID: "runner-a", cpus: 4, memoryMiB: 8192})
+			got := calls(t, args)
+			if !tc.refused {
+				if errors.Is(err, macvm.ErrNoDesktopSession) || len(got) != 2 || !strings.HasPrefix(got[1], "prepare") {
+					t.Fatalf("not refused: %v, helper calls %q", err, got)
+				}
+				return
+			}
+			if !errors.Is(err, macvm.ErrNoDesktopSession) || !strings.Contains(err.Error(), "run prepare in Terminal on the Mac, signed in at its desktop, not over SSH") {
+				t.Fatalf("got %v, want the desktop refusal", err)
+			}
+			if len(got) != 1 || got[0] != "probe" || excluded != 0 {
+				t.Fatalf("refused, yet helper calls %q and %d exclusions", got, excluded)
+			}
+			if _, err := os.Stat(m.layout.PrepareLog()); !os.IsNotExist(err) {
+				t.Fatalf("refused, yet the job's log was made: %v", err)
+			}
+		})
+	}
+}
+
+// MAC26: the setup-by-hand window's AppKit writes to the helper's stderr, which is prepare.log. A foreign
+// line after the helper's own keeps the progress and the failure; the helper's own last line decides
+// whether its prepare ended with an error.
+func TestPrepareLogSkipsForeignLines(t *testing.T) {
+	const appKit = "2026-10-25 13:00:00.123 wardyn-macvm[4242:77] WARNING: Secure coding is not enabled for restorable state!"
+	write := func(lines ...string) string {
+		p := filepath.Join(t.TempDir(), "prepare.log")
+		if err := os.WriteFile(p, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	ev := `{"phase":"setup_by_hand"}`
+	want := prepareProgress(write(`{"phase":"check"}`, ev))
+	if want == 0 {
+		t.Fatal("no progress from a setup_by_hand event")
+	}
+	if got := prepareProgress(write(`{"phase":"check"}`, ev, appKit, "")); got != want {
+		t.Fatalf("progress %d after an AppKit line, want %d", got, want)
+	}
+	if got := prepareFailure(write(ev, "wardyn-macvm: macvm: stage 1: boom", appKit)); got != "macvm: stage 1: boom" {
+		t.Fatalf("failure %q after an AppKit line", got)
+	}
+	if got := prepareFailure(write("wardyn-macvm: an earlier prepare's error", `{"phase":"download","fraction":0.5}`, appKit)); got != "" {
+		t.Fatalf("a running prepare reads as failed: %q", got)
+	}
 }
