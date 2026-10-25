@@ -29,6 +29,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   about the disk. A saved "Finished" arrangement of the run page gains the "Attach from your terminal" tile at its
   bottom, once, where the disk line shows.
 
+### Fixed
+
+- Stopping a run on a Docker runner no longer stops half-way when the organisation gives up on a slow stop and resets
+  the call. The stop finishes on its own time budget, so the run's proxy and network are not left for the clean-up
+  sweep.
+
 ## [0.10.0-rc.2] — 2026-10-25
 
 ### Before you upgrade
