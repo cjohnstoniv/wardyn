@@ -211,13 +211,24 @@ func (h setupHost) installBinary(ctx context.Context, dst string, stopService bo
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
-	if err := keepPrevious(dst, h.exe); err != nil {
-		return fmt.Errorf("keep the previous %s: %w", dst, err)
+	// A rollback installs from the .previous it restores: keeping the binary it replaces would overwrite that
+	// file with the failed one, and a write that then failed would leave no copy of the old runner.
+	if !isSameFile(h.exe, dst+".previous") {
+		if err := keepPrevious(dst, h.exe); err != nil {
+			return fmt.Errorf("keep the previous %s: %w", dst, err)
+		}
 	}
 	if err := writeAtomic(dst, 0o755, func(w io.Writer) error { _, err := io.Copy(w, src); return err }); err != nil {
 		return fmt.Errorf("install %s: %w", dst, err)
 	}
 	return nil
+}
+
+// isSameFile reports whether a and b are both there and are one file.
+func isSameFile(a, b string) bool {
+	sa, errA := os.Stat(a)
+	sb, errB := os.Stat(b)
+	return errA == nil && errB == nil && os.SameFile(sa, sb)
 }
 
 // keepPrevious keeps the binary an upgrade is about to replace as dst+".previous", a hard link taken

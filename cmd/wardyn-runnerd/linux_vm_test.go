@@ -45,14 +45,11 @@ func TestVMCapsCarryTheFolderShareProbe(t *testing.T) {
 	}
 }
 
-// waitFullPass waits for the background full-spool pass a tick started to finish.
+// waitFullPass waits for the background full-spool pass a tick started to finish: on the pass's own
+// completion, which a loaded runner delays but never skips, not on a deadline it can overrun.
 func waitFullPass(t *testing.T, d *dockerSink) {
 	t.Helper()
-	for deadline := time.Now().Add(5 * time.Second); d.fullBusy.Load(); time.Sleep(5 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("the full-spool pass did not finish")
-		}
-	}
+	d.fullPasses.Wait()
 }
 
 // The full-spool rule is behind the Linux VM switch: a runner whose caps offer no VM never ends a
