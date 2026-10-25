@@ -115,3 +115,48 @@ func TestRotatingLogSurvivesAFailedRotation(t *testing.T) {
 		t.Errorf("runnerd.log is %d bytes after the rotation, want under the cap", got)
 	}
 }
+
+// A crash log over its bound when serve starts is copied to .1 and emptied in place, so a file launchd holds
+// open for append keeps working; one under the bound is left alone.
+func TestServeBoundsTheCrashLogAtStart(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "runnerd.log")
+	crash := filepath.Join(dir, "runnerd.crash.log")
+	if err := os.WriteFile(crash, bytes.Repeat([]byte("p"), crashLogMax+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	held, err := os.OpenFile(crash, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	restore, err := logToFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restore()
+	if got := fileSize(t, crash); got != 0 {
+		t.Errorf("runnerd.crash.log is %d bytes after start, want it emptied", got)
+	}
+	if got := fileSize(t, crash+".1"); got != crashLogMax+1 {
+		t.Errorf("runnerd.crash.log.1 is %d bytes, want the %d it held", got, crashLogMax+1)
+	}
+	if _, err := held.WriteString("panic\n"); err != nil {
+		t.Fatal(err)
+	}
+	if got := fileSize(t, crash); got != 6 {
+		t.Errorf("a write through the held handle left %d bytes, want 6", got)
+	}
+	restore()
+	if err := os.WriteFile(crash, []byte("small"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	restore2, err := logToFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restore2()
+	if got := fileSize(t, crash); got != 5 {
+		t.Errorf("a crash log under the bound became %d bytes, want it kept at 5", got)
+	}
+}

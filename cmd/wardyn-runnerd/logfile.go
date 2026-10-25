@@ -6,10 +6,12 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -19,7 +21,37 @@ import (
 const (
 	logFileMax  = 10 << 20
 	logFileKeep = 3
+	// crashLogMax bounds the crash log beside the log: a runner that panics at every start appends a stack
+	// trace every restart, and nothing else writes it.
+	crashLogMax = 1 << 20
 )
+
+// crashLogPath is the LaunchAgent's stdout and stderr file beside the log: runnerd.log gives runnerd.crash.log.
+func crashLogPath(logFile string) string { return strings.TrimSuffix(logFile, ".log") + ".crash.log" }
+
+// boundCrashLog empties the crash log once it is over crashLogMax, after copying it to path.1 (the one older
+// file kept). launchd and the managed start script hold the path open for append, so it is truncated in
+// place: a rename would leave their stderr writing to the renamed file. Best effort: a failure leaves the
+// file as it is.
+func boundCrashLog(path string) {
+	st, err := os.Stat(path)
+	if err != nil || st.Size() <= crashLogMax {
+		return
+	}
+	src, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer src.Close()
+	dst, err := os.OpenFile(path+".1", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return
+	}
+	_, err = io.Copy(dst, src)
+	if cerr := dst.Close(); err == nil && cerr == nil {
+		_ = os.Truncate(path, 0)
+	}
+}
 
 // rotatingLog is the file --log-file names, rotated by size. The LaunchAgent passes it: launchd's
 // StandardErrorPath cannot be rotated (newsyslog needs root), so under launchd runnerd keeps its own log.
@@ -44,6 +76,7 @@ func logToFile(path string) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
+	boundCrashLog(crashLogPath(path))
 	log.SetOutput(w)
 	return func() { log.SetOutput(os.Stderr); _ = w.Close() }, nil
 }
