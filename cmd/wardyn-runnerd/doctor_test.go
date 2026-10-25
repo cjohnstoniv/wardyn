@@ -607,3 +607,15 @@ func TestDoctorFlagAndManagedLockOutrankAnEarlierUnitsOrgArgument(t *testing.T) 
 		t.Errorf("org-url = %s %q, want the locked managed address", s.Status, s.Detail)
 	}
 }
+
+// A unit that passes only --config consumes no environment file: with runnerd.json naming no organisation,
+// a stale file beside it is not the organisation either, and doctor says there is none.
+func TestDoctorReportsNoOrganisationForAStaleEnvFileBesideAModernUnitAndNoOrg(t *testing.T) {
+	r := newRig(t)
+	r.setOrg("")
+	writeLegacyEnv(t, r.installUnitText(t, modernUnit), "https://stale.example.com")
+	s := stage(t, r.run(doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}), "org-url")
+	if s.Status != doctor.StatusFail || !strings.Contains(s.Detail, "no organisation") || strings.Contains(s.Detail, "stale.example.com") {
+		t.Errorf("org-url = %s %q, want FAIL with no organisation and no trace of the stale file", s.Status, s.Detail)
+	}
+}

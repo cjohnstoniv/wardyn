@@ -107,8 +107,8 @@ func (s doctorSettings) get(flagName, flag, key string) (value, source string) {
 func (s doctorSettings) org(flag string) (value, source string) {
 	const legacy = "WARDYN_RUNNER_ORG_URL"
 	legacySource := ""
-	if v := s.paths.serviceOrgArg(); flag == "" && v != "" {
-		flag, legacySource = v, legacy+" in the service's settings"
+	if v, from := s.paths.serviceOrgArg(); flag == "" && v != "" {
+		flag, legacySource = v, from
 	}
 	i := slices.IndexFunc(runnerFields, func(f runnerField) bool { return f.name == "org_url" })
 	if value, source = s.resolve(runnerFields[i], "org", flag, "org_url"); value != "" {
