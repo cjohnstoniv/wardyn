@@ -1859,44 +1859,65 @@ func TestDesktopSignIns_ARunThatEndsPausedWritesItsOneRow(t *testing.T) {
 
 // A recorded run that ends with its agent paused to sign in, after the person's desktop closed (#3583),
 // has the pause's recording hold dropped and one desktop.recording.resume row, end_reason run_ended,
-// whichever of the reconciler's two passes meets it first and however often they run.
+// whichever of the reconciler's two passes meets it first and however often they run. A kept run whose
+// lease ended or whose container exited is over too; one lost to an outage keeps its hold and gets no
+// row.
 func TestDesktopSignIns_ARunThatEndsPausedEndsItsRecordingHoldOnce(t *testing.T) {
-	for name, passes := range map[string][]func(*Server, context.Context) error{
+	ends := []struct {
+		name string
+		end  func(*types.AgentRun, time.Time)
+		over bool
+	}{
+		{"killed", func(r *types.AgentRun, at time.Time) { r.State, r.EndedAt = types.RunKilled, &at }, true},
+		{"kept", func(r *types.AgentRun, at time.Time) { r.LostAt, r.LostReason = &at, types.LostEnded }, true},
+		{"reboot", func(r *types.AgentRun, at time.Time) { r.LostAt, r.LostReason = &at, types.LostReboot }, true},
+		{"outage", func(r *types.AgentRun, at time.Time) { r.LostAt, r.LostReason = &at, types.LostOutage }, false},
+	}
+	passOrders := map[string][]func(*Server, context.Context) error{
 		"sign-in pass first":   {(*Server).sweepEndedDesktopVMPauses, (*Server).sweepEndedDesktopRecordingPauses},
 		"recording pass first": {(*Server).sweepEndedDesktopRecordingPauses, (*Server).sweepEndedDesktopVMPauses},
-	} {
-		t.Run(name, func(t *testing.T) {
-			f := newVMSignInFixture(t, "memory")
-			f.recordDesktop(t)
-			if code, _, body := f.do(t, http.MethodPost, "/pause"); code != http.StatusOK {
-				t.Fatalf("pause = %d %s", code, body)
-			}
-			endedAt := time.Now().UTC()
-			f.run.State, f.run.EndedAt = types.RunKilled, &endedAt
-			f.st.putRun(f.run)
-			for range 2 {
-				for _, pass := range passes {
-					if err := pass(f.srv, context.Background()); err != nil {
-						t.Fatal(err)
+	}
+	for _, e := range ends {
+		for order, passes := range passOrders {
+			t.Run(e.name+"/"+order, func(t *testing.T) {
+				f := newVMSignInFixture(t, "memory")
+				f.recordDesktop(t)
+				if code, _, body := f.do(t, http.MethodPost, "/pause"); code != http.StatusOK {
+					t.Fatalf("pause = %d %s", code, body)
+				}
+				e.end(&f.run, time.Now().UTC())
+				f.st.putRun(f.run)
+				for range 2 {
+					for _, pass := range passes {
+						if err := pass(f.srv, context.Background()); err != nil {
+							t.Fatal(err)
+						}
 					}
 				}
-			}
-			if signInHeld(f.srv, f.run.ID) {
-				t.Fatal("an ended run's sign-in still holds the desktop recording")
-			}
-			var resumes []map[string]any
-			for _, ev := range f.h.audit.snapshot() {
-				if ev.Action == "desktop.recording.resume" {
-					resumes = append(resumes, auditData(t, ev))
+				var resumes []map[string]any
+				for _, ev := range f.h.audit.snapshot() {
+					if ev.Action == "desktop.recording.resume" {
+						resumes = append(resumes, auditData(t, ev))
+					}
 				}
-			}
-			if len(resumes) != 1 || resumes[0]["reason"] != desktopPauseSignin || resumes[0]["end_reason"] != signinEndRunEnded {
-				t.Fatalf("desktop.recording.resume rows = %v, want one naming %q with end_reason %q", resumes, desktopPauseSignin, signinEndRunEnded)
-			}
-			if rows := f.signInRows(); len(rows) != 1 {
-				t.Fatalf("desktop.sign_in.pause rows = %d, want one", len(rows))
-			}
-		})
+				held, rows := signInHeld(f.srv, f.run.ID), len(f.signInRows())
+				if !e.over {
+					if !held || len(resumes) != 0 || rows != 0 {
+						t.Fatalf("held %v, resume rows %v, sign-in rows %d: want the hold standing and no row", held, resumes, rows)
+					}
+					return
+				}
+				if held {
+					t.Fatal("an ended run's sign-in still holds the desktop recording")
+				}
+				if len(resumes) != 1 || resumes[0]["reason"] != desktopPauseSignin || resumes[0]["end_reason"] != signinEndRunEnded {
+					t.Fatalf("desktop.recording.resume rows = %v, want one naming %q with end_reason %q", resumes, desktopPauseSignin, signinEndRunEnded)
+				}
+				if rows != 1 {
+					t.Fatalf("desktop.sign_in.pause rows = %d, want one", rows)
+				}
+			})
+		}
 	}
 }
 
