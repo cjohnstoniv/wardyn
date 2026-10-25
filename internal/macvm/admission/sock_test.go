@@ -18,7 +18,12 @@ import (
 // bytes, which would put a test's socket paths past the 103-byte limit.
 func shortTempDir(t *testing.T) string {
 	t.Helper()
-	d, err := os.MkdirTemp("/tmp", "wm")
+	// /tmp's real path (/private/tmp on macOS): the ledger walks every directory without following a link.
+	root, err := filepath.EvalSymlinks("/tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := os.MkdirTemp(root, "wm")
 	if err != nil {
 		t.Fatal(err)
 	}
