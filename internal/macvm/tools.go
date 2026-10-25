@@ -231,7 +231,10 @@ func (s *ToolsStage) Run(ctx context.Context, in Stage2Input) (ToolsResult, erro
 	res, err := onGuest(ctx, g, in, o)
 	sctx, cancel := context.WithTimeout(context.Background(), DefaultStopTimeout)
 	defer cancel()
-	if serr := stop(sctx); err == nil && serr != nil {
+	switch serr := stop(sctx); {
+	case errors.Is(serr, ErrStage2Stopped):
+		err = serr
+	case err == nil && serr != nil:
 		err = fmt.Errorf("macvm: the stage 2 VM did not shut down cleanly: %w", serr)
 	}
 	return res, err

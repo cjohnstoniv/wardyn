@@ -103,9 +103,8 @@ func TestRunSocketsLiveInTheSocketDir(t *testing.T) {
 // agent.sock exists for runnerd to send Init on, and status says why and
 // shows the listener.
 func TestRunListeningOnTheToolsPortFailsBeforeInit(t *testing.T) {
-	defer macvm.SetRunExtraPorts(macvm.ToolsPort)()
 	eng := &macvmtest.Engine{}
-	r := startRun(t, eng, nil)
+	r := startRun(t, eng, func(_ *macvm.RunConfig, o *macvm.RunOptions) { macvm.RunExtraPorts(o, macvm.ToolsPort) })
 	evc, err := macvm.DialControl(context.Background(), filepath.Join(r.sock, macvm.ControlSock))
 	if err != nil {
 		t.Fatal(err)
@@ -147,8 +146,10 @@ func TestRunStartSweepsGoneRunsSocketDirs(t *testing.T) {
 	root := macvmtest.SockRoot(t)
 	sc := macvm.SockConfig(root)
 	sc.Fstat = macvmtest.SockFstat
-	gone, live, answering := "111111111111", "222222222222", "333333333333"
-	for _, k := range []string{gone, live, answering} {
+	// starting is a helper (a stage-2 boot's job key: no run dir) that made
+	// its dir and has not bound its ctl.sock yet; the others are older.
+	gone, live, answering, starting := "111111111111", "222222222222", "333333333333", "444444444444"
+	for _, k := range []string{gone, live, answering, starting} {
 		if _, err := sc.MakeRunDir(k); err != nil {
 			t.Fatal(err)
 		}
@@ -158,6 +159,12 @@ func TestRunStartSweepsGoneRunsSocketDirs(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer l.Close()
+	old := time.Now().Add(-2 * time.Minute)
+	for _, k := range []string{gone, live, answering} {
+		if err := os.Chtimes(filepath.Join(sc.UserDir(), k), old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
 	own := macvm.Layout{Root: t.TempDir()}
 	if err := os.MkdirAll(filepath.Join(own.RunsDir(), live), 0o700); err != nil {
 		t.Fatal(err)
@@ -174,7 +181,7 @@ func TestRunStartSweepsGoneRunsSocketDirs(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(sc.UserDir(), gone)); !os.IsNotExist(err) {
 		t.Fatalf("a gone run's socket dir was kept: %v", err)
 	}
-	for _, k := range []string{live, answering} {
+	for _, k := range []string{live, answering, starting} {
 		if _, err := os.Lstat(filepath.Join(sc.UserDir(), k)); err != nil {
 			t.Fatalf("socket dir %s went: %v", k, err)
 		}

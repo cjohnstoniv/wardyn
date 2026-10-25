@@ -57,16 +57,22 @@ func (c Stage2BootConfig) ToolsBoot() ToolsBoot {
 	}
 }
 
+// ErrStage2Stopped is a stage-2 boot that runnerd stopped through its ctl.sock.
+var ErrStage2Stopped = errors.New("macvm: the stage-2 boot was stopped through its ctl.sock")
+
 // stage2VM is one stage-2 boot: its ctl.sock answers hello, status, stop and
 // net_fd like a run's (no desktop_password: a stage-2 boot has no run
-// credential).
+// credential). stop ends the boot at any point and replies once the VM is
+// stopped and the boot's sockets are gone.
 type stage2VM struct {
 	events  eventHub
 	netCh   chan *os.File
 	mu      sync.Mutex
 	st      Status
-	stopReq chan struct{}
-	once    sync.Once
+	stopReq chan struct{} // closed by ctl.sock stop
+	down    chan struct{} // closed once the boot is undone
+	reqOnce sync.Once
+	dnOnce  sync.Once
 }
 
 func (v *stage2VM) status() Status {
@@ -74,8 +80,18 @@ func (v *stage2VM) status() Status {
 	defer v.mu.Unlock()
 	return v.st
 }
+func (v *stage2VM) setState(s MachineState, detail string) {
+	v.mu.Lock()
+	v.st.State, v.st.Error = s, detail
+	v.mu.Unlock()
+}
+func (v *stage2VM) finish() { v.dnOnce.Do(func() { close(v.down) }) }
 func (v *stage2VM) stop(bool, time.Duration) error {
-	v.once.Do(func() { close(v.stopReq) })
+	v.reqOnce.Do(func() { close(v.stopReq) })
+	<-v.down
+	if st := v.status(); st.State != StateStopped {
+		return fmt.Errorf("macvm: the stage-2 VM is %s after stop", st.State)
+	}
 	return nil
 }
 func (v *stage2VM) netFD(f *os.File) error {
@@ -114,14 +130,14 @@ func (c Stage2BootConfig) boot(ctx context.Context, spec MachineSpec) (ToolsGues
 	if err := checkSocketPaths(filepath.Join(sc.UserDir(), c.SockKey)); err != nil {
 		return nil, nil, err
 	}
+	v := &stage2VM{netCh: make(chan *os.File, 1), stopReq: make(chan struct{}), down: make(chan struct{}),
+		st: Status{Proto: ControlProto, State: StateStopped, HelperPID: os.Getpid(), Network: NetWaiting, CPUs: spec.CPUs, MemoryMiB: spec.MemoryBytes / mib}}
+	undo = append(undo, v.finish)
 	dir, err := sc.MakeRunDir(c.SockKey)
 	if err != nil {
-		return nil, nil, err
+		return fail(err)
 	}
-	undo = append(undo, func() { _ = os.RemoveAll(dir) })
-	v := &stage2VM{netCh: make(chan *os.File, 1), stopReq: make(chan struct{}),
-		st: Status{Proto: ControlProto, State: StateStopped, HelperPID: os.Getpid(), Network: NetWaiting, CPUs: spec.CPUs, MemoryMiB: spec.MemoryBytes / mib}}
-	undo = append(undo, v.events.close)
+	undo = append(undo, func() { _ = os.RemoveAll(dir) }, v.events.close)
 	ctl, err := listenUnix(filepath.Join(dir, ControlSock))
 	if err != nil {
 		return fail(err)
@@ -183,17 +199,47 @@ func (c Stage2BootConfig) boot(ctx context.Context, spec MachineSpec) (ToolsGues
 	v.st.State, v.st.StartedAt = StateRunning, time.Now().UTC()
 	v.mu.Unlock()
 	wait := cmpDuration(c.GuestWait, 5*time.Minute)
+	life, kill := context.WithCancelCause(context.Background())
 	g := &toolsGuest{
 		tools:   guestagent.NewClient(pairDial(pairs[ToolsPort], wait)),
 		control: guestagent.NewClient(pairDial(pairs[AgentPort], wait)),
 		desktop: pairDial(pairs[DesktopPort], wait),
 		tmp:     os.TempDir(),
+		life:    life,
 	}
+	var (
+		once sync.Once
+		serr error
+	)
+	shutdown := func(sctx context.Context, cause error) error {
+		once.Do(func() {
+			v.setState(StateStopping, "")
+			kill(cause)
+			g.close()
+			if serr = stopMachine(sctx, m); serr != nil {
+				v.setState(StateError, serr.Error())
+			} else {
+				v.setState(StateStopped, "")
+			}
+			for i := len(undo) - 1; i >= 0; i-- {
+				undo[i]()
+			}
+		})
+		return serr
+	}
+	go func() {
+		select {
+		case <-v.stopReq:
+			sctx, cancel := context.WithTimeout(context.Background(), DefaultStopTimeout)
+			defer cancel()
+			_ = shutdown(sctx, ErrStage2Stopped)
+		case <-life.Done():
+		}
+	}()
 	stop := func(sctx context.Context) error {
-		g.close()
-		err := stopMachine(sctx, m)
-		for i := len(undo) - 1; i >= 0; i-- {
-			undo[i]()
+		err := shutdown(sctx, errors.New("macvm: the stage-2 boot ended"))
+		if errors.Is(context.Cause(life), ErrStage2Stopped) {
+			return errors.Join(ErrStage2Stopped, err)
 		}
 		return err
 	}
@@ -260,7 +306,15 @@ func pairDial(p *pairer, wait time.Duration) func(ctx context.Context) (net.Conn
 type toolsGuest struct {
 	tools, control *guestagent.Client
 	desktop        func(ctx context.Context) (net.Conn, error)
-	tmp            string // where a reader that cannot be read twice is spooled
+	tmp            string          // where a reader that cannot be read twice is spooled
+	life           context.Context // ends when the boot is stopped
+}
+
+// bound is ctx, also ended when the boot is stopped.
+func (g *toolsGuest) bound(ctx context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancelCause(ctx)
+	unhook := context.AfterFunc(g.life, func() { cancel(context.Cause(g.life)) })
+	return ctx, func() { unhook(); cancel(nil) }
 }
 
 var _ ToolsGuest = (*toolsGuest)(nil)
@@ -271,6 +325,8 @@ func (g *toolsGuest) close() { g.tools.Close(); g.control.Close() }
 // Push sends r with the SHA-256 the wire needs: hashed in place for a
 // seekable reader, else spooled to a temp file first.
 func (g *toolsGuest) Push(ctx context.Context, dest string, mode fs.FileMode, r io.Reader, size int64) error {
+	ctx, done := g.bound(ctx)
+	defer done()
 	rs, ok := r.(io.ReadSeeker)
 	if !ok {
 		f, err := os.CreateTemp(g.tmp, ".wardyn-push-*")
@@ -304,19 +360,27 @@ func (g *toolsGuest) Push(ctx context.Context, dest string, mode fs.FileMode, r 
 }
 
 func (g *toolsGuest) Run(ctx context.Context, argv []string) (string, int, error) {
+	ctx, done := g.bound(ctx)
+	defer done()
 	return g.tools.ToolsRun(ctx, argv)
 }
 
 func (g *toolsGuest) DesktopPassword(ctx context.Context, pw []byte) (bool, error) {
+	ctx, done := g.bound(ctx)
+	defer done()
 	return g.tools.ToolsDesktopPassword(ctx, string(pw))
 }
 
 func (g *toolsGuest) Pointer(ctx context.Context) (int, int, error) {
+	ctx, done := g.bound(ctx)
+	defer done()
 	p, err := g.tools.ToolsPointer(ctx)
 	return p.X, p.Y, err
 }
 
 func (g *toolsGuest) ToolsDial(ctx context.Context) (string, error) {
+	ctx, done := g.bound(ctx)
+	defer done()
 	d, err := g.control.ToolsDial(ctx)
 	return d.Class, err
 }
@@ -324,6 +388,8 @@ func (g *toolsGuest) ToolsDial(ctx context.Context) (string, error) {
 // MovePointer logs in to the guest's Screen Sharing with VncAuth over the
 // desktop path and sends one PointerEvent to (x, y), no buttons.
 func (g *toolsGuest) MovePointer(ctx context.Context, pw []byte, x, y int) error {
+	ctx, done := g.bound(ctx)
+	defer done()
 	c, err := g.desktop(ctx)
 	if err != nil {
 		return err
