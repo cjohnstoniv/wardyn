@@ -45,8 +45,9 @@ import (
 const macHelperExitWait = 15 * time.Second
 
 // macDestroyTimeout bounds a macOS VM destroy, which runs apart from the call that asked for it: the stop
-// (its timeout, and one helper wait for the dial), then a helper wait before the kill and one after it.
-const macDestroyTimeout = macvm.DefaultStopTimeout + 3*macHelperExitWait
+// (its timeout, and one helper wait for the dial), then a helper wait before the kill and one after it, plus
+// slack for the ledger reads and poll overshoot so the wait after the kill keeps its whole bound.
+const macDestroyTimeout = macvm.DefaultStopTimeout + 3*macHelperExitWait + 5*time.Second
 
 // MacVMConfig turns macOS VM sandboxes on. wardyn-runnerd fills it on a Mac whose operator turned them on.
 type MacVMConfig struct {
