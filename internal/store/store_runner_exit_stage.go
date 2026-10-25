@@ -46,7 +46,11 @@ func (s PG) StageRunnerExit(ctx context.Context, runnerID, runID uuid.UUID, exit
 	if err != nil {
 		return err
 	}
-	if current.RunnerID != runnerID || current.Generation != exit.Generation || run.SandboxRef != exit.Ref {
+	// A finalize clears a terminal run's ref, and the runner's exit for the same generation can land
+	// after it: with no ref left, the generation is the binding. Refused, the exit is never
+	// acknowledged and is replayed on every reconnect, so no session of the runner would last.
+	refCleared := run.State.IsTerminal() && run.SandboxRef == ""
+	if current.RunnerID != runnerID || current.Generation != exit.Generation || (run.SandboxRef != exit.Ref && !refCleared) {
 		return ErrRunnerExecutionRefused
 	}
 	// The org already settled this run (terminal, or ended at its lease): the
@@ -83,10 +87,11 @@ type RunnerExitWork struct {
 
 // ListRunnerExitWork pages by run UUID. Generation cannot advance while one
 // incomplete receipt exists, so a run has at most one item in this work list.
+// A parked receipt (ParkRunnerExit) is not listed.
 func (s PG) ListRunnerExitWork(ctx context.Context, after uuid.UUID) ([]RunnerExitWork, error) {
 	return collect(ctx, s.Pool, "list", "runner exit work", `SELECT x.runner_id,x.run_id,x.payload FROM runner_execution_exits x
  JOIN runner_executions e ON e.run_id=x.run_id AND e.generation=x.generation
- WHERE NOT x.tail_complete AND NOT x.receipt_only AND x.run_id>$1 AND e.exec_id<>'' AND e.exec_id=x.payload->>'exec_id'
+ WHERE NOT x.tail_complete AND NOT x.receipt_only AND x.parked_at IS NULL AND x.run_id>$1 AND e.exec_id<>'' AND e.exec_id=x.payload->>'exec_id'
  ORDER BY x.run_id LIMIT 100`, []any{after}, func(row pgx.Row) (RunnerExitWork, error) {
 		var out RunnerExitWork
 		var payload []byte

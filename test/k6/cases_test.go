@@ -261,6 +261,10 @@ func caseNormalStop(t *testing.T, e *env) {
 	if _, err := d.CreateSandbox(bg, e.spec(id)); err != nil {
 		t.Fatalf("CreateSandbox: %v", err)
 	}
+	if n := e.cp.renews.Load(); n == 0 {
+		t.Fatalf("the proxy opened with no token renew reaching the fake control plane at %s:8443; proxy log tail:\n%s", e.cp.ip, e.proxyLogTail(id))
+	}
+	note(t, "fake control plane %s:8443 saw %d token renews", e.cp.ip, e.cp.renews.Load())
 	for _, n := range []string{proxyName(id), ref(id)} {
 		p, err := e.admin.CoreV1().Pods(e.runsNS).Get(bg, n, metav1.GetOptions{})
 		if err != nil {
@@ -340,6 +344,16 @@ func caseNormalStop(t *testing.T, e *env) {
 	if n := e.sink.goneCount(id); n != 1 {
 		t.Errorf("producer settled %d times, want once", n)
 	}
+}
+
+// proxyLogTail is the last lines of the run's proxy pod log, for a failure message.
+func (e *env) proxyLogTail(id uuid.UUID) string {
+	tail := int64(20)
+	b, err := e.admin.CoreV1().Pods(e.runsNS).GetLogs(proxyName(id), &corev1.PodLogOptions{TailLines: &tail}).DoRaw(bg)
+	if err != nil {
+		return "(no proxy log: " + err.Error() + ")"
+	}
+	return string(b)
 }
 
 func (e *env) kubelet(t *testing.T) string {

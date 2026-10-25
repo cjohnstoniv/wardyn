@@ -129,6 +129,8 @@ func (d *Driver) vmConfig() *VMConfig { return d.vmCfg.Load() }
 type vmRun struct {
 	runID uuid.UUID
 	dir   string
+	// mac marks a macOS VM (macvm.go): its helper, not a QEMU container, runs it.
+	mac   bool
 	agent *guestagent.Client
 	// stop ends the output followers of the VM's detached execs at teardown.
 	ctx  context.Context
@@ -161,14 +163,20 @@ func (d *Driver) vmFor(ctx context.Context, ref string) *vmRun {
 // vmLookup is vmFor with its failure: a container the engine could not inspect is an error, not "a
 // container". A ref the engine does not hold is nil, nil.
 func (d *Driver) vmLookup(ctx context.Context, ref string) (*vmRun, error) {
-	vc := d.vmConfig()
-	if vc == nil {
-		return nil, nil
-	}
 	if v, ok := d.vms.Load(ref); ok {
 		return v.(*vmRun), nil
 	}
 	if _, ok := d.notVMs.Load(ref); ok {
+		return nil, nil
+	}
+	if v := d.macVMLookup(ref); v != nil {
+		return v, nil
+	}
+	vc := d.vmConfig()
+	if vc == nil {
+		if d.macVMConfig() != nil {
+			d.notVMs.Store(ref, struct{}{}) // no run directory: a container, looked up once
+		}
 		return nil, nil
 	}
 	res, err := d.cli.ContainerInspect(ctx, ref, client.ContainerInspectOptions{})
@@ -752,6 +760,10 @@ func (d *Driver) vmUnderKVM(ctx context.Context, ctl string) error {
 
 // vmPowerdown asks the guest to shut down (ACPI) and waits up to stopTimeout for QEMU to exit.
 func (d *Driver) vmPowerdown(ctx context.Context, v *vmRun, ref string) {
+	if v.mac {
+		d.macVMStop(ctx, v, true)
+		return
+	}
 	ctx, cancel := context.WithTimeout(ctx, stopTimeout)
 	defer cancel()
 	conn, err := d.dialUnix(ctx, filepath.Join(v.dir, "ctl", qemu.QMPSocket))
@@ -803,13 +815,16 @@ func (d *Driver) EndVM(ctx context.Context, runID uuid.UUID) (bool, error) {
 // teardownVM removes what a VM run adds to a container run's teardown: its sidecars and its run
 // directory. Safe on any run id; a container run has neither.
 func (d *Driver) teardownVM(ctx context.Context, agentRef string, runID uuid.UUID) {
-	vc := d.vmConfig()
-	if vc == nil {
-		return
-	}
 	if v, ok := d.vms.LoadAndDelete(agentRef); ok {
 		v.(*vmRun).stop()
 		v.(*vmRun).agent.Close()
+	}
+	if d.teardownMacVM(ctx, runID) {
+		return
+	}
+	vc := d.vmConfig()
+	if vc == nil {
+		return
 	}
 	d.warnVMSidecars(ctx, runID)
 	if err := os.RemoveAll(vc.runDir(runID)); err != nil {
@@ -834,7 +849,8 @@ func (d *Driver) sweepVMOrphans(ctx context.Context, lister containerListerAPI, 
 		return verdict[runID]
 	}
 	cleaned := map[uuid.UUID]bool{}
-	var errs []error
+	macs, macErr := d.sweepMacVMOrphans(ctx, cutoff, isOrphan)
+	errs := []error{macErr}
 	for _, comp := range []string{componentVMNet, componentVMFS, componentVMPrep} {
 		res, err := lister.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: client.Filters{}.Add("label", labelComponent+"="+comp)})
 		if err != nil {
@@ -880,5 +896,5 @@ func (d *Driver) sweepVMOrphans(ctx context.Context, lister containerListerAPI, 
 			cleaned[runID] = true
 		}
 	}
-	return len(cleaned), errors.Join(errs...)
+	return len(cleaned) + macs, errors.Join(errs...)
 }

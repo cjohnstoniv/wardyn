@@ -17,6 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // errNoRemoteExecutor is the remote placement's answer when no runner.Runner is
@@ -544,14 +545,15 @@ func macOSVMFit(mc *runnerwire.MacVMCaps, rn types.Runner, ask macOSVMAsk, pool 
 	return nil
 }
 
-// macOSVMAskOf is the macOS VM ask of a run fold: its harness ids and the size stepResources applied.
-func macOSVMAskOf(f *runFold) macOSVMAsk {
-	ask := macOSVMAsk{CPUMillis: f.place.applied.CPUMillis.Applied, MemoryMiB: f.place.applied.MemoryMiB.Applied}
-	for _, h := range f.harnesses {
+// macOSVMAskOf is the macOS VM ask of a run: its harness ids (the request's agent when it names no
+// harness set) and the size stepResources applied.
+func macOSVMAskOf(applied client.AppliedResources, harnesses []types.RunHarness, agent string) macOSVMAsk {
+	ask := macOSVMAsk{CPUMillis: applied.CPUMillis.Applied, MemoryMiB: applied.MemoryMiB.Applied}
+	for _, h := range harnesses {
 		ask.Harnesses = append(ask.Harnesses, h.Harness)
 	}
-	if len(ask.Harnesses) == 0 && f.req.Agent != "" {
-		ask.Harnesses = []string{f.req.Agent}
+	if len(ask.Harnesses) == 0 && agent != "" {
+		ask.Harnesses = []string{agent}
 	}
 	return ask
 }

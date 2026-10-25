@@ -70,6 +70,13 @@ regexes = [
     # collection name) as an argument beside a token fixture, so the rule
     # parses the path as the key. Not a credential.
     '''"tfs/defaultcollection"''',
+    # internal/macvm/stage2boot_test.go's fake per-run socket key, a 0-9a-f run
+    # standing in for the random name a stage-2 boot gets. Not a credential.
+    '''SockKey: "0123456789ab"''',
+    # internal/macvm/rfbshim.go's desktop password alphabet: the set of
+    # characters a generated one-time desktop password is drawn from (no
+    # look-alikes), a source constant, never a password itself.
+    '''desktopPasswordAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"''',
 ]
 paths = [
     # The leaked-value detector's own tests: intentionally realistic-shaped

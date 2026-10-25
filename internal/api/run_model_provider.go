@@ -338,7 +338,8 @@ func providerLLMAccess(agent string, mp runProviderChoice) *composeLLMAccess {
 		if mp.provider.Kind == types.ModelProviderBedrockSSO {
 			note = mpAccessAWSSignIn
 		}
-		return &composeLLMAccess{Provisioned: true, Note: fmt.Sprintf(note, agent, mp.provider.ID)}
+		return &composeLLMAccess{Provisioned: true, Note: fmt.Sprintf(note, agent, mp.provider.ID),
+			sandboxResident: kindResidency(mp.provider.Kind) == residencySandbox}
 	}
 	return &composeLLMAccess{Note: fmt.Sprintf(mpAccessNoProvider, agent)}
 }

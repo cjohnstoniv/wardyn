@@ -157,6 +157,9 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// The runner holds the agent back until this line appears: it prints only once :3128 is bound.
+	srv.OnListening(func() { fmt.Fprintln(os.Stdout, proxy.ReadyMarker) })
+
 	errCh := make(chan error, 1)
 	go func() {
 		slog.Info("wardyn-proxy: listening",
@@ -176,6 +179,9 @@ func main() {
 		// Terminal (k8s runners): the pod is never restarted, so a lapsed
 		// proxy never serves again. Drain the sink for at most 5 s, then fail.
 		slog.Error("wardyn-proxy: run egress lapsed; exiting")
+		if err := srv.WriteLapseCause(terminationLog); err != nil {
+			slog.Warn("wardyn-proxy: writing the lapse cause", slog.Any("err", err))
+		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), lapseDrain)
 		_ = srv.Shutdown(shutdownCtx)
 		cancel()
@@ -197,6 +203,10 @@ const (
 	exitLapsed = 3
 	lapseDrain = 5 * time.Second
 )
+
+// terminationLog is the pod's default terminationMessagePath: the k8s runner reads a lapsed
+// proxy's cause back from it.
+const terminationLog = "/dev/termination-log"
 
 // applyLLMScanSwitch is the per-proxy kill-switch: WARDYN_LLM_SCAN=off forces
 // THIS proxy process's outbound content inspection OFF regardless of policy.

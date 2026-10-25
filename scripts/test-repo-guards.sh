@@ -962,7 +962,7 @@ fi
 # and the new systemd failed test-desktop-profile.sh on every PR. A job names the image instead.
 floating="$(grep -nE '^[[:space:]]*runs-on:.*ubuntu-latest' .github/workflows/*.yml || true)"
 if [ -n "$floating" ]; then
-    bad "workflow jobs on the moving ubuntu-latest label (name the image, e.g. ubuntu-24.04):
+    bad "workflow jobs on the moving ubuntu-latest label (name the image, e.g. ubuntu-26.04):
 ${floating}"
 else
     ok "every workflow job names its runner image (no ubuntu-latest)"

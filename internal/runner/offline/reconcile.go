@@ -12,8 +12,10 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/retrylog"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerspool"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
@@ -257,89 +259,128 @@ var errReplayHeld = errors.New("offline: the run was quarantined or retired duri
 
 // Replay uses only the authenticated runner peer; expired run tokens are never
 // involved. Spool ACKs and durable exit results survive reconnect and restart.
+// It is the replay before READY: every run is tried.
 func (m *Manager) Replay(ctx context.Context, peer *runnerwire.Peer) error {
+	return m.replay(ctx, peer.EventsAck, false)
+}
+
+// replay sends each run's unacknowledged spool rows, then its exit. A run that fails is that run's
+// own fault: the later runs are still sent, and its error is joined into the result, so this runner
+// does not come ready with a spool it never replayed. paced is the periodic loop's pass: there a run
+// that failed is not tried again until its own retrylog delay has passed, while the others go every
+// pass. A failure, or a success, starts or clears that run's delay either way.
+func (m *Manager) replay(ctx context.Context, send func(context.Context, []runnerwire.Event) error, paced bool) error {
 	m.replayMu.Lock()
 	defer m.replayMu.Unlock()
 	m.mu.Lock()
 	ids := m.runIDs()
 	revoked := m.state.Revoked
+	for id := range m.replayWaits {
+		if _, ok := m.state.Runs[id]; !ok {
+			delete(m.replayWaits, id)
+		}
+	}
 	m.mu.Unlock()
 	if revoked {
 		return runnerwire.ErrRevoked
 	}
-	// A spool that will not open is that run's own fault: the other runs' evidence is still sent, and
-	// the error is returned last, so this runner does not come ready with a spool it never replayed.
-	var unopened []error
+	var errs []error
 	for _, id := range ids {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(append(errs, err)...)
+		}
 		m.mu.Lock()
 		quarantined := m.state.Runs[id].Quarantine != nil || m.state.Runs[id].Retired
+		now := m.now()
+		wait, waiting := m.replayWaits[id]
 		m.mu.Unlock()
-		if quarantined {
+		if quarantined || (paced && waiting && now.Before(wait.next)) {
 			continue
 		}
-		spool, err := runnerspool.Open(filepath.Join(m.dir, "spools", id.String()), id)
-		if err != nil {
-			unopened = append(unopened, fmt.Errorf("open the spool of run %s: %w", id, err))
-			continue
-		}
-		err = spool.Replay(ctx, func(ctx context.Context, rows []runnerspool.Record) error {
-			// A quarantine or retirement that lands mid-replay stops the rest of this run's backlog, as
-			// one that landed before the replay began does.
-			m.mu.Lock()
-			held := m.state.Runs[id].Quarantine != nil || m.state.Runs[id].Retired
-			m.mu.Unlock()
-			if held {
-				return errReplayHeld
-			}
-			evs := make([]runnerwire.Event, len(rows))
-			for i, row := range rows {
-				b, err := row.Marshal()
-				if err != nil {
-					return err
-				}
-				evs[i] = runnerwire.Event{Kind: runnerwire.EventSpool, RunID: &id, Data: b}
-			}
-			return peer.EventsAck(ctx, evs)
-		})
-		closeErr := spool.Close()
-		if errors.Is(err, errReplayHeld) {
-			// Held mid-replay: like a run held before it began, its exit is not sent either.
-			if closeErr != nil {
-				return closeErr
-			}
-			continue
-		}
-		if err := errors.Join(err, closeErr); err != nil {
-			return err
-		}
+		err := m.replayRun(ctx, id, send)
 		m.mu.Lock()
-		if err := m.ensureDurable(); err != nil {
-			m.mu.Unlock()
-			return err
-		}
-		r := m.state.Runs[id]
-		m.mu.Unlock()
-		if r.Exit == nil || r.ExitAcked {
-			continue
-		}
-		b, err := json.Marshal(r.Exit)
 		if err != nil {
-			return err
-		}
-		if err := peer.EventAck(ctx, runnerwire.Event{Kind: runnerwire.EventAgentExit, RunID: &id, Data: b}); err != nil {
-			return err
-		}
-		m.mu.Lock()
-		current := m.state.Runs[id]
-		if current.Exit != nil && *current.Exit == *r.Exit {
-			current.ExitAcked = true
-			m.state.Runs[id] = current
-			err = m.save()
+			wait.fails++
+			wait.next = now.Add(retrylog.Delay(wait.fails))
+			if m.replayWaits == nil {
+				m.replayWaits = map[uuid.UUID]replayWait{}
+			}
+			m.replayWaits[id] = wait
+		} else {
+			delete(m.replayWaits, id)
 		}
 		m.mu.Unlock()
 		if err != nil {
-			return err
+			errs = append(errs, fmt.Errorf("replay run %s: %w", id, err))
 		}
 	}
-	return errors.Join(unopened...)
+	return errors.Join(errs...)
+}
+
+// replayWait is a run whose replay failed: how many times in a row, and when it is next tried.
+type replayWait struct {
+	fails int
+	next  time.Time
+}
+
+// replayRun sends one run's spool backlog and then its exit, unless it is quarantined or retired
+// meanwhile.
+func (m *Manager) replayRun(ctx context.Context, id uuid.UUID, send func(context.Context, []runnerwire.Event) error) error {
+	spool, err := runnerspool.Open(filepath.Join(m.dir, "spools", id.String()), id)
+	if err != nil {
+		return fmt.Errorf("open the spool: %w", err)
+	}
+	err = spool.Replay(ctx, func(ctx context.Context, rows []runnerspool.Record) error {
+		// A quarantine or retirement that lands mid-replay stops the rest of this run's backlog, as
+		// one that landed before the replay began does.
+		m.mu.Lock()
+		held := m.state.Runs[id].Quarantine != nil || m.state.Runs[id].Retired
+		m.mu.Unlock()
+		if held {
+			return errReplayHeld
+		}
+		evs := make([]runnerwire.Event, len(rows))
+		for i, row := range rows {
+			b, err := row.Marshal()
+			if err != nil {
+				return err
+			}
+			evs[i] = runnerwire.Event{Kind: runnerwire.EventSpool, RunID: &id, Data: b}
+		}
+		return send(ctx, evs)
+	})
+	closeErr := spool.Close()
+	if errors.Is(err, errReplayHeld) {
+		// Held mid-replay: like a run held before it began, its exit is not sent either.
+		return closeErr
+	}
+	if err := errors.Join(err, closeErr); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	if err := m.ensureDurable(); err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	r := m.state.Runs[id]
+	m.mu.Unlock()
+	if r.Exit == nil || r.ExitAcked {
+		return nil
+	}
+	b, err := json.Marshal(r.Exit)
+	if err != nil {
+		return err
+	}
+	if err := send(ctx, []runnerwire.Event{{Kind: runnerwire.EventAgentExit, RunID: &id, Data: b}}); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	current := m.state.Runs[id]
+	if current.Exit != nil && *current.Exit == *r.Exit {
+		current.ExitAcked = true
+		m.state.Runs[id] = current
+		return m.save()
+	}
+	return nil
 }

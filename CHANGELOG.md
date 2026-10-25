@@ -11,6 +11,96 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Before you upgrade
+
+- 0.10 can't be rolled back by redeploying 0.9.x: its migrations rename tables and change constraints. Take a database backup first.
+- **Upgrade wardyn-runnerd and rebuild the Linux VM guest image (`vm-linux`) to order a desktop sign-in's pause and
+  resume.** A run on an older wardyn-runnerd or guest image is not refused: its pause and resume work as before, its
+  `desktop.sign_in.pause` row says `fenced` false, and a continue that reaches its guest late can still run the agent
+  while the run page says paused. Migration `0231_desktop_vm_pause_generation` adds a column to `desktop_vm_sign_ins`;
+  no grant changes.
+- During a rolling control-plane upgrade, a desktop sign-in pause can stay paused until it is resumed from an upgraded server.
+- A Kubernetes runner (wardyn-runnerd) gets the short-run recording fix below only with a proxy image of this release.
+  The Helm chart pins the proxy tag to the runner's. A runner started without Helm and not pinned uses the proxy image
+  the organisation named at registration: when that is an older release, its runs keep working as before, without the
+  fix, and the runner logs a warning once. Have the organisation name this release's proxy image, or run setup with
+  `--proxy-image` set to it.
+  A proxy image named by digest or by a tag that is not a release number starts its runs as before, whatever its
+  release: this release's proxy gets the fix that way too, and an older one keeps working without it. The runner
+  cannot read such an image's release, so it logs no warning for it; name a release tag to have it checked.
+- The proxy-ready fix on Docker spans three pieces: wardyn-runnerd, the wardyn-proxy image and the agent images.
+  Upgrade the organisation before its runners, as always. A runner that follows an older organisation's proxy image
+  keeps starting runs as before and logs once that the image does not announce when it is listening, so the fix does not
+  reach those runs until the organisation is upgraded. The agent images wait for the proxy on their own and need no
+  runner change.
+
+### Changed
+
+- On `agent-base`, an exec-mode run (`workload.kind: command`) that clones a repository or names a starting folder
+  now gets the same workspace prep a harness run does: the repos are cloned into `/home/agent/work` and the git
+  credential helper is ready, where the clone was skipped and the folder left empty unless the run also had a
+  starting folder. A run with neither is unchanged.
+- A failing retry no longer floods the logs. The organisation retries a runner exit receipt after 5 seconds, doubling
+  to 5 minutes, and logs an identical error once per interval with a `repeated` count; a receipt refused on 8 tries in
+  a row as a foreign, stale or incomplete incarnation is parked (migration `0232_runner_exit_parked`): kept, audited as
+  `runner.exit.park`, no longer retried, and failed by `wardyn doctor`'s new `runner-exits` stage. The runner backs off
+  each run's failing replay on its own, without holding up the others, logs its containment and replay retries the
+  same way (containment is still tried on every pass), and on macOS writes `~/Library/Logs/wardyn/runnerd.log` itself, rotated
+  at 10 MiB with three older files kept (a crash goes to `runnerd.crash.log`); `wardyn runner upgrade` rewrites the LaunchAgent to pass `--log-file`.
+
+### Added
+
+- macOS virtual machines (preview, off by default). A Mac on macOS 27 or later can run up to two macOS VM sandboxes,
+  installed on that Mac from Apple's own restore image. Wardyn does not ship macOS. Turn it on with `WARDYN_MACOS_VMS`
+  in the organisation and, on the Mac, `WARDYN_RUNNER_MACOS_VM=1`, the managed preference `MacOSVM` or
+  `wardyn-runnerd setup --macos-vm on`. `wardyn-runnerd macos-vm prepare`, `status` (`--json` for one JSON object) and
+  `remove` build, show and delete the Mac's macOS base; `prepare --new-image` builds a new one from Apple's newest
+  restore image. The runner offers macOS VMs only when its helper's `wardyn-macvm probe` passes, offers as many as the
+  Mac's shared ledger and memory leave room for, and ends its newest one when the disk drops below 5 GiB free.
+
+### Fixed
+
+- The image launcher split each `WARDYN_REPOS` clone record with a tab as whitespace, so an empty field moved the
+  fields after it up a place. This control plane never sends such a record. A control plane that sends only the
+  single-repository variables (`WARDYN_REPO_URL`, `WARDYN_REPO_SLUG`) got no git broker rewrite, and a record with
+  an empty middle field lost its branch. Empty fields now stay in place.
+- A unit delete, move or rename no longer scans every membership per affected person (migration
+  `0233_governance_memberships_subject` adds an index on the membership subject).
+- A continue that reaches a Linux VM's guest agent after a later "Pause the agent to sign in", as one delayed past a
+  lost run lock can, no longer runs the agent while the person signs in. Each pause takes the run's next pause
+  generation, kept in the database (migration `0231_desktop_vm_pause_generation`), and every stop and continue carries
+  one to the guest agent, which drops a request out of order and answers `409`: one older than the newest it has
+  seen, or a stop after its own generation's continue. The order outlives a restart of the guest agent's service. Each
+  pause-to-resume's `desktop.sign_in.pause` row records `fenced`, false when the run's wardyn-runnerd or guest image
+  predates it.
+- A short command run on a Kubernetes runner (wardyn-runnerd) no longer loses its recording. The run's proxy refuses
+  every request until its first token renew succeeds, but its pod read as ready once it listened, so the agent could
+  start, finish and have its recording upload refused inside that window. The proxy now listens only once its first
+  renew has succeeded, so its pod is ready only once it serves.
+- A run on a Kubernetes runner (wardyn-runnerd) whose proxy cannot renew its run token, for example because a
+  firewall blocks the organisation, now fails naming the cause: "the run's proxy could not renew its run token with
+  the organisation:" and the proxy's last renew error, without the token or the URL's path and query. Before, its
+  start waited out the start timeout and said only that the proxy pod never became ready. A proxy that has never
+  renewed now gives up about a minute after it starts; a refused renew still ends it at once, with the same sentence.
+- `GET /runs/{id}/output` no longer points the run's owner or an operator at a recording that was never received.
+  With run output persistence off, an ended run on a runner that does not capture output, and whose recording never
+  arrived, answers `409` `run_output_not_kept`.
+- On Docker, a run's agent can no longer start before its proxy is listening. The runner now holds the agent back until
+  the proxy reports it has bound its port, and fails the run if it does not within 10 seconds. The
+  agent images also wait up to 10 seconds for the proxy before they run the task, and carry on with one stderr line if
+  it never answers. Before, an exec run's first requests, or a very short run's recording upload, could be refused with
+  "connection refused".
+- A Linux VM run that ends while its agent is paused to sign in now writes its `desktop.sign_in.pause` audit row, marked
+  `ended_paused` with the run's own end time and no `resumed_at`. Before, the pause had no row at all, because a resume
+  is refused once the run is not running.
+- A desktop recording's replay no longer shows a failed clipboard or file action read as an empty action log. It shows
+  the replay's load failure with its retry.
+- Retrying a team drive save that stored one group's allocation and failed on another now also removes a group the
+  admin took out of the editor since. Before, that group's allocation stayed.
+- The setup checklist's model-access row now reports `resident_file` for a run served by an AWS sign-in, whose session
+  file is held in the sandbox, instead of `proxy_injected`, so it agrees with the `model_credential` the same
+  response carries.
+
 ## [0.10.0-rc.1] — 2026-10-24
 
 ### Before you upgrade

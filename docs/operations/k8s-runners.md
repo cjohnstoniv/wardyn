@@ -204,6 +204,7 @@
 |---|---|---|
 | Runner offline, inside the budget | Pods keep running; decisions buffer; the run continues on reconnect | Restore runnerd |
 | Runner offline past a proxy's deadline | That proxy exits; the run is lost `outage` | Restore runnerd; the run does not revive |
+| Proxy cannot renew its run token at start | It exits about a minute after it starts; the run fails with "the run's proxy could not renew its run token with the organisation:" and its last renew error | Let the cluster reach the host and port the error names |
 | Proxy crashes, runs out of memory or lapses | Terminal: the pod stays `Failed`, runnerd contains the run and settles its decisions | Start a new run |
 | Relay lost | First-use approvals are denied; decisions buffer | Restore the relay Service |
 | New proxy pod's IP still fenced for an earlier run | The runner stops the new run before it opens; the run fails with reason `relay_ip_fenced` | Start the run again. The address frees when the earlier run's stop is confirmed |

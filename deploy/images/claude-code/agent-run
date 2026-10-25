@@ -78,6 +78,7 @@ set -euo pipefail
 # provision_git_helper_secret, clone_one, dispatch_repo_clones,
 # resolve_workdir) — identical across every agent image's agent-run.
 source /usr/local/bin/agent-run-lib.sh
+wait_for_proxy
 
 # The two lines this image's boot pane prints while it waits (BOOT_SEED_PREPARING,
 # BOOT_SEED_PREP_GONE) are DRAFT constants in agent-run-lib.sh, sourced above:

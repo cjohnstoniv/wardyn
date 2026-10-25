@@ -183,12 +183,17 @@ type Driver struct {
 	cli dockerAPI
 	cfg Config
 
-	// proxySettle is how long startProxy's exit-watch requires a proxy's
-	// Running state to have HELD before trusting it. New() sets this to
-	// proxyStartSettle for a real daemon; newWithClient's zero value (0) is
-	// the deliberate default for fake-backed test drivers, so the unit suite
-	// doesn't pay a real wall-clock tax on every CreateSandbox.
+	// proxySettle is how long startProxy's exit-watch (a proxy image without the ready marker) requires
+	// a proxy's Running state to have HELD before trusting it. New() sets this to proxyStartSettle for a
+	// real daemon; newWithClient's zero value (0) is the deliberate default for fake-backed test drivers,
+	// so the unit suite doesn't pay a real wall-clock tax on every CreateSandbox.
 	proxySettle time.Duration
+	// legacyProxyWarned holds the proxy images already logged as lacking the ready marker.
+	legacyProxyWarned sync.Map
+
+	// proxyReady overrides how long startProxy waits for a proxy's ready marker; zero means
+	// proxyReadyWait. Tests shorten it.
+	proxyReady time.Duration
 
 	// subnetMu serialises this driver's run network creates from RunSubnetPool (createPoolRunNetwork).
 	subnetMu sync.Mutex
@@ -238,6 +243,7 @@ type Driver struct {
 	// ref to its *vmRun; notVMs holds the refs found to be containers, until their teardown;
 	// vmDial, a test hook, replaces the unix dial to a VM's sockets.
 	vmCfg  atomic.Pointer[VMConfig]
+	macCfg atomic.Pointer[MacVMConfig] // EnableMacVM: macOS VM sandboxes, whose refs vms holds too
 	vms    sync.Map
 	notVMs sync.Map
 	vmDial func(ctx context.Context, path string) (net.Conn, error)

@@ -58,6 +58,8 @@ type runnerFile struct {
 	// LocalModelPort lists the ports, comma-separated, a laptop local model server may be relayed on
 	// (#2957); none when unset, so no run on this computer uses its model server until the person allows one.
 	LocalModelPort string `json:"local_model_port,omitempty"`
+	// MacOSVM turns macOS VM sandboxes on ("1") on a Mac; off when unset.
+	MacOSVM string `json:"macos_vm,omitempty"`
 }
 
 // Where each setting is read from, in the order serve consults them. A managed preference outranks the
@@ -104,6 +106,16 @@ var runnerFields = []runnerField{
 	{name: "runner_no_proxy", env: []string{"NO_PROXY", "no_proxy"}, file: func(f *runnerFile) *string { return &f.RunnerNoProxy }},
 	{name: "recording_store", flag: "recording-store", env: []string{"WARDYN_RECORDING_STORE"}, managed: "RecordingStore", def: "pg", locked: true, file: func(f *runnerFile) *string { return &f.RecordingStore }},
 	{name: "local_model_port", flag: "local-model-port", env: []string{"WARDYN_LOCAL_MODEL_PORT"}, managed: "LocalModelPort", file: func(f *runnerFile) *string { return &f.LocalModelPort }},
+	{name: "macos_vm", env: []string{"WARDYN_RUNNER_MACOS_VM"}, managed: "MacOSVM", file: func(f *runnerFile) *string { return &f.MacOSVM }},
+}
+
+// macOSVMOn reads the macos_vm setting.
+func macOSVMOn(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "on", "yes":
+		return true
+	}
+	return false
 }
 
 // parseLocalModelPorts reads local_model_port: comma-separated ports, each 1 to 65535. Empty allows none.

@@ -13,7 +13,9 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"math"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -256,6 +258,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if proxyJSON, err = d.runnerProxyConfig(ctx, spec.RunID, proxyJSON); err != nil {
 		return fail(err)
 	}
+	d.warnOlderProxy()
 	secretData := map[string][]byte{proxyConfigSecretKey: proxyJSON}
 	// The agent's credential-bearing env rides this SAME Secret (see
 	// runner.SandboxSpec.SecretEnv), via a secretKeyRef per variable rather
@@ -329,9 +332,11 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 				SecurityContext:          restrictedSecurityContext(),
 				Resources:                proxyResources(len(spec.ProxyConfig.AzureGates) > 0),
 				TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
-				// The proxy binds its listener only after its startup resolve has succeeded, so a
-				// connect to it is that proof: without a probe the container is Ready as soon as it
-				// runs, and waitPodIP can return before a failing resolve exits it.
+				// The proxy binds its listener only once it serves: after its startup resolve has
+				// succeeded and, on a runner (self_lapse), after its first renew. A connect to it is that
+				// proof: without a probe the container is Ready as soon as it runs, and waitPodIP can
+				// return before a failing resolve exits it, or start an agent whose requests the proxy
+				// still refuses, a short run's recording upload among them.
 				ReadinessProbe: &corev1.Probe{
 					ProbeHandler:  corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(runner.ProxyListenPort)}},
 					PeriodSeconds: 1,
@@ -721,6 +726,9 @@ func proxyStartFailure(pod *corev1.Pod) error {
 		if t == nil || (cs.Name == stageProxyConfigInitName && t.ExitCode == 0) {
 			continue
 		}
+		if cs.Name == proxyContainerName && t.ExitCode == proxyExitLapsed {
+			return proxyRenewFailure(t.Message)
+		}
 		return fmt.Errorf("proxy container %s exited before the proxy was ready (exit code %d, %s): %s", cs.Name, t.ExitCode, t.Reason, t.Message)
 	}
 	return nil
@@ -784,6 +792,66 @@ func (d *Driver) runnerdPeerRules() []networkingv1.NetworkPolicyEgressRule {
 			PodSelector:       &metav1.LabelSelector{MatchLabels: maps.Clone(p.PodLabels)},
 		}},
 	}}
+}
+
+// proxyReadyRelease is the first release whose runner proxy listens only once it serves.
+const proxyReadyRelease = "0.10.0-rc.2"
+
+// warnOlderProxy says once, in runner mode, that the proxy image is a known release older than
+// proxyReadyRelease: that proxy listens while it still refuses every request, so its pod reads Ready
+// before it serves and a short run's recording upload can be refused. Its runs start as before. An
+// image whose release cannot be read (a digest pin, a development build) is not judged.
+func (d *Driver) warnOlderProxy() {
+	if !d.runnerMode() {
+		return
+	}
+	if tag := imageReleaseTag(d.cfg.ProxyImage); tag == "" || !releaseOlder(tag, proxyReadyRelease) {
+		return
+	}
+	d.olderProxyWarned.Do(func() {
+		slog.Warn("k8s: the proxy image is older than this runner; its pod reads ready before it serves, so a short run's recording can be lost",
+			slog.String("image", d.cfg.ProxyImage), slog.String("needs", proxyReadyRelease),
+			slog.String("fix", "have the organisation name this release's proxy image, or run setup with --proxy-image set to it"))
+	})
+}
+
+// releaseTagRE is a release (X.Y.Z) or a release candidate (X.Y.Z-rc.N) image tag.
+var releaseTagRE = regexp.MustCompile(`^([0-9]+)\.([0-9]+)\.([0-9]+)(?:-rc\.([0-9]+))?$`)
+
+// imageReleaseTag is image's tag when it names a release, else "": a digest-only reference, an
+// untagged one or a development tag has none.
+func imageReleaseTag(image string) string {
+	ref, _, _ := strings.Cut(image, "@")
+	i := strings.LastIndex(ref, ":")
+	if i < 0 || strings.Contains(ref[i:], "/") || !releaseTagRE.MatchString(ref[i+1:]) {
+		return ""
+	}
+	return ref[i+1:]
+}
+
+// releaseOlder reports whether release tag a is older than b: a release candidate is older than
+// its release.
+func releaseOlder(a, b string) bool {
+	pa, pb := releaseParts(a), releaseParts(b)
+	for i := range pa {
+		if pa[i] != pb[i] {
+			return pa[i] < pb[i]
+		}
+	}
+	return false
+}
+
+func releaseParts(v string) [4]int {
+	m := releaseTagRE.FindStringSubmatch(v)
+	var p [4]int
+	for i := range 3 {
+		p[i], _ = strconv.Atoi(m[i+1])
+	}
+	p[3] = math.MaxInt // a release sorts after each of its candidates
+	if m[4] != "" {
+		p[3], _ = strconv.Atoi(m[4])
+	}
+	return p
 }
 
 // runnerProxyConfig adds the runner-only proxy config keys (runner mode): runnerd's own CA bundle
