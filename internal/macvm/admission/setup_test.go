@@ -1037,6 +1037,39 @@ func TestSetupRelinkQuarantinesAnEntryThatCannotBeLinked(t *testing.T) {
 	wantLayout(t, r)
 }
 
+// A name in the old entries directory whose inode the published one does not hold is not unlinked with the
+// rest: it moves to a root-only quarantine. Nothing makes one under the setup's lock, so a hook plants it
+// after the swap.
+func TestSetupDiscardKeepsAnEntryThePublishedDirectoryLacks(t *testing.T) {
+	r := newRig(t, bigMac())
+	names := admitN(t, r, 2)
+	var late string
+	plant := func(c *SetupConfig) {
+		c.Fstat = drift(t, r, "03777")
+		c.afterSwap = func(old string) {
+			late = filepath.Join(old, "e-late.json")
+			if err := os.WriteFile(late, []byte("late"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := Setup(r.setupCfg(plant)); err != nil {
+		t.Fatal(err)
+	}
+	q, _ := filepath.Glob(filepath.Join(filepath.Dir(r.dir), quarantinePrefix+"*", "e-late.json"))
+	if len(q) != 1 || readFile(t, q[0]) != "late" {
+		t.Fatalf("the name the published directory lacks was not quarantined: %v", q)
+	}
+	if m, _ := filepath.Glob(filepath.Join(filepath.Dir(r.dir), "."+entriesName+"-link.*")); len(m) != 0 {
+		t.Fatalf("link directories left: %v", m)
+	}
+	if n := counted(t, r); n != 2 {
+		t.Fatalf("a helper counts %d of 2 entries", n)
+	}
+	wantEntries(t, r, names, "the discard")
+	wantLayout(t, r)
+}
+
 // DR-0431 residual: an entry its owner releases between a failed migration and
 // the retry stays released.
 func TestSetupRetryNeverResurrectsAReleasedEntry(t *testing.T) {

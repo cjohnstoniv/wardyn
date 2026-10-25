@@ -32,6 +32,7 @@ type SetupConfig struct {
 	afterFlock func()                 // tests: runs once the old lock's flock is held
 	beforeMove func(dst string) error // tests: runs before each entry is moved
 	afterSock  func()                 // tests: runs once sock/ is swept
+	afterSwap  func(old string)       // tests: runs once relink swapped the new entries directory in; old is where the old one now is
 }
 
 const (
@@ -371,7 +372,12 @@ func (s *setup) relink(dst *source) error {
 	if err := renameSwap(int(s.base.Fd()), filepath.Base(tmp), entriesName); err != nil {
 		return err
 	}
-	s.discard(filepath.Base(tmp))
+	if s.c.afterSwap != nil {
+		s.c.afterSwap(tmp)
+	}
+	if s.keepUnpublished(filepath.Base(tmp)) {
+		s.discard(filepath.Base(tmp))
+	}
 	return nil
 }
 
@@ -400,6 +406,57 @@ func (s *setup) discard(name string) {
 		}
 	}
 	_ = unix.Unlinkat(int(s.base.Fd()), name, unix.AT_REMOVEDIR)
+}
+
+// keepUnpublished moves each name of name, the entries directory relink just swapped out, to a root-only
+// quarantine unless its inode is also in the published entries directory, so the discard that follows
+// unlinks only second links. Under the setup's lock every name is in both, and none moves. It reports
+// whether the discard may go on: not after a name it could not move.
+func (s *setup) keepUnpublished(name string) bool {
+	f, _, err := s.rootDir(s.base, name)
+	if f == nil {
+		return true // discard says why
+	}
+	held, err := s.publishedInodes()
+	names, nerr := dirNames(f)
+	if err != nil || nerr != nil {
+		s.c.Logf("left %s: %v", f.Name(), errors.Join(err, nerr))
+		return false
+	}
+	ok := true
+	for _, n := range names {
+		var st unix.Stat_t
+		if unix.Fstatat(int(f.Fd()), n, &st, unix.AT_SYMLINK_NOFOLLOW) != nil || held[[2]uint64{uint64(st.Dev), st.Ino}] {
+			continue
+		}
+		why := fmt.Sprintf("%s holds %s, which the entries directory does not", f.Name(), n)
+		if err := s.quarantineName(f, n, why); err != nil && !errors.Is(err, unix.ENOENT) {
+			s.c.Logf("left %s: %v", filepath.Join(f.Name(), n), err)
+			ok = false
+		}
+	}
+	return ok
+}
+
+// publishedInodes is the device and inode of each name in Base's entries directory.
+func (s *setup) publishedInodes() (map[[2]uint64]bool, error) {
+	f, _, err := s.openDir(int(s.base.Fd()), entriesName, filepath.Join(s.base.Name(), entriesName))
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	names, err := f.Readdirnames(-1)
+	if err != nil {
+		return nil, err
+	}
+	held := make(map[[2]uint64]bool, len(names))
+	for _, n := range names {
+		var st unix.Stat_t
+		if err := unix.Fstatat(int(f.Fd()), n, &st, unix.AT_SYMLINK_NOFOLLOW); err == nil {
+			held[[2]uint64{uint64(st.Dev), st.Ino}] = true
+		}
+	}
+	return held, nil
 }
 
 // stage moves dst's entries (dst is nil when there is no entries directory to
