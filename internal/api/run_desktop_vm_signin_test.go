@@ -1921,6 +1921,42 @@ func TestDesktopSignIns_ARunThatEndsPausedEndsItsRecordingHoldOnce(t *testing.T)
 	}
 }
 
+// The sign-in sweep ends the recording hold of the pause it closes (#3628), by itself: the recording
+// pass would drop the entry too, so this runs the sign-in pass alone. A pause it leaves standing, a
+// run lost to an outage, keeps its hold.
+func TestDesktopSignIns_TheSweepEndsTheRecordingHoldOfThePauseItCloses(t *testing.T) {
+	ends := []struct {
+		name string
+		end  func(*types.AgentRun, time.Time)
+		over bool
+	}{
+		{"killed", func(r *types.AgentRun, at time.Time) { r.State, r.EndedAt = types.RunKilled, &at }, true},
+		{"kept", func(r *types.AgentRun, at time.Time) { r.LostAt, r.LostReason = &at, types.LostEnded }, true},
+		{"reboot", func(r *types.AgentRun, at time.Time) { r.LostAt, r.LostReason = &at, types.LostReboot }, true},
+		{"outage", func(r *types.AgentRun, at time.Time) { r.LostAt, r.LostReason = &at, types.LostOutage }, false},
+	}
+	for _, e := range ends {
+		t.Run(e.name, func(t *testing.T) {
+			f := newVMSignInFixture(t, "memory")
+			f.recordDesktop(t)
+			if code, _, body := f.do(t, http.MethodPost, "/pause"); code != http.StatusOK {
+				t.Fatalf("pause = %d %s", code, body)
+			}
+			if !signInHeld(f.srv, f.run.ID) {
+				t.Fatal("the pause took no recording hold")
+			}
+			e.end(&f.run, time.Now().UTC())
+			f.st.putRun(f.run)
+			if err := f.srv.sweepEndedDesktopVMPauses(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if held := signInHeld(f.srv, f.run.ID); held == e.over {
+				t.Fatalf("after the sign-in sweep alone: held = %v, want %v", held, !e.over)
+			}
+		})
+	}
+}
+
 // A run lost to an outage keeps its agent running and can be revived, so its pause is not over: the
 // sweep writes no row and leaves the mark.
 func TestDesktopSignIns_AnOutageLostRunKeepsItsPause(t *testing.T) {
