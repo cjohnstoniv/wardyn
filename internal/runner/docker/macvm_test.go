@@ -597,3 +597,28 @@ func sweepSockForTest(l macvm.Layout, sockRoot string) ([]string, error) {
 		return errors.Is(err, os.ErrNotExist)
 	})
 }
+
+// CoversKind says which kinds Status can enumerate: containers and Linux VMs always, macOS VMs only
+// while they are on, so a runnerd with them off reports its macOS VM runs unknown, not gone (#3667).
+func TestDriverCoversKind(t *testing.T) {
+	r := newMacRig(t)
+	for _, kind := range []types.MachineKind{"", types.MachineContainer, types.MachineLinuxVM, types.MachineMacOSVM} {
+		if !r.d.CoversKind(kind) {
+			t.Errorf("CoversKind(%q) = false with macOS VMs on", kind)
+		}
+	}
+	if r.d.CoversKind(types.MachineKind("zx_vm")) {
+		t.Error("CoversKind answered true for an unknown kind")
+	}
+	if err := r.d.EnableMacVM(nil); err != nil {
+		t.Fatal(err)
+	}
+	if r.d.CoversKind(types.MachineMacOSVM) {
+		t.Error("CoversKind(macos_vm) = true with macOS VMs off")
+	}
+	for _, kind := range []types.MachineKind{"", types.MachineLinuxVM} {
+		if !r.d.CoversKind(kind) {
+			t.Errorf("CoversKind(%q) = false with macOS VMs off", kind)
+		}
+	}
+}

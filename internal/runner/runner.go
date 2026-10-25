@@ -433,6 +433,14 @@ type SandboxEnder interface {
 	EndSandbox(ctx context.Context, ref string) error
 }
 
+// KindCoverer is an OPTIONAL substrate capability: whether Status can enumerate a machine kind's
+// sandboxes now. A kind it cannot (macOS VMs off in this runnerd) is unknown, never absent: the offline
+// Manager reports such a run present and does not probe it (#3667). A substrate without it covers
+// containers and Linux VMs only, the kinds whose Status answers from the engine's own record.
+type KindCoverer interface {
+	CoversKind(kind types.MachineKind) bool
+}
+
 // ErrEndUnsupported is EndSandbox's (and StopProxy's) answer from a router
 // whose substrate for ref cannot keep a stopped (or lost) sandbox.
 var ErrEndUnsupported = errors.New("runner: this substrate cannot keep an ended sandbox")

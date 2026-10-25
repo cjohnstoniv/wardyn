@@ -125,6 +125,20 @@ func (d *Driver) EnableMacVM(c *MacVMConfig) error {
 
 func (d *Driver) macVMConfig() *MacVMConfig { return d.macCfg.Load() }
 
+var _ runner.KindCoverer = (*Driver)(nil)
+
+// CoversKind is runner.KindCoverer: containers and Linux VMs are inspected as containers, and macOS
+// VMs only while they are on (macVMConfig); with them off, Status would read every one as absent.
+func (d *Driver) CoversKind(kind types.MachineKind) bool {
+	switch kind.Normalize() {
+	case "", types.MachineLinuxVM:
+		return true
+	case types.MachineMacOSVM:
+		return d.macVMConfig() != nil
+	}
+	return false
+}
+
 // ReclaimMacVMs reconciles this runner's macOS VM ledger entries whose VM and run directory are gone
 // (reclaimGone); wardyn-runnerd runs it with every recompute of its offer.
 func (d *Driver) ReclaimMacVMs() error {
