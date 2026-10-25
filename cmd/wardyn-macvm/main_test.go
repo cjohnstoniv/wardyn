@@ -10,6 +10,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -83,6 +84,40 @@ func TestPrepareRefusedUntilWired(t *testing.T) {
 	code := run(context.Background(), []string{"prepare", "--root", t.TempDir(), "--cpus", "4", "--memory-mib", "8192"}, d)
 	if code != 1 || !strings.Contains(errb.String(), "prepare is not available") {
 		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+}
+
+// TestPrepareDepsWiresProvisioner: prepare's first boot is
+// macvm.NewProvisioner; this build still refuses prepare, naming the prep
+// network.
+func TestPrepareDepsWiresProvisioner(t *testing.T) {
+	var o macvm.PrepareOptions
+	err := prepareDeps(&o)
+	if reflect.TypeOf(o.FirstBoot) != reflect.TypeOf(macvm.NewProvisioner()) {
+		t.Fatalf("FirstBoot = %T; want %T", o.FirstBoot, macvm.NewProvisioner())
+	}
+	if err == nil || !strings.Contains(err.Error(), "no prep network") {
+		t.Fatalf("prepareDeps: %v", err)
+	}
+}
+
+// TestMainDepsProbeProvisioning: the helper's own probe asks
+// macvm.NewProvisioner, so it reports provisioning truthfully.
+func TestMainDepsProbeProvisioning(t *testing.T) {
+	d := mainDeps()
+	if reflect.TypeOf(d.firstBoot) != reflect.TypeOf(macvm.NewProvisioner()) {
+		t.Fatalf("firstBoot = %T; want %T", d.firstBoot, macvm.NewProvisioner())
+	}
+	var out bytes.Buffer
+	d.engine = func() (macvm.Engine, error) { return &macvmtest.Engine{}, nil }
+	d.stdout = &out
+	_ = run(context.Background(), []string{"probe"}, d)
+	var r probeReport
+	if err := json.Unmarshal(out.Bytes(), &r); err != nil {
+		t.Fatalf("%v %q", err, out.String())
+	}
+	if want := okOr(macvm.NewProvisioner().Supported()); r.Provisioning != want {
+		t.Fatalf("provisioning %q; want %q", r.Provisioning, want)
 	}
 }
 
@@ -204,6 +239,9 @@ func TestProbe(t *testing.T) {
 		}
 		if code != tc.want || r.Supported != (tc.want == 0) || r.GOOS == "" || r.HelperVersion == "" {
 			t.Fatalf("%s: exit %d, report %+v", tc.name, code, r)
+		}
+		if tc.want == 0 && r.Provisioning != "ok" {
+			t.Fatalf("%s: provisioning %q", tc.name, r.Provisioning)
 		}
 		if tc.hostErr != nil && r.Host != tc.hostErr.Error() {
 			t.Fatalf("%s: host %q", tc.name, r.Host)
