@@ -1272,12 +1272,17 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - name: Build the macOS VM helper (cgo, arm64)
+      # The helper installs the guest agent into the VM and refuses one whose version differs from its own, so both
+      # are built here with the one ldflags value. (-trimpath makes Go drop -ldflags from `go version -m`, so the
+      # pair's equality is by construction; the package step reads back the helper's version and the build commit.)
+      - name: Build the macOS VM helper (cgo, arm64) and its guest agent
         run: |
           set -euo pipefail
-          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build -trimpath \
-            -ldflags "-X github.com/cjohnstoniv/wardyn/internal/version.releaseBuild=true" \
+          ldflags="-X github.com/cjohnstoniv/wardyn/internal/version.releaseBuild=true"
+          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "$ldflags" \
             -o bin/wardyn-macvm ./cmd/wardyn-macvm
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "$ldflags" \
+            -o bin/wardyn-guest-agent ./cmd/wardyn-guest-agent
       - name: Build, sign and notarize (each only with its secrets)
         env:
           # Notarization submits the package to Apple, so it runs only for a real release tag run.
@@ -1297,7 +1302,7 @@ jobs:
           DRY_RUN="$DRY_RUN" scripts/build-runner-pkg.sh --version "$version" \
             --arm64 bin/wardyn-runnerd-darwin-arm64 --amd64 bin/wardyn-runnerd-darwin-amd64 \
             --cli-arm64 bin/wardyn-darwin-arm64 --cli-amd64 bin/wardyn-darwin-amd64 \
-            --macvm bin/wardyn-macvm --out wardyn-runnerd.pkg
+            --macvm bin/wardyn-macvm --guest-agent bin/wardyn-guest-agent --out wardyn-runnerd.pkg
           # An unsigned package has no signature to check; a signed one must verify.
           pkgutil --check-signature wardyn-runnerd.pkg || true
           payload="$(pkgutil --payload-files wardyn-runnerd.pkg)"
@@ -1308,12 +1313,25 @@ jobs:
           # The helper is in the package, no macOS image ever is,
           # and the helper carries exactly the virtualization entitlement.
           grep -Eq '(^|/)usr/local/wardyn/bin/wardyn-macvm$' <<<"$payload"
+          grep -Eq '(^|/)usr/local/wardyn/bin/wardyn-guest-agent$' <<<"$payload"
           if grep -Eiq '\.(ipsw|img)$' <<<"$payload"; then echo "::error::the package payload lists a macOS image"; exit 1; fi
           pkgutil --expand-full wardyn-runnerd.pkg "$RUNNER_TEMP/pkg"
           helper="$(find "$RUNNER_TEMP/pkg" -path '*/Payload/usr/local/wardyn/bin/wardyn-macvm' -type f)"
           [ -n "$helper" ] && [ "$(wc -l <<<"$helper")" -eq 1 ]
           codesign -d --entitlements :- "$helper" 2>/dev/null | plutil -convert json -o - - \
             | jq -e '. == {"com.apple.security.virtualization": true}'
+          # The guest agent is in the package once, signed, and carries no entitlement.
+          agent="$(find "$RUNNER_TEMP/pkg" -path '*/Payload/usr/local/wardyn/bin/wardyn-guest-agent' -type f)"
+          [ -n "$agent" ] && [ "$(wc -l <<<"$agent")" -eq 1 ] && [ -x "$agent" ]
+          codesign --verify --strict "$agent"
+          [ -z "$(codesign -d --entitlements :- "$agent" 2>/dev/null)" ]
+          # The helper refuses an agent of another version: the helper reports the bare release version, and the
+          # pair were built from the same commit.
+          [ "$("$helper" version)" = "$version" ]
+          stamp() { go version -m "$1" | grep -E '^[[:space:]]+build[[:space:]]+(-ldflags|vcs\.revision|vcs\.modified)=' || true; }
+          want="$(stamp "$helper")"
+          grep -q 'vcs.revision=' <<<"$want"
+          [ "$(stamp "$agent")" = "$want" ]
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: runner-pkg

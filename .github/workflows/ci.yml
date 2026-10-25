@@ -1808,12 +1808,25 @@ jobs:
           echo "probe exit status: $rc"
           [ "$rc" -le 1 ]
           jq -e '.vz == true and (.host | type == "string")' "$RUNNER_TEMP/probe.json"
+      # The helper installs this into the guest and compares its version with its own. Neither is stamped here,
+      # so both read the same checkout's commit from the build info; the release job stamps both releaseBuild.
+      - name: Build the guest agent, sign it ad hoc with no entitlement and read it back
+        id: agent
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          agent="$RUNNER_TEMP/wardyn-guest-agent"
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -o "$agent" ./cmd/wardyn-guest-agent
+          codesign --force --sign - "$agent"
+          codesign --verify --strict "$agent"
+          grep -q 'Signature=adhoc' <<<"$(codesign -dv "$agent" 2>&1)"
+          [ -z "$(codesign -d --entitlements :- "$agent" 2>/dev/null)" ]
       # The real postinstall, and the signed helper's ledger-setup it runs, under the runner's passwordless
       # sudo against a temp root, read back with BSD stat. %Mp%Lp, not %Lp alone: %Lp drops the sticky bit.
       # The roots sit under /private/tmp, so every directory the helper walks from / is root-owned.
       # It runs the signed helper as root: only once the sign step proved that helper.
       - name: Package postinstall makes the admission ledger (real root, BSD tools)
-        if: ${{ !cancelled() && steps.sign.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.sign.outcome == 'success' && steps.agent.outcome == 'success' }}
         run: |
           set -euo pipefail
           post=deploy/runner/macos/pkg-scripts/postinstall
@@ -1830,10 +1843,21 @@ jobs:
             sudo mkdir -p "$r/Users/Shared" "$r/usr/local/wardyn/bin"
             sudo chmod 1777 "$r/Users/Shared"
             sudo install -m 0755 "$RUNNER_TEMP/wardyn-macvm" "$r/usr/local/wardyn/bin/wardyn-macvm"
+            sudo install -m 0755 "$RUNNER_TEMP/wardyn-guest-agent" "$r/usr/local/wardyn/bin/wardyn-guest-agent"
           }
           fresh
           sudo env WARDYN_PKG_ROOT="$r" sh "$post"
           ledger "$r"
+          # The guest agent is where the helper reads it, executable and still validly signed after the install.
+          installed="$r/usr/local/wardyn/bin/wardyn-guest-agent"
+          [ -x "$installed" ]
+          codesign --verify --strict "$installed"
+          # The helper refuses an agent of another version, so the pair must carry the same stamp: the commit
+          # and ldflags in each binary's build info (not cgo, which differs on purpose). Empty would match vacuously.
+          stamp() { go version -m "$1" | grep -E '^[[:space:]]+build[[:space:]]+(-ldflags|vcs\.revision|vcs\.modified)=' || true; }
+          want="$(stamp "$r/usr/local/wardyn/bin/wardyn-macvm")"
+          grep -q 'vcs.revision=' <<<"$want"
+          [ "$(stamp "$installed")" = "$want" ]
           # A second install changes nothing: the lock keeps its inode.
           lock="$r/Users/Shared/Wardyn/admission.lock"
           ino="$(stat -f %i "$lock")"
