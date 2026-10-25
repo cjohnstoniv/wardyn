@@ -10,7 +10,7 @@ import { Label } from "../../../../ui/label";
 import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import type { EffectiveLimit } from "../../../../../lib/types/runner-pools";
-import { parseCpuMillis, parseMemoryMib, setCpu, setMemory } from "../../lenses/limits-lens";
+import { disownFill, parseCpuMillis, parseMemoryMib, setCpu, setMemory } from "../../lenses/limits-lens";
 import { draftSource } from "../provenance";
 import { cpuNumber, memoryNumber, resolvedLifetime, resolvedLifetimeText } from "../format";
 import { Chip } from "../../../../wardyn/primitives";
@@ -18,6 +18,7 @@ import { NR_MACHINE } from "../../../../wardyn/copy/new-run/machine";
 import { atMinimum } from "../../lenses/limits-lens";
 import { macOSMinimumOf, macOSMinimumSentence, useMacOSOffer } from "../../steps/run/macos-offer";
 import { ReviewGroup } from "../review-group";
+import type { NewRunDraft } from "../../draft/run-intent";
 import type { GroupProps } from "./group-props";
 
 function LimitField({ id, label, text, onText, hint, invalid }: {
@@ -35,13 +36,15 @@ function LimitField({ id, label, text, onText, hint, invalid }: {
 const capHint = (limit: EffectiveLimit | undefined, cap: string, by: string | undefined) =>
   limit && !limit.cap.unlimited && by ? NR_REVIEW.LIMIT_UP_TO(cap, by) : undefined;
 
-function LimitsEditor({ cpuMillis, memoryMib, pre, dispatch, close }: Pick<GroupProps, "pre" | "dispatch"> & {
-  cpuMillis?: number; memoryMib?: number; close: () => void;
+function LimitsEditor({ cpuMillis, memoryMib, fill, pre, dispatch, close }: Pick<GroupProps, "pre" | "dispatch"> & {
+  cpuMillis?: number; memoryMib?: number; fill: NewRunDraft["guided"]["macosFill"]; close: () => void;
 }) {
   const [cpuText, setCpuText] = React.useState(cpuMillis === undefined ? "" : cpuNumber(cpuMillis));
   const [memoryText, setMemoryText] = React.useState(memoryMib === undefined ? "" : String(memoryMib));
   const applied = pre?.resources_applied;
   const limits = pre?.limits;
+  // Setting a figure makes it the person's, so leaving macOS no longer takes it back, even when set to the filled number.
+  const own = (key: "cpu_millis" | "memory_mib") => fill?.[key] !== undefined && dispatch({ type: "guided", patch: { macosFill: disownFill(fill, key) } });
   const by = (limit: EffectiveLimit | undefined, name: string | undefined) => (limit?.cap_source === "pool" ? pre?.runner_pool?.name : name);
   return (
     <>
@@ -50,14 +53,18 @@ function LimitsEditor({ cpuMillis, memoryMib, pre, dispatch, close }: Pick<Group
         onText={(t) => {
           setCpuText(t);
           const millis = parseCpuMillis(t);
-          if (millis !== undefined) dispatch({ type: "edit", apply: (i) => setCpu(i, millis) });
+          if (millis === undefined) return;
+          own("cpu_millis");
+          dispatch({ type: "edit", apply: (i) => setCpu(i, millis) });
         }} />
       <LimitField id="review-memory" label={NR_REVIEW.MEMORY_LABEL} text={memoryText} invalid={parseMemoryMib(memoryText) === undefined}
         hint={capHint(limits?.memory_mib, memoryNumber(limits?.memory_mib.cap.value ?? 0), by(limits?.memory_mib, applied?.memory_mib.source_name))}
         onText={(t) => {
           setMemoryText(t);
           const mib = parseMemoryMib(t);
-          if (mib !== undefined) dispatch({ type: "edit", apply: (i) => setMemory(i, mib) });
+          if (mib === undefined) return;
+          own("memory_mib");
+          dispatch({ type: "edit", apply: (i) => setMemory(i, mib) });
         }} />
       <Button type="button" variant="outline" className="w-fit" onClick={close}>{NR_REVIEW.DONE}</Button>
     </>
@@ -88,7 +95,7 @@ export function LimitsGroup({ draft, pre, docRows, dispatch }: GroupProps) {
       detail={NR_REVIEW.LIMITS_DETAIL}
       provenance={source || draftSource(draft, ["resources"], NR_REVIEW.PROV_SELECTED)}
       docRows={docRows}
-      editor={(close) => <LimitsEditor cpuMillis={requested?.cpu_millis} memoryMib={requested?.memory_mib} pre={pre} dispatch={dispatch} close={close} />}
+      editor={(close) => <LimitsEditor cpuMillis={requested?.cpu_millis} memoryMib={requested?.memory_mib} fill={draft.guided.macosFill} pre={pre} dispatch={dispatch} close={close} />}
     >
       {below && <p className="text-sm text-danger">{below}</p>}
     </ReviewGroup>

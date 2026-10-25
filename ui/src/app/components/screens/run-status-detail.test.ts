@@ -351,6 +351,22 @@ describe("runStartupView: the plan's table", () => {
     expect(view(mk({ updatedAgo: RUN_START_OVERDUE_MS + S, machine_kind: "linux_vm" }))!.hint).toBe(RUN_STARTUP.OVERDUE);
   });
 
+  it("a macOS phase row goes overdue on the macOS bound: a stalled start shows the advice, a fresh or failed one does not", () => {
+    const run = (updatedAgo: number) => mk({ updatedAgo, machine_kind: "macos_vm" });
+    const connecting = (updatedAgo: number) => runStartupView(run(updatedAgo), T0, { lastStep: "terminal", sawBuilding: false, macOS: { phase: "connect" } })!;
+    const stalled = connecting(RUN_START_OVERDUE_MACOS_MS + S);
+    expect(stalled.hint).toBe(RUN_STARTUP.OVERDUE);
+    expect(marks(stalled)[2]).toBe(`${RUN_STARTUP_MACOS.STEP_CONNECT}=pending`);
+    expect(stalled.rows[2].stale).toBe(true);
+    const fresh = connecting(RUN_START_OVERDUE_MS + S);
+    expect(fresh.hint).toBe("");
+    expect(marks(fresh)[2]).toBe(`${RUN_STARTUP_MACOS.STEP_CONNECT}=active`);
+    const failed = runStartupView(run(RUN_START_OVERDUE_MACOS_MS + S), T0, { lastStep: "terminal", sawBuilding: false, macOS: { phase: "connect", failure: "no route" } })!;
+    expect(failed.hint).toBe("");
+    expect(failed.alert).toBe("no route");
+    expect(marks(failed)[2]).toBe(`${RUN_STARTUP_MACOS.STEP_CONNECT_FAILED}=failed`);
+  });
+
   it("overdue in PENDING: 29:59 is live, 30:00 drops the spinner (Building or not)", () => {
     const live = view(mk({ state: "PENDING", createdAgo: 30 * MIN - S, ...BUILDING }))!;
     expect(live.rows[0].mark).toBe("active");

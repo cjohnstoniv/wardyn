@@ -70,6 +70,17 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   row in that run's audit, marked `chain_check`. The check reads only the recording's metadata, not its content. A check
   of your own run still leaves nothing, and who may ask, and what a refused caller sees, are unchanged.
 
+### Fixed
+
+- A macOS VM run stuck in one start phase, such as connecting to the VM, now shows the same overdue advice as any
+  other start once the macOS start time has passed. Before, the phase row kept its spinner and said nothing. A start
+  that failed still shows its failure.
+- Choosing Linux again after macOS in New Run no longer drops a CPU or memory value you had set to exactly the Mac
+  minimum before choosing macOS. Only the figures that choosing macOS filled in are taken back, and only while they are
+  still at the minimum.
+- In New Run, a Mac pool that was preparing or at capacity when the page opened offers macOS once it recovers, when
+  you move to another step. Before, it stayed unavailable until the page was reloaded, and the draft is kept either way.
+
 ## [0.10.0-rc.2] — 2026-10-25
 
 ### Before you upgrade

@@ -386,7 +386,9 @@ function macOSStartLine(start: MacOSStart, chip = false): string | undefined {
 
 // A macOS VM's rows replace Starting the sandbox and Downloading the image (mock M-D1): the phases before the
 // current one are done, the current one runs or, with a failure, fails and says why, and the list stops there.
-function macOSStartup(start: MacOSStart, last: (mark: StartupMark) => StartupRow[]): StartupView {
+// Past the overdue bound the running row loses its spinner and the overdue advice shows, as for any other start;
+// a failure is not stalled, so it keeps its own alert and no advice.
+function macOSStartup(start: MacOSStart, overdue: boolean, last: (mark: StartupMark) => StartupRow[]): StartupView {
   const order = ["clone", "start", "connect"] as const;
   const labels = { clone: RUN_STARTUP_MACOS.STEP_CLONE, start: RUN_STARTUP_MACOS.STEP_START, connect: RUN_STARTUP_MACOS.STEP_CONNECT };
   const failedLabels = { clone: labels.clone, start: RUN_STARTUP_MACOS.STEP_START_FAILED, connect: RUN_STARTUP_MACOS.STEP_CONNECT_FAILED };
@@ -395,9 +397,14 @@ function macOSStartup(start: MacOSStart, last: (mark: StartupMark) => StartupRow
   const rows: StartupRow[] = order.map((key, i) => ({
     key,
     label: i === at && failed ? failedLabels[key] : labels[key],
-    mark: i < at ? "done" : i > at ? "pending" : failed ? "failed" : "active",
+    mark: i < at ? "done" : i > at ? "pending" : failed ? "failed" : overdue ? "pending" : "active",
+    ...(i === at && !failed && overdue && { stale: true }),
   }));
-  return { rows: failed ? rows.slice(0, at + 1) : [...rows, ...last("pending")], hint: "", alert: start.failure ?? "" };
+  return {
+    rows: failed ? rows.slice(0, at + 1) : [...rows, ...last("pending")],
+    hint: overdue && !failed ? RUN_STARTUP.OVERDUE : "",
+    alert: start.failure ?? "",
+  };
 }
 
 // runStartupView derives the run page's startup steps from the run fields the
@@ -454,7 +461,7 @@ export function runStartupView(
         ]
       : [];
 
-  if (opts.macOS && starting) return macOSStartup(opts.macOS, last);
+  if (opts.macOS && starting) return macOSStartup(opts.macOS, elapsed >= RUN_START_OVERDUE_MACOS_MS, last);
 
   // A reason waiting cannot fix: the list stops at the step that failed.
   if (isTerminalStatusReason(stepReason)) {
