@@ -47,6 +47,8 @@ type macTestHost struct {
 	freeDisk int64
 	// onProcesses runs once, at the next process-table read (the next ledger operation).
 	onProcesses func()
+	// pinned is the pids gone leaves in the table: a helper that outlives its kill.
+	pinned map[int]bool
 }
 
 func (h *macTestHost) BootTime() (int64, error)              { return 1, nil }
@@ -70,7 +72,13 @@ func (h *macTestHost) Processes() ([]admission.Proc, error) {
 	return out, nil
 }
 func (h *macTestHost) set(p admission.Proc) { h.mu.Lock(); h.procs[p.PID] = p; h.mu.Unlock() }
-func (h *macTestHost) gone(pid int)         { h.mu.Lock(); delete(h.procs, pid); h.mu.Unlock() }
+func (h *macTestHost) gone(pid int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !h.pinned[pid] {
+		delete(h.procs, pid)
+	}
+}
 
 // macDocker is the fake engine with the relay's attach a real stream socket, as the engine's is.
 type macDocker struct {

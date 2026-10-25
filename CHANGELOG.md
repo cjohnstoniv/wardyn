@@ -33,6 +33,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   keeps starting runs as before and logs once that the image does not announce when it is listening, so the fix does not
   reach those runs until the organisation is upgraded. The agent images wait for the proxy on their own and need no
   runner change.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the `ALTER
+  DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `macos_vm_disks`
+  (migration `0236_macos_vm_disks`). Without it a macOS VM run's page never says whether its disk was removed from the
+  Mac.
 
 ### Changed
 
@@ -57,6 +61,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `remove` build, show and delete the Mac's macOS base; `prepare --new-image` builds a new one from Apple's newest
   restore image. The runner offers macOS VMs only when its helper's `wardyn-macvm probe` passes, offers as many as the
   Mac's shared ledger and memory leave room for, and ends its newest one when the disk drops below 5 GiB free.
+- A macOS VM run's page says when the run's disk was removed from the Mac, or why it could not be. It needs this
+  release's wardyn-runnerd. With an older one the page says "Removing…" for 10 minutes after the run ends, then nothing
+  about the disk. A saved "Finished" arrangement of the run page gains the "Attach from your terminal" tile at its
+  bottom, once, where the disk line shows.
 
 ### Fixed
 

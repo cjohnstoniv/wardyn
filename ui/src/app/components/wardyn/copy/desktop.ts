@@ -59,6 +59,10 @@ export const DESKTOP = {
   diskRemoving: "Removing the macOS VM's disk from this Mac…", // MV-D10
   diskRemoved: (time: string) => `The macOS VM and its disk were removed from this Mac at ${time}.`, // MV-D11
   diskRemoveFailed: (reason: string) => `The macOS VM's disk could not be removed from this Mac: ${reason}.`, // MV-D12
+  // MV-D12's <reason>, from the runner's closed code; MV-D12c for an empty or unknown one.
+  diskReasonInUse: "the VM's files are still in use", // MV-D12a
+  diskReasonDeleteFailed: "macOS couldn't delete its files", // MV-D12b
+  diskReasonUnknown: "the Mac didn't say why", // MV-D12c
   endedLowDisk: (gb: string) => `This Mac ran low on disk (${gb} GB free), so the macOS VM was stopped.`, // MV-D13
   endedRunnerUpgraded: "This Mac's runner was upgraded while the macOS VM ran, so the run was ended.", // MV-D14
   startingMacOS: "The macOS desktop is still starting.", // MV-D15

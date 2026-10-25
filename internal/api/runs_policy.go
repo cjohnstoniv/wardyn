@@ -287,6 +287,9 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		ModelAllowlists map[string][]string `json:"model_allowlists,omitempty"`
 		// MacOS is a macOS VM run's desktop as its Mac offers it (run_macos_view.go); absent on every other run.
 		MacOS *runMacOSView `json:"macos,omitempty"`
+		// MacOSDisk is where a macOS VM run's disk stands on its Mac at the run's end (run_macos_disk.go);
+		// absent on every other run.
+		MacOSDisk *runMacOSDiskView `json:"macos_disk,omitempty"`
 	}{
 		AgentRun: run, UIApps: apps, UserTypeName: s.runUserTypeName(r, run.UserType),
 		ModelProviderName: providerName, ModelProviderDeleted: providerDeleted,
@@ -299,6 +302,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		Agents:          s.runDetailAgents(r.Context(), run),
 		ModelAllowlists: s.runModelAllowlists(r.Context(), run.ID),
 		MacOS:           s.runMacOSView(run),
+		MacOSDisk:       s.runMacOSDiskView(r.Context(), run),
 	})
 }
 

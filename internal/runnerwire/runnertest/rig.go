@@ -5,11 +5,13 @@ package runnertest
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -29,6 +31,7 @@ type Rig struct {
 	mu     sync.Mutex
 	queued []string // "kind ref", in order
 	events []runnerwire.Event
+	disks  []runner.MacOSVMDisk
 }
 
 // NewRig connects a fresh fake runner for runnerID and waits for its `caps`.
@@ -45,6 +48,11 @@ func NewRig(tb testing.TB, runnerID string) *Rig {
 		OnEvent: func(ev runnerwire.Event) {
 			r.mu.Lock()
 			r.events = append(r.events, ev)
+			r.mu.Unlock()
+		},
+		MacOSVMDisks: func(_ context.Context, reports []runner.MacOSVMDisk) {
+			r.mu.Lock()
+			r.disks = append(r.disks, reports...)
 			r.mu.Unlock()
 		},
 	})
@@ -89,6 +97,13 @@ func (r *Rig) Events() []runnerwire.Event {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]runnerwire.Event(nil), r.events...)
+}
+
+// MacOSVMDisks is every macOS VM disk report the org received, in order.
+func (r *Rig) MacOSVMDisks() []runner.MacOSVMDisk {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.disks)
 }
 
 // Streams is the byte streams each peer holds: the org's, then the runner's.

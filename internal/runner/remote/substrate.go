@@ -78,6 +78,9 @@ type Options struct {
 	// output up to accepted (an absolute end that only grows) before the
 	// runner is told. It must be idempotent: a resent prefix repeats it.
 	OutputAccepted func(ctx context.Context, run uuid.UUID, accepted int64) error
+	// MacOSVMDisks, when set, takes the macOS VM disk reports a runner's stop, kill, end and sweep replies
+	// carry. They are the runner's word; an older runner sends none.
+	MacOSVMDisks func(ctx context.Context, reports []runner.MacOSVMDisk)
 }
 
 // callTimeout bounds the calls an io-shaped method (Resize, ExecSession.Wait)
@@ -436,7 +439,11 @@ func (s *Substrate) AgentStatus(ctx context.Context, ref, agentExecID string) (r
 // teardown calls a verb that keeps working while the runner is away: offline,
 // it is queued as a pending action and answers runner.ErrPendingOnRunner.
 func (s *Substrate) teardown(ctx context.Context, method string, kind types.RunnerActionKind, ref string) error {
-	err := s.refCall(ctx, method, ref, nil)
+	var res runnerwire.TeardownResult
+	err := s.refCall(ctx, method, ref, &res)
+	if err == nil && res.MacOSVMDisk != nil {
+		s.macOSVMDisks(ctx, []runner.MacOSVMDisk{*res.MacOSVMDisk})
+	}
 	if err == nil || !errors.Is(err, runner.ErrRunnerOffline) || s.opts.Queue == nil {
 		return err
 	}
@@ -447,6 +454,13 @@ func (s *Substrate) teardown(ctx context.Context, method string, kind types.Runn
 		l.requireFresh(ctx)
 	}
 	return runner.ErrPendingOnRunner
+}
+
+// macOSVMDisks hands reports to the MacOSVMDisks hook, when there is one and they are any.
+func (s *Substrate) macOSVMDisks(ctx context.Context, reports []runner.MacOSVMDisk) {
+	if s.opts.MacOSVMDisks != nil && len(reports) > 0 {
+		s.opts.MacOSVMDisks(ctx, reports)
+	}
 }
 
 func (s *Substrate) StopSandbox(ctx context.Context, ref string) error {
@@ -609,6 +623,7 @@ func (s *Substrate) SweepOrphanedSandboxes(ctx context.Context, minAge time.Dura
 	if err := s.call(ctx, runnerwire.MethodSweep, runnerwire.SweepArgs{MinAge: minAge}, &list); err != nil {
 		return 0, err
 	}
+	s.macOSVMDisks(ctx, list.MacOSVMDisks)
 	var orphans []uuid.UUID
 	for _, id := range list.Candidates {
 		if isOrphan(id) {
@@ -622,6 +637,7 @@ func (s *Substrate) SweepOrphanedSandboxes(ctx context.Context, minAge time.Dura
 	if err := s.call(ctx, runnerwire.MethodSweep, runnerwire.SweepArgs{MinAge: minAge, Remove: orphans}, &done); err != nil {
 		return 0, err
 	}
+	s.macOSVMDisks(ctx, done.MacOSVMDisks)
 	return done.Removed, nil
 }
 

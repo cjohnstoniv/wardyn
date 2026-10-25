@@ -334,3 +334,5 @@ The runner drawer shows most of these from fixed codes and numbers the runner re
 
 - Migration `0234_macos_vm_kind` widens `agent_runs.machine_kind` to allow `macos_vm`, and the desktop sign-in `store` column to allow `run_disk`. It changes no row.
 - A run records its guest macOS build (`guest_os`) and the Mac's (`host_os`) in `vm_machine`.
+- A run's page says whether the Mac removed the run's directory, with the VM's disk and clone, or why it could not. The runner sends fixed codes, which migration `0236_macos_vm_disks` stores.
+- A runner older than this release sends no such report. Its run's page says "Removing…" for 10 minutes after the run ends, then nothing about the disk.

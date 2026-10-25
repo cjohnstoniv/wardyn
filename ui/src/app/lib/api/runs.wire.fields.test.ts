@@ -32,6 +32,7 @@ import { runs } from "./runs";
 import { TEMPLATE_REQUEST_FIELDS } from "../template-fields";
 import { intentToWire, POLICY_CARRIER } from "../../components/screens/new-run-flow/draft/intent-to-wire";
 import type { RunIntent } from "../../components/screens/new-run-flow/draft/run-intent";
+import { DISK_REASONS } from "../../components/screens/run-detail/macos-run-facts";
 
 // Shared fetch stub.
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -208,7 +209,7 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
     expect(omitted).toEqual([]);
   });
 
-  it("RunDetail adds exactly ui_apps, user_type_name, the model provider's name and deleted flag, the launching portal's name, the allowlists its proxy was handed, the pool's name, the ended run's kept_until, the run's policy, its open sync sessions, its computer folder, its agents and a macOS VM's desktop over AgentRun — " +
+  it("RunDetail adds exactly ui_apps, user_type_name, the model provider's name and deleted flag, the launching portal's name, the allowlists its proxy was handed, the pool's name, the ended run's kept_until, the run's policy, its open sync sessions, its computer folder, its agents, a macOS VM's desktop and its disk over AgentRun — " +
     "the fields only GET /runs/{id} sends (handleGetRun's anonymous wrapper struct, runs_policy.go)", () => {
     const runDetailOwnKeys = tsInterfaceKeys(runsTs, "RunDetail");
     expect(runDetailOwnKeys).toEqual([
@@ -225,7 +226,19 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
       "computer_folder",
       "agents",
       "macos",
+      "macos_disk",
     ]);
+  });
+
+  it("RunMacOSDisk's keys are exactly runMacOSDiskView's json tags (GET /runs/{id} macos_disk, run_macos_disk.go)", () => {
+    const diskGo = readFileSync(join(root, "internal/api/run_macos_disk.go"), "utf8");
+    expect(tsInterfaceKeys(runsTs, "RunMacOSDisk").sort()).toEqual(goJSONTags(diskGo, "runMacOSDiskView").sort());
+  });
+
+  it("DISK_REASONS' codes are exactly the runner's kept reasons (internal/runner/macos_disk.go)", () => {
+    const diskGo = readFileSync(join(root, "internal/runner/macos_disk.go"), "utf8");
+    const code = (name: string) => new RegExp(`\\b${name}\\s*=\\s*"([^"]+)"`).exec(diskGo)?.[1];
+    expect([...DISK_REASONS.keys()]).toEqual([code("MacOSVMDiskHelperAlive"), code("MacOSVMDiskRemoveFailed")]);
   });
 
   it("RunMacOS's keys are exactly runMacOSView's json tags (GET /runs/{id} macos, run_macos_view.go)", () => {
