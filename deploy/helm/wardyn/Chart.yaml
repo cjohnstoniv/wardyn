@@ -2,8 +2,8 @@ apiVersion: v2
 name: wardyn
 description: Governed-sandbox control plane for any workload
 type: application
-version: 0.10.0-rc.2
-appVersion: 0.10.0-rc.2
+version: 0.10.0-rc.3
+appVersion: 0.10.0-rc.3
 keywords:
   - governance
   - sandbox
