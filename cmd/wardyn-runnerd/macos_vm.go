@@ -315,6 +315,13 @@ func (m *macOSVMs) guestMemory(man macvm.Manifest) uint64 {
 	return max(m.perRunMemory, man.MinMemoryMiB<<20)
 }
 
+// The caps' refusal for a per-run limit below the base's minimum: the owner's MV-R47 (memory) and MV-R48
+// (CPU), with the runner's per-run amount, the base's minimum and the runner's id.
+const (
+	macOSVMMemoryBelowMinimum = "Per-run memory on this runner is %[1]s GB; a macOS VM needs at least %[2]d GB. Its owner raises it to %[2]d GB or more in Your account → My runner, or with `wardyn runner set %[3]s --per-run-memory %[2]d`."
+	macOSVMCPUBelowMinimum    = "Per-run CPU on this runner is %[1]d CPUs; a macOS VM needs at least %[2]d. Its owner raises it to %[2]d or more in Your account → My runner, or with `wardyn runner set %[3]s --per-run-cpu %[2]d`."
+)
+
 // belowMinimum is why a per-run limit the organisation sent is below the base's minimum, naming the flag
 // to raise, for this Mac's log, and the caps' refusal (design 6, "Guest size below minimum"), else "".
 func (m *macOSVMs) belowMinimum(man macvm.Manifest) (why, refusal string) {
@@ -326,10 +333,10 @@ func (m *macOSVMs) belowMinimum(man macvm.Manifest) (why, refusal string) {
 		gb := strconv.FormatFloat(math.Floor(float64(mem>>20)/1024*10)/10, 'f', -1, 64)
 		need := (man.MinMemoryMiB + 1023) >> 10
 		return fmt.Sprintf("the runner's per-run memory (%d MiB) is below the macOS base's minimum (%d MiB); raise --per-run-memory", mem>>20, man.MinMemoryMiB),
-			fmt.Sprintf("Per-run memory on this runner is %s GB; a macOS VM needs at least %d GB. Re-register the runner with --per-run-memory %d or more.", gb, need, need)
+			fmt.Sprintf(macOSVMMemoryBelowMinimum, gb, need, m.runnerID)
 	case cpus != 0 && cpus < man.MinCPUs:
 		return fmt.Sprintf("the runner's per-run CPUs (%d) are below the macOS base's minimum (%d); raise --per-run-cpu", cpus, man.MinCPUs),
-			fmt.Sprintf("Per-run CPU on this runner is %d CPUs; a macOS VM needs at least %d. Re-register the runner with --per-run-cpu %d or more.", cpus, man.MinCPUs, man.MinCPUs)
+			fmt.Sprintf(macOSVMCPUBelowMinimum, cpus, man.MinCPUs, m.runnerID)
 	}
 	return "", ""
 }
@@ -451,8 +458,10 @@ func (m *macOSVMs) reconcilePrepare() {
 }
 
 // prepareOrder is the helper's prepare phases in order, for an overall percentage.
+// Setup by hand comes between provisioning and stage 1 (setupcode.go), and stage 2's tools after the
+// shutdown that ends stage 1 (prepare.go stage2); ready is the end, not a phase of progress.
 var prepareOrder = []string{macvm.PhaseCheck, macvm.PhaseDownload, macvm.PhaseValidate, macvm.PhaseCreate,
-	macvm.PhaseInstall, macvm.PhaseProvision, macvm.PhaseBootstrap, macvm.PhaseShutdown}
+	macvm.PhaseInstall, macvm.PhaseProvision, macvm.PhaseSetupByHand, macvm.PhaseBootstrap, macvm.PhaseShutdown, macvm.PhaseTools}
 
 // lastLine is the last non-empty line of the file at path (prepare.log is small: progress lines only).
 func lastLine(path string) string {
@@ -895,7 +904,11 @@ func prepareMacOSVMBase(cmd *cobra.Command, plan setupPlan, limits *types.Runner
 		return
 	}
 	if limits == nil {
-		fmt.Fprintln(out, "macOS VMs are on. To build this Mac's macOS base: wardyn-runnerd macos-vm prepare --per-run-cpu <CPUs> --per-run-memory <GB> (the runner's per-run limits).")
+		keep := ""
+		if plan.keepIPSW {
+			keep = " --" + macvm.FlagKeepIPSW
+		}
+		fmt.Fprintln(out, "macOS VMs are on. To build this Mac's macOS base: wardyn-runnerd macos-vm prepare --per-run-cpu <CPUs> --per-run-memory <GB>"+keep+" (the runner's per-run limits).")
 		return
 	}
 	id, err := runneridentity.Load(plan.paths.stateDir, plan.org)
@@ -904,8 +917,15 @@ func prepareMacOSVMBase(cmd *cobra.Command, plan setupPlan, limits *types.Runner
 		return
 	}
 	m := openMacOSVMs(macOSVMSetup{ledgerDir: admission.DefaultDir, root: root, runnerID: id.RunnerID.String(), uid: os.Getuid(), host: admission.SystemHost(), owner: fileOwner})
-	a := prepareArgs{helper: filepath.Join(filepath.Dir(plan.paths.installed), "wardyn-macvm"), runnerID: id.RunnerID.String(),
-		cpus: int(limits.PerRun.CPUMillis / 1000), memoryMiB: uint64(limits.PerRun.MemoryMiB)}
+	startSetupPrepare(cmd, m, plan, id.RunnerID.String(), limits)
+}
+
+// startSetupPrepare is setup's prepare on m: the helper beside the installed runnerd, the limits just
+// registered, and setup's --keep-ipsw.
+func startSetupPrepare(cmd *cobra.Command, m *macOSVMs, plan setupPlan, runnerID string, limits *types.RunnerLimits) {
+	out := cmd.OutOrStdout()
+	a := prepareArgs{helper: filepath.Join(filepath.Dir(plan.paths.installed), "wardyn-macvm"), runnerID: runnerID,
+		cpus: int(limits.PerRun.CPUMillis / 1000), memoryMiB: uint64(limits.PerRun.MemoryMiB), keepIPSW: plan.keepIPSW}
 	if err := m.startPrepare(cmd.Context(), a); err != nil {
 		fmt.Fprintf(out, "macOS VMs are on, but this Mac's macOS base did not start preparing: %v\n", err)
 		return

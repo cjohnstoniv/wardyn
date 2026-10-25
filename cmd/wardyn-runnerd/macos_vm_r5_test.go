@@ -290,8 +290,8 @@ func TestMacOSVMEntryOfAnotherLoginIsNotMine(t *testing.T) {
 	}
 }
 
-// R3 L3: a per-run limit below the base's minimum offers none and the caps carry the design's text for
-// it (DESIGN.r6 §6, "Guest size below minimum"), naming the flag to raise.
+// R3 L3: a per-run limit below the base's minimum offers none, and the caps carry the owner's text for
+// it (MV-R47, MV-R48 in mocks/MACVM/strings.md), naming the flag to raise.
 func TestMacOSVMBelowMinimumRefusesWithTheCanonText(t *testing.T) {
 	r := newMacLedgerRig(t)
 	m, _ := openWithBudget(t, r)
@@ -299,9 +299,9 @@ func TestMacOSVMBelowMinimumRefusesWithTheCanonText(t *testing.T) {
 		cpuMillis, memMiB int64
 		want              string
 	}{
-		{4000, 2048, "Per-run memory on this runner is 2 GB; a macOS VM needs at least 4 GB. Re-register the runner with --per-run-memory 4 or more."},
-		{4000, 3584, "Per-run memory on this runner is 3.5 GB; a macOS VM needs at least 4 GB. Re-register the runner with --per-run-memory 4 or more."},
-		{2000, 8192, "Per-run CPU on this runner is 2 CPUs; a macOS VM needs at least 4. Re-register the runner with --per-run-cpu 4 or more."},
+		{4000, 2048, "Per-run memory on this runner is 2 GB; a macOS VM needs at least 4 GB. Its owner raises it to 4 GB or more in Your account → My runner, or with `wardyn runner set runner-a --per-run-memory 4`."},
+		{4000, 3584, "Per-run memory on this runner is 3.5 GB; a macOS VM needs at least 4 GB. Its owner raises it to 4 GB or more in Your account → My runner, or with `wardyn runner set runner-a --per-run-memory 4`."},
+		{2000, 8192, "Per-run CPU on this runner is 2 CPUs; a macOS VM needs at least 4. Its owner raises it to 4 or more in Your account → My runner, or with `wardyn runner set runner-a --per-run-cpu 4`."},
 		{4000, 8192, ""},
 	} {
 		m.setPerRunLimits(tc.cpuMillis, tc.memMiB)
