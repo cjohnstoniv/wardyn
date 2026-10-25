@@ -68,40 +68,17 @@ func (s PG) RefuseRunnerEvent(ctx context.Context, runnerID uuid.UUID, r RunnerE
 			return false, err
 		}
 	}
-	// The runner acknowledges a refused record and deletes it, so a cursor left behind would refuse every later
-	// record as a gap and fall short of the runner's spool seal (runnerspool Seal). The CAS moves it only for the
-	// record right after it, on the cursor of this runner's run and spool; a gap, a repeat, a hash with no place in a
-	// receipt or another spool's record moves nothing. A missing cursor is made as ingest makes it (lockRunnerSpool),
-	// only for the stream's first record (the one next after none) and a run that is this runner's.
-	if sp := r.Spool; sp != nil && sp.Seq > 0 && len(sp.Hash) == 64 {
-		if sp.Seq == 1 {
-			if _, err := tx.Exec(ctx, `INSERT INTO runner_spool_cursors(run_id,runner_id,spool_id) SELECT $1::uuid,$2::uuid,$3::uuid
- WHERE EXISTS (SELECT 1 FROM agent_runs WHERE id=$1::uuid AND runner_id=$2::uuid) ON CONFLICT(run_id) DO NOTHING`, sp.RunID, runnerID, sp.SpoolID); err != nil {
-				return false, err
-			}
-		}
-		if _, err := tx.Exec(ctx, `UPDATE runner_spool_cursors SET last_seq=$4::bigint,recent_hashes=recent_hashes||jsonb_build_object($5::text,$6::text)
- WHERE run_id=$1::uuid AND runner_id=$2::uuid AND spool_id=$3::uuid AND last_seq=$7::bigint`,
-			sp.RunID, runnerID, sp.SpoolID, sp.Seq, strconv.FormatInt(sp.Seq, 10), sp.Hash, sp.Seq-1); err != nil {
+	if r.Spool != nil {
+		if err := advanceRefusedSpoolCursorTx(ctx, tx, runnerID, *r.Spool); err != nil {
 			return false, err
 		}
 	}
 	if _, err := tx.Exec(ctx, db.AuditChainLockTimeoutSQL()); err != nil {
 		return false, err
 	}
-	// The run id is the runner's word: the row joins a run's trail only when that run is this runner's, else it
-	// names the runner and keeps the claim in its data.
-	target, runID, claimed := runnerID.String(), r.RunID, ""
-	if runID != nil {
-		var own bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM agent_runs WHERE id = $1 AND runner_id = $2)`, *runID, runnerID).Scan(&own); err != nil {
-			return false, err
-		}
-		if own {
-			target = runID.String()
-		} else {
-			runID, claimed = nil, runID.String()
-		}
+	target, runID, claimed, err := refusalTargetTx(ctx, tx, runnerID, r.RunID)
+	if err != nil {
+		return false, err
 	}
 	var rows []types.AuditEvent
 	write := func(fields map[string]any) error {
@@ -152,6 +129,44 @@ func (s PG) RefuseRunnerEvent(ctx context.Context, runnerID uuid.UUID, r RunnerE
 		}
 	}
 	return settled, nil
+}
+
+// advanceRefusedSpoolCursorTx moves a run's spool cursor past a refused record. The runner acknowledges a refused
+// record and deletes it, so a cursor left behind would refuse every later record as a gap and fall short of the
+// runner's spool seal (runnerspool Seal). The CAS moves it only for the record right after it, on the cursor of this
+// runner's run and spool; a gap, a repeat, a hash with no place in a receipt or another spool's record moves nothing.
+// A missing cursor is made as ingest makes it (lockRunnerSpool), only for the stream's first record (the one next
+// after none) and a run that is this runner's.
+func advanceRefusedSpoolCursorTx(ctx context.Context, tx pgx.Tx, runnerID uuid.UUID, sp RunnerEventRefusalSpool) error {
+	if sp.Seq <= 0 || len(sp.Hash) != 64 {
+		return nil
+	}
+	if sp.Seq == 1 {
+		if _, err := tx.Exec(ctx, `INSERT INTO runner_spool_cursors(run_id,runner_id,spool_id) SELECT $1::uuid,$2::uuid,$3::uuid
+ WHERE EXISTS (SELECT 1 FROM agent_runs WHERE id=$1::uuid AND runner_id=$2::uuid) ON CONFLICT(run_id) DO NOTHING`, sp.RunID, runnerID, sp.SpoolID); err != nil {
+			return err
+		}
+	}
+	_, err := tx.Exec(ctx, `UPDATE runner_spool_cursors SET last_seq=$4::bigint,recent_hashes=recent_hashes||jsonb_build_object($5::text,$6::text)
+ WHERE run_id=$1::uuid AND runner_id=$2::uuid AND spool_id=$3::uuid AND last_seq=$7::bigint`,
+		sp.RunID, runnerID, sp.SpoolID, sp.Seq, strconv.FormatInt(sp.Seq, 10), sp.Hash, sp.Seq-1)
+	return err
+}
+
+// refusalTargetTx names a refusal row's run. The run id is the runner's word: the row joins a run's trail only when
+// that run is this runner's, else it names the runner and keeps the claim for its data.
+func refusalTargetTx(ctx context.Context, tx pgx.Tx, runnerID uuid.UUID, claim *uuid.UUID) (target string, runID *uuid.UUID, claimed string, err error) {
+	if claim == nil {
+		return runnerID.String(), nil, "", nil
+	}
+	var own bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM agent_runs WHERE id = $1 AND runner_id = $2)`, *claim, runnerID).Scan(&own); err != nil {
+		return "", nil, "", err
+	}
+	if own {
+		return claim.String(), claim, "", nil
+	}
+	return runnerID.String(), nil, claim.String(), nil
 }
 
 // settleRefusedActionTx closes actionID as refused when it is runnerID's, still open, and bound as
