@@ -12,3 +12,6 @@ import "errors"
 func renameNoReplace(fromfd int, from string, tofd int, to string) error {
 	return errors.ErrUnsupported
 }
+
+// renameSwap has no one-step exchange here, so it fails closed.
+func renameSwap(dirfd int, a, b string) error { return errors.ErrUnsupported }
