@@ -20,9 +20,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `no_desktop`, with the state `failed`; before, only the error text said so. A console that does not know the code
   shows the error text as before.
 - A Linux or macOS VM run now refuses a new connection on a granted port other than 80 once it has 1,024 such
-  connections open at once, and reports the refusal through its denial report with the reason `tunnel-limit`; open
-  connections are never cut. Both ends of each connection now send TCP keepalive probes, so a peer that vanished is
-  noticed (#3489).
+  connections open at once, and reports the refusal through its denial report with the reason `tunnel-limit`; the cap
+  does not evict existing connections, and lower process or container resource limits can bind first. The relay now
+  sends TCP keepalive probes toward both the guest and the proxy, so a peer that vanished is noticed; the
+  proxy-to-origin leg is unchanged (#3489).
 
 ### Fixed
 

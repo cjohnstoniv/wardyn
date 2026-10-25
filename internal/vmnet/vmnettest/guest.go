@@ -159,6 +159,22 @@ func (g *Guest) Dial(addr [4]byte, port uint16, timeout time.Duration) (*gonet.T
 	return gonet.DialContextTCP(ctx, g.s, tcpip.FullAddress{NIC: 1, Addr: tcpip.AddrFrom4(addr), Port: port}, ipv4.ProtocolNumber)
 }
 
+// Abort resets c, a connection dialled from this guest, instead of closing it
+// with a FIN.
+func (g *Guest) Abort(c *gonet.TCPConn) {
+	port := c.LocalAddr().(*net.TCPAddr).Port
+	for _, te := range g.s.RegisteredEndpoints() {
+		ep, ok := te.(tcpip.Endpoint)
+		if !ok {
+			continue
+		}
+		if a, err := ep.GetLocalAddress(); err == nil && int(a.Port) == port {
+			ep.SocketOptions().SetLinger(tcpip.LingerOption{Enabled: true})
+		}
+	}
+	_ = c.Close()
+}
+
 // SendUDP sends one datagram from the guest.
 func (g *Guest) SendUDP(addr [4]byte, port uint16, payload []byte) error {
 	c, err := gonet.DialUDP(g.s, nil, &tcpip.FullAddress{NIC: 1, Addr: tcpip.AddrFrom4(addr), Port: port}, ipv4.ProtocolNumber)

@@ -54,21 +54,29 @@ var (
 )
 
 const (
-	nicID       = 1
-	linkMTU     = 1500
-	maxInFlight = 1024 // half-open guest SYNs the stack holds at once
+	nicID   = 1
+	linkMTU = 1500
 
 	// maxOpaqueTunnels is the most opaque guest tunnels a run's relay holds at
 	// once, pending ones included. It is a deliberate bound, cheap to raise if a
 	// real run ever hits it. Opaque is every granted port except 80, which takes
 	// the HTTP path (httpfwd.go) and is not counted. A tunnel past the bound is
-	// refused with reasonTunnelLimit; an established one is never cut.
+	// refused with reasonTunnelLimit; the bound never evicts an established one.
 	maxOpaqueTunnels = 1024
 
 	// reasonTunnelLimit is the refusal reason for a tunnel past the bound. The
 	// proxy's closed set of relay reasons (vmnetReasons) names it too.
 	reasonTunnelLimit = "tunnel-limit"
 )
+
+// inFlightBound is how many guest SYNs the stack's forwarder holds at once, for
+// a relay whose opaque bound is opaque. A forwarder entry lasts until the
+// handler completes the flow, and an opaque flow completes only after its proxy
+// ask, so every pending ask holds one. The bound is therefore twice the opaque
+// bound: with every slot pending, a further opaque SYN still reaches handleTCP
+// and gets the typed refusal instead of being dropped unseen, and port-80 and
+// refused flows have headroom. It stays finite.
+func inFlightBound(opaque int) int { return 2 * opaque }
 
 // A guest tunnel can outlive its peer without a FIN: a guest that was killed,
 // a NAT that dropped the flow. Keepalive probes on both legs notice it, so the
@@ -178,7 +186,7 @@ func New(cfg Config) (*Relay, error) {
 	if err := s.SetSpoofing(nicID, true); err != nil {
 		return nil, errors.New(err.String())
 	}
-	s.SetTransportProtocolHandler(tcp.ProtocolNumber, tcp.NewForwarder(s, 0, maxInFlight, rl.handleTCP).HandlePacket)
+	s.SetTransportProtocolHandler(tcp.ProtocolNumber, tcp.NewForwarder(s, 0, inFlightBound(int(rl.maxOpaque)), rl.handleTCP).HandlePacket)
 	s.SetTransportProtocolHandler(udp.ProtocolNumber, udp.NewForwarder(s, func(r *udp.ForwarderRequest) bool {
 		id := r.ID()
 		rl.rep.refuse(refusal{Reason: "udp", Host: id.LocalAddress.String(), Port: int(id.LocalPort)})
@@ -431,19 +439,30 @@ func setKeepalive(ep tcpip.Endpoint) {
 	_ = ep.SetSockOptInt(tcpip.KeepaliveCountOption, keepaliveCount)
 }
 
-// splice copies both ways, half-closing each side when the other finishes.
+// splice copies both ways, half-closing each side when the other finishes. A
+// copy that ends in an error (a reset, a read failure) is not a half-close: it
+// closes both ends, which unblocks the other direction, so the tunnel and its
+// slot do not wait on a peer that keeps its own half open.
 func splice(gc *gonet.TCPConn, pc net.Conn) {
 	done := make(chan struct{}, 2)
+	abort := func() {
+		_ = gc.Close()
+		_ = pc.Close()
+	}
 	go func() {
-		_, _ = io.Copy(pc, gc)
-		if cw, ok := pc.(interface{ CloseWrite() error }); ok {
+		if _, err := io.Copy(pc, gc); err != nil {
+			abort()
+		} else if cw, ok := pc.(interface{ CloseWrite() error }); ok {
 			_ = cw.CloseWrite()
 		}
 		done <- struct{}{}
 	}()
 	go func() {
-		_, _ = io.Copy(gc, pc)
-		_ = gc.CloseWrite()
+		if _, err := io.Copy(gc, pc); err != nil {
+			abort()
+		} else {
+			_ = gc.CloseWrite()
+		}
 		done <- struct{}{}
 	}()
 	<-done

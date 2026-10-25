@@ -13,10 +13,18 @@ import (
 	"time"
 
 	"gvisor.dev/gvisor/pkg/tcpip"
+	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 
 	"github.com/cjohnstoniv/wardyn/internal/vmnet/vmnettest"
 )
+
+// holdTunnel is one tunnel the proxy holds open; reset makes its end a RST.
+type holdTunnel struct {
+	release chan struct{}
+	reset   bool
+	ended   bool
+}
 
 // holdProxy allows every name but those in denied, answers an ask once gate (if
 // set) is closed, and holds each tunnel open until the test closes it.
@@ -26,7 +34,7 @@ type holdProxy struct {
 	denied  map[string]bool
 	gate    chan struct{}
 	asks    int
-	tunnels []chan struct{}
+	tunnels []*holdTunnel
 	refused []refusal
 }
 
@@ -66,11 +74,17 @@ func startHoldProxy(t *testing.T) *holdProxy {
 		c, _, _ := w.(http.Hijacker).Hijack()
 		defer c.Close()
 		_, _ = io.WriteString(c, "HTTP/1.1 200 Connection Established\r\n\r\n")
-		release := make(chan struct{})
+		ht := &holdTunnel{release: make(chan struct{})}
 		h.mu.Lock()
-		h.tunnels = append(h.tunnels, release)
+		h.tunnels = append(h.tunnels, ht)
 		h.mu.Unlock()
-		<-release
+		<-ht.release
+		h.mu.Lock()
+		reset := ht.reset
+		h.mu.Unlock()
+		if tc, ok := c.(*net.TCPConn); ok && reset {
+			_ = tc.SetLinger(0)
+		}
 	})}
 	go func() { _ = srv.Serve(l) }()
 	t.Cleanup(func() {
@@ -87,17 +101,22 @@ func (h *holdProxy) snapshot() (asks, tunnels int, refused []refusal) {
 }
 
 // closeTunnel ends the proxy's side of the nth tunnel opened.
-func (h *holdProxy) closeTunnel(n int) {
+func (h *holdProxy) closeTunnel(n int) { h.endTunnel(n, false) }
+
+// resetTunnel ends the proxy's side of the nth tunnel with a RST.
+func (h *holdProxy) resetTunnel(n int) { h.endTunnel(n, true) }
+
+func (h *holdProxy) endTunnel(n int, reset bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.tunnels[n] != nil {
-		close(h.tunnels[n])
-		h.tunnels[n] = nil
+	if ht := h.tunnels[n]; !ht.ended {
+		ht.ended, ht.reset = true, reset
+		close(ht.release)
 	}
 }
 
 func (h *holdProxy) closeAll() {
-	for n := range h.tunnels {
+	for n := 0; n < h.tunnelCount(); n++ {
 		h.closeTunnel(n)
 	}
 }
@@ -140,8 +159,9 @@ func TestOpaqueTunnelsStopAtTheBound(t *testing.T) {
 		}
 		defer c.Close()
 		conns = append(conns, c)
+		// One at a time, so the proxy's nth tunnel is the guest's nth connection.
+		waitFor(t, "the tunnel", func() bool { return h.tunnelCount() == i+1 })
 	}
-	waitFor(t, "the bound's tunnels", func() bool { return h.tunnelCount() == bound })
 
 	if c, err := g.Dial(addr, 2100, 3*time.Second); err == nil {
 		c.Close()
@@ -287,4 +307,75 @@ func keepaliveReads(te stack.TransportEndpoint) bool {
 	}
 	n, err := ep.GetSockOptInt(tcpip.KeepaliveCountOption)
 	return err == nil && time.Duration(idle) == keepaliveIdle && time.Duration(interval) == keepaliveInterval && n == keepaliveCount
+}
+
+// A copy that ends in an error ends the whole tunnel: the other end may sit
+// idle with its own half open, and the slot must not wait on it.
+func TestOpaqueSlotFreedWhenACopyFails(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		fail func(h *holdProxy, g *vmnettest.Guest, c *gonet.TCPConn)
+	}{
+		{"the proxy side resets while the guest is idle", func(h *holdProxy, _ *vmnettest.Guest, _ *gonet.TCPConn) { h.resetTunnel(0) }},
+		{"the guest resets while the proxy is idle", func(_ *holdProxy, g *vmnettest.Guest, c *gonet.TCPConn) { g.Abort(c) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := startHoldProxy(t)
+			rl, g, addr := capRelay(t, h, 1)
+			c, err := g.Dial(addr, 2000, 3*time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close()
+			waitFor(t, "the tunnel", func() bool { return h.tunnelCount() == 1 })
+
+			tc.fail(h, g, c)
+			waitFor(t, "the slot after a failed copy", opaqueIs(rl, 0))
+
+			c2, err := g.Dial(addr, 2001, 3*time.Second)
+			if err != nil {
+				t.Fatalf("a flow after the slot freed: %v", err)
+			}
+			defer c2.Close()
+			waitFor(t, "the next tunnel", func() bool { return h.tunnelCount() == 2 })
+		})
+	}
+}
+
+func TestInFlightBoundLeavesRoomForTheTypedRefusal(t *testing.T) {
+	if inFlightBound(maxOpaqueTunnels) <= maxOpaqueTunnels {
+		t.Fatalf("production in-flight bound %d is not above the opaque cap %d", inFlightBound(maxOpaqueTunnels), maxOpaqueTunnels)
+	}
+	h := startHoldProxy(t)
+	h.gate = make(chan struct{})
+	const bound = 2
+	rl, g, addr := capRelay(t, h, bound)
+
+	for i := 0; i < bound; i++ {
+		go func(port uint16) {
+			if c, err := g.Dial(addr, port, 10*time.Second); err == nil {
+				defer c.Close()
+				waitFor(t, "the tunnel", func() bool { return h.tunnelCount() == bound })
+			}
+		}(uint16(2000 + i))
+	}
+	waitFor(t, "every slot pending", func() bool { a, _, _ := h.snapshot(); return a == bound && rl.opaque.Load() == bound })
+
+	start := time.Now()
+	if c, err := g.Dial(addr, 2100, 5*time.Second); err == nil {
+		c.Close()
+		t.Fatal("an opaque flow past the bound was admitted")
+	}
+	if time.Since(start) > 2*time.Second {
+		t.Fatal("the excess SYN was dropped, not reset")
+	}
+	waitFor(t, "tunnel-limit report", func() bool {
+		_, _, rs := h.snapshot()
+		return len(rs) == 1 && rs[0].Reason == reasonTunnelLimit && rs[0].Port == 2100
+	})
+	if asks, _, _ := h.snapshot(); asks != bound || rl.opaque.Load() != bound {
+		t.Fatalf("asks %d, held %d: the refused flow admitted something extra", asks, rl.opaque.Load())
+	}
+	close(h.gate)
+	waitFor(t, "the pending flows tunnel", func() bool { return h.tunnelCount() == bound })
 }
