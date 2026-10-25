@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/cjohnstoniv/wardyn/internal/doctor"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -30,3 +31,6 @@ func checkMacOSVMFlag(v, _ string) error {
 func askMacOSVM(*cobra.Command, string, *setupPlan, *types.RunnerLimits) error { return nil }
 
 func prepareMacOSVMBase(*cobra.Command, setupPlan, *types.RunnerLimits) {}
+
+// macOSVMDoctorStages is doctor's macOS VM stage, where there is none.
+func macOSVMDoctorStages() []doctor.Stage { return nil }

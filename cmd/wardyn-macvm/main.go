@@ -377,6 +377,8 @@ func cmdUpdateTools(ctx context.Context, args []string, d deps) int {
 		Engine: eng, Layout: macvm.Layout{Root: *j.root}, Slot: *j.slot, Power: d.power(), Admit: j.admit(macvm.UpdateToolsCommand, d),
 		Stage: st, Tooling: st.Tooling, Force: *force, CPUs: *j.cpus, MemoryMiB: *j.memMiB, HelperVersion: version.String(),
 		Progress: func(ev macvm.PrepareEvent) { _ = enc.Encode(ev) },
+		// The staging-cleanup warning goes to the job's log (runnerd's tools-update.log), not nowhere.
+		Log: slog.New(slog.NewTextHandler(d.stderr, nil)),
 	}
 	if _, _, err := macvm.UpdateTools(ctx, o); err != nil {
 		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)

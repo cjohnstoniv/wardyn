@@ -606,6 +606,8 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 			}
 		},
 		LocalAttach: local.Set,
+		// The organisation's per-run limits, on every connect: each macOS guest is sized at them.
+		PerRunLimits: extra.macOSVM.setPerRunLimits,
 		StreamOffline: func(peer *runnerwire.Peer) {
 			online.CompareAndSwap(peer, nil)
 			streams.Offline(peer)
@@ -944,13 +946,14 @@ func enableMacOSVM(ctx context.Context, sub *docker.Driver, runnerID string, on 
 	}
 	m.gate(ctx)
 	if m.ledger != nil {
-		cfg := &docker.MacVMConfig{Layout: m.layout, Helper: m.helper, Identity: macOSVMIdentity,
-			Ledger: m.ledger, Host: m.host, RunnerID: runnerID, HostOS: macHostOS(), Changed: m.changed}
+		m.sweepStaging()
+		cfg := &docker.MacVMConfig{Layout: m.layout, Helper: m.helper, Identity: macOSVMIdentity, SockRoot: m.sockRoot,
+			ToolsDialFile: filepath.Join(root, runToolsDialFile), Ledger: m.ledger, Host: m.host, RunnerID: runnerID, HostOS: macHostOS(), Changed: m.changed}
 		if err := sub.EnableMacVM(cfg); err != nil {
 			slog.WarnContext(ctx, "macOS VM sandboxes are off on this runner", "reason", err.Error())
 			m.ledger, m.refusal = nil, macOSVMLedgerDamaged
 		} else {
-			m.reclaim, m.endNewest = sub.ReclaimMacVMs, sub.EndNewestMacVM
+			m.reclaim, m.endNewest, m.prepNet = sub.ReclaimMacVMs, sub.EndNewestMacVM, sub.StartMacPrepNet
 			m.toolsUpdate = func(man macvm.Manifest) {
 				go func() {
 					if err := m.startToolsUpdate(context.WithoutCancel(ctx), man); err != nil {
