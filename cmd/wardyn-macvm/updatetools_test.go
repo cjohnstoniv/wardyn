@@ -61,6 +61,32 @@ func TestUpdateToolsTakesRunnerdsFlagsAndNetFD(t *testing.T) { updateToolsJob(t,
 // wardyn-guest-agent beside the helper to where stage 1 installed it.
 func TestUpdateToolsPushesTheAgentWhenItDrifts(t *testing.T) { updateToolsJob(t, true) }
 
+// TestUpdateToolsRefusesWithoutTheGuestAgentBeforeBooting: with no
+// wardyn-guest-agent beside the helper, update-tools stops by name before it
+// boots anything.
+func TestUpdateToolsRefusesWithoutTheGuestAgentBeforeBooting(t *testing.T) {
+	p, err := guestAgentPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(p); !os.IsNotExist(err) {
+		t.Fatalf("a guest agent is already beside the test binary: %v", err)
+	}
+	root := t.TempDir()
+	ledger := makeLedger(t, root)
+	eng := &macvmtest.Engine{}
+	d, _, _ := testDeps(eng)
+	var errb lockedBuf
+	d.stderr, d.powerSource = &errb, onAC{}
+	args := append(runnerdArgs(filepath.Join(root, "vm"), "e1", ledger), "--"+macvm.FlagSockRoot, macvmtest.SockRoot(t))
+	if code := run(context.Background(), args, d); code != 1 || !strings.Contains(errb.String(), "wardyn-guest-agent beside this helper") {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if n := len(eng.Machines()); n != 0 {
+		t.Fatalf("%d VMs booted without a guest agent to install", n)
+	}
+}
+
 // placeGuestAgent puts a wardyn-guest-agent beside this test binary, where
 // the helper looks for it, and returns its bytes.
 func placeGuestAgent(t *testing.T) []byte {

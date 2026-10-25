@@ -145,13 +145,15 @@ func quote(w string) string {
 	return "'" + strings.ReplaceAll(w, "'", `'\''`) + "'"
 }
 
+// kcpasswordLen is the length of a kcpassword of an n-byte password.
+func kcpasswordLen(n int) int { return (n + 1 + 11) / 12 * 12 }
+
 // kcpassword is /etc/kcpassword's obfuscation of pw: pw and a NUL, padded
 // with NULs to a multiple of 12 bytes, XORed with the fixed key.
 // UNVERIFIED (external): the format on macOS 27.
 func kcpassword(pw []byte) []byte {
 	key := []byte{0x7D, 0x89, 0x52, 0x23, 0xD2, 0xBC, 0xDD, 0xEA, 0xA3, 0xB9, 0x1F}
-	n := (len(pw) + 1 + 11) / 12 * 12
-	out := make([]byte, n)
+	out := make([]byte, kcpasswordLen(len(pw)))
 	copy(out, pw)
 	for i := range out {
 		out[i] ^= key[i%len(key)]

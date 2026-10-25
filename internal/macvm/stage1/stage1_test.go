@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -428,38 +429,70 @@ func TestRefusedIsOnlyARefusal(t *testing.T) {
 // the same boot, just before and just after it; anything else is unknown and
 // stops stage 1.
 func TestARefusalCountsOnlyFromALiveGuest(t *testing.T) {
-	for name, c := range map[string]struct {
-		dial  func(ctx context.Context, port int) (net.Conn, error) // after Remote Login off
-		epoch func(off bool) (uint64, error)
-	}{
+	type hooks struct {
+		// dial answers every dial once Remote Login is off (nil: the guest).
+		dial func(ctx context.Context, port int) (net.Conn, error)
+		// epoch is the guest's epoch once Remote Login is off (nil: 7).
+		epoch func() (uint64, error)
+	}
+	refused22 := func(f *fixture, then func()) func(ctx context.Context, port int) (net.Conn, error) {
+		return func(ctx context.Context, port int) (net.Conn, error) {
+			if port == 22 {
+				if then != nil {
+					then()
+				}
+				return nil, stage1test.Refused()
+			}
+			return f.srv.Dial(ctx, port)
+		}
+	}
+	for name, setup := range map[string]func(f *fixture) hooks{
 		// Port 22 refused, and port 5900 refused too.
-		"Screen Sharing silent": {dial: func(context.Context, int) (net.Conn, error) { return nil, stage1test.Refused() }},
-		"lease asked again": {epoch: func(off bool) (uint64, error) {
-			if off {
-				return 8, nil
-			}
-			return 7, nil
-		}},
-		"VM stopped": {epoch: func(off bool) (uint64, error) {
-			if off {
-				return 0, macvm.ErrGuestStopped
-			}
-			return 7, nil
-		}},
+		"Screen Sharing refused": func(*fixture) hooks {
+			return hooks{dial: func(context.Context, int) (net.Conn, error) { return nil, stage1test.Refused() }}
+		},
+		// Port 22 refused; port 5900 connects and sends nothing.
+		"Screen Sharing mute": func(f *fixture) hooks {
+			return hooks{dial: refused22(f, func() { f.srv.MuteRFB(true) })}
+		},
+		"lease asked again": func(*fixture) hooks {
+			return hooks{epoch: func() (uint64, error) { return 8, nil }}
+		},
+		// Port 22 keeps answering while the lease changes: the check before
+		// each dial stops at once, not after OffWait.
+		"lease asked again while port 22 still answers": func(f *fixture) hooks {
+			f.srv.StaysOn = true
+			return hooks{epoch: func() (uint64, error) { return 8, nil }}
+		},
+		// The lease changes only with the refusal: only the check after it
+		// can see that.
+		"lease asked again at the refusal": func(f *fixture) hooks {
+			var bumps atomic.Uint64
+			return hooks{dial: refused22(f, func() { bumps.Add(1) }), epoch: func() (uint64, error) { return 7 + bumps.Load(), nil }}
+		},
+		"VM stopped": func(*fixture) hooks {
+			return hooks{epoch: func() (uint64, error) { return 0, macvm.ErrGuestStopped }}
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t, provPass)
+			h := setup(f)
 			in := f.input(false)
-			if c.dial != nil {
+			if h.dial != nil {
 				in.Dial = func(ctx context.Context, port int) (net.Conn, error) {
-					if !f.srv.RemoteLogin() {
-						return c.dial(ctx, port)
+					if remoteLoginTurnedOff(f) {
+						return h.dial(ctx, port)
 					}
 					return f.srv.Dial(ctx, port)
 				}
 			}
-			if c.epoch != nil {
-				in.GuestEpoch = func() (uint64, error) { return c.epoch(!f.srv.RemoteLogin()) }
+			if h.epoch != nil {
+				in.GuestEpoch = func() (uint64, error) {
+					if remoteLoginTurnedOff(f) {
+						return h.epoch()
+					}
+					return 7, nil
+				}
 			}
 			_, err := f.b.Bootstrap(context.Background(), in)
 			if !errors.Is(err, ErrGuestLivenessUnknown) {
@@ -470,6 +503,12 @@ func TestARefusalCountsOnlyFromALiveGuest(t *testing.T) {
 			}
 		})
 	}
+}
+
+// remoteLoginTurnedOff says whether the guest has run Remote Login off.
+func remoteLoginTurnedOff(f *fixture) bool {
+	execs := f.srv.Execs()
+	return len(execs) > 0 && slices.Equal(execs[len(execs)-1].Argv, root("/usr/sbin/systemsetup", "-f", "-setremotelogin", "off"))
 }
 
 // Before Remote Login off the guest must be shown up: with Screen Sharing
@@ -498,5 +537,20 @@ func TestBeforeOffTheGuestMustBeShownUp(t *testing.T) {
 				t.Fatal("Remote Login was turned off from a guest not shown to be up")
 			}
 		})
+	}
+}
+
+// Every stdin is built at its exact size: no regrowth leaves a password or
+// the code behind in a dropped array.
+func TestStdinIsSizedExactly(t *testing.T) {
+	agent := make([]byte, 5000)
+	s, err := newSession(macvm.BootstrapInput{Username: admin, Password: code, NewPassword: newPass}, agent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range commands {
+		if in := s.stdin(c); len(in) != cap(in) {
+			t.Errorf("%s: stdin is %d bytes in a %d-byte array", c.ID, len(in), cap(in))
+		}
 	}
 }

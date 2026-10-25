@@ -53,6 +53,7 @@ type Server struct {
 
 	mu       sync.Mutex
 	sharing  bool // Screen Sharing loaded: port 5900 sends its RFB banner
+	muteRFB  bool // port 5900 accepts, then sends nothing
 	rfb      net.Listener
 	user     string
 	password string
@@ -85,7 +86,12 @@ func New(t testing.TB, user, password string) *Server {
 			if err != nil {
 				return
 			}
-			_, _ = c.Write([]byte("RFB 003.889\n"))
+			s.mu.Lock()
+			mute := s.muteRFB
+			s.mu.Unlock()
+			if !mute {
+				_, _ = c.Write([]byte("RFB 003.889\n"))
+			}
 			_ = c.Close()
 		}
 	}()
@@ -138,6 +144,13 @@ func (s *Server) Dial(ctx context.Context, port int) (net.Conn, error) {
 func (s *Server) SetPassword(pw string) {
 	s.mu.Lock()
 	s.password = pw
+	s.mu.Unlock()
+}
+
+// MuteRFB makes port 5900 accept a connection and then send nothing.
+func (s *Server) MuteRFB(on bool) {
+	s.mu.Lock()
+	s.muteRFB = on
 	s.mu.Unlock()
 }
 

@@ -303,34 +303,50 @@ func (s *session) codeReplaced(ctx context.Context) error {
 }
 
 // stdin is c's stdin: sudo's password line first for a root command.
+//
+// It is allocated once at its exact size, so no secret is left behind in an
+// array a regrowth dropped; run zeroes the one array after the command.
 func (s *session) stdin(c command) []byte {
-	var b bytes.Buffer
+	const rotate = "passwd /Users/"
+	n := 0
 	if c.Root {
-		b.Write(s.admin)
-		b.WriteByte('\n')
+		n += len(s.admin) + 1
+	}
+	switch c.In {
+	case stdinRotate:
+		n += len(rotate) + len(s.username) + 1 + len(s.code) + 1 + len(s.next) + 1
+	case stdinAgent:
+		n += len(s.agent)
+	case stdinPlist:
+		n += len(agentPlist)
+	case stdinAgentPassword:
+		n += len(s.agentPw) + 1
+	case stdinKCPassword:
+		n += kcpasswordLen(len(s.agentPw))
+	}
+	b := make([]byte, 0, n)
+	if c.Root {
+		b = append(append(b, s.admin...), '\n')
 	}
 	switch c.In {
 	case stdinRotate:
 		// Written piece by piece: a formatted line would leave a copy of
 		// both secrets in fmt's buffer pool. The username passed safeWord.
-		b.WriteString("passwd /Users/" + s.username + " ")
-		b.Write(s.code)
-		b.WriteByte(' ')
-		b.Write(s.next)
-		b.WriteByte('\n')
+		b = append(append(append(b, rotate...), s.username...), ' ')
+		b = append(append(append(b, s.code...), ' '), s.next...)
+		b = append(b, '\n')
 	case stdinAgent:
-		b.Write(s.agent)
+		b = append(b, s.agent...)
 	case stdinPlist:
-		b.WriteString(agentPlist)
+		b = append(b, agentPlist...)
 	case stdinAgentPassword:
-		b.Write(s.agentPw)
-		b.WriteByte('\n')
+		b = append(append(b, s.agentPw...), '\n')
 	case stdinKCPassword:
 		kc := kcpassword(s.agentPw)
-		b.Write(kc)
+		b = append(b, kc...)
 		clear(kc)
 	}
-	return b.Bytes()
+	return b
 }
 
 // run runs c once over its own SSH session.
