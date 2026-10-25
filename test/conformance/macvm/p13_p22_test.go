@@ -454,7 +454,7 @@ func TestP20_ManagedGate(t *testing.T) {
 		}
 	})
 	t.Run("personal", func(t *testing.T) {
-		mustOK(t, wardyn(t, "runner", "trust", runnerID(t), "personal"), "runner trust personal")
+		mustOK(t, wardyn(t, "runner", "trust", runnerID(t), "personal", "--reason", "macvm-live P20: the personal-trust refusal"), "runner trust personal")
 		r := askRefused(t, spec{})
 		member := ask(t, "As a member, ask for a macOS VM run on this runner now: paste the refusal the member sees:")
 		doStep(t, "Mark the runner managed_device again through four-eyes with the second test admin.")
