@@ -20,7 +20,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `aws_sso_refused_tokens`, `cli_sign_ins`, `ui_desktop_closed`, `desktop_signins`, `desktop_signin_shares`,
   `desktop_signin_runs`, `approval_rules`, `governance_restrictions`, `governance_restriction_members`,
   `governance_unit_admins`, `oidc_session_sids` and `desktop_vm_sign_ins`. Also grant it `SELECT, INSERT, UPDATE` on
-  `runner_health`, `launch_preset_version_floor`, `cli_sessions` and `governance_boundary`.
+  `runner_health`, `launch_preset_version_floor`, `cli_sessions` and `governance_boundary`. If it turns on
+  `WARDYN_MULTI_AGENT_TASKS`, grant it `SELECT, INSERT, UPDATE` on `run_harnesses` as well.
 
 ### Added
 
