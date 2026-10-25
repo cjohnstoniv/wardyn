@@ -19,6 +19,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   refused because it cannot reach the Mac's desktop (over SSH, under sudo, or with no one signed in) is
   `no_desktop`, with the state `failed`; before, only the error text said so. A console that does not know the code
   shows the error text as before.
+- The runner inventory's macOS VM capabilities no longer carry the runner's own `refusal` sentence. Read `reason`
+  (with `min_cpus` and `min_memory_mib`) instead; the console words the refusal from those.
 
 ### Fixed
 
