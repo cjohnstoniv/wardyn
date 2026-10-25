@@ -707,7 +707,7 @@ func (d *Driver) waitPodIP(ctx context.Context, clock *startClock, podName strin
 		// A container's own Waiting reason first: podStuckReason reads only the
 		// pod, and would call an init-blocked pod one "with no container status".
 		why := cmp.Or(waitingDetail(lastPod), podStuckReason(lastPod))
-		if line := proxyNotReadyDetail(lastPod, d.cfg.ProxyImage); line != "" {
+		if line := proxyNotReadyDetail(lastPod, d.cfg.ProxyImage, d.runnerMode()); line != "" {
 			why = strings.Join(slices.DeleteFunc([]string{why, line}, func(s string) bool { return s == "" }), "; ")
 		}
 		if why != "" {
