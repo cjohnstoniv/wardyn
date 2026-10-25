@@ -314,3 +314,58 @@ func TestDesktopRecording_AnEndedRunsIdlePauseIsSwept(t *testing.T) {
 		})
 	}
 }
+
+// TestDesktopRecording_AKeptRunThatEndedIsOver (#3583): a kept run whose lease ended or whose
+// container exited stays RUNNING but is over (desktopPauseRunOver): an idle take over's pause is
+// swept with one resume row marked run_ended. A run lost to an outage may be revived, and a live run
+// lives: their pause stands and no resume row is written.
+func TestDesktopRecording_AKeptRunThatEndedIsOver(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		reason types.LostReason // "" leaves the run live
+		over   bool
+	}{
+		{"kept, lease ended", types.LostEnded, true},
+		{"kept, rebooted", types.LostReboot, true},
+		{"lost to an outage", types.LostOutage, false},
+		{"live", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			h := newHarness(t)
+			ast := newAuthzStore()
+			cfg := baseTestConfig(h, ast)
+			cfg.RecordingStore = fsRecordingStore(t)
+			srv := New(cfg)
+			run := types.AgentRun{ID: uuid.New(), State: types.RunRunning, RecordingLevel: types.RecordingScreenActions}
+			if tc.reason != "" {
+				lostAt := time.Now().UTC()
+				run.LostAt, run.LostReason = &lostAt, tc.reason
+			}
+			ast.mu.Lock()
+			ast.runs[run.ID] = run
+			ast.mu.Unlock()
+			srv.PauseDesktopRecording(ctx, run, desktopPauseTakeover, takeoverHold(uuid.New()))
+			for range 2 {
+				if err := srv.sweepEndedDesktopRecordingPauses(ctx); err != nil {
+					t.Fatal(err)
+				}
+			}
+			srv.desktopRecs.mu.Lock()
+			_, held := srv.desktopRecs.byRun[run.ID]
+			srv.desktopRecs.mu.Unlock()
+			var resumes []map[string]any
+			for _, ev := range h.audit.snapshot() {
+				if ev.Action == "desktop.recording.resume" {
+					resumes = append(resumes, auditData(t, ev))
+				}
+			}
+			switch {
+			case tc.over && (held || len(resumes) != 1 || resumes[0]["end_reason"] != signinEndRunEnded):
+				t.Fatalf("held %v, desktop.recording.resume rows = %v, want the pause swept with one row marked %q", held, resumes, signinEndRunEnded)
+			case !tc.over && (!held || len(resumes) != 0):
+				t.Fatalf("held %v, desktop.recording.resume rows = %v, want the pause standing and no row", held, resumes)
+			}
+		})
+	}
+}

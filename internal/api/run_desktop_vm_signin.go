@@ -718,9 +718,7 @@ func (s *Server) sweepEndedDesktopVMPauses(ctx context.Context) error {
 	}
 	for _, p := range paused {
 		run, err := s.cfg.Store.GetRun(ctx, p.RunID)
-		// A kept run whose lease ended or whose container exited is over. A kept run lost to an outage
-		// still has its agent running and may be revived, so its pause stands.
-		if err != nil || (!run.State.IsTerminal() && !(run.LostAt != nil && (run.LostReason == types.LostEnded || run.LostReason == types.LostReboot))) {
+		if err != nil || !desktopPauseRunOver(run) {
 			continue
 		}
 		// A lease-ended run stays RUNNING while it is kept, so its end is LostAt, not EndedAt.
@@ -741,6 +739,13 @@ func (s *Server) sweepEndedDesktopVMPauses(ctx context.Context) error {
 		s.endDesktopHold(ctx, run, vmSignInHold(run.ID, pausedAt))
 	}
 	return nil
+}
+
+// desktopPauseRunOver reports whether run is over for a desktop pause: terminal, or kept after its
+// lease ended or its container exited, which stays RUNNING. A kept run lost to an outage still has
+// its agent running and may be revived, so its pause stands.
+func desktopPauseRunOver(run types.AgentRun) bool {
+	return run.State.IsTerminal() || (run.LostAt != nil && (run.LostReason == types.LostEnded || run.LostReason == types.LostReboot))
 }
 
 // handleResumeDesktopAgent continues the agent and writes the session's one desktop.sign_in.pause row. It is
