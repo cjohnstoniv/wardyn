@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -53,7 +54,59 @@ func runnerdArgs(root, entry, ledger string) []string {
 // boots the base's staging copy on the net_fd runnerd sends to the job's
 // ctl.sock, reaches the guest agent's tools mode on 1026, records the guest's
 // tools-port dial, and swaps the updated base in.
-func TestUpdateToolsTakesRunnerdsFlagsAndNetFD(t *testing.T) {
+func TestUpdateToolsTakesRunnerdsFlagsAndNetFD(t *testing.T) { updateToolsJob(t, false) }
+
+// TestUpdateToolsPushesTheAgentWhenItDrifts: a base whose pins are current
+// but whose guest agent is another build is updated, and stage 2 pushes the
+// wardyn-guest-agent beside the helper to where stage 1 installed it.
+func TestUpdateToolsPushesTheAgentWhenItDrifts(t *testing.T) { updateToolsJob(t, true) }
+
+// TestUpdateToolsRefusesWithoutTheGuestAgentBeforeBooting: with no
+// wardyn-guest-agent beside the helper, update-tools stops by name before it
+// boots anything.
+func TestUpdateToolsRefusesWithoutTheGuestAgentBeforeBooting(t *testing.T) {
+	p, err := guestAgentPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(p); !os.IsNotExist(err) {
+		t.Fatalf("a guest agent is already beside the test binary: %v", err)
+	}
+	root := t.TempDir()
+	ledger := makeLedger(t, root)
+	eng := &macvmtest.Engine{}
+	d, _, _ := testDeps(eng)
+	var errb lockedBuf
+	d.stderr, d.powerSource = &errb, onAC{}
+	args := append(runnerdArgs(filepath.Join(root, "vm"), "e1", ledger), "--"+macvm.FlagSockRoot, macvmtest.SockRoot(t))
+	if code := run(context.Background(), args, d); code != 1 || !strings.Contains(errb.String(), "wardyn-guest-agent beside this helper") {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if n := len(eng.Machines()); n != 0 {
+		t.Fatalf("%d VMs booted without a guest agent to install", n)
+	}
+}
+
+// placeGuestAgent puts a wardyn-guest-agent beside this test binary, where
+// the helper looks for it, and returns its bytes.
+func placeGuestAgent(t *testing.T) []byte {
+	t.Helper()
+	p, err := guestAgentPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent := []byte("fake darwin/arm64 wardyn-guest-agent " + t.Name())
+	if err := os.WriteFile(p, agent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(p) })
+	return agent
+}
+
+// updateToolsJob runs update-tools as runnerd starts it. With drift, the base
+// has every shipped pin and only its guest agent build differs.
+func updateToolsJob(t *testing.T, drift bool) {
+	agent := placeGuestAgent(t)
 	root := t.TempDir()
 	ledger := makeLedger(t, root)
 	l, err := admission.Open(admission.Config{Dir: ledger, UID: os.Getuid(), RunnerID: "r1", Host: host{}, Fstat: rootFstat})
@@ -71,7 +124,22 @@ func TestUpdateToolsTakesRunnerdsFlagsAndNetFD(t *testing.T) {
 		_ = os.WriteFile(filepath.Join(base, n), []byte(b), 0o600)
 	}
 	_ = os.WriteFile(filepath.Join(base, macvm.ManifestFile),
-		[]byte(`{"format":1,"state":"ready","hardware_model":"aHc=","min_cpus":2,"min_memory_mib":4096,"desktop":"control","helper_version":"old"}`), 0o600)
+		[]byte(`{"format":1,"state":"ready","hardware_model":"aHc=","min_cpus":2,"min_memory_mib":4096,"desktop":"control","helper_version":"old","agent_version":"0.0.0-old"}`), 0o600)
+	if drift {
+		tooling, err := macvm.ShippedTooling()
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec := macvm.ToolsRecord{AgentVersion: "0.0.0-old", Pins: map[string]macvm.PinRecord{}, Harnesses: []string{macvm.HarnessNone}, TriedAt: time.Now().UTC()}
+		for _, p := range tooling.Harnesses {
+			rec.Pins[p.ID] = macvm.PinRecord{Version: p.Version, SHA256: p.SHA256}
+		}
+		b, _ := json.Marshal(rec)
+		_ = os.WriteFile(filepath.Join(base, macvm.ToolsRecordFile), b, 0o600)
+		if macvm.NeedsToolsUpdate(base, tooling, "", time.Now()) {
+			t.Fatal("the base's pins are not current: only the agent should drift")
+		}
+	}
 
 	eng := &macvmtest.Engine{}
 	d, _, _ := testDeps(eng)
@@ -116,7 +184,14 @@ func TestUpdateToolsTakesRunnerdsFlagsAndNetFD(t *testing.T) {
 	}
 	var mu sync.Mutex
 	var execs [][]string
+	pushes := map[string][]byte{}
 	tools := http.NewServeMux()
+	tools.HandleFunc("POST /v1/tools/push", func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		pushes[r.URL.Query().Get("dest")] = b
+		mu.Unlock()
+	})
 	tools.HandleFunc("POST /v1/tools/exec", func(w http.ResponseWriter, r *http.Request) {
 		var x guestagent.ToolsExec
 		_ = json.NewDecoder(r.Body).Decode(&x)
@@ -149,8 +224,14 @@ func TestUpdateToolsTakesRunnerdsFlagsAndNetFD(t *testing.T) {
 		t.Fatalf("stage 2 ran no tools step over 1026: %v", execs)
 	}
 	man, err := macvm.ReadyBase(base)
-	if err != nil || man.HelperVersion != version.String() || man.Desktop != "control" {
+	if err != nil || man.HelperVersion != version.String() || man.Desktop != "control" || man.AgentVersion != version.String() {
 		t.Fatalf("base after the update: %+v %v", man, err)
+	}
+	mu.Lock()
+	pushed := pushes[guestagent.MacAgentBinaryPath]
+	mu.Unlock()
+	if !bytes.Equal(pushed, agent) {
+		t.Fatalf("the guest agent pushed to %s is %q; want the build beside the helper", guestagent.MacAgentBinaryPath, pushed)
 	}
 	if !strings.Contains(out.String(), `"tools_dial":"connected"`) {
 		t.Fatalf("the tools-port dial is not in the job's log:\n%s", out.String())

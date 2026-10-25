@@ -11,6 +11,7 @@
 #   /Users/Shared/Wardyn                        root:wheel 0755
 #   /Users/Shared/Wardyn/admission.lock         root:wheel 0644
 #   /Users/Shared/Wardyn/macos-vm-admission/    root:wheel 1777 (sticky, like /tmp): the entries live here
+#   /Users/Shared/Wardyn/sock/                  root:wheel 1777: each login's u<uid>/ (0700) holds its run sockets
 # The installer is the only thing that creates any of them. A runner that made the lock would own it and
 # could delete it, and a replaced inode ends mutual exclusion, so a runner that finds one missing or
 # wrong offers no macOS VMs.

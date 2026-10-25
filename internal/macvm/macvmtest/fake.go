@@ -283,7 +283,6 @@ type FirstBoot struct {
 	last     BootArgs
 	done     chan error
 	stopOnce sync.Once
-	result   error
 }
 
 // BootArgs are the arguments of the last Boot.

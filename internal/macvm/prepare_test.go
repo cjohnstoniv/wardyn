@@ -101,6 +101,7 @@ type prepNet struct {
 }
 
 func (n *prepNet) Serve(*os.File) error { <-n.closed; return nil }
+func (n *prepNet) DHCPRequests() uint64 { return 0 }
 func (n *prepNet) DialGuest(context.Context, int) (net.Conn, error) {
 	if n.onDial != nil {
 		n.onDial()

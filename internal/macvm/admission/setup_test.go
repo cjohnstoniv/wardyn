@@ -5,6 +5,7 @@ package admission
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -19,7 +20,8 @@ import (
 
 // setupCfg runs Setup on r's base as a root that cannot chown (tests run as one user).
 func (r *rig) setupCfg(mod ...func(*SetupConfig)) SetupConfig {
-	c := SetupConfig{Base: filepath.Dir(r.dir), Fstat: r.fs.fstat, Chown: func(*os.File) error { return nil }, LockWait: 5 * time.Second}
+	c := SetupConfig{Base: filepath.Dir(r.dir), Fstat: r.fs.fstat, Chown: func(*os.File) error { return nil }, LockWait: 5 * time.Second,
+		Logf: func(string, ...any) {}}
 	for _, m := range mod {
 		m(&c)
 	}
@@ -90,6 +92,9 @@ func TestSetupIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(r.lock(), []byte("held"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Setup(r.setupCfg()); err != nil { // the rig has no sock/ yet
 		t.Fatal(err)
 	}
 	before := tree(t, filepath.Dir(r.dir))
@@ -177,8 +182,9 @@ func TestSetupRebuildsBase(t *testing.T) {
 }
 
 // Children planted or damaged inside a sound base (from an older install): a
-// login's lock, a symlinked lock, a lock that is a directory, a symlinked
-// entries directory. Each is replaced, and no link is followed.
+// login's lock, a lock that is a directory, a symlinked entries directory are
+// replaced; a symlinked lock is refused (only ENOENT means no lock). No link
+// is followed.
 func TestSetupReplacesPlantedChildren(t *testing.T) {
 	r := newRig(t, bigMac())
 	old := ino(t, r.lock())
@@ -207,12 +213,14 @@ func TestSetupReplacesPlantedChildren(t *testing.T) {
 	if err := os.Symlink(target, r.lock()); err != nil {
 		t.Fatal(err)
 	}
-	if err := Setup(r.setupCfg()); err != nil {
-		t.Fatal(err)
-	}
+	wantNotInstalled(t, Setup(r.setupCfg()), "a symlinked lock")
 	if readFile(t, target) != "keep" || perm(t, target) != 0o666 {
 		t.Fatal("the lock symlink's target was changed")
 	}
+	if fi, err := os.Lstat(r.lock()); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("a refused Setup replaced the symlinked lock")
+	}
+	_ = os.Remove(r.lock())
 
 	_ = os.Remove(r.lock())
 	if err := os.Mkdir(r.lock(), 0o755); err != nil {
@@ -367,4 +375,544 @@ func readFile(t *testing.T, p string) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+// admitN admits n logins (uids 501...) and returns the entry names.
+func admitN(t *testing.T, r *rig, n int) []string {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		if _, err := r.open(t, 501+i, fmt.Sprintf("r%d", i)).Admit(runReq(8 * gib)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return entryFiles(t, r.dir)
+}
+
+// wantEntries: dst holds every one of names.
+func wantEntries(t *testing.T, r *rig, names []string, what string) {
+	t.Helper()
+	for _, n := range names {
+		if _, err := os.Lstat(filepath.Join(r.dir, n)); err != nil {
+			t.Fatalf("%s: entry %s lost (%v)", what, n, err)
+		}
+	}
+}
+
+// everyEntry counts each of names wherever it is under base's parent.
+func everyEntry(t *testing.T, r *rig, names []string) int {
+	t.Helper()
+	found := 0
+	_ = filepath.Walk(filepath.Dir(filepath.Dir(r.dir)), func(p string, fi os.FileInfo, err error) error {
+		if err == nil && fi.Mode().IsRegular() {
+			for _, n := range names {
+				if filepath.Base(p) == n {
+					found++
+				}
+			}
+		}
+		return nil
+	})
+	return found
+}
+
+// Fable R4 M1: the staging directory stays root-only while entries move into
+// it, so a name planted in it as soon as it can be reached (its chown) is too
+// late to block a move. Setup, retried once if it fails, ends with every entry.
+func TestSetupStagingRootOnlyDuringMove(t *testing.T) {
+	r := newRig(t, bigMac())
+	names := admitN(t, r, 2)
+	_ = os.Chmod(r.dir, 0o755)
+	plant := func(c *SetupConfig) {
+		c.Chown = func(f *os.File) error {
+			if strings.HasPrefix(filepath.Base(f.Name()), "."+entriesName+".") {
+				for _, n := range names {
+					_ = os.Mkdir(filepath.Join(f.Name(), n), 0o755) // a login planting another's entry name
+				}
+			}
+			return nil
+		}
+	}
+	if err := Setup(r.setupCfg(plant)); err != nil {
+		if err := Setup(r.setupCfg()); err != nil {
+			t.Fatalf("the retry: %v", err)
+		}
+	}
+	wantEntries(t, r, names, "a name planted in the staging directory")
+	wantLayout(t, r)
+}
+
+// The witness for a name planted mid-move: the move fails; a retry refuses
+// (two things share that name) with every entry still on disk; once root
+// clears the planted name, a retry carries every entry forward.
+func TestSetupRetryCarriesEveryEntry(t *testing.T) {
+	r := newRig(t, bigMac())
+	names := admitN(t, r, 2)
+	_ = os.Chmod(r.dir, 0o755)
+	calls, planted := 0, ""
+	mid := func(c *SetupConfig) {
+		c.beforeMove = func(dst string) error {
+			if calls++; calls == 2 {
+				planted = dst
+				return os.Mkdir(dst, 0o755)
+			}
+			return nil
+		}
+	}
+	if err := Setup(r.setupCfg(mid)); err == nil {
+		t.Fatal("a move onto a planted name succeeded")
+	}
+	if n := everyEntry(t, r, names); n != len(names) {
+		t.Fatalf("after the failed move %d of %d entries are on disk", n, len(names))
+	}
+	if err := Setup(r.setupCfg()); err == nil {
+		t.Fatal("a retry succeeded while a planted name shadows an entry")
+	} else if n := everyEntry(t, r, names); n != len(names) {
+		t.Fatalf("after the refused retry %d of %d entries are on disk", n, len(names))
+	}
+	if err := os.Remove(planted); err != nil {
+		t.Fatal(err)
+	}
+	if err := Setup(r.setupCfg()); err != nil {
+		t.Fatal(err)
+	}
+	wantEntries(t, r, names, "the retry after a failed move")
+	wantLayout(t, r)
+}
+
+// Two entries of one name, a staging leftover's and the entries directory's.
+// Into an exact entries directory: dst's copy stays (it counts) and the
+// leftover goes to a root-only quarantine. Into one that is not exact: Setup
+// refuses. Neither is ever overwritten.
+func TestSetupNeverOverwritesAnEntry(t *testing.T) {
+	for _, exactDst := range []bool{true, false} {
+		r := newRig(t, bigMac())
+		base := filepath.Dir(r.dir)
+		stage := filepath.Join(base, "."+entriesName+".1")
+		if err := os.Mkdir(stage, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		for d, body := range map[string]string{stage: "a", r.dir: "b"} {
+			if err := os.WriteFile(filepath.Join(d, "e-x.json"), []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if !exactDst {
+			_ = os.Chmod(r.dir, 0o755)
+			wantNotInstalled(t, Setup(r.setupCfg()), "two entries of one name")
+		} else if err := Setup(r.setupCfg()); err != nil {
+			t.Fatalf("two entries of one name, exact dst: %v", err)
+		} else {
+			q, _ := filepath.Glob(filepath.Join(base, ".wardyn-quarantine.*", "e-x.json"))
+			if readFile(t, filepath.Join(r.dir, "e-x.json")) != "b" || len(q) != 1 || readFile(t, q[0]) != "a" || perm(t, filepath.Dir(q[0])) != 0o700 {
+				t.Fatalf("exact dst: dst's copy was not kept, or the other copy is not in a root-only quarantine (%v)", q)
+			}
+		}
+		bodies := map[string]bool{}
+		_ = filepath.Walk(base, func(p string, fi os.FileInfo, err error) error {
+			if err == nil && fi.Name() == "e-x.json" {
+				bodies[readFile(t, p)] = true
+			}
+			return nil
+		})
+		if !bodies["a"] || !bodies["b"] {
+			t.Fatalf("exact dst %v: an entry was overwritten: bodies left %v", exactDst, bodies)
+		}
+	}
+}
+
+// Entries in an earlier quarantine (in the base, or a rebuilt base's beside it)
+// are carried forward; a quarantined login's base is not entries.
+func TestSetupCarriesQuarantinedEntries(t *testing.T) {
+	r := newRig(t, bigMac())
+	base := filepath.Dir(r.dir)
+	mk := func(dir string, uid uint32) {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		r.fs.set(dir, uid)
+		r.fs.set(filepath.Dir(dir), uid)
+	}
+	inBase := filepath.Join(base, ".wardyn-quarantine.a", entriesName)
+	beside := filepath.Join(filepath.Dir(base), ".wardyn-quarantine.b", "Wardyn", entriesName)
+	planted := filepath.Join(filepath.Dir(base), ".wardyn-quarantine.c", "Wardyn", entriesName)
+	mk(inBase, 0)
+	mk(beside, 0)
+	mk(planted, 501)
+	for d, n := range map[string]string{inBase: "e-1.json", beside: "e-2.json", planted: "e-forged.json"} {
+		if err := os.WriteFile(filepath.Join(d, n), []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := Setup(r.setupCfg()); err != nil {
+		t.Fatal(err)
+	}
+	wantEntries(t, r, []string{"e-1.json", "e-2.json"}, "quarantined entries")
+	if _, err := os.Lstat(filepath.Join(r.dir, "e-forged.json")); err == nil {
+		t.Fatal("an entry from a login's quarantined base was carried")
+	}
+	wantLayout(t, r)
+}
+
+// Review R4 L1 and R5 L3: a lock open failing for any reason but ENOENT fails
+// closed: EACCES on a mode-0 lock (not as root, which opens it), and a socket
+// at the lock's name, whose open fails for root too (ENXIO; EOPNOTSUPP on
+// macOS). The macOS CI job runs this test under sudo.
+func TestSetupLockOpenErrorFailsClosed(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		plant func(lock string) error
+	}{
+		{"mode0", func(lock string) error {
+			if os.Geteuid() == 0 {
+				return errSkip
+			}
+			return os.Chmod(lock, 0)
+		}},
+		{"socket", func(lock string) error {
+			if err := os.Remove(lock); err != nil {
+				return err
+			}
+			fd, err := unix.Socket(unix.AF_UNIX, unix.SOCK_STREAM, 0)
+			if err != nil {
+				return err
+			}
+			defer unix.Close(fd)
+			return unix.Bind(fd, &unix.SockaddrUnix{Name: lock})
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := newRig(t, bigMac())
+			if err := c.plant(r.lock()); errors.Is(err, errSkip) {
+				t.Skip("root opens a mode-0 file")
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			defer os.Chmod(r.lock(), 0o644)
+			was := ino(t, r.lock())
+			if err := Setup(r.setupCfg()); err == nil || !strings.Contains(err.Error(), lockFile+" cannot be opened") {
+				t.Fatalf("a lock that cannot be opened: got %v, want a refusal naming the fix", err)
+			}
+			if ino(t, r.lock()) != was {
+				t.Fatal("a lock that could not be locked was replaced")
+			}
+		})
+	}
+}
+
+var errSkip = errors.New("skip")
+
+// ERRATA-r6 E1: sock/ is made exact; its children must each be u<uid>, a real
+// 0700 directory owned by that uid, or they go to a quarantine.
+func TestSetupSockChildren(t *testing.T) {
+	r := newRig(t, bigMac())
+	if err := Setup(r.setupCfg()); err != nil {
+		t.Fatal(err)
+	}
+	sock := filepath.Join(filepath.Dir(r.dir), sockName)
+	if perm(t, sock) != os.ModeSticky|0o777 {
+		t.Fatalf("sock is %v", perm(t, sock))
+	}
+	dir := func(n string, uid uint32, mode os.FileMode) string {
+		p := filepath.Join(sock, n)
+		if err := os.Mkdir(p, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		_ = os.Chmod(p, mode)
+		r.fs.set(p, uid)
+		return p
+	}
+	good := dir("u501", 501, 0o700)
+	goodIno := ino(t, good)
+	dir("u502", 501, 0o700)  // another uid's name
+	dir("u503", 503, 0o755)  // not 0700
+	dir("u0504", 504, 0o700) // not canonical
+	if err := os.Symlink(t.TempDir(), filepath.Join(sock, "u505")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sock, "junk"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Setup(r.setupCfg()); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := readNames(sock)
+	if len(got) != 1 || got[0] != "u501" || ino(t, good) != goodIno {
+		t.Fatalf("sock holds %v after Setup, want only the sound u501, kept", got)
+	}
+	// A sock that is not exact is made again, its sound children moved across.
+	_ = os.Chmod(sock, 0o755)
+	if err := Setup(r.setupCfg()); err != nil {
+		t.Fatal(err)
+	}
+	if perm(t, sock) != os.ModeSticky|0o777 || ino(t, filepath.Join(sock, "u501")) != goodIno {
+		t.Fatal("a sock that was not exact was not rebuilt with its sound child")
+	}
+}
+
+// counted is a fresh helper's Counted() on r's ledger.
+func counted(t *testing.T, r *rig) int {
+	t.Helper()
+	es, err := r.open(t, 900, "probe").Counted()
+	if err != nil {
+		t.Fatalf("Counted: %v", err)
+	}
+	return len(es)
+}
+
+// leftover moves names out of r's entries directory into dir, made 0700, as
+// an earlier run left them in staging or a quarantine.
+func leftover(t *testing.T, r *rig, dir string, names ...string) string {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range names {
+		if err := os.Rename(filepath.Join(r.dir, n), filepath.Join(dir, n)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+// clone copies r's entry n into dir as name, with n's owner.
+func clone(t *testing.T, r *rig, n, dir, name string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(readFile(t, filepath.Join(r.dir, n))), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r.mu.Lock()
+	r.owners[name] = r.owners[n]
+	r.mu.Unlock()
+}
+
+func stageDir(r *rig, i int) string {
+	return filepath.Join(filepath.Dir(r.dir), "."+entriesName+"."+strconv.Itoa(i))
+}
+
+// Review R5 M1 (ERRATA-r6 E13 e): a login's link .wardyn-quarantine.x -> the
+// base's parent would alias the live entries directory as a source. The link
+// is never followed but skipped and logged: Setup succeeds every time, and
+// every entry still counts.
+func TestSetupQuarantineLinkToParent(t *testing.T) {
+	r := newRig(t, bigMac())
+	admitN(t, r, 2)
+	if err := Setup(r.setupCfg()); err != nil {
+		t.Fatal(err)
+	}
+	parent := filepath.Dir(filepath.Dir(r.dir))
+	link := filepath.Join(parent, ".wardyn-quarantine.x")
+	if err := os.Symlink(parent, link); err != nil {
+		t.Fatal(err)
+	}
+	var logged []string
+	logf := func(c *SetupConfig) {
+		c.Logf = func(f string, a ...any) { logged = append(logged, fmt.Sprintf(f, a...)) }
+	}
+	for i := 1; i <= 3; i++ {
+		if err := Setup(r.setupCfg(logf)); err != nil {
+			t.Fatalf("run %d: %v", i, err)
+		}
+		if n := counted(t, r); n != 2 {
+			t.Fatalf("run %d: a helper counts %d of 2 entries", i, n)
+		}
+	}
+	if !strings.Contains(strings.Join(logged, "\n"), "skipped "+link) {
+		t.Fatalf("the link was not logged as skipped: %q", logged)
+	}
+}
+
+// ERRATA-r6 E13 (b): a source that is the same directory as the entries
+// directory by its fstat (device and inode) is never read as a source.
+func TestSetupDedupesSourcesByIdentity(t *testing.T) {
+	r := newRig(t, bigMac())
+	names := admitN(t, r, 1)
+	stage := stageDir(r, 1)
+	clone(t, r, names[0], stage, names[0])
+	var dst unix.Stat_t
+	if err := unix.Lstat(r.dir, &dst); err != nil {
+		t.Fatal(err)
+	}
+	alias := func(c *SetupConfig) {
+		c.Fstat = func(fd int, name string) (unix.Stat_t, error) {
+			st, err := r.fs.fstat(fd, name)
+			if name == stage {
+				st.Dev, st.Ino = dst.Dev, dst.Ino
+			}
+			return st, err
+		}
+	}
+	if err := Setup(r.setupCfg(alias)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(stage, names[0])); err != nil {
+		t.Fatalf("an alias of the entries directory was read as a source: %v", err)
+	}
+	if n := counted(t, r); n != 1 {
+		t.Fatalf("a helper counts %d of 1 entries", n)
+	}
+}
+
+// ERRATA-r6 E13 (a): the merge runs under the old lock's flock, taken and
+// rechecked (dev and inode) before anything moves: a helper admitting
+// mid-merge waits and gets ErrBusy, and admits once Setup is done; a lock
+// replaced between the open and the flock refuses with nothing moved.
+func TestSetupMergeHoldsTheFlock(t *testing.T) {
+	r := newRig(t, bigMac())
+	names := admitN(t, r, 1)
+	stage := leftover(t, r, stageDir(r, 1), names...)
+	h := r.open(t, 502, "b", func(c *Config) { c.LockWait = 50 * time.Millisecond })
+	var midErr error
+	mid := func(c *SetupConfig) {
+		c.beforeMove = func(string) error { _, midErr = h.Admit(runReq(8 * gib)); return nil }
+	}
+	if err := Setup(r.setupCfg(mid)); err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(midErr, ErrBusy) {
+		t.Fatalf("a helper admitting mid-merge: got %v, want ErrBusy", midErr)
+	}
+	if _, err := h.Admit(runReq(8 * gib)); err != nil {
+		t.Fatalf("the helper after Setup: %v", err)
+	}
+
+	leftover(t, r, stage, names...)
+	swap := func(c *SetupConfig) {
+		c.afterFlock = func() {
+			if err := os.WriteFile(r.lock()+".new", nil, 0o644); err != nil {
+				t.Error(err)
+			}
+			if err := os.Rename(r.lock()+".new", r.lock()); err != nil {
+				t.Error(err)
+			}
+		}
+	}
+	wantNotInstalled(t, Setup(r.setupCfg(swap)), "a lock replaced before its flock")
+	if _, err := os.Lstat(filepath.Join(stage, names[0])); err != nil {
+		t.Fatalf("an entry moved after the lock recheck failed: %v", err)
+	}
+}
+
+// ERRATA-r6 E13 (d): an entry gone when its move comes (its owner removed it)
+// is skipped: Setup succeeds and every other entry counts.
+func TestSetupEntryGoneMidMerge(t *testing.T) {
+	r := newRig(t, bigMac())
+	names := admitN(t, r, 2)
+	stage := stageDir(r, 1)
+	clone(t, r, names[1], stage, "e-gone.json")
+	leftover(t, r, stage, names[1])
+	gone := func(c *SetupConfig) {
+		c.beforeMove = func(to string) error {
+			if filepath.Base(to) == "e-gone.json" {
+				return os.Remove(filepath.Join(stage, "e-gone.json"))
+			}
+			return nil
+		}
+	}
+	if err := Setup(r.setupCfg(gone)); err != nil {
+		t.Fatalf("an entry gone mid-merge: %v", err)
+	}
+	wantEntries(t, r, names, "an entry gone mid-merge")
+	if n := counted(t, r); n != 2 {
+		t.Fatalf("a helper counts %d of 2 entries", n)
+	}
+}
+
+// ERRATA-r6 E13 (e) and (c): after any failed Setup a helper on the exact
+// ledger counts at least what it counted before, and every entry is on disk
+// once. Each run fails at a different point: either move, or after the sweep.
+func TestSetupFailedSetupNeverLowersTheCount(t *testing.T) {
+	for k := 1; k <= 3; k++ {
+		r := newRig(t, bigMac())
+		names := admitN(t, r, 2)
+		clone(t, r, names[0], r.dir, "e-3.json")
+		clone(t, r, names[0], r.dir, "e-4.json")
+		leftover(t, r, stageDir(r, 1), "e-3.json", "e-4.json")
+		start := counted(t, r)
+		calls := 0
+		fail := func(c *SetupConfig) {
+			c.beforeMove = func(string) error {
+				if calls++; calls == k {
+					return errors.New("planted failure")
+				}
+				return nil
+			}
+			c.afterSock = func() {
+				if k == 3 {
+					_ = os.Chmod(filepath.Join(filepath.Dir(r.dir), sockName), 0o755)
+				}
+			}
+		}
+		if err := Setup(r.setupCfg(fail)); err == nil {
+			t.Fatalf("failure point %d: Setup succeeded", k)
+		}
+		if n := counted(t, r); n < start {
+			t.Fatalf("failure point %d: a helper counts %d, down from %d", k, n, start)
+		}
+		all := append([]string{"e-3.json", "e-4.json"}, names...)
+		if n := everyEntry(t, r, all); n != len(all) {
+			t.Fatalf("failure point %d: %d copies of %d entries on disk", k, n, len(all))
+		}
+	}
+}
+
+// ERRATA-r6 E13 (e): after a successful Setup a helper counts every distinct
+// entry name found in the entries directory and every source.
+func TestSetupCountsEveryDistinctName(t *testing.T) {
+	r := newRig(t, bigMac())
+	names := admitN(t, r, 2)
+	base := filepath.Dir(r.dir)
+	stage := leftover(t, r, stageDir(r, 1), names[1])
+	clone(t, r, names[0], stage, names[0]) // a second copy of a name dst holds
+	clone(t, r, names[0], filepath.Join(base, ".wardyn-quarantine.a", entriesName), "e-3.json")
+	clone(t, r, names[0], filepath.Join(filepath.Dir(base), ".wardyn-quarantine.b", "Wardyn", entriesName), "e-4.json")
+	if err := Setup(r.setupCfg()); err != nil {
+		t.Fatal(err)
+	}
+	if n := counted(t, r); n != 4 {
+		t.Fatalf("a helper counts %d of 4 distinct names", n)
+	}
+	wantEntries(t, r, append([]string{"e-3.json", "e-4.json"}, names...), "every distinct name")
+	wantLayout(t, r)
+}
+
+// Review R5 L1: a child a login makes in sock/ after the sweep is left for the
+// next sweep. It neither fails the install nor passes as sound.
+func TestSetupSockChildAfterSweep(t *testing.T) {
+	r := newRig(t, bigMac())
+	if err := Setup(r.setupCfg()); err != nil {
+		t.Fatal(err)
+	}
+	sock := filepath.Join(filepath.Dir(r.dir), sockName)
+	late := func(c *SetupConfig) {
+		c.afterSock = func() {
+			_ = os.Mkdir(filepath.Join(sock, "x"), 0o755)
+			_ = os.Mkdir(filepath.Join(sock, "u77"), 0o755)
+		}
+	}
+	if err := Setup(r.setupCfg(late)); err != nil {
+		t.Fatalf("a child made after the sweep failed the install: %v", err)
+	}
+	if err := Setup(r.setupCfg()); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := readNames(sock); len(got) != 0 {
+		t.Fatalf("the next sweep left %v in sock", got)
+	}
+}
+
+// Review R5 L2: an empty staging directory an earlier run left is removed.
+func TestSetupRemovesEmptyStaging(t *testing.T) {
+	r := newRig(t, bigMac())
+	if err := os.Mkdir(stageDir(r, 1), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := Setup(r.setupCfg()); err != nil {
+		t.Fatal(err)
+	}
+	if m, _ := filepath.Glob(filepath.Join(filepath.Dir(r.dir), "."+entriesName+".*")); len(m) != 0 {
+		t.Fatalf("staging directories left: %v", m)
+	}
 }
