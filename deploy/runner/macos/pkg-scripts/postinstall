@@ -33,8 +33,12 @@
 # The lock sits outside the world-writable entries directory so no login can unlink it; the helper walks to
 # it from / and refuses anything else (internal/macvm/admission).
 #
-# WARDYN_PKG_ROOT is a path prefix for the tests (scripts/test-pkg-postinstall.sh); the installer never sets it.
+# WARDYN_PKG_ROOT and WARDYN_PKG_PATH are for the tests (scripts/test-pkg-postinstall.sh); the installer never
+# sets them. The first prefixes every path, the second puts the test's stand-in tools ahead of the system ones.
 set -eu
+# The installer's own PATH, set here so a caller's PATH never picks the tools this root script runs.
+PATH="${WARDYN_PKG_PATH:+$WARDYN_PKG_PATH:}/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
 R="${WARDYN_PKG_ROOT:-}"
 
 # snap <path>: type, uid:gid and mode of the path itself (BSD stat never follows a link), in one lstat.
