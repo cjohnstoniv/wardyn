@@ -57,8 +57,8 @@ var (
 	assumedRunnerdStatus = []string{"macos-vm", "status", "--json"}
 	// assumedRunnerdLabel is the LaunchAgent label runnerd runs under: `wardyn-runnerd setup`, which
 	// registers the window's runner, installs it as serviceLabel (cmd/wardyn-runnerd/setup_host.go:33).
-	// The pkg's own agent, com.wardyn.runnerd.managed, sits idle beside it. WARDYN_MACVM_RUNNERD_LABEL
-	// overrides this for a runner started another way.
+	// setup boots out the pkg's own agent, com.wardyn.runnerd.managed. A runner registered and kicked by
+	// hand runs under that one instead: set WARDYN_MACVM_RUNNERD_LABEL for it.
 	assumedRunnerdLabel = env("WARDYN_MACVM_RUNNERD_LABEL", "com.wardyn.runnerd")
 	// assumedGuestAgent is the guest agent's process name in the guest (cmd/wardyn-guest-agent).
 	assumedGuestAgent = "wardyn-guest-agent"
