@@ -128,6 +128,46 @@ func TestCurrentActivityHoldsReplacementAndRevocationBarrier(t *testing.T) {
 	}
 }
 
+// A runner reads online while a current-activity check holds its session lock across the store
+// lookup, so placement does not refuse a run on a connected, ready runner.
+func TestHubOnlineStaysTrueWhileACurrentActivityCheckHoldsTheSession(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	h, s, row, peer := activityFixture(t)
+	if !h.Online(row.ID) {
+		t.Fatal("a ready runner on a live peer reads offline")
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	h.cfg.Lookup = func(context.Context, uuid.UUID) (types.Runner, error) {
+		close(entered)
+		select {
+		case <-release:
+			return row, nil
+		case <-ctx.Done():
+			return types.Runner{}, ctx.Err()
+		}
+	}
+	a := Admission{Activity: func(context.Context, uuid.UUID) error { return nil }}
+	done := make(chan error, 1)
+	go func() { done <- h.currentActivity(ctx, row, a, s, peer, uuid.New()) }()
+	awaitValue(t, ctx, entered)
+	if s.mu.TryLock() {
+		s.mu.Unlock()
+		t.Fatal("the activity lookup ran outside the session lock")
+	}
+	online := h.Online(row.ID)
+	close(release)
+	if err := awaitValue(t, ctx, done); err != nil {
+		t.Fatal(err)
+	}
+	if !online {
+		t.Error("a ready runner on a live peer reads offline during an activity lookup")
+	}
+	if s.activityPeer.Load() != nil {
+		t.Error("the activity check left its peer set after it returned")
+	}
+}
+
 func TestCurrentActivityControlCannotBeHistoricalEvent(t *testing.T) {
 	h, s, row, peer := activityFixture(t)
 	calls := 0

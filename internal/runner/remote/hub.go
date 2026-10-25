@@ -92,6 +92,10 @@ type hubSession struct {
 	// perRun is the per-run pair the session's AUTH_OK carried, which recheck compares with the stored
 	// row: a limits change committed through another replica ends the session. Nil before the first AUTH_OK.
 	perRun atomic.Pointer[perRunLimits]
+	// activityPeer is the peer a current-activity check has verified under mu, set while that check
+	// holds mu across its store lookups: Online reads it instead of reading the held mu as a session
+	// in transition. Nil whenever no check runs.
+	activityPeer atomic.Pointer[runnerwire.Peer]
 }
 
 // perRunLimits is the per-run CPU (milli-CPU) and memory (MiB) AUTH_OK names; zero when the runner

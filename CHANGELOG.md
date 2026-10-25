@@ -31,6 +31,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- A run on a runner could be refused with "no eligible runner" at the moment the runner was busy recording an idle
+  signal, though the runner was connected and ready. The runner now reads as connected throughout.
 - Stopping a run on a Docker runner no longer stops half-way when the organisation gives up on a slow stop and resets
   the call. The stop finishes on its own time budget, so the run's proxy and network are not left for the clean-up
   sweep.
