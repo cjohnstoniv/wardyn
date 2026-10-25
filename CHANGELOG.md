@@ -56,6 +56,13 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Over the SSH gateway, a command run in a bring-your-own image whose `HOME` is relative (resolved through `CDPATH`)
   or is `-` no longer starts its output with a stray directory line. The output is the command's alone, as under
   OpenSSH.
+- `wardyn-runnerd doctor` finds the organisation address the way the service does: `--org`, the managed `OrgURL`
+  setting, then `org_url` in `runnerd.json`. It no longer reads a `WARDYN_RUNNER_ORG_URL` exported in your shell, which
+  the service never reads, so a check that passed on that variable no longer hides an address the service would not
+  find. The variable is read only from an earlier install's service settings, where its unit passes it to `--org`. Its hints name the settings that work.
+- An admin's successful check of the audit chain over another person's desktop recording now leaves a `recording.read`
+  row in that run's audit, marked `chain_check`. The check reads only the recording's metadata, not its content. A check
+  of your own run still leaves nothing, and who may ask, and what a refused caller sees, are unchanged.
 
 ## [0.10.0-rc.2] — 2026-10-25
 

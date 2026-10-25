@@ -45,14 +45,14 @@ func TestStatusStageNamesTheSettingOfTheStageItStoppedAt(t *testing.T) {
 	for _, tc := range []struct {
 		stage, setting string
 	}{
-		{types.RunnerStageDNS, "WARDYN_RUNNER_ORG_URL"},
+		{types.RunnerStageDNS, orgSetting},
 		{types.RunnerStageProxy, "HTTPS_PROXY"},
 		{types.RunnerStageTLS, "WARDYN_TRUSTED_CA_FILE"},
-		{types.RunnerStageHealthz, "WARDYN_RUNNER_ORG_URL"},
+		{types.RunnerStageHealthz, orgSetting},
 		{types.RunnerStageEngine, "DOCKER_HOST"},
 		{types.RunnerStageProxyImage, "WARDYN_PROXY_IMAGE"},
 		{types.RunnerStageRelay, "WARDYN_RELAY_LISTEN"},
-		{"", "WARDYN_RUNNER_ORG_URL"},
+		{"", orgSetting},
 	} {
 		t.Run("stage "+tc.stage, func(t *testing.T) {
 			r := newRig(t)
