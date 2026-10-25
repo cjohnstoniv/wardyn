@@ -48,13 +48,18 @@ func (h *Hub) GoawayAll(ctx context.Context) error {
 
 // Online reports whether id's current session reached its own READY and its
 // peer is still up. A session in transition holds its slot and reads offline
-// rather than making the caller wait for it.
+// rather than making the caller wait for it. A current-activity callback holds
+// the slot over a ready session, so that session reads by what the callback checked.
 func (h *Hub) Online(id uuid.UUID) bool {
 	h.mu.Lock()
 	s := h.sessions[id]
 	h.mu.Unlock()
-	if s == nil || !s.mu.TryLock() {
+	if s == nil {
 		return false
+	}
+	if !s.mu.TryLock() {
+		a, ready := s.active.Load(), s.readyID.Load()
+		return a != nil && a.peer.Online() && ready != nil && *ready == a.id
 	}
 	defer s.mu.Unlock()
 	return s.peer != nil && s.peer.Online() && s.readyFor(s.id)

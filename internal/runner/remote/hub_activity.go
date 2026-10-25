@@ -43,6 +43,8 @@ func (h *Hub) currentActivity(ctx context.Context, row types.Runner, a Admission
 	if !currentSession || !session.readyFor(session.id) || session.peer != peer || peer == nil || !peer.Online() || a.Activity == nil {
 		return runnerwire.ErrNotReady
 	}
+	session.active.Store(&activeSession{id: session.id, peer: peer})
+	defer session.active.Store(nil)
 	current, err := h.cfg.Lookup(ctx, row.ID)
 	if err != nil || current.ID != row.ID || current.State != types.RunnerClaimed || current.RevokedAt != nil ||
 		!current.OwnerHeld() || current.OwnerKind != row.OwnerKind || current.Owner != row.Owner || string(current.PublicKey) != string(row.PublicKey) || current.OrgURLSHA256 != row.OrgURLSHA256 {

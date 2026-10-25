@@ -186,3 +186,53 @@ func TestHubCloseReportsDisconnectedForAConnectedSession(t *testing.T) {
 		t.Fatalf("connected %d, disconnected %d; want 1 and 1", connected.Load(), disconnected.Load())
 	}
 }
+
+// A current-activity callback holds the session lock across its lookup and
+// Activity; the ready session it checked still reads online meanwhile, and a
+// session held by anything else (an admission) still reads offline.
+func TestHubOnlineDuringCurrentActivity(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	h, s, row, peer := activityFixture(t)
+	lookup, activity := make(chan struct{}, 1), make(chan struct{}, 1)
+	release := make(chan struct{})
+	h.cfg.Lookup = func(context.Context, uuid.UUID) (types.Runner, error) {
+		lookup <- struct{}{}
+		select {
+		case <-release:
+			return row, nil
+		case <-ctx.Done():
+			return types.Runner{}, ctx.Err()
+		}
+	}
+	a := Admission{Activity: func(context.Context, uuid.UUID) error {
+		activity <- struct{}{}
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}}
+	done := make(chan error, 1)
+	go func() { done <- h.currentActivity(ctx, row, a, s, peer, uuid.New()) }()
+	awaitValue(t, ctx, lookup)
+	if !h.Online(row.ID) {
+		t.Fatal("a ready session reads offline while its activity lookup holds the lock")
+	}
+	release <- struct{}{}
+	awaitValue(t, ctx, activity)
+	if !h.Online(row.ID) {
+		t.Fatal("a ready session reads offline while its Activity holds the lock")
+	}
+	release <- struct{}{}
+	if err := awaitValue(t, ctx, done); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	transition := h.Online(row.ID)
+	s.mu.Unlock()
+	if transition || !h.Online(row.ID) {
+		t.Fatalf("after the callback: held=%v, want offline while held and online once released", transition)
+	}
+}

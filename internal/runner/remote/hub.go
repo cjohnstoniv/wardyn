@@ -89,6 +89,15 @@ type hubSession struct {
 	// abort cancels an admission in progress, which holds mu: a revocation or GOAWAY that finds mu taken
 	// ends the attach with it, instead of waiting out a stalled one.
 	abort atomic.Pointer[context.CancelFunc]
+	// active names the session id and peer a current-activity callback checked
+	// ready. The callback holds mu throughout, as the replacement barrier, so
+	// Online reads this instead of taking that session for one in transition.
+	active atomic.Pointer[activeSession]
+}
+
+type activeSession struct {
+	id   string
+	peer *runnerwire.Peer
 }
 
 // readyFor reports whether id is the current session and reached READY
