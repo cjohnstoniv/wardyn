@@ -38,6 +38,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Changed
 
+- A unit admin deciding a held membership change no longer sees, in its diff, the other units the person holds
+  memberships under (`belongs_by`). Super admins and security admins still see them; the decision's recheck is
+  unchanged.
+- Changing a runner's per-run limits now ends its session, so it reconnects with the new limits at once. Before, a
+  connected runner kept the old limits until it next reconnected.
 - On `agent-base`, an exec-mode run (`workload.kind: command`) that clones a repository or names a starting folder
   now gets the same workspace prep a harness run does: the repos are cloned into `/home/agent/work` and the git
   credential helper is ready, where the clone was skipped and the folder left empty unless the run also had a
@@ -58,10 +63,21 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `wardyn-runnerd setup --macos-vm on`. `wardyn-runnerd macos-vm prepare`, `status` (`--json` for one JSON object) and
   `remove` build, show and delete the Mac's macOS base; `prepare --new-image` builds a new one from Apple's newest
   restore image. The runner offers macOS VMs only when its helper's `wardyn-macvm probe` passes, offers as many as the
-  Mac's shared ledger and memory leave room for, and ends its newest one when the disk drops below 5 GiB free.
+  Mac's shared ledger and memory leave room for, and ends its newest one when the disk drops below 5 GiB free. Migration
+  `0234_macos_vm_kind` lets a run record the `macos_vm` kind. `wardyn-runnerd setup --keep-ipsw` keeps Apple's
+  restore image, as `prepare --keep-ipsw` does.
 
 ### Fixed
 
+- A headless run on a runner could be marked lost (reboot) when a check landed between its agent's exit and the
+  runner's exit receipt; the receipt was then refused and the run never recorded `run.complete`. The runner's exit
+  receipt now ends such a run (#3665).
+- An SSH key approval's title now says what happens: "Sign Git's SSH sign-in for <host>", where it said "Write an
+  SSH key for <host>". The proxy signs the sign-in and no key file enters the sandbox.
+- The desktop replay shows where a screen recording stopped, at its size cap or at a stream the recorder could not
+  follow. Before, it froze on the last frame with no notice.
+- A VM run lost to an outage keeps its desktop sign-in pause, since its agent may still be running. A run whose
+  lease ended or whose host rebooted ends the pause and its recording hold.
 - The image launcher split each `WARDYN_REPOS` clone record with a tab as whitespace, so an empty field moved the
   fields after it up a place. This control plane never sends such a record. A control plane that sends only the
   single-repository variables (`WARDYN_REPO_URL`, `WARDYN_REPO_SLUG`) got no git broker rewrite, and a record with
