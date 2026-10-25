@@ -26,6 +26,8 @@ import (
 	"io"
 	"net"
 	"os"
+	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -55,6 +57,9 @@ var (
 	// ErrUnsafePassword: a password or code holds a character that stdin's
 	// line-based readers could split on.
 	ErrUnsafePassword = errors.New("stage 1: a password holds a character other than letters, digits, '-' or '_'")
+	// ErrUnexpectedAccounts: the guest's local users of UniqueID 500 or more are not exactly the admin and the
+	// agent, or the list could not be read as dscl prints it.
+	ErrUnexpectedAccounts = errors.New("stage 1: the guest's local accounts are not exactly the admin and the agent")
 	// ErrAgentChecksum: the installed guest agent is not the file sent.
 	ErrAgentChecksum = errors.New("stage 1: the installed guest agent's SHA-256 does not match")
 )
@@ -375,6 +380,40 @@ func (s *session) run(ctx context.Context, c command) error {
 	}
 	if c.CheckAgentSHA && !strings.HasPrefix(out.String(), s.agentSHA) {
 		return ErrAgentChecksum
+	}
+	if c.CheckAccounts {
+		return s.checkAccounts(out.String())
+	}
+	return nil
+}
+
+// checkAccounts reads dscl's "name UniqueID" lines strictly: a line that is not exactly two fields with a
+// numeric ID, or an output with none, is refused. The users of UniqueID 500 or more must be the admin and
+// the agent and no one else.
+func (s *session) checkAccounts(listing string) error {
+	var found []string
+	for _, l := range strings.Split(strings.TrimSpace(listing), "\n") {
+		f := strings.Fields(l)
+		if len(f) != 2 {
+			return fmt.Errorf("%w: cannot read %q", ErrUnexpectedAccounts, l)
+		}
+		id, err := strconv.Atoi(f[1])
+		if err != nil {
+			return fmt.Errorf("%w: cannot read %q", ErrUnexpectedAccounts, l)
+		}
+		if id >= 500 {
+			found = append(found, f[0])
+		}
+	}
+	slices.Sort(found)
+	if want := []string{agentUser, s.username}; !slices.Equal(found, slices.Sorted(slices.Values(want))) {
+		var extra []string
+		for _, u := range found {
+			if !slices.Contains(want, u) {
+				extra = append(extra, u)
+			}
+		}
+		return fmt.Errorf("%w: found %q, extra %q", ErrUnexpectedAccounts, found, extra)
 	}
 	return nil
 }
