@@ -212,6 +212,8 @@ declare -A ALLOWLIST=(
   ["ui/src/app/lib/schedule.test.ts"]=32
   # 0.10 W4f: SESS-M12's signedInUntil tests pass a fixed instant in as the clock (now) and compare only to it.
   ["ui/src/app/lib/session-continuity-copy.test.ts"]=3 # injected clock only: signedInUntil(at, now), never compared to the wall clock
+  # 0.10 MAC26: a sample AppKit stderr line whose timestamp is log text the prepare.log readers skip, never a time.
+  ["cmd/wardyn-runnerd/macos_vm_status_test.go"]=1
   # 0.10 DESK-PLAYER: a recorded desktop's started_at and the chain check's from bound, fixed instants the replay and
   # the range read only echo or offset from; audit rows' time is passthrough (partitions key on recorded_at). None is
   # compared to the wall clock.
