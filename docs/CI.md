@@ -448,6 +448,7 @@ gh run list -R cjohnstoniv/wardyn --workflow ci.yml --status completed --limit 6
   - Dispatch it on the bundle branch `proofs/<lane>-<sha12>`, one commit on `origin/main` adding `.proofs/`; on `main` every job skips.
   - Lane code can save cache entries under its run's ref whatever the token allows, and `ci.yml` restores `main`'s. So it never runs there, and it uses no cache.
   - A run counts only once `git diff --quiet origin/main...<head sha> -- ':(exclude).proofs'` exits 0 locally, so the workflow and script were main's.
+  - The `prove` job has the same Postgres service and `WARDYN_TEST_PG` as `test-pg-shard`, so a proof of a PG-backed test in `./internal/store` or `./internal/api` runs there instead of skipping.
 - `release.yml` has one group per ref and cancels nothing, so a dispatch and the tag push cannot publish at once.
 - `release.yml`'s `runner-pkg` job (macOS) builds `wardyn-runnerd.pkg` with [`scripts/build-runner-pkg.sh`](../scripts/build-runner-pkg.sh). Each signing step runs only when its `APPLE_DEVELOPER_ID_*` or `APPLE_NOTARY_*` secrets are set, and logs a skip line otherwise; [`scripts/test-runner-pkg.sh`](../scripts/test-runner-pkg.sh) covers the script on Linux.
 - The same job builds the macOS VM helper with cgo and signs it ad hoc with its one virtualization entitlement even without secrets. It then checks that entitlement, and that the package holds no macOS image.
