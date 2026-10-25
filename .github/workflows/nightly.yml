@@ -20,6 +20,10 @@ on:
         description: "Stage the multi-arch images and attest them. Leave on for a release candidate; a hand run that must not touch the registry turns it off."
         type: boolean
         default: true
+      compat_refusal:
+        description: "runner-compat-walk also runs step 3b (DR-0436): the released runner's exit refused for good by this tree's organisation is acknowledged once. Off in the nightly."
+        type: boolean
+        default: false
   # Kept, but nothing calls it today: ci.yml's train-suites dispatches this workflow with
   # scope=candidate and publish=false. The input is a string here (workflow_call has no choice
   # type); a value other than candidate runs every lane.
@@ -1944,6 +1948,7 @@ jobs:
         env:
           WARDYN_TEST_DOCKER: "1"
           GH_TOKEN: ${{ github.token }} # the releases API read that resolves the released tag
+          WARDYN_COMPAT_REFUSAL: ${{ inputs.compat_refusal && '1' || '' }}
         shell: bash
         run: |
           set +e
@@ -1951,6 +1956,8 @@ jobs:
           ./scripts/runner-compat-walk.sh 2>&1 | tee test/reports/e2e/runner-compat-walk.log
           echo "WALK_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
       - name: Assert the walk actually ran (not a self-skip) and passed
+        env:
+          WARDYN_COMPAT_REFUSAL: ${{ inputs.compat_refusal && '1' || '' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1964,6 +1971,9 @@ jobs:
             exit 1
           fi
           grep -q '^runner-compat-walk: PASS' "$log" || { echo "::error::the walk never reached its own closing PASS line"; exit 1; }
+          if [ "${WARDYN_COMPAT_REFUSAL}" = "1" ]; then
+            grep -q '^refusal-acked-once: PASS' "$log" || { echo "::error::step 3b (compat_refusal) never passed"; exit 1; }
+          fi
       - name: Upload walk evidence (log, wardynd and serve logs, run reads)
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7

@@ -328,7 +328,7 @@
 # docs/AUDIT-ACTIONS.md 53796 adds 31 over 53765, measured (0.10 rc2): desktop.sign_in.pause also written for a run that ended paused.
 # docs/AUDIT-ACTIONS.md 53884 = ours 53796 + theirs 53853 - base 53765 at the 0.10 rc2 merge of main (W1) into lane B1.
 # docs/AUDIT-ACTIONS.md 53885 adds 1 over 53884, measured: the merged desktop.sign_in.pause row joins `fenced` and `ended_paused` with one "and".
-docs/AUDIT-ACTIONS.md=53885 share=8
+docs/AUDIT-ACTIONS.md=54025 share=8
 # docs/AUDIT-ACTIONS.md 50827 = ours 50175 + theirs 50556 - base 49904 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
@@ -362,3 +362,4 @@ docs/AUDIT-ACTIONS.md=53885 share=8
 # docs/AUDIT-ACTIONS.md 46394 adds 5 over 46389, measured (0.9.3 UIa, DR-0263): run.create resources_applied also carries pids_limit.
 # docs/AUDIT-ACTIONS.md 48975 adds 124 over 48851, measured (0.10 AWS re-signing): the brokered:aws-sigv4 and brokered:aws-sigv4:refused decision-log rows.
 # docs/AUDIT-ACTIONS.md 50615 adds 59 over 50556, measured (0.10 HYB-F): run.folder.finalize and the bring_back direction.
+# docs/AUDIT-ACTIONS.md 54025 adds 140 over 53885 (DR-0436): the runner.event.refuse row and the refuse row's org clause.

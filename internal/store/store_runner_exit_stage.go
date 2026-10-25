@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -28,6 +29,11 @@ func (s PG) StageRunnerExit(ctx context.Context, runnerID, runID uuid.UUID, exit
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // committed tx is already closed
 	run, err := runnerExecutionRun(ctx, tx, runnerID, runID)
+	// Permanent, so refused (DR-0436): no production path deletes an agent_runs row, and the runner learns a
+	// run's id only after the run commits, so the same exit always meets the same missing run.
+	if errors.Is(err, ErrNotFound) {
+		return fmt.Errorf("%w: %w", ErrRunnerExecutionRefused, err)
+	}
 	if err != nil {
 		return err
 	}
@@ -43,6 +49,12 @@ func (s PG) StageRunnerExit(ctx context.Context, runnerID, runID uuid.UUID, exit
 		return err
 	}
 	current, err := readRunnerExecution(ctx, tx, runID)
+	// Permanent, so refused: the run is locked and present, its execution row is only ever upserted, never
+	// deleted (store_runner_execution.go BeginRunnerExecution), and it commits before the LEASE that carries its
+	// generation; no row means no generation was ever issued for this run, and a later one is a fresh uuid.New().
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("%w: %w", ErrRunnerExecutionRefused, err)
+	}
 	if err != nil {
 		return err
 	}
