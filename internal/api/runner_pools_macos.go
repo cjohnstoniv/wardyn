@@ -25,16 +25,20 @@ type macOSCandidate struct {
 // poolMacOSVMOf is the pool list's macOS VM offer for a pool whose eligible targets are eligible: each
 // self-hosted one's row and macos_vm runs from fits (runnerFits, read once per list) and its last caps
 // from this replica's endpoint, so it costs no query of its own. A remote-hosted target is no
-// candidate: placement never starts a macOS VM on one (macOSVMOnRemote).
-func (s *Server) poolMacOSVMOf(ctx context.Context, eligible []poolTarget, fits map[string]runnerFit) *client.PoolMacOSVM {
+// candidate: placement never starts a macOS VM on one (macOSVMOnRemote, kindTargets). Nor is any of the
+// person's own when their profile denies them (denied, deny_placements), so such a pool offers none.
+func (s *Server) poolMacOSVMOf(ctx context.Context, eligible []poolTarget, fits map[string]runnerFit, denied []types.Placement) *client.PoolMacOSVM {
 	var cands []macOSCandidate
 	for _, t := range eligible {
-		if t.runnerID == nil {
+		if t.runnerID == nil || slices.Contains(denied, types.PlacementLocal) {
 			continue
 		}
 		f := fits[t.id]
 		c := macOSCandidate{rn: f.runner, live: f.used.MacOSVMRuns}
 		c.rn.ID = *t.runnerID
+		if c.rn.Limits == nil {
+			c.rn.Limits = f.limits
+		}
 		c.caps, c.haveCaps = s.runnerLastCaps(*t.runnerID)
 		cands = append(cands, c)
 	}
@@ -50,9 +54,9 @@ func poolMacOSVM(cands []macOSCandidate, operator bool) *client.PoolMacOSVM {
 	if len(cands) == 0 {
 		return out
 	}
-	slices.SortFunc(cands, func(a, b macOSCandidate) int { return cmp.Compare(a.rn.Name, b.rn.Name) })
+	slices.SortFunc(cands, func(a, b macOSCandidate) int { return cmp.Compare(macRunnerName(a.rn), macRunnerName(b.rn)) })
 	if len(cands) == 1 {
-		out.Runner = cands[0].rn.Name
+		out.Runner = macRunnerName(cands[0].rn)
 	}
 	var offered []*runnerwire.MacVMCaps
 	for _, c := range cands {
@@ -61,7 +65,8 @@ func poolMacOSVM(cands []macOSCandidate, operator bool) *client.PoolMacOSVM {
 			offered = append(offered, c.caps.MacOSVM)
 			continue
 		}
-		ref := client.PoolMacOSVMRefusal{Runner: c.rn.Name, Why: offer.Why, Detail: offer.Refusal.Detail}
+		ref := client.PoolMacOSVMRefusal{Runner: macRunnerName(c.rn), Why: offer.Why, Detail: offer.Refusal.Detail,
+			Reason: offer.Refused, Have: offer.Have, Need: offer.Need}
 		if mc := c.caps.MacOSVM; mc != nil && offer.Why == client.MacOSVMWhyPreparing {
 			ref.Progress = mc.Base.Progress
 		} else if mc != nil && offer.Why == client.MacOSVMWhyNoBase {

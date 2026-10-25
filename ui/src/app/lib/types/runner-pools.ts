@@ -318,11 +318,15 @@ export interface PoolMacOSVM {
 }
 
 /** Go: client.MacOSVMWhy*. */
-export type PoolMacOSVMWhy = "not_offered" | "preparing" | "at_limit" | "no_room" | "not_managed" | "no_posture" | "no_base";
+export type PoolMacOSVMWhy = "not_offered" | "preparing" | "at_limit" | "no_room" | "not_managed" | "no_posture" | "no_base" | "runner_refused";
+
+/** Go: client.MacOSVMRefused*, the reason of a runner_refused refusal. */
+export type PoolMacOSVMRefusedReason = "below_min_memory" | "below_min_cpu" | "other";
 
 /**
  * Go: client.PoolMacOSVMRefusal. `progress` is set for preparing, `error` for no_base when the runner said one,
- * `runner_id` on not_managed for a security operator only; `detail` is the org's sentence.
+ * `runner_id` on not_managed for a security operator only; `detail` is the org's sentence. `reason` is set on
+ * runner_refused, with `have` and `need` for a size below the base's minimum (GB of memory, or CPUs).
  */
 export interface PoolMacOSVMRefusal {
   runner: string;
@@ -331,6 +335,9 @@ export interface PoolMacOSVMRefusal {
   progress?: number;
   error?: string;
   detail: string;
+  reason?: PoolMacOSVMRefusedReason;
+  have?: number;
+  need?: number;
 }
 
 /**

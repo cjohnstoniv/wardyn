@@ -275,4 +275,13 @@ func TestMacVMStartReportsItsPhases(t *testing.T) {
 	if want := []string{detail(runner.MacOSCloning), runner.MacOSDiskShortMessage(need, 30<<30)}; err == nil || !slices.Equal(said, want) {
 		t.Fatalf("a Mac short of disk said %q (%v), want %q", said, err, want)
 	}
+
+	// The run's network and proxy are the start's, not the clone's: their failure is said as the start's,
+	// before any clone began.
+	r = newMacRig(t)
+	r.f.networkCreateErr = errors.New("no network")
+	said, err = run(t, r)
+	if want := []string{detail(runner.MacOSStartFailed)}; err == nil || !slices.Equal(said, want) {
+		t.Fatalf("a run whose network failed said %q (%v), want %q", said, err, want)
+	}
 }

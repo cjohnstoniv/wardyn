@@ -364,7 +364,12 @@ func (s *Server) placementCapabilityRefusalFor(ctx context.Context, req createRu
 			}
 		}
 		if ref != nil {
-			return placementRunRefusal(ref, ref.Error())
+			// The field travels in errorBody.Field, so the sentence is the detail alone.
+			msg := ref.Error()
+			if ref.Field != "" {
+				msg = ref.Detail
+			}
+			return placementRunRefusal(ref, msg)
 		}
 	}
 	return nil
@@ -396,8 +401,11 @@ type macOSOffer struct {
 	Max       int
 	Harnesses []string
 	Desktop   string
-	// Why is the refusal's client.MacOSVMWhy* code, for the pool list; "" when Offered.
-	Why string
+	// Why is the refusal's client.MacOSVMWhy* code, for the pool list; "" when Offered. On runner_refused,
+	// Refused is its client.MacOSVMRefused* reason, with Have and Need for a size below the minimum.
+	Why        string
+	Refused    string
+	Have, Need int
 	// Evidence is what the managed-Mac gate rested on, for the run page's "Where it ran".
 	Evidence []string
 	// Pool is what a pool of several Macs is told instead of Refusal when this runner is why it cannot
@@ -439,7 +447,8 @@ func macOSVMOffer(rn types.Runner, caps runnerwire.Caps, haveCaps bool, live int
 	}
 	out := macOSOffer{Max: mc.Max, Harnesses: mc.Harnesses, Desktop: mc.Desktop}
 	if mc.Refusal != "" {
-		out.Refusal, out.Why = macOSRefusal("machine_kind", mc.Refusal), client.MacOSVMWhyNotOffered
+		out.Why = client.MacOSVMWhyRunnerRefused
+		out.Refused, out.Have, out.Need, out.Refusal = macOSRunnerRefused(rn, mc)
 		return out
 	}
 	evidence, refusal := macOSHostGate(rn, operator)
@@ -471,6 +480,35 @@ func macOSVMOffer(rn types.Runner, caps runnerwire.Caps, haveCaps bool, live int
 	}
 	out.Offered = out.Refusal == nil
 	return out
+}
+
+// macOSRunnerRefused is why a runner refuses macOS VMs itself, as the organisation reads it from the
+// runner's per-run limits and the base's minimums its caps carry, never from the runner's own text:
+// memory below the minimum (MV-R47), CPU below it (MV-R48), else MV-N14's "can't right now".
+func macOSRunnerRefused(rn types.Runner, mc *runnerwire.MacVMCaps) (reason string, have, need int, ref *placement.Refusal) {
+	if rn.Limits != nil {
+		perRun := rn.Limits.PerRun
+		if mc.MinMemoryMiB > 0 && int(perRun.MemoryMiB) < mc.MinMemoryMiB {
+			have, need = int(perRun.MemoryMiB/1024), (mc.MinMemoryMiB+1023)/1024
+			return client.MacOSVMRefusedBelowMinMemory, have, need, macOSRefusal("machine_kind", macOSMemoryBelowMinimum(rn, have, need))
+		}
+		if mc.MinCPUs > 0 && int(perRun.CPUMillis/1000) < mc.MinCPUs {
+			have, need = int(perRun.CPUMillis/1000), mc.MinCPUs
+			return client.MacOSVMRefusedBelowMinCPU, have, need, macOSRefusal("machine_kind", macOSCPUBelowMinimum(rn, have, need))
+		}
+	}
+	return client.MacOSVMRefusedOther, 0, 0, macOSRefusal("machine_kind", macOSPoolCannotTake)
+}
+
+// macOSCPUBelowMinimum is MV-R48: the runner's per-run CPU is under the base's minimum, which only its
+// owner raises.
+func macOSCPUBelowMinimum(rn types.Runner, have, need int) string {
+	return fmt.Sprintf("Per-run CPU on this runner is %d CPUs; a macOS VM needs at least %d. Its owner raises it to %d or more in Your account → My runner, or with `wardyn runner set %s --per-run-cpu %d`.", have, need, need, macRunnerName(rn), need)
+}
+
+// macOSMemoryBelowMinimum is MV-R47, in whole GB.
+func macOSMemoryBelowMinimum(rn types.Runner, haveGB, needGB int) string {
+	return fmt.Sprintf("Per-run memory on this runner is %d GB; a macOS VM needs at least %d GB. Its owner raises it to %d GB or more in Your account → My runner, or with `wardyn runner set %s --per-run-memory %d`.", haveGB, needGB, needGB, macRunnerName(rn), needGB)
 }
 
 // macOSHostGate is the managed-Mac gate (design 3.9): the runner's trust class is managed_device, which
@@ -537,24 +575,34 @@ func macOSVMFit(mc *runnerwire.MacVMCaps, rn types.Runner, ask macOSVMAsk, pool 
 		if h == macOSVMHarnessNone || slices.Contains(mc.Harnesses, h) {
 			continue
 		}
+		display := h
+		if def, ok := harnessByID(h); ok {
+			display = def.Display
+		}
 		if !slices.ContainsFunc(mc.Harnesses, func(o string) bool { return o != macOSVMHarnessNone }) {
 			if pool {
-				display := h
-				if def, ok := harnessByID(h); ok {
-					display = def.Display
-				}
 				return macOSRefusal("harness", fmt.Sprintf("Every runner in this pool must offer %s in a macOS VM. Until Apple's Command Line Tools finish installing on each Mac, choose Your own tools.", display))
 			}
 			return macOSRefusal("harness", fmt.Sprintf("macOS VMs on %s offer only Your own tools until Apple's Command Line Tools finish installing.", macRunnerName(rn)))
 		}
-		return macOSRefusal("harness", fmt.Sprintf("This Mac's macOS base can't run %s right now.", h))
+		return macOSRefusal("harness", fmt.Sprintf("This Mac's macOS base can't run %s right now.", display))
 	}
-	if cpus := ask.CPUMillis / 1000; ask.CPUMillis > 0 && cpus < mc.MinCPUs {
-		return macOSRefusal("resources", fmt.Sprintf("Per-run CPU on this runner is %d CPUs; a macOS VM needs at least %d. Its owner raises it to %d or more in Your account → My runner, or with `wardyn runner set %s --per-run-cpu %d`.", cpus, mc.MinCPUs, mc.MinCPUs, macRunnerName(rn), mc.MinCPUs))
+	cpuLow := ask.CPUMillis > 0 && ask.CPUMillis/1000 < mc.MinCPUs
+	memLow := ask.MemoryMiB > 0 && ask.MemoryMiB < mc.MinMemoryMiB
+	// The runner's per-run limit is the cause when it too is under the minimum, or unknown: only its owner
+	// raises it. Otherwise the run's own ask was lowered under the minimum, and the run raises it.
+	cpus, mem := ask.CPUMillis/1000, ask.MemoryMiB
+	if rn.Limits != nil {
+		cpus, mem = int(rn.Limits.PerRun.CPUMillis/1000), int(rn.Limits.PerRun.MemoryMiB)
 	}
-	if ask.MemoryMiB > 0 && ask.MemoryMiB < mc.MinMemoryMiB {
-		need := (mc.MinMemoryMiB + 1023) / 1024
-		return macOSRefusal("resources", fmt.Sprintf("Per-run memory on this runner is %d GB; a macOS VM needs at least %d GB. Its owner raises it to %d GB or more in Your account → My runner, or with `wardyn runner set %s --per-run-memory %d`.", ask.MemoryMiB/1024, need, need, macRunnerName(rn), need))
+	if cpuLow && (rn.Limits == nil || cpus < mc.MinCPUs) {
+		return macOSRefusal("resources", macOSCPUBelowMinimum(rn, cpus, mc.MinCPUs))
+	}
+	if memLow && (rn.Limits == nil || mem < mc.MinMemoryMiB) {
+		return macOSRefusal("resources", macOSMemoryBelowMinimum(rn, mem/1024, (mc.MinMemoryMiB+1023)/1024))
+	}
+	if cpuLow || memLow {
+		return macOSRefusal("resources", fmt.Sprintf("A macOS VM needs at least %d CPU and %d MiB.", mc.MinCPUs, mc.MinMemoryMiB))
 	}
 	return nil
 }
