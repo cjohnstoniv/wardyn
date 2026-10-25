@@ -25,18 +25,21 @@ import (
 // ExitFromRunner stages a durable candidate on the checked peer read loop.
 // It never binds an execution handle or waits for a same-peer teardown RPC.
 func (s *Server) ExitFromRunner(ctx context.Context, runnerID uuid.UUID, event runnerwire.Event) error {
-	st, ok := s.cfg.Store.(store.PG)
-	if !ok || event.Kind != runnerwire.EventAgentExit || event.RunID == nil || len(event.Data) > 4096 {
-		return store.ErrRunnerExecutionRefused
+	if event.Kind != runnerwire.EventAgentExit || event.RunID == nil || len(event.Data) > 4096 {
+		return errAgentExitShape
 	}
 	var exit runnerwire.AgentExit
 	dec := json.NewDecoder(bytes.NewReader(event.Data))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&exit); err != nil {
-		return store.ErrRunnerExecutionRefused
+		return errAgentExitShape
 	}
 	if err := dec.Decode(new(any)); !errors.Is(err, io.EOF) {
-		return store.ErrRunnerExecutionRefused
+		return errAgentExitShape
+	}
+	st, ok := s.cfg.Store.(store.PG)
+	if !ok {
+		return errRunnerIngestUnavailable
 	}
 	return st.StageRunnerExit(ctx, runnerID, *event.RunID, exit)
 }

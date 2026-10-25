@@ -2932,6 +2932,11 @@ hiding them would repeat the failure mode we are designed to avoid.
     - A Mac runner reports its macOS VM status to its own organisation as fixed codes and numbers: the preparing step, percent and download rate; a wait, failure or host-check code with free GB; and whether it runs in a GUI login session, as yes or no. No user or account name is sent. The base's error is the one free text: the runner replaces its login's home folder with `~`, but an error from Apple's framework, `softwareupdate` or the guest may still name another path.
     - The macOS VM base's pinned guest tools are checked against SHA-256 values compiled into the runner, so the remaining trust is the supply chain at the time each pin was chosen.
 
+97. **A runner can make its organisation write audit rows by sending events it will refuse; the rows are capped, and a refused event is acknowledged and not kept [0.10].** ([`internal/api/runner_event_refuse.go#Server.classifyRunnerEvent`](../internal/api/runner_event_refuse.go), [`internal/store/store_runner_event_refuse.go#PG.RefuseRunnerEvent`](../internal/store/store_runner_event_refuse.go).)
+    - The cap is 32 `runner.event.refuse` rows per runner per hour on each replica, then one `suppressed` row; it is held in memory, so a restart re-arms it.
+    - A refused event is acknowledged so the runner stops resending it, and only its SHA-256 and size are kept.
+    - A runner can close its own open actions as `refused` this way, which it could already do by answering `refused`.
+
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 
 - Residual #46 above named what the proxy injects; this narrows WHICH requests it injects onto.

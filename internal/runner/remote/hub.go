@@ -505,6 +505,10 @@ func configureAdmission(ctx context.Context, cfg *runnerwire.PeerConfig, resumed
 				return fmt.Errorf("%w: expected pending action result before STATE", runnerwire.ErrBadFrame)
 			}
 			if err := a.Event(ctx, ev); err != nil {
+				var refusal *runnerwire.EventRefusal
+				if errors.As(err, &refusal) {
+					delete(pending, result.ID) // answered: the org refused it for good and recorded that; the peer acknowledges
+				}
 				return err
 			}
 			delete(pending, result.ID)

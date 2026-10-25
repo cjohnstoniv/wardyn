@@ -64,12 +64,15 @@ func TestRunnerActionsPG_StatePageQueuesContainmentAndOnlyItsExactResultSettlesI
 	if _, err := st.ClaimRunner(ctx, sibling.ID, sibling.Owner, sibling.KeyFingerprint, time.Now()); err != nil {
 		t.Fatal(err)
 	}
+	// A malformed result of this runner that names its open action closes it as refused (DR-0436), so these name
+	// another action and leave this one for its exact result.
+	stranger := runnerwire.ActionResult{ID: uuid.New(), Outcome: types.RunnerActionSuccess, ObservedAt: result.ObservedAt}
 	for name, c := range map[string]struct {
 		runner uuid.UUID
 		event  runnerwire.Event
 	}{
-		"unknown field":        {rn.ID, runnerwire.Event{Kind: runnerwire.EventActionResult, RunID: &run.ID, Data: mustJSON(map[string]any{"id": result.ID, "outcome": "success", "observed_at": result.ObservedAt, "extra": 1})}},
-		"no run":               {rn.ID, runnerwire.Event{Kind: runnerwire.EventActionResult, Data: event.Data}},
+		"unknown field":        {rn.ID, runnerwire.Event{Kind: runnerwire.EventActionResult, RunID: &run.ID, Data: mustJSON(map[string]any{"id": stranger.ID, "outcome": "success", "observed_at": result.ObservedAt, "extra": 1})}},
+		"no run":               {rn.ID, runnerwire.Event{Kind: runnerwire.EventActionResult, Data: mustJSON(stranger)}},
 		"posture has no store": {rn.ID, runnerwire.Event{Kind: runnerwire.EventPosture, RunID: &run.ID, Data: event.Data}},
 		"another owned runner": {sibling.ID, event},
 	} {

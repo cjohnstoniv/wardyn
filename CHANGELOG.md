@@ -100,6 +100,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The setup checklist's model-access row now reports `resident_file` for a run served by an AWS sign-in, whose session
   file is held in the sandbox, instead of `proxy_injected`, so it agrees with the `model_credential` the same
   response carries.
+- A runner whose event the organisation refused for good no longer reconnects and drops every second: the refusal is
+  acknowledged and audited (`runner.event.refuse`), and a refused action result closes its action (#3648).
 
 ## [0.10.0-rc.1] — 2026-10-24
 
