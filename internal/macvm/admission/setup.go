@@ -431,14 +431,15 @@ func (s *setup) move(src *source, n string, to *os.File) error {
 	return renameNoReplace(int(src.f.Fd()), n, int(to.Fd()), n)
 }
 
-// entrySources opens Base's entries directory (nil if it does not open as a
-// directory) and every other directory that may hold entries: staging
+// entrySources opens Base's entries directory (nil if what is there is not a
+// directory, a link, or nothing; any other failure to open or fstat it is an
+// error) and every other directory that may hold entries: staging
 // directories a failed run left, and the entries directories in earlier
 // quarantines, in Base and beside it (a rebuilt base's). A linkPrefix
-// directory holds none, and is discarded. Each is opened from its parent's descriptor one component at a
-// time, never through a link, and every component must be a root-owned
-// directory by its fstat; one whose device and inode were seen already
-// (Base's entries directory first) is skipped.
+// directory holds none, and is discarded. Each is opened from its parent's
+// descriptor one component at a time, never through a link, and every
+// component must be a root-owned directory by its fstat; one whose device
+// and inode were seen already (Base's entries directory first) is skipped.
 func (s *setup) entrySources() (*source, []*source, error) {
 	bfd, err := s.l.walkDir(s.c.Base)
 	if err != nil {
@@ -458,13 +459,19 @@ func (s *setup) entrySources() (*source, []*source, error) {
 
 	seen := map[[2]uint64]bool{}
 	var dst *source
-	if f, st, err := s.openDir(bfd, entriesName, filepath.Join(s.c.Base, entriesName)); err == nil {
+	path := filepath.Join(s.c.Base, entriesName)
+	switch f, st, err := s.openDir(bfd, entriesName, path); {
+	case err == nil:
 		s.files = append(s.files, f)
 		dst = &source{f: f, st: st}
 		seen[[2]uint64{uint64(st.Dev), st.Ino}] = true
 		if dst.names, err = f.Readdirnames(-1); err != nil {
 			return nil, nil, err
 		}
+	case errors.Is(err, unix.ENOENT), errors.Is(err, unix.ENOTDIR), errors.Is(err, unix.ELOOP):
+		// none, or not a directory (a file, a link): stage replaces it
+	default: // one that cannot be read may hold entries: never replaced
+		return nil, nil, notInstalled("%s cannot be inspected (%v)", path, err)
 	}
 	var srcs []*source
 	var readErr error

@@ -1081,3 +1081,76 @@ func TestSetupLockFstatErrorFailsClosed(t *testing.T) {
 		t.Fatal("Setup replaced the lock it could not fstat")
 	}
 }
+
+// DR-0440: an entries directory whose fstat fails once (EIO) may hold
+// entries, so Setup refuses before it changes anything; a fresh helper still
+// counts both entries, and the retry keeps them.
+func TestSetupEntriesInspectErrorFailsClosed(t *testing.T) {
+	r := newRig(t, bigMac())
+	names := admitN(t, r, 2)
+	dirIno, lockIno := ino(t, r.dir), ino(t, r.lock())
+	failed := false
+	once := func(c *SetupConfig) {
+		c.Fstat = func(fd int, name string) (unix.Stat_t, error) {
+			if name == r.dir && !failed {
+				failed = true
+				return unix.Stat_t{}, unix.EIO
+			}
+			return r.fs.fstat(fd, name)
+		}
+	}
+	if err := Setup(r.setupCfg(once)); err == nil || !failed {
+		t.Fatalf("Setup with the entries directory's fstat failing: %v (failed %v)", err, failed)
+	}
+	if ino(t, r.dir) != dirIno || ino(t, r.lock()) != lockIno {
+		t.Fatal("a refused Setup replaced the entries directory or the lock")
+	}
+	if got := entryFiles(t, r.dir); len(got) != len(names) {
+		t.Fatalf("the entries directory holds %v, not %v", got, names)
+	}
+	if n := counted(t, r); n != 2 {
+		t.Fatalf("before the retry a fresh helper counts %d of 2 entries", n)
+	}
+	if _, err := r.open(t, 503, "fresh").Admit(runReq(8 * gib)); !IsRefusal(err) {
+		t.Fatalf("before the retry a fresh helper admitted a third VM (%v)", err)
+	}
+	if err := Setup(r.setupCfg()); err != nil {
+		t.Fatal(err)
+	}
+	if n := counted(t, r); n != 2 {
+		t.Fatalf("after the retry a helper counts %d of 2 entries", n)
+	}
+	wantEntries(t, r, names, "the retry after a failed inspection")
+	wantLayout(t, r)
+}
+
+// DR-0440: what is at the entries name and is not a directory (a file, a
+// link) is still replaced: it moves to a quarantine, nothing it names is
+// touched, and the layout is made.
+func TestSetupReplacesEntriesThatAreNotADirectory(t *testing.T) {
+	for _, kind := range []string{"file", "link"} {
+		r := newRig(t, bigMac())
+		target := filepath.Join(t.TempDir(), "target")
+		if err := os.WriteFile(target, []byte("keep"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_ = os.RemoveAll(r.dir)
+		var err error
+		if kind == "file" {
+			err = os.WriteFile(r.dir, []byte("planted"), 0o644)
+		} else {
+			err = os.Symlink(target, r.dir)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := Setup(r.setupCfg()); err != nil {
+			t.Fatalf("%s at the entries name: %v", kind, err)
+		}
+		q, _ := filepath.Glob(filepath.Join(filepath.Dir(r.dir), ".wardyn-quarantine.*", entriesName))
+		if len(q) != 1 || readFile(t, target) != "keep" {
+			t.Fatalf("%s at the entries name: quarantined %v, target %q", kind, q, readFile(t, target))
+		}
+		wantLayout(t, r)
+	}
+}
