@@ -25,6 +25,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/macvm/admission"
 	"github.com/cjohnstoniv/wardyn/internal/macvm/macvmtest"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // makeSockResidue makes runID's socket directory as its helper would, as a crash leaves it.
@@ -113,12 +114,39 @@ func TestMacVMTeardownSweepsSocketResidue(t *testing.T) {
 	}
 }
 
-// The run's end texts are the canon's, verbatim (MV-D13, MV-D14; base 3c6ea5e08:176-177).
+// The run's end texts are the canon's, verbatim (MV-D13, MV-D14; base 3c6ea5e08:176-177; the runner
+// lane's R1-R4).
 func TestMacVMEndTextsAreCanon(t *testing.T) {
+	if macVMLostNetwork != "The macOS VM lost its network." || macVMRestarted != "The Mac restarted, so the macOS VM was lost." ||
+		macVMHelperStopped != "The macOS VM's helper stopped." || macVMStopped != "The macOS VM stopped." {
+		t.Fatalf("end texts %q, %q, %q, %q", macVMLostNetwork, macVMRestarted, macVMHelperStopped, macVMStopped)
+	}
 	if macVMUpgraded != "This Mac's runner was upgraded while the macOS VM ran, so the run was ended." ||
 		macVMLowDisk("12\n") != "This Mac ran low on disk (12 GB free), so the macOS VM was stopped." ||
 		macVMLowDisk("") != "This Mac ran low on disk, so the macOS VM was stopped." {
 		t.Fatalf("end texts %q, %q", macVMUpgraded, macVMLowDisk("12"))
+	}
+}
+
+// A macOS VM's start refusals are the canon's, verbatim (the runner lane's R5-R8).
+func TestMacVMStartRefusalsAreCanon(t *testing.T) {
+	r := newMacRig(t)
+	for name, tc := range map[string]struct {
+		mut  func(*runner.SandboxSpec)
+		want string
+	}{
+		"drives": {func(s *runner.SandboxSpec) { s.Drives = []types.DriveMount{{ObjectName: "d"}} }, "A macOS VM sandbox has no drives in this release."},
+		"folder": {func(s *runner.SandboxSpec) { s.Mounts = []runner.Mount{{Source: "/tmp", Target: "/w"}} }, "A macOS VM sandbox shares no folder in this release."},
+		"agent start": {func(s *runner.SandboxSpec) {
+			s.Interactive, s.Env = true, map[string]string{envInteractiveStart: "agent"}
+		},
+			"A macOS VM sandbox's terminal opens a shell, not the agent CLI, in this release. Set the interactive start to shell."},
+	} {
+		spec := macSpec()
+		tc.mut(&spec)
+		if _, err := r.d.refuseMacVMSpec(spec); err == nil || err.Error() != tc.want {
+			t.Errorf("%s: refusal %v, want %q", name, err, tc.want)
+		}
 	}
 }
 

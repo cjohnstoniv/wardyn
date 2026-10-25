@@ -285,7 +285,8 @@ func (s *Server) offerKinds(ctx context.Context, f placementInput, pool types.Ru
 // the pool keeps that runner alone of their own. Any other run with drives keeps only the remote-hosted
 // kind when the pool has it, as no other drive mounts on a person's own runner (a pin naming that runner is refused, not dropped); with none it stays on the person's own runners for
 // the drive step to refuse. A waiting run the local-eligibility step refused on the person's own runners
-// (noLocal) keeps only the remote-hosted kind the same way. A kind the pool has no runner of is the kind
+// (noLocal) keeps only the remote-hosted kind the same way. A macOS VM run never keeps the remote-hosted
+// kind, so neither rule moves it off the person's own Macs. A kind the pool has no runner of is the kind
 // mismatch, and a pool whose every kind is denied is the deny sentence for the first of them.
 func (s *Server) kindTargets(ctx context.Context, f placementInput, pool types.RunnerPool, targets []poolTarget) (map[types.Placement][]poolTarget, *runRefusal) {
 	kinds := map[types.Placement][]poolTarget{}
@@ -297,6 +298,15 @@ func (s *Server) kindTargets(ctx context.Context, f placementInput, pool types.R
 			return nil, poolRefusal(&runnerpool.Refusal{Reason: runnerpool.ReasonMemberMismatch, Name: pool.Name, Scope: pool.Scope})
 		}
 		kinds = map[types.Placement][]poolTarget{asked: kinds[asked]}
+	}
+	// A macOS VM runs only on a person's own Mac, so the remote-hosted kind is never a candidate: the run
+	// waits for its Mac or is refused for why it cannot have one, never sent where it cannot start. Left
+	// with no other kind, it is refused for that.
+	if _, remote := kinds[types.PlacementRemote]; remote && types.MachineKind(f.req.MachineKind).IsMacOSVM() {
+		delete(kinds, types.PlacementRemote)
+		if len(kinds) == 0 {
+			return nil, placementRunRefusal(&placement.Refusal{Reason: placement.ReasonPlacementCapability, Field: "machine_kind"}, macOSVMOnRemote)
+		}
 	}
 	var refused types.Placement
 	for _, kind := range kindOrder {

@@ -132,6 +132,8 @@ describe("runner pool carriers", () => {
     expect(union("RunEndReason")).toEqual(consts(limitsGo, '\\bRunEnd\\w+\\s+RunEndReason = "([a-z_]+)"'));
     expect(union("LimitSource").size).toBe(4);
     expect(union("PoolMacOSVMWhy")).toEqual(consts(clientGo, '\\bMacOSVMWhy\\w+\\s*=\\s*"([a-z_]+)"'));
-    expect(union("PoolMacOSVMWhy").size).toBe(7);
+    expect(union("PoolMacOSVMWhy").size).toBe(8);
+    expect(union("PoolMacOSVMRefusedReason")).toEqual(consts(clientGo, '\\bMacOSVMRefused\\w+\\s*=\\s*"([a-z_]+)"'));
+    expect(union("PoolMacOSVMRefusedReason").size).toBe(3);
   });
 });

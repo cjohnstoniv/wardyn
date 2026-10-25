@@ -245,6 +245,8 @@ type PoolMacOSVM struct {
 // PoolMacOSVMRefusal is why one runner of a pool cannot take a macOS VM now. Why is MacOSVMWhy*;
 // Progress is set for preparing and Error for no_base when the runner said one. RunnerID is set on
 // not_managed for a security operator only, who marks the Mac with it. Detail is the org's sentence.
+// Reason is set on runner_refused (MacOSVMRefused*), with Have and Need on a size below the base's
+// minimum: what the runner's per-run limit gives and what the base needs, in GB of memory or in CPUs.
 type PoolMacOSVMRefusal struct {
 	Runner   string `json:"runner"`
 	RunnerID string `json:"runner_id,omitempty"`
@@ -252,6 +254,9 @@ type PoolMacOSVMRefusal struct {
 	Progress int    `json:"progress,omitempty"`
 	Error    string `json:"error,omitempty"`
 	Detail   string `json:"detail"`
+	Reason   string `json:"reason,omitempty"`
+	Have     int    `json:"have,omitempty"`
+	Need     int    `json:"need,omitempty"`
 }
 
 // PoolMacOSVMRefusal.Why values.
@@ -263,6 +268,16 @@ const (
 	MacOSVMWhyNotManaged = "not_managed"
 	MacOSVMWhyNoPosture  = "no_posture"
 	MacOSVMWhyNoBase     = "no_base"
+	// MacOSVMWhyRunnerRefused: the runner sent caps that refuse macOS VMs itself. Its own text never
+	// reaches the console; Reason says why, as the organisation reads it.
+	MacOSVMWhyRunnerRefused = "runner_refused"
+)
+
+// PoolMacOSVMRefusal.Reason values, on runner_refused.
+const (
+	MacOSVMRefusedBelowMinMemory = "below_min_memory"
+	MacOSVMRefusedBelowMinCPU    = "below_min_cpu"
+	MacOSVMRefusedOther          = "other"
 )
 
 // PoolRunner is one of the caller's own self-hosted runners in a user pool.

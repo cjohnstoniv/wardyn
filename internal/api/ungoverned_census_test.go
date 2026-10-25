@@ -106,6 +106,7 @@ var ungovernedCallerCensus = map[string]struct {
 	"run_workspace_authorization.go:workspaceProvidersRefusal": {1, "R: provider admission; the spec it yields meets the boundary at resolve"},
 	"runner_pools.go:permittedPools":                           {1, "D: pool placement; the run meets the boundary at resolve and dispatch"},
 	"runner_pools_catalogue.go:personAllowance":                {1, "D: a pool allowance; the run meets the boundary at resolve and dispatch"},
+	"runner_pools_macos.go:poolMacOSVMOf":                      {1, "authz-only: a refusal's detail; the runner id goes to a security operator only"},
 	"runner_pools_runners.go:appendRunnerMembers":              {1, "authz-only: a list"},
 	"runner_registration.go:handleRunnerTokenSelf":             {1, "authz-only: runner registration reach"},
 	"runner_usage.go:remoteUsage":                              {1, "authz-only: a measured reason's detail"},
