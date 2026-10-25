@@ -13,7 +13,7 @@ export type MacVMBaseState = "none" | "preparing" | "ready" | "update_needed" | 
 export type MacVMStep = "check" | "download" | "install" | "setup" | "tools";
 
 /** Go: runnerwire.MacVMWaitACPower and its siblings; MacVMBase.wait. */
-export type MacVMWait = "ac_power" | "battery" | "download_retry" | "setup_by_hand";
+export type MacVMWait = "ac_power" | "battery" | "download_retry" | "setup_by_hand" | "docker";
 
 /** Go: runnerwire.MacVMFailureDownload and its siblings; MacVMBase.failure. */
 export type MacVMFailure = "download" | "install" | "tools";
@@ -51,6 +51,7 @@ export type MacVMReason =
   | "memory_below_minimum"
   | "cpu_below_minimum"
   | "disk_short"
+  | "slot_leaked"
   | "low_memory"
   | "too_hot";
 

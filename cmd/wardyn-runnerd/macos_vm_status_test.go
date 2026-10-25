@@ -8,15 +8,19 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
 	"github.com/cjohnstoniv/wardyn/internal/macvm/admission"
+	"github.com/cjohnstoniv/wardyn/internal/macvm/macvmtest"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 )
 
@@ -246,6 +250,18 @@ func TestMacOSVMStatusRate(t *testing.T) {
 	if b := preparingBase(t, start, p2, ev(t, macvm.PrepareEvent{Phase: macvm.PhaseDownload, Paused: true})); b.BytesPerSec != 0 || b.Wait != "battery" {
 		t.Fatalf("during a wait: %+v", b)
 	}
+	if b := preparingBase(t, start, p2, ev(t, macvm.PrepareEvent{Phase: macvm.PhaseDownload, Paused: true}), start); b.BytesPerSec != 0 || b.Wait != "" {
+		t.Fatalf("after a wait, before the next progress event: %+v", b)
+	}
+	var failed prepareStatus
+	for _, e := range []macvm.PrepareEvent{{Phase: macvm.PhaseDownload}, {Phase: macvm.PhaseDownload, Bytes: 200, Total: 1000, Fraction: 0.2, BytesPerSec: 38.9e6}} {
+		failed.add(e)
+	}
+	var fb runnerwire.MacVMBase
+	failed.apply(&fb, false)
+	if fb.BytesPerSec != 0 {
+		t.Fatalf("a base that is not preparing has no rate: %+v", fb)
+	}
 	if b := preparingBase(t, start, p2, ev(t, macvm.PrepareEvent{Phase: macvm.PhaseCreate})); b.BytesPerSec != 0 {
 		t.Fatalf("after the download: %+v", b)
 	}
@@ -370,6 +386,42 @@ func TestMacOSVMStatusReason(t *testing.T) {
 	m.recompute()
 	if c := m.current(); c.Reason != "" {
 		t.Fatalf("disk enough: %+v", c)
+	}
+
+	// A slot the framework keeps and nothing accounts for: a leaked entry. It ranks after disk_short and
+	// before low_memory and too_hot, and Refusal stays empty.
+	lr := newMacLedgerRig(t)
+	m = lr.open(t)
+	if _, err := m.ledger.AddLeaked("", 10, 1); err != nil {
+		t.Fatal(err)
+	}
+	m.recompute()
+	if c := m.current(); c.Reason != "slot_leaked" || c.Refusal != "" || c.Max != 1 {
+		t.Fatalf("leaked slot: %+v", c)
+	}
+	m.setThermal("serious")
+	m.host = &statusHost{macHost: lr.host, free: 500 * gib, avail: 5 * gib}
+	m.recompute()
+	if c := m.current(); c.Reason != "slot_leaked" {
+		t.Fatalf("leaked slot, low memory and too hot: %+v", c)
+	}
+	m.setPerRunLimits(0, 4096)
+	m.recompute()
+	if c := m.current(); c.Reason != "memory_below_minimum" {
+		t.Fatalf("leaked slot and a limit below the minimum: %+v", c)
+	}
+	m = lr.open(t)
+	_, _ = m.ledger.AddLeaked("", 10, 1)
+	_ = os.Remove(filepath.Join(m.layout.BaseDir(0), macvm.ManifestFile))
+	m.host = &statusHost{macHost: lr.host, free: 60 * gib, avail: 48 * gib}
+	m.recompute()
+	if c := m.current(); c.Reason != "disk_short" {
+		t.Fatalf("leaked slot and too little disk: %+v", c)
+	}
+	m.host = &statusHost{macHost: lr.host, free: 500 * gib, avail: 48 * gib}
+	m.recompute()
+	if c := m.current(); c.Reason != "slot_leaked" || c.Base.State != "none" {
+		t.Fatalf("leaked slot with no base: %+v", c)
 	}
 
 	// Too little free memory for the next guest: it needs the guest's 8 GiB and the 2 GiB margin.
@@ -554,4 +606,102 @@ func TestMacOSVMStatusCadence(t *testing.T) {
 	if _, _, _, th, _ := m.hostStatus(); th != "serious" {
 		t.Fatalf("a failed re-probe changed the thermal state to %q", th)
 	}
+}
+
+// dockerWaitRig is a prepare whose stage-2 boot listens for its network, and a prep network that fails
+// while fail is set.
+func dockerWaitRig(t *testing.T, dockerDown *atomic.Bool, fail *atomic.Bool) (r *macLedgerRig, m *macOSVMs, e admission.Entry, attached <-chan error, nets *prepNets) {
+	t.Helper()
+	r = newMacLedgerRig(t)
+	m = r.open(t)
+	if err := os.Remove(filepath.Join(m.layout.BaseDir(0), macvm.ManifestFile)); err != nil {
+		t.Fatal(err)
+	}
+	m.sockRoot, m.sockFstat = macvmtest.SockRoot(t), macvmtest.SockFstat
+	e, attached = liveStage2JobOf(t, r, m, admission.KindPrepare)
+	nets = &prepNets{t: t}
+	m.prepNet = func(ctx context.Context, id string) (*os.File, func(), error) {
+		if fail.Load() {
+			return nil, nil, errors.New("docker: the stage-2 network did not start")
+		}
+		return nets.start(ctx, id)
+	}
+	m.prepRemove = nets.remove
+	m.dockerUp = func(context.Context) bool { return !dockerDown.Load() }
+	return r, m, e, attached, nets
+}
+
+// awaitWait recomputes until the base's wait is want.
+func awaitWait(t *testing.T, m *macOSVMs, want string) {
+	t.Helper()
+	var got string
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		m.recompute()
+		if got = m.current().Base.Wait; got == want {
+			return
+		}
+	}
+	t.Fatalf("the base's wait is %q, want %q", got, want)
+}
+
+// While the stage-2 network cannot start and Docker does not answer, the preparing base waits for Docker.
+// Another network error with Docker up sets no wait; a hand-off that succeeds clears the wait; so does
+// the job's helper going away.
+func TestMacOSVMStatusDockerWait(t *testing.T) {
+	var down, fail atomic.Bool
+	down.Store(true)
+	fail.Store(true)
+	_, m, _, attached, _ := dockerWaitRig(t, &down, &fail)
+	stop := serving(m)
+	defer handled(t, m)
+	defer stop()
+	m.recompute() // starts the job's handler
+	awaitWait(t, m, runnerwire.MacVMWaitDocker)
+	if c := m.current(); c.Base.State != runnerwire.MacVMBasePreparing || c.Base.Wait != "docker" {
+		t.Fatalf("caps: %+v", c.Base)
+	}
+	// Docker answers again but the network still fails for another reason: no wait.
+	down.Store(false)
+	awaitWait(t, m, "")
+	// Docker down again, then the hand-off succeeds: the wait is gone.
+	down.Store(true)
+	awaitWait(t, m, runnerwire.MacVMWaitDocker)
+	fail.Store(false)
+	for deadline := time.After(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		m.recompute() // each recompute starts the handler again
+		select {
+		case err := <-attached:
+			if err != nil {
+				t.Fatalf("the stage-2 boot: %v", err)
+			}
+			awaitWait(t, m, "")
+			return
+		case <-deadline:
+			t.Fatal("the stage-2 boot never got its network")
+		default:
+		}
+	}
+}
+
+func TestMacOSVMStatusDockerWaitEndsWithTheHelper(t *testing.T) {
+	var down, fail atomic.Bool
+	down.Store(true)
+	fail.Store(true)
+	r, m, _, _, _ := dockerWaitRig(t, &down, &fail)
+	stop := serving(m)
+	defer handled(t, m)
+	defer stop()
+	m.recompute()
+	awaitWait(t, m, runnerwire.MacVMWaitDocker)
+	r.host.setProcs(admission.Proc{PID: os.Getpid(), UID: 501, Start: 3, Name: "wardyn-runnerd"})
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		m.recompute()
+		m.mu.Lock()
+		n := len(m.dockerWait)
+		m.mu.Unlock()
+		if n == 0 && m.current().Base.Wait == "" {
+			return
+		}
+	}
+	t.Fatalf("the wait outlived the job's helper: %+v", m.current().Base)
 }

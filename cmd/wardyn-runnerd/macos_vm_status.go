@@ -129,6 +129,8 @@ func (s *prepareStatus) add(ev macvm.PrepareEvent) {
 	if ev.Phase == macvm.PhaseDownload && !ev.Retry && !ev.Paused && ev.Bytes > 0 {
 		s.sawBytes = true
 		s.rate = int64(ev.BytesPerSec)
+	} else if ev.Phase == macvm.PhaseDownload && (ev.Paused || ev.Retry) {
+		s.rate = 0 // the rate from before a wait is stale when the download resumes
 	}
 }
 
@@ -161,7 +163,7 @@ func (s prepareStatus) apply(b *runnerwire.MacVMBase, preparing bool) {
 	if preparing {
 		b.Wait = s.wait
 	}
-	if s.step == runnerwire.MacVMStepDownload && b.Wait == "" {
+	if preparing && s.step == runnerwire.MacVMStepDownload && b.Wait == "" {
 		b.BytesPerSec = s.rate
 	}
 }
@@ -296,8 +298,12 @@ func (m *macOSVMs) hostStatus() (reason, hostOS, hostReason, thermal string, noS
 	return m.reason, m.hostOSVersion, m.hostReason, m.thermal, m.noSession
 }
 
-// reasonsWhenReady is the reasons a ready base can carry beyond its minimum: low memory, then too hot.
+// reasonsWhenReady is the reasons a ready base can carry beyond its minimum and a leaked slot: low memory,
+// then too hot.
 func (m *macOSVMs) reasonsWhenReady(c *runnerwire.MacVMCaps, man macvm.Manifest, thermal string) {
+	if c.Reason != "" {
+		return
+	}
 	need := m.guestMemory(man) + admission.LiveMemoryMarginBytes
 	if avail, err := m.host.AvailableMemoryBytes(); err == nil && avail < need {
 		c.Reason, c.FreeGB, c.NeedGB = runnerwire.MacVMReasonLowMemory, int(avail>>30), int((need+1<<30-1)>>30)
@@ -305,6 +311,19 @@ func (m *macOSVMs) reasonsWhenReady(c *runnerwire.MacVMCaps, man macvm.Manifest,
 	}
 	if thermal == "serious" || thermal == "critical" {
 		c.Reason = runnerwire.MacVMReasonTooHot
+	}
+}
+
+// reasonSlotLeaked says the ledger holds a slot the framework keeps and nothing accounts for (a leaked
+// entry, recorded by a helper whose start Apple refused with its VM limit), until the Mac restarts. It
+// yields to an earlier reason.
+func (m *macOSVMs) reasonSlotLeaked(c *runnerwire.MacVMCaps) {
+	if c.Reason != "" {
+		return
+	}
+	counted, err := m.ledger.Counted()
+	if err == nil && slices.ContainsFunc(counted, func(e admission.Entry) bool { return e.Kind == admission.KindLeaked }) {
+		c.Reason = runnerwire.MacVMReasonSlotLeaked
 	}
 }
 
