@@ -99,6 +99,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   it used to start the count empty.
 - A brief database error while a runner replays its saved audit events no longer drops one of them from the audit
   log. The event is kept for the next replay.
+- The audit trail now records the end of a desktop sign-in or take-over pause that was still open when the run ended,
+  after the person had closed the desktop (#3583). Its `desktop.recording.resume` row is written once, marked
+  `end_reason` `run_ended`, and the server stops holding the pause. Before, the pause stayed open with no end row.
 
 ## [0.10.0-rc.2] — 2026-10-25
 

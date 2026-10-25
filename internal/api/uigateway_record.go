@@ -6,7 +6,6 @@ package api
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -151,13 +150,10 @@ func (s *Server) saveDesktopRecording(ctx context.Context, run types.AgentRun, s
 	}
 	// A recorder that met a message it could not follow stopped keeping frames: the stored cast is
 	// shorter than the session, so the write row says where it ends rather than reading as complete.
-	var stopped struct {
-		StoppedMS int64 `json:"stopped_ms"`
-	}
-	if json.Unmarshal(doc, &stopped) == nil && stopped.StoppedMS > 0 {
-		data["stopped_ms"] = stopped.StoppedMS
+	if stopped := rec.StoppedMS(); stopped > 0 {
+		data["stopped_ms"] = stopped
 		slog.WarnContext(ctx, "wardynd: desktop recording stopped early at a message it could not follow",
-			"run_id", run.ID, "session", session, "stopped_ms", stopped.StoppedMS)
+			"run_id", run.ID, "session", session, "stopped_ms", stopped)
 	}
 	s.auditUISession(sess, "desktop.recording.write", key, outcome, data)
 }
@@ -192,8 +188,10 @@ func (d *desktopRecordings) remove(run uuid.UUID, rec *recording.RFBRecorder) {
 
 // forgetEndedDesktopPause drops a paused run's entry once its last connection closed and the run has
 // ended (or is gone), so a pause nothing will resume does not stay for the life of the process, and
-// writes the gap's resume row: every pause row has one. A live run keeps it: a connection that opens
-// during the pause must start paused.
+// writes the gap's resume row, end_reason run_ended: every pause row has one. A live run keeps it: a
+// connection that opens during the pause must start paused. The entry is deleted under the lock
+// before the row is written, so the last connection's close and sweepEndedDesktopRecordingPauses,
+// or two sweeps, write it once.
 func (s *Server) forgetEndedDesktopPause(ctx context.Context, runID uuid.UUID) {
 	if s.cfg.Store == nil {
 		return
@@ -212,8 +210,33 @@ func (s *Server) forgetEndedDesktopPause(ctx context.Context, runID uuid.UUID) {
 	delete(d.byRun, runID)
 	d.mu.Unlock()
 	if r.paused != nil {
-		s.auditDesktopResume(ctx, runID, cur.SandboxRef, *r.paused)
+		s.auditDesktopResume(ctx, runID, cur.SandboxRef, *r.paused, true)
 	}
+}
+
+// sweepEndedDesktopRecordingPauses closes every pause this replica holds on a run with no desktop
+// connection left, once the run has ended (forgetEndedDesktopPause): a person who disconnected
+// before the run ended left a take over's or sign-in's hold that no connection's close would end.
+// The hold lives in the memory of the replica that took it, so this pass runs on every replica, not
+// only the leader. One pass of the reconciler.
+func (s *Server) sweepEndedDesktopRecordingPauses(ctx context.Context) error {
+	for _, runID := range s.desktopRecs.idlePaused() {
+		s.forgetEndedDesktopPause(ctx, runID)
+	}
+	return nil
+}
+
+// idlePaused lists the runs whose gap is open here with no connection recording.
+func (d *desktopRecordings) idlePaused() []uuid.UUID {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var out []uuid.UUID
+	for id, r := range d.byRun {
+		if r.paused != nil && len(r.recs) == 0 {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // PauseDesktopRecording stops keeping the run's screen frames (C11): the action log, the clipboard
@@ -277,7 +300,7 @@ func (s *Server) ResumeDesktopRecording(ctx context.Context, run types.AgentRun,
 		delete(d.byRun, run.ID)
 	}
 	d.mu.Unlock()
-	s.auditDesktopResume(ctx, run.ID, run.SandboxRef, p)
+	s.auditDesktopResume(ctx, run.ID, run.SandboxRef, p, run.State.IsTerminal())
 	return true
 }
 
@@ -334,10 +357,14 @@ func (d *desktopRecordings) heldWith(run uuid.UUID, prefix string) []string {
 	return out
 }
 
-// auditDesktopResume writes desktop.recording.resume for gap p, ending now.
-func (s *Server) auditDesktopResume(ctx context.Context, runID uuid.UUID, sandboxRef string, p desktopPause) {
+// auditDesktopResume writes desktop.recording.resume for gap p, ending now. A gap closed once the run
+// had ended says so, as a container sign-in's close does: end_reason run_ended (signinEndRunEnded).
+func (s *Server) auditDesktopResume(ctx context.Context, runID uuid.UUID, sandboxRef string, p desktopPause, runEnded bool) {
 	end := s.cfg.Now().UTC()
+	data := map[string]any{"reason": p.reason, "gap_start": p.at, "gap_end": end, "gap_ms": end.Sub(p.at).Milliseconds()}
+	if runEnded {
+		data["end_reason"] = signinEndRunEnded
+	}
 	s.recordStreamAudit(ctx, sandboxRef, s.auditEvent(&runID, types.ActorSystem, "wardynd", "desktop.recording.resume",
-		runID.String(), "success", mustJSON(map[string]any{"reason": p.reason, "gap_start": p.at, "gap_end": end,
-			"gap_ms": end.Sub(p.at).Milliseconds()})))
+		runID.String(), "success", mustJSON(data)))
 }
