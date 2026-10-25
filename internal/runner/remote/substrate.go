@@ -441,6 +441,14 @@ func (s *Substrate) AgentStatus(ctx context.Context, ref, agentExecID string) (r
 func (s *Substrate) teardown(ctx context.Context, method string, kind types.RunnerActionKind, ref string) error {
 	var res runnerwire.TeardownResult
 	err := s.refCall(ctx, method, ref, &res)
+	// A kill or an end that the runner answered, even with a failure, is the last this substrate does for
+	// the sandbox, so its machine kind goes; a runner that did not answer is asked again, and the kind stays
+	// for that. A stop leaves the sandbox to start again.
+	if (method == runnerwire.MethodKill || method == runnerwire.MethodEnd) && !errors.Is(err, runner.ErrRunnerOffline) {
+		s.mu.Lock()
+		delete(s.vmKinds, ref)
+		s.mu.Unlock()
+	}
 	if err == nil && res.MacOSVMDisk != nil {
 		s.macOSVMDisks(ctx, []runner.MacOSVMDisk{*res.MacOSVMDisk})
 	}
@@ -472,13 +480,7 @@ func (s *Substrate) KillSandbox(ctx context.Context, ref string) error {
 }
 
 func (s *Substrate) EndSandbox(ctx context.Context, ref string) error {
-	err := s.teardown(ctx, runnerwire.MethodEnd, types.RunnerActionEnd, ref)
-	if err == nil {
-		s.mu.Lock()
-		delete(s.vmKinds, ref)
-		s.mu.Unlock()
-	}
-	return err
+	return s.teardown(ctx, runnerwire.MethodEnd, types.RunnerActionEnd, ref)
 }
 
 // vmKind is the machine kind ref was created with here, "" when this substrate did not create it.
