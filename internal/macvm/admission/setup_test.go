@@ -1147,6 +1147,125 @@ func TestSetupDiscardUnlinksNothingWhenTheSwappedOutDirectoryCannotBeChecked(t *
 	wantEntries(t, r, names, "the discard")
 }
 
+// keptFor runs a Setup whose swapped-out directory holds the late name too, with fault planted, and returns
+// the directories relink replaced that are still in Base.
+func keptFor(t *testing.T, r *rig, fault func(op, dir, name string) error) []string {
+	t.Helper()
+	if err := Setup(r.setupCfg(func(c *SetupConfig) {
+		swapPlant(t, r, "e-late.json", c)
+		c.fault = fault
+	})); err != nil {
+		t.Fatal(err)
+	}
+	return linkDirs(r)
+}
+
+// wantKept fails unless the one kept directory still holds every admitted name and the late one, and a
+// helper still counts the admitted entries.
+func wantKept(t *testing.T, r *rig, kept, names []string, what string) {
+	t.Helper()
+	if len(kept) != 1 {
+		t.Fatalf("%s: the swapped-out directory was discarded or lost: %v", what, kept)
+	}
+	for _, n := range append([]string{"e-late.json"}, names...) {
+		if _, err := os.Lstat(filepath.Join(kept[0], n)); err != nil {
+			t.Fatalf("%s: %s is gone from the kept directory: %v", what, n, err)
+		}
+	}
+	if n := counted(t, r); n != len(names) {
+		t.Fatalf("%s: a helper counts %d of %d entries", what, n, len(names))
+	}
+	wantEntries(t, r, names, what)
+}
+
+// Fail closed: the published entries directory cannot be listed, or cannot be opened, so no name of the
+// swapped-out one is proved a second link, and none is unlinked.
+func TestSetupDiscardSkippedWhenThePublishedDirectoryCannotBeRead(t *testing.T) {
+	r := newRig(t, bigMac())
+	names := admitN(t, r, 2)
+	kept := keptFor(t, r, func(op, dir, name string) error {
+		if op == "readdir" && filepath.Base(dir) == entriesName {
+			return unix.EIO
+		}
+		return nil
+	})
+	wantKept(t, r, kept, names, "a published directory that cannot be listed")
+}
+
+func TestSetupDiscardSkippedWhenThePublishedDirectoryCannotBeOpened(t *testing.T) {
+	r := newRig(t, bigMac())
+	names := admitN(t, r, 2)
+	armed, failed := false, false
+	if err := Setup(r.setupCfg(func(c *SetupConfig) {
+		swapPlant(t, r, "e-late.json", c)
+		fs, plant := c.Fstat, c.afterSwap
+		c.afterSwap = func(old string) { plant(old); armed = true }
+		c.Fstat = func(fd int, name string) (unix.Stat_t, error) {
+			if armed && !failed && filepath.Base(name) == entriesName {
+				failed = true
+				return unix.Stat_t{}, unix.EIO
+			}
+			return fs(fd, name)
+		}
+	})); err != nil {
+		t.Fatal(err)
+	}
+	wantKept(t, r, linkDirs(r), names, "a published directory that cannot be opened")
+}
+
+// A published name that cannot be statted is not in the proof, so its twin in the swapped-out directory
+// moves to a quarantine instead of being unlinked.
+func TestSetupDiscardQuarantinesTheTwinOfAPublishedNameItCannotStat(t *testing.T) {
+	r := newRig(t, bigMac())
+	names := admitN(t, r, 2)
+	kept := keptFor(t, r, func(op, dir, name string) error {
+		if op == "stat" && filepath.Base(dir) == entriesName && name == names[0] {
+			return unix.EIO
+		}
+		return nil
+	})
+	if len(kept) != 0 {
+		t.Fatalf("link directories left: %v", kept)
+	}
+	q, _ := filepath.Glob(filepath.Join(filepath.Dir(r.dir), quarantinePrefix+"*", names[0]))
+	if len(q) != 1 {
+		t.Fatalf("the twin was not quarantined: %v", q)
+	}
+	if n := counted(t, r); n != 2 {
+		t.Fatalf("a helper counts %d of 2 entries", n)
+	}
+	wantEntries(t, r, names, "the quarantine of a twin")
+}
+
+// A name that will not move to the quarantine keeps the swapped-out directory whole.
+func TestSetupDiscardSkippedWhenAQuarantineRenameFails(t *testing.T) {
+	r := newRig(t, bigMac())
+	names := admitN(t, r, 2)
+	kept := keptFor(t, r, func(op, dir, name string) error {
+		if op == "quarantine" && name == "e-late.json" {
+			return unix.EIO
+		}
+		return nil
+	})
+	wantKept(t, r, kept, names, "a quarantine rename that fails")
+}
+
+// A name its owner removed before it moved leaves no empty quarantine directory behind.
+func TestSetupQuarantineOfAVanishedNameLeavesNoDirectory(t *testing.T) {
+	r := newRig(t, bigMac())
+	names := admitN(t, r, 2)
+	kept := keptFor(t, r, func(op, dir, name string) error {
+		if op == "quarantine" && name == "e-late.json" {
+			return unix.ENOENT
+		}
+		return nil
+	})
+	if q, _ := filepath.Glob(filepath.Join(filepath.Dir(r.dir), quarantinePrefix+"*")); len(kept) != 0 || len(q) != 0 {
+		t.Fatalf("left behind: link directories %v, quarantines %v", kept, q)
+	}
+	wantEntries(t, r, names, "the vanished name")
+}
+
 // A swapped-out directory kept because a name could not be moved is not unlinked by the next setup: the name
 // the published directory lacks moves to a quarantine then.
 func TestSetupNextRunQuarantinesWhatAKeptDirectoryHolds(t *testing.T) {

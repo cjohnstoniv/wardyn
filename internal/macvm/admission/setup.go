@@ -310,6 +310,9 @@ func (s *setup) quarantineName(from *os.File, n, why string) error {
 	if err = s.faulted("quarantine", from.Name(), n); err == nil {
 		err = renameNoReplace(int(from.Fd()), n, int(qf.Fd()), n)
 	}
+	if errors.Is(err, unix.ENOENT) { // its owner removed it: no empty quarantine behind
+		_ = unix.Unlinkat(int(s.base.Fd()), filepath.Base(q), unix.AT_REMOVEDIR)
+	}
 	return err
 }
 
