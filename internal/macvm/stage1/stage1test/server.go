@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	"golang.org/x/crypto/ssh"
+	"gvisor.dev/gvisor/pkg/tcpip"
 )
 
 // Exec is one command the guest ran.
@@ -43,11 +44,16 @@ type Server struct {
 	DropOnOff bool
 	// StaysOn keeps Remote Login answering after it was turned off.
 	StaysOn bool
+	// RejectPasswd makes dscl's passwd fail the way interactive dscl does:
+	// an error on stderr, and exit 0 at the end of its input.
+	RejectPasswd bool
 	// KeyboardOnly takes the password through keyboard-interactive (PAM)
 	// only, as one hidden prompt.
 	KeyboardOnly bool
 
 	mu       sync.Mutex
+	sharing  bool // Screen Sharing loaded: port 5900 sends its RFB banner
+	rfb      net.Listener
 	user     string
 	password string
 	key      ssh.Signer
@@ -65,10 +71,24 @@ func New(t testing.TB, user, password string) *Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &Server{user: user, password: password, on: true, files: map[string][]byte{}, ln: ln}
+	rfb, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{user: user, password: password, on: true, files: map[string][]byte{}, ln: ln, rfb: rfb}
 	s.NewHostKey(t)
-	t.Cleanup(func() { _ = ln.Close() })
+	t.Cleanup(func() { _ = ln.Close(); _ = rfb.Close() })
 	go s.accept()
+	go func() {
+		for {
+			c, err := rfb.Accept()
+			if err != nil {
+				return
+			}
+			_, _ = c.Write([]byte("RFB 003.889\n"))
+			_ = c.Close()
+		}
+	}()
 	return s
 }
 
@@ -88,18 +108,30 @@ func (s *Server) NewHostKey(t testing.TB) ssh.PublicKey {
 	return k.PublicKey()
 }
 
-// Dial is the prep relay's DialGuest: refused unless Remote Login is on and
-// port is 22.
+// Refused is the prep relay's refusal of a dial, as its netstack (gonet)
+// reports a guest's RST.
+func Refused() error {
+	return &net.OpError{Op: "connect", Net: "tcp", Err: errors.New((&tcpip.ErrConnectionRefused{}).String())}
+}
+
+// Dial is the prep relay's DialGuest: port 22 while Remote Login is on, port
+// 5900 (an RFB banner) once Screen Sharing is loaded; any other is refused.
 func (s *Server) Dial(ctx context.Context, port int) (net.Conn, error) {
 	s.mu.Lock()
 	s.dials = append(s.dials, port)
-	on := s.on
+	addr := ""
+	switch {
+	case port == 22 && s.on:
+		addr = s.ln.Addr().String()
+	case port == 5900 && s.sharing:
+		addr = s.rfb.Addr().String()
+	}
 	s.mu.Unlock()
-	if !on || port != 22 {
-		return nil, errors.New("connection refused")
+	if addr == "" {
+		return nil, Refused()
 	}
 	var d net.Dialer
-	return d.DialContext(ctx, "tcp", s.ln.Addr().String())
+	return d.DialContext(ctx, "tcp", addr)
 }
 
 // SetPassword sets the account's password, as the provisioning boot does.
@@ -243,8 +275,8 @@ func (s *Server) exec(line string, stdin []byte) (code int, stdout, stderr []byt
 	switch {
 	case slices.Equal(argv, []string{"/usr/bin/dscl", "."}):
 		f := strings.Fields(strings.TrimSpace(string(rest)))
-		if len(f) != 4 || f[0] != "passwd" || f[1] != "/Users/"+s.user || f[2] != s.password {
-			return 1, nil, append([]byte("passwd: DS error: eDSAuthFailed; input: "), rest...), false
+		if s.RejectPasswd || len(f) != 4 || f[0] != "passwd" || f[1] != "/Users/"+s.user || f[2] != s.password {
+			return 0, nil, append([]byte("passwd: DS error: eDSAuthFailed; input: "), rest...), false
 		}
 		s.password = f[3]
 	case len(argv) == 2 && argv[0] == "/bin/dd" && strings.HasPrefix(argv[1], "of="):
@@ -252,6 +284,8 @@ func (s *Server) exec(line string, stdin []byte) (code int, stdout, stderr []byt
 	case len(argv) == 4 && argv[0] == "/usr/bin/shasum":
 		sum := sha256.Sum256(s.files[argv[3]])
 		return 0, []byte(hex.EncodeToString(sum[:]) + "  " + argv[3] + "\n"), nil, false
+	case len(argv) == 4 && argv[0] == "/bin/launchctl" && argv[1] == "bootstrap" && strings.HasSuffix(argv[3], "com.apple.screensharing.plist"):
+		s.sharing = true
 	case len(argv) == 4 && argv[0] == "/usr/sbin/systemsetup" && argv[2] == "-setremotelogin" && argv[3] == "off":
 		s.on = s.StaysOn
 		return 0, nil, nil, s.DropOnOff

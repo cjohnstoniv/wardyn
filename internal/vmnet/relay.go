@@ -29,6 +29,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"gvisor.dev/gvisor/pkg/buffer"
@@ -90,6 +91,10 @@ type Relay struct {
 	stop  chan struct{}
 	dhcp  bool
 	prep  bool
+	// dhcpSeen counts the guest's DHCP requests: a reboot or a reset link
+	// asks for its lease again, so prepare's stage 1 reads it as the boot's
+	// epoch.
+	dhcpSeen atomic.Uint64
 }
 
 // New builds a relay's stack. Close releases it.
@@ -180,6 +185,9 @@ func (rl *Relay) DialGuest(ctx context.Context, port uint16) (net.Conn, error) {
 	return gonet.DialContextTCP(ctx, rl.stack, tcpip.FullAddress{NIC: nicID, Addr: guestIP, Port: port}, ipv4.ProtocolNumber)
 }
 
+// DHCPRequests is how many DHCP requests the guest has sent this relay.
+func (rl *Relay) DHCPRequests() uint64 { return rl.dhcpSeen.Load() }
+
 // Close stops the relay.
 func (rl *Relay) Close() {
 	close(rl.stop)
@@ -229,6 +237,7 @@ func (rl *Relay) ServeStream(r io.Reader, w io.Writer) error {
 			continue
 		}
 		if rl.dhcp && isDHCPRequest(frame) {
+			rl.dhcpSeen.Add(1)
 			if reply, ok := dhcpReply(frame); ok {
 				if err := write(reply); err != nil {
 					return err

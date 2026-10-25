@@ -35,6 +35,8 @@ type command struct {
 	// OnlyWithCode: run only on the D1(c) path, where the login is the
 	// Mac's person's one-time code.
 	OnlyWithCode bool
+	// Event, when set, is the prepare event detail emitted before this row.
+	Event string
 	// CheckAgentSHA: the output must start with the agent's SHA-256.
 	CheckAgentSHA bool
 	// MayDropSession: turning Remote Login off may end this very session
@@ -55,32 +57,35 @@ const (
 // table is the one place to correct them.
 var commands = []command{
 	// D1(c): the first SSH step replaces the one-time code (§3.4 step 6, D1(c)).
-	{ID: "rotate-admin-password", Step: "6 D1(c)", Argv: []string{"/usr/bin/dscl", "."}, In: stdinRotate, OnlyWithCode: true},
+	{ID: "rotate-admin-password", Step: "6 D1(c)", Event: "replacing the one-time code", Argv: []string{"/usr/bin/dscl", "."}, In: stdinRotate, OnlyWithCode: true},
 
-	// a. the guest agent and its LaunchDaemon (§3.4 step 7a).
-	{ID: "agent-dir", Step: "7a", Root: true, Argv: []string{"/usr/bin/install", "-d", "-o", "root", "-g", "wheel", "-m", "755", agentLibexec}},
+	// a. the guest agent and its LaunchDaemon (§3.4 step 7a). They are
+	// loaded only once b has made the user the agent runs as.
+	{ID: "agent-dir", Step: "7a", Event: "installing the guest agent", Root: true, Argv: []string{"/usr/bin/install", "-d", "-o", "root", "-g", "wheel", "-m", "755", agentLibexec}},
 	{ID: "agent-create", Step: "7a", Root: true, Argv: []string{"/usr/bin/install", "-o", "root", "-g", "wheel", "-m", "755", "/dev/null", guestagent.MacAgentBinaryPath}},
 	{ID: "agent-write", Step: "7a", Root: true, Argv: []string{"/bin/dd", "of=" + guestagent.MacAgentBinaryPath}, In: stdinAgent},
 	{ID: "agent-verify", Step: "7a", Root: true, Argv: []string{"/usr/bin/shasum", "-a", "256", guestagent.MacAgentBinaryPath}, CheckAgentSHA: true},
 	{ID: "plist-create", Step: "7a", Root: true, Argv: []string{"/usr/bin/install", "-o", "root", "-g", "wheel", "-m", "644", "/dev/null", guestagent.MacAgentPlistPath}},
 	{ID: "plist-write", Step: "7a", Root: true, Argv: []string{"/bin/dd", "of=" + guestagent.MacAgentPlistPath}, In: stdinPlist},
-	{ID: "agent-enable", Step: "7a", Root: true, Argv: []string{"/bin/launchctl", "enable", "system/" + guestagent.MacAgentLabel}},
-	{ID: "agent-load", Step: "7a", Root: true, Argv: []string{"/bin/launchctl", "bootstrap", "system", guestagent.MacAgentPlistPath}},
 
 	// b. the standard user agent, and auto-login as it (§3.4 step 7b).
-	{ID: "agent-user", Step: "7b", Root: true, Argv: []string{"/usr/sbin/sysadminctl", "-addUser", agentUser, "-fullName", agentUser, "-password", "-"}, In: stdinAgentPassword},
+	{ID: "agent-user", Step: "7b", Event: "creating the agent user", Root: true, Argv: []string{"/usr/sbin/sysadminctl", "-addUser", agentUser, "-fullName", agentUser, "-password", "-"}, In: stdinAgentPassword},
 	{ID: "autologin-user", Step: "7b", Root: true, Argv: []string{"/usr/bin/defaults", "write", "/Library/Preferences/com.apple.loginwindow", "autoLoginUser", agentUser}},
 	{ID: "kcpassword-create", Step: "7b", Root: true, Argv: []string{"/usr/bin/install", "-o", "root", "-g", "wheel", "-m", "600", "/dev/null", kcpasswdPath}},
 	{ID: "kcpassword-write", Step: "7b", Root: true, Argv: []string{"/bin/dd", "of=" + kcpasswdPath}, In: stdinKCPassword},
 
+	// a, continued: the agent's user exists now, so its LaunchDaemon loads.
+	{ID: "agent-enable", Step: "7a", Event: "starting the guest agent", Root: true, Argv: []string{"/bin/launchctl", "enable", "system/" + guestagent.MacAgentLabel}},
+	{ID: "agent-load", Step: "7a", Root: true, Argv: []string{"/bin/launchctl", "bootstrap", "system", guestagent.MacAgentPlistPath}},
+
 	// c. Screen Sharing as root, with the legacy VNC-password option; the
 	// password itself is set later by the guest agent's file write (§3.4 step 7c, §3.8).
-	{ID: "screensharing-enable", Step: "7c", Root: true, Argv: []string{"/bin/launchctl", "enable", "system/com.apple.screensharing"}},
+	{ID: "screensharing-enable", Step: "7c", Event: "turning on Screen Sharing", Root: true, Argv: []string{"/bin/launchctl", "enable", "system/com.apple.screensharing"}},
 	{ID: "screensharing-load", Step: "7c", Root: true, Argv: []string{"/bin/launchctl", "bootstrap", "system", "/System/Library/LaunchDaemons/com.apple.screensharing.plist"}},
 	{ID: "vnc-legacy", Step: "7c", Root: true, Argv: []string{"/usr/bin/defaults", "write", "/Library/Preferences/com.apple.RemoteManagement", "VNCLegacyConnectionsEnabled", "-bool", "true"}},
 
 	// d. never sleep, no screen lock, no automatic software updates (§3.4 step 7d).
-	{ID: "power-never-sleep", Step: "7d", Root: true, Argv: []string{"/usr/bin/pmset", "-a", "sleep", "0", "displaysleep", "0", "disksleep", "0"}},
+	{ID: "power-never-sleep", Step: "7d", Event: "setting power, screen lock and updates", Root: true, Argv: []string{"/usr/bin/pmset", "-a", "sleep", "0", "displaysleep", "0", "disksleep", "0"}},
 	{ID: "screenlock-off", Step: "7d", Root: true, Argv: []string{"/usr/bin/defaults", "write", "/Library/Preferences/com.apple.screensaver", "askForPassword", "-int", "0"}},
 	{ID: "screensaver-off", Step: "7d", Root: true, Argv: []string{"/usr/bin/defaults", "write", "/Library/Preferences/com.apple.screensaver", "idleTime", "-int", "0"}},
 	{ID: "updates-check-off", Step: "7d", Root: true, Argv: []string{"/usr/bin/defaults", "write", "/Library/Preferences/com.apple.SoftwareUpdate", "AutomaticCheckEnabled", "-bool", "false"}},
@@ -88,8 +93,11 @@ var commands = []command{
 	{ID: "updates-macos-off", Step: "7d", Root: true, Argv: []string{"/usr/bin/defaults", "write", "/Library/Preferences/com.apple.SoftwareUpdate", "AutomaticallyInstallMacOSUpdates", "-bool", "false"}},
 
 	// e. Remote Login off, last (§3.4 step 7e).
-	{ID: "remote-login-off", Step: "7e", Root: true, Argv: []string{"/usr/sbin/systemsetup", "-f", "-setremotelogin", "off"}, MayDropSession: true},
+	{ID: "remote-login-off", Step: "7e", Event: "turning Remote Login off", Root: true, Argv: []string{"/usr/sbin/systemsetup", "-f", "-setremotelogin", "off"}, MayDropSession: true},
 }
+
+// steps are the §3.4 steps a row may cite.
+var steps = []string{"6 D1(c)", "7a", "7b", "7c", "7d", "7e"}
 
 // agentPlist is the guest agent's LaunchDaemon plist. Its only values are the
 // shared constants, none of which needs XML escaping.
