@@ -96,6 +96,8 @@
 #      `if`, its `with.push`, or its own DRY_RUN/PUBLISH env that its script reads; never by job env.
 #  30. no workflow job runs on `ubuntu-latest`: that label moved to ubuntu-26.04 under a green main and
 #      broke every PR's compose job, so each job names the image its runs were proven on.
+#  31. release.yml's runner-pkg job reads the release stamp back from the packaged guest agent with
+#      scripts/check-release-stamp.sh, and that script's test refuses an unstamped binary (#3636).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -968,7 +970,7 @@ else
     ok "every workflow job names its runner image (no ubuntu-latest)"
 fi
 
-# Guards 26-29 (release.yml and nightly.yml) are in test-repo-guards-release.sh, sourced so they
+# Guards 26-29 and 31 (release.yml and nightly.yml) are in test-repo-guards-release.sh, sourced so they
 # share this file's fail, bad, ok, REL, NIGHTLY and NOTIFY_EXEMPT.
 . "$ROOT/scripts/test-repo-guards-release.sh"
 
