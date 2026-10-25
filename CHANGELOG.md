@@ -28,6 +28,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The audit trail now records the end of a desktop sign-in or take-over pause that was still open when the run ended,
   after the person had closed the desktop (#3583). Its `desktop.recording.resume` row is written once, marked
   `end_reason` `run_ended`, and the server stops holding the pause. Before, the pause stayed open with no end row.
+- A Linux VM run whose agent was paused for a desktop sign-in, then lost to a control-plane outage and its agent
+  stopped, now has the pause ended once the stop is confirmed (#3629). Its `desktop.sign_in.pause` row is written once,
+  ended at the stop, and a recorded desktop's `desktop.recording.resume` row says `end_reason` `run_ended`. Before, the
+  pause stayed open with no row. A pause whose stop failed, or is not yet made, still stands.
 - `wardyn-runnerd doctor` on a host whose service definition is still an earlier install's, which passes `--org`, now
   checks the organisation that service uses, as `serve` does, instead of the one in `runnerd.json`.
 

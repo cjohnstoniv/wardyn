@@ -11,6 +11,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // DesktopVMSignIns is a VM run's sign-in store (migration 0230): what its guest made of the store at
@@ -48,6 +50,13 @@ type DesktopVMSignInStore interface {
 	// false when the agent was not marked paused at pausedAt with generation gen, so only one resume of
 	// a pause sees it and none clears a newer pause's mark.
 	ResumeDesktopVMAgent(ctx context.Context, runID uuid.UUID, pausedAt time.Time, gen int64) (by string, at time.Time, found bool, err error)
+	// EndStoppedDesktopVMAgentPause clears the mark of the pause at pausedAt with generation gen, as
+	// ResumeDesktopVMAgent does, only on a run kept after the outage at lostAt whose agent's stop is
+	// recorded (agent_stopped_at, see RunLeaser.MarkRunAgentStopped). One transaction locks the run's
+	// row before it checks that and clears the mark, so a revive, which clears the outage mark and the
+	// stop together, either commits first and nothing is cleared, or waits for it. It answers the pause
+	// it cleared and the recorded stop; found is false when nothing was cleared.
+	EndStoppedDesktopVMAgentPause(ctx context.Context, runID uuid.UUID, lostAt, pausedAt time.Time, gen int64) (by string, at, stoppedAt time.Time, found bool, err error)
 	// PausedDesktopVMAgents lists every run whose agent is marked paused.
 	PausedDesktopVMAgents(ctx context.Context) ([]PausedDesktopVMAgent, error)
 }
@@ -105,9 +114,7 @@ func (s PG) PauseDesktopVMAgent(ctx context.Context, runID uuid.UUID, by string,
 func (s PG) ResumeDesktopVMAgent(ctx context.Context, runID uuid.UUID, pausedAt time.Time, gen int64) (string, time.Time, bool, error) {
 	var by string
 	var at time.Time
-	err := s.Pool.QueryRow(ctx, `UPDATE desktop_vm_sign_ins d SET paused_by = NULL, paused_at = NULL
-		FROM desktop_vm_sign_ins old WHERE d.run_id = $1 AND old.run_id = d.run_id AND d.paused_at = $2
-		AND d.pause_generation = $3 RETURNING old.paused_by, old.paused_at`, runID, pausedAt, gen).Scan(&by, &at)
+	err := s.Pool.QueryRow(ctx, clearDesktopVMPauseSQL, runID, pausedAt, gen).Scan(&by, &at)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", time.Time{}, false, nil
 	}
@@ -115,6 +122,39 @@ func (s PG) ResumeDesktopVMAgent(ctx context.Context, runID uuid.UUID, pausedAt 
 		return "", time.Time{}, false, fmt.Errorf("store: resume desktop VM agent: %w", err)
 	}
 	return by, at, true, nil
+}
+
+// clearDesktopVMPauseSQL clears the mark of run $1's pause at $2 with generation $3 and returns what it was.
+const clearDesktopVMPauseSQL = `UPDATE desktop_vm_sign_ins d SET paused_by = NULL, paused_at = NULL
+		FROM desktop_vm_sign_ins old WHERE d.run_id = $1 AND old.run_id = d.run_id AND d.paused_at = $2
+		AND d.pause_generation = $3 RETURNING old.paused_by, old.paused_at`
+
+// EndStoppedDesktopVMAgentPause — see DesktopVMSignInStore.
+func (s PG) EndStoppedDesktopVMAgentPause(ctx context.Context, runID uuid.UUID, lostAt, pausedAt time.Time, gen int64) (by string, at, stoppedAt time.Time, found bool, err error) {
+	err = s.inTx(ctx, func(q Querier) error {
+		err := q.QueryRow(ctx, `SELECT agent_stopped_at FROM agent_runs
+			WHERE id = $1 AND lost_at = $2 AND lost_reason = $3 AND agent_stopped_at IS NOT NULL FOR UPDATE`,
+			runID, lostAt, string(types.LostOutage)).Scan(&stoppedAt)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		err = q.QueryRow(ctx, clearDesktopVMPauseSQL, runID, pausedAt, gen).Scan(&by, &at)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		found = err == nil
+		return err
+	})
+	if err != nil {
+		return "", time.Time{}, time.Time{}, false, fmt.Errorf("store: end stopped desktop VM agent pause: %w", err)
+	}
+	if !found {
+		return "", time.Time{}, time.Time{}, false, nil
+	}
+	return by, at, stoppedAt, true, nil
 }
 
 // PausedDesktopVMAgents — see DesktopVMSignInStore.

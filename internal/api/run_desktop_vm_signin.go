@@ -701,7 +701,8 @@ func (w *vmSignInWatch) stop() {
 // ended before anyone resumed it, as success with ended_paused and the run's own end time, and no
 // resumed_at: the agent was never continued. A resume is refused once the run is not running, so
 // nothing else would write it. The mark is cleared first, by the pause's own paused_at and generation, so one pass
-// on one replica writes the row. One pass of the reconciler.
+// on one replica writes the row. A run lost to an outage is over only once its agent's stop is
+// confirmed (endStoppedAgentPause). One pass of the reconciler.
 func (s *Server) sweepEndedDesktopVMPauses(ctx context.Context) error {
 	st, ok := s.cfg.Store.(store.DesktopVMSignInStore)
 	if !ok {
@@ -718,7 +719,13 @@ func (s *Server) sweepEndedDesktopVMPauses(ctx context.Context) error {
 	}
 	for _, p := range paused {
 		run, err := s.cfg.Store.GetRun(ctx, p.RunID)
-		if err != nil || !desktopPauseRunOver(run) {
+		if err != nil {
+			continue
+		}
+		if !desktopPauseRunOver(run) {
+			if run.LostAt != nil && run.LostReason == types.LostOutage {
+				s.endStoppedAgentPause(ctx, st, p)
+			}
 			continue
 		}
 		// A lease-ended run stays RUNNING while it is kept, so its end is LostAt, not EndedAt.
@@ -743,9 +750,61 @@ func (s *Server) sweepEndedDesktopVMPauses(ctx context.Context) error {
 
 // desktopPauseRunOver reports whether run is over for a desktop pause: terminal, or kept after its
 // lease ended or its container exited, which stays RUNNING. A kept run lost to an outage still has
-// its agent running and may be revived, so its pause stands.
+// its agent running and may be revived, so its pause stands, until its agent's stop is confirmed
+// (desktopPauseOver).
 func desktopPauseRunOver(run types.AgentRun) bool {
 	return run.State.IsTerminal() || (run.LostAt != nil && (run.LostReason == types.LostEnded || run.LostReason == types.LostReboot))
+}
+
+// desktopPauseOver is desktopPauseRunOver, or a run kept after an outage whose agent's stop is
+// recorded (agent_stopped_at, which stopLostSandbox writes only once the stop succeeded, and a revive
+// clears): nothing continues that agent, and an extension of the run's end since does not undo the
+// stop. A stop that failed, or is due and not yet made, is not one. A store that cannot read the stop,
+// or a failed read, leaves the run not over.
+func (s *Server) desktopPauseOver(ctx context.Context, run types.AgentRun) bool {
+	if desktopPauseRunOver(run) {
+		return true
+	}
+	if run.LostAt == nil || run.LostReason != types.LostOutage {
+		return false
+	}
+	rd, ok := s.cfg.Store.(runAgentStoppedReader)
+	if !ok {
+		return false
+	}
+	stopped, err := rd.RunAgentStopped(ctx, run.ID)
+	return err == nil && stopped
+}
+
+// endStoppedAgentPause ends p, the pause on a run kept after an outage, once its agent's stop is
+// recorded for that outage, as sweepEndedDesktopVMPauses ends a pause whose run ended: one row, ended
+// at the stop (never before the pause began), and that pause's recording hold dropped. The agent is
+// not continued. The run's lock is only tried, as the lease sweep tries it, and the run is read again
+// under it; the check of the stop and the clear of the mark are one store transaction
+// (store.DesktopVMSignInStore.EndStoppedDesktopVMAgentPause), so a revive that lands first leaves the
+// pause standing, and only the pass that cleared the mark writes the row.
+func (s *Server) endStoppedAgentPause(ctx context.Context, st store.DesktopVMSignInStore, p store.PausedDesktopVMAgent) {
+	ctx, unlock, ok := s.tryLockRunOp(ctx, p.RunID)
+	if !ok {
+		return
+	}
+	defer unlock()
+	run, err := s.cfg.Store.GetRun(ctx, p.RunID)
+	if err != nil || run.LostAt == nil || run.LostReason != types.LostOutage {
+		return
+	}
+	by, pausedAt, stoppedAt, cleared, err := st.EndStoppedDesktopVMAgentPause(ctx, run.ID, *run.LostAt, p.PausedAt, p.PauseGeneration)
+	if err != nil || !cleared {
+		return
+	}
+	endedAt := stoppedAt.UTC()
+	if pausedAt.After(endedAt) {
+		endedAt = pausedAt
+	}
+	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", auditDesktopSignIn, run.ID.String(), "success",
+		mustJSON(map[string]any{"paused_by": by, "paused_at": pausedAt, "ended_paused": true, "ended_at": endedAt,
+			"paused_seconds": int(endedAt.Sub(pausedAt).Seconds())})))
+	s.endDesktopHold(ctx, run, vmSignInHold(run.ID, pausedAt))
 }
 
 // handleResumeDesktopAgent continues the agent and writes the session's one desktop.sign_in.pause row. It is

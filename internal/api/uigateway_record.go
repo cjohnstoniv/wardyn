@@ -187,7 +187,7 @@ func (d *desktopRecordings) remove(run uuid.UUID, rec *recording.RFBRecorder) {
 }
 
 // forgetEndedDesktopPause drops a paused run's entry once its last connection closed and the run is
-// over (desktopPauseRunOver) or gone, so a pause nothing will resume does not stay for the life of
+// over (desktopPauseOver) or gone, so a pause nothing will resume does not stay for the life of
 // the process, and writes the gap's resume row, end_reason run_ended: every pause row has one. A
 // live run keeps it: a connection that opens during the pause must start paused. The entry is deleted under the lock
 // before the row is written, so the last connection's close and sweepEndedDesktopRecordingPauses,
@@ -197,7 +197,7 @@ func (s *Server) forgetEndedDesktopPause(ctx context.Context, runID uuid.UUID) {
 		return
 	}
 	cur, err := s.cfg.Store.GetRun(ctx, runID)
-	if !errors.Is(err, store.ErrNotFound) && (err != nil || !desktopPauseRunOver(cur)) {
+	if !errors.Is(err, store.ErrNotFound) && (err != nil || !s.desktopPauseOver(ctx, cur)) {
 		return
 	}
 	d := &s.desktopRecs
@@ -300,7 +300,7 @@ func (s *Server) ResumeDesktopRecording(ctx context.Context, run types.AgentRun,
 		delete(d.byRun, run.ID)
 	}
 	d.mu.Unlock()
-	s.auditDesktopResume(ctx, run.ID, run.SandboxRef, p, desktopPauseRunOver(run))
+	s.auditDesktopResume(ctx, run.ID, run.SandboxRef, p, s.desktopPauseOver(ctx, run))
 	return true
 }
 
@@ -358,7 +358,7 @@ func (d *desktopRecordings) heldWith(run uuid.UUID, prefix string) []string {
 }
 
 // auditDesktopResume writes desktop.recording.resume for gap p, ending now. A gap closed once the run
-// was over (desktopPauseRunOver) says so, as a container sign-in's close does: end_reason run_ended (signinEndRunEnded).
+// was over (desktopPauseOver) says so, as a container sign-in's close does: end_reason run_ended (signinEndRunEnded).
 func (s *Server) auditDesktopResume(ctx context.Context, runID uuid.UUID, sandboxRef string, p desktopPause, runEnded bool) {
 	end := s.cfg.Now().UTC()
 	data := map[string]any{"reason": p.reason, "gap_start": p.at, "gap_end": end, "gap_ms": end.Sub(p.at).Milliseconds()}
