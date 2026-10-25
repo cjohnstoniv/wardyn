@@ -372,7 +372,14 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
-	rollback = append(rollback, func() { _ = os.RemoveAll(dir) })
+	// Until the VM's destruction joins the rollback, the run directory is this create's to delete. From then on
+	// destroyMacVM alone decides: it keeps the directory, and the ledger entry, while the helper may be alive.
+	destroys := false
+	rollback = append(rollback, func() {
+		if !destroys {
+			_ = os.RemoveAll(dir)
+		}
+	})
 	// The run's network and proxy are what the start hands the VM (MacOSStarting), so a failure here is
 	// the start's, said before any clone began.
 	failed = runner.MacOSStartFailed
@@ -394,6 +401,7 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 	v := newMacVMRun(c, spec.RunID, dir)
 	ref := agentContainerName(spec.RunID)
 	// From here the VM (or its helper) may exist: the rollback is the teardown's own destruction.
+	destroys = true
 	rollback = append(rollback, func() {
 		v.stop()
 		v.agent.Close()
