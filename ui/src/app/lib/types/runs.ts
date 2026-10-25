@@ -297,10 +297,11 @@ export interface AgentRun {
   // "ended" = its end passed, so it is stopped with no network and its files
   // stay for the ended-run grace. "reboot" = its container exited under it
   // and is kept stopped; "outage" = its token lapsed, so its proxy was removed
-  // and its agent left running with no network (#574). The run stays RUNNING
-  // meanwhile.
+  // and its agent left running with no network (#574). "gone" = a runner
+  // reported its sandbox gone with no exit code, so the run was ended FAILED
+  // (#3667). The run stays RUNNING meanwhile.
   lost_at?: string;
-  lost_reason?: "ended" | "reboot" | "outage";
+  lost_reason?: "ended" | "reboot" | "outage" | "gone";
   // The run's end time, stamped by the three state writers that move a run to
   // a terminal state (migration 0092, #1197). Absent for a live run and for a
   // legacy row the backfill could not date exactly. A lease-ended run (
@@ -422,7 +423,7 @@ export interface RunProxyRelease {
   run_id: string;
   created_by: string;
   state: RunState;
-  lost_reason?: "ended" | "reboot" | "outage";
+  lost_reason?: "ended" | "reboot" | "outage" | "gone";
   proxy_release: string;
 }
 

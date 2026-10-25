@@ -90,3 +90,76 @@ func (s PG) MarkRunnerRunLost(ctx context.Context, runnerID, runID uuid.UUID, ex
 	}
 	return tag.RowsAffected() == 1, tx.Commit(ctx)
 }
+
+// RunnerSandboxGoneAfter is how long a run's sandbox must stay reported absent, from its first absent
+// report to the start of a later fresh session's inventory that still reports it absent, before the
+// run is ended lost (gone). A refused runner reconnects at 1 s doubling (runnerwire reconnectDelay),
+// so the sixth session at the latest is past it; one report never is.
+const RunnerSandboxGoneAfter = 30 * time.Second
+
+// goneClaimableSQL is TRUE for an agent_runs row (alias a) a gone mark may land on: RUNNING and holding
+// a sandbox (HoldsSandboxSQL), with no containment report from its runner and no staged exit still to
+// finish, each of which settles the run on its own path.
+const goneClaimableSQL = `a.state='RUNNING' AND ` + HoldsSandboxSQL + `
+	AND NOT EXISTS (SELECT 1 FROM run_containment_pending p WHERE p.run_id=a.id)
+	AND NOT EXISTS (SELECT 1 FROM runner_execution_exits x WHERE x.run_id=a.id AND NOT x.tail_complete AND NOT x.receipt_only AND x.parked_at IS NULL)`
+
+// goneConfirmedSQL is TRUE for an agent_runs row (alias a) whose sandbox runner $1's current inventory
+// still reports absent at least $2 (RunnerSandboxGoneAfter) after its first absent report, and that a
+// gone mark may land on. It reads o.needs_loss, so intakeRunnerStateRow runs runnerSandboxGoneTx after
+// syncRunContainmentPendingTx (this report's containment row is the one goneClaimableSQL checks) and
+// before its observation insert (the row's needs_loss carries the gone verdict).
+const goneConfirmedSQL = `a.sandbox_absent_at IS NOT NULL AND ` + goneClaimableSQL + `
+	AND EXISTS (SELECT 1 FROM runner_inventories i JOIN runner_inventory_observations o ON o.runner_id=i.runner_id
+		WHERE i.runner_id=$1 AND o.run_id=a.id AND o.needs_loss AND i.created_at >= a.sandbox_absent_at + $2::interval)`
+
+// runnerSandboxGoneTx records one STATE report of a known run's sandbox. Absent with no exit code,
+// under the run's own ref, with no retirement or containment report and nothing else settling the run,
+// it stamps agent_runs.sandbox_absent_at once and answers true, which refuses READY. Any other report
+// clears the stamp, so only an unbroken series of absent reports confirms.
+func runnerSandboxGoneTx(ctx context.Context, tx pgx.Tx, row runnerwire.RunState) (bool, error) {
+	if !row.SandboxPresent && row.Ref != "" && row.Retirement == nil && row.ContainmentPending == nil {
+		tag, err := tx.Exec(ctx, `UPDATE agent_runs a SET sandbox_absent_at=COALESCE(a.sandbox_absent_at, clock_timestamp())
+			WHERE a.id=$1 AND a.sandbox_ref=$2 AND `+goneClaimableSQL, row.RunID, row.Ref)
+		if err != nil || tag.RowsAffected() == 1 {
+			return err == nil, err
+		}
+	}
+	_, err := tx.Exec(ctx, `UPDATE agent_runs SET sandbox_absent_at=NULL WHERE id=$1 AND sandbox_absent_at IS NOT NULL`, row.RunID)
+	return false, err
+}
+
+// ListRunnerGoneRuns is the gone pass's bounded page: the runner's runs whose sandbox its current
+// inventory confirmed gone. It grants no authority; MarkRunnerRunGone rechecks everything.
+func (s PG) ListRunnerGoneRuns(ctx context.Context, runnerID, after uuid.UUID) ([]types.AgentRun, error) {
+	return collect(ctx, s.Pool, "list", "runner gone runs",
+		`SELECT `+runCols+` FROM agent_runs a WHERE a.runner_id=$1 AND a.id>$3 AND a.placement='local' AND `+goneConfirmedSQL+` ORDER BY a.id LIMIT 100`,
+		[]any{runnerID, RunnerSandboxGoneAfter.String(), after}, scanRun)
+}
+
+// MarkRunnerRunGone marks a run lost (gone) for its authenticated runner, only while the runner's
+// current inventory confirms its sandbox gone (goneConfirmedSQL). It clears a pause: the agent is not
+// running. The lock order is MarkRunnerRunLost's.
+func (s PG) MarkRunnerRunGone(ctx context.Context, runnerID, runID uuid.UUID, expectedRef string, at time.Time) (bool, error) {
+	if _, err := s.Pool.Exec(ctx, `SELECT 1 FROM agent_runs WHERE id = $1 FOR UPDATE`, runID); err != nil {
+		return false, err
+	}
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // committed tx is already closed
+	run, err := runnerExecutionRun(ctx, tx, runnerID, runID)
+	if err != nil {
+		return false, err
+	}
+	if expectedRef == "" || run.SandboxRef != expectedRef {
+		return false, ErrRunnerExecutionRefused
+	}
+	tag, err := tx.Exec(ctx, `UPDATE agent_runs a SET lost_at=$3, lost_reason=$4, paused_at=NULL, paused_reason=''
+		WHERE a.id=$5 AND a.runner_id=$1 AND `+goneConfirmedSQL, runnerID, RunnerSandboxGoneAfter.String(), at, string(types.LostGone), runID)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, tx.Commit(ctx)
+}
