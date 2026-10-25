@@ -1,0 +1,36 @@
+{
+  "keyed_sha": "f15a707fa50768a1facfc39d04283e99d149e3f6",
+  "proofs": [
+    {
+      "name": "macvm-fold-askof-takes-fold",
+      "package": "./internal/api",
+      "run": "^TestPreflightMirrorsLaunchGates$",
+      "tags": "docker",
+      "files": {
+        "internal/api/run_placement_capabilities.go": ".proofs/files/macvm-fold-askof-takes-fold/internal/api/run_placement_capabilities.go",
+        "internal/api/run_fold_steps.go": ".proofs/files/macvm-fold-askof-takes-fold/internal/api/run_fold_steps.go"
+      },
+      "want_fail": "--- FAIL: TestPreflightMirrorsLaunchGates"
+    },
+    {
+      "name": "macvm-caps-no-brand-entry",
+      "package": "./internal/api",
+      "run": "^TestRefusalSentenceConstsStartCapitalized$",
+      "tags": "docker",
+      "files": {
+        "internal/api/refusal_capitalization_test.go": ".proofs/files/macvm-caps-no-brand-entry/internal/api/refusal_capitalization_test.go"
+      },
+      "want_fail": "--- FAIL: TestRefusalSentenceConstsStartCapitalized"
+    },
+    {
+      "name": "macvm-census-no-refusal-entry",
+      "package": "./internal/api",
+      "run": "^TestUngovernedCallerCensus$",
+      "tags": "docker",
+      "files": {
+        "internal/api/ungoverned_census_test.go": ".proofs/files/macvm-census-no-refusal-entry/internal/api/ungoverned_census_test.go"
+      },
+      "want_fail": "--- FAIL: TestUngovernedCallerCensus"
+    }
+  ]
+}
