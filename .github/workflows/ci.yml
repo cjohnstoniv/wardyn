@@ -1782,6 +1782,12 @@ jobs:
           # -v: prove the darwin-native guest agent tests (server_darwin_test.go) ran, not just compiled.
           go test -count=1 -timeout 10m -v ./internal/vm/guestagent/ | tee "$RUNNER_TEMP/guestagent.out"
           grep -q -- '^--- PASS: TestDarwin' "$RUNNER_TEMP/guestagent.out"
+      - name: Live suite self-tests (its P-rows skip on a hosted Mac)
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          export TMPDIR=/private/tmp
+          go test -count=1 -tags macvm_live ./test/conformance/macvm/
       - name: Build the darwin runnerd
         if: ${{ !cancelled() }}
         run: CGO_ENABLED=0 go build -tags docker -trimpath -o "$RUNNER_TEMP/wardyn-runnerd" ./cmd/wardyn-runnerd

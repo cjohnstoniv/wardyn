@@ -50,8 +50,8 @@ type deps struct {
 	// prepare supplies prepare's first-boot provisioner, prep network and
 	// stage 1, which other parts of the build provide.
 	prepare func(*macvm.PrepareOptions) error
-	// firstBoot is the provisioning first boot (macvm.NewProvisioner); nil
-	// until that is linked.
+	// firstBoot is the provisioning first boot (macvm.NewProvisioner), which
+	// probe asks whether this host can run it.
 	firstBoot macvm.FirstBooter
 	// fstat replaces fstat(2) in the ledger's ownership checks (tests).
 	fstat func(fd int, name string) (unix.Stat_t, error)
@@ -73,10 +73,15 @@ func (d deps) power() macvm.PowerSource {
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	os.Exit(run(ctx, os.Args[1:], deps{
+	os.Exit(run(ctx, os.Args[1:], mainDeps()))
+}
+
+// mainDeps are the helper's real deps.
+func mainDeps() deps {
+	return deps{
 		engine: platformEngine, host: admission.SystemHost(), stdout: os.Stdout, stderr: os.Stderr,
-		prepare: prepareDeps,
-	}))
+		prepare: prepareDeps, firstBoot: macvm.NewProvisioner(),
+	}
 }
 
 func run(ctx context.Context, args []string, d deps) int {
@@ -395,10 +400,13 @@ func cmdUpdateTools(ctx context.Context, args []string, d deps) int {
 
 // prepareDeps wires prepare's first-boot provisioner (macvm.NewProvisioner),
 // prep network (internal/vmnet) and stage 1. Stage 1 installs the
-// wardyn-guest-agent that sits beside this helper. The provisioner and the
-// prep network arrive from their own lanes; until they are merged this build
-// refuses prepare by name.
+// wardyn-guest-agent that sits beside this helper. A build whose provisioner
+// is unsupported keeps it: Prepare's host check refuses with its reason. The
+// prep network is not wired yet, so this build refuses prepare by name.
 func prepareDeps(o *macvm.PrepareOptions) error {
+	if o.FirstBoot == nil {
+		o.FirstBoot = macvm.NewProvisioner()
+	}
 	if o.Bootstrap == nil {
 		agent, err := guestAgentPath()
 		if err != nil {
@@ -406,8 +414,8 @@ func prepareDeps(o *macvm.PrepareOptions) error {
 		}
 		o.Bootstrap = stage1.New(stage1.Config{AgentPath: agent, AgentVersion: version.String()})
 	}
-	if o.FirstBoot == nil || o.PrepNet == nil || o.Bootstrap == nil {
-		return errors.New("this build has no guest provisioning, prep network or stage 1 yet; prepare is not available")
+	if o.PrepNet == nil {
+		return errors.New("this build has no prep network yet; prepare is not available")
 	}
 	return nil
 }
@@ -441,7 +449,7 @@ type probeReport struct {
 // exits 0 only when they can.
 func cmdProbe(d deps) int {
 	r := probeReport{GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, Cgo: cgoEnabled, VZ: vzLinked, HelperVersion: version.String()}
-	hostErr := errors.New("no engine")
+	var hostErr error
 	if eng, err := d.engine(); err != nil {
 		hostErr = err
 	} else {

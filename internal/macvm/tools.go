@@ -664,18 +664,7 @@ func UpdateTools(ctx context.Context, o UpdateOptions) (Manifest, bool, error) {
 	if o.Engine == nil || o.Power == nil || o.Stage == nil || o.Layout.Root == "" {
 		return Manifest{}, false, errors.New("macvm: a tools update needs an engine, a power source, a stage 2 and a root")
 	}
-	if o.Progress == nil {
-		o.Progress = func(PrepareEvent) {}
-	}
-	if o.PowerPoll == 0 {
-		o.PowerPoll = 2 * time.Second
-	}
-	if o.Now == nil {
-		o.Now = time.Now
-	}
-	if o.Log == nil {
-		o.Log = slog.New(slog.NewJSONHandler(io.Discard, nil))
-	}
+	o.setDefaults()
 	base := o.Layout.BaseDir(o.Slot)
 	nb, done, err := beginUpdate(ctx, base, o.Log)
 	if err != nil {
@@ -755,6 +744,22 @@ func UpdateTools(ctx context.Context, o UpdateOptions) (Manifest, bool, error) {
 	}
 	o.Progress(PrepareEvent{Phase: PhaseReady, Fraction: 1})
 	return m, true, nil
+}
+
+// setDefaults fills UpdateTools' unset progress, power poll, clock and log.
+func (o *UpdateOptions) setDefaults() {
+	if o.Progress == nil {
+		o.Progress = func(PrepareEvent) {}
+	}
+	if o.PowerPoll == 0 {
+		o.PowerPoll = 2 * time.Second
+	}
+	if o.Now == nil {
+		o.Now = time.Now
+	}
+	if o.Log == nil {
+		o.Log = slog.New(slog.NewJSONHandler(io.Discard, nil))
+	}
 }
 
 // beginUpdate takes base's update lock for a tools update or a re-prepare and
