@@ -145,6 +145,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Choosing Linux again after macOS in New Run no longer drops a CPU or memory value you had set to exactly the Mac
   minimum before choosing macOS. Only the figures that choosing macOS filled in are taken back, and only while they are
   still at the minimum.
+- In New Run, a Mac pool that was preparing or at capacity when the page opened offers macOS once it recovers, when
+  you move to another step. Before, it stayed unavailable until the page was reloaded, and the draft is kept either way.
 
 ## [0.10.0-rc.1] — 2026-10-24
 
