@@ -1879,7 +1879,8 @@ jobs:
           go test -c -tags macvm_live -o "$RUNNER_TEMP/macvm_live.test" ./test/conformance/macvm
           # Go's own test2json converts the raw output; the testing package has no -test.json flag.
           rc=0
-          "$RUNNER_TEMP/macvm_live.test" -test.v=test2json >"$RUNNER_TEMP/suite.raw" 2>"$RUNNER_TEMP/suite.err" || rc=$?
+          # From /, as an operator on the rented Mac would run it: the suite must not lean on the checkout.
+          (cd / && "$RUNNER_TEMP/macvm_live.test" -test.v=test2json) >"$RUNNER_TEMP/suite.raw" 2>"$RUNNER_TEMP/suite.err" || rc=$?
           cat "$RUNNER_TEMP/suite.err"
           # On a failure, show which test failed: its output is in suite.raw, not on the console.
           [ "$rc" -eq 0 ] || { tail -n 200 "$RUNNER_TEMP/suite.raw"; echo "::error::the packaged suite exited $rc"; exit 1; }
