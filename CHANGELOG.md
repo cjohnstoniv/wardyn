@@ -70,8 +70,6 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   row in that run's audit, marked `chain_check`. The check reads only the recording's metadata, not its content. A check
   of your own run still leaves nothing, and who may ask, and what a refused caller sees, are unchanged.
 
-### Fixed
-
 - A macOS VM run stuck in one start phase, such as connecting to the VM, now shows the same overdue advice as any
   other start once the macOS start time has passed. Before, the phase row kept its spinner and said nothing. A start
   that failed still shows its failure.
@@ -80,6 +78,15 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   still at the minimum.
 - In New Run, a Mac pool that was preparing or at capacity when the page opened offers macOS once it recovers, when
   you move to another step. Before, it stayed unavailable until the page was reloaded, and the draft is kept either way.
+- A run on a runner whose sandbox disappears without an exit code now ends. When two reports at least 30 seconds
+  apart find the sandbox gone, the run is marked lost (`gone`) and ends FAILED, and its slot frees at once (#3667).
+  Before, it stayed running and held the runner's capacity until its token lapsed. Migration
+  `0235_run_sandbox_absent_at` adds a column to `agent_runs`; no grant changes.
+- An interrupted or failed reinstall of the runner package on a Mac no longer leaves it counting fewer running macOS
+  VMs than it has. The installer also stops, with the count untouched, when it cannot read the count's files, where
+  it used to start the count empty.
+- A brief database error while a runner replays its saved audit events no longer drops one of them from the audit
+  log. The event is kept for the next replay.
 
 ## [0.10.0-rc.2] — 2026-10-25
 
