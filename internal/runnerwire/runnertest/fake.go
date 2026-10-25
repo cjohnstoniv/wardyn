@@ -41,7 +41,9 @@ type Fake struct {
 	// PauseGens is the generation of each pause_agent and resume_agent, and FencedPause their answer.
 	PauseGens   []int64
 	FencedPause bool
-	disks       map[string]runner.MacOSVMDisk // SetMacOSVMDisk's reports, by local ref
+	// EndErr, when set, is what EndSandbox answers, as an end that failed on the runner.
+	EndErr error
+	disks  map[string]runner.MacOSVMDisk // SetMacOSVMDisk's reports, by local ref
 }
 
 // NewFake offers CC1 and CC2.
@@ -192,8 +194,9 @@ func (f *Fake) EndSandbox(_ context.Context, ref string) error {
 	f.note("end", ref)
 	f.mu.Lock()
 	f.StoppedRef[ref] = true
+	err := f.EndErr
 	f.mu.Unlock()
-	return nil
+	return err
 }
 
 func (f *Fake) StopProxy(_ context.Context, ref string) error { f.note("stop_proxy", ref); return nil }

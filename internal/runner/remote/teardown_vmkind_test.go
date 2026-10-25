@@ -39,22 +39,24 @@ func TestTeardownDropsTheMachineKindOnKillAndEnd(t *testing.T) {
 	}
 }
 
-// An end that fails still drops the kind once the runner has answered: the second end finds the sandbox gone.
+// An end the runner answers with a failure still drops the kind: the substrate does no more for the sandbox.
 func TestFailedEndDropsTheMachineKind(t *testing.T) {
 	rig := runnertest.NewRig(t, rid)
 	sb, _ := create(t, rig, nil)
-	if err := rig.Sub.KillSandbox(ctxT(t), sb.Ref); err != nil {
-		t.Fatal(err)
-	}
 	remote.SetVMKind(rig.Sub, sb.Ref, types.MachineLinuxVM)
-	_ = rig.Sub.EndSandbox(ctxT(t), sb.Ref)
+	rig.Fake.EndErr = errors.New("end failed on the runner")
+	err := rig.Sub.EndSandbox(ctxT(t), sb.Ref)
+	if err == nil || errors.Is(err, runner.ErrRunnerOffline) || errors.Is(err, runner.ErrPendingOnRunner) {
+		t.Fatalf("End = %v, want the runner's failure", err)
+	}
 	if got := remote.VMKindOf(rig.Sub, sb.Ref); got != "" {
-		t.Fatalf("after an end of a sandbox the runner no longer has, the kind is %q, want none", got)
+		t.Fatalf("after a failed end the kind is %q, want none", got)
 	}
 }
 
-// A teardown queued for a runner that is away keeps the kind: the runner is asked again.
-func TestQueuedTeardownKeepsTheMachineKind(t *testing.T) {
+// A kill queued for a runner that is away drops the kind too: the runner replays it on its own side on
+// reconnect, which never comes back through the substrate.
+func TestQueuedKillDropsTheMachineKind(t *testing.T) {
 	rig := runnertest.NewRig(t, rid)
 	sb, _ := create(t, rig, nil)
 	remote.SetVMKind(rig.Sub, sb.Ref, types.MachineMacOSVM)
@@ -63,7 +65,7 @@ func TestQueuedTeardownKeepsTheMachineKind(t *testing.T) {
 	if err := rig.Sub.KillSandbox(ctxT(t), sb.Ref); !errors.Is(err, runner.ErrPendingOnRunner) {
 		t.Fatalf("offline Kill = %v, want ErrPendingOnRunner", err)
 	}
-	if got := remote.VMKindOf(rig.Sub, sb.Ref); got != types.MachineMacOSVM {
-		t.Fatalf("a queued kill left the kind %q, want it kept", got)
+	if got := remote.VMKindOf(rig.Sub, sb.Ref); got != "" {
+		t.Fatalf("a queued kill left the kind %q, want none", got)
 	}
 }
