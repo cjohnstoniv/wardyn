@@ -78,7 +78,7 @@
 
 - It needs `--per-run-cpu` (CPUs) and `--per-run-memory` (GB): the runner's per-run limits, which the preparing VM uses and never raises.
 - `--keep-ipsw` keeps Apple's image after the base is ready, and `--new-image` is the re-prepare.
-- `wardyn-runnerd setup` starts the same preparing itself with the limits it just registered, on a first registration unless the base is ready, and passes `--keep-ipsw` on to it. A rerun prints the prepare command instead.
+- `wardyn-runnerd setup` starts the same preparing itself with the limits it just registered, on a first registration unless the base is ready. Given `--keep-ipsw`, setup passes it on to that prepare. A rerun prints the prepare command instead.
 
 | Step | What happens |
 |---|---|
