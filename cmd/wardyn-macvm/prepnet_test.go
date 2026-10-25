@@ -13,6 +13,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
 	"golang.org/x/sys/unix"
+	glog "gvisor.dev/gvisor/pkg/log"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
 )
@@ -191,5 +192,32 @@ func TestPrepNetCloseTwice(t *testing.T) {
 	}
 	if err := nw.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestGVisorLogGoesToPrepRelayLog: gVisor's own netstack log, stderr by
+// default, goes to prep-relay.log once the relays' log is open, so no
+// netstack warning can become prepare.log's last line.
+func TestGVisorLogGoesToPrepRelayLog(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderr := os.Stderr
+	os.Stderr = w
+	defer func() { os.Stderr = stderr }()
+	root := t.TempDir()
+	_, closeLog, err := openRelayLog(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	glog.Warningf("x-gvisor-warning")
+	closeLog()
+	os.Stderr = stderr
+	_ = w.Close()
+	out, _ := io.ReadAll(r)
+	logged, _ := os.ReadFile(macvm.Layout{Root: root}.PrepRelayLog())
+	if len(out) != 0 || !strings.Contains(string(logged), "x-gvisor-warning") {
+		t.Fatalf("stderr %q, prep-relay.log %q", out, logged)
 	}
 }
