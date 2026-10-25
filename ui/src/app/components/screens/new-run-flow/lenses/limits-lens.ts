@@ -5,7 +5,7 @@
 
 // Owns resources.cpu_millis and resources.memory_mib (Review's Limits group), and a macOS VM's pre-fill of them.
 
-import type { RunIntent } from "../draft/run-intent";
+import type { GuidedFacts, RunIntent } from "../draft/run-intent";
 import { withKeys } from "./lens-keys";
 
 export const setCpu = (intent: RunIntent, cpuMillis: number): RunIntent =>
@@ -31,11 +31,20 @@ export const startAtMinimum = (intent: RunIntent, min: MacOSMinimum): RunIntent 
 export const atMinimum = (intent: RunIntent, min: MacOSMinimum): boolean =>
   intent.resources?.cpu_millis === min.cpuMillis && intent.resources?.memory_mib === min.memoryMib;
 
-/** Leaving macOS takes back the pre-fill, and only an ask still exactly the minimum. */
-export function dropMinimum(intent: RunIntent, min: MacOSMinimum): RunIntent {
-  if (!atMinimum(intent, min)) return intent;
-  const { cpu_millis: _cpu, memory_mib: _memory, ...rest } = intent.resources ?? {};
-  return withKeys(intent, { resources: Object.keys(rest).length ? rest : undefined });
+/** Which of the two figures choosing macOS added: one the ask already held at or above the minimum is the person's. */
+export const minimumFill = (intent: RunIntent, min: MacOSMinimum): NonNullable<GuidedFacts["macosFill"]> => ({
+  cpu: (intent.resources?.cpu_millis ?? 0) < min.cpuMillis,
+  memory: (intent.resources?.memory_mib ?? 0) < min.memoryMib,
+});
+
+/** Leaving macOS takes back the figures the pre-fill added, and only while each is still exactly the minimum. */
+export function dropMinimum(intent: RunIntent, min: MacOSMinimum, fill: GuidedFacts["macosFill"]): RunIntent {
+  const { cpu_millis: cpu, memory_mib: memory, ...rest } = intent.resources ?? {};
+  const dropCpu = !!fill?.cpu && cpu === min.cpuMillis;
+  const dropMemory = !!fill?.memory && memory === min.memoryMib;
+  if (!dropCpu && !dropMemory) return intent;
+  const kept = { ...rest, ...(!dropCpu && cpu !== undefined && { cpu_millis: cpu }), ...(!dropMemory && memory !== undefined && { memory_mib: memory }) };
+  return withKeys(intent, { resources: Object.keys(kept).length ? kept : undefined });
 }
 
 /** True when either figure of the ask is under the macOS minimum. */

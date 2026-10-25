@@ -16,7 +16,7 @@ import { harnessIds } from "../../lenses/lens-keys";
 import { stepIssues } from "../../lenses/local-issues";
 import { addApp, appsOf, chooseAppKind, commandOf, editApp, isServer, removeApp, setCommand } from "../../lenses/apps-lens";
 import type { MachineKind } from "../../../../../lib/types/machine-kind";
-import { dropMinimum, startAtMinimum } from "../../lenses/limits-lens";
+import { dropMinimum, minimumFill, startAtMinimum } from "../../lenses/limits-lens";
 import { chooseBarrier, chooseMachineKind, chooseMode, choosePool } from "../../lenses/run-lens";
 import { modeOf, type RunMode } from "../../lenses/shape-lens";
 import { flowSteps, StepShell } from "../step-shell";
@@ -60,12 +60,17 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
   // A macOS VM starts its CPU and memory ask at the base's minimum; leaving macOS takes that back.
   const offer = useMacOSOffer();
   const minimum = offer?.ok ? { cpuMillis: offer.minCPUs * 1000, memoryMib: offer.minMemoryMiB } : undefined;
-  const chooseKind = (kind: MachineKind) =>
+  const fill = draft.guided.macosFill;
+  const chooseKind = (kind: MachineKind) => {
+    const onMac = intent.machine_kind === "macos_vm";
+    if (kind === "macos_vm" && !onMac && minimum) dispatch({ type: "guided", patch: { macosFill: minimumFill(intent, minimum) } });
+    else if (kind !== "macos_vm" && fill) dispatch({ type: "guided", patch: { macosFill: undefined } });
     edit((i) => {
-      const leaving = i.machine_kind === "macos_vm" && kind !== "macos_vm" && minimum ? dropMinimum(i, minimum) : i;
+      const leaving = i.machine_kind === "macos_vm" && kind !== "macos_vm" && minimum ? dropMinimum(i, minimum, fill) : i;
       const next = chooseMachineKind(leaving, kind);
       return kind === "macos_vm" && minimum ? startAtMinimum(next, minimum) : next;
     });
+  };
 
   return (
     <StepShell

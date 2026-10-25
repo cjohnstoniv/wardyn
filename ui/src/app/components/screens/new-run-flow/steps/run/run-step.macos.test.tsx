@@ -130,6 +130,15 @@ describe("OS row: macOS chosen (frame 2, M-N2 frame 1)", () => {
     expect(intentNow().resources).toBeUndefined();
   });
 
+  it("keeps CPU and memory the person set to exactly the minimum before choosing macOS when Linux is chosen again", async () => {
+    show({ ...AGENT, resources: { cpu_millis: 4000, memory_mib: 8192 } }, ON, READY);
+    await chooseVM();
+    await userEvent.click(macosButton());
+    expect(intentNow().resources).toEqual({ cpu_millis: 4000, memory_mib: 8192 });
+    await userEvent.click(within(osGroup()).getByRole("button", { name: NR_MACHINE.OS_LINUX }));
+    expect(intentNow()).toMatchObject({ machine_kind: "linux_vm", resources: { cpu_millis: 4000, memory_mib: 8192 } });
+  });
+
   it("says an agent that disallows desktop sign-ins stops the run (M-N2 frame 3)", async () => {
     // The setup status's own harness row says it: the draft's agent has "Sign-ins in a desktop: Not allowed".
     const status = { ...ON, harnesses: [{ id: "release-bot", display: "Release bot", has_gateway: false, has_login: false, desktop_sign_ins_off: true }] } as SetupStatus;
