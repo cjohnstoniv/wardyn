@@ -630,8 +630,11 @@ func (p *prep) provisionAndBootstrap(ctx context.Context, spec MachineSpec) (Boo
 	if err != nil {
 		return BootstrapResult{}, err
 	}
-	if err := p.waitAC(ctx, PhaseProvision); err != nil {
-		return BootstrapResult{}, err
+	if err := p.waitAC(wctx, PhaseProvision); err != nil {
+		return BootstrapResult{}, relayFailed(err)
+	}
+	if err := wctx.Err(); err != nil {
+		return BootstrapResult{}, relayFailed(err)
 	}
 	p.emit(PrepareEvent{Phase: PhaseProvision})
 	user, pass := provisionUser, password

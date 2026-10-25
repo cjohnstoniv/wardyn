@@ -621,6 +621,58 @@ func TestPrepareFailsWithTheRelaysError(t *testing.T) {
 	}
 }
 
+// A relay that fails while the provisioning step waits for AC ends the prepare with the relay's error; the
+// first boot never starts.
+func TestPrepareRelayFailureDuringTheProvisionPowerWait(t *testing.T) {
+	f := newPrep(t)
+	f.net.serveErr = errors.New("virtual NIC failed")
+	f.eng.InstallFunc = func(ctx context.Context, _ *macvmtest.Machine, _ string, _ func(float64)) error {
+		f.power.set(false) // on battery for the provisioning wait, which never ends by itself
+		return ctx.Err()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := macvm.Prepare(ctx, f.opts)
+	if err == nil || !strings.Contains(err.Error(), "virtual NIC failed") {
+		t.Fatalf("prepare error = %v, want the relay's", err)
+	}
+	if f.fb.Boots() != 0 {
+		t.Fatalf("booted %d times after the relay stopped", f.fb.Boots())
+	}
+}
+
+// onACAfter reports AC, but only after pause once armed, so a relay that fails at once has failed by then.
+type onACAfter struct {
+	armed atomic.Bool
+	pause time.Duration
+}
+
+func (p *onACAfter) OnAC(context.Context) (bool, error) {
+	if p.armed.Load() {
+		time.Sleep(p.pause)
+	}
+	return true, nil
+}
+
+// Already on AC, a relay that has failed still ends the prepare with its error and no boot.
+func TestPrepareRelayFailedBeforeTheFirstBootOnAC(t *testing.T) {
+	f := newPrep(t)
+	f.net.serveErr = errors.New("virtual NIC failed")
+	pw := &onACAfter{pause: 100 * time.Millisecond}
+	f.opts.Power = pw
+	f.eng.InstallFunc = func(ctx context.Context, _ *macvmtest.Machine, _ string, _ func(float64)) error {
+		pw.armed.Store(true)
+		return ctx.Err()
+	}
+	_, err := macvm.Prepare(context.Background(), f.opts)
+	if err == nil || !strings.Contains(err.Error(), "virtual NIC failed") {
+		t.Fatalf("prepare error = %v, want the relay's", err)
+	}
+	if f.fb.Boots() != 0 {
+		t.Fatalf("booted %d times after the relay stopped", f.fb.Boots())
+	}
+}
+
 // A provisioning boot the framework refuses with its VM limit calls the Leaked hook once; any other boot
 // error does not; a failing hook is logged and the prepare still returns the boot error.
 func TestPrepareLeakedHook(t *testing.T) {
