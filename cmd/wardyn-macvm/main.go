@@ -511,7 +511,11 @@ func openRelayLog(root string) (*slog.Logger, func(), error) {
 	}
 	// gVisor's netstack logs to stderr by default; send it here too.
 	glog.SetTarget(glog.JSONEmitter{Writer: &glog.Writer{Next: f}})
-	return slog.New(slog.NewJSONHandler(f, nil)), func() { _ = f.Close() }, nil
+	return slog.New(slog.NewJSONHandler(f, nil)), func() {
+		// A netstack line after the close is dropped, not written to the closed file.
+		glog.SetTarget(glog.JSONEmitter{Writer: &glog.Writer{Next: io.Discard}})
+		_ = f.Close()
+	}, nil
 }
 
 // guestAgentPath is the darwin/arm64 wardyn-guest-agent beside this helper:
