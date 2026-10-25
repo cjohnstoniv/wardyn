@@ -116,6 +116,17 @@ export const RUN_STARTUP = {
     "This is taking longer than a start usually does. If nothing changes, kill the run and launch it again.",
 } as const;
 
+// A macOS VM's start (MV-D02 to MV-D07, MV-D16), beside RUN_STARTUP so its pin stays whole. Ids in the comments.
+export const RUN_STARTUP_MACOS = {
+  STEP_CLONE: "Cloning the macOS base", // MV-D02
+  STEP_START: "Starting macOS", // MV-D03
+  STEP_CONNECT: "Connecting to the VM", // MV-D04
+  STEP_CONNECT_FAILED: "Connecting to the VM — failed", // MV-D05
+  NO_AGENT: "The macOS VM started but its Wardyn agent did not connect within 3 minutes.", // MV-D06
+  DISK_SHORT: (reserved: string, free: string) => `Not enough free disk to start a macOS VM safely: it reserves ${reserved} GB and this Mac has ${free} GB free.`, // MV-D07
+  STEP_START_FAILED: "Starting macOS — failed", // MV-D16
+} as const;
+
 // The image-build stage line's reason token (`image: Building`), written by the
 // server while a run is PENDING. run-status-detail.test.ts reads the Go constant
 // and fails if the two drift.
@@ -296,7 +307,7 @@ export type StartupMark = "done" | "active" | "pending" | "failed";
 // `stale`: the row that was active before the run went overdue (drawn without
 // its spinner but in the normal text colour, as the mock's stale row).
 export type StartupRow = {
-  key: "build" | "start" | "download" | "last";
+  key: "build" | "start" | "download" | "last" | "clone" | "connect";
   label: string;
   mark: StartupMark;
   stale?: boolean;
@@ -309,6 +320,25 @@ export type StartupView = {
   alert: string;
 };
 export type StartupLastStep = "terminal" | "task" | "command" | null;
+
+/** A macOS VM's start: the phase it is in, and the sentence that stopped it there (start or connect only). */
+export type MacOSStart = { phase: "clone" | "start" | "connect"; failure?: string };
+
+// A macOS VM's rows replace Starting the sandbox and Downloading the image (mock M-D1): the phases before the
+// current one are done, the current one runs or, with a failure, fails and says why, and the list stops there.
+function macOSStartup(start: MacOSStart, last: (mark: StartupMark) => StartupRow[]): StartupView {
+  const order = ["clone", "start", "connect"] as const;
+  const labels = { clone: RUN_STARTUP_MACOS.STEP_CLONE, start: RUN_STARTUP_MACOS.STEP_START, connect: RUN_STARTUP_MACOS.STEP_CONNECT };
+  const failedLabels = { clone: labels.clone, start: RUN_STARTUP_MACOS.STEP_START_FAILED, connect: RUN_STARTUP_MACOS.STEP_CONNECT_FAILED };
+  const at = order.indexOf(start.phase);
+  const failed = start.failure !== undefined;
+  const rows: StartupRow[] = order.map((key, i) => ({
+    key,
+    label: i === at && failed ? failedLabels[key] : labels[key],
+    mark: i < at ? "done" : i > at ? "pending" : failed ? "failed" : "active",
+  }));
+  return { rows: failed ? rows.slice(0, at + 1) : [...rows, ...last("pending")], hint: "", alert: start.failure ?? "" };
+}
 
 // runStartupView derives the run page's startup steps from the run fields the
 // page already polls. null unless the run is PENDING or STARTING, so a caller
@@ -330,7 +360,7 @@ export function runStartupView(
     status_reason?: string | null;
   },
   now: number,
-  opts: { lastStep: StartupLastStep; sawBuilding: boolean; startOverdueMs?: number },
+  opts: { lastStep: StartupLastStep; sawBuilding: boolean; startOverdueMs?: number; macOS?: MacOSStart },
 ): StartupView | null {
   const starting = run.state === "STARTING";
   if (!starting && run.state !== "PENDING") return null;
@@ -362,6 +392,8 @@ export function runStartupView(
           },
         ]
       : [];
+
+  if (opts.macOS && starting) return macOSStartup(opts.macOS, last);
 
   // A reason waiting cannot fix: the list stops at the step that failed.
   if (isTerminalStatusReason(stepReason)) {

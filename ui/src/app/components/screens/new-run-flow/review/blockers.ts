@@ -86,6 +86,8 @@ export interface BlockerInput {
   unsupported: readonly string[];
   /** The refusal for harnesses no one declared image carries together (combinationReason), when the draft has them. */
   combination?: string;
+  /** A macOS VM's CPU or memory ask is under the base's minimum: the sentence, which names the minimum. */
+  macOSMinimum?: string;
   templateNeeds: readonly TemplateSetupNeed[];
   /** The template's needs are unread or could not be read: fail closed with the stale line. */
   templateUnread?: boolean;
@@ -108,6 +110,7 @@ export function buildBlockers(input: BlockerInput): Blocker[] {
     out.push({ id: `local:${i.code}`, kind: "local", text: isAppProblem(i.code) ? appIssueText({ ...i, code: i.code }) : ISSUE_TEXT[i.code], to: locationOfHome(i.home) });
   }
   if (input.combination) out.push({ id: "local:combination", kind: "local", text: input.combination, to: locationOfHome("harnesses") });
+  if (input.macOSMinimum) out.push({ id: "local:macos_minimum", kind: "local", text: input.macOSMinimum, field: "resources" });
   if (input.keepLimit) out.push({ id: "keep:limit", kind: "local", ...input.keepLimit, to: locationOfHome("files"), field: "keep_work_folder" });
   for (const path of input.unsupported) {
     out.push({ id: `unsupported:${path}`, kind: "unsupported", text: NR_REVIEW.BLOCKER_UNSUPPORTED(path), to: locationOfHome(homeOfPath(path) ?? "document"), field: path });

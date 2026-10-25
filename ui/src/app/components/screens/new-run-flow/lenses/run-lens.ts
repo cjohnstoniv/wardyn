@@ -6,6 +6,7 @@
 // Owns experience, workload.kind, runner_pool_id, machine_kind and confinement_class (a command
 // and the ports of an application server are apps-lens).
 
+import type { MachineKind } from "../../../../lib/types/machine-kind";
 import type { ConfinementClass } from "../../../../lib/types/runs";
 import type { RunnerPoolScope } from "../../../../lib/types/runner-pools";
 import type { RunIntent } from "../draft/run-intent";
@@ -29,8 +30,8 @@ export const choosePool = (intent: RunIntent, poolId: string): RunIntent => with
  * The machine kind. A container is the default, so it is the absent key; a VM is its own barrier, so a
  * barrier chosen for a container is dropped with the switch.
  */
-export const chooseMachineKind = (intent: RunIntent, kind: "container" | "linux_vm"): RunIntent =>
-  kind === "linux_vm" ? withKeys(intent, { machine_kind: "linux_vm", confinement_class: undefined }) : withKeys(intent, { machine_kind: undefined });
+export const chooseMachineKind = (intent: RunIntent, kind: MachineKind): RunIntent =>
+  kind === "container" ? withKeys(intent, { machine_kind: undefined }) : withKeys(intent, { machine_kind: kind, confinement_class: undefined });
 
 /** Called only when the person changes the barrier: an untouched draft lets the server choose. */
 export const chooseBarrier = (intent: RunIntent, cc: ConfinementClass): RunIntent => withKeys(intent, { confinement_class: cc });
