@@ -46,6 +46,7 @@ var wantArgv = [][]string{
 	root("/usr/bin/install", "-o", "root", "-g", "wheel", "-m", "644", "/dev/null", "/Library/LaunchDaemons/com.wardyn.guest-agent.plist"),
 	root("/bin/dd", "of=/Library/LaunchDaemons/com.wardyn.guest-agent.plist"),
 	root("/usr/sbin/sysadminctl", "-addUser", "agent", "-fullName", "agent", "-password", "-"),
+	root("/usr/bin/dscl", ".", "-list", "/Users", "UniqueID"),
 	root("/usr/bin/defaults", "write", "/Library/Preferences/com.apple.loginwindow", "autoLoginUser", "agent"),
 	root("/usr/bin/install", "-o", "root", "-g", "wheel", "-m", "600", "/dev/null", "/etc/kcpassword"),
 	root("/bin/dd", "of=/etc/kcpassword"),
@@ -553,4 +554,44 @@ func TestStdinIsSizedExactly(t *testing.T) {
 			t.Errorf("%s: stdin is %d bytes in a %d-byte array", c.ID, len(in), cap(in))
 		}
 	}
+}
+
+// Stage 1 finishes only when the guest's local users of UniqueID 500 or more are exactly the admin and the
+// agent; a person's extra account is refused by name, and a listing that cannot be read is no pass.
+func TestOnlyTheAdminAndTheAgentMayBeAccounts(t *testing.T) {
+	t.Run("exactly the two", func(t *testing.T) {
+		f := newFixture(t, code)
+		if _, err := f.b.Bootstrap(context.Background(), f.input(true)); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("an extra account", func(t *testing.T) {
+		f := newFixture(t, code)
+		f.srv.ExtraAccounts = []string{"intruder"}
+		_, err := f.b.Bootstrap(context.Background(), f.input(true))
+		var se *StepError
+		if !errors.Is(err, ErrUnexpectedAccounts) || !errors.As(err, &se) || se.Command != "accounts-check" || !strings.Contains(err.Error(), "intruder") {
+			t.Fatalf("err = %v; want ErrUnexpectedAccounts at accounts-check naming intruder", err)
+		}
+		if !f.srv.RemoteLogin() {
+			t.Fatal("stage 1 went on to turn Remote Login off after the refusal")
+		}
+	})
+	t.Run("the listing cannot be read", func(t *testing.T) {
+		s := &session{username: admin}
+		for _, out := range []string{"", "wardyn-admin 501 extra\n", "wardyn-admin abc\nagent 502\n", "agent 502\n", "wardyn-admin 501\n"} {
+			if err := s.checkAccounts(out); !errors.Is(err, ErrUnexpectedAccounts) {
+				t.Errorf("checkAccounts(%q) = %v, want a refusal", out, err)
+			}
+		}
+		if err := s.checkAccounts("root 0\nnobody -2\n_spotlight 89\nwardyn-admin 501\nagent 502\n"); err != nil {
+			t.Errorf("the two accounts among the system ones were refused: %v", err)
+		}
+		if err := s.checkAccounts("_nouid\nwardyn-admin 501\nagent 502\n"); err != nil {
+			t.Errorf("a record with no UniqueID was refused: %v", err)
+		}
+		if err := s.checkAccounts("wardyn-admin\nagent 502\n"); !errors.Is(err, ErrUnexpectedAccounts) {
+			t.Errorf("an admin with no UniqueID passed: %v", err)
+		}
+	})
 }

@@ -387,6 +387,33 @@ func (p setupPaths) installedService() string {
 	return ""
 }
 
+// serviceOrgArg is the organisation the installed service definition really passes serve as --org, "" when
+// it passes none, and how to name where it came from: an earlier install's LaunchAgent names it in
+// ProgramArguments, an earlier Linux unit passes ${WARDYN_RUNNER_ORG_URL} from its environment file. A
+// definition that passes only --config consumes neither, so a stale environment file beside it names nothing.
+func (p setupPaths) serviceOrgArg() (org, source string) {
+	if p.plistFile != "" {
+		if plist, err := os.ReadFile(p.plistFile); err == nil {
+			if m := plistOrgArg.FindSubmatch(plist); m != nil {
+				return html.UnescapeString(strings.TrimSpace(string(m[1]))), "the LaunchAgent's --org argument"
+			}
+			return "", ""
+		}
+	}
+	unit, err := os.ReadFile(p.unitFile)
+	if err != nil {
+		return "", ""
+	}
+	for _, line := range strings.Split(string(unit), "\n") {
+		if strings.HasPrefix(line, "ExecStart=") && strings.Contains(line, "--org ${WARDYN_RUNNER_ORG_URL}") {
+			return p.setting("WARDYN_RUNNER_ORG_URL"), "WARDYN_RUNNER_ORG_URL in the service's settings"
+		}
+	}
+	return "", ""
+}
+
+var plistOrgArg = regexp.MustCompile(`<string>--org</string>\s*<string>([^<]*)</string>`)
+
 // noServiceEnvFile is the environment file a Linux service read before runnerd.json, and on macOS, which
 // had no such file, the one --no-service wrote beside the identity's directory.
 func (p setupPaths) noServiceEnvFile() string {

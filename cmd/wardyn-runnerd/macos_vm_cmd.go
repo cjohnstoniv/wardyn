@@ -131,6 +131,7 @@ type macOSVMStatus struct {
 	Leaked        int      `json:"leaked"`          // framework slots held until a restart
 	ToolsDial     string   `json:"tools_dial"`      // how the last run boot's tools-port dial ended, "" before one
 	Error         string   `json:"error"`
+	Failure       string   `json:"failure,omitempty"` // runnerwire.MacVMFailure*, when the base has one
 
 	progress, counted, minCPUs, minMemoryMiB int
 	setupCode                                string
@@ -150,13 +151,14 @@ func (m *macOSVMs) status(ctx context.Context) (macOSVMStatus, error) {
 	m.recompute()
 	c := m.current()
 	st.State, st.Base, st.Max, st.progress, st.Error = c.Base.State, c.Base.GuestOS, c.Max, c.Base.Progress, c.Base.Error
+	st.Failure = c.Base.Failure
 	if perr != nil {
 		st.Error = cmp.Or(st.Error, perr.Error())
 	}
 	if c.Base.State == runnerwire.MacVMBaseReady {
 		st.Desktop, st.Harnesses, st.minCPUs, st.minMemoryMiB = cmp.Or(c.Desktop, "none"), append(st.Harnesses, c.Harnesses...), c.MinCPUs, c.MinMemoryMiB
 	}
-	if ev, ok, _ := lastHelperLines(m.layout.PrepareLog()); ok {
+	if ev, ok, _, _ := lastHelperLines(m.layout.PrepareLog()); ok {
 		st.Phase = ev.Phase
 	}
 	if st.setupCode = setupCodeWaiting(m.layout.Root); st.setupCode != "" {

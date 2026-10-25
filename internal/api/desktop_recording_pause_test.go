@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -232,5 +233,139 @@ func TestDesktopRecording_AnEndedRunsPauseIsForgotten(t *testing.T) {
 	closeOne()
 	if held() {
 		t.Fatal("an ended run's pause is still held")
+	}
+}
+
+// TestDesktopRecording_AnEndedRunsIdlePauseIsSwept (#3583): a take over's pause still open when its
+// run ends, with no desktop connection left, is closed by the reconciler's pass: the hold is gone and
+// one desktop.recording.resume row is written, naming the gap's reason and end_reason run_ended. A
+// live run's pause stands. Whether the pass meets it alone, after the last disconnect closed it, or
+// racing that disconnect, and however many passes run, the gap gets one resume row.
+func TestDesktopRecording_AnEndedRunsIdlePauseIsSwept(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		conn bool // a desktop connection is open when the run ends
+		end  func(closeConn, sweep func())
+	}{
+		{"no connection left", false, func(_, sweep func()) { sweep(); sweep() }},
+		{"the last disconnect first", true, func(closeConn, sweep func()) { closeConn(); sweep(); sweep() }},
+		{"the last disconnect racing a pass", true, func(closeConn, sweep func()) {
+			var wg sync.WaitGroup
+			wg.Go(closeConn)
+			wg.Go(sweep)
+			wg.Wait()
+			sweep()
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			h := newHarness(t)
+			ast := newAuthzStore()
+			cfg := baseTestConfig(h, ast)
+			cfg.RecordingStore = fsRecordingStore(t)
+			srv := New(cfg)
+			run := types.AgentRun{ID: uuid.New(), State: types.RunRunning, RecordingLevel: types.RecordingScreenActions}
+			ast.mu.Lock()
+			ast.runs[run.ID] = run
+			ast.mu.Unlock()
+			held := func() bool {
+				srv.desktopRecs.mu.Lock()
+				defer srv.desktopRecs.mu.Unlock()
+				_, ok := srv.desktopRecs.byRun[run.ID]
+				return ok
+			}
+			sweep := func() {
+				if err := srv.sweepEndedDesktopRecordingPauses(ctx); err != nil {
+					t.Error(err)
+				}
+			}
+			srv.PauseDesktopRecording(ctx, run, desktopPauseTakeover, takeoverHold(uuid.New()))
+			closeConn := func() {}
+			if tc.conn {
+				sandbox, relay := net.Pipe()
+				conn := srv.recordDesktopConn(run, uiSession{Run: run.ID, App: desktopApp, Principal: "alice"}, relay, nil)
+				closeConn = func() {
+					_ = sandbox.Close()
+					_ = conn.Close()
+				}
+			}
+			sweep()
+			if !held() {
+				t.Fatal("a live run's pause was swept")
+			}
+			ast.mu.Lock()
+			ended := ast.runs[run.ID]
+			ended.State = types.RunCompleted
+			ast.runs[run.ID] = ended
+			ast.mu.Unlock()
+			tc.end(closeConn, sweep)
+			if held() {
+				t.Fatal("an ended run's pause is still held")
+			}
+			var resumes []map[string]any
+			for _, ev := range h.audit.snapshot() {
+				if ev.Action == "desktop.recording.resume" {
+					resumes = append(resumes, auditData(t, ev))
+				}
+			}
+			if len(resumes) != 1 || resumes[0]["reason"] != desktopPauseTakeover || resumes[0]["end_reason"] != signinEndRunEnded {
+				t.Fatalf("desktop.recording.resume rows = %v, want one naming %q with end_reason %q", resumes, desktopPauseTakeover, signinEndRunEnded)
+			}
+		})
+	}
+}
+
+// TestDesktopRecording_AKeptRunThatEndedIsOver (#3583): a kept run whose lease ended or whose
+// container exited stays RUNNING but is over (desktopPauseRunOver): an idle take over's pause is
+// swept with one resume row marked run_ended. A run lost to an outage may be revived, and a live run
+// lives: their pause stands and no resume row is written.
+func TestDesktopRecording_AKeptRunThatEndedIsOver(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		reason types.LostReason // "" leaves the run live
+		over   bool
+	}{
+		{"kept, lease ended", types.LostEnded, true},
+		{"kept, rebooted", types.LostReboot, true},
+		{"lost to an outage", types.LostOutage, false},
+		{"live", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			h := newHarness(t)
+			ast := newAuthzStore()
+			cfg := baseTestConfig(h, ast)
+			cfg.RecordingStore = fsRecordingStore(t)
+			srv := New(cfg)
+			run := types.AgentRun{ID: uuid.New(), State: types.RunRunning, RecordingLevel: types.RecordingScreenActions}
+			if tc.reason != "" {
+				lostAt := time.Now().UTC()
+				run.LostAt, run.LostReason = &lostAt, tc.reason
+			}
+			ast.mu.Lock()
+			ast.runs[run.ID] = run
+			ast.mu.Unlock()
+			srv.PauseDesktopRecording(ctx, run, desktopPauseTakeover, takeoverHold(uuid.New()))
+			for range 2 {
+				if err := srv.sweepEndedDesktopRecordingPauses(ctx); err != nil {
+					t.Fatal(err)
+				}
+			}
+			srv.desktopRecs.mu.Lock()
+			_, held := srv.desktopRecs.byRun[run.ID]
+			srv.desktopRecs.mu.Unlock()
+			var resumes []map[string]any
+			for _, ev := range h.audit.snapshot() {
+				if ev.Action == "desktop.recording.resume" {
+					resumes = append(resumes, auditData(t, ev))
+				}
+			}
+			switch {
+			case tc.over && (held || len(resumes) != 1 || resumes[0]["end_reason"] != signinEndRunEnded):
+				t.Fatalf("held %v, desktop.recording.resume rows = %v, want the pause swept with one row marked %q", held, resumes, signinEndRunEnded)
+			case !tc.over && (!held || len(resumes) != 0):
+				t.Fatalf("held %v, desktop.recording.resume rows = %v, want the pause standing and no row", held, resumes)
+			}
+		})
 	}
 }

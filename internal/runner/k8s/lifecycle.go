@@ -92,6 +92,29 @@ func waitingDetail(pod *corev1.Pod) string {
 	return ""
 }
 
+// proxyNotReadyDetail is the extra start-failure line for a proxy container that is Running but not
+// Ready when the start deadline passes, else "": the probe is a connect to the listen port, and the proxy
+// did not open it in time. In runner mode the proxy opens it only once its lapse gate opens on the first
+// run-token renewal (Server.awaitOpen), so the line says it may be waiting for that; wardynd's own driver
+// has no lapse gate. image is named when it is known.
+func proxyNotReadyDetail(pod *corev1.Pod, image string, runnerMode bool) string {
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.Name != proxyContainerName || cs.State.Running == nil || cs.Ready {
+			continue
+		}
+		proxy := "the proxy"
+		if image != "" {
+			proxy += " (image " + image + ")"
+		}
+		line := fmt.Sprintf("%s is running but its port %d readiness probe has not passed; check the proxy log and connectivity", proxy, runner.ProxyListenPort)
+		if runnerMode {
+			line += "; the proxy may be waiting for its first run-token renewal with the organisation"
+		}
+		return line
+	}
+	return ""
+}
+
 // waitingReason is what a starting pod is waiting ON, in one line, and unlike
 // waitingDetail it always has an answer: a pod NO NODE TOOK has no
 // ContainerStatuses, so it falls back to the PodScheduled condition. Same

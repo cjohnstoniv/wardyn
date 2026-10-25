@@ -434,12 +434,12 @@ func TestPrepareWithoutADesktopWritesNothing(t *testing.T) {
 	d, _, errb := testDeps(&macvmtest.Engine{})
 	d.firstBoot = &macvmtest.FirstBoot{
 		Unsupported: fmt.Errorf("no class X; %w needs macOS 27", macvm.ErrNoProvisioning),
-		NoScreen:    fmt.Errorf("macvm: this process has no window-server session: %w", macvm.ErrNoDesktopSession),
+		NoScreen:    fmt.Errorf("this process has no window-server session: %w", macvm.ErrNoDesktopSession),
 	}
 	d.prepare = func(*macvm.PrepareOptions, *slog.Logger) error { t.Fatal("prepare was wired"); return nil }
 	root := filepath.Join(t.TempDir(), "root")
 	code := run(context.Background(), []string{"prepare", "--root", root, "--cpus", "4", "--memory-mib", "8192"}, d)
-	if code != 1 || !strings.Contains(errb.String(), "run prepare in Terminal on the Mac, signed in at its desktop, not over SSH") {
+	if code != 1 || !strings.Contains(errb.String(), "wardyn-macvm: "+macvm.NoDesktopFailurePrefix) || !strings.Contains(errb.String(), "run prepare in Terminal on the Mac, signed in at its desktop, not over SSH") {
 		t.Fatalf("exit %d: %s", code, errb.String())
 	}
 	if _, err := os.Stat(root); !os.IsNotExist(err) {

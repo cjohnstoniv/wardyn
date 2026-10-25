@@ -39,6 +39,9 @@ type command struct {
 	Event string
 	// CheckAgentSHA: the output must start with the agent's SHA-256.
 	CheckAgentSHA bool
+	// CheckAccounts: the output is the guest's local users with their UniqueIDs,
+	// and the row passes only when those of 500 or more are exactly the admin and the agent.
+	CheckAccounts bool
 	// MayDropSession: turning Remote Login off may end this very session
 	// before it reports an exit status; the fresh-dial check after it decides.
 	MayDropSession bool
@@ -70,6 +73,9 @@ var commands = []command{
 
 	// b. the standard user agent, and auto-login as it (§3.4 step 7b).
 	{ID: "agent-user", Step: "7b", Event: "creating the agent user", Root: true, Argv: []string{"/usr/sbin/sysadminctl", "-addUser", agentUser, "-fullName", agentUser, "-password", "-"}, In: stdinAgentPassword},
+	// Only the admin and the agent may be accounts the base ships with: a person's setup by hand could have
+	// made another, and every VM cloned from the base would hold it.
+	{ID: "accounts-check", Step: "7b", Root: true, Argv: []string{"/usr/bin/dscl", ".", "-list", "/Users", "UniqueID"}, CheckAccounts: true},
 	{ID: "autologin-user", Step: "7b", Root: true, Argv: []string{"/usr/bin/defaults", "write", "/Library/Preferences/com.apple.loginwindow", "autoLoginUser", agentUser}},
 	{ID: "kcpassword-create", Step: "7b", Root: true, Argv: []string{"/usr/bin/install", "-o", "root", "-g", "wheel", "-m", "600", "/dev/null", kcpasswdPath}},
 	{ID: "kcpassword-write", Step: "7b", Root: true, Argv: []string{"/bin/dd", "of=" + kcpasswdPath}, In: stdinKCPassword},

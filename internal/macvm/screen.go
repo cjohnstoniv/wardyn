@@ -10,6 +10,10 @@ import "errors"
 // as root. Its text is what the person reads.
 var ErrNoDesktopSession = errors.New("setup by hand needs this Mac's desktop: run prepare in Terminal on the Mac, signed in at its desktop, not over SSH and not with sudo")
 
+// NoDesktopFailurePrefix starts the error a setup by hand ends with when this process cannot reach the Mac's
+// desktop; the cause follows it.
+const NoDesktopFailurePrefix = "macvm: no desktop: "
+
 // ServeScreens runs work and returns its exit code. The helper's main goroutine calls it, locked to the
 // process's main thread from init, because AppKit runs only there: on darwin that thread waits while work
 // runs, so a first boot's Screen can open the guest's window on it. The first window makes the thread

@@ -67,10 +67,10 @@ func screenReady() error {
 		return errNoScreen
 	}
 	if geteuid() == 0 {
-		return fmt.Errorf("macvm: prepare runs as root: %w", ErrNoDesktopSession)
+		return fmt.Errorf("prepare runs as root: %w", ErrNoDesktopSession)
 	}
 	if C.wardynScreenSession() == 0 {
-		return fmt.Errorf("macvm: this process has no window-server session: %w", ErrNoDesktopSession)
+		return fmt.Errorf("this process has no window-server session: %w", ErrNoDesktopSession)
 	}
 	return nil
 }

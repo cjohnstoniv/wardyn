@@ -51,7 +51,15 @@ var reachUDP = []reachTarget{
 }
 
 func dialTCP(gs *stack.Stack, ip [4]byte, port uint16) (net.Conn, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	return dialTCPWithin(gs, ip, port, time.Second)
+}
+
+// dialTCPWithin is dialTCP with the caller's deadline. A refusal (reset)
+// returns at once whatever the deadline; the deadline only bounds a dial that
+// is still waiting, so a long one waits out a slow runner without letting a
+// refused target look reachable.
+func dialTCPWithin(gs *stack.Stack, ip [4]byte, port uint16, d time.Duration) (net.Conn, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), d)
 	defer cancel()
 	return gonet.DialContextTCP(ctx, gs, tcpip.FullAddress{NIC: 1, Addr: tcpip.AddrFrom4(ip), Port: port}, ipv4.ProtocolNumber)
 }
@@ -124,7 +132,10 @@ func TestStdioRelayReach(t *testing.T) {
 
 	// The two things that are reachable: the relay's DNS, and a proxy-allowed name.
 	addr := dnsQuery(t, gs, "allowed", "test")
-	c, err := dialTCP(gs, addr, 443)
+	// The one positive dial gets a generous deadline: under -race on a hosted
+	// runner the first connect through the relay can outlast the negatives'
+	// one second. Every negative above keeps dialTCP's short deadline.
+	c, err := dialTCPWithin(gs, addr, 443, 10*time.Second)
 	if err != nil {
 		t.Fatalf("a proxy-allowed name is unreachable: %v", err)
 	}

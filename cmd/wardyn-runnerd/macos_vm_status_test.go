@@ -234,6 +234,54 @@ func TestMacOSVMStatusFailure(t *testing.T) {
 	}
 }
 
+// #3692: a setup by hand the helper refused for want of the Mac's desktop is failure no_desktop, state
+// failed, with the cause alone as the error, and `status --json` carries it. The host-too-old and heat
+// refusals have no failure and stay raw.
+func TestMacOSVMStatusNoDesktop(t *testing.T) {
+	log := func(msg string) []string {
+		return []string{ev(t, macvm.PrepareEvent{Phase: macvm.PhaseCheck}), "wardyn-macvm: " + msg}
+	}
+	for name, cause := range map[string]string{
+		"as root":  macvm.NoDesktopFailurePrefix + "prepare runs as root: " + macvm.ErrNoDesktopSession.Error(),
+		"over SSH": macvm.NoDesktopFailurePrefix + "this process has no window-server session: " + macvm.ErrNoDesktopSession.Error(),
+	} {
+		_, b := failedBase(t, log(cause)...)
+		if b.Failure != "no_desktop" || strings.HasPrefix(b.Error, macvm.NoDesktopFailurePrefix) || !strings.Contains(b.Error, "not over SSH") {
+			t.Fatalf("%s: %+v", name, b)
+		}
+	}
+	for name, msg := range map[string]string{
+		"host too old": "macOS VMs need macOS 26 or later on this Mac (it runs 25.6)",
+		"heat":         macvm.ErrThermal.Error(),
+	} {
+		if _, b := failedBase(t, log(msg)...); b.Failure != "" || b.Error != msg {
+			t.Fatalf("%s: %+v", name, b)
+		}
+	}
+	// status --json: the failure is a key of the object, only when the base has one.
+	withSwVers(t, "26.7")
+	r := newMacLedgerRig(t)
+	r.host.setProcs(admission.Proc{PID: os.Getpid(), UID: 501, Start: 3, Name: "wardyn-runnerd"})
+	m := r.open(t)
+	m.helper, _ = probeScript(t, `{"host":"ok","provisioning":"ok","cgo":true,"vz":true,"thermal":"nominal"}`, 0)
+	_ = os.Remove(filepath.Join(m.layout.BaseDir(0), macvm.ManifestFile))
+	js := func() string {
+		st, err := m.status(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := json.Marshal(st)
+		return string(raw)
+	}
+	if got := js(); strings.Contains(got, `"failure"`) {
+		t.Fatalf("a base with no failure has the key: %s", got)
+	}
+	writeLog(t, m, log(macvm.NoDesktopFailurePrefix+"prepare runs as root: "+macvm.ErrNoDesktopSession.Error())...)
+	if got := js(); !strings.Contains(got, `"state":"failed"`) || !strings.Contains(got, `"failure":"no_desktop"`) {
+		t.Fatalf("status JSON: %s", got)
+	}
+}
+
 // The rate and the size come from the last progress event; there is no rate during a wait, and a prepare
 // from the cache (validate events only) gets its size from the second validate event.
 func TestMacOSVMStatusRate(t *testing.T) {
@@ -827,5 +875,33 @@ func TestPrepareLogSkipsForeignLines(t *testing.T) {
 	}
 	if got := prepareFailure(write("wardyn-macvm: an earlier prepare's error", `{"phase":"download","fraction":0.5}`, appKit)); got != "" {
 		t.Fatalf("a running prepare reads as failed: %q", got)
+	}
+}
+
+// A foreign line over bufio's 64 KiB default sits before the helper's error: the error is still read.
+func TestPrepareLogReadsPastALongForeignLine(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "prepare.log")
+	long := strings.Repeat("x", 200<<10)
+	body := `{"phase":"check"}` + "\n" + long + "\n" + "wardyn-macvm: macvm: stage 1: boom\n"
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := prepareFailure(p); got != "macvm: stage 1: boom" {
+		t.Fatalf("failure %q after a 200 KiB line, want the helper's error", got)
+	}
+	huge := `{"phase":"check"}` + "\n" + strings.Repeat("x", prepareLogLineMax+1) + "\n" + "wardyn-macvm: macvm: stage 1: boom\n"
+	if err := os.WriteFile(p, []byte(huge), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := prepareFailure(p); !strings.Contains(got, "could not be read to its end") {
+		t.Fatalf("failure %q after a line over the limit, want the read error", got)
+	}
+	// An error line read before the scan stopped is shown as before.
+	early := "wardyn-macvm: macvm: stage 1: boom\n" + strings.Repeat("x", prepareLogLineMax+1) + "\n"
+	if err := os.WriteFile(p, []byte(early), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := prepareFailure(p); got != "macvm: stage 1: boom" {
+		t.Fatalf("failure %q with the error line before the long one, want that line", got)
 	}
 }

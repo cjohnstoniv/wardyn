@@ -689,6 +689,9 @@ func (s *Server) runWatcherTick(ctx context.Context, lastUndispatched *time.Time
 	pass("desktop sign-in sweep", s.sweepDesktopSignins(ctx))
 	// A VM's pause whose run ended with the agent still paused writes its row here.
 	pass("ended desktop pause sweep", s.sweepEndedDesktopVMPauses(ctx))
+	// And the recording hold of a pause whose run ended with no desktop connection left, on every
+	// replica: each holds its own.
+	pass("ended desktop recording pause sweep", s.sweepEndedDesktopRecordingPauses(ctx))
 	// A run whose token lapsed loses its proxy within a tick.
 	pass("lapsed run token sweep", s.sweepLapsedRunTokens(ctx))
 	// Azure DevOps personal access tokens, on their own slower clock.

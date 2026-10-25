@@ -706,7 +706,11 @@ func (d *Driver) waitPodIP(ctx context.Context, clock *startClock, podName strin
 	if errors.Is(err, context.DeadlineExceeded) && lastPod != nil {
 		// A container's own Waiting reason first: podStuckReason reads only the
 		// pod, and would call an init-blocked pod one "with no container status".
-		if why := cmp.Or(waitingDetail(lastPod), podStuckReason(lastPod)); why != "" {
+		why := cmp.Or(waitingDetail(lastPod), podStuckReason(lastPod))
+		if line := proxyNotReadyDetail(lastPod, d.cfg.ProxyImage, d.runnerMode()); line != "" {
+			why = strings.Join(slices.DeleteFunc([]string{why, line}, func(s string) bool { return s == "" }), "; ")
+		}
+		if why != "" {
 			return "", fmt.Errorf("%w (%s)", err, why)
 		}
 	}
@@ -815,7 +819,9 @@ func (d *Driver) warnOlderProxy() {
 	})
 }
 
-// releaseTagRE is a release (X.Y.Z) or a release candidate (X.Y.Z-rc.N) image tag.
+// releaseTagRE is a release (X.Y.Z) or a release candidate (X.Y.Z-rc.N) image tag. It is the same
+// pattern as releaseVersion in cmd/wardyn-runnerd (proxy_image.go), kept apart on purpose: change
+// one and change the other. TestReleaseTagRETable and the same table in cmd/wardyn-runnerd pin the pair.
 var releaseTagRE = regexp.MustCompile(`^([0-9]+)\.([0-9]+)\.([0-9]+)(?:-rc\.([0-9]+))?$`)
 
 // imageReleaseTag is image's tag when it names a release, else "": a digest-only reference, an
