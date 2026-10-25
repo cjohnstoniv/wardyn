@@ -373,10 +373,10 @@ func TestRunnerUpgradeRefusesAPreviousItCannotExamine(t *testing.T) {
 	}
 	r.publish("0.10.1", next, releaseSigner("0.10.1"), nil)
 	out, err := r.cli("upgrade", "--version", "0.10.1")
-	if err == nil || !strings.Contains(err.Error(), "for the previous runner") {
+	if err == nil || !strings.Contains(err.Error(), "could not check for a previous runner") {
 		t.Fatalf("err = %v\n%s", err, out)
 	}
-	if !r.installedIs(old) || r.record("calls") != "" {
-		t.Fatalf("the upgrade ran past a .previous it could not examine: calls %q\n%s", r.record("calls"), out)
+	if got := r.called("GET /release"); len(got) != 0 || strings.Contains(out, "Replacing the runner") || !r.installedIs(old) || r.record("calls") != "" {
+		t.Fatalf("the upgrade went on past a .previous it could not examine: downloaded %v, calls %q\n%s", got, r.record("calls"), out)
 	}
 }

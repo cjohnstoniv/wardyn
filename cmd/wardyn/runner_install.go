@@ -139,6 +139,13 @@ func runRunnerUpgrade(cmd *cobra.Command, version, flagBase string) error {
 	if err != nil {
 		return err
 	}
+	prev := installed + ".previous"
+	// A .previous that cannot be examined is not "none before": the swap would then pick it up as one it kept.
+	// It is looked at first, so a refusal comes before anything is downloaded or announced.
+	prevBefore, err := os.Stat(prev)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf(errUpgradePreviousUnreadable, err)
+	}
 	var health struct {
 		ArtifactBase string `json:"cli_artifact_base"`
 	}
@@ -150,12 +157,6 @@ func runRunnerUpgrade(cmd *cobra.Command, version, flagBase string) error {
 	defer cleanup()
 	from := cmp.Or(current, copySetupOldVersion)
 	fmt.Fprintf(out, copyUpgradeSwapping+"\n", from, version)
-	prev := installed + ".previous"
-	// A .previous that cannot be examined is not "none before": the swap would then pick it up as one it kept.
-	prevBefore, err := os.Stat(prev)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("could not check %s for the previous runner: %w. Nothing was changed", prev, err)
-	}
 	// The new setup moves the old one's settings out of the service files into runnerd.json, where an older
 	// setup does not look, so a rollback puts the files back as they are now.
 	kept, err := keepServiceFiles(serviceFiles())
