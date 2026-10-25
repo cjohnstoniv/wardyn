@@ -86,6 +86,8 @@ check_ledger() {
 
 # 1. From nothing, and again over a sound base: the base keeps its inode and ledger-setup runs again.
 fresh nothing; run nothing; check_ledger "from nothing"
+# The shell makes nothing inside the base: the lock, macos-vm-admission/ and sock/ are ledger-setup's alone.
+[ -z "$(ls -A "$(B)")" ] || fail "the shell made something inside the base: $(ls -A "$(B)")"
 ino="$(ino "$(B)")"; run again; check_ledger "an upgrade"
 [ "$(ino "$(B)")" = "$ino" ] && [ "$(wc -l <"$R/ledger-setup.args")" = 2 ] || fail "an upgrade replaced a sound base"
 

@@ -138,7 +138,7 @@ jobs:
               Makefile|.github/workflows/ci.yml) ui=true ;;
             esac
             case "$f" in
-              internal/macvm/*|cmd/wardyn-macvm/*|internal/vm/guestagent/*|cmd/wardyn-guest-agent/*|cmd/wardyn-runnerd/*|test/conformance/macvm/*|deploy/runner/macos/*|scripts/build-runner-pkg.sh|scripts/check-macvm-selectors.sh|go.mod|go.sum|.github/workflows/ci.yml) macos=true ;;
+              internal/macvm/*|internal/vmnet/*|cmd/wardyn-macvm/*|internal/vm/guestagent/*|cmd/wardyn-guest-agent/*|cmd/wardyn-runnerd/*|test/conformance/macvm/*|deploy/runner/macos/*|scripts/build-runner-pkg.sh|scripts/check-macvm-selectors.sh|go.mod|go.sum|.github/workflows/ci.yml) macos=true ;;
             esac
             if [ "$class" = backend ]; then
               case "$f" in *_test.go) ;; *) images=true ;; esac
@@ -1756,21 +1756,43 @@ jobs:
           go version
       # Bounded retry of the module fetch only; go.sum verifies each module.
       - run: for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done
+      # Each package on its own, and every later step runs after a failure: one run lists every darwin error.
       - name: cgo build and vet
         run: |
-          set -euo pipefail
-          go build ./internal/macvm/... ./cmd/wardyn-macvm/ ./internal/vm/guestagent/ ./cmd/wardyn-guest-agent/
-          go vet ./internal/macvm/... ./cmd/wardyn-macvm/ ./internal/vm/guestagent/ ./cmd/wardyn-guest-agent/
+          fail=0
+          pkgs=$(go list ./internal/macvm/... ./internal/vmnet/... ./cmd/wardyn-macvm/ ./internal/vm/guestagent/ ./cmd/wardyn-guest-agent/) || fail=1
+          [ -n "$pkgs" ] || fail=1
+          for p in $pkgs; do
+            go build "$p" || fail=1
+            go vet "$p" || fail=1
+          done
+          exit "$fail"
       - name: Tests
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
-          go test -count=1 -timeout 15m ./internal/macvm/... ./cmd/wardyn-macvm/ ./cmd/wardyn-guest-agent/
+          # The ledger walks every directory from / without following a link, and the runner's TMPDIR
+          # (/var/folders/...) goes through the /var link: test under /private/tmp, as user and as root.
+          export TMPDIR=/private/tmp
+          go test -count=1 -timeout 15m ./internal/macvm/... ./internal/vmnet/... ./cmd/wardyn-macvm/ ./cmd/wardyn-guest-agent/
+          # The lock-open refusal again as root, the installer's uid: its socket case is one root still hits.
+          go test -c -o "$RUNNER_TEMP/admission.test" ./internal/macvm/admission/
+          sudo env TMPDIR="$TMPDIR" "$RUNNER_TEMP/admission.test" -test.count=1 -test.v -test.run '^TestSetupLockOpenErrorFailsClosed$' | tee "$RUNNER_TEMP/admission-root.out"
+          grep -q -- '--- PASS: TestSetupLockOpenErrorFailsClosed/socket' "$RUNNER_TEMP/admission-root.out"
           # -v: prove the darwin-native guest agent tests (server_darwin_test.go) ran, not just compiled.
           go test -count=1 -timeout 10m -v ./internal/vm/guestagent/ | tee "$RUNNER_TEMP/guestagent.out"
           grep -q -- '^--- PASS: TestDarwin' "$RUNNER_TEMP/guestagent.out"
+      - name: Live suite self-tests (its P-rows skip on a hosted Mac)
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          export TMPDIR=/private/tmp
+          go test -count=1 -tags macvm_live ./test/conformance/macvm/
       - name: Build the darwin runnerd
+        if: ${{ !cancelled() }}
         run: CGO_ENABLED=0 go build -tags docker -trimpath -o "$RUNNER_TEMP/wardyn-runnerd" ./cmd/wardyn-runnerd
       - name: Sign the helper ad hoc with its entitlement and read it back
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           helper="$RUNNER_TEMP/wardyn-macvm"
@@ -1795,6 +1817,7 @@ jobs:
       # sudo against a temp root, read back with BSD stat. %Mp%Lp, not %Lp alone: %Lp drops the sticky bit.
       # The roots sit under /private/tmp, so every directory the helper walks from / is root-owned.
       - name: Package postinstall makes the admission ledger (real root, BSD tools)
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           post=deploy/runner/macos/pkg-scripts/postinstall
@@ -1803,6 +1826,7 @@ jobs:
             [ "$(stat -f '%Su:%Sg %Mp%Lp %HT' "$b")" = 'root:wheel 0755 Directory' ]
             [ "$(stat -f '%Su:%Sg %Mp%Lp %HT' "$b/admission.lock")" = 'root:wheel 0644 Regular File' ]
             [ "$(stat -f '%Su:%Sg %Mp%Lp %HT' "$b/macos-vm-admission")" = 'root:wheel 1777 Directory' ]
+            [ "$(stat -f '%Su:%Sg %Mp%Lp %HT' "$b/sock")" = 'root:wheel 1777 Directory' ]
           }
           fresh() {
             r="$(sudo mktemp -d /private/tmp/wardyn-pkgroot.XXXXXX)"
@@ -1825,6 +1849,16 @@ jobs:
           sudo env WARDYN_PKG_ROOT="$r" sh "$post"
           ledger "$r"
           [ "$(stat -f %i "$lock")" != "$ino" ]
+          # sock/ keeps a login's own u<uid> (0700) and moves anything else aside, such as a u<N> another uid made.
+          sock="$r/Users/Shared/Wardyn/sock"
+          own="$sock/u$(id -u)"
+          mkdir -m 0700 "$own"
+          mkdir -m 0700 "$sock/u4242"
+          own_ino="$(stat -f %i "$own")"
+          sudo env WARDYN_PKG_ROOT="$r" sh "$post"
+          ledger "$r"
+          [ "$(stat -f %i "$own")" = "$own_ino" ]
+          [ "$(ls -A "$sock")" = "u$(id -u)" ]
           # A login's own Wardyn directory, with a link at macos-vm-admission: replaced, and the target untouched.
           fresh
           b="$r/Users/Shared/Wardyn"
@@ -1839,6 +1873,7 @@ jobs:
           sudo ls -la "$r/Users/Shared"
           sudo sh -c 'ls -d "$1"/.wardyn-quarantine.*/Wardyn' _ "$r/Users/Shared"
       - name: Packaged live suite (it skips, since no VM boots on a hosted Mac)
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           if [ ! -d test/conformance/macvm ]; then

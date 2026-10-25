@@ -118,8 +118,17 @@ func startRun(t *testing.T, eng *macvmtest.Engine, mod func(*macvm.RunConfig, *m
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	r.cancel = cancel
-	t.Cleanup(cancel)
-	go func() { r.done <- macvm.Run(ctx, o) }()
+	exited := make(chan struct{})
+	// No helper outlives its test: a later test must not share its goroutines.
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-exited:
+		case <-time.After(10 * time.Second):
+			t.Error("the helper did not exit after its test")
+		}
+	})
+	go func() { r.done <- macvm.Run(ctx, o); close(exited) }()
 	select {
 	case <-listening:
 	case err := <-r.done:

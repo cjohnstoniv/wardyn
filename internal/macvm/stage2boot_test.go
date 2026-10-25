@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -208,6 +209,57 @@ func TestStage2BootTakesNetFDAndReachesToolsMode(t *testing.T) {
 	}
 	if _, err := os.Lstat(sockDir); !os.IsNotExist(err) {
 		t.Fatalf("the stage-2 socket dir outlived the boot: %v", err)
+	}
+}
+
+// stop on a started stage-2 boot's ctl.sock ends it: a guest call in flight
+// fails at once, the VM stops, the socket dir goes, the reply comes once that is
+// done, and the boot's own stop reports ErrStage2Stopped.
+func TestStage2BootStopOnItsCtlSockEndsTheVM(t *testing.T) {
+	eng := &macvmtest.Engine{}
+	root := macvmtest.SockRoot(t)
+	cfg := macvm.Stage2BootConfig{Engine: eng, SockRoot: root, SockKey: "0123456789ab", SockFstat: macvmtest.SockFstat, GuestWait: time.Minute}
+	dir := t.TempDir()
+	spec := macvm.MachineSpec{CPUs: 4, MemoryBytes: 8 << 30, MinCPUs: 2, MinMemoryBytes: 4 << 30, HardwareModel: []byte("hw"),
+		MachineIdentifier: []byte("id"), DiskPath: filepath.Join(dir, macvm.DiskFile), AuxPath: filepath.Join(dir, macvm.AuxFile)}
+	type booted struct {
+		g    macvm.ToolsGuest
+		stop func(context.Context) error
+		err  error
+	}
+	done := make(chan booted, 1)
+	go func() {
+		g, stop, err := cfg.ToolsBoot()(context.Background(), spec)
+		done <- booted{g, stop, err}
+	}()
+	sockDir := macvm.SockDir(root, "0123456789ab")
+	cc := sendNetFD(t, filepath.Join(sockDir, macvm.ControlSock))
+	b := <-done
+	if b.err != nil {
+		t.Fatal(b.err)
+	}
+	// No guest agent answers: this call waits for one until the stop.
+	inFlight := make(chan error, 1)
+	go func() { _, _, err := b.g.Run(context.Background(), []string{"/usr/bin/true"}); inFlight <- err }()
+	if err := cc.Stop(context.Background(), true, 0); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	if m := eng.Machines()[0]; m.State() != macvm.StateStopped {
+		t.Fatalf("after stop the VM is %s", m.State())
+	}
+	if _, err := os.Lstat(sockDir); !os.IsNotExist(err) {
+		t.Fatalf("the socket dir outlived the stop: %v", err)
+	}
+	select {
+	case err := <-inFlight:
+		if err == nil {
+			t.Fatal("the guest call succeeded on a stopped boot")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a guest call went on after the stop")
+	}
+	if err := b.stop(context.Background()); !errors.Is(err, macvm.ErrStage2Stopped) {
+		t.Fatalf("the boot's stop: %v, want ErrStage2Stopped", err)
 	}
 }
 

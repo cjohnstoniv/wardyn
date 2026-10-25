@@ -838,3 +838,16 @@ func TestUpdateToolsSweepsLeftoversEvenWhenCurrent(t *testing.T) {
 		t.Fatalf("leftover generation kept: %v", err)
 	}
 }
+
+// A stage 2 whose boot runnerd stopped through its ctl.sock fails with that,
+// however far the install got: no base is published from a stopped boot.
+func TestStage2StoppedThroughCtlSockFails(t *testing.T) {
+	f, g := newTools(t), newGuest()
+	s := f.stage(g, new(atomic.Int64), new(atomic.Int64))
+	s.Boot = func(context.Context, macvm.MachineSpec) (macvm.ToolsGuest, func(context.Context) error, error) {
+		return g, func(context.Context) error { return macvm.ErrStage2Stopped }, nil
+	}
+	if _, err := s.Run(context.Background(), macvm.Stage2Input{}); !errors.Is(err, macvm.ErrStage2Stopped) || strings.Contains(err.Error(), "shut down cleanly") {
+		t.Fatalf("run: %v, want ErrStage2Stopped as itself", err)
+	}
+}
