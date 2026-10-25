@@ -1857,6 +1857,49 @@ func TestDesktopSignIns_ARunThatEndsPausedWritesItsOneRow(t *testing.T) {
 	}
 }
 
+// A recorded run that ends with its agent paused to sign in, after the person's desktop closed (#3583),
+// has the pause's recording hold dropped and one desktop.recording.resume row, end_reason run_ended,
+// whichever of the reconciler's two passes meets it first and however often they run.
+func TestDesktopSignIns_ARunThatEndsPausedEndsItsRecordingHoldOnce(t *testing.T) {
+	for name, passes := range map[string][]func(*Server, context.Context) error{
+		"sign-in pass first":   {(*Server).sweepEndedDesktopVMPauses, (*Server).sweepEndedDesktopRecordingPauses},
+		"recording pass first": {(*Server).sweepEndedDesktopRecordingPauses, (*Server).sweepEndedDesktopVMPauses},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newVMSignInFixture(t, "memory")
+			f.recordDesktop(t)
+			if code, _, body := f.do(t, http.MethodPost, "/pause"); code != http.StatusOK {
+				t.Fatalf("pause = %d %s", code, body)
+			}
+			endedAt := time.Now().UTC()
+			f.run.State, f.run.EndedAt = types.RunKilled, &endedAt
+			f.st.putRun(f.run)
+			for range 2 {
+				for _, pass := range passes {
+					if err := pass(f.srv, context.Background()); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if signInHeld(f.srv, f.run.ID) {
+				t.Fatal("an ended run's sign-in still holds the desktop recording")
+			}
+			var resumes []map[string]any
+			for _, ev := range f.h.audit.snapshot() {
+				if ev.Action == "desktop.recording.resume" {
+					resumes = append(resumes, auditData(t, ev))
+				}
+			}
+			if len(resumes) != 1 || resumes[0]["reason"] != desktopPauseSignin || resumes[0]["end_reason"] != signinEndRunEnded {
+				t.Fatalf("desktop.recording.resume rows = %v, want one naming %q with end_reason %q", resumes, desktopPauseSignin, signinEndRunEnded)
+			}
+			if rows := f.signInRows(); len(rows) != 1 {
+				t.Fatalf("desktop.sign_in.pause rows = %d, want one", len(rows))
+			}
+		})
+	}
+}
+
 // A run lost to an outage keeps its agent running and can be revived, so its pause is not over: the
 // sweep writes no row and leaves the mark.
 func TestDesktopSignIns_AnOutageLostRunKeepsItsPause(t *testing.T) {

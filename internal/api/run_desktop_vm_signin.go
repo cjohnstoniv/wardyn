@@ -322,8 +322,8 @@ func (s *Server) handlePauseDesktopAgent(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	// The desktop's screen recording keeps no frames from here until the resume ends this hold, as a
-	// container's sign-in does. A run that ends while paused drops the hold with its last connection
-	// (forgetEndedDesktopPause).
+	// container's sign-in does. A run that ends while paused drops the hold with its last connection,
+	// or at the next reconciler pass when none is open (sweepEndedDesktopRecordingPauses).
 	if s.desktopRecorded(run) {
 		s.PauseDesktopRecording(bg, run, desktopPauseSignin, vmSignInHold(run.ID, now))
 	}
