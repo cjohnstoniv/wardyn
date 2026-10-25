@@ -22,6 +22,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- The host's connection to a desktop VM's guest agent no longer keeps every connection it has ever redialled, and
+  reads at most 64 KiB of response headers from the guest; a frame cut off after its header now reads as an unexpected
+  end of stream rather than a clean one (#3388).
 - A desktop VM's tunnel on a granted non-HTTP port is now closed after 30 minutes with no byte in either direction;
   before, a silent tunnel stayed open until a peer closed it (#3489).
 - A Kubernetes run whose proxy container is running but never becomes ready now fails at the start deadline with a line
