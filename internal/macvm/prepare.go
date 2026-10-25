@@ -96,13 +96,19 @@ type PrepareOptions struct {
 	FirstBoot FirstBooter
 	PrepNet   func() (PrepNetwork, error)
 	Bootstrap Bootstrapper
-	HTTP      *http.Client
+	// Stage2 installs the developer tools (nil: the base serves "none" only).
+	Stage2 Stage2
+	HTTP   *http.Client
 	// CPUs and MemoryMiB are the runner's per-run limits. Prepare's VM uses
 	// them as they are; below the image's minimum, prepare stops.
 	CPUs      int
 	MemoryMiB uint64
 	DiskBytes int64 // 0: BaseDiskBytes
 	KeepIPSW  bool
+	// Reprepare builds a whole new base even when one is ready (a newer
+	// restore image, or the operator asked) and swaps it in for the old one.
+	// Without it a ready base is returned as it is.
+	Reprepare bool
 	// HelperVersion goes into the manifest.
 	HelperVersion string
 	Progress      func(PrepareEvent)
@@ -131,6 +137,15 @@ const provisionUser = "wardyn-admin"
 // stopping the installer is undefined behaviour. If such a step is cut short
 // anyway (power loss, restart, the helper dies), the next Prepare discards
 // the partial base and restarts from create with the cached restore image.
+//
+// A re-prepare (o.Reprepare with a ready base), and a prepare that replaces a
+// complete base in a format this helper does not run, never write under the
+// live base. Like a tools update it holds the base's update lock for its whole run,
+// builds the new base in the staging dir <base>.update, and swaps it in with
+// one exchange under the base's lock; runs keep cloning the old base
+// meanwhile, and the old generation is deleted after the exchange. Cut short,
+// it leaves the live base as it was, and the next update or re-prepare sweeps
+// the staging dir.
 func Prepare(ctx context.Context, o PrepareOptions) (Manifest, error) {
 	p, err := newPrep(o)
 	if err != nil {
@@ -188,21 +203,45 @@ func (p *prep) run(ctx context.Context) (Manifest, error) {
 	if err := thermalGate(p.Engine); err != nil {
 		return Manifest{}, err
 	}
-	// A ready base is kept; an update prepares into another slot's dir.
-	if m, err := ReadyBase(p.base); err == nil {
+	// A ready base is kept unless a re-prepare was asked for.
+	if m, err := ReadyBase(p.base); err == nil && !p.Reprepare {
 		return m, nil
 	}
-	if p.Admit != nil {
-		release, err := p.Admit(ctx)
-		if err != nil {
-			return Manifest{}, err
-		}
-		defer release()
-	}
-	for _, d := range []string{p.Layout.Root, p.cache, filepath.Dir(p.base), p.base} {
+	for _, d := range []string{p.Layout.Root, p.cache, filepath.Dir(p.base)} {
 		if err := mkdirPrivate(d); err != nil {
 			return Manifest{}, err
 		}
+	}
+	staging, done, err := beginUpdate(ctx, p.base, p.Log)
+	if err != nil {
+		return Manifest{}, err
+	}
+	// The admission entry is released last, after done has deleted the old
+	// generation that entry reserves disk for.
+	release := func() {}
+	defer func() { done(); release() }()
+	// A first prepare, or one after an interrupted install, builds in place:
+	// until its manifest is ready nothing clones it. A re-prepare, and the
+	// replacement of a complete base in another format, build in the staging
+	// dir and leave the old base as it is until the swap.
+	live := p.base
+	if m, err := ReadyBase(live); err == nil {
+		if !p.Reprepare {
+			return m, nil // another prepare finished it while this one waited
+		}
+		p.base = staging
+	} else if finishedBase(live) {
+		p.base = staging
+	}
+	if p.Admit != nil {
+		r, err := p.Admit(ctx)
+		if err != nil {
+			return Manifest{}, err
+		}
+		release = r
+	}
+	if err := mkdirPrivate(p.base); err != nil {
+		return Manifest{}, err
 	}
 	if err := p.discardInterrupted(); err != nil {
 		return Manifest{}, err
@@ -245,6 +284,11 @@ func (p *prep) run(ctx context.Context) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, err
 	}
+	// Stage 2 runs while the install marker is still down: cut short, the
+	// whole base is discarded and the next Prepare restarts from create.
+	if err := p.stage2(ctx, spec, &res); err != nil {
+		return Manifest{}, err
+	}
 
 	m := Manifest{
 		Format: BaseFormat, State: BaseReady, GuestOS: fmt.Sprintf("macOS %s (%s)", img.OSVersion, img.BuildVersion),
@@ -258,11 +302,48 @@ func (p *prep) run(ctx context.Context) (Manifest, error) {
 	if err := os.Remove(filepath.Join(p.base, installingMarker)); err != nil {
 		return Manifest{}, err
 	}
+	if p.base != live {
+		if err := swapBase(ctx, p.base, live); err != nil {
+			return Manifest{}, err
+		}
+	}
 	if !p.KeepIPSW {
 		_ = os.Remove(ipsw)
 	}
 	p.emit(PrepareEvent{Phase: PhaseReady, Fraction: 1})
 	return m, nil
+}
+
+// stage2 installs the developer tools and records which harnesses the base can
+// serve. Like every step after the download it starts only on AC and is never
+// paused.
+func (p *prep) stage2(ctx context.Context, spec MachineSpec, res *BootstrapResult) error {
+	if p.Stage2 == nil {
+		return nil
+	}
+	if err := p.waitAC(ctx, PhaseTools); err != nil {
+		return err
+	}
+	p.emit(PrepareEvent{Phase: PhaseTools})
+	tr, err := p.Stage2.Run(ctx, Stage2Input{Spec: spec, Dir: p.base})
+	if err != nil {
+		return fmt.Errorf("macvm: stage 2: %w", err)
+	}
+	if tr.AgentVersion != "" {
+		res.AgentVersion = tr.AgentVersion
+	}
+	res.Harnesses = tr.Harnesses
+	return writeToolsRecord(p.base, tr, res.AgentVersion, time.Now())
+}
+
+// finishedBase says whether dir holds a base whose install finished, in any
+// format: no install marker, and a manifest that parses and says ready.
+func finishedBase(dir string) bool {
+	if _, err := os.Stat(filepath.Join(dir, installingMarker)); !os.IsNotExist(err) {
+		return false
+	}
+	m, err := ReadManifest(dir)
+	return err == nil && m.State == BaseReady
 }
 
 // discardInterrupted removes a base whose install started but never reached a
@@ -276,7 +357,7 @@ func (p *prep) discardInterrupted() error {
 		return nil
 	}
 	p.Log.Warn("macvm: discarding an install that did not finish", "base", p.base)
-	for _, f := range []string{DiskFile, AuxFile, MachineIDFile, ManifestFile, installingMarker} {
+	for _, f := range []string{DiskFile, AuxFile, MachineIDFile, ManifestFile, ToolsRecordFile, installingMarker} {
 		if err := os.Remove(filepath.Join(p.base, f)); err != nil && !os.IsNotExist(err) {
 			return err
 		}
