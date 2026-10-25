@@ -213,6 +213,16 @@
    "want_fail": "--- FAIL: TestLostRun_AHeadlessRunnerRunIsLeftForItsExitReceipt"
   },
   {
+   "name": "watch-t2-mutation-interactive",
+   "package": "./internal/api",
+   "run": "^TestLostRun_OnlyAHeadlessRunnerRunSkipsTheRebootMark$/^an_interactive_run_on_a_runner$",
+   "tags": "",
+   "files": {
+    "internal/api/run_lost.go": ".proofs/files/watch-t2-mutation-interactive/internal/api/run_lost.go"
+   },
+   "want_fail": "--- FAIL: TestLostRun_OnlyAHeadlessRunnerRunSkipsTheRebootMark/an_interactive_run_on_a_runner"
+  },
+  {
    "name": "watch-t3-pg-reboot",
    "package": "./internal/api",
    "run": "^TestRunLostPG_ARebootedRunnerRunEndsByItsExitReceipt$",
