@@ -85,8 +85,14 @@ func (m *macOSVMs) handNet(ctx context.Context, e admission.Entry) {
 		if _, err := os.Lstat(sock); err == nil {
 			break
 		}
-		if !wait() || m.vmGone(e) {
+		if !wait() {
 			m.markDockerWait(e.ID, false)
+			return
+		}
+		if m.vmGone(e) {
+			// A network an earlier runnerd started for this job and this one adopted is still up.
+			m.markDockerWait(e.ID, false)
+			m.removeJobNet(ctx, e.ID)
 			return
 		}
 	}
@@ -114,11 +120,17 @@ func (m *macOSVMs) handNet(ctx context.Context, e admission.Entry) {
 	m.markDockerWait(e.ID, false)
 	for wait() {
 		if m.vmGone(e) {
-			if err := m.prepRemove(context.WithoutCancel(ctx), e.ID); err != nil {
-				slog.Warn("macOS VM base: remove the stage-2 network", "error", err.Error())
-			}
+			m.removeJobNet(ctx, e.ID)
 			return
 		}
+	}
+}
+
+// removeJobNet removes the job's stage-2 network by its names, under a context a stop of this runnerd
+// does not cancel.
+func (m *macOSVMs) removeJobNet(ctx context.Context, id string) {
+	if err := m.prepRemove(context.WithoutCancel(ctx), id); err != nil {
+		slog.Warn("macOS VM base: remove the stage-2 network", "error", err.Error())
 	}
 }
 
