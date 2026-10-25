@@ -23,6 +23,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/cjohnstoniv/wardyn/internal/doctor"
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
 	"github.com/cjohnstoniv/wardyn/internal/macvm/admission"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
@@ -82,7 +83,7 @@ func (r *macLedgerRig) fstat(fd int, name string) (unix.Stat_t, error) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	st.Uid = 0
+	st.Uid, st.Gid = 0, 0
 	if r.notRoot[name] {
 		st.Uid = 501
 	}
@@ -438,23 +439,41 @@ func TestMacOSVMStatusNeverShowsTheSetupCode(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(m.layout.BaseDir(0), macvm.ManifestFile), []byte(man), 0o600)
 	const code = "K7MP2QXR"
 	_ = os.WriteFile(m.layout.PrepareLog(), []byte(`{"phase":"install","fraction":1}`+"\n"+`{"phase":"setup_by_hand","detail":"`+code+`"}`+"\n"), 0o600)
-	codeFile := filepath.Join(r.root, setupCodeFile)
+	codeFile := macvm.Layout{Root: r.root}.SetupCode()
+	if filepath.Base(codeFile) != "setup-code.json" { // design D:1306
+		t.Fatalf("setup code file %s", codeFile)
+	}
+	// doctor reads the login's own VM directory: point HOME at one that holds the same file.
+	t.Setenv("HOME", t.TempDir())
+	docRoot, err := macvm.DefaultRoot()
+	if err != nil || os.MkdirAll(docRoot, 0o700) != nil {
+		t.Fatal(err)
+	}
+	docFile := macvm.Layout{Root: docRoot}.SetupCode()
 	var logs strings.Builder
 	var mu sync.Mutex
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(lockedWriter{&mu, &logs}, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	defer slog.SetDefault(prev)
 	for _, mode := range []os.FileMode{0o644, 0o600} {
-		_ = os.WriteFile(codeFile, []byte(code+"\n"), mode)
-		_ = os.Chmod(codeFile, mode)
+		for _, f := range []string{codeFile, docFile} {
+			_ = os.WriteFile(f, []byte(`{"code":"`+code+`"}`+"\n"), mode)
+			_ = os.Chmod(f, mode)
+		}
 		st, err := m.status(context.Background())
 		if err != nil {
 			t.Fatal(err)
 		}
-		var text strings.Builder
+		var text, docText, docJSON strings.Builder
 		st.writeText(&text)
 		js, _ := json.Marshal(st)
-		for _, out := range []string{text.String(), string(js)} {
+		rep := doctor.Report{Stages: macOSVMDoctorStages()}
+		_ = rep.WriteText(&docText)
+		_ = rep.WriteJSON(&docJSON)
+		if named := strings.Contains(docText.String(), docFile); named != (mode == 0o600) {
+			t.Fatalf("mode %o: doctor names the code file %v:\n%s", mode, named, docText.String())
+		}
+		for _, out := range []string{text.String(), string(js), docText.String(), docJSON.String()} {
 			if strings.Contains(out, code) {
 				t.Fatalf("mode %o: the one-time code is in the status:\n%s", mode, out)
 			}
@@ -468,7 +487,7 @@ func TestMacOSVMStatusNeverShowsTheSetupCode(t *testing.T) {
 		var keys map[string]any
 		_ = json.Unmarshal(js, &keys)
 		got := slices.Sorted(maps.Keys(keys))
-		want := []string{"base", "desktop", "error", "harnesses", "held_disk_bytes", "identity", "leaked", "max", "phase", "state", "thermal"}
+		want := []string{"base", "desktop", "error", "harnesses", "held_disk_bytes", "identity", "leaked", "max", "phase", "state", "thermal", "tools_dial"}
 		if !slices.Equal(got, want) {
 			t.Fatalf("status JSON keys %v, want %v", got, want)
 		}

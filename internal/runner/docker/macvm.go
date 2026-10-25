@@ -8,7 +8,6 @@ package docker
 import (
 	"cmp"
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -25,6 +24,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
+	"golang.org/x/sys/unix"
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
 	"github.com/cjohnstoniv/wardyn/internal/macvm/admission"
@@ -41,14 +41,6 @@ import (
 // destruction is verified. A macOS VM has no agent container: its ref is the agent container name all
 // the same, and it is found again after a restart by its run directory.
 
-// macSocketPathMax is the longest unix socket path a macOS connect or bind accepts (sun_path is 104
-// bytes there, 108 on Linux; the smaller one rules).
-const macSocketPathMax = 103
-
-// macRunKeyLen is the length of a macOS VM run directory's name: the run id's first 12 hex digits, which
-// keeps the helper's sockets under macSocketPathMax below ~/Library/Application Support.
-const macRunKeyLen = 12
-
 // macHelperExitWait bounds the wait for a helper to exit after its VM stopped, before it is killed.
 const macHelperExitWait = 15 * time.Second
 
@@ -60,6 +52,12 @@ type MacVMConfig struct {
 	Helper string
 	// Identity is the machine-identifier strategy every run uses.
 	Identity macvm.IdentityStrategy
+	// SockRoot is the socket root the helper makes each run's socket directory under ("" is
+	// admission.DefaultSockDir), written into each run's run.json (macvm_sock.go).
+	SockRoot string
+	// ToolsDialFile, when set, is where the last run boot's tools-port dial class is kept for
+	// `macos-vm status` (recordToolsDial).
+	ToolsDialFile string
 	// Ledger is this runner's handle on the host admission ledger; LedgerDir is its directory, written
 	// into each run's run.json for the helper ("" is the package default).
 	Ledger    *admission.Ledger
@@ -78,11 +76,14 @@ type MacVMConfig struct {
 	// spawn starts the helper for a run dir and signal signals a helper; tests replace both.
 	spawn  func(runDir string) error
 	signal func(pid int, sig syscall.Signal) error
+	// sockFstat replaces fstat(2) in the socket directory checks and sweepSock the socket residue sweep
+	// (macvm.SweepSockResidue); tests replace both.
+	sockFstat func(fd int, name string) (unix.Stat_t, error)
+	sweepSock func(l macvm.Layout, sockRoot string) ([]string, error)
 }
 
-func (c *MacVMConfig) runDir(runID uuid.UUID) string {
-	return c.Layout.RunDir(hex.EncodeToString(runID[:macRunKeyLen/2]))
-}
+// runDir is the run's directory, named by its run key (the run id's first 12 hex digits).
+func (c *MacVMConfig) runDir(runID uuid.UUID) string { return c.Layout.RunDir(runID.String()) }
 
 func (c *MacVMConfig) changed() {
 	if c.Changed != nil {
@@ -96,8 +97,9 @@ func (d *Driver) EnableMacVM(c *MacVMConfig) error {
 		if c.Ledger == nil || c.Host == nil || c.Helper == "" || c.Layout.Root == "" || c.RunnerID == "" {
 			return errors.New("docker: macOS VMs need a ledger, a host, the helper, a VM directory and the runner id")
 		}
-		if n := len(c.runDir(uuid.Nil)) + len("/"+macvm.DesktopSock); n > macSocketPathMax {
-			return fmt.Errorf("docker: the macOS VM directory %q is too long for its sockets' paths (%d bytes, at most %d)", c.Layout.Root, n, macSocketPathMax)
+		// The sockets live in the socket directory, not the run directory: the guard is its length.
+		if n := len(filepath.Join(c.sockDir(uuid.Nil), macvm.DesktopSock)); n > macvm.MaxSocketPath {
+			return fmt.Errorf("docker: the macOS VM socket directory %q is too long for its sockets' paths (%d bytes, at most %d)", c.sockDir(uuid.Nil), n, macvm.MaxSocketPath)
 		}
 		if c.BootTimeout == 0 {
 			c.BootTimeout = 10 * time.Minute
@@ -107,6 +109,9 @@ func (d *Driver) EnableMacVM(c *MacVMConfig) error {
 		}
 		if c.signal == nil {
 			c.signal = syscall.Kill
+		}
+		if c.sweepSock == nil {
+			c.sweepSock = macvm.SweepSockResidue
 		}
 	}
 	d.macCfg.Store(c)
@@ -137,12 +142,19 @@ func startHelper(helper, runDir string) error {
 	return nil
 }
 
-func newMacVMRun(runID uuid.UUID, dir string) *vmRun {
+// newMacVMRun is a macOS VM run's handle: its guest agent is dialled on agent.sock in the run's socket
+// directory, checked on every dial.
+func newMacVMRun(c *MacVMConfig, runID uuid.UUID, dir string) *vmRun {
 	ctx, stop := context.WithCancel(context.Background())
-	sock := filepath.Join(dir, macvm.AgentSock)
 	var nd net.Dialer
 	return &vmRun{runID: runID, dir: dir, mac: true, ctx: ctx, stop: stop,
-		agent: guestagent.NewClient(func(ctx context.Context) (net.Conn, error) { return nd.DialContext(ctx, "unix", sock) })}
+		agent: guestagent.NewClient(func(ctx context.Context) (net.Conn, error) {
+			sock, err := c.sockPath(runID, macvm.AgentSock)
+			if err != nil {
+				return nil, err
+			}
+			return nd.DialContext(ctx, "unix", sock)
+		})}
 }
 
 // macVMLookup finds a macOS VM by its run directory, as a runner restart leaves it: the ref names the run,
@@ -163,7 +175,7 @@ func (d *Driver) macVMLookup(ref string) *vmRun {
 	if v, ok := d.vms.Load(ref); ok {
 		return v.(*vmRun)
 	}
-	nv := newMacVMRun(id, dir)
+	nv := newMacVMRun(c, id, dir)
 	v, loaded := d.vms.LoadOrStore(ref, nv)
 	if loaded { // another caller stored it first: this one's context and client go
 		nv.stop()
@@ -182,16 +194,13 @@ func readMacRun(dir string, runID uuid.UUID) (macvm.RunConfig, error) {
 	return cfg, err
 }
 
-// macDesktopSock is where a macOS VM's helper serves the guest's display.
-func macDesktopSock(dir string) string { return filepath.Join(dir, macvm.DesktopSock) }
-
 // The texts a macOS VM run ends with. A helper that is gone for no reason the runner knows, or a VM that
 // stopped with no error, ends with no text of its own: the organisation's own words for a stopped run.
 const (
 	macVMLostNetwork = "The macOS VM lost its network"
 	macVMRestarted   = "The Mac restarted; the macOS VM was lost"
-	macVMUpgraded    = "This Mac's runner was upgraded while the macOS VM ran, so the run was ended."
-	macVMLowDisk     = "This Mac ran low on disk (%d GB free), so the macOS VM was stopped."
+	macVMUpgraded    = "This Mac's runner was upgraded while the macOS VM ran"
+	macVMLowDisk     = "This Mac ran low on disk"
 )
 
 // refuseMacVMSpec refuses, before anything is created, what a macOS VM cannot honour, and a run that a
@@ -324,7 +333,7 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 	if err != nil {
 		return fail(err)
 	}
-	v := newMacVMRun(spec.RunID, dir)
+	v := newMacVMRun(c, spec.RunID, dir)
 	ref := agentContainerName(spec.RunID)
 	// From here the VM (or its helper) may exist: the rollback is the teardown's own destruction.
 	rollback = append(rollback, func() {
@@ -333,17 +342,18 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 		d.destroyMacVM(context.Background(), v, entry.ID, false)
 	})
 	if err := macvm.WriteRunConfig(dir, macvm.RunConfig{RunID: spec.RunID.String(), BaseDir: c.Layout.BaseDir(0), CPUs: cpus, MemoryMiB: memMiB,
-		Identity: c.Identity, RunnerID: c.RunnerID, LedgerEntry: entry.ID, LedgerDir: c.LedgerDir}); err != nil {
+		Identity: c.Identity, RunnerID: c.RunnerID, LedgerEntry: entry.ID, LedgerDir: c.LedgerDir, SockRoot: c.SockRoot}); err != nil {
 		return fail(fmt.Errorf("docker: macOS VM run directory: %w", err))
 	}
 	if err := c.spawn(dir); err != nil {
 		return fail(err)
 	}
-	ctlPath := filepath.Join(dir, macvm.ControlSock)
-	if err := waitForSocket(ctx, ctlPath, 2*time.Minute); err != nil { // the clone comes first
+	// The clone comes first. The socket is waited for where the helper makes it, and its directory is
+	// checked before the dial (dialControl).
+	if err := waitForSocket(ctx, filepath.Join(c.sockDir(spec.RunID), macvm.ControlSock), 2*time.Minute); err != nil {
 		return fail(fmt.Errorf("docker: the macOS VM helper did not start: %w", err))
 	}
-	cc, err := macvm.DialControl(ctx, ctlPath)
+	cc, err := c.dialControl(ctx, spec.RunID)
 	if err != nil {
 		return fail(fmt.Errorf("docker: the macOS VM helper: %w", err))
 	}
@@ -370,12 +380,15 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 	c.changed()
 	spec.NotifyWaiting("vm: booting")
 	// The desktop's per-run password: from the helper to the guest agent, in memory only (never logged,
-	// never written). A guest that did not set it gets no desktop for this run; the run still starts.
+	// never written). A base with a desktop publishes the run ready only once the guest set it (ERRATA E5):
+	// a helper that gives none, or a guest that did not set it, is the run's named failure
+	// (macvm.ErrDesktopPassword), never a ready run without its password.
 	var password string
-	if man.Desktop != "" && man.Desktop != "none" {
+	desktop := man.Desktop != "" && man.Desktop != "none"
+	if desktop {
 		if password, err = cc.DesktopPassword(bctx); err != nil {
-			slog.Warn("docker: the macOS VM's desktop is off for this run: its helper gave no desktop credential",
-				slog.String("run_id", spec.RunID.String()), slog.String("err", err.Error()))
+			slog.Warn("docker: the macOS VM's helper gave no desktop password", slog.String("run_id", spec.RunID.String()), slog.String("err", err.Error()))
+			return fail(fmt.Errorf("docker: %w", macvm.ErrDesktopPassword))
 		}
 	}
 	res, err := d.bootMacVM(bctx, v, cc, spec, password)
@@ -383,7 +396,12 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 	if err != nil {
 		return fail(err)
 	}
-	if res.DesktopPasswordSet == nil || !*res.DesktopPasswordSet {
+	set := res.DesktopPasswordSet != nil && *res.DesktopPasswordSet
+	if desktop && !set {
+		return fail(fmt.Errorf("docker: %w", macvm.ErrDesktopPassword))
+	}
+	go c.recordToolsDial(v.ctx, v.agent)
+	if !set {
 		if err := os.WriteFile(filepath.Join(dir, macDesktopOffFile), nil, 0o600); err != nil {
 			return fail(fmt.Errorf("docker: macOS VM run directory: %w", err))
 		}
@@ -442,7 +460,7 @@ func waitMacVMRunning(ctx context.Context, cc *macvm.ControlClient) error {
 // sign-in store.
 func (d *Driver) bootMacVM(ctx context.Context, v *vmRun, cc *macvm.ControlClient, spec runner.SandboxSpec, desktopPassword string) (guestagent.InitResult, error) {
 	var none guestagent.InitResult
-	if err := waitForSocket(ctx, filepath.Join(v.dir, macvm.AgentSock), 30*time.Second); err != nil {
+	if err := waitForSocket(ctx, filepath.Join(d.macVMConfig().sockDir(v.runID), macvm.AgentSock), 30*time.Second); err != nil {
 		return none, fmt.Errorf("docker: the macOS VM's guest agent: %w", err)
 	}
 	for {
@@ -487,19 +505,25 @@ func macDesktopOff(dir string) bool {
 // (-stdio) instead of a socket, and answers the attach connection's descriptor. It attaches before the
 // start, so nothing is buffered on the connection that the helper would miss.
 func (d *Driver) startMacVMNet(ctx context.Context, spec runner.SandboxSpec, proxyIP string) (*os.File, error) {
+	labels := d.labels(spec.RunID, componentVMNet, spec.Labels)
+	labels[labelMachineKind] = string(types.MachineMacOSVM)
+	return d.startMacRelay(ctx, spec.RunID, labels, proxyIP)
+}
+
+// startMacRelay is startMacVMNet's relay on id's internal network, -proxy at proxyIP: a run's, or a
+// base job's stage-2 one (StartMacPrepNet).
+func (d *Driver) startMacRelay(ctx context.Context, id uuid.UUID, labels map[string]string, proxyIP string) (*os.File, error) {
 	info, err := d.cli.Info(ctx, client.InfoOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("docker: info: %w", err)
 	}
-	host := hardenedHostConfig(internalNetName(spec.RunID), "", runner.Resources{MemoryMiB: 256, PidsLimit: vmPidsLimit}, info.Info)
+	host := hardenedHostConfig(internalNetName(id), "", runner.Resources{MemoryMiB: 256, PidsLimit: vmPidsLimit}, info.Info)
 	host.ReadonlyRootfs = true
 	host.RestartPolicy = container.RestartPolicy{Name: container.RestartPolicyDisabled}
 	host.ExtraHosts = []string{"wardyn-proxy:" + proxyIP}
 	uid, gid := vmUser(os.Getuid(), os.Getgid())
-	labels := d.labels(spec.RunID, componentVMNet, spec.Labels)
-	labels[labelMachineKind] = string(types.MachineMacOSVM)
 	created, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
-		Name: vmnetName(spec.RunID),
+		Name: vmnetName(id),
 		Config: &container.Config{Image: d.proxyImage(), User: strconv.Itoa(uid) + ":" + strconv.Itoa(gid), Entrypoint: []string{vmnetEntrypoint},
 			Cmd:       []string{"-stdio", "-proxy", "wardyn-proxy:" + strconv.Itoa(runner.ProxyListenPort)},
 			OpenStdin: true, AttachStdin: true, AttachStdout: true, AttachStderr: true, Labels: labels},
@@ -545,13 +569,16 @@ func attachFile(h client.HijackedResponse) (*os.File, error) {
 // macVMStatus is Status for a macOS VM: what its helper says. A helper nobody answers for is gone (the
 // Mac restarted, or the helper died), and one that speaks another control protocol is ended cleanly.
 func (d *Driver) macVMStatus(ctx context.Context, v *vmRun) (runner.Status, error) {
-	if b, err := os.ReadFile(filepath.Join(v.dir, macLowDiskFile)); err == nil {
-		gb, _ := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
-		return runner.Status{State: types.RunStopped, Message: fmt.Sprintf(macVMLowDisk, gb)}, nil
+	if _, err := os.Lstat(filepath.Join(v.dir, macLowDiskFile)); err == nil {
+		return runner.Status{State: types.RunStopped, Message: macVMLowDisk}, nil
+	}
+	c := d.macVMConfig()
+	if c == nil {
+		return runner.Status{State: types.RunStopped}, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	cc, err := macvm.DialControl(ctx, filepath.Join(v.dir, macvm.ControlSock))
+	cc, err := c.dialControl(ctx, v.runID)
 	var proto *macvm.ErrProto
 	switch {
 	case errors.As(err, &proto):
@@ -616,7 +643,7 @@ func (d *Driver) EndNewestMacVM(ctx context.Context, freeBytes int64) (string, e
 	if err := os.WriteFile(filepath.Join(dir, macLowDiskFile), []byte(strconv.FormatInt(max(freeBytes, 0)>>30, 10)), 0o600); err != nil {
 		return runID.String(), fmt.Errorf("docker: macOS VM run directory: %w", err)
 	}
-	cc, err := macvm.DialControl(ctx, filepath.Join(dir, macvm.ControlSock))
+	cc, err := c.dialControl(ctx, runID)
 	if err != nil {
 		return runID.String(), fmt.Errorf("docker: the macOS VM helper: %w", err)
 	}
@@ -722,7 +749,7 @@ func (d *Driver) destroyMacVM(ctx context.Context, v *vmRun, entryID string, gra
 	}
 	stopped := false
 	sctx, cancel := context.WithTimeout(ctx, macvm.DefaultStopTimeout+macHelperExitWait)
-	if cc, err := macvm.DialControl(sctx, filepath.Join(v.dir, macvm.ControlSock)); err == nil {
+	if cc, err := c.dialControl(sctx, v.runID); err == nil {
 		stopped = cc.Stop(sctx, graceful, macvm.DefaultStopTimeout) == nil
 		_ = cc.Close()
 	}
@@ -739,6 +766,7 @@ func (d *Driver) destroyMacVM(ctx context.Context, v *vmRun, entryID string, gra
 		log.Warn("docker: delete a macOS VM run directory (pending; the orphan sweep retries)", slog.String("err", err.Error()))
 		return
 	}
+	c.sweepSockResidue()
 	var err error
 	if e, ok := c.entry(entryID); stopped || ok && e.HelperPID == 0 {
 		err = c.Ledger.Release(entryID, admission.Destroyed{Stopped: true, RunDir: v.dir})
@@ -775,7 +803,7 @@ func (d *Driver) teardownMacVM(ctx context.Context, runID uuid.UUID) bool {
 	if err != nil {
 		return false
 	}
-	v := newMacVMRun(runID, dir)
+	v := newMacVMRun(c, runID, dir)
 	defer func() { v.stop(); v.agent.Close() }()
 	d.destroyMacVM(ctx, v, cfg.LedgerEntry, false)
 	return true
@@ -810,7 +838,7 @@ func (d *Driver) sweepMacVMOrphans(ctx context.Context, cutoff time.Time, isOrph
 			continue // a live VM, or a create in flight; its run's own teardown ends it
 		}
 		dctx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		cc, derr := macvm.DialControl(dctx, filepath.Join(dir, macvm.ControlSock))
+		cc, derr := c.dialControl(dctx, runID)
 		cancel()
 		if derr == nil {
 			_ = cc.Close()
@@ -821,6 +849,7 @@ func (d *Driver) sweepMacVMOrphans(ctx context.Context, cutoff time.Time, isOrph
 			continue
 		}
 		cleaned++
+		c.sweepSockResidue()
 		if err := c.Ledger.ReclaimOwn(cfg.LedgerEntry, dir); err != nil && !errors.Is(err, os.ErrNotExist) {
 			errs = append(errs, fmt.Errorf("docker: release orphaned macOS VM %s: %w", runID, err))
 		}

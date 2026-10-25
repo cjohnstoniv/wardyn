@@ -71,7 +71,7 @@ func (m *macDocker) ContainerAttach(ctx context.Context, id string, opts client.
 	m.fakeDocker.mu.Lock()
 	c := m.fakeDocker.containers[id]
 	m.fakeDocker.mu.Unlock()
-	if c == nil || c.cfg.Labels[labelComponent] != componentVMNet {
+	if c == nil || !strings.HasPrefix(c.name, "wardyn-vmnet-") { // a run's relay, or a base job's (StartMacPrepNet)
 		return m.fakeDocker.ContainerAttach(ctx, id, opts)
 	}
 	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
@@ -142,7 +142,9 @@ func newMacRig(t *testing.T) *macRig {
 	layout := macvm.Layout{Root: filepath.Join(root, "vm")}
 	makeMacBase(t, layout)
 	r.c = &MacVMConfig{Layout: layout, Helper: "/nonexistent/wardyn-macvm", Identity: macvm.IdentityFresh, Ledger: r.open(t, 501, "runner-a"),
-		Host: r.host, RunnerID: "runner-a", HostOS: "macOS 26.1 (25B78)", BootTimeout: 20 * time.Second}
+		Host: r.host, RunnerID: "runner-a", HostOS: "macOS 26.1 (25B78)", BootTimeout: 20 * time.Second,
+		SockRoot: macvmtest.SockRoot(t), ToolsDialFile: filepath.Join(layout.Root, "run-tools-dial"), sockFstat: macvmtest.SockFstat}
+	r.c.sweepSock = sweepSockForTest
 	r.c.spawn = func(dir string) error { r.helper(ctx, dir); return nil }
 	r.c.signal = func(int, unix.Signal) error { cancel(); return nil }
 	if r.secret, err = macvm.NewDesktopSecret(); err != nil {
@@ -169,7 +171,7 @@ func (r *macRig) open(t *testing.T, uid int, runnerID string) *admission.Ledger 
 		Fstat: func(fd int, _ string) (unix.Stat_t, error) { // the package's install: every directory is root's
 			var st unix.Stat_t
 			err := unix.Fstat(fd, &st)
-			st.Uid = 0
+			st.Uid, st.Gid = 0, 0
 			return st, err
 		}})
 	if err != nil {
@@ -186,7 +188,7 @@ func (r *macRig) helper(ctx context.Context, dir string) {
 	go func() {
 		defer r.runs.Done()
 		defer r.host.gone(macHelperPID)
-		_ = macvm.Run(ctx, macvm.RunOptions{Engine: r.eng, RunDir: dir, NetWait: 10 * time.Second, DesktopPassword: r.secret, Claim: func(cfg macvm.RunConfig) error {
+		_ = macvm.Run(ctx, macvm.RunOptions{Engine: r.eng, RunDir: dir, NetWait: 10 * time.Second, DesktopPassword: r.secret, SockFstat: macvmtest.SockFstat, Claim: func(cfg macvm.RunConfig) error {
 			_, err := r.c.Ledger.ClaimHelper(cfg.LedgerEntry, macHelperPID, 7)
 			return err
 		}})
@@ -210,6 +212,9 @@ func (r *macRig) helper(ctx context.Context, dir string) {
 			r.mu.Unlock()
 			_ = json.NewEncoder(w).Encode(res)
 		})
+		mux.HandleFunc("GET /v1/dial/tools", func(w http.ResponseWriter, _ *http.Request) {
+			_ = json.NewEncoder(w).Encode(guestagent.ToolsDial{Class: guestagent.DialRefused, Error: "connection refused", Dials: 1})
+		})
 		_ = guestagent.ServeVsock(ctx, func(context.Context) (net.Conn, error) {
 			ms := r.eng.Machines()
 			if len(ms) == 0 {
@@ -231,8 +236,14 @@ func makeMacBase(t *testing.T, l macvm.Layout) {
 			t.Fatal(err)
 		}
 	}
-	m := `{"format":1,"state":"ready","guest_os":"macOS 26.1","min_cpus":2,"min_memory_mib":4096,"hardware_model":"aHc=","desktop":"control","harnesses":["claude-code"]}`
-	if err := os.WriteFile(filepath.Join(base, macvm.ManifestFile), []byte(m), 0o600); err != nil {
+	writeMacManifest(t, l, "control")
+}
+
+// writeMacManifest writes the base's manifest with the given desktop.
+func writeMacManifest(t *testing.T, l macvm.Layout, desktop string) {
+	t.Helper()
+	m := `{"format":1,"state":"ready","guest_os":"macOS 26.1","min_cpus":2,"min_memory_mib":4096,"hardware_model":"aHc=","desktop":"` + desktop + `","harnesses":["claude-code"]}`
+	if err := os.WriteFile(filepath.Join(l.BaseDir(0), macvm.ManifestFile), []byte(m), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -360,6 +371,7 @@ func TestMacVMOwnerReturnSweepsTombstonedRun(t *testing.T) {
 		Identity: macvm.IdentityFresh, RunnerID: r.c.RunnerID, LedgerEntry: e.ID}); err != nil {
 		t.Fatal(err)
 	}
+	sockDir := r.makeSockResidue(t, runID) // the dead helper's socket directory
 	past := time.Now().Add(-time.Hour)
 	_ = os.Chtimes(dir, past, past)
 	// The login ended: its helper and runner are gone, and another login tombstones the entry.
@@ -384,6 +396,9 @@ func TestMacVMOwnerReturnSweepsTombstonedRun(t *testing.T) {
 	if _, err := os.Lstat(dir); !os.IsNotExist(err) {
 		t.Fatalf("the tombstoned run's directory was not swept: %v", err)
 	}
+	if _, err := os.Lstat(sockDir); !os.IsNotExist(err) {
+		t.Fatalf("the swept run's socket directory stayed: %v", err)
+	}
 	counted, _ := r.c.Ledger.Counted()
 	debts, _ := r.c.Ledger.Debts()
 	if len(counted)+len(debts) != 0 {
@@ -394,36 +409,58 @@ func TestMacVMOwnerReturnSweepsTombstonedRun(t *testing.T) {
 	}
 }
 
-// A helper with no desktop password for the run: the run starts, with its desktop off.
-func TestMacVMDesktopOffWhenTheHelperHasNoPassword(t *testing.T) {
+// ERRATA E5 (run half): on a base with a desktop, a run is ready only once its desktop password is set. A
+// helper with no password for the run, or a guest that did not set it, fails the run by name
+// (macvm.ErrDesktopPassword), and the failed create leaves no ledger entry, run directory or socket
+// directory.
+func TestMacVMRunWithoutItsDesktopPasswordFailsByName(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		setup  func(r *macRig)
+		booted bool // the guest was handed its sandbox before the failure
+	}{
+		{"helper has none", func(r *macRig) { r.secret = nil }, false},
+		{"guest did not set it", func(r *macRig) { r.setPassword = false }, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newMacRig(t)
+			tc.setup(r)
+			spec := macSpec()
+			if _, err := r.d.CreateSandbox(context.Background(), spec); !errors.Is(err, macvm.ErrDesktopPassword) {
+				t.Fatalf("create: %v, want the named desktop password failure", err)
+			}
+			r.mu.Lock()
+			booted := r.init != nil
+			r.mu.Unlock()
+			if booted != tc.booted {
+				t.Fatalf("the guest was handed its sandbox: %v, want %v", booted, tc.booted)
+			}
+			if counted, _ := r.c.Ledger.Counted(); len(counted) != 0 {
+				t.Fatalf("the failed run kept its ledger entry: %+v", counted)
+			}
+			if _, err := os.Lstat(r.c.runDir(spec.RunID)); !os.IsNotExist(err) {
+				t.Fatalf("the failed run's directory stayed: %v", err)
+			}
+			if _, err := os.Lstat(r.c.sockDir(spec.RunID)); !os.IsNotExist(err) {
+				t.Fatalf("the failed run's socket directory stayed: %v", err)
+			}
+		})
+	}
+}
+
+// A base with no desktop runs with its desktop off: nothing to set, so no failure.
+func TestMacVMDesktopOffOnABaseWithNoDesktop(t *testing.T) {
 	r := newMacRig(t)
-	r.secret = nil
+	writeMacManifest(t, r.c.Layout, "none")
 	sb, err := r.d.CreateSandbox(context.Background(), macSpec())
 	if err != nil {
 		t.Fatalf("the run did not start: %v", err)
 	}
 	if r.init.DesktopPassword != "" {
-		t.Fatal("a password reached the guest from a helper that has none")
+		t.Fatal("a password reached the guest of a base with no desktop")
 	}
 	if _, err := r.d.DialDesktop(context.Background(), sb.Ref); !errors.Is(err, errMacDesktopOff) {
-		t.Fatalf("desktop of a run with no password: %v", err)
-	}
-	if err := r.d.StopSandbox(context.Background(), sb.Ref); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// A guest that did not set the desktop password still runs, with its desktop off for the run.
-func TestMacVMDesktopOffWhenTheGuestDidNotSetItsPassword(t *testing.T) {
-	r := newMacRig(t)
-	r.setPassword = false
-	spec := macSpec()
-	sb, err := r.d.CreateSandbox(context.Background(), spec)
-	if err != nil {
-		t.Fatalf("the run did not start: %v", err)
-	}
-	if _, err := r.d.DialDesktop(context.Background(), sb.Ref); !errors.Is(err, errMacDesktopOff) {
-		t.Fatalf("desktop of a run whose guest set no password: %v", err)
+		t.Fatalf("desktop of a run with no desktop: %v", err)
 	}
 	if err := r.d.StopSandbox(context.Background(), sb.Ref); err != nil {
 		t.Fatal(err)
@@ -442,7 +479,7 @@ func TestMacVMDesktopPasswordNeverLoggedOrWritten(t *testing.T) {
 		pw := r.password(t)
 		spec := macSpec()
 		sb, err := r.d.CreateSandbox(context.Background(), spec)
-		if err != nil {
+		if (err == nil) != set {
 			slog.SetDefault(prev)
 			t.Fatal(err)
 		}
@@ -458,7 +495,9 @@ func TestMacVMDesktopPasswordNeverLoggedOrWritten(t *testing.T) {
 			})
 		}
 		slog.Info("the guest's sandbox", "init", *r.init)
-		_ = r.d.StopSandbox(context.Background(), sb.Ref)
+		if set {
+			_ = r.d.StopSandbox(context.Background(), sb.Ref)
+		}
 		slog.SetDefault(prev)
 		if strings.Contains(logs.String(), pw) {
 			t.Fatalf("set=%v: the desktop password is in the runner's log:\n%s", set, logs.String())
@@ -487,7 +526,7 @@ func TestMacVMEndNewestForLowDisk(t *testing.T) {
 	if run, err := r.d.EndNewestMacVM(context.Background(), 3<<30); run != spec.RunID.String() || err != nil {
 		t.Fatalf("ended %q, %v", run, err)
 	}
-	if st, err := r.d.Status(context.Background(), sb.Ref); err != nil || st.State != types.RunStopped || st.Message != "This Mac ran low on disk (3 GB free), so the macOS VM was stopped." {
+	if st, err := r.d.Status(context.Background(), sb.Ref); err != nil || st.State != types.RunStopped || st.Message != "This Mac ran low on disk" {
 		t.Fatalf("status %+v %v", st, err)
 	}
 	if err := r.d.StopSandbox(context.Background(), sb.Ref); err != nil {
@@ -506,4 +545,15 @@ func (r *macRig) password(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return pw
+}
+
+// sweepSockForTest is macvm.SweepSockResidue with the test's root-ownership stand-in: a key whose run
+// directory is gone is removed.
+func sweepSockForTest(l macvm.Layout, sockRoot string) ([]string, error) {
+	sc := macvm.SockConfig(sockRoot)
+	sc.Fstat = macvmtest.SockFstat
+	return sc.SweepRunDirs(func(k string) bool {
+		_, err := os.Lstat(filepath.Join(l.RunsDir(), k))
+		return errors.Is(err, os.ErrNotExist)
+	})
 }

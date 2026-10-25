@@ -13,10 +13,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/cjohnstoniv/wardyn/internal/doctor"
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
 	"github.com/cjohnstoniv/wardyn/internal/macvm/admission"
 	"github.com/cjohnstoniv/wardyn/internal/runneridentity"
@@ -126,6 +128,7 @@ type macOSVMStatus struct {
 	Identity      string   `json:"identity"`
 	HeldDiskBytes int64    `json:"held_disk_bytes"` // disk held for ended logins' VMs
 	Leaked        int      `json:"leaked"`          // framework slots held until a restart
+	ToolsDial     string   `json:"tools_dial"`      // how the last run boot's tools-port dial ended, "" before one
 	Error         string   `json:"error"`
 
 	progress, counted, minCPUs, minMemoryMiB int
@@ -157,6 +160,7 @@ func (m *macOSVMs) status(ctx context.Context) (macOSVMStatus, error) {
 	if st.setupCode = setupCodeWaiting(m.layout.Root); st.setupCode != "" {
 		st.Phase = "setup_by_hand"
 	}
+	st.ToolsDial = lastToolsDial(m.layout.Root)
 	counted, err := m.ledger.Counted()
 	if err != nil {
 		return st, err
@@ -199,6 +203,9 @@ func (st macOSVMStatus) writeText(out io.Writer) {
 	if st.Thermal != "" {
 		fmt.Fprintf(out, "thermal: %s\n", st.Thermal)
 	}
+	if st.ToolsDial != "" {
+		fmt.Fprintf(out, "tools_dial: %s\n", st.ToolsDial)
+	}
 	fmt.Fprintf(out, "macOS VMs on this Mac (every login): %d; this runner offers %d at once\n", st.counted, st.Max)
 	if st.Leaked > 0 {
 		fmt.Fprintf(out, "VM slots macOS holds until this Mac restarts: %d\n", st.Leaked)
@@ -206,4 +213,30 @@ func (st macOSVMStatus) writeText(out io.Writer) {
 	if st.HeldDiskBytes > 0 {
 		fmt.Fprintf(out, "disk held for ended logins' VMs until they log in again: %d GB\n", st.HeldDiskBytes>>30)
 	}
+}
+
+// runToolsDialFile, in the VM directory, is the driver's record of how the last run boot's guest agent
+// dial of the tools port ended (docker.MacVMConfig.ToolsDialFile).
+const runToolsDialFile = "run-tools-dial"
+
+// lastToolsDial is that record when it names one of the five classes, else "".
+func lastToolsDial(root string) string {
+	b, err := os.ReadFile(filepath.Join(root, runToolsDialFile))
+	if s := strings.TrimSpace(string(b)); err == nil && macvm.ValidToolsDial(s) {
+		return s
+	}
+	return ""
+}
+
+// macOSVMDoctorStages is doctor's macOS VM stage: only while macOS waits for setup by hand, it names the
+// file that holds the one-time code, never the code.
+func macOSVMDoctorStages() []doctor.Stage {
+	root, err := macvm.DefaultRoot()
+	if err != nil {
+		return nil
+	}
+	if p := setupCodeWaiting(root); p != "" {
+		return []doctor.Stage{doctor.SkipStage("macos-vm", "macOS asked for setup by hand; the one-time code is in "+p)}
+	}
+	return nil
 }

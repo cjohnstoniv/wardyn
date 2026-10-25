@@ -75,9 +75,16 @@ type macOSVMs struct {
 	refusal, why string
 	// helper is the wardyn-macvm beside this runner.
 	helper string
-	// perRunMemory is the runner's per-run memory limit in bytes, which every guest gets; 0 is unknown,
-	// and a guest then gets the base's minimum.
-	perRunMemory uint64
+	// perRunMemory is the runner's per-run memory limit in bytes, which every guest gets, and perRunCPUs
+	// its per-run CPUs: the organisation's (setPerRunLimits), under mu. 0 is no limit known, and a guest
+	// then gets the base's minimum. defaultPerRunMemory is setup's value, what no limit resets to.
+	perRunMemory, defaultPerRunMemory uint64
+	perRunCPUs                        int
+	// sockRoot is the socket root ("" is admission.DefaultSockDir) and sockFstat replaces fstat(2) in its
+	// checks (tests); prepNet brings up a base job's stage-2 network (the driver's StartMacPrepNet).
+	sockRoot  string
+	sockFstat func(fd int, name string) (unix.Stat_t, error)
+	prepNet   func(ctx context.Context, entryID string) (*os.File, func(), error)
 	// version is the guest agent this runner ships; a base whose agent differs needs a tools update.
 	version string
 	// toolsUpdate starts that update (design 3.4, guest agent drift) for the base whose manifest it is
@@ -90,6 +97,9 @@ type macOSVMs struct {
 	endNewest func(ctx context.Context, freeBytes int64) (string, error)
 	interval  time.Duration
 	kick      chan struct{}
+	// ctx is the serve's (start), which the jobs' stage-2 networks live under; nets the jobs being handled.
+	ctx  context.Context
+	nets map[string]bool
 
 	mu    sync.Mutex
 	caps  *runnerwire.MacVMCaps
@@ -112,7 +122,7 @@ type macOSVMSetup struct {
 // none of them) makes a handle that offers no macOS VM and names the fix.
 func openMacOSVMs(s macOSVMSetup) *macOSVMs {
 	m := &macOSVMs{host: s.host, layout: macvm.Layout{Root: s.root}, runnerID: s.runnerID, version: s.version, perRunMemory: s.perRunMemory,
-		interval: macOSVMRecompute, kick: make(chan struct{}, 1)}
+		defaultPerRunMemory: s.perRunMemory, interval: macOSVMRecompute, kick: make(chan struct{}, 1)}
 	if err := os.MkdirAll(s.root, 0o700); err != nil {
 		slog.Warn("macOS VM sandboxes are off on this runner: no VM directory", "error", err.Error())
 		m.refusal = macOSVMLedgerDamaged
@@ -184,6 +194,9 @@ func (m *macOSVMs) start(ctx context.Context, resend func()) {
 	if m == nil {
 		return
 	}
+	m.mu.Lock()
+	m.ctx = ctx
+	m.mu.Unlock()
 	if m.endNewest != nil {
 		go m.watchDisk(ctx, macOSVMDiskEvery, func() (int64, error) { return m.host.FreeDiskBytes(m.layout.Root) }, m.endNewest)
 	}
@@ -249,6 +262,7 @@ func (m *macOSVMs) build(last *runnerwire.MacVMCaps) runnerwire.MacVMCaps {
 		slog.Warn("macOS VM ledger: tombstone pass", "error", err.Error())
 	}
 	m.reconcilePrepare()
+	m.watchJobs()
 	if m.reclaim != nil {
 		if err := m.reclaim(); err != nil {
 			slog.Warn("macOS VM ledger: reconcile", "error", err.Error())
@@ -262,6 +276,11 @@ func (m *macOSVMs) build(last *runnerwire.MacVMCaps) runnerwire.MacVMCaps {
 	c.MinCPUs, c.MinMemoryMiB = man.MinCPUs, int(man.MinMemoryMiB)
 	c.Harnesses, c.Desktop = slices.Clone(man.Harnesses), man.Desktop
 	m.checkAgent(man)
+	if why := m.belowMinimum(man); why != "" {
+		// design 3.10: a per-run limit below the base's minimum offers none; the flag is named on this Mac.
+		slog.Warn("macOS VM sandboxes: this runner offers none", "reason", why)
+		return c
+	}
 	off, err := m.ledger.Offer(m.guestMemory(man), admission.RunDiskReservation(cmp.Or(man.DiskBytes, macvm.BaseDiskBytes)))
 	switch {
 	case err == nil:
@@ -276,7 +295,46 @@ func (m *macOSVMs) build(last *runnerwire.MacVMCaps) runnerwire.MacVMCaps {
 // guestMemory is what one guest of this base takes: the per-run memory, or the base's minimum when that
 // is more (a run below it is refused at start).
 func (m *macOSVMs) guestMemory(man macvm.Manifest) uint64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return max(m.perRunMemory, man.MinMemoryMiB<<20)
+}
+
+// belowMinimum is why a per-run limit the organisation sent is below the base's minimum, naming the flag
+// to raise, else "".
+func (m *macOSVMs) belowMinimum(man macvm.Manifest) string {
+	m.mu.Lock()
+	mem, cpus := m.perRunMemory, m.perRunCPUs
+	m.mu.Unlock()
+	switch {
+	case mem != 0 && mem < man.MinMemoryMiB<<20:
+		return fmt.Sprintf("the runner's per-run memory (%d MiB) is below the macOS base's minimum (%d MiB); raise --per-run-memory", mem>>20, man.MinMemoryMiB)
+	case cpus != 0 && cpus < man.MinCPUs:
+		return fmt.Sprintf("the runner's per-run CPUs (%d) are below the macOS base's minimum (%d); raise --per-run-cpu", cpus, man.MinCPUs)
+	}
+	return ""
+}
+
+// setPerRunLimits is runnerwire.RunnerHooks.PerRunLimits: the per-run CPU (milli-CPU) and memory (MiB)
+// the organisation sends on every connect, which each guest is sized at, then a recompute. (0, 0) is
+// "no per-run limit": the organisation stores a runner's limits whole or not at all (NULL is nil,
+// internal/store/store_runner_limits.go limits) and sends 0 for nil (internal/runner/remote/hub.go
+// perRunOf), and no write can set 0 (types.RunnerAmounts.validate: per-run CPU >= 1000 milli-CPU,
+// memory >= 1 MiB). The guest then gets setup's value, else the base's minimum (guestMemory).
+func (m *macOSVMs) setPerRunLimits(cpuMillis, memoryMiB int64) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.perRunMemory, m.perRunCPUs = m.defaultPerRunMemory, 0
+	if memoryMiB > 0 {
+		m.perRunMemory = uint64(memoryMiB) << 20
+	}
+	if cpuMillis > 0 {
+		m.perRunCPUs = int(cpuMillis / 1000)
+	}
+	m.mu.Unlock()
+	m.changed()
 }
 
 // base is the base image's state for the caps.
@@ -415,16 +473,12 @@ func prepareFailure(log string) string {
 	return msg
 }
 
-// setupCodeFile, in the VM directory, is where the helper leaves the one-time code macOS's Setup
-// Assistant asks for: owner-only (0600), read on this Mac by the person at it. The runner never reads the
-// code: it only says where the file is, so the code is in no log, no status and nothing sent to the
-// organisation.
-const setupCodeFile = "setup-code"
-
-// setupCodeWaiting is the setup code's file when the helper left one (a non-empty 0600 regular file),
-// else "".
+// setupCodeWaiting is the file where the helper left the one-time code macOS's Setup Assistant asks for
+// (macvm.SetupCodeFile, owner-only 0600, read on this Mac by the person at it) when it is there (a
+// non-empty 0600 regular file), else "". The runner never reads the code: it only says where the file
+// is, so the code is in no log, no status and nothing sent to the organisation.
 func setupCodeWaiting(root string) string {
-	p := filepath.Join(root, setupCodeFile)
+	p := macvm.Layout{Root: root}.SetupCode()
 	fi, err := os.Lstat(p)
 	if err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm() != 0o600 || fi.Size() == 0 {
 		return ""
@@ -580,10 +634,10 @@ func (m *macOSVMs) startPrepare(ctx context.Context, a prepareArgs) error {
 		if !a.newImage {
 			return errMacOSBaseReady
 		}
-		extra = append(extra, "--reprepare")
+		extra = append(extra, "--"+macvm.FlagReprepare)
 	}
 	if a.keepIPSW {
-		extra = append(extra, "--keep-ipsw")
+		extra = append(extra, "--"+macvm.FlagKeepIPSW)
 	}
 	if _, err := probeHelper(ctx, a.helper); err != nil {
 		return err
@@ -592,7 +646,7 @@ func (m *macOSVMs) startPrepare(ctx context.Context, a prepareArgs) error {
 		slog.Warn("macOS VM directory: Time Machine exclusion", "error", err.Error())
 	}
 	return m.startJob(ctx, helperJob{kind: admission.KindPrepare, disk: admission.PrepareDiskReservation(macvm.BaseDiskBytes),
-		log: m.layout.PrepareLog(), sub: "prepare", helper: a.helper, cpus: a.cpus, memMiB: a.memoryMiB, runner: a.runnerID,
+		log: m.layout.PrepareLog(), sub: macvm.PrepareCommand, helper: a.helper, cpus: a.cpus, memMiB: a.memoryMiB, runner: a.runnerID,
 		ledger: a.ledgerDir, extra: extra, descr: "prepare"})
 }
 
@@ -602,14 +656,15 @@ const toolsUpdateLog = "tools-update.log"
 // startToolsUpdate starts the helper's tools update of the base whose manifest is man (design 3.4, 3.12):
 // its own ledger entry, a guest at the base's minimum CPUs and the per-run memory (or the minimum), and
 // the helper's `update-tools`, which takes the base's update lock, works on a staging copy and swaps it
-// in, so runs keep cloning the old base meanwhile.
+// in, so runs keep cloning the old base meanwhile. It passes --force: runnerd starts it only once it found
+// the base's agent is not its own, and the helper's own check knows no agent version to compare.
 func (m *macOSVMs) startToolsUpdate(ctx context.Context, man macvm.Manifest) error {
 	if m.ledger == nil {
 		return errors.New(cmp.Or(m.refusal, m.why))
 	}
 	return m.startJob(ctx, helperJob{kind: admission.KindToolsUpdate, disk: admission.RunDiskReservation(cmp.Or(man.DiskBytes, macvm.BaseDiskBytes)),
-		log: filepath.Join(m.layout.Root, toolsUpdateLog), sub: "update-tools", helper: m.helper, cpus: max(man.MinCPUs, 1),
-		memMiB: m.guestMemory(man) >> 20, runner: m.runnerID, descr: "tools update"})
+		log: filepath.Join(m.layout.Root, toolsUpdateLog), sub: macvm.UpdateToolsCommand, helper: m.helper, cpus: max(man.MinCPUs, 1),
+		memMiB: m.guestMemory(man) >> 20, runner: m.runnerID, extra: []string{"--" + macvm.FlagForce}, descr: "tools update"})
 }
 
 // startJob takes the job's ledger entry (the tombstone pass first) and starts the helper in its own
@@ -639,10 +694,13 @@ func (m *macOSVMs) startJob(ctx context.Context, j helperJob) error {
 		return never(err)
 	}
 	defer logf.Close()
-	args := []string{j.sub, "--root", m.layout.Root, "--cpus", strconv.Itoa(j.cpus), "--memory-mib", strconv.FormatUint(j.memMiB, 10),
-		"--runner-id", j.runner, "--ledger-entry", e.ID}
+	args := []string{j.sub, "--" + macvm.FlagRoot, m.layout.Root, "--" + macvm.FlagCPUs, strconv.Itoa(j.cpus),
+		"--" + macvm.FlagMemoryMiB, strconv.FormatUint(j.memMiB, 10), "--" + macvm.FlagRunnerID, j.runner, "--" + macvm.FlagLedgerEntry, e.ID}
 	if j.ledger != "" {
-		args = append(args, "--ledger-dir", j.ledger)
+		args = append(args, "--"+macvm.FlagLedgerDir, j.ledger)
+	}
+	if m.sockRoot != "" {
+		args = append(args, "--"+macvm.FlagSockRoot, m.sockRoot)
 	}
 	cmd := exec.Command(j.helper, append(args, j.extra...)...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
