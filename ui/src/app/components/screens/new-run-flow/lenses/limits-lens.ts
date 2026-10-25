@@ -27,21 +27,21 @@ export const startAtMinimum = (intent: RunIntent, min: MacOSMinimum): RunIntent 
     },
   });
 
-/** True when the ask is exactly the macOS minimum: the pre-fill the person has not changed. */
+/** True when the ask is exactly the macOS minimum: the test for Review's "Mac minimum" chip, not a record of how it got there. */
 export const atMinimum = (intent: RunIntent, min: MacOSMinimum): boolean =>
   intent.resources?.cpu_millis === min.cpuMillis && intent.resources?.memory_mib === min.memoryMib;
 
-/** Which of the two figures choosing macOS added: one the ask already held at or above the minimum is the person's. */
+/** The figures choosing macOS filled in, with the numbers it set: one the ask already held at or above the minimum is the person's. */
 export const minimumFill = (intent: RunIntent, min: MacOSMinimum): NonNullable<GuidedFacts["macosFill"]> => ({
-  cpu: (intent.resources?.cpu_millis ?? 0) < min.cpuMillis,
-  memory: (intent.resources?.memory_mib ?? 0) < min.memoryMib,
+  ...((intent.resources?.cpu_millis ?? 0) < min.cpuMillis && { cpu_millis: min.cpuMillis }),
+  ...((intent.resources?.memory_mib ?? 0) < min.memoryMib && { memory_mib: min.memoryMib }),
 });
 
-/** Leaving macOS takes back the figures the pre-fill added, and only while each is still exactly the minimum. */
-export function dropMinimum(intent: RunIntent, min: MacOSMinimum, fill: GuidedFacts["macosFill"]): RunIntent {
+/** Leaving macOS takes back the figures the pre-fill added, and only while each is still the number it filled in. */
+export function dropMinimum(intent: RunIntent, fill: GuidedFacts["macosFill"]): RunIntent {
   const { cpu_millis: cpu, memory_mib: memory, ...rest } = intent.resources ?? {};
-  const dropCpu = !!fill?.cpu && cpu === min.cpuMillis;
-  const dropMemory = !!fill?.memory && memory === min.memoryMib;
+  const dropCpu = fill?.cpu_millis !== undefined && cpu === fill.cpu_millis;
+  const dropMemory = fill?.memory_mib !== undefined && memory === fill.memory_mib;
   if (!dropCpu && !dropMemory) return intent;
   const kept = { ...rest, ...(!dropCpu && cpu !== undefined && { cpu_millis: cpu }), ...(!dropMemory && memory !== undefined && { memory_mib: memory }) };
   return withKeys(intent, { resources: Object.keys(kept).length ? kept : undefined });

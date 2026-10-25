@@ -139,6 +139,40 @@ describe("OS row: macOS chosen (frame 2, M-N2 frame 1)", () => {
     expect(intentNow()).toMatchObject({ machine_kind: "linux_vm", resources: { cpu_millis: 4000, memory_mib: 8192 } });
   });
 
+  it("takes back the pre-fill when the pool stops offering macOS before Linux is chosen again", async () => {
+    const REFUSAL: MacOSOffer = { ok: false, refusal: { why: "preparing", runner: "mac-studio-07", percent: 42 } };
+    function Flip({ children }: { children: React.ReactNode }) {
+      const [offer, setOffer] = React.useState<MacOSOffer>(READY);
+      return (
+        <MacOSOfferContext.Provider value={offer}>
+          {children}
+          <button onClick={() => setOffer(REFUSAL)}>flip</button>
+        </MacOSOfferContext.Provider>
+      );
+    }
+    render(
+      <MemoryRouter>
+        <ModelAccessProvider status={ON} onRefresh={() => {}}>
+          <Flip>
+            <NewRunDraftProvider owner="alice">
+              <Seeded intent={AGENT}>
+                <RunStep location={{ screen: "step", step: "run" }} go={vi.fn()} startFromScratch={() => {}} deps={{ load: vi.fn(async () => SCENARIO_POOLS.member) }} />
+                <Probe />
+              </Seeded>
+            </NewRunDraftProvider>
+          </Flip>
+        </ModelAccessProvider>
+      </MemoryRouter>,
+    );
+    await chooseVM();
+    await userEvent.click(macosButton());
+    expect(intentNow().resources).toEqual({ cpu_millis: 4000, memory_mib: 8192 });
+    await userEvent.click(screen.getByRole("button", { name: "flip" }));
+    await userEvent.click(within(osGroup()).getByRole("button", { name: NR_MACHINE.OS_LINUX }));
+    expect(intentNow().machine_kind).toBe("linux_vm");
+    expect(intentNow().resources).toBeUndefined();
+  });
+
   it("says an agent that disallows desktop sign-ins stops the run (M-N2 frame 3)", async () => {
     // The setup status's own harness row says it: the draft's agent has "Sign-ins in a desktop: Not allowed".
     const status = { ...ON, harnesses: [{ id: "release-bot", display: "Release bot", has_gateway: false, has_login: false, desktop_sign_ins_off: true }] } as SetupStatus;

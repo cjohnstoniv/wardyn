@@ -66,7 +66,7 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
     if (kind === "macos_vm" && !onMac && minimum) dispatch({ type: "guided", patch: { macosFill: minimumFill(intent, minimum) } });
     else if (kind !== "macos_vm" && fill) dispatch({ type: "guided", patch: { macosFill: undefined } });
     edit((i) => {
-      const leaving = i.machine_kind === "macos_vm" && kind !== "macos_vm" && minimum ? dropMinimum(i, minimum, fill) : i;
+      const leaving = i.machine_kind === "macos_vm" && kind !== "macos_vm" ? dropMinimum(i, fill) : i;
       const next = chooseMachineKind(leaving, kind);
       return kind === "macos_vm" && minimum ? startAtMinimum(next, minimum) : next;
     });

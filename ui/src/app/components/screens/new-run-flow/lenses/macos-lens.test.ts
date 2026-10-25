@@ -28,22 +28,22 @@ describe("the macOS minimum", () => {
     const start: RunIntent = { ...BASE, resources: { disk_mib: 20480 } };
     const filled = startAtMinimum(start, MIN);
     expect(atMinimum(filled, MIN)).toBe(true);
-    expect(dropMinimum(filled, MIN, minimumFill(start, MIN)).resources).toEqual({ disk_mib: 20480 });
+    expect(dropMinimum(filled, minimumFill(start, MIN)).resources).toEqual({ disk_mib: 20480 });
     const raisedStart: RunIntent = { ...BASE, resources: { cpu_millis: 6000, memory_mib: 8192 } };
     const raised = startAtMinimum(raisedStart, MIN);
-    expect(dropMinimum(raised, MIN, minimumFill(raisedStart, MIN))).toBe(raised);
+    expect(dropMinimum(raised, minimumFill(raisedStart, MIN))).toBe(raised);
   });
 
   it("keeps values the person set equal to the minimum before choosing macOS, and takes back only the figure it added", () => {
     const explicit: RunIntent = { ...BASE, resources: { cpu_millis: 4000, memory_mib: 8192 } };
-    expect(minimumFill(explicit, MIN)).toEqual({ cpu: false, memory: false });
-    expect(dropMinimum(startAtMinimum(explicit, MIN), MIN, minimumFill(explicit, MIN)).resources).toEqual({ cpu_millis: 4000, memory_mib: 8192 });
+    expect(minimumFill(explicit, MIN)).toEqual({});
+    expect(dropMinimum(startAtMinimum(explicit, MIN), minimumFill(explicit, MIN)).resources).toEqual({ cpu_millis: 4000, memory_mib: 8192 });
     const memoryOnly: RunIntent = { ...BASE, resources: { memory_mib: 8192 } };
-    expect(minimumFill(memoryOnly, MIN)).toEqual({ cpu: true, memory: false });
-    expect(dropMinimum(startAtMinimum(memoryOnly, MIN), MIN, minimumFill(memoryOnly, MIN)).resources).toEqual({ memory_mib: 8192 });
+    expect(minimumFill(memoryOnly, MIN)).toEqual({ cpu_millis: 4000 });
+    expect(dropMinimum(startAtMinimum(memoryOnly, MIN), minimumFill(memoryOnly, MIN)).resources).toEqual({ memory_mib: 8192 });
     const changed = { ...startAtMinimum(BASE, MIN), resources: { cpu_millis: 5000, memory_mib: 8192 } };
-    expect(dropMinimum(changed, MIN, minimumFill(BASE, MIN)).resources).toEqual({ cpu_millis: 5000 });
-    expect(dropMinimum(startAtMinimum(BASE, MIN), MIN, undefined).resources).toEqual({ cpu_millis: 4000, memory_mib: 8192 });
+    expect(dropMinimum(changed, minimumFill(BASE, MIN)).resources).toEqual({ cpu_millis: 5000 });
+    expect(dropMinimum(startAtMinimum(BASE, MIN), undefined).resources).toEqual({ cpu_millis: 4000, memory_mib: 8192 });
   });
 
   it("reads an ask under the minimum on either figure, and an unset one as not under", () => {
