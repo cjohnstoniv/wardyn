@@ -290,6 +290,11 @@ func (s *setup) merge(dst *source, srcs []*source) error {
 
 // quarantineEntry moves src's entry n into a new root-only directory in Base.
 func (s *setup) quarantineEntry(src *source, n, dst string) error {
+	return s.quarantineName(src.f, n, fmt.Sprintf("%s holds %s already; the copy in %s", dst, n, src.f.Name()))
+}
+
+// quarantineName moves from's entry n into a new root-only directory in Base, and logs why.
+func (s *setup) quarantineName(from *os.File, n, why string) error {
 	q, err := os.MkdirTemp(s.c.Base, ".wardyn-quarantine.")
 	if err != nil {
 		return err
@@ -299,8 +304,8 @@ func (s *setup) quarantineEntry(src *source, n, dst string) error {
 		return err
 	}
 	defer qf.Close()
-	s.c.Logf("%s holds %s already; the copy in %s moves to %s", dst, n, src.f.Name(), q)
-	return renameNoReplace(int(src.f.Fd()), n, int(qf.Fd()), n)
+	s.c.Logf("%s moves to %s", why, q)
+	return renameNoReplace(int(from.Fd()), n, int(qf.Fd()), n)
 }
 
 // linkPrefix names the directory relink builds a replacement in, and where
@@ -345,6 +350,14 @@ func (s *setup) relink(dst *source) error {
 		case err == nil:
 			linked++
 		case errors.Is(err, unix.ENOENT): // its owner removed it
+		case errors.Is(err, unix.EPERM) && notRegular(dst.f, n):
+			// Not a file a helper reads as a VM's entry, and a hard link to it fails: any login can make
+			// one in this world-writable directory, and it must not stop every setup. It goes to a
+			// root-only quarantine. A regular file that fails the same way (the immutable flag) cannot be
+			// renamed either, so that one still stops the run.
+			if err := s.quarantineName(dst.f, n, fmt.Sprintf("%s holds %s, which is not a file and cannot be linked", dst.f.Name(), n)); err != nil && !errors.Is(err, unix.ENOENT) {
+				return err
+			}
 		default:
 			return fmt.Errorf("admission: linking %s into %s: %w", filepath.Join(dst.f.Name(), n), tmp, err)
 		}
@@ -360,6 +373,12 @@ func (s *setup) relink(dst *source) error {
 	}
 	s.discard(filepath.Base(tmp))
 	return nil
+}
+
+// notRegular reports whether dir's entry n is there and is not a regular file.
+func notRegular(dir *os.File, n string) bool {
+	var st unix.Stat_t
+	return unix.Fstatat(int(dir.Fd()), n, &st, unix.AT_SYMLINK_NOFOLLOW) == nil && uint32(st.Mode)&unix.S_IFMT != unix.S_IFREG
 }
 
 // discard empties and removes name, a linkPrefix directory in Base.

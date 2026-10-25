@@ -1011,6 +1011,32 @@ func TestSetupFailedMigrationKeepsEveryEntryCounted(t *testing.T) {
 	}
 }
 
+// A directory named like an entry cannot be hard-linked, and any login can make one in the world-writable
+// entries directory. The relink moves it to a root-only quarantine and finishes, every real entry kept.
+func TestSetupRelinkQuarantinesAnEntryThatCannotBeLinked(t *testing.T) {
+	r := newRig(t, bigMac())
+	names := admitN(t, r, 2)
+	planted := filepath.Join(r.dir, "e-planted.json")
+	if err := os.MkdirAll(filepath.Join(planted, "inside"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := Setup(r.setupCfg(func(c *SetupConfig) { c.Fstat = drift(t, r, "03777") })); err != nil {
+		t.Fatalf("Setup wedged on a planted directory: %v", err)
+	}
+	if _, err := os.Lstat(planted); err == nil {
+		t.Fatal("the planted directory is still in the entries directory")
+	}
+	q, _ := filepath.Glob(filepath.Join(filepath.Dir(r.dir), quarantinePrefix+"*", "e-planted.json", "inside"))
+	if len(q) != 1 {
+		t.Fatalf("the planted directory was not quarantined: %v", q)
+	}
+	if n := counted(t, r); n != 2 {
+		t.Fatalf("a helper counts %d of 2 entries", n)
+	}
+	wantEntries(t, r, names, "the relink past a planted directory")
+	wantLayout(t, r)
+}
+
 // DR-0431 residual: an entry its owner releases between a failed migration and
 // the retry stays released.
 func TestSetupRetryNeverResurrectsAReleasedEntry(t *testing.T) {
