@@ -42,6 +42,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The macOS VM ledger setup (`wardyn-macvm ledger-setup`, run by the runner package's postinstall) no longer fails on a
   directory that a login made in the entries directory under an entry's name: the directory moves to a root-only
   quarantine beside the base and the setup finishes (#3675). An entry file with the immutable flag still stops it.
+- A Kubernetes runner's proxy now logs `wardyn-proxy: listening` when it has bound its port, after its first run-token
+  renewal, not while it is still waiting for that renewal (#3632).
 
 ## [0.10.0-rc.3] — 2026-10-25
 

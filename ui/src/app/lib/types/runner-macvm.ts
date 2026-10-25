@@ -16,7 +16,7 @@ export type MacVMStep = "check" | "download" | "install" | "setup" | "tools";
 export type MacVMWait = "ac_power" | "battery" | "download_retry" | "setup_by_hand" | "docker";
 
 /** Go: runnerwire.MacVMFailureDownload and its siblings; MacVMBase.failure. */
-export type MacVMFailure = "download" | "install" | "tools";
+export type MacVMFailure = "download" | "install" | "tools" | "no_desktop";
 
 /** Go: runnerwire.MacVMBase. The codes are strings: look each up in one table and treat a miss as absent. */
 export interface MacVMBase {
@@ -32,7 +32,7 @@ export interface MacVMBase {
   step_percent?: number;
   /** MacVMWait; state preparing only. */
   wait?: string;
-  /** MacVMFailure: download or install with state failed, tools with state ready. */
+  /** MacVMFailure: download, install or no_desktop with state failed, tools with state ready. */
   failure?: string;
   /** The restore image's size, once this prepare knows it. */
   download_bytes?: number;
