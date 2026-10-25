@@ -54,7 +54,7 @@
 | **v0.9.8** | A fix release: private-address refusals name the internal_hosts remedy, wrapped base images say what works instead, and credential delivery rows the server cannot build are listed. | **Shipped (pre-alpha)** — `v0.9.8`, 2026-10-21 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.10.0-rc.1** | rc.1: Linux VM sandboxes networked through the run's proxy, organisation units with their own walls and admins, local model servers as providers, folders from your computer, and desktop recording and clipboard controls. | **Shipped (pre-alpha)** — `v0.10.0-rc.1`, 2026-10-24 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.10.0-rc.2** | rc.2: macOS VM sandboxes on company-managed Macs (preview, off by default), ordered desktop sign-in pauses, quieter runner exit retries, and the rc.1 fixes. | **Shipped (pre-alpha)** — `v0.10.0-rc.2`, 2026-10-25 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.10.0-rc.3** | rc.3: macOS VMs on macOS 26 Macs through a one-time setup by hand, the run page's macOS disk line, and fixes for rc.2's three known issues. | **Shipped (pre-alpha)** — `v0.10.0-rc.3`, 2026-10-25 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.10.0-rc.3** | rc.3: macOS VMs on macOS 26 Macs through a one-time setup by hand, the run page's macOS disk line, and fixes for rc.2's five known issues. | **Shipped (pre-alpha)** — `v0.10.0-rc.3`, 2026-10-25 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ## Shipped detail
 
