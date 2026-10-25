@@ -1,0 +1,925 @@
+// Copyright 2026 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+//go:build docker
+
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net"
+	"net/netip"
+	"os"
+	"path/filepath"
+	"runtime"
+	"slices"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/containerd/errdefs"
+	"github.com/moby/moby/client"
+
+	"github.com/cjohnstoniv/wardyn/internal/dockerutil"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/macvm"
+	"github.com/cjohnstoniv/wardyn/internal/macvm/admission"
+	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runner/docker"
+	"github.com/cjohnstoniv/wardyn/internal/runner/keystore"
+	"github.com/cjohnstoniv/wardyn/internal/runner/offline"
+	"github.com/cjohnstoniv/wardyn/internal/runner/posture"
+	"github.com/cjohnstoniv/wardyn/internal/runner/runneragent"
+	"github.com/cjohnstoniv/wardyn/internal/runner/runnerio"
+	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
+	"github.com/cjohnstoniv/wardyn/internal/runneridentity"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/internal/version"
+	"github.com/google/uuid"
+)
+
+func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity, stateDir string, opts serveOptions) (runnerRuntime, error) {
+	switch opts.substrate {
+	case "k8s":
+		return k8sRunnerHooks(ctx, identity, stateDir, opts)
+	case "folders":
+		return foldersRunnerHooks(ctx, identity, stateDir, opts)
+	}
+	if opts.proxyImage == "" {
+		return runnerRuntime{}, errors.New("runner serve requires --proxy-image or WARDYN_PROXY_IMAGE")
+	}
+	record, err := opts.recordingEnabled()
+	if err != nil {
+		return runnerRuntime{}, err
+	}
+	want, err := parseRelayWant(opts.relayListen, opts.relayHostTarget)
+	if err != nil {
+		return runnerRuntime{}, err
+	}
+	cli, err := client.New(client.FromEnv)
+	if err != nil {
+		return runnerRuntime{}, err
+	}
+	defer cli.Close()
+	eng, err := readyEngine(ctx, cli, "docker engine not reachable (set DOCKER_HOST to the engine's socket if it is not the default)", opts.network, want)
+	if err != nil {
+		return runnerRuntime{}, atStage(types.RunnerStageEngine, err)
+	}
+	driveRoots, err := parseDriveRoots(opts.driveRoots)
+	if err != nil {
+		return runnerRuntime{}, err
+	}
+	modelPorts, err := parseLocalModelPorts(opts.localModelPorts)
+	if err != nil {
+		return runnerRuntime{}, err
+	}
+	relay := newLocalRelay(ctx)
+	if relay.sources, err = parseRelaySources(os.Getenv(envRelaySources)); err != nil {
+		return runnerRuntime{}, err
+	}
+	relay.modelPorts = modelPorts
+	// The decision sink before the runtime: its startup containment stops the runs' proxies, and one
+	// still running delivers what it holds while it stops only if the sink already listens.
+	sink, err := newDockerSink(ctx, stateDir, eng)
+	if err != nil {
+		return runnerRuntime{}, fmt.Errorf("decision sink did not start: %w", err)
+	}
+	runSubnets, runSubnetBits, err := docker.RunSubnetPoolFromEnv(os.Getenv)
+	if err != nil {
+		return runnerRuntime{}, errors.Join(err, sink.Close())
+	}
+	ev := &evidenceForwarder{}
+	sub, err := docker.New(docker.Config{RunnerID: identity.RunnerID.String(), ProxyImage: opts.proxyImage, InternalNetwork: opts.network, Record: record,
+		ControlPlaneRelay: relay.Ensure, LocalModelRelay: relay, TrustedCAPEM: opts.trustedCA, TrustedCAFile: opts.trustedCAPath, UpstreamProxyURL: opts.upstreamProxy,
+		DecisionSink: sinkAdapter{s: sink.spoolSink, url: sink.proxyURL}, Evidence: ev,
+		ProxyServesAnyPeer: docker.ProxyServesAnyPeerFromEnv(), UserDriveHostRoots: driveRoots,
+		ProxyPeersOnlyByDefault: docker.ProxyPeersOnlyByDefaultFromEnv(), PeersOnlyFallback: opts.offline.peersOnlyChanged,
+		RunSubnetPool: runSubnets, RunSubnetBits: runSubnetBits})
+	if err != nil {
+		return runnerRuntime{}, errors.Join(err, sink.Close())
+	}
+	local, err := opts.localAttachEnabled()
+	if err != nil {
+		return runnerRuntime{}, errors.Join(err, sink.Close())
+	}
+	extras := sink.extras(sub, ev)
+	watch := newRelayWatch(relayReprobe(relay), opts.offline.secretsOrNil())
+	watch.onChange = opts.offline.relayChanged
+	extras.report = connectReport{log: opts.offline, relay: watch}
+	extras.linuxVM = enableLinuxVM(ctx, sub, stateDir, os.Getenv)
+	extras.macOSVM = enableMacOSVM(ctx, sub, identity.RunnerID.String(), stateDir, opts.macOSVM)
+	extras.localAttach, extras.orgURL = local, opts.orgURL
+	endVMsOnFullSpool(sink.spoolSink, extras.linuxVM, sub.EndVM)
+	extras.driveRoots, extras.localModelRelay, extras.localModelPorts = driveRoots, true, modelPorts
+	// The runtime first: its startup containment pass stops lapsed runs even when the check below fails.
+	rt, err := localRunnerRuntime(ctx, identity, stateDir, sub, docker.SandboxRef, relay, dockerCapacity, extras)
+	if err != nil {
+		return runnerRuntime{}, errors.Join(err, sink.Close())
+	}
+	rt.hooks.ProxyImage = mirroredProxyImageHook(opts.proxyImageMirror, opts.proxyImagePinned, followOrgProxyImage(opts.proxyImage, opts.proxyImagePinned, sub.SetProxyImage))
+	pair, err := chooseRelay(ctx, sub, opts.proxyImage, eng, want)
+	if err != nil {
+		return runnerRuntime{}, errors.Join(err, rt.close())
+	}
+	if err := sink.use(pair.bind); err != nil {
+		return runnerRuntime{}, errors.Join(fmt.Errorf("decision sink: %w", err), rt.close())
+	}
+	relay.use(pair)
+	opts.offline.relayChanged(types.RelayReachable)
+	slog.InfoContext(ctx, "run relay reachable", "engine", eng.desc, "listen", pair.bind, "target", pair.target)
+	return rt, nil
+}
+
+// dockerCapacity is the Docker engine's CPUs and memory as the runner's advertised capacity, the size
+// placement holds one run on this runner to, read again on every connect. An engine that does not answer
+// within ten seconds leaves the capacity unreported (unknown, never zero) until the next connect.
+func dockerCapacity(ctx context.Context) placement.Capacity {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	c, err := readDockerCapacity(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "runner capacity unknown until the next connect: Docker did not report its size", "error", err)
+	}
+	return c
+}
+
+// hostMeasure is what this computer has for runs, as Docker reports it: its CPUs and memory, and the
+// free disk of Docker's data root when the engine is not VM-backed (a VM's disk is measured by
+// measureVMDisk). 0 is unknown.
+func hostMeasure(ctx context.Context) (types.RunnerAmounts, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	cli, err := client.New(client.FromEnv)
+	if err != nil {
+		return types.RunnerAmounts{}, err
+	}
+	defer cli.Close()
+	info, err := cli.Info(ctx, client.InfoOptions{})
+	if err != nil {
+		return types.RunnerAmounts{}, err
+	}
+	return docker.MeasureInfo(info.Info, os.Getenv("DOCKER_HOST"), docker.FreeDiskMiB), nil
+}
+
+// dockerArch is the Docker engine's CPU architecture, "amd64" or "arm64", or "" when the engine does
+// not answer within ten seconds or reports another: the runner then reports none, and the control plane
+// keeps the one it had.
+func dockerArch(ctx context.Context) string {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	cli, err := client.New(client.FromEnv)
+	if err != nil {
+		return ""
+	}
+	defer cli.Close()
+	info, err := cli.Info(ctx, client.InfoOptions{})
+	if err != nil {
+		return ""
+	}
+	return dockerutil.NormalizeArch(info.Info.Architecture)
+}
+
+func readDockerCapacity(ctx context.Context) (placement.Capacity, error) {
+	cli, err := client.New(client.FromEnv)
+	if err != nil {
+		return placement.Capacity{}, err
+	}
+	defer cli.Close()
+	info, err := cli.Info(ctx, client.InfoOptions{})
+	if err != nil {
+		return placement.Capacity{}, err
+	}
+	return engineCapacity(info.Info.NCPU, info.Info.MemTotal), nil
+}
+
+// readyEngine is serve's and setup's look at the engine before the relay
+// search: it answers (unreachable is the refusal when it does not), an
+// explicit --relay-listen passes admitRelayBind before anything on the engine
+// changes, and the proxy sidecars' bridge exists. Any failure exits serve;
+// the service manager's restart policy is the retry. An engine that accepts
+// the connection and never answers fails at engineCheckBound, so serve exits
+// with a log line instead of waiting, silent, for ever.
+func readyEngine(ctx context.Context, cli *client.Client, unreachable, network string, want relayPair) (dockerEngine, error) {
+	ctx, cancel := context.WithTimeout(ctx, engineCheckBound)
+	defer cancel()
+	eng, err := admittedEngine(ctx, cli, unreachable, want)
+	if err != nil {
+		return dockerEngine{}, err
+	}
+	return eng, ensureInternalNetwork(ctx, cli, network)
+}
+
+// admittedEngine is readyEngine without its one write: the engine answers and the explicit relay bind, if
+// any, is one the relay may listen on. doctor stops here.
+func admittedEngine(ctx context.Context, cli *client.Client, unreachable string, want relayPair) (dockerEngine, error) {
+	eng, err := inspectEngine(ctx, cli, unreachable)
+	if err != nil {
+		return dockerEngine{}, err
+	}
+	if want.bind.IsValid() {
+		if err := admitRelayBind(want.bind, eng); err != nil {
+			return dockerEngine{}, err
+		}
+	}
+	return eng, nil
+}
+
+// inspectEngine tells native from VM-backed. Docker Desktop is VM-backed by
+// its OperatingSystem: a WSL2 distribution may hold a docker0 of its own
+// beside it. Any other engine is native when its bridge interface is on this
+// host (dockerHostGateway), and VM-backed when not, which is never an error.
+// It also records Rancher Desktop's veth-rd-wsl addresses when this host has
+// that interface.
+func inspectEngine(ctx context.Context, cli *client.Client, unreachable string) (dockerEngine, error) {
+	info, err := cli.Info(ctx, client.InfoOptions{})
+	if err != nil {
+		return dockerEngine{}, fmt.Errorf("%s; Rancher Desktop must use the dockerd (moby) engine; runnerd follows DOCKER_HOST, else a docker context that is a local unix socket: %w", unreachable, err)
+	}
+	eng := dockerEngine{desc: fmt.Sprintf("%q (%s)", info.Info.OperatingSystem, info.Info.Name), version: info.Info.ServerVersion}
+	if iface, err := net.InterfaceByName(rancherWSLVeth); err == nil {
+		held, _ := ifaceAddrs(iface) // unreadable: no veth candidate, as if absent
+		for _, a := range held {
+			if a.Is4() {
+				eng.veth = append(eng.veth, a)
+			}
+		}
+	}
+	if info.Info.OperatingSystem == "Docker Desktop" {
+		eng.why = "Docker Desktop"
+		return eng, nil
+	}
+	if eng.gateway, eng.bridge, err = dockerHostGateway(ctx, cli); err != nil {
+		eng.gateway, eng.bridge, eng.why = netip.Addr{}, nil, err.Error()
+		return eng, nil
+	}
+	eng.native = true
+	return eng, nil
+}
+
+// relayCheckBound bounds pulling the proxy image and the relay search together.
+const relayCheckBound = 2 * time.Minute
+
+// engineCheckBound bounds readyEngine's calls to the engine.
+var engineCheckBound = 30 * time.Second
+
+// chooseRelay pulls the proxy image when it is missing, so the probe runs the
+// image runs will, then finds the relay pair (findRelay) with the driver's
+// probe container. Both share one bound; the probe is never skipped.
+func chooseRelay(ctx context.Context, d *docker.Driver, image string, eng dockerEngine, want relayPair) (relayPair, error) {
+	ctx, cancel := context.WithTimeout(ctx, relayCheckBound)
+	defer cancel()
+	present, err := d.ImagePresent(ctx, image)
+	if err == nil && !present {
+		slog.InfoContext(ctx, "pulling proxy image "+image)
+		err = d.EnsureProxyImage(ctx)
+	}
+	if err != nil {
+		return relayPair{}, atStage(types.RunnerStageProxyImage, fmt.Errorf("relay: the proxy image %s is not on this engine and could not be pulled (a registry that needs a login: docker pull it as this user first): %w", image, err))
+	}
+	pair, err := findRelay(ctx, d.ProbeRelay, eng, want)
+	return pair, atStage(types.RunnerStageRelay, err)
+}
+
+// relayReprobe is a serving runner's relay check (relayWatch): the engine answers and still admits the
+// bind in use (admittedEngine: the rule doctor's relay stage and serve's start apply), and every listener
+// the relay holds answers there. It starts no container: doctor's relay stage and serve's start run a
+// throwaway probe container, too costly to repeat every relayReprobeInterval.
+func relayReprobe(relay *localRelay) func(context.Context) error {
+	return func(ctx context.Context) error {
+		cli, err := client.New(client.FromEnv)
+		if err != nil {
+			return err
+		}
+		defer cli.Close()
+		if _, err := admittedEngine(ctx, cli, "docker engine not reachable", relay.inUse()); err != nil {
+			return err
+		}
+		return relay.answers(ctx)
+	}
+}
+
+// newLocalRelay is the relay for a Docker runtime; only the docker build has
+// one. It listens nowhere until use and a run's Ensure.
+func newLocalRelay(ctx context.Context) *localRelay {
+	return &localRelay{ctx: ctx, listeners: map[uint16]net.Listener{}, conns: map[net.Conn]*runnerwire.Peer{}}
+}
+
+// ensureInternalNetwork creates the proxy sidecars' bridge when it is missing,
+// as deploy/runner/install.sh does.
+func ensureInternalNetwork(ctx context.Context, cli *client.Client, name string) error {
+	_, err := cli.NetworkInspect(ctx, name, client.NetworkInspectOptions{})
+	switch {
+	case err == nil:
+		return nil
+	case !errdefs.IsNotFound(err):
+		return fmt.Errorf("docker network %s: %w", name, err)
+	}
+	if _, err := cli.NetworkCreate(ctx, name, client.NetworkCreateOptions{Driver: "bridge"}); err != nil {
+		return fmt.Errorf("create docker network %s: %w", name, err)
+	}
+	slog.InfoContext(ctx, "created the Docker network for proxy sidecars", "network", name)
+	return nil
+}
+
+// dockerHostGateway is the address a native engine resolves host-gateway to
+// (the default bridge's gateway, unless the daemon sets host-gateway-ip, when
+// the relay is simply unreachable) and the addresses that bridge's interface
+// holds on this host. An error means the engine is not native (inspectEngine).
+func dockerHostGateway(ctx context.Context, cli *client.Client) (netip.Addr, []netip.Addr, error) {
+	insp, err := cli.NetworkInspect(ctx, "bridge", client.NetworkInspectOptions{})
+	if err != nil {
+		return netip.Addr{}, nil, err
+	}
+	var gateway netip.Addr
+	for _, c := range insp.Network.IPAM.Config {
+		if c.Gateway.Is4() {
+			gateway = c.Gateway
+			break
+		}
+	}
+	iface, err := net.InterfaceByName(insp.Network.Options["com.docker.network.bridge.name"])
+	if err != nil {
+		return netip.Addr{}, nil, fmt.Errorf("its bridge interface is not on this host: %w", err)
+	}
+	held, err := ifaceAddrs(iface)
+	if err != nil {
+		return netip.Addr{}, nil, err
+	}
+	return gateway, held, nil
+}
+
+// ifaceAddrs is the IP addresses an interface holds.
+func ifaceAddrs(iface *net.Interface) ([]netip.Addr, error) {
+	addrs, err := iface.Addrs()
+	if err != nil {
+		return nil, err
+	}
+	var held []netip.Addr
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok {
+			if ip, ok := netip.AddrFromSlice(n.IP); ok {
+				held = append(held, ip.Unmap())
+			}
+		}
+	}
+	return held, nil
+}
+
+// postureInterval is how often a connected runner re-reads its posture.
+const postureInterval = 15 * time.Minute
+
+// runRelay is the relay a runtime drives: the Docker localRelay or the k8s k8sRelay.
+type runRelay interface {
+	Online(*runnerwire.Peer)
+	Offline(*runnerwire.Peer)
+	Close() error
+}
+
+// runtimeExtras are the substrate-specific parts of a runtime. Each zero field takes the default its
+// comment names.
+type runtimeExtras struct {
+	// keystore holds runner_resident values; zero is the OS keyring.
+	keystore runneragent.Keystore
+	// noPosture: no posture reporter (k8s, design K1 §3.3).
+	noPosture bool
+	// arch is the reported architecture; "" reads the engine's.
+	arch string
+	// options are the manager's substrate options; started runs once the manager exists, before
+	// the startup containment pass (the k8s runner's fence replay and first proxy list).
+	options offline.Options
+	started func(context.Context, *offline.Manager) error
+	// closeAlso runs when the runtime closes (the decision sink).
+	closeAlso func() error
+	// linuxVM, set when the operator turned Linux VM sandboxes on and the probe passed, is what the
+	// runner's caps offer; nil offers none and refuses create_vm.
+	linuxVM *runnerwire.VMCaps
+	// macOSVM, set when the operator turned macOS VM sandboxes on (enableMacOSVM), builds the caps'
+	// macos_vm and resends them when they change; nil offers none.
+	macOSVM *macOSVMs
+	// localAttach opens the local attach socket while the organisation allows it (--local-attach on,
+	// Docker only); orgURL is the organisation its pointer file names.
+	localAttach bool
+	orgURL      string
+	// report is what caps carry beyond the substrate's own (offline summary, relay status).
+	report connectReport
+	// driveRoots are --drive-root, advertised as the runner's allowed_roots.
+	driveRoots []string
+	// localModelRelay: the substrate relays a laptop local model (the Docker driver's
+	// LocalModelRelay), so the caps name runnerwire.ProxySettingLocalModelRelay.
+	localModelRelay bool
+	// localModelPorts are --local-model-port, advertised as the runner's local_model_ports.
+	localModelPorts []uint16
+}
+
+// proxySettings are the run proxy settings the caps name: every one this build carries, and the
+// local model relay where the substrate serves it.
+func (e runtimeExtras) proxySettings() []string {
+	if !e.localModelRelay {
+		return runnerwire.ProxySettings
+	}
+	return append(slices.Clip(runnerwire.ProxySettings), runnerwire.ProxySettingLocalModelRelay)
+}
+
+// parseDriveRoots checks --drive-root: each an absolute, cleaned folder. The docker driver binds a drive
+// only strictly below one of them, after resolving symlinks (runner.UserDriveMountSourceCheck).
+func parseDriveRoots(raw []string) ([]string, error) {
+	for _, r := range raw {
+		if !filepath.IsAbs(r) || filepath.Clean(r) != r || r == "/" {
+			return nil, fmt.Errorf("--drive-root %q: give an absolute, cleaned folder below /", r)
+		}
+	}
+	return raw, nil
+}
+
+func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, stateDir string, sub substrate.Substrate, ref func(uuid.UUID) string, relay *localRelay, capacity func(context.Context) placement.Capacity, extra runtimeExtras) (runnerRuntime, error) {
+	// A re-registered computer starts clean: the earlier registration's runs are contained, then set aside.
+	if err := offline.SetAsidePrevious(ctx, stateDir, identity.RunnerID, sub, ref); err != nil {
+		return runnerRuntime{}, err
+	}
+	return runnerRuntimeWith(ctx, identity, stateDir, sub, ref, relay, capacity, extra)
+}
+
+// runnerKeystore is the keystore the runner's resident credentials live in: the caller's, else this
+// runner's own.
+func runnerKeystore(ks runneragent.Keystore, runnerID string) runneragent.Keystore {
+	if ks.Set != nil {
+		return ks
+	}
+	store := keystore.For(runnerID)
+	return runneragent.Keystore{Set: store.Set, Get: store.Get, Delete: store.Delete, DeleteAll: store.DeleteAll, Precheck: store.Precheck}
+}
+
+// hostCaps is the part of the caps report that belongs to the machine and the substrate: what it
+// supports, its name, version and arch, and whether it keeps a sandbox after the run ends.
+func hostCaps(ctx context.Context, sub substrate.Substrate, arch string) (runnerwire.Caps, error) {
+	_, keeps := sub.(runner.SandboxEnder)
+	support, err := sub.Classes(ctx)
+	if err != nil {
+		return runnerwire.Caps{}, err
+	}
+	// A host that cannot say its name reports none, and keeps the machine name it had.
+	machine, _ := os.Hostname()
+	if arch == "" {
+		arch = engineArch(ctx)
+	}
+	return runnerwire.Caps{Support: support, Version: version.String(), MachineName: machine, Arch: arch, EndsUnkept: !keeps}, nil
+}
+
+// checkLapsesAtStartup runs the first lapse check. Run retries transient containment errors, and
+// BeforeReady refuses admission until required containment actually succeeds.
+func checkLapsesAtStartup(ctx context.Context, manager *offline.Manager) {
+	startup, cancel := context.WithTimeout(ctx, 30*time.Second)
+	err := manager.CheckLapses(startup)
+	cancel()
+	if err != nil {
+		slog.WarnContext(ctx, "runner startup containment will retry", "error", err)
+	}
+}
+
+func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, stateDir string, sub substrate.Substrate, ref func(uuid.UUID) string, relay runRelay, capacity func(context.Context) placement.Capacity, extra runtimeExtras) (_ runnerRuntime, retErr error) {
+	streams, err := runnerio.New(sub, identity.RunnerID.String(), stateDir)
+	if err != nil {
+		return runnerRuntime{}, err
+	}
+	manager, err := offline.New(stateDir, identity.RunnerID, sub, ref, streams.OutputSettled, streams.EraseOutput)
+	if err != nil {
+		return runnerRuntime{}, err
+	}
+	streams.HoldSandboxes(manager.HoldsSandbox)
+	streams.AttachRuns(manager.AttachRef)
+	local, err := newLocalSocket(extra.localAttach, identity.RunnerID.String(), extra.orgURL, stateDir, streams.ServeLocal)
+	if err != nil {
+		return runnerRuntime{}, errors.Join(err, manager.Close())
+	}
+	manager.ReleaseSettledOutput(streams.ReleaseOutput)
+	defer func() {
+		if retErr != nil {
+			retErr = errors.Join(retErr, manager.Close())
+		}
+	}()
+	resident, err := runneragent.NewResident(runnerKeystore(extra.keystore, identity.RunnerID.String()), stateDir, manager.AdmitResident, time.Now)
+	if err != nil {
+		return runnerRuntime{}, err
+	}
+	var reporter *posture.Reporter
+	if !extra.noPosture {
+		reporter = posture.NewReporter()
+	}
+	if err := manager.SetOptions(extra.options); err != nil {
+		return runnerRuntime{}, err
+	}
+	if extra.started != nil {
+		if err := extra.started(ctx, manager); err != nil {
+			return runnerRuntime{}, err
+		}
+	}
+	dispatcher, err := runneragent.New(runneragent.Config{
+		RunnerID: identity.RunnerID.String(), Substrate: sub, HoldsSandbox: manager.HoldsSandbox,
+		BeforeCreate: manager.BeforeCreate, Created: manager.Created, CreateFailed: manager.CreateFailed,
+		BeforeRefCall: func(ctx context.Context, method, ref string, generation uuid.UUID) error {
+			if method == runnerwire.MethodKill || method == runnerwire.MethodEnd {
+				streams.EndLocalAttach(ref) // a local terminal never outlives its sandbox
+			}
+			return manager.BeforeRefCall(ctx, method, ref, generation)
+		},
+		AfterRefCall: manager.AfterRefCall, CheckSelftest: manager.CheckSelftest,
+		MutationFinished: manager.MutationFinished,
+		ExecutionResult:  manager.ExecutionResult,
+		Streams:          streams.Call, Output: streams.Output, BindOutput: streams.BindOutput, ForgetOutput: streams.ForgetOutput,
+		Resident: resident, LinuxVM: extra.linuxVM != nil, MacOSVM: extra.macOSVM.enabled(),
+	})
+	if err != nil {
+		return runnerRuntime{}, err
+	}
+	checkLapsesAtStartup(ctx, manager)
+	caps := &capsReporter{sub: sub, extra: extra, capacity: capacity, dispatcher: dispatcher, hasLocal: local != nil}
+	hooks := runnerwire.RunnerHooks{
+		Call: dispatcher.Call,
+		// The org never opens a stream toward a runner: a relay is the
+		// runner's, opened outbound by localRelay.
+		Open: func(*runnerwire.Peer, *runnerwire.Stream, runnerwire.Open) error {
+			return runnerwire.Refuse("unsupported runner stream")
+		},
+		Clock: manager.Clock, Pending: manager.Pending, StatePages: manager.StatePages,
+		BeforeReady: manager.BeforeReady, Lease: manager.Lease, Offline: manager.Offline,
+		// manager.Revoked has released the manager's lock before the resident
+		// erase runs (lock order: Resident, then Manager).
+		Revoked: func(ctx context.Context) error { return errors.Join(manager.Revoked(ctx), resident.EraseAll(ctx)) },
+		Replay: func(ctx context.Context, peer *runnerwire.Peer) error {
+			if err := caps.send(ctx, peer, true, true); err != nil {
+				return err
+			}
+			// Posture only gates runner_resident delivery; a refused report
+			// must not keep the runner from READY.
+			if reporter != nil {
+				if err := reporter.Send(ctx, peer); err != nil {
+					slog.WarnContext(ctx, "runner posture report failed", "error", err)
+				}
+			}
+			return manager.Replay(ctx, peer)
+		},
+		Online: func(peer *runnerwire.Peer, resumed bool) {
+			caps.online.Store(peer)
+			manager.Online(peer)
+			streams.Online(peer)
+			relay.Online(peer)
+			caps.afterOnline(ctx, peer, resumed)
+			if reporter != nil {
+				go reporter.Watch(peer, postureInterval)
+			}
+		},
+		LocalAttach: local.Set,
+		// The organisation's per-run limits, on every connect: each macOS guest is sized at them.
+		PerRunLimits: extra.macOSVM.setPerRunLimits,
+		StreamOffline: func(peer *runnerwire.Peer) {
+			caps.online.CompareAndSwap(peer, nil)
+			streams.Offline(peer)
+			relay.Offline(peer)
+		},
+	}
+	run := func(ctx context.Context) error {
+		extra.macOSVM.start(ctx, func() { caps.resendMacOS(ctx) })
+		if w := extra.report.relay; w != nil {
+			go w.run(ctx, func() { caps.resendRelay(ctx) })
+		}
+		go func() {
+			if manager.IsRevoked() {
+				if err := resident.EraseAll(ctx); err != nil {
+					slog.WarnContext(ctx, "runner resident erase after revocation will retry on the sweep", "error", err)
+				}
+			}
+			resident.SweepExpired(ctx, time.Minute)
+		}()
+		return manager.Run(ctx)
+	}
+	return runnerRuntime{hooks: hooks, run: run, close: func() error {
+		err := errors.Join(local.Close(), manager.Close(), relay.Close())
+		if extra.closeAlso != nil {
+			err = errors.Join(err, extra.closeAlso())
+		}
+		return err
+	}}, nil
+}
+
+// evidenceForwarder breaks the construction cycle: the driver needs the manager's evidence store,
+// and the manager needs the driver. Before the manager exists the driver only stops an earlier
+// registration's proxies (SetAsidePrevious), whose runs this runner holds no record of.
+type evidenceForwarder struct{ m *offline.Manager }
+
+func (e *evidenceForwarder) LoadEvidence(id uuid.UUID) ([]byte, error) {
+	if e.m == nil {
+		return nil, nil // an earlier registration's run: no sink key, so nothing to settle
+	}
+	return e.m.LoadEvidence(id)
+}
+
+func (e *evidenceForwarder) SaveEvidence(id uuid.UUID, b []byte) error {
+	if e.m == nil {
+		return errors.New("evidence store not ready")
+	}
+	return e.m.SaveEvidence(id, b)
+}
+
+// stateDirSink is the decision sink over the runner's state directory: its key there (stable across
+// restarts, so its pin is) and each run's spool there.
+func stateDirSink(stateDir string, opts spoolSinkOptions) (*spoolSink, error) {
+	cert, _, err := loadOrCreateSinkCert(filepath.Join(stateDir, "decision-sink.key"))
+	if err != nil {
+		return nil, err
+	}
+	opts.Cert = cert
+	opts.SpoolDir = func(id uuid.UUID) string { return filepath.Join(stateDir, "spools", id.String()) }
+	opts.ActivityDir = opts.SpoolDir
+	return newSpoolSink(opts), nil
+}
+
+// sinkAdapter is the decision sink as a driver drives it (k8s.DecisionSink, docker.DecisionSink): the
+// per-run key, Register, Succeed (Docker), the proxy's decision_sink value, Drain and ProducerGone.
+type sinkAdapter struct {
+	s   *spoolSink
+	url func() string // tls://host:port, as a run's proxy dials the sink
+}
+
+func (a sinkAdapter) NewKey() (string, [32]byte, error) { return newSinkKey() }
+
+func (a sinkAdapter) Register(id uuid.UUID, hash [32]byte) error { return a.s.Register(id, hash) }
+
+func (a sinkAdapter) Succeed(id uuid.UUID, hash [32]byte) error { return a.s.Succeed(id, hash) }
+
+func (a sinkAdapter) ProxyConfig(key string) any {
+	return proxy.DecisionSinkConfig{URL: a.url(), SPKISHA256: a.s.SPKIPin(), Key: key}
+}
+
+// Drain answers whatever the proxy did; its reply is the sink's own record (runnerspool.Drained).
+// The proxy closes no open tunnel on drain: those end with the pod or
+// container, which is why the caller removes it right after and never treats a drain as evidence.
+func (a sinkAdapter) Drain(ctx context.Context, id uuid.UUID) error {
+	_, err := a.s.Drain(ctx, id)
+	return err
+}
+
+// ProducerGone settles the run's producer. A run the sink no longer holds (sealed at retirement, its
+// spool erased, or retired before this restart) has nothing left to settle, so a later stop of it, such as
+// the orphan sweep removing a kept agent, still succeeds.
+func (a sinkAdapter) ProducerGone(ctx context.Context, id uuid.UUID) error {
+	_, err := a.s.ProducerGone(ctx, id)
+	if errors.Is(err, errSinkRunUnknown) {
+		return nil
+	}
+	return err
+}
+
+// sinkAddrFile keeps where a Docker runner's decision sink last listened (bind:port), so a restart
+// listens there again before its startup containment stops the runs' proxies: one still running
+// reconnects and delivers what it holds while it stops, instead of losing it.
+const sinkAddrFile = "decision-sink.addr"
+
+// dockerSink is a Docker runner's decision sink, the one Kubernetes runners use, served on the relay's
+// bind address. A run's proxy reaches it at host.docker.internal, which its hosts map to the relay's
+// target, so runnerd is the spool's only writer on every Docker engine.
+type dockerSink struct {
+	*spoolSink
+	ctx      context.Context
+	stateDir string
+
+	addrMu sync.Mutex
+	bound  map[netip.Addr]uint16 // where it listens: address and port
+	lns    []net.Listener
+	url    string // decision_sink.url for new proxies; "" until use
+
+	fullBusy   atomic.Bool // a full-spool pass is running (endFullSpoolVMsInBackground)
+	fullMu     sync.Mutex  // guards fullClosed, fullCancel and the Add on fullPasses
+	fullClosed bool        // Close has begun: no new pass starts
+	fullPasses sync.WaitGroup
+	fullCancel context.CancelFunc // cancels the running pass; guarded by fullMu
+}
+
+// newDockerSink starts the sink, listening at once where it listened before a restart when that
+// address is still free and one the relay may listen on (admitRelayBind): never every interface.
+func newDockerSink(ctx context.Context, stateDir string, eng dockerEngine) (*dockerSink, error) {
+	s, err := stateDirSink(stateDir, spoolSinkOptions{})
+	if err != nil {
+		return nil, err
+	}
+	d := &dockerSink{spoolSink: s, ctx: ctx, stateDir: stateDir, bound: map[netip.Addr]uint16{}}
+	b, err := os.ReadFile(filepath.Join(stateDir, sinkAddrFile))
+	if err != nil {
+		return d, nil
+	}
+	if ap, perr := netip.ParseAddrPort(strings.TrimSpace(string(b))); perr == nil {
+		if aerr := admitRelayBind(ap.Addr(), eng); aerr != nil {
+			slog.WarnContext(ctx, "decision sink: decision-sink.addr names an address the relay may not listen on, so the sink does not listen there; a run's proxy from before this restart cannot deliver what it holds, and its decisions are counted as lost", "address", ap.String(), "error", aerr)
+		} else if _, lerr := d.listen(ap); lerr != nil {
+			slog.WarnContext(ctx, "decision sink: cannot listen where it did before this restart, so a run's proxy from before it cannot deliver what it holds; its decisions are counted as lost", "address", ap.String(), "error", lerr)
+		}
+	}
+	return d, nil
+}
+
+func (d *dockerSink) listen(ap netip.AddrPort) (uint16, error) {
+	ln, err := net.Listen("tcp", ap.String())
+	if err != nil {
+		return 0, err
+	}
+	port := uint16(ln.Addr().(*net.TCPAddr).Port)
+	d.addrMu.Lock()
+	d.bound[ap.Addr()] = port
+	d.lns = append(d.lns, ln)
+	d.addrMu.Unlock()
+	go func() {
+		if err := d.Serve(ln); err != nil && !errors.Is(err, net.ErrClosed) {
+			slog.ErrorContext(d.ctx, "decision sink stopped", "error", err)
+		}
+	}()
+	return port, nil
+}
+
+// Close closes the sink and every listener it opened, one whose Serve has not started included, so
+// its port is free once Close returns.
+func (d *dockerSink) Close() error {
+	if d.spoolSink.fullRuleOn() {
+		d.joinFullPass()
+	}
+	err := d.spoolSink.Close()
+	d.addrMu.Lock()
+	lns := d.lns
+	d.lns = nil
+	d.addrMu.Unlock()
+	for _, ln := range lns {
+		if cerr := ln.Close(); cerr != nil && !errors.Is(cerr, net.ErrClosed) {
+			err = errors.Join(err, cerr)
+		}
+	}
+	return err
+}
+
+// use points new proxies at the sink on bind, the relay's address, listening there first unless it
+// already does (at the port it had before a restart); a new address is kept in the state directory.
+func (d *dockerSink) use(bind netip.Addr) error {
+	d.addrMu.Lock()
+	port, ok := d.bound[bind]
+	d.addrMu.Unlock()
+	if !ok {
+		var err error
+		if port, err = d.listen(netip.AddrPortFrom(bind, 0)); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(d.stateDir, sinkAddrFile), []byte(netip.AddrPortFrom(bind, port).String()+"\n"), 0o600); err != nil {
+			return err
+		}
+	}
+	d.addrMu.Lock()
+	d.url = fmt.Sprintf("tls://host.docker.internal:%d", port)
+	d.addrMu.Unlock()
+	return nil
+}
+
+// proxyURL is decision_sink.url for a new proxy.
+func (d *dockerSink) proxyURL() string {
+	d.addrMu.Lock()
+	defer d.addrMu.Unlock()
+	return d.url
+}
+
+// fullSpoolBound bounds one full-spool pass: ending a VM waits for the guest's power down.
+var fullSpoolBound = 2 * time.Minute
+
+// closeJoinBound is how long Close waits for a running full-spool pass before cancelling it, and
+// cancelUnwindBound how long it then waits for the pass to return. Together they sit under the service
+// manager's stop timeout (systemd's 90 s default for the unit, launchd's 20 s ExitTimeOut), which would
+// otherwise kill the runner mid-pass. A pass cut short is not lost: its run's spool records that the
+// VM is being ended (Spool.SetEndPending), and the next start's pass finishes it.
+var (
+	closeJoinBound    = 10 * time.Second
+	cancelUnwindBound = 2 * time.Second
+)
+
+// endFullSpoolVMsInBackground runs the full-spool pass off the containment tick, one at a time. The tick
+// shares its 30 s safety context with CheckLapses, which runs after it, and ending one VM can take
+// that long: the pass gets a budget of its own and never delays a lapse.
+func (d *dockerSink) endFullSpoolVMsInBackground(ctx context.Context) {
+	if !d.spoolSink.fullRuleOn() {
+		return // the Linux VM switch is off: no pass, no goroutine
+	}
+	d.fullMu.Lock()
+	if d.fullClosed || !d.fullBusy.CompareAndSwap(false, true) {
+		d.fullMu.Unlock()
+		return
+	}
+	pass, cancel := context.WithTimeout(context.WithoutCancel(ctx), fullSpoolBound)
+	d.fullCancel = cancel
+	d.fullPasses.Add(1)
+	d.fullMu.Unlock()
+	go func() {
+		defer d.fullPasses.Done()
+		defer d.fullBusy.Store(false)
+		defer cancel()
+		d.EndVMsWithFullSpools(pass)
+	}()
+}
+
+// joinFullPass stops new full-spool passes and waits up to closeJoinBound for a running one, then
+// cancels it and waits up to cancelUnwindBound for it to return, so spoolSink.Close does not race a
+// live pass. Only a pass that ignores its cancelled context for cancelUnwindBound outlives it. Close
+// calls it only when the full-spool rule is on.
+func (d *dockerSink) joinFullPass() {
+	d.fullMu.Lock()
+	d.fullClosed = true
+	d.fullMu.Unlock()
+	done := make(chan struct{})
+	go func() { d.fullPasses.Wait(); close(done) }()
+	select {
+	case <-done:
+		return
+	case <-time.After(closeJoinBound):
+	}
+	d.fullMu.Lock()
+	if d.fullCancel != nil {
+		d.fullCancel()
+	}
+	d.fullMu.Unlock()
+	select {
+	case <-done:
+	case <-time.After(cancelUnwindBound):
+	}
+}
+
+// extras are the sink's part of the runtime: Tick regrants credit after the organisation's acks and
+// retries loss rows, and at startup, before the containment pass, the driver's record store becomes
+// the manager's and every run's sink key is registered again.
+func (d *dockerSink) extras(sub *docker.Driver, ev *evidenceForwarder) runtimeExtras {
+	return runtimeExtras{
+		options: offline.Options{Tick: func(ctx context.Context) { d.Tick(ctx); d.endFullSpoolVMsInBackground(ctx) }},
+		started: func(_ context.Context, m *offline.Manager) error {
+			ev.m = m
+			return sub.ReregisterSinks(m.SinkRunIDs())
+		},
+		closeAlso: d.Close,
+	}
+}
+
+// enableMacOSVM turns macOS VM sandboxes on when the operator asked for them on an Apple silicon Mac,
+// and returns the handle that builds the caps' macos_vm. Off by default. A Mac whose ledger is missing or
+// damaged offers none and says why in its caps, in words; one with no helper beside wardyn-runnerd, or
+// whose helper's probe does not pass, offers none and says why in its caps as a code, and in its log in words. Container runs are untouched
+// either way. The runner does not know its per-run memory here (the organisation keeps the limits), so
+// the offer sizes each guest at the base's minimum until it does.
+func enableMacOSVM(ctx context.Context, sub *docker.Driver, runnerID, stateDir string, on bool) *macOSVMs {
+	if !on {
+		return nil
+	}
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		slog.WarnContext(ctx, "macOS VM sandboxes are off on this runner: they need an Apple silicon Mac")
+		return nil
+	}
+	root, err := macvm.DefaultRoot()
+	if err != nil {
+		slog.WarnContext(ctx, "macOS VM sandboxes are off on this runner", "reason", err.Error())
+		return nil
+	}
+	measured, err := measureHost(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "macOS VM sandboxes: Docker did not report its memory; the ledger subtracts none", "error", err.Error())
+	}
+	m := openMacOSVMs(macOSVMSetup{ledgerDir: admission.DefaultDir, root: root, runnerID: runnerID, version: version.String(), uid: os.Getuid(), limitsFile: macOSVMLimitsFile(stateDir),
+		dockerMemory: uint64(max(measured.MemoryMiB, 0)) << 20, host: admission.SystemHost(), owner: fileOwner})
+	m.helper, err = macVMHelperPath()
+	if err == nil {
+		_, err = os.Stat(m.helper)
+	}
+	if m.ledger != nil && err != nil {
+		slog.WarnContext(ctx, "macOS VM sandboxes are off on this runner: no helper beside wardyn-runnerd", "error", err.Error())
+		m.ledger, m.why, m.reason = nil, macOSVMNoHelper, runnerwire.MacVMReasonNoHelper
+	}
+	m.gate(ctx)
+	m.dockerUp = func(ctx context.Context) bool { _, err := sub.Classes(ctx); return err == nil }
+	if m.ledger != nil {
+		m.sweepStaging()
+		cfg := &docker.MacVMConfig{Layout: m.layout, Helper: m.helper, Identity: macOSVMIdentity, SockRoot: m.sockRoot,
+			ToolsDialFile: filepath.Join(root, runToolsDialFile), Ledger: m.ledger, Host: m.host, RunnerID: runnerID, HostOS: macHostOS(), Changed: m.changed}
+		if err := sub.EnableMacVM(cfg); err != nil {
+			slog.WarnContext(ctx, "macOS VM sandboxes are off on this runner", "reason", err.Error())
+			m.ledger, m.refusal, m.reason = nil, macOSVMLedgerDamaged, runnerwire.MacVMReasonLedgerDamaged
+		} else {
+			m.reclaim, m.endNewest = sub.ReclaimMacVMs, sub.EndNewestMacVM
+			m.prepNet, m.prepSweep, m.prepRemove = sub.StartMacPrepNet, sub.SweepMacPrep, sub.RemoveMacPrepNet
+			m.toolsUpdate = func(man macvm.Manifest) {
+				go func() {
+					if err := m.startToolsUpdate(context.WithoutCancel(ctx), man); err != nil {
+						slog.WarnContext(ctx, "macOS VM base: the tools update did not start", "error", err.Error())
+					}
+				}()
+			}
+			slog.InfoContext(ctx, "macOS VM sandboxes are on", "dir", root, "identity", string(cfg.Identity))
+		}
+	}
+	m.checkSession(ctx)
+	m.recompute()
+	return m
+}

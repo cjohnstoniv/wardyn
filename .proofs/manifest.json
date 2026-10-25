@@ -1,0 +1,705 @@
+{
+ "keyed_sha": "dffc70d0d9fbe484283c4626c5b922f950097aa8",
+ "proofs": [
+  {
+   "name": "kind-drop-sr3",
+   "package": "./internal/runner/offline",
+   "run": "^TestCreatedRecordsMachineKind$",
+   "tags": "",
+   "files": {
+    "internal/runner/offline/manager.go": ".proofs/files/kind-drop-sr3/internal/runner/offline/manager.go"
+   },
+   "want_fail": "--- FAIL: TestCreatedRecordsMachineKind"
+  },
+  {
+   "name": "sg-drop-cover-arm",
+   "package": "./internal/runner/offline",
+   "run": "^TestObserveRunReportsUncoveredKindAsPresent$",
+   "tags": "",
+   "files": {
+    "internal/runner/offline/observation.go": ".proofs/files/sg-drop-cover-arm/internal/runner/offline/observation.go"
+   },
+   "want_fail": "--- FAIL: TestObserveRunReportsUncoveredKindAsPresent"
+  },
+  {
+   "name": "sg-cover-nothing",
+   "package": "./internal/runner/offline",
+   "run": "^TestObserveRunReportsCoveredGoneKindAbsent$",
+   "tags": "",
+   "files": {
+    "internal/runner/offline/observation.go": ".proofs/files/sg-cover-nothing/internal/runner/offline/observation.go"
+   },
+   "want_fail": "--- FAIL: TestObserveRunReportsCoveredGoneKindAbsent"
+  },
+  {
+   "name": "sg-default-covers-all",
+   "package": "./internal/runner/offline",
+   "run": "^TestObserveRunTreatsUndeclaredSubstrateAsContainerOrLinuxVM$",
+   "tags": "",
+   "files": {
+    "internal/runner/offline/observation.go": ".proofs/files/sg-default-covers-all/internal/runner/offline/observation.go"
+   },
+   "want_fail": "--- FAIL: TestObserveRunTreatsUndeclaredSubstrateAsContainerOrLinuxVM"
+  },
+  {
+   "name": "sg-drop-unacked-exit",
+   "package": "./internal/runner/offline",
+   "run": "^TestObserveRunReportsARecordedExitAsPresent$",
+   "tags": "",
+   "files": {
+    "internal/runner/offline/observation.go": ".proofs/files/sg-drop-unacked-exit/internal/runner/offline/observation.go"
+   },
+   "want_fail": "--- FAIL: TestObserveRunReportsARecordedExitAsPresent"
+  },
+  {
+   "name": "sg-macos-always-covered",
+   "package": "./internal/runner/docker",
+   "run": "^TestDriverCoversKind$",
+   "tags": "docker",
+   "files": {
+    "internal/runner/docker/macvm.go": ".proofs/files/sg-macos-always-covered/internal/runner/docker/macvm.go"
+   },
+   "want_fail": "--- FAIL: TestDriverCoversKind"
+  },
+  {
+   "name": "sg-drop-stamp-call",
+   "package": "./internal/store",
+   "run": "^TestPG_RunnerSandboxGoneNeedsTwoSessionsThirtySecondsApart$",
+   "tags": "",
+   "files": {
+    "internal/store/store_runner_inventory.go": ".proofs/files/sg-drop-stamp-call/internal/store/store_runner_inventory.go"
+   },
+   "want_fail": "--- FAIL: TestPG_RunnerSandboxGoneNeedsTwoSessionsThirtySecondsApart"
+  },
+  {
+   "name": "sg-drop-staged-exit-guard",
+   "package": "./internal/store",
+   "run": "^TestPG_RunnerSandboxGoneGuards$/^unfinished_staged_exit$",
+   "tags": "",
+   "files": {
+    "internal/store/store_runner_state.go": ".proofs/files/sg-drop-staged-exit-guard/internal/store/store_runner_state.go"
+   },
+   "want_fail": "--- FAIL: TestPG_RunnerSandboxGoneGuards/unfinished_staged_exit"
+  },
+  {
+   "name": "sg-drop-ref-check",
+   "package": "./internal/store",
+   "run": "^TestPG_RunnerSandboxGoneAuthority$",
+   "tags": "",
+   "files": {
+    "internal/store/store_runner_state.go": ".proofs/files/sg-drop-ref-check/internal/store/store_runner_state.go"
+   },
+   "want_fail": "--- FAIL: TestPG_RunnerSandboxGoneAuthority"
+  },
+  {
+   "name": "sg-stamp-ignores-present",
+   "package": "./internal/api",
+   "run": "^TestRunnerStatePG_PresentMacOSVMRunIsKept$",
+   "tags": "",
+   "files": {
+    "internal/store/store_runner_state.go": ".proofs/files/sg-stamp-ignores-present/internal/store/store_runner_state.go"
+   },
+   "want_fail": "--- FAIL: TestRunnerStatePG_PresentMacOSVMRunIsKept"
+  },
+  {
+   "name": "sg-claimable-lost-at-null",
+   "package": "./internal/api",
+   "run": "^TestRunnerStatePG_GoneOutageKeptRunEnds$",
+   "tags": "",
+   "files": {
+    "internal/store/store_runner_state.go": ".proofs/files/sg-claimable-lost-at-null/internal/store/store_runner_state.go"
+   },
+   "want_fail": "--- FAIL: TestRunnerStatePG_GoneOutageKeptRunEnds"
+  },
+  {
+   "name": "sg-drop-gone-schedule",
+   "package": "./internal/api",
+   "run": "^TestRunnerStatePG_GoneSandboxEndsRunFailed$/^headless$",
+   "tags": "",
+   "files": {
+    "internal/api/runner_state.go": ".proofs/files/sg-drop-gone-schedule/internal/api/runner_state.go"
+   },
+   "want_fail": "--- FAIL: TestRunnerStatePG_GoneSandboxEndsRunFailed/headless"
+  },
+  {
+   "name": "sg-drop-gone-pass",
+   "package": "./internal/api",
+   "run": "^TestRunnerStatePG_OfflineSweepEndsGoneRunOnce$",
+   "tags": "",
+   "files": {
+    "internal/api/runner_state.go": ".proofs/files/sg-drop-gone-pass/internal/api/runner_state.go"
+   },
+   "want_fail": "--- FAIL: TestRunnerStatePG_OfflineSweepEndsGoneRunOnce"
+  },
+  {
+   "name": "sg-drop-lease-gone-arm",
+   "package": "./internal/api",
+   "run": "^TestRunLeasePG_GoneMarkWithoutEndIsFinished$",
+   "tags": "",
+   "files": {
+    "internal/api/run_lease.go": ".proofs/files/sg-drop-lease-gone-arm/internal/api/run_lease.go"
+   },
+   "want_fail": "--- FAIL: TestRunLeasePG_GoneMarkWithoutEndIsFinished"
+  },
+  {
+   "name": "sg-drop-containment-pending-guard",
+   "package": "./internal/store",
+   "run": "^TestPG_RunnerSandboxGoneGuards$/^containment_pending_row$",
+   "tags": "",
+   "files": {
+    "internal/store/store_runner_state.go": ".proofs/files/sg-drop-containment-pending-guard/internal/store/store_runner_state.go"
+   },
+   "want_fail": "--- FAIL: TestPG_RunnerSandboxGoneGuards/containment_pending_row"
+  },
+  {
+   "name": "live-drop-probe-stamp",
+   "package": "./internal/store",
+   "run": "^TestPG_RunnerSandboxProbeConfirmsOnDatabaseTime$",
+   "tags": "",
+   "files": {
+    "internal/store/store_runner_state.go": ".proofs/files/live-drop-probe-stamp/internal/store/store_runner_state.go"
+   },
+   "want_fail": "--- FAIL: TestPG_RunnerSandboxProbeConfirmsOnDatabaseTime"
+  },
+  {
+   "name": "live-drop-session-fence-stamp",
+   "package": "./internal/store",
+   "run": "^TestPG_RunnerSandboxProbeIgnoresASupersededSession$",
+   "tags": "",
+   "files": {
+    "internal/store/store_runner_state.go": ".proofs/files/live-drop-session-fence-stamp/internal/store/store_runner_state.go"
+   },
+   "want_fail": "--- FAIL: TestPG_RunnerSandboxProbeIgnoresASupersededSession"
+  },
+  {
+   "name": "live-drop-claimable-stamp",
+   "package": "./internal/store",
+   "run": "^TestPG_RunnerSandboxProbeGuards$/^unfinished_staged_exit$",
+   "tags": "",
+   "files": {
+    "internal/store/store_runner_state.go": ".proofs/files/live-drop-claimable-stamp/internal/store/store_runner_state.go"
+   },
+   "want_fail": "--- FAIL: TestPG_RunnerSandboxProbeGuards/unfinished_staged_exit"
+  },
+  {
+   "name": "live-drop-probed-ref-check",
+   "package": "./internal/store",
+   "run": "^TestPG_RunnerRunGoneProbedAuthority$",
+   "tags": "",
+   "files": {
+    "internal/store/store_runner_state.go": ".proofs/files/live-drop-probed-ref-check/internal/store/store_runner_state.go"
+   },
+   "want_fail": "--- FAIL: TestPG_RunnerRunGoneProbedAuthority"
+  },
+  {
+   "name": "live-due-stays-absent",
+   "package": "./internal/api",
+   "run": "^TestRunnerProbePG_TwoAbsentChecksThirtySecondsApartEndTheRun$",
+   "tags": "",
+   "files": {
+    "internal/api/runner_probe_gone.go": ".proofs/files/live-due-stays-absent/internal/api/runner_probe_gone.go"
+   },
+   "want_fail": "--- FAIL: TestRunnerProbePG_TwoAbsentChecksThirtySecondsApartEndTheRun"
+  },
+  {
+   "name": "live-drop-probe-clear",
+   "package": "./internal/api",
+   "run": "^TestRunnerProbePG_PresentCheckClearsTheStamp$",
+   "tags": "",
+   "files": {
+    "internal/store/store_runner_state.go": ".proofs/files/live-drop-probe-clear/internal/store/store_runner_state.go"
+   },
+   "want_fail": "--- FAIL: TestRunnerProbePG_PresentCheckClearsTheStamp"
+  },
+  {
+   "name": "live-error-reads-absent",
+   "package": "./internal/api",
+   "run": "^TestRunnerProbePG_CheckErrorNeitherSetsNorClears$",
+   "tags": "",
+   "files": {
+    "internal/api/runner_probe_gone.go": ".proofs/files/live-error-reads-absent/internal/api/runner_probe_gone.go"
+   },
+   "want_fail": "--- FAIL: TestRunnerProbePG_CheckErrorNeitherSetsNorClears"
+  },
+  {
+   "name": "live-gone-after-zero",
+   "package": "./internal/api",
+   "run": "^TestRunnerProbePG_ProbeAndStateConfirmEachOther$",
+   "tags": "",
+   "files": {
+    "internal/store/store_runner_state.go": ".proofs/files/live-gone-after-zero/internal/store/store_runner_state.go"
+   },
+   "want_fail": "--- FAIL: TestRunnerProbePG_ProbeAndStateConfirmEachOther/same_moment_never_confirms/check_then_STATE"
+  },
+  {
+   "name": "live-watch-absent-returns",
+   "package": "./internal/api",
+   "run": "^TestRunnerProbePG_WatcherKeepsWatchingUntilConfirmed$",
+   "tags": "",
+   "files": {
+    "internal/api/reconcile.go": ".proofs/files/live-watch-absent-returns/internal/api/reconcile.go"
+   },
+   "want_fail": "--- FAIL: TestRunnerProbePG_WatcherKeepsWatchingUntilConfirmed"
+  },
+  {
+   "name": "live-drop-sweep-probe-switch",
+   "package": "./internal/api",
+   "run": "^TestRunnerProbePG_SweepEndsAConfirmedRun$",
+   "tags": "",
+   "files": {
+    "internal/api/reconcile.go": ".proofs/files/live-drop-sweep-probe-switch/internal/api/reconcile.go"
+   },
+   "want_fail": "--- FAIL: TestRunnerProbePG_SweepEndsAConfirmedRun"
+  },
+  {
+   "name": "live-drop-session-fence-confirm",
+   "package": "./internal/api",
+   "run": "^TestRunnerProbePG_StaleSessionCheckChangesNothing$",
+   "tags": "",
+   "files": {
+    "internal/store/store_runner_state.go": ".proofs/files/live-drop-session-fence-confirm/internal/store/store_runner_state.go"
+   },
+   "want_fail": "--- FAIL: TestRunnerProbePG_StaleSessionCheckChangesNothing"
+  },
+  {
+   "name": "live-drop-watch-offline-return",
+   "package": "./internal/api",
+   "run": "^TestReconcileWatch_RunnerRunOfflineHereStops$",
+   "tags": "",
+   "files": {
+    "internal/api/reconcile.go": ".proofs/files/live-drop-watch-offline-return/internal/api/reconcile.go"
+   },
+   "want_fail": "--- FAIL: TestReconcileWatch_RunnerRunOfflineHereStops/runner_ref"
+  },
+  {
+   "name": "live-drop-sweep-offline-skip",
+   "package": "./internal/api",
+   "run": "^TestSweepRunWatchers_RunnerRunOfflineHereGetsNoWatcher$",
+   "tags": "",
+   "files": {
+    "internal/api/reconcile.go": ".proofs/files/live-drop-sweep-offline-skip/internal/api/reconcile.go"
+   },
+   "want_fail": "--- FAIL: TestSweepRunWatchers_RunnerRunOfflineHereGetsNoWatcher"
+  },
+  {
+   "name": "live-revive-error-starts-agent",
+   "package": "./internal/api",
+   "run": "^TestReviveRun_UnobservableSandboxRefuses$",
+   "tags": "",
+   "files": {
+    "internal/api/run_revive.go": ".proofs/files/live-revive-error-starts-agent/internal/api/run_revive.go"
+   },
+   "want_fail": "--- FAIL: TestReviveRun_UnobservableSandboxRefuses"
+  },
+  {
+   "name": "live-sweep-error-stops",
+   "package": "./internal/api",
+   "run": "^TestSweepTerminalSandboxes_UnobservableSandboxIsLeftAlone$",
+   "tags": "",
+   "files": {
+    "internal/api/sandbox_sweep.go": ".proofs/files/live-sweep-error-stops/internal/api/sandbox_sweep.go"
+   },
+   "want_fail": "--- FAIL: TestSweepTerminalSandboxes_UnobservableSandboxIsLeftAlone"
+  },
+  {
+   "name": "live-drop-covered-guard",
+   "package": "./internal/runner/runneragent",
+   "run": "^TestDispatcherReadsOfAnUncoveredSandboxAreUnobservable$",
+   "tags": "",
+   "files": {
+    "internal/runner/runneragent/dispatch.go": ".proofs/files/live-drop-covered-guard/internal/runner/runneragent/dispatch.go"
+   },
+   "want_fail": "--- FAIL: TestDispatcherReadsOfAnUncoveredSandboxAreUnobservable"
+  },
+  {
+   "name": "live-covered-nil-refuses",
+   "package": "./internal/runner/runneragent",
+   "run": "^TestDispatcherReachesTheEngineForACoveredSandbox$",
+   "tags": "",
+   "files": {
+    "internal/runner/runneragent/dispatch.go": ".proofs/files/live-covered-nil-refuses/internal/runner/runneragent/dispatch.go"
+   },
+   "want_fail": "--- FAIL: TestDispatcherReachesTheEngineForACoveredSandbox/nil/status"
+  },
+  {
+   "name": "live-covered-guards-every-method",
+   "package": "./internal/runner/runneragent",
+   "run": "^TestDispatcherReachesTheEngineForACoveredSandbox$",
+   "tags": "",
+   "files": {
+    "internal/runner/runneragent/dispatch.go": ".proofs/files/live-covered-guards-every-method/internal/runner/runneragent/dispatch.go"
+   },
+   "want_fail": "--- FAIL: TestDispatcherReachesTheEngineForACoveredSandbox/uncovered/stop"
+  },
+  {
+   "name": "live-coversref-unknown-false",
+   "package": "./internal/runner/offline",
+   "run": "^TestCoversRef$",
+   "tags": "",
+   "files": {
+    "internal/runner/offline/ref_calls.go": ".proofs/files/live-coversref-unknown-false/internal/runner/offline/ref_calls.go"
+   },
+   "want_fail": "--- FAIL: TestCoversRef/unknown_ref"
+  },
+  {
+   "name": "live-coversref-always-true",
+   "package": "./internal/runner/offline",
+   "run": "^TestCoversRef$",
+   "tags": "",
+   "files": {
+    "internal/runner/offline/ref_calls.go": ".proofs/files/live-coversref-always-true/internal/runner/offline/ref_calls.go"
+   },
+   "want_fail": "--- FAIL: TestCoversRef/macos_vm_off"
+  },
+  {
+   "name": "live-drop-covered-wiring",
+   "package": "./cmd/wardyn-runnerd",
+   "run": "^TestCoveredIsWiredToTheManager$",
+   "tags": "",
+   "files": {
+    "cmd/wardyn-runnerd/production_docker.go": ".proofs/files/live-drop-covered-wiring/cmd/wardyn-runnerd/production_docker.go"
+   },
+   "want_fail": "--- FAIL: TestCoveredIsWiredToTheManager"
+  },
+  {
+   "name": "live-covered-wired-to-holds",
+   "package": "./cmd/wardyn-runnerd",
+   "run": "^TestCoveredIsWiredToTheManager$",
+   "tags": "",
+   "files": {
+    "cmd/wardyn-runnerd/production_docker.go": ".proofs/files/live-covered-wired-to-holds/cmd/wardyn-runnerd/production_docker.go"
+   },
+   "want_fail": "--- FAIL: TestCoveredIsWiredToTheManager"
+  },
+  {
+   "name": "live-wiring-outside-runtime",
+   "package": "./cmd/wardyn-runnerd",
+   "run": "^TestCoveredIsWiredToTheManager$",
+   "tags": "",
+   "files": {
+    "cmd/wardyn-runnerd/production_docker.go": ".proofs/files/live-wiring-outside-runtime/cmd/wardyn-runnerd/production_docker.go"
+   },
+   "want_fail": "--- FAIL: TestCoveredIsWiredToTheManager"
+  },
+  {
+   "name": "ts-d1-drop-teardown-removed",
+   "package": "./internal/runner/docker",
+   "run": "^TestMacVMDiskTeardownRecordsRemoved$",
+   "tags": "docker",
+   "files": {
+    "internal/runner/docker/macvm.go": ".proofs/files/ts-d1-drop-teardown-removed/internal/runner/docker/macvm.go"
+   },
+   "want_fail": "--- FAIL: TestMacVMDiskTeardownRecordsRemoved"
+  },
+  {
+   "name": "ts-d2-drop-helper-alive",
+   "package": "./internal/runner/docker",
+   "run": "^TestMacVMDiskHelperOutlivesItsKill$",
+   "tags": "docker",
+   "files": {
+    "internal/runner/docker/macvm.go": ".proofs/files/ts-d2-drop-helper-alive/internal/runner/docker/macvm.go"
+   },
+   "want_fail": "--- FAIL: TestMacVMDiskHelperOutlivesItsKill"
+  },
+  {
+   "name": "ts-d4-drop-sweep-removed",
+   "package": "./internal/runner/docker",
+   "run": "^TestMacVMDiskKeptThenTheSweepRemovesIt$",
+   "tags": "docker",
+   "files": {
+    "internal/runner/docker/macvm.go": ".proofs/files/ts-d4-drop-sweep-removed/internal/runner/docker/macvm.go"
+   },
+   "want_fail": "--- FAIL: TestMacVMDiskKeptThenTheSweepRemovesIt"
+  },
+  {
+   "name": "ts-d5-drop-teardown-removed-kill",
+   "package": "./internal/runner/docker",
+   "run": "^TestMacVMDiskKillRecordsRemoved$",
+   "tags": "docker",
+   "files": {
+    "internal/runner/docker/macvm.go": ".proofs/files/ts-d5-drop-teardown-removed-kill/internal/runner/docker/macvm.go"
+   },
+   "want_fail": "--- FAIL: TestMacVMDiskKillRecordsRemoved"
+  },
+  {
+   "name": "ts-d6-linux-vm-records",
+   "package": "./internal/runner/docker",
+   "run": "^TestMacVMDiskNoneForOtherKinds$",
+   "tags": "docker",
+   "files": {
+    "internal/runner/docker/vm.go": ".proofs/files/ts-d6-linux-vm-records/internal/runner/docker/vm.go"
+   },
+   "want_fail": "--- FAIL: TestMacVMDiskNoneForOtherKinds"
+  },
+  {
+   "name": "ts-d7-no-prune",
+   "package": "./internal/runner/docker",
+   "run": "^TestMacVMDiskPrunesOldReports$",
+   "tags": "docker",
+   "files": {
+    "internal/runner/docker/macvm_disk.go": ".proofs/files/ts-d7-no-prune/internal/runner/docker/macvm_disk.go"
+   },
+   "want_fail": "--- FAIL: TestMacVMDiskPrunesOldReports"
+  },
+  {
+   "name": "ts-d8-plain-store",
+   "package": "./internal/runner/docker",
+   "run": "^TestMacVMDiskRemovedIsFinal$",
+   "tags": "docker",
+   "files": {
+    "internal/runner/docker/macvm_disk.go": ".proofs/files/ts-d8-plain-store/internal/runner/docker/macvm_disk.go"
+   },
+   "want_fail": "--- FAIL: TestMacVMDiskRemovedIsFinal"
+  },
+  {
+   "name": "ts-r1-drop-teardown-reply",
+   "package": "./internal/runner/runneragent",
+   "run": "^TestTeardownReplyCarriesTheMacOSVMDisk$",
+   "tags": "",
+   "files": {
+    "internal/runner/runneragent/dispatch.go": ".proofs/files/ts-r1-drop-teardown-reply/internal/runner/runneragent/dispatch.go"
+   },
+   "want_fail": "--- FAIL: TestTeardownReplyCarriesTheMacOSVMDisk"
+  },
+  {
+   "name": "ts-r2-empty-teardown-result",
+   "package": "./internal/runner/runneragent",
+   "run": "^TestTeardownReplyWithoutAReportIsNil$",
+   "tags": "",
+   "files": {
+    "internal/runnerwire/macos_disk.go": ".proofs/files/ts-r2-empty-teardown-result/internal/runnerwire/macos_disk.go"
+   },
+   "want_fail": "--- FAIL: TestTeardownReplyWithoutAReportIsNil"
+  },
+  {
+   "name": "ts-r3-drop-list-disks",
+   "package": "./internal/runner/runneragent",
+   "run": "^TestSweepRepliesCarryEveryHeldMacOSVMDisk$",
+   "tags": "",
+   "files": {
+    "internal/runner/runneragent/dispatch.go": ".proofs/files/ts-r3-drop-list-disks/internal/runner/runneragent/dispatch.go"
+   },
+   "want_fail": "--- FAIL: TestSweepRepliesCarryEveryHeldMacOSVMDisk"
+  },
+  {
+   "name": "ts-r3-drop-remove-disks",
+   "package": "./internal/runner/runneragent",
+   "run": "^TestSweepRepliesCarryEveryHeldMacOSVMDisk$",
+   "tags": "",
+   "files": {
+    "internal/runner/runneragent/dispatch.go": ".proofs/files/ts-r3-drop-remove-disks/internal/runner/runneragent/dispatch.go"
+   },
+   "want_fail": "--- FAIL: TestSweepRepliesCarryEveryHeldMacOSVMDisk"
+  },
+  {
+   "name": "ts-w1-drop-teardown-hook",
+   "package": "./internal/runnerwire/runnertest",
+   "run": "^TestTeardownHandsTheMacOSVMDiskToTheOrg$",
+   "tags": "",
+   "files": {
+    "internal/runner/remote/substrate.go": ".proofs/files/ts-w1-drop-teardown-hook/internal/runner/remote/substrate.go"
+   },
+   "want_fail": "--- FAIL: TestTeardownHandsTheMacOSVMDiskToTheOrg"
+  },
+  {
+   "name": "ts-w2-drop-list-pass",
+   "package": "./internal/runnerwire/runnertest",
+   "run": "^TestSweepHandsTheMacOSVMDisksFromBothPasses$",
+   "tags": "",
+   "files": {
+    "internal/runner/remote/substrate.go": ".proofs/files/ts-w2-drop-list-pass/internal/runner/remote/substrate.go"
+   },
+   "want_fail": "--- FAIL: TestSweepHandsTheMacOSVMDisksFromBothPasses"
+  },
+  {
+   "name": "ts-w3-drop-nil-check",
+   "package": "./internal/runnerwire/runnertest",
+   "run": "^TestNoMacOSVMDiskReachesTheOrgWithoutAReport$",
+   "tags": "",
+   "files": {
+    "internal/runner/remote/substrate.go": ".proofs/files/ts-w3-drop-nil-check/internal/runner/remote/substrate.go"
+   },
+   "want_fail": "--- FAIL: TestNoMacOSVMDiskReachesTheOrgWithoutAReport"
+  },
+  {
+   "name": "ts-w4-strict-decode",
+   "package": "./internal/runnerwire/runnertest",
+   "run": "^TestAnOlderOrgDecodesTheNewReplies$",
+   "tags": "",
+   "files": {
+    "internal/runnerwire/call.go": ".proofs/files/ts-w4-strict-decode/internal/runnerwire/call.go"
+   },
+   "want_fail": "--- FAIL: TestAnOlderOrgDecodesTheNewReplies"
+  },
+  {
+   "name": "ts-s1-drop-runner-binding",
+   "package": "./internal/store",
+   "run": "^TestPG_MacOSVMDiskBinding$",
+   "tags": "",
+   "files": {
+    "internal/store/store_macos_vm_disks.go": ".proofs/files/ts-s1-drop-runner-binding/internal/store/store_macos_vm_disks.go"
+   },
+   "want_fail": "--- FAIL: TestPG_MacOSVMDiskBinding"
+  },
+  {
+   "name": "ts-s2-drop-monotonic",
+   "package": "./internal/store",
+   "run": "^TestPG_MacOSVMDiskMonotonic$",
+   "tags": "",
+   "files": {
+    "internal/store/store_macos_vm_disks.go": ".proofs/files/ts-s2-drop-monotonic/internal/store/store_macos_vm_disks.go"
+   },
+   "want_fail": "--- FAIL: TestPG_MacOSVMDiskMonotonic"
+  },
+  {
+   "name": "ts-s3-drop-kind",
+   "package": "./internal/store",
+   "run": "^TestPG_MacOSVMDiskOtherKinds$",
+   "tags": "",
+   "files": {
+    "internal/store/store_macos_vm_disks.go": ".proofs/files/ts-s3-drop-kind/internal/store/store_macos_vm_disks.go"
+   },
+   "want_fail": "--- FAIL: TestPG_MacOSVMDiskOtherKinds"
+  },
+  {
+   "name": "ts-a1-drop-macos-guard",
+   "package": "./internal/api",
+   "run": "^TestRunMacOSDiskView$",
+   "tags": "",
+   "files": {
+    "internal/api/run_macos_disk.go": ".proofs/files/ts-a1-drop-macos-guard/internal/api/run_macos_disk.go"
+   },
+   "want_fail": "--- FAIL: TestRunMacOSDiskView"
+  },
+  {
+   "name": "ts-a1-drop-window",
+   "package": "./internal/api",
+   "run": "^TestRunMacOSDiskView$",
+   "tags": "",
+   "files": {
+    "internal/api/run_macos_disk.go": ".proofs/files/ts-a1-drop-window/internal/api/run_macos_disk.go"
+   },
+   "want_fail": "--- FAIL: TestRunMacOSDiskView"
+  },
+  {
+   "name": "ts-a1-drop-vmmachine",
+   "package": "./internal/api",
+   "run": "^TestRunMacOSDiskView$",
+   "tags": "",
+   "files": {
+    "internal/api/run_macos_disk.go": ".proofs/files/ts-a1-drop-vmmachine/internal/api/run_macos_disk.go"
+   },
+   "want_fail": "--- FAIL: TestRunMacOSDiskView"
+  },
+  {
+   "name": "ts-a1-drop-lostat",
+   "package": "./internal/api",
+   "run": "^TestRunMacOSDiskView$",
+   "tags": "",
+   "files": {
+    "internal/api/run_macos_disk.go": ".proofs/files/ts-a1-drop-lostat/internal/api/run_macos_disk.go"
+   },
+   "want_fail": "--- FAIL: TestRunMacOSDiskView"
+  },
+  {
+   "name": "ts-a2-drop-reason-check",
+   "package": "./internal/api",
+   "run": "^TestRunnerMacOSVMDisksNormalizes$",
+   "tags": "",
+   "files": {
+    "internal/api/run_macos_disk.go": ".proofs/files/ts-a2-drop-reason-check/internal/api/run_macos_disk.go"
+   },
+   "want_fail": "--- FAIL: TestRunnerMacOSVMDisksNormalizes"
+  },
+  {
+   "name": "ts-a3-drop-without-cancel",
+   "package": "./internal/api",
+   "run": "^TestRunnerMacOSVMDisksOutliveTheCall$",
+   "tags": "",
+   "files": {
+    "internal/api/run_macos_disk.go": ".proofs/files/ts-a3-drop-without-cancel/internal/api/run_macos_disk.go"
+   },
+   "want_fail": "--- FAIL: TestRunnerMacOSVMDisksOutliveTheCall"
+  },
+  {
+   "name": "ts-a4-drop-hook",
+   "package": "./internal/api",
+   "run": "^TestPG_MacOSVMDiskReportEndToEnd$",
+   "tags": "",
+   "files": {
+    "internal/api/runner_actions.go": ".proofs/files/ts-a4-drop-hook/internal/api/runner_actions.go"
+   },
+   "want_fail": "--- FAIL: TestPG_MacOSVMDiskReportEndToEnd"
+  },
+  {
+   "name": "dr0450-refusal-before-error",
+   "package": "./internal/store",
+   "run": "^TestPG_RunnerSpoolTransientRunnerReadIsNotARefusal$",
+   "tags": "",
+   "files": {
+    "internal/store/store_runner_spool.go": ".proofs/files/dr0450-refusal-before-error/internal/store/store_runner_spool.go"
+   },
+   "want_fail": "--- FAIL: TestPG_RunnerSpoolTransientRunnerReadIsNotARefusal"
+  },
+  {
+   "name": "dr0431-migration-counted",
+   "package": "./internal/macvm/admission",
+   "run": "^TestSetupFailedMigrationKeepsEveryEntryCounted$",
+   "tags": "",
+   "files": {
+    "internal/macvm/admission/setup.go": ".proofs/files/dr0431-migration-counted/internal/macvm/admission/setup.go"
+   },
+   "want_fail": "--- FAIL: TestSetupFailedMigrationKeepsEveryEntryCounted"
+  },
+  {
+   "name": "dr0431-no-resurrect",
+   "package": "./internal/macvm/admission",
+   "run": "^TestSetupRetryNeverResurrectsAReleasedEntry$",
+   "tags": "",
+   "files": {
+    "internal/macvm/admission/setup.go": ".proofs/files/dr0431-no-resurrect/internal/macvm/admission/setup.go"
+   },
+   "want_fail": "--- FAIL: TestSetupRetryNeverResurrectsAReleasedEntry"
+  },
+  {
+   "name": "dr0431-lock-fstat",
+   "package": "./internal/macvm/admission",
+   "run": "^TestSetupLockFstatErrorFailsClosed$",
+   "tags": "",
+   "files": {
+    "internal/macvm/admission/setup.go": ".proofs/files/dr0431-lock-fstat/internal/macvm/admission/setup.go"
+   },
+   "want_fail": "--- FAIL: TestSetupLockFstatErrorFailsClosed"
+  },
+  {
+   "name": "dr0440-entries-inspect",
+   "package": "./internal/macvm/admission",
+   "run": "^TestSetupEntriesInspectErrorFailsClosed$",
+   "tags": "",
+   "files": {
+    "internal/macvm/admission/setup.go": ".proofs/files/dr0440-entries-inspect/internal/macvm/admission/setup.go"
+   },
+   "want_fail": "--- FAIL: TestSetupEntriesInspectErrorFailsClosed"
+  },
+  {
+   "name": "dr0445-source-inspect",
+   "package": "./internal/macvm/admission",
+   "run": "^TestSetupSourceInspectErrorFailsClosed$",
+   "tags": "",
+   "files": {
+    "internal/macvm/admission/setup.go": ".proofs/files/dr0445-source-inspect/internal/macvm/admission/setup.go"
+   },
+   "want_fail": "--- FAIL: TestSetupSourceInspectErrorFailsClosed"
+  },
+  {
+   "name": "dr0449-int-overflow",
+   "package": "./internal/store",
+   "run": "^TestPG_MacOSVMDiskMigrationAddsTheSSHTile$",
+   "tags": "",
+   "files": {
+    "internal/db/migrations/0236_macos_vm_disks.sql": ".proofs/files/dr0449-int-overflow/internal/db/migrations/0236_macos_vm_disks.sql"
+   },
+   "want_fail": "--- FAIL: TestPG_MacOSVMDiskMigrationAddsTheSSHTile"
+  }
+ ]
+}
