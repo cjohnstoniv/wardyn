@@ -192,3 +192,34 @@ func TestWarnPinnedProxyImageSkewAtStartup(t *testing.T) {
 		t.Fatalf("no skew warning naming both:\n%s", buf.String())
 	}
 }
+
+// releaseTagCases is the same table of tags as in internal/runner/k8s/release_tag_test.go, which
+// checks that package's releaseTagRE on it: the two release patterns must agree on every row.
+var releaseTagCases = map[string]bool{
+	"1.2.3":          true,
+	"0.10.0":         true,
+	"0.10.0-rc.2":    true,
+	"10.20.30-rc.0":  true,
+	"":               false,
+	"1.2":            false,
+	"1.2.3.4":        false,
+	"v1.2.3":         false,
+	"1.2.3-rc":       false,
+	"1.2.3-rc.":      false,
+	"1.2.3-rc.x":     false,
+	"1.2.3-beta.1":   false,
+	"1.2.3+abc123":   false,
+	"1.2.3-rc.1+abc": false,
+	" 1.2.3":         false,
+	"1.2.3\n":        false,
+	"latest":         false,
+	"main":           false,
+}
+
+func TestReleaseVersionTable(t *testing.T) {
+	for tag, want := range releaseTagCases {
+		if got := releaseVersion.MatchString(tag); got != want {
+			t.Errorf("releaseVersion.MatchString(%q) = %v, want %v", tag, got, want)
+		}
+	}
+}

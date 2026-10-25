@@ -819,7 +819,9 @@ func (d *Driver) warnOlderProxy() {
 	})
 }
 
-// releaseTagRE is a release (X.Y.Z) or a release candidate (X.Y.Z-rc.N) image tag.
+// releaseTagRE is a release (X.Y.Z) or a release candidate (X.Y.Z-rc.N) image tag. It is the same
+// pattern as releaseVersion in cmd/wardyn-runnerd (proxy_image.go), kept apart on purpose: change
+// one and change the other. TestReleaseTagRETable and the same table in cmd/wardyn-runnerd pin the pair.
 var releaseTagRE = regexp.MustCompile(`^([0-9]+)\.([0-9]+)\.([0-9]+)(?:-rc\.([0-9]+))?$`)
 
 // imageReleaseTag is image's tag when it names a release, else "": a digest-only reference, an
