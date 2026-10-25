@@ -76,7 +76,7 @@ regexes = [
     # internal/macvm/rfbshim.go's desktop password alphabet: the set of
     # characters a generated one-time desktop password is drawn from (no
     # look-alikes), a source constant, never a password itself.
-    '''desktopPasswordAlphabet = "''',
+    '''desktopPasswordAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"''',
 ]
 paths = [
     # The leaked-value detector's own tests: intentionally realistic-shaped
