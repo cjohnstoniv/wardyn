@@ -22,6 +22,7 @@ const (
 	whyLogged           = "written to the operator log, never rendered to a person"
 	whyAfterPrefix      = "always spliced after a field name or clause, so it is never a sentence's first word"
 	whyGoBootError      = "a boot refusal returned from fmt.Errorf and logged by main, not an HTTP or console sentence"
+	whyBrandMacOS       = "brand name macOS is always written with a lower-case m"
 )
 
 // sentenceConstFragments are named string consts that this guard deliberately
@@ -92,6 +93,8 @@ var sentenceConstNotSentences = map[string]string{
 	"roleSnapshotWarnNote":   "a slog attribute of the role-mapping warning: " + whyLogged,
 	"roleSnapshotWarnRemedy": "a slog attribute of the role-mapping warning: " + whyLogged,
 	"sftpServerMissing":      "written to the SSH session's stderr and logged, led by the protocol name sftp",
+
+	"macOSVMOnRemote": whyBrandMacOS, "macOSVMsOff": whyBrandMacOS,
 }
 
 // wireFieldPathRe matches a const whose text opens with a field path and a

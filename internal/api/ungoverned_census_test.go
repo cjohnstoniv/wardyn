@@ -96,6 +96,7 @@ var ungovernedCallerCensus = map[string]struct {
 	"run_limit_sources.go:limitSources":                        {1, "authz-only: a display of where limits came from"},
 	"run_overrides_apply.go:applySecretOverrides":              {2, "R: a removal only narrows; the spec meets the boundary at resolve"},
 	"run_owner_authority.go:ownerCapabilityRefusal":            {1, "V: the owner re-check at revive, beside the boundary floor check"},
+	"run_placement_capabilities.go:macOSVMRefusal":             {1, "authz-only: a refusal's wording; the runner id and trust command go to a security operator only, and every caller is refused alike"},
 	"run_placement_eligibility.go:deniedPlacements":            {1, "D: placement; the run it admits meets the boundary at resolve and dispatch"},
 	"run_policy_overlay.go:applyPolicyOverlay":                 {1, "R: the member overlay clamp; the boundary is the last step after it"},
 	"run_policy_resolution.go:resolveRunPolicyFacts":           {2, "R: the member clamp gates; boundaryRunStep is the last step on both arms"},
