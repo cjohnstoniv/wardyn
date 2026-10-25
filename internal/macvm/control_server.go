@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -21,7 +22,17 @@ type controlHandler interface {
 	stop(graceful bool, timeout time.Duration) error
 	netFD(f *os.File) error
 	subscribe() (<-chan Event, func())
+	// desktopPassword is the run's VNC password; ErrNoDesktopPassword without one.
+	desktopPassword() (string, error)
 }
+
+// controlOwnerUID is the uid a desktop_password peer must have: the helper's own (runnerd's, which
+// started it). Settable so a test can make the peer a stranger.
+var controlOwnerUID = func() *atomic.Int64 {
+	var v atomic.Int64
+	v.Store(int64(os.Getuid()))
+	return &v
+}()
 
 // maxControlLine bounds one request line; ctl.sock is 0700 inside a 0700 run
 // dir, so only the user's own processes reach it, but a runaway line still
@@ -43,22 +54,22 @@ func serveControlConn(c *net.UnixConn, h controlHandler) {
 	defer c.Close()
 	var (
 		pending []byte
-		fds     []*os.File
 		hello   bool
 	)
+	enc := json.NewEncoder(c)
+	reply := func(r ControlReply) bool { return enc.Encode(r) == nil }
+	cc := &controlConn{c: c, h: h, enc: enc, reply: reply}
 	defer func() {
-		for _, f := range fds {
+		for _, f := range cc.fds {
 			_ = f.Close()
 		}
 	}()
-	enc := json.NewEncoder(c)
-	reply := func(r ControlReply) bool { return enc.Encode(r) == nil }
 	buf := make([]byte, 4096)
 	oob := make([]byte, unix.CmsgSpace(4*4))
 	for {
 		n, oobn, _, _, err := c.ReadMsgUnix(buf, oob)
 		if oobn > 0 {
-			fds = append(fds, parseRights(oob[:oobn])...)
+			cc.fds = append(cc.fds, parseRights(oob[:oobn])...)
 		}
 		if err != nil {
 			return
@@ -91,50 +102,75 @@ func serveControlConn(c *net.UnixConn, h controlHandler) {
 				}
 				continue
 			}
-			switch req.Op {
-			case OpStatus:
-				st := h.status()
-				if !reply(ControlReply{OK: true, Status: &st}) {
-					return
-				}
-			case OpStop:
-				r := ControlReply{OK: true}
-				if err := h.stop(req.Graceful, time.Duration(req.TimeoutMS)*time.Millisecond); err != nil {
-					r = ControlReply{Error: err.Error()}
-				}
-				if !reply(r) {
-					return
-				}
-			case OpNetFD:
-				if len(fds) == 0 {
-					reply(ControlReply{Error: "net_fd without a descriptor"})
-					return
-				}
-				f := fds[0]
-				fds = fds[1:]
-				r := ControlReply{OK: true}
-				if err := h.netFD(f); err != nil {
-					_ = f.Close()
-					r = ControlReply{Error: err.Error()}
-				}
-				if !reply(r) {
-					return
-				}
-			case OpEvents:
-				// Subscribe before the ack, so the client misses nothing
-				// published after its Events call returns.
-				ch, cancel := h.subscribe()
-				if !reply(ControlReply{OK: true}) {
-					cancel()
-					return
-				}
-				streamEvents(c, enc, ch, cancel)
-				return
-			default:
-				reply(ControlReply{Error: "unknown op " + req.Op})
+			if !cc.op(req) {
 				return
 			}
 		}
+	}
+}
+
+// controlConn is one ctl.sock connection after its hello.
+type controlConn struct {
+	c     *net.UnixConn
+	h     controlHandler
+	enc   *json.Encoder
+	fds   []*os.File
+	reply func(ControlReply) bool
+}
+
+// op answers one request and says whether the connection goes on.
+func (cc *controlConn) op(req ControlRequest) bool {
+	h, reply := cc.h, cc.reply
+	switch req.Op {
+	case OpStatus:
+		st := h.status()
+		return reply(ControlReply{OK: true, Status: &st})
+	case OpStop:
+		r := ControlReply{OK: true}
+		if err := h.stop(req.Graceful, time.Duration(req.TimeoutMS)*time.Millisecond); err != nil {
+			r = ControlReply{Error: err.Error()}
+		}
+		return reply(r)
+	case OpNetFD:
+		if len(cc.fds) == 0 {
+			reply(ControlReply{Error: "net_fd without a descriptor"})
+			return false
+		}
+		f := cc.fds[0]
+		cc.fds = cc.fds[1:]
+		r := ControlReply{OK: true}
+		if err := h.netFD(f); err != nil {
+			_ = f.Close()
+			r = ControlReply{Error: err.Error()}
+		}
+		return reply(r)
+	case OpDesktopPassword:
+		// ctl.sock is 0700 already; the peer's uid is checked as well, because this one
+		// answer is a secret.
+		if uid, err := peerUID(cc.c); err != nil || int64(uid) != controlOwnerUID.Load() {
+			reply(ControlReply{Error: "desktop_password: the peer is not this helper's user"})
+			return false
+		}
+		r := ControlReply{OK: true}
+		pw, err := h.desktopPassword()
+		if err != nil {
+			r = ControlReply{Error: err.Error()}
+		}
+		r.DesktopPassword = pw
+		return reply(r)
+	case OpEvents:
+		// Subscribe before the ack, so the client misses nothing
+		// published after its Events call returns.
+		ch, cancel := h.subscribe()
+		if !reply(ControlReply{OK: true}) {
+			cancel()
+			return false
+		}
+		streamEvents(cc.c, cc.enc, ch, cancel)
+		return false
+	default:
+		reply(ControlReply{Error: "unknown op " + req.Op})
+		return false
 	}
 }
 

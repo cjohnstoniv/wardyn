@@ -43,7 +43,7 @@ func serveVsock(ctx context.Context, dial DialFunc, h http.Handler, wait time.Du
 			sleep(ctx, wait)
 			continue
 		}
-		serveSession(ctx, conn, h, &protocols)
+		serveSession(ctx, conn, h, &protocols, nil)
 		sleep(ctx, wait)
 	}
 	return nil
@@ -59,8 +59,9 @@ func sleep(ctx context.Context, d time.Duration) {
 }
 
 // serveSession waits on conn for the host's hello (the connection is idle until the helper pairs it),
-// answers it, and serves h to that session until it ends.
-func serveSession(ctx context.Context, conn net.Conn, h http.Handler, protocols *http.Protocols) {
+// answers it, and serves h to that session until it ends. onHello, when set, is called once the hello
+// is answered.
+func serveSession(ctx context.Context, conn net.Conn, h http.Handler, protocols *http.Protocols, onHello func()) {
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
 	rc := newRecordConn(conn)
@@ -73,6 +74,9 @@ func serveSession(ctx context.Context, conn net.Conn, h http.Handler, protocols 
 	if _, err := conn.Write(appendRecord([]byte{0}, recHello, hello)); err != nil {
 		_ = conn.Close()
 		return
+	}
+	if onHello != nil {
+		onHello()
 	}
 	l := newOneConn(rc)
 	srv := &http.Server{Handler: h, Protocols: protocols, ReadHeaderTimeout: time.Minute}

@@ -28,7 +28,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Unset or empty (`docker run -e VAR` / compose `VAR=`) keeps the default quietly.
 - Every boolean `wardynd` and the runner substrates read goes through that one parser (`1`/`true`/`yes`/`on`, `0`/`false`/`no`/`off`, anything else exits 2 at boot).
 - The exception is `WARDYN_ENVBUILD_REGISTRY_INSECURE`: it takes Go's `strconv.ParseBool` forms (`1`/`t`/`true`, `0`/`f`/`false`, no `yes` or `on`) and fails the build on anything else.
-- The eight `internal/api` switches read per request (`WARDYN_EGRESS_SECOND_HUMAN`, `WARDYN_CAPABILITY_SECOND_HUMAN`, `WARDYN_GOVERNANCE_SECOND_HUMAN`, `WARDYN_ALLOW_USER_ENV_SECRET`, `WARDYN_ALLOW_AGENT_TELEMETRY`, `WARDYN_GIT_PAT_API_BITBUCKET_SERVER`, `WARDYN_SCHEDULED_RUNS`, `WARDYN_MCP_LOCAL_SERVERS`) are also read once at boot so a bad value is refused there.
+- The nine `internal/api` switches read per request (`WARDYN_EGRESS_SECOND_HUMAN`, `WARDYN_CAPABILITY_SECOND_HUMAN`, `WARDYN_GOVERNANCE_SECOND_HUMAN`, `WARDYN_ALLOW_USER_ENV_SECRET`, `WARDYN_ALLOW_AGENT_TELEMETRY`, `WARDYN_GIT_PAT_API_BITBUCKET_SERVER`, `WARDYN_SCHEDULED_RUNS`, `WARDYN_MCP_LOCAL_SERVERS`, `WARDYN_MACOS_VMS`) are also read once at boot so a bad value is refused there.
 - So are `WARDYN_COMPONENT_ENV_RESERVE_EDITORS` and `WARDYN_KUBECTL_CLI`, read on every component check.
 - Two `wardyn-proxy` parsers are kept on purpose.
 - `WARDYN_LLM_SCAN` is a kill switch that can only disable.
@@ -291,6 +291,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_COMPONENT_ENV_RESERVE_EDITORS` | bool | off | reserves `EDITOR`, `VISUAL`, `PAGER`, `GIT_EDITOR`, `GIT_PAGER` and `GIT_SEQUENCE_EDITOR`: no component may set them. A stored component that does is refused at its next save or attach |
 | `WARDYN_ALLOW_USER_ENV_SECRET` | bool | (unset) | let MEMBERS hold `env_secret` and `file_secret` grants. Default-unset DROPS a member's `env_secret` or `file_secret` grant even when the operator's ceiling lists the exact pairing (`dropAdminOnlyEnvSecretGrants`, `inline_policy_bounds.go`). [Details](#wardyn_allow_user_env_secret) |
 | `WARDYN_MCP_LOCAL_SERVERS` | bool | off | Sandboxed MCP servers (`transport: stdio`). **Each has the agent's access; the harness applies tool rules.** Off: saving one, a new run, a queued run's admission and a revive refuse it; a run already running keeps it until it ends. [Details](#wardyn_mcp_local_servers) |
+| `WARDYN_MACOS_VMS` | bool | off | Lets a run ask for a macOS virtual machine (`machine_kind: macos_vm`) on a registered, company-managed Mac. Off: create refuses the kind with `400` `machine_kind_unknown`. A Mac also needs its own opt-in. [Details](#wardyn_macos_vms) |
 | `WARDYN_EGRESS_SECOND_HUMAN` | bool | (unset) | four-eyes on egress approvals: the human who DECIDES an `egress_domain` approval must not be the human who created the run (`requireSecondHuman`, `approvals_second_human.go`). **Local mode REFUSES it**, and the `admin-token` principal BYPASSES it. [Details](#wardyn_egress_second_human) |
 | `WARDYN_CAPABILITY_SECOND_HUMAN` | bool | (unset) | four-eyes on Azure DevOps capability escalations: the human who DECIDES one must not be the human who created the run. **Local mode REFUSES it**, and the `admin-token` principal BYPASSES it. [Details](#wardyn_capability_second_human) |
 | `WARDYN_GOVERNANCE_SECOND_HUMAN` | bool | (unset) | four-eyes on governance writes: a human's write to a governance profile, a capability grant, a key-domain assignment or `local_credential_delivery` is stored as a pending change. A second, distinct human must approve it. [Details](#wardyn_governance_second_human) |
@@ -1442,6 +1443,22 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Re-enable the agent CLI's own telemetry inside sandboxes.
 - Default-unset SUPPRESSES it (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, `DISABLE_TELEMETRY=1` in the sandbox env, `runs_dispatch_mounts.go`): the CLI's first-run phone-home is otherwise the FIRST pending egress approval a Confined pilot sees, before the host their task actually needs.
 - A value that is not a bool exits 2 at boot (`#202`; before that it was silently read as unset).
+
+### `WARDYN_MACOS_VMS`
+
+- Turns on macOS virtual machine sandboxes: a run with `machine_kind: macos_vm`, started by a registered runner on a Mac.
+- Off (the default): create refuses `macos_vm` with `400` `machine_kind_unknown`. Every other request and response reads as it did before the kind existed.
+- On, a run still lands only on a Mac runner that offers macOS VMs, has its own opt-in, and passes the managed-Mac gate:
+  - its trust class is `managed_device`, which only a security operator sets;
+  - its posture says `mdm_managed` from the MDM's posture file.
+- A Mac whose posture fails is refused with `runner_posture_unmet`; every other refusal here is `placement_capability`.
+- Placement refuses a Mac whose base image is not ready or that is at its limit of macOS VMs (at most 2).
+- macOS VMs need a pool where every runner offers them; a mixed pool refuses them. This matches Linux VMs.
+- It also refuses a harness the base cannot serve, and a CPU or memory below the base's minimum.
+- A macOS VM takes no folder mount, and a Kubernetes runner refuses the kind.
+- `GET /setup/status` publishes it as `features.macos_vms`, present only when on.
+- Needs migration `0234_macos_vm_kind`, which widens two CHECK constraints and changes no row.
+- A value that is not a bool exits 2 at boot.
 
 ### `WARDYN_MCP_LOCAL_SERVERS`
 

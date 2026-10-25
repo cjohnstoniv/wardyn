@@ -25,22 +25,27 @@ func TestDispatcherCreateMethodsStartOnlyTheirOwnKind(t *testing.T) {
 		name, method string
 		kind         types.MachineKind
 		offersVM     bool
+		offersMac    bool
 		ok           bool
 		refusal      string
 	}{
-		{"container by create_sandbox", runnerwire.MethodCreateSandbox, "", false, true, ""},
-		{"explicit container by create_sandbox", runnerwire.MethodCreateSandbox, types.MachineContainer, false, true, ""},
-		{"VM by create_sandbox", runnerwire.MethodCreateSandbox, types.MachineLinuxVM, true, false, "needs create_vm"},
-		{"container by create_vm", runnerwire.MethodCreateVM, "", true, false, "Linux VM sandboxes only"},
-		{"VM on a runner that does not offer VMs", runnerwire.MethodCreateVM, types.MachineLinuxVM, false, false, "does not offer Linux VM sandboxes"},
-		{"unknown kind", runnerwire.MethodCreateVM, "windows_vm", true, false, "machine_kind"},
-		{"VM by create_vm", runnerwire.MethodCreateVM, types.MachineLinuxVM, true, true, ""},
+		{"container by create_sandbox", runnerwire.MethodCreateSandbox, "", false, false, true, ""},
+		{"explicit container by create_sandbox", runnerwire.MethodCreateSandbox, types.MachineContainer, false, false, true, ""},
+		{"VM by create_sandbox", runnerwire.MethodCreateSandbox, types.MachineLinuxVM, true, false, false, "needs create_vm"},
+		{"container by create_vm", runnerwire.MethodCreateVM, "", true, true, false, "VM sandboxes only"},
+		{"VM on a runner that does not offer VMs", runnerwire.MethodCreateVM, types.MachineLinuxVM, false, false, false, "does not offer Linux VM sandboxes"},
+		{"unknown kind", runnerwire.MethodCreateVM, "windows_vm", true, true, false, "machine_kind"},
+		{"VM by create_vm", runnerwire.MethodCreateVM, types.MachineLinuxVM, true, false, true, ""},
+		{"macOS VM by create_sandbox", runnerwire.MethodCreateSandbox, types.MachineMacOSVM, true, true, false, "needs create_vm"},
+		{"macOS VM on a runner that offers Linux VMs only", runnerwire.MethodCreateVM, types.MachineMacOSVM, true, false, false, "does not offer macOS VM sandboxes"},
+		{"Linux VM on a runner that offers macOS VMs only", runnerwire.MethodCreateVM, types.MachineLinuxVM, false, true, false, "does not offer Linux VM sandboxes"},
+		{"macOS VM by create_vm", runnerwire.MethodCreateVM, types.MachineMacOSVM, false, true, true, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := runnertest.NewFake()
 			intents := 0
-			d, err := newTestDispatcher(Config{RunnerID: id, Substrate: fake, LinuxVM: tc.offersVM,
+			d, err := newTestDispatcher(Config{RunnerID: id, Substrate: fake, LinuxVM: tc.offersVM, MacOSVM: tc.offersMac,
 				BeforeCreate: func(context.Context, runner.SandboxSpec) error { intents++; return nil },
 				Created:      func(context.Context, runner.SandboxSpec, string) error { return nil },
 			})

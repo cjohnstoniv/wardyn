@@ -38,3 +38,7 @@ func lockFree(path string, exclusive bool) bool {
 	unlock()
 	return true
 }
+
+// RunExtraPorts makes o's run boot also register ports (tests of the
+// listener check).
+func RunExtraPorts(o *RunOptions, ports ...uint32) { o.extraPorts = ports }

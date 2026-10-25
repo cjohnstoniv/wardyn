@@ -4,6 +4,7 @@
 package macvm
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/macvm/admission"
+	"github.com/google/uuid"
 )
 
 // RootDirName is the VM directory under the user's Application Support/Wardyn.
@@ -30,15 +34,56 @@ func DefaultRoot() (string, error) {
 //
 //	<root>/bases/<slot>/   disk.img aux.img machine-id manifest.json (slot 0 unless the per-slot fallback is on)
 //	<root>/cache/          <build>.ipsw(.part)
-//	<root>/runs/<run-id>/  disk.img aux.img machine-id run.json ctl.sock agent.sock desktop.sock helper.log
+//	<root>/runs/<run-key>/ disk.img aux.img machine-id run.json helper.log
 //	<root>/prepare.log
+//	<root>/setup-code.json (only while macOS waits for its setup by hand)
+//
+// A run's sockets live outside the home, in its socket directory (SockDir).
 type Layout struct{ Root string }
 
 func (l Layout) BaseDir(slot int) string { return filepath.Join(l.Root, "bases", strconv.Itoa(slot)) }
 func (l Layout) CacheDir() string        { return filepath.Join(l.Root, "cache") }
 func (l Layout) RunsDir() string         { return filepath.Join(l.Root, "runs") }
 func (l Layout) RunDir(runID string) string {
-	return filepath.Join(l.RunsDir(), runID)
+	return filepath.Join(l.RunsDir(), RunKey(runID))
+}
+
+// RunKeyLen is the length of a run key.
+const RunKeyLen = 12
+
+// RunKey names a run's directories: the run id's first 12 hex digits, so the
+// socket paths stay under MaxSocketPath. A string that is not a UUID (a key
+// already) is returned as it is.
+func RunKey(runID string) string {
+	if u, err := uuid.Parse(runID); err == nil {
+		return hex.EncodeToString(u[:RunKeyLen/2])
+	}
+	return runID
+}
+
+// MaxSocketPath is the longest unix socket path macOS binds or connects
+// (sockaddr_un's sun_path is 104 bytes with its terminating NUL).
+const MaxSocketPath = 103
+
+// SockDir is the run's socket directory, <sock-root>/u<uid>/<run-key>, under
+// sockRoot ("" is admission.DefaultSockDir). It holds ctl.sock, agent.sock
+// and desktop.sock.
+func SockDir(sockRoot, runID string) string {
+	return filepath.Join(SockConfig(sockRoot).UserDir(), RunKey(runID))
+}
+
+// SockConfig is this login's socket directory configuration under sockRoot.
+func SockConfig(sockRoot string) admission.SockConfig {
+	return admission.SockConfig{Dir: sockRoot, UID: os.Getuid()}
+}
+
+// checkSocketPaths refuses a socket directory whose longest socket path
+// would not fit a macOS sockaddr_un.
+func checkSocketPaths(dir string) error {
+	if n := len(filepath.Join(dir, DesktopSock)); n > MaxSocketPath {
+		return fmt.Errorf("macvm: the socket directory %s is too long for its sockets' paths (%d bytes, at most %d)", dir, n, MaxSocketPath)
+	}
+	return nil
 }
 func (l Layout) PrepareLog() string { return filepath.Join(l.Root, "prepare.log") }
 
@@ -170,7 +215,14 @@ type RunConfig struct {
 	RunnerID    string `json:"runner_id,omitempty"`
 	LedgerEntry string `json:"ledger_entry,omitempty"`
 	LedgerDir   string `json:"ledger_dir,omitempty"`
+	// SockRoot overrides the socket root, admission.DefaultSockDir (tests).
+	SockRoot string `json:"sock_root,omitempty"`
 }
+
+// toolsModeField is the helper's stage-2 boot-configuration field. Only
+// prepare and a tools update set it, in memory; a run.json that carries it
+// is refused, so a run boot never listens on the tools port.
+const toolsModeField = "tools_mode"
 
 // WriteRunConfig creates the run dir (0700) and writes its run.json.
 func WriteRunConfig(runDir string, c RunConfig) error {
@@ -180,18 +232,30 @@ func WriteRunConfig(runDir string, c RunConfig) error {
 	return writeJSONAtomic(filepath.Join(runDir, RunConfigFile), c, 0o600)
 }
 
-// ReadRunConfig reads <run-dir>/run.json.
+// ReadRunConfig reads <run-dir>/run.json, on every open: the directory's
+// name must be the key of the run id it names, and it must not carry tools
+// mode.
 func ReadRunConfig(runDir string) (RunConfig, error) {
 	var c RunConfig
 	b, err := os.ReadFile(filepath.Join(runDir, RunConfigFile))
 	if err != nil {
 		return c, err
 	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(b, &fields); err != nil {
+		return c, fmt.Errorf("macvm: run config: %w", err)
+	}
+	if _, ok := fields[toolsModeField]; ok {
+		return c, ErrToolsModeRun
+	}
 	if err := json.Unmarshal(b, &c); err != nil {
 		return c, fmt.Errorf("macvm: run config: %w", err)
 	}
 	if c.RunID == "" || c.BaseDir == "" {
 		return c, errors.New("macvm: run config needs run_id and base_dir")
+	}
+	if name, key := filepath.Base(filepath.Clean(runDir)), RunKey(c.RunID); name != key {
+		return c, fmt.Errorf("macvm: the run directory %s holds run %s, whose directory is %s", runDir, c.RunID, key)
 	}
 	return c, nil
 }
