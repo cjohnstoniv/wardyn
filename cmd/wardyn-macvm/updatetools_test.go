@@ -87,6 +87,29 @@ func TestUpdateToolsRefusesWithoutTheGuestAgentBeforeBooting(t *testing.T) {
 	}
 }
 
+// TestRefusedStage2LeavesNoJobRoot: a stage-2 run refused for the missing wardyn-guest-agent leaves neither
+// the job's root nor its prep-relay.log behind.
+func TestRefusedStage2LeavesNoJobRoot(t *testing.T) {
+	for _, cmd := range []string{macvm.UpdateToolsCommand, macvm.PrepareCommand} {
+		t.Run(cmd, func(t *testing.T) {
+			root := t.TempDir()
+			ledger := makeLedger(t, root)
+			vmRoot := filepath.Join(root, "vm")
+			d, _, _ := testDeps(&macvmtest.Engine{})
+			var errb lockedBuf
+			d.stderr, d.powerSource = &errb, onAC{}
+			args := append(runnerdArgs(vmRoot, "e1", ledger), "--"+macvm.FlagSockRoot, macvmtest.SockRoot(t))
+			args[0] = cmd
+			if code := run(context.Background(), args, d); code != 1 || !strings.Contains(errb.String(), "wardyn-guest-agent beside this helper") {
+				t.Fatalf("exit %d: %s", code, errb.String())
+			}
+			if _, err := os.Stat(vmRoot); !os.IsNotExist(err) {
+				t.Fatalf("the refused run left %s behind: %v", vmRoot, err)
+			}
+		})
+	}
+}
+
 // placeGuestAgent puts a wardyn-guest-agent beside this test binary, where
 // the helper looks for it, and returns its bytes.
 func placeGuestAgent(t *testing.T) []byte {

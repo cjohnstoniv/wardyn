@@ -327,24 +327,30 @@ func (j jobFlags) admit(name string, d deps) func(context.Context) (func(), erro
 	}
 }
 
-// stage2 is the job's stage 2: the shipped pins, applied over a stage-2 boot
-// whose ctl.sock (JobControlSock) takes runnerd's net_fd.
-func (j jobFlags) stage2(eng macvm.Engine, d deps, relayLog *slog.Logger) (*macvm.ToolsStage, error) {
+// stage2Agent is what a stage-2 boot needs of this helper, checked before the job's root is written: the
+// ledger entry its socket directory is named by, and the wardyn-guest-agent beside the helper.
+func (j jobFlags) stage2Agent() (string, error) {
 	if *j.entry == "" {
-		return nil, fmt.Errorf("a stage-2 boot needs --%s: its socket directory is named by the entry", macvm.FlagLedgerEntry)
-	}
-	t, err := macvm.ShippedTooling()
-	if err != nil {
-		return nil, err
+		return "", fmt.Errorf("a stage-2 boot needs --%s: its socket directory is named by the entry", macvm.FlagLedgerEntry)
 	}
 	agent, err := guestAgentPath()
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	// Refused here, before anything boots: an update that cannot install
+	// Refused before anything boots: an update that cannot install
 	// the agent would leave the base drifted, and every start would boot it.
 	if _, err := os.Stat(agent); err != nil {
-		return nil, fmt.Errorf("stage 2 needs the wardyn-guest-agent beside this helper: %w", err)
+		return "", fmt.Errorf("stage 2 needs the wardyn-guest-agent beside this helper: %w", err)
+	}
+	return agent, nil
+}
+
+// stage2 is the job's stage 2: the shipped pins, applied over a stage-2 boot
+// whose ctl.sock (JobControlSock) takes runnerd's net_fd. agent is stage2Agent's.
+func (j jobFlags) stage2(eng macvm.Engine, d deps, relayLog *slog.Logger, agent string) (*macvm.ToolsStage, error) {
+	t, err := macvm.ShippedTooling()
+	if err != nil {
+		return nil, err
 	}
 	boot := macvm.Stage2BootConfig{Engine: eng, SockRoot: *j.sockRoot, SockKey: macvm.JobSockKey(*j.entry), SockFstat: d.sockFstat, Log: relayLog}
 	return &macvm.ToolsStage{Boot: boot.ToolsBoot(), ToolsOptions: macvm.ToolsOptions{
@@ -373,6 +379,14 @@ func cmdPrepare(ctx context.Context, args []string, d deps) int {
 			return 1
 		}
 	}
+	var agent string
+	if *j.entry != "" {
+		var err error
+		if agent, err = j.stage2Agent(); err != nil {
+			fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
+			return 1
+		}
+	}
 	relayLog, closeLog, err := openRelayLog(*j.root)
 	if err != nil {
 		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
@@ -393,7 +407,7 @@ func cmdPrepare(ctx context.Context, args []string, d deps) int {
 		Admit:           j.admit(macvm.PrepareCommand, d),
 	}
 	if *j.entry != "" {
-		st, err := j.stage2(eng, d, relayLog)
+		st, err := j.stage2(eng, d, relayLog, agent)
 		if err != nil {
 			fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
 			return 1
@@ -422,6 +436,11 @@ func cmdUpdateTools(ctx context.Context, args []string, d deps) int {
 	if code := j.parse(fs, args, d); code != 0 {
 		return code
 	}
+	agent, err := j.stage2Agent()
+	if err != nil {
+		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
+		return 1
+	}
 	relayLog, closeLog, err := openRelayLog(*j.root)
 	if err != nil {
 		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
@@ -433,7 +452,7 @@ func cmdUpdateTools(ctx context.Context, args []string, d deps) int {
 		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
 		return 1
 	}
-	st, err := j.stage2(eng, d, relayLog)
+	st, err := j.stage2(eng, d, relayLog, agent)
 	if err != nil {
 		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
 		return 1
