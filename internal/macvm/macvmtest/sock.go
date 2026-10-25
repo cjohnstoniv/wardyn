@@ -18,7 +18,12 @@ import (
 // TMPDIR would put the sockets past the 103-byte limit.
 func SockRoot(t testing.TB) string {
 	t.Helper()
-	d, err := os.MkdirTemp("/tmp", "wm")
+	// /tmp's real path (/private/tmp on macOS): the ledger walks every directory without following a link.
+	root, err := filepath.EvalSymlinks("/tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := os.MkdirTemp(root, "wm")
 	if err != nil {
 		t.Fatal(err)
 	}
