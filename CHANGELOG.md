@@ -30,6 +30,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `end_reason` `run_ended`, and the server stops holding the pause. Before, the pause stayed open with no end row.
 - `wardyn-runnerd doctor` on a host whose service definition is still an earlier install's, which passes `--org`, now
   checks the organisation that service uses, as `serve` does, instead of the one in `runnerd.json`.
+- On macOS, a base-image download that resumes a partial file now continues after the bytes already on disk instead of
+  overwriting its start, so a restarted preparation no longer re-downloads the whole image after the check rejects
+  it (#3684).
 
 ## [0.10.0-rc.3] — 2026-10-25
 
