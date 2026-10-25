@@ -18,4 +18,10 @@ const (
 	// control plane was unreachable past the token's life: its proxy is stopped
 	// so it has no egress, and its agent is left running.
 	LostOutage LostReason = "outage"
+	// LostGone is a runner run whose sandbox is gone with no exit code (its
+	// container removed, its macOS VM or pod lost, its host restarted with it):
+	// STATE reports from two fresh sessions of its runner, at least
+	// store.RunnerSandboxGoneAfter apart, said so. Nothing is left to keep or
+	// revive, so the run is ended FAILED at once (api endGoneRun).
+	LostGone LostReason = "gone"
 )
