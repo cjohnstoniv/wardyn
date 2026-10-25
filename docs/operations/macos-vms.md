@@ -78,7 +78,7 @@
 
 - It needs `--per-run-cpu` (CPUs) and `--per-run-memory` (GB): the runner's per-run limits, which the preparing VM uses and never raises.
 - `--keep-ipsw` keeps Apple's image after the base is ready, and `--new-image` is the re-prepare.
-- `wardyn-runnerd setup` starts the same preparing itself with the limits it just registered, on a first registration unless the base is ready. A rerun prints the prepare command instead.
+- `wardyn-runnerd setup` starts the same preparing itself with the limits it just registered, on a first registration unless the base is ready, and passes `--keep-ipsw` on to it. A rerun prints the prepare command instead.
 
 | Step | What happens |
 |---|---|
@@ -263,6 +263,7 @@
 | A real `wardyn-proxy` that is attached through standard input only and watched for an early exit | The prep proxy that stage 2 depends on |
 | The VM has exactly one network device of the expected kind | The guest's only route being its own relay |
 | A VM shut down from inside the guest frees its slot | The two-VM count |
+| A release's guest agent carries the same version stamp as its helper | The helper's check that the guest runs its own agent. Both are built in one step from one stamp, but nothing reads the agent's stamp back |
 
 - **Every other check that needs a real Mac** has also not run:
   - the signed helper running from the package;
