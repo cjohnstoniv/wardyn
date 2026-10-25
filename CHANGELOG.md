@@ -37,6 +37,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   error, instead of waiting for a guest that has no network and leaving the reason only in `prep-relay.log` (#3643).
 - On macOS, a base preparation or a tools update whose VM macOS refuses to start for its VM limit now records the leaked
   VM slot, as a run already did, so the slot is counted at once instead of when a run next hits it (#3659).
+- A macOS VM runner's stage-2 network is now removed when the job's VM goes away before its control socket appears, and
+  is no longer torn down when handing it to the helper fails after the helper already took it (#3641, #3642).
+- The macOS VM ledger setup (`wardyn-macvm ledger-setup`, run by the runner package's postinstall) no longer fails on a
+  directory that a login made in the entries directory under an entry's name: the directory moves to a root-only
+  quarantine beside the base and the setup finishes (#3675). An entry file with the immutable flag still stops it.
 
 ## [0.10.0-rc.3] — 2026-10-25
 

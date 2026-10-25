@@ -32,6 +32,7 @@ type SetupConfig struct {
 	afterFlock func()                 // tests: runs once the old lock's flock is held
 	beforeMove func(dst string) error // tests: runs before each entry is moved
 	afterSock  func()                 // tests: runs once sock/ is swept
+	afterSwap  func(old string)       // tests: runs once relink swapped the new entries directory in; old is where the old one now is
 }
 
 const (
@@ -290,6 +291,11 @@ func (s *setup) merge(dst *source, srcs []*source) error {
 
 // quarantineEntry moves src's entry n into a new root-only directory in Base.
 func (s *setup) quarantineEntry(src *source, n, dst string) error {
+	return s.quarantineName(src.f, n, fmt.Sprintf("%s holds %s already; the copy in %s", dst, n, src.f.Name()))
+}
+
+// quarantineName moves from's entry n into a new root-only directory in Base, and logs why.
+func (s *setup) quarantineName(from *os.File, n, why string) error {
 	q, err := os.MkdirTemp(s.c.Base, ".wardyn-quarantine.")
 	if err != nil {
 		return err
@@ -299,8 +305,8 @@ func (s *setup) quarantineEntry(src *source, n, dst string) error {
 		return err
 	}
 	defer qf.Close()
-	s.c.Logf("%s holds %s already; the copy in %s moves to %s", dst, n, src.f.Name(), q)
-	return renameNoReplace(int(src.f.Fd()), n, int(qf.Fd()), n)
+	s.c.Logf("%s moves to %s", why, q)
+	return renameNoReplace(int(from.Fd()), n, int(qf.Fd()), n)
 }
 
 // linkPrefix names the directory relink builds a replacement in, and where
@@ -345,6 +351,14 @@ func (s *setup) relink(dst *source) error {
 		case err == nil:
 			linked++
 		case errors.Is(err, unix.ENOENT): // its owner removed it
+		case errors.Is(err, unix.EPERM) && notRegular(dst.f, n):
+			// Not a file a helper reads as a VM's entry, and a hard link to it fails: any login can make
+			// one in this world-writable directory, and it must not stop every setup. It goes to a
+			// root-only quarantine. A regular file that fails the same way (the immutable flag) cannot be
+			// renamed either, so that one still stops the run.
+			if err := s.quarantineName(dst.f, n, fmt.Sprintf("%s holds %s, which is not a file and cannot be linked", dst.f.Name(), n)); err != nil && !errors.Is(err, unix.ENOENT) {
+				return err
+			}
 		default:
 			return fmt.Errorf("admission: linking %s into %s: %w", filepath.Join(dst.f.Name(), n), tmp, err)
 		}
@@ -358,8 +372,19 @@ func (s *setup) relink(dst *source) error {
 	if err := renameSwap(int(s.base.Fd()), filepath.Base(tmp), entriesName); err != nil {
 		return err
 	}
-	s.discard(filepath.Base(tmp))
+	if s.c.afterSwap != nil {
+		s.c.afterSwap(tmp)
+	}
+	if s.keepUnpublished(filepath.Base(tmp)) {
+		s.discard(filepath.Base(tmp))
+	}
 	return nil
+}
+
+// notRegular reports whether dir's entry n is there and is not a regular file.
+func notRegular(dir *os.File, n string) bool {
+	var st unix.Stat_t
+	return unix.Fstatat(int(dir.Fd()), n, &st, unix.AT_SYMLINK_NOFOLLOW) == nil && uint32(st.Mode)&unix.S_IFMT != unix.S_IFREG
 }
 
 // discard empties and removes name, a linkPrefix directory in Base.
@@ -381,6 +406,57 @@ func (s *setup) discard(name string) {
 		}
 	}
 	_ = unix.Unlinkat(int(s.base.Fd()), name, unix.AT_REMOVEDIR)
+}
+
+// keepUnpublished moves each name of name, the entries directory relink just swapped out, to a root-only
+// quarantine unless its inode is also in the published entries directory, so the discard that follows
+// unlinks only second links. Under the setup's lock every name is in both, and none moves. It reports
+// whether the discard may go on: not after a name it could not move.
+func (s *setup) keepUnpublished(name string) bool {
+	f, _, err := s.rootDir(s.base, name)
+	if f == nil {
+		return true // discard says why
+	}
+	held, err := s.publishedInodes()
+	names, nerr := dirNames(f)
+	if err != nil || nerr != nil {
+		s.c.Logf("left %s: %v", f.Name(), errors.Join(err, nerr))
+		return false
+	}
+	ok := true
+	for _, n := range names {
+		var st unix.Stat_t
+		if unix.Fstatat(int(f.Fd()), n, &st, unix.AT_SYMLINK_NOFOLLOW) != nil || held[[2]uint64{uint64(st.Dev), st.Ino}] {
+			continue
+		}
+		why := fmt.Sprintf("%s holds %s, which the entries directory does not", f.Name(), n)
+		if err := s.quarantineName(f, n, why); err != nil && !errors.Is(err, unix.ENOENT) {
+			s.c.Logf("left %s: %v", filepath.Join(f.Name(), n), err)
+			ok = false
+		}
+	}
+	return ok
+}
+
+// publishedInodes is the device and inode of each name in Base's entries directory.
+func (s *setup) publishedInodes() (map[[2]uint64]bool, error) {
+	f, _, err := s.openDir(int(s.base.Fd()), entriesName, filepath.Join(s.base.Name(), entriesName))
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	names, err := f.Readdirnames(-1)
+	if err != nil {
+		return nil, err
+	}
+	held := make(map[[2]uint64]bool, len(names))
+	for _, n := range names {
+		var st unix.Stat_t
+		if err := unix.Fstatat(int(f.Fd()), n, &st, unix.AT_SYMLINK_NOFOLLOW); err == nil {
+			held[[2]uint64{uint64(st.Dev), st.Ino}] = true
+		}
+	}
+	return held, nil
 }
 
 // stage moves dst's entries (dst is nil when there is no entries directory to
@@ -417,7 +493,9 @@ func (s *setup) stage(dst *source, srcs []*source) error {
 	if got, err := readNames(tmp); err != nil || len(got) != moved {
 		return notInstalled("moving the macOS VM entries found %d of %d (%v)", len(got), moved, err)
 	}
-	if _, err := os.Lstat(path); err == nil {
+	if used, err := occupied(path); err != nil {
+		return err
+	} else if used {
 		if err := quarantineIn(s.c.Base, path); err != nil {
 			return err
 		}
@@ -599,11 +677,27 @@ func readNames(dir string) ([]string, error) {
 	return d.Readdirnames(-1)
 }
 
+// occupied reports whether anything is at path. An Lstat error other than not-exist is returned, because the
+// rename that follows is no refusal: over an empty directory it succeeds and replaces it (nothing is lost, as
+// it is empty), so the step stops here instead.
+func occupied(path string) (bool, error) {
+	_, err := os.Lstat(path)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, os.ErrNotExist):
+		return false, nil
+	}
+	return false, err
+}
+
 // moveAll renames each of names from src into dst, never over something there.
 func (s *setup) moveAll(src string, names []string, dst string) error {
 	for _, n := range names {
 		to := filepath.Join(dst, n)
-		if _, err := os.Lstat(to); err == nil {
+		if used, err := occupied(to); err != nil {
+			return err
+		} else if used {
 			return notInstalled("two macOS VM entries are named %s (%s)", n, src)
 		}
 		if s.c.beforeMove != nil {
@@ -644,7 +738,9 @@ func (s *setup) sock(from string) error {
 	if err := s.moveAll(src, keep, tmp); err != nil {
 		return err
 	}
-	if _, err := os.Lstat(dst); err == nil {
+	if used, err := occupied(dst); err != nil {
+		return err
+	} else if used {
 		if err := quarantineIn(s.c.Base, dst); err != nil {
 			return err
 		}

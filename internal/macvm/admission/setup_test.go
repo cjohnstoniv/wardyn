@@ -1011,6 +1011,65 @@ func TestSetupFailedMigrationKeepsEveryEntryCounted(t *testing.T) {
 	}
 }
 
+// A directory named like an entry cannot be hard-linked, and any login can make one in the world-writable
+// entries directory. The relink moves it to a root-only quarantine and finishes, every real entry kept.
+func TestSetupRelinkQuarantinesAnEntryThatCannotBeLinked(t *testing.T) {
+	r := newRig(t, bigMac())
+	names := admitN(t, r, 2)
+	planted := filepath.Join(r.dir, "e-planted.json")
+	if err := os.MkdirAll(filepath.Join(planted, "inside"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := Setup(r.setupCfg(func(c *SetupConfig) { c.Fstat = drift(t, r, "03777") })); err != nil {
+		t.Fatalf("Setup wedged on a planted directory: %v", err)
+	}
+	if _, err := os.Lstat(planted); err == nil {
+		t.Fatal("the planted directory is still in the entries directory")
+	}
+	q, _ := filepath.Glob(filepath.Join(filepath.Dir(r.dir), quarantinePrefix+"*", "e-planted.json", "inside"))
+	if len(q) != 1 {
+		t.Fatalf("the planted directory was not quarantined: %v", q)
+	}
+	if n := counted(t, r); n != 2 {
+		t.Fatalf("a helper counts %d of 2 entries", n)
+	}
+	wantEntries(t, r, names, "the relink past a planted directory")
+	wantLayout(t, r)
+}
+
+// A name in the old entries directory whose inode the published one does not hold is not unlinked with the
+// rest: it moves to a root-only quarantine. Nothing makes one under the setup's lock, so a hook plants it
+// after the swap.
+func TestSetupDiscardKeepsAnEntryThePublishedDirectoryLacks(t *testing.T) {
+	r := newRig(t, bigMac())
+	names := admitN(t, r, 2)
+	var late string
+	plant := func(c *SetupConfig) {
+		c.Fstat = drift(t, r, "03777")
+		c.afterSwap = func(old string) {
+			late = filepath.Join(old, "e-late.json")
+			if err := os.WriteFile(late, []byte("late"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := Setup(r.setupCfg(plant)); err != nil {
+		t.Fatal(err)
+	}
+	q, _ := filepath.Glob(filepath.Join(filepath.Dir(r.dir), quarantinePrefix+"*", "e-late.json"))
+	if len(q) != 1 || readFile(t, q[0]) != "late" {
+		t.Fatalf("the name the published directory lacks was not quarantined: %v", q)
+	}
+	if m, _ := filepath.Glob(filepath.Join(filepath.Dir(r.dir), "."+entriesName+"-link.*")); len(m) != 0 {
+		t.Fatalf("link directories left: %v", m)
+	}
+	if n := counted(t, r); n != 2 {
+		t.Fatalf("a helper counts %d of 2 entries", n)
+	}
+	wantEntries(t, r, names, "the discard")
+	wantLayout(t, r)
+}
+
 // DR-0431 residual: an entry its owner releases between a failed migration and
 // the retry stays released.
 func TestSetupRetryNeverResurrectsAReleasedEntry(t *testing.T) {
@@ -1192,9 +1251,7 @@ func TestSetupSourceInspectErrorFailsClosed(t *testing.T) {
 		t.Fatalf("Setup with a source's fstat failing: %v (failed %v)", err, failed)
 	}
 	if err := r.openErr(); err == nil {
-		if n := counted(t, r); n != 2 {
-			t.Fatalf("before the retry a fresh helper counts %d of 2 entries", n)
-		}
+		t.Fatal("before the retry a fresh helper opened the ledger; it must refuse until the new base has its lock")
 	}
 	if n := everyEntry(t, r, names); n != 2 {
 		t.Fatalf("after the refused Setup %d copies of 2 entries are on disk", n)
@@ -1244,4 +1301,27 @@ func TestSetupSkipsUntrustedSources(t *testing.T) {
 		t.Fatalf("entries carried from untrusted sources: %v", got)
 	}
 	wantLayout(t, r)
+}
+
+// An Lstat that fails for a reason other than not-exist is an error, not "nothing there": the rename after
+// it would replace an empty directory.
+func TestSetupOccupiedRefusesOnAnyOtherLstatError(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "d"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		path string
+		used bool
+		err  bool
+	}{
+		{filepath.Join(dir, "d"), true, false},
+		{filepath.Join(dir, "none"), false, false},
+		{filepath.Join(dir, strings.Repeat("x", 300)), false, true}, // ENAMETOOLONG
+	} {
+		used, err := occupied(tc.path)
+		if used != tc.used || (err != nil) != tc.err {
+			t.Errorf("occupied(%.40s): %v, %v; want %v, error %v", tc.path, used, err, tc.used, tc.err)
+		}
+	}
 }
