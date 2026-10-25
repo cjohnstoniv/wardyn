@@ -390,6 +390,25 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(new Set(tsInlineKeys(setupTs, "SetupStatus", "features"))).toEqual(new Set(goTags));
   });
 
+  // internal/types/machine.go: AgentRun.vm_machine and machine_kind.
+  it("VMMachine: full parity with the TS VMMachine mirror", () => {
+    const goTags = goJSONTags(readFileSync(join(root, "internal/types/machine.go"), "utf8"), "VMMachine");
+    expect(goTags).toContain("guest_os");
+    const runsTs = readFileSync(join(root, "ui/src/app/lib/types/runs.ts"), "utf8");
+    expect(new Set(tsInterfaceTopKeys(runsTs, "VMMachine"))).toEqual(new Set(goTags));
+  });
+
+  it("MachineKind: the TS VMKind is exactly Go's non-container kinds", () => {
+    const machineGo = readFileSync(join(root, "internal/types/machine.go"), "utf8");
+    const goKinds = [...machineGo.matchAll(/^\s*Machine\w+\s+MachineKind\s*=\s*"([a-z_]+)"/gm)].map((m) => m[1]);
+    expect(goKinds).toContain("macos_vm");
+    const kindTs = readFileSync(join(root, "ui/src/app/lib/types/machine-kind.ts"), "utf8");
+    const vm = /export type VMKind = ([^;]+);/.exec(kindTs);
+    if (!vm) throw new Error("machine-kind.ts: no VMKind");
+    const tsVMKinds = [...vm[1].matchAll(/"([a-z_]+)"/g)].map((m) => m[1]);
+    expect(new Set(tsVMKinds)).toEqual(new Set(goKinds.filter((k) => k !== "container")));
+  });
+
   // GET /runs/{id}/sign-in: RunSignIn mirrors runSignInResponse.
   it("runSignInResponse (GET /runs/{id}/sign-in): full parity with the TS RunSignIn mirror", () => {
     const goTags = goJSONTags(readFileSync(join(root, "internal/api/run_sign_in.go"), "utf8"), "runSignInResponse");
