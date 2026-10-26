@@ -480,15 +480,18 @@ func (m *macOSVMs) vmGone(e admission.Entry) bool {
 	return err != nil || got != start
 }
 
-// reconcilePrepare releases this runner's prepare entries whose helper has exited: prepare has no run
-// directory, and the ledger itself refuses while a VM process of this user could still be its VM.
+// reconcilePrepare releases this runner's prepare and tools-update entries whose helper has exited
+// (the helper releases nothing, startJob): neither job has a run directory, and the ledger itself
+// refuses while a VM process of this user could still be its VM.
 func (m *macOSVMs) reconcilePrepare() {
-	for _, e := range m.own(admission.KindPrepare) {
-		if !m.vmGone(e) {
-			continue
-		}
-		if err := m.ledger.ReclaimOwn(e.ID, ""); err != nil {
-			slog.Warn("macOS VM ledger: release a finished prepare", "error", err.Error())
+	for _, k := range []admission.Kind{admission.KindPrepare, admission.KindToolsUpdate} {
+		for _, e := range m.own(k) {
+			if !m.vmGone(e) {
+				continue
+			}
+			if err := m.ledger.ReclaimOwn(e.ID, ""); err != nil {
+				slog.Warn("macOS VM ledger: release a finished job", "kind", string(k), "error", err.Error())
+			}
 		}
 	}
 }

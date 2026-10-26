@@ -187,23 +187,27 @@ func TestMacOSVMRecomputeTombstones(t *testing.T) {
 	}
 }
 
-// A prepare entry of this runner's whose helper has exited is released by the recompute.
+// A prepare or tools-update entry of this runner's whose helper has exited is released by the recompute.
 func TestMacOSVMReconcilesFinishedPrepare(t *testing.T) {
-	r := newMacLedgerRig(t)
-	r.host.setProcs(admission.Proc{PID: 30, UID: 501, Start: 3, Name: "wardyn-runnerd"})
-	m := r.open(t)
-	e, err := m.ledger.Admit(admission.Request{Kind: admission.KindPrepare, GuestCPUs: 4, GuestMemory: 8 * gib,
-		DiskReserve: admission.PrepareDiskReservation(macvm.BaseDiskBytes), OwnerPID: 30, OwnerStart: 3})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !m.preparing() {
-		t.Fatal("a live prepare is not reported")
-	}
-	r.host.setProcs()
-	m.recompute()
-	if counted, _ := m.ledger.Counted(); len(counted) != 0 {
-		t.Fatalf("finished prepare %s still counted: %+v", e.ID, counted)
+	for _, kind := range []admission.Kind{admission.KindPrepare, admission.KindToolsUpdate} {
+		t.Run(string(kind), func(t *testing.T) {
+			r := newMacLedgerRig(t)
+			r.host.setProcs(admission.Proc{PID: 30, UID: 501, Start: 3, Name: "wardyn-runnerd"})
+			m := r.open(t)
+			e, err := m.ledger.Admit(admission.Request{Kind: kind, GuestCPUs: 4, GuestMemory: 8 * gib,
+				DiskReserve: admission.PrepareDiskReservation(macvm.BaseDiskBytes), OwnerPID: 30, OwnerStart: 3})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if kind == admission.KindPrepare && !m.preparing() {
+				t.Fatal("a live prepare is not reported")
+			}
+			r.host.setProcs()
+			m.recompute()
+			if counted, _ := m.ledger.Counted(); len(counted) != 0 {
+				t.Fatalf("finished %s %s still counted: %+v", kind, e.ID, counted)
+			}
+		})
 	}
 }
 

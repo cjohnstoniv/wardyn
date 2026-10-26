@@ -31,6 +31,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   VM. Which came first is read from the time since the Mac started, so a change of the clock cannot make that VM look
   older than its helper. A process it cannot prove is not that VM still keeps the slot, and a slot recorded by an
   earlier release frees once no macOS VM, helper or Docker engine of that user runs.
+- A finished tools update of the macOS VM base no longer keeps one of the Mac's two VM slots until the Mac restarts
+  (#3700). The runner now frees its entry once its helper has exited, as it does for a finished prepare.
 - A change of the Mac's clock no longer makes the macOS VM ledger take its live VMs for an earlier boot's. The ledger
   told boots apart by `kern.boottime`, which macOS moves with the clock, so a clock change could stop counting a live
   VM, refuse its helper and delete its runner's entries. Each entry now records the boot's session, and only a
