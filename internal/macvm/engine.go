@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"strconv"
@@ -121,6 +122,17 @@ func IsVMLimit(domain string, code int) bool {
 // ErrVMLimit is what an engine's Start wraps when the framework refused with its VM limit. The helper
 // matches it by type, never by the framework's text.
 var ErrVMLimit = errors.New("macvm: Apple's framework refused to start another macOS VM (VZErrorVirtualMachineLimitExceeded)")
+
+// reportVMLimit runs leaked when err is the framework's VM limit refusal: the helper records the slot the
+// ledger cannot account for. The hook's own failure is logged; the caller still fails with err.
+func reportVMLimit(err error, leaked func() error, log *slog.Logger) {
+	if !errors.Is(err, ErrVMLimit) || leaked == nil {
+		return
+	}
+	if lerr := leaked(); lerr != nil {
+		log.Error("macvm: recording a leaked slot failed", "err", lerr.Error())
+	}
+}
 
 // RestoreImage is what LoadRestoreImage reads from a restore image.
 type RestoreImage struct {

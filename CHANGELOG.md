@@ -30,6 +30,20 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `end_reason` `run_ended`, and the server stops holding the pause. Before, the pause stayed open with no end row.
 - `wardyn-runnerd doctor` on a host whose service definition is still an earlier install's, which passes `--org`, now
   checks the organisation that service uses, as `serve` does, instead of the one in `runnerd.json`.
+- On macOS, a base-image download that resumes a partial file now continues after the bytes already on disk instead of
+  overwriting its start, so a restarted preparation no longer re-downloads the whole image after the check rejects
+  it (#3684).
+- On macOS, a base preparation whose network relay stops on a virtual network device failure now fails with the relay's
+  error, instead of waiting for a guest that has no network and leaving the reason only in `prep-relay.log` (#3643).
+- On macOS, a base preparation or a tools update whose VM macOS refuses to start for its VM limit now records the leaked
+  VM slot, as a run already did, so the slot is counted at once instead of when a run next hits it (#3659).
+- A macOS VM runner's stage-2 network is now removed when the job's VM goes away before its control socket appears, and
+  is no longer torn down when handing it to the helper fails after the helper already took it (#3641, #3642).
+- The macOS VM ledger setup (`wardyn-macvm ledger-setup`, run by the runner package's postinstall) no longer fails on a
+  directory that a login made in the entries directory under an entry's name: the directory moves to a root-only
+  quarantine beside the base and the setup finishes (#3675). An entry file with the immutable flag still stops it.
+- A Kubernetes runner's proxy now logs `wardyn-proxy: listening` when it has bound its port, after its first run-token
+  renewal, not while it is still waiting for that renewal (#3632).
 
 ## [0.10.0-rc.3] — 2026-10-25
 

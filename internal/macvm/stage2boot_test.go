@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -275,5 +276,37 @@ func TestStage2BootWithoutNetFDStartsNothing(t *testing.T) {
 	}
 	if len(eng.Machines()) != 0 {
 		t.Fatal("a VM was built without its network")
+	}
+}
+
+// A stage-2 VM the framework refuses to start with its VM limit calls the Leaked hook once (a tools update's
+// VM and prepare's stage 2 are this boot); any other start error does not.
+func TestStage2BootLeakedHook(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		startErr  error
+		wantCalls int
+	}{
+		{"vm limit", fmt.Errorf("%w: boom", macvm.ErrVMLimit), 1},
+		{"other error", errors.New("boom"), 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := macvmtest.SockRoot(t)
+			calls := 0
+			cfg := macvm.Stage2BootConfig{Engine: &macvmtest.Engine{StartErr: tc.startErr}, SockRoot: root, SockKey: "0123456789ab",
+				SockFstat: macvmtest.SockFstat, Leaked: func() error { calls++; return nil }}
+			dir := t.TempDir()
+			spec := macvm.MachineSpec{CPUs: 4, MemoryBytes: 8 << 30, MinCPUs: 2, MinMemoryBytes: 4 << 30, HardwareModel: []byte("hw"),
+				MachineIdentifier: []byte("id"), DiskPath: filepath.Join(dir, macvm.DiskFile), AuxPath: filepath.Join(dir, macvm.AuxFile)}
+			done := make(chan error, 1)
+			go func() { _, _, err := cfg.ToolsBoot()(context.Background(), spec); done <- err }()
+			sendNetFD(t, filepath.Join(macvm.SockDir(root, "0123456789ab"), macvm.ControlSock))
+			if err := <-done; err == nil || !errors.Is(err, tc.startErr) {
+				t.Fatalf("the boot returned %v, want the start error", err)
+			}
+			if calls != tc.wantCalls {
+				t.Fatalf("Leaked calls: %d, want %d", calls, tc.wantCalls)
+			}
+		})
 	}
 }

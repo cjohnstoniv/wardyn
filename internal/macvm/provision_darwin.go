@@ -81,7 +81,7 @@ func (p provisionDarwin) Boot(disk, aux string, hardwareModel, machineID []byte,
 		return FirstBoot{}, fmt.Errorf("macvm provision: network socket: %w", err)
 	}
 	if h == nil {
-		return FirstBoot{}, provisionCError("start", cErr)
+		return FirstBoot{}, classifyProvisionStart(provisionCError("start", cErr))
 	}
 
 	vm := &provisionVM{h: h, done: make(chan error, 1), exited: make(chan struct{})}

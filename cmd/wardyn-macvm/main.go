@@ -327,26 +327,40 @@ func (j jobFlags) admit(name string, d deps) func(context.Context) (func(), erro
 	}
 }
 
-// stage2 is the job's stage 2: the shipped pins, applied over a stage-2 boot
-// whose ctl.sock (JobControlSock) takes runnerd's net_fd.
-func (j jobFlags) stage2(eng macvm.Engine, d deps, relayLog *slog.Logger) (*macvm.ToolsStage, error) {
-	if *j.entry == "" {
-		return nil, fmt.Errorf("a stage-2 boot needs --%s: its socket directory is named by the entry", macvm.FlagLedgerEntry)
+// leaked is the hook that records the framework slot a refused VM start of this job left behind.
+func (j jobFlags) leaked(d deps) func() error {
+	return func() error {
+		return leaked(macvm.RunConfig{RunnerID: *j.runner, LedgerEntry: *j.entry, LedgerDir: *j.ledgerDir}, d)
 	}
+}
+
+// stage2Agent is what a stage-2 boot needs of this helper, checked before the job's root is written: the
+// ledger entry its socket directory is named by, and the wardyn-guest-agent beside the helper.
+func (j jobFlags) stage2Agent() (string, error) {
+	if *j.entry == "" {
+		return "", fmt.Errorf("a stage-2 boot needs --%s: its socket directory is named by the entry", macvm.FlagLedgerEntry)
+	}
+	agent, err := guestAgentPath()
+	if err != nil {
+		return "", err
+	}
+	// Refused before anything boots: an update that cannot install
+	// the agent would leave the base drifted, and every start would boot it.
+	if _, err := os.Stat(agent); err != nil {
+		return "", fmt.Errorf("stage 2 needs the wardyn-guest-agent beside this helper: %w", err)
+	}
+	return agent, nil
+}
+
+// stage2 is the job's stage 2: the shipped pins, applied over a stage-2 boot
+// whose ctl.sock (JobControlSock) takes runnerd's net_fd. agent is stage2Agent's.
+func (j jobFlags) stage2(eng macvm.Engine, d deps, relayLog *slog.Logger, agent string) (*macvm.ToolsStage, error) {
 	t, err := macvm.ShippedTooling()
 	if err != nil {
 		return nil, err
 	}
-	agent, err := guestAgentPath()
-	if err != nil {
-		return nil, err
-	}
-	// Refused here, before anything boots: an update that cannot install
-	// the agent would leave the base drifted, and every start would boot it.
-	if _, err := os.Stat(agent); err != nil {
-		return nil, fmt.Errorf("stage 2 needs the wardyn-guest-agent beside this helper: %w", err)
-	}
-	boot := macvm.Stage2BootConfig{Engine: eng, SockRoot: *j.sockRoot, SockKey: macvm.JobSockKey(*j.entry), SockFstat: d.sockFstat, Log: relayLog}
+	boot := macvm.Stage2BootConfig{Engine: eng, SockRoot: *j.sockRoot, SockKey: macvm.JobSockKey(*j.entry), SockFstat: d.sockFstat,
+		Leaked: j.leaked(d), Log: relayLog}
 	return &macvm.ToolsStage{Boot: boot.ToolsBoot(), ToolsOptions: macvm.ToolsOptions{
 		Tooling: t, Cache: filepath.Join(macvm.Layout{Root: *j.root}.CacheDir(), "tools"),
 		// Stage 2 replaces the guest agent where stage 1 installed it, with
@@ -373,6 +387,14 @@ func cmdPrepare(ctx context.Context, args []string, d deps) int {
 			return 1
 		}
 	}
+	var agent string
+	if *j.entry != "" {
+		var err error
+		if agent, err = j.stage2Agent(); err != nil {
+			fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
+			return 1
+		}
+	}
 	relayLog, closeLog, err := openRelayLog(*j.root)
 	if err != nil {
 		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
@@ -391,9 +413,10 @@ func cmdPrepare(ctx context.Context, args []string, d deps) int {
 		SetupByHandWait: *byHand,
 		Progress:        func(ev macvm.PrepareEvent) { _ = enc.Encode(ev) },
 		Admit:           j.admit(macvm.PrepareCommand, d),
+		Leaked:          j.leaked(d),
 	}
 	if *j.entry != "" {
-		st, err := j.stage2(eng, d, relayLog)
+		st, err := j.stage2(eng, d, relayLog, agent)
 		if err != nil {
 			fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
 			return 1
@@ -422,6 +445,11 @@ func cmdUpdateTools(ctx context.Context, args []string, d deps) int {
 	if code := j.parse(fs, args, d); code != 0 {
 		return code
 	}
+	agent, err := j.stage2Agent()
+	if err != nil {
+		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
+		return 1
+	}
 	relayLog, closeLog, err := openRelayLog(*j.root)
 	if err != nil {
 		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
@@ -433,7 +461,7 @@ func cmdUpdateTools(ctx context.Context, args []string, d deps) int {
 		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
 		return 1
 	}
-	st, err := j.stage2(eng, d, relayLog)
+	st, err := j.stage2(eng, d, relayLog, agent)
 	if err != nil {
 		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
 		return 1
@@ -492,7 +520,11 @@ func openRelayLog(root string) (*slog.Logger, func(), error) {
 	}
 	// gVisor's netstack logs to stderr by default; send it here too.
 	glog.SetTarget(glog.JSONEmitter{Writer: &glog.Writer{Next: f}})
-	return slog.New(slog.NewJSONHandler(f, nil)), func() { _ = f.Close() }, nil
+	return slog.New(slog.NewJSONHandler(f, nil)), func() {
+		// A netstack line after the close is dropped, not written to the closed file.
+		glog.SetTarget(glog.JSONEmitter{Writer: &glog.Writer{Next: io.Discard}})
+		_ = f.Close()
+	}, nil
 }
 
 // guestAgentPath is the darwin/arm64 wardyn-guest-agent beside this helper:

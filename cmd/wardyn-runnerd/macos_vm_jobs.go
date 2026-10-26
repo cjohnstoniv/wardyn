@@ -29,6 +29,8 @@ import (
 var (
 	jobSockPoll  = time.Second
 	jobDialTries = 20
+	// jobNetCheckWait bounds handNet's question to a boot whose net_fd send failed.
+	jobNetCheckWait = 10 * time.Second
 )
 
 // watchJobs starts handNet for each of this runner's claimed prepare and tools-update entries whose
@@ -85,8 +87,14 @@ func (m *macOSVMs) handNet(ctx context.Context, e admission.Entry) {
 		if _, err := os.Lstat(sock); err == nil {
 			break
 		}
-		if !wait() || m.vmGone(e) {
+		if !wait() {
 			m.markDockerWait(e.ID, false)
+			return
+		}
+		if m.vmGone(e) {
+			// A network an earlier runnerd started for this job and this one adopted is still up.
+			m.markDockerWait(e.ID, false)
+			m.removeJobNet(ctx, e.ID)
 			return
 		}
 	}
@@ -106,19 +114,37 @@ func (m *macOSVMs) handNet(ctx context.Context, e admission.Entry) {
 		err = m.sendJobNet(ctx, e.ID, attach)
 		_ = attach.Close()
 		if err != nil {
-			undo()
 			slog.Warn("macOS VM base: hand the stage-2 boot its network", "error", err.Error())
-			return
+			// The send can fail after the helper took the descriptor (its reply lost, a stop of this
+			// runnerd), and tearing down a network the helper holds strands it until its own wait ends.
+			// So ask it, under a context a stop does not cancel: undo only when it says it has none.
+			chk, cancel := context.WithTimeout(context.WithoutCancel(ctx), jobNetCheckWait)
+			held, aerr := m.jobNetAttached(chk, e.ID)
+			cancel()
+			if aerr != nil {
+				// Unknown: the helper may hold it, so keep it while the VM lives (the hold loop below
+				// removes it once the VM is gone); nothing else would, before the next start's sweep.
+				slog.Warn("macOS VM base: the stage-2 network is kept, the boot could not be asked", "error", aerr.Error())
+			} else if !held {
+				undo()
+				return
+			}
 		}
 	}
 	m.markDockerWait(e.ID, false)
 	for wait() {
 		if m.vmGone(e) {
-			if err := m.prepRemove(context.WithoutCancel(ctx), e.ID); err != nil {
-				slog.Warn("macOS VM base: remove the stage-2 network", "error", err.Error())
-			}
+			m.removeJobNet(ctx, e.ID)
 			return
 		}
+	}
+}
+
+// removeJobNet removes the job's stage-2 network by its names, under a context a stop of this runnerd
+// does not cancel.
+func (m *macOSVMs) removeJobNet(ctx context.Context, id string) {
+	if err := m.prepRemove(context.WithoutCancel(ctx), id); err != nil {
+		slog.Warn("macOS VM base: remove the stage-2 network", "error", err.Error())
 	}
 }
 

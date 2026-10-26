@@ -74,7 +74,7 @@ printf '#!/bin/sh\necho 501\n' >"$TB/stat"; printf '#!/bin/sh\necho "launchctl $
 printf '#!/bin/sh\necho "$0 $*" >>"$STUB_LOG"\n' >"$TB/ln"; cp "$TB/ln" "$TB/mkdir"; chmod +x "$TB"/*
 : >"$STUB_LOG"
 PATH="$TB:$PATH" sh "${SRC}/pkg-scripts/preinstall" || fail "preinstall failed (a failing preinstall aborts the install)"
-PATH="$TB:$PATH" sh "${SRC}/pkg-scripts/postinstall" || fail "postinstall failed when launchctl refused"
+WARDYN_PKG_PATH="$TB" sh "${SRC}/pkg-scripts/postinstall" || fail "postinstall failed when launchctl refused"
 grep -q 'launchctl bootout gui/501/com.wardyn.runnerd.managed' "$STUB_LOG" || fail "preinstall did not stop the agent"
 grep -q 'launchctl bootstrap gui/501 /Library/LaunchAgents/com.wardyn.runnerd.managed.plist' "$STUB_LOG" || fail "postinstall did not load the agent"
 grep -q 'ln -sf /usr/local/wardyn/bin/wardyn-runnerd /usr/local/bin/wardyn-runnerd' "$STUB_LOG" || fail "postinstall did not link the runner"
