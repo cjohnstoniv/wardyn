@@ -37,7 +37,10 @@ type Manager struct {
 	// pendingLogged is when each held run's containment-pending warning was last logged.
 	pendingLogged map[uuid.UUID]time.Time
 	// retryLogs spaces out the "will retry" lines of the containment and replay loops, which tick every second.
-	retryLogs     retrylog.Dedupe
+	retryLogs retrylog.Dedupe
+	// containLogs is each run's last logged containment failure (logContainFailure): the attempts are
+	// never spaced out, only the identical lines between them.
+	containLogs   map[uuid.UUID]*containLog
 	dir           string
 	root          *os.Root
 	sub           substrate.Substrate
@@ -441,7 +444,7 @@ func (m *Manager) CheckLapses(ctx context.Context) error {
 				}
 				continue
 			}
-			errs = append(errs, fmt.Errorf("contain run %s: %w", id, err))
+			errs = append(errs, errContain{run: id, err: err})
 			continue
 		}
 		m.mu.Lock()
@@ -453,6 +456,8 @@ func (m *Manager) CheckLapses(ctx context.Context) error {
 		}
 		r = current
 		delete(m.pendingLogged, id)
+		recovered, failed := m.containLogs[id]
+		delete(m.containLogs, id)
 		if r.ProxyStoppedAt == nil || (r.MutationFailure != nil && !r.MutationFailure.Contained) {
 			before := r
 			at := m.now().UTC()
@@ -471,6 +476,9 @@ func (m *Manager) CheckLapses(ctx context.Context) error {
 			}
 		}
 		m.mu.Unlock()
+		if failed {
+			slog.InfoContext(ctx, "runner containment recovered", "run_id", id, "repeated", recovered.repeated)
+		}
 	}
 	return errors.Join(errs...)
 }
@@ -485,6 +493,53 @@ type errContainmentSuperseded struct {
 
 func (e errContainmentSuperseded) Error() string {
 	return fmt.Sprintf("contain run %s: mutation changed during containment (%s changed; selected by %s)", e.run, e.changed, e.selectedBy)
+}
+
+// errContain is one run's failed containment attempt, kept typed so the containment loop logs it per run
+// (logContainFailure). Its text and its Unwrap are those of fmt.Errorf("contain run %s: %w").
+type errContain struct {
+	run uuid.UUID
+	err error
+}
+
+func (e errContain) Error() string { return fmt.Sprintf("contain run %s: %v", e.run, e.err) }
+func (e errContain) Unwrap() error { return e.err }
+
+// containSummaryEvery spaces out the repeats of one run's identical containment failure.
+const containSummaryEvery = time.Minute
+
+// containLog is the failure last logged for one run, and its identical repeats not logged since.
+type containLog struct {
+	err      string
+	next     time.Time
+	repeated int
+}
+
+// logContainFailure logs one run's failed containment attempt at ERROR: a first failure, or one whose
+// error changed, at once; identical repeats as one summary line at most once per containSummaryEvery,
+// saying how many went unlogged. A success logs at once (CheckLapses). Only the line is spaced out:
+// every attempt still runs, and still fails its pass.
+func (m *Manager) logContainFailure(ctx context.Context, c errContain) {
+	m.mu.Lock()
+	now, text := m.now(), c.err.Error()
+	l := m.containLogs[c.run]
+	log, repeated := true, 0
+	switch {
+	case l == nil || l.err != text:
+		if m.containLogs == nil {
+			m.containLogs = map[uuid.UUID]*containLog{}
+		}
+		m.containLogs[c.run] = &containLog{err: text, next: now.Add(containSummaryEvery)}
+	case now.Before(l.next):
+		l.repeated++
+		log = false
+	default:
+		repeated, l.repeated, l.next = l.repeated, 0, now.Add(containSummaryEvery)
+	}
+	m.mu.Unlock()
+	if log {
+		slog.ErrorContext(ctx, "runner containment will retry", "run_id", c.run, "error", c, "repeated", repeated)
+	}
 }
 
 // changedContainmentField is the first thing sameContainmentTarget saw differ.
@@ -520,8 +575,8 @@ func (m *Manager) selectedBy(id uuid.UUID, r localRun) string {
 	return "lease_lapsed"
 }
 
-// logContainmentErrors logs a tick's errors: a superseded pass at WARN, one line each, and everything
-// else at ERROR as one line, through logRetry.
+// logContainmentErrors logs a tick's errors: a superseded pass at WARN, one line each, a run's failed
+// containment per run (logContainFailure), and everything else at ERROR as one line, through logRetry.
 func (m *Manager) logContainmentErrors(ctx context.Context, err error) {
 	var other []error
 	var walk func(error)
@@ -535,6 +590,11 @@ func (m *Manager) logContainmentErrors(ctx context.Context, err error) {
 		var sup errContainmentSuperseded
 		if errors.As(e, &sup) {
 			slog.WarnContext(ctx, "runner containment superseded, re-checking", "run_id", sup.run, "changed", sup.changed, "selected_by", sup.selectedBy)
+			return
+		}
+		var c errContain
+		if errors.As(e, &c) {
+			m.logContainFailure(ctx, c)
 			return
 		}
 		other = append(other, e)
