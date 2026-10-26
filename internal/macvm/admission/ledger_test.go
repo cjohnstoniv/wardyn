@@ -885,9 +885,10 @@ func TestClaimHelperRefusals(t *testing.T) {
 // restart included, until its owner removes it.
 func TestUnparsableEntryCountsUntilRemoved(t *testing.T) {
 	h := bigMac()
+	h.boot = time.Now().Add(-time.Hour).UnixMicro()
 	r := newRig(t, h)
 	a := r.open(t, 501, "a")
-	past := time.Now().Add(-48 * time.Hour) // before this boot, by any clock
+	past := time.UnixMicro(h.boot).Add(-48 * time.Hour) // before this boot's kern.boottime
 	for _, n := range []string{"e-torn1.json", "e-torn2.json"} {
 		f := filepath.Join(r.dir, n)
 		if err := os.WriteFile(f, []byte(`{"id":"x","kin`), 0o644); err != nil {
@@ -899,6 +900,12 @@ func TestUnparsableEntryCountsUntilRemoved(t *testing.T) {
 	}
 	if _, err := a.Admit(runReq(8 * gib)); !IsRefusal(err) {
 		t.Fatalf("torn entries not counted: %v", err)
+	}
+	h.mu.Lock()
+	h.boot += time.Hour.Microseconds() // the clock went forward: same session, boottime moved
+	h.mu.Unlock()
+	if _, err := a.Admit(runReq(8 * gib)); !IsRefusal(err) {
+		t.Fatalf("torn entries not counted after a clock change: %v", err)
 	}
 	h.restart()
 	if _, err := a.Admit(runReq(8 * gib)); !IsRefusal(err) {
