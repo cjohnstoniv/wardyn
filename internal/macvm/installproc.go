@@ -25,9 +25,28 @@ type installRequest struct {
 	IPSW string
 }
 
-// installProgress is one line the install process writes to its stdout.
+// installProgress is one line the install process writes to its stdout. A
+// line without a fraction is not progress.
 type installProgress struct {
-	Fraction float64 `json:"fraction"`
+	Fraction *float64 `json:"fraction"`
+}
+
+// stderrTail is how much of the install process's stderr its error keeps.
+const stderrTail = 2048
+
+// tailWriter keeps the last stderrTail bytes written to it.
+type tailWriter struct{ b []byte }
+
+func (w *tailWriter) Write(p []byte) (int, error) {
+	if len(p) >= stderrTail {
+		w.b = append(w.b[:0], p[len(p)-stderrTail:]...)
+		return len(p), nil
+	}
+	w.b = append(w.b, p...)
+	if over := len(w.b) - stderrTail; over > 0 {
+		w.b = append(w.b[:0], w.b[over:]...)
+	}
+	return len(p), nil
 }
 
 // RunInstall is the install process's side: it reads an installRequest from
@@ -47,7 +66,7 @@ func RunInstall(ctx context.Context, eng Engine, in io.Reader, out io.Writer) er
 		return fmt.Errorf("macvm: install request: %w", err)
 	}
 	enc := json.NewEncoder(out)
-	return installVM(ctx, eng, req.Spec, req.IPSW, func(f float64) { _ = enc.Encode(installProgress{Fraction: f}) })
+	return installVM(ctx, eng, req.Spec, req.IPSW, func(f float64) { _ = enc.Encode(installProgress{Fraction: &f}) })
 }
 
 // installVM builds the installer's VM and runs the installer on it.
@@ -83,8 +102,8 @@ func installInProcess(ctx context.Context, argv []string, spec MachineSpec, ipsw
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = DefaultStopTimeout
 	cmd.Stdin = bytes.NewReader(req)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+	stderr := &tailWriter{}
+	cmd.Stderr = stderr
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
@@ -95,16 +114,13 @@ func installInProcess(ctx context.Context, argv []string, spec MachineSpec, ipsw
 	sc := bufio.NewScanner(stdout)
 	for sc.Scan() {
 		var ev installProgress
-		if json.Unmarshal(sc.Bytes(), &ev) == nil {
-			progress(ev.Fraction)
+		if json.Unmarshal(sc.Bytes(), &ev) == nil && ev.Fraction != nil {
+			progress(*ev.Fraction)
 		}
 	}
 	_, _ = io.Copy(io.Discard, stdout) // a line too long for the scanner
 	if err := cmd.Wait(); err != nil {
-		msg := strings.TrimSpace(stderr.String())
-		if len(msg) > 2048 {
-			msg = msg[len(msg)-2048:]
-		}
+		msg := strings.TrimSpace(string(stderr.b))
 		if msg == "" {
 			return fmt.Errorf("the install process: %w", err)
 		}

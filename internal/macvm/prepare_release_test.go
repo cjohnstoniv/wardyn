@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -36,6 +37,11 @@ func TestInstallProcessHelper(t *testing.T) {
 		eng.InstallFunc = func(context.Context, *macvmtest.Machine, string, func(float64)) error {
 			return errors.New("installer failed")
 		}
+	case "noprogress":
+		// Lines that are not progress: none may move the install's fraction.
+		fmt.Println(`{}`)
+		fmt.Println(`{"other":1}`)
+		fmt.Println(`{"fraction":0.5}`)
 	case "hang":
 		eng.InstallFunc = func(ctx context.Context, _ *macvmtest.Machine, _ string, progress func(float64)) error {
 			progress(0.5)
@@ -127,5 +133,22 @@ func TestPrepareFirstBootRetriesOnTheAuxLock(t *testing.T) {
 	h.fb.BootErr = errors.New("some other refusal")
 	if _, err := macvm.Prepare(context.Background(), h.opts); err == nil || h.fb.Boots() != 1 {
 		t.Fatalf("another start error was retried: %v, %d boots", err, h.fb.Boots())
+	}
+}
+
+// Only a line with a fraction is progress: {} cannot send the install's
+// fraction back to 0.
+func TestPrepareInstallProgressNeedsAFraction(t *testing.T) {
+	f := newPrep(t)
+	installInProcess(t, f, "noprogress")
+	if _, err := macvm.Prepare(context.Background(), f.opts); err != nil {
+		t.Fatal(err)
+	}
+	var got []float64
+	for _, ev := range f.ev.phase(macvm.PhaseInstall) {
+		got = append(got, ev.Fraction)
+	}
+	if !slices.Equal(got, []float64{0, 0.5, 0.5, 1}) {
+		t.Fatalf("install fractions %v, want [0 0.5 0.5 1]", got)
 	}
 }

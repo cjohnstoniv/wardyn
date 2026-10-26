@@ -339,3 +339,23 @@ func TestParseContentRangeAndIPSWName(t *testing.T) {
 		}
 	}
 }
+
+// The install process's stderr is kept to its last stderrTail bytes however
+// much it writes, in any size of write.
+func TestTailWriterKeepsOnlyTheTail(t *testing.T) {
+	var all []byte
+	w := &tailWriter{}
+	for i, n := 0, 1; i < 400; i, n = i+1, n*7%5000+1 {
+		p := bytes.Repeat([]byte{byte('a' + i%26)}, n)
+		all = append(all, p...)
+		if k, err := w.Write(p); k != n || err != nil {
+			t.Fatalf("write %d: %d %v", n, k, err)
+		}
+		if len(w.b) > stderrTail || cap(w.b) > 2*stderrTail {
+			t.Fatalf("after %d bytes the tail holds %d (cap %d)", len(all), len(w.b), cap(w.b))
+		}
+	}
+	if !bytes.Equal(w.b, all[len(all)-stderrTail:]) {
+		t.Fatal("the tail is not the last bytes written")
+	}
+}
