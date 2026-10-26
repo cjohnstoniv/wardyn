@@ -20,7 +20,7 @@ func lockAux(path string) (*os.File, error) {
 	}
 	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		_ = f.Close()
-		return nil, errAuxLocked
+		return nil, ErrAuxLocked
 	}
 	return f, nil
 }

@@ -33,16 +33,18 @@ type Engine struct {
 	// InstallFunc, if set, runs as the installer; otherwise it reports 0.5
 	// and 1 and returns.
 	InstallFunc func(ctx context.Context, m *Machine, ipsw string, progress func(float64)) error
-	// StartErr makes Machine.Start fail.
-	StartErr error
+	// StartErr makes Machine.Start fail: every start, or with StartFailures
+	// set, only the first that many.
+	StartErr      error
+	StartFailures int
 	// IgnoreRequestStop makes machines ignore a graceful stop.
 	IgnoreRequestStop bool
 	// LockAux makes each machine flock its aux storage for the life of the
 	// process, as Code-Hex/vz's installer VM does: nothing releases it.
 	LockAux bool
 
-	installs, loads, ids int
-	machines             []*Machine
+	installs, loads, ids, startFails int
+	machines                         []*Machine
 }
 
 var _ macvm.Engine = (*Engine)(nil)
@@ -144,6 +146,18 @@ func (e *Engine) Machines() []*Machine {
 	return append([]*Machine(nil), e.machines...)
 }
 
+func (e *Engine) startErr() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.StartFailures > 0 {
+		if e.startFails >= e.StartFailures {
+			return nil
+		}
+		e.startFails++
+	}
+	return e.StartErr
+}
+
 // Machine is a fake VM.
 type Machine struct {
 	Plan macvm.Plan
@@ -159,9 +173,9 @@ type Machine struct {
 }
 
 func (m *Machine) Start(context.Context) error {
-	if m.e.StartErr != nil {
+	if err := m.e.startErr(); err != nil {
 		m.end(macvm.StateError)
-		return m.e.StartErr
+		return err
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -319,9 +333,9 @@ type BootArgs struct {
 
 var _ macvm.FirstBooter = (*FirstBoot)(nil)
 
-// errAuxLocked is the framework's refusal of a VM whose aux storage another VM
+// ErrAuxLocked is the framework's refusal of a VM whose aux storage another VM
 // locks, as the first boot reports it.
-var errAuxLocked = errors.New("macvm provision: start: Invalid virtual machine configuration. Failed to lock auxiliary storage")
+var ErrAuxLocked = errors.New("macvm provision: start: Invalid virtual machine configuration. Failed to lock auxiliary storage")
 
 func (f *FirstBoot) Supported() error { return f.Unsupported }
 
@@ -335,7 +349,7 @@ func (f *FirstBoot) Boot(disk, aux string, hw, mid []byte, cpus uint, mem uint64
 		return macvm.FirstBoot{}, f.BootErr
 	}
 	if f.AuxLocked != nil && f.AuxLocked() {
-		return macvm.FirstBoot{}, errAuxLocked
+		return macvm.FirstBoot{}, ErrAuxLocked
 	}
 	if f.LockAux {
 		l, err := lockAux(aux)

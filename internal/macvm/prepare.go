@@ -584,10 +584,11 @@ func (p *prep) install(ctx context.Context, spec MachineSpec, ipsw string) error
 	return nil
 }
 
-// auxLockRetries and auxLockBackoff bound firstBoot's retry on the aux lock
-// refusal. It is a backstop, not the release: the install process has exited
-// by then (InstallProcess), but the framework's own per-VM process may take a
-// moment to let go of the aux storage, with no signal to wait on.
+// auxLockRetries and auxLockBackoff bound retryAuxLocked's retry on the aux
+// lock refusal, at the first boot and the stage-2 boot. It is a backstop, not
+// the release: the VM before (the install process's, or the first boot's) is
+// gone by then, but the framework's own per-VM process may take a moment to
+// let go of the aux storage, with no signal to wait on.
 var (
 	auxLockRetries = 5
 	auxLockBackoff = 2 * time.Second
@@ -599,22 +600,33 @@ func auxLocked(err error) bool {
 	return strings.Contains(err.Error(), "Failed to lock auxiliary storage")
 }
 
-// firstBoot starts the first boot, retrying a short while on exactly the aux
-// lock refusal.
-func (p *prep) firstBoot(ctx context.Context, spec MachineSpec, nic *os.File, user, pass string) (FirstBoot, error) {
+// retryAuxLocked runs start, and again a short while on exactly the aux lock
+// refusal. start must leave nothing behind when it fails.
+func retryAuxLocked(ctx context.Context, log *slog.Logger, start func() error) error {
 	for try := 0; ; try++ {
-		fb, err := p.FirstBoot.Boot(spec.DiskPath, spec.AuxPath, spec.HardwareModel, spec.MachineIdentifier,
-			uint(spec.CPUs), spec.MemoryBytes, nic, user, pass)
+		err := start()
 		if err == nil || try == auxLockRetries || !auxLocked(err) {
-			return fb, err
+			return err
 		}
-		p.Log.Warn("macvm: the first boot's aux storage is still locked; retrying", "err", err.Error())
+		log.Warn("macvm: the aux storage is still locked; retrying", "err", err.Error())
 		select {
 		case <-ctx.Done():
-			return FirstBoot{}, err
+			return err
 		case <-time.After(auxLockBackoff):
 		}
 	}
+}
+
+// firstBoot starts the first boot, retrying on the aux lock refusal.
+func (p *prep) firstBoot(ctx context.Context, spec MachineSpec, nic *os.File, user, pass string) (FirstBoot, error) {
+	var fb FirstBoot
+	err := retryAuxLocked(ctx, p.Log, func() error {
+		var err error
+		fb, err = p.FirstBoot.Boot(spec.DiskPath, spec.AuxPath, spec.HardwareModel, spec.MachineIdentifier,
+			uint(spec.CPUs), spec.MemoryBytes, nic, user, pass)
+		return err
+	})
+	return fb, err
 }
 
 // provisionAndBootstrap runs the one first boot, waits for the guest's Remote
