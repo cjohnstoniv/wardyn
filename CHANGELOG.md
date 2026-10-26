@@ -22,8 +22,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A Kubernetes run that an earlier release left stopping (#3537) still has its proxy pod, both NetworkPolicies and a
   Secret holding the run's secret values and managed files in the runs namespace. Its stop is retried when its
   runner, upgraded to this release, next reconnects, and finished when the pod shows the proxy never started; the
-  pod, the policies and the Secret are then removed. Upgrade the runner first. Only a run still held after that needs
-  the hand cleanup in `docs/operations/k8s-runners.md` ("A stop still held after the upgrade").
+  pod, the policies and the Secret are then removed. Upgrade the runner first. A run still held after that keeps its
+  fence; `docs/operations/k8s-runners.md` ("A stop still held after the upgrade") says how it may be released.
 - A macOS VM restore image in `macos-vm.noindex/cache` that this release has no record of, placed by hand or kept by
   an earlier release after a failed prepare, now stops `macos-vm prepare` (#3706). Prepare names the file and neither
   uses nor deletes it. Delete it, so prepare downloads the image again, or move it out of the cache and pass it with
