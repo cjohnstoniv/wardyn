@@ -19,10 +19,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   checks about every 15 seconds; start Docker again once `wardyn-runnerd macos-vm status` no longer counts the VM. A
   leaked slot that an earlier release recorded, and an entry file that does not parse, stay until their owner
   removes them, as the shared ledger section of `docs/operations/macos-vms.md` says.
-- A Kubernetes run that an earlier release left stopping, with its proxy pod, both NetworkPolicies and its Secret
-  still in the runs namespace (#3537), gets its stop retried when its runner, upgraded to this release, next
-  reconnects. The runner finishes it when the pod shows the proxy never started, and the pod, the policies and the
-  Secret are removed. Upgrade the runner before removing anything by hand.
+- A Kubernetes run that an earlier release left stopping (#3537) still has its proxy pod, both NetworkPolicies and a
+  Secret holding the run's secret values and managed files in the runs namespace. Its stop is retried when its
+  runner, upgraded to this release, next reconnects, and finished when the pod shows the proxy never started; the
+  pod, the policies and the Secret are then removed. Upgrade the runner first. Only a run still held after that needs
+  the hand cleanup in `docs/operations/k8s-runners.md` ("A stop still held after the upgrade").
 - A macOS VM restore image in `macos-vm.noindex/cache` that this release has no record of, placed by hand or kept by
   an earlier release after a failed prepare, now stops `macos-vm prepare` (#3706). Prepare names the file and neither
   uses nor deletes it. Delete it, so prepare downloads the image again, or move it out of the cache and pass it with
@@ -133,7 +134,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A Kubernetes runner now finishes stopping a run whose proxy pod was deleted after its setup step finished and before
   the proxy started, such as a run cancelled at that moment (#3537). The kubelet reports that pod as failed with the
   proxy never started, which the runner did not accept as proof that it stopped. The pod, both NetworkPolicies and the
-  Secret holding the proxy's config and the run's secret values stayed in the runs namespace until removed by hand.
+  Secret holding the proxy's config, the run's secret values and its managed files stayed in the runs namespace until
+  removed by hand.
 - A recorded run that ends within its first five minutes, such as a short command on a laptop's Docker runner, uploads
   its whole recording once, at exit. That upload is now retried when it gets no answer or a 502, 503 or 504 (the run's
   proxy cannot record the request yet, or the runner's link to the organisation is down), with new attempts starting

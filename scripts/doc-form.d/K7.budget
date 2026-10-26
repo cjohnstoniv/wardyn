@@ -6,4 +6,5 @@
 # docs/operations/k8s-runners.md 3976 = 3950 + 26, measured: 0.9.4 L4b, API tokens cannot make a node record, so the CLI works in local mode only.
 # docs/operations/k8s-runners.md 4024 = 3976 + 48, measured: a proxy that cannot renew its run token at start ends the run naming the renew error.
 # docs/operations/k8s-runners.md 4025 = 4024 + 1, measured: the bind/delete row names the main_never_started arm (#3537).
-docs/operations/k8s-runners.md=4025 share=35
+# docs/operations/k8s-runners.md 4266 = 4025 + 241, measured: the hand cleanup for a stop an earlier release held, as the fallback once the upgraded runner has reconnected (#3537, #3711).
+docs/operations/k8s-runners.md=4266 share=35
