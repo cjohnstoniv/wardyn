@@ -11,8 +11,18 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- `wardyn-runnerd macos-vm prepare --ipsw <file> --sha256 <hex>` builds a Mac's base from a restore image downloaded
+  elsewhere, for a Mac whose network refuses Apple's pinned update host. `--sha256` is required: prepare copies the
+  file into its cache, checks the copy's hash before anything loads or installs it, refuses a mismatch naming both
+  hashes, and never changes or deletes the file given. The pinning error now names `--ipsw` (#3701).
+
 ### Changed
 
+- A macOS VM's prepare no longer reuses a restore image found in its download cache unless that image's download
+  recorded its SHA-256 and the file still matches; one with no record, or a different hash, is deleted and downloaded
+  again, and the record is deleted with the image (#3706).
 - A macOS VM's prepare behind a proxy that inspects TLS now fails at the first range of the restore image, not after
   three retries, when the error is Apple's certificate-pinning refusal of `updates.cdn-apple.com`. The error says the
   host's certificate chain failed Apple's pinning check, that a proxy inspecting TLS is the likely cause and to exempt
