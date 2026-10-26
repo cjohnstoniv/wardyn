@@ -13,6 +13,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Changed
 
+- A macOS VM's prepare behind a proxy that inspects TLS now fails at the first range of the restore image, not after
+  three retries, when the error is Apple's certificate-pinning refusal of `updates.cdn-apple.com`. The error says Apple
+  pins the host, to exempt it from TLS inspection, and prints the image URL; the requirements table in
+  `docs/operations/macos-vms.md` lists the uninspected path (#3701).
 - A macOS VM's prepare now refuses a base that holds another local account than `wardyn-admin` and `agent`, and names
   the extra one, so an account made by hand during setup no longer ships in every VM cloned from the base.
 - `wardyn-runnerd macos-vm status --json` has a `failure` key when the base has one, and a setup by hand the helper

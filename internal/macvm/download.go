@@ -28,6 +28,20 @@ const maxRangeFailures = 3
 // until none is left.
 const DownloadFailurePrefix = "macvm: restore image download: "
 
+// pinnedHostAdvice is the cause a certificate-pinning refusal ends the download with, with the image
+// URL prepare asked for. Apple pins its update CDN, so the platform verifier refuses any chain a
+// TLS-inspecting proxy re-signs.
+const pinnedHostAdvice = "Apple pins this host and a proxy on this network inspects TLS; exempt updates.cdn-apple.com " +
+	"from TLS inspection and run prepare again (the image is %s)"
+
+// isPinningRefusal says err is the platform verifier refusing a pinned host's chain. macOS reports it
+// as a bare "x509: ... certificates do not meet pinning requirements" with no typed error to match, so
+// the text is the only signal.
+func isPinningRefusal(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "x509:") && strings.Contains(msg, "pinning requirements")
+}
+
 type downloader struct {
 	client *http.Client
 	power  PowerSource
@@ -77,6 +91,10 @@ func (d *downloader) fetch(ctx context.Context, url, part string) error {
 			}
 			if ctx.Err() != nil {
 				return ctx.Err()
+			}
+			if isPinningRefusal(err) {
+				// A proxy that inspects TLS refuses every range the same way; retrying only waits.
+				return fmt.Errorf(DownloadFailurePrefix+pinnedHostAdvice+": %w", url, err)
 			}
 			if failures++; failures >= maxRangeFailures {
 				return fmt.Errorf(DownloadFailurePrefix+"%w", err)

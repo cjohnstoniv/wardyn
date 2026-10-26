@@ -595,3 +595,49 @@ func TestPrepareDownloadRetryEvents(t *testing.T) {
 		t.Fatalf("%d retry events for three failed ranges, want 2 (the last failure ends the download)", n)
 	}
 }
+
+// failingTransport answers every request with err and counts them.
+type failingTransport struct {
+	err   error
+	calls atomic.Int64
+}
+
+func (t *failingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	t.calls.Add(1)
+	return nil, t.err
+}
+
+// A TLS-inspecting proxy re-signs Apple's pinned update host, so every range fails the same way:
+// prepare ends at the first one, names the cause and the image URL, and never retries.
+func TestPrepareDownloadPinningRefusalFailsAtOnce(t *testing.T) {
+	f := newPrep(t)
+	tr := &failingTransport{err: errors.New(`tls: failed to verify certificate: x509: “updates.cdn-apple.com” certificates do not meet pinning requirements`)}
+	f.opts.HTTP = &http.Client{Transport: tr}
+	_, err := macvm.Prepare(context.Background(), f.opts)
+	if err == nil || !strings.HasPrefix(err.Error(), macvm.DownloadFailurePrefix) ||
+		!strings.Contains(err.Error(), "exempt updates.cdn-apple.com from TLS inspection") || !strings.Contains(err.Error(), f.srv.url()) {
+		t.Fatalf("pinning refusal: %v", err)
+	}
+	if n := tr.calls.Load(); n != 1 {
+		t.Fatalf("%d requests for a pinning refusal, want 1", n)
+	}
+	for _, ev := range f.ev.phase(macvm.PhaseDownload) {
+		if ev.Retry {
+			t.Fatalf("a pinning refusal was retried: %+v", ev)
+		}
+	}
+}
+
+// Any other certificate error keeps the three range attempts and its own words.
+func TestPrepareDownloadOtherX509ErrorStillRetries(t *testing.T) {
+	f := newPrep(t)
+	tr := &failingTransport{err: errors.New("tls: failed to verify certificate: x509: certificate signed by unknown authority")}
+	f.opts.HTTP = &http.Client{Transport: tr}
+	_, err := macvm.Prepare(context.Background(), f.opts)
+	if err == nil || strings.Contains(err.Error(), "exempt") || !strings.Contains(err.Error(), "unknown authority") {
+		t.Fatalf("other x509 error: %v", err)
+	}
+	if n := tr.calls.Load(); n != 3 {
+		t.Fatalf("%d requests, want 3 range attempts", n)
+	}
+}
