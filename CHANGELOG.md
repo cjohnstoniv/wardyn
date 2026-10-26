@@ -30,6 +30,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `end_reason` `run_ended`, and the server stops holding the pause. Before, the pause stayed open with no end row.
 - `wardyn-runnerd doctor` on a host whose service definition is still an earlier install's, which passes `--org`, now
   checks the organisation that service uses, as `serve` does, instead of the one in `runnerd.json`.
+- A recorded run that ends within its first five minutes, such as a short command on a laptop's Docker runner, uploads
+  its whole recording once, at exit. That upload is now retried for up to 30 seconds when it gets no answer or a 502,
+  503 or 504 (the run's proxy cannot record the request yet, or the runner's link to the organisation is down), so
+  the run keeps its recording (#3705). Before, one such refusal lost the whole recording.
 
 ## [0.10.0-rc.3] — 2026-10-25
 
