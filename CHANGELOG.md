@@ -20,10 +20,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   leaked slot that an earlier release recorded, and an entry file that does not parse, stay until their owner
   removes them, as the shared ledger section of `docs/operations/macos-vms.md` says.
 - A Kubernetes run that an earlier release left stopping (#3537) still has its proxy pod, both NetworkPolicies and a
-  Secret holding the run's secret values and managed files in the runs namespace. Its stop is retried when its
-  runner, upgraded to this release, next reconnects, and finished when the pod shows the proxy never started; the
-  pod, the policies and the Secret are then removed. Upgrade the runner first. A run still held after that keeps its
-  fence; `docs/operations/k8s-runners.md` ("A stop still held after the upgrade") says how it may be released.
+  Secret holding the proxy's config, the run's secret values and its managed files in the runs namespace. Its stop is
+  retried when its runner, upgraded to this release, next reconnects, and finished when the pod shows the proxy never
+  started; the pod, the policies and the Secret are then removed. Upgrade the runner first. A run still held after
+  that keeps its fence; `docs/operations/k8s-runners.md` ("A stop still held after the upgrade") says how it may be
+  released.
 - A macOS VM restore image in `macos-vm.noindex/cache` that this release has no record of, placed by hand or kept by
   an earlier release after a failed prepare, now stops `macos-vm prepare` (#3706). Prepare names the file and neither
   uses nor deletes it. Delete it, so prepare downloads the image again, or move it out of the cache and pass it with
@@ -58,7 +59,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   adds the flag to its `ProgramArguments`. `wardyn runner upgrade` to a newer release writes it; on a runner already on the
   current release, upgrade stops before setup, so run `wardyn-runnerd setup` again or add the flag by hand (#3702).
 - A macOS VM's prepare now refuses a base that holds another local account than `wardyn-admin` and `agent`, and names
-  the extra one, so an account made by hand during setup no longer ships in every VM cloned from the base.
+  the extra one, so an account made by hand during setup no longer ships in every VM cloned from the base (#3687).
 - `wardyn-runnerd macos-vm status --json` has a `failure` key when the base has one, and a setup by hand the helper
   refused because it cannot reach the Mac's desktop (over SSH, under sudo, or with no one signed in) is
   `no_desktop`, with the state `failed`; before, only the error text said so. A console that does not know the code
@@ -109,6 +110,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   pause stayed open with no row. A pause whose stop failed, or is not yet made, still stands.
 - `wardyn-runnerd doctor` on a host whose service definition is still an earlier install's, which passes `--org`, now
   checks the organisation that service uses, as `serve` does, instead of the one in `runnerd.json`.
+- `wardyn-runnerd macos-vm status` and the runner no longer lose a failed prepare's reason when a long line in
+  `prepare.log` comes before the helper's error; a read that stops early says so (#3690).
+- The macOS runner package's install script sets its own `PATH` instead of relying on the installer's (#3646).
+- A macOS VM run's disk-removed report is no longer lost when the report prune runs as the report is stored (#3682).
 - On macOS, a base-image download that resumes a partial file now continues after the bytes already on disk instead of
   overwriting its start, so a restarted preparation no longer re-downloads the whole image after the check rejects
   it (#3684).
