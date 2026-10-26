@@ -13,12 +13,16 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Before you upgrade
 
-- A macOS VM slot that 0.10.0-rc.3 recorded and never freed lacks the boot session and start order this release
-  reads, so this release frees it only once no macOS VM, helper or Docker engine of that user runs (#3700). After upgrading the runner, quit Docker Desktop once while no macOS VM runs; the runner frees the slot
-  within 15 seconds, and Docker can start again.
-- A Kubernetes run that an earlier release left stopping, with its proxy pod, both NetworkPolicies and its Secret still
-  in the runs namespace (#3537), is cleaned up once its runner runs this release: the organisation's sweep when the
-  runner reconnects removes them. Upgrade the runner before removing anything by hand.
+- A slot that 0.10.0-rc.3 recorded for a macOS VM prepare or tools update, and never freed, lacks the boot session
+  and start order this release reads, so the upgraded runner frees it only once no macOS VM, helper or Docker engine
+  of that user runs (#3700). Keep the runner running and quit Docker Desktop while no macOS VM runs. The runner
+  checks about every 15 seconds; start Docker again once `wardyn-runnerd macos-vm status` no longer counts the VM. A
+  leaked slot that an earlier release recorded, and an entry file that does not parse, stay until their owner
+  removes them, as the shared ledger section of `docs/operations/macos-vms.md` says.
+- A Kubernetes run that an earlier release left stopping, with its proxy pod, both NetworkPolicies and its Secret
+  still in the runs namespace (#3537), gets its stop retried when its runner, upgraded to this release, next
+  reconnects. The runner finishes it when the pod shows the proxy never started, and the pod, the policies and the
+  Secret are removed. Upgrade the runner before removing anything by hand.
 
 ### Changed
 
