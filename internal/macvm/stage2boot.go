@@ -216,11 +216,9 @@ func (c Stage2BootConfig) boot(ctx context.Context, spec MachineSpec) (ToolsGues
 		reportVMLimit(err, c.Leaked, c.Log)
 		return fail(err)
 	}
-	v.mu.Lock()
-	v.st.Listeners = append(v.st.Listeners, stage2Ports...)
-	v.mu.Unlock()
 	undo = append(undo, func() { _ = m.Stop() })
 	v.mu.Lock()
+	v.st.Listeners = append(v.st.Listeners, stage2Ports...)
 	v.st.State, v.st.StartedAt = StateRunning, time.Now().UTC()
 	v.mu.Unlock()
 	wait := cmpDuration(c.GuestWait, 5*time.Minute)
