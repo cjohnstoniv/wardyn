@@ -32,6 +32,7 @@
 |---|---|
 | The Mac | Apple silicon, macOS 26 or later. On macOS 26 each prepare, `--new-image` too, needs [setup by hand](#setup-by-hand) once per base, about 10 minutes at the Mac. macOS 27 sets the guest up unattended |
 | Docker | A running engine on the Mac. The guest's network relay and proxy run in it, and the runner needs it to start ([Docker on the Mac](#docker-on-the-mac)) |
+| Network | An uninspected path to `updates.cdn-apple.com`. Apple pins that host, so a TLS-inspecting proxy fails the image download at once; the error prints the image URL. The same exemption covers [stage 2](#the-prep-proxy), whose Apple hosts are opaque tunnels |
 | Disk | About 85 GiB free to prepare, then about 107 GiB free to start a second VM ([Disk](#disk)) |
 | Power | On AC power to start preparing ([Preparing the base image](#preparing-the-base-image)) |
 | A login | Someone logged in on the Mac ([Logins, FileVault and restarts](#logins-filevault-and-restarts)) |

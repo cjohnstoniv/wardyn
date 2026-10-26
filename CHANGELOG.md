@@ -13,6 +13,19 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Changed
 
+- A macOS VM's prepare behind a proxy that inspects TLS now fails at the first range of the restore image, not after
+  three retries, when the error is Apple's certificate-pinning refusal of `updates.cdn-apple.com`. The error says the
+  host's certificate chain failed Apple's pinning check, that a proxy inspecting TLS is the likely cause and to exempt
+  the host from it, and prints the image URL; the requirements table in
+  `docs/operations/macos-vms.md` lists the uninspected path (#3701).
+- The macOS VM start refusal "this Mac does not have enough free memory right now" now gives the free memory (free,
+  inactive and speculative pages) and the memory needed (the VM's plus the margin) in GiB, and names lowering Docker's memory allowance as the
+  usual fix; `macos-vm status` and `prepare` on a runner with no `runnerd.json` now say none was found at its path and
+  to run `wardyn-runnerd setup` or write `org_url` into it, and use the `--org` an earlier service definition passes
+  `serve` (#3702).
+- Upgrade note: a hand-installed macOS LaunchAgent does not get `--log-file`, so its log is not rotated until someone
+  adds the flag to its `ProgramArguments`. `wardyn runner upgrade` to a newer release writes it; on a runner already on the
+  current release, upgrade stops before setup, so run `wardyn-runnerd setup` again or add the flag by hand (#3702).
 - A macOS VM's prepare now refuses a base that holds another local account than `wardyn-admin` and `agent`, and names
   the extra one, so an account made by hand during setup no longer ships in every VM cloned from the base.
 - `wardyn-runnerd macos-vm status --json` has a `failure` key when the base has one, and a setup by hand the helper
