@@ -308,16 +308,29 @@ func TestContainmentLogBoundsInterleavedErrors(t *testing.T) {
 		t.Fatalf("%d ERROR lines over %d passes of two interleaved errors, want each error once plus at most one a minute:\n%s", lines, total, buf.String())
 	}
 
-	m.mu.Lock()
-	r = m.state.Runs[failing]
-	r.Retired = true
-	m.state.Runs[failing] = r
-	m.mu.Unlock()
+	// A retired run forgets its failures: back in the loop, an error it logged within the last minute logs
+	// again at once. Run's first pass is second 122; kept, the timeout's summary would be due at second 181.
+	setRetired := func(on bool) {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		r := m.state.Runs[failing]
+		r.Retired = on
+		m.state.Runs[failing] = r
+	}
+	setRetired(true)
 	_ = m.CheckLapses(t.Context())
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, kept := m.containLogs[failing]; kept {
-		t.Fatal("a retired run's logged failures were kept")
+	setRetired(false)
+	stop.mu.Lock()
+	stop.answer = func(int64) error { return timeout }
+	stop.mu.Unlock()
+	before := strings.Count(buf.String(), `"msg":"runner containment will retry"`)
+	ctx, cancel = context.WithCancel(t.Context())
+	go func() { done <- m.Run(ctx) }()
+	ticks <- time.Time{} // returns once the first pass (second 122) has logged
+	cancel()
+	<-done
+	if after := strings.Count(buf.String(), `"msg":"runner containment will retry"`); after != before+1 {
+		t.Fatalf("%d new lines for a retired run's known error back in the loop, want 1 (its failures forgotten):\n%s", after-before, buf.String())
 	}
 }
 
