@@ -5,8 +5,10 @@ package macvm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -149,6 +151,7 @@ func (p *prep) givenImage(ctx context.Context) (RestoreImage, string, string, er
 	}
 	// The copy replaces a cached file of the same name only when a Wardyn download recorded that file: the
 	// given file's hash says nothing about another one, which may be the operator's only copy of it.
+	// Only a file shown absent may be skipped: one that cannot be inspected is kept, not replaced.
 	final := filepath.Join(p.cache, name)
 	if _, err := os.Stat(final); err == nil {
 		known, mismatch, err := knownOrigin(final)
@@ -158,6 +161,8 @@ func (p *prep) givenImage(ctx context.Context) (RestoreImage, string, string, er
 		if known == "" {
 			return RestoreImage{}, "", "", &UnrecordedImageError{Path: final, Mismatch: mismatch}
 		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return RestoreImage{}, "", "", fmt.Errorf("macvm: inspect cached restore image %s: %w", final, err)
 	}
 	if err := p.waitAC(ctx, PhaseValidate); err != nil {
 		return RestoreImage{}, "", "", err

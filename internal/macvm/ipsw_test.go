@@ -415,6 +415,30 @@ func TestPrepareIPSWKeepsAnUnrecordedCachedFileOfTheSameName(t *testing.T) {
 	}
 }
 
+// A cached file of the same name that prepare cannot inspect is kept and stops prepare: only one shown
+// absent may be skipped. A link that loops makes the inspection fail with something other than "not exist".
+func TestPrepareIPSWKeepsACachedFileItCannotInspect(t *testing.T) {
+	f := newPrep(t)
+	final := cachedPath(f)
+	if err := os.MkdirAll(filepath.Dir(final), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Base(final), final); err != nil {
+		t.Fatal(err)
+	}
+	src, sha := operatorIPSW(t, "operator-downloaded-restore-image")
+	f.opts.IPSW, f.opts.IPSWSHA256 = src, sha
+	if _, err := macvm.Prepare(context.Background(), f.opts); err == nil || errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("--ipsw over a cached file it cannot inspect: %v", err)
+	}
+	if target, err := os.Readlink(final); err != nil || target != filepath.Base(final) {
+		t.Fatalf("the cached entry changed: %q %v", target, err)
+	}
+	if f.eng.Loads() != 0 || f.eng.Installs() != 0 {
+		t.Fatalf("a refused prepare loaded %d and installed %d", f.eng.Loads(), f.eng.Installs())
+	}
+}
+
 // A crash between the record and the rename leaves a complete marked partial file and its record. The
 // next prepare gets a 416 for it, renames it and installs, without refusing.
 func TestPrepareCrashAfterRecordBeforeRenameResumes(t *testing.T) {
