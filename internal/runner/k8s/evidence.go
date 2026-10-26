@@ -26,10 +26,6 @@ import (
 // status: the API keeps an object with finalizers, marked for deletion, even through a force delete.
 const stopProofFinalizer = "wardyn.dev/stop-proof"
 
-// reasonDeletionByPodGC is the DisruptionTarget reason the pod garbage collector sets when it marks
-// a pod Failed without any kubelet, before deleting the pod of a Node that is gone.
-const reasonDeletionByPodGC = "DeletionByPodGC"
-
 // assoc is how a pod's node binding was associated with a Node UID by bracketing reads.
 type assoc string
 
@@ -86,13 +82,12 @@ type witnessContainer struct {
 
 // Arms a witness can record.
 const (
-	armTerminal  = "terminal"
-	armNeverInit = "never_initialized"
-	armUnbound   = "unbound_deleted"
-	armTaint     = "taint"
-	armRecord    = "record"
-	tier1        = "tier1"
-	tier2        = "tier2"
+	armTerminal = "terminal"
+	armUnbound  = "unbound_deleted"
+	armTaint    = "taint"
+	armRecord   = "record"
+	tier1       = "tier1"
+	tier2       = "tier2"
 )
 
 // witness is runnerd's own copy of the evidence a held object showed, persisted before the
@@ -235,12 +230,6 @@ func (ev *runEvidence) latchReuse(pe *podEvidence, h *nodeHolder) bool {
 	return true
 }
 
-// containerStatuses is every init and main container status; ephemeral containers are never
-// evidence inputs (Fable r10 L2).
-func containerStatuses(pod *corev1.Pod) []corev1.ContainerStatus {
-	return slices.Concat(pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses)
-}
-
 // recordIdentity records what a read of the pod shows: the pod IP and host IP when first seen, and
 // each container's runtime ID as a baseline or a latch. It reports whether a new baseline appeared
 // (the caller then sends an anchor list) and whether anything changed (the caller persists).
@@ -304,34 +293,6 @@ func (pe *podEvidence) hasLatch() bool {
 		}
 	}
 	return false
-}
-
-func podGCMarked(pod *corev1.Pod) bool {
-	for _, c := range pod.Status.Conditions {
-		if c.Type == corev1.DisruptionTarget && c.Reason == reasonDeletionByPodGC {
-			return true
-		}
-	}
-	return false
-}
-
-// specContainerNames is every init and main container the spec declares.
-func specContainerNames(pod *corev1.Pod) (inits, mains []string) {
-	for _, c := range pod.Spec.InitContainers {
-		inits = append(inits, c.Name)
-	}
-	for _, c := range pod.Spec.Containers {
-		mains = append(mains, c.Name)
-	}
-	return inits, mains
-}
-
-func statusByName(pod *corev1.Pod) map[string]corev1.ContainerStatus {
-	m := map[string]corev1.ContainerStatus{}
-	for _, cs := range containerStatuses(pod) {
-		m[cs.Name] = cs
-	}
-	return m
 }
 
 // verdict is an arm's answer for one pod.
@@ -461,59 +422,21 @@ func (ev *runEvidence) terminalArm(pe *podEvidence, pod *corev1.Pod, post *nodeH
 	return verdict{arm: armTerminal, tiers: tiers}
 }
 
-// neverInitialized reports the never-initialized arm's status conditions alone (Fable r10 H1, r11
-// L3): Failed, deleting, not by the pod GC, Initialized=False present, a status for every spec
-// container, every main container waiting with no baseline or latch, and every init container
-// waiting with none or terminated. The node binding is checked separately.
-func (pe *podEvidence) neverInitialized(pod *corev1.Pod) (terminatedInits []string, ok bool) {
-	if pod.Status.Phase != corev1.PodFailed || pod.DeletionTimestamp == nil || podGCMarked(pod) {
-		return nil, false
-	}
-	initialized := false
-	for _, c := range pod.Status.Conditions {
-		if c.Type == corev1.PodInitialized {
-			if c.Status != corev1.ConditionFalse {
-				return nil, false
-			}
-			initialized = true
-		}
-	}
-	if !initialized {
-		return nil, false
-	}
-	inits, mains := specContainerNames(pod)
-	statuses := statusByName(pod)
-	clean := func(name string) bool {
-		c := pe.Containers[name]
-		return c == nil || (c.Baseline == "" && len(c.Latched) == 0)
-	}
-	for _, name := range mains {
-		cs, ok := statuses[name]
-		if !ok || cs.State.Waiting == nil || !clean(name) {
-			return nil, false
-		}
-	}
-	for _, name := range inits {
-		cs, ok := statuses[name]
-		switch {
-		case !ok:
-			return nil, false
-		case cs.State.Waiting != nil && clean(name):
-		case cs.State.Terminated != nil:
-			terminatedInits = append(terminatedInits, name)
-		default:
-			return nil, false
-		}
-	}
-	return terminatedInits, true
+// clean reports a container that no read of the pod ever showed with a runtime ID: no baseline
+// and no latch.
+func (pe *podEvidence) clean(name string) bool {
+	c := pe.Containers[name]
+	return c == nil || (c.Baseline == "" && len(c.Latched) == 0)
 }
 
-// neverInitializedArm binds the never-initialized status to a node: tier 2's node checks on a causal
-// run; on the no-association path only the accepted "no prior holder" record, which evaluate has
-// already checked. A terminated init container must also be bound by tier 1 or the node binding.
+// neverInitializedArm binds the status of a pod whose main containers never started (unstartedArm:
+// never initialized, or deleted between its init and main containers) to a node: tier 2's node
+// checks on a causal run; on the no-association path only the accepted "no prior holder" record,
+// which evaluate has already checked. A terminated init container must also be bound by tier 1 or
+// the node binding.
 func (ev *runEvidence) neverInitializedArm(pe *podEvidence, pod *corev1.Pod, post *nodeHolder) verdict {
-	inits, ok := pe.neverInitialized(pod)
-	if !ok || !pe.tier2Node(pod, post) {
+	arm, inits := unstartedArm(pod, pe.clean)
+	if arm == "" || !pe.tier2Node(pod, post) {
 		return verdict{}
 	}
 	statuses := statusByName(pod)
@@ -526,7 +449,7 @@ func (ev *runEvidence) neverInitializedArm(pe *podEvidence, pod *corev1.Pod, pos
 		}
 		tiers[name] = tier
 	}
-	return verdict{arm: armNeverInit, tiers: tiers}
+	return verdict{arm: arm, tiers: tiers}
 }
 
 // newWitness builds the witness of a passing verdict from the status read it judged.
@@ -543,7 +466,7 @@ func newWitness(runID uuid.UUID, pe *podEvidence, pod *corev1.Pod, v verdict, po
 		}
 	}
 	switch v.arm {
-	case armTerminal, armNeverInit:
+	case armTerminal, armNeverInit, armMainNeverStarted:
 		w.PostStatus = post
 	case armTaint:
 		w.Taint = post

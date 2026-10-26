@@ -666,7 +666,7 @@ func distinctHumanApprovers(approvers []runner.NodeRecordApprover) (int, error) 
 
 // holderBound is precondition (ii): on a run that is not (u2) and has no latched ID, the post-bind
 // holder still holds the name with its recorded machineID and systemUUID, and the pod's status is
-// bound to it: the terminal arm's three conditions or the never-initialized status, and a
+// bound to it: the terminal arm's three conditions or a status unstartedArm accepts, and a
 // non-empty hostIP equal to the holder's current InternalIP.
 func (pe *podEvidence) holderBound(pod *corev1.Pod, h *nodeHolder) string {
 	a := pe.anchor()
@@ -687,7 +687,7 @@ func (pe *podEvidence) holderBound(pod *corev1.Pod, h *nodeHolder) string {
 	if terminalThree(pod) {
 		return ""
 	}
-	if _, ok := pe.neverInitialized(pod); ok {
+	if arm, _ := unstartedArm(pod, pe.clean); arm != "" {
 		if h.OutOfService {
 			return "the holder carries the out-of-service taint"
 		}

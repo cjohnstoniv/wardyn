@@ -30,6 +30,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `end_reason` `run_ended`, and the server stops holding the pause. Before, the pause stayed open with no end row.
 - `wardyn-runnerd doctor` on a host whose service definition is still an earlier install's, which passes `--org`, now
   checks the organisation that service uses, as `serve` does, instead of the one in `runnerd.json`.
+- A Kubernetes runner now finishes stopping a run whose proxy pod was deleted after its setup step finished and before
+  the proxy started, such as a run cancelled at that moment (#3537). The kubelet reports that pod as failed with the
+  proxy never started, which the runner did not accept as proof that it stopped. The pod, both NetworkPolicies and the
+  Secret holding the proxy's config and the run's secret values stayed in the runs namespace until removed by hand.
 
 ## [0.10.0-rc.3] — 2026-10-25
 
