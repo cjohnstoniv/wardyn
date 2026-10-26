@@ -486,13 +486,16 @@ func putBody(body io.Reader, n int64, uploadURL, runToken string, plainLog bool)
 	return nil
 }
 
-// finalRetryBudget bounds how long the delivery at exit retries a PUT that may
-// yet pass (retryFinal); finalRetryWait is the first wait, doubled after each
-// attempt. A run that ends before its first part (firstPartInterval) has only
+// finalRetryBudget bounds when the delivery at exit may start another attempt
+// at a PUT that may yet pass (retryFinal); finalRetryWait is the first wait,
+// doubled after each attempt. It schedules retries only: each attempt keeps its
+// own deadline (uploadTimeout) and a flush may send several parts, so the
+// delivery can end later than the budget. A run that ends before its first part (firstPartInterval) has only
 // this delivery, so one refusal at exit, from a run's proxy that cannot record
 // the request yet or a relay to the organisation that is down, lost its whole
-// recording (#3705). The run's exit is seen once this process exits, so the
-// budget is also how much later a run that cannot deliver at all is seen to end.
+// recording (#3705). The run's exit is seen once this process exits, so a run
+// that cannot deliver at all is seen to end about this much later, plus its
+// last attempt's deadline.
 var (
 	finalRetryBudget = 30 * time.Second
 	finalRetryWait   = time.Second
