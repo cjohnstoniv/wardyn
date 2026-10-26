@@ -29,6 +29,8 @@ type fakeHost struct {
 	avail uint64
 	free  int64
 	procs []Proc
+	// procErr makes Processes fail.
+	procErr error
 }
 
 func (h *fakeHost) BootTime() (int64, error) { h.mu.Lock(); defer h.mu.Unlock(); return h.boot, nil }
@@ -50,7 +52,7 @@ func (h *fakeHost) FreeDiskBytes(string) (int64, error) {
 func (h *fakeHost) Processes() ([]Proc, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return append([]Proc(nil), h.procs...), nil
+	return append([]Proc(nil), h.procs...), h.procErr
 }
 func (h *fakeHost) setProcs(ps ...Proc) { h.mu.Lock(); h.procs = ps; h.mu.Unlock() }
 

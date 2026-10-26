@@ -76,6 +76,7 @@
 - Apple's licence allows up to two additional copies or instances of macOS on a Mac for development, testing, macOS Server or personal non-commercial use. The framework refuses a third. Wardyn counts first.
 - One ledger on the Mac counts every macOS VM, whichever login or purpose: a run, preparing the base, and a tools update. Preparing holds one of the two slots.
 - A third VM is refused with the reason. Docker's own Linux VM does not count.
+- A macOS VM that ended without reporting its stop frees its slot once no Virtualization or helper process of its user that started after its helper remains. Docker's Linux VM holds that slot only if Docker started after that helper.
 - Nothing in a Wardyn release contains macOS. The restore image comes from Apple to the Mac that uses it, and it is never uploaded, exported or stored in a registry.
 
 ## Preparing the base image
