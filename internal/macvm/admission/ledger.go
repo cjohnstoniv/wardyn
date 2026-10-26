@@ -27,11 +27,11 @@
 // all of them count it, writable only by the login that created it, and
 // (sticky bit) removable only by it. Every write goes to an exclusive temp
 // file in the same dir and is renamed into place, so a reader never sees half
-// an entry; a file that does not parse anyway counts as a live VM (fail
-// closed) until the boot changes. An entry's uid is its file's owner, never a
-// field inside it. Every transaction holds flock(LOCK_EX) on admission.lock,
-// waiting at most LockWait. A runner never creates the lock: if it is
-// missing, Open refuses and names the fix.
+// an entry; a file that does not parse anyway is damage, and counts as a live
+// VM (fail closed) until its owner removes it. An entry's uid is its file's
+// owner, never a field inside it. Every transaction holds flock(LOCK_EX) on
+// admission.lock, waiting at most LockWait. A runner never creates the lock:
+// if it is missing, Open refuses and names the fix.
 //
 // Limits stated, not fixed here:
 //   - only the owning login (or root) can delete a file, so another login's
@@ -162,19 +162,27 @@ type Entry struct {
 	RunnerID string `json:"runner_id"`
 	RunID    string `json:"run_id,omitempty"`
 	// Slot is the licence slot (0 or 1), for the per-slot-base fallback.
-	Slot        int    `json:"slot"`
-	OwnerPID    int    `json:"owner_pid"`
-	OwnerStart  int64  `json:"owner_start"`
-	HelperPID   int    `json:"helper_pid,omitempty"`
-	HelperStart int64  `json:"helper_start,omitempty"`
-	GuestCPUs   int    `json:"guest_cpus"`
-	GuestMemory uint64 `json:"guest_memory_bytes"`
+	Slot       int   `json:"slot"`
+	OwnerPID   int   `json:"owner_pid"`
+	OwnerStart int64 `json:"owner_start"`
+	// OwnerMonoStart and HelperMonoStart are those processes' Proc.MonoStart,
+	// recorded from the snapshot under the lock; 0 when unknown, as in every
+	// entry an earlier release wrote.
+	OwnerMonoStart  uint64 `json:"owner_mono_start,omitempty"`
+	HelperPID       int    `json:"helper_pid,omitempty"`
+	HelperStart     int64  `json:"helper_start,omitempty"`
+	HelperMonoStart uint64 `json:"helper_mono_start,omitempty"`
+	GuestCPUs       int    `json:"guest_cpus"`
+	GuestMemory     uint64 `json:"guest_memory_bytes"`
 	// DockerMemory is the memory the login's Docker engine is configured with.
-	DockerMemory uint64    `json:"docker_memory_bytes"`
-	Overhead     uint64    `json:"overhead_bytes"`
-	DiskReserve  int64     `json:"disk_reserve_bytes"`
-	BootTime     int64     `json:"boot_time"`
-	Created      time.Time `json:"created"`
+	DockerMemory uint64 `json:"docker_memory_bytes"`
+	Overhead     uint64 `json:"overhead_bytes"`
+	DiskReserve  int64  `json:"disk_reserve_bytes"`
+	BootTime     int64  `json:"boot_time"`
+	// BootSession is the boot's session (sameBoot); empty in an entry an
+	// earlier release wrote.
+	BootSession string    `json:"boot_session,omitempty"`
+	Created     time.Time `json:"created"`
 
 	// UID is the entry file's owner.
 	UID  int    `json:"-"`
@@ -186,12 +194,20 @@ type Proc struct {
 	PID   int
 	UID   int
 	Start int64 // start time, microseconds since the epoch
-	Name  string
+	// MonoStart is when the process was created, in mach absolute time: it
+	// counts up from this boot's start and no change of the calendar clock
+	// moves it, so it orders creations where Start cannot. 0 when unreadable.
+	MonoStart uint64
+	Name      string
 }
 
-// Host is what the ledger reads from the Mac.
+// Host is what the ledger reads from the Mac. A Host that also has a
+// BootSession method (bootSessioner) gives the boot's identity; one without
+// it leaves every entry this boot's (sameBoot).
 type Host interface {
-	// BootTime is kern.boottime in microseconds since the epoch.
+	// BootTime is kern.boottime in microseconds since the epoch. XNU moves it
+	// with every change of the calendar clock, so the ledger records it on
+	// each entry but never compares it.
 	BootTime() (int64, error)
 	// MemoryBytes is hw.memsize.
 	MemoryBytes() (uint64, error)
@@ -200,6 +216,12 @@ type Host interface {
 	// FreeDiskBytes is the space available to this user on path's volume.
 	FreeDiskBytes(path string) (int64, error)
 	Processes() ([]Proc, error)
+}
+
+// bootSessioner reads the boot's session id, kern.bootsessionuuid, which XNU
+// makes once per boot and no clock change touches.
+type bootSessioner interface {
+	BootSession() (string, error)
 }
 
 // VirtualizationProcess is the name of the framework's per-VM process. The
@@ -326,7 +348,9 @@ func IsRefusal(err error) bool {
 
 // view is the ledger as one transaction sees it.
 type view struct {
-	boot    int64
+	boot int64
+	// session is this boot's session; "" when unreadable.
+	session string
 	procs   []Proc
 	counted []Entry // counted toward host capacity
 	// debts are honoured-tombstoned entries: their slot and memory are
@@ -360,6 +384,11 @@ func (l *Ledger) load() (*view, error) {
 		return nil, err
 	}
 	v := &view{boot: boot, procs: procs, tombs: map[string]tomb{}}
+	if h, ok := l.c.Host.(bootSessioner); ok {
+		if s, err := h.BootSession(); err == nil { // unreadable: "", so every entry is this boot's
+			v.session = s
+		}
+	}
 	for _, de := range des {
 		name := de.Name()
 		if strings.HasPrefix(name, "e-") && strings.HasSuffix(name, ".json"+tombSuffix) {
@@ -382,14 +411,12 @@ func (l *Ledger) load() (*view, error) {
 		}
 		e, ok := readEntry(filepath.Join(l.c.Dir, name), fi)
 		if !ok {
-			if fi.ModTime().UnixMicro() >= boot {
-				v.unknown++ // fail closed: counts as a live VM
-			}
+			v.unknown++ // fail closed: counts as a live VM, whatever its time
 			continue
 		}
 		e.file, e.UID = name, l.c.FileOwner(fi)
 		v.all = append(v.all, e)
-		if e.BootTime != boot {
+		if !v.sameBoot(e) {
 			continue
 		}
 		if v.tombstoned(e) {
@@ -399,6 +426,20 @@ func (l *Ledger) load() (*view, error) {
 		v.counted = append(v.counted, e)
 	}
 	return v, nil
+}
+
+// sameBoot: e may be from this boot. The only proof of an earlier boot is a
+// recorded session that differs from this boot's; no calendar time proves
+// one, since the clock can move either way. An entry with no session (an
+// earlier release wrote it) is this boot's everywhere, so it counts until the
+// dead-entry rules free it, a tombstone or ReclaimOwn; with no monotonic
+// start (mayBeVM) both hold while any Virtualization or helper process of its
+// user runs. So after a restart such a slot frees once no macOS VM, helper or
+// Docker engine of that user runs, and a leaked one only when its owner
+// removes the file. With this boot's session unknown, every entry is this
+// boot's.
+func (v *view) sameBoot(e Entry) bool {
+	return v.session == "" || e.BootSession == "" || e.BootSession == v.session
 }
 
 func readEntry(path string, fi os.FileInfo) (Entry, bool) {
@@ -515,9 +556,10 @@ func (l *Ledger) Admit(req Request) (Entry, error) {
 		}
 		out = Entry{
 			Kind: req.Kind, State: StateReserved, RunnerID: l.c.RunnerID, RunID: req.RunID,
-			Slot: slot, OwnerPID: req.OwnerPID, OwnerStart: req.OwnerStart,
+			Slot: slot, OwnerPID: req.OwnerPID, OwnerStart: req.OwnerStart, OwnerMonoStart: v.monoStart(req.OwnerPID, req.OwnerStart),
 			GuestCPUs: req.GuestCPUs, GuestMemory: req.GuestMemory, DockerMemory: l.c.DockerMemoryBytes,
-			Overhead: l.c.OverheadBytes, DiskReserve: req.DiskReserve, BootTime: v.boot, Created: time.Now().UTC(),
+			Overhead: l.c.OverheadBytes, DiskReserve: req.DiskReserve, BootTime: v.boot, BootSession: v.session,
+			Created: time.Now().UTC(),
 		}
 		if req.Kind == KindPrepare {
 			out.State = StatePreparing
@@ -547,7 +589,7 @@ func (l *Ledger) AddLeaked(own string, ownerPID int, ownerStart int64) (Entry, e
 			return &Refusal{Reason: "the framework's refusal is accounted for by counted entries"}
 		}
 		out = Entry{Kind: KindLeaked, State: StateLeaked, RunnerID: l.c.RunnerID, Slot: -1,
-			OwnerPID: ownerPID, OwnerStart: ownerStart, BootTime: v.boot, Created: time.Now().UTC()}
+			OwnerPID: ownerPID, OwnerStart: ownerStart, BootTime: v.boot, BootSession: v.session, Created: time.Now().UTC()}
 		return l.create(&out)
 	})
 	return out, err
@@ -576,7 +618,7 @@ func (l *Ledger) Update(id string, fn func(*Entry)) (Entry, error) {
 
 // ClaimHelper is called by the helper itself (same uid and runner as the
 // entry), under the lock, before it creates its VM: it records its own pid and
-// start time, so the entry never depends on runnerd surviving the spawn. It
+// start times, so the entry never depends on runnerd surviving the spawn. It
 // refuses when the entry is gone, from an earlier boot, or has a tombstone
 // beside it (written or forged: the helper does not start either way).
 func (l *Ledger) ClaimHelper(id string, pid int, start int64) (Entry, error) {
@@ -590,13 +632,13 @@ func (l *Ledger) ClaimHelper(id string, pid int, start int64) (Entry, error) {
 		if err != nil {
 			return fmt.Errorf("admission: this VM's ledger entry: %w", err)
 		}
-		if e.BootTime != v.boot {
+		if !v.sameBoot(e) {
 			return errors.New("admission: this VM's ledger entry is from an earlier boot")
 		}
 		if _, ok := v.tombs[e.file]; ok {
 			return errors.New("admission: this VM's ledger entry was tombstoned")
 		}
-		e.HelperPID, e.HelperStart = pid, start
+		e.HelperPID, e.HelperStart, e.HelperMonoStart = pid, start, v.monoStart(pid, start)
 		if e.State == StateReserved {
 			e.State = StateStarting
 		}
@@ -604,6 +646,17 @@ func (l *Ledger) ClaimHelper(id string, pid int, start int64) (Entry, error) {
 		return l.rewrite(&e)
 	})
 	return out, err
+}
+
+// monoStart is the MonoStart of the process pid that started at start, as
+// alive matches it; 0 when no such process is in the snapshot.
+func (v *view) monoStart(pid int, start int64) uint64 {
+	for _, p := range v.procs {
+		if p.PID == pid && p.Start == start {
+			return p.MonoStart
+		}
+	}
+	return 0
 }
 
 func (l *Ledger) own(v *view, id string) (Entry, error) {
