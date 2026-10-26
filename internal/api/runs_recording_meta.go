@@ -50,7 +50,8 @@ func (s *Server) projectRecordingMeta(r *http.Request, runs []types.AgentRun) {
 }
 
 // fillRecordingMeta is projectRecordingMeta without the opt-in: a single run's
-// own read pays one stat, not one per run on the board, so it always projects.
+// own read pays one run's metadata lookup (StatJoined: each stored part plus
+// the first missing one), not one per run on the board, so it always projects.
 func (s *Server) fillRecordingMeta(ctx context.Context, runs []types.AgentRun) {
 	if s.cfg.RecordingStore == nil {
 		return
