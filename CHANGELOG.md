@@ -84,6 +84,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   how many repeats went unlogged, even when two errors take turns; a new error, or the run's containment succeeding,
   logs at once. Containment is still tried on every pass, and a failed pass still refuses the runner's ready state as
   before.
+- A Kubernetes runner now finishes stopping a run whose proxy pod was deleted after its setup step finished and before
+  the proxy started, such as a run cancelled at that moment (#3537). The kubelet reports that pod as failed with the
+  proxy never started, which the runner did not accept as proof that it stopped. The pod, both NetworkPolicies and the
+  Secret holding the proxy's config and the run's secret values stayed in the runs namespace until removed by hand.
 
 ## [0.10.0-rc.3] — 2026-10-25
 

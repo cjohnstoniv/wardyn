@@ -297,7 +297,7 @@ A revoked runner whose runnerd never returns leaves objects behind. Select them 
 | Finalizer semantics | A force delete leaves a finalized object held; a patch with a wrong UID or stale version is refused |
 | Normal stop | `StopProxy` ends in the `terminal` arm with a causal association |
 | Pod IP reuse after stop | A stopped proxy's IP is released and a later proxy that receives it starts; an IP still fenced for another run is refused |
-| Bind and delete, serial and overlapping | Both winning orders were observed on each kubelet: delete-first gives arm `unbound_deleted`, bind-first gives `never_initialized` or `terminal` with a causal association |
+| Bind and delete, serial and overlapping | Both winning orders were observed on each kubelet: delete-first gives arm `unbound_deleted`, bind-first gives `never_initialized`, `main_never_started` or `terminal` with a causal association |
 | Never initialised | An image pull that fails, and a cancel during the pull, both complete |
 | Restart while unbound | A restart between the unbound read and the bind keeps the run causal |
 | Crash gaps | A crash between steps of `StopProxy`, label teardown and the orphan sweep finishes after restart |
