@@ -23,9 +23,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A macOS VM's prepare reuses a restore image from its download cache only when a previous prepare's download wrote a
   record of its SHA-256 beside it and the file still matches. A file with no record, or a different hash, stops
   prepare with an error naming the file and what to do; it is never deleted. The record is written only for an image
-  Wardyn downloaded over the pinned connection from start to finish (a partial download resumes only with the marker
-  Wardyn wrote for it), or copied with `--ipsw` after its hash matched. It guards against hand-placed or damaged files,
-  not against someone with the runner user's write access (#3706).
+  Wardyn downloaded over the pinned connection in a download it started, resumed only from its own partial file (the
+  one with the marker Wardyn wrote for it), or copied with `--ipsw` after its hash matched. It guards against
+  hand-placed or damaged files, not against someone with the runner user's write access (#3706).
 - A macOS VM's prepare behind a proxy that inspects TLS now fails at the first range of the restore image, not after
   three retries, when the error is Apple's certificate-pinning refusal of `updates.cdn-apple.com`. The error says the
   host's certificate chain failed Apple's pinning check, that a proxy inspecting TLS is the likely cause and to exempt

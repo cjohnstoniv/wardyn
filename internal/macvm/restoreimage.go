@@ -42,15 +42,13 @@ func (p *prep) restoreImage(ctx context.Context) (RestoreImage, string, string, 
 			if sha == "" {
 				return RestoreImage{}, "", "", &UnrecordedImageError{Path: final, Mismatch: mismatch}
 			}
+			// A crash after the rename leaves the marker of the download that made it.
+			if _, err := os.Lstat(final + ".part"); err != nil {
+				_ = os.Remove(final + ".part" + partMarkerSuffix)
+			}
 		}
 		if sha == "" {
-			if err := p.download(ctx, u, final); err != nil {
-				return RestoreImage{}, "", "", err
-			}
-			if sha, err = fileSHA256(final); err != nil {
-				return RestoreImage{}, "", "", err
-			}
-			if err := os.WriteFile(recordPath(final), []byte(sha+"\n"), 0o600); err != nil {
+			if sha, err = p.download(ctx, u, final); err != nil {
 				return RestoreImage{}, "", "", err
 			}
 		}

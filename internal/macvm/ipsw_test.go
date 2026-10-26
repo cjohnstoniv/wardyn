@@ -372,6 +372,76 @@ func TestPrepareIPSWInsideTheCacheIsRefused(t *testing.T) {
 	}
 }
 
+// A crash between the record and the rename leaves a complete marked partial file and its record. The
+// next prepare gets a 416 for it, renames it and installs, without refusing.
+func TestPrepareCrashAfterRecordBeforeRenameResumes(t *testing.T) {
+	f := newPrep(t)
+	placePart(t, f, f.srv.body, true)
+	if err := os.WriteFile(cachedPath(f)+".sha256", []byte(f.srv.sha()+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m, err := macvm.Prepare(context.Background(), f.opts)
+	if err != nil || m.IPSWSHA256 != f.srv.sha() || f.srv.served.Load() != 0 {
+		t.Fatalf("%v, manifest hash %q, %d bytes served", err, m.IPSWSHA256, f.srv.served.Load())
+	}
+	if left := cacheNames(t, f); len(left) != 0 {
+		t.Fatalf("left in the cache: %v", left)
+	}
+}
+
+// A crash after the rename leaves the recorded image and the download's marker: the image is trusted and the
+// stale marker is cleared.
+func TestPrepareCrashAfterRenameKeepsTheImageAndClearsTheMarker(t *testing.T) {
+	f := newPrep(t)
+	placeInCache(t, f, string(f.srv.body), f.srv.sha())
+	if err := os.WriteFile(cachedPath(f)+".part.pinned", nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.opts.KeepIPSW = true
+	m, err := macvm.Prepare(context.Background(), f.opts)
+	if err != nil || m.IPSWSHA256 != f.srv.sha() || f.srv.reqs.Load() != 0 {
+		t.Fatalf("%v, manifest hash %q, %d requests", err, m.IPSWSHA256, f.srv.reqs.Load())
+	}
+	if _, err := os.Stat(cachedPath(f) + ".part.pinned"); !os.IsNotExist(err) {
+		t.Fatalf("the stale marker stayed: %v", err)
+	}
+}
+
+// A record that cannot be written stops the download before the rename, so a retry finds a marked complete
+// partial file, not an image with no record.
+func TestPrepareRecordWriteFailureLeavesNoUnrecordedImage(t *testing.T) {
+	f := newPrep(t)
+	if err := os.MkdirAll(cachedPath(f)+".sha256", 0o700); err != nil { // a directory where the record goes
+		t.Fatal(err)
+	}
+	if _, err := macvm.Prepare(context.Background(), f.opts); err == nil {
+		t.Fatal("an unwritable record not reported")
+	}
+	if _, err := os.Stat(cachedPath(f)); !os.IsNotExist(err) {
+		t.Fatalf("the image was renamed into place without its record: %v", err)
+	}
+	if err := os.Remove(cachedPath(f) + ".sha256"); err != nil {
+		t.Fatal(err)
+	}
+	m, err := macvm.Prepare(context.Background(), f.opts)
+	if err != nil || m.IPSWSHA256 != f.srv.sha() {
+		t.Fatalf("retry: %v, manifest hash %q", err, m.IPSWSHA256)
+	}
+}
+
+// A download that fetched nothing leaves no empty marked partial file behind.
+func TestPrepareFailedDownloadWithNoBytesLeavesNoPart(t *testing.T) {
+	f := newPrep(t)
+	tr := &failingTransport{err: errors.New(`tls: failed to verify certificate: x509: “updates.cdn-apple.com” certificates do not meet pinning requirements`)}
+	f.opts.HTTP = &http.Client{Transport: tr}
+	if _, err := macvm.Prepare(context.Background(), f.opts); err == nil {
+		t.Fatal("pinning refusal not reported")
+	}
+	if left := cacheNames(t, f); len(left) != 0 {
+		t.Fatalf("left in the cache: %v", left)
+	}
+}
+
 // A link outside the cache to a file inside it is refused too, and its target stays.
 func TestPrepareIPSWLinkedToTheCacheIsRefused(t *testing.T) {
 	f := newPrep(t)

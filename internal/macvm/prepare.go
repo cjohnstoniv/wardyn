@@ -500,7 +500,10 @@ func (p *prep) discardInterrupted() error {
 	return nil
 }
 
-func (p *prep) download(ctx context.Context, u, final string) error {
+// download fetches the image at u into final and returns its SHA-256. The record is written before the
+// rename, with the marker still there, so a crash at any point leaves either a resumable marked partial
+// file or a recorded image, never an image without a record.
+func (p *prep) download(ctx context.Context, u, final string) (string, error) {
 	var start time.Time
 	var startBytes int64 = -1
 	d := &downloader{
@@ -533,16 +536,28 @@ func (p *prep) download(ctx context.Context, u, final string) error {
 	p.emit(PrepareEvent{Phase: PhaseDownload, Version: ipswVersion(path.Base(final))})
 	part := final + ".part"
 	if err := p.startPart(part); err != nil {
-		return err
+		return "", err
 	}
 	if err := d.fetch(ctx, u, part); err != nil {
-		return err
+		// A download that fetched nothing leaves no marked empty partial file behind.
+		if fi, serr := os.Stat(part); serr == nil && fi.Size() == 0 {
+			_ = os.Remove(part)
+			_ = os.Remove(part + partMarkerSuffix)
+		}
+		return "", err
+	}
+	sha, err := fileSHA256(part)
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(recordPath(final), []byte(sha+"\n"), 0o600); err != nil {
+		return "", err
 	}
 	if err := os.Rename(part, final); err != nil {
-		return err
+		return "", err
 	}
 	_ = os.Remove(part + partMarkerSuffix)
-	return nil
+	return sha, nil
 }
 
 // waitAC waits for AC power before a phase that must not start on battery.
