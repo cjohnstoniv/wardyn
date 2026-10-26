@@ -92,7 +92,7 @@ func startFakeProxy(t *testing.T, allowed ...string) *fakeProxy {
 				}
 				_, _ = io.WriteString(c, banner)
 			}
-			// The guest's leg ends the read; the deadline only stops a hang, so it allows a loaded runner.
+			// The guest's close normally ends the read; the deadline only stops a hang, so it allows a loaded runner.
 			_ = c.SetReadDeadline(time.Now().Add(10 * time.Second))
 			b, _ := io.ReadAll(brw)
 			f.tunnel <- b
