@@ -31,6 +31,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   VM. Which came first is read from the time since the Mac started, so a change of the clock cannot make that VM look
   older than its helper. A process it cannot prove is not that VM still keeps the slot, and a slot recorded by an
   earlier release frees once no macOS VM, helper or Docker engine of that user runs.
+- A change of the Mac's clock no longer makes the macOS VM ledger take its live VMs for an earlier boot's. The ledger
+  told boots apart by `kern.boottime`, which macOS moves with the clock, so a clock change could stop counting a live
+  VM, refuse its helper and delete its runner's entries. Each entry now records the boot's session, and only a
+  different session means a restart. An entry with none, from an earlier release, is never taken for an earlier
+  boot's, and an entry file that does not parse now counts until its owner removes it, whatever its time.
 - A Kubernetes run whose proxy container is running but never becomes ready now fails at the start deadline with a line
   naming the readiness probe and the proxy image, and saying to check the proxy's log and connectivity; on a runner it
   adds that the proxy may be waiting for its first run-token renewal with the organisation (#3612).

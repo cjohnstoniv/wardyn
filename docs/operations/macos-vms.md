@@ -78,7 +78,7 @@
 - A third VM is refused with the reason. Docker's own Linux VM does not count.
 - A macOS VM that ended without reporting its stop frees its slot once no Virtualization or helper process of its user created after its helper remains, other than another macOS VM's own helper. Docker's Linux VM holds that slot only if Docker started after that helper.
   - Which came first is read from the time since the Mac started, which a change of the clock does not move. A process whose creation time cannot be read keeps the slot.
-  - A slot recorded by an earlier release frees once no macOS VM, helper or Docker engine of that user runs.
+  - A slot recorded by an earlier release frees once no macOS VM, helper or Docker engine of that user runs. Two kinds wait for their owner instead ([The shared ledger](#the-shared-ledger)).
 - Nothing in a Wardyn release contains macOS. The restore image comes from Apple to the Mac that uses it, and it is never uploaded, exported or stored in a registry.
 
 ## Preparing the base image
@@ -222,10 +222,13 @@
   - Its disk stays reserved, because the run's files are in that person's private directory, which no other login can read or delete.
   - The runner reports the held space apart from the freed capacity.
   - It is released when that person next logs in and their runner removes the files. A restart also drops it.
-- **Leftovers.** Entries, tombstones and temporary files from an earlier boot are never counted, but only their owner or root can delete them.
+- **Leftovers.** Entries this release recorded in an earlier boot, their tombstones and temporary files are never counted, but only their owner or root can delete them.
   - If a person never logs in again, their small ledger files and their run directories stay.
   - An admin removes them as root: the files under `/Users/Shared/Wardyn/macos-vm-admission`, that person's `/Users/Shared/Wardyn/sock/u<uid>/`, and `runs/` under `~/Library/Application Support/Wardyn/macos-vm.noindex/` in that person's home.
   - A root cleanup service is not in this release.
+- **Files only their owner clears.** A file that does not parse is damage, since the ledger's own writes never leave one. It counts as a live VM, after a restart too, until it is removed. So does a leaked slot or a tools update's that an earlier release recorded, since nothing proves its boot ended.
+  - First check that no macOS VM or helper of that user runs: `ps -U <user> -o pid,comm | grep -E 'Virtualization|wardyn-macvm'` prints nothing. Quit Docker Desktop first, since its Linux VM is a Virtualization process too.
+  - Only then does the file's owner, or root, delete it from `/Users/Shared/Wardyn/macos-vm-admission`.
 - **A leaked slot.** Apple's framework can hold a VM slot after a VM ended. The runner then lowers `max` by one and reports that the Mac needs a restart. A restart is the only recovery reported.
 
 ## Backups, Spotlight and removal

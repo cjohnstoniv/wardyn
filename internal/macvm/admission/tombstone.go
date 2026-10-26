@@ -96,7 +96,7 @@ func (v *view) helperGone(e Entry) bool {
 // process of its uid remains. (A helper whose runnerd died before recording
 // it is still a helper process, so its entry is never tombstoned under it.)
 func (v *view) tombstonable(e Entry) bool {
-	return e.BootTime == v.boot && e.Kind != KindLeaked && v.helperGone(e) &&
+	return v.sameBoot(e) && e.Kind != KindLeaked && v.helperGone(e) &&
 		v.vzCount(e.UID) == 0 && v.helperCount(e.UID) == 0
 }
 
@@ -121,7 +121,7 @@ func (l *Ledger) ReclaimOwn(id, runDir string) error {
 		if err != nil {
 			return err
 		}
-		if e.BootTime == v.boot {
+		if v.sameBoot(e) {
 			if e.Kind == KindLeaked {
 				return errors.New("admission: a leaked slot clears only when the Mac restarts")
 			}
@@ -171,14 +171,14 @@ func (l *Ledger) Sweep() (int, error) {
 }
 
 // tidy runs in each writing transaction: this login deletes its own entries
-// from an earlier boot, and its own tombstones whose entry is gone or from an
-// earlier boot. Its own tombstoned entries stay until ReclaimOwn reconciles
-// them, since their disk is a debt until the run files are gone.
+// from an earlier boot (sameBoot), and its own tombstones whose entry is gone
+// or from an earlier boot. Its own tombstoned entries stay until ReclaimOwn
+// reconciles them, since their disk is a debt until the run files are gone.
 func (l *Ledger) tidy(v *view) {
 	byFile := map[string]Entry{}
 	for _, e := range v.all {
 		byFile[e.file] = e
-		if e.UID == l.c.UID && e.BootTime != v.boot {
+		if e.UID == l.c.UID && !v.sameBoot(e) {
 			if os.Remove(filepath.Join(l.c.Dir, e.file)) == nil {
 				delete(byFile, e.file)
 			}
@@ -188,7 +188,7 @@ func (l *Ledger) tidy(v *view) {
 		if t.owner != l.c.UID {
 			continue
 		}
-		if e, ok := byFile[entry]; !ok || e.BootTime != v.boot {
+		if e, ok := byFile[entry]; !ok || !v.sameBoot(e) {
 			_ = os.Remove(filepath.Join(l.c.Dir, t.name))
 		}
 	}

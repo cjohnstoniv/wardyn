@@ -29,6 +29,10 @@ func (darwinHost) BootTime() (int64, error) {
 	return tv.Sec*1e6 + int64(tv.Usec), nil
 }
 
+var _ bootSessioner = darwinHost{}
+
+func (darwinHost) BootSession() (string, error) { return unix.Sysctl("kern.bootsessionuuid") }
+
 func (darwinHost) MemoryBytes() (uint64, error) { return unix.SysctlUint64("hw.memsize") }
 
 func (darwinHost) AvailableMemoryBytes() (uint64, error) {
