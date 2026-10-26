@@ -3,7 +3,10 @@
 
 package macvm
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // SetSwapHook makes the base exchange call hook, under the exclusive base
 // lock, just before it swaps. restore undoes it.
@@ -48,4 +51,11 @@ func SetGeteuid(euid int) (restore func()) {
 	old := geteuid
 	geteuid = func() int { return euid }
 	return func() { geteuid = old }
+}
+
+// SetAuxLockBackoff shortens the first boot's wait between aux lock retries.
+func SetAuxLockBackoff(d time.Duration) (restore func()) {
+	old := auxLockBackoff
+	auxLockBackoff = d
+	return func() { auxLockBackoff = old }
 }

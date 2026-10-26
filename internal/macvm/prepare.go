@@ -154,6 +154,11 @@ type PrepareOptions struct {
 	HelperVersion string
 	Progress      func(PrepareEvent)
 	Log           *slog.Logger
+	// InstallProcess, when set, is the argv of the process that runs the
+	// install (the helper with InstallCommand, which calls RunInstall). Unset,
+	// the install runs in this process, which only a fake engine survives: see
+	// RunInstall.
+	InstallProcess []string
 	// PowerPoll is how often power is checked while waiting or downloading.
 	PowerPoll time.Duration
 	// DownloadRange overrides DownloadRange (tests).
@@ -562,31 +567,54 @@ func (p *prep) create(img RestoreImage) ([]byte, error) {
 // installer is never paused. If ctx ends (the process or the Mac is going
 // away), the marker stays and the next Prepare discards the partial disk.
 func (p *prep) install(ctx context.Context, spec MachineSpec, ipsw string) error {
-	guest, host, err := NewNetPair()
-	if err != nil {
-		return err
-	}
-	defer guest.Close()
-	defer host.Close() // nothing reads it: the installer's VM has no network
-	spec.Net = guest
-	plan, err := BuildPlan(spec)
-	if err != nil {
-		return err
-	}
-	m, err := p.Engine.NewMachine(plan)
-	if err != nil {
-		return err
-	}
 	if err := p.waitAC(ctx, PhaseInstall); err != nil {
 		return err
 	}
 	p.emit(PrepareEvent{Phase: PhaseInstall})
-	if err := p.Engine.Install(ctx, m, ipsw, func(f float64) {
-		p.emit(PrepareEvent{Phase: PhaseInstall, Fraction: f})
-	}); err != nil {
+	progress := func(f float64) { p.emit(PrepareEvent{Phase: PhaseInstall, Fraction: f}) }
+	var err error
+	if len(p.InstallProcess) > 0 {
+		err = installInProcess(ctx, p.InstallProcess, spec, ipsw, progress)
+	} else {
+		err = installVM(ctx, p.Engine, spec, ipsw, progress)
+	}
+	if err != nil {
 		return fmt.Errorf(InstallFailurePrefix+"%w", err)
 	}
 	return nil
+}
+
+// auxLockRetries and auxLockBackoff bound firstBoot's retry on the aux lock
+// refusal. It is a backstop, not the release: the install process has exited
+// by then (InstallProcess), but the framework's own per-VM process may take a
+// moment to let go of the aux storage, with no signal to wait on.
+var (
+	auxLockRetries = 5
+	auxLockBackoff = 2 * time.Second
+)
+
+// auxLocked says err is the framework refusing a VM whose auxiliary storage
+// another VM still locks. The framework says so only in its description.
+func auxLocked(err error) bool {
+	return strings.Contains(err.Error(), "Failed to lock auxiliary storage")
+}
+
+// firstBoot starts the first boot, retrying a short while on exactly the aux
+// lock refusal.
+func (p *prep) firstBoot(ctx context.Context, spec MachineSpec, nic *os.File, user, pass string) (FirstBoot, error) {
+	for try := 0; ; try++ {
+		fb, err := p.FirstBoot.Boot(spec.DiskPath, spec.AuxPath, spec.HardwareModel, spec.MachineIdentifier,
+			uint(spec.CPUs), spec.MemoryBytes, nic, user, pass)
+		if err == nil || try == auxLockRetries || !auxLocked(err) {
+			return fb, err
+		}
+		p.Log.Warn("macvm: the first boot's aux storage is still locked; retrying", "err", err.Error())
+		select {
+		case <-ctx.Done():
+			return FirstBoot{}, err
+		case <-time.After(auxLockBackoff):
+		}
+	}
 }
 
 // provisionAndBootstrap runs the one first boot, waits for the guest's Remote
@@ -619,8 +647,7 @@ func (p *prep) provisionAndBootstrap(ctx context.Context, spec MachineSpec) (Boo
 	if p.byHand {
 		user, pass = "", "" // a plain boot: Setup Assistant
 	}
-	fb, err := p.FirstBoot.Boot(spec.DiskPath, spec.AuxPath, spec.HardwareModel, spec.MachineIdentifier,
-		uint(spec.CPUs), spec.MemoryBytes, guest, user, pass)
+	fb, err := p.firstBoot(ctx, spec, guest, user, pass)
 	if err != nil {
 		return BootstrapResult{}, fmt.Errorf("macvm: provisioning boot: %w", err)
 	}

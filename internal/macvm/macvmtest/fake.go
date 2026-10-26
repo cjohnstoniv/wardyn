@@ -37,6 +37,9 @@ type Engine struct {
 	StartErr error
 	// IgnoreRequestStop makes machines ignore a graceful stop.
 	IgnoreRequestStop bool
+	// LockAux makes each machine flock its aux storage for the life of the
+	// process, as Code-Hex/vz's installer VM does: nothing releases it.
+	LockAux bool
 
 	installs, loads, ids int
 	machines             []*Machine
@@ -88,6 +91,13 @@ func (e *Engine) NewMachine(p macvm.Plan) (macvm.Machine, error) {
 		return nil, err
 	}
 	m := &Machine{Plan: p, e: e, state: macvm.StateStopped, done: make(chan struct{}), listeners: map[uint32]*listener{}}
+	if e.LockAux {
+		f, err := lockAux(p.AuxPath)
+		if err != nil {
+			return nil, err
+		}
+		m.aux = f
+	}
 	e.mu.Lock()
 	e.machines = append(e.machines, m)
 	e.mu.Unlock()
@@ -145,6 +155,7 @@ type Machine struct {
 	doneOnce  sync.Once
 	listeners map[uint32]*listener
 	readBack  []byte
+	aux       *os.File // LockAux's lock, never closed
 }
 
 func (m *Machine) Start(context.Context) error {
@@ -282,6 +293,12 @@ type FirstBoot struct {
 	ScreenErr error
 	// NoScreen is ScreenReady's answer, and Screen's first, as on a Mac with no desktop session.
 	NoScreen error
+	// LockAux makes Boot flock the aux storage first and fail as the framework
+	// does while another VM, in any process, still holds it (Engine.LockAux).
+	LockAux bool
+	// AuxLocked, if set, says the aux storage is still locked; Boot then fails
+	// the same way.
+	AuxLocked func() bool
 
 	mu             sync.Mutex
 	boots          int
@@ -302,6 +319,10 @@ type BootArgs struct {
 
 var _ macvm.FirstBooter = (*FirstBoot)(nil)
 
+// errAuxLocked is the framework's refusal of a VM whose aux storage another VM
+// locks, as the first boot reports it.
+var errAuxLocked = errors.New("macvm provision: start: Invalid virtual machine configuration. Failed to lock auxiliary storage")
+
 func (f *FirstBoot) Supported() error { return f.Unsupported }
 
 func (f *FirstBoot) ScreenReady() error { return f.NoScreen }
@@ -312,6 +333,16 @@ func (f *FirstBoot) Boot(disk, aux string, hw, mid []byte, cpus uint, mem uint64
 	f.boots++
 	if f.BootErr != nil {
 		return macvm.FirstBoot{}, f.BootErr
+	}
+	if f.AuxLocked != nil && f.AuxLocked() {
+		return macvm.FirstBoot{}, errAuxLocked
+	}
+	if f.LockAux {
+		l, err := lockAux(aux)
+		if err != nil {
+			return macvm.FirstBoot{}, err
+		}
+		_ = l.Close()
 	}
 	if nic == nil {
 		return macvm.FirstBoot{}, errors.New("fake: no nic")
