@@ -171,35 +171,54 @@ func (c Stage2BootConfig) boot(ctx context.Context, spec MachineSpec) (ToolsGues
 	if err != nil {
 		return fail(err)
 	}
-	m, err := c.Engine.NewMachine(plan)
+	var (
+		m     Machine
+		pairs map[uint32]*pairer
+	)
+	// The first boot's VM, just stopped, may hold the aux storage a moment
+	// longer: each attempt builds the VM and its listeners afresh and undoes
+	// them all when it fails.
+	err = retryAuxLocked(ctx, c.Log, func() error {
+		var attempt []func()
+		failed := func(err error) error {
+			for i := len(attempt) - 1; i >= 0; i-- {
+				attempt[i]()
+			}
+			return err
+		}
+		var err error
+		if m, err = c.Engine.NewMachine(plan); err != nil {
+			return fmt.Errorf("macvm: build the stage-2 VM: %w", err)
+		}
+		pairs = map[uint32]*pairer{}
+		for _, port := range stage2Ports {
+			l, err := m.Listen(port)
+			if err != nil {
+				return failed(fmt.Errorf("macvm: vsock %d: %w", port, err))
+			}
+			attempt = append(attempt, func() { _ = l.Close() })
+			var open []byte
+			if port == DesktopPort {
+				open = []byte{DesktopOpenByte}
+			}
+			p := newPairer(open)
+			attempt = append(attempt, p.close)
+			pairs[port] = p
+			go p.acceptGuest(l)
+		}
+		if err := m.Start(ctx); err != nil {
+			return failed(fmt.Errorf("macvm: start the stage-2 VM: %w", err))
+		}
+		undo = append(undo, attempt...)
+		return nil
+	})
 	if err != nil {
-		return fail(fmt.Errorf("macvm: build the stage-2 VM: %w", err))
-	}
-	pairs := map[uint32]*pairer{}
-	for _, port := range stage2Ports {
-		l, err := m.Listen(port)
-		if err != nil {
-			return fail(fmt.Errorf("macvm: vsock %d: %w", port, err))
-		}
-		undo = append(undo, func() { _ = l.Close() })
-		var open []byte
-		if port == DesktopPort {
-			open = []byte{DesktopOpenByte}
-		}
-		p := newPairer(open)
-		undo = append(undo, p.close)
-		pairs[port] = p
-		go p.acceptGuest(l)
-		v.mu.Lock()
-		v.st.Listeners = append(v.st.Listeners, port)
-		v.mu.Unlock()
-	}
-	if err := m.Start(ctx); err != nil {
 		reportVMLimit(err, c.Leaked, c.Log)
-		return fail(fmt.Errorf("macvm: start the stage-2 VM: %w", err))
+		return fail(err)
 	}
 	undo = append(undo, func() { _ = m.Stop() })
 	v.mu.Lock()
+	v.st.Listeners = append(v.st.Listeners, stage2Ports...)
 	v.st.State, v.st.StartedAt = StateRunning, time.Now().UTC()
 	v.mu.Unlock()
 	wait := cmpDuration(c.GuestWait, 5*time.Minute)

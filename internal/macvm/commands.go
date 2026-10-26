@@ -21,6 +21,8 @@ const (
 	FlagSlot        = "slot"         // the base slot (default 0)
 	FlagReprepare   = "reprepare"    // prepare only: build a new base and swap it in
 	FlagKeepIPSW    = "keep-ipsw"    // prepare only: keep the restore image
+	FlagIPSW        = "ipsw"         // prepare only: build from this restore image instead of downloading Apple's
+	FlagSHA256      = "sha256"       // prepare only: the SHA-256 the --ipsw file must have
 	FlagForce       = "force"        // update-tools only: an update someone asked for
 )
 

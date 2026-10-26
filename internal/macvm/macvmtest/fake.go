@@ -33,13 +33,18 @@ type Engine struct {
 	// InstallFunc, if set, runs as the installer; otherwise it reports 0.5
 	// and 1 and returns.
 	InstallFunc func(ctx context.Context, m *Machine, ipsw string, progress func(float64)) error
-	// StartErr makes Machine.Start fail.
-	StartErr error
+	// StartErr makes Machine.Start fail: every start, or with StartFailures
+	// set, only the first that many.
+	StartErr      error
+	StartFailures int
 	// IgnoreRequestStop makes machines ignore a graceful stop.
 	IgnoreRequestStop bool
+	// LockAux makes each machine flock its aux storage for the life of the
+	// process, as Code-Hex/vz's installer VM does: nothing releases it.
+	LockAux bool
 
-	installs, loads, ids int
-	machines             []*Machine
+	installs, loads, ids, startFails, urlCalls int
+	machines                                   []*Machine
 }
 
 var _ macvm.Engine = (*Engine)(nil)
@@ -47,6 +52,9 @@ var _ macvm.Engine = (*Engine)(nil)
 func (e *Engine) HostCheck() error { return e.HostErr }
 
 func (e *Engine) LatestRestoreImageURL(context.Context) (string, error) {
+	e.mu.Lock()
+	e.urlCalls++
+	e.mu.Unlock()
 	if e.URL == "" {
 		return "", errors.New("fake: no restore image URL")
 	}
@@ -88,6 +96,13 @@ func (e *Engine) NewMachine(p macvm.Plan) (macvm.Machine, error) {
 		return nil, err
 	}
 	m := &Machine{Plan: p, e: e, state: macvm.StateStopped, done: make(chan struct{}), listeners: map[uint32]*listener{}}
+	if e.LockAux {
+		f, err := lockAux(p.AuxPath)
+		if err != nil {
+			return nil, err
+		}
+		m.aux = f
+	}
 	e.mu.Lock()
 	e.machines = append(e.machines, m)
 	e.mu.Unlock()
@@ -121,6 +136,9 @@ func (e *Engine) SetThermal(t macvm.ThermalState) {
 	e.mu.Unlock()
 }
 
+// URLCalls is how many times LatestRestoreImageURL ran.
+func (e *Engine) URLCalls() int { e.mu.Lock(); defer e.mu.Unlock(); return e.urlCalls }
+
 // Installs is how many times Install ran.
 func (e *Engine) Installs() int { e.mu.Lock(); defer e.mu.Unlock(); return e.installs }
 
@@ -134,6 +152,18 @@ func (e *Engine) Machines() []*Machine {
 	return append([]*Machine(nil), e.machines...)
 }
 
+func (e *Engine) startErr() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.StartFailures > 0 {
+		if e.startFails >= e.StartFailures {
+			return nil
+		}
+		e.startFails++
+	}
+	return e.StartErr
+}
+
 // Machine is a fake VM.
 type Machine struct {
 	Plan macvm.Plan
@@ -145,12 +175,13 @@ type Machine struct {
 	doneOnce  sync.Once
 	listeners map[uint32]*listener
 	readBack  []byte
+	aux       *os.File // LockAux's lock, never closed
 }
 
 func (m *Machine) Start(context.Context) error {
-	if m.e.StartErr != nil {
+	if err := m.e.startErr(); err != nil {
 		m.end(macvm.StateError)
-		return m.e.StartErr
+		return err
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -282,6 +313,12 @@ type FirstBoot struct {
 	ScreenErr error
 	// NoScreen is ScreenReady's answer, and Screen's first, as on a Mac with no desktop session.
 	NoScreen error
+	// LockAux makes Boot flock the aux storage first and fail as the framework
+	// does while another VM, in any process, still holds it (Engine.LockAux).
+	LockAux bool
+	// AuxLocked, if set, says the aux storage is still locked; Boot then fails
+	// the same way.
+	AuxLocked func() bool
 
 	mu             sync.Mutex
 	boots          int
@@ -302,6 +339,10 @@ type BootArgs struct {
 
 var _ macvm.FirstBooter = (*FirstBoot)(nil)
 
+// ErrAuxLocked is the framework's refusal of a VM whose aux storage another VM
+// locks, as the first boot reports it.
+var ErrAuxLocked = errors.New("macvm provision: start: Invalid virtual machine configuration. Failed to lock auxiliary storage")
+
 func (f *FirstBoot) Supported() error { return f.Unsupported }
 
 func (f *FirstBoot) ScreenReady() error { return f.NoScreen }
@@ -312,6 +353,16 @@ func (f *FirstBoot) Boot(disk, aux string, hw, mid []byte, cpus uint, mem uint64
 	f.boots++
 	if f.BootErr != nil {
 		return macvm.FirstBoot{}, f.BootErr
+	}
+	if f.AuxLocked != nil && f.AuxLocked() {
+		return macvm.FirstBoot{}, ErrAuxLocked
+	}
+	if f.LockAux {
+		l, err := lockAux(aux)
+		if err != nil {
+			return macvm.FirstBoot{}, err
+		}
+		_ = l.Close()
 	}
 	if nic == nil {
 		return macvm.FirstBoot{}, errors.New("fake: no nic")

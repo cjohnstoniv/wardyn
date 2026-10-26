@@ -46,6 +46,8 @@ func helperFlags(t *testing.T, argv []string) (sub string, set map[string]string
 	switch argv[0] {
 	case macvm.PrepareCommand:
 		fs.Bool(macvm.FlagKeepIPSW, false, "")
+		fs.String(macvm.FlagIPSW, "", "")
+		fs.String(macvm.FlagSHA256, "", "")
 		fs.Bool(macvm.FlagReprepare, false, "")
 	case macvm.UpdateToolsCommand:
 		fs.Bool(macvm.FlagForce, false, "")
@@ -75,7 +77,12 @@ func TestMacOSVMJobArgvIsTheHelpersFlags(t *testing.T) {
 	m.helper, args = fakeHelper(t, 0)
 	man, _ := macvm.ReadManifest(m.layout.BaseDir(0))
 	_ = m.startToolsUpdate(context.Background(), man)
-	_ = m.startPrepare(context.Background(), prepareArgs{helper: m.helper, runnerID: "runner-a", cpus: 4, memoryMiB: 8192, keepIPSW: true, newImage: true})
+	ipsw := filepath.Join(t.TempDir(), "a.ipsw")
+	if err := os.WriteFile(ipsw, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hash := strings.Repeat("ab", 32)
+	_ = m.startPrepare(context.Background(), prepareArgs{helper: m.helper, runnerID: "runner-a", cpus: 4, memoryMiB: 8192, keepIPSW: true, newImage: true, ipsw: ipsw, sha256: strings.ToUpper(hash)})
 	var jobs [][]string
 	for _, c := range calls(t, args) {
 		if f := strings.Fields(c); len(f) > 0 && f[0] != "probe" {
@@ -91,7 +98,8 @@ func TestMacOSVMJobArgvIsTheHelpersFlags(t *testing.T) {
 		t.Fatalf("tools update %s %v", sub, set)
 	}
 	sub, set = helperFlags(t, jobs[1])
-	if sub != macvm.PrepareCommand || set[macvm.FlagReprepare] != "true" || set[macvm.FlagKeepIPSW] != "true" || set[macvm.FlagCPUs] != "4" {
+	if sub != macvm.PrepareCommand || set[macvm.FlagReprepare] != "true" || set[macvm.FlagKeepIPSW] != "true" || set[macvm.FlagCPUs] != "4" ||
+		set[macvm.FlagIPSW] != ipsw || set[macvm.FlagSHA256] != hash {
 		t.Fatalf("prepare %s %v", sub, set)
 	}
 }

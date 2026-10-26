@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -27,6 +28,21 @@ const maxRangeFailures = 3
 // The download wraps its own cause in it twice over (fetch, then the range), and a caller strips it
 // until none is left.
 const DownloadFailurePrefix = "macvm: restore image download: "
+
+// pinnedHostAdvice is the cause a certificate-pinning refusal ends the download with: the host twice, then
+// the image URL prepare asked for. Apple pins its update CDN, so the platform verifier refuses any chain a
+// TLS-inspecting proxy re-signs; the refusal alone does not prove a proxy, so the advice says likely.
+const pinnedHostAdvice = "the certificate chain for %s failed Apple's pinning check; a proxy that inspects TLS is the " +
+	"likely cause: exempt %s from TLS inspection and run prepare again (the image is %s), or download that image on " +
+	"another network and run prepare with --ipsw <file> --sha256 <hex>, taking the SHA-256 from a source you trust"
+
+// isPinningRefusal says err is the platform verifier refusing a pinned host's chain. macOS reports it
+// as a bare "x509: ... certificates do not meet pinning requirements" with no typed error to match, so
+// the text is the only signal.
+func isPinningRefusal(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "x509:") && strings.Contains(msg, "pinning requirements")
+}
 
 type downloader struct {
 	client *http.Client
@@ -81,6 +97,14 @@ func (d *downloader) fetch(ctx context.Context, url, part string) error {
 			}
 			if ctx.Err() != nil {
 				return ctx.Err()
+			}
+			if isPinningRefusal(err) {
+				// A proxy that inspects TLS refuses every range the same way; retrying only waits.
+				host := url
+				if u, perr := neturl.Parse(url); perr == nil && u.Hostname() != "" {
+					host = u.Hostname()
+				}
+				return fmt.Errorf(DownloadFailurePrefix+pinnedHostAdvice+": %w", host, host, url, err)
 			}
 			if failures++; failures >= maxRangeFailures {
 				return fmt.Errorf(DownloadFailurePrefix+"%w", err)

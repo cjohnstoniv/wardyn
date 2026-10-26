@@ -310,3 +310,43 @@ func TestStage2BootLeakedHook(t *testing.T) {
 		})
 	}
 }
+
+// The first boot's VM may hold the aux storage a moment after it stops: the
+// stage-2 boot builds its VM afresh while the start is refused for that.
+func TestStage2BootRetriesTheAuxLock(t *testing.T) {
+	defer macvm.SetAuxLockBackoff(time.Millisecond)()
+	eng := &macvmtest.Engine{StartErr: macvmtest.ErrAuxLocked, StartFailures: 2}
+	root := macvmtest.SockRoot(t)
+	cfg := macvm.Stage2BootConfig{Engine: eng, SockRoot: root, SockKey: macvm.JobSockKey("0123456789abcdef01234567"), SockFstat: macvmtest.SockFstat, GuestWait: 10 * time.Second}
+	dir := t.TempDir()
+	for _, f := range []string{macvm.DiskFile, macvm.AuxFile} {
+		_ = os.WriteFile(filepath.Join(dir, f), nil, 0o600)
+	}
+	spec := macvm.MachineSpec{CPUs: 4, MemoryBytes: 8 << 30, MinCPUs: 2, MinMemoryBytes: 4 << 30, HardwareModel: []byte("hw"),
+		MachineIdentifier: []byte("id"), DiskPath: filepath.Join(dir, macvm.DiskFile), AuxPath: filepath.Join(dir, macvm.AuxFile)}
+	type booted struct {
+		stop func(context.Context) error
+		err  error
+	}
+	done := make(chan booted, 1)
+	go func() {
+		_, stop, err := cfg.ToolsBoot()(context.Background(), spec)
+		done <- booted{stop, err}
+	}()
+	cc := sendNetFD(t, filepath.Join(macvm.SockDir(root, "0123456789ab"), macvm.ControlSock))
+	b := <-done
+	if b.err != nil {
+		t.Fatal(b.err)
+	}
+	ms := eng.Machines()
+	if len(ms) != 3 || ms[0].State() != macvm.StateError || ms[1].State() != macvm.StateError || ms[2].State() != macvm.StateRunning {
+		t.Fatalf("%d machines built", len(ms))
+	}
+	st, err := cc.Status(context.Background())
+	if err != nil || !slices.Equal(st.Listeners, []uint32{macvm.AgentPort, macvm.DesktopPort, macvm.ToolsPort}) {
+		t.Fatalf("status %+v %v", st, err)
+	}
+	if err := b.stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}

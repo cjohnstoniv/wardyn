@@ -210,6 +210,7 @@
 | New proxy pod's IP still fenced for an earlier run | The runner stops the new run before it opens; the run fails with reason `relay_ip_fenced` | Start the run again. The address frees when the earlier run's stop is confirmed |
 | Revoked while online | The org ends the runner's runs `runner_revoked`; runnerd stops every proxy, tears down every sandbox and deletes the per-run and keystore Secrets | Reinstall with a fresh token if wanted |
 | Revoked while offline and never returning | Nothing releases the stop-proof finalizer or the policies | Follow [Revoked and gone](#revoked-and-gone) |
+| A stop an earlier release held | Its proxy pod stays `Failed` and deleting with the proxy never started; its policies and its Secret, with the run's secret values and managed files, stay | Upgrade the runner: it retries the stop when it reconnects. A run still held after that keeps its fence: see [A stop still held after the upgrade](#a-stop-still-held-after-the-upgrade) |
 | runnerd's node lost | The old pod stays Terminating and the volume stays attached | Force-delete the pod, or taint the node `node.kubernetes.io/out-of-service`; proxy deadlines bound egress meanwhile |
 | Boot refusal | runnerd exits with a named error | See the table below |
 
@@ -263,6 +264,14 @@ A revoked runner whose runnerd never returns leaves objects behind. Select them 
 - Never clear the finalizer for a run on a partitioned node or one whose state is unknown. Its pods and policies stay until the node is confirmed powered off or returns.
 - A reinstall refuses until the namespace is clean. Pods end at their deadline anyway.
 
+### A stop still held after the upgrade
+
+Before 0.10.0-rc.4 the runner did not accept a proxy pod deleted before its proxy started as stopped. The upgraded runner does, when it reconnects, from what its own reads of the pod and its node show. If a run is still held after that, the runner's evidence does not prove the stop, and the run keeps its fence:
+
+- Do not remove `wardyn.dev/stop-proof` or delete the run's pods, NetworkPolicies or Secret by hand. One read of the pod cannot show what the runner checks: that no earlier read showed a container ID, and that the node is the machine the run bound to.
+- Release it only as [Sandbox node lost or partitioned](#sandbox-node-lost-or-partitioned) says: the `out-of-service` taint, or a node record, for the node states that section names.
+- On any other node state the run stays held, with its Secret, until the runner can prove the stop.
+
 ## In-cluster services are unreachable
 
 - Runnerd writes a hard deny into every proxy: the `svc` suffix and the cluster domain, the relay ClusterIP, runnerd's pod IP, `apiServer.peers` and `egress.hardDenyCIDRs`.
@@ -297,7 +306,7 @@ A revoked runner whose runnerd never returns leaves objects behind. Select them 
 | Finalizer semantics | A force delete leaves a finalized object held; a patch with a wrong UID or stale version is refused |
 | Normal stop | `StopProxy` ends in the `terminal` arm with a causal association |
 | Pod IP reuse after stop | A stopped proxy's IP is released and a later proxy that receives it starts; an IP still fenced for another run is refused |
-| Bind and delete, serial and overlapping | Both winning orders were observed on each kubelet: delete-first gives arm `unbound_deleted`, bind-first gives `never_initialized` or `terminal` with a causal association |
+| Bind and delete, serial and overlapping | Both winning orders were observed on each kubelet: delete-first gives arm `unbound_deleted`, bind-first gives `never_initialized`, `main_never_started` or `terminal` with a causal association |
 | Never initialised | An image pull that fails, and a cancel during the pull, both complete |
 | Restart while unbound | A restart between the unbound read and the bind keeps the run causal |
 | Crash gaps | A crash between steps of `StopProxy`, label teardown and the orphan sweep finishes after restart |

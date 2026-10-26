@@ -32,6 +32,7 @@
 |---|---|
 | The Mac | Apple silicon, macOS 26 or later. On macOS 26 each prepare, `--new-image` too, needs [setup by hand](#setup-by-hand) once per base, about 10 minutes at the Mac. macOS 27 sets the guest up unattended |
 | Docker | A running engine on the Mac. The guest's network relay and proxy run in it, and the runner needs it to start ([Docker on the Mac](#docker-on-the-mac)) |
+| Network | An uninspected path to `updates.cdn-apple.com`, which Apple pins: a TLS-inspecting proxy fails the image download at once, and the error prints the image URL and names `--ipsw`. The same exemption covers [stage 2](#the-prep-proxy)'s opaque tunnels |
 | Disk | About 85 GiB free to prepare, then about 107 GiB free to start a second VM ([Disk](#disk)) |
 | Power | On AC power to start preparing ([Preparing the base image](#preparing-the-base-image)) |
 | A login | Someone logged in on the Mac ([Logins, FileVault and restarts](#logins-filevault-and-restarts)) |
@@ -77,6 +78,9 @@
 - Apple's licence allows up to two additional copies or instances of macOS on a Mac for development, testing, macOS Server or personal non-commercial use. The framework refuses a third. Wardyn counts first.
 - One ledger on the Mac counts every macOS VM, whichever login or purpose: a run, preparing the base, and a tools update. Preparing holds one of the two slots.
 - A third VM is refused with the reason. Docker's own Linux VM does not count.
+- A macOS VM that ended without reporting its stop frees its slot once no Virtualization or helper process of its user created after its helper remains, other than another macOS VM's own helper. Docker's Linux VM holds that slot only if Docker started after that helper.
+  - Which came first is read from the time since the Mac started, which a change of the clock does not move. A process whose creation time cannot be read keeps the slot.
+  - A slot recorded by an earlier release frees once no macOS VM, helper or Docker engine of that user runs. Two kinds wait for their owner instead ([The shared ledger](#the-shared-ledger)).
 - Nothing in a Wardyn release contains macOS. The restore image comes from Apple to the Mac that uses it, and it is never uploaded, exported or stored in a registry.
 
 ## Preparing the base image
@@ -85,6 +89,11 @@
 
 - It sizes its VM at the runner's per-run limits and never raises them. A runner that has connected to an organisation that sets them has them saved, and `prepare` uses them. Before that, if the organisation sets none, or to use others, pass `--per-run-cpu` (CPUs) and `--per-run-memory` (GB); a flag wins over the saved limit.
 - `--keep-ipsw` keeps Apple's image after the base is ready, and `--new-image` is the re-prepare.
+- `--ipsw <file> --sha256 <hex>` builds from a restore image you downloaded, for a network where Apple's download fails (see Network above). `--sha256` is required; take the SHA-256 from a source you trust. It never asks Apple which image is newest.
+- Prepare copies the file into its cache, never linking or moving it, and uses the copy only when its hash matches, before anything loads or installs it. A mismatch is refused with both hashes and the copy removed. Your file is never changed or deleted.
+- With a base ready, prepare does nothing and does not use the file; `--new-image` builds the new base from it. The copy is deleted once the base is ready, unless `--keep-ipsw` is set.
+- A restore image in the cache is reused only when a previous prepare's download recorded its SHA-256 (a `.sha256` file beside it) and the file still matches. The record is written only for an image Wardyn downloaded over the pinned connection, resumed only from its own partial file, or copied with `--ipsw` after its hash matched.
+- Any other file there (placed by hand, or no longer matching its record) stops prepare with an error naming it. Prepare neither uses nor deletes it: move it out and pass it with `--ipsw` and `--sha256`, or delete it. The record guards against hand-placed or damaged files, not against someone with the runner user's write access.
 - `wardyn-runnerd setup` starts the same preparing itself with the limits it just registered, on a first registration unless the base is ready. Given `--keep-ipsw`, setup passes it on to that prepare. A rerun prints the prepare command instead.
 
 | Step | What happens |
@@ -213,17 +222,20 @@
   - A runner waits at most 10 seconds for the lock, then refuses, saying the ledger is busy.
   - A local user who can do this can already exhaust the Mac's memory or disk directly.
 - **When a slot is released.** A runner frees an entry only once the helper reported the VM stopped, the helper exited and the run directory is gone. There is one exception, a heuristic: a runner may free its own entry for a helper that was killed without that report.
-  - It does so when the helper's process no longer exists, the login has no more Virtualization and `wardyn-macvm` processes than its other entries that have a live helper, and the run directory is gone.
-  - The count cannot say which VM a process belongs to, so it errs toward keeping the entry. It can free an entry too early in one case: this VM's process outlived its helper while another entry's helper is live but has not started its VM yet.
+  - It does so when the helper's process no longer exists, no Virtualization or `wardyn-macvm` process of the login created after that helper remains other than another entry's live helper, and the run directory is gone.
+  - Nothing says which VM a process belongs to, so it errs toward keeping the entry ([Apple's licence and the two-VM limit](#apples-licence-and-the-two-vm-limit)).
   - Then the Virtualization framework's own cap of two is the backstop.
 - **A login that ended with a VM live.** Another login's runner can free its slot and memory once the helper is gone.
   - Its disk stays reserved, because the run's files are in that person's private directory, which no other login can read or delete.
   - The runner reports the held space apart from the freed capacity.
   - It is released when that person next logs in and their runner removes the files. A restart also drops it.
-- **Leftovers.** Entries, tombstones and temporary files from an earlier boot are never counted, but only their owner or root can delete them.
+- **Leftovers.** Entries this release recorded in an earlier boot, their tombstones and temporary files are never counted, but only their owner or root can delete them.
   - If a person never logs in again, their small ledger files and their run directories stay.
   - An admin removes them as root: the files under `/Users/Shared/Wardyn/macos-vm-admission`, that person's `/Users/Shared/Wardyn/sock/u<uid>/`, and `runs/` under `~/Library/Application Support/Wardyn/macos-vm.noindex/` in that person's home.
   - A root cleanup service is not in this release.
+- **Files only their owner clears.** A file that does not parse is damage, since the ledger's own writes never leave one. It counts as a live VM, after a restart too, until it is removed. So does a leaked slot that an earlier release recorded, since nothing proves its boot ended.
+  - First check that no macOS VM or helper of that user runs: `ps -U <user> -o pid,comm | grep -E 'Virtualization|wardyn-macvm'` prints nothing. Quit Docker Desktop first, since its Linux VM is a Virtualization process too.
+  - Only then does the file's owner, or root, delete it from `/Users/Shared/Wardyn/macos-vm-admission`.
 - **A leaked slot.** Apple's framework can hold a VM slot after a VM ended. The runner then lowers `max` by one and reports that the Mac needs a restart. A restart is the only recovery reported.
 
 ## Backups, Spotlight and removal

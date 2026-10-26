@@ -40,7 +40,11 @@ func newMacOSVMCommand() *cobra.Command {
 				return nil, "", err
 			}
 		}
-		id, err := runneridentity.Load(stateDir, cfg.get("org_url"))
+		org, err := macVMOrg(cfg, serviceOrgArg)
+		if err != nil {
+			return nil, "", err
+		}
+		id, err := runneridentity.Load(stateDir, org)
 		if err != nil {
 			return nil, "", err
 		}
@@ -80,6 +84,7 @@ func newMacOSVMCommand() *cobra.Command {
 	var cpu float64
 	var memGB int64
 	var keep, newImage bool
+	var ipsw, sha256 string
 	prepare := &cobra.Command{Use: "prepare", Short: "Build this Mac's macOS base image from Apple's restore image (hours; it continues in the background)", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			m, runnerID, err := open(cmd)
@@ -90,8 +95,12 @@ func newMacOSVMCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			err = m.startPrepare(cmd.Context(), prepareArgs{helper: m.helper, runnerID: runnerID, cpus: cpus, memoryMiB: memMiB, keepIPSW: keep, newImage: newImage})
+			err = m.startPrepare(cmd.Context(), prepareArgs{helper: m.helper, runnerID: runnerID, cpus: cpus, memoryMiB: memMiB, keepIPSW: keep, ipsw: ipsw, sha256: sha256, newImage: newImage})
 			if errors.Is(err, errMacOSBaseReady) {
+				if ipsw != "" {
+					fmt.Fprintln(cmd.OutOrStdout(), "This Mac's macOS base is ready; nothing to prepare, and the --ipsw file was not used. `--new-image` builds a new one, from that file.")
+					return nil
+				}
 				fmt.Fprintln(cmd.OutOrStdout(), "This Mac's macOS base is ready; nothing to prepare. `--new-image` builds a new one from Apple's newest restore image.")
 				return nil
 			}
@@ -104,7 +113,9 @@ func newMacOSVMCommand() *cobra.Command {
 	prepare.Flags().Float64Var(&cpu, "per-run-cpu", 0, "the runner's per-run CPUs (default: the limit its organisation last sent)")
 	prepare.Flags().Int64Var(&memGB, "per-run-memory", 0, "the runner's per-run memory in GB (default: the limit its organisation last sent)")
 	prepare.Flags().BoolVar(&keep, "keep-ipsw", false, "keep Apple's restore image after the base is ready")
-	prepare.Flags().BoolVar(&newImage, "new-image", false, "build a new base from Apple's newest restore image even when one is ready, and swap it in")
+	prepare.Flags().StringVar(&ipsw, "ipsw", "", "build from this macOS restore image (.ipsw) you downloaded instead of downloading Apple's; needs --sha256. With a ready base it does nothing (the file is not used) unless --new-image is given, which builds the new base from this file")
+	prepare.Flags().StringVar(&sha256, "sha256", "", "the SHA-256 (64 hex digits) the --ipsw file must have, from a source you trust; prepare checks a copy in its cache and refuses a file that differs, before anything uses it")
+	prepare.Flags().BoolVar(&newImage, "new-image", false, "build a new base from Apple's newest restore image (or the --ipsw file) even when one is ready, and swap it in")
 	remove := &cobra.Command{Use: "remove", Short: "Delete this Mac's macOS base images and download cache", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		m, _, err := open(cmd)
 		if err != nil {
@@ -114,6 +125,47 @@ func newMacOSVMCommand() *cobra.Command {
 	}}
 	cmd.AddCommand(status, prepare, remove)
 	return cmd
+}
+
+// macVMOrg is the organisation address status and prepare load the runner's identity for, ranked as serve
+// ranks it: a locked managed OrgURL, then the --org an earlier install's service definition passes serve
+// (legacy; serve takes that argument as a flag, and doctor reads it the same way), then the rest of serve's
+// own resolution (cfg). With none, the error says where runnerd.json should be and how to write it, instead of
+// the address check's bare refusal.
+func macVMOrg(cfg runnerConfig, legacy func() string) (string, error) {
+	f := cfg.field("org_url")
+	if f.Value != "" && strings.HasSuffix(f.Source, "(locked)") {
+		return f.Value, nil
+	}
+	if org := legacy(); org != "" {
+		return org, nil
+	}
+	if f.Value != "" {
+		return f.Value, nil
+	}
+	path, err := defaultRunnerConfigPath()
+	if err != nil {
+		return "", err
+	}
+	fix := "run `wardyn-runnerd setup`, write org_url into that file, or set OrgURL in the managed profile"
+	if _, err := os.Stat(path); err != nil {
+		return "", fmt.Errorf("no runnerd.json was found at %s, so this runner's organisation URL is unknown: %s", path, fix)
+	}
+	return "", fmt.Errorf("%s sets no org_url, so this runner's organisation URL is unknown: %s", path, fix)
+}
+
+// serviceOrgArg is the --org the installed service definition passes serve ("": none, or no setup host).
+func serviceOrgArg() string {
+	h, err := osSetupHost()
+	if err != nil {
+		return ""
+	}
+	p, err := h.paths()
+	if err != nil {
+		return ""
+	}
+	org, _ := p.serviceOrgArg()
+	return org
 }
 
 // macOSVMStatus is `macos-vm status`: its JSON (--json) and, with the unexported fields, its text. The

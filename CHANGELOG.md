@@ -11,10 +11,55 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Before you upgrade
+
+- A slot that 0.10.0-rc.3 recorded for a macOS VM prepare or tools update, and never freed, lacks the boot session
+  and start order this release reads, so the upgraded runner frees it only once no macOS VM, helper or Docker engine
+  of that user runs (#3700). Keep the runner running and quit Docker Desktop while no macOS VM runs. The runner
+  checks about every 15 seconds; start Docker again once `wardyn-runnerd macos-vm status` no longer counts the VM. A
+  leaked slot that an earlier release recorded, and an entry file that does not parse, stay until their owner
+  removes them, as the shared ledger section of `docs/operations/macos-vms.md` says.
+- A Kubernetes run that an earlier release left stopping (#3537) still has its proxy pod, both NetworkPolicies and a
+  Secret holding the proxy's config, the run's secret values and its managed files in the runs namespace. Its stop is
+  retried when its runner, upgraded to this release, next reconnects, and finished when the pod shows the proxy never
+  started; the pod, the policies and the Secret are then removed. Upgrade the runner first. A run still held after
+  that keeps its fence; `docs/operations/k8s-runners.md` ("A stop still held after the upgrade") says how it may be
+  released.
+- A macOS VM restore image in `macos-vm.noindex/cache` that this release has no record of, placed by hand or kept by
+  an earlier release after a failed prepare, now stops `macos-vm prepare` (#3706). Prepare names the file and neither
+  uses nor deletes it. Delete it, so prepare downloads the image again, or move it out of the cache and pass it with
+  `--ipsw <file> --sha256 <hex>`, taking the hash from a source you trust.
+
+### Added
+
+- `wardyn-runnerd macos-vm prepare --ipsw <file> --sha256 <hex>` builds a Mac's base from a restore image downloaded
+  elsewhere, for a Mac whose network refuses Apple's pinned update host. `--sha256` is required: prepare copies the
+  file into its cache, checks the copy's hash before anything loads or installs it, refuses a mismatch naming both
+  hashes, and never changes or deletes the file given. The pinning error now names `--ipsw` (#3701).
+
 ### Changed
 
+- A macOS VM's prepare reuses a restore image from its download cache only when a previous prepare's download wrote a
+  record of its SHA-256 beside it and the file still matches. A file with no record, or a different hash, stops
+  prepare with an error naming the file and what to do; it is never deleted. The record is written only for an image
+  Wardyn downloaded over the pinned connection in a download it started, resumed only from its own partial file (the
+  one with the marker Wardyn wrote for it), or copied with `--ipsw` after its hash matched. It guards against
+  hand-placed or damaged files, not against someone with the runner user's write access (#3706).
+- A macOS VM's prepare behind a proxy that inspects TLS now fails at the first range of the restore image, not after
+  three retries, when the error is Apple's certificate-pinning refusal of `updates.cdn-apple.com`. The error says the
+  host's certificate chain failed Apple's pinning check, that a proxy inspecting TLS is the likely cause and to exempt
+  the host from it, and prints the image URL; the requirements table in
+  `docs/operations/macos-vms.md` lists the uninspected path (#3701).
+- The macOS VM start refusal "this Mac does not have enough free memory right now" now gives the free memory (free,
+  inactive and speculative pages) and the memory needed (the VM's plus the margin) in GiB, and names lowering Docker's memory allowance as the
+  usual fix; `macos-vm status` and `prepare` on a runner with no `runnerd.json` now say none was found at its path and
+  to run `wardyn-runnerd setup` or write `org_url` into it, and use the `--org` an earlier service definition passes
+  `serve` (#3702).
+- Upgrade note: a hand-installed macOS LaunchAgent does not get `--log-file`, so its log is not rotated until someone
+  adds the flag to its `ProgramArguments`. `wardyn runner upgrade` to a newer release writes it; on a runner already on the
+  current release, upgrade stops before setup, so run `wardyn-runnerd setup` again or add the flag by hand (#3702).
 - A macOS VM's prepare now refuses a base that holds another local account than `wardyn-admin` and `agent`, and names
-  the extra one, so an account made by hand during setup no longer ships in every VM cloned from the base.
+  the extra one, so an account made by hand during setup no longer ships in every VM cloned from the base (#3687).
 - `wardyn-runnerd macos-vm status --json` has a `failure` key when the base has one, and a setup by hand the helper
   refused because it cannot reach the Mac's desktop (over SSH, under sudo, or with no one signed in) is
   `no_desktop`, with the state `failed`; before, only the error text said so. A console that does not know the code
@@ -37,6 +82,22 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - `wardyn-runnerd serve --log-file` now bounds the crash log beside it: at start, a `runnerd.crash.log` over 1 MiB moves
   to `runnerd.crash.log.1` and is emptied in place, so a runner that panics at every start no longer grows it without
   limit (#3633).
+- A first macOS VM prepare no longer fails right after the install with "Failed to lock auxiliary storage" (#3699). The
+  helper now runs the install in a process of its own, whose exit lets go of the installer's VM and its auxiliary
+  storage before the first boot, and retries that boot for a few seconds on exactly that refusal.
+- A macOS VM that ended without reporting its stop, such as a failed prepare, no longer keeps its slot until Docker
+  stops (#3700). The runner frees it once no Virtualization or helper process of the user created after the VM's helper
+  remains, other than another macOS VM's own helper, so Docker's Linux VM, started earlier, no longer counts as that
+  VM. Which came first is read from the time since the Mac started, so a change of the clock cannot make that VM look
+  older than its helper. A process it cannot prove is not that VM still keeps the slot, and a slot recorded by an
+  earlier release frees once no macOS VM, helper or Docker engine of that user runs.
+- A finished tools update of the macOS VM base no longer keeps one of the Mac's two VM slots until the Mac restarts
+  (#3700). The runner now frees its entry once its helper has exited, as it does for a finished prepare.
+- A change of the Mac's clock no longer makes the macOS VM ledger take its live VMs for an earlier boot's. The ledger
+  told boots apart by `kern.boottime`, which macOS moves with the clock, so a clock change could stop counting a live
+  VM, refuse its helper and delete its runner's entries. Each entry now records the boot's session, and only a
+  different session means a restart. An entry with none, from an earlier release, is never taken for an earlier
+  boot's, and an entry file that does not parse now counts until its owner removes it, whatever its time.
 - A Kubernetes run whose proxy container is running but never becomes ready now fails at the start deadline with a line
   naming the readiness probe and the proxy image, and saying to check the proxy's log and connectivity; on a runner it
   adds that the proxy may be waiting for its first run-token renewal with the organisation (#3612).
@@ -49,6 +110,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   pause stayed open with no row. A pause whose stop failed, or is not yet made, still stands.
 - `wardyn-runnerd doctor` on a host whose service definition is still an earlier install's, which passes `--org`, now
   checks the organisation that service uses, as `serve` does, instead of the one in `runnerd.json`.
+- `wardyn-runnerd macos-vm status` and the runner no longer lose a failed prepare's reason when a long line in
+  `prepare.log` comes before the helper's error; a read that stops early says so (#3690).
+- The macOS runner package's install script sets its own `PATH` instead of relying on the installer's (#3646).
+- A macOS VM run's disk-removed report is no longer lost when the report prune runs as the report is stored (#3682).
 - On macOS, a base-image download that resumes a partial file now continues after the bytes already on disk instead of
   overwriting its start, so a restarted preparation no longer re-downloads the whole image after the check rejects
   it (#3684).
@@ -63,6 +128,28 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   quarantine beside the base and the setup finishes (#3675). An entry file with the immutable flag still stops it.
 - A Kubernetes runner's proxy now logs `wardyn-proxy: listening` when it has bound its port, after its first run-token
   renewal, not while it is still waiting for that renewal (#3632).
+- The server no longer warns every minute that re-asserting a kept run's stop failed while the run's runner is offline
+  and the stop is already queued for it (#3703). It warns once, and logs once when the re-assert succeeds after the
+  runner reconnects; any other failure still warns on every pass, and the stop is still re-asserted on every pass.
+- While the Docker engine is down or restarting, a runner's log no longer repeats `runner containment will retry` every
+  second or two (#3704). Each error a run's containment fails with is logged once, and its repeats as a summary line
+  about once a minute saying how many went unlogged, even when two errors take turns; a new error, or the run's
+  containment succeeding, logs at once. Containment is still tried on every pass, and a failed pass still refuses the runner's ready state as
+  before.
+- A Kubernetes runner now finishes stopping a run whose proxy pod was deleted after its setup step finished and before
+  the proxy started, such as a run cancelled at that moment (#3537). The kubelet reports that pod as failed with the
+  proxy never started, which the runner did not accept as proof that it stopped. The pod, both NetworkPolicies and the
+  Secret holding the proxy's config, the run's secret values and its managed files stayed in the runs namespace until
+  removed by hand.
+- A recorded run that ends within its first five minutes, such as a short command on a laptop's Docker runner, uploads
+  its whole recording once, at exit. That upload is now retried when it gets no answer or a 502, 503 or 504 (the run's
+  proxy cannot record the request yet, or the runner's link to the organisation is down), with new attempts starting
+  for up to 30 seconds (an attempt already sending may finish later), so the run keeps its recording (#3705). Before,
+  one such refusal lost the whole recording.
+- A single run's own read (`wardyn runs get <id> --json`, `GET /api/v1/runs/{id}`) now reports `has_recording`,
+  `recording_bytes` and `recording_duration_sec` without `?include=recording_meta` (#3705). Before, it said
+  `has_recording: false` for every run, including one whose recording was stored. Run lists report the recording
+  fields only with `?include=recording_meta`; without it a listed run says `has_recording: false` whatever is stored.
 
 ## [0.10.0-rc.3] — 2026-10-25
 

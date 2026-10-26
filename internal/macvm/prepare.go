@@ -146,6 +146,13 @@ type PrepareOptions struct {
 	MemoryMiB uint64
 	DiskBytes int64 // 0: BaseDiskBytes
 	KeepIPSW  bool
+	// IPSW is a restore image the operator downloaded, built from instead of Apple's download. It needs
+	// IPSWSHA256: the image is copied into the cache, hashed there, and used only when the hash matches,
+	// before it is loaded or installed. The operator's file is never changed or deleted. A ready base
+	// still wins (the file is not read), unless Reprepare asks for a new one.
+	IPSW string
+	// IPSWSHA256 is the SHA-256 (64 hex digits) the operator says the IPSW file has. It goes with IPSW.
+	IPSWSHA256 string
 	// Reprepare builds a whole new base even when one is ready (a newer
 	// restore image, or the operator asked) and swaps it in for the old one.
 	// Without it a ready base is returned as it is.
@@ -157,6 +164,11 @@ type PrepareOptions struct {
 	// framework's slot the ledger cannot account for (RunOptions.Leaked). Its failure is logged.
 	Leaked func() error
 	Log    *slog.Logger
+	// InstallProcess, when set, is the argv of the process that runs the
+	// install (the helper with InstallCommand, which calls RunInstall). Unset,
+	// the install runs in this process, which only a fake engine survives: see
+	// RunInstall.
+	InstallProcess []string
 	// PowerPoll is how often power is checked while waiting or downloading.
 	PowerPoll time.Duration
 	// DownloadRange overrides DownloadRange (tests).
@@ -181,6 +193,55 @@ const DefaultSetupByHandWait = time.Hour
 var ErrManualSetup = errors.New("macvm: macOS asked for setup by hand")
 
 const provisionUser = "wardyn-admin"
+
+// ErrIPSWNeedsSHA256 is the usage error of an IPSW given without the hash it must have.
+var ErrIPSWNeedsSHA256 = errors.New("macvm: --ipsw needs --sha256 <64 hex digits>: the SHA-256 of the file, from a source you trust")
+
+// IPSWMismatchError refuses an operator-supplied restore image whose hash is not the one given.
+// Nothing of it is kept in the cache.
+type IPSWMismatchError struct {
+	Path      string
+	Want, Got string
+}
+
+func (e *IPSWMismatchError) Error() string {
+	return fmt.Sprintf("macvm: --ipsw %q does not have the SHA-256 given: expected %s, the file is %s; it was not used and nothing of it was kept",
+		e.Path, e.Want, e.Got)
+}
+
+// UnrecordedImageError refuses a restore image found in the download cache that no download of Wardyn's
+// recorded, or whose hash is no longer its record's. Prepare neither uses nor deletes it.
+type UnrecordedImageError struct {
+	Path string
+	// Mismatch: a record exists but the file no longer hashes to it.
+	Mismatch bool
+}
+
+func (e *UnrecordedImageError) Error() string {
+	why := "has no record of coming from a Wardyn download"
+	if e.Mismatch {
+		why = "does not match the record of the Wardyn download that made it"
+	}
+	return fmt.Sprintf("macvm: the restore image %s in the download cache %s, so prepare did not use or delete it: "+
+		"move it out of the cache and run prepare --ipsw <moved path> --sha256 <its SHA-256 from a source you trust>, "+
+		"or delete it to download it again", e.Path, why)
+}
+
+// ErrSHA256NeedsIPSW is the usage error of a hash given with no file to check it against.
+var ErrSHA256NeedsIPSW = errors.New("macvm: --sha256 goes with --ipsw: it is the SHA-256 that file must have")
+
+// CheckIPSWFlags is the usage check of prepare's --ipsw and --sha256: both or neither, and the hash is 64
+// hex digits. It returns the hash in lower case.
+func CheckIPSWFlags(ipsw, sha string) (string, error) {
+	sha = strings.ToLower(strings.TrimSpace(sha))
+	switch {
+	case ipsw != "" && !sha256Hex.MatchString(sha):
+		return "", ErrIPSWNeedsSHA256
+	case ipsw == "" && sha != "":
+		return "", ErrSHA256NeedsIPSW
+	}
+	return sha, nil
+}
 
 // Prepare builds the base image in o.Layout.BaseDir(o.Slot) from the newest
 // restore image this Mac supports.
@@ -221,6 +282,11 @@ func newPrep(o PrepareOptions) (*prep, error) {
 	if o.Engine == nil || o.Power == nil || o.FirstBoot == nil || o.Layout.Root == "" {
 		return nil, errors.New("macvm: prepare needs an engine, a first-boot provisioner, a power source and a root")
 	}
+	sha, err := CheckIPSWFlags(o.IPSW, o.IPSWSHA256)
+	if err != nil {
+		return nil, err
+	}
+	o.IPSWSHA256 = sha
 	if o.HTTP == nil {
 		o.HTTP = http.DefaultClient
 	}
@@ -378,7 +444,7 @@ func (p *prep) run(ctx context.Context) (Manifest, error) {
 		}
 	}
 	if !p.KeepIPSW {
-		_ = os.Remove(ipsw)
+		removeImage(ipsw)
 	}
 	p.emit(PrepareEvent{Phase: PhaseReady, Fraction: 1})
 	return m, nil
@@ -442,52 +508,10 @@ func (p *prep) discardInterrupted() error {
 	return nil
 }
 
-// restoreImage returns a validated restore image in the cache: reused if
-// already complete, otherwise downloaded (resuming a partial file). An image
-// that fails validation is deleted and downloaded again, once.
-func (p *prep) restoreImage(ctx context.Context) (RestoreImage, string, string, error) {
-	u, err := p.Engine.LatestRestoreImageURL(ctx)
-	if err != nil {
-		return RestoreImage{}, "", "", fmt.Errorf("macvm: latest restore image: %w", err)
-	}
-	name, err := ipswName(u)
-	if err != nil {
-		return RestoreImage{}, "", "", err
-	}
-	final := filepath.Join(p.cache, name)
-	for attempt := 0; ; attempt++ {
-		if _, err := os.Stat(final); err != nil {
-			if err := p.download(ctx, u, final); err != nil {
-				return RestoreImage{}, "", "", err
-			}
-		}
-		if err := p.waitAC(ctx, PhaseValidate); err != nil {
-			return RestoreImage{}, "", "", err
-		}
-		p.emit(PrepareEvent{Phase: PhaseValidate})
-		img, err := p.Engine.LoadRestoreImage(final)
-		if err == nil {
-			// The first validate event is written before the load, so it cannot say what the image is.
-			var size int64
-			if fi, serr := os.Stat(final); serr == nil {
-				size = fi.Size()
-			}
-			p.emit(PrepareEvent{Phase: PhaseValidate, Total: size, Version: img.OSVersion})
-			sha, herr := fileSHA256(final)
-			if herr != nil {
-				return RestoreImage{}, "", "", herr
-			}
-			return img, sha, final, nil
-		}
-		_ = os.Remove(final)
-		if attempt >= 1 {
-			return RestoreImage{}, "", "", fmt.Errorf("macvm: the restore image failed validation twice: %w", err)
-		}
-		p.Log.Warn("macvm: restore image failed validation; downloading again", "err", err.Error())
-	}
-}
-
-func (p *prep) download(ctx context.Context, u, final string) error {
+// download fetches the image at u into final and returns its SHA-256. The record is written before the
+// rename, with the marker still there, so a crash at any point leaves either a resumable marked partial
+// file or a recorded image, never an image without a record.
+func (p *prep) download(ctx context.Context, u, final string) (string, error) {
 	var start time.Time
 	var startBytes int64 = -1
 	d := &downloader{
@@ -519,10 +543,29 @@ func (p *prep) download(ctx context.Context, u, final string) error {
 	}
 	p.emit(PrepareEvent{Phase: PhaseDownload, Version: ipswVersion(path.Base(final))})
 	part := final + ".part"
-	if err := d.fetch(ctx, u, part); err != nil {
-		return err
+	if err := p.startPart(part); err != nil {
+		return "", err
 	}
-	return os.Rename(part, final)
+	if err := d.fetch(ctx, u, part); err != nil {
+		// A download that fetched nothing leaves no marked empty partial file behind.
+		if fi, serr := os.Stat(part); serr == nil && fi.Size() == 0 {
+			_ = os.Remove(part + partMarkerSuffix)
+			_ = os.Remove(part)
+		}
+		return "", err
+	}
+	sha, err := fileSHA256(part)
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(recordPath(final), []byte(sha+"\n"), 0o600); err != nil {
+		return "", err
+	}
+	if err := os.Rename(part, final); err != nil {
+		return "", err
+	}
+	_ = os.Remove(part + partMarkerSuffix)
+	return sha, nil
 }
 
 // waitAC waits for AC power before a phase that must not start on battery.
@@ -565,31 +608,66 @@ func (p *prep) create(img RestoreImage) ([]byte, error) {
 // installer is never paused. If ctx ends (the process or the Mac is going
 // away), the marker stays and the next Prepare discards the partial disk.
 func (p *prep) install(ctx context.Context, spec MachineSpec, ipsw string) error {
-	guest, host, err := NewNetPair()
-	if err != nil {
-		return err
-	}
-	defer guest.Close()
-	defer host.Close() // nothing reads it: the installer's VM has no network
-	spec.Net = guest
-	plan, err := BuildPlan(spec)
-	if err != nil {
-		return err
-	}
-	m, err := p.Engine.NewMachine(plan)
-	if err != nil {
-		return err
-	}
 	if err := p.waitAC(ctx, PhaseInstall); err != nil {
 		return err
 	}
 	p.emit(PrepareEvent{Phase: PhaseInstall})
-	if err := p.Engine.Install(ctx, m, ipsw, func(f float64) {
-		p.emit(PrepareEvent{Phase: PhaseInstall, Fraction: f})
-	}); err != nil {
+	progress := func(f float64) { p.emit(PrepareEvent{Phase: PhaseInstall, Fraction: f}) }
+	var err error
+	if len(p.InstallProcess) > 0 {
+		err = installInProcess(ctx, p.InstallProcess, spec, ipsw, progress)
+	} else {
+		err = installVM(ctx, p.Engine, spec, ipsw, progress)
+	}
+	if err != nil {
 		return fmt.Errorf(InstallFailurePrefix+"%w", err)
 	}
 	return nil
+}
+
+// auxLockRetries and auxLockBackoff bound retryAuxLocked's retry on the aux
+// lock refusal, at the first boot and the stage-2 boot. It is a backstop, not
+// the release: the VM before (the install process's, or the first boot's) is
+// gone by then, but the framework's own per-VM process may take a moment to
+// let go of the aux storage, with no signal to wait on.
+var (
+	auxLockRetries = 5
+	auxLockBackoff = 2 * time.Second
+)
+
+// auxLocked says err is the framework refusing a VM whose auxiliary storage
+// another VM still locks. The framework says so only in its description.
+func auxLocked(err error) bool {
+	return strings.Contains(err.Error(), "Failed to lock auxiliary storage")
+}
+
+// retryAuxLocked runs start, and again a short while on exactly the aux lock
+// refusal. start must leave nothing behind when it fails.
+func retryAuxLocked(ctx context.Context, log *slog.Logger, start func() error) error {
+	for try := 0; ; try++ {
+		err := start()
+		if err == nil || try == auxLockRetries || !auxLocked(err) {
+			return err
+		}
+		log.Warn("macvm: the aux storage is still locked; retrying", "err", err.Error())
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(auxLockBackoff):
+		}
+	}
+}
+
+// firstBoot starts the first boot, retrying on the aux lock refusal.
+func (p *prep) firstBoot(ctx context.Context, spec MachineSpec, nic *os.File, user, pass string) (FirstBoot, error) {
+	var fb FirstBoot
+	err := retryAuxLocked(ctx, p.Log, func() error {
+		var err error
+		fb, err = p.FirstBoot.Boot(spec.DiskPath, spec.AuxPath, spec.HardwareModel, spec.MachineIdentifier,
+			uint(spec.CPUs), spec.MemoryBytes, nic, user, pass)
+		return err
+	})
+	return fb, err
 }
 
 // provisionAndBootstrap runs the one first boot, waits for the guest's Remote
@@ -641,8 +719,7 @@ func (p *prep) provisionAndBootstrap(ctx context.Context, spec MachineSpec) (Boo
 	if p.byHand {
 		user, pass = "", "" // a plain boot: Setup Assistant
 	}
-	fb, err := p.FirstBoot.Boot(spec.DiskPath, spec.AuxPath, spec.HardwareModel, spec.MachineIdentifier,
-		uint(spec.CPUs), spec.MemoryBytes, guest, user, pass)
+	fb, err := p.firstBoot(ctx, spec, guest, user, pass)
 	if err != nil {
 		reportVMLimit(err, p.Leaked, p.Log)
 		return BootstrapResult{}, fmt.Errorf("macvm: provisioning boot: %w", err)

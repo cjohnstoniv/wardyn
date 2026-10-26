@@ -31,11 +31,55 @@ func (v *view) helperCount(uid int) int { return v.count(uid, HelperProcess) }
 func (v *view) count(uid int, name string) int {
 	n := 0
 	for _, p := range v.procs {
-		if p.UID == uid && p.Name != "" && strings.HasPrefix(name, p.Name) {
+		if p.UID == uid && named(p, name) {
 			n++
 		}
 	}
 	return n
+}
+
+// named: p's (possibly truncated) name is a prefix of name.
+func named(p Proc, name string) bool { return p.Name != "" && strings.HasPrefix(name, p.Name) }
+
+// mayBeVM: a process in the snapshot may still be e's VM. e's VM, and every
+// helper process of e's (an install process included), was created after e's
+// helper was, or for an entry with no helper recorded, after its owner was.
+// Creation order is read from MonoStart, never from calendar start times: a
+// clock stepped back while the VM was created, then restored, would make the
+// VM look older than its helper. A Virtualization or helper process of e's
+// uid is proven not to be them only when its MonoStart and e's are both known
+// and its is earlier: Docker's Linux VM, or another macOS VM's, from earlier.
+// Anything unknown (an entry an earlier release wrote, a start that could not
+// be read) leaves it possibly e's, as does its name, its PID (reused or not)
+// and its parent (reparented once the helper died). One exception is
+// positive: a process that is exactly (PID and start) the recorded helper of
+// another counted entry of the same uid is that entry's helper, not e's; its
+// VM, if it has one yet, still counts.
+func (v *view) mayBeVM(e Entry) bool {
+	since := e.HelperMonoStart
+	if e.HelperPID == 0 {
+		since = e.OwnerMonoStart
+	}
+	type incarnation struct {
+		pid   int
+		start int64
+	}
+	helpers := map[incarnation]bool{}
+	for _, o := range v.counted {
+		if o.ID != e.ID && o.UID == e.UID && o.HelperPID != 0 {
+			helpers[incarnation{o.HelperPID, o.HelperStart}] = true
+		}
+	}
+	for _, p := range v.procs {
+		if helpers[incarnation{p.PID, p.Start}] {
+			continue
+		}
+		if p.UID == e.UID && (named(p, VirtualizationProcess) || named(p, HelperProcess)) &&
+			(since == 0 || p.MonoStart == 0 || p.MonoStart >= since) {
+			return true
+		}
+	}
+	return false
 }
 
 // helperGone: the entry's helper (or, for an entry with no helper yet, its
@@ -52,7 +96,7 @@ func (v *view) helperGone(e Entry) bool {
 // process of its uid remains. (A helper whose runnerd died before recording
 // it is still a helper process, so its entry is never tombstoned under it.)
 func (v *view) tombstonable(e Entry) bool {
-	return e.BootTime == v.boot && e.Kind != KindLeaked && v.helperGone(e) &&
+	return v.sameBoot(e) && e.Kind != KindLeaked && v.helperGone(e) &&
 		v.vzCount(e.UID) == 0 && v.helperCount(e.UID) == 0
 }
 
@@ -64,10 +108,9 @@ func (v *view) tombstoned(e Entry) bool {
 
 // ReclaimOwn removes one of this runner's entries whose helper died without
 // reporting a stop, or that another login tombstoned: allowed once the helper
-// is gone, this uid has no more Virtualization or helper processes than its
-// other counted entries with a live helper (so none of them can be this
-// entry's VM), and the run dir (empty: none) is gone. That last step is the
-// owner's reconcile, which frees a tombstoned entry's disk debt.
+// is gone, no process may still be the entry's VM (mayBeVM), and the run dir
+// (empty: none) is gone. That last step is the owner's reconcile, which frees
+// a tombstoned entry's disk debt.
 func (l *Ledger) ReclaimOwn(id, runDir string) error {
 	return l.withLock(func() error {
 		v, err := l.load()
@@ -78,20 +121,14 @@ func (l *Ledger) ReclaimOwn(id, runDir string) error {
 		if err != nil {
 			return err
 		}
-		if e.BootTime == v.boot {
+		if v.sameBoot(e) {
 			if e.Kind == KindLeaked {
 				return errors.New("admission: a leaked slot clears only when the Mac restarts")
 			}
 			if !v.helperGone(e) {
 				return errors.New("admission: the helper is still running")
 			}
-			others := 0
-			for _, o := range v.counted {
-				if o.ID != e.ID && o.UID == e.UID && o.HelperPID != 0 && v.alive(o.HelperPID, o.HelperStart) {
-					others++
-				}
-			}
-			if v.vzCount(e.UID) > others || v.helperCount(e.UID) > others {
+			if v.mayBeVM(e) {
 				return errors.New("admission: a Virtualization or helper process of this user may still be this VM")
 			}
 		}
@@ -134,14 +171,14 @@ func (l *Ledger) Sweep() (int, error) {
 }
 
 // tidy runs in each writing transaction: this login deletes its own entries
-// from an earlier boot, and its own tombstones whose entry is gone or from an
-// earlier boot. Its own tombstoned entries stay until ReclaimOwn reconciles
-// them, since their disk is a debt until the run files are gone.
+// from an earlier boot (sameBoot), and its own tombstones whose entry is gone
+// or from an earlier boot. Its own tombstoned entries stay until ReclaimOwn
+// reconciles them, since their disk is a debt until the run files are gone.
 func (l *Ledger) tidy(v *view) {
 	byFile := map[string]Entry{}
 	for _, e := range v.all {
 		byFile[e.file] = e
-		if e.UID == l.c.UID && e.BootTime != v.boot {
+		if e.UID == l.c.UID && !v.sameBoot(e) {
 			if os.Remove(filepath.Join(l.c.Dir, e.file)) == nil {
 				delete(byFile, e.file)
 			}
@@ -151,7 +188,7 @@ func (l *Ledger) tidy(v *view) {
 		if t.owner != l.c.UID {
 			continue
 		}
-		if e, ok := byFile[entry]; !ok || e.BootTime != v.boot {
+		if e, ok := byFile[entry]; !ok || !v.sameBoot(e) {
 			_ = os.Remove(filepath.Join(l.c.Dir, t.name))
 		}
 	}

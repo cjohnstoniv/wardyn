@@ -81,6 +81,30 @@ func TestUsage(t *testing.T) {
 	}
 }
 
+// TestPrepareIPSWNeedsItsHash: --ipsw without --sha256, and --sha256 without --ipsw, are usage errors that
+// stop before anything is written.
+func TestPrepareIPSWNeedsItsHash(t *testing.T) {
+	hash := strings.Repeat("ab", 32)
+	for _, tc := range []struct {
+		extra []string
+		want  string
+	}{
+		{[]string{"--ipsw", "/x/a.ipsw"}, macvm.ErrIPSWNeedsSHA256.Error()},
+		{[]string{"--ipsw", "/x/a.ipsw", "--sha256", "abc"}, macvm.ErrIPSWNeedsSHA256.Error()},
+		{[]string{"--sha256", hash}, macvm.ErrSHA256NeedsIPSW.Error()},
+	} {
+		root := t.TempDir()
+		d, _, errb := testDeps(&macvmtest.Engine{})
+		args := append([]string{"prepare", "--root", root, "--cpus", "4", "--memory-mib", "8192"}, tc.extra...)
+		if code := run(context.Background(), args, d); code != 2 || !strings.Contains(errb.String(), tc.want) {
+			t.Errorf("%v: exit %d: %s", tc.extra, code, errb.String())
+		}
+		if des, _ := os.ReadDir(root); len(des) != 0 {
+			t.Errorf("%v wrote %d entries under root", tc.extra, len(des))
+		}
+	}
+}
+
 // TestPrepareRefusedWhereProvisioningUnsupported: prepare is refused with
 // the provisioner's reason where this build or host cannot boot a first boot.
 func TestPrepareRefusedWhereProvisioningUnsupported(t *testing.T) {

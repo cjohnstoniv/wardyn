@@ -871,6 +871,59 @@ func TestRunLease_ATransientEndErrorKeepsTheRun(t *testing.T) {
 	}
 }
 
+// A kept run whose runner is offline has its stop queued (#3703): the re-assert
+// still runs every pass and still records the failure, but warns once, not
+// every pass; a different error warns every pass; reaching the runner again
+// logs once.
+func TestRunLease_AStopQueuedOnAnOfflineRunnerWarnsOnce(t *testing.T) {
+	const warn = "wardynd: re-asserting a kept run's stop failed"
+	const back = "wardynd: re-asserting a kept run's stop succeeded after its runner reconnected"
+	logs := leaseCovCaptureLogs(t)
+	f := newLeaseFixture(t, -time.Minute)
+	queued := fmt.Errorf("remote: %w", runner.ErrPendingOnRunner)
+	f.rn.endErr = queued
+	f.sweep(t) // the end itself
+	for range 5 {
+		f.now = f.now.Add(time.Minute)
+		f.sweep(t)
+	}
+	if got := logs.with(warn); len(got) != 1 {
+		t.Fatalf("%d %q warnings over 5 queued passes, want 1", len(got), warn)
+	}
+	if f.st.containmentError() != queued.Error() {
+		t.Fatalf("containment_error %q, want the queued answer still recorded", f.st.containmentError())
+	}
+
+	f.rn.endErr = errors.New("docker: stop agent: context deadline exceeded")
+	f.sweep(t)
+	f.sweep(t)
+	if got := logs.with(warn); len(got) != 3 {
+		t.Fatalf("%d %q warnings, want 3 — a different error after a queued one warns every pass", len(got), warn)
+	}
+
+	f.rn.endErr = queued
+	for range 3 {
+		f.sweep(t)
+	}
+	if got := logs.with(warn); len(got) != 4 {
+		t.Fatalf("%d %q warnings, want 4 — queued again warns once", len(got), warn)
+	}
+
+	f.rn.endErr = nil
+	f.sweep(t)
+	f.sweep(t)
+	if got := logs.with(back); len(got) != 1 {
+		t.Fatalf("%d %q records, want 1", len(got), back)
+	}
+	if f.st.containmentError() != "" || f.st.State() != types.RunRunning || f.rn.stopCount() != 0 || f.rn.endCount() != 13 {
+		t.Fatalf("containment_error %q, state %s, StopSandbox %d, EndSandbox %d; want cleared, RUNNING, 0, 13 — one re-assert every pass",
+			f.st.containmentError(), f.st.State(), f.rn.stopCount(), f.rn.endCount())
+	}
+	if got := logs.with(warn); len(got) != 4 {
+		t.Fatalf("%d %q warnings after recovery, want still 4", len(got), warn)
+	}
+}
+
 // The idle reaper's RUNNING -> STOPPED does not go through casRunState; its one call into the server counts it.
 func TestCancelTerminalRunApprovals_CountsTheIdleStop(t *testing.T) {
 	srv := newHarness(t).srv

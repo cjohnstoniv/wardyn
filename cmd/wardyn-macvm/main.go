@@ -49,6 +49,7 @@ import (
 type deps struct {
 	engine func() (macvm.Engine, error)
 	host   admission.Host
+	stdin  io.Reader
 	stdout io.Writer
 	stderr io.Writer
 	// prepare supplies prepare's first-boot provisioner, prep network and
@@ -87,7 +88,7 @@ func main() {
 // mainDeps are the helper's real deps.
 func mainDeps() deps {
 	return deps{
-		engine: platformEngine, host: admission.SystemHost(), stdout: os.Stdout, stderr: os.Stderr,
+		engine: platformEngine, host: admission.SystemHost(), stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr,
 		prepare: prepareDeps, firstBoot: macvm.NewProvisioner(),
 	}
 }
@@ -109,6 +110,8 @@ func run(ctx context.Context, args []string, d deps) int {
 		return cmdPrepare(ctx, args[1:], d)
 	case macvm.UpdateToolsCommand:
 		return cmdUpdateTools(ctx, args[1:], d)
+	case macvm.InstallCommand:
+		return cmdInstall(ctx, d)
 	case "probe":
 		return cmdProbe(d)
 	case "ledger-setup":
@@ -374,10 +377,16 @@ func cmdPrepare(ctx context.Context, args []string, d deps) int {
 	fs.SetOutput(d.stderr)
 	j := newJobFlags(fs)
 	keep := fs.Bool(macvm.FlagKeepIPSW, false, "keep the downloaded restore image")
+	ipsw := fs.String(macvm.FlagIPSW, "", "build from this restore image (.ipsw) instead of downloading Apple's; needs --sha256. Ignored when a base is ready, unless --reprepare; with --reprepare it builds the new base from this file")
+	wantSHA := fs.String(macvm.FlagSHA256, "", "the SHA-256 (64 hex digits) the --ipsw file must have, from a source you trust; checked on a copy in the cache before anything uses it")
 	reprepare := fs.Bool(macvm.FlagReprepare, false, "build a new base even when one is ready (a newer restore image), and swap it in")
 	byHand := fs.Duration("setup-by-hand-wait", macvm.DefaultSetupByHandWait, "how long to wait for macOS's setup by hand (0: stop instead)")
 	if code := j.parse(fs, args, d); code != 0 {
 		return code
+	}
+	if _, err := macvm.CheckIPSWFlags(*ipsw, *wantSHA); err != nil {
+		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
+		return 2
 	}
 	// A setup by hand this process could not show stops before anything is written, the relay log under
 	// root included. d.firstBoot is the same provisioner prepareDeps wires; Prepare checks again.
@@ -409,7 +418,7 @@ func cmdPrepare(ctx context.Context, args []string, d deps) int {
 	enc := json.NewEncoder(d.stdout)
 	o := macvm.PrepareOptions{
 		Engine: eng, Layout: macvm.Layout{Root: *j.root}, Slot: *j.slot, Power: d.power(),
-		CPUs: *j.cpus, MemoryMiB: *j.memMiB, KeepIPSW: *keep, Reprepare: *reprepare, HelperVersion: version.String(),
+		CPUs: *j.cpus, MemoryMiB: *j.memMiB, KeepIPSW: *keep, IPSW: *ipsw, IPSWSHA256: *wantSHA, Reprepare: *reprepare, HelperVersion: version.String(),
 		SetupByHandWait: *byHand,
 		Progress:        func(ev macvm.PrepareEvent) { _ = enc.Encode(ev) },
 		Admit:           j.admit(macvm.PrepareCommand, d),
@@ -423,12 +432,36 @@ func cmdPrepare(ctx context.Context, args []string, d deps) int {
 		}
 		o.Stage2 = st
 	}
+	// The install runs in a helper process of its own, whose exit releases
+	// the installer's VM and its aux storage before the first boot.
+	exe, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
+		return 1
+	}
+	o.InstallProcess = []string{exe, macvm.InstallCommand}
 	if err := d.prepare(&o, relayLog); err != nil {
 		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
 		return 1
 	}
 	if _, err := macvm.Prepare(ctx, o); err != nil {
 		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+// cmdInstall is `wardyn-macvm install-base`, which only prepare starts: one
+// install in a process of its own (macvm.RunInstall), its request on stdin and
+// its progress on stdout.
+func cmdInstall(ctx context.Context, d deps) int {
+	eng, err := d.engine()
+	if err != nil {
+		fmt.Fprintln(d.stderr, err)
+		return 1
+	}
+	if err := macvm.RunInstall(ctx, eng, d.stdin, d.stdout); err != nil {
+		fmt.Fprintln(d.stderr, err)
 		return 1
 	}
 	return 0

@@ -187,23 +187,27 @@ func TestMacOSVMRecomputeTombstones(t *testing.T) {
 	}
 }
 
-// A prepare entry of this runner's whose helper has exited is released by the recompute.
+// A prepare or tools-update entry of this runner's whose helper has exited is released by the recompute.
 func TestMacOSVMReconcilesFinishedPrepare(t *testing.T) {
-	r := newMacLedgerRig(t)
-	r.host.setProcs(admission.Proc{PID: 30, UID: 501, Start: 3, Name: "wardyn-runnerd"})
-	m := r.open(t)
-	e, err := m.ledger.Admit(admission.Request{Kind: admission.KindPrepare, GuestCPUs: 4, GuestMemory: 8 * gib,
-		DiskReserve: admission.PrepareDiskReservation(macvm.BaseDiskBytes), OwnerPID: 30, OwnerStart: 3})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !m.preparing() {
-		t.Fatal("a live prepare is not reported")
-	}
-	r.host.setProcs()
-	m.recompute()
-	if counted, _ := m.ledger.Counted(); len(counted) != 0 {
-		t.Fatalf("finished prepare %s still counted: %+v", e.ID, counted)
+	for _, kind := range []admission.Kind{admission.KindPrepare, admission.KindToolsUpdate} {
+		t.Run(string(kind), func(t *testing.T) {
+			r := newMacLedgerRig(t)
+			r.host.setProcs(admission.Proc{PID: 30, UID: 501, Start: 3, Name: "wardyn-runnerd"})
+			m := r.open(t)
+			e, err := m.ledger.Admit(admission.Request{Kind: kind, GuestCPUs: 4, GuestMemory: 8 * gib,
+				DiskReserve: admission.PrepareDiskReservation(macvm.BaseDiskBytes), OwnerPID: 30, OwnerStart: 3})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if kind == admission.KindPrepare && !m.preparing() {
+				t.Fatal("a live prepare is not reported")
+			}
+			r.host.setProcs()
+			m.recompute()
+			if counted, _ := m.ledger.Counted(); len(counted) != 0 {
+				t.Fatalf("finished %s %s still counted: %+v", kind, e.ID, counted)
+			}
+		})
 	}
 }
 
@@ -379,6 +383,24 @@ func calls(t *testing.T, args string) []string {
 // prepare runs the helper's probe, then excludes the VM directory from Time Machine and runs the helper's
 // prepare with this runner's entry and --keep-ipsw passed through; a helper that ends without claiming
 // the entry frees it. On a ready base, plain prepare starts nothing, and --new-image re-prepares.
+// --ipsw without --sha256, or naming no file, starts nothing, not even the helper's probe.
+func TestMacOSVMPrepareIPSWNeedsItsHash(t *testing.T) {
+	r := newMacLedgerRig(t)
+	m := r.open(t)
+	helper, args := fakeHelper(t, 0)
+	a := prepareArgs{helper: helper, runnerID: "runner-a", cpus: 4, memoryMiB: 8192, ipsw: filepath.Join(t.TempDir(), "a.ipsw")}
+	if err := m.startPrepare(context.Background(), a); !errors.Is(err, macvm.ErrIPSWNeedsSHA256) {
+		t.Fatalf("--ipsw without --sha256: %v", err)
+	}
+	a.sha256 = strings.Repeat("ab", 32)
+	if err := m.startPrepare(context.Background(), a); err == nil || !strings.Contains(err.Error(), "cannot read the restore image") {
+		t.Fatalf("--ipsw naming no file: %v", err)
+	}
+	if _, err := os.Stat(args); !os.IsNotExist(err) {
+		t.Fatalf("a refused --ipsw ran the helper: %q", calls(t, args))
+	}
+}
+
 func TestMacOSVMPrepareExcludesAndPassesKeepIPSW(t *testing.T) {
 	r := newMacLedgerRig(t)
 	m := r.open(t)

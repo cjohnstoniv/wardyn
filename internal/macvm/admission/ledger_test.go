@@ -23,15 +23,25 @@ const gib = 1 << 30
 
 // fakeHost is a Mac with settable numbers and a settable process table.
 type fakeHost struct {
-	mu    sync.Mutex
-	boot  int64
-	mem   uint64
-	avail uint64
-	free  int64
-	procs []Proc
+	mu   sync.Mutex
+	boot int64
+	// session is the boot's session; sessionErr makes reading it fail.
+	session    string
+	sessionErr error
+	mem        uint64
+	avail      uint64
+	free       int64
+	procs      []Proc
+	// procErr makes Processes fail.
+	procErr error
 }
 
 func (h *fakeHost) BootTime() (int64, error) { h.mu.Lock(); defer h.mu.Unlock(); return h.boot, nil }
+func (h *fakeHost) BootSession() (string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.session, h.sessionErr
+}
 func (h *fakeHost) MemoryBytes() (uint64, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -50,12 +60,17 @@ func (h *fakeHost) FreeDiskBytes(string) (int64, error) {
 func (h *fakeHost) Processes() ([]Proc, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return append([]Proc(nil), h.procs...), nil
+	return append([]Proc(nil), h.procs...), h.procErr
 }
 func (h *fakeHost) setProcs(ps ...Proc) { h.mu.Lock(); h.procs = ps; h.mu.Unlock() }
 
-// bigMac: 64 GiB, plenty free, boot 1.
-func bigMac() *fakeHost { return &fakeHost{boot: 1, mem: 64 * gib, avail: 48 * gib, free: 500 * gib} }
+// bigMac: 64 GiB, plenty free, boot 1 (session "boot-1").
+func bigMac() *fakeHost {
+	return &fakeHost{boot: 1, session: "boot-1", mem: 64 * gib, avail: 48 * gib, free: 500 * gib}
+}
+
+// restart is a new boot: a new session, and boottime moved on.
+func (h *fakeHost) restart() { h.mu.Lock(); h.boot++; h.session += "+"; h.mu.Unlock() }
 
 // rig is a ledger dir shared by several simulated logins. Tests run as one
 // OS user, so file owners are simulated: a file belongs to the login whose
@@ -329,6 +344,13 @@ func TestLiveMemoryGuard(t *testing.T) {
 	if _, err := l.Admit(runReq(8 * gib)); !IsRefusal(err) {
 		t.Fatalf("available 9 GiB < 8 + 2: %v, want a refusal", err)
 	}
+	// The refusal gives both numbers in GiB and names the usual fix.
+	_, err := l.Admit(runReq(8 * gib))
+	for _, want := range []string{"9.0 GiB free (free, inactive and speculative pages)", "10.0 GiB needed", "8.0 GiB plus a 2.0 GiB margin", "lowering Docker's memory allowance"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("refusal %q lacks %q", err, want)
+		}
+	}
 }
 
 func TestLeakedLowersMaxNeverTombstonedClearsOnNewBoot(t *testing.T) {
@@ -348,7 +370,7 @@ func TestLeakedLowersMaxNeverTombstonedClearsOnNewBoot(t *testing.T) {
 	if err := func() error { es, _ := l.Counted(); return l.ReclaimOwn(es[0].ID, "") }(); err == nil {
 		t.Fatal("reclaimed a leaked slot before a restart")
 	}
-	h.boot = 2
+	h.restart()
 	if o := offer(t, l, 8*gib); o.Max != 2 {
 		t.Fatalf("offer after a restart: %+v, want 2", o)
 	}
@@ -860,28 +882,47 @@ func TestClaimHelperRefusals(t *testing.T) {
 		t.Fatal("claimed a tombstoned entry")
 	}
 	ec, _ := b.Admit(runReq(8 * gib))
-	h.boot = 2
+	h.restart()
 	if _, err := b.ClaimHelper(ec.ID, 60, 6); err == nil {
 		t.Fatal("claimed an entry from an earlier boot")
 	}
 }
 
-// An unparsable entry counts as live until the boot changes.
-func TestUnparsableEntryCountsUntilBootChanges(t *testing.T) {
-	h := &fakeHost{boot: time.Now().Add(-time.Hour).UnixMicro(), mem: 64 * gib, avail: 48 * gib, free: 500 * gib}
+// An unparsable entry is damage: it counts as live whatever its time, a
+// restart included, until its owner removes it.
+func TestUnparsableEntryCountsUntilRemoved(t *testing.T) {
+	h := bigMac()
+	h.boot = time.Now().Add(-time.Hour).UnixMicro()
 	r := newRig(t, h)
 	a := r.open(t, 501, "a")
+	past := time.UnixMicro(h.boot).Add(-48 * time.Hour) // before this boot's kern.boottime
 	for _, n := range []string{"e-torn1.json", "e-torn2.json"} {
-		if err := os.WriteFile(filepath.Join(r.dir, n), []byte(`{"id":"x","kin`), 0o644); err != nil {
+		f := filepath.Join(r.dir, n)
+		if err := os.WriteFile(f, []byte(`{"id":"x","kin`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(f, past, past); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if _, err := a.Admit(runReq(8 * gib)); !IsRefusal(err) {
 		t.Fatalf("torn entries not counted: %v", err)
 	}
-	h.boot = time.Now().Add(time.Second).UnixMicro() // a restart after the files were written
+	h.mu.Lock()
+	h.boot += time.Hour.Microseconds() // the clock went forward: same session, boottime moved
+	h.mu.Unlock()
+	if _, err := a.Admit(runReq(8 * gib)); !IsRefusal(err) {
+		t.Fatalf("torn entries not counted after a clock change: %v", err)
+	}
+	h.restart()
+	if _, err := a.Admit(runReq(8 * gib)); !IsRefusal(err) {
+		t.Fatalf("torn entries not counted after a restart: %v", err)
+	}
+	if err := os.Remove(filepath.Join(r.dir, "e-torn1.json")); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := a.Admit(runReq(8 * gib)); err != nil {
-		t.Fatalf("torn entries from an earlier boot still counted: %v", err)
+		t.Fatalf("a removed torn entry still counted: %v", err)
 	}
 	if des, _ := os.ReadDir(r.dir); func() bool {
 		for _, d := range des {
