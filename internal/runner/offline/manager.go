@@ -484,14 +484,20 @@ func (m *Manager) CheckLapses(ctx context.Context) error {
 			slog.InfoContext(ctx, "runner containment recovered", "run_id", id, "repeated", repeated)
 		}
 	}
+	m.forgetLeftContainLogs()
+	return errors.Join(errs...)
+}
+
+// forgetLeftContainLogs drops the containment log of each run that is gone or retired: it left the loop
+// without a success, so nothing will log it again.
+func (m *Manager) forgetLeftContainLogs() {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	for id := range m.containLogs {
 		if r, ok := m.state.Runs[id]; !ok || r.Retired {
-			delete(m.containLogs, id) // left the loop without a success: nothing will log it again
+			delete(m.containLogs, id)
 		}
 	}
-	m.mu.Unlock()
-	return errors.Join(errs...)
 }
 
 // errContainmentSuperseded is a containment pass whose run changed under it (a concurrent exec or start):
