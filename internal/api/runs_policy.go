@@ -231,8 +231,10 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	}
 	// Same server-side projection handleListRuns applies per page —
 	// a single run's own detail read must agree with what the list showed.
+	// The recording fields are always filled here: a default read that said
+	// has_recording false for a stored recording read as a lost one (#3705).
 	runs := []types.AgentRun{run}
-	s.projectRecordingMeta(r, runs)
+	s.fillRecordingMeta(r.Context(), runs)
 	s.projectStatusDetailFor(r, runs)
 	s.projectRunnerFacts(r, runs)
 	redactRunRepos(runs)

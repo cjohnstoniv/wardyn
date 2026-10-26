@@ -134,6 +134,22 @@ func TestProjectRecordingMeta_ListAndGet(t *testing.T) {
 			t.Errorf("GET /runs/{id} (no recording) = %+v, want all three fields zero/false", got2)
 		}
 	})
+
+	// A single run's default read (the CLI's `runs get`, a plain API read) must
+	// report a stored recording too, not has_recording false (#3705).
+	t.Run("get without include", func(t *testing.T) {
+		w := do(t, srv, http.MethodGet, "/api/v1/runs/"+withRec.ID.String(), adminToken, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET /runs/{id} = %d, body=%s", w.Code, w.Body.String())
+		}
+		var got types.AgentRun
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if !got.HasRecording || got.RecordingBytes != int64(len(cast)) || got.RecordingDurationSec != 2.5 {
+			t.Errorf("GET /runs/{id} with no include = %+v, want has_recording/bytes/duration set", got)
+		}
+	})
 }
 
 // TestProjectRecordingMeta_NilStoreIsNoop: a deployment with no recording
