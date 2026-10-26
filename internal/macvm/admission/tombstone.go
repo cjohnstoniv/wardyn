@@ -54,8 +54,11 @@ const startSlack = 10 * time.Second
 // startSlack before that is proven not to be them: Docker's Linux VM, or
 // another macOS VM's, from earlier. Any other one may be e's VM, whatever it
 // belongs to: its name, its PID (reused or not) and its parent (reparented
-// once the helper died) prove nothing. A start time after now (the clock went
-// back) proves nothing either, so it leaves every process possibly e's.
+// once the helper died) prove nothing. One exception is positive: a process
+// that is exactly (PID and start) the recorded helper of another counted entry
+// of the same uid is that entry's helper, not e's; its VM, if it has one yet,
+// still counts. A start time after now (the clock went back) proves nothing,
+// so it leaves every process possibly e's.
 func (v *view) mayBeVM(e Entry, now int64) bool {
 	since := e.HelperStart
 	if e.HelperPID == 0 {
@@ -64,9 +67,22 @@ func (v *view) mayBeVM(e Entry, now int64) bool {
 	if since > now {
 		return true
 	}
+	type incarnation struct {
+		pid   int
+		start int64
+	}
+	helpers := map[incarnation]bool{}
+	for _, o := range v.counted {
+		if o.ID != e.ID && o.UID == e.UID && o.HelperPID != 0 {
+			helpers[incarnation{o.HelperPID, o.HelperStart}] = true
+		}
+	}
 	for _, p := range v.procs {
 		if p.Start > now {
 			return true
+		}
+		if helpers[incarnation{p.PID, p.Start}] {
+			continue
 		}
 		if p.UID == e.UID && (named(p, VirtualizationProcess) || named(p, HelperProcess)) &&
 			p.Start >= since-startSlack.Microseconds() {

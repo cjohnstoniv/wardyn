@@ -90,9 +90,9 @@ func TestReclaimOwnKeepsUnknownAttribution(t *testing.T) {
 		}},
 		// No helper recorded: the VM may have started any time after the owner.
 		"no helper": {noHelper: true, procs: func(s int64) []Proc { return []Proc{{PID: 50, UID: 501, Start: s + minutes(1), Name: vzName}} }},
-		// Another entry's live helper with no VM yet: the old count let this through.
-		"another live helper": {otherHelper: true, procs: func(s int64) []Proc {
-			return []Proc{{PID: 88, UID: 501, Start: s + minutes(10), Name: "wardyn-macvm"}}
+		// Another entry's helper PID, but not its start: a reused PID, not that helper.
+		"another entry's helper pid, reused": {otherHelper: true, procs: func(s int64) []Proc {
+			return []Proc{{PID: 88, UID: 501, Start: s + minutes(11), Name: "wardyn-macvm"}}
 		}},
 		"process table error": {procErr: errors.New("sysctl failed"), procs: func(int64) []Proc { return nil }},
 	} {
@@ -123,6 +123,59 @@ func TestReclaimOwnKeepsUnknownAttribution(t *testing.T) {
 			}
 			if err := l.ReclaimOwn(e.ID, ""); err == nil || err.Error() != want {
 				t.Fatalf("ReclaimOwn = %v, want %q", err, want)
+			}
+		})
+	}
+}
+
+// Another entry's live helper, matched by PID and start, is that entry's: a
+// dead entry's slot is released past it while it has no VM yet. Its VM, or
+// any other later process, still keeps the slot, and an entry of another uid
+// proves nothing about this uid's processes.
+func TestReclaimOwnPastAnotherEntrysHelper(t *testing.T) {
+	for name, tc := range map[string]struct {
+		otherUID int
+		vm       bool
+		release  bool
+	}{
+		"its helper, no VM yet":     {otherUID: 501, release: true},
+		"its helper and a later VM": {otherUID: 501, vm: true},
+		"recorded by another uid":   {otherUID: 502},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := bigMac()
+			r := newRig(t, h)
+			a := r.open(t, 501, "a")
+			e, err := a.Admit(runReq(8 * gib))
+			if err != nil {
+				t.Fatal(err)
+			}
+			start := time.Now().Add(-time.Hour).UnixMicro()
+			if e, err = a.Update(e.ID, func(x *Entry) { x.HelperPID, x.HelperStart = 77, start }); err != nil {
+				t.Fatal(err)
+			}
+			b := a
+			if tc.otherUID != 501 {
+				b = r.open(t, tc.otherUID, "b")
+			}
+			o, err := b.Admit(runReq(8 * gib))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := b.Update(o.ID, func(x *Entry) { x.HelperPID, x.HelperStart = 88, start+minutes(5) }); err != nil {
+				t.Fatal(err)
+			}
+			ps := []Proc{{PID: 88, UID: 501, Start: start + minutes(5), Name: "wardyn-macvm"}}
+			if tc.vm {
+				ps = append(ps, Proc{PID: 89, UID: 501, Start: start + minutes(6), Name: vzName})
+			}
+			h.setProcs(ps...)
+			err = a.ReclaimOwn(e.ID, "")
+			if tc.release && err != nil {
+				t.Fatalf("kept past the other entry's helper: %v", err)
+			}
+			if !tc.release && (err == nil || err.Error() != errMayBeVM) {
+				t.Fatalf("ReclaimOwn = %v, want %q", err, errMayBeVM)
 			}
 		})
 	}
