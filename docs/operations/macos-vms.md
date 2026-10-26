@@ -76,7 +76,9 @@
 - Apple's licence allows up to two additional copies or instances of macOS on a Mac for development, testing, macOS Server or personal non-commercial use. The framework refuses a third. Wardyn counts first.
 - One ledger on the Mac counts every macOS VM, whichever login or purpose: a run, preparing the base, and a tools update. Preparing holds one of the two slots.
 - A third VM is refused with the reason. Docker's own Linux VM does not count.
-- A macOS VM that ended without reporting its stop frees its slot once no Virtualization or helper process of its user that started after its helper remains, other than another macOS VM's own helper. Docker's Linux VM holds that slot only if Docker started after that helper.
+- A macOS VM that ended without reporting its stop frees its slot once no Virtualization or helper process of its user created after its helper remains, other than another macOS VM's own helper. Docker's Linux VM holds that slot only if Docker started after that helper.
+  - Which came first is read from the time since the Mac started, which a change of the clock does not move. A process whose creation time cannot be read keeps the slot.
+  - A slot recorded by an earlier release frees once no macOS VM, helper or Docker engine of that user runs.
 - Nothing in a Wardyn release contains macOS. The restore image comes from Apple to the Mac that uses it, and it is never uploaded, exported or stored in a registry.
 
 ## Preparing the base image
@@ -213,8 +215,8 @@
   - A runner waits at most 10 seconds for the lock, then refuses, saying the ledger is busy.
   - A local user who can do this can already exhaust the Mac's memory or disk directly.
 - **When a slot is released.** A runner frees an entry only once the helper reported the VM stopped, the helper exited and the run directory is gone. There is one exception, a heuristic: a runner may free its own entry for a helper that was killed without that report.
-  - It does so when the helper's process no longer exists, the login has no more Virtualization and `wardyn-macvm` processes than its other entries that have a live helper, and the run directory is gone.
-  - The count cannot say which VM a process belongs to, so it errs toward keeping the entry. It can free an entry too early in one case: this VM's process outlived its helper while another entry's helper is live but has not started its VM yet.
+  - It does so when the helper's process no longer exists, no Virtualization or `wardyn-macvm` process of the login created after that helper remains other than another entry's live helper, and the run directory is gone.
+  - Nothing says which VM a process belongs to, so it errs toward keeping the entry ([Apple's licence and the two-VM limit](#apples-licence-and-the-two-vm-limit)).
   - Then the Virtualization framework's own cap of two is the backstop.
 - **A login that ended with a VM live.** Another login's runner can free its slot and memory once the helper is gone.
   - Its disk stays reserved, because the run's files are in that person's private directory, which no other login can read or delete.

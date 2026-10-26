@@ -26,9 +26,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   helper now runs the install in a process of its own, whose exit lets go of the installer's VM and its auxiliary
   storage before the first boot, and retries that boot for a few seconds on exactly that refusal.
 - A macOS VM that ended without reporting its stop, such as a failed prepare, no longer keeps its slot until Docker
-  stops (#3700). The runner frees it once no Virtualization or helper process of the user that started after the VM's
-  helper remains, other than another macOS VM's own helper, so Docker's Linux VM, started earlier, no longer counts as
-  that VM. A process it cannot prove is not that VM still keeps the slot.
+  stops (#3700). The runner frees it once no Virtualization or helper process of the user created after the VM's helper
+  remains, other than another macOS VM's own helper, so Docker's Linux VM, started earlier, no longer counts as that
+  VM. Which came first is read from the time since the Mac started, so a change of the clock cannot make that VM look
+  older than its helper. A process it cannot prove is not that VM still keeps the slot, and a slot recorded by an
+  earlier release frees once no macOS VM, helper or Docker engine of that user runs.
 - A Kubernetes run whose proxy container is running but never becomes ready now fails at the start deadline with a line
   naming the readiness probe and the proxy image, and saying to check the proxy's log and connectivity; on a runner it
   adds that the proxy may be waiting for its first run-token renewal with the organisation (#3612).

@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 )
 
 func (v *view) alive(pid int, start int64) bool {
@@ -42,30 +41,24 @@ func (v *view) count(uid int, name string) int {
 // named: p's (possibly truncated) name is a prefix of name.
 func named(p Proc, name string) bool { return p.Name != "" && strings.HasPrefix(name, p.Name) }
 
-// startSlack is how far before e's helper a process must have started to be
-// proven not e's (mayBeVM): it absorbs a small step back of the clock that
-// start times are read on.
-const startSlack = 10 * time.Second
-
 // mayBeVM: a process in the snapshot may still be e's VM. e's VM, and every
-// helper process of e's (an install process included), started after e's
-// helper did, or for an entry with no helper recorded, after its owner did. A
-// Virtualization or helper process of e's uid that started more than
-// startSlack before that is proven not to be them: Docker's Linux VM, or
-// another macOS VM's, from earlier. Any other one may be e's VM, whatever it
-// belongs to: its name, its PID (reused or not) and its parent (reparented
-// once the helper died) prove nothing. One exception is positive: a process
-// that is exactly (PID and start) the recorded helper of another counted entry
-// of the same uid is that entry's helper, not e's; its VM, if it has one yet,
-// still counts. A start time after now (the clock went back) proves nothing,
-// so it leaves every process possibly e's.
-func (v *view) mayBeVM(e Entry, now int64) bool {
-	since := e.HelperStart
+// helper process of e's (an install process included), was created after e's
+// helper was, or for an entry with no helper recorded, after its owner was.
+// Creation order is read from MonoStart, never from calendar start times: a
+// clock stepped back while the VM was created, then restored, would make the
+// VM look older than its helper. A Virtualization or helper process of e's
+// uid is proven not to be them only when its MonoStart and e's are both known
+// and its is earlier: Docker's Linux VM, or another macOS VM's, from earlier.
+// Anything unknown (an entry an earlier release wrote, a start that could not
+// be read) leaves it possibly e's, as does its name, its PID (reused or not)
+// and its parent (reparented once the helper died). One exception is
+// positive: a process that is exactly (PID and start) the recorded helper of
+// another counted entry of the same uid is that entry's helper, not e's; its
+// VM, if it has one yet, still counts.
+func (v *view) mayBeVM(e Entry) bool {
+	since := e.HelperMonoStart
 	if e.HelperPID == 0 {
-		since = e.OwnerStart
-	}
-	if since > now {
-		return true
+		since = e.OwnerMonoStart
 	}
 	type incarnation struct {
 		pid   int
@@ -78,14 +71,11 @@ func (v *view) mayBeVM(e Entry, now int64) bool {
 		}
 	}
 	for _, p := range v.procs {
-		if p.Start > now {
-			return true
-		}
 		if helpers[incarnation{p.PID, p.Start}] {
 			continue
 		}
 		if p.UID == e.UID && (named(p, VirtualizationProcess) || named(p, HelperProcess)) &&
-			p.Start >= since-startSlack.Microseconds() {
+			(since == 0 || p.MonoStart == 0 || p.MonoStart >= since) {
 			return true
 		}
 	}
@@ -138,7 +128,7 @@ func (l *Ledger) ReclaimOwn(id, runDir string) error {
 			if !v.helperGone(e) {
 				return errors.New("admission: the helper is still running")
 			}
-			if v.mayBeVM(e, time.Now().UnixMicro()) {
+			if v.mayBeVM(e) {
 				return errors.New("admission: a Virtualization or helper process of this user may still be this VM")
 			}
 		}

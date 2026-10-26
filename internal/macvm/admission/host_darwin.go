@@ -8,8 +8,10 @@ package admission
 import (
 	"bytes"
 	"context"
+	"os"
 	"os/exec"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
@@ -53,6 +55,7 @@ func (darwinHost) Processes() ([]Proc, error) {
 	if err != nil {
 		return nil, err
 	}
+	euid := os.Geteuid()
 	out := make([]Proc, 0, len(kps))
 	for i := range kps {
 		p := &kps[i].Proc
@@ -60,12 +63,48 @@ func (darwinHost) Processes() ([]Proc, error) {
 		if j := bytes.IndexByte(name, 0); j >= 0 {
 			name = name[:j]
 		}
-		out = append(out, Proc{
+		pr := Proc{
 			PID:   int(p.P_pid),
 			UID:   int(kps[i].Eproc.Ucred.Uid),
 			Start: p.P_starttime.Sec*1e6 + int64(p.P_starttime.Usec),
 			Name:  string(name),
-		})
+		}
+		// Only this user's: the ledger orders no other user's processes,
+		// and the kernel refuses them to a non-root caller anyway.
+		if pr.UID == euid {
+			pr.MonoStart = monoStart(pr.PID)
+		}
+		out = append(out, pr)
 	}
 	return out, nil
+}
+
+// From XNU: PROC_INFO_CALL_PIDRUSAGE (bsd/sys/proc_info_private.h) and
+// RUSAGE_INFO_V1 (bsd/sys/resource.h). struct rusage_info_v1 there is
+// uint8_t ri_uuid[16] followed by sixteen uint64_t fields, 144 bytes; read as
+// 8-byte words, ri_uuid is words 0 and 1 and ri_proc_start_abstime, the ninth
+// uint64_t, is word 10 (byte offset 80).
+const (
+	procInfoCallPIDRusage = 9
+	rusageInfoV1          = 1
+	rusageInfoV1Words     = 18
+	riProcStartAbstime    = 10
+)
+
+// monoStart is pid's ri_proc_start_abstime, read as libproc's
+// proc_pid_rusage(pid, RUSAGE_INFO_V1, &ri) does it:
+// __proc_info(PROC_INFO_CALL_PIDRUSAGE, pid, flavor, 0, &ri, 0), a plain
+// system call, so no cgo. XNU stamps it at fork together with the calendar
+// start (kern_fork.c, microtime_with_abstime) and keeps both across exec. 0
+// when it cannot be read: another user's process (EPERM), or a pid gone since
+// the snapshot. A pid reused since the snapshot reads its new process's later
+// start, which only keeps a slot longer.
+func monoStart(pid int) uint64 {
+	var ri [rusageInfoV1Words]uint64
+	_, _, errno := unix.Syscall6(unix.SYS_PROC_INFO, procInfoCallPIDRusage, uintptr(pid), rusageInfoV1, 0,
+		uintptr(unsafe.Pointer(&ri[0])), 0)
+	if errno != 0 {
+		return 0
+	}
+	return ri[riProcStartAbstime]
 }

@@ -162,13 +162,18 @@ type Entry struct {
 	RunnerID string `json:"runner_id"`
 	RunID    string `json:"run_id,omitempty"`
 	// Slot is the licence slot (0 or 1), for the per-slot-base fallback.
-	Slot        int    `json:"slot"`
-	OwnerPID    int    `json:"owner_pid"`
-	OwnerStart  int64  `json:"owner_start"`
-	HelperPID   int    `json:"helper_pid,omitempty"`
-	HelperStart int64  `json:"helper_start,omitempty"`
-	GuestCPUs   int    `json:"guest_cpus"`
-	GuestMemory uint64 `json:"guest_memory_bytes"`
+	Slot       int   `json:"slot"`
+	OwnerPID   int   `json:"owner_pid"`
+	OwnerStart int64 `json:"owner_start"`
+	// OwnerMonoStart and HelperMonoStart are those processes' Proc.MonoStart,
+	// recorded from the snapshot under the lock; 0 when unknown, as in every
+	// entry an earlier release wrote.
+	OwnerMonoStart  uint64 `json:"owner_mono_start,omitempty"`
+	HelperPID       int    `json:"helper_pid,omitempty"`
+	HelperStart     int64  `json:"helper_start,omitempty"`
+	HelperMonoStart uint64 `json:"helper_mono_start,omitempty"`
+	GuestCPUs       int    `json:"guest_cpus"`
+	GuestMemory     uint64 `json:"guest_memory_bytes"`
 	// DockerMemory is the memory the login's Docker engine is configured with.
 	DockerMemory uint64    `json:"docker_memory_bytes"`
 	Overhead     uint64    `json:"overhead_bytes"`
@@ -186,7 +191,11 @@ type Proc struct {
 	PID   int
 	UID   int
 	Start int64 // start time, microseconds since the epoch
-	Name  string
+	// MonoStart is when the process was created, in mach absolute time: it
+	// counts up from this boot's start and no change of the calendar clock
+	// moves it, so it orders creations where Start cannot. 0 when unreadable.
+	MonoStart uint64
+	Name      string
 }
 
 // Host is what the ledger reads from the Mac.
@@ -510,7 +519,7 @@ func (l *Ledger) Admit(req Request) (Entry, error) {
 		}
 		out = Entry{
 			Kind: req.Kind, State: StateReserved, RunnerID: l.c.RunnerID, RunID: req.RunID,
-			Slot: slot, OwnerPID: req.OwnerPID, OwnerStart: req.OwnerStart,
+			Slot: slot, OwnerPID: req.OwnerPID, OwnerStart: req.OwnerStart, OwnerMonoStart: v.monoStart(req.OwnerPID, req.OwnerStart),
 			GuestCPUs: req.GuestCPUs, GuestMemory: req.GuestMemory, DockerMemory: l.c.DockerMemoryBytes,
 			Overhead: l.c.OverheadBytes, DiskReserve: req.DiskReserve, BootTime: v.boot, Created: time.Now().UTC(),
 		}
@@ -571,7 +580,7 @@ func (l *Ledger) Update(id string, fn func(*Entry)) (Entry, error) {
 
 // ClaimHelper is called by the helper itself (same uid and runner as the
 // entry), under the lock, before it creates its VM: it records its own pid and
-// start time, so the entry never depends on runnerd surviving the spawn. It
+// start times, so the entry never depends on runnerd surviving the spawn. It
 // refuses when the entry is gone, from an earlier boot, or has a tombstone
 // beside it (written or forged: the helper does not start either way).
 func (l *Ledger) ClaimHelper(id string, pid int, start int64) (Entry, error) {
@@ -591,7 +600,7 @@ func (l *Ledger) ClaimHelper(id string, pid int, start int64) (Entry, error) {
 		if _, ok := v.tombs[e.file]; ok {
 			return errors.New("admission: this VM's ledger entry was tombstoned")
 		}
-		e.HelperPID, e.HelperStart = pid, start
+		e.HelperPID, e.HelperStart, e.HelperMonoStart = pid, start, v.monoStart(pid, start)
 		if e.State == StateReserved {
 			e.State = StateStarting
 		}
@@ -599,6 +608,17 @@ func (l *Ledger) ClaimHelper(id string, pid int, start int64) (Entry, error) {
 		return l.rewrite(&e)
 	})
 	return out, err
+}
+
+// monoStart is the MonoStart of the process pid that started at start, as
+// alive matches it; 0 when no such process is in the snapshot.
+func (v *view) monoStart(pid int, start int64) uint64 {
+	for _, p := range v.procs {
+		if p.PID == pid && p.Start == start {
+			return p.MonoStart
+		}
+	}
+	return 0
 }
 
 func (l *Ledger) own(v *view, id string) (Entry, error) {
