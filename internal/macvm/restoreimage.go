@@ -48,6 +48,9 @@ func (p *prep) restoreImage(ctx context.Context) (RestoreImage, string, string, 
 			if _, err := os.Lstat(final + ".part"); err != nil {
 				_ = os.Remove(final + ".part" + partMarkerSuffix)
 			}
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			// Only a file shown absent is downloaded over: one that cannot be inspected is kept.
+			return RestoreImage{}, "", "", fmt.Errorf("macvm: inspect cached restore image %s: %w", final, err)
 		}
 		if sha == "" {
 			if sha, err = p.download(ctx, u, final); err != nil {

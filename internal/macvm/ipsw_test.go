@@ -415,27 +415,33 @@ func TestPrepareIPSWKeepsAnUnrecordedCachedFileOfTheSameName(t *testing.T) {
 	}
 }
 
-// A cached file of the same name that prepare cannot inspect is kept and stops prepare: only one shown
-// absent may be skipped. A link that loops makes the inspection fail with something other than "not exist".
-func TestPrepareIPSWKeepsACachedFileItCannotInspect(t *testing.T) {
-	f := newPrep(t)
-	final := cachedPath(f)
-	if err := os.MkdirAll(filepath.Dir(final), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(filepath.Base(final), final); err != nil {
-		t.Fatal(err)
-	}
-	src, sha := operatorIPSW(t, "operator-downloaded-restore-image")
-	f.opts.IPSW, f.opts.IPSWSHA256 = src, sha
-	if _, err := macvm.Prepare(context.Background(), f.opts); err == nil || errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("--ipsw over a cached file it cannot inspect: %v", err)
-	}
-	if target, err := os.Readlink(final); err != nil || target != filepath.Base(final) {
-		t.Fatalf("the cached entry changed: %q %v", target, err)
-	}
-	if f.eng.Loads() != 0 || f.eng.Installs() != 0 {
-		t.Fatalf("a refused prepare loaded %d and installed %d", f.eng.Loads(), f.eng.Installs())
+// A cached restore image that prepare cannot inspect is kept and stops prepare, on a download and with
+// --ipsw alike: only one shown absent may be replaced. A link that loops makes the inspection fail with
+// something other than "not exist".
+func TestPrepareKeepsACachedImageItCannotInspect(t *testing.T) {
+	for _, given := range []bool{false, true} {
+		t.Run(map[bool]string{false: "download", true: "ipsw"}[given], func(t *testing.T) {
+			f := newPrep(t)
+			final := cachedPath(f)
+			if err := os.MkdirAll(filepath.Dir(final), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(filepath.Base(final), final); err != nil {
+				t.Fatal(err)
+			}
+			if given {
+				f.opts.IPSW, f.opts.IPSWSHA256 = operatorIPSW(t, "operator-downloaded-restore-image")
+			}
+			if _, err := macvm.Prepare(context.Background(), f.opts); err == nil || errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("prepare over a cached image it cannot inspect: %v", err)
+			}
+			if target, err := os.Readlink(final); err != nil || target != filepath.Base(final) {
+				t.Fatalf("the cached entry changed: %q %v", target, err)
+			}
+			if f.eng.Loads() != 0 || f.eng.Installs() != 0 {
+				t.Fatalf("a refused prepare loaded %d and installed %d", f.eng.Loads(), f.eng.Installs())
+			}
+		})
 	}
 }
 
