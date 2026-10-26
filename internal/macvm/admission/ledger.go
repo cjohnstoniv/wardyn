@@ -442,6 +442,17 @@ func (v *view) sameBoot(e Entry) bool {
 	return v.session == "" || e.BootSession == "" || e.BootSession == v.session
 }
 
+// EarlierBoot: e was recorded in an earlier boot of this Mac, proved only as
+// sameBoot proves one: a recorded session that differs from h's readable one.
+func EarlierBoot(h Host, e Entry) bool {
+	b, ok := h.(bootSessioner)
+	if !ok || e.BootSession == "" {
+		return false
+	}
+	s, err := b.BootSession()
+	return err == nil && s != "" && s != e.BootSession
+}
+
 func readEntry(path string, fi os.FileInfo) (Entry, bool) {
 	var e Entry
 	if !fi.Mode().IsRegular() || fi.Size() > maxEntryFile {

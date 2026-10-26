@@ -11,6 +11,14 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- A failed macOS VM start no longer keeps its VM in the helper until the helper exits (#3708). Each failed attempt
+  kept one, and a first boot's retries on the auxiliary storage lock can make several.
+- After a change of the Mac's clock, a macOS VM run whose helper stopped no longer ends with "The Mac restarted, so
+  the macOS VM was lost." (#3709). The runner tells a restart by the boot session the ledger records, as the ledger
+  does, so a run whose entry has no session, from an earlier release, says its helper stopped.
+
 ## [0.10.0-rc.4] — 2026-10-26
 
 ### Before you upgrade
