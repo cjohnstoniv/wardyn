@@ -211,7 +211,8 @@ func WriteFrame(w io.Writer, typ byte, payload []byte) error {
 	return err
 }
 
-// ReadFrame reads one frame; io.EOF only at a frame boundary.
+// ReadFrame reads one frame. io.EOF comes back only at a frame boundary, before the first header byte;
+// a frame cut short anywhere after that, a header with no payload behind it included, is io.ErrUnexpectedEOF.
 func ReadFrame(r io.Reader) (byte, []byte, error) {
 	var hdr [5]byte
 	if _, err := io.ReadFull(r, hdr[:]); err != nil {
@@ -226,6 +227,9 @@ func ReadFrame(r io.Reader) (byte, []byte, error) {
 	}
 	payload := make([]byte, n)
 	if _, err := io.ReadFull(r, payload); err != nil {
+		if errors.Is(err, io.EOF) { // ReadFull says EOF when it read nothing; the header already made this a frame
+			err = io.ErrUnexpectedEOF
+		}
 		return 0, nil, fmt.Errorf("guestagent: truncated frame: %w", err)
 	}
 	return hdr[0], payload, nil

@@ -400,7 +400,17 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
 
   it("MachineKind: the TS VMKind is exactly Go's non-container kinds", () => {
     const machineGo = readFileSync(join(root, "internal/types/machine.go"), "utf8");
-    const goKinds = [...machineGo.matchAll(/^\s*Machine\w+\s+MachineKind\s*=\s*"([a-z_]+)"/gm)].map((m) => m[1]);
+    const consts = new Map([...machineGo.matchAll(/^\s*(Machine\w+)\s+MachineKind\s*=\s*"([a-z_]+)"/gm)].map((m) => [m[1], m[2]] as const));
+    // The kinds the server accepts are the case list in MachineKind.Validate, not the constants alone: a kind
+    // declared and left out of it (or listed and not declared) is refused or unknown at run time.
+    const cases = /func \(k MachineKind\) Validate\(\) error \{\s*switch k \{\s*case ([^:]+):/.exec(machineGo);
+    if (!cases) throw new Error("machine.go: no case list in MachineKind.Validate");
+    const goKinds = cases[1].split(",").map((c) => c.trim()).filter((c) => c !== '""').map((c) => {
+      const v = consts.get(c);
+      if (v === undefined) throw new Error(`machine.go: Validate lists ${c}, which is no MachineKind constant`);
+      return v;
+    });
+    expect(new Set(goKinds)).toEqual(new Set(consts.values()));
     expect(goKinds).toContain("macos_vm");
     const kindTs = readFileSync(join(root, "ui/src/app/lib/types/machine-kind.ts"), "utf8");
     const vm = /export type VMKind = ([^;]+);/.exec(kindTs);

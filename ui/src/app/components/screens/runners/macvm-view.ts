@@ -20,6 +20,14 @@ export function sizeShortfall(caps: MacVMCaps, perRun: RunnerAmounts | undefined
   return out;
 }
 
+/** The reasons the runner offers no macOS VM at all (the ones that came with a refusal sentence). */
+const REFUSED_REASONS = ["ledger_damaged", "memory_below_minimum", "cpu_below_minimum"];
+
+/** Whether the runner's caps say it refuses macOS VMs outright; the console words the refusal from `reason`, never from the runner's text. */
+export function refused(caps: MacVMCaps): boolean {
+  return REFUSED_REASONS.includes(caps.reason ?? "");
+}
+
 export type MacVMBadge = { tone: "neutral" | "warning" | "info"; text: string };
 
 /** The card badge: the count while it offers, "preparing" with the percent, "not offered" otherwise; none without caps. */
@@ -28,7 +36,7 @@ export function macVMBadge(caps: MacVMCaps | undefined, active: number | undefin
   const { state, progress } = caps.base;
   if (state === "preparing") return { tone: "info", text: MACVM_K.K02(String(progress ?? 0)) };
   const short = sizeShortfall(caps, perRun);
-  if (caps.refusal || state !== "ready" || short.memory || short.cpu) return { tone: "neutral", text: MACVM_K.K03 };
+  if (refused(caps) || state !== "ready" || short.memory || short.cpu) return { tone: "neutral", text: MACVM_K.K03 };
   if (active === undefined) return null;
   return { tone: active >= caps.max ? "warning" : "neutral", text: MACVM_K.K01(String(active), String(caps.max)) };
 }

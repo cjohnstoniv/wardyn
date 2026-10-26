@@ -226,7 +226,7 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 
 - **Without MDM** install the package, then run [`wardyn runner setup`](../runner-registration.md#wardyn-runner-setup), or `wardyn-runnerd setup --token-file <file>` (`--org <url>` without a profile).
   - `setup` stops the managed agent, writes the agent `com.wardyn.runnerd` in the person's own `~/Library/LaunchAgents`, and the managed agent stays idle. `serve` also takes a lock in the runner state directory, so a second `serve` for one identity exits with a message.
-- Logs go to `~/Library/Logs/wardyn/runnerd.log` either way; `serve --log-file` rotates it at 10 MiB, keeping `.1` to `.3`. A crash goes to `runnerd.crash.log` beside it.
+- Logs go to `~/Library/Logs/wardyn/runnerd.log` either way; `serve --log-file` rotates it at 10 MiB, keeping `.1` to `.3`. A crash goes to `runnerd.crash.log` beside it. `serve` moves a crash log over 1 MiB to `runnerd.crash.log.1` when it starts, so the log is bounded at each start, not held to a hard cap.
 
 ### Managed preferences
 

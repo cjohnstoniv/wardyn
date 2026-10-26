@@ -1011,6 +1011,297 @@ func TestSetupFailedMigrationKeepsEveryEntryCounted(t *testing.T) {
 	}
 }
 
+// A directory named like an entry cannot be hard-linked, and any login can make one in the world-writable
+// entries directory. The relink moves it to a root-only quarantine and finishes, every real entry kept.
+func TestSetupRelinkQuarantinesAnEntryThatCannotBeLinked(t *testing.T) {
+	r := newRig(t, bigMac())
+	names := admitN(t, r, 2)
+	planted := filepath.Join(r.dir, "e-planted.json")
+	if err := os.MkdirAll(filepath.Join(planted, "inside"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := Setup(r.setupCfg(func(c *SetupConfig) { c.Fstat = drift(t, r, "03777") })); err != nil {
+		t.Fatalf("Setup wedged on a planted directory: %v", err)
+	}
+	if _, err := os.Lstat(planted); err == nil {
+		t.Fatal("the planted directory is still in the entries directory")
+	}
+	q, _ := filepath.Glob(filepath.Join(filepath.Dir(r.dir), quarantinePrefix+"*", "e-planted.json", "inside"))
+	if len(q) != 1 {
+		t.Fatalf("the planted directory was not quarantined: %v", q)
+	}
+	if n := counted(t, r); n != 2 {
+		t.Fatalf("a helper counts %d of 2 entries", n)
+	}
+	wantEntries(t, r, names, "the relink past a planted directory")
+	wantLayout(t, r)
+}
+
+// A name in the old entries directory whose inode the published one does not hold is not unlinked with the
+// rest: it moves to a root-only quarantine. Nothing makes one under the setup's lock, so a hook plants it
+// after the swap.
+func TestSetupDiscardKeepsAnEntryThePublishedDirectoryLacks(t *testing.T) {
+	r := newRig(t, bigMac())
+	names := admitN(t, r, 2)
+	var late string
+	plant := func(c *SetupConfig) {
+		c.Fstat = drift(t, r, "03777")
+		c.afterSwap = func(old string) {
+			late = filepath.Join(old, "e-late.json")
+			if err := os.WriteFile(late, []byte("late"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := Setup(r.setupCfg(plant)); err != nil {
+		t.Fatal(err)
+	}
+	q, _ := filepath.Glob(filepath.Join(filepath.Dir(r.dir), quarantinePrefix+"*", "e-late.json"))
+	if len(q) != 1 || readFile(t, q[0]) != "late" {
+		t.Fatalf("the name the published directory lacks was not quarantined: %v", q)
+	}
+	if m, _ := filepath.Glob(filepath.Join(filepath.Dir(r.dir), "."+entriesName+"-link.*")); len(m) != 0 {
+		t.Fatalf("link directories left: %v", m)
+	}
+	if n := counted(t, r); n != 2 {
+		t.Fatalf("a helper counts %d of 2 entries", n)
+	}
+	wantEntries(t, r, names, "the discard")
+	wantLayout(t, r)
+}
+
+// swapPlant plants late in the entries directory relink swaps out, as nothing can under the setup's lock.
+func swapPlant(t *testing.T, r *rig, late string, c *SetupConfig) {
+	c.Fstat = drift(t, r, "03777")
+	c.afterSwap = func(old string) {
+		if err := os.WriteFile(filepath.Join(old, late), []byte("late"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// linkDirs lists the directories relink replaced that are still in Base.
+func linkDirs(r *rig) []string {
+	m, _ := filepath.Glob(filepath.Join(filepath.Dir(r.dir), "."+entriesName+"-link.*"))
+	return m
+}
+
+// A name in the swapped-out directory whose inode cannot be read is kept, and the discard is skipped: no
+// proof of a second link, no unlink.
+func TestSetupDiscardKeepsAnEntryItCannotStat(t *testing.T) {
+	r := newRig(t, bigMac())
+	names := admitN(t, r, 2)
+	if err := Setup(r.setupCfg(func(c *SetupConfig) {
+		c.Fstat = drift(t, r, "03777")
+		c.fault = func(op, dir, name string) error {
+			if op == "stat" && strings.Contains(dir, linkPrefix) && name == names[0] {
+				return unix.EIO
+			}
+			return nil
+		}
+	})); err != nil {
+		t.Fatal(err)
+	}
+	m := linkDirs(r)
+	if len(m) != 1 {
+		t.Fatalf("the swapped-out directory was discarded or lost: %v", m)
+	}
+	if _, err := os.Lstat(filepath.Join(m[0], names[0])); err != nil {
+		t.Fatalf("the name with no inode proof is gone: %v", err)
+	}
+	if n := counted(t, r); n != 2 {
+		t.Fatalf("a helper counts %d of 2 entries", n)
+	}
+	wantEntries(t, r, names, "the discard")
+}
+
+// A swapped-out directory that cannot be opened when keepUnpublished looks is not unlinked by a discard whose
+// own open works: nothing is unlinked on a transient failure.
+func TestSetupDiscardUnlinksNothingWhenTheSwappedOutDirectoryCannotBeChecked(t *testing.T) {
+	r := newRig(t, bigMac())
+	names := admitN(t, r, 2)
+	armed, failed := false, false
+	if err := Setup(r.setupCfg(func(c *SetupConfig) {
+		fs := drift(t, r, "03777")
+		c.Fstat = func(fd int, name string) (unix.Stat_t, error) {
+			if armed && !failed && strings.Contains(name, linkPrefix) {
+				failed = true
+				return unix.Stat_t{}, unix.EIO
+			}
+			return fs(fd, name)
+		}
+		c.afterSwap = func(string) { armed = true }
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if !failed {
+		t.Fatal("the open of the swapped-out directory was never faulted")
+	}
+	m := linkDirs(r)
+	if len(m) != 1 {
+		t.Fatalf("the swapped-out directory was discarded or lost: %v", m)
+	}
+	if got := entryFiles(t, m[0]); len(got) != len(names) {
+		t.Fatalf("names left in the kept directory: %v, want %v", got, names)
+	}
+	wantEntries(t, r, names, "the discard")
+}
+
+// keptFor runs a Setup whose swapped-out directory holds the late name too, with fault planted, and returns
+// the directories relink replaced that are still in Base.
+func keptFor(t *testing.T, r *rig, fault func(op, dir, name string) error) []string {
+	t.Helper()
+	if err := Setup(r.setupCfg(func(c *SetupConfig) {
+		swapPlant(t, r, "e-late.json", c)
+		c.fault = fault
+	})); err != nil {
+		t.Fatal(err)
+	}
+	return linkDirs(r)
+}
+
+// wantKept fails unless the one kept directory still holds every admitted name and the late one, and a
+// helper still counts the admitted entries.
+func wantKept(t *testing.T, r *rig, kept, names []string, what string) {
+	t.Helper()
+	if len(kept) != 1 {
+		t.Fatalf("%s: the swapped-out directory was discarded or lost: %v", what, kept)
+	}
+	for _, n := range append([]string{"e-late.json"}, names...) {
+		if _, err := os.Lstat(filepath.Join(kept[0], n)); err != nil {
+			t.Fatalf("%s: %s is gone from the kept directory: %v", what, n, err)
+		}
+	}
+	if n := counted(t, r); n != len(names) {
+		t.Fatalf("%s: a helper counts %d of %d entries", what, n, len(names))
+	}
+	wantEntries(t, r, names, what)
+}
+
+// Fail closed: the published entries directory cannot be listed, or cannot be opened, so no name of the
+// swapped-out one is proved a second link, and none is unlinked.
+func TestSetupDiscardSkippedWhenThePublishedDirectoryCannotBeRead(t *testing.T) {
+	r := newRig(t, bigMac())
+	names := admitN(t, r, 2)
+	kept := keptFor(t, r, func(op, dir, name string) error {
+		if op == "readdir" && filepath.Base(dir) == entriesName {
+			return unix.EIO
+		}
+		return nil
+	})
+	wantKept(t, r, kept, names, "a published directory that cannot be listed")
+}
+
+func TestSetupDiscardSkippedWhenThePublishedDirectoryCannotBeOpened(t *testing.T) {
+	r := newRig(t, bigMac())
+	names := admitN(t, r, 2)
+	armed, failed := false, false
+	if err := Setup(r.setupCfg(func(c *SetupConfig) {
+		swapPlant(t, r, "e-late.json", c)
+		fs, plant := c.Fstat, c.afterSwap
+		c.afterSwap = func(old string) { plant(old); armed = true }
+		c.Fstat = func(fd int, name string) (unix.Stat_t, error) {
+			if armed && !failed && filepath.Base(name) == entriesName {
+				failed = true
+				return unix.Stat_t{}, unix.EIO
+			}
+			return fs(fd, name)
+		}
+	})); err != nil {
+		t.Fatal(err)
+	}
+	wantKept(t, r, linkDirs(r), names, "a published directory that cannot be opened")
+}
+
+// A published name that cannot be statted is not in the proof, so its twin in the swapped-out directory
+// moves to a quarantine instead of being unlinked.
+func TestSetupDiscardQuarantinesTheTwinOfAPublishedNameItCannotStat(t *testing.T) {
+	r := newRig(t, bigMac())
+	names := admitN(t, r, 2)
+	kept := keptFor(t, r, func(op, dir, name string) error {
+		if op == "stat" && filepath.Base(dir) == entriesName && name == names[0] {
+			return unix.EIO
+		}
+		return nil
+	})
+	if len(kept) != 0 {
+		t.Fatalf("link directories left: %v", kept)
+	}
+	q, _ := filepath.Glob(filepath.Join(filepath.Dir(r.dir), quarantinePrefix+"*", names[0]))
+	if len(q) != 1 {
+		t.Fatalf("the twin was not quarantined: %v", q)
+	}
+	if n := counted(t, r); n != 2 {
+		t.Fatalf("a helper counts %d of 2 entries", n)
+	}
+	wantEntries(t, r, names, "the quarantine of a twin")
+}
+
+// A name that will not move to the quarantine keeps the swapped-out directory whole.
+func TestSetupDiscardSkippedWhenAQuarantineRenameFails(t *testing.T) {
+	r := newRig(t, bigMac())
+	names := admitN(t, r, 2)
+	kept := keptFor(t, r, func(op, dir, name string) error {
+		if op == "quarantine" && name == "e-late.json" {
+			return unix.EIO
+		}
+		return nil
+	})
+	wantKept(t, r, kept, names, "a quarantine rename that fails")
+}
+
+// A name its owner removed before it moved leaves no empty quarantine directory behind.
+func TestSetupQuarantineOfAVanishedNameLeavesNoDirectory(t *testing.T) {
+	r := newRig(t, bigMac())
+	names := admitN(t, r, 2)
+	kept := keptFor(t, r, func(op, dir, name string) error {
+		if op == "quarantine" && name == "e-late.json" {
+			return unix.ENOENT
+		}
+		return nil
+	})
+	if q, _ := filepath.Glob(filepath.Join(filepath.Dir(r.dir), quarantinePrefix+"*")); len(kept) != 0 || len(q) != 0 {
+		t.Fatalf("left behind: link directories %v, quarantines %v", kept, q)
+	}
+	wantEntries(t, r, names, "the vanished name")
+}
+
+// A swapped-out directory kept because a name could not be moved is not unlinked by the next setup: the name
+// the published directory lacks moves to a quarantine then.
+func TestSetupNextRunQuarantinesWhatAKeptDirectoryHolds(t *testing.T) {
+	r := newRig(t, bigMac())
+	names := admitN(t, r, 2)
+	if err := Setup(r.setupCfg(func(c *SetupConfig) {
+		swapPlant(t, r, "e-late.json", c)
+		c.fault = func(op, dir, name string) error {
+			if op == "quarantine" && name == "e-late.json" {
+				return unix.EIO
+			}
+			return nil
+		}
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if len(linkDirs(r)) != 1 {
+		t.Fatalf("the first run did not keep the directory: %v", linkDirs(r))
+	}
+	if err := Setup(r.setupCfg()); err != nil {
+		t.Fatal(err)
+	}
+	q, _ := filepath.Glob(filepath.Join(filepath.Dir(r.dir), quarantinePrefix+"*", "e-late.json"))
+	if len(q) != 1 || readFile(t, q[0]) != "late" {
+		t.Fatalf("the next run did not quarantine the name: %v", q)
+	}
+	if m := linkDirs(r); len(m) != 0 {
+		t.Fatalf("link directories left: %v", m)
+	}
+	if n := counted(t, r); n != 2 {
+		t.Fatalf("a helper counts %d of 2 entries", n)
+	}
+	wantEntries(t, r, names, "the next run")
+	wantLayout(t, r)
+}
+
 // DR-0431 residual: an entry its owner releases between a failed migration and
 // the retry stays released.
 func TestSetupRetryNeverResurrectsAReleasedEntry(t *testing.T) {
@@ -1059,8 +1350,11 @@ func TestSetupRetryNeverResurrectsAReleasedEntry(t *testing.T) {
 	if n := counted(t, r); n != 1 {
 		t.Fatalf("after the retry a helper counts %d, not the 1 entry left", n)
 	}
-	if n := everyEntry(t, r, []string{first}); n != 0 {
-		t.Fatalf("the released entry %s is back: %d copies on disk", first, n)
+	// A name a stale link directory holds that the entries directory lacks is quarantined, not unlinked, as
+	// a name it never held would be; the quarantine is not a place a helper reads an entry from.
+	q, _ := filepath.Glob(filepath.Join(filepath.Dir(r.dir), quarantinePrefix+"*", first))
+	if n := everyEntry(t, r, []string{first}) - len(q); n != 0 {
+		t.Fatalf("the released entry %s is back: %d copies on disk outside a quarantine", first, n)
 	}
 	wantEntries(t, r, []string{es[kept].file}, "the entry still held")
 	wantLayout(t, r)
@@ -1192,9 +1486,7 @@ func TestSetupSourceInspectErrorFailsClosed(t *testing.T) {
 		t.Fatalf("Setup with a source's fstat failing: %v (failed %v)", err, failed)
 	}
 	if err := r.openErr(); err == nil {
-		if n := counted(t, r); n != 2 {
-			t.Fatalf("before the retry a fresh helper counts %d of 2 entries", n)
-		}
+		t.Fatal("before the retry a fresh helper opened the ledger; it must refuse until the new base has its lock")
 	}
 	if n := everyEntry(t, r, names); n != 2 {
 		t.Fatalf("after the refused Setup %d copies of 2 entries are on disk", n)
@@ -1244,4 +1536,27 @@ func TestSetupSkipsUntrustedSources(t *testing.T) {
 		t.Fatalf("entries carried from untrusted sources: %v", got)
 	}
 	wantLayout(t, r)
+}
+
+// An Lstat that fails for a reason other than not-exist is an error, not "nothing there": the rename after
+// it would replace an empty directory.
+func TestSetupOccupiedRefusesOnAnyOtherLstatError(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "d"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		path string
+		used bool
+		err  bool
+	}{
+		{filepath.Join(dir, "d"), true, false},
+		{filepath.Join(dir, "none"), false, false},
+		{filepath.Join(dir, strings.Repeat("x", 300)), false, true}, // ENAMETOOLONG
+	} {
+		used, err := occupied(tc.path)
+		if used != tc.used || (err != nil) != tc.err {
+			t.Errorf("occupied(%.40s): %v, %v; want %v, error %v", tc.path, used, err, tc.used, tc.err)
+		}
+	}
 }

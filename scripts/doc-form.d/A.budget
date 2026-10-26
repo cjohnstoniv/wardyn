@@ -334,8 +334,8 @@
 # docs/AUDIT-ACTIONS.md=54188 adds 13 over 54175, measured (0.10 SANDBOX-GONE-LIVE, #3667 F1): the run.lost gone reason also names the status check over a live session.
 # docs/AUDIT-ACTIONS.md=54195 adds 7 over 54188, measured (0.10 W5DESKTOP): the desktop.recording.write row names `stopped_ms`.
 # docs/AUDIT-ACTIONS.md=54222 adds 27 over 54195, measured (0.10 W5DESKTOP): a recording's chain check can name another run's row, by design.
-# docs/AUDIT-ACTIONS.md=54277 = ours 54222 + theirs 54243 - base 54188 at the 0.10 W4 merge of W6FOLLOW (recording.read chain_check). 54285 adds 8 (#3583: `end_reason` on `desktop.recording.resume`).
-docs/AUDIT-ACTIONS.md=54285 share=8
+# docs/AUDIT-ACTIONS.md=54277 = ours 54222 + theirs 54243 - base 54188 at the 0.10 W4 merge of W6FOLLOW (recording.read chain_check). 54285 adds 8 (#3583: `end_reason` on `desktop.recording.resume`). 54286 adds 1 (#3489: `tunnel-limit` in the `vmnet:<reason>` row).
+docs/AUDIT-ACTIONS.md=54286 share=8
 # docs/AUDIT-ACTIONS.md 50827 = ours 50175 + theirs 50556 - base 49904 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.

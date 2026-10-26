@@ -1333,12 +1333,15 @@ jobs:
             if above26 "$m"; then echo "::error::the package Distribution needs macOS $m; the floor is 26.0"; exit 1; fi
           done
           helper="$(find "$RUNNER_TEMP/pkg" -path '*/Payload/usr/local/wardyn/bin/wardyn-macvm' -type f)"
-          [ -n "$helper" ] && [ "$(wc -l <<<"$helper")" -eq 1 ]
+          [ -n "$helper" ]
+          [ "$(wc -l <<<"$helper")" -eq 1 ]
           codesign -d --entitlements :- "$helper" 2>/dev/null | plutil -convert json -o - - \
             | jq -e '. == {"com.apple.security.virtualization": true}'
           # The guest agent is in the package once, signed, and carries no entitlement.
           agent="$(find "$RUNNER_TEMP/pkg" -path '*/Payload/usr/local/wardyn/bin/wardyn-guest-agent' -type f)"
-          [ -n "$agent" ] && [ "$(wc -l <<<"$agent")" -eq 1 ] && [ -x "$agent" ]
+          [ -n "$agent" ]
+          [ "$(wc -l <<<"$agent")" -eq 1 ]
+          [ -x "$agent" ]
           codesign --verify --strict "$agent"
           [ -z "$(codesign -d --entitlements :- "$agent" 2>/dev/null)" ]
           # Nothing at run time compares the agent's version, so this proves provenance: the helper reports the
@@ -1348,6 +1351,14 @@ jobs:
           want="$(stamp "$helper")"
           grep -q 'vcs.revision=' <<<"$want"
           [ "$(stamp "$agent")" = "$want" ]
+      # The check above cannot see the agent's own stamp (-trimpath drops -ldflags from the build info, and the
+      # agent has no version command), so this reads the stamped variable out of the packaged binary (#3636).
+      - name: The packaged guest agent carries the release stamp
+        run: |
+          set -euo pipefail
+          agent="$(find "$RUNNER_TEMP/pkg" -path '*/Payload/usr/local/wardyn/bin/wardyn-guest-agent' -type f)"
+          [ -n "$agent" ] && [ "$(wc -l <<<"$agent")" -eq 1 ]
+          scripts/check-release-stamp.sh "$agent"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: runner-pkg

@@ -239,9 +239,6 @@ func TestMacOSVMHandsTheJobItsNetwork(t *testing.T) {
 		admission.Proc{PID: helperPID, UID: 501, Start: 9, Name: admission.HelperProcess})
 	m := r.open(t)
 	m.sockRoot, m.sockFstat = macvmtest.SockRoot(t), macvmtest.SockFstat
-	prevPoll := jobSockPoll
-	jobSockPoll = 10 * time.Millisecond
-	t.Cleanup(func() { jobSockPoll = prevPoll })
 	e, err := m.ledger.Admit(admission.Request{Kind: admission.KindToolsUpdate, GuestCPUs: 4, GuestMemory: 8 << 30,
 		DiskReserve: admission.RunDiskReservation(macvm.BaseDiskBytes), OwnerPID: os.Getpid(), OwnerStart: 3})
 	if err != nil {
@@ -372,5 +369,28 @@ func TestMacOSVMStartSweepsLeftoverPrepNetsButLedgeredJobs(t *testing.T) {
 	m.start(ctx, func() {})
 	if len(kept) != 1 || !slices.Equal(kept[0], []string{e.ID}) || handing {
 		t.Fatalf("swept %d times keeping %v (jobs could be handed a network: %v); want once, keeping %s first", len(kept), kept, handing, e.ID)
+	}
+}
+
+type noDriver struct{}
+
+func (noDriver) ReclaimMacVMs() error { return nil }
+func (noDriver) EndNewestMacVM(context.Context, int64) (string, error) {
+	return "", nil
+}
+func (noDriver) StartMacPrepNet(context.Context, string) (*os.File, func(), error) {
+	return nil, func() {}, nil
+}
+func (noDriver) SweepMacPrep(context.Context, []string) (int, error) { return 0, nil }
+func (noDriver) RemoveMacPrepNet(context.Context, string) error      { return nil }
+
+// Wiring the driver sets every hook the macOS VM handle calls it through: a dropped prepSweep would leave
+// the networks a crash left for good, and nothing else would notice.
+func TestMacOSVMUseDriverSetsEveryHook(t *testing.T) {
+	m := &macOSVMs{}
+	m.useDriver(noDriver{})
+	if m.reclaim == nil || m.endNewest == nil || m.prepNet == nil || m.prepSweep == nil || m.prepRemove == nil {
+		t.Fatalf("hooks left unset: reclaim=%v endNewest=%v prepNet=%v prepSweep=%v prepRemove=%v",
+			m.reclaim != nil, m.endNewest != nil, m.prepNet != nil, m.prepSweep != nil, m.prepRemove != nil)
 	}
 }

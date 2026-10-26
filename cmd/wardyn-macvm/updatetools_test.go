@@ -87,6 +87,97 @@ func TestUpdateToolsRefusesWithoutTheGuestAgentBeforeBooting(t *testing.T) {
 	}
 }
 
+// TestRefusedStage2LeavesNoJobRoot: a stage-2 run refused for the missing wardyn-guest-agent leaves neither
+// the job's root nor its prep-relay.log behind.
+func TestRefusedStage2LeavesNoJobRoot(t *testing.T) {
+	for _, cmd := range []string{macvm.UpdateToolsCommand, macvm.PrepareCommand} {
+		t.Run(cmd, func(t *testing.T) {
+			root := t.TempDir()
+			ledger := makeLedger(t, root)
+			vmRoot := filepath.Join(root, "vm")
+			d, _, _ := testDeps(&macvmtest.Engine{})
+			var errb lockedBuf
+			d.stderr, d.powerSource = &errb, onAC{}
+			args := append(runnerdArgs(vmRoot, "e1", ledger), "--"+macvm.FlagSockRoot, macvmtest.SockRoot(t))
+			args[0] = cmd
+			if code := run(context.Background(), args, d); code != 1 || !strings.Contains(errb.String(), "wardyn-guest-agent beside this helper") {
+				t.Fatalf("exit %d: %s", code, errb.String())
+			}
+			if _, err := os.Stat(vmRoot); !os.IsNotExist(err) {
+				t.Fatalf("the refused run left %s behind: %v", vmRoot, err)
+			}
+		})
+	}
+}
+
+// TestUpdateToolsRecordsALeakedSlotWhenItsVMIsRefused: the framework refusing update-tools' stage-2 VM with
+// its VM limit, while the ledger counts fewer VMs than the cap, adds one leaked-slot entry for the runner.
+func TestUpdateToolsRecordsALeakedSlotWhenItsVMIsRefused(t *testing.T) {
+	placeGuestAgent(t)
+	root := t.TempDir()
+	ledger := makeLedger(t, root)
+	l, err := admission.Open(admission.Config{Dir: ledger, UID: os.Getuid(), RunnerID: "r1", Host: host{}, Fstat: rootFstat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := admission.Request{Kind: admission.KindToolsUpdate, GuestMemory: 4 << 30, DiskReserve: 1 << 30, OwnerPID: os.Getpid(), OwnerStart: 7}
+	e, err := l.Admit(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Admit(admission.Request{Kind: admission.KindRun, GuestMemory: 4 << 30, DiskReserve: 1 << 30, OwnerPID: os.Getpid(), OwnerStart: 7}); err != nil {
+		t.Fatal(err)
+	}
+	layout := macvm.Layout{Root: filepath.Join(root, "vm")}
+	base := layout.BaseDir(0)
+	_ = os.MkdirAll(base, 0o700)
+	for n, b := range map[string]string{macvm.DiskFile: "d", macvm.AuxFile: "a", macvm.MachineIDFile: "base-id"} {
+		_ = os.WriteFile(filepath.Join(base, n), []byte(b), 0o600)
+	}
+	_ = os.WriteFile(filepath.Join(base, macvm.ManifestFile),
+		[]byte(`{"format":1,"state":"ready","hardware_model":"aHc=","min_cpus":2,"min_memory_mib":4096,"desktop":"control","helper_version":"old","agent_version":"0.0.0-old"}`), 0o600)
+	d, _, _ := testDeps(&macvmtest.Engine{StartErr: macvm.ErrVMLimit})
+	var errb lockedBuf
+	d.stderr, d.powerSource = &errb, onAC{}
+	sockRoot := macvmtest.SockRoot(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	done := make(chan int, 1)
+	go func() {
+		done <- run(ctx, append(runnerdArgs(layout.Root, e.ID, ledger), "--"+macvm.FlagSockRoot, sockRoot), d)
+	}()
+	var cc *macvm.ControlClient
+	for deadline := time.Now().Add(10 * time.Second); cc == nil; time.Sleep(10 * time.Millisecond) {
+		if cc, err = macvm.DialControl(ctx, macvm.JobControlSock(sockRoot, e.ID)); err != nil && time.Now().After(deadline) {
+			t.Fatalf("the job's ctl.sock never answered: %v (%s)", err, errb.String())
+		}
+	}
+	defer cc.Close()
+	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ours, theirs := os.NewFile(uintptr(fds[0]), "attach"), os.NewFile(uintptr(fds[1]), "relay")
+	defer theirs.Close()
+	if err := cc.SendNetFD(ctx, ours); err != nil {
+		t.Fatal(err)
+	}
+	_ = ours.Close()
+	if code := <-done; code != 1 {
+		t.Fatalf("update-tools exit %d: %s", code, errb.String())
+	}
+	es, _ := l.Counted()
+	leaked := 0
+	for _, c := range es {
+		if c.Kind == admission.KindLeaked && c.RunnerID == "r1" {
+			leaked++
+		}
+	}
+	if leaked != 1 {
+		t.Fatalf("%d leaked-slot entries in %d counted, want 1", leaked, len(es))
+	}
+}
+
 // placeGuestAgent puts a wardyn-guest-agent beside this test binary, where
 // the helper looks for it, and returns its bytes.
 func placeGuestAgent(t *testing.T) []byte {

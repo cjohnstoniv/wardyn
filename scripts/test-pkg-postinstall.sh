@@ -69,7 +69,7 @@ fresh() {
     >"$R/usr/local/wardyn/bin/wardyn-macvm"
   chmod +x "$R/usr/local/wardyn/bin/wardyn-macvm"
 }
-post() { env -i PATH="$T:/usr/bin:/bin" OWN="$OWN" WARDYN_PKG_ROOT="$R" SWAP_PATH="${SWAP_PATH:-}" SWAP_TO="${SWAP_TO:-}" sh "$POST" >"${WORK}/out" 2>&1; }
+post() { env -i PATH="$T:/usr/bin:/bin" OWN="$OWN" WARDYN_PKG_ROOT="$R" WARDYN_PKG_PATH="$T" SWAP_PATH="${SWAP_PATH:-}" SWAP_TO="${SWAP_TO:-}" sh "$POST" >"${WORK}/out" 2>&1; }
 run() { post || { cat "${WORK}/out" >&2; fail "postinstall failed ($1)"; }; }
 ino() { /usr/bin/stat -c %i "$1"; }
 root_owned() { [ -e "$OWN/$(ino "$1")" ]; }
@@ -166,7 +166,7 @@ echo "test-pkg-postinstall: race: victims untouched in 20 runs; ledger made in $
 # land in the victim. The quarantine name must be random and the planted link never used.
 fresh predict; mkdir "$R/victim" "$(B)"; chmod 700 "$R/victim"; : >"$(B)/evil"
 stub date 'echo 1700000000'
-env -i PATH="$T:/usr/bin:/bin" OWN="$OWN" WARDYN_PKG_ROOT="$R" sh -c 'echo $$ >"$1"; while [ ! -e "$2" ]; do sleep 0.01; done; exec sh "$3"' _ \
+env -i PATH="$T:/usr/bin:/bin" OWN="$OWN" WARDYN_PKG_ROOT="$R" WARDYN_PKG_PATH="$T" sh -c 'echo $$ >"$1"; while [ ! -e "$2" ]; do sleep 0.01; done; exec sh "$3"' _ \
   "$WORK/pid" "$WORK/go" "$POST" >"${WORK}/out" 2>&1 &
 p=$!; until [ -s "$WORK/pid" ]; do sleep 0.01; done
 for t in 1700000000 1700000001; do ln -s "$R/victim" "$R/Users/Shared/.wardyn-quarantine-$t-$(cat "$WORK/pid")"; done
@@ -187,5 +187,13 @@ rc=0; SWAP_PATH="$(B)" SWAP_TO="$R/secret" post || rc=$?
   || fail "the type switch changed the root-owned file: mode 0600 -> $(mode "$R/secret") (postinstall exit $rc)"
 [ "$rc" = 0 ] || { cat "${WORK}/out" >&2; fail "postinstall failed (type-switch)"; }
 check_ledger "a type switch"; [ "$(ino "$(B)")" != "$(ino "$R/secret")" ] || fail "the hardlink became the base"
+
+# 10. The script sets its own PATH: a tool planted ahead of the system ones in the caller's PATH is never run.
+fresh own-path; mkdir "$WORK/planted"
+for t in ln mkdir stat chmod chown mktemp mv launchctl; do printf '#!/bin/sh\n: >"%s/planted-ran"\n' "$WORK" >"$WORK/planted/$t"; chmod +x "$WORK/planted/$t"; done
+rm -f "$WORK/planted-ran"
+env -i PATH="$WORK/planted:$T:/usr/bin:/bin" OWN="$OWN" WARDYN_PKG_ROOT="$R" WARDYN_PKG_PATH="$T" sh "$POST" >"${WORK}/out" 2>&1 || { cat "${WORK}/out" >&2; fail "postinstall failed (own-path)"; }
+[ ! -e "$WORK/planted-ran" ] || fail "postinstall ran a tool from the caller's PATH"
+check_ledger "a planted PATH"
 
 echo "test-pkg-postinstall: ok"

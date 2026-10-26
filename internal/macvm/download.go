@@ -71,7 +71,7 @@ func (d *downloader) fetch(ctx context.Context, url, part string) error {
 		return err
 	}
 	off, total := st.Size(), int64(-1)
-	// A resume writes after what is there, not over it.
+	// Writes land at the file position, which a fresh open leaves at 0: move it to the resume offset.
 	if _, err := f.Seek(off, io.SeekStart); err != nil {
 		return err
 	}

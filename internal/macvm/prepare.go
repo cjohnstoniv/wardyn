@@ -160,7 +160,10 @@ type PrepareOptions struct {
 	// HelperVersion goes into the manifest.
 	HelperVersion string
 	Progress      func(PrepareEvent)
-	Log           *slog.Logger
+	// Leaked, if set, runs when the provisioning boot is refused with ErrVMLimit: the helper records the
+	// framework's slot the ledger cannot account for (RunOptions.Leaked). Its failure is logged.
+	Leaked func() error
+	Log    *slog.Logger
 	// PowerPoll is how often power is checked while waiting or downloading.
 	PowerPoll time.Duration
 	// DownloadRange overrides DownloadRange (tests).
@@ -644,13 +647,32 @@ func (p *prep) provisionAndBootstrap(ctx context.Context, spec MachineSpec) (Boo
 	}
 	defer guest.Close()
 	defer host.Close()
-	go func() { _ = nw.Serve(host) }()
+	// The relay stopping by itself, not by Close, leaves the guest without a network: cancel the waits with
+	// its error as the cause, so the failure names it.
+	wctx, wcancel := context.WithCancelCause(ctx)
+	defer wcancel(nil)
+	go func() {
+		if err := nw.Serve(host); err != nil {
+			wcancel(fmt.Errorf("macvm: the prepare network relay stopped: %w", err))
+		}
+	}()
+	relayFailed := func(err error) error {
+		if ctx.Err() == nil && wctx.Err() != nil {
+			if cause := context.Cause(wctx); !errors.Is(cause, context.Canceled) {
+				return cause
+			}
+		}
+		return err
+	}
 	password, err := randomPassword()
 	if err != nil {
 		return BootstrapResult{}, err
 	}
-	if err := p.waitAC(ctx, PhaseProvision); err != nil {
-		return BootstrapResult{}, err
+	if err := p.waitAC(wctx, PhaseProvision); err != nil {
+		return BootstrapResult{}, relayFailed(err)
+	}
+	if err := wctx.Err(); err != nil {
+		return BootstrapResult{}, relayFailed(err)
 	}
 	p.emit(PrepareEvent{Phase: PhaseProvision})
 	user, pass := provisionUser, password
@@ -660,6 +682,7 @@ func (p *prep) provisionAndBootstrap(ctx context.Context, spec MachineSpec) (Boo
 	fb, err := p.FirstBoot.Boot(spec.DiskPath, spec.AuxPath, spec.HardwareModel, spec.MachineIdentifier,
 		uint(spec.CPUs), spec.MemoryBytes, guest, user, pass)
 	if err != nil {
+		reportVMLimit(err, p.Leaked, p.Log)
 		return BootstrapResult{}, fmt.Errorf("macvm: provisioning boot: %w", err)
 	}
 	stopped := false
@@ -675,8 +698,6 @@ func (p *prep) provisionAndBootstrap(ctx context.Context, spec MachineSpec) (Boo
 		}
 	}()
 	// done is watched while waiting: a guest that stops by itself is a failure.
-	wctx, wcancel := context.WithCancel(ctx)
-	defer wcancel()
 	early := make(chan error, 1)
 	var vmStopped atomic.Bool
 	go func() {
@@ -684,7 +705,7 @@ func (p *prep) provisionAndBootstrap(ctx context.Context, spec MachineSpec) (Boo
 		case err := <-fb.Done:
 			vmStopped.Store(true)
 			early <- err
-			wcancel()
+			wcancel(nil)
 		case <-wctx.Done():
 		}
 	}()
@@ -709,10 +730,10 @@ func (p *prep) provisionAndBootstrap(ctx context.Context, spec MachineSpec) (Boo
 			return BootstrapResult{}, fmt.Errorf("macvm: the provisioning boot stopped early: %v", e)
 		default:
 		}
-		return BootstrapResult{}, err
+		return BootstrapResult{}, relayFailed(err)
 	}
 	if err := p.waitAC(wctx, PhaseBootstrap); err != nil {
-		return BootstrapResult{}, err
+		return BootstrapResult{}, relayFailed(err)
 	}
 	p.emit(PrepareEvent{Phase: PhaseBootstrap})
 	in := BootstrapInput{Dial: nw.DialGuest, Username: provisionUser, Password: login, Progress: p.emit,
@@ -727,13 +748,16 @@ func (p *prep) provisionAndBootstrap(ctx context.Context, spec MachineSpec) (Boo
 	}
 	res, err := p.Bootstrap.Bootstrap(wctx, in)
 	if err != nil {
+		if rerr := relayFailed(nil); rerr != nil {
+			return BootstrapResult{}, rerr
+		}
 		return BootstrapResult{}, fmt.Errorf("macvm: stage 1: %w", err)
 	}
 	if res.Desktop == "" {
 		res.Desktop = DesktopNone
 	}
 	p.emit(PrepareEvent{Phase: PhaseShutdown})
-	wcancel()
+	wcancel(nil)
 	if err := shutdown(); err != nil {
 		return BootstrapResult{}, fmt.Errorf("macvm: the prepared VM did not shut down cleanly: %w", err)
 	}
