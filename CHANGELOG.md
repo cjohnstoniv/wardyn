@@ -34,8 +34,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   and the stop is already queued for it (#3703). It warns once, and logs once when the re-assert succeeds after the
   runner reconnects; any other failure still warns on every pass, and the stop is still re-asserted on every pass.
 - While the Docker engine is down or restarting, a runner's log no longer repeats `runner containment will retry` every
-  second or two (#3704). Each run's failed containment is logged once, an identical repeat at most once a minute with
-  how many went unlogged, and a changed error or the run's containment succeeding at once. Containment is still tried
+  second or two (#3704). Each error a run's containment fails with is logged once, then at most once a minute with
+  how many repeats went unlogged, even when two errors take turns; a new error, or the run's containment succeeding,
+  logs at once. Containment is still tried
   on every pass, and a failed pass still refuses the runner's ready state as before.
 
 ## [0.10.0-rc.3] — 2026-10-25

@@ -38,9 +38,9 @@ type Manager struct {
 	pendingLogged map[uuid.UUID]time.Time
 	// retryLogs spaces out the "will retry" lines of the containment and replay loops, which tick every second.
 	retryLogs retrylog.Dedupe
-	// containLogs is each run's last logged containment failure (logContainFailure): the attempts are
-	// never spaced out, only the identical lines between them.
-	containLogs   map[uuid.UUID]*containLog
+	// containLogs is each run's logged containment failures by error text (logContainFailure): the
+	// attempts are never spaced out, only the identical lines between them.
+	containLogs   map[uuid.UUID]map[string]*containLog
 	dir           string
 	root          *os.Root
 	sub           substrate.Substrate
@@ -456,7 +456,7 @@ func (m *Manager) CheckLapses(ctx context.Context) error {
 		}
 		r = current
 		delete(m.pendingLogged, id)
-		recovered, failed := m.containLogs[id]
+		texts, failed := m.containLogs[id]
 		delete(m.containLogs, id)
 		if r.ProxyStoppedAt == nil || (r.MutationFailure != nil && !r.MutationFailure.Contained) {
 			before := r
@@ -477,9 +477,20 @@ func (m *Manager) CheckLapses(ctx context.Context) error {
 		}
 		m.mu.Unlock()
 		if failed {
-			slog.InfoContext(ctx, "runner containment recovered", "run_id", id, "repeated", recovered.repeated)
+			repeated := 0
+			for _, l := range texts {
+				repeated += l.repeated
+			}
+			slog.InfoContext(ctx, "runner containment recovered", "run_id", id, "repeated", repeated)
 		}
 	}
+	m.mu.Lock()
+	for id := range m.containLogs {
+		if r, ok := m.state.Runs[id]; !ok || r.Retired {
+			delete(m.containLogs, id) // left the loop without a success: nothing will log it again
+		}
+	}
+	m.mu.Unlock()
 	return errors.Join(errs...)
 }
 
@@ -508,28 +519,36 @@ func (e errContain) Unwrap() error { return e.err }
 // containSummaryEvery spaces out the repeats of one run's identical containment failure.
 const containSummaryEvery = time.Minute
 
-// containLog is the failure last logged for one run, and its identical repeats not logged since.
+// containTextsPerRun bounds the error texts remembered for one run; past it the run starts over, so a
+// text that carries a changing value cannot grow the map.
+const containTextsPerRun = 16
+
+// containLog is one logged failure text of one run, and its repeats not logged since.
 type containLog struct {
-	err      string
 	next     time.Time
 	repeated int
 }
 
-// logContainFailure logs one run's failed containment attempt at ERROR: a first failure, or one whose
-// error changed, at once; identical repeats as one summary line at most once per containSummaryEvery,
-// saying how many went unlogged. A success logs at once (CheckLapses). Only the line is spaced out:
-// every attempt still runs, and still fails its pass.
+// logContainFailure logs one run's failed containment attempt at ERROR: a text not yet seen for the run
+// at once; a seen one, however the texts interleave, as one summary line at most once per
+// containSummaryEvery, saying how many went unlogged. A success logs at once (CheckLapses). Only the line
+// is spaced out: every attempt still runs, and still fails its pass.
 func (m *Manager) logContainFailure(ctx context.Context, c errContain) {
 	m.mu.Lock()
 	now, text := m.now(), c.err.Error()
-	l := m.containLogs[c.run]
+	if m.containLogs == nil {
+		m.containLogs = map[uuid.UUID]map[string]*containLog{}
+	}
+	texts := m.containLogs[c.run]
+	if texts == nil || (texts[text] == nil && len(texts) >= containTextsPerRun) {
+		texts = map[string]*containLog{}
+		m.containLogs[c.run] = texts
+	}
+	l := texts[text]
 	log, repeated := true, 0
 	switch {
-	case l == nil || l.err != text:
-		if m.containLogs == nil {
-			m.containLogs = map[uuid.UUID]*containLog{}
-		}
-		m.containLogs[c.run] = &containLog{err: text, next: now.Add(containSummaryEvery)}
+	case l == nil:
+		texts[text] = &containLog{next: now.Add(containSummaryEvery)}
 	case now.Before(l.next):
 		l.repeated++
 		log = false

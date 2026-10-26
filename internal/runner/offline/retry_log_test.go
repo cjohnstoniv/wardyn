@@ -248,8 +248,9 @@ func TestContainmentLogIsPerRunSummarisedAndAttemptsAreUnchanged(t *testing.T) {
 		{"runner containment will retry", "contain run " + failing.String() + ": " + changed.Error()},
 		{"runner containment recovered", ""},
 	}
-	if !slices.Equal(lines, want) || !slices.Equal(repeated, []float64{0, 59, 0, 4}) {
-		t.Fatalf("lines %v repeated %v; want %v repeated [0 59 0 4]:\n%s", lines, repeated, want, buf.String())
+	// The recovery counts every repeat not logged: 9 of the first error after its summary, 4 of the changed one.
+	if !slices.Equal(lines, want) || !slices.Equal(repeated, []float64{0, 59, 0, 13}) {
+		t.Fatalf("lines %v repeated %v; want %v repeated [0 59 0 13]:\n%s", lines, repeated, want, buf.String())
 	}
 
 	// The refusal is unchanged: a failing pass still fails CheckLapses and BeforeReady every time.
@@ -261,6 +262,62 @@ func TestContainmentLogIsPerRunSummarisedAndAttemptsAreUnchanged(t *testing.T) {
 		if err := m.BeforeReady(t.Context(), &runnerwire.Peer{}, false); !errors.Is(err, down) {
 			t.Fatalf("BeforeReady = %v, want the containment failure", err)
 		}
+	}
+}
+
+// A run whose containment fails with two errors in turn, as an engine coming back up can answer, logs each
+// error once and then each one's summary at most once a minute, not a line on every pass (#3704). A run
+// that leaves the loop without a success forgets its failures.
+func TestContainmentLogBoundsInterleavedErrors(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	m, _, _, org := managerFixture(t)
+	failing := createLocal(t, m, org)
+	var seconds atomic.Int64
+	base := time.Now()
+	refused, timeout := errors.New("connect: connection refused"), errors.New("context deadline exceeded")
+	stop := &phaseStop{seconds: &seconds, calls: map[int64]int{}, answer: func(sec int64) error {
+		if sec%2 == 0 {
+			return refused
+		}
+		return timeout
+	}}
+	const total = 120
+	ticks := make(chan time.Time)
+	m.mu.Lock()
+	r := m.state.Runs[failing]
+	r.FailedCreation = true
+	m.state.Runs[failing] = r
+	m.now = func() time.Time { return base.Add(time.Duration(seconds.Load()) * time.Second) }
+	m.stopper, m.ticks = stop, ticks
+	m.tick = func(context.Context) { seconds.Add(1) }
+	m.mu.Unlock()
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error)
+	go func() { done <- m.Run(ctx) }()
+	for range total {
+		ticks <- time.Time{}
+	}
+	cancel()
+	<-done
+
+	lines := strings.Count(buf.String(), `"msg":"runner containment will retry"`)
+	if lines < 2 || lines > 2*(1+total/60) {
+		t.Fatalf("%d ERROR lines over %d passes of two interleaved errors, want each error once plus at most one a minute:\n%s", lines, total, buf.String())
+	}
+
+	m.mu.Lock()
+	r = m.state.Runs[failing]
+	r.Retired = true
+	m.state.Runs[failing] = r
+	m.mu.Unlock()
+	_ = m.CheckLapses(t.Context())
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, kept := m.containLogs[failing]; kept {
+		t.Fatal("a retired run's logged failures were kept")
 	}
 }
 
