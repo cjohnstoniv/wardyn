@@ -541,8 +541,8 @@ func (p *prep) download(ctx context.Context, u, final string) (string, error) {
 	if err := d.fetch(ctx, u, part); err != nil {
 		// A download that fetched nothing leaves no marked empty partial file behind.
 		if fi, serr := os.Stat(part); serr == nil && fi.Size() == 0 {
-			_ = os.Remove(part)
 			_ = os.Remove(part + partMarkerSuffix)
+			_ = os.Remove(part)
 		}
 		return "", err
 	}

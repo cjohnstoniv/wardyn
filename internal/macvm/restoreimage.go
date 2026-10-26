@@ -219,8 +219,11 @@ func copyFile(ctx context.Context, src, dst string) error {
 	return ctx.Err()
 }
 
-// partMarkerSuffix names the marker beside a partial download. Wardyn writes it before it creates the
-// partial file, so a partial file with a marker is one this download made and may resume.
+// partMarkerSuffix names the marker beside a partial download. Wardyn creates the partial file before
+// its marker and, when a download fails, removes the marker first, so a crash between the two leaves an
+// unmarked partial file, which is removed, never a marker a partial file placed by hand could pair with.
+// The one marker left alone, after the rename to the final name, the next load removes. A partial file
+// with a marker is one this download made and may resume.
 const partMarkerSuffix = ".pinned"
 
 // startPart makes part ready for a download: an existing one with its marker is kept to be resumed; one
@@ -238,16 +241,16 @@ func (p *prep) startPart(part string) error {
 		}
 	}
 	_ = os.Remove(marker)
-	m, err := os.OpenFile(marker, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return err
-	}
-	if err := m.Close(); err != nil {
-		return err
-	}
 	f, err := os.OpenFile(part, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return err
 	}
-	return f.Close()
+	if err := f.Close(); err != nil {
+		return err
+	}
+	m, err := os.OpenFile(marker, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	return m.Close()
 }
