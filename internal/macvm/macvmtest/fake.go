@@ -43,8 +43,8 @@ type Engine struct {
 	// process, as Code-Hex/vz's installer VM does: nothing releases it.
 	LockAux bool
 
-	installs, loads, ids, startFails int
-	machines                         []*Machine
+	installs, loads, ids, startFails, urlCalls int
+	machines                                   []*Machine
 }
 
 var _ macvm.Engine = (*Engine)(nil)
@@ -52,6 +52,9 @@ var _ macvm.Engine = (*Engine)(nil)
 func (e *Engine) HostCheck() error { return e.HostErr }
 
 func (e *Engine) LatestRestoreImageURL(context.Context) (string, error) {
+	e.mu.Lock()
+	e.urlCalls++
+	e.mu.Unlock()
 	if e.URL == "" {
 		return "", errors.New("fake: no restore image URL")
 	}
@@ -132,6 +135,9 @@ func (e *Engine) SetThermal(t macvm.ThermalState) {
 	e.Thermal = t
 	e.mu.Unlock()
 }
+
+// URLCalls is how many times LatestRestoreImageURL ran.
+func (e *Engine) URLCalls() int { e.mu.Lock(); defer e.mu.Unlock(); return e.urlCalls }
 
 // Installs is how many times Install ran.
 func (e *Engine) Installs() int { e.mu.Lock(); defer e.mu.Unlock(); return e.installs }

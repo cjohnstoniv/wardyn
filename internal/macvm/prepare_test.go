@@ -523,6 +523,9 @@ func TestPrepareDownloadRateAfterAResumeCountsThisRunOnly(t *testing.T) {
 	if err := os.WriteFile(part, f.srv.body[:4096], 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(part+".pinned", nil, 0o600); err != nil { // the marker of an interrupted Wardyn download
+		t.Fatal(err)
+	}
 	if _, err := macvm.Prepare(context.Background(), f.opts); err != nil {
 		t.Fatal(err)
 	}

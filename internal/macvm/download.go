@@ -33,7 +33,8 @@ const DownloadFailurePrefix = "macvm: restore image download: "
 // the image URL prepare asked for. Apple pins its update CDN, so the platform verifier refuses any chain a
 // TLS-inspecting proxy re-signs; the refusal alone does not prove a proxy, so the advice says likely.
 const pinnedHostAdvice = "the certificate chain for %s failed Apple's pinning check; a proxy that inspects TLS is the " +
-	"likely cause: exempt %s from TLS inspection and run prepare again (the image is %s)"
+	"likely cause: exempt %s from TLS inspection and run prepare again (the image is %s), or download that image on " +
+	"another network and run prepare with --ipsw <file> --sha256 <hex>, taking the SHA-256 from a source you trust"
 
 // isPinningRefusal says err is the platform verifier refusing a pinned host's chain. macOS reports it
 // as a bare "x509: ... certificates do not meet pinning requirements" with no typed error to match, so

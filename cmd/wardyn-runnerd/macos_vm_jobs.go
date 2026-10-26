@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"maps"
 	"os"
@@ -301,4 +302,21 @@ func sweepSlotStaging(base string) error {
 	}
 	defer func() { _ = unix.Flock(int(f.Fd()), unix.LOCK_UN) }()
 	return os.RemoveAll(base + ".update")
+}
+
+// checkIPSW is the absolute path of the restore image --ipsw names, or why it cannot be used: the helper
+// runs from another directory and reads it as this login.
+func checkIPSW(p string) (string, error) {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return "", fmt.Errorf("--ipsw %q: %w", p, err)
+	}
+	fi, err := os.Stat(abs)
+	if err != nil {
+		return "", fmt.Errorf("--ipsw: cannot read the restore image: %w", err)
+	}
+	if !fi.Mode().IsRegular() {
+		return "", fmt.Errorf("--ipsw %q is not a regular file", abs)
+	}
+	return abs, nil
 }

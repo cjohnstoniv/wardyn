@@ -23,9 +23,26 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   still in the runs namespace (#3537), gets its stop retried when its runner, upgraded to this release, next
   reconnects. The runner finishes it when the pod shows the proxy never started, and the pod, the policies and the
   Secret are removed. Upgrade the runner before removing anything by hand.
+- A macOS VM restore image in `macos-vm.noindex/cache` that this release has no record of, placed by hand or kept by
+  an earlier release after a failed prepare, now stops `macos-vm prepare` (#3706). Prepare names the file and neither
+  uses nor deletes it. Delete it, so prepare downloads the image again, or move it out of the cache and pass it with
+  `--ipsw <file> --sha256 <hex>`, taking the hash from a source you trust.
+
+### Added
+
+- `wardyn-runnerd macos-vm prepare --ipsw <file> --sha256 <hex>` builds a Mac's base from a restore image downloaded
+  elsewhere, for a Mac whose network refuses Apple's pinned update host. `--sha256` is required: prepare copies the
+  file into its cache, checks the copy's hash before anything loads or installs it, refuses a mismatch naming both
+  hashes, and never changes or deletes the file given. The pinning error now names `--ipsw` (#3701).
 
 ### Changed
 
+- A macOS VM's prepare reuses a restore image from its download cache only when a previous prepare's download wrote a
+  record of its SHA-256 beside it and the file still matches. A file with no record, or a different hash, stops
+  prepare with an error naming the file and what to do; it is never deleted. The record is written only for an image
+  Wardyn downloaded over the pinned connection in a download it started, resumed only from its own partial file (the
+  one with the marker Wardyn wrote for it), or copied with `--ipsw` after its hash matched. It guards against
+  hand-placed or damaged files, not against someone with the runner user's write access (#3706).
 - A macOS VM's prepare behind a proxy that inspects TLS now fails at the first range of the restore image, not after
   three retries, when the error is Apple's certificate-pinning refusal of `updates.cdn-apple.com`. The error says the
   host's certificate chain failed Apple's pinning check, that a proxy inspecting TLS is the likely cause and to exempt
