@@ -71,7 +71,7 @@ export interface MacVMCaps {
   desktop?: MacVMDesktop;
   sign_ins?: boolean;
   base: MacVMBase;
-  /** In words, why the runner offers no macOS VM; absent when it offers them. */
+  /** In words, why the runner offers no macOS VM. The runner inventory leaves it out: the console words `reason` itself. */
   refusal?: string;
   /** MacVMReason: why it offers none, or can't start or prepare one now. A string: a newer runner may send another. */
   reason?: string;

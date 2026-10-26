@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -150,18 +151,20 @@ func TestRecordingChain_Answers(t *testing.T) {
 	}
 }
 
-// heldRangeStore holds its first range check until released, so a second can arrive while it walks.
+// heldRangeStore holds its first range check until released, so a second can arrive while it walks. The
+// first check waits for the test to take its signal: a send that gave up when the test was not yet
+// listening let the first check finish unheld, and the test then waited out its bound (#3600).
 type heldRangeStore struct {
 	store.Store
 	walking chan struct{}
 	release chan struct{}
+	held    atomic.Bool
 }
 
 func (s *heldRangeStore) VerifyRecordingAuditRange(context.Context, uuid.UUID, string, time.Time) (store.AuditChainRange, bool, error) {
-	select {
-	case s.walking <- struct{}{}:
+	if s.held.CompareAndSwap(false, true) {
+		s.walking <- struct{}{}
 		<-s.release
-	default:
 	}
 	return store.AuditChainRange{OK: true}, true, nil
 }

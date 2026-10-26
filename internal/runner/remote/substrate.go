@@ -441,6 +441,15 @@ func (s *Substrate) AgentStatus(ctx context.Context, ref, agentExecID string) (r
 func (s *Substrate) teardown(ctx context.Context, method string, kind types.RunnerActionKind, ref string) error {
 	var res runnerwire.TeardownResult
 	err := s.refCall(ctx, method, ref, &res)
+	// A kill or an end is the last this substrate does for the sandbox, so its machine kind goes when the
+	// runner answered it (even with a failure, and a local deadline counts as one), and when it was queued
+	// for the runner to replay on its own side, which never comes back through here. The kind stays only for
+	// an offline refusal that was not queued, which is asked again, and for a stop or stop_proxy, which
+	// leaves a sandbox that can start again.
+	ends := method == runnerwire.MethodKill || method == runnerwire.MethodEnd
+	if ends && !errors.Is(err, runner.ErrRunnerOffline) {
+		s.dropVMKind(ref)
+	}
 	if err == nil && res.MacOSVMDisk != nil {
 		s.macOSVMDisks(ctx, []runner.MacOSVMDisk{*res.MacOSVMDisk})
 	}
@@ -453,7 +462,17 @@ func (s *Substrate) teardown(ctx context.Context, method string, kind types.Runn
 	if l, ok := s.t.(*Link); ok {
 		l.requireFresh(ctx)
 	}
+	if ends {
+		s.dropVMKind(ref)
+	}
 	return runner.ErrPendingOnRunner
+}
+
+// dropVMKind forgets the machine kind held for ref.
+func (s *Substrate) dropVMKind(ref string) {
+	s.mu.Lock()
+	delete(s.vmKinds, ref)
+	s.mu.Unlock()
 }
 
 // macOSVMDisks hands reports to the MacOSVMDisks hook, when there is one and they are any.
@@ -472,13 +491,7 @@ func (s *Substrate) KillSandbox(ctx context.Context, ref string) error {
 }
 
 func (s *Substrate) EndSandbox(ctx context.Context, ref string) error {
-	err := s.teardown(ctx, runnerwire.MethodEnd, types.RunnerActionEnd, ref)
-	if err == nil {
-		s.mu.Lock()
-		delete(s.vmKinds, ref)
-		s.mu.Unlock()
-	}
-	return err
+	return s.teardown(ctx, runnerwire.MethodEnd, types.RunnerActionEnd, ref)
 }
 
 // vmKind is the machine kind ref was created with here, "" when this substrate did not create it.

@@ -32,6 +32,15 @@ const (
 	dialBudget = 5 * time.Second
 )
 
+// proxyDialer dials the proxy with TCP keepalive on, so a tunnel whose proxy
+// side has gone away without a FIN ends instead of holding its slot. It sets
+// the same probe timing as the guest leg.
+func proxyDialer() *net.Dialer {
+	return &net.Dialer{Timeout: dialBudget, KeepAliveConfig: net.KeepAliveConfig{
+		Enable: true, Idle: keepaliveIdle, Interval: keepaliveInterval, Count: keepaliveCount,
+	}}
+}
+
 type proxyClient struct {
 	addr   string // host:port of the run's wardyn-proxy
 	dial   func(ctx context.Context, network, addr string) (net.Conn, error)
@@ -40,8 +49,7 @@ type proxyClient struct {
 
 func newProxyClient(addr string, dial func(ctx context.Context, network, addr string) (net.Conn, error)) *proxyClient {
 	if dial == nil {
-		d := &net.Dialer{Timeout: dialBudget}
-		dial = d.DialContext
+		dial = proxyDialer().DialContext
 	}
 	return &proxyClient{
 		addr: addr, dial: dial,

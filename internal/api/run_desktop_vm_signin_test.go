@@ -49,6 +49,45 @@ type vmSignInTestStore struct {
 	// the approvals table; takeoverErr fails OpenTakeovers.
 	takeovers   *authzApprovals
 	takeoverErr error
+	// stops is each run's recorded agent stop (agent_runs.agent_stopped_at) with the outage mark it was
+	// recorded under, as MarkRunAgentStopped fences it; revive clears it with the mark.
+	stops map[uuid.UUID]vmAgentStop
+}
+
+type vmAgentStop struct{ lostAt, at time.Time }
+
+// markAgentStopped records run id's agent stopped at at under its current outage mark, as
+// MarkRunAgentStopped does: only on a RUNNING run that carries one.
+func (s *vmSignInTestStore) markAgentStopped(t *testing.T, id uuid.UUID, at time.Time) {
+	t.Helper()
+	run, err := s.GetRun(context.Background(), id)
+	if err != nil || run.State != types.RunRunning || run.LostAt == nil || run.LostReason != types.LostOutage {
+		t.Fatalf("record the agent stopped on %+v: %v", run, err)
+	}
+	s.vmu.Lock()
+	defer s.vmu.Unlock()
+	if s.stops == nil {
+		s.stops = map[uuid.UUID]vmAgentStop{}
+	}
+	s.stops[id] = vmAgentStop{lostAt: *run.LostAt, at: at}
+}
+
+// revive clears run's outage mark and its recorded stop together, as MarkRunRevived does.
+func (s *vmSignInTestStore) revive(run *types.AgentRun) {
+	s.vmu.Lock()
+	defer s.vmu.Unlock()
+	delete(s.stops, run.ID)
+	run.LostAt, run.LostReason = nil, ""
+	s.putRun(*run)
+}
+
+var _ runAgentStoppedReader = (*vmSignInTestStore)(nil)
+
+func (s *vmSignInTestStore) RunAgentStopped(_ context.Context, id uuid.UUID) (bool, error) {
+	s.vmu.Lock()
+	defer s.vmu.Unlock()
+	_, ok := s.stops[id]
+	return ok, nil
 }
 
 func (s *vmSignInTestStore) setTakeovers(a *authzApprovals, err error) {
@@ -161,6 +200,26 @@ func (s *vmSignInTestStore) ResumeDesktopVMAgent(_ context.Context, runID uuid.U
 	row.PausedBy, row.PausedAt = "", nil
 	s.rows[runID] = row
 	return by, at, true, nil
+}
+
+// EndStoppedDesktopVMAgentPause mirrors the store's one transaction: under vmu, the run must still carry
+// the outage mark at lostAt with a stop recorded under it, and the row the pause at pausedAt with gen.
+func (s *vmSignInTestStore) EndStoppedDesktopVMAgentPause(ctx context.Context, runID uuid.UUID, lostAt, pausedAt time.Time, gen int64) (string, time.Time, time.Time, bool, error) {
+	s.vmu.Lock()
+	defer s.vmu.Unlock()
+	run, err := s.GetRun(ctx, runID)
+	stop, stopped := s.stops[runID]
+	if err != nil || run.LostAt == nil || !run.LostAt.Equal(lostAt) || run.LostReason != types.LostOutage || !stopped || !stop.lostAt.Equal(lostAt) {
+		return "", time.Time{}, time.Time{}, false, nil
+	}
+	row, ok := s.rows[runID]
+	if !ok || row.PausedAt == nil || !row.PausedAt.Equal(pausedAt) || row.PauseGeneration != gen {
+		return "", time.Time{}, time.Time{}, false, nil
+	}
+	by, at := row.PausedBy, *row.PausedAt
+	row.PausedBy, row.PausedAt = "", nil
+	s.rows[runID] = row
+	return by, at, stop.at, true, nil
 }
 
 func (s *vmSignInTestStore) PausedDesktopVMAgents(context.Context) ([]store.PausedDesktopVMAgent, error) {
@@ -1860,18 +1919,21 @@ func TestDesktopSignIns_ARunThatEndsPausedWritesItsOneRow(t *testing.T) {
 // A recorded run that ends with its agent paused to sign in, after the person's desktop closed (#3583),
 // has the pause's recording hold dropped and one desktop.recording.resume row, end_reason run_ended,
 // whichever of the reconciler's two passes meets it first and however often they run. A kept run whose
-// lease ended or whose container exited is over too; one lost to an outage keeps its hold and gets no
-// row.
+// lease ended or whose container exited is over too, and one lost to an outage whose agent's stop is
+// recorded (#3629); one lost to an outage with no stop recorded keeps its hold and gets no row.
 func TestDesktopSignIns_ARunThatEndsPausedEndsItsRecordingHoldOnce(t *testing.T) {
 	ends := []struct {
 		name string
 		end  func(*types.AgentRun, time.Time)
 		over bool
+		// stopped records the agent's stop under the run's outage mark (#3629).
+		stopped bool
 	}{
-		{"killed", func(r *types.AgentRun, at time.Time) { r.State, r.EndedAt = types.RunKilled, &at }, true},
-		{"kept", func(r *types.AgentRun, at time.Time) { r.LostAt, r.LostReason = &at, types.LostEnded }, true},
-		{"reboot", func(r *types.AgentRun, at time.Time) { r.LostAt, r.LostReason = &at, types.LostReboot }, true},
-		{"outage", func(r *types.AgentRun, at time.Time) { r.LostAt, r.LostReason = &at, types.LostOutage }, false},
+		{"killed", func(r *types.AgentRun, at time.Time) { r.State, r.EndedAt = types.RunKilled, &at }, true, false},
+		{"kept", func(r *types.AgentRun, at time.Time) { r.LostAt, r.LostReason = &at, types.LostEnded }, true, false},
+		{"reboot", func(r *types.AgentRun, at time.Time) { r.LostAt, r.LostReason = &at, types.LostReboot }, true, false},
+		{"outage", func(r *types.AgentRun, at time.Time) { r.LostAt, r.LostReason = &at, types.LostOutage }, false, false},
+		{"outage, agent stopped", func(r *types.AgentRun, at time.Time) { r.LostAt, r.LostReason = &at, types.LostOutage }, true, true},
 	}
 	passOrders := map[string][]func(*Server, context.Context) error{
 		"sign-in pass first":   {(*Server).sweepEndedDesktopVMPauses, (*Server).sweepEndedDesktopRecordingPauses},
@@ -1887,6 +1949,9 @@ func TestDesktopSignIns_ARunThatEndsPausedEndsItsRecordingHoldOnce(t *testing.T)
 				}
 				e.end(&f.run, time.Now().UTC())
 				f.st.putRun(f.run)
+				if e.stopped {
+					f.st.markAgentStopped(t, f.run.ID, time.Now().UTC())
+				}
 				for range 2 {
 					for _, pass := range passes {
 						if err := pass(f.srv, context.Background()); err != nil {
@@ -1921,6 +1986,48 @@ func TestDesktopSignIns_ARunThatEndsPausedEndsItsRecordingHoldOnce(t *testing.T)
 	}
 }
 
+// The sign-in sweep ends the recording hold of the pause it closes (#3628), by itself: the recording
+// pass would drop the entry too, so this runs the sign-in pass alone. A pause it leaves standing, a
+// run lost to an outage with no stop of its agent recorded, keeps its hold.
+func TestDesktopSignIns_TheSweepEndsTheRecordingHoldOfThePauseItCloses(t *testing.T) {
+	ends := []struct {
+		name string
+		end  func(*types.AgentRun, time.Time)
+		over bool
+		// stopped records the agent's stop under the run's outage mark (#3629).
+		stopped bool
+	}{
+		{"killed", func(r *types.AgentRun, at time.Time) { r.State, r.EndedAt = types.RunKilled, &at }, true, false},
+		{"kept", func(r *types.AgentRun, at time.Time) { r.LostAt, r.LostReason = &at, types.LostEnded }, true, false},
+		{"reboot", func(r *types.AgentRun, at time.Time) { r.LostAt, r.LostReason = &at, types.LostReboot }, true, false},
+		{"outage", func(r *types.AgentRun, at time.Time) { r.LostAt, r.LostReason = &at, types.LostOutage }, false, false},
+		{"outage, agent stopped", func(r *types.AgentRun, at time.Time) { r.LostAt, r.LostReason = &at, types.LostOutage }, true, true},
+	}
+	for _, e := range ends {
+		t.Run(e.name, func(t *testing.T) {
+			f := newVMSignInFixture(t, "memory")
+			f.recordDesktop(t)
+			if code, _, body := f.do(t, http.MethodPost, "/pause"); code != http.StatusOK {
+				t.Fatalf("pause = %d %s", code, body)
+			}
+			if !signInHeld(f.srv, f.run.ID) {
+				t.Fatal("the pause took no recording hold")
+			}
+			e.end(&f.run, time.Now().UTC())
+			f.st.putRun(f.run)
+			if e.stopped {
+				f.st.markAgentStopped(t, f.run.ID, time.Now().UTC())
+			}
+			if err := f.srv.sweepEndedDesktopVMPauses(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if held := signInHeld(f.srv, f.run.ID); held == e.over {
+				t.Fatalf("after the sign-in sweep alone: held = %v, want %v", held, !e.over)
+			}
+		})
+	}
+}
+
 // A run lost to an outage keeps its agent running and can be revived, so its pause is not over: the
 // sweep writes no row and leaves the mark.
 func TestDesktopSignIns_AnOutageLostRunKeepsItsPause(t *testing.T) {
@@ -1936,6 +2043,120 @@ func TestDesktopSignIns_AnOutageLostRunKeepsItsPause(t *testing.T) {
 	}
 	if row, _, _ := f.st.DesktopVMSignIns(context.Background(), f.run.ID); row.PausedAt == nil {
 		t.Fatalf("the mark was cleared for a run that can be revived: %+v", row)
+	}
+}
+
+// A run lost to an outage whose agent's stop is recorded for that outage (#3629) is over for its pause:
+// the sweep writes the one desktop.sign_in.pause row, ended at the stop (at the pause's start for a stop
+// recorded before it), and drops that pause's recording hold, however often it runs, with no continue
+// sent. An extension of the run's end since the stop does not undo it, and another hold on the
+// recording stays.
+func TestDesktopSignIns_AnOutageLostRunWhoseAgentStoppedEndsItsPauseOnce(t *testing.T) {
+	for name, tc := range map[string]struct {
+		stopAfter time.Duration // the stop's time, from the pause's start
+		extend    bool
+	}{
+		"stopped after the pause":  {stopAfter: time.Minute},
+		"stopped before the pause": {stopAfter: -time.Minute},
+		"extended since the stop":  {stopAfter: time.Minute, extend: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newVMSignInFixture(t, "memory")
+			f.recordDesktop(t)
+			if code, v, body := f.do(t, http.MethodPost, "/pause"); code != http.StatusOK || !v.Paused {
+				t.Fatalf("pause = %d %s", code, body)
+			}
+			row, _, _ := f.st.DesktopVMSignIns(context.Background(), f.run.ID)
+			pausedAt := *row.PausedAt
+			own, other := vmSignInHold(f.run.ID, pausedAt), vmSignInHold(f.run.ID, pausedAt.Add(-time.Hour))
+			f.srv.PauseDesktopRecording(context.Background(), f.run, desktopPauseSignin, other)
+			stopAt := pausedAt.Add(tc.stopAfter).UTC()
+			lostAt := stopAt.Add(-time.Second)
+			f.run.LostAt, f.run.LostReason = &lostAt, types.LostOutage
+			f.st.putRun(f.run)
+			f.st.markAgentStopped(t, f.run.ID, stopAt)
+			if tc.extend {
+				later := time.Now().Add(48 * time.Hour)
+				f.run.EndsAt = &later
+				f.st.putRun(f.run)
+			}
+			for range 2 {
+				if err := f.srv.sweepEndedDesktopVMPauses(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			rows := f.signInRows()
+			if len(rows) != 1 || rows[0].Outcome != "success" {
+				t.Fatalf("desktop.sign_in.pause rows = %+v, want one success", rows)
+			}
+			d := auditData(t, rows[0])
+			want := stopAt
+			if tc.stopAfter < 0 {
+				want = pausedAt
+			}
+			got, _ := time.Parse(time.RFC3339Nano, d["ended_at"].(string))
+			if d["ended_paused"] != true || !got.Equal(want) {
+				t.Fatalf("row data = %s, want ended_paused and ended_at %v", rows[0].Data, want)
+			}
+			if _, resumed := d["resumed_at"]; resumed {
+				t.Fatalf("row data = %s: the agent was never resumed", rows[0].Data)
+			}
+			if row, _, _ := f.st.DesktopVMSignIns(context.Background(), f.run.ID); row.PausedAt != nil {
+				t.Fatalf("the mark stands after the agent's stop was confirmed: %+v", row)
+			}
+			if f.srv.desktopRecs.holds(f.run.ID, own) || !f.srv.desktopRecs.holds(f.run.ID, other) {
+				t.Fatalf("holds: the pause's own %v, another %v; want only the other's",
+					f.srv.desktopRecs.holds(f.run.ID, own), f.srv.desktopRecs.holds(f.run.ID, other))
+			}
+			if got := f.rn.seen(); !slices.Equal(got, []string{"pause vm-1"}) {
+				t.Fatalf("runner calls = %v, want the pause alone", got)
+			}
+		})
+	}
+}
+
+// A run lost to an outage whose agent's stop is not recorded keeps its pause, its mark and its recording
+// hold, however long ago it was lost (#3629): a stop that failed, or one due once its lease ran out and
+// not yet made. So does one revived before the sweep, which clears the stop with the outage mark.
+func TestDesktopSignIns_AnOutageLostRunWithNoRecordedStopKeepsItsPause(t *testing.T) {
+	for name, lose := range map[string]func(*testing.T, *vmSignInFixture){
+		"stop failed past its end": func(_ *testing.T, f *vmSignInFixture) {
+			lostAt, endsAt := time.Now().UTC().Add(-48*time.Hour), time.Now().UTC().Add(-24*time.Hour)
+			f.run.LostAt, f.run.LostReason, f.run.EndsAt = &lostAt, types.LostOutage, &endsAt
+			f.st.putRun(f.run)
+		},
+		"revived": func(t *testing.T, f *vmSignInFixture) {
+			lostAt := time.Now().UTC()
+			f.run.LostAt, f.run.LostReason = &lostAt, types.LostOutage
+			f.st.putRun(f.run)
+			f.st.markAgentStopped(t, f.run.ID, lostAt.Add(time.Second))
+			f.st.revive(&f.run)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newVMSignInFixture(t, "memory")
+			f.recordDesktop(t)
+			if code, v, body := f.do(t, http.MethodPost, "/pause"); code != http.StatusOK || !v.Paused {
+				t.Fatalf("pause = %d %s", code, body)
+			}
+			lose(t, f)
+			for range 2 {
+				for _, pass := range []func(*Server, context.Context) error{(*Server).sweepEndedDesktopVMPauses, (*Server).sweepEndedDesktopRecordingPauses} {
+					if err := pass(f.srv, context.Background()); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if rows := f.signInRows(); len(rows) != 0 {
+				t.Fatalf("desktop.sign_in.pause rows = %+v, want none", rows)
+			}
+			if row, _, _ := f.st.DesktopVMSignIns(context.Background(), f.run.ID); row.PausedAt == nil {
+				t.Fatalf("the mark was cleared with no stop of the agent recorded: %+v", row)
+			}
+			if !signInHeld(f.srv, f.run.ID) {
+				t.Fatal("the pause's recording hold was dropped with no stop of the agent recorded")
+			}
+		})
 	}
 }
 

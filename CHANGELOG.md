@@ -19,15 +19,34 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   refused because it cannot reach the Mac's desktop (over SSH, under sudo, or with no one signed in) is
   `no_desktop`, with the state `failed`; before, only the error text said so. A console that does not know the code
   shows the error text as before.
+- A Linux or macOS VM run now refuses a new connection on a granted port other than 80 once it has 1,024 such
+  connections open at once, and reports the refusal through its denial report with the reason `tunnel-limit`; the cap
+  does not evict existing connections, and lower process or container resource limits can bind first. The relay now
+  sends TCP keepalive probes toward both the guest and the proxy, so a peer that vanished is noticed; the
+  proxy-to-origin leg is unchanged (#3489).
+- The runner inventory's macOS VM capabilities no longer carry the runner's own `refusal` sentence. Read `reason`
+  (with `min_cpus` and `min_memory_mib`) instead; the console words the refusal from those.
 
 ### Fixed
 
+- A Linux VM whose guest agent never becomes ready before the boot timeout now reports the last error the agent
+  gave (for example a refusal) instead of only the context deadline (#3495).
+- The host's connection to a desktop VM's guest agent no longer keeps every connection it has ever redialled, and
+  reads at most 64 KiB of response headers from the guest; a frame cut off after its header now reads as an unexpected
+  end of stream rather than a clean one (#3388).
+- `wardyn-runnerd serve --log-file` now bounds the crash log beside it: at start, a `runnerd.crash.log` over 1 MiB moves
+  to `runnerd.crash.log.1` and is emptied in place, so a runner that panics at every start no longer grows it without
+  limit (#3633).
 - A Kubernetes run whose proxy container is running but never becomes ready now fails at the start deadline with a line
   naming the readiness probe and the proxy image, and saying to check the proxy's log and connectivity; on a runner it
   adds that the proxy may be waiting for its first run-token renewal with the organisation (#3612).
 - The audit trail now records the end of a desktop sign-in or take-over pause that was still open when the run ended,
   after the person had closed the desktop (#3583). Its `desktop.recording.resume` row is written once, marked
   `end_reason` `run_ended`, and the server stops holding the pause. Before, the pause stayed open with no end row.
+- A Linux VM run whose agent was paused for a desktop sign-in, then lost to a control-plane outage and its agent
+  stopped, now has the pause ended once the stop is confirmed (#3629). Its `desktop.sign_in.pause` row is written once,
+  ended at the stop, and a recorded desktop's `desktop.recording.resume` row says `end_reason` `run_ended`. Before, the
+  pause stayed open with no row. A pause whose stop failed, or is not yet made, still stands.
 - `wardyn-runnerd doctor` on a host whose service definition is still an earlier install's, which passes `--org`, now
   checks the organisation that service uses, as `serve` does, instead of the one in `runnerd.json`.
 - On macOS, a base-image download that resumes a partial file now continues after the bytes already on disk instead of

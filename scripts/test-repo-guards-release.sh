@@ -2,8 +2,8 @@
 # Copyright 2026 The Wardyn Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Guards 26-29 of scripts/test-repo-guards.sh: the release.yml and nightly.yml checks (CLI targets,
-# Go module seeding, watched kind walks, write steps tied to a release tag ref). They sit in their own
+# Guards 26-29 and 31 of scripts/test-repo-guards.sh: the release.yml and nightly.yml checks (CLI targets,
+# Go module seeding, watched kind walks, write steps tied to a release tag ref, the guest agent's stamp). They sit in their own
 # file to keep test-repo-guards.sh under the file-size limit. Not run on its own: test-repo-guards.sh
 # sources it after guard 25, so these guards share its fail, bad, ok, REL, NIGHTLY and NOTIFY_EXEMPT.
 
@@ -215,3 +215,23 @@ if [ -n "$rel_loose" ]; then
     bad "$REL: write steps with no un-negated startsWith(github.ref, 'refs/tags/v') on the step's or job's if (no ||), its with.push, or its own DRY_RUN/PUBLISH env that its script reads: $rel_loose — add it, ANDed with the dry_run condition"; tag_fail=1
 fi
 if [ "$tag_fail" = 0 ]; then ok "all $rel_writes release.yml write steps are tied to a release tag ref (self-test catches $(printf %s "$planted_want" | tr -cd "|" | wc -c) planted violations)"; fi
+
+# ── 31. release.yml reads the release stamp back from the packaged guest agent ─
+# #3636: the agent has no version command and -trimpath hides -ldflags from the build info, so the
+# package step could not tell a stamped agent from an unstamped one. runner-pkg's last step before the
+# upload runs scripts/check-release-stamp.sh on the agent inside the expanded package; the script's own
+# test (stub `go`) proves it refuses an unstamped binary.
+stamp_run="$(yq -r '.jobs["runner-pkg"].steps[] | select(.name == "The packaged guest agent carries the release stamp") | .run' "$REL")"
+stamp_at="$(yq -r '.jobs["runner-pkg"].steps | to_entries | .[] | select(.value.name == "The packaged guest agent carries the release stamp") | .key' "$REL")"
+pkg_at="$(yq -r '.jobs["runner-pkg"].steps | to_entries | .[] | select((.value.name // "") | test("^Build, sign and notarize")) | .key' "$REL")"
+case "$stamp_run" in
+    *'*/Payload/usr/local/wardyn/bin/wardyn-guest-agent'*'scripts/check-release-stamp.sh "$agent"'*) stamp_ok=1 ;;
+    *) stamp_ok=0 ;;
+esac
+if [ "$stamp_ok" != 1 ] || [ -z "$stamp_at" ] || [ -z "$pkg_at" ] || [ "$stamp_at" -le "$pkg_at" ]; then
+    bad "$REL: runner-pkg has no step after the package build that runs scripts/check-release-stamp.sh on the packaged wardyn-guest-agent (#3636) — a release could ship an agent without the stamp"
+elif ! bash "$ROOT/scripts/test-check-release-stamp.sh" >/dev/null 2>&1; then
+    bad "scripts/test-check-release-stamp.sh failed — check-release-stamp.sh no longer tells a stamped binary from an unstamped one (#3636)"
+else
+    ok "release.yml checks the packaged guest agent's release stamp, and the check refuses an unstamped binary"
+fi

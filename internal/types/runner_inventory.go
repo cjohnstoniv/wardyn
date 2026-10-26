@@ -78,7 +78,8 @@ type RunnerView struct {
 	Folders bool `json:"folders,omitempty"`
 	// MacOSVM is the macos_vm object of the runner's last caps event (runnerwire.MacVMCaps), read like
 	// Capacity and absent when the runner offers no macOS VM. It is raw JSON because runnerwire imports
-	// this package: whatever runnerwire.MacVMCaps carries reaches the console with no change here.
+	// this package: whatever runnerwire.MacVMCaps carries reaches the console with no change here,
+	// except its Refusal sentence, which the runner inventory leaves out (runnerMacOSVM).
 	MacOSVM json.RawMessage `json:"macos_vm,omitempty"`
 	// Kind is always RunnerKindSelfHosted: the one shape both kinds' reads share.
 	Kind RunnerKind `json:"kind"`

@@ -11,3 +11,6 @@ func SetVMKind(s *Substrate, ref string, k types.MachineKind) {
 	s.vmKinds[ref] = k
 	s.mu.Unlock()
 }
+
+// VMKindOf is the machine kind the substrate holds for ref, "" when it holds none.
+func VMKindOf(s *Substrate, ref string) types.MachineKind { return s.vmKind(ref) }

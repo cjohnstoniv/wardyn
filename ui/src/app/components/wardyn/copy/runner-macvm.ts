@@ -91,6 +91,8 @@ export const MACVM_R = {
   R47: (n: string, m: string, runner: string) => `Per-run memory on this runner is ${n} GB; a macOS VM needs at least ${m} GB. Its owner raises it to ${m} GB or more in Your account → My runner, or with \`wardyn runner set ${runner} --per-run-memory ${m}\`.`,
   /** MV-R48, per-run CPU below the minimum */
   R48: (n: string, m: string, runner: string) => `Per-run CPU on this runner is ${n} CPUs; a macOS VM needs at least ${m}. Its owner raises it to ${m} or more in Your account → My runner, or with \`wardyn runner set ${runner} --per-run-cpu ${m}\`.`,
+  /** Not on a board: the approved ledger refusal (cmd/wardyn-runnerd macOSVMLedgerDamaged), worded here from reason ledger_damaged */
+  LEDGER_DAMAGED: "This Mac's macOS VM ledger is missing or damaged. Reinstall the Wardyn runner package.",
   /** MV-R49, needs a logged-in session */
   R49: "macOS virtual machines run only while someone is logged in on this Mac.",
   /** MV-R50, needs a restart (slot held) */

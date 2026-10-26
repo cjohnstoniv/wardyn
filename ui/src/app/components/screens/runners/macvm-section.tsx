@@ -19,7 +19,7 @@ import { RUNNER } from "../../wardyn/copy/runners";
 import { Mono } from "../../wardyn/code-block";
 import { Chip } from "../../wardyn/primitives";
 import { Hint } from "./resource-table";
-import { macVMBadge, sizeShortfall } from "./macvm-view";
+import { macVMBadge, refused, sizeShortfall } from "./macvm-view";
 
 /** A string with `code` spans, the way the boards set `wardyn-runnerd setup`. */
 export function MacVMText({ text }: { text: string }) {
@@ -94,11 +94,11 @@ function Body({ caps, active, perRun, runner }: { caps: MacVMCaps; active: numbe
       </>
     );
   }
-  if (state !== "ready" || caps.refusal || short.memory || short.cpu) {
+  if (state !== "ready" || refused(caps) || short.memory || short.cpu) {
     return (
       <>
         <Chip>{MACVM_R.R14}</Chip>
-        {caps.refusal && <p className="mt-1 text-foreground">{caps.refusal}</p>}
+        {caps.reason === "ledger_damaged" && <p className="mt-1 text-foreground">{MACVM_R.LEDGER_DAMAGED}</p>}
         {short.memory && <p className="mt-1 text-foreground"><MacVMText text={MACVM_R.R47(fmt(short.memory.have), fmt(short.memory.need), runner)} /></p>}
         {short.cpu && <p className={short.memory ? "mt-1 text-xs text-muted-foreground" : "mt-1 text-foreground"}><MacVMText text={MACVM_R.R48(fmt(short.cpu.have), fmt(short.cpu.need), runner)} /></p>}
       </>

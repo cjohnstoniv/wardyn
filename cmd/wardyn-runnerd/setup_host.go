@@ -100,7 +100,7 @@ func (p setupPaths) identity() string { return filepath.Join(p.stateDir, "runner
 // crashLogFile is beside the log: the LaunchAgent's stdout and stderr, which take only what serve prints
 // outside its own rotated log (a panic, or a failure before it opens the log).
 func (p setupPaths) crashLogFile() string {
-	return strings.TrimSuffix(p.logFile, ".log") + ".crash.log"
+	return crashLogPath(p.logFile)
 }
 
 // configFile is runnerd.json, where every setting the service runs with lives; the service definition
