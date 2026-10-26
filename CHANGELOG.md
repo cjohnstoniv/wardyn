@@ -143,7 +143,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   one such refusal lost the whole recording.
 - A single run's own read (`wardyn runs get <id> --json`, `GET /api/v1/runs/{id}`) now reports `has_recording`,
   `recording_bytes` and `recording_duration_sec` without `?include=recording_meta` (#3705). Before, it said
-  `has_recording: false` for every run, including one whose recording was stored. Run lists still need the parameter.
+  `has_recording: false` for every run, including one whose recording was stored. Run lists report the recording
+  fields only with `?include=recording_meta`; without it a listed run says `has_recording: false` whatever is stored.
 
 ## [0.10.0-rc.3] — 2026-10-25
 
