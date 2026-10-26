@@ -20,9 +20,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Changed
 
-- A macOS VM's prepare no longer reuses a restore image found in its download cache unless that image's download
-  recorded its SHA-256 and the file still matches; one with no record, or a different hash, is deleted and downloaded
-  again, and the record is deleted with the image (#3706).
+- A macOS VM's prepare reuses a restore image from its download cache only when a previous prepare's download wrote a
+  record of its SHA-256 beside it and the file still matches. A file with no record, or a different hash, stops
+  prepare with an error naming the file and what to do; it is never deleted. The record is written only for an image
+  Wardyn downloaded over the pinned connection from start to finish (a partial download resumes only with the marker
+  Wardyn wrote for it), or copied with `--ipsw` after its hash matched. It guards against hand-placed or damaged files,
+  not against someone with the runner user's write access (#3706).
 - A macOS VM's prepare behind a proxy that inspects TLS now fails at the first range of the restore image, not after
   three retries, when the error is Apple's certificate-pinning refusal of `updates.cdn-apple.com`. The error says the
   host's certificate chain failed Apple's pinning check, that a proxy inspecting TLS is the likely cause and to exempt
@@ -45,6 +48,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- A restore image download that resumed a partial file wrote the new bytes over the start of it instead of after it, so
+  a resumed image could be corrupt; it now writes after what is there (#3706).
 - A Kubernetes run whose proxy container is running but never becomes ready now fails at the start deadline with a line
   naming the readiness probe and the proxy image, and saying to check the proxy's log and connectivity; on a runner it
   adds that the proxy may be waiting for its first run-token renewal with the organisation (#3612).
@@ -53,6 +58,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `end_reason` `run_ended`, and the server stops holding the pause. Before, the pause stayed open with no end row.
 - `wardyn-runnerd doctor` on a host whose service definition is still an earlier install's, which passes `--org`, now
   checks the organisation that service uses, as `serve` does, instead of the one in `runnerd.json`.
+
+### Before you upgrade
+
+- A macOS VM restore image placed by hand in `macos-vm.noindex/cache` now stops `macos-vm prepare` until it is moved
+  out of the cache and passed with `--ipsw <file> --sha256 <hex>`, or deleted. Prepare names the file and neither uses
+  nor deletes it (#3706).
 
 ## [0.10.0-rc.3] — 2026-10-25
 

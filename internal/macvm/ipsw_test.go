@@ -142,6 +142,11 @@ func TestPrepareIPSWWithoutSHA256IsAUsageError(t *testing.T) {
 	if f.eng.Loads() != 0 || len(cacheNames(t, f)) != 0 {
 		t.Fatal("--ipsw alone touched the cache or the engine")
 	}
+	f.opts.IPSW, f.opts.IPSWSHA256 = "", sha
+	if _, err := macvm.Prepare(context.Background(), f.opts); !errors.Is(err, macvm.ErrSHA256NeedsIPSW) {
+		t.Fatalf("a hash with no file: %v", err)
+	}
+	f.opts.IPSW, f.opts.IPSWSHA256 = src, ""
 	for _, tc := range []struct {
 		ipsw, sha string
 		want      error
@@ -159,42 +164,104 @@ func TestPrepareIPSWWithoutSHA256IsAUsageError(t *testing.T) {
 	}
 }
 
-// A file placed in the cache by hand has no record of where it came from: it is not used, it is removed
-// and the image is downloaded again over the pinned path.
-func TestPrepareCacheFileWithoutRecordIsDownloadedAgain(t *testing.T) {
+// A file placed in the cache by hand has no record of where it came from: prepare refuses it, names it and
+// both remedies, and neither uses nor deletes it (it may be the operator's only copy).
+func TestPrepareCacheFileWithoutRecordIsRefusedAndKept(t *testing.T) {
 	f := newPrep(t)
 	placeInCache(t, f, "placed-by-hand", "")
+	_, err := macvm.Prepare(context.Background(), f.opts)
+	var ue *macvm.UnrecordedImageError
+	if !errors.As(err, &ue) || ue.Mismatch || ue.Path != cachedPath(f) ||
+		!strings.Contains(err.Error(), cachedPath(f)) || !strings.Contains(err.Error(), "--ipsw <moved path> --sha256") || !strings.Contains(err.Error(), "delete it") {
+		t.Fatalf("unrecorded cache file: %v", err)
+	}
+	if b, rerr := os.ReadFile(cachedPath(f)); rerr != nil || string(b) != "placed-by-hand" {
+		t.Fatalf("the file was changed or deleted: %q %v", b, rerr)
+	}
+	if f.srv.reqs.Load() != 0 || f.eng.Loads() != 0 || f.eng.Installs() != 0 {
+		t.Fatalf("a refused file led to %d downloads, %d loads, %d installs", f.srv.reqs.Load(), f.eng.Loads(), f.eng.Installs())
+	}
+}
+
+// A record that does not match its file is refused the same way, and both files stay.
+func TestPrepareCacheFileWithWrongRecordIsRefusedAndKept(t *testing.T) {
+	f := newPrep(t)
+	rec := strings.Repeat("cd", 32)
+	placeInCache(t, f, "swapped-after-download", rec)
+	_, err := macvm.Prepare(context.Background(), f.opts)
+	var ue *macvm.UnrecordedImageError
+	if !errors.As(err, &ue) || !ue.Mismatch {
+		t.Fatalf("mismatched record: %v", err)
+	}
+	if b, rerr := os.ReadFile(cachedPath(f)); rerr != nil || string(b) != "swapped-after-download" {
+		t.Fatalf("the file was changed or deleted: %q %v", b, rerr)
+	}
+	if b, rerr := os.ReadFile(cachedPath(f) + ".sha256"); rerr != nil || strings.TrimSpace(string(b)) != rec {
+		t.Fatalf("the record was changed or deleted: %q %v", b, rerr)
+	}
+	if f.srv.reqs.Load() != 0 {
+		t.Fatalf("%d downloads after a refusal", f.srv.reqs.Load())
+	}
+}
+
+func placePart(t *testing.T, f *prepFixture, body []byte, marker bool) {
+	t.Helper()
+	if err := os.MkdirAll(f.opts.Layout.CacheDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cachedPath(f)+".part", body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if marker {
+		if err := os.WriteFile(cachedPath(f)+".part.pinned", nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A complete partial file placed by hand has no marker of a Wardyn download: it is removed with a warning,
+// the image is fetched from byte 0, and the record is the server's bytes, not the file's.
+func TestPrepareHandPlacedCompletePartIsNotTrusted(t *testing.T) {
+	f := newPrep(t)
+	tampered := append([]byte("X"), f.srv.body[1:]...)
+	placePart(t, f, tampered, false)
 	m, err := macvm.Prepare(context.Background(), f.opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if f.srv.reqs.Load() == 0 || m.IPSWSHA256 != f.srv.sha() {
-		t.Fatalf("a file with no record was used: %d requests, manifest hash %q", f.srv.reqs.Load(), m.IPSWSHA256)
+	if m.IPSWSHA256 != f.srv.sha() || f.srv.served.Load() != int64(len(f.srv.body)) {
+		t.Fatalf("manifest hash %q (want %q), %d bytes served of %d", m.IPSWSHA256, f.srv.sha(), f.srv.served.Load(), len(f.srv.body))
+	}
+	if !strings.Contains(f.logs.String(), "UniversalMac_27.0_26A1_Restore.ipsw.part") || !strings.Contains(f.logs.String(), "no marker") {
+		t.Fatalf("no warning naming the partial file:\n%s", f.logs.String())
 	}
 }
 
-// A record that does not match its file is no provenance: the file is removed and downloaded again.
-func TestPrepareCacheFileWithWrongRecordIsDownloadedAgain(t *testing.T) {
+// A short partial file placed by hand is not appended to.
+func TestPrepareHandPlacedShortPartIsNotAppendedTo(t *testing.T) {
 	f := newPrep(t)
-	placeInCache(t, f, "swapped-after-download", strings.Repeat("cd", 32))
+	placePart(t, f, []byte("hand-placed-bytes"), false)
 	m, err := macvm.Prepare(context.Background(), f.opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if f.srv.reqs.Load() == 0 || m.IPSWSHA256 != f.srv.sha() {
-		t.Fatalf("a file whose record differs was used: %d requests, manifest hash %q", f.srv.reqs.Load(), m.IPSWSHA256)
+	if err != nil || m.IPSWSHA256 != f.srv.sha() {
+		t.Fatalf("%v, manifest hash %q (want %q)", err, m.IPSWSHA256, f.srv.sha())
 	}
 }
 
-// A file whose hash is the one the operator gave is of known origin even with no record.
-func TestPrepareCacheFileWithTheOperatorsHashIsReused(t *testing.T) {
+// A partial file left by an interrupted download of Wardyn's, with its marker, still resumes, and the
+// marker goes when the image is complete.
+func TestPrepareMarkedPartResumes(t *testing.T) {
 	f := newPrep(t)
-	_, sha := operatorIPSW(t, "placed-and-vouched-for")
-	placeInCache(t, f, "placed-and-vouched-for", "")
-	f.opts.IPSWSHA256 = sha
+	half := len(f.srv.body) / 2
+	placePart(t, f, f.srv.body[:half], true)
 	m, err := macvm.Prepare(context.Background(), f.opts)
-	if err != nil || f.srv.reqs.Load() != 0 || m.IPSWSHA256 != sha {
-		t.Fatalf("operator's hash: %v, %d requests, manifest hash %q", err, f.srv.reqs.Load(), m.IPSWSHA256)
+	if err != nil || m.IPSWSHA256 != f.srv.sha() {
+		t.Fatalf("%v, manifest hash %q", err, m.IPSWSHA256)
+	}
+	if got := f.srv.served.Load(); got != int64(len(f.srv.body)-half) {
+		t.Fatalf("%d bytes served, want only the missing %d", got, len(f.srv.body)-half)
+	}
+	if left := cacheNames(t, f); len(left) != 0 {
+		t.Fatalf("left in the cache: %v", left)
 	}
 }
 
@@ -297,11 +364,55 @@ func TestPrepareIPSWInsideTheCacheIsRefused(t *testing.T) {
 	placeInCache(t, f, "in-the-cache", "")
 	_, sha := operatorIPSW(t, "in-the-cache")
 	f.opts.IPSW, f.opts.IPSWSHA256 = cachedPath(f), sha
-	if _, err := macvm.Prepare(context.Background(), f.opts); err == nil || !strings.Contains(err.Error(), "in the download cache") {
+	if _, err := macvm.Prepare(context.Background(), f.opts); err == nil || !strings.Contains(err.Error(), "which prepare empties") {
 		t.Fatalf("--ipsw inside the cache: %v", err)
 	}
 	if b, err := os.ReadFile(cachedPath(f)); err != nil || string(b) != "in-the-cache" {
 		t.Fatalf("the file in the cache changed: %q %v", b, err)
+	}
+}
+
+// A link outside the cache to a file inside it is refused too, and its target stays.
+func TestPrepareIPSWLinkedToTheCacheIsRefused(t *testing.T) {
+	f := newPrep(t)
+	placeInCache(t, f, "in-the-cache", "")
+	_, sha := operatorIPSW(t, "in-the-cache")
+	link := filepath.Join(t.TempDir(), "UniversalMac_27.0_26A1_Restore.ipsw")
+	if err := os.Symlink(cachedPath(f), link); err != nil {
+		t.Skip(err)
+	}
+	f.opts.IPSW, f.opts.IPSWSHA256 = link, sha
+	if _, err := macvm.Prepare(context.Background(), f.opts); err == nil || !strings.Contains(err.Error(), "links to") {
+		t.Fatalf("--ipsw linked to the cache: %v", err)
+	}
+	if b, err := os.ReadFile(cachedPath(f)); err != nil || string(b) != "in-the-cache" {
+		t.Fatalf("the target changed: %q %v", b, err)
+	}
+}
+
+// A link planted where the copy is made is replaced, never written through.
+func TestPrepareIPSWCopyDoesNotWriteThroughAPlantedLink(t *testing.T) {
+	f := newPrep(t)
+	src, sha := operatorIPSW(t, "operator-image")
+	victim := filepath.Join(t.TempDir(), "victim")
+	if err := os.WriteFile(victim, []byte("precious"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(f.opts.Layout.CacheDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, cachedPath(f)+".copy"); err != nil {
+		t.Skip(err)
+	}
+	f.opts.IPSW, f.opts.IPSWSHA256 = src, sha
+	if _, err := macvm.Prepare(context.Background(), f.opts); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(victim); err != nil || string(b) != "precious" {
+		t.Fatalf("the link's target was written through: %q %v", b, err)
+	}
+	if left := cacheNames(t, f); len(left) != 0 {
+		t.Fatalf("left in the cache: %v", left)
 	}
 }
 

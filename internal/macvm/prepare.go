@@ -151,8 +151,7 @@ type PrepareOptions struct {
 	// before it is loaded or installed. The operator's file is never changed or deleted. A ready base
 	// still wins (the file is not read), unless Reprepare asks for a new one.
 	IPSW string
-	// IPSWSHA256 is the SHA-256 (64 hex digits) the operator says the restore image has. A restore image
-	// in the cache with no provenance record is used only when it hashes to this.
+	// IPSWSHA256 is the SHA-256 (64 hex digits) the operator says the IPSW file has. It goes with IPSW.
 	IPSWSHA256 string
 	// Reprepare builds a whole new base even when one is ready (a newer
 	// restore image, or the operator asked) and swaps it in for the old one.
@@ -200,6 +199,24 @@ type IPSWMismatchError struct {
 func (e *IPSWMismatchError) Error() string {
 	return fmt.Sprintf("macvm: --ipsw %q does not have the SHA-256 given: expected %s, the file is %s; it was not used and nothing of it was kept",
 		e.Path, e.Want, e.Got)
+}
+
+// UnrecordedImageError refuses a restore image found in the download cache that no download of Wardyn's
+// recorded, or whose hash is no longer its record's. Prepare neither uses nor deletes it.
+type UnrecordedImageError struct {
+	Path string
+	// Mismatch: a record exists but the file no longer hashes to it.
+	Mismatch bool
+}
+
+func (e *UnrecordedImageError) Error() string {
+	why := "has no record of coming from a Wardyn download"
+	if e.Mismatch {
+		why = "does not match the record of the Wardyn download that made it"
+	}
+	return fmt.Sprintf("macvm: the restore image %s in the download cache %s, so prepare did not use or delete it: "+
+		"move it out of the cache and run prepare --ipsw <moved path> --sha256 <its SHA-256 from a source you trust>, "+
+		"or delete it to download it again", e.Path, why)
 }
 
 // ErrSHA256NeedsIPSW is the usage error of a hash given with no file to check it against.
@@ -257,13 +274,11 @@ func newPrep(o PrepareOptions) (*prep, error) {
 	if o.Engine == nil || o.Power == nil || o.FirstBoot == nil || o.Layout.Root == "" {
 		return nil, errors.New("macvm: prepare needs an engine, a first-boot provisioner, a power source and a root")
 	}
-	if o.IPSW != "" {
-		sha, err := CheckIPSWFlags(o.IPSW, o.IPSWSHA256)
-		if err != nil {
-			return nil, err
-		}
-		o.IPSWSHA256 = sha
+	sha, err := CheckIPSWFlags(o.IPSW, o.IPSWSHA256)
+	if err != nil {
+		return nil, err
 	}
+	o.IPSWSHA256 = sha
 	if o.HTTP == nil {
 		o.HTTP = http.DefaultClient
 	}
@@ -485,197 +500,6 @@ func (p *prep) discardInterrupted() error {
 	return nil
 }
 
-// restoreImage returns a validated restore image in the cache: reused if
-// already complete and of known origin, otherwise downloaded (resuming a partial
-// file). An image that fails validation is deleted and downloaded again, once.
-// With an operator-supplied IPSW it is that file's cache copy instead (givenImage).
-func (p *prep) restoreImage(ctx context.Context) (RestoreImage, string, string, error) {
-	if p.IPSW != "" {
-		return p.givenImage(ctx)
-	}
-	u, err := p.Engine.LatestRestoreImageURL(ctx)
-	if err != nil {
-		return RestoreImage{}, "", "", fmt.Errorf("macvm: latest restore image: %w", err)
-	}
-	name, err := ipswName(u)
-	if err != nil {
-		return RestoreImage{}, "", "", err
-	}
-	final := filepath.Join(p.cache, name)
-	for attempt := 0; ; attempt++ {
-		var sha string
-		if _, err := os.Stat(final); err == nil {
-			// A file in the cache is used only if this prepare's download recorded it, or it is the file
-			// the operator named by hash; anything else may have been placed there by hand or half-written.
-			if sha, err = p.knownOrigin(final); err != nil {
-				return RestoreImage{}, "", "", err
-			}
-			if sha == "" {
-				p.Log.Warn("macvm: cached restore image has no matching provenance record; downloading again", "image", name)
-				removeImage(final)
-			}
-		}
-		if sha == "" {
-			if err := p.download(ctx, u, final); err != nil {
-				return RestoreImage{}, "", "", err
-			}
-			if sha, err = fileSHA256(final); err != nil {
-				return RestoreImage{}, "", "", err
-			}
-			if err := os.WriteFile(recordPath(final), []byte(sha+"\n"), 0o600); err != nil {
-				return RestoreImage{}, "", "", err
-			}
-		}
-		img, err := p.validate(ctx, final)
-		if err == nil {
-			return img, sha, final, nil
-		}
-		if ctx.Err() != nil {
-			return RestoreImage{}, "", "", err
-		}
-		removeImage(final)
-		if attempt >= 1 {
-			return RestoreImage{}, "", "", fmt.Errorf("macvm: the restore image failed validation twice: %w", err)
-		}
-		p.Log.Warn("macvm: restore image failed validation; downloading again", "err", err.Error())
-	}
-}
-
-// validate loads the cached image into the engine, which checks it against what this Mac supports.
-func (p *prep) validate(ctx context.Context, final string) (RestoreImage, error) {
-	if err := p.waitAC(ctx, PhaseValidate); err != nil {
-		return RestoreImage{}, err
-	}
-	p.emit(PrepareEvent{Phase: PhaseValidate})
-	img, err := p.Engine.LoadRestoreImage(final)
-	if err != nil {
-		return RestoreImage{}, err
-	}
-	// The first validate event is written before the load, so it cannot say what the image is.
-	var size int64
-	if fi, serr := os.Stat(final); serr == nil {
-		size = fi.Size()
-	}
-	p.emit(PrepareEvent{Phase: PhaseValidate, Total: size, Version: img.OSVersion})
-	return img, nil
-}
-
-// recordPath is the provenance record of the cached restore image at image: the SHA-256 of the bytes
-// the download left, written once it completes.
-func recordPath(image string) string { return image + ".sha256" }
-
-// removeImage deletes a cached restore image and its provenance record.
-func removeImage(image string) {
-	_ = os.Remove(image)
-	_ = os.Remove(recordPath(image))
-}
-
-// knownOrigin is the SHA-256 of the cached restore image at image when its origin is known: its record
-// says the same hash, or the operator gave that hash. It is "" for a file of unknown origin.
-func (p *prep) knownOrigin(image string) (string, error) {
-	sha, err := fileSHA256(image)
-	if err != nil {
-		return "", err
-	}
-	if sha == p.IPSWSHA256 {
-		return sha, nil
-	}
-	if rec, err := os.ReadFile(recordPath(image)); err == nil && strings.TrimSpace(string(rec)) == sha {
-		return sha, nil
-	}
-	return "", nil
-}
-
-// givenImage is restoreImage for an operator-supplied file (PrepareOptions.IPSW). It copies the file into
-// the cache (never a link, never a move: the operator's file stays as it is), hashes the copy, and keeps
-// the copy only when the hash is the one given. A mismatch is final, with no download to fall back to.
-// The copy is loaded and installed from, and the success cleanup deletes it like a downloaded one.
-func (p *prep) givenImage(ctx context.Context) (RestoreImage, string, string, error) {
-	src := p.IPSW
-	name := filepath.Base(src)
-	if !strings.HasSuffix(name, ".ipsw") || strings.HasPrefix(name, ".") {
-		return RestoreImage{}, "", "", fmt.Errorf("macvm: --ipsw %q is not an .ipsw file", src)
-	}
-	if fi, err := os.Stat(src); err != nil {
-		return RestoreImage{}, "", "", fmt.Errorf("macvm: --ipsw: %w", err)
-	} else if !fi.Mode().IsRegular() {
-		return RestoreImage{}, "", "", fmt.Errorf("macvm: --ipsw %q is not a regular file", src)
-	}
-	if a, err := os.Stat(filepath.Dir(src)); err == nil {
-		if b, err := os.Stat(p.cache); err == nil && os.SameFile(a, b) {
-			return RestoreImage{}, "", "", fmt.Errorf("macvm: --ipsw %q is in the download cache, which prepare empties; give a file outside it", src)
-		}
-	}
-	if err := p.waitAC(ctx, PhaseValidate); err != nil {
-		return RestoreImage{}, "", "", err
-	}
-	p.emit(PrepareEvent{Phase: PhaseValidate, Detail: "checking the supplied restore image"})
-	final := filepath.Join(p.cache, name)
-	tmp := final + ".copy"
-	if err := copyFile(ctx, src, tmp); err != nil {
-		_ = os.Remove(tmp)
-		return RestoreImage{}, "", "", fmt.Errorf("macvm: --ipsw: copy into the cache: %w", err)
-	}
-	sha, err := fileSHA256(tmp)
-	if err != nil {
-		_ = os.Remove(tmp)
-		return RestoreImage{}, "", "", err
-	}
-	if sha != p.IPSWSHA256 {
-		_ = os.Remove(tmp)
-		return RestoreImage{}, "", "", &IPSWMismatchError{Path: src, Want: p.IPSWSHA256, Got: sha}
-	}
-	removeImage(final)
-	if err := os.Rename(tmp, final); err != nil {
-		_ = os.Remove(tmp)
-		return RestoreImage{}, "", "", err
-	}
-	if err := os.WriteFile(recordPath(final), []byte(sha+"\n"), 0o600); err != nil {
-		removeImage(final)
-		return RestoreImage{}, "", "", err
-	}
-	img, err := p.validate(ctx, final)
-	if err != nil {
-		removeImage(final) // the cache's copy; src stays
-		return RestoreImage{}, "", "", fmt.Errorf("macvm: --ipsw %q failed validation: %w", src, err)
-	}
-	return img, sha, final, nil
-}
-
-// copyFile writes src to a new file dst, stopping when ctx ends.
-func copyFile(ctx context.Context, src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-	if err != nil {
-		return err
-	}
-	buf := make([]byte, 1<<20)
-	for ctx.Err() == nil {
-		n, rerr := in.Read(buf)
-		if _, werr := out.Write(buf[:n]); werr != nil {
-			_ = out.Close()
-			return werr
-		}
-		if rerr == io.EOF {
-			if err := out.Sync(); err != nil {
-				_ = out.Close()
-				return err
-			}
-			return out.Close()
-		}
-		if rerr != nil {
-			_ = out.Close()
-			return rerr
-		}
-	}
-	_ = out.Close()
-	return ctx.Err()
-}
-
 func (p *prep) download(ctx context.Context, u, final string) error {
 	var start time.Time
 	var startBytes int64 = -1
@@ -708,10 +532,17 @@ func (p *prep) download(ctx context.Context, u, final string) error {
 	}
 	p.emit(PrepareEvent{Phase: PhaseDownload, Version: ipswVersion(path.Base(final))})
 	part := final + ".part"
+	if err := p.startPart(part); err != nil {
+		return err
+	}
 	if err := d.fetch(ctx, u, part); err != nil {
 		return err
 	}
-	return os.Rename(part, final)
+	if err := os.Rename(part, final); err != nil {
+		return err
+	}
+	_ = os.Remove(part + partMarkerSuffix)
+	return nil
 }
 
 // waitAC waits for AC power before a phase that must not start on battery.
