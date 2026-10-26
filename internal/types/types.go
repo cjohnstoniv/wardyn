@@ -255,7 +255,8 @@ type AgentRun struct {
 	BreakGlass bool `json:"break_glass,omitempty"`
 	// CreatedVia is the registered portal this run was launched through on the person's behalf; nil when self-launched. The owner is still the person.
 	CreatedVia *uuid.UUID `json:"created_via,omitempty"`
-	// HasRecording/RecordingBytes/RecordingDurationSec are derived, never stored, projected only with ?include=recording_meta; HasRecording is the only "no recording" signal.
+	// HasRecording/RecordingBytes/RecordingDurationSec are derived, never stored: projected on every single-run read,
+	// and on a list only with ?include=recording_meta. HasRecording is the only "no recording" signal.
 	HasRecording         bool          `json:"has_recording"`
 	RecordingBytes       int64         `json:"recording_bytes,omitempty"`
 	RecordingDurationSec float64       `json:"recording_duration_sec,omitempty"`
