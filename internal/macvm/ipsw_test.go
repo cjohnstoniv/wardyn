@@ -372,6 +372,49 @@ func TestPrepareIPSWInsideTheCacheIsRefused(t *testing.T) {
 	}
 }
 
+// --ipsw never replaces a cached file of the same name that no Wardyn download recorded, or one that no
+// longer matches its record: the given file's hash says nothing about it. A recorded one is replaced.
+func TestPrepareIPSWKeepsAnUnrecordedCachedFileOfTheSameName(t *testing.T) {
+	for _, tc := range []struct {
+		name, record string
+		refused      bool
+	}{
+		{"unrecorded", "", true},
+		{"record mismatch", strings.Repeat("cd", 32), true},
+		{"recorded", "self", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newPrep(t)
+			const cached = "another-image-in-the-cache"
+			record := tc.record
+			if record == "self" {
+				h := sha256.Sum256([]byte(cached))
+				record = hex.EncodeToString(h[:])
+			}
+			placeInCache(t, f, cached, record)
+			src, sha := operatorIPSW(t, "operator-downloaded-restore-image")
+			f.opts.IPSW, f.opts.IPSWSHA256 = src, sha
+			_, err := macvm.Prepare(context.Background(), f.opts)
+			if !tc.refused {
+				if err != nil || f.eng.Installs() != 1 {
+					t.Fatalf("a recorded cached file blocked --ipsw: %v, %d installs", err, f.eng.Installs())
+				}
+				return
+			}
+			var ue *macvm.UnrecordedImageError
+			if !errors.As(err, &ue) || ue.Path != cachedPath(f) {
+				t.Fatalf("--ipsw over an unrecorded cached file: %v", err)
+			}
+			if b, err := os.ReadFile(cachedPath(f)); err != nil || string(b) != cached {
+				t.Fatalf("the cached file changed: %q %v", b, err)
+			}
+			if f.eng.Loads() != 0 || f.eng.Installs() != 0 {
+				t.Fatalf("a refused prepare loaded %d and installed %d", f.eng.Loads(), f.eng.Installs())
+			}
+		})
+	}
+}
+
 // A crash between the record and the rename leaves a complete marked partial file and its record. The
 // next prepare gets a 416 for it, renames it and installs, without refusing.
 func TestPrepareCrashAfterRecordBeforeRenameResumes(t *testing.T) {

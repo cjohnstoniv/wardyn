@@ -147,11 +147,22 @@ func (p *prep) givenImage(ctx context.Context) (RestoreImage, string, string, er
 	if inCache {
 		return RestoreImage{}, "", "", fmt.Errorf("macvm: --ipsw %q is, or links to, a file in the download cache, which prepare empties; give a file outside it", src)
 	}
+	// The copy replaces a cached file of the same name only when a Wardyn download recorded that file: the
+	// given file's hash says nothing about another one, which may be the operator's only copy of it.
+	final := filepath.Join(p.cache, name)
+	if _, err := os.Stat(final); err == nil {
+		known, mismatch, err := knownOrigin(final)
+		if err != nil {
+			return RestoreImage{}, "", "", err
+		}
+		if known == "" {
+			return RestoreImage{}, "", "", &UnrecordedImageError{Path: final, Mismatch: mismatch}
+		}
+	}
 	if err := p.waitAC(ctx, PhaseValidate); err != nil {
 		return RestoreImage{}, "", "", err
 	}
 	p.emit(PrepareEvent{Phase: PhaseValidate, Detail: "checking the supplied restore image"})
-	final := filepath.Join(p.cache, name)
 	tmp := final + copySuffix
 	_ = os.Remove(tmp) // a stray one, or a link planted there: the copy is made in a file of its own
 	if err := copyFile(ctx, src, tmp); err != nil {
