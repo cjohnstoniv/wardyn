@@ -11,6 +11,15 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Before you upgrade
+
+- A macOS VM slot that 0.10.0-rc.3 recorded and never freed lacks the boot session and start order this release
+  reads, so this release frees it only once no macOS VM, helper or Docker engine of that user runs (#3700). After upgrading the runner, quit Docker Desktop once while no macOS VM runs; the runner frees the slot
+  within 15 seconds, and Docker can start again.
+- A Kubernetes run that an earlier release left stopping, with its proxy pod, both NetworkPolicies and its Secret still
+  in the runs namespace (#3537), is cleaned up once its runner runs this release: the organisation's sweep when the
+  runner reconnects removes them. Upgrade the runner before removing anything by hand.
+
 ### Changed
 
 - A macOS VM's prepare behind a proxy that inspects TLS now fails at the first range of the restore image, not after
