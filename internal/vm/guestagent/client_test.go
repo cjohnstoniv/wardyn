@@ -397,6 +397,9 @@ func TestClientForgetsConnectionsClosedByARedial(t *testing.T) {
 		for _, conn := range dead { // the guest's protocol error closes the connection; the next call redials
 			_ = conn.Close()
 		}
+		// The transport learns of a close from its read loop, which may not have run yet: without this
+		// the next call can still pick the closed connection and fail writing to it.
+		c.tr.CloseIdleConnections()
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
