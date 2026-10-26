@@ -76,6 +76,14 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   quarantine beside the base and the setup finishes (#3675). An entry file with the immutable flag still stops it.
 - A Kubernetes runner's proxy now logs `wardyn-proxy: listening` when it has bound its port, after its first run-token
   renewal, not while it is still waiting for that renewal (#3632).
+- The server no longer warns every minute that re-asserting a kept run's stop failed while the run's runner is offline
+  and the stop is already queued for it (#3703). It warns once, and logs once when the re-assert succeeds after the
+  runner reconnects; any other failure still warns on every pass, and the stop is still re-asserted on every pass.
+- While the Docker engine is down or restarting, a runner's log no longer repeats `runner containment will retry` every
+  second or two (#3704). Each error a run's containment fails with is logged once, then at most once a minute with
+  how many repeats went unlogged, even when two errors take turns; a new error, or the run's containment succeeding,
+  logs at once. Containment is still tried on every pass, and a failed pass still refuses the runner's ready state as
+  before.
 
 ## [0.10.0-rc.3] — 2026-10-25
 
