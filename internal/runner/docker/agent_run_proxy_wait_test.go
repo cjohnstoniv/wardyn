@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // agentRunExec runs agent-base's real agent-run as an exec task `date +%s%N` with the proxy URL given,
@@ -42,16 +44,11 @@ func agentRunExec(t *testing.T, proxyURL, waitSecs string) (started time.Time, s
 // The belt: an agent image whose proxy is not listening yet holds the task until it is, instead of
 // starting it into "connection refused".
 func TestAgentRun_WaitsForALateProxy(t *testing.T) {
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := probe.Addr().String()
-	_ = probe.Close() // nothing listens on addr until the goroutine below opens it
+	addr, listen := refusingAddr(t) // nothing listens on addr until the goroutine below opens it
 	opened := make(chan time.Time, 1)
 	go func() {
 		time.Sleep(1500 * time.Millisecond)
-		ln, err := net.Listen("tcp", addr)
+		ln, err := listen()
 		if err != nil {
 			opened <- time.Time{}
 			return
@@ -79,14 +76,35 @@ func TestAgentRun_WaitsForALateProxy(t *testing.T) {
 	}
 }
 
-// Past its bound the belt fails open: one stderr line, then the task runs, as before the wait existed.
-func TestAgentRun_ProxyNeverUpFailsOpenWithOneLine(t *testing.T) {
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
+// refusingAddr is a loopback address that refuses connections until listen is called. A socket that does
+// not listen yet keeps its port bound, so no other listener on the host can take it, as one did a closed
+// port's.
+func refusingAddr(t *testing.T) (addr string, listen func() (net.Listener, error)) {
+	t.Helper()
+	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_STREAM, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	addr := probe.Addr().String()
-	_ = probe.Close()
+	f := os.NewFile(uintptr(fd), "proxy-port")
+	t.Cleanup(func() { _ = f.Close() })
+	if err := unix.Bind(fd, &unix.SockaddrInet4{Addr: [4]byte{127, 0, 0, 1}}); err != nil {
+		t.Fatal(err)
+	}
+	sa, err := unix.Getsockname(fd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return "127.0.0.1:" + strconv.Itoa(sa.(*unix.SockaddrInet4).Port), func() (net.Listener, error) {
+		if err := unix.Listen(fd, 16); err != nil {
+			return nil, err
+		}
+		return net.FileListener(f)
+	}
+}
+
+// Past its bound the belt fails open: one stderr line, then the task runs, as before the wait existed.
+func TestAgentRun_ProxyNeverUpFailsOpenWithOneLine(t *testing.T) {
+	addr, _ := refusingAddr(t)
 	_, stderr, took := agentRunExec(t, "http://"+addr, "1")
 	if n := strings.Count(stderr, "did not accept connections within 1s"); n != 1 {
 		t.Errorf("want exactly one fail-open line, got %d in:\n%s", n, stderr)
