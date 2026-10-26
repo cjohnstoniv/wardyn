@@ -220,7 +220,7 @@ func (*Engine) NewMachine(p macvm.Plan) (macvm.Machine, error) {
 		return nil, err
 	}
 	m := &machine{vm: vm, platform: platform, done: make(chan struct{})}
-	go m.watch()
+	go m.watch(vm.StateChangedNotify())
 	return m, nil
 }
 
@@ -260,9 +260,21 @@ type machine struct {
 	once     sync.Once
 }
 
-// watch closes done once the VM has started and then stopped or failed.
-func (m *machine) watch() {
-	for s := range m.vm.StateChangedNotify() {
+// watch closes done once the VM has started and then stopped or failed. It also ends when a failed Start
+// closes done: the framework closes states only when the VM is collected, which this goroutine would
+// otherwise prevent, so each failed start attempt kept its VM for the helper's life.
+func (m *machine) watch(states <-chan vz.VirtualMachineState) {
+	for {
+		var s vz.VirtualMachineState
+		select {
+		case <-m.done:
+			return
+		case st, ok := <-states:
+			if !ok {
+				return
+			}
+			s = st
+		}
 		switch s {
 		case vz.VirtualMachineStateRunning, vz.VirtualMachineStateStarting:
 			m.mu.Lock()
