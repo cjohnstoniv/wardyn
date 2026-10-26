@@ -261,8 +261,8 @@ type machine struct {
 }
 
 // watch closes done once the VM has started and then stopped or failed. It also ends when a failed Start
-// closes done: the framework closes states only when the VM is collected, which this goroutine would
-// otherwise prevent, so each failed start attempt kept its VM for the helper's life.
+// closes done: the framework never closes states, so this goroutine, which keeps the VM reachable, would
+// otherwise keep each failed start attempt's VM for the helper's life.
 func (m *machine) watch(states <-chan vz.VirtualMachineState) {
 	for {
 		var s vz.VirtualMachineState

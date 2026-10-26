@@ -12,8 +12,7 @@ import (
 	"github.com/Code-Hex/vz/v3"
 )
 
-// A failed Start closes done. The framework closes states only once the VM is collected, which a running
-// watch prevents, so watch must end on done alone.
+// A failed Start closes done. The framework never closes states, so watch must end on done alone.
 func TestWatchEndsWhenAFailedStartClosesDone(t *testing.T) {
 	m := &machine{done: make(chan struct{})}
 	states := make(chan vz.VirtualMachineState)
