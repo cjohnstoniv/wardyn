@@ -17,10 +17,14 @@ import (
 func TestMacVMOrgNamesTheMissingRunnerdJSON(t *testing.T) {
 	cfgDir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", cfgDir)
-	path := filepath.Join(cfgDir, "wardyn", "runnerd.json")
+	t.Setenv("HOME", cfgDir) // darwin's UserConfigDir is $HOME/Library/Application Support
+	path, err := defaultRunnerConfigPath()
+	if err != nil {
+		t.Fatal(err)
+	}
 	none := func() string { return "" }
 
-	_, err := macVMOrg(runnerConfig{}, none)
+	_, err = macVMOrg(runnerConfig{}, none)
 	for _, want := range []string{"no runnerd.json was found at " + path, "wardyn-runnerd setup", "org_url"} {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Fatalf("missing file: %v, want %q", err, want)
@@ -37,9 +41,18 @@ func TestMacVMOrgNamesTheMissingRunnerdJSON(t *testing.T) {
 		t.Fatalf("file without org_url: %v", err)
 	}
 
-	cfg := runnerConfig{{Name: "org_url", Value: "https://org.example"}}
-	if org, err := macVMOrg(cfg, func() string { return "https://legacy.example" }); err != nil || org != "https://org.example" {
+	legacy := func() string { return "https://legacy.example" }
+	cfg := runnerConfig{{Name: "org_url", Value: "https://org.example", Source: sourceFile + " " + path}}
+	if org, err := macVMOrg(cfg, none); err != nil || org != "https://org.example" {
 		t.Fatalf("configured org: %q, %v", org, err)
+	}
+	// serve ranks the definition's --org as a flag: above runnerd.json, below only a locked managed OrgURL.
+	if org, err := macVMOrg(cfg, legacy); err != nil || org != "https://legacy.example" {
+		t.Fatalf("definition's --org over runnerd.json: %q, %v", org, err)
+	}
+	locked := runnerConfig{{Name: "org_url", Value: "https://managed.example", Source: sourceManaged + " OrgURL (locked)"}}
+	if org, err := macVMOrg(locked, legacy); err != nil || org != "https://managed.example" {
+		t.Fatalf("locked managed OrgURL: %q, %v", org, err)
 	}
 	if org, err := macVMOrg(runnerConfig{}, func() string { return "https://legacy.example" }); err != nil || org != "https://legacy.example" {
 		t.Fatalf("service definition's --org: %q, %v", org, err)

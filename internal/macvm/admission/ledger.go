@@ -498,7 +498,7 @@ func (l *Ledger) Admit(req Request) (Entry, error) {
 		}
 		if avail, err := l.c.Host.AvailableMemoryBytes(); err == nil && avail < req.GuestMemory+LiveMemoryMarginBytes {
 			need := req.GuestMemory + LiveMemoryMarginBytes
-			return &Refusal{Reason: fmt.Sprintf("this Mac does not have enough free memory right now: %.1f GiB free plus inactive, %.1f GiB needed (the VM's %.1f GiB plus a %.1f GiB margin); lowering Docker's memory allowance usually frees it",
+			return &Refusal{Reason: fmt.Sprintf("this Mac does not have enough free memory right now: %.1f GiB free (free, inactive and speculative pages), %.1f GiB needed (the VM's %.1f GiB plus a %.1f GiB margin); lowering Docker's memory allowance usually frees it",
 				gibOf(avail), gibOf(need), gibOf(req.GuestMemory), gibOf(LiveMemoryMarginBytes))}
 		}
 		free, err := l.c.Host.FreeDiskBytes(l.c.Volume)

@@ -120,22 +120,27 @@ func newMacOSVMCommand() *cobra.Command {
 	return cmd
 }
 
-// macVMOrg is the organisation address status and prepare load the runner's identity for: serve's own
-// resolution (cfg), else the --org an earlier install's service definition passes serve (legacy; serve ranks
-// that argument as a flag, and doctor reads it the same way). With neither, the error says where runnerd.json
-// should be and how to write it, instead of the address check's bare refusal.
+// macVMOrg is the organisation address status and prepare load the runner's identity for, ranked as serve
+// ranks it: a locked managed OrgURL, then the --org an earlier install's service definition passes serve
+// (legacy; serve takes that argument as a flag, and doctor reads it the same way), then the rest of serve's
+// own resolution (cfg). With none, the error says where runnerd.json should be and how to write it, instead of
+// the address check's bare refusal.
 func macVMOrg(cfg runnerConfig, legacy func() string) (string, error) {
-	if org := cfg.get("org_url"); org != "" {
-		return org, nil
+	f := cfg.field("org_url")
+	if f.Value != "" && strings.HasSuffix(f.Source, "(locked)") {
+		return f.Value, nil
 	}
 	if org := legacy(); org != "" {
 		return org, nil
+	}
+	if f.Value != "" {
+		return f.Value, nil
 	}
 	path, err := defaultRunnerConfigPath()
 	if err != nil {
 		return "", err
 	}
-	fix := "run `wardyn-runnerd setup`, or write org_url into that file"
+	fix := "run `wardyn-runnerd setup`, write org_url into that file, or set OrgURL in the managed profile"
 	if _, err := os.Stat(path); err != nil {
 		return "", fmt.Errorf("no runnerd.json was found at %s, so this runner's organisation URL is unknown: %s", path, fix)
 	}

@@ -614,8 +614,11 @@ func TestPrepareDownloadPinningRefusalFailsAtOnce(t *testing.T) {
 	tr := &failingTransport{err: errors.New(`tls: failed to verify certificate: x509: “updates.cdn-apple.com” certificates do not meet pinning requirements`)}
 	f.opts.HTTP = &http.Client{Transport: tr}
 	_, err := macvm.Prepare(context.Background(), f.opts)
+	// The advice names the host the image comes from, and says a proxy is the likely cause, not a certain one.
+	host := strings.Split(strings.TrimPrefix(f.srv.url(), "http://"), ":")[0]
 	if err == nil || !strings.HasPrefix(err.Error(), macvm.DownloadFailurePrefix) ||
-		!strings.Contains(err.Error(), "exempt updates.cdn-apple.com from TLS inspection") || !strings.Contains(err.Error(), f.srv.url()) {
+		!strings.Contains(err.Error(), "the certificate chain for "+host+" failed Apple's pinning check") ||
+		!strings.Contains(err.Error(), "likely cause: exempt "+host+" from TLS inspection") || !strings.Contains(err.Error(), f.srv.url()) {
 		t.Fatalf("pinning refusal: %v", err)
 	}
 	if n := tr.calls.Load(); n != 1 {

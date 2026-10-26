@@ -331,7 +331,7 @@ func TestLiveMemoryGuard(t *testing.T) {
 	}
 	// The refusal gives both numbers in GiB and names the usual fix.
 	_, err := l.Admit(runReq(8 * gib))
-	for _, want := range []string{"9.0 GiB free plus inactive", "10.0 GiB needed", "8.0 GiB plus a 2.0 GiB margin", "lowering Docker's memory allowance"} {
+	for _, want := range []string{"9.0 GiB free (free, inactive and speculative pages)", "10.0 GiB needed", "8.0 GiB plus a 2.0 GiB margin", "lowering Docker's memory allowance"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("refusal %q lacks %q", err, want)
 		}

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -28,11 +29,11 @@ const maxRangeFailures = 3
 // until none is left.
 const DownloadFailurePrefix = "macvm: restore image download: "
 
-// pinnedHostAdvice is the cause a certificate-pinning refusal ends the download with, with the image
-// URL prepare asked for. Apple pins its update CDN, so the platform verifier refuses any chain a
-// TLS-inspecting proxy re-signs.
-const pinnedHostAdvice = "Apple pins this host and a proxy on this network inspects TLS; exempt updates.cdn-apple.com " +
-	"from TLS inspection and run prepare again (the image is %s)"
+// pinnedHostAdvice is the cause a certificate-pinning refusal ends the download with: the host twice, then
+// the image URL prepare asked for. Apple pins its update CDN, so the platform verifier refuses any chain a
+// TLS-inspecting proxy re-signs; the refusal alone does not prove a proxy, so the advice says likely.
+const pinnedHostAdvice = "the certificate chain for %s failed Apple's pinning check; a proxy that inspects TLS is the " +
+	"likely cause: exempt %s from TLS inspection and run prepare again (the image is %s)"
 
 // isPinningRefusal says err is the platform verifier refusing a pinned host's chain. macOS reports it
 // as a bare "x509: ... certificates do not meet pinning requirements" with no typed error to match, so
@@ -94,7 +95,11 @@ func (d *downloader) fetch(ctx context.Context, url, part string) error {
 			}
 			if isPinningRefusal(err) {
 				// A proxy that inspects TLS refuses every range the same way; retrying only waits.
-				return fmt.Errorf(DownloadFailurePrefix+pinnedHostAdvice+": %w", url, err)
+				host := url
+				if u, perr := neturl.Parse(url); perr == nil && u.Hostname() != "" {
+					host = u.Hostname()
+				}
+				return fmt.Errorf(DownloadFailurePrefix+pinnedHostAdvice+": %w", host, host, url, err)
 			}
 			if failures++; failures >= maxRangeFailures {
 				return fmt.Errorf(DownloadFailurePrefix+"%w", err)
