@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 func (v *view) alive(pid int, start int64) bool {
@@ -31,11 +32,64 @@ func (v *view) helperCount(uid int) int { return v.count(uid, HelperProcess) }
 func (v *view) count(uid int, name string) int {
 	n := 0
 	for _, p := range v.procs {
-		if p.UID == uid && p.Name != "" && strings.HasPrefix(name, p.Name) {
+		if p.UID == uid && named(p, name) {
 			n++
 		}
 	}
 	return n
+}
+
+// named: p's (possibly truncated) name is a prefix of name.
+func named(p Proc, name string) bool { return p.Name != "" && strings.HasPrefix(name, p.Name) }
+
+// startSlack is how far before e's helper a process must have started to be
+// proven not e's (mayBeVM): it absorbs a small step back of the clock that
+// start times are read on.
+const startSlack = 10 * time.Second
+
+// mayBeVM: a process in the snapshot may still be e's VM. e's VM, and every
+// helper process of e's (an install process included), started after e's
+// helper did, or for an entry with no helper recorded, after its owner did. A
+// Virtualization or helper process of e's uid that started more than
+// startSlack before that is proven not to be them: Docker's Linux VM, or
+// another macOS VM's, from earlier. Any other one may be e's VM, whatever it
+// belongs to: its name, its PID (reused or not) and its parent (reparented
+// once the helper died) prove nothing. One exception is positive: a process
+// that is exactly (PID and start) the recorded helper of another counted entry
+// of the same uid is that entry's helper, not e's; its VM, if it has one yet,
+// still counts. A start time after now (the clock went back) proves nothing,
+// so it leaves every process possibly e's.
+func (v *view) mayBeVM(e Entry, now int64) bool {
+	since := e.HelperStart
+	if e.HelperPID == 0 {
+		since = e.OwnerStart
+	}
+	if since > now {
+		return true
+	}
+	type incarnation struct {
+		pid   int
+		start int64
+	}
+	helpers := map[incarnation]bool{}
+	for _, o := range v.counted {
+		if o.ID != e.ID && o.UID == e.UID && o.HelperPID != 0 {
+			helpers[incarnation{o.HelperPID, o.HelperStart}] = true
+		}
+	}
+	for _, p := range v.procs {
+		if p.Start > now {
+			return true
+		}
+		if helpers[incarnation{p.PID, p.Start}] {
+			continue
+		}
+		if p.UID == e.UID && (named(p, VirtualizationProcess) || named(p, HelperProcess)) &&
+			p.Start >= since-startSlack.Microseconds() {
+			return true
+		}
+	}
+	return false
 }
 
 // helperGone: the entry's helper (or, for an entry with no helper yet, its
@@ -64,10 +118,9 @@ func (v *view) tombstoned(e Entry) bool {
 
 // ReclaimOwn removes one of this runner's entries whose helper died without
 // reporting a stop, or that another login tombstoned: allowed once the helper
-// is gone, this uid has no more Virtualization or helper processes than its
-// other counted entries with a live helper (so none of them can be this
-// entry's VM), and the run dir (empty: none) is gone. That last step is the
-// owner's reconcile, which frees a tombstoned entry's disk debt.
+// is gone, no process may still be the entry's VM (mayBeVM), and the run dir
+// (empty: none) is gone. That last step is the owner's reconcile, which frees
+// a tombstoned entry's disk debt.
 func (l *Ledger) ReclaimOwn(id, runDir string) error {
 	return l.withLock(func() error {
 		v, err := l.load()
@@ -85,13 +138,7 @@ func (l *Ledger) ReclaimOwn(id, runDir string) error {
 			if !v.helperGone(e) {
 				return errors.New("admission: the helper is still running")
 			}
-			others := 0
-			for _, o := range v.counted {
-				if o.ID != e.ID && o.UID == e.UID && o.HelperPID != 0 && v.alive(o.HelperPID, o.HelperStart) {
-					others++
-				}
-			}
-			if v.vzCount(e.UID) > others || v.helperCount(e.UID) > others {
+			if v.mayBeVM(e, time.Now().UnixMicro()) {
 				return errors.New("admission: a Virtualization or helper process of this user may still be this VM")
 			}
 		}

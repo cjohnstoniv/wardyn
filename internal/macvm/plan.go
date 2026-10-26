@@ -42,7 +42,7 @@ type MachineSpec struct {
 	BaseDir string
 	// Net is the guest side of the NIC's datagram socket pair. It is the
 	// machine's only network device.
-	Net *os.File
+	Net *os.File `json:"-"`
 }
 
 // NetworkKind names a network attachment. FileHandle is the only kind: no NAT

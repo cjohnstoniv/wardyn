@@ -49,6 +49,7 @@ import (
 type deps struct {
 	engine func() (macvm.Engine, error)
 	host   admission.Host
+	stdin  io.Reader
 	stdout io.Writer
 	stderr io.Writer
 	// prepare supplies prepare's first-boot provisioner, prep network and
@@ -87,7 +88,7 @@ func main() {
 // mainDeps are the helper's real deps.
 func mainDeps() deps {
 	return deps{
-		engine: platformEngine, host: admission.SystemHost(), stdout: os.Stdout, stderr: os.Stderr,
+		engine: platformEngine, host: admission.SystemHost(), stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr,
 		prepare: prepareDeps, firstBoot: macvm.NewProvisioner(),
 	}
 }
@@ -109,6 +110,8 @@ func run(ctx context.Context, args []string, d deps) int {
 		return cmdPrepare(ctx, args[1:], d)
 	case macvm.UpdateToolsCommand:
 		return cmdUpdateTools(ctx, args[1:], d)
+	case macvm.InstallCommand:
+		return cmdInstall(ctx, d)
 	case "probe":
 		return cmdProbe(d)
 	case "ledger-setup":
@@ -423,12 +426,36 @@ func cmdPrepare(ctx context.Context, args []string, d deps) int {
 		}
 		o.Stage2 = st
 	}
+	// The install runs in a helper process of its own, whose exit releases
+	// the installer's VM and its aux storage before the first boot.
+	exe, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
+		return 1
+	}
+	o.InstallProcess = []string{exe, macvm.InstallCommand}
 	if err := d.prepare(&o, relayLog); err != nil {
 		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
 		return 1
 	}
 	if _, err := macvm.Prepare(ctx, o); err != nil {
 		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+// cmdInstall is `wardyn-macvm install-base`, which only prepare starts: one
+// install in a process of its own (macvm.RunInstall), its request on stdin and
+// its progress on stdout.
+func cmdInstall(ctx context.Context, d deps) int {
+	eng, err := d.engine()
+	if err != nil {
+		fmt.Fprintln(d.stderr, err)
+		return 1
+	}
+	if err := macvm.RunInstall(ctx, eng, d.stdin, d.stdout); err != nil {
+		fmt.Fprintln(d.stderr, err)
 		return 1
 	}
 	return 0
