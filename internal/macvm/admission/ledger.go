@@ -451,6 +451,9 @@ func (l *Ledger) usage(v *view) usage {
 	return u
 }
 
+// gibOf is n bytes in GiB, for a message.
+func gibOf(n uint64) float64 { return float64(n) / (1 << 30) }
+
 // memoryBudget is host memory minus macOS's share and the Docker memory of
 // every login holding an entry, plus this login's, each counted once.
 func (l *Ledger) memoryBudget(u usage) (uint64, error) {
@@ -494,7 +497,9 @@ func (l *Ledger) Admit(req Request) (Entry, error) {
 			return &Refusal{Reason: fmt.Sprintf("this Mac's memory for macOS VMs (%d MiB after Docker and macOS) is in use", budget>>20)}
 		}
 		if avail, err := l.c.Host.AvailableMemoryBytes(); err == nil && avail < req.GuestMemory+LiveMemoryMarginBytes {
-			return &Refusal{Reason: "this Mac does not have enough free memory right now"}
+			need := req.GuestMemory + LiveMemoryMarginBytes
+			return &Refusal{Reason: fmt.Sprintf("this Mac does not have enough free memory right now: %.1f GiB free plus inactive, %.1f GiB needed (the VM's %.1f GiB plus a %.1f GiB margin); lowering Docker's memory allowance usually frees it",
+				gibOf(avail), gibOf(need), gibOf(req.GuestMemory), gibOf(LiveMemoryMarginBytes))}
 		}
 		free, err := l.c.Host.FreeDiskBytes(l.c.Volume)
 		if err != nil {

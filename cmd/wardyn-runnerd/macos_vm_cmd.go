@@ -40,7 +40,11 @@ func newMacOSVMCommand() *cobra.Command {
 				return nil, "", err
 			}
 		}
-		id, err := runneridentity.Load(stateDir, cfg.get("org_url"))
+		org, err := macVMOrg(cfg, serviceOrgArg)
+		if err != nil {
+			return nil, "", err
+		}
+		id, err := runneridentity.Load(stateDir, org)
 		if err != nil {
 			return nil, "", err
 		}
@@ -114,6 +118,42 @@ func newMacOSVMCommand() *cobra.Command {
 	}}
 	cmd.AddCommand(status, prepare, remove)
 	return cmd
+}
+
+// macVMOrg is the organisation address status and prepare load the runner's identity for: serve's own
+// resolution (cfg), else the --org an earlier install's service definition passes serve (legacy; serve ranks
+// that argument as a flag, and doctor reads it the same way). With neither, the error says where runnerd.json
+// should be and how to write it, instead of the address check's bare refusal.
+func macVMOrg(cfg runnerConfig, legacy func() string) (string, error) {
+	if org := cfg.get("org_url"); org != "" {
+		return org, nil
+	}
+	if org := legacy(); org != "" {
+		return org, nil
+	}
+	path, err := defaultRunnerConfigPath()
+	if err != nil {
+		return "", err
+	}
+	fix := "run `wardyn-runnerd setup`, or write org_url into that file"
+	if _, err := os.Stat(path); err != nil {
+		return "", fmt.Errorf("no runnerd.json was found at %s, so this runner's organisation URL is unknown: %s", path, fix)
+	}
+	return "", fmt.Errorf("%s sets no org_url, so this runner's organisation URL is unknown: %s", path, fix)
+}
+
+// serviceOrgArg is the --org the installed service definition passes serve ("": none, or no setup host).
+func serviceOrgArg() string {
+	h, err := osSetupHost()
+	if err != nil {
+		return ""
+	}
+	p, err := h.paths()
+	if err != nil {
+		return ""
+	}
+	org, _ := p.serviceOrgArg()
+	return org
 }
 
 // macOSVMStatus is `macos-vm status`: its JSON (--json) and, with the unexported fields, its text. The

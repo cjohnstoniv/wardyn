@@ -281,6 +281,8 @@ Both run `serve --config <path to runnerd.json>` and hold no setting themselves.
 
 Upgrade the organisation before its runners. A runner installed with `setup` upgrades by running `wardyn runner setup` again, or the new release's `wardyn-runnerd setup` with the same flags: it renames a new file over its own copy and restarts the service. Installing a new `wardyn-runnerd.pkg` upgrades only a runner the package's managed agent runs (one set up with `register`); it stops that agent first. A `setup`-installed runner keeps its own copy, so a new package alone leaves it on the old version. Never copy a new binary over the running one: on macOS the system can stop a process whose binary is overwritten in place.
 
+A hand-installed macOS LaunchAgent does not get `--log-file`, so its log is not rotated until someone adds `--log-file` to its `ProgramArguments`; `wardyn runner upgrade` and `wardyn-runnerd setup` write it.
+
 ## The runner's settings file
 
 `runnerd.json` holds every setting a runner has, under a name and with a default, so one file shows what the runner runs with. It is at `<user configuration directory>/wardyn/runnerd.json` (`~/.config/wardyn` on Linux, `~/Library/Application Support/wardyn` on macOS), mode `0600`. `setup` writes it, `serve --config <path>` reads another, and the service definition holds only the binary and that path.

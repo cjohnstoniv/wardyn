@@ -329,6 +329,13 @@ func TestLiveMemoryGuard(t *testing.T) {
 	if _, err := l.Admit(runReq(8 * gib)); !IsRefusal(err) {
 		t.Fatalf("available 9 GiB < 8 + 2: %v, want a refusal", err)
 	}
+	// The refusal gives both numbers in GiB and names the usual fix.
+	_, err := l.Admit(runReq(8 * gib))
+	for _, want := range []string{"9.0 GiB free plus inactive", "10.0 GiB needed", "8.0 GiB plus a 2.0 GiB margin", "lowering Docker's memory allowance"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("refusal %q lacks %q", err, want)
+		}
+	}
 }
 
 func TestLeakedLowersMaxNeverTombstonedClearsOnNewBoot(t *testing.T) {
