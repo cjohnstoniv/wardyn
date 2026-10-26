@@ -57,7 +57,7 @@ func (s *Server) sweepRunLeases(ctx context.Context) error {
 		s.leaseRun(ctx, leaser, run)
 	}
 	// A run the sweep no longer lists (torn down, killed) needs no entry.
-	for _, m := range []*sync.Map{&s.leaseEnded, &s.containmentFailed} {
+	for _, m := range []*sync.Map{&s.leaseEnded, &s.containmentFailed, &s.containmentPending} {
 		m.Range(func(id, _ any) bool {
 			if !listed[id.(uuid.UUID)] {
 				m.Delete(id)
@@ -333,14 +333,29 @@ func (s *Server) noteContainmentFailure(ctx context.Context, leaser store.RunLea
 func (s *Server) settleContainment(ctx context.Context, leaser store.RunLeaser, run types.AgentRun, err error) {
 	data := map[string]any{"reason": string(run.LostReason)}
 	if err != nil {
-		slog.WarnContext(ctx, "wardynd: re-asserting a kept run's stop failed",
-			slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		// A stop queued on an offline runner (runner.ErrPendingOnRunner) answers
+		// the same every pass until the runner reconnects: warn once, not every
+		// pass. Any other error warns every time.
+		quiet := false
+		if errors.Is(err, runner.ErrPendingOnRunner) {
+			_, quiet = s.containmentPending.LoadOrStore(run.ID, struct{}{})
+		} else {
+			s.containmentPending.Delete(run.ID)
+		}
+		if !quiet {
+			slog.WarnContext(ctx, "wardynd: re-asserting a kept run's stop failed",
+				slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		}
 		if s.noteContainmentFailure(ctx, leaser, run.ID, err) {
 			data["containment"], data["error"] = "unresolved", err.Error()
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.containment.reassert",
 				run.ID.String(), "failure", mustJSON(data)))
 		}
 		return
+	}
+	if _, was := s.containmentPending.LoadAndDelete(run.ID); was {
+		slog.InfoContext(ctx, "wardynd: re-asserting a kept run's stop succeeded after its runner reconnected",
+			slog.String("run_id", run.ID.String()))
 	}
 	s.containmentFailed.Delete(run.ID)
 	if run.ContainmentError == "" {

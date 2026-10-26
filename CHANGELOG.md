@@ -30,6 +30,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `end_reason` `run_ended`, and the server stops holding the pause. Before, the pause stayed open with no end row.
 - `wardyn-runnerd doctor` on a host whose service definition is still an earlier install's, which passes `--org`, now
   checks the organisation that service uses, as `serve` does, instead of the one in `runnerd.json`.
+- The server no longer warns every minute that re-asserting a kept run's stop failed while the run's runner is offline
+  and the stop is already queued for it (#3703). It warns once, and logs once when the re-assert succeeds after the
+  runner reconnects; any other failure still warns on every pass, and the stop is still re-asserted on every pass.
 
 ## [0.10.0-rc.3] — 2026-10-25
 
