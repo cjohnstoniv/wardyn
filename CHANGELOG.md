@@ -121,6 +121,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A single run's own read (`wardyn runs get <id> --json`, `GET /api/v1/runs/{id}`) now reports `has_recording`,
   `recording_bytes` and `recording_duration_sec` without `?include=recording_meta` (#3705). Before, it said
   `has_recording: false` for every run, including one whose recording was stored. Run lists still need the parameter.
+- A failed macOS VM start no longer keeps its VM in the helper until the helper exits (#3708). Each failed attempt
+  kept one, and a first boot's retries on the auxiliary storage lock can make several.
+- After a change of the Mac's clock, a macOS VM run whose helper stopped no longer ends with "The Mac restarted, so
+  the macOS VM was lost." (#3709). The runner tells a restart by the boot session the ledger records, as the ledger
+  does, so a run whose entry has no session, from an earlier release, says its helper stopped.
 
 ## [0.10.0-rc.3] — 2026-10-25
 
