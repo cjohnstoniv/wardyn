@@ -207,7 +207,7 @@ ARG HTTP_PROXY=
 ARG HTTPS_PROXY=
 ARG NO_PROXY=
 ARG CLAUDE_INSTALL=npm
-ARG CLAUDE_CODE_VERSION=2.1.308
+ARG CLAUDE_CODE_VERSION=2.1.231
 ARG CLAUDE_MANIFEST_SHA256=
 ARG TARGETARCH
 # The node base's bundled npm has shipped a vendored node-tar carrying
@@ -250,8 +250,8 @@ RUN set -eu; \
             ver="$CLAUDE_CODE_VERSION"; \
             case "$ver" in stable|latest) echo "native download requires an exact CLAUDE_CODE_VERSION and CLAUDE_MANIFEST_SHA256; stage a binary or use npm for channels" >&2; exit 1;; esac; \
             manifest_sum="$CLAUDE_MANIFEST_SHA256"; \
-            if [ -z "$manifest_sum" ] && [ "$ver" = "2.1.308" ]; then \
-                manifest_sum=9a01bbf1996be52f13508ef9e47ef3fcf544ac39037ca91b4c87f2b4efc425fb; \
+            if [ -z "$manifest_sum" ] && [ "$ver" = "2.1.231" ]; then \
+                manifest_sum=670096acfde2def2e5b71178908e40983bf6e3cb6155300ee4a669a5768d3e43; \
             fi; \
             [ -n "$manifest_sum" ] || { echo "native download of $ver requires CLAUDE_MANIFEST_SHA256" >&2; exit 1; }; \
             printf '%s' "$manifest_sum" | grep -zExq '[0123456789abcdefABCDEF]{64}'; \
