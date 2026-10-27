@@ -52,29 +52,20 @@ printf '%s' "$sum" | grep -zExq '[0123456789abcdefABCDEF]{64}'
 ### code-server's embedded shell-quote tracking
 
 - [#1904](https://github.com/cjohnstoniv/wardyn/issues/1904) remains open.
-- Inspection of both official code-server 4.139.1 Linux release archives on 2026-10-07 found the same `@devcontainers/cli` 0.88.0 bundle and shrinkwrap:
+- Inspection of both official code-server 4.141.1 Linux release archives on 2026-10-27 found the same `@devcontainers/cli` 0.88.0 bundle as 4.139.1 and 4.141.0, and the same shrinkwrap as 4.141.0:
 
 | Artifact | SHA256 |
 | --- | --- |
-| [amd64 archive](https://github.com/coder/code-server/releases/download/v4.139.1/code-server-4.139.1-linux-amd64.tar.gz) | `53029be6c5781b7bca49b815fcc9a2a3fc111813ad8c9965b2c0f0d2985a0674` |
-| [arm64 archive](https://github.com/coder/code-server/releases/download/v4.139.1/code-server-4.139.1-linux-arm64.tar.gz) | `0edb4b60d9c4744b2dd14b0911e3c2e6dd8c6f3c13bd58bda23ae744e59e7df1` |
+| [amd64 archive](https://github.com/coder/code-server/releases/download/v4.141.1/code-server-4.141.1-linux-amd64.tar.gz) | `45fd3cfbff9fd0c36fe37105859b0f4f7a0544341ca4e322657f5b3caeca1cbe` |
+| [arm64 archive](https://github.com/coder/code-server/releases/download/v4.141.1/code-server-4.141.1-linux-arm64.tar.gz) | `898903adc4d28dc23b9147073afe36fcafdb49e6ada8e1007bfc62a330ff9315` |
 | `lib/vscode/node_modules/@devcontainers/cli/dist/spec-node/devContainersSpecCLI.js` (both) | `f49753e8ead0a8dc2c8d257169eab6fe338b1c162c778353f0b085ad343bf833` |
-| `lib/vscode/npm-shrinkwrap.json` (both) | `dfcafb7490d47210f39ea1f4bd4d45fbc3c859e398ff895ee239f94214609ec4` |
+| `lib/vscode/npm-shrinkwrap.json` (both) | `55f1f064bdf406c9d46e0e80c586771772c429a97a115366a24f82f98b8c04d7` |
 
 - The bundle inlines the old `quote()` implementation: its comment-token branch checks the comment itself but does not reject a line terminator in a following string.
 - Isolating that bundled function reproduces the [upstream advisory](https://github.com/ljharb/shell-quote/security/advisories/GHSA-pqg4-j6r4-53mv) output without executing it as shell.
 - The bundle exports this through `Gb` and imports it as `yp`; the inspected consumer references call `yp.parse`, not `yp.quote`.
 - That limited static inspection found no affected call path; it is not a general reachability proof.
-- The shrinkwrap still records `shell-quote` 1.10.0.
-
-- Checked 2026-10-18 against the newest release, 4.141.0 (linux-amd64 only):
-
-| Artifact | Result |
-| --- | --- |
-| [amd64 archive](https://github.com/coder/code-server/releases/download/v4.141.0/code-server-4.141.0-linux-amd64.tar.gz) | `65bcd20b524d03eb1b5adb7f360244599ef0e5b74089a46a982d32c074b97a29` |
-| `devContainersSpecCLI.js` | `f49753e8ead0a8dc2c8d257169eab6fe338b1c162c778353f0b085ad343bf833`, identical to 4.139.1 |
-| `npm-shrinkwrap.json` | `55f1f064bdf406c9d46e0e80c586771772c429a97a115366a24f82f98b8c04d7`, `shell-quote` 1.10.0 |
-| bundled `shell-quote` | 1.10.0 |
+- The shrinkwrap and the bundled module both still record `shell-quote` 1.10.0.
 
 - The Dockerfile's replacement of the separate module with 1.11.0 changes neither the inlined function nor the shrinkwrap.
 - Keep the tracking issue open and the replacement in place until a candidate [code-server release](https://github.com/coder/code-server/releases) has been inspected for both the embedded code and metadata; a clean scanner result alone does not establish this.
