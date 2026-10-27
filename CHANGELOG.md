@@ -157,7 +157,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   24.22.1. Earlier images carried Node.js 24.21.0, and `agent-vscode` ran code-server on Node.js 24.20.0. Both
   versions decode Brotli data with a decoder that a crafted stream can make write out of bounds (CVE-2026-111497).
   A Node.js program in a sandbox that decompressed Brotli data from an untrusted source could crash, leak its
-  memory or run the sender's code with that program's rights. Rebuild locally built agent images.
+  memory or run the sender's code with that program's rights.
+- The `agent-claude-code` recipe now pins Claude Code 2.1.308. 2.1.231 embeds a runtime whose Brotli decoder has
+  the same flaw, so a crafted Brotli response to the CLI's own web requests could run code as the agent. Rebuild
+  locally built agent images.
 
 ## [0.10.0-rc.3] — 2026-10-25
 
