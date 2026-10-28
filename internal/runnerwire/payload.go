@@ -245,7 +245,10 @@ type MacVMCaps struct {
 	Desktop string `json:"desktop,omitempty"`
 	// SignIns says the runner keeps a macOS desktop's sign-ins and pauses its agent (pause_agent,
 	// resume_agent). A runner without it is never asked.
-	SignIns bool      `json:"sign_ins,omitempty"`
+	SignIns bool `json:"sign_ins,omitempty"`
+	// Folders says the runner shares a run's folders into its macOS VM. A runner without it is never
+	// sent a macOS VM run with a mount.
+	Folders bool      `json:"folders,omitempty"`
 	Base    MacVMBase `json:"base"`
 	// Refusal is, in words, why the runner offers no macOS VM; empty when it offers them.
 	Refusal string `json:"refusal,omitempty"`
