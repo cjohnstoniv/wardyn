@@ -11,15 +11,21 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Before you upgrade
+
+- Migrations `0237_base_image_prewrapped` (admits `prewrapped` in `base_images.kind`'s CHECK and adds the check's
+  columns) and `0238_run_image_arches` (adds a column to `agent_runs`) change no row and no grant. See
+  [OPERATIONS.md](docs/OPERATIONS.md).
+
 ### Added
 
-- A run's Policy tab now marks each allowed host **Inspected** or **Tunnel only**, with a line saying what each means, and `wardyn run policy` prints the same marks above the YAML. Inspected means Wardyn opens that traffic to add a credential or check it, so the sandbox must trust Wardyn's certificate; Tunnel only passes through unread. Hosts Wardyn opens that the allowlist does not name are listed too, as Inspected. The mark comes from the run's own proxy config at launch, and `GET /api/v1/runs/{id}/policy` returns it as `host_marks`. A run from before this change, or one restarted since, shows no marks. See [OPERATIONS.md](docs/OPERATIONS.md#the-policy-a-run-got).
+- A run's Policy tab now marks each allowed host **Inspected** or **Tunnel only**, with a line saying what each means, and `wardyn run policy` prints the same marks above the YAML. Inspected means Wardyn opens that traffic to add a credential or check it, so the sandbox must trust Wardyn's certificate; Tunnel only passes through unread. Hosts Wardyn opens on a port no allowlist entry names are listed too, as Inspected; under allow-all, every host Wardyn opens is. The mark comes from the run's own proxy config at launch, and `GET /api/v1/runs/{id}/policy` returns it as `host_marks`. A run from before this change, or one restarted since, shows no marks. See [OPERATIONS.md](docs/OPERATIONS.md#the-policy-a-run-got).
 - A Kubernetes control plane, which has no image builder, can now run a pre-wrapped image: one built `FROM` agent-base and
   pinned by digest. Add it under Images with *How it runs* → *Pre-wrapped: runs as is*, or `POST /base-images` with
   `kind: "prewrapped"`. The control plane checks it on the cluster first, with one short pod per node architecture and no
   network, and offers it to workspaces and runs only once it is ready; its runs go only to the architectures that passed.
   A refused or cut-short check gets *Check again* (`POST /base-images/{id}/check`), and each verdict is audited as
-  `base_image.admit`. A security admin now has an Images page and lists, adds and checks pre-wrapped images only. See
+  `base_image.admit`. A security admin now has an Images page and lists, adds, checks and removes pre-wrapped images only. See
   [deploy/images/README.md](deploy/images/README.md#pre-wrapped-image).
 - A macOS VM run now shares its workspace's folders. Each is shared into the guest at `/Users/agent/…` (a workspace's
   `/home/agent/…` path), with the same rules and read-only or writable choice as a container. A folder macOS protects
