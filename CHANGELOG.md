@@ -23,8 +23,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
-- A runner that the organisation sends away or revokes while it waits for its pending work now logs that reason. It could
-  log `context canceled` instead, and a revoked runner then erased its state only on its next connection attempt.
+- A runner that the organisation sends away or revokes while it waits for its pending work now acts on that. It could take
+  it for a dropped connection and log `context canceled`: a revoked runner then kept its state, including the credentials
+  delivered to it, until it next got through to the organisation.
 
 ## [0.10.0-rc.6] — 2026-10-28
 
