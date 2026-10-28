@@ -881,14 +881,16 @@ test("H (agent-boot-egress): an interactive run answers ONE trust prompt and rea
   expect(trustScreen).not.toContain("Security notes");
 
   // Step 5 — choose "Yes, I trust this folder", then ONE Enter. The dialog
-  // ignores keys for a moment after it opens, so the move is repeated until the
-  // pointer sits on Yes.
+  // ignores keys for a moment after it opens, so the screen is read first and
+  // the pointer moved only while it still sits on No; a move is never sent past
+  // Yes.
   await screen.click();
   await expect
     .poll(async () => {
-      await page.keyboard.press("ArrowDown");
-      return termText(screen).catch(() => "");
-    }, { timeout: 30_000 })
+      const text = await termText(screen).catch(() => "");
+      if (/❯ No, exit/.test(text)) await page.keyboard.press("ArrowDown");
+      return text;
+    }, { timeout: 30_000, intervals: [500] })
     .toMatch(/❯ Yes, I trust this folder/);
   await page.keyboard.press("Enter");
 
