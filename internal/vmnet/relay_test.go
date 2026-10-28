@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -251,8 +252,10 @@ func TestRelayRefusals(t *testing.T) {
 			c.Close()
 			t.Fatal("connected to a refused name")
 		}
+		// Every event is an ask for the refused name. There may be two: an ask slower than the guest's 1s
+		// SYN retransmit lets the retransmitted SYN reach the relay after the first reset, as a new flow.
 		ev, _ := f.snapshot()
-		if len(ev) != 1 || !strings.HasPrefix(ev[0], "ask denied.test:443") {
+		if len(ev) == 0 || slices.ContainsFunc(ev, func(e string) bool { return !strings.HasPrefix(e, "ask denied.test:443") }) {
 			t.Fatalf("events %q", ev)
 		}
 	})
