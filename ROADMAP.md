@@ -58,7 +58,7 @@
 | **v0.10.0-rc.3** | rc.3: macOS VMs on macOS 26 Macs through a one-time setup by hand, the run page's macOS disk line, and fixes for rc.2's five known issues. | **Shipped (pre-alpha)** — `v0.10.0-rc.3`, 2026-10-25 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.10.0-rc.4** | rc.4: a first macOS VM prepare on macOS 26 past the auxiliary storage lock, slots freed after a failed prepare, a clear error behind a TLS-inspecting proxy, and Kubernetes and recording fixes. | **Shipped (pre-alpha)** — `v0.10.0-rc.4`, 2026-10-26 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.10.0-rc.5** | rc.5: agent images on Node.js 24.22.1 and code-server 4.141.1 (CVE-2026-111497), and two macOS VM fixes: a failed start lets go of its VM, and a clock change is not a restart. | **Shipped (pre-alpha)** — `v0.10.0-rc.5`, 2026-10-28 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.10.0-rc.6** | rc.6: a macOS VM memory check by macOS's own memory pressure, Bedrock PrivateLink endpoints signed at the proxy, AWS signing shown on Run Detail, and the policy behind a blocked host on New Run. | **Shipped (pre-alpha)** — `v0.10.0-rc.6`, 2026-10-28 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.10.0-rc.6** | rc.6: a macOS VM memory check by macOS's own memory pressure, Bedrock PrivateLink endpoints signed at the proxy, AWS signing shown on Run Detail, and policy context beside host warnings on New Run. | **Shipped (pre-alpha)** — `v0.10.0-rc.6`, 2026-10-28 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ## Shipped detail
 
