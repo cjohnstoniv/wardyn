@@ -494,8 +494,9 @@ func repoOwnDevcontainerURL(ws types.Workspace, p workspacescan.WorkspaceProfile
 // the convention agent image when no builder is configured. Its error is a run
 // that could not be read before the build (errRunUnreadBeforeBuild): the caller
 // aborts the launch, so the run is failed rather than dispatched on a
-// substituted image.
-func (s *Server) workspaceRunImage(ctx context.Context, runID uuid.UUID, ws types.Workspace) (string, error) {
+// substituted image. arches are a prewrapped image's checked architectures,
+// nil for any other image.
+func (s *Server) workspaceRunImage(ctx context.Context, runID uuid.UUID, ws types.Workspace) (image string, arches []string, err error) {
 	// Bound the build the same way the other three
 	// doors do (runs_create.go) — the record/verify launch callers detach
 	// from request cancellation before reaching here (context.WithoutCancel),
@@ -506,13 +507,13 @@ func (s *Server) workspaceRunImage(ctx context.Context, runID uuid.UUID, ws type
 	buildCtx, endBuild, live, err := s.trackRunBuild(ctx, runID)
 	defer endBuild()
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if !live {
-		return agentImage("claude-code", s.cfg.AgentImages), nil
+		return agentImage("claude-code", s.cfg.AgentImages), nil, nil
 	}
-	if built, ok := s.resolveWorkspaceImage(buildCtx, runID, ws, nil, s.announceImageBuild(ctx, runID)); ok {
-		return built, nil
+	if res := s.resolveWorkspaceImageWith(buildCtx, runID, ws, nil, s.announceImageBuild(ctx, runID), imageResolveOpts{}); res.OK {
+		return res.Image, res.ImageArches, nil
 	}
-	return agentImage("claude-code", s.cfg.AgentImages), nil
+	return agentImage("claude-code", s.cfg.AgentImages), nil, nil
 }

@@ -90,7 +90,7 @@ var runBuildDoors = []struct {
 		return !failed
 	}},
 	{"a workspace run builds its image", func(s *Server, ctx context.Context, id uuid.UUID) bool {
-		_, err := s.workspaceRunImage(ctx, id, buildDoorWorkspace())
+		_, _, err := s.workspaceRunImage(ctx, id, buildDoorWorkspace())
 		return err == nil
 	}},
 }
