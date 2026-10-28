@@ -21,6 +21,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `base_image.admit`. A security admin now has an Images page and lists, adds and checks pre-wrapped images only. See
   [deploy/images/README.md](deploy/images/README.md#pre-wrapped-image).
 
+### Fixed
+
+- A runner that the organisation sends away or revokes while it waits for its pending work now logs that reason. It could
+  log `context canceled` instead, and a revoked runner then erased its state only on its next connection attempt.
+
 ## [0.10.0-rc.6] — 2026-10-28
 
 ### Added
