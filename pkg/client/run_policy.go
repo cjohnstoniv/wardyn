@@ -48,8 +48,12 @@ type RunPolicyView struct {
 
 // RunPolicyHostMarks lists the allowed_domains entries the proxy terminates TLS
 // for (Inspected). Every other allowed entry passes through unread (Tunnel only).
+// Terminated is every host the proxy terminates: "host" on any port, "host:port" scoped to one.
 type RunPolicyHostMarks struct {
-	Inspected []string `json:"inspected"`
+	Inspected  []string `json:"inspected"`
+	Terminated []string `json:"terminated"`
+	// Outside is the Terminated hosts no allowed_domains entry covers.
+	Outside []string `json:"outside"`
 }
 
 // The RunPolicyView.State values.

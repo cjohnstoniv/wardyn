@@ -175,17 +175,9 @@ if v.State == client.RunPolicyViewRecorded {
 | `complete` | false for a run from before Wardyn recorded its starting policy: `changes` then lists only what the launch audit rows state |
 | `stored_policy_now` | for a saved-policy source: `same`, `changed`, `updated` (a run from before the record: edited since, possibly a rename only) or `deleted`, with the policy's current `name` |
 | `provenance` | per top-level `spec` key, the layer that set it (`client.PolicyProvenance`, [denials.md](operations/denials.md)) |
-| `host_marks` | `inspected` lists the allowed hosts Wardyn opens, from the run's own proxy config (`client.RunPolicyHostMarks`); every other allowed host is a tunnel. Absent for a run recorded before marks and for a restarted run |
+| `host_marks` | `inspected` lists the allowed hosts Wardyn opens and `terminated` every host it opens, as `host` or `host:port`, from the run's own proxy config (`client.RunPolicyHostMarks`); every other allowed host is a tunnel. Absent for a run recorded before marks and for a restarted run |
 
 The CLI is `wardyn run policy <run-id> [--json]`.
-
-| Mark | Meaning |
-|---|---|
-| Inspected | Wardyn opens this traffic to add a credential or check it, so the sandbox must trust Wardyn's certificate. |
-| Tunnel only | Wardyn passes this traffic through without reading it. It sees only the host name. Apps that pin their certificate work here. |
-
-The run's Policy tab and `wardyn run policy` (as `#` comment lines, so the YAML stays a policy) show each allowed host's mark.
-
 
 #### Reusing the spec
 

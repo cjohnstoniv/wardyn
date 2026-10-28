@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -294,19 +295,53 @@ func TestRunPolicy_HostMarks(t *testing.T) {
 			}
 		}
 	})
+	t.Run("a host the proxy opens outside the allowlist comes after the allowlist, as Inspected", func(t *testing.T) {
+		head, _ := run(t, func(v *sdk.RunPolicyView) {
+			v.HostMarks = &sdk.RunPolicyHostMarks{Inspected: []string{}, Terminated: []string{"api.github.com"}, Outside: []string{"api.github.com"}}
+		})
+		const inspected = "# Inspected: Wardyn opens this traffic to add a credential or check it, so the sandbox must trust Wardyn's certificate.\n"
+		var at []int
+		for _, want := range []string{"# api.anthropic.com: Tunnel only\n", "# pypi.org: Tunnel only\n", "# api.github.com: Inspected\n", inspected} {
+			i := strings.Index(head, want)
+			if i < 0 {
+				t.Fatalf("missing %q in:\n%s", want, head)
+			}
+			at = append(at, i)
+		}
+		if !slices.IsSorted(at) {
+			t.Errorf("the outside host does not come after the allowlist, then the meaning:\n%s", head)
+		}
+	})
 	t.Run("no marks recorded prints none", func(t *testing.T) {
 		head, _ := run(t, func(v *sdk.RunPolicyView) {})
 		if strings.Contains(head, "Inspected") || strings.Contains(head, "Tunnel only") {
 			t.Errorf("a run with no host_marks printed marks:\n%s", head)
 		}
 	})
-	t.Run("allow-all prints the one line", func(t *testing.T) {
+	t.Run("allow-all with nothing opened prints the one line", func(t *testing.T) {
 		head, _ := run(t, func(v *sdk.RunPolicyView) {
-			v.HostMarks = &sdk.RunPolicyHostMarks{Inspected: []string{}}
+			v.HostMarks = &sdk.RunPolicyHostMarks{Inspected: []string{}, Terminated: []string{}, Outside: []string{}}
 			v.Spec.AllowAllEgress = true
 		})
-		if !strings.Contains(head, "# Hosts not listed as Inspected pass through unread.\n") || strings.Contains(head, "pypi.org: ") {
+		if !strings.Contains(head, "# Hosts not listed as Inspected pass through unread.\n") || strings.Contains(head, "pypi.org: ") || strings.Contains(head, "Inspected: Wardyn") {
 			t.Errorf("allow-all header wrong:\n%s", head)
+		}
+	})
+	t.Run("allow-all lists each host the proxy opens, then its meaning, then the allow-all line", func(t *testing.T) {
+		head, _ := run(t, func(v *sdk.RunPolicyView) {
+			v.HostMarks = &sdk.RunPolicyHostMarks{Inspected: []string{}, Terminated: []string{"api.github.com", "api.anthropic.com"}, Outside: []string{}}
+			v.Spec.AllowAllEgress = true
+		})
+		var at []int
+		for _, want := range []string{"# api.github.com: Inspected\n", "# api.anthropic.com: Inspected\n", "# Inspected: Wardyn opens", "# Hosts not listed as Inspected pass through unread.\n"} {
+			i := strings.Index(head, want)
+			if i < 0 {
+				t.Fatalf("missing %q in:\n%s", want, head)
+			}
+			at = append(at, i)
+		}
+		if !slices.IsSorted(at) || strings.Contains(head, "pypi.org: ") {
+			t.Errorf("allow-all header out of order:\n%s", head)
 		}
 	})
 }

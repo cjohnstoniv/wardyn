@@ -553,7 +553,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// Authorization envelope — the append-only answer to "what was this agent
 	// actually allowed to do?". The run row cannot answer it: agent_runs.policy_id
 	// has no FK and no spec column, run_policies.spec is overwritten in place, and
-	// an inline/default policy has no stored row at all. Recorded HERE, at the one
+	// an inline/default policy has no stored row at all. Snapshotted HERE, at the one
 	// funnel every dispatch flavour (agent/scan/verify/record/compose/exec) passes
 	// through, and AFTER every widening phase above (artifact substitution, LLM
 	// transport, subscription/Bedrock injection, the inspection gate) — so this is
@@ -565,11 +565,12 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// field's own doc comment says NEVER logged, so the audited copy is a
 	// Clone with the values replaced by a count; the live `policy` the ProxyConfig
 	// snapshot below references still carries the real values.
-	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.policy.resolve",
-		run.ID.String(), "success", mustJSON(effectivePolicyDatum{
-			RunPolicySpec: auditablePolicy(policy), DiskMiBFilled: diskSoft, DiskMiBBasis: p.MainDrive.basis(), DiskMiBDefaultSource: p.MainDrive.defaultSource(),
-			Provenance: p.Provenance, HostMarks: hostMarksOf(spec.ProxyConfig, policy.AllowedDomains),
-		})))
+	// The snapshot is taken here, with the policy as it stands; it is recorded below, once the
+	// proxy config is final, so the host marks it carries describe the config the runner is sent.
+	envelope := effectivePolicyDatum{
+		RunPolicySpec: auditablePolicy(policy), DiskMiBFilled: diskSoft, DiskMiBBasis: p.MainDrive.basis(), DiskMiBDefaultSource: p.MainDrive.defaultSource(),
+		Provenance: p.Provenance,
+	}
 
 	// Held BEFORE CreateSandbox, not after: the row still carries the
 	// heartbeat it was born with, which any image build/pull longer than the
@@ -614,6 +615,12 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	if !s.sandboxCreateAdmitted(ctx, run, ceiling, siteCfg, &spec, orgConfigKeys, llm, p) {
 		return
 	}
+	// Recorded now, not at the snapshot: the file_secret placeholders and the placement
+	// classification are the last writers of the proxy config, and the host marks must describe
+	// the config the runner is sent. Nothing between the snapshot and here reads the envelope.
+	envelope.HostMarks = hostMarksOf(spec.ProxyConfig, envelope.AllowedDomains)
+	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.policy.resolve",
+		run.ID.String(), "success", mustJSON(envelope)))
 	if !s.applyRunRecording(ctx, &run, &spec, recordingChoice(run, policy, ceiling, siteCfg, siteCfgErr)) {
 		return
 	}

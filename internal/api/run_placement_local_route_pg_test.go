@@ -258,6 +258,9 @@ func TestPG_LocalRun_RepositoryGoesThroughTheBroker(t *testing.T) {
 	if len(rows) != 1 || rows[0].Delivery != types.GrantDeliveryViaOrg {
 		t.Errorf("stored grants = %+v, want the one github_token grant delivered via_org", rows)
 	}
+	// The marks recorded for a run whose placement stripped a grant to via_org are those of the
+	// config the runner was sent.
+	assertMarksAreThoseOfTheConfigSent(t, e.h.audit.snapshot(), run.ID, spec)
 }
 
 // LE-6: on the person's own runner, a Background run that asks for more CPU and memory than the runner

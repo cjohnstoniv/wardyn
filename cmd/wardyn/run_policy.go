@@ -149,17 +149,24 @@ func runPolicyHeaderLines(v sdk.RunPolicyView, person string) []string {
 	return lines
 }
 
-// runPolicyHostLines marks each allowed host Inspected or Tunnel only, then says what each mark
-// means. Nothing for a run that recorded no marks, and under allow-all the one line that says
-// every host not listed passes through unread.
+// runPolicyHostLines marks each allowed host Inspected or Tunnel only, then each host the proxy opens
+// outside the allowlist as Inspected, then says what each mark means. Nothing for a run that recorded
+// no marks. Under allow-all, every host the proxy opens as Inspected, then the one line that says every
+// host not listed passes through unread.
 func runPolicyHostLines(v sdk.RunPolicyView) []string {
 	if v.HostMarks == nil || v.Spec == nil {
 		return nil
 	}
-	if v.Spec.AllowAllEgress {
-		return []string{runPolicyTunnelOnlyAllowAll}
-	}
 	var lines []string
+	if v.Spec.AllowAllEgress {
+		for _, host := range v.HostMarks.Terminated {
+			lines = append(lines, host+": "+runPolicyInspected)
+		}
+		if len(v.HostMarks.Terminated) > 0 {
+			lines = append(lines, runPolicyInspected+": "+runPolicyInspectedMeaning)
+		}
+		return append(lines, runPolicyTunnelOnlyAllowAll)
+	}
 	var inspected, tunnel bool
 	for _, host := range v.Spec.AllowedDomains {
 		mark := runPolicyTunnelOnly
@@ -169,6 +176,10 @@ func runPolicyHostLines(v sdk.RunPolicyView) []string {
 			tunnel = true
 		}
 		lines = append(lines, host+": "+mark)
+	}
+	for _, host := range v.HostMarks.Outside {
+		lines = append(lines, host+": "+runPolicyInspected)
+		inspected = true
 	}
 	if inspected {
 		lines = append(lines, runPolicyInspected+": "+runPolicyInspectedMeaning)
