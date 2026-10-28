@@ -6,6 +6,7 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"net"
 	"net/http"
 	"slices"
 	"strconv"
@@ -208,6 +209,11 @@ func TestTerminatedHosts(t *testing.T) {
 			c.AzureARM = &AzureARMGrant{TenantID: "t", Subscriptions: []string{"s"}}
 			return c
 		}(), []string{"kube.corp.example:6443", AzureLoginHost + ":443", armscope.Host + ":443"}},
+		{"IPv6 literals, scoped and any port", func() *Config {
+			c := cfg(false, true, "fd00::2")
+			c.KubeAPI = &KubeAPIGrant{Host: "fd00::1", Port: 6443, Namespaces: []string{"ns"}}
+			return c
+		}(), []string{"[fd00::1]:6443", "fd00::2"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := tc.c.TerminatedHosts()
@@ -215,8 +221,7 @@ func TestTerminatedHosts(t *testing.T) {
 				t.Fatalf("TerminatedHosts() = %#v, want %#v", got, tc.want)
 			}
 			for _, e := range got {
-				host, port, _ := strings.Cut(e, ":")
-				_ = port
+				host, _ := splitTerminated(e)
 				if !tc.c.InspectsEntry(e) || !tc.c.InspectsEntry(host) {
 					t.Errorf("%q is listed as terminated but InspectsEntry disagrees", e)
 				}
@@ -246,6 +251,14 @@ func TestTerminatedOutside(t *testing.T) {
 				t.Fatalf("TerminatedOutside(%v) = %#v, want %#v", tc.allowed, got, tc.want)
 			}
 		})
+	}
+	v6 := &Config{MITMCACertPEM: "cert", MITMCAKeyPEM: "key", Policy: types.RunPolicySpec{AllowAllEgress: true},
+		KubeAPI: &KubeAPIGrant{Host: "fd00::1", Port: 6443, Namespaces: []string{"ns"}}}
+	if got := v6.TerminatedOutside(nil); !slices.Equal(got, []string{"[fd00::1]:6443"}) {
+		t.Fatalf("an IPv6 door host: TerminatedOutside = %#v, want [fd00::1]:6443", got)
+	}
+	if got := v6.TerminatedOutside([]string{"[fd00::1]:6443"}); len(got) != 0 {
+		t.Fatalf("an IPv6 door host its entry names: TerminatedOutside = %#v, want none", got)
 	}
 	if got := (&Config{MITMHosts: []string{"a.corp.example"}, Policy: c.Policy}).TerminatedOutside(nil); got == nil || len(got) != 0 {
 		t.Fatalf("without a CA = %#v, want an empty non-nil list", got)
@@ -321,11 +334,10 @@ func TestTerminatedOutsideMatchesConnect(t *testing.T) {
 			}
 			canAsk := p.policy.FirstUseMode().RaisesApproval()
 			for _, tok := range cfg.TerminatedHosts() {
-				host, ps, scoped := strings.Cut(tok, ":")
+				host, port := splitTerminated(tok)
 				ports := cfg.outsideProbePorts()
-				if scoped {
-					n, _ := strconv.Atoi(ps)
-					ports = []int{n}
+				if port != 0 {
+					ports = []int{port}
 				}
 				_, isViaOrg := p.viaOrgRouteForHost(host)
 				want := false
@@ -347,4 +359,13 @@ func TestTerminatedOutsideMatchesConnect(t *testing.T) {
 			}
 		})
 	}
+}
+
+// splitTerminated splits a TerminatedHosts element into its host and port (0: any port).
+func splitTerminated(tok string) (string, int) {
+	if h, p, err := net.SplitHostPort(tok); err == nil {
+		n, _ := strconv.Atoi(p)
+		return h, n
+	}
+	return tok, 0
 }

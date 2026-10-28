@@ -6,6 +6,7 @@ package proxy
 import (
 	"context"
 	"maps"
+	"net"
 	"net/http"
 	"slices"
 	"strconv"
@@ -74,18 +75,32 @@ func (m mitmSet) terminatesAnyPort(h string) bool {
 	return m.ca && (m.viaOrg[h] || m.terminatesHost(h))
 }
 
-// terminated lists every host the proxy terminates: host when on any port, host:port when scoped to one.
-func (m mitmSet) terminated() []string {
-	if !m.ca {
-		return []string{}
+// terminatedHost is one host the proxy terminates, and the one port it is scoped to (0: any port).
+type terminatedHost struct {
+	host string
+	port int
+}
+
+// String is the host as TerminatedHosts lists it: host, or host:port with an IPv6 literal bracketed.
+func (t terminatedHost) String() string {
+	if t.port == 0 {
+		return t.host
 	}
-	out := []string{}
+	return net.JoinHostPort(t.host, strconv.Itoa(t.port))
+}
+
+// terminated lists every host the proxy terminates, on any port or scoped to one, in String order.
+func (m mitmSet) terminated() []terminatedHost {
+	if !m.ca {
+		return nil
+	}
+	var out []terminatedHost
 	add := func(h string) {
-		if m.viaOrg[h] || m.ports[h] == 0 {
-			out = append(out, h)
+		if m.viaOrg[h] {
+			out = append(out, terminatedHost{host: h})
 			return
 		}
-		out = append(out, h+":"+strconv.Itoa(m.ports[h]))
+		out = append(out, terminatedHost{host: h, port: m.ports[h]})
 	}
 	for h := range m.viaOrg {
 		add(h)
@@ -100,7 +115,7 @@ func (m mitmSet) terminated() []string {
 			add(h)
 		}
 	}
-	slices.Sort(out)
+	slices.SortFunc(out, func(a, b terminatedHost) int { return strings.Compare(a.String(), b.String()) })
 	return slices.Compact(out)
 }
 
@@ -114,9 +129,13 @@ func (c *Config) TerminatesTLS(host string, port int) bool {
 
 // TerminatedHosts lists every host a run with this config has its proxy terminate, sorted: host when it
 // is terminated on any port (a via_org host, or a compiled host with no port), host:port when
-// a compiled host is scoped to one. It is empty without a CA.
+// a compiled host is scoped to one ([host]:port for an IPv6 literal). It is empty without a CA.
 func (c *Config) TerminatedHosts() []string {
-	return c.mitmSetOf().terminated()
+	out := []string{}
+	for _, t := range c.mitmSetOf().terminated() {
+		out = append(out, t.String())
+	}
+	return out
 }
 
 // TerminatedOutside lists, in TerminatedHosts order, the hosts the run's proxy would open on a port no
@@ -134,10 +153,9 @@ func (c *Config) TerminatedOutside(allowed []string) []string {
 	canAsk := pol.FirstUseMode().RaisesApproval()
 	out := []string{}
 	for _, t := range m.terminated() {
-		host, ports := t, c.outsideProbePorts()
-		if h, p, ok := strings.Cut(t, ":"); ok {
-			n, _ := strconv.Atoi(p)
-			host, ports = h, []int{n}
+		host, ports := t.host, c.outsideProbePorts()
+		if t.port != 0 {
+			ports = []int{t.port}
 		}
 		if slices.ContainsFunc(ports, func(port int) bool {
 			if entryNames(allowed, host, port) {
@@ -146,7 +164,7 @@ func (c *Config) TerminatedOutside(allowed []string) []string {
 			req := egress.Request{Host: host, Port: port, Method: http.MethodConnect}
 			return m.viaOrg[host] || gateConnect(context.Background(), req, gate, pol, portRule).outcome(canAsk) != connectRefuse
 		}) {
-			out = append(out, t)
+			out = append(out, t.String())
 		}
 	}
 	return out
