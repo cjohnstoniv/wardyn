@@ -30,29 +30,46 @@ import (
 // macShareProbes bounds every share's filesystem work on this runner: inside a folder macOS
 // protects, a resolve or an open can wait on a privacy prompt, an evicted iCloud file or a stalled
 // volume.
-var macShareProbes = &macShareProbe{slots: make(chan struct{}, 4), wait: 10 * time.Second}
+var macShareProbes = &macShareProbe{slots: make(chan struct{}, 4), wait: 10 * time.Second, now: time.Now}
 
 // macShareProbe runs check for one share on a worker of its own. A worker holds a slot until it
 // actually returns, so stuck workers never exceed the pool. The create waits, for a slot and then
 // the result, until the result, its own cancellation, or wait, whichever is first; a result that
-// comes later is dropped, and check made no state the create would have to undo.
+// comes later is dropped, and check made no state the create would have to undo. A select picks at
+// random among ready cases, so a slot or a result is taken only if the create is still live and
+// inside wait.
 type macShareProbe struct {
 	slots chan struct{}
 	wait  time.Duration
+	now   func() time.Time
 }
 
 // errShareUnreadable is a share the runner could not read, or not in time.
 var errShareUnreadable = errors.New("docker: the shared folder could not be read")
 
 func (p *macShareProbe) run(ctx context.Context, check func() (string, error)) (string, error) {
+	deadline := p.now().Add(p.wait)
 	timer := time.NewTimer(p.wait)
 	defer timer.Stop()
+	live := func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !p.now().Before(deadline) {
+			return errShareUnreadable
+		}
+		return nil
+	}
 	select {
 	case p.slots <- struct{}{}:
 	case <-ctx.Done():
 		return "", ctx.Err()
 	case <-timer.C:
 		return "", errShareUnreadable
+	}
+	if err := live(); err != nil {
+		<-p.slots
+		return "", err
 	}
 	type result struct {
 		real string
@@ -66,6 +83,9 @@ func (p *macShareProbe) run(ctx context.Context, check func() (string, error)) (
 	}()
 	select {
 	case r := <-done:
+		if err := live(); err != nil {
+			return "", err
+		}
 		return r.real, r.err
 	case <-ctx.Done():
 		return "", ctx.Err()

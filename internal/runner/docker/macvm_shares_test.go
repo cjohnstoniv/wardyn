@@ -42,7 +42,7 @@ func TestMacShareTarget(t *testing.T) {
 // so the next create waits for a slot and refuses at its own deadline; a cancelled create returns at
 // once; a late finish frees its slot, and its result is dropped.
 func TestMacShareProbeBounds(t *testing.T) {
-	p := &macShareProbe{slots: make(chan struct{}, 2), wait: 50 * time.Millisecond}
+	p := &macShareProbe{slots: make(chan struct{}, 2), wait: 50 * time.Millisecond, now: time.Now}
 	release := make(chan struct{})
 	var live, most atomic.Int32
 	stuck := func() (string, error) {
@@ -77,6 +77,29 @@ func TestMacShareProbeBounds(t *testing.T) {
 	}
 	if got, err := p.run(context.Background(), func() (string, error) { return "/ok", nil }); err != nil || got != "/ok" {
 		t.Fatalf("a quick check after the stuck ones: %q, %v", got, err)
+	}
+}
+
+// A cancelled create takes no free slot and runs no check, and a result that lands after the wait
+// is refused even when the create sees it first.
+func TestMacShareProbeFences(t *testing.T) {
+	ran := false
+	p := &macShareProbe{slots: make(chan struct{}, 1), wait: time.Hour, now: time.Now}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for i := 0; i < 50; i++ {
+		if _, err := p.run(ctx, func() (string, error) { ran = true; return "/ok", nil }); !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled create with a free slot: %v", err)
+		}
+	}
+	if ran || len(p.slots) != 0 {
+		t.Fatalf("a cancelled create ran its check (%v) or kept a slot (%d)", ran, len(p.slots))
+	}
+	clock := time.Now()
+	p.now = func() time.Time { return clock }
+	late := func() (string, error) { clock = clock.Add(2 * time.Hour); return "/ok", nil }
+	if got, err := p.run(context.Background(), late); !errors.Is(err, errShareUnreadable) {
+		t.Fatalf("a result after the wait: %q, %v; want errShareUnreadable", got, err)
 	}
 }
 
@@ -168,6 +191,17 @@ func TestMacVMShareRefusalsComeFirst(t *testing.T) {
 		if ms := r.eng.Machines(); len(ms) != 0 {
 			t.Errorf("%s: a machine was built", name)
 		}
+	}
+	// A create cancelled before its folders are checked is refused before anything exists too.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	spec := macSpec()
+	spec.Mounts = []runner.Mount{{Source: roots, Target: "/home/agent/w", ReadOnly: true}}
+	if _, err := r.d.CreateSandbox(ctx, spec); !errors.Is(err, context.Canceled) {
+		t.Errorf("cancelled create: %v", err)
+	}
+	if runs, _ := os.ReadDir(r.c.Layout.RunsDir()); len(runs) != 0 || len(r.eng.Machines()) != 0 {
+		t.Errorf("cancelled create: run directories %v, machines %d", runs, len(r.eng.Machines()))
 	}
 }
 
