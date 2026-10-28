@@ -5,7 +5,10 @@ package proxy
 
 import (
 	"bytes"
+	"context"
+	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -13,6 +16,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/armscope"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // TestTerminatesTLSMatchesHandleConnect pins Config.TerminatesTLS to the decision handleConnect
@@ -223,7 +227,8 @@ func TestTerminatedHosts(t *testing.T) {
 
 func TestTerminatedOutside(t *testing.T) {
 	c := &Config{MITMHosts: []string{"a.corp.example", "b.corp.example:8443", "c.other.example"}, MITMLLM: true,
-		MITMCACertPEM: "cert", MITMCAKeyPEM: "key", ViaOrgRoutes: []ViaOrgRoute{{GrantID: uuid.New(), Host: "v.corp.example"}}}
+		MITMCACertPEM: "cert", MITMCAKeyPEM: "key", ViaOrgRoutes: []ViaOrgRoute{{GrantID: uuid.New(), Host: "v.corp.example"}},
+		Policy: types.RunPolicySpec{AllowAllEgress: true}}
 	for _, tc := range []struct {
 		name    string
 		allowed []string
@@ -232,8 +237,9 @@ func TestTerminatedOutside(t *testing.T) {
 		{"nothing allowed", nil, []string{"a.corp.example", "api.anthropic.com", "api.openai.com", "b.corp.example:8443", "c.other.example", "v.corp.example"}},
 		{"exact and bare cover host and host:port", []string{"a.corp.example", "b.corp.example", "api.anthropic.com", "api.openai.com", "c.other.example", "v.corp.example"}, []string{}},
 		{"a wildcard covers its hosts", []string{"*.corp.example", "*.anthropic.com", "*.openai.com", "c.other.example"}, []string{}},
-		{"a port-qualified entry covers that port only", []string{"b.corp.example:443", "v.corp.example:443"}, []string{"a.corp.example", "api.anthropic.com", "api.openai.com", "b.corp.example:8443", "c.other.example", "v.corp.example"}},
-		{"the matching port covers", []string{"b.corp.example:8443"}, []string{"a.corp.example", "api.anthropic.com", "api.openai.com", "c.other.example", "v.corp.example"}},
+		{"an exact entry names its own port only", []string{"b.corp.example:443", "v.corp.example:443"}, []string{"a.corp.example", "api.anthropic.com", "api.openai.com", "b.corp.example:8443", "c.other.example", "v.corp.example"}},
+		{"an exact entry on the terminated port names it", []string{"b.corp.example:8443"}, []string{"a.corp.example", "api.anthropic.com", "api.openai.com", "c.other.example", "v.corp.example"}},
+		{"a wildcard covers its ports only", []string{"*.corp.example:8443"}, []string{"a.corp.example", "api.anthropic.com", "api.openai.com", "c.other.example", "v.corp.example"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := c.TerminatedOutside(tc.allowed); !slices.Equal(got, tc.want) {
@@ -241,7 +247,104 @@ func TestTerminatedOutside(t *testing.T) {
 			}
 		})
 	}
-	if got := (&Config{MITMHosts: []string{"a.corp.example"}}).TerminatedOutside(nil); got == nil || len(got) != 0 {
+	if got := (&Config{MITMHosts: []string{"a.corp.example"}, Policy: c.Policy}).TerminatedOutside(nil); got == nil || len(got) != 0 {
 		t.Fatalf("without a CA = %#v, want an empty non-nil list", got)
+	}
+}
+
+// TestTerminatedOutsideMatchesConnect pins Config.TerminatedOutside to the decision the real *Proxy
+// gives a CONNECT: a terminated host no entry names is listed exactly when it is a via_org host, or the
+// proxy admits it or holds it for first-use approval, and not when it refuses it. The three-way result
+// (gateConnect) is checked against the proxy's own decideConnect for every host.
+func TestTerminatedOutsideMatchesConnect(t *testing.T) {
+	certPEM, keyPEM := genTestCA(t)
+	ca, err := newCertAuthority(certPEM, keyPEM)
+	if err != nil {
+		t.Fatalf("newCertAuthority: %v", err)
+	}
+	ghGrant := &GitHubAPIGrant{Grants: map[string]uuid.UUID{"o": uuid.New()}}
+	viaOrg := []ViaOrgRoute{{GrantID: uuid.New(), Host: "v.corp.example"}}
+	hosts := []string{"artifacts.corp.example:8443", "plain.corp.example"}
+	pol := func(mode types.FirstUseMode, allowAll bool, allowed, denied []string) types.RunPolicySpec {
+		return types.RunPolicySpec{FirstUseApproval: mode, AllowAllEgress: allowAll, AllowedDomains: allowed, DeniedDomains: denied}
+	}
+	for _, tc := range []struct {
+		name    string
+		llm     bool
+		portRul string
+		policy  types.RunPolicySpec
+		allowed []string
+		want    []string
+	}{
+		{"llm hosts over an allowlist without them are refused", true, "",
+			pol(types.FirstUseAlwaysDeny, false, []string{"pypi.org"}, nil), []string{"pypi.org"}, []string{"v.corp.example"}},
+		{"llm hosts a first-use review would hold are listed", true, "",
+			pol(types.FirstUseDenyWithReview, false, []string{"pypi.org"}, nil), []string{"pypi.org"},
+			[]string{"api.anthropic.com", "api.github.com:443", "api.openai.com", "artifacts.corp.example:8443", "plain.corp.example", "v.corp.example"}},
+		{"a door host outside the allowlist is refused, one on it is named", false, "",
+			pol(types.FirstUseAlwaysDeny, false, []string{"api.github.com"}, nil), []string{"api.github.com"}, []string{"v.corp.example"}},
+		{"under allow-all everything not denied is listed, a denied host is not", true, "",
+			pol(types.FirstUseAlwaysDeny, true, nil, []string{"api.openai.com", "plain.corp.example"}), nil,
+			[]string{"api.anthropic.com", "api.github.com:443", "artifacts.corp.example:8443", "v.corp.example"}},
+		{"a via_org host that is also denied is still listed", false, "",
+			pol(types.FirstUseAlwaysDeny, true, nil, []string{"v.corp.example"}), []string{"api.github.com", "plain.corp.example", "artifacts.corp.example"}, []string{"v.corp.example"}},
+		{"a port-scoped entry names an any-port host", false, "",
+			pol(types.FirstUseAlwaysDeny, false, []string{"plain.corp.example:8443"}, nil), []string{"plain.corp.example:8443"}, []string{"v.corp.example"}},
+		{"an entry on another port leaves a held scoped host listed", false, "",
+			pol(types.FirstUseDenyWithReview, false, []string{"artifacts.corp.example:443"}, nil), []string{"artifacts.corp.example:443"},
+			[]string{"api.github.com:443", "artifacts.corp.example:8443", "plain.corp.example", "v.corp.example"}},
+		{"an any-port host denied on 443 is listed where it is admitted", false, "",
+			pol(types.FirstUseAlwaysDeny, true, nil, []string{"plain.corp.example:443"}), nil,
+			[]string{"api.github.com:443", "artifacts.corp.example:8443", "plain.corp.example", "v.corp.example"}},
+		{"an any-port host denied on every web port and closed elsewhere is not", false, PortRuleOn,
+			pol(types.FirstUseAlwaysDeny, true, nil, []string{"plain.corp.example:443", "plain.corp.example:80"}), nil,
+			[]string{"api.github.com:443", "v.corp.example"}},
+		{"a method restriction without CONNECT refuses all but via_org", true, "",
+			types.RunPolicySpec{AllowAllEgress: true, AllowedMethods: []string{"GET"}}, nil, []string{"v.corp.example"}},
+		{"the port rule closes a scoped port", false, PortRuleOn,
+			pol(types.FirstUseAlwaysDeny, true, nil, nil), nil, []string{"api.github.com:443", "plain.corp.example", "v.corp.example"}},
+		{"the port rule dry run still admits it", false, PortRuleDryRun,
+			pol(types.FirstUseAlwaysDeny, true, nil, nil), nil, []string{"api.github.com:443", "artifacts.corp.example:8443", "plain.corp.example", "v.corp.example"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &Config{MITMHosts: hosts, MITMLLM: tc.llm, GitHubAPI: ghGrant, ViaOrgRoutes: viaOrg, PortRule: tc.portRul, Policy: tc.policy,
+				MITMCACertPEM: string(certPEM), MITMCAKeyPEM: string(keyPEM)}
+			p := newProxy(Options{
+				RunID: uuid.New(), Policy: CompilePolicy(tc.policy), Sink: &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+				Approval: newApprovalClient("http://127.0.0.1:1", newTokenSource("tok"), uuid.New(), http.DefaultClient), Resolver: publicResolver{}, CA: ca,
+				MITMHosts: hosts, MITMLLM: tc.llm, GitHubAPI: ghGrant, ViaOrgRoutes: viaOrg,
+			})
+			p.portRule = effectivePortRule(cfg.VM, cfg.PortRule)
+			got := cfg.TerminatedOutside(tc.allowed)
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("TerminatedOutside(%v) = %#v, want %#v", tc.allowed, got, tc.want)
+			}
+			canAsk := p.policy.FirstUseMode().RaisesApproval()
+			for _, tok := range cfg.TerminatedHosts() {
+				host, ps, scoped := strings.Cut(tok, ":")
+				ports := cfg.outsideProbePorts()
+				if scoped {
+					n, _ := strconv.Atoi(ps)
+					ports = []int{n}
+				}
+				_, isViaOrg := p.viaOrgRouteForHost(host)
+				want := false
+				for _, port := range ports {
+					d, _, _ := p.decideConnect(context.Background(), "", "", host, port)
+					real := map[egress.Decision]connectOutcome{egress.Allow: connectAdmit, egress.Pending: connectHold, egress.Deny: connectRefuse}[d]
+					req := egress.Request{Host: host, Port: port, Method: http.MethodConnect}
+					if g := gateConnect(context.Background(), req, p.evaluator, p.policy, p.portRule).outcome(canAsk); g != real {
+						t.Errorf("%s:%d: the gate decides %v, the proxy's CONNECT decision is %v (%v)", host, port, g, real, d)
+					}
+					if !cfg.TerminatesTLS(host, port) {
+						t.Errorf("%s:%d is probed but the proxy does not terminate it there", host, port)
+					}
+					want = want || !entryNames(tc.allowed, host, port) && (isViaOrg || real != connectRefuse)
+				}
+				if slices.Contains(got, tok) != want {
+					t.Errorf("%s: listed = %v, the proxy's own decision on ports %v (via_org %v) says %v", tok, slices.Contains(got, tok), ports, isViaOrg, want)
+				}
+			}
+		})
 	}
 }

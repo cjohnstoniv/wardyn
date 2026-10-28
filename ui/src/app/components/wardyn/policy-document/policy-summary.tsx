@@ -160,18 +160,17 @@ function summarize(
   const meanings: Meaning[] = [];
   const opened = (hosts: readonly string[] | undefined): Value[] =>
     (hosts ?? []).map((h) => mono(h, { end: hostChip(true) }));
+  const outside = opened(hostMarks?.outside);
   if (allowAll) {
-    // Nothing is listed, so every host the proxy opens is outside the allowlist.
-    const terminated = opened(hostMarks?.terminated);
-    network.push(row(SUMMARY.allowedHosts, [text(D.ALLOW_ALL), ...terminated]));
-    if (terminated.length > 0) meanings.push({ chip: hostChip(true), text: SUMMARY.inspectedMeaning });
+    // Nothing is listed, so the hosts the proxy opens are the ones outside the allowlist.
+    network.push(row(SUMMARY.allowedHosts, [text(D.ALLOW_ALL), ...outside]));
+    if (outside.length > 0) meanings.push({ chip: hostChip(true), text: SUMMARY.inspectedMeaning });
     if (hostMarks) meanings.push({ text: SUMMARY.tunnelOnlyAllowAll });
-  } else if (allowed) {
+  } else if (allowed || outside.length > 0) {
     const inspected = new Set(hostMarks?.inspected);
-    const hosts = entries(allowed, "allowed_domains").map((v) =>
+    const hosts = entries(allowed ?? [], "allowed_domains").map((v) =>
       hostMarks && v.text && v.mark !== "removed" ? { ...v, end: hostChip(inspected.has(v.text)) } : v,
     );
-    const outside = opened(hostMarks?.outside);
     network.push(row(SUMMARY.allowedHosts, hosts.length + outside.length > 0 ? [...hosts, ...outside] : [text(SUMMARY.none)]));
     if (hosts.concat(outside).some((v) => v.end?.label === SUMMARY.inspected)) {
       meanings.push({ chip: hostChip(true), text: SUMMARY.inspectedMeaning });

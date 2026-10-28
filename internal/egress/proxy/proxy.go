@@ -611,15 +611,15 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 		return egress.Deny, "", &log
 	}
 
-	// 1. Policy host verdict (deny beats allow, default-deny) — delegated to the
-	// pluggable Evaluator (default: builtin RunPolicySpec). An evaluator error
-	// fails closed. The IP guard (step 0), first-use approval (step 2), and IP
-	// vetting (step 4) stay HARDWIRED around this verdict regardless of engine.
-	verdict, verr := p.evaluator.EvaluateHost(ctx, req)
-	if verr != nil {
-		log := decisionLog(req, egress.Deny, "policy:evaluator-error")
+	// 1-2. The part of the decision the config alone makes (connect_gate.go): the policy host verdict,
+	// the port rule and the method restriction, in that order. The IP guard (step 0), first-use approval
+	// (step 3), and IP vetting (step 4) stay HARDWIRED around it regardless of engine.
+	gate := gateConnect(ctx, req, p.evaluator, p.policy, p.portRule)
+	if gate.refusal != "" {
+		log := decisionLog(req, egress.Deny, gate.refusal)
 		return egress.Deny, "", &log
 	}
+	verdict, portDryRun := gate.verdict, gate.portDryRun
 	// approvalID records whether (and via which approval) this request's verdict
 	// was RELEASED by the first-use approval flow, so the eventual Allow decision
 	// below can attribute to "approval:<id>" instead of "policy:allowed" — a
@@ -628,48 +628,6 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 	// who approved the egress. Zero == this request never went
 	// through approval (a direct policy allow).
 	var approvalID uuid.UUID
-
-	if verdict == egress.VerdictDeny {
-		log := decisionLog(req, egress.Deny, "policy:denied")
-		return egress.Deny, "", &log
-	}
-	// The port rule (port_rule.go) sits below policy:denied and above the method
-	// check and the approval raise: an approval is host-wide and never opens a
-	// port, so asking for one the rule refuses is a question the answer cannot
-	// change.
-	portDryRun := false
-	if p.portRuleRefuses(host, port) {
-		if p.portRule == PortRuleOn {
-			log := decisionLog(req, egress.Deny, ruleSourcePort)
-			return egress.Deny, "", &log
-		}
-		portDryRun = true
-	}
-
-	// 2. Method restriction (CONNECT counts as method "CONNECT"), applied BEFORE
-	// the first-use approval flow below.
-	//
-	// The method check runs BEFORE the first-use approval raise because it
-	// depends on nothing the approval produces, so refusing first is free. If it
-	// ran after the raise, a request whose method can NEVER pass —
-	// allowed_methods=["GET"] and the sandbox sends POST — would still POST an
-	// egress_domain ApprovalRequest to the control plane, and under
-	// wait_for_review would PARK the connection in ResolveWait until a human
-	// answered or the hold deadline passed: a human asked to decide egress for a
-	// request the very next step refuses unconditionally. Since the SANDBOX picks
-	// the method, it also picks how many approval rows and hold slots it can
-	// create — N POSTs to N unknown hosts under a GET-only policy would fill the
-	// operator's queue and saturate max_holds, stalling the run's legitimate
-	// first-use approvals. Running the check first also stops a method-denied
-	// request from SPENDING a scope=once grant (the trade-off approvals.go
-	// documents for the already-granted half of this ordering).
-	//
-	// Order against policy:denied is unchanged: a host the policy denies outright
-	// still logs policy:denied, never policy:method.
-	if !p.evaluator.MethodAllowed(req.Method) {
-		log := decisionLog(req, egress.Deny, "policy:method")
-		return egress.Deny, "", &log
-	}
 
 	// B6, and it sits HERE — above the first-use approval flow, below
 	// policy:denied/policy:method — for the reason privateIPMemoHit's own doc

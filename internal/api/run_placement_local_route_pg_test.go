@@ -263,6 +263,54 @@ func TestPG_LocalRun_RepositoryGoesThroughTheBroker(t *testing.T) {
 	assertMarksAreThoseOfTheConfigSent(t, e.h.audit.snapshot(), run.ID, spec)
 }
 
+// A via_org host the runner's proxy terminates is listed Terminated and Outside by the real local dispatch.
+// The run asks for intercept_tls, so dispatch mints the run's CA (without a CA the proxy terminates nothing,
+// and the via_org host is correctly not listed: TestPG_LocalRun_RepositoryGoesThroughTheBroker). Dispatch's
+// confineBrokerEgress moves github.com out of allowed_domains into denied_domains, so the host is no
+// Inspected allowlist entry; the via_org route is the organisation's to decide, so the proxy opens it
+// whatever the policy says, and it is Outside. api.openai.com is a model route the proxy would refuse
+// (the allowlist lacks it), so it is not.
+func TestPG_LocalRun_ViaOrgHostIsListedOutside(t *testing.T) {
+	e := newPlacementEnv(t)
+	laptops := e.createPool("Laptops", types.RunnerPoolUser)
+	awake := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2, types.CC3)
+	e.addToPool(e.person, laptops.ID, awake)
+	e.stream(awake, types.CC1, types.CC2, types.CC3)
+	e.srv.cfg.DefaultPolicy.EligibleGrants = append(e.srv.cfg.DefaultPolicy.EligibleGrants, types.GrantSpec{Kind: types.GrantGitHubToken, Scope: json.RawMessage(`{"repos":["acme/widgets"]}`)})
+	if _, err := e.pg.PutCredentialDeliveryPolicy(context.Background(), json.RawMessage(`{"classes":{"github_token":{"mode":"via_org"}}}`), "seed", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	body := runBody(`"runner_pool_id":"` + laptops.ID.String() + `","inline_policy":{"min_confinement_class":"CC2","allowed_domains":["github.com"],` +
+		`"llm_inspection":{"mode":"alert","detect_secret_patterns":true,"intercept_tls":true},` +
+		`"eligible_grants":[{"kind":"github_token","scope":{"repos":["acme/widgets"]}}]}`)
+	run := e.localCreate(body)
+	sent := e.dispatchedSpec(run.ID)
+	const host = "github.com"
+	if !slices.ContainsFunc(sent.ProxyConfig.ViaOrgRoutes, func(r proxy.ViaOrgRoute) bool { return r.Host == host }) {
+		t.Fatalf("the runner's proxy has no via_org route for %s: %+v", host, sent.ProxyConfig.ViaOrgRoutes)
+	}
+	if sent.ProxyConfig.MITMCACertPEM == "" {
+		t.Fatal("dispatch minted no CA for the run, so the proxy terminates nothing; the fixture is broken")
+	}
+	env, marks := assertMarksAreThoseOfTheConfigSent(t, e.h.audit.snapshot(), run.ID, sent)
+	// confineBrokerEgress (runs_dispatch_gitbroker.go) denies the broker's hosts and drops them from the allowlist.
+	if !slices.Contains(env.DeniedDomains, host) {
+		t.Fatalf("denied_domains = %v, want %s (confineBrokerEgress)", env.DeniedDomains, host)
+	}
+	if !slices.Contains(marks.Outside, host) {
+		t.Errorf("outside = %v, want the via_org host %s", marks.Outside, host)
+	}
+	if !terminatesHost(marks.Terminated, host) {
+		t.Errorf("terminated = %v, want the via_org host %s", marks.Terminated, host)
+	}
+	if !terminatesHost(marks.Terminated, "api.openai.com") {
+		t.Fatalf("terminated = %v lacks api.openai.com, so its absence from outside proves nothing", marks.Terminated)
+	}
+	if slices.Contains(marks.Outside, "api.openai.com") {
+		t.Errorf("outside = %v lists api.openai.com, which the proxy refuses over this allowlist", marks.Outside)
+	}
+}
+
 // LE-6: on the person's own runner, a Background run that asks for more CPU and memory than the runner
 // holds is created, reduced to the runner's capacity with source runner_capacity, and dispatched to that
 // runner at the reduced size.

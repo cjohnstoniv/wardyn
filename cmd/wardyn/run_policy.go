@@ -151,18 +151,18 @@ func runPolicyHeaderLines(v sdk.RunPolicyView, person string) []string {
 
 // runPolicyHostLines marks each allowed host Inspected or Tunnel only, then each host the proxy opens
 // outside the allowlist as Inspected, then says what each mark means. Nothing for a run that recorded
-// no marks. Under allow-all, every host the proxy opens as Inspected, then the one line that says every
-// host not listed passes through unread.
+// no marks. Under allow-all, the hosts the proxy opens outside the allowlist as Inspected, then the one
+// line that says every host not listed passes through unread.
 func runPolicyHostLines(v sdk.RunPolicyView) []string {
 	if v.HostMarks == nil || v.Spec == nil {
 		return nil
 	}
 	var lines []string
 	if v.Spec.AllowAllEgress {
-		for _, host := range v.HostMarks.Terminated {
+		for _, host := range v.HostMarks.Outside {
 			lines = append(lines, host+": "+runPolicyInspected)
 		}
-		if len(v.HostMarks.Terminated) > 0 {
+		if len(v.HostMarks.Outside) > 0 {
 			lines = append(lines, runPolicyInspected+": "+runPolicyInspectedMeaning)
 		}
 		return append(lines, runPolicyTunnelOnlyAllowAll)

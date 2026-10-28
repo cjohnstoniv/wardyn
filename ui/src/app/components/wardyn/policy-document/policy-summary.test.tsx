@@ -362,10 +362,11 @@ describe("PolicySummary host marks", () => {
     const { container } = render(
       <PolicySummary
         spec={{ ...spec, allow_all_egress: true } as RunPolicySpec}
-        hostMarks={{ inspected: [], terminated: ["api.github.com", "api.anthropic.com"], outside: [] }}
+        hostMarks={{ inspected: [], terminated: ["api.github.com", "api.anthropic.com", "api.openai.com"], outside: ["api.github.com", "api.anthropic.com"] }}
       />,
     );
     expect(screen.queryByText("pypi.org")).toBeNull();
+    expect(screen.queryByText("api.openai.com")).toBeNull(); // terminated, but the proxy refuses it: not outside
     const text = container.textContent ?? "";
     const at = [ALLOW_ALL_TEXT, "api.github.com", "api.anthropic.com", INSPECTED_MEANING, ALLOW_ALL_LINE].map((s) => text.indexOf(s));
     expect(at.every((i) => i >= 0)).toBe(true);
@@ -375,6 +376,12 @@ describe("PolicySummary host marks", () => {
     expect(screen.queryByText(TUNNEL_MEANING)).toBeNull();
     const line = screen.getByText(ALLOW_ALL_LINE);
     expect(line.closest("p")?.children).toHaveLength(1); // the text only, no chip beside it
+  });
+
+  it("a null allowlist with an outside host still shows that host's Inspected row", () => {
+    render(<PolicySummary spec={{ allowed_domains: null } as unknown as RunPolicySpec} hostMarks={{ inspected: [], terminated: ["api.github.com"], outside: ["api.github.com"] }} />);
+    expect(within(row("api.github.com")).getByText(INSPECTED)).toBeInTheDocument();
+    expect(screen.getByText(INSPECTED_MEANING)).toBeInTheDocument();
   });
 
   it("allow-all with nothing opened: the line and the allow-all line only", () => {
