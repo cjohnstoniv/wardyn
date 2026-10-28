@@ -39,6 +39,7 @@ const ACTION_VERB: Record<string, string> = {
   "identity.mint": "minted a workload identity",
   "identity.revoke": "revoked a workload identity",
   "run.bedrock.configure": "configured Bedrock model access for the run",
+  "run.aws_cli.configure": "configured the AWS CLI for the run",
   // Deliberately NOT "the managed subscription credential": the same action
   // fires for source="subscription" (the operator's own resident Anthropic
   // OAuth token) as for source="managed" (the Wardyn-captured one), and only
@@ -156,4 +157,37 @@ export function describeAction(e: AuditEvent): string {
 /** The target for its own column: the row's target as it is, or the sentence's stand-in ("an unknown host"). */
 export function describeObject(e: AuditEvent): string {
   return e.target || describeParts(e).object;
+}
+
+const BEDROCK_SIGNING: Record<string, "proxy" | "role" | "session"> = {
+  "sso-sigv4-proxy": "proxy",
+  "sso-inject-proxy": "role",
+  "sso-inject": "session",
+};
+
+// awsSigningLine is how dispatch set a run's AWS sign-in lane up, from its run.bedrock.configure or
+// run.aws_cli.configure row, or null for any other row. A Bedrock row is read by its recorded mode (an
+// older row carries no aws_signing), so only the three sign-in modes get a line; bearer and an unknown
+// mode get none. Where the sign-in session sits comes from the mode, never from the reason.
+export function awsSigningLine(e: AuditEvent): { text: string; sandbox: boolean } | null {
+  const d = e.data ?? {};
+  let where: "proxy" | "role" | "session" | null = null;
+  if (e.action === "run.bedrock.configure") {
+    where = BEDROCK_SIGNING[String(d.mode)] ?? null;
+  } else if (e.action === "run.aws_cli.configure") {
+    where = d.aws_signing === "proxy" ? "proxy" : d.aws_signing === "sandbox" ? "role" : null;
+  }
+  if (where === null) return null;
+  if (where === "proxy") return { text: AUDIT.AWS_SIGNING_PROXY, sandbox: false };
+  const code = typeof d.aws_signing_reason === "string" ? d.aws_signing_reason : "";
+  const host = typeof d.aws_signing_host === "string" ? d.aws_signing_host : "";
+  const reason =
+    code === ""
+      ? AUDIT.AWS_SIGNING_NOT_RECORDED
+      : code === "port"
+        ? AUDIT.AWS_SIGNING_PORT(host)
+        : code === "unsigned_host"
+          ? AUDIT.AWS_SIGNING_UNSIGNED_HOST(host)
+          : (AUDIT.AWS_SIGNING_REASON[code] ?? code);
+  return { text: where === "session" ? AUDIT.AWS_SIGNING_SANDBOX_SESSION(reason) : AUDIT.AWS_SIGNING_SANDBOX(reason), sandbox: true };
 }

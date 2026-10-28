@@ -33,6 +33,21 @@ export const AUDIT = {
   EXPIRED_DELETE_EXPIRED_FAILED: "Could not remove a stored sign-in that had expired",
   // A run.build row the image cache answered (data.cache_hit): nothing was built.
   REUSED_IMAGE: "Reused the cached sandbox image",
+  // Mock packet rc.6 §2b (approved 2026-10-28): how dispatch set an AWS sign-in lane up, from the
+  // run.bedrock.configure / run.aws_cli.configure row (aws_signing, and the recorded mode).
+  AWS_SIGNING_PROXY: "AWS signing set up at the proxy: the sandbox gets no role credentials",
+  AWS_SIGNING_SANDBOX: (reason: string) => `AWS signing set up in the sandbox, which gets role credentials: ${reason}`,
+  AWS_SIGNING_SANDBOX_SESSION: (reason: string) =>
+    `AWS signing set up in the sandbox, which gets the sign-in session and role credentials: ${reason}`,
+  AWS_SIGNING_REASON: {
+    off: "signing at the proxy is off on this deployment",
+    sso_proxy_inject_off: "proxy-side AWS sign-in is off on this deployment",
+    endpoint_override: "this deployment uses its own AWS sign-in endpoint",
+    no_aws_host: "the run names no AWS host",
+  } as Record<string, string>,
+  AWS_SIGNING_PORT: (host: string) => `${host} is not on port 443`,
+  AWS_SIGNING_UNSIGNED_HOST: (host: string) => `the proxy can't sign for ${host}`,
+  AWS_SIGNING_NOT_RECORDED: "fallback reason not recorded",
 } as const;
 
 // Short, human verbs for the actions we know about, shared by the Audit screen
@@ -67,6 +82,7 @@ const ACTION_VERB: Record<string, string> = {
   "identity.mint": "minted a workload identity",
   "identity.revoke": "revoked a workload identity",
   "run.bedrock.configure": "configured Bedrock model access for the run",
+  "run.aws_cli.configure": "configured the AWS CLI for the run",
   // Deliberately NOT "the managed subscription credential": the same action
   // fires for source="subscription" (the operator's own resident Anthropic
   // OAuth token) as for source="managed" (the Wardyn-captured one), and only

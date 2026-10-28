@@ -39,7 +39,7 @@ import { LIST_LIMIT } from "../../lib/api/core";
 import { appURL } from "../../lib/base-path";
 import { useCopyToClipboard } from "../../lib/use-copy-to-clipboard";
 import { absoluteTime, clockTime, getErrorMessage } from "../../lib/format";
-import { describeAction, describeEvent, describeObject } from "../../lib/audit-copy";
+import { awsSigningLine, describeAction, describeEvent, describeObject } from "../../lib/audit-copy";
 import { Button } from "../ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { ActorTypeChip } from "../wardyn/primitives";
@@ -519,51 +519,63 @@ function AuditTab({
       ) : (
         <div className="overflow-hidden rounded-xl border border-border bg-card">
           <div className="divide-y divide-border">
-            {events.map((e) => (
-              // One line from sm up; below sm the target drops to a second line of its own (#2917).
-              <div key={e.id} data-testid="run-audit-row" className={`flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 ${isAttributedRefusal(e) && !toolRuleDecision(e) ? "sm:flex-wrap" : "sm:flex-nowrap"}`}>
-                <span
-                  data-testid="run-audit-time"
-                  className="w-[84px] shrink-0 whitespace-nowrap font-mono text-meta text-muted-foreground"
-                  title={absoluteTime(e.time)}
-                >
-                  {clockTime(e.time)}
-                </span>
-                {/* A fixed slot, so the action and target columns start at one x for every actor. */}
-                <span className="inline-flex w-[88px] shrink-0">
-                  <ActorTypeChip type={e.actor_type} />
-                </span>
-                <span
-                  data-testid="run-audit-action"
-                  className="min-w-0 grow basis-[120px] truncate text-xs text-foreground sm:w-[190px] sm:grow-0 sm:basis-auto sm:shrink-0"
-                  title={`${describeEvent(e)}\n${e.action}`}
-                >
-                  {describeAction(e)}
-                </span>
-                {/* A tool call the policy's own tool_rules answered rides an
-                    egress.allow/deny row whose target is the CONTROL PLANE —
-                    so the row says who decided, as the Audit screen does. */}
-                {toolRuleDecision(e) ? (
-                  <AuditDecision event={e} className="flex min-w-0 grow basis-full items-center gap-2 text-xs sm:basis-0" />
-                ) : (
-                  <span data-testid="run-audit-target" className="flex min-w-0 grow basis-full items-center gap-2 sm:basis-0">
-                    {e.target === ERASED_VALUE ? (
-                      <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground" title={AUDIT.ERASED_HINT}>
-                        {AUDIT.ERASED}
-                      </span>
-                    ) : (
-                      // #3035: the viewed run's own id says nothing the page does not.
-                      <span className="min-w-0 flex-1 truncate text-xs text-foreground" title={e.target === runId ? undefined : e.target}>
-                        {e.target === runId ? "" : describeObject(e) || "—"}
-                      </span>
-                    )}
-                    <RuleSourceChip event={e} />
-                    <ErasedFields event={e} className="shrink-0 text-xs" />
+            {events.map((e) => {
+              const signing = awsSigningLine(e);
+              return (
+                // One line from sm up; below sm the target drops to a second line of its own (#2917).
+                <div key={e.id} data-testid="run-audit-row" className={`flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 ${(isAttributedRefusal(e) && !toolRuleDecision(e)) || signing ? "sm:flex-wrap" : "sm:flex-nowrap"}`}>
+                  <span
+                    data-testid="run-audit-time"
+                    className="w-[84px] shrink-0 whitespace-nowrap font-mono text-meta text-muted-foreground"
+                    title={absoluteTime(e.time)}
+                  >
+                    {clockTime(e.time)}
                   </span>
-                )}
-                {!toolRuleDecision(e) && isAttributedRefusal(e) && <PolicyRemedy policy={policy} className="basis-full" />}
-              </div>
-            ))}
+                  {/* A fixed slot, so the action and target columns start at one x for every actor. */}
+                  <span className="inline-flex w-[88px] shrink-0">
+                    <ActorTypeChip type={e.actor_type} />
+                  </span>
+                  <span
+                    data-testid="run-audit-action"
+                    className="min-w-0 grow basis-[120px] truncate text-xs text-foreground sm:w-[190px] sm:grow-0 sm:basis-auto sm:shrink-0"
+                    title={`${describeEvent(e)}\n${e.action}`}
+                  >
+                    {describeAction(e)}
+                  </span>
+                  {/* A tool call the policy's own tool_rules answered rides an
+                      egress.allow/deny row whose target is the CONTROL PLANE —
+                      so the row says who decided, as the Audit screen does. */}
+                  {toolRuleDecision(e) ? (
+                    <AuditDecision event={e} className="flex min-w-0 grow basis-full items-center gap-2 text-xs sm:basis-0" />
+                  ) : (
+                    <span data-testid="run-audit-target" className="flex min-w-0 grow basis-full items-center gap-2 sm:basis-0">
+                      {e.target === ERASED_VALUE ? (
+                        <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground" title={AUDIT.ERASED_HINT}>
+                          {AUDIT.ERASED}
+                        </span>
+                      ) : (
+                        // #3035: the viewed run's own id says nothing the page does not.
+                        <span className="min-w-0 flex-1 truncate text-xs text-foreground" title={e.target === runId ? undefined : e.target}>
+                          {e.target === runId ? "" : describeObject(e) || "—"}
+                        </span>
+                      )}
+                      <RuleSourceChip event={e} />
+                      <ErasedFields event={e} className="shrink-0 text-xs" />
+                    </span>
+                  )}
+                  {!toolRuleDecision(e) && isAttributedRefusal(e) && <PolicyRemedy policy={policy} className="basis-full" />}
+                  {/* Mock packet rc.6 §2b: its own wrapping line, so a long endpoint host is never cut. */}
+                  {signing && (
+                    <span
+                      data-testid="run-audit-aws-signing"
+                      className={`basis-full break-words text-xs sm:pl-[208px] ${signing.sandbox ? "text-warning" : "text-muted-foreground"}`}
+                    >
+                      {signing.text}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
