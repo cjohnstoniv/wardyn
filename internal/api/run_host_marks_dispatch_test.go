@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"slices"
 	"strings"
@@ -90,10 +91,15 @@ func TestDispatchRecordsTheMarksOfTheConfigSent_FilePlaceholder(t *testing.T) {
 				policy: types.RunPolicySpec{
 					AllowedDomains:      []string{placeholderHost, "pypi.org"},
 					MinConfinementClass: types.CC1,
-					EligibleGrants:      []types.GrantSpec{hostScoped(t, fileSecretGrant("api-token", "corp-token", false))},
+					EligibleGrants:      []types.GrantSpec{hostScoped(t, fileSecretGrant("api-token", "walled-token", false))},
 				},
 				mutate: func(srv *Server) {
+					// A one-line value: fileSecretServer's operator rows end in a line break, which
+					// cannot ride a request header, so no placeholder would be authored.
 					_, sec, _ := fileSecretServer(t)
+					if err := sec.For("").Put(context.Background(), "walled-token", []byte("walled-own-value-0001")); err != nil {
+						t.Fatal(err)
+					}
 					srv.cfg.Secrets, srv.cfg.MaskRegistry = sec, secretmask.NewRegistry()
 					srv.cfg.FileSecretPlaceholders = tc.on
 				},
