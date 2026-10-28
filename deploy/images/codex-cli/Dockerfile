@@ -193,9 +193,8 @@ RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi 
 # machine type (byte 18: 0x3e amd64, 0xb7 arm64), as claude-code's is. Anything else (not ELF, such as
 # a launcher script, or another machine type) installs as before.
 ARG TARGETARCH
-# A stalled registry request is retried by npm itself well inside the 180 s attempt (60 s, one retry, 5 s
-# apart), and --loglevel=http logs every fetch with its time, so an attempt that still runs out says
-# whether it was waiting on the registry or installing.
+# npm bounds each registry request and its one retry (60 s, 5 s apart) inside the 180 s attempt; the fetch
+# log (--loglevel=http) and each attempt's duration aid diagnosis when an install still fails.
 COPY deploy/images/README.md deploy/images/codex-cli/codex-bin* /codex-stage/
 RUN set -eu; \
     if [ "$CODEX_INSTALL" = "native" ]; then \
