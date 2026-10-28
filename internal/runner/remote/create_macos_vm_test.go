@@ -77,21 +77,29 @@ func TestCreateLinuxVMNeedsTheRunnersLinuxVMCaps(t *testing.T) {
 	notSent(t, rig)
 }
 
-// A macOS VM that carries a folder is refused with the folder-share sentence, even on a runner that
-// offers macOS VMs; one without a folder passes the org's check and reaches the runner, which here
-// serves no create_vm and so answers the call itself.
-func TestCreateMacOSVMTakesNoFolder(t *testing.T) {
+// A macOS VM that carries a folder is refused with the macOS folder sentence on a runner that offers
+// macOS VMs but not folder shares; with no folder, or on a runner that shares folders, it passes the
+// org's check and reaches the runner, which here serves no create_vm and so answers the call itself.
+func TestCreateMacOSVMFolderNeedsTheCap(t *testing.T) {
 	rig := runnertest.NewRig(t, rid)
 	advertiseKinds(t, rig, nil, &runnerwire.MacVMCaps{Max: 2, Base: runnerwire.MacVMBase{State: runnerwire.MacVMBaseReady}})
-	spec := macSpec()
-	spec.Mounts = []runner.Mount{{Source: "/Users/me/project", Target: "/Users/agent/work", MemberAuthored: true}}
-	if _, err := rig.Sub.CreateSandbox(ctxT(t), spec); err == nil || !strings.Contains(err.Error(), remote.VMNoFolderShare) {
-		t.Fatalf("macOS VM with a folder = %v, want the folder-share refusal", err)
+	withFolder := macSpec()
+	withFolder.Mounts = []runner.Mount{{Source: "/Users/me/project", Target: "/home/agent/work", MemberAuthored: true}}
+	if _, err := rig.Sub.CreateSandbox(ctxT(t), withFolder); err == nil || !strings.Contains(err.Error(), runner.MacVMNoFolderShare) {
+		t.Fatalf("macOS VM with a folder = %v, want the macOS folder-share refusal", err)
 	}
 	notSent(t, rig)
-
-	_, err := rig.Sub.CreateSandbox(ctxT(t), macSpec())
-	if err == nil || strings.Contains(err.Error(), remote.MacOSVMNotOffered("This runner")) || strings.Contains(err.Error(), remote.VMNoFolderShare) {
-		t.Fatalf("macOS VM with no folder = %v, want the org's checks passed and the runner's own answer", err)
+	passed := func(what string, err error) {
+		t.Helper()
+		if err == nil || strings.Contains(err.Error(), remote.MacOSVMNotOffered("This runner")) || strings.Contains(err.Error(), runner.MacVMNoFolderShare) {
+			t.Fatalf("%s = %v, want the org's checks passed and the runner's own answer", what, err)
+		}
 	}
+	_, err := rig.Sub.CreateSandbox(ctxT(t), macSpec())
+	passed("macOS VM with no folder", err)
+
+	sharing := runnertest.NewRig(t, rid)
+	advertiseKinds(t, sharing, nil, &runnerwire.MacVMCaps{Max: 2, Folders: true, Base: runnerwire.MacVMBase{State: runnerwire.MacVMBaseReady}})
+	_, err = sharing.Sub.CreateSandbox(ctxT(t), withFolder)
+	passed("macOS VM with a folder on a runner that shares folders", err)
 }
