@@ -103,7 +103,8 @@ docs/operations/admin-only-writes.md=3855 share=35 # tightened from 3738 to the 
 # docs/operations/three-roles.md 4682 adds 5 (0.10 API-2): a baseline mark covers that host only.
 # docs/operations/three-roles.md 4734 adds 52 over 4682, measured (0.10 unit admins): a unit admin is a grant on a unit, not a fourth role.
 # docs/operations/three-roles.md 4772 = ours 4734 + theirs 4720 - base 4682 at the 0.10 UNIT-ADMIN merge of RESTRICT-PIN 35c385de1.
-docs/operations/three-roles.md=4772 share=35
+# docs/operations/three-roles.md 4788 = 4772 + 16, measured: a unit PUT takes the unit as GET returns it.
+docs/operations/three-roles.md=4788 share=35
 # docs/operations/provider-policy.md 1362 adds 84 over 1278, measured (0.10.0 GHPAT): the GitHub per_user row that takes each person's own token.
 # docs/operations/provider-policy.md 1382 adds 20 over 1362, measured (0.10.0 GHPAT r2): a run cannot mix a shared and a personal-token GitHub row.
 docs/operations/provider-policy.md=1382 share=35

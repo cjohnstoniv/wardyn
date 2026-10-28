@@ -15,6 +15,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - A failed macOS VM start no longer keeps its VM in the helper until the helper exits (#3708). Each failed attempt
   kept one, and a first boot's retries on the auxiliary storage lock can make several.
+- `PUT /governance/units/{id}` now takes a unit as `GET /governance` returns it, so GET, change one field and PUT the
+  rest works. It refused the body with `unknown field "id"` (`governance_unit_request_invalid`); the server-set fields
+  are now ignored, and a field GET never returns is still refused.
 - A macOS VM prepare or start on a Mac in ordinary use is no longer refused for memory macOS can reclaim within
   seconds. The live check counted only free, inactive and speculative pages, which on a 32 GiB Mac in use stayed
   under the VM's memory plus the 2 GiB margin while macOS's own memory pressure reported nearly half of memory free. It
