@@ -1527,7 +1527,9 @@ jobs:
   # scope=candidate: a watched job must never be skipped.
   kind-survival-walk:
     runs-on: ubuntu-26.04
-    timeout-minutes: 30
+    # 50: the walk measured 16-18 minutes (four green nightlies on 2026-10-28) and the prewrapped check adds
+    # about five, so twice the new maximum.
+    timeout-minutes: 50
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
@@ -1585,12 +1587,41 @@ jobs:
             exit 1
           fi
           grep -q '^kind-survival-walk: PASS' "$log" || { echo "::error::the walk never reached its own closing PASS line"; exit 1; }
+      # A prewrapped image's check on this cluster (design final §3; internal/runner/k8s/imagecheck_kind_test.go):
+      # agent-base passes, agent-base without wardyn-rec is refused, and a check whose process is killed is
+      # reclaimed by the orphan sweep. Its own PSS-restricted namespace, so the cluster's wardynd never sweeps
+      # it; the internal kubeconfig because the boot canary dials the apiserver's address from a pod.
+      - name: Prewrapped image check on the cluster (real image, killed control plane)
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'FROM wardyn/agent-base:local\nUSER root\nRUN rm /usr/local/bin/wardyn-rec\nUSER agent\n' \
+            | docker build -t wardyn/agent-base:prewrap-no-rec -
+          kind load docker-image wardyn/agent-base:prewrap-no-rec --name wardyn-quickstart
+          kubectl --context kind-wardyn-quickstart create namespace wardyn-prewrap-check
+          kubectl --context kind-wardyn-quickstart label namespace wardyn-prewrap-check \
+            pod-security.kubernetes.io/enforce=restricted
+          NODE_IP=$(kubectl --context kind-wardyn-quickstart get nodes wardyn-quickstart-control-plane \
+            -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}')
+          kind get kubeconfig --name wardyn-quickstart --internal \
+            | sed "s/wardyn-quickstart-control-plane:6443/${NODE_IP}:6443/" > "$RUNNER_TEMP/prewrap.kc"
+          mkdir -p test/reports/e2e
+          KUBECONFIG="$RUNNER_TEMP/prewrap.kc" WARDYN_TEST_K8S=1 WARDYN_K8S_NAMESPACE=wardyn-prewrap-check \
+            WARDYN_PROXY_IMAGE=wardyn/wardyn-proxy:quickstart WARDYN_TEST_PREWRAP_IMAGE=wardyn/agent-base:local \
+            WARDYN_TEST_PREWRAP_NO_REC_IMAGE=wardyn/agent-base:prewrap-no-rec \
+            go test -tags k8s -count=1 -v -timeout 15m -run '^TestKindPrewrappedCheck' ./internal/runner/k8s/ \
+            2>&1 | tee test/reports/e2e/prewrap-check.log
+          # A skip exits 0: both tests must have run and passed.
+          grep -q '^--- PASS: TestKindPrewrappedCheck ' test/reports/e2e/prewrap-check.log
+          grep -q '^--- PASS: TestKindPrewrappedCheckControlPlaneKilled ' test/reports/e2e/prewrap-check.log
       - name: Upload walk evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: kind-survival-walk-results
-          path: test/reports/e2e/kind-survival-walk.log
+          path: |
+            test/reports/e2e/kind-survival-walk.log
+            test/reports/e2e/prewrap-check.log
           if-no-files-found: error
 
   # scripts/k6-kind-conformance.sh, the Kubernetes runner's kind conformance. It creates and

@@ -12,11 +12,16 @@
 // Its own resource, like the Agents tab: it reads and writes itself, and its
 // one teal button is Add image, so the screen's Save providers is withheld
 // while it is open.
+//
+// A pre-wrapped image (design final §3, the approved final-prewrap mock) runs
+// as is: Add image offers it as "How it runs", the row shows its check on the
+// cluster, and a refused or cut-short check gets Check again. A security admin
+// reaches this tab on its own page and adds pre-wrapped images only.
 import * as React from "react";
 import { AlertTriangle, Container, Loader2 } from "lucide-react";
 import { baseImages } from "../../../lib/api/base-images";
-import { getErrorMessage } from "../../../lib/format";
-import { AVAILABILITY, IMAGES } from "../../../lib/availability-copy";
+import { getErrorMessage, shortDate } from "../../../lib/format";
+import { AVAILABILITY, IMAGES, PREWRAPPED } from "../../../lib/availability-copy";
 import { ACCESS_STATE, PEOPLE } from "../../../lib/people-access-copy";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { useDeferredBusy } from "../../../lib/use-deferred-busy";
@@ -32,10 +37,68 @@ import {
   type AvailabilityDraftValue,
 } from "../../wardyn/availability-control";
 import { makeMono } from "../../wardyn/code-block";
-import { Field } from "../../wardyn/form-primitives";
+import { Field, OptionCard } from "../../wardyn/form-primitives";
+import { useOperator } from "../../wardyn/operator-context";
+import { PageContainer } from "../../wardyn/page-container";
+import { PageHeader } from "../../wardyn/page-header";
+import { Chip } from "../../wardyn/primitives";
 import { EmptyState, TableSkeleton } from "../../wardyn/states";
 
 const withMono = makeMono(["--image"]);
+
+// How often the list is read again while a check is running on the cluster.
+export const CHECK_POLL_MS = 5000;
+
+// The server's own rule (base_images_prewrapped.go): <repository>[:tag]@sha256:<64 hex>.
+const PINNED = /^[^@\s]+@sha256:[0-9a-f]{64}$/;
+
+// The registry and organisation a pull secret must read: the reference up to its last path segment.
+function registryOf(ref: string): string {
+  const name = ref.split("@")[0];
+  return name.slice(0, Math.max(0, name.lastIndexOf("/")));
+}
+
+// What a pre-wrapped row's check says, and whether it can be checked again. reason is
+// "<code>:<arch>[:<detail>]" (the detail may hold colons), or check_interrupted.
+export function prewrappedLine(r: BaseImageEntry, builder: boolean): { text: string; refused: boolean } | null {
+  const c = r.check;
+  if (!c) return null;
+  if (c.status === "checking") return { text: PREWRAPPED.CHECKING, refused: false };
+  const [code = "", arch = "", ...rest] = (c.reason ?? "").split(":");
+  const detail = rest.join(":");
+  if (c.status === "ready") {
+    const ok = c.accepted_arches ?? [];
+    if (code === "platform_missing") return { text: PREWRAPPED.READY_NO_BUILD(ok[0] ?? "", arch), refused: false };
+    if (code === "no_node") return { text: PREWRAPPED.READY_NO_NODE(ok[0] ?? "", arch), refused: false };
+    return { text: PREWRAPPED.READY(ok, c.checked_at ? shortDate(c.checked_at) : ""), refused: false };
+  }
+  switch (code) {
+    case "check_interrupted":
+    case "timed_out":
+      return { text: PREWRAPPED.CUT_SHORT, refused: true };
+    case "contract_missing":
+      return { text: PREWRAPPED.MISSING_TOOL(detail, builder), refused: true };
+    case "contract_old":
+      return { text: PREWRAPPED.CONTRACT_OLD, refused: true };
+    case "unpullable":
+      return { text: PREWRAPPED.UNPULLABLE(detail, registryOf(r.image)), refused: true };
+    case "no_node":
+      return { text: PREWRAPPED.NO_NODE, refused: true };
+    case "platform_missing":
+      return { text: PREWRAPPED.NO_BUILD, refused: true };
+  }
+  return { text: PREWRAPPED.FAILED(detail || code), refused: true };
+}
+
+// /admin/images: the tab on its own page, for a security admin, who has no Providers screen.
+export function ImagesScreen() {
+  return (
+    <PageContainer width="list">
+      <PageHeader title={IMAGES.TAB} />
+      <ImagesTab />
+    </PageContainer>
+  );
+}
 
 // One user-types read for every row's control and the Add image dialog's.
 export function ImagesTab() {
@@ -48,19 +111,42 @@ export function ImagesTab() {
 
 function ImagesTabBody() {
   const [rows, setRows] = React.useState<BaseImageEntry[] | null>(null);
+  const [builder, setBuilder] = React.useState(true);
+  const [noCheck, setNoCheck] = React.useState("");
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [adding, setAdding] = React.useState(false);
+  const [retrying, setRetrying] = React.useState<Record<string, string>>({});
 
   const load = React.useCallback(() => {
     baseImages
       .list()
       .then((list) => {
-        setRows(list);
+        setRows(list.rows);
+        setBuilder(list.imageBuilder);
+        setNoCheck(list.prewrappedUnavailable);
         setStatus("ready");
       })
       .catch(() => setStatus("error"));
   }, []);
   React.useEffect(load, [load]);
+  // A check runs for up to ten minutes on the cluster: read again until none is running.
+  const checking = !!rows?.some((r) => r.check?.status === "checking");
+  React.useEffect(() => {
+    if (!checking) return;
+    const t = setTimeout(load, CHECK_POLL_MS);
+    return () => clearTimeout(t);
+  }, [checking, rows, load]);
+
+  const checkAgain = (r: BaseImageEntry) => {
+    setRetrying((m) => ({ ...m, [r.id]: "" }));
+    baseImages
+      .checkAgain(r.id)
+      .then(() => {
+        setRetrying(({ [r.id]: _, ...m }) => m);
+        load();
+      })
+      .catch((e) => setRetrying((m) => ({ ...m, [r.id]: getErrorMessage(e) })));
+  };
 
   if (status === "loading") return <TableSkeleton rows={2} cols={2} />;
   if (status === "error" || !rows) {
@@ -89,19 +175,41 @@ function ImagesTabBody() {
       {rows.length === 0 ? (
         <EmptyState icon={Container} title={IMAGES.EMPTY_TITLE} description={IMAGES.EMPTY_BODY} action={addButton} size="compact" />
       ) : (
-        rows.map((r) => (
-          <div key={r.id} data-testid={`image-row-${r.image}`} className="overflow-hidden rounded-lg border border-border">
-            <div className="p-3">
-              <div className="text-body font-medium">{r.name}</div>
-              <div className="break-all font-mono text-meta text-muted-foreground">{r.image}</div>
+        rows.map((r) => {
+          const prewrapped = r.kind === "prewrapped";
+          const line = prewrapped ? prewrappedLine(r, builder) : null;
+          const retryError = retrying[r.id];
+          return (
+            <div key={r.id} data-testid={`image-row-${r.image}`} className="overflow-hidden rounded-lg border border-border">
+              <div className="space-y-1 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-body font-medium">{r.name}</span>
+                  {prewrapped && <Chip>{PREWRAPPED.BADGE}</Chip>}
+                </div>
+                <div className="break-all font-mono text-meta text-muted-foreground">{r.image}</div>
+                {line && <p className={line.refused ? "text-meta text-danger" : "text-meta text-muted-foreground"}>{line.text}</p>}
+                {!prewrapped && !builder && <p className="text-meta text-muted-foreground">{PREWRAPPED.NEEDS_BUILDER}</p>}
+                {line?.refused && (
+                  <div className="pt-1">
+                    <Button variant="outline" size="sm" disabled={retryError === ""} onClick={() => checkAgain(r)}>
+                      {PREWRAPPED.CHECK_AGAIN}
+                    </Button>
+                    {retryError && <p className="mt-1 text-xs leading-snug text-danger">{retryError}</p>}
+                  </div>
+                )}
+              </div>
+              {/* A pre-wrapped image is offered to nobody until it is ready, so who gets it waits for that. */}
+              {(!prewrapped || r.check?.status === "ready") && (
+                <div className="border-t border-border p-3">
+                  <AvailabilityControl kind="image" value={r.image} adminsOnly note={prewrapped ? undefined : AVAILABILITY.IMAGE_NOTE} />
+                </div>
+              )}
             </div>
-            <div className="border-t border-border p-3">
-              <AvailabilityControl kind="image" value={r.image} adminsOnly note={AVAILABILITY.IMAGE_NOTE} />
-            </div>
-          </div>
-        ))
+          );
+        })
       )}
-      <AddImageDialog open={adding} onOpenChange={setAdding} onAdded={load} />
+      {rows.some((r) => r.kind === "prewrapped") && <p className="max-w-[70ch] text-meta text-muted-foreground">{PREWRAPPED.FOOTNOTE}</p>}
+      <AddImageDialog open={adding} onOpenChange={setAdding} onAdded={load} builder={builder} noCheck={noCheck} />
     </div>
   );
 }
@@ -116,11 +224,20 @@ function AddImageDialog({
   open,
   onOpenChange,
   onAdded,
+  builder,
+  noCheck,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onAdded: () => void;
+  builder: boolean;
+  // Why this control plane cannot check a pre-wrapped image; "" when it can.
+  noCheck: string;
 }) {
+  // A security admin adds pre-wrapped images only, and with no image builder nothing else can run.
+  const operator = useOperator();
+  const wrapOffered = builder && operator;
+  const [kind, setKind] = React.useState<"byo" | "prewrapped">(wrapOffered ? "byo" : "prewrapped");
   const [ref, setRef] = React.useState("");
   const [draft, setDraft] = React.useState<AvailabilityDraftValue>(START);
   const [saving, setSaving] = React.useState(false);
@@ -130,20 +247,25 @@ function AddImageDialog({
 
   React.useEffect(() => {
     if (!open) {
+      setKind(wrapOffered ? "byo" : "prewrapped");
       setRef("");
       setDraft(START);
       setError(null);
       setPartial(null);
     }
-  }, [open]);
+  }, [open, wrapOffered]);
 
   const submit = async () => {
     if (!ref.trim()) return;
+    if (kind === "prewrapped" && !PINNED.test(ref.trim())) {
+      setError(PREWRAPPED.NOT_PINNED);
+      return;
+    }
     setSaving(true);
     setError(null);
     let entry: BaseImageEntry;
     try {
-      entry = await baseImages.add(ref.trim());
+      entry = await baseImages.add(ref.trim(), kind);
     } catch (e) {
       setError(getErrorMessage(e));
       setSaving(false);
@@ -191,7 +313,42 @@ function AddImageDialog({
               void submit();
             }}
           >
-            <Field label={IMAGES.REF} htmlFor="add-image-ref" hint={IMAGES.REF_HINT} required>
+            <div className="space-y-2" role="group" aria-label={PREWRAPPED.HOW_LABEL}>
+              <div className="text-sm font-medium text-foreground">{PREWRAPPED.HOW_LABEL}</div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <OptionCard
+                  selected={kind === "byo"}
+                  disabled={!wrapOffered || saving}
+                  onClick={() => setKind("byo")}
+                  title={PREWRAPPED.KIND_WRAP}
+                  hint={!operator ? PREWRAPPED.KIND_WRAP_ADMINS_ONLY : !builder ? PREWRAPPED.KIND_WRAP_NO_BUILDER : PREWRAPPED.KIND_WRAP_HINT}
+                />
+                <OptionCard
+                  selected={kind === "prewrapped"}
+                  disabled={!!noCheck || saving}
+                  onClick={() => setKind("prewrapped")}
+                  title={PREWRAPPED.KIND}
+                  hint={noCheck ? PREWRAPPED.KIND_NO_CHECK(noCheck) : PREWRAPPED.KIND_HINT}
+                />
+              </div>
+            </div>
+            <Field
+              label={kind === "prewrapped" ? PREWRAPPED.REF : IMAGES.REF}
+              htmlFor="add-image-ref"
+              hint={
+                kind === "prewrapped" ? (
+                  <>
+                    {PREWRAPPED.REF_HINT}{" "}
+                    <a href={PREWRAPPED.HOW_TO_BUILD_URL} target="_blank" rel="noreferrer" className="underline">
+                      {PREWRAPPED.HOW_TO_BUILD}
+                    </a>
+                  </>
+                ) : (
+                  IMAGES.REF_HINT
+                )
+              }
+              required
+            >
               <Input
                 id="add-image-ref"
                 required
@@ -209,9 +366,9 @@ function AddImageDialog({
             </div>
             <DialogFooter>
               {cancel}
-              <Button type="submit" disabled={saving || !ref.trim() || draft.pending}>
+              <Button type="submit" disabled={saving || !ref.trim() || draft.pending || (kind === "prewrapped" && !!noCheck)}>
                 {showSpinner && <Loader2 className="size-3.5 animate-spin" />}
-                {IMAGES.ADD_CTA}
+                {kind === "prewrapped" ? PREWRAPPED.ADD_CTA : IMAGES.ADD_CTA}
               </Button>
             </DialogFooter>
           </form>

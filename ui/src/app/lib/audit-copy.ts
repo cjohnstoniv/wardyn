@@ -78,6 +78,7 @@ const ACTION_VERB: Record<string, string> = {
   "source.delete": "removed a source",
   "source.scan": "scanned a source",
   "base_image.write": "added a base image",
+  "base_image.admit": "checked a prewrapped image",
   "base_image.delete": "removed a base image",
   "integration.write": "stored an integration",
   "integration.delete": "deleted an integration",

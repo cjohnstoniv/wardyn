@@ -406,6 +406,7 @@ describe("roleCanReach — pure", () => {
 
   it("a security admin's return path to Drives is honoured (its grants are theirs)", () => {
     expect(roleCanReach("/admin/drives", "security_admin")).toBe(true);
+    expect(roleCanReach("/admin/images", "security_admin")).toBe(true);
   });
 
   it("a user reaches their own account page but nothing in the Admin view", () => {

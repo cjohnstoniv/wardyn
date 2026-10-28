@@ -699,10 +699,10 @@ describe("SidebarNav — per view (M-2)", () => {
     expect(within(sheet).getByRole("link", { name: /^Runs/ })).toHaveAttribute("href", "/admin/runs");
   });
 
-  it("a security admin's Admin view: Credentials, User types and User drives join; Secrets, Recordings, Getting started and Settings do not", async () => {
+  it("a security admin's Admin view: Credentials, User types, User drives and Images join; Secrets, Recordings, Getting started and Settings do not", async () => {
     const { labels } = await open("security_admin");
     expect(labels).toEqual([
-      "Runs", "Approvals", "Audit", "Workspaces", "Templates", "Runners", "User drives", "People", "User types", "Permissions", "Policies",
+      "Runs", "Approvals", "Audit", "Workspaces", "Templates", "Runners", "User drives", "Images", "People", "User types", "Permissions", "Policies",
       "Governance", "Credentials",
     ]);
   });

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -287,12 +288,22 @@ func (s PG) SetSourceScanResultUnfenced(ctx context.Context, id uuid.UUID, profi
 
 // Base images (tier 2)
 
-const baseImageCols = `id, kind, name, image, steps, created_at, updated_at`
+const baseImageCols = `id, kind, name, image, steps, created_at, updated_at,
+	check_status, check_attempt, check_deadline, check_reason, accepted_arches, checked_at`
 
 func scanBaseImage(row pgx.Row) (types.BaseImageEntry, error) {
 	var b types.BaseImageEntry
 	var stepsRaw []byte
-	err := row.Scan(&b.ID, &b.Kind, &b.Name, &b.Image, &stepsRaw, &b.CreatedAt, &b.UpdatedAt)
+	var (
+		status    *string
+		attempt   *uuid.UUID
+		deadline  *time.Time
+		reason    string
+		arches    []string
+		checkedAt *time.Time
+	)
+	err := row.Scan(&b.ID, &b.Kind, &b.Name, &b.Image, &stepsRaw, &b.CreatedAt, &b.UpdatedAt,
+		&status, &attempt, &deadline, &reason, &arches, &checkedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.BaseImageEntry{}, ErrNotFound
 	}
@@ -302,13 +313,30 @@ func scanBaseImage(row pgx.Row) (types.BaseImageEntry, error) {
 	if stepsRaw != nil {
 		_ = json.Unmarshal(stepsRaw, &b.Steps)
 	}
+	if status != nil { // only a prewrapped row has a check (0237's CHECK)
+		b.Check = &types.BaseImageCheck{Status: *status, Reason: reason, AcceptedArches: arches, CheckedAt: checkedAt}
+		if attempt != nil {
+			b.Check.Attempt = *attempt
+		}
+		if deadline != nil {
+			b.Check.Deadline = *deadline
+		}
+	}
 	return b, nil
 }
+
+// PrewrappedCheckWindow is how long a prewrapped image's registration check attempt counts: the check pods'
+// own cluster deadline (ten minutes) plus time to pull and publish. A checking row past it reads as interrupted.
+const PrewrappedCheckWindow = 12 * time.Minute
 
 // UpsertBaseImage inserts a catalog image or returns the row with the same
 // identity (kind, image, steps) — the identity index is the dedupe rule. The
 // CHECK constraint refuses 'recommended' structurally: that build is derived
 // per-workspace and has no catalog identity.
+//
+// A new prewrapped row starts its first check: b.Check.Attempt is stored with status checking and a deadline
+// PrewrappedCheckWindow from the database's clock. An identity hit returns the existing row and its check
+// unchanged (the caller compares Check.Attempt to tell the two apart); a retry goes through ClaimImageCheck.
 //
 // An identity hit does NOT touch name, deliberately: this upsert is also the
 // PASSTHROUGH path a workspace/run resolves its base-image spec through,
@@ -320,13 +348,100 @@ func (s PG) UpsertBaseImage(ctx context.Context, b types.BaseImageEntry) (types.
 	if len(b.Steps) > 0 {
 		steps, _ = json.Marshal(b.Steps)
 	}
+	var attempt *uuid.UUID
+	if b.Kind == types.BaseImageKindPrewrapped && b.Check != nil {
+		attempt = &b.Check.Attempt
+	}
 	q := `
-		INSERT INTO base_images (` + baseImageCols + `)
-		VALUES ($1,$2,$3,$4,$5,$6,$7)
+		INSERT INTO base_images (id, kind, name, image, steps, created_at, updated_at,
+			check_status, check_attempt, check_deadline)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,
+			CASE WHEN $8::uuid IS NULL THEN NULL ELSE 'checking' END, $8,
+			CASE WHEN $8::uuid IS NULL THEN NULL ELSE clock_timestamp() + make_interval(secs => $9) END)
 		ON CONFLICT (kind, image, (COALESCE(steps, '[]'::jsonb))) DO UPDATE SET updated_at = now()
 		RETURNING ` + baseImageCols
 	return scanBaseImage(s.Pool.QueryRow(ctx, q,
-		b.ID, b.Kind, b.Name, b.Image, steps, b.CreatedAt, b.UpdatedAt))
+		b.ID, b.Kind, b.Name, b.Image, steps, b.CreatedAt, b.UpdatedAt, attempt, PrewrappedCheckWindow.Seconds()))
+}
+
+// ClaimImageCheck starts a new check attempt on a prewrapped row, for "Check again". The row is locked and the
+// decision is made on it with the database's current time (clock_timestamp(), not the transaction's start):
+// it is eligible when refused, or checking past its deadline. Anything else (ready, a live attempt, another
+// kind) returns the row with ErrConflict and changes nothing, so two concurrent retries start one attempt.
+// The caller starts pods only after this returns nil (the claim is committed).
+func (s PG) ClaimImageCheck(ctx context.Context, id, attempt uuid.UUID) (types.BaseImageEntry, error) {
+	return s.lockedImageCheck(ctx, id, "claim", func(b types.BaseImageEntry, now time.Time) bool {
+		return b.Kind == types.BaseImageKindPrewrapped && b.Check != nil &&
+			(b.Check.Status == types.BaseImageCheckRefused ||
+				(b.Check.Status == types.BaseImageCheckChecking && !b.Check.Deadline.After(now)))
+	}, `UPDATE base_images SET check_status='checking', check_attempt=$2,
+			check_deadline=clock_timestamp() + make_interval(secs => $3),
+			check_reason='', accepted_arches='{}', checked_at=NULL
+		WHERE id=$1 RETURNING `+baseImageCols, attempt, PrewrappedCheckWindow.Seconds())
+}
+
+// FinishImageCheck publishes an attempt's one aggregate verdict (ready with the accepted architectures, or
+// refused with a reason). It is written only when the locked row still has this image, this attempt, status
+// checking and a deadline after the database's current time; otherwise it returns ErrConflict and changes
+// nothing, so a stale, late or expired attempt never touches the row or any other.
+func (s PG) FinishImageCheck(ctx context.Context, id uuid.UUID, image string, attempt uuid.UUID, status, reason string, arches []string) (types.BaseImageEntry, error) {
+	if arches == nil {
+		arches = []string{}
+	}
+	return s.lockedImageCheck(ctx, id, "finish", func(b types.BaseImageEntry, now time.Time) bool {
+		return b.Image == image && b.Check != nil && b.Check.Attempt == attempt &&
+			b.Check.Status == types.BaseImageCheckChecking && b.Check.Deadline.After(now)
+	}, `UPDATE base_images SET check_status=$2, check_reason=$3, accepted_arches=$4, checked_at=clock_timestamp()
+		WHERE id=$1 RETURNING `+baseImageCols, status, reason, arches)
+}
+
+// lockedImageCheck is ClaimImageCheck's and FinishImageCheck's one short transaction: lock the row, read the
+// database's time after the lock is held, decide, and only then update. No external work runs inside it.
+func (s PG) lockedImageCheck(ctx context.Context, id uuid.UUID, what string, eligible func(types.BaseImageEntry, time.Time) bool, update string, args ...any) (types.BaseImageEntry, error) {
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return types.BaseImageEntry{}, fmt.Errorf("store: begin image check %s tx: %w", what, err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // best-effort on the failure path
+
+	b, err := scanBaseImage(tx.QueryRow(ctx, `SELECT `+baseImageCols+` FROM base_images WHERE id=$1 FOR UPDATE`, id))
+	if err != nil {
+		return types.BaseImageEntry{}, err
+	}
+	var now time.Time
+	if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		return types.BaseImageEntry{}, fmt.Errorf("store: image check %s clock: %w", what, err)
+	}
+	if !eligible(b, now) {
+		return b, ErrConflict
+	}
+	out, err := scanBaseImage(tx.QueryRow(ctx, update, append([]any{id}, args...)...))
+	if err != nil {
+		return types.BaseImageEntry{}, fmt.Errorf("store: image check %s: %w", what, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return types.BaseImageEntry{}, fmt.Errorf("store: commit image check %s: %w", what, err)
+	}
+	return out, nil
+}
+
+// LiveImageCheckAttempts returns the attempt IDs of prewrapped rows still checking within their deadline: the
+// orphan sweep spares the check pods carrying one of these, and reclaims every other check pod.
+func (s PG) LiveImageCheckAttempts(ctx context.Context) (map[uuid.UUID]bool, error) {
+	ids, err := collect(ctx, s.Pool, "list", "live image check attempts",
+		`SELECT check_attempt FROM base_images WHERE check_status='checking' AND check_deadline > clock_timestamp()`,
+		nil, func(row pgx.Row) (uuid.UUID, error) {
+			var id uuid.UUID
+			return id, row.Scan(&id)
+		})
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[uuid.UUID]bool, len(ids))
+	for _, id := range ids {
+		out[id] = true
+	}
+	return out, nil
 }
 
 // UpdateBaseImageName renames a catalog base-image row — the explicit, scoped
@@ -340,11 +455,16 @@ func (s PG) UpdateBaseImageName(ctx context.Context, id uuid.UUID, name string) 
 		name, id))
 }
 
-// GetBaseImage returns the catalog row for id, or ErrNotFound. Not on the
-// Store interface (no handler reads one image by id); kept as a PG method
-// because store_hydrate_pg_test.go round-trips through it.
+// GetBaseImage returns the catalog row for id, or ErrNotFound.
 func (s PG) GetBaseImage(ctx context.Context, id uuid.UUID) (types.BaseImageEntry, error) {
 	return scanBaseImage(s.Pool.QueryRow(ctx, `SELECT `+baseImageCols+` FROM base_images WHERE id=$1`, id))
+}
+
+// GetBaseImageByRef returns the catalog row of kind with exactly this image ref and no steps, or ErrNotFound:
+// a workspace naming a prewrapped image by its ref attaches that row, never creates one.
+func (s PG) GetBaseImageByRef(ctx context.Context, kind, image string) (types.BaseImageEntry, error) {
+	return scanBaseImage(s.Pool.QueryRow(ctx, `SELECT `+baseImageCols+` FROM base_images
+		WHERE kind=$1 AND image=$2 AND COALESCE(steps, '[]'::jsonb) = '[]'::jsonb`, kind, image))
 }
 
 // GetBaseImagesByIDs is hydrateAll's own batched read, not a Store-interface

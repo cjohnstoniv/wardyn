@@ -135,12 +135,23 @@ export interface WorkspaceLLMCred {
 // One row of GET /base-images — internal/types.BaseImageEntry on the wire.
 export interface BaseImageEntry {
   id: string;
-  kind: "registry" | "custom" | "byo";
+  kind: "registry" | "custom" | "byo" | "prewrapped";
   name: string;
   image: string;
   steps?: string[];
+  // A prewrapped row's check on the cluster (internal/types.BaseImageCheck); absent on every other kind.
+  check?: BaseImageCheck;
   created_at: string;
   updated_at: string;
+}
+
+// reason is "<code>:<arch>[:<detail>]", or "check_interrupted" for an attempt that ran out of time.
+// On a ready row it names an architecture left out; accepted_arches are those that passed.
+export interface BaseImageCheck {
+  status: "checking" | "ready" | "refused";
+  reason?: string;
+  accepted_arches?: string[];
+  checked_at?: string;
 }
 
 export type WorkspaceSourceKind = "local_dir" | "repo" | "ephemeral";
@@ -167,7 +178,7 @@ export interface WorkspaceSourceInput {
   clone_target?: string;
 }
 
-export type WorkspaceBaseImageKind = "recommended" | "registry" | "custom" | "byo";
+export type WorkspaceBaseImageKind = "recommended" | "registry" | "custom" | "byo" | "prewrapped";
 
 export interface WorkspaceBaseImageInput {
   kind: WorkspaceBaseImageKind;

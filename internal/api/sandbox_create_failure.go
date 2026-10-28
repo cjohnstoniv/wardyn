@@ -26,6 +26,9 @@ func sandboxCreateFailure(err error) (hint, reason string) {
 	if pe := (*remote.LocalModelPortError)(nil); errors.As(err, &pe) {
 		return "the sandbox could not be created: " + pe.Error() + ".", reasonRunnerLocalModelPort
 	}
+	if pe := (*prewrappedPlatformError)(nil); errors.As(err, &pe) {
+		return "the sandbox could not be created: " + pe.msg, pe.reason
+	}
 	if !errors.Is(err, runner.ErrImageArch) {
 		return "the sandbox could not be created: " + err.Error(), "sandbox_create"
 	}

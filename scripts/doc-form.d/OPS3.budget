@@ -90,7 +90,8 @@ docs/operations/who-gets-in.md=1952 share=35
 # docs/operations/admin-only-writes.md 3729 = ours 3700 + theirs 3727 - base 3698 at the 0.10 W4c merge of origin/main ba16e8564 (W4b) onto the train.
 # docs/operations/admin-only-writes.md 3820 = ours 3760 + theirs 3791 - base 3731 at the 0.10 UNIT-ADMIN merge of RESTRICT-PIN 35c385de1.
 # docs/operations/admin-only-writes.md 3855 adds 35 over 3820, measured (#2967 DESK-LOCKS row 5): the /governance/recording tier row.
-docs/operations/admin-only-writes.md=3855 share=35 # tightened from 3738 to the measured count at the 0.10 W4d merge
+# docs/operations/admin-only-writes.md=3874 adds 19 over 3855, measured (0.10 final §3 pre-wrapped images): a security admin lists, adds and checks pre-wrapped images.
+docs/operations/admin-only-writes.md=3874 share=35 # tightened from 3738 to the measured count at the 0.10 W4d merge
 # docs/operations/admin-only-writes.md 3730 adds 32 over 3698, measured (0.10 LAY-A): the /governance/walls tier row.
 # docs/operations/admin-only-writes.md 3727 measured (0.10 BOUNDARY): the /governance/boundary tier row.
 # docs/operations/admin-only-writes.md 3760 adds 29 over 3731, measured (0.10 unit admins): the unit-admin tier row, and the promotion named in the security row.

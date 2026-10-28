@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"strings"
@@ -210,6 +211,24 @@ type imageResolveResult struct {
 	// BaseErr is why wrapping the workspace's chosen base image failed; set on that failure only, so a
 	// caller that must not substitute the convention image can tell it from the lanes that may fall back.
 	BaseErr error
+	// ImageArches are a ready prewrapped base image's checked architectures; nil for any other image.
+	ImageArches []string
+}
+
+// prewrappedWorkspaceImage resolves a workspace's prewrapped base image: checked at registration and run as
+// is, with no wrap, no cache and no build record. Only a ready row runs; anything else fails the run rather
+// than falling back to the convention image.
+func (s *Server) prewrappedWorkspaceImage(ctx context.Context, ref string) imageResolveResult {
+	pw, refusal := s.prewrappedRunImage(ctx, ref)
+	switch {
+	case refusal != nil && refusal.err != nil:
+		return imageResolveResult{BaseErr: refusal.err}
+	case refusal != nil:
+		return imageResolveResult{BaseErr: errors.New(refusal.body.Error)}
+	case pw == nil:
+		return imageResolveResult{BaseErr: errPrewrappedNotRegistered}
+	}
+	return imageResolveResult{Image: pw.Image, OK: true, ImageArches: pw.Check.AcceptedArches}
 }
 
 // resolveWorkspaceImageWith is resolveWorkspaceImage with opts, and the full answer.
@@ -235,6 +254,9 @@ func (s *Server) resolveWorkspaceImageWith(ctx context.Context, runID uuid.UUID,
 	// "recommended" (Wardyn's own convention image for the detected stack) —
 	// like a nil BaseImage — falls through to the devcontainer/generated path
 	// instead of a fixed ref.
+	if prewrappedBase(primary.BaseImage) {
+		return s.prewrappedWorkspaceImage(ctx, primary.BaseImage.Image)
+	}
 	if b := primary.BaseImage; b != nil && b.Kind != "recommended" && strings.TrimSpace(b.Image) != "" {
 		if s.cfg.ImageBuilder == nil {
 			// The workspace_id door hard-400s a base_image with no builder
@@ -472,8 +494,9 @@ func repoOwnDevcontainerURL(ws types.Workspace, p workspacescan.WorkspaceProfile
 // the convention agent image when no builder is configured. Its error is a run
 // that could not be read before the build (errRunUnreadBeforeBuild): the caller
 // aborts the launch, so the run is failed rather than dispatched on a
-// substituted image.
-func (s *Server) workspaceRunImage(ctx context.Context, runID uuid.UUID, ws types.Workspace) (string, error) {
+// substituted image. arches are a prewrapped image's checked architectures,
+// nil for any other image.
+func (s *Server) workspaceRunImage(ctx context.Context, runID uuid.UUID, ws types.Workspace) (image string, arches []string, err error) {
 	// Bound the build the same way the other three
 	// doors do (runs_create.go) — the record/verify launch callers detach
 	// from request cancellation before reaching here (context.WithoutCancel),
@@ -484,13 +507,13 @@ func (s *Server) workspaceRunImage(ctx context.Context, runID uuid.UUID, ws type
 	buildCtx, endBuild, live, err := s.trackRunBuild(ctx, runID)
 	defer endBuild()
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if !live {
-		return agentImage("claude-code", s.cfg.AgentImages), nil
+		return agentImage("claude-code", s.cfg.AgentImages), nil, nil
 	}
-	if built, ok := s.resolveWorkspaceImage(buildCtx, runID, ws, nil, s.announceImageBuild(ctx, runID)); ok {
-		return built, nil
+	if res := s.resolveWorkspaceImageWith(buildCtx, runID, ws, nil, s.announceImageBuild(ctx, runID), imageResolveOpts{}); res.OK {
+		return res.Image, res.ImageArches, nil
 	}
-	return agentImage("claude-code", s.cfg.AgentImages), nil
+	return agentImage("claude-code", s.cfg.AgentImages), nil, nil
 }

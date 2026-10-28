@@ -184,7 +184,9 @@
 # docs/OPERATIONS.md=60390 adds 8 over 60382, measured (0.10 SANDBOX-GONE, #3667): the gone-sandbox section and the 0235 migration row.
 # docs/OPERATIONS.md=60469 adds 79 over 60390, measured (0.10 SANDBOX-GONE-LIVE, #3667 F1): the gone-sandbox section names the live status check, the replica delay and the macOS revive answer.
 # docs/OPERATIONS.md=60527 adds 58 over 60469, measured (0.10 final W3 train): the 0236 migration note from TEARDOWN-STATUS (#3652) beside SANDBOX-GONE-LIVE's 0235 note; ours + theirs - base.
-docs/OPERATIONS.md=60527
+# docs/OPERATIONS.md=60615 adds 88 over 60527, measured (0.10 final §3 pre-wrapped images): the Kubernetes day-2 pointer to the pre-wrapped image recipe.
+# docs/OPERATIONS.md=60642 adds 27 over 60615, measured (0.10 final §3 pre-wrapped images): the 0238 migration row.
+docs/OPERATIONS.md=60642
 # docs/OPERATIONS.md 57751 = ours 57562 + theirs 57690 - base 57501 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/OPERATIONS.md 57722 = ours + theirs - base at the 0.10 HYB-C merge of main onto VM-A, measured.
 # docs/OPERATIONS.md 55840 adds 124 over 55716, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.

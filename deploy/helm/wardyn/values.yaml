@@ -659,7 +659,8 @@ k8s:
   # error and the pod crash-loops instead of coming up).
   proxyImage: ""
   # Optional imagePullSecrets name (WARDYN_K8S_IMAGE_PULL_SECRET) threaded
-  # onto every pod the k8s substrate creates (agent, proxy, boot-time canary).
+  # onto every pod the k8s substrate creates (agent, proxy, boot-time canary,
+  # pre-wrapped image check).
   imagePullSecret: ""
   # Where every sandbox pod goes (WARDYN_K8S_SANDBOX_PLACEMENT, rendered here as JSON): the agent pod,
   # the proxy pod and the boot-time canary all take it, so the canary proves NetworkPolicy

@@ -37,6 +37,13 @@ const UNLISTED = "ghcr.io/acme/e2e-python-ml:3.12";
 const PARTIAL = "ghcr.io/acme/e2e-partial:2.0";
 
 async function gotoImages(page: Page): Promise<void> {
+  // The e2e backend has no image builder, so Add image would offer pre-wrapped images only; these tests
+  // are about who gets an image, so the catalog read says a builder is there and the rest is the real wire.
+  await page.route(/\/api\/v1\/base-images(\?|$)/, async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    const res = await route.fetch();
+    await route.fulfill({ response: res, json: { ...(await res.json()), image_builder: true } });
+  });
   await gotoConsole(page);
   await navToRoute(page, "/admin/settings");
   await page.getByTestId("providers-card").getByRole("link").click();

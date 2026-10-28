@@ -40,6 +40,8 @@ var ungovernedCallerCensus = map[string]struct {
 	"approvals_takeover.go:loadTakeover":                       {1, "authz-only: a takeover's reach and the deny_interactive door, as refuseAttachEntry's ticket lane"},
 	"attach.go:refuseAttachEntry":                              {1, "authz-only: a session door; traffic in the session is the dispatched proxy config"},
 	"attach_ticket.go:handleAttachTicket":                      {1, "authz-only: the ticket's reach stamp; its reach is admitRunEntry's"},
+	"base_images.go:handleDeleteBaseImage":                     {1, "authz-only: which kinds a delete reaches, and the admin-only force detach"},
+	"base_images.go:mayWriteBaseImageKind":                     {1, "authz-only: which catalog kinds a tier writes and lists"},
 	"audit.go:auditRowsFor":                                    {2, "authz-only: audit read scope, and host detail below a super admin"},
 	"audit.go:auditScope":                                      {1, "authz-only: audit read scope"},
 	"audit_partition_export.go:exportAuditPartition":           {2, "authz-only: audit export tier, and host detail below a super admin"},

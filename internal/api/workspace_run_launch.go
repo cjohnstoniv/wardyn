@@ -689,9 +689,16 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 
 	// Record in the built devcontainer image so the task actually runs (its
 	// toolchain isn't in the convention agent image) — same lane as verify.
-	image, ierr := s.workspaceRunImage(ctx, runID, ws)
+	image, arches, ierr := s.workspaceRunImage(ctx, runID, ws)
 	if ierr != nil {
 		return types.AgentRun{}, false, abort(ierr)
+	}
+	// A prewrapped image's checked architectures go on the run before dispatch, which places it by them.
+	if arches != nil {
+		if err := s.cfg.Store.SetRunImageArches(ctx, runID, arches); err != nil {
+			return types.AgentRun{}, false, abort(fmt.Errorf("record the prewrapped image's architectures: %w", err))
+		}
+		created.ImageArches = arches
 	}
 
 	// The chosen model provider's host joins at dispatch, like any run's; it is

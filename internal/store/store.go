@@ -343,6 +343,13 @@ func (s PG) SetRunImage(ctx context.Context, id uuid.UUID, image string) error {
 		`UPDATE agent_runs SET image=$1, updated_at=now() WHERE id=$2`, image, id)
 }
 
+// SetRunImageArches scoped-writes ONLY the architectures the run's prewrapped image was checked on, once
+// its image resolves to a ready prewrapped row.
+func (s PG) SetRunImageArches(ctx context.Context, id uuid.UUID, arches []string) error {
+	return s.execRun(ctx, "set run image arches",
+		`UPDATE agent_runs SET image_arches=$1, updated_at=now() WHERE id=$2`, arches, id)
+}
+
 // SetRunDiskMiB scoped-writes ONLY the resolved ephemeral-disk-cap column.
 // Called once applyEphemeralDisk resolves the effective disk_mib, since that
 // needs dispatch-time inputs unavailable at CreateRun.
@@ -433,7 +440,7 @@ const runReservedCols = `reserved_cpu_millis, reserved_memory_mib, reserved_disk
 // (0195, types.AgentRun.LocalFolder) by RunLocalFolderSeed.
 const runInsertOnlyCols = `local_folder`
 
-const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_reason, containment_error, containment_error_at, ended_at, paused_at, paused_reason, active_at, end_tightened_at, admitted_at, not_recorded, vm_machine, recording_level`
+const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_reason, containment_error, containment_error_at, ended_at, paused_at, paused_reason, active_at, end_tightened_at, admitted_at, not_recorded, vm_machine, recording_level, image_arches`
 
 // scanRun is the ONE reader for runCols. A new column is appended to
 // runInsertCols/runCols and to the end of this Scan — appending is the one edit
@@ -453,7 +460,7 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 		&placement, &r.PlacementFilled, &r.RunnerID, &evidenceSource, &experience, &r.LifetimeCapAt, &capSource,
 		&r.RunnerPoolID, &r.RunnerPoolRevision, &poolSelection, &r.RunnerPoolExecutor, &r.HumanAuthor, &wallsRaw, &machineKind, &r.BreakGlass, &r.RestrictionIDs,
 		&r.FailureHint, &r.StatusDetail, &r.LostAt, &lostReason, &containmentErr, &r.ContainmentErrorAt, &r.EndedAt,
-		&r.PausedAt, &pausedReason, &r.ActiveAt, &r.EndTightenedAt, &r.AdmittedAt, &notRecorded, &vmMachineRaw, &recordingLevel,
+		&r.PausedAt, &pausedReason, &r.ActiveAt, &r.EndTightenedAt, &r.AdmittedAt, &notRecorded, &vmMachineRaw, &recordingLevel, &r.ImageArches,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.AgentRun{}, ErrNotFound
