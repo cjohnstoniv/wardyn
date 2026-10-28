@@ -15,6 +15,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - A failed macOS VM start no longer keeps its VM in the helper until the helper exits (#3708). Each failed attempt
   kept one, and a first boot's retries on the auxiliary storage lock can make several.
+- A macOS VM prepare or start on a Mac in ordinary use is no longer refused for memory macOS can reclaim within
+  seconds. The live check counted only free, inactive and speculative pages, which on a 32 GiB Mac in use stayed
+  under the VM's memory plus the 2 GiB margin while macOS's own memory pressure reported nearly half of memory free. It
+  now takes the larger of that page sum and the share of memory the kernel's memory-pressure level calls free.
 - After a change of the Mac's clock, a macOS VM run whose helper stopped no longer ends with "The Mac restarted, so
   the macOS VM was lost." (#3709). The runner tells a restart by the boot session the ledger records, as the ledger
   does, so a run whose entry has no session, from an earlier release, says its helper stopped.

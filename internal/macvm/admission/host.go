@@ -24,6 +24,15 @@ func Self(h Host, pid int) (int64, error) {
 	return 0, errors.New("admission: process not in the process table")
 }
 
+// availableMemory is the larger of vm_stat's free, inactive and speculative
+// pages and the share of total memory macOS's memory-pressure level calls free
+// (kern.memorystatus_level, the percentage memory_pressure prints). macOS keeps
+// compressed, purgeable and file-backed pages busy and reclaims them within
+// seconds, so the page sum alone refuses almost any Mac in use.
+func availableMemory(pages, total uint64, level uint32) uint64 {
+	return max(pages, total*uint64(min(level, 100))/100)
+}
+
 // parseVMStat reads vm_stat's output: the page size from its first line,
 // then free + inactive + speculative pages.
 func parseVMStat(out string) (uint64, error) {
