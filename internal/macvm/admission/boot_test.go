@@ -167,3 +167,24 @@ func TestLegacyEntryCountsUntilItsVMIsGone(t *testing.T) {
 		t.Fatalf("the owner could not reclaim its legacy entry: %v", err)
 	}
 }
+
+func TestEarlierBootOnlyByADifferentSession(t *testing.T) {
+	e := Entry{BootTime: 1, BootSession: "s1"}
+	for _, c := range []struct {
+		name string
+		h    Host
+		e    Entry
+		want bool
+	}{
+		{"same session, boot time moved by the clock", &fakeHost{boot: 2, session: "s1"}, e, false},
+		{"different session", &fakeHost{boot: 1, session: "s2"}, e, true},
+		{"entry from an earlier release", &fakeHost{boot: 2, session: "s2"}, Entry{BootTime: 1}, false},
+		{"session unreadable", &fakeHost{boot: 2, sessionErr: errors.New("sysctl")}, e, false},
+		{"session empty", &fakeHost{boot: 2}, e, false},
+		{"host without sessions", noSessionHost{&fakeHost{boot: 2, session: "s2"}}, e, false},
+	} {
+		if got := EarlierBoot(c.h, c.e); got != c.want {
+			t.Errorf("%s: EarlierBoot = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
