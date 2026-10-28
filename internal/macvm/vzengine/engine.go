@@ -95,8 +95,32 @@ func (*Engine) ThermalState() macvm.ThermalState {
 	return macvm.ThermalState(C.macvmThermalState())
 }
 
+// shareDevices is one virtio-fs device per share. Read-only is enforced here, on the host, whatever
+// the guest mounts.
+func shareDevices(shares []macvm.Share) ([]vz.DirectorySharingDeviceConfiguration, error) {
+	var devs []vz.DirectorySharingDeviceConfiguration
+	for _, sh := range shares {
+		dir, err := vz.NewSharedDirectory(sh.HostPath, sh.ReadOnly)
+		if err != nil {
+			return nil, fmt.Errorf("share %s: %w", sh.Tag, err)
+		}
+		single, err := vz.NewSingleDirectoryShare(dir)
+		if err != nil {
+			return nil, fmt.Errorf("share %s: %w", sh.Tag, err)
+		}
+		fs, err := vz.NewVirtioFileSystemDeviceConfiguration(sh.Tag)
+		if err != nil {
+			return nil, fmt.Errorf("share %s: %w", sh.Tag, err)
+		}
+		fs.SetDirectoryShare(single)
+		devs = append(devs, fs)
+	}
+	return devs, nil
+}
+
 // NewMachine builds a VM from a checked plan: one FileHandle NIC, one
-// writable disk (the clone), the fixed display, vsock, keyboard and trackpad.
+// writable disk (the clone), the fixed display, vsock, keyboard, trackpad and
+// a virtio-fs device per folder share.
 // No NAT or bridged attachment is ever constructed.
 func (*Engine) NewMachine(p macvm.Plan) (macvm.Machine, error) {
 	if err := macvm.CheckPlan(p); err != nil {
@@ -211,6 +235,14 @@ func (*Engine) NewMachine(p macvm.Plan) (macvm.Machine, error) {
 		return nil, err
 	}
 	cfg.SetEntropyDevicesVirtualMachineConfiguration([]*vz.VirtioEntropyDeviceConfiguration{ent})
+
+	shares, err := shareDevices(p.Shares)
+	if err != nil {
+		return nil, err
+	}
+	if len(shares) > 0 {
+		cfg.SetDirectorySharingDevicesVirtualMachineConfiguration(shares)
+	}
 
 	if ok, err := cfg.Validate(); !ok || err != nil {
 		return nil, fmt.Errorf("vzengine: configuration: %v", err)

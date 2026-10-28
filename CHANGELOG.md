@@ -21,6 +21,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   A refused or cut-short check gets *Check again* (`POST /base-images/{id}/check`), and each verdict is audited as
   `base_image.admit`. A security admin now has an Images page and lists, adds and checks pre-wrapped images only. See
   [deploy/images/README.md](deploy/images/README.md#pre-wrapped-image).
+- A macOS VM run now shares its workspace's folders. Each is shared into the guest at `/Users/agent/…` (a workspace's
+  `/home/agent/…` path), with the same rules and read-only or writable choice as a container. A folder macOS protects
+  (Desktop, Documents, Downloads, iCloud Drive, removable volumes) needs the runner allowed under Privacy & Security →
+  Files and Folders first. A whole home folder, /Users or /private/var can't be shared, because each holds files Wardyn
+  protects; share a project folder inside it. Runners older than this release refuse such a run. Sharing is not yet
+  tested on a real Mac; see [macOS VM sandboxes](docs/operations/macos-vms.md#not-yet-tested-on-a-real-mac).
 
 ### Fixed
 

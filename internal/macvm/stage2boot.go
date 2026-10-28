@@ -53,9 +53,13 @@ func JobSockKey(entryID string) string { return entryID[:min(len(entryID), RunKe
 // stage2Ports are a stage-2 boot's vsock listeners: a run's, plus tools.
 var stage2Ports = []uint32{AgentPort, DesktopPort, ToolsPort}
 
-// ToolsBoot returns the stage-2 boot this configuration describes.
+// ToolsBoot returns the stage-2 boot this configuration describes. It shares no folder: only a run's
+// boot does.
 func (c Stage2BootConfig) ToolsBoot() ToolsBoot {
 	return func(ctx context.Context, spec MachineSpec) (ToolsGuest, func(context.Context) error, error) {
+		if len(spec.Shares) > 0 {
+			return nil, nil, errSharesOutsideRun
+		}
 		return c.boot(ctx, spec)
 	}
 }

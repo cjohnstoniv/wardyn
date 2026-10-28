@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -43,7 +44,26 @@ type MachineSpec struct {
 	// Net is the guest side of the NIC's datagram socket pair. It is the
 	// machine's only network device.
 	Net *os.File `json:"-"`
+	// Shares are the host folders shared into the guest, share n tagged ShareTag(n). Only a run boot
+	// has any.
+	Shares []Share
 }
+
+// Share is one host folder shared into the guest over virtio-fs. HostPath is the canonical path
+// runnerd checked; the guest agent mounts Tag at Target, which the helper only logs.
+type Share struct {
+	Tag      string `json:"tag"`
+	HostPath string `json:"host_path"`
+	Target   string `json:"target"`
+	ReadOnly bool   `json:"read_only"`
+}
+
+// errSharesOutsideRun refuses a folder share in a prepare or tools-update boot: only a run's VM
+// shares folders.
+var errSharesOutsideRun = errors.New("macvm: only a run's VM shares folders; a prepare or tools-update boot shares none")
+
+// ShareTag is the virtio-fs tag of share n, the same shape as a Linux VM's.
+func ShareTag(n int) string { return "wardyn" + strconv.Itoa(n) }
 
 // NetworkKind names a network attachment. FileHandle is the only kind: no NAT
 // or bridged attachment exists in this package, so no plan can ask for one.
@@ -83,6 +103,8 @@ type Plan struct {
 	Vsock bool
 	// Keyboard and pointer for the desktop.
 	Keyboard, Pointer bool
+	// Shares are the virtio-fs directory shares, one device each.
+	Shares []Share
 }
 
 const mib = 1 << 20
@@ -118,6 +140,9 @@ func BuildPlan(s MachineSpec) (Plan, error) {
 	if s.Net == nil {
 		return Plan{}, errors.New("macvm: a macOS VM needs its FileHandle network socket")
 	}
+	if err := checkShares(s.Shares, s.BaseDir); err != nil {
+		return Plan{}, err
+	}
 	return Plan{
 		CPUs:              s.CPUs,
 		MemoryBytes:       s.MemoryBytes,
@@ -130,6 +155,7 @@ func BuildPlan(s MachineSpec) (Plan, error) {
 		Vsock:             true,
 		Keyboard:          true,
 		Pointer:           true,
+		Shares:            s.Shares,
 	}, nil
 }
 
@@ -141,6 +167,23 @@ func CheckPlan(p Plan) error {
 	}
 	if len(p.Storage) != 1 || p.Storage[0].ReadOnly {
 		return errors.New("macvm: a macOS VM has exactly one writable disk, its own clone")
+	}
+	return checkShares(p.Shares, "")
+}
+
+// checkShares refuses a share list that is not share n at ShareTag(n), each an absolute clean
+// directory path outside baseDir (when set).
+func checkShares(shares []Share, baseDir string) error {
+	for i, sh := range shares {
+		if sh.Tag != ShareTag(i) {
+			return fmt.Errorf("macvm: share %d is tagged %q, not %q", i, sh.Tag, ShareTag(i))
+		}
+		if !filepath.IsAbs(sh.HostPath) || filepath.Clean(sh.HostPath) != sh.HostPath || sh.HostPath == "/" {
+			return fmt.Errorf("macvm: share %s needs an absolute, clean folder path other than /", sh.Tag)
+		}
+		if baseDir != "" && (within(baseDir, sh.HostPath) || within(sh.HostPath, baseDir)) {
+			return fmt.Errorf("macvm: share %s overlaps the base image", sh.Tag)
+		}
 	}
 	return nil
 }

@@ -210,9 +210,8 @@ func (s *Substrate) checkVMCaps(spec runner.SandboxSpec) error {
 		if !ok || c.MacOSVM == nil {
 			return runnerwire.Refuse("%s", MacOSVMNotOffered("This runner"))
 		}
-		// A macOS VM shares no folder in this release.
-		if len(spec.Mounts) > 0 {
-			return runnerwire.Refuse(VMNoFolderShare)
+		if len(spec.Mounts) > 0 && !c.MacOSVM.Folders {
+			return runnerwire.Refuse(runner.MacVMNoFolderShare)
 		}
 		return nil
 	}

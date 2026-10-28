@@ -392,3 +392,87 @@ func TestDefaultRootRefusesARelativeHome(t *testing.T) {
 		t.Fatalf("DefaultRoot() = %q, %v", r, err)
 	}
 }
+
+// Shares are share n at ShareTag(n), absolute and clean, outside the base image; the plan carries
+// them as given and CheckPlan holds an engine to the same shape.
+func TestBuildPlanShares(t *testing.T) {
+	s := testSpec(t)
+	s.Shares = []Share{{Tag: ShareTag(0), HostPath: "/Users/me/proj", Target: "/home/agent/proj", ReadOnly: true},
+		{Tag: ShareTag(1), HostPath: "/Users/me/out", Target: "/home/agent/out"}}
+	p, err := BuildPlan(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Shares) != 2 || p.Shares[0] != s.Shares[0] || p.Shares[1] != s.Shares[1] {
+		t.Fatalf("shares = %+v", p.Shares)
+	}
+	if err := CheckPlan(p); err != nil {
+		t.Fatal(err)
+	}
+	for name, sh := range map[string][]Share{
+		"duplicate tag":    {{Tag: ShareTag(0), HostPath: "/a"}, {Tag: ShareTag(0), HostPath: "/b"}},
+		"other tag":        {{Tag: "macOSGuestAutomountTag", HostPath: "/a"}},
+		"relative path":    {{Tag: ShareTag(0), HostPath: "a/b"}},
+		"uncleaned path":   {{Tag: ShareTag(0), HostPath: "/a/../b"}},
+		"host root":        {{Tag: ShareTag(0), HostPath: "/"}},
+		"inside the base":  {{Tag: ShareTag(0), HostPath: filepath.Join(s.BaseDir, "x")}},
+		"holding the base": {{Tag: ShareTag(0), HostPath: filepath.Dir(s.BaseDir)}},
+	} {
+		bad := testSpec(t)
+		bad.BaseDir = s.BaseDir
+		bad.Shares = sh
+		if _, err := BuildPlan(bad); err == nil {
+			t.Errorf("BuildPlan accepted %s", name)
+		}
+		q := p
+		q.Shares = sh
+		if name != "inside the base" && name != "holding the base" && CheckPlan(q) == nil {
+			t.Errorf("CheckPlan accepted %s", name)
+		}
+	}
+}
+
+// The helper's backstop refuses a share whose recorded path now resolves elsewhere, or is gone.
+func TestRecheckSharesRefusesASwappedPath(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, other := filepath.Join(root, "proj"), filepath.Join(root, "other")
+	for _, d := range []string{dir, other} {
+		if err := os.Mkdir(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	shares := []Share{{Tag: ShareTag(0), HostPath: dir}}
+	if err := recheckShares(shares); err != nil {
+		t.Fatalf("an unchanged share was refused: %v", err)
+	}
+	if err := os.Remove(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(other, dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := recheckShares(shares); err == nil {
+		t.Fatal("a share swapped for a link was accepted")
+	}
+	if err := os.Remove(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := recheckShares(shares); err == nil {
+		t.Fatal("a share that is now a file was accepted")
+	}
+}
+
+// Only a run's VM shares folders: the installer's VM refuses any.
+func TestInstallVMRefusesShares(t *testing.T) {
+	s := testSpec(t)
+	s.Shares = []Share{{Tag: ShareTag(0), HostPath: "/a"}}
+	if err := installVM(context.Background(), nil, s, "", nil); !errors.Is(err, errSharesOutsideRun) {
+		t.Fatalf("installVM = %v, want errSharesOutsideRun", err)
+	}
+}

@@ -325,6 +325,7 @@ func (s *Server) placementCapabilityRefusal(ctx context.Context, req createRunRe
 // placementCapabilityRefusalFor is placementCapabilityRefusal with the run's own ask of a macOS VM:
 // the harnesses it starts and the size it was given. A zero ask checks neither.
 func (s *Server) placementCapabilityRefusalFor(ctx context.Context, req createRunRequest, place runPlacement, ceiling governanceCeiling, mounts int, ask macOSVMAsk) *runRefusal {
+	ask.Mounts = mounts
 	runners := []uuid.UUID{requestRunnerID(req)}
 	p := requestPlacement(req)
 	if place.pooled {
@@ -339,10 +340,6 @@ func (s *Server) placementCapabilityRefusalFor(ctx context.Context, req createRu
 	}
 	if demands.LinuxVM && requestIsInteractive(req) && req.InteractiveStart == "agent" {
 		return runError(placement.ReasonPlacementCapability.Status(), string(placement.ReasonPlacementCapability), linuxVMAgentStart)
-	}
-	// A macOS VM shares no folder in 0.10.0, whatever runner it lands on.
-	if demands.MacOSVM && mounts > 0 {
-		return runError(placement.ReasonPlacementCapability.Status(), string(placement.ReasonPlacementCapability), remote.VMNoFolderShare)
 	}
 	if p != types.PlacementLocal || (!demands.IdlePause && !demands.LinuxVM && !demands.MacOSVM) {
 		return nil
@@ -390,6 +387,8 @@ type macOSVMAsk struct {
 	Harnesses []string
 	CPUMillis int
 	MemoryMiB int
+	// Mounts is how many folders the run shares into the VM.
+	Mounts int
 }
 
 // macOSOffer is what one Mac runner offers for macOS VMs now: the one function placement, the runner
@@ -568,9 +567,13 @@ func (s *Server) macOSVMRefusal(ctx context.Context, id uuid.UUID, pc placementC
 	return macOSVMFit(caps.MacOSVM, rn, ask, pool), nil
 }
 
-// macOSVMFit refuses a run whose harness the Mac's base cannot serve, or whose applied size is under
-// the base's minimum guest; runnerd checks both again at start, against its own manifest.
+// macOSVMFit refuses a run that shares a folder on a runner that cannot, whose harness the Mac's base
+// cannot serve, or whose applied size is under the base's minimum guest; runnerd checks the harness and
+// size again at start, against its own manifest.
 func macOSVMFit(mc *runnerwire.MacVMCaps, rn types.Runner, ask macOSVMAsk, pool bool) *placement.Refusal {
+	if ask.Mounts > 0 && !mc.Folders {
+		return macOSRefusal("workspaces", runner.MacVMNoFolderShare)
+	}
 	for _, h := range ask.Harnesses {
 		if h == macOSVMHarnessNone || slices.Contains(mc.Harnesses, h) {
 			continue

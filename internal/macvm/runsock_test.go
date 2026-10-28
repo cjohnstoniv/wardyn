@@ -29,12 +29,15 @@ func TestRunDirIsTheRunKeyAndRunJSONIsCheckedOnOpen(t *testing.T) {
 	if got := filepath.Base(l.RunDir("6f1c2a3b4d5e")); got != "6f1c2a3b4d5e" {
 		t.Fatalf("a key is not its own run dir: %q", got)
 	}
-	cfg := macvm.RunConfig{RunID: testRunID, BaseDir: "/b"}
+	cfg := macvm.RunConfig{RunID: testRunID, BaseDir: "/b",
+		Shares: []macvm.Share{{Tag: macvm.ShareTag(0), HostPath: "/Users/me/proj", Target: "/home/agent/proj", ReadOnly: true}}}
 	if err := macvm.WriteRunConfig(l.RunDir(testRunID), cfg); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := macvm.ReadRunConfig(l.RunDir(testRunID)); err != nil {
+	if got, err := macvm.ReadRunConfig(l.RunDir(testRunID)); err != nil {
 		t.Fatalf("its own dir: %v", err)
+	} else if len(got.Shares) != 1 || got.Shares[0] != cfg.Shares[0] {
+		t.Fatalf("shares round-tripped as %+v", got.Shares)
 	}
 	other := filepath.Join(l.RunsDir(), "aaaaaaaaaaaa")
 	if err := macvm.WriteRunConfig(other, cfg); err != nil {

@@ -136,7 +136,6 @@ func TestMacVMStartRefusalsAreCanon(t *testing.T) {
 		want string
 	}{
 		"drives": {func(s *runner.SandboxSpec) { s.Drives = []types.DriveMount{{ObjectName: "d"}} }, "A macOS VM sandbox has no drives in this release."},
-		"folder": {func(s *runner.SandboxSpec) { s.Mounts = []runner.Mount{{Source: "/tmp", Target: "/w"}} }, "A macOS VM sandbox shares no folder in this release."},
 		"agent start": {func(s *runner.SandboxSpec) {
 			s.Interactive, s.Env = true, map[string]string{envInteractiveStart: "agent"}
 		},

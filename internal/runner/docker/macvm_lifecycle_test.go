@@ -207,7 +207,7 @@ func TestMacGuestInitTurnsTheAutoUpdaterOff(t *testing.T) {
 // the run.json a create writes holds only the run boot's own keys. A field added to RunConfig fails
 // this test, so tools mode can reach a run boot only by a reviewed change here.
 func TestMacVMRunBootCarriesNoToolsMode(t *testing.T) {
-	want := []string{"base_dir", "cpus", "identity", "ledger_dir", "ledger_entry", "memory_mib", "run_id", "runner_id", "sock_root"}
+	want := []string{"base_dir", "cpus", "identity", "ledger_dir", "ledger_entry", "memory_mib", "run_id", "runner_id", "shares", "sock_root"}
 	var got []string
 	rt := reflect.TypeFor[macvm.RunConfig]()
 	for i := range rt.NumField() {
