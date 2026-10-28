@@ -655,6 +655,10 @@ export interface RunPolicyView {
 // internal/api/run_host_marks.go hostMarks: the allowed_domains entries marked Inspected.
 export interface RunPolicyHostMarks {
   inspected: string[];
+  // Every host the proxy terminates: "host" on any port, "host:port" scoped to one.
+  terminated: string[];
+  // The terminated hosts no allowed_domains entry covers, matched by the proxy's own rule.
+  outside: string[];
 }
 
 // internal/policyref.Provenance: the layer that set one value of a run's policy

@@ -1871,6 +1871,13 @@ enforces, not a re-derivation:
   record existed can only say the policy was updated after launch, which a rename
   alone also does.
 
+**Host marks.** `host_marks` marks each allowed host from the proxy config the runner was sent, after secret placeholders and placement, and `terminated` lists every host that proxy opens. Hosts Wardyn opens outside the allowlist are listed too, marked Inspected (`outside`).
+
+| Mark | Meaning |
+|---|---|
+| Inspected | Wardyn opens this traffic to add a credential or check it, so the sandbox must trust Wardyn's certificate. |
+| Tunnel only | Wardyn passes this traffic through without reading it. It sees only the host name. Apps that pin their certificate work here. |
+
 **Who can read it.**
 
 - Whoever can read the run (`GET /runs/{id}`): its creator or an admin.

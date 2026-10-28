@@ -4,7 +4,8 @@
 package api
 
 import (
-	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
@@ -13,17 +14,19 @@ import (
 // served on the run's policy view; an envelope without it predates the mark and says nothing.
 type hostMarks struct {
 	Inspected []string `json:"inspected"` // never null
+	// Terminated is every host the proxy terminates, as proxy.Config.TerminatedHosts lists them:
+	// the allowlist's Inspected entries are a subset of what it covers.
+	Terminated []string `json:"terminated"` // never null
+	// Outside is the Terminated hosts no allowed_domains entry covers, by the proxy package's own
+	// matcher (proxy.Config.TerminatedOutside), so a reader lists them without matching hosts itself.
+	Outside []string `json:"outside"` // never null
 }
 
 // hostMarksOf marks allowed over the proxy config dispatch is handing the sidecar, by the proxy's
 // own rule (proxy.Config.InspectsEntry), never by the name of the host.
 func hostMarksOf(pc runner.ProxyConfig, allowed []string) *hostMarks {
-	cfg := proxy.Config{
-		MITMCACertPEM: pc.MITMCACertPEM, MITMCAKeyPEM: pc.MITMCAKeyPEM,
-		MITMHosts: pc.MITMHosts, MITMLLM: pc.MITMLLM, PATGrants: pc.PATGrants,
-		GitHubAPI: pc.GitHubAPI, AzureARM: pc.AzureARM, AWSSigV4: pc.AWSSigV4, KubeAPI: pc.KubeAPI,
-	}
-	marks := &hostMarks{Inspected: []string{}}
+	cfg := runner.ProxyConfigOf(uuid.Nil, pc, runner.ProxyListenPort)
+	marks := &hostMarks{Inspected: []string{}, Terminated: cfg.TerminatedHosts(), Outside: cfg.TerminatedOutside(allowed)}
 	for _, entry := range allowed {
 		if cfg.InspectsEntry(entry) {
 			marks.Inspected = append(marks.Inspected, entry)

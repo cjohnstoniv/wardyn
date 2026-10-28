@@ -321,7 +321,6 @@ func newProxy(opts Options) *Proxy {
 	if evaluator == nil {
 		evaluator = builtinEvaluator{p: opts.Policy} // default: builtin RunPolicySpec verdict
 	}
-	mitmHosts, mitmPorts, mitmPlaintext := compileMITMHosts(opts.MITMHosts)
 	gitGrants := canonicalGitGrants(opts.GitGrants)
 	// Same canonicalisation as the repo keys above: a host is matched
 	// case-insensitively, so the map key is lowercased once here rather than at
@@ -351,9 +350,7 @@ func newProxy(opts Options) *Proxy {
 		llmUpstreams[vendor] = llmUpstream{host: host, port: port, prefix: strings.TrimSuffix(u.Path, "/")}
 		gatewayVendor[hostKey(host)] = vendor
 	}
-	// A git_pat grant with api: true terminates its own host on 443 and nothing else, so the
-	// forge API is reached only through the door. An entry the operator already authored keeps its own scope.
-	patAPI := newPATAPIGrants(patGrants, mitmHosts, mitmPorts)
+	mitm := buildMITMTables(opts.MITMHosts, patGrants, opts.GitHubAPI, opts.AzureARM, opts.AWSSigV4, opts.KubeAPI)
 	p := &Proxy{
 		runID:                opts.RunID,
 		policy:               opts.Policy,
@@ -364,20 +361,20 @@ func newProxy(opts Options) *Proxy {
 		res:                  res,
 		scanner:              opts.Scanner,
 		ca:                   opts.CA,
-		mitmHosts:            mitmHosts,
-		mitmPorts:            mitmPorts,
-		mitmPlaintext:        mitmPlaintext,
+		mitmHosts:            mitm.hosts,
+		mitmPorts:            mitm.ports,
+		mitmPlaintext:        mitm.plaintext,
 		mitmLLM:              opts.MITMLLM,
 		gitGrants:            gitGrants,
 		patGrants:            patGrants,
 		brokeredPATGrantIDs:  opts.BrokeredPATGrantIDs,
 		adoGrants:            opts.ADOGrants,
 		azure:                newAzureGates(opts.AzureGates),
-		patAPI:               patAPI,
-		ghAPI:                newGitHubAPIDoor(opts.GitHubAPI, mitmHosts, mitmPorts),
-		arm:                  newAzureARMDoor(opts.AzureARM, mitmHosts, mitmPorts),
-		sigv4:                newAWSSigV4Door(opts.AWSSigV4, mitmHosts, mitmPorts),
-		kube:                 newKubeAPIDoor(opts.KubeAPI, mitmHosts, mitmPorts),
+		patAPI:               mitm.patAPI,
+		ghAPI:                mitm.ghAPI,
+		arm:                  mitm.arm,
+		sigv4:                mitm.sigv4,
+		kube:                 mitm.kube,
 		gitTokens:            make(map[uuid.UUID]*gitTokEntry),
 		controlPlaneURL:      controlPlaneEndpoint(opts.ControlPlaneURL, ""),
 		runToken:             opts.RunToken,

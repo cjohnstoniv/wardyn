@@ -299,6 +299,7 @@ describe("PolicySummary host marks", () => {
   const TUNNEL_MEANING =
     "Wardyn passes this traffic through without reading it. It sees only the host name. Apps that pin their certificate work here.";
   const ALLOW_ALL_LINE = "Hosts not listed as Inspected pass through unread.";
+  const ALLOW_ALL_TEXT = "Allow-all egress (block-list only)";
   const spec = { allowed_domains: ["artifacts.corp.example", "pypi.org"] } as RunPolicySpec;
   const row = (host: string) => screen.getByText(host).closest("li") as HTMLElement;
 
@@ -313,7 +314,7 @@ describe("PolicySummary host marks", () => {
   });
 
   it("puts each chip on its own host, and one meaning line per mark present", () => {
-    render(<PolicySummary spec={spec} hostMarks={{ inspected: ["artifacts.corp.example"] }} />);
+    render(<PolicySummary spec={spec} hostMarks={{ inspected: ["artifacts.corp.example"], terminated: ["artifacts.corp.example"], outside: [] }} />);
     expect(within(row("artifacts.corp.example")).getByText(INSPECTED)).toBeInTheDocument();
     expect(within(row("artifacts.corp.example")).queryByText(TUNNEL)).toBeNull();
     expect(within(row("pypi.org")).getByText(TUNNEL)).toBeInTheDocument();
@@ -323,7 +324,7 @@ describe("PolicySummary host marks", () => {
   });
 
   it("explains only the marks present", () => {
-    render(<PolicySummary spec={spec} hostMarks={{ inspected: [] }} />);
+    render(<PolicySummary spec={spec} hostMarks={{ inspected: [], terminated: [], outside: [] }} />);
     expect(screen.getAllByText(TUNNEL)).toHaveLength(3); // two hosts and the meaning line's chip
     expect(screen.queryByText(INSPECTED)).toBeNull();
     expect(screen.queryByText(INSPECTED_MEANING)).toBeNull();
@@ -334,10 +335,52 @@ describe("PolicySummary host marks", () => {
     for (const s of [INSPECTED, TUNNEL, INSPECTED_MEANING, TUNNEL_MEANING, ALLOW_ALL_LINE]) expect(screen.queryByText(s)).toBeNull();
   });
 
-  it("keeps the allow-all row to its one line and adds the allow-all line", () => {
-    render(<PolicySummary spec={{ ...spec, allow_all_egress: true } as RunPolicySpec} hostMarks={{ inspected: [] }} />);
+  it("lists a host the proxy opens outside the allowlist after the allowlist rows, as Inspected", () => {
+    render(
+      <PolicySummary
+        spec={spec}
+        hostMarks={{ inspected: ["artifacts.corp.example"], terminated: ["api.github.com", "artifacts.corp.example"], outside: ["api.github.com"] }}
+      />,
+    );
+    const items = within(screen.getByText("artifacts.corp.example").closest("ul") as HTMLElement).getAllByRole("listitem");
+    expect(items.map((li) => li.textContent)).toEqual([
+      `artifacts.corp.example${INSPECTED}`,
+      `pypi.org${TUNNEL}`,
+      `api.github.com${INSPECTED}`,
+    ]);
+    expect(screen.getByText(INSPECTED_MEANING)).toBeInTheDocument();
+    expect(screen.getByText(TUNNEL_MEANING)).toBeInTheDocument();
+  });
+
+  it("explains Inspected for an outside host even when every listed host is Tunnel only", () => {
+    render(<PolicySummary spec={spec} hostMarks={{ inspected: [], terminated: ["api.github.com"], outside: ["api.github.com"] }} />);
+    expect(within(row("api.github.com")).getByText(INSPECTED)).toBeInTheDocument();
+    expect(screen.getByText(INSPECTED_MEANING)).toBeInTheDocument();
+  });
+
+  it("allow-all: the line, each opened host as Inspected, the Inspected meaning, then the allow-all line with no chip", () => {
+    const { container } = render(
+      <PolicySummary
+        spec={{ ...spec, allow_all_egress: true } as RunPolicySpec}
+        hostMarks={{ inspected: [], terminated: ["api.github.com", "api.anthropic.com"], outside: [] }}
+      />,
+    );
     expect(screen.queryByText("pypi.org")).toBeNull();
-    expect(screen.getByText(ALLOW_ALL_LINE)).toBeInTheDocument();
+    const text = container.textContent ?? "";
+    const at = [ALLOW_ALL_TEXT, "api.github.com", "api.anthropic.com", INSPECTED_MEANING, ALLOW_ALL_LINE].map((s) => text.indexOf(s));
+    expect(at.every((i) => i >= 0)).toBe(true);
+    expect([...at].sort((a, b) => a - b)).toEqual(at);
+    expect(within(row("api.github.com")).getByText(INSPECTED)).toBeInTheDocument();
+    expect(screen.queryByText(TUNNEL)).toBeNull();
     expect(screen.queryByText(TUNNEL_MEANING)).toBeNull();
+    const line = screen.getByText(ALLOW_ALL_LINE);
+    expect(line.closest("p")?.children).toHaveLength(1); // the text only, no chip beside it
+  });
+
+  it("allow-all with nothing opened: the line and the allow-all line only", () => {
+    render(<PolicySummary spec={{ ...spec, allow_all_egress: true } as RunPolicySpec} hostMarks={{ inspected: [], terminated: [], outside: [] }} />);
+    expect(screen.getByText(ALLOW_ALL_TEXT)).toBeInTheDocument();
+    expect(screen.getByText(ALLOW_ALL_LINE)).toBeInTheDocument();
+    for (const s of [INSPECTED, TUNNEL, INSPECTED_MEANING, TUNNEL_MEANING]) expect(screen.queryByText(s)).toBeNull();
   });
 });

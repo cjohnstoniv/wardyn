@@ -53,7 +53,7 @@ type Value = {
   end?: ChipSpec;
 };
 type Row = { label: string; raw?: boolean; values: Value[] };
-type Meaning = { chip: ChipSpec; text: string };
+type Meaning = { chip?: ChipSpec; text: string };
 type Group = { heading: string; intro?: string; rows: Row[]; items?: string[]; ado?: string[]; meanings?: Meaning[] };
 
 type Bag = Record<string, unknown>;
@@ -158,16 +158,22 @@ function summarize(
   const allowAll = take("allow_all_egress", asBool);
   const allowed = take("allowed_domains", asStrings);
   const meanings: Meaning[] = [];
+  const opened = (hosts: readonly string[] | undefined): Value[] =>
+    (hosts ?? []).map((h) => mono(h, { end: hostChip(true) }));
   if (allowAll) {
-    network.push(row(SUMMARY.allowedHosts, [text(D.ALLOW_ALL)]));
-    if (hostMarks) meanings.push({ chip: { label: SUMMARY.tunnelOnly, tone: "neutral" }, text: SUMMARY.tunnelOnlyAllowAll });
+    // Nothing is listed, so every host the proxy opens is outside the allowlist.
+    const terminated = opened(hostMarks?.terminated);
+    network.push(row(SUMMARY.allowedHosts, [text(D.ALLOW_ALL), ...terminated]));
+    if (terminated.length > 0) meanings.push({ chip: hostChip(true), text: SUMMARY.inspectedMeaning });
+    if (hostMarks) meanings.push({ text: SUMMARY.tunnelOnlyAllowAll });
   } else if (allowed) {
     const inspected = new Set(hostMarks?.inspected);
     const hosts = entries(allowed, "allowed_domains").map((v) =>
       hostMarks && v.text && v.mark !== "removed" ? { ...v, end: hostChip(inspected.has(v.text)) } : v,
     );
-    network.push(row(SUMMARY.allowedHosts, hosts.length > 0 ? hosts : [text(SUMMARY.none)]));
-    if (hosts.some((v) => v.end?.label === SUMMARY.inspected)) {
+    const outside = opened(hostMarks?.outside);
+    network.push(row(SUMMARY.allowedHosts, hosts.length + outside.length > 0 ? [...hosts, ...outside] : [text(SUMMARY.none)]));
+    if (hosts.concat(outside).some((v) => v.end?.label === SUMMARY.inspected)) {
       meanings.push({ chip: hostChip(true), text: SUMMARY.inspectedMeaning });
     }
     if (hosts.some((v) => v.end?.label === SUMMARY.tunnelOnly)) {
@@ -410,8 +416,8 @@ export function PolicySummary({
             </dl>
           )}
           {g.meanings?.map((m) => (
-            <p key={m.chip.label} className="flex flex-wrap items-baseline gap-2 text-sm text-muted-foreground">
-              <Chip tone={m.chip.tone}>{m.chip.label}</Chip>
+            <p key={m.text} className="flex flex-wrap items-baseline gap-2 text-sm text-muted-foreground">
+              {m.chip && <Chip tone={m.chip.tone}>{m.chip.label}</Chip>}
               <span>{m.text}</span>
             </p>
           ))}
