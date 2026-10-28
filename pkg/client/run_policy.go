@@ -52,7 +52,8 @@ type RunPolicyView struct {
 type RunPolicyHostMarks struct {
 	Inspected  []string `json:"inspected"`
 	Terminated []string `json:"terminated"`
-	// Outside is the Terminated hosts no allowed_domains entry covers.
+	// Outside is the Terminated hosts the proxy opens on a port no allowed_domains entry names; under
+	// allow-all, every one it opens, whatever the allowlist names. It can overlap allowed_domains.
 	Outside []string `json:"outside"`
 }
 

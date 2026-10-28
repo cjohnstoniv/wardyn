@@ -657,7 +657,8 @@ export interface RunPolicyHostMarks {
   inspected: string[];
   // Every host the proxy terminates: "host" on any port, "host:port" scoped to one.
   terminated: string[];
-  // The terminated hosts no allowed_domains entry covers, matched by the proxy's own rule.
+  // The terminated hosts the proxy opens on a port no allowed_domains entry names (under allow-all,
+  // every one it opens), by the proxy's own rule. It can overlap allowed_domains.
   outside: string[];
 }
 

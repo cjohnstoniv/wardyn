@@ -1871,7 +1871,7 @@ enforces, not a re-derivation:
   record existed can only say the policy was updated after launch, which a rename
   alone also does.
 
-**Host marks.** `host_marks` marks each allowed host from the proxy config the runner was sent, after secret placeholders and placement, and `terminated` lists every host that proxy terminates when it admits a connection. Hosts no allowlist entry names are listed too, marked Inspected (`outside`): those it admits, or holds for first-use approval, never a refused host.
+**Host marks.** `host_marks` marks each allowed host from the proxy config the runner was sent, after secret placeholders and placement, and `terminated` lists every host that proxy terminates once admitted. Hosts it opens on a port no entry names (under allow-all, all of them) are listed too, marked Inspected (`outside`): admitted, or held for first-use approval.
 
 | Mark | Meaning |
 |---|---|
