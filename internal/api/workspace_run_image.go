@@ -211,6 +211,24 @@ type imageResolveResult struct {
 	// BaseErr is why wrapping the workspace's chosen base image failed; set on that failure only, so a
 	// caller that must not substitute the convention image can tell it from the lanes that may fall back.
 	BaseErr error
+	// ImageArches are a ready prewrapped base image's checked architectures; nil for any other image.
+	ImageArches []string
+}
+
+// prewrappedWorkspaceImage resolves a workspace's prewrapped base image: checked at registration and run as
+// is, with no wrap, no cache and no build record. Only a ready row runs; anything else fails the run rather
+// than falling back to the convention image.
+func (s *Server) prewrappedWorkspaceImage(ctx context.Context, ref string) imageResolveResult {
+	pw, refusal := s.prewrappedRunImage(ctx, ref)
+	switch {
+	case refusal != nil && refusal.err != nil:
+		return imageResolveResult{BaseErr: refusal.err}
+	case refusal != nil:
+		return imageResolveResult{BaseErr: errors.New(refusal.body.Error)}
+	case pw == nil:
+		return imageResolveResult{BaseErr: errPrewrappedNotRegistered}
+	}
+	return imageResolveResult{Image: pw.Image, OK: true, ImageArches: pw.Check.AcceptedArches}
 }
 
 // resolveWorkspaceImageWith is resolveWorkspaceImage with opts, and the full answer.
@@ -237,18 +255,7 @@ func (s *Server) resolveWorkspaceImageWith(ctx context.Context, runID uuid.UUID,
 	// like a nil BaseImage — falls through to the devcontainer/generated path
 	// instead of a fixed ref.
 	if prewrappedBase(primary.BaseImage) {
-		// Checked at registration and run as is: no wrap, no cache and no build record. Only a ready row
-		// runs; anything else fails the run rather than falling back to the convention image.
-		pw, refusal := s.prewrappedRunImage(ctx, primary.BaseImage.Image)
-		switch {
-		case refusal != nil && refusal.err != nil:
-			return imageResolveResult{BaseErr: refusal.err}
-		case refusal != nil:
-			return imageResolveResult{BaseErr: errors.New(refusal.body.Error)}
-		case pw == nil:
-			return imageResolveResult{BaseErr: errPrewrappedNotRegistered}
-		}
-		return imageResolveResult{Image: pw.Image, OK: true}
+		return s.prewrappedWorkspaceImage(ctx, primary.BaseImage.Image)
 	}
 	if b := primary.BaseImage; b != nil && b.Kind != "recommended" && strings.TrimSpace(b.Image) != "" {
 		if s.cfg.ImageBuilder == nil {

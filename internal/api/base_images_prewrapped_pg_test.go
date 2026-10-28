@@ -329,27 +329,53 @@ func TestPG_PrewrappedRunDoors(t *testing.T) {
 	if v := e.srv.resolveBuildView(ws, workspaceReadFull); v.State != "nothing_to_build" {
 		t.Fatalf("build view = %+v, want nothing_to_build", v)
 	}
-	if res := e.srv.resolveWorkspaceImageWith(ctx, uuid.New(), ws, nil, nil, imageResolveOpts{}); !res.OK || res.Image != readyRef {
-		t.Fatalf("workspace image = %+v, want %s as is", res, readyRef)
+	if res := e.srv.resolveWorkspaceImageWith(ctx, uuid.New(), ws, nil, nil, imageResolveOpts{}); !res.OK || res.Image != readyRef ||
+		!slices.Equal(res.ImageArches, []string{"amd64"}) {
+		t.Fatalf("workspace image = %+v, want %s as is with [amd64]", res, readyRef)
 	}
 	ws.BaseImage.Image = waitingRef
 	if res := e.srv.resolveWorkspaceImageWith(ctx, uuid.New(), ws, nil, nil, imageResolveOpts{}); res.OK || res.BaseErr == nil {
 		t.Fatalf("waiting workspace image = %+v, want a failed run", res)
 	}
 
-	// A direct run carries the accepted architectures to the substrate; a macOS VM never runs one.
-	if _, err := e.srv.createSandboxAtTarget(ctx, types.AgentRun{ID: uuid.New()}, runner.SandboxSpec{Image: readyRef}); err != nil {
+	// A direct run records the accepted architectures when its image resolves, and dispatch places it by
+	// them even once the catalog row is gone; a macOS VM never runs one.
+	run, err := e.st.CreateRun(ctx, types.AgentRun{ID: uuid.New(), CreatedBy: "sec", Agent: "claude-code",
+		ConfinementClass: types.CC1, State: types.RunPending, RunnerTarget: "k8s", Task: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, arches, failed := e.srv.resolveCreateRunImage(ctx, createRunRequest{Agent: "claude-code", Image: readyRef}, run, nil)
+	if failed || image != readyRef || !slices.Equal(arches, []string{"amd64"}) {
+		t.Fatalf("resolved %q %v failed=%v, want %s [amd64]", image, arches, failed, readyRef)
+	}
+	ready, _ := e.st.GetBaseImageByRef(ctx, types.BaseImageKindPrewrapped, readyRef)
+	if err := e.st.DeleteBaseImage(ctx, ready.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if run, err = e.st.GetRun(ctx, run.ID); err != nil || !slices.Equal(run.ImageArches, []string{"amd64"}) {
+		t.Fatalf("stored run arches = %v (%v), want [amd64]", run.ImageArches, err)
+	}
+	if _, err := e.srv.createSandboxAtTarget(ctx, run, runner.SandboxSpec{Image: readyRef}); err != nil {
 		t.Fatal(err)
 	}
 	if got := e.rn.lastSpec.ImageArches; !slices.Equal(got, []string{"amd64"}) {
-		t.Fatalf("spec.ImageArches = %v, want [amd64]", got)
+		t.Fatalf("spec.ImageArches = %v, want [amd64] after the catalog row was deleted", got)
 	}
-	_, err := e.srv.createSandboxAtTarget(ctx, types.AgentRun{ID: uuid.New(), MachineKind: types.MachineMacOSVM}, runner.SandboxSpec{Image: readyRef})
+	run.MachineKind = types.MachineMacOSVM
+	_, err = e.srv.createSandboxAtTarget(ctx, run, runner.SandboxSpec{Image: readyRef})
 	if pe := (*prewrappedPlatformError)(nil); !errors.As(err, &pe) || pe.reason != reasonPrewrappedPlatformMismatch {
 		t.Fatalf("macOS VM = %v, want %s", err, reasonPrewrappedPlatformMismatch)
 	}
 	if _, reason := sandboxCreateFailure(err); reason != reasonPrewrappedPlatformMismatch {
 		t.Fatalf("audit reason = %s, want %s", reason, reasonPrewrappedPlatformMismatch)
+	}
+	// Any other run is placed as before.
+	if _, err := e.srv.createSandboxAtTarget(ctx, types.AgentRun{ID: uuid.New()}, runner.SandboxSpec{Image: readyRef}); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.rn.lastSpec.ImageArches; got != nil {
+		t.Fatalf("a run with no recorded arches got %v", got)
 	}
 }
 

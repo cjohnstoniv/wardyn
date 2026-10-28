@@ -2182,6 +2182,9 @@ func (s *authzStore) SetSandboxRef(_ context.Context, id uuid.UUID, ref string) 
 func (s *authzStore) SetRunImage(_ context.Context, id uuid.UUID, image string) error {
 	return s.mutateRun(id, func(r *types.AgentRun) { r.Image = image })
 }
+func (s *authzStore) SetRunImageArches(_ context.Context, id uuid.UUID, arches []string) error {
+	return s.mutateRun(id, func(r *types.AgentRun) { r.ImageArches = arches })
+}
 func (s *authzStore) SetRunDiskMiB(_ context.Context, id uuid.UUID, mib int) error {
 	return s.mutateRun(id, func(r *types.AgentRun) { r.DiskMiB = mib })
 }

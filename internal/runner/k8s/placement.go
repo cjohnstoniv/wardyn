@@ -128,9 +128,12 @@ func (p Placement) withArch(arch string) (Placement, error) {
 // set, design final §3). One architecture is withArch. Several leave the operator's selectors as they are
 // and intersect the required node affinity with kubernetes.io/arch In arches: each nonempty required term
 // gains the expression, an empty term is kept (it matches no node, and the expression would widen it), and
-// with no required affinity at all the expression becomes its one term.
+// with no required affinity at all the expression becomes its one term. No arches is p as it is.
 func (p Placement) withArches(arches []string) (Placement, error) {
-	if len(arches) == 1 {
+	switch len(arches) {
+	case 0:
+		return p, nil
+	case 1:
 		return p.withArch(arches[0])
 	}
 	if v, ok := p.NodeSelector[corev1.LabelArchStable]; ok && !slices.Contains(arches, v) {

@@ -130,6 +130,22 @@ func TestCheckPrewrappedImage_PodSpecPolicyFirstAndTeardown(t *testing.T) {
 	if len(left.Items) != 0 || len(pols.Items) != 0 {
 		t.Fatalf("after the check: %d pod(s) and %d polic(ies) of the attempt left, want none", len(left.Items), len(pols.Items))
 	}
+	// A force delete removes the pod before the kubelet stops it, so the policy could go first.
+	for _, a := range cs.Actions() {
+		if a.GetVerb() != "delete" && a.GetVerb() != "delete-collection" || a.GetResource().Resource != "pods" {
+			continue
+		}
+		var opts metav1.DeleteOptions
+		switch da := a.(type) {
+		case clienttesting.DeleteAction:
+			opts = da.GetDeleteOptions()
+		case clienttesting.DeleteCollectionActionImpl:
+			opts = da.DeleteOptions
+		}
+		if g := opts.GracePeriodSeconds; g != nil && *g < 1 {
+			t.Fatalf("a check pod was force-deleted (%s, grace %d)", a.GetVerb(), *g)
+		}
+	}
 }
 
 func TestCheckPrewrappedImage_PolicyIsDenyAllBothWays(t *testing.T) {

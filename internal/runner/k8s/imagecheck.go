@@ -138,9 +138,11 @@ func (d *Driver) checkImageOnArch(ctx context.Context, attempt uuid.UUID, ref, a
 		return v
 	}
 	v.Code, v.Detail = d.waitImageCheck(ctx, podName)
-	// Early, per architecture; the attempt's teardown is what waits for every pod to be gone.
+	// Early, per architecture; the attempt's teardown is what waits for every pod to be gone. Never a force
+	// delete (grace 0): that drops the pod from the API before the kubelet stops it, and the teardown's wait
+	// would then let the policy go while the container may still run (teardownByRunID's H3).
 	zero := int64(0)
-	if err := d.clientset.CoreV1().Pods(ns).Delete(context.WithoutCancel(ctx), podName, metav1.DeleteOptions{GracePeriodSeconds: &zero}); err != nil && !isNotFound(err) {
+	if err := d.clientset.CoreV1().Pods(ns).Delete(context.WithoutCancel(ctx), podName, metav1.DeleteOptions{GracePeriodSeconds: runnerGrace(&zero)}); err != nil && !isNotFound(err) {
 		slog.DebugContext(ctx, "wardynd: k8s substrate: image check pod delete failed; the attempt's teardown retries",
 			slog.String("pod", podName), slog.Any("err", err))
 	}

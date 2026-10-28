@@ -102,7 +102,7 @@ func TestResolveCreateRunImage_ArchVariant(t *testing.T) {
 			if tc.unbond {
 				run.RunnerID = nil
 			}
-			got, failed := srv.resolveCreateRunImage(context.Background(), tc.req, run, tc.ws)
+			got, _, failed := srv.resolveCreateRunImage(context.Background(), tc.req, run, tc.ws)
 			if failed {
 				t.Fatal("resolveCreateRunImage failed")
 			}
@@ -148,7 +148,7 @@ func TestRunArch_FollowsTheBoundRunner(t *testing.T) {
 	if got := srv.runArch(context.Background(), run); got != "arm64" {
 		t.Fatalf("after the rebind runArch = %q, want arm64", got)
 	}
-	img, failed := srv.resolveCreateRunImage(context.Background(), createRunRequest{Agent: "claude-code"}, run, nil)
+	img, _, failed := srv.resolveCreateRunImage(context.Background(), createRunRequest{Agent: "claude-code"}, run, nil)
 	if failed || img != "m/cc:1-arm64" {
 		t.Errorf("image = %q (failed %v), want the arm64 variant", img, failed)
 	}

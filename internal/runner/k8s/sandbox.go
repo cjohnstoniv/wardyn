@@ -148,6 +148,20 @@ func (d *Driver) createPreflight(ctx context.Context, spec runner.SandboxSpec) (
 	return runtimeClassName, runtimeHandler, enforced, nil
 }
 
+// placeAgentPod sets the agent pod's pull secret and its placement: the deployment's, narrowed to the
+// architectures a prewrapped image was checked on (spec.ImageArches).
+func (d *Driver) placeAgentPod(pod *corev1.Pod, spec runner.SandboxSpec) error {
+	if d.cfg.ImagePullSecret != "" {
+		pod.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: d.cfg.ImagePullSecret}}
+	}
+	placement, err := d.placement.withArches(spec.ImageArches)
+	if err != nil {
+		return err
+	}
+	placement.apply(pod, spec.RunID, componentAgent, spec.Labels)
+	return nil
+}
+
 // CreateSandbox provisions the run's Secret, NetworkPolicies, proxy pod, and
 // agent pod, in that order, fail-closed with full rollback on any error
 // (mirrors the docker driver's LIFO teardown-closure shape). Kept as one
@@ -458,17 +472,9 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if runtimeClassName != "" {
 		agentPod.Spec.RuntimeClassName = &runtimeClassName
 	}
-	if d.cfg.ImagePullSecret != "" {
-		agentPod.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: d.cfg.ImagePullSecret}}
+	if err := d.placeAgentPod(agentPod, spec); err != nil {
+		return fail(err)
 	}
-	placement := d.placement
-	if len(spec.ImageArches) > 0 {
-		var err error
-		if placement, err = placement.withArches(spec.ImageArches); err != nil {
-			return fail(err)
-		}
-	}
-	placement.apply(agentPod, spec.RunID, componentAgent, spec.Labels)
 	agentPod.Labels[labelRecord] = strconv.FormatBool(spec.RecordWithin(d.cfg.Record))
 	if err := d.runnerPodSpec(agentPod, componentAgent, ""); err != nil {
 		return fail(err)

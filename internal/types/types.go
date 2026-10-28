@@ -178,6 +178,9 @@ type AgentRun struct {
 	// RecordingLevel is the level the run is recorded at, resolved once at dispatch with NotRecorded
 	// (RecordingChoice); empty for a run dispatched before the level existed, which reads as terminal.
 	RecordingLevel RecordingLevel `json:"recording_level,omitempty"`
+	// ImageArches are the architectures the run's prewrapped image was checked on, recorded when its
+	// image resolved; nil for any other image. Dispatch places the run by these, never by the catalog.
+	ImageArches []string `json:"-"`
 	// RunnerPoolID is the runner pool the run was admitted into, and the next three fields say how
 	// (all written once at create). A pool is a label for a choice and never admission: the run
 	// goes to the exact runner recorded in RunnerID (a self-hosted runner) or RunnerPoolExecutor (a

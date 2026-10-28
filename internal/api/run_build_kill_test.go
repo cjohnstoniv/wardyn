@@ -78,15 +78,15 @@ var runBuildDoors = []struct {
 	build func(*Server, context.Context, uuid.UUID) bool
 }{
 	{"create wraps a base image", func(s *Server, ctx context.Context, id uuid.UUID) bool {
-		_, failed := s.resolveCreateRunImage(ctx, createRunRequest{Agent: "claude-code", Image: "ubuntu:24.04"}, types.AgentRun{ID: id}, nil)
+		_, _, failed := s.resolveCreateRunImage(ctx, createRunRequest{Agent: "claude-code", Image: "ubuntu:24.04"}, types.AgentRun{ID: id}, nil)
 		return !failed
 	}},
 	{"create builds a devcontainer repo", func(s *Server, ctx context.Context, id uuid.UUID) bool {
-		_, failed := s.resolveCreateRunImage(ctx, createRunRequest{Agent: "claude-code", DevcontainerRepo: "https://github.com/acme/widgets"}, types.AgentRun{ID: id}, nil)
+		_, _, failed := s.resolveCreateRunImage(ctx, createRunRequest{Agent: "claude-code", DevcontainerRepo: "https://github.com/acme/widgets"}, types.AgentRun{ID: id}, nil)
 		return !failed
 	}},
 	{"create builds a workspace's image", func(s *Server, ctx context.Context, id uuid.UUID) bool {
-		_, failed := s.resolveCreateRunImage(ctx, createRunRequest{Agent: "claude-code"}, types.AgentRun{ID: id}, []types.Workspace{buildDoorWorkspace()})
+		_, _, failed := s.resolveCreateRunImage(ctx, createRunRequest{Agent: "claude-code"}, types.AgentRun{ID: id}, []types.Workspace{buildDoorWorkspace()})
 		return !failed
 	}},
 	{"a workspace run builds its image", func(s *Server, ctx context.Context, id uuid.UUID) bool {
@@ -425,7 +425,7 @@ func (*failingBaseBuilder) FinalizeBase(context.Context, string, string, io.Writ
 func TestCreateRunImage_BaseImageWrapFailureFailsTheRunOnTheWorkspaceDoorsAlike(t *testing.T) {
 	srv, st, audit, run, ctx := runBuildFixture(t, newStoppableBuilder())
 	srv.cfg.ImageBuilder = &failingBaseBuilder{}
-	image, failed := srv.resolveCreateRunImage(ctx, createRunRequest{Agent: "claude-code"}, run, []types.Workspace{buildDoorWorkspace()})
+	image, _, failed := srv.resolveCreateRunImage(ctx, createRunRequest{Agent: "claude-code"}, run, []types.Workspace{buildDoorWorkspace()})
 	if !failed {
 		t.Fatalf("resolveCreateRunImage launched on %q after the chosen base image failed to wrap", image)
 	}

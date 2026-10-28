@@ -68,16 +68,13 @@ func (c dispatchCeiling) placementExempt() dispatchCeiling {
 // run, a retry or a revive. A pooled run whose row names no target fails; it is never handed to the
 // first substrate that can enforce its class.
 func (s *Server) createSandboxAtTarget(ctx context.Context, run types.AgentRun, spec runner.SandboxSpec) (runner.Sandbox, error) {
-	pw, refusal := s.prewrappedRunImage(ctx, spec.Image)
-	switch {
-	case refusal != nil && refusal.err != nil:
-		return runner.Sandbox{}, refusal.err
-	case refusal != nil:
-		return runner.Sandbox{}, &prewrappedPlatformError{reasonPrewrappedImageNotRegistered, refusal.body.Error}
-	case pw != nil && run.MachineKind == types.MachineMacOSVM:
-		return runner.Sandbox{}, &prewrappedPlatformError{reasonPrewrappedPlatformMismatch, "a prewrapped image is a Linux image and never runs in a macOS VM."}
-	case pw != nil:
-		spec.ImageArches = pw.Check.AcceptedArches
+	// A prewrapped image is placed by the architectures recorded on the run when its image resolved, never
+	// by the catalog, which may have changed since (design final §3).
+	if run.ImageArches != nil {
+		if run.MachineKind == types.MachineMacOSVM {
+			return runner.Sandbox{}, &prewrappedPlatformError{reasonPrewrappedPlatformMismatch, "a prewrapped image is a Linux image and never runs in a macOS VM."}
+		}
+		spec.ImageArches = run.ImageArches
 	}
 	switch {
 	case run.RunnerID != nil && run.Task == harnessLoginTask:
