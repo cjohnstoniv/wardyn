@@ -380,3 +380,15 @@ func TestTailWriterKeepsOnlyTheTail(t *testing.T) {
 		t.Fatal("the tail is not the last bytes written")
 	}
 }
+
+// TestDefaultRootRefusesARelativeHome pins the guard: the runner deletes bases and the cache under this root.
+func TestDefaultRootRefusesARelativeHome(t *testing.T) {
+	t.Setenv("HOME", "relative/home")
+	if r, err := DefaultRoot(); err == nil {
+		t.Fatalf("DefaultRoot() = %q under a relative $HOME", r)
+	}
+	t.Setenv("HOME", "/Users/someone")
+	if r, err := DefaultRoot(); err != nil || r != "/Users/someone/Library/Application Support/Wardyn/"+RootDirName {
+		t.Fatalf("DefaultRoot() = %q, %v", r, err)
+	}
+}

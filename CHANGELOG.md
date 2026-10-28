@@ -22,6 +22,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   seconds. The live check counted only free, inactive and speculative pages, which on a 32 GiB Mac in use stayed
   under the VM's memory plus the 2 GiB margin while macOS's own memory pressure reported nearly half of memory free. It
   now takes the larger of that page sum and the share of memory the kernel's memory-pressure level calls free.
+- The runner no longer finds its macOS VM directory under a relative `$HOME`. `wardyn-runnerd macos-vm remove`
+  and the staging sweep delete under that directory, so a relative one would resolve against the working directory;
+  the runner now refuses it and says why.
 - After a change of the Mac's clock, a macOS VM run whose helper stopped no longer ends with "The Mac restarted, so
   the macOS VM was lost." (#3709). The runner tells a restart by the boot session the ledger records, as the ledger
   does, so a run whose entry has no session, from an earlier release, says its helper stopped.
