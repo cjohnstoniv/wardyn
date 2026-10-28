@@ -320,10 +320,15 @@ if command -v systemd-analyze >/dev/null 2>&1; then
   # exits on its first match while systemd-analyze/the upstream grep are still
   # writing, the upstream takes SIGPIPE, and pipefail reports the pipeline
   # failed even on a clean (matching) verdict.
-  _verify_warnings="$(systemd-analyze verify "${_t}/wardyn.service" "${_t}/wardyn.timer" 2>&1 | grep -E 'wardyn\.(service|timer)' || true)"
-  if ! grep -q . <<<"${_verify_warnings}"; then
-    :  # no output => clean
+  # A nonzero status fails on its own, whatever it printed: a verifier that could not start names
+  # neither unit.
+  _verify_rc=0
+  _verify_out="$(systemd-analyze verify "${_t}/wardyn.service" "${_t}/wardyn.timer" 2>&1)" || _verify_rc=$?
+  _verify_warnings="$(grep -E 'wardyn\.(service|timer)' <<<"${_verify_out}" || true)"
+  if [[ ${_verify_rc} -eq 0 ]] && ! grep -q . <<<"${_verify_warnings}"; then
+    :  # status 0 and no line about our units => clean
   else
+    if [[ ${_verify_rc} -ne 0 ]]; then _verify_warnings="systemd-analyze verify exited ${_verify_rc}:"$'\n'"${_verify_out}"; fi
     printf '%s\n' "${_verify_warnings}" >&2
     rm -rf "${_t}"
     fail "the rendered systemd units do not verify"
