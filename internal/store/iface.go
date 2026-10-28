@@ -116,6 +116,12 @@ type Store interface {
 	// UpdateSourceConfig above, deliberately NOT folded into UpsertBaseImage's identity-hit dedupe.
 	UpdateBaseImageName(ctx context.Context, id uuid.UUID, name string) (types.BaseImageEntry, error)
 	ListBaseImages(ctx context.Context) ([]types.BaseImageEntry, error)
+	GetBaseImage(ctx context.Context, id uuid.UUID) (types.BaseImageEntry, error)
+	GetBaseImageByRef(ctx context.Context, kind, image string) (types.BaseImageEntry, error)
+	// ClaimImageCheck and FinishImageCheck are a prewrapped row's fenced check writes (store_sources.go).
+	ClaimImageCheck(ctx context.Context, id, attempt uuid.UUID) (types.BaseImageEntry, error)
+	FinishImageCheck(ctx context.Context, id uuid.UUID, image string, attempt uuid.UUID, status, reason string, arches []string) (types.BaseImageEntry, error)
+	LiveImageCheckAttempts(ctx context.Context) (map[uuid.UUID]bool, error)
 	WorkspacesUsingBaseImage(ctx context.Context, id uuid.UUID) ([]string, error)
 	DeleteBaseImage(ctx context.Context, id uuid.UUID, detach bool) error
 

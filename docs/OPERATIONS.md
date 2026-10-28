@@ -4072,6 +4072,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0234` (`0234_macos_vm_kind`) admits `macos_vm` in `agent_runs.machine_kind`'s CHECK (`0001`'s table) and `run_disk` in `desktop_vm_sign_ins.store`'s CHECK; no row or grant changes.
 - `0235` (`0235_run_sandbox_absent_at`) adds `agent_runs.sandbox_absent_at` (`0001`'s table): when a runner first reported a RUNNING run's sandbox absent with no exit code, on connecting or to a status check. A later report that it is still absent, at least 30 seconds on, ends the run lost (`gone`) and `FAILED`. No row or grant changes.
 - `0236` (`0236_macos_vm_disks`) creates `macos_vm_disks`, one row per macOS VM run whose runner reported what became of its disk on the Mac; a split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `macos_vm_disks`. It also appends the `ssh` tile to each saved non-empty `finished` row of `ui_run_layouts` (`0037`'s table) that lacks one; no grant changes for that.
+- `0237` (`0237_base_image_prewrapped`) admits `prewrapped` in `base_images.kind`'s CHECK (`0031`'s table) and adds the registration check's columns (`check_status`, `check_attempt`, `check_deadline`, `check_reason`, `accepted_arches`, `checked_at`), NULL or empty on every existing row; no row or grant changes.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.

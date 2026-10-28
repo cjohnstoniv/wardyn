@@ -56,25 +56,64 @@ type Source struct {
 }
 
 // BaseImageEntry is one tier-2 catalog row: a shared, reusable image an
-// operator saved. Kind is registry|custom|byo, never "recommended" (a
+// operator saved. Kind is registry|custom|byo|prewrapped, never "recommended" (a
 // derived per-workspace build with no catalog identity, enforced by a store CHECK).
 type BaseImageEntry struct {
 	ID    uuid.UUID `json:"id"`
-	Kind  string    `json:"kind"` // "registry" | "custom" | "byo"
+	Kind  string    `json:"kind"` // "registry" | "custom" | "byo" | "prewrapped"
 	Name  string    `json:"name"`
-	Image string    `json:"image"` // the ref: the image itself (registry/byo) or the FROM (custom)
+	Image string    `json:"image"` // the ref: the image itself (registry/byo/prewrapped) or the FROM (custom)
 	// Steps are Dockerfile lines on a "custom" Image; not applied at build
 	// time (host-side build RCE — see WorkspaceBaseImage.Steps), stored only
 	// so the row round-trips.
 	Steps     []string  `json:"steps,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// Check is a prewrapped row's registration check, nil on every other kind. Only the server writes it.
+	Check *BaseImageCheck `json:"check,omitempty"`
+}
+
+// BaseImageKindPrewrapped is an image built FROM agent-base and pinned by digest, which runs as is with no
+// image builder once its registration check on the cluster has passed.
+const BaseImageKindPrewrapped = "prewrapped"
+
+// A prewrapped row's check_status. Only BaseImageCheckReady is offered to a workspace or a run.
+const (
+	BaseImageCheckChecking = "checking"
+	BaseImageCheckReady    = "ready"
+	BaseImageCheckRefused  = "refused"
+)
+
+// BaseImageCheck is a prewrapped row's registration check (migration 0237).
+type BaseImageCheck struct {
+	// Status is checking, ready or refused. A checking row whose Deadline has passed is served as refused
+	// with Reason "check_interrupted".
+	Status string `json:"status"`
+	// Attempt is the running (or last) attempt; only its verdict is written.
+	Attempt  uuid.UUID `json:"-"`
+	Deadline time.Time `json:"-"`
+	// Reason is "<code>:<arch>[:<detail>]": on a refused row what refused it, e.g. "contract_missing:arm64:wardyn-rec";
+	// on a ready row an architecture left out and why, e.g. "platform_missing:arm64"; "" otherwise.
+	Reason string `json:"reason,omitempty"`
+	// AcceptedArches are the node architectures the check passed on, e.g. ["amd64", "arm64"].
+	AcceptedArches []string   `json:"accepted_arches,omitempty"`
+	CheckedAt      *time.Time `json:"checked_at,omitempty"`
 }
 
 // ImageContractLine is the one line `wardyn-rec -contract` prints. A pre-wrapped image's registration check
 // runs it on each architecture and accepts only this exact line with exit 0; the number is the image
 // contract's version (deploy/images/README.md, Image contract).
 const ImageContractLine = "wardyn image contract 1"
+
+// ImageContractTools are the runner tools an image must carry in /usr/local/bin for the runner to exec,
+// record, verify and broker git into it: the wrap COPYs them in (envbuild's requiredTools), and a prewrapped
+// image's registration check looks for them.
+var ImageContractTools = []string{
+	"agent-run",         // task entrypoint the runner execs
+	"agent-run-lib.sh",  // sourced by agent-run under `set -euo pipefail` (load-bearing)
+	"wardyn-rec",        // session recorder; required by the image --selftest
+	"wardyn-git-helper", // brokered-token git credential helper
+}
 
 // AttachmentOverride values: a workspace's per-attachment stance on one requirement key its source declares.
 const (

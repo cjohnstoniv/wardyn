@@ -458,7 +458,11 @@ func closedEnumChecks() []closedEnumCheck {
 		// plain string — internal/types/workspace_contract.go) and is validated
 		// ad hoc in internal/api/base_images.go, so this literal list IS the
 		// closed set, not a derived one.
-		{"base_images", "kind", stringSet("registry", "custom", "byo")},
+		{"base_images", "kind", stringSet("registry", "custom", "byo", types.BaseImageKindPrewrapped)},
+		// 0237: a prewrapped row's registration check. NULL on every other kind (the CHECK admits NULL).
+		{"base_images", "check_status", stringSet(
+			types.BaseImageCheckChecking, types.BaseImageCheckReady, types.BaseImageCheckRefused,
+		)},
 		// 0051's role — a small, complete set with real Go constants (unlike
 		// capability_grants.capability above), so it gets a CHECK and this pin.
 		// Pinned to the CONSTANTS oidc.ValidRole itself accepts, never a

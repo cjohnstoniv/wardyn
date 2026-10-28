@@ -2380,6 +2380,19 @@ func (s *authzStore) WorkspacesUsingBaseImage(context.Context, uuid.UUID) ([]str
 	return nil, nil
 }
 func (s *authzStore) DeleteBaseImage(context.Context, uuid.UUID, bool) error { return nil }
+func (s *authzStore) GetBaseImage(context.Context, uuid.UUID) (types.BaseImageEntry, error) {
+	return types.BaseImageEntry{}, store.ErrNotFound
+}
+func (s *authzStore) GetBaseImageByRef(context.Context, string, string) (types.BaseImageEntry, error) {
+	return types.BaseImageEntry{}, store.ErrNotFound
+}
+func (s *authzStore) ClaimImageCheck(context.Context, uuid.UUID, uuid.UUID) (types.BaseImageEntry, error) {
+	return types.BaseImageEntry{}, store.ErrNotFound
+}
+func (s *authzStore) FinishImageCheck(context.Context, uuid.UUID, string, uuid.UUID, string, string, []string) (types.BaseImageEntry, error) {
+	return types.BaseImageEntry{}, store.ErrNotFound
+}
+func (s *authzStore) LiveImageCheckAttempts(context.Context) (map[uuid.UUID]bool, error) { return nil, nil }
 
 func (s *authzStore) CreateGrant(_ context.Context, g types.CredentialGrant) (types.CredentialGrant, error) {
 	if g.ID == uuid.Nil {
