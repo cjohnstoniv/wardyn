@@ -230,7 +230,11 @@ func (s *Server) handleGetRunPolicy(w http.ResponseWriter, r *http.Request) {
 	resp.Redacted = !reflect.DeepEqual(specJSON(redactSpecForRead(served, specReadFull)), specJSON(redactSpecForRead(served, tier)))
 	resp.Spec = &out
 	// Shown with the host list it marks, so a tier that sees fewer hosts sees no marks.
-	restarted := slices.ContainsFunc(revives, func(e types.AuditEvent) bool { return e.Outcome == "success" })
+	restarted, err := s.runRestarted(ctx, run.ID)
+	if err != nil {
+		writeServerError(w, r, "read run restarts", err)
+		return
+	}
 	if !restarted && slices.Equal(out.AllowedDomains, served.AllowedDomains) {
 		resp.HostMarks = envelope.HostMarks
 	}
@@ -340,6 +344,18 @@ func (s *Server) runReviveEvents(ctx context.Context, runID uuid.UUID) ([]types.
 	}
 	all, err := s.cfg.Store.QueryAuditEvents(ctx, runID, 0)
 	return f.Keep(all), err
+}
+
+// runRestarted reports whether the run was ever revived: a success run.revive row, asked for on its
+// own, so refused revives (a full pool or runner, retried) cannot push it past runReviveEvents' page.
+func (s *Server) runRestarted(ctx context.Context, runID uuid.UUID) (bool, error) {
+	f := store.AuditFilter{Action: "run.revive", Outcome: "success"}
+	if p, ok := s.cfg.Store.(store.Pager); ok {
+		rows, err := p.QueryAuditEventsFilteredPage(ctx, &runID, f, store.Page{Limit: 1})
+		return len(rows) > 0, err
+	}
+	all, err := s.cfg.Store.QueryAuditEvents(ctx, runID, 0)
+	return len(f.Keep(all)) > 0, err
 }
 
 // holdsGitHubGrant is rule 12's gate: confineGitBrokerEgress does nothing for a

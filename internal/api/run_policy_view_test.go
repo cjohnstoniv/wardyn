@@ -19,6 +19,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -886,6 +887,46 @@ func TestExplainRunPolicy_DiskBasis(t *testing.T) {
 				t.Errorf("detail = %v, want %q", c.Detail, tc.wantDetail)
 			}
 		})
+	}
+}
+
+// pvPagedStore is pvStore as a store.Pager, serving a filtered page oldest first as PG does, so the view
+// takes its production paged reads. Pager methods the view never calls are the nil embedded ones.
+type pvPagedStore struct {
+	*pvStore
+	store.Pager
+}
+
+var _ store.Pager = pvPagedStore{}
+
+func (s pvPagedStore) QueryAuditEventsFilteredPage(ctx context.Context, runID *uuid.UUID, f store.AuditFilter, p store.Page) ([]types.AuditEvent, error) {
+	all, err := s.QueryAuditEvents(ctx, *runID, 0)
+	out := f.Keep(all)
+	if p.Limit > 0 && len(out) > p.Limit {
+		out = out[:p.Limit]
+	}
+	return out, err
+}
+
+// TestRunPolicyView_HostMarksAfterManyRefusedRestarts: a restart that succeeds after more refused
+// ones (a full pool, retried) than one page of run.revive rows still drops the launch marks.
+func TestRunPolicyView_HostMarksAfterManyRefusedRestarts(t *testing.T) {
+	spec := types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}}
+	rows := []pvRow{{action: "run.policy.resolve", data: effectivePolicyDatum{RunPolicySpec: spec, HostMarks: &hostMarks{Inspected: []string{"api.anthropic.com"}}}}}
+	for range 200 {
+		rows = append(rows, pvRow{action: "run.revive", outcome: "denied", data: map[string]any{}})
+	}
+	rows = append(rows, pvRow{action: "run.revive", data: map[string]any{}})
+	srv, st := pvFixture(t, &capStore{})
+	srv.cfg.Store = pvPagedStore{pvStore: st}
+	run := st.seedRun(pvOwner, types.RunRunning)
+	st.rows(run.ID, rows...)
+	w, resp := pvMember(t, pvOwner).get(t, srv, run.ID)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+	}
+	if resp.HostMarks != nil {
+		t.Errorf("host_marks = %+v after a restart past the first 200 revive rows, want none", resp.HostMarks)
 	}
 }
 
