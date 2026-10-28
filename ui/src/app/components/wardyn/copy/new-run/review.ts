@@ -166,4 +166,7 @@ export const NR_REVIEW = {
   LAUNCH_RUN: "Launch run",
   DROPPED_HOST_ONE: (host: string | number) => `This run can't reach ${host}: your organisation doesn't allow it. Ask your admin to allow it.`,
   DROPPED_HOSTS_MANY: (hosts: string | number) => `This run can't reach ${hosts}: your organisation doesn't allow them. Ask your admin to allow them.`,
+  // Mock packet rc.6 §5a (approved 2026-10-28): under a drop warning whose policy publishes a way to ask.
+  POLICY_CONTEXT: (name: string | number) => `Policy context: ${name}`,
+  POLICY_CONTEXT_DEPLOYMENT: "Policy context: Deployment ceiling",
 } as const;

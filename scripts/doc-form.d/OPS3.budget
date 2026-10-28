@@ -175,7 +175,8 @@ docs/operations/api-tokens.md=6051 share=35 # +86 (lane SI-DOCS), measured; +17 
 # docs/operations/denials.md 5527 adds 35 over 5492, measured (0.10 unit admins): the unit_scope_denied row.
 # docs/operations/denials.md 5560 = ours 5527 + theirs 5525 - base 5492 at the 0.10 UNIT-ADMIN merge of RESTRICT-PIN 35c385de1.
 # docs/operations/denials.md 5579 adds 19 over 5560, measured (0.10 MDL-LAPTOP, #2957): runner_local_model_port_not_allowed.
-docs/operations/denials.md=5579 share=35
+# docs/operations/denials.md 5629 adds 50 over 5579, measured (0.10 rc.6): POST /runs and preflight warning_context.
+docs/operations/denials.md=5629 share=35
 # Round 1: docs/operations/who-gets-in.md measured 1453 after the split banner and heading cleanup.
 # Round 1: docs/operations/admin-only-writes.md measured 2869 after the split banner and heading cleanup.
 # Round 1: docs/operations/three-roles.md measured 4012 after the split banner and heading cleanup.
