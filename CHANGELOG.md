@@ -33,6 +33,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   it for a dropped connection and log `context canceled`: a revoked runner then kept its state, including the credentials
   delivered to it, until it next got through to the organisation.
 
+### Security
+
+- The agent images now carry GitHub CLI 2.103.3, built with Go 1.27.3. Earlier images carried 2.102.0, built with
+  Go 1.27.1, which image scanners flag for CVE-2026-56857. That flaw affects Windows only, so it can't be reached in
+  the Linux images.
+
 ## [0.10.0-rc.6] — 2026-10-28
 
 ### Added
