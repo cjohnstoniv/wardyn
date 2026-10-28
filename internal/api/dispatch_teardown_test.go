@@ -42,6 +42,11 @@ type dispatchTestStore struct {
 	grantsErr   error                   // when set, ListGrantsByRun fails with it
 }
 
+// GetBaseImageByRef: no prewrapped image is registered (dispatch looks one up for a digest-pinned image).
+func (s *dispatchTestStore) GetBaseImageByRef(context.Context, string, string) (types.BaseImageEntry, error) {
+	return types.BaseImageEntry{}, store.ErrNotFound
+}
+
 func (s *dispatchTestStore) ListGrantsByRun(context.Context, uuid.UUID) ([]types.CredentialGrant, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

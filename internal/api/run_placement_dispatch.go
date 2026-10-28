@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -67,6 +68,17 @@ func (c dispatchCeiling) placementExempt() dispatchCeiling {
 // run, a retry or a revive. A pooled run whose row names no target fails; it is never handed to the
 // first substrate that can enforce its class.
 func (s *Server) createSandboxAtTarget(ctx context.Context, run types.AgentRun, spec runner.SandboxSpec) (runner.Sandbox, error) {
+	pw, refusal := s.prewrappedRunImage(ctx, spec.Image)
+	switch {
+	case refusal != nil && refusal.err != nil:
+		return runner.Sandbox{}, refusal.err
+	case refusal != nil:
+		return runner.Sandbox{}, &prewrappedPlatformError{reasonPrewrappedImageNotRegistered, refusal.body.Error}
+	case pw != nil && run.MachineKind == types.MachineMacOSVM:
+		return runner.Sandbox{}, &prewrappedPlatformError{reasonPrewrappedPlatformMismatch, "a prewrapped image is a Linux image and never runs in a macOS VM."}
+	case pw != nil:
+		spec.ImageArches = pw.Check.AcceptedArches
+	}
 	switch {
 	case run.RunnerID != nil && run.Task == harnessLoginTask:
 		// A provider sign-in runs on the server's own substrate, never a person's computer: it holds the
@@ -80,6 +92,11 @@ func (s *Server) createSandboxAtTarget(ctx context.Context, run types.AgentRun, 
 				return runner.Sandbox{}, fmt.Errorf("read the run's runner: %w", err)
 			}
 			spec.RunnerMaxRuns = row.MaxRuns
+			if err := prewrappedRunnerArch(spec.ImageArches, row.Arch); err != nil {
+				return runner.Sandbox{}, err
+			}
+		} else if len(spec.ImageArches) > 0 {
+			return runner.Sandbox{}, prewrappedRunnerArch(spec.ImageArches, "")
 		}
 	case run.RunnerPoolID != nil:
 		if run.RunnerPoolExecutor == "" {
@@ -95,6 +112,28 @@ func (s *Server) createSandboxAtTarget(ctx context.Context, run types.AgentRun, 
 		s.stampServerRun(ctx, run, spec)
 	}
 	return s.cfg.Runner.CreateSandbox(ctx, spec)
+}
+
+// prewrappedPlatformError refuses a prewrapped image where it cannot run; reason is its audit reason.
+type prewrappedPlatformError struct{ reason, msg string }
+
+func (e *prewrappedPlatformError) Error() string { return e.msg }
+
+// prewrappedRunnerArch holds a runner-bound run of a prewrapped image (accepted is its accepted set,
+// empty for any other image) to the architecture the runner reports on its own row: never the
+// operator's image variants, which a runner with none would not consult.
+func prewrappedRunnerArch(accepted []string, arch string) error {
+	switch {
+	case len(accepted) == 0:
+		return nil
+	case arch == "":
+		return &prewrappedPlatformError{reasonPrewrappedPlatformUnknown,
+			"this runner reports no architecture (it predates 0.9.1), so a prewrapped image cannot be matched to it. Update the runner."}
+	case !slices.Contains(accepted, arch):
+		return &prewrappedPlatformError{reasonPrewrappedPlatformMismatch, fmt.Sprintf(
+			"this prewrapped image was checked on %s, and this runner is %s.", strings.Join(accepted, ", "), arch)}
+	}
+	return nil
 }
 
 // serverRunStamper records where a run Wardyn launched itself goes (store.PG.StampServerRun).

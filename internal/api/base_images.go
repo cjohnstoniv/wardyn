@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -11,6 +12,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -30,9 +33,9 @@ import (
 // could the steps ever run. See types.BaseImageEntry.Steps.
 func validateBaseImageWrite(b types.BaseImageEntry) string {
 	switch b.Kind {
-	case "registry", "byo", "custom":
+	case "registry", "byo", "custom", types.BaseImageKindPrewrapped:
 	default:
-		return `kind must be "registry", "custom", or "byo" — "recommended" is derived per workspace, never a catalog entry`
+		return `kind must be "registry", "custom", "byo" or "prewrapped" — "recommended" is derived per workspace, never a catalog entry`
 	}
 	if strings.TrimSpace(b.Name) == "" {
 		return "name is required"
@@ -72,7 +75,9 @@ func imageRefPathSafe(ref string) bool {
 	return true
 }
 
-// handleListBaseImages returns the catalog.
+// handleListBaseImages returns the catalog. A security admin sees the prewrapped rows only: the
+// other kinds name the operator's registry coordinate (mayWriteBaseImageKind). image_builder says
+// whether this control plane wraps the other kinds at all; the console's Add image reads it.
 //
 //	GET /api/v1/base-images
 func (s *Server) handleListBaseImages(w http.ResponseWriter, r *http.Request) {
@@ -81,7 +86,20 @@ func (s *Server) handleListBaseImages(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "list base images", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"base_images": list})
+	now := s.cfg.Now()
+	out := make([]types.BaseImageEntry, 0, len(list))
+	for _, b := range list {
+		if s.mayWriteBaseImageKind(r.Context(), b.Kind) {
+			out = append(out, prewrappedView(b, now))
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"base_images": out, "image_builder": s.cfg.ImageBuilder != nil})
+}
+
+// mayWriteBaseImageKind: an admin writes every kind; a security admin writes prewrapped only (design
+// final §3), and the route group has already refused anyone else.
+func (s *Server) mayWriteBaseImageKind(ctx context.Context, kind string) bool {
+	return s.isOperator(ctx) || kind == types.BaseImageKindPrewrapped
 }
 
 // handleCreateBaseImage upserts a catalog image by identity (kind, image,
@@ -108,14 +126,36 @@ func (s *Server) handleCreateBaseImage(w http.ResponseWriter, r *http.Request) {
 	if entry.Name == "" {
 		entry.Name = lastPathSegment(entry.Image, nil)
 	}
+	if !s.mayWriteBaseImageKind(r.Context(), entry.Kind) {
+		s.refuse(w, r, authz.Deny(authz.ReasonAdminSurface, r.URL.Path, ""))
+		return
+	}
 	if msg := validateBaseImageWrite(entry); msg != "" {
 		writeErrorReason(w, http.StatusBadRequest, reasonBaseImageWriteInvalid, msg)
 		return
+	}
+	var checker runner.PrewrappedImageChecker
+	if entry.Kind == types.BaseImageKindPrewrapped {
+		if !prewrappedPinned(entry.Image) {
+			writeErrorReason(w, http.StatusBadRequest, reasonPrewrappedImageNotPinned,
+				"a prewrapped image is registered by digest: <repository>[:tag]@sha256:<64 hex>")
+			return
+		}
+		var why string
+		if checker, why = s.prewrappedChecker(); checker == nil {
+			writeErrorReason(w, http.StatusUnprocessableEntity, reasonPrewrappedCheckUnavailable,
+				"a prewrapped image is checked on this control plane's own Kubernetes cluster, and it cannot check one: "+why)
+			return
+		}
+		entry.Check = &types.BaseImageCheck{Attempt: uuid.New()}
 	}
 	created, err := s.cfg.Store.UpsertBaseImage(r.Context(), entry)
 	if err != nil {
 		writeServerError(w, r, "upsert base image", err)
 		return
+	}
+	if created.ID == entry.ID && checker != nil {
+		s.startImageCheck(r, checker, created)
 	}
 	status := http.StatusCreated
 	if created.ID != entry.ID {
@@ -138,7 +178,7 @@ func (s *Server) handleCreateBaseImage(w http.ResponseWriter, r *http.Request) {
 		"base_image.write", created.ID.String(), "success", mustJSON(map[string]any{
 			"kind": created.Kind, "image": created.Image, "steps": len(created.Steps),
 		})))
-	writeJSON(w, status, created)
+	writeJSON(w, status, prewrappedView(created, s.cfg.Now()))
 }
 
 // handleDeleteBaseImage removes a catalog row. In use → 409 naming the
@@ -157,6 +197,23 @@ func (s *Server) handleDeleteBaseImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	force := r.URL.Query().Get("force") == "1"
+	// The stored kind decides who may delete, before any referencing workspace is named. Detaching
+	// workspaces stays an admin's.
+	if !s.isOperator(r.Context()) {
+		b, err := s.cfg.Store.GetBaseImage(r.Context(), id)
+		if errors.Is(err, store.ErrNotFound) {
+			writeErrorReason(w, http.StatusNotFound, reasonBaseImageNotFound, "no such base image")
+			return
+		}
+		if err != nil {
+			writeServerError(w, r, "read base image", err)
+			return
+		}
+		if force || !s.mayWriteBaseImageKind(r.Context(), b.Kind) {
+			s.refuse(w, r, authz.Deny(authz.ReasonAdminSurface, r.URL.Path, ""))
+			return
+		}
+	}
 	names, err := s.cfg.Store.WorkspacesUsingBaseImage(r.Context(), id)
 	if err != nil {
 		writeServerError(w, r, "check base image use", err)

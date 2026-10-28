@@ -657,6 +657,18 @@ const (
 	reasonBaseImageWriteInvalid = "base_image_write_invalid" // validateBaseImageWrite's own bucket
 	reasonBaseImageInUse        = "base_image_in_use"
 	reasonBaseImageNotFound     = "base_image_not_found"
+	// A prewrapped image (base_images_prewrapped.go): registered by digest, checked on this control
+	// plane's own cluster, retried only from refused or interrupted.
+	reasonPrewrappedImageNotPinned   = "prewrapped_image_not_pinned"
+	reasonPrewrappedCheckUnavailable = "prewrapped_check_unavailable"
+	reasonPrewrappedCheckInProgress  = "prewrapped_check_in_progress"
+	reasonPrewrappedAlreadyReady     = "prewrapped_already_ready"
+	// A workspace write or a run named a prewrapped image with no ready row (sources.go, run doors).
+	reasonPrewrappedImageNotRegistered = "prewrapped_image_not_registered"
+	// A run of a prewrapped image refused at sandbox create (run_placement_dispatch.go): its runner's
+	// architecture is not one the image was checked on, or the runner reports none.
+	reasonPrewrappedPlatformMismatch = "prewrapped_platform_mismatch"
+	reasonPrewrappedPlatformUnknown  = "prewrapped_platform_unknown"
 )
 
 // DELETE /people/{principal}/credentials (credential_erase.go).

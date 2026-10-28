@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"strings"
@@ -235,6 +236,20 @@ func (s *Server) resolveWorkspaceImageWith(ctx context.Context, runID uuid.UUID,
 	// "recommended" (Wardyn's own convention image for the detected stack) —
 	// like a nil BaseImage — falls through to the devcontainer/generated path
 	// instead of a fixed ref.
+	if prewrappedBase(primary.BaseImage) {
+		// Checked at registration and run as is: no wrap, no cache and no build record. Only a ready row
+		// runs; anything else fails the run rather than falling back to the convention image.
+		pw, refusal := s.prewrappedRunImage(ctx, primary.BaseImage.Image)
+		switch {
+		case refusal != nil && refusal.err != nil:
+			return imageResolveResult{BaseErr: refusal.err}
+		case refusal != nil:
+			return imageResolveResult{BaseErr: errors.New(refusal.body.Error)}
+		case pw == nil:
+			return imageResolveResult{BaseErr: errPrewrappedNotRegistered}
+		}
+		return imageResolveResult{Image: pw.Image, OK: true}
+	}
 	if b := primary.BaseImage; b != nil && b.Kind != "recommended" && strings.TrimSpace(b.Image) != "" {
 		if s.cfg.ImageBuilder == nil {
 			// The workspace_id door hard-400s a base_image with no builder

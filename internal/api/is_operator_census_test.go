@@ -47,6 +47,10 @@ var isOperatorCensus = map[string]int{
 	// keyed on the role the ticket it leads to is stamped with (refuseAttachEntry's ticket
 	// lane); the governed-admin answer is adminDoorExempt's, as there.
 	"approvals_takeover.go:loadTakeover": 1,
+	// Base images (design final §3): the security tier writes prewrapped rows only, and a delete
+	// authorizes the stored kind (and force) before naming any workspace.
+	"base_images.go:mayWriteBaseImageKind": 1,
+	"base_images.go:handleDeleteBaseImage": 1,
 	// Reach: organisation templates are written with the effective role, so the
 	// User view publishes to the organisation as the member it is.
 	"template_list.go:templateCallerOf": 1,

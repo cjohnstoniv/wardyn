@@ -23,6 +23,10 @@ type sandboxOrphanStore struct {
 	listCalls int
 }
 
+func (*sandboxOrphanStore) LiveImageCheckAttempts(context.Context) (map[uuid.UUID]bool, error) {
+	return nil, nil
+}
+
 func (s *sandboxOrphanStore) ListRuns(context.Context) ([]types.AgentRun, error) {
 	s.listCalls++
 	return s.runs, nil

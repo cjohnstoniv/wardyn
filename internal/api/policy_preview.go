@@ -125,7 +125,7 @@ func (s *Server) authorizePreviewRequest(r *http.Request, req createRunRequest) 
 			return ceiling, "", refusal
 		}
 	}
-	if msg, reason := s.validateImageBuildRequest(req); msg != "" {
+	if msg, reason := s.validateImageBuildRequest(r.Context(), req); msg != "" {
 		return ceiling, "", runError(http.StatusBadRequest, reason, msg)
 	}
 	cc, refusal := runRequestEnums(req)

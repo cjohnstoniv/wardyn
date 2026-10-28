@@ -30,6 +30,21 @@
     "sentence": "\"requires admin role\" (registry)"
   },
   {
+    "reason": "admin_surface",
+    "target": "r.URL.Path",
+    "sentence": "\"requires admin role\" (registry)"
+  },
+  {
+    "reason": "admin_surface",
+    "target": "r.URL.Path",
+    "sentence": "\"requires admin role\" (registry)"
+  },
+  {
+    "reason": "admin_surface",
+    "target": "r.URL.Path",
+    "sentence": "\"requires admin role\" (registry)"
+  },
+  {
     "reason": "admin_view",
     "target": "r.URL.Path",
     "sentence": "adminViewLaunchRefusal"

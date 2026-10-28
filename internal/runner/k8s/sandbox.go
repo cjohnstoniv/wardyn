@@ -461,7 +461,14 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if d.cfg.ImagePullSecret != "" {
 		agentPod.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: d.cfg.ImagePullSecret}}
 	}
-	d.placement.apply(agentPod, spec.RunID, componentAgent, spec.Labels)
+	placement := d.placement
+	if len(spec.ImageArches) > 0 {
+		var err error
+		if placement, err = placement.withArches(spec.ImageArches); err != nil {
+			return fail(err)
+		}
+	}
+	placement.apply(agentPod, spec.RunID, componentAgent, spec.Labels)
 	agentPod.Labels[labelRecord] = strconv.FormatBool(spec.RecordWithin(d.cfg.Record))
 	if err := d.runnerPodSpec(agentPod, componentAgent, ""); err != nil {
 		return fail(err)

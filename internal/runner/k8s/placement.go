@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -120,6 +121,42 @@ func (p Placement) withArch(arch string) (Placement, error) {
 		p.NodeSelector = map[string]string{}
 	}
 	p.NodeSelector[corev1.LabelArchStable] = arch
+	return p, nil
+}
+
+// withArches is the placement of a pod whose image runs only on arches (a prewrapped image's accepted
+// set, design final §3). One architecture is withArch. Several leave the operator's selectors as they are
+// and intersect the required node affinity with kubernetes.io/arch In arches: each nonempty required term
+// gains the expression, an empty term is kept (it matches no node, and the expression would widen it), and
+// with no required affinity at all the expression becomes its one term.
+func (p Placement) withArches(arches []string) (Placement, error) {
+	if len(arches) == 1 {
+		return p.withArch(arches[0])
+	}
+	if v, ok := p.NodeSelector[corev1.LabelArchStable]; ok && !slices.Contains(arches, v) {
+		return Placement{}, fmt.Errorf("k8s: WARDYN_K8S_SANDBOX_PLACEMENT nodeSelector %s=%s is not an architecture the image runs on (%s)", corev1.LabelArchStable, v, strings.Join(arches, ", "))
+	}
+	expr := corev1.NodeSelectorRequirement{Key: corev1.LabelArchStable, Operator: corev1.NodeSelectorOpIn, Values: slices.Clone(arches)}
+	p.Affinity = p.Affinity.DeepCopy()
+	if p.Affinity == nil {
+		p.Affinity = &corev1.Affinity{}
+	}
+	if p.Affinity.NodeAffinity == nil {
+		p.Affinity.NodeAffinity = &corev1.NodeAffinity{}
+	}
+	na := p.Affinity.NodeAffinity
+	if na.RequiredDuringSchedulingIgnoredDuringExecution == nil {
+		na.RequiredDuringSchedulingIgnoredDuringExecution = &corev1.NodeSelector{
+			NodeSelectorTerms: []corev1.NodeSelectorTerm{{MatchExpressions: []corev1.NodeSelectorRequirement{expr}}},
+		}
+		return p, nil
+	}
+	terms := na.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+	for i := range terms {
+		if len(terms[i].MatchExpressions) > 0 || len(terms[i].MatchFields) > 0 {
+			terms[i].MatchExpressions = append(terms[i].MatchExpressions, expr)
+		}
+	}
 	return p, nil
 }
 

@@ -280,9 +280,9 @@ func validateWorkspaceBaseImage(b *types.WorkspaceBaseImage) string {
 		return ""
 	}
 	switch b.Kind {
-	case "recommended", "registry", "custom", "byo":
+	case "recommended", "registry", "custom", "byo", types.BaseImageKindPrewrapped:
 	default:
-		return `base_image.kind must be "recommended", "registry", "custom", or "byo"`
+		return `base_image.kind must be "recommended", "registry", "custom", "byo" or "prewrapped"`
 	}
 	if b.Kind != "recommended" {
 		if strings.TrimSpace(b.Image) == "" {
@@ -637,6 +637,10 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	atts, baseImageID, aerr := s.upsertAndAttach(r, req.Sources, req.BaseImage, nil)
+	if errors.Is(aerr, errPrewrappedNotRegistered) {
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonPrewrappedImageNotRegistered, aerr.Error())
+		return
+	}
 	if aerr != nil {
 		writeServerError(w, r, "attach sources", aerr)
 		return
@@ -777,6 +781,10 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		// SourceID — must be read before the next line overwrites
 		// ws.Attachments.
 		atts, baseImageID, aerr := s.upsertAndAttach(r, req.Sources, req.BaseImage, ws.Attachments)
+		if errors.Is(aerr, errPrewrappedNotRegistered) {
+			writeErrorReason(w, http.StatusUnprocessableEntity, reasonPrewrappedImageNotRegistered, aerr.Error())
+			return
+		}
 		if aerr != nil {
 			writeServerError(w, r, "attach sources", aerr)
 			return

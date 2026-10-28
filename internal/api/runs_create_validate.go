@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -165,7 +166,7 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	// convention one). seedRequestWorkspace's caller re-runs this SAME check after
 	// workspace_id is resolved — a workspace's base_image can ALSO set req.Image,
 	// after this ran, and must clear the identical gate (see validateImageBuildRequest).
-	if msg, reason := s.validateImageBuildRequest(req); msg != "" {
+	if msg, reason := s.validateImageBuildRequest(r.Context(), req); msg != "" {
 		writeErrorReason(w, http.StatusBadRequest, reason, msg)
 		return req, noCeiling, "", "", false
 	}
@@ -505,7 +506,10 @@ func (s *Server) denyUserRunQuota(w http.ResponseWriter, r *http.Request, ceilin
 // The two refusals are different causes (#656 M1) — the first is the
 // caller's own request shape, the second a deployment capability the caller
 // cannot fix by changing the request — so each gets its own reason.
-func (s *Server) validateImageBuildRequest(req createRunRequest) (msg, reason string) {
+//
+// A prewrapped image needs no builder: it runs as is once its check made it ready, and one that is
+// not ready is refused for that. A store that cannot be read leaves the builder refusal standing.
+func (s *Server) validateImageBuildRequest(ctx context.Context, req createRunRequest) (msg, reason string) {
 	if req.Image == "" {
 		return "", ""
 	}
@@ -513,6 +517,13 @@ func (s *Server) validateImageBuildRequest(req createRunRequest) (msg, reason st
 		return "image and devcontainer_repo are mutually exclusive", reasonImageDevcontainerExclusive
 	}
 	if s.cfg.ImageBuilder == nil {
+		pw, refusal := s.prewrappedRunImage(ctx, req.Image)
+		if pw != nil {
+			return "", ""
+		}
+		if refusal != nil && refusal.body.Reason == reasonPrewrappedImageNotRegistered {
+			return refusal.body.Error, refusal.body.Reason
+		}
 		return "a custom sandbox image was requested but this control plane has no image builder wired " +
 			"(start wardynd with -tags docker and set WARDYN_ENVBUILD_TOOLS_DIR / -envbuild)", reasonImageBuilderUnavailable
 	}

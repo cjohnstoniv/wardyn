@@ -16,7 +16,9 @@ import (
 )
 
 func TestAggregateImageCheck(t *testing.T) {
-	v := func(arch, code, detail string) ImageArchVerdict { return ImageArchVerdict{Arch: arch, Code: code, Detail: detail} }
+	v := func(arch, code, detail string) ImageArchVerdict {
+		return ImageArchVerdict{Arch: arch, Code: code, Detail: detail}
+	}
 	for _, c := range []struct {
 		name     string
 		in       []ImageArchVerdict

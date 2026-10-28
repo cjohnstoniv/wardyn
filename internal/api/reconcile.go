@@ -219,8 +219,17 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 		run, known = byID[runID]
 		return run, known, err
 	}
+	// A prewrapped image check's pods carry its attempt ID where a run's carry the run ID: a live attempt
+	// is never an orphan, and one past its deadline is swept like any unknown run.
+	liveChecks, err := s.cfg.Store.LiveImageCheckAttempts(ctx)
+	if err != nil {
+		return fmt.Errorf("sweep orphaned sandboxes: list live image checks: %w", err)
+	}
 	leaser, hasLease := s.cfg.Store.(store.RunWatcherLeaser)
 	isOrphan := func(runID uuid.UUID) bool {
+		if liveChecks[runID] {
+			return false
+		}
 		run, known, err := lookup(runID)
 		if err != nil {
 			lookupErr = errors.Join(lookupErr, err)

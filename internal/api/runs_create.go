@@ -596,7 +596,16 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 		return buildCtx, end, live
 	}
 
+	pw, refusal := s.prewrappedRunImage(ctx, req.Image)
+	if refusal != nil {
+		buildFailed(map[string]any{"base_image": req.Image, "error": refusal.body.Error})
+		return "", true
+	}
 	switch {
+	case pw != nil:
+		// A ready prewrapped image runs as is: no wrap and no wardyn-byoi/ tag, so no selftest exec
+		// (design final §3).
+		image = pw.Image
 	case req.Image != "": // validated up front: ImageBuilder is non-nil, not XOR'd
 		// The wardyn-byoi/ output tag is also the discriminator dispatch keys the
 		// runtime selftest preflight off (a wrapped arbitrary image may still lack a
@@ -652,7 +661,7 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 		// creates). resolveWorkspaceImage is fail-open by design (shared with the
 		// wizard/record paths), so the fail-closed decision for the CHOSEN base image
 		// lives here, on the create door, not in it.
-		if b := imageWS.BaseImage; b != nil && b.Kind != "recommended" &&
+		if b := imageWS.BaseImage; b != nil && b.Kind != "recommended" && !prewrappedBase(b) &&
 			strings.TrimSpace(b.Image) != "" && s.cfg.ImageBuilder == nil {
 			buildFailed(map[string]any{
 				"base_image": b.Image,

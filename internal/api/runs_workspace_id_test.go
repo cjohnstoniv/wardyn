@@ -91,7 +91,7 @@ func TestSeedRequestWorkspace(t *testing.T) {
 		if len(spec.WorkspaceMounts) != 0 || len(spec.WorkspaceRepos) != 0 {
 			t.Error("an ephemeral-only workspace must seed no mounts/repos")
 		}
-		if msg, _ := srv.validateImageBuildRequest(req); msg == "" {
+		if msg, _ := srv.validateImageBuildRequest(context.Background(), req); msg == "" {
 			t.Fatal("want a refusal message (no ImageBuilder wired) — a container-shaped workspace's image must still go through the builder gate")
 		}
 	})

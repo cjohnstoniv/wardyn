@@ -102,7 +102,8 @@ func (s *Server) routes() chi.Router {
 			//   adminRoutes            (this file)  one per group, plus
 			//       mountUserTypeRoutes (user_types.go) securityOps, and
 			//       mountKeyDomainRoutes (key_domains.go) securityOps
-			//   mountLibraryRoutes     (sources.go) operatorOnly (+ member reads on r)
+			//   mountLibraryRoutes     (sources.go) operatorOnly; /base-images securityOps,
+			//       prewrapped rows only for a security admin (+ member reads on r)
 			//   mountSetupMutationRoutes            operatorOnly
 			//   mountAccessRoutes      (access.go)  operatorOnly
 			//   mountGovernanceRoutes  (governance.go) — CALLED WITH securityOps
@@ -161,8 +162,9 @@ func (s *Server) routes() chi.Router {
 			// comment.
 			//
 			// WHY THE OPERATOR-TOPOLOGY READS ARE NOT HERE. GET /site-config,
-			// /sources, /sources/{id} and /base-images are operatorOnly, not
-			// securityOps. The tier argument for widening them is real — a security
+			// /sources and /sources/{id} are operatorOnly, not securityOps, and
+			// GET /base-images, which is here so a security admin can register a
+			// prewrapped image, serves that tier the prewrapped rows only. The tier argument for widening them is real — a security
 			// admin holds the org allow/denylist, so scm_hosts is arguably theirs —
 			// but it does not survive what those documents actually carry: an
 			// upstream-proxy PASSWORD ref, a database-password requirement key, and
@@ -173,11 +175,12 @@ func (s *Server) routes() chi.Router {
 			// carries a proxy password — and such an endpoint has no caller today, so
 			// it is not built on spec.
 			//
-			// One rule, and it is not "these four routes". The tier does not reach
+			// One rule, and it is not "these routes". The tier does not reach
 			// the host axis — local_dir paths, the operator's registry coordinate,
-			// stored secret NAMES — on ANY route, and there are two ways for a route
-			// to honour that. These four stay narrowed because they serve whole
-			// operator documents nobody projects. GET
+			// stored secret NAMES — on ANY route, and there are three ways for a route
+			// to honour that. These three stay narrowed because they serve whole
+			// operator documents nobody projects. GET /base-images serves the tier
+			// only the prewrapped rows, the one kind it registers itself. GET
 			// /workspaces{,/{id},/build,/observed-egress} instead WITHHOLD that axis
 			// per reader (helpers.go's workspaceReadSecurity: paths and
 			// base_image.image blanked, the secret:/write: requirement keys and the
@@ -187,7 +190,7 @@ func (s *Server) routes() chi.Router {
 			// Said here because the asymmetry is what a reader notices first: a
 			// security_admin is answered 403 by /sources and 200 by
 			// /workspaces/{id} on what looks like the same datum, and the
-			// tempting resolution — widen these four to match — is the wrong
+			// tempting resolution — widen these three to match — is the wrong
 			// one. The workspace read is not wider; it is projected. Pinned
 			// field by field by TestSecurityAdminForeignWorkspaceFieldByField
 			// (security_admin_workspace_read_test.go), and this paragraph is
@@ -437,7 +440,7 @@ func (s *Server) routes() chi.Router {
 			// profile + status.
 			// Tier-1 source library + tier-2 base-image catalog routes —
 			// mounted from sources.go, same posture as the workspaces block.
-			s.mountLibraryRoutes(r, operatorOnly)
+			s.mountLibraryRoutes(r, operatorOnly, securityOps)
 
 			r.Post("/workspaces", s.handleCreateWorkspace)
 			r.Get("/workspaces", s.handleListWorkspaces)
