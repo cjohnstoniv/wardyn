@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -168,14 +169,15 @@ func TestHealthz_OmitsPolicyHelp(t *testing.T) {
 // and ignored, so GET, change one field, PUT the rest does not fail on "unknown field".
 func TestDecodeGovernanceUnitRequest_TakesTheReadOnlyFieldsGetReturns(t *testing.T) {
 	body := `{"id":"11111111-1111-1111-1111-111111111111","name":"p","ceiling":{"min_confinement_class":"CC2"},
-		"limits":{},"created_at":"2026-10-01T00:00:00Z","updated_at":"2026-10-02T00:00:00Z","created_by":"ann@example.com",
+		"limits":{},"created_at":"NOW","updated_at":"NOW","created_by":"ann@example.com",
 		"kind":"unit","depth":1,"effective":{"ceiling":{}},"people":3,"path_provenance":{}}`
+	body = strings.ReplaceAll(body, "NOW", time.Now().UTC().Format(time.RFC3339))
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/governance/units/x", strings.NewReader(body))
 	req, msg := decodeGovernanceUnitRequest(httptest.NewRecorder(), r)
 	if msg != "" {
 		t.Fatalf("refused a GET-shaped unit: %s", msg)
 	}
-	if req.Name != "p" || req.Ceiling.MinConfinementClass == nil || *req.Ceiling.MinConfinementClass != "CC2" {
+	if req.Name != "p" || req.Ceiling.MinConfinementClass != types.CC2 {
 		t.Fatalf("decoded %+v", req)
 	}
 	r = httptest.NewRequest(http.MethodPut, "/api/v1/governance/units/x", strings.NewReader(`{"name":"p","colour":"red"}`))
