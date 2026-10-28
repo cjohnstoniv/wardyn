@@ -52,6 +52,7 @@
 | **v0.9.6** | A fix release: own Azure DevOps tokens on a person's own runner, clearer refusals, runner connection diagnostics, recordings without typed input. | **Shipped (pre-alpha)** — `v0.9.6`, 2026-10-20 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.9.7** | A fix release: minted Azure DevOps tokens on a person's own runner, and credential delivery writes the server cannot build are refused. | **Shipped (pre-alpha)** — `v0.9.7`, 2026-10-20 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.9.8** | A fix release: private-address refusals name the internal_hosts remedy, wrapped base images say what works instead, and credential delivery rows the server cannot build are listed. | **Shipped (pre-alpha)** — `v0.9.8`, 2026-10-21 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.9.9** | A security patch: the agent images build on Node.js 24.22.1 and code-server 4.141.1 (CVE-2026-111497). The Claude Code CLI's own embedded runtime is a known issue. | **Shipped (pre-alpha)** — `v0.9.9`, 2026-10-28 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ## Shipped detail
 
