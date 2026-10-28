@@ -78,3 +78,45 @@ export const IMAGES = {
   REF: "Image",
   REF_HINT: "The exact reference people will type, e.g. ghcr.io/acme/dev-toolbox:1.4.",
 } as const;
+
+// A pre-wrapped image (design final §3): the approved mock
+// (codex-handoff/010/mocks-approved/final-prewrap), copied exactly. The lines
+// marked "not in the mock" are the reasons the mock drew no row for.
+export const PREWRAPPED = {
+  HOW_LABEL: "How it runs",
+  KIND_WRAP: "Wardyn adds its tools",
+  KIND_WRAP_HINT: "Any image. The image builder adds Wardyn's runner tools before each run.",
+  KIND_WRAP_NO_BUILDER: "This control plane has no image builder.",
+  KIND_WRAP_ADMINS_ONLY: "Admins only.",
+  KIND: "Pre-wrapped: runs as is",
+  KIND_HINT: "Built FROM Wardyn's agent-base and pinned by digest. Checked on the cluster when added; no image builder needed.",
+  REF: "Image, pinned by digest",
+  REF_HINT: "Built FROM agent-base 0.10.0 or later, e.g. ghcr.io/acme/sdk-agent:2.3@sha256:…",
+  HOW_TO_BUILD: "How to build one",
+  HOW_TO_BUILD_URL: "https://github.com/cjohnstoniv/wardyn/blob/main/deploy/images/README.md#pre-wrapped-image",
+  ADD_CTA: "Check and add",
+  NOT_PINNED: "Pin the image by digest (…@sha256:…). A tag can be moved to another image after it is checked.",
+  BADGE: "Pre-wrapped · runs as is",
+  READY: (arches: readonly string[], date: string) =>
+    `Ready: checked on the cluster on ${arches.map((a) => `linux/${a}`).join(" and ")}, ${date}`,
+  READY_NO_BUILD: (ok: string, missing: string) =>
+    `Ready on linux/${ok} only: this image has no linux/${missing} build, so its runs go to ${ok} nodes and ${missing} runners can't run it.`,
+  // not in the mock
+  READY_NO_NODE: (ok: string, missing: string) =>
+    `Ready on linux/${ok} only: the cluster has no linux/${missing} node to check on, so its runs go to ${ok} nodes and ${missing} runners can't run it.`,
+  CHECKING: "Checking on the cluster. Not offered to anyone until it is ready.",
+  MISSING_TOOL: (tool: string, builder: boolean) =>
+    `Not ready: ${tool} is missing from /usr/local/bin${tool === "wardyn-rec" ? ", so a run can't be recorded" : ""}. Build the image FROM agent-base${builder ? ", or choose Wardyn adds its tools." : "."}`,
+  UNPULLABLE: (why: string, registry: string) =>
+    `Not ready: the cluster couldn't pull this image (${why}). Check that the deployment's image pull secret can read ${registry}.`,
+  CUT_SHORT: "The check didn't finish (it is limited to 10 minutes, or the control plane restarted). Check again.",
+  // not in the mock
+  CONTRACT_OLD: "Not ready: this image's wardyn-rec is older than agent-base 0.10.0. Rebuild it FROM agent-base 0.10.0 or later.",
+  NO_NODE: "Not ready: the cluster has no node of an architecture to check this image on.",
+  NO_BUILD: "Not ready: this image has no linux/amd64 or linux/arm64 build.",
+  FAILED: (what: string) => `Not ready: the check failed (${what}). Check again.`,
+  CHECK_AGAIN: "Check again",
+  NEEDS_BUILDER: "Needs an image builder; this control plane has none.",
+  FOOTNOTE:
+    "The check runs a short pod from the pinned image on each node architecture, with no network, and looks for Wardyn's runner tools. It proves the tools are there and start; it doesn't test your agent.",
+} as const;

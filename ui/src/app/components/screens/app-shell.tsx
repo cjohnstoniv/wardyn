@@ -15,6 +15,7 @@ import {
   AlertTriangle,
   CircleUser,
   Compass,
+  Container,
   Contact,
   Fingerprint,
   FolderOpen,
@@ -163,6 +164,9 @@ const ADMIN_NAV: NavItem[] = [
   // User drives: a security admin reaches /admin/drives for its grants and preview (securityOps server-side);
   // a super admin opens it from Workspaces and Settings' card, so its nav is unchanged.
   { to: "/admin/drives", label: DRIVES_NAV_TITLE, icon: HardDrive, tier: "security", group: "build" },
+  // Images: a security admin adds and checks pre-wrapped images there (securityOps server-side, design
+  // final §3); a super admin keeps the Images tab under Settings' Providers card.
+  { to: "/admin/images", label: "Images", icon: Container, tier: "security", group: "build" },
   // People (0.8.6 ppl-p2), User types (0.8, UT-7a) and Credentials (CS-8) are securityOps server-side, so
   // both admin tiers see them (a security admin has no Settings and no Secrets, so Credentials can't live
   // in either).

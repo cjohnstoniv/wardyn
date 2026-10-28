@@ -4,22 +4,38 @@
  */
 
 // The base-image catalog (internal/api/base_images.go), behind the Images tab.
-// Both routes are operatorOnly.
+// An admin reads and writes every kind; a security admin lists, adds and checks
+// again prewrapped images only (design final §3).
 import type { BaseImageEntry } from "../types";
 import { asJson, unwrapList, wfetch } from "./core";
 
+export interface BaseImageCatalog {
+  rows: BaseImageEntry[];
+  // Whether this control plane has an image builder to add Wardyn's tools to the
+  // other kinds. An older daemon sends nothing, and it had only those kinds.
+  imageBuilder: boolean;
+}
+
 export const baseImages = {
-  // GET /api/v1/base-images -> {base_images: [...]}.
-  async list(): Promise<BaseImageEntry[]> {
+  // GET /api/v1/base-images -> {base_images: [...], image_builder}.
+  async list(): Promise<BaseImageCatalog> {
     const res = await wfetch("/base-images", { method: "GET" });
-    return unwrapList<BaseImageEntry>((await asJson<{ base_images?: unknown }>(res)).base_images);
+    const body = await asJson<{ base_images?: unknown; image_builder?: boolean }>(res);
+    return { rows: unwrapList<BaseImageEntry>(body.base_images), imageBuilder: body.image_builder ?? true };
   },
 
   // POST /api/v1/base-images. "byo" is the kind that means the reference is
   // used as written; the server names the row from the reference's last path
   // segment and upserts on (kind, image), so adding a listed ref twice is one row.
-  async add(image: string): Promise<BaseImageEntry> {
-    const res = await wfetch("/base-images", { method: "POST", asPerson: true, body: JSON.stringify({ kind: "byo", image }) });
+  // "prewrapped" also starts its check on the cluster: the row comes back checking.
+  async add(image: string, kind: "byo" | "prewrapped" = "byo"): Promise<BaseImageEntry> {
+    const res = await wfetch("/base-images", { method: "POST", asPerson: true, body: JSON.stringify({ kind, image }) });
+    return asJson<BaseImageEntry>(res);
+  },
+
+  // POST /api/v1/base-images/{id}/check: a refused or interrupted prewrapped row only.
+  async checkAgain(id: string): Promise<BaseImageEntry> {
+    const res = await wfetch(`/base-images/${encodeURIComponent(id)}/check`, { method: "POST", asPerson: true });
     return asJson<BaseImageEntry>(res);
   },
 };

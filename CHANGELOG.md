@@ -11,6 +11,16 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- A Kubernetes control plane, which has no image builder, can now run a pre-wrapped image: one built `FROM` agent-base and
+  pinned by digest. Add it under Images with *How it runs* → *Pre-wrapped: runs as is*, or `POST /base-images` with
+  `kind: "prewrapped"`. The control plane checks it on the cluster first, with one short pod per node architecture and no
+  network, and offers it to workspaces and runs only once it is ready; its runs go only to the architectures that passed.
+  A refused or cut-short check gets *Check again* (`POST /base-images/{id}/check`), and each verdict is audited as
+  `base_image.admit`. A security admin now has an Images page and lists, adds and checks pre-wrapped images only. See
+  [deploy/images/README.md](deploy/images/README.md#pre-wrapped-image).
+
 ## [0.10.0-rc.6] — 2026-10-28
 
 ### Added

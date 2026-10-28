@@ -169,6 +169,8 @@ wardyn workspace build <workspace-id> --refresh
 - Pinning is honored end-to-end — a pre-pulled digest base matches without a registry round-trip — and is the recommended operator practice, but it is NOT enforced.
 - A tag is resolved at wrap time, so what it points at is the operator's call.
 - What the base's content cannot reach is the host: it only ever executes later, inside the run's confinement tier.
+- A pre-wrapped image is the other way round: it is not wrapped, must be pinned by digest, and is checked on the cluster
+  before it runs. See [deploy/images/README.md](../deploy/images/README.md#pre-wrapped-image).
 - See [threatmodel/THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) §5 (residual 13).
 
 A generated recipe is deterministic, not a lock: the base tag, the `:1` feature tags and the claude-code `/stable` channel resolve at build time, and a kept image is not refreshed. What the cache key identifies, and when an image is reused or rebuilt, is in [build-images.md](operations/build-images.md#every-generated-image-carries-claude-code-nothing-bakes-codex-cli); see [threatmodel/THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) §5 (residual 13).

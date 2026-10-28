@@ -5321,6 +5321,13 @@ kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive-slug>-<home>
   - a driver that takes no size option (`vfs`, `fuse-overlayfs`) runs the request UNCAPPED with a warning,
   - while overlay2 over a non-xfs backing filesystem is handed the option anyway and the daemon REFUSES the create, so that run fails closed instead.
 
+### Pre-wrapped images
+
+- A Kubernetes control plane has no image builder, so an image it runs must already carry Wardyn's runner tools.
+- Build one `FROM` agent-base, pin it by digest and add it under Images; the control plane checks it on the cluster
+  before offering it. The recipe and what the check proves are in
+  [deploy/images/README.md](../deploy/images/README.md#pre-wrapped-image).
+
 ## High availability
 
 - `ha.enabled` runs two or more wardynd replicas on Kubernetes so that the loss of a

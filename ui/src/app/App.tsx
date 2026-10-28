@@ -108,6 +108,13 @@ const ProvidersScreen = React.lazy(() =>
     default: m.ProvidersScreen,
   })),
 );
+// A security admin's Images page (design final §3): pre-wrapped images only. A super admin reaches the
+// same tab under Providers, so it has no nav item in that tier.
+const ImagesScreen = React.lazy(() =>
+  import("./components/screens/providers/images-tab").then((m) => ({
+    default: m.ImagesScreen,
+  })),
+);
 // The org's custom components (0.8.9): the catalog and who may use each. Super admin only, no nav item:
 // reached from the Settings card.
 const ComponentsScreen = React.lazy(() =>
@@ -897,6 +904,7 @@ export default function App() {
             <Route path="/admin/settings" element={suspend(<AdminSettingsScreen />)} />
             <Route path="/admin/providers" element={suspend(<ProvidersScreen />)} />
             <Route path="/admin/drives" element={suspend(<DrivesScreen />)} />
+            <Route path="/admin/images" element={suspend(<ImagesScreen />)} />
             <Route path="/admin/components" element={suspend(<ComponentsScreen />)} />
             <Route path="/admin/*" element={<NotFoundPage admin />} />
             <Route path="/account" element={suspend(<YourAccountScreen />)} />

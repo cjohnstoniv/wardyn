@@ -443,6 +443,32 @@ What the wrap does NOT add — your base must still provide:
   - Only relevant if you attach a shell to an untrusted image on a non-MITM'd allowed host.
 
 - **Raw (deploy-time).** If you build an image that already satisfies the contract below, register it under an agent name in `WARDYN_AGENT_IMAGES` (a JSON `{"<agent>":"<ref>"}` map) and launch that agent — no per-run wrap.
+- **Pre-wrapped (Kubernetes, no image builder).** Build it `FROM` agent-base yourself and add it under Images; see [Pre-wrapped image](#pre-wrapped-image).
+
+### Pre-wrapped image
+
+A pre-wrapped image already carries Wardyn's runner tools, so it runs as is: no image builder, no per-run wrap.
+It is for a Kubernetes control plane, which has no image builder.
+
+1. **Build it `FROM` agent-base 0.10.0 or later**, and add your toolchain on top.
+   - Leave `/usr/local/bin` as agent-base ships it, and add no `ENTRYPOINT`.
+   - Build each architecture your nodes run (`docker buildx build --platform linux/amd64,linux/arm64`).
+2. **Push it and pin it by digest**: `<registry>/<repository>[:tag]@sha256:<digest>`.
+   - Images refuses a tag without a digest, because a tag can be moved to another image after the check.
+3. **Add it under Images** with *How it runs* → *Pre-wrapped: runs as is*, or `POST /api/v1/base-images` with `{"kind":"prewrapped","image":"<ref>"}`.
+   - A super admin finds Images under Settings → Providers; a security admin has its own Images page and adds pre-wrapped images only.
+   - The cluster pulls it with the deployment's existing pull secret (`k8s.imagePullSecret`); the control plane reads no registry.
+
+**What the check does.**
+
+- It runs one short pod from the pinned image per node architecture (amd64, arm64), with no network and no service account token, for at most 10 minutes.
+- The pod looks for `agent-run`, `agent-run-lib.sh`, `wardyn-rec` and `wardyn-git-helper` in `/usr/local/bin`, and runs `wardyn-rec -contract`.
+- Only a ready image is offered to a workspace or a run, and its runs go only to the architectures that passed.
+- An architecture with no build or no node is left out; anything else refuses the image, and *Check again* runs a new check.
+- It needs the boot canary to have shown NetworkPolicy enforced, since the pod runs the image's own shell.
+
+**What it does not prove.** It proves the tools are there and start. It does not test your agent or your toolchain, and it does not scan the image.
+
 
 ## Adding a new agent image
 
