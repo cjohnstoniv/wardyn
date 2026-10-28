@@ -20,5 +20,5 @@ docs/operations/build-images.md=1836 share=35
 # docs/ENVBUILD.md 3220 adds 30 over 3190 (0.9.3 FIN-B), measured: one bullet saying a base that exists only on this host cannot be refreshed.
 # docs/ENVBUILD.md 3249 adds 29: the swap-lost-at-launch bullet (0.9.3 FIN-B2).
 # docs/ENVBUILD.md 3300 adds 51 over 3249 (#2289): the per-build registry tag delete and the registry garbage-collect command.
-# docs/ENVBUILD.md=3328 adds 28 over 3300, measured (0.10 final §3 pre-wrapped images): a pre-wrapped image is not wrapped, is pinned and is checked on the cluster.
-docs/ENVBUILD.md=3328 share=35
+# docs/ENVBUILD.md=3324 adds 24 over 3300, measured (0.10 final §3 pre-wrapped images): a pre-wrapped image is not wrapped, is pinned and is checked on the cluster.
+docs/ENVBUILD.md=3324 share=35
