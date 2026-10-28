@@ -8,6 +8,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.9.9] — 2026-10-28
+
 ### Security
 
 - The agent images now build on Node.js 24.22.1, and `agent-vscode` on code-server 4.141.1, which bundles Node.js
@@ -15,6 +17,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   versions decode Brotli data with a decoder that a crafted stream can make write out of bounds (CVE-2026-111497).
   A Node.js program in a sandbox that decompressed Brotli data from an untrusted source could crash, leak its
   memory or run the sender's code with that program's rights. Rebuild locally built agent images.
+
+### Known issues
+
+- **The Claude Code CLI in `agent-claude-code` is not yet updated.** The pinned 2.1.231 runs on its own embedded
+  runtime, whose Brotli decoder has the same flaw; rebuilding the image on Node.js 24.22.1 does not change that runtime.
+  The tested update, 2.1.308, carries the fixed runtime, but its folder-trust prompt defaults to exiting and it failed
+  Wardyn's managed-permission check, so it is not in this patch. Until it is, keep a Claude Code run's allowed hosts to
+  sites you trust: a crafted Brotli response from an allowed site could run code as the agent, inside its sandbox and
+  its egress policy.
 
 ## [0.9.8] — 2026-10-21
 
