@@ -233,8 +233,11 @@ git rev-parse -q --verify "refs/tags/v${FROM_VERSION}" >/dev/null \
   || die "could not fetch tag v${FROM_VERSION}"
 mkdir -p "${WORK}/from-src"
 git archive "v${FROM_VERSION}" | tar -x -C "${WORK}/from-src" || die "could not export the v${FROM_VERSION} tree"
-wardyn_docker_build -f "${WORK}/from-src/deploy/compose/Dockerfile.proxy" -t "${FROM_PROXY_IMAGE}" "${WORK}/from-src" || die "building the v${FROM_VERSION} proxy image failed"
-wardyn_docker_build -f "${WORK}/from-src/deploy/images/claude-code/Dockerfile" -t "${FROM_AGENT_IMAGE}" "${WORK}/from-src" || die "building the v${FROM_VERSION} claude-code agent image failed"
+# The tag's Dockerfiles fetch Go modules once, with no retry and no seeded module cache (later trees
+# have both), so one module-proxy stream error would fail the walk before it starts. The whole build is
+# retried instead; its finished layers are cached, so a retry resumes at the step that failed.
+retry wardyn_docker_build -f "${WORK}/from-src/deploy/compose/Dockerfile.proxy" -t "${FROM_PROXY_IMAGE}" "${WORK}/from-src" || die "building the v${FROM_VERSION} proxy image failed"
+retry wardyn_docker_build -f "${WORK}/from-src/deploy/images/claude-code/Dockerfile" -t "${FROM_AGENT_IMAGE}" "${WORK}/from-src" || die "building the v${FROM_VERSION} claude-code agent image failed"
 kind load docker-image "${FROM_PROXY_IMAGE}" --name "${CLUSTER}" >/dev/null
 kind load docker-image "${FROM_AGENT_IMAGE}" --name "${CLUSTER}" >/dev/null
 

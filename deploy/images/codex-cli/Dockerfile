@@ -193,6 +193,8 @@ RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi 
 # machine type (byte 18: 0x3e amd64, 0xb7 arm64), as claude-code's is. Anything else (not ELF, such as
 # a launcher script, or another machine type) installs as before.
 ARG TARGETARCH
+# npm bounds each registry request and its one retry (60 s, 5 s apart) inside the 180 s attempt; the fetch
+# log (--loglevel=http) and each attempt's duration aid diagnosis when an install still fails.
 COPY deploy/images/README.md deploy/images/codex-cli/codex-bin* /codex-stage/
 RUN set -eu; \
     if [ "$CODEX_INSTALL" = "native" ]; then \
@@ -206,7 +208,14 @@ RUN set -eu; \
         if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi; \
         if [ -n "$HTTP_PROXY" ]; then npm config set proxy "$HTTP_PROXY"; fi; \
         if [ -n "$HTTPS_PROXY" ]; then npm config set https-proxy "$HTTPS_PROXY"; fi; \
-        for i in 1 2 3; do timeout -k 10 180 npm install -g "@openai/codex@$CODEX_VERSION" && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done; \
+        for i in 1 2 3; do \
+            t0=$(date +%s); \
+            timeout -k 10 180 npm install -g "@openai/codex@$CODEX_VERSION" --loglevel=http \
+                --fetch-timeout=60000 --fetch-retries=1 --fetch-retry-mintimeout=5000 --fetch-retry-maxtimeout=5000 \
+                && { echo "codex install attempt $i: ok after $(($(date +%s) - t0)) s"; break; }; \
+            rc=$?; echo "codex install attempt $i: exit $rc after $(($(date +%s) - t0)) s" >&2; \
+            [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); \
+        done; \
         npm config delete proxy https-proxy; \
         echo "installed codex $CODEX_VERSION via npm"; \
     fi

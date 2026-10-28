@@ -60,7 +60,13 @@ done <<<"$gm_rows"
 if [ "$(yq -r '[.jobs[].steps[]? | select((.uses // "") | test("^docker/build-push-action@")) | select(.with["build-contexts"])] | length' "$REL")" != 0 ]; then
     bad "$REL: a docker/build-push-action step passes build-contexts — release keeps the cold Go module fetch (DECISIONS-010.md:1137)"; gm_fail=1
 fi
-if [ "$gm_fail" = 0 ]; then ok "nightly image builds seed the Go module cache from the job; release.yml builds cold"; fi
+# Every Dockerfile that downloads Go modules retries the fetch (#3469); vm-linux, added after it, did not.
+while read -r gm_df; do
+    if grep -E '^[^#]*go mod download' "$gm_df" | grep -qv 'for i in 1 2 3; do go mod download && break'; then
+        bad "$gm_df: 'go mod download' outside the three-try retry loop, so one module-proxy stream error fails the build (#3469)"; gm_fail=1
+    fi
+done < <(git ls-files '*Dockerfile*')
+if [ "$gm_fail" = 0 ]; then ok "image builds retry the Go module fetch, nightly ones seed it from the job; release.yml builds cold"; fi
 
 # ── 28. the kind walks stay watched, matrix legs included ────────────────────
 # #3439: green-by-tree.sh reads a watched matrix job through its "name (leg)" rows, so

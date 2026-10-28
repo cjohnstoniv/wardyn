@@ -216,8 +216,8 @@ type imageResolveResult struct {
 }
 
 // prewrappedWorkspaceImage resolves a workspace's prewrapped base image: checked at registration and run as
-// is, with no wrap, no cache and no build record. Only a ready row runs; anything else fails the run rather
-// than falling back to the convention image.
+// is, with no wrap, no cache and no build record. Only a ready row resolves; anything else returns BaseErr,
+// and the caller decides what that does to the run.
 func (s *Server) prewrappedWorkspaceImage(ctx context.Context, ref string) imageResolveResult {
 	pw, refusal := s.prewrappedRunImage(ctx, ref)
 	switch {
