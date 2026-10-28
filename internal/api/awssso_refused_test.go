@@ -237,8 +237,10 @@ func TestAWSSSORefused_GradesSignedOutUntilASignIn(t *testing.T) {
 	if row := grade(); row.State != modelAccessExpiredSignin || row.Action != modelAccessSignInAction {
 		t.Errorf("grade after a refusal = %q / %q, want expired_signin with the sign-in action", row.State, row.Action)
 	}
-	if _, d, _ := s.providerBedrockRefusal(ctx, p, "claude-code", awsSSOTestOwner, false); d != want {
-		t.Errorf("Review denial %+v, want the dispatch's %+v", d, want)
+	// Review reads the mark, which keeps AWS's answer but not when it came, so it names no age.
+	reviewWant := connectDenial(p.ID, fmt.Sprintf(mpBRRefused, "invalid_request: Invalid request", ""))
+	if _, d, _ := s.providerBedrockRefusal(ctx, p, "claude-code", awsSSOTestOwner, false); d != reviewWant {
+		t.Errorf("Review denial %+v, want the dispatch's answer without its age %+v", d, reviewWant)
 	}
 	var data map[string]any
 	if rows := audit.find("harness.credential.refresh"); len(rows) != 1 || json.Unmarshal(rows[0].Data, &data) != nil || data["registration"] != "present" || data["signed_in_sec"] != float64(3600) {

@@ -15,6 +15,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -162,7 +163,6 @@ func (s *Server) providerBedrockRefusal(ctx context.Context, p types.ModelProvid
 	if refresh {
 		rctx := context.WithValue(ctx, awsSSORenewalBaselineKey{scope}, baseline)
 		var failure string
-		signedIn := blob.CapturedAt
 		if blob, failure = s.refreshAWSSSOBlob(rctx, scope, blob); failure != "" {
 			switch failure {
 			case awsSSORefreshSpentSentence:
@@ -173,14 +173,16 @@ func (s *Server) providerBedrockRefusal(ctx context.Context, p types.ModelProvid
 				return awsSSOBlob{}, providerDenial{}, providerUnavailable{fmt.Sprintf(mpRunRefusal, p.ID, mpBRPersistFailed, mpRunRemedySignIn)}
 			}
 			if detail, refused := strings.CutPrefix(failure, awsSSORefreshRefusedSentence); refused {
-				return refuse(connectDenial(p.ID, s.awsSSORefusedState(detail, signedIn)))
+				// The renewal re-reads the blob under its lock, so the returned one is the sign-in AWS refused.
+				return refuse(connectDenial(p.ID, s.awsSSORefusedState(detail, blob.CapturedAt)))
 			}
 			return refuse(stateDenial(p.ID, mpBRRenewing, mpBRRemedyRetry))
 		}
 	}
-	// A session whose last renewal AWS refused reads the same at Review as at dispatch.
+	// A session whose last renewal AWS refused reads as dispatch's refusal at Review, without its
+	// age: the mark keeps AWS's answer, not when it came.
 	if detail, refused := s.awsSSORefusedFor(blob); refused && blob.expired(s.cfg.Now()) {
-		return refuse(connectDenial(p.ID, s.awsSSORefusedState(detail, blob.CapturedAt)))
+		return refuse(connectDenial(p.ID, s.awsSSORefusedState(detail, time.Time{})))
 	}
 	if now := s.cfg.Now(); blob.expired(now) && (refresh || !blob.renewable(now)) {
 		return refuse(connectDenial(p.ID, mpBRNotSignedIn))

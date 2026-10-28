@@ -21,8 +21,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A run's Audit tab now says whether the run was set up to sign its AWS requests at the proxy or to get role credentials in
   the sandbox, and why not at the proxy, for a Bedrock sign-in run and for an AWS CLI component. It is recorded at
   dispatch (`run.bedrock.configure` gains `aws_signing`, and the new `run.aws_cli.configure` row carries the same fields).
-- When a policy's allowlist drops a host from a run, New Run's Review step now names that policy under the warning, with
-  the way to ask its owner when the policy publishes one. Create and preflight carry the link as `warning_context`.
+- When a policy's allowlist drops a host from a run, New Run's Review step now names the policy the run is bound by
+  under the warning, with the way to ask its owner when that policy publishes one. Create and preflight carry it as
+  `warning_context`.
 
 ### Fixed
 
