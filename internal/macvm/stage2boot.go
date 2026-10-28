@@ -118,6 +118,9 @@ func (c Stage2BootConfig) boot(ctx context.Context, spec MachineSpec) (ToolsGues
 	if c.Engine == nil || c.SockKey == "" {
 		return nil, nil, errors.New("macvm: a stage-2 boot needs an engine and a socket key")
 	}
+	if len(spec.Shares) > 0 {
+		return nil, nil, errSharesOutsideRun
+	}
 	if c.Log == nil {
 		c.Log = slog.New(slog.NewJSONHandler(io.Discard, nil))
 	}

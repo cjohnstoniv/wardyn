@@ -142,12 +142,21 @@ func (r *runner) run(ctx context.Context) error {
 	defer guestNet.Close()
 	r.hostNet = hostNet
 	defer hostNet.Close()
+	// A backstop: runnerd checked each share and recorded its canonical path. One that resolves
+	// elsewhere now was swapped since; refusing here surfaces only as a helper that did not start.
+	if err := recheckShares(r.cfg.Shares); err != nil {
+		return err
+	}
+	for _, sh := range r.cfg.Shares {
+		r.o.Log.Info("macvm: sharing a folder", "run_id", r.cfg.RunID, "tag", sh.Tag, "target", sh.Target,
+			"read_only", sh.ReadOnly)
+	}
 	plan, err := BuildPlan(MachineSpec{
 		CPUs: r.cfg.CPUs, MemoryBytes: r.cfg.MemoryMiB * mib,
 		MinCPUs: man.MinCPUs, MinMemoryBytes: man.MinMemoryMiB * mib,
 		HardwareModel: man.HardwareModel, MachineIdentifier: r.id.MachineIdentifier,
 		DiskPath: filepath.Join(r.o.RunDir, DiskFile), AuxPath: filepath.Join(r.o.RunDir, AuxFile),
-		BaseDir: r.cfg.BaseDir, Net: guestNet,
+		BaseDir: r.cfg.BaseDir, Net: guestNet, Shares: r.cfg.Shares,
 	})
 	if err != nil {
 		return err
@@ -418,6 +427,24 @@ func (r *runner) subscribe() (<-chan Event, func()) { return r.events.subscribe(
 
 // listenUnix listens on path (mode 0600), replacing a socket a previous
 // helper left behind.
+// recheckShares refuses a share whose recorded path no longer resolves to itself, or is no longer a
+// folder. VZ then opens the path by name: the window after this check is a stated residual.
+func recheckShares(shares []Share) error {
+	for _, sh := range shares {
+		real, err := filepath.EvalSymlinks(sh.HostPath)
+		if err != nil {
+			return fmt.Errorf("macvm: share %s: %w", sh.Tag, err)
+		}
+		if real != sh.HostPath {
+			return fmt.Errorf("macvm: share %s no longer resolves to the folder runnerd checked", sh.Tag)
+		}
+		if fi, err := os.Stat(real); err != nil || !fi.IsDir() {
+			return fmt.Errorf("macvm: share %s is no longer a folder", sh.Tag)
+		}
+	}
+	return nil
+}
+
 func listenUnix(path string) (*net.UnixListener, error) {
 	if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSocket != 0 {
 		_ = os.Remove(path)
