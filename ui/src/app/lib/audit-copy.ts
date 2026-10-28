@@ -173,7 +173,7 @@ export function awsSigningLine(e: AuditEvent): { text: string; sandbox: boolean 
   const d = e.data ?? {};
   let where: "proxy" | "role" | "session" | null = null;
   if (e.action === "run.bedrock.configure") {
-    where = BEDROCK_SIGNING[String(d.mode)] ?? null;
+    where = Object.prototype.hasOwnProperty.call(BEDROCK_SIGNING, String(d.mode)) ? BEDROCK_SIGNING[String(d.mode)] : null;
   } else if (e.action === "run.aws_cli.configure") {
     where = d.aws_signing === "proxy" ? "proxy" : d.aws_signing === "sandbox" ? "role" : null;
   }
@@ -188,6 +188,8 @@ export function awsSigningLine(e: AuditEvent): { text: string; sandbox: boolean 
         ? AUDIT.AWS_SIGNING_PORT(host)
         : code === "unsigned_host"
           ? AUDIT.AWS_SIGNING_UNSIGNED_HOST(host)
-          : (AUDIT.AWS_SIGNING_REASON[code] ?? code);
+          : Object.prototype.hasOwnProperty.call(AUDIT.AWS_SIGNING_REASON, code)
+            ? AUDIT.AWS_SIGNING_REASON[code]
+            : code;
   return { text: where === "session" ? AUDIT.AWS_SIGNING_SANDBOX_SESSION(reason) : AUDIT.AWS_SIGNING_SANDBOX(reason), sandbox: true };
 }

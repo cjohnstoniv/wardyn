@@ -568,7 +568,7 @@ function AuditTab({
                   {signing && (
                     <span
                       data-testid="run-audit-aws-signing"
-                      className={`basis-full break-words text-xs sm:pl-[208px] ${signing.sandbox ? "text-warning" : "text-muted-foreground"}`}
+                      className={`min-w-0 basis-full text-xs [overflow-wrap:anywhere] sm:pl-[208px] ${signing.sandbox ? "text-warning" : "text-muted-foreground"}`}
                     >
                       {signing.text}
                     </span>

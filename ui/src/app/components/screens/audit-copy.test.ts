@@ -61,6 +61,8 @@ describe("AWS signing line", () => {
     expect(br({ mode: "sso-sigv4-proxy" })?.text).toBe(AUDIT.AWS_SIGNING_PROXY);
     expect(br({ mode: "bearer" })).toBeNull();
     expect(br({ mode: "something-new" })).toBeNull();
+    expect(br({ mode: "constructor" })).toBeNull();
+    expect(cli({ aws_signing: "sandbox", aws_signing_reason: "toString" })?.text).toBe(AUDIT.AWS_SIGNING_SANDBOX("toString"));
     expect(br({})).toBeNull();
     expect(cli({})).toBeNull();
     expect(awsSigningLine(ev("run.create", "r1", { data: { aws_signing: "proxy" } }))).toBeNull();
