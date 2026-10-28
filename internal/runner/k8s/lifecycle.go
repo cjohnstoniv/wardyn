@@ -365,13 +365,14 @@ type sweepCandidate struct {
 // pod created in the window between the two lists would be invisible and its
 // run's older NetworkPolicy would decide the run's fate on stale age.
 //
-// All three lists share the SAME agent/proxy component selector, which is
-// what excludes a boot canary (labelManaged, not labelComponent) and a drive
-// PVC (never carries labelRun at all).
+// All three lists share the SAME agent/proxy/imagecheck component selector, which
+// is what excludes a boot canary (labelManaged, not labelComponent) and a drive
+// PVC (never carries labelRun at all). An image check pod's labelRun is its check
+// attempt's ID, which the control plane's isOrphan spares while that attempt is live.
 func (d *Driver) sweepCandidates(ctx context.Context) ([]sweepCandidate, map[uuid.UUID]bool, error) {
 	ns := d.cfg.Namespace
 	listOpts := metav1.ListOptions{
-		LabelSelector: labelComponent + " in (" + componentAgent + "," + componentProxy + ")",
+		LabelSelector: labelComponent + " in (" + componentAgent + "," + componentProxy + "," + componentImageCheck + ")",
 	}
 	if d.runnerMode() {
 		// A runner sweeps only what it created (design K1 §3.1 RunnerID).
