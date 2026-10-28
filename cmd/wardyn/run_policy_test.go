@@ -312,6 +312,15 @@ func TestRunPolicy_HostMarks(t *testing.T) {
 			t.Errorf("the outside host does not come after the allowlist, then the meaning:\n%s", head)
 		}
 	})
+	t.Run("a null allowlist still prints the host the proxy opens outside it", func(t *testing.T) {
+		head, _ := run(t, func(v *sdk.RunPolicyView) {
+			v.HostMarks = &sdk.RunPolicyHostMarks{Inspected: []string{}, Terminated: []string{"api.github.com"}, Outside: []string{"api.github.com"}}
+			v.Spec.AllowedDomains = nil
+		})
+		if !strings.Contains(head, "# api.github.com: Inspected\n") || strings.Contains(head, "Tunnel only") {
+			t.Errorf("null allowlist header wrong:\n%s", head)
+		}
+	})
 	t.Run("no marks recorded prints none", func(t *testing.T) {
 		head, _ := run(t, func(v *sdk.RunPolicyView) {})
 		if strings.Contains(head, "Inspected") || strings.Contains(head, "Tunnel only") {
@@ -329,7 +338,7 @@ func TestRunPolicy_HostMarks(t *testing.T) {
 	})
 	t.Run("allow-all lists each host the proxy opens, then its meaning, then the allow-all line", func(t *testing.T) {
 		head, _ := run(t, func(v *sdk.RunPolicyView) {
-			v.HostMarks = &sdk.RunPolicyHostMarks{Inspected: []string{}, Terminated: []string{"api.github.com", "api.anthropic.com"}, Outside: []string{}}
+			v.HostMarks = &sdk.RunPolicyHostMarks{Inspected: []string{}, Terminated: []string{"api.github.com", "api.anthropic.com", "api.openai.com"}, Outside: []string{"api.github.com", "api.anthropic.com"}}
 			v.Spec.AllowAllEgress = true
 		})
 		var at []int
@@ -340,8 +349,8 @@ func TestRunPolicy_HostMarks(t *testing.T) {
 			}
 			at = append(at, i)
 		}
-		if !slices.IsSorted(at) || strings.Contains(head, "pypi.org: ") {
-			t.Errorf("allow-all header out of order:\n%s", head)
+		if !slices.IsSorted(at) || strings.Contains(head, "pypi.org: ") || strings.Contains(head, "api.openai.com") {
+			t.Errorf("allow-all header out of order, or lists a terminated host that is not outside:\n%s", head)
 		}
 	})
 }

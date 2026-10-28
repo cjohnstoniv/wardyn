@@ -263,10 +263,14 @@ func TestPG_LocalRun_RepositoryGoesThroughTheBroker(t *testing.T) {
 	assertMarksAreThoseOfTheConfigSent(t, e.h.audit.snapshot(), run.ID, spec)
 }
 
-// A via_org host the runner's proxy terminates is marked Inspected and listed Terminated by the real local
-// dispatch. The run asks for intercept_tls, so dispatch mints the run's CA (without a CA the proxy terminates
-// nothing, and the via_org host is correctly not marked: TestPG_LocalRun_RepositoryGoesThroughTheBroker).
-func TestPG_LocalRun_ViaOrgHostIsMarkedInspected(t *testing.T) {
+// A via_org host the runner's proxy terminates is listed Terminated and Outside by the real local dispatch.
+// The run asks for intercept_tls, so dispatch mints the run's CA (without a CA the proxy terminates nothing,
+// and the via_org host is correctly not listed: TestPG_LocalRun_RepositoryGoesThroughTheBroker). Dispatch's
+// confineBrokerEgress moves github.com out of allowed_domains into denied_domains, so the host is no
+// Inspected allowlist entry; the via_org route is the organisation's to decide, so the proxy opens it
+// whatever the policy says, and it is Outside. api.openai.com is a model route the proxy would refuse
+// (the allowlist lacks it), so it is not.
+func TestPG_LocalRun_ViaOrgHostIsListedOutside(t *testing.T) {
 	e := newPlacementEnv(t)
 	laptops := e.createPool("Laptops", types.RunnerPoolUser)
 	awake := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2, types.CC3)
@@ -289,14 +293,18 @@ func TestPG_LocalRun_ViaOrgHostIsMarkedInspected(t *testing.T) {
 		t.Fatal("dispatch minted no CA for the run, so the proxy terminates nothing; the fixture is broken")
 	}
 	env, marks := assertMarksAreThoseOfTheConfigSent(t, e.h.audit.snapshot(), run.ID, sent)
-	if !slices.Contains(env.AllowedDomains, host) {
-		t.Fatalf("allowed_domains = %v, want %s", env.AllowedDomains, host)
+	// confineBrokerEgress (runs_dispatch_gitbroker.go) denies the broker's hosts and drops them from the allowlist.
+	if !slices.Contains(env.DeniedDomains, host) {
+		t.Fatalf("denied_domains = %v, want %s (confineBrokerEgress)", env.DeniedDomains, host)
 	}
-	if !slices.Contains(marks.Inspected, host) {
-		t.Errorf("inspected = %v, want the via_org host %s", marks.Inspected, host)
+	if !slices.Contains(marks.Outside, host) {
+		t.Errorf("outside = %v, want the via_org host %s", marks.Outside, host)
 	}
 	if !terminatesHost(marks.Terminated, host) {
 		t.Errorf("terminated = %v, want the via_org host %s", marks.Terminated, host)
+	}
+	if slices.Contains(marks.Outside, "api.openai.com") {
+		t.Errorf("outside = %v lists api.openai.com, which the proxy refuses over this allowlist", marks.Outside)
 	}
 }
 

@@ -281,7 +281,7 @@
 # docs/sdk.md 22671 adds 11 over 22660, measured (#2967 DESK-LOCKS row 5): PutSiteConfigResult strips the recording block and reports RecordingIgnored.
 # docs/sdk.md 22680 adds 9 over 22671, measured: run_output_not_kept also answers an ended run whose runner captures no output and whose recording never arrived.
 # docs/sdk.md=22806 adds 90 over 22716, measured (0.10 final §3 pre-wrapped images): the three prewrapped_* reason rows.
-docs/sdk.md=22850 share=21 # +44 measured (0.10 final #2956 host marks: the host_marks row; the two mark meanings live in OPERATIONS.md); tightened from 21227 to the measured count at the 0.10 W4d merge; +27 (agent, ours + theirs - base); +9 (ui-plumbing, ours + theirs - base)
+docs/sdk.md=22860 share=21 # +10 measured (#2956 r2: the host_marks row names outside); +44 measured (0.10 final #2956 host marks: the host_marks row; the two mark meanings live in OPERATIONS.md); tightened from 21227 to the measured count at the 0.10 W4d merge; +27 (agent, ours + theirs - base); +9 (ui-plumbing, ours + theirs - base)
 # docs/sdk.md 20423 = ours 20195 + theirs 20288 - base 20060 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/sdk.md 20315 = ours + theirs - base at the 0.10 HYB-C merge of main onto VM-A, measured.
 # 0.10 HYB-C: docs/sdk.md 20343 adds 28 over 20315, measured: the placement_capability refusal of a linux_vm run with a folder on a runner that cannot share one.

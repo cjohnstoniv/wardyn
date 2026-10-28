@@ -8,12 +8,15 @@ import (
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // TestHostMarksOf: the mark comes from the proxy config dispatch hands the sidecar, by the proxy's
 // own rule, so the same allowed hosts read differently as the config changes.
 func TestHostMarksOf(t *testing.T) {
 	allowed := []string{"api.anthropic.com", "artifacts.corp.example", "*.corp.example", "pypi.org"}
+	listed := types.RunPolicySpec{AllowedDomains: allowed}
+	openWide := types.RunPolicySpec{AllowedDomains: allowed, AllowAllEgress: true}
 	for _, tc := range []struct {
 		name string
 		pc   runner.ProxyConfig
@@ -22,10 +25,13 @@ func TestHostMarksOf(t *testing.T) {
 		out  []string
 	}{
 		{"no CA", runner.ProxyConfig{MITMHosts: []string{"artifacts.corp.example"}, MITMLLM: true}, []string{}, []string{}, []string{}},
-		{"model route and an artifact host", runner.ProxyConfig{MITMCACertPEM: "c", MITMCAKeyPEM: "k", MITMHosts: []string{"artifacts.corp.example"}, MITMLLM: true},
+		{"model route and an artifact host", runner.ProxyConfig{MITMCACertPEM: "c", MITMCAKeyPEM: "k", MITMHosts: []string{"artifacts.corp.example"}, MITMLLM: true, Policy: listed},
+			[]string{"api.anthropic.com", "artifacts.corp.example", "*.corp.example"},
+			[]string{"api.anthropic.com", "api.openai.com", "artifacts.corp.example"}, []string{}},
+		{"allow-all lists the model route the allowlist lacks", runner.ProxyConfig{MITMCACertPEM: "c", MITMCAKeyPEM: "k", MITMHosts: []string{"artifacts.corp.example"}, MITMLLM: true, Policy: openWide},
 			[]string{"api.anthropic.com", "artifacts.corp.example", "*.corp.example"},
 			[]string{"api.anthropic.com", "api.openai.com", "artifacts.corp.example"}, []string{"api.openai.com"}},
-		{"artifact host only", runner.ProxyConfig{MITMCACertPEM: "c", MITMCAKeyPEM: "k", MITMHosts: []string{"artifacts.corp.example"}},
+		{"artifact host only", runner.ProxyConfig{MITMCACertPEM: "c", MITMCAKeyPEM: "k", MITMHosts: []string{"artifacts.corp.example"}, Policy: listed},
 			[]string{"artifacts.corp.example", "*.corp.example"}, []string{"artifacts.corp.example"}, []string{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

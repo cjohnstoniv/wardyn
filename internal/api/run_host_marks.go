@@ -17,8 +17,9 @@ type hostMarks struct {
 	// Terminated is every host the proxy terminates, as proxy.Config.TerminatedHosts lists them:
 	// the allowlist's Inspected entries are a subset of what it covers.
 	Terminated []string `json:"terminated"` // never null
-	// Outside is the Terminated hosts no allowed_domains entry covers, by the proxy package's own
-	// matcher (proxy.Config.TerminatedOutside), so a reader lists them without matching hosts itself.
+	// Outside is the hosts the run's proxy would open (admit, or hold for first-use approval, and
+	// terminate) that no allowed_domains entry names, by the proxy package's own decision
+	// (proxy.Config.TerminatedOutside), so a reader lists them without matching hosts itself.
 	Outside []string `json:"outside"` // never null
 }
 

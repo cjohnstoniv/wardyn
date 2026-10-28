@@ -4,10 +4,13 @@
 package proxy
 
 import (
+	"context"
+	"net/http"
 	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/egress/domainmatch"
 )
 
@@ -115,13 +118,21 @@ func (c *Config) TerminatedHosts() []string {
 	return c.mitmSetOf().terminated()
 }
 
-// TerminatedOutside lists the TerminatedHosts that no allowed_domains entry covers, in the same order:
-// the hosts the proxy opens that the allowlist does not name. An entry covers a host when it names it
-// exactly or as a wildcard, and a bare entry covers every port while a port-qualified one covers that
-// port only; a host terminated on any port is covered by a bare entry alone.
+// TerminatedOutside lists, in TerminatedHosts order, the hosts the run's proxy would open that no
+// allowed_domains entry names: a via_org host (ServeHTTP routes it before any policy decision), or a
+// terminated host the proxy's own CONNECT decision (gateConnect) does not refuse, so one it admits or
+// holds for first-use approval and opens once approved. A host the proxy refuses (a denied host, a
+// host the allowlist lacks when it asks nobody, a port the port rule closes) is never opened and is
+// not listed. A host any entry names exactly, on any port, is listed by that entry; a wildcard entry
+// covers a host it matches on the ports it names. A host terminated on any port is probed on 443.
 func (c *Config) TerminatedOutside(allowed []string) []string {
+	m := c.mitmSetOf()
+	pol := CompilePolicy(c.Policy)
+	gate := builtinEvaluator{p: pol}
+	portRule := effectivePortRule(c.VM, c.PortRule)
+	canAsk := pol.FirstUseMode().RaisesApproval()
 	out := []string{}
-	for _, t := range c.TerminatedHosts() {
+	for _, t := range m.terminated() {
 		host, port := t, 0
 		if h, p, ok := strings.Cut(t, ":"); ok {
 			n, _ := strconv.Atoi(p)
@@ -129,14 +140,25 @@ func (c *Config) TerminatedOutside(allowed []string) []string {
 		}
 		covered := slices.ContainsFunc(allowed, func(entry string) bool {
 			exact, wild, eport := domainmatch.Classify(entry)
-			if exact != host && (wild == "" || !domainmatch.MatchWild(host, []string{wild})) {
-				return false
+			if exact == host {
+				return true
 			}
-			return eport == 0 || eport == port
+			return wild != "" && domainmatch.MatchWild(host, []string{wild}) && (eport == 0 || eport == port)
 		})
-		if !covered {
-			out = append(out, t)
+		if covered {
+			continue
 		}
+		if !m.viaOrg[host] {
+			probe := port
+			if probe == 0 {
+				probe = 443
+			}
+			req := egress.Request{Host: host, Port: probe, Method: http.MethodConnect}
+			if gateConnect(context.Background(), req, gate, pol, portRule).outcome(canAsk) == connectRefuse {
+				continue
+			}
+		}
+		out = append(out, t)
 	}
 	return out
 }
