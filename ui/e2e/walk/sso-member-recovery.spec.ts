@@ -847,8 +847,9 @@ test("H (agent-boot-egress): an interactive run answers ONE trust prompt and rea
   //   - with `hasCompletedOnboarding` seeded, the theme picker AND the
   //     "Security notes / Press Enter to continue" page are both gone;
   //   - the workspace-trust screen remains, by design — it is a security
-  //     question and Wardyn does not answer it for you. Its default option is
-  //     already "Yes, I trust this folder", so ONE bare Enter accepts it;
+  //     question and Wardyn does not answer it for you. Since Claude Code
+  //     2.1.308 its default option is "No, exit", so the walk moves to "Yes, I
+  //     trust this folder" and confirms, as a person would;
   //   - there is NO login-method picker at all under CLAUDE_CODE_USE_BEDROCK=1.
   //
   // THE NO-SEED SHAPE, deliberately. Seeding tool approval before the person
@@ -879,10 +880,16 @@ test("H (agent-boot-egress): an interactive run answers ONE trust prompt and rea
   expect(trustScreen).not.toContain("Choose the text style");
   expect(trustScreen).not.toContain("Security notes");
 
-  // Step 5 — ONE Enter, and one is the measured number on the fixed image (the
-  // lane measured 3 on :d8f26511 and 1 on the rebuilt one). The default option
-  // is already the accepting one.
+  // Step 5 — choose "Yes, I trust this folder", then ONE Enter. The dialog
+  // ignores keys for a moment after it opens, so the move is repeated until the
+  // pointer sits on Yes.
   await screen.click();
+  await expect
+    .poll(async () => {
+      await page.keyboard.press("ArrowDown");
+      return termText(screen).catch(() => "");
+    }, { timeout: 30_000 })
+    .toMatch(/❯ Yes, I trust this folder/);
   await page.keyboard.press("Enter");
 
   // Step 6 — the CLI's own input prompt, on the Bedrock lane.
