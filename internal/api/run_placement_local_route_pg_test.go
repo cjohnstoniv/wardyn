@@ -264,7 +264,8 @@ func TestPG_LocalRun_RepositoryGoesThroughTheBroker(t *testing.T) {
 }
 
 // A via_org host the runner's proxy terminates is listed Terminated and Outside by the real local dispatch.
-// The run asks for intercept_tls, so dispatch mints the run's CA (without a CA the proxy terminates nothing,
+// The deployment's policy sets intercept_tls (a member's own llm_inspection never survives the clamp
+// when it sets none: composer.ClampMember), so dispatch mints the run's CA (without a CA the proxy terminates nothing,
 // and the via_org host is correctly not listed: TestPG_LocalRun_RepositoryGoesThroughTheBroker). Dispatch's
 // confineBrokerEgress moves github.com out of allowed_domains into denied_domains, so the host is no
 // Inspected allowlist entry; the via_org route is the organisation's to decide, so the proxy opens it
@@ -277,11 +278,11 @@ func TestPG_LocalRun_ViaOrgHostIsListedOutside(t *testing.T) {
 	e.addToPool(e.person, laptops.ID, awake)
 	e.stream(awake, types.CC1, types.CC2, types.CC3)
 	e.srv.cfg.DefaultPolicy.EligibleGrants = append(e.srv.cfg.DefaultPolicy.EligibleGrants, types.GrantSpec{Kind: types.GrantGitHubToken, Scope: json.RawMessage(`{"repos":["acme/widgets"]}`)})
+	e.srv.cfg.DefaultPolicy.LLMInspection = &types.LLMInspectionSpec{Mode: "alert", DetectSecretPatterns: true, InterceptTLS: true}
 	if _, err := e.pg.PutCredentialDeliveryPolicy(context.Background(), json.RawMessage(`{"classes":{"github_token":{"mode":"via_org"}}}`), "seed", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	body := runBody(`"runner_pool_id":"` + laptops.ID.String() + `","inline_policy":{"min_confinement_class":"CC2","allowed_domains":["github.com"],` +
-		`"llm_inspection":{"mode":"alert","detect_secret_patterns":true,"intercept_tls":true},` +
 		`"eligible_grants":[{"kind":"github_token","scope":{"repos":["acme/widgets"]}}]}`)
 	run := e.localCreate(body)
 	sent := e.dispatchedSpec(run.ID)
