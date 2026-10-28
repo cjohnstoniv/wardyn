@@ -70,6 +70,8 @@ export interface MacVMCaps {
   harnesses?: string[];
   desktop?: MacVMDesktop;
   sign_ins?: boolean;
+  /** The runner shares a run's folders into its macOS VM. */
+  folders?: boolean;
   base: MacVMBase;
   /** In words, why the runner offers no macOS VM. The runner inventory leaves it out: the console words `reason` itself. */
   refusal?: string;
