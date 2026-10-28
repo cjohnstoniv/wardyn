@@ -26,6 +26,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- When AWS refuses to renew an AWS sign-in, the run's refusal now says how long after signing in it came, and that a
+  refusal that soon after every sign-in can be the IAM Identity Center session duration or the identity provider's
+  sign-in session. The `harness.credential.refresh` failure row carries `signed_in_sec`.
 - A failed macOS VM start no longer keeps its VM in the helper until the helper exits (#3708). Each failed attempt
   kept one, and a first boot's retries on the auxiliary storage lock can make several.
 - `PUT /governance/units/{id}` now takes a unit as `GET /governance` returns it, so GET, change one field and PUT the
