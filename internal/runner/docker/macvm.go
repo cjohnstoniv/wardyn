@@ -724,18 +724,16 @@ func (d *Driver) EndNewestMacVM(ctx context.Context, freeBytes int64) (string, e
 	return runID.String(), nil
 }
 
-// macVMGoneReason says why a helper is gone: a ledger entry from an earlier boot means the Mac restarted;
-// any other gone helper simply stopped.
+// macVMGoneReason says why a helper is gone: a ledger entry from an earlier boot (by its boot session, as
+// the ledger tells boots apart) means the Mac restarted; any other gone helper simply stopped.
 func (d *Driver) macVMGoneReason(v *vmRun) string {
 	c := d.macVMConfig()
 	cfg, err := readMacRun(v.dir, v.runID)
 	if c == nil || err != nil {
 		return macVMHelperStopped
 	}
-	if e, ok := c.entry(cfg.LedgerEntry); ok {
-		if boot, err := c.Host.BootTime(); err == nil && e.BootTime != boot {
-			return macVMRestarted
-		}
+	if e, ok := c.entry(cfg.LedgerEntry); ok && admission.EarlierBoot(c.Host, e) {
+		return macVMRestarted
 	}
 	return macVMHelperStopped
 }

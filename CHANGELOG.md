@@ -11,6 +11,24 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- A failed macOS VM start no longer keeps its VM in the helper until the helper exits (#3708). Each failed attempt
+  kept one, and a first boot's retries on the auxiliary storage lock can make several.
+- After a change of the Mac's clock, a macOS VM run whose helper stopped no longer ends with "The Mac restarted, so
+  the macOS VM was lost." (#3709). The runner tells a restart by the boot session the ledger records, as the ledger
+  does, so a run whose entry has no session, from an earlier release, says its helper stopped.
+
+### Security
+
+- The agent images now build on Node.js 24.22.1, and `agent-vscode` on code-server 4.141.1, which bundles Node.js
+  24.22.1. Earlier images carried Node.js 24.21.0, and `agent-vscode` ran code-server on Node.js 24.20.0. Both
+  versions decode Brotli data with a decoder that a crafted stream can make write out of bounds (CVE-2026-111497).
+  A Node.js program in a sandbox that decompressed Brotli data from an untrusted source could crash, leak its
+  memory or run the sender's code with that program's rights. Rebuild locally built agent images.
+
+## [0.10.0-rc.4] — 2026-10-26
+
 ### Before you upgrade
 
 - A slot that 0.10.0-rc.3 recorded for a macOS VM prepare or tools update, and never freed, lacks the boot session
