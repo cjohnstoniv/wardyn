@@ -282,7 +282,7 @@ test.describe("Run detail — the Policy tab (#1425)", () => {
       allow_all_egress: true,
       first_use_approval: "deny_with_review",
       min_confinement_class: "CC1",
-      host_marks: { inspected: [], terminated: ["api.github.com"], outside: [] },
+      host_marks: { inspected: [], terminated: ["api.github.com"], outside: ["api.github.com"] },
     });
     sql(
       `SELECT audit_append(gen_random_uuid(), now(), '${runId}', 'system', 'wardynd', 'run.policy.resolve', '${runId}', 'success', '', '${resolved}'::jsonb)`,
