@@ -16,6 +16,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // With WARDYN_AWS_SIGV4_AT_PROXY on, each AWS sign-in lane dispatches a placeholder key pair
@@ -150,5 +151,33 @@ func TestAWSSigV4ConfigFile_ProcessPrintsThePlaceholder(t *testing.T) {
 	if err := json.Unmarshal(out, &got); err != nil || got.Version != 1 ||
 		got.AccessKeyID != proxy.AWSSigV4PlaceholderAccessKeyID || got.SecretAccessKey != proxy.AWSSigV4PlaceholderSecretAccessKey {
 		t.Fatalf("credential_process printed %q (%v)", out, err)
+	}
+}
+
+// With the switch on, setup warns of each AWS sign-in provider whose lane is not re-signed and
+// says why; a re-signed one, a key provider and the switch off say nothing.
+func TestAWSSigV4FallbackChecks(t *testing.T) {
+	public, private, generated, key := brSSOProvider(), brSSOProvider(), brSSOProvider(), brBearerProvider()
+	private.ID, private.Name, private.Bedrock.BaseURL = "bedrock-glued", "Glued endpoint", brBaseURL
+	generated.ID, generated.Bedrock.BaseURL = "bedrock-vpce", "https://vpce-0123456789abcdef0-lj2wisx3.bedrock-runtime.us-west-2.vpce.amazonaws.com"
+	sc := types.SiteConfig{ModelProviders: &types.ModelProviders{Providers: []types.ModelProvider{public, private, generated, key}}}
+	var mp []SetupModelProvider
+	for _, p := range sc.ModelProviders.Providers {
+		mp = append(mp, SetupModelProvider{ID: p.ID, Kind: string(p.Kind)})
+	}
+	s := &Server{cfg: Config{AWSSigV4AtProxy: true, AWSSSOProxyInject: true}}
+	got := s.awsSigV4FallbackChecks(sc, mp)
+	if len(got) != 1 || got[0].ID != "aws_sigv4_fallback:bedrock-glued" || got[0].Status != "warn" ||
+		got[0].Label != "AWS signing at the proxy: Glued endpoint" ||
+		!strings.HasSuffix(got[0].Detail, "the proxy cannot sign for vpce-1.bedrock-runtime.us-west-2.vpce.amazonaws.com.") {
+		t.Fatalf("checks = %+v, want one warn for the glued endpoint naming its host", got)
+	}
+	s.cfg.AWSSSOEndpointOverride = "http://fake:8090"
+	if got := s.awsSigV4FallbackChecks(sc, mp); len(got) != 3 || !strings.HasSuffix(got[0].Detail, "WARDYN_AWS_SSO_ENDPOINT_OVERRIDE is set.") {
+		t.Fatalf("with the test endpoint, checks = %+v, want the three sign-in providers and the reason", got)
+	}
+	s.cfg = Config{AWSSSOProxyInject: true}
+	if got := s.awsSigV4FallbackChecks(sc, mp); len(got) != 0 {
+		t.Fatalf("switch off: checks = %+v, want none", got)
 	}
 }

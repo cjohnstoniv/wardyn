@@ -1680,6 +1680,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A lane is re-signed only when every one of its hosts is an exact AWS service host the proxy can sign for: `<service>.<region>.amazonaws.com`, a global `<service>.amazonaws.com`, or an S3 bucket host. Bedrock's runtime and control hosts qualify.
 - So does a Bedrock PrivateLink endpoint by the name AWS generates for it, `vpce-<id>[-<suffix>].<service>.<region>.vpce.amazonaws.com`, for `bedrock`, `bedrock-runtime`, `bedrock-agent` and `bedrock-agent-runtime` in a commercial Region (not GovCloud). It is signed for its own host and that Region.
 - Not re-signed, so the whole lane keeps its old path and the role credentials stay in the sandbox. That is a wildcard host, a port other than 443, a dual-stack host, another service's PrivateLink host or your own endpoint service's (`vpce-svc-…`), S3 Control, GovCloud IAM, and hosts outside `amazonaws.com`.
+- While it is on, `/setup/status` adds an `aws_sigv4_fallback:<provider>` warning for each AWS sign-in model provider whose lane is not re-signed, naming the host or setting that keeps it.
 - On a re-signed host, the proxy refuses (`403`, reason in `X-Wardyn-Reason`, decision row `brokered:aws-sigv4:refused`) and never forwards:
   - a request not signed with the placeholder key, or not signed at all (`aws_sigv4_not_placeholder`), and a presigned URL (`aws_sigv4_presigned`);
   - SigV4a (`aws_sigv4_algorithm`), and a signature for another service or Region than the host's (`aws_sigv4_scope`);

@@ -38,27 +38,44 @@ const AWSSigV4AtProxyFlagDefault = "off"
 // host is an exact AWS service host on port 443 the proxy can re-sign. One host it cannot
 // re-sign keeps the whole lane on its old path: a lane is signed one way.
 func (s *Server) awsSigV4Hosts(hosts []string) ([]string, bool) {
-	if !s.cfg.AWSSigV4AtProxy || !s.cfg.AWSSSOProxyInject || s.cfg.AWSSSOEndpointOverride != "" || len(hosts) == 0 {
-		return nil, false
+	out, why := s.awsSigV4Lane(hosts)
+	return out, why == ""
+}
+
+// awsSigV4LaneOff is awsSigV4Lane's reason while the switch is off.
+const awsSigV4LaneOff = "off"
+
+// awsSigV4Lane is awsSigV4Hosts with the reason a lane keeps its old path: "" when it is
+// re-signed, awsSigV4LaneOff with the switch off, else the first thing that keeps it.
+func (s *Server) awsSigV4Lane(hosts []string) ([]string, string) {
+	switch {
+	case !s.cfg.AWSSigV4AtProxy:
+		return nil, awsSigV4LaneOff
+	case !s.cfg.AWSSSOProxyInject:
+		return nil, "WARDYN_AWS_SSO_PROXY_INJECT is off"
+	case s.cfg.AWSSSOEndpointOverride != "":
+		return nil, "WARDYN_AWS_SSO_ENDPOINT_OVERRIDE is set"
+	case len(hosts) == 0:
+		return nil, "the lane names no AWS host"
 	}
 	out := make([]string, 0, len(hosts))
 	for _, h := range hosts {
 		host := strings.ToLower(strings.TrimSpace(h))
 		if hh, port, err := net.SplitHostPort(host); err == nil {
 			if port != "443" {
-				return nil, false
+				return nil, h + " is not on port 443"
 			}
 			host = hh
 		}
 		host = strings.TrimSuffix(host, ".")
 		if _, _, ok := proxy.AWSSigV4Scope(host); !ok {
-			return nil, false
+			return nil, "the proxy cannot sign for " + host
 		}
 		if !slices.Contains(out, host) {
 			out = append(out, host)
 		}
 	}
-	return out, true
+	return out, ""
 }
 
 // awsSigV4CredentialFile is the file, beside ~/.aws/config, that holds the placeholder pair in
