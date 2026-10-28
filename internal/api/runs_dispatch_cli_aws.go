@@ -124,7 +124,7 @@ func cliAWSPortalEgress(ssoRegion, endpointOverride string) []string {
 // at dispatch, and its off position refuses the run: the only other way to
 // serve the CLI is the SSO token in the sandbox. ok=false: the run was marked
 // FAILED and dispatch stops. why is the lane's re-signing choice, for
-// recordAWSCLIConfigure once every later gate has held; nil without the row.
+// recordAWSCLIConfigure after the lane-authoring gates; nil without the row.
 func (s *Server) authorAWSCLI(ctx context.Context, run types.AgentRun, cli *awsCLIDispatch, policy *types.RunPolicySpec,
 	sandboxEnv map[string]string, injections []runner.InjectionGrant,
 ) (inj []runner.InjectionGrant, mitm []string, sig *proxy.AWSSigV4Config, why *awsSigV4Why, ok bool) {
