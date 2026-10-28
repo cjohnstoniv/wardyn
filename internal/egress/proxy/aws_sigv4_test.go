@@ -149,6 +149,7 @@ func TestAWSSigV4Scope(t *testing.T) {
 		"vpce-0123.bedrock-runtime.us-east-1.vpce.amazonaws.com":                                  "",
 		"vpce-0123456789abcdef0.bedrock-runtime.vpce.amazonaws.com":                               "",
 		"bedrock-runtime.us-east-1.vpce.amazonaws.com":                                            "",
+		"vpce-0123456789abcdef0.bedrock-runtime.us-gov-west-1.vpce.amazonaws.com":                 "",
 	} {
 		service, region, ok := AWSSigV4Scope(host)
 		got := ""

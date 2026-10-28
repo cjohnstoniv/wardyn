@@ -181,11 +181,12 @@ func AWSSigV4Scope(host string) (service, region string, ok bool) {
 }
 
 // awsPrivateLinkService is the service label and region of rest, a host with its .vpce.amazonaws.com
-// cut: exactly an endpoint label, a Bedrock service and a region.
+// cut: exactly an endpoint label, a Bedrock service and a commercial region. GovCloud (us-gov-*)
+// shares amazonaws.com but is another partition, and is not re-signed here.
 func awsPrivateLinkService(rest string) (label, region string, ok bool) {
 	labels := strings.Split(rest, ".")
 	if len(labels) != 3 || len(labels[0]) > 63 || !awsVPCEndpointLabel.MatchString(labels[0]) ||
-		!awsSigV4PrivateLinkServices[labels[1]] || !awsRegionLabel.MatchString(labels[2]) {
+		!awsSigV4PrivateLinkServices[labels[1]] || !awsRegionLabel.MatchString(labels[2]) || strings.HasPrefix(labels[2], "us-gov-") {
 		return "", "", false
 	}
 	return labels[1], labels[2], true

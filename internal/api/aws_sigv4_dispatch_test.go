@@ -100,6 +100,7 @@ func TestAWSSigV4Hosts(t *testing.T) {
 		{"private endpoint", on, []string{"vpce-1.bedrock-runtime.us-east-1.vpce.amazonaws.com"}, nil},
 		{"bedrock PrivateLink endpoint", on, []string{"bedrock.us-east-1.amazonaws.com", "vpce-0123456789abcdef0-lj2wisx3.bedrock-runtime.us-east-1.vpce.amazonaws.com"},
 			[]string{"bedrock.us-east-1.amazonaws.com", "vpce-0123456789abcdef0-lj2wisx3.bedrock-runtime.us-east-1.vpce.amazonaws.com"}},
+		{"GovCloud PrivateLink endpoint keeps the lane", on, []string{"bedrock.us-east-1.amazonaws.com", "vpce-0123456789abcdef0.bedrock-runtime.us-gov-west-1.vpce.amazonaws.com"}, nil},
 		{"sts private endpoint", on, []string{"sts.us-east-1.amazonaws.com", "vpce-1a2b-c3d4.sts.us-east-1.vpce.amazonaws.com"}, nil},
 		{"sts dual-stack", on, []string{"sts.us-east-1.api.aws"}, nil},
 		{"sts fips", on, []string{"sts-fips.us-east-1.amazonaws.com"}, []string{"sts-fips.us-east-1.amazonaws.com"}},
