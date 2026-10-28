@@ -3,9 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import type { RunPolicySpec } from "../../../lib/types";
+import { SUMMARY } from "../../screens/run-detail/policy-tab-copy";
 import { PolicySummary, specIsRedacted, type PolicyChangeMarks } from "./policy-summary";
 
 // Every key a RunPolicySpec has, each carrying something the Summary shows.
@@ -283,5 +286,58 @@ describe("PolicySummary — push limits (#2601)", () => {
     expect(row("Tools and pushes", "Largest file")).toHaveTextContent("5 MiB");
     expect(row("Tools and pushes", "Hold waits")).toHaveTextContent("300 seconds");
     expect(row("Tools and pushes", "Largest push inspected")).toHaveTextContent("32 MiB");
+  });
+});
+
+// The host marks (#2956, mock R13). The five strings are the approved copy, character for
+// character; cmd/wardyn/run_policy.go prints the same five, so that file is read here too.
+describe("PolicySummary host marks", () => {
+  const INSPECTED = "Inspected";
+  const TUNNEL = "Tunnel only";
+  const INSPECTED_MEANING =
+    "Wardyn opens this traffic to add a credential or check it, so the sandbox must trust Wardyn's certificate.";
+  const TUNNEL_MEANING =
+    "Wardyn passes this traffic through without reading it. It sees only the host name. Apps that pin their certificate work here.";
+  const ALLOW_ALL_LINE = "Hosts not listed as Inspected pass through unread.";
+  const spec = { allowed_domains: ["artifacts.corp.example", "pypi.org"] } as RunPolicySpec;
+  const row = (host: string) => screen.getByText(host).closest("li") as HTMLElement;
+
+  it("pins the five strings verbatim, in the console copy and in the CLI", () => {
+    expect(SUMMARY.inspected).toBe(INSPECTED);
+    expect(SUMMARY.tunnelOnly).toBe(TUNNEL);
+    expect(SUMMARY.inspectedMeaning).toBe(INSPECTED_MEANING);
+    expect(SUMMARY.tunnelOnlyMeaning).toBe(TUNNEL_MEANING);
+    expect(SUMMARY.tunnelOnlyAllowAll).toBe(ALLOW_ALL_LINE);
+    const cli = readFileSync(join(__dirname, "../../../../../../cmd/wardyn/run_policy.go"), "utf8");
+    for (const s of [INSPECTED, TUNNEL, INSPECTED_MEANING, TUNNEL_MEANING, ALLOW_ALL_LINE]) expect(cli).toContain(`"${s}"`);
+  });
+
+  it("puts each chip on its own host, and one meaning line per mark present", () => {
+    render(<PolicySummary spec={spec} hostMarks={{ inspected: ["artifacts.corp.example"] }} />);
+    expect(within(row("artifacts.corp.example")).getByText(INSPECTED)).toBeInTheDocument();
+    expect(within(row("artifacts.corp.example")).queryByText(TUNNEL)).toBeNull();
+    expect(within(row("pypi.org")).getByText(TUNNEL)).toBeInTheDocument();
+    expect(within(row("pypi.org")).queryByText(INSPECTED)).toBeNull();
+    expect(screen.getByText(INSPECTED_MEANING)).toBeInTheDocument();
+    expect(screen.getByText(TUNNEL_MEANING)).toBeInTheDocument();
+  });
+
+  it("explains only the marks present", () => {
+    render(<PolicySummary spec={spec} hostMarks={{ inspected: [] }} />);
+    expect(screen.getAllByText(TUNNEL)).toHaveLength(3); // two hosts and the meaning line's chip
+    expect(screen.queryByText(INSPECTED)).toBeNull();
+    expect(screen.queryByText(INSPECTED_MEANING)).toBeNull();
+  });
+
+  it("shows no marks without host_marks", () => {
+    render(<PolicySummary spec={spec} />);
+    for (const s of [INSPECTED, TUNNEL, INSPECTED_MEANING, TUNNEL_MEANING, ALLOW_ALL_LINE]) expect(screen.queryByText(s)).toBeNull();
+  });
+
+  it("keeps the allow-all row to its one line and adds the allow-all line", () => {
+    render(<PolicySummary spec={{ ...spec, allow_all_egress: true } as RunPolicySpec} hostMarks={{ inspected: [] }} />);
+    expect(screen.queryByText("pypi.org")).toBeNull();
+    expect(screen.getByText(ALLOW_ALL_LINE)).toBeInTheDocument();
+    expect(screen.queryByText(TUNNEL_MEANING)).toBeNull();
   });
 });

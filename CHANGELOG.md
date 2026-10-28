@@ -13,6 +13,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
+- A run's Policy tab now marks each allowed host **Inspected** or **Tunnel only**, with a line saying what each means, and `wardyn run policy` prints the same marks above the YAML. Inspected means Wardyn opens that traffic to add a credential or check it, so the sandbox must trust Wardyn's certificate; Tunnel only passes through unread. The mark comes from the run's own proxy config at launch, and `GET /api/v1/runs/{id}/policy` returns it as `host_marks`. A run from before this change, or one restarted since, shows no marks. See [OPERATIONS.md](docs/OPERATIONS.md#the-policy-a-run-got).
 - A Kubernetes control plane, which has no image builder, can now run a pre-wrapped image: one built `FROM` agent-base and
   pinned by digest. Add it under Images with *How it runs* → *Pre-wrapped: runs as is*, or `POST /base-images` with
   `kind: "prewrapped"`. The control plane checks it on the cluster first, with one short pod per node architecture and no

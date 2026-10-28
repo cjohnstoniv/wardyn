@@ -19,7 +19,7 @@ import { EFFECT_PAST, splitToolRules } from "../policy-tool-rules";
 import { Chip } from "../primitives";
 import { readPATScope } from "../../../lib/git-pat-scope";
 import { asFirstUseMode } from "../../../lib/types";
-import type { ConfinementClass, RunPolicySpec, ToolRule } from "../../../lib/types";
+import type { ConfinementClass, RunPolicyHostMarks, RunPolicySpec, ToolRule } from "../../../lib/types";
 import type { PolicyPreviewPending } from "../../../lib/types/policy-preview";
 import { POLICY_TAB, SUMMARY } from "../../screens/run-detail/policy-tab-copy";
 import { toolRulesTail } from "./policy-facts";
@@ -41,10 +41,20 @@ export interface PolicyFacts {
   requestedClass?: ConfinementClass;
 }
 
-type ChipSpec = { label: string; tone: "neutral" | "warning"; title?: string };
-type Value = { text?: string; mono?: boolean; hidden?: boolean; hiddenTip?: string; mark?: PolicyMark; chips?: ChipSpec[] };
+type ChipSpec = { label: string; tone: "neutral" | "warning" | "info"; title?: string };
+type Value = {
+  text?: string;
+  mono?: boolean;
+  hidden?: boolean;
+  hiddenTip?: string;
+  mark?: PolicyMark;
+  chips?: ChipSpec[];
+  /** A chip pushed to the right edge of the value's line (a host's Inspected / Tunnel only). */
+  end?: ChipSpec;
+};
 type Row = { label: string; raw?: boolean; values: Value[] };
-type Group = { heading: string; intro?: string; rows: Row[]; items?: string[]; ado?: string[] };
+type Meaning = { chip: ChipSpec; text: string };
+type Group = { heading: string; intro?: string; rows: Row[]; items?: string[]; ado?: string[]; meanings?: Meaning[] };
 
 type Bag = Record<string, unknown>;
 const isBag = (v: unknown): v is Bag => v !== null && typeof v === "object" && !Array.isArray(v);
@@ -58,6 +68,9 @@ const asBag = (v: unknown) => (isBag(v) ? v : undefined);
 const ccLabel = (cc: string) => CC_META[cc as ConfinementClass]?.label ?? cc;
 const text = (t: string, extra?: Partial<Value>): Value => ({ text: t, ...extra });
 const mono = (t: string, extra?: Partial<Value>): Value => ({ text: t, mono: true, ...extra });
+
+const hostChip = (inspected: boolean): ChipSpec =>
+  inspected ? { label: SUMMARY.inspected, tone: "info" } : { label: SUMMARY.tunnelOnly, tone: "neutral" };
 
 export function cpuText(millis?: number): string {
   return millis ? SUMMARY.cpuValue(String(Number((millis / 1000).toFixed(2)))) : SUMMARY.standardLimit;
@@ -110,6 +123,7 @@ function summarize(
   marks: PolicyChangeMarks | undefined,
   facts: PolicyFacts | undefined,
   pending: readonly PolicyPreviewPending[] | undefined,
+  hostMarks: RunPolicyHostMarks | undefined,
 ): Group[] {
   const raw = spec as unknown as Bag;
   const known = new Set<string>();
@@ -143,10 +157,22 @@ function summarize(
   const network: Row[] = [];
   const allowAll = take("allow_all_egress", asBool);
   const allowed = take("allowed_domains", asStrings);
-  if (allowAll) network.push(row(SUMMARY.allowedHosts, [text(D.ALLOW_ALL)]));
-  else if (allowed) {
-    const hosts = entries(allowed, "allowed_domains");
+  const meanings: Meaning[] = [];
+  if (allowAll) {
+    network.push(row(SUMMARY.allowedHosts, [text(D.ALLOW_ALL)]));
+    if (hostMarks) meanings.push({ chip: { label: SUMMARY.tunnelOnly, tone: "neutral" }, text: SUMMARY.tunnelOnlyAllowAll });
+  } else if (allowed) {
+    const inspected = new Set(hostMarks?.inspected);
+    const hosts = entries(allowed, "allowed_domains").map((v) =>
+      hostMarks && v.text && v.mark !== "removed" ? { ...v, end: hostChip(inspected.has(v.text)) } : v,
+    );
     network.push(row(SUMMARY.allowedHosts, hosts.length > 0 ? hosts : [text(SUMMARY.none)]));
+    if (hosts.some((v) => v.end?.label === SUMMARY.inspected)) {
+      meanings.push({ chip: hostChip(true), text: SUMMARY.inspectedMeaning });
+    }
+    if (hosts.some((v) => v.end?.label === SUMMARY.tunnelOnly)) {
+      meanings.push({ chip: hostChip(false), text: SUMMARY.tunnelOnlyMeaning });
+    }
   }
   const blocked = entries(take("denied_domains", asStrings) ?? [], "denied_domains");
   if (blocked.length > 0) network.push(row(SUMMARY.blockedHosts, blocked));
@@ -174,6 +200,7 @@ function summarize(
     network.push(row(SUMMARY.traffic, [text(on ? SUMMARY.on : SUMMARY.off)]));
   }
   add(SUMMARY.network, network);
+  if (meanings.length > 0) groups.find((g) => g.heading === SUMMARY.network)!.meanings = meanings;
 
   // One row per kind of credential, each grant listed under it.
   const byKind = new Map<string, Row>();
@@ -318,16 +345,19 @@ export function PolicySummary({
   marks,
   facts,
   pending,
+  hostMarks,
   headingLevel = 3,
 }: {
   spec: RunPolicySpec;
   marks?: PolicyChangeMarks;
   facts?: PolicyFacts;
   pending?: readonly PolicyPreviewPending[];
+  /** Which allowed hosts the run's proxy opens (run page only); with none given no host is marked. */
+  hostMarks?: RunPolicyHostMarks;
   /** The level of the section headings, set by where the document sits on its page. */
   headingLevel?: 3 | 4;
 }) {
-  const groups = summarize(spec, marks, facts, pending);
+  const groups = summarize(spec, marks, facts, pending, hostMarks);
   const Heading = headingLevel === 4 ? "h4" : "h3";
   if (groups.length === 0) return <p className="text-sm text-muted-foreground">{SUMMARY.none}</p>;
   return (
@@ -366,6 +396,11 @@ export function PolicySummary({
                             </span>
                           ))}
                           {v.mark && <MarkChip mark={v.mark} />}
+                          {v.end && (
+                            <span className="ml-auto">
+                              <Chip tone={v.end.tone}>{v.end.label}</Chip>
+                            </span>
+                          )}
                         </li>
                       ))}
                     </ul>
@@ -374,6 +409,12 @@ export function PolicySummary({
               ))}
             </dl>
           )}
+          {g.meanings?.map((m) => (
+            <p key={m.chip.label} className="flex flex-wrap items-baseline gap-2 text-sm text-muted-foreground">
+              <Chip tone={m.chip.tone}>{m.chip.label}</Chip>
+              <span>{m.text}</span>
+            </p>
+          ))}
         </section>
       ))}
     </div>

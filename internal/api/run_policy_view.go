@@ -105,6 +105,10 @@ type runPolicyResponse struct {
 	// Provenance is which layer set each top-level value as create resolved it,
 	// with the contact as of this read. Absent for a run with none recorded.
 	Provenance map[string]policyref.Provenance `json:"provenance,omitempty"`
+	// HostMarks is which allowed hosts the run's proxy opened at launch. Absent for an envelope
+	// that predates it and for a run restarted since: a restart rebuilds the proxy from a
+	// config that can drop hosts, and writes no envelope of its own.
+	HostMarks *hostMarks `json:"host_marks,omitempty"`
 }
 
 type runPolicySource struct {
@@ -225,6 +229,11 @@ func (s *Server) handleGetRunPolicy(w http.ResponseWriter, r *http.Request) {
 	// Redacted: this tier was shown less than a super admin is (a mount's host path, a secret name).
 	resp.Redacted = !reflect.DeepEqual(specJSON(redactSpecForRead(served, specReadFull)), specJSON(redactSpecForRead(served, tier)))
 	resp.Spec = &out
+	// Shown with the host list it marks, so a tier that sees fewer hosts sees no marks.
+	restarted := slices.ContainsFunc(revives, func(e types.AuditEvent) bool { return e.Outcome == "success" })
+	if !restarted && slices.Equal(out.AllowedDomains, served.AllowedDomains) {
+		resp.HostMarks = envelope.HostMarks
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 

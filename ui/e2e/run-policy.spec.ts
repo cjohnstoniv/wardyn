@@ -216,6 +216,45 @@ test.describe("Run detail — the Policy tab (#1425)", () => {
     }
   });
 
+  // The host marks (#2956), read the way the test above reads the policy: a real run, and the
+  // envelope dispatch would write (the `none` runner never dispatches, so it goes in with sql()),
+  // served by the real policy read. The Go tests pin that dispatch computes the marks from the proxy
+  // config (TestHostMarksOf, TestTerminatesTLSMatchesHandleConnect); this pins what a person sees.
+  test("marks one allowed host Inspected and another Tunnel only, and says what each means", async ({ page, request }) => {
+    const stamp = randomUUID().slice(0, 8);
+    const task = `run policy host marks ${stamp}`;
+    const launched = await request.post("/api/v1/runs", {
+      headers: auth,
+      data: { agent: "claude-code", repo: "acme/widgets", task },
+    });
+    expect(launched.status(), await launched.text()).toBe(201);
+    const runId = sql(`SELECT id FROM agent_runs WHERE task = '${task}' ORDER BY created_at DESC LIMIT 1`);
+    const resolved = JSON.stringify({
+      allowed_domains: ["artifacts.e2e-corp.example", "pypi.org"],
+      first_use_approval: "deny_with_review",
+      min_confinement_class: "CC1",
+      host_marks: { inspected: ["artifacts.e2e-corp.example"] },
+    });
+    sql(
+      `SELECT audit_append(gen_random_uuid(), now(), '${runId}', 'system', 'wardynd', 'run.policy.resolve', '${runId}', 'success', '', '${resolved}'::jsonb)`,
+    );
+
+    await gotoConsole(page);
+    await navToRoute(page, `/runs/${runId}`);
+    await page.getByRole("tab", { name: POLICY_TAB.tab }).click();
+    const tab = page.getByTestId("run-policy-tab");
+    await expect(tab.getByText(SUMMARY.inspected, { exact: true }).first()).toBeVisible();
+
+    const inspected = tab.locator("li").filter({ hasText: "artifacts.e2e-corp.example" });
+    await expect(inspected.getByText(SUMMARY.inspected, { exact: true })).toBeVisible();
+    await expect(inspected.getByText(SUMMARY.tunnelOnly, { exact: true })).toHaveCount(0);
+    const tunnel = tab.locator("li").filter({ hasText: "pypi.org" });
+    await expect(tunnel.getByText(SUMMARY.tunnelOnly, { exact: true })).toBeVisible();
+    await expect(tunnel.getByText(SUMMARY.inspected, { exact: true })).toHaveCount(0);
+    await expect(tab.getByText(SUMMARY.inspectedMeaning)).toBeVisible();
+    await expect(tab.getByText(SUMMARY.tunnelOnlyMeaning)).toBeVisible();
+  });
+
   // The narrowing the run got on its stored token: chips, the repositories, and
   // the honesty sentence on the chip. The resolved spec is spliced like the
   // member read below (the seeded runs never dispatch).

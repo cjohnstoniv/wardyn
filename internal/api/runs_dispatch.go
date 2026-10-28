@@ -568,7 +568,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.policy.resolve",
 		run.ID.String(), "success", mustJSON(effectivePolicyDatum{
 			RunPolicySpec: auditablePolicy(policy), DiskMiBFilled: diskSoft, DiskMiBBasis: p.MainDrive.basis(), DiskMiBDefaultSource: p.MainDrive.defaultSource(),
-			Provenance: p.Provenance,
+			Provenance: p.Provenance, HostMarks: hostMarksOf(spec.ProxyConfig, policy.AllowedDomains),
 		})))
 
 	// Held BEFORE CreateSandbox, not after: the row still carries the

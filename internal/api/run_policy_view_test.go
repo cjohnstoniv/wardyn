@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -883,6 +884,37 @@ func TestExplainRunPolicy_DiskBasis(t *testing.T) {
 			}
 			if tc.wantDetail != "" && !strings.Contains(strings.Join(c.Detail, " "), tc.wantDetail) {
 				t.Errorf("detail = %v, want %q", c.Detail, tc.wantDetail)
+			}
+		})
+	}
+}
+
+// TestRunPolicyView_HostMarks pins what the view says about each allowed host: the marks the
+// envelope recorded, none for an envelope that predates them, and none once the run was restarted
+// (a restart rebuilds the proxy from a config that can drop hosts and writes no envelope).
+func TestRunPolicyView_HostMarks(t *testing.T) {
+	spec := types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com", "pypi.org"}}
+	marked := pvRow{action: "run.policy.resolve", data: effectivePolicyDatum{RunPolicySpec: spec, HostMarks: &hostMarks{Inspected: []string{"api.anthropic.com"}}}}
+	for _, tc := range []struct {
+		name string
+		rows []pvRow
+		want *hostMarks
+	}{
+		{"recorded", []pvRow{marked}, &hostMarks{Inspected: []string{"api.anthropic.com"}}},
+		{"an envelope from before marks", []pvRow{pvResolve(spec, false)}, nil},
+		{"a restarted run", []pvRow{marked, {action: "run.revive", data: map[string]any{}}}, nil},
+		{"a refused restart", []pvRow{marked, {action: "run.revive", outcome: "denied", data: map[string]any{}}}, &hostMarks{Inspected: []string{"api.anthropic.com"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, st := pvFixture(t, &capStore{})
+			run := st.seedRun(pvOwner, types.RunRunning)
+			st.rows(run.ID, tc.rows...)
+			w, resp := pvMember(t, pvOwner).get(t, srv, run.ID)
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+			}
+			if !reflect.DeepEqual(resp.HostMarks, tc.want) {
+				t.Errorf("host_marks = %+v, want %+v", resp.HostMarks, tc.want)
 			}
 		})
 	}

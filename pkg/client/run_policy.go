@@ -41,6 +41,15 @@ type RunPolicyView struct {
 	// name): deployment, profile (the leaf's name), member or operator, the
 	// contact to ask, and whether the value is locked.
 	Provenance map[string]PolicyProvenance `json:"provenance,omitempty"`
+	// HostMarks is which allowed hosts the run's proxy opened at launch. Absent
+	// for a run recorded before it existed and for one restarted since.
+	HostMarks *RunPolicyHostMarks `json:"host_marks,omitempty"`
+}
+
+// RunPolicyHostMarks lists the allowed_domains entries the proxy terminates TLS
+// for (Inspected). Every other allowed entry passes through unread (Tunnel only).
+type RunPolicyHostMarks struct {
+	Inspected []string `json:"inspected"`
 }
 
 // The RunPolicyView.State values.

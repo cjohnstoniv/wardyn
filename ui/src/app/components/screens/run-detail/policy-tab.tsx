@@ -190,6 +190,7 @@ function RecordedPolicy({
         redacted={view.redacted}
         marks={marks}
         facts={{ usedClass: run.confinement_class }}
+        hostMarks={view.host_marks}
         headingLevel={4}
       />
       <p className="mt-4 max-w-[92ch] border-t border-dashed border-border pt-2.5 text-xs text-muted-foreground">

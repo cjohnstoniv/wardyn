@@ -326,12 +326,7 @@ func newProxy(opts Options) *Proxy {
 	// Same canonicalisation as the repo keys above: a host is matched
 	// case-insensitively, so the map key is lowercased once here rather than at
 	// every lookup.
-	patGrants := make(map[string]PATGrant, len(opts.PATGrants))
-	for k, g := range opts.PATGrants {
-		if k = strings.ToLower(strings.TrimSpace(k)); k != "" && g.GrantID != uuid.Nil {
-			patGrants[k] = g
-		}
-	}
+	patGrants := canonicalPATGrants(opts.PATGrants)
 	internalHosts := compileInternalHosts(opts.InternalHosts)
 	// Compile the LLM-gateway table + its reverse lookup. LLMUpstreams is
 	// already validated (api.ValidateLLMGateways at boot, applyDefaultsAndValidate
@@ -979,4 +974,16 @@ func (p *Proxy) openTunnel(w http.ResponseWriter, r *http.Request, host string, 
 	}
 	first, err := tunnel(client, watch)
 	p.tunnelEnded(log, host, watch, first, err)
+}
+
+// canonicalPATGrants keys the git_pat grants by lower-cased host and drops an entry with no
+// host or no grant id. The proxy and Config.TerminatesTLS read the same set.
+func canonicalPATGrants(in map[string]PATGrant) map[string]PATGrant {
+	out := make(map[string]PATGrant, len(in))
+	for k, g := range in {
+		if k = strings.ToLower(strings.TrimSpace(k)); k != "" && g.GrantID != uuid.Nil {
+			out[k] = g
+		}
+	}
+	return out
 }
