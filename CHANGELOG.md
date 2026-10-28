@@ -30,8 +30,6 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - When AWS refuses to renew an AWS sign-in, the run's refusal now says how long after signing in it came, and that a
   refusal that soon after every sign-in can be the IAM Identity Center session duration or the identity provider's
   sign-in session. The `harness.credential.refresh` failure row carries `signed_in_sec`.
-- A failed macOS VM start no longer keeps its VM in the helper until the helper exits (#3708). Each failed attempt
-  kept one, and a first boot's retries on the auxiliary storage lock can make several.
 - `PUT /governance/units/{id}` now takes a unit as `GET /governance` returns it, so GET, change one field and PUT the
   rest works. It refused the body with `unknown field "id"` (`governance_unit_request_invalid`); the server-set fields
   are now ignored, and a field GET never returns is still refused.
@@ -42,6 +40,13 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The runner no longer finds its macOS VM directory under a relative `$HOME`. `wardyn-runnerd macos-vm remove`
   and the staging sweep delete under that directory, so a relative one would resolve against the working directory;
   the runner now refuses it and says why.
+
+## [0.10.0-rc.5] — 2026-10-28
+
+### Fixed
+
+- A failed macOS VM start no longer keeps its VM in the helper until the helper exits (#3708). Each failed attempt
+  kept one, and a first boot's retries on the auxiliary storage lock can make several.
 - After a change of the Mac's clock, a macOS VM run whose helper stopped no longer ends with "The Mac restarted, so
   the macOS VM was lost." (#3709). The runner tells a restart by the boot session the ledger records, as the ledger
   does, so a run whose entry has no session, from an earlier release, says its helper stopped.
