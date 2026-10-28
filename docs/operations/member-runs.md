@@ -62,10 +62,10 @@ an interactive first run still asks the operator.
   - `agent-claude-code` (where they were measured) is not a published image — `agent-base` is what ships, and it now carries the three lines too, so any image built `FROM ghcr.io/cjohnstoniv/agent-base:0.7.6` inherits them.
 - An image on another base, or an older tag pinned in `WARDYN_AGENT_IMAGES`, still parks on the CLI's own bootstrap; see [corp-image-authoring.md](../adoption/corp-image-authoring.md) for the rebuild recipe and the CHANGELOG's Known gaps for the full statement.
 
-What an interactive run still shows on first use is Claude Code's **workspace-trust** prompt (`Accessing workspace: …` / `1. Yes, I trust this folder`).
+What an interactive run still shows on first use is Claude Code's **workspace-trust** prompt (`Accessing workspace: …` / `Yes, I trust this folder`).
 
 - That one is a security question — it gates a cloned repo's own project settings taking effect — and Wardyn does not answer it for you.
-- Pressing Enter there raises no approvals.
+- Default: *No, exit*. Answering raises no approvals.
 - A run launched with *"Let it use tools before I attach"* also parks on Claude Code's own *Bypass Permissions mode* confirmation (default "No, exit") until someone attaches and chooses Yes
   - Wardyn does not answer that one either ([THREAT-MODEL.md](../../threatmodel/THREAT-MODEL.md) §4.7).
 
