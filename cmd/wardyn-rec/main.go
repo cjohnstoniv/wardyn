@@ -51,6 +51,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/recording"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // uploadDialTimeout/uploadClientTimeout bound how long a finished task can be
@@ -107,8 +108,13 @@ func run(args []string) error {
 	if v := os.Getenv("WARDYN_RUN_TOKEN"); v != "" {
 		*runToken = v
 	}
+	contract := fs.Bool("contract", false, "print the image contract line and exit (a pre-wrapped image's registration check)")
 
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *contract {
+		_, err := fmt.Println(types.ImageContractLine)
 		return err
 	}
 

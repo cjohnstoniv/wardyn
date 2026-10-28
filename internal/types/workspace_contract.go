@@ -71,6 +71,11 @@ type BaseImageEntry struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// ImageContractLine is the one line `wardyn-rec -contract` prints. A pre-wrapped image's registration check
+// runs it on each architecture and accepts only this exact line with exit 0; the number is the image
+// contract's version (deploy/images/README.md, Image contract).
+const ImageContractLine = "wardyn image contract 1"
+
 // AttachmentOverride values: a workspace's per-attachment stance on one requirement key its source declares.
 const (
 	OverrideOff      = "off"      // this workspace refuses the requirement outright
