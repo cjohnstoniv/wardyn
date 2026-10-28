@@ -39,43 +39,87 @@ const AWSSigV4AtProxyFlagDefault = "off"
 // re-sign keeps the whole lane on its old path: a lane is signed one way.
 func (s *Server) awsSigV4Hosts(hosts []string) ([]string, bool) {
 	out, why := s.awsSigV4Lane(hosts)
-	return out, why == ""
+	return out, why.Code == ""
 }
 
-// awsSigV4LaneOff is awsSigV4Lane's reason while the switch is off.
-const awsSigV4LaneOff = "off"
+// awsSigV4Why is why a lane keeps its old path: a code a run's audit row records (run.bedrock.configure,
+// run.aws_cli.configure), and the host it is about, if any. The zero value is a re-signed lane.
+type awsSigV4Why struct{ Code, Host string }
 
-// awsSigV4Lane is awsSigV4Hosts with the reason a lane keeps its old path: "" when it is
-// re-signed, awsSigV4LaneOff with the switch off, else the first thing that keeps it.
-func (s *Server) awsSigV4Lane(hosts []string) ([]string, string) {
+const (
+	awsSigV4WhyOff               = "off"
+	awsSigV4WhySSOProxyInjectOff = "sso_proxy_inject_off"
+	awsSigV4WhyEndpointOverride  = "endpoint_override"
+	awsSigV4WhyNoAWSHost         = "no_aws_host"
+	awsSigV4WhyPort              = "port"
+	awsSigV4WhyUnsignedHost      = "unsigned_host"
+)
+
+// String is the reason as setup's operator warning says it.
+func (w awsSigV4Why) String() string {
+	switch w.Code {
+	case awsSigV4WhyOff:
+		return "WARDYN_AWS_SIGV4_AT_PROXY is off"
+	case awsSigV4WhySSOProxyInjectOff:
+		return "WARDYN_AWS_SSO_PROXY_INJECT is off"
+	case awsSigV4WhyEndpointOverride:
+		return "WARDYN_AWS_SSO_ENDPOINT_OVERRIDE is set"
+	case awsSigV4WhyNoAWSHost:
+		return "the lane names no AWS host"
+	case awsSigV4WhyPort:
+		return w.Host + " is not on port 443"
+	case awsSigV4WhyUnsignedHost:
+		return "the proxy cannot sign for " + w.Host
+	}
+	return ""
+}
+
+// awsSigningAudit is the fields a run's audit row carries for the lane's choice: where the role
+// credentials were signed, and why not at the proxy. Recorded at dispatch, so the row says what this
+// run did, never what today's settings would do.
+func awsSigningAudit(data map[string]any, why awsSigV4Why) {
+	if why.Code == "" {
+		data["aws_signing"] = "proxy"
+		return
+	}
+	data["aws_signing"] = "sandbox"
+	data["aws_signing_reason"] = why.Code
+	if why.Host != "" {
+		data["aws_signing_host"] = why.Host
+	}
+}
+
+// awsSigV4Lane is awsSigV4Hosts with the reason a lane keeps its old path: the zero awsSigV4Why
+// when it is re-signed, else the first thing that keeps it.
+func (s *Server) awsSigV4Lane(hosts []string) ([]string, awsSigV4Why) {
 	switch {
 	case !s.cfg.AWSSigV4AtProxy:
-		return nil, awsSigV4LaneOff
+		return nil, awsSigV4Why{Code: awsSigV4WhyOff}
 	case !s.cfg.AWSSSOProxyInject:
-		return nil, "WARDYN_AWS_SSO_PROXY_INJECT is off"
+		return nil, awsSigV4Why{Code: awsSigV4WhySSOProxyInjectOff}
 	case s.cfg.AWSSSOEndpointOverride != "":
-		return nil, "WARDYN_AWS_SSO_ENDPOINT_OVERRIDE is set"
+		return nil, awsSigV4Why{Code: awsSigV4WhyEndpointOverride}
 	case len(hosts) == 0:
-		return nil, "the lane names no AWS host"
+		return nil, awsSigV4Why{Code: awsSigV4WhyNoAWSHost}
 	}
 	out := make([]string, 0, len(hosts))
 	for _, h := range hosts {
 		host := strings.ToLower(strings.TrimSpace(h))
 		if hh, port, err := net.SplitHostPort(host); err == nil {
 			if port != "443" {
-				return nil, h + " is not on port 443"
+				return nil, awsSigV4Why{Code: awsSigV4WhyPort, Host: h}
 			}
 			host = hh
 		}
 		host = strings.TrimSuffix(host, ".")
 		if _, _, ok := proxy.AWSSigV4Scope(host); !ok {
-			return nil, "the proxy cannot sign for " + host
+			return nil, awsSigV4Why{Code: awsSigV4WhyUnsignedHost, Host: host}
 		}
 		if !slices.Contains(out, host) {
 			out = append(out, host)
 		}
 	}
-	return out, ""
+	return out, awsSigV4Why{}
 }
 
 // awsSigV4CredentialFile is the file, beside ~/.aws/config, that holds the placeholder pair in

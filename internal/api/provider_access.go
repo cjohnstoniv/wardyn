@@ -103,9 +103,9 @@ func (s *Server) awsSigV4FallbackChecks(sc types.SiteConfig, mp []SetupModelProv
 		if !ok || p.Kind != types.ModelProviderBedrockSSO {
 			continue
 		}
-		if _, why := s.awsSigV4Lane(providerBedrockHosts(p)); why != "" && why != awsSigV4LaneOff {
+		if _, why := s.awsSigV4Lane(providerBedrockHosts(p)); why.Code != "" && why.Code != awsSigV4WhyOff {
 			checks = append(checks, SetupCheck{ID: "aws_sigv4_fallback:" + sp.ID, Label: "AWS signing at the proxy: " + cmp.Or(p.Name, sp.ID),
-				Status: "warn", Detail: "Runs on this provider are not signed at the proxy, so their AWS role credentials enter the sandbox: " + why + "."})
+				Status: "warn", Detail: "Runs on this provider are not signed at the proxy, so their AWS role credentials enter the sandbox: " + why.String() + "."})
 		}
 	}
 	return checks

@@ -16,8 +16,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - With `WARDYN_AWS_SIGV4_AT_PROXY` on, a Bedrock lane through a PrivateLink endpoint is now re-signed at the proxy, so its
   role credentials stay out of the sandbox. Only Bedrock's own services under the name AWS generates for the endpoint qualify;
   your own endpoint service and other services' PrivateLink hosts keep the old path.
-- With `WARDYN_AWS_SIGV4_AT_PROXY` on, setup now warns of each AWS sign-in model provider whose runs are not signed at the
-  proxy, and says which host or setting keeps them on the old path; until now only a run's audit trail showed it.
+- With `WARDYN_AWS_SIGV4_AT_PROXY` on, operator setup now warns when new runs using an AWS sign-in model provider's current
+  settings would keep role credentials in the sandbox, and names the host or setting responsible.
+- A run's Audit tab now says where its AWS role credentials were signed, at the proxy or in the sandbox, and why not at the
+  proxy, for a Bedrock sign-in run and for an AWS CLI component. It is recorded when the run starts
+  (`run.bedrock.configure` gains `aws_signing`, and the new `run.aws_cli.configure` row carries the same fields).
 
 ### Fixed
 
