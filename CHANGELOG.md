@@ -11,6 +11,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+## [0.10.0-rc.5] — 2026-10-28
+
 ### Fixed
 
 - A failed macOS VM start no longer keeps its VM in the helper until the helper exits (#3708). Each failed attempt
