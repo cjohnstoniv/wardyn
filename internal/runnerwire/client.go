@@ -384,11 +384,18 @@ func (c *Client) configure(ctx context.Context, cfg *PeerConfig, ready *atomic.B
 	}
 }
 
-func (c *Client) fresh(ctx context.Context, peer *Peer, pending <-chan []PendingAction, ready *atomic.Bool) error {
-	ctx, cancel := context.WithCancel(ctx)
+func (c *Client) fresh(parent context.Context, peer *Peer, pending <-chan []PendingAction, ready *atomic.Bool) (err error) {
+	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	stop := context.AfterFunc(peer.ctx, cancel)
 	defer stop()
+	// The peer's end cancels ctx too, so a step can see that cancellation first. The session still ended
+	// for the peer's reason, a GOAWAY or REVOKED that Run acts on.
+	defer func() {
+		if errors.Is(err, context.Canceled) && parent.Err() == nil && peer.Err() != nil {
+			err = peer.Err()
+		}
+	}()
 	c.link.setPhase(phaseOrgPending)
 	select {
 	case actions := <-pending:
