@@ -39,7 +39,9 @@ RELEASING.md=6237 share=35 # +7 (MACVM-PKG-CI): the macos and macos-xcode-27 job
 # ROADMAP.md 6426 = 6386 + 40, measured: the v0.10.0-rc.1 Shipped row the release commit adds
 # ROADMAP.md 6457 = 6426 + 31, measured: the v0.10.0-rc.2 Shipped row the release commit adds
 # ROADMAP.md 6491 = 6457 + 34, measured: the v0.10.0-rc.3 Shipped row the release commit adds
-ROADMAP.md=6531 share=35 # = 6491 + 40, measured: the v0.10.0-rc.4 Shipped row the release commit adds
+# ROADMAP.md 6531 = 6491 + 40, measured: the v0.10.0-rc.4 Shipped row the release commit adds
+# ROADMAP.md 6570 = 6531 + 39, measured: the v0.10.0-rc.5 Shipped row the release commit adds.
+ROADMAP.md=6603 share=35 # = 6570 + 33, measured: the v0.9.9 Shipped row the 0.9.9 forward-port adds
 # docs/DEMO-SCRIPT.md 6884 adds 17 over 6867: 0.9 final docs pass 2, measured: the demo script no longer cites the removed wizard's code.
 docs/DEMO-SCRIPT.md=6890 share=35
 # docs/LIVE-TESTS.md 2517, measured at the 0.10 W4c merge of OFFLINE-VM a359ef27b onto the train (two merge bases, VM-A 47c283334 and main 3cea1aa73, so no single base to subtract).

@@ -346,7 +346,7 @@ func TestLiveMemoryGuard(t *testing.T) {
 	}
 	// The refusal gives both numbers in GiB and names the usual fix.
 	_, err := l.Admit(runReq(8 * gib))
-	for _, want := range []string{"9.0 GiB free (free, inactive and speculative pages)", "10.0 GiB needed", "8.0 GiB plus a 2.0 GiB margin", "lowering Docker's memory allowance"} {
+	for _, want := range []string{"9.0 GiB free (the larger of macOS's memory-pressure free share and its free, inactive and speculative pages)", "10.0 GiB needed", "8.0 GiB plus a 2.0 GiB margin", "lowering Docker's memory allowance"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("refusal %q lacks %q", err, want)
 		}
@@ -807,6 +807,27 @@ func TestParseVMStat(t *testing.T) {
 	}
 	if _, err := parseVMStat("nonsense"); err == nil {
 		t.Fatal("parsed nonsense")
+	}
+}
+
+// A 32 GiB Mac in use: 7.9 GiB of free, inactive and speculative pages while
+// memory_pressure reports 46% free. The kernel's share admits a 6 GiB VM plus
+// the 2 GiB margin; the page sum alone refused it.
+func TestAvailableMemoryTakesTheLargerFigure(t *testing.T) {
+	pages := uint64(79) * gib / 10
+	for _, c := range []struct {
+		name  string
+		level uint32
+		want  uint64
+	}{
+		{"pressure level", 46, 32 * gib * 46 / 100},
+		{"page sum", 10, pages},
+		{"no level", 0, pages},
+		{"level past 100", 250, 32 * gib},
+	} {
+		if got := availableMemory(pages, 32*gib, c.level); got != c.want {
+			t.Errorf("%s: availableMemory = %d, want %d", c.name, got, c.want)
+		}
 	}
 }
 

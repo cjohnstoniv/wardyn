@@ -5,9 +5,9 @@
 
 import { describe, expect, it } from "vitest";
 import type { AuditEvent } from "../../lib/types";
-import { describeAction, describeEvent } from "./audit-copy";
+import { AUDIT, describeAction, describeEvent } from "./audit-copy";
 // The run page's Audit tab and the Audit screen read the lib table.
-import { describeAction as describeTabAction } from "../../lib/audit-copy";
+import { awsSigningLine, describeAction as describeTabAction } from "../../lib/audit-copy";
 
 const ev = (action: string, target = "", extra: Partial<AuditEvent> = {}): AuditEvent =>
   ({ id: "e", time: new Date().toISOString(), actor_type: "system", actor: "x", action, outcome: "success", target, ...extra }) as AuditEvent;
@@ -31,5 +31,41 @@ describe("audit sentences", () => {
   it("falls back to the raw key for an action it does not know", () => {
     expect(describeAction(ev("brand.new.thing"))).toBe("brand.new.thing");
     expect(describeEvent(ev("brand.new.thing", "t"))).toBe("brand.new.thing — t");
+  });
+});
+
+// Mock packet rc.6 §2b: how dispatch set an AWS sign-in lane up, read from the recorded mode and reason.
+describe("AWS signing line", () => {
+  const br = (data: Record<string, unknown>) => awsSigningLine(ev("run.bedrock.configure", "r1", { data }));
+  const cli = (data: Record<string, unknown>) => awsSigningLine(ev("run.aws_cli.configure", "c1", { data }));
+
+  it("names the proxy, or the sandbox and the recorded reason", () => {
+    expect(br({ mode: "sso-sigv4-proxy", aws_signing: "proxy" })).toEqual({ text: AUDIT.AWS_SIGNING_PROXY, sandbox: false });
+    expect(br({ mode: "sso-inject-proxy", aws_signing: "sandbox", aws_signing_reason: "unsigned_host", aws_signing_host: "bedrock.corp.example.com" })?.text).toBe(
+      "AWS signing set up in the sandbox, which gets role credentials: the proxy can't sign for bedrock.corp.example.com",
+    );
+    expect(cli({ aws_signing: "sandbox", aws_signing_reason: "port", aws_signing_host: "s3.eu-west-1.amazonaws.com:8443" })?.text).toBe(
+      "AWS signing set up in the sandbox, which gets role credentials: s3.eu-west-1.amazonaws.com:8443 is not on port 443",
+    );
+    expect(cli({ aws_signing: "proxy" })?.text).toBe(AUDIT.AWS_SIGNING_PROXY);
+  });
+
+  it("takes the sign-in session's place from the mode, not the reason", () => {
+    expect(br({ mode: "sso-inject", aws_signing: "sandbox", aws_signing_reason: "off" })?.text).toBe(
+      "AWS signing set up in the sandbox, which gets the sign-in session and role credentials: signing at the proxy is off on this deployment",
+    );
+  });
+
+  it("says an older row recorded no reason, and gives bearer, unknown modes and other rows no line", () => {
+    expect(br({ mode: "sso-inject-proxy" })?.text).toBe("AWS signing set up in the sandbox, which gets role credentials: fallback reason not recorded");
+    expect(br({ mode: "sso-sigv4-proxy" })?.text).toBe(AUDIT.AWS_SIGNING_PROXY);
+    expect(br({ mode: "bearer" })).toBeNull();
+    expect(br({ mode: "something-new" })).toBeNull();
+    expect(br({ mode: "constructor" })).toBeNull();
+    expect(cli({ aws_signing: "sandbox", aws_signing_reason: "toString" })?.text).toBe(AUDIT.AWS_SIGNING_SANDBOX("toString"));
+    expect(br({})).toBeNull();
+    expect(cli({})).toBeNull();
+    expect(awsSigningLine(ev("run.create", "r1", { data: { aws_signing: "proxy" } }))).toBeNull();
+    expect(describeTabAction(ev("run.aws_cli.configure", "c1"))).toBe("Configured the AWS CLI for the run");
   });
 });

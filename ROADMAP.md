@@ -52,10 +52,12 @@
 | **v0.9.6** | A fix release: own Azure DevOps tokens on a person's own runner, clearer refusals, runner connection diagnostics, recordings without typed input. | **Shipped (pre-alpha)** — `v0.9.6`, 2026-10-20 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.9.7** | A fix release: minted Azure DevOps tokens on a person's own runner, and credential delivery writes the server cannot build are refused. | **Shipped (pre-alpha)** — `v0.9.7`, 2026-10-20 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.9.8** | A fix release: private-address refusals name the internal_hosts remedy, wrapped base images say what works instead, and credential delivery rows the server cannot build are listed. | **Shipped (pre-alpha)** — `v0.9.8`, 2026-10-21 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.9.9** | A security patch: the agent images build on Node.js 24.22.1 and code-server 4.141.1 (CVE-2026-111497). The Claude Code CLI's own embedded runtime is a known issue. | **Shipped (pre-alpha)** — `v0.9.9`, 2026-10-28 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.10.0-rc.1** | rc.1: Linux VM sandboxes networked through the run's proxy, organisation units with their own walls and admins, local model servers as providers, folders from your computer, and desktop recording and clipboard controls. | **Shipped (pre-alpha)** — `v0.10.0-rc.1`, 2026-10-24 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.10.0-rc.2** | rc.2: macOS VM sandboxes on company-managed Macs (preview, off by default), ordered desktop sign-in pauses, quieter runner exit retries, and the rc.1 fixes. | **Shipped (pre-alpha)** — `v0.10.0-rc.2`, 2026-10-25 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.10.0-rc.3** | rc.3: macOS VMs on macOS 26 Macs through a one-time setup by hand, the run page's macOS disk line, and fixes for rc.2's five known issues. | **Shipped (pre-alpha)** — `v0.10.0-rc.3`, 2026-10-25 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.10.0-rc.4** | rc.4: a first macOS VM prepare on macOS 26 past the auxiliary storage lock, slots freed after a failed prepare, a clear error behind a TLS-inspecting proxy, and Kubernetes and recording fixes. | **Shipped (pre-alpha)** — `v0.10.0-rc.4`, 2026-10-26 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.10.0-rc.5** | rc.5: agent images on Node.js 24.22.1 and code-server 4.141.1 (CVE-2026-111497), and two macOS VM fixes: a failed start lets go of its VM, and a clock change is not a restart. | **Shipped (pre-alpha)** — `v0.10.0-rc.5`, 2026-10-28 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ## Shipped detail
 

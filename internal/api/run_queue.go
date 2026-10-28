@@ -290,7 +290,8 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 		created = runs[0]
 	}
 	w.Header().Set("Location", s.cfg.BasePath+"/api/v1/runs/"+created.ID.String())
-	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings, ResourcesApplied: &q.f.place.applied})
+	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings,
+		WarningContext: s.warningContexts(ctx, q.f.ceiling, warnings), ResourcesApplied: &q.f.place.applied})
 }
 
 // waitReason is why the launch waits: it is scheduled for later, the pool is at its own cap, or (a pool

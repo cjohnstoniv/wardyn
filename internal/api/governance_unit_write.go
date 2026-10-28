@@ -51,6 +51,10 @@ type governanceUnitRequest struct {
 	// LockedKnobs replaces the unit's locks (governance_locks.go) when present; absent or null keeps
 	// them, so a client that does not know the field never unlocks a knob.
 	LockedKnobs *[]string `json:"locked_knobs,omitempty"`
+	// unitReadOnly takes the fields GET /governance returns that a write never sets, so a client can GET a
+	// unit, change one field and PUT the rest back. The path names the unit and the server stamps the
+	// rest, so each is ignored.
+	unitReadOnly
 
 	contact    *policyref.Contact
 	contactSet bool
@@ -58,6 +62,19 @@ type governanceUnitRequest struct {
 	// keepsSecrets: the write is served at the member tier, so keepSecretRefs puts back what that
 	// tier's read hid before the ceiling is judged in full.
 	keepsSecrets bool
+}
+
+// unitReadOnly is the server-set fields of a unit as GET /governance shows it (governanceUnitView).
+type unitReadOnly struct {
+	ID             json.RawMessage `json:"id,omitempty"`
+	CreatedAt      json.RawMessage `json:"created_at,omitempty"`
+	UpdatedAt      json.RawMessage `json:"updated_at,omitempty"`
+	CreatedBy      json.RawMessage `json:"created_by,omitempty"`
+	Kind           json.RawMessage `json:"kind,omitempty"`
+	Depth          json.RawMessage `json:"depth,omitempty"`
+	Effective      json.RawMessage `json:"effective,omitempty"`
+	People         json.RawMessage `json:"people,omitempty"`
+	PathProvenance json.RawMessage `json:"path_provenance,omitempty"`
 }
 
 // compositionRequest is the parsed composition members. Each pair is (set, value): not set keeps the

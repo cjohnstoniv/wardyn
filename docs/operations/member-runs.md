@@ -49,6 +49,7 @@ an interactive first run still asks the operator.
   - resources and `auto_stop_after_sec` capped, grants narrowed to what the ceiling allows,
   - and `workspace_mounts` dropped entirely.
 - An admin's own `inline_policy` is not clamped.
+- A member run that names no policy runs the ceiling itself, so the ceiling is also its default: a ceiling with `allow_all_egress` opens egress for that run, not only allows a member to open it.
 
 **A first claude-code run parks on nothing the product itself needs — on an image rebuilt from the 0.7.5 tree.**
 

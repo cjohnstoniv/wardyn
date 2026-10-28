@@ -103,7 +103,8 @@ docs/operations/admin-only-writes.md=3855 share=35 # tightened from 3738 to the 
 # docs/operations/three-roles.md 4682 adds 5 (0.10 API-2): a baseline mark covers that host only.
 # docs/operations/three-roles.md 4734 adds 52 over 4682, measured (0.10 unit admins): a unit admin is a grant on a unit, not a fourth role.
 # docs/operations/three-roles.md 4772 = ours 4734 + theirs 4720 - base 4682 at the 0.10 UNIT-ADMIN merge of RESTRICT-PIN 35c385de1.
-docs/operations/three-roles.md=4772 share=35
+# docs/operations/three-roles.md 4788 = 4772 + 16, measured: a unit PUT takes the unit as GET returns it.
+docs/operations/three-roles.md=4788 share=35
 # docs/operations/provider-policy.md 1362 adds 84 over 1278, measured (0.10.0 GHPAT): the GitHub per_user row that takes each person's own token.
 # docs/operations/provider-policy.md 1382 adds 20 over 1362, measured (0.10.0 GHPAT r2): a run cannot mix a shared and a personal-token GitHub row.
 docs/operations/provider-policy.md=1382 share=35
@@ -121,7 +122,9 @@ docs/operations/ownership-and-offboarding.md=2414 share=35
 # docs/operations/governance-writes.md 3572 adds 8 over 3564, measured (#2967 DESK-LOCKS row 5): the recording level row in the covered-writes table.
 docs/operations/governance-writes.md=3572 share=35
 # 0.9.4 L8: docs/operations/member-runs.md 1054 adds 10 over 1044: ssh_key delivery claims bounded.
-docs/operations/member-runs.md=1054 share=35
+# docs/operations/member-runs.md=1054 share=35
+# 0.10.0-rc.6: member-runs 1086 adds 32 over 1054, measured: a no-policy member run's default is the ceiling.
+docs/operations/member-runs.md=1086 share=35
 # docs/operations/user-drives.md 4818 adds 14 over 4804 (0.9 release text for the fix sets merged at release); measured.
 # docs/operations/user-drives.md 4823 adds 5 over 4818 (0.9.3 RV5), measured: nested-root race has no database guard yet.
 # docs/operations/user-drives.md 4823 = 4818 + 5 (RV5), measured at the wave-A merge.
@@ -172,7 +175,8 @@ docs/operations/api-tokens.md=6051 share=35 # +86 (lane SI-DOCS), measured; +17 
 # docs/operations/denials.md 5527 adds 35 over 5492, measured (0.10 unit admins): the unit_scope_denied row.
 # docs/operations/denials.md 5560 = ours 5527 + theirs 5525 - base 5492 at the 0.10 UNIT-ADMIN merge of RESTRICT-PIN 35c385de1.
 # docs/operations/denials.md 5579 adds 19 over 5560, measured (0.10 MDL-LAPTOP, #2957): runner_local_model_port_not_allowed.
-docs/operations/denials.md=5579 share=35
+# docs/operations/denials.md 5629 adds 50 over 5579, measured (0.10 rc.6): POST /runs and preflight warning_context.
+docs/operations/denials.md=5629 share=35
 # Round 1: docs/operations/who-gets-in.md measured 1453 after the split banner and heading cleanup.
 # Round 1: docs/operations/admin-only-writes.md measured 2869 after the split banner and heading cleanup.
 # Round 1: docs/operations/three-roles.md measured 4012 after the split banner and heading cleanup.

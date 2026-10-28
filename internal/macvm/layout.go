@@ -21,11 +21,15 @@ import (
 // The .noindex suffix keeps Spotlight out of it.
 const RootDirName = "macos-vm.noindex"
 
-// DefaultRoot is ~/Library/Application Support/Wardyn/macos-vm.noindex.
+// DefaultRoot is ~/Library/Application Support/Wardyn/macos-vm.noindex. A relative $HOME is refused: the
+// runner deletes under this root, and a relative one would resolve against whatever directory it runs in.
 func DefaultRoot() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
+	}
+	if !filepath.IsAbs(home) {
+		return "", fmt.Errorf("$HOME is %q, not an absolute path; the macOS VM directory lives under it", home)
 	}
 	return filepath.Join(home, "Library", "Application Support", "Wardyn", RootDirName), nil
 }

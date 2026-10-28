@@ -11,6 +11,38 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- With `WARDYN_AWS_SIGV4_AT_PROXY` on, a Bedrock lane through a PrivateLink endpoint is now re-signed at the proxy, so its
+  role credentials stay out of the sandbox. Only Bedrock's own services under the name AWS generates for the endpoint qualify;
+  your own endpoint service and other services' PrivateLink hosts keep the old path.
+- With `WARDYN_AWS_SIGV4_AT_PROXY` on, operator setup now warns when new runs using an AWS sign-in model provider's current
+  settings would keep role credentials in the sandbox, and names the host or setting responsible.
+- A run's Audit tab now says whether the run was set up to sign its AWS requests at the proxy or to get role credentials in
+  the sandbox, and why not at the proxy, for a Bedrock sign-in run and for an AWS CLI component. It is recorded at
+  dispatch (`run.bedrock.configure` gains `aws_signing`, and the new `run.aws_cli.configure` row carries the same fields).
+- When a policy's allowlist drops a host from a run, New Run's Review step now names the policy the run is bound by
+  under the warning, with the way to ask its owner when that policy publishes one. Create and preflight carry it as
+  `warning_context`.
+
+### Fixed
+
+- When AWS refuses to renew an AWS sign-in, the run's refusal now says how long after signing in it came, and that a
+  refusal that soon after every sign-in can be the IAM Identity Center session duration or the identity provider's
+  sign-in session. The `harness.credential.refresh` failure row carries `signed_in_sec`.
+- `PUT /governance/units/{id}` now takes a unit as `GET /governance` returns it, so GET, change one field and PUT the
+  rest works. It refused the body with `unknown field "id"` (`governance_unit_request_invalid`); the server-set fields
+  are now ignored, and a field GET never returns is still refused.
+- A macOS VM prepare or start on a Mac in ordinary use is no longer refused for memory macOS can reclaim within
+  seconds. The live check counted only free, inactive and speculative pages, which on a 32 GiB Mac in use stayed
+  under the VM's memory plus the 2 GiB margin while macOS's own memory pressure reported nearly half of memory free. It
+  now takes the larger of that page sum and the share of memory the kernel's memory-pressure level calls free.
+- The runner no longer finds its macOS VM directory under a relative `$HOME`. `wardyn-runnerd macos-vm remove`
+  and the staging sweep delete under that directory, so a relative one would resolve against the working directory;
+  the runner now refuses it and says why.
+
+## [0.10.0-rc.5] — 2026-10-28
+
 ### Fixed
 
 - A failed macOS VM start no longer keeps its VM in the helper until the helper exits (#3708). Each failed attempt
@@ -856,6 +888,25 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The Recording tab and the take over strip say "Recording off" for a run its policy, its organisation or its runner did
   not record, instead of naming a level. A take over on a run whose runner declined still says it is recorded: the
   console and SSH sessions it opens are.
+
+## [0.9.9] — 2026-10-28
+
+### Security
+
+- The agent images now build on Node.js 24.22.1, and `agent-vscode` on code-server 4.141.1, which bundles Node.js
+  24.22.1. Earlier images carried Node.js 24.21.0, and `agent-vscode` ran code-server on Node.js 24.20.0. Both
+  versions decode Brotli data with a decoder that a crafted stream can make write out of bounds (CVE-2026-111497).
+  A Node.js program in a sandbox that decompressed Brotli data from an untrusted source could crash, leak its
+  memory or run the sender's code with that program's rights. Rebuild locally built agent images.
+
+### Known issues
+
+- **The Claude Code CLI in `agent-claude-code` is not yet updated.** The pinned 2.1.231 runs on its own embedded
+  runtime, whose Brotli decoder has the same flaw; rebuilding the image on Node.js 24.22.1 does not change that runtime.
+  The tested update, 2.1.308, carries the fixed runtime, but its folder-trust prompt defaults to exiting and it failed
+  Wardyn's managed-permission check, so it is not in this patch. Until it is, keep a Claude Code run's allowed hosts to
+  sites you trust: a crafted Brotli response from an allowed site could run code as the agent, inside its sandbox and
+  its egress policy.
 
 ## [0.9.8] — 2026-10-21
 

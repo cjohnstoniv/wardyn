@@ -402,7 +402,8 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// Nothing below can become a 4xx, so the caller gets its run now and the
 	// image build + dispatch continue server-side (runs_create_launch.go).
 	w.Header().Set("Location", s.cfg.BasePath+"/api/v1/runs/"+runID.String())
-	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings, ResourcesApplied: &f.place.applied})
+	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings,
+		WarningContext: s.warningContexts(r.Context(), ceiling, warnings), ResourcesApplied: &f.place.applied})
 	launch := f.launch(req, spec, ceiling, gw, id.Token, created)
 	launchCtx := context.WithoutCancel(ctx)
 	s.goBackground(func() { s.finishCreateRunLaunch(launchCtx, launch) })
@@ -700,6 +701,8 @@ type grantChecker interface {
 type createRunResponse struct {
 	types.AgentRun
 	Warnings []string `json:"warnings,omitempty"`
+	// WarningContext is preflight's, for these warnings.
+	WarningContext []warningContext `json:"warning_context,omitempty"`
 	// ResourcesApplied is the CPU, memory and PIDs the run asked for and got (stepResources).
 	ResourcesApplied *client.AppliedResources `json:"resources_applied,omitempty"`
 }

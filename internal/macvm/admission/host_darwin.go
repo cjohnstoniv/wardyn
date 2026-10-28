@@ -42,7 +42,19 @@ func (darwinHost) AvailableMemoryBytes() (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	return parseVMStat(string(out))
+	pages, err := parseVMStat(string(out))
+	if err != nil {
+		return 0, err
+	}
+	level, err := unix.SysctlUint32("kern.memorystatus_level")
+	if err != nil {
+		return pages, nil
+	}
+	total, err := unix.SysctlUint64("hw.memsize")
+	if err != nil {
+		return pages, nil
+	}
+	return availableMemory(pages, total, level), nil
 }
 
 func (darwinHost) FreeDiskBytes(path string) (int64, error) {

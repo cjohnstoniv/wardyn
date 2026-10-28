@@ -52,6 +52,7 @@ const (
 	keepSandbox = "a directory inside the sandbox, not on the host"
 	keepValues  = "posture values (modes, ids, counts, booleans), never a path or a spec"
 	keepRule    = "an approval rule as its security-tier author wrote it: kinds, repo and preset predicates, and the egress hosts and tools it approves; it holds no policy's workspace_mounts"
+	keepSigning = keepEgress + "; no_aws_host and unsigned_host are aws_signing_reason values about such a host"
 )
 
 // auditHostReviewed are the host-shaped fields served as recorded, per action. A host-shaped field on a
@@ -85,7 +86,8 @@ var auditHostReviewed = map[string]auditHostKeep{
 	"remote_runner.people_policy.delete": {[]string{"after", "before"}, keepValues},
 	"remote_runner.people_policy.set":    {[]string{"after", "before"}, keepValues},
 	"run.artifact.redirect":              {[]string{"host"}, keepEgress},
-	"run.bedrock.configure":              {[]string{"hosts"}, keepEgress},
+	"run.aws_cli.configure":              {[]string{"aws_signing_host"}, keepEgress},
+	"run.bedrock.configure":              {[]string{"hosts", "aws_signing_host", "no_aws_host", "unsigned_host"}, keepSigning},
 	"run.ceiling.reassert":               {[]string{"dropped_injection_hosts"}, keepEgress},
 	"run.component.attach":               {[]string{"hosts"}, keepEgress},
 	"run.create": {[]string{"inline_policy", "policy_overlay", "spec"},

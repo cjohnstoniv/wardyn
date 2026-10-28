@@ -229,7 +229,10 @@ func TestRelayTLSFlows(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer c.Close()
-		_ = c.SetReadDeadline(time.Now().Add(3 * time.Second))
+		// The banner comes after the relay's one-second wait, the tunnel request and the fake proxy's
+		// 200 ms check; on a loaded macOS runner a proxy request alone has taken a second. The deadline
+		// only stops a hang: the banner ends the read as soon as it arrives.
+		_ = c.SetReadDeadline(time.Now().Add(10 * time.Second))
 		line, err := bufio.NewReader(c).ReadString('\n')
 		if err != nil || line != "SSH-2.0-origin\r\n" {
 			t.Fatalf("banner %q, %v", line, err)
