@@ -136,7 +136,9 @@ func TestPlacementCapability_MacOSVM(t *testing.T) {
 			row: perRun(8000, 16384), want: "A macOS VM needs at least 4 CPU and 8192 MiB.", wantNot: "Its owner raises it", field: "resources"},
 		{name: "memory asked under the base minimum", mc: mac(nil), ctx: member, ask: macOSVMAsk{CPUMillis: 4000, MemoryMiB: 4096},
 			row: perRun(8000, 16384), want: "A macOS VM needs at least 4 CPU and 8192 MiB.", wantNot: "Its owner raises it", field: "resources"},
-		{name: "a folder", mc: mac(nil), ctx: member, mounts: 1, want: remote.VMNoFolderShare, field: "-"},
+		{name: "a folder on a runner too old to share one", mc: mac(nil), ctx: member, mounts: 1, want: runner.MacVMNoFolderShare,
+			wantNot: remote.VMNoFolderShare, field: "workspaces"},
+		{name: "a folder on a runner that shares folders", mc: mac(func(m *runnerwire.MacVMCaps) { m.Folders = true }), ctx: member, mounts: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := capsServer(&fakeRunner{})
@@ -247,6 +249,23 @@ func TestPlacementCapability_MacOSVMPoolForms(t *testing.T) {
 		if ref == nil || ref.body.Error != tc.want || ref.body.Field != tc.field {
 			t.Errorf("%s: refusal = %+v, want %q", tc.name, ref, tc.want)
 		}
+	}
+	// Every eligible runner of a pooled run must meet its demand: a pool with one Mac that cannot share a
+	// folder refuses a run that shares one, and takes a run that shares none.
+	sharing := macRunner(t, s, func() *runnerwire.MacVMCaps {
+		mc := readyMac()
+		mc.Folders = true
+		return mc
+	}(), nil)
+	if ref := s.placementCapabilityRefusalFor(capsCtx, req, pool(sharing, ready), governanceCeiling{}, 1, macOSVMAsk{}); ref == nil ||
+		ref.body.Error != runner.MacVMNoFolderShare || ref.body.Field != "workspaces" {
+		t.Errorf("a mixed pool and a folder: refusal = %+v, want %q", ref, runner.MacVMNoFolderShare)
+	}
+	if ref := s.placementCapabilityRefusalFor(capsCtx, req, pool(sharing, ready), governanceCeiling{}, 0, macOSVMAsk{}); ref != nil {
+		t.Errorf("a mixed pool and no folder: refused %+v", ref)
+	}
+	if ref := s.placementCapabilityRefusalFor(capsCtx, req, pool(sharing), governanceCeiling{}, 1, macOSVMAsk{}); ref != nil {
+		t.Errorf("a pool that shares folders: refused %+v", ref)
 	}
 }
 
