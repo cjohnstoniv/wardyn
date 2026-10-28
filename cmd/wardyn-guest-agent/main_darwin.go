@@ -64,6 +64,7 @@ func run(out, plist string) error {
 		MarkerDir: "/var/run",
 		Desktop:   desktop,
 		ToolsDial: dial,
+		Mount:     guestagent.MacShares{Run: runner, Home: guestagent.MacAgentHome, UID: int(ids.UID), GID: int(ids.GID)}.Mount,
 	}
 	h, err := srv.Handler()
 	if err != nil {
