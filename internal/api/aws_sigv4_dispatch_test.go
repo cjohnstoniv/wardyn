@@ -183,13 +183,14 @@ func TestAWSSigV4FallbackChecks(t *testing.T) {
 	}
 }
 
-// Each AWS sign-in lane's audit row says where this run's role credentials were signed, and why not
-// at the proxy, as dispatch decided it: run.bedrock.configure and run.aws_cli.configure.
+// Each AWS sign-in lane's audit row says how dispatch set this run up, at the proxy or with role
+// credentials in the sandbox, and why not at the proxy: run.bedrock.configure and run.aws_cli.configure,
+// whose target is the component.
 func TestAWSSigV4LanesAuditTheirSigning(t *testing.T) {
 	for _, lane := range []struct {
-		action   string
-		dispatch func(*testing.T, func(*Config)) runner.SandboxSpec
-	}{{"run.bedrock.configure", dispatchBedrockSSORun}, {"run.aws_cli.configure", dispatchAWSCLIRun}} {
+		action, target string
+		dispatch       func(*testing.T, func(*Config)) runner.SandboxSpec
+	}{{"run.bedrock.configure", "", dispatchBedrockSSORun}, {"run.aws_cli.configure", cliAWSID, dispatchAWSCLIRun}} {
 		for _, tc := range []struct {
 			name    string
 			on      bool
@@ -203,6 +204,9 @@ func TestAWSSigV4LanesAuditTheirSigning(t *testing.T) {
 				for _, ev := range rec.snapshot() {
 					if ev.Action != lane.action {
 						continue
+					}
+					if lane.target != "" && ev.Target != lane.target {
+						t.Errorf("%s target = %q, want %q", lane.action, ev.Target, lane.target)
 					}
 					var d map[string]any
 					if err := json.Unmarshal(ev.Data, &d); err != nil {

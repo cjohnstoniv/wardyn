@@ -74,9 +74,10 @@ func (w awsSigV4Why) String() string {
 	return ""
 }
 
-// awsSigningAudit is the fields a run's audit row carries for the lane's choice: where the role
-// credentials were signed, and why not at the proxy. Recorded at dispatch, so the row says what this
-// run did, never what today's settings would do.
+// awsSigningAudit is the fields a run's audit row carries for the lane's choice: whether dispatch set it
+// up to sign at the proxy or to get role credentials in the sandbox, and why not at the proxy. Recorded
+// from the decision that staged the files, so the row says how this run was set up, never what today's
+// settings would do.
 func awsSigningAudit(data map[string]any, why awsSigV4Why) {
 	if why.Code == "" {
 		data["aws_signing"] = "proxy"

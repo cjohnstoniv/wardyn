@@ -167,9 +167,9 @@ func (s *Server) authorAWSCLI(ctx context.Context, run types.AgentRun, cli *awsC
 	return inj, mitm, sig, &lane, ok
 }
 
-// recordAWSCLIConfigure records an AWS CLI run's run.aws_cli.configure row: where its role
-// credentials are signed, and why not at the proxy. Like run.bedrock.configure, only once every
-// dispatch gate has held, so a refused run shows no row for a credential it was never handed.
+// recordAWSCLIConfigure records an AWS CLI run's run.aws_cli.configure row: where dispatch set the
+// lane up to sign, and why not at the proxy. Written beside run.bedrock.configure, past the lane
+// gates, so a run those refuse shows no row; a later withdrawal is its own row (run.ceiling.reassert).
 func (s *Server) recordAWSCLIConfigure(ctx context.Context, run types.AgentRun, cli *awsCLIDispatch, why *awsSigV4Why) {
 	if cli == nil || why == nil {
 		return
@@ -177,7 +177,7 @@ func (s *Server) recordAWSCLIConfigure(ctx context.Context, run types.AgentRun, 
 	data := map[string]any{"component_id": cli.ComponentID}
 	awsSigningAudit(data, *why)
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.aws_cli.configure",
-		run.ID.String(), "success", mustJSON(data)))
+		cli.ComponentID, "success", mustJSON(data)))
 }
 
 // runCarriesCLIComponent reports whether run still carries the org row id as an
