@@ -227,9 +227,9 @@ RUN set -eu; \
 # a bump moves GH_VERSION and both digests together. gh gets no GitHub
 # credential here: a run with a GitHub CLI row gets an inert GH_TOKEN, and the
 # proxy adds the App token per request.
-ARG GH_VERSION=2.102.0
-ARG GH_SHA256_AMD64=7e54a307f90afdc59796c325ec0c49fb09e6c18537727207a8ac7513584ea5b0
-ARG GH_SHA256_ARM64=5006962696f01e1624b3fcf1f9d8e1a11547f24bf067dd2a0371b7b421945237
+ARG GH_VERSION=2.103.3
+ARG GH_SHA256_AMD64=e3bafef96328d1a67de3a968bdfe1cc2ffd58cf6aba8b5e201356897ed06bb3d
+ARG GH_SHA256_ARM64=cac3ff84b60b68e64cca69f31f303210c26320361cc3286b773655d4226b7b06
 ARG TARGETARCH
 RUN set -eu; \
     arch="${TARGETARCH:-$(dpkg --print-architecture)}"; \
