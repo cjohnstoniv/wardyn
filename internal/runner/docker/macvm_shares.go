@@ -100,9 +100,11 @@ func (p *macShareProbe) run(ctx context.Context, check func() (string, error)) (
 func macShareTarget(target string) (string, error) {
 	rest, ok := strings.CutPrefix(target, guestagent.AgentHome+"/")
 	if !ok || rest == "" || path.Clean(target) != target {
+		//lint:ignore ST1005 the sentence the person reads, as written in the approved copy
 		return "", errors.New(runner.MacVMShareTarget)
 	}
 	if first, _, _ := strings.Cut(rest, "/"); strings.EqualFold(first, ".wardyn") {
+		//lint:ignore ST1005 as above
 		return "", errors.New(runner.MacVMShareTarget)
 	}
 	return guestagent.MacAgentHome + "/" + rest, nil
