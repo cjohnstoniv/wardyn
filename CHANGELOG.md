@@ -11,6 +11,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- With `WARDYN_AWS_SIGV4_AT_PROXY` on, a Bedrock lane through a PrivateLink endpoint is now re-signed at the proxy, so its
+  role credentials stay out of the sandbox. Only Bedrock's own services under the name AWS generates for the endpoint qualify;
+  your own endpoint service and other services' PrivateLink hosts keep the old path.
+
 ### Fixed
 
 - A failed macOS VM start no longer keeps its VM in the helper until the helper exits (#3708). Each failed attempt
