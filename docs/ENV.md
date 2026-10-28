@@ -1456,7 +1456,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Placement refuses a Mac whose base image is not ready or that is at its limit of macOS VMs (at most 2).
 - macOS VMs need a pool where every runner offers them; a mixed pool refuses them. This matches Linux VMs.
 - It also refuses a harness the base cannot serve, and a CPU or memory below the base's minimum.
-- A macOS VM takes no folder mount, and a Kubernetes runner refuses the kind.
+- Older runners refuse a macOS VM's folders; a Kubernetes runner refuses the kind.
 - `GET /setup/status` publishes it as `features.macos_vms`, present only when on.
 - Needs migration `0234_macos_vm_kind`, which widens two CHECK constraints and changes no row.
 - [macOS VM sandboxes](operations/macos-vms.md) covers the Mac side: its switch, base image, limits and cleanup.
