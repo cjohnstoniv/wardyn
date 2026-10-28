@@ -90,6 +90,8 @@ export const PREWRAPPED = {
   KIND_WRAP_ADMINS_ONLY: "Admins only.",
   KIND: "Pre-wrapped: runs as is",
   KIND_HINT: "Built FROM Wardyn's agent-base and pinned by digest. Checked on the cluster when added; no image builder needed.",
+  // not in the mock
+  KIND_NO_CHECK: (why: string) => `This control plane can't check one: ${why}.`,
   REF: "Image, pinned by digest",
   REF_HINT: "Built FROM agent-base 0.10.0 or later, e.g. ghcr.io/acme/sdk-agent:2.3@sha256:…",
   HOW_TO_BUILD: "How to build one",
@@ -118,5 +120,5 @@ export const PREWRAPPED = {
   CHECK_AGAIN: "Check again",
   NEEDS_BUILDER: "Needs an image builder; this control plane has none.",
   FOOTNOTE:
-    "The check runs a short pod from the pinned image on each node architecture, with no network, and looks for Wardyn's runner tools. It proves the tools are there and start; it doesn't test your agent.",
+    "The check runs a short pod from the pinned image on each node architecture, with no network, and looks for Wardyn's runner tools. It proves the tools are in place and Wardyn's recorder runs; it doesn't test your agent or its toolchain.",
 } as const;

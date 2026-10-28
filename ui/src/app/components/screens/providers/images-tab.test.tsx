@@ -56,7 +56,7 @@ const entry = (id: string, name: string, image: string) => ({
 });
 const TOOLBOX = entry("b1", "dev-toolbox", "ghcr.io/acme/dev-toolbox:1.4");
 const ML = entry("b2", "python-ml", "ghcr.io/acme/python-ml:3.12");
-const cat = (rows: BaseImageEntry[], imageBuilder = true) => ({ rows, imageBuilder });
+const cat = (rows: BaseImageEntry[], imageBuilder = true, prewrappedUnavailable = "") => ({ rows, imageBuilder, prewrappedUnavailable });
 const PINNED = "ghcr.io/acme/sdk-agent:2.3@sha256:" + "a".repeat(64);
 const prewrapped = (id: string, check: BaseImageCheck, image = PINNED): BaseImageEntry => ({
   ...entry(id, "sdk-agent", image),
@@ -277,6 +277,30 @@ describe("ImagesTab", () => {
     expect(wrap).toBeDisabled();
     expect(wrap).toHaveTextContent(PREWRAPPED.KIND_WRAP_ADMINS_ONLY);
     expect(within(how).getByRole("button", { name: new RegExp(PREWRAPPED.KIND) })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("a control plane that cannot check one says why before input, and refuses the pre-wrapped submission only", async () => {
+    const why = "this control plane has no Kubernetes substrate";
+    listMock.mockResolvedValue(cat([], true, why));
+    render(<ImagesTab />);
+    await userEvent.click(await screen.findByRole("button", { name: IMAGES.ADD_CTA }));
+    const dialog = await screen.findByRole("dialog");
+    const how = within(dialog).getByRole("group", { name: PREWRAPPED.HOW_LABEL });
+    const pw = within(how).getByRole("button", { name: new RegExp(PREWRAPPED.KIND) });
+    expect(pw).toBeDisabled();
+    expect(pw).toHaveTextContent(PREWRAPPED.KIND_NO_CHECK(why));
+    expect(within(how).getByRole("button", { name: new RegExp(PREWRAPPED.KIND_WRAP) })).toHaveAttribute("aria-pressed", "true");
+    await userEvent.type(within(dialog).getByLabelText(IMAGES.REF), "ghcr.io/acme/x:1");
+    expect(within(dialog).getByRole("button", { name: IMAGES.ADD_CTA })).toBeEnabled();
+  });
+
+  it("with no builder and no check, nothing can be added", async () => {
+    listMock.mockResolvedValue(cat([], false, "this control plane has no Kubernetes substrate"));
+    render(<ImagesTab />);
+    await userEvent.click(await screen.findByRole("button", { name: IMAGES.ADD_CTA }));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.type(within(dialog).getByLabelText(PREWRAPPED.REF), PINNED);
+    expect(within(dialog).getByRole("button", { name: PREWRAPPED.ADD_CTA })).toBeDisabled();
   });
 
   it("rows: a checking one is offered to nobody yet and the list is read again; a byo one needs a builder", async () => {

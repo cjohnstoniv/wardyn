@@ -14,14 +14,20 @@ export interface BaseImageCatalog {
   // Whether this control plane has an image builder to add Wardyn's tools to the
   // other kinds. An older daemon sends nothing, and it had only those kinds.
   imageBuilder: boolean;
+  // Why this control plane cannot check a prewrapped image; "" when it can. An older daemon sends nothing.
+  prewrappedUnavailable: string;
 }
 
 export const baseImages = {
-  // GET /api/v1/base-images -> {base_images: [...], image_builder}.
+  // GET /api/v1/base-images -> {base_images: [...], image_builder, prewrapped_check_unavailable}.
   async list(): Promise<BaseImageCatalog> {
     const res = await wfetch("/base-images", { method: "GET" });
-    const body = await asJson<{ base_images?: unknown; image_builder?: boolean }>(res);
-    return { rows: unwrapList<BaseImageEntry>(body.base_images), imageBuilder: body.image_builder ?? true };
+    const body = await asJson<{ base_images?: unknown; image_builder?: boolean; prewrapped_check_unavailable?: string }>(res);
+    return {
+      rows: unwrapList<BaseImageEntry>(body.base_images),
+      imageBuilder: body.image_builder ?? true,
+      prewrappedUnavailable: body.prewrapped_check_unavailable ?? "",
+    };
   },
 
   // POST /api/v1/base-images. "byo" is the kind that means the reference is

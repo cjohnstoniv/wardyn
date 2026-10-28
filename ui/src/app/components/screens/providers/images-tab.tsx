@@ -112,6 +112,7 @@ export function ImagesTab() {
 function ImagesTabBody() {
   const [rows, setRows] = React.useState<BaseImageEntry[] | null>(null);
   const [builder, setBuilder] = React.useState(true);
+  const [noCheck, setNoCheck] = React.useState("");
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [adding, setAdding] = React.useState(false);
   const [retrying, setRetrying] = React.useState<Record<string, string>>({});
@@ -122,6 +123,7 @@ function ImagesTabBody() {
       .then((list) => {
         setRows(list.rows);
         setBuilder(list.imageBuilder);
+        setNoCheck(list.prewrappedUnavailable);
         setStatus("ready");
       })
       .catch(() => setStatus("error"));
@@ -207,7 +209,7 @@ function ImagesTabBody() {
         })
       )}
       {rows.some((r) => r.kind === "prewrapped") && <p className="max-w-[70ch] text-meta text-muted-foreground">{PREWRAPPED.FOOTNOTE}</p>}
-      <AddImageDialog open={adding} onOpenChange={setAdding} onAdded={load} builder={builder} />
+      <AddImageDialog open={adding} onOpenChange={setAdding} onAdded={load} builder={builder} noCheck={noCheck} />
     </div>
   );
 }
@@ -223,11 +225,14 @@ function AddImageDialog({
   onOpenChange,
   onAdded,
   builder,
+  noCheck,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onAdded: () => void;
   builder: boolean;
+  // Why this control plane cannot check a pre-wrapped image; "" when it can.
+  noCheck: string;
 }) {
   // A security admin adds pre-wrapped images only, and with no image builder nothing else can run.
   const operator = useOperator();
@@ -320,10 +325,10 @@ function AddImageDialog({
                 />
                 <OptionCard
                   selected={kind === "prewrapped"}
-                  disabled={saving}
+                  disabled={!!noCheck || saving}
                   onClick={() => setKind("prewrapped")}
                   title={PREWRAPPED.KIND}
-                  hint={PREWRAPPED.KIND_HINT}
+                  hint={noCheck ? PREWRAPPED.KIND_NO_CHECK(noCheck) : PREWRAPPED.KIND_HINT}
                 />
               </div>
             </div>
@@ -361,7 +366,7 @@ function AddImageDialog({
             </div>
             <DialogFooter>
               {cancel}
-              <Button type="submit" disabled={saving || !ref.trim() || draft.pending}>
+              <Button type="submit" disabled={saving || !ref.trim() || draft.pending || (kind === "prewrapped" && !!noCheck)}>
                 {showSpinner && <Loader2 className="size-3.5 animate-spin" />}
                 {kind === "prewrapped" ? PREWRAPPED.ADD_CTA : IMAGES.ADD_CTA}
               </Button>

@@ -126,6 +126,11 @@ func TestPG_PrewrappedRegistrationAndRoles(t *testing.T) {
 	if code, reason, _ := e.asSec(t, http.MethodPost, "/api/v1/base-images", prewrapBody("ghcr.io/acme/sdk:2.3")); code != http.StatusBadRequest || reason != reasonPrewrappedImageNotPinned {
 		t.Fatalf("unpinned prewrapped = %d %s, want 400 %s", code, reason, reasonPrewrappedImageNotPinned)
 	}
+	// Steps would store a row the ref-only admission lookup never finds.
+	if code, reason, _ := e.asSec(t, http.MethodPost, "/api/v1/base-images",
+		`{"kind":"prewrapped","image":"`+prewrapRef+`","steps":["RUN true"]}`); code != http.StatusBadRequest || reason != reasonBaseImageWriteInvalid {
+		t.Fatalf("prewrapped with steps = %d %s, want 400 %s", code, reason, reasonBaseImageWriteInvalid)
+	}
 	// A status, architectures or attempt in the body is never taken: the strict decoder refuses it.
 	if code, _, _ := e.asSec(t, http.MethodPost, "/api/v1/base-images",
 		`{"kind":"prewrapped","image":"`+prewrapRef+`","check":{"status":"ready","accepted_arches":["amd64"]}}`); code != http.StatusBadRequest {
@@ -135,7 +140,21 @@ func TestPG_PrewrappedRegistrationAndRoles(t *testing.T) {
 	if code, reason, _ := e.asSec(t, http.MethodPost, "/api/v1/base-images", prewrapBody(prewrapRef)); code != http.StatusUnprocessableEntity || reason != reasonPrewrappedCheckUnavailable {
 		t.Fatalf("no checker = %d %s, want 422 %s", code, reason, reasonPrewrappedCheckUnavailable)
 	}
+	// The catalog read says why from the same capability, so Add image can say so before any input.
+	noCheck := func() string {
+		var body struct {
+			Why string `json:"prewrapped_check_unavailable"`
+		}
+		_ = json.Unmarshal(doSSO(t, e.srv, http.MethodGet, "/api/v1/base-images", e.secSes, "").Body.Bytes(), &body)
+		return body.Why
+	}
+	if got := noCheck(); got != "not proven" {
+		t.Fatalf("list while unavailable = %q, want the checker's reason", got)
+	}
 	e.rn.unavailable = ""
+	if got := noCheck(); got != "" {
+		t.Fatalf("list while available = %q, want empty", got)
+	}
 
 	code, _, b := e.asSec(t, http.MethodPost, "/api/v1/base-images", prewrapBody(prewrapRef))
 	if code != http.StatusCreated || b.Check == nil || b.Check.Status != types.BaseImageCheckChecking {
@@ -256,6 +275,11 @@ func TestPG_PrewrappedWorkspaceAttachOnly(t *testing.T) {
 	if w := ws("checking", prewrapRef); w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("not yet ready = %d, want 422", w.Code)
 	}
+	// The console's pinned-image field sends byo: a ref whose prewrapped row is not ready is refused the same.
+	if w := do(t, e.srv, http.MethodPost, "/api/v1/workspaces", adminToken, `{"name":"typed-checking","base_image":{"kind":"byo","image":"`+prewrapRef+`"}}`); w.Code != http.StatusUnprocessableEntity ||
+		errorReason(w) != reasonPrewrappedImageNotRegistered || rows() != 1 {
+		t.Fatalf("typed ref while checking = %d %s with %d rows, want 422 %s and no byo row", w.Code, errorReason(w), rows(), reasonPrewrappedImageNotRegistered)
+	}
 	e.rn.gate <- struct{}{}
 	e.settled(t, b.ID)
 	w := ws("ready", prewrapRef)
@@ -355,6 +379,18 @@ func TestPG_PrewrappedRunDoors(t *testing.T) {
 	}
 	if run, err = e.st.GetRun(ctx, run.ID); err != nil || !slices.Equal(run.ImageArches, []string{"amd64"}) {
 		t.Fatalf("stored run arches = %v (%v), want [amd64]", run.ImageArches, err)
+	}
+	// A run validated before the row went resolves after it: with no builder it fails, never an ordinary image.
+	late, err := e.st.CreateRun(ctx, types.AgentRun{ID: uuid.New(), CreatedBy: "sec", Agent: "claude-code",
+		ConfinementClass: types.CC1, State: types.RunPending, RunnerTarget: "k8s", Task: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if image, _, failed := e.srv.resolveCreateRunImage(ctx, createRunRequest{Agent: "claude-code", Image: readyRef}, late, nil); !failed {
+		t.Fatalf("a deleted row resolved to %q, want the run failed", image)
+	}
+	if late, err = e.st.GetRun(ctx, late.ID); err != nil || late.State != types.RunFailed {
+		t.Fatalf("late run = %s (%v), want FAILED", late.State, err)
 	}
 	if _, err := e.srv.createSandboxAtTarget(ctx, run, runner.SandboxSpec{Image: readyRef}); err != nil {
 		t.Fatal(err)

@@ -77,7 +77,8 @@ func imageRefPathSafe(ref string) bool {
 
 // handleListBaseImages returns the catalog. A security admin sees the prewrapped rows only: the
 // other kinds name the operator's registry coordinate (mayWriteBaseImageKind). image_builder says
-// whether this control plane wraps the other kinds at all; the console's Add image reads it.
+// whether this control plane wraps the other kinds at all, and prewrapped_check_unavailable why it
+// cannot check a prewrapped one (empty when it can); the console's Add image reads both.
 //
 //	GET /api/v1/base-images
 func (s *Server) handleListBaseImages(w http.ResponseWriter, r *http.Request) {
@@ -93,7 +94,9 @@ func (s *Server) handleListBaseImages(w http.ResponseWriter, r *http.Request) {
 			out = append(out, prewrappedView(b, now))
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"base_images": out, "image_builder": s.cfg.ImageBuilder != nil})
+	_, why := s.prewrappedChecker()
+	writeJSON(w, http.StatusOK, map[string]any{"base_images": out, "image_builder": s.cfg.ImageBuilder != nil,
+		"prewrapped_check_unavailable": why})
 }
 
 // mayWriteBaseImageKind: an admin writes every kind; a security admin writes prewrapped only (design
@@ -136,6 +139,10 @@ func (s *Server) handleCreateBaseImage(w http.ResponseWriter, r *http.Request) {
 	}
 	var checker runner.PrewrappedImageChecker
 	if entry.Kind == types.BaseImageKindPrewrapped {
+		if len(entry.Steps) > 0 { // runs as is, and its admission lookup is by the ref alone
+			writeErrorReason(w, http.StatusBadRequest, reasonBaseImageWriteInvalid, "a prewrapped image runs as is: it takes no steps")
+			return
+		}
 		if !prewrappedPinned(entry.Image) {
 			writeErrorReason(w, http.StatusBadRequest, reasonPrewrappedImageNotPinned,
 				"a prewrapped image is registered by digest: <repository>[:tag]@sha256:<64 hex>")

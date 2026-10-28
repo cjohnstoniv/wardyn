@@ -467,7 +467,7 @@ It is for a Kubernetes control plane, which has no image builder.
 - An architecture with no build or no node is left out; anything else refuses the image, and *Check again* runs a new check.
 - It needs the boot canary to have shown NetworkPolicy enforced, since the pod runs the image's own shell.
 
-**What it does not prove.** It proves the tools are there and start. It does not test your agent or your toolchain, and it does not scan the image.
+**What it does not prove.** It proves the tools are there and `wardyn-rec` runs. It does not test your agent or your toolchain, and it does not scan the image.
 
 
 ## Adding a new agent image

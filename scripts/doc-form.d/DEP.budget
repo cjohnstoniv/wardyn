@@ -7,8 +7,8 @@ deploy/compose/README.md=2313 share=35
 # deploy/images/README.md 4704 adds 50 over 4654 (the Azure CLI component): measured at merge.
 # deploy/images/README.md 4730 adds 26 over 4704 (0.9.4 L9, #1904): the code-server 4.141.0 re-check, measured.
 # #1987: deploy/images/README.md 4780 adds 50 over 4730, measured: the agent-run --tasks line.
-# deploy/images/README.md=5071 adds 291 over 4780, measured (0.10 final §3 pre-wrapped images): the Pre-wrapped image recipe: build, pin, add, and what the check proves.
-deploy/images/README.md=5071 share=35
+# deploy/images/README.md=5072 adds 292 over 4780, measured (0.10 final §3 pre-wrapped images): the Pre-wrapped image recipe: build, pin, add, and what the check proves (wardyn-rec is the one tool it runs).
+deploy/images/README.md=5072 share=35
 # docs/operations/build-images.md 1298 adds 93 over 1205 (0.9 DS1-S1b): the image a run's harnesses start from, and the run_harnesses grant.
 # docs/operations/build-images.md 1418 adds 120 over 1298 (0.9 DS1-S4): offering two harnesses in one run.
 # docs/operations/build-images.md 1451 adds 33 over 1418 (0.9 F-1516 B7): pinned inputs and a pointer to the refresh.

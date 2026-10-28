@@ -606,7 +606,12 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 		// A ready prewrapped image runs as is: no wrap and no wardyn-byoi/ tag, so no selftest exec
 		// (design final §3).
 		image, arches = pw.Image, pw.Check.AcceptedArches
-	case req.Image != "": // validated up front: ImageBuilder is non-nil, not XOR'd
+	case req.Image != "" && s.cfg.ImageBuilder == nil:
+		// Validation let this through as a ready prewrapped image, and its row is gone since: with no
+		// builder nothing else may run it.
+		buildFailed(map[string]any{"base_image": req.Image, "error": errPrewrappedNotRegistered.Error()})
+		return "", nil, true
+	case req.Image != "": // validated up front: not XOR'd
 		// The wardyn-byoi/ output tag is also the discriminator dispatch keys the
 		// runtime selftest preflight off (a wrapped arbitrary image may still lack a
 		// shell or the harness binary).

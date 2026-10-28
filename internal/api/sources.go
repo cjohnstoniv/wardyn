@@ -507,7 +507,8 @@ func (s *Server) upsertAndAttach(r *http.Request, srcs []types.WorkspaceSource, 
 // readyPrewrappedBase is the ready prewrapped row a workspace's base image attaches to, never one it
 // creates: registration creates a prewrapped row and starts its check. A prewrapped base with no ready
 // row is errPrewrappedNotRegistered. Any other explicit kind naming the exact ref of a ready prewrapped
-// image attaches that row too, so the console's pinned-image field picks a registered image as is.
+// image attaches that row too, so the console's pinned-image field picks a registered image as is, and
+// naming one that is not ready is errPrewrappedNotRegistered too, never an ordinary image.
 func (s *Server) readyPrewrappedBase(ctx context.Context, b *types.WorkspaceBaseImage) (*types.BaseImageEntry, error) {
 	if b == nil || b.Kind == "" || b.Kind == "recommended" {
 		return nil, nil
@@ -522,7 +523,7 @@ func (s *Server) readyPrewrappedBase(ctx context.Context, b *types.WorkspaceBase
 		return &row, nil
 	case err != nil && !errors.Is(err, store.ErrNotFound):
 		return nil, err
-	case b.Kind == types.BaseImageKindPrewrapped:
+	case err == nil || b.Kind == types.BaseImageKindPrewrapped:
 		return nil, errPrewrappedNotRegistered
 	}
 	return nil, nil
