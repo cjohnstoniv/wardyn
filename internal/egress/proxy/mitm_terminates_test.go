@@ -16,7 +16,6 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/armscope"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
-	"github.com/cjohnstoniv/wardyn/internal/egress/domainmatch"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -238,7 +237,8 @@ func TestTerminatedOutside(t *testing.T) {
 		{"nothing allowed", nil, []string{"a.corp.example", "api.anthropic.com", "api.openai.com", "b.corp.example:8443", "c.other.example", "v.corp.example"}},
 		{"exact and bare cover host and host:port", []string{"a.corp.example", "b.corp.example", "api.anthropic.com", "api.openai.com", "c.other.example", "v.corp.example"}, []string{}},
 		{"a wildcard covers its hosts", []string{"*.corp.example", "*.anthropic.com", "*.openai.com", "c.other.example"}, []string{}},
-		{"an exact entry on another port still names the host", []string{"b.corp.example:443", "v.corp.example:443"}, []string{"a.corp.example", "api.anthropic.com", "api.openai.com", "c.other.example"}},
+		{"an exact entry names its own port only", []string{"b.corp.example:443", "v.corp.example:443"}, []string{"a.corp.example", "api.anthropic.com", "api.openai.com", "b.corp.example:8443", "c.other.example", "v.corp.example"}},
+		{"an exact entry on the terminated port names it", []string{"b.corp.example:8443"}, []string{"a.corp.example", "api.anthropic.com", "api.openai.com", "c.other.example", "v.corp.example"}},
 		{"a wildcard covers its ports only", []string{"*.corp.example:8443"}, []string{"a.corp.example", "api.anthropic.com", "api.openai.com", "c.other.example", "v.corp.example"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -290,6 +290,15 @@ func TestTerminatedOutsideMatchesConnect(t *testing.T) {
 			pol(types.FirstUseAlwaysDeny, true, nil, []string{"v.corp.example"}), []string{"api.github.com", "plain.corp.example", "artifacts.corp.example"}, []string{"v.corp.example"}},
 		{"a port-scoped entry names an any-port host", false, "",
 			pol(types.FirstUseAlwaysDeny, false, []string{"plain.corp.example:8443"}, nil), []string{"plain.corp.example:8443"}, []string{"v.corp.example"}},
+		{"an entry on another port leaves a held scoped host listed", false, "",
+			pol(types.FirstUseDenyWithReview, false, []string{"artifacts.corp.example:443"}, nil), []string{"artifacts.corp.example:443"},
+			[]string{"api.github.com:443", "artifacts.corp.example:8443", "plain.corp.example", "v.corp.example"}},
+		{"an any-port host denied on 443 is listed where it is admitted", false, "",
+			pol(types.FirstUseAlwaysDeny, true, nil, []string{"plain.corp.example:443"}), nil,
+			[]string{"api.github.com:443", "artifacts.corp.example:8443", "plain.corp.example", "v.corp.example"}},
+		{"an any-port host denied on every web port and closed elsewhere is not", false, PortRuleOn,
+			pol(types.FirstUseAlwaysDeny, true, nil, []string{"plain.corp.example:443", "plain.corp.example:80"}), nil,
+			[]string{"api.github.com:443", "v.corp.example"}},
 		{"a method restriction without CONNECT refuses all but via_org", true, "",
 			types.RunPolicySpec{AllowAllEgress: true, AllowedMethods: []string{"GET"}}, nil, []string{"v.corp.example"}},
 		{"the port rule closes a scoped port", false, PortRuleOn,
@@ -313,25 +322,27 @@ func TestTerminatedOutsideMatchesConnect(t *testing.T) {
 			canAsk := p.policy.FirstUseMode().RaisesApproval()
 			for _, tok := range cfg.TerminatedHosts() {
 				host, ps, scoped := strings.Cut(tok, ":")
-				port := 443
+				ports := cfg.outsideProbePorts()
 				if scoped {
-					port, _ = strconv.Atoi(ps)
-				}
-				d, _, _ := p.decideConnect(context.Background(), "", "", host, port)
-				real := map[egress.Decision]connectOutcome{egress.Allow: connectAdmit, egress.Pending: connectHold, egress.Deny: connectRefuse}[d]
-				req := egress.Request{Host: host, Port: port, Method: http.MethodConnect}
-				if g := gateConnect(context.Background(), req, p.evaluator, p.policy, p.portRule).outcome(canAsk); g != real {
-					t.Errorf("%s:%d: the gate decides %v, the proxy's CONNECT decision is %v (%v)", host, port, g, real, d)
-				}
-				if slices.ContainsFunc(tc.allowed, func(e string) bool { x, _, _ := domainmatch.Classify(e); return x == host }) {
-					if slices.Contains(got, tok) {
-						t.Errorf("%s is named by an entry and is still listed", tok)
-					}
-					continue
+					n, _ := strconv.Atoi(ps)
+					ports = []int{n}
 				}
 				_, isViaOrg := p.viaOrgRouteForHost(host)
-				if want := isViaOrg || real != connectRefuse; slices.Contains(got, tok) != want {
-					t.Errorf("%s: listed = %v, the proxy's own decision (%v, via_org %v) says %v", tok, slices.Contains(got, tok), d, isViaOrg, want)
+				want := false
+				for _, port := range ports {
+					d, _, _ := p.decideConnect(context.Background(), "", "", host, port)
+					real := map[egress.Decision]connectOutcome{egress.Allow: connectAdmit, egress.Pending: connectHold, egress.Deny: connectRefuse}[d]
+					req := egress.Request{Host: host, Port: port, Method: http.MethodConnect}
+					if g := gateConnect(context.Background(), req, p.evaluator, p.policy, p.portRule).outcome(canAsk); g != real {
+						t.Errorf("%s:%d: the gate decides %v, the proxy's CONNECT decision is %v (%v)", host, port, g, real, d)
+					}
+					if !cfg.TerminatesTLS(host, port) {
+						t.Errorf("%s:%d is probed but the proxy does not terminate it there", host, port)
+					}
+					want = want || !entryNames(tc.allowed, host, port) && (isViaOrg || real != connectRefuse)
+				}
+				if slices.Contains(got, tok) != want {
+					t.Errorf("%s: listed = %v, the proxy's own decision on ports %v (via_org %v) says %v", tok, slices.Contains(got, tok), ports, isViaOrg, want)
 				}
 			}
 		})

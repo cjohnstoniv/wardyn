@@ -175,7 +175,7 @@ if v.State == client.RunPolicyViewRecorded {
 | `complete` | false for a run from before Wardyn recorded its starting policy: `changes` then lists only what the launch audit rows state |
 | `stored_policy_now` | for a saved-policy source: `same`, `changed`, `updated` (a run from before the record: edited since, possibly a rename only) or `deleted`, with the policy's current `name` |
 | `provenance` | per top-level `spec` key, the layer that set it (`client.PolicyProvenance`, [denials.md](operations/denials.md)) |
-| `host_marks` | `inspected` lists the allowed hosts Wardyn opens and `terminated` every host it opens, as `host` or `host:port`, and `outside` those opened hosts the allowlist does not name, from the run's own proxy config (`client.RunPolicyHostMarks`); every other allowed host is a tunnel. Absent for a run recorded before marks and for a restarted run |
+| `host_marks` | `inspected` lists the allowed hosts Wardyn opens and `terminated` every host it terminates once admitted, as `host` or `host:port`, and `outside` those the allowlist does not name, from the run's own proxy config (`client.RunPolicyHostMarks`); every other allowed host is a tunnel. Absent for a run recorded before marks and for a restarted run |
 
 The CLI is `wardyn run policy <run-id> [--json]`.
 

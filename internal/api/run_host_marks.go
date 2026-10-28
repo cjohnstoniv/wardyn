@@ -27,7 +27,13 @@ type hostMarks struct {
 // own rule (proxy.Config.InspectsEntry), never by the name of the host.
 func hostMarksOf(pc runner.ProxyConfig, allowed []string) *hostMarks {
 	cfg := runner.ProxyConfigOf(uuid.Nil, pc, runner.ProxyListenPort)
-	marks := &hostMarks{Inspected: []string{}, Terminated: cfg.TerminatedHosts(), Outside: cfg.TerminatedOutside(allowed)}
+	// Under allow-all a reader shows no allowlist rows, only Outside, so no entry names a host there:
+	// dispatch still appends hosts such as the GitHub CLI's api.github.com:443 to allowed_domains.
+	named := allowed
+	if pc.Policy.AllowAllEgress {
+		named = nil
+	}
+	marks := &hostMarks{Inspected: []string{}, Terminated: cfg.TerminatedHosts(), Outside: cfg.TerminatedOutside(named)}
 	for _, entry := range allowed {
 		if cfg.InspectsEntry(entry) {
 			marks.Inspected = append(marks.Inspected, entry)

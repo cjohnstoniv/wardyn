@@ -5,6 +5,7 @@ package proxy
 
 import (
 	"context"
+	"maps"
 	"net/http"
 	"slices"
 	"strconv"
@@ -118,13 +119,13 @@ func (c *Config) TerminatedHosts() []string {
 	return c.mitmSetOf().terminated()
 }
 
-// TerminatedOutside lists, in TerminatedHosts order, the hosts the run's proxy would open that no
-// allowed_domains entry names: a via_org host (ServeHTTP routes it before any policy decision), or a
-// terminated host the proxy's own CONNECT decision (gateConnect) does not refuse, so one it admits or
-// holds for first-use approval and opens once approved. A host the proxy refuses (a denied host, a
-// host the allowlist lacks when it asks nobody, a port the port rule closes) is never opened and is
-// not listed. A host any entry names exactly, on any port, is listed by that entry; a wildcard entry
-// covers a host it matches on the ports it names. A host terminated on any port is probed on 443.
+// TerminatedOutside lists, in TerminatedHosts order, the hosts the run's proxy would open on a port no
+// allowed_domains entry names for them: a via_org host (ServeHTTP routes it before any policy decision),
+// or a terminated host the proxy's own CONNECT decision (gateConnect) does not refuse there, so one it
+// admits or holds for first-use approval and opens once approved. A host the proxy refuses on every such
+// port (a denied host, a host the allowlist lacks when it asks nobody, a port the port rule closes) is not
+// listed. An entry names a host on its own port, or on every port when it has none; a wildcard entry
+// names the hosts it matches. A host terminated on any port is checked on outsideProbePorts.
 func (c *Config) TerminatedOutside(allowed []string) []string {
 	m := c.mitmSetOf()
 	pol := CompilePolicy(c.Policy)
@@ -133,34 +134,49 @@ func (c *Config) TerminatedOutside(allowed []string) []string {
 	canAsk := pol.FirstUseMode().RaisesApproval()
 	out := []string{}
 	for _, t := range m.terminated() {
-		host, port := t, 0
+		host, ports := t, c.outsideProbePorts()
 		if h, p, ok := strings.Cut(t, ":"); ok {
 			n, _ := strconv.Atoi(p)
-			host, port = h, n
+			host, ports = h, []int{n}
 		}
-		covered := slices.ContainsFunc(allowed, func(entry string) bool {
-			exact, wild, eport := domainmatch.Classify(entry)
-			if exact == host {
-				return true
+		if slices.ContainsFunc(ports, func(port int) bool {
+			if entryNames(allowed, host, port) {
+				return false
 			}
-			return wild != "" && domainmatch.MatchWild(host, []string{wild}) && (eport == 0 || eport == port)
-		})
-		if covered {
-			continue
+			req := egress.Request{Host: host, Port: port, Method: http.MethodConnect}
+			return m.viaOrg[host] || gateConnect(context.Background(), req, gate, pol, portRule).outcome(canAsk) != connectRefuse
+		}) {
+			out = append(out, t)
 		}
-		if !m.viaOrg[host] {
-			probe := port
-			if probe == 0 {
-				probe = 443
-			}
-			req := egress.Request{Host: host, Port: probe, Method: http.MethodConnect}
-			if gateConnect(context.Background(), req, gate, pol, portRule).outcome(canAsk) == connectRefuse {
-				continue
-			}
-		}
-		out = append(out, t)
 	}
 	return out
+}
+
+// entryNames reports whether an allowed_domains entry names host on port: an exact entry for host or a
+// wildcard matching it, with no port or with that port.
+func entryNames(allowed []string, host string, port int) bool {
+	return slices.ContainsFunc(allowed, func(entry string) bool {
+		exact, wild, eport := domainmatch.Classify(entry)
+		return (exact == host || wild != "" && domainmatch.MatchWild(host, []string{wild})) && (eport == 0 || eport == port)
+	})
+}
+
+// outsideProbePorts is every port on which the CONNECT decision for a host can differ: 80, 443, each port
+// an allowed_domains or denied_domains entry names, and one port none names, which stands for all the
+// others (the policy and the port rule decide them alike).
+func (c *Config) outsideProbePorts() []int {
+	named := map[int]bool{80: true, 443: true}
+	for _, d := range slices.Concat(c.Policy.AllowedDomains, c.Policy.DeniedDomains) {
+		if _, _, p := domainmatch.Classify(d); p > 0 {
+			named[p] = true
+		}
+	}
+	other := 1
+	for named[other] {
+		other++
+	}
+	named[other] = true
+	return slices.Sorted(maps.Keys(named))
 }
 
 // InspectsEntry reports whether one allowed_domains entry is Inspected: the proxy terminates the

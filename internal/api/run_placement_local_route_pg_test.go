@@ -303,6 +303,9 @@ func TestPG_LocalRun_ViaOrgHostIsListedOutside(t *testing.T) {
 	if !terminatesHost(marks.Terminated, host) {
 		t.Errorf("terminated = %v, want the via_org host %s", marks.Terminated, host)
 	}
+	if !terminatesHost(marks.Terminated, "api.openai.com") {
+		t.Fatalf("terminated = %v lacks api.openai.com, so its absence from outside proves nothing", marks.Terminated)
+	}
 	if slices.Contains(marks.Outside, "api.openai.com") {
 		t.Errorf("outside = %v lists api.openai.com, which the proxy refuses over this allowlist", marks.Outside)
 	}

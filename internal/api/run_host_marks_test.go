@@ -7,6 +7,9 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -30,12 +33,19 @@ func TestHostMarksOf(t *testing.T) {
 			[]string{"api.anthropic.com", "api.openai.com", "artifacts.corp.example"}, []string{}},
 		{"allow-all lists the model route the allowlist lacks", runner.ProxyConfig{MITMCACertPEM: "c", MITMCAKeyPEM: "k", MITMHosts: []string{"artifacts.corp.example"}, MITMLLM: true, Policy: openWide},
 			[]string{"api.anthropic.com", "artifacts.corp.example", "*.corp.example"},
-			[]string{"api.anthropic.com", "api.openai.com", "artifacts.corp.example"}, []string{"api.openai.com"}},
+			[]string{"api.anthropic.com", "api.openai.com", "artifacts.corp.example"}, []string{"api.anthropic.com", "api.openai.com", "artifacts.corp.example"}},
+		{"allow-all lists a door host the allowlist names", runner.ProxyConfig{MITMCACertPEM: "c", MITMCAKeyPEM: "k", GitHubAPI: &proxy.GitHubAPIGrant{Grants: map[string]uuid.UUID{"o": uuid.New()}},
+			Policy: types.RunPolicySpec{AllowedDomains: []string{"api.github.com:443"}, AllowAllEgress: true}},
+			[]string{"api.github.com:443"}, []string{"api.github.com:443"}, []string{"api.github.com:443"}},
 		{"artifact host only", runner.ProxyConfig{MITMCACertPEM: "c", MITMCAKeyPEM: "k", MITMHosts: []string{"artifacts.corp.example"}, Policy: listed},
 			[]string{"artifacts.corp.example", "*.corp.example"}, []string{"artifacts.corp.example"}, []string{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := hostMarksOf(tc.pc, allowed)
+			named := allowed
+			if tc.pc.Policy.AllowedDomains != nil {
+				named = tc.pc.Policy.AllowedDomains
+			}
+			got := hostMarksOf(tc.pc, named)
 			if !slices.Equal(got.Inspected, tc.want) {
 				t.Errorf("inspected = %v, want %v", got.Inspected, tc.want)
 			}
