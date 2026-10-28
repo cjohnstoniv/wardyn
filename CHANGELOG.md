@@ -27,6 +27,13 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   it for a dropped connection and log `context canceled`: a revoked runner then kept its state, including the credentials
   delivered to it, until it next got through to the organisation.
 
+### Security
+
+- `agent-claude-code` now pins Claude Code 2.1.312. The earlier pin, 2.1.231, runs on its own embedded runtime, whose
+  Brotli decoder a crafted stream can make write out of bounds (CVE-2026-111497); 2.1.312 carries the fixed runtime. A
+  crafted Brotli response from a site a Claude Code run may reach could run code as the agent, inside its sandbox and
+  its egress policy. Rebuild locally built `agent-claude-code` images.
+
 ## [0.10.0-rc.6] — 2026-10-28
 
 ### Added
