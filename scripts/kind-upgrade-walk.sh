@@ -236,16 +236,8 @@ git archive "v${FROM_VERSION}" | tar -x -C "${WORK}/from-src" || die "could not 
 # The tag's Dockerfiles fetch Go modules once, with no retry and no seeded module cache (later trees
 # have both), so one module-proxy stream error would fail the walk before it starts. The whole build is
 # retried instead; its finished layers are cached, so a retry resumes at the step that failed.
-from_build() {
-  local i
-  for i in 1 2 3; do
-    wardyn_docker_build "$@" && return 0
-    [[ ${i} -lt 3 ]] && sleep $((i * 5))
-  done
-  return 1
-}
-from_build -f "${WORK}/from-src/deploy/compose/Dockerfile.proxy" -t "${FROM_PROXY_IMAGE}" "${WORK}/from-src" || die "building the v${FROM_VERSION} proxy image failed"
-from_build -f "${WORK}/from-src/deploy/images/claude-code/Dockerfile" -t "${FROM_AGENT_IMAGE}" "${WORK}/from-src" || die "building the v${FROM_VERSION} claude-code agent image failed"
+retry wardyn_docker_build -f "${WORK}/from-src/deploy/compose/Dockerfile.proxy" -t "${FROM_PROXY_IMAGE}" "${WORK}/from-src" || die "building the v${FROM_VERSION} proxy image failed"
+retry wardyn_docker_build -f "${WORK}/from-src/deploy/images/claude-code/Dockerfile" -t "${FROM_AGENT_IMAGE}" "${WORK}/from-src" || die "building the v${FROM_VERSION} claude-code agent image failed"
 kind load docker-image "${FROM_PROXY_IMAGE}" --name "${CLUSTER}" >/dev/null
 kind load docker-image "${FROM_AGENT_IMAGE}" --name "${CLUSTER}" >/dev/null
 
