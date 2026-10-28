@@ -405,8 +405,8 @@ func TestHubStoredLimitsChangeFromAnotherReplicaEndsTheSession(t *testing.T) {
 	if err := awaitValue(t, ctx, done); !errors.Is(err, runnerwire.ErrGoaway) {
 		t.Fatalf("the recheck ended the session with %v, want a GOAWAY", err)
 	}
-	// The recheck still holds the session's slot as the GOAWAY lands; a reconnect before Serve returns is
-	// refused, where a runner's Run waits out its reconnect delay first.
+	// The GOAWAY can land while the recheck still holds the session's slot, and a reconnect then is refused;
+	// a runner's Run retries such a refusal after its reconnect delay, this test does not.
 	serving.Wait()
 	go func() { done <- client.Connect(ctx) }()
 	awaitValue(t, ctx, online)
