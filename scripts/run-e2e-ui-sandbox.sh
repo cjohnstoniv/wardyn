@@ -107,6 +107,7 @@ compose() {
     WARDYN_WARDYND_IMAGE="${WARDYND_IMAGE}" WARDYN_PROXY_IMAGE="${PROXY_IMAGE}" \
     WARDYN_UI_SANDBOX_LISTEN=":8081" WARDYN_UI_SANDBOX_ADVERTISE="http://127.0.0.1:${UI_PORT}" \
     WARDYN_AGENT_IMAGES="$(jq -nc --arg img "${AGENT_IMAGE}" '{"claude-code":$img}')" \
+    WARDYN_AGE_KEY="${AGE_KEY:-}" \
     docker compose -p "${PROJECT}" -f "${COMPOSE_FILE}" "$@"
 }
 
@@ -151,6 +152,10 @@ fi
 # old :pinned tag keeps this stack on the code-server image from the first run
 # that ever created it.
 docker tag wardyn/agent-vscode:local "${AGENT_IMAGE}" || die "could not tag ${AGENT_IMAGE}"
+# One age key for the stack's whole life: the host-mode walk recreates wardynd, and with a fresh ephemeral key it
+# refuses to start over the secrets the path-mode walk sealed.
+AGE_KEY="$(docker run --rm --pull=never --entrypoint /wardynd "${WARDYND_IMAGE}" -gen-age-key | grep -E '^AGE-SECRET-KEY-' | head -1)"
+[[ -n "${AGE_KEY}" ]] || die "wardynd -gen-age-key produced no key"
 
 # ── bring up the dedicated stack ─────────────────────────────────────────────
 log "bringing up ${PROJECT} (api :${API_PORT}, ui :${UI_PORT}, pg :${PG_PORT})"
