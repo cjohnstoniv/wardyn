@@ -106,11 +106,15 @@ type Workload struct {
 }
 
 // WorkloadView is a workload with the state of its current run, as the reads report it: RunState is empty
-// while it has no run, and ServiceHealth when the run has no service health yet.
+// while it has no run, and ServiceHealth when the run has no service health yet. RunPausedAt and
+// ServiceObservedAt are the run's paused_at and its service health's observed_at, for the API to project
+// that health as it projects a run's.
 type WorkloadView struct {
 	Workload
-	RunState      types.RunState
-	ServiceHealth string
+	RunState          types.RunState
+	ServiceHealth     string
+	RunPausedAt       *time.Time
+	ServiceObservedAt *time.Time
 }
 
 // WorkloadPut is the record half of an apply. Digest is the caller's, over Intent, RunIn and RestartKey.
@@ -180,7 +184,8 @@ const workloadCols = `w.id, w.owner, w.name, w.source, w.source_pool_id, COALESC
 // read by name out of the row's JSON, so this query does not depend on the order the migration that adds
 // that column lands in.
 const (
-	workloadViewCols = workloadCols + `, COALESCE(r.state, ''), COALESCE(to_jsonb(r) -> 'service_status' ->> 'health', '')`
+	workloadViewCols = workloadCols + `, COALESCE(r.state, ''), COALESCE(to_jsonb(r) -> 'service_status' ->> 'health', ''), r.paused_at,
+		(to_jsonb(r) -> 'service_status' ->> 'observed_at')::timestamptz`
 	workloadViewFrom = ` FROM workloads w LEFT JOIN agent_runs r ON r.id = w.current_run_id`
 )
 
@@ -212,7 +217,7 @@ func scanWorkload(row pgx.Row) (Workload, error) {
 
 func scanWorkloadView(row pgx.Row) (WorkloadView, error) {
 	var v WorkloadView
-	err := scanWorkloadInto(row, &v.Workload, &v.RunState, &v.ServiceHealth)
+	err := scanWorkloadInto(row, &v.Workload, &v.RunState, &v.ServiceHealth, &v.RunPausedAt, &v.ServiceObservedAt)
 	return v, err
 }
 
