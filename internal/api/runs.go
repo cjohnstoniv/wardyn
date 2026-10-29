@@ -326,8 +326,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// repoSourceWarnings.
 	warnings = append(warnings, s.repoSourceWarnings(ctx, runID, spec, req)...)
 	warnings = append(warnings, f.fitWarnings...)
-	warnings = append(warnings, f.end.warnings(run)...)
-	warnings = append(warnings, serviceCreateWarnings(run)...)
+	warnings = append(append(warnings, f.end.warnings(run)...), serviceCreateWarnings(run)...)
 
 	// The requirements fold that ran ABOVE the confinement floor, audited now
 	// that the run id exists. See recordCreateFolds.

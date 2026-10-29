@@ -168,7 +168,7 @@ func (d *Driver) placeAgentPod(pod *corev1.Pod, spec runner.SandboxSpec) error {
 // linear ordered sequence in one scope so the rollback compensations stay
 // verifiably complete — hence the funlen nolint below.
 //
-//nolint:funlen // one linear ordered sequence, kept in one scope on purpose
+//nolint:funlen,gocyclo // one linear ordered sequence, kept in one scope on purpose
 func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (runner.Sandbox, error) {
 	ns, err := d.createNamespace(spec)
 	if err != nil {

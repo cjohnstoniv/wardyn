@@ -548,6 +548,8 @@ func (d *Driver) teardownRunner(ctx context.Context, runID uuid.UUID, grace *int
 // AcceptNodeRecord checks a security operator's node record against the run's own record and an
 // acceptance list sent now, and accepts it as an infrastructure fence for the run's pods (design K1
 // §3.1 (b), r9 M1(c), Codex R9-L1, R11-M1, Fable r12 M3, r13 M1, owner #7a, #8).
+//
+//nolint:gocyclo // the acceptance checks run in the order the fence needs, in one scope so each read precedes its list
 func (d *Driver) AcceptNodeRecord(ctx context.Context, ref string, rec runner.NodeRecord) error {
 	if !d.runnerMode() {
 		return runner.ErrEndUnsupported
