@@ -108,9 +108,7 @@ func TestPutExternal_ReplacedObjectCleanupHoldsTheRowLock(t *testing.T) {
 	}()
 	select {
 	case err := <-readded:
-		if err != nil {
-			t.Fatalf("delete and re-add: %v", err)
-		}
+		t.Fatalf("the delete and re-add finished while the cleanup still held the old object (err %v)", err)
 	case <-time.After(time.Second): // held behind the cleanup's lock
 	}
 	close(ext.release)
