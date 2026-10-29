@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/federation"
+	"github.com/cjohnstoniv/wardyn/internal/runner/orchestrator"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire/runnertest"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -361,6 +362,11 @@ func TestPG_WorkloadFromRunner_BoundApplyLaunchesOnTheBoundPool(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.h.srv.cfg.RunnerOrgURL = "https://org.example.com" // the env's runner is bound to this organisation
+	// Pools place runs only with a runner wired (poolsPlaceRuns), as the daemon always has; the env's runner,
+	// attached before, is registered with it as the daemon registers each runner endpoint.
+	orch := orchestrator.New()
+	orch.Add(e.h.srv.runnerEndpoint(e.runner).sub)
+	e.h.srv.cfg.Runner = orch
 	e.report(t, e.apply("team-a", "web", ""))
 
 	var got runnerwire.WorkloadStatusArgs
