@@ -545,11 +545,22 @@ func (d *Driver) teardownRunner(ctx context.Context, runID uuid.UUID, grace *int
 	return nil
 }
 
+// nodeRecordRun reads the run's evidence and then the namespace its pods run in. done is true when the record
+// is the one already accepted, before the namespace is read.
+func (d *Driver) nodeRecordRun(ctx context.Context, runID, recordID uuid.UUID) (ev *runEvidence, ns string, done bool, err error) {
+	if ev, err = d.loadEvidence(runID); err != nil {
+		return nil, "", false, err
+	}
+	if ev.Record != nil && ev.Record.ID == recordID {
+		return ev, "", true, nil
+	}
+	ns, err = d.runNamespace(ctx, runID)
+	return ev, ns, false, err
+}
+
 // AcceptNodeRecord checks a security operator's node record against the run's own record and an
 // acceptance list sent now, and accepts it as an infrastructure fence for the run's pods (design K1
 // §3.1 (b), r9 M1(c), Codex R9-L1, R11-M1, Fable r12 M3, r13 M1, owner #7a, #8).
-//
-//nolint:gocyclo // the acceptance checks run in the order the fence needs, in one scope so each read precedes its list
 func (d *Driver) AcceptNodeRecord(ctx context.Context, ref string, rec runner.NodeRecord) error {
 	if !d.runnerMode() {
 		return runner.ErrEndUnsupported
@@ -558,15 +569,8 @@ func (d *Driver) AcceptNodeRecord(ctx context.Context, ref string, rec runner.No
 	if err != nil {
 		return fmt.Errorf("k8s: node record: %w", err)
 	}
-	ev, err := d.loadEvidence(runID)
-	if err != nil {
-		return err
-	}
-	if ev.Record != nil && ev.Record.ID == rec.ID {
-		return nil
-	}
-	ns, err := d.runNamespace(ctx, runID)
-	if err != nil {
+	ev, ns, done, err := d.nodeRecordRun(ctx, runID, rec.ID)
+	if err != nil || done {
 		return err
 	}
 	// Status reads, then each acceptance list after its read returned. Any holder these lists show
