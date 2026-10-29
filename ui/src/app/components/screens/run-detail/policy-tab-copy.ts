@@ -79,6 +79,32 @@ export const CHANGE_HEADING = {
   overlay: "Set by the policy you chose for this run",
 } as const;
 
+// The field a change row is about, in the console's words: the middle column of a change group (T4-c, board R16).
+// The Summary's own section and row names are reused; a field this map lacks leaves its cell empty, never a wire
+// name. "Clipboard and files" is the board's word for the desktop directions.
+export const FIELD_LABEL: Record<string, string> = {
+  allowed_domains: "Allowed hosts",
+  denied_domains: "Blocked hosts",
+  allow_all_egress: "Network",
+  first_use_approval: "Any other host",
+  first_use_hold_seconds: "Any other host",
+  allowed_methods: "Request types",
+  min_confinement_class: "Barrier",
+  eligible_grants: "Credentials",
+  desktop: "Clipboard and files",
+  workspace_mounts: "Folders from the host",
+  workspace_repos: "Repositories",
+  ui_apps: "Apps",
+  tool_rules: "Tool rules",
+  git_push_any_branch: "Pushes",
+  azure_devops_capabilities: "Azure DevOps access",
+  auto_stop_after_sec: "Limits",
+  "resources.cpu_millis": "Limits",
+  "resources.memory_mib": "Limits",
+  "resources.pids_limit": "Limits",
+  "resources.disk_mib": "Limits",
+};
+
 export type PlainCause = Exclude<RunPolicyCause, "limits" | "unit" | "restart" | "walls">;
 
 // S-34 .. S-47: the Summary view.

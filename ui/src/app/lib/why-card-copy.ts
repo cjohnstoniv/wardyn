@@ -18,6 +18,11 @@ export const WHY_CARD = {
   RUN_POLICY: "This run's policy",
   TEAM: (name: string) => `${name} walls`,
   TEAM_FALLBACK: "Your team's walls",
+  // T4-c (board R16): the limit is the person's own walls, not an organisation's. Another reader of the run
+  // sees whose they are.
+  PERSONAL: "Your walls",
+  PERSONAL_OTHER: (owner: string) => `${owner}'s walls`,
+  CAN_CHANGE_PERSONAL: "You can, on Your account.",
   CAN_CHANGE_NOT_HERE: "Not from here. The owner can.",
   ENFORCED_AT_ATTACH: "By Wardyn, before the terminal opens",
   NO_WAY_TO_ASK: (owner: string) => `No way to ask is listed. Contact ${owner} directly.`,

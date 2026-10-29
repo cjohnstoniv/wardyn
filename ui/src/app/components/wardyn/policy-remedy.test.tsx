@@ -6,6 +6,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { OperatorProvider } from "./operator-context";
 import { PolicyRemedy, safeRequestHref } from "./policy-remedy";
 
 const ref = (over: Record<string, string>) => ({ source: "unit", name: "Contractors", ...over });
@@ -67,6 +68,43 @@ describe("PolicyRemedy", () => {
     expect(screen.getByTestId("policy-remedy")).toHaveTextContent("Set byPlatform team walls");
     rerender(<PolicyRemedy policy={{ source: "profile", layer: "profile", name: "Platform team", overridden: true }} />);
     expect(screen.getByTestId("policy-remedy")).toHaveTextContent("Set byThis run's policy");
+  });
+
+  // T4-c: a person's own walls name themselves, say the owner can change them, and have no one to ask.
+  describe("the person's own walls (layer personal)", () => {
+    const own = { source: "personal", layer: "personal", owner: "ana@example.com" };
+    const as = (principal: string) =>
+      render(
+        <OperatorProvider operator={false} principal={principal}>
+          <PolicyRemedy policy={own} copyable />
+        </OperatorProvider>,
+      );
+
+    it("reads Your walls, the owner and You can, on Your account. to the owner", () => {
+      as("ana@example.com");
+      const card = screen.getByTestId("policy-remedy");
+      expect(card).toHaveTextContent("Set byYour walls");
+      expect(card).toHaveTextContent("Ownerana@example.com");
+      expect(card).toHaveTextContent("Can changeYou can, on Your account.");
+      expect(card).not.toHaveTextContent("names no owner");
+    });
+
+    it("names whose walls they are to anyone else, who cannot change them", () => {
+      as("lena@example.com");
+      const card = screen.getByTestId("policy-remedy");
+      expect(card).toHaveTextContent("Set byana@example.com's walls");
+      expect(card).toHaveTextContent("Can changeNot from here. The owner can.");
+    });
+
+    it("beats the run-policy label even when the person overrode the run", () => {
+      render(
+        <OperatorProvider operator={false} principal="ana@example.com">
+          <PolicyRemedy policy={{ ...own, overridden: true }} canChange="ignored" />
+        </OperatorProvider>,
+      );
+      expect(screen.getByTestId("policy-remedy")).toHaveTextContent("Set byYour walls");
+      expect(screen.getByTestId("policy-remedy")).not.toHaveTextContent("ignored");
+    });
   });
 
   it("draws no Set by row without a layer: a run's policy reference and a proxy refusal cannot name the wall", () => {

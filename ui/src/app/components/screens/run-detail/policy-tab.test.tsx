@@ -336,6 +336,53 @@ describe("PolicyTab — changes grouped by cause", () => {
     });
   });
 
+  // T4-c (board R16): the walls group is headed by whose walls they are, and every change row keeps its entry,
+  // field and chip in the same three columns, in every group.
+  describe("walls: whose walls, and the aligned columns", () => {
+    const walls = view({
+      changes: [
+        change({ cause: "walls", field: "allowed_domains", removed: ["pypi.org"] }),
+        change({ cause: "source_control", field: "allowed_domains", added: ["registry.example.com"] }),
+      ],
+    });
+
+    it("the run's owner reads Your walls, any other reader {person}'s walls", async () => {
+      show(walls, { principal: "dana@acme.example" });
+      await ready();
+      expect(screen.getByRole("heading", { name: "Your walls" })).toBeInTheDocument();
+      cleanup();
+      show(walls, { principal: "admin@acme.example" });
+      await ready();
+      expect(screen.getByRole("heading", { name: "dana@acme.example's walls" })).toBeInTheDocument();
+    });
+
+    it("draws each row as entry, field name and chip, in the same columns in every group", async () => {
+      show(walls);
+      await ready();
+      const group = (heading: string) => screen.getByRole("heading", { name: heading }).parentElement!;
+      const rows = [within(group("Your walls")).getByText("pypi.org").closest("li")!, within(group("Added so the run can reach its code")).getByText("registry.example.com").closest("li")!];
+      expect(rows[0]).toHaveTextContent("pypi.orgAllowed hostsRemoved at start");
+      expect(rows[1]).toHaveTextContent("registry.example.comAllowed hostsAdded at start");
+      expect(rows[0].className).toBe(rows[1].className);
+      expect(rows[0].className).toContain("sm:grid-cols-[minmax(0,1fr)_170px_128px]");
+      expect(rows[0].children).toHaveLength(3);
+    });
+
+    it("names a field in the console's words and leaves a field it does not know blank, never a wire name", async () => {
+      show(
+        view({
+          changes: [
+            change({ cause: "walls", field: "desktop", added: ["Block copy out"] }),
+            change({ cause: "launch", field: "max_holds", added: ["3"] }),
+          ],
+        }),
+      );
+      await ready();
+      expect(screen.getByText("Block copy out").closest("li")).toHaveTextContent("Block copy outClipboard and filesAdded at start");
+      expect(screen.getByText("3").closest("li")).not.toHaveTextContent("max_holds");
+    });
+  });
+
   // The server keys a repo with a ref as `repo@ref`.
   it("keeps the Added chip on a repo that carries a ref", async () => {
     show(

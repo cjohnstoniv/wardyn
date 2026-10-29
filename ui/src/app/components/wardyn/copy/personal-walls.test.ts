@@ -4,10 +4,13 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { CHANGE_HEADING, FIELD_LABEL, POLICY_TAB } from "../../screens/run-detail/policy-tab-copy";
+import { WHY_CARD } from "../../../lib/why-card-copy";
 import { NR_TOOLS } from "./new-run/tools";
 import { YOUR_WALLS } from "./personal-walls";
 
-// T4-a and T4-b, character for character as the owner approved them on board R15 (PLAN §6.12, §6.13). Editing one is a
+// T4-a and T4-b, character for character as the owner approved them on board R15, and T4-c on board R16 (PLAN §6.12,
+// §6.13). Editing one is a
 // copy change and needs the mock's owner sign-off.
 const CANON: [id: string, actual: string, canon: string][] = [
   ["T4-a01", YOUR_WALLS.TITLE, "Your walls"],
@@ -42,6 +45,19 @@ const CANON: [id: string, actual: string, canon: string][] = [
   ["T4-b04", `${NR_TOOLS.WALLS_LEAVE_OUT_BEFORE}pypi.org${NR_TOOLS.WALLS_LEAVE_OUT_AFTER}`, "Your walls leave out pypi.org."],
   ["T4-b05", NR_TOOLS.NET_POLICY_ALWAYS_DENY, "Anything else is refused and logged."],
   ["T4-b06", NR_TOOLS.NET_POLICY_ALLOW_ALL, "Any other public host is allowed, except ones your organisation blocks."],
+  ["T4-c01", CHANGE_HEADING.wallsOwn, "Your walls"],
+  ["T4-c02", CHANGE_HEADING.wallsOther("Lena"), "Lena's walls"],
+  ["T4-c03", FIELD_LABEL.allowed_domains, "Allowed hosts"],
+  ["T4-c04", FIELD_LABEL.desktop, "Clipboard and files"],
+  ["T4-c05", POLICY_TAB.chipRemoved, "Removed at start"],
+  ["T4-c06", POLICY_TAB.chipAdded, "Added at start"],
+  ["T4-c07", CHANGE_HEADING.source_control, "Added so the run can reach its code"],
+  ["T4-c08", WHY_CARD.SET_BY, "Set by"],
+  ["T4-c09", WHY_CARD.PERSONAL, "Your walls"],
+  ["T4-c10", WHY_CARD.OWNER, "Owner"],
+  ["T4-c11", WHY_CARD.CAN_CHANGE, "Can change"],
+  ["T4-c12", WHY_CARD.CAN_CHANGE_PERSONAL, "You can, on Your account."],
+  ["T4-c13", WHY_CARD.COPY_DETAILS, "Copy details"],
 ];
 
 describe("Your walls copy", () => {
