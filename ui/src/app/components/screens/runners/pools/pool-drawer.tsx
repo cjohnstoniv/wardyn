@@ -47,6 +47,17 @@ function MachineLine({ machine }: { machine: string | undefined }) {
   );
 }
 
+function NamespaceLine({ ns }: { ns: string }) {
+  const s = POOL_DRAWER.MEMBER_NAMESPACE(ns);
+  const i = s.indexOf(ns);
+  return (
+    <>
+      {s.slice(0, i)}
+      <Mono className="break-all">{ns}</Mono>
+    </>
+  );
+}
+
 function MemberCard({ m, onOpen }: { m: RunnerPoolMemberView; onOpen?: (kind: RunnerKind, id: string) => void }) {
   const l = m.limits;
   const meta = "mt-0.5 text-xs text-muted-foreground";
@@ -79,6 +90,11 @@ function MemberCard({ m, onOpen }: { m: RunnerPoolMemberView; onOpen?: (kind: Ru
         </>
       ) : (
         <div className={meta}>{RES.LIMITS_NOT_SET}</div>
+      )}
+      {m.runner?.owner_kind === "org" && (
+        <div data-member-namespace className={meta}>
+          {m.runs_namespace ? <NamespaceLine ns={m.runs_namespace} /> : POOL_DRAWER.MEMBER_NAMESPACE_DEFAULT}
+        </div>
       )}
     </div>
   );

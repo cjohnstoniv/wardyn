@@ -424,6 +424,9 @@ export const CHANGES = {
   COL_BY: "Proposed by",
   COL_PROPOSED: "Proposed",
   COL_EXPIRES: "Expires",
+  // A held organization runner removal reads as a sentence, with who decides it under it.
+  ORG_RUNNER_REMOVE: (runner: string, pool: string) => `Remove organization runner ${runner} from ${pool}`,
+  SUPER_ADMIN_DECIDES: "A super admin decides this.",
   // By target_kind. A kind this console predates shows its raw name.
   KIND: {
     governance_unit: "Profile",

@@ -285,6 +285,8 @@ export const POOL_DRAWER = {
   MEMBER_AVAILABLE: (cpu: number, cpuTot: number, mem: number, memTot: number, disk: number, diskTot: number) =>
     `${cpu} of ${cpuTot} CPUs · ${mem} of ${memTot} GB memory · ${disk} of ${diskTot} GB disk available`,
   MEMBER_OFFLINE: "(offline: not counted)",
+  MEMBER_NAMESPACE: (ns: string) => `Runs in namespace ${ns}`,
+  MEMBER_NAMESPACE_DEFAULT: "Runs in the runner's default namespace",
   POOL: "Pool",
   REVISION: (revision: number, when: string) => `Revision ${revision} · changed ${when}`,
   READ_ONLY: (owner: string) => `Read-only. Only ${owner} can edit or delete this pool.`,
