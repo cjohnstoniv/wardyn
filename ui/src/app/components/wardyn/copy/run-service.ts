@@ -25,6 +25,14 @@ export const SERVICE_FORM = {
   FAILED_CHECKS: "failed checks in a row",
 } as const;
 
+/** The field errors under the form's inputs: the server's limits (internal/types/service.go) said before launch. Not in the mocks. */
+export const SERVICE_FORM_ERRORS = {
+  PORT_INVALID: "The service port must be from 1 to 65535.",
+  PATH_INVALID: "The health check path must start with /.",
+  EVERY_INVALID: "The health check runs every 5 to 300 seconds.",
+  FAILURES_INVALID: "A service is unhealthy after 1 to 10 failed checks.",
+} as const;
+
 export const DEFAULT_HEALTH_INTERVAL_SEC = 15;
 export const DEFAULT_HEALTH_FAILURES = 3;
 
@@ -64,7 +72,8 @@ export function agoText(iso: string, now: number): string {
 /** The Review row: Service · restarts when it fails · checks port 8080 /healthz every 15 s. */
 export function serviceReviewLine(s: RunService): string {
   const parts = ["Service", s.restart === "never" ? "doesn't restart" : "restarts when it fails"];
-  if (s.port) {
+  // No health block runs no probe, so the line says nothing about a check.
+  if (s.port && s.health) {
     const h = s.health;
     parts.push(`checks port ${s.port}${h?.path ? ` ${h.path}` : ""} every ${h?.interval_sec || DEFAULT_HEALTH_INTERVAL_SEC} s`);
   }

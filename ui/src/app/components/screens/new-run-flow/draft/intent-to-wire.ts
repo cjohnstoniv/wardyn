@@ -9,8 +9,9 @@
 // no client-side class clamp. A field it cannot carry is reported, never dropped.
 
 import type { StartWire } from "../../../../lib/schedule";
+import type { RunService } from "../../../../lib/types/runs";
 import { TEMPLATE_POLICY_FIELDS, TEMPLATE_REQUEST_FIELDS, type TemplateFieldRule } from "../../../../lib/template-fields";
-import { mayKeepRunning } from "../lenses/service-lens";
+import { mayKeepRunning, serviceWire } from "../lenses/service-lens";
 import type { RunIntent } from "./run-intent";
 
 /** The request field the intent's policy overlay travels in (`inline_policy` in the document). */
@@ -73,7 +74,7 @@ export function wireSerializer(requestRows: readonly TemplateFieldRule[], policy
       }
       if (overlay && value !== null && typeof value === "object") {
         body[POLICY_CARRIER] = policyOverlay(value as Record<string, unknown>, unsupported);
-      } else body[key] = value;
+      } else body[key] = key === "service" ? serviceWire(value as RunService) : value;
     }
     body.mode_contract = "0.9";
     if (launch) {

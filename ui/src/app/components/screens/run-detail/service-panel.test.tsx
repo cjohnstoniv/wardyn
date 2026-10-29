@@ -9,7 +9,8 @@ import { render, screen, within } from "@testing-library/react";
 import type { RunDetail, RunService, RunServiceStatus } from "../../../lib/types";
 import { SERVICE_PANEL as T } from "../../wardyn/copy/run-service";
 import { ServicePanel } from "./service-panel";
-import { weekdayClock } from "./run-ends-row";
+import { keptUntilText } from "./run-ends-row";
+import { shortDate } from "../../../lib/format";
 
 const NOW = Date.parse("2020-10-29T12:00:00Z");
 const ENDS = "2020-11-28T09:40:00Z";
@@ -32,7 +33,9 @@ describe("ServicePanel", () => {
     expect(row(T.CHECK)).toHaveTextContent("GET /healthz on port 8080 every 15 s");
     expect(row(T.HEALTH)).toHaveTextContent("Healthy · checked 40 s ago");
     expect(row(T.RESTARTS)).toHaveTextContent(/^0$/);
-    expect(row(T.LEASE)).toHaveTextContent(`Renewed while healthy · ends ${weekdayClock(ENDS)} if it stays unhealthy`);
+    expect(row(T.LEASE)).toHaveTextContent(`Renewed while healthy · ends ${keptUntilText(ENDS, NOW)} if it stays unhealthy`);
+    // A lease a month out reads as the header's Ends chip does, with its date.
+    expect(row(T.LEASE)).toHaveTextContent(shortDate(ENDS));
     expect(screen.getByText(T.FOOTNOTE)).toBeInTheDocument();
     expect(screen.queryByRole("note")).not.toBeInTheDocument();
   });
@@ -75,6 +78,11 @@ describe("ServicePanel", () => {
     expect(row(T.LEASE)).toHaveTextContent(/^No end$/);
     unmount();
     show({ restart: "on_failure" }, status({ health: "healthy" }));
+    expect(row(T.CHECK)).toHaveTextContent(/^None$/);
+  });
+
+  it("a port with no health block runs no probe, so the check reads None", () => {
+    show({ restart: "on_failure", port: 8080 }, status({ health: "healthy" }));
     expect(row(T.CHECK)).toHaveTextContent(/^None$/);
   });
 

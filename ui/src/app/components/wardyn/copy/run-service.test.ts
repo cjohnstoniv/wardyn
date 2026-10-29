@@ -49,6 +49,7 @@ describe("service canon strings", () => {
     expect(serviceReviewLine({ restart: "on_failure", port: 8080, health })).toBe("Service · restarts when it fails · checks port 8080 /healthz every 15 s");
     expect(serviceReviewLine({ restart: "never", port: 8080, health })).toBe("Service · doesn't restart · checks port 8080 /healthz every 15 s");
     expect(serviceReviewLine({ restart: "on_failure", port: 8080, health: { interval_sec: 15, failure_threshold: 3 } })).toBe("Service · restarts when it fails · checks port 8080 every 15 s");
+    expect(serviceReviewLine({ restart: "on_failure", port: 8080 })).toBe("Service · restarts when it fails");
     expect(serviceReviewLine({ restart: "on_failure" })).toBe("Service · restarts when it fails");
   });
 });
