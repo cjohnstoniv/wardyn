@@ -165,15 +165,16 @@ func TestSecretPlaceholders_LineBreaks(t *testing.T) {
 			srv.cfg.EnvSecretPlaceholders = true
 			dispatchOf(srv, run, types.RunPolicySpec{AllowedDomains: []string{placeholderHost},
 				EligibleGrants: []types.GrantSpec{hostScoped(t, envSecretGrant("BREAK_TOKEN", "break-token"))}})
+			events := audit.snapshot()
 			if rn.createCalls != 1 {
-				t.Fatalf("the sandbox was not created; events: %s", auditDump(audit.events, run.ID))
+				t.Fatalf("the sandbox was not created; events: %s", auditDump(events, run.ID))
 			}
 			if got := rn.lastSpec.SecretEnv["BREAK_TOKEN"]; strings.HasPrefix(got, secretPlaceholderPrefix) != tc.placed {
 				t.Errorf("BREAK_TOKEN = %q, placed = %v", got, tc.placed)
 			}
-			ev := findAudit(audit.events, run.ID, "run.secret_placeholder.resolve", map[bool]string{true: "success", false: "failure"}[tc.placed])
+			ev := findAudit(events, run.ID, "run.secret_placeholder.resolve", map[bool]string{true: "success", false: "failure"}[tc.placed])
 			if ev == nil {
-				t.Fatalf("no run.secret_placeholder.resolve row for placed = %v; events: %s", tc.placed, auditDump(audit.events, run.ID))
+				t.Fatalf("no run.secret_placeholder.resolve row for placed = %v; events: %s", tc.placed, auditDump(events, run.ID))
 			}
 			if !tc.placed && !strings.Contains(string(ev.Data), "more than one line") {
 				t.Errorf("fallback row %s, want the line-break reason", ev.Data)
