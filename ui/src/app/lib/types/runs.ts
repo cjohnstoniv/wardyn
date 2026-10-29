@@ -51,9 +51,9 @@ export interface UIApp {
 // not import from components/, so a home under components/ forced a second copy.
 export const CC_ORDER: ConfinementClass[] = ["CC1", "CC2", "CC3"];
 
-// The New Run choice a request was set up from (Go: client.RunShape, request field
+// The New Run choice a request was set up from (Go: types.RunShape, request field
 // `shape`). The server checks it against experience, workload and tools
-// (run_shape_conflict) and otherwise does not use it.
+// (run_shape_conflict) and stores it on the run (AgentRun.shape).
 export type RunShape = "agent_task" | "environment" | "application";
 export const RUN_SHAPES: readonly RunShape[] = ["agent_task", "environment", "application"];
 
@@ -202,6 +202,10 @@ export interface AgentRun {
   // client or before 0.9, which keeps every door's behaviour. Not `interactive`,
   // which is the legacy execution flag.
   experience?: Experience;
+  // The New Run shape the run was set up from, frozen at create: the request's own, else the one
+  // shape its experience, workload and tools fit. Absent when they fit more than one, for a run
+  // from an older client, or one created before the field.
+  shape?: RunShape;
   // The host working-directory the run's workspace is bind-mounted from. Surfaced
   // on the runs board so a workspace-directory collision is visible at a glance.
   workspace_path?: string;

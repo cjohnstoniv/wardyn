@@ -203,6 +203,9 @@ type AgentRun struct {
 	// Experience is the canonical run mode chosen at launch (0.9 New Run), frozen at create and never re-derived. Empty for a run from an older client or before 0.9;
 	// BackgroundOnly is the one predicate every interactive door reads. It is not Interactive, which is the legacy execution flag.
 	Experience RunExperience `json:"experience,omitempty"`
+	// Shape is the New Run shape the run was set up from, frozen at create: the request's own, else the one shape
+	// its experience, workload and tools fit. Empty when they fit more than one, for an older client, or before 0245.
+	Shape RunShape `json:"shape,omitempty"`
 	// WorkspacePath is the run's primary host directory, denormalized so the control plane can warn (never block) a second run on it.
 	WorkspacePath string `json:"workspace_path,omitempty"`
 	// WorkspaceID marks a governed scan run: the driver runs wardyn-scan instead of the agent, trusted (not sandbox input) to persist the profile.

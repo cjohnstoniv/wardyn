@@ -4085,6 +4085,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0240` (`0240_run_service`) adds `agent_runs.service` and `agent_runs.service_status` (`0001`'s table): a service run's frozen spec and its last health. NULL on every existing row; no grant changes.
 - `0241` (`0241_workloads`) creates `workloads` (a named run request Wardyn keeps running, and the run it started) and `workload_bindings` (a Kubernetes namespace on a runner pool bound to a service identity); a split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on both.
 - `0242` (`0242_runner_pool_member_namespace`) adds `runner_pool_members.runs_namespace` (`0152`'s table): the Kubernetes namespace an organization runner serves a pool in, empty (the runner's default) on every existing row; no grant changes.
+- `0245` (`0245_run_shape`) adds `agent_runs.shape` (`0001`'s table): the New Run shape a run was set up from, empty on every existing row; no grant changes.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.

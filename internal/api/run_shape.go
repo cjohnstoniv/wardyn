@@ -51,6 +51,28 @@ func runShapeRefusal(req createRunRequest) *runRefusal {
 	return nil
 }
 
+// storedRunShape is the shape the run row keeps: the request's own, else the one
+// shape runShapeRefusal lets this request carry. A request that fits more than
+// one (an interactive run that includes a harness) or none (an older client's,
+// with no experience) keeps "".
+func storedRunShape(req createRunRequest) client.RunShape {
+	if req.Shape != "" {
+		return req.Shape
+	}
+	var fit client.RunShape
+	for _, shape := range []client.RunShape{client.RunShapeAgentTask, client.RunShapeEnvironment, client.RunShapeApplication} {
+		req.Shape = shape
+		if runShapeRefusal(req) != nil {
+			continue
+		}
+		if fit != "" {
+			return ""
+		}
+		fit = shape
+	}
+	return fit
+}
+
 // applicationServer is the interactive application (#1994): an Environment run
 // that starts a command and declares the app it serves, opened through the web
 // app gateway. It is the same run the environment shape accepts; the shape only
