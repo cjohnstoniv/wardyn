@@ -154,6 +154,9 @@ if wait_state probe '"restarts":1' 8; then
 else
     bad "failing probe did not restart: $(state probe)"
 fi
+# The relaunch waits for its first passing probe like the first launch: starting, no reason.
+if wait_state probe '"health":"starting","reason":"","restarts":1' 4; then ok "a relaunch with a check is starting again, not restarting"
+else bad "relaunch state: $(state probe)"; fi
 stop "$sup"
 
 # 7) passing probes: TCP connect, and HTTP 2xx on the health path.

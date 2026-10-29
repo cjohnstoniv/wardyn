@@ -8,6 +8,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
@@ -142,7 +143,7 @@ func serviceRenewsLater(run types.AgentRun, now time.Time) bool {
 // warning window before the half-life, and every renewal would warn.
 // The write is the PATCH route's compare-and-set, so a person's edit, a re-clamp or a lost
 // race leaves the end alone and writes no audit row, as does an owner whose authority to extend
-// is refused.
+// is refused or whose service identity has lost its authority.
 func (s *Server) renewServiceLease(ctx context.Context, leaser store.RunLeaser, run types.AgentRun, now time.Time) (types.AgentRun, bool) {
 	// The boundary can only shrink the unit, so a run declined without it is declined with it:
 	// the boundary is read only for a run that is about to renew.
@@ -159,6 +160,14 @@ func (s *Server) renewServiceLease(ctx context.Context, leaser store.RunLeaser, 
 	}
 	renewal, ok := planServiceRenewal(run, boundarySec, now)
 	if !ok {
+		return run, false
+	}
+	// A service identity that is retired or suspended, or whose sponsor is no longer live, has lost
+	// the authority that started the run: the rule that ends its tokens and a binding's launch
+	// (serviceRunLive). A refusal, or a check that cannot be answered, renews nothing and audits nothing.
+	if live, err := s.serviceRunLive(ctx, run); err != nil || !live {
+		slog.WarnContext(ctx, "wardynd: a service's lease is not renewed: its service identity or sponsor is not live",
+			slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		return run, false
 	}
 	// A later end keeps a sandbox and its credentials alive, so a renewal needs the authority a
@@ -198,4 +207,19 @@ func (s *Server) renewServiceLease(ctx context.Context, leaser store.RunLeaser, 
 		"success", mustJSON(data)))
 	run.EndsAt, run.EndTightenedAt = &renewal.target, nil
 	return run, true
+}
+
+// serviceRunLive reports whether the service identity that created run still carries the authority it
+// launched with: the rules that end its tokens (queueOwnerLive) as of the run's creation. A run
+// of a person is live.
+func (s *Server) serviceRunLive(ctx context.Context, run types.AgentRun) (bool, error) {
+	name, ok := strings.CutPrefix(run.CreatedBy, types.ServicePrincipalPrefix)
+	if !ok {
+		return true, nil
+	}
+	si, err := s.serviceRecord(ctx, name)
+	if err != nil {
+		return false, err
+	}
+	return s.queueOwnerLive(ctx, serviceAuthority(si, si.Sponsor), run.CreatedAt)
 }

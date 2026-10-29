@@ -43,6 +43,8 @@ export function ServicePanel({ run, now = Date.now() }: { run: RunDetail; now?: 
   const health = SERVICE_HEALTH[st?.health ?? "starting"] ?? SERVICE_HEALTH.unknown;
   const reason = reasonOf(s, st);
   const restarts = st?.restarts ?? 0;
+  // The server renews a service's lease only under a lifetime cap (planServiceRenewal), so an uncapped one ends at its lease.
+  const uncapped = !!run.ends_at && !run.lifetime_cap_at;
   return (
     <div data-testid="service-panel">
       <WidgetCard title={T.TITLE} Icon={HeartPulse} bodyClassName="space-y-3 px-3 py-2.5 text-body">
@@ -61,7 +63,7 @@ export function ServicePanel({ run, now = Date.now() }: { run: RunDetail; now?: 
           <dt className="text-muted-foreground">{T.RESTARTS}</dt>
           <dd>{st?.last_exit_code !== undefined ? T.RESTARTS_WITH_EXIT(restarts, st.last_exit_code) : restarts}</dd>
           <dt className="text-muted-foreground">{T.LEASE}</dt>
-          <dd>{run.ends_at ? T.LEASE_RENEWED(keptUntilText(run.ends_at, now)) : T.LEASE_NONE}</dd>
+          <dd>{!run.ends_at ? T.LEASE_NONE : uncapped ? keptUntilText(run.ends_at, now) : T.LEASE_RENEWED(keptUntilText(run.ends_at, now))}</dd>
         </dl>
         {reason && (
           <p
@@ -72,6 +74,11 @@ export function ServicePanel({ run, now = Date.now() }: { run: RunDetail; now?: 
             )}
           >
             {reason.text}
+          </p>
+        )}
+        {uncapped && (
+          <p role="note" className="rounded-lg border border-border bg-muted/40 px-2.5 py-2 text-foreground">
+            {T.NO_CAP}
           </p>
         )}
         <p className="text-xs text-muted-foreground">{T.FOOTNOTE}</p>

@@ -96,3 +96,64 @@ func TestPG_ARenewalAfterAReclampUsesTheTightenedUnit(t *testing.T) {
 		t.Errorf("max_end_ahead_sec = %d, want the re-clamped 1800", got.RunLimits.MaxEndAheadSec)
 	}
 }
+
+// A service the identity of which was retired, or whose sponsor was revoked (RevokeSub: a session-only cut
+// leaves a service working by design), is not renewed; the same run with its authority intact is.
+func TestPG_AServiceWithoutItsAuthorityIsNotRenewed(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		lose    func(t *testing.T, e svcEnv)
+		renewed bool
+	}{
+		{name: "authority intact", renewed: true},
+		{name: "retired identity", lose: func(t *testing.T, e svcEnv) {
+			if _, err := e.st.RetireServiceIdentity(context.Background(), svcName, "sec-sub"); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "revoked sponsor", lose: func(t *testing.T, e svcEnv) {
+			if err := e.rev.RevokeSub(context.Background(), svcSponsor); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			e := newSvcEnv(t)
+			e.mustCreate(t, svcName, svcSponsor)
+			ageFreshSponsorships(t, e.pool)
+			clock := time.Now().UTC().Add(-time.Second).Truncate(time.Microsecond)
+			e.h.srv.cfg.Runner = &leaseRunner{finalizeTailRunner: &finalizeTailRunner{fakeRunner: &fakeRunner{}}}
+			e.h.srv.cfg.Now = func() time.Time { return clock }
+			end, capAt := clock.Add(30*time.Minute), clock.Add(24*time.Hour)
+			run, err := e.st.CreateRun(ctx, types.AgentRun{
+				ID: uuid.New(), CreatedAt: clock, UpdatedAt: clock,
+				CreatedBy: svcPrin, HumanAuthor: svcSponsor, Agent: "claude-code", Task: "service lease probe",
+				ConfinementClass: types.CC2, State: types.RunRunning, RunnerTarget: "docker",
+				SandboxRef: "wardyn-agent-" + uuid.NewString(), Experience: types.ExperienceBackground,
+				EndsAt: &end, RunLimits: types.RunLimits{MaxEndAheadSec: 7200},
+				LifetimeCapAt: &capAt, LifetimeCapSource: types.LimitSourcePool,
+				Service: &types.RunService{Restart: types.ServiceRestartOnFailure},
+			})
+			if err != nil {
+				t.Fatalf("create run: %v", err)
+			}
+			if ok, err := e.st.SetRunServiceStatus(ctx, run.ID, types.RunServiceStatus{Health: types.ServiceHealthHealthy, ObservedAt: clock}); err != nil || !ok {
+				t.Fatalf("set service status: applied=%v err=%v", ok, err)
+			}
+			if tc.lose != nil {
+				tc.lose(t, e)
+			}
+			if err := e.h.srv.sweepRunLeases(ctx); err != nil {
+				t.Fatalf("sweep: %v", err)
+			}
+			want := end
+			if tc.renewed {
+				want = clock.Add(2 * time.Hour)
+			}
+			if got := pgRun(t, e.st, run.ID); got.EndsAt == nil || !got.EndsAt.Equal(want) {
+				t.Fatalf("ends_at = %v, want %v", got.EndsAt, want)
+			}
+		})
+	}
+}
