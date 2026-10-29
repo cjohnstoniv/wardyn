@@ -1,3 +1,4 @@
 # Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the measured prose words, so growth fails.
 # docs/SERVICES.md 1599 measured (rc.8): the service model, the walls recipe, renewal while healthy, health trust, the re-wrap note and the limits, resolved against the code on the wave head.
-docs/SERVICES.md=1599 share=14
+# docs/SERVICES.md 1607 measured (rc.8 review): the offline-runner line says the 15 minutes run from the last stored reading.
+docs/SERVICES.md=1607 share=14

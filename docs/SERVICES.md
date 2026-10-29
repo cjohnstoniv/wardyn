@@ -108,7 +108,7 @@ The supervisor writes `/home/agent/.wardyn/service.json`, and wardynd reads it e
 - Whatever runs in the sandbox can write that file. A workload that writes `healthy` is believed.
 - So health decides renewal and nothing else. It cannot pass the cap, and the owner could extend the run by hand anyway.
 - The reading never counts as activity, so it does not keep a run clear of an idle pause.
-- Every audit row from this path carries `source: sandbox`.
+- Every health and restart row from this path carries `source: sandbox`.
 
 For an admin, the cap is the real limit on a service. Set the pool's `background.lifetime.max_sec` to what you accept for a service that lies about its health.
 
@@ -138,6 +138,6 @@ At most one `run.service.health` and one `run.service.restart` row are written p
 - The health check reaches 127.0.0.1 inside the sandbox. It cannot check another host or port.
 - One command per service. A command that backgrounds its own work is stopped as one process group.
 - The restart wait grows to 5 minutes and never ends, so a command that always fails keeps restarting until its lease ends.
-- A runner that goes offline leaves the supervisor running. wardynd sees Health unknown, then stops renewing after 15 minutes.
+- A runner that goes offline leaves the supervisor running. Its last reading stays; once that is 15 minutes old, Health reads unknown and renewal stops.
 - A paused or lost service is not renewed.
 - Nothing in Wardyn renews a lease except a healthy service's own sweep and the owner's `PATCH`.
