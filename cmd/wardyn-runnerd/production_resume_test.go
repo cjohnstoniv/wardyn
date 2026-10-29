@@ -450,14 +450,15 @@ func TestMacOSCapsFallbackSendsLastCapsWithTheNewMacOSVM(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.kick <- struct{}{}
+	// A recompute that saw some other change before the manifest was written sends the last acked caps
+	// with the base as it was, so the caps of this change are the first that carry the new base.
 	var got runnerwire.Caps
-	select {
-	case got = <-capsSeen:
-	case <-time.After(5 * time.Second):
-		t.Fatal("no caps were sent for a macOS VM change while Docker is down")
-	}
-	if got.MacOSVM == nil || got.MacOSVM.Base.GuestOS != "macOS 26.3" {
-		t.Fatalf("fallback caps: %+v", got.MacOSVM)
+	for deadline := time.After(5 * time.Second); got.MacOSVM == nil || got.MacOSVM.Base.GuestOS != "macOS 26.3"; {
+		select {
+		case got = <-capsSeen:
+		case <-deadline:
+			t.Fatalf("no caps carried the macOS VM change while Docker is down; last: %+v", got.MacOSVM)
+		}
 	}
 	got.MacOSVM, first.MacOSVM = nil, nil
 	a, _ := runnerwire.Marshal(first)
