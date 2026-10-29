@@ -22,9 +22,10 @@ import (
 // admin (securityOps), and held for a second human under WARDYN_GOVERNANCE_SECOND_HUMAN. Both a set
 // and a clear are held, with no narrowing exemption: a clear widens, and nothing proves a replacement
 // only narrows. Adding a remote-hosted runner that another live pool holds under a policy is held too
-// (it puts that runner in front of a wider audience), and a pool with a policy is not deleted until the
-// policy is cleared. A held change applies in the decision transaction and goes stale when the policy
-// or the pool's remote-hosted runners it reviewed have moved.
+// (it puts that runner in front of a wider audience), so is taking a remote-hosted or an organization
+// runner out of a pool that carries a policy, and a pool with a policy is not deleted until the policy
+// is cleared. A held change applies in the decision transaction and goes stale when the policy or the
+// pool's remote-hosted and organization runners it reviewed have moved.
 
 const govKindRunnerPoolUsePolicy = types.GovernanceTargetRunnerPoolUsePolicy
 
@@ -36,20 +37,27 @@ type runnerPoolUsePolicyRequest struct {
 }
 
 // runnerPoolHeldChange is a held change's payload: a use policy set (Subjects), a clear (nothing), a
-// remote-hosted runner add (Executor, its id) or its removal (Executor and Detach).
+// remote-hosted runner add (Executor, its id) or its removal (Executor and Detach), or an organization
+// runner's removal (RunnerID, its id, and Detach).
 type runnerPoolHeldChange struct {
 	Subjects []types.RunnerPoolSubject `json:"subjects,omitempty"`
 	Executor string                    `json:"remote_runner_id,omitempty"`
+	RunnerID string                    `json:"runner_id,omitempty"`
 	Detach   bool                      `json:"detach,omitempty"`
 }
 
 // runnerPoolUsePolicyState is the target of a change as it stands, hashed by proposal and approval
-// alike: whether a policy exists, its subjects and the remote-hosted runners, so a change goes stale when who may
-// use the pool or what it holds moved, and a member adding their own runner elsewhere cannot make one
-// stale. Presence is its own field: no policy opens the pool, while a stored empty list (what a leaver
-// purge leaves) permits nobody, and both read as no subjects.
-func runnerPoolUsePolicyState(present bool, subjects []types.RunnerPoolSubject, executors []string) any {
-	return map[string]any{"policy_present": present, "subjects": subjects, "remote_runner_ids": nonNilStrings(executors)}
+// alike: whether a policy exists, its subjects, the remote-hosted runners and the organization runners,
+// so a change goes stale when who may use the pool or what it holds moved, and a member adding their own
+// runner elsewhere cannot make one stale. Presence is its own field: no policy opens the pool, while a stored empty list (what a leaver
+// purge leaves) permits nobody, and both read as no subjects. The organization runners are in the hash
+// only when there are some, so a change held on a pool without any keeps the hash it was proposed on.
+func runnerPoolUsePolicyState(present bool, subjects []types.RunnerPoolSubject, executors, orgRunners []string) any {
+	state := map[string]any{"policy_present": present, "subjects": subjects, "remote_runner_ids": nonNilStrings(executors)}
+	if len(orgRunners) > 0 {
+		state["runner_ids"] = orgRunners
+	}
+	return state
 }
 
 // canonicalPoolSubjects folds each subject to the form the caller's identities are matched in, and
@@ -188,8 +196,8 @@ func (s *Server) writeUsePolicy(w http.ResponseWriter, r *http.Request, mode gov
 			writePoolRefusal(w, runnerpool.Refusal{Reason: runnerpool.ReasonStale, Name: row.Pool.Name})
 			return
 		}
-		beforeState := runnerPoolUsePolicyState(row.Policy != nil, before, row.ExecutorIDs)
-		afterState := runnerPoolUsePolicyState(subjects != nil, after, row.ExecutorIDs)
+		beforeState := runnerPoolUsePolicyState(row.Policy != nil, before, row.ExecutorIDs, row.OrgRunnerIDs)
+		afterState := runnerPoolUsePolicyState(subjects != nil, after, row.ExecutorIDs, row.OrgRunnerIDs)
 		s.proposeGovernanceChange(w, r, govProposal{
 			kind: govKindRunnerPoolUsePolicy, op: op, key: poolID.String(), payload: runnerPoolHeldChange{Subjects: subjects},
 			before: beforeState, after: afterState, changed: changedPaths(beforeState, afterState), baseState: beforeState,
@@ -248,10 +256,26 @@ func (s *Server) holdExecutorChange(w http.ResponseWriter, r *http.Request, row 
 	if detach {
 		executors = slices.DeleteFunc(slices.Clone(row.ExecutorIDs), func(id string) bool { return id == executor })
 	}
-	before := runnerPoolUsePolicyState(row.Policy != nil, subjects, row.ExecutorIDs)
-	after := runnerPoolUsePolicyState(row.Policy != nil, subjects, executors)
+	before := runnerPoolUsePolicyState(row.Policy != nil, subjects, row.ExecutorIDs, row.OrgRunnerIDs)
+	after := runnerPoolUsePolicyState(row.Policy != nil, subjects, executors, row.OrgRunnerIDs)
 	s.proposeGovernanceChange(w, r, govProposal{
 		kind: govKindRunnerPoolUsePolicy, op: opExecutorAttach, key: row.Pool.ID.String(), payload: runnerPoolHeldChange{Executor: executor, Detach: detach},
+		before: before, after: after, changed: changedPaths(before, after), baseState: before,
+	})
+}
+
+// holdOrgRunnerDetach stores an organization runner's removal as a pending change on the pool, under
+// the same kind and the same state hash as its use policy.
+func (s *Server) holdOrgRunnerDetach(w http.ResponseWriter, r *http.Request, row store.RunnerPoolCatalogueRow, runnerID string) {
+	subjects := []types.RunnerPoolSubject{}
+	if row.Policy != nil {
+		subjects = row.Policy.Subjects
+	}
+	orgRunners := slices.DeleteFunc(slices.Clone(row.OrgRunnerIDs), func(id string) bool { return id == runnerID })
+	before := runnerPoolUsePolicyState(row.Policy != nil, subjects, row.ExecutorIDs, row.OrgRunnerIDs)
+	after := runnerPoolUsePolicyState(row.Policy != nil, subjects, row.ExecutorIDs, orgRunners)
+	s.proposeGovernanceChange(w, r, govProposal{
+		kind: govKindRunnerPoolUsePolicy, op: opExecutorAttach, key: row.Pool.ID.String(), payload: runnerPoolHeldChange{RunnerID: runnerID, Detach: true},
 		before: before, after: after, changed: changedPaths(before, after), baseState: before,
 	})
 }
@@ -260,11 +284,11 @@ func (s *Server) holdExecutorChange(w http.ResponseWriter, r *http.Request, row 
 // ops, so it is a "set" and the payload (a runner, no Subjects) tells it from a policy set.
 const opExecutorAttach = "set"
 
-// applyRunnerPoolUsePolicyChange applies a held use policy set or clear, or remote-hosted runner add or
-// removal, inside the decision transaction: the target lock (and a runner add or removal's lock on
-// that runner, LockRemoteRunnerPoolMembershipQ), then the pool's policy and remote-hosted runners read
-// as they now stand and compared with what the proposal reviewed, and the write through the pool row
-// lock.
+// applyRunnerPoolUsePolicyChange applies a held use policy set or clear, remote-hosted runner add or
+// removal, or organization runner removal, inside the decision transaction: the target lock (and a
+// remote-hosted runner add or removal's lock on that runner, LockRemoteRunnerPoolMembershipQ), then the
+// pool's policy, remote-hosted runners and organization runners read as they now stand and compared
+// with what the proposal reviewed, and the write through the pool row lock.
 func applyRunnerPoolUsePolicyChange(s *Server, r *http.Request, q store.Querier, ch types.GovernanceChange) (govApplied, error) {
 	ctx := r.Context()
 	poolID, err := uuid.Parse(ch.TargetKey)
@@ -302,8 +326,15 @@ func applyRunnerPoolUsePolicyChange(s *Server, r *http.Request, q store.Querier,
 	if err != nil {
 		return govApplied{}, err
 	}
-	if computeETag(runnerPoolUsePolicyState(present, before, executors)) != ch.BaseHash {
+	orgRunners, err := store.OrgRunnerPoolRunnerIDsQ(ctx, q, poolID)
+	if err != nil {
+		return govApplied{}, err
+	}
+	if computeETag(runnerPoolUsePolicyState(present, before, executors, orgRunners)) != ch.BaseHash {
 		return govApplied{}, store.ErrGovernanceChangeStale
+	}
+	if held.RunnerID != "" {
+		return applyOrgRunnerDetach(ctx, q, poolID, held)
 	}
 	if held.Executor != "" {
 		if held.Detach {
@@ -352,4 +383,19 @@ func applyExecutorDetach(ctx context.Context, q store.Querier, poolID uuid.UUID,
 	}
 	return govApplied{action: auditPoolRunnerRemove, target: poolID.String(), data: map[string]any{
 		"runner_kind": types.RunnerKindRemoteHosted, "remote_runner_id": executor, "scope": types.RunnerPoolOrganization, "revision": rev}}, nil
+}
+
+func applyOrgRunnerDetach(ctx context.Context, q store.Querier, poolID uuid.UUID, held runnerPoolHeldChange) (govApplied, error) {
+	runnerID, err := uuid.Parse(held.RunnerID)
+	if err != nil || !held.Detach {
+		return govApplied{}, errors.New("a held organization runner change is a removal naming a runner")
+	}
+	_, rev, err := store.RemoveOrgRunnerFromPoolQ(ctx, q, poolID, runnerID)
+	if errors.Is(err, store.ErrNotFound) {
+		return govApplied{}, store.ErrGovernanceChangeStale
+	}
+	if err != nil {
+		return govApplied{}, err
+	}
+	return govApplied{action: auditPoolRunnerRemove, target: poolID.String(), data: orgRunnerMemberAudit(types.RunnerPool{Scope: types.RunnerPoolOrganization}, runnerID.String(), rev)}, nil
 }

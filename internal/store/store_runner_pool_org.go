@@ -18,7 +18,7 @@ import (
 // user pool (AddOwnRunnerToPool compares a non-empty owner).
 type OrgRunnerPoolStore interface {
 	AddOrgRunnerToPool(ctx context.Context, id, runnerID uuid.UUID, orgURLSHA256 string) (m types.RunnerPoolMember, added bool, revision int64, err error)
-	RemoveOrgRunnerFromPool(ctx context.Context, id, runnerID uuid.UUID) (removed bool, revision int64, err error)
+	RemoveOrgRunnerFromPool(ctx context.Context, id, runnerID uuid.UUID, refuseGoverned bool) (removed bool, revision int64, err error)
 }
 
 var _ OrgRunnerPoolStore = PG{}
@@ -83,11 +83,51 @@ func (s PG) AddOrgRunnerToPool(ctx context.Context, id, runnerID uuid.UUID, orgU
 }
 
 // RemoveOrgRunnerFromPool removes an org runner (in any state, so a revoked one can be tidied away) from
-// a pool; removed is false when it was not a member.
-func (s PG) RemoveOrgRunnerFromPool(ctx context.Context, id, runnerID uuid.UUID) (bool, int64, error) {
-	return s.removeMember(ctx, id, `
+// a pool; removed is false when it was not a member. The caller decided on a catalogue read taken before
+// the locks whether the removal is held; refuseGoverned says it decided "not held", and
+// ErrRunnerPoolGoverned answers a use policy that was approved in between.
+func (s PG) RemoveOrgRunnerFromPool(ctx context.Context, id, runnerID uuid.UUID, refuseGoverned bool) (removed bool, rev int64, err error) {
+	err = s.inTx(ctx, func(q Querier) error {
+		if err := LockGovernanceTarget(ctx, q, types.GovernanceTargetRunnerPoolUsePolicy, id.String()); err != nil {
+			return err
+		}
+		if refuseGoverned {
+			if err := LockLivePoolQ(ctx, q, id); err != nil {
+				return err
+			}
+			var governed bool
+			if err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runner_pool_use_policies WHERE pool_id = $1)
+				AND EXISTS (SELECT 1 FROM runner_pool_members m JOIN runners r ON r.id = m.runner_id
+				            WHERE m.pool_id = $1 AND m.runner_id = $2 AND r.owner_kind = 'org')`, id, runnerID).Scan(&governed); err != nil {
+				return err
+			}
+			if governed {
+				return ErrRunnerPoolGoverned
+			}
+		}
+		removed, rev, err = RemoveOrgRunnerFromPoolQ(ctx, q, id, runnerID)
+		return err
+	})
+	return removed, rev, err
+}
+
+// RemoveOrgRunnerFromPoolQ is RemoveOrgRunnerFromPool's statement on q (a pgx.Tx), which a held removal
+// applies through inside the decision transaction.
+func RemoveOrgRunnerFromPoolQ(ctx context.Context, q Querier, id, runnerID uuid.UUID) (bool, int64, error) {
+	return removeMemberQ(ctx, q, id, `
 		DELETE FROM runner_pool_members m USING runners r
 		WHERE m.pool_id = $1 AND m.runner_id = $2 AND r.id = m.runner_id AND r.owner_kind = 'org'`, runnerID)
+}
+
+// OrgRunnerPoolRunnerIDsQ lists a pool's organization runners' ids, sorted as text, never nil.
+func OrgRunnerPoolRunnerIDsQ(ctx context.Context, q Querier, id uuid.UUID) ([]string, error) {
+	return collect(ctx, q, "list", "runner pool organization runners", `
+		SELECT m.runner_id::text FROM runner_pool_members m JOIN runners r ON r.id = m.runner_id
+		WHERE m.pool_id = $1 AND r.owner_kind = 'org' ORDER BY m.runner_id::text`,
+		[]any{id}, func(r pgx.Row) (string, error) {
+			var v string
+			return v, r.Scan(&v)
+		})
 }
 
 // ListOrgRunnerPoolRunners is an organization pool's organization runners, newest first, in any state, so

@@ -121,7 +121,8 @@ docs/operations/ownership-and-offboarding.md=2414 share=35
 # docs/operations/governance-writes.md 3529 adds 51 over 3478, measured (0.10 unit admins): a unit admin's widening is always held; a security admin's grant follows the switch.
 # docs/operations/governance-writes.md 3564 = ours 3529 + theirs 3513 - base 3478 at the 0.10 UNIT-ADMIN merge of RESTRICT-PIN 35c385de1.
 # docs/operations/governance-writes.md 3572 adds 8 over 3564, measured (#2967 DESK-LOCKS row 5): the recording level row in the covered-writes table.
-docs/operations/governance-writes.md=3572 share=35
+# docs/operations/governance-writes.md 3574 adds 2 over 3572, measured: the held-removal row covers an organization runner.
+docs/operations/governance-writes.md=3574 share=35
 # 0.9.4 L8: docs/operations/member-runs.md 1054 adds 10 over 1044: ssh_key delivery claims bounded.
 # docs/operations/member-runs.md=1054 share=35
 # 0.10.0-rc.6: member-runs 1086 adds 32 over 1054, measured: a no-policy member run's default is the ceiling.

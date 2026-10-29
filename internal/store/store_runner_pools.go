@@ -86,12 +86,13 @@ const (
 
 // RunnerPoolCatalogueRow is one live pool with what the API needs to decide who may use it and
 // whether it can take a run right now: its use policy, its remote-hosted members (ExecutorIDs, their
-// ids), how many of the caller's own claimed runners it holds, and which of the caller's own runners
-// (in any state) are its members.
+// ids), its organization runners (OrgRunnerIDs, their ids as text, sorted), how many of the caller's own
+// claimed runners it holds, and which of the caller's own runners (in any state) are its members.
 type RunnerPoolCatalogueRow struct {
 	Pool         types.RunnerPool
 	Policy       *types.RunnerPoolUsePolicy
 	ExecutorIDs  []string
+	OrgRunnerIDs []string
 	OwnRunners   int
 	OwnRunnerIDs []uuid.UUID
 }
@@ -199,6 +200,8 @@ func (s PG) ListRunnerPoolCatalogue(ctx context.Context, owner string, all bool)
 		       u.subjects, u.revision, u.updated_by, u.updated_at,
 		       COALESCE((SELECT array_agg(m.remote_runner_id ORDER BY m.remote_runner_id) FROM runner_pool_members m
 		                 WHERE m.pool_id = p.id AND m.remote_runner_id IS NOT NULL), '{}'),
+		       COALESCE((SELECT array_agg(m.runner_id::text ORDER BY m.runner_id::text) FROM runner_pool_members m JOIN runners r ON r.id = m.runner_id
+		                 WHERE m.pool_id = p.id AND r.owner_kind = 'org'), '{}'),
 		       (SELECT count(*) FROM runner_pool_members m JOIN runners r ON r.id = m.runner_id
 		         WHERE m.pool_id = p.id AND r.owner = $1 AND r.state = 'claimed'),
 		       COALESCE((SELECT array_agg(m.runner_id ORDER BY m.runner_id) FROM runner_pool_members m JOIN runners r ON r.id = m.runner_id
@@ -218,7 +221,7 @@ func (s PG) ListRunnerPoolCatalogue(ctx context.Context, owner string, all bool)
 		var polBy *string
 		var polAt *time.Time
 		if err := row.Scan(&r.Pool.ID, &r.Pool.Name, &scope, &r.Pool.Owner, &state, &r.Pool.Revision, &limits, &r.Pool.CreatedAt, &r.Pool.UpdatedAt, &recording,
-			&subjects, &polRev, &polBy, &polAt, &r.ExecutorIDs, &r.OwnRunners, &r.OwnRunnerIDs); err != nil {
+			&subjects, &polRev, &polBy, &polAt, &r.ExecutorIDs, &r.OrgRunnerIDs, &r.OwnRunners, &r.OwnRunnerIDs); err != nil {
 			return r, fmt.Errorf("store: scan runner pool catalogue: %w", err)
 		}
 		r.Pool.Scope, r.Pool.State, r.Pool.Recording = types.RunnerPoolScope(scope), types.RunnerPoolState(state), types.RecordingRequirement(recording)

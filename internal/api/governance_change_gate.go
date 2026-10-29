@@ -212,7 +212,7 @@ var governanceChangeKinds = map[string]govKind{
 }
 
 // forChange is the kind as it decides one held change. A remote-hosted runner add to or removal from an
-// organization pool is held under the use-policy kind but written on the operatorOnly tier, so only a
+// organization pool, or an organization runner's removal from one, is held under the use-policy kind but written on the operatorOnly tier, so only a
 // super admin decides it; a payload that does not decode is given the stricter tier. So is a profile
 // change whose payload names a mount's host path (a kept mount is held as the sentinel, so only a
 // change that adds a mount, changes a host path or makes a kept mount writable names one).
@@ -223,7 +223,7 @@ func (k govKind) forChange(ch types.GovernanceChange) govKind {
 	switch ch.TargetKind {
 	case govKindRunnerPoolUsePolicy:
 		var held runnerPoolHeldChange
-		if decodeHeldPayload(ch.Payload, &held) != nil || held.Executor != "" {
+		if decodeHeldPayload(ch.Payload, &held) != nil || held.Executor != "" || held.RunnerID != "" {
 			k.approver = operatorApprover
 		}
 	case govKindUnit:
