@@ -8,7 +8,7 @@
 // and the facts about it as plain, visible text (nothing hides in a tooltip).
 import * as React from "react";
 import { Link } from "react-router-dom";
-import { ChevronDown, Laptop, MoreHorizontal, Pencil, RotateCcw, ShieldAlert, Skull, TerminalSquare } from "lucide-react";
+import { ChevronDown, Laptop, Layers, MoreHorizontal, Pencil, RotateCcw, ShieldAlert, Skull, TerminalSquare } from "lucide-react";
 import type { RunDetail } from "../../lib/types";
 import { runHeadline } from "../../lib/types";
 import { formatDuration, shortTime } from "../../lib/format";
@@ -20,6 +20,8 @@ import { RUN, RUN_COCKPIT } from "../wardyn/copy";
 import { waitingAdoConsent, waitingReauth } from "../../lib/reauth-waiting-copy";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { RUN_HEADER } from "../wardyn/copy/run-header";
+import { WORKLOAD_CHIP } from "../wardyn/copy/workloads";
+import { useConsoleMode } from "../wardyn/console-view";
 import { serviceBadge } from "../wardyn/copy/run-service";
 import { KillRunDialog } from "../wardyn/kill-run-dialog";
 import { RunEndsControls } from "./run-detail/run-ends-row";
@@ -99,6 +101,7 @@ export function SummaryHeader({
   canKillAgain,
   onClone,
   onRename,
+  workload,
 }: {
   run: RunDetail;
   terminal: boolean;
@@ -145,7 +148,10 @@ export function SummaryHeader({
   // absent for anyone else — same optional-prop shape as onClone, so the
   // header stays renderable with no parent that owns the write.
   onRename?: (title: string) => void;
+  // The workload whose current run this is (the run page asks the list once): a neutral chip that opens its drawer.
+  workload?: { name: string; owner: string };
 }) {
+  const view = useConsoleMode();
   const [confirmId, setConfirmId] = React.useState<string | null>(null);
   // Rename's edit mode: the form renders as its own full-width row under the header.
   const [renaming, setRenaming] = React.useState(false);
@@ -305,6 +311,17 @@ export function SummaryHeader({
         )}
         {run.model_provider_id && <RunProviderChip run={run} />}
         <ConfinementChip value={run.confinement_class} />
+        {workload && (
+          <Link
+            to={`${view === "admin" ? "/admin" : ""}/workloads?${new URLSearchParams({ workload: workload.name, owner: workload.owner })}`}
+            className="rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          >
+            <Chip tone="neutral" className="gap-1">
+              <Layers className="size-3" aria-hidden />
+              {WORKLOAD_CHIP(workload.name)}
+            </Chip>
+          </Link>
+        )}
         {/* 0.9 (M-RN-3 RS3): where a LOCAL run is. Neutral, and absent for a remote run, whose default
             place needs no chip (RN-Q14), so an ordinary run's header is what it was. */}
         {run.placement === "local" && (
