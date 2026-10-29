@@ -1,6 +1,6 @@
 {{/*
 runnerd's RBAC. scripts/test-helm-runnerd.sh holds both halves to the control-plane chart's
-(deploy/helm/wardyn/templates/rbac.yaml): the runs-namespace Role is that chart's k8s-runner Role, rule
+(deploy/helm/wardyn/templates/rbac.yaml): each runs-namespace Role is that chart's k8s-runner Role, rule
 for rule, plus the one `pods: patch` rule below; the ClusterRole is that chart's ClusterRole with
 k8s.readNodes on. Change a verb there and here together, or the test fails.
 
@@ -10,13 +10,14 @@ must apply them before the image starts, including on an upgrade that adds a ver
 review refuses to start otherwise.
 */}}
 {{- if .Values.rbac.create -}}
+{{- range $ns := include "runnerd.runsNamespaces" . | fromJsonArray }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ include "runnerd.fullname" . }}-runs
-  namespace: {{ .Values.runsNamespace }}
+  name: {{ include "runnerd.fullname" $ }}-runs
+  namespace: {{ $ns }}
   labels:
-    {{- include "runnerd.labels" . | nindent 4 }}
+    {{- include "runnerd.labels" $ | nindent 4 }}
 rules:
   - apiGroups: [""]
     resources: ["pods"]
@@ -54,19 +55,54 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "runnerd.fullname" . }}-runs
-  namespace: {{ .Values.runsNamespace }}
+  name: {{ include "runnerd.fullname" $ }}-runs
+  namespace: {{ $ns }}
   labels:
-    {{- include "runnerd.labels" . | nindent 4 }}
+    {{- include "runnerd.labels" $ | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: {{ include "runnerd.fullname" . }}-runs
+  name: {{ include "runnerd.fullname" $ }}-runs
 subjects:
   - kind: ServiceAccount
-    name: {{ include "runnerd.fullname" . }}
-    namespace: {{ .Release.Namespace }}
+    name: {{ include "runnerd.fullname" $ }}
+    namespace: {{ $.Release.Namespace }}
 ---
+{{- end }}
+{{- range $ns := .Values.workloads.namespaces }}
+# WardynWorkload objects are only an authorisation key and a status carrier: no secrets, nothing else.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "runnerd.fullname" $ }}-workloads
+  namespace: {{ $ns }}
+  labels:
+    {{- include "runnerd.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: ["wardyn.dev"]
+    resources: ["wardynworkloads"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["wardyn.dev"]
+    resources: ["wardynworkloads/status"]
+    verbs: ["update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "runnerd.fullname" $ }}-workloads
+  namespace: {{ $ns }}
+  labels:
+    {{- include "runnerd.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "runnerd.fullname" $ }}-workloads
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "runnerd.fullname" $ }}
+    namespace: {{ $.Release.Namespace }}
+---
+{{- end }}
 {{/* The release namespace holds runnerd and what Helm keeps for the release (its release and image-pull secrets); these verbs reach every secret there, so nothing else of value belongs in it. */}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
