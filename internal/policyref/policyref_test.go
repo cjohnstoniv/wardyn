@@ -84,6 +84,15 @@ func TestProjectDropsOnlyTheBadFields(t *testing.T) {
 	}
 }
 
+func TestPersonalNamesTheWallsOwner(t *testing.T) {
+	if r := Layered(Personal("ana@example.com")); r == nil || *r != (Ref{Source: LayerPersonal, Owner: "ana@example.com", Layer: LayerPersonal}) {
+		t.Fatalf("Layered(Personal) = %+v", r)
+	}
+	if r := Personal("ana\nevil"); r.Owner != "" || r.Source != LayerPersonal {
+		t.Fatalf("Personal with a line break kept the owner: %+v", r)
+	}
+}
+
 func TestRequestRoute(t *testing.T) {
 	tests := []struct {
 		name string

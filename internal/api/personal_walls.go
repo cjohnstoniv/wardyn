@@ -420,7 +420,7 @@ func (s *Server) wallsAdmitApproval(w http.ResponseWriter, r *http.Request, ap t
 	if principalFromRequest(r) == run.CreatedBy {
 		msg = "Your walls block " + host + ". Change them in Settings."
 	}
-	ref := &policyref.Ref{Source: policyref.LayerPersonal, Owner: run.CreatedBy}
+	ref := policyref.Personal(run.CreatedBy)
 	writeErrorReasonPolicy(w, http.StatusForbidden, reasonPersonalWallsHost, msg, ref, personalProvenance)
 	return run, haveRun, false
 }
