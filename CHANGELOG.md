@@ -66,6 +66,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   its `callers` names. A named person who is not the owner needs per-run hosts (`WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE`);
   on one shared host it answers `403` `inbound_needs_host_mode`. `/healthz` gains `ui_sandbox.inbound_url_template`.
 - A UI-app call to a run whose runner is offline now answers `503` `runner_offline` on the gateway instead of `502`.
+- Workloads: a named run Wardyn keeps declared. `wardyn apply -f FILE` stores a workload and starts its run; an apply that
+  changes nothing starts nothing, and a changed spec starts the new run before it ends the old one (`workload.replace`). A
+  launch your organisation refuses keeps the old run and is recorded as `last_refusal`. `wardyn diff`, `wardyn delete`,
+  `wardyn workload list|get|restart|delete` and `wardyn workload binding create|list|delete` complete the CLI. On a
+  Kubernetes organisation runner a `WardynWorkload` resource in a bound namespace launches as its service identity, and its
+  status shows the phase and reason. See [Workloads](docs/operations/workloads.md).
 
 ### Changed
 
