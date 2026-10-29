@@ -341,7 +341,7 @@ func (s *Server) launchWorkload(r *http.Request, ws store.WorkloadStore, wl stor
 		}
 		return none, err
 	}
-	actorType, actor := actorFromRequest(r)
+	actorType, actor := workloadActorOf(r)
 	s.recordAudit(ctx, s.auditEvent(&created.ID, actorType, actor, "workload.launch", workloadTarget(claimed), "success", mustJSON(map[string]any{
 		"name": claimed.Name, "owner": claimed.Owner, "generation": claimed.Generation, "run_id": created.ID,
 	})))
@@ -392,7 +392,7 @@ func (s *Server) refuseWorkloadLaunch(r *http.Request, ws store.WorkloadStore, w
 	case err != nil:
 		return client.WorkloadLaunch{}, err
 	}
-	actorType, actor := actorFromRequest(r)
+	actorType, actor := workloadActorOf(r)
 	s.recordAudit(ctx, s.auditEvent(nil, actorType, actor, "workload.launch_refused", workloadTarget(wl), "denied", mustJSON(map[string]any{
 		"name": wl.Name, "owner": wl.Owner, "generation": wl.Generation, "reason": reason,
 	})))
@@ -406,7 +406,7 @@ func (s *Server) refuseWorkloadLaunch(r *http.Request, ws store.WorkloadStore, w
 // r: a caller who goes away does not cut it short, and an end that does not finish here is finished by
 // sweepWorkloadRunEnds.
 func (s *Server) endWorkloadRun(r *http.Request, runID uuid.UUID, wl store.Workload, why string) {
-	killerType, killer := actorFromRequest(r)
+	killerType, killer := workloadActorOf(r)
 	s.endOwedWorkloadRun(r.Context(), store.WorkloadRunEnd{RunID: runID, Owner: wl.Owner, Name: wl.Name, Generation: wl.Generation, Reason: why},
 		killerType, killer)
 }
@@ -767,10 +767,22 @@ func (s *Server) restartLaunch(r *http.Request, ws store.WorkloadStore, wl store
 		return client.WorkloadLaunch{}, err
 	}
 	defer cancel()
+	// The run is the service's; the workload rows and the replaced run's run.kill name who asked.
+	actorType, actor := actorFromRequest(r)
+	sr = sr.WithContext(withActor(sr.Context(), actorType, actor))
 	if live, err := s.queueOwnerLive(sr.Context(), serviceAuthority(si, si.Sponsor), wl.UpdatedAt); err != nil || !live {
 		return inactive, err
 	}
 	return s.launchWorkload(sr, ws, wl)
+}
+
+// workloadActorOf is who a launch's workload rows and the run.kill of the run it replaces name: the actor
+// restartLaunch attached for the person who asked a service's launch (withActor), else the caller of r.
+func workloadActorOf(r *http.Request) (types.ActorType, string) {
+	if a, ok := r.Context().Value(auditActorCtxKey{}).(auditActor); ok {
+		return a.actorType, a.name
+	}
+	return actorFromRequest(r)
 }
 
 // serviceAuthority is the authority a launch acting as service identity si under sponsor binds: the

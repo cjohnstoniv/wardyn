@@ -638,6 +638,33 @@ func TestPG_Workload_AdminRestartChecksTheSponsorSinceTheSpec(t *testing.T) {
 	}
 }
 
+// TestPG_Workload_RestartRowsNameThePerson: a sponsor's restart of a service's workload launches the run as
+// the service, while the workload rows and the replaced run's run.kill row name the sponsor.
+func TestPG_Workload_RestartRowsNameThePerson(t *testing.T) {
+	e := newSvcEnv(t)
+	e.mustCreate(t, svcName, svcSponsor)
+	tok := e.mustMint(t, e.sponsor, svcName)
+	pol := e.plainPolicy(t, "wl-pol")
+	oldRun := launchedRun(t, decodeApply(t, e.as(t, tok.Token, http.MethodPut, "/api/v1/workloads/web", workloadBody(pol, "t", "")), http.StatusCreated))
+	newRun := launchedRun(t, decodeApply(t, doSSO(t, e.h.srv, http.MethodPost, "/api/v1/workloads/web/restart?owner="+svcPrin, e.sponsor, ""), http.StatusOK))
+
+	for _, row := range []struct {
+		run    uuid.UUID
+		action string
+		actor  string
+	}{
+		{newRun, "run.create", svcPrin},
+		{newRun, "workload.launch", svcSponsor},
+		{newRun, "workload.replace", svcSponsor},
+		{oldRun, "run.kill", svcSponsor},
+	} {
+		ev := waitForRecAudit(t, e.h.audit, row.run, row.action, "success")
+		if ev.Actor != row.actor {
+			t.Errorf("%s on %s: actor %s/%s, want %s", row.action, row.run, ev.ActorType, ev.Actor, row.actor)
+		}
+	}
+}
+
 func decodeIntent(t *testing.T, raw string) client.TemplateIntent {
 	t.Helper()
 	var i client.TemplateIntent
