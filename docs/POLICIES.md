@@ -918,6 +918,8 @@ What the check does and does not settle:
 | `name` | `string` | — (required) | Lower-case slug (`[a-z0-9-]`, 1–32 chars, alphanumeric at both ends), unique within the policy. It reaches a filesystem path (`/usr/local/bin/wardyn-ui-<name>`) and a URL query, so the shape is enforced at write time rather than sanitised later. |
 | `port` | `int` | — (required) | The port the app listens on **inside** the sandbox, on `127.0.0.1`. Unique within the policy. The sandbox has no other reachable address, and the relay dials nothing else. |
 | `path` | `string` | `/` | Landing path after the gateway's ticket handoff. Must be an absolute same-origin path — a scheme, a host, a `//` prefix or a `..` is rejected, since that redirect would otherwise leave the UI origin. |
+| `inbound` | `bool` | `false` | Makes the port a service port: the run's owner and its `callers` reach it through the gateway on any run, a background run included. Declaring it needs the restricted `feature` value `inbound`. See [Inbound](UI-SANDBOXES.md#inbound-let-named-callers-reach-a-port). |
+| `callers` | `[]string` | `[]` | Who besides the owner may call an `inbound` app: `user:<sub or email>`, `group:<name>` or `service:<name>`, lower-case, each once, at most 32. Refused without `inbound`; `all` is not a caller. Fixed at create. |
 
 ## `desktop` — `DesktopControls`
 
