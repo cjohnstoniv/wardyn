@@ -128,6 +128,25 @@ func TestWallsSetRefusesAHostThatIsNotText(t *testing.T) {
 	}
 }
 
+// One YAML reader checks and decodes the hosts, so the YAML 1.1 booleans (on, yes, off, no, y, n in any
+// case) are sent as the text they were written as, never as true or false; a quoted host, whatever it
+// would read as unquoted, is sent as written too.
+func TestWallsSetSendsAHostAsWritten(t *testing.T) {
+	srv, st := newWallsServer(t)
+	for host, want := range map[string]string{
+		"yes": "yes", "no": "no", "on": "on", "off": "off", "Yes": "Yes", "ON": "ON", "y": "y", "n": "n",
+		`"on"`: "on", `'yes'`: "yes", `"true"`: "true", `"1.10"`: "1.10",
+	} {
+		if err := execCmdStdin(t, "allowed_domains: ["+host+"]\n", "walls", "set", "-f", "-", "--url", srv.URL, "--token", "tok"); err != nil {
+			t.Errorf("%s: %v", host, err)
+			continue
+		}
+		if got := string(st.spec); got != `{"allowed_domains":["`+want+`"]}` {
+			t.Errorf("%s: stored spec = %s, want the host %q", host, got, want)
+		}
+	}
+}
+
 func TestWallsSetReadsStdin(t *testing.T) {
 	srv, st := newWallsServer(t)
 	if err := execCmdStdin(t, "denied_domains: [evil.example]\n", "walls", "set", "-f", "-", "--url", srv.URL, "--token", "tok"); err != nil {
