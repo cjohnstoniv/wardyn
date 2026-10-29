@@ -423,7 +423,12 @@ type WorkloadReport struct {
 	Names      []string        `json:"names,omitempty"`
 }
 
-var workloadLabel = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
+// workloadLabel is a namespace: a DNS label. workloadName is a workload's name, the same label
+// starting with a letter, the grammar pkg/client and the workloads table hold.
+var (
+	workloadLabel = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
+	workloadName  = regexp.MustCompile(`^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$`)
+)
 
 // Validate refuses a report outside the shape of its op.
 func (r WorkloadReport) Validate() error {
@@ -432,7 +437,7 @@ func (r WorkloadReport) Validate() error {
 	}
 	switch r.Op {
 	case WorkloadOpApply, WorkloadOpDelete:
-		if !workloadLabel.MatchString(r.Name) || r.UID == "" || len(r.Names) > 0 {
+		if !workloadName.MatchString(r.Name) || r.UID == "" || len(r.Names) > 0 {
 			return fmt.Errorf("%w: workload %s needs a name and uid, and no names", ErrBadFrame, r.Op)
 		}
 		if r.Op == WorkloadOpDelete {
@@ -449,7 +454,7 @@ func (r WorkloadReport) Validate() error {
 			return fmt.Errorf("%w: workload sync carries only a namespace and at most %d names", ErrBadFrame, MaxWorkloadSyncNames)
 		}
 		for _, n := range r.Names {
-			if !workloadLabel.MatchString(n) {
+			if !workloadName.MatchString(n) {
 				return fmt.Errorf("%w: workload name %q", ErrBadFrame, n)
 			}
 		}
@@ -492,7 +497,7 @@ type WorkloadStatusArgs struct {
 
 // Validate refuses a status outside the closed phase list or past its bounds.
 func (a WorkloadStatusArgs) Validate() error {
-	if !workloadLabel.MatchString(a.Namespace) || !workloadLabel.MatchString(a.Name) {
+	if !workloadLabel.MatchString(a.Namespace) || !workloadName.MatchString(a.Name) {
 		return fmt.Errorf("%w: workload status for %q/%q", ErrBadFrame, a.Namespace, a.Name)
 	}
 	if !slices.Contains(WorkloadPhases, a.Phase) {

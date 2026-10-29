@@ -309,7 +309,7 @@ func (h *Hub) recheck(ctx context.Context, id uuid.UUID, s *hubSession, peer *ru
 	}
 	if sent := s.perRun.Load(); sent != nil && *sent != perRunOf(current) {
 		// The pair is the one peer's AUTH_OK carried: a reconnect since then has its own, so end only peer's session.
-		_ = h.endWithControl(ctx, id, runnerwire.TypeGoaway, "fresh_session_required", peer)
+		_ = h.endWithControl(ctx, id, runnerwire.TypeGoaway, "fresh_session_required", peer, "")
 	}
 }
 

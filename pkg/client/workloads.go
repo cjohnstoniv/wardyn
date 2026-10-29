@@ -44,7 +44,9 @@ const (
 	MaxWorkloadRestartKey  = 64
 )
 
-var workloadNameRE = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
+// workloadNameRE is a DNS label that starts with a letter: the custom resource's name maps to it 1:1.
+// internal/runnerwire holds the same grammar for the names a runner reports.
+var workloadNameRE = regexp.MustCompile(`^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$`)
 
 // WorkloadDocument is one workload, as a file holds it. The same struct reads either header:
 // ParseWorkload fills Namespace from a custom resource's metadata (empty for the `wardyn/v1`
@@ -141,7 +143,7 @@ func decodeStrict(raw []byte, v any) error {
 func (d WorkloadDocument) Validate() error {
 	switch {
 	case !workloadNameRE.MatchString(d.Name):
-		return fmt.Errorf("workload name %q must be a lowercase DNS label starting with a letter, at most 63 characters", d.Name)
+		return fmt.Errorf("workload name %q must be a lowercase DNS label starting with a letter and ending with a letter or digit, at most 63 characters", d.Name)
 	case utf8.RuneCountInString(d.Description) > MaxWorkloadDescription || hasControl(d.Description):
 		return fmt.Errorf("description must be at most %d characters, with no control characters", MaxWorkloadDescription)
 	case utf8.RuneCountInString(d.RestartKey) > MaxWorkloadRestartKey || hasControl(d.RestartKey):

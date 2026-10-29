@@ -813,7 +813,10 @@ run_service() {
                 if [[ "$restart" != never ]]; then service_kill_group; killed=1; fi
             fi
         done
-        if [[ -n "$_svc_pid" ]]; then wait "$_svc_pid"; _svc_exit=$?; _svc_pid=""; fi
+        # The command is gone, but a child it left in its group may not be: kill
+        # the group before a restart or the return. wait still yields the
+        # command's own exit code.
+        service_kill_group
         if (( _svc_exit == 0 && ! killed )); then service_state; return 0; fi
         if [[ "$restart" == never ]]; then
             _svc_health=unhealthy _svc_reason=""

@@ -41,8 +41,9 @@ func fileFlag(cmd *cobra.Command, file *string) {
 
 // readWorkloadDocs reads every document of file ('-' for stdin) as a workload. YAML is a JSON
 // superset, so one reader takes both; each document is converted to JSON for sdk.ParseWorkload,
-// which refuses a field it does not know. Empty documents between `---` marks are skipped, and
-// two documents of one name are refused: the second would silently win.
+// which refuses a field it does not know. A plain date (restart_key: 2026-10-29) stays the string
+// it was written as, not a time re-encoded as RFC 3339. Empty documents between `---` marks are
+// skipped, and two documents of one name are refused: the second would silently win.
 func readWorkloadDocs(cmd *cobra.Command, file string) ([]sdk.WorkloadDocument, error) {
 	var raw []byte
 	var err error
@@ -58,10 +59,15 @@ func readWorkloadDocs(cmd *cobra.Command, file string) ([]sdk.WorkloadDocument, 
 	seen := map[string]bool{}
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	for n := 1; ; n++ {
-		var v any
-		if err := dec.Decode(&v); errors.Is(err, io.EOF) {
+		var node yaml.Node
+		if err := dec.Decode(&node); errors.Is(err, io.EOF) {
 			break
 		} else if err != nil {
+			return nil, fmt.Errorf("document %d: parse (accepts JSON or YAML): %w", n, err)
+		}
+		datesAsWritten(&node)
+		var v any
+		if err := node.Decode(&v); err != nil {
 			return nil, fmt.Errorf("document %d: parse (accepts JSON or YAML): %w", n, err)
 		}
 		if v == nil {
@@ -87,6 +93,17 @@ func readWorkloadDocs(cmd *cobra.Command, file string) ([]sdk.WorkloadDocument, 
 	return docs, nil
 }
 
+// datesAsWritten retags every plain scalar YAML resolves as a timestamp as a string, so it decodes
+// as the text it was written as.
+func datesAsWritten(n *yaml.Node) {
+	if n.Kind == yaml.ScalarNode && n.ShortTag() == "!!timestamp" {
+		n.Tag = "!!str"
+	}
+	for _, c := range n.Content {
+		datesAsWritten(c)
+	}
+}
+
 func workloadApplyCmd(client clientFn) *cobra.Command {
 	var file string
 	var wait, dryRun, asJSON bool
@@ -99,12 +116,15 @@ func workloadApplyCmd(client clientFn) *cobra.Command {
 			"spec is still stored, the old run keeps running, and the command exits 1.\n\n" +
 			"    wardyn apply -f web.yaml\n" +
 			"    wardyn apply -f - --wait < web.yaml\n\n" +
-			"--wait follows each launched run until it is running, or until it completes when the workload is an\n" +
-			"agent task. --dry-run writes nothing: it prints what would change and the setup checklist of the run.",
+			"--wait follows each launched run until it completes, or until it is running when the workload is a\n" +
+			"service. --dry-run writes nothing: it prints what would change and the setup checklist of the run.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if dryRun && wait {
 				return errors.New("--dry-run and --wait are mutually exclusive (a dry run starts nothing)")
+			}
+			if wait && timeout <= 0 {
+				return errNonPositiveTimeout(timeout) // before any workload is stored, not after
 			}
 			docs, err := readWorkloadDocs(cmd, file)
 			if err != nil {
@@ -150,7 +170,7 @@ func workloadApplyCmd(client clientFn) *cobra.Command {
 	}
 	fileFlag(cmd, &file)
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "write nothing: print the diff against the stored workload and the setup checklist of the run it would start")
-	cmd.Flags().BoolVar(&wait, "wait", false, "follow each launched run until it is running (until it completes, for an agent task); exit with the run's outcome")
+	cmd.Flags().BoolVar(&wait, "wait", false, "follow each launched run until it completes (until it is running, for a service); exit with the run's outcome")
 	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Minute, "give up waiting after this long (with --wait; exit 124). The run keeps going")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the results as a JSON array (progress goes to stderr)")
 	return cmd
@@ -175,14 +195,15 @@ func printWorkloadResult(cmd *cobra.Command, name, verb string, res sdk.Workload
 	}
 }
 
-// followWorkloadRun waits for the run an apply launched: to COMPLETED for an agent task, which
-// ends by itself, and to RUNNING for anything else, which is kept up. Both exit as `run --wait`.
+// followWorkloadRun waits for the run an apply launched: to RUNNING for a service, which is kept
+// up, and to COMPLETED for a background workload without a service block (an agent task or a
+// one-shot command), which ends by itself with its exit code. Both exit as `run --wait`.
 func followWorkloadRun(cmd *cobra.Command, c *sdk.Client, d sdk.WorkloadDocument, id uuid.UUID, timeout time.Duration) error {
 	req, err := sdk.RunDocumentRequest(d.Intent)
 	if err != nil {
 		return err
 	}
-	task := req.Workload != nil && req.Workload.Kind == sdk.WorkloadAgentTask ||
+	task := req.Workload != nil && req.Service == nil ||
 		req.Workload == nil && req.Task != "" && req.Experience != sdk.ExperienceInteractive
 	if task {
 		return waitForRun(cmd.Context(), cmd.ErrOrStderr(), c, id, timeout)
@@ -261,20 +282,21 @@ func workloadDiffCmd(client clientFn) *cobra.Command {
 		Use:   "diff -f FILE",
 		Short: "Show how the workloads in a file differ from the stored ones",
 		Long: "Read each workload through the organisation's door and compare it with the stored workload of the\n" +
-			"same name, as a unified diff of both written as YAML. Exits 0 when every workload is equal and 1\n" +
-			"when any differs or is not stored yet, as `diff` and `kubectl diff` do. Writes nothing.",
+			"same name, as a unified diff of both written as YAML. Exits 0 when every workload is equal, 1 when\n" +
+			"any differs or is not stored yet, and 2 or more on an error, as `diff` and `kubectl diff` do.\n" +
+			"Writes nothing.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			docs, err := readWorkloadDocs(cmd, file)
 			if err != nil {
-				return err
+				return diffError(err)
 			}
 			c := client()
 			differs := 0
 			for _, d := range docs {
 				_, text, err := diffWorkload(cmd.Context(), cmd.ErrOrStderr(), c, d)
 				if err != nil {
-					return err
+					return diffError(err)
 				}
 				if text != "" {
 					differs++
@@ -289,6 +311,15 @@ func workloadDiffCmd(client clientFn) *cobra.Command {
 	}
 	fileFlag(cmd, &file)
 	return cmd
+}
+
+// diffError keeps exit 1 for "differs": an error that would exit 1 (a file that does not parse, a
+// spec the door refuses) exits 2, and an API or connection error keeps its own code.
+func diffError(err error) error {
+	if exitCodeFor(err) == 1 {
+		return &exitError{code: 2, err: err}
+	}
+	return err
 }
 
 func workloadDeleteCmd(client clientFn) *cobra.Command {
@@ -416,8 +447,26 @@ func workloadYAML(d sdk.WorkloadDocument) (string, error) {
 	if err := dec.Decode(&v); err != nil {
 		return "", err
 	}
-	out, err := yaml.Marshal(v)
+	out, err := yaml.Marshal(yamlNumbers(v))
 	return string(out), err
+}
+
+// yamlNumbers swaps each json.Number in v for a plain YAML scalar of its text: yaml.Marshal writes a
+// json.Number as the string it is, quoted.
+func yamlNumbers(v any) any {
+	switch t := v.(type) {
+	case json.Number:
+		return &yaml.Node{Kind: yaml.ScalarNode, Value: t.String()}
+	case map[string]any:
+		for k, e := range t {
+			t[k] = yamlNumbers(e)
+		}
+	case []any:
+		for i, e := range t {
+			t[i] = yamlNumbers(e)
+		}
+	}
+	return v
 }
 
 func splitLines(s string) []string {
@@ -457,16 +506,10 @@ func lineDiff(a, b []string) []diffLine {
 	}
 	am, bm := a[head:len(a)-tail], b[head:len(b)-tail]
 	n, m := len(am), len(bm)
-	if n > diffSideLimit || m > diffSideLimit || n*m > diffCellLimit {
-		for _, s := range am {
-			out = append(out, diffLine{'-', s})
-		}
-		for _, s := range bm {
-			out = append(out, diffLine{'+', s})
-		}
-	} else {
+	if n <= diffSideLimit && m <= diffSideLimit && n*m <= diffCellLimit {
 		// lcs[i*(m+1)+j] is the longest common subsequence of am[i:] and bm[j:].
-		lcs := make([]int32, (n+1)*(m+1))
+		size := (n + 1) * (m + 1)
+		lcs := make([]int32, size)
 		for i := n - 1; i >= 0; i-- {
 			for j := m - 1; j >= 0; j-- {
 				if am[i] == bm[j] {
@@ -490,6 +533,13 @@ func lineDiff(a, b []string) []diffLine {
 				out = append(out, diffLine{'+', bm[j]})
 				j++
 			}
+		}
+	} else {
+		for _, s := range am {
+			out = append(out, diffLine{'-', s})
+		}
+		for _, s := range bm {
+			out = append(out, diffLine{'+', s})
 		}
 	}
 	for _, s := range a[len(a)-tail:] {

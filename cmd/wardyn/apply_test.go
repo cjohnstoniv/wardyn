@@ -6,6 +6,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -99,6 +100,21 @@ func TestApplyPutsEachDocumentUnderItsOwnName(t *testing.T) {
 	}
 }
 
+// TestApplyKeepsADateAsWritten: an unquoted date reaches the body as the string the file wrote, not
+// a time re-encoded as RFC 3339.
+func TestApplyKeepsADateAsWritten(t *testing.T) {
+	rig := newRouteRig(t, map[string]func(http.ResponseWriter, []byte){
+		putWeb: applied(sdk.WorkloadUnchanged, sdk.WorkloadLaunch{State: sdk.WorkloadNoLaunch}),
+	})
+	if _, err := rig.run(t, "apply", "-f", writeTemplateFile(t, "w.yaml", webYAML+"restart_key: 2020-01-02\n")); err != nil {
+		t.Fatal(err)
+	}
+	var web map[string]json.RawMessage
+	if got := rig.sent(putWeb); len(got) != 1 || json.Unmarshal([]byte(got[0]), &web) != nil || string(web["restart_key"]) != `"2020-01-02"` {
+		t.Fatalf("web PUTs = %q", got)
+	}
+}
+
 // TestApplyReadsStdinAndJSON: '-' reads the file from stdin, and a JSON document reads as well.
 func TestApplyReadsStdinAndJSON(t *testing.T) {
 	rig := newRouteRig(t, map[string]func(http.ResponseWriter, []byte){
@@ -179,6 +195,11 @@ func TestApplyRefusesAFileBeforeSendingAnything(t *testing.T) {
 	if _, err := rig.run(t, "apply"); err == nil || !strings.Contains(err.Error(), `"file"`) {
 		t.Errorf("apply without -f = %v", err)
 	}
+	for _, timeout := range []string{"0s", "-1s"} {
+		if _, err := rig.run(t, "apply", "-f", writeTemplateFile(t, "w.yaml", webYAML), "--wait", "--timeout="+timeout); err == nil || exitCodeFor(err) != 124 {
+			t.Errorf("--wait --timeout %s = %v (exit %d), want 124", timeout, err, exitCodeFor(err))
+		}
+	}
 	for key, bodies := range rig.bodies {
 		t.Errorf("%s was requested: %q", key, bodies)
 	}
@@ -258,6 +279,31 @@ func TestDiffExitCodes(t *testing.T) {
 	if _, err, _ = run(replyJSON(http.StatusInternalServerError, map[string]string{"error": "boom"})); err == nil || exitCodeFor(err) != 4 {
 		t.Errorf("a server error = %v, want exit 4", err)
 	}
+
+	// A file that does not parse is an error, not a difference.
+	bad := newRouteRig(t, map[string]func(http.ResponseWriter, []byte){})
+	if _, err := bad.run(t, "diff", "-f", writeTemplateFile(t, "w.yaml", webYAML+"colour: red\n")); err == nil || exitCodeFor(err) != 2 {
+		t.Errorf("an unknown field = %v (exit %d), want exit 2", err, exitCodeFor(err))
+	}
+}
+
+// TestDiffWritesNumbersAsNumbers: a number in the intent reads as the number in both sides of the
+// diff, not as a quoted string.
+func TestDiffWritesNumbersAsNumbers(t *testing.T) {
+	src := func(sec int) string {
+		return strings.Replace(webYAML, "  no_repositories_or_drives: true\n", fmt.Sprintf("  no_repositories_or_drives: true\n  ends_after_sec: %d\n", sec), 1)
+	}
+	rig := newRouteRig(t, doorRoutes(t, map[string]func(http.ResponseWriter, []byte){getWeb: replyJSON(http.StatusOK, storedWeb(t, src(7200)))}))
+	out, err := rig.run(t, "diff", "-f", writeTemplateFile(t, "w.yaml", src(3600)))
+	var ee *exitError
+	if !errors.As(err, &ee) || ee.code != 1 {
+		t.Fatalf("err = %v, want exit 1", err)
+	}
+	for _, want := range []string{"-    ends_after_sec: 7200\n", "+    ends_after_sec: 3600\n"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
 }
 
 // TestDiffReportsTheDoorsDiagnostics: a spec the door refuses is not compared.
@@ -268,8 +314,8 @@ func TestDiffReportsTheDoorsDiagnostics(t *testing.T) {
 		}}),
 	})
 	_, err := rig.run(t, "diff", "-f", writeTemplateFile(t, "w.yaml", webYAML))
-	if err == nil || !strings.Contains(err.Error(), "1 problem") || !strings.Contains(err.Error(), "workload/web") {
-		t.Fatalf("err = %v", err)
+	if err == nil || !strings.Contains(err.Error(), "1 problem") || !strings.Contains(err.Error(), "workload/web") || exitCodeFor(err) != 2 {
+		t.Fatalf("err = %v (exit %d), want exit 2", err, exitCodeFor(err))
 	}
 	if n := len(rig.sent(getWeb)); n != 0 {
 		t.Errorf("the stored workload was read after a refusal (%d)", n)
@@ -330,10 +376,13 @@ func TestDeleteFileDeletesEachWorkload(t *testing.T) {
 	}
 }
 
-// TestApplyWaitFollowsTheRunToWhereItBelongs: a kept-up workload is followed to RUNNING, an agent
-// task to COMPLETED, and a run that fails first exits 1 with its state.
+// TestApplyWaitFollowsTheRunToWhereItBelongs: a service is followed to RUNNING; an agent task and a
+// command without a service block, which end by themselves, to COMPLETED; and a run that fails
+// first exits 1 with its state.
 func TestApplyWaitFollowsTheRunToWhereItBelongs(t *testing.T) {
 	setWaitPollInterval(t, time.Millisecond)
+	serviceYAML := strings.Replace(webYAML, "  no_repositories_or_drives: true\n", "  no_repositories_or_drives: true\n  service: {restart: on_failure}\n", 1)
+	timeout := "30s"
 	run := func(src string, state types.RunState) (string, error) {
 		id := uuid.New()
 		rig := newRouteRig(t, map[string]func(http.ResponseWriter, []byte){
@@ -341,20 +390,31 @@ func TestApplyWaitFollowsTheRunToWhereItBelongs(t *testing.T) {
 			putWorker:                         applied(sdk.WorkloadCreated, launchedRun(id)),
 			"GET /api/v1/runs/" + id.String(): replyJSON(http.StatusOK, types.AgentRun{ID: id, State: state}),
 		})
-		return rig.run(t, "apply", "-f", writeTemplateFile(t, "w.yaml", src), "--wait", "--timeout", "30s")
+		return rig.run(t, "apply", "-f", writeTemplateFile(t, "w.yaml", src), "--wait", "--timeout", timeout)
 	}
-	if _, err := run(webYAML, types.RunRunning); err != nil {
+	if _, err := run(serviceYAML, types.RunRunning); err != nil {
 		t.Errorf("service running: %v", err)
 	}
 	if _, err := run(workerCR, types.RunCompleted); err != nil {
 		t.Errorf("task completed: %v", err)
 	}
+	if _, err := run(webYAML, types.RunCompleted); err != nil {
+		t.Errorf("command completed: %v", err)
+	}
 	var ee *exitError
-	if _, err := run(webYAML, types.RunFailed); !errors.As(err, &ee) || ee.code != 1 || !strings.Contains(err.Error(), "FAILED") {
+	if _, err := run(serviceYAML, types.RunFailed); !errors.As(err, &ee) || ee.code != 1 || !strings.Contains(err.Error(), "FAILED") {
 		t.Errorf("service failed: %v, want exit 1", err)
 	}
-	if _, err := run(webYAML, types.RunKilled); !errors.As(err, &ee) || ee.code != 2 {
+	if _, err := run(serviceYAML, types.RunKilled); !errors.As(err, &ee) || ee.code != 2 {
 		t.Errorf("service killed: %v, want exit 2", err)
+	}
+	if _, err := run(webYAML, types.RunFailed); !errors.As(err, &ee) || ee.code != 1 {
+		t.Errorf("command failed: %v, want exit 1", err)
+	}
+	// A running command without a service block is not done: the wait goes on until it ends.
+	timeout = "50ms"
+	if _, err := run(webYAML, types.RunRunning); !errors.As(err, &ee) || ee.code != 124 {
+		t.Errorf("command still running: %v, want the wait to time out (124)", err)
 	}
 }
 

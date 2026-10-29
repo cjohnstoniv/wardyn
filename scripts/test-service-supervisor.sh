@@ -106,6 +106,27 @@ else bad "TERM: rc=$rc state=$(state term)"; fi
 if [[ $pg != 0 ]] && ! kill -0 -- "-$pg" 2>/dev/null; then ok "TERM reached the command's process group"
 else bad "process group $pg survived the stop"; fi
 
+# 4b) a child that outlives its command's exit is killed with the group: before
+# each restart, so a stop during the backoff finds nothing left, and before an
+# exit under restart=never, which keeps the command's own code.
+alive() { local p; for p in $(cat "$1" 2>/dev/null); do kill -0 "$p" 2>/dev/null && return 0; done; return 1; }
+start orphan "sleep 300 & echo \$! >> '$tmp/orphan.pids'; exit 1"
+if wait_state orphan '"restarts":1' 4 && ! alive "$tmp/orphan.pids"; then
+    ok "a crashed command's child is killed before the restart"
+else bad "child of the crashed command survived: $(state orphan) pids=$(cat "$tmp/orphan.pids" 2>/dev/null)"; fi
+if wait_state orphan '"restarts":2' 6; then
+    stop "$sup"
+    if [[ $rc == 143 ]] && ! alive "$tmp/orphan.pids"; then ok "a stop during backoff leaves no child of any generation"
+    else bad "stop during backoff: rc=$rc pids=$(cat "$tmp/orphan.pids")"; fi
+else bad "orphan case did not restart twice: $(state orphan)"; fi
+rc=0
+# shellcheck disable=SC2016 # expanded by the inner bash
+env WARDYN_SERVICE_STATE_FILE="$tmp/orphannever.json" WARDYN_SERVICE_RESTART=never \
+    bash -c 'set -euo pipefail; . "$1"; run_service "$2"' _ "$LIB" \
+    "sleep 300 & echo \$! > '$tmp/orphannever.pids'; exit 3" >/dev/null 2>&1 || rc=$?
+if [[ $rc == 3 ]] && ! alive "$tmp/orphannever.pids"; then ok "restart=never kills the child and keeps the command's code (3)"
+else bad "restart=never orphan: rc=$rc state=$(state orphannever) pids=$(cat "$tmp/orphannever.pids" 2>/dev/null)"; fi
+
 # 5) failing probe past the threshold with restart=never: unhealthy, still running.
 port="$(free_port)"
 start probenever 'sleep 300' WARDYN_SERVICE_RESTART=never WARDYN_SERVICE_PORT="$port" \

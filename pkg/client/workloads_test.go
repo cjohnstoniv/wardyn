@@ -74,6 +74,8 @@ func TestParseWorkload_Refuses(t *testing.T) {
 		"uppercase name":    `{"api_version":"wardyn/v1","kind":"Workload","name":"Triage","intent":{"task":"t"}}`,
 		"digit-led name":    `{"api_version":"wardyn/v1","kind":"Workload","name":"1w","intent":{"task":"t"}}`,
 		"long name":         `{"api_version":"wardyn/v1","kind":"Workload","name":"a` + strings.Repeat("b", 63) + `","intent":{"task":"t"}}`,
+		"hyphen-led name":   `{"api_version":"wardyn/v1","kind":"Workload","name":"-w","intent":{"task":"t"}}`,
+		"hyphen-ended name": `{"api_version":"wardyn/v1","kind":"Workload","name":"w-","intent":{"task":"t"}}`,
 		"long description":  `{"api_version":"wardyn/v1","kind":"Workload","name":"w","description":"` + strings.Repeat("d", 201) + `","intent":{"task":"t"}}`,
 		"control in desc":   `{"api_version":"wardyn/v1","kind":"Workload","name":"w","description":"a\nb","intent":{"task":"t"}}`,
 		"long restart key":  `{"api_version":"wardyn/v1","kind":"Workload","name":"w","restart_key":"` + strings.Repeat("k", 65) + `","intent":{"task":"t"}}`,
@@ -82,6 +84,16 @@ func TestParseWorkload_Refuses(t *testing.T) {
 	} {
 		if _, err := client.ParseWorkload([]byte(doc)); err == nil {
 			t.Errorf("%s: parsed", name)
+		}
+	}
+}
+
+// The name grammar's boundaries, as the runner wire holds them (internal/runnerwire): one character,
+// an inner hyphen and 63 characters parse.
+func TestParseWorkload_NameBoundaries(t *testing.T) {
+	for _, name := range []string{"w", "w-1", "a-b-c", "a" + strings.Repeat("b", 62)} {
+		if _, err := client.ParseWorkload([]byte(`{"api_version":"wardyn/v1","kind":"Workload","name":"` + name + `","intent":{"task":"t"}}`)); err != nil {
+			t.Errorf("%q: %v", name, err)
 		}
 	}
 }
