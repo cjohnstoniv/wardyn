@@ -495,10 +495,9 @@ func TestPG_Workload_ForeignSecurityReadWithholdsTheHostAxis(t *testing.T) {
 	check("security list of the owner", read(e.sec, "/api/v1/workloads?owner=mem"), true)
 }
 
-// queuedWorkloadReplacement makes the person's workload "web" hold r, a running run in pool, at
-// generation 1, then applies a changed spec while pool is full: the new run waits in the queue. It returns
-// the new run.
-func (e *queueEnv) queuedWorkloadReplacement(pool types.RunnerPool, r types.AgentRun) uuid.UUID {
+// holdingWorkload makes the person's workload "web", a Background task in pool, hold r, a running run, at
+// generation 1. It returns the workload's intent for a task.
+func (e *queueEnv) holdingWorkload(pool types.RunnerPool, r types.AgentRun) func(task string) string {
 	e.t.Helper()
 	ctx := context.Background()
 	intent := func(task string) string {
@@ -522,6 +521,15 @@ func (e *queueEnv) queuedWorkloadReplacement(pool types.RunnerPool, r types.Agen
 	if _, err := e.pg.SetWorkloadRun(ctx, wl.ID, claimed.ClaimToken, claimed.Generation, r.ID); err != nil {
 		e.t.Fatal(err)
 	}
+	return intent
+}
+
+// queuedWorkloadReplacement makes the person's workload "web" hold r, a running run in another pool than
+// pool, then applies a changed spec into pool while pool is full: the new run waits in the queue. It
+// returns the new run.
+func (e *queueEnv) queuedWorkloadReplacement(pool types.RunnerPool, r types.AgentRun) uuid.UUID {
+	e.t.Helper()
+	intent := e.holdingWorkload(pool, r)
 	res := decodeApply(e.t, e.call(e.person, http.MethodPut, "/api/v1/workloads/web", `{"intent":`+intent("t2")+`}`), http.StatusOK)
 	queued := launchedRun(e.t, res)
 	if got := e.run(queued).State; got != types.RunQueued {
@@ -545,12 +553,12 @@ func (e *queueEnv) settleWorkloadRunEnds() {
 	}
 }
 
-// TestPG_Workload_QueuedReplacementTakesOverOnceRunning: a replacement that waits in the queue leaves the
-// running run alone while it waits; once it runs, the sweep ends the old run and records the replacement.
+// TestPG_Workload_QueuedReplacementTakesOverOnceRunning: a replacement that waits in another pool's queue
+// leaves the running run alone while it waits; once it runs, the sweep ends the old run and records the replacement.
 func TestPG_Workload_QueuedReplacementTakesOverOnceRunning(t *testing.T) {
 	e := newQueueEnv(t)
-	pool := e.cappedPool("Busy", 2)
-	occupant, running := e.occupy(pool), e.occupy(pool)
+	pool := e.cappedPool("Busy", 1)
+	occupant, running := e.occupy(pool), e.occupy(e.cappedPool("Old", 1))
 	queued := e.queuedWorkloadReplacement(pool, running)
 
 	e.settleWorkloadRunEnds()
@@ -580,8 +588,8 @@ func TestPG_Workload_QueuedReplacementTakesOverOnceRunning(t *testing.T) {
 // leaves the running run running; the workload takes it back and records the refusal, owed a launch again.
 func TestPG_Workload_RefusedQueuedReplacementKeepsTheRunningRun(t *testing.T) {
 	e := newQueueEnv(t)
-	pool := e.cappedPool("Busy", 2)
-	occupant, running := e.occupy(pool), e.occupy(pool)
+	pool := e.cappedPool("Busy", 1)
+	occupant, running := e.occupy(pool), e.occupy(e.cappedPool("Old", 1))
 	queued := e.queuedWorkloadReplacement(pool, running)
 
 	if _, err := e.pg.UpsertCapabilityGrant(context.Background(), types.CapabilityGrant{SubjectType: types.CapabilitySubjectUser,
@@ -612,6 +620,33 @@ func TestPG_Workload_RefusedQueuedReplacementKeepsTheRunningRun(t *testing.T) {
 	if len(e.audits(running.ID, "run.kill")) != 0 {
 		t.Fatal("the running run was killed")
 	}
+	if n := e.count(`SELECT count(*) FROM workload_run_ends`); n != 0 {
+		t.Fatalf("owed ends left = %d, want 0", n)
+	}
+}
+
+// TestPG_Workload_ReplacementQueuedBehindItsOwnRunReplacesInPlace: in a pool of one slot, held by the
+// workload's own run, a changed spec could never start beside it: the old run ends at once, recorded as a
+// replacement, and the new one starts in the slot it freed.
+func TestPG_Workload_ReplacementQueuedBehindItsOwnRunReplacesInPlace(t *testing.T) {
+	e := newQueueEnv(t)
+	pool := e.cappedPool("Solo", 1)
+	running := e.occupy(pool)
+	intent := e.holdingWorkload(pool, running)
+
+	res := decodeApply(t, e.call(e.person, http.MethodPut, "/api/v1/workloads/web", `{"intent":`+intent("t2")+`}`), http.StatusOK)
+	queued := launchedRun(t, res)
+	if got := e.run(running.ID).State; got != types.RunKilled {
+		t.Fatalf("old run state = %s once its replacement queued behind it, want KILLED", got)
+	}
+	kills := e.waitAudit(running.ID, "run.kill")
+	if d := queueAuditData(t, kills[0]); d["reason"] != workloadKillReplaced {
+		t.Fatalf("run.kill data = %v, want reason %s", d, workloadKillReplaced)
+	}
+	if rows := e.audits(queued, "workload.replace"); len(rows) != 1 {
+		t.Fatalf("workload.replace rows on the replacement = %d, want 1", len(rows))
+	}
+	e.waitStarted(queued)
 	if n := e.count(`SELECT count(*) FROM workload_run_ends`); n != 0 {
 		t.Fatalf("owed ends left = %d, want 0", n)
 	}

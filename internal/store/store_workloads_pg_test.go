@@ -739,6 +739,40 @@ func TestPG_Workload_ErasureDeletesTheOwnersWorkloads(t *testing.T) {
 	}
 }
 
+// A person's erasure leaves the runs their workloads let go of owed their end, but no longer naming them.
+func TestPG_Workload_ErasureForgetsTheOwnerOfOwedEnds(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := t.Context()
+	mine := persistRun(t, ctx, pool, newRun(types.RunRunning)).ID
+	theirs := persistRun(t, ctx, pool, newRun(types.RunRunning)).ID
+	for _, e := range []store.WorkloadRunEnd{
+		{RunID: mine, Owner: "sub-a", Name: "web", Generation: 1, Reason: store.WorkloadEndDeleted},
+		{RunID: theirs, Owner: "sub-b", Name: "web", Generation: 1, Reason: store.WorkloadEndDeleted},
+	} {
+		if err := st.OweWorkloadRunEnd(ctx, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := st.DeleteRunnerPoolsByOwner(ctx, "sub-a"); err != nil {
+		t.Fatal(err)
+	}
+	ends, err := st.ListWorkloadRunEnds(ctx, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[uuid.UUID]string{}
+	for _, e := range ends {
+		got[e.RunID] = e.Owner
+	}
+	if owner, ok := got[mine]; !ok || owner != "" {
+		t.Errorf("the erased person's owed end = %q (owed %v), want still owed and naming no one", owner, ok)
+	}
+	if got[theirs] != "sub-b" {
+		t.Errorf("another person's owed end names %q, want sub-b", got[theirs])
+	}
+}
+
 func TestPG_WorkloadBinding_CreateConflictAndPoolFences(t *testing.T) {
 	pool := runsPGPoolIsolated(t)
 	st := store.NewPG(pool)
