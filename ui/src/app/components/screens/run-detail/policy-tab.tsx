@@ -266,7 +266,7 @@ function groupChanges(changes: RunPolicyChange[], ownRun: boolean, person: strin
 // credential id, an app id) and stays in monospace.
 const READABLE_FIELDS = new Set([
   "min_confinement_class", "first_use_approval", "first_use_hold_seconds", "git_push_any_branch",
-  "allow_all_egress", "auto_stop_after_sec", "resources.cpu_millis", "resources.memory_mib", "resources.disk_mib",
+  "allow_all_egress", "auto_stop_after_sec", "resources.cpu_millis", "resources.memory_mib", "resources.disk_mib", "desktop",
 ]);
 
 // Single-value fields arrive as one-entry sets of the raw value; each reads in the

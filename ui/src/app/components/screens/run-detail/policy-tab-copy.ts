@@ -98,6 +98,7 @@ export const FIELD_LABEL: Record<string, string> = {
   tool_rules: "Tool rules",
   git_push_any_branch: "Pushes",
   azure_devops_capabilities: "Azure DevOps access",
+  github_capabilities: "GitHub access",
   auto_stop_after_sec: "Limits",
   "resources.cpu_millis": "Limits",
   "resources.memory_mib": "Limits",
