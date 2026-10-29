@@ -189,7 +189,8 @@ func sameServiceStatus(a, b types.RunServiceStatus) bool {
 
 // sweepServiceHealth is the run watcher's service health pass. A run with a runner is read by the
 // replica that holds that runner's session; a run with none (the in-process substrate or an
-// organization's executor) is read by the sweep leader alone.
+// organization's executor) is read by the sweep leader alone, under its term. Both kinds share one
+// least-recently-observed queue and the one budget, so slow reads of either kind never starve the other.
 func (s *Server) sweepServiceHealth(ctx context.Context) error {
 	st, ok := s.cfg.Store.(store.ServiceRunStore)
 	if !ok || s.cfg.Runner == nil {
@@ -201,56 +202,67 @@ func (s *Server) sweepServiceHealth(ctx context.Context) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, serviceSweepBudget)
 	defer cancel()
-	var held, led []types.AgentRun
+	var reads []serviceRead
+	var led []types.AgentRun
 	for _, run := range runs {
 		switch {
 		case run.RunnerID == nil:
 			led = append(led, run)
 		case s.runnerOnline(*run.RunnerID):
-			held = append(held, run)
+			reads = append(reads, serviceRead{ctx: ctx, run: run})
 		}
 	}
-	s.mirrorServiceRuns(ctx, st, held)
-	if len(led) == 0 {
-		return nil
+	if len(led) > 0 {
+		if lctx, end, ok := s.beginLeaderSweep(ctx); ok {
+			defer end()
+			for _, run := range led {
+				reads = append(reads, serviceRead{ctx: lctx, run: run})
+			}
+		}
 	}
-	lctx, end, ok := s.beginLeaderSweep(ctx)
-	if !ok {
-		return nil
-	}
-	defer end()
-	s.mirrorServiceRuns(lctx, st, led)
+	s.mirrorServiceRuns(st, reads)
 	return nil
 }
 
+// serviceRead is one run a pass reads, with the context it is read under: the pass's budget, and for
+// a leader's run the leader's term as well.
+type serviceRead struct {
+	ctx context.Context
+	run types.AgentRun
+}
+
 // mirrorServiceRuns reads runs in parallel, the least recently observed first so a pass cut short by
-// its budget never starves the same runs.
-func (s *Server) mirrorServiceRuns(ctx context.Context, st store.ServiceRunStore, runs []types.AgentRun) {
-	observed := func(r types.AgentRun) time.Time {
-		if r.ServiceStatus == nil {
+// its budget never starves the same runs. A read whose context is done is skipped, never started.
+func (s *Server) mirrorServiceRuns(st store.ServiceRunStore, reads []serviceRead) {
+	observed := func(r serviceRead) time.Time {
+		if r.run.ServiceStatus == nil {
 			return time.Time{}
 		}
-		return r.ServiceStatus.ObservedAt
+		return r.run.ServiceStatus.ObservedAt
 	}
-	slices.SortStableFunc(runs, func(a, b types.AgentRun) int { return observed(a).Compare(observed(b)) })
+	slices.SortStableFunc(reads, func(a, b serviceRead) int { return observed(a).Compare(observed(b)) })
 	var wg sync.WaitGroup
 	slots := make(chan struct{}, serviceProbeWorkers)
 	defer wg.Wait()
-	for _, run := range runs {
+	for _, rd := range reads {
 		select {
 		case slots <- struct{}{}:
-		case <-ctx.Done():
-			return
+		case <-rd.ctx.Done():
+			continue
+		}
+		if rd.ctx.Err() != nil {
+			<-slots
+			continue
 		}
 		wg.Go(func() {
 			defer func() { <-slots }()
 			defer func() {
 				if r := recover(); r != nil {
-					slog.ErrorContext(ctx, "wardynd: PANIC in service health read (contained)",
-						slog.String("run_id", run.ID.String()), slog.Any("panic", r))
+					slog.ErrorContext(rd.ctx, "wardynd: PANIC in service health read (contained)",
+						slog.String("run_id", rd.run.ID.String()), slog.Any("panic", r))
 				}
 			}()
-			s.mirrorServiceRun(ctx, st, run)
+			s.mirrorServiceRun(rd.ctx, st, rd.run)
 		})
 	}
 }
