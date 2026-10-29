@@ -41,11 +41,15 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A runner that the organisation sends away or revokes while it waits for its pending work now acts on that. It could take
   it for a dropped connection and log `context canceled`: a revoked runner then kept its state, including the credentials
   delivered to it, until it next got through to the organisation.
+- A header credential Wardyn adds at the proxy from a stored secret is now sent without one trailing line break, which a
+  secret saved with `echo` or an editor ends in; the request carried an invalid header before. A secret that is under
+  8 bytes once that line break is dropped is refused instead (`secret_value_too_short`), since output masking could not
+  cover it.
 
 ### Security
 
 - With `WARDYN_ENV_SECRET_PLACEHOLDERS`, `WARDYN_FILE_SECRET_PLACEHOLDERS` or `WARDYN_RUNNER_SECRET_PLACEHOLDERS` on, a
-  secret whose stored value ends in a line break, as one saved with `echo` or an editor does, now gets a placeholder.
+  secret whose stored value ends in one line break, as one saved with `echo` or an editor does, now gets a placeholder.
   It went into the sandbox as its value, and only the run's audit log said so.
 - The agent images now carry GitHub CLI 2.103.3, built with Go 1.27.3. Earlier images carried 2.102.0, built with
   Go 1.27.1, which image scanners flag for CVE-2026-56857. That flaw affects Windows only, so it can't be reached in
