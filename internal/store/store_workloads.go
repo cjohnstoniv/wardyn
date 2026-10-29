@@ -527,7 +527,8 @@ const (
 // transaction that let it go, and dropped once the run is ended, so an end cut short is still owed. Owner,
 // Name and Generation are the workload's, for the run.kill row; Reason is WorkloadEndReplaced or
 // WorkloadEndDeleted. AfterRunID, when set, is the queued run that replaces it: the end waits until that
-// run is running. AfterState and AfterDetail are that run's state and status_detail as
+// run is running. AfterState and AfterDetail are that run's state and status_detail, and AfterRan whether
+// it took its slot (workloadRunRanSQL: a run that ran and then ended still replaced this one), as
 // ListWorkloadRunEnds read them.
 type WorkloadRunEnd struct {
 	RunID       uuid.UUID
@@ -538,11 +539,12 @@ type WorkloadRunEnd struct {
 	AfterRunID  *uuid.UUID
 	AfterState  types.RunState
 	AfterDetail string
+	AfterRan    bool
 }
 
 func scanWorkloadRunEnd(row pgx.Row) (WorkloadRunEnd, error) {
 	var e WorkloadRunEnd
-	err := row.Scan(&e.RunID, &e.Owner, &e.Name, &e.Generation, &e.Reason, &e.AfterRunID, &e.AfterState, &e.AfterDetail)
+	err := row.Scan(&e.RunID, &e.Owner, &e.Name, &e.Generation, &e.Reason, &e.AfterRunID, &e.AfterState, &e.AfterDetail, &e.AfterRan)
 	return e, err
 }
 
@@ -566,10 +568,11 @@ func (s PG) OweWorkloadRunEnd(ctx context.Context, e WorkloadRunEnd) error {
 // with the state of the run it waits on.
 func (s PG) ListWorkloadRunEnds(ctx context.Context, olderThan time.Duration, limit int) ([]WorkloadRunEnd, error) {
 	return collect(ctx, s.Pool, "list", "owed workload run ends", `
-		SELECT e.run_id, e.owner, e.name, e.generation, e.reason, e.after_run_id, COALESCE(a.state, ''), COALESCE(a.status_detail, '')
+		SELECT e.run_id, e.owner, e.name, e.generation, e.reason, e.after_run_id, COALESCE(a.state, ''), COALESCE(a.status_detail, ''),
+			COALESCE(`+workloadRunRanSQL("a", "$3")+`, false)
 		FROM workload_run_ends e LEFT JOIN agent_runs a ON a.id = e.after_run_id
 		WHERE e.created_at < now() - make_interval(secs => $1::float8) ORDER BY e.created_at, e.run_id LIMIT $2`,
-		[]any{olderThan.Seconds(), limit}, scanWorkloadRunEnd)
+		[]any{olderThan.Seconds(), limit, slotHoldingStateNames()}, scanWorkloadRunEnd)
 }
 
 // RestoreWorkloadRun gives a workload back the run e is owed to end, because e.AfterRunID, the queued run

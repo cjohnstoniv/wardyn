@@ -503,7 +503,7 @@ func (s *Server) sweepWorkloadRunEnds(ctx context.Context) error {
 		switch {
 		case e.AfterRunID == nil:
 			s.endOwedWorkloadRun(ctx, e, types.ActorSystem, "wardynd")
-		case e.AfterState == types.RunRunning || e.AfterState == types.RunWaiting:
+		case e.AfterState == types.RunRunning || e.AfterState == types.RunWaiting, isTerminalRunState(e.AfterState) && e.AfterRan:
 			s.takeOverWorkloadRun(ctx, e)
 		case isTerminalRunState(e.AfterState):
 			s.restoreWorkloadRun(ctx, ws, e)
@@ -512,8 +512,8 @@ func (s *Server) sweepWorkloadRunEnds(ctx context.Context) error {
 	return nil
 }
 
-// takeOverWorkloadRun ends e's run now that e.AfterRunID, the queued run that replaces it, is running, and
-// records the replacement.
+// takeOverWorkloadRun ends e's run now that e.AfterRunID, the queued run that replaces it, is running (or
+// ran, and has ended since: a normal end of the run that replaced it), and records the replacement.
 func (s *Server) takeOverWorkloadRun(ctx context.Context, e store.WorkloadRunEnd) {
 	if !s.endOwedWorkloadRun(ctx, e, types.ActorSystem, "wardynd") {
 		return

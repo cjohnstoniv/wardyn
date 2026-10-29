@@ -625,6 +625,40 @@ func TestPG_Workload_RefusedQueuedReplacementKeepsTheRunningRun(t *testing.T) {
 	}
 }
 
+// TestPG_Workload_ReplacementThatRanThenEndedStillReplaces: a queued replacement that started and then
+// ended before the sweep saw it running ended normally: the old run is still ended, with no restore and no
+// refusal.
+func TestPG_Workload_ReplacementThatRanThenEndedStillReplaces(t *testing.T) {
+	e := newQueueEnv(t)
+	pool := e.cappedPool("Busy", 1)
+	occupant, running := e.occupy(pool), e.occupy(e.cappedPool("Old", 1))
+	queued := e.queuedWorkloadReplacement(pool, running)
+
+	e.free(occupant)
+	e.waitStarted(queued)
+	e.exec(`UPDATE agent_runs SET state = 'FAILED', status_detail = 'agent exited' WHERE id = $1`, queued) // ran, then crashed
+	e.settleWorkloadRunEnds()
+	if got := e.run(running.ID).State; got != types.RunKilled {
+		t.Fatalf("old run state = %s after its replacement ran and ended, want KILLED", got)
+	}
+	v, err := e.pg.GetWorkload(context.Background(), e.personP, "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.CurrentRunID == nil || *v.CurrentRunID != queued || v.CurrentGeneration != 2 || v.LastRefusal != nil {
+		t.Fatalf("workload run=%v generation=%d refusal=%+v, want %s kept at generation 2 and no refusal", v.CurrentRunID, v.CurrentGeneration, v.LastRefusal, queued)
+	}
+	if len(e.audits(queued, "workload.launch_refused")) != 0 {
+		t.Fatal("a replacement that ran was recorded as refused")
+	}
+	if rows := e.audits(queued, "workload.replace"); len(rows) != 1 {
+		t.Fatalf("workload.replace rows on the replacement = %d, want 1", len(rows))
+	}
+	if n := e.count(`SELECT count(*) FROM workload_run_ends`); n != 0 {
+		t.Fatalf("owed ends left = %d, want 0", n)
+	}
+}
+
 // TestPG_Workload_ReplacementQueuedBehindItsOwnRunReplacesInPlace: in a pool of one slot, held by the
 // workload's own run, a changed spec could never start beside it: the old run ends at once, recorded as a
 // replacement, and the new one starts in the slot it freed.
