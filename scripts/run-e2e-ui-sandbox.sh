@@ -100,13 +100,16 @@ ECHO_PORT=9099
 # this moves with it.
 UI_MAX_CONNS=8
 
+# The background command run has no harness, so it starts from the "base" image. Mapping base too keeps it on
+# the local image: unmapped, it falls back to the published agent-base tagged with the daemon's version, and a
+# release candidate's version has no such tag until it is cut.
 compose() {
   COMPOSE_PROJECT_NAME="${PROJECT}" WARDYN_NS="${PROJECT}" \
     WARDYN_UP_PORT="${API_PORT}" WARDYN_PG_PORT="${PG_PORT}" WARDYN_SSH_PORT="${SSH_PORT}" \
     WARDYN_REGISTRY_PORT="${REGISTRY_PORT}" WARDYN_UI_SANDBOX_PORT="${UI_PORT}" \
     WARDYN_WARDYND_IMAGE="${WARDYND_IMAGE}" WARDYN_PROXY_IMAGE="${PROXY_IMAGE}" \
     WARDYN_UI_SANDBOX_LISTEN=":8081" WARDYN_UI_SANDBOX_ADVERTISE="http://127.0.0.1:${UI_PORT}" \
-    WARDYN_AGENT_IMAGES="$(jq -nc --arg img "${AGENT_IMAGE}" '{"claude-code":$img}')" \
+    WARDYN_AGENT_IMAGES="$(jq -nc --arg img "${AGENT_IMAGE}" '{"claude-code":$img, base:$img}')" \
     WARDYN_AGE_KEY="${AGE_KEY:-}" \
     docker compose -p "${PROJECT}" -f "${COMPOSE_FILE}" "$@"
 }
