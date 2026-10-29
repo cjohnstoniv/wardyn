@@ -78,7 +78,7 @@ func (s *Server) leaseRun(ctx context.Context, leaser store.RunLeaser, run types
 		s.killRunAtLifetime(ctx, run, reason)
 		return
 	}
-	run = s.renewServiceLease(ctx, leaser, run, now)
+	run, renewing := s.renewServiceLease(ctx, leaser, run, now)
 	switch {
 	case run.LostAt != nil && run.LostReason == types.LostGone:
 		// endGoneRun's mark landed and its end did not (a failed write, or an end moved between its
@@ -155,6 +155,8 @@ func (s *Server) leaseRun(ctx context.Context, leaser store.RunLeaser, run types
 	case run.EndsAt == nil:
 	case !now.Before(*run.EndsAt):
 		s.endRun(ctx, leaser, run, now)
+	case renewing:
+		// A service renewal keeps alive is not warned (renewServiceLease).
 	default:
 		s.warnRunEnding(ctx, leaser, run, now)
 	}

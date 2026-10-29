@@ -277,3 +277,50 @@ func TestRunLease_AServiceNotHeardFromIsNotRenewed(t *testing.T) {
 		}
 	}
 }
+
+// A service renewal keeps alive is never warned: with a unit of an hour or less the warning window
+// opens before the half-life, and every renewal would send run.ending_soon. A service renewal will
+// not keep alive is warned as before.
+func TestRunLease_EndingSoonOnlyWhenRenewalWillNotHappen(t *testing.T) {
+	healthy := func(f *leaseFixture) {
+		f.st.run.ServiceStatus = &types.RunServiceStatus{Health: types.ServiceHealthHealthy, ObservedAt: f.now}
+	}
+	for _, tc := range []struct {
+		name    string
+		endsIn  time.Duration
+		mutate  func(f *leaseFixture)
+		renewed bool
+		warned  bool
+	}{
+		{name: "healthy, inside the warning window, before the half-life", endsIn: 45 * time.Minute, mutate: healthy},
+		{name: "healthy, renewed to a full unit inside the warning window", endsIn: 20 * time.Minute, mutate: healthy, renewed: true},
+		{name: "starting, before the half-life", endsIn: 45 * time.Minute},
+		{name: "unhealthy", endsIn: 45 * time.Minute, warned: true, mutate: func(f *leaseFixture) {
+			f.st.run.ServiceStatus = &types.RunServiceStatus{Health: types.ServiceHealthUnhealthy, ObservedAt: f.now}
+		}},
+		{name: "unknown", endsIn: 45 * time.Minute, warned: true, mutate: func(f *leaseFixture) {
+			f.st.run.ServiceStatus = &types.RunServiceStatus{Health: types.ServiceHealthUnknown, ObservedAt: f.now}
+		}},
+		{name: "at the lifetime cap", endsIn: 45 * time.Minute, warned: true, mutate: func(f *leaseFixture) {
+			healthy(f)
+			capAt := f.now.Add(45 * time.Minute)
+			f.st.run.LifetimeCapAt, f.st.run.LifetimeCapSource = &capAt, types.LimitSourcePool
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newServiceLeaseFixture(t, tc.endsIn)
+			f.st.run.RunLimits = types.RunLimits{MaxEndAheadSec: 3600}
+			if tc.mutate != nil {
+				tc.mutate(f)
+			}
+			end := f.endsAt()
+			f.sweep(t)
+			if renewed := !f.endsAt().Equal(end); renewed != tc.renewed {
+				t.Errorf("renewed = %v, want %v", renewed, tc.renewed)
+			}
+			if n := len(f.audit.eventsFor(f.run.ID, "run.ending_soon")); (n == 1) != tc.warned || n > 1 {
+				t.Errorf("%d run.ending_soon rows, want warned=%v", n, tc.warned)
+			}
+		})
+	}
+}

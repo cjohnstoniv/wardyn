@@ -93,26 +93,45 @@ func planServiceRenewal(run types.AgentRun, boundarySec int, now time.Time) (ser
 	return serviceRenewal{target: target, unit: unit, source: source, health: health}, true
 }
 
+// serviceRenewsLater is whether a service run planServiceRenewal declined now is one it will renew
+// when its half-life opens: starting or healthy, with a lease unit, and an end short of the target
+// the lifetime cap allows (the cap's second, as planServiceRenewal truncates it).
+func serviceRenewsLater(run types.AgentRun, now time.Time) bool {
+	if run.Service == nil || run.EndsAt == nil || run.LostAt != nil || run.PausedAt != nil {
+		return false
+	}
+	if h := renewalHealth(run, now); h != types.ServiceHealthStarting && h != types.ServiceHealthHealthy {
+		return false
+	}
+	if cmp.Or(run.RunLimits.MaxEndAheadSec, run.RunLimits.DefaultEndSec) == 0 {
+		return false
+	}
+	return run.LifetimeCapAt == nil || run.LifetimeCapAt.Truncate(time.Second).After(*run.EndsAt)
+}
+
 // renewServiceLease renews run's lease when planServiceRenewal says so and returns the run as
 // the sweep goes on with it: the new end on success, the row it was given on any other outcome.
+// The bool says the run's end is renewal's to move, so the sweep sends no run.ending_soon: the run
+// was renewed this pass, or it is a service renewal will renew when its half-life opens. A unit of
+// an hour or less opens the warning window before the half-life, and every renewal would warn.
 // The write is the PATCH route's compare-and-set, so a person's edit, a re-clamp or a lost
 // race leaves the end alone and writes no audit row, as does an owner whose authority to extend
 // is refused.
-func (s *Server) renewServiceLease(ctx context.Context, leaser store.RunLeaser, run types.AgentRun, now time.Time) types.AgentRun {
+func (s *Server) renewServiceLease(ctx context.Context, leaser store.RunLeaser, run types.AgentRun, now time.Time) (types.AgentRun, bool) {
 	// The boundary can only shrink the unit, so a run declined without it is declined with it:
 	// the boundary is read only for a run that is about to renew.
 	if _, ok := planServiceRenewal(run, 0, now); !ok {
-		return run
+		return run, serviceRenewsLater(run, now)
 	}
 	boundarySec, err := s.boundaryEndCap(ctx, run)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: reading the boundary to renew a service's lease failed",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
-		return run
+		return run, false
 	}
 	renewal, ok := planServiceRenewal(run, boundarySec, now)
 	if !ok {
-		return run
+		return run, false
 	}
 	// A later end keeps a sandbox and its credentials alive, so a renewal needs the authority a
 	// PATCH moving the end later does (extendRefusal), as the owner the run row names. A refusal,
@@ -124,17 +143,17 @@ func (s *Server) renewServiceLease(ctx context.Context, leaser store.RunLeaser, 
 			slog.WarnContext(ctx, "wardynd: a service's lease is not renewed: its owner's authority is refused",
 				slog.String("run_id", run.ID.String()), slog.String("reason", ref.reason))
 		}
-		return run
+		return run, false
 	}
 	applied, err := leaser.SetRunEndAndWait(ctx, run.ID, run.RunLimits, run.EndsAt, run.WaitBudgetSec,
 		&renewal.target, run.WaitBudgetSec, nil)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: renewing a service's lease failed",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
-		return run
+		return run, false
 	}
 	if !applied {
-		return run
+		return run, false
 	}
 	// The runner contains a run at the end its lease carries, as in reclampRun.
 	if run.Placement == types.PlacementLocal {
@@ -150,5 +169,5 @@ func (s *Server) renewServiceLease(ctx context.Context, leaser store.RunLeaser, 
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.end.set", run.ID.String(),
 		"success", mustJSON(data)))
 	run.EndsAt, run.EndTightenedAt = &renewal.target, nil
-	return run
+	return run, true
 }
