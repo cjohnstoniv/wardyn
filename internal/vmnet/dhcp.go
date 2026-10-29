@@ -115,15 +115,19 @@ func parseDHCP(frame []byte) (m dhcpMessage, ok bool) {
 	return m, true
 }
 
-// dhcpDeclined reports whether frame is the guest's DECLINE of the lease, and
-// the reason it gave (option 56), if any. A guest declines when the address it
-// was offered answers its probe as in use (RFC 5227).
-func dhcpDeclined(frame []byte) (message string, ok bool) {
+// dhcpDeclined reports whether frame is the guest's DECLINE of a lease, the
+// address it declined (option 50) and the reason it gave (option 56), if any. A
+// guest declines when the address it was offered answers its probe as in use
+// (RFC 5227).
+func dhcpDeclined(frame []byte) (addr, message string, ok bool) {
 	m, ok := parseDHCP(frame)
 	if !ok || m.msgType != dhcpDecline {
-		return "", false
+		return "", "", false
 	}
-	return string(m.message), true
+	if len(m.reqIP) == 4 {
+		addr = tcpip.AddrFrom4Slice(m.reqIP).String()
+	}
+	return addr, string(m.message), true
 }
 
 // dhcpReply answers one DHCP request frame; ok is false for anything it does
