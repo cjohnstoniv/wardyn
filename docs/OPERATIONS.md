@@ -43,6 +43,7 @@ user, same host](#second-user-same-host)". Deciding who can do what:
 - [High availability](#high-availability)
 - [Kubernetes: known gaps](operations/kubernetes-known-gaps.md#kubernetes-known-gaps)
 - Task pages under [`docs/operations/`](operations/): [Managed laptops: client-mode runners](operations/hybrid-laptops.md), [Runner pools](operations/runner-pools.md#runner-pools-where-a-run-goes), [Launch presets](operations/launch-presets.md#launch-presets), [Console branding](operations/console-branding.md#console-branding), [The Wardyn boundary](operations/boundary.md#the-wardyn-boundary-the-outermost-layer-of-every-run), [Approval rules](operations/approval-rules.md#approval-rules-a-security-admins-rule-approves-a-service-identitys-held-call), [Unit admins](operations/unit-admins.md#unit-admins-governing-one-part-of-the-tree)
+- [Workloads](operations/workloads.md): keep a run declared with `wardyn apply` or a WardynWorkload resource, bind a namespace, read its status, and the Argo CD health check.
 
 </details>
 
@@ -5353,6 +5354,7 @@ kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive-slug>-<home>
   is **not zero-downtime upgrades**.
 - The Deployment strategy stays `Recreate`, so an
   upgrade stops the old replicas before it starts the new ones.
+- With registered runners keep one replica: [High availability: what a second replica still hits](operations/high-availability.md).
 
 ### Turning it on
 

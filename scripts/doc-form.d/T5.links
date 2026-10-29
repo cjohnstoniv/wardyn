@@ -1,0 +1,3 @@
+# The must-link rule in scripts/check-doc-links.sh applies to these docs.
+docs/EXTENDING.md
+docs/operations/high-availability.md

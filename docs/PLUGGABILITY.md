@@ -248,4 +248,5 @@
   - [`internal/runner/docker/hardening.go`](../internal/runner/docker/hardening.go) (`resolveRuntime`, `capabilitiesForWith`) + `cmd/wardynd` `WARDYN_CONFINEMENT_MAP` — the confinement substrate/runtime seam.
 - [`internal/egress/evaluator.go`](../internal/egress/evaluator.go) (policy evaluator, overridable via `Options.Evaluator` in [`internal/egress/proxy/proxy.go`](../internal/egress/proxy/proxy.go)) + [`internal/egress/proxy/local_routes.go`](../internal/egress/proxy/local_routes.go) (LLM-route forwarding) — the egress seams.
 - [`internal/runner/runner.go`](../internal/runner/runner.go) (`Capabilities.Resolved`) + [`internal/api/healthz.go`](../internal/api/healthz.go) (`/healthz` `confinement_substrates` + `components`).
+- [EXTENDING.md](EXTENDING.md) maps the layers and the interface each extension implements, including the closed sets (model provider kinds, credential classes) that have no seam.
 - Planned impls (seams ready, alternates not built): the non-OCI VMM `Substrate` (SmolVM/Firecracker), SPIRE identity, OPA/Cedar evaluator, an external LLM gateway.
