@@ -115,9 +115,9 @@ func TestPG_WorkloadFromRunner_UnboundIsNotBound(t *testing.T) {
 	e.bindNamespace(t, e.orgPool(t, "Other cluster").ID, "team-b")
 	e.report(t, e.apply("team-b", "web", ""))
 	e.report(t, e.apply("team-x", "web", ""))
-	got := e.statuses(t, 1)
+	e.statuses(t, 1)
 	time.Sleep(200 * time.Millisecond) // a status for team-b would have arrived by now
-	if got = e.fake.WorkloadStatuses(); len(got) != 1 || got[0].Namespace != "team-x" || got[0].Phase != runnerwire.WorkloadPhaseNotBound {
+	if got := e.fake.WorkloadStatuses(); len(got) != 1 || got[0].Namespace != "team-x" || got[0].Phase != runnerwire.WorkloadPhaseNotBound {
 		t.Fatalf("statuses %+v, want one NotBound for team-x", got)
 	}
 	if _, err := e.st.GetWorkload(context.Background(), svcPrin, "web"); !errors.Is(err, store.ErrNotFound) {

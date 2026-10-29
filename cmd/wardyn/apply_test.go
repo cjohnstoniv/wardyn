@@ -239,13 +239,13 @@ func storedWeb(t *testing.T, src string) sdk.Workload {
 func TestDiffExitCodes(t *testing.T) {
 	stored := storedWeb(t, webYAML)
 	file := writeTemplateFile(t, "w.yaml", webYAML)
-	run := func(get func(http.ResponseWriter, []byte)) (string, error, *routeRig) {
+	run := func(get func(http.ResponseWriter, []byte)) (string, *routeRig, error) {
 		rig := newRouteRig(t, doorRoutes(t, map[string]func(http.ResponseWriter, []byte){getWeb: get}))
 		out, err := rig.run(t, "diff", "-f", file)
-		return out, err, rig
+		return out, rig, err
 	}
 
-	out, err, rig := run(replyJSON(http.StatusOK, stored))
+	out, rig, err := run(replyJSON(http.StatusOK, stored))
 	if err != nil || out != "" {
 		t.Errorf("equal: err = %v, output = %q", err, out)
 	}
@@ -257,7 +257,7 @@ func TestDiffExitCodes(t *testing.T) {
 
 	changed := stored
 	changed.Description = "an older description"
-	out, err, _ = run(replyJSON(http.StatusOK, changed))
+	out, _, err = run(replyJSON(http.StatusOK, changed))
 	var ee *exitError
 	if !errors.As(err, &ee) || ee.code != 1 {
 		t.Errorf("changed: err = %v, want exit 1", err)
@@ -268,7 +268,7 @@ func TestDiffExitCodes(t *testing.T) {
 		}
 	}
 
-	out, err, _ = run(replyJSON(http.StatusNotFound, map[string]string{"error": "workload_not_found"}))
+	out, _, err = run(replyJSON(http.StatusNotFound, map[string]string{"error": "workload_not_found"}))
 	if !errors.As(err, &ee) || ee.code != 1 {
 		t.Errorf("not stored: err = %v, want exit 1", err)
 	}
@@ -276,7 +276,7 @@ func TestDiffExitCodes(t *testing.T) {
 		t.Errorf("not stored: output = %q", out)
 	}
 
-	if _, err, _ = run(replyJSON(http.StatusInternalServerError, map[string]string{"error": "boom"})); err == nil || exitCodeFor(err) != 4 {
+	if _, _, err = run(replyJSON(http.StatusInternalServerError, map[string]string{"error": "boom"})); err == nil || exitCodeFor(err) != 4 {
 		t.Errorf("a server error = %v, want exit 4", err)
 	}
 
