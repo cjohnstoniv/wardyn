@@ -84,8 +84,8 @@ func (h *Hub) endWithControl(ctx context.Context, id uuid.UUID, kind runnerwire.
 				(*abort)()
 			}
 		}
-		// With only set, the holder is a reconnect that replaces the session this call was made for: wait
-		// for it instead of cancelling it.
+		// With only set, wait for the holder instead of cancelling it: it may be a reconnect replacing the
+		// session this call was made for, or an activity check, the resume timer or Close.
 		s.mu.Lock()
 	}
 	defer s.mu.Unlock()
