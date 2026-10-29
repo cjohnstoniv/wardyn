@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
@@ -422,4 +423,32 @@ func (s *Server) wallsAdmitApproval(w http.ResponseWriter, r *http.Request, ap t
 	ref := &policyref.Ref{Source: policyref.LayerPersonal, Owner: run.CreatedBy}
 	writeErrorReasonPolicy(w, http.StatusForbidden, reasonPersonalWallsHost, msg, ref, personalProvenance)
 	return run, haveRun, false
+}
+
+// projectWallsBlock sets WallsBlock on every PENDING egress_domain row whose host the run owner's walls
+// deny, the verdict wallsAdmitApproval gives on an approve. The run and the walls are read once each per run;
+// a run or walls that cannot be read leave the row unmarked, and the approve still refuses on its own.
+func (s *Server) projectWallsBlock(ctx context.Context, rows []types.ApprovalRequest) {
+	if s.cfg.Store == nil {
+		return
+	}
+	blocks := map[uuid.UUID]*types.PersonalWallsSpec{}
+	for i := range rows {
+		ap := rows[i]
+		if ap.State != types.ApprovalPending || ap.Kind != types.ApprovalEgressDomain {
+			continue
+		}
+		walls, seen := blocks[ap.RunID]
+		if !seen {
+			if run, err := s.cfg.Store.GetRun(ctx, ap.RunID); err == nil {
+				if spec, err := s.personalWalls(ctx, run.CreatedBy); err == nil {
+					walls = &spec
+				}
+			}
+			blocks[ap.RunID] = walls
+		}
+		if walls != nil && walls.DeniedDomains != nil && ceilingDenies(*walls.DeniedDomains, approvalHost(ap)) {
+			rows[i].WallsBlock = true
+		}
+	}
 }

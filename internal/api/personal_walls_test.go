@@ -332,6 +332,45 @@ func TestPersonalWallsSealLayer(t *testing.T) {
 	}
 }
 
+// wallsRunStore is the walls fake with the runs a list of approvals reads back.
+type wallsRunStore struct {
+	*uvStore
+	runs map[uuid.UUID]types.AgentRun
+}
+
+func (s *wallsRunStore) GetRun(_ context.Context, id uuid.UUID) (types.AgentRun, error) {
+	if run, ok := s.runs[id]; ok {
+		return run, nil
+	}
+	return types.AgentRun{}, store.ErrNotFound
+}
+
+// TestPersonalWallsProjectWallsBlock: only a PENDING egress_domain row whose host the run owner's walls
+// deny is marked; a host outside the deny list, a decided row and a run that cannot be read are not.
+func TestPersonalWallsProjectWallsBlock(t *testing.T) {
+	h := newHarness(t)
+	uv := &uvStore{permStore: &permStore{capStore: &capStore{userTypes: utKnown}}, prefs: map[string]json.RawMessage{}}
+	run := types.AgentRun{ID: uuid.New(), CreatedBy: wallsSub}
+	st := &wallsRunStore{uvStore: uv, runs: map[uuid.UUID]types.AgentRun{run.ID: run}}
+	srv := New(baseTestConfig(h, st))
+	saveWalls(t, uv, wallsSub, types.PersonalWallsSpec{DeniedDomains: wallsList("*.evil.example")})
+	row := func(runID uuid.UUID, host string, state types.ApprovalState) types.ApprovalRequest {
+		return types.ApprovalRequest{RunID: runID, Kind: types.ApprovalEgressDomain, State: state, RequestedScope: json.RawMessage(`{"host":"` + host + `"}`)}
+	}
+	rows := []types.ApprovalRequest{
+		row(run.ID, "a.evil.example", types.ApprovalPending),
+		row(run.ID, "docs.example.com", types.ApprovalPending),
+		row(run.ID, "a.evil.example", types.ApprovalApproved),
+		row(uuid.New(), "a.evil.example", types.ApprovalPending),
+	}
+	srv.projectWallsBlock(context.Background(), rows)
+	for i, want := range []bool{true, false, false, false} {
+		if rows[i].WallsBlock != want {
+			t.Errorf("row %d (%s %s): walls_block = %v, want %v", i, rows[i].State, approvalHost(rows[i]), rows[i].WallsBlock, want)
+		}
+	}
+}
+
 // TestPersonalWallsAdmitApproval: an approval of a host the run owner's walls deny is refused whoever
 // decides, with the owner's own sentence for the owner; a host outside their allowlist is not.
 func TestPersonalWallsAdmitApproval(t *testing.T) {

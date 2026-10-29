@@ -61,3 +61,13 @@ export const NR_WALLS = {
   // Not on the board: the walls step's own warning on Review, with the knob in the Policy tab's field words.
   NARROWED: (knob: string | number) => `Your walls narrowed ${knob}.`,
 } as const;
+
+// T4-c's approval refusal (board R16): shown on a request whose host the run owner's walls deny, with the Why card
+// under it. Each sentence is drawn with the host in monospace between its two halves. "in Settings" is where the
+// board says "on Your account", which the console now calls Settings (the Why card's own Can change row says the same).
+export const APPROVAL_WALLS = {
+  OWN_BEFORE: "Your walls block ",
+  OWN_AFTER: ". Change them in Settings.",
+  OTHER_BEFORE: (owner: string) => `${owner}'s walls block `,
+  OTHER_AFTER: " for this run.",
+} as const;
