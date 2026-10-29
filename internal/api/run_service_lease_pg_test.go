@@ -15,7 +15,7 @@ import (
 )
 
 // newServiceLeasePG is a server on a throwaway Postgres store with a fixed clock (*clock) and one
-// RUNNING service run started at *clock whose captured lease is leaseSec and whose end is endsIn away.
+// RUNNING service run started at *clock whose captured lease is leaseSec, whose end is endsIn away and whose pool lifetime cap is a day out.
 func newServiceLeasePG(t *testing.T, clock *time.Time, leaseSec int, endsIn time.Duration) (*Server, store.PG, types.AgentRun) {
 	t.Helper()
 	st := store.NewPG(throwawayPGPool(t))
@@ -23,13 +23,14 @@ func newServiceLeasePG(t *testing.T, clock *time.Time, leaseSec int, endsIn time
 	h.srv.cfg.Store = st
 	h.srv.cfg.Runner = &leaseRunner{finalizeTailRunner: &finalizeTailRunner{fakeRunner: &fakeRunner{}}}
 	h.srv.cfg.Now = func() time.Time { return *clock }
-	end := clock.Add(endsIn)
+	end, capAt := clock.Add(endsIn), clock.Add(24*time.Hour)
 	run, err := st.CreateRun(context.Background(), types.AgentRun{
 		ID: uuid.New(), CreatedAt: *clock, UpdatedAt: *clock,
 		CreatedBy: "op@example.com", OperatorOwned: true, Agent: "claude-code", Task: "service lease probe",
 		ConfinementClass: types.CC2, State: types.RunRunning, RunnerTarget: "docker",
 		SandboxRef: "wardyn-agent-" + uuid.NewString(), Experience: types.ExperienceBackground,
 		EndsAt: &end, RunLimits: types.RunLimits{MaxEndAheadSec: leaseSec},
+		LifetimeCapAt: &capAt, LifetimeCapSource: types.LimitSourcePool,
 		Service: &types.RunService{Restart: types.ServiceRestartOnFailure},
 	})
 	if err != nil {

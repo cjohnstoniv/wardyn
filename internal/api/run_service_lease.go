@@ -16,13 +16,15 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// A service's lease renews itself. The unit is the lease the run captured
-// (max_end_ahead_sec, else default_end_sec), held to the boundary's maximum the way
-// every PATCH is; the bounds are the pool's and deployment's lifetime cap, which this
-// never passes. While the service is starting or healthy and its end is within half a
-// unit, the lease sweep moves the end to now plus the furthest the walls allow, so a
-// healthy service lives as long as its walls let it. An unhealthy one, or one
-// not heard from lately (renewalHealth), is not renewed and ends at its lease, with the usual run.ending_soon warnings.
+// A service's lease renews itself only when an absolute lifetime cap applies: the pool's
+// background.lifetime.max_sec or the deployment's WARDYN_RUN_MAX_AGE. The unit is the lease
+// the run captured (max_end_ahead_sec, else default_end_sec), held to the boundary's maximum
+// the way every PATCH is; the bound is that cap, which this never passes. While the service is
+// starting or healthy and its end is within half a unit, the lease sweep moves the end to now
+// plus the furthest the cap allows, so a healthy service lives as long as its cap lets it. A
+// service with no cap, an unhealthy one, or one not heard from lately (renewalHealth) is not
+// renewed and ends at its lease, with the usual run.ending_soon warnings; the uncapped one is
+// told so before launch (serviceNoCapWarning).
 
 // serviceStatusStale is how old a service's last health observation may be before renewal reads
 // it as unknown. The health sweep rewrites an unchanged status only every serviceStatusRefresh, so
@@ -87,7 +89,7 @@ type serviceRenewal struct {
 // boundarySec is the boundary's end maximum in seconds, 0 for none. A run with no lease
 // unit has no end to renew; health is renewalHealth's, so a stale observation renews nothing.
 func planServiceRenewal(run types.AgentRun, boundarySec int, now time.Time) (serviceRenewal, bool) {
-	if run.Service == nil || run.EndsAt == nil || run.LostAt != nil || run.PausedAt != nil {
+	if run.Service == nil || run.LifetimeCapAt == nil || run.EndsAt == nil || run.LostAt != nil || run.PausedAt != nil {
 		return serviceRenewal{}, false
 	}
 	health := renewalHealth(run, now)
@@ -102,12 +104,8 @@ func planServiceRenewal(run types.AgentRun, boundarySec int, now time.Time) (ser
 	if run.EndsAt.Sub(now) > time.Duration(unit)*time.Second/2 {
 		return serviceRenewal{}, false
 	}
-	var capAhead *time.Duration
-	if run.LifetimeCapAt != nil {
-		d := run.LifetimeCapAt.Sub(now)
-		capAhead = &d
-	}
-	bound := latestEndAhead(unit, capAhead, run.LifetimeCapSource)
+	capAhead := run.LifetimeCapAt.Sub(now)
+	bound := latestEndAhead(unit, &capAhead, run.LifetimeCapSource)
 	target := now.Add(bound.ahead).Truncate(time.Second)
 	if !target.After(*run.EndsAt) {
 		return serviceRenewal{}, false
@@ -120,10 +118,11 @@ func planServiceRenewal(run types.AgentRun, boundarySec int, now time.Time) (ser
 }
 
 // serviceRenewsLater is whether a service run planServiceRenewal declined now is one it will renew
-// when its half-life opens: starting or healthy, with a lease unit, and an end short of the target
-// the lifetime cap allows (the cap's second, as planServiceRenewal truncates it).
+// when its half-life opens: capped, starting or healthy, with a lease unit, and an end short of the
+// target the lifetime cap allows (the cap's second, as planServiceRenewal truncates it). An uncapped
+// service never renews, so it gets the normal run.ending_soon warnings.
 func serviceRenewsLater(run types.AgentRun, now time.Time) bool {
-	if run.Service == nil || run.EndsAt == nil || run.LostAt != nil || run.PausedAt != nil {
+	if run.Service == nil || run.LifetimeCapAt == nil || run.EndsAt == nil || run.LostAt != nil || run.PausedAt != nil {
 		return false
 	}
 	if h := renewalHealth(run, now); h != types.ServiceHealthStarting && h != types.ServiceHealthHealthy {
@@ -132,7 +131,7 @@ func serviceRenewsLater(run types.AgentRun, now time.Time) bool {
 	if cmp.Or(run.RunLimits.MaxEndAheadSec, run.RunLimits.DefaultEndSec) == 0 {
 		return false
 	}
-	return run.LifetimeCapAt == nil || run.LifetimeCapAt.Truncate(time.Second).After(*run.EndsAt)
+	return run.LifetimeCapAt.Truncate(time.Second).After(*run.EndsAt)
 }
 
 // renewServiceLease renews run's lease when planServiceRenewal says so and returns the run as

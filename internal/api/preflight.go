@@ -402,7 +402,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	warnings = append(warnings, s.managedSettingsUndeliveredWarning(ctx, managedSettingsRun{req: &req, spec: spec, harnesses: f.harnesses, level: f.autonomy.Level,
 		locked: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade).agentGuardrailLocks, class: enforced, place: f.place}, bound)...)
 	warnings = append(warnings, f.fitWarnings...)
-	warnings = append(warnings, servicePauseWarnings(req.Service != nil, ceiling.Limits.PauseIdleAfterSec)...)
+	warnings = append(warnings, serviceWarnings(req.Service != nil, ceiling.Limits.PauseIdleAfterSec, f.end.capSec > 0)...)
 
 	// A zero residency means no provider was chosen (none serves the agent, or a
 	// non-model run) — omitted rather than published as a guess.

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -142,18 +143,21 @@ func TestServiceEnvFromTheFrozenSpec(t *testing.T) {
 	}
 }
 
-// TestServiceCreateWarnings: the pause sentence rides a service's 201 only under an idle pause.
+// TestServiceCreateWarnings: the pause sentence rides a service's 201 only under an idle pause, and the
+// no-cap sentence only when no lifetime cap applies.
 func TestServiceCreateWarnings(t *testing.T) {
 	svc := &types.RunService{Restart: types.ServiceRestartOnFailure}
 	paused := types.RunLimits{PauseIdleAfterSec: 900}
+	capAt := time.Now().Add(time.Hour)
 	for _, tc := range []struct {
 		name string
 		run  types.AgentRun
 		want []string
 	}{
-		{"a service under an idle pause", types.AgentRun{Service: svc, RunLimits: paused},
-			[]string{"Your admin pauses runs nobody is using, so this service will be paused while it waits for requests."}},
-		{"a service with no idle pause", types.AgentRun{Service: svc}, nil},
+		{"a capped service under an idle pause", types.AgentRun{Service: svc, RunLimits: paused, LifetimeCapAt: &capAt}, []string{servicePauseWarning}},
+		{"a capped service with no idle pause", types.AgentRun{Service: svc, LifetimeCapAt: &capAt}, nil},
+		{"an uncapped service", types.AgentRun{Service: svc}, []string{serviceNoCapWarning}},
+		{"an uncapped service under an idle pause", types.AgentRun{Service: svc, RunLimits: paused}, []string{servicePauseWarning, serviceNoCapWarning}},
 		{"a run that is not a service", types.AgentRun{RunLimits: paused}, nil},
 	} {
 		if got := serviceCreateWarnings(tc.run); !slices.Equal(got, tc.want) {
@@ -162,18 +166,48 @@ func TestServiceCreateWarnings(t *testing.T) {
 	}
 }
 
+// TestServiceNoCapWarning: the exact sentence, present with no lifetime cap and absent with one, at the
+// two dry doors' shared helper and on a queued run's 201.
+func TestServiceNoCapWarning(t *testing.T) {
+	const want = "No lifetime limit applies to this run, so Wardyn will not keep renewing it: the service ends at its lease like any run. Ask your admin to set a lifetime limit on the pool to keep a service up."
+	if serviceNoCapWarning != want {
+		t.Fatalf("serviceNoCapWarning = %q, want %q", serviceNoCapWarning, want)
+	}
+	for _, c := range []struct {
+		name            string
+		service, capped bool
+		want            []string
+	}{
+		{"service, no cap", true, false, []string{want}},
+		{"service, capped", true, true, nil},
+		{"no service, no cap", false, false, nil},
+	} {
+		if got := serviceWarnings(c.service, 0, c.capped); !slices.Equal(got, c.want) {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+	queued := types.AgentRun{State: types.RunQueued, Service: &types.RunService{Restart: types.ServiceRestartOnFailure}}
+	if got := queuedServiceWarnings(queued, types.RunLimits{}, createEnd{}); !slices.Equal(got, []string{want}) {
+		t.Errorf("queued, no cap: %q, want the no-cap sentence", got)
+	}
+	if got := queuedServiceWarnings(queued, types.RunLimits{}, createEnd{capSec: 3600}); got != nil {
+		t.Errorf("queued, capped: %q, want none", got)
+	}
+}
+
 // TestQueuedServiceWarnings: a queued run captures no limits until it starts, so its 201 reads the
 // limits the launch resolved, not the empty ones on the queued row.
 func TestQueuedServiceWarnings(t *testing.T) {
 	svc := &types.RunService{Restart: types.ServiceRestartOnFailure}
 	queued := types.AgentRun{State: types.RunQueued, Service: svc}
-	if got := queuedServiceWarnings(queued, types.RunLimits{PauseIdleAfterSec: 900}); !slices.Equal(got, []string{servicePauseWarning}) {
+	capped := createEnd{capSec: 3600}
+	if got := queuedServiceWarnings(queued, types.RunLimits{PauseIdleAfterSec: 900}, capped); !slices.Equal(got, []string{servicePauseWarning}) {
 		t.Errorf("under an idle pause: %q, want the pause sentence", got)
 	}
-	if got := queuedServiceWarnings(queued, types.RunLimits{}); got != nil {
+	if got := queuedServiceWarnings(queued, types.RunLimits{}, capped); got != nil {
 		t.Errorf("with no idle pause: %q, want none", got)
 	}
-	if got := queuedServiceWarnings(types.AgentRun{State: types.RunQueued}, types.RunLimits{PauseIdleAfterSec: 900}); got != nil {
+	if got := queuedServiceWarnings(types.AgentRun{State: types.RunQueued}, types.RunLimits{PauseIdleAfterSec: 900}, capped); got != nil {
 		t.Errorf("not a service: %q, want none", got)
 	}
 }
