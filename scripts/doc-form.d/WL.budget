@@ -4,4 +4,5 @@
 # docs/operations/workloads.md 2427 adds 29 over 2398: the Digest row of the table of parts.
 # docs/operations/workloads.md 2481 adds 54 over 2427: the history route.
 # docs/operations/workloads.md 2668 measured after the workload-history merge onto the crdfix wave.
-docs/operations/workloads.md=2668 share=10
+# docs/operations/workloads.md 2677 measured (rc.8): the binding table says a revoke, not a session-only sign-out, ends a binding.
+docs/operations/workloads.md=2677 share=10

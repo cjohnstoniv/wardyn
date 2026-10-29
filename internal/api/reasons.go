@@ -749,5 +749,5 @@ const (
 	reasonWorkloadBindingPoolScope   = "workload_binding_pool_scope"   // 422: the pool is a person's own; a binding names an organization pool only
 	// A custom resource's status reason (runner_workloads.go), never an HTTP answer.
 	reasonWorkloadPoolMismatch    = "workload_pool_mismatch"    // the resource names a runner pool other than its namespace binding's
-	reasonWorkloadBindingInactive = "workload_binding_inactive" // the binding's identity is suspended or retired, its sponsor changed, or the sponsor's sessions were cut
+	reasonWorkloadBindingInactive = "workload_binding_inactive" // the binding's identity is suspended or retired, its sponsor changed, or the sponsor's access was revoked
 )

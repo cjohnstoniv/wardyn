@@ -147,7 +147,7 @@ The binding stops being authority when any of these happens. The spec is still r
 |---|---|
 | The service identity is suspended | Phase `BindingInactive`, reason `workload_binding_inactive` |
 | The identity's sponsor changed since the binding was made | The same |
-| The sponsor's sessions were cut | The same |
+| The sponsor's access is revoked (a sign-out that keeps their tokens does not count) | The same |
 | The identity is retired | Its bindings are deleted |
 
 To bind the namespace again, delete the binding and create it again with the identity's current sponsor. `wardyn workload binding delete ID` ends the namespace's launching; the runs it started continue.

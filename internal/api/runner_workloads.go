@@ -49,7 +49,7 @@ const (
 )
 
 const workloadBindingInactiveMsg = "The namespace binding no longer carries authority: its service identity is suspended or retired, " +
-	"its sponsor changed since the binding was made, or the sponsor's sessions were cut. Bind the namespace again."
+	"its sponsor changed since the binding was made, or the sponsor's access was revoked. Bind the namespace again."
 
 // WorkloadFromRunner is the `workload` event. It runs on the runner's read loop, so it only decodes, finds
 // the binding and records; a launch, a run's end and every status push go on in the background, because
@@ -206,8 +206,8 @@ func (s *Server) applyWorkloadReport(ctx context.Context, ws store.WorkloadStore
 
 // launchBoundWorkload launches a recorded resource's owed generation as the bound service, once the
 // binding still carries authority: the identity usable, its sponsor the one the binding was made under,
-// and the sponsor's sessions not cut since. These are the rules that end its tokens. A binding that no
-// longer carries it is recorded as the launch's refusal, and the current run keeps running. Either way the
+// and the sponsor's access not revoked since (a sign-out that keeps tokens does not count). These are the
+// rules that end its tokens. A binding that no longer carries it is recorded as the launch's refusal, and the current run keeps running. Either way the
 // resource's status is pushed at once.
 func (s *Server) launchBoundWorkload(ws store.WorkloadStore, b store.WorkloadBinding, si types.ServiceIdentity, wl store.Workload) {
 	sr, cancel, err := serviceLaunchRequest(si, b.Sponsor)

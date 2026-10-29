@@ -837,7 +837,7 @@ func (s *Server) restartLaunch(r *http.Request, ws store.WorkloadStore, wl store
 	}
 	// The service's standing as of the spec's last write, the authority that recorded it, as a binding's
 	// launch is judged as of the binding's making: usable, the same sponsor since, and the sponsor's
-	// sessions not cut since.
+	// access not revoked since (a sign-out that keeps tokens does not count).
 	sr, cancel, err := serviceLaunchRequest(si, si.Sponsor)
 	if err != nil {
 		return client.WorkloadLaunch{}, err
