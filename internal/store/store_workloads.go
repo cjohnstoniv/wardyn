@@ -494,13 +494,19 @@ func (s PG) DeleteK8sWorkload(ctx context.Context, w Workload) (Workload, error)
 		w.ID, w.K8sUID, w.SourcePoolID, w.SourceNamespace)
 }
 
-// deleteWorkload deletes the workload where matches and owes its current run's end in the same transaction.
+// deleteWorkload deletes the workload where matches and owes its current run's end in the same transaction,
+// and at once the end of a run that waited on it to take over.
 func (s PG) deleteWorkload(ctx context.Context, where string, args ...any) (Workload, error) {
 	var w Workload
 	err := s.inTx(ctx, func(q Querier) error {
 		var err error
 		w, err = scanWorkload(q.QueryRow(ctx, `DELETE FROM workloads w WHERE `+where+` RETURNING `+workloadCols, args...))
 		if err != nil || w.CurrentRunID == nil {
+			return err
+		}
+		// A run still waiting on the current one to take over from it has nothing left to wait for.
+		if _, err = q.Exec(ctx, `UPDATE workload_run_ends SET after_run_id = NULL, reason = $2 WHERE after_run_id = $1`,
+			*w.CurrentRunID, WorkloadEndDeleted); err != nil {
 			return err
 		}
 		return oweWorkloadRunEnd(ctx, q, WorkloadRunEnd{RunID: *w.CurrentRunID, Owner: w.Owner, Name: w.Name, Generation: w.Generation, Reason: WorkloadEndDeleted})

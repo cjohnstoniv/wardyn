@@ -765,6 +765,40 @@ func TestPG_Workload_ARunningReplacementWaitsForTheNext(t *testing.T) {
 	}
 }
 
+// TestPG_Workload_DeleteOwesTheRunAQueuedReplacementWasToEnd: deleting a workload whose current run is a
+// queued replacement owes both that run and the running one it was to replace, neither waiting on anything.
+func TestPG_Workload_DeleteOwesTheRunAQueuedReplacementWasToEnd(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := t.Context()
+	running := persistRun(t, ctx, pool, newRun(types.RunRunning)).ID
+	queued := persistRun(t, ctx, pool, newRun(types.RunQueued)).ID
+	w := mustPutWorkload(t, st, workloadPut("sub-a", "svc", "d1"))
+	if _, err := st.SetWorkloadRun(ctx, w.ID, mustClaim(t, st, w.ID), 1, running); err != nil {
+		t.Fatal(err)
+	}
+	mustPutWorkload(t, st, workloadPut("sub-a", "svc", "d2"))
+	if _, err := st.SetWorkloadRun(ctx, w.ID, mustClaim(t, st, w.ID), 2, queued); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DeleteWorkload(ctx, "sub-a", "svc"); err != nil {
+		t.Fatal(err)
+	}
+	ends, err := st.ListWorkloadRunEnds(ctx, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[uuid.UUID]store.WorkloadRunEnd{}
+	for _, e := range ends {
+		got[e.RunID] = e
+	}
+	for _, id := range []uuid.UUID{running, queued} {
+		if e, ok := got[id]; !ok || e.AfterRunID != nil || e.Reason != store.WorkloadEndDeleted {
+			t.Errorf("owed end of %s = %+v (owed %v), want owed at once for the delete", id, e, ok)
+		}
+	}
+}
+
 // A person's erasure removes their workloads, and only theirs.
 func TestPG_Workload_ErasureDeletesTheOwnersWorkloads(t *testing.T) {
 	st := store.NewPG(runsPGPoolIsolated(t))
