@@ -49,10 +49,10 @@ test.describe("New Run: who can call a port", () => {
     await page.getByRole("button", { name: "billing" }).click();
     await expect(page.getByText(NR_RUN.CALLER_ADDED)).toHaveCount(2);
     await page.getByLabel(NR_RUN.CALLERS_MENU_PERSON).fill("ana@");
-    await page.getByRole("button", { name: NR_RUN.CALLER_ADD_PERSON }).click();
+    await page.getByRole("dialog").getByRole("button", { name: NR_RUN.CALLER_ADD_PERSON, exact: true }).click();
     await expect(page.getByRole("alert").filter({ hasText: NR_RUN.CALLER_EMAIL_INVALID })).toBeVisible();
     await page.getByLabel(NR_RUN.CALLERS_MENU_PERSON).fill("li.wei@example.com");
-    await page.getByRole("button", { name: NR_RUN.CALLER_ADD_PERSON }).click();
+    await page.getByRole("dialog").getByRole("button", { name: NR_RUN.CALLER_ADD_PERSON, exact: true }).click();
     await page.keyboard.press("Escape");
 
     await expect(page.locator("[data-caller]")).toHaveCount(3);
