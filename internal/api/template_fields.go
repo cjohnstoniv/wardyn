@@ -332,7 +332,7 @@ var templateNestedCarried = map[string]string{
 	"StartFolder":        "kind attachment repo drive_id subpath",
 	"SecretOverride":     "secret_name host header format",
 	"ToolRule":           "tool effect",
-	"UIApp":              "name port path",
+	"UIApp":              "name port path inbound callers",
 	"WorkspaceMount":     "source target read_only",
 	"WorkspaceRepo":      "repo target ref",
 	"WorkspaceSelection": "workspace_id enabled_optional read_only target repos",
