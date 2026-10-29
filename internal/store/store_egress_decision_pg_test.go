@@ -12,6 +12,7 @@ package store_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -144,6 +145,51 @@ func TestPG_AddWorkspaceEgressDecision(t *testing.T) {
 			t.Fatalf("deny with a FULL approved list: %v, want success (the cap must guard the target list only)", err)
 		}
 	})
+}
+
+// TestPG_AddWorkspaceEgressDecisionFreshness pins WithEgressDecidedAt against the
+// real statements: a decision stamped BEFORE the operator's list edit writes
+// nothing (and says so), one at or after it writes, and a call with no option
+// behaves exactly as the live write-back always has.
+func TestPG_AddWorkspaceEgressDecisionFreshness(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+
+	for _, allow := range []bool{true, false} {
+		name := map[bool]string{true: "approve", false: "deny"}[allow]
+		listOf := func(w types.Workspace) []string {
+			if allow {
+				return w.ApprovedEgress
+			}
+			return w.DeniedEgress
+		}
+		ws := newEgressWorkspace(t, pg, ctx)
+		edited, err := pg.SetWorkspaceApprovedEgress(ctx, ws.ID, nil)
+		if err != nil || edited.EgressEditedAt == nil {
+			t.Fatalf("%s: list edit: %v (stamp %v)", name, err, edited.EgressEditedAt)
+		}
+		stamp := *edited.EgressEditedAt
+
+		stale := store.WithEgressDecidedAt(ctx, stamp.Add(-time.Minute))
+		if _, err := pg.AddWorkspaceEgressDecision(stale, ws.ID, "old.example.com", allow, 64); !errors.Is(err, store.ErrConflict) {
+			t.Fatalf("%s: a decision older than the list edit: err = %v, want ErrConflict", name, err)
+		}
+		if got, _ := pg.GetWorkspace(ctx, ws.ID); has(listOf(got), "old.example.com") {
+			t.Fatalf("%s: the stale decision wrote the host: %v", name, listOf(got))
+		}
+
+		fresh := store.WithEgressDecidedAt(ctx, stamp)
+		got, err := pg.AddWorkspaceEgressDecision(fresh, ws.ID, "same-moment.example.com", allow, 64)
+		if err != nil || !has(listOf(got), "same-moment.example.com") {
+			t.Fatalf("%s: a decision at the edit's own moment: %v / %v, want it written", name, err, listOf(got))
+		}
+
+		got, err = pg.AddWorkspaceEgressDecision(ctx, ws.ID, "no-option.example.com", allow, 64)
+		if err != nil || !has(listOf(got), "no-option.example.com") {
+			t.Fatalf("%s: no option: %v / %v, want the unconditional write", name, err, listOf(got))
+		}
+	}
 }
 
 // TestPG_SetWorkspaceDeniedEgress covers the revocation route's store call — the

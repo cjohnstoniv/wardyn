@@ -261,6 +261,8 @@ func (s PG) SetWorkspaceApprovedEgress(ctx context.Context, id uuid.UUID, domain
 // list (deny beats allow), and guards the cap against the target list only,
 // ORed with "already present" so an idempotent re-decide on a full list
 // never errors. Both effects land in ONE UPDATE, so a decision never half-applies.
+// $4 is WithEgressDecidedAt's time, NULL when unset: set, the write also
+// refuses a row whose list the operator edited after that moment.
 const (
 	qAddApprovedEgressDecision = `
 		UPDATE workspaces
@@ -275,6 +277,7 @@ const (
 			jsonb_array_length(COALESCE(approved_egress,'[]'::jsonb)) < $3
 			OR COALESCE(approved_egress,'[]'::jsonb) @> to_jsonb($2::text)
 		  )
+		  AND ($4::timestamptz IS NULL OR egress_edited_at IS NULL OR egress_edited_at <= $4::timestamptz)
 		RETURNING ` + wsReadCols
 
 	qAddDeniedEgressDecision = `
@@ -290,23 +293,42 @@ const (
 			jsonb_array_length(COALESCE(denied_egress,'[]'::jsonb)) < $3
 			OR COALESCE(denied_egress,'[]'::jsonb) @> to_jsonb($2::text)
 		  )
+		  AND ($4::timestamptz IS NULL OR egress_edited_at IS NULL OR egress_edited_at <= $4::timestamptz)
 		RETURNING ` + wsReadCols
 )
+
+type egressDecidedAtKey struct{}
+
+// WithEgressDecidedAt returns a context under which AddWorkspaceEgressDecision
+// writes only while the workspace's egress lists were not edited after at (the
+// moment the decision was made), so a replay of an old verdict cannot land on a
+// list the operator has since restated. Unset, the write is unconditional.
+func WithEgressDecidedAt(ctx context.Context, at time.Time) context.Context {
+	return context.WithValue(ctx, egressDecidedAtKey{}, at)
+}
 
 // AddWorkspaceEgressDecision records one `always`-scoped egress decision for
 // host: on allow it is added to approved_egress (capped, deduped) and removed
 // from denied_egress; on deny the mirror. Returns ErrConflict, not a bare
-// "not found", when id exists but the cap guard refused the write.
+// "not found", when id exists but the cap guard (or WithEgressDecidedAt's
+// freshness guard) refused the write.
 func (s PG) AddWorkspaceEgressDecision(ctx context.Context, id uuid.UUID, host string, allow bool, maxApprovedEgress int) (types.Workspace, error) {
 	q := qAddApprovedEgressDecision
 	if !allow {
 		q = qAddDeniedEgressDecision
 	}
-	ws, err := scanWorkspace(s.Pool.QueryRow(ctx, q, id, host, maxApprovedEgress))
+	var decidedAt *time.Time
+	if at, ok := ctx.Value(egressDecidedAtKey{}).(time.Time); ok {
+		decidedAt = &at
+	}
+	ws, err := scanWorkspace(s.Pool.QueryRow(ctx, q, id, host, maxApprovedEgress, decidedAt))
 	ws, err = s.hydrateIfOK(ctx, ws, err)
 	if errors.Is(err, ErrNotFound) {
-		// Distinguish "no such workspace" from "cap reached".
+		// Distinguish "no such workspace" from "cap reached" (or, with a decided-at, a newer list edit).
 		if _, gerr := s.GetWorkspace(ctx, id); gerr == nil {
+			if decidedAt != nil {
+				return types.Workspace{}, fmt.Errorf("%w: cap reached or a newer egress-list edit", ErrConflict)
+			}
 			return types.Workspace{}, ErrConflict
 		}
 		return types.Workspace{}, ErrNotFound
