@@ -387,11 +387,11 @@ func TestPersonalWallsAdmitApproval(t *testing.T) {
 		return w, ok
 	}
 	w, ok := admit(wallsSub, "a.evil.example")
-	if ok || w.Code != http.StatusForbidden || wireReason(t, w) != reasonPersonalWallsHost || !strings.Contains(w.Body.String(), "Your walls block a.evil.example") {
-		t.Errorf("owner approving a denied host: ok %v %d %s, want 403 %s in the owner's words", ok, w.Code, w.Body, reasonPersonalWallsHost)
-	}
 	var refusal errorBody
 	_ = json.Unmarshal(w.Body.Bytes(), &refusal)
+	if ok || w.Code != http.StatusForbidden || wireReason(t, w) != reasonPersonalWallsHost || refusal.Error != "Your walls block a.evil.example. Change them in Settings." {
+		t.Errorf("owner approving a denied host: ok %v %d %s, want 403 %s in the owner's words", ok, w.Code, w.Body, reasonPersonalWallsHost)
+	}
 	if refusal.Policy == nil || refusal.Policy.Layer != policyref.LayerPersonal || refusal.Policy.Owner != wallsSub {
 		t.Errorf("the refusal's policy = %+v, want layer %s owned by %s", refusal.Policy, policyref.LayerPersonal, wallsSub)
 	}
