@@ -6,10 +6,12 @@ package offline
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -107,5 +109,92 @@ func TestRetirementReplayReleasesOutputTheCrashLeft(t *testing.T) {
 	}
 	if _, err := os.Stat(dir); err == nil {
 		t.Fatal("the replayed retirement left the output on disk")
+	}
+}
+
+// ackRetirement runs a through Pending against a loopback org that acknowledges it, which compacts the
+// retired run to its tombstone.
+func ackRetirement(t *testing.T, m *Manager, a runnerwire.PendingAction) *runnerwire.Peer {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	t.Cleanup(cancel)
+	orgConn, runConn := runnerwire.Loopback()
+	org := runnerwire.NewPeer(orgConn, runnerwire.PeerConfig{Org: true, OnEventChecked: func(runnerwire.Event) error { return nil }})
+	peer := runnerwire.NewPeer(runConn, runnerwire.PeerConfig{})
+	org.Start(ctx, 0)
+	peer.Start(ctx, 0)
+	t.Cleanup(func() { org.Close(); peer.Close() })
+	if err := m.Pending(ctx, peer, []runnerwire.PendingAction{a}); err != nil {
+		t.Fatal(err)
+	}
+	return peer
+}
+
+// A release that fails once the retirement is stored must still happen after the org acknowledges the
+// receipt and the run compacts: on a reconnect, and again at the next runner start.
+func TestRetiredOutputReleaseRetriesAfterReceiptAck(t *testing.T) {
+	m, sub, id, _, a := retirementFixture(t)
+	s, dir := retainedOutput(t, id, 4)
+	m.outputSettled = s.OutputSettled
+	m.ReleaseSettledOutput(func(uuid.UUID, string) error { return errors.New("disk busy") })
+	a.Retirement.OutputEnd = 4
+	peer := ackRetirement(t, m, a)
+	if r := m.state.Runs[id]; !r.Tombstone || !r.OutputPending {
+		t.Fatalf("receipt acknowledged but run %+v lost its release obligation", r)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("output gone though the release failed: %v", err)
+	}
+	// Reconnect with the release still failing: the obligation stays.
+	if err := m.Pending(t.Context(), peer, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !m.state.Runs[id].OutputPending {
+		t.Fatal("a failed retry dropped the release obligation")
+	}
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// The next runner start wires a working release, as production does.
+	reopened, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput, noErase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	reopened.ReleaseSettledOutput(s.ReleaseOutput)
+	if _, err := os.Stat(dir); err == nil {
+		t.Fatal("restart left a retired run's output on disk")
+	}
+	if r := reopened.state.Runs[id]; !r.Retired || !r.Tombstone || r.OutputPending {
+		t.Fatalf("after the release the run is %+v, want a settled tombstone", r)
+	}
+}
+
+// A reconnect also pays the obligation, and it never releases output that is not settled.
+func TestRetiredOutputReleaseOnReconnectKeepsUnsettledOutput(t *testing.T) {
+	m, _, id, _, a := retirementFixture(t)
+	s, dir := retainedOutput(t, id, 2)
+	m.outputSettled = func(context.Context, uuid.UUID, string) (int64, bool, error) { return 4, true, nil }
+	m.ReleaseSettledOutput(s.ReleaseOutput)
+	a.Retirement.OutputEnd = 4
+	peer := ackRetirement(t, m, a)
+	if err := m.Pending(t.Context(), peer, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("retry released unacknowledged output: %v", err)
+	}
+	if !m.state.Runs[id].OutputPending {
+		t.Fatal("unsettled output lost its release obligation")
+	}
+	raw, _ := json.Marshal(runnerwire.OutputAckArgs{RunID: id, Offset: 4})
+	if _, err := s.Call(t.Context(), &runnerwire.Peer{}, 0, runnerwire.MethodOutputAck, raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Pending(t.Context(), peer, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dir); err == nil {
+		t.Fatal("reconnect left settled output on disk")
 	}
 }
