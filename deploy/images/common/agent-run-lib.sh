@@ -798,7 +798,8 @@ run_service() {
         /bin/sh -c "$cmd" &
         _svc_pid=$!
         set +m
-        if [[ -z "$interval" ]]; then _svc_health=healthy _svc_reason=""; fi
+        # A relaunch with a check starts as the first launch does, until its first passing probe.
+        if [[ -z "$interval" ]]; then _svc_health=healthy _svc_reason=""; else _svc_health=starting _svc_reason=""; fi
         service_state
         started=$SECONDS fails=0 tick=0 killed=0
         while kill -0 "$_svc_pid" 2>/dev/null; do
