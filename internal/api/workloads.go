@@ -32,8 +32,9 @@ import (
 // rows). An apply checks the document through the template door and records it; it launches only while
 // the stored spec is ahead of its run, through handleCreateRun as the owner, so every gate a POST /runs
 // passes applies unchanged and a workload grants nothing. A new run replaces the old one only once it
-// exists (create, then end), and one that waits in its pool's queue only once it runs (sweepWorkloadRunEnds);
-// a refused launch is recorded and the running one keeps running.
+// exists (create, then end), and one that waits in its pool's queue only once it runs (sweepWorkloadRunEnds),
+// unless the old run holds a slot in that pool: then it ends at once; a refused launch is recorded and the
+// running one keeps running.
 //
 // The two halves, normalizeWorkload with PutWorkload and launchWorkload, take no HTTP caller of their own:
 // the custom-resource path records and launches through them with a request serviceLaunchRequest builds.

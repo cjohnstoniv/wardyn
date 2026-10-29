@@ -312,7 +312,8 @@ func (s PG) ClaimWorkloadLaunch(ctx context.Context, id uuid.UUID) (Workload, bo
 // that run as owed its end (WorkloadRunEnd), so an end the caller does not finish is still owed. When runID
 // waited in its pool's queue its start can still be refused, so the run it replaces is not handed back:
 // its owed end waits on runID (AfterRunID), and a run already waiting on the run it replaces waits on
-// runID instead.
+// runID instead. Unless what it replaces holds a slot in runID's pool: runID could not start while it
+// runs, so it is handed back to end now.
 // ErrNotFound when the workload is gone, and ErrWorkloadSuperseded when claim is no longer the workload's
 // (it lapsed and was taken again, or its holder already recorded) or that generation, or a later one, was
 // recorded first; the caller ends runID (OweWorkloadRunEnd).
@@ -343,8 +344,15 @@ func (s PG) SetWorkloadRun(ctx context.Context, id, claim uuid.UUID, generation 
 		if prev == nil || *prev == runID {
 			return nil
 		}
+		// runID waits on prev only when it waited in its queue and nothing it replaces holds a slot in
+		// its pool: a replacement queued behind its own workload's run could never start, so that run
+		// ends now (a replace in place, with a gap).
 		var waited bool
-		if err := q.QueryRow(ctx, `SELECT state = 'QUEUED' OR admitted_at IS NOT NULL FROM agent_runs WHERE id = $1`, runID).Scan(&waited); err != nil {
+		if err := q.QueryRow(ctx, `
+			SELECT (n.state = 'QUEUED' OR n.admitted_at IS NOT NULL) AND NOT EXISTS (
+				SELECT 1 FROM agent_runs o WHERE o.runner_pool_id = n.runner_pool_id AND o.state = ANY($3) AND `+HoldsSandboxSQL+`
+					AND (o.id = $2 OR o.id IN (SELECT run_id FROM workload_run_ends WHERE after_run_id = $2)))
+			FROM agent_runs n WHERE n.id = $1`, runID, *prev, slotHoldingStateNames()).Scan(&waited); err != nil {
 			return err
 		}
 		var after *uuid.UUID
