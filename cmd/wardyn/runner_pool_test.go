@@ -512,6 +512,11 @@ func TestRunnerPoolOrgRunnersAddAndRemove(t *testing.T) {
 	if err != nil || srv.sent(http.MethodPut, orgPath) || strings.TrimSpace(out) != "cluster-a is already in Cluster" {
 		t.Errorf("add of a member = %v, printed %q, sent %+v", err, out, srv.reqs)
 	}
+	// A member asked for another namespace is sent, so the server's refusal reaches the person.
+	srv = newPoolRoutes(t, held)
+	if _, err := execCmdCapture(t, "runner", "pool", "add", pool.String(), "cluster-a", "--runs-namespace", "team-b", "--url", srv.URL, "--token", "t"); !srv.sent(http.MethodPut, orgPath) {
+		t.Errorf("add of a member in another namespace = %v, sent %+v, want the PUT", err, srv.reqs)
+	}
 }
 
 // The server's sentence for an organization runner it refuses (one already in another pool) is the error,
