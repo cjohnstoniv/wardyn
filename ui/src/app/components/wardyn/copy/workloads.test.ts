@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { agoLong, agoShort, WORKLOAD_BINDINGS, WORKLOAD_CHIP, WORKLOADS } from "./workloads";
+import { agoLong, agoShort, digestShort, WORKLOAD_BINDINGS, WORKLOAD_CHIP, WORKLOADS } from "./workloads";
 
 // The approved mock (r16 T3-a and T3-b), spelled out so a reword fails.
 describe("workload canon strings", () => {
@@ -27,9 +27,10 @@ describe("workload canon strings", () => {
 
   it("the drawer", () => {
     const W = WORKLOADS;
-    expect([W.GENERATION, W.CURRENT_RUN, W.LAST_REFUSAL, W.SPEC, W.RESTART, W.DELETE]).toEqual([
-      "Generation", "Current run", "Last refusal", "Spec", "Restart", "Delete",
+    expect([W.GENERATION, W.DIGEST, W.CURRENT_RUN, W.LAST_REFUSAL, W.SPEC, W.RESTART, W.DELETE]).toEqual([
+      "Generation", "Digest", "Current run", "Last refusal", "Spec", "Restart", "Delete",
     ]);
+    expect(digestShort("9f1c4e5d2b7a3c8e0f6a1b9d4c7e2a5b8f3d6c9e1a4b7d0f3c6e9a2b5d8a07b")).toBe("sha256:9f1c4e…a07b");
     expect(W.STARTED("2 d ago")).toBe("started 2 d ago");
     expect(W.REFUSAL_GENERATION(3)).toBe("Generation 3");
     expect(W.PREVIOUS_KEPT).toBe("the previous run kept running.");

@@ -32,6 +32,8 @@ export interface Workload {
   restart_key?: string;
   /** The door-normalised intent. */
   intent: TemplateIntent;
+  /** The hex SHA-256 over the intent, run_in and restart_key; absent for a reader who sees the intent with its host axis withheld. */
+  digest?: string;
   /** Counts spec changes; current_generation is the one the current run was launched from. */
   generation: number;
   current_generation: number;

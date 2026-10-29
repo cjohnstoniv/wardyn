@@ -251,6 +251,9 @@ type Workload struct {
 	RestartKey  string         `json:"restart_key,omitempty"`
 	// Intent is the door-normalised intent.
 	Intent TemplateIntent `json:"intent"`
+	// Digest is the hex SHA-256 over the intent, run_in and restart_key; an apply of the same digest changes
+	// nothing. It is withheld from a reader who sees the intent with its host axis withheld.
+	Digest string `json:"digest,omitempty"`
 	// Generation counts spec changes; CurrentGeneration is the one the current run was launched from.
 	Generation        int64      `json:"generation"`
 	CurrentGeneration int64      `json:"current_generation"`

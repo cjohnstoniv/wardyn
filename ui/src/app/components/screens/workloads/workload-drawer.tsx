@@ -6,8 +6,8 @@
 // The Workloads screen's detail drawer (mock r16 T3-a): the spec, its generation, the current run and the last
 // refusal, with Restart and Delete. A custom resource's workload has one writer, Git: Delete is hidden and the
 // drawer says where to change it. The last refusal is a plain sentence with its code in small print (owner
-// answer q12). The mock's Digest, Inbound address and History rows have no field on the wire yet, so they are
-// not drawn.
+// answer q12). The mock's Inbound address and History rows have no field on the wire yet, so they are not
+// drawn.
 import * as React from "react";
 import { GitBranch, RotateCcw, Trash2 } from "lucide-react";
 import { Link } from "react-router-dom";
@@ -20,7 +20,7 @@ import { refusalSentence } from "../../../lib/workload-refusals";
 import { Button } from "../../ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "../../ui/sheet";
 import { Mono } from "../../wardyn/code-block";
-import { agoShort, WORKLOADS as W } from "../../wardyn/copy/workloads";
+import { agoShort, digestShort, WORKLOADS as W } from "../../wardyn/copy/workloads";
 import { runPath, type ConsoleView } from "../../wardyn/console-view";
 import { YamlBlock } from "../../wardyn/yaml-block";
 import { ConfirmDialog } from "../runners/confirm-dialog";
@@ -125,6 +125,13 @@ export function WorkloadDrawer({
               <Row label={W.GENERATION}>
                 <Mono className="text-foreground">{w.generation}</Mono>
               </Row>
+              {w.digest && (
+                <Row label={W.DIGEST}>
+                  <Mono className="text-xs text-foreground" title={w.digest}>
+                    {digestShort(w.digest)}
+                  </Mono>
+                </Row>
+              )}
               {w.run_id && (
                 <Row label={W.CURRENT_RUN}>
                   <Link to={runPath(view, w.run_id)} className="font-mono text-xs text-info hover:underline">

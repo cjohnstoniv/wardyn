@@ -202,6 +202,9 @@ func workloadOut(v store.WorkloadView, tier workspaceReadTier, now time.Time) cl
 		projectServiceHealth(run, now)
 		out.State += "/" + string(run[0].ServiceStatus.Health)
 	}
+	if tier == workspaceReadFull { // the digest of an intent whose host axis is withheld would let a reader test guesses at it
+		out.Digest = v.Digest
+	}
 	_ = json.Unmarshal(redactWorkloadIntentForRead(v.Intent, tier), &out.Intent) //nolint:errcheck // the door wrote it; an unreadable intent reads as none
 	if f := v.LastRefusal; f != nil {
 		out.LastRefusal = &client.WorkloadRefusal{Generation: f.Generation, Reason: f.Reason, Message: f.Message, At: f.At}

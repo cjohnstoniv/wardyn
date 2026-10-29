@@ -1,0 +1,67 @@
+/**
+ * Copyright 2026 The Wardyn Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
+import type { Workload } from "../../../lib/types/workloads";
+import { WORKLOADS as W } from "../../wardyn/copy/workloads";
+import { WorkloadDrawer } from "./workload-drawer";
+
+const getRun = vi.fn();
+vi.mock("../../../lib/api/runs", () => ({ runs: { getRun: (id: string) => getRun(id) } }));
+vi.mock("../../../lib/api/workloads", () => ({ workloads: { restart: vi.fn(), remove: vi.fn() } }));
+
+const RUN = "7c41e0a9-0000-0000-0000-000000000000";
+const DIGEST = "9f1c4e5d2b7a3c8e0f6a1b9d4c7e2a5b8f3d6c9e1a4b7d0f3c6e9a2b5d8a07b";
+const NOW = Date.now();
+const D = 24 * 60 * 60 * 1000;
+const ago = (ms: number) => new Date(NOW - ms).toISOString();
+
+const workload = (over: Partial<Workload> = {}): Workload => ({
+  name: "billing-api",
+  owner: "me",
+  source: "api",
+  intent: {},
+  generation: 4,
+  current_generation: 4,
+  run_id: RUN,
+  state: "RUNNING",
+  created_at: ago(9 * D),
+  updated_at: ago(2 * D),
+  ...over,
+});
+
+function open(w: Workload) {
+  return render(
+    <MemoryRouter>
+      <WorkloadDrawer workload={w} view="user" now={NOW} onClose={vi.fn()} onChanged={vi.fn()} />
+    </MemoryRouter>,
+  );
+}
+
+beforeEach(() => {
+  getRun.mockResolvedValue({ id: RUN, created_at: ago(2 * D) });
+});
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+});
+
+describe("WorkloadDrawer digest", () => {
+  it("shows the digest short, with the full value on hover", async () => {
+    open(workload({ digest: DIGEST }));
+    await screen.findByText(/started/);
+    expect(screen.getByText(W.DIGEST)).toBeInTheDocument();
+    const short = screen.getByText("sha256:9f1c4e…a07b");
+    expect(short).toHaveAttribute("title", DIGEST);
+  });
+
+  it("draws no Digest row for a reader the server withheld it from", async () => {
+    open(workload());
+    await screen.findByText(/started/);
+    expect(screen.queryByText(W.DIGEST)).toBeNull();
+  });
+});

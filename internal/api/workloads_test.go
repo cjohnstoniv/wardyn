@@ -6,6 +6,9 @@ package api
 import (
 	"encoding/json"
 	"testing"
+	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/store"
 )
 
 // TestRedactWorkloadIntentForReadFailsClosed: a policy that does not decode is withheld whole, and the
@@ -24,5 +27,18 @@ func TestRedactWorkloadIntentForReadFailsClosed(t *testing.T) {
 	}
 	if redactWorkloadIntentForRead(json.RawMessage(`[1]`), workspaceReadSecurity) != nil {
 		t.Fatal("an intent that is not an object was not withheld")
+	}
+}
+
+// TestWorkloadOutDigest: the digest is reported in full to a reader who sees the whole intent, and withheld
+// from the security tier reading another owner's, whose intent has its host axis withheld.
+func TestWorkloadOutDigest(t *testing.T) {
+	v := store.WorkloadView{Workload: store.Workload{Name: "web", Owner: "alice", Digest: "9f1c4e", Intent: json.RawMessage(`{"task":"t"}`)}}
+	now := time.Now()
+	if got := workloadOut(v, workspaceReadFull, now).Digest; got != "9f1c4e" {
+		t.Fatalf("full tier digest = %q, want 9f1c4e", got)
+	}
+	if got := workloadOut(v, workspaceReadSecurity, now).Digest; got != "" {
+		t.Fatalf("security tier digest = %q, want it withheld", got)
 	}
 }

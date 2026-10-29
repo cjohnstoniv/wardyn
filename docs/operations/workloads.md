@@ -15,6 +15,7 @@
 | Source | `api` for the CLI and API, `k8s` for a custom resource. One name has one source, or the apply is `409` `workload_source_conflict` |
 | Intent | What to run: exactly the `intent` of a `kind: Run` document ([Run documents](../sdk.md#run-documents)) |
 | Generation | Counts spec changes. `current_generation` is the one the current run was launched from |
+| Digest | The hex SHA-256 over the intent, `run_in` and `restart_key`. An apply with the same digest changes nothing. The security tier reading another owner's workload does not get it |
 | Run | The current run. `state` is its state, with its service health when it has a [service](../SERVICES.md) block |
 
 - An owner holds at most 100 workloads (`422` `workload_cap_reached`).

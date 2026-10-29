@@ -38,6 +38,7 @@ export const WORKLOADS = {
   BINDING_INACTIVE: "Binding inactive",
   // The detail drawer.
   GENERATION: "Generation",
+  DIGEST: "Digest",
   CURRENT_RUN: "Current run",
   STARTED: (ago: string) => `started ${ago}`,
   LAST_REFUSAL: "Last refusal",
@@ -91,6 +92,9 @@ export const WORKLOAD_BINDINGS = {
   BOUND: (namespace: string) => `${namespace} bound.`,
   UNBOUND: (namespace: string) => `The binding for ${namespace} was deleted.`,
 } as const;
+
+/** The drawer's Digest: "sha256:9f1c4e…a07b", the hex digest cut to its first six and last four. */
+export const digestShort = (hex: string): string => `sha256:${hex.slice(0, 6)}…${hex.slice(-4)}`;
 
 const plural = (n: number, unit: string) => `${n} ${unit}${n === 1 ? "" : "s"}`;
 
