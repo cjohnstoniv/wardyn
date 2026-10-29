@@ -103,7 +103,7 @@
 |---|---|
 | `org` | The organisation's public HTTPS URL (required) |
 | `runsNamespace` | The pre-existing runs namespace. Empty, or equal to the release namespace, fails the render (required) |
-| `extraRunsNamespaces` | More pre-existing runs namespaces beside `runsNamespace`, which stays the default: see [Several runs namespaces](#several-runs-namespaces). Each is unique and not the release namespace, or the render fails |
+| `extraRunsNamespaces` | More pre-existing runs namespaces beside `runsNamespace`, which stays the default: see [Several runs namespaces](#several-runs-namespaces). Each is unique and not the release namespace, or the render fails. Fit checks read the default quota only; tighter extra quotas refuse at pod create |
 | `sandbox.arch` | `amd64` or `arm64` (required): pinned as every run pod's `kubernetes.io/arch` selector |
 | `sandbox.maxPodLifetime` | Upper bound on both pods' `activeDeadlineSeconds`; default `168h` |
 | `registration.existingSecret` | The Secret holding the token under `token` (required) |

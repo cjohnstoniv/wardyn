@@ -137,7 +137,7 @@ func TestWorkloadWatcherReportsEverythingAfterSync(t *testing.T) {
 	events.none(t)
 }
 
-// TestWorkloadWatcherLiveEvents: an add and a changed generation apply, a status-only update says
+// TestWorkloadWatcherLiveEvents: an add, a changed generation and a changed uid apply, a status-only update says
 // nothing, and a delete carries the uid.
 func TestWorkloadWatcherLiveEvents(t *testing.T) {
 	client := fakeWorkloadClient()
@@ -170,10 +170,20 @@ func TestWorkloadWatcherLiveEvents(t *testing.T) {
 		t.Fatalf("generation change: %+v", a)
 	}
 
+	// A re-created resource the informer saw as one update: the uid changed, the generation did not.
+	recreated := workloadCR("team-a", "bot", 2, intentSpec("./two"))
+	recreated.SetUID("uid-bot-2")
+	if _, err := crs.Update(ctx, recreated, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if a := events.next(t); a.Op != runnerwire.WorkloadOpApply || a.Generation != 2 || a.UID != "uid-bot-2" {
+		t.Fatalf("uid change: %+v, want an apply of the new uid", a)
+	}
+
 	if err := crs.Delete(ctx, "bot", metav1.DeleteOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if d := events.next(t); d.Op != runnerwire.WorkloadOpDelete || d.Name != "bot" || d.UID != "uid-bot" || d.Generation != 0 || len(d.Spec) != 0 {
+	if d := events.next(t); d.Op != runnerwire.WorkloadOpDelete || d.Name != "bot" || d.UID != "uid-bot-2" || d.Generation != 0 || len(d.Spec) != 0 {
 		t.Fatalf("delete: %+v", d)
 	}
 }
@@ -368,6 +378,27 @@ func TestWorkloadWatcherStatusOnlyForItsResource(t *testing.T) {
 	answer.Phase = runnerwire.WorkloadPhaseRunning
 	if err := w.status(ctx, answer); err == nil || status()["phase"] != "Unhealthy" {
 		t.Fatalf("after %d conflicts: %v, status %v; want an error and the status unwritten", workloadStatusAttempts, err, status())
+	}
+}
+
+// TestWorkloadWatcherRefusesMissingCRD: a listed namespace whose WardynWorkload resource the API server
+// does not know refuses boot naming the CRD and its file; any other list error refuses too.
+func TestWorkloadWatcherRefusesMissingCRD(t *testing.T) {
+	client := fakeWorkloadClient()
+	client.PrependReactor("list", "wardynworkloads", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewNotFound(workloadGVR.GroupResource(), "")
+	})
+	_, err := newWorkloadWatcher(context.Background(), client, []string{"team-a"}, time.Hour)
+	if err == nil || !strings.Contains(err.Error(), "wardynworkloads.wardyn.dev") || !strings.Contains(err.Error(), "crds/wardyn.dev_wardynworkloads.yaml") {
+		t.Fatalf("missing CRD: %v, want a refusal naming wardynworkloads.wardyn.dev and the chart's crds file", err)
+	}
+
+	client = fakeWorkloadClient()
+	client.PrependReactor("list", "wardynworkloads", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(workloadGVR.GroupResource(), "", fmt.Errorf("no grant"))
+	})
+	if _, err = newWorkloadWatcher(context.Background(), client, []string{"team-a"}, time.Hour); err == nil || !strings.Contains(err.Error(), "team-a") {
+		t.Fatalf("forbidden list: %v, want a refusal naming the namespace", err)
 	}
 }
 
