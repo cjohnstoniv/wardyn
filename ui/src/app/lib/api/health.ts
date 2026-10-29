@@ -191,7 +191,7 @@ export interface PolicyRef {
   email?: string;
   request_url?: string;
   request_text?: string;
-  // On a refusal: the kind of layer that refused ("deployment" or "unit").
+  // On a refusal: the kind of layer that refused ("deployment", "unit" or "personal").
   layer?: string;
   // The person changed the policy for this run, inside their ceiling.
   overridden?: boolean;

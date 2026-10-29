@@ -33,6 +33,8 @@ import { resolveDoor } from "../../lib/model-access";
 import { usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
 import { OpenInUserView, runPath, useConsoleMode } from "../wardyn/console-view";
 import { PUSH } from "../wardyn/copy/push";
+import { APPROVAL_WALLS } from "../wardyn/copy/personal-walls";
+import { PolicyRemedy, personalOwn } from "../wardyn/policy-remedy";
 import { APPROVAL, APPROVAL_BANNER_LABEL, SECURITY_ONLY_REASON, approvalScopeBadge } from "../wardyn/copy";
 import { APPROVAL_ASKED, APPROVAL_ESCALATION } from "../wardyn/copy/approvals";
 import { useAgentName } from "../wardyn/use-agent-name";
@@ -151,6 +153,11 @@ export function ApprovalCard({
   const agentCount = run?.agents?.length ?? 0;
   const asker = item.kind === "tool_call" && agentCount >= 2 && typeof scope.harness === "string" && scope.harness ? scope.harness : undefined;
   const canDecide = kindDecidable && !hostUngranted && !runEnded;
+  // T4-c: the requester's own walls deny this host, so no approver can admit it: Approve is off before the click,
+  // Deny stays, and the sentence and Why card say whose walls they are. Drawn once the run read has settled, since
+  // the owner is the run's creator and "Your walls" would otherwise flash on an approver who is not the owner.
+  const wallsBlocked = !!item.walls_block && !runEnded;
+  const wallsPolicy = { source: "personal", layer: "personal", owner: run?.created_by } as const;
 
   // S10 — an Azure DevOps escalation (or the Entra-consent chain it can
   // raise) gets ITS OWN card, not this generic one: it needs fields
@@ -356,7 +363,7 @@ export function ApprovalCard({
           ) : null
         ) : (
           <>
-            <Button size="sm" variant="info" onClick={() => onAct("approve")} disabled={!canDecide}>
+            <Button size="sm" variant="info" onClick={() => onAct("approve")} disabled={!canDecide || wallsBlocked}>
               <Check className="size-4" /> Approve
             </Button>
             <Button variant="outline" size="sm" onClick={() => onAct("deny")} disabled={!canDecide}>
@@ -377,6 +384,17 @@ export function ApprovalCard({
           requested {relativeTime(item.requested_at)}
         </span>
       </div>
+
+      {wallsBlocked && host && run !== undefined && (
+        <div className="mt-2.5 space-y-2" data-testid="approval-walls-block">
+          <p className="text-sm text-foreground">
+            {personalOwn(wallsPolicy, principal) ? APPROVAL_WALLS.OWN_BEFORE : APPROVAL_WALLS.OTHER_BEFORE(wallsPolicy.owner ?? "")}
+            <span className="font-mono">{host}</span>
+            {personalOwn(wallsPolicy, principal) ? APPROVAL_WALLS.OWN_AFTER : APPROVAL_WALLS.OTHER_AFTER}
+          </p>
+          <PolicyRemedy policy={wallsPolicy} copyable />
+        </div>
+      )}
 
       {/* Say what the denial costs and the way out, at the moment it happens —
           and that a grant would still not hand this member the Always scope. */}

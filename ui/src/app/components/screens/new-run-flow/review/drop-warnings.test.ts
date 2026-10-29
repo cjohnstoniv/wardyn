@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
-import { reviewWarningText } from "./drop-warnings";
+import { isWallsHostWarning, reviewWarningText } from "./drop-warnings";
 
 describe("reviewWarningText", () => {
   it("says one dropped host in the ceiling's words", () => {
@@ -40,5 +40,12 @@ describe("reviewWarningText", () => {
     expect(reviewWarningText("your walls narrowed desktop")).toBe("Your walls narrowed clipboard and files.");
     expect(reviewWarningText("your walls narrowed min_confinement_class")).toBe("Your walls narrowed barrier.");
     expect(reviewWarningText("your walls narrowed limits.max_end_ahead_sec")).toBe("Your walls narrowed limits.max_end_ahead_sec.");
+  });
+
+  it("leaves the host-list narrowing to the Access group's note, and no other knob", () => {
+    expect(isWallsHostWarning("your walls narrowed allowed_domains")).toBe(true);
+    expect(isWallsHostWarning("your walls narrowed denied_domains")).toBe(true);
+    expect(isWallsHostWarning("your walls narrowed desktop")).toBe(false);
+    expect(isWallsHostWarning("dropped 1 egress domain(s) not in operator allowlist: a.example")).toBe(false);
   });
 });

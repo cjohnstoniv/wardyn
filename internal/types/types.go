@@ -489,6 +489,10 @@ type ApprovalRequest struct {
 	// Decidable is the list route's verdict on whether THIS caller may act on a PENDING row (mayDecide, the egress_host
 	// grant included), projected at response time and never stored. Nil on a row the verdict was not computed for.
 	Decidable *bool `json:"decidable,omitempty"`
+	// WallsBlock is true on a PENDING egress_domain row whose host the requesting run owner's own walls deny: no
+	// approver can admit it (personal_walls_host), so the console draws Approve disabled. Projected at response time
+	// and never stored; absent when the host is not denied or the walls could not be read.
+	WallsBlock bool `json:"walls_block,omitempty"`
 	// LastRejoinedAt is when a held request last re-entered the hold on this PENDING row (nil until
 	// then); approval.Hold measures a bounded hold from it when it is later than RequestedAt. Not on the wire.
 	LastRejoinedAt *time.Time `json:"-"`

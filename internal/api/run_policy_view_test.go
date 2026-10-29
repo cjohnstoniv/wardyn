@@ -866,6 +866,20 @@ func TestExplainRunPolicy_Walls(t *testing.T) {
 			t.Errorf("no walls record: want launch for the deny")
 		}
 	})
+	t.Run("walls block a desktop direction", func(t *testing.T) {
+		open := types.DesktopControls{CopyOut: types.TransferAllowed}
+		blocked := types.DesktopControls{CopyOut: types.TransferBlocked, PasteIn: types.TransferAllowed, Upload: types.TransferAllowed, Download: types.TransferBlocked}
+		base := pvSpec(nil, func(s *types.RunPolicySpec) { s.Desktop = &open })
+		resolved := pvSpec(nil, func(s *types.RunPolicySpec) { s.Desktop = &blocked })
+		walls := &wallsSourceRecord{Narrowed: []string{fieldDesktop}}
+		got := explainRunPolicy(ptr(base), resolved, evidenceOf(func(e *auditEvidence) { e.walls = walls }), types.SiteConfig{}, types.AgentRun{})
+		if c := pvChange(got, causeWalls, fieldDesktop); c == nil || !slices.Equal(c.Added, []string{"Block copy out"}) || len(c.Removed) != 0 || len(got) != 1 {
+			t.Errorf("changes = %+v, want walls adding only Block copy out", got)
+		}
+		if same := explainRunPolicy(ptr(pvSpec(nil, nil)), pvSpec(nil, nil), evidenceOf(nil), types.SiteConfig{}, types.AgentRun{}); len(same) != 0 {
+			t.Errorf("an unset desktop against itself = %+v, want no changes", same)
+		}
+	})
 	t.Run("walls and the member bound on one knob", func(t *testing.T) {
 		base := pvSpec([]string{"a.example", "b.example", "c.example"}, nil)
 		resolved := pvSpec([]string{"a.example"}, nil)

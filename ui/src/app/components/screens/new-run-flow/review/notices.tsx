@@ -13,7 +13,7 @@ import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { RUN_WAIT } from "../../../../lib/runner-pool-refusals";
 import type { AppliedAmount, AppliedResources } from "../../../../lib/types/new-run-contract";
 import type { LimitSource } from "../../../../lib/types/runner-pools";
-import { reviewWarningText } from "./drop-warnings";
+import { isWallsHostWarning, reviewWarningText } from "./drop-warnings";
 import { amountText } from "./format";
 import type { PoolSlotsFact } from "./review-seams";
 
@@ -78,7 +78,8 @@ export function Notices({ poolName, slots, applied, askedByYou, warnings, warnin
   // Each warning keeps its index into the server's list, which is what its context names.
   const server = (warnings ?? [])
     .map((w, index) => ({ w, policy: askablePolicy(warningContext?.find((c) => c.warning_index === index)) }))
-    .filter(({ w }) => w !== RESOURCES_CAPPED || (distinct.length === 0 || diskCut || !!applied?.pids_limit?.capped));
+    .filter(({ w }) => w !== RESOURCES_CAPPED || (distinct.length === 0 || diskCut || !!applied?.pids_limit?.capped))
+    .filter(({ w }) => !isWallsHostWarning(w));
   if (!full && distinct.length === 0 && server.length === 0) return null;
   return (
     <div className="flex flex-col gap-3">
