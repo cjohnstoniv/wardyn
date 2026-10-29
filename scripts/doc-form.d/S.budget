@@ -296,7 +296,8 @@
 # docs/sdk.md 23942 measured after the crdfix merge onto the run-shape wave.
 # docs/sdk.md=23912 adds 17 over 23895, measured (rc.8 workload history): WorkloadHistory in the /workloads row.
 # docs/sdk.md 23959 measured after the workload-history merge onto the crdfix wave.
-docs/sdk.md=23959 share=21
+# docs/sdk.md 23960 adds 1 over 23959, measured (rc.8): workload_binding_pool_scope named in the bindings row's reason cell.
+docs/sdk.md=23960 share=21
 # docs/sdk.md 20423 = ours 20195 + theirs 20288 - base 20060 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/sdk.md 20315 = ours + theirs - base at the 0.10 HYB-C merge of main onto VM-A, measured.
 # 0.10 HYB-C: docs/sdk.md 20343 adds 28 over 20315, measured: the placement_capability refusal of a linux_vm run with a folder on a runner that cannot share one.
