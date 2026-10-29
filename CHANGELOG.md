@@ -37,8 +37,6 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `run.service.restart`). A starting or healthy service has its lease renewed within the pool's lifetime cap, as
   `run.end.set` with reason `service_renewed`; an unhealthy one ends at its lease. See [Services](docs/SERVICES.md).
 
-### Added
-
 - Your walls: limits you set on every run you start, which only narrow what your organisation allows. Set them under
   **Your account**, with `wardyn walls` (`wardyn walls set --file walls.yaml`, `wardyn walls clear`), or through
   `GET`, `PUT` and `DELETE /api/v1/me/walls`. They name the sites a run may reach or never reach, what happens at a site
