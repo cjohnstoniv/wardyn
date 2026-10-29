@@ -309,6 +309,63 @@ func TestRunLease_ARenewalNeedsTheOwnersAuthorityToExtend(t *testing.T) {
 	}
 }
 
+// serviceIdentityLeaseStore is the lease store with the service identity a run was created by read back as svc.
+type serviceIdentityLeaseStore struct {
+	*leaseStore
+	store.ServiceIdentityStore // only GetServiceIdentity and ServiceStillSponsored are asked
+	svc                        types.ServiceIdentity
+}
+
+func (s *serviceIdentityLeaseStore) GetServiceIdentity(_ context.Context, name string) (types.ServiceIdentity, error) {
+	if name != s.svc.Name {
+		return types.ServiceIdentity{}, store.ErrNotFound
+	}
+	return s.svc, nil
+}
+
+// ServiceStillSponsored answers as the real store does for a sponsorship that began before the run.
+func (s *serviceIdentityLeaseStore) ServiceStillSponsored(_ context.Context, name, sponsor string, _ time.Time) (bool, error) {
+	if name != s.svc.Name {
+		return false, store.ErrNotFound
+	}
+	return s.svc.Usable() && s.svc.Sponsor == sponsor, nil
+}
+
+// A service whose identity is retired or suspended is not renewed, and nothing is audited: its tokens
+// are gone or refused, so a renewal would keep a run alive nobody can act for. An active identity renews.
+func TestRunLease_AServiceWithoutALiveIdentityIsNotRenewed(t *testing.T) {
+	then := time.Now().Add(-time.Hour)
+	for _, tc := range []struct {
+		name    string
+		svc     types.ServiceIdentity
+		renewed bool
+	}{
+		{name: "retired", svc: types.ServiceIdentity{Name: "ops-bot", Sponsor: "t@example.com", RetiredAt: &then}},
+		{name: "suspended", svc: types.ServiceIdentity{Name: "ops-bot", Sponsor: "t@example.com", SuspendedAt: &then}},
+		{name: "active", svc: types.ServiceIdentity{Name: "ops-bot", Sponsor: "t@example.com"}, renewed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newServiceLeaseFixture(t, 30*time.Minute)
+			f.st.run.ServiceStatus = &types.RunServiceStatus{Health: types.ServiceHealthHealthy, ObservedAt: f.now}
+			f.st.run.CreatedBy = types.ServicePrincipalPrefix + "ops-bot"
+			f.srv.cfg.Store = &serviceIdentityLeaseStore{leaseStore: f.st, svc: tc.svc}
+			f.srv.cfg.SessionRevocations = fakeAuthzSessionRevocations{}
+			end := f.endsAt()
+			f.sweep(t)
+			want, wantRows := end, 0
+			if tc.renewed {
+				want, wantRows = f.now.Add(2*time.Hour), 1
+			}
+			if got := f.endsAt(); !got.Equal(want) {
+				t.Errorf("ends_at = %v, want %v", got, want)
+			}
+			if n := len(f.audit.eventsFor(f.run.ID, "run.end.set")); n != wantRows {
+				t.Errorf("%d run.end.set rows, want %d", n, wantRows)
+			}
+		})
+	}
+}
+
 // The health sweep rewrites an unchanged status only every serviceStatusRefresh: a healthy service
 // observed one refresh and more ago is still renewed.
 func TestRunLease_AnUnchangedHealthyServiceIsRenewedAcrossTheRefresh(t *testing.T) {
