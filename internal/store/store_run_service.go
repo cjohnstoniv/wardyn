@@ -43,6 +43,15 @@ func scanRunService(r *types.AgentRun, serviceRaw, statusRaw []byte) error {
 	return nil
 }
 
+// ServiceRunStore is the service-health surface. Optional like RunLimitsReclamper; the api layer
+// mirrors no service health when a store lacks it.
+type ServiceRunStore interface {
+	ListServiceRuns(ctx context.Context) ([]types.AgentRun, error)
+	SetRunServiceStatus(ctx context.Context, id uuid.UUID, st types.RunServiceStatus) (bool, error)
+}
+
+var _ ServiceRunStore = PG{}
+
 // ListServiceRuns reads the runs whose service health is worth reading: RUNNING with a service spec, a
 // sandbox, and neither lost nor paused (a frozen or gone sandbox answers nothing).
 func (s PG) ListServiceRuns(ctx context.Context) ([]types.AgentRun, error) {
