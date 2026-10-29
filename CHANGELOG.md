@@ -42,8 +42,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
-- The console's left bar is split in two. The top group holds Runs, Workloads and Approvals (and Audit and Recordings in
-  the Admin view); **Setup** holds Getting started and Settings. **Your account** is now **Settings**.
+- The console's left bar leads with Runs, Workloads and Approvals (and Audit and Recordings in the Admin view), with no
+  heading; Getting started and Settings now sit under **Setup**. **Your account** is now **Settings**.
 - The Runs page filters by what a run was set up as: **All**, **Agent tasks**, **Environments**, **Apps & scripts** or
   **Services**, each with its count. A run keeps the shape it was set up from (`shape` on the run, and on the
   `run.create` audit row when the request names one); a run from before this release, or one whose request fits
@@ -162,7 +162,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   deadline exceeded".
 - Helm: with `basePath` set and `env.WARDYN_BASE_PATH` set to `""`, the probes and ServiceMonitor now follow the
   empty value wardynd serves under, so the pod goes ready.
-- A run's placement refusal with no detail no longer reads with a trailing ": ".
+- A placement refusal that names no field no longer begins with ": ".
 - VS Code in the browser could not open its workbench connection through the app gateway: the gateway now gives an app its
   own origin on a request from its own page.
 
@@ -185,7 +185,6 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   double-click. See [Installing with a macOS package and MDM](docs/operations/hybrid-laptops.md#installing-with-a-macos-package-and-mdm).
 - No macOS VM has been booted on a real Mac by this release's tests; the rows listed under
   [Not yet tested on a real Mac](docs/operations/macos-vms.md#not-yet-tested-on-a-real-mac) stay untested.
-
 - A person other than a run's owner can open an inbound app only on per-run hosts; on one shared host the ticket is
   refused `inbound_needs_host_mode`. Opening a code editor through an inbound port on per-run hosts has not been tested
   end to end in this release.
