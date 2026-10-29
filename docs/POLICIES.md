@@ -537,7 +537,7 @@ What the check does and does not settle:
 ## Your walls
 
 - Your walls are limits you set on every run you start, which only narrow what your organisation allows. They are one private document per signed-in person; no one else reads or edits it, and no admin route reaches it.
-- Set them under **Your account** in the console, with `wardyn walls`, or through `/api/v1/me/walls` ([sdk.md](sdk.md#your-walls)). A save applies to runs you start from then on.
+- Set them in **Settings** in the console, with `wardyn walls`, or through `/api/v1/me/walls` ([sdk.md](sdk.md#your-walls)). A save applies to runs you start from then on.
 - The admin token, local mode and a service identity are no person, so they have no walls (`400` `walls_need_person`) and none are applied to their runs.
 
 | Knob | Console | Effect on each run you start |

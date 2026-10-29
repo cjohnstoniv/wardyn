@@ -631,7 +631,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `ADD_TO_RUN` | mock | Add to run |
 | `SECRET_INTRO` | pending (W-39) | Choose one of your saved secrets and how the run receives it. Prefer a request header: no copy is placed in the sandbox. |
 | `SECRET_LABEL` | mock | Secret |
-| `SECRET_HELP` | mock | Values are stored encrypted and never shown again. Add new secrets under Your account. |
+| `SECRET_HELP` | mock | Values are stored encrypted and never shown again. Add new secrets in Settings. |
 | `SECRET_NONE` | deviation (owner approved 2026-10-17, FR-0110) | You have no saved secrets yet. |
 | `DELIVERY_LABEL` | mock | Delivery |
 | `DELIVERY_HEADER_OPTION` | pending (W-39) | Request header |
