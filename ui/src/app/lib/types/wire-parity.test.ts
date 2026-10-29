@@ -950,6 +950,17 @@ describe("Restriction wire (GET /governance restrictions, POST/PUT /governance/r
   });
 });
 
+describe("Your walls wire (GET/PUT /me/walls)", () => {
+  it("the walls DTOs' TypeScript keys are exactly the Go json tags", () => {
+    const root = repoRoot();
+    const go = readFileSync(join(root, "internal/types/personal_walls.go"), "utf8");
+    const ts = readFileSync(join(root, "ui/src/app/lib/api/walls.ts"), "utf8");
+    for (const name of ["PersonalWalls", "PersonalWallsSpec"]) {
+      expect(tsInterfaceTopKeys(ts, name).sort(), name).toEqual(goJSONTags(go, name).sort());
+    }
+  });
+});
+
 describe("SetupProviderAccess cause fields", () => {
   it("keeps the Go and TypeScript optional wire fields in parity", () => {
     const root = repoRoot();
