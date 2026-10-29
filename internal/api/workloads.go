@@ -555,16 +555,23 @@ func (s *Server) restoreWorkloadRun(ctx context.Context, ws store.WorkloadStore,
 }
 
 // workloadOwnerOf is the owner a workload route acts for: ?owner= when given, else the caller. ok is false
-// when the caller may not read, restart or delete that owner's workloads. The owner may, and so may the
-// current sponsor of a service-identity owner and the security tier, the reach a run's read and stop have
-// (ownsRunOrSponsorOrAdmin).
-func (s *Server) workloadOwnerOf(r *http.Request) (string, bool) {
+// when the caller may not reach that owner's workloads for what the route does. Reading and stopping are
+// the reach a run's read and stop have (ownsRunOrSponsorOrAdmin): the owner, the current sponsor of a
+// service-identity owner, and the security tier. A restart, or any action that launches as the service
+// identity, is narrower (launches): only the owner, the service's sponsor, or an operator (isOperator, a
+// super admin). A security_admin may stop a workload as a containment power, but may not launch as the
+// service.
+func (s *Server) workloadOwnerOf(r *http.Request, launches bool) (string, bool) {
 	caller := principalFromRequest(r)
 	owner := r.URL.Query().Get("owner")
 	if owner == "" || owner == caller {
 		return caller, caller != ""
 	}
-	return owner, s.isSecurityOperator(r.Context()) || s.sponsorsWorkloadOwner(r, owner)
+	tier := s.isSecurityOperator
+	if launches {
+		tier = s.isOperator
+	}
+	return owner, tier(r.Context()) || s.sponsorsWorkloadOwner(r, owner)
 }
 
 // sponsorsWorkloadOwner reports whether the caller of r is the current sponsor of the service identity
@@ -579,12 +586,12 @@ func (s *Server) sponsorsWorkloadOwner(r *http.Request, owner string) bool {
 	return err == nil && si.Sponsor == caller
 }
 
-// workloadFor reads the workload a {name} route names, for the owner workloadOwnerOf resolves. A missing
-// workload and one the caller may not reach get the same 404.
-func (s *Server) workloadFor(w http.ResponseWriter, r *http.Request, ws store.WorkloadStore) (store.WorkloadView, bool) {
+// workloadFor reads the workload a {name} route names, for the owner workloadOwnerOf resolves (launches as
+// it says there). A missing workload and one the caller may not reach get the same 404.
+func (s *Server) workloadFor(w http.ResponseWriter, r *http.Request, ws store.WorkloadStore, launches bool) (store.WorkloadView, bool) {
 	var v store.WorkloadView
 	err := store.ErrNotFound
-	if owner, ok := s.workloadOwnerOf(r); ok {
+	if owner, ok := s.workloadOwnerOf(r, launches); ok {
 		v, err = ws.GetWorkload(r.Context(), owner, chi.URLParam(r, "name"))
 	}
 	switch {
@@ -604,7 +611,7 @@ func (s *Server) handleGetWorkload(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if v, ok := s.workloadFor(w, r, ws); ok {
+	if v, ok := s.workloadFor(w, r, ws, false); ok {
 		writeJSON(w, http.StatusOK, workloadOut(v, s.workloadReadTier(r, v.Owner), s.cfg.Now()))
 	}
 }
@@ -653,7 +660,7 @@ func (s *Server) handleListWorkloads(w http.ResponseWriter, r *http.Request) {
 func (s *Server) workloadListOwners(r *http.Request) (owners []string, all bool, err error) {
 	ctx := r.Context()
 	if r.URL.Query().Get("owner") != "" {
-		if owner, ok := s.workloadOwnerOf(r); ok {
+		if owner, ok := s.workloadOwnerOf(r, false); ok {
 			return []string{owner}, false, nil
 		}
 		return nil, false, nil
@@ -682,7 +689,7 @@ func (s *Server) handleDeleteWorkload(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	v, ok := s.workloadFor(w, r, ws)
+	v, ok := s.workloadFor(w, r, ws, false)
 	if !ok {
 		return
 	}
@@ -712,8 +719,9 @@ func (s *Server) handleDeleteWorkload(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleRestartWorkload is POST /workloads/{name}/restart[?owner=]: a fresh run of the same spec, then the
-// old one ends; a refused one leaves the old one running. The launch is the owner's: the owner's own
-// request, or for a service identity's workload its authority as its token would carry it. A person's
+// old one ends; a refused one leaves the old one running. Only the owner, the service's sponsor or an
+// operator may restart; a security_admin may delete but not restart (workloadOwnerOf). The launch is the
+// owner's: the owner's own request, or for a service identity's workload its authority as its token would carry it. A person's
 // workload restarted by someone else is recorded and starts at the owner's next apply, because nothing
 // launches as a person without their session.
 func (s *Server) handleRestartWorkload(w http.ResponseWriter, r *http.Request) {
@@ -721,7 +729,7 @@ func (s *Server) handleRestartWorkload(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	v, ok := s.workloadFor(w, r, ws)
+	v, ok := s.workloadFor(w, r, ws, true)
 	if !ok {
 		return
 	}

@@ -759,9 +759,9 @@ func TestPG_Workload_ReplacementQueuedBehindItsOwnRunReplacesInPlace(t *testing.
 	}
 }
 
-// TestPG_Workload_AdminRestartChecksTheSponsorSinceTheSpec: a security operator's restart of a service's
-// workload launches as the service only while its sponsor's sessions have not been cut since the spec was
-// written.
+// TestPG_Workload_AdminRestartChecksTheSponsorSinceTheSpec: a super admin's restart of a service's workload
+// launches as the service only while its sponsor's sessions have not been cut since the spec was written. A
+// security_admin's restart is refused outright, with the 404 a foreign workload gets, and launches nothing.
 func TestPG_Workload_AdminRestartChecksTheSponsorSinceTheSpec(t *testing.T) {
 	e := newSvcEnv(t)
 	e.mustCreate(t, svcName, svcSponsor)
@@ -769,14 +769,37 @@ func TestPG_Workload_AdminRestartChecksTheSponsorSinceTheSpec(t *testing.T) {
 	pol := e.plainPolicy(t, "wl-pol")
 	launchedRun(t, decodeApply(t, e.as(t, tok.Token, http.MethodPut, "/api/v1/workloads/web", workloadBody(pol, "t", "")), http.StatusCreated))
 	path := "/api/v1/workloads/web/restart?owner=" + svcPrin
-	launchedRun(t, decodeApply(t, doSSO(t, e.h.srv, http.MethodPost, path, e.sec, ""), http.StatusOK))
+	if w := doSSO(t, e.h.srv, http.MethodPost, path, e.sec, ""); w.Code != http.StatusNotFound || respReason(w) != reasonWorkloadNotFound {
+		t.Fatalf("security_admin restart: %d %s, want 404 %s", w.Code, w.Body.String(), reasonWorkloadNotFound)
+	}
+	if n := countAudit(e.h.audit.snapshot(), "workload.restart"); n != 0 {
+		t.Fatalf("workload.restart rows after the refused restart = %d, want 0", n)
+	}
+	launchedRun(t, decodeApply(t, doSSO(t, e.h.srv, http.MethodPost, path, e.super, ""), http.StatusOK))
 
 	if err := e.rev.CutSessions(context.Background(), svcSponsor); err != nil {
 		t.Fatal(err)
 	}
-	res := decodeApply(t, doSSO(t, e.h.srv, http.MethodPost, path, e.sec, ""), http.StatusOK)
+	res := decodeApply(t, doSSO(t, e.h.srv, http.MethodPost, path, e.super, ""), http.StatusOK)
 	if res.Launch.State != client.WorkloadRefused || res.Launch.Reason != reasonServiceIdentityInactive {
 		t.Fatalf("restart after the sponsor's sessions were cut = %+v, want refused %s", res.Launch, reasonServiceIdentityInactive)
+	}
+}
+
+// TestPG_Workload_SecurityAdminDeletesButCannotLaunch: a security_admin and a super admin both delete a
+// service's workload (the containment power), and the delete ends its run.
+func TestPG_Workload_SecurityAdminDeletesButCannotLaunch(t *testing.T) {
+	e := newSvcEnv(t)
+	e.mustCreate(t, svcName, svcSponsor)
+	tok := e.mustMint(t, e.sponsor, svcName)
+	pol := e.plainPolicy(t, "wl-pol")
+	for _, name := range []string{"web-a", "web-b"} {
+		launchedRun(t, decodeApply(t, e.as(t, tok.Token, http.MethodPut, "/api/v1/workloads/"+name, workloadBody(pol, name, "")), http.StatusCreated))
+	}
+	for name, as := range map[string]*http.Cookie{"web-a": e.sec, "web-b": e.super} {
+		if w := doSSO(t, e.h.srv, http.MethodDelete, "/api/v1/workloads/"+name+"?owner="+svcPrin, as, ""); w.Code != http.StatusNoContent {
+			t.Errorf("DELETE %s: %d %s, want 204", name, w.Code, w.Body.String())
+		}
 	}
 }
 
