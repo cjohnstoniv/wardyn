@@ -195,7 +195,7 @@
 # docs/OPERATIONS.md=60615 adds 88 over 60527, measured (0.10 final §3 pre-wrapped images): the Kubernetes day-2 pointer to the pre-wrapped image recipe.
 # docs/OPERATIONS.md=60642 adds 27 over 60615, measured (0.10 final §3 pre-wrapped images): the 0238 migration row.
 # docs/OPERATIONS.md=60726 adds 84 over 60642, measured (0.10 final #2956 host marks): the host-marks paragraph, the two mark meanings and the hosts opened outside the allowlist.
-# docs/OPERATIONS.md=60790 adds 48 over 60742, measured (rc.8 inbound): the 0240 migration row.
+# docs/OPERATIONS.md=60790 adds 48 over 60742, measured (rc.8 inbound): the 0239 migration row.
 docs/OPERATIONS.md=60790
 # docs/OPERATIONS.md 57751 = ours 57562 + theirs 57690 - base 57501 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/OPERATIONS.md 57722 = ours + theirs - base at the 0.10 HYB-C merge of main onto VM-A, measured.

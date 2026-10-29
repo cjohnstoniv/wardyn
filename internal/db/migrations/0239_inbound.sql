@@ -11,7 +11,7 @@
 --
 -- ON CONFLICT keeps an admin's own choice: a database that already holds the row is left as it is.
 INSERT INTO capability_restrictions (capability, value, created_by)
-VALUES ('feature', 'inbound', 'migration:0240')
+VALUES ('feature', 'inbound', 'migration:0239')
 ON CONFLICT (capability, value) DO NOTHING;
 
 -- api_tokens.kind admits `inbound`: a token that reaches an inbound app and nothing on the console API.

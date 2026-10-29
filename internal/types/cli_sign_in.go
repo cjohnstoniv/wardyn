@@ -26,10 +26,11 @@ const (
 	APITokenKindAPI       = "api"
 	APITokenKindCLIAccess = "cli_access" // 1 h, renewed by a refresh, publishes the role user
 	APITokenKindCLIAdmin  = "cli_admin"  // wardyn login --admin: 1 h, the real role, never renewed
+	APITokenKindInbound   = "inbound"    // calls a run's inbound ports through the app gateway, never the API
 )
 
 // APITokenKinds is the closed set api_tokens.kind admits.
-var APITokenKinds = []string{APITokenKindAPI, APITokenKindCLIAccess, APITokenKindCLIAdmin}
+var APITokenKinds = []string{APITokenKindAPI, APITokenKindCLIAccess, APITokenKindCLIAdmin, APITokenKindInbound}
 
 // CLI sign-in modes (cli_sign_ins.mode).
 const (
