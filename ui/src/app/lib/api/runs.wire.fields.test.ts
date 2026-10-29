@@ -60,6 +60,8 @@ const workspaceEntry = { workspace_id: "ws-1", enabled_optional: ["egress:api.st
 function sampleIntent(): RunIntent {
   const intent: Record<string, unknown> = {};
   for (const r of TEMPLATE_REQUEST_FIELDS) if (!r.excluded && !r.pending) intent[r.name] = r.name === "inline_policy" ? {} : 1;
+  // A service is sent only beside a background command (mayKeepRunning), so the sample is one.
+  Object.assign(intent, { experience: "background", workload: { kind: "command", command: "serve" } });
   return intent as RunIntent;
 }
 

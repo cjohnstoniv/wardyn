@@ -15,7 +15,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the `ALTER
   DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `workloads` and
-  `workload_bindings` (migration `0241_workloads`). Without it applying a workload and binding a namespace fail. An
+  `workload_bindings` (migration `0241_workloads`) and on `workload_run_ends` (migration `0244_workload_run_ends`).
+  Without it applying a workload and binding a namespace fail. An
   upgrade from before 0.10.0-rc.3 also needs `SELECT, INSERT, UPDATE, DELETE` on `macos_vm_disks` (migration
   `0236_macos_vm_disks`), and every grant the 0.10.0-rc.1 notes list: `SELECT, INSERT, UPDATE, DELETE` on
   `aws_sso_refused_tokens`, `cli_sign_ins`, `ui_desktop_closed`, `desktop_signins`, `desktop_signin_shares`,
