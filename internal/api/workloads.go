@@ -183,18 +183,24 @@ func (s *Server) answerWorkload(w http.ResponseWriter, r *http.Request, ws store
 	if err != nil {
 		v = store.WorkloadView{Workload: wl} // deleted under the apply: answer what was recorded
 	}
-	writeJSON(w, status, client.WorkloadApplyResult{Workload: workloadOut(v, s.workloadReadTier(r, wl.Owner)), Outcome: outcome, Launch: launch})
+	writeJSON(w, status, client.WorkloadApplyResult{Workload: workloadOut(v, s.workloadReadTier(r, wl.Owner), s.cfg.Now()), Outcome: outcome, Launch: launch})
 }
 
 func workloadTarget(wl store.Workload) string { return wl.Owner + "/" + wl.Name }
 
-// workloadOut is a stored workload as the API reports it to a reader of tier (workloadReadTier).
-func workloadOut(v store.WorkloadView, tier workspaceReadTier) client.Workload {
+// workloadOut is a stored workload as the API reports it at now to a reader of tier (workloadReadTier).
+func workloadOut(v store.WorkloadView, tier workspaceReadTier, now time.Time) client.Workload {
 	out := client.Workload{Name: v.Name, Owner: v.Owner, Source: client.WorkloadSource(v.Source), Namespace: v.SourceNamespace,
 		Description: v.Description, RunIn: v.RunIn, RestartKey: v.RestartKey, Generation: v.Generation,
 		CurrentGeneration: v.CurrentGeneration, RunID: v.CurrentRunID, State: string(v.RunState), CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt}
 	if v.RunState != "" && v.ServiceHealth != "" {
-		out.State += "/" + v.ServiceHealth
+		// The run's health as the run routes serve it: unknown while paused or stale.
+		run := []types.AgentRun{{PausedAt: v.RunPausedAt, ServiceStatus: &types.RunServiceStatus{Health: types.ServiceHealthState(v.ServiceHealth)}}}
+		if v.ServiceObservedAt != nil {
+			run[0].ServiceStatus.ObservedAt = *v.ServiceObservedAt
+		}
+		projectServiceHealth(run, now)
+		out.State += "/" + string(run[0].ServiceStatus.Health)
 	}
 	_ = json.Unmarshal(redactWorkloadIntentForRead(v.Intent, tier), &out.Intent) //nolint:errcheck // the door wrote it; an unreadable intent reads as none
 	if f := v.LastRefusal; f != nil {
@@ -503,7 +509,7 @@ func (s *Server) sweepWorkloadRunEnds(ctx context.Context) error {
 		switch {
 		case e.AfterRunID == nil:
 			s.endOwedWorkloadRun(ctx, e, types.ActorSystem, "wardynd")
-		case e.AfterState == types.RunRunning || e.AfterState == types.RunWaiting:
+		case e.AfterState == types.RunRunning || e.AfterState == types.RunWaiting, isTerminalRunState(e.AfterState) && e.AfterRan:
 			s.takeOverWorkloadRun(ctx, e)
 		case isTerminalRunState(e.AfterState):
 			s.restoreWorkloadRun(ctx, ws, e)
@@ -512,8 +518,8 @@ func (s *Server) sweepWorkloadRunEnds(ctx context.Context) error {
 	return nil
 }
 
-// takeOverWorkloadRun ends e's run now that e.AfterRunID, the queued run that replaces it, is running, and
-// records the replacement.
+// takeOverWorkloadRun ends e's run now that e.AfterRunID, the queued run that replaces it, is running (or
+// ran, and has ended since: a normal end of the run that replaced it), and records the replacement.
 func (s *Server) takeOverWorkloadRun(ctx context.Context, e store.WorkloadRunEnd) {
 	if !s.endOwedWorkloadRun(ctx, e, types.ActorSystem, "wardynd") {
 		return
@@ -599,7 +605,7 @@ func (s *Server) handleGetWorkload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if v, ok := s.workloadFor(w, r, ws); ok {
-		writeJSON(w, http.StatusOK, workloadOut(v, s.workloadReadTier(r, v.Owner)))
+		writeJSON(w, http.StatusOK, workloadOut(v, s.workloadReadTier(r, v.Owner), s.cfg.Now()))
 	}
 }
 
@@ -637,7 +643,7 @@ func (s *Server) handleListWorkloads(w http.ResponseWriter, r *http.Request) {
 				tier = s.workloadReadTier(r, v.Owner)
 				tiers[v.Owner] = tier
 			}
-			out = append(out, workloadOut(v, tier))
+			out = append(out, workloadOut(v, tier, s.cfg.Now()))
 		}
 		return out, lerr
 	}, nil)

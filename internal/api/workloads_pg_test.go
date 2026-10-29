@@ -121,6 +121,46 @@ func TestPG_Workload_ChangeCreatesThenKills(t *testing.T) {
 	}
 }
 
+// TestPG_Workload_HealthReadsAsTheRunRoutesServeIt: a workload's state carries its run's service health
+// projected as the run routes project it: unknown while the run is paused or its last read is stale.
+func TestPG_Workload_HealthReadsAsTheRunRoutesServeIt(t *testing.T) {
+	e := newSvcEnv(t)
+	pol := e.plainPolicy(t, "wl-pol")
+	runID := launchedRun(t, decodeApply(t, doSSO(t, e.h.srv, http.MethodPut, "/api/v1/workloads/web", e.mem, workloadBody(pol, "t", "")), http.StatusCreated))
+	set := func(sql string) {
+		t.Helper()
+		if _, err := e.pool.Exec(context.Background(), sql, runID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reads := func() (string, string) {
+		t.Helper()
+		var one client.Workload
+		if w := doSSO(t, e.h.srv, http.MethodGet, "/api/v1/workloads/web", e.mem, ""); w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &one) != nil {
+			t.Fatalf("GET: %d %s", w.Code, w.Body.String())
+		}
+		var page []client.Workload
+		if w := doSSO(t, e.h.srv, http.MethodGet, "/api/v1/workloads", e.mem, ""); w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &page) != nil || len(page) != 1 {
+			t.Fatalf("list: %d %s", w.Code, w.Body.String())
+		}
+		return one.State, page[0].State
+	}
+	set(`UPDATE agent_runs SET state = 'RUNNING', paused_at = NULL,
+		service_status = jsonb_build_object('health', 'healthy', 'restarts', 0, 'observed_at', now()) WHERE id = $1`)
+	if got, listed := reads(); got != "RUNNING/healthy" || listed != got {
+		t.Fatalf("fresh health: GET %q, list %q; want RUNNING/healthy", got, listed)
+	}
+	set(`UPDATE agent_runs SET paused_at = now() WHERE id = $1`)
+	if got, listed := reads(); got != "RUNNING/unknown" || listed != got {
+		t.Fatalf("paused run: GET %q, list %q; want RUNNING/unknown", got, listed)
+	}
+	set(`UPDATE agent_runs SET paused_at = NULL,
+		service_status = jsonb_build_object('health', 'healthy', 'restarts', 0, 'observed_at', now() - interval '1 hour') WHERE id = $1`)
+	if got, listed := reads(); got != "RUNNING/unknown" || listed != got {
+		t.Fatalf("stale health: GET %q, list %q; want RUNNING/unknown", got, listed)
+	}
+}
+
 // TestPG_Workload_CeilingRefusalPassesThrough: a launch the create path refuses answers 200 with the same
 // reason a direct POST /runs gets, records it, and keeps the previous run.
 func TestPG_Workload_CeilingRefusalPassesThrough(t *testing.T) {
@@ -619,6 +659,40 @@ func TestPG_Workload_RefusedQueuedReplacementKeepsTheRunningRun(t *testing.T) {
 	}
 	if len(e.audits(running.ID, "run.kill")) != 0 {
 		t.Fatal("the running run was killed")
+	}
+	if n := e.count(`SELECT count(*) FROM workload_run_ends`); n != 0 {
+		t.Fatalf("owed ends left = %d, want 0", n)
+	}
+}
+
+// TestPG_Workload_ReplacementThatRanThenEndedStillReplaces: a queued replacement that started and then
+// ended before the sweep saw it running ended normally: the old run is still ended, with no restore and no
+// refusal.
+func TestPG_Workload_ReplacementThatRanThenEndedStillReplaces(t *testing.T) {
+	e := newQueueEnv(t)
+	pool := e.cappedPool("Busy", 1)
+	occupant, running := e.occupy(pool), e.occupy(e.cappedPool("Old", 1))
+	queued := e.queuedWorkloadReplacement(pool, running)
+
+	e.free(occupant)
+	e.waitStarted(queued)
+	e.exec(`UPDATE agent_runs SET state = 'FAILED', status_detail = 'agent exited' WHERE id = $1`, queued) // ran, then crashed
+	e.settleWorkloadRunEnds()
+	if got := e.run(running.ID).State; got != types.RunKilled {
+		t.Fatalf("old run state = %s after its replacement ran and ended, want KILLED", got)
+	}
+	v, err := e.pg.GetWorkload(context.Background(), e.personP, "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.CurrentRunID == nil || *v.CurrentRunID != queued || v.CurrentGeneration != 2 || v.LastRefusal != nil {
+		t.Fatalf("workload run=%v generation=%d refusal=%+v, want %s kept at generation 2 and no refusal", v.CurrentRunID, v.CurrentGeneration, v.LastRefusal, queued)
+	}
+	if len(e.audits(queued, "workload.launch_refused")) != 0 {
+		t.Fatal("a replacement that ran was recorded as refused")
+	}
+	if rows := e.audits(queued, "workload.replace"); len(rows) != 1 {
+		t.Fatalf("workload.replace rows on the replacement = %d, want 1", len(rows))
 	}
 	if n := e.count(`SELECT count(*) FROM workload_run_ends`); n != 0 {
 		t.Fatalf("owed ends left = %d, want 0", n)
