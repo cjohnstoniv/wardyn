@@ -463,7 +463,7 @@ curl -sf -b jar "$UI_ORIGIN/__wardyn/enter?run=$RUN_ID&app=vscode&ticket=$TICKET
 - The gateway must be on (`WARDYN_UI_SANDBOX_LISTEN`). With it off there is no inbound.
 - Declaring an inbound app needs the restricted `feature` value `inbound`: nobody may until an administrator allows it, and a `*` allow grants nobody. See [Capabilities](operations/capabilities.md#inbound).
   - The grant decides who may declare a port, not whom they may name. A granted person may name any person, group or service as a caller.
-  - An administrator limits the callers only by writing the app and its callers into a ceiling or a stored policy.
+  - An administrator limits callers only in a ceiling, which drops a caller its app entry does not name.
 - A profile's `deny_ui_apps` removes inbound apps with the rest, and refuses a live call to one.
 - A profile's `deny_interactive` removes inbound apps at create, with a warning, and refuses a live call.
   - A port can serve a shell, so allowing it under a no-shell profile would make the wall advisory.
