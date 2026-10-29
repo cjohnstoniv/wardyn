@@ -216,6 +216,95 @@ test.describe("Run detail — the Policy tab (#1425)", () => {
     }
   });
 
+  // The host marks (#2956), read the way the test above reads the policy: a real run, and the
+  // envelope dispatch would write (the `none` runner never dispatches, so it goes in with sql()),
+  // served by the real policy read. The Go tests pin that dispatch computes the marks from the proxy
+  // config (TestHostMarksOf, TestTerminatesTLSMatchesHandleConnect); this pins what a person sees.
+  test("marks one allowed host Inspected and another Tunnel only, and says what each means", async ({ page, request }) => {
+    const stamp = randomUUID().slice(0, 8);
+    const task = `run policy host marks ${stamp}`;
+    const launched = await request.post("/api/v1/runs", {
+      headers: auth,
+      data: { agent: "claude-code", repo: "acme/widgets", task },
+    });
+    expect(launched.status(), await launched.text()).toBe(201);
+    const runId = sql(`SELECT id FROM agent_runs WHERE task = '${task}' ORDER BY created_at DESC LIMIT 1`);
+    const resolved = JSON.stringify({
+      allowed_domains: ["artifacts.e2e-corp.example", "pypi.org"],
+      first_use_approval: "deny_with_review",
+      min_confinement_class: "CC1",
+      host_marks: {
+        inspected: ["artifacts.e2e-corp.example"],
+        terminated: ["api.github.com", "artifacts.e2e-corp.example"],
+        outside: ["api.github.com"],
+      },
+    });
+    sql(
+      `SELECT audit_append(gen_random_uuid(), now(), '${runId}', 'system', 'wardynd', 'run.policy.resolve', '${runId}', 'success', '', '${resolved}'::jsonb)`,
+    );
+
+    await gotoConsole(page);
+    await navToRoute(page, `/runs/${runId}`);
+    await page.getByRole("tab", { name: POLICY_TAB.tab }).click();
+    const tab = page.getByTestId("run-policy-tab");
+    await expect(tab.getByText(SUMMARY.inspected, { exact: true }).first()).toBeVisible();
+
+    const inspected = tab.locator("li").filter({ hasText: "artifacts.e2e-corp.example" });
+    await expect(inspected.getByText(SUMMARY.inspected, { exact: true })).toBeVisible();
+    await expect(inspected.getByText(SUMMARY.tunnelOnly, { exact: true })).toHaveCount(0);
+    const tunnel = tab.locator("li").filter({ hasText: "pypi.org" });
+    await expect(tunnel.getByText(SUMMARY.tunnelOnly, { exact: true })).toBeVisible();
+    await expect(tunnel.getByText(SUMMARY.inspected, { exact: true })).toHaveCount(0);
+    await expect(tab.getByText(SUMMARY.inspectedMeaning)).toBeVisible();
+    await expect(tab.getByText(SUMMARY.tunnelOnlyMeaning)).toBeVisible();
+
+    // A host the proxy opens that the allowlist does not name comes after the allowlist, Inspected.
+    const outside = tab.locator("li").filter({ hasText: "api.github.com" });
+    await expect(outside.getByText(SUMMARY.inspected, { exact: true })).toBeVisible();
+    const hosts = await tab.locator("li").allTextContents();
+    const order = ["artifacts.e2e-corp.example", "pypi.org", "api.github.com"].map((h) => hosts.findIndex((t) => t.includes(h)));
+    expect(order.every((i) => i >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+  });
+
+  // Allow-all (r14): the one line, each host the proxy opens as Inspected, the Inspected meaning,
+  // then the allow-all line as plain text with no chip.
+  test("under allow-all lists each opened host as Inspected, then the allow-all line with no chip", async ({ page, request }) => {
+    const stamp = randomUUID().slice(0, 8);
+    const task = `run policy host marks allow-all ${stamp}`;
+    const launched = await request.post("/api/v1/runs", {
+      headers: auth,
+      data: { agent: "claude-code", repo: "acme/widgets", task },
+    });
+    expect(launched.status(), await launched.text()).toBe(201);
+    const runId = sql(`SELECT id FROM agent_runs WHERE task = '${task}' ORDER BY created_at DESC LIMIT 1`);
+    const resolved = JSON.stringify({
+      allow_all_egress: true,
+      first_use_approval: "deny_with_review",
+      min_confinement_class: "CC1",
+      host_marks: { inspected: [], terminated: ["api.github.com"], outside: ["api.github.com"] },
+    });
+    sql(
+      `SELECT audit_append(gen_random_uuid(), now(), '${runId}', 'system', 'wardynd', 'run.policy.resolve', '${runId}', 'success', '', '${resolved}'::jsonb)`,
+    );
+
+    await gotoConsole(page);
+    await navToRoute(page, `/runs/${runId}`);
+    await page.getByRole("tab", { name: POLICY_TAB.tab }).click();
+    const tab = page.getByTestId("run-policy-tab");
+    const opened = tab.locator("li").filter({ hasText: "api.github.com" });
+    await expect(opened.getByText(SUMMARY.inspected, { exact: true })).toBeVisible();
+    const line = tab.getByText(SUMMARY.tunnelOnlyAllowAll, { exact: true });
+    await expect(line).toBeVisible();
+    // The Inspected meaning comes before the allow-all line, and the allow-all line carries no chip.
+    const text = (await tab.textContent()) ?? "";
+    expect(text.indexOf("api.github.com")).toBeGreaterThanOrEqual(0);
+    expect(text.indexOf(SUMMARY.inspectedMeaning)).toBeGreaterThan(text.indexOf("api.github.com"));
+    expect(text.indexOf(SUMMARY.tunnelOnlyAllowAll)).toBeGreaterThan(text.indexOf(SUMMARY.inspectedMeaning));
+    await expect(line.locator("xpath=..").getByText(SUMMARY.tunnelOnly, { exact: true })).toHaveCount(0);
+    await expect(line.locator("xpath=..").getByText(SUMMARY.inspected, { exact: true })).toHaveCount(0);
+  });
+
   // The narrowing the run got on its stored token: chips, the repositories, and
   // the honesty sentence on the chip. The resolved spec is spliced like the
   // member read below (the seeded runs never dispatch).

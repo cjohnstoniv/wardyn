@@ -229,6 +229,8 @@ type RunConfig struct {
 	LedgerDir   string `json:"ledger_dir,omitempty"`
 	// SockRoot overrides the socket root, admission.DefaultSockDir (tests).
 	SockRoot string `json:"sock_root,omitempty"`
+	// Shares are the folders runnerd checked and shares into the VM, each at its canonical path.
+	Shares []Share `json:"shares,omitempty"`
 }
 
 // toolsModeField is the helper's stage-2 boot-configuration field. Only

@@ -68,11 +68,43 @@ func TestDarwinInitRefusesWhatMacOSCannotDo(t *testing.T) {
 	_, _, h := newDarwinServer(t)
 	in := Init{Mounts: []Mount{{Tag: "wardyn0", Target: "/Users/agent/work"}}}
 	if w := postInit(h, in); w.Code != http.StatusUnprocessableEntity {
-		t.Errorf("folder mount: Init = %d", w.Code)
+		t.Errorf("folder mount with no mounter: Init = %d", w.Code)
 	}
 	// A refusal leaves the boot's Init available.
 	if w := postInit(h, Init{}); w.Code != 200 {
 		t.Errorf("Init after refusals = %d", w.Code)
+	}
+}
+
+// Shares are mounted in order before the marker; one that fails refuses the Init with 422, names its
+// target, and writes no marker, so nothing runs without its folders.
+func TestDarwinInitMountsSharesBeforeTheMarker(t *testing.T) {
+	s, _, h := newDarwinServer(t)
+	marker := filepath.Join(s.MarkerDir, "wardyn-guest-init")
+	var got []Mount
+	s.Mount = func(_ context.Context, m Mount) error {
+		if _, err := os.Stat(marker); err == nil {
+			t.Errorf("share %s mounted after the marker", m.Tag)
+		}
+		got = append(got, m)
+		return nil
+	}
+	in := Init{Mounts: []Mount{{Tag: "wardyn0", Target: "/Users/agent/a", ReadOnly: true}, {Tag: "wardyn1", Target: "/Users/agent/b"}}}
+	if w := postInit(h, in); w.Code != 200 {
+		t.Fatalf("Init = %d %s", w.Code, w.Body)
+	}
+	if !slices.Equal(got, in.Mounts) {
+		t.Errorf("mounted %+v, want %+v", got, in.Mounts)
+	}
+
+	s2, _, h2 := newDarwinServer(t)
+	s2.Mount = func(context.Context, Mount) error { return errors.New("mount_virtiofs failed") }
+	w := postInit(h2, Init{Mounts: []Mount{{Tag: "wardyn9", Target: "/Users/agent/c"}}})
+	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "/Users/agent/c") {
+		t.Fatalf("failed mount: Init = %d %s", w.Code, w.Body)
+	}
+	if _, err := os.Stat(filepath.Join(s2.MarkerDir, "wardyn-guest-init")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a failed mount left the marker: %v", err)
 	}
 }
 

@@ -100,7 +100,7 @@ func TestSecretPlaceholders_OnKeepsTheValueAtTheProxy(t *testing.T) {
 		envSecretGrant("PLAIN_TOKEN", "corp-token"),
 		hostScoped(t, envSecretGrant("MULTI_TOKEN", "corp-token")))
 	if spec.SecretEnv["MULTI_TOKEN"] != fileOperValue {
-		t.Errorf("MULTI_TOKEN = %q, want the value: one with a line break cannot ride a header", spec.SecretEnv["MULTI_TOKEN"])
+		t.Errorf("MULTI_TOKEN = %q, want the value: its host already carries CORP_TOKEN's credential", spec.SecretEnv["MULTI_TOKEN"])
 	}
 	if spec.SecretEnv["PLAIN_TOKEN"] != fileOperValue {
 		t.Errorf("PLAIN_TOKEN = %q, want the value: a grant with no host is untouched", spec.SecretEnv["PLAIN_TOKEN"])
@@ -141,6 +141,45 @@ func TestSecretPlaceholders_OnKeepsTheValueAtTheProxy(t *testing.T) {
 	}
 	if !slices.Equal(outcomes, []string{"success", "failure", "failure"}) {
 		t.Errorf("run.secret_placeholder.resolve outcomes %v, want CORP_TOKEN placed and the other two fallbacks recorded", outcomes)
+	}
+}
+
+// A value saved with echo or an editor ends in one line break: it is placed, and the sink injects it
+// without the break. A line break inside a value cannot ride a header, so that value goes in as before.
+func TestSecretPlaceholders_LineBreaks(t *testing.T) {
+	for _, tc := range []struct {
+		name, value string
+		placed      bool
+	}{
+		{"trailing LF", "one-line-value-0001\n", true},
+		{"trailing CRLF", "one-line-value-0001\r\n", true},
+		{"inner break", "two-line\nvalue-0001", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rn := &fakeRunner{}
+			srv, st, audit, run := dispatchTeardownFixture(t, rn, types.RunPending)
+			run.Task = ""
+			st.run = run
+			srv.cfg.Store, srv.cfg.MaskRegistry = &grantRecStore{dispatchTestStore: st}, secretmask.NewRegistry()
+			srv.cfg.Secrets = &memSecrets{m: map[string][]byte{"break-token": []byte(tc.value)}}
+			srv.cfg.EnvSecretPlaceholders = true
+			dispatchOf(srv, run, types.RunPolicySpec{AllowedDomains: []string{placeholderHost},
+				EligibleGrants: []types.GrantSpec{hostScoped(t, envSecretGrant("BREAK_TOKEN", "break-token"))}})
+			events := audit.snapshot()
+			if rn.createCalls != 1 {
+				t.Fatalf("the sandbox was not created; events: %s", auditDump(events, run.ID))
+			}
+			if got := rn.lastSpec.SecretEnv["BREAK_TOKEN"]; strings.HasPrefix(got, secretPlaceholderPrefix) != tc.placed {
+				t.Errorf("BREAK_TOKEN = %q, placed = %v", got, tc.placed)
+			}
+			ev := findAudit(events, run.ID, "run.secret_placeholder.resolve", map[bool]string{true: "success", false: "failure"}[tc.placed])
+			if ev == nil {
+				t.Fatalf("no run.secret_placeholder.resolve row for placed = %v; events: %s", tc.placed, auditDump(events, run.ID))
+			}
+			if !tc.placed && !strings.Contains(string(ev.Data), "more than one line") {
+				t.Errorf("fallback row %s, want the line-break reason", ev.Data)
+			}
+		})
 	}
 }
 

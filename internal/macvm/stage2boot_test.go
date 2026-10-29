@@ -350,3 +350,13 @@ func TestStage2BootRetriesTheAuxLock(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A tools-update or prepare boot shares no folder, refused before it makes anything.
+func TestStage2BootRefusesShares(t *testing.T) {
+	cfg := macvm.Stage2BootConfig{Engine: &macvmtest.Engine{}, SockRoot: macvmtest.SockRoot(t), SockKey: macvm.JobSockKey("0123456789abcdef01234567"),
+		SockFstat: macvmtest.SockFstat}
+	spec := macvm.MachineSpec{Shares: []macvm.Share{{Tag: macvm.ShareTag(0), HostPath: "/a"}}}
+	if _, _, err := cfg.ToolsBoot()(context.Background(), spec); err == nil || !strings.Contains(err.Error(), "shares none") {
+		t.Fatalf("ToolsBoot with a share = %v", err)
+	}
+}

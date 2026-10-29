@@ -78,12 +78,13 @@ What Wardyn does for a delivered value:
 - It writes a file under `/run/wardyn/secrets` ([`internal/runner/managed_files.go#ComponentSecretDir`](../internal/runner/managed_files.go)).
   - On Docker the file is mode `0400`, owned by the workload's user ([`internal/runner/docker/managed_files.go#managedFilesTar`](../internal/runner/docker/managed_files.go)).
   - On Kubernetes an init container running as the workload's user copies it into a memory-backed volume, at mode `0400` and owned by that user. The Secret volume is not mounted in the workload's containers ([`internal/runner/k8s/agent_secrets.go#agentSecretVolumes`](../internal/runner/k8s/agent_secrets.go)).
-  - On Kubernetes a `file_secret` or component file is deleted after its first read, so a tool that reads it twice finds it gone; copy it on first read if it is needed again ([`internal/runner/k8s/agent_secrets.go#wipeAfterReadScript`](../internal/runner/k8s/agent_secrets.go)).
+  - On Kubernetes a `file_secret` or component file is deleted after its first read; a tool that needs it twice must copy it ([`internal/runner/k8s/agent_secrets.go#wipeAfterReadScript`](../internal/runner/k8s/agent_secrets.go)).
 - A `file_secret` grant on a runner that cannot deliver a file fails the run ([`internal/api/runs_dispatch_files.go#Server.fileSecretRunnerDelivers`](../internal/api/runs_dispatch_files.go)).
 - On Kubernetes, a delivered file beside a shared drive is refused ([`internal/runner/k8s/managed_files.go#errAgentSecretBesideShare`](../internal/runner/k8s/managed_files.go)).
 - With `WARDYN_ENV_SECRET_PLACEHOLDERS` or `WARDYN_FILE_SECRET_PLACEHOLDERS` on, a grant whose scope names a `host` puts a placeholder in the sandbox instead of the value. Both are off by default in 0.10.0.
+  - One trailing line break is dropped. A value with a line break inside goes in as it is, audited as a `run.secret_placeholder.resolve` failure.
   - The proxy replaces the placeholder with the value in the `Authorization` header of requests to that host ([`internal/api/runs_dispatch_placeholders.go#Server.authorSecretPlaceholder`](../internal/api/runs_dispatch_placeholders.go)).
-  - A program that signs locally, or uses the value any other way, holds only the placeholder and fails.
+  - A program that uses the value any other way, such as signing locally, fails.
   - Without `WARDYN_PROXY_RESPONSE_SCRUB`, a host that echoes the request header back returns the value to the sandbox.
   - `WARDYN_RUNNER_SECRET_PLACEHOLDERS`, also off by default, does the same for a `runner_resident` grant: the runner gets the placeholder, and the organisation's egress fills it ([`internal/api/runs_dispatch_placeholders.go#Server.placeResidentEnvSecrets`](../internal/api/runs_dispatch_placeholders.go)).
 - It skips a grant it cannot honour, and leaves the variable or file absent; it does not set a blank ([`internal/api/runs_dispatch_files.go#Server.resolveFileSecretGrants`](../internal/api/runs_dispatch_files.go)).

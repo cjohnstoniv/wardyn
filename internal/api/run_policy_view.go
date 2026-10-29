@@ -105,6 +105,10 @@ type runPolicyResponse struct {
 	// Provenance is which layer set each top-level value as create resolved it,
 	// with the contact as of this read. Absent for a run with none recorded.
 	Provenance map[string]policyref.Provenance `json:"provenance,omitempty"`
+	// HostMarks is which allowed hosts the run's proxy opened at launch. Absent for an envelope
+	// that predates it and for a run restarted since: a restart rebuilds the proxy from a
+	// config that can drop hosts, and writes no envelope of its own.
+	HostMarks *hostMarks `json:"host_marks,omitempty"`
 }
 
 type runPolicySource struct {
@@ -225,6 +229,15 @@ func (s *Server) handleGetRunPolicy(w http.ResponseWriter, r *http.Request) {
 	// Redacted: this tier was shown less than a super admin is (a mount's host path, a secret name).
 	resp.Redacted = !reflect.DeepEqual(specJSON(redactSpecForRead(served, specReadFull)), specJSON(redactSpecForRead(served, tier)))
 	resp.Spec = &out
+	// Shown with the host list it marks, so a tier that sees fewer hosts sees no marks.
+	restarted, err := s.runRestarted(ctx, run.ID)
+	if err != nil {
+		writeServerError(w, r, "read run restarts", err)
+		return
+	}
+	if !restarted && slices.Equal(out.AllowedDomains, served.AllowedDomains) {
+		resp.HostMarks = envelope.HostMarks
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -331,6 +344,18 @@ func (s *Server) runReviveEvents(ctx context.Context, runID uuid.UUID) ([]types.
 	}
 	all, err := s.cfg.Store.QueryAuditEvents(ctx, runID, 0)
 	return f.Keep(all), err
+}
+
+// runRestarted reports whether the run was ever revived: a success run.revive row, asked for on its
+// own, so refused revives (a full pool or runner, retried) cannot push it past runReviveEvents' page.
+func (s *Server) runRestarted(ctx context.Context, runID uuid.UUID) (bool, error) {
+	f := store.AuditFilter{Action: "run.revive", Outcome: "success"}
+	if p, ok := s.cfg.Store.(store.Pager); ok {
+		rows, err := p.QueryAuditEventsFilteredPage(ctx, &runID, f, store.Page{Limit: 1})
+		return len(rows) > 0, err
+	}
+	all, err := s.cfg.Store.QueryAuditEvents(ctx, runID, 0)
+	return len(f.Keep(all)) > 0, err
 }
 
 // holdsGitHubGrant is rule 12's gate: confineGitBrokerEgress does nothing for a

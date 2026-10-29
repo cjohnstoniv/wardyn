@@ -22,7 +22,7 @@
 | Confinement | The VM boundary, which the runner treats as the `CC3` family. The run's recorded `confinement_class` stays the one it asked for |
 | Sign-ins | Kept on the run's virtual disk, not in memory ([Credentials and sign-ins](#credentials-and-sign-ins)) |
 
-- Not in this release: folder mounts, Linux VMs on a Mac, drives, reviving a stopped VM, and runner terminal recording. Each is refused with a reason.
+- Not in this release: Linux VMs on a Mac, drives, reviving a stopped VM, and runner terminal recording. Each is refused with a reason.
 - macOS VMs need a pool where every runner offers them; a mixed pool refuses them. This matches Linux VMs.
 - A Kubernetes runner refuses the kind.
 
@@ -275,11 +275,17 @@
 |---|---|
 | Proxy certificate | Tools that use the macOS keychain (Safari, `gh`, `kubectl`) do not trust the run's proxy certificate, so hosts the proxy inspects show certificate errors in them. Node, Python, git and curl are pointed at it |
 | Harnesses | Claude Code, Codex CLI and "Your own tools", depending on what the base installed. If Apple's Command Line Tools cannot install, only "Your own tools" is offered |
-| Folders | A folder mount is refused |
+| Folders | Shared into the guest; see [Folders](#folders) |
 | Desktop | One fixed 1920 x 1080 display. An `observe` result (see above) leaves macOS VMs agent-only |
 | Clipboard | Paste in is allowed and copy out is blocked by default, as for other desktops, if Apple's Screen Sharing carries the standard clipboard messages. Otherwise nothing is copied either way |
 | Heat and battery | New VMs are refused at serious or critical thermal state. Battery use and lid-close sleep on MacBooks were not measured |
 | Guest patching | The guest's automatic updates are off, so a run's OS is predictable. Re-prepare to move to a newer macOS |
+
+### Folders
+
+- Shared into the guest at `/Users/agent/…` (a workspace's `/home/agent/…` path), with the same rules and read-only or writable choice as a container.
+- A folder macOS protects (Desktop, Documents, Downloads, iCloud Drive, removable volumes) needs the runner allowed under Privacy & Security → Files and Folders first.
+- A whole home folder, /Users or /private/var can't be shared, because each holds files Wardyn protects; share a project folder inside it.
 
 ## Not yet tested on a real Mac
 
@@ -307,9 +313,18 @@
 | The VM has exactly one network device of the expected kind | The guest's only route being its own relay |
 | A VM shut down from inside the guest frees its slot | The two-VM count |
 | A full network buffer on the guest's side drops only the frames it refuses, and the guest's network stays up | The guest's network under a large download, such as the Command Line Tools. TCP resends what was dropped |
+| The guest's `mount -t virtiofs` accepts `nosuid`, `nodev`, `noowners` and `rdonly` | Every shared folder. A refused option fails the run before it starts |
+| With `noowners`, the agent can read and write files on a shared folder that belong to the Mac's login | Writable folders, and reading a folder whose files are not world-readable |
+| A folder shared read-only refuses writes from the guest | Read-only folders |
+| The runner refuses a share of a whole home folder, /Users or /private/var on a real Mac, before the VM starts | Folders: what a run may share |
+| The VM's share is allowed into a folder macOS protects once the runner is allowed into it | Protected folders. The runner's own check passes, and the share could still read empty |
+| Removable volumes and iCloud Drive are allowed in the same Files and Folders pane | The fix the refusal names |
+| A link inside a shared folder is followed in the guest, not on the Mac | What a shared folder can reach |
+| A slow or evicted volume answers the runner's check within ten seconds | A slow volume is otherwise refused with the privacy sentence, whose advice then does not apply |
 | A guest that goes away is noticed by the helper's network relay | The relay ending instead of waiting; on Linux it ends at its next send |
 | A release's guest agent carries the same version stamp as its helper | The helper's check that the guest runs its own agent. Both are built in one step from one stamp, but nothing reads the agent's stamp back |
 | `wardyn-macvm probe` reporting the guest agent as `ok` on a release build | That the agent beside the helper is the release's own. Probe compares the two builds' commit and module version; a release build records no stamp to compare, so `ok` there means same commit, not same release stamp |
+| A macOS VM run's Inspected and Tunnel only marks match what its proxy does, checked host by host from inside the guest | The run's Policy tab and `wardyn run policy` on a macOS VM run |
 
 - **Every other check that needs a real Mac** has also not run:
   - the signed helper running from the package;

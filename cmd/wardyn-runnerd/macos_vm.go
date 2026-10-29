@@ -293,7 +293,7 @@ func (m *macOSVMs) recompute() bool {
 // base ready it offers none. A ledger read that fails keeps the last max, as the organisation already
 // has it.
 func (m *macOSVMs) build(last *runnerwire.MacVMCaps) runnerwire.MacVMCaps {
-	c := runnerwire.MacVMCaps{SignIns: true, Base: runnerwire.MacVMBase{State: runnerwire.MacVMBaseNone}}
+	c := runnerwire.MacVMCaps{SignIns: true, Folders: true, Base: runnerwire.MacVMBase{State: runnerwire.MacVMBaseNone}}
 	reason, hostOS, hostReason, thermal, noSession := m.hostStatus()
 	c.NoSession = noSession
 	if m.ledger == nil {

@@ -647,6 +647,19 @@ export interface RunPolicyView {
   stored_policy_now?: StoredPolicyNow;
   // Which layer set each top-level policy value, keyed by its json name.
   provenance?: Record<string, PolicyProvenance>;
+  // Which allowed hosts the run's proxy opened at launch; every other allowed
+  // host passed through unread. Absent for a run recorded before it existed.
+  host_marks?: RunPolicyHostMarks;
+}
+
+// internal/api/run_host_marks.go hostMarks: the allowed_domains entries marked Inspected.
+export interface RunPolicyHostMarks {
+  inspected: string[];
+  // Every host the proxy terminates: "host" on any port, "host:port" scoped to one.
+  terminated: string[];
+  // The terminated hosts the proxy opens on a port no allowed_domains entry names (under allow-all,
+  // every one it opens), by the proxy's own rule. It can overlap allowed_domains.
+  outside: string[];
 }
 
 // internal/policyref.Provenance: the layer that set one value of a run's policy

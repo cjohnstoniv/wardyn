@@ -456,7 +456,7 @@ It is for a Kubernetes control plane, which has no image builder.
 2. **Push it and pin it by digest**: `<registry>/<repository>[:tag]@sha256:<digest>`.
    - Images refuses a tag without a digest, because a tag can be moved to another image after the check.
 3. **Add it under Images** with *How it runs* → *Pre-wrapped: runs as is*, or `POST /api/v1/base-images` with `{"kind":"prewrapped","image":"<ref>"}`.
-   - A super admin finds Images under Settings → Providers; a security admin has its own Images page and adds pre-wrapped images only.
+   - A super admin finds Images under Settings → Providers; a security admin's own Images page adds, checks and removes pre-wrapped images only.
    - The cluster pulls it with the deployment's existing pull secret (`k8s.imagePullSecret`); the control plane reads no registry.
 
 **What the check does.**

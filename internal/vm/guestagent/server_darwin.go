@@ -24,7 +24,7 @@ import (
 )
 
 // Server is the macOS guest agent's HTTP handler: the Linux server's requests (server_linux.go) on
-// macOS. It differs where macOS does: no virtiofs shares (folder mounts are refused), no sign-in
+// macOS. It differs where macOS does: folder shares are mounted before the marker (MacShares), no sign-in
 // tmpfs (the guest keeps its keychain and browser profiles on the run's disk, so Init answers
 // SignInsRunDisk and refuses a read-only store it cannot make), the proxy CA reaches the tools through
 // their environment, and the desktop is the guest's Screen Sharing (Desktop). The zero value is not
@@ -48,6 +48,8 @@ type Server struct {
 	// ToolsDial is how the agent's tools-port dial ended (ServeTools), answered as GET /v1/dial/tools;
 	// nil serves no such request. The tools requests themselves are never served here.
 	ToolsDial *ToolsDialRecord
+	// Mount mounts one folder share (MacShares.Mount); nil refuses an Init that names one.
+	Mount func(context.Context, Mount) error
 
 	// signal signals a process group; nil is kill(2) (tests hold or fail it).
 	signal func(pgid int, sig unix.Signal) error
@@ -156,10 +158,16 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "the sandbox is already initialised", http.StatusConflict)
 		return
 	}
-	// Refused before the marker, so a corrected Init can follow.
-	if len(in.Mounts) > 0 {
-		http.Error(w, "a macOS guest does not mount folder shares", http.StatusUnprocessableEntity)
-		return
+	// Mounted before the marker: a share that fails refuses the Init and writes no marker.
+	for _, m := range in.Mounts {
+		if s.Mount == nil {
+			http.Error(w, "this agent cannot mount folder shares", http.StatusUnprocessableEntity)
+			return
+		}
+		if err := s.Mount(r.Context(), m); err != nil {
+			http.Error(w, fmt.Sprintf("the shared folder at %s: %v", m.Target, err), http.StatusUnprocessableEntity)
+			return
+		}
 	}
 	// 0.10.0 cannot make a macOS keychain read-only, so a run that wants no sign-ins kept gets no
 	// desktop: no password is set, and the tunnel refuses. It still runs agent-only. This is

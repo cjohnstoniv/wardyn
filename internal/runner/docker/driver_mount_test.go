@@ -207,52 +207,55 @@ func TestCreateSandbox_RecordingMountHostBindValidated(t *testing.T) {
 	}
 }
 
+// deniedMountCases are the workspace mounts a container refuses; a macOS VM's shares refuse them too
+// (TestMacVMSharesRefuseTheContainersDeniedMounts).
+var deniedMountCases = []struct {
+	name string
+	m    runner.Mount
+}{
+	{"root", runner.Mount{Source: "/", Target: "/home/agent/x"}},
+	{"proc", runner.Mount{Source: "/proc", Target: "/home/agent/x"}},
+	{"proc-sub", runner.Mount{Source: "/proc/sys", Target: "/home/agent/x"}},
+	{"sys", runner.Mount{Source: "/sys", Target: "/home/agent/x"}},
+	{"sys-cgroup", runner.Mount{Source: "/sys/fs/cgroup", Target: "/work/x"}},
+	{"dev", runner.Mount{Source: "/dev", Target: "/home/agent/x"}},
+	{"dev-mem", runner.Mount{Source: "/dev/mem", Target: "/work/x"}},
+	{"run", runner.Mount{Source: "/run", Target: "/home/agent/x"}},
+	{"var-run", runner.Mount{Source: "/var/run", Target: "/home/agent/x"}},
+	{"var-lib-docker", runner.Mount{Source: "/var/lib/docker", Target: "/work/x"}},
+	{"docker-sock-varrun", runner.Mount{Source: "/var/run/docker.sock", Target: "/work/x"}},
+	{"docker-sock-anywhere", runner.Mount{Source: "/home/u/docker.sock", Target: "/work/x"}},
+	{"etc", runner.Mount{Source: "/etc", Target: "/home/agent/x"}},
+	{"etc-sub", runner.Mount{Source: "/etc/shadow", Target: "/work/x"}},
+	{"boot", runner.Mount{Source: "/boot", Target: "/home/agent/x"}},
+	{"root-home", runner.Mount{Source: "/root", Target: "/home/agent/x"}},
+	{"root-home-sub", runner.Mount{Source: "/root/.ssh", Target: "/work/x"}},
+	{"relative-source", runner.Mount{Source: "relative/path", Target: "/work/x"}},
+	{"traversal-source", runner.Mount{Source: "/home/u/../../etc", Target: "/work/x"}},
+	{"uncleaned-trailing-slash", runner.Mount{Source: "/home/u/repo/", Target: "/work/x"}},
+	{"empty-source", runner.Mount{Source: "", Target: "/work/x"}},
+	{"bad-target-prefix", runner.Mount{Source: "/home/u/repo", Target: "/etc"}},
+	{"bad-target-usr", runner.Mount{Source: "/home/u/repo", Target: "/usr/local"}},
+	// The reserved target, arriving from a stored policy row.
+	// validatePolicySpec refuses it at authoring, but a row written before the
+	// reservation existed is exactly what this defense-in-depth re-check is
+	// for. The driver's check must carry the reservation:
+	// runner.ValidateMount's ValidateTarget alone does not, so the bind would
+	// land inside the member's drive — nesting over a rw bind makes runc mkdir
+	// the intermediate directories in the share, and whichever mount lands
+	// second shadows the other.
+	{"reserved-drive-target", runner.Mount{Source: "/home/u/repo", Target: runner.DriveTarget}},
+	{"reserved-drive-target-nested", runner.Mount{Source: "/home/u/repo", Target: runner.DriveTarget + "/shared"}},
+	{"relative-target", runner.Mount{Source: "/home/u/repo", Target: "work"}},
+	{"empty-target", runner.Mount{Source: "/home/u/repo", Target: ""}},
+}
+
 // TestCreateSandbox_DeniedMountsRejected runs the full deny-list matrix: each
 // dangerous Source (and a bad Target) must FAIL the CreateSandbox closed (the
 // driver defense-in-depth re-check), so a bad mount can never reach Docker even
 // if it somehow got past policy validation.
 func TestCreateSandbox_DeniedMountsRejected(t *testing.T) {
-	cases := []struct {
-		name string
-		m    runner.Mount
-	}{
-		{"root", runner.Mount{Source: "/", Target: "/home/agent/x"}},
-		{"proc", runner.Mount{Source: "/proc", Target: "/home/agent/x"}},
-		{"proc-sub", runner.Mount{Source: "/proc/sys", Target: "/home/agent/x"}},
-		{"sys", runner.Mount{Source: "/sys", Target: "/home/agent/x"}},
-		{"sys-cgroup", runner.Mount{Source: "/sys/fs/cgroup", Target: "/work/x"}},
-		{"dev", runner.Mount{Source: "/dev", Target: "/home/agent/x"}},
-		{"dev-mem", runner.Mount{Source: "/dev/mem", Target: "/work/x"}},
-		{"run", runner.Mount{Source: "/run", Target: "/home/agent/x"}},
-		{"var-run", runner.Mount{Source: "/var/run", Target: "/home/agent/x"}},
-		{"var-lib-docker", runner.Mount{Source: "/var/lib/docker", Target: "/work/x"}},
-		{"docker-sock-varrun", runner.Mount{Source: "/var/run/docker.sock", Target: "/work/x"}},
-		{"docker-sock-anywhere", runner.Mount{Source: "/home/u/docker.sock", Target: "/work/x"}},
-		{"etc", runner.Mount{Source: "/etc", Target: "/home/agent/x"}},
-		{"etc-sub", runner.Mount{Source: "/etc/shadow", Target: "/work/x"}},
-		{"boot", runner.Mount{Source: "/boot", Target: "/home/agent/x"}},
-		{"root-home", runner.Mount{Source: "/root", Target: "/home/agent/x"}},
-		{"root-home-sub", runner.Mount{Source: "/root/.ssh", Target: "/work/x"}},
-		{"relative-source", runner.Mount{Source: "relative/path", Target: "/work/x"}},
-		{"traversal-source", runner.Mount{Source: "/home/u/../../etc", Target: "/work/x"}},
-		{"uncleaned-trailing-slash", runner.Mount{Source: "/home/u/repo/", Target: "/work/x"}},
-		{"empty-source", runner.Mount{Source: "", Target: "/work/x"}},
-		{"bad-target-prefix", runner.Mount{Source: "/home/u/repo", Target: "/etc"}},
-		{"bad-target-usr", runner.Mount{Source: "/home/u/repo", Target: "/usr/local"}},
-		// The reserved target, arriving from a stored policy row.
-		// validatePolicySpec refuses it at authoring, but a row written before the
-		// reservation existed is exactly what this defense-in-depth re-check is
-		// for. The driver's check must carry the reservation:
-		// runner.ValidateMount's ValidateTarget alone does not, so the bind would
-		// land inside the member's drive — nesting over a rw bind makes runc mkdir
-		// the intermediate directories in the share, and whichever mount lands
-		// second shadows the other.
-		{"reserved-drive-target", runner.Mount{Source: "/home/u/repo", Target: runner.DriveTarget}},
-		{"reserved-drive-target-nested", runner.Mount{Source: "/home/u/repo", Target: runner.DriveTarget + "/shared"}},
-		{"relative-target", runner.Mount{Source: "/home/u/repo", Target: "work"}},
-		{"empty-target", runner.Mount{Source: "/home/u/repo", Target: ""}},
-	}
-	for _, tc := range cases {
+	for _, tc := range deniedMountCases {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := createWithMounts(t, []runner.Mount{tc.m})
 			if err == nil {

@@ -178,6 +178,9 @@ type effectivePolicyDatum struct {
 	// Provenance is which layer set each value as create resolved it (layer,
 	// leaf name, locked), never a contact. Absent for a lane with no create resolution.
 	Provenance knobProvenance `json:"provenance,omitempty"`
+	// HostMarks is which allowed hosts the run's proxy opens (run_host_marks.go). Nil on an envelope
+	// recorded before it existed, which means unknown.
+	HostMarks *hostMarks `json:"host_marks,omitempty"`
 }
 
 // applyEphemeralDisk is where the org and profile maximums bind a run's ephemeral scratch size at
