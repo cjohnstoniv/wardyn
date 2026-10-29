@@ -258,6 +258,12 @@ func TestDiffExitCodes(t *testing.T) {
 	if _, err, _ = run(replyJSON(http.StatusInternalServerError, map[string]string{"error": "boom"})); err == nil || exitCodeFor(err) != 4 {
 		t.Errorf("a server error = %v, want exit 4", err)
 	}
+
+	// A file that does not parse is an error, not a difference.
+	bad := newRouteRig(t, map[string]func(http.ResponseWriter, []byte){})
+	if _, err := bad.run(t, "diff", "-f", writeTemplateFile(t, "w.yaml", webYAML+"colour: red\n")); err == nil || exitCodeFor(err) != 2 {
+		t.Errorf("an unknown field = %v (exit %d), want exit 2", err, exitCodeFor(err))
+	}
 }
 
 // TestDiffReportsTheDoorsDiagnostics: a spec the door refuses is not compared.
@@ -268,8 +274,8 @@ func TestDiffReportsTheDoorsDiagnostics(t *testing.T) {
 		}}),
 	})
 	_, err := rig.run(t, "diff", "-f", writeTemplateFile(t, "w.yaml", webYAML))
-	if err == nil || !strings.Contains(err.Error(), "1 problem") || !strings.Contains(err.Error(), "workload/web") {
-		t.Fatalf("err = %v", err)
+	if err == nil || !strings.Contains(err.Error(), "1 problem") || !strings.Contains(err.Error(), "workload/web") || exitCodeFor(err) != 2 {
+		t.Fatalf("err = %v (exit %d), want exit 2", err, exitCodeFor(err))
 	}
 	if n := len(rig.sent(getWeb)); n != 0 {
 		t.Errorf("the stored workload was read after a refusal (%d)", n)

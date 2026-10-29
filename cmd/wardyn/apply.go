@@ -261,20 +261,21 @@ func workloadDiffCmd(client clientFn) *cobra.Command {
 		Use:   "diff -f FILE",
 		Short: "Show how the workloads in a file differ from the stored ones",
 		Long: "Read each workload through the organisation's door and compare it with the stored workload of the\n" +
-			"same name, as a unified diff of both written as YAML. Exits 0 when every workload is equal and 1\n" +
-			"when any differs or is not stored yet, as `diff` and `kubectl diff` do. Writes nothing.",
+			"same name, as a unified diff of both written as YAML. Exits 0 when every workload is equal, 1 when\n" +
+			"any differs or is not stored yet, and 2 or more on an error, as `diff` and `kubectl diff` do.\n" +
+			"Writes nothing.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			docs, err := readWorkloadDocs(cmd, file)
 			if err != nil {
-				return err
+				return diffError(err)
 			}
 			c := client()
 			differs := 0
 			for _, d := range docs {
 				_, text, err := diffWorkload(cmd.Context(), cmd.ErrOrStderr(), c, d)
 				if err != nil {
-					return err
+					return diffError(err)
 				}
 				if text != "" {
 					differs++
@@ -289,6 +290,15 @@ func workloadDiffCmd(client clientFn) *cobra.Command {
 	}
 	fileFlag(cmd, &file)
 	return cmd
+}
+
+// diffError keeps exit 1 for "differs": an error that would exit 1 (a file that does not parse, a
+// spec the door refuses) exits 2, and an API or connection error keeps its own code.
+func diffError(err error) error {
+	if exitCodeFor(err) == 1 {
+		return &exitError{code: 2, err: err}
+	}
+	return err
 }
 
 func workloadDeleteCmd(client clientFn) *cobra.Command {
