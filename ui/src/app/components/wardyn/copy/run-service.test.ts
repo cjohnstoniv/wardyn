@@ -77,11 +77,11 @@ describe("serviceBadge", () => {
 });
 
 describe("agoText", () => {
-  const now = Date.parse("2026-10-29T12:00:00Z");
+  const now = Date.parse("2020-10-29T12:00:00Z");
   it.each([
-    ["2026-10-29T11:59:20Z", "40 s ago"],
-    ["2026-10-29T11:54:00Z", "6 min ago"],
-    ["2026-10-29T09:00:00Z", "3 h ago"],
-    ["2026-10-29T12:00:05Z", "0 s ago"],
+    ["2020-10-29T11:59:20Z", "40 s ago"],
+    ["2020-10-29T11:54:00Z", "6 min ago"],
+    ["2020-10-29T09:00:00Z", "3 h ago"],
+    ["2020-10-29T12:00:05Z", "0 s ago"],
   ])("%s reads %s", (iso, text) => expect(agoText(iso, now)).toBe(text));
 });

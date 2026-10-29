@@ -11,8 +11,8 @@ import { SERVICE_PANEL as T } from "../../wardyn/copy/run-service";
 import { ServicePanel } from "./service-panel";
 import { weekdayClock } from "./run-ends-row";
 
-const NOW = Date.parse("2026-10-29T12:00:00Z");
-const ENDS = "2026-11-28T09:40:00Z";
+const NOW = Date.parse("2020-10-29T12:00:00Z");
+const ENDS = "2020-11-28T09:40:00Z";
 const WITH_PATH: RunService = { restart: "on_failure", port: 8080, health: { path: "/healthz", interval_sec: 15, failure_threshold: 3 } };
 const status = (over: Partial<RunServiceStatus> & Pick<RunServiceStatus, "health">): RunServiceStatus => ({
   restarts: 0, observed_at: new Date(NOW - 40_000).toISOString(), ...over,
