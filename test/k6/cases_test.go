@@ -1064,6 +1064,10 @@ func caseRunsNamespaces(t *testing.T, e *env) {
 		id := ids[ns]
 		e.cleanupRunIn(t, ns, id)
 		spec := e.spec(id)
+		// Both runs sit on the one pin node. By default an agent requests its whole 2-vCPU limit and the
+		// proxy another 500m, so the second run does not fit a CI-sized kind worker. The case proves
+		// namespace fencing, not capacity: request a sliver (limits stay the default).
+		spec.Resources = runner.Resources{CPURequestMillis: 100, MemoryRequestMiB: 256}
 		if ns != e.runsNS {
 			spec.Namespace = ns
 		}
