@@ -216,3 +216,21 @@ func TestServiceShapeAtTheDoors(t *testing.T) {
 		}
 	}
 }
+
+// TestServicePauseWarnings: the sentence appears only for a service under an idle pause.
+func TestServicePauseWarnings(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		service bool
+		pause   int
+		want    []string
+	}{
+		{"service and pause", true, 1800, []string{servicePauseWarning}},
+		{"no service", false, 1800, nil},
+		{"no pause", true, 0, nil},
+	} {
+		if got := servicePauseWarnings(c.service, c.pause); !slices.Equal(got, c.want) {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+}

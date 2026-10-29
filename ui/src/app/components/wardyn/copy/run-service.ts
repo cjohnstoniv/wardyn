@@ -33,6 +33,9 @@ export const SERVICE_FORM_ERRORS = {
   FAILURES_INVALID: "A service is unhealthy after 1 to 10 failed checks.",
 } as const;
 
+/** The server's sentence for a service under an idle pause (internal/api/run_service.go servicePauseWarning), byte for byte: New Run finds it in the checks' warnings. Mock r15 T1-a. */
+export const SERVICE_PAUSE_WARNING = "Your admin pauses runs nobody is using, so this service will be paused while it waits for requests.";
+
 export const DEFAULT_HEALTH_INTERVAL_SEC = 15;
 export const DEFAULT_HEALTH_FAILURES = 3;
 
