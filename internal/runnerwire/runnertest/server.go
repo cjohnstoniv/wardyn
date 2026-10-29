@@ -212,18 +212,24 @@ func (s *Server) refMethod(ctx context.Context, method string, args json.RawMess
 	case runnerwire.MethodStatus:
 		return s.sub.Status(ctx, ref)
 	case runnerwire.MethodStop:
-		err = s.sub.StopSandbox(ctx, ref)
-		return runnerwire.TeardownReply(s.sub, ref), err
+		if err := s.sub.StopSandbox(ctx, ref); err != nil {
+			return nil, err // as the real dispatcher: a teardown reply only after a successful call
+		}
+		return runnerwire.TeardownReply(s.sub, ref), nil
 	case runnerwire.MethodKill:
-		err = s.sub.KillSandbox(ctx, ref)
-		return runnerwire.TeardownReply(s.sub, ref), err
+		if err := s.sub.KillSandbox(ctx, ref); err != nil {
+			return nil, err // as the real dispatcher: a teardown reply only after a successful call
+		}
+		return runnerwire.TeardownReply(s.sub, ref), nil
 	case runnerwire.MethodEnd:
 		e, ok := s.sub.(runner.SandboxEnder)
 		if !ok {
 			return nil, runner.ErrEndUnsupported
 		}
-		err = e.EndSandbox(ctx, ref)
-		return runnerwire.TeardownReply(s.sub, ref), err
+		if err := e.EndSandbox(ctx, ref); err != nil {
+			return nil, err // as the real dispatcher: a teardown reply only after a successful call
+		}
+		return runnerwire.TeardownReply(s.sub, ref), nil
 	case runnerwire.MethodPauseAgent, runnerwire.MethodResumeAgent:
 		p, ok := s.sub.(runner.AgentPauser)
 		if !ok {
