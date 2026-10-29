@@ -29,6 +29,21 @@
 #     (20 requests must not leave 20 execs), and the pool's idle reap actually
 #     ends them
 #
+# Then the stack is recreated in HOST mode (WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE,
+# a run-<id>.localhost origin per run) and the governed-inbound proof runs on it:
+#
+#   - an inbound token calls a BACKGROUND run's inbound app and gets the app's
+#     answer; X-Wardyn-Caller reaches the app, a client-sent X-Wardyn-* and the
+#     bearer do not; a non-inbound app, a caller the app does not name and an
+#     API-kind token are each refused (404 inbound_not_found, 401
+#     inbound_credential_invalid); each call is an inbound.allow / inbound.deny row
+#   - a named person who is not the owner opens the app with a caller ticket and
+#     lands in it; a person nobody named gets the foreign-run 404
+#   - the host-mode cross-site rule on a cookie session, Origin: null included
+#   - the VS Code app opens in host mode: the editor page loads and its WebSocket
+#     upgrade crosses the gateway
+#   - past the per-caller bucket the gateway answers 429 inbound_rate_limited
+#
 # GUARD: Docker-dependent, like the other live lanes. No-op unless
 # WARDYN_TEST_DOCKER=1.
 #
@@ -105,14 +120,14 @@ pass() { note "[pass]" "$1"; }
 fail() { note "[FAIL]" "$1"; FAILED=1; }
 
 teardown() {
-  for r in "${RUN_ID:-}" "${RUN_B_ID:-}"; do
+  for r in "${RUN_ID:-}" "${RUN_B_ID:-}" "${RUN_BG_ID:-}" "${RUN_HM_ID:-}"; do
     [[ -n "${r}" ]] || continue
     curl -sS -X POST "${BASE}/api/v1/runs/${r}/kill" -H "Authorization: Bearer ${ADMIN_TOKEN}" >/dev/null 2>&1 || true
   done
   # Give wardynd a moment to stop+remove the per-run agent/proxy containers it
   # created OUTSIDE compose's bookkeeping before compose down kills wardynd
   # itself (run-e2e-ssh.sh's own hard-won note).
-  [[ -n "${RUN_ID:-}${RUN_B_ID:-}" ]] && sleep 3
+  [[ -n "${RUN_ID:-}${RUN_B_ID:-}${RUN_BG_ID:-}${RUN_HM_ID:-}" ]] && sleep 3
   log "tearing down ${PROJECT} (compose down --volumes; this project only)"
   compose down --volumes >/dev/null 2>&1 || true
   rm -rf "${TMPDIR}"
@@ -190,16 +205,10 @@ bind_cookie() {
   sed -n 's/^[Ss]et-[Cc]ookie: *\(wardyn_ui_bind_[^;]*\).*/\1/p' "${TMPDIR}/bind.h" | tr -d '\r' | head -1
 }
 
-# launch_run -> prints the run id; an idle interactive sandbox (never execs the
-# agent, so no model credential is needed — run-e2e-ssh.sh's proven convention).
-launch_run() {
-  local body st rid state
-  body='{"agent":"claude-code","repo":"local:e2e","confinement_class":"CC1","interactive":true,
-    "inline_policy":{"allowed_domains":[],"first_use_approval":"always_deny",
-    "min_confinement_class":"CC1","auto_stop_after_sec":-1,
-    "ui_apps":[{"name":"vscode","port":'"${VSCODE_PORT}"',"path":"/"},
-               {"name":"echo","port":'"${ECHO_PORT}"',"path":"/"}]}}'
-  st=$(api POST /api/v1/runs "${body}")
+# launch_json BODY -> prints the run id once the run is RUNNING.
+launch_json() {
+  local st rid state
+  st=$(api POST /api/v1/runs "$1")
   [[ "${st}" == "201" || "${st}" == "200" ]] || { cat "${TMPDIR}/resp.json" >&2; return 1; }
   rid="$(jq -r '.id' "${TMPDIR}/resp.json")"
   [[ -n "${rid}" && "${rid}" != "null" ]] || return 1
@@ -213,6 +222,16 @@ launch_run() {
   done
   echo "run ${rid} never reached RUNNING" >&2
   return 1
+}
+
+# launch_run -> prints the run id; an idle interactive sandbox (never execs the
+# agent, so no model credential is needed — run-e2e-ssh.sh's proven convention).
+launch_run() {
+  launch_json '{"agent":"claude-code","repo":"local:e2e","confinement_class":"CC1","interactive":true,
+    "inline_policy":{"allowed_domains":[],"first_use_approval":"always_deny",
+    "min_confinement_class":"CC1","auto_stop_after_sec":-1,
+    "ui_apps":[{"name":"vscode","port":'"${VSCODE_PORT}"',"path":"/"},
+               {"name":"echo","port":'"${ECHO_PORT}"',"path":"/"}]}}'
 }
 
 RUN_ID="$(launch_run)" || die "could not launch the UI-sandbox run"
@@ -455,6 +474,360 @@ if [[ "${started}" == "vscode" ]]; then
   pass "audit: ui.start records only the app the launcher actually started (${started}) — the pre-listening echo app started nothing"
 else
   fail "audit: ui.start apps = '${started}', want only 'vscode'"
+fi
+
+# ═══ governed inbound, in host mode ═════════════════════════════════════════
+# Everything above ran on the shared origin. Inbound needs one origin per run for a person who is not the
+# owner (the gateway refuses that person on a shared host), so the path-mode runs end here and wardynd is
+# recreated with WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE. A *.localhost name resolves to loopback, so the walk
+# needs no DNS.
+kill_run() {
+  local r="$1" state
+  [[ -n "${r}" ]] || return 0
+  curl -sS -o /dev/null -X POST "${BASE}/api/v1/runs/${r}/kill" -H "Authorization: Bearer ${ADMIN_TOKEN}" || true
+  for _ in $(seq 1 30); do
+    api GET "/api/v1/runs/${r}" >/dev/null
+    state="$(jq -r '.state // empty' "${TMPDIR}/resp.json" 2>/dev/null)"
+    [[ -z "${state}" || "${state}" =~ ^(KILLED|STOPPED|FAILED|COMPLETED)$ ]] && return 0
+    sleep 2
+  done
+  return 1
+}
+kill_run "${RUN_ID}" || fail "host mode: run ${RUN_ID} did not end before the restart"
+kill_run "${RUN_B_ID}" || fail "host mode: run ${RUN_B_ID} did not end before the restart"
+
+HOST_ORIGIN_TEMPLATE="http://run-{run}.localhost:${UI_PORT}"
+HM_OVERRIDE="${TMPDIR}/host-mode.compose.yaml"
+cat >"${HM_OVERRIDE}" <<YAML
+services:
+  wardynd:
+    environment:
+      WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE: "${HOST_ORIGIN_TEMPLATE}"
+YAML
+compose -f "${HM_OVERRIDE}" up -d --no-deps --force-recreate wardynd >/dev/null 2>&1 || die "could not recreate wardynd in host mode"
+wait_healthy "${BASE}" 60 2 || { compose logs wardynd | tail -80; die "wardynd did not become healthy in host mode"; }
+HOST_MODE="false"
+INBOUND_TEMPLATE=""
+for _ in $(seq 1 10); do
+  curl -sS "${BASE}/healthz" >"${TMPDIR}/healthz-host.json" 2>/dev/null || true
+  HOST_MODE="$(jq -r '.ui_sandbox.host_mode // false' "${TMPDIR}/healthz-host.json" 2>/dev/null || echo false)"
+  [[ "${HOST_MODE}" == "true" ]] && break
+  sleep 1
+done
+INBOUND_TEMPLATE="$(jq -r '.ui_sandbox.inbound_url_template // empty' "${TMPDIR}/healthz-host.json" 2>/dev/null)"
+if [[ "${HOST_MODE}" == "true" && "${INBOUND_TEMPLATE}" == "${HOST_ORIGIN_TEMPLATE}/r/{run}/{app}/" ]]; then
+  pass "host mode: /healthz reports host_mode=true and inbound_url_template ${INBOUND_TEMPLATE}"
+else
+  compose logs wardynd | tail -40
+  die "host mode did not come up: host_mode=${HOST_MODE}, inbound_url_template='${INBOUND_TEMPLATE}'"
+fi
+
+# The people. The stack has one admin bearer and no second human, so the other principals are registered
+# the way run-e2e-ssh.sh registers its second key: a row in this project's own Postgres, hashed the way
+# GetAPITokenByRaw reads it. e2e-caller is named by the apps below; e2e-stranger is named by nothing. Each
+# holds a console (api) token and an inbound token, the two kinds the gateway tells apart.
+seed_token() { # PRINCIPAL KIND -> prints the raw token once its row is in
+  local principal="$1" kind="$2" raw sha
+  raw="wdn_$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+  sha="$(printf '%s' "${raw}" | sha256sum | cut -d' ' -f1)"
+  compose exec -T postgres psql -U wardyn -d wardyn -v ON_ERROR_STOP=1 -c \
+    "INSERT INTO api_tokens (id, principal, email, role, user_type, groups, groups_truncated, name, token_sha256, kind, expires_at)
+     VALUES (gen_random_uuid(), '${principal}', '${principal}@e2e.wardyn.invalid', 'user', 'standard', '[]', false, 'e2e ${kind}', '${sha}', '${kind}', now() + interval '30 days');" \
+    >"${TMPDIR}/seed-token.log" 2>&1 || { echo "seed ${principal}/${kind}: $(cat "${TMPDIR}/seed-token.log")" >&2; return 1; }
+  printf '%s' "${raw}"
+}
+CALLER_API="$(seed_token e2e-caller api)" || die "could not register e2e-caller"
+CALLER_INBOUND="$(seed_token e2e-caller inbound)" || die "could not register e2e-caller"
+STRANGER_API="$(seed_token e2e-stranger api)" || die "could not register e2e-stranger"
+STRANGER_INBOUND="$(seed_token e2e-stranger inbound)" || die "could not register e2e-stranger"
+code=$(curl -sS -o "${TMPDIR}/me.json" -w '%{http_code}' "${BASE}/api/v1/me" -H "Authorization: Bearer ${CALLER_API}")
+if [[ "${code}" == "200" && "$(jq -r '.principal' "${TMPDIR}/me.json")" == "e2e-caller" ]]; then
+  pass "setup: e2e-caller's console token signs in as e2e-caller"
+else
+  die "setup: e2e-caller's console token: status ${code}, body $(cat "${TMPDIR}/me.json")"
+fi
+code=$(curl -sS -o /dev/null -w '%{http_code}' "${BASE}/api/v1/me" -H "Authorization: Bearer ${CALLER_INBOUND}")
+if [[ "${code}" == "401" ]]; then
+  pass "an inbound token is refused on the console API (401)"
+else
+  fail "an inbound token on the console API: status ${code}, want 401"
+fi
+
+# Two runs. RUN_BG is a BACKGROUND command run (no terminal, no desktop): its only door is the inbound app
+# `api`, answered by the echo responder the command starts. RUN_HM is an interactive run with the editor
+# (a non-inbound app) beside an inbound `api` app, so "a non-inbound app on a run that has an inbound one"
+# is a real case.
+BG_CMD="mkdir -p /home/agent && printf %s '${ECHO_APP_B64}' | base64 -d > ${ECHO_APP_PATH} && chmod +x ${ECHO_APP_PATH} && exec socat TCP-LISTEN:${ECHO_PORT},reuseaddr,fork EXEC:${ECHO_APP_PATH}"
+RUN_BG_ID="$(launch_json "$(jq -nc --arg cmd "${BG_CMD}" --argjson port "${ECHO_PORT}" \
+  '{repo:"local:e2e", confinement_class:"CC1", experience:"background", workload:{kind:"command", command:$cmd},
+    inline_policy:{allowed_domains:[], first_use_approval:"always_deny", min_confinement_class:"CC1",
+      ui_apps:[{name:"api", port:$port, path:"/", inbound:true, callers:["user:e2e-caller"]}]}}')")" \
+  || die "could not launch the background run with an inbound app"
+RUN_HM_ID="$(launch_json "$(jq -nc --argjson port "${ECHO_PORT}" --argjson editor "${VSCODE_PORT}" \
+  '{agent:"claude-code", repo:"local:e2e", confinement_class:"CC1", interactive:true,
+    inline_policy:{allowed_domains:[], first_use_approval:"always_deny", min_confinement_class:"CC1", auto_stop_after_sec:-1,
+      ui_apps:[{name:"vscode", port:$editor, path:"/"},
+               {name:"api", port:$port, path:"/", inbound:true, callers:["user:e2e-caller"]}]}}')")" \
+  || die "could not launch the interactive run with the editor"
+pass "host mode: background run ${RUN_BG_ID} (inbound api) and interactive run ${RUN_HM_ID} (vscode + inbound api) are RUNNING"
+
+# ── host-mode request helpers ───────────────────────────────────────────────
+uihost() { printf 'run-%s.localhost:%s' "$1" "${UI_PORT}"; }
+# hreq RUN OUT CURL_ARGS... -> one request to RUN's own origin; prints the status, writes OUT.body and OUT.h
+hreq() {
+  local run="$1" out="$2"
+  shift 2
+  curl -sS -m 60 --resolve "$(uihost "${run}"):127.0.0.1" -o "${out}.body" -D "${out}.h" -w '%{http_code}' "$@"
+}
+iurl() { printf 'http://%s/r/%s/%s/%s' "$(uihost "$1")" "$1" "$2" "${3:-}"; }
+reason_of() { jq -r '.reason // empty' "$1" 2>/dev/null; }
+# want_refusal LABEL GOT_STATUS WANT_STATUS WANT_REASON BODY_FILE
+want_refusal() {
+  local got_reason
+  got_reason="$(reason_of "$5")"
+  if [[ "$2" == "$3" && "${got_reason}" == "$4" ]]; then
+    pass "$1: $3 $4"
+  else
+    fail "$1: status $2 reason '${got_reason}', want $3 $4 (body: $(head -c 200 "$5"))"
+  fi
+}
+# open_in_host RUN APP TICKET -> binds the ticket and POSTs enter on the run's own origin, as the console's
+# /open page does; sets OPEN_STATUS, OPEN_LOCATION and OPEN_SESS.
+open_in_host() {
+  local run="$1" app="$2" ticket="$3" bind
+  hreq "${run}" "${TMPDIR}/hbind" -X POST -H "Sec-Fetch-Site: same-site" -H "Origin: ${BASE}" \
+    --data-urlencode "ticket=${ticket}" "http://$(uihost "${run}")/__wardyn/bind" >/dev/null
+  bind="$(sed -n 's/^[Ss]et-[Cc]ookie: *\(wardyn_ui_bind_[^;]*\).*/\1/p' "${TMPDIR}/hbind.h" | tr -d '\r' | head -1)"
+  OPEN_STATUS="$(hreq "${run}" "${TMPDIR}/henter" -X POST -H "Cookie: ${bind}" \
+    --data-urlencode "run=${run}" --data-urlencode "app=${app}" --data-urlencode "ticket=${ticket}" \
+    "http://$(uihost "${run}")/__wardyn/enter")"
+  OPEN_LOCATION="$(sed -n 's/^[Ll]ocation: *//p' "${TMPDIR}/henter.h" | tr -d '\r' | head -1)"
+  OPEN_SESS="$(sed -n 's/.*[Ss]et-[Cc]ookie: *wardyn_ui_sess=\([^;]*\).*/\1/p' "${TMPDIR}/henter.h" | head -1)"
+}
+# app_ticket TOKEN RUN APP -> the status of POST /runs/{run}/apps/{app}/ticket as TOKEN's holder; the body is resp.json
+app_ticket() {
+  curl -sS -o "${TMPDIR}/resp.json" -w '%{http_code}' -X POST "${BASE}/api/v1/runs/$2/apps/$3/ticket" -H "Authorization: Bearer $1"
+}
+# The denial rows share auth.fail's bound (1/s, burst 5, process-wide): a pause before each request whose
+# inbound.deny row is asserted keeps the bucket from eating it.
+refill() { sleep 2; }
+
+# ── token path ──────────────────────────────────────────────────────────────
+# The first call waits out the command's start: the responder is not listening the instant the run is RUNNING.
+# The client sends a forged X-Wardyn-Caller, an X-Wardyn-Admin and (it is the credential) a bearer; none of
+# them may reach the app as sent.
+code="000"
+for _ in $(seq 1 12); do
+  code=$(hreq "${RUN_BG_ID}" "${TMPDIR}/tok" -H "Authorization: Bearer ${CALLER_INBOUND}" \
+    -H "X-Wardyn-Caller: spoofed-admin" -H "X-Wardyn-Admin: yes" "$(iurl "${RUN_BG_ID}" api "probe?secret=querysecret")")
+  [[ "${code}" == "200" ]] && grep -q "ECHO-END" "${TMPDIR}/tok.body" && break
+  sleep 5
+done
+if [[ "${code}" == "200" ]] && grep -q "ECHO-END" "${TMPDIR}/tok.body"; then
+  pass "token path: an inbound token called the background run's inbound app and got the app's answer"
+else
+  fail "token path: status ${code}, body head: $(head -c 300 "${TMPDIR}/tok.body")"
+fi
+if [[ "$(grep -ic '^x-wardyn-caller:' "${TMPDIR}/tok.body")" == "1" ]] \
+   && grep -qi '^x-wardyn-caller: e2e-caller' "${TMPDIR}/tok.body" \
+   && grep -qi '^x-wardyn-caller-email: e2e-caller@e2e.wardyn.invalid' "${TMPDIR}/tok.body"; then
+  pass "token path: X-Wardyn-Caller (and -Email) reached the app, set by the gateway"
+else
+  fail "token path: caller headers at the app: $(grep -i 'x-wardyn' "${TMPDIR}/tok.body" | tr '\n' '|')"
+fi
+if ! grep -qiE 'spoofed-admin|x-wardyn-admin|^authorization:' "${TMPDIR}/tok.body" && ! grep -q "${CALLER_INBOUND}" "${TMPDIR}/tok.body"; then
+  pass "token path: a client-sent X-Wardyn-* header and the bearer did not reach the app"
+else
+  fail "token path: the app saw something it must not:
+$(cat "${TMPDIR}/tok.body")"
+fi
+
+refill
+code=$(hreq "${RUN_BG_ID}" "${TMPDIR}/apitok" -H "Authorization: Bearer ${CALLER_API}" "$(iurl "${RUN_BG_ID}" api probe)")
+want_refusal "token path: an API-kind token" "${code}" 401 inbound_credential_invalid "${TMPDIR}/apitok.body"
+if grep -qi '^www-authenticate: *Bearer' "${TMPDIR}/apitok.h"; then
+  pass "token path: the 401 carries WWW-Authenticate: Bearer"
+else
+  fail "token path: no WWW-Authenticate on the 401: $(tr -d '\r' < "${TMPDIR}/apitok.h" | tr '\n' '|')"
+fi
+code=$(hreq "${RUN_BG_ID}" "${TMPDIR}/admintok" -H "Authorization: Bearer ${ADMIN_TOKEN}" "$(iurl "${RUN_BG_ID}" api probe)")
+want_refusal "token path: the admin bearer is no credential here" "${code}" 403 ui_gateway_no_session "${TMPDIR}/admintok.body"
+refill
+code=$(hreq "${RUN_BG_ID}" "${TMPDIR}/stranger" -H "Authorization: Bearer ${STRANGER_INBOUND}" "$(iurl "${RUN_BG_ID}" api probe)")
+want_refusal "token path: a live inbound token of someone the app does not name" "${code}" 404 inbound_not_found "${TMPDIR}/stranger.body"
+refill
+code=$(hreq "${RUN_HM_ID}" "${TMPDIR}/noninbound" -H "Authorization: Bearer ${CALLER_INBOUND}" "$(iurl "${RUN_HM_ID}" vscode)")
+want_refusal "token path: a non-inbound app on a run that has an inbound one" "${code}" 404 inbound_not_found "${TMPDIR}/noninbound.body"
+# A bearer is never ambient, so the browser rules that refuse a cookie session do not apply to it.
+code=$(hreq "${RUN_BG_ID}" "${TMPDIR}/tok-null" -H "Authorization: Bearer ${CALLER_INBOUND}" -H "Origin: null" "$(iurl "${RUN_BG_ID}" api probe)")
+if [[ "${code}" == "200" ]]; then
+  pass "token path: Origin: null does not stop a bearer (the cross-site rule is for cookie sessions)"
+else
+  fail "token path with Origin: null: status ${code}, want 200"
+fi
+
+# ── people path ─────────────────────────────────────────────────────────────
+# A named person who is not the owner: the console's /open page mints their ticket for the one app, binds it
+# and enters, on the run's own host. This is that sequence, request for request.
+code=$(app_ticket "${CALLER_API}" "${RUN_BG_ID}" api)
+if [[ "${code}" == "200" ]]; then
+  PEOPLE_TICKET="$(jq -r '.ticket' "${TMPDIR}/resp.json")"
+  open_in_host "${RUN_BG_ID}" api "${PEOPLE_TICKET}"
+  if [[ "${OPEN_STATUS}" == "303" && "${OPEN_LOCATION}" == "/r/${RUN_BG_ID}/api/" && -n "${OPEN_SESS}" ]]; then
+    pass "people path: the named caller's ticket entered on the run's own host (303 -> ${OPEN_LOCATION})"
+  else
+    fail "people path: enter status ${OPEN_STATUS}, location '${OPEN_LOCATION}', headers: $(tr -d '\r' < "${TMPDIR}/henter.h" | tr '\n' '|')"
+  fi
+  PEOPLE_SESS="${OPEN_SESS}"
+  code=$(hreq "${RUN_BG_ID}" "${TMPDIR}/landed" -H "Cookie: wardyn_ui_sess=${PEOPLE_SESS}" "http://$(uihost "${RUN_BG_ID}")${OPEN_LOCATION}who")
+  if [[ "${code}" == "200" ]] && grep -qi '^x-wardyn-caller: e2e-caller' "${TMPDIR}/landed.body"; then
+    pass "people path: the named caller landed in the app, as e2e-caller"
+  else
+    fail "people path: landing status ${code}, body head: $(head -c 300 "${TMPDIR}/landed.body")"
+  fi
+else
+  fail "people path: the named caller was refused a ticket: status ${code}, $(cat "${TMPDIR}/resp.json")"
+  PEOPLE_SESS=""
+fi
+refill
+code=$(app_ticket "${STRANGER_API}" "${RUN_BG_ID}" api)
+want_refusal "people path: a person nobody named" "${code}" 404 run_not_found "${TMPDIR}/resp.json"
+code=$(app_ticket "${CALLER_API}" "${RUN_HM_ID}" vscode)
+want_refusal "people path: a named caller asking for a non-inbound app" "${code}" 404 run_not_found "${TMPDIR}/resp.json"
+
+# The host-mode cross-site rule on that cookie session (uiCrossSite). A request names its own origin or none,
+# or it is a top-level GET navigation; a foreign Origin, "null" (a sandboxed frame's, a webview's) and any
+# other cross-site request is refused 403 ui_gateway_cross_site before the app is reached.
+if [[ -n "${PEOPLE_SESS}" ]]; then
+  BG_ORIGIN="http://$(uihost "${RUN_BG_ID}")"
+  SESS_COOKIE="Cookie: wardyn_ui_sess=${PEOPLE_SESS}"
+  refill
+  code=$(hreq "${RUN_BG_ID}" "${TMPDIR}/xs-null" -H "${SESS_COOKIE}" -H "Origin: null" "$(iurl "${RUN_BG_ID}" api probe)")
+  want_refusal "cross-site rule: a cookie request with Origin: null" "${code}" 403 ui_gateway_cross_site "${TMPDIR}/xs-null.body"
+  code=$(hreq "${RUN_BG_ID}" "${TMPDIR}/xs-fetch" -H "${SESS_COOKIE}" -H "Sec-Fetch-Site: cross-site" -H "Sec-Fetch-Mode: cors" "$(iurl "${RUN_BG_ID}" api probe)")
+  want_refusal "cross-site rule: a cross-site fetch" "${code}" 403 ui_gateway_cross_site "${TMPDIR}/xs-fetch.body"
+  code=$(hreq "${RUN_BG_ID}" "${TMPDIR}/xs-nav" -H "${SESS_COOKIE}" -H "Sec-Fetch-Site: cross-site" -H "Sec-Fetch-Mode: navigate" -H "Sec-Fetch-Dest: document" "$(iurl "${RUN_BG_ID}" api probe)")
+  if [[ "${code}" == "200" ]]; then
+    pass "cross-site rule: a cross-site top-level GET navigation (a link) is let through"
+  else
+    fail "cross-site rule: a cross-site navigation: status ${code}, want 200"
+  fi
+  code=$(hreq "${RUN_BG_ID}" "${TMPDIR}/xs-own" -H "${SESS_COOKIE}" -H "Origin: ${BG_ORIGIN}" -H "Sec-Fetch-Site: same-origin" "$(iurl "${RUN_BG_ID}" api probe)")
+  if [[ "${code}" == "200" ]]; then
+    pass "cross-site rule: a request naming the run's own origin is let through"
+  else
+    fail "cross-site rule: a same-origin request: status ${code}, want 200"
+  fi
+fi
+
+# ── VS Code in host mode ────────────────────────────────────────────────────
+# The editor is a non-inbound app, so its owner opens it with the ordinary ticket. The page must load, and the
+# WebSocket the workbench opens next must get through the gateway: the upgrade carries the browser's Origin,
+# which for the run's own page is the run's own origin.
+HM_TICKET="$(mint_ticket "${RUN_HM_ID}")" || die "no ticket for the editor run"
+open_in_host "${RUN_HM_ID}" vscode "${HM_TICKET}"
+if [[ "${OPEN_STATUS}" == "303" && "${OPEN_LOCATION}" == "/r/${RUN_HM_ID}/vscode/" && -n "${OPEN_SESS}" ]]; then
+  pass "vscode: the owner entered on the run's own host (303 -> ${OPEN_LOCATION})"
+else
+  fail "vscode: enter status ${OPEN_STATUS}, location '${OPEN_LOCATION}', headers: $(tr -d '\r' < "${TMPDIR}/henter.h" | tr '\n' '|')"
+fi
+HM_SESS="${OPEN_SESS}"
+HM_ORIGIN="http://$(uihost "${RUN_HM_ID}")"
+got_html=0
+for _ in $(seq 1 6); do
+  code=$(hreq "${RUN_HM_ID}" "${TMPDIR}/hm-editor" -L -H "Cookie: wardyn_ui_sess=${HM_SESS}" "$(iurl "${RUN_HM_ID}" vscode)")
+  [[ "${code}" == "200" ]] && grep -qi "code-server" "${TMPDIR}/hm-editor.body" && { got_html=1; break; }
+  sleep 5
+done
+if [[ "${got_html}" -eq 1 ]]; then
+  pass "vscode: the editor page loaded in host mode ($(wc -c < "${TMPDIR}/hm-editor.body") bytes)"
+else
+  fail "vscode: editor page status ${code}, body head: $(head -c 300 "${TMPDIR}/hm-editor.body")"
+fi
+# ws_status RUN SESS ORIGIN OUT -> the status line code of a WebSocket upgrade to the editor (101 when the
+# server accepts it; curl then holds the socket open until -m ends it, which is not a failure here).
+ws_status() {
+  local run="$1" sess="$2" origin="$3" out="$4" token
+  token="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+  curl -sS -m 6 --http1.1 --resolve "$(uihost "${run}"):127.0.0.1" -o /dev/null -D "${out}.h" \
+    -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" \
+    -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" -H "Origin: ${origin}" -H "Cookie: wardyn_ui_sess=${sess}" \
+    "$(iurl "${run}" vscode "?reconnectionToken=${token}&reconnection=false&skipWebSocketFrames=true")" >/dev/null 2>&1 || true
+  sed -n '1s/^HTTP\/[0-9.]* \([0-9]*\).*/\1/p' "${out}.h" | tr -d '\r'
+}
+code="$(ws_status "${RUN_HM_ID}" "${HM_SESS}" "${HM_ORIGIN}" "${TMPDIR}/hm-ws")"
+if [[ "${code}" == "101" ]]; then
+  pass "vscode: the editor's WebSocket upgrade (Origin ${HM_ORIGIN}) got through the gateway (101)"
+else
+  fail "vscode: the WebSocket upgrade with the run's own Origin answered '${code}', want 101: $(tr -d '\r' < "${TMPDIR}/hm-ws.h" | head -8 | tr '\n' '|')"
+fi
+# What the cross-site rule does with a webview's "null" origin: it refuses it, on a plain request and on an
+# upgrade alike, because an Origin that is not the request's own is the rule's definition of cross-site.
+refill
+code=$(hreq "${RUN_HM_ID}" "${TMPDIR}/hm-null" -H "Cookie: wardyn_ui_sess=${HM_SESS}" -H "Origin: null" "$(iurl "${RUN_HM_ID}" vscode)")
+want_refusal "vscode: a cookie request with Origin: null" "${code}" 403 ui_gateway_cross_site "${TMPDIR}/hm-null.body"
+code="$(ws_status "${RUN_HM_ID}" "${HM_SESS}" "null" "${TMPDIR}/hm-ws-null")"
+if [[ "${code}" == "403" ]]; then
+  pass "vscode: a WebSocket upgrade with Origin: null is refused 403 by the cross-site rule"
+else
+  fail "vscode: the WebSocket upgrade with Origin: null answered '${code}', want 403: $(tr -d '\r' < "${TMPDIR}/hm-ws-null.h" | head -8 | tr '\n' '|')"
+fi
+code="$(ws_status "${RUN_HM_ID}" "${HM_SESS}" "https://evil.example" "${TMPDIR}/hm-ws-evil")"
+if [[ "${code}" == "403" ]]; then
+  pass "vscode: a WebSocket upgrade from another origin is refused 403"
+else
+  fail "vscode: the WebSocket upgrade from another origin answered '${code}', want 403"
+fi
+
+# ── the rate bound ──────────────────────────────────────────────────────────
+# 400 calls at once from one caller: the bucket holds 100 and refills at 50 a second, and a refused call
+# comes back at once, so the arrivals outrun the refill whatever the app's speed.
+sleep 3
+mkdir -p "${TMPDIR}/rl"
+curl -sS -m 120 --parallel --parallel-max 50 --resolve "$(uihost "${RUN_BG_ID}"):127.0.0.1" \
+  -H "Authorization: Bearer ${CALLER_INBOUND}" -o "${TMPDIR}/rl/#1.body" -D "${TMPDIR}/rl/#1.h" -w '%{http_code}\n' \
+  "$(iurl "${RUN_BG_ID}" api "rl[1-400]")" >"${TMPDIR}/rl/codes.txt" 2>/dev/null || true
+n200="$(grep -c '^200$' "${TMPDIR}/rl/codes.txt" || true)"
+n429="$(grep -c '^429$' "${TMPDIR}/rl/codes.txt" || true)"
+first429="$(grep -l '^HTTP/[0-9.]* 429' "${TMPDIR}"/rl/*.h 2>/dev/null | head -1 || true)"
+if [[ "${n429:-0}" -ge 1 && "${n200:-0}" -ge 1 && -n "${first429}" ]] \
+   && [[ "$(reason_of "${first429%.h}.body")" == "inbound_rate_limited" ]] && grep -qi '^retry-after: *1' "${first429}"; then
+  pass "rate bound: of 400 calls from one caller ${n200} were answered and ${n429} refused 429 inbound_rate_limited with Retry-After: 1"
+else
+  fail "rate bound: ${n200:-0} answered, ${n429:-0} refused; first 429 file '${first429}' (reason '$(reason_of "${first429%.h}.body")')"
+fi
+
+# ── the inbound audit trail ─────────────────────────────────────────────────
+inbound_rows() { # RUN JQ_FILTER -> the number of the run's inbound.* rows the filter keeps
+  jq "[.[] | select($2)] | length" "${TMPDIR}/inbound-$1.json"
+}
+for r in "${RUN_BG_ID}" "${RUN_HM_ID}"; do
+  api GET "/api/v1/audit?run_id=${r}&action_prefix=inbound.&limit=1000" >/dev/null
+  cp "${TMPDIR}/resp.json" "${TMPDIR}/inbound-${r}.json"
+done
+check_rows() { # LABEL RUN JQ_FILTER
+  local n
+  n="$(inbound_rows "$2" "$3")"
+  if [[ "${n:-0}" -ge 1 ]]; then pass "audit: $1 (${n} row(s))"; else fail "audit: no row for: $1"; fi
+}
+check_rows "inbound.allow by token, naming e2e-caller, the entry that admitted it and the token id" "${RUN_BG_ID}" \
+  '.action=="inbound.allow" and .outcome=="success" and .actor=="e2e-caller" and .target=="api" and .data.via=="token" and .data.caller=="user:e2e-caller" and .data.method=="GET" and .data.path=="/probe" and (.data.token_id|length)>0'
+check_rows "inbound.allow by session for the person who opened the app" "${RUN_BG_ID}" \
+  '.action=="inbound.allow" and .actor=="e2e-caller" and .data.via=="session" and .data.caller=="user:e2e-caller"'
+check_rows "inbound.deny credential_invalid for the API-kind token" "${RUN_BG_ID}" \
+  '.action=="inbound.deny" and .outcome=="denied" and .data.reason=="credential_invalid" and .data.via=="token"'
+check_rows "inbound.deny not_found for the caller nobody named" "${RUN_BG_ID}" \
+  '.action=="inbound.deny" and .actor=="e2e-stranger" and .data.reason=="not_found"'
+check_rows "inbound.deny cross_site for the Origin: null cookie request" "${RUN_BG_ID}" \
+  '.action=="inbound.deny" and .data.reason=="cross_site"'
+check_rows "inbound.deny rate_limited" "${RUN_BG_ID}" \
+  '.action=="inbound.deny" and .data.reason=="rate_limited"'
+check_rows "inbound.deny not_found for the non-inbound editor app" "${RUN_HM_ID}" \
+  '.action=="inbound.deny" and .target=="vscode" and .data.reason=="not_found"'
+if [[ "$(inbound_rows "${RUN_BG_ID}" '(.data.path // "") | test("secret")')" == "0" ]]; then
+  pass "audit: no inbound row records a query string"
+else
+  fail "audit: an inbound row carries the request's query"
 fi
 
 # ── summary ──────────────────────────────────────────────────────────────────
