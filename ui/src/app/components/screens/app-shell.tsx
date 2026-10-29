@@ -22,6 +22,7 @@ import {
   HardDrive,
   KeyRound,
   Laptop,
+  Layers,
   LayoutTemplate,
   Lock,
   Menu,
@@ -151,6 +152,7 @@ interface NavItem {
 }
 const ADMIN_NAV: NavItem[] = [
   { to: "/admin/runs", label: "Runs", icon: Activity, badge: "attention", group: "activity" },
+  { to: "/admin/workloads", label: "Workloads", icon: Layers, group: "activity" },
   { to: "/admin/approvals", label: "Approvals", icon: ShieldCheck, badge: "approvals", group: "activity" },
   { to: "/admin/audit", label: "Audit", icon: ScrollText, group: "activity" },
   { to: "/admin/recordings", label: "Recordings", icon: Play, tier: "super", group: "activity" },
@@ -181,6 +183,7 @@ const ADMIN_NAV: NavItem[] = [
 ];
 const USER_NAV: NavItem[] = [
   { to: "/runs", label: "Runs", icon: Activity, badge: "attention" },
+  { to: "/workloads", label: "Workloads", icon: Layers },
   { to: "/approvals", label: "Approvals", icon: ShieldCheck, badge: "approvals" },
   { to: "/workspaces", label: "Workspaces", icon: FolderOpen },
   { to: "/templates", label: "Templates", icon: LayoutTemplate },

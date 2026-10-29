@@ -172,6 +172,8 @@ export { expect };
 export type NavLabel =
   | "Runs"
   | "Approvals"
+  // 0.10 — beside Runs, in both views.
+  | "Workloads"
   // 0.8.6 (ppl-p2) — first under Access (#3056), both admin tiers.
   | "People"
   | "Workspaces"

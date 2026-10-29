@@ -33,6 +33,7 @@ const NOT_A_DRAFT: Record<string, string> = {
   "/resume": "action on a run, no composed body",
   "/attach/ticket": "mints a single-use ticket, no composed body",
   "/attach/takeover": "action on a run, no composed body",
+  "}/restart": "action on a workload, no composed body",
   '"/admin/runs/restart"': "action on named runs, no composed text",
   "/org-check": "probe, saves nothing",
   "/sign-in`, { method": "starts a sign-in flow, no body",
