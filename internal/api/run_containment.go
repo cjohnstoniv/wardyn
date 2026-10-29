@@ -322,8 +322,8 @@ func nodeRecordAuditData(c runNodeRecordChange, rec runner.NodeRecord, a types.R
 }
 
 // deliverNodeRecord ends the runner's session on this replica, if it holds one, so the runner reconnects
-// and reads the record on its fresh session's PENDING; a runner offline or on another replica reads it on
-// its next connection. A failure only delays delivery.
+// and reads the record on its fresh session's PENDING; a runner offline reads it on its next connection, and
+// one on another replica is told over the bus. A failure only delays delivery.
 func (s *Server) deliverNodeRecord(ctx context.Context, runnerID uuid.UUID) {
 	st, ok := s.cfg.Store.(store.RunnerStore)
 	if !ok {
@@ -332,6 +332,7 @@ func (s *Server) deliverNodeRecord(ctx context.Context, runnerID uuid.UUID) {
 	if err := s.runnerHub(st).Goaway(ctx, runnerID); err != nil {
 		slog.WarnContext(ctx, "wardynd: a node record waits for the runner's next session", slog.String("runner_id", runnerID.String()), slog.Any("err", err))
 	}
+	s.announceRunnerGoaway(runnerID)
 }
 
 // applyRunNodeRecordChange applies a held node record inside the decision transaction: the proposer and
