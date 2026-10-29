@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -563,5 +564,34 @@ func TestPG_WorkloadBinding_ForRunnerFollowsMembershipAndPoolDelete(t *testing.T
 	var n int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM workload_bindings WHERE pool_id = $1`, p.ID).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("%d bindings left on the deleted pool (%v)", n, err)
+	}
+}
+
+// Retiring a service identity deletes its namespace bindings in the same transaction, and leaves every
+// other identity's.
+func TestPG_WorkloadBinding_RetiredServiceLosesItsBindings(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := t.Context()
+	if _, err := st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: "sub-a", Issuer: "https://issuer.test", Email: "a@corp.example"}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"ci-bot", "other-bot"} {
+		if _, err := st.CreateServiceIdentity(ctx, types.ServiceIdentity{Name: name, Sponsor: "sub-a", UserType: types.UserTypeStandard, CreatedBy: "sub-a"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p := ownPool(t, st, "sub-a", "A")
+	for ns, svc := range map[string]string{"team-a": "ci-bot", "team-b": "ci-bot", "team-c": "other-bot"} {
+		if _, err := st.CreateWorkloadBinding(ctx, store.WorkloadBinding{PoolID: p.ID, Namespace: ns, Service: svc, Sponsor: "sub-a", CreatedBy: "secop"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := st.RetireServiceIdentity(ctx, "ci-bot", "secop"); err != nil {
+		t.Fatal(err)
+	}
+	left, err := st.ListWorkloadBindings(ctx, store.Page{})
+	if err != nil || len(left) != 1 || left[0].Service != "other-bot" || left[0].Namespace != "team-c" {
+		t.Fatalf("bindings after the retire = %+v (%v), want only other-bot's", left, err)
 	}
 }
