@@ -445,6 +445,8 @@ export const health = {
       // browser (#1241); the gateway refuses an enter without it.
       bind_url?: string;
       host_mode?: boolean;
+      // inbound_url_template: where an API client calls an inbound app, with {run} and {app} to fill in.
+      inbound_url_template?: string;
     };
     // Per-pluggable-seam selection (server.go's ComponentInfo), keyed by seam
     // name ("recording", "identity", ...). recording.selected ===

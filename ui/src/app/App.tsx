@@ -194,6 +194,12 @@ const CliSignInScreen = React.lazy(() =>
     default: m.CliSignInScreen,
   })),
 );
+// /open/{run}/{app}: the link people are given for an inbound app. Outside the setup gate, like /cli/sign-in.
+const OpenAppScreen = React.lazy(() =>
+  import("./components/screens/open-app").then((m) => ({
+    default: m.OpenAppScreen,
+  })),
+);
 const WorkspacesScreen = React.lazy(() =>
   import("./components/screens/workspaces").then((m) => ({
     default: m.WorkspacesScreen,
@@ -872,6 +878,7 @@ export default function App() {
             element={<SetupRoute onDone={() => navigate("/runs")} status={setupStatus} />}
           />
           <Route path="/cli/sign-in" element={suspend(<CliSignInScreen />)} />
+          <Route path="/open/:run/:app" element={suspend(<OpenAppScreen />)} />
           <Route element={<RequireSetup status={setupStatus} />}>
             <Route
               path="/"
