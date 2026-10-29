@@ -43,6 +43,11 @@ export const serviceIdentities = {
     );
   },
 
+  // GET /api/v1/service-identities -> every identity, retired ones included (security tier): the Bind namespace dialog's choices.
+  async listAll(): Promise<ServiceIdentity[]> {
+    return unwrapList<ServiceIdentity>(await asJson<unknown>(await wfetch(withLimit("/service-identities"), { method: "GET" })));
+  },
+
   // POST /api/v1/me/service-identities/{name}/tokens -> 201 with the new token, `token` holding the plaintext.
   async mintToken(name: string, body: MintServiceTokenRequest): Promise<ApiToken> {
     return asJson<ApiToken>(await wfetch(tokensPath(name), { method: "POST", asPerson: true, body: JSON.stringify(body) }));
