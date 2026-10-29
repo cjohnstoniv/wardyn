@@ -19,6 +19,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -248,6 +249,16 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	// Without a trailing line break (headerCredential), which no header carries: a secret placeholder
 	// is authored for such a value.
 	header := headerCredential(secret)
+	if len(header) < len(secret) && len(header) < secretmask.MinLen {
+		// The stored value passed the write-time length check only by its line break: without it,
+		// output masking would drop it, so it is not handed out.
+		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
+			"secret.read", read.auditTarget(minted.Injection.SecretName, grantID), "failure",
+			mustJSON(read.auditData(map[string]any{"purpose": "proxy-injection", "reason": reasonSecretValueTooShort, "grant_id": grantID, "owner": claims.Sub}, row))))
+		writeErrorReason(w, http.StatusFailedDependency, reasonSecretValueTooShort,
+			fmt.Sprintf("the stored credential is shorter than %d bytes without its trailing line break, so it cannot be masked; nothing was substituted", secretmask.MinLen))
+		return
+	}
 	formattedValue := formatInjectionValue(minted.Injection.Format, header)
 
 	// Register the raw secret and formatted value with the mask registry so
