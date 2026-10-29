@@ -16,6 +16,8 @@
 -- and current_generation is the one current_run_id was launched from, so a launch is owed while the
 -- second is behind the first. last_refusal is {generation, reason, message, at} of the last refused
 -- launch. launch_claim_until fences one replica to one launch; a claim a crash leaves lapses by itself.
+-- launch_claim_token names the claim: only its holder records the launch's run or refusal, so a claimer
+-- whose claim lapsed and was taken again cannot clear or overwrite the newer claimer's outcome.
 -- status_pushed is the hash of the last status sent to the runner.
 --
 -- source_pool_id and current_run_id are cleared, not the row removed, if the pool or run row they name
@@ -42,6 +44,7 @@ CREATE TABLE IF NOT EXISTS workloads (
     current_generation bigint NOT NULL DEFAULT 0 CHECK (current_generation >= 0),
     last_refusal       jsonb CHECK (last_refusal IS NULL OR jsonb_typeof(last_refusal) = 'object'),
     launch_claim_until timestamptz,
+    launch_claim_token uuid,
     status_pushed      text NOT NULL DEFAULT '',
     created_by         text NOT NULL,
     created_at         timestamptz NOT NULL DEFAULT now(),

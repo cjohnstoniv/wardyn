@@ -52,7 +52,9 @@ var ErrWorkloadSourceConflict = fmt.Errorf("%w: the workload belongs to another 
 var ErrWorkloadCapReached = errors.New("store: the owner holds the most workloads allowed")
 
 // ErrWorkloadSuperseded is returned by SetWorkloadRun when a launch of the same or a later generation was
-// recorded first, so the run the caller started is not the workload's and must be ended. Wraps ErrConflict.
+// recorded first, or the caller's claim lapsed and was taken again, so the run the caller started is not
+// the workload's and must be ended; and by RecordWorkloadRefusal when the caller's claim is no longer the
+// workload's, so the refusal is not recorded. Wraps ErrConflict.
 var ErrWorkloadSuperseded = fmt.Errorf("%w: a launch of this generation was already recorded", ErrConflict)
 
 // ErrWorkloadBindingConflict is returned by CreateWorkloadBinding when the namespace is bound on the pool
@@ -92,6 +94,9 @@ type Workload struct {
 	CurrentGeneration int64
 	LastRefusal       *WorkloadRefusal
 	LaunchClaimUntil  *time.Time
+	// ClaimToken names the claim ClaimWorkloadLaunch took; it is set on the workload that call returns only,
+	// and SetWorkloadRun and RecordWorkloadRefusal take it back.
+	ClaimToken uuid.UUID
 	// StatusPushed is the hash of the last status sent to SourceRunnerID.
 	StatusPushed string
 	CreatedBy    string
@@ -143,8 +148,8 @@ type WorkloadBinding struct {
 type WorkloadStore interface {
 	PutWorkload(ctx context.Context, in WorkloadPut) (Workload, WorkloadWrite, error)
 	ClaimWorkloadLaunch(ctx context.Context, id uuid.UUID) (Workload, bool, error)
-	SetWorkloadRun(ctx context.Context, id uuid.UUID, generation int64, runID uuid.UUID) (*uuid.UUID, error)
-	RecordWorkloadRefusal(ctx context.Context, id uuid.UUID, r WorkloadRefusal) error
+	SetWorkloadRun(ctx context.Context, id, claim uuid.UUID, generation int64, runID uuid.UUID) (*uuid.UUID, error)
+	RecordWorkloadRefusal(ctx context.Context, id, claim uuid.UUID, r WorkloadRefusal) error
 	RestartWorkload(ctx context.Context, id uuid.UUID) (Workload, error)
 	SetWorkloadStatusPushed(ctx context.Context, id uuid.UUID, hash string) error
 	GetWorkload(ctx context.Context, owner, name string) (WorkloadView, error)
@@ -281,38 +286,44 @@ func (s PG) PutWorkload(ctx context.Context, in WorkloadPut) (Workload, Workload
 // ClaimWorkloadLaunch takes the right to launch the workload's current generation for WorkloadLaunchClaim.
 // It reports false, with no error, when none is owed (the current generation was launched) or another
 // replica holds the claim. A claim a crash left lapses by itself. The workload it returns is the one to
-// launch: its Generation is the generation to hand to SetWorkloadRun.
+// launch: its Generation is the generation, and its ClaimToken the claim, to hand to SetWorkloadRun or
+// RecordWorkloadRefusal.
 func (s PG) ClaimWorkloadLaunch(ctx context.Context, id uuid.UUID) (Workload, bool, error) {
-	w, err := scanWorkload(s.Pool.QueryRow(ctx, `
-		UPDATE workloads w SET launch_claim_until = now() + make_interval(secs => $2::float8)
+	var w Workload
+	err := scanWorkloadInto(s.Pool.QueryRow(ctx, `
+		UPDATE workloads w SET launch_claim_until = now() + make_interval(secs => $2::float8), launch_claim_token = gen_random_uuid()
 		WHERE w.id = $1 AND w.current_generation < w.generation AND (w.launch_claim_until IS NULL OR w.launch_claim_until < now())
-		RETURNING `+workloadCols, id, WorkloadLaunchClaim.Seconds()))
+		RETURNING `+workloadCols+`, w.launch_claim_token`, id, WorkloadLaunchClaim.Seconds()), &w, &w.ClaimToken)
 	if errors.Is(err, ErrNotFound) {
 		return Workload{}, false, nil
 	}
 	return w, err == nil, err
 }
 
-// SetWorkloadRun records that runID is the run of the workload's given generation: it becomes the current
-// run, the generation current, the last refusal is cleared and the claim released. It returns the run it
-// replaces, nil if there was none, for the caller to end. ErrNotFound when the workload is gone, and
-// ErrWorkloadSuperseded when that generation, or a later one, was recorded first; the caller ends runID.
-func (s PG) SetWorkloadRun(ctx context.Context, id uuid.UUID, generation int64, runID uuid.UUID) (*uuid.UUID, error) {
+// SetWorkloadRun records that runID is the run of the workload's given generation, launched under claim: it
+// becomes the current run, the generation current, the last refusal is cleared and the claim released. It
+// returns the run it replaces, nil if there was none, for the caller to end. ErrNotFound when the workload
+// is gone, and ErrWorkloadSuperseded when claim is no longer the workload's (it lapsed and was taken again,
+// or its holder already recorded) or that generation, or a later one, was recorded first; the caller ends
+// runID.
+func (s PG) SetWorkloadRun(ctx context.Context, id, claim uuid.UUID, generation int64, runID uuid.UUID) (*uuid.UUID, error) {
 	var prev *uuid.UUID
 	err := s.inTx(ctx, func(q Querier) error {
 		var cur int64
-		err := q.QueryRow(ctx, `SELECT current_run_id, current_generation FROM workloads WHERE id = $1 FOR UPDATE`, id).Scan(&prev, &cur)
+		var token *uuid.UUID
+		err := q.QueryRow(ctx, `SELECT current_run_id, current_generation, launch_claim_token FROM workloads WHERE id = $1 FOR UPDATE`, id).Scan(&prev, &cur, &token)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
 		if err != nil {
 			return err
 		}
-		if cur >= generation {
+		if token == nil || *token != claim || cur >= generation {
 			return ErrWorkloadSuperseded
 		}
 		_, err = q.Exec(ctx, `
-			UPDATE workloads SET current_run_id = $2, current_generation = $3, last_refusal = NULL, launch_claim_until = NULL
+			UPDATE workloads SET current_run_id = $2, current_generation = $3, last_refusal = NULL, launch_claim_until = NULL,
+				launch_claim_token = NULL
 			WHERE id = $1`, id, runID, generation)
 		return err
 	})
@@ -322,22 +333,32 @@ func (s PG) SetWorkloadRun(ctx context.Context, id uuid.UUID, generation int64, 
 	return prev, nil
 }
 
-// RecordWorkloadRefusal stores why a launch was refused and releases the claim, so the next apply tries
-// again. The current run is untouched: a spec the gates refuse never ends a working service. ErrNotFound
-// when the workload is gone.
-func (s PG) RecordWorkloadRefusal(ctx context.Context, id uuid.UUID, r WorkloadRefusal) error {
+// RecordWorkloadRefusal stores why the launch under claim was refused and releases the claim, so the next
+// apply tries again. The current run is untouched: a spec the gates refuse never ends a working service.
+// ErrNotFound when the workload is gone, and ErrWorkloadSuperseded, with nothing written, when claim is no
+// longer the workload's: a later claimer's claim and outcome stand.
+func (s PG) RecordWorkloadRefusal(ctx context.Context, id, claim uuid.UUID, r WorkloadRefusal) error {
 	b, err := json.Marshal(r)
 	if err != nil {
 		return fmt.Errorf("store: encode workload refusal: %w", err)
 	}
-	tag, err := s.Pool.Exec(ctx, `UPDATE workloads SET last_refusal = $2, launch_claim_until = NULL WHERE id = $1`, id, b)
+	tag, err := s.Pool.Exec(ctx, `
+		UPDATE workloads SET last_refusal = $3, launch_claim_until = NULL, launch_claim_token = NULL
+		WHERE id = $1 AND launch_claim_token = $2`, id, claim, b)
 	if err != nil {
 		return fmt.Errorf("store: record workload refusal: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
+	if tag.RowsAffected() > 0 {
+		return nil
 	}
-	return nil
+	var exists bool
+	if err := s.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM workloads WHERE id = $1)`, id).Scan(&exists); err != nil {
+		return fmt.Errorf("store: record workload refusal: %w", err)
+	}
+	if exists {
+		return ErrWorkloadSuperseded
+	}
+	return ErrNotFound
 }
 
 // RestartWorkload marks the workload's spec as not launched, so the next claim starts a fresh run of it
