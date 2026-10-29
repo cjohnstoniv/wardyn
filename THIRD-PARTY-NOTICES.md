@@ -114,6 +114,7 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`, 
 | `github.com/opencontainers/image-spec/specs-go` | Apache-2.0 | https://github.com/opencontainers/image-spec/blob/v1.1.1/LICENSE |
 | `github.com/pkg/errors` | BSD-2-Clause | https://github.com/pkg/errors/blob/v0.9.1/LICENSE |
 | `github.com/pkg/sftp` | BSD-2-Clause | https://github.com/pkg/sftp/blob/v1.13.11/LICENSE |
+| `github.com/pmezard/go-difflib/difflib` | BSD-3-Clause | https://github.com/pmezard/go-difflib/blob/5d4384ee4fb2/LICENSE |
 | `github.com/secure-systems-lab/go-securesystemslib` | MIT | https://github.com/secure-systems-lab/go-securesystemslib/blob/v0.11.0/LICENSE |
 | `github.com/shibumi/go-pathspec` | Apache-2.0 | https://github.com/shibumi/go-pathspec/blob/v1.3.0/LICENSE |
 | `github.com/sigstore/protobuf-specs/gen/pb-go` | Apache-2.0 | https://github.com/sigstore/protobuf-specs/blob/v0.5.1/LICENSE |
