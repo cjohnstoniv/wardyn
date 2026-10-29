@@ -42,6 +42,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Security
 
+- With `WARDYN_ENV_SECRET_PLACEHOLDERS`, `WARDYN_FILE_SECRET_PLACEHOLDERS` or `WARDYN_RUNNER_SECRET_PLACEHOLDERS` on, a
+  secret whose stored value ends in a line break, as one saved with `echo` or an editor does, now gets a placeholder.
+  It went into the sandbox as its value, and only the run's audit log said so.
 - The agent images now carry GitHub CLI 2.103.3, built with Go 1.27.3. Earlier images carried 2.102.0, built with
   Go 1.27.1, which image scanners flag for CVE-2026-56857. That flaw affects Windows only, so it can't be reached in
   the Linux images.
