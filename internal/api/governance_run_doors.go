@@ -199,10 +199,11 @@ func (s *Server) applicationUIAppsRefusal(r *http.Request, req createRunRequest,
 	if req.Shape != client.RunShapeApplication || !applicationServer(req) {
 		return nil
 	}
+	declared, _ := requestPolicyRules(req)
 	switch {
 	case s.uiAppsDenied(r, spec, ceiling):
 		return runError(http.StatusUnprocessableEntity, reasonRunApplicationUIAppsDenied, applicationUIAppsDeniedMsg)
-	case s.inboundAppsDenied(r, spec, ceiling):
+	case s.inboundAppsDenied(r, *declared, ceiling): // an inherited inbound app is boundInboundApps' to strip
 		return runError(http.StatusUnprocessableEntity, reasonRunApplicationUIAppsDenied, applicationInboundDeniedMsg)
 	case len(spec.UIApps) == 0: // declared, and none left without deny_ui_apps: the ceiling's allowed list took it
 		return runError(http.StatusUnprocessableEntity, reasonRunApplicationUIAppsDenied, applicationUIAppsNotAllowedMsg)

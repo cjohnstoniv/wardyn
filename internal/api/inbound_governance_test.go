@@ -212,4 +212,15 @@ func TestApplicationRunRefusedWhenDenyInteractiveStripsItsInboundApp(t *testing.
 	if got := srv.applicationUIAppsRefusal(r, req, plain, inboundCeiling(types.GovernanceLimits{DenyInteractive: true})); got != nil {
 		t.Fatalf("deny_interactive refused an application whose app is not inbound: %+v", got)
 	}
+
+	// The refusal keys on what the application declared: an inbound app it inherits is stripped, not refused.
+	resolved := types.RunPolicySpec{UIApps: []types.UIApp{{Name: "web", Port: 3000}, {Name: "api", Port: 8080, Inbound: true}}}
+	ceiling := inboundCeiling(types.GovernanceLimits{DenyInteractive: true})
+	if got := srv.applicationUIAppsRefusal(r, req, resolved, ceiling); got != nil {
+		t.Fatalf("deny_interactive refused an application over an inherited inbound app: %+v", got)
+	}
+	srv.boundUIApps(ctx, r, &resolved, ceiling, true)
+	if len(resolved.UIApps) != 1 || resolved.UIApps[0].Name != "web" {
+		t.Fatalf("ui_apps = %+v, want the inherited inbound app stripped", resolved.UIApps)
+	}
 }
