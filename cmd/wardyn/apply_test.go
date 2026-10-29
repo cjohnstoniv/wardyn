@@ -376,10 +376,13 @@ func TestDeleteFileDeletesEachWorkload(t *testing.T) {
 	}
 }
 
-// TestApplyWaitFollowsTheRunToWhereItBelongs: a kept-up workload is followed to RUNNING, an agent
-// task to COMPLETED, and a run that fails first exits 1 with its state.
+// TestApplyWaitFollowsTheRunToWhereItBelongs: a service is followed to RUNNING; an agent task and a
+// command without a service block, which end by themselves, to COMPLETED; and a run that fails
+// first exits 1 with its state.
 func TestApplyWaitFollowsTheRunToWhereItBelongs(t *testing.T) {
 	setWaitPollInterval(t, time.Millisecond)
+	serviceYAML := strings.Replace(webYAML, "  no_repositories_or_drives: true\n", "  no_repositories_or_drives: true\n  service: {restart: on_failure}\n", 1)
+	timeout := "30s"
 	run := func(src string, state types.RunState) (string, error) {
 		id := uuid.New()
 		rig := newRouteRig(t, map[string]func(http.ResponseWriter, []byte){
@@ -387,20 +390,31 @@ func TestApplyWaitFollowsTheRunToWhereItBelongs(t *testing.T) {
 			putWorker:                         applied(sdk.WorkloadCreated, launchedRun(id)),
 			"GET /api/v1/runs/" + id.String(): replyJSON(http.StatusOK, types.AgentRun{ID: id, State: state}),
 		})
-		return rig.run(t, "apply", "-f", writeTemplateFile(t, "w.yaml", src), "--wait", "--timeout", "30s")
+		return rig.run(t, "apply", "-f", writeTemplateFile(t, "w.yaml", src), "--wait", "--timeout", timeout)
 	}
-	if _, err := run(webYAML, types.RunRunning); err != nil {
+	if _, err := run(serviceYAML, types.RunRunning); err != nil {
 		t.Errorf("service running: %v", err)
 	}
 	if _, err := run(workerCR, types.RunCompleted); err != nil {
 		t.Errorf("task completed: %v", err)
 	}
+	if _, err := run(webYAML, types.RunCompleted); err != nil {
+		t.Errorf("command completed: %v", err)
+	}
 	var ee *exitError
-	if _, err := run(webYAML, types.RunFailed); !errors.As(err, &ee) || ee.code != 1 || !strings.Contains(err.Error(), "FAILED") {
+	if _, err := run(serviceYAML, types.RunFailed); !errors.As(err, &ee) || ee.code != 1 || !strings.Contains(err.Error(), "FAILED") {
 		t.Errorf("service failed: %v, want exit 1", err)
 	}
-	if _, err := run(webYAML, types.RunKilled); !errors.As(err, &ee) || ee.code != 2 {
+	if _, err := run(serviceYAML, types.RunKilled); !errors.As(err, &ee) || ee.code != 2 {
 		t.Errorf("service killed: %v, want exit 2", err)
+	}
+	if _, err := run(webYAML, types.RunFailed); !errors.As(err, &ee) || ee.code != 1 {
+		t.Errorf("command failed: %v, want exit 1", err)
+	}
+	// A running command without a service block is not done: the wait goes on until it ends.
+	timeout = "50ms"
+	if _, err := run(webYAML, types.RunRunning); !errors.As(err, &ee) || ee.code != 124 {
+		t.Errorf("command still running: %v, want the wait to time out (124)", err)
 	}
 }
 

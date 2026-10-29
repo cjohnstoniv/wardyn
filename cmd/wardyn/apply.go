@@ -116,8 +116,8 @@ func workloadApplyCmd(client clientFn) *cobra.Command {
 			"spec is still stored, the old run keeps running, and the command exits 1.\n\n" +
 			"    wardyn apply -f web.yaml\n" +
 			"    wardyn apply -f - --wait < web.yaml\n\n" +
-			"--wait follows each launched run until it is running, or until it completes when the workload is an\n" +
-			"agent task. --dry-run writes nothing: it prints what would change and the setup checklist of the run.",
+			"--wait follows each launched run until it completes, or until it is running when the workload is a\n" +
+			"service. --dry-run writes nothing: it prints what would change and the setup checklist of the run.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if dryRun && wait {
@@ -170,7 +170,7 @@ func workloadApplyCmd(client clientFn) *cobra.Command {
 	}
 	fileFlag(cmd, &file)
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "write nothing: print the diff against the stored workload and the setup checklist of the run it would start")
-	cmd.Flags().BoolVar(&wait, "wait", false, "follow each launched run until it is running (until it completes, for an agent task); exit with the run's outcome")
+	cmd.Flags().BoolVar(&wait, "wait", false, "follow each launched run until it completes (until it is running, for a service); exit with the run's outcome")
 	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Minute, "give up waiting after this long (with --wait; exit 124). The run keeps going")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the results as a JSON array (progress goes to stderr)")
 	return cmd
@@ -195,14 +195,15 @@ func printWorkloadResult(cmd *cobra.Command, name, verb string, res sdk.Workload
 	}
 }
 
-// followWorkloadRun waits for the run an apply launched: to COMPLETED for an agent task, which
-// ends by itself, and to RUNNING for anything else, which is kept up. Both exit as `run --wait`.
+// followWorkloadRun waits for the run an apply launched: to RUNNING for a service, which is kept
+// up, and to COMPLETED for a background workload without a service block (an agent task or a
+// one-shot command), which ends by itself with its exit code. Both exit as `run --wait`.
 func followWorkloadRun(cmd *cobra.Command, c *sdk.Client, d sdk.WorkloadDocument, id uuid.UUID, timeout time.Duration) error {
 	req, err := sdk.RunDocumentRequest(d.Intent)
 	if err != nil {
 		return err
 	}
-	task := req.Workload != nil && req.Workload.Kind == sdk.WorkloadAgentTask ||
+	task := req.Workload != nil && req.Service == nil ||
 		req.Workload == nil && req.Task != "" && req.Experience != sdk.ExperienceInteractive
 	if task {
 		return waitForRun(cmd.Context(), cmd.ErrOrStderr(), c, id, timeout)
