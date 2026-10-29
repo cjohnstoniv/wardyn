@@ -622,8 +622,9 @@ type hostAxisView struct {
 // host path and the image blanked and the secret names gone, and the egress and the rest kept.
 func TestPG_Workload_ForeignSecurityReadWithholdsTheHostAxis(t *testing.T) {
 	e := newSvcEnv(t)
-	pol := e.plainPolicy(t, "wl-pol")
-	decodeApply(t, doSSO(t, e.h.srv, http.MethodPut, "/api/v1/workloads/web", e.mem, workloadBody(pol, "t", hostAxisIntent)), http.StatusCreated)
+	// No policy_id: an intent names it or an inline_policy, not both.
+	body := `{"intent":{"agent":"claude-code","task":"t"` + hostAxisIntent + `}}`
+	decodeApply(t, doSSO(t, e.h.srv, http.MethodPut, "/api/v1/workloads/web", e.mem, body), http.StatusCreated)
 
 	read := func(c *http.Cookie, path string) hostAxisView {
 		t.Helper()
