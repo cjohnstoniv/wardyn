@@ -36,7 +36,7 @@ import {
 import { Chip } from "../../wardyn/primitives";
 import { ErrorState } from "../../wardyn/states";
 import { cn } from "../../ui/utils";
-import { CHANGE_HEADING, POLICY_TAB, SUMMARY, type PlainCause } from "./policy-tab-copy";
+import { CHANGE_HEADING, FIELD_LABEL, POLICY_TAB, SUMMARY, type PlainCause } from "./policy-tab-copy";
 
 type Load = { status: "loading" } | { status: "error" } | { status: "ready"; view: RunPolicyView };
 
@@ -162,11 +162,16 @@ function RecordedPolicy({
       {groups.map((g) => (
         <div key={g.key} className="mt-2 min-w-0 rounded-lg border border-border px-3 py-2">
           <h4 className="text-body font-semibold">{g.heading}</h4>
-          <ul className="mt-1 space-y-0.5">
+          {/* T4-c: entry, field and chip sit in fixed columns, so each starts at the same x in every row and every group. */}
+          <ul className="mt-1">
             {g.entries.map((e, i) => (
-              <li key={i} className="flex min-w-0 flex-wrap items-center gap-1.5 text-xs">
+              <li
+                key={i}
+                className="flex min-h-[30px] min-w-0 flex-wrap items-center gap-x-4 gap-y-0.5 border-t border-border py-1 text-xs first:border-t-0 sm:grid sm:grid-cols-[minmax(0,1fr)_170px_128px]"
+              >
                 <span className={cn("min-w-0 break-all", e.mono && "font-mono")}>{e.text}</span>
-                {e.mark && <MarkChip mark={e.mark} />}
+                <span className="min-w-0 text-muted-foreground">{e.field}</span>
+                <span className="justify-self-start">{e.mark && <MarkChip mark={e.mark} />}</span>
               </li>
             ))}
           </ul>
@@ -202,7 +207,7 @@ function RecordedPolicy({
 
 /* ---------- changes ---------- */
 
-type Group = { key: string; heading: string; detail: string[]; entries: { text: string; mono: boolean; mark?: PolicyMark }[] };
+type Group = { key: string; heading: string; detail: string[]; entries: { text: string; field: string; mono: boolean; mark?: PolicyMark }[] };
 
 function MarkChip({ mark }: { mark: PolicyMark }) {
   return mark === "added" ? (
@@ -218,6 +223,8 @@ function headingFor(c: RunPolicyChange, ownRun: boolean, person: string): { key:
   switch (c.cause) {
     case "limits":
       return { key: "limits", heading: ownRun ? CHANGE_HEADING.limitsOwn : CHANGE_HEADING.limitsOther(person) };
+    case "walls":
+      return { key: "walls", heading: ownRun ? CHANGE_HEADING.wallsOwn : CHANGE_HEADING.wallsOther(person) };
     case "unit":
       if (c.unit) return { key: `profile:${c.unit}`, heading: CHANGE_HEADING.unit(c.unit) };
       break;
@@ -247,8 +254,9 @@ function groupChanges(changes: RunPolicyChange[], ownRun: boolean, person: strin
     // The heading of a restart or a disk change already says what happened.
     const plain = c.cause === "restart" || c.cause === "org_disk" || c.cause === "pool_disk";
     const mono = !READABLE_FIELDS.has(c.field);
-    for (const text of c.added ?? []) g.entries.push({ text: entryText(c.field, text, holdSeconds), mono, mark: plain ? undefined : "added" });
-    for (const text of c.removed ?? []) g.entries.push({ text: entryText(c.field, text, holdSeconds), mono, mark: plain ? undefined : "removed" });
+    const field = FIELD_LABEL[c.field] ?? "";
+    for (const text of c.added ?? []) g.entries.push({ text: entryText(c.field, text, holdSeconds), field, mono, mark: plain ? undefined : "added" });
+    for (const text of c.removed ?? []) g.entries.push({ text: entryText(c.field, text, holdSeconds), field, mono, mark: plain ? undefined : "removed" });
     g.detail.push(...(c.detail ?? []));
   }
   return [...groups.values()];
@@ -258,7 +266,7 @@ function groupChanges(changes: RunPolicyChange[], ownRun: boolean, person: strin
 // credential id, an app id) and stays in monospace.
 const READABLE_FIELDS = new Set([
   "min_confinement_class", "first_use_approval", "first_use_hold_seconds", "git_push_any_branch",
-  "allow_all_egress", "auto_stop_after_sec", "resources.cpu_millis", "resources.memory_mib", "resources.disk_mib",
+  "allow_all_egress", "auto_stop_after_sec", "resources.cpu_millis", "resources.memory_mib", "resources.disk_mib", "desktop",
 ]);
 
 // Single-value fields arrive as one-entry sets of the raw value; each reads in the

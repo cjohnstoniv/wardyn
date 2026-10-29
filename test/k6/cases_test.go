@@ -75,6 +75,54 @@ func (e *env) dropTestPod(t *testing.T, name string) {
 	})
 }
 
+// cordonSeen cordons node and returns once the scheduler holds the cordon (holdSeen): a probe is refused
+// with a node that "were unschedulable", the cordon's own filter, which runs before the label's.
+func (e *env) cordonSeen(t *testing.T, node string) {
+	t.Helper()
+	e.cordon(t, node, true)
+	e.holdSeen(t, "the cordon", func(msg string) bool { return strings.Contains(msg, "were unschedulable") })
+}
+
+// holdSeen returns once the scheduler holds a node change that leaves the scheduling label's pods
+// unbound. The scheduler learns of a node patch on its node watch and of a new pod on its pod watch, with
+// no order between the two, so a pod created straight after the patch can still be bound from the
+// scheduler's older view. A probe pod with the label's selector is created until one is refused with a
+// message refused accepts; a probe bound from the older view is deleted and tried again, five times at
+// most. Each probe is deleted at once and again at cleanup, so none outlives the call, even on a failure.
+func (e *env) holdSeen(t *testing.T, hold string, refused func(msg string) bool) {
+	t.Helper()
+	zero := int64(0)
+	for try := 1; ; try++ {
+		name := "k6-hold-probe-" + short()
+		if _, err := e.admin.CoreV1().Pods(e.runsNS).Create(bg, e.testPod(name, "", nil, "sleep 5"), metav1.CreateOptions{}); err != nil {
+			t.Fatalf("create hold probe: %v", err)
+		}
+		t.Cleanup(func() {
+			_ = e.admin.CoreV1().Pods(e.runsNS).Delete(bg, name, metav1.DeleteOptions{GracePeriodSeconds: &zero})
+		})
+		p := e.waitPod(t, name, time.Minute, "bound, or refused for "+hold, func(p *corev1.Pod) bool {
+			return p.Spec.NodeName != "" || slices.ContainsFunc(p.Status.Conditions, func(c corev1.PodCondition) bool {
+				return c.Type == corev1.PodScheduled && c.Status == corev1.ConditionFalse && refused(c.Message)
+			})
+		})
+		if err := e.admin.CoreV1().Pods(e.runsNS).Delete(bg, name, metav1.DeleteOptions{GracePeriodSeconds: &zero}); err != nil && !apierrors.IsNotFound(err) {
+			t.Fatalf("delete hold probe %s: %v", name, err)
+		}
+		if p.Spec.NodeName == "" {
+			return
+		}
+		if try == 5 {
+			t.Fatalf("the scheduler still bound a probe to %s after %d tries at %s", p.Spec.NodeName, try, hold)
+		}
+	}
+}
+
+// labelGone is holdSeen's refusal for the scheduling label's removal: refused by the selector alone, so
+// no node that "were unschedulable" stands in for the label being gone.
+func labelGone(msg string) bool {
+	return strings.Contains(msg, "didn't match Pod's node affinity/selector") && !strings.Contains(msg, "were unschedulable")
+}
+
 // stopRun is a normal end: StopProxy, then label teardown, then every object gone.
 func (e *env) stopRun(t *testing.T, id uuid.UUID) {
 	t.Helper()
@@ -430,11 +478,29 @@ func casePodIPReuse(t *testing.T, e *env) {
 		t.Fatalf("the next proxy, with the pending run's IP %s the only address left: %v, want the relay fence's refusal", ip, err)
 	}
 	note(t, "the next proxy received the pending run's IP %s and was refused: %v", ip, err)
-	e.waitRunGone(t, next, goneWait)
+	e.waitRunGone(t, next, goneWait) // the pending run stays fenced: its address is reserved when the case ends (kase)
 }
 
-// k6OnlyIP names the case's IP reservation.
-const k6OnlyIP = "k6-only-ip"
+// k6OnlyIP names the case's IP reservation; k6FencedIP the one that keeps every still-fenced run's address.
+const (
+	k6OnlyIP   = "k6-only-ip"
+	k6FencedIP = "k6-fenced-ip"
+)
+
+// reserveIPs applies the Calico IPReservation name holding addrs, which Calico IPAM then never hands out.
+func reserveIPs(t *testing.T, name string, addrs []string) {
+	t.Helper()
+	doc, err := json.Marshal(map[string]any{"apiVersion": "crd.projectcalico.org/v1", "kind": "IPReservation",
+		"metadata": map[string]any{"name": name}, "spec": map[string]any{"reservedCIDRs": addrs}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := filepath.Join(t.TempDir(), "reservation.json")
+	if err := os.WriteFile(f, doc, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sh(t, "kubectl", "--kubeconfig", os.Getenv("K6_ADMIN_KUBECONFIG"), "apply", "-f", f)
+}
 
 // onlyIP reserves every address of the runs namespace's Calico pool but ip, so the next pod there
 // can receive ip and nothing else: Calico IPAM never hands out a reserved address, and while ip is
@@ -471,16 +537,7 @@ func (e *env) onlyIP(t *testing.T, ip string) (release func()) {
 			reserved = append(reserved, a.String())
 		}
 	}
-	doc, err := json.Marshal(map[string]any{"apiVersion": "crd.projectcalico.org/v1", "kind": "IPReservation",
-		"metadata": map[string]any{"name": k6OnlyIP}, "spec": map[string]any{"reservedCIDRs": reserved}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	f := filepath.Join(t.TempDir(), "reservation.json")
-	if err := os.WriteFile(f, doc, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	sh(t, "kubectl", "--kubeconfig", kc, "apply", "-f", f)
+	reserveIPs(t, k6OnlyIP, reserved)
 	released := false
 	release = func() {
 		if !released { // set only once the delete succeeded, so the cleanup retries a failed one
@@ -544,6 +601,7 @@ func caseBindDeleteSerial(t *testing.T, e *env) {
 	e.cleanupRun(t, id)
 	e.setSched(t, "") // no node satisfies the selector
 	t.Cleanup(func() { e.setSched(t, e.pin) })
+	e.holdSeen(t, "the label's removal", labelGone)
 	pw := e.watchProxy(t, id)
 	ctx, cancel := context.WithCancel(bg)
 	defer cancel()
@@ -596,7 +654,7 @@ func (e *env) overlapOnce(t *testing.T, i int, delta time.Duration) string {
 	id := uuid.New()
 	e.cleanupRun(t, id)
 	e.setSched(t, e.pin)
-	e.cordon(t, e.pin, true)
+	e.cordonSeen(t, e.pin)
 	defer e.cordon(t, e.pin, false)
 	pw := e.watchProxy(t, id)
 	defer pw.stop()
@@ -715,7 +773,7 @@ func caseRestartWhileUnbound(t *testing.T, e *env) {
 	e.cleanupRun(t, id)
 	v1 := e.store.view(nil)
 	d1 := e.newDriver(t, v1)
-	e.cordon(t, e.pin, true) // the node is in the before-list, but nothing binds yet
+	e.cordonSeen(t, e.pin) // the node is in the before-list, but nothing binds yet
 	t.Cleanup(func() { e.cordon(t, e.pin, false) })
 	ctx1, cancel1 := context.WithCancel(bg)
 	defer cancel1()
@@ -951,8 +1009,12 @@ func caseRetainedPolicy(t *testing.T, e *env) {
 // caseNodeReuse: a Node a run used is deleted and its name comes back on a new Node object; the 30 s
 // tick records the reuse, and tier 1 then refuses (owner #8). It also records the pod GC's mark.
 func caseNodeReuse(t *testing.T, e *env) {
-	e.setSched(t, e.other)
 	t.Cleanup(func() { e.setSched(t, e.pin) })
+	// The label leaves the pin, and the scheduler holds that, before it goes to the other worker: a run
+	// created straight after a move can still be bound to the pin from the scheduler's older view.
+	e.setSched(t, "")
+	e.holdSeen(t, "the label's removal", labelGone)
+	e.setSched(t, e.other)
 	id := uuid.New()
 	e.cleanupRun(t, id)
 	if _, err := e.main.CreateSandbox(bg, e.spec(id)); err != nil {
@@ -1013,4 +1075,146 @@ func caseNodeReuse(t *testing.T, e *env) {
 		t.Errorf("proxy completed on arm %q after a reuse", arm)
 	}
 	note(t, "pod GC mark: %s; reuse recorded on the tick; StopProxy refused: %v", gc, err)
+}
+
+// caseRunsNamespaces: one runner, two runs namespaces (design T5 §2.7). A run in each lands wholly in
+// its own namespace; neither agent reaches a pod in the other namespace, which an unconfined pod
+// there does reach; a runner that does not serve a namespace refuses a run naming it, and refuses to
+// boot over a live run recorded in it.
+func caseRunsNamespaces(t *testing.T, e *env) {
+	e.setSched(t, e.pin)
+	d := e.newDriverIn(t, e.store.view(nil), e.runsNS, e.extraNS)
+	other := map[string]string{e.runsNS: e.extraNS, e.extraNS: e.runsNS}
+
+	// A listener in each namespace counts the connections it accepts.
+	listenerIP, conns := map[string]string{}, map[string]func() int{}
+	for _, ns := range []string{e.runsNS, e.extraNS} {
+		name := "k6-listener-" + short()
+		p := e.testPod(name, "", nil, `while true; do nc -l -p 8080 </dev/null >/dev/null 2>&1 && echo conn; done`)
+		p.Namespace = ns
+		if _, err := e.admin.CoreV1().Pods(ns).Create(bg, p, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		e.dropPodIn(t, ns, name)
+		listenerIP[ns] = e.waitRunningIP(t, ns, name)
+		conns[ns] = func() int {
+			b, err := e.admin.CoreV1().Pods(ns).GetLogs(name, &corev1.PodLogOptions{}).DoRaw(bg)
+			if err != nil {
+				t.Fatalf("listener logs in %s: %v", ns, err)
+			}
+			return strings.Count(string(b), "conn")
+		}
+	}
+	// The control: a pod no Wardyn policy selects reaches the other namespace's listener, so a zero
+	// below is the runs' policies at work, not an unreachable listener.
+	cname := "k6-control-" + short()
+	control := e.testPod(cname, "", nil, fmt.Sprintf(`while true; do nc -w 1 %s 8080 </dev/null; sleep 0.3; done`, listenerIP[e.extraNS]))
+	if _, err := e.admin.CoreV1().Pods(e.runsNS).Create(bg, control, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	e.dropTestPod(t, cname)
+	if err := poll(bg, 2*time.Minute, func(context.Context) (bool, error) { return conns[e.extraNS]() > 0, nil }); err != nil {
+		inconclusive(t, "an unconfined pod in "+e.runsNS+" never reached the listener in "+e.extraNS+": the cluster gives the probe nothing to deny")
+	}
+	zero := int64(0)
+	_ = e.admin.CoreV1().Pods(e.runsNS).Delete(bg, cname, metav1.DeleteOptions{GracePeriodSeconds: &zero})
+	e.podGone(t, cname, time.Minute)
+
+	// A run in each namespace: the first names none (the default), the second names its namespace.
+	ids := map[string]uuid.UUID{e.runsNS: uuid.New(), e.extraNS: uuid.New()}
+	for _, ns := range []string{e.runsNS, e.extraNS} {
+		id := ids[ns]
+		e.cleanupRunIn(t, ns, id)
+		spec := e.spec(id)
+		// Both runs sit on the one pin node. By default an agent requests its whole 2-vCPU limit and the
+		// proxy another 500m, so the second run does not fit a CI-sized kind worker. The case proves
+		// namespace fencing, not capacity: request a sliver (limits stay the default).
+		spec.Resources = runner.Resources{CPURequestMillis: 100, MemoryRequestMiB: 256}
+		if ns != e.runsNS {
+			spec.Namespace = ns
+		}
+		ctx, cancel := context.WithTimeout(bg, createWait)
+		_, err := d.CreateSandbox(ctx, spec)
+		cancel()
+		if err != nil {
+			t.Fatalf("CreateSandbox in %s: %v", ns, err)
+		}
+		for _, name := range []string{ref(id), proxyName(id)} {
+			if _, err := e.admin.CoreV1().Pods(ns).Get(bg, name, metav1.GetOptions{}); err != nil {
+				t.Errorf("pod %s not in %s: %v", name, ns, err)
+			}
+			if _, err := e.admin.CoreV1().Pods(other[ns]).Get(bg, name, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+				t.Errorf("pod %s found in %s too (%v)", name, other[ns], err)
+			}
+		}
+	}
+
+	// Each agent dials the other namespace's listener; neither may connect.
+	before := map[string]int{e.runsNS: conns[e.runsNS](), e.extraNS: conns[e.extraNS]()}
+	for ns, id := range ids {
+		probe := fmt.Sprintf(`(while true; do nc -w 1 %s 8080 </dev/null; sleep 0.3; done) >/dev/null 2>&1 &`, listenerIP[other[ns]])
+		sh(t, "kubectl", "--kubeconfig", os.Getenv("K6_ADMIN_KUBECONFIG"), "-n", ns, "exec", ref(id), "-c", "agent", "--", "sh", "-c", probe)
+	}
+	time.Sleep(5 * time.Second)
+	for ns := range ids {
+		if n := conns[other[ns]]() - before[other[ns]]; n != 0 {
+			t.Errorf("the agent in %s reached the listener in %s %d times", ns, other[ns], n)
+		}
+	}
+
+	// The runner that serves only the first namespace refuses a run naming the second, creating
+	// nothing, and refuses to boot over the live run recorded there.
+	refused := uuid.New()
+	e.cleanupRunIn(t, e.extraNS, refused)
+	spec := e.spec(refused)
+	spec.Namespace = e.extraNS
+	if _, err := e.main.CreateSandbox(bg, spec); err == nil || !strings.Contains(err.Error(), "runs_namespace_not_served") {
+		t.Errorf("a one-namespace runner took a run naming %s: %v", e.extraNS, err)
+	}
+	if gone, left := e.runGoneIn(bg, e.extraNS, refused); !gone {
+		t.Errorf("the refused run left objects in %s: %s", e.extraNS, left)
+	}
+	if err := e.main.CheckRunNamespaces(bg, []uuid.UUID{ids[e.extraNS]}); err == nil || !strings.Contains(err.Error(), "runs_namespace_unlisted") {
+		t.Errorf("a runner not listing %s booted over a live run there: %v", e.extraNS, err)
+	}
+
+	for ns, id := range ids {
+		if err := d.StopProxy(bg, ref(id)); err != nil {
+			t.Fatalf("StopProxy in %s: %v", ns, err)
+		}
+		if err := d.StopSandbox(bg, ref(id)); err != nil {
+			t.Fatalf("StopSandbox in %s: %v", ns, err)
+		}
+		if err := poll(bg, goneWait, func(ctx context.Context) (bool, error) { gone, _ := e.runGoneIn(ctx, ns, id); return gone, nil }); err != nil {
+			_, left := e.runGoneIn(bg, ns, id)
+			t.Errorf("run in %s not gone within %s: %s", ns, goneWait, left)
+		}
+	}
+	note(t, "a run in each of %s and %s; 0 cross-namespace connections from either agent (control reached); unserved namespace refused; unlisted live run refuses boot; both stopped", e.runsNS, e.extraNS)
+}
+
+// dropPodIn is dropTestPod for a pod in namespace ns.
+func (e *env) dropPodIn(t *testing.T, ns, name string) {
+	t.Cleanup(func() {
+		zero := int64(0)
+		_ = e.admin.CoreV1().Pods(ns).Delete(bg, name, metav1.DeleteOptions{GracePeriodSeconds: &zero})
+	})
+}
+
+// waitRunningIP waits for the pod in ns to run with an IP and returns it.
+func (e *env) waitRunningIP(t *testing.T, ns, name string) string {
+	t.Helper()
+	var ip string
+	err := poll(bg, 2*time.Minute, func(ctx context.Context) (bool, error) {
+		p, err := e.admin.CoreV1().Pods(ns).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return false, nil
+		}
+		ip = p.Status.PodIP
+		return p.Status.Phase == corev1.PodRunning && ip != "", nil
+	})
+	if err != nil {
+		t.Fatalf("pod %s in %s not running within 2m", name, ns)
+	}
+	return ip
 }

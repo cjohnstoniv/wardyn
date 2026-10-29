@@ -5,7 +5,7 @@
 
 // The run-create request/result shapes (POST /api/v1/runs).
 
-import type { Agent, AgentRun, ConfinementClass } from "./runs";
+import type { Agent, AgentRun, ConfinementClass, RunService } from "./runs";
 import type { AppliedResources } from "./new-run-contract";
 import type { MachineKind } from "./machine-kind";
 
@@ -63,6 +63,8 @@ export interface CreateRunInput {
   // it. Neither takes the default end (#1319).
   ends_after_sec?: number;
   no_end?: boolean;
+  /** Keeps a background command running (pkg/client.CreateRunRequest.Service): the server fills the defaults. */
+  service?: RunService;
   /**
    * A folder on the person's computer (pkg/client.CreateRunRequest.LocalFolder, types.RunLocalFolder). With
    * `runner_id` it is held by their own folder-only runner, and Wardyn seeds it before the agent starts.

@@ -64,7 +64,7 @@ func (d *Driver) PrewrappedCheckUnavailable() string {
 // CheckPrewrappedImage implements runner.PrewrappedImageChecker.
 func (d *Driver) CheckPrewrappedImage(ctx context.Context, attempt uuid.UUID, ref string) []runner.ImageArchVerdict {
 	out := make([]runner.ImageArchVerdict, len(runner.PrewrappedCandidateArches))
-	ns := d.cfg.Namespace
+	ns := d.defaultNamespace()
 	labels := wardynLabels(attempt, componentImageCheck, nil)
 	// The attempt's policy comes first and is removed last (teardownByRunID waits for its pods to be gone).
 	netpol := &networkingv1.NetworkPolicy{
@@ -107,7 +107,7 @@ func (d *Driver) checkImageOnArch(ctx context.Context, attempt uuid.UUID, ref, a
 		v.Code = runner.ImageCheckNoNode
 		return v
 	}
-	ns := d.cfg.Namespace
+	ns := d.defaultNamespace()
 	podName := "wardyn-imagecheck-" + attempt.String() + "-" + arch
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: podName, Namespace: ns},
@@ -153,7 +153,7 @@ func (d *Driver) checkImageOnArch(ctx context.Context, attempt uuid.UUID, ref, a
 func (d *Driver) waitImageCheck(ctx context.Context, podName string) (code, detail string) {
 	var unschedulableSince time.Time
 	pollErr := wait.PollUntilContextTimeout(ctx, k8sPollInterval, imageCheckWait, true, func(pollCtx context.Context) (bool, error) {
-		pod, err := d.clientset.CoreV1().Pods(d.cfg.Namespace).Get(pollCtx, podName, metav1.GetOptions{})
+		pod, err := d.clientset.CoreV1().Pods(d.defaultNamespace()).Get(pollCtx, podName, metav1.GetOptions{})
 		if err != nil {
 			return false, err
 		}

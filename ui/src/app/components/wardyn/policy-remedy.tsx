@@ -16,6 +16,7 @@ import { cn } from "../ui/utils";
 import type { PolicyRef } from "../../lib/api/health";
 import { POLICY_REMEDY } from "../../lib/governance-copy";
 import { WHY_CARD } from "../../lib/why-card-copy";
+import { usePrincipal } from "./operator-context";
 
 const MAX_HREF = 2048;
 
@@ -43,11 +44,16 @@ const LINK = "underline underline-offset-2 hover:text-foreground";
 const REQUEST_BUTTON =
   "inline-flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-foreground hover:bg-muted";
 
+// A person's own walls (layer "personal") are theirs to change: the card says so to the owner, and names
+// whose they are to anyone else. A reader whose identity is unknown is not the owner: it reads them as the owner's.
+export const personalOwn = (policy: PolicyRef, principal: string): boolean => !policy.owner || policy.owner === principal;
+
 // setByLabel names the wall that set the limit, from a refusal's own layer. A run's policy reference carries no
 // layer and a proxy refusal cannot know it, so without one the Set by row is not drawn at all: naming a wall
 // there would be a guess.
-function setByLabel(policy: PolicyRef): string | null {
+function setByLabel(policy: PolicyRef, principal: string): string | null {
   if (!policy.layer) return null;
+  if (policy.layer === "personal") return personalOwn(policy, principal) ? WHY_CARD.PERSONAL : WHY_CARD.PERSONAL_OTHER(policy.owner ?? "");
   if (policy.overridden) return WHY_CARD.RUN_POLICY;
   if (policy.layer === "deployment") return WHY_CARD.BOUNDARY;
   return policy.name ? WHY_CARD.TEAM(policy.name) : WHY_CARD.TEAM_FALLBACK;
@@ -67,14 +73,19 @@ export interface PolicyRemedyProps {
 }
 
 export function PolicyRemedy({ policy, className, enforced, canChange, copyable, line }: PolicyRemedyProps) {
+  const principal = usePrincipal();
   const [copied, setCopied] = React.useState(false);
   const resetTimer = React.useRef<number>(undefined);
   React.useEffect(() => () => window.clearTimeout(resetTimer.current), []);
   if (!policy) return null;
+  // Nobody to ask for a limit the person set themselves: the Can change row says where to change it.
+  const personal = policy.layer === "personal";
   const href = safeRequestHref(policy.request_url);
   const mail = policy.email ? safeRequestHref(`mailto:${policy.email}`) : "";
   let action: React.ReactNode = null;
-  if (href) {
+  if (personal) {
+    action = null;
+  } else if (href) {
     action = (
       <a href={href} target="_blank" rel="noopener noreferrer" className={line ? LINK : REQUEST_BUTTON}>
         {POLICY_REMEDY.LINK} <span aria-hidden="true">↗</span>
@@ -107,11 +118,12 @@ export function PolicyRemedy({ policy, className, enforced, canChange, copyable,
       </span>
     );
   }
-  const setBy = setByLabel(policy);
+  const setBy = setByLabel(policy, principal);
+  const changeBy = personal ? (personalOwn(policy, principal) ? WHY_CARD.CAN_CHANGE_PERSONAL : WHY_CARD.CAN_CHANGE_NOT_HERE) : canChange;
   const rows: Array<[string, React.ReactNode]> = [[WHY_CARD.OWNER, policy.owner || WHY_CARD.NOT_LISTED]];
   if (setBy) rows.unshift([WHY_CARD.SET_BY, setBy]);
   if (enforced) rows.push([WHY_CARD.ENFORCED, enforced]);
-  if (canChange) rows.push([WHY_CARD.CAN_CHANGE, canChange]);
+  if (changeBy) rows.push([WHY_CARD.CAN_CHANGE, changeBy]);
   const copy = () => {
     const text = rows.map(([k, v]) => `${k}: ${typeof v === "string" ? v : ""}`.trimEnd()).join("\n");
     // A refused or missing clipboard changes nothing on screen; "Copied" only follows a write that landed.

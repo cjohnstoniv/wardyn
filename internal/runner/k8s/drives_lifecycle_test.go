@@ -39,7 +39,7 @@ func ssarDriver(t *testing.T, allow map[string]bool, failErr error) (*Driver, *i
 		out.Status.Allowed = allow[ra.Verb]
 		return true, out, nil
 	})
-	return &Driver{clientset: cs, cfg: Config{Namespace: testNamespace}}, &reviews
+	return &Driver{clientset: cs, cfg: Config{Namespaces: []string{testNamespace}}}, &reviews
 }
 
 // fakeLifecycleClock replaces the verdict clock for one test.

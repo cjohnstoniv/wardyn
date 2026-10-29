@@ -387,6 +387,8 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, p di
 	if p.TaskMode == "exec" {
 		sandboxEnv["WARDYN_TASK_MODE"] = "exec"
 	}
+	// A service: the supervisor's settings come from the spec frozen on the run (serviceEnv).
+	serviceEnv(sandboxEnv, run.Service)
 	// interactive_start=agent: the attach shell opens IN the image's agent CLI
 	// instead of a bare shell. Consumed by attach-bashrc.sh (the image's
 	// ~/.bashrc), which the tmux/bash attach chain sources — the same seam its

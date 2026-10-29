@@ -38,6 +38,9 @@ export interface UIApp {
   name: string;
   port: number;
   path?: string;
+  // Callable from outside the run through the gateway, by the callers listed.
+  inbound?: boolean;
+  callers?: string[];
 }
 
 // Canonical weakest -> strongest ladder — the single place the Fence < Wall <
@@ -48,9 +51,9 @@ export interface UIApp {
 // not import from components/, so a home under components/ forced a second copy.
 export const CC_ORDER: ConfinementClass[] = ["CC1", "CC2", "CC3"];
 
-// The New Run choice a request was set up from (Go: client.RunShape, request field
+// The New Run choice a request was set up from (Go: types.RunShape, request field
 // `shape`). The server checks it against experience, workload and tools
-// (run_shape_conflict) and otherwise does not use it.
+// (run_shape_conflict) and stores it on the run (AgentRun.shape).
 export type RunShape = "agent_task" | "environment" | "application";
 export const RUN_SHAPES: readonly RunShape[] = ["agent_task", "environment", "application"];
 
@@ -81,6 +84,35 @@ export type RunState =
   // Keep the union open so an unrecognized backend state degrades to a
   // neutral badge instead of crashing the console (see primitives.tsx).
   | (string & {});
+
+/** Go: types.RunService. A service is a background run of a command that wardynd keeps running. */
+export interface RunService {
+  restart: "on_failure" | "never";
+  /** Listens on 127.0.0.1 inside the sandbox; absent = none declared. */
+  port?: number;
+  /** Needs `port`: an HTTP GET of `path` (2xx/3xx passes), or a TCP connect without one. */
+  health?: ServiceHealth;
+}
+
+/** Go: types.ServiceHealth. */
+export interface ServiceHealth {
+  path?: string;
+  interval_sec: number;
+  failure_threshold: number;
+}
+
+/** Go: types.ServiceHealthState. */
+export type ServiceHealthState = "starting" | "healthy" | "unhealthy" | "unknown";
+
+/** Go: types.RunServiceStatus. `reason` is closed: restarting | probe_failing | supervisor_missing | unreachable | paused. */
+export interface RunServiceStatus {
+  health: ServiceHealthState;
+  reason?: string;
+  restarts: number;
+  last_exit_code?: number;
+  /** wardynd's clock, never the sandbox's. */
+  observed_at: string;
+}
 
 /** Go: types.RunQueue. `position` is how many runs wait ahead in the pool, never whose. */
 export interface RunQueue {
@@ -170,6 +202,10 @@ export interface AgentRun {
   // client or before 0.9, which keeps every door's behaviour. Not `interactive`,
   // which is the legacy execution flag.
   experience?: Experience;
+  // The New Run shape the run was set up from, frozen at create: the request's own, else the one
+  // shape its experience, workload and tools fit. Absent when they fit more than one, for a run
+  // from an older client, or one created before the field.
+  shape?: RunShape;
   // The host working-directory the run's workspace is bind-mounted from. Surfaced
   // on the runs board so a workspace-directory collision is visible at a glance.
   workspace_path?: string;
@@ -272,6 +308,11 @@ export interface AgentRun {
   // AgentRun.InnerWalls (#2822): the harness's own walls the run launched with.
   // Absent for a run with no catalog harness, or one created before the field.
   inner_walls?: HarnessInnerWalls;
+  // AgentRun.Service: the spec of a background run kept running, frozen at create with defaults
+  // filled. Absent for any other run. AgentRun.ServiceStatus: its last health observation, absent
+  // until the first one.
+  service?: RunService;
+  service_status?: RunServiceStatus;
   // Run limits captured at create (migration 0072, #567): the lease end (null =
   // no end), the wait for a decision (absent = the deployment's approval
   // expiry), the owner's profile run limits and that profile's id (absent for
@@ -607,6 +648,7 @@ export type RunPolicyCause =
   | "git_broker"
   | "overlay"
   | "unit"
+  | "walls"
   | "org_disk"
   | "pool_disk"
   | "restart"

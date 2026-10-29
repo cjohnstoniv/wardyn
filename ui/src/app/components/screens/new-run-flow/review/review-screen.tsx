@@ -166,6 +166,8 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
   const [addingSecret, setAddingSecret] = React.useState<SetupItem | null>(null);
   const [saveKind, setSaveKind] = React.useState<TemplateKind | null>(null);
   const [publish, setPublish] = React.useState<TemplatePublish | null>(null);
+  // Whether the Access group draws a walls-leave-out line; when it does not, the walls' host warning stays a notice.
+  const [wallsLeftOut, setWallsLeftOut] = React.useState(false);
   const openSave = (kind: TemplateKind) => {
     setSaveKind(kind);
     templateSource.list().then((l) => setPublish(l.publish), () => setPublish(ONLY_ME));
@@ -218,7 +220,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
         ),
       }}
     >
-      <Notices poolName={pool} slots={pre?.runner_pool_slots} applied={pre?.resources_applied} askedByYou={changedFromOrigin(draft, ["resources"])} warnings={pre?.warnings} warningContext={pre?.warning_context} diskCut={!!pre?.main_drive?.clamped_by && pre.main_drive.clamped_by !== "policy"} />
+      <Notices poolName={pool} slots={pre?.runner_pool_slots} applied={pre?.resources_applied} askedByYou={changedFromOrigin(draft, ["resources"])} warnings={pre?.warnings} warningContext={pre?.warning_context} diskCut={!!pre?.main_drive?.clamped_by && pre.main_drive.clamped_by !== "policy"} wallsLeftOut={wallsLeftOut} />
       <BlockerList blockers={blockers} go={(loc: NewRunLocation) => go(loc)} onCheckAgain={issues.length ? undefined : checkAgain} onAdd={setAddingSecret} />
       {addingSecret && (
         <AddTokenDialog
@@ -244,7 +246,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
               <WhereGroup {...group} docRows={docRows.where} />
               <WorkGroup {...group} docRows={docRows.work} />
               <ToolsGroup {...group} docRows={docRows.tools} />
-              <AccessGroup {...group} docRows={docRows.access} />
+              <AccessGroup {...group} docRows={docRows.access} onLeftOut={setWallsLeftOut} />
               <LimitsGroup {...group} docRows={docRows.limits} />
             </BlockedGroups.Provider>
           </StepSection>

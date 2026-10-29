@@ -69,6 +69,7 @@ var ungovernedCallerCensus = map[string]struct {
 	"governance_scope.go:unitScopeQ":                           {1, "authz-only: unit-admin reach over a unit, on a write's transaction"},
 	"governance_unit_admin.go:auditUnitScope":                  {1, "authz-only: the scope an audit row names"},
 	"governance_policy_ref.go:meGovernanceContact":             {1, "authz-only: a display contact"},
+	"governance_run_doors.go:inboundAppsDenied":                {1, "authz-only: a door the boundary holds no knob for (boundInboundApps and the application refusal read it)"},
 	"governance_run_doors.go:uiAppsDenied":                     {1, "authz-only: a door the boundary holds no knob for (boundUIApps and the application refusal read it)"},
 	"grants.go:handleListGrants":                               {1, "authz-only: grant read reach"},
 	"helpers.go:ownsRunOrAdmin":                                {1, "authz-only: run reach"},
@@ -140,6 +141,10 @@ var ungovernedCallerCensus = map[string]struct {
 	"workspace_egress_github.go:unionDirectGitHubEgress":       {1, "D: the GitHub host clamp; hosts meet the boundary at dispatch"},
 	"workspace_refs.go:launchCarrierRule":                      {1, "R: the launch carrier; the run meets the boundary at resolve"},
 	"workspaces.go:handleListWorkspaces":                       {1, "authz-only: a list scope"},
+	"workloads.go:handleDeleteWorkload":                        {1, "authz-only: who may delete a custom resource's workload through the API; a delete ends a run and admits none"},
+	"workloads.go:workloadOwnerOf":                             {2, "authz-only: workload reach; a restart's launch is a run create, which meets the boundary at resolve"},
+	"workloads.go:workloadListOwners":                          {1, "authz-only: a list scope"},
+	"workloads.go:workloadReadTier":                            {2, "authz-only: the workload read tier, what a reader is shown of another owner's workload"},
 }
 
 // ungovernedCensusTags are the classifications a census entry may name.

@@ -201,17 +201,17 @@ func TestTemplateIntentBytesDoNotDependOnKeyOrderOrFormat(t *testing.T) {
 
 // TestTemplateDependencyEdges holds every row of templateDependencies: the
 // dependent field alone is refused, and it is satisfied by the field it needs
-// or by a needs_setup entry.
+// (or its alt) or by a needs_setup entry.
 func TestTemplateDependencyEdges(t *testing.T) {
 	// The expected edges are written out, so deleting a row fails here as well as editing one.
 	var got []string
 	for _, dep := range templateDependencies {
-		got = append(got, dep.field+">"+dep.needs)
+		got = append(got, dep.field+">"+dependencyNeeds(dep.needs, dep.alt))
 	}
 	want := []string{
 		"devcontainer_ref>devcontainer_repo", "model_provider>agent", "tool_approvals>agent", "seed_auto_tools>agent",
-		"inline_policy.tool_rules>agent", "workload>experience", "startup>experience", "interactive_start>interactive", "task_mode>interactive",
-		"inline_policy.ui_apps>interactive", "runner_id>placement", "runner_id>runner_pool_id",
+		"inline_policy.tool_rules>agent", "workload>experience", "startup>experience", "service>workload", "interactive_start>interactive", "task_mode>interactive",
+		"inline_policy.ui_apps>interactive or experience", "runner_id>placement", "runner_id>runner_pool_id",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("dependency edges = %v, want %v", got, want)
@@ -252,7 +252,8 @@ func TestTemplateDependencyEdges(t *testing.T) {
 				d.checkDependencies(doc)
 				var mine []client.TemplateDiagnostic
 				for _, diag := range d.diags {
-					if diag.Path == "intent."+dep.field && strings.Contains(diag.Message, " needs "+dep.needs+".") {
+					// The refusal names every field that satisfies the edge, its alternative included.
+					if diag.Path == "intent."+dep.field && strings.Contains(diag.Message, " needs "+dependencyNeeds(dep.needs, dep.alt)+".") {
 						mine = append(mine, diag)
 					}
 				}
@@ -269,8 +270,18 @@ func TestTemplateDependencyEdges(t *testing.T) {
 			if diags := check(listed); len(diags) != 0 {
 				t.Errorf("listed under needs_setup: %v", diagReasons(diags))
 			}
-			if !templateKnownField(dep.field) || !templateKnownField(dep.needs) {
+			if !templateKnownField(dep.field) || !templateKnownField(dep.needs) || (dep.alt != "" && !templateKnownField(dep.alt)) {
 				t.Errorf("an edge names a field the registry does not know")
+			}
+			if dep.alt != "" {
+				if diags := check(build(dep.field, dep.alt)); len(diags) != 0 {
+					t.Errorf("with its alternative %s: %v", dep.alt, diagReasons(diags))
+				}
+				altListed := build(dep.field)
+				altListed.NeedsSetup = []client.TemplateSetupNeed{{Field: dep.alt}}
+				if diags := check(altListed); len(diags) != 0 {
+					t.Errorf("alternative %s listed under needs_setup: %v", dep.alt, diagReasons(diags))
+				}
 			}
 		})
 	}

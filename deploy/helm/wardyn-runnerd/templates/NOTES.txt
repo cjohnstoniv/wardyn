@@ -1,4 +1,4 @@
-wardyn-runnerd {{ include "runnerd.tag" . }} ({{ .Values.sandbox.arch }}) placing runs in namespace {{ .Values.runsNamespace }}.
+wardyn-runnerd {{ include "runnerd.tag" . }} ({{ .Values.sandbox.arch }}) placing runs in {{ join ", " (include "runnerd.runsNamespaces" . | fromJsonArray) }} (the first is the default).
 
 1. Read the runner's fingerprint:
      kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "runnerd.fullname" . }} --all-containers
@@ -7,9 +7,16 @@ wardyn-runnerd {{ include "runnerd.tag" . }} ({{ .Values.sandbox.arch }}) placin
 Runs land only on {{ .Values.sandbox.arch }} nodes (kubernetes.io/arch). For a mixed-arch cluster install a second
 release for the other arch, with its own release name, registration Secret and runs namespace.
 
+{{- if .Values.workloads.namespaces }}
+
+WardynWorkload objects in {{ join ", " .Values.workloads.namespaces }} are watched. Helm installs the CRD (crds/) once and never upgrades it: re-apply
+crds/wardyn.dev_wardynworkloads.yaml by hand on a chart upgrade. runnerd refuses to boot while the per-namespace
+workloads Role is missing, so with rbac.create=false apply it first.
+{{- end }}
+
 {{- if not .Values.rbac.create }}
 
-rbac.create is false: apply the ClusterRole, ClusterRoleBinding, both Roles and both RoleBindings BEFORE the
+rbac.create is false: apply the ClusterRole, ClusterRoleBinding, every Role and RoleBinding BEFORE the
 image starts, and again before any upgrade that adds a verb. runnerd's boot access review refuses to start
 while a verb is missing. To see exactly what the chart would apply:
      helm template {{ .Release.Name }} <chart> -n {{ .Release.Namespace }} -f <your values> --set rbac.create=true --show-only templates/rbac.yaml

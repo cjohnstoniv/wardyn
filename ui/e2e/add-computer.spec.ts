@@ -16,7 +16,7 @@ const PS = "irm https://github.com/cjohnstoniv/wardyn/releases/download/v0.10.0/
 const LINUX = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36";
 const WINDOWS = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36";
 const NO_CLI_SIGN_IN =
-  "This server does not offer CLI sign-in yet. Set WARDYN_TOKEN to a personal API token first; a personal token works for setup. A Wardyn admin can invite you to create one, and you claim it under Your account.";
+  "This server does not offer CLI sign-in yet. Set WARDYN_TOKEN to a personal API token first; a personal token works for setup. A Wardyn admin can invite you to create one, and you claim it in Settings.";
 
 /** /healthz as the daemon answers it, with the release version and CLI sign-in set for the state under test. One real read, then cached (a round trip per match races Playwright disposing the response). */
 async function healthz(page: Page, over: Record<string, unknown>) {
@@ -125,7 +125,7 @@ test.describe("Admin -> Runners: Add this computer", () => {
     await expect(mdm.getByText("wdr_3kFj9aQm7TxP2vLd8NcRwYe1HbZu4Sg6", { exact: true })).toBeVisible();
     await expect(mdm.getByText("On their computer, the runner registers with:")).toBeVisible();
     await expect(mdm.getByText("wardyn-runnerd setup --org https://wardyn.example.com --token-file <file>", { exact: true })).toBeVisible();
-    await expect(mdm.getByText("Their computer then waits for dev@example.com to claim it in Your account → My runner.")).toBeVisible();
+    await expect(mdm.getByText("Their computer then waits for dev@example.com to claim it in Settings → My runner.")).toBeVisible();
     const text = (await mdm.textContent()) ?? "";
     expect(text).not.toMatch(/\bserve\b/);
     expect(text).not.toContain("--proxy-image");
@@ -204,7 +204,7 @@ test.describe("Your account -> My runner: Add this computer", () => {
     await page.route("**/api/v1/me/runners*", (r) => (r.request().method() === "GET" ? r.fulfill({ json: list }) : r.fallback()));
     await asRealMember(page);
     await gotoConsole(page, "user");
-    await navTo(page, "Your account");
+    await navTo(page, "Settings");
     await page.getByRole("button", { name: /^My runner/ }).click();
     await expect(page.locator("[data-add-computer]")).toBeVisible();
     const mineCard = page.locator("#my-runner");
@@ -226,7 +226,7 @@ test.describe("Your account -> My runner: Add this computer", () => {
     });
     await asRealMember(page);
     await gotoConsole(page, "user");
-    await navTo(page, "Your account");
+    await navTo(page, "Settings");
     await page.getByRole("button", { name: /^My runner/ }).click();
     const block = page.locator("[data-add-computer]");
     await expect(page.getByText("You haven't registered a runner.")).toBeVisible();
@@ -243,7 +243,7 @@ test.describe("Your account -> My runner: Add this computer", () => {
     // answer reaches the block.
     await asRealMember(page);
     await gotoConsole(page, "user");
-    await navTo(page, "Your account");
+    await navTo(page, "Settings");
     await page.getByRole("button", { name: /^My runner/ }).click();
     const block = page.locator("[data-add-computer]");
     await expect(block.getByText("Personal runners aren't turned on for you. Ask your admin.")).toBeVisible();

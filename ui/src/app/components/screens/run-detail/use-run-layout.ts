@@ -26,7 +26,7 @@ import {
   type RunLayoutPreset,
   type RunLayoutWidget,
 } from "../../../lib/api/run-layout";
-import { normalizeLayout, presetLayout } from "./widget-registry";
+import { forRun, normalizeLayout, presetLayout } from "./widget-registry";
 
 // Long enough that a drag across the canvas is one PUT, short enough that a
 // human who drags and immediately closes the tab keeps the arrangement (and
@@ -54,11 +54,12 @@ export type RunLayoutState = {
   reset: () => void;
 };
 
-export function useRunLayout(preset: RunLayoutPreset): RunLayoutState {
+/** `service`: the run is a service, so its live layout carries the Service panel. */
+export function useRunLayout(preset: RunLayoutPreset, service = false): RunLayoutState {
   // Seeded with the preset default rather than empty: the canvas can paint the
   // machine's arrangement immediately and swap once a saved one arrives, which
   // beats one round-trip of empty canvas for the majority who never saved one.
-  const [layout, setLayout] = React.useState<RunLayoutWidget[]>(() => presetLayout(preset));
+  const [layout, setLayout] = React.useState<RunLayoutWidget[]>(() => presetLayout(preset, service));
   const [loaded, setLoaded] = React.useState(false);
   const [persistable, setPersistable] = React.useState(true);
 
@@ -136,12 +137,12 @@ export function useRunLayout(preset: RunLayoutPreset): RunLayoutState {
   const reset = React.useCallback(() => {
     cancelPending();
     dirty.current = true;
-    commit(presetLayout(preset));
+    commit(presetLayout(preset, service));
     // PUT [] is the reset: there is no DELETE route, and storing today's
     // default as a personal choice would freeze this human out of every future
     // improvement to it. An empty saved layout reads as "never saved" on load.
     void put([]);
-  }, [preset, put]);
+  }, [preset, service, put]);
 
   React.useEffect(() => {
     let alive = true;
@@ -157,7 +158,7 @@ export function useRunLayout(preset: RunLayoutPreset): RunLayoutState {
           if (alive) setLoaded(true);
           return;
         }
-        commit(res.layout.length > 0 ? normalizeLayout(res.layout, preset) : presetLayout(preset));
+        commit(res.layout.length > 0 ? forRun(normalizeLayout(res.layout, preset), preset, service) : presetLayout(preset, service));
         setLoaded(true);
       })
       .catch(() => {
@@ -165,13 +166,13 @@ export function useRunLayout(preset: RunLayoutPreset): RunLayoutState {
           if (alive) setLoaded(true);
           return;
         }
-        commit(presetLayout(preset));
+        commit(presetLayout(preset, service));
         setLoaded(true);
       });
     return () => {
       alive = false;
     };
-  }, [preset]);
+  }, [preset, service]);
 
   // Finish a debounced write the human never saw land — on unmount (they
   // navigated away mid-debounce) and on a preset switch, where the cleanup

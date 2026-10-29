@@ -280,6 +280,20 @@ const (
 	reasonUIGatewayBindOriginNotConsole = "bind_origin_not_console"
 )
 
+// The UI gateway's inbound arm (uigateway_inbound.go): a call to an app declared inbound: true, and the
+// host-mode cross-site check every cookie request passes.
+const (
+	reasonInboundCredentialInvalid = "inbound_credential_invalid" // the bearer is not a live inbound token (401, WWW-Authenticate: Bearer)
+	reasonInboundNotFound          = "inbound_not_found"          // no run, no such app, an app that is not inbound, or a token holder who is not one of its callers: one answer
+	reasonInboundRateLimited       = "inbound_rate_limited"       // the run's inbound apps are past 50 requests a second, burst 100 (429, Retry-After: 1)
+	reasonUIGatewayCrossSite       = "ui_gateway_cross_site"      // host mode: a session request from another site that is not a top-level navigation, or naming another Origin
+)
+
+// An app's ticket (inbound_ticket.go): POST /runs/{id}/apps/{app}/ticket.
+const (
+	reasonInboundNeedsHostMode = "inbound_needs_host_mode" // a named caller who is not the owner, on a deployment serving apps from one shared host (403)
+)
+
 // Device federation (devices_auth.go): the forwarder's own auth chain and
 // audit-ingest door. Most values here are already the exact strings
 // s.auditAuthFailedAs/auditEnrolFailure/auditIngestFailure wrote before #656

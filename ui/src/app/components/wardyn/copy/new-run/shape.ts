@@ -34,7 +34,7 @@ export const NR_SHAPE = {
   AGENT_TITLE: "Agent task",
   AGENT_BODY: "A one-time coding task, driven by you or running autonomously.",
   AGENT_SUB: "Interactive · Autonomous",
-  ENV_TITLE: "Environment sandbox",
+  ENV_TITLE: "Environment",
   ENV_BODY: "A reusable workspace for development, analysis or investigation.",
   /** pending A18: the recommended text until the owner answers. */
   ENV_SUB: "Interactive · Your drive is attached when you have one",

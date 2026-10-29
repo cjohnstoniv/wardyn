@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"slices"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -411,7 +411,7 @@ func TestComposedUIAppsDenial_ReadSurfacesShowTheDenial(t *testing.T) {
 			continue
 		}
 		seen = true
-		if !p.Effective.Limits.DenyUIApps || !slices.Equal(p.Effective.Ceiling.UIApps, docs) {
+		if !p.Effective.Limits.DenyUIApps || !reflect.DeepEqual(p.Effective.Ceiling.UIApps, docs) {
 			t.Errorf("effective view = ui_apps %+v, deny_ui_apps %v; want the base's list with the denial", p.Effective.Ceiling.UIApps, p.Effective.Limits.DenyUIApps)
 		}
 	}

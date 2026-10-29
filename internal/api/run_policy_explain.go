@@ -29,6 +29,7 @@ const (
 	causeGitBroker     = "git_broker"
 	causeOverlay       = "overlay"
 	causeUnit          = "unit"
+	causeWalls         = "walls"
 	causeOrgDisk       = "org_disk"
 	causePoolDisk      = "pool_disk" // the console heading is policy-tab-copy.ts pool_disk
 	causeRestart       = "restart"
@@ -38,7 +39,7 @@ const (
 
 var causeOrder = []string{
 	causeWorkspace, causeSourceControl, causeComponent, causeMirror, causeModelAccess, causeGitBroker,
-	causeOverlay, causeUnit, causeOrgDisk, causePoolDisk, causeRestart, causeLimits, causeLaunch,
+	causeOverlay, causeUnit, causeWalls, causeOrgDisk, causePoolDisk, causeRestart, causeLimits, causeLaunch,
 }
 
 // The RunPolicySpec fields a change can name, as their JSON names. The list
@@ -56,12 +57,13 @@ const (
 	fieldGHCaps    = "github_capabilities"
 	fieldMethods   = "allowed_methods"
 	fieldMinCC     = "min_confinement_class"
+	fieldDesktop   = "desktop"
 	fieldDisk      = "resources.disk_mib"
 )
 
 var policyFieldOrder = []string{
 	fieldAllowed, fieldDenied, "allow_all_egress", "first_use_approval", "first_use_hold_seconds", "max_holds",
-	fieldMethods, fieldMinCC, fieldGrants, "auto_stop_after_sec", fieldMounts, fieldRepos, fieldUIApps,
+	fieldMethods, fieldMinCC, fieldDesktop, fieldGrants, "auto_stop_after_sec", fieldMounts, fieldRepos, fieldUIApps,
 	"resources.cpu_millis", "resources.memory_mib", "resources.pids_limit", fieldDisk,
 	fieldToolRules, "git_push_any_branch", fieldADOCaps, fieldGHCaps,
 }
@@ -98,6 +100,7 @@ type auditEvidence struct {
 	diskBasis                                                                  client.MainDriveBasis // disk_mib_basis; empty on a run that predates it
 	diskDefaultSource                                                          types.LimitSource     // disk_mib_default_source, with basis default
 	legacyGitBroker                                                            bool                  // no confine row exists and the run holds a github grant
+	walls                                                                      *wallsSourceRecord    // what the launching person's walls narrowed (policy_source.personal_walls)
 }
 
 // explainRunPolicy attributes each difference between the policy a run started
@@ -123,6 +126,9 @@ func explainRunPolicy(base *types.RunPolicySpec, resolved types.RunPolicySpec, e
 	groups := map[changeKey]*runPolicyChange{}
 	put := func(field, entry string, added bool) {
 		cause, profile, at := x.cause(field, entry, added)
+		if field == fieldDesktop && cause != causeWalls {
+			return // only a person's own walls are said to narrow the desktop; any other layer's change stays unshown
+		}
 		k := changeKey{cause: cause, field: field, profile: profile}
 		if at != nil {
 			k.at = *at
@@ -276,6 +282,8 @@ func (x *explainer) evidenceCause(field, entry string, added bool) (cause, profi
 	ev := x.ev
 	allowAdded, denyAdded := field == fieldAllowed && added, field == fieldDenied && added
 	switch {
+	case x.walled(field, entry, added):
+		return causeWalls, "", nil, true
 	case allowAdded && ev.workspace[entry]:
 		return causeWorkspace, "", nil, true
 	case allowAdded && ev.sourceControl[entry]:
@@ -300,6 +308,32 @@ func (x *explainer) evidenceCause(field, entry string, added bool) (cause, profi
 		return causeRestart, "", &t, true
 	}
 	return "", "", nil, false
+}
+
+// walled is the walls rule: the entry is one the person's walls took out of the run (an allowlist
+// entry or a grant) or added to it (a deny or a blocked desktop direction), as the run.create row
+// recorded, or the field is a scalar knob the walls narrowed. List entries are matched exactly, so
+// a knob the boundary also narrowed keeps each of its entries with the layer that changed it. A
+// scalar holds one value that both layers may have tightened; the walls step runs first and the record cannot tell the two apart, so
+// it is the walls'.
+func (x *explainer) walled(field, entry string, added bool) bool {
+	w := x.ev.walls
+	if w == nil {
+		return false
+	}
+	switch {
+	case field == fieldAllowed && !added:
+		return slices.Contains(w.Removed[fieldAllowed], strings.ToLower(strings.TrimSpace(entry)))
+	case field == fieldGrants && !added:
+		return slices.Contains(w.Removed[fieldGrants], entry)
+	case field == fieldDenied && added:
+		return slices.Contains(w.Added[fieldDenied], strings.ToLower(strings.TrimSpace(entry)))
+	case field == fieldDesktop:
+		return added && slices.Contains(w.Added[fieldDesktop], entry)
+	case field == fieldAllowed, field == fieldGrants, field == fieldDenied:
+		return false
+	}
+	return slices.Contains(w.Narrowed, field)
 }
 
 func (x *explainer) derivedCause(field, entry string, added bool) string {
@@ -368,6 +402,33 @@ func (x *explainer) mirrored(field, entry string, added bool) bool {
 	return false
 }
 
+// uiAppKey is a ui_app's entry key: its name, and for an inbound app the callers it admits, so making an app
+// inbound or adding a caller is a change the diff sees and not a no-op on an unchanged name.
+func uiAppKey(a types.UIApp) string {
+	if !a.Inbound {
+		return a.Name
+	}
+	if len(a.Callers) == 0 {
+		return a.Name + " (inbound)"
+	}
+	return a.Name + " (inbound: " + strings.Join(a.Callers, ", ") + ")"
+}
+
+// desktopBlocked names the desktop directions sp blocks, as the field-set row lists them.
+func desktopBlocked(sp types.RunPolicySpec) []string {
+	d := sp.Desktop.Effective()
+	var out []string
+	for _, dir := range []struct {
+		name string
+		rule types.TransferRule
+	}{{"Block paste in", d.PasteIn}, {"Block copy out", d.CopyOut}, {"Block upload", d.Upload}, {"Block download", d.Download}} {
+		if dir.rule == types.TransferBlocked {
+			out = append(out, dir.name)
+		}
+	}
+	return out
+}
+
 // policyFieldSets is a spec's comparable content: each list field as its
 // redaction-safe entry keys, each scalar as a one-entry set (none when unset).
 // A grant is "kind:host" or "kind:repo,repo", a mount its target, a repo
@@ -395,6 +456,9 @@ func policyFieldSets(sp types.RunPolicySpec) map[string][]string {
 		scalar("resources.pids_limit", strconv.Itoa(r.PidsLimit))
 		scalar(fieldDisk, strconv.Itoa(r.DiskMiB))
 	}
+	if blocked := desktopBlocked(sp); len(blocked) > 0 {
+		m[fieldDesktop] = blocked
+	}
 	for _, g := range sp.EligibleGrants {
 		m[fieldGrants] = append(m[fieldGrants], grantKey(g))
 	}
@@ -409,7 +473,7 @@ func policyFieldSets(sp types.RunPolicySpec) map[string][]string {
 		m[fieldRepos] = append(m[fieldRepos], key)
 	}
 	for _, a := range sp.UIApps {
-		m[fieldUIApps] = append(m[fieldUIApps], a.Name)
+		m[fieldUIApps] = append(m[fieldUIApps], uiAppKey(a))
 	}
 	for _, t := range sp.ToolRules {
 		m[fieldToolRules] = append(m[fieldToolRules], t.Tool+":"+string(t.Effect))

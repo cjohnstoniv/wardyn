@@ -63,8 +63,8 @@ func (d *Driver) CanManageDrives(ctx context.Context) error {
 	denied, err := d.reviewDriveLifecycle(ctx)
 	if err != nil {
 		slog.Warn("wardynd: k8s substrate: could not review the drive-claim permissions",
-			slog.String("namespace", d.cfg.Namespace), slog.String("error", err.Error()))
-		return fmt.Errorf("k8s: drives: review claim permissions in %q: %w", d.cfg.Namespace, runner.ErrDriveLifecycleUnavailable)
+			slog.String("namespace", d.defaultNamespace()), slog.String("error", err.Error()))
+		return fmt.Errorf("k8s: drives: review claim permissions in %q: %w", d.defaultNamespace(), runner.ErrDriveLifecycleUnavailable)
 	}
 	ttl := driveLifecycleYesTTL
 	if denied != "" {
@@ -80,7 +80,7 @@ func (d *Driver) driveLifecycleAnswer(denied string) error {
 	if denied == "" {
 		return nil
 	}
-	return fmt.Errorf("k8s: drives: the service account may not %s claims in %q: %w", denied, d.cfg.Namespace, runner.ErrDriveLifecycleUnavailable)
+	return fmt.Errorf("k8s: drives: the service account may not %s claims in %q: %w", denied, d.defaultNamespace(), runner.ErrDriveLifecycleUnavailable)
 }
 
 // reviewDriveLifecycle asks the apiserver about each verb and returns the
@@ -88,7 +88,7 @@ func (d *Driver) driveLifecycleAnswer(denied string) error {
 func (d *Driver) reviewDriveLifecycle(ctx context.Context) (string, error) {
 	for _, verb := range driveLifecycleVerbs {
 		review := &authzv1.SelfSubjectAccessReview{Spec: authzv1.SelfSubjectAccessReviewSpec{
-			ResourceAttributes: &authzv1.ResourceAttributes{Namespace: d.cfg.Namespace, Verb: verb, Resource: "persistentvolumeclaims"},
+			ResourceAttributes: &authzv1.ResourceAttributes{Namespace: d.defaultNamespace(), Verb: verb, Resource: "persistentvolumeclaims"},
 		}}
 		got, err := d.clientset.AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, review, metav1.CreateOptions{})
 		if err != nil {

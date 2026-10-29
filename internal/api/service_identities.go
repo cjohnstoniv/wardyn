@@ -455,12 +455,16 @@ func (s *Server) handleMintServiceToken(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
+	kind, ok := apiTokenMintKind(w, req.Kind)
+	if !ok {
+		return
+	}
 	lifetime, clampedFrom, ok := s.serviceTokenLifetime(w, req.TTLSeconds)
 	if !ok {
 		return
 	}
 	// A sponsor's session can only be checked against a revocation store; without one the token could
-	// never authenticate (serviceTokenAuth refuses it), so the mint is refused rather than handed out dead.
+	// never authenticate (verifyServiceToken refuses it), so the mint is refused rather than handed out dead.
 	if s.cfg.SessionRevocations == nil {
 		writeErrorReason(w, http.StatusConflict, reasonServiceIdentityInactive, "this deployment cannot check the sponsor's session, so a service token would never authenticate")
 		return
@@ -490,11 +494,11 @@ func (s *Server) handleMintServiceToken(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	expires := authorizedAt.Add(lifetime)
-	// RevSeq orders the token against its sponsor's revocation cuts (serviceTokenAuth) and its own
+	// RevSeq orders the token against its sponsor's revocation cuts (verifyServiceToken) and its own
 	// principal's (a queued launch's owner check).
 	row := types.APIToken{
 		ID: uuid.New(), Principal: si.Principal(), Role: oidc.RoleUser, UserType: si.UserType, Groups: []string{},
-		GroupsTruncated: new(bool), Name: name, CreatedAt: authorizedAt, ExpiresAt: &expires, RevSeq: issue.Seq,
+		GroupsTruncated: new(bool), Name: name, CreatedAt: authorizedAt, ExpiresAt: &expires, RevSeq: issue.Seq, Kind: kind,
 	}
 	plaintext := newBearer(apiTokenPrefix)
 	created, err := ss.CreateServiceToken(guardOwner(r.Context(), sub), si.Name, sub, apiTokenMaxPerPrincipal, row, plaintext)

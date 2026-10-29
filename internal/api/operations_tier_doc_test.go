@@ -296,6 +296,10 @@ var docTierRows = []struct{ route, token string }{
 	{"PATCH /api/v1/service-identities/{name}", "`DELETE /service-identities/{name}`"},
 	{"DELETE /api/v1/service-identities/{name}", "`DELETE /service-identities/{name}`"},
 	{"POST /api/v1/tokens/{id}/move", "`POST /tokens/{id}/move`"},
+	// Workload bindings (0.10): standing authority over a service identity, the security tier's.
+	{"POST /api/v1/workload-bindings", "the `/workload-bindings` routes"},
+	{"GET /api/v1/workload-bindings", "the `/workload-bindings` routes"},
+	{"DELETE /api/v1/workload-bindings/{id}", "the `/workload-bindings` routes"},
 	// Member drives (0.9): the admin list and delete of the drives people create are SUPER.
 	{"GET /api/v1/drives/member", "the `/drives/member` routes"},
 	{"DELETE /api/v1/drives/member/{id}", "the `/drives/member` routes"},

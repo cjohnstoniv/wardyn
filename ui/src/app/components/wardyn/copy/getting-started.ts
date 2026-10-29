@@ -57,7 +57,7 @@ export const MEMBER_GETTING_STARTED = {
   // Packet M-B (modes-b.html): the "Your model connections · in Your account"
   // row, which links to /account.
   MODEL_CONNECTIONS: "Your model connections",
-  MODEL_CONNECTIONS_WHERE: "in Your account",
+  MODEL_CONNECTIONS_WHERE: "in Settings",
 } as const;
 
 // X3-F4, the MEMBER's empty runs board. The operator
@@ -79,7 +79,7 @@ export const RUNS_MEMBER_EMPTY = {
 // consumer.
 
 // The operator welcome's closing note (onboarding-screen.tsx). The setup funnel
-// is the Admin view's "Getting started" entry in the sidebar's lower nav (app-shell.tsx);
+// is the Admin view's "Getting started" entry in the sidebar's Setup group (app-shell.tsx);
 // the User view's entry of the same name is the member page.
 export const WELCOME = {
   NOTE: "A quick guided setup — the barrier is the only requirement; a model or agent is optional. You can revisit anytime under “Getting started” in the sidebar.",

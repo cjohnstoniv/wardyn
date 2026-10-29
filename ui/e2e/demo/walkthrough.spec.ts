@@ -631,7 +631,7 @@ test("act 5 — a real run", async () => {
   await expect(page).toHaveURL(/\/runs\/new/, { timeout: 30_000 });
   await startGuided(page);
 
-  // An Environment sandbox is the interactive run with no agent: a bare shell
+  // An Environment is the interactive run with no agent: a bare shell
   // is all this needs, not the agent CLI. Run and Harnesses are left on their
   // defaults.
   await chooseShape(

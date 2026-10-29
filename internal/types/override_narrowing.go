@@ -115,6 +115,8 @@ var overrideNarrowing = []OverrideNarrowing{
 	// is just as acceptable and the clamp leaves it alone.
 	{OverrideFirstUseApproval, OverrideSet, OverrideWiden, OverrideClamped},
 	{OverrideAllowAllEgress, OverrideSet, OverrideWiden, OverrideClamped},
+	// False turns open egress off for the run: only a tightening, so always allowed.
+	{OverrideAllowAllEgress, OverrideNarrow, OverrideTighten, OverrideAllowed},
 }
 
 // OverrideNarrowingTable returns the table, in its fixed order.

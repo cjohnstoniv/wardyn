@@ -177,6 +177,8 @@ const (
 	reasonMainDriveUnenforceable = "main_drive_unenforceable" // the run's policy writes a disk size the runner it lands on cannot cap
 	// The run shape (run_shape.go): New Run's choice, checked against the carriers.
 	reasonRunShapeConflict = "run_shape_conflict" // shape does not fit the run's experience, workload or tools
+	// A service (run_service.go): a background command kept running.
+	reasonRunServiceShape = "run_service_shape" // service rides a run that is not a background command
 	// An application run whose declared app the resolved policy strips (governance_run_doors.go).
 	reasonRunApplicationUIAppsDenied = "run_application_ui_apps_denied" // shape application declares an app the profile's deny_ui_apps removes
 	// The harness set (run_harness_set.go): the harnesses a run includes and the
@@ -319,9 +321,15 @@ const (
 	reasonWorkspaceOwningUnitDefault = "workspace_owning_unit_default" // the Default unit cannot be pinned: unpin the workspace with null instead
 	reasonBoundaryStale              = "boundary_stale"                // If-Match does not match the current boundary ETag
 	reasonBoundaryHost               = "boundary_host"                 // an egress approval would admit a host the Wardyn boundary does not allow
-	reasonGrantWithheld              = "credential_withheld"           // a mint or redeem of a grant the run's profile or the Wardyn boundary now withholds
+	reasonGrantWithheld              = "credential_withheld"           // a mint or redeem of a grant the run's profile, the Wardyn boundary or the owner's walls now withhold
 	reasonGrantWithheldUnread        = "credential_withheld_unread"    // the run, its grants, its profile or the boundary could not be read to check the mint
 	reasonBreakGlassReasonRequired   = "break_glass_reason_required"   // an admin-token break-glass run without a usable reason
+
+	// GET/PUT/DELETE /me/walls (personal_walls.go), and the walls' refusals at an approval.
+	reasonWallsInvalid      = "walls_invalid"       // the walls name a knob wider than no limit, a site that is not a DNS name or wildcard, or a list over its cap
+	reasonWallsNeedPerson   = "walls_need_person"   // the caller is no signed-in person (the admin token, local mode, a service identity)
+	reasonWallsUnavailable  = "walls_unavailable"   // the store keeps no personal settings (not the Postgres store)
+	reasonPersonalWallsHost = "personal_walls_host" // an egress approval would admit a host the run owner's walls deny
 
 	// /governance/approval-rules, and an approval rule's own refusals inside decide().
 	reasonApprovalRuleInvalid       = "approval_rule_invalid"        // the rule document names an unknown kind, a glob, a wildcard host, a scope other than once or run, or no repo or preset
@@ -724,4 +732,22 @@ const (
 const (
 	reasonRunResumeNotRunning = "run_resume_not_running" // the run is not in a resumable state
 	reasonRunResumeFailed     = "run_resume_failed"      // thawForExec failed
+)
+
+// Workloads and their namespace bindings (workloads.go, workload_bindings.go).
+const (
+	reasonWorkloadsUnavailable       = "workloads_unavailable"         // 501: this store keeps no workloads
+	reasonWorkloadInvalid            = "workload_invalid"              // 400: the header or the intent is not a workload the door accepts; diagnostics say where
+	reasonWorkloadNotFound           = "workload_not_found"            // 404: no such workload, or one the caller may not reach
+	reasonWorkloadSourceConflict     = "workload_source_conflict"      // 409: a custom resource owns the workload (or the API does, for a custom resource)
+	reasonWorkloadCapReached         = "workload_cap_reached"          // 422: the owner holds 100 workloads
+	reasonWorkloadManagedByK8s       = "workload_managed_by_k8s"       // 409: a custom resource's workload is deleted in Git, or by an admin
+	reasonWorkloadBindingNeedsPerson = "workload_binding_needs_person" // 403: a binding is made by a signed-in person, never an API token
+	reasonWorkloadBindingInvalid     = "workload_binding_invalid"      // 400: the pool, namespace or service is missing or malformed
+	reasonWorkloadBindingConflict    = "workload_binding_conflict"     // 409: the namespace is bound on the pool already
+	reasonWorkloadBindingNotFound    = "workload_binding_not_found"    // 404: no such binding
+	reasonWorkloadBindingPoolScope   = "workload_binding_pool_scope"   // 422: the pool is a person's own; a binding names an organization pool only
+	// A custom resource's status reason (runner_workloads.go), never an HTTP answer.
+	reasonWorkloadPoolMismatch    = "workload_pool_mismatch"    // the resource names a runner pool other than its namespace binding's
+	reasonWorkloadBindingInactive = "workload_binding_inactive" // the binding's identity is suspended or retired, its sponsor changed, or the sponsor's access was revoked
 )

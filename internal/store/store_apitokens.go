@@ -319,6 +319,7 @@ func scanAPIToken(row pgx.Row) (types.APIToken, error) {
 	if err != nil {
 		return types.APIToken{}, fmt.Errorf("store: scan api token: %w", err)
 	}
+	t.Inbound = t.Kind == types.APITokenKindInbound
 	if groups != nil {
 		if err := json.Unmarshal(groups, &t.Groups); err != nil {
 			return types.APIToken{}, fmt.Errorf("store: scan api token groups: %w", err)

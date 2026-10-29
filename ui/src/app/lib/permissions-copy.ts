@@ -137,7 +137,7 @@ export const KIND: Record<CapabilityKind, KindCopy> = {
     label: "SSH keys and API tokens",
     blurb: "Whether a member may add an SSH key or mint an API token.",
     valueLabel: "Feature",
-    valueHint: "ssh_key, api_token or custom_component. Use * for those three. self_host_runner and service_attach are never covered by *: name them.",
+    valueHint: "ssh_key, api_token or custom_component. Use * for those three. inbound, self_host_runner and service_attach are never covered by *: name them.",
     unenforced: "Members can add SSH keys and mint API tokens.",
     enforced:
       "A member can only add SSH keys or mint API tokens when granted. Keys and tokens they already have keep working until removed or revoked.",
@@ -183,6 +183,18 @@ export const SELF_HOST = {
     "Nobody may register a runner of their own until you grant self_host_runner, to a person or group below or to everyone with this switch. Runners already registered keep working. Admins are never asked.",
   SWITCH: "Allow everyone to register their own runner",
   FAILED: "Failed to save the rule",
+} as const;
+
+// The Permissions row for the `inbound` feature value (a port callable from outside the run, r16 T2-e). Restricted
+// by migration 0239, so it is off until an allow names it; its grants are written in the add-grant form, so the row
+// lists who is allowed and opens that form. A service is a `user` grant naming service:<name>.
+export const INBOUND_ACCESS = {
+  LABEL: "Inbound access",
+  BLURB: "Declare ports that other people and services can call through the gateway. Off until you allow it.",
+  ALLOWED_FOR: "Allowed for:",
+  SUBJECT_SERVICE: "Service",
+  ADD_GRANT: "Add a grant",
+  REQUIRES_ROLE: "Requires the admin or security admin role.",
 } as const;
 
 export const PERM = {

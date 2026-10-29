@@ -81,6 +81,9 @@ func runGetCmd(client clientFn) *cobra.Command {
 				fmt.Fprintf(cmd.OutOrStdout(), "\nwaiting: %d ahead in pool %s; queued %s, gives up %s (%s)\n",
 					q.Position, q.PoolID, q.QueuedAt.Format(time.RFC3339), q.DeadlineAt.Format(time.RFC3339), q.Reason)
 			}
+			if line := serviceLine(run, time.Now()); line != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "\n%s\n", line)
+			}
 			// A run the per-person Azure DevOps lane declined says why (run.ado_lane.skip).
 			if detail := adoLaneDeclineDetail(cmd.Context(), client(), run.ID); detail != "" {
 				fmt.Fprintf(cmd.OutOrStdout(), "\nazure devops: %s\n", detail)
@@ -100,6 +103,40 @@ func runGetCmd(client clientFn) *cobra.Command {
 	}
 	get.Flags().BoolVar(&getJSON, "json", false, "emit raw JSON")
 	return get
+}
+
+// serviceLine is a service run's health as one line, "service: healthy · 3 restarts · checked 40s ago", and ""
+// for a run that is not a service. A service wardynd has not yet observed says so.
+func serviceLine(run types.AgentRun, now time.Time) string {
+	if run.Service == nil {
+		return ""
+	}
+	st := run.ServiceStatus
+	if st == nil {
+		return "service: not checked yet"
+	}
+	health := string(st.Health)
+	if st.Reason != "" {
+		health += " (" + st.Reason + ")"
+	}
+	restarts := fmt.Sprintf("%d restarts", st.Restarts)
+	if st.Restarts == 1 {
+		restarts = "1 restart"
+	}
+	return fmt.Sprintf("service: %s \u00b7 %s \u00b7 checked %s ago", health, restarts, agoText(now.Sub(st.ObservedAt)))
+}
+
+// agoText is an elapsed time as the terminal says it: seconds, minutes, hours or days, rounded down.
+func agoText(d time.Duration) string {
+	switch {
+	case d >= 48*time.Hour:
+		return fmt.Sprintf("%dd", int(d/(24*time.Hour)))
+	case d >= time.Hour:
+		return fmt.Sprintf("%dh", int(d/time.Hour))
+	case d >= time.Minute:
+		return fmt.Sprintf("%dm", int(d/time.Minute))
+	}
+	return fmt.Sprintf("%ds", max(int(d/time.Second), 0))
 }
 
 // adoLaneDeclineDetail is the sentence of the run's run.ado_lane.skip row, "" when

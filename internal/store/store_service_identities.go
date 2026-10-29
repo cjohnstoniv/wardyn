@@ -314,6 +314,10 @@ func (s PG) RetireServiceIdentity(ctx context.Context, name, by string) (Service
 	if err != nil {
 		return ServiceIdentityChanged{}, err
 	}
+	// Its namespace bindings go with it: a retired identity is never a workload's authority again.
+	if _, err = tx.Exec(ctx, `DELETE FROM workload_bindings WHERE service = $1`, name); err != nil {
+		return ServiceIdentityChanged{}, fmt.Errorf("store: delete retired service identity's workload bindings: %w", err)
+	}
 	if err = tx.Commit(ctx); err != nil {
 		return ServiceIdentityChanged{}, fmt.Errorf("store: commit service identity retire: %w", err)
 	}
@@ -347,7 +351,7 @@ func (s PG) CreateServiceToken(ctx context.Context, name, sponsor string, maxLiv
 	if err != nil {
 		return types.APIToken{}, err
 	}
-	// A token at or before sponsor_since never authenticates (serviceTokenAuth): refuse it rather than
+	// A token at or before sponsor_since never authenticates (verifyServiceToken): refuse it rather than
 	// hand back a credential that is dead on arrival.
 	if !out.CreatedAt.After(si.SponsorSince) {
 		return types.APIToken{}, ErrServiceIdentityInactive

@@ -43,7 +43,9 @@ RELEASING.md=6237 share=35 # +7 (MACVM-PKG-CI): the macos and macos-xcode-27 job
 # ROADMAP.md 6570 = 6531 + 39, measured: the v0.10.0-rc.5 Shipped row the release commit adds.
 # ROADMAP.md 6603 = 6570 + 33, measured: the v0.9.9 Shipped row the 0.9.9 forward-port adds.
 # ROADMAP.md 6644 = 6603 + 41, measured: the v0.10.0-rc.6 Shipped row the release commit adds
-ROADMAP.md=6685 share=35 # = 6644 + 41, measured: the v0.10.0-rc.7 Shipped row the release commit adds
+# ROADMAP.md 6685 = 6644 + 41, measured: the v0.10.0-rc.7 Shipped row the release commit adds
+# ROADMAP.md 6715 = 6675 + 40, measured: the v0.10.0-rc.8 Shipped row the release commit adds
+ROADMAP.md=6715 share=35 # = 6685 - 10, measured (rc.8 E5): the HA line points at the high-availability page, and personal walls leave the open lists
 # docs/DEMO-SCRIPT.md 6884 adds 17 over 6867: 0.9 final docs pass 2, measured: the demo script no longer cites the removed wizard's code.
 docs/DEMO-SCRIPT.md=6890 share=35
 # docs/LIVE-TESTS.md 2517, measured at the 0.10 W4c merge of OFFLINE-VM a359ef27b onto the train (two merge bases, VM-A 47c283334 and main 3cea1aa73, so no single base to subtract).

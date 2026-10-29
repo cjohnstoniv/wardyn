@@ -326,7 +326,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// repoSourceWarnings.
 	warnings = append(warnings, s.repoSourceWarnings(ctx, runID, spec, req)...)
 	warnings = append(warnings, f.fitWarnings...)
-	warnings = append(warnings, f.end.warnings(run)...)
+	warnings = append(append(warnings, f.end.warnings(run)...), serviceCreateWarnings(run)...)
 
 	// The requirements fold that ran ABOVE the confinement floor, audited now
 	// that the run id exists. See recordCreateFolds.
@@ -450,6 +450,7 @@ type runRowInput struct {
 func newRunRow(ctx context.Context, in runRowInput) types.AgentRun {
 	req, f, placed := in.req, in.f, in.placed
 	operatorOwned := operatorOwnedRequest(ctx)
+	service, _ := frozenRunService(req.Service) // serviceRefusal has already held it valid
 	return types.AgentRun{
 		ID:               in.runID,
 		CreatedAt:        in.now,
@@ -467,6 +468,8 @@ func newRunRow(ctx context.Context, in runRowInput) types.AgentRun {
 		Interactive:      req.Interactive,
 		MachineKind:      types.MachineKind(req.MachineKind).Normalize(),
 		Experience:       req.Experience,
+		Shape:            storedRunShape(req),
+		Service:          service,
 		LocalFolder:      req.LocalFolder,
 		WorkspacePath:    in.workspacePath,
 		WorkspaceIDs:     workspaceIDsOf(f.wsRefs), // referencedWorkspaces above, same spec as WorkspacePath
@@ -617,10 +620,13 @@ func createRunAuditData(req createRunRequest, policyID *uuid.UUID, enforced type
 		data["preset"] = req.Preset
 		data["preset_version"] = req.PresetVersion
 	}
+	if service, _ := frozenRunService(req.Service); service != nil {
+		data["service"] = service // the spec the run keeps, defaults filled
+	}
 	if req.Shape != "" {
-		// The New Run choice the run was set up from. The run row does not keep
-		// it, and the launch intent that does is not always kept, so this row is
-		// what says a run was started as an application (#1994).
+		// The New Run choice the run was set up from. The run row keeps it too,
+		// but the chained audit row outlives the run, so this row is what says a
+		// run was started as an application (#1994).
 		data["shape"] = req.Shape
 	}
 	if req.TaskMode == "exec" {

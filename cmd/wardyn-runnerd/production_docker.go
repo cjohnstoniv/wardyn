@@ -415,6 +415,10 @@ type runtimeExtras struct {
 	localModelRelay bool
 	// localModelPorts are --local-model-port, advertised as the runner's local_model_ports.
 	localModelPorts []uint16
+	// runsNamespaces are a k8s runner's --runs-namespace, advertised as its runs_namespaces.
+	runsNamespaces []string
+	// workloadStatus is the k8s runner's workload_status adapter (workloads_k8s.go); nil refuses the call.
+	workloadStatus func(context.Context, runnerwire.WorkloadStatusArgs) error
 }
 
 // proxySettings are the run proxy settings the caps name: every one this build carries, and the
@@ -533,6 +537,7 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		ExecutionResult:  manager.ExecutionResult,
 		Streams:          streams.Call, Output: streams.Output, BindOutput: streams.BindOutput, ForgetOutput: streams.ForgetOutput,
 		Resident: resident, LinuxVM: extra.linuxVM != nil, MacOSVM: extra.macOSVM.enabled(),
+		WorkloadStatus: extra.workloadStatus,
 	})
 	if err != nil {
 		return runnerRuntime{}, err

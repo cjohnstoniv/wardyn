@@ -121,7 +121,7 @@ func nextStepOf(ck setupCheckLite, consoleURL string) string {
 	if ck.Status != "warn" || (ck.ID != "llm_provider" && !strings.HasPrefix(ck.ID, "llm_provider:")) {
 		return ck.Fix
 	}
-	step := "use the console: Your account → Your model connections (" + strings.TrimRight(consoleURL, "/") + "/account)"
+	step := "use the console: Settings → Your model connections (" + strings.TrimRight(consoleURL, "/") + "/account)"
 	if strings.HasPrefix(ck.ID, "llm_provider:") && ck.Fix != "" {
 		step += " — " + ck.Fix
 	}

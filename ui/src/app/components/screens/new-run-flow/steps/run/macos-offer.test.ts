@@ -37,10 +37,10 @@ describe("macOSOfferOf", () => {
   it("a Mac that refused itself shows the canon line for its reason, with the numbers, and never its own text", () => {
     const refused = (extra: Record<string, unknown>) => one({ why: "runner_refused" as PoolMacOSVMRefusal["why"], detail: "PLANTED runner text", ...extra } as Partial<PoolMacOSVMRefusal>);
     expect(text(refused({ reason: "below_min_memory", have: 6, need: 8 }))).toBe(
-      "Per-run memory on this runner is 6 GB; a macOS VM needs at least 8 GB. Its owner raises it to 8 GB or more in Your account \u2192 My runner, or with `wardyn runner set mac-studio-07 --per-run-memory 8`.",
+      "Per-run memory on this runner is 6 GB; a macOS VM needs at least 8 GB. Its owner raises it to 8 GB or more in Settings \u2192 My runner, or with `wardyn runner set mac-studio-07 --per-run-memory 8`.",
     );
     expect(text(refused({ reason: "below_min_cpu", have: 2, need: 4 }))).toBe(
-      "Per-run CPU on this runner is 2 CPUs; a macOS VM needs at least 4. Its owner raises it to 4 or more in Your account \u2192 My runner, or with `wardyn runner set mac-studio-07 --per-run-cpu 4`.",
+      "Per-run CPU on this runner is 2 CPUs; a macOS VM needs at least 4. Its owner raises it to 4 or more in Settings \u2192 My runner, or with `wardyn runner set mac-studio-07 --per-run-cpu 4`.",
     );
     const generic = "Every runner in this pool must be able to take a macOS VM, and at least one can't right now. Try again later, or choose another pool.";
     expect(text(refused({ reason: "other" }))).toBe(generic);

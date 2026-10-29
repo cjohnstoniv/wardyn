@@ -14,6 +14,7 @@
 // Group by Workspace/Title, a display-only option that never changes what the
 // server returns — see runs-groups.ts).
 import type { RunsEndedWithin, RunsListStatus } from "../../../lib/api/runs";
+import { RUN_SEGMENTS, type RunsSegmentFilter } from "./runs-segment";
 
 export type RunsStatusFilter = "all" | RunsListStatus;
 export type RunsWhoseRuns = "all" | "mine";
@@ -29,6 +30,8 @@ export interface RunsFilterState {
   // owner=me server-side regardless of what this reads.
   scope: RunsWhoseRuns;
   group: RunsGroupBy;
+  // R17-N3: one of the shape segments. Display-only like `group`: the server returns the same runs.
+  segment: RunsSegmentFilter;
 }
 
 // H-2: ended runs show 7 days by default; killed runs show 24h (includeKilled
@@ -41,16 +44,19 @@ export const DEFAULT_RUNS_FILTERS: RunsFilterState = {
   workspace: "all",
   scope: "all",
   group: "sections",
+  segment: "all",
 };
 
 const STATUSES: ReadonlySet<string> = new Set(["all", "needs", "active", "ended", "failed", "killed"]);
 const WINDOWS: ReadonlySet<string> = new Set(["24h", "7d", "30d", "all"]);
 const GROUPS: ReadonlySet<string> = new Set(["sections", "workspace", "title"]);
+const SEGMENTS: ReadonlySet<string> = new Set(RUN_SEGMENTS);
 
 export function parseRunsFilters(params: URLSearchParams): RunsFilterState {
   const status = params.get("status") ?? DEFAULT_RUNS_FILTERS.status;
   const endedWithin = params.get("ended_within") ?? DEFAULT_RUNS_FILTERS.endedWithin;
   const group = params.get("group") ?? DEFAULT_RUNS_FILTERS.group;
+  const segment = params.get("segment") ?? DEFAULT_RUNS_FILTERS.segment;
   return {
     q: params.get("q") ?? "",
     status: STATUSES.has(status) ? (status as RunsStatusFilter) : "all",
@@ -59,6 +65,7 @@ export function parseRunsFilters(params: URLSearchParams): RunsFilterState {
     workspace: params.get("workspace") ?? "all",
     scope: params.get("owner") === "me" ? "mine" : "all",
     group: GROUPS.has(group) ? (group as RunsGroupBy) : "sections",
+    segment: SEGMENTS.has(segment) ? (segment as RunsSegmentFilter) : "all",
   };
 }
 
@@ -74,14 +81,16 @@ export function serializeRunsFilters(f: RunsFilterState): URLSearchParams {
   if (f.workspace !== DEFAULT_RUNS_FILTERS.workspace) params.set("workspace", f.workspace);
   if (f.scope === "mine") params.set("owner", "me");
   if (f.group !== DEFAULT_RUNS_FILTERS.group) params.set("group", f.group);
+  if (f.segment !== DEFAULT_RUNS_FILTERS.segment) params.set("segment", f.segment);
   return params;
 }
 
 // group is deliberately excluded: it never changes what is fetched (or
 // whether the fetch came back empty), only how the same rows are laid out —
-// see design.md §6 H-6. scope IS included: Mine narrows the server read, so a
-// deployment with other people's runs but none of the viewer's own reads as
-// "no match", never as first-run or quiet.
+// see design.md §6 H-6. segment IS included: it hides rows, so a segment that
+// matches none reads as "no match", never as quiet. scope IS included: Mine
+// narrows the server read, so a deployment with other people's runs but none
+// of the viewer's own reads as "no match", never as first-run or quiet.
 export function runsFiltersAreDefault(f: RunsFilterState): boolean {
   return (
     f.q === "" &&
@@ -89,7 +98,8 @@ export function runsFiltersAreDefault(f: RunsFilterState): boolean {
     f.endedWithin === DEFAULT_RUNS_FILTERS.endedWithin &&
     !f.includeKilled &&
     f.workspace === DEFAULT_RUNS_FILTERS.workspace &&
-    f.scope === DEFAULT_RUNS_FILTERS.scope
+    f.scope === DEFAULT_RUNS_FILTERS.scope &&
+    f.segment === DEFAULT_RUNS_FILTERS.segment
   );
 }
 

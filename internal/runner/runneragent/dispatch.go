@@ -78,6 +78,9 @@ type Config struct {
 	// machine_kind macos_vm. Each kind has its own switch, so a runner that offers one starts none of
 	// the other.
 	MacOSVM bool
+	// WorkloadStatus patches the status of one WardynWorkload custom resource from the org's answer
+	// (a k8s runner that lists workload namespaces); nil refuses workload_status.
+	WorkloadStatus func(context.Context, runnerwire.WorkloadStatusArgs) error
 }
 
 // errUnobservable is Status's and AgentStatus's answer for a sandbox Covered says this runner cannot
@@ -145,6 +148,18 @@ func (d *Dispatcher) Call(ctx context.Context, peer *runnerwire.Peer, id uint32,
 			return nil, err
 		}
 		return probe.ProbeDrive(ctx, drive)
+	case runnerwire.MethodWorkloadStatus:
+		if d.cfg.WorkloadStatus == nil {
+			return nil, runnerwire.Refuse("this runner serves no workload namespaces")
+		}
+		var a runnerwire.WorkloadStatusArgs
+		if err := runnerwire.Unmarshal(args, &a); err != nil {
+			return nil, err
+		}
+		if err := a.Validate(); err != nil {
+			return nil, err
+		}
+		return nil, d.cfg.WorkloadStatus(ctx, a)
 	case runnerwire.MethodSweep:
 		return d.sweep(ctx, args)
 	case runnerwire.MethodSelftest:

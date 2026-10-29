@@ -200,7 +200,7 @@ test.describe("New Run, Guided setup: each workload end to end", () => {
     });
   });
 
-  test("Environment sandbox: no harness is needed", async ({ page }) => {
+  test("Environment: no harness is needed", async ({ page }) => {
     const bodies = await stubFlow(page);
     await openGuided(page);
     await toHarnesses(page, "environment");

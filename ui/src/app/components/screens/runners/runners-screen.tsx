@@ -18,6 +18,7 @@ import type { RunnerKind } from "../../../lib/types/runner-pools";
 import { SECURITY_ONLY_REASON } from "../../wardyn/copy";
 import { POOLS, RUNNER_V6 } from "../../wardyn/copy/runner-pools";
 import { RUNNERS } from "../../wardyn/copy/runners";
+import { WORKLOAD_BINDINGS } from "../../wardyn/copy/workloads";
 import { useOperator } from "../../wardyn/operator-context";
 import { AddComputerBlock } from "../../wardyn/add-computer-block";
 import { useRovingRadio } from "../../wardyn/use-roving-radio";
@@ -38,6 +39,7 @@ import { sortRunners } from "./runner-display";
 import { RunnersSwitchDialog } from "./runners-switch";
 import { UnusedTokens } from "./unused-tokens";
 import { useRunnersData } from "./use-runners-data";
+import { WorkloadBindingsTab } from "./workload-bindings-tab";
 
 type Filter = "active" | "revoked" | "all";
 const FILTERS: { id: Filter; label: string }[] = [
@@ -95,13 +97,13 @@ function FilterGroup({ filter, onChange }: { filter: Filter; onChange: (f: Filte
   );
 }
 
-type Tab = "runners" | "pools";
+type Tab = "runners" | "pools" | "bindings";
 
 export function RunnersScreen() {
   const superAdmin = useOperator();
   const { status, enabled, rows, remote, tokens, reload } = useRunnersData();
   const [params, setParams] = useSearchParams();
-  const tab: Tab = params.get("tab") === "pools" ? "pools" : "runners";
+  const tab: Tab = params.get("tab") === "pools" ? "pools" : params.get("tab") === "bindings" ? "bindings" : "runners";
   const openPoolId = params.get("pool");
   const [filter, setFilter] = React.useState<Filter>("active");
   const [search, setSearch] = React.useState("");
@@ -117,7 +119,7 @@ export function RunnersScreen() {
 
   // A tab change replaces the entry; opening a pool or a runner out of one adds an entry, so Back returns to where it was.
   const go = (next: Tab, pool?: string, push = false) => {
-    setParams(next === "pools" ? { tab: "pools", ...(pool ? { pool } : {}) } : {}, { replace: !pool && !push });
+    setParams(next === "pools" ? { tab: "pools", ...(pool ? { pool } : {}) } : next === "bindings" ? { tab: "bindings" } : {}, { replace: !pool && !push });
   };
   const openPool = (id: string) => {
     setSelected(null);
@@ -195,6 +197,7 @@ export function RunnersScreen() {
   if (status === "loading") body = <Framed><TableSkeleton rows={5} cols={6} /></Framed>;
   else if (status === "forbidden") body = <Framed><p className="p-4 text-sm text-muted-foreground">{SECURITY_ONLY_REASON}</p></Framed>;
   else if (status === "error") body = <Framed><LoadFailed onRetry={reload} /></Framed>;
+  else if (tab === "bindings") body = <WorkloadBindingsTab />;
   else if (tab === "pools") body = <PoolsTab runners={rows} remote={remote} openPoolId={openPoolId} onOpenPool={(id) => go("pools", id ?? undefined)} onOpenRunner={openRunner} />;
   else if (empty) {
     body = enabled ? (
@@ -246,6 +249,7 @@ export function RunnersScreen() {
           tabs={[
             { value: "runners", label: RUNNER_V6.TAB_RUNNERS },
             { value: "pools", label: RUNNER_V6.TAB_POOLS },
+            { value: "bindings", label: WORKLOAD_BINDINGS.TAB },
           ]}
         />
       )}

@@ -337,7 +337,33 @@
 # docs/AUDIT-ACTIONS.md=54277 = ours 54222 + theirs 54243 - base 54188 at the 0.10 W4 merge of W6FOLLOW (recording.read chain_check). 54285 adds 8 (#3583: `end_reason` on `desktop.recording.resume`). 54286 adds 1 (#3489: `tunnel-limit` in the `vmnet:<reason>` row).
 # docs/AUDIT-ACTIONS.md 54400 adds 12 over 54388, measured (0.10.0-rc.6 AWS renewal): harness.credential.refresh signed_in_sec.
 # docs/AUDIT-ACTIONS.md=54456 adds 56 over 54400, measured (0.10 final §3 pre-wrapped images): the base_image.admit row and security admins on the base_image write row.
-docs/AUDIT-ACTIONS.md=54456 share=8
+# docs/AUDIT-ACTIONS.md 54470 adds 14 over 54456, measured: an organization runner's removal from a pool with a use policy is held, on the runner_pool.runner.detach row.
+# docs/AUDIT-ACTIONS.md 54483 = 54470 + 13 (rc.8 services): `service` in the run.create data fields.
+# docs/AUDIT-ACTIONS.md=54528 adds 45 over 54483, measured (rc.8 services): the run.end.set service_renewed reason.
+# docs/AUDIT-ACTIONS.md 54512 adds 56 over 54456, measured (0.10 rc.8 personal walls): the person.walls.set and person.walls.delete rows, personal_walls on run.create and run.ceiling.reassert.
+# docs/AUDIT-ACTIONS.md 54584 = 54528 + 56 (rc.8 personal walls on top of services and lease renewal).
+# docs/AUDIT-ACTIONS.md=54651 adds 168 over 54483, measured (rc.8 services): the run.service.health and run.service.restart rows and the restart verb.
+# docs/AUDIT-ACTIONS.md 54752 = 54584 + 168 (rc.8 service health rows and the restart verb).
+# docs/AUDIT-ACTIONS.md 54684 adds 214 over 54470, measured (rc.8 governed inbound): the inbound.allow and inbound.deny rows, and the cross_site and governance_unit re-check reasons on ui.authorize.
+# docs/AUDIT-ACTIONS.md 54966 = 54752 + 214 (rc.8 inbound gateway rows).
+# docs/AUDIT-ACTIONS.md=54785 adds 33 over 54752, measured (rc.8 runs namespace): runs_namespace on the attach row and on run.create, the organization runner's add handler.
+# docs/AUDIT-ACTIONS.md 54999 = 54966 + 33 (rc.8 inbound gateway rows and runs namespace, combined in the wave).
+# docs/AUDIT-ACTIONS.md 54750 = 54483 + 267, measured (rc.8 workloads): the workload.* and workload_binding.* rows, three verbs, the launch_refused exception and run.kill's workload reasons.
+# docs/AUDIT-ACTIONS.md 55265 = 54999 + 267 - 1, measured (rc.8 workloads on the wave; the launch verb was counted once).
+# docs/AUDIT-ACTIONS.md 54983 adds 17 over 54966, measured (rc.8 D1): needs_host_mode on inbound.deny, for an app's browser ticket.
+# docs/AUDIT-ACTIONS.md 55282 = 55265 + 17, measured (rc.8 D1 on the wave).
+# docs/AUDIT-ACTIONS.md=55303 adds 21 over 55282, measured (rc.8 inbound docs): kind inbound on the token.create row and kind on the service_identity.token.create row.
+# docs/AUDIT-ACTIONS.md 55349 adds 67 over 55282, measured (rc.8 D2): workload.apply and workload.delete from a runner's report (via, runner_id, pool_id, namespace, uid).
+# docs/AUDIT-ACTIONS.md 55370 = 55303 + 67, measured (rc.8 inbound docs and D2 combined on the wave).
+# docs/AUDIT-ACTIONS.md 55446 adds 76 over 55370, measured (rc.8 FIX5): the workload sweep's run.kill, workload.replace and workload.launch_refused rows.
+# docs/AUDIT-ACTIONS.md 55470 adds 24 over 55446, measured (rc.8 FIX5): who a restarted service workload's rows name.
+# docs/AUDIT-ACTIONS.md 55483 adds 13 over 55470, measured (rc.8 FIX5): a replacement queued behind its own run's slot kills it at once.
+# docs/AUDIT-ACTIONS.md 55486 adds 3 over 55483, measured (rc.8 FIX5): a queued replacement that ran and then ended still replaces.
+# docs/AUDIT-ACTIONS.md 55503 adds 17 over 55486, measured (rc.8 inbound review F4a).
+# docs/AUDIT-ACTIONS.md 55513 adds 10 over 55503, measured (rc.8 inbound review F4b).
+# docs/AUDIT-ACTIONS.md 55517 adds 4, measured (rc.8 service cap): run.end.set service_renewed only under a lifetime cap.
+# docs/AUDIT-ACTIONS.md 55519 adds 2, measured (rc.8 cumulative review): inbound.deny run_unreadable for a stream whose run read stays down.
+docs/AUDIT-ACTIONS.md=55519 share=8
 # docs/AUDIT-ACTIONS.md 50827 = ours 50175 + theirs 50556 - base 49904 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.

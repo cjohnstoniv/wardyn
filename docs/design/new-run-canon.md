@@ -102,7 +102,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `AGENT_TITLE` | mock | Agent task |
 | `AGENT_BODY` | mock | A one-time coding task, driven by you or running autonomously. |
 | `AGENT_SUB` | mock | Interactive · Autonomous |
-| `ENV_TITLE` | mock | Environment sandbox |
+| `ENV_TITLE` | mock | Environment |
 | `ENV_BODY` | mock | A reusable workspace for development, analysis or investigation. |
 | `ENV_SUB` | pending (A18) | Interactive · Your drive is attached when you have one |
 | `APP_TITLE` | mock | Application sandbox |
@@ -146,7 +146,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `START_COMMAND_LABEL` | mock | Start command |
 | `START_COMMAND_HELP` | mock | Run verbatim in the sandbox when it starts. The run keeps going until you end it or it reaches its lifetime limit. |
 | `PORTS_LABEL` | mock | Ports |
-| `PORTS_HELP` | mock | Each port opens from the run page through Wardyn's web app gateway. Only people who may enter this run can open it. |
+| `PORTS_HELP` | mock | Each port opens from the run page through Wardyn's web app gateway. Only people who may enter this run can open it, unless you make it callable from outside. |
 | `PORT_COL_NAME` | mock | Name |
 | `PORT_COL_PORT` | mock | Port |
 | `PORT_COL_PATH` | mock | Path |
@@ -154,6 +154,27 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `PORTS_FULL` | mock | A run can open up to 8 ports. |
 | `PORT_INVALID` | mock | Enter a port from 1 to 65535. |
 | `PORT_DUPLICATE(port)` | mock | Two apps can't share port {port}. |
+| `PORT_INBOUND_LABEL` | mock | Callable from outside the run |
+| `PORT_INBOUND_HELP` | mock | People and services you name can reach this port through Wardyn's gateway, even when the run has no terminal. Every call is recorded. |
+| `PORT_INBOUND_REFUSED` | mock | Your organisation hasn't turned on inbound access for you. |
+| `CALLERS_LABEL` | mock | Who can call it |
+| `CALLERS_HELP` | mock | You can always call it. Add the people, groups and service identities that may call it too. |
+| `CALLERS_NONE` | mock | Only you can call it. |
+| `CALLERS_ADD` | mock | Add a caller |
+| `CALLER_PERSON` | mock | Person |
+| `CALLER_GROUP` | mock | Group |
+| `CALLER_SERVICE` | mock | Service identity |
+| `CALLERS_MENU_DIRECTORY` | mock | Search the directory |
+| `CALLERS_MENU_GROUPS` | mock | Your groups |
+| `CALLERS_MENU_SERVICES` | mock | Services you sponsor |
+| `CALLERS_MENU_PERSON` | mock | A person |
+| `CALLERS_NO_GROUPS` | mock | Your sign-in doesn't list any groups. |
+| `CALLERS_NO_SERVICES` | mock | You don't sponsor any service identities. |
+| `CALLER_EMAIL_PLACEHOLDER` | mock | name@example.com |
+| `CALLER_EMAIL_INVALID` | mock | Enter a full email address, like ana@example.com. |
+| `CALLER_ADD_PERSON` | mock | Add |
+| `CALLER_ADDED` | mock | Added |
+| `CALLER_REMOVE_ARIA(value)` | mock | Remove {value} |
 | `PORT_REQUIRED` | deviation (lead wording 2026-10-20, FEAT-1APP-UI) | An application needs at least one port to open. |
 | `APP_NAME_DUPLICATE(name)` | deviation (lead wording 2026-10-20, APP-UI-2) | Two applications are named {name}. Give each its own name. |
 | `APP_NAME_INVALID` | deviation (lead wording 2026-10-20, APP-UI-2) | Use lower-case letters, numbers and dashes, up to 32 characters, starting and ending with a letter or number. |
@@ -163,7 +184,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `APP_PORT_ARIA(who)` | deviation (lead wording 2026-10-20, APP-UI-2) | Port for {who} |
 | `APP_PATH_ARIA(who)` | deviation (lead wording 2026-10-20, APP-UI-2) | Path for {who} |
 | `APP_REMOVE_ARIA(who)` | deviation (lead wording 2026-10-20, APP-UI-2) | Remove {who} |
-| `APP_TERMINAL_NOTE` | mock | The sandbox also has a terminal, as an Environment sandbox does. |
+| `APP_TERMINAL_NOTE` | mock | The sandbox also has a terminal, as an Environment does. |
 | `COMMAND_LABEL` | mock | Command |
 | `COMMAND_HELP` | mock | Run verbatim in the sandbox. The run ends when the command exits. |
 | `COMMAND_REQUIRED` | deviation (lead wording 2026-10-17, FR-0099) | A command run needs a command to run. |
@@ -631,7 +652,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `ADD_TO_RUN` | mock | Add to run |
 | `SECRET_INTRO` | pending (W-39) | Choose one of your saved secrets and how the run receives it. Prefer a request header: no copy is placed in the sandbox. |
 | `SECRET_LABEL` | mock | Secret |
-| `SECRET_HELP` | mock | Values are stored encrypted and never shown again. Add new secrets under Your account. |
+| `SECRET_HELP` | mock | Values are stored encrypted and never shown again. Add new secrets in Settings. |
 | `SECRET_NONE` | deviation (owner approved 2026-10-17, FR-0110) | You have no saved secrets yet. |
 | `DELIVERY_LABEL` | mock | Delivery |
 | `DELIVERY_HEADER_OPTION` | pending (W-39) | Request header |
@@ -819,7 +840,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `GROUP_LIMITS` | mock | Limits |
 | `VALUE_AGENT` | mock | Agent task |
 | `VALUE_APPLICATION` | mock | Application sandbox |
-| `VALUE_ENVIRONMENT` | mock | Environment sandbox |
+| `VALUE_ENVIRONMENT` | mock | Environment |
 | `TIMING_APPLICATION` | mock | Background automation · Runs when launched |
 | `TIMING_APPLICATION_SERVER` | mock | Application server · Starts when launched |
 | `APP_PORT(port)` | mock | Port {port} |

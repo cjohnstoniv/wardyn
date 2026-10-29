@@ -1,0 +1,4 @@
+# Asserted against every cap in scripts/doc-form.sh (strict tier).
+docs/EXTENDING.md
+docs/design/README.md
+docs/operations/high-availability.md

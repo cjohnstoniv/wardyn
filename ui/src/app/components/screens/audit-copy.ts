@@ -48,6 +48,20 @@ export const AUDIT = {
   AWS_SIGNING_PORT: (host: string) => `${host} is not on port 443`,
   AWS_SIGNING_UNSIGNED_HOST: (host: string) => `the proxy can't sign for ${host}`,
   AWS_SIGNING_NOT_RECORDED: "fallback reason not recorded",
+  // A run.end.set row with reason service_renewed: wardynd moved a healthy service's end forward by its lease.
+  SERVICE_RENEWED: "renewed the service's lease",
+  // inbound.allow / inbound.deny (r15 T2-f): a call to an app the run declares inbound, one row per request; the
+  // object is the app. The unnamed app is for a row whose target was lost.
+  INBOUND_ALLOW: "Allowed inbound",
+  INBOUND_DENY: "Denied inbound",
+  INBOUND_NO_APP: "an unknown app",
+  // An inbound.deny of a request that showed no valid credential has no actor to name (r15 T2-f).
+  NO_CALLER: "no caller",
+  // Where a service row's fact came from (r15 T2-f): read inside the sandbox, or decided by the server.
+  SOURCE_SANDBOX: "sandbox",
+  SOURCE_SERVER: "server",
+  OUTCOME_ALLOW: "allow",
+  OUTCOME_DENY: "deny",
 } as const;
 
 // Short, human verbs for the actions we know about, shared by the Audit screen
@@ -67,6 +81,9 @@ const ACTION_VERB: Record<string, string> = {
   "run.revoke": "revoked the run's identity",
   "run.autostop": "auto-stopped the idle run",
   "run.reconcile": "reconciled run state",
+  // A service's health read from inside the sandbox, and a restart of its command (rows written by wardynd).
+  "run.service.health": "service health changed",
+  "run.service.restart": "restarted the service",
   // The EFFECTIVE policy the sandbox was actually given, recorded after every
   // widening phase, so this is what the proxy enforces, not what was asked for.
   "run.policy.resolve": "resolved the policy this run was given",
@@ -160,7 +177,11 @@ function describe(e: AuditEvent): Described {
       join: { sep: " for ", fallback: "an unknown host" },
     };
   }
+  if (e.action === "inbound.allow" || e.action === "inbound.deny") {
+    return { head: e.action === "inbound.allow" ? AUDIT.INBOUND_ALLOW : AUDIT.INBOUND_DENY, join: { sep: " to ", fallback: AUDIT.INBOUND_NO_APP } };
+  }
   if (e.action === "credential.revoke") return { head: AUDIT.REVOKE_RUN_CREDENTIALS };
+  if (e.action === "run.end.set" && e.data?.reason === "service_renewed") return { head: capitalize(AUDIT.SERVICE_RENEWED), join: { sep: " — " } };
   // "Removed" only on a row whose deletion happened; a failure row says what
   // was not removed. Any other outcome reads as the raw line.
   if (e.action === "credential.expired.delete" && (e.outcome === "success" || e.outcome === "failure")) {

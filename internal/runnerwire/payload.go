@@ -83,10 +83,14 @@ const (
 	EventActionResult  = "action_result"
 	EventSpool         = "spool"
 	EventResidentErase = "resident_erase"
+	// EventWorkload carries a WorkloadReport: a WardynWorkload custom resource the runner saw
+	// change, or the names a namespace still holds. Only a runner that lists workload namespaces
+	// sends it.
+	EventWorkload = "workload"
 )
 
 // EventKinds is the closed list.
-var EventKinds = []string{EventCaps, EventPosture, EventWaiting, EventAgentExit, EventActionResult, EventSpool, EventResidentErase}
+var EventKinds = []string{EventCaps, EventPosture, EventWaiting, EventAgentExit, EventActionResult, EventSpool, EventResidentErase, EventWorkload}
 
 // Event is the EVENT payload. Call, when non-zero, names the in-flight CALL the
 // event belongs to (a waiting report), so the org can deliver it on that
@@ -165,6 +169,11 @@ type Caps struct {
 	// proxy (0.10 on). An older runner rebuilds the proxy config without them, so the org refuses a
 	// create that sets one the runner does not name; absent reads as none.
 	ProxySettings []string `json:"proxy_settings,omitempty"`
+	// RunsNamespaces are the Kubernetes namespaces a k8s runner places run pods in, the first being
+	// its default. The org sends a create naming a namespace only to a runner that lists it, and a
+	// pool member pinned to a namespace is eligible only on such a runner. Absent (an older runner,
+	// or a runner on another substrate) says nothing: the runner serves its one namespace as before.
+	RunsNamespaces []string `json:"runs_namespaces,omitempty"`
 }
 
 // The run proxy settings a runner names in Caps.ProxySettings, each its proxy.Config key.

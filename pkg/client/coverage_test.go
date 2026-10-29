@@ -67,6 +67,8 @@ var (
 	_ client.DriveReclaim
 	_ client.CapabilitySubjectType
 	_ client.Restriction
+	_ client.PersonalWalls
+	_ client.PersonalWallsSpec
 	_ client.PresetsDocument
 	_ client.Preset
 	_ client.PresetRequest
@@ -104,6 +106,7 @@ var (
 	_ client.CreateServiceIdentityRequest
 	_ client.UpdateServiceIdentityRequest
 	_ client.MintServiceTokenRequest
+	_ client.CreateAPITokenRequest
 	_ client.MoveTokenRequest
 )
 
@@ -124,6 +127,7 @@ func routeFamilies() map[string][]string {
 		"site-config": {"GetSiteConfig", "PutSiteConfig", "PutSiteConfigResult", "PutSiteConfigClearing"},
 		"drives":      {"GetDrives", "ApplyDrives", "ApplyDrivesResult", "ListMemberDrives", "DeleteMemberDrive", "CreateMyDrive", "DeleteMyDrive"},
 		"templates":   {"ListTemplates", "GetTemplate", "SaveTemplate", "DeleteTemplate", "CopyTemplate", "ImportTemplate", "ListTemplateGroupAdmins", "GrantTemplateGroupAdmin", "RevokeTemplateGroupAdmin"},
+		"walls":       {"GetMyWalls", "PutMyWalls", "ClearMyWalls"},
 		"presets":     {"ListPresets", "GetPreset", "PutPreset", "DeletePreset", "ApplyPresets"},
 		"governance": {"GetGovernance", "ApplyGovernance", "ApplyGovernanceResult", "PlanGovernance",
 			"MoveGovernanceMembership", "PromoteGovernanceMembership", "GrantUnitAdmin", "RevokeUnitAdmin", "CheckGovernance", "GovernanceDryRun"},
@@ -135,7 +139,8 @@ func routeFamilies() map[string][]string {
 		"ssh-keys":        {"ListSSHKeys", "ListSSHKeysPage", "AddSSHKey", "DeleteSSHKey"},
 		"people":          {"ListPeople", "ErasePerson"},
 		"invitations":     {"CreateInvitation", "ListInvitations", "ListPersonInvitations", "ListPersonInvitationsPage", "ListMyInvitations", "RevokeInvitation", "ClaimInvitation"},
-		"service-ids":     {"CreateServiceIdentity", "ListServiceIdentities", "ListServiceIdentitiesPage", "GetServiceIdentity", "UpdateServiceIdentity", "RetireServiceIdentity", "ListMyServiceIdentities", "MintServiceToken", "ListServiceTokens", "ListServiceTokensPage", "RevokeServiceToken", "MoveToken"},
+		"service-ids":     {"CreateServiceIdentity", "ListServiceIdentities", "ListServiceIdentitiesPage", "GetServiceIdentity", "UpdateServiceIdentity", "RetireServiceIdentity", "ListMyServiceIdentities", "MintServiceToken", "ListServiceTokens", "ListServiceTokensPage", "RevokeServiceToken", "MoveToken", "CreateAPIToken", "RevokeAPIToken"},
+		"workloads":       {"ApplyWorkload", "ListWorkloads", "ListWorkloadsPage", "GetWorkload", "WorkloadHistory", "DeleteWorkload", "RestartWorkload", "CreateWorkloadBinding", "ListWorkloadBindings", "ListWorkloadBindingsPage", "DeleteWorkloadBinding"},
 		"components":      {"MyComponents", "SaveMyComponent", "UpdateMyComponent", "DeleteMyComponent", "ListComponents", "PutComponent", "DeleteComponent"},
 		"runners":         {"MintRunnerToken", "RegisterRunner", "ClaimRunner", "ListRunners", "ListRunnersPage", "GetRunner", "ListMyRunners", "ListMyRunnersPage", "GetMyRunner", "SetMyRunnerLimits", "ListRunnerTokens", "ListRunnerTokensPage", "RevokeMyRunner", "RevokeRunnerToken", "GetRunnerSettings", "SetRunnersEnabled", "MintOrgRunnerToken", "ClaimOrgRunner", "SetRunnerTrust"},
 		"runner-pools":    {"ListRunnerPools", "ListRunnerPoolsPage", "ListRunnerPoolsFor", "ListMyRunnerPools", "GetRunnerPool", "CreateRunnerPool", "UpdateRunnerPool", "DeleteRunnerPool", "CreateMyRunnerPool", "UpdateMyRunnerPool", "DeleteMyRunnerPool", "OwnRunnerPool", "AddMyRunnerToPool", "RemoveMyRunnerFromPool", "AddRunnerPoolRunner", "RemoveRunnerPoolRunner", "GetOrgRunnerPoolDefaults", "SetOrgRunnerPoolDefaults", "GetMyRunnerPoolDefaults", "SetMyRunnerPoolDefaults", "ClearMyRunnerPoolDefaults", "AddRunnerPoolRemoteRunner", "RemoveRunnerPoolRemoteRunner", "AddMyPoolRemoteRunner", "RemoveMyPoolRemoteRunner", "ListRunnerPoolMembers", "GetRunnerPoolUsePolicy", "SetRunnerPoolUsePolicy", "ClearRunnerPoolUsePolicy"},

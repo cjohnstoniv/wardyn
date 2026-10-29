@@ -712,6 +712,131 @@ repo_scan_ok() {
     find "$workdir" -maxdepth 2 -mindepth 1 -type d -name ".git" 2>/dev/null | grep . >/dev/null
 }
 
+# ── service supervisor (WARDYN_SERVICE=1) ─────────────────────────────────────
+# A service run keeps its command up inside the ONE agent exec: on k8s that exec
+# is an add-only ephemeral container, so the control plane cannot restart it,
+# and neither docker's nor the pod's restart policy reaches an exec. wardynd
+# reads the state file below over the exec channel it already has and mirrors it
+# onto the run, so the file is a contract. v1:
+#   {"v":1,"health":"starting|healthy|unhealthy","reason":"|restarting|probe_failing",
+#    "restarts":<int>,"last_exit_code":<int>|null}
+# WARDYN_SERVICE_STATE_FILE is the test's seam only: the control plane never sets
+# it, and a run's own env cannot carry a WARDYN_ name.
+_svc_pid="" _svc_health="" _svc_reason="" _svc_restarts=0 _svc_exit=null
+
+# service_state — rewrite the state file atomically (tmp + mv), so a reader
+# never sees half of one.
+service_state() {
+    local f="${WARDYN_SERVICE_STATE_FILE:-/home/agent/.wardyn/service.json}"
+    mkdir -p "${f%/*}"
+    printf '{"v":1,"health":"%s","reason":"%s","restarts":%d,"last_exit_code":%s}\n' \
+        "$_svc_health" "$_svc_reason" "$_svc_restarts" "$_svc_exit" > "$f.tmp" &&
+        mv -f "$f.tmp" "$f"
+}
+
+# service_probe <port> [path] — TCP connect to 127.0.0.1:<port>; with a path, an
+# HTTP/1.0 GET on the same fd that passes on a 2xx or 3xx status line. Plain bash
+# (/dev/tcp, as wait_for_proxy does), so a service image needs no curl. Its own
+# bash, so fd 3 never leaks into the supervisor, under timeout: the whole probe,
+# the connect included (a listener whose backlog is full never answers it), fails
+# after 5 s.
+service_probe() {
+    # shellcheck disable=SC2016 # expanded by the inner bash
+    timeout 5 bash -c '
+        exec 3<>"/dev/tcp/127.0.0.1/$1" || exit 1
+        [[ -n "$2" ]] || exit 0
+        printf "GET %s HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n" "$2" >&3 || exit 1
+        read -r line <&3 || exit 1
+        [[ "$line" =~ ^HTTP/1\.[0-9]\ [23][0-9][0-9] ]]
+    ' _ "$1" "${2:-}" 2>/dev/null
+}
+
+# service_kill_group — TERM the command's whole process group, KILL what is
+# left after 10 s, and record the command's exit code.
+service_kill_group() {
+    local i
+    [[ -n "$_svc_pid" ]] || return 0
+    kill -TERM -- "-$_svc_pid" 2>/dev/null
+    for ((i = 0; i < 50; i++)); do
+        kill -0 -- "-$_svc_pid" 2>/dev/null || break
+        sleep 0.2
+    done
+    kill -KILL -- "-$_svc_pid" 2>/dev/null
+    wait "$_svc_pid"
+    _svc_exit=$?
+    _svc_pid=""
+}
+
+# service_stop — the TERM/INT trap. A stopped service is never restarted.
+service_stop() {
+    trap - TERM INT
+    service_kill_group
+    service_state
+    exit 143
+}
+
+# run_service "<command>" — run the command as /bin/sh -c, restart it per
+# WARDYN_SERVICE_RESTART (on_failure | never), and probe WARDYN_SERVICE_PORT
+# when health is set (WARDYN_SERVICE_HEALTH_INTERVAL, _THRESHOLD, optional _PATH).
+# Returns the code the run ends with: 0 when the command exits 0 on its own, the
+# command's code under restart=never. on_failure never gives up (the run's end
+# and walls bound it); its backoff is 1, 2, 4 … 300 s and resets after 600 s up.
+# Every wait is `sleep & wait`, so a stop lands at once.
+run_service() {
+    # agent-run runs under -e, and a failing command is this loop's normal case.
+    set +e
+    local cmd="$1" restart="${WARDYN_SERVICE_RESTART:-on_failure}" port="${WARDYN_SERVICE_PORT:-}"
+    local path="${WARDYN_SERVICE_HEALTH_PATH:-}" interval="${WARDYN_SERVICE_HEALTH_INTERVAL:-}"
+    local threshold="${WARDYN_SERVICE_HEALTH_THRESHOLD:-3}" backoff=1 started fails tick killed
+    [[ -n "$port" ]] || interval=""
+    _svc_health=starting _svc_reason="" _svc_restarts=0 _svc_exit=null
+    trap service_stop TERM INT
+    while :; do
+        # -m only around the launch, so the command leads its own process group
+        # (one kill reaches its children); left on, bash prints a line per job.
+        set -m
+        /bin/sh -c "$cmd" &
+        _svc_pid=$!
+        set +m
+        # A relaunch with a check starts as the first launch does, until its first passing probe.
+        if [[ -z "$interval" ]]; then _svc_health=healthy _svc_reason=""; else _svc_health=starting _svc_reason=""; fi
+        service_state
+        started=$SECONDS fails=0 tick=0 killed=0
+        while kill -0 "$_svc_pid" 2>/dev/null; do
+            sleep 1 & wait $!
+            if [[ -z "$interval" ]] || (( ++tick < interval )); then continue; fi
+            tick=0
+            kill -0 "$_svc_pid" 2>/dev/null || break
+            if service_probe "$port" "$path"; then
+                fails=0
+                if [[ "$_svc_health" != healthy ]]; then _svc_health=healthy _svc_reason=""; service_state; fi
+            elif (( ++fails >= threshold )) && [[ "$_svc_reason" != probe_failing ]]; then
+                _svc_health=unhealthy _svc_reason=probe_failing
+                service_state
+                echo "agent-run: service failed $fails health checks in a row" >&2
+                # Liveness: the group's exit takes the restart path below.
+                if [[ "$restart" != never ]]; then service_kill_group; killed=1; fi
+            fi
+        done
+        # The command is gone, but a child it left in its group may not be: kill
+        # the group before a restart or the return. wait still yields the
+        # command's own exit code.
+        service_kill_group
+        if (( _svc_exit == 0 && ! killed )); then service_state; return 0; fi
+        if [[ "$restart" == never ]]; then
+            _svc_health=unhealthy _svc_reason=""
+            service_state
+            return "$_svc_exit"
+        fi
+        if (( SECONDS - started >= 600 )); then backoff=1; fi
+        _svc_restarts=$((_svc_restarts + 1)) _svc_health=unhealthy _svc_reason=restarting
+        service_state
+        echo "agent-run: service exited $_svc_exit; restart $_svc_restarts in ${backoff}s" >&2
+        sleep "$backoff" & wait $!
+        backoff=$((backoff * 2 > 300 ? 300 : backoff * 2))
+    done
+}
+
 # maybe_exec_task_mode "<task>" — exec task mode (BYOA/CI lane): when the
 # control plane set WARDYN_TASK_MODE=exec, run the task as a plain shell
 # command INSTEAD of the agent harness and never return. No-op otherwise.
@@ -720,6 +845,8 @@ repo_scan_ok() {
 # full prep (MITM CA, clone, brokered creds, recording) before this call; the
 # base image's stub does the workspace prep only when the run clones a repository or names a starting folder.
 # The command's exit code propagates to the caller (0 -> COMPLETED, else FAILED).
+# A service (WARDYN_SERVICE=1) runs under run_service instead and exits with the
+# code it returns.
 maybe_exec_task_mode() {
     # Several agents in one run (agent-run-set --tasks): this launcher's shared prep
     # is done, so the next agent's may start.
@@ -733,6 +860,10 @@ maybe_exec_task_mode() {
         # survives `sh -c` fine), and a login shell sources /etc/profile,
         # which reassembles PATH from scratch — destroying every BYOI/
         # devcontainer image's own Dockerfile ENV PATH toolchain.
+        if [[ "${WARDYN_SERVICE:-}" == "1" ]]; then
+            run_service "$1"
+            exit $?
+        fi
         exec /bin/sh -c "$1"
     fi
 }

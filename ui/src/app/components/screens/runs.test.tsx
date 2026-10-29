@@ -293,6 +293,63 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
     );
   });
 
+  describe("segments (R17-N3)", () => {
+    const board = () =>
+      listRunsFilteredMock.mockResolvedValue({
+        runs: [
+          run({ id: "a", task: "Agent one", shape: "agent_task" }),
+          run({ id: "e", task: "Env one", shape: "environment", agent: "" }),
+          run({ id: "p", task: "App one", shape: "application", agent: "" }),
+          run({ id: "s", task: "Svc one", shape: "application", agent: "", service: { restart: "on_failure" } }),
+        ],
+        truncated: false,
+        hiddenOlder: 0,
+        hiddenKilled: 0,
+      });
+
+    it("counts each segment, and a pick shows only that segment's runs", async () => {
+      board();
+      renderScreen();
+      await screen.findByText("Agent one");
+      const group = screen.getByRole("group", { name: "Run shape" });
+      for (const label of ["All", "Agent tasks", "Environments", "Apps & scripts", "Services"]) {
+        expect(within(group).getByRole("button", { name: new RegExp(`^${label} \\d$`) })).toBeTruthy();
+      }
+      expect(within(group).getByRole("button", { name: "All 4" })).toBeTruthy();
+      fireEvent.click(within(group).getByRole("button", { name: "Environments 1" }));
+      await screen.findByText("Env one");
+      expect(screen.queryByText("Agent one")).toBeNull();
+      expect(screen.queryByText("Svc one")).toBeNull();
+    });
+
+    it("marks the picked segment with a tint and teal text, not a solid fill", async () => {
+      board();
+      renderScreen();
+      await screen.findByText("Agent one");
+      const group = screen.getByRole("group", { name: "Run shape" });
+      fireEvent.click(within(group).getByRole("button", { name: "Environments 1" }));
+      const picked = within(group).getByRole("button", { name: "Environments 1" });
+      expect(picked).toHaveAttribute("aria-pressed", "true");
+      expect(picked).toHaveClass("bg-primary/10", "text-primary");
+      expect(picked).not.toHaveClass("bg-primary");
+      expect(within(group).getByRole("button", { name: "All 4" })).not.toHaveClass("bg-primary/10");
+    });
+
+    it("Services with no service reads the approved sentence", async () => {
+      listRunsFilteredMock.mockResolvedValue({ runs: [run({ shape: "agent_task" })], truncated: false, hiddenOlder: 0, hiddenKilled: 0 });
+      renderScreen();
+      await screen.findByText("Fix flaky auth tests");
+      fireEvent.click(screen.getByRole("button", { name: "Services 0" }));
+      await screen.findByText("No services yet. Start one with Keep it running on an Automation / script run.");
+    });
+
+    it("a segment with no run under another active filter reads as no match, not as no services", async () => {
+      listRunsFilteredMock.mockResolvedValue({ runs: [run({ shape: "agent_task" })], truncated: false, hiddenOlder: 0, hiddenKilled: 0 });
+      renderScreen(undefined, "/runs?segment=services&status=failed");
+      await screen.findByText("No runs match these filters");
+    });
+  });
+
   it("no match, then Clear restores the default filters", async () => {
     // The mock stands in for the server's own q= filtering (runs-api-filters
     // is what pins the real thing): populated with the default (no q), empty

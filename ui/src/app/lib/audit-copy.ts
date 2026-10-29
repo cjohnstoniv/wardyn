@@ -24,6 +24,9 @@ const ACTION_VERB: Record<string, string> = {
   "run.revoke": "revoked the run's identity",
   "run.autostop": "auto-stopped the idle run",
   "run.reconcile": "reconciled run state",
+  // A service's health read from inside the sandbox, and a restart of its command (rows written by wardynd).
+  "run.service.health": "service health changed",
+  "run.service.restart": "restarted the service",
   // The EFFECTIVE policy the sandbox was actually given, recorded after every
   // widening phase, so this is what the proxy enforces, not what was asked for.
   "run.policy.resolve": "resolved the policy this run was given",
@@ -124,7 +127,14 @@ function describeParts(e: AuditEvent): AuditParts {
   if (e.action.startsWith("llm.scan.")) {
     return { lead: `LLM content scan (${e.action.slice("llm.scan.".length)}) for`, sep: " ", object: e.target || "an unknown host" };
   }
+  if (e.action === "inbound.allow" || e.action === "inbound.deny") {
+    const verb = e.action === "inbound.allow" ? AUDIT.INBOUND_ALLOW : AUDIT.INBOUND_DENY;
+    return { lead: `${verb} to`, sep: " ", object: e.target || AUDIT.INBOUND_NO_APP };
+  }
   if (e.action === "credential.revoke") return whole(AUDIT.REVOKE_RUN_CREDENTIALS);
+  if (e.action === "run.end.set" && e.data?.reason === "service_renewed") {
+    return { lead: capitalize(AUDIT.SERVICE_RENEWED), sep: " — ", object: e.target ?? "" };
+  }
   // "Removed" only on a row whose deletion happened; a failure row says what
   // was not removed. Any other outcome reads as the raw line.
   if (e.action === "credential.expired.delete" && (e.outcome === "success" || e.outcome === "failure")) {
@@ -158,6 +168,36 @@ export function describeAction(e: AuditEvent): string {
 /** The target for its own column: the row's target as it is, or the sentence's stand-in ("an unknown host"). */
 export function describeObject(e: AuditEvent): string {
   return e.target || describeParts(e).object;
+}
+
+export const isInbound = (e: AuditEvent): boolean => e.action === "inbound.allow" || e.action === "inbound.deny";
+
+/** An inbound.deny that carries no actor: the request showed no valid credential, so there is no caller to name. */
+export const hasNoCaller = (e: AuditEvent): boolean => e.action === "inbound.deny" && !e.actor;
+
+/** Where a service row's fact came from: "sandbox" for what wardynd read inside the run, "server" for a lease it renewed itself. Null for any other row. */
+export function serviceSource(e: AuditEvent): string | null {
+  if (e.action === "run.service.health" || e.action === "run.service.restart") return AUDIT.SOURCE_SANDBOX;
+  return e.action === "run.end.set" && e.data?.reason === "service_renewed" ? AUDIT.SOURCE_SERVER : null;
+}
+
+// inboundDetail is the second line of an inbound.allow / inbound.deny row, from what the row recorded: the request
+// (method and path, never the query), how the caller came (a token or a session) and who they matched, or why they
+// were refused. `withRun` ends the line with the run's short id, for the Audit page, which lists several runs; a run's
+// own Audit tab leaves it off. Null for any other row; a field the row lacks is left out, never guessed.
+export function inboundDetail(e: AuditEvent, withRun = false): string | null {
+  if (!isInbound(e)) return null;
+  const d = e.data ?? {};
+  const text = (k: string) => (typeof d[k] === "string" && d[k] ? (d[k] as string) : "");
+  const request = [text("method"), text("path")].filter(Boolean).join(" ");
+  const via = text("via") && `via ${text("via")}`;
+  const parts =
+    e.action === "inbound.allow"
+      ? [request, via, text("caller") && `caller ${text("caller")}`]
+      : [text("reason") && `reason ${text("reason")}`, via, request];
+  const line = parts.filter(Boolean);
+  if (line.length && withRun && e.run_id) line.push(e.run_id.replace(/^run_/, "").slice(0, 8));
+  return line.join(" · ") || null;
 }
 
 const BEDROCK_SIGNING: Record<string, "proxy" | "role" | "session"> = {

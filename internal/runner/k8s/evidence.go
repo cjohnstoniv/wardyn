@@ -159,6 +159,9 @@ type runEvidence struct {
 	SinkKeyHash string `json:"sink_key_hash,omitempty"`
 	// ProducerGone marks the sink producer settled on the proxy's completion evidence.
 	ProducerGone bool `json:"producer_gone,omitempty"`
+	// Namespace is the namespace the run's objects were created in, saved with the sink key before
+	// any pod exists; boot refuses a live run whose namespace is no longer listed.
+	Namespace string `json:"namespace,omitempty"`
 }
 
 func decodeEvidence(b []byte) (*runEvidence, error) {
