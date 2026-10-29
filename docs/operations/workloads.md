@@ -107,6 +107,7 @@ intent:
 - Two applies that race leave one run: the launch that loses is ended with reason `workload_replaced`.
 - `workload restart` is recorded as `workload.restart`. When it is not the owner's own request it launches only for a service identity whose sponsor's session is live; a person's workload then starts at their next apply.
 - Deleting a workload removes the row, then ends its run with reason `workload_deleted`.
+- `GET /workloads/{name}/history[?owner=]` returns the workload's `workload.*` audit rows, newest first: `time`, `action` (`apply`, `launch`, `replace`, `launch_refused`, `restart` or `delete`), `generation`, `run_id`, `ended_run_id` and `reason`. The same callers read it as `GET /workloads/{name}`; a service identity's token does not. A name applied again after a delete shares the old history. The console's drawer lists it.
 
 ## Kubernetes: the WardynWorkload resource
 

@@ -265,6 +265,20 @@ type Workload struct {
 	UpdatedAt   time.Time        `json:"updated_at"`
 }
 
+// WorkloadEvent is one row of a workload's history: a workload.* audit row without its actor and hashes.
+type WorkloadEvent struct {
+	Time time.Time `json:"time"`
+	// Action is apply, launch, replace, launch_refused, restart or delete.
+	Action     string `json:"action"`
+	Generation int64  `json:"generation,omitempty"`
+	// RunID is the run a launch started, or the run that replaced another.
+	RunID *uuid.UUID `json:"run_id,omitempty"`
+	// EndedRunID is the run a replace or a delete ended.
+	EndedRunID *uuid.UUID `json:"ended_run_id,omitempty"`
+	// Reason is a launch_refused row's reason code.
+	Reason string `json:"reason,omitempty"`
+}
+
 // WorkloadApplyResult is the answer of an apply or restart.
 type WorkloadApplyResult struct {
 	Workload Workload        `json:"workload"`
@@ -333,6 +347,17 @@ func (c *Client) ListWorkloads(ctx context.Context, owner string, opts ...ListOp
 func (c *Client) GetWorkload(ctx context.Context, name, owner string) (Workload, error) {
 	var out Workload
 	err := c.do(ctx, http.MethodGet, workloadPath(name, owner), nil, &out)
+	return out, err
+}
+
+// WorkloadHistory reads the workload's audit rows, newest first. GET /api/v1/workloads/{name}/history.
+func (c *Client) WorkloadHistory(ctx context.Context, name, owner string, opts ...ListOpts) ([]WorkloadEvent, error) {
+	var out []WorkloadEvent
+	path := "/api/v1/workloads/" + url.PathEscape(name) + "/history"
+	if owner != "" {
+		path += "?owner=" + url.QueryEscape(owner)
+	}
+	err := c.do(ctx, http.MethodGet, appendListOpts(path, opts), nil, &out)
 	return out, err
 }
 

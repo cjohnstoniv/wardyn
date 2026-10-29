@@ -1,4 +1,5 @@
 # Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the measured prose words, so growth fails.
 # docs/operations/workloads.md 2398 measured (rc.8): what a workload is, the file, the CLI, update semantics, the WardynWorkload resource, bindings, status, the Argo CD health check and the limits, resolved against the code on the wave head.
 # docs/operations/workloads.md 2427 adds 29 over 2398: the Digest row of the table of parts.
-docs/operations/workloads.md=2427 share=10
+# docs/operations/workloads.md 2481 adds 54 over 2427: the history route.
+docs/operations/workloads.md=2481 share=10

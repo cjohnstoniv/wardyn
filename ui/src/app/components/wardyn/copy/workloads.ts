@@ -46,6 +46,12 @@ export const WORKLOADS = {
   REFUSAL_GENERATION: (n: number) => `Generation ${n}`,
   PREVIOUS_KEPT: "the previous run kept running.",
   SPEC: "Spec",
+  HISTORY: "History",
+  /** "gen 4 launched 7c41e0a9, ended 51c0d7e2 · 2 d ago": the mono parts are the generation and the run ids. */
+  HISTORY_GEN: (n: number) => `gen ${n}`,
+  HISTORY_LAUNCHED: "launched",
+  HISTORY_ENDED: "ended",
+  HISTORY_REFUSED: "refused",
   RESTART: "Restart",
   DELETE: "Delete",
   /** Followed by the namespace, in mono, and MANAGED_TAIL. */

@@ -28,6 +28,15 @@ describe("workloads - request shape", () => {
     expect(sent()).toMatchObject({ url: "/api/v1/workloads?limit=1000", method: "GET" });
   });
 
+  it("history GETs /workloads/{name}/history, with the owner when given", async () => {
+    let sent = stub(json(null));
+    expect(await workloads.history("billing-api")).toEqual([]);
+    expect(sent()).toMatchObject({ url: "/api/v1/workloads/billing-api/history?limit=1000", method: "GET" });
+    sent = stub(json([{ time: "t", action: "launch" }]));
+    expect(await workloads.history("billing-api", "service:billing")).toHaveLength(1);
+    expect(sent()).toMatchObject({ url: "/api/v1/workloads/billing-api/history?owner=service%3Abilling&limit=1000", method: "GET" });
+  });
+
   it("get, restart and remove name the owner only when given", async () => {
     let sent = stub(json({ name: "a/b" }));
     await workloads.get("a/b");

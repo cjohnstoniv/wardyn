@@ -51,7 +51,7 @@ const ts = read("ui/src/app/lib/types/workloads.ts");
 const go = read("pkg/client/workloads.go");
 
 describe("workloads wire", () => {
-  it.each(["Workload", "WorkloadRefusal", "WorkloadLaunch", "WorkloadApplyResult", "WorkloadBinding", "CreateWorkloadBindingRequest"])(
+  it.each(["Workload", "WorkloadRefusal", "WorkloadEvent", "WorkloadLaunch", "WorkloadApplyResult", "WorkloadBinding", "CreateWorkloadBindingRequest"])(
     "%s has full parity with its Go struct",
     (name) => {
       expect(new Set(tsKeys(ts, name))).toEqual(new Set(goJSONTags(go, name)));

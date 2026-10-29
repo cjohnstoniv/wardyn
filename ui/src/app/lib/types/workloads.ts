@@ -45,6 +45,20 @@ export interface Workload {
   updated_at: string;
 }
 
+/** One row of a workload's history. Go: client.WorkloadEvent. */
+export interface WorkloadEvent {
+  time: string;
+  /** `apply`, `launch`, `replace`, `launch_refused`, `restart` or `delete`. */
+  action: string;
+  generation?: number;
+  /** The run a launch started, or the run that replaced another. */
+  run_id?: string;
+  /** The run a replace or a delete ended. */
+  ended_run_id?: string;
+  /** A launch_refused row's reason code. */
+  reason?: string;
+}
+
 /** What an apply or restart did to the stored workload. Go: client.WorkloadOutcome. */
 export type WorkloadOutcome = "created" | "updated" | "unchanged";
 

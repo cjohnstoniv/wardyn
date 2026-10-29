@@ -16,11 +16,13 @@ import { WorkloadsScreen } from "./workloads";
 const listMock = vi.fn();
 const restartMock = vi.fn();
 const removeMock = vi.fn();
+const historyMock = vi.fn();
 vi.mock("../../lib/api/workloads", () => ({
   workloads: {
     list: (...a: unknown[]) => listMock(...a),
     restart: (...a: unknown[]) => restartMock(...a),
     remove: (...a: unknown[]) => removeMock(...a),
+    history: (...a: unknown[]) => historyMock(...a),
   },
 }));
 const getRunMock = vi.fn();
@@ -72,6 +74,7 @@ function renderScreen(path = "/workloads") {
 beforeEach(() => {
   listMock.mockResolvedValue(ROWS);
   getRunMock.mockResolvedValue({ created_at: ago(2 * D) });
+  historyMock.mockResolvedValue([]);
 });
 afterEach(() => {
   cleanup();

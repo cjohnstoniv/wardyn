@@ -4,7 +4,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { Workload } from "../../../lib/types/workloads";
 import { WORKLOADS as W } from "../../wardyn/copy/workloads";
@@ -12,7 +12,10 @@ import { WorkloadDrawer } from "./workload-drawer";
 
 const getRun = vi.fn();
 vi.mock("../../../lib/api/runs", () => ({ runs: { getRun: (id: string) => getRun(id) } }));
-vi.mock("../../../lib/api/workloads", () => ({ workloads: { restart: vi.fn(), remove: vi.fn() } }));
+const history = vi.fn();
+vi.mock("../../../lib/api/workloads", () => ({
+  workloads: { restart: vi.fn(), remove: vi.fn(), history: (name: string, owner?: string) => history(name, owner) },
+}));
 
 const RUN = "7c41e0a9-0000-0000-0000-000000000000";
 const DIGEST = "9f1c4e5d2b7a3c8e0f6a1b9d4c7e2a5b8f3d6c9e1a4b7d0f3c6e9a2b5d8a07b";
@@ -44,6 +47,7 @@ function open(w: Workload) {
 
 beforeEach(() => {
   getRun.mockResolvedValue({ id: RUN, created_at: ago(2 * D) });
+  history.mockResolvedValue([]);
 });
 afterEach(() => {
   cleanup();
@@ -63,5 +67,35 @@ describe("WorkloadDrawer digest", () => {
     open(workload());
     await screen.findByText(/started/);
     expect(screen.queryByText(W.DIGEST)).toBeNull();
+  });
+});
+
+describe("WorkloadDrawer history", () => {
+  const OLD = "51c0d7e2-0000-0000-0000-000000000000";
+
+  it("lists launches and refusals as the board does, newest first, with the run a launch replaced", async () => {
+    history.mockResolvedValue([
+      { time: ago(2 * D), action: "replace", generation: 4, run_id: RUN, ended_run_id: OLD },
+      { time: ago(2 * D), action: "launch", generation: 4, run_id: RUN },
+      { time: ago(2 * D), action: "apply", generation: 4 },
+      { time: ago(3 * D), action: "launch_refused", generation: 3, reason: "pool_lifetime_exceeded" },
+      { time: ago(9 * D), action: "launch", generation: 2, run_id: OLD },
+    ]);
+    open(workload({ owner: "service:billing" }));
+    const list = await screen.findByTestId("workload-history");
+    expect(history).toHaveBeenCalledWith("billing-api", "service:billing");
+    expect(screen.getByText(W.HISTORY)).toBeInTheDocument();
+    expect(within(list).getAllByRole("listitem").map((li) => li.textContent)).toEqual([
+      "gen 4 launched 7c41e0a9, ended 51c0d7e2 · 2 d ago",
+      "gen 3 refused · 3 d ago",
+      "gen 2 launched 51c0d7e2 · 9 d ago",
+    ]);
+  });
+
+  it("draws no History when there are no rows or the read fails", async () => {
+    history.mockRejectedValue(new Error("no"));
+    open(workload());
+    await screen.findByText(/started/);
+    expect(screen.queryByText(W.HISTORY)).toBeNull();
   });
 });
