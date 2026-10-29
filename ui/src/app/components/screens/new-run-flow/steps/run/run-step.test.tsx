@@ -850,6 +850,9 @@ describe("Run step: Keep it running", () => {
     await poolSelect();
     expect(screen.queryByRole("switch", { name: SERVICE_FORM.LABEL })).not.toBeInTheDocument();
     cleanup();
+    show({ ...SCRIPT, workload: { kind: "agent_task", task: "x" } });
+    await poolSelect();
+    expect(screen.queryByRole("switch", { name: SERVICE_FORM.LABEL })).not.toBeInTheDocument();
     cleanup();
     show({ ...SCRIPT, machine_kind: "linux_vm" });
     await poolSelect();
