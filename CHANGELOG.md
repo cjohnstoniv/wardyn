@@ -11,6 +11,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+## [0.10.0-rc.7] — 2026-10-29
+
 ### Before you upgrade
 
 - Migrations `0237_base_image_prewrapped` (admits `prewrapped` in `base_images.kind`'s CHECK and adds the check's
