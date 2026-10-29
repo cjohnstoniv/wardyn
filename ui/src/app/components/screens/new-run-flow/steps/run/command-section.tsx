@@ -22,10 +22,12 @@ export interface CommandSectionProps {
   onKind: (kind: AppKind) => void;
   onCommand: (command: string) => void;
   onApps: { edit: (index: number, patch: Partial<UIApp>) => void; add: () => void; remove: (index: number) => void };
+  /** Under the command: an Automation / script's "Keep it running". */
+  children?: React.ReactNode;
 }
 
 /** An Application is a script that runs on its own, or a server that keeps running and opens its ports in the browser. */
-export function CommandSection({ kind, command, apps, onKind, onCommand, onApps }: CommandSectionProps) {
+export function CommandSection({ kind, command, apps, onKind, onCommand, onApps, children }: CommandSectionProps) {
   const labelId = React.useId();
   const server = kind === "server";
   const help = server ? NR_RUN.START_COMMAND_HELP : NR_RUN.COMMAND_HELP;
@@ -42,6 +44,7 @@ export function CommandSection({ kind, command, apps, onKind, onCommand, onApps 
           <Input id={COMMAND_ID} className="font-mono" value={command} aria-required="true" aria-describedby={`${COMMAND_ID}-help`} onChange={(e) => onCommand(e.target.value)} />
           <p id={`${COMMAND_ID}-help`} className="text-xs leading-snug text-muted-foreground">{help}</p>
         </div>
+        {children}
         {server && <PortsSection apps={apps} {...onApps} />}
         {server && <p className="text-xs leading-snug text-muted-foreground">{NR_RUN.APP_TERMINAL_NOTE}</p>}
       </div>

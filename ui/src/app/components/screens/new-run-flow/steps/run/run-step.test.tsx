@@ -14,6 +14,7 @@ import { RUNNER_POOL_REFUSAL } from "../../../../../lib/runner-pool-refusals";
 import type { RunnerPoolCatalogueEntry, RunnerPoolList } from "../../../../../lib/types/runner-pools";
 import { NR_RUN } from "../../../../wardyn/copy/new-run/run";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
+import { SERVICE_FORM } from "../../../../wardyn/copy/run-service";
 import { NR_MACHINE } from "../../../../wardyn/copy/new-run/machine";
 import { ModelAccessProvider } from "../../../../wardyn/model-access-context";
 import { browserZone, scheduleDaysAhead, todayDate, type StartChoice } from "../../../../../lib/schedule";
@@ -772,5 +773,58 @@ describe("Run step: Schedule for later", () => {
     await userEvent.click(screen.getByRole("radio", { name: NR_RUN.TIMING_NOW }));
     expect(scheduleNow()).toBeNull();
     expect(screen.queryByLabelText(NR_RUN.START_DATE)).not.toBeInTheDocument();
+  });
+});
+
+// Mock r15 T1-a: "Keep it running" under an Automation / script's command.
+describe("Run step: Keep it running", () => {
+  const SCRIPT: RunIntent = { shape: "application", experience: "background", workload: { kind: "command", command: "./serve --port 8080" } };
+  const toggle = () => screen.getByRole("switch", { name: SERVICE_FORM.LABEL });
+
+  it("is off by default, says what it does, and sends no service until it is turned on", async () => {
+    show(SCRIPT);
+    await poolSelect();
+    expect(toggle()).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByText(SERVICE_FORM.HELP)).toBeInTheDocument();
+    expect(screen.queryByText(SERVICE_FORM.RESTART_LABEL)).not.toBeInTheDocument();
+    expect(intentNow()).not.toHaveProperty("service");
+  });
+
+  it("turns on with a restart on failure, then names a port with the check's defaults and a path", async () => {
+    show(SCRIPT);
+    await poolSelect();
+    await userEvent.click(toggle());
+    expect(intentNow().service).toEqual({ restart: "on_failure" });
+    expect(screen.getByLabelText(SERVICE_FORM.PATH_LABEL)).toBeDisabled();
+    expect(screen.getByText(SERVICE_FORM.PORT_HELP)).toBeInTheDocument();
+    expect(screen.getByText(SERVICE_FORM.PATH_HELP)).toBeInTheDocument();
+    setField(screen.getByLabelText(SERVICE_FORM.PORT_LABEL), "8080");
+    expect(intentNow().service).toEqual({ restart: "on_failure", port: 8080, health: { interval_sec: 15, failure_threshold: 3 } });
+    setField(screen.getByLabelText(SERVICE_FORM.PATH_LABEL), "/healthz");
+    setField(screen.getByLabelText(SERVICE_FORM.EVERY_LABEL), "30");
+    setField(screen.getByLabelText(SERVICE_FORM.FAILURES_LABEL), "5");
+    expect(intentNow().service).toEqual({ restart: "on_failure", port: 8080, health: { path: "/healthz", interval_sec: 30, failure_threshold: 5 } });
+    expect(screen.getByText(SERVICE_FORM.SECONDS)).toBeInTheDocument();
+    expect(screen.getByText(SERVICE_FORM.FAILED_CHECKS)).toBeInTheDocument();
+  });
+
+  it("chooses Don't restart, and clearing the port takes the health check with it", async () => {
+    show({ ...SCRIPT, service: { restart: "on_failure", port: 8080, health: { path: "/healthz", interval_sec: 15, failure_threshold: 3 } } });
+    await poolSelect();
+    await userEvent.click(screen.getByRole("button", { name: SERVICE_FORM.RESTART_NEVER }));
+    expect(intentNow().service?.restart).toBe("never");
+    expect(screen.getByRole("button", { name: SERVICE_FORM.RESTART_ON_FAILURE })).toHaveAttribute("aria-pressed", "false");
+    setField(screen.getByLabelText(SERVICE_FORM.PORT_LABEL), "");
+    expect(intentNow().service).toEqual({ restart: "never" });
+  });
+
+  it("is not offered for an agent task, an application server, or a virtual machine", async () => {
+    show({ shape: "application", experience: "interactive", startup: { kind: "command", command: "npm run dev" }, inline_policy: { ui_apps: [{ name: "web", port: 3000, path: "/" }] } });
+    await poolSelect();
+    expect(screen.queryByRole("switch", { name: SERVICE_FORM.LABEL })).not.toBeInTheDocument();
+    cleanup();
+    show({ ...SCRIPT, machine_kind: "linux_vm" });
+    await poolSelect();
+    expect(screen.queryByRole("switch", { name: SERVICE_FORM.LABEL })).not.toBeInTheDocument();
   });
 });

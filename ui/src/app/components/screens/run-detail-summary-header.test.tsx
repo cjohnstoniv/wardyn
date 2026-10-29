@@ -851,3 +851,31 @@ describe("SummaryHeader — a scheduled run's badge", () => {
     expect(screen.getByText("Queued")).toBeInTheDocument();
   });
 });
+
+describe("SummaryHeader — a live service's badge", () => {
+  const svc = (over: Partial<AgentRun> = {}): AgentRun => ({
+    ...runningInteractive, interactive: false, service: { restart: "on_failure" },
+    service_status: { health: "unhealthy", reason: "restarting", restarts: 3, observed_at: aheadByHours(-0.01) }, ...over,
+  });
+  const show = (run: AgentRun) =>
+    renderHeader(
+      <OperatorProvider operator={true}>
+        <SummaryHeader run={run} terminal={false} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+
+  it("carries the list's chip: the health word, the restarts and the warning tone, with no Interactive chip", () => {
+    show(svc());
+    expect(screen.getByText("Unhealthy · 3 restarts").closest("span[class*='rounded']")?.className).toMatch(/warning/);
+    expect(screen.queryByText("Running")).toBeNull();
+    expect(screen.queryByText("Interactive")).toBeNull();
+  });
+
+  it("reads Starting before the first health read, and plain Running for a run that is not a service", () => {
+    show(svc({ service_status: undefined }));
+    expect(screen.getByText("Starting")).toBeInTheDocument();
+    cleanup();
+    show(svc({ service: undefined, service_status: undefined }));
+    expect(screen.getByText("Running")).toBeInTheDocument();
+  });
+});

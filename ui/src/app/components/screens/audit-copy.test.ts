@@ -69,3 +69,23 @@ describe("AWS signing line", () => {
     expect(describeTabAction(ev("run.aws_cli.configure", "c1"))).toBe("Configured the AWS CLI for the run");
   });
 });
+
+// Mock r15 T2-f: the service's rows, and the lease renewal's reason.
+describe("service audit rows", () => {
+  it("names the health and restart rows on the Audit screen and the run's Audit tab", () => {
+    expect(describeAction(ev("run.service.health", "r1"))).toBe("Service health changed");
+    expect(describeTabAction(ev("run.service.health", "r1"))).toBe("Service health changed");
+    expect(describeAction(ev("run.service.restart", "r1"))).toBe("Restarted the service");
+    expect(describeTabAction(ev("run.service.restart", "r1"))).toBe("Restarted the service");
+  });
+
+  it("words a run.end.set row by its reason, and leaves any other reason as the raw action", () => {
+    const renewed = ev("run.end.set", "r1", { data: { reason: "service_renewed" } });
+    expect(AUDIT.SERVICE_RENEWED).toBe("renewed the service's lease");
+    expect(describeAction(renewed)).toBe("Renewed the service's lease");
+    expect(describeTabAction(renewed)).toBe("Renewed the service's lease");
+    expect(describeEvent(renewed)).toBe("Renewed the service's lease — r1");
+    expect(describeAction(ev("run.end.set", "r1", { data: { reason: "limits_reclamped" } }))).toBe("run.end.set");
+    expect(describeTabAction(ev("run.end.set", "r1"))).toBe("run.end.set");
+  });
+});
