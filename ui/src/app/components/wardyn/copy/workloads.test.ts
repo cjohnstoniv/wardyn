@@ -27,8 +27,8 @@ describe("workload canon strings", () => {
 
   it("the drawer", () => {
     const W = WORKLOADS;
-    expect([W.GENERATION, W.DIGEST, W.CURRENT_RUN, W.LAST_REFUSAL, W.SPEC, W.RESTART, W.DELETE]).toEqual([
-      "Generation", "Digest", "Current run", "Last refusal", "Spec", "Restart", "Delete",
+    expect([W.GENERATION, W.DIGEST, W.CURRENT_RUN, W.INBOUND_ADDRESS, W.LAST_REFUSAL, W.SPEC, W.RESTART, W.DELETE]).toEqual([
+      "Generation", "Digest", "Current run", "Inbound address", "Last refusal", "Spec", "Restart", "Delete",
     ]);
     expect(digestShort("9f1c4e5d2b7a3c8e0f6a1b9d4c7e2a5b8f3d6c9e1a4b7d0f3c6e9a2b5d8a07b")).toBe("sha256:9f1c4e…a07b");
     expect([W.HISTORY, W.HISTORY_GEN(4), W.HISTORY_LAUNCHED, W.HISTORY_ENDED, W.HISTORY_REFUSED]).toEqual([

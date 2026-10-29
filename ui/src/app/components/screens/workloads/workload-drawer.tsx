@@ -6,11 +6,13 @@
 // The Workloads screen's detail drawer (mock r16 T3-a): the spec, its generation, the current run and the last
 // refusal, with Restart and Delete. A custom resource's workload has one writer, Git: Delete is hidden and the
 // drawer says where to change it. The last refusal is a plain sentence with its code in small print (owner
-// answer q12). The mock's Inbound address row has no field on the wire yet, so it is not drawn.
+// answer q12). Digest, Inbound address and History are the rows owner answer q3 adopted: the address is the
+// current run's own, built as the run page builds it, and it changes when a new run replaces the old one.
 import * as React from "react";
 import { GitBranch, RotateCcw, Trash2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
+import { health as healthApi } from "../../../lib/api/health";
 import { runs } from "../../../lib/api/runs";
 import { workloads } from "../../../lib/api/workloads";
 import { getErrorMessage } from "../../../lib/format";
@@ -23,6 +25,7 @@ import { agoShort, digestShort, WORKLOADS as W } from "../../wardyn/copy/workloa
 import { runPath, type ConsoleView } from "../../wardyn/console-view";
 import { YamlBlock } from "../../wardyn/yaml-block";
 import { ConfirmDialog } from "../runners/confirm-dialog";
+import { inboundAddress } from "../run-detail/ui-app-row";
 import { refusedNow, WorkloadBadge } from "./workload-state";
 
 /** The document a workload was applied as, which the Spec shows read-only. */
@@ -45,21 +48,36 @@ const Row = ({ label, children }: { label: string; children: React.ReactNode }) 
   </div>
 );
 
-/** When the current run started, read from the run itself; the id alone shows until (or unless) the run is read. */
-function useRunStart(runId: string | undefined): string | undefined {
-  const [started, setStarted] = React.useState<{ id: string; at: string } | null>(null);
+/** The current run as the drawer reads it: when it started and the inbound addresses its apps are called at. */
+function useRunFacts(runId: string | undefined): { startedAt?: string; addresses: string[] } {
+  const [run, setRun] = React.useState<{ id: string; at: string; inbound: string[] } | null>(null);
+  const [template, setTemplate] = React.useState<string | undefined>(undefined);
+  const inbound = run && run.id === runId ? run.inbound : [];
   React.useEffect(() => {
     if (!runId) return;
     let live = true;
     runs
       .getRun(runId)
-      .then((r) => live && r && setStarted({ id: runId, at: r.created_at }))
+      .then((r) => live && r && setRun({ id: runId, at: r.created_at, inbound: (r.ui_apps ?? []).filter((a) => a.inbound).map((a) => a.name) }))
       .catch(() => undefined);
     return () => {
       live = false;
     };
   }, [runId]);
-  return started && started.id === runId ? started.at : undefined;
+  // The template is the deployment's, read only for a run that has an inbound app to address.
+  const wantTemplate = inbound.length > 0;
+  React.useEffect(() => {
+    if (!wantTemplate) return;
+    let live = true;
+    void healthApi.health().then((h) => live && setTemplate(h.ui_sandbox?.inbound_url_template));
+    return () => {
+      live = false;
+    };
+  }, [wantTemplate]);
+  return {
+    startedAt: run && run.id === runId ? run.at : undefined,
+    addresses: runId && template ? inbound.map((app) => inboundAddress(template, runId, app)) : [],
+  };
 }
 
 /** The workload's history, read again when its spec or its run changes. A failed read is no history. */
@@ -106,7 +124,7 @@ export function WorkloadDrawer({
 }) {
   const [busy, setBusy] = React.useState(false);
   const [deleting, setDeleting] = React.useState(false);
-  const startedAt = useRunStart(workload?.run_id);
+  const { startedAt, addresses } = useRunFacts(workload?.run_id);
   const history = historyRows(useHistory(workload));
   if (!workload) return null;
   const w = workload;
@@ -167,6 +185,15 @@ export function WorkloadDrawer({
                     {w.run_id.slice(0, 8)}
                   </Link>
                   {startedAt && <> · {W.STARTED(agoShort(startedAt, now))}</>}
+                </Row>
+              )}
+              {addresses.length > 0 && (
+                <Row label={W.INBOUND_ADDRESS}>
+                  {addresses.map((a) => (
+                    <p key={a}>
+                      <Mono className="text-xs text-foreground">{a}</Mono>
+                    </p>
+                  ))}
                 </Row>
               )}
               {refusal && (

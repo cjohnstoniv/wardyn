@@ -20,7 +20,8 @@ export interface InboundFacts {
   inbound_url_template?: string;
 }
 
-const fill = (template: string, run: string, app: string) =>
+/** Where an API client calls an inbound app: /healthz's inbound_url_template with {run} and {app} filled in. */
+export const inboundAddress = (template: string, run: string, app: string) =>
   template.split("{run}").join(encodeURIComponent(run)).split("{app}").join(encodeURIComponent(app));
 
 export function UIAppRow({
@@ -44,7 +45,7 @@ export function UIAppRow({
 }) {
   const callers = app.callers ?? [];
   const link = `${window.location.origin}${basePath()}/open/${encodeURIComponent(runId)}/${encodeURIComponent(app.name)}`;
-  const address = facts?.inbound_url_template ? fill(facts.inbound_url_template, runId, app.name) : "";
+  const address = facts?.inbound_url_template ? inboundAddress(facts.inbound_url_template, runId, app.name) : "";
   const copyButton = "gap-1.5 " + buttonVariants({ variant: "outline", size: "sm" });
   return (
     <div className="mt-3 border-t border-border pt-3 first-of-type:border-t-0 first-of-type:pt-0" data-testid={`ui-app-${app.name}`}>

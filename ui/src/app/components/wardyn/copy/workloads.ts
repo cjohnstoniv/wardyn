@@ -40,6 +40,7 @@ export const WORKLOADS = {
   GENERATION: "Generation",
   DIGEST: "Digest",
   CURRENT_RUN: "Current run",
+  INBOUND_ADDRESS: "Inbound address",
   STARTED: (ago: string) => `started ${ago}`,
   LAST_REFUSAL: "Last refusal",
   /** "Generation 3 · <sentence> · the previous run kept running." The code follows in small print. */

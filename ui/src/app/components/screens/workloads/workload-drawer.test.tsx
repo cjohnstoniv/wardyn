@@ -4,7 +4,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { Workload } from "../../../lib/types/workloads";
 import { WORKLOADS as W } from "../../wardyn/copy/workloads";
@@ -12,6 +12,8 @@ import { WorkloadDrawer } from "./workload-drawer";
 
 const getRun = vi.fn();
 vi.mock("../../../lib/api/runs", () => ({ runs: { getRun: (id: string) => getRun(id) } }));
+const health = vi.fn();
+vi.mock("../../../lib/api/health", () => ({ health: { health: () => health() } }));
 const history = vi.fn();
 vi.mock("../../../lib/api/workloads", () => ({
   workloads: { restart: vi.fn(), remove: vi.fn(), history: (name: string, owner?: string) => history(name, owner) },
@@ -48,6 +50,7 @@ function open(w: Workload) {
 beforeEach(() => {
   getRun.mockResolvedValue({ id: RUN, created_at: ago(2 * D) });
   history.mockResolvedValue([]);
+  health.mockResolvedValue({ status: "ok", ui_sandbox: { inbound_url_template: "https://{run}.apps.example.com/r/{run}/{app}/" } });
 });
 afterEach(() => {
   cleanup();
@@ -97,5 +100,36 @@ describe("WorkloadDrawer history", () => {
     open(workload());
     await screen.findByText(/started/);
     expect(screen.queryByText(W.HISTORY)).toBeNull();
+  });
+});
+
+describe("WorkloadDrawer inbound address", () => {
+  it("shows the current run's address, built from /healthz's template as the run page builds it", async () => {
+    getRun.mockResolvedValue({
+      id: RUN,
+      created_at: ago(2 * D),
+      ui_apps: [{ name: "api", port: 8080, inbound: true }, { name: "admin", port: 9090 }],
+    });
+    open(workload());
+    expect(await screen.findByText(`https://${RUN}.apps.example.com/r/${RUN}/api/`)).toBeInTheDocument();
+    expect(screen.getByText(W.INBOUND_ADDRESS)).toBeInTheDocument();
+    expect(screen.queryByText(/\/admin\//)).toBeNull();
+  });
+
+  it("draws no address for a run with no inbound app, and does not ask /healthz", async () => {
+    getRun.mockResolvedValue({ id: RUN, created_at: ago(2 * D), ui_apps: [{ name: "admin", port: 9090 }] });
+    open(workload());
+    await screen.findByText(/started/);
+    expect(screen.queryByText(W.INBOUND_ADDRESS)).toBeNull();
+    expect(health).not.toHaveBeenCalled();
+  });
+
+  it("draws no address when the deployment publishes no template", async () => {
+    getRun.mockResolvedValue({ id: RUN, created_at: ago(2 * D), ui_apps: [{ name: "api", port: 8080, inbound: true }] });
+    health.mockResolvedValue({});
+    open(workload());
+    await screen.findByText(/started/);
+    await waitFor(() => expect(health).toHaveBeenCalled());
+    expect(screen.queryByText(W.INBOUND_ADDRESS)).toBeNull();
   });
 });
