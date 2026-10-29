@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Your account → Your walls (T4-a, owner-approved board R15). The canon strings are byte-equal to the
+// Settings → Your walls (T4-a, owner-approved board R15). The canon strings are byte-equal to the
 // board and pinned by personal-walls.test.ts; the four marked "not on the board" are the card's own
 // failure and accessibility words. The card is imported directly by the lazy account screen.
 

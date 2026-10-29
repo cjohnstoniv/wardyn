@@ -56,7 +56,7 @@ const CANON: [id: string, actual: string, canon: string][] = [
   ["T4-c09", WHY_CARD.PERSONAL, "Your walls"],
   ["T4-c10", WHY_CARD.OWNER, "Owner"],
   ["T4-c11", WHY_CARD.CAN_CHANGE, "Can change"],
-  ["T4-c12", WHY_CARD.CAN_CHANGE_PERSONAL, "You can, on Your account."],
+  ["T4-c12", WHY_CARD.CAN_CHANGE_PERSONAL, "You can, in Settings."],
   ["T4-c13", WHY_CARD.COPY_DETAILS, "Copy details"],
 ];
 

@@ -22,7 +22,7 @@ export const WHY_CARD = {
   // sees whose they are.
   PERSONAL: "Your walls",
   PERSONAL_OTHER: (owner: string) => `${owner}'s walls`,
-  CAN_CHANGE_PERSONAL: "You can, on Your account.",
+  CAN_CHANGE_PERSONAL: "You can, in Settings.",
   CAN_CHANGE_NOT_HERE: "Not from here. The owner can.",
   ENFORCED_AT_ATTACH: "By Wardyn, before the terminal opens",
   NO_WAY_TO_ASK: (owner: string) => `No way to ask is listed. Contact ${owner} directly.`,

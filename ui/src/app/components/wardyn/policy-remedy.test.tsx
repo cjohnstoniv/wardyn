@@ -80,12 +80,12 @@ describe("PolicyRemedy", () => {
         </OperatorProvider>,
       );
 
-    it("reads Your walls, the owner and You can, on Your account. to the owner", () => {
+    it("reads Your walls, the owner and You can, in Settings. to the owner", () => {
       as("ana@example.com");
       const card = screen.getByTestId("policy-remedy");
       expect(card).toHaveTextContent("Set byYour walls");
       expect(card).toHaveTextContent("Ownerana@example.com");
-      expect(card).toHaveTextContent("Can changeYou can, on Your account.");
+      expect(card).toHaveTextContent("Can changeYou can, in Settings.");
       expect(card).not.toHaveTextContent("names no owner");
     });
 

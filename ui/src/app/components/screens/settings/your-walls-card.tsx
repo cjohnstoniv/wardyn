@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Your account: the Your walls card (T4-a, owner-approved board R15). One private document per
+// Settings: the Your walls card (T4-a, owner-approved board R15). One private document per
 // person, read and written whole at /me/walls. Every knob only narrows what the organisation allows;
 // none the person leaves out is a limit. The card is absent for a caller who is no person (the admin
 // token, local mode) and where the store keeps no personal settings (walls.ts's wallsAbsent).
