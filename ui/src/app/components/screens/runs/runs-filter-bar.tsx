@@ -344,7 +344,7 @@ function FiltersSheet({
         )}
         {saving && <SaveViewForm onSave={onSaveView} onClose={() => setSaving(false)} />}
         <div className="mt-1 flex items-center gap-2.5">
-          <Button type="button" variant="ghost" size="lg" onClick={() => onChange({ ...DEFAULT_RUNS_FILTERS, q: filters.q })}>
+          <Button type="button" variant="ghost" size="lg" onClick={() => onChange({ ...DEFAULT_RUNS_FILTERS, q: filters.q, segment: filters.segment })}>
             {RUNS_FILTERS_SHEET.CLEAR}
           </Button>
           <SheetClose asChild>

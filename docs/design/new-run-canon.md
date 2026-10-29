@@ -102,7 +102,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `AGENT_TITLE` | mock | Agent task |
 | `AGENT_BODY` | mock | A one-time coding task, driven by you or running autonomously. |
 | `AGENT_SUB` | mock | Interactive · Autonomous |
-| `ENV_TITLE` | mock | Environment sandbox |
+| `ENV_TITLE` | mock | Environment |
 | `ENV_BODY` | mock | A reusable workspace for development, analysis or investigation. |
 | `ENV_SUB` | pending (A18) | Interactive · Your drive is attached when you have one |
 | `APP_TITLE` | mock | Application sandbox |
@@ -165,7 +165,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `APP_PORT_ARIA(who)` | deviation (lead wording 2026-10-20, APP-UI-2) | Port for {who} |
 | `APP_PATH_ARIA(who)` | deviation (lead wording 2026-10-20, APP-UI-2) | Path for {who} |
 | `APP_REMOVE_ARIA(who)` | deviation (lead wording 2026-10-20, APP-UI-2) | Remove {who} |
-| `APP_TERMINAL_NOTE` | mock | The sandbox also has a terminal, as an Environment sandbox does. |
+| `APP_TERMINAL_NOTE` | mock | The sandbox also has a terminal, as an Environment does. |
 | `COMMAND_LABEL` | mock | Command |
 | `COMMAND_HELP` | mock | Run verbatim in the sandbox. The run ends when the command exits. |
 | `COMMAND_REQUIRED` | deviation (lead wording 2026-10-17, FR-0099) | A command run needs a command to run. |
@@ -821,7 +821,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `GROUP_LIMITS` | mock | Limits |
 | `VALUE_AGENT` | mock | Agent task |
 | `VALUE_APPLICATION` | mock | Application sandbox |
-| `VALUE_ENVIRONMENT` | mock | Environment sandbox |
+| `VALUE_ENVIRONMENT` | mock | Environment |
 | `TIMING_APPLICATION` | mock | Background automation · Runs when launched |
 | `TIMING_APPLICATION_SERVER` | mock | Application server · Starts when launched |
 | `APP_PORT(port)` | mock | Port {port} |

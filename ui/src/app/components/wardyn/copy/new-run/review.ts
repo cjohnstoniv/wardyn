@@ -50,7 +50,7 @@ export const NR_REVIEW = {
   GROUP_LIMITS: "Limits",
   VALUE_AGENT: "Agent task",
   VALUE_APPLICATION: "Application sandbox",
-  VALUE_ENVIRONMENT: "Environment sandbox",
+  VALUE_ENVIRONMENT: "Environment",
   TIMING_APPLICATION: "Background automation · Runs when launched",
   TIMING_APPLICATION_SERVER: "Application server · Starts when launched",
   APP_PORT: (port: string | number) => `Port ${port}`,

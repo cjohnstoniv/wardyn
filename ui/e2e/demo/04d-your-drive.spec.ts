@@ -386,7 +386,7 @@ test.beforeAll(async () => {
 
 /**
  * The member's terminal-run recipe up to Files, where the drive's card lives:
- * Start, Environment sandbox (the old Terminal), then Fence on Run and the
+ * Start, Environment (the old Terminal), then Fence on Run and the
  * optional Harnesses step passed by. The guided flow sets the order, so the
  * title and the policy come later, in `memberRunLaunch`.
  *
