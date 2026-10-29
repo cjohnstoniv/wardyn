@@ -59,7 +59,8 @@ CREATE INDEX IF NOT EXISTS workloads_source_pool_idx ON workloads (source_pool_i
 -- A namespace binding: the custom resources of one Kubernetes namespace, on the runners of one pool,
 -- launch as a service identity. It is the only authority such a resource has. sponsor is the identity's
 -- sponsor when the binding was made; a new sponsor, a suspended or retired identity, or the sponsor's
--- cut sessions end it as authority without removing the row. A pool's deletion removes its bindings.
+-- revoked access (a session-only sign-out does not count) ends it as authority without removing the
+-- row. A pool's deletion removes its bindings.
 --
 -- Split-role installs grant the app role SELECT, INSERT, UPDATE, DELETE on it (CHANGELOG, Before you
 -- upgrade).

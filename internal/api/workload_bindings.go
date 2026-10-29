@@ -20,8 +20,9 @@ import (
 // Workload bindings: "the custom resources of namespace N, on the runners of pool P, launch as service
 // identity S". A binding is standing authority over S, so it is the security tier's to make, applied
 // directly and audited as a token move is, and a signed-in person's alone: no API token makes one. It
-// records S's sponsor; a new sponsor, a suspended or retired S, or the sponsor's cut sessions end it as
-// authority (the custom-resource path checks), and retiring S deletes it.
+// records S's sponsor; a new sponsor, a suspended or retired S, or the sponsor's revoked access (a
+// session-only sign-out does not count) ends it as authority (the custom-resource path checks), and
+// retiring S deletes it.
 
 // workloadNamespaceRE is a Kubernetes namespace: a DNS label (the schema's own check).
 var workloadNamespaceRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)

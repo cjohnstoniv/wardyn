@@ -78,7 +78,7 @@ claim still recomputes.
 
 **Verbs:** `add` `admit` `alert` `allow` `apply` `approve` `attach` `authenticate` `authorize` `autostop` `begin` `block` `build` `bypass` `cancel` `capture` `claim` `close` `coalesce` `collide` `complete` `configure` `confine` `connect` `create` `deactivate` `decide` `delete` `deny` `deprovision` `detach` `disconnect` `dispatch` `drop` `ending_soon` `enrol` `erase` `exchange` `exec` `expire` `fail` `finalize` `forward` `grant` `hold` `ingest` `inject` `kill` `launch` `list` `member_remove` `migrate` `mint` `mount` `open` `park` `pause` `ping` `promote` `propose` `read` `reassert` `reassign` `reclaim` `reconcile` `record` `redirect` `refresh` `refuse` `rehearse` `reject` `rekey` `renew` `replace` `request` `reset` `restart` `resolve` `resume` `retire` `revive` `revoke` `rewrap` `scan` `seed` `selftest` `set` `skip` `snapshot` `start` `store` `sweep` `synthesize` `takeover` `test` `transfer` `unbind` `update` `upload` `veto` `write`
 
-Twenty-two exceptions, listed in that test's `auditActionGrammarAllow`:
+Twenty-three exceptions, listed in that test's `auditActionGrammarAllow`:
 
 - `authz.denied` keeps its past tense (see ["Renamed in 0.8"](#renamed-in-08) below for why — the single heaviest-cited action in the tree and a compatibility surface OPERATIONS.md already commits to by name).
 - `run.ended`, `run.ended.expired` (the lease's end-of-run rows, #568) and `auth.signin_unserialized` (the sign-in lock's no-capacity row) landed on main after this grammar did.
