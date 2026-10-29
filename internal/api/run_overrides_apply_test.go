@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -513,5 +515,51 @@ func TestOverrides_AllowAllEgressFalseIsANarrowing(t *testing.T) {
 	applyRunEgressOverrides(&spec, eg, e)
 	if len(e.rows) != 0 || e.applied.Egress != nil {
 		t.Errorf("a closed spec recorded an edit: %+v %+v", e.rows, e.applied)
+	}
+}
+
+// ovPresetStore is the overrides fixture's store with one launch preset.
+type ovPresetStore struct {
+	*pvStore
+	preset types.LaunchPreset
+}
+
+func (s *ovPresetStore) GetLaunchPreset(_ context.Context, name string) (types.LaunchPreset, error) {
+	if name != s.preset.Name {
+		return types.LaunchPreset{}, store.ErrNotFound
+	}
+	return s.preset, nil
+}
+
+// allow_all_egress false narrows an open deployment default policy too, both asked for in the
+// request itself and carried by a preset's stored request, which expands into the same door.
+func TestRunEgressOverrides_FalseClosesTheDefaultAndAPresetBase(t *testing.T) {
+	srv, st := ovMemberFixture(t)
+	st.capStore.govProfile, st.capStore.govHasGroupTier = nil, false // unassigned: the deployment default is the base
+	open := govDeployment()
+	open.AllowAllEgress = true
+	srv.cfg.DefaultPolicy = open
+	off := `{"egress":{"allow_all_egress":false}}`
+	srv.cfg.Store = &ovPresetStore{pvStore: st, preset: types.LaunchPreset{Name: "closed-egress", Version: 1,
+		Request: json.RawMessage(`{"agent":"claude-code","overrides":` + off + `}`)}}
+	person := provSource{Kind: provKindPerson}
+	for name, body := range map[string]string{
+		"request": `{"agent":"claude-code","task":"t","overrides":` + off + `}`,
+		"preset":  `{"preset":"closed-egress","task":"t"}`,
+	} {
+		w := doSSO(t, srv, http.MethodPost, previewDoor, ovCookie(t), body)
+		var pv policyPreviewResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &pv); err != nil || w.Code != http.StatusOK {
+			t.Fatalf("%s: %d %v: %s", name, w.Code, err, w.Body.String())
+		}
+		if pv.Spec.AllowAllEgress {
+			t.Errorf("%s: allow_all_egress false left the default's open egress on: %+v", name, pv.Spec)
+		}
+		if !provHas(pv.Provenance, "allow_all_egress", "false", person, provEffectNarrowed) {
+			t.Errorf("%s: the narrowing is not recorded as the person's: %+v", name, pv.Provenance)
+		}
+		if pv.Source.PolicyID != nil {
+			t.Errorf("%s: source = %+v, want the deployment default", name, pv.Source)
+		}
 	}
 }
