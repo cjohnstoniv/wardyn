@@ -137,7 +137,7 @@ wardyn workload binding create --pool <pool> --namespace team-a --service web-bo
 - The organisation finds a binding through the reporting runner's own pools. If a runner is in two pools that bind one namespace, the older binding wins.
 - A resource may name a `runner_pool_id` in its intent, but only the bound pool's. The binding chooses the pool.
 
-The binding stops being authority when any of these happens. The spec is still recorded, nothing launches, and a running run keeps running.
+The binding stops being authority when any of these happens. The spec is still recorded, nothing launches, a resource's delete or a full list removes no workload, and a running run keeps running.
 
 | Cause | Result |
 |---|---|
