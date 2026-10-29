@@ -772,14 +772,14 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 	s.mountInvitationRoutes(r, securityOps)
 	s.mountServiceIdentityRoutes(r, securityOps)
 	s.mountSCIMStatusRoute(securityOps)
-	// Run-detail widget layout: per-user, per-preset, server-synced so a
-	// layout survives a new machine (localStorage would not). Scoped to
-	// the caller's OWN principal at the store, exactly like the ssh-keys
-	// block above — never a principal taken from the body.
+	// Run-detail widget layout: per-user, per-preset, server-synced so a layout survives a new
+	// machine (localStorage would not). Scoped to the caller's OWN principal at the store, exactly
+	// like the ssh-keys block above — never a principal taken from the body.
 	r.Get("/me/run-layout", s.handleGetRunLayout)
 	// The caller's own kept launch setups, newest first (launch_intent.go).
 	r.Get("/me/launch-intents", s.handleListLaunchIntents)
 	r.Put("/me/run-layout", s.handlePutRunLayout)
+	s.mountPersonalWallsRoutes(r) // the caller's own walls, keyed by their session (personal_walls.go)
 	// Per-user Azure DevOps sign-in (ado_entra.go): two browser doors that
 	// capture ONE PERSON'S Azure DevOps refresh token. It belongs in this
 	// self-service block and nowhere else — both doors refuse a caller with no

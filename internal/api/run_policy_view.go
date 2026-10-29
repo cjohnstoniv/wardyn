@@ -60,6 +60,9 @@ type policySourceRecord struct {
 	// Overlay is the keys a policy_overlay laid onto Spec, the default it
 	// started from (run_policy_overlay.go); never its values.
 	Overlay []string `json:"overlay,omitempty"`
+	// PersonalWalls is what the launching person's own walls narrowed, set only
+	// when they narrowed something (personal_walls.go).
+	PersonalWalls *wallsSourceRecord `json:"personal_walls,omitempty"`
 	// edits stays in memory: the person's provenance rows for this request.
 	edits *overrideEdits
 	// overlaid stays in memory: Spec with the overlay laid on, before the clamp.
