@@ -7,7 +7,7 @@
 // literal the mock draws against the key that renders it. A copy change is a change to this table.
 import { describe, expect, it } from "vitest";
 import { DISPOSITION, MINTED } from "./credentials";
-import { dayOf, inWords, INVITATIONS, lifetimeWords, ROLE_WORDS, SERVICES, TOKEN_DIALOG } from "./service-tokens";
+import { dayOf, inWords, INVITATIONS, lifetimeWords, OWN_TOKENS, ROLE_WORDS, SERVICES, TOKEN_DIALOG } from "./service-tokens";
 
 const NOW = Date.parse("2026-10-12T09:00:00Z");
 const at = (ms: number) => new Date(NOW + ms).toISOString();
@@ -78,6 +78,21 @@ describe("Service identities I sponsor card", () => {
     ["Token minted.", SERVICES.MINTED_TOAST],
     ["Inbound only", SERVICES.INBOUND_ONLY],
   ])("%s", (mock, actual) => expect(actual).toBe(mock));
+});
+
+// Approved by the owner on 2026-10-29 (r17 T2-d): the card and its dialogs as built, character for character.
+describe("Your API tokens card", () => {
+  it.each<[string, string]>([
+    ["Your API tokens", OWN_TOKENS.TITLE],
+    ["No tokens", OWN_TOKENS.SUMMARY(0)],
+    ["2 active", OWN_TOKENS.SUMMARY(2)],
+    ["Loading your API tokens", OWN_TOKENS.LOADING],
+    ["Revoke laptop-cli", OWN_TOKENS.REVOKE_LABEL("laptop-cli")],
+    ["Revoke laptop-cli?", OWN_TOKENS.REVOKE_TITLE("laptop-cli")],
+    ["It stops working now. Anything using it is refused. You can mint another.", OWN_TOKENS.REVOKE_BODY],
+    ["Mint a token", TOKEN_DIALOG.OWN_MINT_TITLE],
+    ["The token acts as you. It is shown once.", TOKEN_DIALOG.OWN_MINT_LEDE],
+  ])("%s", (want, got) => expect(got).toBe(want));
 });
 
 describe("Token dialog", () => {
