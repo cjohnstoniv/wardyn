@@ -712,6 +712,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-runner-pkg-dry-run.sh
 	./scripts/test-pkg-postinstall.sh
 	./scripts/test-runner-limits.sh
+	./scripts/test-service-supervisor.sh
 	./scripts/test-stage-agent-binary.sh
 	./scripts/test-doc-form.sh
 	./scripts/test-doc-links.sh
