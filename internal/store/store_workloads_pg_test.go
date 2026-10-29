@@ -723,6 +723,48 @@ func TestPG_Workload_K8sStatusesCarryRunStateAndHealth(t *testing.T) {
 	}
 }
 
+// TestPG_Workload_ARunningReplacementWaitsForTheNext: generation 2 waited in its queue and is running when
+// generation 3 is recorded, before the sweep ended generation 1. Generation 2 serves, so it stays until
+// generation 3 runs; generation 1, which generation 2 took over from, is owed its end at once.
+func TestPG_Workload_ARunningReplacementWaitsForTheNext(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := t.Context()
+	r1 := persistRun(t, ctx, pool, newRun(types.RunRunning)).ID
+	r2 := persistRun(t, ctx, pool, newRun(types.RunQueued)).ID
+	r3 := persistRun(t, ctx, pool, newRun(types.RunQueued)).ID
+
+	w := mustPutWorkload(t, st, workloadPut("sub-a", "svc", "d1"))
+	if _, err := st.SetWorkloadRun(ctx, w.ID, mustClaim(t, st, w.ID), 1, r1); err != nil {
+		t.Fatal(err)
+	}
+	mustPutWorkload(t, st, workloadPut("sub-a", "svc", "d2"))
+	if prev, err := st.SetWorkloadRun(ctx, w.ID, mustClaim(t, st, w.ID), 2, r2); err != nil || prev != nil {
+		t.Fatalf("generation 2 recorded = %v, %v; want no run handed back", prev, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET state = 'RUNNING', admitted_at = now() WHERE id = $1`, r2); err != nil {
+		t.Fatal(err)
+	}
+	mustPutWorkload(t, st, workloadPut("sub-a", "svc", "d3"))
+	if prev, err := st.SetWorkloadRun(ctx, w.ID, mustClaim(t, st, w.ID), 3, r3); err != nil || prev != nil {
+		t.Fatalf("generation 3 recorded = %v, %v; want the running generation 2 kept", prev, err)
+	}
+	ends, err := st.ListWorkloadRunEnds(ctx, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[uuid.UUID]store.WorkloadRunEnd{}
+	for _, e := range ends {
+		got[e.RunID] = e
+	}
+	if e, ok := got[r2]; !ok || e.AfterRunID == nil || *e.AfterRunID != r3 {
+		t.Errorf("generation 2's owed end = %+v (owed %v), want it waiting on %s", e, ok, r3)
+	}
+	if e, ok := got[r1]; !ok || e.AfterRunID != nil {
+		t.Errorf("generation 1's owed end = %+v (owed %v), want it owed at once", e, ok)
+	}
+}
+
 // A person's erasure removes their workloads, and only theirs.
 func TestPG_Workload_ErasureDeletesTheOwnersWorkloads(t *testing.T) {
 	st := store.NewPG(runsPGPoolIsolated(t))

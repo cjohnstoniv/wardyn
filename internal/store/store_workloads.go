@@ -316,14 +316,22 @@ func (s PG) ClaimWorkloadLaunch(ctx context.Context, id uuid.UUID) (Workload, bo
 	return w, err == nil, err
 }
 
+// workloadRunRanSQL is whether the agent_runs row tbl took its slot: it holds one now (a state in the
+// array parameter states), or it was admitted from its queue and the start did not refuse it ("queue: "
+// status detail). A run that waited and ended without either never ran.
+func workloadRunRanSQL(tbl, states string) string {
+	return `(` + tbl + `.state = ANY(` + states + `) OR (` + tbl + `.admitted_at IS NOT NULL AND ` + tbl + `.status_detail NOT LIKE 'queue: %'))`
+}
+
 // SetWorkloadRun records that runID is the run of the workload's given generation, launched under claim: it
 // becomes the current run, the generation current, the last refusal is cleared and the claim released. It
 // returns the run it replaces, nil if there was none, for the caller to end; the same transaction records
 // that run as owed its end (WorkloadRunEnd), so an end the caller does not finish is still owed. When runID
-// waited in its pool's queue its start can still be refused, so the run it replaces is not handed back:
-// its owed end waits on runID (AfterRunID), and a run already waiting on the run it replaces waits on
-// runID instead. Unless what it replaces holds a slot in runID's pool: runID could not start while it
-// runs, so it is handed back to end now.
+// waited in its pool's queue its start can still be refused, so the run it replaces, while it runs, is not
+// handed back: its owed end waits on runID (AfterRunID). Unless it holds a slot in runID's pool: runID
+// could not start while it runs, so it is handed back to end now. A run it replaces that never ran is
+// handed back, and a run already waiting on it waits on runID instead; once it ran, that older run is owed
+// its end at once.
 // ErrNotFound when the workload is gone, and ErrWorkloadSuperseded when claim is no longer the workload's
 // (it lapsed and was taken again, or its holder already recorded) or that generation, or a later one, was
 // recorded first; the caller ends runID (OweWorkloadRunEnd).
@@ -354,31 +362,38 @@ func (s PG) SetWorkloadRun(ctx context.Context, id, claim uuid.UUID, generation 
 		if prev == nil || *prev == runID {
 			return nil
 		}
-		// runID waits on prev only when it waited in its queue and nothing it replaces holds a slot in
-		// its pool: a replacement queued behind its own workload's run could never start, so that run
-		// ends now (a replace in place, with a gap).
-		var waited bool
+		// prev serves while it holds a slot, and took over once it ran (workloadRunRanSQL). runID waits for
+		// the run that serves (prev, or else the older run that waited on prev) only when it waited in its
+		// queue and that run holds no slot in its pool: a replacement queued behind its own workload's run
+		// could never start, so that run ends now (a replace in place, with a gap).
+		var serving, ran, waited bool
+		if err := q.QueryRow(ctx, `SELECT state = ANY($2), `+workloadRunRanSQL("agent_runs", "$2")+` FROM agent_runs WHERE id = $1`,
+			*prev, slotHoldingStateNames()).Scan(&serving, &ran); err != nil {
+			return err
+		}
 		if err := q.QueryRow(ctx, `
 			SELECT (n.state = 'QUEUED' OR n.admitted_at IS NOT NULL) AND NOT EXISTS (
 				SELECT 1 FROM agent_runs o WHERE o.runner_pool_id = n.runner_pool_id AND o.state = ANY($3) AND `+HoldsSandboxSQL+`
-					AND (o.id = $2 OR o.id IN (SELECT run_id FROM workload_run_ends WHERE after_run_id = $2)))
-			FROM agent_runs n WHERE n.id = $1`, runID, *prev, slotHoldingStateNames()).Scan(&waited); err != nil {
+					AND CASE WHEN $4 THEN o.id = $2 ELSE o.id IN (SELECT run_id FROM workload_run_ends WHERE after_run_id = $2) END)
+			FROM agent_runs n WHERE n.id = $1`, runID, *prev, slotHoldingStateNames(), ran).Scan(&waited); err != nil {
 			return err
 		}
 		var after *uuid.UUID
 		if waited {
 			after = &runID
 		}
-		// An older run waiting on prev to start waits on runID now, or ends at once when runID did not wait.
-		tag, err := q.Exec(ctx, `UPDATE workload_run_ends SET after_run_id = $2 WHERE after_run_id = $1`, *prev, after)
-		if err != nil {
+		// An older run waiting on prev: prev took over from it once it ran, so it ends at once; while prev
+		// never ran, it waits on runID instead, or ends at once when runID did not wait.
+		waiters := after
+		if ran {
+			waiters = nil
+		}
+		if _, err := q.Exec(ctx, `UPDATE workload_run_ends SET after_run_id = $2 WHERE after_run_id = $1`, *prev, waiters); err != nil {
 			return err
 		}
 		end := WorkloadRunEnd{RunID: *prev, Owner: owner, Name: name, Generation: generation, Reason: WorkloadEndReplaced}
-		if waited && tag.RowsAffected() == 0 {
-			// prev is the run that is running: it ends once runID runs. prev, when an older run waited on it,
-			// never took over, and ends now.
-			end.AfterRunID, deferred = after, true
+		if serving && waited {
+			end.AfterRunID, deferred = after, true // prev ends once runID runs
 		}
 		return oweWorkloadRunEnd(ctx, q, end)
 	})
