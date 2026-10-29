@@ -101,6 +101,8 @@ export const SERVICES = {
   LOADING_TOKENS: "Loading tokens",
   LOAD_ERROR_LABEL: "Service identities",
   MINTED_TOAST: "Token minted.",
+  /** The list tag of a token that can only call inbound ports (r15 T2-d). */
+  INBOUND_ONLY: "Inbound only",
 } as const;
 
 export const TOKEN_DIALOG = {
@@ -111,6 +113,12 @@ export const TOKEN_DIALOG = {
   MINT_TITLE: (name: string) => `Mint a token for ${name}`,
   MINT_LEDE: (name: string) => `The token acts as ${name}, not as you. It is shown once.`,
   MINT_WARNING: (name: string) => `Anyone who holds the token can do what ${name} is allowed to do, which may be more than you can.`,
+  // r15 T2-d: what a minted token is for. The inbound help replaces MINT_WARNING, which says what the identity may do
+  // with the Wardyn API and so overclaims for a token that cannot use it.
+  USE_LABEL: "Use",
+  USE_API: "Wardyn API",
+  USE_INBOUND: "Calling inbound ports",
+  INBOUND_HELP: "An inbound token can call the ports that name you as a caller. It can't use the Wardyn API. It expires within 90 days.",
   NAME_LABEL: "Token name",
   NAME_HINT: "Helps you tell your tokens apart.",
   NAME_REQUIRED: "Name the token.",
