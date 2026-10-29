@@ -76,7 +76,7 @@ func TestRelayLogsADHCPDecline(t *testing.T) {
 	t.Cleanup(func() { _ = b.Close(); rl.Close() })
 
 	reason := "address in use"
-	opt := append([]byte{56, byte(len(reason))}, reason...)
+	opt := append([]byte{50, 4, 10, 0, 2, 15, 56, byte(len(reason))}, reason...)
 	if err := writeFrame(b, dhcpRequestFrame(dhcpDecline, 9, opt...)); err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestRelayLogsADHCPDecline(t *testing.T) {
 	}
 	rl.rep.flush()
 	got := log.String()
-	if !strings.Contains(got, "declined the DHCP lease") || !strings.Contains(got, reason) {
+	if !strings.Contains(got, "declined the DHCP lease") || !strings.Contains(got, reason) || !strings.Contains(got, `"address":"10.0.2.15"`) {
 		t.Fatalf("log has no DECLINE line with the guest's reason:\n%s", got)
 	}
 	if strings.Contains(got, "dhcp_unanswered") {
