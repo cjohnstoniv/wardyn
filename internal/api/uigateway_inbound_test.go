@@ -34,6 +34,35 @@ type uiTokenStore struct {
 	// lookupErr, when set, fails every lookup (failed counts them): the store cannot answer.
 	lookupErr error
 	failed    int
+	// runErr and policyErr, when set, fail every read of the run and of its policy's audit events.
+	runErr, policyErr error
+}
+
+func (s *uiTokenStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
+	s.mu.Lock()
+	err := s.runErr
+	s.mu.Unlock()
+	if err != nil {
+		return types.AgentRun{}, err
+	}
+	return s.uiMemStore.GetRun(ctx, id)
+}
+
+func (s *uiTokenStore) QueryAuditEvents(ctx context.Context, runID uuid.UUID, limit int) ([]types.AuditEvent, error) {
+	s.mu.Lock()
+	err := s.policyErr
+	s.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return s.uiMemStore.QueryAuditEvents(ctx, runID, limit)
+}
+
+// failReads makes every read of the run and of its policy fail with err (nil answers again).
+func (s *uiTokenStore) failReads(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.runErr, s.policyErr = err, err
 }
 
 // GetAPITokenByRaw answers as the store's lookup does: a revoked or expired token is no token.
@@ -260,6 +289,33 @@ func TestUIGateway_InboundRefusalsAreInboundDenies(t *testing.T) {
 		}
 		if n := len(h.audit.auditRows("inbound.allow", "success")) + len(h.audit.auditRows("ui.authorize", "denied")); n != 0 {
 			t.Errorf("%d inbound.allow or ui.authorize rows beside the inbound.deny; actions: %v", n, h.audit.actions())
+		}
+	})
+
+	// A store that cannot answer is no verdict on the caller: 503 run_unreadable, and no inbound.deny row.
+	t.Run("a run or policy that cannot be read is 503 and no row", func(t *testing.T) {
+		h, _ := inboundHarness(t)
+		h.srv.cfg.Store.(*uiTokenStore).failReads(errors.New("connection refused"))
+		if rec := h.call("wdn_alice", nil); rec.Code != http.StatusServiceUnavailable || respondedReason(t, rec) != reasonRunUnreadable {
+			t.Fatalf("call = %d %s, want 503 %s", rec.Code, rec.Body.String(), reasonRunUnreadable)
+		}
+		if rows := h.audit.auditRows("inbound.deny", "denied"); len(rows) != 0 {
+			t.Errorf("inbound.deny rows = %+v, want none", rows)
+		}
+		h.srv.cfg.Store.(*uiTokenStore).failReads(nil)
+		if rec := h.call("wdn_alice", nil); rec.Code != http.StatusOK {
+			t.Fatalf("call after the store answers = %d %s, want 200", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("a run the store does not hold is 404 inbound_not_found", func(t *testing.T) {
+		h, _ := inboundHarness(t)
+		h.srv.cfg.Store.(*uiTokenStore).runErr = store.ErrNotFound
+		if rec := h.call("wdn_alice", nil); rec.Code != http.StatusNotFound || respondedReason(t, rec) != reasonInboundNotFound {
+			t.Fatalf("call = %d %s, want 404 %s", rec.Code, rec.Body.String(), reasonInboundNotFound)
+		}
+		if !h.audit.hasDataValue("reason", inboundDenyNotFound) {
+			t.Errorf("no inbound.deny not_found; reasons: %s", h.audit.dataReasons())
 		}
 	})
 
@@ -604,6 +660,37 @@ func TestUIGateway_InboundStreamIsReadmitted(t *testing.T) {
 		}
 		if rows := h.audit.auditRows("inbound.deny", "denied"); len(rows) != 0 {
 			t.Errorf("inbound.deny rows = %+v, want none", rows)
+		}
+	})
+	t.Run("a failed read of the run keeps the stream", func(t *testing.T) {
+		h, gw := open(t)
+		conn, br := openInboundStream(t, h, gw, "wdn_alice")
+		tokens(h).failReads(errors.New("connection refused"))
+		time.Sleep(5 * every)
+		tokens(h).failReads(nil)
+		time.Sleep(5 * every)
+		if !echoes(conn, br) {
+			t.Fatal("a store blip on the run read closed the stream")
+		}
+		if rows := h.audit.auditRows("inbound.deny", "denied"); len(rows) != 0 {
+			t.Errorf("inbound.deny rows = %+v, want none", rows)
+		}
+	})
+	t.Run("reads of the run failing past the bound close the stream with a run_unreadable row", func(t *testing.T) {
+		h, gw := open(t)
+		conn, br := openInboundStream(t, h, gw, "wdn_alice")
+		tokens(h).failReads(errors.New("connection refused"))
+		time.Sleep(5 * every) // the first unanswerable re-admission is recorded, and rides out
+		if !echoes(conn, br) {
+			t.Fatal("one unanswerable re-admission closed the stream")
+		}
+		h.clock.advance(inboundResolveTTL)
+		if !closes(conn, br) {
+			t.Fatal("the stream outlived re-admissions unanswerable past the bound")
+		}
+		if rows := h.audit.auditRows("inbound.deny", "denied"); len(rows) != 1 || rows[0].Actor != h.owner ||
+			!h.audit.hasDataValue("reason", reasonRunUnreadable) || h.audit.hasDataValue("reason", inboundDenyNotFound) {
+			t.Errorf("inbound.deny rows = %+v, want one run_unreadable by %s and no not_found", rows, h.owner)
 		}
 	})
 	t.Run("lookups failing past the bound close the stream with a row", func(t *testing.T) {
