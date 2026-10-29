@@ -61,7 +61,11 @@ type SandboxSpec struct {
 	RunnerID string
 	// RunnerMaxRuns is that runner's max_runs when the create was sent: the runner refuses a create past
 	// it, a backstop to the control plane's own count. 0 sets no bound.
-	RunnerMaxRuns    int
+	RunnerMaxRuns int
+	// Namespace is the Kubernetes namespace a k8s runner creates the run in, from the run's pool
+	// membership; empty is the runner's default (first) namespace. A runner that does not serve it
+	// refuses the create (runs_namespace_not_served). Other substrates ignore it.
+	Namespace        string
 	Image            string // resolved agent/workspace OCI image
 	ConfinementClass types.ConfinementClass
 	// Env is non-secret environment. Credential material NEVER passes through

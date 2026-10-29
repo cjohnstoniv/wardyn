@@ -162,7 +162,7 @@ func TestSampleCPU_TheRealReadIsOneNamespacedGET(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := &Driver{clientset: cs, cfg: Config{Namespace: "runs-ns"}}
+	d := &Driver{clientset: cs, cfg: Config{Namespaces: []string{"runs-ns"}}}
 
 	got, err := d.SampleCPU(context.Background(), []string{"p"})
 	if err != nil || got["p"] != 30 {

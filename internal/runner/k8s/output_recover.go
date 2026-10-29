@@ -28,7 +28,11 @@ var _ runner.OutputRecoverer = (*Driver)(nil)
 // ctx bounds the whole read, the wait for a container that has not started yet
 // included.
 func (d *Driver) RecoverOutput(ctx context.Context, ref string, w io.Writer) error {
-	pods := d.clientset.CoreV1().Pods(d.cfg.Namespace)
+	ns, err := d.refNamespace(ctx, ref)
+	if err != nil {
+		return err
+	}
+	pods := d.clientset.CoreV1().Pods(ns)
 	for {
 		pod, err := pods.Get(ctx, ref, metav1.GetOptions{})
 		switch {

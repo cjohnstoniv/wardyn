@@ -55,25 +55,27 @@ func (c accessCheck) String() string {
 	return c.ns + "/" + r + ":" + c.verb
 }
 
-// runnerAccess lists every verb §4 grants: the server Role in the runs namespace plus pods: patch,
+// runnerAccess lists every verb §4 grants: the server Role in each runs namespace plus pods: patch,
 // secrets create/get/delete/deletecollection in runnerd's own namespace, and the ClusterRole's runtimeclasses: get
 // and nodes: list.
-func runnerAccess(runsNS, ownNS string) []accessCheck {
+func runnerAccess(runsNSs []string, ownNS string) []accessCheck {
 	var out []accessCheck
 	add := func(ns, group, resource string, verbs ...string) {
 		for _, v := range verbs {
 			out = append(out, accessCheck{ns, group, resource, v})
 		}
 	}
-	add(runsNS, "", "pods", "create", "get", "list", "delete", "deletecollection", "patch")
-	add(runsNS, "", "pods/ephemeralcontainers", "update")
-	add(runsNS, "", "pods/exec", "get", "create")
-	add(runsNS, "", "pods/log", "get")
-	add(runsNS, "", "secrets", "create", "delete", "deletecollection")
-	add(runsNS, "networking.k8s.io", "networkpolicies", "create", "list", "delete", "deletecollection")
-	add(runsNS, "", "events", "list")
-	add(runsNS, "metrics.k8s.io", "pods", "list")
-	add(runsNS, "", "resourcequotas", "list")
+	for _, runsNS := range runsNSs {
+		add(runsNS, "", "pods", "create", "get", "list", "delete", "deletecollection", "patch")
+		add(runsNS, "", "pods/ephemeralcontainers", "update")
+		add(runsNS, "", "pods/exec", "get", "create")
+		add(runsNS, "", "pods/log", "get")
+		add(runsNS, "", "secrets", "create", "delete", "deletecollection")
+		add(runsNS, "networking.k8s.io", "networkpolicies", "create", "list", "delete", "deletecollection")
+		add(runsNS, "", "events", "list")
+		add(runsNS, "metrics.k8s.io", "pods", "list")
+		add(runsNS, "", "resourcequotas", "list")
+	}
 	add(ownNS, "", "secrets", "create", "get", "delete", "deletecollection")
 	add("", "node.k8s.io", "runtimeclasses", "get")
 	add("", "", "nodes", "list")
@@ -84,7 +86,7 @@ func runnerAccess(runsNS, ownNS string) []accessCheck {
 // naming each one not granted (§3.4 item 2).
 func (d *Driver) CheckRunnerAccess(ctx context.Context, ownNS string) error {
 	var missing []string
-	for _, c := range runnerAccess(d.cfg.Namespace, ownNS) {
+	for _, c := range runnerAccess(d.cfg.Namespaces, ownNS) {
 		sar := &authorizationv1.SelfSubjectAccessReview{Spec: authorizationv1.SelfSubjectAccessReviewSpec{
 			ResourceAttributes: &authorizationv1.ResourceAttributes{Namespace: c.ns, Group: c.group, Resource: c.resource, Verb: c.verb},
 		}}
@@ -105,12 +107,22 @@ func (d *Driver) CheckRunnerAccess(ctx context.Context, ownNS string) error {
 	return nil
 }
 
-// CheckForeignObjects refuses boot when the runs namespace holds wardyn.managed pods or
+// CheckForeignObjects refuses boot when a runs namespace holds wardyn.managed pods or
 // NetworkPolicies of another runner, or of none (a server's), naming them (§3.4 item 3).
 func (d *Driver) CheckForeignObjects(ctx context.Context) error {
+	for _, ns := range d.cfg.Namespaces {
+		if err := d.checkForeignObjects(ctx, ns); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkForeignObjects is CheckForeignObjects in one namespace.
+func (d *Driver) checkForeignObjects(ctx context.Context, ns string) error {
 	opts := metav1.ListOptions{LabelSelector: labelManaged + "=true"}
 	var foreign []string
-	pods, err := d.clientset.CoreV1().Pods(d.cfg.Namespace).List(ctx, opts)
+	pods, err := d.clientset.CoreV1().Pods(ns).List(ctx, opts)
 	if err != nil {
 		return fmt.Errorf("%w: list pods: %w", errRunnerForeignObjects, err)
 	}
@@ -119,7 +131,7 @@ func (d *Driver) CheckForeignObjects(ctx context.Context) error {
 			foreign = append(foreign, "pod/"+p.Name)
 		}
 	}
-	pols, err := d.clientset.NetworkingV1().NetworkPolicies(d.cfg.Namespace).List(ctx, opts)
+	pols, err := d.clientset.NetworkingV1().NetworkPolicies(ns).List(ctx, opts)
 	if err != nil {
 		return fmt.Errorf("%w: list networkpolicies: %w", errRunnerForeignObjects, err)
 	}
@@ -129,7 +141,7 @@ func (d *Driver) CheckForeignObjects(ctx context.Context) error {
 		}
 	}
 	if len(foreign) > 0 {
-		return fmt.Errorf("%w: namespace %s holds objects another runner or a server created: %s", errRunnerForeignObjects, d.cfg.Namespace, strings.Join(foreign, ", "))
+		return fmt.Errorf("%w: namespace %s holds objects another runner or a server created: %s", errRunnerForeignObjects, ns, strings.Join(foreign, ", "))
 	}
 	return nil
 }
@@ -174,9 +186,20 @@ func kubeletAtFloor(v string) bool {
 }
 
 // ProxyRunByIP maps a relay connection's source address to the run whose live proxy pod (this
-// runner's, Pending or Running) holds it. A miss is (Nil, false).
+// runner's, Pending or Running, in any of its namespaces) holds it. A miss is (Nil, false).
 func (d *Driver) ProxyRunByIP(ctx context.Context, ip netip.Addr) (uuid.UUID, bool, error) {
-	pods, err := d.clientset.CoreV1().Pods(d.cfg.Namespace).List(ctx, metav1.ListOptions{
+	for _, ns := range d.cfg.Namespaces {
+		id, ok, err := d.proxyRunByIP(ctx, ns, ip)
+		if err != nil || ok {
+			return id, ok, err
+		}
+	}
+	return uuid.Nil, false, nil
+}
+
+// proxyRunByIP is ProxyRunByIP in one namespace.
+func (d *Driver) proxyRunByIP(ctx context.Context, ns string, ip netip.Addr) (uuid.UUID, bool, error) {
+	pods, err := d.clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
 		LabelSelector: labelManaged + "=true," + labelComponent + "=" + componentProxy + "," + runner.LabelRunnerID + "=" + d.cfg.RunnerID,
 	})
 	if err != nil {
@@ -205,7 +228,7 @@ func (d *Driver) ProxyRunByIP(ctx context.Context, ip netip.Addr) (uuid.UUID, bo
 // relayProbeBound bounds the boot source probe.
 const relayProbeBound = 2 * time.Minute
 
-// ProbeRelaySource runs the boot source probe (§3.4 item 5, N3): a pod in the runs namespace,
+// ProbeRelaySource runs the boot source probe (§3.4 item 5, N3): a pod in the default runs namespace,
 // labelled as a proxy so runnerd's ingress admits it, dials target:port (the relay Service) with
 // the proxy image's own -egress-canary; observed returns the source address the relay accepted it
 // from. A source other than the probe pod's IP is relay_source_rewritten. The probe's pod and its
@@ -216,7 +239,7 @@ func (d *Driver) ProbeRelaySource(ctx context.Context, target string, port int32
 	runID := uuid.New()
 	labels := d.stampRunner(wardynLabels(runID, componentProxy, nil))
 	name := "wardyn-relay-probe-" + runID.String()
-	ns := d.cfg.Namespace
+	ns := d.defaultNamespace()
 	pol := &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: labels},
 		Spec: networkingv1.NetworkPolicySpec{

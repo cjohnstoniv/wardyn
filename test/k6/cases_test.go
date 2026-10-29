@@ -1014,3 +1014,141 @@ func caseNodeReuse(t *testing.T, e *env) {
 	}
 	note(t, "pod GC mark: %s; reuse recorded on the tick; StopProxy refused: %v", gc, err)
 }
+
+// caseRunsNamespaces: one runner, two runs namespaces (design T5 §2.7). A run in each lands wholly in
+// its own namespace; neither agent reaches a pod in the other namespace, which an unconfined pod
+// there does reach; a runner that does not serve a namespace refuses a run naming it, and refuses to
+// boot over a live run recorded in it.
+func caseRunsNamespaces(t *testing.T, e *env) {
+	e.setSched(t, e.pin)
+	d := e.newDriverIn(t, e.store.view(nil), e.runsNS, e.extraNS)
+	other := map[string]string{e.runsNS: e.extraNS, e.extraNS: e.runsNS}
+
+	// A listener in each namespace counts the connections it accepts.
+	listenerIP, conns := map[string]string{}, map[string]func() int{}
+	for _, ns := range []string{e.runsNS, e.extraNS} {
+		name := "k6-listener-" + short()
+		p := e.testPod(name, "", nil, `while true; do nc -l -p 8080 </dev/null >/dev/null 2>&1 && echo conn; done`)
+		p.Namespace = ns
+		if _, err := e.admin.CoreV1().Pods(ns).Create(bg, p, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		e.dropPodIn(t, ns, name)
+		listenerIP[ns] = e.waitRunningIP(t, ns, name)
+		conns[ns] = func() int {
+			b, err := e.admin.CoreV1().Pods(ns).GetLogs(name, &corev1.PodLogOptions{}).DoRaw(bg)
+			if err != nil {
+				t.Fatalf("listener logs in %s: %v", ns, err)
+			}
+			return strings.Count(string(b), "conn")
+		}
+	}
+	// The control: a pod no Wardyn policy selects reaches the other namespace's listener, so a zero
+	// below is the runs' policies at work, not an unreachable listener.
+	cname := "k6-control-" + short()
+	control := e.testPod(cname, "", nil, fmt.Sprintf(`while true; do nc -w 1 %s 8080 </dev/null; sleep 0.3; done`, listenerIP[e.extraNS]))
+	if _, err := e.admin.CoreV1().Pods(e.runsNS).Create(bg, control, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	e.dropTestPod(t, cname)
+	if err := poll(bg, 2*time.Minute, func(context.Context) (bool, error) { return conns[e.extraNS]() > 0, nil }); err != nil {
+		inconclusive(t, "an unconfined pod in "+e.runsNS+" never reached the listener in "+e.extraNS+": the cluster gives the probe nothing to deny")
+	}
+	zero := int64(0)
+	_ = e.admin.CoreV1().Pods(e.runsNS).Delete(bg, cname, metav1.DeleteOptions{GracePeriodSeconds: &zero})
+	e.podGone(t, cname, time.Minute)
+
+	// A run in each namespace: the first names none (the default), the second names its namespace.
+	ids := map[string]uuid.UUID{e.runsNS: uuid.New(), e.extraNS: uuid.New()}
+	for _, ns := range []string{e.runsNS, e.extraNS} {
+		id := ids[ns]
+		e.cleanupRunIn(t, ns, id)
+		spec := e.spec(id)
+		if ns != e.runsNS {
+			spec.Namespace = ns
+		}
+		ctx, cancel := context.WithTimeout(bg, createWait)
+		_, err := d.CreateSandbox(ctx, spec)
+		cancel()
+		if err != nil {
+			t.Fatalf("CreateSandbox in %s: %v", ns, err)
+		}
+		for _, name := range []string{ref(id), proxyName(id)} {
+			if _, err := e.admin.CoreV1().Pods(ns).Get(bg, name, metav1.GetOptions{}); err != nil {
+				t.Errorf("pod %s not in %s: %v", name, ns, err)
+			}
+			if _, err := e.admin.CoreV1().Pods(other[ns]).Get(bg, name, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+				t.Errorf("pod %s found in %s too (%v)", name, other[ns], err)
+			}
+		}
+	}
+
+	// Each agent dials the other namespace's listener; neither may connect.
+	before := map[string]int{e.runsNS: conns[e.runsNS](), e.extraNS: conns[e.extraNS]()}
+	for ns, id := range ids {
+		probe := fmt.Sprintf(`(while true; do nc -w 1 %s 8080 </dev/null; sleep 0.3; done) >/dev/null 2>&1 &`, listenerIP[other[ns]])
+		sh(t, "kubectl", "--kubeconfig", os.Getenv("K6_ADMIN_KUBECONFIG"), "-n", ns, "exec", ref(id), "-c", "agent", "--", "sh", "-c", probe)
+	}
+	time.Sleep(5 * time.Second)
+	for ns := range ids {
+		if n := conns[other[ns]]() - before[other[ns]]; n != 0 {
+			t.Errorf("the agent in %s reached the listener in %s %d times", ns, other[ns], n)
+		}
+	}
+
+	// The runner that serves only the first namespace refuses a run naming the second, creating
+	// nothing, and refuses to boot over the live run recorded there.
+	refused := uuid.New()
+	e.cleanupRunIn(t, e.extraNS, refused)
+	spec := e.spec(refused)
+	spec.Namespace = e.extraNS
+	if _, err := e.main.CreateSandbox(bg, spec); err == nil || !strings.Contains(err.Error(), "runs_namespace_not_served") {
+		t.Errorf("a one-namespace runner took a run naming %s: %v", e.extraNS, err)
+	}
+	if gone, left := e.runGoneIn(bg, e.extraNS, refused); !gone {
+		t.Errorf("the refused run left objects in %s: %s", e.extraNS, left)
+	}
+	if err := e.main.CheckRunNamespaces(bg, []uuid.UUID{ids[e.extraNS]}); err == nil || !strings.Contains(err.Error(), "runs_namespace_unlisted") {
+		t.Errorf("a runner not listing %s booted over a live run there: %v", e.extraNS, err)
+	}
+
+	for ns, id := range ids {
+		if err := d.StopProxy(bg, ref(id)); err != nil {
+			t.Fatalf("StopProxy in %s: %v", ns, err)
+		}
+		if err := d.StopSandbox(bg, ref(id)); err != nil {
+			t.Fatalf("StopSandbox in %s: %v", ns, err)
+		}
+		if err := poll(bg, goneWait, func(ctx context.Context) (bool, error) { gone, _ := e.runGoneIn(ctx, ns, id); return gone, nil }); err != nil {
+			_, left := e.runGoneIn(bg, ns, id)
+			t.Errorf("run in %s not gone within %s: %s", ns, goneWait, left)
+		}
+	}
+	note(t, "a run in each of %s and %s; 0 cross-namespace connections from either agent (control reached); unserved namespace refused; unlisted live run refuses boot; both stopped", e.runsNS, e.extraNS)
+}
+
+// dropPodIn is dropTestPod for a pod in namespace ns.
+func (e *env) dropPodIn(t *testing.T, ns, name string) {
+	t.Cleanup(func() {
+		zero := int64(0)
+		_ = e.admin.CoreV1().Pods(ns).Delete(bg, name, metav1.DeleteOptions{GracePeriodSeconds: &zero})
+	})
+}
+
+// waitRunningIP waits for the pod in ns to run with an IP and returns it.
+func (e *env) waitRunningIP(t *testing.T, ns, name string) string {
+	t.Helper()
+	var ip string
+	err := poll(bg, 2*time.Minute, func(ctx context.Context) (bool, error) {
+		p, err := e.admin.CoreV1().Pods(ns).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return false, nil
+		}
+		ip = p.Status.PodIP
+		return p.Status.Phase == corev1.PodRunning && ip != "", nil
+	})
+	if err != nil {
+		t.Fatalf("pod %s in %s not running within 2m", name, ns)
+	}
+	return ip
+}

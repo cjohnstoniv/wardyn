@@ -53,12 +53,14 @@ import (
 const handlerRunscPrefix = "runsc"
 
 // Config configures the k8s Driver. Mirrors the docker driver's Config where
-// concepts overlap; Namespace/ImagePullSecret/AllowUnenforcedNetPol are new.
+// concepts overlap; Namespaces/ImagePullSecret/AllowUnenforcedNetPol are new.
 type Config struct {
-	// Namespace is the k8s namespace every sandbox is created in. Resolved by
-	// register.go's resolveNamespace before reaching here; New defaults an
-	// empty value to "default" defensively.
-	Namespace string
+	// Namespaces are the k8s namespaces sandboxes are created in, the first
+	// being the default: a spec naming none is created there. A server has one,
+	// resolved by register.go's resolveNamespace; a runner has one per
+	// --runs-namespace (design T5 §2.7). New defaults an empty list, or one
+	// empty name, to "default" defensively.
+	Namespaces []string
 	// ProxyImage is the wardyn-proxy sidecar image — ALSO the image the
 	// boot-time egress canary launches (with -egress-canary).
 	ProxyImage string
@@ -175,8 +177,8 @@ func (c *Config) withDefaults() {
 	if c.StartTimeout <= 0 {
 		c.StartTimeout = runner.DefaultSandboxStartTimeout
 	}
-	if c.Namespace == "" {
-		c.Namespace = "default"
+	if len(c.Namespaces) == 0 || len(c.Namespaces) == 1 && c.Namespaces[0] == "" {
+		c.Namespaces = []string{"default"}
 	}
 }
 
@@ -229,6 +231,8 @@ type Driver struct {
 	// olderProxyWarned says once that the proxy image is older than proxyReadyRelease.
 	olderProxyWarned sync.Once
 
+	// runNamespaces maps a run ID to the namespace its objects live in (namespaces.go).
+	runNamespaces sync.Map
 	// runLocks serialise each run's evidence read-modify-write (runner mode).
 	runLocks sync.Map
 	// brackets routes a creating pod's start-wait reads through its bracket (runner mode).
@@ -315,22 +319,27 @@ func newWithClient(ctx context.Context, cs kubernetes.Interface, restCfg *rest.C
 	}
 	d := &Driver{clientset: cs, restConfig: restCfg, cfg: cfg, placement: placement, apiserverHostPort: hostPort, now: time.Now}
 
-	verdict, cerr := d.runEgressCanary(ctx)
-	switch verdict {
-	case canaryIndeterminate:
-		return nil, fmt.Errorf("k8s: refusing to boot: %w", cerr)
-	case canaryUnenforced:
-		if !cfg.AllowUnenforcedNetPol {
-			return nil, fmt.Errorf("k8s: refusing to boot: %w (set WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1 to override on a TRUSTED cluster)", errNetworkPolicyUnenforced)
+	// The canary runs in every namespace: each is where some run's NetworkPolicies must hold.
+	// NetworkPolicy reads as enforced only when every namespace proved it.
+	enforced := true
+	for _, ns := range cfg.Namespaces {
+		verdict, cerr := d.runEgressCanary(ctx, ns)
+		switch verdict {
+		case canaryIndeterminate:
+			return nil, fmt.Errorf("k8s: refusing to boot: %w", d.inNamespace(ns, cerr))
+		case canaryUnenforced:
+			if !cfg.AllowUnenforcedNetPol {
+				return nil, fmt.Errorf("k8s: refusing to boot: %w (set WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1 to override on a TRUSTED cluster)", d.inNamespace(ns, errNetworkPolicyUnenforced))
+			}
+			logWarnUnenforcedNetPolOptOut()
+			d.netPolOptedOut, enforced = true, false
+		case canaryEnforced:
+		case canaryAcknowledged:
+			logWarnAckAmbientDefaultDeny()
+			d.netPolAcked, enforced = true, false
 		}
-		logWarnUnenforcedNetPolOptOut()
-		d.netPolOptedOut = true
-	case canaryEnforced:
-		d.netPolEnforced = true
-	case canaryAcknowledged:
-		logWarnAckAmbientDefaultDeny()
-		d.netPolAcked = true
 	}
+	d.netPolEnforced = enforced
 	if d.runnerMode() {
 		if !d.netPolEnforced {
 			return nil, errRunnerNetPolOverride

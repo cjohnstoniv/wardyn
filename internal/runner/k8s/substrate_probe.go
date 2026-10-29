@@ -14,13 +14,23 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
-// ProbeSubstrate implements runner.SubstrateProber with one namespaced pod list
+// ProbeSubstrate implements runner.SubstrateProber with one pod list per namespace
 // of limit 1. The Role already grants `list` on pods (rbac.yaml), so the probe
 // needs no verb of its own, and a list is the cheapest call that fails the way
 // every real operation here would: a refused token is 401, a deleted
 // RoleBinding is 403, a black-holed apiserver runs into ctx's deadline.
 func (d *Driver) ProbeSubstrate(ctx context.Context) runner.SubstrateState {
-	_, err := d.clientset.CoreV1().Pods(d.cfg.Namespace).List(ctx, metav1.ListOptions{Limit: 1})
+	for _, ns := range d.cfg.Namespaces {
+		if s := d.probeNamespace(ctx, ns); s != runner.SubstrateOK {
+			return s
+		}
+	}
+	return runner.SubstrateOK
+}
+
+// probeNamespace is ProbeSubstrate's list in one namespace.
+func (d *Driver) probeNamespace(ctx context.Context, ns string) runner.SubstrateState {
+	_, err := d.clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{Limit: 1})
 	switch {
 	case err == nil:
 		return runner.SubstrateOK
