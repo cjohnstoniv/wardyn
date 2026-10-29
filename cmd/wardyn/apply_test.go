@@ -195,6 +195,11 @@ func TestApplyRefusesAFileBeforeSendingAnything(t *testing.T) {
 	if _, err := rig.run(t, "apply"); err == nil || !strings.Contains(err.Error(), `"file"`) {
 		t.Errorf("apply without -f = %v", err)
 	}
+	for _, timeout := range []string{"0s", "-1s"} {
+		if _, err := rig.run(t, "apply", "-f", writeTemplateFile(t, "w.yaml", webYAML), "--wait", "--timeout="+timeout); err == nil || exitCodeFor(err) != 124 {
+			t.Errorf("--wait --timeout %s = %v (exit %d), want 124", timeout, err, exitCodeFor(err))
+		}
+	}
 	for key, bodies := range rig.bodies {
 		t.Errorf("%s was requested: %q", key, bodies)
 	}

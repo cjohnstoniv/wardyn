@@ -123,6 +123,9 @@ func workloadApplyCmd(client clientFn) *cobra.Command {
 			if dryRun && wait {
 				return errors.New("--dry-run and --wait are mutually exclusive (a dry run starts nothing)")
 			}
+			if wait && timeout <= 0 {
+				return errNonPositiveTimeout(timeout) // before any workload is stored, not after
+			}
 			docs, err := readWorkloadDocs(cmd, file)
 			if err != nil {
 				return err
