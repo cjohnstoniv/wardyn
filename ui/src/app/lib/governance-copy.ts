@@ -176,6 +176,9 @@ export const GOVERNANCE = {
   LIMIT_INTERACTIVE_LABEL: "Deny interactive runs",
   LIMIT_INTERACTIVE_HINT:
     "An interactive run is supervised at the attach pane rather than by rules. A run with no task comes up interactive too, and is refused the same way.",
+  // r16 T2-e: what the two doors also turn off. Said after LIMIT_INTERACTIVE_HINT, and as the hint of the Deny UI apps row.
+  LIMIT_INTERACTIVE_INBOUND: "Inbound ports are turned off too, since a port can serve a shell.",
+  LIMIT_UI_APPS_HINT: "Also turns off inbound ports.",
   GRADE_NOTE: "Grades this ceiling as written — advisory, the same meter the policy editor shows.",
   SAVE: "Save profile",
   LIMIT_DRIVE_LABEL: "Deny mounting a user drive",

@@ -185,6 +185,18 @@ export const SELF_HOST = {
   FAILED: "Failed to save the rule",
 } as const;
 
+// The Permissions row for the `inbound` feature value (a port callable from outside the run, r16 T2-e). Restricted
+// by migration 0239, so it is off until an allow names it; its grants are written in the add-grant form, so the row
+// lists who is allowed and opens that form. A service is a `user` grant naming service:<name>.
+export const INBOUND_ACCESS = {
+  LABEL: "Inbound access",
+  BLURB: "Declare ports that other people and services can call through the gateway. Off until you allow it.",
+  ALLOWED_FOR: "Allowed for:",
+  SUBJECT_SERVICE: "Service",
+  ADD_GRANT: "Add a grant",
+  REQUIRES_ROLE: "Requires the admin or security admin role.",
+} as const;
+
 export const PERM = {
   TITLE: "Permissions",
   LEAD: "Grant members and groups specific Wardyn capabilities. A capability refuses nothing until you enforce it.",
