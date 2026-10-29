@@ -105,6 +105,19 @@ export const SERVICES = {
   INBOUND_ONLY: "Inbound only",
 } as const;
 
+// Your account: "Your API tokens", the tokens a person mints for themselves (r15 T2-d). The table, column and
+// state words are SERVICES'; only what names whose token it is lives here.
+export const OWN_TOKENS = {
+  TITLE: "Your API tokens",
+  SUMMARY: (active: number) => (active === 0 ? "No tokens" : `${active} active`),
+  LOADING: "Loading your API tokens",
+  LOAD_ERROR_LABEL: "Your API tokens",
+  TABLE_LABEL: "Your API tokens",
+  REVOKE_LABEL: (token: string) => `Revoke ${token}`,
+  REVOKE_TITLE: (token: string) => `Revoke ${token}?`,
+  REVOKE_BODY: "It stops working now. Anything using it is refused. You can mint another.",
+} as const;
+
 export const TOKEN_DIALOG = {
   CLAIM_TITLE: "Claim your token",
   CLAIM_LEDE: "This invitation is for you alone. The token acts as you, with your role, and is shown once.",
@@ -112,6 +125,8 @@ export const TOKEN_DIALOG = {
   CLAIM_WARNING_TAIL: ". Anything still using it stops working now.",
   MINT_TITLE: (name: string) => `Mint a token for ${name}`,
   MINT_LEDE: (name: string) => `The token acts as ${name}, not as you. It is shown once.`,
+  OWN_MINT_TITLE: "Mint a token",
+  OWN_MINT_LEDE: "The token acts as you. It is shown once.",
   MINT_WARNING: (name: string) => `Anyone who holds the token can do what ${name} is allowed to do, which may be more than you can.`,
   // r15 T2-d: what a minted token is for. The inbound help replaces MINT_WARNING, which says what the identity may do
   // with the Wardyn API and so overclaims for a token that cannot use it.

@@ -486,6 +486,7 @@ curl -sf -b jar "$UI_ORIGIN/__wardyn/enter?run=$RUN_ID&app=vscode&ticket=$TICKET
 ### Call it with a token
 
 - Mint an **inbound token** in the console: yourself with `POST /api/v1/me/tokens`, or for a service identity you sponsor with `POST /api/v1/me/service-identities/{name}/tokens`, sending `{"kind":"inbound"}`. See [API tokens](operations/api-tokens.md#inbound-tokens).
+- A person mints their own inbound token in the console under Settings → Your API tokens: choose **Calling inbound ports** for Use. It is shown once.
 - Send it as the one bearer this listener takes. `inbound_url_template` in `/healthz` under `ui_sandbox` gives the address, with `{run}` and `{app}` to fill in; `$UI` below is the part before `/r/`.
 
 ```sh
