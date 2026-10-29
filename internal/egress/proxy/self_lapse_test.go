@@ -70,6 +70,7 @@ func TestSelfLapse_ListensOnlyOnceOpen(t *testing.T) {
 		addr := ln.Addr().String()
 		_ = ln.Close()
 		s := &Server{proxy: p, http: &http.Server{Addr: addr, Handler: p}}
+		s.watchShutdown()
 		served := make(chan error, 1)
 		go func() { served <- s.ListenAndServe() }()
 		t.Cleanup(func() { _ = s.http.Shutdown(context.Background()) })
@@ -143,6 +144,28 @@ func TestSelfLapse_ListensOnlyOnceOpen(t *testing.T) {
 		if time.Now().After(end) {
 			t.Fatal("a proxy shut down before its first renew never returned from ListenAndServe")
 		}
+	}
+}
+
+// TestSelfLapse_ShutdownBeforeListenAndServeReturns: a Shutdown that completes before ListenAndServe
+// reaches its open gate still ends it, as net/http runs only the hooks registered before Shutdown.
+func TestSelfLapse_ShutdownBeforeListenAndServeReturns(t *testing.T) {
+	p, _ := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", "127.0.0.1:1", nil, nil)
+	p.lapse = newLapseGate(&fakeBoot{}, testLapseTTL)
+	s := &Server{proxy: p, http: &http.Server{Addr: "127.0.0.1:0", Handler: p}}
+	s.watchShutdown()
+	if err := s.http.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	served := make(chan error, 1)
+	go func() { served <- s.ListenAndServe() }()
+	select {
+	case err := <-served:
+		if err != nil {
+			t.Fatalf("ListenAndServe after Shutdown: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ListenAndServe after a completed Shutdown never returned")
 	}
 }
 
