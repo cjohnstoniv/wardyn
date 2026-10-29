@@ -42,6 +42,18 @@ type MintServiceTokenRequest struct {
 	Kind string `json:"kind,omitempty"`
 }
 
+// CreateAPITokenRequest is the POST /api/v1/me/tokens body: a token for the caller's own identity. It
+// mirrors internal/api's createAPITokenRequest.
+type CreateAPITokenRequest struct {
+	Name string `json:"name"`
+	// TTLSeconds is the requested lifetime; zero takes the deployment's cap, else no expiry (an inbound
+	// token always expires).
+	TTLSeconds int64 `json:"ttl_seconds,omitempty"`
+	// Kind is "api" (the default when omitted) or "inbound", a token that calls the inbound ports naming its
+	// owner and nothing on the API.
+	Kind string `json:"kind,omitempty"`
+}
+
 // MoveTokenRequest is the POST /api/v1/tokens/{id}/move body. internal/api aliases it (moveTokenRequest).
 type MoveTokenRequest struct {
 	ServiceIdentity string `json:"service_identity"`
@@ -136,6 +148,20 @@ func (c *Client) ListServiceTokensPage(ctx context.Context, name string, opts ..
 // DELETE /api/v1/me/service-identities/{name}/tokens/{id}.
 func (c *Client) RevokeServiceToken(ctx context.Context, name string, id uuid.UUID) error {
 	return c.do(ctx, http.MethodDelete, myServiceTokensPath(name)+"/"+id.String(), nil, nil)
+}
+
+// CreateAPIToken mints a token for the caller's own identity; Token holds the plaintext, which the server
+// shows once. It needs a signed-in browser session, so a bearer token cannot mint: the CLI has no verb for
+// it. POST /api/v1/me/tokens.
+func (c *Client) CreateAPIToken(ctx context.Context, req CreateAPITokenRequest) (APIToken, error) {
+	var out APIToken
+	err := c.do(ctx, http.MethodPost, "/api/v1/me/tokens", req, &out)
+	return out, err
+}
+
+// RevokeAPIToken revokes one of the caller's own tokens. DELETE /api/v1/me/tokens/{id}.
+func (c *Client) RevokeAPIToken(ctx context.Context, id uuid.UUID) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/me/tokens/"+id.String(), nil, nil)
 }
 
 // MoveToken links a live admin-minted token to the service identity that replaces it (security tier).

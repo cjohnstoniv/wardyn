@@ -104,6 +104,17 @@ func TestInvitationAndServiceIdentityMethods_RequestShape(t *testing.T) {
 				}
 				return err
 			}, "POST", "/api/v1/me/service-identities/ci-nightly/tokens", "", `{"name":"deploy","ttl_seconds":86400}`},
+		{"CreateAPIToken", 201, `{"id":"` + id.String() + `","token":"wdy_secret","principal":"dana"}`,
+			func(c *client.Client) error {
+				got, err := c.CreateAPIToken(context.Background(), client.CreateAPITokenRequest{Name: "hook", TTLSeconds: 86400, Kind: "inbound"})
+				if err == nil && got.Token != "wdy_secret" {
+					t.Errorf("CreateAPIToken token = %q, want the plaintext", got.Token)
+				}
+				return err
+			}, "POST", "/api/v1/me/tokens", "", `{"name":"hook","ttl_seconds":86400,"kind":"inbound"}`},
+		{"RevokeAPIToken", 204, ``,
+			func(c *client.Client) error { return c.RevokeAPIToken(context.Background(), id) },
+			"DELETE", "/api/v1/me/tokens/" + id.String(), "", ""},
 		{"ListServiceTokens", 200, `[{"id":"` + id.String() + `","name":"deploy"}]`,
 			func(c *client.Client) error {
 				got, err := c.ListServiceTokens(context.Background(), "ci-nightly")
