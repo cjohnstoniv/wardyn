@@ -64,8 +64,9 @@ type SandboxSpec struct {
 	RunnerMaxRuns int
 	// Namespace is the Kubernetes namespace a k8s runner creates the run in, from the run's pool
 	// membership; empty is the runner's default (first) namespace. A runner that does not serve it
-	// refuses the create (runs_namespace_not_served). Other substrates ignore it.
-	Namespace        string
+	// refuses the create (runs_namespace_not_served). Other substrates ignore it. Omitted when empty, so a
+	// runner that predates it gets the bytes it always did.
+	Namespace        string `json:"namespace,omitempty"`
 	Image            string // resolved agent/workspace OCI image
 	ConfinementClass types.ConfinementClass
 	// Env is non-secret environment. Credential material NEVER passes through
