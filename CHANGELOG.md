@@ -33,9 +33,23 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A change to a runner pool's use policy that was held for a second person before the upgrade, on a pool that already
   holds an organization runner, reads as stale when it is approved: the state it was proposed against now includes the
   pool's organization runners. Propose it again. A held change on a pool with no organization runner is unaffected.
+- Migrations `0240_run_service`, `0242_runner_pool_member_namespace` and `0245_run_shape` add columns to `agent_runs`
+  and `runner_pool_members`; they change no grant.
+- On a Kubernetes chart upgrade, apply the `WardynWorkload` CRD again by hand:
+  `deploy/helm/wardyn-runnerd/crds/wardyn.dev_wardynworkloads.yaml`. Helm installs a chart's `crds/` once and never
+  upgrades it. A runner whose chart lists a namespace under `workloads.namespaces` refuses to start while that
+  namespace has no CRD. See [Workloads](docs/operations/workloads.md).
 
 ### Added
 
+- The console's left bar is split in two. The top group holds Runs, Workloads and Approvals (and Audit and Recordings in
+  the Admin view); **Setup** holds Getting started and Settings. **Your account** is now **Settings**.
+- The Runs page filters by what a run was set up as: **All**, **Agent tasks**, **Environments**, **Apps & scripts** or
+  **Services**, each with its count. A run keeps the shape it was set up from (`shape` on the run, and on the
+  `run.create` audit row when the request names one); a run from before this release, or one whose request fits
+  several shapes, has none. New Run's **Environment sandbox** card is now **Environment**.
+- **Your API tokens**, under Settings: a person mints and revokes their own API tokens in the console, choosing what
+  the token is for under **Use**: **Wardyn API** or **Calling inbound ports**.
 - A background command can be kept running as a service. On New Run, an Automation / script has **Keep it running**
   (`wardyn run --service`, or `service` on `POST /runs`): the command is restarted when it exits with an error, after a
   pause that grows to 5 minutes, and checked on a port inside the sandbox by a TCP connect or an HTTP GET. The run list
@@ -49,14 +63,13 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   one of its callers. See [Services](docs/SERVICES.md#start-a-service).
 - Changing a service identity's sponsor stops lease renewal of the services it already runs: they end at their current
   lease end. Relaunch or apply them again under the new sponsor.
-
 - Your walls: limits you set on every run you start, which only narrow what your organisation allows. Set them under
-  **Your account**, with `wardyn walls` (`wardyn walls set --file walls.yaml`, `wardyn walls clear`), or through
+  **Settings**, with `wardyn walls` (`wardyn walls set --file walls.yaml`, `wardyn walls clear`), or through
   `GET`, `PUT` and `DELETE /api/v1/me/walls`. They name the sites a run may reach or never reach, what happens at a site
   not listed, a barrier floor, the clipboard and file directions, and credentials kept out. They are private to you and
   bind every run you start, a super admin's too. Your site list is not applied again at dispatch or revive, so the hosts
-  a run's own setup adds stay reachable; your denies, blocked directions and withheld credentials are, and at the mint
-  door. An egress approval for a host your walls deny is refused `personal_walls_host`. New reasons: `walls_invalid`,
+  a run's own setup adds stay reachable; your denies, blocked directions and withheld credentials are applied again, at dispatch, at
+  revive and at the mint door. An egress approval for a host your walls deny is refused `personal_walls_host`. New reasons: `walls_invalid`,
   `walls_need_person`, `walls_unavailable` and `personal_walls_host`; new audit actions `person.walls.set` and
   `person.walls.delete`. See [Your walls](docs/POLICIES.md#your-walls).
 - `overrides.egress.allow_all_egress: false` is accepted on a run request, on any base policy, and turns open egress off
@@ -77,12 +90,24 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   its `callers` names. A named person who is not the owner needs per-run hosts (`WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE`);
   on one shared host it answers `403` `inbound_needs_host_mode`. `/healthz` gains `ui_sandbox.inbound_url_template`.
 - A UI-app call to a run whose runner is offline now answers `503` `runner_offline` on the gateway instead of `502`.
+- An inbound app's run page has **Copy link for people** and **Copy address for API clients**. The link is
+  `/open/{run}/{app}`: it mints the caller's ticket and opens the app in one step.
+- New Run warns that a service will be paused while it waits for requests when your admin pauses runs nobody is using;
+  a queued service's `201` carries the same warning.
 - Workloads: a named run Wardyn keeps declared. `wardyn apply -f FILE` stores a workload and starts its run; an apply that
   changes nothing starts nothing, and a changed spec starts the new run before it ends the old one (`workload.replace`). A
   launch your organisation refuses keeps the old run and is recorded as `last_refusal`. `wardyn diff`, `wardyn delete`,
   `wardyn workload list|get|restart|delete` and `wardyn workload binding create|list|delete` complete the CLI. On a
   Kubernetes organisation runner a `WardynWorkload` resource in a bound namespace launches as its service identity, and its
-  status shows the phase and reason. A binding names an organization pool only. See [Workloads](docs/operations/workloads.md).
+  status shows the phase and reason. A binding names an organization pool only, and is refused `409`
+  `service_identity_inactive` while the identity's sponsor is not active; a restart after the sponsor's access is
+  revoked is refused too. See [Workloads](docs/operations/workloads.md).
+  - The console has a **Workloads** screen: each workload's state, and a drawer with its spec digest, its history and the
+    current run's inbound address. A run started from a workload shows a workload chip in its header, and Runners has a
+    **Workload bindings** tab.
+  - The API: `PUT`, `GET` and `DELETE /workloads/{name}`, `GET /workloads`, `GET /workloads/{name}/history` and
+    `POST /workloads/{name}/restart`. Audit actions: `workload.apply`, `workload.launch`, `workload.launch_refused`,
+    `workload.replace`, `workload.restart` and `workload.delete`.
   - Migration `0243_workload_k8s_uid` records the `metadata.uid` of the resource a workload was reported from. A status
     is written only to the resource with that uid, so one deleted and recreated under the same name never gets the old
     one's status. No grant changes.
@@ -106,8 +131,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   session.
 - The gateway removes any `X-Wardyn-*` header a client sends before the request reaches the app. On an inbound app it adds
   `X-Wardyn-Caller`, and `X-Wardyn-Caller-Email` when the credential carries an email.
-- An inbound-token stream is re-checked at most every 30 seconds and closed once its token is revoked, has expired or its
-  owner is suspended.
+- An upgraded connection an inbound token opened is re-checked at most every 30 seconds and closed once its token is
+  revoked, has expired, its owner is suspended or the run's profile denies inbound.
 
 ### Fixed
 
@@ -137,8 +162,29 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   deadline exceeded".
 - Helm: with `basePath` set and `env.WARDYN_BASE_PATH` set to `""`, the probes and ServiceMonitor now follow the
   empty value wardynd serves under, so the pod goes ready.
+- A run's placement refusal with no detail no longer reads with a trailing ": ".
+- VS Code in the browser could not open its workbench connection through the app gateway: the gateway now gives an app its
+  own origin on a request from its own page.
+
+### Security
+
+- The console's `seroval` and `seroval-plugins` move from 1.6.8 to 1.6.12 (GHSA-9wx9-5pv9-3349, GHSA-f86p-h4j2-7qgj).
 
 ### Known issues
+
+- `agent-claude-code` stays on Claude Code 2.1.231. Its embedded runtime carries a Brotli decoder flaw
+  (CVE-2026-111497): a crafted Brotli response from a site a run reaches could run code as the agent, inside its
+  sandbox and its egress policy. Later Claude Code releases fix that runtime. In them, though, a repository's
+  `permissions.allow` still lets a tool run that managed settings with `allowManagedPermissionRulesOnly` ask about, and
+  Wardyn's strictest attended rule set (L0) depends on those settings. Wardyn keeps the pin until a release passes both.
+  Until then, keep a Claude Code run's allowed hosts to sites you trust.
+- A dead macOS VM's slot stays held while a later Virtualization process of the same user runs. Quitting that process
+  frees it.
+- A Kubernetes exec run still records no output and no recording (`run_output_not_captured`).
+- The macOS package is unsigned until the release workflow has the Apple Developer ID secrets; Gatekeeper refuses a
+  double-click. See [Installing with a macOS package and MDM](docs/operations/hybrid-laptops.md#installing-with-a-macos-package-and-mdm).
+- No macOS VM has been booted on a real Mac by this release's tests; the rows listed under
+  [Not yet tested on a real Mac](docs/operations/macos-vms.md#not-yet-tested-on-a-real-mac) stay untested.
 
 - A person other than a run's owner can open an inbound app only on per-run hosts; on one shared host the ticket is
   refused `inbound_needs_host_mode`. Opening a code editor through an inbound port on per-run hosts has not been tested
