@@ -122,7 +122,7 @@ func TestPG_AServiceWithoutItsAuthorityIsNotRenewed(t *testing.T) {
 			e := newSvcEnv(t)
 			e.mustCreate(t, svcName, svcSponsor)
 			ageFreshSponsorships(t, e.pool)
-			clock := time.Now().UTC().Add(-time.Second).Truncate(time.Microsecond)
+			clock := time.Now().UTC().Add(-time.Second).Truncate(time.Second)
 			e.h.srv.cfg.Runner = &leaseRunner{finalizeTailRunner: &finalizeTailRunner{fakeRunner: &fakeRunner{}}}
 			e.h.srv.cfg.Now = func() time.Time { return clock }
 			end, capAt := clock.Add(30*time.Minute), clock.Add(24*time.Hour)
