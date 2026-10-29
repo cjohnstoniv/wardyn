@@ -129,6 +129,32 @@ var queryIDMatrix = map[string]queryIDRoute{
 		entity: entityPrincipal, readers: []string{"parseRunsListParams", "hasRunsListFilterParams"},
 		ownAdmitted: true, pinnedBy: "TestHandleListRuns_H4_ViewUserForcesOwnerMe",
 	},
+	// Workloads: ?owner= names whose workloads a route acts on (workloadOwnerOf). A member reaches only
+	// their own and a service identity's they sponsor; another owner's workload is the same 404 as a missing
+	// one, and the list of another owner is the empty 200. The routes need the Postgres store (501 on the
+	// matrix's double), so the PG tests carry the probe.
+	"GET /api/v1/workloads?owner": {
+		entity: entityPrincipal, readers: []string{"workloadListOwners", "workloadOwnerOf"},
+		ownAdmitted: true, pinnedBy: "TestPG_Workload_SponsorReadsAndDeletes",
+	},
+	"GET /api/v1/workloads/{name}?owner": {
+		entity: entityPrincipal, readers: []string{"workloadOwnerOf"},
+		ownAdmitted: true, pinnedBy: "TestPG_Workload_SponsorReadsAndDeletes",
+	},
+	"GET /api/v1/workloads/{name}/history?owner": {
+		entity: entityPrincipal, readers: []string{"workloadOwnerOf"},
+		ownAdmitted: true, pinnedBy: "TestPG_Workload_HistoryHasTheWorkloadReadGate",
+	},
+	"DELETE /api/v1/workloads/{name}?owner": {
+		entity: entityPrincipal, readers: []string{"workloadOwnerOf"},
+		ownAdmitted: true, pinnedBy: "TestPG_Workload_SponsorReadsAndDeletes",
+	},
+	// A restart launches as the owner, so only the owner, the sponsor or an operator reaches it: even a
+	// security_admin naming the service gets the 404, which a member gets a fortiori.
+	"POST /api/v1/workloads/{name}/restart?owner": {
+		entity: entityPrincipal, readers: []string{"workloadOwnerOf"},
+		ownAdmitted: true, pinnedBy: "TestPG_Workload_AdminRestartChecksTheSponsorSinceTheSpec",
+	},
 }
 
 // queryParamNotAnID names every query parameter this package reads that does
