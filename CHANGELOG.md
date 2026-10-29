@@ -11,6 +11,14 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- wardynd no longer fails its first start after an upgrade whose migrations take longer than 30 seconds. The checks
+  after the migration had kept the connect deadline and stopped with "verify the audit append privileges: context
+  deadline exceeded".
+- Helm: with `basePath` set and `env.WARDYN_BASE_PATH` set to `""`, the probes and ServiceMonitor now follow the
+  empty value wardynd serves under, so the pod goes ready.
+
 ## [0.10.0-rc.7] — 2026-10-29
 
 ### Before you upgrade

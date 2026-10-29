@@ -55,7 +55,7 @@ Pick one of three shapes. The server records it as `shape` ([run documents](sdk.
 
 - **How should it run?** (Agent task only): **Interactive** or **Autonomous**.
   - Interactive means you work in the sandbox, and one harness can start with it.
-  - Autonomous means an agent runs on its own, with no SSH or terminal. **When should it run?** offers **Run now**; **Schedule for later** is marked **Coming soon**.
+  - Autonomous means an agent runs on its own, with no SSH or terminal. **When should it run?** offers **Run now**, plus **Schedule for later** when [scheduled runs](ENV.md#wardyn_scheduled_runs) are on.
 - **What should run?** (Application sandbox only): **Automation / script** or **Application / server**.
 - **Command** is required for an automation. It runs verbatim, and the run ends when it exits.
 - An **Application / server** takes a required **Start command** and one to eight **Ports**, each with a name, a port and a path. The run is interactive and keeps going until you end it or it reaches its lifetime limit.
@@ -93,7 +93,7 @@ Press **+ Add** to open a dialog with three stages: **Type**, **Choose**, **Moun
 | **User drive** | An existing drive of yours |
 | **Shared drive** | An existing shared drive. You get your own folder on it |
 | **Folder on this machine** | A folder already onboarded in Workspaces, on the computer running Wardyn; with none it reads "No folders onboarded yet. Add one in Workspaces." Disabled when the server runs its sandboxes on Kubernetes |
-| **Your computer** | Marked **Coming soon** |
+| **Your computer** | A folder from your own folder-only runner, when the deployment [allows it](ENV.md#wardyn_computer_folders); otherwise disabled with its reason |
 
 - A drive that cannot attach is greyed with its reason, such as paused by your admin or not available in this pool's runners.
 - **Mount path** sits inside the sandbox user's home directory, and no two items may overlap. A drive's path is fixed. A repository's or folder's path is fixed too, unless it is its workspace's only item.
