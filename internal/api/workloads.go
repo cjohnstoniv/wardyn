@@ -759,13 +759,15 @@ func (s *Server) restartLaunch(r *http.Request, ws store.WorkloadStore, wl store
 	case err != nil:
 		return client.WorkloadLaunch{}, err
 	}
-	// The service's standing now, as its tokens are checked on every request: usable, its sponsor live.
+	// The service's standing as of the spec's last write, the authority that recorded it, as a binding's
+	// launch is judged as of the binding's making: usable, the same sponsor since, and the sponsor's
+	// sessions not cut since.
 	sr, cancel, err := serviceLaunchRequest(si, si.Sponsor)
 	if err != nil {
 		return client.WorkloadLaunch{}, err
 	}
 	defer cancel()
-	if live, err := s.queueOwnerLive(sr.Context(), serviceAuthority(si, si.Sponsor), s.cfg.Now()); err != nil || !live {
+	if live, err := s.queueOwnerLive(sr.Context(), serviceAuthority(si, si.Sponsor), wl.UpdatedAt); err != nil || !live {
 		return inactive, err
 	}
 	return s.launchWorkload(sr, ws, wl)

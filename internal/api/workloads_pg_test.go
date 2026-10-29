@@ -617,6 +617,27 @@ func TestPG_Workload_RefusedQueuedReplacementKeepsTheRunningRun(t *testing.T) {
 	}
 }
 
+// TestPG_Workload_AdminRestartChecksTheSponsorSinceTheSpec: a security operator's restart of a service's
+// workload launches as the service only while its sponsor's sessions have not been cut since the spec was
+// written.
+func TestPG_Workload_AdminRestartChecksTheSponsorSinceTheSpec(t *testing.T) {
+	e := newSvcEnv(t)
+	e.mustCreate(t, svcName, svcSponsor)
+	tok := e.mustMint(t, e.sponsor, svcName)
+	pol := e.plainPolicy(t, "wl-pol")
+	launchedRun(t, decodeApply(t, e.as(t, tok.Token, http.MethodPut, "/api/v1/workloads/web", workloadBody(pol, "t", "")), http.StatusCreated))
+	path := "/api/v1/workloads/web/restart?owner=" + svcPrin
+	launchedRun(t, decodeApply(t, doSSO(t, e.h.srv, http.MethodPost, path, e.sec, ""), http.StatusOK))
+
+	if err := e.rev.CutSessions(context.Background(), svcSponsor); err != nil {
+		t.Fatal(err)
+	}
+	res := decodeApply(t, doSSO(t, e.h.srv, http.MethodPost, path, e.sec, ""), http.StatusOK)
+	if res.Launch.State != client.WorkloadRefused || res.Launch.Reason != reasonServiceIdentityInactive {
+		t.Fatalf("restart after the sponsor's sessions were cut = %+v, want refused %s", res.Launch, reasonServiceIdentityInactive)
+	}
+}
+
 func decodeIntent(t *testing.T, raw string) client.TemplateIntent {
 	t.Helper()
 	var i client.TemplateIntent
