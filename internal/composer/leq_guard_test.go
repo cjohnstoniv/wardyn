@@ -31,7 +31,7 @@ var leqRules = map[string]string{
 	"workspace_mounts":                 "every mount of a is a mount of b, read-only wherever b's is",
 	"workspace_repos":                  "every repo of a is a repo of b",
 	"llm_inspection":                   "b none: a none or with no detector sidecar; a none: false; both: identical",
-	"ui_apps":                          "every app of a is an app of b on the same path; an empty a only under an empty b",
+	"ui_apps":                          "every app of a is an app of b on the same path, inbound only where b's is, callers a subset of b's; an empty a only under an empty b",
 	"resources.cpu_millis":             "a <= b after normalising",
 	"resources.memory_mib":             "a <= b after normalising",
 	"resources.pids_limit":             "a <= b after normalising",

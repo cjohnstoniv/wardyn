@@ -219,7 +219,9 @@
     "UIApp": [
       "name",
       "port",
-      "path"
+      "path",
+      "inbound",
+      "callers"
     ],
     "WorkspaceMount": [
       "source",

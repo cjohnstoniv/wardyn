@@ -201,7 +201,7 @@ func TestTemplateIntentBytesDoNotDependOnKeyOrderOrFormat(t *testing.T) {
 
 // TestTemplateDependencyEdges holds every row of templateDependencies: the
 // dependent field alone is refused, and it is satisfied by the field it needs
-// or by a needs_setup entry.
+// (or its alt) or by a needs_setup entry.
 func TestTemplateDependencyEdges(t *testing.T) {
 	// The expected edges are written out, so deleting a row fails here as well as editing one.
 	var got []string
@@ -269,8 +269,18 @@ func TestTemplateDependencyEdges(t *testing.T) {
 			if diags := check(listed); len(diags) != 0 {
 				t.Errorf("listed under needs_setup: %v", diagReasons(diags))
 			}
-			if !templateKnownField(dep.field) || !templateKnownField(dep.needs) {
+			if !templateKnownField(dep.field) || !templateKnownField(dep.needs) || (dep.alt != "" && !templateKnownField(dep.alt)) {
 				t.Errorf("an edge names a field the registry does not know")
+			}
+			if dep.alt != "" {
+				if diags := check(build(dep.field, dep.alt)); len(diags) != 0 {
+					t.Errorf("with its alternative %s: %v", dep.alt, diagReasons(diags))
+				}
+				altListed := build(dep.field)
+				altListed.NeedsSetup = []client.TemplateSetupNeed{{Field: dep.alt}}
+				if diags := check(altListed); len(diags) != 0 {
+					t.Errorf("alternative %s listed under needs_setup: %v", dep.alt, diagReasons(diags))
+				}
 			}
 		})
 	}

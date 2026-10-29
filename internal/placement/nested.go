@@ -69,7 +69,7 @@ var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.HarnessCredential](): strings.Fields("Harness SHA256"),
 	reflect.TypeFor[types.HarnessInnerWalls](): strings.Fields("SandboxMode Approvals"),
 	reflect.TypeFor[types.DesktopControls]():   strings.Fields("PasteIn CopyOut Upload Download"),
-	reflect.TypeFor[types.UIApp]():             strings.Fields("Name Port Path"),
+	reflect.TypeFor[types.UIApp]():             strings.Fields("Name Port Path Inbound Callers"),
 	reflect.TypeFor[types.WorkspaceMount]():    strings.Fields("Source Target ReadOnly"),
 	reflect.TypeFor[types.WorkspaceRepo]():     strings.Fields("Repo Target Ref"),
 }
