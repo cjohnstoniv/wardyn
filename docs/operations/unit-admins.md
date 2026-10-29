@@ -62,7 +62,7 @@ A unit admin's widening is always held for a second human, whatever `WARDYN_GOVE
 - A write that changes a locked knob is `409` `unit_knob_locked`: "`<knob>` is locked by `<locker>`; ask `<contact>`".
 - Locking a knob a unit below sets to another value is the same `409`, listing those units. Their values are never cleared for you.
 - A unit's own admins, or anyone above them, may lock it. Only a security admin locks on the boundary, whose locks bind while it is in `hard_limits`.
-- Adding a lock applies directly; removing one is held. Restrictions ignore locks.
+- Adding a lock applies directly; removing one is held. Restrictions and a person's own [walls](../POLICIES.md#your-walls) ignore locks.
 - A run's provenance marks a locked knob `locked`, named for the nearest locker.
 
 ## Making someone a unit admin
