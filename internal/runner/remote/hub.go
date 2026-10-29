@@ -264,7 +264,7 @@ func (h *Hub) serveClaimed(ctx context.Context, conn runnerwire.Conn, row types.
 			peer.Close()
 			live = false
 		case <-recheck.C:
-			h.recheck(ctx, row.ID, s)
+			h.recheck(ctx, row.ID, s, peer)
 		}
 	}
 	h.ended(row.ID, s, peer)
@@ -288,7 +288,7 @@ var errOwnerInactive = errors.New("runner hub: the runner's owner is deactivated
 // GOAWAY once its owner is deactivated or its per-run limits differ from the pair AUTH_OK carried. A failed read is retried at the next
 // tick: the store already refuses a revoked runner's writes, so this only
 // bounds the session's lifetime.
-func (h *Hub) recheck(ctx context.Context, id uuid.UUID, s *hubSession) {
+func (h *Hub) recheck(ctx context.Context, id uuid.UUID, s *hubSession, peer *runnerwire.Peer) {
 	current, err := h.cfg.Lookup(ctx, id)
 	if err != nil || current.ID != id {
 		return
@@ -308,7 +308,8 @@ func (h *Hub) recheck(ctx context.Context, id uuid.UUID, s *hubSession) {
 		return
 	}
 	if sent := s.perRun.Load(); sent != nil && *sent != perRunOf(current) {
-		_ = h.Goaway(ctx, id)
+		// The pair is the one peer's AUTH_OK carried: a reconnect since then has its own, so end only peer's session.
+		_ = h.endWithControl(ctx, id, runnerwire.TypeGoaway, "fresh_session_required", peer)
 	}
 }
 
