@@ -331,8 +331,8 @@ func TestPG_WorkloadFromRunner_DropLeavesARecreatedResource(t *testing.T) {
 	if r, err := e.st.GetRun(ctx, run); err != nil || r.State == types.RunKilled {
 		t.Fatalf("run after the stale drops = %q (%v), want it running", r.State, err)
 	}
-	if n := countAudit(e.h.audit.snapshot(), "workload.delete"); n != 0 {
-		t.Fatalf("%d workload.delete rows after the stale drops, want 0", n)
+	if n := countAudit(e.h.audit.snapshot(), "workload.delete"); n != 0 || owedEnds(t, e.svcEnv, run) != 0 {
+		t.Fatalf("%d workload.delete rows and %d owed ends after the stale drops, want none", n, owedEnds(t, e.svcEnv, run))
 	}
 
 	drop(stale)

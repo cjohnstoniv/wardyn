@@ -459,10 +459,24 @@ func (s PG) ListK8sWorkloadStatuses(ctx context.Context) ([]WorkloadView, error)
 // ends, or ErrNotFound. The run itself is not touched here; the same transaction records it as owed its
 // end (WorkloadRunEnd).
 func (s PG) DeleteWorkload(ctx context.Context, owner, name string) (Workload, error) {
+	return s.deleteWorkload(ctx, `w.owner = $1 AND w.name = $2`, owner, name)
+}
+
+// DeleteK8sWorkload is DeleteWorkload for w, a custom resource's workload as the caller read it, and only
+// while the row is still that resource's: the same row id, metadata.uid, pool and namespace. ErrNotFound,
+// with nothing deleted and no end owed, when the row is gone or an apply of a recreated resource has moved
+// it to another uid since the read.
+func (s PG) DeleteK8sWorkload(ctx context.Context, w Workload) (Workload, error) {
+	return s.deleteWorkload(ctx, `w.id = $1 AND w.source = 'k8s' AND w.k8s_uid = $2 AND w.source_pool_id = $3 AND w.source_namespace = $4`,
+		w.ID, w.K8sUID, w.SourcePoolID, w.SourceNamespace)
+}
+
+// deleteWorkload deletes the workload where matches and owes its current run's end in the same transaction.
+func (s PG) deleteWorkload(ctx context.Context, where string, args ...any) (Workload, error) {
 	var w Workload
 	err := s.inTx(ctx, func(q Querier) error {
 		var err error
-		w, err = scanWorkload(q.QueryRow(ctx, `DELETE FROM workloads w WHERE w.owner = $1 AND w.name = $2 RETURNING `+workloadCols, owner, name))
+		w, err = scanWorkload(q.QueryRow(ctx, `DELETE FROM workloads w WHERE `+where+` RETURNING `+workloadCols, args...))
 		if err != nil || w.CurrentRunID == nil {
 			return err
 		}
@@ -571,17 +585,6 @@ func (s PG) DropWorkloadRunEnd(ctx context.Context, runID uuid.UUID) error {
 		return fmt.Errorf("store: drop a workload run's owed end: %w", err)
 	}
 	return nil
-}
-
-// DeleteK8sWorkload removes w, a custom resource's workload as the caller read it, only while the row is
-// still that resource's: the same row id, metadata.uid, pool and namespace. It returns the removed row, whose
-// CurrentRunID the caller ends, or ErrNotFound with nothing deleted when the row is gone or an apply of a
-// recreated resource has moved it to another uid since the read. The run itself is not touched here.
-func (s PG) DeleteK8sWorkload(ctx context.Context, w Workload) (Workload, error) {
-	return scanWorkload(s.Pool.QueryRow(ctx, `
-		DELETE FROM workloads w
-		WHERE w.id = $1 AND w.source = 'k8s' AND w.k8s_uid = $2 AND w.source_pool_id = $3 AND w.source_namespace = $4
-		RETURNING `+workloadCols, w.ID, w.K8sUID, w.SourcePoolID, w.SourceNamespace))
 }
 
 const workloadBindingCols = `b.id, b.pool_id, b.namespace, b.service, b.sponsor, b.created_by, b.created_at`

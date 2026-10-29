@@ -483,6 +483,13 @@ func TestPG_Workload_K8sDeleteHoldsOnlyForTheRowRead(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	owedEnds := func(id uuid.UUID) (n int) {
+		t.Helper()
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM workload_run_ends WHERE run_id = $1`, id).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
 	stale := read()
 	for _, next := range []struct{ uid, digest string }{{"uid-2", "d1"}, {"uid-3", "d2"}} {
 		put(next.uid, next.digest)
@@ -494,23 +501,27 @@ func TestPG_Workload_K8sDeleteHoldsOnlyForTheRowRead(t *testing.T) {
 		}
 		stale = read()
 	}
+	if n := owedEnds(run); n != 0 {
+		t.Fatalf("%d owed ends after the stale deletes, want 0", n)
+	}
 
 	// The same uid on a row recreated since the read is another row.
 	if _, err := st.DeleteWorkload(ctx, "service:bot", "svc"); err != nil {
 		t.Fatal(err)
 	}
 	put(stale.K8sUID, "d2")
-	if _, err := st.DeleteK8sWorkload(ctx, stale); !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("delete of a replaced row = %v, want ErrNotFound", err)
-	}
 
 	cur := read()
-	if _, err := st.SetWorkloadRun(ctx, cur.ID, mustClaim(t, st, cur.ID), cur.Generation, run); err != nil {
+	run2 := persistRun(t, ctx, pool, newRun(types.RunRunning)).ID
+	if _, err := st.SetWorkloadRun(ctx, cur.ID, mustClaim(t, st, cur.ID), cur.Generation, run2); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := st.DeleteK8sWorkload(ctx, stale); !errors.Is(err, store.ErrNotFound) || owedEnds(run2) != 0 {
+		t.Fatalf("delete of a replaced row with a run = %v, %d owed ends; want ErrNotFound and none", err, owedEnds(run2))
+	}
 	gone, err := st.DeleteK8sWorkload(ctx, read())
-	if err != nil || gone.ID != cur.ID || gone.CurrentRunID == nil || *gone.CurrentRunID != run {
-		t.Fatalf("matching delete = %+v (%v), want row %s with run %s", gone, err, cur.ID, run)
+	if err != nil || gone.ID != cur.ID || gone.CurrentRunID == nil || *gone.CurrentRunID != run2 || owedEnds(run2) != 1 {
+		t.Fatalf("matching delete = %+v (%v), %d owed ends; want row %s with run %s owed its end", gone, err, owedEnds(run2), cur.ID, run2)
 	}
 	if _, err := st.GetWorkload(ctx, "service:bot", "svc"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("after the matching delete = %v, want ErrNotFound", err)
