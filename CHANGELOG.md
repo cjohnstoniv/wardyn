@@ -23,6 +23,19 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `governance_unit_admins`, `oidc_session_sids` and `desktop_vm_sign_ins`. Also grant it `SELECT, INSERT, UPDATE` on
   `runner_health`, `launch_preset_version_floor`, `cli_sessions` and `governance_boundary`. If it turns on
   `WARDYN_MULTI_AGENT_TASKS`, grant it `SELECT, INSERT, UPDATE` on `run_harnesses` as well.
+- A service needs the runner tools of this release in its image. An image wrapped or built before it runs the command
+  once, with no restart and no health check, and its health reads *Health unknown* after 10 minutes. Wrap or build the
+  image again with this release. See [Services](docs/SERVICES.md#images).
+
+### Added
+
+- A background command can be kept running as a service. On New Run, an Automation / script has **Keep it running**
+  (`wardyn run --service`, or `service` on `POST /runs`): the command is restarted when it exits with an error, after a
+  pause that grows to 5 minutes, and checked on a port inside the sandbox by a TCP connect or an HTTP GET. The run list
+  and run page show *Starting*, *Healthy*, *Unhealthy* or *Health unknown* and the restart count. The supervisor runs
+  inside the sandbox, so health is the sandbox's own report (`source: sandbox` on `run.service.health` and
+  `run.service.restart`). A starting or healthy service has its lease renewed within the pool's lifetime cap, as
+  `run.end.set` with reason `service_renewed`; an unhealthy one ends at its lease. See [Services](docs/SERVICES.md).
 
 ### Fixed
 
