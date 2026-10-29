@@ -574,11 +574,10 @@ func (s *Server) workloadOwnerOf(r *http.Request, launches bool) (string, bool) 
 	if owner == "" || owner == caller {
 		return caller, caller != ""
 	}
-	tier := s.isSecurityOperator
 	if launches {
-		tier = s.isOperator
+		return owner, s.isOperator(r.Context()) || s.sponsorsWorkloadOwner(r, owner)
 	}
-	return owner, tier(r.Context()) || s.sponsorsWorkloadOwner(r, owner)
+	return owner, s.isSecurityOperator(r.Context()) || s.sponsorsWorkloadOwner(r, owner)
 }
 
 // sponsorsWorkloadOwner reports whether the caller of r is the current sponsor of the service identity
