@@ -898,12 +898,12 @@ func TestPG_Workload_AdminRestartChecksTheSponsorSinceTheSpec(t *testing.T) {
 	}
 	launchedRun(t, decodeApply(t, doSSO(t, e.h.srv, http.MethodPost, path, e.super, ""), http.StatusOK))
 
-	if err := e.rev.CutSessions(context.Background(), svcSponsor); err != nil {
+	if err := e.rev.RevokeSub(context.Background(), svcSponsor); err != nil {
 		t.Fatal(err)
 	}
 	res := decodeApply(t, doSSO(t, e.h.srv, http.MethodPost, path, e.super, ""), http.StatusOK)
 	if res.Launch.State != client.WorkloadRefused || res.Launch.Reason != reasonServiceIdentityInactive {
-		t.Fatalf("restart after the sponsor's sessions were cut = %+v, want refused %s", res.Launch, reasonServiceIdentityInactive)
+		t.Fatalf("restart after the sponsor's access was revoked = %+v, want refused %s", res.Launch, reasonServiceIdentityInactive)
 	}
 }
 
