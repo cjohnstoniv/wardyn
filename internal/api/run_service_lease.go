@@ -7,6 +7,7 @@ import (
 	"cmp"
 	"context"
 	"log/slog"
+	"net/http"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
@@ -73,7 +74,8 @@ func planServiceRenewal(run types.AgentRun, boundarySec int, now time.Time) (ser
 // renewServiceLease renews run's lease when planServiceRenewal says so and returns the run as
 // the sweep goes on with it: the new end on success, the row it was given on any other outcome.
 // The write is the PATCH route's compare-and-set, so a person's edit, a re-clamp or a lost
-// race leaves the end alone and writes no audit row.
+// race leaves the end alone and writes no audit row, as does an owner whose authority to extend
+// is refused.
 func (s *Server) renewServiceLease(ctx context.Context, leaser store.RunLeaser, run types.AgentRun, now time.Time) types.AgentRun {
 	// The boundary can only shrink the unit, so a run declined without it is declined with it:
 	// the boundary is read only for a run that is about to renew.
@@ -88,6 +90,18 @@ func (s *Server) renewServiceLease(ctx context.Context, leaser store.RunLeaser, 
 	}
 	renewal, ok := planServiceRenewal(run, boundarySec, now)
 	if !ok {
+		return run
+	}
+	// A later end keeps a sandbox and its credentials alive, so a renewal needs the authority a
+	// PATCH moving the end later does (extendRefusal), as the owner the run row names. A refusal,
+	// or a check that cannot be answered, renews nothing and writes no audit row: the run ends at
+	// its lease with the usual warnings.
+	if ref := s.extendRefusal(ctx, run, false); ref != nil {
+		// A check that could not be answered was logged where it failed (loggedMsg).
+		if ref.status != http.StatusServiceUnavailable {
+			slog.WarnContext(ctx, "wardynd: a service's lease is not renewed: its owner's authority is refused",
+				slog.String("run_id", run.ID.String()), slog.String("reason", ref.reason))
+		}
 		return run
 	}
 	applied, err := leaser.SetRunEndAndWait(ctx, run.ID, run.RunLimits, run.EndsAt, run.WaitBudgetSec,

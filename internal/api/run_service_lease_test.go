@@ -5,9 +5,13 @@ package api
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -186,5 +190,51 @@ func TestRunLease_ALostRenewalWritesNothing(t *testing.T) {
 	}
 	if n := len(f.audit.eventsFor(f.run.ID, "run.end.set")); n != 0 {
 		t.Errorf("%d run.end.set rows after a lost compare-and-set, want none", n)
+	}
+}
+
+// ownerChainLeaseStore is the lease store with the run's captured unit read back as chainErr.
+type ownerChainLeaseStore struct {
+	*leaseStore
+	chainErr error
+}
+
+func (s *ownerChainLeaseStore) GetGovernanceUnitChain(context.Context, uuid.UUID) ([]types.GovernanceUnit, error) {
+	return nil, s.chainErr
+}
+
+// A renewal moves the end later, so it meets the owner re-check a PATCH extending the end meets;
+// a refusal, and a check that cannot be answered, renew nothing and audit nothing.
+func TestRunLease_ARenewalNeedsTheOwnersAuthorityToExtend(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		chainErr  error
+		grantsErr error
+	}{
+		{name: "the captured unit is deleted", chainErr: store.ErrNotFound},
+		{name: "the captured unit cannot be read", chainErr: errors.New("connection refused")},
+		{name: "the run's grants cannot be read", grantsErr: errors.New("connection refused")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newServiceLeaseFixture(t, 30*time.Minute)
+			f.st.run.ServiceStatus = &types.RunServiceStatus{Health: types.ServiceHealthHealthy, ObservedAt: f.now}
+			if tc.chainErr != nil {
+				unit := uuid.New()
+				f.st.run.UnitID = &unit
+				f.srv.cfg.Store = &ownerChainLeaseStore{leaseStore: f.st, chainErr: tc.chainErr}
+			}
+			f.st.credGrantsErr = tc.grantsErr
+			end := f.endsAt()
+			f.sweep(t)
+			if got := f.endsAt(); !got.Equal(end) {
+				t.Errorf("ends_at moved to %v, want %v", got, end)
+			}
+			if n := len(f.audit.eventsFor(f.run.ID, "run.end.set")); n != 0 {
+				t.Errorf("%d run.end.set rows, want none", n)
+			}
+			if n := len(f.audit.eventsFor(f.run.ID, "run.ending_soon")); n != 1 {
+				t.Errorf("%d run.ending_soon rows, want the normal warning", n)
+			}
+		})
 	}
 }
