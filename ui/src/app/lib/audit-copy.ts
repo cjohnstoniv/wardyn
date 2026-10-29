@@ -170,11 +170,23 @@ export function describeObject(e: AuditEvent): string {
   return e.target || describeParts(e).object;
 }
 
+export const isInbound = (e: AuditEvent): boolean => e.action === "inbound.allow" || e.action === "inbound.deny";
+
+/** An inbound.deny that carries no actor: the request showed no valid credential, so there is no caller to name. */
+export const hasNoCaller = (e: AuditEvent): boolean => e.action === "inbound.deny" && !e.actor;
+
+/** Where a service row's fact came from: "sandbox" for what wardynd read inside the run, "server" for a lease it renewed itself. Null for any other row. */
+export function serviceSource(e: AuditEvent): string | null {
+  if (e.action === "run.service.health" || e.action === "run.service.restart") return AUDIT.SOURCE_SANDBOX;
+  return e.action === "run.end.set" && e.data?.reason === "service_renewed" ? AUDIT.SOURCE_SERVER : null;
+}
+
 // inboundDetail is the second line of an inbound.allow / inbound.deny row, from what the row recorded: the request
 // (method and path, never the query), how the caller came (a token or a session) and who they matched, or why they
-// were refused. Null for any other row; a field the row lacks is left out, never guessed.
-export function inboundDetail(e: AuditEvent): string | null {
-  if (e.action !== "inbound.allow" && e.action !== "inbound.deny") return null;
+// were refused. `withRun` ends the line with the run's short id, for the Audit page, which lists several runs; a run's
+// own Audit tab leaves it off. Null for any other row; a field the row lacks is left out, never guessed.
+export function inboundDetail(e: AuditEvent, withRun = false): string | null {
+  if (!isInbound(e)) return null;
   const d = e.data ?? {};
   const text = (k: string) => (typeof d[k] === "string" && d[k] ? (d[k] as string) : "");
   const request = [text("method"), text("path")].filter(Boolean).join(" ");
@@ -183,7 +195,9 @@ export function inboundDetail(e: AuditEvent): string | null {
     e.action === "inbound.allow"
       ? [request, via, text("caller") && `caller ${text("caller")}`]
       : [text("reason") && `reason ${text("reason")}`, via, request];
-  return parts.filter(Boolean).join(" · ") || null;
+  const line = parts.filter(Boolean);
+  if (line.length && withRun && e.run_id) line.push(e.run_id.replace(/^run_/, "").slice(0, 8));
+  return line.join(" · ") || null;
 }
 
 const BEDROCK_SIGNING: Record<string, "proxy" | "role" | "session"> = {
