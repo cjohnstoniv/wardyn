@@ -8,6 +8,8 @@
 // API, CLI, admin or portal token ever calls a port). From there both ride one pipeline: the session
 // re-assert, a per-run request bucket, one inbound.allow row per admitted request, then the relay. The
 // token never reaches the sandbox (uiStripInbound drops Authorization); X-Wardyn-Caller names the caller.
+// A WebSocket or other upgrade a token opens is admitted again every inboundResolveTTL while it lasts
+// (watchInboundStream), so a revoke reaches it as it reaches the token's next request.
 //
 // The host-mode cross-site check here binds every cookie session, inbound or not: the victim of a foreign
 // app on a sibling run's origin is the caller's own editor session, which a same-site page could otherwise
@@ -15,11 +17,13 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -160,7 +164,14 @@ func (st *uiInboundState) setRef(runID uuid.UUID, ref string) {
 func (s *Server) uiRelayAnsweredEarly(w http.ResponseWriter, r *http.Request, runID uuid.UUID, app string) bool {
 	if raw, ok := bearerToken(r); ok && strings.HasPrefix(raw, apiTokenPrefix) {
 		if sess, ok := s.inboundTokenSession(w, r, runID, app, raw); ok {
-			s.relayUISession(w, r, sess)
+			// An upgrade this request becomes is admitted again while it lasts (watchInboundStream). The
+			// re-admission's answers go nowhere: the stream has no response left to write them on.
+			held := r.WithContext(context.WithoutCancel(r.Context()))
+			readmit := func() bool {
+				_, ok := s.admitInboundToken(healthzGateWriter{h: http.Header{}}, held, runID, app, raw)
+				return ok
+			}
+			s.relayUISession(w, r.WithContext(context.WithValue(r.Context(), inboundReadmitCtxKey{}, readmit)), sess)
 		}
 		return true
 	}
@@ -223,16 +234,25 @@ func (s *Server) uiRunOrigin(runID uuid.UUID) string {
 }
 
 // inboundTokenSession is the bearer arm's credential: the session an inbound token holds on app of runID,
-// reused for inboundResolveTTL. A bearer that is not a live inbound token is 401 inbound_credential_invalid;
-// a live one that may not call this app — no run, no such app, an app that is not inbound, a holder who is
-// neither the owner nor a caller — is 404 inbound_not_found, one answer for all four. ok=false when it has
-// answered.
+// reused for inboundResolveTTL (admitInboundToken). ok=false when it has answered.
 func (s *Server) inboundTokenSession(w http.ResponseWriter, r *http.Request, runID uuid.UUID, app, raw string) (uiSession, bool) {
 	now := s.cfg.Now()
 	key := inboundSessionKey(raw, runID, app)
 	if sess, ok := s.uiInbound.cached(key, now); ok {
 		return sess, true
 	}
+	sess, ok := s.admitInboundToken(w, r, runID, app, raw)
+	if ok {
+		s.uiInbound.remember(key, sess, now)
+	}
+	return sess, ok
+}
+
+// admitInboundToken is the bearer arm's admission, uncached: a bearer that is not a live inbound token is
+// 401 inbound_credential_invalid; a live one that may not call this app — no run, no such app, an app that
+// is not inbound, a holder who is neither the owner nor a caller — is 404 inbound_not_found, one answer for
+// all four. Each refusal writes its inbound.deny row. ok=false when it has answered.
+func (s *Server) admitInboundToken(w http.ResponseWriter, r *http.Request, runID uuid.UUID, app, raw string) (uiSession, bool) {
 	v, r, verdict := s.verifyAPIToken(w, r, raw, true)
 	switch verdict {
 	case tokenAnswered:
@@ -249,8 +269,62 @@ func (s *Server) inboundTokenSession(w http.ResponseWriter, r *http.Request, run
 		writeErrorReason(w, http.StatusNotFound, reasonInboundNotFound, inboundNotFoundMsg)
 		return uiSession{}, false
 	}
-	s.uiInbound.remember(key, sess, now)
 	return sess, true
+}
+
+// inboundReadmitCtxKey carries an inbound-token request's re-admission to the upgrade it may become
+// (uiRelayAnsweredEarly, watchInboundStream).
+type inboundReadmitCtxKey struct{}
+
+// watchInboundStream holds an upgraded stream an inbound token opened to the authority that admitted it:
+// every inboundResolveTTL (uiInboundStreamEvery in tests) the token is admitted again, uncached, by
+// admitInboundToken, so the token's revoke or expiry, its service identity or sponsor going, its owner
+// losing the run or the app no longer naming its caller all reach the stream as they reach a request. A
+// refusal writes the inbound.deny row a refused request writes and closes the stream. A browser
+// session's stream carries no re-admission and is left as it was
+// (TestUIGateway_EstablishedConnectionOutlivesTheRevoke).
+func (s *Server) watchInboundStream(resp *http.Response) {
+	readmit, ok := resp.Request.Context().Value(inboundReadmitCtxKey{}).(func() bool)
+	if !ok {
+		return
+	}
+	body, ok := resp.Body.(io.ReadWriteCloser)
+	if !ok {
+		return // ReverseProxy refuses a 101 without a writable body itself
+	}
+	stream := &inboundStream{ReadWriteCloser: body, done: make(chan struct{})}
+	resp.Body = stream
+	go func() {
+		tick := time.NewTicker(cmp.Or(s.uiInboundStreamEvery, inboundResolveTTL))
+		defer tick.Stop()
+		for {
+			select {
+			case <-stream.done:
+				return
+			case <-tick.C:
+				if !readmit() {
+					_ = stream.Close() // the relay's copy ends, and the caller's connection with it
+					return
+				}
+			}
+		}
+	}()
+}
+
+// inboundStream is the sandbox side of an inbound-token stream: its first Close also ends the watch.
+type inboundStream struct {
+	io.ReadWriteCloser
+	once sync.Once
+	done chan struct{}
+	err  error
+}
+
+func (c *inboundStream) Close() error {
+	c.once.Do(func() {
+		close(c.done)
+		c.err = c.ReadWriteCloser.Close()
+	})
+	return c.err
 }
 
 // inboundSessionFor is the session v may hold on app of runID, ok=false when it may hold none. A store

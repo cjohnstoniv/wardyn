@@ -583,7 +583,10 @@ func (s *Server) uiStripOutbound(resp *http.Response) error {
 	if sess, ok := uiSessionFromContext(resp.Request.Context()); ok {
 		uiConfineServiceWorker(resp.Request, resp.Header, s.uiBasePath()+uiRelayPrefix(sess.Run, sess.App)+"/")
 		if resp.StatusCode == http.StatusSwitchingProtocols {
-			return s.uiFilterUpgrade(resp, sess)
+			if err := s.uiFilterUpgrade(resp, sess); err != nil {
+				return err
+			}
+			s.watchInboundStream(resp)
 		}
 	} else {
 		resp.Header.Del("Service-Worker-Allowed")
