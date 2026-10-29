@@ -14,13 +14,14 @@ import { shortDate } from "../../../lib/format";
 
 const NOW = Date.parse("2020-10-29T12:00:00Z");
 const ENDS = "2020-11-28T09:40:00Z";
+const CAP = new Date(Date.parse(ENDS) + 30 * 86_400_000).toISOString();
 const WITH_PATH: RunService = { restart: "on_failure", port: 8080, health: { path: "/healthz", interval_sec: 15, failure_threshold: 3 } };
 const status = (over: Partial<RunServiceStatus> & Pick<RunServiceStatus, "health">): RunServiceStatus => ({
   restarts: 0, observed_at: new Date(NOW - 40_000).toISOString(), ...over,
 });
 
 function show(service: RunService | undefined, service_status?: RunServiceStatus, over: Partial<RunDetail> = {}) {
-  const run = { id: "r1", state: "RUNNING", ends_at: ENDS, service, service_status, ...over } as RunDetail;
+  const run = { id: "r1", state: "RUNNING", ends_at: ENDS, lifetime_cap_at: CAP, service, service_status, ...over } as RunDetail;
   return render(<ServicePanel run={run} now={NOW} />);
 }
 const row = (label: string) => (screen.getByText(label, { selector: "dt" }).nextElementSibling as HTMLElement);
@@ -38,6 +39,13 @@ describe("ServicePanel", () => {
     expect(row(T.LEASE)).toHaveTextContent(shortDate(ENDS));
     expect(screen.getByText(T.FOOTNOTE)).toBeInTheDocument();
     expect(screen.queryByRole("note")).not.toBeInTheDocument();
+  });
+
+  it("an uncapped service shows its plain end and the no-cap note, with no renewal clause", () => {
+    show(WITH_PATH, status({ health: "healthy" }), { lifetime_cap_at: undefined });
+    expect(row(T.LEASE)).toHaveTextContent(new RegExp(`^${keptUntilText(ENDS, NOW).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`));
+    expect(row(T.LEASE)).not.toHaveTextContent("Renewed while healthy");
+    expect(screen.getByRole("note")).toHaveTextContent(T.NO_CAP);
   });
 
   it("starting with no read yet: waits for the first check", () => {
