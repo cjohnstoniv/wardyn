@@ -298,6 +298,51 @@ func TestPG_Workload_StaleClaimRecordsNothing(t *testing.T) {
 	}
 }
 
+// A late report of a resource at a lower metadata.generation than stored (a runner's cache behind
+// another's) writes nothing, even with another spec; a new uid at a lower generation is a new resource.
+func TestPG_Workload_LowerK8sGenerationIsIgnored(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := t.Context()
+	poolA := ownPool(t, st, "sub-a", "A")
+	runnerA, runnerB := uuid.New(), uuid.New()
+	gen1, gen2 := int64(1), int64(2)
+
+	in := workloadPut("service:bot", "svc", "d2")
+	in.Intent = json.RawMessage(`{"experience":"background","task":"gen2"}`)
+	in.Source, in.SourcePoolID, in.SourceNamespace, in.SourceRunnerID, in.K8sGeneration, in.K8sUID =
+		store.WorkloadSourceK8s, &poolA.ID, "team-a", &runnerA, &gen2, "uid-1"
+	w := mustPutWorkload(t, st, in)
+	run := persistRun(t, ctx, pool, newRun(types.RunRunning)).ID
+	if _, err := st.SetWorkloadRun(ctx, w.ID, mustClaim(t, st, w.ID), 1, run); err != nil {
+		t.Fatal(err)
+	}
+
+	late := in
+	late.Intent, late.Digest, late.SourceRunnerID, late.K8sGeneration = json.RawMessage(`{"experience":"background","task":"gen1"}`), "d1", &runnerB, &gen1
+	got, write, err := st.PutWorkload(ctx, late)
+	if err != nil || write != store.WorkloadUnchanged || got.ID != w.ID || got.Digest != "d2" {
+		t.Fatalf("late put = %+v, %v, %v; want the stored row back unchanged", got, write, err)
+	}
+	v, err := st.GetWorkload(ctx, "service:bot", "svc")
+	if err != nil || v.Digest != "d2" || string(v.Intent) != string(w.Intent) || v.Generation != 1 || v.K8sGeneration == nil || *v.K8sGeneration != 2 ||
+		v.SourceRunnerID == nil || *v.SourceRunnerID != runnerA || v.CurrentRunID == nil || *v.CurrentRunID != run || v.CurrentGeneration != 1 ||
+		!v.UpdatedAt.Equal(w.UpdatedAt) {
+		t.Fatalf("after the late put = %+v (%v), want the generation 2 row and its run untouched", v.Workload, err)
+	}
+
+	// The same uid at the same metadata.generation is still answered (a re-report), and a new uid is
+	// accepted at any generation.
+	if _, write, err := st.PutWorkload(ctx, in); err != nil || write != store.WorkloadUnchanged {
+		t.Fatalf("re-report at the stored generation = %v, %v", write, err)
+	}
+	late.K8sUID = "uid-2"
+	got, write, err = st.PutWorkload(ctx, late)
+	if err != nil || write != store.WorkloadUpdated || got.Digest != "d1" || got.Generation != 2 || got.K8sUID != "uid-2" || *got.K8sGeneration != 1 {
+		t.Fatalf("new uid at generation 1 = %+v, %v, %v; want it recorded", got, write, err)
+	}
+}
+
 // A custom resource's workload is its pool's and namespace's alone, and an API one is the API's alone.
 func TestPG_Workload_SourceConflict(t *testing.T) {
 	st := store.NewPG(runsPGPoolIsolated(t))
@@ -407,6 +452,79 @@ func TestPG_Workload_ReadsAndDelete(t *testing.T) {
 	}
 	if rest, _ := st.ListWorkloads(ctx, store.Page{}); len(rest) != 3 {
 		t.Fatalf("%d left, want three", len(rest))
+	}
+}
+
+// A custom resource's workload is deleted only while the row is still the one read: after an apply of a
+// recreated resource (a new uid, with the same spec or another) moved it, or after the row was replaced by
+// another of the same uid, the stale delete removes nothing and the run stays. The matching one removes it.
+func TestPG_Workload_K8sDeleteHoldsOnlyForTheRowRead(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := t.Context()
+	poolA := ownPool(t, st, "sub-a", "A")
+	runner, gen := uuid.New(), int64(1)
+	put := func(uid, digest string) store.Workload {
+		in := workloadPut("service:bot", "svc", digest)
+		in.Source, in.SourcePoolID, in.SourceNamespace, in.SourceRunnerID, in.K8sGeneration, in.K8sUID =
+			store.WorkloadSourceK8s, &poolA.ID, "team-a", &runner, &gen, uid
+		return mustPutWorkload(t, st, in)
+	}
+	read := func() store.Workload {
+		v, err := st.GetWorkload(ctx, "service:bot", "svc")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v.Workload
+	}
+	w := put("uid-1", "d1")
+	run := persistRun(t, ctx, pool, newRun(types.RunRunning)).ID
+	if _, err := st.SetWorkloadRun(ctx, w.ID, mustClaim(t, st, w.ID), 1, run); err != nil {
+		t.Fatal(err)
+	}
+
+	owedEnds := func(id uuid.UUID) (n int) {
+		t.Helper()
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM workload_run_ends WHERE run_id = $1`, id).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	stale := read()
+	for _, next := range []struct{ uid, digest string }{{"uid-2", "d1"}, {"uid-3", "d2"}} {
+		put(next.uid, next.digest)
+		if _, err := st.DeleteK8sWorkload(ctx, stale); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("delete of %s after %s was applied = %v, want ErrNotFound", stale.K8sUID, next.uid, err)
+		}
+		if v := read(); v.ID != w.ID || v.K8sUID != next.uid || v.CurrentRunID == nil || *v.CurrentRunID != run {
+			t.Fatalf("after the stale delete = %+v, want row %s of %s with run %s kept", v, w.ID, next.uid, run)
+		}
+		stale = read()
+	}
+	if n := owedEnds(run); n != 0 {
+		t.Fatalf("%d owed ends after the stale deletes, want 0", n)
+	}
+
+	// The same uid on a row recreated since the read is another row.
+	if _, err := st.DeleteWorkload(ctx, "service:bot", "svc"); err != nil {
+		t.Fatal(err)
+	}
+	put(stale.K8sUID, "d2")
+
+	cur := read()
+	run2 := persistRun(t, ctx, pool, newRun(types.RunRunning)).ID
+	if _, err := st.SetWorkloadRun(ctx, cur.ID, mustClaim(t, st, cur.ID), cur.Generation, run2); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DeleteK8sWorkload(ctx, stale); !errors.Is(err, store.ErrNotFound) || owedEnds(run2) != 0 {
+		t.Fatalf("delete of a replaced row with a run = %v, %d owed ends; want ErrNotFound and none", err, owedEnds(run2))
+	}
+	gone, err := st.DeleteK8sWorkload(ctx, read())
+	if err != nil || gone.ID != cur.ID || gone.CurrentRunID == nil || *gone.CurrentRunID != run2 || owedEnds(run2) != 1 {
+		t.Fatalf("matching delete = %+v (%v), %d owed ends; want row %s with run %s owed its end", gone, err, owedEnds(run2), cur.ID, run2)
+	}
+	if _, err := st.GetWorkload(ctx, "service:bot", "svc"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("after the matching delete = %v, want ErrNotFound", err)
 	}
 }
 
