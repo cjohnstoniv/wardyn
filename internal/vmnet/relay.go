@@ -503,7 +503,11 @@ func (rl *Relay) Listen(ctx context.Context, path string) error {
 			return err
 		}
 		rl.log.Info("qemu_connected")
+		// A silent guest must not outlive the context: closing c ends Serve.
+		// AfterFunc also fires at once if ctx ended since Accept.
+		stop := context.AfterFunc(ctx, func() { _ = c.Close() })
 		err = rl.Serve(c)
+		stop()
 		_ = c.Close()
 		rl.log.Info("qemu_disconnected", "err", errString(err))
 	}
