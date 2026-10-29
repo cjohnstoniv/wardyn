@@ -102,7 +102,7 @@ intent:
 - The new run is created before the old one is ended. A workload is never without a run because of a change.
 - A refused launch is a `200`, not an error. The spec is stored at its new generation, and the old run keeps running.
 - The answer carries `launch.state` `refused`, with the create path's own `reason` and sentence. The ceiling, a pool's limits and the unit walls all refuse here as they refuse `POST /runs`.
-- The workload records `last_refusal` (`generation`, `reason`, `message`, `at`) until a launch succeeds. The audit row is `workload.launch_refused`.
+- The workload records `last_refusal` (`generation`, `reason`, `message`, `at`) until a launch succeeds. A `security_admin` reading another owner's workload gets the `reason` without the `message`. The audit row is `workload.launch_refused`.
 - Two applies that race leave one run: the launch that loses is ended with reason `workload_replaced`.
 - `workload restart` is recorded as `workload.restart`. Only the owner, the service identity's sponsor or a super admin may restart; a `security_admin` gets `404`, because a restart launches as the service. When it is not the owner's own request it launches only for a service identity whose sponsor's session is live; a person's workload then starts at their next apply.
 - Deleting a workload removes the row, then ends its run with reason `workload_deleted`. The owner, the service identity's sponsor, a super admin or a `security_admin` may delete.

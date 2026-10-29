@@ -1,3 +1,3 @@
 # Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the measured prose words, so growth fails.
-# docs/operations/workloads.md 2479 measured (rc.8, the organization-pool rule, who may restart and a binding without authority): what a workload is, the file, the CLI, update semantics, the WardynWorkload resource, bindings, status, the Argo CD health check and the limits, resolved against the code on the wave head.
-docs/operations/workloads.md=2479 share=10
+# docs/operations/workloads.md 2491 measured (rc.8, the organization-pool rule, who may restart, a binding without authority and the security tier's refusal): what a workload is, the file, the CLI, update semantics, the WardynWorkload resource, bindings, status, the Argo CD health check and the limits, resolved against the code on the wave head.
+docs/operations/workloads.md=2491 share=10

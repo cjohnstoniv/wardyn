@@ -205,6 +205,9 @@ func workloadOut(v store.WorkloadView, tier workspaceReadTier, now time.Time) cl
 	_ = json.Unmarshal(redactWorkloadIntentForRead(v.Intent, tier), &out.Intent) //nolint:errcheck // the door wrote it; an unreadable intent reads as none
 	if f := v.LastRefusal; f != nil {
 		out.LastRefusal = &client.WorkloadRefusal{Generation: f.Generation, Reason: f.Reason, Message: f.Message, At: f.At}
+		if tier != workspaceReadFull {
+			out.LastRefusal.Message = "" // the sentence can name the image the intent's read blanks; the reason code stays
+		}
 	}
 	return out
 }
