@@ -177,3 +177,18 @@ func TestListPersonInvitationsAndServiceListsSurfaceTruncation(t *testing.T) {
 		t.Errorf("ListServiceTokensPage = truncated %v, err %v", tr, err)
 	}
 }
+
+// TestListWorkloadsSurfaceTruncation pins X-Wardyn-Truncated on the workload Page forms, and its
+// absence as false.
+func TestListWorkloadsSurfaceTruncation(t *testing.T) {
+	ctx := context.Background()
+	for _, truncated := range []bool{true, false} {
+		c := r3bTruncatedServer(t, truncated)
+		if rows, tr, err := c.ListWorkloadsPage(ctx, "service:ci"); err != nil || tr != truncated || len(rows) != 1 {
+			t.Errorf("ListWorkloadsPage = %d rows, truncated %v, err %v; want 1, %v", len(rows), tr, err, truncated)
+		}
+		if rows, tr, err := c.ListWorkloadBindingsPage(ctx); err != nil || tr != truncated || len(rows) != 1 {
+			t.Errorf("ListWorkloadBindingsPage = %d rows, truncated %v, err %v; want 1, %v", len(rows), tr, err, truncated)
+		}
+	}
+}

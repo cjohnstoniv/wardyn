@@ -306,16 +306,24 @@ func (c *Client) ApplyWorkload(ctx context.Context, name string, req WorkloadApp
 	return out, err
 }
 
-// ListWorkloads lists the caller's workloads; owner, for an administrator or a service identity's
-// sponsor, names another principal. GET /api/v1/workloads.
-func (c *Client) ListWorkloads(ctx context.Context, owner string, opts ...ListOpts) ([]Workload, error) {
+// ListWorkloadsPage is ListWorkloads plus the server's X-Wardyn-Truncated signal: truncated=true
+// means a further page exists.
+func (c *Client) ListWorkloadsPage(ctx context.Context, owner string, opts ...ListOpts) (workloads []Workload, truncated bool, err error) {
 	path := "/api/v1/workloads"
 	if owner != "" {
 		path += "?owner=" + url.QueryEscape(owner)
 	}
-	var out []Workload
-	err := c.do(ctx, http.MethodGet, appendListOpts(path, opts), nil, &out)
-	return out, err
+	var hdr http.Header
+	err = c.do(ctx, http.MethodGet, appendListOpts(path, opts), nil, &workloads, &hdr)
+	return workloads, hdr.Get("X-Wardyn-Truncated") == "true", err
+}
+
+// ListWorkloads lists the caller's workloads; owner, for an administrator or a service identity's
+// sponsor, names another principal. GET /api/v1/workloads. Prefer ListWorkloadsPage, which also
+// returns the server's truncation signal.
+func (c *Client) ListWorkloads(ctx context.Context, owner string, opts ...ListOpts) ([]Workload, error) {
+	workloads, _, err := c.ListWorkloadsPage(ctx, owner, opts...)
+	return workloads, err
 }
 
 // GetWorkload reads one workload. GET /api/v1/workloads/{name}.
@@ -350,11 +358,19 @@ func (c *Client) CreateWorkloadBinding(ctx context.Context, req CreateWorkloadBi
 	return out, err
 }
 
+// ListWorkloadBindingsPage is ListWorkloadBindings plus the server's X-Wardyn-Truncated signal:
+// truncated=true means a further page exists.
+func (c *Client) ListWorkloadBindingsPage(ctx context.Context, opts ...ListOpts) (bindings []WorkloadBinding, truncated bool, err error) {
+	var hdr http.Header
+	err = c.do(ctx, http.MethodGet, appendListOpts("/api/v1/workload-bindings", opts), nil, &bindings, &hdr)
+	return bindings, hdr.Get("X-Wardyn-Truncated") == "true", err
+}
+
 // ListWorkloadBindings lists every binding (security tier). GET /api/v1/workload-bindings.
+// Prefer ListWorkloadBindingsPage, which also returns the server's truncation signal.
 func (c *Client) ListWorkloadBindings(ctx context.Context, opts ...ListOpts) ([]WorkloadBinding, error) {
-	var out []WorkloadBinding
-	err := c.do(ctx, http.MethodGet, appendListOpts("/api/v1/workload-bindings", opts), nil, &out)
-	return out, err
+	bindings, _, err := c.ListWorkloadBindingsPage(ctx, opts...)
+	return bindings, err
 }
 
 // DeleteWorkloadBinding removes a binding (security tier); runs it launched continue.
