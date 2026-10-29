@@ -45,7 +45,7 @@ Pick one of three shapes. The server records it as `shape` ([run documents](sdk.
 | Shape | Sub-line shown | Runs as |
 |---|---|---|
 | **Agent task** | Interactive · Autonomous · Repeat / schedule coming soon | A one-time coding task, driven by you or running on its own |
-| **Environment sandbox** | Interactive · Your drive is attached when you have one | A reusable workspace for development or analysis |
+| **Environment** | Interactive · Your drive is attached when you have one | A reusable workspace for development or analysis |
 | **Application sandbox** | Automation / script · Application / server | A sandboxed command that runs on its own, or a server you open in your browser |
 
 - Choosing a shape opens step 2. Choosing the shape a draft already has changes nothing: its starter, prompt and task stay.
@@ -103,7 +103,7 @@ Press **+ Add** to open a dialog with three stages: **Type**, **Choose**, **Moun
 - **Remove** is disabled for a folder that comes with its workspace's repositories; remove those to remove it.
 - The first item you add is where the run starts. Change it under **Starting folder**, with an optional **Subfolder** inside that item. With nothing attached the run starts in the main drive.
 - With nothing added, choose **No extra files — only the main drive**. A held **Continue to tools and access** says "Add what it needs, or choose No extra files."
-- An Environment sandbox opens with your own drive attached when it can attach.
+- An Environment opens with your own drive attached when it can attach.
 
 ### Step 5: Tools and access
 

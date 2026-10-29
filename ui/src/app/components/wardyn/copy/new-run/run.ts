@@ -72,7 +72,7 @@ export const NR_RUN = {
   APP_PORT_ARIA: (who: string) => `Port for ${who}`,
   APP_PATH_ARIA: (who: string) => `Path for ${who}`,
   APP_REMOVE_ARIA: (who: string) => `Remove ${who}`,
-  APP_TERMINAL_NOTE: "The sandbox also has a terminal, as an Environment sandbox does.",
+  APP_TERMINAL_NOTE: "The sandbox also has a terminal, as an Environment does.",
   COMMAND_LABEL: "Command",
   /** Lead wording 2026-10-17 (FR-0099): the Review blocker for a command run with no command. */
   COMMAND_REQUIRED: "A command run needs a command to run.",
