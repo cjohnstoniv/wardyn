@@ -96,6 +96,16 @@ func newClusterWorkloadWatcher(ctx context.Context, namespaces []string) (*workl
 func newWorkloadWatcher(ctx context.Context, client dynamic.Interface, namespaces []string, resync time.Duration) (*workloadWatcher, error) {
 	w := &workloadWatcher{ctx: ctx, client: client, resync: resync, now: time.Now, names: namespaces,
 		informers: map[string]cache.SharedIndexInformer{}, handlers: map[string]cache.ResourceEventHandlerRegistration{}, synced: map[string]*atomic.Bool{}, kick: make(chan struct{}, 1)}
+	// An absent CRD makes every informer 404 forever with boot green, so it refuses boot here like a
+	// missing grant (CheckRunnerAccess).
+	for _, ns := range namespaces {
+		if _, err := client.Resource(workloadGVR).Namespace(ns).List(ctx, metav1.ListOptions{Limit: 1}); err != nil {
+			if apierrors.IsNotFound(err) {
+				return nil, fmt.Errorf("workload watcher: the WardynWorkload CRD (%s) is not installed: apply the chart's crds/wardyn.dev_wardynworkloads.yaml: %w", workloadGVR.GroupResource(), err)
+			}
+			return nil, fmt.Errorf("workload watcher: list %s in namespace %s: %w", workloadGVR.Resource, ns, err)
+		}
+	}
 	for _, ns := range namespaces {
 		inf := dynamicinformer.NewFilteredDynamicInformer(client, workloadGVR, ns, 0, cache.Indexers{}, nil).Informer()
 		reg, err := inf.AddEventHandler(cache.ResourceEventHandlerFuncs{

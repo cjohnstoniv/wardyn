@@ -371,6 +371,27 @@ func TestWorkloadWatcherStatusOnlyForItsResource(t *testing.T) {
 	}
 }
 
+// TestWorkloadWatcherRefusesMissingCRD: a listed namespace whose WardynWorkload resource the API server
+// does not know refuses boot naming the CRD and its file; any other list error refuses too.
+func TestWorkloadWatcherRefusesMissingCRD(t *testing.T) {
+	client := fakeWorkloadClient()
+	client.PrependReactor("list", "wardynworkloads", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewNotFound(workloadGVR.GroupResource(), "")
+	})
+	_, err := newWorkloadWatcher(context.Background(), client, []string{"team-a"}, time.Hour)
+	if err == nil || !strings.Contains(err.Error(), "wardynworkloads.wardyn.dev") || !strings.Contains(err.Error(), "crds/wardyn.dev_wardynworkloads.yaml") {
+		t.Fatalf("missing CRD: %v, want a refusal naming wardynworkloads.wardyn.dev and the chart's crds file", err)
+	}
+
+	client = fakeWorkloadClient()
+	client.PrependReactor("list", "wardynworkloads", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(workloadGVR.GroupResource(), "", fmt.Errorf("no grant"))
+	})
+	if _, err = newWorkloadWatcher(context.Background(), client, []string{"team-a"}, time.Hour); err == nil || !strings.Contains(err.Error(), "team-a") {
+		t.Fatalf("forbidden list: %v, want a refusal naming the namespace", err)
+	}
+}
+
 // TestWorkloadWatcherAttach: the session hooks hand the watcher its peer and the runtime still sees
 // both; with no namespaces there is no watcher and the runtime is untouched.
 func TestWorkloadWatcherAttach(t *testing.T) {
