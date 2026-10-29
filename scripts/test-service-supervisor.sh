@@ -186,5 +186,38 @@ else
     echo "skip: socat not installed; TCP and HTTP pass cases not run"
 fi
 
+# 8) the whole probe is bounded to 5 s: a connect a full backlog never answers,
+# and an HTTP status line a silent listener never sends, each fail in time. The
+# listeners need python3; skipped without it.
+if command -v python3 >/dev/null 2>&1; then
+    python3 -I -c '
+import socket
+full = socket.socket(); full.bind(("127.0.0.1", 0)); full.listen(0)
+fill = [socket.socket() for _ in range(4)]
+for c in fill:
+    c.setblocking(False); c.connect_ex(full.getsockname())
+silent = socket.socket(); silent.bind(("127.0.0.1", 0)); silent.listen(8)
+print(full.getsockname()[1], silent.getsockname()[1], flush=True)
+held = []
+while True:
+    held.append(silent.accept()[0])
+' > "$tmp/hung.ports" &
+    sups+=("$!")
+    for ((i = 0; i < 50; i++)); do [[ -s "$tmp/hung.ports" ]] && break; sleep 0.1; done
+    read -r full_port silent_port < "$tmp/hung.ports"
+    # probe_bounded <what> <port> [path] — the probe fails, within 7 s.
+    probe_bounded() {
+        local s=$SECONDS prc=0
+        # shellcheck disable=SC2016 # expanded by the inner bash
+        timeout 20 bash -c '. "$1"; service_probe "$2" "$3"' _ "$LIB" "$2" "${3:-}" || prc=$?
+        if (( prc != 0 && SECONDS - s <= 7 )); then ok "a probe whose $1 never answers fails in $((SECONDS - s))s"
+        else bad "$1 probe: rc=$prc after $((SECONDS - s))s"; fi
+    }
+    probe_bounded "TCP connect" "$full_port"
+    probe_bounded "HTTP read" "$silent_port" /healthz
+else
+    echo "skip: python3 not installed; the hung-probe cases not run"
+fi
+
 echo "--- test-service-supervisor: $([[ $fail -eq 0 ]] && echo PASS || echo FAIL) ---"
 exit "$fail"

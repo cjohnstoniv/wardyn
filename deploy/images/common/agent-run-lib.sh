@@ -736,16 +736,20 @@ service_state() {
 
 # service_probe <port> [path] — TCP connect to 127.0.0.1:<port>; with a path, an
 # HTTP/1.0 GET on the same fd that passes on a 2xx or 3xx status line. Plain bash
-# (/dev/tcp, as wait_for_proxy does), so a service image needs no curl. A
-# subshell, so fd 3 never leaks into the supervisor.
-service_probe() (
-    local line
-    exec 3<>"/dev/tcp/127.0.0.1/$1" || exit 1
-    [[ -n "${2:-}" ]] || exit 0
-    printf 'GET %s HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n' "$2" >&3 || exit 1
-    read -r -t 5 line <&3 || exit 1
-    [[ "$line" =~ ^HTTP/1\.[0-9]\ [23][0-9][0-9] ]]
-) 2>/dev/null
+# (/dev/tcp, as wait_for_proxy does), so a service image needs no curl. Its own
+# bash, so fd 3 never leaks into the supervisor, under timeout: the whole probe,
+# the connect included (a listener whose backlog is full never answers it), fails
+# after 5 s.
+service_probe() {
+    # shellcheck disable=SC2016 # expanded by the inner bash
+    timeout 5 bash -c '
+        exec 3<>"/dev/tcp/127.0.0.1/$1" || exit 1
+        [[ -n "$2" ]] || exit 0
+        printf "GET %s HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n" "$2" >&3 || exit 1
+        read -r line <&3 || exit 1
+        [[ "$line" =~ ^HTTP/1\.[0-9]\ [23][0-9][0-9] ]]
+    ' _ "$1" "${2:-}" 2>/dev/null
+}
 
 # service_kill_group — TERM the command's whole process group, KILL what is
 # left after 10 s, and record the command's exit code.
