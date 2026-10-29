@@ -387,6 +387,9 @@ func TestD1cRotationThatFailsWithExitZeroKeepsTheCode(t *testing.T) {
 	if !errors.As(err, &se) || se.Command != "rotate-admin-password" {
 		t.Fatalf("err = %v; want the rotation's step error", err)
 	}
+	if errors.Is(err, ErrSignInRefused) { // a failed rotation is not a wrong account
+		t.Fatalf("err = %v; a refused sign-in after the rotation reads as ErrSignInRefused", err)
+	}
 	if len(f.replaced) != 0 || f.srv.Password() != code || len(f.srv.Execs()) != 1 {
 		t.Fatalf("Replaced %d times, guest password replaced %v, %d commands", len(f.replaced), f.srv.Password() != code, len(f.srv.Execs()))
 	}
