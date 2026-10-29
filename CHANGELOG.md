@@ -45,6 +45,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `run.end.set` with reason `service_renewed`, but only when a cap applies: the pool's `background.lifetime.max_sec` or
   `WARDYN_RUN_MAX_AGE`. With no cap, or when unhealthy, a service ends at its lease like any run, and New Run says so
   before launch. See [Services](docs/SERVICES.md).
+- A port on a background run opens from the run page only when it is callable from outside; the run's owner is always
+  one of its callers. See [Services](docs/SERVICES.md#start-a-service).
+- Changing a service identity's sponsor stops lease renewal of the services it already runs: they end at their current
+  lease end. Relaunch or apply them again under the new sponsor.
 
 - Your walls: limits you set on every run you start, which only narrow what your organisation allows. Set them under
   **Your account**, with `wardyn walls` (`wardyn walls set --file walls.yaml`, `wardyn walls clear`), or through
@@ -136,10 +140,6 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Known issues
 
-- A port on a background run opens from the run page only when it is callable from outside; the run's owner is always
-  one of its callers. See [Services](docs/SERVICES.md#start-a-service).
-- Changing a service identity's sponsor stops lease renewal of the services it already runs: they end at their current
-  lease end. Relaunch or apply them again under the new sponsor.
 - A person other than a run's owner can open an inbound app only on per-run hosts; on one shared host the ticket is
   refused `inbound_needs_host_mode`. Opening a code editor through an inbound port on per-run hosts has not been tested
   end to end in this release.
