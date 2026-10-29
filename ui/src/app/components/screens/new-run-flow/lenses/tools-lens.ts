@@ -7,7 +7,8 @@
 // components and overrides. It never writes inline_policy: a host the person
 // adds is overrides.hosts.add_allowed, which works beside policy_id.
 
-import type { AccessHost, AccessRow } from "../../../../lib/types/new-run-access";
+import type { PersonalWallsSpec } from "../../../../lib/api/walls";
+import type { AccessFacts, AccessHost, AccessRow } from "../../../../lib/types/new-run-access";
 import type { SetupItem } from "../../../../lib/types/preflight";
 import type { RunIntent } from "../draft/run-intent";
 import { withKeys } from "./lens-keys";
@@ -19,6 +20,37 @@ export function addAllowedHost(intent: RunIntent, host: string): RunIntent {
   return withKeys(intent, {
     overrides: { ...intent.overrides, hosts: { ...hosts, add_allowed: [...(hosts?.add_allowed ?? []), host] } },
   });
+}
+
+/** "Only the sites listed" is on: the run is sent with overrides.egress.allow_all_egress: false. */
+export const narrowsEgress = (intent: RunIntent): boolean => intent.overrides?.egress?.allow_all_egress === false;
+
+/** Turns the switch on, or off by leaving the key out (a run never asks for `true` here), pruning what it empties. */
+export function setNarrowEgress(intent: RunIntent, on: boolean): RunIntent {
+  const { allow_all_egress: _, ...rest } = intent.overrides?.egress ?? {};
+  const egress = on ? { ...rest, allow_all_egress: false } : rest;
+  const { egress: __, ...others } = intent.overrides ?? {};
+  const overrides = Object.keys(egress).length > 0 ? { ...others, egress } : others;
+  return withKeys(intent, { overrides: Object.keys(overrides).length > 0 ? overrides : undefined });
+}
+
+/** A walls entry covers a host the way the proxy reads an entry: exactly, or a `*.` wildcard's subdomains. */
+const covers = (entry: string, host: string, apex: boolean): boolean =>
+  entry === host || (entry.startsWith("*.") && (host.endsWith(entry.slice(1)) || (apex && host === entry.slice(2))));
+
+/**
+ * The hosts the server says are not allowed that the person's own walls take out of the run: one their
+ * "never these sites" covers, or one outside their "only these sites". The server's answer does not name the
+ * layer that dropped a host, so the walls the person set are read against it. A wildcard in the list counts
+ * as covering its bare domain, so a host is named only when the walls leave it out either way.
+ */
+export function wallsLeaveOut(walls: PersonalWallsSpec | undefined, access: AccessFacts | undefined, answered: boolean): string[] {
+  if (!walls || !access || !answered) return [];
+  const denied = walls.denied_domains ?? [];
+  return access.hosts
+    .filter((h) => h.verdict === "not_allowed")
+    .map((h) => h.host)
+    .filter((host) => denied.some((e) => covers(e, host, false)) || (walls.allowed_domains !== undefined && !walls.allowed_domains.some((e) => covers(e, host, true))));
 }
 
 export function setModelProvider(intent: RunIntent, toolId: string, provider: string): RunIntent {
