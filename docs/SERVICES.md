@@ -1,7 +1,7 @@
 # Services — keep a command running
 
 - A service is a background run of one command that Wardyn keeps running: it restarts the command when it exits with an error, and checks it on a port inside the sandbox.
-- It lives as long as the walls around it allow. A healthy service has its lease renewed for it; an unhealthy one ends at its lease.
+- It lives as long as the walls around it allow. A healthy service under a lifetime cap has its lease renewed for it; an unhealthy one, or one with no cap, ends at its lease.
 - Health is the sandbox's own report. Read [Health is the sandbox's claim](#health-is-the-sandboxs-claim) before you rely on it.
 
 ## Start a service
@@ -67,13 +67,13 @@ A service is gated as any background command is: `deny_task_mode_exec`, autonomy
 
 Three limits apply:
 
-- **The cap.** The pool's `background.lifetime.max_sec` or the deployment's [`WARDYN_RUN_MAX_AGE`](ENV.md#wardyn_run_max_age), whichever is shorter, is captured as the run's lifetime cap. A run still live at the cap is killed. Nothing renews past it.
+- **The cap.** The pool's `background.lifetime.max_sec` or the deployment's [`WARDYN_RUN_MAX_AGE`](ENV.md#wardyn_run_max_age), whichever is shorter, is captured as the run's lifetime cap. A run still live at the cap is killed. Nothing renews past it, and with no cap nothing renews at all: a service with no cap ends at its lease like any run, and New Run says so before launch.
 - **The lease unit.** The governance profile's `max_end_ahead_sec`, or `default_end_sec` when that is 0. A service whose profile names neither is never renewed.
 - **The first end.** The run starts with the end any background command gets. Renewal takes over from there.
 
 To let a team run services for at most 30 days:
 
-1. Create a pool whose use policy admits the team and set its background lifetime: `wardyn runner pool update <pool> --background-lifetime 24h:720h`. The flag takes DEFAULT:MAX as Go durations, so 30 days is `720h` ([Limits: the strictest wins](operations/runner-pools.md#limits-the-strictest-wins)).
+1. Create a pool whose use policy admits the team and set its background lifetime. A pool lifetime limit (or `WARDYN_RUN_MAX_AGE`) is required to keep a service up: `wardyn runner pool update <pool> --background-lifetime 24h:720h`. The flag takes DEFAULT:MAX as Go durations, so 30 days is `720h` ([Limits: the strictest wins](operations/runner-pools.md#limits-the-strictest-wins)).
 2. On the team's unit profile, set `max_end_ahead_sec` to the lease you want a failing service to keep its slot for, for example 24 hours ([Three roles](operations/three-roles.md)).
 3. Leave `deny_task_mode_exec` off. Set `pause_idle_after_sec` to 0, or a service that waits for requests is frozen.
 
@@ -82,7 +82,7 @@ To let a team run services for at most 30 days:
 Every minute the lease sweep looks at each running service. It renews the lease when all of these hold:
 
 - The service is `starting` or `healthy`, and the observation is fresh. One older than 15 minutes counts as unknown.
-- The run is not paused or lost, and has an end.
+- The run has a lifetime cap, is not paused or lost, and has an end.
 - The end is within half a lease unit of now.
 - The run's owner could still extend it: the check a `PATCH` does.
 

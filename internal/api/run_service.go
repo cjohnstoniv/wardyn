@@ -85,15 +85,33 @@ func servicePauseWarnings(hasService bool, pauseAfterSec int) []string {
 	return nil
 }
 
-// serviceCreateWarnings are the sentences a service's 201 carries.
-func serviceCreateWarnings(run types.AgentRun) []string {
-	return servicePauseWarnings(run.Service != nil, run.RunLimits.PauseIdleAfterSec)
+// serviceNoCapWarning is said before launch to a service no lifetime cap applies to: its lease renews only
+// under a cap (planServiceRenewal), so without one it ends at its lease like any run.
+const serviceNoCapWarning = "No lifetime limit applies to this run, so Wardyn will not keep renewing it: the service ends at its lease like any run. Ask your admin to set a lifetime limit on the pool to keep a service up."
+
+// serviceNoCapWarnings is the no-cap sentence for a service no lifetime cap applies to: the pool's
+// background.lifetime.max_sec or the deployment's WARDYN_RUN_MAX_AGE.
+func serviceNoCapWarnings(hasService, capped bool) []string {
+	if hasService && !capped {
+		return []string{serviceNoCapWarning}
+	}
+	return nil
 }
 
-// queuedServiceWarnings are serviceCreateWarnings for a run waiting in a pool's queue. Its limits are
-// captured only when it starts (run_queue_start.go), so the sentence reads the limits the launch
-// resolved now: an advisory, as the profile may change before the start.
-func queuedServiceWarnings(queued types.AgentRun, current types.RunLimits) []string {
-	queued.RunLimits = current
-	return serviceCreateWarnings(queued)
+// serviceWarnings are the sentences a service carries before and at launch: the pause sentence from the
+// idle pause in force, the no-cap sentence from the lifetime cap the run's end was decided under.
+func serviceWarnings(hasService bool, pauseAfterSec int, capped bool) []string {
+	return append(servicePauseWarnings(hasService, pauseAfterSec), serviceNoCapWarnings(hasService, capped)...)
+}
+
+// serviceCreateWarnings are the sentences a service's 201 carries.
+func serviceCreateWarnings(run types.AgentRun) []string {
+	return serviceWarnings(run.Service != nil, run.RunLimits.PauseIdleAfterSec, run.LifetimeCapAt != nil)
+}
+
+// queuedServiceWarnings are serviceCreateWarnings for a run waiting in a pool's queue. Its limits and
+// lifetime cap are captured only when it starts (run_queue_start.go), so the sentences read the limits
+// and the cap the launch resolved now (end.capSec): an advisory, as the profile may change before the start.
+func queuedServiceWarnings(queued types.AgentRun, current types.RunLimits, end createEnd) []string {
+	return serviceWarnings(queued.Service != nil, current.PauseIdleAfterSec, end.capSec > 0)
 }

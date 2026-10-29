@@ -18,9 +18,10 @@ import (
 )
 
 func leaseServiceRun(now time.Time, endsIn time.Duration, l types.RunLimits) types.AgentRun {
-	end := now.Add(endsIn)
+	end, capAt := now.Add(endsIn), now.Add(24*time.Hour)
 	return types.AgentRun{
 		CreatedAt: now.Add(-time.Minute), Experience: types.ExperienceBackground, EndsAt: &end, RunLimits: l,
+		LifetimeCapAt: &capAt, LifetimeCapSource: types.LimitSourcePool,
 		Service: &types.RunService{Restart: types.ServiceRestartOnFailure},
 	}
 }
@@ -68,6 +69,9 @@ func TestPlanServiceRenewal(t *testing.T) {
 		}, want: 2 * hour, unit: 7200, source: types.LimitSourceGovernance, health: types.ServiceHealthStarting},
 		{name: "not a service", endsIn: time.Minute, limits: lease, mutate: func(r *types.AgentRun) { r.Service = nil }},
 		{name: "no end", endsIn: time.Minute, limits: lease, mutate: func(r *types.AgentRun) { r.EndsAt = nil }},
+		{name: "no lifetime cap is no renewal", endsIn: time.Minute, limits: lease, mutate: func(r *types.AgentRun) {
+			r.LifetimeCapAt, r.LifetimeCapSource = nil, ""
+		}},
 		{name: "lost", endsIn: time.Minute, limits: lease, mutate: func(r *types.AgentRun) { r.LostAt = at(-time.Minute) }},
 		{name: "paused", endsIn: time.Minute, limits: lease, mutate: func(r *types.AgentRun) { r.PausedAt = at(-time.Minute) }},
 		{name: "the default end is the unit when no lease is named", endsIn: time.Minute, limits: types.RunLimits{DefaultEndSec: 1800},
@@ -113,8 +117,35 @@ func TestPlanServiceRenewal(t *testing.T) {
 	}
 }
 
-// newServiceLeaseFixture is a lease fixture whose run is a service with a two-hour lease, started a
-// minute ago: with no health observation it is still starting (renewalHealth).
+// TestServiceRenewsLater: a declined service renews later only with a lifetime cap its end is short of.
+func TestServiceRenewsLater(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	lease := types.RunLimits{MaxEndAheadSec: 7200}
+	for _, tc := range []struct {
+		name   string
+		mutate func(*types.AgentRun)
+		want   bool
+	}{
+		{name: "capped, end short of the cap", want: true},
+		{name: "no cap", mutate: func(r *types.AgentRun) { r.LifetimeCapAt, r.LifetimeCapSource = nil, "" }},
+		{name: "end at the cap", mutate: func(r *types.AgentRun) { r.LifetimeCapAt = r.EndsAt }},
+		{name: "not a service", mutate: func(r *types.AgentRun) { r.Service = nil }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			run := leaseServiceRun(now, 45*time.Minute, lease)
+			if tc.mutate != nil {
+				tc.mutate(&run)
+			}
+			if got := serviceRenewsLater(run, now); got != tc.want {
+				t.Errorf("serviceRenewsLater = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// newServiceLeaseFixture is a lease fixture whose run is a service with a two-hour lease and a
+// pool lifetime cap a day out, started a minute ago: with no health observation it is still
+// starting (renewalHealth).
 func newServiceLeaseFixture(t *testing.T, endsIn time.Duration) *leaseFixture {
 	t.Helper()
 	f := newLeaseFixture(t, endsIn)
@@ -122,6 +153,8 @@ func newServiceLeaseFixture(t *testing.T, endsIn time.Duration) *leaseFixture {
 	f.st.run.Experience = types.ExperienceBackground
 	f.st.run.Service = &types.RunService{Restart: types.ServiceRestartOnFailure}
 	f.st.run.RunLimits = types.RunLimits{MaxEndAheadSec: 7200}
+	capAt := f.now.Add(24 * time.Hour)
+	f.st.run.LifetimeCapAt, f.st.run.LifetimeCapSource = &capAt, types.LimitSourcePool
 	return f
 }
 
@@ -196,6 +229,24 @@ func TestRunLease_ARenewalNeverPassesTheLifetimeCap(t *testing.T) {
 	}
 	if src := leaseAuditData(t, f.audit.eventsFor(f.run.ID, "run.end.set")[0])["source"]; src != "pool" {
 		t.Errorf("source = %v, want pool", src)
+	}
+}
+
+// With no lifetime cap a service is not renewed: it ends at its lease and gets the normal warning.
+func TestRunLease_AServiceWithNoLifetimeCapIsNotRenewed(t *testing.T) {
+	f := newServiceLeaseFixture(t, 30*time.Minute)
+	f.st.run.LifetimeCapAt, f.st.run.LifetimeCapSource = nil, ""
+	f.st.run.ServiceStatus = &types.RunServiceStatus{Health: types.ServiceHealthHealthy, ObservedAt: f.now}
+	end := f.endsAt()
+	f.sweep(t)
+	if got := f.endsAt(); !got.Equal(end) {
+		t.Errorf("ends_at moved to %v, want %v", got, end)
+	}
+	if n := len(f.audit.eventsFor(f.run.ID, "run.end.set")); n != 0 {
+		t.Errorf("%d run.end.set rows, want none", n)
+	}
+	if n := len(f.audit.eventsFor(f.run.ID, "run.ending_soon")); n != 1 {
+		t.Errorf("%d run.ending_soon rows, want the normal warning", n)
 	}
 }
 

@@ -38,8 +38,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   pause that grows to 5 minutes, and checked on a port inside the sandbox by a TCP connect or an HTTP GET. The run list
   and run page show *Starting*, *Healthy*, *Unhealthy* or *Health unknown* and the restart count. The supervisor runs
   inside the sandbox, so health is the sandbox's own report (`source: sandbox` on `run.service.health` and
-  `run.service.restart`). A starting or healthy service has its lease renewed within the pool's lifetime cap, as
-  `run.end.set` with reason `service_renewed`; an unhealthy one ends at its lease. See [Services](docs/SERVICES.md).
+  `run.service.restart`). A starting or healthy service has its lease renewed within its lifetime cap, as
+  `run.end.set` with reason `service_renewed`, but only when a cap applies: the pool's `background.lifetime.max_sec` or
+  `WARDYN_RUN_MAX_AGE`. With no cap, or when unhealthy, a service ends at its lease like any run, and New Run says so
+  before launch. See [Services](docs/SERVICES.md).
 
 - Your walls: limits you set on every run you start, which only narrow what your organisation allows. Set them under
   **Your account**, with `wardyn walls` (`wardyn walls set --file walls.yaml`, `wardyn walls clear`), or through

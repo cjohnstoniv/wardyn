@@ -23,7 +23,8 @@ docs/operations/monitoring.md=2166 share=13
 # docs/operations/run-lifetime.md 2044 adds 18 (0.9.3 F-R24), measured: a pool's Interactive idle stop bounds auto_stop_after_sec.
 # docs/operations/run-lifetime.md 2077 adds 33 over 2044 (0.9.3 FIN-E), measured: the pool idle-stop default and maximum.
 # docs/operations/run-lifetime.md 2088 adds 11 over 2077, measured (0.10 OC-API1b): an extend re-checks the owner's placement.
-docs/operations/run-lifetime.md=2088 share=21
+# docs/operations/run-lifetime.md 2102 adds 14 over 2088, measured (rc.8 svccap): max_end_ahead_sec is the renewal unit of a capped service.
+docs/operations/run-lifetime.md=2102 share=21
 # docs/operations/kubernetes-known-gaps.md 2110 adds 50 over 2060, measured: the proxy DNS rule's coverage and what needs an operator policy (0.9.3 ASK-6 review).
 # docs/operations/kubernetes-known-gaps.md 2153 = 2110 + 43, measured: the proxy DNS peer's fixed namespace and label, and how to check yours
 docs/operations/kubernetes-known-gaps.md=2153 share=15
