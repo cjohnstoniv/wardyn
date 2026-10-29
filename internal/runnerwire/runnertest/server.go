@@ -148,6 +148,21 @@ func (s *Server) handle(ctx context.Context, id uint32, method string, args json
 			return nil, err
 		}
 		return p.ProbeDrive(ctx, m)
+	case runnerwire.MethodWorkloadStatus:
+		ws, ok := s.sub.(interface {
+			WorkloadStatus(context.Context, runnerwire.WorkloadStatusArgs) error
+		})
+		if !ok {
+			return nil, runnerwire.Refuse("this runner serves no workload namespaces")
+		}
+		a, err := decode[runnerwire.WorkloadStatusArgs](args)
+		if err != nil {
+			return nil, err
+		}
+		if err := a.Validate(); err != nil {
+			return nil, err
+		}
+		return nil, ws.WorkloadStatus(ctx, a)
 	case runnerwire.MethodEnsureProxyImg:
 		rv, ok := s.sub.(runner.ProxyReviver)
 		if !ok {
