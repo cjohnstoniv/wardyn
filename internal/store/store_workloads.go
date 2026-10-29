@@ -220,6 +220,9 @@ func sameUUIDPtr(a, b *uuid.UUID) bool {
 //   - No row: it is created at generation 1 (WorkloadCreated), or ErrWorkloadCapReached.
 //   - A row of the other source, or for a custom resource of another pool or namespace:
 //     ErrWorkloadSourceConflict, and nothing is written.
+//   - A custom resource of the stored metadata.uid at a lower metadata.generation than stored: a late
+//     report from a stale cache, answered WorkloadUnchanged with nothing written, whatever its digest.
+//     Generations are compared within one uid only: a new uid is a new resource.
 //   - A different digest: the spec is replaced and the generation moves by one (WorkloadUpdated).
 //   - The same digest: only the description is written, and for a custom resource the reporting runner,
 //     metadata.generation and metadata.uid (WorkloadUnchanged).
@@ -261,6 +264,12 @@ func (s PG) PutWorkload(ctx context.Context, in WorkloadPut) (Workload, Workload
 		if cur.Source != in.Source || in.Source == WorkloadSourceK8s &&
 			(!sameUUIDPtr(cur.SourcePoolID, in.SourcePoolID) || cur.SourceNamespace != in.SourceNamespace) {
 			return ErrWorkloadSourceConflict
+		}
+		if in.Source == WorkloadSourceK8s && in.K8sUID != "" && in.K8sUID == cur.K8sUID &&
+			in.K8sGeneration != nil && cur.K8sGeneration != nil && *in.K8sGeneration < *cur.K8sGeneration {
+			// Another runner's informer cache, behind this one's: the stored generation stands.
+			out, write = cur, WorkloadUnchanged
+			return nil
 		}
 		if cur.Digest != in.Digest {
 			out, err = scanWorkload(q.QueryRow(ctx, `

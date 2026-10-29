@@ -298,6 +298,51 @@ func TestPG_Workload_StaleClaimRecordsNothing(t *testing.T) {
 	}
 }
 
+// A late report of a resource at a lower metadata.generation than stored (a runner's cache behind
+// another's) writes nothing, even with another spec; a new uid at a lower generation is a new resource.
+func TestPG_Workload_LowerK8sGenerationIsIgnored(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := t.Context()
+	poolA := ownPool(t, st, "sub-a", "A")
+	runnerA, runnerB := uuid.New(), uuid.New()
+	gen1, gen2 := int64(1), int64(2)
+
+	in := workloadPut("service:bot", "svc", "d2")
+	in.Intent = json.RawMessage(`{"experience":"background","task":"gen2"}`)
+	in.Source, in.SourcePoolID, in.SourceNamespace, in.SourceRunnerID, in.K8sGeneration, in.K8sUID =
+		store.WorkloadSourceK8s, &poolA.ID, "team-a", &runnerA, &gen2, "uid-1"
+	w := mustPutWorkload(t, st, in)
+	run := persistRun(t, ctx, pool, newRun(types.RunRunning)).ID
+	if _, err := st.SetWorkloadRun(ctx, w.ID, mustClaim(t, st, w.ID), 1, run); err != nil {
+		t.Fatal(err)
+	}
+
+	late := in
+	late.Intent, late.Digest, late.SourceRunnerID, late.K8sGeneration = json.RawMessage(`{"experience":"background","task":"gen1"}`), "d1", &runnerB, &gen1
+	got, write, err := st.PutWorkload(ctx, late)
+	if err != nil || write != store.WorkloadUnchanged || got.ID != w.ID || got.Digest != "d2" {
+		t.Fatalf("late put = %+v, %v, %v; want the stored row back unchanged", got, write, err)
+	}
+	v, err := st.GetWorkload(ctx, "service:bot", "svc")
+	if err != nil || v.Digest != "d2" || string(v.Intent) != string(w.Intent) || v.Generation != 1 || v.K8sGeneration == nil || *v.K8sGeneration != 2 ||
+		v.SourceRunnerID == nil || *v.SourceRunnerID != runnerA || v.CurrentRunID == nil || *v.CurrentRunID != run || v.CurrentGeneration != 1 ||
+		!v.UpdatedAt.Equal(w.UpdatedAt) {
+		t.Fatalf("after the late put = %+v (%v), want the generation 2 row and its run untouched", v.Workload, err)
+	}
+
+	// The same uid at the same metadata.generation is still answered (a re-report), and a new uid is
+	// accepted at any generation.
+	if _, write, err := st.PutWorkload(ctx, in); err != nil || write != store.WorkloadUnchanged {
+		t.Fatalf("re-report at the stored generation = %v, %v", write, err)
+	}
+	late.K8sUID = "uid-2"
+	got, write, err = st.PutWorkload(ctx, late)
+	if err != nil || write != store.WorkloadUpdated || got.Digest != "d1" || got.Generation != 2 || got.K8sUID != "uid-2" || *got.K8sGeneration != 1 {
+		t.Fatalf("new uid at generation 1 = %+v, %v, %v; want it recorded", got, write, err)
+	}
+}
+
 // A custom resource's workload is its pool's and namespace's alone, and an API one is the API's alone.
 func TestPG_Workload_SourceConflict(t *testing.T) {
 	st := store.NewPG(runsPGPoolIsolated(t))

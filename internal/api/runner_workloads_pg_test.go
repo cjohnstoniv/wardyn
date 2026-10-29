@@ -230,3 +230,26 @@ func TestPG_WorkloadFromRunner_DeleteFollowsTheResourceUID(t *testing.T) {
 		t.Fatalf("%d workload.delete rows, want 1", n)
 	}
 }
+
+// A report of the resource at a lower metadata.generation than recorded, with another spec, is a stale
+// runner cache: the recorded spec stands and no workload.apply row is written for it.
+func TestPG_WorkloadFromRunner_LowerGenerationIsIgnored(t *testing.T) {
+	e := newCREnv(t)
+	newer := e.apply("team-a", "web", "")
+	newer.Generation = 2
+	e.report(t, newer)
+	first, err := e.st.GetWorkload(context.Background(), svcPrin, "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	older := e.apply("team-a", "web", "")
+	older.Spec = json.RawMessage(`{"intent":{"agent":"claude-code","task":"older","policy_id":"` + e.pol + `"}}`)
+	e.report(t, older)
+	v, err := e.st.GetWorkload(context.Background(), svcPrin, "web")
+	if err != nil || v.Digest != first.Digest || v.Generation != first.Generation || v.K8sGeneration == nil || *v.K8sGeneration != 2 {
+		t.Fatalf("after the older report = %+v (%v), want the generation 2 spec kept", v.Workload, err)
+	}
+	if n := countAudit(e.h.audit.snapshot(), "workload.apply"); n != 1 {
+		t.Fatalf("%d workload.apply rows, want 1", n)
+	}
+}
