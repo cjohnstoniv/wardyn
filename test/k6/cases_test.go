@@ -473,10 +473,31 @@ func casePodIPReuse(t *testing.T, e *env) {
 	}
 	note(t, "the next proxy received the pending run's IP %s and was refused: %v", ip, err)
 	e.waitRunGone(t, next, goneWait)
+	// The pending run stays fenced for the rest of the suite while Calico counts its address free, so a
+	// later case's proxy could draw it and be refused for this run. It is reserved until the cluster goes.
+	reserveIPs(t, k6FencedIP, []string{ip})
 }
 
-// k6OnlyIP names the case's IP reservation.
-const k6OnlyIP = "k6-only-ip"
+// k6OnlyIP names the case's IP reservation; k6FencedIP the one that keeps a fenced run's address.
+const (
+	k6OnlyIP   = "k6-only-ip"
+	k6FencedIP = "k6-fenced-ip"
+)
+
+// reserveIPs applies the Calico IPReservation name holding addrs, which Calico IPAM then never hands out.
+func reserveIPs(t *testing.T, name string, addrs []string) {
+	t.Helper()
+	doc, err := json.Marshal(map[string]any{"apiVersion": "crd.projectcalico.org/v1", "kind": "IPReservation",
+		"metadata": map[string]any{"name": name}, "spec": map[string]any{"reservedCIDRs": addrs}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := filepath.Join(t.TempDir(), "reservation.json")
+	if err := os.WriteFile(f, doc, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sh(t, "kubectl", "--kubeconfig", os.Getenv("K6_ADMIN_KUBECONFIG"), "apply", "-f", f)
+}
 
 // onlyIP reserves every address of the runs namespace's Calico pool but ip, so the next pod there
 // can receive ip and nothing else: Calico IPAM never hands out a reserved address, and while ip is
@@ -513,16 +534,7 @@ func (e *env) onlyIP(t *testing.T, ip string) (release func()) {
 			reserved = append(reserved, a.String())
 		}
 	}
-	doc, err := json.Marshal(map[string]any{"apiVersion": "crd.projectcalico.org/v1", "kind": "IPReservation",
-		"metadata": map[string]any{"name": k6OnlyIP}, "spec": map[string]any{"reservedCIDRs": reserved}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	f := filepath.Join(t.TempDir(), "reservation.json")
-	if err := os.WriteFile(f, doc, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	sh(t, "kubectl", "--kubeconfig", kc, "apply", "-f", f)
+	reserveIPs(t, k6OnlyIP, reserved)
 	released := false
 	release = func() {
 		if !released { // set only once the delete succeeded, so the cleanup retries a failed one
