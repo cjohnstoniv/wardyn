@@ -39,9 +39,10 @@ import { LIST_LIMIT } from "../../lib/api/core";
 import { appURL } from "../../lib/base-path";
 import { useCopyToClipboard } from "../../lib/use-copy-to-clipboard";
 import { absoluteTime, clockTime, getErrorMessage } from "../../lib/format";
-import { awsSigningLine, describeAction, describeEvent, describeObject } from "../../lib/audit-copy";
+import { awsSigningLine, describeAction, describeEvent, describeObject, hasNoCaller, inboundDetail, isInbound } from "../../lib/audit-copy";
 import { Button } from "../ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
+import { InboundOutcome, NoCaller } from "../wardyn/audit-inbound";
 import { ActorTypeChip } from "../wardyn/primitives";
 import {
   AuditDecision,
@@ -524,9 +525,10 @@ function AuditTab({
           <div className="divide-y divide-border">
             {events.map((e) => {
               const signing = awsSigningLine(e);
+              const inbound = inboundDetail(e);
               return (
                 // One line from sm up; below sm the target drops to a second line of its own (#2917).
-                <div key={e.id} data-testid="run-audit-row" className={`flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 ${(isAttributedRefusal(e) && !toolRuleDecision(e)) || signing ? "sm:flex-wrap" : "sm:flex-nowrap"}`}>
+                <div key={e.id} data-testid="run-audit-row" className={`flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 ${(isAttributedRefusal(e) && !toolRuleDecision(e)) || signing || inbound ? "sm:flex-wrap" : "sm:flex-nowrap"}`}>
                   <span
                     data-testid="run-audit-time"
                     className="w-[84px] shrink-0 whitespace-nowrap font-mono text-meta text-muted-foreground"
@@ -536,7 +538,7 @@ function AuditTab({
                   </span>
                   {/* A fixed slot, so the action and target columns start at one x for every actor. */}
                   <span className="inline-flex w-[88px] shrink-0">
-                    <ActorTypeChip type={e.actor_type} />
+                    {hasNoCaller(e) ? <NoCaller /> : <ActorTypeChip type={e.actor_type} />}
                   </span>
                   <span
                     data-testid="run-audit-action"
@@ -564,6 +566,16 @@ function AuditTab({
                       )}
                       <RuleSourceChip event={e} />
                       <ErasedFields event={e} className="shrink-0 text-xs" />
+                    </span>
+                  )}
+                  {isInbound(e) && (
+                    <span data-testid="run-audit-outcome" className="ml-auto shrink-0">
+                      <InboundOutcome allowed={e.action === "inbound.allow"} />
+                    </span>
+                  )}
+                  {inbound && (
+                    <span data-testid="run-audit-detail" className="min-w-0 basis-full truncate font-mono text-xs text-muted-foreground sm:pl-[208px]" title={inbound}>
+                      {inbound}
                     </span>
                   )}
                   {!toolRuleDecision(e) && isAttributedRefusal(e) && <PolicyRemedy policy={policy} className="basis-full" />}

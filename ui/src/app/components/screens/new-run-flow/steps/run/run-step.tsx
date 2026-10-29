@@ -29,7 +29,7 @@ import { ModeSection } from "./mode-section";
 import { ledeOf, runTypeOf, selectedPoolId, usablePools } from "./pool-model";
 import { PoolSection } from "./pool-section";
 import { ServiceSection } from "./service-section";
-import { useServicePauses } from "./use-service-pause";
+import { useRunPreview } from "./use-run-preview";
 import { QuestionBlock } from "./question-block";
 import { loadPools, usePools, type LoadPools } from "./pool-source";
 import { TimingSection } from "./timing-section";
@@ -54,7 +54,7 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
     if (unnamed) dispatch({ type: "edit", apply: (i) => chooseMode(i, fallback) });
   }, [unnamed, fallback, dispatch]);
   const runType = runTypeOf(intent);
-  const pauses = useServicePauses(intent);
+  const { pauses, inboundRefused } = useRunPreview(intent);
 
   const pools = usePools(deps?.load ?? loadPools, runType);
   const list = pools.status === "ready" ? pools.list : undefined;
@@ -93,6 +93,8 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
           kind={isServer(intent) ? "server" : "automation"}
           command={commandOf(intent) ?? ""}
           apps={appsOf(intent)}
+          keptRunning={!!intent.service}
+          inboundRefused={inboundRefused}
           onKind={(kind) => edit((i) => chooseAppKind(i, kind))}
           onCommand={(command) => edit((i) => setCommand(i, command))}
           onApps={{ edit: (n, patch) => edit((i) => editApp(i, n, patch)), add: () => edit(addApp), remove: (n) => edit((i) => removeApp(i, n)) }}

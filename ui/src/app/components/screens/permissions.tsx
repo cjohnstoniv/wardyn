@@ -136,7 +136,9 @@ export const SUBJECT_LABEL: Record<CapabilitySubjectType, string> = {
 // A stored grant may name a kind this build doesn't know (the schema puts no
 // CHECK on `capability` on purpose — see migration 0042). Render it verbatim
 // rather than blank: an unknown row is inert, not invisible.
-function kindLabel(capability: string): string {
+function kindLabel(capability: string, value = ""): string {
+  // The feature kind is titled for its first values (SSH keys and API tokens); an inbound grant is the Inbound access row's.
+  if (capability === "feature" && value === INBOUND_VALUE) return INBOUND_ACCESS.LABEL;
   return KIND[capability as CapabilityKind]?.label ?? capability;
 }
 
@@ -425,7 +427,7 @@ export function PermissionsScreen() {
                         {serviceName(g) !== null ? <Mono>{serviceName(g)}</Mono> : <SubjectName g={g} typeName={typeName} />}
                       </span>
                     </TableCell>
-                    <TableCell>{kindLabel(g.capability)}</TableCell>
+                    <TableCell>{kindLabel(g.capability, g.value)}</TableCell>
                     <TableCell>
                       <Mono>{g.value}</Mono>
                     </TableCell>
@@ -458,7 +460,7 @@ export function PermissionsScreen() {
                         size="sm"
                         disabled={!securityOperator}
                         onClick={() => setToRemove(g)}
-                        aria-label={`${PERM.REMOVE} ${kindLabel(g.capability)} ${g.value}`}
+                        aria-label={`${PERM.REMOVE} ${kindLabel(g.capability, g.value)} ${g.value}`}
                       >
                         {PERM.REMOVE}
                       </Button>

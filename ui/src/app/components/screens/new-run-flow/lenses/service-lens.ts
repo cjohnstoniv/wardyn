@@ -11,6 +11,7 @@ import type { RunService } from "../../../../lib/types/runs";
 import { isVMKind } from "../../../../lib/types/machine-kind";
 import { DEFAULT_HEALTH_FAILURES, DEFAULT_HEALTH_INTERVAL_SEC } from "../../../wardyn/copy/run-service";
 import type { RunIntent } from "../draft/run-intent";
+import { setApps } from "./apps-lens";
 import { withKeys } from "./lens-keys";
 import { issue, type StepIssue } from "./step-issues";
 
@@ -21,7 +22,8 @@ export const mayKeepRunning = (intent: RunIntent): boolean =>
 const set = (intent: RunIntent, service: RunService | undefined): RunIntent => withKeys(intent, { service });
 
 /** Off by default: the run then ends when its command exits. On restarts it when it fails. */
-export const keepRunning = (intent: RunIntent, on: boolean): RunIntent => set(intent, on ? { restart: "on_failure" } : undefined);
+export const keepRunning = (intent: RunIntent, on: boolean): RunIntent =>
+  on ? set(intent, { restart: "on_failure" }) : setApps(set(intent, undefined), []);
 
 export const setRestart = (intent: RunIntent, restart: RunService["restart"]): RunIntent =>
   intent.service ? set(intent, { ...intent.service, restart }) : intent;

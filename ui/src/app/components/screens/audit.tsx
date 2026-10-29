@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import type { AuditEvent, ActorType, AgentRun } from "../../lib/types";
 import { isNetworkFault, runHeadline } from "../../lib/types";
-import { describeEvent, inboundDetail } from "../../lib/audit-copy";
+import { describeEvent, hasNoCaller, inboundDetail, isInbound, serviceSource } from "../../lib/audit-copy";
 import { RunRef } from "../wardyn/run-ref";
 import { AUDIT } from "./audit-copy";
 import { audit as api } from "../../lib/api/audit";
@@ -48,6 +48,7 @@ import {
 } from "../wardyn/primitives";
 import { Mono } from "../wardyn/code-block";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
+import { InboundOutcome, NoCaller, SourceLabel } from "../wardyn/audit-inbound";
 import { AuditDecision, ErasedFields, RuleSourceChip, toolRuleDecision } from "../wardyn/audit-decision";
 import { PageHeader } from "../wardyn/page-header";
 import { PageContainer } from "../wardyn/page-container";
@@ -634,10 +635,9 @@ function EventOutcome({ e }: { e: AuditEvent }) {
       decision === "allow" ? "text-success" : decision === "deny" ? "text-danger" : "text-warning";
     return <span className={cn("font-mono text-xs font-semibold", tone)}>{decision}</span>;
   }
-  if (e.action === "inbound.allow" || e.action === "inbound.deny") {
-    const allowed = e.action === "inbound.allow";
-    return <span className={cn("font-mono text-xs font-semibold", allowed ? "text-success" : "text-danger")}>{allowed ? "allow" : "deny"}</span>;
-  }
+  if (isInbound(e)) return <InboundOutcome allowed={e.action === "inbound.allow"} />;
+  const source = serviceSource(e);
+  if (source) return <SourceLabel source={source} />;
   if (e.action === "credential.mint" && e.outcome === "success") {
     return <span className="font-mono text-xs font-semibold text-info">brokered</span>;
   }
@@ -702,7 +702,7 @@ function EventRow({
   // its host, so "Allowed egress to …" would be false on the row.
   const ruled = toolRuleDecision(event);
   const Icon = KIND_META[kind].Icon;
-  const detail = inboundDetail(event);
+  const detail = inboundDetail(event, true);
   // Below sm the row is up to three lines: time, actor, icon and outcome, then the description, then the run reference (#3036).
   // `order` moves the outcome up without touching the DOM order; from sm up it is the one line it always was (#2849).
   return (
@@ -715,7 +715,7 @@ function EventRow({
       </span>
       {/* Fixed-width cells so the description and the run chip start at the same x on every row (#2852). */}
       <span data-testid="audit-actor-cell" className="w-[88px] shrink-0">
-        <ActorTypeChip type={event.actor_type} />
+        {hasNoCaller(event) ? <NoCaller /> : <ActorTypeChip type={event.actor_type} />}
       </span>
       <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
       {ruled ? (

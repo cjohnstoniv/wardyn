@@ -55,6 +55,13 @@ export const AUDIT = {
   INBOUND_ALLOW: "Allowed inbound",
   INBOUND_DENY: "Denied inbound",
   INBOUND_NO_APP: "an unknown app",
+  // An inbound.deny of a request that showed no valid credential has no actor to name (r15 T2-f).
+  NO_CALLER: "no caller",
+  // Where a service row's fact came from (r15 T2-f): read inside the sandbox, or decided by the server.
+  SOURCE_SANDBOX: "sandbox",
+  SOURCE_SERVER: "server",
+  OUTCOME_ALLOW: "allow",
+  OUTCOME_DENY: "deny",
 } as const;
 
 // Short, human verbs for the actions we know about, shared by the Audit screen

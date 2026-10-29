@@ -87,6 +87,15 @@ describe("PermissionsScreen, who may declare inbound ports", () => {
     expect(within(cell).getByText("Service")).toBeInTheDocument();
   });
 
+  it("titles an inbound grant's row Inbound access, and any other feature grant by the feature kind", async () => {
+    getPermissionsMock.mockResolvedValue({ grants: [allow({}), allow({ id: "77777777-7777-7777-7777-777777777777", value: "ssh_key" })], enforcement: {} });
+    renderScreen();
+    await row();
+    const cells = within(screen.getByRole("table")).getAllByRole("row").map((r) => within(r).queryByText(/Inbound access|SSH keys and API tokens/)?.textContent);
+    expect(cells.filter(Boolean)).toEqual(["Inbound access", "SSH keys and API tokens"]);
+    expect(KIND.feature.valueHint).toMatch(/\binbound, self_host_runner and service_attach are never covered by \*/);
+  });
+
   it("Add a grant fills the form's capability and value, again after a second click", async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderScreen();

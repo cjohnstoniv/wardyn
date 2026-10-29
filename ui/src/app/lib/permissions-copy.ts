@@ -137,7 +137,7 @@ export const KIND: Record<CapabilityKind, KindCopy> = {
     label: "SSH keys and API tokens",
     blurb: "Whether a member may add an SSH key or mint an API token.",
     valueLabel: "Feature",
-    valueHint: "ssh_key, api_token or custom_component. Use * for those three. self_host_runner and service_attach are never covered by *: name them.",
+    valueHint: "ssh_key, api_token or custom_component. Use * for those three. inbound, self_host_runner and service_attach are never covered by *: name them.",
     unenforced: "Members can add SSH keys and mint API tokens.",
     enforced:
       "A member can only add SSH keys or mint API tokens when granted. Keys and tokens they already have keep working until removed or revoked.",

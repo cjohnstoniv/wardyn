@@ -27,6 +27,12 @@ describe("setPort", () => {
   it("turning Keep it running off drops the check with the service", () => {
     expect(keepRunning(withService(svc()), false)).not.toHaveProperty("service");
   });
+
+  it("turning it off takes the ports with it, and leaves no empty overlay", () => {
+    const ported: RunIntent = { ...withService(svc()), inline_policy: { ui_apps: [{ name: "api", port: 8080, path: "/", inbound: true }] } };
+    expect(keepRunning(ported, false)).not.toHaveProperty("inline_policy");
+    expect(keepRunning(ported, true).inline_policy?.ui_apps).toHaveLength(1);
+  });
 });
 
 describe("serviceWire", () => {

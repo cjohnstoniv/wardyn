@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import type { AuditEvent } from "../../lib/types";
 import { AUDIT, describeAction, describeEvent } from "./audit-copy";
 // The run page's Audit tab and the Audit screen read the lib table.
-import { awsSigningLine, describeAction as describeTabAction, describeEvent as describeTabEvent, inboundDetail } from "../../lib/audit-copy";
+import { awsSigningLine, describeAction as describeTabAction, describeEvent as describeTabEvent, hasNoCaller, inboundDetail, serviceSource } from "../../lib/audit-copy";
 
 const ev = (action: string, target = "", extra: Partial<AuditEvent> = {}): AuditEvent =>
   ({ id: "e", time: new Date().toISOString(), actor_type: "system", actor: "x", action, outcome: "success", target, ...extra }) as AuditEvent;
@@ -104,6 +104,22 @@ describe("service audit rows", () => {
     expect(inboundDetail(allow)).toBe("GET /v1/invoices · via token · caller service:billing");
     expect(inboundDetail(deny)).toBe("reason credential_invalid · via token · POST /v1/refunds");
     expect(inboundDetail(ev("inbound.deny", "api", { data: { reason: "not_found", via: "session", method: "GET", path: "/" } }))).toBe("reason not_found · via session · GET /");
+  });
+
+  it("ends an inbound detail with the run's short id on request, names no caller for a refusal with no actor, and labels the service rows", () => {
+    const allow = ev("inbound.allow", "api", { run_id: "run_7c41e0a9-aaaa", data: { method: "GET", path: "/v1/invoices", via: "token", caller: "service:billing" } });
+    expect(inboundDetail(allow, true)).toBe("GET /v1/invoices · via token · caller service:billing · 7c41e0a9");
+    expect(inboundDetail(allow)).toBe("GET /v1/invoices · via token · caller service:billing");
+    expect(inboundDetail(ev("inbound.allow", "api", { run_id: "run_7c41e0a9-aaaa" }), true)).toBeNull();
+    expect(hasNoCaller(ev("inbound.deny", "api", { actor: "" }))).toBe(true);
+    expect(hasNoCaller(ev("inbound.deny", "api", { actor: "service:billing" }))).toBe(false);
+    expect(hasNoCaller(ev("inbound.allow", "api", { actor: "" }))).toBe(false);
+    expect([AUDIT.NO_CALLER, AUDIT.SOURCE_SANDBOX, AUDIT.SOURCE_SERVER, AUDIT.OUTCOME_ALLOW, AUDIT.OUTCOME_DENY]).toEqual(["no caller", "sandbox", "server", "allow", "deny"]);
+    expect(serviceSource(ev("run.service.health"))).toBe("sandbox");
+    expect(serviceSource(ev("run.service.restart"))).toBe("sandbox");
+    expect(serviceSource(ev("run.end.set", "r1", { data: { reason: "service_renewed" } }))).toBe("server");
+    expect(serviceSource(ev("run.end.set", "r1", { data: { reason: "limits_tightened" } }))).toBeNull();
+    expect(serviceSource(ev("run.create"))).toBeNull();
   });
 
   it("leaves out an inbound field the row lacks, and gives no detail to any other row", () => {
