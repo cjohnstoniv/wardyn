@@ -20,6 +20,7 @@ import { RUN, RUN_COCKPIT } from "../wardyn/copy";
 import { waitingAdoConsent, waitingReauth } from "../../lib/reauth-waiting-copy";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { RUN_HEADER } from "../wardyn/copy/run-header";
+import { serviceBadge } from "../wardyn/copy/run-service";
 import { KillRunDialog } from "../wardyn/kill-run-dialog";
 import { RunEndsControls } from "./run-detail/run-ends-row";
 import { useOperator, useOperatorResolved, usePrincipal } from "../wardyn/operator-context";
@@ -160,6 +161,8 @@ export function SummaryHeader({
   const canAttach = mayEnterRunOrUnknown(run, principal, operator, useOperatorResolved());
   const elapsed = useElapsed(run.created_at, run.ended_at ?? run.updated_at, terminal);
   const sentence = statusSentence(run, terminal, pendingApprovalCount, viewerBlocked);
+  // The list's chip, so a row and its page say the same thing: a live service's health in place of "Running".
+  const health = run.lost_reason === "ended" ? undefined : serviceBadge(run);
   const startRename = () => {
     // F3 (review round 2): never seed from the WHOLE task —
     // runHeadline's own fallback chain (title, then task, then
@@ -259,7 +262,7 @@ export function SummaryHeader({
       </div>
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm">
-        <RunStateBadge state={run.state} word={scheduledBadgeWord(run)} />
+        <RunStateBadge state={run.state} word={health?.word ?? scheduledBadgeWord(run)} tone={health?.tone} pulse={health?.pulse} />
         {sentence && (
           <span data-testid="run-status-sentence" className="min-w-0 text-foreground [overflow-wrap:anywhere]">
             {sentence}

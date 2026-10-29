@@ -10,6 +10,7 @@
 
 import type { StartWire } from "../../../../lib/schedule";
 import { TEMPLATE_POLICY_FIELDS, TEMPLATE_REQUEST_FIELDS, type TemplateFieldRule } from "../../../../lib/template-fields";
+import { mayKeepRunning } from "../lenses/service-lens";
 import type { RunIntent } from "./run-intent";
 
 /** The request field the intent's policy overlay travels in (`inline_policy` in the document). */
@@ -62,6 +63,9 @@ export function wireSerializer(requestRows: readonly TemplateFieldRule[], policy
     const body: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(intent)) {
       if (value === undefined) continue;
+      // A service rides only a background command on a container. One left from an earlier choice (the run became an
+      // agent task or a VM) is not sent: the server would refuse the whole run for it.
+      if (key === "service" && !mayKeepRunning(intent)) continue;
       const overlay = key === "inline_policy";
       if (overlay ? !overlayCarried : !REQUEST.has(key) && !LAUNCH_CHOSEN.has(key)) {
         unsupported.push(key);

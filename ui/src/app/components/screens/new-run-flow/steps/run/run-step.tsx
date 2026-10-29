@@ -14,6 +14,7 @@ import { useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../..
 import type { RunIntent } from "../../draft/run-intent";
 import { harnessIds } from "../../lenses/lens-keys";
 import { stepIssues } from "../../lenses/local-issues";
+import { keepRunning, mayKeepRunning, setHealth, setPort, setRestart } from "../../lenses/service-lens";
 import { addApp, appsOf, chooseAppKind, commandOf, editApp, isServer, removeApp, setCommand } from "../../lenses/apps-lens";
 import type { MachineKind } from "../../../../../lib/types/machine-kind";
 import { dropMinimum, minimumFill, startAtMinimum } from "../../lenses/limits-lens";
@@ -27,6 +28,7 @@ import { useMacOSOffer } from "./macos-offer";
 import { ModeSection } from "./mode-section";
 import { ledeOf, runTypeOf, selectedPoolId, usablePools } from "./pool-model";
 import { PoolSection } from "./pool-section";
+import { ServiceSection } from "./service-section";
 import { QuestionBlock } from "./question-block";
 import { loadPools, usePools, type LoadPools } from "./pool-source";
 import { TimingSection } from "./timing-section";
@@ -92,7 +94,17 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
           onKind={(kind) => edit((i) => chooseAppKind(i, kind))}
           onCommand={(command) => edit((i) => setCommand(i, command))}
           onApps={{ edit: (n, patch) => edit((i) => editApp(i, n, patch)), add: () => edit(addApp), remove: (n) => edit((i) => removeApp(i, n)) }}
-        />
+        >
+          {mayKeepRunning(intent) && (
+            <ServiceSection
+              service={intent.service}
+              onKeepRunning={(on) => edit((i) => keepRunning(i, on))}
+              onRestart={(restart) => edit((i) => setRestart(i, restart))}
+              onPort={(port) => edit((i) => setPort(i, port))}
+              onHealth={(patch) => edit((i) => setHealth(i, patch))}
+            />
+          )}
+        </CommandSection>
       )}
       <QuestionBlock label={NR_RUN.WHERE_LABEL}>
         <MachineKindSection kind={intent.machine_kind ?? "container"} agents={harnessIds(intent)} onChoose={chooseKind} />

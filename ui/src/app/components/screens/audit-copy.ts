@@ -48,6 +48,8 @@ export const AUDIT = {
   AWS_SIGNING_PORT: (host: string) => `${host} is not on port 443`,
   AWS_SIGNING_UNSIGNED_HOST: (host: string) => `the proxy can't sign for ${host}`,
   AWS_SIGNING_NOT_RECORDED: "fallback reason not recorded",
+  // A run.end.set row with reason service_renewed: wardynd moved a healthy service's end forward by its lease.
+  SERVICE_RENEWED: "renewed the service's lease",
 } as const;
 
 // Short, human verbs for the actions we know about, shared by the Audit screen
@@ -67,6 +69,9 @@ const ACTION_VERB: Record<string, string> = {
   "run.revoke": "revoked the run's identity",
   "run.autostop": "auto-stopped the idle run",
   "run.reconcile": "reconciled run state",
+  // A service's health read from inside the sandbox, and a restart of its command (rows written by wardynd).
+  "run.service.health": "service health changed",
+  "run.service.restart": "restarted the service",
   // The EFFECTIVE policy the sandbox was actually given, recorded after every
   // widening phase, so this is what the proxy enforces, not what was asked for.
   "run.policy.resolve": "resolved the policy this run was given",
@@ -161,6 +166,7 @@ function describe(e: AuditEvent): Described {
     };
   }
   if (e.action === "credential.revoke") return { head: AUDIT.REVOKE_RUN_CREDENTIALS };
+  if (e.action === "run.end.set" && e.data?.reason === "service_renewed") return { head: capitalize(AUDIT.SERVICE_RENEWED), join: { sep: " — " } };
   // "Removed" only on a row whose deletion happened; a failure row says what
   // was not removed. Any other outcome reads as the raw line.
   if (e.action === "credential.expired.delete" && (e.outcome === "success" || e.outcome === "failure")) {
