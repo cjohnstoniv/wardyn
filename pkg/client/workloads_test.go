@@ -21,7 +21,7 @@ const workloadNative = `{"api_version":"wardyn/v1","kind":"Workload","name":"tri
 	`"intent":{"experience":"background","inline_policy":{"allowed_domains":["a.example"]},"workload":{"command":"./serve","kind":"command"}}}`
 
 const workloadCR = `{"apiVersion":"wardyn.dev/v1alpha1","kind":"WardynWorkload",` +
-	`"metadata":{"name":"triage-bot","namespace":"team-a","uid":"x","labels":{"a":"b"},"creationTimestamp":"2026-10-29T00:00:00Z"},` +
+	`"metadata":{"name":"triage-bot","namespace":"team-a","uid":"x","labels":{"a":"b"},"creationTimestamp":"0001-01-01T00:00:00Z"},` +
 	`"spec":{"description":"Triage","run_in":"platform","restart_key":"1",` +
 	`"intent":{"experience":"background","inline_policy":{"allowed_domains":["a.example"]},"workload":{"command":"./serve","kind":"command"}}},` +
 	`"status":{"phase":"Running","runID":"5f0c"}}`
@@ -119,7 +119,7 @@ func TestWorkloadMethods_RequestShape(t *testing.T) {
 	id := uuid.MustParse("11111111-2222-3333-4444-555555555555")
 	run := uuid.New()
 	applied := `{"workload":{"name":"triage-bot","owner":"alice","source":"api","generation":2,"current_generation":2,"run_id":"` + run.String() + `",` +
-		`"intent":{"task":"t"},"created_at":"2026-10-29T00:00:00Z","updated_at":"2026-10-29T00:00:00Z"},"outcome":"updated","launch":{"state":"launched","run_id":"` + run.String() + `"}}`
+		`"intent":{"task":"t"},"created_at":"0001-01-01T00:00:00Z","updated_at":"0001-01-01T00:00:00Z"},"outcome":"updated","launch":{"state":"launched","run_id":"` + run.String() + `"}}`
 	doc, err := client.ParseWorkload([]byte(workloadNative))
 	if err != nil {
 		t.Fatal(err)
@@ -141,7 +141,7 @@ func TestWorkloadMethods_RequestShape(t *testing.T) {
 			}
 			return err
 		}, "PUT", "/api/v1/workloads/triage-bot", "", `{"description":"Triage","run_in":"platform","restart_key":"1","intent":{"experience":"background","inline_policy":{"allowed_domains":["a.example"]},"workload":{"command":"./serve","kind":"command"}}}`},
-		{"ListWorkloads", 200, `[{"name":"w","owner":"service:bot","source":"k8s","namespace":"team-a","generation":1,"current_generation":0,"last_refusal":{"generation":1,"reason":"x","at":"2026-10-29T00:00:00Z"}}]`, func(c *client.Client) error {
+		{"ListWorkloads", 200, `[{"name":"w","owner":"service:bot","source":"k8s","namespace":"team-a","generation":1,"current_generation":0,"last_refusal":{"generation":1,"reason":"x","at":"0001-01-01T00:00:00Z"}}]`, func(c *client.Client) error {
 			got, err := c.ListWorkloads(context.Background(), "service:bot", client.ListOpts{Limit: 5})
 			if err == nil && (len(got) != 1 || got[0].Source != client.WorkloadSourceK8s || got[0].LastRefusal == nil) {
 				t.Errorf("ListWorkloads = %+v", got)

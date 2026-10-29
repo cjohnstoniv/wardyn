@@ -55,13 +55,13 @@ func TestW4CovDispatchDeliversARunnerGoawayWithItsRunnerIDAndTime(t *testing.T) 
 	b.Handle(KindRunnerGoaway, func(m Message) { heard = m })
 	b.Handle(KindRunKill, func(m Message) { t.Errorf("the kill handler ran for %s", m.Kind) })
 
-	payload, err := json.Marshal(Message{Kind: KindRunnerGoaway, Run: w4CovRun, Origin: "replica-b", Data: json.RawMessage(`{"at":"2026-01-02T03:04:05Z"}`)})
+	payload, err := json.Marshal(Message{Kind: KindRunnerGoaway, Run: w4CovRun, Origin: "replica-b", Data: json.RawMessage(`{"n":1}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	b.dispatch(context.Background(), string(payload))
 
-	if heard.Kind != KindRunnerGoaway || heard.Run != w4CovRun || string(heard.Data) != `{"at":"2026-01-02T03:04:05Z"}` {
+	if heard.Kind != KindRunnerGoaway || heard.Run != w4CovRun || string(heard.Data) != `{"n":1}` {
 		t.Errorf("handler heard %+v", heard)
 	}
 }
