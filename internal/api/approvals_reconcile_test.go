@@ -162,11 +162,11 @@ func (r *rcReadStore) GetWorkspace(ctx context.Context, id uuid.UUID) (types.Wor
 	return r.on(r.reads.Add(1), ws, err)
 }
 
-// TestReconcileSkipsWhenTheScanCannotReadTheWorkspace pins the fail-closed
-// edge: an errored read of the workspace in the scan is not "never edited". The
-// operator's list edit (newer than the verdict) is exactly what that read would
-// have shown, and the apply loop's own, later read succeeds, so reading the
-// failure as zero re-added a host the operator had removed.
+// TestReconcileSkipsWhenTheScanCannotReadTheWorkspace covers the fail-closed
+// edge end to end: an errored read of the workspace in the scan is not "never
+// edited", and the host the operator removed stays removed. The apply loop's
+// later read also sees the edit, so this alone does not tell the scan's check
+// from the apply loop's; each is a guard for the other.
 func TestReconcileSkipsWhenTheScanCannotReadTheWorkspace(t *testing.T) {
 	const host = "registry.npmjs.org"
 	f := newScopeFixture(t)
