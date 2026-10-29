@@ -2,4 +2,5 @@
 # docs/SERVICES.md 1599 measured (rc.8): the service model, the walls recipe, renewal while healthy, health trust, the re-wrap note and the limits, resolved against the code on the wave head.
 # docs/SERVICES.md 1607 measured (rc.8 review): the offline-runner line says the 15 minutes run from the last stored reading.
 # docs/SERVICES.md 1660 adds 53 over 1607, measured (rc.8 svccap): renewal needs a lifetime cap; with none a service ends at its lease and New Run says so.
-docs/SERVICES.md=1660 share=14
+# docs/SERVICES.md 1763 adds 103 over 1660, measured (rc.8 review): a background run opens only callable-from-outside ports; renewal needs a live service identity and sponsor, and a sponsor change stops it.
+docs/SERVICES.md=1763 share=14

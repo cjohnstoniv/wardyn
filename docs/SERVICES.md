@@ -26,6 +26,7 @@ The spec is frozen on the run at create, with its defaults filled. It cannot cha
 
 - A `health` block needs a `port`. A `port` alone is not checked: the supervisor probes only when `health` is set.
 - `port` names the port the health check connects to. It opens that port to nobody.
+- To open a service's port from the run page, mark it **Callable from outside** in New Run. A background run opens only inbound ports, and its owner is always one of the callers. Inbound apps must be turned on for you.
 - A service created under an idle pause gets this warning on its 201: "Your admin pauses runs nobody is using, so this service will be paused while it waits for requests."
 
 ## What runs in the sandbox
@@ -85,6 +86,7 @@ Every minute the lease sweep looks at each running service. It renews the lease 
 - The run has a lifetime cap, is not paused or lost, and has an end.
 - The end is within half a lease unit of now.
 - The run's owner could still extend it: the check a `PATCH` does.
+- For a run a service identity owns: the identity is not suspended or retired, its sponsor's access is not revoked, and its sponsor is the one it had when the run was created.
 
 Renewal moves the end to now plus the lease unit, or to the cap if that is sooner. The unit is cut to the boundary's maximum as every `PATCH` is. A lost race with a person's edit renews nothing. A ceiling tightened later lowers the unit at the next renewal; one loosened frees nothing on a run already created.
 
@@ -93,6 +95,7 @@ Renewal moves the end to now plus the lease unit, or to the cap if that is soone
 - The owner can still extend the run by hand with `PATCH /runs/{id}`, whatever its health ([Extend](operations/run-lifetime.md#extend)). No `wardyn` command does it.
 - A service that stays unknown for a whole lease, such as one on an offline runner, therefore ends.
 - When the cap is the limit, a healthy service is killed at the cap with the reason `max_lifetime_reached`.
+- Changing a service identity's sponsor stops renewal of the services it already runs. They end at their current lease end. Relaunch or apply them again under the new sponsor.
 
 ## Health is the sandbox's claim
 
