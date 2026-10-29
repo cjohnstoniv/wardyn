@@ -76,6 +76,7 @@ describe("Service identities I sponsor card", () => {
     ["Loading service identities", SERVICES.LOADING],
     ["Loading tokens", SERVICES.LOADING_TOKENS],
     ["Token minted.", SERVICES.MINTED_TOAST],
+    ["Inbound only", SERVICES.INBOUND_ONLY],
   ])("%s", (mock, actual) => expect(actual).toBe(mock));
 });
 
@@ -88,6 +89,10 @@ describe("Token dialog", () => {
     ["Mint a token for ci-nightly", TOKEN_DIALOG.MINT_TITLE("ci-nightly")],
     ["The token acts as ci-nightly, not as you. It is shown once.", TOKEN_DIALOG.MINT_LEDE("ci-nightly")],
     ["Anyone who holds the token can do what ci-nightly is allowed to do, which may be more than you can.", TOKEN_DIALOG.MINT_WARNING("ci-nightly")],
+    ["Use", TOKEN_DIALOG.USE_LABEL],
+    ["Wardyn API", TOKEN_DIALOG.USE_API],
+    ["Calling inbound ports", TOKEN_DIALOG.USE_INBOUND],
+    ["An inbound token can call the ports that name you as a caller. It can't use the Wardyn API. It expires within 90 days.", TOKEN_DIALOG.INBOUND_HELP],
     ["Token name", TOKEN_DIALOG.NAME_LABEL],
     ["Helps you tell your tokens apart.", TOKEN_DIALOG.NAME_HINT],
     ["Name the token.", TOKEN_DIALOG.NAME_REQUIRED],

@@ -18,6 +18,8 @@ import * as React from "react";
 import { Button } from "../../ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../ui/dialog";
 import { Input } from "../../ui/input";
+import { Label } from "../../ui/label";
+import { RadioGroup, RadioGroupItem } from "../../ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { HttpError } from "../../../lib/api/core";
 import type { ApiToken } from "../../../lib/types/service-identities";
@@ -35,6 +37,8 @@ const NAME_INVALID_REASON = "api_token_name_invalid";
 export interface TokenRequest {
   name: string;
   ttl_seconds?: number;
+  /** Absent for a token that calls the Wardyn API. */
+  kind?: "inbound";
 }
 
 export interface TokenDialogProps {
@@ -92,6 +96,8 @@ export function TokenDialog(props: TokenDialogProps) {
   const uid = React.useId();
   const [name, setName] = React.useState(initialName);
   const [ttl, setTtl] = React.useState(kind === "claim" && limitSeconds ? limitSeconds : DEFAULT_LIFETIME);
+  // What a minted token is for: the Wardyn API (the default) or calling inbound ports. A claim is always the API's.
+  const [use, setUse] = React.useState<"api" | "inbound">("api");
   const [phase, setPhase] = React.useState<"form" | "busy" | "reveal">("form");
   const [nameError, setNameError] = React.useState("");
   const [refusal, setRefusal] = React.useState<Refusal | null>(null);
@@ -123,7 +129,7 @@ export function TokenDialog(props: TokenDialogProps) {
     setRefusal(null);
     setPhase("busy");
     try {
-      const tok = await submit(ttl > 0 ? { name: trimmed, ttl_seconds: ttl } : { name: trimmed });
+      const tok = await submit({ name: trimmed, ...(ttl > 0 && { ttl_seconds: ttl }), ...(use === "inbound" && { kind: "inbound" as const }) });
       const life = tok.expires_at ? Date.parse(tok.expires_at) - Date.parse(tok.created_at) : 0;
       setReveal({
         token: tok.token ?? "",
@@ -254,7 +260,27 @@ export function TokenDialog(props: TokenDialogProps) {
                 {T.CLAIM_WARNING_TAIL}
               </p>
             )}
-            {!refusal?.final && !isClaim && (
+            {!isClaim && (
+              <fieldset className="grid gap-2 rounded-md border border-border px-3 py-2.5" disabled={phase === "busy" || refusal?.final}>
+                <legend className="px-1 text-sm font-medium">{T.USE_LABEL}</legend>
+                <RadioGroup value={use} onValueChange={(v) => setUse(v as "api" | "inbound")} aria-label={T.USE_LABEL} className="gap-2">
+                  <div className="flex items-center gap-2">
+                    <RadioGroupItem id={`${uid}-use-api`} value="api" />
+                    <Label htmlFor={`${uid}-use-api`}>{T.USE_API}</Label>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <RadioGroupItem id={`${uid}-use-inbound`} value="inbound" aria-describedby={use === "inbound" ? `${uid}-use-help` : undefined} />
+                    <Label htmlFor={`${uid}-use-inbound`}>{T.USE_INBOUND}</Label>
+                  </div>
+                </RadioGroup>
+                {use === "inbound" && (
+                  <p id={`${uid}-use-help`} className="text-xs text-muted-foreground">
+                    {T.INBOUND_HELP}
+                  </p>
+                )}
+              </fieldset>
+            )}
+            {!refusal?.final && !isClaim && use === "api" && (
               <p className="rounded-md border border-warning/25 bg-warning-subtle px-3 py-2 text-sm text-foreground">
                 {T.MINT_WARNING(service)}
               </p>

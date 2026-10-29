@@ -32,6 +32,7 @@ const NOT_A_DRAFT: Record<string, string> = {
   "/revive": "action on a run, no composed body",
   "/resume": "action on a run, no composed body",
   "/attach/ticket": "mints a single-use ticket, no composed body",
+  "/ticket`, { method": "mints a single-use ticket for one inbound app, no composed body",
   "/attach/takeover": "action on a run, no composed body",
   "}/restart": "action on a workload, no composed body",
   '"/admin/runs/restart"': "action on named runs, no composed text",

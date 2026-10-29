@@ -146,7 +146,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `START_COMMAND_LABEL` | mock | Start command |
 | `START_COMMAND_HELP` | mock | Run verbatim in the sandbox when it starts. The run keeps going until you end it or it reaches its lifetime limit. |
 | `PORTS_LABEL` | mock | Ports |
-| `PORTS_HELP` | mock | Each port opens from the run page through Wardyn's web app gateway. Only people who may enter this run can open it. |
+| `PORTS_HELP` | mock | Each port opens from the run page through Wardyn's web app gateway. Only people who may enter this run can open it, unless you make it callable from outside. |
 | `PORT_COL_NAME` | mock | Name |
 | `PORT_COL_PORT` | mock | Port |
 | `PORT_COL_PATH` | mock | Path |
@@ -154,6 +154,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `PORTS_FULL` | mock | A run can open up to 8 ports. |
 | `PORT_INVALID` | mock | Enter a port from 1 to 65535. |
 | `PORT_DUPLICATE(port)` | mock | Two apps can't share port {port}. |
+| `PORT_INBOUND_LABEL` | mock | Callable from outside the run |
+| `PORT_INBOUND_HELP` | mock | People and services you name can reach this port through Wardyn's gateway, even when the run has no terminal. Every call is recorded. |
 | `PORT_REQUIRED` | deviation (lead wording 2026-10-20, FEAT-1APP-UI) | An application needs at least one port to open. |
 | `APP_NAME_DUPLICATE(name)` | deviation (lead wording 2026-10-20, APP-UI-2) | Two applications are named {name}. Give each its own name. |
 | `APP_NAME_INVALID` | deviation (lead wording 2026-10-20, APP-UI-2) | Use lower-case letters, numbers and dashes, up to 32 characters, starting and ending with a letter or number. |

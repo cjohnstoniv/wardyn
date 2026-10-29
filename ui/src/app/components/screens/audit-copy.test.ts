@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import type { AuditEvent } from "../../lib/types";
 import { AUDIT, describeAction, describeEvent } from "./audit-copy";
 // The run page's Audit tab and the Audit screen read the lib table.
-import { awsSigningLine, describeAction as describeTabAction } from "../../lib/audit-copy";
+import { awsSigningLine, describeAction as describeTabAction, describeEvent as describeTabEvent, inboundDetail } from "../../lib/audit-copy";
 
 const ev = (action: string, target = "", extra: Partial<AuditEvent> = {}): AuditEvent =>
   ({ id: "e", time: new Date().toISOString(), actor_type: "system", actor: "x", action, outcome: "success", target, ...extra }) as AuditEvent;
@@ -87,5 +87,28 @@ describe("service audit rows", () => {
     expect(describeEvent(renewed)).toBe("Renewed the service's lease — r1");
     expect(describeAction(ev("run.end.set", "r1", { data: { reason: "limits_reclamped" } }))).toBe("run.end.set");
     expect(describeTabAction(ev("run.end.set", "r1"))).toBe("run.end.set");
+  });
+
+  // r15 T2-f: the two inbound rows, as the mock words them; the app is the object, the request is the second line.
+  it("words an inbound call by its decision, with the app as the object and the request as the detail", () => {
+    const allow = ev("inbound.allow", "api", { data: { method: "GET", path: "/v1/invoices", via: "token", caller: "service:billing" } });
+    const deny = ev("inbound.deny", "api", { outcome: "denied", data: { reason: "credential_invalid", via: "token", method: "POST", path: "/v1/refunds" } });
+    expect(AUDIT.INBOUND_ALLOW).toBe("Allowed inbound");
+    expect(AUDIT.INBOUND_DENY).toBe("Denied inbound");
+    expect(describeEvent(allow)).toBe("Allowed inbound to api");
+    expect(describeAction(allow)).toBe("Allowed inbound");
+    expect(describeEvent(deny)).toBe("Denied inbound to api");
+    expect(describeEvent(ev("inbound.deny"))).toBe("Denied inbound to an unknown app");
+    expect(describeTabAction(allow)).toBe("Allowed inbound to");
+    expect(describeTabEvent(deny)).toBe("Denied inbound to api");
+    expect(inboundDetail(allow)).toBe("GET /v1/invoices · via token · caller service:billing");
+    expect(inboundDetail(deny)).toBe("reason credential_invalid · via token · POST /v1/refunds");
+    expect(inboundDetail(ev("inbound.deny", "api", { data: { reason: "not_found", via: "session", method: "GET", path: "/" } }))).toBe("reason not_found · via session · GET /");
+  });
+
+  it("leaves out an inbound field the row lacks, and gives no detail to any other row", () => {
+    expect(inboundDetail(ev("inbound.allow", "api", { data: { method: "GET", path: "/" } }))).toBe("GET /");
+    expect(inboundDetail(ev("inbound.allow", "api"))).toBeNull();
+    expect(inboundDetail(ev("egress.allow", "a.example", { data: { method: "GET", path: "/" } }))).toBeNull();
   });
 });

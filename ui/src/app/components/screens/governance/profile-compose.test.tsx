@@ -216,6 +216,21 @@ describe("ProfileEditor — authoring an overlay", { timeout: 20_000 }, () => {
     );
   });
 
+  // r16 T2-e: the two doors say what they also turn off, and the UI apps row has its display name, never the wire key.
+  it("says on the two doors that inbound ports go with them, and names the row Deny UI apps", async () => {
+    renderEditor(null);
+    expect(GOV.LIMIT_INTERACTIVE_INBOUND).toBe("Inbound ports are turned off too, since a port can serve a shell.");
+    expect(GOV.LIMIT_UI_APPS_HINT).toBe("Also turns off inbound ports.");
+    expect(LIMITS_CHIP.UI_APPS).toBe("Deny UI apps");
+    expect(screen.getByText(`${GOV.LIMIT_INTERACTIVE_HINT} ${GOV.LIMIT_INTERACTIVE_INBOUND}`)).toBeInTheDocument();
+    expect(screen.getByText("Also turns off inbound ports.")).toBeInTheDocument();
+    expect(screen.queryByText("deny_ui_apps")).toBeNull();
+    await userEvent.click(screen.getByRole("switch", { name: "Deny UI apps" }));
+    typeValue(GOV.FIELD_NAME, "Team A");
+    await userEvent.click(screen.getByRole("button", { name: GOV.SAVE }));
+    expect(createProfileMock).toHaveBeenLastCalledWith(expect.objectContaining({ limits: expect.objectContaining({ deny_ui_apps: true }) }));
+  });
+
   it("limits set on a new profile before a base is picked move into the overlay on compose", async () => {
     renderEditor(null);
     typeValue(GOV.FIELD_NAME, "Team A");
@@ -238,7 +253,7 @@ describe("ProfileEditor — authoring an overlay", { timeout: 20_000 }, () => {
     renderEditor(null);
     typeValue(GOV.FIELD_NAME, "Team A");
     await pickBase("Baseline");
-    await userEvent.click(screen.getByRole("switch", { name: `deny_ui_apps ${GOV.OVERLAY_NARROW}` }));
+    await userEvent.click(screen.getByRole("switch", { name: `${LIMITS_CHIP.UI_APPS} ${GOV.OVERLAY_NARROW}` }));
     await userEvent.click(screen.getByRole("switch", { name: `max_cpu_millis ${GOV.OVERLAY_NARROW}` }));
     typeValue("max_cpu_millis", "500");
     await userEvent.click(screen.getAllByRole("combobox", { name: /caps autonomy at/ })[0]);

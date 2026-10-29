@@ -48,7 +48,11 @@ export const NR_RUN = {
     "Run verbatim in the sandbox when it starts. The run keeps going until you end it or it reaches its lifetime limit.",
   PORTS_LABEL: "Ports",
   PORTS_HELP:
-    "Each port opens from the run page through Wardyn's web app gateway. Only people who may enter this run can open it.",
+    "Each port opens from the run page through Wardyn's web app gateway. Only people who may enter this run can open it, unless you make it callable from outside.",
+  /** T2-a (r16): a port's own card carries the checkbox and its help. "Who can call it" is not here: its picker is redrawn in r17. */
+  PORT_INBOUND_LABEL: "Callable from outside the run",
+  PORT_INBOUND_HELP:
+    "People and services you name can reach this port through Wardyn's gateway, even when the run has no terminal. Every call is recorded.",
   PORT_COL_NAME: "Name",
   PORT_COL_PORT: "Port",
   PORT_COL_PATH: "Path",

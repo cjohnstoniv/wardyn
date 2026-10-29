@@ -50,6 +50,11 @@ export const AUDIT = {
   AWS_SIGNING_NOT_RECORDED: "fallback reason not recorded",
   // A run.end.set row with reason service_renewed: wardynd moved a healthy service's end forward by its lease.
   SERVICE_RENEWED: "renewed the service's lease",
+  // inbound.allow / inbound.deny (r15 T2-f): a call to an app the run declares inbound, one row per request; the
+  // object is the app. The unnamed app is for a row whose target was lost.
+  INBOUND_ALLOW: "Allowed inbound",
+  INBOUND_DENY: "Denied inbound",
+  INBOUND_NO_APP: "an unknown app",
 } as const;
 
 // Short, human verbs for the actions we know about, shared by the Audit screen
@@ -164,6 +169,9 @@ function describe(e: AuditEvent): Described {
       head: `LLM content scan (${e.action.slice("llm.scan.".length)})`,
       join: { sep: " for ", fallback: "an unknown host" },
     };
+  }
+  if (e.action === "inbound.allow" || e.action === "inbound.deny") {
+    return { head: e.action === "inbound.allow" ? AUDIT.INBOUND_ALLOW : AUDIT.INBOUND_DENY, join: { sep: " to ", fallback: AUDIT.INBOUND_NO_APP } };
   }
   if (e.action === "credential.revoke") return { head: AUDIT.REVOKE_RUN_CREDENTIALS };
   if (e.action === "run.end.set" && e.data?.reason === "service_renewed") return { head: capitalize(AUDIT.SERVICE_RENEWED), join: { sep: " — " } };
