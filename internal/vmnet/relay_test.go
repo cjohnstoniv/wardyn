@@ -5,11 +5,13 @@ package vmnet
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"io"
 	"net"
 	"net/http"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -334,5 +336,36 @@ func TestRelayDropsOversizedFrames(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("an oversized frame length did not end the connection")
+	}
+}
+
+// A guest that connects and goes silent must not keep Listen alive once its
+// context ends.
+func TestListenReturnsOnCancelWithIdleGuest(t *testing.T) {
+	rl, err := New(Config{Proxy: "127.0.0.1:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(rl.Close)
+	path := filepath.Join(t.TempDir(), "vmnet.sock")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- rl.Listen(ctx, path) }()
+	var c net.Conn
+	waitFor(t, "listen socket", func() bool {
+		c, err = net.Dial("unix", path)
+		return err == nil
+	})
+	defer c.Close()
+	time.Sleep(200 * time.Millisecond) // let Listen accept and start serving
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Listen = %v, want nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Listen still serving an idle guest after cancel")
 	}
 }
