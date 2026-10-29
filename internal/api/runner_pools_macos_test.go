@@ -128,9 +128,9 @@ func TestPoolMacOSVMRunnerRefusedReason(t *testing.T) {
 		detail     string
 	}{
 		"memory below the minimum": {limited(8000, 6144), refusing(true), client.MacOSVMRefusedBelowMinMemory, 6, 8,
-			"Per-run memory on this runner is 6 GB; a macOS VM needs at least 8 GB. Its owner raises it to 8 GB or more in Your account → My runner, or with `wardyn runner set studio --per-run-memory 8`."},
+			"Per-run memory on this runner is 6 GB; a macOS VM needs at least 8 GB. Its owner raises it to 8 GB or more in Settings → My runner, or with `wardyn runner set studio --per-run-memory 8`."},
 		"CPU below the minimum": {limited(2000, 16384), refusing(true), client.MacOSVMRefusedBelowMinCPU, 2, 4,
-			"Per-run CPU on this runner is 2 CPUs; a macOS VM needs at least 4. Its owner raises it to 4 or more in Your account → My runner, or with `wardyn runner set studio --per-run-cpu 4`."},
+			"Per-run CPU on this runner is 2 CPUs; a macOS VM needs at least 4. Its owner raises it to 4 or more in Settings → My runner, or with `wardyn runner set studio --per-run-cpu 4`."},
 		"limits meet the minimum": {limited(8000, 16384), refusing(true), client.MacOSVMRefusedOther, 0, 0, macOSPoolCannotTake},
 		"no minimum in the caps":  {limited(1000, 1024), refusing(false), client.MacOSVMRefusedOther, 0, 0, macOSPoolCannotTake},
 		"no limits known":         {managedMac("studio"), refusing(true), client.MacOSVMRefusedOther, 0, 0, macOSPoolCannotTake},

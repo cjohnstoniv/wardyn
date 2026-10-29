@@ -80,7 +80,7 @@ func newRegisterCommand() *cobra.Command {
 		}
 		// The limits it registered with stay on screen: with every limit given as a flag nothing else shows them.
 		fmt.Fprintf(cmd.OutOrStdout(), "registered %s; key fingerprint %s\n  %s\n", done.name, done.fingerprint, limitsLine(done.limits))
-		fmt.Fprintln(cmd.OutOrStdout(), "  claim it in the console (Your account → My runner) with this fingerprint, or\n"+
+		fmt.Fprintln(cmd.OutOrStdout(), "  claim it in the console (Settings → My runner) with this fingerprint, or\n"+
 			"  WARDYN_TOKEN=<your personal API token> wardyn runner claim --pool <name> --default\n"+
 			"  the admin token cannot claim; a claimed runner in no pool runs nothing")
 		return nil
@@ -133,7 +133,7 @@ func registrationFailure(err error) error {
 		return fmt.Errorf("runner registration refused: %w. This token cannot be used again: obtain a fresh token and choose a new private state directory before retrying (the local key was preserved)", err)
 	}
 	if !errors.As(err, &refused) || refused.Status >= http.StatusInternalServerError {
-		return fmt.Errorf("runner registration failed: %w. The server may have spent the token before it failed: check Your account → My runners, and if this host is not there mint a new token and choose a new private state directory (the local key was preserved)", err)
+		return fmt.Errorf("runner registration failed: %w. The server may have spent the token before it failed: check Settings → My runners, and if this host is not there mint a new token and choose a new private state directory (the local key was preserved)", err)
 	}
 	return fmt.Errorf("runner registration failed: %w. The server did not refuse the token: retry with it and a new private state directory (the local key was preserved)", err)
 }

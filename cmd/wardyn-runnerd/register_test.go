@@ -64,7 +64,7 @@ func TestRegisterCreatesPrivateBoundIdentity(t *testing.T) {
 	}
 	text := out.String()
 	if !strings.Contains(text, "registered laptop; key fingerprint "+got.Fingerprint+"\n  limits: runs at once ") ||
-		!strings.Contains(text, "claim it in the console (Your account → My runner) with this fingerprint, or\n  WARDYN_TOKEN=<your personal API token> wardyn runner claim --pool <name> --default\n") || !strings.Contains(text, "the admin token cannot claim") || strings.Contains(text, token) {
+		!strings.Contains(text, "claim it in the console (Settings → My runner) with this fingerprint, or\n  WARDYN_TOKEN=<your personal API token> wardyn runner claim --pool <name> --default\n") || !strings.Contains(text, "the admin token cannot claim") || strings.Contains(text, token) {
 		t.Fatal("fingerprint absent or token printed")
 	}
 }
