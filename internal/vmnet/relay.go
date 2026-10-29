@@ -289,7 +289,7 @@ func (rl *Relay) ServeStream(r io.Reader, w io.Writer) error {
 					return err
 				}
 			} else if addr, msg, declined := dhcpDeclined(frame); declined {
-				rl.log.Warn("guest declined the DHCP lease as an address in use", "address", addr, "message", msg)
+				rl.rep.refuseLocal("guest declined the DHCP lease as an address in use", "address", addr, "message", msg)
 			} else {
 				rl.rep.refuse(refusal{Reason: "dropped-frame", Detail: "dhcp_unanswered"})
 			}
