@@ -301,13 +301,25 @@ type inboundReadmission struct {
 	app, raw, principal string
 }
 
-// readmitInbound admits a's token again, uncached (admitInboundToken). Its answers go nowhere: the stream
-// has no response left to write them on. transient is a refusal that is no verdict on the token: a lookup
-// that could not be made (verifyAPIToken's 503), which writes no row.
+// readmitInbound admits a's token again, uncached (admitInboundToken), then asks the run's profile what a
+// request's re-assert asks (uiInboundUnitDenies): a stream is admitted by the same arms a request is. Its
+// answers go nowhere: the stream has no response left to write them on. transient is a refusal that is no
+// verdict on the token or the profile: a lookup that could not be made (verifyAPIToken's 503), or a run or
+// profile that could not be read, which write no inbound.deny row.
 func (s *Server) readmitInbound(a inboundReadmission) (ok, transient bool) {
 	w := &inboundReadmitWriter{healthzGateWriter: healthzGateWriter{h: http.Header{}}}
-	_, ok = s.admitInboundToken(w, a.r, a.runID, a.app, a.raw)
-	return ok, !ok && w.status == http.StatusServiceUnavailable
+	sess, ok := s.admitInboundToken(w, a.r, a.runID, a.app, a.raw)
+	if !ok {
+		return false, w.status == http.StatusServiceUnavailable
+	}
+	run, err := s.cfg.Store.GetRun(a.r.Context(), a.runID)
+	if err != nil {
+		return false, true
+	}
+	if de := s.uiInboundUnitDenies(a.r.Context(), sess, run); de != nil {
+		return false, de.status == http.StatusServiceUnavailable
+	}
+	return true, false
 }
 
 // inboundReadmitWriter is healthzGateWriter that keeps the status of what was written.
@@ -321,7 +333,8 @@ func (w *inboundReadmitWriter) WriteHeader(code int) { w.status = code }
 // watchInboundStream holds an upgraded stream an inbound token opened to the authority that admitted it:
 // every inboundResolveTTL (uiInboundStreamEvery in tests) the token is admitted again, uncached, by
 // admitInboundToken, so the token's revoke or expiry, its service identity or sponsor going, its owner
-// losing the run or the app no longer naming its caller all reach the stream as they reach a request. A
+// losing the run or the app no longer naming its caller all reach the stream as they reach a request, as
+// does the run's profile coming to deny UI apps or interactive sessions (uiInboundUnitDenies). A
 // refusal writes the inbound.deny row a refused request writes and closes the stream. A lookup that
 // cannot be made keeps the stream and asks again next tick, so one store blip ends no stream; one that
 // stays unanswerable for inboundResolveTTL, the staleness the design allows, closes it with an inbound.deny

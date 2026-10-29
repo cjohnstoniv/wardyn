@@ -541,6 +541,39 @@ func TestUIGateway_InboundStreamIsReadmitted(t *testing.T) {
 		}
 	})
 
+	// The profile arm of a request's re-assert reaches an open stream too: a profile changed to deny UI apps,
+	// or interactive sessions, closes it at the next tick with the inbound.deny row a refused call gets.
+	for name, limits := range map[string]types.GovernanceLimits{
+		"deny_ui_apps":     {DenyUIApps: true},
+		"deny_interactive": {DenyInteractive: true},
+	} {
+		t.Run("a stream closes when its run's profile comes to "+name, func(t *testing.T) {
+			h, gw := open(t)
+			unit := types.GovernanceUnit{ID: uuid.New(), Name: "walled"}
+			setUnit := func(u types.GovernanceUnit) {
+				h.store.sshMemStore.mu.Lock()
+				defer h.store.sshMemStore.mu.Unlock()
+				h.store.profiles = []types.GovernanceUnit{u}
+			}
+			setUnit(unit)
+			h.run.UnitID = &unit.ID
+			h.store.putRun(h.run)
+			conn, br := openInboundStream(t, h, gw, "wdn_alice")
+			if !echoes(conn, br) {
+				t.Fatal("the stream carried nothing under a profile that allows inbound")
+			}
+			unit.Limits = limits
+			setUnit(unit)
+			if !closes(conn, br) {
+				t.Fatal("the stream outlived the profile that now denies it")
+			}
+			if rows := h.audit.auditRows("inbound.deny", "denied"); len(rows) != 1 || rows[0].Actor != h.owner ||
+				!h.audit.hasDataValue("reason", inboundDenyUnitDenies) {
+				t.Errorf("inbound.deny rows = %+v, want one unit_denies by %s", rows, h.owner)
+			}
+		})
+	}
+
 	// A lookup that cannot be made is no verdict on the token: the stream rides it out, and is closed, with a
 	// row, only once the re-admission has been unanswerable for the staleness bound.
 	lookupsFail := func(t *testing.T, h *uiHarness) {

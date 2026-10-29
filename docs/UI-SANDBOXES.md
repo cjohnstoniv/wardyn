@@ -506,7 +506,7 @@ curl -H "Authorization: Bearer $INBOUND_TOKEN" "$UI/r/$RUN_ID/api/health"
 ### What Wardyn checks on every call
 
 - **The token** is looked up, then checked for expiry and revocation, and for an owner who is a service identity, its live record and sponsor. The result is reused for 30 seconds per token, run and app.
-- **A revoked, expired or suspended token** stops calling within that window. An inbound-token stream already open is re-checked at most every 30 seconds (rc.8) and closed when its token no longer holds.
+- **A revoked, expired or suspended token** stops calling within that window. An inbound-token stream already open is re-checked at most every 30 seconds (rc.8) and closed when its token no longer holds, or when the run's profile now denies UI apps or interactive sessions.
 - **A browser session** is re-checked as in [Bounds](#bounds), minus the owner rule for a named caller, and also refused when the run's profile now denies UI apps or interactive sessions.
 - **Host mode** adds a cross-site check to every cookie session, inbound or not. A request must be same-origin, carry no fetch metadata, or be a top-level `GET` or `HEAD` navigation, and an `Origin` header must be the request's own.
 - **Capacity** is shared: at most 8 relay connections per run, each a `socat` exec that is slower to open on Kubernetes or a remote runner. Inbound suits internal APIs and tools, not high-traffic services.
@@ -683,7 +683,7 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
 - And a connection already established (a relayed WebSocket) keeps working until
   it closes, including after a portal revoke: killing the run is what ends an
   in-flight session, the same bound attach and [SSH](SSH.md#bounds) publish.
-  - An inbound-token stream is the exception (rc.8): it is re-checked at most every 30 seconds and closed once its token is revoked, expired or suspended.
+  - An inbound-token stream is the exception (rc.8): it is re-checked at most every 30 seconds and closed once its token is revoked, expired or suspended, or the run's profile denies inbound apps.
 - Every refusal writes a
   `ui.authorize` / `denied` row naming the reason.
 - **Header hygiene, both directions.** Cookies are not port-scoped, so a shared
