@@ -38,6 +38,9 @@ export interface UIApp {
   name: string;
   port: number;
   path?: string;
+  // Callable from outside the run through the gateway, by the callers listed.
+  inbound?: boolean;
+  callers?: string[];
 }
 
 // Canonical weakest -> strongest ladder — the single place the Fence < Wall <
