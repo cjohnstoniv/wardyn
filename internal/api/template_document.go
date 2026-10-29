@@ -375,9 +375,17 @@ func (d *templateDecoder) checkDependencies(doc client.TemplateDocument) {
 		has := func(field string) bool { return templateSpecifies(doc, field) || listed(field) }
 		if templateSpecifies(doc, dep.field) && !has(dep.needs) && !(dep.alt != "" && has(dep.alt)) {
 			path := "intent." + dep.field
-			d.add(path, reasonTemplateDependencyMissing, templateDependencyMissingMsg(path, dep.needs))
+			d.add(path, reasonTemplateDependencyMissing, templateDependencyMissingMsg(path, dependencyNeeds(dep.needs, dep.alt)))
 		}
 	}
+}
+
+// dependencyNeeds is what a dependency edge's refusal names: the field it needs, or either of two.
+func dependencyNeeds(needs, alt string) string {
+	if alt == "" {
+		return needs
+	}
+	return needs + " or " + alt
 }
 
 // checkAvailable refuses a valid field this server cannot honour yet. Each case

@@ -206,12 +206,12 @@ func TestTemplateDependencyEdges(t *testing.T) {
 	// The expected edges are written out, so deleting a row fails here as well as editing one.
 	var got []string
 	for _, dep := range templateDependencies {
-		got = append(got, dep.field+">"+dep.needs)
+		got = append(got, dep.field+">"+dependencyNeeds(dep.needs, dep.alt))
 	}
 	want := []string{
 		"devcontainer_ref>devcontainer_repo", "model_provider>agent", "tool_approvals>agent", "seed_auto_tools>agent",
 		"inline_policy.tool_rules>agent", "workload>experience", "startup>experience", "service>workload", "interactive_start>interactive", "task_mode>interactive",
-		"inline_policy.ui_apps>interactive", "runner_id>placement", "runner_id>runner_pool_id",
+		"inline_policy.ui_apps>interactive or experience", "runner_id>placement", "runner_id>runner_pool_id",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("dependency edges = %v, want %v", got, want)
@@ -252,7 +252,8 @@ func TestTemplateDependencyEdges(t *testing.T) {
 				d.checkDependencies(doc)
 				var mine []client.TemplateDiagnostic
 				for _, diag := range d.diags {
-					if diag.Path == "intent."+dep.field && strings.Contains(diag.Message, " needs "+dep.needs+".") {
+					// The refusal names every field that satisfies the edge, its alternative included.
+					if diag.Path == "intent."+dep.field && strings.Contains(diag.Message, " needs "+dependencyNeeds(dep.needs, dep.alt)+".") {
 						mine = append(mine, diag)
 					}
 				}

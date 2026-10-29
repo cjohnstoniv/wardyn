@@ -162,6 +162,22 @@ func TestServiceCreateWarnings(t *testing.T) {
 	}
 }
 
+// TestQueuedServiceWarnings: a queued run captures no limits until it starts, so its 201 reads the
+// limits the launch resolved, not the empty ones on the queued row.
+func TestQueuedServiceWarnings(t *testing.T) {
+	svc := &types.RunService{Restart: types.ServiceRestartOnFailure}
+	queued := types.AgentRun{State: types.RunQueued, Service: svc}
+	if got := queuedServiceWarnings(queued, types.RunLimits{PauseIdleAfterSec: 900}); !slices.Equal(got, []string{servicePauseWarning}) {
+		t.Errorf("under an idle pause: %q, want the pause sentence", got)
+	}
+	if got := queuedServiceWarnings(queued, types.RunLimits{}); got != nil {
+		t.Errorf("with no idle pause: %q, want none", got)
+	}
+	if got := queuedServiceWarnings(types.AgentRun{State: types.RunQueued}, types.RunLimits{PauseIdleAfterSec: 900}); got != nil {
+		t.Errorf("not a service: %q, want none", got)
+	}
+}
+
 // TestRunCreateAuditRecordsService: run.create carries the frozen spec, defaults filled, and nothing for
 // a run that is not a service.
 func TestRunCreateAuditRecordsService(t *testing.T) {

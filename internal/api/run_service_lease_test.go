@@ -5,16 +5,20 @@ package api
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 func leaseServiceRun(now time.Time, endsIn time.Duration, l types.RunLimits) types.AgentRun {
 	end := now.Add(endsIn)
 	return types.AgentRun{
-		Experience: types.ExperienceBackground, EndsAt: &end, RunLimits: l,
+		CreatedAt: now.Add(-time.Minute), Experience: types.ExperienceBackground, EndsAt: &end, RunLimits: l,
 		Service: &types.RunService{Restart: types.ServiceRestartOnFailure},
 	}
 }
@@ -45,6 +49,21 @@ func TestPlanServiceRenewal(t *testing.T) {
 		{name: "outside the half-life", endsIn: hour + time.Second, limits: lease},
 		{name: "unhealthy is never renewed", endsIn: time.Minute, limits: lease, mutate: func(r *types.AgentRun) { r.ServiceStatus = status(types.ServiceHealthUnhealthy) }},
 		{name: "unknown is never renewed", endsIn: time.Minute, limits: lease, mutate: func(r *types.AgentRun) { r.ServiceStatus = status(types.ServiceHealthUnknown) }},
+		{name: "a stale observation is unknown", endsIn: time.Minute, limits: lease, mutate: func(r *types.AgentRun) {
+			r.ServiceStatus = status(types.ServiceHealthHealthy)
+			r.ServiceStatus.ObservedAt = now.Add(-serviceStatusStale - time.Second)
+		}},
+		{name: "an observation at the stale mark still counts", endsIn: time.Minute, limits: lease, mutate: func(r *types.AgentRun) {
+			r.ServiceStatus = status(types.ServiceHealthHealthy)
+			r.ServiceStatus.ObservedAt = now.Add(-serviceStatusStale)
+		}, want: 2 * hour, unit: 7200, source: types.LimitSourceGovernance, health: types.ServiceHealthHealthy},
+		{name: "no observation past the supervisor's grace is unknown", endsIn: time.Minute, limits: lease, mutate: func(r *types.AgentRun) {
+			r.CreatedAt = now.Add(-serviceSupervisorGrace)
+		}},
+		{name: "the grace runs from admission for a queued run", endsIn: time.Minute, limits: lease, mutate: func(r *types.AgentRun) {
+			r.CreatedAt = now.Add(-time.Hour)
+			r.AdmittedAt = at(-time.Minute)
+		}, want: 2 * hour, unit: 7200, source: types.LimitSourceGovernance, health: types.ServiceHealthStarting},
 		{name: "not a service", endsIn: time.Minute, limits: lease, mutate: func(r *types.AgentRun) { r.Service = nil }},
 		{name: "no end", endsIn: time.Minute, limits: lease, mutate: func(r *types.AgentRun) { r.EndsAt = nil }},
 		{name: "lost", endsIn: time.Minute, limits: lease, mutate: func(r *types.AgentRun) { r.LostAt = at(-time.Minute) }},
@@ -92,10 +111,12 @@ func TestPlanServiceRenewal(t *testing.T) {
 	}
 }
 
-// newServiceLeaseFixture is a lease fixture whose run is a service with a two-hour lease.
+// newServiceLeaseFixture is a lease fixture whose run is a service with a two-hour lease, started a
+// minute ago: with no health observation it is still starting (renewalHealth).
 func newServiceLeaseFixture(t *testing.T, endsIn time.Duration) *leaseFixture {
 	t.Helper()
 	f := newLeaseFixture(t, endsIn)
+	f.st.run.CreatedAt = f.now.Add(-time.Minute)
 	f.st.run.Experience = types.ExperienceBackground
 	f.st.run.Service = &types.RunService{Restart: types.ServiceRestartOnFailure}
 	f.st.run.RunLimits = types.RunLimits{MaxEndAheadSec: 7200}
@@ -186,5 +207,132 @@ func TestRunLease_ALostRenewalWritesNothing(t *testing.T) {
 	}
 	if n := len(f.audit.eventsFor(f.run.ID, "run.end.set")); n != 0 {
 		t.Errorf("%d run.end.set rows after a lost compare-and-set, want none", n)
+	}
+}
+
+// ownerChainLeaseStore is the lease store with the run's captured unit read back as chainErr.
+type ownerChainLeaseStore struct {
+	*leaseStore
+	chainErr error
+}
+
+func (s *ownerChainLeaseStore) GetGovernanceUnitChain(context.Context, uuid.UUID) ([]types.GovernanceUnit, error) {
+	return nil, s.chainErr
+}
+
+// A renewal moves the end later, so it meets the owner re-check a PATCH extending the end meets;
+// a refusal, and a check that cannot be answered, renew nothing and audit nothing.
+func TestRunLease_ARenewalNeedsTheOwnersAuthorityToExtend(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		chainErr  error
+		grantsErr error
+	}{
+		{name: "the captured unit is deleted", chainErr: store.ErrNotFound},
+		{name: "the captured unit cannot be read", chainErr: errors.New("connection refused")},
+		{name: "the run's grants cannot be read", grantsErr: errors.New("connection refused")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newServiceLeaseFixture(t, 30*time.Minute)
+			f.st.run.ServiceStatus = &types.RunServiceStatus{Health: types.ServiceHealthHealthy, ObservedAt: f.now}
+			if tc.chainErr != nil {
+				unit := uuid.New()
+				f.st.run.UnitID = &unit
+				f.srv.cfg.Store = &ownerChainLeaseStore{leaseStore: f.st, chainErr: tc.chainErr}
+			}
+			f.st.credGrantsErr = tc.grantsErr
+			end := f.endsAt()
+			f.sweep(t)
+			if got := f.endsAt(); !got.Equal(end) {
+				t.Errorf("ends_at moved to %v, want %v", got, end)
+			}
+			if n := len(f.audit.eventsFor(f.run.ID, "run.end.set")); n != 0 {
+				t.Errorf("%d run.end.set rows, want none", n)
+			}
+			if n := len(f.audit.eventsFor(f.run.ID, "run.ending_soon")); n != 1 {
+				t.Errorf("%d run.ending_soon rows, want the normal warning", n)
+			}
+		})
+	}
+}
+
+// The health sweep rewrites an unchanged status only every serviceStatusRefresh: a healthy service
+// observed one refresh and more ago is still renewed.
+func TestRunLease_AnUnchangedHealthyServiceIsRenewedAcrossTheRefresh(t *testing.T) {
+	f := newServiceLeaseFixture(t, 30*time.Minute)
+	f.st.run.ServiceStatus = &types.RunServiceStatus{Health: types.ServiceHealthHealthy,
+		ObservedAt: f.now.Add(-serviceStatusRefresh - 4*time.Minute)}
+	f.sweep(t)
+	if got := f.endsAt(); !got.Equal(f.now.Add(2 * time.Hour)) {
+		t.Fatalf("ends_at = %v, want a renewal", got)
+	}
+}
+
+// A runner no replica holds keeps its last status forever: renewal reads an old one as unknown.
+func TestRunLease_AServiceNotHeardFromIsNotRenewed(t *testing.T) {
+	for name, mutate := range map[string]func(f *leaseFixture){
+		"a stale observation": func(f *leaseFixture) {
+			f.st.run.ServiceStatus = &types.RunServiceStatus{Health: types.ServiceHealthHealthy,
+				ObservedAt: f.now.Add(-serviceStatusStale - time.Minute)}
+		},
+		"no observation past the grace": func(f *leaseFixture) { f.st.run.CreatedAt = f.now.Add(-time.Hour) },
+	} {
+		f := newServiceLeaseFixture(t, 30*time.Minute)
+		mutate(f)
+		end := f.endsAt()
+		f.sweep(t)
+		if got := f.endsAt(); !got.Equal(end) {
+			t.Errorf("%s: ends_at moved to %v", name, got)
+		}
+		if n := len(f.audit.eventsFor(f.run.ID, "run.end.set")); n != 0 {
+			t.Errorf("%s: %d run.end.set rows, want none", name, n)
+		}
+	}
+}
+
+// A service renewal keeps alive is never warned: with a unit of an hour or less the warning window
+// opens before the half-life, and every renewal would send run.ending_soon. A service renewal will
+// not keep alive is warned as before.
+func TestRunLease_EndingSoonOnlyWhenRenewalWillNotHappen(t *testing.T) {
+	healthy := func(f *leaseFixture) {
+		f.st.run.ServiceStatus = &types.RunServiceStatus{Health: types.ServiceHealthHealthy, ObservedAt: f.now}
+	}
+	for _, tc := range []struct {
+		name    string
+		endsIn  time.Duration
+		mutate  func(f *leaseFixture)
+		renewed bool
+		warned  bool
+	}{
+		{name: "healthy, inside the warning window, before the half-life", endsIn: 45 * time.Minute, mutate: healthy},
+		{name: "healthy, renewed to a full unit inside the warning window", endsIn: 20 * time.Minute, mutate: healthy, renewed: true},
+		{name: "starting, before the half-life", endsIn: 45 * time.Minute},
+		{name: "unhealthy", endsIn: 45 * time.Minute, warned: true, mutate: func(f *leaseFixture) {
+			f.st.run.ServiceStatus = &types.RunServiceStatus{Health: types.ServiceHealthUnhealthy, ObservedAt: f.now}
+		}},
+		{name: "unknown", endsIn: 45 * time.Minute, warned: true, mutate: func(f *leaseFixture) {
+			f.st.run.ServiceStatus = &types.RunServiceStatus{Health: types.ServiceHealthUnknown, ObservedAt: f.now}
+		}},
+		{name: "at the lifetime cap", endsIn: 45 * time.Minute, warned: true, mutate: func(f *leaseFixture) {
+			healthy(f)
+			capAt := f.now.Add(45 * time.Minute)
+			f.st.run.LifetimeCapAt, f.st.run.LifetimeCapSource = &capAt, types.LimitSourcePool
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newServiceLeaseFixture(t, tc.endsIn)
+			f.st.run.RunLimits = types.RunLimits{MaxEndAheadSec: 3600}
+			if tc.mutate != nil {
+				tc.mutate(f)
+			}
+			end := f.endsAt()
+			f.sweep(t)
+			if renewed := !f.endsAt().Equal(end); renewed != tc.renewed {
+				t.Errorf("renewed = %v, want %v", renewed, tc.renewed)
+			}
+			if n := len(f.audit.eventsFor(f.run.ID, "run.ending_soon")); (n == 1) != tc.warned || n > 1 {
+				t.Errorf("%d run.ending_soon rows, want warned=%v", n, tc.warned)
+			}
+		})
 	}
 }

@@ -446,3 +446,58 @@ func TestServiceHealthSweep_StoreWithoutTheSurface(t *testing.T) {
 		t.Fatalf("sweepServiceHealth: %v", err)
 	}
 }
+
+// TestServiceHealthSweep_LeaderReadsShareTheBudget: the leader's runs join the held runs' queue, so a
+// pass whose held reads all hang until its budget runs out still reads the least recently observed
+// run, pass after pass, even when the sweep leader owns it.
+func TestServiceHealthSweep_LeaderReadsShareTheBudget(t *testing.T) {
+	now := time.Date(2020, 10, 29, 12, 0, 0, 0, time.UTC)
+	led := serviceRun(now, "ref-led", time.Hour)
+	runs := []types.AgentRun{led}
+	runnerID := uuid.New()
+	for i := range 2 * serviceProbeWorkers {
+		r := serviceRun(now, fmt.Sprintf("ref-held-%d", i), time.Hour)
+		r.RunnerID = &runnerID
+		runs = append(runs, r)
+	}
+	healthy := textPane(stateFileJSON("healthy", "", 0, "null"), 0)
+	lease := &fakeLease{lead: true, termCtx: context.Background(), current: func(int64) bool { return true }}
+	f := newServiceHealthFixture(t, func(ref string) (*runner.ExecSession, error) {
+		if ref == led.SandboxRef {
+			return healthy(runner.ExecSpec{})
+		}
+		pr, pw := io.Pipe() // a held read that answers nothing until its budget ends it
+		return &runner.ExecSession{Stdout: pr, Stderr: strings.NewReader(""),
+			Wait: func() (int, error) { return 0, nil }, Close: pw.Close}, nil
+	}, func(cfg *Config) {
+		cfg.SweeperLease = lease
+		cfg.RunnerOnline = func(uuid.UUID) bool { return true }
+	}, runs...)
+	for pass := 1; pass <= 3; pass++ {
+		// Every held run was heard from a minute ago; the leader's run longer ago than that.
+		f.st.mu.Lock()
+		for id, r := range f.st.runs {
+			if r.RunnerID != nil {
+				r.ServiceStatus = &types.RunServiceStatus{Health: types.ServiceHealthHealthy, ObservedAt: f.now.Add(-time.Minute)}
+				f.st.runs[id] = r
+			}
+		}
+		f.st.mu.Unlock()
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		err := f.srv.sweepServiceHealth(ctx)
+		cancel()
+		if err != nil {
+			t.Fatalf("pass %d: %v", pass, err)
+		}
+		if n := f.st.writeCount(led.ID); n != pass {
+			t.Fatalf("pass %d: the leader's run was written %d times, want %d", pass, n, pass)
+		}
+		if s := f.st.status(led.ID); s == nil || s.Health != types.ServiceHealthHealthy || !s.ObservedAt.Equal(f.now) {
+			t.Fatalf("pass %d: the leader's run status = %+v, want healthy now", pass, s)
+		}
+		f.now = f.now.Add(serviceStatusRefresh + time.Minute) // due again: an unchanged status is rewritten
+	}
+	if begins, ends := lease.counts(); begins != 3 || ends != 3 {
+		t.Errorf("lease begins %d ends %d, want 3 and 3", begins, ends)
+	}
+}
