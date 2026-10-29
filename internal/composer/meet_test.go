@@ -427,7 +427,9 @@ func TestMeetUIAppsMatchLeq(t *testing.T) {
 }
 
 // TestMeetUIAppsInboundCallers pins the inbound declaration through the meet: an app is inbound
-// only if both sides make it inbound, and its callers are the ones both sides name.
+// only if both sides make it inbound, and its callers are the ones both sides name. An overlay that asks
+// for more than its base (inbound over a base app that is not, a caller the base does not name) is
+// refused at write and narrowed with a warning at resolve, to the same result.
 func TestMeetUIAppsInboundCallers(t *testing.T) {
 	ana, bo, svc := "user:ana@example.com", "group:payments", "service:billing"
 	app := func(inbound bool, callers ...string) types.UIApp {
@@ -437,18 +439,30 @@ func TestMeetUIAppsInboundCallers(t *testing.T) {
 		name     string
 		base, ov types.UIApp
 		want     types.UIApp
+		widens   bool
 	}{
-		{"both inbound, callers intersect", app(true, ana, bo), app(true, bo, svc), app(true, bo)},
-		{"both inbound, overlay adds a caller", app(true, ana), app(true, ana, bo), app(true, ana)},
-		{"both inbound, no caller in common", app(true, ana), app(true, bo), app(true)},
-		{"overlay not inbound", app(true, ana), app(false), app(false)},
-		{"base not inbound", app(false), app(true, ana), app(false)},
-		{"neither inbound", app(false), app(false), app(false)},
+		{"both inbound, callers intersect", app(true, ana, bo), app(true, bo, svc), app(true, bo), true},
+		{"both inbound, overlay drops a caller", app(true, ana, bo), app(true, bo), app(true, bo), false},
+		{"both inbound, overlay adds a caller", app(true, ana), app(true, ana, bo), app(true, ana), true},
+		{"both inbound, no caller in common", app(true, ana), app(true, bo), app(true), true},
+		{"overlay not inbound", app(true, ana), app(false), app(false), false},
+		{"base not inbound", app(false), app(true), app(false), true},
+		{"base not inbound, overlay names a caller", app(false), app(true, ana), app(false), true},
+		{"neither inbound", app(false), app(false), app(false), false},
 	}
 	for _, r := range rows {
 		t.Run(r.name, func(t *testing.T) {
 			base := Authority{Ceiling: types.RunPolicySpec{MinConfinementClass: types.CC2, UIApps: []types.UIApp{r.base}}}
-			got := mustApply(t, base, overlayOf(types.CeilingOverlay{UIApps: &[]types.UIApp{r.ov}}))
+			ov := overlayOf(types.CeilingOverlay{UIApps: &[]types.UIApp{r.ov}})
+			if err := ValidateOverlay(base, ov); r.widens {
+				wantOverlayErr(t, err, ReasonOverlayInvalid, "ui_apps")
+			} else if err != nil {
+				t.Fatalf("ValidateOverlay: %v", err)
+			}
+			got, warns, err := ApplyOverlay(base, ov)
+			if err != nil || (len(warns) > 0) != r.widens {
+				t.Fatalf("ApplyOverlay: err = %v, warnings = %v, want a warning %v", err, warns, r.widens)
+			}
 			if !sameUIApps(got.Ceiling.UIApps, []types.UIApp{r.want}) {
 				t.Errorf("ui_apps = %+v, want %+v", got.Ceiling.UIApps, r.want)
 			}
