@@ -785,11 +785,12 @@ else
 fi
 
 # ── the rate bound ──────────────────────────────────────────────────────────
-# 400 calls at once from one caller: the bucket holds 100 and refills at 50 a second, and a refused call
-# comes back at once, so the arrivals outrun the refill whatever the app's speed.
+# 400 calls from one caller, 300 of them in flight at once: the bucket holds 100 and refills at 50 a second,
+# and the relay answers far slower than that (about 12 a second here), so the calls must arrive together, not
+# one per answer, to outrun the refill.
 sleep 3
 mkdir -p "${TMPDIR}/rl"
-curl -sS -m 120 --parallel --parallel-max 50 --resolve "$(uihost "${RUN_BG_ID}"):127.0.0.1" \
+curl -sS -m 120 --parallel --parallel-immediate --parallel-max 300 --resolve "$(uihost "${RUN_BG_ID}"):127.0.0.1" \
   -H "Authorization: Bearer ${CALLER_INBOUND}" -o "${TMPDIR}/rl/#1.body" -D "${TMPDIR}/rl/#1.h" -w '%{http_code}\n' \
   "$(iurl "${RUN_BG_ID}" api "rl[1-400]")" >"${TMPDIR}/rl/codes.txt" 2>/dev/null || true
 n200="$(grep -c '^200$' "${TMPDIR}/rl/codes.txt" || true)"
