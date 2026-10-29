@@ -1,6 +1,8 @@
 // Copyright 2026 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
+//go:build unix
+
 // Package admission is the host-wide ledger every macOS VM on a Mac takes an
 // entry in before its helper starts: a run's VM, prepare's VM and a tools
 // update's VM, from every login session's runner. It enforces Apple's cap of
