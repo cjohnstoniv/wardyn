@@ -131,7 +131,7 @@
 - Only a security operator changes a class: `wardyn runner trust <runner-id> <class> --reason <text>` (`PUT /api/v1/runners/{id}/trust`), or the trust section of *Admin → Runners*. It goes through the governance-change path and is audited `runner.trust.write`.
 - An organisation runner is always `org_cluster` and cannot be changed. The write moves a person's runner between `personal` and `managed_device` only.
 - A runner cannot raise its own class: the registration payload, capabilities and posture never feed the column.
-- Trusting `org_cluster` means trusting that cluster's administrators with the per-run and keystore Secrets, etcd backups and the per-run MITM key.
+- Trusting `org_cluster` means trusting that cluster's administrators with the per-run and keystore Secrets, etcd backups and the per-run MITM key, and to launch as any service identity bound to the runner's pools ([Workloads](workloads.md#bind-a-namespace)).
 - The delivery policy can differ per class (`by_trust`, falling back to the global row). A run is judged at the highest class among its eligible runners and bound to a runner of that class.
 - A downgrade does not pull values already delivered. A resident delivery or revive that finds the class changed is refused `runner_trust_changed`.
 - The CC3 floor is unchanged: no runner takes a resident credential for a CC3 run.

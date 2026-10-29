@@ -119,6 +119,8 @@ A Kubernetes organisation runner can watch namespaces for `WardynWorkload` resou
 
 A binding says: the resources of namespace N, on the runners of pool P, launch as service identity S. It is standing authority, so it is made by a signed-in person with the security role, never with an API token or the admin token.
 
+Anyone who can create or update a WardynWorkload in a bound namespace launches runs as the bound service identity, under its ceiling and with its credentials, while its sponsor is active. Every runner in the bound pool can apply, replace and delete that service identity's Kubernetes workloads, so bind a namespace only to a pool whose runners you trust as much as the service.
+
 1. Make the service identity, with a sponsor ([Service identities](api-tokens.md#service-identities)).
 2. Set `workloads.namespaces` in the runner chart to the namespaces to watch. The chart adds a Role and RoleBinding per namespace: `get`, `list` and `watch` on `wardynworkloads`, and `patch` on `wardynworkloads/status`. No Secret, nothing cluster-wide.
 3. Apply the CRD, [`wardyn.dev_wardynworkloads.yaml`](../../deploy/helm/wardyn-runnerd/crds/wardyn.dev_wardynworkloads.yaml). Helm installs it once from `crds/` and never upgrades it, so apply the file again by hand on a chart upgrade.
@@ -132,7 +134,7 @@ wardyn workload binding create --pool <pool> --namespace team-a --service web-bo
 
 - With `rbac.create=false`, apply the per-namespace Roles before the runner image starts. The runner refuses to boot without them.
 - `--pool` takes an organisation pool's id or name. A person's own pool is refused (`422` `workload_binding_pool_scope`): its runners are personal, and a personal runner must never launch as a service. A namespace is bound once per pool (`409` `workload_binding_conflict`).
-- Bind only pools whose runners are all in the one cluster the namespace belongs to.
+- Bind only pools whose runners are all in the one cluster the namespace belongs to. The binding names a namespace, not a cluster: a runner of the pool in another cluster that reports a resource in a namespace of the same name launches as the service too.
 - A runner serves a pool in one runs namespace, `runs_namespace`, fixed when the runner is added to the pool ([Runner pools](runner-pools.md)). That is where the pods go; the binding's namespace is only where the resource lives.
 - The organisation finds a binding through the reporting runner's own pools. If a runner is in two pools that bind one namespace, the older binding wins.
 - A resource may name a `runner_pool_id` in its intent, but only the bound pool's. The binding chooses the pool.
