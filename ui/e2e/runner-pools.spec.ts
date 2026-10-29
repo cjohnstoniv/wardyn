@@ -312,7 +312,7 @@ test("a default that fails after the runner joined the pool does not say the run
 test("Your account: My pools says administrators can see the pools and the cap is 10", async ({ page }) => {
   await page.route("**/api/v1/me/runners*", (route) => (route.request().method() === "GET" ? route.fulfill({ json: [] }) : route.fallback()));
   await gotoConsole(page, "user");
-  await navTo(page, "Your account");
+  await navTo(page, "Settings");
   await page.getByRole("button", { name: /^My runner/ }).click();
   await expect(page.getByText("Only you can change these. Administrators can see them.", { exact: true })).toBeVisible();
   await expect(page.getByText("You can have up to 10 pools, for example Laptop and Home server.")).toBeVisible();
@@ -329,7 +329,7 @@ test("My runner: a runner that registered but never connected names the service 
   };
   await page.route("**/api/v1/me/runners*", (route) => (route.request().method() === "GET" ? route.fulfill({ json: [never] }) : route.fallback()));
   await gotoConsole(page, "user");
-  await navTo(page, "Your account");
+  await navTo(page, "Settings");
   await page.getByRole("button", { name: /^My runner/ }).click();
   await expect(page.getByText("Never connected", { exact: true })).toBeVisible();
   await expect(page.locator("[data-offline-note]")).toHaveText(

@@ -13,7 +13,6 @@ import {
 import {
   Activity,
   AlertTriangle,
-  CircleUser,
   Compass,
   Container,
   Contact,
@@ -21,6 +20,7 @@ import {
   FolderOpen,
   HardDrive,
   KeyRound,
+  Layers,
   Laptop,
   LayoutTemplate,
   Lock,
@@ -38,7 +38,6 @@ import { NeedsYouNotices } from "../wardyn/needs-you-notices";
 import { SHELL } from "../wardyn/copy";
 import { lastCheckedLabel } from "../../lib/readiness";
 import { UnsavedGuardProvider, useGuardedNavClick } from "../../lib/use-unsaved-guard";
-import { SidebarLowerLinks } from "./sidebar-settings-link";
 // GOVERNANCE_NAV_TITLE and USER_TYPES_NAV_TITLE are each ONE string for two
 // places — this nav label and the screen's own heading (governance-copy.ts's
 // GOVERNANCE.TITLE and user-types-copy.ts's USER_TYPES.TITLE each read the
@@ -48,13 +47,13 @@ import { SidebarLowerLinks } from "./sidebar-settings-link";
 // sidebar doesn't drag a whole screen-only canon table into the entry chunk
 // (#498) for one string.
 import {
-  ADMIN_NAV_GROUPS,
   CREDENTIALS_NAV_TITLE,
   DRIVES_NAV_TITLE,
   GOVERNANCE_NAV_TITLE,
   RUNNERS_NAV_TITLE,
   USER_TYPES_NAV_TITLE,
-  type AdminNavGroup,
+  NAV_GROUPS,
+  type NavGroup,
 } from "../../lib/nav-copy";
 import { cn } from "../ui/utils";
 import { Button } from "../ui/button";
@@ -127,46 +126,49 @@ function useSessionExpiry(expiresAt: Date | null): SessionExpiryState {
 
 // Two nav sets, one per view (admin-member-modes-design.md §3, packet M-A).
 // The Admin view links its own /admin/* paths so the active item follows the
-// URL; the User view is Runs · Approvals · Workspaces at the person's scope.
-// Hiding is COSMETIC ONLY: every route enforces its tier server-side
-// (internal/api/routes.go), and an admin in the User view is answered as a
-// user by the session clamp.
+// URL; the User view links the person's own scope. Hiding is COSMETIC ONLY:
+// every route enforces its tier server-side (internal/api/routes.go), and an
+// admin in the User view is answered as a user by the session clamp.
 //
-// The Admin view groups its items under small headings (#3056): Activity, Build, Access, Limits, Keys.
-// Items both views share keep one relative order: Runs, Approvals, Workspaces, Templates.
+// Both views group their items: Runs (no heading), Setup, and in the Admin view Access, Limits, Keys. Items
+// both views share keep one relative order: Runs, Workloads, Approvals, then Workspaces, Templates, Getting
+// started, Settings.
 interface NavItem {
   to: string;
   label: string;
   icon: React.ElementType;
   badge?: "approvals" | "attention";
   // Which admin tier the item belongs to, when only one: a security admin's
-  // nav shows only what that tier can write or read org-wide (§2.1). Drives
-  // joins it (grants and preview are securityOps); Secrets is super-only;
-  // Recordings waits for F1 (packet M-A QM-5).
+  // nav shows only what that tier can write or read org-wide (§2.1).
+  // Secrets and Recordings are super-only; Getting started and Settings are the super
+  // admin's own pages (a security admin has neither).
   tier?: "super" | "security";
-  // Other paths that keep this item lit (see SidebarLowerLinks).
+  // Other paths that keep this item lit (Settings' cards open their own pages).
   also?: string[];
-  // The Admin view heading the item sits under.
-  group?: AdminNavGroup;
+  // The heading the item sits under.
+  group: NavGroup;
 }
 const ADMIN_NAV: NavItem[] = [
-  { to: "/admin/runs", label: "Runs", icon: Activity, badge: "attention", group: "activity" },
-  { to: "/admin/approvals", label: "Approvals", icon: ShieldCheck, badge: "approvals", group: "activity" },
-  { to: "/admin/audit", label: "Audit", icon: ScrollText, group: "activity" },
-  { to: "/admin/recordings", label: "Recordings", icon: Play, tier: "super", group: "activity" },
-  { to: "/admin/workspaces", label: "Workspaces", icon: FolderOpen, group: "build" },
+  { to: "/admin/runs", label: "Runs", icon: Activity, badge: "attention", group: "runs" },
+  // Workloads: the declared, kept-running things (T3); a member route, so both admin tiers see it.
+  { to: "/admin/workloads", label: "Workloads", icon: Layers, group: "runs" },
+  { to: "/admin/approvals", label: "Approvals", icon: ShieldCheck, badge: "approvals", group: "runs" },
+  { to: "/admin/audit", label: "Audit", icon: ScrollText, group: "runs" },
+  { to: "/admin/recordings", label: "Recordings", icon: Play, tier: "super", group: "runs" },
+  { to: "/admin/workspaces", label: "Workspaces", icon: FolderOpen, group: "setup" },
   // 0.9: saved starting points; org admins rename, delete and publish here. A member route server-side, so
   // both admin tiers see it. The label is literal like its neighbours: the screen's copy module is lazy-only.
-  { to: "/admin/templates", label: "Templates", icon: LayoutTemplate, group: "build" },
+  { to: "/admin/templates", label: "Templates", icon: LayoutTemplate, group: "setup" },
   // 0.9: people's own computers that run their runs. securityOps server-side, so both admin tiers see it;
   // the page explains the off state, so the item is always there (RN-Q4).
-  { to: "/admin/runners", label: RUNNERS_NAV_TITLE, icon: Laptop, group: "build" },
-  // User drives: a security admin reaches /admin/drives for its grants and preview (securityOps server-side);
-  // a super admin opens it from Workspaces and Settings' card, so its nav is unchanged.
-  { to: "/admin/drives", label: DRIVES_NAV_TITLE, icon: HardDrive, tier: "security", group: "build" },
-  // Images: a security admin adds and checks pre-wrapped images there (securityOps server-side, design
-  // final §3); a super admin keeps the Images tab under Settings' Providers card.
-  { to: "/admin/images", label: "Images", icon: Container, tier: "security", group: "build" },
+  { to: "/admin/runners", label: RUNNERS_NAV_TITLE, icon: Laptop, group: "setup" },
+  // User drives: grants and preview (securityOps server-side), so both admin tiers see it.
+  { to: "/admin/drives", label: DRIVES_NAV_TITLE, icon: HardDrive, group: "setup" },
+  // Images: pre-wrapped images are added and checked there (securityOps server-side, design final §3).
+  { to: "/admin/images", label: "Images", icon: Container, group: "setup" },
+  // Providers and Components are opened only from Settings' cards and have no entry of their own.
+  { to: "/admin/setup", label: "Getting started", icon: Compass, tier: "super", group: "setup" },
+  { to: "/admin/settings", label: SETTINGS_NAV.SETTINGS, icon: Settings, tier: "super", group: "setup", also: ["/admin/providers", "/admin/components"] },
   // People (0.8.6 ppl-p2), User types (0.8, UT-7a) and Credentials (CS-8) are securityOps server-side, so
   // both admin tiers see them (a security admin has no Settings and no Secrets, so Credentials can't live
   // in either).
@@ -180,39 +182,23 @@ const ADMIN_NAV: NavItem[] = [
   { to: "/admin/secrets", label: "Secrets", icon: Lock, tier: "super", group: "keys" },
 ];
 const USER_NAV: NavItem[] = [
-  { to: "/runs", label: "Runs", icon: Activity, badge: "attention" },
-  { to: "/approvals", label: "Approvals", icon: ShieldCheck, badge: "approvals" },
-  { to: "/workspaces", label: "Workspaces", icon: FolderOpen },
-  { to: "/templates", label: "Templates", icon: LayoutTemplate },
-];
-// Under the divider (#217's slot): Getting started and Settings in the Admin view,
-// where a security admin has neither; Getting started and Your account in the
-// User view. The page heading reads "Getting started" in both.
-const ADMIN_LOWER: NavItem[] = [
-  { to: "/admin/setup", label: "Getting started", icon: Compass },
-  // Providers, Components and Drives are opened only from Settings' cards and have no entry of their own.
-  { to: "/admin/settings", label: SETTINGS_NAV.SETTINGS, icon: Settings, also: ["/admin/providers", "/admin/components", "/admin/drives"] },
-];
-const USER_LOWER: NavItem[] = [
-  { to: "/setup", label: "Getting started", icon: Compass },
-  { to: "/account", label: NAV.YOUR_ACCOUNT, icon: CircleUser },
+  { to: "/runs", label: "Runs", icon: Activity, badge: "attention", group: "runs" },
+  { to: "/workloads", label: "Workloads", icon: Layers, group: "runs" },
+  { to: "/approvals", label: "Approvals", icon: ShieldCheck, badge: "approvals", group: "runs" },
+  { to: "/workspaces", label: "Workspaces", icon: FolderOpen, group: "setup" },
+  { to: "/templates", label: "Templates", icon: LayoutTemplate, group: "setup" },
+  { to: "/setup", label: "Getting started", icon: Compass, group: "setup" },
+  { to: "/account", label: NAV.SETTINGS, icon: Settings, group: "setup" },
 ];
 
-function navItemsForView(
-  view: ConsoleView,
-  superAdmin: boolean,
-  identityResolved: boolean,
-): { items: NavItem[]; lower: NavItem[] } {
+function navItemsForView(view: ConsoleView, superAdmin: boolean, identityResolved: boolean): NavItem[] {
   // B1 — `role` and the tiers are fail-open for an unresolved or failed /me,
   // so "not known yet" renders neither nav, rather than a guess, and the
   // banner says why. The fail-open defaults themselves stay (operator-context.tsx).
-  if (!identityResolved) return { items: [], lower: [] };
-  if (view === "user") return { items: USER_NAV, lower: USER_LOWER };
+  if (!identityResolved) return [];
+  if (view === "user") return USER_NAV;
   const tier = superAdmin ? "super" : "security";
-  return {
-    items: ADMIN_NAV.filter((i) => !i.tier || i.tier === tier),
-    lower: superAdmin ? ADMIN_LOWER : [],
-  };
+  return ADMIN_NAV.filter((i) => !i.tier || i.tier === tier);
 }
 
 // FOCUS MODE (design board 2c) — one screen, the run cockpit, can ask the shell
@@ -309,8 +295,9 @@ function SidebarNav({
   onNavigate?: () => void;
 }) {
   const { access, view, hasSwitch } = useShellView(meta);
-  const { items, lower } = navItemsForView(view, meta.operator, meta.identityResolved);
+  const items = navItemsForView(view, meta.operator, meta.identityResolved);
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   // #217 — a sidebar click can navigate away from a dirty form (Settings ➝
   // Providers is the case the mock walks); this asks the shared guard first
   // instead of always navigating straight through (lib/use-unsaved-guard.tsx).
@@ -336,7 +323,9 @@ function SidebarNav({
       {view === "user" && <UserViewEyebrow currentUserType={meta.userType} userTypes={meta.userViewTypes} />}
       <nav className="space-y-0.5">
         {items.map((item, i) => {
-          const heading = view === "admin" && item.group && item.group !== items[i - 1]?.group ? item.group : null;
+          // The first group, Runs, carries no heading; every later group does.
+          const heading = item.group !== "runs" && item.group !== items[i - 1]?.group ? item.group : null;
+          const alsoOn = !!item.also?.some((p) => pathname === p || pathname.startsWith(`${p}/`));
           const count =
             item.badge === "approvals"
               ? pendingApprovals
@@ -350,21 +339,21 @@ function SidebarNav({
                   data-testid={`nav-group-${heading}`}
                   className={cn("px-2.5 pb-1 text-xs font-medium text-muted-foreground", i > 0 && "pt-3")}
                 >
-                  {ADMIN_NAV_GROUPS[heading]}
+                  {NAV_GROUPS[heading]}
                 </div>
               )}
               <NavLink
                 to={item.to}
                 onClick={guardedClick(item.to, onNavigate)}
-                className={({ isActive }) => navLinkClass(isActive)}
+                className={({ isActive }) => navLinkClass(isActive || alsoOn)}
               >
                 {({ isActive }) => (
                   <>
-                    {isActive && (
+                    {(isActive || alsoOn) && (
                       <span className="absolute -left-3 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-r bg-sidebar-primary" />
                     )}
                     <item.icon
-                      className={cn("size-4", isActive && "text-foreground")}
+                      className={cn("size-4", (isActive || alsoOn) && "text-foreground")}
                     />
                     <span className="flex-1 text-left">{item.label}</span>
                     {count > 0 && (
@@ -378,13 +367,6 @@ function SidebarNav({
             </React.Fragment>
           );
         })}
-        {/* #217 — last, under a divider: Settings (Admin view) or Your
-            account (User view), with the view's setup page above it. */}
-        <SidebarLowerLinks
-          items={lower}
-          navLinkClass={navLinkClass}
-          onClick={(to) => guardedClick(to, onNavigate)}
-        />
       </nav>
 
       <div className="mt-auto space-y-3">

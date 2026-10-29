@@ -38,7 +38,7 @@ export const RUNNERS = {
   MINT_DONE_TITLE: (person: string) => `Registration token for ${person}`,
   MINT_SHOWN_ONCE: "Shown once. Copy it now and deliver it to their computer as a file only they can read — for example with your device management tool.",
   COMMAND_LEAD: "On their computer, the runner registers with:",
-  MINT_NEXT: (person: string) => `Their computer then waits for ${person} to claim it in Your account → My runner.`,
+  MINT_NEXT: (person: string) => `Their computer then waits for ${person} to claim it in Settings → My runner.`,
   CLOSE_UNCOPIED_TITLE: "Close without copying the token?",
   CLOSE_UNCOPIED_BODY: "You can't see this token again. If you need it, create another.",
   KEEP_OPEN: "Keep it open",
@@ -63,14 +63,14 @@ export const RUNNERS = {
   TURN_ON: "Turn on runners",
   TURN_ON_TITLE: "Turn on runners?",
   TURN_ON_BODY:
-    "People can then register their own computers from Your account. Every run on one still goes through your policy and audit, and what a runner reports about itself is labelled as reported.",
+    "People can then register their own computers from Settings. Every run on one still goes through your policy and audit, and what a runner reports about itself is labelled as reported.",
   TURN_ON_REFUSED_TITLE: "Runners can't be turned on yet",
   TURN_OFF: "Turn off runners",
   TURN_OFF_TITLE: "Turn off runners?",
   TURN_OFF_BODY:
     "Every runner's connection closes and no new run can go to one. Runs already on a runner keep going under the policy they started with, as they would offline — after about an hour their network stops and they're marked lost.",
   EMPTY_TITLE: "No runners yet",
-  EMPTY_BODY: "People add a computer from Your account → My runner.",
+  EMPTY_BODY: "People add a computer from Settings → My runner.",
   // Appended only where the Managed install (MDM) section it names is on the page (a super admin, runners on).
   EMPTY_BODY_MDM: "To set up computers through device management, create a registration token under Managed install (MDM) above.",
   FETCH_FAILED_TITLE: "Couldn't load runners",

@@ -125,7 +125,7 @@ test.describe("Admin -> Runners: Add this computer", () => {
     await expect(mdm.getByText("wdr_3kFj9aQm7TxP2vLd8NcRwYe1HbZu4Sg6", { exact: true })).toBeVisible();
     await expect(mdm.getByText("On their computer, the runner registers with:")).toBeVisible();
     await expect(mdm.getByText("wardyn-runnerd setup --org https://wardyn.example.com --token-file <file>", { exact: true })).toBeVisible();
-    await expect(mdm.getByText("Their computer then waits for dev@example.com to claim it in Your account → My runner.")).toBeVisible();
+    await expect(mdm.getByText("Their computer then waits for dev@example.com to claim it in Settings → My runner.")).toBeVisible();
     const text = (await mdm.textContent()) ?? "";
     expect(text).not.toMatch(/\bserve\b/);
     expect(text).not.toContain("--proxy-image");
@@ -204,7 +204,7 @@ test.describe("Your account -> My runner: Add this computer", () => {
     await page.route("**/api/v1/me/runners*", (r) => (r.request().method() === "GET" ? r.fulfill({ json: list }) : r.fallback()));
     await asRealMember(page);
     await gotoConsole(page, "user");
-    await navTo(page, "Your account");
+    await navTo(page, "Settings");
     await page.getByRole("button", { name: /^My runner/ }).click();
     await expect(page.locator("[data-add-computer]")).toBeVisible();
     const mineCard = page.locator("#my-runner");
@@ -226,7 +226,7 @@ test.describe("Your account -> My runner: Add this computer", () => {
     });
     await asRealMember(page);
     await gotoConsole(page, "user");
-    await navTo(page, "Your account");
+    await navTo(page, "Settings");
     await page.getByRole("button", { name: /^My runner/ }).click();
     const block = page.locator("[data-add-computer]");
     await expect(page.getByText("You haven't registered a runner.")).toBeVisible();
@@ -243,7 +243,7 @@ test.describe("Your account -> My runner: Add this computer", () => {
     // answer reaches the block.
     await asRealMember(page);
     await gotoConsole(page, "user");
-    await navTo(page, "Your account");
+    await navTo(page, "Settings");
     await page.getByRole("button", { name: /^My runner/ }).click();
     const block = page.locator("[data-add-computer]");
     await expect(block.getByText("Personal runners aren't turned on for you. Ask your admin.")).toBeVisible();
