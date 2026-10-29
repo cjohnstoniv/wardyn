@@ -790,17 +790,21 @@ fi
 # one per answer, to outrun the refill.
 sleep 3
 mkdir -p "${TMPDIR}/rl"
+# One call first, so the token's session is cached and the 300 take their verdicts at once, not each after a
+# token lookup of its own.
+hreq "${RUN_BG_ID}" "${TMPDIR}/rl/warm" -H "Authorization: Bearer ${CALLER_INBOUND}" "$(iurl "${RUN_BG_ID}" api warm)" >/dev/null || true
 curl -sS -m 120 --parallel --parallel-immediate --parallel-max 300 --resolve "$(uihost "${RUN_BG_ID}"):127.0.0.1" \
   -H "Authorization: Bearer ${CALLER_INBOUND}" -o "${TMPDIR}/rl/#1.body" -D "${TMPDIR}/rl/#1.h" -w '%{http_code}\n' \
   "$(iurl "${RUN_BG_ID}" api "rl[1-400]")" >"${TMPDIR}/rl/codes.txt" 2>/dev/null || true
 n200="$(grep -c '^200$' "${TMPDIR}/rl/codes.txt" || true)"
 n429="$(grep -c '^429$' "${TMPDIR}/rl/codes.txt" || true)"
+n503="$(grep -c '^503$' "${TMPDIR}/rl/codes.txt" || true)" # admitted, then no relay connection within the wait
 first429="$(grep -l '^HTTP/[0-9.]* 429' "${TMPDIR}"/rl/*.h 2>/dev/null | head -1 || true)"
 if [[ "${n429:-0}" -ge 1 && "${n200:-0}" -ge 1 && -n "${first429}" ]] \
    && [[ "$(reason_of "${first429%.h}.body")" == "inbound_rate_limited" ]] && grep -qi '^retry-after: *1' "${first429}"; then
-  pass "rate bound: of 400 calls from one caller ${n200} were answered and ${n429} refused 429 inbound_rate_limited with Retry-After: 1"
+  pass "rate bound: of 400 calls from one caller ${n200} were answered, ${n429} refused 429 inbound_rate_limited with Retry-After: 1 and ${n503:-0} admitted but not relayed (503)"
 else
-  fail "rate bound: ${n200:-0} answered, ${n429:-0} refused; first 429 file '${first429}' (reason '$(reason_of "${first429%.h}.body")')"
+  fail "rate bound: ${n200:-0} answered, ${n429:-0} refused, ${n503:-0} not relayed (503); first 429 file '${first429}' (reason '$(reason_of "${first429%.h}.body")')"
 fi
 
 # ── the inbound audit trail ─────────────────────────────────────────────────
