@@ -19,7 +19,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   gateway, and a guest's DHCP decline is logged as one, with the guest's reason.
 - On a Mac that needs setup by hand, the setup window's title now names the account to create, `wardyn-admin`, and
   says its password is the one-time code. If the guest then refuses that sign-in, preparing stops at once and says to
-  discard the base and prepare again, instead of ending on an SSH error.
+  run prepare again, instead of ending on an SSH error.
 - A host removed from a workspace's allowed list is no longer added back when wardynd reapplies earlier "always" approvals
   at start, if the workspace could not be read or its list changed while they were being reapplied.
 - Azure Key Vault: deleting and re-adding a secret while the cleanup of its replaced value was still running no longer
