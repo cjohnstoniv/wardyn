@@ -120,7 +120,7 @@ func serveTools(ctx context.Context, dial DialFunc, h http.Handler, rec *ToolsDi
 		_ = conn.SetReadDeadline(time.Now().Add(timeout))
 		helloed := false
 		herr := serveSession(ctx, conn, h, &protocols, func() {
-			_ = conn.SetReadDeadline(time.Time{})
+			_ = conn.SetReadDeadline(time.Time{}) // what net/http does anyway at Serve and the h2 preface; kept explicit
 			helloed = true
 			rec.set(DialConnected, nil)
 		})

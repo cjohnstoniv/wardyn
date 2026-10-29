@@ -362,11 +362,7 @@ func (s *Server) placementCapabilityRefusalFor(ctx context.Context, req createRu
 		}
 		if ref != nil {
 			// The field travels in errorBody.Field, so the sentence is the detail alone.
-			msg := ref.Error()
-			if ref.Field != "" {
-				msg = ref.Detail
-			}
-			return placementRunRefusal(ref, msg)
+			return placementRunRefusal(ref, ref.Detail)
 		}
 	}
 	return nil
