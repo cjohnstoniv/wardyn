@@ -33,6 +33,7 @@ var isOperatorCensus = map[string]int{
 	"helpers.go:ownsRunOrSuperAdmin":      1,
 	"helpers.go:workspaceReadTierFor":     1,
 	"workloads.go:workloadReadTier":       1, // an operator reads another owner's workload in full, as workspaceReadTierFor reads a workspace
+	"workloads.go:workloadOwnerOf":        1, // reach: an operator restarts another owner's workload (launches); the launch is the owner's own run create
 	"attach_ticket.go:handleAttachTicket": 1, // the ticket's reach stamp; its reach is admitRunEntry's
 	"desktop_files.go:desktopRun":         1, // the entry rule (mayEnterRun) and the deny_ui_apps skip, as the ticket's
 	"attach.go:refuseAttachEntry":         1,
