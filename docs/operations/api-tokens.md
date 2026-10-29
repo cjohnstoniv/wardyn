@@ -159,7 +159,7 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/jso
 - Lists mark it: `GET /me/tokens`, `GET /tokens` and a service identity's token list carry `"inbound": true` on its row.
 - **Every call is re-checked** against the token's owner as an API call is: revocation, expiry, a person's sign-in, and for a service identity its live record and sponsor.
   - The gateway reuses the result for 30 seconds per token, run and app.
-  - A stream an inbound token opened is re-checked at most every 30 seconds (rc.8) and closed when the token no longer holds.
+  - A WebSocket or other upgraded connection an inbound token opened is re-checked at most every 30 seconds (rc.8) and closed when the token no longer holds.
   - A person's inbound token also answers `401` `role_stamp_stale` once `WARDYN_ROLE_STAMP_TTL` has passed since its owner last signed in.
 - **Groups are the ones stamped on the token.** A `group:` caller entry matches a person's token by its stored groups: those of the mint, refreshed each time its owner signs in again. A group change reaches the token at that sign-in, not at once.
 - Revoking a person's sessions revokes their inbound tokens with the rest. Changing a service identity's sponsor revokes its tokens, inbound ones included.

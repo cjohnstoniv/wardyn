@@ -21,6 +21,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -67,6 +68,9 @@ const (
 	inboundDenyRateLimited       = "rate_limited"
 	inboundDenyNotRunning        = "not_running"
 	inboundDenyUnitDenies        = "unit_denies"
+	// inboundDenyUnreadable is no inbound.deny reason: the run or its policy could not be read, which is no
+	// verdict on the caller. It answers 503 run_unreadable and writes no row.
+	inboundDenyUnreadable = "unreadable"
 )
 
 const (
@@ -263,7 +267,8 @@ func (s *Server) inboundTokenSession(w http.ResponseWriter, r *http.Request, run
 // 401 inbound_credential_invalid; a live one that may not call this app — no run, no such app, an app that
 // is not inbound, a holder who is neither the owner nor a caller — is 404 inbound_not_found, one answer for
 // all four; and one that may, on a run that is not running or is kept, is 409 ui_gateway_not_running. Each
-// refusal writes its inbound.deny row. ok=false when it has answered.
+// refusal writes its inbound.deny row. A run or policy that cannot be read is 503 run_unreadable and no row:
+// no verdict on the caller (readmitInbound keeps a stream on it). ok=false when it has answered.
 //
 // principal and tokenID are who the token proved to be when a stream was opened under it (inboundReadmission),
 // "" and uuid.Nil on a request: a token that no longer resolves cannot say, and its row then names them.
@@ -285,6 +290,8 @@ func (s *Server) admitInboundToken(w http.ResponseWriter, r *http.Request, runID
 	case inboundDenyNotRunning:
 		s.auditInboundRefused(r, runID, app, v.Principal, v.ID, deny)
 		writeErrorReason(w, http.StatusConflict, reasonUIGatewayNotRunning, inboundNotRunningMsg)
+	case inboundDenyUnreadable:
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonRunUnreadable, uiSessionUnverifiableMsg)
 	default:
 		s.auditInboundRefused(r, runID, app, v.Principal, v.ID, deny)
 		writeErrorReason(w, http.StatusNotFound, reasonInboundNotFound, inboundNotFoundMsg)
@@ -307,42 +314,60 @@ type inboundReadmission struct {
 
 // readmitInbound admits a's token again, uncached (admitInboundToken), then asks the run's profile what a
 // request's re-assert asks (uiInboundUnitDenies): a stream is admitted by the same arms a request is. Its
-// answers go nowhere: the stream has no response left to write them on. transient is a refusal that is no
-// verdict on the token or the profile: a lookup that could not be made (verifyAPIToken's 503), or a run or
-// profile that could not be read, which write no inbound.deny row.
-func (s *Server) readmitInbound(a inboundReadmission) (ok, transient bool) {
+// answers go nowhere: the stream has no response left to write them on. unavailable is the reason of a
+// refusal that is no verdict on the token or the profile, and writes no inbound.deny row here: a lookup that
+// could not be made (verifyAPIToken's 503, reasonTokenLookupUnavailable), or a run, policy or profile that
+// could not be read (reasonRunUnreadable). It is "" for an admission and for a verdict.
+func (s *Server) readmitInbound(a inboundReadmission) (ok bool, unavailable string) {
 	w := &inboundReadmitWriter{healthzGateWriter: healthzGateWriter{h: http.Header{}}}
 	sess, ok := s.admitInboundToken(w, a.r, a.runID, a.app, a.raw, a.principal, a.tokenID)
 	if !ok {
-		return false, w.status == http.StatusServiceUnavailable
+		if w.status != http.StatusServiceUnavailable {
+			return false, ""
+		}
+		var body errorBody
+		if json.Unmarshal(w.body, &body) == nil && body.Reason == reasonRunUnreadable {
+			return false, reasonRunUnreadable
+		}
+		return false, reasonTokenLookupUnavailable
 	}
 	run, err := s.cfg.Store.GetRun(a.r.Context(), a.runID)
 	if err != nil {
-		return false, true
+		return false, reasonRunUnreadable
 	}
 	if de := s.uiInboundUnitDenies(a.r.Context(), sess, run); de != nil {
-		return false, de.status == http.StatusServiceUnavailable
+		if de.status == http.StatusServiceUnavailable {
+			return false, reasonRunUnreadable
+		}
+		return false, ""
 	}
-	return true, false
+	return true, ""
 }
 
-// inboundReadmitWriter is healthzGateWriter that keeps the status of what was written.
+// inboundReadmitWriter is healthzGateWriter that keeps the status and the body of what was written.
 type inboundReadmitWriter struct {
 	healthzGateWriter
 	status int
+	body   []byte
 }
 
 func (w *inboundReadmitWriter) WriteHeader(code int) { w.status = code }
+
+func (w *inboundReadmitWriter) Write(b []byte) (int, error) {
+	w.body = append(w.body, b...)
+	return len(b), nil
+}
 
 // watchInboundStream holds an upgraded stream an inbound token opened to the authority that admitted it:
 // every inboundResolveTTL (uiInboundStreamEvery in tests) the token is admitted again, uncached, by
 // admitInboundToken, so the token's revoke or expiry, its service identity or sponsor going, its owner
 // losing the run or the app no longer naming its caller all reach the stream as they reach a request, as
 // does the run's profile coming to deny UI apps or interactive sessions (uiInboundUnitDenies). A
-// refusal writes the inbound.deny row a refused request writes and closes the stream. A lookup that
-// cannot be made keeps the stream and asks again next tick, so one store blip ends no stream; one that
+// refusal writes the inbound.deny row a refused request writes and closes the stream. A lookup or read
+// that cannot be made keeps the stream and asks again next tick, so one store blip ends no stream; one that
 // stays unanswerable for inboundResolveTTL, the staleness the design allows, closes it with an inbound.deny
-// token_lookup_unavailable row. A browser session's stream carries no re-admission and is left as it was
+// row naming what was unavailable (token_lookup_unavailable, or run_unreadable for the run, its policy or
+// its profile): fail closed, never a stream held open on a store that stays down. A browser session's stream carries no re-admission and is left as it was
 // (TestUIGateway_EstablishedConnectionOutlivesTheRevoke).
 func (s *Server) watchInboundStream(resp *http.Response) {
 	a, ok := resp.Request.Context().Value(inboundReadmitCtxKey{}).(inboundReadmission)
@@ -364,12 +389,12 @@ func (s *Server) watchInboundStream(resp *http.Response) {
 			case <-stream.done:
 				return
 			case <-tick.C:
-				ok, transient := s.readmitInbound(a)
+				ok, unavailable := s.readmitInbound(a)
 				if ok {
 					failingSince = time.Time{}
 					continue
 				}
-				if transient {
+				if unavailable != "" {
 					now := s.cfg.Now()
 					if failingSince.IsZero() {
 						failingSince = now
@@ -377,7 +402,7 @@ func (s *Server) watchInboundStream(resp *http.Response) {
 					if now.Sub(failingSince) < inboundResolveTTL {
 						continue
 					}
-					s.auditInboundRefused(a.r, a.runID, a.app, a.principal, a.tokenID, reasonTokenLookupUnavailable)
+					s.auditInboundRefused(a.r, a.runID, a.app, a.principal, a.tokenID, unavailable)
 				}
 				_ = stream.Close() // the relay's copy ends, and the caller's connection with it
 				return
@@ -404,20 +429,24 @@ func (c *inboundStream) Close() error {
 
 // inboundSessionFor is the session v may hold on app of runID, or the inbound.deny reason it may hold none:
 // not_found for no reach, and not_running for a caller whose run is not running, has no sandbox or is kept
-// (asked after reach, so the state is no oracle). A store failure is not_found too (logged): the request
-// fails closed, and a retry asks again.
+// (asked after reach, so the state is no oracle). A run or policy that cannot be read is unreadable (logged),
+// not a verdict: the request fails closed, and a retry asks again.
 //
 // The session's authority time is the token's creation, so the re-assert's revocation cutoff and sponsor
 // check order it as they do the token itself. It carries no role: no role gives inbound reach.
 func (s *Server) inboundSessionFor(ctx context.Context, runID uuid.UUID, app string, v verifiedAPIToken) (uiSession, string) {
 	run, err := s.cfg.Store.GetRun(ctx, runID)
 	if err != nil {
-		if !errors.Is(err, store.ErrNotFound) {
-			slog.ErrorContext(ctx, "wardynd: ui gateway inbound run lookup failed", "run_id", runID, "err", err)
+		if errors.Is(err, store.ErrNotFound) {
+			return uiSession{}, inboundDenyNotFound
 		}
-		return uiSession{}, inboundDenyNotFound
+		slog.ErrorContext(ctx, "wardynd: ui gateway inbound run lookup failed", "run_id", runID, "err", err)
+		return uiSession{}, inboundDenyUnreadable
 	}
-	declared, ok := s.inboundApp(ctx, runID, app)
+	declared, ok, err := s.inboundAppRead(ctx, runID, app)
+	if err != nil {
+		return uiSession{}, inboundDenyUnreadable
+	}
 	if !ok {
 		return uiSession{}, inboundDenyNotFound
 	}
@@ -447,19 +476,26 @@ func (s *Server) inboundSessionFor(ctx context.Context, runID uuid.UUID, app str
 }
 
 // inboundApp is app as the run's effective policy declares it, when it is declared inbound. A policy that
-// cannot be read declares nothing (logged), so every caller fails closed on it.
+// cannot be read declares nothing, so every caller fails closed on it.
 func (s *Server) inboundApp(ctx context.Context, runID uuid.UUID, app string) (types.UIApp, bool) {
+	a, ok, _ := s.inboundAppRead(ctx, runID, app)
+	return a, ok
+}
+
+// inboundAppRead is inboundApp that says when the policy could not be read (logged), for the caller that
+// answers that differently from an app that is not inbound.
+func (s *Server) inboundAppRead(ctx context.Context, runID uuid.UUID, app string) (types.UIApp, bool, error) {
 	apps, err := s.effectiveUIApps(ctx, runID)
 	if err != nil {
 		slog.ErrorContext(ctx, "wardynd: ui gateway inbound policy lookup failed", "run_id", runID, "err", err)
-		return types.UIApp{}, false
+		return types.UIApp{}, false, err
 	}
 	for _, a := range apps {
 		if a.Name == app && a.Inbound {
-			return a, true
+			return a, true, nil
 		}
 	}
-	return types.UIApp{}, false
+	return types.UIApp{}, false, nil
 }
 
 // uiAppIsInbound reports whether app is an inbound app of runID: the background-only door's one exception.
