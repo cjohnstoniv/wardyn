@@ -13,6 +13,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- A macOS guest now gets its address on a macOS VM's network. The relay answered ARP for every address, the guest's own
+  included, so macOS's check of its offered address before taking it found it in use, declined it, and asked again
+  forever; preparing a base then waited out its hour without reaching the guest. The relay now answers ARP only for its
+  gateway, and a guest's DHCP decline is logged as one, with the guest's reason.
 - wardynd no longer fails its first start after an upgrade whose migrations take longer than 30 seconds. The checks
   after the migration had kept the connect deadline and stopped with "verify the audit append privileges: context
   deadline exceeded".
