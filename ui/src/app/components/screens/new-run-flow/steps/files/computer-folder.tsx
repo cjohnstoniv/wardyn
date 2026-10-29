@@ -339,11 +339,14 @@ export function ComputerFolderCard({ folder, onDirection, onChange, onRemove }: 
   const { list } = useFolderRunners();
   const runner = list?.find((r) => r.id === folder.runner_id);
   const name = folder.name || baseName(folder.path ?? "");
-  const [survey, setSurvey] = React.useState<FolderSurvey>();
+  // The survey belongs to the folder it was taken of: Change to another one shows none until that one answers.
+  const [surveyed, setSurveyed] = React.useState<{ runnerId?: string; path?: string; survey?: FolderSurvey }>();
+  const survey = surveyed?.runnerId === folder.runner_id && surveyed?.path === folder.path ? surveyed?.survey : undefined;
   React.useEffect(() => {
     if (!folder.runner_id || !folder.path || !runner?.online) return;
     let alive = true;
-    computerFolders.list(folder.runner_id, folder.path, true).then((l) => alive && setSurvey(l.survey)).catch(() => undefined);
+    const { runner_id: runnerId, path } = folder;
+    computerFolders.list(runnerId, path, true).then((l) => alive && setSurveyed({ runnerId, path, survey: l.survey })).catch(() => undefined);
     return () => {
       alive = false;
     };
