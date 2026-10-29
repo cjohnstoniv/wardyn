@@ -733,3 +733,17 @@ const (
 	reasonRunResumeNotRunning = "run_resume_not_running" // the run is not in a resumable state
 	reasonRunResumeFailed     = "run_resume_failed"      // thawForExec failed
 )
+
+// Workloads and their namespace bindings (workloads.go, workload_bindings.go).
+const (
+	reasonWorkloadsUnavailable       = "workloads_unavailable"         // 501: this store keeps no workloads
+	reasonWorkloadInvalid            = "workload_invalid"              // 400: the header or the intent is not a workload the door accepts; diagnostics say where
+	reasonWorkloadNotFound           = "workload_not_found"            // 404: no such workload, or one the caller may not reach
+	reasonWorkloadSourceConflict     = "workload_source_conflict"      // 409: a custom resource owns the workload (or the API does, for a custom resource)
+	reasonWorkloadCapReached         = "workload_cap_reached"          // 422: the owner holds 100 workloads
+	reasonWorkloadManagedByK8s       = "workload_managed_by_k8s"       // 409: a custom resource's workload is deleted in Git, or by an admin
+	reasonWorkloadBindingNeedsPerson = "workload_binding_needs_person" // 403: a binding is made by a signed-in person, never an API token
+	reasonWorkloadBindingInvalid     = "workload_binding_invalid"      // 400: the pool, namespace or service is missing or malformed
+	reasonWorkloadBindingConflict    = "workload_binding_conflict"     // 409: the namespace is bound on the pool already
+	reasonWorkloadBindingNotFound    = "workload_binding_not_found"    // 404: no such binding
+)

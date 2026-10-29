@@ -348,7 +348,9 @@
 # docs/AUDIT-ACTIONS.md 54966 = 54752 + 214 (rc.8 inbound gateway rows).
 # docs/AUDIT-ACTIONS.md=54785 adds 33 over 54752, measured (rc.8 runs namespace): runs_namespace on the attach row and on run.create, the organization runner's add handler.
 # docs/AUDIT-ACTIONS.md 54999 = 54966 + 33 (rc.8 inbound gateway rows and runs namespace, combined in the wave).
-docs/AUDIT-ACTIONS.md=54999 share=8
+# docs/AUDIT-ACTIONS.md 54750 = 54483 + 267, measured (rc.8 workloads): the workload.* and workload_binding.* rows, three verbs, the launch_refused exception and run.kill's workload reasons.
+# docs/AUDIT-ACTIONS.md 55265 = 54999 + 267 - 1, measured (rc.8 workloads on the wave; the launch verb was counted once).
+docs/AUDIT-ACTIONS.md=55265 share=8
 # docs/AUDIT-ACTIONS.md 50827 = ours 50175 + theirs 50556 - base 49904 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.

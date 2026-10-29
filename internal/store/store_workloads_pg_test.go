@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -18,6 +19,16 @@ import (
 
 func workloadPut(owner, name, digest string) store.WorkloadPut {
 	return store.WorkloadPut{Owner: owner, Name: name, Source: store.WorkloadSourceAPI, Intent: json.RawMessage(`{"experience":"background"}`), Digest: digest, By: owner}
+}
+
+// mustClaim takes the workload's launch claim and returns its token.
+func mustClaim(t *testing.T, st store.PG, id uuid.UUID) uuid.UUID {
+	t.Helper()
+	w, ok, err := st.ClaimWorkloadLaunch(t.Context(), id)
+	if err != nil || !ok || w.ClaimToken == uuid.Nil {
+		t.Fatalf("claim workload %s = %+v, %v, %v; want a claim", id, w, ok, err)
+	}
+	return w.ClaimToken
 }
 
 func mustPutWorkload(t *testing.T, st store.PG, in store.WorkloadPut) store.Workload {
@@ -145,10 +156,11 @@ func TestPG_Workload_ClaimHoldsThenLapses(t *testing.T) {
 	if _, err := pool.Exec(ctx, `UPDATE workloads SET launch_claim_until = now() - interval '1 second' WHERE id = $1`, w.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok, err := st.ClaimWorkloadLaunch(ctx, w.ID); err != nil || !ok {
-		t.Fatalf("claim after the lapse = %v, %v; want taken", ok, err)
+	retaken, ok, err := st.ClaimWorkloadLaunch(ctx, w.ID)
+	if err != nil || !ok || retaken.ClaimToken == claimed.ClaimToken {
+		t.Fatalf("claim after the lapse = %v, %v; want taken under a new token", ok, err)
 	}
-	if err := st.RecordWorkloadRefusal(ctx, w.ID, store.WorkloadRefusal{Generation: 1, Reason: "x"}); err != nil {
+	if err := st.RecordWorkloadRefusal(ctx, w.ID, retaken.ClaimToken, store.WorkloadRefusal{Generation: 1, Reason: "x"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok, err := st.ClaimWorkloadLaunch(ctx, w.ID); err != nil || !ok {
@@ -169,10 +181,8 @@ func TestPG_Workload_RunRefusalAndRestart(t *testing.T) {
 	run1, run2, run3, run4 := run(), run(), run(), run()
 
 	w := mustPutWorkload(t, st, workloadPut("sub-a", "svc", "d1"))
-	if _, ok, _ := st.ClaimWorkloadLaunch(ctx, w.ID); !ok {
-		t.Fatal("no claim on a new workload")
-	}
-	if prev, err := st.SetWorkloadRun(ctx, w.ID, 1, run1); err != nil || prev != nil {
+	claim := mustClaim(t, st, w.ID)
+	if prev, err := st.SetWorkloadRun(ctx, w.ID, claim, 1, run1); err != nil || prev != nil {
 		t.Fatalf("first run recorded = %v, %v; want no previous run", prev, err)
 	}
 	if _, ok, err := st.ClaimWorkloadLaunch(ctx, w.ID); err != nil || ok {
@@ -185,29 +195,25 @@ func TestPG_Workload_RunRefusalAndRestart(t *testing.T) {
 	// A changed spec: the claim comes back, and recording the new run hands back the old one.
 	next := workloadPut("sub-a", "svc", "d2")
 	mustPutWorkload(t, st, next)
-	if _, ok, _ := st.ClaimWorkloadLaunch(ctx, w.ID); !ok {
-		t.Fatal("no claim on a changed workload")
-	}
-	if prev, err := st.SetWorkloadRun(ctx, w.ID, 2, run2); err != nil || prev == nil || *prev != run1 {
+	claim = mustClaim(t, st, w.ID)
+	if prev, err := st.SetWorkloadRun(ctx, w.ID, claim, 2, run2); err != nil || prev == nil || *prev != run1 {
 		t.Fatalf("second run recorded = %v, %v; want %s back", prev, err, run1)
 	}
 	for _, gen := range []int64{2, 1} {
-		if _, err := st.SetWorkloadRun(ctx, w.ID, gen, run3); !errors.Is(err, store.ErrWorkloadSuperseded) || !errors.Is(err, store.ErrConflict) {
+		if _, err := st.SetWorkloadRun(ctx, w.ID, claim, gen, run3); !errors.Is(err, store.ErrWorkloadSuperseded) || !errors.Is(err, store.ErrConflict) {
 			t.Fatalf("run recorded again for generation %d = %v, want ErrWorkloadSuperseded", gen, err)
 		}
 	}
-	if _, err := st.SetWorkloadRun(ctx, uuid.New(), 1, run3); !errors.Is(err, store.ErrNotFound) {
+	if _, err := st.SetWorkloadRun(ctx, uuid.New(), claim, 1, run3); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("run recorded for an unknown workload = %v, want ErrNotFound", err)
 	}
 
 	// A refused third generation keeps the running second and leaves the launch owed.
 	next.Digest = "d3"
 	mustPutWorkload(t, st, next)
-	if _, ok, _ := st.ClaimWorkloadLaunch(ctx, w.ID); !ok {
-		t.Fatal("no claim on the third generation")
-	}
+	claim = mustClaim(t, st, w.ID)
 	at := store.WorkloadRefusal{Generation: 3, Reason: "ceiling_refused", Message: "no"}
-	if err := st.RecordWorkloadRefusal(ctx, w.ID, at); err != nil {
+	if err := st.RecordWorkloadRefusal(ctx, w.ID, claim, at); err != nil {
 		t.Fatal(err)
 	}
 	v, err := st.GetWorkload(ctx, "sub-a", "svc")
@@ -215,13 +221,11 @@ func TestPG_Workload_RunRefusalAndRestart(t *testing.T) {
 		v.LastRefusal == nil || v.LastRefusal.Generation != 3 || v.LastRefusal.Reason != "ceiling_refused" || v.LastRefusal.Message != "no" {
 		t.Fatalf("after the refusal = %+v (%v)", v, err)
 	}
-	if err := st.RecordWorkloadRefusal(ctx, uuid.New(), at); !errors.Is(err, store.ErrNotFound) {
+	if err := st.RecordWorkloadRefusal(ctx, uuid.New(), claim, at); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("refusal of an unknown workload = %v, want ErrNotFound", err)
 	}
-	if _, ok, _ := st.ClaimWorkloadLaunch(ctx, w.ID); !ok {
-		t.Fatal("no claim after the refusal")
-	}
-	if prev, err := st.SetWorkloadRun(ctx, w.ID, 3, run3); err != nil || prev == nil || *prev != run2 {
+	claim = mustClaim(t, st, w.ID)
+	if prev, err := st.SetWorkloadRun(ctx, w.ID, claim, 3, run3); err != nil || prev == nil || *prev != run2 {
 		t.Fatalf("third run recorded = %v, %v; want %s back", prev, err, run2)
 	}
 	if v, err = st.GetWorkload(ctx, "sub-a", "svc"); err != nil || v.LastRefusal != nil || v.CurrentGeneration != 3 {
@@ -233,10 +237,8 @@ func TestPG_Workload_RunRefusalAndRestart(t *testing.T) {
 	if err != nil || r.CurrentGeneration != 0 || r.Generation != 3 || r.CurrentRunID == nil || *r.CurrentRunID != run3 {
 		t.Fatalf("restart = %+v (%v)", r, err)
 	}
-	if _, ok, _ := st.ClaimWorkloadLaunch(ctx, w.ID); !ok {
-		t.Fatal("no claim after a restart")
-	}
-	if prev, err := st.SetWorkloadRun(ctx, w.ID, 3, run4); err != nil || prev == nil || *prev != run3 {
+	claim = mustClaim(t, st, w.ID)
+	if prev, err := st.SetWorkloadRun(ctx, w.ID, claim, 3, run4); err != nil || prev == nil || *prev != run3 {
 		t.Fatalf("restarted run recorded = %v, %v; want %s back", prev, err, run3)
 	}
 	if _, err := st.RestartWorkload(ctx, uuid.New()); !errors.Is(err, store.ErrNotFound) {
@@ -249,6 +251,50 @@ func TestPG_Workload_RunRefusalAndRestart(t *testing.T) {
 	}
 	if v, err = st.GetWorkload(ctx, "sub-a", "svc"); err != nil || v.CurrentRunID != nil || v.RunState != "" {
 		t.Fatalf("after the run row is gone = %+v (%v)", v, err)
+	}
+}
+
+// A claimer whose claim lapsed and was taken again records nothing: neither a refusal over the newer
+// claim, nor one after the newer claimer's run, nor a run of its own.
+func TestPG_Workload_StaleClaimRecordsNothing(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := t.Context()
+	w := mustPutWorkload(t, st, workloadPut("sub-a", "svc", "d1"))
+	lapse := func() {
+		t.Helper()
+		if _, err := pool.Exec(ctx, `UPDATE workloads SET launch_claim_until = now() - interval '1 second' WHERE id = $1`, w.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	refusal := store.WorkloadRefusal{Generation: 1, Reason: "ceiling_refused"}
+
+	a := mustClaim(t, st, w.ID)
+	lapse()
+	b := mustClaim(t, st, w.ID)
+	if err := st.RecordWorkloadRefusal(ctx, w.ID, a, refusal); !errors.Is(err, store.ErrWorkloadSuperseded) {
+		t.Fatalf("stale refusal = %v, want ErrWorkloadSuperseded", err)
+	}
+	v, err := st.GetWorkload(ctx, "sub-a", "svc")
+	if err != nil || v.LaunchClaimUntil == nil || v.LastRefusal != nil {
+		t.Fatalf("after the stale refusal = %+v (%v), want the newer claim held and no refusal", v.Workload, err)
+	}
+	if _, ok, err := st.ClaimWorkloadLaunch(ctx, w.ID); err != nil || ok {
+		t.Fatalf("claim while the newer one holds = %v, %v; want held", ok, err)
+	}
+	if _, err := st.SetWorkloadRun(ctx, w.ID, a, 1, persistRun(t, ctx, pool, newRun(types.RunRunning)).ID); !errors.Is(err, store.ErrWorkloadSuperseded) {
+		t.Fatalf("stale run = %v, want ErrWorkloadSuperseded", err)
+	}
+
+	run := persistRun(t, ctx, pool, newRun(types.RunRunning)).ID
+	if _, err := st.SetWorkloadRun(ctx, w.ID, b, 1, run); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RecordWorkloadRefusal(ctx, w.ID, a, refusal); !errors.Is(err, store.ErrWorkloadSuperseded) {
+		t.Fatalf("stale refusal after the newer run = %v, want ErrWorkloadSuperseded", err)
+	}
+	if v, err = st.GetWorkload(ctx, "sub-a", "svc"); err != nil || v.LastRefusal != nil || v.CurrentRunID == nil || *v.CurrentRunID != run || v.CurrentGeneration != 1 {
+		t.Fatalf("after the newer run = %+v (%v), want its run and no refusal", v.Workload, err)
 	}
 }
 
@@ -387,10 +433,7 @@ func TestPG_Workload_K8sStatusesCarryRunStateAndHealth(t *testing.T) {
 	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET service_status = '{"health":"unhealthy","restarts":2}' WHERE id = $1`, run.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok, _ := st.ClaimWorkloadLaunch(ctx, withRun.ID); !ok {
-		t.Fatal("no claim")
-	}
-	if _, err := st.SetWorkloadRun(ctx, withRun.ID, 1, run.ID); err != nil {
+	if _, err := st.SetWorkloadRun(ctx, withRun.ID, mustClaim(t, st, withRun.ID), 1, run.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.SetWorkloadStatusPushed(ctx, withRun.ID, "h1"); err != nil {
@@ -521,5 +564,34 @@ func TestPG_WorkloadBinding_ForRunnerFollowsMembershipAndPoolDelete(t *testing.T
 	var n int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM workload_bindings WHERE pool_id = $1`, p.ID).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("%d bindings left on the deleted pool (%v)", n, err)
+	}
+}
+
+// Retiring a service identity deletes its namespace bindings in the same transaction, and leaves every
+// other identity's.
+func TestPG_WorkloadBinding_RetiredServiceLosesItsBindings(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := t.Context()
+	if _, err := st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: "sub-a", Issuer: "https://issuer.test", Email: "a@corp.example"}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"ci-bot", "other-bot"} {
+		if _, err := st.CreateServiceIdentity(ctx, types.ServiceIdentity{Name: name, Sponsor: "sub-a", UserType: types.UserTypeStandard, CreatedBy: "sub-a"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p := ownPool(t, st, "sub-a", "A")
+	for ns, svc := range map[string]string{"team-a": "ci-bot", "team-b": "ci-bot", "team-c": "other-bot"} {
+		if _, err := st.CreateWorkloadBinding(ctx, store.WorkloadBinding{PoolID: p.ID, Namespace: ns, Service: svc, Sponsor: "sub-a", CreatedBy: "secop"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := st.RetireServiceIdentity(ctx, "ci-bot", "secop"); err != nil {
+		t.Fatal(err)
+	}
+	left, err := st.ListWorkloadBindings(ctx, store.Page{})
+	if err != nil || len(left) != 1 || left[0].Service != "other-bot" || left[0].Namespace != "team-c" {
+		t.Fatalf("bindings after the retire = %+v (%v), want only other-bot's", left, err)
 	}
 }

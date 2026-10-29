@@ -77,6 +77,12 @@ var serviceAllowed = map[string]bool{
 	"GET /api/v1/setup/status":                       true,
 	"PUT /api/v1/model-providers/{id}/credential":    true,
 	"DELETE /api/v1/model-providers/{id}/credential": true,
+	// Its own workloads (workloads.go): a workload is the same POST /runs under the service, kept by name.
+	"PUT /api/v1/workloads/{name}":          true,
+	"GET /api/v1/workloads":                 true,
+	"GET /api/v1/workloads/{name}":          true,
+	"DELETE /api/v1/workloads/{name}":       true,
+	"POST /api/v1/workloads/{name}/restart": true,
 }
 
 // serviceScopeRefusal is the 403 body a service identity's token gets on any other route.
