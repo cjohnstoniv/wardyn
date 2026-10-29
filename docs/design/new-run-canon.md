@@ -156,6 +156,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `PORT_DUPLICATE(port)` | mock | Two apps can't share port {port}. |
 | `PORT_INBOUND_LABEL` | mock | Callable from outside the run |
 | `PORT_INBOUND_HELP` | mock | People and services you name can reach this port through Wardyn's gateway, even when the run has no terminal. Every call is recorded. |
+| `PORT_INBOUND_REFUSED` | mock | Your organisation hasn't turned on inbound access for you. |
 | `CALLERS_LABEL` | mock | Who can call it |
 | `CALLERS_HELP` | mock | You can always call it. Add the people, groups and service identities that may call it too. |
 | `CALLERS_NONE` | mock | Only you can call it. |

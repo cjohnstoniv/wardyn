@@ -53,6 +53,8 @@ export const NR_RUN = {
   PORT_INBOUND_LABEL: "Callable from outside the run",
   PORT_INBOUND_HELP:
     "People and services you name can reach this port through Wardyn's gateway, even when the run has no terminal. Every call is recorded.",
+  /** T2-a (r15, spelling per the r15 notes): preflight's capability_feature refusal on runs.ui_apps, under the checkbox. */
+  PORT_INBOUND_REFUSED: "Your organisation hasn't turned on inbound access for you.",
   /** T2-a (r17): "Who can call it" is a set of chips and an "Add a caller" menu built from what the console already knows. */
   CALLERS_LABEL: "Who can call it",
   CALLERS_HELP: "You can always call it. Add the people, groups and service identities that may call it too.",

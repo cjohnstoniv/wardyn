@@ -8,6 +8,7 @@ import { Input } from "../../../../ui/input";
 import { Label } from "../../../../ui/label";
 import { RadioCard, RadioCardGroup } from "../../../../wardyn/radio-card";
 import { NR_RUN } from "../../../../wardyn/copy/new-run/run";
+import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import type { UIApp } from "../../../../../lib/types/runs";
 import type { AppKind } from "../../lenses/apps-lens";
 import { PortsSection } from "./ports-section";
@@ -22,12 +23,16 @@ export interface CommandSectionProps {
   onKind: (kind: AppKind) => void;
   onCommand: (command: string) => void;
   onApps: { edit: (index: number, patch: Partial<UIApp>) => void; add: () => void; remove: (index: number) => void };
+  /** Whether an Automation / script keeps itself running: its ports are then drawn too, as an optional section. */
+  keptRunning?: boolean;
+  /** The server refused a port callable from outside (this person may not declare one). */
+  inboundRefused?: boolean;
   /** Under the command: an Automation / script's "Keep it running". */
   children?: React.ReactNode;
 }
 
 /** An Application is a script that runs on its own, or a server that keeps running and opens its ports in the browser. */
-export function CommandSection({ kind, command, apps, onKind, onCommand, onApps, children }: CommandSectionProps) {
+export function CommandSection({ kind, command, apps, onKind, onCommand, onApps, keptRunning, inboundRefused, children }: CommandSectionProps) {
   const labelId = React.useId();
   const portsId = React.useId();
   const server = kind === "server";
@@ -50,10 +55,11 @@ export function CommandSection({ kind, command, apps, onKind, onCommand, onApps,
         {server && <p className="text-xs leading-snug text-muted-foreground">{NR_RUN.APP_TERMINAL_NOTE}</p>}
       </div>
     </QuestionBlock>
-    {/* T2-a (r16): Ports is a section card of its own, after What should run? and before Where should it run?. */}
-    {server && (
-      <QuestionBlock labelId={portsId} label={NR_RUN.PORTS_LABEL}>
-        <PortsSection labelId={portsId} apps={apps} {...onApps} />
+    {/* T2-a (r16): Ports is a section card of its own, after What should run? and before Where should it run?.
+        An Automation / script that keeps itself running has it too, as Optional (r15 q1). */}
+    {(server || keptRunning) && (
+      <QuestionBlock labelId={portsId} label={NR_RUN.PORTS_LABEL} marker={server ? undefined : NR_SHARED.OPTIONAL}>
+        <PortsSection labelId={portsId} apps={apps} optional={!server} inboundRefused={inboundRefused} {...onApps} />
       </QuestionBlock>
     )}
     </>

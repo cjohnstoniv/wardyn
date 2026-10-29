@@ -20,6 +20,9 @@ const FIRST_APP: UIApp = { name: "web", port: 3000, path: "/" };
 /** An Application / server: an interactive run that starts a command and declares the ports it opens (#1994). */
 export const isServer = (intent: RunIntent): boolean => intent.shape === "application" && intent.experience === "interactive";
 
+/** Whether the Run step draws a Ports section: a server always, and a script that keeps itself running (its service). */
+export const hasPorts = (intent: RunIntent): boolean => isServer(intent) || (intent.shape === "application" && !!intent.service);
+
 export const appsOf = (intent: RunIntent): UIApp[] => intent.inline_policy?.ui_apps ?? [];
 
 /** The command the shape runs: the workload's for a script, the startup's for a server. */
@@ -103,11 +106,11 @@ export function portProblems(apps: readonly UIApp[]): RowProblems[] {
 
 const FIELDS = ["name", "port", "path"] as const;
 
-/** A server needs one port and every row sound; a failed Continue focuses the first bad row's first bad field. */
+/** A server needs one port and every row sound (a service's ports are optional, but each one it names must be sound); a failed Continue focuses the first bad row's first bad field. */
 export function appIssues(intent: RunIntent): StepIssue[] {
-  if (!isServer(intent)) return [];
+  if (!hasPorts(intent)) return [];
   const apps = appsOf(intent);
-  if (apps.length === 0) return [issue("run", "app_required")];
+  if (apps.length === 0) return isServer(intent) ? [issue("run", "app_required")] : [];
   const problems = portProblems(apps);
   for (const [i, row] of problems.entries()) {
     const field = FIELDS.find((f) => row[f]);

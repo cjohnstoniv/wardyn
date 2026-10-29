@@ -70,6 +70,7 @@ describe("callers canon strings", () => {
     expect(NR_RUN.CALLERS_NO_SERVICES).toBe("You don't sponsor any service identities.");
     expect(NR_RUN.CALLER_EMAIL_INVALID).toBe("Enter a full email address, like ana@example.com.");
     expect(NR_RUN.CALLER_REMOVE_ARIA("payments")).toBe("Remove payments");
+    expect(NR_RUN.PORT_INBOUND_REFUSED).toBe("Your organisation hasn't turned on inbound access for you.");
   });
 });
 

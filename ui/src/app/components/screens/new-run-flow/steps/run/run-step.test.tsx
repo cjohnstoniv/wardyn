@@ -10,6 +10,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { setField } from "../../../../../../test/set-field";
 import { SCENARIO_POOLS, SHARED, TEAM_LAPTOPS, barrierOptions, effectiveLimits, unavailablePool } from "../../../../../lib/new-run-fixtures/scenarios/pools";
+import { HttpError } from "../../../../../lib/api/core";
 import { RUNNER_POOL_REFUSAL } from "../../../../../lib/runner-pool-refusals";
 import type { RunnerPoolCatalogueEntry, RunnerPoolList } from "../../../../../lib/types/runner-pools";
 import { NR_RUN } from "../../../../wardyn/copy/new-run/run";
@@ -25,11 +26,11 @@ import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft } from "../../ne
 import { RunStep } from "./run-step";
 
 // The Run step asks the policy preview about a service through the shared checks hook; what it answered is the test's to say.
-const checks = vi.hoisted(() => ({ warnings: [] as string[] }));
+const checks = vi.hoisted(() => ({ warnings: [] as string[], error: null as unknown }));
 vi.mock("../../draft/use-intent-checks", async (orig) => ({
   ...(await orig<typeof import("../../draft/use-intent-checks")>()),
   useDraftIdentity: () => ({ principal: "alice", resolved: true, revision: 1, authGeneration: 0 }),
-  useIntentChecks: () => ({ preview: { result: { warnings: checks.warnings } } }),
+  useIntentChecks: () => ({ preview: { result: { warnings: checks.warnings }, error: checks.error } }),
 }));
 
 const AGENT: RunIntent = { shape: "agent_task", experience: "interactive" };
@@ -869,6 +870,39 @@ describe("Run step: Keep it running", () => {
     await poolSelect();
     expect(screen.queryByText(SERVICE_PAUSE_WARNING)).not.toBeInTheDocument();
     checks.warnings = [];
+  });
+
+  it("draws Ports as an Optional section once it is on, and takes them away when it is turned off", async () => {
+    show({ ...SCRIPT, service: { restart: "on_failure" } });
+    await poolSelect();
+    const ports = screen.getByRole("group", { name: NR_RUN.PORTS_LABEL });
+    expect(within(ports.closest("section") as HTMLElement).getByText(NR_SHARED.OPTIONAL)).toBeInTheDocument();
+    expect(screen.queryByText(NR_RUN.PORT_REQUIRED)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: NR_RUN.PORT_ADD }));
+    await userEvent.click(screen.getByRole("checkbox", { name: NR_RUN.PORT_INBOUND_LABEL }));
+    expect(intentNow().inline_policy?.ui_apps).toEqual([{ name: "app1", port: 0, path: "/", inbound: true }]);
+    await userEvent.click(toggle());
+    expect(screen.queryByText(NR_RUN.PORTS_LABEL)).not.toBeInTheDocument();
+    expect(intentNow()).not.toHaveProperty("inline_policy");
+  });
+
+  it("says the organisation has not turned on inbound access when the server refuses the inbound port", async () => {
+    const inbound: RunIntent = { ...SCRIPT, service: { restart: "on_failure" }, inline_policy: { ui_apps: [{ name: "api", port: 8080, path: "/", inbound: true }] } };
+    show(inbound);
+    await poolSelect();
+    expect(screen.queryByText(NR_RUN.PORT_INBOUND_REFUSED)).not.toBeInTheDocument();
+    cleanup();
+    // The wire's reason is shared by the feature doors: only the inbound sentence says this one.
+    checks.error = new HttpError(403, "Custom components aren't turned on for you. Ask your admin.", "capability_feature");
+    show(inbound);
+    await poolSelect();
+    expect(screen.queryByText(NR_RUN.PORT_INBOUND_REFUSED)).not.toBeInTheDocument();
+    cleanup();
+    checks.error = new HttpError(403, "Inbound apps aren't turned on for you. Ask your admin, or declare the app without inbound.", "capability_feature");
+    show(inbound);
+    await poolSelect();
+    expect(screen.getByText(NR_RUN.PORT_INBOUND_REFUSED)).toHaveAttribute("role", "alert");
+    checks.error = null;
   });
 
   it("is not offered for an agent task, an application server, or a virtual machine", async () => {

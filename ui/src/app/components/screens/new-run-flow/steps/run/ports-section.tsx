@@ -27,10 +27,14 @@ interface Props {
   edit: (index: number, patch: Partial<UIApp>) => void;
   add: () => void;
   remove: (index: number) => void;
+  /** A service's ports: none is fine. A server needs one. */
+  optional?: boolean;
+  /** The server refused a port callable from outside: say so under the checkbox. */
+  inboundRefused?: boolean;
 }
 
 /** The ports an Application / server opens from the run page, one card each: a name, a port and a landing path, and whether it is callable from outside. */
-export function PortsSection({ labelId, apps, edit, add, remove }: Props) {
+export function PortsSection({ labelId, apps, edit, add, remove, optional, inboundRefused }: Props) {
   const problems = portProblems(apps);
   const full = apps.length >= MAX_APPS;
   const addRef = useRef<HTMLButtonElement>(null);
@@ -97,13 +101,14 @@ export function PortsSection({ labelId, apps, edit, add, remove }: Props) {
               <div className="flex min-w-0 flex-1 flex-col gap-1.5">
                 <Label htmlFor={inboundId}>{NR_RUN.PORT_INBOUND_LABEL}</Label>
                 <p id={`${inboundId}-help`} className="text-xs leading-snug text-muted-foreground">{NR_RUN.PORT_INBOUND_HELP}</p>
+                {app.inbound && inboundRefused && <p role="alert" className="text-sm text-danger">{NR_RUN.PORT_INBOUND_REFUSED}</p>}
                 {app.inbound && <CallersEditor app={app} index={i} who={who} onChange={(callers) => edit(i, { callers: callers.length ? callers : undefined })} />}
               </div>
             </div>
           </div>
         );
       })}
-      {apps.length === 0 && <p role="alert" className="text-sm text-danger">{NR_RUN.PORT_REQUIRED}</p>}
+      {apps.length === 0 && !optional && <p role="alert" className="text-sm text-danger">{NR_RUN.PORT_REQUIRED}</p>}
       <div className="flex items-center gap-2.5">
         <Button ref={addRef} id="nr-app-add" type="button" variant="outline" size="sm" disabled={full} onClick={add}>{NR_RUN.PORT_ADD}</Button>
         {full && <span className="text-xs text-muted-foreground">{NR_RUN.PORTS_FULL}</span>}

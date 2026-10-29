@@ -10,7 +10,7 @@ import { useShellSetupStatus } from "../../../../wardyn/model-access-context";
 import { scheduledRunsOn, startInstant, whenText } from "../../../../../lib/schedule";
 import { launchStart, type LaunchStart } from "../../draft/launch-start";
 import type { RunIntent } from "../../draft/run-intent";
-import { appsOf, isServer } from "../../lenses/apps-lens";
+import { appsOf, hasPorts, isServer } from "../../lenses/apps-lens";
 import { mayKeepRunning } from "../../lenses/service-lens";
 import { serviceReviewLine } from "../../../../wardyn/copy/run-service";
 import { ReviewGroup } from "../review-group";
@@ -34,7 +34,7 @@ export function RunGroup({ draft, preview, docRows, go }: GroupProps) {
   const { status } = useShellSetupStatus();
   const detail = timing(draft.intent, launchStart(draft, scheduledRunsOn(status), Date.now()));
   // The ports the server will actually keep: once the policy preview answers, what governance left of them.
-  const apps = isServer(draft.intent) ? (preview ? (preview.spec.ui_apps ?? []) : appsOf(draft.intent)) : [];
+  const apps = hasPorts(draft.intent) ? (preview ? (preview.spec.ui_apps ?? []) : appsOf(draft.intent)) : [];
   const service = mayKeepRunning(draft.intent) ? draft.intent.service : undefined;
   return (
     <ReviewGroup
