@@ -1996,9 +1996,11 @@ jobs:
     # fail-fast: one red shard cancels the others, so a red run stops spending
     # about 48 runner-minutes on a result that is already a failure. test-pg
     # still reports: legs cancelled by fail-fast do not cancel the run, so its
-    # `!cancelled()` holds and it fails on the matrix result `failure`.
+    # `!cancelled()` holds and it fails on the matrix result `failure`. A train
+    # or a release candidate runs every shard to the end: each red there needs
+    # its own cause before the next push, and a cancelled shard has none.
     strategy:
-      fail-fast: true
+      fail-fast: ${{ !startsWith(github.head_ref || github.ref_name, 'train/') && !startsWith(github.head_ref || github.ref_name, 'chore/release-') }}
       matrix:
         include:
           - shard: api-1
