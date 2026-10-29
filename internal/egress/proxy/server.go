@@ -50,6 +50,8 @@ type Server struct {
 	signinListen string
 	// onListening, when set, runs once the main listener is bound (see OnListening).
 	onListening func()
+	// stopped closes when the HTTP server is shut down, whenever ListenAndServe gets to look.
+	stopped chan struct{}
 }
 
 // NewServer wires a Proxy from a validated Config and dependencies. It mints
@@ -367,6 +369,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		ConnContext: signinConnContext,
 	}
 	out := &Server{proxy: p, http: srv, sink: sink, allowedPeers: cfg.AllowedPeers, signinListen: cfg.SigninListen}
+	out.watchShutdown()
 
 	// Start the run-token renewer, which keeps this sidecar's short-TTL token
 	// fresh for the life of the run and, alongside it, the activity reporter
@@ -460,14 +463,19 @@ func (s *Server) awaitOpen() bool {
 	if g == nil {
 		return true
 	}
-	stop := make(chan struct{})
-	s.http.RegisterOnShutdown(sync.OnceFunc(func() { close(stop) }))
 	select {
 	case <-g.open:
 		return true
-	case <-stop:
+	case <-s.stopped:
 		return false
 	}
+}
+
+// watchShutdown arms s.stopped. net/http runs only the hooks registered before Shutdown, so this is
+// done where the Server is built, not in awaitOpen, which a Shutdown may complete before.
+func (s *Server) watchShutdown() {
+	s.stopped = make(chan struct{})
+	s.http.RegisterOnShutdown(sync.OnceFunc(func() { close(s.stopped) }))
 }
 
 // shutdownDrainReserve is the most of Shutdown's deadline held back for the sink drain.
