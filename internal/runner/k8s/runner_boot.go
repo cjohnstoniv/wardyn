@@ -57,8 +57,9 @@ func (c accessCheck) String() string {
 
 // runnerAccess lists every verb §4 grants: the server Role in each runs namespace plus pods: patch,
 // secrets create/get/delete/deletecollection in runnerd's own namespace, and the ClusterRole's runtimeclasses: get
-// and nodes: list.
-func runnerAccess(runsNSs []string, ownNS string) []accessCheck {
+// and nodes: list. A runner that lists workload namespaces (design T3 §2.5) also needs the WardynWorkload
+// Role in each: the resource's get, list and watch, and its status's update and patch.
+func runnerAccess(runsNSs []string, ownNS string, workloadNSs []string) []accessCheck {
 	var out []accessCheck
 	add := func(ns, group, resource string, verbs ...string) {
 		for _, v := range verbs {
@@ -76,6 +77,10 @@ func runnerAccess(runsNSs []string, ownNS string) []accessCheck {
 		add(runsNS, "metrics.k8s.io", "pods", "list")
 		add(runsNS, "", "resourcequotas", "list")
 	}
+	for _, ns := range workloadNSs {
+		add(ns, "wardyn.dev", "wardynworkloads", "get", "list", "watch")
+		add(ns, "wardyn.dev", "wardynworkloads/status", "update", "patch")
+	}
 	add(ownNS, "", "secrets", "create", "get", "delete", "deletecollection")
 	add("", "node.k8s.io", "runtimeclasses", "get")
 	add("", "", "nodes", "list")
@@ -83,15 +88,16 @@ func runnerAccess(runsNSs []string, ownNS string) []accessCheck {
 }
 
 // CheckRunnerAccess asks a SelfSubjectAccessReview for every verb the runner needs and refuses boot
-// naming each one not granted (§3.4 item 2).
-func (d *Driver) CheckRunnerAccess(ctx context.Context, ownNS string) error {
+// naming each one not granted (§3.4 item 2). workloadNSs are the namespaces the runner watches for
+// WardynWorkload resources; none adds no check.
+func (d *Driver) CheckRunnerAccess(ctx context.Context, ownNS string, workloadNSs ...string) error {
 	var missing []string
-	for _, c := range runnerAccess(d.cfg.Namespaces, ownNS) {
+	for _, c := range runnerAccess(d.cfg.Namespaces, ownNS, workloadNSs) {
 		sar := &authorizationv1.SelfSubjectAccessReview{Spec: authorizationv1.SelfSubjectAccessReviewSpec{
 			ResourceAttributes: &authorizationv1.ResourceAttributes{Namespace: c.ns, Group: c.group, Resource: c.resource, Verb: c.verb},
 		}}
-		if sub, ok := strings.CutPrefix(c.resource, "pods/"); ok {
-			sar.Spec.ResourceAttributes.Resource, sar.Spec.ResourceAttributes.Subresource = "pods", sub
+		if res, sub, ok := strings.Cut(c.resource, "/"); ok {
+			sar.Spec.ResourceAttributes.Resource, sar.Spec.ResourceAttributes.Subresource = res, sub
 		}
 		res, err := d.clientset.AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, sar, metav1.CreateOptions{})
 		if err != nil {

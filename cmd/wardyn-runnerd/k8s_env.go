@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/netip"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -32,6 +33,7 @@ var k8sEnvRead = []string{
 	"WARDYN_RUNNERD_APISERVER_PEERS",
 	"WARDYN_RUNNERD_HARD_DENY_CIDRS",
 	"WARDYN_RUNNERD_POD_SELECTOR",
+	"WARDYN_RUNNERD_WORKLOAD_NAMESPACES",
 	archEnv,
 	"WARDYN_CONFINEMENT_MAP",
 	"WARDYN_K8S_READ_NODES",
@@ -49,6 +51,9 @@ type k8sEnv struct {
 	podSelector                       map[string]string
 	confinement                       map[types.ConfinementClass]string
 	linuxVM                           bool // WARDYN_RUNNER_LINUX_VM=1: offer Linux VM sandboxes as CC3 pods
+	// workloadNamespaces are the namespaces watched for WardynWorkload resources (design T3 §2.5);
+	// none leaves the workload path off.
+	workloadNamespaces []string
 }
 
 // readK8sEnv parses environ (os.Environ's form). Every value is checked: a malformed or missing
@@ -108,6 +113,11 @@ func readK8sEnv(environ []string) (k8sEnv, error) {
 			e.hardDenyCIDRs = append(e.hardDenyCIDRs, p.String())
 		}
 	}
+	if v, ok := env["WARDYN_RUNNERD_WORKLOAD_NAMESPACES"]; ok {
+		if e.workloadNamespaces, err = parseWorkloadNamespaces(v); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	if err := json.Unmarshal([]byte(env["WARDYN_RUNNERD_POD_SELECTOR"]), &e.podSelector); err != nil || len(e.podSelector) == 0 {
 		errs = append(errs, fmt.Errorf("WARDYN_RUNNERD_POD_SELECTOR: want a JSON object of runnerd's pod labels, got %q", env["WARDYN_RUNNERD_POD_SELECTOR"]))
 	}
@@ -129,6 +139,26 @@ func readK8sEnv(environ []string) (k8sEnv, error) {
 		return k8sEnv{}, fmt.Errorf("runner k8s settings: %w", err)
 	}
 	return e, nil
+}
+
+// workloadNamespaceLabel is a Kubernetes namespace name, which the workload wire also requires.
+var workloadNamespaceLabel = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
+
+// parseWorkloadNamespaces reads WARDYN_RUNNERD_WORKLOAD_NAMESPACES, the chart's comma-separated
+// workloads.namespaces. A set value names each namespace once; an empty entry is refused, not dropped.
+func parseWorkloadNamespaces(v string) ([]string, error) {
+	var out []string
+	for _, ns := range strings.Split(v, ",") {
+		ns = strings.TrimSpace(ns)
+		switch {
+		case !workloadNamespaceLabel.MatchString(ns):
+			return nil, fmt.Errorf("WARDYN_RUNNERD_WORKLOAD_NAMESPACES: want comma-separated namespace names, got %q", v)
+		case slices.Contains(out, ns):
+			return nil, fmt.Errorf("WARDYN_RUNNERD_WORKLOAD_NAMESPACES: %q is named twice", ns)
+		}
+		out = append(out, ns)
+	}
+	return out, nil
 }
 
 // apiserverPeerCIDRs reads apiServer.peers (a JSON list of NetworkPolicyPeer) into the CIDRs the
