@@ -57,12 +57,13 @@ const (
 	fieldGHCaps    = "github_capabilities"
 	fieldMethods   = "allowed_methods"
 	fieldMinCC     = "min_confinement_class"
+	fieldDesktop   = "desktop"
 	fieldDisk      = "resources.disk_mib"
 )
 
 var policyFieldOrder = []string{
 	fieldAllowed, fieldDenied, "allow_all_egress", "first_use_approval", "first_use_hold_seconds", "max_holds",
-	fieldMethods, fieldMinCC, fieldGrants, "auto_stop_after_sec", fieldMounts, fieldRepos, fieldUIApps,
+	fieldMethods, fieldMinCC, fieldDesktop, fieldGrants, "auto_stop_after_sec", fieldMounts, fieldRepos, fieldUIApps,
 	"resources.cpu_millis", "resources.memory_mib", "resources.pids_limit", fieldDisk,
 	fieldToolRules, "git_push_any_branch", fieldADOCaps, fieldGHCaps,
 }
@@ -434,6 +435,15 @@ func policyFieldSets(sp types.RunPolicySpec) map[string][]string {
 		scalar("resources.memory_mib", strconv.Itoa(r.MemoryMiB))
 		scalar("resources.pids_limit", strconv.Itoa(r.PidsLimit))
 		scalar(fieldDisk, strconv.Itoa(r.DiskMiB))
+	}
+	d := sp.Desktop.Effective()
+	for _, dir := range []struct {
+		name string
+		rule types.TransferRule
+	}{{"Block paste in", d.PasteIn}, {"Block copy out", d.CopyOut}, {"Block upload", d.Upload}, {"Block download", d.Download}} {
+		if dir.rule == types.TransferBlocked {
+			m[fieldDesktop] = append(m[fieldDesktop], dir.name)
+		}
 	}
 	for _, g := range sp.EligibleGrants {
 		m[fieldGrants] = append(m[fieldGrants], grantKey(g))
