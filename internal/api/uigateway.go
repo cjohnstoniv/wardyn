@@ -400,7 +400,11 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 	if sess.Caller = ta.caller; sess.Caller != "" {
 		sess.Service = "" // a caller enters as themselves, never as the sponsor of the run's service identity
 	}
-	s.startUISession(w, r, run, ta, sess, map[string]any{"app": declared.Name, "port": declared.Port}, declared.PathOrRoot(), redirectStatus)
+	data := map[string]any{"app": declared.Name, "port": declared.Port}
+	if sess.Caller != "" {
+		data["inbound"], data["caller"] = true, sess.Caller // the entry that admitted them, as their inbound.allow rows name it
+	}
+	s.startUISession(w, r, run, ta, sess, data, declared.PathOrRoot(), redirectStatus)
 }
 
 // relay

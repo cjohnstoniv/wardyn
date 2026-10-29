@@ -1827,6 +1827,8 @@ hiding them would repeat the failure mode we are designed to avoid.
       - A person an inbound app names opens it in their own browser, so the same acknowledgement holds for them: the app's code runs with that caller's network reach.
       - That is why a named caller who is not the owner needs host mode (residual #18).
       - The app's operator named its callers and each call is recorded: `inbound.allow` and `inbound.deny` rows carry the caller, the app, the method and the path, never the query.
+      - The `inbound` grant decides who may declare a port, not whom they may name: a granted person may name any person, group or service as a caller. An administrator limits the callers only by writing the app and its callers into a ceiling or a stored policy.
+      - The run's 8 gateway connections are shared by all its apps and callers, so callers holding them can make the owner's other apps on that run wait, or answer 503.
       - A call keeps the run alive and thaws a paused one, which is intended for a service.
       - The first connection may start the owner's launcher, which the owner declared.
 
@@ -2956,12 +2958,12 @@ hiding them would repeat the failure mode we are designed to avoid.
 98. **A browser stream already open is not cut when its session ends; an inbound-token stream is [rc.8].**
     - A UI-app session, the owner's or a named caller's, is re-checked every 30 seconds on a request, but an upgraded WebSocket is checked only at its start.
     - So an owner's relayed socket that was open when their sessions were revoked keeps working until it closes or the run ends. Killing the run ends it.
-    - A stream an inbound token opened is the exception (rc.8: re-checked at most every 30 s): it is closed when the token is revoked, expires or its owner is suspended.
+    - A stream an inbound token opened is the exception (rc.8: re-checked at most every 30 s): it is closed when the token is revoked, expires or its owner is suspended, or when the run's profile now denies UI apps or interactive sessions.
     - The gateway also reuses a verified token's session for 30 seconds per token, run and app, so a new request after a revoke can still pass within that window.
     - A named caller's browser session never re-checks the callers list, which is fixed for the run, or the caller's group membership.
     - A person removed from a group keeps a session already open until `WARDYN_UI_SANDBOX_SESSION_TTL` (8 hours by default) bounds its later requests; a socket already upgraded is not cut by it. An inbound token carries the groups stamped at its mint, refreshed when its owner signs in again.
-    - Bounds: a caller can reach only the apps the run declared inbound, at most 8 relay connections and 50 requests a second per run, and the token never reaches the sandbox.
-    - No role reaches an inbound app: only the owner and the named callers can. A profile's `deny_ui_apps` or `deny_interactive` refuses a live call at the next re-check.
+    - Bounds: a caller can reach only the apps the run declared inbound, at most 8 relay connections and 50 requests a second per run and per caller, and the token never reaches the sandbox.
+    - No role reaches an inbound app: only the owner and the named callers can. A profile's `deny_ui_apps` or `deny_interactive` refuses a live call at the next re-check and closes an open inbound-token stream at its next tick; a browser stream already open is not cut by it.
 
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 

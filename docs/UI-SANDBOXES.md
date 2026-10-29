@@ -462,6 +462,8 @@ curl -sf -b jar "$UI_ORIGIN/__wardyn/enter?run=$RUN_ID&app=vscode&ticket=$TICKET
 
 - The gateway must be on (`WARDYN_UI_SANDBOX_LISTEN`). With it off there is no inbound.
 - Declaring an inbound app needs the restricted `feature` value `inbound`: nobody may until an administrator allows it, and a `*` allow grants nobody. See [Capabilities](operations/capabilities.md#inbound).
+  - The grant decides who may declare a port, not whom they may name. A granted person may name any person, group or service as a caller.
+  - An administrator limits the callers only by writing the app and its callers into a ceiling or a stored policy.
 - A profile's `deny_ui_apps` removes inbound apps with the rest, and refuses a live call to one.
 - A profile's `deny_interactive` removes inbound apps at create, with a warning, and refuses a live call.
   - A port can serve a shell, so allowing it under a no-shell profile would make the wall advisory.
@@ -494,7 +496,7 @@ curl -H "Authorization: Bearer $INBOUND_TOKEN" "$UI/r/$RUN_ID/api/health"
 |---|---|
 | `401` `inbound_credential_invalid`, with `WWW-Authenticate: Bearer` | The bearer is not a live inbound token. An API, CLI, admin or portal token is refused the same way |
 | `404` `inbound_not_found` | No such run, no such app, an app that is not inbound, or a holder who is neither the owner nor a caller |
-| `429` `inbound_rate_limited`, `Retry-After: 1` | The run's inbound apps are past 50 requests a second, burst 100, all callers together |
+| `429` `inbound_rate_limited`, `Retry-After: 1` | The run's inbound apps are past 50 requests a second, burst 100, all callers together, or the caller is past the same limit over all the runs they call |
 | `503` `runner_offline` | The runner holding the run is offline. Retry when it reconnects |
 | `403` `ui_gateway_cross_site` | A cookie session request from another site, in host mode (see "What Wardyn checks" below) |
 
@@ -506,16 +508,18 @@ curl -H "Authorization: Bearer $INBOUND_TOKEN" "$UI/r/$RUN_ID/api/health"
 ### What Wardyn checks on every call
 
 - **The token** is looked up, then checked for expiry and revocation, and for an owner who is a service identity, its live record and sponsor. The result is reused for 30 seconds per token, run and app.
-- **A revoked, expired or suspended token** stops calling within that window. An inbound-token stream already open is re-checked at most every 30 seconds (rc.8) and closed when its token no longer holds.
+- **A revoked, expired or suspended token** stops calling within that window. An inbound-token stream already open is re-checked at most every 30 seconds (rc.8) and closed when its token no longer holds, or when the run's profile now denies UI apps or interactive sessions.
 - **A browser session** is re-checked as in [Bounds](#bounds), minus the owner rule for a named caller, and also refused when the run's profile now denies UI apps or interactive sessions.
 - **Host mode** adds a cross-site check to every cookie session, inbound or not. A request must be same-origin, carry no fetch metadata, or be a top-level `GET` or `HEAD` navigation, and an `Origin` header must be the request's own.
 - **Capacity** is shared: at most 8 relay connections per run, each a `socat` exec that is slower to open on Kubernetes or a remote runner. Inbound suits internal APIs and tools, not high-traffic services.
+  - The 8 are shared by all the run's apps and all its callers. Callers holding them can make the owner's other apps on that run wait, or answer `503`.
 
 ### What is recorded
 
 - `inbound.allow` for each request the gateway admits and `inbound.deny` for a refusal, with the caller, app, method, path (never the query), `via` (`session` or `token`) and the matched entry. See [`inbound.allow`](AUDIT-ACTIONS.md#sessions-ssh--ui-relay).
 - Denials share the `auth.fail` rate bound, so a flood of refusals writes fewer rows than requests. A refused re-check of a session is its usual `ui.authorize` denial.
 - A busy run writes up to 50 `inbound.allow` rows a second, in bursts of up to 100, so filter them when reading the run's trail.
+  - One caller writes at most the same over all the runs they call.
 
 ## 4. Deployment
 
@@ -682,7 +686,7 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
 - And a connection already established (a relayed WebSocket) keeps working until
   it closes, including after a portal revoke: killing the run is what ends an
   in-flight session, the same bound attach and [SSH](SSH.md#bounds) publish.
-  - An inbound-token stream is the exception (rc.8): it is re-checked at most every 30 seconds and closed once its token is revoked, expired or suspended.
+  - An inbound-token stream is the exception (rc.8): it is re-checked at most every 30 seconds and closed once its token is revoked, expired or suspended, or the run's profile denies inbound apps.
 - Every refusal writes a
   `ui.authorize` / `denied` row naming the reason.
 - **Header hygiene, both directions.** Cookies are not port-scoped, so a shared

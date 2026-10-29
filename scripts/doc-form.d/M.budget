@@ -78,7 +78,10 @@ docs/SSH.md=6961 share=35
 # docs/UI-SANDBOXES.md 6627 adds 5 (0.10 W4c seam, CTL-A x CTL-C): the clipboard filter names the sign-in display, measured.
 # docs/UI-SANDBOXES.md 7749 adds 1122 over 6627, measured (rc.8 inbound docs): the Inbound section, and the bearer, background-run and stream-lifetime lines in Open an app and Bounds.
 # docs/UI-SANDBOXES.md 7769 measured (rc.8 review): inbound wording made exact (groups refreshed at sign-in, rate-bound denials, burst, HEAD, session TTL).
-docs/UI-SANDBOXES.md=7769 share=35
+# docs/UI-SANDBOXES.md 7796 adds 27 over 7769, measured (rc.8 inbound review F1: the limit is per caller as well as per run).
+# docs/UI-SANDBOXES.md 7815 adds 19 over 7796, measured (rc.8 inbound review F3: a token stream is closed by the profile too).
+# docs/UI-SANDBOXES.md 7890 adds 75 over 7815, measured (rc.8 inbound review F5, F6: who the grant lets a caller name, and the shared connections).
+docs/UI-SANDBOXES.md=7890 share=35
 # docs/NEW-RUN.md 2905 measured (0.9 final docs pass): the New run guide.
 # docs/NEW-RUN.md 2914 adds 9 over 2905: 0.9 final docs pass 2, measured: the runner-limit wait reason and the runner pools links.
 # docs/NEW-RUN.md 2915 adds 1 over 2914: docs fix: run --file overlay; a policy's own * rule stays in force on a routed run, measured.

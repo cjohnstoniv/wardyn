@@ -47,8 +47,9 @@ const (
 	// lookup, the run and its effective apps are read once per window, so a revoked token, or one whose
 	// owner lost the run, stops calling within it. The session's own re-assert runs on top (uiReassertRelay).
 	inboundResolveTTL = 30 * time.Second
-	// inboundRatePerSec and inboundBurst bound the requests to one run's inbound apps, all callers together:
-	// each admitted request is an audit row, and the run's 8 relay connections are shared by all of them.
+	// inboundRatePerSec and inboundBurst bound the requests to one run's inbound apps, all callers together,
+	// and again the requests of one caller, all runs together: each admitted request is an audit row, and
+	// the run's 8 relay connections are shared by all of them.
 	inboundRatePerSec = 50.0
 	inboundBurst      = 100.0
 	// maxInboundEntries bounds each of uiInboundState's maps; past it a map is pruned wholesale, like
@@ -87,6 +88,8 @@ type uiInboundState struct {
 	sessions map[string]inboundCached
 	// buckets is each run's request bucket, with the sandbox reference its rows carry (recordStreamAudit).
 	buckets map[uuid.UUID]*inboundBucket
+	// callers is each caller's request bucket, by principal, over all the runs they call.
+	callers map[string]*inboundBucket
 }
 
 type inboundCached struct {
@@ -125,32 +128,41 @@ func (st *uiInboundState) remember(key string, sess uiSession, now time.Time) {
 	st.sessions[key] = inboundCached{sess: sess, at: now}
 }
 
-// take spends one request from runID's bucket, recording ref as the run's sandbox when it is known, and
-// answers whether the request may go and the sandbox reference the bucket holds.
-func (st *uiInboundState) take(runID uuid.UUID, now time.Time, ref string) (bool, string) {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	b := st.buckets[runID]
+// refill is k's bucket in *m, full and new when it has none, topped up to now.
+func refill[K comparable](m *map[K]*inboundBucket, k K, now time.Time) *inboundBucket {
+	b := (*m)[k]
 	if b == nil {
-		if st.buckets == nil {
-			st.buckets = map[uuid.UUID]*inboundBucket{}
-		} else if len(st.buckets) > maxInboundEntries {
-			clear(st.buckets)
+		if *m == nil {
+			*m = map[K]*inboundBucket{}
+		} else if len(*m) > maxInboundEntries {
+			clear(*m)
 		}
 		b = &inboundBucket{tokens: inboundBurst, last: now}
-		st.buckets[runID] = b
+		(*m)[k] = b
 	}
 	if elapsed := now.Sub(b.last).Seconds(); elapsed > 0 {
 		b.tokens = min(inboundBurst, b.tokens+elapsed*inboundRatePerSec)
 	}
 	b.last = now
+	return b
+}
+
+// take spends one request from runID's bucket and from principal's, recording ref as the run's sandbox when
+// it is known, and answers whether the request may go and the sandbox reference the run's bucket holds. A
+// request that either bucket refuses spends from neither, so a caller over its own limit takes nothing
+// from the run's callers.
+func (st *uiInboundState) take(runID uuid.UUID, principal string, now time.Time, ref string) (bool, string) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	b, c := refill(&st.buckets, runID, now), refill(&st.callers, principal, now)
 	if ref != "" {
 		b.ref = ref
 	}
-	if b.tokens < 1 {
+	if b.tokens < 1 || c.tokens < 1 {
 		return false, b.ref
 	}
 	b.tokens--
+	c.tokens--
 	return true, b.ref
 }
 
@@ -169,7 +181,7 @@ func (s *Server) uiRelayAnsweredEarly(w http.ResponseWriter, r *http.Request, ru
 	if raw, ok := bearerToken(r); ok && strings.HasPrefix(raw, apiTokenPrefix) {
 		if sess, ok := s.inboundTokenSession(w, r, runID, app, raw); ok {
 			// An upgrade this request becomes is admitted again while it lasts (watchInboundStream).
-			a := inboundReadmission{r: r.WithContext(context.WithoutCancel(r.Context())), runID: runID, app: app, raw: raw, principal: sess.Principal}
+			a := inboundReadmission{r: r.WithContext(context.WithoutCancel(r.Context())), runID: runID, app: app, raw: raw, principal: sess.Principal, tokenID: sess.tokenID}
 			s.relayUISession(w, r.WithContext(context.WithValue(r.Context(), inboundReadmitCtxKey{}, a)), sess)
 		}
 		return true
@@ -240,7 +252,7 @@ func (s *Server) inboundTokenSession(w http.ResponseWriter, r *http.Request, run
 	if sess, ok := s.uiInbound.cached(key, now); ok {
 		return sess, true
 	}
-	sess, ok := s.admitInboundToken(w, r, runID, app, raw)
+	sess, ok := s.admitInboundToken(w, r, runID, app, raw, "", uuid.Nil)
 	if ok {
 		s.uiInbound.remember(key, sess, now)
 	}
@@ -252,13 +264,16 @@ func (s *Server) inboundTokenSession(w http.ResponseWriter, r *http.Request, run
 // is not inbound, a holder who is neither the owner nor a caller — is 404 inbound_not_found, one answer for
 // all four; and one that may, on a run that is not running or is kept, is 409 ui_gateway_not_running. Each
 // refusal writes its inbound.deny row. ok=false when it has answered.
-func (s *Server) admitInboundToken(w http.ResponseWriter, r *http.Request, runID uuid.UUID, app, raw string) (uiSession, bool) {
+//
+// principal and tokenID are who the token proved to be when a stream was opened under it (inboundReadmission),
+// "" and uuid.Nil on a request: a token that no longer resolves cannot say, and its row then names them.
+func (s *Server) admitInboundToken(w http.ResponseWriter, r *http.Request, runID uuid.UUID, app, raw, principal string, tokenID uuid.UUID) (uiSession, bool) {
 	v, r, verdict := s.verifyAPIToken(w, r, raw, true)
 	switch verdict {
 	case tokenAnswered:
 		return uiSession{}, false
 	case tokenRefused:
-		s.auditInboundRefused(r, runID, app, "", inboundDenyCredentialInvalid)
+		s.auditInboundRefused(r, runID, app, principal, tokenID, inboundDenyCredentialInvalid)
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		writeErrorReason(w, http.StatusUnauthorized, reasonInboundCredentialInvalid, inboundCredentialInvalidMsg)
 		return uiSession{}, false
@@ -268,10 +283,10 @@ func (s *Server) admitInboundToken(w http.ResponseWriter, r *http.Request, runID
 	case "":
 		return sess, true
 	case inboundDenyNotRunning:
-		s.auditInboundRefused(r, runID, app, v.Principal, deny)
+		s.auditInboundRefused(r, runID, app, v.Principal, v.ID, deny)
 		writeErrorReason(w, http.StatusConflict, reasonUIGatewayNotRunning, inboundNotRunningMsg)
 	default:
-		s.auditInboundRefused(r, runID, app, v.Principal, deny)
+		s.auditInboundRefused(r, runID, app, v.Principal, v.ID, deny)
 		writeErrorReason(w, http.StatusNotFound, reasonInboundNotFound, inboundNotFoundMsg)
 	}
 	return uiSession{}, false
@@ -282,20 +297,33 @@ func (s *Server) admitInboundToken(w http.ResponseWriter, r *http.Request, runID
 type inboundReadmitCtxKey struct{}
 
 // inboundReadmission is what a stream needs to admit its token again: the request that opened it, held past
-// its cancel, and the token and the principal it proved.
+// its cancel, and the token and the principal and token id it proved.
 type inboundReadmission struct {
 	r                   *http.Request
 	runID               uuid.UUID
 	app, raw, principal string
+	tokenID             uuid.UUID
 }
 
-// readmitInbound admits a's token again, uncached (admitInboundToken). Its answers go nowhere: the stream
-// has no response left to write them on. transient is a refusal that is no verdict on the token: a lookup
-// that could not be made (verifyAPIToken's 503), which writes no row.
+// readmitInbound admits a's token again, uncached (admitInboundToken), then asks the run's profile what a
+// request's re-assert asks (uiInboundUnitDenies): a stream is admitted by the same arms a request is. Its
+// answers go nowhere: the stream has no response left to write them on. transient is a refusal that is no
+// verdict on the token or the profile: a lookup that could not be made (verifyAPIToken's 503), or a run or
+// profile that could not be read, which write no inbound.deny row.
 func (s *Server) readmitInbound(a inboundReadmission) (ok, transient bool) {
 	w := &inboundReadmitWriter{healthzGateWriter: healthzGateWriter{h: http.Header{}}}
-	_, ok = s.admitInboundToken(w, a.r, a.runID, a.app, a.raw)
-	return ok, !ok && w.status == http.StatusServiceUnavailable
+	sess, ok := s.admitInboundToken(w, a.r, a.runID, a.app, a.raw, a.principal, a.tokenID)
+	if !ok {
+		return false, w.status == http.StatusServiceUnavailable
+	}
+	run, err := s.cfg.Store.GetRun(a.r.Context(), a.runID)
+	if err != nil {
+		return false, true
+	}
+	if de := s.uiInboundUnitDenies(a.r.Context(), sess, run); de != nil {
+		return false, de.status == http.StatusServiceUnavailable
+	}
+	return true, false
 }
 
 // inboundReadmitWriter is healthzGateWriter that keeps the status of what was written.
@@ -309,7 +337,8 @@ func (w *inboundReadmitWriter) WriteHeader(code int) { w.status = code }
 // watchInboundStream holds an upgraded stream an inbound token opened to the authority that admitted it:
 // every inboundResolveTTL (uiInboundStreamEvery in tests) the token is admitted again, uncached, by
 // admitInboundToken, so the token's revoke or expiry, its service identity or sponsor going, its owner
-// losing the run or the app no longer naming its caller all reach the stream as they reach a request. A
+// losing the run or the app no longer naming its caller all reach the stream as they reach a request, as
+// does the run's profile coming to deny UI apps or interactive sessions (uiInboundUnitDenies). A
 // refusal writes the inbound.deny row a refused request writes and closes the stream. A lookup that
 // cannot be made keeps the stream and asks again next tick, so one store blip ends no stream; one that
 // stays unanswerable for inboundResolveTTL, the staleness the design allows, closes it with an inbound.deny
@@ -348,7 +377,7 @@ func (s *Server) watchInboundStream(resp *http.Response) {
 					if now.Sub(failingSince) < inboundResolveTTL {
 						continue
 					}
-					s.auditInboundRefused(a.r, a.runID, a.app, a.principal, reasonTokenLookupUnavailable)
+					s.auditInboundRefused(a.r, a.runID, a.app, a.principal, a.tokenID, reasonTokenLookupUnavailable)
 				}
 				_ = stream.Close() // the relay's copy ends, and the caller's connection with it
 				return
@@ -492,10 +521,11 @@ func (s *Server) uiInboundUnitDenies(ctx context.Context, sess uiSession, run ty
 		msg: fmt.Sprintf("Inbound apps are not allowed under the governance profile %q this run was launched under.", p.Name)}
 }
 
-// admitInbound spends an inbound session's request from its run's bucket and writes its inbound.allow row.
+// admitInbound spends an inbound session's request from its run's bucket and its caller's, and writes its
+// inbound.allow row.
 // False when it has answered: 429 inbound_rate_limited with Retry-After, its denial rate-bound like auth.fail.
 func (s *Server) admitInbound(w http.ResponseWriter, r *http.Request, sess uiSession) bool {
-	ok, ref := s.uiInbound.take(sess.Run, s.cfg.Now(), sess.SandboxRef)
+	ok, ref := s.uiInbound.take(sess.Run, sess.Principal, s.cfg.Now(), sess.SandboxRef)
 	if ref == "" {
 		// A cookie session holds no sandbox reference: read it once per bucket.
 		if run, err := s.cfg.Store.GetRun(r.Context(), sess.Run); err == nil && run.SandboxRef != "" {
@@ -543,8 +573,9 @@ func (s *Server) recordInbound(ctx context.Context, sourceIP string, sess uiSess
 }
 
 // auditInboundRefused writes the inbound.deny row of a token refused before it held a session, within
-// authFailedAllowed's bound. principal is "" until the token proved one.
-func (s *Server) auditInboundRefused(r *http.Request, runID uuid.UUID, app, principal, reason string) {
+// authFailedAllowed's bound. principal and tokenID are "" and uuid.Nil until the token proved them, or a
+// stream that did names them.
+func (s *Server) auditInboundRefused(r *http.Request, runID uuid.UUID, app, principal string, tokenID uuid.UUID, reason string) {
 	if !s.authFailedAllowed() {
 		return
 	}
@@ -552,8 +583,11 @@ func (s *Server) auditInboundRefused(r *http.Request, runID uuid.UUID, app, prin
 	if isServicePrincipal(principal) {
 		actorType = serviceActorType
 	}
-	ev := s.auditEvent(&runID, actorType, principal, "inbound.deny", app, "denied", mustJSON(map[string]any{
-		"reason": reason, "via": "token", "method": r.Method, "path": inboundPath(r, runID, app)}))
+	data := map[string]any{"reason": reason, "via": "token", "method": r.Method, "path": inboundPath(r, runID, app)}
+	if tokenID != uuid.Nil {
+		data["token_id"] = tokenID
+	}
+	ev := s.auditEvent(&runID, actorType, principal, "inbound.deny", app, "denied", mustJSON(data))
 	ev.SourceIP = r.RemoteAddr
 	s.recordAudit(context.WithoutCancel(r.Context()), ev)
 }

@@ -278,7 +278,7 @@ func TestUIGateway_InboundRefusalsAreInboundDenies(t *testing.T) {
 func TestUIGateway_InboundRateLimit(t *testing.T) {
 	h, _ := inboundHarness(t)
 	for range int(inboundBurst) {
-		h.srv.uiInbound.take(h.run.ID, h.clock.now(), "")
+		h.srv.uiInbound.take(h.run.ID, "someone", h.clock.now(), "")
 	}
 	rec := h.call("wdn_alice", nil)
 	if rec.Code != http.StatusTooManyRequests || respondedReason(t, rec) != reasonInboundRateLimited || rec.Header().Get("Retry-After") != "1" {
@@ -290,6 +290,31 @@ func TestUIGateway_InboundRateLimit(t *testing.T) {
 	h.clock.advance(time.Second)
 	if rec := h.call("wdn_alice", nil); rec.Code != http.StatusOK {
 		t.Fatalf("a second later = %d %s, want 200", rec.Code, rec.Body.String())
+	}
+}
+
+// TestUIGateway_InboundCallerRateLimit: a caller who spreads calls over many runs is bound by their own
+// bucket, however full each run's is; another caller, and the run's own bucket, are untouched by it.
+func TestUIGateway_InboundCallerRateLimit(t *testing.T) {
+	h, _ := inboundHarness(t, "user:bob")
+	for range int(inboundBurst) {
+		if ok, _ := h.srv.uiInbound.take(uuid.New(), "bob", h.clock.now(), ""); !ok {
+			t.Fatal("a caller's first calls, each on its own run, were refused")
+		}
+	}
+	rec := h.call("wdn_bob", nil)
+	if rec.Code != http.StatusTooManyRequests || respondedReason(t, rec) != reasonInboundRateLimited || rec.Header().Get("Retry-After") != "1" {
+		t.Fatalf("bob's call = %d %s, want 429 %s with Retry-After 1", rec.Code, rec.Body.String(), reasonInboundRateLimited)
+	}
+	if !h.audit.hasDataValue("reason", inboundDenyRateLimited) {
+		t.Errorf("no inbound.deny rate_limited; reasons: %s", h.audit.dataReasons())
+	}
+	if rec := h.call("wdn_alice", nil); rec.Code != http.StatusOK {
+		t.Fatalf("alice's call = %d %s, want 200: bob's bucket is not hers", rec.Code, rec.Body.String())
+	}
+	h.clock.advance(time.Second)
+	if rec := h.call("wdn_bob", nil); rec.Code != http.StatusOK {
+		t.Fatalf("bob a second later = %d %s, want 200", rec.Code, rec.Body.String())
 	}
 }
 
@@ -482,12 +507,19 @@ func TestUIGateway_InboundStreamIsReadmitted(t *testing.T) {
 			if !echoes(conn, br) {
 				t.Fatal("the stream carried nothing before the token ended")
 			}
+			tok, err := tokens(h).GetAPITokenByRaw(context.Background(), "wdn_alice")
+			if err != nil {
+				t.Fatalf("read the token before it ends: %v", err)
+			}
 			end(h)
 			if !closes(conn, br) {
 				t.Fatal("the stream outlived its token")
 			}
-			if !h.audit.hasDataValue("reason", inboundDenyCredentialInvalid) {
-				t.Errorf("no inbound.deny credential_invalid; reasons: %s", h.audit.dataReasons())
+			// One row, naming who the stream was open for, though the token no longer proves it.
+			rows := h.audit.auditRows("inbound.deny", "denied")
+			if len(rows) != 1 || rows[0].Actor != h.owner || !h.audit.hasDataValue("reason", inboundDenyCredentialInvalid) ||
+				!h.audit.hasDataValue("token_id", tok.ID.String()) {
+				t.Errorf("inbound.deny rows = %+v, want one credential_invalid by %s for token %s", rows, h.owner, tok.ID)
 			}
 		})
 	}
@@ -515,6 +547,39 @@ func TestUIGateway_InboundStreamIsReadmitted(t *testing.T) {
 			t.Errorf("no inbound.deny credential_invalid; reasons: %s", h.audit.dataReasons())
 		}
 	})
+
+	// The profile arm of a request's re-assert reaches an open stream too: a profile changed to deny UI apps,
+	// or interactive sessions, closes it at the next tick with the inbound.deny row a refused call gets.
+	for name, limits := range map[string]types.GovernanceLimits{
+		"deny_ui_apps":     {DenyUIApps: true},
+		"deny_interactive": {DenyInteractive: true},
+	} {
+		t.Run("a stream closes when its run's profile comes to "+name, func(t *testing.T) {
+			h, gw := open(t)
+			unit := types.GovernanceUnit{ID: uuid.New(), Name: "walled"}
+			setUnit := func(u types.GovernanceUnit) {
+				h.store.sshMemStore.mu.Lock()
+				defer h.store.sshMemStore.mu.Unlock()
+				h.store.profiles = []types.GovernanceUnit{u}
+			}
+			setUnit(unit)
+			h.run.UnitID = &unit.ID
+			h.store.putRun(h.run)
+			conn, br := openInboundStream(t, h, gw, "wdn_alice")
+			if !echoes(conn, br) {
+				t.Fatal("the stream carried nothing under a profile that allows inbound")
+			}
+			unit.Limits = limits
+			setUnit(unit)
+			if !closes(conn, br) {
+				t.Fatal("the stream outlived the profile that now denies it")
+			}
+			if rows := h.audit.auditRows("inbound.deny", "denied"); len(rows) != 1 || rows[0].Actor != h.owner ||
+				!h.audit.hasDataValue("reason", inboundDenyUnitDenies) {
+				t.Errorf("inbound.deny rows = %+v, want one unit_denies by %s", rows, h.owner)
+			}
+		})
+	}
 
 	// A lookup that cannot be made is no verdict on the token: the stream rides it out, and is closed, with a
 	// row, only once the re-admission has been unanswerable for the staleness bound.

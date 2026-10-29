@@ -359,7 +359,9 @@
 # docs/AUDIT-ACTIONS.md 55470 adds 24 over 55446, measured (rc.8 FIX5): who a restarted service workload's rows name.
 # docs/AUDIT-ACTIONS.md 55483 adds 13 over 55470, measured (rc.8 FIX5): a replacement queued behind its own run's slot kills it at once.
 # docs/AUDIT-ACTIONS.md 55486 adds 3 over 55483, measured (rc.8 FIX5): a queued replacement that ran and then ended still replaces.
-docs/AUDIT-ACTIONS.md=55486 share=8
+# docs/AUDIT-ACTIONS.md 55503 adds 17 over 55486, measured (rc.8 inbound review F4a).
+# docs/AUDIT-ACTIONS.md 55513 adds 10 over 55503, measured (rc.8 inbound review F4b).
+docs/AUDIT-ACTIONS.md=55513 share=8
 # docs/AUDIT-ACTIONS.md 50827 = ours 50175 + theirs 50556 - base 49904 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
