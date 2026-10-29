@@ -16,6 +16,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -44,6 +45,8 @@ type Fake struct {
 	// EndErr, when set, is what EndSandbox answers, as an end that failed on the runner.
 	EndErr error
 	disks  map[string]runner.MacOSVMDisk // SetMacOSVMDisk's reports, by local ref
+	// workloads is every workload_status the runner was sent, in order.
+	workloads []runnerwire.WorkloadStatusArgs
 }
 
 // NewFake offers CC1 and CC2.
@@ -87,6 +90,21 @@ func (f *Fake) MacOSVMDisks() []runner.MacOSVMDisk {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Collect(maps.Values(f.disks))
+}
+
+// WorkloadStatus records a workload_status, as a k8s runner patches it into the resource's status.
+func (f *Fake) WorkloadStatus(_ context.Context, a runnerwire.WorkloadStatusArgs) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.workloads = append(f.workloads, a)
+	return nil
+}
+
+// WorkloadStatuses is every workload_status the runner was sent, in order.
+func (f *Fake) WorkloadStatuses() []runnerwire.WorkloadStatusArgs {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.workloads)
 }
 
 func (f *Fake) note(verb, ref string) {

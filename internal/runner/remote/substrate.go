@@ -685,3 +685,13 @@ func (s *Substrate) EraseResident(ctx context.Context, runID uuid.UUID) error {
 	s.mu.Unlock()
 	return s.call(ctx, runnerwire.MethodEraseResident, runnerwire.EraseResidentArgs{RunID: runID}, nil)
 }
+
+// WorkloadStatus has the runner write one WardynWorkload custom resource's status, which it patches
+// into the resource's status subresource and nowhere else. A status outside the wire's bounds is
+// refused here and never sent.
+func (s *Substrate) WorkloadStatus(ctx context.Context, a runnerwire.WorkloadStatusArgs) error {
+	if err := a.Validate(); err != nil {
+		return err
+	}
+	return s.call(ctx, runnerwire.MethodWorkloadStatus, a, nil)
+}

@@ -353,7 +353,9 @@
 # docs/AUDIT-ACTIONS.md 54983 adds 17 over 54966, measured (rc.8 D1): needs_host_mode on inbound.deny, for an app's browser ticket.
 # docs/AUDIT-ACTIONS.md 55282 = 55265 + 17, measured (rc.8 D1 on the wave).
 # docs/AUDIT-ACTIONS.md=55303 adds 21 over 55282, measured (rc.8 inbound docs): kind inbound on the token.create row and kind on the service_identity.token.create row.
-docs/AUDIT-ACTIONS.md=55303 share=8
+# docs/AUDIT-ACTIONS.md 55349 adds 67 over 55282, measured (rc.8 D2): workload.apply and workload.delete from a runner's report (via, runner_id, pool_id, namespace, uid).
+# docs/AUDIT-ACTIONS.md 55370 = 55303 + 67, measured (rc.8 inbound docs and D2 combined on the wave).
+docs/AUDIT-ACTIONS.md=55370 share=8
 # docs/AUDIT-ACTIONS.md 50827 = ours 50175 + theirs 50556 - base 49904 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.

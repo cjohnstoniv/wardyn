@@ -423,11 +423,17 @@ func TestPG_Workload_K8sStatusesCarryRunStateAndHealth(t *testing.T) {
 	p := ownPool(t, st, "sub-a", "A")
 	k8s := func(name string) store.WorkloadPut {
 		in := workloadPut("service:bot", name, "d")
-		in.Source, in.SourcePoolID, in.SourceNamespace = store.WorkloadSourceK8s, &p.ID, "team-a"
+		in.Source, in.SourcePoolID, in.SourceNamespace, in.K8sUID = store.WorkloadSourceK8s, &p.ID, "team-a", "uid-"+name
 		return in
 	}
 	withRun := mustPutWorkload(t, st, k8s("has-run"))
 	mustPutWorkload(t, st, k8s("no-run"))
+	// The same spec reported from a resource recreated under the name keeps the row and takes the new uid.
+	recreated := k8s("no-run")
+	recreated.K8sUID = "uid-recreated"
+	if _, write, err := st.PutWorkload(ctx, recreated); err != nil || write != store.WorkloadUnchanged {
+		t.Fatalf("recreated resource: %q (%v), want unchanged", write, err)
+	}
 	mustPutWorkload(t, st, workloadPut("sub-a", "api-one", "d"))
 	run := persistRun(t, ctx, pool, newRun(types.RunRunning))
 	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET service_status = '{"health":"unhealthy","restarts":2}' WHERE id = $1`, run.ID); err != nil {
@@ -450,11 +456,11 @@ func TestPG_Workload_K8sStatusesCarryRunStateAndHealth(t *testing.T) {
 	for _, v := range got {
 		switch v.Name {
 		case "has-run":
-			if v.RunState != types.RunRunning || v.ServiceHealth != "unhealthy" || v.StatusPushed != "h1" {
+			if v.RunState != types.RunRunning || v.ServiceHealth != "unhealthy" || v.StatusPushed != "h1" || v.K8sUID != "uid-has-run" {
 				t.Errorf("has-run = %+v", v)
 			}
 		case "no-run":
-			if v.RunState != "" || v.ServiceHealth != "" || v.StatusPushed != "" {
+			if v.RunState != "" || v.ServiceHealth != "" || v.StatusPushed != "" || v.K8sUID != "uid-recreated" {
 				t.Errorf("no-run = %+v", v)
 			}
 		default:

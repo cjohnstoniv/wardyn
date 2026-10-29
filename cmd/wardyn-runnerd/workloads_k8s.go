@@ -314,44 +314,69 @@ func (w *workloadWatcher) emit(p workloadPeer, rep runnerwire.WorkloadReport) er
 	return nil
 }
 
-// status writes the organisation's answer to the resource's status subresource and nowhere else. A
-// resource deleted in the meantime has nothing to write to.
+// workloadStatusAttempts bounds the read-then-write rounds of one status: a write that meets a newer
+// resourceVersion is read again, and one still losing after this many is dropped (the org's next push
+// carries it).
+const workloadStatusAttempts = 3
+
+// status writes the organisation's answer to the resource's status subresource and nowhere else, and
+// only to the resource the answer is for: the one whose metadata.uid is a.UID and whose
+// metadata.generation is a.ObservedGeneration. A late answer for a resource since deleted and recreated
+// under the name, or for a spec since changed, is dropped. The write carries the resourceVersion it was
+// checked at, so the apiserver refuses it if the resource changed in between; a deleted resource has
+// nothing to write to. Neither is an error: the org's next push answers what the resource is now.
 func (w *workloadWatcher) status(ctx context.Context, a runnerwire.WorkloadStatusArgs) error {
-	inf, ok := w.informers[a.Namespace]
-	if !ok {
+	if _, ok := w.informers[a.Namespace]; !ok {
 		return runnerwire.Refuse("workload namespace %q is not one this runner watches", a.Namespace)
 	}
 	ready := metav1.ConditionFalse
 	if a.Phase == runnerwire.WorkloadPhaseRunning {
 		ready = metav1.ConditionTrue
 	}
-	// The transition time moves only when Ready does, so a repeated answer is not a new transition.
-	since := w.now().UTC().Format(time.RFC3339)
-	if o, exists, _ := inf.GetStore().GetByKey(a.Namespace + "/" + a.Name); exists {
-		if u, ok := o.(*unstructured.Unstructured); ok {
-			if st, at := readyCondition(u); st == string(ready) && at != "" {
-				since = at
-			}
+	res := w.client.Resource(workloadGVR).Namespace(a.Namespace)
+	for range workloadStatusAttempts {
+		u, err := res.Get(ctx, a.Name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if string(u.GetUID()) != a.UID || u.GetGeneration() != a.ObservedGeneration {
+			slog.DebugContext(ctx, "workload status dropped: it answers another resource or generation", "namespace", a.Namespace, "name", a.Name,
+				"uid", a.UID, "generation", a.ObservedGeneration, "current_uid", u.GetUID(), "current_generation", u.GetGeneration())
+			return nil
+		}
+		// The transition time moves only when Ready does, so a repeated answer is not a new transition.
+		since := w.now().UTC().Format(time.RFC3339)
+		if st, at := readyCondition(u); st == string(ready) && at != "" {
+			since = at
+		}
+		body, err := json.Marshal(map[string]any{
+			"metadata": map[string]any{"uid": a.UID, "resourceVersion": u.GetResourceVersion()},
+			"status": map[string]any{
+				"observedGeneration": a.ObservedGeneration,
+				"phase":              a.Phase,
+				"runID":              a.RunID,
+				"reason":             a.Reason,
+				"message":            a.Message,
+				"conditions": []map[string]any{{
+					"type": "Ready", "status": string(ready), "reason": a.Phase, "lastTransitionTime": since,
+				}},
+			}})
+		if err != nil {
+			return err
+		}
+		_, err = res.Patch(ctx, a.Name, k8stypes.MergePatchType, body, metav1.PatchOptions{}, "status")
+		switch {
+		case err == nil, apierrors.IsNotFound(err):
+			return nil
+		case !apierrors.IsConflict(err):
+			return err
 		}
 	}
-	body, err := json.Marshal(map[string]any{"status": map[string]any{
-		"observedGeneration": a.ObservedGeneration,
-		"phase":              a.Phase,
-		"runID":              a.RunID,
-		"reason":             a.Reason,
-		"message":            a.Message,
-		"conditions": []map[string]any{{
-			"type": "Ready", "status": string(ready), "reason": a.Phase, "lastTransitionTime": since,
-		}},
-	}})
-	if err != nil {
-		return err
-	}
-	_, err = w.client.Resource(workloadGVR).Namespace(a.Namespace).Patch(ctx, a.Name, k8stypes.MergePatchType, body, metav1.PatchOptions{}, "status")
-	if apierrors.IsNotFound(err) {
-		return nil
-	}
-	return err
+	slog.WarnContext(ctx, "workload status dropped: the resource kept changing under the write", "namespace", a.Namespace, "name", a.Name)
+	return nil
 }
 
 // readyCondition is the Ready condition's status and lastTransitionTime on u, "" when it has none.

@@ -212,6 +212,7 @@ func (s *Server) admitRunner(_ context.Context, rn types.Runner) (remote.Admissi
 			peer := ep.link.ReadyPeer()
 			sameSession := func() bool { return peer != nil && ep.link.ReadyPeer() == peer }
 			go s.sweepRunnerOrphansOnReady(s.cfg.BaseCtx, id, ep.sub, sameSession, readySweepRetries)
+			go s.pushRunnerWorkloadStatuses(s.cfg.BaseCtx, id)
 		},
 	}, nil
 }
@@ -258,6 +259,8 @@ func (s *Server) eventFromRunner(ctx context.Context, runnerID uuid.UUID, sessio
 		err = s.PostureFromRunner(ctx, runnerID, ev)
 	case runnerwire.EventResidentErase:
 		err = s.ResidentEraseFromRunner(ctx, runnerID, ev)
+	case runnerwire.EventWorkload:
+		err = s.WorkloadFromRunner(ctx, runnerID, ev)
 	case runnerwire.EventCaps:
 		s.capsFromRunner(ctx, runnerID, session, ev)
 	case runnerwire.EventWaiting:

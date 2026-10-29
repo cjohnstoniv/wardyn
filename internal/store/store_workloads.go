@@ -75,13 +75,14 @@ type Workload struct {
 	ID    uuid.UUID
 	Owner string
 	Name  string
-	// Source is who writes the row. SourcePoolID, SourceNamespace, SourceRunnerID and K8sGeneration are
-	// set for a custom resource only; SourcePoolID is nil if its pool row was removed.
+	// Source is who writes the row. SourcePoolID, SourceNamespace, SourceRunnerID, K8sGeneration and
+	// K8sUID are set for a custom resource only; SourcePoolID is nil if its pool row was removed.
 	Source          WorkloadSource
 	SourcePoolID    *uuid.UUID
 	SourceNamespace string
 	SourceRunnerID  *uuid.UUID
 	K8sGeneration   *int64
+	K8sUID          string
 	Description     string
 	RunIn           string
 	RestartKey      string
@@ -113,8 +114,8 @@ type WorkloadView struct {
 }
 
 // WorkloadPut is the record half of an apply. Digest is the caller's, over Intent, RunIn and RestartKey.
-// SourcePoolID, SourceNamespace, SourceRunnerID and K8sGeneration are for a custom resource and nil or
-// empty otherwise. By is the writer, kept on a created row.
+// SourcePoolID, SourceNamespace, SourceRunnerID, K8sGeneration and K8sUID are for a custom resource and
+// nil or empty otherwise. By is the writer, kept on a created row.
 type WorkloadPut struct {
 	Owner           string
 	Name            string
@@ -123,6 +124,7 @@ type WorkloadPut struct {
 	SourceNamespace string
 	SourceRunnerID  *uuid.UUID
 	K8sGeneration   *int64
+	K8sUID          string
 	Description     string
 	RunIn           string
 	RestartKey      string
@@ -167,7 +169,7 @@ var _ WorkloadStore = PG{}
 
 const workloadCols = `w.id, w.owner, w.name, w.source, w.source_pool_id, COALESCE(w.source_namespace, ''), w.source_runner_id,
 	w.k8s_generation, w.description, w.run_in, w.restart_key, w.intent, w.digest, w.generation, w.current_run_id,
-	w.current_generation, w.last_refusal, w.launch_claim_until, w.status_pushed, w.created_by, w.created_at, w.updated_at`
+	w.current_generation, w.last_refusal, w.launch_claim_until, w.status_pushed, w.created_by, w.created_at, w.updated_at, w.k8s_uid`
 
 // workloadViewCols and workloadViewFrom read a workload with its current run. The run's service health is
 // read by name out of the row's JSON, so this query does not depend on the order the migration that adds
@@ -181,7 +183,7 @@ func scanWorkloadInto(row pgx.Row, w *Workload, extra ...any) error {
 	var refusal []byte
 	err := row.Scan(append([]any{&w.ID, &w.Owner, &w.Name, &w.Source, &w.SourcePoolID, &w.SourceNamespace, &w.SourceRunnerID,
 		&w.K8sGeneration, &w.Description, &w.RunIn, &w.RestartKey, &w.Intent, &w.Digest, &w.Generation, &w.CurrentRunID,
-		&w.CurrentGeneration, &refusal, &w.LaunchClaimUntil, &w.StatusPushed, &w.CreatedBy, &w.CreatedAt, &w.UpdatedAt}, extra...)...)
+		&w.CurrentGeneration, &refusal, &w.LaunchClaimUntil, &w.StatusPushed, &w.CreatedBy, &w.CreatedAt, &w.UpdatedAt, &w.K8sUID}, extra...)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -219,8 +221,8 @@ func sameUUIDPtr(a, b *uuid.UUID) bool {
 //   - A row of the other source, or for a custom resource of another pool or namespace:
 //     ErrWorkloadSourceConflict, and nothing is written.
 //   - A different digest: the spec is replaced and the generation moves by one (WorkloadUpdated).
-//   - The same digest: only the description is written, and for a custom resource the reporting runner and
-//     metadata.generation (WorkloadUnchanged).
+//   - The same digest: only the description is written, and for a custom resource the reporting runner,
+//     metadata.generation and metadata.uid (WorkloadUnchanged).
 //
 // It never touches the run columns: whether a launch is owed is the generation against CurrentGeneration.
 func (s PG) PutWorkload(ctx context.Context, in WorkloadPut) (Workload, WorkloadWrite, error) {
@@ -246,11 +248,11 @@ func (s PG) PutWorkload(ctx context.Context, in WorkloadPut) (Workload, Workload
 			}
 			out, err = scanWorkload(q.QueryRow(ctx, `
 				INSERT INTO workloads AS w (owner, name, source, source_pool_id, source_namespace, source_runner_id, k8s_generation,
-					description, run_in, restart_key, intent, digest, created_by)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+					description, run_in, restart_key, intent, digest, created_by, k8s_uid)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 				RETURNING `+workloadCols,
 				in.Owner, in.Name, in.Source, in.SourcePoolID, ns, in.SourceRunnerID, in.K8sGeneration,
-				in.Description, in.RunIn, in.RestartKey, []byte(in.Intent), in.Digest, in.By))
+				in.Description, in.RunIn, in.RestartKey, []byte(in.Intent), in.Digest, in.By, in.K8sUID))
 			write = WorkloadCreated
 			return err
 		case err != nil:
@@ -263,17 +265,17 @@ func (s PG) PutWorkload(ctx context.Context, in WorkloadPut) (Workload, Workload
 		if cur.Digest != in.Digest {
 			out, err = scanWorkload(q.QueryRow(ctx, `
 				UPDATE workloads w SET intent = $2, digest = $3, run_in = $4, restart_key = $5, description = $6,
-					source_runner_id = $7, k8s_generation = $8, generation = w.generation + 1, updated_at = now()
+					source_runner_id = $7, k8s_generation = $8, k8s_uid = $9, generation = w.generation + 1, updated_at = now()
 				WHERE w.id = $1 RETURNING `+workloadCols,
-				cur.ID, []byte(in.Intent), in.Digest, in.RunIn, in.RestartKey, in.Description, in.SourceRunnerID, in.K8sGeneration))
+				cur.ID, []byte(in.Intent), in.Digest, in.RunIn, in.RestartKey, in.Description, in.SourceRunnerID, in.K8sGeneration, in.K8sUID))
 			write = WorkloadUpdated
 			return err
 		}
 		out, err = scanWorkload(q.QueryRow(ctx, `
-			UPDATE workloads w SET description = $2, source_runner_id = $3, k8s_generation = $4,
+			UPDATE workloads w SET description = $2, source_runner_id = $3, k8s_generation = $4, k8s_uid = $5,
 				updated_at = CASE WHEN w.description <> $2 THEN now() ELSE w.updated_at END
 			WHERE w.id = $1 RETURNING `+workloadCols,
-			cur.ID, in.Description, in.SourceRunnerID, in.K8sGeneration))
+			cur.ID, in.Description, in.SourceRunnerID, in.K8sGeneration, in.K8sUID))
 		write = WorkloadUnchanged
 		return err
 	})

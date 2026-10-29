@@ -37,6 +37,7 @@ func TestWorkloadReportValidate(t *testing.T) {
 		"apply with names":    {Op: WorkloadOpApply, Namespace: "team-a", Name: "t", UID: "u", Generation: 1, Spec: spec, Names: []string{"x"}},
 		"apply spec too big":  {Op: WorkloadOpApply, Namespace: "team-a", Name: "t", UID: "u", Generation: 1, Spec: json.RawMessage(`"` + strings.Repeat("a", MaxWorkloadSpecBytes) + `"`)},
 		"delete with spec":    {Op: WorkloadOpDelete, Namespace: "team-a", Name: "t", UID: "u", Spec: spec},
+		"uid too long":        {Op: WorkloadOpDelete, Namespace: "team-a", Name: "t", UID: strings.Repeat("u", MaxWorkloadUID+1)},
 		"sync with name":      {Op: WorkloadOpSync, Namespace: "team-a", Name: "t"},
 		"sync bad name":       {Op: WorkloadOpSync, Namespace: "team-a", Names: []string{"ok", "No"}},
 		"sync too many":       {Op: WorkloadOpSync, Namespace: "team-a", Names: make([]string, MaxWorkloadSyncNames+1)},
@@ -62,7 +63,7 @@ func TestWorkloadNameBoundaries(t *testing.T) {
 		if err := (WorkloadReport{Op: WorkloadOpSync, Namespace: "team-a", Names: []string{name}}).Validate(); err != nil {
 			t.Errorf("sync name %q: %v", name, err)
 		}
-		if err := (WorkloadStatusArgs{Namespace: "team-a", Name: name, Phase: WorkloadPhases[0]}).Validate(); err != nil {
+		if err := (WorkloadStatusArgs{Namespace: "team-a", Name: name, UID: "u", Phase: WorkloadPhases[0]}).Validate(); err != nil {
 			t.Errorf("status name %q: %v", name, err)
 		}
 	}
@@ -73,7 +74,7 @@ func TestWorkloadNameBoundaries(t *testing.T) {
 		if err := (WorkloadReport{Op: WorkloadOpSync, Namespace: "team-a", Names: []string{name}}).Validate(); !errors.Is(err, ErrBadFrame) {
 			t.Errorf("sync name %q: want ErrBadFrame, got %v", name, err)
 		}
-		if err := (WorkloadStatusArgs{Namespace: "team-a", Name: name, Phase: WorkloadPhases[0]}).Validate(); !errors.Is(err, ErrBadFrame) {
+		if err := (WorkloadStatusArgs{Namespace: "team-a", Name: name, UID: "u", Phase: WorkloadPhases[0]}).Validate(); !errors.Is(err, ErrBadFrame) {
 			t.Errorf("status name %q: want ErrBadFrame, got %v", name, err)
 		}
 	}
@@ -84,7 +85,7 @@ func TestWorkloadNameBoundaries(t *testing.T) {
 
 func TestWorkloadStatusArgsValidate(t *testing.T) {
 	for _, p := range WorkloadPhases {
-		if err := (WorkloadStatusArgs{Namespace: "team-a", Name: "triage", ObservedGeneration: 4, Phase: p}).Validate(); err != nil {
+		if err := (WorkloadStatusArgs{Namespace: "team-a", Name: "triage", UID: "u1", ObservedGeneration: 4, Phase: p}).Validate(); err != nil {
 			t.Errorf("phase %s: %v", p, err)
 		}
 	}
@@ -92,10 +93,12 @@ func TestWorkloadStatusArgsValidate(t *testing.T) {
 		t.Fatalf("%d phases, want the 10 the CRD status names", len(WorkloadPhases))
 	}
 	bad := map[string]WorkloadStatusArgs{
-		"unknown phase":   {Namespace: "team-a", Name: "t", Phase: "Done"},
-		"no name":         {Namespace: "team-a", Phase: WorkloadPhaseRunning},
-		"negative gen":    {Namespace: "team-a", Name: "t", Phase: WorkloadPhaseRunning, ObservedGeneration: -1},
-		"message too big": {Namespace: "team-a", Name: "t", Phase: WorkloadPhaseRefused, Message: strings.Repeat("m", MaxWorkloadMessage+1)},
+		"unknown phase":   {Namespace: "team-a", Name: "t", UID: "u", Phase: "Done"},
+		"no name":         {Namespace: "team-a", UID: "u", Phase: WorkloadPhaseRunning},
+		"no uid":          {Namespace: "team-a", Name: "t", Phase: WorkloadPhaseRunning},
+		"uid too long":    {Namespace: "team-a", Name: "t", UID: strings.Repeat("u", MaxWorkloadUID+1), Phase: WorkloadPhaseRunning},
+		"negative gen":    {Namespace: "team-a", Name: "t", UID: "u", Phase: WorkloadPhaseRunning, ObservedGeneration: -1},
+		"message too big": {Namespace: "team-a", Name: "t", UID: "u", Phase: WorkloadPhaseRefused, Message: strings.Repeat("m", MaxWorkloadMessage+1)},
 	}
 	for name, a := range bad {
 		if err := a.Validate(); !errors.Is(err, ErrBadFrame) {
