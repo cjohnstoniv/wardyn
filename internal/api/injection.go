@@ -245,14 +245,17 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 		writeErrorReason(w, status, reason, body)
 		return
 	}
-	formattedValue := formatInjectionValue(minted.Injection.Format, secret)
+	// Without a trailing line break (headerCredential), which no header carries: a secret placeholder
+	// is authored for such a value.
+	header := headerCredential(secret)
+	formattedValue := formatInjectionValue(minted.Injection.Format, header)
 
 	// Register the raw secret and formatted value with the mask registry so
 	// both forms are masked from PTY/asciicast streams. The formatted value
 	// (e.g. "Bearer sk-...") is what the agent might observe in proxy error
 	// messages; the raw value covers direct leakage. A nil registry is a no-op.
 	// A value that is not on record is not handed out.
-	if s.refuseUnmasked(w, r, claims, "injection.resolve", secret, []byte(formattedValue)) {
+	if s.refuseUnmasked(w, r, claims, "injection.resolve", secret, header, []byte(formattedValue)) {
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
