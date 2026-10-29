@@ -365,6 +365,10 @@ func deleteRunnerPoolQ(ctx context.Context, q Querier, id uuid.UUID) (RunnerPool
 	if _, err := q.Exec(ctx, `DELETE FROM runner_pool_members WHERE pool_id = $1`, id); err != nil {
 		return out, err
 	}
+	// The pool row stays as a tombstone, so the cascade on its bindings does not fire.
+	if _, err := q.Exec(ctx, `DELETE FROM workload_bindings WHERE pool_id = $1`, id); err != nil {
+		return out, err
+	}
 	if err := clearOrgDefaultSlotsQ(ctx, q, id, &out); err != nil {
 		return out, err
 	}
@@ -378,7 +382,7 @@ func deleteRunnerPoolQ(ctx context.Context, q Querier, id uuid.UUID) (RunnerPool
 // as DeleteRunnerPool deletes one, and then every pool of theirs, the tombstones included, forgets them
 // (owner and created_by cleared). It holds the lock every create takes, so a pool the person creates
 // meanwhile is either deleted here or made after it. The person's stored preferences are deleted in the
-// same transaction. Returns the deletions, in pool id order.
+// same transaction, and so are their workloads. Returns the deletions, in pool id order.
 func (s PG) DeleteRunnerPoolsByOwner(ctx context.Context, owner string) ([]RunnerPoolDeletion, error) {
 	var out []RunnerPoolDeletion
 	err := s.inTx(ctx, func(q Querier) error {
@@ -410,7 +414,11 @@ func (s PG) DeleteRunnerPoolsByOwner(ctx context.Context, owner string) ([]Runne
 		if _, err = q.Exec(ctx, `DELETE FROM principal_prefs WHERE principal = $1`, owner); err != nil {
 			return err
 		}
-		_, err = q.Exec(ctx, `DELETE FROM ui_run_layouts WHERE principal = $1`, owner)
+		if _, err = q.Exec(ctx, `DELETE FROM ui_run_layouts WHERE principal = $1`, owner); err != nil {
+			return err
+		}
+		// So do the workloads they own.
+		_, err = q.Exec(ctx, `DELETE FROM workloads WHERE owner = $1`, owner)
 		return err
 	})
 	return out, err

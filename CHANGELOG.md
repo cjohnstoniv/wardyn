@@ -11,6 +11,19 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Before you upgrade
+
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the `ALTER
+  DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `workloads` and
+  `workload_bindings` (migration `0241_workloads`). Without it applying a workload and binding a namespace fail. An
+  upgrade from before 0.10.0-rc.3 also needs `SELECT, INSERT, UPDATE, DELETE` on `macos_vm_disks` (migration
+  `0236_macos_vm_disks`), and every grant the 0.10.0-rc.1 notes list: `SELECT, INSERT, UPDATE, DELETE` on
+  `aws_sso_refused_tokens`, `cli_sign_ins`, `ui_desktop_closed`, `desktop_signins`, `desktop_signin_shares`,
+  `desktop_signin_runs`, `approval_rules`, `governance_restrictions`, `governance_restriction_members`,
+  `governance_unit_admins`, `oidc_session_sids` and `desktop_vm_sign_ins`. Also grant it `SELECT, INSERT, UPDATE` on
+  `runner_health`, `launch_preset_version_floor`, `cli_sessions` and `governance_boundary`. If it turns on
+  `WARDYN_MULTI_AGENT_TASKS`, grant it `SELECT, INSERT, UPDATE` on `run_harnesses` as well.
+
 ### Fixed
 
 - A macOS guest now gets its address on a macOS VM's network. The relay answered ARP for every address, the guest's own
