@@ -62,6 +62,8 @@ export const POLICY_TAB = {
 export const CHANGE_HEADING = {
   limitsOwn: "Narrowed to fit your limits", // S-14a
   limitsOther: (person: string) => `Narrowed to fit the limits set for ${person}`, // S-14b
+  wallsOwn: "Your walls",
+  wallsOther: (person: string) => `${person}'s walls`,
   workspace: "Added for the workspace", // S-15
   source_control: "Added so the run can reach its code", // S-16
   component: "Added for an attached component",
@@ -77,7 +79,7 @@ export const CHANGE_HEADING = {
   overlay: "Set by the policy you chose for this run",
 } as const;
 
-export type PlainCause = Exclude<RunPolicyCause, "limits" | "unit" | "restart">;
+export type PlainCause = Exclude<RunPolicyCause, "limits" | "unit" | "restart" | "walls">;
 
 // S-34 .. S-47: the Summary view.
 export const SUMMARY = {
