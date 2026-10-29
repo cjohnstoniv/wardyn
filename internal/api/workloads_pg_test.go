@@ -407,8 +407,8 @@ func TestPG_WorkloadBinding_NamesAnOrganizationPoolOnly(t *testing.T) {
 	}
 }
 
-// TestPG_WorkloadBinding_RefusesAnInactiveSponsor: a binding for an identity whose sponsor's access was
-// revoked is refused 409 at the door, as a token mint is, and no row is written.
+// TestPG_WorkloadBinding_RefusesAnInactiveSponsor: a binding for an identity whose sponsor is deactivated is
+// refused 409 at the door, as a token mint is, and no row is written.
 func TestPG_WorkloadBinding_RefusesAnInactiveSponsor(t *testing.T) {
 	e := newSvcEnv(t)
 	e.mustCreate(t, svcName, svcSponsor)
@@ -417,12 +417,12 @@ func TestPG_WorkloadBinding_RefusesAnInactiveSponsor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := e.rev.RevokeSub(ctx, svcSponsor); err != nil {
+	if _, err := e.pool.Exec(ctx, `UPDATE principal_identities SET deactivated_at = now() WHERE principal = $1`, svcSponsor); err != nil {
 		t.Fatal(err)
 	}
 	w := doSSO(t, e.h.srv, http.MethodPost, "/api/v1/workload-bindings", e.sec, `{"pool":"`+org.Name+`","namespace":"apps","service":"`+svcName+`"}`)
 	if w.Code != http.StatusConflict || respReason(w) != reasonServiceIdentityInactive {
-		t.Fatalf("bind with a revoked sponsor: %d %s, want 409 %s", w.Code, w.Body.String(), reasonServiceIdentityInactive)
+		t.Fatalf("bind with a deactivated sponsor: %d %s, want 409 %s", w.Code, w.Body.String(), reasonServiceIdentityInactive)
 	}
 	if left, err := e.st.ListWorkloadBindings(ctx, store.Page{}); err != nil || len(left) != 0 {
 		t.Fatalf("bindings after the refusal = %+v (%v), want none", left, err)
