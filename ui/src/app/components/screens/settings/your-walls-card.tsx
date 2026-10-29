@@ -127,6 +127,8 @@ export function YourWallsCard() {
   const [form, setForm] = React.useState<Form>(() => toForm({}));
   const [busy, setBusy] = React.useState(false);
   const [saved, setSaved] = React.useState(false);
+  // The unlisted-sites choice was filled in by picking "Only these sites", not chosen by the person.
+  const [autoFirstUse, setAutoFirstUse] = React.useState(false);
   const [refusal, setRefusal] = React.useState<{ message: string; reason: string } | null>(null);
 
   const load = React.useCallback(() => {
@@ -192,7 +194,15 @@ export function YourWallsCard() {
               aria-label={T.SITES}
               value={form.only ? "only" : "any"}
               // The unlisted sites of a list are refused unless the person chose otherwise.
-              onValueChange={(v) => edit(v === "only" ? { only: true, firstUse: form.firstUse ?? "always_deny" } : { only: false })}
+              onValueChange={(v) => {
+                if (v === "only") {
+                  setAutoFirstUse(form.firstUse === undefined || autoFirstUse);
+                  edit({ only: true, firstUse: form.firstUse ?? "always_deny" });
+                } else {
+                  setAutoFirstUse(false);
+                  edit(autoFirstUse ? { only: false, firstUse: undefined } : { only: false });
+                }
+              }}
             >
               <label className="flex items-center gap-2 text-sm">
                 <RadioGroupItem value="any" />
@@ -219,7 +229,10 @@ export function YourWallsCard() {
             <Segmented<FirstUseMode | "">
               value={form.firstUse ?? ""}
               options={UNLISTED}
-              onChange={(v) => edit({ firstUse: v || undefined })}
+              onChange={(v) => {
+                setAutoFirstUse(false);
+                edit({ firstUse: v || undefined });
+              }}
             />
           </div>
           <div className="flex flex-col gap-2">
