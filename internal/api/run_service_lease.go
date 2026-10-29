@@ -50,6 +50,31 @@ func renewalHealth(run types.AgentRun, now time.Time) types.ServiceHealthState {
 	return types.ServiceHealthUnknown
 }
 
+// projectServiceHealth is what a run's service_status says on the wire, from one place for every route
+// that serves a run (projectStatusDetailFor): a paused run's last read (reason paused), and one older than
+// serviceStatusStale (reason unreachable: the health sweep skips a run whose runner is offline, so nothing
+// rewrites it), is unknown, never the health it last had. observed_at is kept, so the reader still sees
+// when it was last checked; the stored row is not changed.
+func projectServiceHealth(runs []types.AgentRun, now time.Time) {
+	for i := range runs {
+		st := runs[i].ServiceStatus
+		if st == nil {
+			continue
+		}
+		derived := *st
+		switch {
+		case runs[i].PausedAt != nil:
+			derived.Reason = "paused"
+		case now.Sub(st.ObservedAt) > serviceStatusStale:
+			derived.Reason = "unreachable"
+		default:
+			continue
+		}
+		derived.Health = types.ServiceHealthUnknown
+		runs[i].ServiceStatus = &derived
+	}
+}
+
 // serviceRenewal is one renewal planServiceRenewal decided on.
 type serviceRenewal struct {
 	target time.Time
@@ -113,8 +138,9 @@ func serviceRenewsLater(run types.AgentRun, now time.Time) bool {
 // renewServiceLease renews run's lease when planServiceRenewal says so and returns the run as
 // the sweep goes on with it: the new end on success, the row it was given on any other outcome.
 // The bool says the run's end is renewal's to move, so the sweep sends no run.ending_soon: the run
-// was renewed this pass, or it is a service renewal will renew when its half-life opens. A unit of
-// an hour or less opens the warning window before the half-life, and every renewal would warn.
+// was renewed this pass, or it is a service renewal will renew when its half-life opens and whose
+// owner still has the authority a renewal needs (extendRefusal). A unit of an hour or less opens the
+// warning window before the half-life, and every renewal would warn.
 // The write is the PATCH route's compare-and-set, so a person's edit, a re-clamp or a lost
 // race leaves the end alone and writes no audit row, as does an owner whose authority to extend
 // is refused.
@@ -122,7 +148,9 @@ func (s *Server) renewServiceLease(ctx context.Context, leaser store.RunLeaser, 
 	// The boundary can only shrink the unit, so a run declined without it is declined with it:
 	// the boundary is read only for a run that is about to renew.
 	if _, ok := planServiceRenewal(run, 0, now); !ok {
-		return run, serviceRenewsLater(run, now)
+		// Quiet only while the renewal it waits for will be allowed: a run whose owner lost the
+		// authority to extend is warned now, not first at its half-life.
+		return run, serviceRenewsLater(run, now) && s.extendRefusal(ctx, run, false) == nil
 	}
 	boundarySec, err := s.boundaryEndCap(ctx, run)
 	if err != nil {

@@ -181,7 +181,9 @@ func (s *Server) newUISession(run types.AgentRun, ta ticketActor, app string, po
 	}
 }
 
-// startUISession sets sess's cookie, audits the authorization and sends the browser to the app.
+// startUISession sets sess's cookie, audits the authorization and sends the browser to the app. The row
+// names the sponsor entry only when sess entered as the sponsor (sess.Service): a caller of a service
+// identity's app enters as themselves, as their inbound.allow rows say.
 func (s *Server) startUISession(w http.ResponseWriter, r *http.Request, run types.AgentRun, ta ticketActor, sess uiSession, data map[string]any, landing string, redirectStatus int) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     uiCookieName,
@@ -192,8 +194,10 @@ func (s *Server) startUISession(w http.ResponseWriter, r *http.Request, run type
 		Secure:   s.cfg.OIDCSecureCookies,
 		Expires:  time.Unix(sess.Expires, 0),
 	})
-	s.auditUI(&run.ID, types.ActorHuman, ta.principal, "ui.authorize", sess.App, "success",
-		ta.withVia(withSponsorEntry(run, data)))
+	if sess.Service != "" {
+		data = withSponsorEntry(run, data)
+	}
+	s.auditUI(&run.ID, types.ActorHuman, ta.principal, "ui.authorize", sess.App, "success", ta.withVia(data))
 	http.Redirect(w, r, s.uiBasePath()+uiRelayPrefix(run.ID, sess.App)+landing, redirectStatus)
 }
 

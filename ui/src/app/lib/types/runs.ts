@@ -104,7 +104,7 @@ export interface ServiceHealth {
 /** Go: types.ServiceHealthState. */
 export type ServiceHealthState = "starting" | "healthy" | "unhealthy" | "unknown";
 
-/** Go: types.RunServiceStatus. `reason` is closed: restarting | probe_failing | supervisor_missing | unreachable. */
+/** Go: types.RunServiceStatus. `reason` is closed: restarting | probe_failing | supervisor_missing | unreachable | paused. */
 export interface RunServiceStatus {
   health: ServiceHealthState;
   reason?: string;

@@ -6,6 +6,8 @@ package api
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -307,6 +309,14 @@ func TestRunLease_EndingSoonOnlyWhenRenewalWillNotHappen(t *testing.T) {
 		{name: "healthy, inside the warning window, before the half-life", endsIn: 45 * time.Minute, mutate: healthy},
 		{name: "healthy, renewed to a full unit inside the warning window", endsIn: 20 * time.Minute, mutate: healthy, renewed: true},
 		{name: "starting, before the half-life", endsIn: 45 * time.Minute},
+		// Renewal will be refused at the half-life (TestRunLease_ARenewalNeedsTheOwnersAuthorityToExtend),
+		// so the run is warned now.
+		{name: "healthy, before the half-life, its captured unit deleted", endsIn: 45 * time.Minute, warned: true, mutate: func(f *leaseFixture) {
+			healthy(f)
+			unit := uuid.New()
+			f.st.run.UnitID = &unit
+			f.srv.cfg.Store = &ownerChainLeaseStore{leaseStore: f.st, chainErr: store.ErrNotFound}
+		}},
 		{name: "unhealthy", endsIn: 45 * time.Minute, warned: true, mutate: func(f *leaseFixture) {
 			f.st.run.ServiceStatus = &types.RunServiceStatus{Health: types.ServiceHealthUnhealthy, ObservedAt: f.now}
 		}},
@@ -332,6 +342,40 @@ func TestRunLease_EndingSoonOnlyWhenRenewalWillNotHappen(t *testing.T) {
 			}
 			if n := len(f.audit.eventsFor(f.run.ID, "run.ending_soon")); (n == 1) != tc.warned || n > 1 {
 				t.Errorf("%d run.ending_soon rows, want warned=%v", n, tc.warned)
+			}
+		})
+	}
+}
+
+// The API never serves a stale or a paused run's last read as its health: both are unknown, saying why, with
+// observed_at kept so the reader sees when it was last checked, and the stored status unchanged. A fresh
+// read is served as stored.
+func TestServiceHealthOnTheWire(t *testing.T) {
+	f := newServiceLeaseFixture(t, time.Hour)
+	paused := f.now.Add(-time.Minute)
+	for _, tc := range []struct {
+		name     string
+		observed time.Time
+		paused   *time.Time
+		health   types.ServiceHealthState
+		reason   string
+	}{
+		{name: "fresh", observed: f.now.Add(-time.Minute), health: types.ServiceHealthHealthy},
+		{name: "stale", observed: f.now.Add(-serviceStatusStale - time.Second), health: types.ServiceHealthUnknown, reason: "unreachable"},
+		{name: "paused", observed: f.now.Add(-time.Minute), paused: &paused, health: types.ServiceHealthUnknown, reason: "paused"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stored := &types.RunServiceStatus{Health: types.ServiceHealthHealthy, Restarts: 2, ObservedAt: tc.observed}
+			run := f.run
+			run.ServiceStatus, run.PausedAt = stored, tc.paused
+			runs := []types.AgentRun{run}
+			f.srv.projectStatusDetailFor(httptest.NewRequest(http.MethodGet, "/api/v1/runs/"+run.ID.String(), nil), runs)
+			got := runs[0].ServiceStatus
+			if got.Health != tc.health || got.Reason != tc.reason || !got.ObservedAt.Equal(tc.observed) || got.Restarts != 2 {
+				t.Errorf("served %+v, want health %q reason %q, observed_at and restarts as stored", *got, tc.health, tc.reason)
+			}
+			if stored.Health != types.ServiceHealthHealthy || stored.Reason != "" {
+				t.Errorf("the stored status changed to %+v", *stored)
 			}
 		})
 	}

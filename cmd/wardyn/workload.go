@@ -42,10 +42,11 @@ func workloadListCmd(client clientFn) *cobra.Command {
 		Short: "List workloads with their state",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			rows, err := client().ListWorkloads(cmd.Context(), owner, listPageOptsAt(limit, offset)...)
+			rows, truncated, err := client().ListWorkloadsPage(cmd.Context(), owner, listPageOptsAt(limit, offset)...)
 			if err != nil {
 				return err
 			}
+			warnListTruncated(cmd, truncated, "workload", len(rows), offset)
 			if asJSON {
 				if rows == nil {
 					rows = []sdk.Workload{}
@@ -198,10 +199,11 @@ func workloadBindingListCmd(client clientFn) *cobra.Command {
 		Short: "List the workload bindings",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			rows, err := client().ListWorkloadBindings(cmd.Context(), listPageOptsAt(limit, offset)...)
+			rows, truncated, err := client().ListWorkloadBindingsPage(cmd.Context(), listPageOptsAt(limit, offset)...)
 			if err != nil {
 				return err
 			}
+			warnListTruncated(cmd, truncated, "workload binding", len(rows), offset)
 			if asJSON {
 				if rows == nil {
 					rows = []sdk.WorkloadBinding{}

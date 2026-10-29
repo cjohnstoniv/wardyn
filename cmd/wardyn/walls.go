@@ -4,6 +4,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -84,10 +86,11 @@ func wallsCmd(client clientFn) *cobra.Command {
 	return cmd
 }
 
-// readWallsSpec reads the walls from file ('-' for stdin). The YAML is decoded into the typed spec, not
-// into plain data, so a host that reads as a number or a date stays the text the file wrote; a key the
-// spec does not have is refused. A file that names no limit is refused too: it would clear the walls,
-// and `walls clear` says that.
+// readWallsSpec reads the walls from file ('-' for stdin). One YAML reader (yaml.v3, whose YAML 1.2 rules
+// read on, yes, off and no as text) parses the file for both the host check and the typed decode, so a
+// host is sent as the file wrote it or refused before any request; the parsed document reaches the spec as
+// JSON, and a key the spec does not have is refused. A file that names no limit is refused too: it would
+// clear the walls, and `walls clear` says that.
 func readWallsSpec(stdin io.Reader, file string) (types.PersonalWallsSpec, error) {
 	var raw []byte
 	var err error
@@ -99,12 +102,28 @@ func readWallsSpec(stdin io.Reader, file string) (types.PersonalWallsSpec, error
 	if err != nil {
 		return types.PersonalWallsSpec{}, fmt.Errorf("read the walls file: %w", err)
 	}
-	if err := checkHostsAreText(raw); err != nil {
+	var doc yamlv3.Node
+	if err := yamlv3.Unmarshal(raw, &doc); err != nil {
+		return types.PersonalWallsSpec{}, wallsParseError(err)
+	}
+	if err := checkHostsAreText(&doc); err != nil {
 		return types.PersonalWallsSpec{}, err
 	}
+	var v any
+	if doc.Kind != 0 { // an empty file is no document: it names no limit
+		if err := doc.Decode(&v); err != nil {
+			return types.PersonalWallsSpec{}, wallsParseError(err)
+		}
+	}
+	js, err := json.Marshal(v)
+	if err != nil {
+		return types.PersonalWallsSpec{}, wallsParseError(err)
+	}
+	dec := json.NewDecoder(bytes.NewReader(js))
+	dec.DisallowUnknownFields()
 	var spec types.PersonalWallsSpec
-	if err := yaml.UnmarshalStrict(raw, &spec); err != nil {
-		return types.PersonalWallsSpec{}, fmt.Errorf("the walls file does not parse (accepts JSON or YAML): %w", err)
+	if err := dec.Decode(&spec); err != nil {
+		return types.PersonalWallsSpec{}, wallsParseError(err)
 	}
 	if spec.Empty() {
 		return types.PersonalWallsSpec{}, errors.New("the walls file names no limit: to remove your walls, run `wardyn walls clear`")
@@ -112,12 +131,16 @@ func readWallsSpec(stdin io.Reader, file string) (types.PersonalWallsSpec, error
 	return spec, nil
 }
 
+// wallsParseError is the one wording for a file the reader cannot take.
+func wallsParseError(err error) error {
+	return fmt.Errorf("the walls file does not parse (accepts JSON or YAML): %w", err)
+}
+
 // checkHostsAreText refuses a site that YAML reads as a number, a date or a boolean: decoding it into the
 // text field would write it back in another spelling (1.10 as 1.1), which is a different site.
-func checkHostsAreText(raw []byte) error {
-	var doc yamlv3.Node
-	if err := yamlv3.Unmarshal(raw, &doc); err != nil || len(doc.Content) == 0 || doc.Content[0].Kind != yamlv3.MappingNode {
-		return nil // the typed decode below says what is wrong with it
+func checkHostsAreText(doc *yamlv3.Node) error {
+	if len(doc.Content) == 0 || doc.Content[0].Kind != yamlv3.MappingNode {
+		return nil // the typed decode says what is wrong with it
 	}
 	top := doc.Content[0].Content
 	for i := 0; i+1 < len(top); i += 2 {

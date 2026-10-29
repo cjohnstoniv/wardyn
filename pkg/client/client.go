@@ -73,8 +73,9 @@
 //     ListServiceIdentitiesPage, GetServiceIdentity, UpdateServiceIdentity, RetireServiceIdentity, ListMyServiceIdentities, and the
 //     sponsor's token routes MintServiceToken (a signed-in session only), ListServiceTokens, ListServiceTokensPage, RevokeServiceToken;
 //     with MoveToken (POST /api/v1/tokens/{id}/move)
-//   - workloads (/api/v1/workloads, /api/v1/workload-bindings): ApplyWorkload, ListWorkloads, GetWorkload, DeleteWorkload, RestartWorkload,
-//     and the namespace bindings CreateWorkloadBinding (a signed-in person), ListWorkloadBindings, DeleteWorkloadBinding (security tier)
+//   - workloads (/api/v1/workloads, /api/v1/workload-bindings): ApplyWorkload, ListWorkloads, ListWorkloadsPage, GetWorkload,
+//     DeleteWorkload, RestartWorkload, and the namespace bindings CreateWorkloadBinding (a signed-in person),
+//     ListWorkloadBindings, ListWorkloadBindingsPage, DeleteWorkloadBinding (security tier)
 //   - components (/api/v1/components):   ListComponents, PutComponent, DeleteComponent (the organisation's, admin) — and, on
 //     /api/v1/me/components, the caller's own: MyComponents, SaveMyComponent, UpdateMyComponent, DeleteMyComponent
 //

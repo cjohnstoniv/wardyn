@@ -69,7 +69,8 @@ func (s ServiceHealthState) Valid() bool {
 // RunServiceStatus is the last observation of a service (AgentRun.ServiceStatus); absent until the first one.
 type RunServiceStatus struct {
 	Health ServiceHealthState `json:"health"`
-	// Reason is closed: restarting | probe_failing | supervisor_missing | unreachable.
+	// Reason is closed: restarting | probe_failing | supervisor_missing | unreachable, and on the wire paused
+	// (the API serves a paused run's health as unknown/paused, and a stale one as unknown/unreachable).
 	Reason       string    `json:"reason,omitempty"`
 	Restarts     int       `json:"restarts"`
 	LastExitCode *int      `json:"last_exit_code,omitempty"`

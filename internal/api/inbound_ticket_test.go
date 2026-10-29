@@ -4,11 +4,13 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -92,5 +94,37 @@ func TestAppTicket_EnterOpensOnlyItsApp(t *testing.T) {
 		{Name: "code", Port: uiTestPort, Inbound: true, Callers: []string{"group:ops"}}}})
 	if rec := h.enterOnRunHost("code", tok); rec.Code != http.StatusForbidden {
 		t.Errorf("a ticket whose callers entry is gone: %d %s, want 403", rec.Code, rec.Body.String())
+	}
+}
+
+// TestAppTicket_CallerEnterIsNotTheSponsors: on a service identity's run, a caller's enter row (ui.authorize)
+// carries no sponsor entry, as its inbound.allow rows do not; an enter as the sponsor still carries it.
+func TestAppTicket_CallerEnterIsNotTheSponsors(t *testing.T) {
+	h := inboundTicketHarness(t, "user:bob")
+	h.run.CreatedBy = types.ServicePrincipalPrefix + "payments"
+	h.store.putRun(h.run)
+	entries := func() []map[string]any {
+		var out []map[string]any
+		for _, ev := range h.audit.auditRows("ui.authorize", "success") {
+			var data map[string]any
+			_ = json.Unmarshal(ev.Data, &data)
+			out = append(out, data)
+		}
+		return out
+	}
+
+	if rec := h.enterOnRunHost("code", ticketOf(t, h.appTicketAs("code", "bob", nil))); rec.Code != http.StatusFound {
+		t.Fatalf("a caller's enter: %d %s, want 302", rec.Code, rec.Body.String())
+	}
+	if rows := entries(); len(rows) != 1 || rows[0]["entry"] != nil || rows[0]["service_identity"] != nil {
+		t.Fatalf("the caller's ui.authorize rows = %v, want one with no sponsor entry", rows)
+	}
+
+	ta := ticketActor{actorType: types.ActorHuman, principal: "alice", role: oidc.RoleUser}
+	sess := h.srv.newUISession(h.run, ta, "code", uiTestPort, time.Hour)
+	h.srv.startUISession(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil), h.run, ta, sess,
+		map[string]any{"app": "code"}, "/", http.StatusFound)
+	if rows := entries(); len(rows) != 2 || rows[1]["entry"] != sponsorEntry || rows[1]["service_identity"] != "payments" {
+		t.Fatalf("the sponsor's ui.authorize rows = %v, want entry %s for payments", rows, sponsorEntry)
 	}
 }

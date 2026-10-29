@@ -132,6 +132,14 @@ func TestPG_OrgRunnerNamespaceGatesPlacementAndDispatch(t *testing.T) {
 	if _, err := e.srv.createSandboxAtTarget(context.Background(), stored, runner.SandboxSpec{RunID: run.ID}); !errors.Is(err, runner.ErrExecutorUnavailable) {
 		t.Errorf("a create after the membership was removed = %v, want ErrExecutorUnavailable", err)
 	}
+
+	// Added again under a namespace the runner does not advertise: the create refuses it, never sends it.
+	if w := e.admin(http.MethodPut, orgRunnerPath(org.ID, cluster), `{"runs_namespace":"team-c"}`); w.Code != http.StatusCreated {
+		t.Fatalf("re-add = %d %s", w.Code, w.Body)
+	}
+	if _, err := e.srv.createSandboxAtTarget(context.Background(), stored, runner.SandboxSpec{RunID: run.ID}); !errors.Is(err, runner.ErrExecutorUnavailable) {
+		t.Errorf("a create in a namespace the runner does not serve = %v, want ErrExecutorUnavailable", err)
+	}
 }
 
 // The default namespace needs nothing advertised and sends none: today's behaviour.
