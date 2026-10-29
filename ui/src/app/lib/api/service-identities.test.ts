@@ -42,6 +42,12 @@ describe("serviceIdentities - request shape", () => {
     expect(sent()).toEqual({ url: "/api/v1/me/invitations/i%2F1/claim", method: "POST", body: '{"name":"ci","ttl_seconds":3600}' });
   });
 
+  it("listAll GETs /service-identities, the security tier's whole list", async () => {
+    const sent = stub(json([{ name: "billing", state: "active" }]));
+    expect(await serviceIdentities.listAll()).toHaveLength(1);
+    expect(sent()).toMatchObject({ url: "/api/v1/service-identities?limit=1000", method: "GET" });
+  });
+
   it("listMine GETs /me/service-identities", async () => {
     const sent = stub(json([{ name: "ci-nightly", state: "active" }]));
     expect(await serviceIdentities.listMine()).toHaveLength(1);

@@ -45,6 +45,7 @@ vi.mock("../../../lib/api/runner-pools", () => ({
     clearPeoplePolicy: (...a: unknown[]) => clearPeopleMock(...a),
   },
 }));
+vi.mock("./workload-bindings-tab", () => ({ WorkloadBindingsTab: () => <div data-testid="bindings-tab" /> }));
 vi.mock("./pools/pools-tab", () => ({
   PoolsTab: ({ openPoolId, onOpenRunner }: { openPoolId: string | null; onOpenRunner: (kind: string, id: string) => void }) => (
     <div data-testid="pools-tab">
@@ -732,6 +733,19 @@ describe("Admin -> Runners tabs", () => {
     expect(screen.getByTestId("page-header-description")).toHaveTextContent(RUNNERS.PAGE_LEDE);
     expect(screen.queryByRole("button", { name: "Create a registration token" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "Add this computer" })).toBeNull();
+  });
+
+  it("Workload bindings is the third tab, and the address keeps it", async () => {
+    const user = userEvent.setup();
+    renderScreen();
+    await screen.findByRole("button", { name: "laptop-7" });
+    const strip = screen.getByRole("tablist", { name: "Runners sections" });
+    expect(within(strip).getAllByRole("tab").map((t) => t.textContent)).toEqual(["Runners", "Pools", "Workload bindings"]);
+    await user.click(within(strip).getByRole("tab", { name: "Workload bindings" }));
+    expect(await screen.findByTestId("bindings-tab")).toBeInTheDocument();
+    cleanup();
+    renderScreen({ at: "/admin/runners?tab=bindings" });
+    expect(await screen.findByTestId("bindings-tab")).toBeInTheDocument();
   });
 
   // #3062: the strip is the shared underline Tabs, so the arrow keys move selection and focus.

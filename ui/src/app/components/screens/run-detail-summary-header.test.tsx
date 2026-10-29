@@ -121,6 +121,45 @@ describe("SummaryHeader — where a local run is", () => {
   });
 });
 
+describe("SummaryHeader — the workload chip (T3-b)", () => {
+  const chip = { name: "billing-api", owner: "service:billing" };
+
+  it("says Workload: <name> and links to the workload's drawer", () => {
+    renderHeader(
+      <OperatorProvider operator={false}>
+        <SummaryHeader run={runningInteractive} terminal={false} onKill={() => {}} workload={chip} />
+      </OperatorProvider>,
+    );
+    expect(screen.getByRole("link", { name: "Workload: billing-api" })).toHaveAttribute(
+      "href",
+      "/workloads?workload=billing-api&owner=service%3Abilling",
+    );
+  });
+
+  it("is absent on a run no workload owns", () => {
+    renderHeader(
+      <OperatorProvider operator={false}>
+        <SummaryHeader run={runningInteractive} terminal={false} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+    expect(screen.queryByText(/^Workload:/)).toBeNull();
+  });
+
+  it("links within the Admin view from an admin run page", () => {
+    render(
+      <MemoryRouter initialEntries={["/admin/runs/run-1"]}>
+        <OperatorProvider operator={true}>
+          <SummaryHeader run={runningInteractive} terminal={false} onKill={() => {}} workload={chip} />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole("link", { name: "Workload: billing-api" })).toHaveAttribute(
+      "href",
+      "/admin/workloads?workload=billing-api&owner=service%3Abilling",
+    );
+  });
+});
+
 // #3034: the run's lifetime is two pill menus ending the facts row, not a full-width band under the header.
 describe("SummaryHeader — the lifetime pills", () => {
   const live = { ...runningInteractive, created_by: "me", wait_budget_sec: 4 * 3600, run_limits: { user_changes_limits: true } } as AgentRun;

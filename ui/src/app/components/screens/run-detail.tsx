@@ -65,6 +65,7 @@ import { useConsoleMode } from "../wardyn/console-view";
 import { RUN_COCKPIT, RUN_OUTPUT } from "../wardyn/copy";
 import { ProfileReview } from "./profile-review";
 import { SummaryHeader } from "./run-detail-summary-header";
+import { useRunWorkload } from "./workloads/use-run-workload";
 import { viewerBlockedOnDecision } from "./run-detail/viewer-blocked";
 import { ApprovalsTab } from "./run-detail-approvals-tab";
 import { NeedsYouBanner } from "../wardyn/needs-you-banner";
@@ -108,6 +109,7 @@ function RunDetailPage({ id }: { id: string }) {
     recording, recState, setRecState, recKey, setRecKey, recordingDisabled,
     load, terminal, pending, endingEvents, held, killAgain, outcomeReady,
   } = useRunDetail(id);
+  const workload = useRunWorkload(run?.id);
 
   // "Make a policy from this run" — the honest home of "write the policy from
   // what actually happened", now that /runs/new's Record radio (which only ever
@@ -313,6 +315,7 @@ function RunDetailPage({ id }: { id: string }) {
             onClone={view === "user" ? () => void onClone() : undefined}
             onRename={view === "user" ? rename : undefined}
             onLifetimeChanged={() => load(false)}
+            workload={workload}
           />
 
           <LaunchWarningsNote />
