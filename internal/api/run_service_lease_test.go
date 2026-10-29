@@ -256,6 +256,18 @@ func TestRunLease_ARenewalNeedsTheOwnersAuthorityToExtend(t *testing.T) {
 	}
 }
 
+// The health sweep rewrites an unchanged status only every serviceStatusRefresh: a healthy service
+// observed one refresh and more ago is still renewed.
+func TestRunLease_AnUnchangedHealthyServiceIsRenewedAcrossTheRefresh(t *testing.T) {
+	f := newServiceLeaseFixture(t, 30*time.Minute)
+	f.st.run.ServiceStatus = &types.RunServiceStatus{Health: types.ServiceHealthHealthy,
+		ObservedAt: f.now.Add(-serviceStatusRefresh - 4*time.Minute)}
+	f.sweep(t)
+	if got := f.endsAt(); !got.Equal(f.now.Add(2 * time.Hour)) {
+		t.Fatalf("ends_at = %v, want a renewal", got)
+	}
+}
+
 // A runner no replica holds keeps its last status forever: renewal reads an old one as unknown.
 func TestRunLease_AServiceNotHeardFromIsNotRenewed(t *testing.T) {
 	for name, mutate := range map[string]func(f *leaseFixture){

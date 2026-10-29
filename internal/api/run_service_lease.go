@@ -25,9 +25,10 @@ import (
 // not heard from lately (renewalHealth), is not renewed and ends at its lease, with the usual run.ending_soon warnings.
 
 // serviceStatusStale is how old a service's last health observation may be before renewal reads
-// it as unknown: two of the health sweep's refresh writes missed (serviceStatusRefresh), so no
-// replica is reading the run any more (the one holding its runner is gone).
-const serviceStatusStale = 2 * serviceStatusRefresh
+// it as unknown. The health sweep rewrites an unchanged status only every serviceStatusRefresh, so
+// a live service's observed_at is up to that old; three refreshes missed means no replica is
+// reading the run any more (the one holding its runner is gone).
+const serviceStatusStale = 3 * serviceStatusRefresh
 
 // renewalHealth is a service's health as renewal reads it: the last observation while it is fresh;
 // with none yet, starting inside the supervisor's grace from the run's start (the rule
