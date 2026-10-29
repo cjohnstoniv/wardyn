@@ -229,8 +229,11 @@ export function K8sEnvironmentRows({ status }: { status: SetupStatus }) {
   // k8s-only "pullable" claim nothing actually verifies (wardynd has no
   // docker CLI / image-inspect capability on this driver either).
   const agentImage = status.checks.find((c) => c.id === "agent_image");
+  // The server's own row (setup_checks_ha.go), found by id: present only while HA and runners are both on.
+  const replicas = status.checks.find((c) => c.id === "registered_runners_ha");
   const rows: SetupCheck[] = [
     { id: "k8s_runner_fact", label: "Runner", status: "info", detail: "Kubernetes" },
+    ...(replicas ? [replicas] : []),
     k8sEgressRow(status),
     k8sClassesRow(status),
     ...(agentImage ? [agentImage] : []),

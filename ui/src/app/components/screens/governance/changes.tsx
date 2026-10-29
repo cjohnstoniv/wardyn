@@ -22,6 +22,7 @@ import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
 import { governance as api } from "../../../lib/api/governance";
+import { runnerPools } from "../../../lib/api/runner-pools";
 import { absoluteTime, getErrorMessage, relativeTime } from "../../../lib/format";
 import { CHANGES, GOVERNANCE } from "../../../lib/governance-copy";
 import type { GovernanceChange } from "../../../lib/types";
@@ -53,6 +54,36 @@ export function changeTarget(c: GovernanceChange): string {
     }
   }
   return c.target_key;
+}
+
+// The organization runner a held removal takes out of its pool. The payload never reaches the console, so it
+// is the one id the diff's runner_ids lose; null for every other change. A pool's key is its id.
+function removedOrgRunner(c: GovernanceChange): string | null {
+  if (c.target_kind !== "runner_pool_use_policy") return null;
+  const ids = (side: unknown) => ((side as { runner_ids?: unknown } | undefined)?.runner_ids ?? []) as string[];
+  const after = ids(c.diff.after);
+  return ids(c.diff.before).find((id) => !after.includes(id)) ?? null;
+}
+
+// The names the removal rows read: each such change's pool and runner. A name that cannot be read (or has
+// not arrived) shows its id, so the row is never blank.
+function useRemovalNames(changes: GovernanceChange[]): Record<string, { pool: string; runner: string }> {
+  const [names, setNames] = React.useState<Record<string, { pool: string; runner: string }>>({});
+  const asked = React.useRef(new Set<string>());
+  React.useEffect(() => {
+    for (const c of changes) {
+      const runner = removedOrgRunner(c);
+      if (!runner || asked.current.has(c.id)) continue;
+      asked.current.add(c.id);
+      Promise.all([runnerPools.get(c.target_key), runnerPools.members(c.target_key)])
+        .then(([pool, members]) => {
+          const m = members.find((x) => x.kind === "self_hosted" && x.id === runner);
+          setNames((n) => ({ ...n, [c.id]: { pool: pool.name, runner: m?.name ?? runner } }));
+        })
+        .catch(() => {});
+    }
+  }, [changes]);
+  return names;
 }
 
 // One value of a diff cell. Strings read as they are, an absent value as DIFF_UNSET, anything else as JSON.
@@ -91,6 +122,7 @@ export function ChangesTab({
 }) {
   const [open, setOpen] = React.useState<GovernanceChange | null>(null);
   const navigate = useNavigate();
+  const removalNames = useRemovalNames(changes);
   return (
     <section className="mt-4 overflow-hidden rounded-xl border border-border bg-card">
       {/* The lead describes the list, so it rides with the list; with nothing waiting the empty block
@@ -141,25 +173,33 @@ export function ChangesTab({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {changes.map((c) => (
-                <TableRow key={c.id} className="cursor-pointer" onClick={() => setOpen(c)}>
-                  <TableCell className="font-medium">
-                    <button type="button" className="text-left hover:underline" onClick={() => setOpen(c)}>
-                      {changeLabel(c)}
-                    </button>
-                  </TableCell>
-                  <TableCell>
-                    <Mono className="text-foreground">{changeTarget(c)}</Mono>
-                  </TableCell>
-                  <TableCell>{c.proposed_by}</TableCell>
-                  <TableCell className="whitespace-nowrap text-muted-foreground" title={absoluteTime(c.proposed_at)}>
-                    {relativeTime(c.proposed_at)}
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap text-muted-foreground" title={absoluteTime(c.expires_at)}>
-                    {relativeTime(c.expires_at)}
-                  </TableCell>
-                </TableRow>
-              ))}
+              {changes.map((c) => {
+                const gone = removedOrgRunner(c);
+                return (
+                  <TableRow key={c.id} className="cursor-pointer" onClick={() => setOpen(c)}>
+                    <TableCell className="font-medium">
+                      <button type="button" className="text-left hover:underline" onClick={() => setOpen(c)}>
+                        {gone
+                          ? CHANGES.ORG_RUNNER_REMOVE(removalNames[c.id]?.runner ?? gone, removalNames[c.id]?.pool ?? c.target_key)
+                          : changeLabel(c)}
+                      </button>
+                      {gone && (
+                        <p className="text-xs font-normal text-muted-foreground">{CHANGES.SUPER_ADMIN_DECIDES}</p>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <Mono className="text-foreground">{changeTarget(c)}</Mono>
+                    </TableCell>
+                    <TableCell>{c.proposed_by}</TableCell>
+                    <TableCell className="whitespace-nowrap text-muted-foreground" title={absoluteTime(c.proposed_at)}>
+                      {relativeTime(c.proposed_at)}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap text-muted-foreground" title={absoluteTime(c.expires_at)}>
+                      {relativeTime(c.expires_at)}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         )}

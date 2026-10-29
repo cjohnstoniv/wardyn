@@ -74,6 +74,17 @@ describe("organization pool members", () => {
   });
 });
 
+describe("organization pool member namespace line", () => {
+  const cluster = (id: string) => selfRunner({ id, name: id, owner: "", owner_kind: "org", trust_class: "org_cluster", machine_name: "node-1.corp.example.com" });
+  it("names the namespace an organization runner serves, or its default, and none on a remote-hosted member", () => {
+    renderDrawer(pool(), { members: [{ ...member(cluster("k8s-east")), runs_namespace: "team-payments" }, member(cluster("k8s-west")), member(EU)] });
+    const cards = document.querySelectorAll("[data-member]");
+    expect((cards[0] as HTMLElement).querySelector("[data-member-namespace]")?.textContent).toBe("Runs in namespace team-payments");
+    expect((cards[1] as HTMLElement).querySelector("[data-member-namespace]")?.textContent).toBe("Runs in the runner's default namespace");
+    expect((cards[2] as HTMLElement).querySelector("[data-member-namespace]")).toBeNull();
+  });
+});
+
 describe("organization pool members read by a pool member", () => {
   it("shows an organization runner the server sent without the people behind it, and prints no undefined", () => {
     const sent = selfRunner({ id: "r-cluster", name: "cluster-a", owner_kind: "org", trust_class: "org_cluster", machine_name: "node-1.corp.example.com" });

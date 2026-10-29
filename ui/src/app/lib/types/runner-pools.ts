@@ -460,6 +460,8 @@ export interface RunnerPoolMemberView {
   configured?: boolean;
   /** A self-hosted member's runner view; its owner is named on an operator's read. */
   runner?: RunnerView;
+  /** An organization runner's namespace in this pool; absent means the runner's default. */
+  runs_namespace?: string;
   limits: RunnerLimits | null;
   usage: RunnerUsage;
 }
