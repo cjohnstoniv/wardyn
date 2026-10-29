@@ -5,8 +5,8 @@
 
 // T4-c (board R16): a request whose host the run owner's own walls deny has Approve off, Deny on, a sentence
 // naming whose walls they are, and the Why card under it.
-import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { beforeEach, describe, it, expect, vi } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { makeApproval } from "../../../test/factories";
 import { SCENARIO_HARNESSES } from "../../lib/new-run-fixtures/scenarios/harnesses";
@@ -15,9 +15,10 @@ import { ModelAccessProvider } from "../wardyn/model-access-context";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { ApprovalCard } from "./approvals-cards";
 
-vi.mock("../../lib/api/runs", () => ({
-  runs: { getRun: async () => ({ id: "r1", created_by: "ana@example.com", agent: "claude-code", repo: "acme/web-app", title: "Fix the flaky cart test", state: "RUNNING", confinement_class: "CC1" }) satisfies Partial<RunDetail> },
-}));
+const getRun = vi.hoisted(() => vi.fn());
+vi.mock("../../lib/api/runs", () => ({ runs: { getRun } }));
+const RUN = { id: "r1", created_by: "ana@example.com", agent: "claude-code", repo: "acme/web-app", title: "Fix the flaky cart test", state: "RUNNING", confinement_class: "CC1" } satisfies Partial<RunDetail>;
+beforeEach(() => { getRun.mockResolvedValue(RUN); });
 
 const row = (walls_block?: boolean) =>
   makeApproval({
@@ -60,5 +61,14 @@ describe("ApprovalCard: a host the requester's walls deny", () => {
     await screen.findByText("Fix the flaky cart test");
     expect(screen.queryByTestId("approval-walls-block")).toBeNull();
     expect(screen.getByRole("button", { name: /approve/i })).toBeEnabled();
+  });
+
+  it("draws no sentence when the run read fails, since whose walls they are is unknown", async () => {
+    getRun.mockRejectedValue(new Error("forbidden"));
+    show(row(true), "lena@example.com");
+    await screen.findByRole("button", { name: /deny/i });
+    await waitFor(() => expect(getRun).toHaveBeenCalled());
+    expect(screen.queryByTestId("approval-walls-block")).toBeNull();
+    expect(screen.getByRole("button", { name: /approve/i })).toBeDisabled();
   });
 });

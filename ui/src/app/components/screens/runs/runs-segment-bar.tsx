@@ -40,11 +40,11 @@ export function RunsSegmentBar({
           onClick={() => onChange(o.value)}
           className={cn(
             "flex items-center gap-1.5 whitespace-nowrap border-l border-border px-3 py-1.5 text-sm transition-colors first:border-l-0",
-            value === o.value ? "bg-primary font-medium text-primary-foreground" : "text-muted-foreground hover:text-foreground",
+            value === o.value ? "bg-primary/10 font-medium text-primary" : "text-muted-foreground hover:text-foreground",
           )}
         >
           {o.label}{" "}
-          <span className="text-meta tabular-nums">{counts[o.value]}</span>
+          <span className={cn("rounded-full px-2 text-meta tabular-nums", value === o.value ? "bg-primary/15" : "bg-muted")}>{counts[o.value]}</span>
         </button>
       ))}
     </div>

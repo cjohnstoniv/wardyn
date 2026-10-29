@@ -69,3 +69,10 @@ describe("Your walls copy", () => {
     expect(actual).toBe(canon);
   });
 });
+
+describe("the owner's approval refusal", () => {
+  // internal/api/personal_walls.go words the same refusal for the owner; the two must read alike.
+  it("reads as the sentence the server sends for a denied host", () => {
+    expect(APPROVAL_WALLS.OWN_BEFORE + "a.evil.example" + APPROVAL_WALLS.OWN_AFTER).toBe("Your walls block a.evil.example. Change them in Settings.");
+  });
+});

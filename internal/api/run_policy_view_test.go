@@ -876,8 +876,24 @@ func TestExplainRunPolicy_Walls(t *testing.T) {
 		if c := pvChange(got, causeWalls, fieldDesktop); c == nil || !slices.Equal(c.Added, []string{"Block copy out"}) || len(c.Removed) != 0 || len(got) != 1 {
 			t.Errorf("changes = %+v, want walls adding only Block copy out", got)
 		}
-		if same := explainRunPolicy(ptr(pvSpec(nil, nil)), pvSpec(nil, nil), evidenceOf(nil), types.SiteConfig{}, types.AgentRun{}); len(same) != 0 {
-			t.Errorf("an unset desktop against itself = %+v, want no changes", same)
+		defaults := types.DesktopControls{CopyOut: types.TransferBlocked, Download: types.TransferBlocked}
+		if same := explainRunPolicy(ptr(pvSpec(nil, nil)), pvSpec(nil, func(s *types.RunPolicySpec) { s.Desktop = &defaults }), evidenceOf(nil), types.SiteConfig{}, types.AgentRun{}); len(same) != 0 {
+			t.Errorf("an unset desktop against the default desktop = %+v, want no changes", same)
+		}
+	})
+	t.Run("a desktop direction narrowed by anything but the walls is not shown", func(t *testing.T) {
+		open := types.DesktopControls{CopyOut: types.TransferAllowed}
+		blocked := types.DesktopControls{CopyOut: types.TransferBlocked}
+		base := pvSpec(nil, func(s *types.RunPolicySpec) { s.Desktop = &open })
+		resolved := pvSpec(nil, func(s *types.RunPolicySpec) { s.Desktop = &blocked })
+		for name, ev := range map[string]auditEvidence{
+			"no walls record":        evidenceOf(nil),
+			"walls narrowed else":    evidenceOf(func(e *auditEvidence) { e.walls = &wallsSourceRecord{Narrowed: []string{"allowed_domains"}} }),
+			"member bound, no walls": evidenceOf(func(e *auditEvidence) { e.bounded = true }),
+		} {
+			if got := explainRunPolicy(ptr(base), resolved, ev, types.SiteConfig{}, types.AgentRun{}); len(got) != 0 {
+				t.Errorf("%s: changes = %+v, want no desktop entry", name, got)
+			}
 		}
 	})
 	t.Run("walls and the member bound on one knob", func(t *testing.T) {

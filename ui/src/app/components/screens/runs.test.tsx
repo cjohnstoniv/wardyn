@@ -322,6 +322,19 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
       expect(screen.queryByText("Svc one")).toBeNull();
     });
 
+    it("marks the picked segment with a tint and teal text, not a solid fill", async () => {
+      board();
+      renderScreen();
+      await screen.findByText("Agent one");
+      const group = screen.getByRole("group", { name: "Run shape" });
+      fireEvent.click(within(group).getByRole("button", { name: "Environments 1" }));
+      const picked = within(group).getByRole("button", { name: "Environments 1" });
+      expect(picked).toHaveAttribute("aria-pressed", "true");
+      expect(picked).toHaveClass("bg-primary/10", "text-primary");
+      expect(picked).not.toHaveClass("bg-primary");
+      expect(within(group).getByRole("button", { name: "All 4" })).not.toHaveClass("bg-primary/10");
+    });
+
     it("Services with no service reads the approved sentence", async () => {
       listRunsFilteredMock.mockResolvedValue({ runs: [run({ shape: "agent_task" })], truncated: false, hiddenOlder: 0, hiddenKilled: 0 });
       renderScreen();

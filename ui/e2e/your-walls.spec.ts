@@ -9,7 +9,7 @@
 // walls take out is the server's own answer. The preflight is stubbed, as the other New Run specs stub it
 // (the seeded backend runs no barrier runtime); it carries the walls step's own warning sentence.
 import type { Page } from "@playwright/test";
-import { test, expect, asRealMember, gotoConsole, navToRoute } from "./fixtures";
+import { test, expect, asRealMember, gotoConsole, navToRoute, MEMBER_TOKEN } from "./fixtures";
 import { NR_DOCUMENT } from "../src/app/components/wardyn/copy/new-run/document";
 import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
 import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
@@ -39,7 +39,17 @@ async function stub(page: Page) {
   });
 }
 
+// The member's walls live on the shared backend, and the policy preview applies them: walls left behind by
+// one test (a failed one never reaches its own clean-up) would otherwise narrow the next test's preview.
+async function clearWalls(page: Page) {
+  const res = await page.request.delete("/api/v1/me/walls", { headers: { Authorization: `Bearer ${MEMBER_TOKEN}` } });
+  expect(res.status(), await res.text()).toBeLessThan(300);
+}
+
 test.describe("Your walls", () => {
+  test.beforeEach(({ page }) => clearWalls(page));
+  test.afterEach(({ page }) => clearWalls(page));
+
   test("save walls on Your account, and New Run says which host they leave out", async ({ page }) => {
     await stub(page);
     await asRealMember(page);
@@ -78,9 +88,9 @@ test.describe("Your walls", () => {
     await expect(row.getByText(NR_TOOLS.NET_NOT_ALLOWED)).toBeVisible();
     await expect(page.getByTestId("walls-leave-out")).toHaveText(NR_WALLS.LEAVE_OUT(LEFT_OUT));
 
-    // Review carries the walls step's own warning, in the console's words.
+    // Review names the left-out host in its Access group, in the console's words.
     await press(page, NR_TOOLS.REVIEW_RUN);
-    await expect(page.getByText("Your walls narrowed allowed hosts.")).toBeVisible();
+    await expect(page.getByTestId("walls-leave-out")).toHaveText(NR_WALLS.LEAVE_OUT(LEFT_OUT));
 
     // Take the walls away again so a later spec in this worker starts clean.
     await navToRoute(page, "/account");

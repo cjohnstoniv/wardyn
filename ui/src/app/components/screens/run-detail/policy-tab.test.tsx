@@ -381,6 +381,20 @@ describe("PolicyTab — changes grouped by cause", () => {
       expect(screen.getByText("Block copy out").closest("li")).toHaveTextContent("Block copy outClipboard and filesAdded at start");
       expect(screen.getByText("3").closest("li")).not.toHaveTextContent("max_holds");
     });
+
+    it("draws a desktop direction in plain text and names a GitHub capability change", async () => {
+      show(
+        view({
+          changes: [
+            change({ cause: "walls", field: "desktop", added: ["Block copy out"] }),
+            change({ cause: "launch", field: "github_capabilities", added: ["code_read"] }),
+          ],
+        }),
+      );
+      await ready();
+      expect(screen.getByText("Block copy out")).not.toHaveClass("font-mono");
+      expect(screen.getByText("code_read").closest("li")).toHaveTextContent("code_readGitHub accessAdded at start");
+    });
   });
 
   // The server keys a repo with a ref as `repo@ref`.

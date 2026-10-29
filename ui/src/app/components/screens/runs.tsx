@@ -13,7 +13,7 @@
 // file, board-groups.ts and App.tsx's badge.
 import * as React from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
-import { FilterX, Hexagon } from "lucide-react";
+import { FilterX, HeartPulse, Hexagon } from "lucide-react";
 import { toast } from "sonner";
 import type { AgentRun, SetupStatus } from "../../lib/types";
 import { runs as api } from "../../lib/api/runs";
@@ -303,7 +303,7 @@ export function RunsScreen() {
             <RunsLoadingSkeleton />
           ) : noServices ? (
             <div className="mt-4 overflow-hidden rounded-xl border border-border bg-card">
-              <EmptyState icon={Hexagon} title={RUNS_SEGMENTS.SERVICES_EMPTY} />
+              <EmptyState icon={HeartPulse} title={RUNS_SEGMENTS.SERVICES_EMPTY} />
             </div>
           ) : noMatch ? (
             <div className="mt-4 overflow-hidden rounded-xl border border-border bg-card">

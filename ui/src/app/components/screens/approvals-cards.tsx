@@ -385,7 +385,7 @@ export function ApprovalCard({
         </span>
       </div>
 
-      {wallsBlocked && host && run !== undefined && (
+      {wallsBlocked && host && run && (
         <div className="mt-2.5 space-y-2" data-testid="approval-walls-block">
           <p className="text-sm text-foreground">
             {personalOwn(wallsPolicy, principal) ? APPROVAL_WALLS.OWN_BEFORE : APPROVAL_WALLS.OTHER_BEFORE(wallsPolicy.owner ?? "")}

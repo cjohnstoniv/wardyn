@@ -18,6 +18,7 @@ import type { HarnessSetFact } from "../../../../../lib/types/new-run-contract";
 import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
+import { NR_WALLS } from "../../../../wardyn/copy/personal-walls";
 import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../../new-run-route";
 import type { RunIntent } from "../../draft/run-intent";
 import { checkFailureText } from "../../draft/use-intent-checks";
@@ -107,6 +108,27 @@ describe("Tools and access step", () => {
     show();
     const card = (await screen.findByRole("heading", { name: ORG_GITHUB.name })).closest("li") as HTMLElement;
     expect(within(card).getByText(NR_TOOLS.GITHUB_REPOS("acme/web-app"))).toBeTruthy();
+  });
+
+  // The e2e spec "Only the sites listed" gets this from the server's preview of a member with no walls saved.
+  it("offers Only the sites listed while the preview says the run allows all egress, and sends allow_all_egress false", async () => {
+    answer({ ...SCENARIO_ACCESS.member, unlisted: { mode: "always_deny", allow_all: true, decider: "you" } }, true);
+    const Egress = () => <p data-testid="egress">{JSON.stringify(useNewRunDraft().intent.overrides?.egress ?? null)}</p>;
+    render(
+      <NewRunDraftProvider owner="alice">
+        <Seed intent={READY}><ToolsStep {...props} /><Egress /></Seed>
+      </NewRunDraftProvider>,
+    );
+    const only = await screen.findByRole("switch", { name: NR_WALLS.ONLY_LISTED });
+    await userEvent.click(only);
+    expect(JSON.parse(screen.getByTestId("egress").textContent!)).toEqual({ allow_all_egress: false });
+    expect(screen.getByRole("switch", { name: NR_WALLS.ONLY_LISTED })).toBeChecked();
+  });
+  it("offers no such switch when the preview already narrows the run, as it does for a person whose walls name only some sites", async () => {
+    answer({ ...SCENARIO_ACCESS.member, unlisted: { mode: "always_deny", allow_all: false, decider: "you" } }, true);
+    show();
+    await screen.findByRole("heading", { name: NR_TOOLS.NETWORK_TITLE });
+    expect(screen.queryByRole("switch", { name: NR_WALLS.ONLY_LISTED })).toBeNull();
   });
 
   const SENTENCE = "This tool cannot be added to this run.";

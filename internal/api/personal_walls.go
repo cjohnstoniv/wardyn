@@ -429,7 +429,7 @@ func (s *Server) wallsAdmitApproval(w http.ResponseWriter, r *http.Request, ap t
 // deny, the verdict wallsAdmitApproval gives on an approve. The run and the walls are read once each per run;
 // a run or walls that cannot be read leave the row unmarked, and the approve still refuses on its own.
 func (s *Server) projectWallsBlock(ctx context.Context, rows []types.ApprovalRequest) {
-	if s.cfg.Store == nil {
+	if _, ok := s.cfg.Store.(store.PrincipalPrefStore); !ok {
 		return
 	}
 	blocks := map[uuid.UUID]*types.PersonalWallsSpec{}
