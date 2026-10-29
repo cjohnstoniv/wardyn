@@ -34,7 +34,8 @@ var serviceHealthPathRE = regexp.MustCompile(`^/[A-Za-z0-9._~!$&'()*+,;=:@%/-]{0
 // (AgentRun.Service), defaults filled. Its presence is what makes a run a service.
 type RunService struct {
 	Restart ServiceRestart `json:"restart"`
-	// Port is the port the service listens on, 127.0.0.1 inside the sandbox; 0 = none declared.
+	// Port is the port the service listens on, 127.0.0.1 inside the sandbox; 0 = none declared. A port
+	// alone is not checked: the supervisor checks the service only when Health is set too.
 	Port   int            `json:"port,omitempty"`
 	Health *ServiceHealth `json:"health,omitempty"` // needs Port
 }
