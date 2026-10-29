@@ -4,6 +4,10 @@
 package runnerwire
 
 import (
+	"encoding/json"
+	"fmt"
+	"regexp"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -69,6 +73,9 @@ const (
 	MethodLocalAttach       = "local_attach"
 	MethodLocalAttachMode   = "local_attach_mode"
 	MethodLocalAttachTeeAck = "local_attach_tee_ack"
+	// MethodWorkloadStatus patches the status of one WardynWorkload custom resource from the org's
+	// answer (WorkloadStatusArgs). It is sent only to a runner that reported a workload.
+	MethodWorkloadStatus = "workload_status"
 )
 
 // The tee window of a local attach session whose Tee is true. The runner shows at most
@@ -382,4 +389,117 @@ type LocalAttachModeArgs struct {
 type LocalAttachTeeAckArgs struct {
 	Stream uint32 `json:"stream"`
 	Offset int64  `json:"offset"`
+}
+
+// The WorkloadReport ops.
+const (
+	WorkloadOpApply  = "apply"
+	WorkloadOpDelete = "delete"
+	WorkloadOpSync   = "sync"
+)
+
+// Workload report bounds. MaxWorkloadSpecBytes is the most a custom resource's spec may take; the
+// org refuses a larger one. MaxWorkloadSyncNames bounds a sync's name list.
+const (
+	MaxWorkloadSpecBytes = 256 << 10
+	MaxWorkloadSyncNames = 1000
+	MaxWorkloadMessage   = 512
+)
+
+// WorkloadReport is the `workload` event's data. Namespace is where the custom resource lives; the
+// org reads it only as the key of a binding, never as the namespace a run is placed in.
+//
+//   - apply: Name, UID, Generation (metadata.generation) and Spec (the resource's spec, as written).
+//   - delete: Name and UID.
+//   - sync: Names, every workload the runner saw in Namespace after its informer synced; the org
+//     deletes the workloads it holds for the namespace that the list omits.
+type WorkloadReport struct {
+	Op         string          `json:"op"`
+	Namespace  string          `json:"namespace"`
+	Name       string          `json:"name,omitempty"`
+	UID        string          `json:"uid,omitempty"`
+	Generation int64           `json:"generation,omitempty"`
+	Spec       json.RawMessage `json:"spec,omitempty"`
+	Names      []string        `json:"names,omitempty"`
+}
+
+var workloadLabel = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
+
+// Validate refuses a report outside the shape of its op.
+func (r WorkloadReport) Validate() error {
+	if !workloadLabel.MatchString(r.Namespace) {
+		return fmt.Errorf("%w: workload namespace %q", ErrBadFrame, r.Namespace)
+	}
+	switch r.Op {
+	case WorkloadOpApply, WorkloadOpDelete:
+		if !workloadLabel.MatchString(r.Name) || r.UID == "" || len(r.Names) > 0 {
+			return fmt.Errorf("%w: workload %s needs a name and uid, and no names", ErrBadFrame, r.Op)
+		}
+		if r.Op == WorkloadOpDelete {
+			if r.Generation != 0 || len(r.Spec) > 0 {
+				return fmt.Errorf("%w: workload delete carries no generation or spec", ErrBadFrame)
+			}
+			return nil
+		}
+		if r.Generation < 1 || len(r.Spec) == 0 || len(r.Spec) > MaxWorkloadSpecBytes {
+			return fmt.Errorf("%w: workload apply needs a generation and a spec of at most %d bytes", ErrBadFrame, MaxWorkloadSpecBytes)
+		}
+	case WorkloadOpSync:
+		if r.Name != "" || r.UID != "" || r.Generation != 0 || len(r.Spec) > 0 || len(r.Names) > MaxWorkloadSyncNames {
+			return fmt.Errorf("%w: workload sync carries only a namespace and at most %d names", ErrBadFrame, MaxWorkloadSyncNames)
+		}
+		for _, n := range r.Names {
+			if !workloadLabel.MatchString(n) {
+				return fmt.Errorf("%w: workload name %q", ErrBadFrame, n)
+			}
+		}
+	default:
+		return fmt.Errorf("%w: unknown workload op %q", ErrBadFrame, r.Op)
+	}
+	return nil
+}
+
+// The phases of WorkloadStatusArgs, as a WardynWorkload's status.phase shows them.
+const (
+	WorkloadPhasePending         = "Pending"
+	WorkloadPhaseQueued          = "Queued"
+	WorkloadPhaseRunning         = "Running"
+	WorkloadPhaseUnhealthy       = "Unhealthy"
+	WorkloadPhaseCompleted       = "Completed"
+	WorkloadPhaseEnded           = "Ended"
+	WorkloadPhaseRefused         = "Refused"
+	WorkloadPhaseInvalid         = "Invalid"
+	WorkloadPhaseNotBound        = "NotBound"
+	WorkloadPhaseBindingInactive = "BindingInactive"
+)
+
+// WorkloadPhases is the closed list.
+var WorkloadPhases = []string{WorkloadPhasePending, WorkloadPhaseQueued, WorkloadPhaseRunning, WorkloadPhaseUnhealthy, WorkloadPhaseCompleted,
+	WorkloadPhaseEnded, WorkloadPhaseRefused, WorkloadPhaseInvalid, WorkloadPhaseNotBound, WorkloadPhaseBindingInactive}
+
+// WorkloadStatusArgs is workload_status's. The runner writes it to the resource's status
+// subresource and nowhere else; the org ignores the status of every resource it reads.
+type WorkloadStatusArgs struct {
+	Namespace          string `json:"namespace"`
+	Name               string `json:"name"`
+	ObservedGeneration int64  `json:"observed_generation"`
+	Phase              string `json:"phase"`
+	RunID              string `json:"run_id,omitempty"`
+	// Reason is a Wardyn reason token on Refused, Invalid and the like.
+	Reason  string `json:"reason,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+// Validate refuses a status outside the closed phase list or past its bounds.
+func (a WorkloadStatusArgs) Validate() error {
+	if !workloadLabel.MatchString(a.Namespace) || !workloadLabel.MatchString(a.Name) {
+		return fmt.Errorf("%w: workload status for %q/%q", ErrBadFrame, a.Namespace, a.Name)
+	}
+	if !slices.Contains(WorkloadPhases, a.Phase) {
+		return fmt.Errorf("%w: unknown workload phase %q", ErrBadFrame, a.Phase)
+	}
+	if a.ObservedGeneration < 0 || len(a.Reason) > MaxRefusalReason || len(a.Message) > MaxWorkloadMessage {
+		return fmt.Errorf("%w: workload status out of bounds", ErrBadFrame)
+	}
+	return nil
 }
