@@ -506,9 +506,13 @@ func lineDiff(a, b []string) []diffLine {
 	}
 	am, bm := a[head:len(a)-tail], b[head:len(b)-tail]
 	n, m := len(am), len(bm)
-	if n <= diffSideLimit && m <= diffSideLimit && n*m <= diffCellLimit {
+	// Each side is bounded before the product, so it cannot overflow; the product is checked on its own.
+	size := 0
+	if n <= diffSideLimit && m <= diffSideLimit {
+		size = (n + 1) * (m + 1)
+	}
+	if size > 0 && size <= diffCellLimit {
 		// lcs[i*(m+1)+j] is the longest common subsequence of am[i:] and bm[j:].
-		size := (n + 1) * (m + 1)
 		lcs := make([]int32, size)
 		for i := n - 1; i >= 0; i-- {
 			for j := m - 1; j >= 0; j-- {

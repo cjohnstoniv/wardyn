@@ -628,6 +628,26 @@ func TestEraseResidentForgetsTheDigests(t *testing.T) {
 	}
 }
 
+// WorkloadStatus reaches the runner as sent; a status outside the wire's bounds is refused before any call.
+func TestWorkloadStatusReachesTheRunner(t *testing.T) {
+	rig := runnertest.NewRig(t, rid)
+	a := runnerwire.WorkloadStatusArgs{Namespace: "team-a", Name: "web", UID: "uid-web", ObservedGeneration: 3, Phase: runnerwire.WorkloadPhaseRunning, RunID: uuid.NewString()}
+	if err := rig.Sub.WorkloadStatus(ctxT(t), a); err != nil {
+		t.Fatal(err)
+	}
+	if got := rig.Fake.WorkloadStatuses(); len(got) != 1 || got[0] != a {
+		t.Fatalf("runner saw %+v, want [%+v]", got, a)
+	}
+	bad := a
+	bad.Phase = "Sleeping"
+	if err := rig.Sub.WorkloadStatus(ctxT(t), bad); !errors.Is(err, runnerwire.ErrBadFrame) {
+		t.Fatalf("unknown phase = %v, want ErrBadFrame", err)
+	}
+	if got := rig.Fake.WorkloadStatuses(); len(got) != 1 {
+		t.Fatalf("a refused status reached the runner: %+v", got)
+	}
+}
+
 func waitStreams(t *testing.T, rig *runnertest.Rig, want int) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)

@@ -119,6 +119,7 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 	// whole lifetime, which is exactly what returning early ahead of this line
 	// did. Both boot passes then run regardless of the other's error.
 	s.goBackground(func() { s.runWatcherSweeper(s.watcherBaseCtx(), watcherSweepInterval) })
+	s.startWorkloadStatusSweeper() // custom-resource workloads' statuses, on their own faster cadence
 	// sweepOrphanedSandboxes runs LAST: finalizeUndispatchedRuns above has by now
 	// flipped every ref-empty abandoned run terminal, so those runs' leaked
 	// containers are visible to the label sweep as "row terminal, containers still

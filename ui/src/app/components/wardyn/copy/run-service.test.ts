@@ -3,8 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { agoText, serviceBadge, serviceReviewLine, SERVICE_FORM, SERVICE_PANEL } from "./run-service";
+import { agoText, serviceBadge, serviceReviewLine, SERVICE_FORM, SERVICE_PANEL, SERVICE_PAUSE_WARNING } from "./run-service";
 
 // The approved mocks (r15 T1-a, T1-b, T1-c): the strings here are the canon, spelled out so a reword fails.
 describe("service canon strings", () => {
@@ -24,6 +26,11 @@ describe("service canon strings", () => {
       FAILURES_LABEL: "Unhealthy after",
       FAILED_CHECKS: "failed checks in a row",
     });
+  });
+
+  it("the pause sentence is byte-equal to the server's", () => {
+    const go = readFileSync(resolve(process.cwd(), "../internal/api/run_service.go"), "utf8");
+    expect(/const servicePauseWarning = "([^"]*)"/.exec(go)?.[1]).toBe(SERVICE_PAUSE_WARNING);
   });
 
   it("the Service panel, values in sentence case", () => {
@@ -49,6 +56,7 @@ describe("service canon strings", () => {
     expect(serviceReviewLine({ restart: "on_failure", port: 8080, health })).toBe("Service · restarts when it fails · checks port 8080 /healthz every 15 s");
     expect(serviceReviewLine({ restart: "never", port: 8080, health })).toBe("Service · doesn't restart · checks port 8080 /healthz every 15 s");
     expect(serviceReviewLine({ restart: "on_failure", port: 8080, health: { interval_sec: 15, failure_threshold: 3 } })).toBe("Service · restarts when it fails · checks port 8080 every 15 s");
+    expect(serviceReviewLine({ restart: "on_failure", port: 8080 })).toBe("Service · restarts when it fails");
     expect(serviceReviewLine({ restart: "on_failure" })).toBe("Service · restarts when it fails");
   });
 });

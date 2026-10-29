@@ -13,6 +13,7 @@ import type { RunIntent } from "../draft/run-intent";
 import { appIssues, commandOf } from "./apps-lens";
 import { withKeys } from "./lens-keys";
 import { shapeCarriers, type RunMode } from "./shape-lens";
+import { serviceIssues } from "./service-lens";
 import { issue, type StepIssue, type StepValidator } from "./step-issues";
 
 export function chooseMode(intent: RunIntent, mode: RunMode): RunIntent {
@@ -41,5 +42,5 @@ export const runIssues: StepValidator = (intent, ctx) => {
   const command = intent.shape === "application" || intent.workload?.kind === "command";
   if (command && !commandOf(intent)?.trim()) out.push(issue("run", "command_required"));
   if (!intent.runner_pool_id && ctx.poolDefault === false) out.push(issue("run", "pool_required"));
-  return [...out, ...appIssues(intent)];
+  return [...out, ...appIssues(intent), ...serviceIssues(intent)];
 };

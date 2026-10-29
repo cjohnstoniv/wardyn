@@ -6,8 +6,10 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/uuid"
@@ -258,6 +260,443 @@ func TestPG_Workload_BindingLaunchMatchesTokenLaunch(t *testing.T) {
 	}
 	if _, ok := db["via"]; ok {
 		t.Errorf("bound launch run.create carries via: %s", b.Data)
+	}
+}
+
+// cutShort is the store with the request cut short where a workload lets its run go: once the delete has
+// committed, or once the launch's record is lost (lose: SetWorkloadRun answers that another launch was
+// recorded first, recording nothing), cancel is called before the run is read. With failReads set, every
+// run read fails from then on.
+type cutShort struct {
+	store.PG
+	cancel    context.CancelFunc
+	lose      bool
+	failReads *atomic.Bool
+}
+
+func (s cutShort) cut() {
+	s.cancel()
+	if s.failReads != nil {
+		s.failReads.Store(true)
+	}
+}
+
+func (s cutShort) DeleteWorkload(ctx context.Context, owner, name string) (store.Workload, error) {
+	w, err := s.PG.DeleteWorkload(ctx, owner, name)
+	s.cut()
+	return w, err
+}
+
+func (s cutShort) SetWorkloadRun(ctx context.Context, id, claim uuid.UUID, generation int64, runID uuid.UUID) (*uuid.UUID, error) {
+	if !s.lose {
+		return s.PG.SetWorkloadRun(ctx, id, claim, generation, runID)
+	}
+	s.cut()
+	return nil, store.ErrWorkloadSuperseded
+}
+
+func (s cutShort) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
+	if s.failReads != nil && s.failReads.Load() {
+		return types.AgentRun{}, errors.New("run unreadable")
+	}
+	return s.PG.GetRun(ctx, id)
+}
+
+// owedEnds counts runID's rows in workload_run_ends.
+func owedEnds(t *testing.T, e svcEnv, runID uuid.UUID) int {
+	t.Helper()
+	var n int
+	if err := e.pool.QueryRow(context.Background(), `SELECT count(*) FROM workload_run_ends WHERE run_id = $1`, runID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// wantKilledFor waits for runID's run.kill row and checks the run is KILLED for why and owes nothing.
+func wantKilledFor(t *testing.T, e svcEnv, runID uuid.UUID, why string) {
+	t.Helper()
+	if got := killReason(t, e, runID); got != why {
+		t.Fatalf("run.kill reason = %q, want %q", got, why)
+	}
+	if run, err := e.st.GetRun(context.Background(), runID); err != nil || run.State != types.RunKilled {
+		t.Fatalf("run state = %q (%v), want KILLED", run.State, err)
+	}
+	if n := owedEnds(t, e, runID); n != 0 {
+		t.Fatalf("workload_run_ends rows for the killed run = %d, want 0", n)
+	}
+}
+
+// TestPG_Workload_DeleteEndsTheRunWhenTheCallerGoesAway: a caller who goes away once the delete has
+// committed, before the run is read, does not leave the run running.
+func TestPG_Workload_DeleteEndsTheRunWhenTheCallerGoesAway(t *testing.T) {
+	e := newSvcEnv(t)
+	pol := e.plainPolicy(t, "wl-pol")
+	runID := launchedRun(t, decodeApply(t, doSSO(t, e.h.srv, http.MethodPut, "/api/v1/workloads/web", e.mem, workloadBody(pol, "t", "")), http.StatusCreated))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	e.h.srv.cfg.Store = cutShort{PG: e.st, cancel: cancel}
+	if w := doSSOCtx(t, e.h.srv, ctx, http.MethodDelete, "/api/v1/workloads/web", e.mem, ""); w.Code != http.StatusNoContent {
+		t.Fatalf("delete: %d %s, want 204", w.Code, w.Body.String())
+	}
+	wantKilledFor(t, e, runID, workloadKillDeleted)
+}
+
+// TestPG_Workload_LostRecordEndsTheRunWhenTheCallerGoesAway: a launch whose record another launch won
+// ends the run it started, though its caller went away before the run was read.
+func TestPG_Workload_LostRecordEndsTheRunWhenTheCallerGoesAway(t *testing.T) {
+	e := newSvcEnv(t)
+	pol := e.plainPolicy(t, "wl-pol")
+	oldRun := launchedRun(t, decodeApply(t, doSSO(t, e.h.srv, http.MethodPut, "/api/v1/workloads/web", e.mem, workloadBody(pol, "t", "")), http.StatusCreated))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	e.h.srv.cfg.Store = cutShort{PG: e.st, cancel: cancel, lose: true}
+	res := decodeApply(t, doSSOCtx(t, e.h.srv, ctx, http.MethodPut, "/api/v1/workloads/web", e.mem, workloadBody(pol, "t2", "")), http.StatusOK)
+	if res.Launch.State != client.WorkloadNoLaunch {
+		t.Fatalf("launch = %+v, want none: the record was lost", res.Launch)
+	}
+	e.h.srv.cfg.Store = e.st
+	var lost []types.AuditEvent
+	for _, ev := range e.h.audit.snapshot() {
+		if ev.Action == "run.create" && ev.RunID != nil && *ev.RunID != oldRun {
+			lost = append(lost, ev)
+		}
+	}
+	if len(lost) != 1 {
+		t.Fatalf("run.create rows for a new run = %d, want 1", len(lost))
+	}
+	wantKilledFor(t, e, *lost[0].RunID, workloadKillReplaced)
+	if run, err := e.st.GetRun(context.Background(), oldRun); err != nil || isTerminalRunState(run.State) {
+		t.Fatalf("the workload's own run = %q (%v), want it still live", run.State, err)
+	}
+}
+
+// TestPG_Workload_UnreadableRunStaysOwedUntilTheSweepEndsIt: a run that cannot be read once its workload
+// is deleted is left owed its end, and the sweep ends it.
+func TestPG_Workload_UnreadableRunStaysOwedUntilTheSweepEndsIt(t *testing.T) {
+	e := newSvcEnv(t)
+	pol := e.plainPolicy(t, "wl-pol")
+	runID := launchedRun(t, decodeApply(t, doSSO(t, e.h.srv, http.MethodPut, "/api/v1/workloads/web", e.mem, workloadBody(pol, "t", "")), http.StatusCreated))
+	e.h.srv.cfg.Store = cutShort{PG: e.st, cancel: func() {}, failReads: new(atomic.Bool)}
+	if w := doSSO(t, e.h.srv, http.MethodDelete, "/api/v1/workloads/web", e.mem, ""); w.Code != http.StatusNoContent {
+		t.Fatalf("delete: %d %s, want 204", w.Code, w.Body.String())
+	}
+	e.h.srv.cfg.Store = e.st
+	if run, err := e.st.GetRun(context.Background(), runID); err != nil || isTerminalRunState(run.State) {
+		t.Fatalf("run state = %q (%v), want it not yet ended", run.State, err)
+	}
+	if n := owedEnds(t, e, runID); n != 1 {
+		t.Fatalf("workload_run_ends rows = %d, want the run owed its end", n)
+	}
+	if err := e.h.srv.sweepWorkloadRunEnds(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := owedEnds(t, e, runID); n != 1 {
+		t.Fatalf("workload_run_ends rows = %d: the sweep took an end younger than its grace", n)
+	}
+	if _, err := e.pool.Exec(context.Background(), `UPDATE workload_run_ends SET created_at = now() - interval '1 hour' WHERE run_id = $1`, runID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.h.srv.sweepWorkloadRunEnds(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	wantKilledFor(t, e, runID, workloadKillDeleted)
+	if ev := waitForRecAudit(t, e.h.audit, runID, "run.kill", "success"); ev.ActorType != types.ActorSystem {
+		t.Fatalf("the sweep's run.kill actor = %s/%s, want system", ev.ActorType, ev.Actor)
+	}
+}
+
+// hostAxisIntent carries each host-axis field a workload read withholds from the security tier, beside the
+// egress axis it keeps.
+const hostAxisIntent = `,"image":"registry.corp.internal/base:1","inline_policy":{"allowed_domains":["artifacts.corp.internal"],` +
+	`"workspace_mounts":[{"source":"/srv/nfs-prod/payments","target":"/work/data"}],` +
+	`"llm_inspection":{"mode":"alert","detect_secrets":true,"workspace_secret_names":["acme-prod-db-password"]}}`
+
+// hostAxisView is the part of a read workload's intent hostAxisIntent wrote.
+type hostAxisView struct {
+	Image        string `json:"image"`
+	InlinePolicy struct {
+		AllowedDomains  []string `json:"allowed_domains"`
+		WorkspaceMounts []struct {
+			Source string `json:"source"`
+			Target string `json:"target"`
+		} `json:"workspace_mounts"`
+		LLMInspection map[string]json.RawMessage `json:"llm_inspection"`
+	} `json:"inline_policy"`
+}
+
+// TestPG_Workload_ForeignSecurityReadWithholdsTheHostAxis: the owner and an operator read a workload's
+// intent whole; the security tier reading another owner's, by GET or in a list, reads it with the mount's
+// host path and the image blanked and the secret names gone, and the egress and the rest kept.
+func TestPG_Workload_ForeignSecurityReadWithholdsTheHostAxis(t *testing.T) {
+	e := newSvcEnv(t)
+	pol := e.plainPolicy(t, "wl-pol")
+	decodeApply(t, doSSO(t, e.h.srv, http.MethodPut, "/api/v1/workloads/web", e.mem, workloadBody(pol, "t", hostAxisIntent)), http.StatusCreated)
+
+	read := func(c *http.Cookie, path string) hostAxisView {
+		t.Helper()
+		w := doSSO(t, e.h.srv, http.MethodGet, path, c, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET %s: %d %s", path, w.Code, w.Body.String())
+		}
+		var one struct {
+			Owner  string          `json:"owner"`
+			Intent json.RawMessage `json:"intent"`
+		}
+		var page []struct {
+			Owner  string          `json:"owner"`
+			Intent json.RawMessage `json:"intent"`
+		}
+		raw := w.Body.Bytes()
+		if json.Unmarshal(raw, &page) == nil {
+			for _, p := range page {
+				if p.Owner == "mem" {
+					one = p
+				}
+			}
+		} else if err := json.Unmarshal(raw, &one); err != nil {
+			t.Fatal(err)
+		}
+		if one.Owner != "mem" {
+			t.Fatalf("GET %s: no workload of mem in %s", path, raw)
+		}
+		var v hostAxisView
+		if err := json.Unmarshal(one.Intent, &v); err != nil {
+			t.Fatalf("GET %s intent: %v", path, err)
+		}
+		return v
+	}
+	check := func(what string, v hostAxisView, projected bool) {
+		t.Helper()
+		image, source, names := "registry.corp.internal/base:1", "/srv/nfs-prod/payments", true
+		if projected {
+			image, source, names = "", "", false
+		}
+		if v.Image != image {
+			t.Errorf("%s: image = %q, want %q", what, v.Image, image)
+		}
+		if m := v.InlinePolicy.WorkspaceMounts; len(m) != 1 || m[0].Source != source || m[0].Target != "/work/data" {
+			t.Errorf("%s: workspace_mounts = %+v, want source %q and the target kept", what, m, source)
+		}
+		if _, ok := v.InlinePolicy.LLMInspection["workspace_secret_names"]; ok != names {
+			t.Errorf("%s: llm_inspection = %v, workspace_secret_names present = %v, want %v", what, v.InlinePolicy.LLMInspection, ok, names)
+		}
+		if string(v.InlinePolicy.LLMInspection["detect_secrets"]) != "true" {
+			t.Errorf("%s: llm_inspection.detect_secrets = %s, want it kept", what, v.InlinePolicy.LLMInspection["detect_secrets"])
+		}
+		if d := v.InlinePolicy.AllowedDomains; len(d) != 1 || d[0] != "artifacts.corp.internal" {
+			t.Errorf("%s: allowed_domains = %v, want the egress kept", what, d)
+		}
+	}
+	check("owner GET", read(e.mem, "/api/v1/workloads/web"), false)
+	check("owner list", read(e.mem, "/api/v1/workloads"), false)
+	check("operator GET", read(e.admin, "/api/v1/workloads/web?owner=mem"), false)
+	check("security GET", read(e.sec, "/api/v1/workloads/web?owner=mem"), true)
+	check("security list", read(e.sec, "/api/v1/workloads"), true)
+	check("security list of the owner", read(e.sec, "/api/v1/workloads?owner=mem"), true)
+}
+
+// holdingWorkload makes the person's workload "web", a Background task in pool, hold r, a running run, at
+// generation 1. It returns the workload's intent for a task.
+func (e *queueEnv) holdingWorkload(pool types.RunnerPool, r types.AgentRun) func(task string) string {
+	e.t.Helper()
+	ctx := context.Background()
+	intent := func(task string) string {
+		return `{"experience":"background","workload":{"kind":"agent_task","agent":"claude-code","task":"` + task + `"},` +
+			`"tools":[{"id":"claude-code","kind":"harness"}],"no_repositories_or_drives":true,"runner_pool_id":"` + pool.ID.String() + `"}`
+	}
+	in, invalid := normalizeWorkload(client.WorkloadDocument{APIVersion: client.TemplateDocumentVersion, Kind: client.WorkloadDocumentKind,
+		Name: "web", Intent: decodeIntent(e.t, intent("t"))})
+	if invalid != nil {
+		e.t.Fatalf("normalize: %+v", invalid)
+	}
+	in.Owner, in.Source, in.By = e.personP, store.WorkloadSourceAPI, e.personP
+	wl, _, err := e.pg.PutWorkload(ctx, in)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	claimed, ok, err := e.pg.ClaimWorkloadLaunch(ctx, wl.ID)
+	if err != nil || !ok {
+		e.t.Fatalf("claim = %v, %v", ok, err)
+	}
+	if _, err := e.pg.SetWorkloadRun(ctx, wl.ID, claimed.ClaimToken, claimed.Generation, r.ID); err != nil {
+		e.t.Fatal(err)
+	}
+	return intent
+}
+
+// queuedWorkloadReplacement makes the person's workload "web" hold r, a running run in another pool than
+// pool, then applies a changed spec into pool while pool is full: the new run waits in the queue. It
+// returns the new run.
+func (e *queueEnv) queuedWorkloadReplacement(pool types.RunnerPool, r types.AgentRun) uuid.UUID {
+	e.t.Helper()
+	intent := e.holdingWorkload(pool, r)
+	res := decodeApply(e.t, e.call(e.person, http.MethodPut, "/api/v1/workloads/web", `{"intent":`+intent("t2")+`}`), http.StatusOK)
+	queued := launchedRun(e.t, res)
+	if got := e.run(queued).State; got != types.RunQueued {
+		e.t.Fatalf("replacement state = %s, want QUEUED in the full pool", got)
+	}
+	if got := e.run(r.ID).State; got != types.RunRunning {
+		e.t.Fatalf("running run state = %s once its replacement queued, want RUNNING", got)
+	}
+	if len(e.audits(r.ID, "run.kill")) != 0 || len(e.audits(queued, "workload.replace")) != 0 {
+		e.t.Fatal("a queued replacement ended the running run")
+	}
+	return queued
+}
+
+// settleWorkloadRunEnds runs the workload sweep over every owed end, however young.
+func (e *queueEnv) settleWorkloadRunEnds() {
+	e.t.Helper()
+	e.exec(`UPDATE workload_run_ends SET created_at = now() - interval '1 hour'`)
+	if err := e.srv.sweepWorkloadRunEnds(context.Background()); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+// TestPG_Workload_QueuedReplacementTakesOverOnceRunning: a replacement that waits in another pool's queue
+// leaves the running run alone while it waits; once it runs, the sweep ends the old run and records the replacement.
+func TestPG_Workload_QueuedReplacementTakesOverOnceRunning(t *testing.T) {
+	e := newQueueEnv(t)
+	pool := e.cappedPool("Busy", 1)
+	occupant, running := e.occupy(pool), e.occupy(e.cappedPool("Old", 1))
+	queued := e.queuedWorkloadReplacement(pool, running)
+
+	e.settleWorkloadRunEnds()
+	if got := e.run(running.ID).State; got != types.RunRunning {
+		t.Fatalf("running run state = %s while its replacement waits, want RUNNING", got)
+	}
+	e.free(occupant)
+	e.waitStarted(queued)
+	e.exec(`UPDATE agent_runs SET state = 'RUNNING' WHERE id = $1`, queued) // the runner reports it up
+	e.settleWorkloadRunEnds()
+	if got := e.run(running.ID).State; got != types.RunKilled {
+		t.Fatalf("old run state = %s once its replacement runs, want KILLED", got)
+	}
+	kills := e.waitAudit(running.ID, "run.kill")
+	if d := queueAuditData(t, kills[0]); d["reason"] != workloadKillReplaced {
+		t.Fatalf("run.kill data = %v, want reason %s", d, workloadKillReplaced)
+	}
+	if rows := e.audits(queued, "workload.replace"); len(rows) != 1 {
+		t.Fatalf("workload.replace rows on the replacement = %d, want 1", len(rows))
+	}
+	if n := e.count(`SELECT count(*) FROM workload_run_ends`); n != 0 {
+		t.Fatalf("owed ends left = %d, want 0", n)
+	}
+}
+
+// TestPG_Workload_RefusedQueuedReplacementKeepsTheRunningRun: a replacement whose queued start is refused
+// leaves the running run running; the workload takes it back and records the refusal, owed a launch again.
+func TestPG_Workload_RefusedQueuedReplacementKeepsTheRunningRun(t *testing.T) {
+	e := newQueueEnv(t)
+	pool := e.cappedPool("Busy", 1)
+	occupant, running := e.occupy(pool), e.occupy(e.cappedPool("Old", 1))
+	queued := e.queuedWorkloadReplacement(pool, running)
+
+	if _, err := e.pg.UpsertCapabilityGrant(context.Background(), types.CapabilityGrant{SubjectType: types.CapabilitySubjectUser,
+		Subject: e.personP, Capability: capAgent, Value: "claude-code", Effect: types.CapabilityDeny, CreatedBy: "seed"}); err != nil {
+		t.Fatal(err)
+	}
+	e.free(occupant)
+	if got := e.waitFailed(queued); got.StatusDetail != "queue: capability_agent" {
+		t.Fatalf("replacement status_detail = %q, want its start refused", got.StatusDetail)
+	}
+	e.settleWorkloadRunEnds()
+	if got := e.run(running.ID).State; got != types.RunRunning {
+		t.Fatalf("old run state = %s after its replacement was refused, want RUNNING", got)
+	}
+	v, err := e.pg.GetWorkload(context.Background(), e.personP, "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.CurrentRunID == nil || *v.CurrentRunID != running.ID || v.CurrentGeneration != 0 {
+		t.Fatalf("workload run=%v generation=%d, want %s back and a launch owed", v.CurrentRunID, v.CurrentGeneration, running.ID)
+	}
+	if f := v.LastRefusal; f == nil || f.Generation != 2 || f.Reason != "capability_agent" {
+		t.Fatalf("last_refusal = %+v, want generation 2 refused for capability_agent", f)
+	}
+	if rows := e.audits(queued, "workload.launch_refused"); len(rows) != 1 || rows[0].Outcome != "denied" {
+		t.Fatalf("workload.launch_refused rows = %+v, want one denied", rows)
+	}
+	if len(e.audits(running.ID, "run.kill")) != 0 {
+		t.Fatal("the running run was killed")
+	}
+	if n := e.count(`SELECT count(*) FROM workload_run_ends`); n != 0 {
+		t.Fatalf("owed ends left = %d, want 0", n)
+	}
+}
+
+// TestPG_Workload_ReplacementQueuedBehindItsOwnRunReplacesInPlace: in a pool of one slot, held by the
+// workload's own run, a changed spec could never start beside it: the old run ends at once, recorded as a
+// replacement, and the new one starts in the slot it freed.
+func TestPG_Workload_ReplacementQueuedBehindItsOwnRunReplacesInPlace(t *testing.T) {
+	e := newQueueEnv(t)
+	pool := e.cappedPool("Solo", 1)
+	running := e.occupy(pool)
+	intent := e.holdingWorkload(pool, running)
+
+	res := decodeApply(t, e.call(e.person, http.MethodPut, "/api/v1/workloads/web", `{"intent":`+intent("t2")+`}`), http.StatusOK)
+	queued := launchedRun(t, res)
+	if got := e.run(running.ID).State; got != types.RunKilled {
+		t.Fatalf("old run state = %s once its replacement queued behind it, want KILLED", got)
+	}
+	kills := e.waitAudit(running.ID, "run.kill")
+	if d := queueAuditData(t, kills[0]); d["reason"] != workloadKillReplaced {
+		t.Fatalf("run.kill data = %v, want reason %s", d, workloadKillReplaced)
+	}
+	if rows := e.audits(queued, "workload.replace"); len(rows) != 1 {
+		t.Fatalf("workload.replace rows on the replacement = %d, want 1", len(rows))
+	}
+	e.waitStarted(queued)
+	if n := e.count(`SELECT count(*) FROM workload_run_ends`); n != 0 {
+		t.Fatalf("owed ends left = %d, want 0", n)
+	}
+}
+
+// TestPG_Workload_AdminRestartChecksTheSponsorSinceTheSpec: a security operator's restart of a service's
+// workload launches as the service only while its sponsor's sessions have not been cut since the spec was
+// written.
+func TestPG_Workload_AdminRestartChecksTheSponsorSinceTheSpec(t *testing.T) {
+	e := newSvcEnv(t)
+	e.mustCreate(t, svcName, svcSponsor)
+	tok := e.mustMint(t, e.sponsor, svcName)
+	pol := e.plainPolicy(t, "wl-pol")
+	launchedRun(t, decodeApply(t, e.as(t, tok.Token, http.MethodPut, "/api/v1/workloads/web", workloadBody(pol, "t", "")), http.StatusCreated))
+	path := "/api/v1/workloads/web/restart?owner=" + svcPrin
+	launchedRun(t, decodeApply(t, doSSO(t, e.h.srv, http.MethodPost, path, e.sec, ""), http.StatusOK))
+
+	if err := e.rev.CutSessions(context.Background(), svcSponsor); err != nil {
+		t.Fatal(err)
+	}
+	res := decodeApply(t, doSSO(t, e.h.srv, http.MethodPost, path, e.sec, ""), http.StatusOK)
+	if res.Launch.State != client.WorkloadRefused || res.Launch.Reason != reasonServiceIdentityInactive {
+		t.Fatalf("restart after the sponsor's sessions were cut = %+v, want refused %s", res.Launch, reasonServiceIdentityInactive)
+	}
+}
+
+// TestPG_Workload_RestartRowsNameThePerson: a sponsor's restart of a service's workload launches the run as
+// the service, while the workload rows and the replaced run's run.kill row name the sponsor.
+func TestPG_Workload_RestartRowsNameThePerson(t *testing.T) {
+	e := newSvcEnv(t)
+	e.mustCreate(t, svcName, svcSponsor)
+	tok := e.mustMint(t, e.sponsor, svcName)
+	pol := e.plainPolicy(t, "wl-pol")
+	oldRun := launchedRun(t, decodeApply(t, e.as(t, tok.Token, http.MethodPut, "/api/v1/workloads/web", workloadBody(pol, "t", "")), http.StatusCreated))
+	newRun := launchedRun(t, decodeApply(t, doSSO(t, e.h.srv, http.MethodPost, "/api/v1/workloads/web/restart?owner="+svcPrin, e.sponsor, ""), http.StatusOK))
+
+	for _, row := range []struct {
+		run    uuid.UUID
+		action string
+		actor  string
+	}{
+		{newRun, "run.create", svcPrin},
+		{newRun, "workload.launch", svcSponsor},
+		{newRun, "workload.replace", svcSponsor},
+		{oldRun, "run.kill", svcSponsor},
+	} {
+		ev := waitForRecAudit(t, e.h.audit, row.run, row.action, "success")
+		if ev.Actor != row.actor {
+			t.Errorf("%s on %s: actor %s/%s, want %s", row.action, row.run, ev.ActorType, ev.Actor, row.actor)
+		}
 	}
 }
 

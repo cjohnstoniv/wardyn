@@ -136,7 +136,8 @@ docs/operations/user-drives.md=4931 share=35
 # docs/operations/capabilities.md 4169 = 4169 + 0 (RV5), measured at the wave-A merge.
 # docs/operations/capabilities.md 4205 adds 36: the withdrawn component grant line (0.9.3 FIN-B2).
 # docs/operations/capabilities.md 4383 = 4205 + 178, measured: a restricted value is closed whatever the switch says, the explain cross-reference and the exact self_host_runner grant.
-docs/operations/capabilities.md=4393 share=35
+# docs/operations/capabilities.md 4586 adds 193 over 4393, measured (rc.8 inbound docs): the inbound feature value.
+docs/operations/capabilities.md=4586 share=35
 # docs/operations/custom-components.md 1365 adds 181 over 1184, measured: the credential confinement floor on a CC1-only estate (0.9.3 ASK-6).
 # docs/operations/custom-components.md 1269, measured: the credential-floor section trimmed from 181 to 85 added words over 1184 (0.9.3 ASK-6 review).
 docs/operations/custom-components.md=1269 share=35
@@ -153,7 +154,9 @@ docs/operations/custom-components.md=1269 share=35
 # docs/operations/api-tokens.md 5582, measured at the FIN-E2 merge into the final train (both sides' sentences).
 # docs/operations/api-tokens.md=5582 adds 8 (0.10): unbind is refused while a runner or runner token is held.
 # 0.10 ATT-LOGIN-SRV: docs/operations/api-tokens.md 5948 adds 358 over 5590: the CLI sign-in section, measured.
-docs/operations/api-tokens.md=6051 share=35 # +86 (lane SI-DOCS), measured; +17 the sponsor mints in admin view only
+# docs/operations/api-tokens.md 6516 adds 465 over 6051, measured (rc.8 inbound docs): the inbound tokens section, the workload routes of a service's allow-list and the app ticket.
+# docs/operations/api-tokens.md 6525 measured (rc.8 review): inbound wording made exact (groups refreshed at sign-in, rate-bound denials, burst, HEAD, session TTL).
+docs/operations/api-tokens.md=6525 share=35 # +86 (lane SI-DOCS), measured; +17 the sponsor mints in admin view only
 # G-1423 r1: docs/operations/denials.md 4709 adds 32 over 4677 for the audit-only delegation_scope source.
 # docs/operations/denials.md 4786 adds 77 (0.9 G-sec-rest): the exec relay rows (#1976) and the audit_retention_actor_reserved row.
 # D-108-114 merge: docs/operations/denials.md 4806 adds 20 over 4786 for the runs.placement cause of governance_profile.

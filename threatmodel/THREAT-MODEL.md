@@ -1742,6 +1742,14 @@ hiding them would repeat the failure mode we are designed to avoid.
       - Set `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` to a per-run host (wildcard DNS + wildcard certificate) and each run gets its own origin, with an enter served on any other host refused outright.
       - That is the recommendation for any install with more than one user ([docs/OPERATIONS.md](../docs/OPERATIONS.md#ui-apps-with-more-than-one-user-use-host-mode), "UI apps with more than one user").
       - Which mode is running is published, not inferred — boot logs the shared-origin mode as a warning and `/healthz` carries `ui_sandbox.host_mode`.
+    - **Inbound apps (rc.8).**
+      - An app that names callers can be opened by a person who is not the run's owner, so in path mode the residual above would turn cross-user: a foreign app could script the caller's own apps.
+      - So a browser ticket for a named caller who is not the owner is refused `inbound_needs_host_mode` unless host mode is on (`handleAppTicket`, [`internal/api/inbound_ticket.go`](../internal/api/inbound_ticket.go)).
+      - The owner opens an app in either mode, and a caller with an inbound token works in either mode, because a bearer is never ambient and carries no cookie.
+      - Host mode adds a cross-site check to every cookie session, inbound or not (`uiCrossSite`, [`internal/api/uigateway_inbound.go`](../internal/api/uigateway_inbound.go)).
+      - A request must be same-origin, carry no fetch metadata, or be a top-level `GET` navigation, and an `Origin` it names must be its own.
+      - It closes a foreign app on a sibling run's origin driving the caller's own editor session: a same-site WebSocket carries the cookie, and CORS does not cover a WebSocket.
+      - Path mode serves every run from one origin, so the check is off there and the refusal above is the control.
     - **The console's own cookies (#1258).**
       - A relayed page is B1 code, and its `document.cookie` can set `Domain=<registrable domain>` cookies that the browser then sends to the console on any host under that domain.
       - Under secure cookies (TLS served directly, or `WARDYN_TLS_TERMINATED`) the console's session and sign-in cookies are `__Host-` cookies ([`internal/auth/oidc/cookies.go`](../internal/auth/oidc/cookies.go)).
@@ -1815,10 +1823,16 @@ hiding them would repeat the failure mode we are designed to avoid.
     - The relay deliberately sets no CSP or `X-Frame-Options` (`UIGatewayHandler`: "this origin serves the sandbox's own app, and the console's policy would break it"), and audit records only `ui.authorize`/`ui.open`/`ui.close` (residual #19).
     - **Operator acknowledgment:** opening a run's UI app runs that run's (agent-authored, possibly prompt-injected) code in your browser, with your browser's network reach.
     - A `Content-Security-Policy: connect-src 'self'` would narrow, not close, this — it stops in-page `fetch`/`XHR`/WebSocket egress but not navigation or a form submit — and is not implemented.
+    - **Inbound callers (rc.8).**
+      - A person an inbound app names opens it in their own browser, so the same acknowledgement holds for them: the app's code runs with that caller's network reach.
+      - That is why a named caller who is not the owner needs host mode (residual #18).
+      - The app's operator named its callers and each call is recorded: `inbound.allow` and `inbound.deny` rows carry the caller, the app, the method and the path, never the query.
+      - A call keeps the run alive and thaws a paused one, which is intended for a service.
+      - The first connection may start the owner's launcher, which the owner declared.
 
 22. **The UI-relay's session cookie re-asserts ownership and revocation every 30 seconds; only a role demotion waits for the TTL.**
     - `uiSessionTTL` is 8 hours (`WARDYN_UI_SANDBOX_SESSION_TTL`); the cookie is minted once at `handleUIEnter` against the caller's role at that moment.
-    - Every 30 seconds (`uiReassertInterval`, `uiSessionStillAuthorized`) the relay re-checks, per request, that the principal may still enter the run, that no revocation postdates the session, and that a portal grant is live; an upgraded WebSocket is checked only at its start.
+    - Every 30 seconds (`uiReassertInterval`, `uiSessionStillAuthorized`) the relay re-checks, per request, that the principal may still enter the run, that no revocation postdates the session, and that a portal grant is live; an upgraded WebSocket is checked only at its start, except an inbound-token stream (rc.8: re-checked at most every 30 s; residual #98).
     - Demoting an admin does not end their cookie: its role is a login-time snapshot, so it keeps the admin's reach until the TTL lapses or the run stops.
 
 23. **The shipped default deployment collapses the audited insider into the trusted operator.**
@@ -2938,6 +2952,16 @@ hiding them would repeat the failure mode we are designed to avoid.
     - A refused event is acknowledged so the runner stops resending it, and only its SHA-256 and size are kept.
     - A refused spool record next in its run's stream moves the run's spool cursor past it, as an accepted one would, so the records after it are not refused as a gap.
     - A runner can close its own open actions as `refused` this way, which it could already do by answering `refused`.
+
+98. **A browser stream already open is not cut when its session ends; an inbound-token stream is [rc.8].**
+    - A UI-app session, the owner's or a named caller's, is re-checked every 30 seconds on a request, but an upgraded WebSocket is checked only at its start.
+    - So an owner's relayed socket that was open when their sessions were revoked keeps working until it closes or the run ends. Killing the run ends it.
+    - A stream an inbound token opened is the exception (rc.8: re-checked at most every 30 s): it is closed when the token is revoked, expires or its owner is suspended.
+    - The gateway also reuses a verified token's session for 30 seconds per token, run and app, so a new request after a revoke can still pass within that window.
+    - A named caller's browser session never re-checks the callers list, which is fixed for the run, or the caller's group membership.
+    - A person removed from a group keeps a session already open until `WARDYN_UI_SANDBOX_SESSION_TTL` (8 hours by default) bounds its later requests; a socket already upgraded is not cut by it. An inbound token carries the groups stamped at its mint, refreshed when its owner signs in again.
+    - Bounds: a caller can reach only the apps the run declared inbound, at most 8 relay connections and 50 requests a second per run, and the token never reaches the sandbox.
+    - No role reaches an inbound app: only the owner and the named callers can. A profile's `deny_ui_apps` or `deny_interactive` refuses a live call at the next re-check.
 
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 

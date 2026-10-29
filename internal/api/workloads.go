@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -31,15 +32,17 @@ import (
 // rows). An apply checks the document through the template door and records it; it launches only while
 // the stored spec is ahead of its run, through handleCreateRun as the owner, so every gate a POST /runs
 // passes applies unchanged and a workload grants nothing. A new run replaces the old one only once it
-// exists (create, then end); a refused launch is recorded and the running one keeps running.
+// exists (create, then end), and one that waits in its pool's queue only once it runs (sweepWorkloadRunEnds),
+// unless the old run holds a slot in that pool: then it ends at once; a refused launch is recorded and the
+// running one keeps running.
 //
 // The two halves, normalizeWorkload with PutWorkload and launchWorkload, take no HTTP caller of their own:
 // the custom-resource path records and launches through them with a request serviceLaunchRequest builds.
 
 // The run.kill reason a workload's run ends with.
 const (
-	workloadKillReplaced = "workload_replaced" // a newer launch of the workload replaced it
-	workloadKillDeleted  = "workload_deleted"  // the workload was deleted
+	workloadKillReplaced = store.WorkloadEndReplaced // a newer launch of the workload replaced it
+	workloadKillDeleted  = store.WorkloadEndDeleted  // the workload was deleted
 )
 
 const workloadNotFoundMsg = "There is no workload of that name that you may reach."
@@ -180,22 +183,111 @@ func (s *Server) answerWorkload(w http.ResponseWriter, r *http.Request, ws store
 	if err != nil {
 		v = store.WorkloadView{Workload: wl} // deleted under the apply: answer what was recorded
 	}
-	writeJSON(w, status, client.WorkloadApplyResult{Workload: workloadOut(v), Outcome: outcome, Launch: launch})
+	writeJSON(w, status, client.WorkloadApplyResult{Workload: workloadOut(v, s.workloadReadTier(r, wl.Owner)), Outcome: outcome, Launch: launch})
 }
 
 func workloadTarget(wl store.Workload) string { return wl.Owner + "/" + wl.Name }
 
-// workloadOut is a stored workload as the API reports it.
-func workloadOut(v store.WorkloadView) client.Workload {
+// workloadOut is a stored workload as the API reports it to a reader of tier (workloadReadTier).
+func workloadOut(v store.WorkloadView, tier workspaceReadTier) client.Workload {
 	out := client.Workload{Name: v.Name, Owner: v.Owner, Source: client.WorkloadSource(v.Source), Namespace: v.SourceNamespace,
 		Description: v.Description, RunIn: v.RunIn, RestartKey: v.RestartKey, Generation: v.Generation,
 		CurrentGeneration: v.CurrentGeneration, RunID: v.CurrentRunID, State: string(v.RunState), CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt}
 	if v.RunState != "" && v.ServiceHealth != "" {
 		out.State += "/" + v.ServiceHealth
 	}
-	_ = json.Unmarshal(v.Intent, &out.Intent) //nolint:errcheck // the door wrote it; an unreadable intent reads as none
+	_ = json.Unmarshal(redactWorkloadIntentForRead(v.Intent, tier), &out.Intent) //nolint:errcheck // the door wrote it; an unreadable intent reads as none
 	if f := v.LastRefusal; f != nil {
 		out.LastRefusal = &client.WorkloadRefusal{Generation: f.Generation, Reason: f.Reason, Message: f.Message, At: f.At}
+	}
+	return out
+}
+
+// workloadReadTier is the tier the caller of r reads owner's workloads at (helpers.go's workspace tiers):
+// in full as the owner, as the sponsor of a service-identity owner, or as an operator; with the host axis
+// withheld as the security tier reading anyone else's. No other caller reaches another owner's workload.
+func (s *Server) workloadReadTier(r *http.Request, owner string) workspaceReadTier {
+	ctx := r.Context()
+	if s.isOperator(ctx) || !s.isSecurityOperator(ctx) || owner == principalFromRequest(r) || s.sponsorsWorkloadOwner(r, owner) {
+		return workspaceReadFull
+	}
+	return workspaceReadSecurity
+}
+
+// workloadIntentImageKeys are the intent's keys that name a registry coordinate: the image the run uses,
+// and the one it picks from the organisation's allowed list.
+var workloadIntentImageKeys = []string{"image", "allowed_image"}
+
+// redactWorkloadIntentForRead projects a stored workload intent down to its reader's tier, as
+// redactWorkspaceForRead does a workspace: below full, the host axis goes and the egress axis stays. The
+// host axis in an intent is an inline workspace mount's source (a host path), the image coordinates, and
+// the secret names content inspection resolves. Like redactProfileForRead it deletes or blanks decoded
+// keys, so a field a newer intent carries is kept, and it fails closed: a part that does not decode is
+// withheld whole.
+func redactWorkloadIntentForRead(raw json.RawMessage, tier workspaceReadTier) json.RawMessage {
+	if tier == workspaceReadFull || len(raw) == 0 {
+		return raw
+	}
+	var intent map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &intent); err != nil {
+		return nil
+	}
+	for _, k := range workloadIntentImageKeys {
+		if _, ok := intent[k]; ok {
+			intent[k] = json.RawMessage(`""`)
+		}
+	}
+	if pol, ok := intent["inline_policy"]; ok {
+		if pol = redactWorkloadPolicyForRead(pol); pol == nil {
+			delete(intent, "inline_policy")
+		} else {
+			intent["inline_policy"] = pol
+		}
+	}
+	out, err := json.Marshal(intent)
+	if err != nil {
+		return nil
+	}
+	return out
+}
+
+// redactWorkloadPolicyForRead is redactWorkloadIntentForRead for the intent's inline_policy: each
+// workspace mount's source blanked, content inspection's workspace_secret_names dropped. nil when the
+// policy does not decode.
+func redactWorkloadPolicyForRead(raw json.RawMessage) json.RawMessage {
+	var pol map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &pol); err != nil {
+		return nil
+	}
+	if m, ok := pol["workspace_mounts"]; ok {
+		var mounts []map[string]json.RawMessage
+		if err := json.Unmarshal(m, &mounts); err != nil {
+			delete(pol, "workspace_mounts")
+		} else {
+			for _, mount := range mounts {
+				if _, ok := mount["source"]; ok {
+					mount["source"] = json.RawMessage(`""`)
+				}
+			}
+			if pol["workspace_mounts"], err = json.Marshal(mounts); err != nil {
+				return nil
+			}
+		}
+	}
+	if li, ok := pol["llm_inspection"]; ok {
+		var spec map[string]json.RawMessage
+		if err := json.Unmarshal(li, &spec); err != nil {
+			delete(pol, "llm_inspection")
+		} else {
+			delete(spec, "workspace_secret_names")
+			if pol["llm_inspection"], err = json.Marshal(spec); err != nil {
+				return nil
+			}
+		}
+	}
+	out, err := json.Marshal(pol)
+	if err != nil {
+		return nil
 	}
 	return out
 }
@@ -244,13 +336,13 @@ func (s *Server) launchWorkload(r *http.Request, ws store.WorkloadStore, wl stor
 		if errors.Is(err, store.ErrNotFound) {
 			why = workloadKillDeleted
 		}
-		s.endWorkloadRun(r, created.ID, claimed, why)
+		s.endUntakenWorkloadRun(r, ws, created.ID, claimed, why)
 		if errors.Is(err, store.ErrWorkloadSuperseded) || errors.Is(err, store.ErrNotFound) {
 			return none, nil
 		}
 		return none, err
 	}
-	actorType, actor := actorFromRequest(r)
+	actorType, actor := workloadActorOf(r)
 	s.recordAudit(ctx, s.auditEvent(&created.ID, actorType, actor, "workload.launch", workloadTarget(claimed), "success", mustJSON(map[string]any{
 		"name": claimed.Name, "owner": claimed.Owner, "generation": claimed.Generation, "run_id": created.ID,
 	})))
@@ -301,7 +393,7 @@ func (s *Server) refuseWorkloadLaunch(r *http.Request, ws store.WorkloadStore, w
 	case err != nil:
 		return client.WorkloadLaunch{}, err
 	}
-	actorType, actor := actorFromRequest(r)
+	actorType, actor := workloadActorOf(r)
 	s.recordAudit(ctx, s.auditEvent(nil, actorType, actor, "workload.launch_refused", workloadTarget(wl), "denied", mustJSON(map[string]any{
 		"name": wl.Name, "owner": wl.Owner, "generation": wl.Generation, "reason": reason,
 	})))
@@ -310,26 +402,149 @@ func (s *Server) refuseWorkloadLaunch(r *http.Request, ws store.WorkloadStore, w
 
 // endWorkloadRun ends runID, a run that is no longer wl's own, as the caller of r: the run a newer launch
 // replaced, the current run of a deleted workload, or a run whose record another launch won. The run.kill
-// row says why. A run that has ended already is left as it is.
+// row says why. A run that has ended already is left as it is. The run is owed its end in
+// workload_run_ends, written with the delete or the record that let it go, and the end works detached from
+// r: a caller who goes away does not cut it short, and an end that does not finish here is finished by
+// sweepWorkloadRunEnds.
 func (s *Server) endWorkloadRun(r *http.Request, runID uuid.UUID, wl store.Workload, why string) {
-	ctx := r.Context()
-	killerType, killer := actorFromRequest(r)
-	extra := map[string]any{"reason": why, "workload": wl.Name, "generation": wl.Generation}
-	run, err := s.cfg.Store.GetRun(ctx, runID)
+	killerType, killer := workloadActorOf(r)
+	s.endOwedWorkloadRun(r.Context(), store.WorkloadRunEnd{RunID: runID, Owner: wl.Owner, Name: wl.Name, Generation: wl.Generation, Reason: why},
+		killerType, killer)
+}
+
+// endUntakenWorkloadRun ends runID, a run a launch of wl started that the workload did not take. Nothing
+// else remembers that run, so it is recorded as owed its end first.
+func (s *Server) endUntakenWorkloadRun(r *http.Request, ws store.WorkloadStore, runID uuid.UUID, wl store.Workload, why string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), killCascadeTimeout)
+	defer cancel()
+	if err := ws.OweWorkloadRunEnd(ctx, store.WorkloadRunEnd{RunID: runID, Owner: wl.Owner, Name: wl.Name, Generation: wl.Generation, Reason: why}); err != nil {
+		slog.ErrorContext(ctx, "wardynd: record a workload's run as owed its end", slog.String("run_id", runID.String()),
+			slog.String("workload", workloadTarget(wl)), slog.Any("err", err))
+	}
+	s.endWorkloadRun(r, runID, wl, why)
+}
+
+// endOwedWorkloadRun ends e's run as killer and then drops what was owed, and reports whether the run is
+// ended. The reads and the kill run on a context detached from ctx and bounded, as killRunCascade's own
+// are. Once the KILLED transition is won the end is durable: a teardown cut short is the sandbox sweep's to
+// finish (recoverAbandonedKillTail). A run that is not ended here stays owed.
+func (s *Server) endOwedWorkloadRun(ctx context.Context, e store.WorkloadRunEnd, killerType types.ActorType, killer string) bool {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
+	defer cancel()
+	extra := map[string]any{"reason": e.Reason, "workload": e.Name, "generation": e.Generation}
+	run, err := s.cfg.Store.GetRun(ctx, e.RunID)
+	ended := err == nil && isTerminalRunState(run.State)
 	// A lost CAS is a move between live states (a dispatch claim, the sandbox coming up): re-read and kill
 	// from the state the run now holds, as killLiveRun does.
-	for attempt := 1; err == nil && !isTerminalRunState(run.State); attempt++ {
+	for attempt := 1; err == nil && !ended; attempt++ {
 		applied, killData, kerr := s.killRunCascade(ctx, run, killerType, killer, extra)
 		if kerr != nil || applied || attempt == killCASAttempts {
+			ended = applied
 			if err = kerr; err == nil && len(killData) > 0 {
 				err = fmt.Errorf("teardown steps failed: %v", killData)
 			}
 			break
 		}
-		run, err = s.cfg.Store.GetRun(ctx, runID)
+		run, err = s.cfg.Store.GetRun(ctx, e.RunID)
+		ended = err == nil && isTerminalRunState(run.State)
 	}
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		slog.ErrorContext(ctx, "wardynd: end a workload's run", slog.String("run_id", runID.String()), slog.String("workload", workloadTarget(wl)), slog.Any("err", err))
+	if errors.Is(err, store.ErrNotFound) {
+		ended, err = true, nil // the run row is gone, and its owed end with it
+	}
+	target := e.Owner + "/" + e.Name
+	if err != nil {
+		slog.ErrorContext(ctx, "wardynd: end a workload's run", slog.String("run_id", e.RunID.String()), slog.String("workload", target), slog.Any("err", err))
+	}
+	ws, ok := s.cfg.Store.(store.WorkloadStore)
+	if !ended || !ok {
+		return ended
+	}
+	if err := ws.DropWorkloadRunEnd(ctx, e.RunID); err != nil {
+		slog.ErrorContext(ctx, "wardynd: drop a workload run's owed end", slog.String("run_id", e.RunID.String()), slog.String("workload", target), slog.Any("err", err))
+	}
+	return true
+}
+
+// workloadRunEndGrace is how old an owed end must be before the sweep takes it: longer than an end in
+// flight takes (its reads share one killCascadeTimeout and its won kill has its own), so the sweep does not
+// race the request that let the run go.
+const workloadRunEndGrace = 2*killCascadeTimeout + 30*time.Second
+
+// workloadRunEndBatch bounds the owed ends one sweep pass takes; the rest wait for the next pass.
+const workloadRunEndBatch = 100
+
+// sweepWorkloadRunEnds ends the runs that workloads let go of and whose end was cut short: the request
+// went away, a read failed, or the process died first. It runs on the workload status sweeper's cadence,
+// on one replica, as system/wardynd. No other sweep reaches such a run: the sandbox sweep takes terminal
+// runs only, and the lease sweep only a run past its end or its lifetime cap.
+//
+// It also settles a replacement that waited in its pool's queue (SetWorkloadRun): once the new run is
+// running the old one ends and the replacement is recorded; when the new run ends before it ran (the
+// start refused it, or it was ended while it waited) the workload takes the old run back and records the
+// refusal. Until then the old run keeps running.
+func (s *Server) sweepWorkloadRunEnds(ctx context.Context) error {
+	ws, ok := s.cfg.Store.(store.WorkloadStore)
+	if !ok {
+		return nil
+	}
+	ctx, end, ok := s.beginLeaderSweep(ctx)
+	if !ok {
+		return nil
+	}
+	defer end()
+	owed, err := ws.ListWorkloadRunEnds(ctx, workloadRunEndGrace, workloadRunEndBatch)
+	if err != nil {
+		return err
+	}
+	for _, e := range owed {
+		if ctx.Err() != nil {
+			return ctx.Err() // the rest wait for the next pass
+		}
+		switch {
+		case e.AfterRunID == nil:
+			s.endOwedWorkloadRun(ctx, e, types.ActorSystem, "wardynd")
+		case e.AfterState == types.RunRunning || e.AfterState == types.RunWaiting:
+			s.takeOverWorkloadRun(ctx, e)
+		case isTerminalRunState(e.AfterState):
+			s.restoreWorkloadRun(ctx, ws, e)
+		}
+	}
+	return nil
+}
+
+// takeOverWorkloadRun ends e's run now that e.AfterRunID, the queued run that replaces it, is running, and
+// records the replacement.
+func (s *Server) takeOverWorkloadRun(ctx context.Context, e store.WorkloadRunEnd) {
+	if !s.endOwedWorkloadRun(ctx, e, types.ActorSystem, "wardynd") {
+		return
+	}
+	s.recordAudit(ctx, s.auditEvent(e.AfterRunID, types.ActorSystem, "wardynd", "workload.replace", e.Owner+"/"+e.Name, "success", mustJSON(map[string]any{
+		"name": e.Name, "owner": e.Owner, "generation": e.Generation, "old_run_id": e.RunID, "new_run_id": *e.AfterRunID,
+	})))
+}
+
+// workloadReplacementEndedMsg is the refusal a workload records when its queued replacement ended before
+// it ran.
+const workloadReplacementEndedMsg = "The new run ended before it started, so the run it was to replace keeps running."
+
+// restoreWorkloadRun gives the workload back e's run, because e.AfterRunID, the queued run that was to
+// replace it, ended before it ran, and records why as the launch's refusal: the queue's reason when the
+// start refused it, else the state it ended in.
+func (s *Server) restoreWorkloadRun(ctx context.Context, ws store.WorkloadStore, e store.WorkloadRunEnd) {
+	reason := queueToken(e.AfterDetail)
+	if reason == "" {
+		reason = strings.ToLower(string(e.AfterState))
+	}
+	restored, err := ws.RestoreWorkloadRun(ctx, e, store.WorkloadRefusal{Generation: e.Generation, Reason: reason, Message: workloadReplacementEndedMsg,
+		At: s.cfg.Now().UTC()})
+	if err != nil {
+		slog.ErrorContext(ctx, "wardynd: give a workload back its run", slog.String("run_id", e.RunID.String()), slog.String("workload", e.Owner+"/"+e.Name), slog.Any("err", err))
+		return
+	}
+	if restored {
+		s.recordAudit(ctx, s.auditEvent(e.AfterRunID, types.ActorSystem, "wardynd", "workload.launch_refused", e.Owner+"/"+e.Name, "denied", mustJSON(map[string]any{
+			"name": e.Name, "owner": e.Owner, "generation": e.Generation, "reason": reason,
+		})))
 	}
 }
 
@@ -384,7 +599,7 @@ func (s *Server) handleGetWorkload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if v, ok := s.workloadFor(w, r, ws); ok {
-		writeJSON(w, http.StatusOK, workloadOut(v))
+		writeJSON(w, http.StatusOK, workloadOut(v, s.workloadReadTier(r, v.Owner)))
 	}
 }
 
@@ -415,8 +630,14 @@ func (s *Server) handleListWorkloads(w http.ResponseWriter, r *http.Request) {
 			rows, lerr = ws.ListWorkloadsOf(ctx, owners, p)
 		}
 		out := make([]client.Workload, 0, len(rows))
+		tiers := map[string]workspaceReadTier{} // one sponsor read per owner, not per row
 		for _, v := range rows {
-			out = append(out, workloadOut(v))
+			tier, ok := tiers[v.Owner]
+			if !ok {
+				tier = s.workloadReadTier(r, v.Owner)
+				tiers[v.Owner] = tier
+			}
+			out = append(out, workloadOut(v, tier))
 		}
 		return out, lerr
 	}, nil)
@@ -539,16 +760,30 @@ func (s *Server) restartLaunch(r *http.Request, ws store.WorkloadStore, wl store
 	case err != nil:
 		return client.WorkloadLaunch{}, err
 	}
-	// The service's standing now, as its tokens are checked on every request: usable, its sponsor live.
+	// The service's standing as of the spec's last write, the authority that recorded it, as a binding's
+	// launch is judged as of the binding's making: usable, the same sponsor since, and the sponsor's
+	// sessions not cut since.
 	sr, cancel, err := serviceLaunchRequest(si, si.Sponsor)
 	if err != nil {
 		return client.WorkloadLaunch{}, err
 	}
 	defer cancel()
-	if live, err := s.queueOwnerLive(sr.Context(), serviceAuthority(si, si.Sponsor), s.cfg.Now()); err != nil || !live {
+	// The run is the service's; the workload rows and the replaced run's run.kill name who asked.
+	actorType, actor := actorFromRequest(r)
+	sr = sr.WithContext(withActor(sr.Context(), actorType, actor))
+	if live, err := s.queueOwnerLive(sr.Context(), serviceAuthority(si, si.Sponsor), wl.UpdatedAt); err != nil || !live {
 		return inactive, err
 	}
 	return s.launchWorkload(sr, ws, wl)
+}
+
+// workloadActorOf is who a launch's workload rows and the run.kill of the run it replaces name: the actor
+// restartLaunch attached for the person who asked a service's launch (withActor), else the caller of r.
+func workloadActorOf(r *http.Request) (types.ActorType, string) {
+	if a, ok := r.Context().Value(auditActorCtxKey{}).(auditActor); ok {
+		return a.actorType, a.name
+	}
+	return actorFromRequest(r)
 }
 
 // serviceAuthority is the authority a launch acting as service identity si under sponsor binds: the

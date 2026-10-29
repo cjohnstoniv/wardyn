@@ -49,7 +49,8 @@ function MachineLine({ machine }: { machine: string | undefined }) {
 
 function NamespaceLine({ ns }: { ns: string }) {
   const s = POOL_DRAWER.MEMBER_NAMESPACE(ns);
-  const i = s.indexOf(ns);
+  // The name ends the sentence; the last match keeps a name like "in" from matching the prose.
+  const i = s.lastIndexOf(ns);
   return (
     <>
       {s.slice(0, i)}

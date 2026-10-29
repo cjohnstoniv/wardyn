@@ -298,6 +298,51 @@ func TestPG_Workload_StaleClaimRecordsNothing(t *testing.T) {
 	}
 }
 
+// A late report of a resource at a lower metadata.generation than stored (a runner's cache behind
+// another's) writes nothing, even with another spec; a new uid at a lower generation is a new resource.
+func TestPG_Workload_LowerK8sGenerationIsIgnored(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := t.Context()
+	poolA := ownPool(t, st, "sub-a", "A")
+	runnerA, runnerB := uuid.New(), uuid.New()
+	gen1, gen2 := int64(1), int64(2)
+
+	in := workloadPut("service:bot", "svc", "d2")
+	in.Intent = json.RawMessage(`{"experience":"background","task":"gen2"}`)
+	in.Source, in.SourcePoolID, in.SourceNamespace, in.SourceRunnerID, in.K8sGeneration, in.K8sUID =
+		store.WorkloadSourceK8s, &poolA.ID, "team-a", &runnerA, &gen2, "uid-1"
+	w := mustPutWorkload(t, st, in)
+	run := persistRun(t, ctx, pool, newRun(types.RunRunning)).ID
+	if _, err := st.SetWorkloadRun(ctx, w.ID, mustClaim(t, st, w.ID), 1, run); err != nil {
+		t.Fatal(err)
+	}
+
+	late := in
+	late.Intent, late.Digest, late.SourceRunnerID, late.K8sGeneration = json.RawMessage(`{"experience":"background","task":"gen1"}`), "d1", &runnerB, &gen1
+	got, write, err := st.PutWorkload(ctx, late)
+	if err != nil || write != store.WorkloadUnchanged || got.ID != w.ID || got.Digest != "d2" {
+		t.Fatalf("late put = %+v, %v, %v; want the stored row back unchanged", got, write, err)
+	}
+	v, err := st.GetWorkload(ctx, "service:bot", "svc")
+	if err != nil || v.Digest != "d2" || string(v.Intent) != string(w.Intent) || v.Generation != 1 || v.K8sGeneration == nil || *v.K8sGeneration != 2 ||
+		v.SourceRunnerID == nil || *v.SourceRunnerID != runnerA || v.CurrentRunID == nil || *v.CurrentRunID != run || v.CurrentGeneration != 1 ||
+		!v.UpdatedAt.Equal(w.UpdatedAt) {
+		t.Fatalf("after the late put = %+v (%v), want the generation 2 row and its run untouched", v.Workload, err)
+	}
+
+	// The same uid at the same metadata.generation is still answered (a re-report), and a new uid is
+	// accepted at any generation.
+	if _, write, err := st.PutWorkload(ctx, in); err != nil || write != store.WorkloadUnchanged {
+		t.Fatalf("re-report at the stored generation = %v, %v", write, err)
+	}
+	late.K8sUID = "uid-2"
+	got, write, err = st.PutWorkload(ctx, late)
+	if err != nil || write != store.WorkloadUpdated || got.Digest != "d1" || got.Generation != 2 || got.K8sUID != "uid-2" || *got.K8sGeneration != 1 {
+		t.Fatalf("new uid at generation 1 = %+v, %v, %v; want it recorded", got, write, err)
+	}
+}
+
 // A custom resource's workload is its pool's and namespace's alone, and an API one is the API's alone.
 func TestPG_Workload_SourceConflict(t *testing.T) {
 	st := store.NewPG(runsPGPoolIsolated(t))
@@ -410,6 +455,215 @@ func TestPG_Workload_ReadsAndDelete(t *testing.T) {
 	}
 }
 
+// A custom resource's workload is deleted only while the row is still the one read: after an apply of a
+// recreated resource (a new uid, with the same spec or another) moved it, or after the row was replaced by
+// another of the same uid, the stale delete removes nothing and the run stays. The matching one removes it.
+func TestPG_Workload_K8sDeleteHoldsOnlyForTheRowRead(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := t.Context()
+	poolA := ownPool(t, st, "sub-a", "A")
+	runner, gen := uuid.New(), int64(1)
+	put := func(uid, digest string) store.Workload {
+		in := workloadPut("service:bot", "svc", digest)
+		in.Source, in.SourcePoolID, in.SourceNamespace, in.SourceRunnerID, in.K8sGeneration, in.K8sUID =
+			store.WorkloadSourceK8s, &poolA.ID, "team-a", &runner, &gen, uid
+		return mustPutWorkload(t, st, in)
+	}
+	read := func() store.Workload {
+		v, err := st.GetWorkload(ctx, "service:bot", "svc")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v.Workload
+	}
+	w := put("uid-1", "d1")
+	run := persistRun(t, ctx, pool, newRun(types.RunRunning)).ID
+	if _, err := st.SetWorkloadRun(ctx, w.ID, mustClaim(t, st, w.ID), 1, run); err != nil {
+		t.Fatal(err)
+	}
+
+	owedEnds := func(id uuid.UUID) (n int) {
+		t.Helper()
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM workload_run_ends WHERE run_id = $1`, id).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	stale := read()
+	for _, next := range []struct{ uid, digest string }{{"uid-2", "d1"}, {"uid-3", "d2"}} {
+		put(next.uid, next.digest)
+		if _, err := st.DeleteK8sWorkload(ctx, stale); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("delete of %s after %s was applied = %v, want ErrNotFound", stale.K8sUID, next.uid, err)
+		}
+		if v := read(); v.ID != w.ID || v.K8sUID != next.uid || v.CurrentRunID == nil || *v.CurrentRunID != run {
+			t.Fatalf("after the stale delete = %+v, want row %s of %s with run %s kept", v, w.ID, next.uid, run)
+		}
+		stale = read()
+	}
+	if n := owedEnds(run); n != 0 {
+		t.Fatalf("%d owed ends after the stale deletes, want 0", n)
+	}
+
+	// The same uid on a row recreated since the read is another row.
+	if _, err := st.DeleteWorkload(ctx, "service:bot", "svc"); err != nil {
+		t.Fatal(err)
+	}
+	put(stale.K8sUID, "d2")
+
+	cur := read()
+	run2 := persistRun(t, ctx, pool, newRun(types.RunRunning)).ID
+	if _, err := st.SetWorkloadRun(ctx, cur.ID, mustClaim(t, st, cur.ID), cur.Generation, run2); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DeleteK8sWorkload(ctx, stale); !errors.Is(err, store.ErrNotFound) || owedEnds(run2) != 0 {
+		t.Fatalf("delete of a replaced row with a run = %v, %d owed ends; want ErrNotFound and none", err, owedEnds(run2))
+	}
+	gone, err := st.DeleteK8sWorkload(ctx, read())
+	if err != nil || gone.ID != cur.ID || gone.CurrentRunID == nil || *gone.CurrentRunID != run2 || owedEnds(run2) != 1 {
+		t.Fatalf("matching delete = %+v (%v), %d owed ends; want row %s with run %s owed its end", gone, err, owedEnds(run2), cur.ID, run2)
+	}
+	if _, err := st.GetWorkload(ctx, "service:bot", "svc"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("after the matching delete = %v, want ErrNotFound", err)
+	}
+}
+
+// Recording a replacement and deleting a workload each owe the run they let go its end, in the same
+// write; an owed end is listed once it is older than asked, and dropping one twice is not an error.
+func TestPG_Workload_LettingARunGoOwesItsEnd(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := t.Context()
+	run := func() uuid.UUID { return persistRun(t, ctx, pool, newRun(types.RunRunning)).ID }
+	run1, run2, run3 := run(), run(), run()
+	owed := func(olderThan time.Duration) map[uuid.UUID]store.WorkloadRunEnd {
+		t.Helper()
+		ends, err := st.ListWorkloadRunEnds(ctx, olderThan, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[uuid.UUID]store.WorkloadRunEnd{}
+		for _, e := range ends {
+			out[e.RunID] = e
+		}
+		return out
+	}
+
+	w := mustPutWorkload(t, st, workloadPut("sub-a", "svc", "d1"))
+	if _, err := st.SetWorkloadRun(ctx, w.ID, mustClaim(t, st, w.ID), 1, run1); err != nil {
+		t.Fatal(err)
+	}
+	if got := owed(0); len(got) != 0 {
+		t.Fatalf("owed after the first run = %v, want none", got)
+	}
+	mustPutWorkload(t, st, workloadPut("sub-a", "svc", "d2"))
+	if _, err := st.SetWorkloadRun(ctx, w.ID, mustClaim(t, st, w.ID), 2, run2); err != nil {
+		t.Fatal(err)
+	}
+	want := store.WorkloadRunEnd{RunID: run1, Owner: "sub-a", Name: "svc", Generation: 2, Reason: store.WorkloadEndReplaced}
+	if got := owed(0)[run1]; got != want {
+		t.Fatalf("owed for the replaced run = %+v, want %+v", got, want)
+	}
+	if _, err := st.DeleteWorkload(ctx, "sub-a", "svc"); err != nil {
+		t.Fatal(err)
+	}
+	want = store.WorkloadRunEnd{RunID: run2, Owner: "sub-a", Name: "svc", Generation: 2, Reason: store.WorkloadEndDeleted}
+	if got := owed(0)[run2]; got != want {
+		t.Fatalf("owed for the deleted workload's run = %+v, want %+v", got, want)
+	}
+	if err := st.OweWorkloadRunEnd(ctx, store.WorkloadRunEnd{RunID: run3, Owner: "sub-a", Name: "svc", Generation: 3, Reason: store.WorkloadEndReplaced}); err != nil {
+		t.Fatal(err)
+	}
+	if got := owed(time.Hour); len(got) != 0 {
+		t.Fatalf("owed older than an hour = %v, want none", got)
+	}
+	if got := owed(0); len(got) != 3 {
+		t.Fatalf("owed = %v, want the three runs", got)
+	}
+	for _, id := range []uuid.UUID{run1, run2, run3, run3} {
+		if err := st.DropWorkloadRunEnd(ctx, id); err != nil {
+			t.Fatalf("drop %s: %v", id, err)
+		}
+	}
+	if got := owed(0); len(got) != 0 {
+		t.Fatalf("owed after the drops = %v, want none", got)
+	}
+}
+
+// A replacement that waited in the queue leaves the running run's end waiting on it, and a later queued
+// one takes that wait over; restoring gives the workload the running run back with the refusal, and once no
+// workload holds the replacement the running run is owed its end at once instead.
+func TestPG_Workload_QueuedReplacementDefersTheEnd(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := t.Context()
+	running := persistRun(t, ctx, pool, newRun(types.RunRunning)).ID
+	queued := persistRun(t, ctx, pool, newRun(types.RunQueued)).ID
+	later := persistRun(t, ctx, pool, newRun(types.RunQueued)).ID
+	owed := func() map[uuid.UUID]store.WorkloadRunEnd {
+		t.Helper()
+		ends, err := st.ListWorkloadRunEnds(ctx, 0, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[uuid.UUID]store.WorkloadRunEnd{}
+		for _, e := range ends {
+			out[e.RunID] = e
+		}
+		return out
+	}
+
+	w := mustPutWorkload(t, st, workloadPut("sub-a", "svc", "d1"))
+	if _, err := st.SetWorkloadRun(ctx, w.ID, mustClaim(t, st, w.ID), 1, running); err != nil {
+		t.Fatal(err)
+	}
+	mustPutWorkload(t, st, workloadPut("sub-a", "svc", "d2"))
+	if prev, err := st.SetWorkloadRun(ctx, w.ID, mustClaim(t, st, w.ID), 2, queued); err != nil || prev != nil {
+		t.Fatalf("queued replacement recorded = %v, %v; want no run handed back to end", prev, err)
+	}
+	if e := owed()[running]; e.AfterRunID == nil || *e.AfterRunID != queued || e.AfterState != types.RunQueued {
+		t.Fatalf("running run's owed end = %+v, want it waiting on %s, QUEUED", e, queued)
+	}
+	mustPutWorkload(t, st, workloadPut("sub-a", "svc", "d3"))
+	if prev, err := st.SetWorkloadRun(ctx, w.ID, mustClaim(t, st, w.ID), 3, later); err != nil || prev == nil || *prev != queued {
+		t.Fatalf("second queued replacement recorded = %v, %v; want %s, which never ran, handed back", prev, err, queued)
+	}
+	got := owed()
+	if e := got[running]; e.AfterRunID == nil || *e.AfterRunID != later {
+		t.Fatalf("running run's owed end = %+v, want it waiting on %s now", e, later)
+	}
+	if e := got[queued]; e.AfterRunID != nil || e.Reason != store.WorkloadEndReplaced {
+		t.Fatalf("the replaced queued run's owed end = %+v, want it owed at once", e)
+	}
+
+	refusal := store.WorkloadRefusal{Generation: 3, Reason: "capability_agent", At: time.Now().UTC()}
+	if ok, err := st.RestoreWorkloadRun(ctx, got[running], refusal); err != nil || !ok {
+		t.Fatalf("restore = %v, %v; want restored", ok, err)
+	}
+	v, err := st.GetWorkload(ctx, "sub-a", "svc")
+	if err != nil || v.CurrentRunID == nil || *v.CurrentRunID != running || v.CurrentGeneration != 0 || v.LastRefusal == nil || v.LastRefusal.Reason != "capability_agent" {
+		t.Fatalf("after the restore = %+v (%v), want %s back, a launch owed and the refusal", v, err, running)
+	}
+	if ok, err := st.RestoreWorkloadRun(ctx, got[running], refusal); err != nil || ok {
+		t.Fatalf("second restore = %v, %v; want nothing to restore", ok, err)
+	}
+	if _, ok := owed()[running]; ok {
+		t.Fatal("the restored run is still owed its end")
+	}
+
+	// A wait whose replacement no workload holds any more: the running run is owed its end at once.
+	if err := st.OweWorkloadRunEnd(ctx, store.WorkloadRunEnd{RunID: running, Owner: "sub-a", Name: "gone", Generation: 4, Reason: store.WorkloadEndReplaced,
+		AfterRunID: &later}); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := st.RestoreWorkloadRun(ctx, owed()[running], refusal); err != nil || ok {
+		t.Fatalf("restore with no holder = %v, %v; want nothing restored", ok, err)
+	}
+	if e, ok := owed()[running]; !ok || e.AfterRunID != nil {
+		t.Fatalf("running run's owed end = %+v (%v), want it owed at once", e, ok)
+	}
+}
+
 // The status sweep reads only custom-resource workloads, with their run's state and service health.
 func TestPG_Workload_K8sStatusesCarryRunStateAndHealth(t *testing.T) {
 	pool := runsPGPoolIsolated(t)
@@ -423,11 +677,17 @@ func TestPG_Workload_K8sStatusesCarryRunStateAndHealth(t *testing.T) {
 	p := ownPool(t, st, "sub-a", "A")
 	k8s := func(name string) store.WorkloadPut {
 		in := workloadPut("service:bot", name, "d")
-		in.Source, in.SourcePoolID, in.SourceNamespace = store.WorkloadSourceK8s, &p.ID, "team-a"
+		in.Source, in.SourcePoolID, in.SourceNamespace, in.K8sUID = store.WorkloadSourceK8s, &p.ID, "team-a", "uid-"+name
 		return in
 	}
 	withRun := mustPutWorkload(t, st, k8s("has-run"))
 	mustPutWorkload(t, st, k8s("no-run"))
+	// The same spec reported from a resource recreated under the name keeps the row and takes the new uid.
+	recreated := k8s("no-run")
+	recreated.K8sUID = "uid-recreated"
+	if _, write, err := st.PutWorkload(ctx, recreated); err != nil || write != store.WorkloadUnchanged {
+		t.Fatalf("recreated resource: %q (%v), want unchanged", write, err)
+	}
 	mustPutWorkload(t, st, workloadPut("sub-a", "api-one", "d"))
 	run := persistRun(t, ctx, pool, newRun(types.RunRunning))
 	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET service_status = '{"health":"unhealthy","restarts":2}' WHERE id = $1`, run.ID); err != nil {
@@ -450,11 +710,11 @@ func TestPG_Workload_K8sStatusesCarryRunStateAndHealth(t *testing.T) {
 	for _, v := range got {
 		switch v.Name {
 		case "has-run":
-			if v.RunState != types.RunRunning || v.ServiceHealth != "unhealthy" || v.StatusPushed != "h1" {
+			if v.RunState != types.RunRunning || v.ServiceHealth != "unhealthy" || v.StatusPushed != "h1" || v.K8sUID != "uid-has-run" {
 				t.Errorf("has-run = %+v", v)
 			}
 		case "no-run":
-			if v.RunState != "" || v.ServiceHealth != "" || v.StatusPushed != "" {
+			if v.RunState != "" || v.ServiceHealth != "" || v.StatusPushed != "" || v.K8sUID != "uid-recreated" {
 				t.Errorf("no-run = %+v", v)
 			}
 		default:
@@ -476,6 +736,40 @@ func TestPG_Workload_ErasureDeletesTheOwnersWorkloads(t *testing.T) {
 	left, err := st.ListWorkloads(ctx, store.Page{})
 	if err != nil || len(left) != 1 || left[0].Owner != "sub-b" {
 		t.Fatalf("left = %+v (%v), want only sub-b's", left, err)
+	}
+}
+
+// A person's erasure leaves the runs their workloads let go of owed their end, but no longer naming them.
+func TestPG_Workload_ErasureForgetsTheOwnerOfOwedEnds(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := t.Context()
+	mine := persistRun(t, ctx, pool, newRun(types.RunRunning)).ID
+	theirs := persistRun(t, ctx, pool, newRun(types.RunRunning)).ID
+	for _, e := range []store.WorkloadRunEnd{
+		{RunID: mine, Owner: "sub-a", Name: "web", Generation: 1, Reason: store.WorkloadEndDeleted},
+		{RunID: theirs, Owner: "sub-b", Name: "web", Generation: 1, Reason: store.WorkloadEndDeleted},
+	} {
+		if err := st.OweWorkloadRunEnd(ctx, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := st.DeleteRunnerPoolsByOwner(ctx, "sub-a"); err != nil {
+		t.Fatal(err)
+	}
+	ends, err := st.ListWorkloadRunEnds(ctx, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[uuid.UUID]string{}
+	for _, e := range ends {
+		got[e.RunID] = e.Owner
+	}
+	if owner, ok := got[mine]; !ok || owner != "" {
+		t.Errorf("the erased person's owed end = %q (owed %v), want still owed and naming no one", owner, ok)
+	}
+	if got[theirs] != "sub-b" {
+		t.Errorf("another person's owed end names %q, want sub-b", got[theirs])
 	}
 }
 

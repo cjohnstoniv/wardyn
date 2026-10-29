@@ -181,11 +181,11 @@ func (s *Server) routes() chi.Router {
 			// to honour that. These three stay narrowed because they serve whole
 			// operator documents nobody projects. GET /base-images serves the tier
 			// only the prewrapped rows, the one kind it registers itself. GET
-			// /workspaces{,/{id},/build,/observed-egress} instead WITHHOLD that axis
-			// per reader (helpers.go's workspaceReadSecurity: paths and
-			// base_image.image blanked, the secret:/write: requirement keys and the
-			// scanned profile's host keys dropped) while keeping the EGRESS axis,
-			// which is the input to the decision this tier is widened to make.
+			// /workspaces{,/{id},/build,/observed-egress} and /workloads{,/{name}} instead WITHHOLD that
+			// axis per reader (helpers.go's workspaceReadSecurity: paths and base_image.image blanked,
+			// the secret:/write: requirement keys and the scanned profile's host keys dropped; for a
+			// workload, redactWorkloadIntentForRead) while keeping the EGRESS axis, which is the input
+			// to the decision this tier is widened to make.
 			//
 			// Said here because the asymmetry is what a reader notices first: a
 			// security_admin is answered 403 by /sources and 200 by

@@ -14,7 +14,7 @@ import { RUNNER_POOL_REFUSAL } from "../../../../../lib/runner-pool-refusals";
 import type { RunnerPoolCatalogueEntry, RunnerPoolList } from "../../../../../lib/types/runner-pools";
 import { NR_RUN } from "../../../../wardyn/copy/new-run/run";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
-import { SERVICE_FORM } from "../../../../wardyn/copy/run-service";
+import { SERVICE_FORM, SERVICE_FORM_ERRORS, SERVICE_PAUSE_WARNING } from "../../../../wardyn/copy/run-service";
 import { NR_MACHINE } from "../../../../wardyn/copy/new-run/machine";
 import { ModelAccessProvider } from "../../../../wardyn/model-access-context";
 import { browserZone, scheduleDaysAhead, todayDate, type StartChoice } from "../../../../../lib/schedule";
@@ -23,6 +23,14 @@ import type { RunIntent } from "../../draft/run-intent";
 import { poolScope } from "../../lenses/run-lens";
 import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft } from "../../new-run-route";
 import { RunStep } from "./run-step";
+
+// The Run step asks the policy preview about a service through the shared checks hook; what it answered is the test's to say.
+const checks = vi.hoisted(() => ({ warnings: [] as string[] }));
+vi.mock("../../draft/use-intent-checks", async (orig) => ({
+  ...(await orig<typeof import("../../draft/use-intent-checks")>()),
+  useDraftIdentity: () => ({ principal: "alice", resolved: true, revision: 1, authGeneration: 0 }),
+  useIntentChecks: () => ({ preview: { result: { warnings: checks.warnings } } }),
+}));
 
 const AGENT: RunIntent = { shape: "agent_task", experience: "interactive" };
 const MEMBER = SCENARIO_POOLS.member;
@@ -808,18 +816,67 @@ describe("Run step: Keep it running", () => {
     expect(screen.getByText(SERVICE_FORM.FAILED_CHECKS)).toBeInTheDocument();
   });
 
-  it("chooses Don't restart, and clearing the port takes the health check with it", async () => {
-    show({ ...SCRIPT, service: { restart: "on_failure", port: 8080, health: { path: "/healthz", interval_sec: 15, failure_threshold: 3 } } });
+  it("chooses Don't restart, and clearing the port keeps the typed check for the next port", async () => {
+    const health = { path: "/ready", interval_sec: 30, failure_threshold: 5 };
+    show({ ...SCRIPT, service: { restart: "on_failure", port: 8080, health } });
     await poolSelect();
     await userEvent.click(screen.getByRole("button", { name: SERVICE_FORM.RESTART_NEVER }));
     expect(intentNow().service?.restart).toBe("never");
     expect(screen.getByRole("button", { name: SERVICE_FORM.RESTART_ON_FAILURE })).toHaveAttribute("aria-pressed", "false");
     setField(screen.getByLabelText(SERVICE_FORM.PORT_LABEL), "");
-    expect(intentNow().service).toEqual({ restart: "never" });
+    expect(intentNow().service).toEqual({ restart: "never", health });
+    expect(screen.getByLabelText(SERVICE_FORM.PATH_LABEL)).toBeDisabled();
+    setField(screen.getByLabelText(SERVICE_FORM.PORT_LABEL), "9090");
+    expect(intentNow().service).toEqual({ restart: "never", port: 9090, health });
+    expect(screen.getByLabelText(SERVICE_FORM.PATH_LABEL)).toHaveValue("/ready");
+  });
+
+  it("says which field is out of range, beside the field", async () => {
+    show({ ...SCRIPT, service: { restart: "on_failure", port: 8080, health: { interval_sec: 15, failure_threshold: 3 } } });
+    await poolSelect();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    const cases: [string, string, string][] = [
+      [SERVICE_FORM.PORT_LABEL, "70000", SERVICE_FORM_ERRORS.PORT_INVALID],
+      [SERVICE_FORM.PATH_LABEL, "healthz", SERVICE_FORM_ERRORS.PATH_INVALID],
+      [SERVICE_FORM.EVERY_LABEL, "4", SERVICE_FORM_ERRORS.EVERY_INVALID],
+      [SERVICE_FORM.FAILURES_LABEL, "11", SERVICE_FORM_ERRORS.FAILURES_INVALID],
+    ];
+    for (const [label, typed, text] of cases) {
+      setField(screen.getByLabelText(label), typed);
+      expect(screen.getByLabelText(label)).toHaveAttribute("aria-invalid", "true");
+      expect(screen.getByText(text)).toHaveAttribute("role", "alert");
+    }
+    setField(screen.getByLabelText(SERVICE_FORM.PORT_LABEL), "8080");
+    setField(screen.getByLabelText(SERVICE_FORM.PATH_LABEL), "/healthz");
+    setField(screen.getByLabelText(SERVICE_FORM.EVERY_LABEL), "30");
+    setField(screen.getByLabelText(SERVICE_FORM.FAILURES_LABEL), "5");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("says the service will be paused when the checks' warnings carry the server's sentence, and not otherwise", async () => {
+    checks.warnings = [SERVICE_PAUSE_WARNING];
+    show({ ...SCRIPT, service: { restart: "on_failure" } });
+    await poolSelect();
+    expect(screen.getByText(SERVICE_PAUSE_WARNING)).toBeInTheDocument();
+    cleanup();
+    checks.warnings = [];
+    show({ ...SCRIPT, service: { restart: "on_failure" } });
+    await poolSelect();
+    expect(screen.queryByText(SERVICE_PAUSE_WARNING)).not.toBeInTheDocument();
+    cleanup();
+    checks.warnings = [SERVICE_PAUSE_WARNING];
+    show(SCRIPT);
+    await poolSelect();
+    expect(screen.queryByText(SERVICE_PAUSE_WARNING)).not.toBeInTheDocument();
+    checks.warnings = [];
   });
 
   it("is not offered for an agent task, an application server, or a virtual machine", async () => {
     show({ shape: "application", experience: "interactive", startup: { kind: "command", command: "npm run dev" }, inline_policy: { ui_apps: [{ name: "web", port: 3000, path: "/" }] } });
+    await poolSelect();
+    expect(screen.queryByRole("switch", { name: SERVICE_FORM.LABEL })).not.toBeInTheDocument();
+    cleanup();
+    show({ ...SCRIPT, workload: { kind: "agent_task", task: "x" } });
     await poolSelect();
     expect(screen.queryByRole("switch", { name: SERVICE_FORM.LABEL })).not.toBeInTheDocument();
     cleanup();

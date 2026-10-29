@@ -399,11 +399,13 @@ const (
 )
 
 // Workload report bounds. MaxWorkloadSpecBytes is the most a custom resource's spec may take; the
-// org refuses a larger one. MaxWorkloadSyncNames bounds a sync's name list.
+// org refuses a larger one. MaxWorkloadSyncNames bounds a sync's name list, and MaxWorkloadUID a
+// resource's metadata.uid (a Kubernetes UID is 36 bytes).
 const (
 	MaxWorkloadSpecBytes = 256 << 10
 	MaxWorkloadSyncNames = 1000
 	MaxWorkloadMessage   = 512
+	MaxWorkloadUID       = 128
 )
 
 // WorkloadReport is the `workload` event's data. Namespace is where the custom resource lives; the
@@ -430,6 +432,10 @@ var (
 	workloadName  = regexp.MustCompile(`^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$`)
 )
 
+// ValidWorkloadName reports whether n is a name a workload frame may carry. A Kubernetes name
+// may start with a digit; such a resource can never be a workload, so a sync leaves it out.
+func ValidWorkloadName(n string) bool { return workloadName.MatchString(n) }
+
 // Validate refuses a report outside the shape of its op.
 func (r WorkloadReport) Validate() error {
 	if !workloadLabel.MatchString(r.Namespace) {
@@ -437,7 +443,7 @@ func (r WorkloadReport) Validate() error {
 	}
 	switch r.Op {
 	case WorkloadOpApply, WorkloadOpDelete:
-		if !workloadName.MatchString(r.Name) || r.UID == "" || len(r.Names) > 0 {
+		if !workloadName.MatchString(r.Name) || r.UID == "" || len(r.UID) > MaxWorkloadUID || len(r.Names) > 0 {
 			return fmt.Errorf("%w: workload %s needs a name and uid, and no names", ErrBadFrame, r.Op)
 		}
 		if r.Op == WorkloadOpDelete {
@@ -483,10 +489,14 @@ var WorkloadPhases = []string{WorkloadPhasePending, WorkloadPhaseQueued, Workloa
 	WorkloadPhaseEnded, WorkloadPhaseRefused, WorkloadPhaseInvalid, WorkloadPhaseNotBound, WorkloadPhaseBindingInactive}
 
 // WorkloadStatusArgs is workload_status's. The runner writes it to the resource's status
-// subresource and nowhere else; the org ignores the status of every resource it reads.
+// subresource and nowhere else; the org ignores the status of every resource it reads. UID and
+// ObservedGeneration are the resource the org answers, as its report named them: the runner writes the
+// status only to that resource (metadata.uid) at that metadata.generation, so a late answer never lands
+// on a resource recreated under the same name, nor on a newer spec.
 type WorkloadStatusArgs struct {
 	Namespace          string `json:"namespace"`
 	Name               string `json:"name"`
+	UID                string `json:"uid"`
 	ObservedGeneration int64  `json:"observed_generation"`
 	Phase              string `json:"phase"`
 	RunID              string `json:"run_id,omitempty"`
@@ -497,8 +507,8 @@ type WorkloadStatusArgs struct {
 
 // Validate refuses a status outside the closed phase list or past its bounds.
 func (a WorkloadStatusArgs) Validate() error {
-	if !workloadLabel.MatchString(a.Namespace) || !workloadName.MatchString(a.Name) {
-		return fmt.Errorf("%w: workload status for %q/%q", ErrBadFrame, a.Namespace, a.Name)
+	if !workloadLabel.MatchString(a.Namespace) || !workloadName.MatchString(a.Name) || a.UID == "" || len(a.UID) > MaxWorkloadUID {
+		return fmt.Errorf("%w: workload status for %q/%q (uid %q)", ErrBadFrame, a.Namespace, a.Name, a.UID)
 	}
 	if !slices.Contains(WorkloadPhases, a.Phase) {
 		return fmt.Errorf("%w: unknown workload phase %q", ErrBadFrame, a.Phase)

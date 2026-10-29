@@ -15,7 +15,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the `ALTER
   DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `workloads` and
-  `workload_bindings` (migration `0241_workloads`). Without it applying a workload and binding a namespace fail. An
+  `workload_bindings` (migration `0241_workloads`) and on `workload_run_ends` (migration `0244_workload_run_ends`).
+  Without it applying a workload and binding a namespace fail. An
   upgrade from before 0.10.0-rc.3 also needs `SELECT, INSERT, UPDATE, DELETE` on `macos_vm_disks` (migration
   `0236_macos_vm_disks`), and every grant the 0.10.0-rc.1 notes list: `SELECT, INSERT, UPDATE, DELETE` on
   `aws_sso_refused_tokens`, `cli_sign_ins`, `ui_desktop_closed`, `desktop_signins`, `desktop_signin_shares`,
@@ -23,6 +24,67 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `governance_unit_admins`, `oidc_session_sids` and `desktop_vm_sign_ins`. Also grant it `SELECT, INSERT, UPDATE` on
   `runner_health`, `launch_preset_version_floor`, `cli_sessions` and `governance_boundary`. If it turns on
   `WARDYN_MULTI_AGENT_TASKS`, grant it `SELECT, INSERT, UPDATE` on `run_harnesses` as well.
+- A service needs the runner tools of this release in its image. An image wrapped or built before it runs the command
+  once, with no restart and no health check, and its health reads *Health unknown* after 10 minutes. Wrap or build the
+  image again with this release. See [Services](docs/SERVICES.md#images).
+- Migration `0239_inbound` restricts the `feature` value `inbound`, admits `inbound` in `api_tokens.kind`'s CHECK and
+  adds `caller` and `app` to `attach_tickets`. It inserts the `inbound` restriction row when absent, rewrites no token or ticket, and adds no grant. See
+  [OPERATIONS.md](docs/OPERATIONS.md).
+
+### Added
+
+- A background command can be kept running as a service. On New Run, an Automation / script has **Keep it running**
+  (`wardyn run --service`, or `service` on `POST /runs`): the command is restarted when it exits with an error, after a
+  pause that grows to 5 minutes, and checked on a port inside the sandbox by a TCP connect or an HTTP GET. The run list
+  and run page show *Starting*, *Healthy*, *Unhealthy* or *Health unknown* and the restart count. The supervisor runs
+  inside the sandbox, so health is the sandbox's own report (`source: sandbox` on `run.service.health` and
+  `run.service.restart`). A starting or healthy service has its lease renewed within the pool's lifetime cap, as
+  `run.end.set` with reason `service_renewed`; an unhealthy one ends at its lease. See [Services](docs/SERVICES.md).
+
+- Your walls: limits you set on every run you start, which only narrow what your organisation allows. Set them under
+  **Your account**, with `wardyn walls` (`wardyn walls set --file walls.yaml`, `wardyn walls clear`), or through
+  `GET`, `PUT` and `DELETE /api/v1/me/walls`. They name the sites a run may reach or never reach, what happens at a site
+  not listed, a barrier floor, the clipboard and file directions, and credentials kept out. They are private to you and
+  bind every run you start, a super admin's too. Your site list is not applied again at dispatch or revive, so the hosts
+  a run's own setup adds stay reachable; your denies, blocked directions and withheld credentials are, and at the mint
+  door. An egress approval for a host your walls deny is refused `personal_walls_host`. New reasons: `walls_invalid`,
+  `walls_need_person`, `walls_unavailable` and `personal_walls_host`; new audit actions `person.walls.set` and
+  `person.walls.delete`. See [Your walls](docs/POLICIES.md#your-walls).
+- `overrides.egress.allow_all_egress: false` is accepted on a run request, on any base policy, and turns open egress off
+  for that run; it reaches the base's listed hosts, the hosts you add and the hosts its own setup needs. New Run step 5
+  offers it as **Only the sites listed**. Before, `false` was refused.
+- A run's `ui_apps` entry can now be marked `inbound`, with a `callers` list, so the run's owner and the people, groups and
+  service identities it names can call that port through the app gateway on any run, a background run with no terminal
+  included. Each admitted call is recorded as `inbound.allow`, and refusals as `inbound.deny` under the `auth.fail` rate bound. It is HTTP and WebSocket only, and it travels the
+  same exec lane as any UI app, so docker, Kubernetes and remote runners need no change. Nobody but an operator may declare one until an
+  administrator allows the new `inbound` value of the `feature` permission (a run that only inherits an administrator's
+  inbound apps is not asked); a governance profile's `deny_ui_apps` or
+  `deny_interactive` removes inbound apps. See [UI sandboxes](docs/UI-SANDBOXES.md#inbound-let-named-callers-reach-a-port).
+- An **inbound token** (`{"kind":"inbound"}` on `POST /me/tokens`, or on a service identity's token mint) calls the inbound
+  apps that name its holder as a caller, sent as `Authorization: Bearer wdn_…` on the gateway. It does nothing on the Wardyn
+  API, and the gateway takes no other token. It must expire, in at most 90 days, and token lists mark it `"inbound": true`.
+  See [API tokens](docs/operations/api-tokens.md#inbound-tokens).
+- `POST /runs/{id}/apps/{app}/ticket` mints the browser ticket that opens one inbound app for the run's owner or a person
+  its `callers` names. A named person who is not the owner needs per-run hosts (`WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE`);
+  on one shared host it answers `403` `inbound_needs_host_mode`. `/healthz` gains `ui_sandbox.inbound_url_template`.
+- A UI-app call to a run whose runner is offline now answers `503` `runner_offline` on the gateway instead of `502`.
+- Workloads: a named run Wardyn keeps declared. `wardyn apply -f FILE` stores a workload and starts its run; an apply that
+  changes nothing starts nothing, and a changed spec starts the new run before it ends the old one (`workload.replace`). A
+  launch your organisation refuses keeps the old run and is recorded as `last_refusal`. `wardyn diff`, `wardyn delete`,
+  `wardyn workload list|get|restart|delete` and `wardyn workload binding create|list|delete` complete the CLI. On a
+  Kubernetes organisation runner a `WardynWorkload` resource in a bound namespace launches as its service identity, and its
+  status shows the phase and reason. See [Workloads](docs/operations/workloads.md).
+
+### Changed
+
+- With per-run hosts, every relay session request from a browser must now be same-origin, carry no fetch metadata, or be a
+  top-level `GET` or `HEAD` navigation, and an `Origin` it names must be its own; anything else is `403` `ui_gateway_cross_site`.
+  This holds for every app, inbound or not, so a page on another run's origin can no longer drive a person's own editor
+  session.
+- The gateway removes any `X-Wardyn-*` header a client sends before the request reaches the app. On an inbound app it adds
+  `X-Wardyn-Caller`, and `X-Wardyn-Caller-Email` when the credential carries an email.
+- An inbound-token stream is re-checked at most every 30 seconds and closed once its token is revoked, has expired or its
+  owner is suspended.
 
 ### Fixed
 

@@ -441,6 +441,41 @@ A run can carry components that add destinations and secrets ([POLICIES.md](POLI
   - A fact never carries the name of a secret the organisation provides.
 - Create, preflight and preview refuse with the component reasons in [`Reason`](#reason-branch-on-this-never-on-errors-prose); a run is audited as `run.component.attach` and `run.component.refuse`.
 
+## Your walls
+
+A person's own walls are limits they set on every run they start; they only narrow ([POLICIES.md](POLICIES.md#your-walls) lists the knobs). The client wraps the three routes.
+
+| Method | Route | Answers |
+|---|---|---|
+| `GetMyWalls` | `GET /api/v1/me/walls` | `200` `{spec, updated_at?}`; `{spec: {}}` when none are set |
+| `PutMyWalls` | `PUT /api/v1/me/walls` | `{spec}` replaces the whole document. `200` `{spec, updated_at}`; an empty spec is no walls |
+| `ClearMyWalls` | `DELETE /api/v1/me/walls` | `204`; the stored document becomes `{}` |
+
+- The routes act for the signed-in person only. A personal API token, a CLI session or a delegation acts as that person; no principal is read from the path or the body.
+- The admin token, local mode and a service identity are refused `400` `walls_need_person`. A deployment whose store keeps no personal settings answers `501` `walls_unavailable`.
+- A body that names a wider value, a site that is not a DNS name or `*.` wildcard, or a list over its cap is `400` `walls_invalid`, naming the first path. A body with an unknown key is refused by the strict decode.
+- A write is audited as `person.walls.set` or `person.walls.delete`: the knobs named, the length of each list and the kinds kept out, never the lists.
+- `wardyn walls` prints your walls as YAML, `wardyn walls set --file walls.yaml` (`-` reads stdin) replaces them and `wardyn walls clear` removes them. The file holds the knobs at the top level, and one that names no limit is refused: use `clear`.
+- A run that your walls narrowed records `policy_source.personal_walls` on its `run.create` row, read back by `GET /runs/{id}/policy` as the cause `walls`.
+
+### Narrowing one run
+
+`overrides.egress.allow_all_egress: false` turns open egress off for one run, on any base: the default policy, a stored `policy_id`, a preset, a template or a run document.
+
+- The run then reaches the base's listed hosts, the hosts in `overrides.hosts.add_allowed` and the hosts its own setup needs. The base's own hosts stay read-only.
+- It is a narrowing, so it is always allowed and the ceiling has nothing to bound. On a base that already has open egress off it changes nothing.
+- Add `overrides.egress.first_use_approval: always_deny` for default-deny. `true` still requests every other public host and is bounded by the ceiling.
+- The client's `RunEgressOverrides.AllowAllEgress` is a `*bool`, and `Items()` reports `false` as the operation `narrow` and `true` as `set`.
+
+```yaml
+overrides:
+  egress:
+    allow_all_egress: false
+    first_use_approval: always_deny
+  hosts:
+    add_allowed: [api.example.com, pypi.org]
+```
+
 ## Run templates
 
 A template is a saved run setup, whole or partial, kept for yourself, published to the organisation or published to one group. It is content: a published template grants nothing.
@@ -717,7 +752,7 @@ start.
 | `policy_overlay_invalid` / `policy_overlay_conflict` | `400`: an unusable `policy_overlay`, or one beside `policy_id` or `inline_policy` (see [Run documents](#run-documents)). |
 | `run_shape_conflict` | `422`: `shape` does not fit the run: it needs `experience`, and `application`, `environment` and `agent_task` each require the workload or tool shown under [Run documents](#run-documents). |
 | `run_service_shape` | `422`: `service` rides a run that is not a background run of a command: it needs `experience` `background` and `workload` kind `command`. A VM `machine_kind` is `request_field_unavailable`. |
-| `run_application_ui_apps_denied` | `422`: `POST /runs`, `POST /runs/preflight` and `POST /runs/policy-preview`: `shape` `application` declares `ui_apps` that the governance profile's `deny_ui_apps` strips or its allowed apps lack, and the sentence says which. Other shapes keep the strip and the warning. |
+| `run_application_ui_apps_denied` | `422`: `POST /runs`, `POST /runs/preflight` and `POST /runs/policy-preview`: `shape` `application` declares `ui_apps` that the governance profile's `deny_ui_apps` strips or its allowed apps lack, or an inbound app that `deny_interactive` strips, and the sentence says which. Other shapes keep the strip and the warning. |
 | `run_background_only` | `409`: an interactive door of a background task (terminal, exec, SSH, web gateway, desktop). Logs, audit, status and the lifecycle controls (kill, revive, extend) stay. |
 | `template_document_invalid` / `template_field_invalid` / `template_field_unknown` / `template_version_unsupported` | `400`, `422` for the version: a document that is not one bounded document, a value of the wrong shape (null and redaction placeholders included), a key the schema lacks, or an `api_version` or `kind` this server does not read. |
 | `template_secret_refused` / `template_run_state_refused` / `template_metadata_in_content` / `template_field_excluded` | `400`: a template never holds a secret value, state of one run (identity, session, claim, admission), an owner, scope, group or revision, or a launch-only (title, description) or retired field. The path is in the diagnostic. |
@@ -802,9 +837,10 @@ start.
 | `approval_rule_not_applicable` | An `approval.policy.skip` reason, never sent to a client: no rule decides that approval. |
 | `boundary_host` | `POST /approvals/{id}/approve` (403): the Wardyn boundary is in `hard_limits` and denies the egress host, or does not allow it. |
 | `restriction_invalid` / `restriction_not_found` / `restriction_host` / `workspace_owning_unit_default` | The restriction routes, an egress approval, and `PUT /workspaces/{id}/owning-unit`. |
-| `walls_invalid` / `walls_need_person` / `walls_unavailable` / `personal_walls_host` | `/me/walls`: invalid walls (400), no signed-in person (400), no personal settings store (501); an egress approval of a host the run owner's walls deny (403). |
-| `credential_withheld` | `POST /internal/credentials/mint`, `GET /internal/injection/{grantID}` (403): the run's governance profile or the Wardyn boundary now withholds the grant or a host it reaches. |
-| `credential_withheld_unread` | `POST /internal/credentials/mint` (503): the run, its grants, its profile or the Wardyn boundary could not be read to check the grant; retry. |
+| `walls_invalid` / `walls_need_person` / `walls_unavailable` | `/me/walls` ([Your walls](#your-walls)): `400` walls that name a wider value, a bad site or a list over its cap; `400` a caller who is no signed-in person (the admin token, local mode, a service identity); `501` a store that keeps no personal settings. |
+| `personal_walls_host` | `POST /approvals/{id}/approve` (403): the run owner's walls deny the egress host. A host outside their list is not refused here; it follows their choice for a site that is not listed. |
+| `credential_withheld` | `POST /internal/credentials/mint`, `GET /internal/injection/{grantID}` (403): the run's governance profile, the Wardyn boundary or the run owner's walls now withhold the grant or a host it reaches. |
+| `credential_withheld_unread` | `POST /internal/credentials/mint` (503): the run, its grants, its profile, the Wardyn boundary or the run owner's walls could not be read to check the grant; retry. |
 | `break_glass_reason_required` | `POST /runs`, `/runs/preflight` and `/runs/policy-preview` with the admin token (400): the boundary is in `hard_limits`, bounds something, a unit with its own walls or a restriction exists, and the `X-Wardyn-Break-Glass-Reason` header is missing, too long or has control characters. |
 | `secret_name_invalid` / `secret_name_reserved` / `secret_owner_param_refused` / `secret_body_invalid` / `secret_value_too_short` / `secret_cap_reached` / `secret_not_found` | `PUT/DELETE /secrets/{name}` (and `/me/secrets/{name}`, `/shared-secrets/{name}`): the name fails the secret-name format or is reserved, `?owner=` was sent on a write, the body is malformed, the value is below the mask minimum, the owner already holds the maximum number of secrets, or (the admin-only `?owner=` delete arm) that owner holds no secret by that name. Also `GET /internal/injection/{grantID}` (424): a stored header credential under the minimum without its trailing line break. |
 | `people_store_unavailable` / `person_principal_invalid` / `person_principal_reserved` / `person_email_invalid` / `person_collision` / `person_email_taken` | `POST /people` (operator/security-tier only). |
@@ -835,6 +871,7 @@ start.
 | `needs_sso` | The service-identity routes in local mode, which has no person to sponsor one (`409`). |
 | `workloads_unavailable` / `workload_invalid` / `workload_not_found` / `workload_source_conflict` / `workload_cap_reached` / `workload_managed_by_k8s` | The `/workloads` routes (`ApplyWorkload`, `GetWorkload`, `ListWorkloads`, `RestartWorkload`, `DeleteWorkload`). `501`: the store keeps no workloads. `400` `workload_invalid`: the name is not a lowercase DNS label, a header field is too long, or the intent fails the run-document door (`diagnostics` lists each problem, as `POST /templates/import` does). `404`: no workload of that name that you may reach. `409` `workload_source_conflict`: a custom resource owns it, so an apply cannot change it. `422`: you hold 100 workloads. `409` `workload_managed_by_k8s`: deleting a custom resource's workload, which only an admin or `security_admin` may. A launch the create path refuses is not an error: the answer is `200` with `launch.state` `refused` and that refusal's `reason`, and the previous run keeps running. |
 | `workload_binding_needs_person` / `workload_binding_invalid` / `workload_binding_conflict` / `workload_binding_not_found` | The `/workload-bindings` routes (security tier). `403` `workload_binding_needs_person`: a binding is made by a signed-in person, never with an API token or the admin token. `400`: the pool or service is missing, or the namespace is not a DNS label. `409`: the namespace is bound on that pool already. `404` `workload_binding_not_found`: no binding with that id. An unknown pool answers `runner_pool_not_found`; an unknown or inactive service identity `service_identity_not_found` or `service_identity_inactive`. |
+| `workload_pool_mismatch` / `workload_binding_inactive` | A `WardynWorkload` custom resource's `status.reason`, never an HTTP answer. `workload_pool_mismatch`: the spec names a `runner_pool_id` other than the pool its namespace is bound on, so nothing is recorded. `workload_binding_inactive`: the binding's service identity is suspended or retired, its sponsor changed since the binding was made, or the sponsor's sessions were cut; the spec is recorded, nothing launches, and a running run keeps running. Bind the namespace again. |
 | `api_token_no_human` / `api_token_from_delegated_token` / `api_token_member_mode_mint` / `api_token_name_invalid` / `api_token_ttl_invalid` / `api_token_cap_reached` | `POST /api/v1/tokens` (self-service mint) and `DELETE`; the invitation claim and the sponsor's service-token mint answer the mint guards with the same sentences, and `api_token_cap_reached` (`422`) there means `20` live tokens on the identity for the sponsor's mint, but on an invitation claim the cap is the claimer's own live tokens. |
 | `owner_ambiguous` / `owner_unresolved` | The shared owner/principal resolver shape: more than one known principal matches a name, or none does. `secrets.go`'s admin `?owner=` resolution (`ownerRefusalReason`) and `sshkeys_admin.go`'s `resolveSSHKeyOwner` (also reached from `POST /sessions/revoke`'s SSH-key cutoff) both answer from this one vocabulary rather than each inventing its own. |
 | `sessions_revoke_param_invalid` | `POST /sessions/revoke`: the body must set exactly one of `sub`/`all`, and `sessions_only` (browser sessions end; API tokens and SSH keys keep working) goes with `sub`, not `all`. |
@@ -982,7 +1019,7 @@ The rest reach the wire only through
 | `audit_retention_digest_mismatch` | `POST /audit/retention/drop`: the digest supplied is not the one the database computes for the partition. Answered `409` and audited. |
 | `audit_retention_actor_reserved` | `POST /audit/retention/drop`: the caller's actor name is `wardynd`, which is reserved for the retention sweeper. Answered `403` and audited. |
 | `byoi_user` | A Bring-Your-Own-Identity principal reached a route BYOI does not extend to. |
-| `capability_egress_host` / `capability_feature` / `capability_secret` | The capability-grant gates outside the five launch-door kinds already covered above: an egress host, a feature flag, or a secret the caller's capability grants do not cover. A feature flag also gates the invitation claim and the sponsor's service-token mint (`api_token`) and, as the foreign-run `404`'s audit reason, a sponsor entering a service identity's run (`service_attach`). |
+| `capability_egress_host` / `capability_feature` / `capability_secret` | The capability-grant gates outside the five launch-door kinds already covered above: an egress host, a feature flag, or a secret the caller's capability grants do not cover. A feature flag also gates the invitation claim and the sponsor's service-token mint (`api_token`) and, as the foreign-run `404`'s audit reason, a sponsor entering a service identity's run (`service_attach`). A request that declares an inbound app is refused `403` on `POST /runs`, `/runs/preflight` and `/runs/policy-preview` until an administrator allows the `inbound` feature (target `runs.ui_apps`). |
 | `delegation_scope` | A portal's delegated token asked for a route outside its own delegation allow-list (#1142). |
 | `service_scope` | A service identity's token asked for a route outside its fixed allow-list (#1508): run create, preflight, list, read, events, output, `PATCH` and kill, `GET /audit?run_id=`, `GET /presets`, `GET /workspaces`, `GET /me`, `GET /setup/status` and its own model-provider credential. Everything else, `GET /audit/export` included, answers `403`. |
 | `event_stream_cap` | The caller already holds 32 open `GET /runs/{id}/events` streams, the most one principal may (#1407); close one and retry. Answered `422` and not audited, like `run_quota`. |
@@ -997,7 +1034,7 @@ The rest reach the wire only through
 | `recording_governed` | `POST /workspaces/{id}/record` by an admin whose runs are governed (`WARDYN_GOVERN_ADMIN_RUNS`): `403`, audited at target `workspaces.record`. The body names the remedy, `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT` set to `recording`. The admin token and local mode are never refused. |
 | `run_kept` | The run is kept (ended or lost); its agent is stopped and nothing may act on it as if it were live. |
 | `run_owner_only` | Interactive entry (attach-ticket mint or consume, the cookie attach lane, a UI app, take-over) to a run whose owner is a person, asked by a super admin who is not that person (#1476): `403`, with `error` "only the person who started this run can open it interactively". Unlike `not_owner` it is not hidden — the admin can already see the run. A run with no personal owner (operator-owned) stays enterable; kill, approve, policy, grants, revoke, audit, revive and resume are unchanged. Also the SSH gateway's refusal of a service identity's sponsor, whatever grant they hold (#1508). |
-| `role_stamp_stale` | The `wdn_` API token's role and group stamp is older than the deployment's `WARDYN_ROLE_STAMP_TTL` (0.8.6); answered `401`. The token's owner signs in to the console again, which re-stamps it; mint nothing new. |
+| `role_stamp_stale` | The `wdn_` API token's role and group stamp is older than the deployment's `WARDYN_ROLE_STAMP_TTL` (0.8.6); answered `401`. The token's owner signs in to the console again, which re-stamps it; mint nothing new. An inbound token on the app gateway is refused the same way. |
 | `key_domain_unknown` | A key-domain assignment named a domain the deployment's key domains file does not declare (`PUT /key-domains/assignments/{subject_type}/{subject}`): `422`, audited as `authz.denied`. |
 | `key_domain_ambiguous_membership` | A group key-domain assignment would leave people in groups assigned to different domains with no assignment of their own, or while a person whose last sign-in lost groups (a Microsoft Entra overage) has none, so their next principal key would be refused: `409`, audited as `authz.denied`, counting and naming them. Deactivated or purged people are not counted; deleting such a person's user assignment while a group is assigned is refused the same way, as is deleting the user assignment of a person whose groups are assigned to different domains. |
 | `run_quota` | The acting principal's governance profile run-count or concurrency limit is at its cap. Not audited on its own (`Audit: false` in the registry): an authorized caller at a limit is no attacker. |

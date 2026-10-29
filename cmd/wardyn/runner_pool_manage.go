@@ -150,7 +150,8 @@ func poolMembers(cmd *cobra.Command, c *sdk.Client, pool sdk.RunnerPool, runnerA
 	}
 	var done, failed []string
 	for _, ref := range refs {
-		if add && ref.in(members) {
+		// A member in another namespace goes to the server, which refuses the change and says why.
+		if add && ref.in(members) && ref.sameNamespace(members, runsNamespace) {
 			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s is already in %s\n", ref.name, pool.Name); err != nil {
 				return err
 			}
