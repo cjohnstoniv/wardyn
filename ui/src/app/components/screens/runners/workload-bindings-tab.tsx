@@ -25,6 +25,7 @@ import { BindNamespaceDialog, servicePrincipal } from "./workload-bind-dialog";
 interface PoolName {
   id: string;
   name: string;
+  scope: string;
 }
 
 export function WorkloadBindingsTab() {
@@ -40,7 +41,7 @@ export function WorkloadBindingsTab() {
     Promise.all([workloadBindings.list(), runnerPools.list(), serviceIdentities.listAll()])
       .then(([list, catalogue, identities]) => {
         setBindings(list);
-        setPools(catalogue.pools.filter((p) => p.scope === "organization").map((p) => ({ id: p.id, name: p.name })));
+        setPools(catalogue.pools.map((p) => ({ id: p.id, name: p.name, scope: p.scope })));
         setServices(identities.filter((s) => s.state !== "suspended" && s.state !== "retired"));
         setLoadError(null);
         setNow(Date.now());

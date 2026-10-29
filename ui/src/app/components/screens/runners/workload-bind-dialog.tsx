@@ -21,17 +21,18 @@ import { Field } from "../../wardyn/form-primitives";
 export const servicePrincipal = (name: string) => `service:${name}`;
 
 export function BindNamespaceDialog({
-  pools,
+  pools: catalogue,
   services,
   onClose,
   onBound,
 }: {
-  /** The organization pools a binding may name. */
-  pools: { id: string; name: string }[];
+  /** Every pool the catalogue lists; only an organization pool may be named, so the dialog offers those. */
+  pools: { id: string; name: string; scope: string }[];
   services: ServiceIdentity[];
   onClose: () => void;
   onBound: (namespace: string) => void;
 }) {
+  const pools = React.useMemo(() => catalogue.filter((p) => p.scope === "organization"), [catalogue]);
   const [pool, setPool] = React.useState("");
   const [namespace, setNamespace] = React.useState("");
   const [service, setService] = React.useState("");

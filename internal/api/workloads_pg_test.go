@@ -254,6 +254,39 @@ func TestPG_WorkloadBinding_NeedsAPerson(t *testing.T) {
 	}
 }
 
+// TestPG_WorkloadBinding_NamesAnOrganizationPoolOnly: a person's own pool is refused 422, named by id or by
+// name, so a personal runner never launches as a service; an organization pool binds.
+func TestPG_WorkloadBinding_NamesAnOrganizationPoolOnly(t *testing.T) {
+	e := newSvcEnv(t)
+	e.mustCreate(t, svcName, svcSponsor)
+	ctx := context.Background()
+	mine, err := e.st.CreateRunnerPool(ctx, types.RunnerPool{ID: uuid.New(), Name: "My laptop", Scope: types.RunnerPoolUser, Owner: svcSponsor}, svcSponsor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	org, err := e.st.CreateRunnerPool(ctx, types.RunnerPool{ID: uuid.New(), Name: "Platform", Scope: types.RunnerPoolOrganization}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bind := func(pool, ns string) *httptest.ResponseRecorder {
+		return doSSO(t, e.h.srv, http.MethodPost, "/api/v1/workload-bindings", e.sec, `{"pool":"`+pool+`","namespace":"`+ns+`","service":"`+svcName+`"}`)
+	}
+	for _, ref := range []string{mine.ID.String(), mine.Name} {
+		if w := bind(ref, "apps"); w.Code != http.StatusUnprocessableEntity || respReason(w) != reasonWorkloadBindingPoolScope {
+			t.Errorf("bind by %q: %d %s, want 422 %s", ref, w.Code, w.Body.String(), reasonWorkloadBindingPoolScope)
+		}
+	}
+	if left, err := e.st.ListWorkloadBindings(ctx, store.Page{}); err != nil || len(left) != 0 {
+		t.Fatalf("bindings after the refusals = %+v (%v), want none", left, err)
+	}
+	for _, ref := range []string{org.ID.String(), org.Name} {
+		ns := map[string]string{org.ID.String(): "by-id", org.Name: "by-name"}[ref]
+		if w := bind(ref, ns); w.Code != http.StatusCreated {
+			t.Errorf("bind %q on the organization pool: %d %s, want 201", ref, w.Code, w.Body.String())
+		}
+	}
+}
+
 // TestPG_Workload_BindingLaunchMatchesTokenLaunch: a launch under the service's bound authority writes the
 // run.create row a launch with the service's token writes, apart from `via` (which neither carries here).
 func TestPG_Workload_BindingLaunchMatchesTokenLaunch(t *testing.T) {

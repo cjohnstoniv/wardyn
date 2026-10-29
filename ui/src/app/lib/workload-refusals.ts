@@ -12,6 +12,7 @@
 export const WORKLOAD_REFUSAL_SENTENCE: Record<string, string> = {
   // The workload paths (internal/api/reasons.go).
   workload_binding_inactive: "The namespace binding no longer carries authority, so nothing launches until it is bound again.",
+  workload_binding_pool_scope: "A binding names an organization pool, not a person's own.",
   workload_pool_mismatch: "The spec names a runner pool other than the one its namespace is bound on.",
   workload_invalid: "The spec is not a workload Wardyn accepts.",
   workload_source_conflict: "Another writer already owns a workload of this name.",

@@ -131,7 +131,7 @@ wardyn workload binding create --pool <pool> --namespace team-a --service web-bo
 5. Commit the resource to `team-a`.
 
 - With `rbac.create=false`, apply the per-namespace Roles before the runner image starts. The runner refuses to boot without them.
-- `--pool` takes a pool's id, or an organisation pool's name. A namespace is bound once per pool (`409` `workload_binding_conflict`).
+- `--pool` takes an organisation pool's id or name. A person's own pool is refused (`422` `workload_binding_pool_scope`): its runners are personal, and a personal runner must never launch as a service. A namespace is bound once per pool (`409` `workload_binding_conflict`).
 - Bind only pools whose runners are all in the one cluster the namespace belongs to.
 - A runner serves a pool in one runs namespace, `runs_namespace`, fixed when the runner is added to the pool ([Runner pools](runner-pools.md)). That is where the pods go; the binding's namespace is only where the resource lives.
 - The organisation finds a binding through the reporting runner's own pools. If a runner is in two pools that bind one namespace, the older binding wins.

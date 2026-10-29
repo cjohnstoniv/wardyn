@@ -853,32 +853,35 @@ func TestPG_WorkloadBinding_CreateConflictAndPoolFences(t *testing.T) {
 	pool := runsPGPoolIsolated(t)
 	st := store.NewPG(pool)
 	ctx := t.Context()
-	p := ownPool(t, st, "sub-a", "A")
+	pid := orgPool(t, st, "A")
 	bind := func(poolID uuid.UUID, ns string) (store.WorkloadBinding, error) {
 		return st.CreateWorkloadBinding(ctx, store.WorkloadBinding{PoolID: poolID, Namespace: ns, Service: "bot", Sponsor: "sub-a", CreatedBy: "secop"})
 	}
 
-	b, err := bind(p.ID, "team-a")
-	if err != nil || b.ID == uuid.Nil || b.PoolID != p.ID || b.Namespace != "team-a" || b.Service != "bot" || b.Sponsor != "sub-a" || b.CreatedBy != "secop" || b.CreatedAt.IsZero() {
+	b, err := bind(pid, "team-a")
+	if err != nil || b.ID == uuid.Nil || b.PoolID != pid || b.Namespace != "team-a" || b.Service != "bot" || b.Sponsor != "sub-a" || b.CreatedBy != "secop" || b.CreatedAt.IsZero() {
 		t.Fatalf("binding = %+v (%v)", b, err)
 	}
-	if _, err := bind(p.ID, "team-a"); !errors.Is(err, store.ErrWorkloadBindingConflict) || !errors.Is(err, store.ErrConflict) {
+	if _, err := bind(pid, "team-a"); !errors.Is(err, store.ErrWorkloadBindingConflict) || !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("second binding of the namespace = %v, want ErrWorkloadBindingConflict", err)
 	}
-	if _, err := bind(ownPool(t, st, "sub-a", "B").ID, "team-a"); err != nil {
+	if _, err := bind(orgPool(t, st, "B"), "team-a"); err != nil {
 		t.Fatalf("same namespace on another pool: %v", err)
 	}
 	if _, err := bind(uuid.New(), "team-b"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("binding on an unknown pool = %v, want ErrNotFound", err)
 	}
-	if _, err := bind(p.ID, "Not_A_Label"); err == nil || errors.Is(err, store.ErrNotFound) {
+	if _, err := bind(pid, "Not_A_Label"); err == nil || errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("binding of a bad namespace = %v, want the schema's refusal", err)
 	}
-	gone := ownPool(t, st, "sub-a", "C")
-	if _, err := st.DeleteRunnerPool(ctx, gone.ID); err != nil {
+	if _, err := bind(ownPool(t, st, "sub-a", "U").ID, "team-u"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("binding on a user pool = %v, want ErrNotFound", err)
+	}
+	gone := orgPool(t, st, "C")
+	if _, err := st.DeleteRunnerPool(ctx, gone); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := bind(gone.ID, "team-c"); !errors.Is(err, store.ErrNotFound) {
+	if _, err := bind(gone, "team-c"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("binding on a deleted pool = %v, want ErrNotFound", err)
 	}
 
@@ -904,12 +907,12 @@ func TestPG_WorkloadBinding_ForRunnerFollowsMembershipAndPoolDelete(t *testing.T
 	pool := runsPGPoolIsolated(t)
 	st := store.NewPG(pool)
 	ctx := t.Context()
-	p := ownPool(t, st, "sub-a", "A")
+	pid := orgPool(t, st, "A")
 	member, outsider := claimedRunnerOf(t, st, "sub-a"), claimedRunnerOf(t, st, "sub-b")
-	if _, _, _, err := st.AddOwnRunnerToPool(ctx, p.ID, member, "sub-a", ownerTestOrgHash); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO runner_pool_members (pool_id, runner_id) VALUES ($1, $2)`, pid, member); err != nil {
 		t.Fatal(err)
 	}
-	b, err := st.CreateWorkloadBinding(ctx, store.WorkloadBinding{PoolID: p.ID, Namespace: "team-a", Service: "bot", Sponsor: "sub-a", CreatedBy: "secop"})
+	b, err := st.CreateWorkloadBinding(ctx, store.WorkloadBinding{PoolID: pid, Namespace: "team-a", Service: "bot", Sponsor: "sub-a", CreatedBy: "secop"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -925,14 +928,14 @@ func TestPG_WorkloadBinding_ForRunnerFollowsMembershipAndPoolDelete(t *testing.T
 		t.Fatalf("binding through a pool the runner is not in = %v, want ErrNotFound", err)
 	}
 
-	if _, err := st.DeleteRunnerPool(ctx, p.ID); err != nil {
+	if _, err := st.DeleteRunnerPool(ctx, pid); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.BindingForRunner(ctx, member, "team-a"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("binding after the pool is deleted = %v, want ErrNotFound", err)
 	}
 	var n int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM workload_bindings WHERE pool_id = $1`, p.ID).Scan(&n); err != nil || n != 0 {
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM workload_bindings WHERE pool_id = $1`, pid).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("%d bindings left on the deleted pool (%v)", n, err)
 	}
 }
@@ -951,9 +954,9 @@ func TestPG_WorkloadBinding_RetiredServiceLosesItsBindings(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	p := ownPool(t, st, "sub-a", "A")
+	pid := orgPool(t, st, "A")
 	for ns, svc := range map[string]string{"team-a": "ci-bot", "team-b": "ci-bot", "team-c": "other-bot"} {
-		if _, err := st.CreateWorkloadBinding(ctx, store.WorkloadBinding{PoolID: p.ID, Namespace: ns, Service: svc, Sponsor: "sub-a", CreatedBy: "secop"}); err != nil {
+		if _, err := st.CreateWorkloadBinding(ctx, store.WorkloadBinding{PoolID: pid, Namespace: ns, Service: svc, Sponsor: "sub-a", CreatedBy: "secop"}); err != nil {
 			t.Fatal(err)
 		}
 	}
