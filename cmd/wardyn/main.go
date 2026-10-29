@@ -388,6 +388,7 @@ func rootCmd() *cobra.Command {
 		invitationCmd(client),
 		serviceIdentityCmd(client),
 		tokenCmd(client),
+		wallsCmd(client),
 		deviceCmd(client),
 		runnerCmd(client, sess),
 		supportBundleCmd(client),
