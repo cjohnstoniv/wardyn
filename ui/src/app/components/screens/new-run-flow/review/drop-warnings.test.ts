@@ -34,4 +34,11 @@ describe("reviewWarningText", () => {
       expect(reviewWarningText(w)).toBe(w);
     }
   });
+
+  it("names the knob your walls narrowed in the console's words, and a knob it has no words for as sent", () => {
+    expect(reviewWarningText("your walls narrowed allowed_domains")).toBe("Your walls narrowed allowed hosts.");
+    expect(reviewWarningText("your walls narrowed desktop")).toBe("Your walls narrowed clipboard and files.");
+    expect(reviewWarningText("your walls narrowed min_confinement_class")).toBe("Your walls narrowed barrier.");
+    expect(reviewWarningText("your walls narrowed limits.max_end_ahead_sec")).toBe("Your walls narrowed limits.max_end_ahead_sec.");
+  });
 });

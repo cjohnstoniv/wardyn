@@ -7,12 +7,16 @@
 // allowlist: a,b", dropUncoveredPrivateLiterals' "dropped private address entry "x": ..." and a workspace's
 // "dropped clone host "x" of workspace "w": ...") name the hosts in operator words, for the audit trail and
 // the API. Review says them in the person's words (NR_REVIEW.DROPPED_HOST_ONE and DROPPED_HOSTS_MANY).
-// Anything else the server says passes through unchanged.
+// The walls step's "your walls narrowed <knob>" names the knob in the console's words. Anything else the server
+// says passes through unchanged.
 
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
+import { FIELD_LABEL } from "../../run-detail/policy-tab-copy";
 
 const EGRESS_DROP = /^dropped \d+ egress domain\(s\) not in operator allowlist: (.+)$/;
 const PRIVATE_DROP = /^dropped private address entry "(.+?)": not in operator allowlist/;
+// The step that meets a person's own walls into the run names the knob it narrowed by its wire name.
+const WALLS_NARROWED = /^your walls narrowed (.+)$/;
 const CLONE_DROP = /^dropped clone host "(.+?)" of /;
 
 /** "a", "a and b", "a, b and c". */
@@ -22,6 +26,8 @@ function joinAnd(items: string[]): string {
 
 /** The server's sentence, or the dropped-host sentence when it is one of the three drop warnings. */
 export function reviewWarningText(warning: string): string {
+  const knob = WALLS_NARROWED.exec(warning)?.[1];
+  if (knob) return NR_REVIEW.WALLS_NARROWED(FIELD_LABEL[knob]?.toLowerCase() ?? knob);
   const private_ = PRIVATE_DROP.exec(warning)?.[1] ?? CLONE_DROP.exec(warning)?.[1];
   const hosts = EGRESS_DROP.exec(warning)?.[1].split(",") ?? (private_ ? [private_] : []);
   if (hosts.length === 0) return warning;
