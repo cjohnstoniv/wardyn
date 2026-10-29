@@ -18,7 +18,7 @@ extraRunsNamespaces: []
 # so re-apply it by hand on a chart upgrade.
 workloads:
   # Namespaces whose WardynWorkload objects runnerd watches. Each gets a Role and RoleBinding with
-  # wardynworkloads get, list, watch and wardynworkloads/status update, patch: no secrets, nothing cluster-wide.
+  # wardynworkloads get, list, watch and wardynworkloads/status patch: no secrets, nothing cluster-wide.
   # A workload object is only an authorisation key; its run pods still go to the runs namespaces.
   # With rbac.create=false apply those Roles before the image starts: runnerd refuses to boot without them.
   namespaces: []

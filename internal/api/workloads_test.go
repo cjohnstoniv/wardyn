@@ -6,7 +6,23 @@ package api
 import (
 	"encoding/json"
 	"testing"
+	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/store"
 )
+
+// TestWorkloadOutBlanksTheRefusalMessageForTheSecurityTier: the security tier reads a refusal's reason code
+// but not its sentence, which can name the image the intent's read blanks; the full tier reads both.
+func TestWorkloadOutBlanksTheRefusalMessageForTheSecurityTier(t *testing.T) {
+	v := store.WorkloadView{Workload: store.Workload{Name: "web", Owner: "service:bot", Intent: json.RawMessage(`{"task":"t","image":"r/x:1"}`),
+		LastRefusal: &store.WorkloadRefusal{Generation: 2, Reason: "image_not_allowed", Message: "image r/x:1 is not allowed"}}}
+	if f := workloadOut(v, workspaceReadFull, time.Now()).LastRefusal; f == nil || f.Reason != "image_not_allowed" || f.Message != "image r/x:1 is not allowed" {
+		t.Fatalf("full tier refusal = %+v, want reason and message", f)
+	}
+	if f := workloadOut(v, workspaceReadSecurity, time.Now()).LastRefusal; f == nil || f.Reason != "image_not_allowed" || f.Message != "" {
+		t.Fatalf("security tier refusal = %+v, want the reason and no message", f)
+	}
+}
 
 // TestRedactWorkloadIntentForReadFailsClosed: a policy that does not decode is withheld whole, and the
 // full tier reads the stored bytes as they are.

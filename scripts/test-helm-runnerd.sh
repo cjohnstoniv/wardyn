@@ -146,7 +146,7 @@ multi="$(render --set extraRunsNamespaces[0]=wardyn-runs-b --set extraRunsNamesp
 ok "extraRunsNamespaces: a Role, binding and flag per namespace; ingress In list"
 
 # Declarative workloads: nothing by default; per listed namespace one get/list/watch Role with status
-# update/patch, and never a secret or a cluster-wide verb.
+# patch, and never a secret or a cluster-wide verb.
 [ "$(val "$out" 'select(.kind == "Role" and .metadata.name == "r-wardyn-runnerd-workloads") | .metadata.name')" = "" ] \
   || die "a workloads Role renders by default"
 grep -q WARDYN_RUNNERD_WORKLOAD_NAMESPACES <<<"$out" && die "WARDYN_RUNNERD_WORKLOAD_NAMESPACES is set by default"
@@ -154,8 +154,8 @@ wl="$(render --set workloads.namespaces[0]=team-a --set workloads.namespaces[1]=
 [ "$(val "$wl" 'select(.kind == "Role" and .metadata.name == "r-wardyn-runnerd-workloads") | .metadata.namespace')" = "$(printf 'team-a\nteam-b')" ] \
   || die "workloads.namespaces did not render one Role per namespace"
 [ "$(docs "$wl" 'select(.kind == "Role" and .metadata.name == "r-wardyn-runnerd-workloads") | .rules' | sort -u)" \
-  = '[{"apiGroups":["wardyn.dev"],"resources":["wardynworkloads"],"verbs":["get","list","watch"]},{"apiGroups":["wardyn.dev"],"resources":["wardynworkloads/status"],"verbs":["update","patch"]}]' ] \
-  || die "the workloads Role is not exactly wardynworkloads get/list/watch and wardynworkloads/status update/patch"
+  = '[{"apiGroups":["wardyn.dev"],"resources":["wardynworkloads"],"verbs":["get","list","watch"]},{"apiGroups":["wardyn.dev"],"resources":["wardynworkloads/status"],"verbs":["patch"]}]' ] \
+  || die "the workloads Role is not exactly wardynworkloads get/list/watch and wardynworkloads/status patch"
 [ "$(val "$wl" 'select(.kind == "RoleBinding" and .metadata.name == "r-wardyn-runnerd-workloads") | .metadata.namespace + ">" + .roleRef.name + ">" + .subjects[0].name + "." + .subjects[0].namespace')" \
   = "$(printf 'team-a>r-wardyn-runnerd-workloads>r-wardyn-runnerd.wardyn-runner\nteam-b>r-wardyn-runnerd-workloads>r-wardyn-runnerd.wardyn-runner')" ] \
   || die "a workloads RoleBinding does not bind the Role to runnerd's ServiceAccount"

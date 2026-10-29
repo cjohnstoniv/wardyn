@@ -392,6 +392,28 @@ func TestPG_WorkloadFromRunner_BoundApplyLaunchesOnTheBoundPool(t *testing.T) {
 	}
 }
 
+// A binding whose sponsor's sessions were cut has lost its authority: a delete report and a full list that omits
+// the resource leave the workload row and its run alone, and audit nothing.
+func TestPG_WorkloadFromRunner_BindingWithoutAuthorityDeletesNothing(t *testing.T) {
+	e := newCREnv(t)
+	ctx := context.Background()
+	_, run := e.k8sWorkloadWithRun(t, "web", "uid-web")
+	if err := e.rev.CutSessions(ctx, svcSponsor); err != nil {
+		t.Fatal(err)
+	}
+	e.report(t, runnerwire.WorkloadReport{Op: runnerwire.WorkloadOpDelete, Namespace: "team-a", Name: "web", UID: "uid-web"})
+	e.report(t, runnerwire.WorkloadReport{Op: runnerwire.WorkloadOpSync, Namespace: "team-a", Names: []string{}})
+	if v, err := e.st.GetWorkload(ctx, svcPrin, "web"); err != nil || v.CurrentRunID == nil || *v.CurrentRunID != run {
+		t.Fatalf("workload after the delete and the sync = %+v (%v), want it kept with run %s", v.Workload, err, run)
+	}
+	if r, err := e.st.GetRun(ctx, run); err != nil || r.State == types.RunKilled {
+		t.Fatalf("run state = %q (%v), want it not ended", r.State, err)
+	}
+	if n := countAudit(e.h.audit.snapshot(), "workload.delete"); n != 0 || owedEnds(t, e.svcEnv, run) != 0 {
+		t.Fatalf("%d workload.delete rows and %d owed ends, want none", n, owedEnds(t, e.svcEnv, run))
+	}
+}
+
 // A resource's delete ends its workload's current run: the run is killed workload_deleted, and the
 // workload.delete row is the run's and names it as ended_run_id.
 func TestPG_WorkloadFromRunner_DeleteEndsTheCurrentRun(t *testing.T) {

@@ -64,7 +64,7 @@ intent:
 | `wardyn workload binding create\|list\|delete` | Binds a namespace to a service identity. [Security tier](#bind-a-namespace) |
 
 - `-f -` reads standard input. `FILE` is required.
-- `workload list|get|restart|delete` take `--owner` for an administrator, or a service identity's sponsor, who acts on another owner's workloads. `list` takes `--limit`, `--offset` and `--json`.
+- `workload list|get|restart|delete` take `--owner` for an administrator, or a service identity's sponsor, who acts on another owner's workloads. A `security_admin` may list, get and delete them but not restart one (below). `list` takes `--limit`, `--offset` and `--json`.
 - Authentication is unchanged: `WARDYN_URL`, `WARDYN_TOKEN` or your stored sign-in. A pipeline uses a service identity's token, which reaches only that identity's own workloads.
 
 ### apply
@@ -102,10 +102,10 @@ intent:
 - The new run is created before the old one is ended. A workload is never without a run because of a change.
 - A refused launch is a `200`, not an error. The spec is stored at its new generation, and the old run keeps running.
 - The answer carries `launch.state` `refused`, with the create path's own `reason` and sentence. The ceiling, a pool's limits and the unit walls all refuse here as they refuse `POST /runs`.
-- The workload records `last_refusal` (`generation`, `reason`, `message`, `at`) until a launch succeeds. The audit row is `workload.launch_refused`.
+- The workload records `last_refusal` (`generation`, `reason`, `message`, `at`) until a launch succeeds. A `security_admin` reading another owner's workload gets the `reason` without the `message`. The audit row is `workload.launch_refused`.
 - Two applies that race leave one run: the launch that loses is ended with reason `workload_replaced`.
-- `workload restart` is recorded as `workload.restart`. When it is not the owner's own request it launches only for a service identity whose sponsor's session is live; a person's workload then starts at their next apply.
-- Deleting a workload removes the row, then ends its run with reason `workload_deleted`.
+- `workload restart` is recorded as `workload.restart`. Only the owner, the service identity's sponsor or a super admin may restart; a `security_admin` gets `404`, because a restart launches as the service. When it is not the owner's own request it launches only for a service identity whose sponsor's session is live; a person's workload then starts at their next apply.
+- Deleting a workload removes the row, then ends its run with reason `workload_deleted`. The owner, the service identity's sponsor, a super admin or a `security_admin` may delete.
 
 ## Kubernetes: the WardynWorkload resource
 
@@ -119,8 +119,10 @@ A Kubernetes organisation runner can watch namespaces for `WardynWorkload` resou
 
 A binding says: the resources of namespace N, on the runners of pool P, launch as service identity S. It is standing authority, so it is made by a signed-in person with the security role, never with an API token or the admin token.
 
+Anyone who can create or update a WardynWorkload in a bound namespace launches runs as the bound service identity, under its ceiling and with its credentials, while its sponsor is active. Every runner in the bound pool can apply, replace and delete that service identity's Kubernetes workloads, so bind a namespace only to a pool whose runners you trust as much as the service.
+
 1. Make the service identity, with a sponsor ([Service identities](api-tokens.md#service-identities)).
-2. Set `workloads.namespaces` in the runner chart to the namespaces to watch. The chart adds a Role and RoleBinding per namespace: `get`, `list` and `watch` on `wardynworkloads`, and `update` and `patch` on `wardynworkloads/status`. No Secret, nothing cluster-wide.
+2. Set `workloads.namespaces` in the runner chart to the namespaces to watch. The chart adds a Role and RoleBinding per namespace: `get`, `list` and `watch` on `wardynworkloads`, and `patch` on `wardynworkloads/status`. No Secret, nothing cluster-wide.
 3. Apply the CRD, [`wardyn.dev_wardynworkloads.yaml`](../../deploy/helm/wardyn-runnerd/crds/wardyn.dev_wardynworkloads.yaml). Helm installs it once from `crds/` and never upgrades it, so apply the file again by hand on a chart upgrade.
 4. Bind the namespace:
 
@@ -131,13 +133,13 @@ wardyn workload binding create --pool <pool> --namespace team-a --service web-bo
 5. Commit the resource to `team-a`.
 
 - With `rbac.create=false`, apply the per-namespace Roles before the runner image starts. The runner refuses to boot without them.
-- `--pool` takes a pool's id, or an organisation pool's name. A namespace is bound once per pool (`409` `workload_binding_conflict`).
-- Bind only pools whose runners are all in the one cluster the namespace belongs to.
+- `--pool` takes an organisation pool's id or name. A person's own pool is refused (`422` `workload_binding_pool_scope`): its runners are personal, and a personal runner must never launch as a service. A namespace is bound once per pool (`409` `workload_binding_conflict`).
+- Bind only pools whose runners are all in the one cluster the namespace belongs to. The binding names a namespace, not a cluster: a runner of the pool in another cluster that reports a resource in a namespace of the same name launches as the service too.
 - A runner serves a pool in one runs namespace, `runs_namespace`, fixed when the runner is added to the pool ([Runner pools](runner-pools.md)). That is where the pods go; the binding's namespace is only where the resource lives.
 - The organisation finds a binding through the reporting runner's own pools. If a runner is in two pools that bind one namespace, the older binding wins.
 - A resource may name a `runner_pool_id` in its intent, but only the bound pool's. The binding chooses the pool.
 
-The binding stops being authority when any of these happens. The spec is still recorded, nothing launches, and a running run keeps running.
+The binding stops being authority when any of these happens. The spec is still recorded, nothing launches, a resource's delete or a full list removes no workload, and a running run keeps running.
 
 | Cause | Result |
 |---|---|

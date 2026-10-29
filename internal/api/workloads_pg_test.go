@@ -254,6 +254,39 @@ func TestPG_WorkloadBinding_NeedsAPerson(t *testing.T) {
 	}
 }
 
+// TestPG_WorkloadBinding_NamesAnOrganizationPoolOnly: a person's own pool is refused 422, named by id or by
+// name, so a personal runner never launches as a service; an organization pool binds.
+func TestPG_WorkloadBinding_NamesAnOrganizationPoolOnly(t *testing.T) {
+	e := newSvcEnv(t)
+	e.mustCreate(t, svcName, svcSponsor)
+	ctx := context.Background()
+	mine, err := e.st.CreateRunnerPool(ctx, types.RunnerPool{ID: uuid.New(), Name: "My laptop", Scope: types.RunnerPoolUser, Owner: svcSponsor}, svcSponsor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	org, err := e.st.CreateRunnerPool(ctx, types.RunnerPool{ID: uuid.New(), Name: "Platform", Scope: types.RunnerPoolOrganization}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bind := func(pool, ns string) *httptest.ResponseRecorder {
+		return doSSO(t, e.h.srv, http.MethodPost, "/api/v1/workload-bindings", e.sec, `{"pool":"`+pool+`","namespace":"`+ns+`","service":"`+svcName+`"}`)
+	}
+	for _, ref := range []string{mine.ID.String(), mine.Name} {
+		if w := bind(ref, "apps"); w.Code != http.StatusUnprocessableEntity || respReason(w) != reasonWorkloadBindingPoolScope {
+			t.Errorf("bind by %q: %d %s, want 422 %s", ref, w.Code, w.Body.String(), reasonWorkloadBindingPoolScope)
+		}
+	}
+	if left, err := e.st.ListWorkloadBindings(ctx, store.Page{}); err != nil || len(left) != 0 {
+		t.Fatalf("bindings after the refusals = %+v (%v), want none", left, err)
+	}
+	for _, ref := range []string{org.ID.String(), org.Name} {
+		ns := map[string]string{org.ID.String(): "by-id", org.Name: "by-name"}[ref]
+		if w := bind(ref, ns); w.Code != http.StatusCreated {
+			t.Errorf("bind %q on the organization pool: %d %s, want 201", ref, w.Code, w.Body.String())
+		}
+	}
+}
+
 // TestPG_Workload_BindingLaunchMatchesTokenLaunch: a launch under the service's bound authority writes the
 // run.create row a launch with the service's token writes, apart from `via` (which neither carries here).
 func TestPG_Workload_BindingLaunchMatchesTokenLaunch(t *testing.T) {
@@ -726,9 +759,9 @@ func TestPG_Workload_ReplacementQueuedBehindItsOwnRunReplacesInPlace(t *testing.
 	}
 }
 
-// TestPG_Workload_AdminRestartChecksTheSponsorSinceTheSpec: a security operator's restart of a service's
-// workload launches as the service only while its sponsor's sessions have not been cut since the spec was
-// written.
+// TestPG_Workload_AdminRestartChecksTheSponsorSinceTheSpec: a super admin's restart of a service's workload
+// launches as the service only while its sponsor's sessions have not been cut since the spec was written. A
+// security_admin's restart is refused outright, with the 404 a foreign workload gets, and launches nothing.
 func TestPG_Workload_AdminRestartChecksTheSponsorSinceTheSpec(t *testing.T) {
 	e := newSvcEnv(t)
 	e.mustCreate(t, svcName, svcSponsor)
@@ -736,14 +769,37 @@ func TestPG_Workload_AdminRestartChecksTheSponsorSinceTheSpec(t *testing.T) {
 	pol := e.plainPolicy(t, "wl-pol")
 	launchedRun(t, decodeApply(t, e.as(t, tok.Token, http.MethodPut, "/api/v1/workloads/web", workloadBody(pol, "t", "")), http.StatusCreated))
 	path := "/api/v1/workloads/web/restart?owner=" + svcPrin
-	launchedRun(t, decodeApply(t, doSSO(t, e.h.srv, http.MethodPost, path, e.sec, ""), http.StatusOK))
+	if w := doSSO(t, e.h.srv, http.MethodPost, path, e.sec, ""); w.Code != http.StatusNotFound || respReason(w) != reasonWorkloadNotFound {
+		t.Fatalf("security_admin restart: %d %s, want 404 %s", w.Code, w.Body.String(), reasonWorkloadNotFound)
+	}
+	if n := countAudit(e.h.audit.snapshot(), "workload.restart"); n != 0 {
+		t.Fatalf("workload.restart rows after the refused restart = %d, want 0", n)
+	}
+	launchedRun(t, decodeApply(t, doSSO(t, e.h.srv, http.MethodPost, path, e.super, ""), http.StatusOK))
 
 	if err := e.rev.CutSessions(context.Background(), svcSponsor); err != nil {
 		t.Fatal(err)
 	}
-	res := decodeApply(t, doSSO(t, e.h.srv, http.MethodPost, path, e.sec, ""), http.StatusOK)
+	res := decodeApply(t, doSSO(t, e.h.srv, http.MethodPost, path, e.super, ""), http.StatusOK)
 	if res.Launch.State != client.WorkloadRefused || res.Launch.Reason != reasonServiceIdentityInactive {
 		t.Fatalf("restart after the sponsor's sessions were cut = %+v, want refused %s", res.Launch, reasonServiceIdentityInactive)
+	}
+}
+
+// TestPG_Workload_SecurityAdminDeletesButCannotLaunch: a security_admin and a super admin both delete a
+// service's workload (the containment power), and the delete ends its run.
+func TestPG_Workload_SecurityAdminDeletesButCannotLaunch(t *testing.T) {
+	e := newSvcEnv(t)
+	e.mustCreate(t, svcName, svcSponsor)
+	tok := e.mustMint(t, e.sponsor, svcName)
+	pol := e.plainPolicy(t, "wl-pol")
+	for _, name := range []string{"web-a", "web-b"} {
+		launchedRun(t, decodeApply(t, e.as(t, tok.Token, http.MethodPut, "/api/v1/workloads/"+name, workloadBody(pol, name, "")), http.StatusCreated))
+	}
+	for name, as := range map[string]*http.Cookie{"web-a": e.sec, "web-b": e.super} {
+		if w := doSSO(t, e.h.srv, http.MethodDelete, "/api/v1/workloads/"+name+"?owner="+svcPrin, as, ""); w.Code != http.StatusNoContent {
+			t.Errorf("DELETE %s: %d %s, want 204", name, w.Code, w.Body.String())
+		}
 	}
 }
 

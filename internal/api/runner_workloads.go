@@ -217,7 +217,7 @@ func (s *Server) launchBoundWorkload(ws store.WorkloadStore, b store.WorkloadBin
 	}
 	defer cancel()
 	ctx := sr.Context()
-	live, err := s.queueOwnerLive(ctx, serviceAuthority(si, b.Sponsor), b.CreatedAt)
+	live, err := s.bindingLive(ctx, b, si)
 	switch {
 	case err != nil:
 		// Unknown standing launches nothing; the runner's next report of the resource tries again.
@@ -243,6 +243,10 @@ func (s *Server) launchBoundWorkload(ws store.WorkloadStore, b store.WorkloadBin
 func (s *Server) syncWorkloadReport(ctx context.Context, ws store.WorkloadStore, sr *http.Request, runnerID uuid.UUID, b store.WorkloadBinding,
 	si types.ServiceIdentity, rep runnerwire.WorkloadReport,
 ) error {
+	if live, err := s.bindingLive(ctx, b, si); err != nil || !live {
+		skipDeleteOfInactiveBinding(ctx, runnerID, b, rep.Namespace, err)
+		return err
+	}
 	views, err := ws.ListK8sWorkloadStatuses(ctx)
 	if err != nil {
 		return err
@@ -258,6 +262,19 @@ func (s *Server) syncWorkloadReport(ctx context.Context, ws store.WorkloadStore,
 	return nil
 }
 
+// bindingLive reports whether b still carries authority for the identity si: the rules that end its tokens
+// (queueOwnerLive), as of the binding's making.
+func (s *Server) bindingLive(ctx context.Context, b store.WorkloadBinding, si types.ServiceIdentity) (bool, error) {
+	return s.queueOwnerLive(ctx, serviceAuthority(si, b.Sponsor), b.CreatedAt)
+}
+
+// skipDeleteOfInactiveBinding logs a delete a binding without authority did not make (err is the standing
+// check's own failure, when it failed).
+func skipDeleteOfInactiveBinding(ctx context.Context, runnerID uuid.UUID, b store.WorkloadBinding, namespace string, err error) {
+	slog.WarnContext(ctx, "wardynd: a binding without authority deletes no workload", slog.String("runner_id", runnerID.String()),
+		slog.String("pool_id", b.PoolID.String()), slog.String("namespace", namespace), slog.String("service", b.Service), slog.Any("err", err))
+}
+
 // dropK8sWorkload deletes wl, the workload of a resource that is gone, and ends its run in the background
 // as the bound service (run.kill reason workload_deleted). uid is the resource's, when the report named it.
 // The delete holds only while the row is still the one wl was read as: an apply of a recreated resource
@@ -265,6 +282,12 @@ func (s *Server) syncWorkloadReport(ctx context.Context, ws store.WorkloadStore,
 func (s *Server) dropK8sWorkload(ctx context.Context, ws store.WorkloadStore, sr *http.Request, runnerID uuid.UUID, b store.WorkloadBinding,
 	si types.ServiceIdentity, wl store.Workload, uid, via string,
 ) error {
+	// A binding that lost its authority deletes nothing: the rows and the run stay as they are, as an apply
+	// launches nothing under it (launchBoundWorkload).
+	if live, err := s.bindingLive(ctx, b, si); err != nil || !live {
+		skipDeleteOfInactiveBinding(ctx, runnerID, b, wl.SourceNamespace, err)
+		return err
+	}
 	removed, err := ws.DeleteK8sWorkload(ctx, wl)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil

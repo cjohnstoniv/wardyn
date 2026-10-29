@@ -638,14 +638,15 @@ func scanWorkloadBinding(row pgx.Row) (WorkloadBinding, error) {
 	return b, nil
 }
 
-// CreateWorkloadBinding binds b.Namespace on the live pool b.PoolID to the service identity b.Service, with
-// the sponsor the caller read. ErrNotFound when the pool is unknown or deleted, and
+// CreateWorkloadBinding binds b.Namespace on the live organization pool b.PoolID to the service identity
+// b.Service, with the sponsor the caller read. ErrNotFound when the pool is unknown, deleted or a person's
+// own (a personal runner must never launch as a service), and
 // ErrWorkloadBindingConflict when the namespace is bound on the pool already. Whether the identity may be
 // bound is the caller's to decide.
 func (s PG) CreateWorkloadBinding(ctx context.Context, b WorkloadBinding) (WorkloadBinding, error) {
 	out, err := scanWorkloadBinding(s.Pool.QueryRow(ctx, `
 		INSERT INTO workload_bindings AS b (pool_id, namespace, service, sponsor, created_by)
-		SELECT p.id, $2, $3, $4, $5 FROM runner_pools p WHERE p.id = $1 AND p.state <> 'deleted'
+		SELECT p.id, $2, $3, $4, $5 FROM runner_pools p WHERE p.id = $1 AND p.state <> 'deleted' AND p.scope = 'organization'
 		RETURNING `+workloadBindingCols, b.PoolID, b.Namespace, b.Service, b.Sponsor, b.CreatedBy))
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {

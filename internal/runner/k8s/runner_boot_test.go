@@ -65,6 +65,9 @@ func TestRunnerAccessReviewChecksWorkloadVerbs(t *testing.T) {
 	if want := "team-a/wardynworkloads/:watch"; !slices.Contains(asked, want) {
 		t.Errorf("asked %v, want %s among them", asked, want)
 	}
+	if unused := "team-a/wardynworkloads/status:update"; slices.Contains(asked, unused) {
+		t.Errorf("asked %v, want no %s: the runner only patches the status", asked, unused)
+	}
 }
 
 func TestRunnerForeignObjects(t *testing.T) {

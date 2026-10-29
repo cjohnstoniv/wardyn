@@ -66,13 +66,17 @@ func (s *Server) handleCreateWorkloadBinding(w http.ResponseWriter, r *http.Requ
 			"pool and service are required, and namespace must be a Kubernetes namespace name (a lowercase DNS label)")
 		return
 	}
-	poolID, ok, err := bindingPoolID(ctx, ps, req.Pool)
+	pool, ok, err := bindingPool(ctx, ps, req.Pool)
 	switch {
 	case err != nil:
 		writeServerError(w, r, "read runner pools", err)
 		return
 	case !ok:
 		writePoolNotFound(w)
+		return
+	case pool.Scope != types.RunnerPoolOrganization:
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonWorkloadBindingPoolScope,
+			"A binding names an organization pool: the runners of a person's own pool must not launch as a service identity.")
 		return
 	}
 	si, err := ss.GetServiceIdentity(ctx, req.Service)
@@ -87,7 +91,7 @@ func (s *Server) handleCreateWorkloadBinding(w http.ResponseWriter, r *http.Requ
 		writeErrorReason(w, http.StatusConflict, reasonServiceIdentityInactive, "The service identity is suspended or retired.")
 		return
 	}
-	b, err := ws.CreateWorkloadBinding(ctx, store.WorkloadBinding{PoolID: poolID, Namespace: req.Namespace, Service: si.Name, Sponsor: si.Sponsor,
+	b, err := ws.CreateWorkloadBinding(ctx, store.WorkloadBinding{PoolID: pool.ID, Namespace: req.Namespace, Service: si.Name, Sponsor: si.Sponsor,
 		CreatedBy: principalFromRequest(r)})
 	switch {
 	case errors.Is(err, store.ErrWorkloadBindingConflict):
@@ -105,22 +109,34 @@ func (s *Server) handleCreateWorkloadBinding(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusCreated, workloadBindingOut(b))
 }
 
-// bindingPoolID resolves a binding's pool: an id as given (the store refuses an unknown or deleted one), or
-// the name of a live organization pool. ok is false when no pool has that name.
-func bindingPoolID(ctx context.Context, ps store.RunnerPoolStore, ref string) (uuid.UUID, bool, error) {
-	if id, err := uuid.Parse(ref); err == nil {
-		return id, true, nil
+// bindingPool resolves a binding's pool: an id as given (a deleted one is not found), or a pool's name,
+// an organization pool's before another's. ok is false when no pool has that id or name. The caller
+// refuses a pool that is not an organization pool.
+func bindingPool(ctx context.Context, ps store.RunnerPoolStore, ref string) (pool types.RunnerPool, ok bool, err error) {
+	if id, perr := uuid.Parse(ref); perr == nil {
+		p, err := ps.GetRunnerPool(ctx, id)
+		switch {
+		case errors.Is(err, store.ErrNotFound) || (err == nil && p.State == types.RunnerPoolDeleted):
+			return types.RunnerPool{}, false, nil
+		case err != nil:
+			return types.RunnerPool{}, false, err
+		}
+		return p, true, nil
 	}
-	rows, err := ps.ListRunnerPoolCatalogue(ctx, "", false)
+	rows, err := ps.ListRunnerPoolCatalogue(ctx, "", true)
 	if err != nil {
-		return uuid.Nil, false, err
+		return types.RunnerPool{}, false, err
 	}
 	for _, row := range rows {
-		if row.Pool.Scope == types.RunnerPoolOrganization && strings.EqualFold(row.Pool.Name, ref) {
-			return row.Pool.ID, true, nil
+		if !strings.EqualFold(row.Pool.Name, ref) {
+			continue
 		}
+		if row.Pool.Scope == types.RunnerPoolOrganization {
+			return row.Pool, true, nil
+		}
+		pool, ok = row.Pool, true
 	}
-	return uuid.Nil, false, nil
+	return pool, ok, nil
 }
 
 // handleListWorkloadBindings is GET /workload-bindings: every binding, by pool then namespace.

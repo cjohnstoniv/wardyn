@@ -292,7 +292,9 @@
 # docs/sdk.md 23408 adds 70 over 23338, measured (rc.8 D2): the workload_pool_mismatch and workload_binding_inactive status reasons.
 # docs/sdk.md 23881 = 23811 + 70, measured (rc.8 walls, inbound docs and D2 combined on the wave).
 # docs/sdk.md=23895 adds 14 over 23881, measured (rc.8 run shape): the run keeps its shape.
-docs/sdk.md=23895 share=21
+# docs/sdk.md 23928 = 23811 + 117, measured (rc.8 walls, inbound docs and D2 combined on the wave, and the crd review fixes).
+# docs/sdk.md 23942 measured after the crdfix merge onto the run-shape wave.
+docs/sdk.md=23942 share=21
 # docs/sdk.md 20423 = ours 20195 + theirs 20288 - base 20060 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/sdk.md 20315 = ours + theirs - base at the 0.10 HYB-C merge of main onto VM-A, measured.
 # 0.10 HYB-C: docs/sdk.md 20343 adds 28 over 20315, measured: the placement_capability refusal of a linux_vm run with a folder on a runner that cannot share one.

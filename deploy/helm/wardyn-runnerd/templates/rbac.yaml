@@ -84,7 +84,7 @@ rules:
     verbs: ["get", "list", "watch"]
   - apiGroups: ["wardyn.dev"]
     resources: ["wardynworkloads/status"]
-    verbs: ["update", "patch"]
+    verbs: ["patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
