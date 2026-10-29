@@ -50,6 +50,31 @@ func renewalHealth(run types.AgentRun, now time.Time) types.ServiceHealthState {
 	return types.ServiceHealthUnknown
 }
 
+// projectServiceHealth is what a run's service_status says on the wire, from one place for every route
+// that serves a run (projectStatusDetailFor): a paused run's last read (reason paused), and one older than
+// serviceStatusStale (reason unreachable: the health sweep skips a run whose runner is offline, so nothing
+// rewrites it), is unknown, never the health it last had. observed_at is kept, so the reader still sees
+// when it was last checked; the stored row is not changed.
+func projectServiceHealth(runs []types.AgentRun, now time.Time) {
+	for i := range runs {
+		st := runs[i].ServiceStatus
+		if st == nil {
+			continue
+		}
+		derived := *st
+		switch {
+		case runs[i].PausedAt != nil:
+			derived.Reason = "paused"
+		case now.Sub(st.ObservedAt) > serviceStatusStale:
+			derived.Reason = "unreachable"
+		default:
+			continue
+		}
+		derived.Health = types.ServiceHealthUnknown
+		runs[i].ServiceStatus = &derived
+	}
+}
+
 // serviceRenewal is one renewal planServiceRenewal decided on.
 type serviceRenewal struct {
 	target time.Time
