@@ -33,6 +33,8 @@ import { useRole } from "../wardyn/operator-context";
 import { useConsoleMode } from "../wardyn/console-view";
 import { RunsComposer } from "./runs/runs-composer";
 import { RunsFilterBar } from "./runs/runs-filter-bar";
+import { RunsSegmentBar } from "./runs/runs-segment-bar";
+import { filterBySegment, segmentCounts } from "./runs/runs-segment";
 import { RunRowList } from "./runs/run-row";
 import { AdminOlderLimitsCard } from "./runs/admin-older-limits-card";
 import { FleetCapacityCard } from "./runs/fleet-capacity-card";
@@ -55,6 +57,7 @@ import {
   RUNS_QUIET,
   RUNS_NO_MATCH_BODY,
   RUNS_SECTION,
+  RUNS_SEGMENTS,
   RUNS_SHOW_30,
   runsTruncatedNote,
   runsAgedNote,
@@ -186,7 +189,10 @@ export function RunsScreen() {
   const confinementClasses = setupStatus?.runner?.confinement_classes ?? [];
   usePoll(loadSetupStatus, SETUP_POLL_MS, !!shellStatus || !!setupStatus?.unreachable);
 
-  const sections: RunSections = React.useMemo(() => sectionRuns(runsList), [runsList]);
+  // R17-N3: the segment narrows the fetched rows here; its counts follow the other filters.
+  const counts = React.useMemo(() => segmentCounts(runsList), [runsList]);
+  const shownRuns = React.useMemo(() => filterBySegment(runsList, filters.segment), [runsList, filters.segment]);
+  const sections: RunSections = React.useMemo(() => sectionRuns(shownRuns), [shownRuns]);
   const workspaceOptions = React.useMemo(
     () => {
       const labels = runsList.map((r) => r.repo || r.workspace_path).filter((l): l is string => !!l);
@@ -223,7 +229,9 @@ export function RunsScreen() {
   // swaps in a rows-only skeleton under it instead.
   const firstLoad = status === "loading" && !loadedOnce;
   const refetching = status === "loading" && loadedOnce;
-  const noMatch = status === "ready" && !trueEmpty && runsList.length === 0 && (nothingHidden || activeFilter);
+  const noMatch = status === "ready" && !trueEmpty && shownRuns.length === 0 && (nothingHidden || activeFilter || filters.segment !== "all");
+  // The approved Services empty state: no service, and no other filter or hidden run to blame.
+  const noServices = noMatch && filters.segment === "services" && !activeFilter && nothingHidden;
   const quiet =
     status === "ready" && !trueEmpty && !noMatch && isTopQuiet(sections) && runsFiltersAreDefault(effectiveFilters);
 
@@ -272,13 +280,14 @@ export function RunsScreen() {
         )
       ) : (
         <>
+          <RunsSegmentBar value={filters.segment} counts={counts} onChange={(segment) => setFilters({ ...filters, segment })} />
           <RunsFilterBar
             filters={filters}
             workspaces={workspaceOptions}
             adminView={adminView}
             currentSearch={searchParams.toString()}
             savedViews={savedViews}
-            runCount={runsList.length}
+            runCount={shownRuns.length}
             runsTruncated={truncated}
             onChange={setFilters}
             onSelectView={(search) =>
@@ -292,6 +301,10 @@ export function RunsScreen() {
 
           {refetching ? (
             <RunsLoadingSkeleton />
+          ) : noServices ? (
+            <div className="mt-4 overflow-hidden rounded-xl border border-border bg-card">
+              <EmptyState icon={Hexagon} title={RUNS_SEGMENTS.SERVICES_EMPTY} />
+            </div>
           ) : noMatch ? (
             <div className="mt-4 overflow-hidden rounded-xl border border-border bg-card">
               <EmptyState
@@ -333,7 +346,7 @@ export function RunsScreen() {
                 // H-6: Group by Workspace/Title replaces the time sections
                 // with one section per group — Needs you / Waiting on the
                 // owner above still show their own fixed sections either way.
-                groupRunsBy(nonAttentionRuns(runsList), filters.group).map((g) => (
+                groupRunsBy(nonAttentionRuns(shownRuns), filters.group).map((g) => (
                   <RunsSection key={g.label} title={g.label} runs={g.runs} />
                 ))
               )}

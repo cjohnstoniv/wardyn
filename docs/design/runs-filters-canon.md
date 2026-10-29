@@ -17,4 +17,12 @@ The source is the approved R6 Run phone board (frames 1 to 3). A key with argume
 | `CHIP_REMOVE_ARIA(chip)` | derived: the chip's remove button name, not drawn | Remove {chip} |
 | `WORKSPACE_CHIP(w)` | derived: board chip pattern (R6-Run-Phone) | Workspace · {w} |
 
-`TITLE` is the sheet's title and the button's label when no filter is active. `WORKSPACE_CHIP` is the one key that lives in `RUNS_FILTERS`.
+| `SEGMENT_ALL` | mock (R17-N3) | All |
+| `SEGMENT_AGENT_TASKS` | mock (R17-N3) | Agent tasks |
+| `SEGMENT_ENVIRONMENTS` | mock (R17-N3), owner change from "Developer sandboxes" | Environments |
+| `SEGMENT_APPS` | mock (R17-N3) | Apps & scripts |
+| `SEGMENT_SERVICES` | mock (R17-N3) | Services |
+| `SEGMENT_SERVICES_EMPTY` | mock (R17-N3, q11) | No services yet. Start one with Keep it running on an Automation / script run. |
+| `SEGMENT_LABEL` | derived: the segment group's accessible name, not drawn | Run shape |
+
+`TITLE` is the sheet's title and the button's label when no filter is active. `WORKSPACE_CHIP` is the one key that lives in `RUNS_FILTERS`. The `SEGMENT_*` keys live in `RUNS_SEGMENTS` (the shape segments above the filter bar, not a phone-only surface).
