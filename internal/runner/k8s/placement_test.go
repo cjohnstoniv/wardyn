@@ -64,7 +64,7 @@ func TestPlacement_AllThreePods(t *testing.T) {
 	installProxyIPReactor(t, cs, "10.244.0.7")
 	installAgentRunningReactor(t, cs)
 	d, err := newWithClient(context.Background(), cs, testRestConfig(), Config{
-		Namespace: testNamespace, ProxyImage: "wardyn/wardyn-proxy:test", SandboxPlacement: testPlacementJSON,
+		Namespaces: []string{testNamespace}, ProxyImage: "wardyn/wardyn-proxy:test", SandboxPlacement: testPlacementJSON,
 	})
 	if err != nil {
 		t.Fatalf("newWithClient: %v", err)
@@ -163,7 +163,7 @@ func TestPlacement_RefusedAtBoot(t *testing.T) {
 			cs := fake.NewClientset()
 			installCanaryReactor(t, cs, false)
 			_, err := newWithClient(context.Background(), cs, testRestConfig(), Config{
-				Namespace: testNamespace, ProxyImage: "wardyn/wardyn-proxy:test", SandboxPlacement: tc.json,
+				Namespaces: []string{testNamespace}, ProxyImage: "wardyn/wardyn-proxy:test", SandboxPlacement: tc.json,
 			})
 			// The label form of safe-to-evict is allowlisted too (the same single key).
 			if tc.wantKey == "" {
@@ -193,7 +193,7 @@ func TestPlacement_RunnerArch(t *testing.T) {
 	cs := fake.NewClientset()
 	installCanaryReactor(t, cs, false)
 	d, err := newWithClient(context.Background(), cs, testRestConfig(), Config{
-		Namespace: testNamespace, ProxyImage: "wardyn/wardyn-proxy:test", SandboxPlacement: `{"nodeSelector": {"pool": "sandbox"}}`,
+		Namespaces: []string{testNamespace}, ProxyImage: "wardyn/wardyn-proxy:test", SandboxPlacement: `{"nodeSelector": {"pool": "sandbox"}}`,
 		RunnerID: testRunnerID, Arch: "arm64", Evidence: &memEvidence{}, HardDeny: &HardDeny{},
 	})
 	if err != nil {
@@ -237,7 +237,7 @@ func TestPlacement_RunnerArchRefusals(t *testing.T) {
 			cs := fake.NewClientset()
 			installCanaryReactor(t, cs, false)
 			_, err := newWithClient(context.Background(), cs, testRestConfig(), Config{
-				Namespace: testNamespace, ProxyImage: "wardyn/wardyn-proxy:test", SandboxPlacement: tc.json,
+				Namespaces: []string{testNamespace}, ProxyImage: "wardyn/wardyn-proxy:test", SandboxPlacement: tc.json,
 				RunnerID: testRunnerID, Arch: tc.arch, Evidence: &memEvidence{}, HardDeny: &HardDeny{},
 			})
 			if tc.wantErr == "" {
@@ -323,7 +323,7 @@ func TestPlacement_ImageArchesPlaceTheAgentPod(t *testing.T) {
 	installDeleteCollectionSupport(t, cs)
 	installProxyIPReactor(t, cs, "10.244.0.7")
 	installAgentRunningReactor(t, cs)
-	d, err := newWithClient(context.Background(), cs, testRestConfig(), Config{Namespace: testNamespace, ProxyImage: "wardyn/wardyn-proxy:test"})
+	d, err := newWithClient(context.Background(), cs, testRestConfig(), Config{Namespaces: []string{testNamespace}, ProxyImage: "wardyn/wardyn-proxy:test"})
 	if err != nil {
 		t.Fatalf("newWithClient: %v", err)
 	}

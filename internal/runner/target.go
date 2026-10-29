@@ -38,6 +38,10 @@ type TargetFacts struct {
 	// it is unavailable, not that the target is offline.
 	ProbeErr error
 
+	// RunsNamespaces are the Kubernetes namespaces a k8s runner advertises (runnerwire.Caps.RunsNamespaces),
+	// the first being its default; empty for every other target and for an older runner.
+	RunsNamespaces []string
+
 	// RecordsUnasked: a self-hosted runner older than per-run recording that records by its own
 	// setting whatever its organisation asks (session recording without the per-run flag). Its
 	// runner_declined mark is a guess, so a cast it uploads may clear it.

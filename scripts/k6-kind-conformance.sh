@@ -13,7 +13,7 @@
 #     serving its runner URL over TLS from a CA this script mints;
 #   - enrols an organisation runner the production way: an org token minted by the org, the
 #     deploy/helm/wardyn-runnerd chart registering with it, a security operator claiming it by its
-#     fingerprint, then runnerd dialling the org's hub outbound;
+#     fingerprint, then runnerd dialling the org's hub outbound; it serves two runs namespaces;
 #   - enrols a second, personal runner (a person's token, a second chart release) for the trust
 #     placement case;
 #   - runs TestK6Org (test/k6) against that org and the live runnerd, then scales runnerd down and
@@ -64,6 +64,7 @@ ORG_NS=wardyn-k6-org
 ORG_RUNS_NS=wardyn-k6-orgruns
 OWN_NS=wardyn-k6-runner
 RUNS_NS=wardyn-k6-runs
+EXTRA_RUNS_NS=wardyn-k6-runs-b
 RELEASE=k6
 P_RELEASE=k6p
 P_OWN_NS=wardyn-k6-prunner
@@ -335,18 +336,23 @@ EOF
     '$(printf '%s' "$SEC_TOKEN" | sha256sum | cut -d' ' -f1)')" >/dev/null
 }
 
-# install_runnerd RELEASE OWN_NS RUNS_NS TOKEN installs the runnerd chart registering with TOKEN, waits
-# for its boot checks, and leaves the deployment's name in INSTALLED; it fails when runnerd never boots.
+# install_runnerd RELEASE OWN_NS RUNS_NS TOKEN [EXTRA_RUNS_NS] installs the runnerd chart registering with
+# TOKEN (placing runs in EXTRA_RUNS_NS too when given), waits for its boot checks, and leaves the
+# deployment's name in INSTALLED; it fails when runnerd never boots.
 install_runnerd() {
-  local release=$1 own=$2 runs=$3 token=$4
+  local release=$1 own=$2 runs=$3 token=$4 extra=${5:-} ns
+  local extra_set=()
   kubectl create namespace "$own" >/dev/null
-  kubectl create namespace "$runs" >/dev/null
-  kubectl label namespace "$runs" pod-security.kubernetes.io/enforce=restricted pod-security.kubernetes.io/enforce-version=latest >/dev/null
+  for ns in "$runs" ${extra:+"$extra"}; do
+    kubectl create namespace "$ns" >/dev/null
+    kubectl label namespace "$ns" pod-security.kubernetes.io/enforce=restricted pod-security.kubernetes.io/enforce-version=latest >/dev/null
+  done
+  [ -z "$extra" ] || extra_set=(--set "extraRunsNamespaces[0]=$extra")
   kubectl -n "$own" create configmap k6-org-ca --from-file=ca.pem="$WORK/ca.pem" >/dev/null
   kubectl -n "$own" create secret generic k6-registration --from-literal=token="$token" >/dev/null
   sed -e "s/arch: ARCH/arch: $ARCH/" -e "s/^runsNamespace: .*/runsNamespace: $runs/" \
     "$WORK/values.yaml" >"$WORK/values-$release-$VERSION.yaml"
-  helm install "$release" deploy/helm/wardyn-runnerd -n "$own" -f "$WORK/values-$release-$VERSION.yaml" >/dev/null
+  helm install "$release" deploy/helm/wardyn-runnerd -n "$own" -f "$WORK/values-$release-$VERSION.yaml" "${extra_set[@]}" >/dev/null
   INSTALLED="$(kubectl -n "$own" get deploy -l "app.kubernetes.io/instance=$release" -o jsonpath='{.items[0].metadata.name}')"
   if kubectl -n "$own" rollout status "deployment/$INSTALLED" --timeout=300s >/dev/null &&
      timeout 300 bash -c "until kubectl -n $own logs deployment/$INSTALLED -c runnerd 2>/dev/null | grep 'k8s runner ready to connect' >/dev/null; do sleep 3; done"; then
@@ -415,9 +421,9 @@ for image in $NODE_IMAGES; do
 
   log "[$VERSION] the runnerd chart, registering with the org's token"
   boot=PASS
-  install_runnerd "$RELEASE" "$OWN_NS" "$RUNS_NS" "$(jq -r .token "$WORK/resp.json")" || { boot=FAIL; rc=1; }
+  install_runnerd "$RELEASE" "$OWN_NS" "$RUNS_NS" "$(jq -r .token "$WORK/resp.json")" "$EXTRA_RUNS_NS" || { boot=FAIL; rc=1; }
   DEPLOY="$INSTALLED"
-  case_line in-cluster-runnerd-boot "$boot" "chart Role; SSAR, foreign objects, kubelet floor, relay listen and the relay source probe on Calico (log: k8s runner ready to connect)"
+  case_line in-cluster-runnerd-boot "$boot" "chart Role in two runs namespaces; SSAR, foreign objects, the canary in each, kubelet floor, relay listen and the relay source probe on Calico (log: k8s runner ready to connect)"
 
   # The claim: the security operator confirms the fingerprint runnerd printed at registration.
   FP="$(fingerprint "$OWN_NS" "$DEPLOY")"
@@ -486,6 +492,7 @@ WARDYN_TEST_K6=1
 KUBECONFIG=$WORK/runnerd.kc
 K6_ADMIN_KUBECONFIG=$WORK/admin-internal.kc
 K6_RUNS_NS=$RUNS_NS
+K6_EXTRA_RUNS_NS=$EXTRA_RUNS_NS
 K6_OWN_NS=$OWN_NS
 K6_SA=$SA
 K6_RUNNER_ID=$RUNNER_ID

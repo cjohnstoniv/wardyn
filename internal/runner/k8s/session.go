@@ -66,13 +66,17 @@ func (d *Driver) Attach(ctx context.Context, ref string, opts runner.AttachOptio
 	if ref == "" {
 		return nil, errors.New("k8s: attach: empty sandbox ref")
 	}
-	pod, err := d.clientset.CoreV1().Pods(d.cfg.Namespace).Get(ctx, ref, metav1.GetOptions{})
+	ns, err := d.refNamespace(ctx, ref)
+	if err != nil {
+		return nil, fmt.Errorf("k8s: attach: %w", err)
+	}
+	pod, err := d.clientset.CoreV1().Pods(ns).Get(ctx, ref, metav1.GetOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("k8s: attach: get pod %q: %w", ref, err)
 	}
 	container := resolveExecContainer(pod)
 
-	exec, err := d.newExecutor(ref, container, []string{"/bin/sh", "-c", attachShellScriptFor(opts.Observer)}, true, true)
+	exec, err := d.newExecutor(ns, ref, container, []string{"/bin/sh", "-c", attachShellScriptFor(opts.Observer)}, true, true)
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +130,11 @@ func (d *Driver) ExecStream(ctx context.Context, ref string, spec runner.ExecSpe
 	if len(spec.Argv) == 0 {
 		return nil, errors.New("k8s: exec stream: empty argv")
 	}
-	pod, err := d.clientset.CoreV1().Pods(d.cfg.Namespace).Get(ctx, ref, metav1.GetOptions{})
+	ns, err := d.refNamespace(ctx, ref)
+	if err != nil {
+		return nil, fmt.Errorf("k8s: exec stream: %w", err)
+	}
+	pod, err := d.clientset.CoreV1().Pods(ns).Get(ctx, ref, metav1.GetOptions{})
 	if err != nil {
 		return nil, sandboxGoneErr(fmt.Errorf("k8s: exec stream: get pod %q: %w", ref, err))
 	}
@@ -137,7 +145,7 @@ func (d *Driver) ExecStream(ctx context.Context, ref string, spec runner.ExecSpe
 		cmd = []string{"/bin/sh", "-c", envWrapScript(spec.Env, spec.Argv)}
 	}
 
-	exec, err := d.newExecutor(ref, container, cmd, true, spec.TTY)
+	exec, err := d.newExecutor(ns, ref, container, cmd, true, spec.TTY)
 	if err != nil {
 		return nil, err
 	}
@@ -197,12 +205,12 @@ func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) 
 // clientset backs Pods().Get for container resolution but has no HTTP server
 // behind it for the exec subresource itself, so a real dial from a test would
 // just fail to connect.
-func (d *Driver) newExecutor(podName, container string, cmd []string, stdin, tty bool) (remotecommand.Executor, error) {
+func (d *Driver) newExecutor(ns, podName, container string, cmd []string, stdin, tty bool) (remotecommand.Executor, error) {
 	if d.execFactory != nil {
 		return d.execFactory(podName, container, cmd, stdin, tty)
 	}
 	req := d.clientset.CoreV1().RESTClient().Post().
-		Namespace(d.cfg.Namespace).
+		Namespace(ns).
 		Resource("pods").
 		Name(podName).
 		SubResource("exec").

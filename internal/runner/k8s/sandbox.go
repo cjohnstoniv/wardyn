@@ -170,13 +170,17 @@ func (d *Driver) placeAgentPod(pod *corev1.Pod, spec runner.SandboxSpec) error {
 //
 //nolint:funlen // one linear ordered sequence, kept in one scope on purpose
 func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (runner.Sandbox, error) {
-	ns := d.cfg.Namespace
+	ns, err := d.createNamespace(spec)
+	if err != nil {
+		return runner.Sandbox{}, err
+	}
 
 	// (1) Preflight: fail closed BEFORE creating anything.
 	runtimeClassName, runtimeHandler, enforced, err := d.createPreflight(ctx, spec)
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
+	d.noteNamespace(spec.RunID, ns)
 	defer d.brackets.Delete(proxyPodName(spec.RunID))
 	defer d.brackets.Delete(agentPodName(spec.RunID))
 	// The drives come LAST in preflight since it's the only step that
@@ -395,7 +399,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	}
 
 	clock := d.newStartClock()
-	proxyIP, err := d.waitPodIP(ctx, clock, proxyPodName(spec.RunID), spec.NotifyWaiting)
+	proxyIP, err := d.waitPodIP(ctx, clock, ns, proxyPodName(spec.RunID), spec.NotifyWaiting)
 	if err != nil {
 		return fail(fmt.Errorf("k8s: proxy pod never became ready: %w", err))
 	}
@@ -487,7 +491,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// the sandbox out: a k8s Pod Create is purely declarative, unlike
 	// docker's ContainerStart, so a caller racing straight into
 	// Attach/ExecStream would hit "container not found" against a pod still Pending.
-	if err := d.waitContainerRunning(ctx, clock, agentPodName(spec.RunID), mainContainerName, spec.NotifyWaiting); err != nil {
+	if err := d.waitContainerRunning(ctx, clock, ns, agentPodName(spec.RunID), mainContainerName, spec.NotifyWaiting); err != nil {
 		return fail(fmt.Errorf("k8s: agent pod's main container never started: %w", err))
 	}
 
@@ -542,14 +546,14 @@ func addMainContainerVolumes(pod *corev1.Pod, vols []corev1.Volume, mounts []cor
 //
 // onWaiting (nil-safe) gets that reason while waiting, once per change — see
 // runner.SandboxSpec.OnWaiting.
-func (d *Driver) waitContainerRunning(ctx context.Context, clock *startClock, podName, containerName string, onWaiting func(string)) error {
+func (d *Driver) waitContainerRunning(ctx context.Context, clock *startClock, ns, podName, containerName string, onWaiting func(string)) error {
 	var lastPod *corev1.Pod
 	var lastGetErr error
 	// Last reason REPORTED, so the report fires on change, not on a tick.
 	var lastReason string
 	var pulls pullWatch
 	err := clock.poll(ctx, func(pollCtx context.Context) (bool, bool, error) {
-		pod, gerr := d.readPod(pollCtx, podName)
+		pod, gerr := d.readPod(pollCtx, ns, podName)
 		if tolerateGetError(gerr, &lastGetErr) {
 			return false, false, nil
 		}
@@ -681,13 +685,13 @@ func (d *Driver) resolveRuntimeClassName(ctx context.Context, class types.Confin
 // One bound, clock's: absolute across the proxy and the agent, so an
 // unplaceable proxy waits for room under the same deadlines the agent does
 // rather than failing on a deadline of its own.
-func (d *Driver) waitPodIP(ctx context.Context, clock *startClock, podName string, onWaiting func(string)) (string, error) {
+func (d *Driver) waitPodIP(ctx context.Context, clock *startClock, ns, podName string, onWaiting func(string)) (string, error) {
 	var ip string
 	var lastPod *corev1.Pod
 	var lastGetErr error
 	var lastReason string
 	err := clock.poll(ctx, func(pollCtx context.Context) (bool, bool, error) {
-		pod, gerr := d.readPod(pollCtx, podName)
+		pod, gerr := d.readPod(pollCtx, ns, podName)
 		if tolerateGetError(gerr, &lastGetErr) {
 			return false, false, nil
 		}
@@ -904,6 +908,7 @@ func (d *Driver) openSink(runID uuid.UUID) (any, error) {
 	}
 	if _, err := d.mutate(runID, func(ev *runEvidence) (bool, error) {
 		ev.SinkKeyHash = hex.EncodeToString(hash[:])
+		ev.Namespace = d.notedNamespace(runID)
 		return true, nil
 	}); err != nil {
 		return nil, err
@@ -966,34 +971,4 @@ func (d *Driver) runnerPodSpec(pod *corev1.Pod, component, controlPlaneURL strin
 	}
 	pod.Spec.HostAliases = append(pod.Spec.HostAliases, corev1.HostAlias{IP: ip, Hostnames: []string{u.Hostname()}})
 	return nil
-}
-
-// createPod creates a pod; in runner mode it first persists the bracket's lower end (a node list
-// scoped by the pod's own nodeSelector), then records the create response's UID, and routes the
-// start wait's reads of the pod through the bracket.
-func (d *Driver) createPod(ctx context.Context, runID uuid.UUID, component string, pod *corev1.Pod) (*corev1.Pod, error) {
-	if !d.runnerMode() {
-		return d.clientset.CoreV1().Pods(d.cfg.Namespace).Create(ctx, pod, metav1.CreateOptions{})
-	}
-	b := &bracket{d: d, runID: runID, component: component, selector: pod.Spec.NodeSelector}
-	if err := b.before(ctx, pod.Name); err != nil {
-		return nil, err
-	}
-	created, err := d.clientset.CoreV1().Pods(d.cfg.Namespace).Create(ctx, pod, metav1.CreateOptions{})
-	if err != nil {
-		return nil, err
-	}
-	if err := b.created(created); err != nil {
-		return nil, err
-	}
-	d.brackets.Store(pod.Name, b)
-	return created, nil
-}
-
-// readPod is the start wait's pod read: through the pod's bracket in runner mode.
-func (d *Driver) readPod(ctx context.Context, name string) (*corev1.Pod, error) {
-	if v, ok := d.brackets.Load(name); ok {
-		return v.(*bracket).get(ctx, name)
-	}
-	return d.clientset.CoreV1().Pods(d.cfg.Namespace).Get(ctx, name, metav1.GetOptions{})
 }

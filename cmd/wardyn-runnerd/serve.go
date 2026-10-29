@@ -46,8 +46,11 @@ type serveOptions struct {
 	// startup and handed to every run's proxy. It is never sent to the organisation.
 	upstreamProxy string
 	// substrate is --substrate: docker (default) or k8s. The rest are k8s only (design K1 §3.3).
-	substrate, runsNamespace, relayService, arch string
-	maxPodLifetime                               time.Duration
+	substrate, relayService, arch string
+	maxPodLifetime                time.Duration
+	// runsNamespaces is --runs-namespace, repeatable: the namespaces runs are placed in, the first being
+	// the default (design T5 §2.7).
+	runsNamespaces []string
 	// folderRoots is --folder-root: the folders a --substrate folders runner shares (default: home).
 	folderRoots []string
 	// localAttach is --local-attach, the runner's own ceiling on local attach; orgURL is --org, which
@@ -227,7 +230,7 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 	cmd.Flags().StringVar(&opts.localModelPorts, "local-model-port", "", "docker: the port, or comma-separated ports, of a model server on this computer that runs here may use when the organisation allows it, "+
 		"such as 11434; default: none, so no run here uses this computer's model server")
 	cmd.Flags().StringArrayVar(&opts.driveRoots, "drive-root", nil, "docker: a folder a drive bound to this runner may mount from, with everything under it (repeatable; default: none, so no drive mounts here)")
-	cmd.Flags().StringVar(&opts.runsNamespace, "runs-namespace", "", "k8s: the dedicated namespace runs are created in; never runnerd's own")
+	cmd.Flags().StringArrayVar(&opts.runsNamespaces, "runs-namespace", nil, "k8s: a dedicated namespace runs are created in, never runnerd's own (repeatable; the first is where a run that names none goes)")
 	cmd.Flags().StringVar(&opts.relayService, "relay-service", "", "k8s: the relay Service's DNS name (<name>.<namespace>.svc.<cluster domain>), which must resolve to exactly one ClusterIP")
 	cmd.Flags().StringVar(&opts.arch, "arch", os.Getenv(archEnv), "k8s, required: the sandbox node architecture, amd64 or arm64, pinned as every run pod's kubernetes.io/arch node selector")
 	cmd.Flags().DurationVar(&opts.maxPodLifetime, "max-pod-lifetime", 0, "k8s: the most any run pod may live (activeDeadlineSeconds), e.g. 24h")

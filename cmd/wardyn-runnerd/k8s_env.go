@@ -184,6 +184,22 @@ func parseConfinementMap(s string) (map[types.ConfinementClass]string, error) {
 	return out, nil
 }
 
+// checkRunsNamespaces checks --runs-namespace against runnerd's own namespace (design T5 §2.7): each
+// is named once and none is runnerd's own, where a run pod could name runnerd's ServiceAccount.
+func checkRunsNamespaces(runs []string, ownNS string) error {
+	seen := map[string]bool{}
+	for _, ns := range runs {
+		switch {
+		case ns == "" || ownNS == "" || ns == ownNS:
+			return fmt.Errorf("--runs-namespace %q must be a dedicated namespace, not runnerd's own (%q)", ns, ownNS)
+		case seen[ns]:
+			return fmt.Errorf("--runs-namespace %q is given twice", ns)
+		}
+		seen[ns] = true
+	}
+	return nil
+}
+
 // k8sServeFlags are the serve flags only a k8s runnerd takes.
 var k8sServeFlags = []string{"runs-namespace", "relay-service", "arch", "max-pod-lifetime"}
 

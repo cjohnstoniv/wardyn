@@ -27,12 +27,12 @@ func (d *Driver) Measure(ctx context.Context) (types.RunnerAmounts, error) {
 	ctx, cancel := context.WithTimeout(ctx, fitReadTimeout)
 	defer cancel()
 	var why []string
-	quotas, err := d.clientset.CoreV1().ResourceQuotas(d.cfg.Namespace).List(ctx, metav1.ListOptions{})
+	quotas, err := d.clientset.CoreV1().ResourceQuotas(d.defaultNamespace()).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		quotas = &corev1.ResourceQuotaList{}
-		why = append(why, fmt.Sprintf("ResourceQuota list in %s: %v", d.cfg.Namespace, err))
+		why = append(why, fmt.Sprintf("ResourceQuota list in %s: %v", d.defaultNamespace(), err))
 	} else if len(quotas.Items) == 0 && !d.cfg.ReadNodes {
-		why = append(why, fmt.Sprintf("no ResourceQuota in %s and k8s.readNodes is off", d.cfg.Namespace))
+		why = append(why, fmt.Sprintf("no ResourceQuota in %s and k8s.readNodes is off", d.defaultNamespace()))
 	}
 	var nodes []corev1.ResourceList
 	if d.cfg.ReadNodes {
@@ -47,7 +47,7 @@ func (d *Driver) Measure(ctx context.Context) (types.RunnerAmounts, error) {
 	m := measureCluster(quotas.Items, nodes)
 	if err == nil && len(quotas.Items) > 0 && !d.cfg.ReadNodes {
 		if unset := unsetQuotaNames(m); len(unset) > 0 {
-			why = append(why, fmt.Sprintf("no ResourceQuota in %s sets %s and k8s.readNodes is off", d.cfg.Namespace, strings.Join(unset, ", ")))
+			why = append(why, fmt.Sprintf("no ResourceQuota in %s sets %s and k8s.readNodes is off", d.defaultNamespace(), strings.Join(unset, ", ")))
 		}
 	}
 	if len(why) > 0 && (m.CPUMillis <= 0 || m.MemoryMiB <= 0 || m.DiskMiB <= 0) {
