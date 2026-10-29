@@ -157,7 +157,8 @@ docs/operations/custom-components.md=1269 share=35
 # 0.10 ATT-LOGIN-SRV: docs/operations/api-tokens.md 5948 adds 358 over 5590: the CLI sign-in section, measured.
 # docs/operations/api-tokens.md 6516 adds 465 over 6051, measured (rc.8 inbound docs): the inbound tokens section, the workload routes of a service's allow-list and the app ticket.
 # docs/operations/api-tokens.md 6525 measured (rc.8 review): inbound wording made exact (groups refreshed at sign-in, rate-bound denials, burst, HEAD, session TTL).
-docs/operations/api-tokens.md=6525 share=35 # +86 (lane SI-DOCS), measured; +17 the sponsor mints in admin view only
+# docs/operations/api-tokens.md 6529 adds 4 over 6525, measured (rc.8 cumulative review: only an upgraded connection an inbound token opened is re-checked).
+docs/operations/api-tokens.md=6529 share=35 # +86 (lane SI-DOCS), measured; +17 the sponsor mints in admin view only
 # G-1423 r1: docs/operations/denials.md 4709 adds 32 over 4677 for the audit-only delegation_scope source.
 # docs/operations/denials.md 4786 adds 77 (0.9 G-sec-rest): the exec relay rows (#1976) and the audit_retention_actor_reserved row.
 # D-108-114 merge: docs/operations/denials.md 4806 adds 20 over 4786 for the runs.placement cause of governance_profile.
