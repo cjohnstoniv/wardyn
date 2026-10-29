@@ -31,7 +31,6 @@ import { RunStatusStrip, useEvidenceFacts } from "./status-strip";
 import { RunFailureBlock } from "./failure-block";
 import { LocalModelsCard } from "./local-models-card";
 import { LoginSandboxNote } from "./login-sandbox-note";
-import { ServicePanel } from "./service-panel";
 import { TerminalPane } from "./terminal-notice";
 import type { WidgetContext } from "./widget-registry";
 
@@ -197,7 +196,6 @@ export function Cockpit({
     <div className="flex min-h-0 flex-1 flex-col">
       <RunStatusStrip ctx={ctx} />
       <LocalModelsCard run={run} />
-      <ServicePanel run={run} />
       <div className="flex min-h-0 flex-1 flex-col">
         <RunCanvas ctx={ctx} />
       </div>
