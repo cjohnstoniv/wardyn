@@ -341,16 +341,16 @@ export function ComputerFolderCard({ folder, onDirection, onChange, onRemove }: 
   const name = folder.name || baseName(folder.path ?? "");
   // The survey belongs to the folder it was taken of: Change to another one shows none until that one answers.
   const [surveyed, setSurveyed] = React.useState<{ runnerId?: string; path?: string; survey?: FolderSurvey }>();
-  const survey = surveyed?.runnerId === folder.runner_id && surveyed?.path === folder.path ? surveyed?.survey : undefined;
+  const { runner_id: runnerId, path } = folder;
+  const survey = surveyed?.runnerId === runnerId && surveyed?.path === path ? surveyed?.survey : undefined;
   React.useEffect(() => {
-    if (!folder.runner_id || !folder.path || !runner?.online) return;
+    if (!runnerId || !path || !runner?.online) return;
     let alive = true;
-    const { runner_id: runnerId, path } = folder;
     computerFolders.list(runnerId, path, true).then((l) => alive && setSurveyed({ runnerId, path, survey: l.survey })).catch(() => undefined);
     return () => {
       alive = false;
     };
-  }, [folder.runner_id, folder.path, runner?.online]);
+  }, [runnerId, path, runner?.online]);
   return (
     <div className="flex flex-col gap-3 border-t border-border px-[15px] py-3.5 first:border-t-0" data-testid="nr-computer-card">
       <div className="flex flex-wrap items-center gap-2.5">
