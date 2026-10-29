@@ -4083,6 +4083,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0238` (`0238_run_image_arches`) adds `agent_runs.image_arches` (`0001`'s table): the architectures a run's pre-wrapped image was checked on, which place the run. NULL on every existing row; no grant changes.
 - `0239` (`0239_inbound`) adds the restricted `feature` value `inbound` to `capability_restrictions` (so nobody may declare an inbound app until an admin allows it), admits `inbound` in `api_tokens.kind`'s CHECK (`0199`'s column), and adds `caller` and `app` to `attach_tickets` (`0026`'s table), empty on every existing ticket; no row or grant changes.
 - `0240` (`0240_run_service`) adds `agent_runs.service` and `agent_runs.service_status` (`0001`'s table): a service run's frozen spec and its last health. NULL on every existing row; no grant changes.
+- `0241` (`0241_workloads`) creates `workloads` (a named run request Wardyn keeps running, and the run it started) and `workload_bindings` (a Kubernetes namespace on a runner pool bound to a service identity); a split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on both.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
