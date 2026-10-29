@@ -63,7 +63,7 @@ func launchedRun(id uuid.UUID) sdk.WorkloadLaunch {
 // per document, the custom resource's namespace and metadata stay out of the body, and the lines
 // name the outcome and the run.
 func TestApplyPutsEachDocumentUnderItsOwnName(t *testing.T) {
-	webRun, workerRun := uuid.New(), uuid.New()
+	webRun := uuid.New()
 	rig := newRouteRig(t, map[string]func(http.ResponseWriter, []byte){
 		putWeb:    applied(sdk.WorkloadCreated, launchedRun(webRun)),
 		putWorker: applied(sdk.WorkloadUnchanged, sdk.WorkloadLaunch{State: sdk.WorkloadNoLaunch}),
