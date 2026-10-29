@@ -49,10 +49,30 @@ export const NR_RUN = {
   PORTS_LABEL: "Ports",
   PORTS_HELP:
     "Each port opens from the run page through Wardyn's web app gateway. Only people who may enter this run can open it, unless you make it callable from outside.",
-  /** T2-a (r16): a port's own card carries the checkbox and its help. "Who can call it" is not here: its picker is redrawn in r17. */
+  /** T2-a (r16): a port's own card carries the checkbox and its help. */
   PORT_INBOUND_LABEL: "Callable from outside the run",
   PORT_INBOUND_HELP:
     "People and services you name can reach this port through Wardyn's gateway, even when the run has no terminal. Every call is recorded.",
+  /** T2-a (r17): "Who can call it" is a set of chips and an "Add a caller" menu built from what the console already knows. */
+  CALLERS_LABEL: "Who can call it",
+  CALLERS_HELP: "You can always call it. Add the people, groups and service identities that may call it too.",
+  CALLERS_NONE: "Only you can call it.",
+  CALLERS_ADD: "Add a caller",
+  CALLER_PERSON: "Person",
+  CALLER_GROUP: "Group",
+  CALLER_SERVICE: "Service identity",
+  CALLERS_MENU_DIRECTORY: "Search the directory",
+  CALLERS_MENU_GROUPS: "Your groups",
+  CALLERS_MENU_SERVICES: "Services you sponsor",
+  CALLERS_MENU_PERSON: "A person",
+  CALLERS_NO_GROUPS: "Your sign-in doesn't list any groups.",
+  CALLERS_NO_SERVICES: "You don't sponsor any service identities.",
+  CALLER_EMAIL_PLACEHOLDER: "name@example.com",
+  CALLER_EMAIL_INVALID: "Enter a full email address, like ana@example.com.",
+  CALLER_ADD_PERSON: "Add",
+  CALLER_ADDED: "Added",
+  /** Accessible name of a caller chip's remove button; the value is what the chip shows. */
+  CALLER_REMOVE_ARIA: (value: string) => `Remove ${value}`,
   PORT_COL_NAME: "Name",
   PORT_COL_PORT: "Port",
   PORT_COL_PATH: "Path",
