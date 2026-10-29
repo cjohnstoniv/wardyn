@@ -132,6 +132,11 @@ func k8sRunnerHooks(ctx context.Context, identity runneridentity.Identity, state
 		linuxVM = enableK8sLinuxVM(ctx, drv)
 	}
 	ks := keystore.NewK8s(drv.Clientset(), ownNS, runnerID)
+	// The WardynWorkload watcher: nil unless the chart lists workload namespaces (design T3 §2.5).
+	workloads, err := newClusterWorkloadWatcher(ctx, env.workloadNamespaces)
+	if err != nil {
+		return runnerRuntime{}, errors.Join(err, relay.Close(), sink.Close())
+	}
 	started := func(ctx context.Context, m *offline.Manager) error {
 		ev.m = m
 		// A live run in a namespace no longer listed refuses boot; the rest are mapped to theirs.
@@ -167,12 +172,14 @@ func k8sRunnerHooks(ctx context.Context, identity runneridentity.Identity, state
 		linuxVM:        linuxVM,
 		report:         connectReport{log: opts.offline},
 		runsNamespaces: opts.runsNamespaces,
+		workloadStatus: workloads.statusFunc(),
 	})
 	if err != nil {
 		return runnerRuntime{}, errors.Join(err, relay.Close(), sink.Close())
 	}
+	rt = workloads.attach(rt)
 	checks := errors.Join(
-		drv.CheckRunnerAccess(ctx, ownNS),
+		drv.CheckRunnerAccess(ctx, ownNS, env.workloadNamespaces...),
 		drv.CheckForeignObjects(ctx),
 		drv.CheckKubeletFloor(ctx, opts.arch),
 	)

@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -37,6 +38,32 @@ func TestRunnerAccessReviewNamesMissingVerbs(t *testing.T) {
 	err := h.d.CheckRunnerAccess(context.Background(), "wardyn-runner")
 	if !errors.Is(err, errRunnerAccessMissing) || !strings.Contains(err.Error(), testNamespace+"/pods:patch") || !strings.Contains(err.Error(), "nodes:list") {
 		t.Fatalf("CheckRunnerAccess: %v", err)
+	}
+}
+
+// TestRunnerAccessReviewChecksWorkloadVerbs: the WardynWorkload verbs are asked only for the
+// listed workload namespaces, the status ones as a subresource, and each missing one is named.
+func TestRunnerAccessReviewChecksWorkloadVerbs(t *testing.T) {
+	h := newRunnerHarness(t)
+	var asked []string
+	h.cs.PrependReactor("create", "selfsubjectaccessreviews", func(a clienttesting.Action) (bool, runtime.Object, error) {
+		sar := a.(clienttesting.CreateAction).GetObject().(*authorizationv1.SelfSubjectAccessReview)
+		ra := sar.Spec.ResourceAttributes
+		if ra.Group == "wardyn.dev" {
+			asked = append(asked, ra.Namespace+"/"+ra.Resource+"/"+ra.Subresource+":"+ra.Verb)
+		}
+		sar.Status.Allowed = !(ra.Resource == "wardynworkloads" && ra.Subresource == "status" && ra.Verb == "patch")
+		return true, sar, nil
+	})
+	if err := h.d.CheckRunnerAccess(context.Background(), "wardyn-runner"); err != nil || len(asked) != 0 {
+		t.Fatalf("no workload namespaces: err %v, asked %v, want none", err, asked)
+	}
+	err := h.d.CheckRunnerAccess(context.Background(), "wardyn-runner", "team-a")
+	if !errors.Is(err, errRunnerAccessMissing) || !strings.Contains(err.Error(), "team-a/wardynworkloads/status.wardyn.dev:patch") || strings.Contains(err.Error(), "wardynworkloads.wardyn.dev:get") {
+		t.Fatalf("CheckRunnerAccess: %v, want only the status patch in team-a named", err)
+	}
+	if want := "team-a/wardynworkloads/:watch"; !slices.Contains(asked, want) {
+		t.Errorf("asked %v, want %s among them", asked, want)
 	}
 }
 
