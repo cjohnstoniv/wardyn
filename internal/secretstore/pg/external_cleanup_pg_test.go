@@ -62,7 +62,7 @@ func (r *rotExt) Check(ctx context.Context, owner, name, ref string) error {
 	_, err := r.Get(ctx, owner, name, ref)
 	return err
 }
-func (r *rotExt) Delete(_ context.Context, _, _, ref string) error {
+func (r *rotExt) Delete(ctx context.Context, _, _, ref string) error {
 	r.mu.Lock()
 	obj := secretstore.RefObject(ref)
 	gate := r.gated && obj == "A"
@@ -73,7 +73,11 @@ func (r *rotExt) Delete(_ context.Context, _, _, ref string) error {
 	r.mu.Unlock()
 	if gate {
 		close(entered)
-		<-release
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -91,6 +95,8 @@ func TestPutExternal_ReplacedObjectCleanupHoldsTheRowLock(t *testing.T) {
 	s := mixedStore(t, pool, mustIdentity(t), false, ext, true)
 	mustPut(t, s, "bob", "tok", "v1") // object A
 	ext.pause()
+	release := sync.OnceFunc(func() { close(ext.release) })
+	t.Cleanup(release) // a Fatal below still lets the paused cleanup and the Puts behind it finish before the pool closes
 	replaced := make(chan error, 1)
 	go func() { replaced <- s.For("bob").Put(t.Context(), "tok", []byte("v2")) }() // object B; A's cleanup stops
 	select {
@@ -111,7 +117,7 @@ func TestPutExternal_ReplacedObjectCleanupHoldsTheRowLock(t *testing.T) {
 		t.Fatalf("the delete and re-add finished while the cleanup still held the old object (err %v)", err)
 	case <-time.After(time.Second): // held behind the cleanup's lock
 	}
-	close(ext.release)
+	release()
 	if err := <-replaced; err != nil {
 		t.Fatalf("replacing Put: %v", err)
 	}
