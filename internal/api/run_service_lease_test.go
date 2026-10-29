@@ -11,7 +11,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-func serviceRun(now time.Time, endsIn time.Duration, l types.RunLimits) types.AgentRun {
+func leaseServiceRun(now time.Time, endsIn time.Duration, l types.RunLimits) types.AgentRun {
 	end := now.Add(endsIn)
 	return types.AgentRun{
 		Experience: types.ExperienceBackground, EndsAt: &end, RunLimits: l,
@@ -71,7 +71,7 @@ func TestPlanServiceRenewal(t *testing.T) {
 			want: 20 * time.Minute, unit: 1200, source: types.LimitSourceGovernance, health: types.ServiceHealthStarting},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			run := serviceRun(now, tc.endsIn, tc.limits)
+			run := leaseServiceRun(now, tc.endsIn, tc.limits)
 			if tc.mutate != nil {
 				tc.mutate(&run)
 			}

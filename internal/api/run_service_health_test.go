@@ -103,7 +103,7 @@ type serviceHealthFixture struct {
 
 func newServiceHealthFixture(t *testing.T, answer func(ref string) (*runner.ExecSession, error), cfgFn func(*Config), runs ...types.AgentRun) *serviceHealthFixture {
 	t.Helper()
-	f := &serviceHealthFixture{now: time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)}
+	f := &serviceHealthFixture{now: time.Date(2020, 10, 29, 12, 0, 0, 0, time.UTC)}
 	f.st = &serviceHealthStore{runs: map[uuid.UUID]types.AgentRun{}, writes: map[uuid.UUID]int{}}
 	for _, r := range runs {
 		f.st.runs[r.ID] = r
@@ -215,7 +215,7 @@ func TestDecodeServiceState(t *testing.T) {
 
 // TestServiceHealthSweep_StatesFromTheSandbox: every way the read can come out, and the status it stores.
 func TestServiceHealthSweep_StatesFromTheSandbox(t *testing.T) {
-	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	now := time.Date(2020, 10, 29, 12, 0, 0, 0, time.UTC)
 	exit137 := 137
 	admittedRecently := serviceRun(now, "ref", time.Hour)
 	admitted := now.Add(-time.Minute)
@@ -313,7 +313,7 @@ func TestServiceHealthSweep_AuditsOnlyTransitions(t *testing.T) {
 		defer mu.Unlock()
 		return textPane(body, 0)(runner.ExecSpec{})
 	}
-	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	now := time.Date(2020, 10, 29, 12, 0, 0, 0, time.UTC)
 	run := serviceRun(now, "ref", time.Hour)
 	f := newServiceHealthFixture(t, answer, nil, run)
 	rows := func() (health, restart int) {
@@ -357,7 +357,7 @@ func TestServiceHealthSweep_AuditsOnlyTransitions(t *testing.T) {
 
 // A blip keeps the counts, so the recovery does not read as a fresh run of restarts.
 func TestServiceHealthSweep_UnreachableKeepsTheLastCounts(t *testing.T) {
-	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	now := time.Date(2020, 10, 29, 12, 0, 0, 0, time.UTC)
 	run := serviceRun(now, "ref", time.Hour)
 	exit := 1
 	run.ServiceStatus = &types.RunServiceStatus{Health: types.ServiceHealthHealthy, Restarts: 5, LastExitCode: &exit, ObservedAt: now.Add(-time.Minute)}
@@ -374,7 +374,7 @@ func TestServiceHealthSweep_UnreachableKeepsTheLastCounts(t *testing.T) {
 
 // A status the store refused to write (the run ended meanwhile) earns no audit row.
 func TestServiceHealthSweep_UnwrittenStatusIsNotAudited(t *testing.T) {
-	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	now := time.Date(2020, 10, 29, 12, 0, 0, 0, time.UTC)
 	run := serviceRun(now, "ref", time.Hour)
 	f := newServiceHealthFixture(t, answerWith(stateFileJSON("unhealthy", "restarting", 2, "1"), 0), nil, run)
 	f.st.gone = true
@@ -388,7 +388,7 @@ func TestServiceHealthSweep_UnwrittenStatusIsNotAudited(t *testing.T) {
 // runner is read by whichever replica holds that runner's session, leader or not; a runner held
 // elsewhere is not read at all.
 func TestServiceHealthSweep_LeaderAndHolderSplit(t *testing.T) {
-	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	now := time.Date(2020, 10, 29, 12, 0, 0, 0, time.UTC)
 	heldID, otherID := uuid.New(), uuid.New()
 	local := serviceRun(now, "ref-local", time.Hour)
 	held := serviceRun(now, "ref-held", time.Hour)
@@ -425,7 +425,7 @@ func TestServiceHealthSweep_LeaderAndHolderSplit(t *testing.T) {
 
 // With no SweeperLease the sweep runs as it always did, one replica reading everything it can reach.
 func TestServiceHealthSweep_NoLeaseReadsLocalRuns(t *testing.T) {
-	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	now := time.Date(2020, 10, 29, 12, 0, 0, 0, time.UTC)
 	run := serviceRun(now, "ref", time.Hour)
 	f := newServiceHealthFixture(t, answerWith(stateFileJSON("healthy", "", 0, "null"), 0), nil, run)
 	f.sweep(t)

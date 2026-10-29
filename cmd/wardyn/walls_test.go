@@ -51,7 +51,7 @@ func newWallsServer(t *testing.T) (*httptest.Server, *wallsStore) {
 		w.Header().Set("Content-Type", "application/json")
 		out := map[string]any{"spec": st.spec}
 		if string(st.spec) != "{}" {
-			out["updated_at"] = time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+			out["updated_at"] = time.Date(2020, 10, 29, 12, 0, 0, 0, time.UTC)
 		}
 		_ = json.NewEncoder(w).Encode(out)
 	}))
@@ -63,7 +63,7 @@ const wallsYAML = `# only these sites
 allowed_domains:
   - pypi.org
   - "1.10"
-  - "2026-01-02"
+  - "2020-01-02"
 denied_domains: [evil.example]
 first_use_approval: deny_with_review
 min_confinement_class: CC2
@@ -86,7 +86,7 @@ func TestWallsYAMLRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(st.spec, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.AllowedDomains == nil || strings.Join(*got.AllowedDomains, ",") != "pypi.org,1.10,2026-01-02" {
+	if got.AllowedDomains == nil || strings.Join(*got.AllowedDomains, ",") != "pypi.org,1.10,2020-01-02" {
 		t.Fatalf("allowed_domains = %v, want the three hosts as written", got.AllowedDomains)
 	}
 	if got.Desktop == nil || got.Desktop.CopyOut != types.TransferBlocked || got.FirstUseApproval == nil || *got.FirstUseApproval != types.FirstUseDenyWithReview {
@@ -117,7 +117,7 @@ func TestWallsYAMLRoundTrip(t *testing.T) {
 // A site YAML would read as a number or a date is refused rather than written back in another spelling.
 func TestWallsSetRefusesAHostThatIsNotText(t *testing.T) {
 	srv, st := newWallsServer(t)
-	for _, host := range []string{"1.10", "2026-01-02", "true", "42"} {
+	for _, host := range []string{"1.10", "2020-01-02", "true", "42"} {
 		err := execCmdStdin(t, "allowed_domains:\n  - "+host+"\n", "walls", "set", "-f", "-", "--url", srv.URL, "--token", "tok")
 		if err == nil || !strings.Contains(err.Error(), "quotes") {
 			t.Errorf("%s: err = %v, want the put-it-in-quotes refusal", host, err)
