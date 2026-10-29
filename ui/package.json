@@ -94,8 +94,8 @@
       "@csstools/css-color-parser": "4.2.5",
       "@csstools/css-parser-algorithms": "4.0.2",
       "@csstools/color-helpers": "6.1.2",
-      "seroval": "1.6.8",
-      "seroval-plugins": "1.6.8",
+      "seroval": "1.6.12",
+      "seroval-plugins": "1.6.12",
       "zod": "4.6.6"
     }
   }
