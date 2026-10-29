@@ -48,6 +48,40 @@ func TestWorkloadReportValidate(t *testing.T) {
 	}
 }
 
+// A workload name is pkg/client's grammar: a DNS label that starts with a letter. A namespace is any
+// DNS label, so it may start with a digit.
+func TestWorkloadNameBoundaries(t *testing.T) {
+	spec := json.RawMessage(`{"intent":{}}`)
+	apply := func(ns, name string) error {
+		return WorkloadReport{Op: WorkloadOpApply, Namespace: ns, Name: name, UID: "u", Generation: 1, Spec: spec}.Validate()
+	}
+	for _, name := range []string{"w", "w-1", "a-b-c", "a" + strings.Repeat("b", 62)} {
+		if err := apply("team-a", name); err != nil {
+			t.Errorf("name %q: %v", name, err)
+		}
+		if err := (WorkloadReport{Op: WorkloadOpSync, Namespace: "team-a", Names: []string{name}}).Validate(); err != nil {
+			t.Errorf("sync name %q: %v", name, err)
+		}
+		if err := (WorkloadStatusArgs{Namespace: "team-a", Name: name, Phase: WorkloadPhases[0]}).Validate(); err != nil {
+			t.Errorf("status name %q: %v", name, err)
+		}
+	}
+	for _, name := range []string{"", "-w", "w-", "1w", "W", "a" + strings.Repeat("b", 63)} {
+		if err := apply("team-a", name); !errors.Is(err, ErrBadFrame) {
+			t.Errorf("name %q: want ErrBadFrame, got %v", name, err)
+		}
+		if err := (WorkloadReport{Op: WorkloadOpSync, Namespace: "team-a", Names: []string{name}}).Validate(); !errors.Is(err, ErrBadFrame) {
+			t.Errorf("sync name %q: want ErrBadFrame, got %v", name, err)
+		}
+		if err := (WorkloadStatusArgs{Namespace: "team-a", Name: name, Phase: WorkloadPhases[0]}).Validate(); !errors.Is(err, ErrBadFrame) {
+			t.Errorf("status name %q: want ErrBadFrame, got %v", name, err)
+		}
+	}
+	if err := apply("1-team", "w"); err != nil {
+		t.Errorf("a digit-led namespace: %v", err)
+	}
+}
+
 func TestWorkloadStatusArgsValidate(t *testing.T) {
 	for _, p := range WorkloadPhases {
 		if err := (WorkloadStatusArgs{Namespace: "team-a", Name: "triage", ObservedGeneration: 4, Phase: p}).Validate(); err != nil {
