@@ -17,6 +17,9 @@ useDefault = true
 description = "Deliberate fake fixtures and prose false positives"
 regexTarget = "match"
 regexes = [
+    # RFC 6455's sample WebSocket key, base64 of "the sample nonce": the UI-sandbox e2e sends it to open an
+    # upgrade (generic-api-key reads it as a secret). It is a published example value, never a credential.
+    '''dGhlIHNhbXBsZSBub25jZQ==''',
     # README prose "…: secret-output masking, eBPF/Tetragon …" trips
     # generic-api-key with "eBPF/Tetragon" parsed as the secret value.
     '''secret-output masking''',
