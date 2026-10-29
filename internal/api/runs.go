@@ -327,6 +327,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	warnings = append(warnings, s.repoSourceWarnings(ctx, runID, spec, req)...)
 	warnings = append(warnings, f.fitWarnings...)
 	warnings = append(warnings, f.end.warnings(run)...)
+	warnings = append(warnings, serviceCreateWarnings(run)...)
 
 	// The requirements fold that ran ABOVE the confinement floor, audited now
 	// that the run id exists. See recordCreateFolds.
@@ -450,6 +451,7 @@ type runRowInput struct {
 func newRunRow(ctx context.Context, in runRowInput) types.AgentRun {
 	req, f, placed := in.req, in.f, in.placed
 	operatorOwned := operatorOwnedRequest(ctx)
+	service, _ := frozenRunService(req.Service) // serviceRefusal has already held it valid
 	return types.AgentRun{
 		ID:               in.runID,
 		CreatedAt:        in.now,
@@ -467,6 +469,7 @@ func newRunRow(ctx context.Context, in runRowInput) types.AgentRun {
 		Interactive:      req.Interactive,
 		MachineKind:      types.MachineKind(req.MachineKind).Normalize(),
 		Experience:       req.Experience,
+		Service:          service,
 		LocalFolder:      req.LocalFolder,
 		WorkspacePath:    in.workspacePath,
 		WorkspaceIDs:     workspaceIDsOf(f.wsRefs), // referencedWorkspaces above, same spec as WorkspacePath
@@ -616,6 +619,9 @@ func createRunAuditData(req createRunRequest, policyID *uuid.UUID, enforced type
 		// outlives it: this ties the run to the preset version it came from.
 		data["preset"] = req.Preset
 		data["preset_version"] = req.PresetVersion
+	}
+	if service, _ := frozenRunService(req.Service); service != nil {
+		data["service"] = service // the spec the run keeps, defaults filled
 	}
 	if req.Shape != "" {
 		// The New Run choice the run was set up from. The run row does not keep

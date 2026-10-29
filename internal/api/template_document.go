@@ -42,6 +42,7 @@ var templateDependencies = []struct{ field, needs, alt string }{
 	{"inline_policy.tool_rules", "agent", ""},
 	{"workload", "experience", ""},
 	{"startup", "experience", ""},
+	{"service", "workload", ""},
 	{"interactive_start", "interactive", ""},
 	{"task_mode", "interactive", ""},
 	{"inline_policy.ui_apps", "interactive", "experience"},
