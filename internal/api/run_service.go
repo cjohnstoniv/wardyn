@@ -82,3 +82,11 @@ func serviceCreateWarnings(run types.AgentRun) []string {
 	}
 	return nil
 }
+
+// queuedServiceWarnings are serviceCreateWarnings for a run waiting in a pool's queue. Its limits are
+// captured only when it starts (run_queue_start.go), so the sentence reads the limits the launch
+// resolved now: an advisory, as the profile may change before the start.
+func queuedServiceWarnings(queued types.AgentRun, current types.RunLimits) []string {
+	queued.RunLimits = current
+	return serviceCreateWarnings(queued)
+}
