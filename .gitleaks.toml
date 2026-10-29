@@ -13,13 +13,10 @@
 [extend]
 useDefault = true
 
-[allowlist]
+[[allowlists]]
 description = "Deliberate fake fixtures and prose false positives"
 regexTarget = "match"
 regexes = [
-    # RFC 6455's sample WebSocket key, base64 of "the sample nonce": the UI-sandbox e2e sends it to open an
-    # upgrade (generic-api-key reads it as a secret). It is a published example value, never a credential.
-    '''dGhlIHNhbXBsZSBub25jZQ==''',
     # README prose "…: secret-output masking, eBPF/Tetragon …" trips
     # generic-api-key with "eBPF/Tetragon" parsed as the secret value.
     '''secret-output masking''',
@@ -103,3 +100,14 @@ paths = [
     # with them, so the signer can be checked against them byte for byte.
     '''internal/egress/proxy/testdata/sigv4/''',
 ]
+
+# RFC 6455's sample WebSocket key, base64 of "the sample nonce": the UI-sandbox e2e sends it to open an upgrade, and
+# generic-api-key reads it as a secret. It is a published example value, never a credential. Scoped to that one rule,
+# that one file and that exact secret (all three must hold).
+[[allowlists]]
+description = "RFC 6455 sample WebSocket key in the UI-sandbox e2e"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^dGhlIHNhbXBsZSBub25jZQ==$''']
+paths = ['''^scripts/run-e2e-ui-sandbox\.sh$''']
