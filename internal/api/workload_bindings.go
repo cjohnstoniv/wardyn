@@ -92,6 +92,16 @@ func (s *Server) handleCreateWorkloadBinding(w http.ResponseWriter, r *http.Requ
 		writeErrorReason(w, http.StatusConflict, reasonServiceIdentityInactive, "The service identity is suspended or retired.")
 		return
 	}
+	// A sponsor who is not live now would leave the binding inactive from its first report, so it is refused
+	// here, as a token mint for that identity is.
+	if err := s.withServiceState(r, &si); err != nil {
+		writeServerError(w, r, "read the sponsor's session", err)
+		return
+	}
+	if si.State == types.ServiceIdentitySponsorInactive {
+		writeErrorReason(w, http.StatusConflict, reasonServiceIdentityInactive, "The service identity's sponsor is not active, so the binding could never launch.")
+		return
+	}
 	b, err := ws.CreateWorkloadBinding(ctx, store.WorkloadBinding{PoolID: pool.ID, Namespace: req.Namespace, Service: si.Name, Sponsor: si.Sponsor,
 		CreatedBy: principalFromRequest(r)})
 	switch {

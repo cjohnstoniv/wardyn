@@ -407,6 +407,28 @@ func TestPG_WorkloadBinding_NamesAnOrganizationPoolOnly(t *testing.T) {
 	}
 }
 
+// TestPG_WorkloadBinding_RefusesAnInactiveSponsor: a binding for an identity whose sponsor's access was
+// revoked is refused 409 at the door, as a token mint is, and no row is written.
+func TestPG_WorkloadBinding_RefusesAnInactiveSponsor(t *testing.T) {
+	e := newSvcEnv(t)
+	e.mustCreate(t, svcName, svcSponsor)
+	ctx := context.Background()
+	org, err := e.st.CreateRunnerPool(ctx, types.RunnerPool{ID: uuid.New(), Name: "Platform", Scope: types.RunnerPoolOrganization}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.rev.RevokeSub(ctx, svcSponsor); err != nil {
+		t.Fatal(err)
+	}
+	w := doSSO(t, e.h.srv, http.MethodPost, "/api/v1/workload-bindings", e.sec, `{"pool":"`+org.Name+`","namespace":"apps","service":"`+svcName+`"}`)
+	if w.Code != http.StatusConflict || respReason(w) != reasonServiceIdentityInactive {
+		t.Fatalf("bind with a revoked sponsor: %d %s, want 409 %s", w.Code, w.Body.String(), reasonServiceIdentityInactive)
+	}
+	if left, err := e.st.ListWorkloadBindings(ctx, store.Page{}); err != nil || len(left) != 0 {
+		t.Fatalf("bindings after the refusal = %+v (%v), want none", left, err)
+	}
+}
+
 // TestPG_Workload_BindingLaunchMatchesTokenLaunch: a launch under the service's bound authority writes the
 // run.create row a launch with the service's token writes, apart from `via` (which neither carries here).
 func TestPG_Workload_BindingLaunchMatchesTokenLaunch(t *testing.T) {
