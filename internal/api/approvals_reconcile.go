@@ -29,7 +29,10 @@ import (
 // by the egress-list PUTs) is skipped — an undone `always` still reads APPROVED,
 // so a per-approval "applied" marker could not tell. Decided rows are never
 // deleted, so the decision set is read in bounded pages of a narrow projection
-// (egressDecisionsToReconcile).
+// (egressDecisionsToReconcile). The edit rule is checked twice more where a
+// stale read could miss it: against the workspace row the apply loop reads, and
+// in the write itself (store.WithEgressDecidedAt), since a PUT can land between
+// the scan and the write.
 func (s *Server) ReconcileWorkspaceEgressDecisions(ctx context.Context) (int, error) {
 	if s.cfg.Store == nil || s.cfg.Approvals == nil {
 		return 0, nil
@@ -51,6 +54,9 @@ func (s *Server) ReconcileWorkspaceEgressDecisions(ctx context.Context) (int, er
 		if werr != nil {
 			continue // workspace gone; nothing to persist onto (as before)
 		}
+		if ws.EgressEditedAt != nil && d.decidedAt.Before(*ws.EgressEditedAt) {
+			continue // the operator's own list edit overruled this verdict since the scan
+		}
 		if reason := s.healRejects(ctx, ws, d); reason != "" {
 			s.auditHealDecision(ctx, d, ws.OwnedBy, "failure", reason)
 			continue
@@ -60,9 +66,10 @@ func (s *Server) ReconcileWorkspaceEgressDecisions(ctx context.Context) (int, er
 		if healHolds(ws, d) {
 			continue
 		}
-		// Best-effort, exactly like the live write-back: a deleted workspace or a
-		// cap-reached list is skipped, not fatal to the rest of the reconcile.
-		written, err := s.cfg.Store.AddWorkspaceEgressDecision(ctx, d.workspace, d.host, d.allow, maxApprovedEgress)
+		// Best-effort, exactly like the live write-back: a deleted workspace, a
+		// cap-reached list or a list edited since d was decided is skipped, not
+		// fatal to the rest of the reconcile.
+		written, err := s.cfg.Store.AddWorkspaceEgressDecision(store.WithEgressDecidedAt(ctx, d.decidedAt), d.workspace, d.host, d.allow, maxApprovedEgress)
 		if err != nil {
 			s.auditHealDecision(ctx, d, ws.OwnedBy, "failure", err.Error())
 			continue
@@ -125,7 +132,7 @@ func (s *Server) egressDecisionsToReconcile(ctx context.Context) ([]egressDecisi
 		host      string
 	}
 	newest := map[listKey]egressDecision{}
-	edits := map[uuid.UUID]time.Time{}
+	edits := map[uuid.UUID]egressEdit{}
 	// APPROVED and DENIED only, and that is the whole list on purpose: a durable
 	// `always` verdict is something a human decided. EXPIRED and CANCELLED carry
 	// no decision at all (both write the zero scope — the sweeper because nobody
@@ -151,7 +158,11 @@ func (s *Server) egressDecisionsToReconcile(ctx context.Context) ([]egressDecisi
 				if !ok {
 					continue
 				}
-				if edited := s.lastEgressEdit(ctx, edits, d.workspace); !edited.IsZero() && d.decidedAt.Before(edited) {
+				edited, known := s.lastEgressEdit(ctx, edits, d.workspace)
+				if !known {
+					continue // can't tell whether the operator overruled it; the next boot retries
+				}
+				if !edited.IsZero() && d.decidedAt.Before(edited) {
 					continue // the operator's own list edit is newer than this verdict
 				}
 				if prev, seen := newest[listKey{d.workspace, d.host}]; seen && !prev.decidedAt.Before(d.decidedAt) {
@@ -209,24 +220,34 @@ func (s *Server) alwaysEgressDecision(ctx context.Context, ap types.ApprovalRequ
 	return d, true
 }
 
+// egressEdit is lastEgressEdit's memoized answer: at is the stamp (zero when the
+// workspace was never edited that way) and known is false when the read failed.
+type egressEdit struct {
+	at    time.Time
+	known bool
+}
+
 // lastEgressEdit is when the operator last REPLACED one of this workspace's
 // egress lists through the approved-egress/denied-egress PUTs, memoized in edits
 // so the scan costs one GetWorkspace per workspace rather than per approval.
 //
-// Zero means "never edited that way" — nothing is skipped — and an unreadable
-// workspace answers zero for the same reason it does not error: the
-// AddWorkspaceEgressDecision that would follow fails on that row anyway, so
-// guessing here would only trade one skip for another.
-func (s *Server) lastEgressEdit(ctx context.Context, edits map[uuid.UUID]time.Time, id uuid.UUID) time.Time {
-	if at, ok := edits[id]; ok {
-		return at
+// at is zero when the workspace was never edited that way — nothing is skipped.
+// known is false when the workspace could not be read: that is NOT "never
+// edited", since an edit may be exactly what the failed read would have shown, so
+// the caller skips the decision (fail closed) and the next boot retries.
+func (s *Server) lastEgressEdit(ctx context.Context, edits map[uuid.UUID]egressEdit, id uuid.UUID) (at time.Time, known bool) {
+	if e, ok := edits[id]; ok {
+		return e.at, e.known
 	}
-	var at time.Time
-	if ws, err := s.cfg.Store.GetWorkspace(ctx, id); err == nil && ws.EgressEditedAt != nil {
-		at = *ws.EgressEditedAt
+	var e egressEdit
+	if ws, err := s.cfg.Store.GetWorkspace(ctx, id); err == nil {
+		e.known = true
+		if ws.EgressEditedAt != nil {
+			e.at = *ws.EgressEditedAt
+		}
 	}
-	edits[id] = at
-	return at
+	edits[id] = e
+	return e.at, e.known
 }
 
 // healRejects re-asks the LIVE decide path's direction-specific question about a

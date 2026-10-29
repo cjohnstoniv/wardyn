@@ -53,6 +53,11 @@ type localRun struct {
 	// Tombstone marks a retired run the org acknowledged retiring, compacted to its identity
 	// (compactRetired): only RunID, Ref, Lease.RunID and Retired remain.
 	Tombstone bool `json:"tombstone,omitempty"`
+	// OutputPending is the durable obligation to release a retired run's output: set with the
+	// retirement receipt, cleared when a release succeeds, and kept through compaction, so a failed
+	// release is retried at runner start and on every reconnect. The release still refuses
+	// unsettled output.
+	OutputPending bool `json:"output_pending,omitempty"`
 }
 
 // proxyExit is one ProxyExited obligation and the evidence that recorded it.

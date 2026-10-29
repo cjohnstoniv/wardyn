@@ -30,6 +30,7 @@ const (
 	dhcpDiscover = 1
 	dhcpOffer    = 2
 	dhcpRequest  = 3
+	dhcpDecline  = 4
 	dhcpAck      = 5
 	dhcpNak      = 6
 )
@@ -57,26 +58,31 @@ func isDHCPRequest(frame []byte) bool {
 	return len(p) >= header.UDPMinimumSize && header.UDP(p).DestinationPort() == dhcpServerPort
 }
 
-// dhcpReply answers one DHCP request frame; ok is false for anything it does
-// not answer (malformed, not a DISCOVER or REQUEST, a REQUEST for another
-// server).
-func dhcpReply(frame []byte) (reply []byte, ok bool) {
+// dhcpMessage is a guest's DHCP request: its BOOTP payload and the options the
+// responder reads.
+type dhcpMessage struct {
+	b                        []byte
+	msgType                  byte
+	reqIP, serverID, message []byte
+}
+
+// parseDHCP reads one DHCP request frame; ok is false for a malformed one.
+func parseDHCP(frame []byte) (m dhcpMessage, ok bool) {
 	ip := header.IPv4(frame[header.EthernetMinimumSize:])
 	p := ip.Payload()
 	udp := header.UDP(p)
 	if int(udp.Length()) > len(p) || udp.Length() < header.UDPMinimumSize {
-		return nil, false
+		return m, false
 	}
 	b := p[header.UDPMinimumSize:udp.Length()]
 	if len(b) < dhcpMinPayload || len(b) > dhcpMaxPayload {
-		return nil, false
+		return m, false
 	}
 	// op=BOOTREQUEST, htype=Ethernet, hlen=6, giaddr=0 (no relay agent).
 	if b[0] != 1 || b[1] != 1 || b[2] != 6 || !bytes.Equal(b[24:28], []byte{0, 0, 0, 0}) || !bytes.Equal(b[236:240], dhcpCookie) {
-		return nil, false
+		return m, false
 	}
-	var msgType byte
-	var reqIP, serverID []byte
+	m.b = b
 	opts := b[240:]
 	for len(opts) > 0 {
 		code := opts[0]
@@ -88,24 +94,53 @@ func dhcpReply(frame []byte) (reply []byte, ok bool) {
 			continue
 		}
 		if len(opts) < 2 || len(opts) < 2+int(opts[1]) {
-			return nil, false
+			return m, false
 		}
 		val := opts[2 : 2+int(opts[1])]
 		switch code {
 		case 53:
 			if len(val) != 1 {
-				return nil, false
+				return m, false
 			}
-			msgType = val[0]
+			m.msgType = val[0]
 		case 50:
-			reqIP = val
+			m.reqIP = val
 		case 54:
-			serverID = val
+			m.serverID = val
+		case 56:
+			m.message = val
 		}
 		opts = opts[2+int(opts[1]):]
 	}
+	return m, true
+}
+
+// dhcpDeclined reports whether frame is the guest's DECLINE of a lease, the
+// address it declined (option 50) and the reason it gave (option 56), if any. A
+// guest declines when the address it was offered answers its probe as in use
+// (RFC 5227).
+func dhcpDeclined(frame []byte) (addr, message string, ok bool) {
+	m, ok := parseDHCP(frame)
+	if !ok || m.msgType != dhcpDecline {
+		return "", "", false
+	}
+	if len(m.reqIP) == 4 {
+		addr = tcpip.AddrFrom4Slice(m.reqIP).String()
+	}
+	return addr, string(m.message), true
+}
+
+// dhcpReply answers one DHCP request frame; ok is false for anything it does
+// not answer (malformed, not a DISCOVER or REQUEST, a REQUEST for another
+// server).
+func dhcpReply(frame []byte) (reply []byte, ok bool) {
+	m, ok := parseDHCP(frame)
+	if !ok {
+		return nil, false
+	}
+	b, reqIP, serverID := m.b, m.reqIP, m.serverID
 	rt := byte(dhcpOffer)
-	switch msgType {
+	switch m.msgType {
 	case dhcpDiscover:
 	case dhcpRequest:
 		// A REQUEST that names another server is that server's, not ours.

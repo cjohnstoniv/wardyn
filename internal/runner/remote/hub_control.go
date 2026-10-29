@@ -21,13 +21,13 @@ import (
 // Stored-row verification on every new connection enforces the durable gate;
 // this method alone is intentionally not a substitute for that transaction.
 func (h *Hub) Revoke(ctx context.Context, id uuid.UUID) error {
-	return h.endWithControl(ctx, id, runnerwire.TypeRevoked, "runner_revoked")
+	return h.endWithControl(ctx, id, runnerwire.TypeRevoked, "runner_revoked", nil)
 }
 
 // Goaway forces the next connection through full admission, for replica drain
 // or an administrative session reset. It does not revoke the registered key.
 func (h *Hub) Goaway(ctx context.Context, id uuid.UUID) error {
-	return h.endWithControl(ctx, id, runnerwire.TypeGoaway, "fresh_session_required")
+	return h.endWithControl(ctx, id, runnerwire.TypeGoaway, "fresh_session_required", nil)
 }
 
 // GoawayAll sends every session Goaway, as after runners are switched off.
@@ -66,7 +66,9 @@ func (h *Hub) Online(id uuid.UUID) bool {
 	return s.peer != nil && s.peer.Online() && s.readyFor(s.id)
 }
 
-func (h *Hub) endWithControl(ctx context.Context, id uuid.UUID, kind runnerwire.Type, reason string) error {
+// endWithControl ends id's session with a control frame. With only set, it ends the session only while it still
+// serves that peer: a caller that decided on an older session's state must not end the one that replaced it.
+func (h *Hub) endWithControl(ctx context.Context, id uuid.UUID, kind runnerwire.Type, reason string, only *runnerwire.Peer) error {
 	h.mu.Lock()
 	s := h.sessions[id]
 	h.mu.Unlock()
@@ -74,16 +76,20 @@ func (h *Hub) endWithControl(ctx context.Context, id uuid.UUID, kind runnerwire.
 		return nil
 	}
 	if !s.mu.TryLock() {
-		// An admission holds the slot, perhaps stalled on a durable call or a dead link: end it now rather
-		// than after its own timeouts.
-		s.activityPeer.Store(nil) // a pending revoke reads offline, as it did before an activity check could hold the slot
-		if abort := s.abort.Load(); abort != nil {
-			(*abort)()
+		if only == nil {
+			// An admission holds the slot, perhaps stalled on a durable call or a dead link: end it now rather
+			// than after its own timeouts.
+			s.activityPeer.Store(nil) // a pending revoke reads offline, as it did before an activity check could hold the slot
+			if abort := s.abort.Load(); abort != nil {
+				(*abort)()
+			}
 		}
+		// With only set, wait for the holder instead of cancelling it: it may be a reconnect replacing the
+		// session this call was made for, or an activity check, the resume timer or Close.
 		s.mu.Lock()
 	}
 	defer s.mu.Unlock()
-	if s.peer == nil {
+	if s.peer == nil || (only != nil && s.peer != only) {
 		return nil
 	}
 	s.readyID.Store(nil)

@@ -273,7 +273,8 @@ func (st macOSVMStatus) writeText(out io.Writer) {
 	}
 }
 
-// macOSVMSetupWindow is the title of the setup-by-hand window the helper opens (internal/macvm wardynScreenShow).
+// macOSVMSetupWindow is the short name of the setup-by-hand window the helper opens (internal/macvm wardynScreenShow):
+// the window's title starts with it and goes on to name the account to create and its password.
 const macOSVMSetupWindow = "Wardyn: set up this macOS VM"
 
 // runToolsDialFile, in the VM directory, is the driver's record of how the last run boot's guest agent

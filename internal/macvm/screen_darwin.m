@@ -71,7 +71,7 @@ void wardynScreenShow(void *vm) {
 			                                            backing:NSBackingStoreBuffered
 			                                              defer:NO];
 			w.releasedWhenClosed = NO;
-			w.title = @"Wardyn: set up this macOS VM";
+			w.title = @"Wardyn: set up this macOS VM — create the account wardyn-admin; its password is the one-time code";
 			w.contentAspectRatio = NSMakeSize(16, 9);
 			VZVirtualMachineView *view = [[VZVirtualMachineView alloc] init];
 			view.virtualMachine = machine;

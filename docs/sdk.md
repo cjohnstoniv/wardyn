@@ -34,10 +34,8 @@ import (
     "context"
     "fmt"
     "log"
-    "time"
 
     "github.com/cjohnstoniv/wardyn/pkg/client"
-    "github.com/google/uuid"
 )
 
 func main() {
@@ -67,13 +65,14 @@ func main() {
     // 3. Poll or fetch later.
     run, _ := c.GetRun(ctx, created.ID)
 
-    // 4. Approve a pending credential or egress request. The run filter is
-    //    uuid.Nil here ("every run"); pass a run id instead — e.g.
-    //    c.ListApprovals(ctx, client.ApprovalPending, created.ID) — to get
-    //    only that run's approvals (the server's ?run_id= predicate).
-    //    Omitting DecisionOpts keeps today's default scope: the grant holds
-    //    for the rest of the run.
-    pending, _ := c.ListApprovals(ctx, client.ApprovalPending, uuid.Nil)
+    // 4. Approve this run's pending credential or egress requests. created.ID
+    //    asks for only this run's approvals (the server's ?run_id= predicate);
+    //    uuid.Nil would list every run's. Omitting DecisionOpts keeps the
+    //    default scope: the grant holds for the rest of the run.
+    pending, err := c.ListApprovals(ctx, client.ApprovalPending, created.ID)
+    if err != nil {
+        log.Fatal(err)
+    }
     for _, ap := range pending {
         approved, err := c.Approve(ctx, ap.ID, "reviewed and safe")
         if err != nil {
@@ -83,18 +82,17 @@ func main() {
         fmt.Println("approved:", approved.ID)
     }
 
-    // 4b. An egress_domain approval can instead be scoped narrower or wider:
-    //     ScopeOnce releases a single connection, ScopeUntil holds until a
-    //     deadline, and ScopeAlways (operator-only) persists the host onto
-    //     the run's workspace so future runs never raise it. Deny takes the
-    //     same DecisionOpts.
-    if len(pending) > 0 {
-        until := time.Now().Add(2 * time.Hour)
-        _, _ = c.Approve(ctx, pending[0].ID, "temporary access", client.DecisionOpts{
-            Scope: client.ScopeUntil,
-            Until: &until,
-        })
-    }
+    // 4b. Instead of that default, an egress_domain approval can be scoped
+    //     narrower or wider: ScopeOnce releases a single connection, ScopeUntil
+    //     holds until a deadline, and ScopeAlways (operator-only) persists the
+    //     host onto the run's workspace so future runs never raise it. Deny
+    //     takes the same DecisionOpts. In place of the Approve call above:
+    //
+    //         until := time.Now().Add(2 * time.Hour)
+    //         approved, err := c.Approve(ctx, ap.ID, "temporary access", client.DecisionOpts{
+    //             Scope: client.ScopeUntil,
+    //             Until: &until,
+    //         })
 
     // 5. Fetch the append-only audit trail for the run.
     events, _ := c.AuditEvents(ctx, run.ID)
@@ -806,7 +804,7 @@ start.
 | `credential_withheld` | `POST /internal/credentials/mint`, `GET /internal/injection/{grantID}` (403): the run's governance profile or the Wardyn boundary now withholds the grant or a host it reaches. |
 | `credential_withheld_unread` | `POST /internal/credentials/mint` (503): the run, its grants, its profile or the Wardyn boundary could not be read to check the grant; retry. |
 | `break_glass_reason_required` | `POST /runs`, `/runs/preflight` and `/runs/policy-preview` with the admin token (400): the boundary is in `hard_limits`, bounds something, a unit with its own walls or a restriction exists, and the `X-Wardyn-Break-Glass-Reason` header is missing, too long or has control characters. |
-| `secret_name_invalid` / `secret_name_reserved` / `secret_owner_param_refused` / `secret_body_invalid` / `secret_value_too_short` / `secret_cap_reached` / `secret_not_found` | `PUT/DELETE /secrets/{name}` (and `/me/secrets/{name}`, `/shared-secrets/{name}`): the name fails the secret-name format or is reserved, `?owner=` was sent on a write, the body is malformed, the value is below the mask minimum, the owner already holds the maximum number of secrets, or (the admin-only `?owner=` delete arm) that owner holds no secret by that name. |
+| `secret_name_invalid` / `secret_name_reserved` / `secret_owner_param_refused` / `secret_body_invalid` / `secret_value_too_short` / `secret_cap_reached` / `secret_not_found` | `PUT/DELETE /secrets/{name}` (and `/me/secrets/{name}`, `/shared-secrets/{name}`): the name fails the secret-name format or is reserved, `?owner=` was sent on a write, the body is malformed, the value is below the mask minimum, the owner already holds the maximum number of secrets, or (the admin-only `?owner=` delete arm) that owner holds no secret by that name. Also `GET /internal/injection/{grantID}` (424): a stored header credential under the minimum without its trailing line break. |
 | `people_store_unavailable` / `person_principal_invalid` / `person_principal_reserved` / `person_email_invalid` / `person_collision` / `person_email_taken` | `POST /people` (operator/security-tier only). |
 | `people_list_param_invalid` | `GET /people` (security tier): `state` is not `active` or `deactivated`, or `cursor` is not one a previous page returned. A malformed `limit` answers `invalid_limit_param`, as every list does. |
 | `person_token_mint_removed` | `POST /people/{principal}/tokens` (securityOps, kept mounted): refused for every caller, 403, whether the person exists or not (#1477). No role creates a token that acts as another person; they sign in and create their own (`POST /me/tokens`). The two shared no-store guards below still answer first. |

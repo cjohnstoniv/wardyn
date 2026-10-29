@@ -359,6 +359,16 @@ func TestCommandTableCitesItsStep(t *testing.T) {
 	}
 }
 
+func TestRefusedPasswordIsErrSignInRefused(t *testing.T) {
+	f := newFixture(t, provPass)
+	in := f.input(false)
+	in.Password = "not-the-password"
+	_, err := f.b.Bootstrap(context.Background(), in)
+	if !errors.Is(err, ErrSignInRefused) || !errors.Is(err, macvm.ErrSignInRefused) {
+		t.Fatalf("err = %v; want ErrSignInRefused", err)
+	}
+}
+
 func TestKeyboardInteractiveSignIn(t *testing.T) {
 	f := newFixture(t, provPass)
 	f.srv.KeyboardOnly = true
@@ -376,6 +386,9 @@ func TestD1cRotationThatFailsWithExitZeroKeepsTheCode(t *testing.T) {
 	var se *StepError
 	if !errors.As(err, &se) || se.Command != "rotate-admin-password" {
 		t.Fatalf("err = %v; want the rotation's step error", err)
+	}
+	if errors.Is(err, ErrSignInRefused) { // a failed rotation is not a wrong account
+		t.Fatalf("err = %v; a refused sign-in after the rotation reads as ErrSignInRefused", err)
 	}
 	if len(f.replaced) != 0 || f.srv.Password() != code || len(f.srv.Execs()) != 1 {
 		t.Fatalf("Replaced %d times, guest password replaced %v, %d commands", len(f.replaced), f.srv.Password() != code, len(f.srv.Execs()))

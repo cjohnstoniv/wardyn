@@ -144,8 +144,9 @@ serviceAccount:
   # e.g. IRSA for kek.provider=awskms:
   #   eks.amazonaws.com/role-arn: arn:aws:iam::<account>:role/<role>
   annotations: {}
-  # wardynd does not call the API server in v0.x, so the projected token is
-  # unnecessary attack surface — do not auto-mount it by default. Applied on the
+  # Off by default: with any runner but Kubernetes wardynd calls no API server, so
+  # the projected token is unnecessary attack surface. k8s.enabled needs it true
+  # (the chart refuses otherwise). Applied on the
   # POD spec too, so the posture also holds when create=false and you bring your
   # own ServiceAccount (whose own automount default is true).
   automount: false

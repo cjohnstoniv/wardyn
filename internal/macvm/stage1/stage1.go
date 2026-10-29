@@ -60,6 +60,8 @@ var (
 	// ErrUnexpectedAccounts: the guest's local users of UniqueID 500 or more are not exactly the admin and the
 	// agent, or the list could not be read as dscl prints it.
 	ErrUnexpectedAccounts = errors.New("stage 1: the guest's local accounts are not exactly the admin and the agent")
+	// ErrSignInRefused: the guest answered, but refused the admin account's password.
+	ErrSignInRefused = macvm.ErrSignInRefused
 	// ErrAgentChecksum: the installed guest agent is not the file sent.
 	ErrAgentChecksum = errors.New("stage 1: the installed guest agent's SHA-256 does not match")
 )
@@ -282,6 +284,9 @@ func (s *session) connect(ctx context.Context) error {
 		if errors.Is(err, ErrHostKeyChanged) {
 			return ErrHostKeyChanged
 		}
+		if strings.Contains(err.Error(), "unable to authenticate") { // x/crypto has no typed error for it
+			return fmt.Errorf("%w (%s): %w", ErrSignInRefused, s.username, err)
+		}
 		return fmt.Errorf("stage 1: sign in to the guest as %s: %w", s.username, err)
 	}
 	_ = conn.SetDeadline(time.Time{})
@@ -298,6 +303,9 @@ func (s *session) codeReplaced(ctx context.Context) error {
 	clear(s.admin)
 	s.admin, s.next = s.next, nil
 	if err := s.connect(ctx); err != nil {
+		if errors.Is(err, ErrSignInRefused) { // a failed rotation, not a wrong account: keep the text, not the identity
+			err = errors.New(err.Error())
+		}
 		return &StepError{Step: "6 D1(c)", Command: "rotate-admin-password", Err: fmt.Errorf("the new password does not sign in: %w", err)}
 	}
 	if s.in.Replaced != nil {

@@ -180,6 +180,9 @@ func (m *Manager) Clock(h runnerwire.Hello, received time.Time) error {
 // beforeReadyContainBound bounds the containment BeforeReady runs before a session is ready.
 var beforeReadyContainBound = 30 * time.Second
 
+// replayPassBound bounds each replayLoop pass, its exit observation and audit replay together.
+var replayPassBound = 30 * time.Second
+
 // BeforeReady enables admission only after pending actions and fresh replay.
 // It does not write to peer; resumed peers have not started their read loop.
 func (m *Manager) BeforeReady(ctx context.Context, peer *runnerwire.Peer, _ bool) error {
@@ -680,7 +683,7 @@ func (m *Manager) replayLoop(ctx context.Context) {
 		if m.replayTick != nil {
 			m.replayTick()
 		}
-		observe, cancel := context.WithTimeout(ctx, 30*time.Second)
+		observe, cancel := context.WithTimeout(ctx, replayPassBound)
 		if err := m.observeExits(observe); err != nil {
 			m.logRetry(ctx, slog.LevelWarn, "runner lifecycle observation will retry", err)
 		}

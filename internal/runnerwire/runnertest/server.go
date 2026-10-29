@@ -212,18 +212,15 @@ func (s *Server) refMethod(ctx context.Context, method string, args json.RawMess
 	case runnerwire.MethodStatus:
 		return s.sub.Status(ctx, ref)
 	case runnerwire.MethodStop:
-		err = s.sub.StopSandbox(ctx, ref)
-		return runnerwire.TeardownReply(s.sub, ref), err
+		return s.teardown(ref, s.sub.StopSandbox(ctx, ref))
 	case runnerwire.MethodKill:
-		err = s.sub.KillSandbox(ctx, ref)
-		return runnerwire.TeardownReply(s.sub, ref), err
+		return s.teardown(ref, s.sub.KillSandbox(ctx, ref))
 	case runnerwire.MethodEnd:
 		e, ok := s.sub.(runner.SandboxEnder)
 		if !ok {
 			return nil, runner.ErrEndUnsupported
 		}
-		err = e.EndSandbox(ctx, ref)
-		return runnerwire.TeardownReply(s.sub, ref), err
+		return s.teardown(ref, e.EndSandbox(ctx, ref))
 	case runnerwire.MethodPauseAgent, runnerwire.MethodResumeAgent:
 		p, ok := s.sub.(runner.AgentPauser)
 		if !ok {
@@ -262,6 +259,15 @@ func (s *Server) refMethod(ctx context.Context, method string, args json.RawMess
 		return nil, rv.CanReplaceProxy(ctx, ref)
 	}
 	return nil, fmt.Errorf("unknown method %q", method)
+}
+
+// teardown answers a stop, kill or end as the real dispatcher does: a teardown
+// reply only after a successful call.
+func (s *Server) teardown(ref string, err error) (any, error) {
+	if err != nil {
+		return nil, err
+	}
+	return runnerwire.TeardownReply(s.sub, ref), nil
 }
 
 func (s *Server) create(ctx context.Context, id uint32, args json.RawMessage) (any, error) {

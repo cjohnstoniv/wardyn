@@ -11,6 +11,35 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- A macOS guest now gets its address on a macOS VM's network. The relay answered ARP for every address, the guest's own
+  included, so macOS's check of its offered address before taking it found it in use, declined it, and asked again
+  forever; preparing a base then waited out its hour without reaching the guest. The relay now answers ARP only for its
+  gateway, and a guest's DHCP decline is logged as one, with the guest's reason.
+- On a Mac that needs setup by hand, the setup window's title now names the account to create, `wardyn-admin`, and
+  says its password is the one-time code. If the guest then refuses that sign-in, preparing stops at once and says to
+  run prepare again, instead of ending on an SSH error.
+- A host removed from a workspace's allowed list is no longer added back when wardynd reapplies earlier "always" approvals
+  at start, if the workspace could not be read or its list changed while they were being reapplied.
+- Azure Key Vault: deleting and re-adding a secret while the cleanup of its replaced value was still running no longer
+  loses the new value. The cleanup now checks, under the secret's lock, that the object it removes is not in use again.
+- A runner retries removing a retired run's output after a failed attempt, at its next start and on each reconnect;
+  before, that output stayed on disk.
+- Folder sync no longer takes a different file of the same name and size for a rename, which kept the old bytes in the
+  sandbox. It compares contents before renaming there, and otherwise copies the file.
+- `wardyn-vmnet` in listen mode now exits on SIGTERM while a guest's connection is open but idle.
+- A run's egress proxy that is told to stop before its run opens now stops; it could wait forever.
+- A runner that reconnects at the moment its limits are rechecked no longer has the new session ended by that check.
+- New Run: the computer-folder card no longer shows the previous folder's file counts after **Change**.
+- Approvals: the Decided tab's load error now clears when the background refresh loads the list.
+- `wardyn site-config set` now treats an empty list written as `[ ]` or over several lines as empty, like `[]`.
+- wardynd no longer fails its first start after an upgrade whose migrations take longer than 30 seconds. The checks
+  after the migration had kept the connect deadline and stopped with "verify the audit append privileges: context
+  deadline exceeded".
+- Helm: with `basePath` set and `env.WARDYN_BASE_PATH` set to `""`, the probes and ServiceMonitor now follow the
+  empty value wardynd serves under, so the pod goes ready.
+
 ## [0.10.0-rc.7] — 2026-10-29
 
 ### Before you upgrade

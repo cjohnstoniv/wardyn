@@ -124,6 +124,10 @@ type Bootstrapper interface {
 	Bootstrap(ctx context.Context, in BootstrapInput) (BootstrapResult, error)
 }
 
+// ErrSignInRefused is what a Bootstrapper returns, wrapped, when the guest's Remote Login answered and
+// refused the admin account's password.
+var ErrSignInRefused = errors.New("the guest refused the sign-in as the admin account")
+
 // PrepareOptions configures Prepare.
 type PrepareOptions struct {
 	Engine Engine
@@ -670,6 +674,15 @@ func (p *prep) firstBoot(ctx context.Context, spec MachineSpec, nic *os.File, us
 	return fb, err
 }
 
+// stage1Failed is stage 1's error, saying what to do when the first sign-in
+// after setup by hand, with the one-time code, was refused.
+func stage1Failed(err error, withCode bool) error {
+	if withCode && errors.Is(err, ErrSignInRefused) {
+		return fmt.Errorf("macvm: the guest refused the sign-in as %s with the one-time code: the account made in Setup Assistant must be named %s and its password must be the one-time code. Run prepare again", provisionUser, provisionUser)
+	}
+	return fmt.Errorf("macvm: stage 1: %w", err)
+}
+
 // provisionAndBootstrap runs the one first boot, waits for the guest's Remote
 // Login (provisioned, or by hand), runs stage 1 and shuts the VM down.
 func (p *prep) provisionAndBootstrap(ctx context.Context, spec MachineSpec) (BootstrapResult, error) {
@@ -790,7 +803,7 @@ func (p *prep) provisionAndBootstrap(ctx context.Context, spec MachineSpec) (Boo
 		if rerr := relayFailed(nil); rerr != nil {
 			return BootstrapResult{}, rerr
 		}
-		return BootstrapResult{}, fmt.Errorf("macvm: stage 1: %w", err)
+		return BootstrapResult{}, stage1Failed(err, replace != "")
 	}
 	if res.Desktop == "" {
 		res.Desktop = DesktopNone

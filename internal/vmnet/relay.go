@@ -288,15 +288,37 @@ func (rl *Relay) ServeStream(r io.Reader, w io.Writer) error {
 				if err := write(reply); err != nil {
 					return err
 				}
+			} else if addr, msg, declined := dhcpDeclined(frame); declined {
+				rl.rep.refuseLocal("guest declined the DHCP lease as an address in use", "address", addr, "message", msg)
 			} else {
 				rl.rep.refuse(refusal{Reason: "dropped-frame", Detail: "dhcp_unanswered"})
 			}
+			continue
+		}
+		if !reachesStack(frame) {
 			continue
 		}
 		pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{Payload: buffer.MakeWithData(frame)})
 		rl.link.InjectInbound(header.Ethernet(frame).Type(), pkt)
 		pkt.DecRef()
 	}
+}
+
+// reachesStack reports whether a guest frame may go to the stack: anything but
+// an ARP request for an address other than the gateway. The stack spoofs, so it
+// would answer who-has for any address, the guest's own included: a macOS DHCP
+// client probes its offered address before taking it (RFC 5227), takes the
+// stack's answer as a conflict and declines the lease. The gateway is the
+// guest's only on-link peer; DNS answers are off-link (names.go).
+func reachesStack(frame []byte) bool {
+	if header.Ethernet(frame).Type() != header.ARPProtocolNumber {
+		return true
+	}
+	a := header.ARP(frame[header.EthernetMinimumSize:])
+	if !a.IsValid() || a.Op() != header.ARPRequest {
+		return true // the stack drops an invalid one; a reply resolves the guest for DialGuest
+	}
+	return tcpip.AddrFrom4Slice(a.ProtocolAddressTarget()) == gatewayIP
 }
 
 func (rl *Relay) serveDNS(c *gonet.UDPConn) {
@@ -503,7 +525,11 @@ func (rl *Relay) Listen(ctx context.Context, path string) error {
 			return err
 		}
 		rl.log.Info("qemu_connected")
+		// A silent guest must not outlive the context: closing c ends Serve.
+		// AfterFunc also fires at once if ctx ended since Accept.
+		stop := context.AfterFunc(ctx, func() { _ = c.Close() })
 		err = rl.Serve(c)
+		stop()
 		_ = c.Close()
 		rl.log.Info("qemu_disconnected", "err", errString(err))
 	}

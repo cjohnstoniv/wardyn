@@ -358,9 +358,20 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // the one on screen (#2487: it is up to four capped lists, and only grows).
   const filterRef = React.useRef(filter);
   filterRef.current = filter;
+  const viewRef = React.useRef(view);
+  viewRef.current = view;
+  // A refresh that loads the decided lists for the view still on screen also heals a failed first load of the tab.
   const fetchAll = React.useCallback(
-    () => (filterRef.current === "decided" ? Promise.all([fetchPending(), fetchDecided()]).then(() => undefined) : fetchPending()),
-    [fetchPending, fetchDecided],
+    () =>
+      filterRef.current === "decided"
+        ? Promise.all([
+            fetchPending(),
+            fetchDecided().then(() => {
+              if (viewRef.current === view) setDecidedStatus("ready");
+            }),
+          ]).then(() => undefined)
+        : fetchPending(),
+    [fetchPending, fetchDecided, view],
   );
   const loadDecided = React.useCallback(() => {
     setDecidedStatus((st) => (st === "ready" ? st : "loading"));
