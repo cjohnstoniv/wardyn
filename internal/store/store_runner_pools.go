@@ -30,8 +30,8 @@ type RunnerPoolStore interface {
 	// every person's user pools too, for oversight.
 	ListRunnerPoolCatalogue(ctx context.Context, owner string, all bool) ([]RunnerPoolCatalogueRow, error)
 	GetRunnerPool(ctx context.Context, id uuid.UUID) (types.RunnerPool, error)
-	// ListRunnerPoolMembers is every member of a pool: only the admission fold reads it, and only through
-	// runnerpool.OwnRunnerCandidates.
+	// ListRunnerPoolMembers is every member of a pool: the admission fold reads it, through
+	// runnerpool.OwnRunnerCandidates and for an organization runner's runs namespace, and so does dispatch.
 	ListRunnerPoolMembers(ctx context.Context, id uuid.UUID) ([]types.RunnerPoolMember, error)
 	CreateRunnerPool(ctx context.Context, p types.RunnerPool, by string) (types.RunnerPool, error)
 	UpdateRunnerPool(ctx context.Context, id uuid.UUID, revision int64, name *string, state *types.RunnerPoolState, limits *types.RunnerPoolLimits, recording *types.RecordingRequirement) (types.RunnerPool, error)
@@ -181,10 +181,10 @@ func (s PG) GetRunnerPool(ctx context.Context, id uuid.UUID) (types.RunnerPool, 
 
 func (s PG) ListRunnerPoolMembers(ctx context.Context, id uuid.UUID) ([]types.RunnerPoolMember, error) {
 	return collect(ctx, s.Pool, "list", "runner pool members",
-		`SELECT pool_id, kind, runner_id, COALESCE(remote_runner_id, ''), added_at FROM runner_pool_members WHERE pool_id = $1 ORDER BY runner_id, remote_runner_id`,
+		`SELECT pool_id, kind, runner_id, COALESCE(remote_runner_id, ''), runs_namespace, added_at FROM runner_pool_members WHERE pool_id = $1 ORDER BY runner_id, remote_runner_id`,
 		[]any{id}, func(row pgx.Row) (types.RunnerPoolMember, error) {
 			var m types.RunnerPoolMember
-			if err := row.Scan(&m.PoolID, &m.Kind, &m.RunnerID, &m.RemoteRunnerID, &m.AddedAt); err != nil {
+			if err := row.Scan(&m.PoolID, &m.Kind, &m.RunnerID, &m.RemoteRunnerID, &m.RunsNamespace, &m.AddedAt); err != nil {
 				return m, fmt.Errorf("store: scan runner pool member: %w", err)
 			}
 			return m, nil

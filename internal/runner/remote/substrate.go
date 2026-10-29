@@ -152,7 +152,8 @@ func (s *Substrate) Advertised() (runner.TargetFacts, bool) {
 	advertised := c.CPUMillisMax > 0 && c.MemoryMiBMax > 0
 	return runner.TargetFacts{Classes: slices.Clone(c.Support.Classes), CapacityAdvertised: advertised, CPUMillisMax: c.CPUMillisMax, MemoryMiBMax: c.MemoryMiBMax,
 		EphemeralDiskEnforcement: c.Support.EphemeralDiskEnforcement, KeepsEnded: !c.EndsUnkept, UserDrives: c.Support.UserDrives,
-		Records: c.Support.SessionRecording && c.Support.RecordPerRun, RecordsUnasked: c.Support.SessionRecording && !c.Support.RecordPerRun}, true
+		Records: c.Support.SessionRecording && c.Support.RecordPerRun, RecordsUnasked: c.Support.SessionRecording && !c.Support.RecordPerRun,
+		RunsNamespaces: slices.Clone(c.RunsNamespaces)}, true
 }
 
 // HandleEvent keeps the `caps` event and passes the rest to Options.OnEvent.

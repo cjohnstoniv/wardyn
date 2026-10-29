@@ -568,3 +568,54 @@ func TestRunnerPoolUserPoolNeverTakesAnOrgRunner(t *testing.T) {
 		}
 	}
 }
+
+// --runs-namespace is sent as the body of the organization runner's add, and only an organization runner
+// takes one: a person's runner is refused before any write.
+func TestRunnerPoolAddRunsNamespace(t *testing.T) {
+	pool, cluster, person := uuid.New(), uuid.New(), uuid.New()
+	poolPath := "/api/v1/runner-pools/" + pool.String()
+	routes := map[string]any{
+		"GET " + poolPath:              sdk.RunnerPool{ID: pool, Name: "Cluster", Scope: sdk.RunnerPoolOrganization, Revision: 1},
+		"GET " + poolPath + "/members": []sdk.RunnerPoolMemberView{},
+		"GET /api/v1/runners": []sdk.RunnerView{
+			{ID: cluster, Name: "cluster-a", State: types.RunnerClaimed, OwnerKind: types.RunnerOwnerOrg},
+			{ID: person, Name: "laptop-7", State: types.RunnerClaimed, OwnerKind: types.RunnerOwnerPerson}},
+		"GET /api/v1/me/runners":     []sdk.RunnerView{},
+		"GET /api/v1/remote-runners": []sdk.RemoteRunnerView{},
+		"PUT *":                      sdk.RunnerPoolMember{PoolID: pool, RunsNamespace: "team-a"},
+	}
+	srv := newPoolRoutes(t, routes)
+	if _, err := execCmdCapture(t, "runner", "pool", "add", pool.String(), "cluster-a", "--runs-namespace", "team-a", "--url", srv.URL, "--token", "t"); err != nil {
+		t.Fatalf("add with a namespace = %v", err)
+	}
+	var put recordedReq
+	for _, r := range srv.reqs {
+		if r.method == http.MethodPut {
+			put = r
+		}
+	}
+	if put.path != poolPath+"/runners/"+cluster.String() || string(put.body) != `{"runs_namespace":"team-a"}` {
+		t.Errorf("the add sent %s %s", put.path, put.body)
+	}
+
+	srv = newPoolRoutes(t, routes)
+	if _, err := execCmdCapture(t, "runner", "pool", "add", pool.String(), "cluster-a", "--url", srv.URL, "--token", "t"); err != nil {
+		t.Fatalf("add without a namespace = %v", err)
+	}
+	for _, r := range srv.reqs {
+		if r.method == http.MethodPut && len(r.body) != 0 {
+			t.Errorf("an add with no namespace sent the body %s", r.body)
+		}
+	}
+
+	srv = newPoolRoutes(t, routes)
+	_, err := execCmdCapture(t, "runner", "pool", "add", pool.String(), person.String(), "--runs-namespace", "team-a", "--url", srv.URL, "--token", "t")
+	if err == nil || !strings.Contains(err.Error(), "--runs-namespace applies to an organization runner") {
+		t.Errorf("a person's runner with a namespace = %v", err)
+	}
+	for _, r := range srv.reqs {
+		if r.method == http.MethodPut {
+			t.Errorf("a refused namespace reached %s %s", r.method, r.path)
+		}
+	}
+}

@@ -733,6 +733,13 @@ func (p runPlacement) auditFields(run types.AgentRun, runnerName string) map[str
 	if runnerName != "" {
 		data["runner_name"] = runnerName
 	}
+	if run.RunnerID != nil {
+		for _, t := range p.eligible {
+			if t.runnerID != nil && *t.runnerID == *run.RunnerID && t.runsNamespace != "" {
+				data["runs_namespace"] = t.runsNamespace
+			}
+		}
+	}
 	return data
 }
 
@@ -800,6 +807,11 @@ func eligibleTargets(targets []poolTarget, d placementDemand) ([]poolTarget, pla
 
 func (d placementDemand) refusal(t poolTarget) placement.Reason {
 	if t.offline {
+		return placement.ReasonRunnerOffline
+	}
+	// A runner that does not advertise the namespace its membership names cannot take the run, answered
+	// like an offline member: the pool has none eligible.
+	if !t.servesRunsNamespace() {
 		return placement.ReasonRunnerOffline
 	}
 	if d.reqCCOK {

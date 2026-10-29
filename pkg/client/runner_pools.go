@@ -527,11 +527,18 @@ func (c *Client) RemoveMyRunnerFromPool(ctx context.Context, poolID, runnerID uu
 	return c.do(ctx, http.MethodDelete, "/api/v1/me/runner-pools/"+poolID.String()+"/runners/"+runnerID.String(), nil, nil)
 }
 
-// AddRunnerPoolRunner puts a claimed organisation runner into an organisation pool (admin). A runner
-// serves one pool only; one already in another pool is refused with the server's sentence.
-func (c *Client) AddRunnerPoolRunner(ctx context.Context, poolID, runnerID uuid.UUID) (RunnerPoolMember, error) {
+// AddRunnerPoolRunner puts a claimed organisation runner into an organisation pool (admin), serving the
+// Kubernetes namespace runsNamespace ("" for the runner's default). A runner serves each namespace for one
+// pool only; one already serving it for another pool is refused with the server's sentence.
+func (c *Client) AddRunnerPoolRunner(ctx context.Context, poolID, runnerID uuid.UUID, runsNamespace string) (RunnerPoolMember, error) {
 	var out RunnerPoolMember
-	err := c.do(ctx, http.MethodPut, "/api/v1/runner-pools/"+poolID.String()+"/runners/"+runnerID.String(), nil, &out)
+	var body any
+	if runsNamespace != "" {
+		body = struct {
+			RunsNamespace string `json:"runs_namespace"`
+		}{runsNamespace}
+	}
+	err := c.do(ctx, http.MethodPut, "/api/v1/runner-pools/"+poolID.String()+"/runners/"+runnerID.String(), body, &out)
 	return out, err
 }
 

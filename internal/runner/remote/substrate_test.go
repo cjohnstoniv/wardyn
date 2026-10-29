@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -97,6 +98,28 @@ func TestAdvertisedCarriesDiskWordKeepAndDrives(t *testing.T) {
 	f, ok := rig.Sub.Advertised()
 	if !ok || f.EphemeralDiskEnforcement != types.StorageEnforcementEviction || !f.KeepsEnded || !f.UserDrives {
 		t.Fatalf("Advertised = %+v, %v", f, ok)
+	}
+}
+
+// A k8s runner's runs namespaces reach the placement facts, in the order it advertised them; an older
+// runner says none.
+func TestAdvertisedCarriesTheRunsNamespaces(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		caps string
+		want []string
+	}{
+		{"two namespaces", `{"support":{"Classes":["CC1"]},"runs_namespaces":["wardyn-runs","team-a"]}`, []string{"wardyn-runs", "team-a"}},
+		{"older runner", `{"support":{"Classes":["CC1"]},"version":"0.9.3"}`, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rig := runnertest.NewRig(t, rid)
+			rig.Sub.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: []byte(c.caps)})
+			f, ok := rig.Sub.Advertised()
+			if !ok || !slices.Equal(f.RunsNamespaces, c.want) {
+				t.Fatalf("Advertised = %+v, %v; want RunsNamespaces %v", f, ok, c.want)
+			}
+		})
 	}
 }
 
