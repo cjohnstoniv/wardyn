@@ -361,6 +361,14 @@ func TestWorkloadWatcherStatusOnlyForItsResource(t *testing.T) {
 	if err := w.status(ctx, answer); err != nil {
 		t.Fatalf("a resource deleted between the read and the write: %v, want no error", err)
 	}
+	// One that loses every attempt is an error, so the org sends it again.
+	for range workloadStatusAttempts {
+		patchErrs = append(patchErrs, apierrors.NewConflict(workloadGVR.GroupResource(), "bot", fmt.Errorf("changed")))
+	}
+	answer.Phase = runnerwire.WorkloadPhaseRunning
+	if err := w.status(ctx, answer); err == nil || status()["phase"] != "Unhealthy" {
+		t.Fatalf("after %d conflicts: %v, status %v; want an error and the status unwritten", workloadStatusAttempts, err, status())
+	}
 }
 
 // TestWorkloadWatcherAttach: the session hooks hand the watcher its peer and the runtime still sees

@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -165,7 +166,11 @@ func (s *Server) applyWorkloadReport(ctx context.Context, ws store.WorkloadStore
 	}
 	// The binding chooses the pool. A resource may name it, but only as the binding's.
 	req, err := client.RunDocumentRequest(spec.Intent)
-	if named, perr := uuid.Parse(req.RunnerPoolID); err != nil || (req.RunnerPoolID != "" && (perr != nil || named != b.PoolID)) {
+	if err != nil {
+		s.answerWorkloadReport(runnerID, rep, runnerwire.WorkloadPhaseInvalid, reasonWorkloadInvalid, "The spec's intent is not a run request: "+err.Error())
+		return nil
+	}
+	if named, perr := uuid.Parse(req.RunnerPoolID); req.RunnerPoolID != "" && (perr != nil || named != b.PoolID) {
 		s.answerWorkloadReport(runnerID, rep, runnerwire.WorkloadPhaseRefused, reasonWorkloadPoolMismatch,
 			"The spec names a runner pool other than the one this namespace is bound on. Remove runner_pool_id, or name the bound pool.")
 		return nil
@@ -362,6 +367,11 @@ func (s *Server) pushWorkloadView(ctx context.Context, ws store.WorkloadStore, v
 	if v.SourceRunnerID == nil || v.K8sUID == "" {
 		return
 	}
+	// The sweep and a launch may push one workload at once; one at a time, so the hash stored last is
+	// the status written last.
+	mu, _ := workloadPushMu.LoadOrStore(v.ID, &sync.Mutex{})
+	mu.(*sync.Mutex).Lock()
+	defer mu.(*sync.Mutex).Unlock()
 	a := workloadStatusOf(v)
 	pctx, cancel := context.WithTimeout(ctx, workloadStatusTimeout)
 	err := s.runnerEndpoint(*v.SourceRunnerID).sub.WorkloadStatus(pctx, a)
@@ -374,6 +384,10 @@ func (s *Server) pushWorkloadView(ctx context.Context, ws store.WorkloadStore, v
 			slog.String("runner_id", v.SourceRunnerID.String()), slog.Any("err", err))
 	}
 }
+
+// workloadPushMu holds a *sync.Mutex per workload id (pushWorkloadView), one per custom-resource
+// workload this process has pushed.
+var workloadPushMu sync.Map
 
 // pushWorkloadStatuses pushes the status of every custom-resource workload for which push says so.
 func (s *Server) pushWorkloadStatuses(ctx context.Context, push func(store.WorkloadView) bool) error {

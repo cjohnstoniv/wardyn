@@ -324,7 +324,8 @@ const workloadStatusAttempts = 3
 // metadata.generation is a.ObservedGeneration. A late answer for a resource since deleted and recreated
 // under the name, or for a spec since changed, is dropped. The write carries the resourceVersion it was
 // checked at, so the apiserver refuses it if the resource changed in between; a deleted resource has
-// nothing to write to. Neither is an error: the org's next push answers what the resource is now.
+// nothing to write to. Neither is an error: the org's next push answers what the resource is now. A write
+// that keeps losing to changes is one, so the org sends it again.
 func (w *workloadWatcher) status(ctx context.Context, a runnerwire.WorkloadStatusArgs) error {
 	if _, ok := w.informers[a.Namespace]; !ok {
 		return runnerwire.Refuse("workload namespace %q is not one this runner watches", a.Namespace)
@@ -375,8 +376,8 @@ func (w *workloadWatcher) status(ctx context.Context, a runnerwire.WorkloadStatu
 			return err
 		}
 	}
-	slog.WarnContext(ctx, "workload status dropped: the resource kept changing under the write", "namespace", a.Namespace, "name", a.Name)
-	return nil
+	// An error, so the org keeps the status unsent and its next sweep writes it again.
+	return fmt.Errorf("workload %s/%s kept changing under the status write", a.Namespace, a.Name)
 }
 
 // readyCondition is the Ready condition's status and lastTransitionTime on u, "" when it has none.
