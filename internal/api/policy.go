@@ -410,6 +410,9 @@ func validateUIApps(apps []types.UIApp) error {
 		if err := validateUIAppPath(a.Path); err != nil {
 			return fmt.Errorf("ui_apps[%d]: %w", i, err)
 		}
+		if err := validateUIAppCallers(a); err != nil {
+			return fmt.Errorf("ui_apps[%d]: %w", i, err)
+		}
 	}
 	return nil
 }

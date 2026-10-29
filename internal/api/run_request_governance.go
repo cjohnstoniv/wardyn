@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 func (s *Server) runCapabilityRefusal(r *http.Request, kind, value, target, msg string) *runRefusal {
@@ -22,6 +23,19 @@ func (s *Server) runCapabilityRefusal(r *http.Request, kind, value, target, msg 
 		return nil
 	}
 	return runDenied(authz.Deny(capKinds[kind].reason, target, msg))
+}
+
+// inboundDeclaredRefusal is featureInbound at create, preflight and policy preview: asked when the REQUEST
+// declares an inbound app, in its inline_policy or the keys of its policy_overlay. A stored policy's or a
+// ceiling's inbound apps are the admin's choice, so a run that only inherits them is not asked (the capability
+// doctrine, as for a stored policy's components). Operators never reach it (runRequestGovernance returns first).
+func (s *Server) inboundDeclaredRefusal(r *http.Request, req createRunRequest) *runRefusal {
+	spec, _ := requestPolicyRules(req)
+	if spec == nil || !slices.ContainsFunc(spec.UIApps, func(a types.UIApp) bool { return a.Inbound }) {
+		return nil
+	}
+	return s.runCapabilityRefusal(r, capFeature, featureInbound, "runs.ui_apps",
+		"Inbound apps aren't turned on for you. Ask your admin, or declare the app without inbound.")
 }
 
 // Only member-authored workspace images need this re-check. Applying it to
@@ -101,6 +115,9 @@ func (s *Server) runRequestGovernance(r *http.Request, req createRunRequest) (go
 			"Stored policy "+req.PolicyID.String()+" isn't available to you. Ask your admin, or launch without policy_id."); refusal != nil {
 			return governanceCeiling{}, refusal
 		}
+	}
+	if refusal := s.inboundDeclaredRefusal(r, req); refusal != nil {
+		return governanceCeiling{}, refusal
 	}
 	ceiling, err := s.effectiveCeiling(r.Context())
 	if err != nil {

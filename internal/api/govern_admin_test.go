@@ -164,6 +164,12 @@ func governSites() []governSite {
 				warns := s.boundUIApps(ctx, governReq(ctx), &spec, walled(types.GovernanceLimits{DenyUIApps: true}), false)
 				return len(warns) > 0 && len(spec.UIApps) == 0
 			}},
+		{"governance_run_doors.go boundInboundApps", plain,
+			func(t *testing.T, s *Server, ctx context.Context) bool {
+				spec := types.RunPolicySpec{UIApps: []types.UIApp{{Name: "api", Port: 8080, Inbound: true}}}
+				warns := s.boundUIApps(ctx, governReq(ctx), &spec, walled(types.GovernanceLimits{DenyInteractive: true}), false)
+				return len(warns) > 0 && len(spec.UIApps) == 0
+			}},
 		{"capabilities.go newCapBatch", capSrv(&capStore{enf: map[string]bool{capAgent: true}}),
 			func(t *testing.T, s *Server, ctx context.Context) bool {
 				ok, err := s.newCapBatch(ctx).allowed(ctx, capAgent, "claude-code")
@@ -330,6 +336,7 @@ var governSiteElsewhere = map[string]string{
 	"boundaryEndPlan":         "row: run_end_wait.go handleSetRunEndAndWait (the end bound)",
 	"memberResources":         "row: runs_dispatch_ceiling.go boundResources",
 	"uiAppsDenied":            "row: governance_run_doors.go boundUIApps",
+	"inboundAppsDenied":       "row: governance_run_doors.go boundInboundApps",
 	"recordLaneVeto":          "row: workspace_admission.go laneVetoedBy",
 	"deniedPlacements":        "test: run_placement_capabilities_test.go",
 	"gitHubOwnTokenDecider":   "test: gh_own_pat_test.go",
