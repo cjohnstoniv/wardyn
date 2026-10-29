@@ -392,13 +392,14 @@ func TestPG_WorkloadFromRunner_BoundApplyLaunchesOnTheBoundPool(t *testing.T) {
 	}
 }
 
-// A binding whose sponsor's sessions were cut has lost its authority: a delete report and a full list that omits
-// the resource leave the workload row and its run alone, and audit nothing.
+// A binding whose sponsor was revoked has lost its authority: a delete report and a full list that omits the
+// resource leave the workload row and its run alone, and audit nothing. A browser-only cut (CutSessions) would
+// not do: it leaves the service's tokens working, and the binding is judged by the rules that end them.
 func TestPG_WorkloadFromRunner_BindingWithoutAuthorityDeletesNothing(t *testing.T) {
 	e := newCREnv(t)
 	ctx := context.Background()
 	_, run := e.k8sWorkloadWithRun(t, "web", "uid-web")
-	if err := e.rev.CutSessions(ctx, svcSponsor); err != nil {
+	if err := e.rev.RevokeSub(ctx, svcSponsor); err != nil {
 		t.Fatal(err)
 	}
 	e.report(t, runnerwire.WorkloadReport{Op: runnerwire.WorkloadOpDelete, Namespace: "team-a", Name: "web", UID: "uid-web"})
