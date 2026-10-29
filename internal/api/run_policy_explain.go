@@ -126,6 +126,9 @@ func explainRunPolicy(base *types.RunPolicySpec, resolved types.RunPolicySpec, e
 	groups := map[changeKey]*runPolicyChange{}
 	put := func(field, entry string, added bool) {
 		cause, profile, at := x.cause(field, entry, added)
+		if field == fieldDesktop && cause != causeWalls {
+			return // only a person's own walls are said to narrow the desktop; any other layer's change stays unshown
+		}
 		k := changeKey{cause: cause, field: field, profile: profile}
 		if at != nil {
 			k.at = *at
