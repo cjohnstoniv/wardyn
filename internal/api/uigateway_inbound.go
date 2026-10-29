@@ -181,7 +181,7 @@ func (s *Server) uiRelayAnsweredEarly(w http.ResponseWriter, r *http.Request, ru
 	if raw, ok := bearerToken(r); ok && strings.HasPrefix(raw, apiTokenPrefix) {
 		if sess, ok := s.inboundTokenSession(w, r, runID, app, raw); ok {
 			// An upgrade this request becomes is admitted again while it lasts (watchInboundStream).
-			a := inboundReadmission{r: r.WithContext(context.WithoutCancel(r.Context())), runID: runID, app: app, raw: raw, principal: sess.Principal}
+			a := inboundReadmission{r: r.WithContext(context.WithoutCancel(r.Context())), runID: runID, app: app, raw: raw, principal: sess.Principal, tokenID: sess.tokenID}
 			s.relayUISession(w, r.WithContext(context.WithValue(r.Context(), inboundReadmitCtxKey{}, a)), sess)
 		}
 		return true
@@ -252,7 +252,7 @@ func (s *Server) inboundTokenSession(w http.ResponseWriter, r *http.Request, run
 	if sess, ok := s.uiInbound.cached(key, now); ok {
 		return sess, true
 	}
-	sess, ok := s.admitInboundToken(w, r, runID, app, raw)
+	sess, ok := s.admitInboundToken(w, r, runID, app, raw, "", uuid.Nil)
 	if ok {
 		s.uiInbound.remember(key, sess, now)
 	}
@@ -264,13 +264,16 @@ func (s *Server) inboundTokenSession(w http.ResponseWriter, r *http.Request, run
 // is not inbound, a holder who is neither the owner nor a caller — is 404 inbound_not_found, one answer for
 // all four; and one that may, on a run that is not running or is kept, is 409 ui_gateway_not_running. Each
 // refusal writes its inbound.deny row. ok=false when it has answered.
-func (s *Server) admitInboundToken(w http.ResponseWriter, r *http.Request, runID uuid.UUID, app, raw string) (uiSession, bool) {
+//
+// principal and tokenID are who the token proved to be when a stream was opened under it (inboundReadmission),
+// "" and uuid.Nil on a request: a token that no longer resolves cannot say, and its row then names them.
+func (s *Server) admitInboundToken(w http.ResponseWriter, r *http.Request, runID uuid.UUID, app, raw, principal string, tokenID uuid.UUID) (uiSession, bool) {
 	v, r, verdict := s.verifyAPIToken(w, r, raw, true)
 	switch verdict {
 	case tokenAnswered:
 		return uiSession{}, false
 	case tokenRefused:
-		s.auditInboundRefused(r, runID, app, "", inboundDenyCredentialInvalid)
+		s.auditInboundRefused(r, runID, app, principal, tokenID, inboundDenyCredentialInvalid)
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		writeErrorReason(w, http.StatusUnauthorized, reasonInboundCredentialInvalid, inboundCredentialInvalidMsg)
 		return uiSession{}, false
@@ -280,10 +283,10 @@ func (s *Server) admitInboundToken(w http.ResponseWriter, r *http.Request, runID
 	case "":
 		return sess, true
 	case inboundDenyNotRunning:
-		s.auditInboundRefused(r, runID, app, v.Principal, deny)
+		s.auditInboundRefused(r, runID, app, v.Principal, v.ID, deny)
 		writeErrorReason(w, http.StatusConflict, reasonUIGatewayNotRunning, inboundNotRunningMsg)
 	default:
-		s.auditInboundRefused(r, runID, app, v.Principal, deny)
+		s.auditInboundRefused(r, runID, app, v.Principal, v.ID, deny)
 		writeErrorReason(w, http.StatusNotFound, reasonInboundNotFound, inboundNotFoundMsg)
 	}
 	return uiSession{}, false
@@ -294,11 +297,12 @@ func (s *Server) admitInboundToken(w http.ResponseWriter, r *http.Request, runID
 type inboundReadmitCtxKey struct{}
 
 // inboundReadmission is what a stream needs to admit its token again: the request that opened it, held past
-// its cancel, and the token and the principal it proved.
+// its cancel, and the token and the principal and token id it proved.
 type inboundReadmission struct {
 	r                   *http.Request
 	runID               uuid.UUID
 	app, raw, principal string
+	tokenID             uuid.UUID
 }
 
 // readmitInbound admits a's token again, uncached (admitInboundToken), then asks the run's profile what a
@@ -308,7 +312,7 @@ type inboundReadmission struct {
 // profile that could not be read, which write no inbound.deny row.
 func (s *Server) readmitInbound(a inboundReadmission) (ok, transient bool) {
 	w := &inboundReadmitWriter{healthzGateWriter: healthzGateWriter{h: http.Header{}}}
-	sess, ok := s.admitInboundToken(w, a.r, a.runID, a.app, a.raw)
+	sess, ok := s.admitInboundToken(w, a.r, a.runID, a.app, a.raw, a.principal, a.tokenID)
 	if !ok {
 		return false, w.status == http.StatusServiceUnavailable
 	}
@@ -373,7 +377,7 @@ func (s *Server) watchInboundStream(resp *http.Response) {
 					if now.Sub(failingSince) < inboundResolveTTL {
 						continue
 					}
-					s.auditInboundRefused(a.r, a.runID, a.app, a.principal, reasonTokenLookupUnavailable)
+					s.auditInboundRefused(a.r, a.runID, a.app, a.principal, a.tokenID, reasonTokenLookupUnavailable)
 				}
 				_ = stream.Close() // the relay's copy ends, and the caller's connection with it
 				return
@@ -569,8 +573,9 @@ func (s *Server) recordInbound(ctx context.Context, sourceIP string, sess uiSess
 }
 
 // auditInboundRefused writes the inbound.deny row of a token refused before it held a session, within
-// authFailedAllowed's bound. principal is "" until the token proved one.
-func (s *Server) auditInboundRefused(r *http.Request, runID uuid.UUID, app, principal, reason string) {
+// authFailedAllowed's bound. principal and tokenID are "" and uuid.Nil until the token proved them, or a
+// stream that did names them.
+func (s *Server) auditInboundRefused(r *http.Request, runID uuid.UUID, app, principal string, tokenID uuid.UUID, reason string) {
 	if !s.authFailedAllowed() {
 		return
 	}
@@ -578,8 +583,11 @@ func (s *Server) auditInboundRefused(r *http.Request, runID uuid.UUID, app, prin
 	if isServicePrincipal(principal) {
 		actorType = serviceActorType
 	}
-	ev := s.auditEvent(&runID, actorType, principal, "inbound.deny", app, "denied", mustJSON(map[string]any{
-		"reason": reason, "via": "token", "method": r.Method, "path": inboundPath(r, runID, app)}))
+	data := map[string]any{"reason": reason, "via": "token", "method": r.Method, "path": inboundPath(r, runID, app)}
+	if tokenID != uuid.Nil {
+		data["token_id"] = tokenID
+	}
+	ev := s.auditEvent(&runID, actorType, principal, "inbound.deny", app, "denied", mustJSON(data))
 	ev.SourceIP = r.RemoteAddr
 	s.recordAudit(context.WithoutCancel(r.Context()), ev)
 }

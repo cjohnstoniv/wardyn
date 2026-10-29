@@ -507,12 +507,19 @@ func TestUIGateway_InboundStreamIsReadmitted(t *testing.T) {
 			if !echoes(conn, br) {
 				t.Fatal("the stream carried nothing before the token ended")
 			}
+			tok, err := tokens(h).GetAPITokenByRaw(context.Background(), "wdn_alice")
+			if err != nil {
+				t.Fatalf("read the token before it ends: %v", err)
+			}
 			end(h)
 			if !closes(conn, br) {
 				t.Fatal("the stream outlived its token")
 			}
-			if !h.audit.hasDataValue("reason", inboundDenyCredentialInvalid) {
-				t.Errorf("no inbound.deny credential_invalid; reasons: %s", h.audit.dataReasons())
+			// One row, naming who the stream was open for, though the token no longer proves it.
+			rows := h.audit.auditRows("inbound.deny", "denied")
+			if len(rows) != 1 || rows[0].Actor != h.owner || !h.audit.hasDataValue("reason", inboundDenyCredentialInvalid) ||
+				!h.audit.hasDataValue("token_id", tok.ID.String()) {
+				t.Errorf("inbound.deny rows = %+v, want one credential_invalid by %s for token %s", rows, h.owner, tok.ID)
 			}
 		})
 	}
