@@ -433,8 +433,12 @@ type diffLine struct {
 // diffContext is how many unchanged lines a hunk shows around a change.
 const diffContext = 3
 
-// diffCellLimit bounds the table lineDiff fills; past it the changed middle is shown replaced whole.
-const diffCellLimit = 16 << 20
+// diffCellLimit bounds the table lineDiff fills, and diffSideLimit each side's changed lines (so the
+// table size cannot overflow); past either, the changed middle is shown replaced whole.
+const (
+	diffCellLimit = 16 << 20
+	diffSideLimit = 1 << 20
+)
 
 // lineDiff is the shortest edit script from a to b. The common head and tail are set aside first,
 // so a small change in a long document costs a small table.
@@ -447,13 +451,13 @@ func lineDiff(a, b []string) []diffLine {
 	for tail < len(a)-head && tail < len(b)-head && a[len(a)-1-tail] == b[len(b)-1-tail] {
 		tail++
 	}
-	out := make([]diffLine, 0, len(a)+len(b))
+	var out []diffLine
 	for _, s := range a[:head] {
 		out = append(out, diffLine{' ', s})
 	}
 	am, bm := a[head:len(a)-tail], b[head:len(b)-tail]
 	n, m := len(am), len(bm)
-	if n*m > diffCellLimit {
+	if n > diffSideLimit || m > diffSideLimit || n*m > diffCellLimit {
 		for _, s := range am {
 			out = append(out, diffLine{'-', s})
 		}
