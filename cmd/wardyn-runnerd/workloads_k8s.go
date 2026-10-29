@@ -43,6 +43,11 @@ const (
 	workloadResync = 10 * time.Minute
 	// workloadSendTimeout bounds one event, so a stalled session cannot hold the informers.
 	workloadSendTimeout = 30 * time.Second
+	// workloadClientQPS and workloadClientBurst mirror the driver's clientQPS and clientBurst
+	// (internal/runner/k8s/driver.go), which replace client-go's 5/10 default so the status writes
+	// and informer relists do not starve behind it.
+	workloadClientQPS   = 50
+	workloadClientBurst = 100
 )
 
 // workloadPeer is the session's event sender, a *runnerwire.Peer.
@@ -86,6 +91,7 @@ func newClusterWorkloadWatcher(ctx context.Context, namespaces []string) (*workl
 	if err != nil {
 		return nil, fmt.Errorf("workload watcher: %w", err)
 	}
+	cfg.QPS, cfg.Burst = workloadClientQPS, workloadClientBurst
 	client, err := dynamic.NewForConfig(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("workload watcher: %w", err)
