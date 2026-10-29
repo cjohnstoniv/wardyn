@@ -368,6 +368,18 @@ func (x *explainer) mirrored(field, entry string, added bool) bool {
 	return false
 }
 
+// uiAppKey is a ui_app's entry key: its name, and for an inbound app the callers it admits, so making an app
+// inbound or adding a caller is a change the diff sees and not a no-op on an unchanged name.
+func uiAppKey(a types.UIApp) string {
+	if !a.Inbound {
+		return a.Name
+	}
+	if len(a.Callers) == 0 {
+		return a.Name + " (inbound)"
+	}
+	return a.Name + " (inbound: " + strings.Join(a.Callers, ", ") + ")"
+}
+
 // policyFieldSets is a spec's comparable content: each list field as its
 // redaction-safe entry keys, each scalar as a one-entry set (none when unset).
 // A grant is "kind:host" or "kind:repo,repo", a mount its target, a repo
@@ -409,7 +421,7 @@ func policyFieldSets(sp types.RunPolicySpec) map[string][]string {
 		m[fieldRepos] = append(m[fieldRepos], key)
 	}
 	for _, a := range sp.UIApps {
-		m[fieldUIApps] = append(m[fieldUIApps], a.Name)
+		m[fieldUIApps] = append(m[fieldUIApps], uiAppKey(a))
 	}
 	for _, t := range sp.ToolRules {
 		m[fieldToolRules] = append(m[fieldToolRules], t.Tool+":"+string(t.Effect))

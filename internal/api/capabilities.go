@@ -176,9 +176,14 @@ const (
 	// /me/runners/tokens). Restricted by migration 0178 on the same terms as service_attach: nobody
 	// until an allow names it, an `all` allow included. Runners and claims that already exist are untouched.
 	featureSelfHostRunner = "self_host_runner"
+	// featureInbound: "may declare a ui_app callable from outside the run" (ui_apps[].inbound). Restricted by
+	// migration 0239 on the same terms as service_attach: nobody until an allow names it, an `all` allow
+	// included. Asked at create and preflight when the request itself declares an inbound app, never for a
+	// stored or ceiling policy's (inboundDeclaredRefusal); runs already going are untouched.
+	featureInbound = "inbound"
 )
 
-var featureValues = []string{featureSSHKey, featureAPIToken, featureCustomComponent, featureServiceAttach, featureSelfHostRunner}
+var featureValues = []string{featureSSHKey, featureAPIToken, featureCustomComponent, featureServiceAttach, featureSelfHostRunner, featureInbound}
 
 // capabilityKinds is the closed set, in the order the admin surface shows them.
 var capabilityKinds = []string{capEgressHost, capSecret, capWorkspace, capImage, capAgent, capWorkspaceProvider, capModelProvider, capFeature, capPolicy, capComponent}
