@@ -30,6 +30,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Migration `0239_inbound` restricts the `feature` value `inbound`, admits `inbound` in `api_tokens.kind`'s CHECK and
   adds `caller` and `app` to `attach_tickets`. It inserts the `inbound` restriction row when absent, rewrites no token or ticket, and adds no grant. See
   [OPERATIONS.md](docs/OPERATIONS.md).
+- A change to a runner pool's use policy that was held for a second person before the upgrade, on a pool that already
+  holds an organization runner, reads as stale when it is approved: the state it was proposed against now includes the
+  pool's organization runners. Propose it again. A held change on a pool with no organization runner is unaffected.
 
 ### Added
 
@@ -75,10 +78,21 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   launch your organisation refuses keeps the old run and is recorded as `last_refusal`. `wardyn diff`, `wardyn delete`,
   `wardyn workload list|get|restart|delete` and `wardyn workload binding create|list|delete` complete the CLI. On a
   Kubernetes organisation runner a `WardynWorkload` resource in a bound namespace launches as its service identity, and its
-  status shows the phase and reason. See [Workloads](docs/operations/workloads.md).
+  status shows the phase and reason. A binding names an organization pool only. See [Workloads](docs/operations/workloads.md).
   - Migration `0243_workload_k8s_uid` records the `metadata.uid` of the resource a workload was reported from. A status
     is written only to the resource with that uid, so one deleted and recreated under the same name never gets the old
     one's status. No grant changes.
+- An organization runner on Kubernetes can place runs in several runs namespaces. List the extra ones under
+  `extraRunsNamespaces` in the runner chart, and add the runner to a pool with
+  `wardyn runner pool add POOL RUNNER --runs-namespace NAMESPACE`. The namespace is fixed when the runner joins the pool,
+  and a runner serves each named namespace for one pool. See
+  [Several runs namespaces](docs/operations/k8s-runners.md#several-runs-namespaces).
+- Removing an organization runner from a pool that carries a use policy is held for a super admin when second-human
+  governance is on, as a remote-hosted runner's removal already was.
+- With several wardynd replicas, a kill, end or stop queued on a replica that does not hold a runner's session now ends
+  that session, so the runner reads the action at once and not at its next reconnect. Setup status gains a warning row,
+  *Runners with several replicas*, while high availability and runners are both on: a launch, terminal or revive served by
+  another replica still finds the runner offline. See [High availability](docs/operations/high-availability.md).
 
 ### Changed
 
@@ -119,6 +133,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   deadline exceeded".
 - Helm: with `basePath` set and `env.WARDYN_BASE_PATH` set to `""`, the probes and ServiceMonitor now follow the
   empty value wardynd serves under, so the pod goes ready.
+
+### Known issues
+
+- A person other than a run's owner can open an inbound app only on per-run hosts; on one shared host the ticket is
+  refused `inbound_needs_host_mode`. Opening a code editor through an inbound port on per-run hosts has not been tested
+  end to end in this release.
 
 ## [0.10.0-rc.7] — 2026-10-29
 

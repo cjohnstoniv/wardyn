@@ -234,7 +234,7 @@
 | **v0.8** | **Alpha RC.** Shipped as `v0.8.0` through `v0.8.9`; see the Shipped table. |
 | **v0.9** | **Hybrid local + remote.** Shipped as `v0.9.0` through `v0.9.4`. See [below](#v09-scope); [design](docs/design/0.9/PLAN.md). |
 | **v0.10** | **Developer sandboxes**: desktop machines with a real browser inside nested walls, plus the New Run items marked Coming soon; see [below](#v010-scope). |
-| **v0.10.x** | The developer-sandbox follow-ons behind flags: macOS, Windows, the local window, GPU desktops, fork, personal walls and agent rules; see [below](#v010-scope). |
+| **v0.10.x** | The developer-sandbox follow-ons behind flags: macOS, Windows, the local window, GPU desktops, fork and agent rules; see [below](#v010-scope). |
 | **v1.0** | SPIRE identity provider, OpenBao secret store, L3 MCP/tool gateway and the rest of the 1.0 list; see [below](#v10-scope). |
 | **v1.0 (git-token ref confinement)** | **Token-side** branch-namespace confinement for minted git tokens; see [below](#v10-git-token-ref-confinement-scope). |
 
@@ -293,7 +293,7 @@ What 0.9.3 adds to the runners (the release candidates are in the Shipped table)
 | Laptop sandboxes in a local native window | #2961 |
 | GPU in container sandboxes, and an opt-in GPU desktop for Linux VMs | #2958, #2959 |
 | Snapshots, fork, warm pools and sleep on disconnect | #2960 |
-| Per-setting delegation, personal walls, agent rules, place rules | #2947, #2948, #2949, #2950 |
+| Per-setting delegation, agent rules, place rules | #2947, #2949, #2950 |
 | Live two-way sync with a conflict view, and organisation controls for local folders | #2987, #2990 |
 | Pause on every runtime, cold move between machines, and org sites with a reference edge box | #2991 |
 | Preview URLs, in-browser approvals, action gates, watermark, browser lock-down, Record Mode for desktops | #2965, #2964, #2971, #2969, #2970, #2966 |
@@ -323,8 +323,7 @@ What 0.9.3 adds to the runners (the release candidates are in the Shipped table)
 - cloud STS federation ·
 - OTLP/OCSF SIEM sinks (file/webhook/syslog sinks already ship) ·
 - Docker/Compose L1 default-deny via nftables (the k8s target's L1 already ships — NetworkPolicy, boot-time-canary-enforced, blocking `169.254.169.254`; Docker/Compose still relies on L0 structural confinement alone) ·
-- HA completion — closing the still-open per-process blockers a second replica hits (chiefly the in-memory, fail-open secret-masking registry;
-- see [docs/OPERATIONS.md](docs/OPERATIONS.md)'s "High availability" section for the exact list and what v0.5 already closed) ·
+- HA completion — closing the blockers a second replica still hits, chiefly that a registered runner holds its session with one replica; see [High availability](docs/operations/high-availability.md) for each ·
 - k8s substrate parity with Docker: BYOI/devcontainer builds, `local_dir` mounts, a per-pod PIDs limit, and a k8s ground-truth correlator (see [deploy/helm/wardyn/README.md](deploy/helm/wardyn/README.md)'s "Known gaps") ·
 - CC3/Vault (Kata) packaged and GA — experimental today ·
 - Cilium `toFQDNs` ·

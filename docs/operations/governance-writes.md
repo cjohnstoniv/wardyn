@@ -67,7 +67,7 @@ an operator follows to turn one on and run the queue.
 - **Who may approve.**
   - The approver must pass the predicate of the tier the write was proposed on, never a weaker one.
   - Profile, assignment, grant, enforcement, availability and user-type priority changes are proposed on the security tier, so a security admin or a super admin approves; a security admin may approve a super admin's change.
-  - A role mapping, an organization pool's remote-hosted runner add or removal that the table below marks, and a profile change that sets a mount's host path or makes a mount writable, is written on the super-admin tier, so only a super admin approves one:
+  - A role mapping, an organization pool's remote-hosted runner add or removal and organization runner removal that the table below marks, and a profile change that sets a mount's host path or makes a mount writable, is written on the super-admin tier, so only a super admin approves one:
     - a security admin who tries is refused `403` `authz.denied` reason `admin_surface` (target `governance.change`),
     - and those changes are neither listed to a security admin nor readable by one (`GET /governance/changes/{id}` answers `404`).
   - The predicate is evaluated again inside the approval transaction: a token revoked since it authenticated, cut off by a session revocation, or whose role no longer passes is refused, and the change stays pending.
@@ -150,7 +150,7 @@ an operator follows to turn one on and run the queue.
 
 - **SSO is configured.** Local mode authenticates nobody, so with the switch on every covered write and every approve or reject answers `503` `governance_second_human_local_mode`.
 - **The admin token is held out of band.** It applies a covered write directly and approves a change, each audited as `governance.change.bypass`. It is the break-glass and the one way past this gate.
-- **Two humans can approve.** Every covered target needs a second security admin or super admin, except role mappings and an organization pool's remote-hosted runner add or removal, which need a second super admin (see step 6).
+- **Two humans can approve.** Every covered target needs a second security admin or super admin, except role mappings and an organization pool's remote-hosted runner add or removal and organization runner removal, which need a second super admin (see step 6).
 - **Every CLI and SDK caller is upgraded.** A client built before 0.8.6 decodes the `202` as an empty object ([sdk.md](../sdk.md) "Old clients"): nothing applies unapproved, but its error confuses.
 
 Then set `WARDYN_GOVERNANCE_SECOND_HUMAN` (and, if `72h` is wrong, `WARDYN_GOVERNANCE_CHANGE_TTL`) in the daemon's environment; on Kubernetes that is the chart's existing `env` map.
@@ -241,7 +241,7 @@ wardyn governance set governance.json --prune    # the same apply, once the plan
 
 **6. One super admin.**
 
-- Role mappings, and a held remote-hosted runner add to or removal from an organization pool, are written on the super-admin tier, so only a super admin may approve one, and nobody approves their own.
+- Role mappings, a held remote-hosted runner add to an organization pool, and a held remote-hosted or organization runner removal from one, are written on the super-admin tier, so only a super admin may approve one, and nobody approves their own.
 - With a single super admin, no role mapping or held pool membership can change while the switch is on, except through the admin token (audited as a bypass).
 - The lockout guard is judged against the **approver's** own roles at apply, so the approver cannot be the person whose mapping change would strip their own admin.
 

@@ -27,5 +27,6 @@ docs/operations/monitoring.md=2166 share=13
 docs/operations/run-lifetime.md=2102 share=21
 # docs/operations/kubernetes-known-gaps.md 2110 adds 50 over 2060, measured: the proxy DNS rule's coverage and what needs an operator policy (0.9.3 ASK-6 review).
 # docs/operations/kubernetes-known-gaps.md 2153 = 2110 + 43, measured: the proxy DNS peer's fixed namespace and label, and how to check yours
-docs/operations/kubernetes-known-gaps.md=2153 share=15
+# docs/operations/kubernetes-known-gaps.md 2165 adds 12 over 2153, measured (rc.8 E5): the replicas row points at the high-availability page.
+docs/operations/kubernetes-known-gaps.md=2165 share=15
 # docs/operations/secrets-and-keys.md 9534 adds 44 (0.9 G-sec-rest, #1977): the 'Requiring it' paragraph says the flag covers new writes only, existing local-key rows are not moved, and kek_local_rows reports them.

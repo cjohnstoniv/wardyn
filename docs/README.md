@@ -41,6 +41,9 @@
 | Let a security admin's rule approve a service identity's held tool calls and first-use hosts | [operations/approval-rules.md](operations/approval-rules.md) |
 | Stop sharing the admin token — a token per person, and tokens for someone who never signs in | [operations/api-tokens.md](operations/api-tokens.md) |
 | Decide where runs go — runner pools, their limits and barriers, and the queue | [operations/runner-pools.md](operations/runner-pools.md) |
+| Run more than one wardynd replica, and see what a second replica still cannot do | [operations/high-availability.md](operations/high-availability.md) |
+| Keep a command running, with restarts and a health check | [SERVICES.md](SERVICES.md) |
+| Keep a run declared from a file or a WardynWorkload resource, and bind a namespace | [operations/workloads.md](operations/workloads.md) |
 | Give each person persistent storage, and reclaim it when they leave | [operations/user-drives.md](operations/user-drives.md) |
 | Offboard a person: sessions, tokens, keys, runs, credentials, workspaces, drives | [operations/ownership-and-offboarding.md](operations/ownership-and-offboarding.md) |
 | Write the organisation's provider policy — console, CLI or MDM | [operations/provider-policy.md](operations/provider-policy.md) |
@@ -50,8 +53,10 @@
 | See which exported functions have no test (`make test-gaps`) | [TEST-GAPS.md](TEST-GAPS.md) |
 | Run the live tests against real Entra/ADO/Bedrock | [LIVE-TESTS.md](LIVE-TESTS.md) |
 | Swap a component (identity, secret store, recording, substrate) | [PLUGGABILITY.md](PLUGGABILITY.md) |
+| Find the layers of the code, the interface each extension implements, and where a service or workload plugs in | [EXTENDING.md](EXTENDING.md) |
 | Write or edit a doc (form, size caps, links, visuals, the headings code quotes) | [STYLE.md](STYLE.md) |
 | Design or review a console screen (color budget, type rungs, elevation, status glyphs) | [design/CONSOLE-RULES.md](design/CONSOLE-RULES.md) |
+| Read a design note, and tell a current one from a record | [design/README.md](design/README.md) |
 | Understand the design, or contribute | [../ARCHITECTURE.md](../ARCHITECTURE.md), [../CONTRIBUTING.md](../CONTRIBUTING.md) |
 | Plan a change — issues, branches, pull requests, what "done" means | [../CONTRIBUTING.md](../CONTRIBUTING.md#branching-issues-and-pull-requests) |
 | Know how Wardyn is built — AI-written code, and the human-driven planning and review around it | [HOW-WARDYN-IS-BUILT.md](HOW-WARDYN-IS-BUILT.md) |
