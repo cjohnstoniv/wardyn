@@ -282,7 +282,7 @@
 # docs/sdk.md 22680 adds 9 over 22671, measured: run_output_not_kept also answers an ended run whose runner captures no output and whose recording never arrived.
 # docs/sdk.md=22806 adds 90 over 22716, measured (0.10 final §3 pre-wrapped images): the three prewrapped_* reason rows.
 # docs/sdk.md=22902 adds 28 over 22874, measured (rc.8 services): the run_service_shape row.
-docs/sdk.md=23071 share=21 # = 22934 + 137 (rc.8 inbound gateway reasons and runner_offline)
+docs/sdk.md=23137 share=21 # +66 measured (rc.8 D1): the inbound_needs_host_mode row; = 22934 + 137 (rc.8 inbound gateway reasons and runner_offline)
 # docs/sdk.md 20423 = ours 20195 + theirs 20288 - base 20060 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/sdk.md 20315 = ours + theirs - base at the 0.10 HYB-C merge of main onto VM-A, measured.
 # 0.10 HYB-C: docs/sdk.md 20343 adds 28 over 20315, measured: the placement_capability refusal of a linux_vm run with a folder on a runner that cannot share one.
