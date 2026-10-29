@@ -278,7 +278,7 @@ func wallsHost(h string) bool {
 
 // wallsSourceRecord is policy_source.personal_walls on the run.create row: the knobs the person's
 // walls narrowed at create, the allowlist entries and grants (kind:host, grantKey) they took out of
-// the run, and the denies they added. Read back by GET /runs/{id}/policy.
+// the run, and the denies and blocked desktop directions they added. Read back by GET /runs/{id}/policy.
 type wallsSourceRecord struct {
 	Narrowed []string            `json:"narrowed"`
 	Removed  map[string][]string `json:"removed,omitempty"`
@@ -308,6 +308,7 @@ func newWallsSource(before, after types.RunPolicySpec) *wallsSourceRecord {
 	put(&rec.Removed, "allowed_domains", setDiff(b.AllowedDomains, a.AllowedDomains))
 	put(&rec.Removed, "eligible_grants", setDiff(wallsGrantKeys(before.EligibleGrants), wallsGrantKeys(after.EligibleGrants)))
 	put(&rec.Added, "denied_domains", setDiff(a.DeniedDomains, b.DeniedDomains))
+	put(&rec.Added, fieldDesktop, setDiff(desktopBlocked(after), desktopBlocked(before)))
 	return rec
 }
 

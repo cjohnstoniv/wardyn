@@ -871,7 +871,7 @@ func TestExplainRunPolicy_Walls(t *testing.T) {
 		blocked := types.DesktopControls{CopyOut: types.TransferBlocked, PasteIn: types.TransferAllowed, Upload: types.TransferAllowed, Download: types.TransferBlocked}
 		base := pvSpec(nil, func(s *types.RunPolicySpec) { s.Desktop = &open })
 		resolved := pvSpec(nil, func(s *types.RunPolicySpec) { s.Desktop = &blocked })
-		walls := &wallsSourceRecord{Narrowed: []string{fieldDesktop}}
+		walls := &wallsSourceRecord{Narrowed: []string{fieldDesktop}, Added: map[string][]string{fieldDesktop: {"Block copy out"}}}
 		got := explainRunPolicy(ptr(base), resolved, evidenceOf(func(e *auditEvidence) { e.walls = walls }), types.SiteConfig{}, types.AgentRun{})
 		if c := pvChange(got, causeWalls, fieldDesktop); c == nil || !slices.Equal(c.Added, []string{"Block copy out"}) || len(c.Removed) != 0 || len(got) != 1 {
 			t.Errorf("changes = %+v, want walls adding only Block copy out", got)
@@ -879,6 +879,23 @@ func TestExplainRunPolicy_Walls(t *testing.T) {
 		defaults := types.DesktopControls{CopyOut: types.TransferBlocked, Download: types.TransferBlocked}
 		if same := explainRunPolicy(ptr(pvSpec(nil, nil)), pvSpec(nil, func(s *types.RunPolicySpec) { s.Desktop = &defaults }), evidenceOf(nil), types.SiteConfig{}, types.AgentRun{}); len(same) != 0 {
 			t.Errorf("an unset desktop against the default desktop = %+v, want no changes", same)
+		}
+	})
+	t.Run("only the desktop direction the walls blocked is the walls'", func(t *testing.T) {
+		open := types.DesktopControls{PasteIn: types.TransferAllowed, CopyOut: types.TransferBlocked, Upload: types.TransferAllowed, Download: types.TransferBlocked}
+		base := pvSpec(nil, func(s *types.RunPolicySpec) { s.Desktop = &open })
+		// The boundary blocks upload; the walls step then runs on that and blocks paste in.
+		afterBoundary := types.DesktopControls{PasteIn: types.TransferAllowed, CopyOut: types.TransferBlocked, Upload: types.TransferBlocked, Download: types.TransferBlocked}
+		resolved := pvSpec(nil, func(s *types.RunPolicySpec) {
+			s.Desktop = &types.DesktopControls{PasteIn: types.TransferBlocked, CopyOut: types.TransferBlocked, Upload: types.TransferBlocked, Download: types.TransferBlocked}
+		})
+		walls := newWallsSource(pvSpec(nil, func(s *types.RunPolicySpec) { s.Desktop = &afterBoundary }), resolved)
+		if walls == nil || !slices.Equal(walls.Added[fieldDesktop], []string{"Block paste in"}) {
+			t.Fatalf("walls record = %+v, want Added[desktop] = Block paste in only", walls)
+		}
+		got := explainRunPolicy(ptr(base), resolved, evidenceOf(func(e *auditEvidence) { e.walls = walls }), types.SiteConfig{}, types.AgentRun{})
+		if c := pvChange(got, causeWalls, fieldDesktop); c == nil || !slices.Equal(c.Added, []string{"Block paste in"}) || len(got) != 1 {
+			t.Errorf("changes = %+v, want walls adding only Block paste in, upload not shown as the walls'", got)
 		}
 	})
 	t.Run("a desktop direction narrowed by anything but the walls is not shown", func(t *testing.T) {
