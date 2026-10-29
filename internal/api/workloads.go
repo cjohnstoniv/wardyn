@@ -32,7 +32,8 @@ import (
 // rows). An apply checks the document through the template door and records it; it launches only while
 // the stored spec is ahead of its run, through handleCreateRun as the owner, so every gate a POST /runs
 // passes applies unchanged and a workload grants nothing. A new run replaces the old one only once it
-// exists (create, then end); a refused launch is recorded and the running one keeps running.
+// exists (create, then end), and one that waits in its pool's queue only once it runs (sweepWorkloadRunEnds);
+// a refused launch is recorded and the running one keeps running.
 //
 // The two halves, normalizeWorkload with PutWorkload and launchWorkload, take no HTTP caller of their own:
 // the custom-resource path records and launches through them with a request serviceLaunchRequest builds.
@@ -422,11 +423,11 @@ func (s *Server) endUntakenWorkloadRun(r *http.Request, ws store.WorkloadStore, 
 	s.endWorkloadRun(r, runID, wl, why)
 }
 
-// endOwedWorkloadRun ends e's run as killer and then drops what was owed. The reads and the kill run on a
-// context detached from ctx and bounded, as killRunCascade's own are. Once the KILLED transition is won the
-// end is durable: a teardown cut short is the sandbox sweep's to finish (recoverAbandonedKillTail). A run
-// that is not ended here stays owed.
-func (s *Server) endOwedWorkloadRun(ctx context.Context, e store.WorkloadRunEnd, killerType types.ActorType, killer string) {
+// endOwedWorkloadRun ends e's run as killer and then drops what was owed, and reports whether the run is
+// ended. The reads and the kill run on a context detached from ctx and bounded, as killRunCascade's own
+// are. Once the KILLED transition is won the end is durable: a teardown cut short is the sandbox sweep's to
+// finish (recoverAbandonedKillTail). A run that is not ended here stays owed.
+func (s *Server) endOwedWorkloadRun(ctx context.Context, e store.WorkloadRunEnd, killerType types.ActorType, killer string) bool {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
 	defer cancel()
 	extra := map[string]any{"reason": e.Reason, "workload": e.Name, "generation": e.Generation}
@@ -455,11 +456,12 @@ func (s *Server) endOwedWorkloadRun(ctx context.Context, e store.WorkloadRunEnd,
 	}
 	ws, ok := s.cfg.Store.(store.WorkloadStore)
 	if !ended || !ok {
-		return
+		return ended
 	}
 	if err := ws.DropWorkloadRunEnd(ctx, e.RunID); err != nil {
 		slog.ErrorContext(ctx, "wardynd: drop a workload run's owed end", slog.String("run_id", e.RunID.String()), slog.String("workload", target), slog.Any("err", err))
 	}
+	return true
 }
 
 // workloadRunEndGrace is how old an owed end must be before the sweep takes it: longer than an end in
@@ -474,6 +476,11 @@ const workloadRunEndBatch = 100
 // went away, a read failed, or the process died first. It runs on the workload status sweeper's cadence,
 // on one replica, as system/wardynd. No other sweep reaches such a run: the sandbox sweep takes terminal
 // runs only, and the lease sweep only a run past its end or its lifetime cap.
+//
+// It also settles a replacement that waited in its pool's queue (SetWorkloadRun): once the new run is
+// running the old one ends and the replacement is recorded; when the new run ends before it ran (the
+// start refused it, or it was ended while it waited) the workload takes the old run back and records the
+// refusal. Until then the old run keeps running.
 func (s *Server) sweepWorkloadRunEnds(ctx context.Context) error {
 	ws, ok := s.cfg.Store.(store.WorkloadStore)
 	if !ok {
@@ -492,9 +499,52 @@ func (s *Server) sweepWorkloadRunEnds(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err() // the rest wait for the next pass
 		}
-		s.endOwedWorkloadRun(ctx, e, types.ActorSystem, "wardynd")
+		switch {
+		case e.AfterRunID == nil:
+			s.endOwedWorkloadRun(ctx, e, types.ActorSystem, "wardynd")
+		case e.AfterState == types.RunRunning || e.AfterState == types.RunWaiting:
+			s.takeOverWorkloadRun(ctx, e)
+		case isTerminalRunState(e.AfterState):
+			s.restoreWorkloadRun(ctx, ws, e)
+		}
 	}
 	return nil
+}
+
+// takeOverWorkloadRun ends e's run now that e.AfterRunID, the queued run that replaces it, is running, and
+// records the replacement.
+func (s *Server) takeOverWorkloadRun(ctx context.Context, e store.WorkloadRunEnd) {
+	if !s.endOwedWorkloadRun(ctx, e, types.ActorSystem, "wardynd") {
+		return
+	}
+	s.recordAudit(ctx, s.auditEvent(e.AfterRunID, types.ActorSystem, "wardynd", "workload.replace", e.Owner+"/"+e.Name, "success", mustJSON(map[string]any{
+		"name": e.Name, "owner": e.Owner, "generation": e.Generation, "old_run_id": e.RunID, "new_run_id": *e.AfterRunID,
+	})))
+}
+
+// workloadReplacementEndedMsg is the refusal a workload records when its queued replacement ended before
+// it ran.
+const workloadReplacementEndedMsg = "The new run ended before it started, so the run it was to replace keeps running."
+
+// restoreWorkloadRun gives the workload back e's run, because e.AfterRunID, the queued run that was to
+// replace it, ended before it ran, and records why as the launch's refusal: the queue's reason when the
+// start refused it, else the state it ended in.
+func (s *Server) restoreWorkloadRun(ctx context.Context, ws store.WorkloadStore, e store.WorkloadRunEnd) {
+	reason := queueToken(e.AfterDetail)
+	if reason == "" {
+		reason = strings.ToLower(string(e.AfterState))
+	}
+	restored, err := ws.RestoreWorkloadRun(ctx, e, store.WorkloadRefusal{Generation: e.Generation, Reason: reason, Message: workloadReplacementEndedMsg,
+		At: s.cfg.Now().UTC()})
+	if err != nil {
+		slog.ErrorContext(ctx, "wardynd: give a workload back its run", slog.String("run_id", e.RunID.String()), slog.String("workload", e.Owner+"/"+e.Name), slog.Any("err", err))
+		return
+	}
+	if restored {
+		s.recordAudit(ctx, s.auditEvent(e.AfterRunID, types.ActorSystem, "wardynd", "workload.launch_refused", e.Owner+"/"+e.Name, "denied", mustJSON(map[string]any{
+			"name": e.Name, "owner": e.Owner, "generation": e.Generation, "reason": reason,
+		})))
+	}
 }
 
 // workloadOwnerOf is the owner a workload route acts for: ?owner= when given, else the caller. ok is false

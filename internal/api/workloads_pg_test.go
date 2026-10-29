@@ -495,6 +495,128 @@ func TestPG_Workload_ForeignSecurityReadWithholdsTheHostAxis(t *testing.T) {
 	check("security list of the owner", read(e.sec, "/api/v1/workloads?owner=mem"), true)
 }
 
+// queuedWorkloadReplacement makes the person's workload "web" hold r, a running run in pool, at
+// generation 1, then applies a changed spec while pool is full: the new run waits in the queue. It returns
+// the new run.
+func (e *queueEnv) queuedWorkloadReplacement(pool types.RunnerPool, r types.AgentRun) uuid.UUID {
+	e.t.Helper()
+	ctx := context.Background()
+	intent := func(task string) string {
+		return `{"experience":"background","workload":{"kind":"agent_task","agent":"claude-code","task":"` + task + `"},` +
+			`"tools":[{"id":"claude-code","kind":"harness"}],"no_repositories_or_drives":true,"runner_pool_id":"` + pool.ID.String() + `"}`
+	}
+	in, invalid := normalizeWorkload(client.WorkloadDocument{APIVersion: client.TemplateDocumentVersion, Kind: client.WorkloadDocumentKind,
+		Name: "web", Intent: decodeIntent(e.t, intent("t"))})
+	if invalid != nil {
+		e.t.Fatalf("normalize: %+v", invalid)
+	}
+	in.Owner, in.Source, in.By = e.personP, store.WorkloadSourceAPI, e.personP
+	wl, _, err := e.pg.PutWorkload(ctx, in)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	claimed, ok, err := e.pg.ClaimWorkloadLaunch(ctx, wl.ID)
+	if err != nil || !ok {
+		e.t.Fatalf("claim = %v, %v", ok, err)
+	}
+	if _, err := e.pg.SetWorkloadRun(ctx, wl.ID, claimed.ClaimToken, claimed.Generation, r.ID); err != nil {
+		e.t.Fatal(err)
+	}
+	res := decodeApply(e.t, e.call(e.person, http.MethodPut, "/api/v1/workloads/web", `{"intent":`+intent("t2")+`}`), http.StatusOK)
+	queued := launchedRun(e.t, res)
+	if got := e.run(queued).State; got != types.RunQueued {
+		e.t.Fatalf("replacement state = %s, want QUEUED in the full pool", got)
+	}
+	if got := e.run(r.ID).State; got != types.RunRunning {
+		e.t.Fatalf("running run state = %s once its replacement queued, want RUNNING", got)
+	}
+	if len(e.audits(r.ID, "run.kill")) != 0 || len(e.audits(queued, "workload.replace")) != 0 {
+		e.t.Fatal("a queued replacement ended the running run")
+	}
+	return queued
+}
+
+// settleWorkloadRunEnds runs the workload sweep over every owed end, however young.
+func (e *queueEnv) settleWorkloadRunEnds() {
+	e.t.Helper()
+	e.exec(`UPDATE workload_run_ends SET created_at = now() - interval '1 hour'`)
+	if err := e.srv.sweepWorkloadRunEnds(context.Background()); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+// TestPG_Workload_QueuedReplacementTakesOverOnceRunning: a replacement that waits in the queue leaves the
+// running run alone while it waits; once it runs, the sweep ends the old run and records the replacement.
+func TestPG_Workload_QueuedReplacementTakesOverOnceRunning(t *testing.T) {
+	e := newQueueEnv(t)
+	pool := e.cappedPool("Busy", 2)
+	occupant, running := e.occupy(pool), e.occupy(pool)
+	queued := e.queuedWorkloadReplacement(pool, running)
+
+	e.settleWorkloadRunEnds()
+	if got := e.run(running.ID).State; got != types.RunRunning {
+		t.Fatalf("running run state = %s while its replacement waits, want RUNNING", got)
+	}
+	e.free(occupant)
+	e.waitStarted(queued)
+	e.exec(`UPDATE agent_runs SET state = 'RUNNING' WHERE id = $1`, queued) // the runner reports it up
+	e.settleWorkloadRunEnds()
+	if got := e.run(running.ID).State; got != types.RunKilled {
+		t.Fatalf("old run state = %s once its replacement runs, want KILLED", got)
+	}
+	kills := e.waitAudit(running.ID, "run.kill")
+	if d := queueAuditData(t, kills[0]); d["reason"] != workloadKillReplaced {
+		t.Fatalf("run.kill data = %v, want reason %s", d, workloadKillReplaced)
+	}
+	if rows := e.audits(queued, "workload.replace"); len(rows) != 1 {
+		t.Fatalf("workload.replace rows on the replacement = %d, want 1", len(rows))
+	}
+	if n := e.count(`SELECT count(*) FROM workload_run_ends`); n != 0 {
+		t.Fatalf("owed ends left = %d, want 0", n)
+	}
+}
+
+// TestPG_Workload_RefusedQueuedReplacementKeepsTheRunningRun: a replacement whose queued start is refused
+// leaves the running run running; the workload takes it back and records the refusal, owed a launch again.
+func TestPG_Workload_RefusedQueuedReplacementKeepsTheRunningRun(t *testing.T) {
+	e := newQueueEnv(t)
+	pool := e.cappedPool("Busy", 2)
+	occupant, running := e.occupy(pool), e.occupy(pool)
+	queued := e.queuedWorkloadReplacement(pool, running)
+
+	if _, err := e.pg.UpsertCapabilityGrant(context.Background(), types.CapabilityGrant{SubjectType: types.CapabilitySubjectUser,
+		Subject: e.personP, Capability: capAgent, Value: "claude-code", Effect: types.CapabilityDeny, CreatedBy: "seed"}); err != nil {
+		t.Fatal(err)
+	}
+	e.free(occupant)
+	if got := e.waitFailed(queued); got.StatusDetail != "queue: capability_agent" {
+		t.Fatalf("replacement status_detail = %q, want its start refused", got.StatusDetail)
+	}
+	e.settleWorkloadRunEnds()
+	if got := e.run(running.ID).State; got != types.RunRunning {
+		t.Fatalf("old run state = %s after its replacement was refused, want RUNNING", got)
+	}
+	v, err := e.pg.GetWorkload(context.Background(), e.personP, "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.CurrentRunID == nil || *v.CurrentRunID != running.ID || v.CurrentGeneration != 0 {
+		t.Fatalf("workload run=%v generation=%d, want %s back and a launch owed", v.CurrentRunID, v.CurrentGeneration, running.ID)
+	}
+	if f := v.LastRefusal; f == nil || f.Generation != 2 || f.Reason != "capability_agent" {
+		t.Fatalf("last_refusal = %+v, want generation 2 refused for capability_agent", f)
+	}
+	if rows := e.audits(queued, "workload.launch_refused"); len(rows) != 1 || rows[0].Outcome != "denied" {
+		t.Fatalf("workload.launch_refused rows = %+v, want one denied", rows)
+	}
+	if len(e.audits(running.ID, "run.kill")) != 0 {
+		t.Fatal("the running run was killed")
+	}
+	if n := e.count(`SELECT count(*) FROM workload_run_ends`); n != 0 {
+		t.Fatalf("owed ends left = %d, want 0", n)
+	}
+}
+
 func decodeIntent(t *testing.T, raw string) client.TemplateIntent {
 	t.Helper()
 	var i client.TemplateIntent
