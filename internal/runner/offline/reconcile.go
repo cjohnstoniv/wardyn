@@ -27,6 +27,9 @@ import (
 // replay. A failed ACK retains the local result, so retry cannot repeat a
 // destructive action against a later incarnation of the sandbox.
 func (m *Manager) Pending(ctx context.Context, peer *runnerwire.Peer, actions []runnerwire.PendingAction) error {
+	m.mu.Lock()
+	m.retryRetiredReleases(ctx)
+	m.mu.Unlock()
 	for _, a := range actions {
 		result, err := m.apply(ctx, a)
 		if err != nil {
@@ -64,10 +67,8 @@ func (m *Manager) replayedAction(ctx context.Context, a runnerwire.PendingAction
 	if old.Result.Outcome == "" {
 		return runnerwire.ActionResult{}, false, nil
 	}
-	if r := m.state.Runs[a.RunID]; a.Kind == types.RunnerActionRetire && old.Result.Outcome == "success" && r.Retired && m.releaseOutput != nil {
-		if err := m.releaseOutput(a.RunID, r.Ref); err != nil {
-			slog.WarnContext(ctx, "runner kept a retired run's output", "run_id", a.RunID, "error", err)
-		}
+	if a.Kind == types.RunnerActionRetire && old.Result.Outcome == "success" {
+		m.releaseRetiredOutput(ctx, a.RunID)
 	}
 	return old.Result, true, m.save()
 }
