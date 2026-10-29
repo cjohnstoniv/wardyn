@@ -151,6 +151,15 @@ func TestK6(t *testing.T) {
 	kase := func(name string, fn func(t *testing.T, e *env)) {
 		var status, detail string
 		t.Run(name, func(t *testing.T) {
+			// A run a case leaves fenced keeps its proxy IP refused for the rest of the suite while Calico
+			// counts the address free, so a later case's proxy could draw it and be refused for that run
+			// (relay_ip_fenced). Registered first, so it runs after the case's own cleanups: every address a
+			// fence still holds is reserved until the cluster goes.
+			t.Cleanup(func() {
+				if ips := e.fences.held(); len(ips) > 0 {
+					reserveIPs(t, k6FencedIP, ips)
+				}
+			})
 			defer func() {
 				if ids := e.runs.take(); t.Failed() {
 					e.dump(t, ids)
@@ -436,6 +445,20 @@ func (f *fences) ipOf(run uuid.UUID) (string, bool) {
 	defer f.mu.Unlock()
 	ip, ok := f.seen[run]
 	return ip, ok
+}
+
+// held is every proxy IP a fence still refuses, sorted.
+func (f *fences) held() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var ips []string
+	for _, ip := range f.byRun {
+		if ip != "" && !slices.Contains(ips, ip) {
+			ips = append(ips, ip)
+		}
+	}
+	sort.Strings(ips)
+	return ips
 }
 
 // fakeControlPlane stands in for the runnerd relay that production puts in front of the org: a TLS

@@ -539,6 +539,12 @@ EOF
   kubectl -n "$OWN_NS" scale "deployment/$DEPLOY" --replicas=0 >/dev/null
   [ -n "${P_DEPLOY:-}" ] && kubectl -n "$P_OWN_NS" scale "deployment/$P_DEPLOY" --replicas=0 >/dev/null
   kubectl -n "$OWN_NS" wait --for=delete pod -l "app.kubernetes.io/instance=$RELEASE" --timeout=120s >/dev/null 2>&1 || true
+  # Both suites on one cluster: the org suite's last runs outlive the runner it revoked (a revoke stops no
+  # run), held by runnerd's finalizer on the worker node-name-reuse-tick needs; TestK6 starts without them.
+  if want org && want inproc; then
+    kubectl -n "$RUNS_NS" get pods -o name | xargs -r -n1 kubectl -n "$RUNS_NS" patch --type merge -p '{"metadata":{"finalizers":null}}' >/dev/null 2>&1 || true
+    kubectl -n "$RUNS_NS" delete pods --all --grace-period=0 --force --wait=true >/dev/null 2>&1 || true
+  fi
   # A killed inproc run skips the Go cleanups: drop pod-ip-reuse-after-stop's IP reservation so a kept
   # cluster never starts starved (Calico before v3.22 has no such resource; the case names that).
   kubectl delete ipreservations.crd.projectcalico.org k6-only-ip --ignore-not-found >/dev/null 2>&1 || true

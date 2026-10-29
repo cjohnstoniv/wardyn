@@ -117,6 +117,12 @@ func (e *env) holdSeen(t *testing.T, hold string, refused func(msg string) bool)
 	}
 }
 
+// labelGone is holdSeen's refusal for the scheduling label's removal: refused by the selector alone, so
+// no node that "were unschedulable" stands in for the label being gone.
+func labelGone(msg string) bool {
+	return strings.Contains(msg, "didn't match Pod's node affinity/selector") && !strings.Contains(msg, "were unschedulable")
+}
+
 // stopRun is a normal end: StopProxy, then label teardown, then every object gone.
 func (e *env) stopRun(t *testing.T, id uuid.UUID) {
 	t.Helper()
@@ -472,13 +478,10 @@ func casePodIPReuse(t *testing.T, e *env) {
 		t.Fatalf("the next proxy, with the pending run's IP %s the only address left: %v, want the relay fence's refusal", ip, err)
 	}
 	note(t, "the next proxy received the pending run's IP %s and was refused: %v", ip, err)
-	e.waitRunGone(t, next, goneWait)
-	// The pending run stays fenced for the rest of the suite while Calico counts its address free, so a
-	// later case's proxy could draw it and be refused for this run. It is reserved until the cluster goes.
-	reserveIPs(t, k6FencedIP, []string{ip})
+	e.waitRunGone(t, next, goneWait) // the pending run stays fenced: its address is reserved when the case ends (kase)
 }
 
-// k6OnlyIP names the case's IP reservation; k6FencedIP the one that keeps a fenced run's address.
+// k6OnlyIP names the case's IP reservation; k6FencedIP the one that keeps every still-fenced run's address.
 const (
 	k6OnlyIP   = "k6-only-ip"
 	k6FencedIP = "k6-fenced-ip"
@@ -598,10 +601,7 @@ func caseBindDeleteSerial(t *testing.T, e *env) {
 	e.cleanupRun(t, id)
 	e.setSched(t, "") // no node satisfies the selector
 	t.Cleanup(func() { e.setSched(t, e.pin) })
-	// Refused by the selector alone: no node that "were unschedulable" stands in for the label being gone.
-	e.holdSeen(t, "the label's removal", func(msg string) bool {
-		return strings.Contains(msg, "didn't match Pod's node affinity/selector") && !strings.Contains(msg, "were unschedulable")
-	})
+	e.holdSeen(t, "the label's removal", labelGone)
 	pw := e.watchProxy(t, id)
 	ctx, cancel := context.WithCancel(bg)
 	defer cancel()
@@ -1009,8 +1009,12 @@ func caseRetainedPolicy(t *testing.T, e *env) {
 // caseNodeReuse: a Node a run used is deleted and its name comes back on a new Node object; the 30 s
 // tick records the reuse, and tier 1 then refuses (owner #8). It also records the pod GC's mark.
 func caseNodeReuse(t *testing.T, e *env) {
-	e.setSched(t, e.other)
 	t.Cleanup(func() { e.setSched(t, e.pin) })
+	// The label leaves the pin, and the scheduler holds that, before it goes to the other worker: a run
+	// created straight after a move can still be bound to the pin from the scheduler's older view.
+	e.setSched(t, "")
+	e.holdSeen(t, "the label's removal", labelGone)
+	e.setSched(t, e.other)
 	id := uuid.New()
 	e.cleanupRun(t, id)
 	if _, err := e.main.CreateSandbox(bg, e.spec(id)); err != nil {
