@@ -56,6 +56,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -526,6 +527,12 @@ func (s *Server) uiRewrite(pr *httputil.ProxyRequest) {
 	// The app sees a plain loopback Host, which is what it is bound to and what
 	// its own CSRF/host checks expect — never the run id we dial by.
 	pr.Out.Host = "localhost:" + strconv.Itoa(sess.Port)
+	// A request from the app's own page carries the gateway's origin, which is not that Host: an app that
+	// checks Origin against Host (code-server refuses its workbench's WebSocket so) would refuse its own
+	// page. That origin becomes the app's own; any other goes on as it came, for the app's check to judge.
+	if o, err := url.Parse(pr.In.Header.Get("Origin")); err == nil && o.Host != "" && strings.EqualFold(o.Host, pr.In.Host) {
+		pr.Out.Header.Set("Origin", "http://"+pr.Out.Host)
+	}
 	uiStripInbound(pr.Out, s.cfg.UICookiePolicy)
 	uiCallerHeaders(pr.Out.Header, sess)
 	if uiDesktopApp(sess.App) {
