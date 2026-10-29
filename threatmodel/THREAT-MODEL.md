@@ -1827,6 +1827,8 @@ hiding them would repeat the failure mode we are designed to avoid.
       - A person an inbound app names opens it in their own browser, so the same acknowledgement holds for them: the app's code runs with that caller's network reach.
       - That is why a named caller who is not the owner needs host mode (residual #18).
       - The app's operator named its callers and each call is recorded: `inbound.allow` and `inbound.deny` rows carry the caller, the app, the method and the path, never the query.
+      - The `inbound` grant decides who may declare a port, not whom they may name: a granted person may name any person, group or service as a caller. An administrator limits the callers only by writing the app and its callers into a ceiling or a stored policy.
+      - The run's 8 gateway connections are shared by all its apps and callers, so callers holding them can make the owner's other apps on that run wait, or answer 503.
       - A call keeps the run alive and thaws a paused one, which is intended for a service.
       - The first connection may start the owner's launcher, which the owner declared.
 

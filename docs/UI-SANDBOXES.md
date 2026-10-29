@@ -462,6 +462,8 @@ curl -sf -b jar "$UI_ORIGIN/__wardyn/enter?run=$RUN_ID&app=vscode&ticket=$TICKET
 
 - The gateway must be on (`WARDYN_UI_SANDBOX_LISTEN`). With it off there is no inbound.
 - Declaring an inbound app needs the restricted `feature` value `inbound`: nobody may until an administrator allows it, and a `*` allow grants nobody. See [Capabilities](operations/capabilities.md#inbound).
+  - The grant decides who may declare a port, not whom they may name. A granted person may name any person, group or service as a caller.
+  - An administrator limits the callers only by writing the app and its callers into a ceiling or a stored policy.
 - A profile's `deny_ui_apps` removes inbound apps with the rest, and refuses a live call to one.
 - A profile's `deny_interactive` removes inbound apps at create, with a warning, and refuses a live call.
   - A port can serve a shell, so allowing it under a no-shell profile would make the wall advisory.
@@ -510,6 +512,7 @@ curl -H "Authorization: Bearer $INBOUND_TOKEN" "$UI/r/$RUN_ID/api/health"
 - **A browser session** is re-checked as in [Bounds](#bounds), minus the owner rule for a named caller, and also refused when the run's profile now denies UI apps or interactive sessions.
 - **Host mode** adds a cross-site check to every cookie session, inbound or not. A request must be same-origin, carry no fetch metadata, or be a top-level `GET` or `HEAD` navigation, and an `Origin` header must be the request's own.
 - **Capacity** is shared: at most 8 relay connections per run, each a `socat` exec that is slower to open on Kubernetes or a remote runner. Inbound suits internal APIs and tools, not high-traffic services.
+  - The 8 are shared by all the run's apps and all its callers. Callers holding them can make the owner's other apps on that run wait, or answer `503`.
 
 ### What is recorded
 
