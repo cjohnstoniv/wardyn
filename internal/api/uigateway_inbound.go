@@ -47,8 +47,9 @@ const (
 	// lookup, the run and its effective apps are read once per window, so a revoked token, or one whose
 	// owner lost the run, stops calling within it. The session's own re-assert runs on top (uiReassertRelay).
 	inboundResolveTTL = 30 * time.Second
-	// inboundRatePerSec and inboundBurst bound the requests to one run's inbound apps, all callers together:
-	// each admitted request is an audit row, and the run's 8 relay connections are shared by all of them.
+	// inboundRatePerSec and inboundBurst bound the requests to one run's inbound apps, all callers together,
+	// and again the requests of one caller, all runs together: each admitted request is an audit row, and
+	// the run's 8 relay connections are shared by all of them.
 	inboundRatePerSec = 50.0
 	inboundBurst      = 100.0
 	// maxInboundEntries bounds each of uiInboundState's maps; past it a map is pruned wholesale, like
@@ -87,6 +88,8 @@ type uiInboundState struct {
 	sessions map[string]inboundCached
 	// buckets is each run's request bucket, with the sandbox reference its rows carry (recordStreamAudit).
 	buckets map[uuid.UUID]*inboundBucket
+	// callers is each caller's request bucket, by principal, over all the runs they call.
+	callers map[string]*inboundBucket
 }
 
 type inboundCached struct {
@@ -125,32 +128,41 @@ func (st *uiInboundState) remember(key string, sess uiSession, now time.Time) {
 	st.sessions[key] = inboundCached{sess: sess, at: now}
 }
 
-// take spends one request from runID's bucket, recording ref as the run's sandbox when it is known, and
-// answers whether the request may go and the sandbox reference the bucket holds.
-func (st *uiInboundState) take(runID uuid.UUID, now time.Time, ref string) (bool, string) {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	b := st.buckets[runID]
+// refill is k's bucket in *m, full and new when it has none, topped up to now.
+func refill[K comparable](m *map[K]*inboundBucket, k K, now time.Time) *inboundBucket {
+	b := (*m)[k]
 	if b == nil {
-		if st.buckets == nil {
-			st.buckets = map[uuid.UUID]*inboundBucket{}
-		} else if len(st.buckets) > maxInboundEntries {
-			clear(st.buckets)
+		if *m == nil {
+			*m = map[K]*inboundBucket{}
+		} else if len(*m) > maxInboundEntries {
+			clear(*m)
 		}
 		b = &inboundBucket{tokens: inboundBurst, last: now}
-		st.buckets[runID] = b
+		(*m)[k] = b
 	}
 	if elapsed := now.Sub(b.last).Seconds(); elapsed > 0 {
 		b.tokens = min(inboundBurst, b.tokens+elapsed*inboundRatePerSec)
 	}
 	b.last = now
+	return b
+}
+
+// take spends one request from runID's bucket and from principal's, recording ref as the run's sandbox when
+// it is known, and answers whether the request may go and the sandbox reference the run's bucket holds. A
+// request that either bucket refuses spends from neither, so a caller over its own limit takes nothing
+// from the run's callers.
+func (st *uiInboundState) take(runID uuid.UUID, principal string, now time.Time, ref string) (bool, string) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	b, c := refill(&st.buckets, runID, now), refill(&st.callers, principal, now)
 	if ref != "" {
 		b.ref = ref
 	}
-	if b.tokens < 1 {
+	if b.tokens < 1 || c.tokens < 1 {
 		return false, b.ref
 	}
 	b.tokens--
+	c.tokens--
 	return true, b.ref
 }
 
@@ -492,10 +504,11 @@ func (s *Server) uiInboundUnitDenies(ctx context.Context, sess uiSession, run ty
 		msg: fmt.Sprintf("Inbound apps are not allowed under the governance profile %q this run was launched under.", p.Name)}
 }
 
-// admitInbound spends an inbound session's request from its run's bucket and writes its inbound.allow row.
+// admitInbound spends an inbound session's request from its run's bucket and its caller's, and writes its
+// inbound.allow row.
 // False when it has answered: 429 inbound_rate_limited with Retry-After, its denial rate-bound like auth.fail.
 func (s *Server) admitInbound(w http.ResponseWriter, r *http.Request, sess uiSession) bool {
-	ok, ref := s.uiInbound.take(sess.Run, s.cfg.Now(), sess.SandboxRef)
+	ok, ref := s.uiInbound.take(sess.Run, sess.Principal, s.cfg.Now(), sess.SandboxRef)
 	if ref == "" {
 		// A cookie session holds no sandbox reference: read it once per bucket.
 		if run, err := s.cfg.Store.GetRun(r.Context(), sess.Run); err == nil && run.SandboxRef != "" {

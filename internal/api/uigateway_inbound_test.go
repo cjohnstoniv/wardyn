@@ -278,7 +278,7 @@ func TestUIGateway_InboundRefusalsAreInboundDenies(t *testing.T) {
 func TestUIGateway_InboundRateLimit(t *testing.T) {
 	h, _ := inboundHarness(t)
 	for range int(inboundBurst) {
-		h.srv.uiInbound.take(h.run.ID, h.clock.now(), "")
+		h.srv.uiInbound.take(h.run.ID, "someone", h.clock.now(), "")
 	}
 	rec := h.call("wdn_alice", nil)
 	if rec.Code != http.StatusTooManyRequests || respondedReason(t, rec) != reasonInboundRateLimited || rec.Header().Get("Retry-After") != "1" {
@@ -290,6 +290,31 @@ func TestUIGateway_InboundRateLimit(t *testing.T) {
 	h.clock.advance(time.Second)
 	if rec := h.call("wdn_alice", nil); rec.Code != http.StatusOK {
 		t.Fatalf("a second later = %d %s, want 200", rec.Code, rec.Body.String())
+	}
+}
+
+// TestUIGateway_InboundCallerRateLimit: a caller who spreads calls over many runs is bound by their own
+// bucket, however full each run's is; another caller, and the run's own bucket, are untouched by it.
+func TestUIGateway_InboundCallerRateLimit(t *testing.T) {
+	h, _ := inboundHarness(t, "user:bob")
+	for range int(inboundBurst) {
+		if ok, _ := h.srv.uiInbound.take(uuid.New(), "bob", h.clock.now(), ""); !ok {
+			t.Fatal("a caller's first calls, each on its own run, were refused")
+		}
+	}
+	rec := h.call("wdn_bob", nil)
+	if rec.Code != http.StatusTooManyRequests || respondedReason(t, rec) != reasonInboundRateLimited || rec.Header().Get("Retry-After") != "1" {
+		t.Fatalf("bob's call = %d %s, want 429 %s with Retry-After 1", rec.Code, rec.Body.String(), reasonInboundRateLimited)
+	}
+	if !h.audit.hasDataValue("reason", inboundDenyRateLimited) {
+		t.Errorf("no inbound.deny rate_limited; reasons: %s", h.audit.dataReasons())
+	}
+	if rec := h.call("wdn_alice", nil); rec.Code != http.StatusOK {
+		t.Fatalf("alice's call = %d %s, want 200: bob's bucket is not hers", rec.Code, rec.Body.String())
+	}
+	h.clock.advance(time.Second)
+	if rec := h.call("wdn_bob", nil); rec.Code != http.StatusOK {
+		t.Fatalf("bob a second later = %d %s, want 200", rec.Code, rec.Body.String())
 	}
 }
 

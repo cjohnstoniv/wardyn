@@ -494,7 +494,7 @@ curl -H "Authorization: Bearer $INBOUND_TOKEN" "$UI/r/$RUN_ID/api/health"
 |---|---|
 | `401` `inbound_credential_invalid`, with `WWW-Authenticate: Bearer` | The bearer is not a live inbound token. An API, CLI, admin or portal token is refused the same way |
 | `404` `inbound_not_found` | No such run, no such app, an app that is not inbound, or a holder who is neither the owner nor a caller |
-| `429` `inbound_rate_limited`, `Retry-After: 1` | The run's inbound apps are past 50 requests a second, burst 100, all callers together |
+| `429` `inbound_rate_limited`, `Retry-After: 1` | The run's inbound apps are past 50 requests a second, burst 100, all callers together, or the caller is past the same limit over all the runs they call |
 | `503` `runner_offline` | The runner holding the run is offline. Retry when it reconnects |
 | `403` `ui_gateway_cross_site` | A cookie session request from another site, in host mode (see "What Wardyn checks" below) |
 
@@ -516,6 +516,7 @@ curl -H "Authorization: Bearer $INBOUND_TOKEN" "$UI/r/$RUN_ID/api/health"
 - `inbound.allow` for each request the gateway admits and `inbound.deny` for a refusal, with the caller, app, method, path (never the query), `via` (`session` or `token`) and the matched entry. See [`inbound.allow`](AUDIT-ACTIONS.md#sessions-ssh--ui-relay).
 - Denials share the `auth.fail` rate bound, so a flood of refusals writes fewer rows than requests. A refused re-check of a session is its usual `ui.authorize` denial.
 - A busy run writes up to 50 `inbound.allow` rows a second, in bursts of up to 100, so filter them when reading the run's trail.
+  - One caller writes at most the same over all the runs they call.
 
 ## 4. Deployment
 
