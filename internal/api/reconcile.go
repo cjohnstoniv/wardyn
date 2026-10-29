@@ -694,6 +694,9 @@ func (s *Server) runWatcherTick(ctx context.Context, lastUndispatched *time.Time
 	// not frozen first; its backstop resumes a run whose request
 	// closed without a writer calling approvalClosed.
 	pass("run pause sweep", s.sweepRunPauses(ctx))
+	// A service's health, read from the state file its supervisor keeps. The read is
+	// never presence, so it does not hold a run past an idle wall.
+	pass("service health sweep", s.sweepServiceHealth(ctx))
 	// A sign-in whose run ended, whose window passed, or whose end failed.
 	pass("desktop sign-in sweep", s.sweepDesktopSignins(ctx))
 	// A VM's pause whose run ended with the agent still paused writes its row here.

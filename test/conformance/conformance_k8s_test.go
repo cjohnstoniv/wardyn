@@ -79,7 +79,7 @@ func TestConformanceK8s(t *testing.T) {
 	// "default" fallback (Config.withDefaults). ci.yml sets it to the
 	// PSS-restricted namespace it labels.
 	sub, err := k8s.New(k8s.Config{
-		Namespace:  os.Getenv("WARDYN_K8S_NAMESPACE"),
+		Namespaces: []string{os.Getenv("WARDYN_K8S_NAMESPACE")},
 		ProxyImage: proxyImage,
 		Record:     true, // the production default; see the doc comment above
 		// ConfinementRuntimes deliberately nil: this suite proves CC1 (the

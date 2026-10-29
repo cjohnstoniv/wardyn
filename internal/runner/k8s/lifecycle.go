@@ -25,7 +25,11 @@ import (
 
 // Status reports the sandbox (agent pod) lifecycle state.
 func (d *Driver) Status(ctx context.Context, ref string) (runner.Status, error) {
-	pod, err := d.clientset.CoreV1().Pods(d.cfg.Namespace).Get(ctx, ref, metav1.GetOptions{})
+	ns, err := d.refNamespace(ctx, ref)
+	if err != nil {
+		return runner.Status{}, fmt.Errorf("k8s: status: %w", err)
+	}
+	pod, err := d.clientset.CoreV1().Pods(ns).Get(ctx, ref, metav1.GetOptions{})
 	if err != nil {
 		if isNotFound(err) {
 			return runner.Status{State: types.RunStopped, Message: "sandbox not found"}, nil
@@ -174,7 +178,10 @@ func (d *Driver) KillSandbox(ctx context.Context, ref string) error {
 // ref that is not a wardyn agent pod name at all falls through to a no-op.
 func (d *Driver) teardown(ctx context.Context, ref string, gracePeriodSeconds *int64) error {
 	d.execOutputs.Delete(ref)
-	ns := d.cfg.Namespace
+	ns, err := d.refNamespace(ctx, ref)
+	if err != nil {
+		return fmt.Errorf("k8s: teardown: %w", err)
+	}
 	pod, err := d.clientset.CoreV1().Pods(ns).Get(ctx, ref, metav1.GetOptions{})
 	if err != nil {
 		if isNotFound(err) {
@@ -208,7 +215,10 @@ func (d *Driver) teardownByRunID(ctx context.Context, runID uuid.UUID, gracePeri
 		// both pods are proven stopped (design K1 §3.1, stop_proxy.go).
 		return d.teardownRunner(ctx, runID, gracePeriodSeconds)
 	}
-	ns := d.cfg.Namespace
+	ns, err := d.runNamespace(ctx, runID)
+	if err != nil {
+		return fmt.Errorf("k8s: teardown: %w", err)
+	}
 	listOpts := metav1.ListOptions{LabelSelector: labelRun + "=" + runID.String()}
 	// Never a force delete here either: a zero grace removes the pods without
 	// the kubelet confirming, and the wait below would then prove nothing.
@@ -237,6 +247,7 @@ func (d *Driver) teardownByRunID(ctx context.Context, runID uuid.UUID, gracePeri
 	if err := d.clientset.NetworkingV1().NetworkPolicies(ns).DeleteCollection(ctx, metav1.DeleteOptions{}, listOpts); err != nil && !isNotFound(err) {
 		return fmt.Errorf("k8s: teardown: delete network policies: %w", err)
 	}
+	d.runNamespaces.Delete(runID)
 	return nil
 }
 
@@ -370,7 +381,6 @@ type sweepCandidate struct {
 // PVC (never carries labelRun at all). An image check pod's labelRun is its check
 // attempt's ID, which the control plane's isOrphan spares while that attempt is live.
 func (d *Driver) sweepCandidates(ctx context.Context) ([]sweepCandidate, map[uuid.UUID]bool, error) {
-	ns := d.cfg.Namespace
 	listOpts := metav1.ListOptions{
 		LabelSelector: labelComponent + " in (" + componentAgent + "," + componentProxy + "," + componentImageCheck + ")",
 	}
@@ -378,39 +388,44 @@ func (d *Driver) sweepCandidates(ctx context.Context) ([]sweepCandidate, map[uui
 		// A runner sweeps only what it created (design K1 §3.1 RunnerID).
 		listOpts.LabelSelector += "," + runner.LabelRunnerID + "=" + d.cfg.RunnerID
 	}
-	netpols, netpolsErr := d.clientset.NetworkingV1().NetworkPolicies(ns).List(ctx, listOpts)
-	if netpolsErr != nil && !apierrors.IsForbidden(netpolsErr) {
-		return nil, nil, fmt.Errorf("k8s: list sandbox network policies for orphan sweep: %w", netpolsErr)
-	}
-	// Pods LAST (see above), and never best-effort: this verb has been granted
-	// since the substrate shipped, and without it there is no sweep at all.
-	pods, err := d.clientset.CoreV1().Pods(ns).List(ctx, listOpts)
-	if err != nil {
-		return nil, nil, fmt.Errorf("k8s: list sandbox pods for orphan sweep: %w", err)
-	}
-	if netpolsErr != nil {
-		warnSweepListForbidden(netpolsErr)
-	}
+	hasPod := map[uuid.UUID]bool{}
+	var candidates []sweepCandidate
+	// Each namespace in turn: a run's objects all live in one, so the pods-last order holds per run.
+	// The namespace an object was listed in is noted, so its teardown finds a run no pod names.
+	for _, ns := range d.cfg.Namespaces {
+		netpols, netpolsErr := d.clientset.NetworkingV1().NetworkPolicies(ns).List(ctx, listOpts)
+		if netpolsErr != nil && !apierrors.IsForbidden(netpolsErr) {
+			return nil, nil, fmt.Errorf("k8s: list sandbox network policies for orphan sweep: %w", d.inNamespace(ns, netpolsErr))
+		}
+		// Pods LAST (see above), and never best-effort: this verb has been granted
+		// since the substrate shipped, and without it there is no sweep at all.
+		pods, err := d.clientset.CoreV1().Pods(ns).List(ctx, listOpts)
+		if err != nil {
+			return nil, nil, fmt.Errorf("k8s: list sandbox pods for orphan sweep: %w", d.inNamespace(ns, err))
+		}
+		if netpolsErr != nil {
+			warnSweepListForbidden(netpolsErr)
+		}
 
-	hasPod := make(map[uuid.UUID]bool, len(pods.Items))
-	candidates := make([]sweepCandidate, 0, len(pods.Items)+len(netpols.Items))
-	add := func(meta metav1.ObjectMeta, fromPod bool) {
-		runID, perr := uuid.Parse(meta.Labels[labelRun])
-		if perr != nil {
-			return // not an object whose run id we can key teardown on
+		add := func(meta metav1.ObjectMeta, fromPod bool) {
+			runID, perr := uuid.Parse(meta.Labels[labelRun])
+			if perr != nil {
+				return // not an object whose run id we can key teardown on
+			}
+			if fromPod {
+				hasPod[runID] = true
+			}
+			d.noteNamespace(runID, ns)
+			candidates = append(candidates, sweepCandidate{runID: runID, createdAt: meta.CreationTimestamp.Time, fromPod: fromPod})
 		}
-		if fromPod {
-			hasPod[runID] = true
+		if netpolsErr == nil {
+			for i := range netpols.Items {
+				add(netpols.Items[i].ObjectMeta, false)
+			}
 		}
-		candidates = append(candidates, sweepCandidate{runID: runID, createdAt: meta.CreationTimestamp.Time, fromPod: fromPod})
-	}
-	if netpolsErr == nil {
-		for i := range netpols.Items {
-			add(netpols.Items[i].ObjectMeta, false)
+		for i := range pods.Items {
+			add(pods.Items[i].ObjectMeta, true)
 		}
-	}
-	for i := range pods.Items {
-		add(pods.Items[i].ObjectMeta, true)
 	}
 	return candidates, hasPod, nil
 }

@@ -218,6 +218,8 @@ function headingFor(c: RunPolicyChange, ownRun: boolean, person: string): { key:
   switch (c.cause) {
     case "limits":
       return { key: "limits", heading: ownRun ? CHANGE_HEADING.limitsOwn : CHANGE_HEADING.limitsOther(person) };
+    case "walls":
+      return { key: "walls", heading: ownRun ? CHANGE_HEADING.wallsOwn : CHANGE_HEADING.wallsOther(person) };
     case "unit":
       if (c.unit) return { key: `profile:${c.unit}`, heading: CHANGE_HEADING.unit(c.unit) };
       break;

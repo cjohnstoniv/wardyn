@@ -29,6 +29,7 @@ const (
 	causeGitBroker     = "git_broker"
 	causeOverlay       = "overlay"
 	causeUnit          = "unit"
+	causeWalls         = "walls"
 	causeOrgDisk       = "org_disk"
 	causePoolDisk      = "pool_disk" // the console heading is policy-tab-copy.ts pool_disk
 	causeRestart       = "restart"
@@ -38,7 +39,7 @@ const (
 
 var causeOrder = []string{
 	causeWorkspace, causeSourceControl, causeComponent, causeMirror, causeModelAccess, causeGitBroker,
-	causeOverlay, causeUnit, causeOrgDisk, causePoolDisk, causeRestart, causeLimits, causeLaunch,
+	causeOverlay, causeUnit, causeWalls, causeOrgDisk, causePoolDisk, causeRestart, causeLimits, causeLaunch,
 }
 
 // The RunPolicySpec fields a change can name, as their JSON names. The list
@@ -98,6 +99,7 @@ type auditEvidence struct {
 	diskBasis                                                                  client.MainDriveBasis // disk_mib_basis; empty on a run that predates it
 	diskDefaultSource                                                          types.LimitSource     // disk_mib_default_source, with basis default
 	legacyGitBroker                                                            bool                  // no confine row exists and the run holds a github grant
+	walls                                                                      *wallsSourceRecord    // what the launching person's walls narrowed (policy_source.personal_walls)
 }
 
 // explainRunPolicy attributes each difference between the policy a run started
@@ -276,6 +278,8 @@ func (x *explainer) evidenceCause(field, entry string, added bool) (cause, profi
 	ev := x.ev
 	allowAdded, denyAdded := field == fieldAllowed && added, field == fieldDenied && added
 	switch {
+	case x.walled(field, entry, added):
+		return causeWalls, "", nil, true
 	case allowAdded && ev.workspace[entry]:
 		return causeWorkspace, "", nil, true
 	case allowAdded && ev.sourceControl[entry]:
@@ -300,6 +304,30 @@ func (x *explainer) evidenceCause(field, entry string, added bool) (cause, profi
 		return causeRestart, "", &t, true
 	}
 	return "", "", nil, false
+}
+
+// walled is the walls rule: the entry is one the person's walls took out of the run (an allowlist
+// entry or a grant) or added to it (a deny), as the run.create row recorded, or the field is a scalar
+// knob the walls narrowed. List entries are matched exactly, so a knob the boundary also narrowed
+// keeps each of its entries with the layer that changed it. A scalar holds one value that both
+// layers may have tightened; the walls step runs first and the record cannot tell the two apart, so
+// it is the walls'.
+func (x *explainer) walled(field, entry string, added bool) bool {
+	w := x.ev.walls
+	if w == nil {
+		return false
+	}
+	switch {
+	case field == fieldAllowed && !added:
+		return slices.Contains(w.Removed[fieldAllowed], strings.ToLower(strings.TrimSpace(entry)))
+	case field == fieldGrants && !added:
+		return slices.Contains(w.Removed[fieldGrants], entry)
+	case field == fieldDenied && added:
+		return slices.Contains(w.Added[fieldDenied], strings.ToLower(strings.TrimSpace(entry)))
+	case field == fieldAllowed, field == fieldGrants, field == fieldDenied:
+		return false
+	}
+	return slices.Contains(w.Narrowed, field)
 }
 
 func (x *explainer) derivedCause(field, entry string, added bool) string {

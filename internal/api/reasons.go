@@ -321,9 +321,15 @@ const (
 	reasonWorkspaceOwningUnitDefault = "workspace_owning_unit_default" // the Default unit cannot be pinned: unpin the workspace with null instead
 	reasonBoundaryStale              = "boundary_stale"                // If-Match does not match the current boundary ETag
 	reasonBoundaryHost               = "boundary_host"                 // an egress approval would admit a host the Wardyn boundary does not allow
-	reasonGrantWithheld              = "credential_withheld"           // a mint or redeem of a grant the run's profile or the Wardyn boundary now withholds
+	reasonGrantWithheld              = "credential_withheld"           // a mint or redeem of a grant the run's profile, the Wardyn boundary or the owner's walls now withhold
 	reasonGrantWithheldUnread        = "credential_withheld_unread"    // the run, its grants, its profile or the boundary could not be read to check the mint
 	reasonBreakGlassReasonRequired   = "break_glass_reason_required"   // an admin-token break-glass run without a usable reason
+
+	// GET/PUT/DELETE /me/walls (personal_walls.go), and the walls' refusals at an approval.
+	reasonWallsInvalid      = "walls_invalid"       // the walls name a knob wider than no limit, a site that is not a DNS name or wildcard, or a list over its cap
+	reasonWallsNeedPerson   = "walls_need_person"   // the caller is no signed-in person (the admin token, local mode, a service identity)
+	reasonWallsUnavailable  = "walls_unavailable"   // the store keeps no personal settings (not the Postgres store)
+	reasonPersonalWallsHost = "personal_walls_host" // an egress approval would admit a host the run owner's walls deny
 
 	// /governance/approval-rules, and an approval rule's own refusals inside decide().
 	reasonApprovalRuleInvalid       = "approval_rule_invalid"        // the rule document names an unknown kind, a glob, a wildcard host, a scope other than once or run, or no repo or preset

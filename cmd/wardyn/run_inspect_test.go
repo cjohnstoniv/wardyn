@@ -91,3 +91,27 @@ func TestRunGetCmd_PrintsTheADOLaneDecline(t *testing.T) {
 		}
 	}
 }
+
+// `run get` prints a service's health on one line, and nothing of the kind for a run that is not a service.
+func TestServiceLine(t *testing.T) {
+	now := time.Now()
+	svc := &types.RunService{Restart: types.ServiceRestartOnFailure}
+	status := func(h types.ServiceHealthState, reason string, restarts int, ago time.Duration) *types.RunServiceStatus {
+		return &types.RunServiceStatus{Health: h, Reason: reason, Restarts: restarts, ObservedAt: now.Add(-ago)}
+	}
+	for _, tc := range []struct {
+		name string
+		run  types.AgentRun
+		want string
+	}{
+		{"healthy", types.AgentRun{Service: svc, ServiceStatus: status(types.ServiceHealthHealthy, "", 3, 40*time.Second)}, "service: healthy \u00b7 3 restarts \u00b7 checked 40s ago"},
+		{"one restart, minutes", types.AgentRun{Service: svc, ServiceStatus: status(types.ServiceHealthStarting, "", 1, 5*time.Minute+9*time.Second)}, "service: starting \u00b7 1 restart \u00b7 checked 5m ago"},
+		{"unhealthy carries its reason", types.AgentRun{Service: svc, ServiceStatus: status(types.ServiceHealthUnhealthy, "probe_failing", 0, 3*time.Hour)}, "service: unhealthy (probe_failing) \u00b7 0 restarts \u00b7 checked 3h ago"},
+		{"not observed yet", types.AgentRun{Service: svc}, "service: not checked yet"},
+		{"not a service", types.AgentRun{ServiceStatus: status(types.ServiceHealthHealthy, "", 0, 0)}, ""},
+	} {
+		if got := serviceLine(tc.run, now); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}

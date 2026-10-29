@@ -739,6 +739,10 @@ var routeMatrix = map[string]classifiedRoute{
 	// caller's own principal, so there is no foreign row to 404 on.
 	"GET /api/v1/me/run-layout": {class: classMember},
 	"PUT /api/v1/me/run-layout": {class: classMember},
+	// The same shape: the caller's own walls (personal_walls.go), keyed by their session.
+	"GET /api/v1/me/walls":    {class: classMember},
+	"PUT /api/v1/me/walls":    {class: classMember},
+	"DELETE /api/v1/me/walls": {class: classMember},
 	// The same shape again: the store scopes the list to the caller's own runs.
 	"GET /api/v1/me/launch-intents": {class: classMember},
 	"GET /api/v1/policies":          {class: classMember},

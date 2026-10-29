@@ -78,6 +78,7 @@ const (
 type env struct {
 	admin, sa                                        kubernetes.Interface
 	runsNS, ownNS, saName, runnerID, relayIP, orgURL string
+	extraNS                                          string // the runner's second runs namespace
 	proxyImage, agentImage, arch                     string
 	peerLabels                                       map[string]string
 	pin, other                                       string // the two workers: pin carries runs, other is spare
@@ -114,7 +115,7 @@ func TestK6(t *testing.T) {
 	}
 	e := &env{
 		admin: kubernetes.NewForConfigOrDie(adminCfg), sa: kubernetes.NewForConfigOrDie(saCfg),
-		runsNS: must(t, "K6_RUNS_NS"), ownNS: must(t, "K6_OWN_NS"), saName: must(t, "K6_SA"),
+		runsNS: must(t, "K6_RUNS_NS"), extraNS: must(t, "K6_EXTRA_RUNS_NS"), ownNS: must(t, "K6_OWN_NS"), saName: must(t, "K6_SA"),
 		runnerID: must(t, "K6_RUNNER_ID"), relayIP: must(t, "K6_RELAY_IP"), orgURL: must(t, "K6_ORG_URL"),
 		proxyImage: must(t, "WARDYN_PROXY_IMAGE"), agentImage: must(t, "K6_AGENT_IMAGE"),
 		arch:  must(t, "K6_ARCH"),
@@ -193,6 +194,7 @@ func TestK6(t *testing.T) {
 	kase("crash-gaps-orphan-sweep", caseCrashGapsSweep)
 	kase("hard-deny-in-proxy-config", caseHardDenyConfig)
 	kase("retained-policy-probe", caseRetainedPolicy)
+	kase("runs-namespaces", caseRunsNamespaces)
 	kase("node-name-reuse-tick", caseNodeReuse) // last: it restarts a kind node
 	for _, r := range results {
 		fmt.Println(r)
@@ -490,9 +492,16 @@ func newFakeControlPlane(t *testing.T, host, apiserver string) *fakeControlPlane
 
 // --- driver and runs ----------------------------------------------------------------------------
 
-// newDriver builds a runner-mode Driver as runnerd's k8sRunnerHooks does, over v. Its boot canary
-// runs on the pin node, so the pin node is labelled and schedulable first.
+// newDriver builds a runner-mode Driver as runnerd's k8sRunnerHooks does, over v, placing runs in the
+// runs namespace.
 func (e *env) newDriver(t *testing.T, v *view) *k8s.Driver {
+	t.Helper()
+	return e.newDriverIn(t, v, e.runsNS)
+}
+
+// newDriverIn is newDriver over namespaces, the first being the default. Its boot canary runs on the
+// pin node, so the pin node is labelled and schedulable first.
+func (e *env) newDriverIn(t *testing.T, v *view, namespaces ...string) *k8s.Driver {
 	t.Helper()
 	e.setSched(t, e.pin)
 	e.cordon(t, e.pin, false)
@@ -501,7 +510,7 @@ func (e *env) newDriver(t *testing.T, v *view) *k8s.Driver {
 		t.Fatal(err)
 	}
 	d, err := k8s.NewRunner(substrate.Deps{ProxyImage: e.proxyImage}, func(c *k8s.Config) {
-		c.Namespace = e.runsNS
+		c.Namespaces = namespaces
 		c.RunnerID = e.runnerID
 		// Mirrors relay.Ensure (cmd/wardyn-runnerd/relay_k8s.go): the URL must use the relay Service's port.
 		// The address it returns is the fake control plane's, so the proxy's hostAlias maps the org host to it.
@@ -564,22 +573,25 @@ func proxyName(id uuid.UUID) string { return "wardyn-proxy-" + id.String() }
 
 // cleanupRun strips every finalizer from the run's pods and deletes what is left, so one case's
 // leftovers never reach the next. It runs after a case's assertions.
-func (e *env) cleanupRun(t *testing.T, id uuid.UUID) {
+func (e *env) cleanupRun(t *testing.T, id uuid.UUID) { e.cleanupRunIn(t, e.runsNS, id) }
+
+// cleanupRunIn is cleanupRun for a run in namespace ns.
+func (e *env) cleanupRunIn(t *testing.T, ns string, id uuid.UUID) {
 	e.runs.add(id.String())
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
 		sel := metav1.ListOptions{LabelSelector: labelRun + "=" + id.String()}
-		pods, _ := e.admin.CoreV1().Pods(e.runsNS).List(ctx, sel)
+		pods, _ := e.admin.CoreV1().Pods(ns).List(ctx, sel)
 		zero := int64(0)
 		for _, p := range pods.Items {
-			_, _ = e.admin.CoreV1().Pods(e.runsNS).Patch(ctx, p.Name, k8stypes.MergePatchType, []byte(`{"metadata":{"finalizers":null}}`), metav1.PatchOptions{})
-			_ = e.admin.CoreV1().Pods(e.runsNS).Delete(ctx, p.Name, metav1.DeleteOptions{GracePeriodSeconds: &zero})
+			_, _ = e.admin.CoreV1().Pods(ns).Patch(ctx, p.Name, k8stypes.MergePatchType, []byte(`{"metadata":{"finalizers":null}}`), metav1.PatchOptions{})
+			_ = e.admin.CoreV1().Pods(ns).Delete(ctx, p.Name, metav1.DeleteOptions{GracePeriodSeconds: &zero})
 		}
-		_ = e.admin.NetworkingV1().NetworkPolicies(e.runsNS).DeleteCollection(ctx, metav1.DeleteOptions{}, sel)
-		_ = e.admin.CoreV1().Secrets(e.runsNS).DeleteCollection(ctx, metav1.DeleteOptions{}, sel)
+		_ = e.admin.NetworkingV1().NetworkPolicies(ns).DeleteCollection(ctx, metav1.DeleteOptions{}, sel)
+		_ = e.admin.CoreV1().Secrets(ns).DeleteCollection(ctx, metav1.DeleteOptions{}, sel)
 		_ = wait.PollUntilContextTimeout(ctx, 500*time.Millisecond, time.Minute, true, func(ctx context.Context) (bool, error) {
-			l, err := e.admin.CoreV1().Pods(e.runsNS).List(ctx, sel)
+			l, err := e.admin.CoreV1().Pods(ns).List(ctx, sel)
 			return err == nil && len(l.Items) == 0, nil
 		})
 	})
@@ -595,10 +607,15 @@ func (e *env) dump(t *testing.T, ids []string) {
 
 // runGone reports whether every object of the run is gone.
 func (e *env) runGone(ctx context.Context, id uuid.UUID) (bool, string) {
+	return e.runGoneIn(ctx, e.runsNS, id)
+}
+
+// runGoneIn is runGone for a run in namespace ns.
+func (e *env) runGoneIn(ctx context.Context, ns string, id uuid.UUID) (bool, string) {
 	sel := metav1.ListOptions{LabelSelector: labelRun + "=" + id.String()}
-	pods, err1 := e.admin.CoreV1().Pods(e.runsNS).List(ctx, sel)
-	pols, err2 := e.admin.NetworkingV1().NetworkPolicies(e.runsNS).List(ctx, sel)
-	secs, err3 := e.admin.CoreV1().Secrets(e.runsNS).List(ctx, sel)
+	pods, err1 := e.admin.CoreV1().Pods(ns).List(ctx, sel)
+	pols, err2 := e.admin.NetworkingV1().NetworkPolicies(ns).List(ctx, sel)
+	secs, err3 := e.admin.CoreV1().Secrets(ns).List(ctx, sel)
 	if err := errors.Join(err1, err2, err3); err != nil {
 		return false, err.Error()
 	}

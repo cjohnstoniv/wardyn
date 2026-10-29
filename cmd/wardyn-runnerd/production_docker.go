@@ -415,6 +415,8 @@ type runtimeExtras struct {
 	localModelRelay bool
 	// localModelPorts are --local-model-port, advertised as the runner's local_model_ports.
 	localModelPorts []uint16
+	// runsNamespaces are a k8s runner's --runs-namespace, advertised as its runs_namespaces.
+	runsNamespaces []string
 }
 
 // proxySettings are the run proxy settings the caps name: every one this build carries, and the

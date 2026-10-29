@@ -101,6 +101,26 @@ func TestSubstrateFlagChecks(t *testing.T) {
 	}
 }
 
+// TestRunsNamespacesCheck: every --runs-namespace is dedicated and named once (design T5 §2.7).
+func TestRunsNamespacesCheck(t *testing.T) {
+	if err := checkRunsNamespaces([]string{"team-a", "team-b"}, "wardyn-runner"); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		runs []string
+		own  string
+	}{
+		{[]string{"team-a", "wardyn-runner"}, "wardyn-runner"},
+		{[]string{"team-a", "team-a"}, "wardyn-runner"},
+		{[]string{"team-a", ""}, "wardyn-runner"},
+		{[]string{"team-a"}, ""},
+	} {
+		if err := checkRunsNamespaces(tc.runs, tc.own); err == nil {
+			t.Errorf("--runs-namespace %q with runnerd in %q accepted", tc.runs, tc.own)
+		}
+	}
+}
+
 func TestOrgHTTPClientTrustsBundle(t *testing.T) {
 	if c, err := orgHTTPClient(""); c != nil || err != nil {
 		t.Fatalf("no bundle: %v %v", c, err)
