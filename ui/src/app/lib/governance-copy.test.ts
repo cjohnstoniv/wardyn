@@ -96,6 +96,8 @@ const rendered: Record<string, string> = {
   LIMIT_EXEC_HINT: GOVERNANCE.LIMIT_EXEC_HINT,
   LIMIT_INTERACTIVE_LABEL: GOVERNANCE.LIMIT_INTERACTIVE_LABEL,
   LIMIT_INTERACTIVE_HINT: GOVERNANCE.LIMIT_INTERACTIVE_HINT,
+  LIMIT_INTERACTIVE_INBOUND: GOVERNANCE.LIMIT_INTERACTIVE_INBOUND,
+  LIMIT_UI_APPS_HINT: GOVERNANCE.LIMIT_UI_APPS_HINT,
   GRADE_NOTE: GOVERNANCE.GRADE_NOTE,
   SAVE: GOVERNANCE.SAVE,
   LIMIT_DRIVE_LABEL: GOVERNANCE.LIMIT_DRIVE_LABEL,
@@ -221,8 +223,8 @@ const rendered: Record<string, string> = {
 const NUMERIC_TEMPLATE = ["RUBRIC.SET_NOTE(n, level)"];
 
 describe("governance-copy — §7.2-§7.13 parsed out of the prompt doc", () => {
-  it("finds all 150 frozen keys in the doc", () => {
-    expect(doc.size).toBe(150);
+  it("finds all 152 frozen keys in the doc", () => {
+    expect(doc.size).toBe(152);
   });
 
   it("covers every doc key, and freezes no key the doc doesn't", () => {
