@@ -21,8 +21,33 @@ import (
 // every PATCH is; the bounds are the pool's and deployment's lifetime cap, which this
 // never passes. While the service is starting or healthy and its end is within half a
 // unit, the lease sweep moves the end to now plus the furthest the walls allow, so a
-// healthy service lives as long as its walls let it. An unhealthy one is not renewed
-// and ends at its lease, with the usual run.ending_soon warnings.
+// healthy service lives as long as its walls let it. An unhealthy one, or one
+// not heard from lately (renewalHealth), is not renewed and ends at its lease, with the usual run.ending_soon warnings.
+
+// serviceStatusStale is how old a service's last health observation may be before renewal reads
+// it as unknown: two of the health sweep's refresh writes missed (serviceStatusRefresh), so no
+// replica is reading the run any more (the one holding its runner is gone).
+const serviceStatusStale = 2 * serviceStatusRefresh
+
+// renewalHealth is a service's health as renewal reads it: the last observation while it is fresh;
+// with none yet, starting inside the supervisor's grace from the run's start (the rule
+// serviceObservation applies to a missing state file); unknown otherwise.
+func renewalHealth(run types.AgentRun, now time.Time) types.ServiceHealthState {
+	if st := run.ServiceStatus; st != nil {
+		if now.Sub(st.ObservedAt) > serviceStatusStale {
+			return types.ServiceHealthUnknown
+		}
+		return st.Health
+	}
+	since := run.CreatedAt
+	if run.AdmittedAt != nil {
+		since = *run.AdmittedAt
+	}
+	if now.Sub(since) < serviceSupervisorGrace {
+		return types.ServiceHealthStarting
+	}
+	return types.ServiceHealthUnknown
+}
 
 // serviceRenewal is one renewal planServiceRenewal decided on.
 type serviceRenewal struct {
@@ -34,15 +59,12 @@ type serviceRenewal struct {
 
 // planServiceRenewal is the end a service run's lease is renewed to now, or false for none.
 // boundarySec is the boundary's end maximum in seconds, 0 for none. A run with no lease
-// unit has no end to renew; a run with no health observation yet counts as starting.
+// unit has no end to renew; health is renewalHealth's, so a stale observation renews nothing.
 func planServiceRenewal(run types.AgentRun, boundarySec int, now time.Time) (serviceRenewal, bool) {
 	if run.Service == nil || run.EndsAt == nil || run.LostAt != nil || run.PausedAt != nil {
 		return serviceRenewal{}, false
 	}
-	health := types.ServiceHealthStarting
-	if run.ServiceStatus != nil {
-		health = run.ServiceStatus.Health
-	}
+	health := renewalHealth(run, now)
 	if health != types.ServiceHealthStarting && health != types.ServiceHealthHealthy {
 		return serviceRenewal{}, false
 	}

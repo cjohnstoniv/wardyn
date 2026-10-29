@@ -18,7 +18,7 @@ import (
 func leaseServiceRun(now time.Time, endsIn time.Duration, l types.RunLimits) types.AgentRun {
 	end := now.Add(endsIn)
 	return types.AgentRun{
-		Experience: types.ExperienceBackground, EndsAt: &end, RunLimits: l,
+		CreatedAt: now.Add(-time.Minute), Experience: types.ExperienceBackground, EndsAt: &end, RunLimits: l,
 		Service: &types.RunService{Restart: types.ServiceRestartOnFailure},
 	}
 }
@@ -49,6 +49,21 @@ func TestPlanServiceRenewal(t *testing.T) {
 		{name: "outside the half-life", endsIn: hour + time.Second, limits: lease},
 		{name: "unhealthy is never renewed", endsIn: time.Minute, limits: lease, mutate: func(r *types.AgentRun) { r.ServiceStatus = status(types.ServiceHealthUnhealthy) }},
 		{name: "unknown is never renewed", endsIn: time.Minute, limits: lease, mutate: func(r *types.AgentRun) { r.ServiceStatus = status(types.ServiceHealthUnknown) }},
+		{name: "a stale observation is unknown", endsIn: time.Minute, limits: lease, mutate: func(r *types.AgentRun) {
+			r.ServiceStatus = status(types.ServiceHealthHealthy)
+			r.ServiceStatus.ObservedAt = now.Add(-serviceStatusStale - time.Second)
+		}},
+		{name: "an observation at the stale mark still counts", endsIn: time.Minute, limits: lease, mutate: func(r *types.AgentRun) {
+			r.ServiceStatus = status(types.ServiceHealthHealthy)
+			r.ServiceStatus.ObservedAt = now.Add(-serviceStatusStale)
+		}, want: 2 * hour, unit: 7200, source: types.LimitSourceGovernance, health: types.ServiceHealthHealthy},
+		{name: "no observation past the supervisor's grace is unknown", endsIn: time.Minute, limits: lease, mutate: func(r *types.AgentRun) {
+			r.CreatedAt = now.Add(-serviceSupervisorGrace)
+		}},
+		{name: "the grace runs from admission for a queued run", endsIn: time.Minute, limits: lease, mutate: func(r *types.AgentRun) {
+			r.CreatedAt = now.Add(-time.Hour)
+			r.AdmittedAt = at(-time.Minute)
+		}, want: 2 * hour, unit: 7200, source: types.LimitSourceGovernance, health: types.ServiceHealthStarting},
 		{name: "not a service", endsIn: time.Minute, limits: lease, mutate: func(r *types.AgentRun) { r.Service = nil }},
 		{name: "no end", endsIn: time.Minute, limits: lease, mutate: func(r *types.AgentRun) { r.EndsAt = nil }},
 		{name: "lost", endsIn: time.Minute, limits: lease, mutate: func(r *types.AgentRun) { r.LostAt = at(-time.Minute) }},
@@ -96,10 +111,12 @@ func TestPlanServiceRenewal(t *testing.T) {
 	}
 }
 
-// newServiceLeaseFixture is a lease fixture whose run is a service with a two-hour lease.
+// newServiceLeaseFixture is a lease fixture whose run is a service with a two-hour lease, started a
+// minute ago: with no health observation it is still starting (renewalHealth).
 func newServiceLeaseFixture(t *testing.T, endsIn time.Duration) *leaseFixture {
 	t.Helper()
 	f := newLeaseFixture(t, endsIn)
+	f.st.run.CreatedAt = f.now.Add(-time.Minute)
 	f.st.run.Experience = types.ExperienceBackground
 	f.st.run.Service = &types.RunService{Restart: types.ServiceRestartOnFailure}
 	f.st.run.RunLimits = types.RunLimits{MaxEndAheadSec: 7200}
@@ -236,5 +253,27 @@ func TestRunLease_ARenewalNeedsTheOwnersAuthorityToExtend(t *testing.T) {
 				t.Errorf("%d run.ending_soon rows, want the normal warning", n)
 			}
 		})
+	}
+}
+
+// A runner no replica holds keeps its last status forever: renewal reads an old one as unknown.
+func TestRunLease_AServiceNotHeardFromIsNotRenewed(t *testing.T) {
+	for name, mutate := range map[string]func(f *leaseFixture){
+		"a stale observation": func(f *leaseFixture) {
+			f.st.run.ServiceStatus = &types.RunServiceStatus{Health: types.ServiceHealthHealthy,
+				ObservedAt: f.now.Add(-serviceStatusStale - time.Minute)}
+		},
+		"no observation past the grace": func(f *leaseFixture) { f.st.run.CreatedAt = f.now.Add(-time.Hour) },
+	} {
+		f := newServiceLeaseFixture(t, 30*time.Minute)
+		mutate(f)
+		end := f.endsAt()
+		f.sweep(t)
+		if got := f.endsAt(); !got.Equal(end) {
+			t.Errorf("%s: ends_at moved to %v", name, got)
+		}
+		if n := len(f.audit.eventsFor(f.run.ID, "run.end.set")); n != 0 {
+			t.Errorf("%s: %d run.end.set rows, want none", name, n)
+		}
 	}
 }
