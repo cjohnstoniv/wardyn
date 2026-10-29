@@ -48,6 +48,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -530,7 +531,7 @@ func (s *Server) uiRewrite(pr *httputil.ProxyRequest) {
 	// A request from the app's own page carries the gateway's origin, which is not that Host: an app that
 	// checks Origin against Host (code-server refuses its workbench's WebSocket so) would refuse its own
 	// page. That origin becomes the app's own; any other goes on as it came, for the app's check to judge.
-	if o, err := url.Parse(pr.In.Header.Get("Origin")); err == nil && o.Host != "" && strings.EqualFold(o.Host, pr.In.Host) {
+	if s.uiOwnOrigin(pr.In) {
 		pr.Out.Header.Set("Origin", "http://"+pr.Out.Host)
 	}
 	uiStripInbound(pr.Out, s.cfg.UICookiePolicy)
@@ -538,6 +539,18 @@ func (s *Server) uiRewrite(pr *httputil.ProxyRequest) {
 	if uiDesktopApp(sess.App) {
 		pr.Out.Header.Del("Sec-WebSocket-Extensions") // compression would hide the RFB stream (uiFilterUpgrade)
 	}
+}
+
+// uiOwnOrigin reports whether r names the gateway's own origin: its Origin's host is r's Host, and its
+// scheme the one the gateway is reached by (the origin template's in host mode, the advertised URL's in path
+// mode). A missing Origin, "null" and any other scheme or port are not.
+func (s *Server) uiOwnOrigin(r *http.Request) bool {
+	u, err := url.Parse(r.Header.Get("Origin"))
+	if err != nil || u.Host == "" || !strings.EqualFold(u.Host, r.Host) {
+		return false
+	}
+	scheme, _, _ := strings.Cut(cmp.Or(s.cfg.UIOriginTemplate, s.cfg.UIAdvertiseURL, "http://"), "://")
+	return strings.EqualFold(u.Scheme, scheme)
 }
 
 // uiStripInbound is the sandbox-ward half of the header hygiene. Cookies are

@@ -1113,17 +1113,28 @@ func TestUIGateway_RelayGivesTheAppItsOwnOrigin(t *testing.T) {
 		_, _ = io.WriteString(w, "ok")
 	}))
 	cookie := h.openSession()
+	const own = "own" // the app's own origin, http://<the Host it is sent>
 	for _, tc := range []struct{ name, origin, want string }{
-		{"own page", "http://example.com", ""},
+		{"own page", "https://ui.example.com", own},
+		{"own page, host in another case", "https://UI.example.com", own},
 		{"foreign page", "https://evil.example", "https://evil.example"},
+		{"own host by another scheme", "http://ui.example.com", "http://ui.example.com"},
+		{"own host on another port", "https://ui.example.com:8443", "https://ui.example.com:8443"},
+		{"null", "null", "null"},
+		{"no Origin", "", ""},
 	} {
-		rec := h.relay("/", cookie, func(r *http.Request) { r.Header.Set("Origin", tc.origin) })
+		rec := h.relay("/", cookie, func(r *http.Request) {
+			r.Host = "ui.example.com" // the advertised gateway (UIAdvertiseURL)
+			if tc.origin != "" {
+				r.Header.Set("Origin", tc.origin)
+			}
+		})
 		if rec.Code != http.StatusOK {
 			t.Fatalf("%s: relay %d %s", tc.name, rec.Code, rec.Body.String())
 		}
 		got := <-seen
 		want := tc.want
-		if want == "" {
+		if want == own {
 			want = "http://" + got.Host
 		}
 		if o := got.Header.Get("Origin"); o != want {
