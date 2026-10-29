@@ -110,9 +110,10 @@ func newWorkloadWatcher(ctx context.Context, client dynamic.Interface, namespace
 		inf := dynamicinformer.NewFilteredDynamicInformer(client, workloadGVR, ns, 0, cache.Indexers{}, nil).Informer()
 		reg, err := inf.AddEventHandler(cache.ResourceEventHandlerFuncs{
 			AddFunc: func(obj any) { w.applied(ns, obj) },
-			// A status write or a resync is an update that leaves metadata.generation alone.
+			// A status write or a resync is an update that leaves metadata.generation alone. A new uid
+			// is a delete and re-create the informer saw as one update, and starts at the same generation.
 			UpdateFunc: func(old, cur any) {
-				if workloadGeneration(old) != workloadGeneration(cur) {
+				if workloadGeneration(old) != workloadGeneration(cur) || workloadUID(old) != workloadUID(cur) {
 					w.applied(ns, cur)
 				}
 			},
@@ -131,6 +132,13 @@ func workloadGeneration(obj any) int64 {
 		return u.GetGeneration()
 	}
 	return 0
+}
+
+func workloadUID(obj any) k8stypes.UID {
+	if u, ok := obj.(*unstructured.Unstructured); ok {
+		return u.GetUID()
+	}
+	return ""
 }
 
 // attach wires the watcher into a runtime: it learns the session from the Online and StreamOffline

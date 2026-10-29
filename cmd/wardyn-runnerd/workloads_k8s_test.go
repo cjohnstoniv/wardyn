@@ -137,7 +137,7 @@ func TestWorkloadWatcherReportsEverythingAfterSync(t *testing.T) {
 	events.none(t)
 }
 
-// TestWorkloadWatcherLiveEvents: an add and a changed generation apply, a status-only update says
+// TestWorkloadWatcherLiveEvents: an add, a changed generation and a changed uid apply, a status-only update says
 // nothing, and a delete carries the uid.
 func TestWorkloadWatcherLiveEvents(t *testing.T) {
 	client := fakeWorkloadClient()
@@ -170,10 +170,20 @@ func TestWorkloadWatcherLiveEvents(t *testing.T) {
 		t.Fatalf("generation change: %+v", a)
 	}
 
+	// A re-created resource the informer saw as one update: the uid changed, the generation did not.
+	recreated := workloadCR("team-a", "bot", 2, intentSpec("./two"))
+	recreated.SetUID("uid-bot-2")
+	if _, err := crs.Update(ctx, recreated, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if a := events.next(t); a.Op != runnerwire.WorkloadOpApply || a.Generation != 2 || a.UID != "uid-bot-2" {
+		t.Fatalf("uid change: %+v, want an apply of the new uid", a)
+	}
+
 	if err := crs.Delete(ctx, "bot", metav1.DeleteOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if d := events.next(t); d.Op != runnerwire.WorkloadOpDelete || d.Name != "bot" || d.UID != "uid-bot" || d.Generation != 0 || len(d.Spec) != 0 {
+	if d := events.next(t); d.Op != runnerwire.WorkloadOpDelete || d.Name != "bot" || d.UID != "uid-bot-2" || d.Generation != 0 || len(d.Spec) != 0 {
 		t.Fatalf("delete: %+v", d)
 	}
 }
