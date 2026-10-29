@@ -64,7 +64,8 @@ export function agoText(iso: string, now: number): string {
 /** The Review row: Service · restarts when it fails · checks port 8080 /healthz every 15 s. */
 export function serviceReviewLine(s: RunService): string {
   const parts = ["Service", s.restart === "never" ? "doesn't restart" : "restarts when it fails"];
-  if (s.port) {
+  // No health block runs no probe, so the line says nothing about a check.
+  if (s.port && s.health) {
     const h = s.health;
     parts.push(`checks port ${s.port}${h?.path ? ` ${h.path}` : ""} every ${h?.interval_sec || DEFAULT_HEALTH_INTERVAL_SEC} s`);
   }

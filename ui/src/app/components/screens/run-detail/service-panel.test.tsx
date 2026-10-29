@@ -78,6 +78,11 @@ describe("ServicePanel", () => {
     expect(row(T.CHECK)).toHaveTextContent(/^None$/);
   });
 
+  it("a port with no health block runs no probe, so the check reads None", () => {
+    show({ restart: "on_failure", port: 8080 }, status({ health: "healthy" }));
+    expect(row(T.CHECK)).toHaveTextContent(/^None$/);
+  });
+
   it("draws nothing for a run that is not a live service", () => {
     const { container, unmount } = show(undefined);
     expect(container).toBeEmptyDOMElement();

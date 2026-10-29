@@ -14,9 +14,9 @@ import { Chip, WidgetCard } from "../../wardyn/primitives";
 import { weekdayClock } from "./run-ends-row";
 
 function checkText(s: RunService): string {
-  if (!s.port) return T.CHECK_NONE;
-  const sec = s.health?.interval_sec || DEFAULT_HEALTH_INTERVAL_SEC;
-  return s.health?.path ? T.CHECK_HTTP(s.health.path, s.port, sec) : T.CHECK_TCP(s.port, sec);
+  if (!s.port || !s.health) return T.CHECK_NONE;
+  const sec = s.health.interval_sec || DEFAULT_HEALTH_INTERVAL_SEC;
+  return s.health.path ? T.CHECK_HTTP(s.health.path, s.port, sec) : T.CHECK_TCP(s.port, sec);
 }
 
 /** The one sentence a state's reason has, with its tone: warning while the service is failing, neutral while Wardyn cannot tell. */
