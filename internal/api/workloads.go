@@ -644,7 +644,7 @@ func (s *Server) handleWorkloadHistory(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	filter := store.AuditFilter{ActionPrefix: "workload.", Target: v.Owner + "/" + v.Name}
+	filter := store.AuditFilter{ActionPrefix: "workload.", Target: v.Owner + "/" + v.Name, Origin: store.AuditOriginOrganisation}
 	servePage(w, r, page, func(p store.Page) ([]client.WorkloadEvent, error) {
 		evs, err := pager.QueryAuditEventsFilteredPage(r.Context(), nil, filter, p)
 		out := make([]client.WorkloadEvent, 0, len(evs))
