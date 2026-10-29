@@ -80,6 +80,12 @@ describe("override narrowing table", () => {
 });
 
 describe("run-wide egress scalars", () => {
+  it("allow_all_egress narrow (false) is a tightening the server always allows", () => {
+    expect(overrideRule("allow_all_egress", "narrow")).toMatchObject({ direction: "tighten", rule: "allowed" });
+    expect(overrideOffered("allow_all_egress", "narrow")).toBe(true);
+    expect(overrideMayBeClamped("allow_all_egress", "narrow")).toBe(false);
+  });
+
   it("are widening rows the ceiling clamps, never plainly allowed or refused", () => {
     for (const kind of ["first_use_approval", "allow_all_egress"] as const) {
       expect(overrideRule(kind, "set")).toMatchObject({ direction: "widen", rule: "ceiling_clamped" });
