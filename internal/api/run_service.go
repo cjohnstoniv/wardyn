@@ -75,12 +75,19 @@ func serviceEnv(env map[string]string, s *types.RunService) {
 // Background exclusion, so a service that waits for requests is frozen. No profile number is disclosed.
 const servicePauseWarning = "Your admin pauses runs nobody is using, so this service will be paused while it waits for requests."
 
-// serviceCreateWarnings are the sentences a service's 201 carries.
-func serviceCreateWarnings(run types.AgentRun) []string {
-	if run.Service != nil && run.RunLimits.PauseIdleAfterSec > 0 {
+// servicePauseWarnings is the pause sentence for a service under an idle pause of pauseAfterSec: the 201
+// carries it from the run's captured limit, and the two read doors from the caller's ceiling, so New Run
+// says it before the launch (the same test the placement demands make).
+func servicePauseWarnings(hasService bool, pauseAfterSec int) []string {
+	if hasService && pauseAfterSec > 0 {
 		return []string{servicePauseWarning}
 	}
 	return nil
+}
+
+// serviceCreateWarnings are the sentences a service's 201 carries.
+func serviceCreateWarnings(run types.AgentRun) []string {
+	return servicePauseWarnings(run.Service != nil, run.RunLimits.PauseIdleAfterSec)
 }
 
 // queuedServiceWarnings are serviceCreateWarnings for a run waiting in a pool's queue. Its limits are

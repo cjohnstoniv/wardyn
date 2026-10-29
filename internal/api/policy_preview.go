@@ -80,6 +80,8 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 	if f.adoNarrowed != "" {
 		response.Warnings = append(response.Warnings, f.adoNarrowed)
 	}
+	// A service under an idle pause is frozen while it waits for requests. The sentence names no limit.
+	response.Warnings = append(response.Warnings, servicePauseWarnings(f.req.Service != nil, f.ceiling.Limits.PauseIdleAfterSec)...)
 	// Run-level, never per repository group: the groups include devcontainer_repo,
 	// which the server clones and the lane never serves.
 	response.ADOLaneDeclined = string(f.adoDecline)

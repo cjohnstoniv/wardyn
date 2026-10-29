@@ -7,7 +7,8 @@ import { Input } from "../../../../ui/input";
 import { Label } from "../../../../ui/label";
 import { Segmented } from "../../../../wardyn/segmented";
 import { Switch } from "../../../../wardyn/form-primitives";
-import { DEFAULT_HEALTH_FAILURES, DEFAULT_HEALTH_INTERVAL_SEC, SERVICE_FORM as T, SERVICE_FORM_ERRORS as E } from "../../../../wardyn/copy/run-service";
+import { TriangleAlert } from "lucide-react";
+import { DEFAULT_HEALTH_FAILURES, DEFAULT_HEALTH_INTERVAL_SEC, SERVICE_FORM as T, SERVICE_FORM_ERRORS as E, SERVICE_PAUSE_WARNING } from "../../../../wardyn/copy/run-service";
 import type { RunService } from "../../../../../lib/types/runs";
 import { serviceProblems, type ServiceField } from "../../lenses/service-lens";
 
@@ -17,6 +18,8 @@ export interface ServiceSectionProps {
   onRestart: (restart: RunService["restart"]) => void;
   onPort: (port: number) => void;
   onHealth: (patch: Partial<NonNullable<RunService["health"]>>) => void;
+  /** The checks say the person's limits pause idle runs, which freezes a service that waits for requests. */
+  pauses?: boolean;
 }
 
 /** Digits only: a half-typed number is 0 until it parses, and the server fills a health check's 0 with its default. */
@@ -27,7 +30,7 @@ const FIELD_ID: Record<ServiceField, string> = { port: "nr-service-port", path: 
 const FIELD_TEXT: Record<ServiceField, string> = { port: E.PORT_INVALID, path: E.PATH_INVALID, interval: E.EVERY_INVALID, failures: E.FAILURES_INVALID };
 
 /** "Keep it running" under an Automation / script's command: restart it when it fails, and check it on a port inside the sandbox. */
-export function ServiceSection({ service, onKeepRunning, onRestart, onPort, onHealth }: ServiceSectionProps) {
+export function ServiceSection({ service, onKeepRunning, onRestart, onPort, onHealth, pauses }: ServiceSectionProps) {
   const health = service?.health;
   const problems = serviceProblems(service);
   // A field's invalid mark and the id of the sentence under it (and of its help, when it has one).
@@ -47,6 +50,12 @@ export function ServiceSection({ service, onKeepRunning, onRestart, onPort, onHe
           <span aria-hidden="true" className="text-sm font-medium">{T.LABEL}</span>
         </div>
         <p className="text-xs leading-snug text-muted-foreground">{T.HELP}</p>
+        {service && pauses && (
+          <div role="note" className="flex items-start gap-2 rounded-lg border border-[color-mix(in_srgb,var(--warning)_35%,var(--border))] bg-warning-subtle px-3 py-2.5 text-sm">
+            <TriangleAlert aria-hidden="true" className="mt-0.5 size-4 flex-none text-warning" />
+            <span>{SERVICE_PAUSE_WARNING}</span>
+          </div>
+        )}
       </div>
       {service && (
         <>

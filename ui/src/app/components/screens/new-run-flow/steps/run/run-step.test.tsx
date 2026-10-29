@@ -14,7 +14,7 @@ import { RUNNER_POOL_REFUSAL } from "../../../../../lib/runner-pool-refusals";
 import type { RunnerPoolCatalogueEntry, RunnerPoolList } from "../../../../../lib/types/runner-pools";
 import { NR_RUN } from "../../../../wardyn/copy/new-run/run";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
-import { SERVICE_FORM, SERVICE_FORM_ERRORS } from "../../../../wardyn/copy/run-service";
+import { SERVICE_FORM, SERVICE_FORM_ERRORS, SERVICE_PAUSE_WARNING } from "../../../../wardyn/copy/run-service";
 import { NR_MACHINE } from "../../../../wardyn/copy/new-run/machine";
 import { ModelAccessProvider } from "../../../../wardyn/model-access-context";
 import { browserZone, scheduleDaysAhead, todayDate, type StartChoice } from "../../../../../lib/schedule";
@@ -23,6 +23,14 @@ import type { RunIntent } from "../../draft/run-intent";
 import { poolScope } from "../../lenses/run-lens";
 import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft } from "../../new-run-route";
 import { RunStep } from "./run-step";
+
+// The Run step asks the policy preview about a service through the shared checks hook; what it answered is the test's to say.
+const checks = vi.hoisted(() => ({ warnings: [] as string[] }));
+vi.mock("../../draft/use-intent-checks", async (orig) => ({
+  ...(await orig<typeof import("../../draft/use-intent-checks")>()),
+  useDraftIdentity: () => ({ principal: "alice", resolved: true, revision: 1, authGeneration: 0 }),
+  useIntentChecks: () => ({ preview: { result: { warnings: checks.warnings } } }),
+}));
 
 const AGENT: RunIntent = { shape: "agent_task", experience: "interactive" };
 const MEMBER = SCENARIO_POOLS.member;
@@ -843,6 +851,24 @@ describe("Run step: Keep it running", () => {
     setField(screen.getByLabelText(SERVICE_FORM.EVERY_LABEL), "30");
     setField(screen.getByLabelText(SERVICE_FORM.FAILURES_LABEL), "5");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("says the service will be paused when the checks' warnings carry the server's sentence, and not otherwise", async () => {
+    checks.warnings = [SERVICE_PAUSE_WARNING];
+    show({ ...SCRIPT, service: { restart: "on_failure" } });
+    await poolSelect();
+    expect(screen.getByText(SERVICE_PAUSE_WARNING)).toBeInTheDocument();
+    cleanup();
+    checks.warnings = [];
+    show({ ...SCRIPT, service: { restart: "on_failure" } });
+    await poolSelect();
+    expect(screen.queryByText(SERVICE_PAUSE_WARNING)).not.toBeInTheDocument();
+    cleanup();
+    checks.warnings = [SERVICE_PAUSE_WARNING];
+    show(SCRIPT);
+    await poolSelect();
+    expect(screen.queryByText(SERVICE_PAUSE_WARNING)).not.toBeInTheDocument();
+    checks.warnings = [];
   });
 
   it("is not offered for an agent task, an application server, or a virtual machine", async () => {

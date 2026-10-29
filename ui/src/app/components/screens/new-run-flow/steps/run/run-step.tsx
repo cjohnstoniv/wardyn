@@ -29,6 +29,7 @@ import { ModeSection } from "./mode-section";
 import { ledeOf, runTypeOf, selectedPoolId, usablePools } from "./pool-model";
 import { PoolSection } from "./pool-section";
 import { ServiceSection } from "./service-section";
+import { useServicePauses } from "./use-service-pause";
 import { QuestionBlock } from "./question-block";
 import { loadPools, usePools, type LoadPools } from "./pool-source";
 import { TimingSection } from "./timing-section";
@@ -53,6 +54,7 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
     if (unnamed) dispatch({ type: "edit", apply: (i) => chooseMode(i, fallback) });
   }, [unnamed, fallback, dispatch]);
   const runType = runTypeOf(intent);
+  const pauses = useServicePauses(intent);
 
   const pools = usePools(deps?.load ?? loadPools, runType);
   const list = pools.status === "ready" ? pools.list : undefined;
@@ -102,6 +104,7 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
               onRestart={(restart) => edit((i) => setRestart(i, restart))}
               onPort={(port) => edit((i) => setPort(i, port))}
               onHealth={(patch) => edit((i) => setHealth(i, patch))}
+              pauses={pauses}
             />
           )}
         </CommandSection>
