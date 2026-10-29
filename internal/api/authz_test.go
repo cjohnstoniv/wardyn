@@ -293,6 +293,16 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/me/runner-pool-defaults":                  {class: classMember},
 	"PUT /api/v1/me/runner-pool-defaults":                  {class: classMember},
 	"DELETE /api/v1/me/runner-pool-defaults":               {class: classMember},
+	// Workloads (0.10): each route acts on the caller's own workloads (?owner= for a sponsor or the
+	// security tier); a binding is standing authority over a service identity, the security tier's.
+	"PUT /api/v1/workloads/{name}":          {class: classMember},
+	"GET /api/v1/workloads":                 {class: classMember},
+	"GET /api/v1/workloads/{name}":          {class: classMember},
+	"DELETE /api/v1/workloads/{name}":       {class: classMember},
+	"POST /api/v1/workloads/{name}/restart": {class: classMember},
+	"POST /api/v1/workload-bindings":        {class: classSecurity},
+	"GET /api/v1/workload-bindings":         {class: classSecurity},
+	"DELETE /api/v1/workload-bindings/{id}": {class: classSecurity},
 	// Console branding (#1125): the sign-in page draws the brand before anyone
 	// has signed in, so its read and the logo it names are anonymous. The
 	// read is the public subset only (TestBrandingAnonymousReadIsThePublicSubset).

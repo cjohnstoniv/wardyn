@@ -298,11 +298,11 @@ func (s *Server) routes() chi.Router {
 			// Uncapped NDJSON bulk export beside the capped, paginated read above —
 			// per-principal evidence ("everything developer X did") in one request.
 			r.Get("/audit/export", s.handleExportAudit)
-			// Tamper-evidence sweep over the audit hash chain (migration 0047),
-			// plus the sandbox sweep — one on each tier, hence two routers.
+			// Tamper-evidence sweep over the audit hash chain (migration 0047), plus the sandbox sweep: one per tier.
 			s.adminRoutes(operatorOnly, securityOps)
 			s.mountRunnerRevokeRoutes(r, securityOps)             // runner_revoke.go: the security tier, or the runner's own owner
 			s.mountRunnerPoolRoutes(r, operatorOnly, securityOps) // runner_pools.go: 501 until the pool storage lands
+			s.mountWorkloadRoutes(r, securityOps)                 // workloads.go: the caller's own workloads; the bindings are the security tier's
 			s.mountRunnerInventoryRoutes(r, operatorOnly, securityOps)
 			s.mountOrgRunnerRoutes(securityOps) // runner_registration.go: org runner mint, claim and trust
 			s.mountTemplateRoutes(r, operatorOnly)
