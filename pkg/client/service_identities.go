@@ -37,6 +37,9 @@ type MintServiceTokenRequest struct {
 	Name string `json:"name"`
 	// TTLSeconds is at most 90 days, or the deployment's cap if lower; zero takes that longest lifetime.
 	TTLSeconds int64 `json:"ttl_seconds,omitempty"`
+	// Kind is "api" (the default when omitted) or "inbound", a token that calls the inbound ports naming the
+	// identity and nothing on the API.
+	Kind string `json:"kind,omitempty"`
 }
 
 // MoveTokenRequest is the POST /api/v1/tokens/{id}/move body. internal/api aliases it (moveTokenRequest).

@@ -607,7 +607,10 @@ type APIToken struct {
 	// ServiceIdentity names the service identity an admin linked this token to, set with Disposition on
 	// a token that has a move row (#1508); empty on any other token.
 	ServiceIdentity string `json:"service_identity,omitempty"`
-	Token           string `json:"token,omitempty"` // plaintext, create response ONLY
+	// Inbound marks a token of APITokenKindInbound: it calls the inbound ports that name its principal as a
+	// caller, through the app gateway, and authenticates nothing on the API. Read from Kind.
+	Inbound bool   `json:"inbound,omitempty"`
+	Token   string `json:"token,omitempty"` // plaintext, create response ONLY
 	// IdentityStampedAt is when Role and Groups were last stamped: at mint, then at each sign-in of
 	// the owner. Nil reads as stale under WARDYN_ROLE_STAMP_TTL. Never on the wire.
 	IdentityStampedAt *time.Time `json:"-"`
@@ -615,8 +618,9 @@ type APIToken struct {
 	// that existed their order once. 0 only for a token written by a replica that predates it, which a
 	// revocation cutoff orders on CreatedAt. Never on the wire.
 	RevSeq int64 `json:"-"`
-	// Kind is APITokenKindAPI for a personal token, or a CLI kind (cli_sign_in.go). Never on the wire:
-	// the name says which computer a CLI token belongs to.
+	// Kind is APITokenKindAPI for a personal token, APITokenKindInbound for an inbound one, or a CLI kind
+	// (cli_sign_in.go). Never on the wire (Inbound says the one kind a list needs): the name says which
+	// computer a CLI token belongs to.
 	Kind string `json:"-"`
 	// CLISessionID is the CLI session a CLI token belongs to; the token stops authenticating when the
 	// session ends. Nil on a personal token. Never on the wire.

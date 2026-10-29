@@ -82,61 +82,61 @@ var serviceAllowed = map[string]bool{
 // serviceScopeRefusal is the 403 body a service identity's token gets on any other route.
 const serviceScopeRefusal = "A service identity cannot reach this action"
 
-// serviceTokenAuth authenticates a wdn_ token whose principal is a service identity's, in apiTokenAuth's
-// place for it. A refusal falls through to fallback with its auth.fail reason set, so every refusal is the
-// one 401 of an unknown token (no oracle for which check failed); a store failure is a 503.
-func (s *Server) serviceTokenAuth(w http.ResponseWriter, r *http.Request, t types.APIToken, next, fallback http.Handler) {
+// verifyServiceToken is verifyAPIToken's check of a token whose principal is a service identity's: the
+// identity's live record and its sponsor's session. A refusal is tokenRefused with its auth.fail reason on
+// the returned request, so every refusal is the one 401 of an unknown token (no oracle for which check
+// failed); a store failure is a written 503.
+func (s *Server) verifyServiceToken(w http.ResponseWriter, r *http.Request, t types.APIToken) (*types.ServiceIdentity, *http.Request, tokenVerdict) {
 	ctx := r.Context()
-	reject := func(reason string) {
-		fallback.ServeHTTP(w, r.WithContext(oidc.WithSessionRejected(ctx, reason)))
+	reject := func(reason string) (*types.ServiceIdentity, *http.Request, tokenVerdict) {
+		return nil, r.WithContext(oidc.WithSessionRejected(ctx, reason)), tokenRefused
 	}
-	unavailable := func(what string, err error) {
+	unavailable := func(what string, err error) (*types.ServiceIdentity, *http.Request, tokenVerdict) {
 		slog.ErrorContext(ctx, "api: "+what+" lookup failed; this service token could not be authenticated", "error", err, "path", r.URL.Path)
 		s.metrics.authStoreErrorInc()
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonTokenLookupUnavailable, "api token lookup failed")
+		return nil, r, tokenAnswered
 	}
 	ss, ok := s.cfg.Store.(store.ServiceIdentityStore)
 	if !ok {
-		reject(authFailedServiceIdentityInactive)
-		return
+		return reject(authFailedServiceIdentityInactive)
 	}
 	si, err := ss.GetServiceIdentity(ctx, strings.TrimPrefix(t.Principal, types.ServicePrincipalPrefix))
 	if errors.Is(err, store.ErrNotFound) {
-		reject(authFailedServiceIdentityInactive)
-		return
+		return reject(authFailedServiceIdentityInactive)
 	}
 	if err != nil {
-		unavailable("service identity", err)
-		return
+		return unavailable("service identity", err)
 	}
 	// A token at or before sponsor_since is not a credential: a mint whose row committed after a sponsor
 	// change's revoke snapshot still never authenticates, the cutoff rule apiTokenAuth applies to a session.
 	if !si.Usable() || !t.CreatedAt.After(si.SponsorSince) {
-		reject(authFailedServiceIdentityInactive)
-		return
+		return reject(authFailedServiceIdentityInactive)
 	}
 	// The sponsor's session state, read on every request (epoch -1: a session-only cut leaves a token
 	// working, as for the sponsor's own). A deployment with no revocation store has no sponsor to ask:
 	// fail closed.
 	if s.cfg.SessionRevocations == nil {
-		reject(authFailedServiceSponsorInactive)
-		return
+		return reject(authFailedServiceSponsorInactive)
 	}
 	status, rerr := oidc.CheckSession(ctx, s.cfg.SessionRevocations, si.Sponsor, "", oidc.Issue{At: t.CreatedAt, Seq: t.RevSeq}, -1)
 	if rerr != nil {
-		unavailable("session-revocation", rerr)
-		return
+		return unavailable("session-revocation", rerr)
 	}
 	if status != oidc.SessionLive {
-		reject(authFailedServiceSponsorInactive)
-		return
+		return reject(authFailedServiceSponsorInactive)
 	}
-	_ = s.cfg.Store.TouchAPIToken(ctx, t.ID, s.cfg.Now().UTC())
+	return &si, r, tokenVerified
+}
+
+// serviceTokenAuth serves a request whose service token verifyAPIToken accepted, with si the identity's
+// live record: published at member reach, on serviceAllowed only.
+func (s *Server) serviceTokenAuth(w http.ResponseWriter, r *http.Request, t types.APIToken, si types.ServiceIdentity, next http.Handler) {
 	// Role and type come from the live identity on every request, not a sign-in stamp, so refuseStaleRoleStamp
 	// has nothing to compare. Member reach, no groups, a complete (empty) snapshot. The token's revocation
 	// sequence rides the request as an API token's does, so a queued launch, an event stream or a terminal
 	// this request opens is ordered against the sponsor's cuts by that sequence and not by two clocks.
-	ctx = oidc.WithRevocationSeq(withHumanIdentity(ctx, t.Principal, "", oidc.RoleUser, si.UserType, []string{}, false), t.Principal, t.RevSeq)
+	ctx := oidc.WithRevocationSeq(withHumanIdentity(r.Context(), t.Principal, "", oidc.RoleUser, si.UserType, []string{}, false), t.Principal, t.RevSeq)
 	r = r.WithContext(withAPITokenID(withServiceIdentity(ctx, si.Name, si.Sponsor), t.ID))
 	if rctx := chi.RouteContext(r.Context()); rctx == nil || !serviceAllowed[r.Method+" "+rctx.RoutePattern()] {
 		d := authz.Deny(authz.ReasonServiceScope, r.URL.Path, serviceScopeRefusal)
