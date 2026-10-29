@@ -385,7 +385,8 @@ func deleteRunnerPoolQ(ctx context.Context, q Querier, id uuid.UUID) (RunnerPool
 // as DeleteRunnerPool deletes one, and then every pool of theirs, the tombstones included, forgets them
 // (owner and created_by cleared). It holds the lock every create takes, so a pool the person creates
 // meanwhile is either deleted here or made after it. The person's stored preferences are deleted in the
-// same transaction, and so are their workloads. Returns the deletions, in pool id order.
+// same transaction, and so are their workloads; the owed ends of runs their workloads let go of forget
+// them. Returns the deletions, in pool id order.
 func (s PG) DeleteRunnerPoolsByOwner(ctx context.Context, owner string) ([]RunnerPoolDeletion, error) {
 	var out []RunnerPoolDeletion
 	err := s.inTx(ctx, func(q Querier) error {
@@ -420,8 +421,12 @@ func (s PG) DeleteRunnerPoolsByOwner(ctx context.Context, owner string) ([]Runne
 		if _, err = q.Exec(ctx, `DELETE FROM ui_run_layouts WHERE principal = $1`, owner); err != nil {
 			return err
 		}
-		// So do the workloads they own.
-		_, err = q.Exec(ctx, `DELETE FROM workloads WHERE owner = $1`, owner)
+		// So do the workloads they own. The runs those workloads let go of stay owed their end (erasure
+		// ends none of the person's runs), but no longer name them.
+		if _, err = q.Exec(ctx, `DELETE FROM workloads WHERE owner = $1`, owner); err != nil {
+			return err
+		}
+		_, err = q.Exec(ctx, `UPDATE workload_run_ends SET owner = '' WHERE owner = $1`, owner)
 		return err
 	})
 	return out, err
