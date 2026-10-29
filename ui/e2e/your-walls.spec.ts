@@ -78,9 +78,9 @@ test.describe("Your walls", () => {
     await expect(row.getByText(NR_TOOLS.NET_NOT_ALLOWED)).toBeVisible();
     await expect(page.getByTestId("walls-leave-out")).toHaveText(NR_WALLS.LEAVE_OUT(LEFT_OUT));
 
-    // Review carries the walls step's own warning, in the console's words.
+    // Review names the left-out host in its Access group, in the console's words.
     await press(page, NR_TOOLS.REVIEW_RUN);
-    await expect(page.getByText("Your walls narrowed allowed hosts.")).toBeVisible();
+    await expect(page.getByTestId("walls-leave-out")).toHaveText(NR_WALLS.LEAVE_OUT(LEFT_OUT));
 
     // Take the walls away again so a later spec in this worker starts clean.
     await navToRoute(page, "/account");
