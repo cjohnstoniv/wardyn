@@ -77,6 +77,8 @@ describe("callers canon strings", () => {
 describe("callers model", () => {
   it("writes the server's grammar: lower-case, prefixed, and nothing it would refuse", () => {
     expect(personCaller(" Li.Wei@Example.com ")).toBe("user:li.wei@example.com");
+    expect(personCaller("Ana@Example.com")).toBe("user:ana@example.com");
+    expect(personCaller(" Ünal@example.com ")).toBe("user:Ünal@example.com");
     expect(personCaller("ana@")).toBeUndefined();
     expect(personCaller("ana example@x.com")).toBeUndefined();
     expect(groupCaller("Payments Team")).toBe("group:payments team");
@@ -84,6 +86,7 @@ describe("callers model", () => {
     expect(serviceCaller("billing")).toBe("service:billing");
     expect(serviceCaller("ab")).toBeUndefined();
     expect(userCaller("PAULA.NG@example.com")).toBe("user:paula.ng@example.com");
+    expect(userCaller("Ünal@example.com")).toBe("user:Ünal@example.com");
     expect(userCaller("two words")).toBeUndefined();
   });
 });

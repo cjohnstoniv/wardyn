@@ -27,15 +27,23 @@ export const callerValue = (caller: string): string => (callerKind(caller) ? cal
 // A full address: something, an @, a host with a dot. The server takes any lower-case `sub` or email; the picker offers email only.
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-/** `user:<email>`, lower-cased, or undefined for text that is not a whole address. */
+// The server's CanonicalUserSubject: trimmed, and lower-cased only when ASCII-only (ASCIIOnlySubject). A value with
+// a rune above ASCII stays as written and matches only that exact string.
+const ASCII_ONLY = /^[\x00-\x7f]*$/;
+const canonicalUser = (value: string): string => {
+  const v = value.trim();
+  return ASCII_ONLY.test(v) ? v.toLowerCase() : v;
+};
+
+/** `user:<email>`, lower-cased as the server stores it, or undefined for text that is not a whole address. */
 export function personCaller(text: string): string | undefined {
-  const email = text.trim().toLowerCase();
+  const email = canonicalUser(text);
   return EMAIL.test(email) ? `user:${email}` : undefined;
 }
 
 /** `user:<sub or email>` for a directory person, lower-cased as the server stores it; undefined for a value with a space or control character. */
 export function userCaller(value: string): string | undefined {
-  const sub = value.trim().toLowerCase();
+  const sub = canonicalUser(value);
   return sub && !/[\s\x00-\x1f\x7f]/.test(sub) ? `user:${sub}` : undefined;
 }
 
