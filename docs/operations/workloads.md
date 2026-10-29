@@ -120,7 +120,7 @@ A Kubernetes organisation runner can watch namespaces for `WardynWorkload` resou
 A binding says: the resources of namespace N, on the runners of pool P, launch as service identity S. It is standing authority, so it is made by a signed-in person with the security role, never with an API token or the admin token.
 
 1. Make the service identity, with a sponsor ([Service identities](api-tokens.md#service-identities)).
-2. Set `workloads.namespaces` in the runner chart to the namespaces to watch. The chart adds a Role and RoleBinding per namespace: `get`, `list` and `watch` on `wardynworkloads`, and `update` and `patch` on `wardynworkloads/status`. No Secret, nothing cluster-wide.
+2. Set `workloads.namespaces` in the runner chart to the namespaces to watch. The chart adds a Role and RoleBinding per namespace: `get`, `list` and `watch` on `wardynworkloads`, and `patch` on `wardynworkloads/status`. No Secret, nothing cluster-wide.
 3. Apply the CRD, [`wardyn.dev_wardynworkloads.yaml`](../../deploy/helm/wardyn-runnerd/crds/wardyn.dev_wardynworkloads.yaml). Helm installs it once from `crds/` and never upgrades it, so apply the file again by hand on a chart upgrade.
 4. Bind the namespace:
 
