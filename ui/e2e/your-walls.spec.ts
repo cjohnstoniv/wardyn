@@ -107,6 +107,15 @@ test.describe("Your walls", () => {
     page.on("request", (req) => {
       if (req.method() === "POST" && new URL(req.url()).pathname === "/api/v1/runs/policy-preview") bodies.push(req.postData() ?? "");
     });
+    // The seeded member's runs never allow all egress, so the real preview would never offer the switch. Until the
+    // draft narrows egress, the preview answers that this run allows all of it; after, the server's answer passes as is.
+    await page.route("**/api/v1/runs/policy-preview", async (route) => {
+      const res = await route.fetch();
+      const json = (await res.json()) as { access?: { unlisted?: { allow_all?: boolean } } };
+      const narrowed = JSON.parse(route.request().postData() ?? "{}")?.overrides?.egress?.allow_all_egress === false;
+      if (!narrowed && json.access?.unlisted) json.access.unlisted.allow_all = true;
+      await route.fulfill({ response: res, json });
+    });
     await asRealMember(page);
     await gotoConsole(page);
     await navToRoute(page, "/runs/new");
