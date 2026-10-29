@@ -45,8 +45,8 @@ const REQUEST_BUTTON =
   "inline-flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-foreground hover:bg-muted";
 
 // A person's own walls (layer "personal") are theirs to change: the card says so to the owner, and names
-// whose they are to anyone else. A reader whose identity is unknown reads them as the owner's own.
-export const personalOwn = (policy: PolicyRef, principal: string): boolean => !policy.owner || !principal || policy.owner === principal;
+// whose they are to anyone else. A reader whose identity is unknown is not the owner: it reads them as the owner's.
+export const personalOwn = (policy: PolicyRef, principal: string): boolean => !policy.owner || policy.owner === principal;
 
 // setByLabel names the wall that set the limit, from a refusal's own layer. A run's policy reference carries no
 // layer and a proxy refusal cannot know it, so without one the Set by row is not drawn at all: naming a wall

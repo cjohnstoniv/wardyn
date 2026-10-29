@@ -34,15 +34,20 @@ export function setNarrowEgress(intent: RunIntent, on: boolean): RunIntent {
   return withKeys(intent, { overrides: Object.keys(overrides).length > 0 ? overrides : undefined });
 }
 
-/** A walls entry covers a host the way the proxy reads an entry: exactly, or a `*.` wildcard's subdomains. */
-const covers = (entry: string, host: string, apex: boolean): boolean =>
-  entry === host || (entry.startsWith("*.") && (host.endsWith(entry.slice(1)) || (apex && host === entry.slice(2))));
+/**
+ * A walls entry covers a host the way the proxy reads an entry: exactly, or a `*.` wildcard's subdomains, and not its bare
+ * domain (domainmatch.MatchWild; internal/composer/meet_domains.go covers). Hosts are compared lower-cased on both sides.
+ */
+const covers = (entry: string, host: string): boolean => {
+  const e = entry.toLowerCase();
+  const h = host.toLowerCase();
+  return e === h || (e.startsWith("*.") && h.endsWith(e.slice(1)));
+};
 
 /**
  * The hosts the server says are not allowed that the person's own walls take out of the run: one their
  * "never these sites" covers, or one outside their "only these sites". The server's answer does not name the
- * layer that dropped a host, so the walls the person set are read against it. A wildcard in the list counts
- * as covering its bare domain, so a host is named only when the walls leave it out either way.
+ * layer that dropped a host, so the walls the person set are read against it.
  */
 export function wallsLeaveOut(walls: PersonalWallsSpec | undefined, access: AccessFacts | undefined, answered: boolean): string[] {
   if (!walls || !access || !answered) return [];
@@ -50,7 +55,7 @@ export function wallsLeaveOut(walls: PersonalWallsSpec | undefined, access: Acce
   return access.hosts
     .filter((h) => h.verdict === "not_allowed")
     .map((h) => h.host)
-    .filter((host) => denied.some((e) => covers(e, host, false)) || (walls.allowed_domains !== undefined && !walls.allowed_domains.some((e) => covers(e, host, true))));
+    .filter((host) => denied.some((e) => covers(e, host)) || (walls.allowed_domains !== undefined && !walls.allowed_domains.some((e) => covers(e, host))));
 }
 
 export function setModelProvider(intent: RunIntent, toolId: string, provider: string): RunIntent {

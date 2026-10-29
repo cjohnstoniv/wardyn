@@ -17,7 +17,8 @@ import { AccessCredentials } from "./access-credentials";
 import { stepLocation, type GroupProps } from "./group-props";
 import { JumpButton } from "./jump-button";
 
-export function AccessGroup({ draft, pre, preview, docRows, go }: GroupProps) {
+/** `onLeftOut` is told whether any walls-leave-out line is drawn, so Review keeps the walls' own warning when none is. */
+export function AccessGroup({ draft, pre, preview, docRows, go, onLeftOut }: GroupProps & { onLeftOut?: (drawn: boolean) => void }) {
   const access = pre?.access ?? preview?.access;
   const hosts = access?.hosts ?? [];
   const source = preview?.source.name;
@@ -29,6 +30,8 @@ export function AccessGroup({ draft, pre, preview, docRows, go }: GroupProps) {
     return () => { alive = false; };
   }, []);
   const leftOut = wallsLeaveOut(walls, pre?.access ?? preview?.access, !!access);
+  const drawn = leftOut.length > 0;
+  React.useEffect(() => onLeftOut?.(drawn), [drawn, onLeftOut]);
   // A run that reaches only its listed sites says so (T4-b); one that may ask for more keeps the plain count.
   const closed = !!access && !access.unlisted.allow_all && access.unlisted.mode === "always_deny";
   const count = hosts.length === 1 ? NR_REVIEW.POLICY_HOST_ONE : NR_REVIEW.POLICY_HOSTS(hosts.length);

@@ -164,4 +164,19 @@ describe("the policy under a drop warning", () => {
     expect(screen.queryByTestId("drop-warning-policy")).toBeNull();
     expect(screen.getByText(NR_REVIEW.DROPPED_HOST_ONE("registry.npmjs.org"))).toBeInTheDocument();
   });
+
+  describe("the walls' host warning", () => {
+    const warn = ["your walls narrowed allowed_domains", "your walls narrowed denied_domains"];
+
+    it("is left to the Access group's leave-out line when one is drawn (a host the person added)", () => {
+      const { container } = render(<Notices askedByYou={false} warnings={warn} wallsLeftOut />);
+      expect(container).toBeEmptyDOMElement();
+    });
+
+    it("stays a notice when no leave-out line is drawn (a base-policy host the walls cut)", () => {
+      render(<Notices askedByYou={false} warnings={warn} />);
+      expect(screen.getByText("Your walls narrowed allowed hosts.")).toBeInTheDocument();
+      expect(screen.getByText("Your walls narrowed blocked hosts.")).toBeInTheDocument();
+    });
+  });
 });

@@ -48,7 +48,15 @@ describe("wallsLeaveOut", () => {
     expect(wallsLeaveOut({ allowed_domains: [] }, hosts, true)).toEqual(["pypi.org", "paste.example.net", "sub.docs.example.org"]);
   });
 
-  it("does not claim a host a wildcard may cover, bare domain included", () => {
-    expect(wallsLeaveOut({ allowed_domains: ["*.example.org"] }, access(host("example.org", "not_allowed")), true)).toEqual([]);
+  // The server's rule (internal/composer/meet_domains.go covers, domainmatch.MatchWild): `*.example.org` matches subdomains only, never `example.org`.
+  it("a wildcard covers its subdomains and not its bare domain", () => {
+    expect(wallsLeaveOut({ allowed_domains: ["*.example.org"] }, access(host("example.org", "not_allowed")), true)).toEqual(["example.org"]);
+    expect(wallsLeaveOut({ allowed_domains: ["*.example.org"] }, access(host("a.example.org", "not_allowed")), true)).toEqual([]);
+    expect(wallsLeaveOut({ denied_domains: ["*.example.org"] }, access(host("example.org", "not_allowed")), true)).toEqual([]);
+  });
+
+  it("compares host and entry lower-cased", () => {
+    expect(wallsLeaveOut({ denied_domains: ["Paste.Example.NET"] }, access(host("paste.example.net", "not_allowed")), true)).toEqual(["paste.example.net"]);
+    expect(wallsLeaveOut({ allowed_domains: ["*.Example.ORG"] }, access(host("A.example.org", "not_allowed")), true)).toEqual([]);
   });
 });

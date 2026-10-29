@@ -311,10 +311,10 @@ func (x *explainer) evidenceCause(field, entry string, added bool) (cause, profi
 }
 
 // walled is the walls rule: the entry is one the person's walls took out of the run (an allowlist
-// entry or a grant) or added to it (a deny), as the run.create row recorded, or the field is a scalar
-// knob the walls narrowed. List entries are matched exactly, so a knob the boundary also narrowed
-// keeps each of its entries with the layer that changed it. A scalar holds one value that both
-// layers may have tightened; the walls step runs first and the record cannot tell the two apart, so
+// entry or a grant) or added to it (a deny or a blocked desktop direction), as the run.create row
+// recorded, or the field is a scalar knob the walls narrowed. List entries are matched exactly, so
+// a knob the boundary also narrowed keeps each of its entries with the layer that changed it. A
+// scalar holds one value that both layers may have tightened; the walls step runs first and the record cannot tell the two apart, so
 // it is the walls'.
 func (x *explainer) walled(field, entry string, added bool) bool {
 	w := x.ev.walls
@@ -328,6 +328,8 @@ func (x *explainer) walled(field, entry string, added bool) bool {
 		return slices.Contains(w.Removed[fieldGrants], entry)
 	case field == fieldDenied && added:
 		return slices.Contains(w.Added[fieldDenied], strings.ToLower(strings.TrimSpace(entry)))
+	case field == fieldDesktop:
+		return added && slices.Contains(w.Added[fieldDesktop], entry)
 	case field == fieldAllowed, field == fieldGrants, field == fieldDenied:
 		return false
 	}
@@ -412,6 +414,21 @@ func uiAppKey(a types.UIApp) string {
 	return a.Name + " (inbound: " + strings.Join(a.Callers, ", ") + ")"
 }
 
+// desktopBlocked names the desktop directions sp blocks, as the field-set row lists them.
+func desktopBlocked(sp types.RunPolicySpec) []string {
+	d := sp.Desktop.Effective()
+	var out []string
+	for _, dir := range []struct {
+		name string
+		rule types.TransferRule
+	}{{"Block paste in", d.PasteIn}, {"Block copy out", d.CopyOut}, {"Block upload", d.Upload}, {"Block download", d.Download}} {
+		if dir.rule == types.TransferBlocked {
+			out = append(out, dir.name)
+		}
+	}
+	return out
+}
+
 // policyFieldSets is a spec's comparable content: each list field as its
 // redaction-safe entry keys, each scalar as a one-entry set (none when unset).
 // A grant is "kind:host" or "kind:repo,repo", a mount its target, a repo
@@ -439,14 +456,8 @@ func policyFieldSets(sp types.RunPolicySpec) map[string][]string {
 		scalar("resources.pids_limit", strconv.Itoa(r.PidsLimit))
 		scalar(fieldDisk, strconv.Itoa(r.DiskMiB))
 	}
-	d := sp.Desktop.Effective()
-	for _, dir := range []struct {
-		name string
-		rule types.TransferRule
-	}{{"Block paste in", d.PasteIn}, {"Block copy out", d.CopyOut}, {"Block upload", d.Upload}, {"Block download", d.Download}} {
-		if dir.rule == types.TransferBlocked {
-			m[fieldDesktop] = append(m[fieldDesktop], dir.name)
-		}
+	if blocked := desktopBlocked(sp); len(blocked) > 0 {
+		m[fieldDesktop] = blocked
 	}
 	for _, g := range sp.EligibleGrants {
 		m[fieldGrants] = append(m[fieldGrants], grantKey(g))

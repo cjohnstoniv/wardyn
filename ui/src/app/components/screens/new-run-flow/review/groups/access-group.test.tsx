@@ -62,8 +62,8 @@ describe("Review: Access", () => {
       hosts: [host("api.example.com", "allowed"), host("packages.example.com", "allowed"), host("git.example.com", "allowed"), host("pypi.org", "not_allowed")],
       unlisted: { mode: "always_deny", allow_all: false, decider: "you" },
     };
-    const show = (facts: AccessFacts) =>
-      render(<AccessGroup draft={initialDraft("alice")} pre={{ access: facts } as unknown as ReviewPreflight} preview={null} docRows={[]} go={vi.fn()} dispatch={vi.fn()} />);
+    const show = (facts: AccessFacts, onLeftOut?: (drawn: boolean) => void) =>
+      render(<AccessGroup draft={initialDraft("alice")} pre={{ access: facts } as unknown as ReviewPreflight} preview={null} docRows={[]} go={vi.fn()} dispatch={vi.fn()} onLeftOut={onLeftOut} />);
 
     it("says how many sites and that anything else is refused, with the walls note for a host they cut", async () => {
       getWalls.mockResolvedValue({ spec: { denied_domains: ["pypi.org"] } });
@@ -72,6 +72,22 @@ describe("Review: Access", () => {
       expect(note).toHaveTextContent("Your walls leave out pypi.org.");
       expect(screen.getByText(NR_WALLS.REVIEW_SITES(4))).toBeTruthy();
       expect(screen.queryByText(NR_REVIEW.POLICY_HOSTS(4))).toBeNull();
+    });
+
+    it("tells Review whether a leave-out line is drawn, so the walls' own warning stays when none is", async () => {
+      // pypi.org is a base-policy host the walls cut but the post-walls answer does not carry: no line, so the warning stays.
+      getWalls.mockResolvedValue({ spec: { denied_domains: ["pypi.org"] } });
+      const onLeftOut = vi.fn();
+      show({ ...closed, hosts: closed.hosts.filter((h) => h.host !== "pypi.org") }, onLeftOut);
+      await vi.waitFor(() => expect(getWalls).toHaveBeenCalled());
+      await Promise.resolve();
+      expect(screen.queryByTestId("walls-leave-out")).toBeNull();
+      expect(onLeftOut).not.toHaveBeenCalledWith(true);
+      cleanup();
+      const drawn = vi.fn();
+      show(closed, drawn);
+      await screen.findByTestId("walls-leave-out");
+      expect(drawn).toHaveBeenLastCalledWith(true);
     });
 
     it("draws no note when the walls cut nothing, and keeps the plain count when anything else may be asked for", async () => {

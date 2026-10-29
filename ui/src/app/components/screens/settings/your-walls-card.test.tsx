@@ -108,6 +108,24 @@ describe("Your walls card", () => {
     expect(await screen.findByRole("status")).toHaveTextContent(YOUR_WALLS.SAVED);
   });
 
+  it("going back to Any site clears the unlisted-sites choice Only these sites filled in, and keeps one the person made", async () => {
+    render(<YourWallsCard />);
+    await open();
+    await user.click(screen.getByRole("radio", { name: YOUR_WALLS.SITES_ONLY }));
+    expect(screen.getByRole("button", { name: YOUR_WALLS.UNLISTED_BLOCK })).toHaveAttribute("aria-pressed", "true");
+    await user.click(screen.getByRole("radio", { name: YOUR_WALLS.SITES_ANY }));
+    expect(screen.getByRole("button", { name: YOUR_WALLS.UNLISTED_BLOCK })).toHaveAttribute("aria-pressed", "false");
+    await user.click(screen.getByRole("button", { name: YOUR_WALLS.SAVE }));
+    await waitFor(() => expect(putMock).toHaveBeenCalledWith({}));
+
+    // A choice the person made themselves stays when they go back to Any site.
+    await user.click(screen.getByRole("radio", { name: YOUR_WALLS.SITES_ONLY }));
+    await user.click(screen.getByRole("button", { name: YOUR_WALLS.UNLISTED_ASK }));
+    await user.click(screen.getByRole("radio", { name: YOUR_WALLS.SITES_ANY }));
+    await user.click(screen.getByRole("button", { name: YOUR_WALLS.SAVE }));
+    await waitFor(() => expect(putMock).toHaveBeenLastCalledWith({ first_use_approval: "deny_with_review" }));
+  });
+
   it("Any site sends no allowlist, and an empty form sends an empty spec", async () => {
     getMock.mockResolvedValue({ spec: { allowed_domains: ["a.example.com"] } });
     render(<YourWallsCard />);

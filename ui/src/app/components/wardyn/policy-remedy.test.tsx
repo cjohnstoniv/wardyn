@@ -96,6 +96,13 @@ describe("PolicyRemedy", () => {
       expect(card).toHaveTextContent("Can changeNot from here. The owner can.");
     });
 
+    it("does not read a reader of unknown identity as the owner", () => {
+      as("");
+      const card = screen.getByTestId("policy-remedy");
+      expect(card).toHaveTextContent("Set byana@example.com's walls");
+      expect(card).toHaveTextContent("Can changeNot from here. The owner can.");
+    });
+
     it("beats the run-policy label even when the person overrode the run", () => {
       render(
         <OperatorProvider operator={false} principal="ana@example.com">

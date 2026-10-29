@@ -26,8 +26,8 @@ function joinAnd(items: string[]): string {
 }
 
 /**
- * The walls step's warning for the host lists. Review says it by host instead (the Access group's "Your walls leave
- * out {host}.", board R15 T4-b), so this sentence is not shown again as a notice.
+ * The walls step's warning for the host lists. When the Access group names a host the walls leave out ("Your walls leave
+ * out {host}.", board R15 T4-b), Review says it by host and this sentence is not shown again as a notice; otherwise it is.
  */
 export const isWallsHostWarning = (warning: string): boolean => {
   const knob = WALLS_NARROWED.exec(warning)?.[1];
