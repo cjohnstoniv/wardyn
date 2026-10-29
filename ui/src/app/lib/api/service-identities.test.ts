@@ -35,6 +35,19 @@ describe("serviceIdentities - request shape", () => {
     expect(sent()).toMatchObject({ url: "/api/v1/me/tokens?limit=1000", method: "GET" });
   });
 
+  it("mintMyToken POSTs to /me/tokens as the person, naming the inbound kind, and returns the plaintext once", async () => {
+    const sent = stub(json({ id: "t1", token: "wdy_secret", principal: "dana" }, 201));
+    const got = await serviceIdentities.mintMyToken({ name: "hook", ttl_seconds: 86400, kind: "inbound" });
+    expect(got.token).toBe("wdy_secret");
+    expect(sent()).toEqual({ url: "/api/v1/me/tokens", method: "POST", body: '{"name":"hook","ttl_seconds":86400,"kind":"inbound"}' });
+  });
+
+  it("revokeMyToken DELETEs one of the caller's tokens and accepts the 204", async () => {
+    const sent = stub(new Response(null, { status: 204 }));
+    await expect(serviceIdentities.revokeMyToken("t/1")).resolves.toBeUndefined();
+    expect(sent()).toMatchObject({ url: "/api/v1/me/tokens/t%2F1", method: "DELETE" });
+  });
+
   it("claimInvitation POSTs the name and ttl, and returns the plaintext once", async () => {
     const sent = stub(json({ id: "t1", token: "wdy_secret", name: "ci" }, 201));
     const got = await serviceIdentities.claimInvitation("i/1", { name: "ci", ttl_seconds: 3600 });
