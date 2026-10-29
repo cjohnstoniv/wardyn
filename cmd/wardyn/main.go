@@ -393,6 +393,7 @@ func rootCmd() *cobra.Command {
 		supportBundleCmd(client),
 		caCmd(client),
 		doctorCmd(client),
+		workloadCmd(client), workloadApplyCmd(client), workloadDiffCmd(client), workloadDeleteCmd(client),
 	)
 	return root
 }
