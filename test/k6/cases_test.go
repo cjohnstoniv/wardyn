@@ -75,6 +75,41 @@ func (e *env) dropTestPod(t *testing.T, name string) {
 	})
 }
 
+// cordonSeen cordons node and returns once the scheduler holds the cordon. The scheduler learns of the
+// cordon on its node watch and of a new pod on its pod watch, with no order between the two, so a pod
+// created straight after the patch can still be bound to the node from the scheduler's older view. A
+// probe pod is created until one is refused with a node that "were unschedulable" (the cordon's own
+// filter, which runs before the label's); a probe bound from the older view is deleted and tried again.
+// Each probe is deleted at once and again at cleanup, so none outlives the call, even on a failure.
+func (e *env) cordonSeen(t *testing.T, node string) {
+	t.Helper()
+	e.cordon(t, node, true)
+	zero := int64(0)
+	for try := 1; ; try++ {
+		name := "k6-cordon-probe-" + short()
+		if _, err := e.admin.CoreV1().Pods(e.runsNS).Create(bg, e.testPod(name, "", nil, "sleep 5"), metav1.CreateOptions{}); err != nil {
+			t.Fatalf("create cordon probe: %v", err)
+		}
+		t.Cleanup(func() {
+			_ = e.admin.CoreV1().Pods(e.runsNS).Delete(bg, name, metav1.DeleteOptions{GracePeriodSeconds: &zero})
+		})
+		p := e.waitPod(t, name, time.Minute, "bound, or refused for an unschedulable node", func(p *corev1.Pod) bool {
+			return p.Spec.NodeName != "" || slices.ContainsFunc(p.Status.Conditions, func(c corev1.PodCondition) bool {
+				return c.Type == corev1.PodScheduled && c.Status == corev1.ConditionFalse && strings.Contains(c.Message, "were unschedulable")
+			})
+		})
+		if err := e.admin.CoreV1().Pods(e.runsNS).Delete(bg, name, metav1.DeleteOptions{GracePeriodSeconds: &zero}); err != nil && !apierrors.IsNotFound(err) {
+			t.Fatalf("delete cordon probe %s: %v", name, err)
+		}
+		if p.Spec.NodeName == "" {
+			return
+		}
+		if try == 5 {
+			t.Fatalf("the scheduler still bound a probe to %s after %d tries at its cordon", p.Spec.NodeName, try)
+		}
+	}
+}
+
 // stopRun is a normal end: StopProxy, then label teardown, then every object gone.
 func (e *env) stopRun(t *testing.T, id uuid.UUID) {
 	t.Helper()
@@ -596,7 +631,7 @@ func (e *env) overlapOnce(t *testing.T, i int, delta time.Duration) string {
 	id := uuid.New()
 	e.cleanupRun(t, id)
 	e.setSched(t, e.pin)
-	e.cordon(t, e.pin, true)
+	e.cordonSeen(t, e.pin)
 	defer e.cordon(t, e.pin, false)
 	pw := e.watchProxy(t, id)
 	defer pw.stop()
@@ -715,7 +750,7 @@ func caseRestartWhileUnbound(t *testing.T, e *env) {
 	e.cleanupRun(t, id)
 	v1 := e.store.view(nil)
 	d1 := e.newDriver(t, v1)
-	e.cordon(t, e.pin, true) // the node is in the before-list, but nothing binds yet
+	e.cordonSeen(t, e.pin) // the node is in the before-list, but nothing binds yet
 	t.Cleanup(func() { e.cordon(t, e.pin, false) })
 	ctx1, cancel1 := context.WithCancel(bg)
 	defer cancel1()
