@@ -6,8 +6,10 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/uuid"
@@ -258,6 +260,148 @@ func TestPG_Workload_BindingLaunchMatchesTokenLaunch(t *testing.T) {
 	}
 	if _, ok := db["via"]; ok {
 		t.Errorf("bound launch run.create carries via: %s", b.Data)
+	}
+}
+
+// cutShort is the store with the request cut short where a workload lets its run go: once the delete has
+// committed, or once the launch's record is lost (lose: SetWorkloadRun answers that another launch was
+// recorded first, recording nothing), cancel is called before the run is read. With failReads set, every
+// run read fails from then on.
+type cutShort struct {
+	store.PG
+	cancel    context.CancelFunc
+	lose      bool
+	failReads *atomic.Bool
+}
+
+func (s cutShort) cut() {
+	s.cancel()
+	if s.failReads != nil {
+		s.failReads.Store(true)
+	}
+}
+
+func (s cutShort) DeleteWorkload(ctx context.Context, owner, name string) (store.Workload, error) {
+	w, err := s.PG.DeleteWorkload(ctx, owner, name)
+	s.cut()
+	return w, err
+}
+
+func (s cutShort) SetWorkloadRun(ctx context.Context, id, claim uuid.UUID, generation int64, runID uuid.UUID) (*uuid.UUID, error) {
+	if !s.lose {
+		return s.PG.SetWorkloadRun(ctx, id, claim, generation, runID)
+	}
+	s.cut()
+	return nil, store.ErrWorkloadSuperseded
+}
+
+func (s cutShort) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
+	if s.failReads != nil && s.failReads.Load() {
+		return types.AgentRun{}, errors.New("run unreadable")
+	}
+	return s.PG.GetRun(ctx, id)
+}
+
+// owedEnds counts runID's rows in workload_run_ends.
+func owedEnds(t *testing.T, e svcEnv, runID uuid.UUID) int {
+	t.Helper()
+	var n int
+	if err := e.pool.QueryRow(context.Background(), `SELECT count(*) FROM workload_run_ends WHERE run_id = $1`, runID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// wantKilledFor waits for runID's run.kill row and checks the run is KILLED for why and owes nothing.
+func wantKilledFor(t *testing.T, e svcEnv, runID uuid.UUID, why string) {
+	t.Helper()
+	if got := killReason(t, e, runID); got != why {
+		t.Fatalf("run.kill reason = %q, want %q", got, why)
+	}
+	if run, err := e.st.GetRun(context.Background(), runID); err != nil || run.State != types.RunKilled {
+		t.Fatalf("run state = %q (%v), want KILLED", run.State, err)
+	}
+	if n := owedEnds(t, e, runID); n != 0 {
+		t.Fatalf("workload_run_ends rows for the killed run = %d, want 0", n)
+	}
+}
+
+// TestPG_Workload_DeleteEndsTheRunWhenTheCallerGoesAway: a caller who goes away once the delete has
+// committed, before the run is read, does not leave the run running.
+func TestPG_Workload_DeleteEndsTheRunWhenTheCallerGoesAway(t *testing.T) {
+	e := newSvcEnv(t)
+	pol := e.plainPolicy(t, "wl-pol")
+	runID := launchedRun(t, decodeApply(t, doSSO(t, e.h.srv, http.MethodPut, "/api/v1/workloads/web", e.mem, workloadBody(pol, "t", "")), http.StatusCreated))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	e.h.srv.cfg.Store = cutShort{PG: e.st, cancel: cancel}
+	if w := doSSOCtx(t, e.h.srv, ctx, http.MethodDelete, "/api/v1/workloads/web", e.mem, ""); w.Code != http.StatusNoContent {
+		t.Fatalf("delete: %d %s, want 204", w.Code, w.Body.String())
+	}
+	wantKilledFor(t, e, runID, workloadKillDeleted)
+}
+
+// TestPG_Workload_LostRecordEndsTheRunWhenTheCallerGoesAway: a launch whose record another launch won
+// ends the run it started, though its caller went away before the run was read.
+func TestPG_Workload_LostRecordEndsTheRunWhenTheCallerGoesAway(t *testing.T) {
+	e := newSvcEnv(t)
+	pol := e.plainPolicy(t, "wl-pol")
+	oldRun := launchedRun(t, decodeApply(t, doSSO(t, e.h.srv, http.MethodPut, "/api/v1/workloads/web", e.mem, workloadBody(pol, "t", "")), http.StatusCreated))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	e.h.srv.cfg.Store = cutShort{PG: e.st, cancel: cancel, lose: true}
+	res := decodeApply(t, doSSOCtx(t, e.h.srv, ctx, http.MethodPut, "/api/v1/workloads/web", e.mem, workloadBody(pol, "t2", "")), http.StatusOK)
+	if res.Launch.State != client.WorkloadNoLaunch {
+		t.Fatalf("launch = %+v, want none: the record was lost", res.Launch)
+	}
+	e.h.srv.cfg.Store = e.st
+	var lost []types.AuditEvent
+	for _, ev := range e.h.audit.snapshot() {
+		if ev.Action == "run.create" && ev.RunID != nil && *ev.RunID != oldRun {
+			lost = append(lost, ev)
+		}
+	}
+	if len(lost) != 1 {
+		t.Fatalf("run.create rows for a new run = %d, want 1", len(lost))
+	}
+	wantKilledFor(t, e, *lost[0].RunID, workloadKillReplaced)
+	if run, err := e.st.GetRun(context.Background(), oldRun); err != nil || isTerminalRunState(run.State) {
+		t.Fatalf("the workload's own run = %q (%v), want it still live", run.State, err)
+	}
+}
+
+// TestPG_Workload_UnreadableRunStaysOwedUntilTheSweepEndsIt: a run that cannot be read once its workload
+// is deleted is left owed its end, and the sweep ends it.
+func TestPG_Workload_UnreadableRunStaysOwedUntilTheSweepEndsIt(t *testing.T) {
+	e := newSvcEnv(t)
+	pol := e.plainPolicy(t, "wl-pol")
+	runID := launchedRun(t, decodeApply(t, doSSO(t, e.h.srv, http.MethodPut, "/api/v1/workloads/web", e.mem, workloadBody(pol, "t", "")), http.StatusCreated))
+	e.h.srv.cfg.Store = cutShort{PG: e.st, cancel: func() {}, failReads: new(atomic.Bool)}
+	if w := doSSO(t, e.h.srv, http.MethodDelete, "/api/v1/workloads/web", e.mem, ""); w.Code != http.StatusNoContent {
+		t.Fatalf("delete: %d %s, want 204", w.Code, w.Body.String())
+	}
+	e.h.srv.cfg.Store = e.st
+	if run, err := e.st.GetRun(context.Background(), runID); err != nil || isTerminalRunState(run.State) {
+		t.Fatalf("run state = %q (%v), want it not yet ended", run.State, err)
+	}
+	if n := owedEnds(t, e, runID); n != 1 {
+		t.Fatalf("workload_run_ends rows = %d, want the run owed its end", n)
+	}
+	if err := e.h.srv.sweepWorkloadRunEnds(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := owedEnds(t, e, runID); n != 1 {
+		t.Fatalf("workload_run_ends rows = %d: the sweep took an end younger than its grace", n)
+	}
+	if _, err := e.pool.Exec(context.Background(), `UPDATE workload_run_ends SET created_at = now() - interval '1 hour' WHERE run_id = $1`, runID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.h.srv.sweepWorkloadRunEnds(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	wantKilledFor(t, e, runID, workloadKillDeleted)
+	if ev := waitForRecAudit(t, e.h.audit, runID, "run.kill", "success"); ev.ActorType != types.ActorSystem {
+		t.Fatalf("the sweep's run.kill actor = %s/%s, want system", ev.ActorType, ev.Actor)
 	}
 }
 

@@ -412,8 +412,8 @@ func (s *Server) pushRunnerWorkloadStatuses(ctx context.Context, runnerID uuid.U
 	}
 }
 
-// startWorkloadStatusSweeper starts the status sweep for the life of the daemon, on a store that keeps
-// workloads.
+// startWorkloadStatusSweeper starts the status sweep, and with it the sweep of workload runs still owed
+// their end (sweepWorkloadRunEnds), for the life of the daemon, on a store that keeps workloads.
 func (s *Server) startWorkloadStatusSweeper() {
 	if _, ok := s.cfg.Store.(store.WorkloadStore); ok && s.watcherBaseCtx() != nil {
 		s.goBackground(func() { s.workloadStatusSweeper(s.watcherBaseCtx(), workloadStatusEvery) })
@@ -440,6 +440,9 @@ func (s *Server) workloadStatusSweeper(ctx context.Context, every time.Duration)
 				defer cancel()
 				if err := s.sweepWorkloadStatuses(pctx); err != nil && !errors.Is(err, context.DeadlineExceeded) {
 					slog.WarnContext(ctx, "wardynd: workload status sweep", slog.Any("err", err))
+				}
+				if err := s.sweepWorkloadRunEnds(pctx); err != nil && !errors.Is(err, context.DeadlineExceeded) {
+					slog.WarnContext(ctx, "wardynd: workload run end sweep", slog.Any("err", err))
 				}
 			}()
 		}

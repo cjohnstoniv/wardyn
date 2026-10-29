@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -38,8 +39,8 @@ import (
 
 // The run.kill reason a workload's run ends with.
 const (
-	workloadKillReplaced = "workload_replaced" // a newer launch of the workload replaced it
-	workloadKillDeleted  = "workload_deleted"  // the workload was deleted
+	workloadKillReplaced = store.WorkloadEndReplaced // a newer launch of the workload replaced it
+	workloadKillDeleted  = store.WorkloadEndDeleted  // the workload was deleted
 )
 
 const workloadNotFoundMsg = "There is no workload of that name that you may reach."
@@ -244,7 +245,7 @@ func (s *Server) launchWorkload(r *http.Request, ws store.WorkloadStore, wl stor
 		if errors.Is(err, store.ErrNotFound) {
 			why = workloadKillDeleted
 		}
-		s.endWorkloadRun(r, created.ID, claimed, why)
+		s.endUntakenWorkloadRun(r, ws, created.ID, claimed, why)
 		if errors.Is(err, store.ErrWorkloadSuperseded) || errors.Is(err, store.ErrNotFound) {
 			return none, nil
 		}
@@ -310,27 +311,101 @@ func (s *Server) refuseWorkloadLaunch(r *http.Request, ws store.WorkloadStore, w
 
 // endWorkloadRun ends runID, a run that is no longer wl's own, as the caller of r: the run a newer launch
 // replaced, the current run of a deleted workload, or a run whose record another launch won. The run.kill
-// row says why. A run that has ended already is left as it is.
+// row says why. A run that has ended already is left as it is. The run is owed its end in
+// workload_run_ends, written with the delete or the record that let it go, and the end works detached from
+// r: a caller who goes away does not cut it short, and an end that does not finish here is finished by
+// sweepWorkloadRunEnds.
 func (s *Server) endWorkloadRun(r *http.Request, runID uuid.UUID, wl store.Workload, why string) {
-	ctx := r.Context()
 	killerType, killer := actorFromRequest(r)
-	extra := map[string]any{"reason": why, "workload": wl.Name, "generation": wl.Generation}
-	run, err := s.cfg.Store.GetRun(ctx, runID)
+	s.endOwedWorkloadRun(r.Context(), store.WorkloadRunEnd{RunID: runID, Owner: wl.Owner, Name: wl.Name, Generation: wl.Generation, Reason: why},
+		killerType, killer)
+}
+
+// endUntakenWorkloadRun ends runID, a run a launch of wl started that the workload did not take. Nothing
+// else remembers that run, so it is recorded as owed its end first.
+func (s *Server) endUntakenWorkloadRun(r *http.Request, ws store.WorkloadStore, runID uuid.UUID, wl store.Workload, why string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), killCascadeTimeout)
+	defer cancel()
+	if err := ws.OweWorkloadRunEnd(ctx, store.WorkloadRunEnd{RunID: runID, Owner: wl.Owner, Name: wl.Name, Generation: wl.Generation, Reason: why}); err != nil {
+		slog.ErrorContext(ctx, "wardynd: record a workload's run as owed its end", slog.String("run_id", runID.String()),
+			slog.String("workload", workloadTarget(wl)), slog.Any("err", err))
+	}
+	s.endWorkloadRun(r, runID, wl, why)
+}
+
+// endOwedWorkloadRun ends e's run as killer and then drops what was owed. The reads and the kill run on a
+// context detached from ctx and bounded, as killRunCascade's own are. Once the KILLED transition is won the
+// end is durable: a teardown cut short is the sandbox sweep's to finish (recoverAbandonedKillTail). A run
+// that is not ended here stays owed.
+func (s *Server) endOwedWorkloadRun(ctx context.Context, e store.WorkloadRunEnd, killerType types.ActorType, killer string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
+	defer cancel()
+	extra := map[string]any{"reason": e.Reason, "workload": e.Name, "generation": e.Generation}
+	run, err := s.cfg.Store.GetRun(ctx, e.RunID)
+	ended := err == nil && isTerminalRunState(run.State)
 	// A lost CAS is a move between live states (a dispatch claim, the sandbox coming up): re-read and kill
 	// from the state the run now holds, as killLiveRun does.
-	for attempt := 1; err == nil && !isTerminalRunState(run.State); attempt++ {
+	for attempt := 1; err == nil && !ended; attempt++ {
 		applied, killData, kerr := s.killRunCascade(ctx, run, killerType, killer, extra)
 		if kerr != nil || applied || attempt == killCASAttempts {
+			ended = applied
 			if err = kerr; err == nil && len(killData) > 0 {
 				err = fmt.Errorf("teardown steps failed: %v", killData)
 			}
 			break
 		}
-		run, err = s.cfg.Store.GetRun(ctx, runID)
+		run, err = s.cfg.Store.GetRun(ctx, e.RunID)
+		ended = err == nil && isTerminalRunState(run.State)
 	}
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		slog.ErrorContext(ctx, "wardynd: end a workload's run", slog.String("run_id", runID.String()), slog.String("workload", workloadTarget(wl)), slog.Any("err", err))
+	if errors.Is(err, store.ErrNotFound) {
+		ended, err = true, nil // the run row is gone, and its owed end with it
 	}
+	target := e.Owner + "/" + e.Name
+	if err != nil {
+		slog.ErrorContext(ctx, "wardynd: end a workload's run", slog.String("run_id", e.RunID.String()), slog.String("workload", target), slog.Any("err", err))
+	}
+	ws, ok := s.cfg.Store.(store.WorkloadStore)
+	if !ended || !ok {
+		return
+	}
+	if err := ws.DropWorkloadRunEnd(ctx, e.RunID); err != nil {
+		slog.ErrorContext(ctx, "wardynd: drop a workload run's owed end", slog.String("run_id", e.RunID.String()), slog.String("workload", target), slog.Any("err", err))
+	}
+}
+
+// workloadRunEndGrace is how old an owed end must be before the sweep takes it: longer than an end in
+// flight takes (its reads share one killCascadeTimeout and its won kill has its own), so the sweep does not
+// race the request that let the run go.
+const workloadRunEndGrace = 2*killCascadeTimeout + 30*time.Second
+
+// workloadRunEndBatch bounds the owed ends one sweep pass takes; the rest wait for the next pass.
+const workloadRunEndBatch = 100
+
+// sweepWorkloadRunEnds ends the runs that workloads let go of and whose end was cut short: the request
+// went away, a read failed, or the process died first. It runs on the workload status sweeper's cadence,
+// on one replica, as system/wardynd. No other sweep reaches such a run: the sandbox sweep takes terminal
+// runs only, and the lease sweep only a run past its end or its lifetime cap.
+func (s *Server) sweepWorkloadRunEnds(ctx context.Context) error {
+	ws, ok := s.cfg.Store.(store.WorkloadStore)
+	if !ok {
+		return nil
+	}
+	ctx, end, ok := s.beginLeaderSweep(ctx)
+	if !ok {
+		return nil
+	}
+	defer end()
+	owed, err := ws.ListWorkloadRunEnds(ctx, workloadRunEndGrace, workloadRunEndBatch)
+	if err != nil {
+		return err
+	}
+	for _, e := range owed {
+		if ctx.Err() != nil {
+			return ctx.Err() // the rest wait for the next pass
+		}
+		s.endOwedWorkloadRun(ctx, e, types.ActorSystem, "wardynd")
+	}
+	return nil
 }
 
 // workloadOwnerOf is the owner a workload route acts for: ?owner= when given, else the caller. ok is false

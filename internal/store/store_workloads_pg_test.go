@@ -410,6 +410,68 @@ func TestPG_Workload_ReadsAndDelete(t *testing.T) {
 	}
 }
 
+// Recording a replacement and deleting a workload each owe the run they let go its end, in the same
+// write; an owed end is listed once it is older than asked, and dropping one twice is not an error.
+func TestPG_Workload_LettingARunGoOwesItsEnd(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := t.Context()
+	run := func() uuid.UUID { return persistRun(t, ctx, pool, newRun(types.RunRunning)).ID }
+	run1, run2, run3 := run(), run(), run()
+	owed := func(olderThan time.Duration) map[uuid.UUID]store.WorkloadRunEnd {
+		t.Helper()
+		ends, err := st.ListWorkloadRunEnds(ctx, olderThan, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[uuid.UUID]store.WorkloadRunEnd{}
+		for _, e := range ends {
+			out[e.RunID] = e
+		}
+		return out
+	}
+
+	w := mustPutWorkload(t, st, workloadPut("sub-a", "svc", "d1"))
+	if _, err := st.SetWorkloadRun(ctx, w.ID, mustClaim(t, st, w.ID), 1, run1); err != nil {
+		t.Fatal(err)
+	}
+	if got := owed(0); len(got) != 0 {
+		t.Fatalf("owed after the first run = %v, want none", got)
+	}
+	mustPutWorkload(t, st, workloadPut("sub-a", "svc", "d2"))
+	if _, err := st.SetWorkloadRun(ctx, w.ID, mustClaim(t, st, w.ID), 2, run2); err != nil {
+		t.Fatal(err)
+	}
+	want := store.WorkloadRunEnd{RunID: run1, Owner: "sub-a", Name: "svc", Generation: 2, Reason: store.WorkloadEndReplaced}
+	if got := owed(0)[run1]; got != want {
+		t.Fatalf("owed for the replaced run = %+v, want %+v", got, want)
+	}
+	if _, err := st.DeleteWorkload(ctx, "sub-a", "svc"); err != nil {
+		t.Fatal(err)
+	}
+	want = store.WorkloadRunEnd{RunID: run2, Owner: "sub-a", Name: "svc", Generation: 2, Reason: store.WorkloadEndDeleted}
+	if got := owed(0)[run2]; got != want {
+		t.Fatalf("owed for the deleted workload's run = %+v, want %+v", got, want)
+	}
+	if err := st.OweWorkloadRunEnd(ctx, store.WorkloadRunEnd{RunID: run3, Owner: "sub-a", Name: "svc", Generation: 3, Reason: store.WorkloadEndReplaced}); err != nil {
+		t.Fatal(err)
+	}
+	if got := owed(time.Hour); len(got) != 0 {
+		t.Fatalf("owed older than an hour = %v, want none", got)
+	}
+	if got := owed(0); len(got) != 3 {
+		t.Fatalf("owed = %v, want the three runs", got)
+	}
+	for _, id := range []uuid.UUID{run1, run2, run3, run3} {
+		if err := st.DropWorkloadRunEnd(ctx, id); err != nil {
+			t.Fatalf("drop %s: %v", id, err)
+		}
+	}
+	if got := owed(0); len(got) != 0 {
+		t.Fatalf("owed after the drops = %v, want none", got)
+	}
+}
+
 // The status sweep reads only custom-resource workloads, with their run's state and service health.
 func TestPG_Workload_K8sStatusesCarryRunStateAndHealth(t *testing.T) {
 	pool := runsPGPoolIsolated(t)

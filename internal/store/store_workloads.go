@@ -159,6 +159,9 @@ type WorkloadStore interface {
 	ListWorkloadsOf(ctx context.Context, owners []string, p Page) ([]WorkloadView, error)
 	ListK8sWorkloadStatuses(ctx context.Context) ([]WorkloadView, error)
 	DeleteWorkload(ctx context.Context, owner, name string) (Workload, error)
+	OweWorkloadRunEnd(ctx context.Context, e WorkloadRunEnd) error
+	ListWorkloadRunEnds(ctx context.Context, olderThan time.Duration, limit int) ([]WorkloadRunEnd, error)
+	DropWorkloadRunEnd(ctx context.Context, runID uuid.UUID) error
 	CreateWorkloadBinding(ctx context.Context, b WorkloadBinding) (WorkloadBinding, error)
 	ListWorkloadBindings(ctx context.Context, p Page) ([]WorkloadBinding, error)
 	DeleteWorkloadBinding(ctx context.Context, id uuid.UUID) (WorkloadBinding, error)
@@ -304,16 +307,19 @@ func (s PG) ClaimWorkloadLaunch(ctx context.Context, id uuid.UUID) (Workload, bo
 
 // SetWorkloadRun records that runID is the run of the workload's given generation, launched under claim: it
 // becomes the current run, the generation current, the last refusal is cleared and the claim released. It
-// returns the run it replaces, nil if there was none, for the caller to end. ErrNotFound when the workload
-// is gone, and ErrWorkloadSuperseded when claim is no longer the workload's (it lapsed and was taken again,
-// or its holder already recorded) or that generation, or a later one, was recorded first; the caller ends
-// runID.
+// returns the run it replaces, nil if there was none, for the caller to end; the same transaction records
+// that run as owed its end (WorkloadRunEnd), so an end the caller does not finish is still owed.
+// ErrNotFound when the workload is gone, and ErrWorkloadSuperseded when claim is no longer the workload's
+// (it lapsed and was taken again, or its holder already recorded) or that generation, or a later one, was
+// recorded first; the caller ends runID (OweWorkloadRunEnd).
 func (s PG) SetWorkloadRun(ctx context.Context, id, claim uuid.UUID, generation int64, runID uuid.UUID) (*uuid.UUID, error) {
 	var prev *uuid.UUID
 	err := s.inTx(ctx, func(q Querier) error {
 		var cur int64
 		var token *uuid.UUID
-		err := q.QueryRow(ctx, `SELECT current_run_id, current_generation, launch_claim_token FROM workloads WHERE id = $1 FOR UPDATE`, id).Scan(&prev, &cur, &token)
+		var owner, name string
+		err := q.QueryRow(ctx, `SELECT current_run_id, current_generation, launch_claim_token, owner, name FROM workloads WHERE id = $1 FOR UPDATE`,
+			id).Scan(&prev, &cur, &token, &owner, &name)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -323,11 +329,16 @@ func (s PG) SetWorkloadRun(ctx context.Context, id, claim uuid.UUID, generation 
 		if token == nil || *token != claim || cur >= generation {
 			return ErrWorkloadSuperseded
 		}
-		_, err = q.Exec(ctx, `
+		if _, err = q.Exec(ctx, `
 			UPDATE workloads SET current_run_id = $2, current_generation = $3, last_refusal = NULL, launch_claim_until = NULL,
 				launch_claim_token = NULL
-			WHERE id = $1`, id, runID, generation)
-		return err
+			WHERE id = $1`, id, runID, generation); err != nil {
+			return err
+		}
+		if prev == nil || *prev == runID {
+			return nil
+		}
+		return oweWorkloadRunEnd(ctx, q, WorkloadRunEnd{RunID: *prev, Owner: owner, Name: name, Generation: generation, Reason: WorkloadEndReplaced})
 	})
 	if err != nil {
 		return nil, err
@@ -411,9 +422,78 @@ func (s PG) ListK8sWorkloadStatuses(ctx context.Context) ([]WorkloadView, error)
 }
 
 // DeleteWorkload removes one owner's workload and returns the removed row, whose CurrentRunID the caller
-// ends, or ErrNotFound. The run itself is not touched here.
+// ends, or ErrNotFound. The run itself is not touched here; the same transaction records it as owed its
+// end (WorkloadRunEnd).
 func (s PG) DeleteWorkload(ctx context.Context, owner, name string) (Workload, error) {
-	return scanWorkload(s.Pool.QueryRow(ctx, `DELETE FROM workloads w WHERE w.owner = $1 AND w.name = $2 RETURNING `+workloadCols, owner, name))
+	var w Workload
+	err := s.inTx(ctx, func(q Querier) error {
+		var err error
+		w, err = scanWorkload(q.QueryRow(ctx, `DELETE FROM workloads w WHERE w.owner = $1 AND w.name = $2 RETURNING `+workloadCols, owner, name))
+		if err != nil || w.CurrentRunID == nil {
+			return err
+		}
+		return oweWorkloadRunEnd(ctx, q, WorkloadRunEnd{RunID: *w.CurrentRunID, Owner: w.Owner, Name: w.Name, Generation: w.Generation, Reason: WorkloadEndDeleted})
+	})
+	if err != nil {
+		return Workload{}, err
+	}
+	return w, nil
+}
+
+// The reasons a workload's run is owed its end, which its run.kill row carries.
+const (
+	WorkloadEndReplaced = "workload_replaced" // a newer launch of the workload replaced it
+	WorkloadEndDeleted  = "workload_deleted"  // the workload was deleted
+)
+
+// WorkloadRunEnd is a run a workload let go of that is still owed its end (migration 0244): written in the
+// transaction that let it go, and dropped once the run is ended, so an end cut short is still owed. Owner,
+// Name and Generation are the workload's, for the run.kill row; Reason is WorkloadEndReplaced or
+// WorkloadEndDeleted.
+type WorkloadRunEnd struct {
+	RunID      uuid.UUID
+	Owner      string
+	Name       string
+	Generation int64
+	Reason     string
+}
+
+func scanWorkloadRunEnd(row pgx.Row) (WorkloadRunEnd, error) {
+	var e WorkloadRunEnd
+	err := row.Scan(&e.RunID, &e.Owner, &e.Name, &e.Generation, &e.Reason)
+	return e, err
+}
+
+// oweWorkloadRunEnd records e on q. A run already owed its end keeps the row it has.
+func oweWorkloadRunEnd(ctx context.Context, q Querier, e WorkloadRunEnd) error {
+	if _, err := q.Exec(ctx, `
+		INSERT INTO workload_run_ends (run_id, owner, name, generation, reason) VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (run_id) DO NOTHING`, e.RunID, e.Owner, e.Name, e.Generation, e.Reason); err != nil {
+		return fmt.Errorf("store: owe a workload's run its end: %w", err)
+	}
+	return nil
+}
+
+// OweWorkloadRunEnd records that e's run is owed its end: a run a launch started that the workload did not
+// take, because another launch was recorded first or the workload is gone.
+func (s PG) OweWorkloadRunEnd(ctx context.Context, e WorkloadRunEnd) error {
+	return oweWorkloadRunEnd(ctx, s.Pool, e)
+}
+
+// ListWorkloadRunEnds returns up to limit owed ends recorded more than olderThan ago, oldest first.
+func (s PG) ListWorkloadRunEnds(ctx context.Context, olderThan time.Duration, limit int) ([]WorkloadRunEnd, error) {
+	return collect(ctx, s.Pool, "list", "owed workload run ends", `
+		SELECT run_id, owner, name, generation, reason FROM workload_run_ends
+		WHERE created_at < now() - make_interval(secs => $1::float8) ORDER BY created_at, run_id LIMIT $2`,
+		[]any{olderThan.Seconds(), limit}, scanWorkloadRunEnd)
+}
+
+// DropWorkloadRunEnd removes runID's owed end once the run is ended. One already gone is not an error.
+func (s PG) DropWorkloadRunEnd(ctx context.Context, runID uuid.UUID) error {
+	if _, err := s.Pool.Exec(ctx, `DELETE FROM workload_run_ends WHERE run_id = $1`, runID); err != nil {
+		return fmt.Errorf("store: drop a workload run's owed end: %w", err)
+	}
+	return nil
 }
 
 const workloadBindingCols = `b.id, b.pool_id, b.namespace, b.service, b.sponsor, b.created_by, b.created_at`
