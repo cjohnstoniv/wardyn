@@ -200,6 +200,58 @@ func TestUIGateway_InboundToken(t *testing.T) {
 	})
 }
 
+// TestUIGateway_InboundRefusalsAreInboundDenies: a call to a run that is not running, or is kept, is refused
+// before it is admitted (inbound.deny not_running, never inbound.allow); a profile that denies interactive
+// sessions is inbound.deny unit_denies; and a bearer that proved no one is recorded with no actor.
+func TestUIGateway_InboundRefusalsAreInboundDenies(t *testing.T) {
+	for name, end := range map[string]func(run *types.AgentRun){
+		"completed": func(run *types.AgentRun) { run.State = types.RunCompleted },
+		"kept":      func(run *types.AgentRun) { at := time.Now(); run.LostAt = &at },
+	} {
+		t.Run("a "+name+" run is not_running", func(t *testing.T) {
+			h, _ := inboundHarness(t)
+			end(&h.run)
+			h.store.putRun(h.run)
+			if rec := h.call("wdn_alice", nil); rec.Code != http.StatusConflict || respondedReason(t, rec) != reasonUIGatewayNotRunning {
+				t.Fatalf("call = %d %s, want 409 %s", rec.Code, rec.Body.String(), reasonUIGatewayNotRunning)
+			}
+			if rows := h.audit.auditRows("inbound.deny", "denied"); len(rows) != 1 || rows[0].Actor != h.owner || !h.audit.hasDataValue("reason", inboundDenyNotRunning) {
+				t.Errorf("inbound.deny rows = %+v, want one not_running by %s", rows, h.owner)
+			}
+			if rows := h.audit.auditRows("inbound.allow", "success"); len(rows) != 0 {
+				t.Errorf("inbound.allow rows = %+v, want none", rows)
+			}
+		})
+	}
+
+	t.Run("a profile denying interactive sessions is unit_denies", func(t *testing.T) {
+		h, _ := inboundHarness(t)
+		unit := types.GovernanceUnit{ID: uuid.New(), Name: "no-interactive", Limits: types.GovernanceLimits{DenyInteractive: true}}
+		h.store.profiles = []types.GovernanceUnit{unit}
+		h.run.UnitID = &unit.ID
+		h.store.putRun(h.run)
+		if rec := h.call("wdn_alice", nil); rec.Code != http.StatusForbidden {
+			t.Fatalf("call = %d %s, want 403", rec.Code, rec.Body.String())
+		}
+		if !h.audit.hasDataValue("reason", inboundDenyUnitDenies) {
+			t.Errorf("no inbound.deny unit_denies; reasons: %s", h.audit.dataReasons())
+		}
+		if n := len(h.audit.auditRows("inbound.allow", "success")) + len(h.audit.auditRows("ui.authorize", "denied")); n != 0 {
+			t.Errorf("%d inbound.allow or ui.authorize rows beside the inbound.deny; actions: %v", n, h.audit.actions())
+		}
+	})
+
+	t.Run("a bearer that proved no one has no actor", func(t *testing.T) {
+		h, _ := inboundHarness(t)
+		if rec := h.call("wdn_nobody", nil); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("call = %d %s, want 401", rec.Code, rec.Body.String())
+		}
+		if rows := h.audit.auditRows("inbound.deny", "denied"); len(rows) != 1 || rows[0].Actor != "" {
+			t.Errorf("inbound.deny rows = %+v, want one with actor \"\"", rows)
+		}
+	})
+}
+
 // TestUIGateway_InboundRateLimit: past the run's bucket a call is 429 with Retry-After, and audited.
 func TestUIGateway_InboundRateLimit(t *testing.T) {
 	h, _ := inboundHarness(t)

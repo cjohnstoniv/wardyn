@@ -57,12 +57,15 @@ const (
 )
 
 // The inbound.deny `reason` values the relay writes itself: audit data, never on the wire. A re-assert
-// refusal of an inbound session is its ui.authorize denial, as for any session.
+// refusal of an inbound session is its ui.authorize denial, as for any session, except the profile's
+// (unit_denies, uiInboundUnitDenies).
 const (
 	inboundDenyCredentialInvalid = "credential_invalid"
 	inboundDenyNotFound          = "not_found"
 	inboundDenyCrossSite         = "cross_site"
 	inboundDenyRateLimited       = "rate_limited"
+	inboundDenyNotRunning        = "not_running"
+	inboundDenyUnitDenies        = "unit_denies"
 )
 
 const (
@@ -70,6 +73,7 @@ const (
 	// inboundNotFoundMsg answers no run, no such app, an app that is not inbound and a token whose holder is
 	// not one of its callers alike, so a token is no oracle for which runs exist.
 	inboundNotFoundMsg    = "No inbound app here answers this token"
+	inboundNotRunningMsg  = "This run is not running; its inbound apps are gone"
 	inboundRateLimitedMsg = "Too many requests to this run's inbound apps; retry in a second"
 	uiCrossSiteMsg        = "This request came from another site; open the app from its own page"
 	uiRunnerOfflineMsg    = "The runner holding this run is offline; try again when it reconnects"
@@ -251,25 +255,31 @@ func (s *Server) inboundTokenSession(w http.ResponseWriter, r *http.Request, run
 // admitInboundToken is the bearer arm's admission, uncached: a bearer that is not a live inbound token is
 // 401 inbound_credential_invalid; a live one that may not call this app — no run, no such app, an app that
 // is not inbound, a holder who is neither the owner nor a caller — is 404 inbound_not_found, one answer for
-// all four. Each refusal writes its inbound.deny row. ok=false when it has answered.
+// all four; and one that may, on a run that is not running or is kept, is 409 ui_gateway_not_running. Each
+// refusal writes its inbound.deny row. ok=false when it has answered.
 func (s *Server) admitInboundToken(w http.ResponseWriter, r *http.Request, runID uuid.UUID, app, raw string) (uiSession, bool) {
 	v, r, verdict := s.verifyAPIToken(w, r, raw, true)
 	switch verdict {
 	case tokenAnswered:
 		return uiSession{}, false
 	case tokenRefused:
-		s.auditInboundRefused(r, runID, app, "unknown", inboundDenyCredentialInvalid)
+		s.auditInboundRefused(r, runID, app, "", inboundDenyCredentialInvalid)
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		writeErrorReason(w, http.StatusUnauthorized, reasonInboundCredentialInvalid, inboundCredentialInvalidMsg)
 		return uiSession{}, false
 	}
-	sess, ok := s.inboundSessionFor(r.Context(), runID, app, v)
-	if !ok {
-		s.auditInboundRefused(r, runID, app, v.Principal, inboundDenyNotFound)
+	sess, deny := s.inboundSessionFor(r.Context(), runID, app, v)
+	switch deny {
+	case "":
+		return sess, true
+	case inboundDenyNotRunning:
+		s.auditInboundRefused(r, runID, app, v.Principal, deny)
+		writeErrorReason(w, http.StatusConflict, reasonUIGatewayNotRunning, inboundNotRunningMsg)
+	default:
+		s.auditInboundRefused(r, runID, app, v.Principal, deny)
 		writeErrorReason(w, http.StatusNotFound, reasonInboundNotFound, inboundNotFoundMsg)
-		return uiSession{}, false
 	}
-	return sess, true
+	return uiSession{}, false
 }
 
 // inboundReadmitCtxKey carries an inbound-token request's re-admission to the upgrade it may become
@@ -327,26 +337,32 @@ func (c *inboundStream) Close() error {
 	return c.err
 }
 
-// inboundSessionFor is the session v may hold on app of runID, ok=false when it may hold none. A store
-// failure is none too (logged): the request fails closed, and a retry asks again.
+// inboundSessionFor is the session v may hold on app of runID, or the inbound.deny reason it may hold none:
+// not_found for no reach, and not_running for a caller whose run is not running, has no sandbox or is kept
+// (asked after reach, so the state is no oracle). A store failure is not_found too (logged): the request
+// fails closed, and a retry asks again.
 //
 // The session's authority time is the token's creation, so the re-assert's revocation cutoff and sponsor
 // check order it as they do the token itself. It carries no role: no role gives inbound reach.
-func (s *Server) inboundSessionFor(ctx context.Context, runID uuid.UUID, app string, v verifiedAPIToken) (uiSession, bool) {
+func (s *Server) inboundSessionFor(ctx context.Context, runID uuid.UUID, app string, v verifiedAPIToken) (uiSession, string) {
 	run, err := s.cfg.Store.GetRun(ctx, runID)
 	if err != nil {
 		if !errors.Is(err, store.ErrNotFound) {
 			slog.ErrorContext(ctx, "wardynd: ui gateway inbound run lookup failed", "run_id", runID, "err", err)
 		}
-		return uiSession{}, false
+		return uiSession{}, inboundDenyNotFound
 	}
 	declared, ok := s.inboundApp(ctx, runID, app)
 	if !ok {
-		return uiSession{}, false
+		return uiSession{}, inboundDenyNotFound
 	}
 	caller, ok := s.inboundCaller(ctx, run, declared, v.Principal, v.Email, v.Groups, v.CreatedAt)
 	if !ok {
-		return uiSession{}, false
+		return uiSession{}, inboundDenyNotFound
+	}
+	// uiDial's state check, made here so a call it would refuse is never admitted (inbound.allow).
+	if run.State != types.RunRunning || run.SandboxRef == "" || runIsKept(run) {
+		return uiSession{}, inboundDenyNotRunning
 	}
 	now := s.cfg.Now()
 	sess := uiSession{
@@ -362,7 +378,7 @@ func (s *Server) inboundSessionFor(ctx context.Context, runID uuid.UUID, app str
 	if v.service != nil {
 		sess.sponsor = v.service.Sponsor
 	}
-	return sess, true
+	return sess, ""
 }
 
 // inboundApp is app as the run's effective policy declares it, when it is declared inbound. A policy that
@@ -420,7 +436,10 @@ func (s *Server) inboundCaller(ctx context.Context, run types.AgentRun, app type
 }
 
 // uiInboundUnitDenies is the re-assert's profile arm for an inbound session: the run's profile as it stands
-// now denies UI apps, or denies interactive sessions, which a service port could serve.
+// now denies UI apps, or denies interactive sessions, which a service port could serve. Its refusal is the
+// session's inbound.deny unit_denies row, rate-bound as the arm's other refusals are, in place of a
+// ui.authorize denial; the arm also runs on the connection path (uiDial), where no request is in hand, so
+// the row names no method or path.
 func (s *Server) uiInboundUnitDenies(ctx context.Context, sess uiSession, run types.AgentRun) *uiDialError {
 	p, err := s.runUnit(ctx, run)
 	if err != nil {
@@ -430,8 +449,11 @@ func (s *Server) uiInboundUnitDenies(ctx context.Context, sess uiSession, run ty
 	if p == nil || (!p.Limits.DenyUIApps && !p.Limits.DenyInteractive) {
 		return nil
 	}
-	return s.uiDenyReassert(sess, string(authz.ReasonGovernanceUnit), http.StatusForbidden,
-		fmt.Sprintf("Inbound apps are not allowed under the governance profile %q this run was launched under.", p.Name))
+	if s.authFailedAllowed() {
+		s.recordInbound(ctx, "", sess, sess.SandboxRef, "inbound.deny", "denied", map[string]any{"reason": inboundDenyUnitDenies})
+	}
+	return &uiDialError{status: http.StatusForbidden, reason: string(authz.ReasonGovernanceUnit),
+		msg: fmt.Sprintf("Inbound apps are not allowed under the governance profile %q this run was launched under.", p.Name)}
 }
 
 // admitInbound spends an inbound session's request from its run's bucket and writes its inbound.allow row.
@@ -461,7 +483,14 @@ func (s *Server) admitInbound(w http.ResponseWriter, r *http.Request, sess uiSes
 // app, and what was asked (the path the app sees, never the query). ref, when known, is the run's sandbox,
 // so a remote runner's rows carry the relay.
 func (s *Server) auditInbound(r *http.Request, sess uiSession, ref, action, outcome string, data map[string]any) {
-	data["app"], data["port"], data["method"], data["path"] = sess.App, sess.Port, r.Method, inboundPath(r, sess.Run, sess.App)
+	data["method"], data["path"] = r.Method, inboundPath(r, sess.Run, sess.App)
+	s.recordInbound(r.Context(), r.RemoteAddr, sess, ref, action, outcome, data)
+}
+
+// recordInbound writes one inbound.* row of sess with data: the caller and the app. sourceIP is the
+// request's, "" where the row has no request (uiInboundUnitDenies).
+func (s *Server) recordInbound(ctx context.Context, sourceIP string, sess uiSession, ref, action, outcome string, data map[string]any) {
+	data["app"], data["port"] = sess.App, sess.Port
 	data["via"], data["caller"] = "session", "owner"
 	if sess.tokenID != uuid.Nil {
 		data["via"], data["token_id"] = "token", sess.tokenID
@@ -473,12 +502,12 @@ func (s *Server) auditInbound(r *http.Request, sess uiSession, ref, action, outc
 		data["service_identity"], data["entry"] = sess.Service, sponsorEntry
 	}
 	ev := s.auditEvent(&sess.Run, uiActorType(sess), sess.Principal, action, sess.App, outcome, mustJSON(data))
-	ev.SourceIP = r.RemoteAddr
-	s.recordStreamAudit(s.uiAuditCtx(context.WithoutCancel(r.Context()), sess), ref, ev)
+	ev.SourceIP = sourceIP
+	s.recordStreamAudit(s.uiAuditCtx(context.WithoutCancel(ctx), sess), ref, ev)
 }
 
 // auditInboundRefused writes the inbound.deny row of a token refused before it held a session, within
-// authFailedAllowed's bound. principal is "unknown" until the token proved one.
+// authFailedAllowed's bound. principal is "" until the token proved one.
 func (s *Server) auditInboundRefused(r *http.Request, runID uuid.UUID, app, principal, reason string) {
 	if !s.authFailedAllowed() {
 		return
