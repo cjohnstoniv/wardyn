@@ -124,6 +124,10 @@ type Bootstrapper interface {
 	Bootstrap(ctx context.Context, in BootstrapInput) (BootstrapResult, error)
 }
 
+// ErrSignInRefused is what a Bootstrapper returns, wrapped, when the guest's Remote Login answered and
+// refused the admin account's password.
+var ErrSignInRefused = errors.New("the guest refused the sign-in as the admin account")
+
 // PrepareOptions configures Prepare.
 type PrepareOptions struct {
 	Engine Engine
@@ -789,6 +793,9 @@ func (p *prep) provisionAndBootstrap(ctx context.Context, spec MachineSpec) (Boo
 	if err != nil {
 		if rerr := relayFailed(nil); rerr != nil {
 			return BootstrapResult{}, rerr
+		}
+		if p.byHand && errors.Is(err, ErrSignInRefused) {
+			return BootstrapResult{}, fmt.Errorf("macvm: the guest refused the sign-in as %s with the one-time code: the account made in Setup Assistant must be named %s and its password must be the one-time code. Discard this base and prepare again", provisionUser, provisionUser)
 		}
 		return BootstrapResult{}, fmt.Errorf("macvm: stage 1: %w", err)
 	}

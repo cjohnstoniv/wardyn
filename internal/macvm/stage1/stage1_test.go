@@ -359,6 +359,16 @@ func TestCommandTableCitesItsStep(t *testing.T) {
 	}
 }
 
+func TestRefusedPasswordIsErrSignInRefused(t *testing.T) {
+	f := newFixture(t, provPass)
+	in := f.input(false)
+	in.Password = "not-the-password"
+	_, err := f.b.Bootstrap(context.Background(), in)
+	if !errors.Is(err, ErrSignInRefused) || !errors.Is(err, macvm.ErrSignInRefused) {
+		t.Fatalf("err = %v; want ErrSignInRefused", err)
+	}
+}
+
 func TestKeyboardInteractiveSignIn(t *testing.T) {
 	f := newFixture(t, provPass)
 	f.srv.KeyboardOnly = true

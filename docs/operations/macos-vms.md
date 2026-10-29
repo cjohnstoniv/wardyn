@@ -131,7 +131,7 @@
 - On macOS 27 this happens only when the guest's Remote Login has not answered 10 minutes after the first boot.
 - Before you start, `wardyn-runnerd macos-vm status` on a macOS 26 Mac says that its prepare needs setup by hand.
 - When the wait begins, preparing writes a fresh 8-character one-time code to `~/Library/Application Support/Wardyn/macos-vm.noindex/setup-code.json`, readable by you only. `status` and `doctor` name the file and never print the code. No log or event carries it.
-- It opens a window on the Mac, "Wardyn: set up this macOS VM", with the guest's screen in it. The window has no close button: it closes by itself when the wait ends.
+- It opens a window on the Mac, "Wardyn: set up this macOS VM", with the guest's screen in it. Its title names the account to create, `wardyn-admin`, and says its password is the one-time code. The window has no close button: it closes by itself when the wait ends.
 - Preparing waits up to an hour for the guest's Remote Login, then stops and publishes no base. Run `prepare` again to retry.
 - The window needs the Mac's desktop. On macOS 26, `prepare`, and the prepare that `setup` starts, refuse at once, before any download, when started over SSH, outside the signed-in desktop, or with sudo. They say: run prepare in Terminal on the Mac, signed in at its desktop, not over SSH and not with sudo.
 

@@ -60,6 +60,8 @@ var (
 	// ErrUnexpectedAccounts: the guest's local users of UniqueID 500 or more are not exactly the admin and the
 	// agent, or the list could not be read as dscl prints it.
 	ErrUnexpectedAccounts = errors.New("stage 1: the guest's local accounts are not exactly the admin and the agent")
+	// ErrSignInRefused: the guest answered, but refused the admin account's password.
+	ErrSignInRefused = macvm.ErrSignInRefused
 	// ErrAgentChecksum: the installed guest agent is not the file sent.
 	ErrAgentChecksum = errors.New("stage 1: the installed guest agent's SHA-256 does not match")
 )
@@ -281,6 +283,9 @@ func (s *session) connect(ctx context.Context) error {
 		_ = conn.Close()
 		if errors.Is(err, ErrHostKeyChanged) {
 			return ErrHostKeyChanged
+		}
+		if strings.Contains(err.Error(), "unable to authenticate") { // x/crypto has no typed error for it
+			return fmt.Errorf("%w (%s): %w", ErrSignInRefused, s.username, err)
 		}
 		return fmt.Errorf("stage 1: sign in to the guest as %s: %w", s.username, err)
 	}
