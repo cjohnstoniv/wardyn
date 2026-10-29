@@ -181,22 +181,111 @@ func (s *Server) answerWorkload(w http.ResponseWriter, r *http.Request, ws store
 	if err != nil {
 		v = store.WorkloadView{Workload: wl} // deleted under the apply: answer what was recorded
 	}
-	writeJSON(w, status, client.WorkloadApplyResult{Workload: workloadOut(v), Outcome: outcome, Launch: launch})
+	writeJSON(w, status, client.WorkloadApplyResult{Workload: workloadOut(v, s.workloadReadTier(r, wl.Owner)), Outcome: outcome, Launch: launch})
 }
 
 func workloadTarget(wl store.Workload) string { return wl.Owner + "/" + wl.Name }
 
-// workloadOut is a stored workload as the API reports it.
-func workloadOut(v store.WorkloadView) client.Workload {
+// workloadOut is a stored workload as the API reports it to a reader of tier (workloadReadTier).
+func workloadOut(v store.WorkloadView, tier workspaceReadTier) client.Workload {
 	out := client.Workload{Name: v.Name, Owner: v.Owner, Source: client.WorkloadSource(v.Source), Namespace: v.SourceNamespace,
 		Description: v.Description, RunIn: v.RunIn, RestartKey: v.RestartKey, Generation: v.Generation,
 		CurrentGeneration: v.CurrentGeneration, RunID: v.CurrentRunID, State: string(v.RunState), CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt}
 	if v.RunState != "" && v.ServiceHealth != "" {
 		out.State += "/" + v.ServiceHealth
 	}
-	_ = json.Unmarshal(v.Intent, &out.Intent) //nolint:errcheck // the door wrote it; an unreadable intent reads as none
+	_ = json.Unmarshal(redactWorkloadIntentForRead(v.Intent, tier), &out.Intent) //nolint:errcheck // the door wrote it; an unreadable intent reads as none
 	if f := v.LastRefusal; f != nil {
 		out.LastRefusal = &client.WorkloadRefusal{Generation: f.Generation, Reason: f.Reason, Message: f.Message, At: f.At}
+	}
+	return out
+}
+
+// workloadReadTier is the tier the caller of r reads owner's workloads at (helpers.go's workspace tiers):
+// in full as the owner, as the sponsor of a service-identity owner, or as an operator; with the host axis
+// withheld as the security tier reading anyone else's. No other caller reaches another owner's workload.
+func (s *Server) workloadReadTier(r *http.Request, owner string) workspaceReadTier {
+	ctx := r.Context()
+	if s.isOperator(ctx) || !s.isSecurityOperator(ctx) || owner == principalFromRequest(r) || s.sponsorsWorkloadOwner(r, owner) {
+		return workspaceReadFull
+	}
+	return workspaceReadSecurity
+}
+
+// workloadIntentImageKeys are the intent's keys that name a registry coordinate: the image the run uses,
+// and the one it picks from the organisation's allowed list.
+var workloadIntentImageKeys = []string{"image", "allowed_image"}
+
+// redactWorkloadIntentForRead projects a stored workload intent down to its reader's tier, as
+// redactWorkspaceForRead does a workspace: below full, the host axis goes and the egress axis stays. The
+// host axis in an intent is an inline workspace mount's source (a host path), the image coordinates, and
+// the secret names content inspection resolves. Like redactProfileForRead it deletes or blanks decoded
+// keys, so a field a newer intent carries is kept, and it fails closed: a part that does not decode is
+// withheld whole.
+func redactWorkloadIntentForRead(raw json.RawMessage, tier workspaceReadTier) json.RawMessage {
+	if tier == workspaceReadFull || len(raw) == 0 {
+		return raw
+	}
+	var intent map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &intent); err != nil {
+		return nil
+	}
+	for _, k := range workloadIntentImageKeys {
+		if _, ok := intent[k]; ok {
+			intent[k] = json.RawMessage(`""`)
+		}
+	}
+	if pol, ok := intent["inline_policy"]; ok {
+		if pol = redactWorkloadPolicyForRead(pol); pol == nil {
+			delete(intent, "inline_policy")
+		} else {
+			intent["inline_policy"] = pol
+		}
+	}
+	out, err := json.Marshal(intent)
+	if err != nil {
+		return nil
+	}
+	return out
+}
+
+// redactWorkloadPolicyForRead is redactWorkloadIntentForRead for the intent's inline_policy: each
+// workspace mount's source blanked, content inspection's workspace_secret_names dropped. nil when the
+// policy does not decode.
+func redactWorkloadPolicyForRead(raw json.RawMessage) json.RawMessage {
+	var pol map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &pol); err != nil {
+		return nil
+	}
+	if m, ok := pol["workspace_mounts"]; ok {
+		var mounts []map[string]json.RawMessage
+		if err := json.Unmarshal(m, &mounts); err != nil {
+			delete(pol, "workspace_mounts")
+		} else {
+			for _, mount := range mounts {
+				if _, ok := mount["source"]; ok {
+					mount["source"] = json.RawMessage(`""`)
+				}
+			}
+			if pol["workspace_mounts"], err = json.Marshal(mounts); err != nil {
+				return nil
+			}
+		}
+	}
+	if li, ok := pol["llm_inspection"]; ok {
+		var spec map[string]json.RawMessage
+		if err := json.Unmarshal(li, &spec); err != nil {
+			delete(pol, "llm_inspection")
+		} else {
+			delete(spec, "workspace_secret_names")
+			if pol["llm_inspection"], err = json.Marshal(spec); err != nil {
+				return nil
+			}
+		}
+	}
+	out, err := json.Marshal(pol)
+	if err != nil {
+		return nil
 	}
 	return out
 }
@@ -459,7 +548,7 @@ func (s *Server) handleGetWorkload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if v, ok := s.workloadFor(w, r, ws); ok {
-		writeJSON(w, http.StatusOK, workloadOut(v))
+		writeJSON(w, http.StatusOK, workloadOut(v, s.workloadReadTier(r, v.Owner)))
 	}
 }
 
@@ -490,8 +579,14 @@ func (s *Server) handleListWorkloads(w http.ResponseWriter, r *http.Request) {
 			rows, lerr = ws.ListWorkloadsOf(ctx, owners, p)
 		}
 		out := make([]client.Workload, 0, len(rows))
+		tiers := map[string]workspaceReadTier{} // one sponsor read per owner, not per row
 		for _, v := range rows {
-			out = append(out, workloadOut(v))
+			tier, ok := tiers[v.Owner]
+			if !ok {
+				tier = s.workloadReadTier(r, v.Owner)
+				tiers[v.Owner] = tier
+			}
+			out = append(out, workloadOut(v, tier))
 		}
 		return out, lerr
 	}, nil)

@@ -405,6 +405,96 @@ func TestPG_Workload_UnreadableRunStaysOwedUntilTheSweepEndsIt(t *testing.T) {
 	}
 }
 
+// hostAxisIntent carries each host-axis field a workload read withholds from the security tier, beside the
+// egress axis it keeps.
+const hostAxisIntent = `,"image":"registry.corp.internal/base:1","inline_policy":{"allowed_domains":["artifacts.corp.internal"],` +
+	`"workspace_mounts":[{"source":"/srv/nfs-prod/payments","target":"/work/data"}],` +
+	`"llm_inspection":{"mode":"alert","detect_secrets":true,"workspace_secret_names":["acme-prod-db-password"]}}`
+
+// hostAxisView is the part of a read workload's intent hostAxisIntent wrote.
+type hostAxisView struct {
+	Image        string `json:"image"`
+	InlinePolicy struct {
+		AllowedDomains  []string `json:"allowed_domains"`
+		WorkspaceMounts []struct {
+			Source string `json:"source"`
+			Target string `json:"target"`
+		} `json:"workspace_mounts"`
+		LLMInspection map[string]json.RawMessage `json:"llm_inspection"`
+	} `json:"inline_policy"`
+}
+
+// TestPG_Workload_ForeignSecurityReadWithholdsTheHostAxis: the owner and an operator read a workload's
+// intent whole; the security tier reading another owner's, by GET or in a list, reads it with the mount's
+// host path and the image blanked and the secret names gone, and the egress and the rest kept.
+func TestPG_Workload_ForeignSecurityReadWithholdsTheHostAxis(t *testing.T) {
+	e := newSvcEnv(t)
+	pol := e.plainPolicy(t, "wl-pol")
+	decodeApply(t, doSSO(t, e.h.srv, http.MethodPut, "/api/v1/workloads/web", e.mem, workloadBody(pol, "t", hostAxisIntent)), http.StatusCreated)
+
+	read := func(c *http.Cookie, path string) hostAxisView {
+		t.Helper()
+		w := doSSO(t, e.h.srv, http.MethodGet, path, c, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET %s: %d %s", path, w.Code, w.Body.String())
+		}
+		var one struct {
+			Owner  string          `json:"owner"`
+			Intent json.RawMessage `json:"intent"`
+		}
+		var page []struct {
+			Owner  string          `json:"owner"`
+			Intent json.RawMessage `json:"intent"`
+		}
+		raw := w.Body.Bytes()
+		if json.Unmarshal(raw, &page) == nil {
+			for _, p := range page {
+				if p.Owner == "mem" {
+					one = p
+				}
+			}
+		} else if err := json.Unmarshal(raw, &one); err != nil {
+			t.Fatal(err)
+		}
+		if one.Owner != "mem" {
+			t.Fatalf("GET %s: no workload of mem in %s", path, raw)
+		}
+		var v hostAxisView
+		if err := json.Unmarshal(one.Intent, &v); err != nil {
+			t.Fatalf("GET %s intent: %v", path, err)
+		}
+		return v
+	}
+	check := func(what string, v hostAxisView, projected bool) {
+		t.Helper()
+		image, source, names := "registry.corp.internal/base:1", "/srv/nfs-prod/payments", true
+		if projected {
+			image, source, names = "", "", false
+		}
+		if v.Image != image {
+			t.Errorf("%s: image = %q, want %q", what, v.Image, image)
+		}
+		if m := v.InlinePolicy.WorkspaceMounts; len(m) != 1 || m[0].Source != source || m[0].Target != "/work/data" {
+			t.Errorf("%s: workspace_mounts = %+v, want source %q and the target kept", what, m, source)
+		}
+		if _, ok := v.InlinePolicy.LLMInspection["workspace_secret_names"]; ok != names {
+			t.Errorf("%s: llm_inspection = %v, workspace_secret_names present = %v, want %v", what, v.InlinePolicy.LLMInspection, ok, names)
+		}
+		if string(v.InlinePolicy.LLMInspection["detect_secrets"]) != "true" {
+			t.Errorf("%s: llm_inspection.detect_secrets = %s, want it kept", what, v.InlinePolicy.LLMInspection["detect_secrets"])
+		}
+		if d := v.InlinePolicy.AllowedDomains; len(d) != 1 || d[0] != "artifacts.corp.internal" {
+			t.Errorf("%s: allowed_domains = %v, want the egress kept", what, d)
+		}
+	}
+	check("owner GET", read(e.mem, "/api/v1/workloads/web"), false)
+	check("owner list", read(e.mem, "/api/v1/workloads"), false)
+	check("operator GET", read(e.admin, "/api/v1/workloads/web?owner=mem"), false)
+	check("security GET", read(e.sec, "/api/v1/workloads/web?owner=mem"), true)
+	check("security list", read(e.sec, "/api/v1/workloads"), true)
+	check("security list of the owner", read(e.sec, "/api/v1/workloads?owner=mem"), true)
+}
+
 func decodeIntent(t *testing.T, raw string) client.TemplateIntent {
 	t.Helper()
 	var i client.TemplateIntent
