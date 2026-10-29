@@ -812,8 +812,8 @@ func TestPG_RunnerActions_DeferredStopProxyIsNeverReissued(t *testing.T) {
 }
 
 // The lease sweep re-asserts a kept run's stop every pass: once the runner has answered that exact
-// binding, a re-assert returns the answered action and queues nothing. A new loss, a new generation or
-// a successful recovery since is a new binding, and queues.
+// binding, a re-assert returns the answered action and queues nothing. A new loss, or a successful
+// recovery since (even at the same ref, generation and loss), queues.
 func TestPG_RunnerActions_AnsweredActionIsNotRequeued(t *testing.T) {
 	f := newActionFixture(t)
 	ctx := t.Context()
@@ -849,10 +849,17 @@ func TestPG_RunnerActions_AnsweredActionIsNotRequeued(t *testing.T) {
 	}
 	answer(f.mustQueue(t, f.action(relost, types.RunnerActionStopProxy, gen)))
 
+	// A successful recovery reopens what the answered stops closed, at the same ref and generation:
+	// the stop obligation it renews queues again, for the same loss as for a new one.
 	if _, err := f.pool.Exec(ctx, `INSERT INTO runner_pending_actions (id, runner_id, run_id, kind, ref, binding_version, owner, execution_generation, proof, applied_at, outcome, observed_at)
 		VALUES ($1,$2,$3,'recover_containment',$4,1,$5,$6,'{}'::jsonb,now(),'success',now())`,
 		uuid.New(), f.rn.ID, run.ID, run.SandboxRef, f.rn.Owner, gen); err != nil {
 		t.Fatal(err)
+	}
+	renewed := f.mustQueue(t, f.action(relost, types.RunnerActionStopProxy, gen))
+	answer(renewed)
+	if again, queued, err := f.st.QueueRunnerAction(ctx, f.action(relost, types.RunnerActionStopProxy, gen)); err != nil || queued || again.ID != renewed.ID {
+		t.Fatalf("the renewed stop re-asserted after its answer: queued=%v id=%s err=%v", queued, again.ID, err)
 	}
 	f.mustQueue(t, f.action(run, types.RunnerActionEnd, gen))
 }
