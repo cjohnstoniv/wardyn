@@ -631,7 +631,7 @@ func TestEraseResidentForgetsTheDigests(t *testing.T) {
 // WorkloadStatus reaches the runner as sent; a status outside the wire's bounds is refused before any call.
 func TestWorkloadStatusReachesTheRunner(t *testing.T) {
 	rig := runnertest.NewRig(t, rid)
-	a := runnerwire.WorkloadStatusArgs{Namespace: "team-a", Name: "web", ObservedGeneration: 3, Phase: runnerwire.WorkloadPhaseRunning, RunID: uuid.NewString()}
+	a := runnerwire.WorkloadStatusArgs{Namespace: "team-a", Name: "web", UID: "uid-web", ObservedGeneration: 3, Phase: runnerwire.WorkloadPhaseRunning, RunID: uuid.NewString()}
 	if err := rig.Sub.WorkloadStatus(ctxT(t), a); err != nil {
 		t.Fatal(err)
 	}

@@ -16,7 +16,7 @@ import (
 )
 
 func TestDispatcherWorkloadStatus(t *testing.T) {
-	status := runnerwire.WorkloadStatusArgs{Namespace: "team-a", Name: "triage-bot", ObservedGeneration: 3, Phase: runnerwire.WorkloadPhaseRunning, RunID: uuid.NewString()}
+	status := runnerwire.WorkloadStatusArgs{Namespace: "team-a", Name: "triage-bot", UID: "uid-triage-bot", ObservedGeneration: 3, Phase: runnerwire.WorkloadPhaseRunning, RunID: uuid.NewString()}
 	a, b := runnerwire.Loopback()
 	defer b.Close()
 	p := runnerwire.NewPeer(a, runnerwire.PeerConfig{})

@@ -53,7 +53,7 @@ func newWorkloadSweepServer(t *testing.T) (*Server, *workloadSweepStore) {
 func k8sView(name string, runner uuid.UUID, state types.RunState) store.WorkloadView {
 	run, gen := uuid.New(), int64(4)
 	return store.WorkloadView{Workload: store.Workload{ID: uuid.New(), Owner: "service:ci-bot", Name: name, Source: store.WorkloadSourceK8s,
-		SourceNamespace: "team-a", SourceRunnerID: &runner, K8sGeneration: &gen, Generation: 2, CurrentGeneration: 2, CurrentRunID: &run},
+		SourceNamespace: "team-a", SourceRunnerID: &runner, K8sGeneration: &gen, K8sUID: "uid-" + name, Generation: 2, CurrentGeneration: 2, CurrentRunID: &run},
 		RunState: state}
 }
 
@@ -119,8 +119,8 @@ func TestWorkloadStatusOf(t *testing.T) {
 		if err := a.Validate(); err != nil {
 			t.Errorf("%s: %+v does not fit the wire: %v", tc.name, a, err)
 		}
-		if a.ObservedGeneration != 4 || a.Namespace != "team-a" || a.Name != "web" {
-			t.Errorf("%s: status %+v, want team-a/web at observed generation 4", tc.name, a)
+		if a.ObservedGeneration != 4 || a.Namespace != "team-a" || a.Name != "web" || a.UID != "uid-web" {
+			t.Errorf("%s: status %+v, want team-a/web (uid-web) at observed generation 4", tc.name, a)
 		}
 	}
 }
@@ -138,7 +138,9 @@ func TestWorkloadStatusSweep_PushesWhatMovedToItsOnlineRunner(t *testing.T) {
 	same := k8sView("same", online, types.RunRunning)
 	same.StatusPushed = workloadStatusHash(workloadStatusOf(same))
 	away := k8sView("away", offline, types.RunRunning)
-	f.views = []store.WorkloadView{moved, same, away}
+	unnamed := k8sView("unnamed", online, types.RunRunning)
+	unnamed.K8sUID = "" // recorded before the uid column: waits for its resource's next report
+	f.views = []store.WorkloadView{moved, same, away, unnamed}
 
 	if err := srv.sweepWorkloadStatuses(context.Background()); err != nil {
 		t.Fatal(err)
@@ -152,6 +154,9 @@ func TestWorkloadStatusSweep_PushesWhatMovedToItsOnlineRunner(t *testing.T) {
 	}
 	if _, ok := f.pushed[away.ID]; ok {
 		t.Fatal("a status for a runner held elsewhere was recorded as sent")
+	}
+	if _, ok := f.pushed[unnamed.ID]; ok {
+		t.Fatal("a status with no resource uid was recorded as sent")
 	}
 
 	srv.pushRunnerWorkloadStatuses(context.Background(), online)

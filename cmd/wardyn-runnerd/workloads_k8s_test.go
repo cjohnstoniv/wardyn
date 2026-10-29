@@ -13,11 +13,13 @@ import (
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 )
@@ -224,7 +226,7 @@ func TestWorkloadWatcherStatus(t *testing.T) {
 	first, later := clock.Format(time.RFC3339), clock.Add(time.Hour).Format(time.RFC3339)
 	w.now = func() time.Time { return clock }
 	ctx := context.Background()
-	answer := runnerwire.WorkloadStatusArgs{Namespace: "team-a", Name: "bot", ObservedGeneration: 3, Phase: runnerwire.WorkloadPhaseRunning, RunID: "5f0c"}
+	answer := runnerwire.WorkloadStatusArgs{Namespace: "team-a", Name: "bot", UID: "uid-bot", ObservedGeneration: 3, Phase: runnerwire.WorkloadPhaseRunning, RunID: "5f0c"}
 
 	read := func() map[string]any {
 		got, err := client.Resource(workloadGVR).Namespace("team-a").Get(ctx, "bot", metav1.GetOptions{})
@@ -286,6 +288,75 @@ func TestWorkloadWatcherStatus(t *testing.T) {
 	gone.Name = "deleted"
 	if err := w.status(ctx, gone); err != nil {
 		t.Fatalf("a deleted resource: %v, want no error", err)
+	}
+}
+
+// TestWorkloadWatcherStatusOnlyForItsResource: an answer is written only to the resource it names, by
+// uid and generation, at the resourceVersion it was checked at; a resource recreated under the name, a
+// newer spec, a delete before the write, or a write that meets a change are no error storm.
+func TestWorkloadWatcherStatusOnlyForItsResource(t *testing.T) {
+	cr := workloadCR("team-a", "bot", 2, intentSpec("./one"))
+	cr.SetResourceVersion("7")
+	client := fakeWorkloadClient(cr)
+	var patches []map[string]any
+	var patchErrs []error // answered, in order, before the tracker sees a patch
+	client.PrependReactor("patch", "wardynworkloads", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		var body map[string]any
+		_ = json.Unmarshal(a.(k8stesting.PatchAction).GetPatch(), &body)
+		patches = append(patches, body)
+		if len(patchErrs) > 0 {
+			err := patchErrs[0]
+			patchErrs = patchErrs[1:]
+			return true, nil, err
+		}
+		return false, nil, nil
+	})
+	w := startWorkloadWatcher(t, client, time.Hour, nil, "team-a")
+	waitWorkload(t, "the informer to sync", func() bool { return w.synced["team-a"].Load() })
+	ctx := context.Background()
+	status := func() map[string]any {
+		got, err := client.Resource(workloadGVR).Namespace("team-a").Get(ctx, "bot", metav1.GetOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		st, _ := got.Object["status"].(map[string]any)
+		return st
+	}
+	answer := runnerwire.WorkloadStatusArgs{Namespace: "team-a", Name: "bot", UID: "uid-bot", ObservedGeneration: 2, Phase: runnerwire.WorkloadPhaseRunning, RunID: "run-b"}
+
+	replaced := answer
+	replaced.UID, replaced.ObservedGeneration, replaced.RunID = "uid-old", 2, "run-a"
+	stale := answer
+	stale.ObservedGeneration = 1
+	for name, a := range map[string]runnerwire.WorkloadStatusArgs{"a resource recreated under the name": replaced, "an older generation": stale} {
+		if err := w.status(ctx, a); err != nil {
+			t.Fatalf("%s: %v, want dropped without an error", name, err)
+		}
+	}
+	if st := status(); st != nil || len(patches) != 0 {
+		t.Fatalf("a stale answer was written: status %v, %d patches", st, len(patches))
+	}
+
+	if err := w.status(ctx, answer); err != nil {
+		t.Fatal(err)
+	}
+	if st := status(); st["phase"] != "Running" || st["runID"] != "run-b" {
+		t.Fatalf("the matching answer: status %v", st)
+	}
+	md, _ := patches[0]["metadata"].(map[string]any)
+	if len(patches) != 1 || md["uid"] != "uid-bot" || md["resourceVersion"] != "7" {
+		t.Fatalf("patches %v, want one carrying uid-bot at resourceVersion 7", patches)
+	}
+
+	// A write that meets a change is read again and retried; one whose resource went is no error.
+	patchErrs = []error{apierrors.NewConflict(workloadGVR.GroupResource(), "bot", fmt.Errorf("changed"))}
+	answer.Phase = runnerwire.WorkloadPhaseUnhealthy
+	if err := w.status(ctx, answer); err != nil || len(patches) != 3 || status()["phase"] != "Unhealthy" {
+		t.Fatalf("after a conflict: %v, %d patches, status %v; want it retried once and written", err, len(patches), status())
+	}
+	patchErrs = []error{apierrors.NewNotFound(workloadGVR.GroupResource(), "bot")}
+	if err := w.status(ctx, answer); err != nil {
+		t.Fatalf("a resource deleted between the read and the write: %v, want no error", err)
 	}
 }
 

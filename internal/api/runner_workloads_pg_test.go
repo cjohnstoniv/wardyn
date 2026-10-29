@@ -131,7 +131,7 @@ func TestPG_WorkloadFromRunner_PoolMismatchIsRefused(t *testing.T) {
 	other := e.orgPool(t, "Elsewhere")
 	e.report(t, e.apply("team-a", "web", `,"runner_pool_id":"`+other.ID.String()+`"`))
 	got := e.statuses(t, 1)
-	if got[0].Phase != runnerwire.WorkloadPhaseRefused || got[0].Reason != reasonWorkloadPoolMismatch || got[0].ObservedGeneration != 1 {
+	if got[0].Phase != runnerwire.WorkloadPhaseRefused || got[0].Reason != reasonWorkloadPoolMismatch || got[0].ObservedGeneration != 1 || got[0].UID != "uid-web" {
 		t.Fatalf("status %+v, want Refused %s at generation 1", got[0], reasonWorkloadPoolMismatch)
 	}
 	if _, err := e.st.GetWorkload(context.Background(), svcPrin, "web"); !errors.Is(err, store.ErrNotFound) {
@@ -148,8 +148,8 @@ func TestPG_WorkloadFromRunner_SponsorChangeIsBindingInactive(t *testing.T) {
 	}
 	e.report(t, e.apply("team-a", "web", ""))
 	got := e.statuses(t, 1)
-	if got[0].Phase != runnerwire.WorkloadPhaseBindingInactive || got[0].Reason != reasonWorkloadBindingInactive || got[0].RunID != "" {
-		t.Fatalf("status %+v, want BindingInactive with no run", got[0])
+	if got[0].Phase != runnerwire.WorkloadPhaseBindingInactive || got[0].Reason != reasonWorkloadBindingInactive || got[0].RunID != "" || got[0].UID != "uid-web" {
+		t.Fatalf("status %+v, want BindingInactive for uid-web with no run", got[0])
 	}
 	v, err := e.st.GetWorkload(context.Background(), svcPrin, "web")
 	if err != nil || v.Source != store.WorkloadSourceK8s || v.SourcePoolID == nil || *v.SourcePoolID != e.rp.ID || v.CurrentRunID != nil ||
@@ -176,7 +176,7 @@ func TestPG_WorkloadFromRunner_SyncPrunes(t *testing.T) {
 		}
 		gen := int64(1)
 		in.Owner, in.Source, in.By = svcPrin, store.WorkloadSourceK8s, svcPrin
-		in.SourcePoolID, in.SourceNamespace, in.SourceRunnerID, in.K8sGeneration = &e.rp.ID, w.ns, &e.runner, &gen
+		in.SourcePoolID, in.SourceNamespace, in.SourceRunnerID, in.K8sGeneration, in.K8sUID = &e.rp.ID, w.ns, &e.runner, &gen, "uid-"+w.name
 		if _, _, err := e.st.PutWorkload(ctx, in); err != nil {
 			t.Fatal(err)
 		}
@@ -200,5 +200,33 @@ func TestPG_WorkloadFromRunner_SyncPrunes(t *testing.T) {
 	}
 	if len(deletes) != 1 || deletes[0]["name"] != "gone" || deletes[0]["via"] != workloadViaK8sSync || deletes[0]["namespace"] != "team-a" {
 		t.Fatalf("workload.delete rows %+v, want one for gone via %s", deletes, workloadViaK8sSync)
+	}
+}
+
+// A delete names the resource's uid: one for a resource the name has since been recreated as leaves the
+// newer resource's workload, and the matching one deletes it (workload.delete via k8s).
+func TestPG_WorkloadFromRunner_DeleteFollowsTheResourceUID(t *testing.T) {
+	e := newCREnv(t)
+	ctx := context.Background()
+	in, invalid := normalizeWorkload(clientWorkloadDoc(t, "web", `{"agent":"claude-code","task":"t","policy_id":"`+e.pol+`"}`))
+	if invalid != nil {
+		t.Fatalf("normalize: %+v", invalid)
+	}
+	gen := int64(1)
+	in.Owner, in.Source, in.By = svcPrin, store.WorkloadSourceK8s, svcPrin
+	in.SourcePoolID, in.SourceNamespace, in.SourceRunnerID, in.K8sGeneration, in.K8sUID = &e.rp.ID, "team-a", &e.runner, &gen, "uid-new"
+	if _, _, err := e.st.PutWorkload(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	e.report(t, runnerwire.WorkloadReport{Op: runnerwire.WorkloadOpDelete, Namespace: "team-a", Name: "web", UID: "uid-old"})
+	if _, err := e.st.GetWorkload(ctx, svcPrin, "web"); err != nil {
+		t.Fatalf("a delete of the replaced resource removed the new one's workload: %v", err)
+	}
+	e.report(t, runnerwire.WorkloadReport{Op: runnerwire.WorkloadOpDelete, Namespace: "team-a", Name: "web", UID: "uid-new"})
+	if _, err := e.st.GetWorkload(ctx, svcPrin, "web"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("the matching delete left the workload: %v", err)
+	}
+	if n := countAudit(e.h.audit.snapshot(), "workload.delete"); n != 1 {
+		t.Fatalf("%d workload.delete rows, want 1", n)
 	}
 }

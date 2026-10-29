@@ -92,7 +92,8 @@ func (s *Server) WorkloadFromRunner(ctx context.Context, runnerID uuid.UUID, ev 
 		return s.applyWorkloadReport(ctx, ws, sr, runnerID, b, si, rep)
 	case runnerwire.WorkloadOpDelete:
 		v, err := ws.GetWorkload(ctx, types.ServicePrincipalPrefix+b.Service, rep.Name)
-		if errors.Is(err, store.ErrNotFound) || (err == nil && !boundK8sWorkload(v.Workload, b, rep.Namespace)) {
+		// A delete of a resource the name has since been recreated as leaves the newer one's workload.
+		if errors.Is(err, store.ErrNotFound) || (err == nil && (!boundK8sWorkload(v.Workload, b, rep.Namespace) || (v.K8sUID != "" && v.K8sUID != rep.UID))) {
 			return nil // nothing this resource recorded
 		}
 		if err != nil {
@@ -171,7 +172,7 @@ func (s *Server) applyWorkloadReport(ctx context.Context, ws store.WorkloadStore
 	}
 	owner, generation := types.ServicePrincipalPrefix+b.Service, rep.Generation
 	in.Owner, in.Source, in.By = owner, store.WorkloadSourceK8s, owner
-	in.SourcePoolID, in.SourceNamespace, in.SourceRunnerID, in.K8sGeneration = &b.PoolID, rep.Namespace, &runnerID, &generation
+	in.SourcePoolID, in.SourceNamespace, in.SourceRunnerID, in.K8sGeneration, in.K8sUID = &b.PoolID, rep.Namespace, &runnerID, &generation, rep.UID
 	wl, write, err := ws.PutWorkload(ctx, in)
 	switch {
 	case errors.Is(err, store.ErrWorkloadSourceConflict):
@@ -290,7 +291,7 @@ func (s *Server) dropK8sWorkload(ctx context.Context, ws store.WorkloadStore, sr
 // no stored workload carries this answer, so the status sweep never repeats it, and the runner's next
 // report of the resource earns it again.
 func (s *Server) answerWorkloadReport(runnerID uuid.UUID, rep runnerwire.WorkloadReport, phase, reason, msg string) {
-	a := runnerwire.WorkloadStatusArgs{Namespace: rep.Namespace, Name: rep.Name, ObservedGeneration: rep.Generation, Phase: phase,
+	a := runnerwire.WorkloadStatusArgs{Namespace: rep.Namespace, Name: rep.Name, UID: rep.UID, ObservedGeneration: rep.Generation, Phase: phase,
 		Reason: reason, Message: clipUTF8(msg, runnerwire.MaxWorkloadMessage)}
 	s.goBackground(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), workloadStatusTimeout)
@@ -305,7 +306,7 @@ func (s *Server) answerWorkloadReport(runnerID uuid.UUID, rep runnerwire.Workloa
 // workloadStatusOf is the status a resource's stored workload reads as: the refusal of its current spec's
 // launch when there is one, else its run's state with the run's service health.
 func workloadStatusOf(v store.WorkloadView) runnerwire.WorkloadStatusArgs {
-	a := runnerwire.WorkloadStatusArgs{Namespace: v.SourceNamespace, Name: v.Name}
+	a := runnerwire.WorkloadStatusArgs{Namespace: v.SourceNamespace, Name: v.Name, UID: v.K8sUID}
 	if v.K8sGeneration != nil {
 		a.ObservedGeneration = *v.K8sGeneration
 	}
@@ -355,9 +356,10 @@ func clipUTF8(s string, n int) string {
 }
 
 // pushWorkloadView sends v's status to the runner that last reported its resource and records the hash
-// of what was sent. A push that fails records nothing, so the next sweep sends it again.
+// of what was sent. A push that fails records nothing, so the next sweep sends it again. A row with no
+// resource uid yet (recorded before the column) waits for its resource's next report to name it.
 func (s *Server) pushWorkloadView(ctx context.Context, ws store.WorkloadStore, v store.WorkloadView) {
-	if v.SourceRunnerID == nil {
+	if v.SourceRunnerID == nil || v.K8sUID == "" {
 		return
 	}
 	a := workloadStatusOf(v)
