@@ -175,6 +175,8 @@ policy.tool_rules
 policy.tool_rules.effect
 policy.tool_rules.tool
 policy.ui_apps
+policy.ui_apps.callers
+policy.ui_apps.inbound
 policy.ui_apps.name
 policy.ui_apps.path
 policy.ui_apps.port

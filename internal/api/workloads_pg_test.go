@@ -228,6 +228,11 @@ func TestPG_Workload_SponsorReadsAndDeletes(t *testing.T) {
 	if w := doSSO(t, e.h.srv, http.MethodGet, path, e.other, ""); w.Code != http.StatusNotFound || respReason(w) != reasonWorkloadNotFound {
 		t.Fatalf("other GET: %d %s, want 404 %s", w.Code, w.Body.String(), reasonWorkloadNotFound)
 	}
+	otherList := doSSO(t, e.h.srv, http.MethodGet, "/api/v1/workloads?owner="+svcPrin, e.other, "")
+	var otherPage []client.Workload
+	if err := json.Unmarshal(otherList.Body.Bytes(), &otherPage); err != nil || otherList.Code != http.StatusOK || len(otherPage) != 0 {
+		t.Fatalf("other list of the service: %d %s, want 200 and no workload", otherList.Code, otherList.Body.String())
+	}
 	if w := doSSO(t, e.h.srv, http.MethodDelete, path, e.other, ""); w.Code != http.StatusNotFound {
 		t.Fatalf("other DELETE: %d %s, want 404", w.Code, w.Body.String())
 	}

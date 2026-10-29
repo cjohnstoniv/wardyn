@@ -141,6 +141,9 @@ var ungovernedCallerCensus = map[string]struct {
 	"workspace_egress_github.go:unionDirectGitHubEgress":       {1, "D: the GitHub host clamp; hosts meet the boundary at dispatch"},
 	"workspace_refs.go:launchCarrierRule":                      {1, "R: the launch carrier; the run meets the boundary at resolve"},
 	"workspaces.go:handleListWorkspaces":                       {1, "authz-only: a list scope"},
+	"workloads.go:handleDeleteWorkload":                        {1, "authz-only: who may delete a custom resource's workload through the API; a delete ends a run and admits none"},
+	"workloads.go:workloadListOwners":                          {1, "authz-only: a list scope"},
+	"workloads.go:workloadReadTier":                            {2, "authz-only: the workload read tier, what a reader is shown of another owner's workload"},
 }
 
 // ungovernedCensusTags are the classifications a census entry may name.

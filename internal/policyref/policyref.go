@@ -192,6 +192,16 @@ func Project(source, name string, c *Contact) *Ref {
 	return ref
 }
 
+// Personal is the policy a refusal by a person's own walls names: source personal, which Layered stamps as
+// the personal layer, and the walls' owner, kept when it passes as Project keeps a contact's owner.
+func Personal(owner string) *Ref {
+	ref := &Ref{Source: LayerPersonal}
+	if validText(owner, ownerMax) {
+		ref.Owner = owner
+	}
+	return ref
+}
+
 // RequestRoute is the one place the request route is chosen: request_url, else
 // "mailto:" + email, else "". Both candidates are checked again here, so a Ref
 // assembled by hand never yields a route the write rules would have refused.

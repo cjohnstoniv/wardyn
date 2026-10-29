@@ -54,7 +54,7 @@ var lateAddCensus = map[string]int{
 	"provider_subscription.go authorOAuthSentinelGrant":         1,
 	"run_derived_egress.go deriveRunEgress":                     3,
 	"run_overrides_apply.go applyHostOverrides":                 1,
-	"run_overrides_apply.go applyRunEgressOverrides":            2,
+	"run_overrides_apply.go applyRunEgressOverrides":            3, // the person's allow_all_egress edit at resolve, before the clamp and the seal; the third records a false narrowing the census reads only as a variable
 	"run_overrides_apply.go applyRunHostOverrides":              1,
 	"run_overrides_apply.go boundOverrideAdds":                  1,
 	"run_policy_provenance.go canonicalKnobs":                   1,

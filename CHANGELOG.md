@@ -76,6 +76,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `wardyn workload list|get|restart|delete` and `wardyn workload binding create|list|delete` complete the CLI. On a
   Kubernetes organisation runner a `WardynWorkload` resource in a bound namespace launches as its service identity, and its
   status shows the phase and reason. See [Workloads](docs/operations/workloads.md).
+  - Migration `0243_workload_k8s_uid` records the `metadata.uid` of the resource a workload was reported from. A status
+    is written only to the resource with that uid, so one deleted and recreated under the same name never gets the old
+    one's status. No grant changes.
 
 ### Changed
 
