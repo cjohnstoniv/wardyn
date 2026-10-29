@@ -4,10 +4,12 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { Workload } from "../../../lib/types/workloads";
 import { WORKLOADS as W } from "../../wardyn/copy/workloads";
+import { workloads } from "../../../lib/api/workloads";
 import { WorkloadDrawer } from "./workload-drawer";
 
 const getRun = vi.fn();
@@ -95,11 +97,42 @@ describe("WorkloadDrawer history", () => {
     ]);
   });
 
-  it("draws no History when there are no rows or the read fails", async () => {
+  // The read has settled once its promise has, and one more turn has let the hook's own handler run.
+  const settled = async () => {
+    await waitFor(() => expect(history).toHaveBeenCalled());
+    await act(async () => {
+      await Promise.resolve(history.mock.results[0].value).catch(() => undefined);
+    });
+  };
+
+  it("draws no History when there are no rows", async () => {
+    history.mockResolvedValue([]);
+    open(workload());
+    await screen.findByText(/started/);
+    await settled();
+    expect(screen.queryByText(W.HISTORY)).toBeNull();
+  });
+
+  it("draws no History when the read fails", async () => {
     history.mockRejectedValue(new Error("no"));
     open(workload());
     await screen.findByText(/started/);
+    await settled();
     expect(screen.queryByText(W.HISTORY)).toBeNull();
+  });
+
+  it("reads the history again after a refused restart, which changes nothing else the drawer keys on", async () => {
+    history.mockResolvedValueOnce([]).mockResolvedValue([{ time: ago(1000), action: "launch_refused", generation: 4, reason: "pool_lifetime_exceeded" }]);
+    vi.mocked(workloads.restart).mockResolvedValue({ launch: { state: "refused", reason: "pool_lifetime_exceeded" } } as never);
+    open(workload());
+    await screen.findByText(/started/);
+    await settled();
+    expect(screen.queryByTestId("workload-history")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: new RegExp(W.RESTART) }));
+    const list = await screen.findByTestId("workload-history");
+    expect(history).toHaveBeenCalledTimes(2);
+    expect(within(list).getAllByRole("listitem")).toHaveLength(1);
+    expect(list).toHaveTextContent("refused");
   });
 });
 

@@ -106,6 +106,7 @@ var (
 	_ client.CreateServiceIdentityRequest
 	_ client.UpdateServiceIdentityRequest
 	_ client.MintServiceTokenRequest
+	_ client.CreateAPITokenRequest
 	_ client.MoveTokenRequest
 )
 
@@ -138,7 +139,7 @@ func routeFamilies() map[string][]string {
 		"ssh-keys":        {"ListSSHKeys", "ListSSHKeysPage", "AddSSHKey", "DeleteSSHKey"},
 		"people":          {"ListPeople", "ErasePerson"},
 		"invitations":     {"CreateInvitation", "ListInvitations", "ListPersonInvitations", "ListPersonInvitationsPage", "ListMyInvitations", "RevokeInvitation", "ClaimInvitation"},
-		"service-ids":     {"CreateServiceIdentity", "ListServiceIdentities", "ListServiceIdentitiesPage", "GetServiceIdentity", "UpdateServiceIdentity", "RetireServiceIdentity", "ListMyServiceIdentities", "MintServiceToken", "ListServiceTokens", "ListServiceTokensPage", "RevokeServiceToken", "MoveToken"},
+		"service-ids":     {"CreateServiceIdentity", "ListServiceIdentities", "ListServiceIdentitiesPage", "GetServiceIdentity", "UpdateServiceIdentity", "RetireServiceIdentity", "ListMyServiceIdentities", "MintServiceToken", "ListServiceTokens", "ListServiceTokensPage", "RevokeServiceToken", "MoveToken", "CreateAPIToken", "RevokeAPIToken"},
 		"workloads":       {"ApplyWorkload", "ListWorkloads", "ListWorkloadsPage", "GetWorkload", "WorkloadHistory", "DeleteWorkload", "RestartWorkload", "CreateWorkloadBinding", "ListWorkloadBindings", "ListWorkloadBindingsPage", "DeleteWorkloadBinding"},
 		"components":      {"MyComponents", "SaveMyComponent", "UpdateMyComponent", "DeleteMyComponent", "ListComponents", "PutComponent", "DeleteComponent"},
 		"runners":         {"MintRunnerToken", "RegisterRunner", "ClaimRunner", "ListRunners", "ListRunnersPage", "GetRunner", "ListMyRunners", "ListMyRunnersPage", "GetMyRunner", "SetMyRunnerLimits", "ListRunnerTokens", "ListRunnerTokensPage", "RevokeMyRunner", "RevokeRunnerToken", "GetRunnerSettings", "SetRunnersEnabled", "MintOrgRunnerToken", "ClaimOrgRunner", "SetRunnerTrust"},

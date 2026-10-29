@@ -35,6 +35,7 @@ import { MyComponentsCard } from "./my-components-card";
 import { YourWallsCard } from "./your-walls-card";
 import { MyRunnerAndPoolsCards } from "./my-pools-card";
 import { InvitationsCard } from "./invitations-card";
+import { ApiTokensCard } from "./api-tokens-card";
 import { ServiceIdentitiesCard } from "./service-identities-card";
 import { SignedInClisCard } from "./signed-in-clis-card";
 import { SshKeysPane } from "../ssh-keys";
@@ -66,6 +67,9 @@ export function YourAccountScreen() {
         <div className="space-y-2">
           {/* #1508: an admin's invitation to create an API token. Renders nothing while none is waiting. */}
           <InvitationsCard />
+          {/* r15 T2-d: the person's own API and inbound tokens. Renders nothing for a caller who is no person
+              and where the api_token feature is not granted. */}
+          <ApiTokensCard />
           {/* #541 (§5.4, packet MP-D): every person's own model-provider
               credentials, User view only — an admin reaches it by switching
               to Member view. Renders nothing with no provider block. */}

@@ -43,7 +43,7 @@ export interface TokenRequest {
 
 export interface TokenDialogProps {
   kind: "claim" | "mint";
-  /** The service identity's name (mint). */
+  /** The service identity's name (mint); absent for a person's own token. */
   service?: string;
   /** The invitation's token lifetime limit in seconds (claim); absent when it sets none. */
   limitSeconds?: number;
@@ -113,6 +113,8 @@ export function TokenDialog(props: TokenDialogProps) {
   // Input does not forward a ref under React 18, so the name field is found by its id.
   const focusName = () => document.getElementById(`${uid}-name`)?.focus();
   const isClaim = kind === "claim";
+  // A mint with no service identity is the person's own token: it acts as them, as a claim does.
+  const own = !isClaim && !service;
   const created = reveal !== null;
 
   const send = async () => {
@@ -135,7 +137,7 @@ export function TokenDialog(props: TokenDialogProps) {
         token: tok.token ?? "",
         name: tok.name || trimmed,
         expiresAt: tok.expires_at ?? null,
-        principal: isClaim ? null : tok.principal,
+        principal: isClaim || own ? null : tok.principal,
         role: tok.role,
         clamped: ttl > 0 && life > 0 && life < ttl * 1000 - 1000,
       });
@@ -251,8 +253,8 @@ export function TokenDialog(props: TokenDialogProps) {
             }}
           >
             <DialogHeader>
-              <DialogTitle>{isClaim ? T.CLAIM_TITLE : T.MINT_TITLE(service)}</DialogTitle>
-              <DialogDescription>{isClaim ? T.CLAIM_LEDE : T.MINT_LEDE(service)}</DialogDescription>
+              <DialogTitle>{isClaim ? T.CLAIM_TITLE : own ? T.OWN_MINT_TITLE : T.MINT_TITLE(service)}</DialogTitle>
+              <DialogDescription>{isClaim ? T.CLAIM_LEDE : own ? T.OWN_MINT_LEDE : T.MINT_LEDE(service)}</DialogDescription>
             </DialogHeader>
             {!refusal?.final && isClaim && replaces && (
               <p className="rounded-md border border-warning/25 bg-warning-subtle px-3 py-2 text-sm text-foreground">
@@ -280,7 +282,7 @@ export function TokenDialog(props: TokenDialogProps) {
                 )}
               </fieldset>
             )}
-            {!refusal?.final && !isClaim && use === "api" && (
+            {!refusal?.final && !isClaim && !own && use === "api" && (
               <p className="rounded-md border border-warning/25 bg-warning-subtle px-3 py-2 text-sm text-foreground">
                 {T.MINT_WARNING(service)}
               </p>

@@ -80,8 +80,11 @@ function useRunFacts(runId: string | undefined): { startedAt?: string; addresses
   };
 }
 
-/** The workload's history, read again when its spec or its run changes. A failed read is no history. */
-function useHistory(workload: Workload | null): WorkloadEvent[] {
+/**
+ * The workload's history, read again when its spec or its run changes, and when `reload` changes (a refused restart
+ * changes neither but writes a row; the rows already drawn stay until the new read lands). A failed read is no history.
+ */
+function useHistory(workload: Workload | null, reload: number): WorkloadEvent[] {
   const name = workload?.name;
   const owner = workload?.owner;
   const key = workload ? `${workload.owner}/${workload.name}/${workload.generation}/${workload.run_id ?? ""}` : "";
@@ -96,7 +99,7 @@ function useHistory(workload: Workload | null): WorkloadEvent[] {
     return () => {
       live = false;
     };
-  }, [key, name, owner]);
+  }, [key, name, owner, reload]);
   return got && got.key === key ? got.events : [];
 }
 
@@ -125,7 +128,8 @@ export function WorkloadDrawer({
   const [busy, setBusy] = React.useState(false);
   const [deleting, setDeleting] = React.useState(false);
   const { startedAt, addresses } = useRunFacts(workload?.run_id);
-  const history = historyRows(useHistory(workload));
+  const [historyReload, setHistoryReload] = React.useState(0);
+  const history = historyRows(useHistory(workload, historyReload));
   if (!workload) return null;
   const w = workload;
   const k8s = w.source === "k8s";
@@ -144,6 +148,7 @@ export function WorkloadDrawer({
       toast.error(getErrorMessage(e));
     } finally {
       setBusy(false);
+      setHistoryReload((n) => n + 1);
     }
   };
 
@@ -259,7 +264,7 @@ export function WorkloadDrawer({
         title={W.DELETE_TITLE(w.name)}
         body={[W.DELETE_BODY]}
         confirmLabel={W.DELETE}
-        onConfirm={() => workloads.remove(w.name, owner)}
+        onConfirm={() => workloads.remove(w.name, owner).finally(() => setHistoryReload((n) => n + 1))}
         onDone={() => {
           toast.success(W.DELETED(w.name));
           onClose();

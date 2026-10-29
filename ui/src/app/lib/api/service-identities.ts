@@ -29,6 +29,16 @@ export const serviceIdentities = {
     return unwrapList<ApiToken>(await asJson<unknown>(await wfetch(withLimit("/me/tokens"), { method: "GET" })));
   },
 
+  // POST /api/v1/me/tokens -> 201 with the caller's own new token, `token` holding the plaintext.
+  async mintMyToken(body: MintServiceTokenRequest): Promise<ApiToken> {
+    return asJson<ApiToken>(await wfetch("/me/tokens", { method: "POST", asPerson: true, body: JSON.stringify(body) }));
+  },
+
+  // DELETE /api/v1/me/tokens/{id} -> 204; any other answer throws.
+  async revokeMyToken(id: string): Promise<void> {
+    await asNoContent(await wfetch(`/me/tokens/${encodeURIComponent(id)}`, { method: "DELETE" }));
+  },
+
   // POST /api/v1/me/invitations/{id}/claim -> 201 with the new token, `token` holding the plaintext.
   async claimInvitation(id: string, body: ClaimInvitationRequest): Promise<ApiToken> {
     return asJson<ApiToken>(

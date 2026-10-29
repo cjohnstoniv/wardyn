@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -274,6 +275,63 @@ func TestPG_Workload_HistoryListsOnlyThisWorkloadsRows(t *testing.T) {
 	}
 	if l := got[3]; l.Generation != 1 || l.RunID == nil || *l.RunID != oldRun {
 		t.Fatalf("first launch row = %+v, want generation 1 and run %s", l, oldRun)
+	}
+}
+
+// TestPG_Workload_HistoryIgnoresARowAForwardingDeviceClaimed: a laptop can forward a workload.launch_refused row
+// whose target names a real owner/name, and the history is the organisation's own record, so that row is not in it.
+// A refusal the organisation wrote for the same workload still is.
+func TestPG_Workload_HistoryIgnoresARowAForwardingDeviceClaimed(t *testing.T) {
+	e := newSvcEnv(t)
+	e.h.srv.cfg.Audit = store.Recorder{Pool: e.pool}
+	pol := e.plainPolicy(t, "wl-pol")
+	decodeApply(t, doSSO(t, e.h.srv, http.MethodPut, "/api/v1/workloads/web", e.mem, workloadBody(pol, "t", "")), http.StatusCreated)
+	var wl client.Workload
+	if w := doSSO(t, e.h.srv, http.MethodGet, "/api/v1/workloads/web", e.mem, ""); w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &wl) != nil {
+		t.Fatalf("get workload: %d %s", w.Code, w.Body.String())
+	}
+	ctx := context.Background()
+	target := wl.Owner + "/web"
+	refused := func(generation int) types.AuditEvent {
+		d, _ := json.Marshal(map[string]any{"generation": generation, "reason": "pool_lifetime_exceeded"})
+		return types.AuditEvent{ID: uuid.New(), Time: time.Now().UTC().Truncate(time.Microsecond), ActorType: types.ActorSystem,
+			Actor: "wardynd", Action: "workload.launch_refused", Target: target, Outcome: "failure", Data: d}
+	}
+
+	forged := refused(99)
+	if err := e.pool.QueryRow(ctx, `SELECT audit_row_hash($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb)`,
+		"", forged.ID, forged.Time, forged.RunID, string(forged.ActorType), forged.Actor,
+		forged.Action, forged.Target, forged.Outcome, forged.SourceIP, []byte(forged.Data)).Scan(&forged.RowHash); err != nil {
+		t.Fatal(err)
+	}
+	dev, err := e.st.CreateDevice(ctx, types.Device{ID: uuid.New(), Name: "laptop"}, "wdd_"+uuid.NewString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.IngestDeviceAudit(ctx, dev.ID, "10.9.9.9", []types.FederatedAuditEvent{{AuditEvent: forged, Seq: 1}}); err != nil {
+		t.Fatalf("ingest: %v", err)
+	}
+	own := refused(7)
+	if err := store.InsertAuditEvent(ctx, e.pool, &own); err != nil {
+		t.Fatal(err)
+	}
+
+	w := doSSO(t, e.h.srv, http.MethodGet, "/api/v1/workloads/web/history", e.mem, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("history: %d %s, want 200", w.Code, w.Body.String())
+	}
+	var got []client.WorkloadEvent
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	var refusedGens []int64
+	for _, ev := range got {
+		if ev.Action == "launch_refused" {
+			refusedGens = append(refusedGens, ev.Generation)
+		}
+	}
+	if want := []int64{7}; !slices.Equal(refusedGens, want) {
+		t.Fatalf("launch_refused generations = %v, want %v: the organisation's row, not the forwarded one (99)", refusedGens, want)
 	}
 }
 
