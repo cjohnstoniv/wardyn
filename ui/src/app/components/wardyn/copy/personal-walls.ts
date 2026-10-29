@@ -58,7 +58,11 @@ export const NR_WALLS = {
   LEAVE_OUT_BEFORE: "Your walls leave out ",
   LEAVE_OUT_AFTER: ".",
   LEAVE_OUT: (host: string | number) => `Your walls leave out ${host}.`,
-  // Not on the board: the walls step's own warning on Review, with the knob in the Policy tab's field words.
+  // Review's Network value for a run that reaches only the listed sites (board R15, T4-b).
+  REVIEW_SITES: (n: string | number) => `${n} sites · anything else refused`,
+  REVIEW_SITE_ONE: "1 site · anything else refused",
+  // Not on the board: the walls step's own warning on Review for a knob the board draws no note for, with the knob
+  // in the Policy tab's field words. A host the walls leave out has the board's LEAVE_OUT note instead.
   NARROWED: (knob: string | number) => `Your walls narrowed ${knob}.`,
 } as const;
 

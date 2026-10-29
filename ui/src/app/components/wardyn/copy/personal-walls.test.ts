@@ -43,6 +43,8 @@ const CANON: [id: string, actual: string, canon: string][] = [
   ["T4-b02", NR_WALLS.ONLY_LISTED_HELP, "This run reaches only the listed sites and what its setup needs. Your organisation allows more."],
   ["T4-b03", NR_WALLS.LEAVE_OUT("pypi.org"), "Your walls leave out pypi.org."],
   ["T4-b04", `${NR_WALLS.LEAVE_OUT_BEFORE}pypi.org${NR_WALLS.LEAVE_OUT_AFTER}`, "Your walls leave out pypi.org."],
+  ["T4-b07", NR_WALLS.REVIEW_SITES(3), "3 sites · anything else refused"],
+  ["T4-b08", NR_WALLS.REVIEW_SITE_ONE, "1 site · anything else refused"],
   ["T4-b05", NR_TOOLS.NET_POLICY_ALWAYS_DENY, "Anything else is refused and logged."],
   ["T4-b06", NR_TOOLS.NET_POLICY_ALLOW_ALL, "Any other public host is allowed, except ones your organisation blocks."],
   ["T4-c01", CHANGE_HEADING.wallsOwn, "Your walls"],

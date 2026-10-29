@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MY_COMPONENTS, ORG_KUBECTL } from "../../../../../lib/new-run-fixtures/scenarios/catalogue";
@@ -11,13 +11,20 @@ import { SCENARIO_ACCESS } from "../../../../../lib/new-run-fixtures/scenarios/t
 import type { AccessFacts, AccessHost } from "../../../../../lib/types/new-run-access";
 import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
+import { NR_WALLS } from "../../../../wardyn/copy/personal-walls";
 import { initialDraft } from "../../draft/run-intent";
 import type { ReviewPreflight } from "../review-seams";
 import { AccessGroup } from "./access-group";
 
+const getWalls = vi.hoisted(() => vi.fn());
+vi.mock("../../../../../lib/api/walls", () => ({ walls: { get: getWalls } }));
 vi.mock("../../../../../lib/api/components", () => ({ components: { mine: () => Promise.resolve({ ...MY_COMPONENTS, org: [ORG_KUBECTL] }) } }));
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  getWalls.mockReset();
+});
+beforeEach(() => getWalls.mockRejectedValue(new Error("no walls")));
 
 const access: AccessFacts = {
   ...SCENARIO_ACCESS.member,
@@ -45,5 +52,33 @@ describe("Review: Access", () => {
     const group = screen.getByRole("group", { name: NR_REVIEW.GROUP_ACCESS });
     const row = within(group).getByText(kubeHost.host).parentElement as HTMLElement;
     expect(within(row).getByText(ORG_KUBECTL.name)).toBeTruthy();
+  });
+
+  // T4-b: a run that reaches only its listed sites reads as the board draws it, and a host the person's walls cut gets the note.
+  describe("a run that reaches only the listed sites", () => {
+    const host = (name: string, verdict: AccessHost["verdict"]): AccessHost => ({ host: name, via: "requested", rows: [], verdict, source: { kind: "policy", id: "p", name: "p" } });
+    const closed: AccessFacts = {
+      ...access,
+      hosts: [host("api.example.com", "allowed"), host("packages.example.com", "allowed"), host("git.example.com", "allowed"), host("pypi.org", "not_allowed")],
+      unlisted: { mode: "always_deny", allow_all: false, decider: "you" },
+    };
+    const show = (facts: AccessFacts) =>
+      render(<AccessGroup draft={initialDraft("alice")} pre={{ access: facts } as unknown as ReviewPreflight} preview={null} docRows={[]} go={vi.fn()} dispatch={vi.fn()} />);
+
+    it("says how many sites and that anything else is refused, with the walls note for a host they cut", async () => {
+      getWalls.mockResolvedValue({ spec: { denied_domains: ["pypi.org"] } });
+      show(closed);
+      const note = await screen.findByTestId("walls-leave-out");
+      expect(note).toHaveTextContent("Your walls leave out pypi.org.");
+      expect(screen.getByText(NR_WALLS.REVIEW_SITES(4))).toBeTruthy();
+      expect(screen.queryByText(NR_REVIEW.POLICY_HOSTS(4))).toBeNull();
+    });
+
+    it("draws no note when the walls cut nothing, and keeps the plain count when anything else may be asked for", async () => {
+      getWalls.mockResolvedValue({ spec: {} });
+      show({ ...closed, unlisted: { mode: "deny_with_review", allow_all: false, decider: "you" } });
+      expect(await screen.findByText(NR_REVIEW.POLICY_HOSTS(4))).toBeTruthy();
+      expect(screen.queryByTestId("walls-leave-out")).toBeNull();
+    });
   });
 });

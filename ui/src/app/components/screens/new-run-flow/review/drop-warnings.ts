@@ -25,6 +25,15 @@ function joinAnd(items: string[]): string {
   return items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 }
 
+/**
+ * The walls step's warning for the host lists. Review says it by host instead (the Access group's "Your walls leave
+ * out {host}.", board R15 T4-b), so this sentence is not shown again as a notice.
+ */
+export const isWallsHostWarning = (warning: string): boolean => {
+  const knob = WALLS_NARROWED.exec(warning)?.[1];
+  return knob === "allowed_domains" || knob === "denied_domains";
+};
+
 /** The server's sentence, or the dropped-host sentence when it is one of the three drop warnings. */
 export function reviewWarningText(warning: string): string {
   const knob = WALLS_NARROWED.exec(warning)?.[1];
