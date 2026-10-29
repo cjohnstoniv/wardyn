@@ -27,7 +27,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   once, with no restart and no health check, and its health reads *Health unknown* after 10 minutes. Wrap or build the
   image again with this release. See [Services](docs/SERVICES.md#images).
 - Migration `0239_inbound` restricts the `feature` value `inbound`, admits `inbound` in `api_tokens.kind`'s CHECK and
-  adds `caller` and `app` to `attach_tickets`. It changes no row and no grant, and needs no new grant. See
+  adds `caller` and `app` to `attach_tickets`. It inserts the `inbound` restriction row when absent, rewrites no token or ticket, and adds no grant. See
   [OPERATIONS.md](docs/OPERATIONS.md).
 
 ### Added
@@ -54,9 +54,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   offers it as **Only the sites listed**. Before, `false` was refused.
 - A run's `ui_apps` entry can now be marked `inbound`, with a `callers` list, so the run's owner and the people, groups and
   service identities it names can call that port through the app gateway on any run, a background run with no terminal
-  included. Every call is recorded as `inbound.allow` or `inbound.deny`. It is HTTP and WebSocket only, and it travels the
-  same exec lane as any UI app, so docker, Kubernetes and remote runners need no change. Nobody may declare one until an
-  administrator allows the new `inbound` value of the `feature` permission; a governance profile's `deny_ui_apps` or
+  included. Each admitted call is recorded as `inbound.allow`, and refusals as `inbound.deny` under the `auth.fail` rate bound. It is HTTP and WebSocket only, and it travels the
+  same exec lane as any UI app, so docker, Kubernetes and remote runners need no change. Nobody but an operator may declare one until an
+  administrator allows the new `inbound` value of the `feature` permission (a run that only inherits an administrator's
+  inbound apps is not asked); a governance profile's `deny_ui_apps` or
   `deny_interactive` removes inbound apps. See [UI sandboxes](docs/UI-SANDBOXES.md#inbound-let-named-callers-reach-a-port).
 - An **inbound token** (`{"kind":"inbound"}` on `POST /me/tokens`, or on a service identity's token mint) calls the inbound
   apps that name its holder as a caller, sent as `Authorization: Bearer wdn_…` on the gateway. It does nothing on the Wardyn
@@ -76,7 +77,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Changed
 
 - With per-run hosts, every relay session request from a browser must now be same-origin, carry no fetch metadata, or be a
-  top-level `GET` navigation, and an `Origin` it names must be its own; anything else is `403` `ui_gateway_cross_site`.
+  top-level `GET` or `HEAD` navigation, and an `Origin` it names must be its own; anything else is `403` `ui_gateway_cross_site`.
   This holds for every app, inbound or not, so a page on another run's origin can no longer drive a person's own editor
   session.
 - The gateway removes any `X-Wardyn-*` header a client sends before the request reaches the app. On an inbound app it adds

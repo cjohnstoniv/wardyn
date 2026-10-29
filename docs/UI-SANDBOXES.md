@@ -508,14 +508,14 @@ curl -H "Authorization: Bearer $INBOUND_TOKEN" "$UI/r/$RUN_ID/api/health"
 - **The token** is looked up, then checked for expiry and revocation, and for an owner who is a service identity, its live record and sponsor. The result is reused for 30 seconds per token, run and app.
 - **A revoked, expired or suspended token** stops calling within that window. An inbound-token stream already open is re-checked at most every 30 seconds (rc.8) and closed when its token no longer holds.
 - **A browser session** is re-checked as in [Bounds](#bounds), minus the owner rule for a named caller, and also refused when the run's profile now denies UI apps or interactive sessions.
-- **Host mode** adds a cross-site check to every cookie session, inbound or not. A request must be same-origin, carry no fetch metadata, or be a top-level `GET` navigation, and an `Origin` header must be the request's own.
+- **Host mode** adds a cross-site check to every cookie session, inbound or not. A request must be same-origin, carry no fetch metadata, or be a top-level `GET` or `HEAD` navigation, and an `Origin` header must be the request's own.
 - **Capacity** is shared: at most 8 relay connections per run, each a `socat` exec that is slower to open on Kubernetes or a remote runner. Inbound suits internal APIs and tools, not high-traffic services.
 
 ### What is recorded
 
-- `inbound.allow` for each admitted request and `inbound.deny` for each refusal, with the caller, app, method, path (never the query), `via` (`session` or `token`) and the matched entry. See [`inbound.allow`](AUDIT-ACTIONS.md#sessions-ssh--ui-relay).
-- Denials share the `auth.fail` rate bound. A refused re-check of a session is its usual `ui.authorize` denial.
-- A busy run writes up to 50 `inbound.allow` rows a second, so filter them when reading the run's trail.
+- `inbound.allow` for each request the gateway admits and `inbound.deny` for a refusal, with the caller, app, method, path (never the query), `via` (`session` or `token`) and the matched entry. See [`inbound.allow`](AUDIT-ACTIONS.md#sessions-ssh--ui-relay).
+- Denials share the `auth.fail` rate bound, so a flood of refusals writes fewer rows than requests. A refused re-check of a session is its usual `ui.authorize` denial.
+- A busy run writes up to 50 `inbound.allow` rows a second, in bursts of up to 100, so filter them when reading the run's trail.
 
 ## 4. Deployment
 

@@ -2959,7 +2959,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     - A stream an inbound token opened is the exception (rc.8: re-checked at most every 30 s): it is closed when the token is revoked, expires or its owner is suspended.
     - The gateway also reuses a verified token's session for 30 seconds per token, run and app, so a new request after a revoke can still pass within that window.
     - A named caller's browser session never re-checks the callers list, which is fixed for the run, or the caller's group membership.
-    - A person removed from a group keeps a session already open until `WARDYN_UI_SANDBOX_SESSION_TTL` (8 hours by default) ends it. An inbound token carries the groups stamped at its mint.
+    - A person removed from a group keeps a session already open until `WARDYN_UI_SANDBOX_SESSION_TTL` (8 hours by default) bounds its later requests; a socket already upgraded is not cut by it. An inbound token carries the groups stamped at its mint, refreshed when its owner signs in again.
     - Bounds: a caller can reach only the apps the run declared inbound, at most 8 relay connections and 50 requests a second per run, and the token never reaches the sandbox.
     - No role reaches an inbound app: only the owner and the named callers can. A profile's `deny_ui_apps` or `deny_interactive` refuses a live call at the next re-check.
 
