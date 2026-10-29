@@ -82,6 +82,35 @@ export type RunState =
   // neutral badge instead of crashing the console (see primitives.tsx).
   | (string & {});
 
+/** Go: types.RunService. A service is a background run of a command that wardynd keeps running. */
+export interface RunService {
+  restart: "on_failure" | "never";
+  /** Listens on 127.0.0.1 inside the sandbox; absent = none declared. */
+  port?: number;
+  /** Needs `port`: an HTTP GET of `path` (2xx/3xx passes), or a TCP connect without one. */
+  health?: ServiceHealth;
+}
+
+/** Go: types.ServiceHealth. */
+export interface ServiceHealth {
+  path?: string;
+  interval_sec: number;
+  failure_threshold: number;
+}
+
+/** Go: types.ServiceHealthState. */
+export type ServiceHealthState = "starting" | "healthy" | "unhealthy" | "unknown";
+
+/** Go: types.RunServiceStatus. `reason` is closed: restarting | probe_failing | supervisor_missing | unreachable. */
+export interface RunServiceStatus {
+  health: ServiceHealthState;
+  reason?: string;
+  restarts: number;
+  last_exit_code?: number;
+  /** wardynd's clock, never the sandbox's. */
+  observed_at: string;
+}
+
 /** Go: types.RunQueue. `position` is how many runs wait ahead in the pool, never whose. */
 export interface RunQueue {
   pool_id: string;
@@ -272,6 +301,11 @@ export interface AgentRun {
   // AgentRun.InnerWalls (#2822): the harness's own walls the run launched with.
   // Absent for a run with no catalog harness, or one created before the field.
   inner_walls?: HarnessInnerWalls;
+  // AgentRun.Service: the spec of a background run kept running, frozen at create with defaults
+  // filled. Absent for any other run. AgentRun.ServiceStatus: its last health observation, absent
+  // until the first one.
+  service?: RunService;
+  service_status?: RunServiceStatus;
   // Run limits captured at create (migration 0072, #567): the lease end (null =
   // no end), the wait for a decision (absent = the deployment's approval
   // expiry), the owner's profile run limits and that profile's id (absent for

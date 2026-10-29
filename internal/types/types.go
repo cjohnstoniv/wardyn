@@ -266,6 +266,11 @@ type AgentRun struct {
 	DiskMiB              int           `json:"disk_mib,omitempty"`  // effective ephemeral disk cap MiB; 0 = no cap resolved
 	Attention            *RunAttention `json:"attention,omitempty"` // what this live run awaits and who can clear it; derived, only on view-opted-in read paths
 
+	// Service is the spec of a background run that is kept running, frozen at create with its defaults filled; nil for any other run.
+	Service *RunService `json:"service,omitempty"`
+	// ServiceStatus is the last health observation of that service, written by wardynd's sweep; absent until the first one.
+	ServiceStatus *RunServiceStatus `json:"service_status,omitempty"`
+
 	// HumanAuthor is the principal accountable for the run at create, written once: the service identity's sponsor
 	// at launch for a service identity's run, unchanged by a later sponsor change, and CreatedBy for any other run. A
 	// record of accountability, not proof that a person was present. Empty for a run from before it was recorded.
