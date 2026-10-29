@@ -81,6 +81,11 @@ func TestWorkloadNameBoundaries(t *testing.T) {
 	if err := apply("1-team", "w"); err != nil {
 		t.Errorf("a digit-led namespace: %v", err)
 	}
+	for name, want := range map[string]bool{"w": true, "a-b-c": true, "1w": false, "-w": false, "": false} {
+		if got := ValidWorkloadName(name); got != want {
+			t.Errorf("ValidWorkloadName(%q) = %v, want %v", name, got, want)
+		}
+	}
 }
 
 func TestWorkloadStatusArgsValidate(t *testing.T) {

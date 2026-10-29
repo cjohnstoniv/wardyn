@@ -268,7 +268,7 @@ func (w *workloadWatcher) report(ns string) {
 	for _, u := range items {
 		// A resource the report cannot carry (an oversize spec) still counts as held: leaving its name
 		// out of the list would make the organisation delete a workload it already runs.
-		if workloadNamespaceLabel.MatchString(u.GetName()) {
+		if runnerwire.ValidWorkloadName(u.GetName()) {
 			names = append(names, u.GetName())
 		}
 		if w.emit(p, applyReport(u)) != nil {

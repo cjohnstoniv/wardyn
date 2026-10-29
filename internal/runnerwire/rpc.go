@@ -432,6 +432,10 @@ var (
 	workloadName  = regexp.MustCompile(`^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$`)
 )
 
+// ValidWorkloadName reports whether n is a name a workload frame may carry. A Kubernetes name
+// may start with a digit; such a resource can never be a workload, so a sync leaves it out.
+func ValidWorkloadName(n string) bool { return workloadName.MatchString(n) }
+
 // Validate refuses a report outside the shape of its op.
 func (r WorkloadReport) Validate() error {
 	if !workloadLabel.MatchString(r.Namespace) {

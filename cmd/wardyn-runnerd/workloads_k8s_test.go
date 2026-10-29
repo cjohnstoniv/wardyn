@@ -110,7 +110,9 @@ func waitWorkload(t *testing.T, what string, cond func() bool) {
 
 // TestWorkloadWatcherReportsEverythingAfterSync: once the informer has listed the namespace, each
 // resource is applied (spec as written) and one sync names them all. A resource whose spec the wire
-// cannot carry is not applied but is still named, so the organisation does not delete it.
+// cannot carry is not applied but is still named, so the organisation does not delete it. A
+// digit-led name, which Kubernetes allows and no workload can have, is left out of both, so the sync
+// still goes.
 func TestWorkloadWatcherReportsEverythingAfterSync(t *testing.T) {
 	huge := map[string]any{"intent": strings.Repeat("x", runnerwire.MaxWorkloadSpecBytes+1)}
 	events := newWorkloadEvents()
@@ -118,6 +120,7 @@ func TestWorkloadWatcherReportsEverythingAfterSync(t *testing.T) {
 		workloadCR("team-a", "beta", 2, intentSpec("./beta")),
 		workloadCR("team-a", "alpha", 1, intentSpec("./alpha")),
 		workloadCR("team-a", "huge", 1, huge),
+		workloadCR("team-a", "1web", 1, intentSpec("./web")),
 		workloadCR("team-b", "elsewhere", 1, intentSpec("./x")),
 	), time.Hour, events, "team-a")
 
