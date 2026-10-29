@@ -168,6 +168,8 @@ export interface RunnerPoolMember {
   kind: RunnerKind;
   runner_id?: string;
   remote_runner_id?: string;
+  /** The Kubernetes namespace an organization runner serves the pool in; absent is the runner's default. */
+  runs_namespace?: string;
   added_at: string;
 }
 
@@ -462,4 +464,6 @@ export interface RunnerPoolMemberView {
   runner?: RunnerView;
   limits: RunnerLimits | null;
   usage: RunnerUsage;
+  /** The Kubernetes namespace an organization runner serves the pool in; absent is the runner's default. */
+  runs_namespace?: string;
 }

@@ -126,3 +126,16 @@ func TestValidateRunnerPoolName(t *testing.T) {
 		}
 	}
 }
+
+// A member's runs namespace is empty (the runner's default) or a Kubernetes namespace name: a DNS-1123
+// label of at most 63 characters.
+func TestValidRunsNamespace(t *testing.T) {
+	for ns, want := range map[string]bool{
+		"": true, "team-a": true, "a": true, "0": true, "a-b-c": true, strings.Repeat("a", 63): true,
+		strings.Repeat("a", 64): false, "Team-a": false, "team_a": false, "-a": false, "a-": false, "a.b": false, " a": false,
+	} {
+		if got := ValidRunsNamespace(ns); got != want {
+			t.Errorf("ValidRunsNamespace(%q) = %v, want %v", ns, got, want)
+		}
+	}
+}

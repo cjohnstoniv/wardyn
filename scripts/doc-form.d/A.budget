@@ -344,7 +344,8 @@
 # docs/AUDIT-ACTIONS.md 54584 = 54528 + 56 (rc.8 personal walls on top of services and lease renewal).
 # docs/AUDIT-ACTIONS.md=54651 adds 168 over 54483, measured (rc.8 services): the run.service.health and run.service.restart rows and the restart verb.
 # docs/AUDIT-ACTIONS.md 54752 = 54584 + 168 (rc.8 service health rows and the restart verb).
-docs/AUDIT-ACTIONS.md=54752 share=8
+# docs/AUDIT-ACTIONS.md=54785 adds 33 over 54752, measured (rc.8 runs namespace): runs_namespace on the attach row and on run.create, the organization runner's add handler.
+docs/AUDIT-ACTIONS.md=54785 share=8
 # docs/AUDIT-ACTIONS.md 50827 = ours 50175 + theirs 50556 - base 49904 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
