@@ -295,9 +295,6 @@ func overridesShapeRefusal(o client.RunOverrides) *runRefusal {
 		if e.FirstUseApproval != "" && !e.FirstUseApproval.Valid() {
 			return overrideInvalid("egress.first_use_approval: %q is not one of always_deny, deny_with_review, wait_for_review", e.FirstUseApproval)
 		}
-		if e.AllowAllEgress != nil && !*e.AllowAllEgress {
-			return overrideInvalid("egress.allow_all_egress: set it to true, or leave it out")
-		}
 	}
 	return pushRuleOverridesShape(o.PushRules)
 }
