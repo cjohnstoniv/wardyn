@@ -811,6 +811,52 @@ func TestPG_RunnerActions_DeferredStopProxyIsNeverReissued(t *testing.T) {
 	}
 }
 
+// The lease sweep re-asserts a kept run's stop every pass: once the runner has answered that exact
+// binding, a re-assert returns the answered action and queues nothing. A new loss, a new generation or
+// a successful recovery since is a new binding, and queues.
+func TestPG_RunnerActions_AnsweredActionIsNotRequeued(t *testing.T) {
+	f := newActionFixture(t)
+	ctx := t.Context()
+	run := f.run(t)
+	gen := f.issue(t, run)
+	run = f.lose(t, run)
+	answer := func(a types.RunnerPendingAction) {
+		t.Helper()
+		if _, _, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, run.ID, a.ID, types.RunnerActionSuccess, "", time.Now(), prepareSpoolTest); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, kind := range []types.RunnerActionKind{types.RunnerActionStopProxy, types.RunnerActionEnd} {
+		first := f.mustQueue(t, f.action(run, kind, gen))
+		answer(first)
+		for range 3 {
+			again, queued, err := f.st.QueueRunnerAction(ctx, f.action(run, kind, gen))
+			if err != nil || queued || again.ID != first.ID {
+				t.Fatalf("%s re-asserted after its answer: queued=%v id=%s err=%v", kind, queued, again.ID, err)
+			}
+		}
+		if n := f.count(t, `SELECT count(*) FROM runner_pending_actions WHERE run_id=$1 AND kind=$2`, run.ID, string(kind)); n != 1 {
+			t.Fatalf("%d %s rows, want the one answered", n, kind)
+		}
+	}
+
+	if _, err := f.pool.Exec(ctx, `UPDATE agent_runs SET lost_at = lost_at + interval '1 minute' WHERE id=$1`, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	relost, err := f.st.GetRun(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	answer(f.mustQueue(t, f.action(relost, types.RunnerActionStopProxy, gen)))
+
+	if _, err := f.pool.Exec(ctx, `INSERT INTO runner_pending_actions (id, runner_id, run_id, kind, ref, binding_version, owner, execution_generation, proof, applied_at, outcome, observed_at)
+		VALUES ($1,$2,$3,'recover_containment',$4,1,$5,$6,'{}'::jsonb,now(),'success',now())`,
+		uuid.New(), f.rn.ID, run.ID, run.SandboxRef, f.rn.Owner, gen); err != nil {
+		t.Fatal(err)
+	}
+	f.mustQueue(t, f.action(run, types.RunnerActionEnd, gen))
+}
+
 // A run's lease checks read its action history by run, not the table: every earlier index is partial on
 // the open or unsettled rows, and a run that ended leaves applied rows those cannot serve.
 func TestPG_RunnerActions_RunReadsUseTheRunIndex(t *testing.T) {

@@ -151,9 +151,9 @@ func (s *Server) queueRunnerTeardown(ctx context.Context, runnerID uuid.UUID, ki
 		// The action waits for the runner; its receipt is runner.action.apply or runner.action.refuse.
 		s.recordAudit(ctx, s.auditEvent(&a.RunID, types.ActorSystem, "wardynd", placement.ActionRunnerActionRequest,
 			a.ID.String(), "success", mustJSON(map[string]any{"action": a.Kind, "runner_id": runnerID})))
-	}
-	if err == nil {
 		// The runner's session may be on another replica: end it there, so the fresh one reads the action.
+		// Only for a new one: the lease sweep re-asserts a kept run's stop every pass, and ending the
+		// session for an action already queued or answered would reset all its streams each time.
 		s.announceRunnerGoaway(runnerID)
 	}
 	return err

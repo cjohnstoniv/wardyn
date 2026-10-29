@@ -16,6 +16,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/livebus"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 func runnerGoawayMessage(id uuid.UUID, at time.Time) livebus.Message {
@@ -65,8 +66,9 @@ func TestRunnerSessionBeganIsWhenTheLatestFreshSessionBegan(t *testing.T) {
 }
 
 // Two Servers on one database are two wardynds. The runner's session is on A; a kill served by B
-// finds the runner offline and queues. B's notice ends A's session within one notice. A notice
-// older than a session that began after it does not.
+// finds the runner offline and queues. B's notice ends A's session within one notice. Once the fresh
+// session applied the kill, re-asserting it ends nothing. A notice older than a session that began
+// after it does not.
 func TestRunnerGoawayPG_AKillQueuedOnBEndsTheSessionOnA(t *testing.T) {
 	f := newAdmissionFixture(t)
 	a := f.srv
@@ -118,6 +120,25 @@ func TestRunnerGoawayPG_AKillQueuedOnBEndsTheSessionOnA(t *testing.T) {
 	if !f.waitReady(second) {
 		t.Fatalf("the fresh session never reached READY: %v", second.result())
 	}
+	// The fresh session applied the kill. Re-asserting it, as the lease sweep does every pass on
+	// every replica, queues nothing and announces nothing: the session stays up.
+	haWait(t, 10*time.Second, "the kill applied", func() bool {
+		return countRows(t, f, `SELECT count(*) FROM runner_pending_actions WHERE run_id=$1 AND kind='kill' AND outcome='success'`) == 1
+	})
+	for range 3 {
+		if err := b.queueRunnerTeardown(f.ctx, f.rn.ID, types.RunnerActionKill, f.run.SandboxRef); err != nil {
+			t.Fatalf("re-asserting the applied kill = %v", err)
+		}
+	}
+	select {
+	case <-second.done:
+		t.Fatalf("re-asserting an applied kill ended the fresh session: %v", second.err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if n := countRows(t, f, `SELECT count(*) FROM runner_pending_actions WHERE run_id=$1 AND kind='kill'`); n != 1 {
+		t.Fatalf("%d kill rows after the re-asserts, want the one applied", n)
+	}
+
 	began, ok := a.runnerSessionBegan(f.rn.ID)
 	if !ok {
 		t.Fatal("A noted no fresh session")
@@ -137,4 +158,13 @@ func TestRunnerGoawayPG_AKillQueuedOnBEndsTheSessionOnA(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("a notice newer than the session did not end it")
 	}
+}
+
+func countRows(t *testing.T, f *admissionFixture, q string) int {
+	t.Helper()
+	var n int
+	if err := f.pool.QueryRow(f.ctx, q, f.run.ID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
 }
