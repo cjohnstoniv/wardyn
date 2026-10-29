@@ -25,6 +25,7 @@ type handBootstrap struct {
 	in        macvm.BootstrapInput
 	codePath  string
 	fileAfter bool
+	err       error // returned by Bootstrap when set
 }
 
 func (b *handBootstrap) Bootstrap(_ context.Context, in macvm.BootstrapInput) (macvm.BootstrapResult, error) {
@@ -36,6 +37,9 @@ func (b *handBootstrap) Bootstrap(_ context.Context, in macvm.BootstrapInput) (m
 	}
 	_, err := os.Stat(b.codePath)
 	b.fileAfter = err == nil
+	if b.err != nil {
+		return macvm.BootstrapResult{}, b.err
+	}
 	return macvm.BootstrapResult{Desktop: macvm.DesktopNone, AgentVersion: "0.10.0", Harnesses: []string{"none"}}, nil
 }
 
@@ -172,6 +176,18 @@ func TestPrepareWithoutProvisioningGoesStraightToSetupByHand(t *testing.T) {
 	}
 	if opened, closed := f.fb.Windows(); opened != 1 || closed != 1 {
 		t.Fatalf("windows opened %d, closed %d; want 1 and 1", opened, closed)
+	}
+}
+
+// A guest that refuses the sign-in after setup by hand gets the account-and-password text, not an ssh error.
+func TestSetupByHandRefusedSignInSaysWhatToDo(t *testing.T) {
+	f, b, _ := handPrep(t)
+	f.fb.Unsupported = errHostNoProvisioning
+	b.err = fmt.Errorf("%w (wardyn-admin): ssh: handshake failed: ssh: unable to authenticate", macvm.ErrSignInRefused)
+	_, err := macvm.Prepare(context.Background(), f.opts)
+	want := "the guest refused the sign-in as wardyn-admin with the one-time code: the account made in Setup Assistant must be named wardyn-admin and its password must be the one-time code. Discard this base and prepare again"
+	if err == nil || !strings.Contains(err.Error(), want) || strings.Contains(err.Error(), "ssh:") {
+		t.Fatalf("got %v, want the text %q", err, want)
 	}
 }
 
