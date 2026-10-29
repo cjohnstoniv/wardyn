@@ -140,6 +140,31 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/jso
 > Offboarding a person means revoking their tokens explicitly.
 > A demoted or departed human who never signs in again is not caught by the login-time re-stamp, and the row outlives their access to your IdP either way.
 > It is published as a residual ([`threatmodel/THREAT-MODEL.md`](../../threatmodel/THREAT-MODEL.md) §5, "A per-user API token's role AND group snapshot are bounded-stale, not frozen").
+## Inbound tokens
+
+- An **inbound token** is a `wdn_` token of kind `inbound`. It calls the inbound ports of runs that name its holder as a caller, through the [UI-sandbox gateway](../UI-SANDBOXES.md#inbound-let-named-callers-reach-a-port), and does nothing else.
+- It authenticates nothing on this API: every console route answers it the one `401` of an unknown token, so the holder cannot launch a run or read anything.
+- The gateway takes an inbound token and nothing else. An API, CLI, admin or portal token sent there is refused `401` `inbound_credential_invalid`.
+
+| Call | Who | What |
+|---|---|---|
+| `POST /api/v1/me/tokens` with `{"kind":"inbound"}` | any signed-in human | an inbound token for yourself, as the person you are |
+| `POST /api/v1/me/service-identities/{name}/tokens` with `{"kind":"inbound"}` | the identity's sponsor | an inbound token for the service identity, which a `service:<name>` caller entry names |
+
+- `kind` is `api` when omitted. Any value other than `api` or `inbound` is a `400`.
+- Every guard of an ordinary mint applies, because it is the same door: the `api_token` [feature](capabilities.md#feature), the show-once answer, and the cap of `20` live tokens per principal, inbound ones counted.
+- **It must expire.**
+  - The default and the maximum are `90d`, or the deployment cap `WARDYN_API_TOKEN_MAX_TTL` if lower, the rule a service token follows.
+  - A `ttl_seconds` above that is clamped, and the `token.create` row records the clamp.
+- Lists mark it: `GET /me/tokens`, `GET /tokens` and a service identity's token list carry `"inbound": true` on its row.
+- **Every call is re-checked** against the token's owner as an API call is: revocation, expiry, a person's sign-in, and for a service identity its live record and sponsor.
+  - The gateway reuses the result for 30 seconds per token, run and app.
+  - A stream an inbound token opened is re-checked at most every 30 seconds (rc.8) and closed when the token no longer holds.
+  - A person's inbound token also answers `401` `role_stamp_stale` once `WARDYN_ROLE_STAMP_TTL` has passed since its owner last signed in.
+- **Groups are the ones stamped at the mint.** A `group:` caller entry matches a person's token by the groups it was minted with, so a group change reaches the token when it is minted again.
+- Revoking a person's sessions revokes their inbound tokens with the rest. Changing a service identity's sponsor revokes its tokens, inbound ones included.
+- The token never reaches the sandbox, which sees the caller as `X-Wardyn-Caller`. Wardyn does not bind it to a network.
+
 ## CLI sign-in (`wardyn login`)
 
 Off unless the operator sets `WARDYN_CLI_SIGN_IN=true`; it needs SSO. The CLI half: `wardyn login`, `whoami`, `logout`;
@@ -348,6 +373,7 @@ A service identity is automation that runs under its own name. It is not a perso
 | The sponsor, with `20` live tokens on the identity | `422` `api_token_cap_reached` |
 
 - **A service token** is an ordinary `wdn_` token with principal `service:<name>`, role `user` and no email or groups.
+  - The sponsor can also mint it as an [inbound token](#inbound-tokens), which a `service:<name>` caller entry of an inbound app names.
   - It must expire: the default and maximum are `90d`, or the deployment cap if lower.
   - It is a bearer. Wardyn does not bind it to a workload or a network.
 - **Every request is re-checked** against the live identity and its sponsor.
@@ -366,9 +392,12 @@ A service identity is automation that runs under its own name. It is not a perso
 | `PATCH /runs/{id}`, `POST /runs/{id}/kill` | manage its own runs |
 | `GET /me`, `GET /setup/status` | who am I and what can I reach (`GET /me` adds a `service` block), and which providers are live |
 | `PUT`, `DELETE /model-providers/{id}/credential` | its own model key, in its own namespace |
+| `PUT /workloads/{name}`, `GET /workloads`, `GET /workloads/{name}` | keep a named run request running as the service, and read it |
+| `DELETE /workloads/{name}`, `POST /workloads/{name}/restart` | remove one of its workloads, which ends its run, or start a fresh run of the same spec |
 
 - Every other route, including any added later, answers `403` `service_scope` with an `authz.denied` row.
-  - That covers attach, approvals, secrets, tokens, SSH keys, invitations, `GET /audit/export`, `GET /workspaces/{id}` and every admin route.
+  - That covers attach, an inbound app's browser ticket (`POST /runs/{id}/apps/{app}/ticket`), approvals, secrets, tokens, SSH keys, invitations, `GET /audit/export`, `GET /workspaces/{id}` and every admin route.
+  - Its own calls to an inbound app go through the gateway, with its inbound token.
 - **Grants and credentials.**
   - Capability grants and governance assignments bind to the `user` subject type with the subject `service:<name>`.
   - It has no groups, so only `all` and user-type rows reach it.

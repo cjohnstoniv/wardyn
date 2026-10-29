@@ -286,7 +286,8 @@
 # docs/sdk.md 23071 = 22934 + 137 (rc.8 inbound gateway reasons and runner_offline).
 # docs/sdk.md 23272 = 23071 + 201, measured (rc.8 workloads on the wave).
 # docs/sdk.md 23338 = 23272 + 66, measured (rc.8 D1 inbound_needs_host_mode row on the wave).
-docs/sdk.md=23338 share=21
+# docs/sdk.md 23382 = 23338 + 44, measured (rc.8 inbound docs): the inbound feature refusal, the deny_interactive application refusal and the gateway's role_stamp_stale.
+docs/sdk.md=23382 share=21
 # docs/sdk.md 20423 = ours 20195 + theirs 20288 - base 20060 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/sdk.md 20315 = ours + theirs - base at the 0.10 HYB-C merge of main onto VM-A, measured.
 # 0.10 HYB-C: docs/sdk.md 20343 adds 28 over 20315, measured: the placement_capability refusal of a linux_vm run with a folder on a runner that cannot share one.

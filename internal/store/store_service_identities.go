@@ -351,7 +351,7 @@ func (s PG) CreateServiceToken(ctx context.Context, name, sponsor string, maxLiv
 	if err != nil {
 		return types.APIToken{}, err
 	}
-	// A token at or before sponsor_since never authenticates (serviceTokenAuth): refuse it rather than
+	// A token at or before sponsor_since never authenticates (verifyServiceToken): refuse it rather than
 	// hand back a credential that is dead on arrival.
 	if !out.CreatedAt.After(si.SponsorSince) {
 		return types.APIToken{}, ErrServiceIdentityInactive

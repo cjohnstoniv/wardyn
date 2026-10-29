@@ -305,7 +305,7 @@ export WARDYN_AGENT_IMAGES='{"vscode":"wardyn/agent-vscode:local"}'
 
 ## 3. Open an app
 
-- A background task's UI apps cannot be opened (`409 run_background_only`).
+- A background task's UI apps cannot be opened (`409 run_background_only`), except an [inbound](#inbound-let-named-callers-reach-a-port) app.
 - Three calls:
   1. Mint a single-use attach ticket (the **same** ticket the browser terminal uses — there is no second ticket type); `?purpose=ui` skips the terminal session cap at the mint, since a UI session holds no terminal slot,
   2. **bind** it to the browser that will use it,
@@ -418,6 +418,104 @@ curl -sf -b jar "$UI_ORIGIN/__wardyn/enter?run=$RUN_ID&app=vscode&ticket=$TICKET
 - The app is
   never embedded in the console page — an `<iframe>` on the console origin is
   precisely what the second listener exists to prevent.
+
+## Inbound: let named callers reach a port
+
+- A `ui_apps` entry marked `inbound` is a **service port**: the run's owner and the callers it names can reach it through this gateway on any run, a background run with no terminal included.
+- People open it in a browser with a ticket. Machines call it with an inbound token.
+- Everything else on this page still holds: the exec lane, only declared ports, the second origin, header hygiene, and the 8 relay connections per run.
+- The protocol is HTTP/1.1 and WebSocket. There is no raw TCP.
+
+### Declare it
+
+```json
+{
+  "ui_apps": [
+    { "name": "api", "port": 8080, "path": "/", "inbound": true,
+      "callers": ["group:payments", "service:billing", "user:ana@example.com"] }
+  ]
+}
+```
+
+- `callers` is allowed only with `inbound`, holds at most 32 entries, and names each caller once.
+- An entry is `user:<sub or email>`, `group:<name>` or `service:<name>`, already lower-case with no surrounding spaces.
+  - A spelling that is not in that form is refused `400`, not folded.
+  - `all` is not a caller: an inbound app is never open to every signed-in person.
+  - Names are checked for shape only. A name nobody holds admits nobody.
+- The owner is always a caller. A service identity's run is also open to its current sponsor.
+- Callers are fixed when the run is created. To change them, start a new run.
+- Path and port rules are unchanged, and there is no `protocol` field.
+
+### Who can call it
+
+| Caller | Credential | Admitted when |
+|---|---|---|
+| The run's owner, a person or a service identity | A browser session, or an inbound token | The owner rule, as for any UI app |
+| A named person | A browser session from the app's ticket (below), or their own inbound token | `user:` matches their subject, or their email where sign-in vouches for emails; or `group:` matches a group of their sign-in |
+| A named service identity | Its inbound token | `service:<name>` is the token's principal |
+| Anyone else | None | Refused. No role, a super admin's included, reaches an inbound app |
+
+- A group is matched against the groups stamped on the credential: a sign-in's, or the token's at its mint.
+  - A member removed from the group keeps a browser session already open until `WARDYN_UI_SANDBOX_SESSION_TTL` ends it.
+
+### Turn it on
+
+- The gateway must be on (`WARDYN_UI_SANDBOX_LISTEN`). With it off there is no inbound.
+- Declaring an inbound app needs the restricted `feature` value `inbound`: nobody may until an administrator allows it, and a `*` allow grants nobody. See [Capabilities](operations/capabilities.md#inbound).
+- A profile's `deny_ui_apps` removes inbound apps with the rest, and refuses a live call to one.
+- A profile's `deny_interactive` removes inbound apps at create, with a warning, and refuses a live call.
+  - A port can serve a shell, so allowing it under a no-shell profile would make the wall advisory.
+  - A run of shape `application` is refused `422` `run_application_ui_apps_denied` instead of stripped.
+- A ceiling's `ui_apps` list narrows a request.
+  - It keeps `inbound` only where its own entry is inbound, and cuts `callers` to the ones it names, with a warning.
+  - An overlay keeps `inbound` only where both sides have it, and the callers both name.
+  - Adding a caller, or making an app inbound, is widening: the governance check cannot treat it as narrowing.
+
+### Open it in a browser
+
+1. A named person, or the owner, mints a ticket: `POST /api/v1/runs/{id}/apps/{app}/ticket`, answering `{ticket, expires_in_seconds}`.
+2. The ticket goes through the same bind and enter hand-off as [Open an app](#3-open-an-app).
+
+- The ticket opens that one app and never a terminal.
+- Anyone who is neither the owner nor a named caller, and a missing run or an app that is not inbound, all get the foreign-run `404 run_not_found`.
+- A named caller who is not the owner needs host mode. Under one shared host the answer is `403` `inbound_needs_host_mode`, audited as `inbound.deny`, because another run's app could script the caller's own apps.
+- The owner works in both modes. A run that is not `RUNNING` answers `409`.
+
+### Call it with a token
+
+- Mint an **inbound token** in the console: yourself with `POST /api/v1/me/tokens`, or for a service identity you sponsor with `POST /api/v1/me/service-identities/{name}/tokens`, sending `{"kind":"inbound"}`. See [API tokens](operations/api-tokens.md#inbound-tokens).
+- Send it as the one bearer this listener takes. `inbound_url_template` in `/healthz` under `ui_sandbox` gives the address, with `{run}` and `{app}` to fill in; `$UI` below is the part before `/r/`.
+
+```sh
+curl -H "Authorization: Bearer $INBOUND_TOKEN" "$UI/r/$RUN_ID/api/health"
+```
+
+| Answer | When |
+|---|---|
+| `401` `inbound_credential_invalid`, with `WWW-Authenticate: Bearer` | The bearer is not a live inbound token. An API, CLI, admin or portal token is refused the same way |
+| `404` `inbound_not_found` | No such run, no such app, an app that is not inbound, or a holder who is neither the owner nor a caller |
+| `429` `inbound_rate_limited`, `Retry-After: 1` | The run's inbound apps are past 50 requests a second, burst 100, all callers together |
+| `503` `runner_offline` | The runner holding the run is offline. Retry when it reconnects |
+| `403` `ui_gateway_cross_site` | A cookie session request from another site, in host mode (see "What Wardyn checks" below) |
+
+- The token never reaches the sandbox: `Authorization` is stripped like every other credential.
+- Every request to any app has client-sent `X-Wardyn-*` headers removed.
+- On an inbound app the relay adds `X-Wardyn-Caller`, the caller's principal, and `X-Wardyn-Caller-Email` when the credential carries one.
+- Each call keeps the run alive and thaws a paused run, as any relayed request does.
+
+### What Wardyn checks on every call
+
+- **The token** is looked up, then checked for expiry and revocation, and for an owner who is a service identity, its live record and sponsor. The result is reused for 30 seconds per token, run and app.
+- **A revoked, expired or suspended token** stops calling within that window. An inbound-token stream already open is re-checked at most every 30 seconds (rc.8) and closed when its token no longer holds.
+- **A browser session** is re-checked as in [Bounds](#bounds), minus the owner rule for a named caller, and also refused when the run's profile now denies UI apps or interactive sessions.
+- **Host mode** adds a cross-site check to every cookie session, inbound or not. A request must be same-origin, carry no fetch metadata, or be a top-level `GET` navigation, and an `Origin` header must be the request's own.
+- **Capacity** is shared: at most 8 relay connections per run, each a `socat` exec that is slower to open on Kubernetes or a remote runner. Inbound suits internal APIs and tools, not high-traffic services.
+
+### What is recorded
+
+- `inbound.allow` for each admitted request and `inbound.deny` for each refusal, with the caller, app, method, path (never the query), `via` (`session` or `token`) and the matched entry. See [`inbound.allow`](AUDIT-ACTIONS.md#sessions-ssh--ui-relay).
+- Denials share the `auth.fail` rate bound. A refused re-check of a session is its usual `ui.authorize` denial.
+- A busy run writes up to 50 `inbound.allow` rows a second, so filter them when reading the run's trail.
 
 ## 4. Deployment
 
@@ -532,8 +630,8 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
 
 ## Bounds
 
-- **Auth.** Exactly one mechanism on this listener: the ticket handoff, then the
-  signed relay cookie.
+- **Auth.** One mechanism on this listener: the ticket handoff, then the
+  signed relay cookie. The one exception is an inbound token on an [inbound](#inbound-let-named-callers-reach-a-port) app.
   - It never falls through to the console's session cookie or
     the admin bearer token, because the caller on this origin may be
     sandbox-authored JavaScript.
@@ -584,6 +682,7 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
 - And a connection already established (a relayed WebSocket) keeps working until
   it closes, including after a portal revoke: killing the run is what ends an
   in-flight session, the same bound attach and [SSH](SSH.md#bounds) publish.
+  - An inbound-token stream is the exception (rc.8): it is re-checked at most every 30 seconds and closed once its token is revoked, expired or suspended.
 - Every refusal writes a
   `ui.authorize` / `denied` row naming the reason.
 - **Header hygiene, both directions.** Cookies are not port-scoped, so a shared
