@@ -48,7 +48,6 @@
 package api
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -57,7 +56,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
-	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -538,61 +536,6 @@ func (s *Server) uiRewrite(pr *httputil.ProxyRequest) {
 	uiCallerHeaders(pr.Out.Header, sess)
 	if uiDesktopApp(sess.App) {
 		pr.Out.Header.Del("Sec-WebSocket-Extensions") // compression would hide the RFB stream (uiFilterUpgrade)
-	}
-}
-
-// uiOwnOrigin reports whether r names the gateway's own origin: its Origin's host is r's Host, and its
-// scheme the one the gateway is reached by (the origin template's in host mode, the advertised URL's in path
-// mode). A missing Origin, "null" and any other scheme or port are not.
-func (s *Server) uiOwnOrigin(r *http.Request) bool {
-	u, err := url.Parse(r.Header.Get("Origin"))
-	if err != nil || u.Host == "" || !strings.EqualFold(u.Host, r.Host) {
-		return false
-	}
-	scheme, _, _ := strings.Cut(cmp.Or(s.cfg.UIOriginTemplate, s.cfg.UIAdvertiseURL, "http://"), "://")
-	return strings.EqualFold(u.Scheme, scheme)
-}
-
-// uiStripInbound is the sandbox-ward half of the header hygiene. Cookies are
-// not port-scoped, so a browser attaches EVERY wardyn_* cookie for this
-// hostname — including the console's session on a shared-host deployment — to
-// a request bound for sandbox-authored code. They come off here, along with
-// Authorization (same reason) and any ?ticket (single-use, but a ticket in an
-// app's access log is still a ticket in a log). Every other cookie is the
-// operator's policy (UICookiePolicy; the default forwards it).
-func uiStripInbound(out *http.Request, policy UICookiePolicy) {
-	out.Header.Del("Authorization")
-	out.Header.Del("Proxy-Authorization")
-	// Filtered off the RAW header, never rebuilt from out.Cookies(): net/http's
-	// parser silently DROPS any cookie whose value is not RFC-6265-valid (a
-	// space, a comma, a quote), so re-serialising through it ate a sandbox
-	// app's own non-conforming cookies as a side effect of stripping ours.
-	// This relay is supposed to be a pass-through for everything that is not
-	// a wardyn_* credential, so only those segments come off and the rest goes
-	// on to the app as it arrived.
-	if raw := strings.Join(out.Header.Values("Cookie"), "; "); raw != "" {
-		kept := make([]string, 0, strings.Count(raw, ";")+1)
-		for _, seg := range strings.Split(raw, ";") {
-			seg = strings.TrimSpace(seg)
-			// A segment with no '=' is a NAMELESS cookie (RFC 6265bis sends
-			// just its value), so it matches only what the policy says of "".
-			name, _, ok := strings.Cut(seg, "=")
-			if !ok {
-				name = ""
-			}
-			if seg != "" && policy.forwards(name) {
-				kept = append(kept, seg)
-			}
-		}
-		if len(kept) == 0 {
-			out.Header.Del("Cookie")
-		} else {
-			out.Header.Set("Cookie", strings.Join(kept, "; "))
-		}
-	}
-	if q := out.URL.Query(); q.Has("ticket") {
-		q.Del("ticket")
-		out.URL.RawQuery = q.Encode()
 	}
 }
 

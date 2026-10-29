@@ -234,6 +234,18 @@ func (s *Server) uiCrossSite(r *http.Request) bool {
 	return !navigation
 }
 
+// uiOwnOrigin reports whether r names the gateway's own origin: its Origin's host is r's Host, and its
+// scheme the one the gateway is reached by (the origin template's in host mode, the advertised URL's in path
+// mode). A missing Origin, "null" and any other scheme or port are not.
+func (s *Server) uiOwnOrigin(r *http.Request) bool {
+	u, err := url.Parse(r.Header.Get("Origin"))
+	if err != nil || u.Host == "" || !strings.EqualFold(u.Host, r.Host) {
+		return false
+	}
+	scheme, _, _ := strings.Cut(cmp.Or(s.cfg.UIOriginTemplate, s.cfg.UIAdvertiseURL, "http://"), "://")
+	return strings.EqualFold(u.Scheme, scheme)
+}
+
 // uiRunOrigin returns the host this run's apps must be served on in HOST mode
 // (WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE), or "" in shared-origin path mode where
 // any host that reaches the listener is acceptable.
