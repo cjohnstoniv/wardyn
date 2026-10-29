@@ -58,6 +58,21 @@ func (s PG) AddOrgRunnerToPool(ctx context.Context, id, runnerID uuid.UUID, orgU
 		if p.Scope != types.RunnerPoolOrganization {
 			return ErrRunnerPoolScope
 		}
+		// A runner already in this pool keeps the namespace it was added with: a re-add answers that member,
+		// or ErrRunnerNamespaceFixed for another namespace, before any other pool's membership is weighed.
+		m.RunnerID = &runnerID
+		err = q.QueryRow(ctx, `
+			SELECT m.pool_id, m.kind, m.runs_namespace, m.added_at FROM runner_pool_members m JOIN runners r ON r.id = m.runner_id
+			WHERE m.pool_id = $1 AND m.runner_id = $2 AND r.owner_kind = 'org'`, id, runnerID).Scan(&m.PoolID, &m.Kind, &m.RunsNamespace, &m.AddedAt)
+		switch {
+		case err == nil && m.RunsNamespace != runsNamespace:
+			return ErrRunnerNamespaceFixed
+		case err == nil:
+			rev = p.Revision
+			return nil
+		case !errors.Is(err, pgx.ErrNoRows):
+			return err
+		}
 		// The runner's other live memberships that overlap this one, the exact namespace first.
 		var clash string
 		err = q.QueryRow(ctx, `
@@ -73,7 +88,6 @@ func (s PG) AddOrgRunnerToPool(ctx context.Context, id, runnerID uuid.UUID, orgU
 		case !errors.Is(err, pgx.ErrNoRows):
 			return err
 		}
-		m.RunnerID = &runnerID
 		m.RunsNamespace = runsNamespace
 		err = q.QueryRow(ctx, `
 			INSERT INTO runner_pool_members (pool_id, runner_id, runs_namespace)
