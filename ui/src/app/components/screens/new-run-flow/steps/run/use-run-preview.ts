@@ -16,7 +16,7 @@ import { useLocalIssues } from "../../new-run-route";
 const NO_AUTO_PREFLIGHT = { local: false, backendArm: false, modelArm: false };
 
 /** The server's sentence for the inbound feature refusal (inboundDeclaredRefusal): its reason, capability_feature, is shared with the other feature doors, and the wire carries no target. */
-const INBOUND_REFUSAL = "Inbound apps aren't turned on for you.";
+export const INBOUND_REFUSAL = "Inbound apps aren't turned on for you.";
 
 export interface RunPreview {
   /** The server's policy preview says the service would be paused while it waits for requests. */
