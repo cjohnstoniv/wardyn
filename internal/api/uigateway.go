@@ -336,7 +336,7 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 	// runs humanOrAdminAuth, so the ticket's stamped role/principal is the only
 	// authorization signal, exactly as in handleAttachWS.
 	superAdmin := ta.role == oidc.RoleAdmin
-	if !s.mayEnterRunOrSponsor(r.Context(), run, ta.principal, superAdmin, ta.authorizedAt) {
+	if !s.uiTicketMayEnter(r.Context(), run, ta, app, superAdmin) { // a caller's ticket: inbound_ticket.go
 		if superAdmin {
 			s.refuseRunOwnerOnly(w, r.WithContext(withTicketActor(r.Context(), ta)), run)
 			return
@@ -397,6 +397,9 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 
 	sess := s.newUISession(run, ta, declared.Name, declared.Port, s.uiSessionTTL())
 	sess.Inbound = declared.Inbound
+	if sess.Caller = ta.caller; sess.Caller != "" {
+		sess.Service = "" // a caller enters as themselves, never as the sponsor of the run's service identity
+	}
 	s.startUISession(w, r, run, ta, sess, map[string]any{"app": declared.Name, "port": declared.Port}, declared.PathOrRoot(), redirectStatus)
 }
 

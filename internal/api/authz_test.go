@@ -905,6 +905,12 @@ var routeMatrix = map[string]classifiedRoute{
 	// rows required so chi.Walk's discovery of BOTH registrations stays pinned.
 	"POST /api/v1/runs/{id}/attach/ticket": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 	"POST /api/v1/runs/{id}/kill":          {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+
+	// An inbound app's ticket (inbound_ticket.go): classMember, NOT classOwner — a person the app's callers
+	// list names reaches it without owning the run, and no role does. The handler is the gate: anyone it
+	// does not admit gets the foreign-run 404, which the member probe's random id meets too.
+	"POST /api/v1/runs/{id}/apps/{app}/ticket": {class: classMember},
+
 	// Thawing a paused run keeps its sandbox busy: a write, so not the
 	// security tier's inspect-or-stop.
 	"POST /api/v1/runs/{id}/resume": {class: classOwner, entity: entityRun, ownerTier: tierSuper},

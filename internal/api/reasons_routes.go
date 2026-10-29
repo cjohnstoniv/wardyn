@@ -289,6 +289,11 @@ const (
 	reasonUIGatewayCrossSite       = "ui_gateway_cross_site"      // host mode: a session request from another site that is not a top-level navigation, or naming another Origin
 )
 
+// An app's ticket (inbound_ticket.go): POST /runs/{id}/apps/{app}/ticket.
+const (
+	reasonInboundNeedsHostMode = "inbound_needs_host_mode" // a named caller who is not the owner, on a deployment serving apps from one shared host (403)
+)
+
 // Device federation (devices_auth.go): the forwarder's own auth chain and
 // audit-ingest door. Most values here are already the exact strings
 // s.auditAuthFailedAs/auditEnrolFailure/auditIngestFailure wrote before #656

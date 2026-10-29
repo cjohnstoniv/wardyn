@@ -272,6 +272,16 @@ func TestUIGateway_BackgroundRunRefusedAtEnterAndRelay(t *testing.T) {
 		}
 	})
 
+	// A caller's ticket (POST /runs/{id}/apps/{app}/ticket) is minted and spent on a background run's inbound
+	// app; the route has no background refusal of its own, since it mints for inbound apps only.
+	t.Run("a caller's ticket opens the inbound app", func(t *testing.T) {
+		h := inboundTicketHarness(t, "user:bob")
+		background(h)
+		if rec := h.enterOnRunHost("code", ticketOf(t, h.appTicketAs("code", "bob", nil))); rec.Code != http.StatusFound {
+			t.Fatalf("enter = %d %s, want 302", rec.Code, rec.Body.String())
+		}
+	})
+
 	for _, tc := range doorExperiences {
 		t.Run(tc.name+" runs still open", func(t *testing.T) {
 			h := newUIHarness(t, okBackend())

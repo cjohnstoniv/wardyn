@@ -273,7 +273,7 @@ func (s *Server) routes() chi.Router {
 			// docs/sdk.md "Renamed in 0.8") are factored out of this already-long
 			// function into mountRenamedRunRoutes, called once, below.
 			s.mountRenamedRunRoutes(r)
-
+			s.mountInboundTicketRoutes(r) // a browser's ticket to one inbound app, for its owner or a named caller (inbound_ticket.go)
 			// Approvals: reading the queue is a member act (own runs only — see
 			// handleListApprovals), DECIDING is OWNER-OR-ADMIN rather than
 			// operator-only: the decision IS the live authorization over an
