@@ -89,7 +89,7 @@ func (r *rotExt) Walk(context.Context) ([]secretstore.ExternalEntry, error) { re
 // A Put's cleanup of the object it replaced waits for the row's lock, so a
 // delete and re-add that reuse that object while the cleanup is in flight land
 // after it, and the row keeps its value.
-func TestPutExternal_ReplacedObjectCleanupHoldsTheRowLock(t *testing.T) {
+func TestPG_PutExternal_ReplacedObjectCleanupHoldsTheRowLock(t *testing.T) {
 	pool := rekeyDatabase(t)
 	ext := newRotExt()
 	s := mixedStore(t, pool, mustIdentity(t), false, ext, true)
