@@ -337,7 +337,8 @@
 # docs/AUDIT-ACTIONS.md=54277 = ours 54222 + theirs 54243 - base 54188 at the 0.10 W4 merge of W6FOLLOW (recording.read chain_check). 54285 adds 8 (#3583: `end_reason` on `desktop.recording.resume`). 54286 adds 1 (#3489: `tunnel-limit` in the `vmnet:<reason>` row).
 # docs/AUDIT-ACTIONS.md 54400 adds 12 over 54388, measured (0.10.0-rc.6 AWS renewal): harness.credential.refresh signed_in_sec.
 # docs/AUDIT-ACTIONS.md=54456 adds 56 over 54400, measured (0.10 final §3 pre-wrapped images): the base_image.admit row and security admins on the base_image write row.
-docs/AUDIT-ACTIONS.md=54456 share=8
+# docs/AUDIT-ACTIONS.md 54512 adds 56 over 54456, measured (0.10 rc.8 personal walls): the person.walls.set and person.walls.delete rows, personal_walls on run.create and run.ceiling.reassert.
+docs/AUDIT-ACTIONS.md=54512 share=8
 # docs/AUDIT-ACTIONS.md 50827 = ours 50175 + theirs 50556 - base 49904 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.

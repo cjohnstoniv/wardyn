@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -640,15 +641,19 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 				slog.Any("injection_hosts", droppedInjection), slog.Any("broker_lanes", droppedLane))
 		}
 	}
-	// The Wardyn boundary withheld a credential from a run no profile applies to: the row is written
-	// for it too, naming the boundary, so a stripped credential is never silent.
-	boundaryActed := len(layers) > 0 && (len(droppedInjection) > 0 || len(droppedLane) > 0 || len(droppedGrant) > 0)
+	// An outer layer (the Wardyn boundary, a restriction, the run owner's walls) withheld a credential
+	// from a run no profile applies to: the row is written for it too, naming the layer, so a stripped
+	// credential is never silent. boundary is set only for a boundary layer, personal_walls for the
+	// walls' layer.
+	layerActed := len(layers) > 0 && (len(droppedInjection) > 0 || len(droppedLane) > 0 || len(droppedGrant) > 0)
+	boundaryLayer := slices.ContainsFunc(layers, func(l sealLayer) bool { return l.rec.Layer == policyref.LayerBoundary })
+	wallsLayer := slices.ContainsFunc(layers, func(l sealLayer) bool { return l.rec.Layer == policyref.LayerPersonal })
 	// No assigned profile — an operator (effectiveCeiling short-circuits at step
 	// 1) or an unassigned member: no run.ceiling.reassert row, which is what
 	// makes the row's ABSENCE mean "no profile applies" rather than "this door
 	// skipped the ceiling". ceilingForDispatch leaves deny and profile empty
 	// together, so this is the same provable no-op the deny check stood for.
-	if c.profile == "" && !boundaryActed {
+	if c.profile == "" && !layerActed {
 		return grantRows
 	}
 	// ALWAYS audited when a profile applies, even with nothing to drop: "which
@@ -672,11 +677,18 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 		"dropped_broker_lanes":    nonNilStrings(droppedLane),
 	}
 	if len(layers) > 0 {
-		data["boundary"] = true
+		if boundaryLayer {
+			data["boundary"] = true
+		}
+		if wallsLayer {
+			data["personal_walls"] = true
+		}
 		data["withheld_grants"] = nonNilStrings(droppedGrant)
 	}
-	if c.profile == "" {
+	if c.profile == "" && boundaryLayer {
 		data["note"] = "the Wardyn boundary denies these hosts or does not allow them, so every credential lane that reaches one is withheld"
+	} else if c.profile == "" {
+		data["note"] = "a restriction or the run owner's walls deny these hosts or keep these credentials out, so every credential lane that reaches one is withheld"
 	} else if len(added) > 0 || len(droppedInjection) > 0 || len(droppedLane) > 0 {
 		data["note"] = "the acting principal's governance profile denies these hosts; the denies are unioned into the run policy " +
 			"(deny beats allow and allow_all_egress at the proxy) and every credential lane that reaches a denied host is withheld — " +

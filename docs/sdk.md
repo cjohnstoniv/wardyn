@@ -801,6 +801,7 @@ start.
 | `approval_rule_not_applicable` | An `approval.policy.skip` reason, never sent to a client: no rule decides that approval. |
 | `boundary_host` | `POST /approvals/{id}/approve` (403): the Wardyn boundary is in `hard_limits` and denies the egress host, or does not allow it. |
 | `restriction_invalid` / `restriction_not_found` / `restriction_host` / `workspace_owning_unit_default` | The restriction routes, an egress approval, and `PUT /workspaces/{id}/owning-unit`. |
+| `walls_invalid` / `walls_need_person` / `walls_unavailable` / `personal_walls_host` | `/me/walls`: invalid walls (400), no signed-in person (400), no personal settings store (501); an egress approval of a host the run owner's walls deny (403). |
 | `credential_withheld` | `POST /internal/credentials/mint`, `GET /internal/injection/{grantID}` (403): the run's governance profile or the Wardyn boundary now withholds the grant or a host it reaches. |
 | `credential_withheld_unread` | `POST /internal/credentials/mint` (503): the run, its grants, its profile or the Wardyn boundary could not be read to check the grant; retry. |
 | `break_glass_reason_required` | `POST /runs`, `/runs/preflight` and `/runs/policy-preview` with the admin token (400): the boundary is in `hard_limits`, bounds something, a unit with its own walls or a restriction exists, and the `X-Wardyn-Break-Glass-Reason` header is missing, too long or has control characters. |
