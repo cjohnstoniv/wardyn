@@ -51,6 +51,7 @@ func (s *Server) mountWorkloadRoutes(r, securityOps chi.Router) {
 	r.Put("/workloads/{name}", s.handlePutWorkload)
 	r.Get("/workloads", s.handleListWorkloads)
 	r.Get("/workloads/{name}", s.handleGetWorkload)
+	r.Get("/workloads/{name}/history", s.handleWorkloadHistory)
 	r.Delete("/workloads/{name}", s.handleDeleteWorkload)
 	r.Post("/workloads/{name}/restart", s.handleRestartWorkload)
 	// A binding is standing authority over a service identity: the security tier's, applied directly and
@@ -201,6 +202,9 @@ func workloadOut(v store.WorkloadView, tier workspaceReadTier, now time.Time) cl
 		}
 		projectServiceHealth(run, now)
 		out.State += "/" + string(run[0].ServiceStatus.Health)
+	}
+	if tier == workspaceReadFull { // the digest of an intent whose host axis is withheld would let a reader test guesses at it
+		out.Digest = v.Digest
 	}
 	_ = json.Unmarshal(redactWorkloadIntentForRead(v.Intent, tier), &out.Intent) //nolint:errcheck // the door wrote it; an unreadable intent reads as none
 	if f := v.LastRefusal; f != nil {
@@ -617,6 +621,61 @@ func (s *Server) handleGetWorkload(w http.ResponseWriter, r *http.Request) {
 	if v, ok := s.workloadFor(w, r, ws, false); ok {
 		writeJSON(w, http.StatusOK, workloadOut(v, s.workloadReadTier(r, v.Owner), s.cfg.Now()))
 	}
+}
+
+// handleWorkloadHistory is GET /workloads/{name}/history[?owner=]: this workload's workload.* audit rows,
+// newest first, behind the same owner gate as GET /workloads/{name}. The rows are read by their target
+// (workloadTarget), not through GET /audit, which a member reads only for runs of their own.
+func (s *Server) handleWorkloadHistory(w http.ResponseWriter, r *http.Request) {
+	ws, ok := s.workloadStore(w)
+	if !ok {
+		return
+	}
+	pager, ok := s.cfg.Store.(store.Pager)
+	if !ok {
+		writeErrorReason(w, http.StatusNotImplemented, reasonWorkloadsUnavailable, "workload history requires the Postgres store backend")
+		return
+	}
+	v, ok := s.workloadFor(w, r, ws, false)
+	if !ok {
+		return
+	}
+	page, ok := parseListPage(w, r, defaultListLimit)
+	if !ok {
+		return
+	}
+	filter := store.AuditFilter{ActionPrefix: "workload.", Target: v.Owner + "/" + v.Name}
+	servePage(w, r, page, func(p store.Page) ([]client.WorkloadEvent, error) {
+		evs, err := pager.QueryAuditEventsFilteredPage(r.Context(), nil, filter, p)
+		out := make([]client.WorkloadEvent, 0, len(evs))
+		for _, ev := range evs {
+			out = append(out, workloadEventOf(ev))
+		}
+		return out, err
+	}, nil)
+}
+
+// workloadEventOf projects a workload.* audit row to what a history shows: when, what, which generation and
+// which runs. The actor, source address and hashes stay in the audit log.
+func workloadEventOf(ev types.AuditEvent) client.WorkloadEvent {
+	var d struct {
+		Generation int64      `json:"generation"`
+		RunID      *uuid.UUID `json:"run_id"`
+		NewRunID   *uuid.UUID `json:"new_run_id"`
+		OldRunID   *uuid.UUID `json:"old_run_id"`
+		EndedRunID *uuid.UUID `json:"ended_run_id"`
+		Reason     string     `json:"reason"`
+	}
+	_ = json.Unmarshal(ev.Data, &d) //nolint:errcheck // a row without readable data still shows its time and action
+	out := client.WorkloadEvent{Time: ev.Time, Action: strings.TrimPrefix(ev.Action, "workload."), Generation: d.Generation,
+		RunID: d.RunID, EndedRunID: d.EndedRunID, Reason: d.Reason}
+	if d.NewRunID != nil {
+		out.RunID = d.NewRunID
+	}
+	if d.OldRunID != nil {
+		out.EndedRunID = d.OldRunID
+	}
+	return out
 }
 
 // handleListWorkloads is GET /workloads[?owner=]: the caller's own and those of the service identities

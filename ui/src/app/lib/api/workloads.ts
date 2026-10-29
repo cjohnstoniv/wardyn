@@ -7,7 +7,7 @@
 // (workload_bindings.go). A workload is applied from the command line or a custom resource, never here: the
 // console reads, restarts and deletes. A binding is standing authority over a service identity, so creating
 // one is a signed-in person's alone (asPerson).
-import type { CreateWorkloadBindingRequest, Workload, WorkloadApplyResult, WorkloadBinding } from "../types/workloads";
+import type { CreateWorkloadBindingRequest, Workload, WorkloadApplyResult, WorkloadBinding, WorkloadEvent } from "../types/workloads";
 import { asJson, asNoContent, unwrapList, wfetch, withLimit } from "./core";
 
 const seg = encodeURIComponent;
@@ -22,6 +22,12 @@ export const workloads = {
   },
 
   get: async (name: string, owner?: string): Promise<Workload> => asJson<Workload>(await wfetch(workloadPath(name, owner), { method: "GET" })),
+
+  /** The workload's audit rows (launches, replacements, refusals), newest first. */
+  async history(name: string, owner?: string): Promise<WorkloadEvent[]> {
+    const path = `/workloads/${seg(name)}/history${owner ? `?owner=${seg(owner)}` : ""}`;
+    return unwrapList<WorkloadEvent>(await asJson<unknown>(await wfetch(withLimit(path), { method: "GET" })));
+  },
 
   /** A fresh run of the same spec, then the old one ends; a refused one leaves the old one running. */
   async restart(name: string, owner?: string): Promise<WorkloadApplyResult> {

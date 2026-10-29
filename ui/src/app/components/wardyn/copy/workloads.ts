@@ -38,13 +38,21 @@ export const WORKLOADS = {
   BINDING_INACTIVE: "Binding inactive",
   // The detail drawer.
   GENERATION: "Generation",
+  DIGEST: "Digest",
   CURRENT_RUN: "Current run",
+  INBOUND_ADDRESS: "Inbound address",
   STARTED: (ago: string) => `started ${ago}`,
   LAST_REFUSAL: "Last refusal",
   /** "Generation 3 · <sentence> · the previous run kept running." The code follows in small print. */
   REFUSAL_GENERATION: (n: number) => `Generation ${n}`,
   PREVIOUS_KEPT: "the previous run kept running.",
   SPEC: "Spec",
+  HISTORY: "History",
+  /** "gen 4 launched 7c41e0a9, ended 51c0d7e2 · 2 d ago": the mono parts are the generation and the run ids. */
+  HISTORY_GEN: (n: number) => `gen ${n}`,
+  HISTORY_LAUNCHED: "launched",
+  HISTORY_ENDED: "ended",
+  HISTORY_REFUSED: "refused",
   RESTART: "Restart",
   DELETE: "Delete",
   /** Followed by the namespace, in mono, and MANAGED_TAIL. */
@@ -91,6 +99,9 @@ export const WORKLOAD_BINDINGS = {
   BOUND: (namespace: string) => `${namespace} bound.`,
   UNBOUND: (namespace: string) => `The binding for ${namespace} was deleted.`,
 } as const;
+
+/** The drawer's Digest: "sha256:9f1c4e…a07b", the hex digest cut to its first six and last four. */
+export const digestShort = (hex: string): string => `sha256:${hex.slice(0, 6)}…${hex.slice(-4)}`;
 
 const plural = (n: number, unit: string) => `${n} ${unit}${n === 1 ? "" : "s"}`;
 

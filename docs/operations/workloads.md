@@ -15,6 +15,7 @@
 | Source | `api` for the CLI and API, `k8s` for a custom resource. One name has one source, or the apply is `409` `workload_source_conflict` |
 | Intent | What to run: exactly the `intent` of a `kind: Run` document ([Run documents](../sdk.md#run-documents)) |
 | Generation | Counts spec changes. `current_generation` is the one the current run was launched from |
+| Digest | The hex SHA-256 over the intent, `run_in` and `restart_key`. An apply with the same digest changes nothing. The security tier reading another owner's workload does not get it |
 | Run | The current run. `state` is its state, with its service health when it has a [service](../SERVICES.md) block |
 
 - An owner holds at most 100 workloads (`422` `workload_cap_reached`).
@@ -106,6 +107,7 @@ intent:
 - Two applies that race leave one run: the launch that loses is ended with reason `workload_replaced`.
 - `workload restart` is recorded as `workload.restart`. Only the owner, the service identity's sponsor or a super admin may restart; a `security_admin` gets `404`, because a restart launches as the service. When it is not the owner's own request it launches only for a service identity whose sponsor's session is live; a person's workload then starts at their next apply.
 - Deleting a workload removes the row, then ends its run with reason `workload_deleted`. The owner, the service identity's sponsor, a super admin or a `security_admin` may delete.
+- `GET /workloads/{name}/history[?owner=]` returns the workload's `workload.*` audit rows, newest first: `time`, `action` (`apply`, `launch`, `replace`, `launch_refused`, `restart` or `delete`), `generation`, `run_id`, `ended_run_id` and `reason`. The same callers read it as `GET /workloads/{name}`; a service identity's token does not. A name applied again after a delete shares the old history. The console's drawer lists it.
 
 ## Kubernetes: the WardynWorkload resource
 

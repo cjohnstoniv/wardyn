@@ -9,6 +9,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -234,6 +236,61 @@ func TestPG_Workload_SponsorReadsAndDeletes(t *testing.T) {
 	}
 	if got := killReason(t, e, runID); got != workloadKillDeleted {
 		t.Fatalf("run.kill reason = %q, want %q", got, workloadKillDeleted)
+	}
+}
+
+// TestPG_Workload_HistoryListsOnlyThisWorkloadsRows: the history of a workload that was applied twice is its
+// own workload.* rows, newest first, with the replace naming both runs, and none of another workload's.
+func TestPG_Workload_HistoryListsOnlyThisWorkloadsRows(t *testing.T) {
+	e := newSvcEnv(t)
+	e.h.srv.cfg.Audit = store.Recorder{Pool: e.pool} // the history reads the audit table itself
+	pol := e.plainPolicy(t, "wl-pol")
+	oldRun := launchedRun(t, decodeApply(t, doSSO(t, e.h.srv, http.MethodPut, "/api/v1/workloads/web", e.mem, workloadBody(pol, "t", "")), http.StatusCreated))
+	newRun := launchedRun(t, decodeApply(t, doSSO(t, e.h.srv, http.MethodPut, "/api/v1/workloads/web", e.mem, workloadBody(pol, "t2", "")), http.StatusOK))
+	decodeApply(t, doSSO(t, e.h.srv, http.MethodPut, "/api/v1/workloads/api", e.mem, workloadBody(pol, "other", "")), http.StatusCreated)
+
+	w := doSSO(t, e.h.srv, http.MethodGet, "/api/v1/workloads/web/history", e.mem, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("history: %d %s, want 200", w.Code, w.Body.String())
+	}
+	var got []client.WorkloadEvent
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	var actions []string
+	for _, ev := range got {
+		actions = append(actions, ev.Action)
+	}
+	if want := []string{"replace", "launch", "apply", "launch", "apply"}; !slices.Equal(actions, want) {
+		t.Fatalf("history actions = %v, want %v", actions, want)
+	}
+	if r := got[0]; r.Generation != 2 || r.RunID == nil || *r.RunID != newRun || r.EndedRunID == nil || *r.EndedRunID != oldRun {
+		t.Fatalf("replace row = %+v, want generation 2, run %s, ended %s", r, newRun, oldRun)
+	}
+	if l := got[3]; l.Generation != 1 || l.RunID == nil || *l.RunID != oldRun {
+		t.Fatalf("first launch row = %+v, want generation 1 and run %s", l, oldRun)
+	}
+}
+
+// TestPG_Workload_HistoryHasTheWorkloadReadGate: a service's workload history is its sponsor's to read, and
+// nobody else's, as the workload itself is.
+func TestPG_Workload_HistoryHasTheWorkloadReadGate(t *testing.T) {
+	e := newSvcEnv(t)
+	e.h.srv.cfg.Audit = store.Recorder{Pool: e.pool}
+	e.mustCreate(t, svcName, svcSponsor)
+	tok := e.mustMint(t, e.sponsor, svcName)
+	pol := e.plainPolicy(t, "wl-pol")
+	decodeApply(t, e.as(t, tok.Token, http.MethodPut, "/api/v1/workloads/web", workloadBody(pol, "t", "")), http.StatusCreated)
+
+	path := "/api/v1/workloads/web/history?owner=" + svcPrin
+	if w := doSSO(t, e.h.srv, http.MethodGet, path, e.sponsor, ""); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"action":"apply"`) {
+		t.Fatalf("sponsor history: %d %s, want 200 with the apply row", w.Code, w.Body.String())
+	}
+	if w := doSSO(t, e.h.srv, http.MethodGet, path, e.other, ""); w.Code != http.StatusNotFound || respReason(w) != reasonWorkloadNotFound {
+		t.Fatalf("other history: %d %s, want 404 %s", w.Code, w.Body.String(), reasonWorkloadNotFound)
+	}
+	if w := e.as(t, tok.Token, http.MethodGet, "/api/v1/workloads/web/history", ""); w.Code != http.StatusForbidden {
+		t.Fatalf("service token history: %d %s, want 403 service_scope", w.Code, w.Body.String())
 	}
 }
 

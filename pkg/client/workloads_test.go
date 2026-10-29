@@ -164,6 +164,13 @@ func TestWorkloadMethods_RequestShape(t *testing.T) {
 			_, err := c.GetWorkload(context.Background(), "a/b", "")
 			return err
 		}, "GET", "/api/v1/workloads/a%2Fb", "", ""},
+		{"WorkloadHistory", 200, `[{"action":"launch","generation":4,"run_id":"` + id.String() + `"}]`, func(c *client.Client) error {
+			got, err := c.WorkloadHistory(context.Background(), "w", "alice", client.ListOpts{Limit: 5})
+			if err == nil && (len(got) != 1 || got[0].Action != "launch" || got[0].Generation != 4 || got[0].RunID == nil || *got[0].RunID != id) {
+				t.Errorf("WorkloadHistory = %+v", got)
+			}
+			return err
+		}, "GET", "/api/v1/workloads/w/history", "owner=alice&limit=5", ""},
 		{"DeleteWorkload", 204, ``, func(c *client.Client) error {
 			return c.DeleteWorkload(context.Background(), "w", "alice")
 		}, "DELETE", "/api/v1/workloads/w", "owner=alice", ""},

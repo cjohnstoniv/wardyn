@@ -32,6 +32,8 @@ export interface Workload {
   restart_key?: string;
   /** The door-normalised intent. */
   intent: TemplateIntent;
+  /** The hex SHA-256 over the intent, run_in and restart_key; absent for a reader who sees the intent with its host axis withheld. */
+  digest?: string;
   /** Counts spec changes; current_generation is the one the current run was launched from. */
   generation: number;
   current_generation: number;
@@ -41,6 +43,20 @@ export interface Workload {
   last_refusal?: WorkloadRefusal;
   created_at: string;
   updated_at: string;
+}
+
+/** One row of a workload's history. Go: client.WorkloadEvent. */
+export interface WorkloadEvent {
+  time: string;
+  /** `apply`, `launch`, `replace`, `launch_refused`, `restart` or `delete`. */
+  action: string;
+  generation?: number;
+  /** The run a launch started, or the run that replaced another. */
+  run_id?: string;
+  /** The run a replace or a delete ended. */
+  ended_run_id?: string;
+  /** A launch_refused row's reason code. */
+  reason?: string;
 }
 
 /** What an apply or restart did to the stored workload. Go: client.WorkloadOutcome. */
