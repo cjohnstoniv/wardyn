@@ -54,14 +54,14 @@ func TestRunnerGoawayNoticeIsANoOpWithoutASession(t *testing.T) {
 func TestRunnerSessionBeganIsWhenTheLatestFreshSessionBegan(t *testing.T) {
 	srv := newHarness(t).srv
 	id := uuid.New()
-	if _, ok := srv.runnerSessionBegan(id); ok {
+	if _, _, ok := srv.runnerSessionBegan(id); ok {
 		t.Fatal("a runner with no session has a start time")
 	}
 	before := srv.cfg.Now()
 	srv.noteRunnerSession(id, "s1")
-	got, ok := srv.runnerSessionBegan(id)
-	if !ok || got.Before(before) || got.After(srv.cfg.Now()) {
-		t.Fatalf("began = %v, %v; want a time at noteRunnerSession", got, ok)
+	session, got, ok := srv.runnerSessionBegan(id)
+	if !ok || session != "s1" || got.Before(before) || got.After(srv.cfg.Now()) {
+		t.Fatalf("began = %q %v, %v; want s1 at noteRunnerSession", session, got, ok)
 	}
 }
 
@@ -139,7 +139,7 @@ func TestRunnerGoawayPG_AKillQueuedOnBEndsTheSessionOnA(t *testing.T) {
 		t.Fatalf("%d kill rows after the re-asserts, want the one applied", n)
 	}
 
-	began, ok := a.runnerSessionBegan(f.rn.ID)
+	_, began, ok := a.runnerSessionBegan(f.rn.ID)
 	if !ok {
 		t.Fatal("A noted no fresh session")
 	}

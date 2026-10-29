@@ -364,13 +364,13 @@ func (s *Server) noteRunnerSession(id uuid.UUID, session string) {
 	rs.beganAt[id] = s.cfg.Now()
 }
 
-// runnerSessionBegan is when id's latest fresh session began on this replica, false if it has had none.
-func (s *Server) runnerSessionBegan(id uuid.UUID) (time.Time, bool) {
+// runnerSessionBegan is id's latest fresh session on this replica and when it began, false if it has had none.
+func (s *Server) runnerSessionBegan(id uuid.UUID) (string, time.Time, bool) {
 	rs := &s.runnerStreams
 	rs.connectMu.Lock()
 	defer rs.connectMu.Unlock()
 	at, ok := rs.beganAt[id]
-	return at, ok
+	return rs.beganSession[id], at, ok
 }
 
 // owedConnectSession is the session whose runner.connect row id owes, "" when none.

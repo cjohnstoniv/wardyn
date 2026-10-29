@@ -85,13 +85,14 @@ func (s *Server) announceRunnerGoaway(runnerID uuid.UUID) {
 // onRunnerGoawayNotice ends the runner's session if this replica holds one. A session that began after
 // the notice was sent read the queue after the action was in it, so a burst of queued actions makes the
 // runner reconnect once, not once per action. The times are two replicas' clocks, so skew can cost one
-// extra or one skipped GOAWAY, never a wrong delivery.
+// extra or one skipped GOAWAY, never a wrong delivery. The session checked here is the one ended: the
+// end runs later, and by then a newer session, which read the queue after the check, may hold the slot.
 func (s *Server) onRunnerGoawayNotice(m livebus.Message) {
 	var n runnerGoawayNotice
 	if unmarshalNotice(m, &n) != nil || n.At.IsZero() {
 		return
 	}
-	began, ok := s.runnerSessionBegan(m.Run)
+	session, began, ok := s.runnerSessionBegan(m.Run)
 	if !ok || began.After(n.At) {
 		return
 	}
@@ -103,7 +104,7 @@ func (s *Server) onRunnerGoawayNotice(m livebus.Message) {
 	s.goBackground(func() {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(s.cfg.BaseCtx), liveBusPublishTimeout)
 		defer cancel()
-		if err := s.runnerHub(st).Goaway(ctx, m.Run); err != nil {
+		if err := s.runnerHub(st).GoawaySession(ctx, m.Run, session); err != nil {
 			slog.Warn("wardynd: a queued runner action waits for the runner's next session", slog.String("runner_id", m.Run.String()), slog.Any("err", err))
 		}
 	})
