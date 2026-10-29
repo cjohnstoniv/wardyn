@@ -177,6 +177,8 @@ const (
 	reasonMainDriveUnenforceable = "main_drive_unenforceable" // the run's policy writes a disk size the runner it lands on cannot cap
 	// The run shape (run_shape.go): New Run's choice, checked against the carriers.
 	reasonRunShapeConflict = "run_shape_conflict" // shape does not fit the run's experience, workload or tools
+	// A service (run_service.go): a background command kept running.
+	reasonRunServiceShape = "run_service_shape" // service rides a run that is not a background command
 	// An application run whose declared app the resolved policy strips (governance_run_doors.go).
 	reasonRunApplicationUIAppsDenied = "run_application_ui_apps_denied" // shape application declares an app the profile's deny_ui_apps removes
 	// The harness set (run_harness_set.go): the harnesses a run includes and the

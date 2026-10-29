@@ -210,7 +210,7 @@ func TestTemplateDependencyEdges(t *testing.T) {
 	}
 	want := []string{
 		"devcontainer_ref>devcontainer_repo", "model_provider>agent", "tool_approvals>agent", "seed_auto_tools>agent",
-		"inline_policy.tool_rules>agent", "workload>experience", "startup>experience", "interactive_start>interactive", "task_mode>interactive",
+		"inline_policy.tool_rules>agent", "workload>experience", "startup>experience", "service>workload", "interactive_start>interactive", "task_mode>interactive",
 		"inline_policy.ui_apps>interactive", "runner_id>placement", "runner_id>runner_pool_id",
 	}
 	if !slices.Equal(got, want) {

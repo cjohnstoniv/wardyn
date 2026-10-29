@@ -187,6 +187,11 @@
       "memory_mib",
       "disk_mib"
     ],
+    "RunService": [
+      "restart",
+      "port",
+      "health"
+    ],
     "RunStartup": [
       "kind",
       "tool",
@@ -204,6 +209,11 @@
       "host",
       "header",
       "format"
+    ],
+    "ServiceHealth": [
+      "path",
+      "interval_sec",
+      "failure_threshold"
     ],
     "StartFolder": [
       "kind",
@@ -809,6 +819,14 @@
       "meaning": "No tool is included, which is valid: the sandbox starts from the agent base image. An interactive environment or a command may include several harnesses, and at most one starts. Each harness has its own model provider, tool rules and default effect, and nothing is shared between tools.",
       "section": "harness",
       "keyed_by": "harness"
+    },
+    {
+      "name": "service",
+      "part": "tools_image",
+      "omitted": "unset_optional",
+      "empty": "value",
+      "meaning": "The command is not kept running: it runs once and the run ends with it. A present service is a choice to keep it running; its restart, port and health check follow the defaults the server fills.",
+      "section": "run_wide"
     },
     {
       "name": "startup",
