@@ -22,8 +22,8 @@ import (
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
-// crEnv is svcEnv with the service identity created, one claimed runner attached over loopback (fake)
-// and a member of an organization pool, and that pool binding namespace team-a to the service.
+// crEnv is svcEnv with the service identity created, one claimed organization runner attached over loopback
+// (fake) and a member of an organization pool, and that pool binding namespace team-a to the service.
 type crEnv struct {
 	svcEnv
 	runner uuid.UUID
@@ -40,15 +40,17 @@ func newCREnv(t *testing.T) crEnv {
 	e.rp = e.orgPool(t, "Cluster")
 	ctx := context.Background()
 	e.runner = uuid.New()
-	fp := "fp-" + e.runner.String()
-	if _, err := e.st.CreateRunner(ctx, types.Runner{ID: e.runner, Owner: svcSponsor, Name: "cluster", PublicKey: append(e.runner[:], e.runner[:]...),
-		KeyFingerprint: fp, OrgURLSHA256: federation.OrgURLSHA256("https://org.example.com"), Limits: roomyRunnerLimits()}); err != nil {
+	fp, org := "fp-"+e.runner.String(), federation.OrgURLSHA256("https://org.example.com")
+	// An organization pool runs only the organization's own runners (runnerpool.OrgRunnerCandidates), so the
+	// runner is one, claimed and added as the security admin's routes do; a person's runner never joins.
+	if _, err := e.st.CreateRunner(ctx, types.Runner{ID: e.runner, OwnerKind: types.RunnerOwnerOrg, Name: "cluster", PublicKey: append(e.runner[:], e.runner[:]...),
+		KeyFingerprint: fp, OrgURLSHA256: org, Limits: roomyRunnerLimits()}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.st.ClaimRunner(ctx, e.runner, svcSponsor, fp, time.Now()); err != nil {
+	if _, err := e.st.ClaimOrgRunner(ctx, e.runner, fp, org, "sec-sub", time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.pool.Exec(ctx, `INSERT INTO runner_pool_members (pool_id, runner_id) VALUES ($1, $2)`, e.rp.ID, e.runner); err != nil {
+	if _, _, _, err := e.st.AddOrgRunnerToPool(ctx, e.rp.ID, e.runner, org, ""); err != nil {
 		t.Fatal(err)
 	}
 	e.bindNamespace(t, e.rp.ID, "team-a")
@@ -367,6 +369,9 @@ func TestPG_WorkloadFromRunner_BoundApplyLaunchesOnTheBoundPool(t *testing.T) {
 	orch := orchestrator.New()
 	orch.Add(e.h.srv.runnerEndpoint(e.runner).sub)
 	e.h.srv.cfg.Runner = orch
+	// The hub reads online only the runners it admitted, and attachRunner links this one around it, so its
+	// answer for this runner is given here: placement takes no offline runner.
+	e.h.srv.cfg.RunnerOnline = func(id uuid.UUID) bool { return id == e.runner }
 	e.report(t, e.apply("team-a", "web", ""))
 
 	var got runnerwire.WorkloadStatusArgs
