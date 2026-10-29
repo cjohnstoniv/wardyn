@@ -307,6 +307,14 @@ func TestRunLease_EndingSoonOnlyWhenRenewalWillNotHappen(t *testing.T) {
 		{name: "healthy, inside the warning window, before the half-life", endsIn: 45 * time.Minute, mutate: healthy},
 		{name: "healthy, renewed to a full unit inside the warning window", endsIn: 20 * time.Minute, mutate: healthy, renewed: true},
 		{name: "starting, before the half-life", endsIn: 45 * time.Minute},
+		// Renewal will be refused at the half-life (TestRunLease_ARenewalNeedsTheOwnersAuthorityToExtend),
+		// so the run is warned now.
+		{name: "healthy, before the half-life, its captured unit deleted", endsIn: 45 * time.Minute, warned: true, mutate: func(f *leaseFixture) {
+			healthy(f)
+			unit := uuid.New()
+			f.st.run.UnitID = &unit
+			f.srv.cfg.Store = &ownerChainLeaseStore{leaseStore: f.st, chainErr: store.ErrNotFound}
+		}},
 		{name: "unhealthy", endsIn: 45 * time.Minute, warned: true, mutate: func(f *leaseFixture) {
 			f.st.run.ServiceStatus = &types.RunServiceStatus{Health: types.ServiceHealthUnhealthy, ObservedAt: f.now}
 		}},
