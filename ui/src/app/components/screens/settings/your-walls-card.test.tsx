@@ -28,7 +28,7 @@ const open = async () => {
   await user.click(await screen.findByRole("button", { name: /^Your walls/ }));
   await screen.findByText(YOUR_WALLS.SITES);
 };
-const echo = (spec: unknown): Promise<PersonalWalls> => Promise.resolve({ spec: spec as PersonalWalls["spec"], updated_at: "2026-10-29T12:00:00Z" });
+const echo = (spec: unknown): Promise<PersonalWalls> => Promise.resolve({ spec: spec as PersonalWalls["spec"] });
 
 beforeEach(() => {
   getMock.mockResolvedValue({ spec: {} });

@@ -11,6 +11,7 @@
 // says passes through unchanged.
 
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
+import { NR_WALLS } from "../../../wardyn/copy/personal-walls";
 import { FIELD_LABEL } from "../../run-detail/policy-tab-copy";
 
 const EGRESS_DROP = /^dropped \d+ egress domain\(s\) not in operator allowlist: (.+)$/;
@@ -27,7 +28,7 @@ function joinAnd(items: string[]): string {
 /** The server's sentence, or the dropped-host sentence when it is one of the three drop warnings. */
 export function reviewWarningText(warning: string): string {
   const knob = WALLS_NARROWED.exec(warning)?.[1];
-  if (knob) return NR_REVIEW.WALLS_NARROWED(FIELD_LABEL[knob]?.toLowerCase() ?? knob);
+  if (knob) return NR_WALLS.NARROWED(FIELD_LABEL[knob]?.toLowerCase() ?? knob);
   const private_ = PRIVATE_DROP.exec(warning)?.[1] ?? CLONE_DROP.exec(warning)?.[1];
   const hosts = EGRESS_DROP.exec(warning)?.[1].split(",") ?? (private_ ? [private_] : []);
   if (hosts.length === 0) return warning;

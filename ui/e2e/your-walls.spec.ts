@@ -14,7 +14,7 @@ import { NR_DOCUMENT } from "../src/app/components/wardyn/copy/new-run/document"
 import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
 import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
 import { NR_TOOLS } from "../src/app/components/wardyn/copy/new-run/tools";
-import { YOUR_WALLS } from "../src/app/components/wardyn/copy/personal-walls";
+import { NR_WALLS, YOUR_WALLS } from "../src/app/components/wardyn/copy/personal-walls";
 import { SCENARIO_HARNESSES, SCENARIO_HARNESS_SETS } from "../src/app/lib/new-run-fixtures/scenarios/harnesses";
 import { SCENARIO_PREFLIGHT } from "../src/app/lib/new-run-fixtures/scenarios/preflight";
 
@@ -76,7 +76,7 @@ test.describe("Your walls", () => {
     await dialog.getByRole("button", { name: NR_TOOLS.ADD_TO_RUN }).click();
     const row = page.getByRole("listitem").filter({ hasText: LEFT_OUT });
     await expect(row.getByText(NR_TOOLS.NET_NOT_ALLOWED)).toBeVisible();
-    await expect(page.getByTestId("walls-leave-out")).toHaveText(NR_TOOLS.WALLS_LEAVE_OUT(LEFT_OUT));
+    await expect(page.getByTestId("walls-leave-out")).toHaveText(NR_WALLS.LEAVE_OUT(LEFT_OUT));
 
     // Review carries the walls step's own warning, in the console's words.
     await press(page, NR_TOOLS.REVIEW_RUN);
@@ -106,7 +106,7 @@ test.describe("Your walls", () => {
     await press(page, `${NR_REVIEW.CHANGE} ${NR_REVIEW.GROUP_ACCESS}`);
     await press(page, NR_REVIEW.EDIT_TOOLS_ACCESS);
     // The switch is offered only while the preview says this run allows all egress.
-    const only = page.getByRole("switch", { name: NR_TOOLS.ONLY_LISTED });
+    const only = page.getByRole("switch", { name: NR_WALLS.ONLY_LISTED });
     await expect(only).toBeVisible();
     await only.click();
     await expect(only).toHaveAttribute("aria-checked", "true");

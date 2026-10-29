@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { CHANGE_HEADING, FIELD_LABEL, POLICY_TAB } from "../../screens/run-detail/policy-tab-copy";
 import { WHY_CARD } from "../../../lib/why-card-copy";
 import { NR_TOOLS } from "./new-run/tools";
-import { YOUR_WALLS } from "./personal-walls";
+import { NR_WALLS, YOUR_WALLS } from "./personal-walls";
 
 // T4-a and T4-b, character for character as the owner approved them on board R15, and T4-c on board R16 (PLAN §6.12,
 // §6.13). Editing one is a
@@ -39,10 +39,10 @@ const CANON: [id: string, actual: string, canon: string][] = [
   ["T4-a24", YOUR_WALLS.RESTART_NOTE, "Runs already started keep their sites. Blocked sites, clipboard and credentials also apply when they restart."],
   ["T4-a25", YOUR_WALLS.KINDS.cloud_sts, "Cloud credentials"],
   ["T4-a26", YOUR_WALLS.KINDS.ssh_key, "SSH key"],
-  ["T4-b01", NR_TOOLS.ONLY_LISTED, "Only the sites listed"],
-  ["T4-b02", NR_TOOLS.ONLY_LISTED_HELP, "This run reaches only the listed sites and what its setup needs. Your organisation allows more."],
-  ["T4-b03", NR_TOOLS.WALLS_LEAVE_OUT("pypi.org"), "Your walls leave out pypi.org."],
-  ["T4-b04", `${NR_TOOLS.WALLS_LEAVE_OUT_BEFORE}pypi.org${NR_TOOLS.WALLS_LEAVE_OUT_AFTER}`, "Your walls leave out pypi.org."],
+  ["T4-b01", NR_WALLS.ONLY_LISTED, "Only the sites listed"],
+  ["T4-b02", NR_WALLS.ONLY_LISTED_HELP, "This run reaches only the listed sites and what its setup needs. Your organisation allows more."],
+  ["T4-b03", NR_WALLS.LEAVE_OUT("pypi.org"), "Your walls leave out pypi.org."],
+  ["T4-b04", `${NR_WALLS.LEAVE_OUT_BEFORE}pypi.org${NR_WALLS.LEAVE_OUT_AFTER}`, "Your walls leave out pypi.org."],
   ["T4-b05", NR_TOOLS.NET_POLICY_ALWAYS_DENY, "Anything else is refused and logged."],
   ["T4-b06", NR_TOOLS.NET_POLICY_ALLOW_ALL, "Any other public host is allowed, except ones your organisation blocks."],
   ["T4-c01", CHANGE_HEADING.wallsOwn, "Your walls"],

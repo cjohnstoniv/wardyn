@@ -12,6 +12,7 @@ import { AdoLaunchNote, AdoOwnTokenNote, AdoRunTokenLine, adoLaunchNoteKind, own
 import { Switch } from "../../../../wardyn/form-primitives";
 import { Chip } from "../../../../wardyn/primitives";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
+import { NR_WALLS } from "../../../../wardyn/copy/personal-walls";
 import type { PersonalWallsSpec } from "../../../../../lib/api/walls";
 import type { SCMAccessPAT } from "../../../../../lib/types/ado-pat";
 import type { AccessCredential, AccessFacts, AccessUnlisted } from "../../../../../lib/types/new-run-access";
@@ -134,18 +135,18 @@ export function Totals({ access, answered, names: harnessNames, providers, ado, 
           <p key={host} data-testid="walls-leave-out" className="flex items-center gap-2 rounded-md border border-border bg-muted px-3 py-2 text-xs text-foreground">
             <Grid3x3 aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
             <span className="min-w-0 [overflow-wrap:anywhere]">
-              {NR_TOOLS.WALLS_LEAVE_OUT_BEFORE}
+              {NR_WALLS.LEAVE_OUT_BEFORE}
               <span className="font-mono">{host}</span>
-              {NR_TOOLS.WALLS_LEAVE_OUT_AFTER}
+              {NR_WALLS.LEAVE_OUT_AFTER}
             </span>
           </p>
         ))}
         {onlyListed && (
           <div className="flex items-start gap-2.5 border-t border-border pt-2.5">
-            <Switch checked={onlyListed.on} onChange={onlyListed.onChange} label={NR_TOOLS.ONLY_LISTED} className="mt-0.5" />
+            <Switch checked={onlyListed.on} onChange={onlyListed.onChange} label={NR_WALLS.ONLY_LISTED} className="mt-0.5" />
             <div>
-              <p className="text-sm font-medium">{NR_TOOLS.ONLY_LISTED}</p>
-              <p className="text-xs text-muted-foreground">{NR_TOOLS.ONLY_LISTED_HELP}</p>
+              <p className="text-sm font-medium">{NR_WALLS.ONLY_LISTED}</p>
+              <p className="text-xs text-muted-foreground">{NR_WALLS.ONLY_LISTED_HELP}</p>
             </div>
           </div>
         )}

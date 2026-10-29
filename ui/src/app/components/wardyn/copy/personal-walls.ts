@@ -48,3 +48,16 @@ export const YOUR_WALLS = {
   SAVE_FAILED: "Couldn't save your walls.",
   REMOVE_SITE: (site: string) => `Remove ${site}`,
 } as const;
+
+// New Run's side of the walls (T4-b, board R15). Kept out of NR_TOOLS and NR_REVIEW, whose keys the New Run canon
+// document freezes one for one. The switch sits under Network on step 5; the leave-out note names a host the
+// person's own walls take out of the run, drawn with the host in monospace between its two halves.
+export const NR_WALLS = {
+  ONLY_LISTED: "Only the sites listed",
+  ONLY_LISTED_HELP: "This run reaches only the listed sites and what its setup needs. Your organisation allows more.",
+  LEAVE_OUT_BEFORE: "Your walls leave out ",
+  LEAVE_OUT_AFTER: ".",
+  LEAVE_OUT: (host: string | number) => `Your walls leave out ${host}.`,
+  // Not on the board: the walls step's own warning on Review, with the knob in the Policy tab's field words.
+  NARROWED: (knob: string | number) => `Your walls narrowed ${knob}.`,
+} as const;

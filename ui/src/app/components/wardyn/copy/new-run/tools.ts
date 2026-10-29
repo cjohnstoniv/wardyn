@@ -266,13 +266,6 @@ export const NR_TOOLS = {
   NET_POLICY_TIMEOUT: (n: string | number) => `If nobody decides within ${n} seconds, it's refused.`,
   /** pending W-36: the recommended text until the owner answers. */
   NET_POLICY_ALLOW_ALL: "Any other public host is allowed, except ones your organisation blocks.",
-  /** T4-b (board R15): the switch under Network that sends overrides.egress.allow_all_egress: false. */
-  ONLY_LISTED: "Only the sites listed",
-  ONLY_LISTED_HELP: "This run reaches only the listed sites and what its setup needs. Your organisation allows more.",
-  /** T4-b: a host the person's own walls take out of the run, drawn with the host in monospace between the two halves. */
-  WALLS_LEAVE_OUT_BEFORE: "Your walls leave out ",
-  WALLS_LEAVE_OUT_AFTER: ".",
-  WALLS_LEAVE_OUT: (host: string | number) => `Your walls leave out ${host}.`,
   NET_POLICY_CEILING: "Your organisation's ceiling still narrows this list at review.",
   /** pending W-36: the recommended text until the owner answers. */
   NET_POLICY_CHECKED: "Checked against your organisation's limits just now.",
