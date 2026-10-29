@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -648,5 +649,51 @@ func TestAuditSpoolRewriteMemoryIsFlatInTheBacklog(t *testing.T) {
 	}
 	if !bytes.HasPrefix(b, []byte("{\"kept\":1}\n{\"kept\":2}\nxxx")) || b[len(b)-1] != '\n' {
 		t.Errorf("compacted spool lost its kept lines or its tail: starts %q", b[:40])
+	}
+}
+
+// compact opens <path>.tmp, and when stageRewrite then fails it must remove the temp file and hand
+// the error back, leaving the spool as it was (#3630). A tail range that runs past the end of the
+// spool fails stageRewrite after the open (io.ErrUnexpectedEOF), which the stuckSpool tests never
+// reach: they make the OpenFile itself fail. Without the os.Remove(tmp) in compact the half-written
+// <path>.tmp would stay behind and the Stat below would find it.
+func TestAuditSpoolCompactRemovesTempFileWhenTheRewriteFails(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit-spool.jsonl")
+	sp, err := NewAuditSpool(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { sp.f.Close() })
+	for _, action := range []string{"run.create", "run.start"} {
+		if err := sp.Append(newTestEvent(action)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	size := int64(len(before))
+
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	f, consumed, lines := sp.f, sp.consumed, sp.Lines()
+	err = sp.compact([][]byte{[]byte(`{"kept":1}`)}, 0, size+16)
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("compact err = %v, want io.ErrUnexpectedEOF from the tail running past the spool", err)
+	}
+	if _, serr := os.Stat(path + ".tmp"); !errors.Is(serr, os.ErrNotExist) {
+		t.Errorf("stat %s.tmp err = %v, want it removed after the failed rewrite", path, serr)
+	}
+	after, rerr := os.ReadFile(path)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	if !bytes.Equal(after, before) {
+		t.Errorf("spool changed by a failed compact: before %q, after %q", before, after)
+	}
+	if sp.f != f || sp.consumed != consumed || sp.Lines() != lines {
+		t.Errorf("spool state moved by a failed compact: f same %v, consumed %d->%d, lines %d->%d",
+			sp.f == f, consumed, sp.consumed, lines, sp.Lines())
 	}
 }
