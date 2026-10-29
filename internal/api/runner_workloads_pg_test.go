@@ -346,3 +346,75 @@ func TestPG_WorkloadFromRunner_DropLeavesARecreatedResource(t *testing.T) {
 		t.Fatalf("%d workload.delete rows, want 1", n)
 	}
 }
+
+// A bound apply, with runners on and the binding live, launches the resource's workload as the bound
+// service on the binding's pool, and the resource's status then names the run.
+func TestPG_WorkloadFromRunner_BoundApplyLaunchesOnTheBoundPool(t *testing.T) {
+	e := newCREnv(t)
+	ctx := context.Background()
+	site, err := e.st.GetSiteConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	site.Runners = &types.RunnerSettings{Enabled: true}
+	if _, err := e.st.PutSiteConfig(ctx, site); err != nil {
+		t.Fatal(err)
+	}
+	e.h.srv.cfg.RunnerOrgURL = "https://org.example.com" // the env's runner is bound to this organisation
+	e.report(t, e.apply("team-a", "web", ""))
+
+	var got runnerwire.WorkloadStatusArgs
+	for deadline := time.Now().Add(5 * time.Second); got.RunID == ""; time.Sleep(10 * time.Millisecond) {
+		for _, s := range e.fake.WorkloadStatuses() {
+			if s.RunID != "" {
+				got = s
+			}
+		}
+		if got.RunID == "" && time.Now().After(deadline) {
+			v, _ := e.st.GetWorkload(ctx, svcPrin, "web")
+			t.Fatalf("no status names a run: %+v (workload refusal %+v)", e.fake.WorkloadStatuses(), v.LastRefusal)
+		}
+	}
+	v, err := e.st.GetWorkload(ctx, svcPrin, "web")
+	if err != nil || v.CurrentRunID == nil || v.CurrentRunID.String() != got.RunID || v.CurrentGeneration != v.Generation {
+		t.Fatalf("stored workload %+v (%v), want its current run to be the status's %s", v.Workload, err, got.RunID)
+	}
+	if got.Namespace != "team-a" || got.Name != "web" || got.UID != "uid-web" || got.ObservedGeneration != 1 {
+		t.Fatalf("status %+v, want team-a/web uid-web at generation 1", got)
+	}
+	run, err := e.st.GetRun(ctx, *v.CurrentRunID)
+	if err != nil || run.CreatedBy != svcPrin || run.RunnerPoolID == nil || *run.RunnerPoolID != e.rp.ID {
+		t.Fatalf("run %+v (%v), want one of %s on pool %s", run, err, svcPrin, e.rp.ID)
+	}
+	events := e.h.audit.snapshot()
+	if countAudit(events, "workload.launch") != 1 || countAudit(events, "workload.launch_refused") != 0 {
+		t.Fatalf("audit launch/launch_refused = %d/%d, want 1/0", countAudit(events, "workload.launch"), countAudit(events, "workload.launch_refused"))
+	}
+}
+
+// A resource's delete ends its workload's current run: the run is killed workload_deleted, and the
+// workload.delete row is the run's and names it as ended_run_id.
+func TestPG_WorkloadFromRunner_DeleteEndsTheCurrentRun(t *testing.T) {
+	e := newCREnv(t)
+	_, run := e.k8sWorkloadWithRun(t, "web", "uid-web")
+	e.report(t, runnerwire.WorkloadReport{Op: runnerwire.WorkloadOpDelete, Namespace: "team-a", Name: "web", UID: "uid-web"})
+	if got := killReason(t, e.svcEnv, run); got != workloadKillDeleted {
+		t.Fatalf("run.kill reason = %q, want %q", got, workloadKillDeleted)
+	}
+	if r, err := e.st.GetRun(context.Background(), run); err != nil || r.State != types.RunKilled {
+		t.Fatalf("run state = %q (%v), want KILLED", r.State, err)
+	}
+	var deletes []types.AuditEvent
+	for _, ev := range e.h.audit.snapshot() {
+		if ev.Action == "workload.delete" {
+			deletes = append(deletes, ev)
+		}
+	}
+	if len(deletes) != 1 || deletes[0].RunID == nil || *deletes[0].RunID != run {
+		t.Fatalf("workload.delete rows %+v, want one on run %s", deletes, run)
+	}
+	var d map[string]any
+	if err := json.Unmarshal(deletes[0].Data, &d); err != nil || d["ended_run_id"] != run.String() || d["via"] != workloadViaK8s || d["uid"] != "uid-web" {
+		t.Fatalf("workload.delete data %s (%v), want ended_run_id %s via %s for uid-web", deletes[0].Data, err, run, workloadViaK8s)
+	}
+}
