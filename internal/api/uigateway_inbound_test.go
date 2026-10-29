@@ -31,17 +31,39 @@ type uiTokenStore struct {
 	*uiMemStore
 	mu     sync.Mutex
 	tokens map[string]types.APIToken
+	// lookupErr, when set, fails every lookup (failed counts them): the store cannot answer.
+	lookupErr error
+	failed    int
 }
 
 // GetAPITokenByRaw answers as the store's lookup does: a revoked or expired token is no token.
 func (s *uiTokenStore) GetAPITokenByRaw(_ context.Context, raw string) (types.APIToken, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.lookupErr != nil {
+		s.failed++
+		return types.APIToken{}, s.lookupErr
+	}
 	t, ok := s.tokens[raw]
 	if !ok || t.RevokedAt != nil || (t.ExpiresAt != nil && !time.Now().Before(*t.ExpiresAt)) {
 		return types.APIToken{}, store.ErrNotFound
 	}
 	return t, nil
+}
+
+// failLookups makes every lookup fail with err (nil answers again) and returns how many have failed so far.
+func (s *uiTokenStore) failLookups(err error) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lookupErr = err
+	return s.failed
+}
+
+// failedLookups is how many lookups have failed.
+func (s *uiTokenStore) failedLookups() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.failed
 }
 
 // update changes the stored token raw, as a revoke or an expiry would.
@@ -491,6 +513,45 @@ func TestUIGateway_InboundStreamIsReadmitted(t *testing.T) {
 		}
 		if !h.audit.hasDataValue("reason", inboundDenyCredentialInvalid) {
 			t.Errorf("no inbound.deny credential_invalid; reasons: %s", h.audit.dataReasons())
+		}
+	})
+
+	// A lookup that cannot be made is no verdict on the token: the stream rides it out, and is closed, with a
+	// row, only once the re-admission has been unanswerable for the staleness bound.
+	lookupsFail := func(t *testing.T, h *uiHarness) {
+		t.Helper()
+		ts := tokens(h)
+		from := ts.failLookups(errors.New("connection refused"))
+		for deadline := time.Now().Add(5 * time.Second); ts.failedLookups() < from+2; time.Sleep(every) { // two: the first is recorded
+			if time.Now().After(deadline) {
+				t.Fatal("no re-admission was attempted while the store failed")
+			}
+		}
+	}
+	t.Run("a transient lookup failure keeps the stream", func(t *testing.T) {
+		h, gw := open(t)
+		conn, br := openInboundStream(t, h, gw, "wdn_alice")
+		lookupsFail(t, h)
+		tokens(h).failLookups(nil)
+		time.Sleep(5 * every)
+		if !echoes(conn, br) {
+			t.Fatal("one unanswerable re-admission closed the stream")
+		}
+		if rows := h.audit.auditRows("inbound.deny", "denied"); len(rows) != 0 {
+			t.Errorf("inbound.deny rows = %+v, want none", rows)
+		}
+	})
+	t.Run("lookups failing past the bound close the stream with a row", func(t *testing.T) {
+		h, gw := open(t)
+		conn, br := openInboundStream(t, h, gw, "wdn_alice")
+		lookupsFail(t, h)
+		h.clock.advance(inboundResolveTTL)
+		if !closes(conn, br) {
+			t.Fatal("the stream outlived re-admissions unanswerable past the bound")
+		}
+		if rows := h.audit.auditRows("inbound.deny", "denied"); len(rows) != 1 || rows[0].Actor != h.owner ||
+			!h.audit.hasDataValue("reason", reasonTokenLookupUnavailable) {
+			t.Errorf("inbound.deny rows = %+v, want one token_lookup_unavailable by %s", rows, h.owner)
 		}
 	})
 

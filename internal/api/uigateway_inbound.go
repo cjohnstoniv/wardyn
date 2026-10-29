@@ -168,14 +168,9 @@ func (st *uiInboundState) setRef(runID uuid.UUID, ref string) {
 func (s *Server) uiRelayAnsweredEarly(w http.ResponseWriter, r *http.Request, runID uuid.UUID, app string) bool {
 	if raw, ok := bearerToken(r); ok && strings.HasPrefix(raw, apiTokenPrefix) {
 		if sess, ok := s.inboundTokenSession(w, r, runID, app, raw); ok {
-			// An upgrade this request becomes is admitted again while it lasts (watchInboundStream). The
-			// re-admission's answers go nowhere: the stream has no response left to write them on.
-			held := r.WithContext(context.WithoutCancel(r.Context()))
-			readmit := func() bool {
-				_, ok := s.admitInboundToken(healthzGateWriter{h: http.Header{}}, held, runID, app, raw)
-				return ok
-			}
-			s.relayUISession(w, r.WithContext(context.WithValue(r.Context(), inboundReadmitCtxKey{}, readmit)), sess)
+			// An upgrade this request becomes is admitted again while it lasts (watchInboundStream).
+			a := inboundReadmission{r: r.WithContext(context.WithoutCancel(r.Context())), runID: runID, app: app, raw: raw, principal: sess.Principal}
+			s.relayUISession(w, r.WithContext(context.WithValue(r.Context(), inboundReadmitCtxKey{}, a)), sess)
 		}
 		return true
 	}
@@ -282,19 +277,46 @@ func (s *Server) admitInboundToken(w http.ResponseWriter, r *http.Request, runID
 	return uiSession{}, false
 }
 
-// inboundReadmitCtxKey carries an inbound-token request's re-admission to the upgrade it may become
+// inboundReadmitCtxKey carries an inbound-token request's inboundReadmission to the upgrade it may become
 // (uiRelayAnsweredEarly, watchInboundStream).
 type inboundReadmitCtxKey struct{}
+
+// inboundReadmission is what a stream needs to admit its token again: the request that opened it, held past
+// its cancel, and the token and the principal it proved.
+type inboundReadmission struct {
+	r                   *http.Request
+	runID               uuid.UUID
+	app, raw, principal string
+}
+
+// readmitInbound admits a's token again, uncached (admitInboundToken). Its answers go nowhere: the stream
+// has no response left to write them on. transient is a refusal that is no verdict on the token: a lookup
+// that could not be made (verifyAPIToken's 503), which writes no row.
+func (s *Server) readmitInbound(a inboundReadmission) (ok, transient bool) {
+	w := &inboundReadmitWriter{healthzGateWriter: healthzGateWriter{h: http.Header{}}}
+	_, ok = s.admitInboundToken(w, a.r, a.runID, a.app, a.raw)
+	return ok, !ok && w.status == http.StatusServiceUnavailable
+}
+
+// inboundReadmitWriter is healthzGateWriter that keeps the status of what was written.
+type inboundReadmitWriter struct {
+	healthzGateWriter
+	status int
+}
+
+func (w *inboundReadmitWriter) WriteHeader(code int) { w.status = code }
 
 // watchInboundStream holds an upgraded stream an inbound token opened to the authority that admitted it:
 // every inboundResolveTTL (uiInboundStreamEvery in tests) the token is admitted again, uncached, by
 // admitInboundToken, so the token's revoke or expiry, its service identity or sponsor going, its owner
 // losing the run or the app no longer naming its caller all reach the stream as they reach a request. A
-// refusal writes the inbound.deny row a refused request writes and closes the stream. A browser
-// session's stream carries no re-admission and is left as it was
+// refusal writes the inbound.deny row a refused request writes and closes the stream. A lookup that
+// cannot be made keeps the stream and asks again next tick, so one store blip ends no stream; one that
+// stays unanswerable for inboundResolveTTL, the staleness the design allows, closes it with an inbound.deny
+// token_lookup_unavailable row. A browser session's stream carries no re-admission and is left as it was
 // (TestUIGateway_EstablishedConnectionOutlivesTheRevoke).
 func (s *Server) watchInboundStream(resp *http.Response) {
-	readmit, ok := resp.Request.Context().Value(inboundReadmitCtxKey{}).(func() bool)
+	a, ok := resp.Request.Context().Value(inboundReadmitCtxKey{}).(inboundReadmission)
 	if !ok {
 		return
 	}
@@ -307,15 +329,29 @@ func (s *Server) watchInboundStream(resp *http.Response) {
 	go func() {
 		tick := time.NewTicker(cmp.Or(s.uiInboundStreamEvery, inboundResolveTTL))
 		defer tick.Stop()
+		var failingSince time.Time // the first of the unanswerable re-admissions in a row
 		for {
 			select {
 			case <-stream.done:
 				return
 			case <-tick.C:
-				if !readmit() {
-					_ = stream.Close() // the relay's copy ends, and the caller's connection with it
-					return
+				ok, transient := s.readmitInbound(a)
+				if ok {
+					failingSince = time.Time{}
+					continue
 				}
+				if transient {
+					now := s.cfg.Now()
+					if failingSince.IsZero() {
+						failingSince = now
+					}
+					if now.Sub(failingSince) < inboundResolveTTL {
+						continue
+					}
+					s.auditInboundRefused(a.r, a.runID, a.app, a.principal, reasonTokenLookupUnavailable)
+				}
+				_ = stream.Close() // the relay's copy ends, and the caller's connection with it
+				return
 			}
 		}
 	}()
