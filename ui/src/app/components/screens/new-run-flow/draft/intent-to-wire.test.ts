@@ -196,6 +196,11 @@ describe("intentToWire: a service", () => {
     expect(unsupported).toEqual([]);
   });
 
+  it("leaves a health check out while no port is named", () => {
+    const { body } = intentToWire({ ...SCRIPT, service: { restart: "on_failure", health: service.health } });
+    expect(body.service).toEqual({ restart: "on_failure" });
+  });
+
   it("does not send one left over after the run became an agent task, an application server or a virtual machine", () => {
     for (const intent of [
       { ...SCRIPT, service, experience: "interactive", workload: undefined },

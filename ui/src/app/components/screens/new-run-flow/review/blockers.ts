@@ -15,6 +15,7 @@ import { NR_RUN } from "../../../wardyn/copy/new-run/run";
 import { NR_SHAPE } from "../../../wardyn/copy/new-run/shape";
 import { NR_TOOLS } from "../../../wardyn/copy/new-run/tools";
 import { NR_TEMPLATES } from "../../../wardyn/copy/new-run/templates";
+import { SERVICE_FORM_ERRORS as SE } from "../../../wardyn/copy/run-service";
 import { DRIVE_REFUSAL_REASON } from "../../../../lib/drive-refusals";
 import type { SetupItem } from "../../../../lib/types/preflight";
 import type { TemplateSetupNeed } from "../../../../lib/types/templates";
@@ -58,6 +59,10 @@ const ISSUE_TEXT: Record<Exclude<StepIssueCode, AppProblemCode>, string> = {
   command_required: NR_RUN.COMMAND_REQUIRED,
   pool_required: NR_RUN.POOL_HELP,
   app_required: NR_RUN.PORT_REQUIRED,
+  service_port_invalid: SE.PORT_INVALID,
+  service_path_invalid: SE.PATH_INVALID,
+  service_interval_invalid: SE.EVERY_INVALID,
+  service_failures_invalid: SE.FAILURES_INVALID,
   main_drive_size_required: NR_FILES.SIZE_ERROR,
   files_choice_required: NR_FILES.CHOOSE_FILES,
   starts_here_required: NR_FILES.STARTS_HERE_REQUIRED,
