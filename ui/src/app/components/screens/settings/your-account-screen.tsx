@@ -58,7 +58,7 @@ export function YourAccountScreen() {
 
   return (
     <PageContainer width="form" className="pb-8">
-      <PageHeader title="Your account" description={YOUR_ACCOUNT.LEDE} />
+      <PageHeader title={YOUR_ACCOUNT.TITLE} description={YOUR_ACCOUNT.LEDE} />
       {state === "loading" && <TableSkeleton />}
       {state === "error" && <ErrorState onRetry={load} />}
       {state === "ready" && status && (

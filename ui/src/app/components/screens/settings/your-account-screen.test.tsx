@@ -68,9 +68,9 @@ beforeEach(() => {
 });
 
 describe("YourAccountScreen", () => {
-  it("titles the page 'Your account' with the S-3 description", async () => {
+  it("titles the page 'Your settings' with the S-3 description", async () => {
     renderScreen();
-    expect(await screen.findByRole("heading", { name: "Your account", level: 1 })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Your settings", level: 1 })).toBeInTheDocument();
     expect(screen.getByText(YOUR_ACCOUNT.LEDE)).toBeInTheDocument();
   });
 
