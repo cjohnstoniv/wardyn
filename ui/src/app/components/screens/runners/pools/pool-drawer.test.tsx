@@ -83,6 +83,13 @@ describe("organization pool member namespace line", () => {
     expect((cards[1] as HTMLElement).querySelector("[data-member-namespace]")?.textContent).toBe("Runs in the runner's default namespace");
     expect((cards[2] as HTMLElement).querySelector("[data-member-namespace]")).toBeNull();
   });
+
+  it("keeps the whole sentence when the namespace is also a word of it", () => {
+    renderDrawer(pool(), { members: [{ ...member(cluster("k8s-east")), runs_namespace: "in" }, { ...member(cluster("k8s-west")), runs_namespace: "namespace" }] });
+    const cards = document.querySelectorAll("[data-member]");
+    expect((cards[0] as HTMLElement).querySelector("[data-member-namespace]")?.textContent).toBe("Runs in namespace in");
+    expect((cards[1] as HTMLElement).querySelector("[data-member-namespace]")?.textContent).toBe("Runs in namespace namespace");
+  });
 });
 
 describe("organization pool members read by a pool member", () => {
