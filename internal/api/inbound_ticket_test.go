@@ -84,6 +84,10 @@ func TestAppTicket_EnterOpensOnlyItsApp(t *testing.T) {
 	if rows := h.audit.auditRows("inbound.allow", "success"); len(rows) != 1 || !strings.Contains(string(rows[0].Data), `"caller":"user:bob"`) {
 		t.Errorf("inbound.allow rows = %+v, want one naming caller user:bob", rows)
 	}
+	if rows := h.audit.auditRows("ui.authorize", "success"); len(rows) != 1 || !strings.Contains(string(rows[0].Data), `"inbound":true`) ||
+		!strings.Contains(string(rows[0].Data), `"caller":"user:bob"`) {
+		t.Errorf("ui.authorize rows = %+v, want one naming inbound and caller user:bob", rows)
+	}
 	if rec := h.enterOnRunHost("code", mint("gail", "OPS")); rec.Code != http.StatusFound {
 		t.Errorf("a caller by group: %d %s, want 302", rec.Code, rec.Body.String())
 	}
