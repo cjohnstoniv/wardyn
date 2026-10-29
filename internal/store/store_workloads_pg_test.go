@@ -455,6 +455,68 @@ func TestPG_Workload_ReadsAndDelete(t *testing.T) {
 	}
 }
 
+// A custom resource's workload is deleted only while the row is still the one read: after an apply of a
+// recreated resource (a new uid, with the same spec or another) moved it, or after the row was replaced by
+// another of the same uid, the stale delete removes nothing and the run stays. The matching one removes it.
+func TestPG_Workload_K8sDeleteHoldsOnlyForTheRowRead(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := t.Context()
+	poolA := ownPool(t, st, "sub-a", "A")
+	runner, gen := uuid.New(), int64(1)
+	put := func(uid, digest string) store.Workload {
+		in := workloadPut("service:bot", "svc", digest)
+		in.Source, in.SourcePoolID, in.SourceNamespace, in.SourceRunnerID, in.K8sGeneration, in.K8sUID =
+			store.WorkloadSourceK8s, &poolA.ID, "team-a", &runner, &gen, uid
+		return mustPutWorkload(t, st, in)
+	}
+	read := func() store.Workload {
+		v, err := st.GetWorkload(ctx, "service:bot", "svc")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v.Workload
+	}
+	w := put("uid-1", "d1")
+	run := persistRun(t, ctx, pool, newRun(types.RunRunning)).ID
+	if _, err := st.SetWorkloadRun(ctx, w.ID, mustClaim(t, st, w.ID), 1, run); err != nil {
+		t.Fatal(err)
+	}
+
+	stale := read()
+	for _, next := range []struct{ uid, digest string }{{"uid-2", "d1"}, {"uid-3", "d2"}} {
+		put(next.uid, next.digest)
+		if _, err := st.DeleteK8sWorkload(ctx, stale); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("delete of %s after %s was applied = %v, want ErrNotFound", stale.K8sUID, next.uid, err)
+		}
+		if v := read(); v.ID != w.ID || v.K8sUID != next.uid || v.CurrentRunID == nil || *v.CurrentRunID != run {
+			t.Fatalf("after the stale delete = %+v, want row %s of %s with run %s kept", v, w.ID, next.uid, run)
+		}
+		stale = read()
+	}
+
+	// The same uid on a row recreated since the read is another row.
+	if _, err := st.DeleteWorkload(ctx, "service:bot", "svc"); err != nil {
+		t.Fatal(err)
+	}
+	put(stale.K8sUID, "d2")
+	if _, err := st.DeleteK8sWorkload(ctx, stale); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("delete of a replaced row = %v, want ErrNotFound", err)
+	}
+
+	cur := read()
+	if _, err := st.SetWorkloadRun(ctx, cur.ID, mustClaim(t, st, cur.ID), cur.Generation, run); err != nil {
+		t.Fatal(err)
+	}
+	gone, err := st.DeleteK8sWorkload(ctx, read())
+	if err != nil || gone.ID != cur.ID || gone.CurrentRunID == nil || *gone.CurrentRunID != run {
+		t.Fatalf("matching delete = %+v (%v), want row %s with run %s", gone, err, cur.ID, run)
+	}
+	if _, err := st.GetWorkload(ctx, "service:bot", "svc"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("after the matching delete = %v, want ErrNotFound", err)
+	}
+}
+
 // The status sweep reads only custom-resource workloads, with their run's state and service health.
 func TestPG_Workload_K8sStatusesCarryRunStateAndHealth(t *testing.T) {
 	pool := runsPGPoolIsolated(t)

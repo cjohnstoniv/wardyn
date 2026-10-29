@@ -260,10 +260,12 @@ func (s *Server) syncWorkloadReport(ctx context.Context, ws store.WorkloadStore,
 
 // dropK8sWorkload deletes wl, the workload of a resource that is gone, and ends its run in the background
 // as the bound service (run.kill reason workload_deleted). uid is the resource's, when the report named it.
+// The delete holds only while the row is still the one wl was read as: an apply of a recreated resource
+// that moved it to its own uid in between keeps the row and its run, and nothing is audited.
 func (s *Server) dropK8sWorkload(ctx context.Context, ws store.WorkloadStore, sr *http.Request, runnerID uuid.UUID, b store.WorkloadBinding,
 	si types.ServiceIdentity, wl store.Workload, uid, via string,
 ) error {
-	removed, err := ws.DeleteWorkload(ctx, wl.Owner, wl.Name)
+	removed, err := ws.DeleteK8sWorkload(ctx, wl)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil
 	}

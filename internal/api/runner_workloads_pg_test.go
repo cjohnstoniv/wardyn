@@ -253,3 +253,96 @@ func TestPG_WorkloadFromRunner_LowerGenerationIsIgnored(t *testing.T) {
 		t.Fatalf("%d workload.apply rows, want 1", n)
 	}
 }
+
+// putK8sWorkload records name in team-a as resource uid's workload on the env's pool, as an apply of it
+// would, with an intent of task; it launches nothing.
+func (e crEnv) putK8sWorkload(t *testing.T, name, uid, task string) store.Workload {
+	t.Helper()
+	in, invalid := normalizeWorkload(clientWorkloadDoc(t, name, `{"agent":"claude-code","task":"`+task+`","policy_id":"`+e.pol+`"}`))
+	if invalid != nil {
+		t.Fatalf("normalize: %+v", invalid)
+	}
+	gen := int64(1)
+	in.Owner, in.Source, in.By = svcPrin, store.WorkloadSourceK8s, svcPrin
+	in.SourcePoolID, in.SourceNamespace, in.SourceRunnerID, in.K8sGeneration, in.K8sUID = &e.rp.ID, "team-a", &e.runner, &gen, uid
+	wl, _, err := e.st.PutWorkload(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return wl
+}
+
+// k8sWorkloadWithRun is putK8sWorkload with a live run recorded as the workload's current run. The run is
+// one the service launches through the API, as the workload <name>-api.
+func (e crEnv) k8sWorkloadWithRun(t *testing.T, name, uid string) (store.Workload, uuid.UUID) {
+	t.Helper()
+	ctx := context.Background()
+	tok := e.mustMint(t, e.sponsor, svcName)
+	run := launchedRun(t, decodeApply(t, e.as(t, tok.Token, http.MethodPut, "/api/v1/workloads/"+name+"-api", workloadBody(e.pol, "t", "")), http.StatusCreated))
+	wl := e.putK8sWorkload(t, name, uid, "t")
+	claimed, ok, err := e.st.ClaimWorkloadLaunch(ctx, wl.ID)
+	if err != nil || !ok {
+		t.Fatalf("claim %s = %v, %v; want a claim", name, ok, err)
+	}
+	if _, err := e.st.SetWorkloadRun(ctx, wl.ID, claimed.ClaimToken, claimed.Generation, run); err != nil {
+		t.Fatal(err)
+	}
+	wl.CurrentRunID, wl.CurrentGeneration = &run, claimed.Generation
+	return wl, run
+}
+
+// A drop that read the resource's workload before an apply of the recreated resource moved the row to its
+// own uid, with the same spec or another, leaves the row and its run and audits nothing; the drop of the
+// row as it now is removes it and ends the run.
+func TestPG_WorkloadFromRunner_DropLeavesARecreatedResource(t *testing.T) {
+	e := newCREnv(t)
+	ctx := context.Background()
+	wl, run := e.k8sWorkloadWithRun(t, "web", "uid-1")
+	b, err := e.st.BindingForRunner(ctx, e.runner, "team-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	si, err := e.h.srv.serviceRecord(ctx, svcName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sr, cancel, err := serviceLaunchRequest(si, b.Sponsor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancel()
+	drop := func(w store.Workload) {
+		t.Helper()
+		if err := e.h.srv.dropK8sWorkload(ctx, e.st, sr, e.runner, b, si, w, w.K8sUID, workloadViaK8s); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	stale := wl
+	for _, next := range []struct{ uid, task string }{{"uid-2", "t"}, {"uid-3", "t2"}} {
+		e.putK8sWorkload(t, "web", next.uid, next.task)
+		drop(stale)
+		v, err := e.st.GetWorkload(ctx, svcPrin, "web")
+		if err != nil || v.ID != wl.ID || v.K8sUID != next.uid || v.CurrentRunID == nil || *v.CurrentRunID != run {
+			t.Fatalf("after a drop of %s = %+v (%v), want row %s of %s with run %s kept", stale.K8sUID, v.Workload, err, wl.ID, next.uid, run)
+		}
+		stale = v.Workload
+	}
+	if r, err := e.st.GetRun(ctx, run); err != nil || r.State == types.RunKilled {
+		t.Fatalf("run after the stale drops = %q (%v), want it running", r.State, err)
+	}
+	if n := countAudit(e.h.audit.snapshot(), "workload.delete"); n != 0 {
+		t.Fatalf("%d workload.delete rows after the stale drops, want 0", n)
+	}
+
+	drop(stale)
+	if _, err := e.st.GetWorkload(ctx, svcPrin, "web"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("the matching drop left the workload: %v", err)
+	}
+	if got := killReason(t, e.svcEnv, run); got != workloadKillDeleted {
+		t.Fatalf("run.kill reason = %q, want %q", got, workloadKillDeleted)
+	}
+	if n := countAudit(e.h.audit.snapshot(), "workload.delete"); n != 1 {
+		t.Fatalf("%d workload.delete rows, want 1", n)
+	}
+}

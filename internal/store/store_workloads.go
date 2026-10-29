@@ -159,6 +159,7 @@ type WorkloadStore interface {
 	ListWorkloadsOf(ctx context.Context, owners []string, p Page) ([]WorkloadView, error)
 	ListK8sWorkloadStatuses(ctx context.Context) ([]WorkloadView, error)
 	DeleteWorkload(ctx context.Context, owner, name string) (Workload, error)
+	DeleteK8sWorkload(ctx context.Context, w Workload) (Workload, error)
 	CreateWorkloadBinding(ctx context.Context, b WorkloadBinding) (WorkloadBinding, error)
 	ListWorkloadBindings(ctx context.Context, p Page) ([]WorkloadBinding, error)
 	DeleteWorkloadBinding(ctx context.Context, id uuid.UUID) (WorkloadBinding, error)
@@ -423,6 +424,17 @@ func (s PG) ListK8sWorkloadStatuses(ctx context.Context) ([]WorkloadView, error)
 // ends, or ErrNotFound. The run itself is not touched here.
 func (s PG) DeleteWorkload(ctx context.Context, owner, name string) (Workload, error) {
 	return scanWorkload(s.Pool.QueryRow(ctx, `DELETE FROM workloads w WHERE w.owner = $1 AND w.name = $2 RETURNING `+workloadCols, owner, name))
+}
+
+// DeleteK8sWorkload removes w, a custom resource's workload as the caller read it, only while the row is
+// still that resource's: the same row id, metadata.uid, pool and namespace. It returns the removed row, whose
+// CurrentRunID the caller ends, or ErrNotFound with nothing deleted when the row is gone or an apply of a
+// recreated resource has moved it to another uid since the read. The run itself is not touched here.
+func (s PG) DeleteK8sWorkload(ctx context.Context, w Workload) (Workload, error) {
+	return scanWorkload(s.Pool.QueryRow(ctx, `
+		DELETE FROM workloads w
+		WHERE w.id = $1 AND w.source = 'k8s' AND w.k8s_uid = $2 AND w.source_pool_id = $3 AND w.source_namespace = $4
+		RETURNING `+workloadCols, w.ID, w.K8sUID, w.SourcePoolID, w.SourceNamespace))
 }
 
 const workloadBindingCols = `b.id, b.pool_id, b.namespace, b.service, b.sponsor, b.created_by, b.created_at`
