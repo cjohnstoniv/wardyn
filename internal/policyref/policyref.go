@@ -88,8 +88,8 @@ type Ref struct {
 	// cards), inside what their ceiling allows. A refusal then names the policy
 	// as changed, so the person is not sent to the owner of a policy they edited.
 	Overridden bool `json:"overridden,omitempty"`
-	// Layer is the kind of layer that set the limit (LayerDeployment or
-	// LayerUnit today). Layered stamps it on a refusal's policy; the
+	// Layer is the kind of layer that set the limit (LayerDeployment,
+	// LayerUnit or LayerPersonal). Layered stamps it on a refusal's policy; the
 	// proxy's attribution never carries it, because its wire predates the key.
 	Layer string `json:"layer,omitempty"`
 	// Locked says the knob a refusal is attributed to is locked by the layer that set it, so no
@@ -123,15 +123,15 @@ type Provenance struct {
 }
 
 // Layered is a copy of ref stamped with the layer kind its source names
-// (deployment or profile; none for any other source), nil for nil. The one place
-// a refusal's policy gains its layer.
+// (deployment, unit or personal; none for any other source), nil for nil. The one
+// place a refusal's policy gains its layer.
 func Layered(ref *Ref) *Ref {
 	if ref == nil {
 		return nil
 	}
 	cp := *ref
 	cp.Layer = ""
-	if cp.Source == SourceUnit || cp.Source == SourceDeployment {
+	if cp.Source == SourceUnit || cp.Source == SourceDeployment || cp.Source == LayerPersonal {
 		cp.Layer = cp.Source
 	}
 	return &cp

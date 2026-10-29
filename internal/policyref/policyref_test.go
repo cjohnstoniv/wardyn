@@ -124,3 +124,17 @@ func TestFields(t *testing.T) {
 		t.Error("IsZero wrong")
 	}
 }
+
+func TestLayered(t *testing.T) {
+	for _, source := range []string{SourceUnit, SourceDeployment, LayerPersonal} {
+		if got := Layered(&Ref{Source: source}); got.Layer != source {
+			t.Errorf("Layered(%s).Layer = %q, want %q", source, got.Layer, source)
+		}
+	}
+	if got := Layered(&Ref{Source: "other", Layer: "stale"}); got.Layer != "" {
+		t.Errorf("Layered(other).Layer = %q, want none", got.Layer)
+	}
+	if Layered(nil) != nil {
+		t.Error("Layered(nil) is not nil")
+	}
+}
