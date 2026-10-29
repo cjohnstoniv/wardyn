@@ -560,7 +560,7 @@ What the check does and does not settle:
 2. A host or credential they cut is dropped with the warning `your walls narrowed <knob>`. The run's policy record names the layer `personal` for each knob they decided, and the run's **Policy** tab heads those changes **Your walls**.
 3. At dispatch, at revive and at the credential mint door, your denies, your blocked directions and your withheld credentials are applied again. Your site list is not, so a host the run's own setup adds stays reachable.
    - Loosening your walls after a run starts frees nothing for it. A deny, a blocked direction or a withheld credential added later binds it.
-4. An egress approval for a host your `denied_domains` cover is refused for every approver, `403` `personal_walls_host`: "Your walls block {host}. Change them on Your account." to you, and "{owner}'s walls block {host} for this run." to anyone else. A host outside your list follows your **When a site is not listed** choice.
+4. An egress approval for a host your `denied_domains` cover is refused for every approver, `403` `personal_walls_host`: "Your walls block {host}. Change them in Settings." to you, and "{owner}'s walls block {host} for this run." to anyone else. A host outside your list follows your **When a site is not listed** choice.
 5. A mint of a credential you keep out is refused `403` `credential_withheld`.
 6. If your walls cannot be read, a create is refused `500`, the run is sealed to no egress and no credential, a mint is `503` `credential_withheld_unread` and an approval is `500`. A run is never started without them.
 

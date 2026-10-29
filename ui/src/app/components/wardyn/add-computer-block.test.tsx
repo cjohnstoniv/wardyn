@@ -17,7 +17,7 @@ const SH = "curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v
 const PS = "irm https://github.com/cjohnstoniv/wardyn/releases/download/v0.10.0/install-cli.ps1 | iex";
 const SIGN_IN_NOTE = "A browser tab opens. Approve the sign-in there once.";
 const NO_CLI_SIGN_IN =
-  "This server does not offer CLI sign-in yet. Set WARDYN_TOKEN to a personal API token first; a personal token works for setup. A Wardyn admin can invite you to create one, and you claim it under Your account.";
+  "This server does not offer CLI sign-in yet. Set WARDYN_TOKEN to a personal API token first; a personal token works for setup. A Wardyn admin can invite you to create one, and you claim it in Settings.";
 const WSL2 = "Runners run in WSL2. Open your WSL2 distribution and run all three commands there.";
 const NO_INSTALL = "This deployment didn't report its version, so there is no install line here. See Other ways to install.";
 

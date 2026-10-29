@@ -417,7 +417,7 @@ func (s *Server) wallsAdmitApproval(w http.ResponseWriter, r *http.Request, ap t
 	}
 	msg := run.CreatedBy + "'s walls block " + host + " for this run."
 	if principalFromRequest(r) == run.CreatedBy {
-		msg = "Your walls block " + host + ". Change them on Your account."
+		msg = "Your walls block " + host + ". Change them in Settings."
 	}
 	writeErrorReason(w, http.StatusForbidden, reasonPersonalWallsHost, msg)
 	return run, haveRun, false

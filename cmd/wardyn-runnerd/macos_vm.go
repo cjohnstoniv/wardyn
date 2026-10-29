@@ -351,8 +351,8 @@ func (m *macOSVMs) guestMemory(man macvm.Manifest) uint64 {
 // The caps' refusal for a per-run limit below the base's minimum: the owner's MV-R47 (memory) and MV-R48
 // (CPU), with the runner's per-run amount, the base's minimum and the runner's id.
 const (
-	macOSVMMemoryBelowMinimum = "Per-run memory on this runner is %[1]s GB; a macOS VM needs at least %[2]d GB. Its owner raises it to %[2]d GB or more in Your account → My runner, or with `wardyn runner set %[3]s --per-run-memory %[2]d`."
-	macOSVMCPUBelowMinimum    = "Per-run CPU on this runner is %[1]d CPUs; a macOS VM needs at least %[2]d. Its owner raises it to %[2]d or more in Your account → My runner, or with `wardyn runner set %[3]s --per-run-cpu %[2]d`."
+	macOSVMMemoryBelowMinimum = "Per-run memory on this runner is %[1]s GB; a macOS VM needs at least %[2]d GB. Its owner raises it to %[2]d GB or more in Settings → My runner, or with `wardyn runner set %[3]s --per-run-memory %[2]d`."
+	macOSVMCPUBelowMinimum    = "Per-run CPU on this runner is %[1]d CPUs; a macOS VM needs at least %[2]d. Its owner raises it to %[2]d or more in Settings → My runner, or with `wardyn runner set %[3]s --per-run-cpu %[2]d`."
 )
 
 // belowMinimum is why a per-run limit the organisation sent is below the base's minimum, naming the flag

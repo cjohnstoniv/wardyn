@@ -498,12 +498,12 @@ func macOSRunnerRefused(rn types.Runner, mc *runnerwire.MacVMCaps) (reason strin
 // macOSCPUBelowMinimum is MV-R48: the runner's per-run CPU is under the base's minimum, which only its
 // owner raises.
 func macOSCPUBelowMinimum(rn types.Runner, have, need int) string {
-	return fmt.Sprintf("Per-run CPU on this runner is %d CPUs; a macOS VM needs at least %d. Its owner raises it to %d or more in Your account → My runner, or with `wardyn runner set %s --per-run-cpu %d`.", have, need, need, macRunnerName(rn), need)
+	return fmt.Sprintf("Per-run CPU on this runner is %d CPUs; a macOS VM needs at least %d. Its owner raises it to %d or more in Settings → My runner, or with `wardyn runner set %s --per-run-cpu %d`.", have, need, need, macRunnerName(rn), need)
 }
 
 // macOSMemoryBelowMinimum is MV-R47, in whole GB.
 func macOSMemoryBelowMinimum(rn types.Runner, haveGB, needGB int) string {
-	return fmt.Sprintf("Per-run memory on this runner is %d GB; a macOS VM needs at least %d GB. Its owner raises it to %d GB or more in Your account → My runner, or with `wardyn runner set %s --per-run-memory %d`.", haveGB, needGB, needGB, macRunnerName(rn), needGB)
+	return fmt.Sprintf("Per-run memory on this runner is %d GB; a macOS VM needs at least %d GB. Its owner raises it to %d GB or more in Settings → My runner, or with `wardyn runner set %s --per-run-memory %d`.", haveGB, needGB, needGB, macRunnerName(rn), needGB)
 }
 
 // macOSHostGate is the managed-Mac gate (design 3.9): the runner's trust class is managed_device, which
