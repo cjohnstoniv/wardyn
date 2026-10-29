@@ -75,6 +75,11 @@
     "sentence": "\"run not found\""
   },
   {
+    "reason": "attach_ticket_foreign_run",
+    "target": "run.ID.String()",
+    "sentence": "\"run not found\""
+  },
+  {
     "reason": "audit_export_partition_filter",
     "target": "\"audit.export\"",
     "sentence": "\"a partition export covers the whole partition; remove the other filter parameters\""
@@ -163,6 +168,11 @@
     "reason": "capKinds[capFeature].reason",
     "target": "\"runs.component\"",
     "sentence": "\"Custom components aren't turned on for you. Ask your admin.\""
+  },
+  {
+    "reason": "capKinds[capFeature].reason",
+    "target": "\"runs.ui_apps\"",
+    "sentence": "\"Inbound apps aren't turned on for you. Ask your admin, or declare the app without inbound.\""
   },
   {
     "reason": "capKinds[capFeature].reason",
