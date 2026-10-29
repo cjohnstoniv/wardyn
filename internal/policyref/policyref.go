@@ -43,6 +43,8 @@ const (
 	LayerBoundary   = "boundary"
 	// LayerRestriction is a restriction (types.Restriction): a deny-only list that follows people.
 	LayerRestriction = "restriction"
+	// LayerPersonal is a person's own walls (types.PersonalWalls): a private, narrow-only document that follows them.
+	LayerPersonal = "personal"
 
 	mailtoScheme = "mailto:"
 )
