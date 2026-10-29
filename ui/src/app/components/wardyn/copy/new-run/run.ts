@@ -48,7 +48,33 @@ export const NR_RUN = {
     "Run verbatim in the sandbox when it starts. The run keeps going until you end it or it reaches its lifetime limit.",
   PORTS_LABEL: "Ports",
   PORTS_HELP:
-    "Each port opens from the run page through Wardyn's web app gateway. Only people who may enter this run can open it.",
+    "Each port opens from the run page through Wardyn's web app gateway. Only people who may enter this run can open it, unless you make it callable from outside.",
+  /** T2-a (r16): a port's own card carries the checkbox and its help. */
+  PORT_INBOUND_LABEL: "Callable from outside the run",
+  PORT_INBOUND_HELP:
+    "People and services you name can reach this port through Wardyn's gateway, even when the run has no terminal. Every call is recorded.",
+  /** T2-a (r15, spelling per the r15 notes): preflight's capability_feature refusal on runs.ui_apps, under the checkbox. */
+  PORT_INBOUND_REFUSED: "Your organisation hasn't turned on inbound access for you.",
+  /** T2-a (r17): "Who can call it" is a set of chips and an "Add a caller" menu built from what the console already knows. */
+  CALLERS_LABEL: "Who can call it",
+  CALLERS_HELP: "You can always call it. Add the people, groups and service identities that may call it too.",
+  CALLERS_NONE: "Only you can call it.",
+  CALLERS_ADD: "Add a caller",
+  CALLER_PERSON: "Person",
+  CALLER_GROUP: "Group",
+  CALLER_SERVICE: "Service identity",
+  CALLERS_MENU_DIRECTORY: "Search the directory",
+  CALLERS_MENU_GROUPS: "Your groups",
+  CALLERS_MENU_SERVICES: "Services you sponsor",
+  CALLERS_MENU_PERSON: "A person",
+  CALLERS_NO_GROUPS: "Your sign-in doesn't list any groups.",
+  CALLERS_NO_SERVICES: "You don't sponsor any service identities.",
+  CALLER_EMAIL_PLACEHOLDER: "name@example.com",
+  CALLER_EMAIL_INVALID: "Enter a full email address, like ana@example.com.",
+  CALLER_ADD_PERSON: "Add",
+  CALLER_ADDED: "Added",
+  /** Accessible name of a caller chip's remove button; the value is what the chip shows. */
+  CALLER_REMOVE_ARIA: (value: string) => `Remove ${value}`,
   PORT_COL_NAME: "Name",
   PORT_COL_PORT: "Port",
   PORT_COL_PATH: "Path",
@@ -68,7 +94,7 @@ export const NR_RUN = {
   APP_PORT_ARIA: (who: string) => `Port for ${who}`,
   APP_PATH_ARIA: (who: string) => `Path for ${who}`,
   APP_REMOVE_ARIA: (who: string) => `Remove ${who}`,
-  APP_TERMINAL_NOTE: "The sandbox also has a terminal, as an Environment sandbox does.",
+  APP_TERMINAL_NOTE: "The sandbox also has a terminal, as an Environment does.",
   COMMAND_LABEL: "Command",
   /** Lead wording 2026-10-17 (FR-0099): the Review blocker for a command run with no command. */
   COMMAND_REQUIRED: "A command run needs a command to run.",

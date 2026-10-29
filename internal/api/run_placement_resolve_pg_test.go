@@ -78,9 +78,12 @@ type placementEnv struct {
 	online map[uuid.UUID]bool
 }
 
-func newPlacementEnv(t *testing.T) *placementEnv {
+func newPlacementEnv(t *testing.T) *placementEnv { return newPlacementEnvOn(t, false) }
+
+// newPlacementEnvOn is newPlacementEnv with the second-human hold switched on or off.
+func newPlacementEnvOn(t *testing.T, secondHuman bool) *placementEnv {
 	t.Helper()
-	e := &placementEnv{poolEnv: newPoolEnv(t, false), online: map[uuid.UUID]bool{}}
+	e := &placementEnv{poolEnv: newPoolEnv(t, secondHuman), online: map[uuid.UUID]bool{}}
 	e.runner = &poolRunner{fakeRunner: &fakeRunner{},
 		execFacts: map[string]runner.TargetFacts{
 			"alpha": {Classes: []types.ConfinementClass{types.CC1, types.CC2, types.CC3}},

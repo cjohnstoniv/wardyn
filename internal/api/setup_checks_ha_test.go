@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/recording"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 type fakeMaskSync struct{ err error }
@@ -88,5 +89,39 @@ func TestSetupStatus_NoHARowsWithoutHA(t *testing.T) {
 		if _, ok := rows[id]; ok {
 			t.Errorf("row %s present without HA", id)
 		}
+	}
+}
+
+// registered_runners_ha is a warn row while WARDYN_HA and runners are both on,
+// carries no Fix, and is absent otherwise (including when the switch cannot be read).
+// The WARDYN_HA gate is haChecks' caller; TestSetupStatus_NoHARowsWithoutHA covers it.
+func TestSetupStatus_RegisteredRunnersHARow(t *testing.T) {
+	want := SetupCheck{ID: "registered_runners_ha", Label: "Runners with several replicas", Status: "warn",
+		Detail: "Runners connect to one server replica. A launch, terminal or revive that another replica serves finds the runner offline. Keep one replica while you use runners."}
+	for _, tc := range []struct {
+		name    string
+		runners *types.RunnerSettings
+		getErr  error
+		present bool
+	}{
+		{"runners on", &types.RunnerSettings{Enabled: true}, nil, true},
+		{"runners off", &types.RunnerSettings{}, nil, false},
+		{"runners unset", nil, nil, false},
+		{"switch unreadable", &types.RunnerSettings{Enabled: true}, errors.New("config failed"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeSiteConfigStore{cfg: types.SiteConfig{Runners: tc.runners}, getErr: tc.getErr}
+			srv, _ := newSiteConfigHarness(t, fake)
+			srv.cfg.MaskSync = fakeMaskSync{}
+			var got *SetupCheck
+			for _, c := range srv.haChecks(context.Background()) {
+				if c.ID == want.ID {
+					got = &c
+				}
+			}
+			if (got != nil) != tc.present || (got != nil && *got != want) {
+				t.Errorf("row = %+v, want present=%v %+v", got, tc.present, want)
+			}
+		})
 	}
 }

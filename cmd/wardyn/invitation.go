@@ -20,7 +20,7 @@ import (
 //	wardyn person invitations <principal> [--state pending|claimed|expired|revoked]
 //	wardyn invitation revoke <id>
 //
-// There is no claim verb: the target claims signed in, from the console's Account page.
+// There is no claim verb: the target claims signed in, from the console's Settings.
 
 func personInviteCmd(client clientFn) *cobra.Command {
 	var expiresIn, tokenTTL time.Duration
@@ -32,7 +32,7 @@ func personInviteCmd(client clientFn) *cobra.Command {
 		Long: `Invite one known person to create their own API token.
 
 The invitation holds no secret. Only the person, signed in to the console as themselves,
-can claim it (Account page), and the token is shown to them once; you never see it.
+can claim it (in Settings), and the token is shown to them once; you never see it.
 --replaces names a live token an admin created for them: claiming the invitation revokes it.
 The invitation lasts 72 hours unless --expires-in says otherwise (at most 14 days).`,
 		Args: cobra.ExactArgs(1),

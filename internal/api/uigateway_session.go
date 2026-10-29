@@ -130,6 +130,15 @@ type uiSession struct {
 	// Desktop marks a session on a VM's desktop (App uiDesktopAppName, no Port): it lasts at most
 	// uiDesktopSessionTTL and ends when its person closes it (uigateway_desktop.go).
 	Desktop bool `json:"d,omitempty"`
+	// Inbound marks a session on an app declared inbound: true, the one door a background run keeps
+	// (uigateway_inbound.go). Caller is the callers entry the session's principal matched, empty for the
+	// run's owner: a Caller session skips the owner rule, its run's callers being fixed at create.
+	Inbound bool   `json:"n,omitempty"`
+	Caller  string `json:"k,omitempty"`
+	// tokenID and sponsor ride an inbound token's session only, never a cookie: the token its rows name,
+	// and the sponsor of the service identity that holds it.
+	tokenID uuid.UUID
+	sponsor string
 }
 
 // auditUISession writes one ui.* row for sess: its run, its principal, and the
@@ -141,7 +150,7 @@ func (s *Server) auditUISession(sess uiSession, action, target, outcome string, 
 	if sess.Service != "" {
 		data["service_identity"], data["entry"] = sess.Service, sponsorEntry
 	}
-	s.recordStreamAudit(s.cfg.BaseCtx, sess.SandboxRef, s.auditEvent(&sess.Run, types.ActorHuman, sess.Principal, action, target, outcome, mustJSON(data)))
+	s.recordStreamAudit(s.uiAuditCtx(s.cfg.BaseCtx, sess), sess.SandboxRef, s.auditEvent(&sess.Run, uiActorType(sess), sess.Principal, action, target, outcome, mustJSON(data)))
 }
 
 type uiSessionCtxKey struct{}
@@ -172,7 +181,9 @@ func (s *Server) newUISession(run types.AgentRun, ta ticketActor, app string, po
 	}
 }
 
-// startUISession sets sess's cookie, audits the authorization and sends the browser to the app.
+// startUISession sets sess's cookie, audits the authorization and sends the browser to the app. The row
+// names the sponsor entry only when sess entered as the sponsor (sess.Service): a caller of a service
+// identity's app enters as themselves, as their inbound.allow rows say.
 func (s *Server) startUISession(w http.ResponseWriter, r *http.Request, run types.AgentRun, ta ticketActor, sess uiSession, data map[string]any, landing string, redirectStatus int) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     uiCookieName,
@@ -183,8 +194,10 @@ func (s *Server) startUISession(w http.ResponseWriter, r *http.Request, run type
 		Secure:   s.cfg.OIDCSecureCookies,
 		Expires:  time.Unix(sess.Expires, 0),
 	})
-	s.auditUI(&run.ID, types.ActorHuman, ta.principal, "ui.authorize", sess.App, "success",
-		ta.withVia(withSponsorEntry(run, data)))
+	if sess.Service != "" {
+		data = withSponsorEntry(run, data)
+	}
+	s.auditUI(&run.ID, types.ActorHuman, ta.principal, "ui.authorize", sess.App, "success", ta.withVia(data))
 	http.Redirect(w, r, s.uiBasePath()+uiRelayPrefix(run.ID, sess.App)+landing, redirectStatus)
 }
 
@@ -301,6 +314,9 @@ func (s *Server) decodeUISession(r *http.Request, now time.Time) (uiSession, boo
 // "authorized at enter" meant "authorized until the cookie expires", while
 // holding an editor with an in-sandbox terminal.
 //
+// An inbound session (uigateway_inbound.go) skips the background-only arm, a named caller's skips the
+// ownership one (sess.Caller), and both answer to the run's profile's deny_ui_apps and deny_interactive.
+//
 // Three arms are needed: the ownership re-assert catches a handed-over run but
 // NOT an off-boarded owner (they still equal run.CreatedBy), the revoke cutoff
 // is what catches that one, and a session opened through a portal is also
@@ -331,13 +347,18 @@ func (s *Server) uiSessionStillAuthorized(ctx context.Context, sess uiSession, r
 				http.StatusServiceUnavailable, uiSessionUnverifiableMsg)
 		}
 	}
-	if !s.mayEnterRunOrSponsor(ctx, run, sess.Principal, sess.Role == oidc.RoleAdmin, time.Unix(sess.AuthorizedAt, sess.AuthorizedNs).UTC()) {
+	if sess.Caller == "" && !s.mayEnterRunOrSponsor(ctx, run, sess.Principal, sess.Role == oidc.RoleAdmin, time.Unix(sess.AuthorizedAt, sess.AuthorizedNs).UTC()) {
 		return s.uiDenyReassert(sess, uiDeniedReasonNotAuthorized,
 			http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
 	}
-	if backgroundOnlyRefusal(run, "web application gateway") != nil {
+	if !sess.Inbound && backgroundOnlyRefusal(run, "web application gateway") != nil {
 		return s.uiDenyReassert(sess, reasonRunBackgroundOnly,
 			http.StatusConflict, runBackgroundOnlyMsg("web application gateway"))
+	}
+	if sess.Inbound {
+		if de := s.uiInboundUnitDenies(ctx, sess, run); de != nil {
+			return de
+		}
 	}
 	if s.cfg.SessionRevocations == nil {
 		return nil

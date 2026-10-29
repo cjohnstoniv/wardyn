@@ -9,7 +9,7 @@
 
 ## 1. Register a public key
 
-- **SSO deployment (OIDC configured):** User view sidebar → **Your account**
+- **SSO deployment (OIDC configured):** User view sidebar → **Settings**
   (`/account`) → **Add key**.
 - Paste your public key (the console never asks
   for a private key; the paste field's own helper line says so, and pasting
@@ -120,7 +120,7 @@ For incident response or offboarding:
    - An unresolved email or ambiguous name is `422`;
      a lookup or deletion failure is `500`.
    - Owners can still remove individual
-     keys through **Your account** (`/account`), `wardyn ssh-key delete <fingerprint>`,
+     keys through **Settings** (`/account`), `wardyn ssh-key delete <fingerprint>`,
      or `DELETE /api/v1/me/ssh-keys/{fingerprint}`.
 4. End existing access with `wardyn run kill <run-id>` and verify teardown
    succeeded.
@@ -558,7 +558,7 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
   it.
 - `--path` picks a different keypair; the default is deliberately **not**
   `~/.ssh/id_ed25519` — a key an external tool dials sandboxes with should be
-  revocable from Your account (`/account`) without touching your everyday identity.
+  revocable from Settings (`/account`) without touching your everyday identity.
 - **`wardyn run wait-ready <run-id>`** ([`cmd/wardyn/run_wait_ready.go`](../cmd/wardyn/run_wait_ready.go)) blocks
   past what `run --wait` waits for.
 - `--wait` waits for a TERMINAL state (and is refused outright on an interactive run, which never reaches one on its own);
@@ -796,7 +796,7 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
     - **log in again** (the ordinary path now — `oidc.Config.OnLogin` re-stamps both `role` and `role_checked_at` for every key that principal owns, no re-registration needed)
     - **or `DELETE`/`POST` the key again** (still supported, still immediate, useful when you want the refresh before your next login rather than after).
   - Which of your own keys carries the `admin` stamp is
-    visible without reading the database: Your account (`/account`) badges the
+    visible without reading the database: Settings (`/account`) badges the
     row **Admin override**.
   - That badge reflects the STORED `role` only — it does not
     currently show whether `role_checked_at` has aged past `WARDYN_SSH_ROLE_TTL`,

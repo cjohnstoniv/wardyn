@@ -20,6 +20,8 @@
 #       is served back by the admin-gated GET /runs/{id}/recording/{runID}
 #   (g) the OIDC login flow against Dex completes and a session cookie (no admin
 #       bearer) authenticates GET /api/v1/runs
+#   (j) service lifecycle: a failing service command is restarted and reads
+#       unhealthy, a listening one reads healthy, and killing it ends KILLED
 #
 # GUARD: this is a heavyweight, Docker-dependent test. It is a NO-OP unless
 # WARDYN_TEST_DOCKER=1 is set (mirrors the integration-test convention so plain
@@ -69,11 +71,14 @@ WORKDIR="$(mktemp -d /tmp/wardyn-e2e.XXXXXX)"
 RUN_ID=""
 CC_RUN_ID=""                             # the REAL-AGENT (claude-code) run id
 REC_RUN_ID=""                            # the finite recording run id (step i)
+SVC_A_ID=""                              # the failing service run (step j)
+SVC_B_ID=""                              # the healthy service run (step j)
 PROXY_NAME=""
 CC_AGENT="claude-code"                   # real agent NAME (image via WARDYN_AGENT_IMAGES)
 CC_IMAGE="${WARDYN_E2E_CC_IMAGE:-wardyn/agent-claude-code:local}" # the demo tag the compose stack maps to
 
-# Pin BOTH agent images this script launches. An agent name the operator map
+# Pin the agent images this script launches (the fixture, claude-code, and "base" for a
+# command run that includes no harness: step j, whose image is the claude-code one). An agent name the operator map
 # does not carry resolves to the CONVENTION image
 # ghcr.io/cjohnstoniv/agent-<name>:<the DAEMON's own version> (agentImageForKey
 # in internal/api/runs_policy.go) — ":latest" only while the binary carries no
@@ -90,7 +95,7 @@ CC_IMAGE="${WARDYN_E2E_CC_IMAGE:-wardyn/agent-claude-code:local}" # the demo tag
 # keys below are non-negotiable — the assertions further down check the resolved
 # image by name — so a caller who pins either of them to something ELSE is told
 # so, rather than having their value dropped without a word.
-E2E_PINNED_IMAGES="{\"${FIXTURE_AGENT}\":\"${FIXTURE_IMAGE}\",\"${CC_AGENT}\":\"${CC_IMAGE}\"}"
+E2E_PINNED_IMAGES="{\"${FIXTURE_AGENT}\":\"${FIXTURE_IMAGE}\",\"${CC_AGENT}\":\"${CC_IMAGE}\",\"base\":\"${CC_IMAGE}\"}"
 if [[ -n "${WARDYN_AGENT_IMAGES:-}" ]]; then
     WARDYN_AGENT_IMAGES="$(python3 - "${WARDYN_AGENT_IMAGES}" "${E2E_PINNED_IMAGES}" <<'PY'
 import json, sys
@@ -117,7 +122,7 @@ teardown() {
   [[ "${WARDYN_E2E_KEEP:-}" == "1" ]] && { log "WARDYN_E2E_KEEP=1 set; leaving stack up"; return; }
   log "Tearing down"
   [[ -n "${PROXY_NAME}" ]] && docker rm -f "${PROXY_NAME}" >/dev/null 2>&1 || true
-  for rid in "${RUN_ID}" "${CC_RUN_ID}" "${REC_RUN_ID}"; do
+  for rid in "${RUN_ID}" "${CC_RUN_ID}" "${REC_RUN_ID}" "${SVC_A_ID}" "${SVC_B_ID}"; do
     [[ -n "${rid}" ]] || continue
     # Best-effort: remove any per-run sandbox artifacts the kill cascade left.
     docker rm -f "wardyn-agent-${rid}" "wardyn-proxy-${rid}" >/dev/null 2>&1 || true
@@ -186,6 +191,72 @@ recording_step() {
     note "(i) agent container logs (tail 20): $(docker logs --tail 20 "wardyn-agent-${REC_RUN_ID}" 2>&1 | tr '\n' '|' || echo '<logs failed>')"
     note "(i) recorder staging: $(docker exec "wardyn-agent-${REC_RUN_ID}" sh -c 'ls -la /var/log/wardyn 2>&1 | head -12' 2>&1 | tr '\n' '|' || echo '<exec failed>')"
   fi
+}
+
+# (j) service lifecycle. A service is a background command the supervisor in the sandbox keeps
+# running (deploy/images/common/agent-run-lib.sh run_service); wardynd mirrors its state file into
+# the run's service_status on the 60 s watcher tick, so every wait below is counted in ticks, not in
+# health intervals. A failing command is restarted (restarts >= 2) and reads unhealthy; a server
+# answering 200 on its port reads healthy within two ticks; a kill ends the run KILLED. The run
+# carries no harness, so it starts from the "base" image pinned above.
+# SKIPPED, never failed, when the image predates the supervisor: service_status reads
+# unknown/supervisor_missing, or (a reused image, WARDYN_E2E_NO_BUILD=1) the command ran once without
+# a supervisor and the run FAILED with no restart counted.
+svc_read() { # run id -> "STATE HEALTH RESTARTS REASON"
+  hc -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/api/v1/runs/$1" \
+    | python3 -c 'import sys,json;r=json.load(sys.stdin);s=r.get("service_status") or {};print(r.get("state",""),s.get("health","-"),s.get("restarts",0),s.get("reason") or "-")' 2>/dev/null
+}
+svc_kill() { hc -o /dev/null -w '%{http_code}' -X POST "${BASE}/api/v1/runs/$1/kill" -H "Authorization: Bearer ${ADMIN_TOKEN}"; }
+service_step() {
+  local out state health restarts reason i serve
+  log "(j) service lifecycle: restart on failure, health, kill"
+  out="$(e2e_wardyn run --experience background --command 'exit 3' --service --restart on-failure 2>&1)"
+  echo "${out}"
+  SVC_A_ID="$(printf '%s\n' "${out}" | awk '/^created run/{print $3; exit}')"
+  if [[ -z "${SVC_A_ID}" ]]; then bad "(j) the failing service run was not created: ${out}"; return; fi
+  state=""; health=""; restarts=0; reason=""
+  for i in $(seq 1 48); do
+    read -r state health restarts reason <<<"$(svc_read "${SVC_A_ID}")"
+    if [[ "${reason}" == "supervisor_missing" || ( "${WARDYN_E2E_NO_BUILD:-}" == "1" && "${state}" == "FAILED" && "${restarts:-0}" == "0" ) ]]; then
+      note "(j) SKIP: the agent image predates the service supervisor (state=${state} reason=${reason}); rebuild it, or prove this step on the post-tag nightly"
+      svc_kill "${SVC_A_ID}" >/dev/null; return
+    fi
+    [[ "${restarts:-0}" -ge 2 && "${health}" == "unhealthy" ]] && break
+    sleep 5
+  done
+  if [[ "${restarts:-0}" -ge 2 && "${health}" == "unhealthy" && "${state}" == "RUNNING" ]]; then
+    ok "(j) failing service: restarted ${restarts}x, reads unhealthy, run still RUNNING"
+  else
+    bad "(j) failing service: state=${state:-<none>} health=${health:-<none>} restarts=${restarts:-0} reason=${reason:-<none>}, expected RUNNING, unhealthy, restarts >= 2"
+  fi
+  svc_kill "${SVC_A_ID}" >/dev/null
+
+  serve='socat TCP-LISTEN:8080,reuseaddr,fork SYSTEM:"printf '"'"'HTTP/1.0 200 OK\r\n\r\n'"'"'"'
+  out="$(e2e_wardyn run --experience background --command "${serve}" --service --port 8080 --health-path / --health-every 5s 2>&1)"
+  echo "${out}"
+  SVC_B_ID="$(printf '%s\n' "${out}" | awk '/^created run/{print $3; exit}')"
+  if [[ -z "${SVC_B_ID}" ]]; then bad "(j) the healthy service run was not created: ${out}"; return; fi
+  state=""; health=""; restarts=0; reason=""
+  for i in $(seq 1 36); do   # two 60 s ticks plus slack
+    read -r state health restarts reason <<<"$(svc_read "${SVC_B_ID}")"
+    [[ "${health}" == "healthy" ]] && break
+    case "${state}" in COMPLETED|FAILED|KILLED) break ;; esac
+    sleep 5
+  done
+  if [[ "${health}" == "healthy" && "${state}" == "RUNNING" ]]; then
+    ok "(j) listening service reads healthy (GET / answers 200), run RUNNING"
+  else
+    bad "(j) listening service: state=${state:-<none>} health=${health:-<none>} restarts=${restarts:-0} reason=${reason:-<none>}, expected RUNNING and healthy"
+  fi
+
+  out="$(svc_kill "${SVC_B_ID}")"
+  for i in $(seq 1 30); do
+    read -r state _ <<<"$(svc_read "${SVC_B_ID}")"
+    [[ "${state}" == "KILLED" ]] && break
+    sleep 2
+  done
+  if [[ "${out}" =~ ^20[0-9]$ && "${state}" == "KILLED" ]]; then ok "(j) killing the service ends the run KILLED (kill=${out})"
+  else bad "(j) kill service: kill=${out} state=${state:-<none>}, expected 202 and KILLED"; fi
 }
 
 # ── 0. preflight ───────────────────────────────────────────────────────────--
@@ -477,6 +548,7 @@ fi
 # held on its credential approval from the moment it starts, and (ii) needs that
 # hold still open.
 recording_step
+service_step
 
 log "REAL-AGENT: creating a governed run (agent=${CC_AGENT}, with a task)"
 CC_TASK="print the word READY and exit"   # trivial; claude fails fast w/o a key

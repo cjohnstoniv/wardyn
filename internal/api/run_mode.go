@@ -377,7 +377,8 @@ func experienceConflictRefusal(req createRunRequest) *runRefusal {
 			return runModeConflict("startup", "A background task starts its workload; startup is for an interactive environment.")
 		case pol != nil && pol.AutoStopAfterSec != 0:
 			return runError(http.StatusUnprocessableEntity, reasonRunModeConflict, idleStopBackgroundMsg())
-		case pol != nil && len(pol.UIApps) > 0:
+		// An inbound app is the one gateway door a background task keeps (uigateway_inbound.go).
+		case pol != nil && slices.ContainsFunc(pol.UIApps, func(a types.UIApp) bool { return !a.Inbound }):
 			return runModeConflict(at+".ui_apps", "A background task has no web application gateway.")
 		case slices.ContainsFunc(req.Tools, hasOwnTask):
 			return multiAgentTaskConflict(req)

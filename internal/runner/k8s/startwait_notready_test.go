@@ -28,7 +28,7 @@ func TestWaitPodIP_RunningButNotReadyNamesTheReadinessProbe(t *testing.T) {
 			Name: proxyContainerName, Ready: false, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
 		}}}
 	})
-	_, err := d.waitPodIP(context.Background(), d.newStartClock(), podName, nil)
+	_, err := d.waitPodIP(context.Background(), d.newStartClock(), d.defaultNamespace(), podName, nil)
 	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), notReadyLine) ||
 		!strings.Contains(err.Error(), "wardyn-proxy@sha256:abc") {
 		t.Fatalf("err = %v; want a start-timeout error naming the readiness probe and the proxy image", err)
@@ -84,7 +84,7 @@ func TestWaitPodIP_WaitingProxyHasNoReadinessProbeLine(t *testing.T) {
 			Name: proxyContainerName, State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ContainerCreating"}},
 		}}}
 	})
-	_, err := d.waitPodIP(context.Background(), d.newStartClock(), podName, nil)
+	_, err := d.waitPodIP(context.Background(), d.newStartClock(), d.defaultNamespace(), podName, nil)
 	if !errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), notReadyLine) ||
 		!strings.Contains(err.Error(), proxyContainerName+": ContainerCreating") {
 		t.Fatalf("err = %v; want the container reason and no readiness-probe line", err)

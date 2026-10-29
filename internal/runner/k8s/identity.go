@@ -280,6 +280,7 @@ type bracket struct {
 	d         *Driver
 	runID     uuid.UUID
 	component string
+	ns        string
 	selector  map[string]string
 	last      *nodeMap
 	lastAt    time.Time
@@ -321,6 +322,36 @@ func (b *bracket) created(pod *corev1.Pod) error {
 	return err
 }
 
+// createPod creates a pod; in runner mode it first persists the bracket's lower end (a node list
+// scoped by the pod's own nodeSelector), then records the create response's UID, and routes the
+// start wait's reads of the pod through the bracket.
+func (d *Driver) createPod(ctx context.Context, runID uuid.UUID, component string, pod *corev1.Pod) (*corev1.Pod, error) {
+	if !d.runnerMode() {
+		return d.clientset.CoreV1().Pods(pod.Namespace).Create(ctx, pod, metav1.CreateOptions{})
+	}
+	b := &bracket{d: d, runID: runID, component: component, ns: pod.Namespace, selector: pod.Spec.NodeSelector}
+	if err := b.before(ctx, pod.Name); err != nil {
+		return nil, err
+	}
+	created, err := d.clientset.CoreV1().Pods(pod.Namespace).Create(ctx, pod, metav1.CreateOptions{})
+	if err != nil {
+		return nil, err
+	}
+	if err := b.created(created); err != nil {
+		return nil, err
+	}
+	d.brackets.Store(pod.Name, b)
+	return created, nil
+}
+
+// readPod is the start wait's pod read of a pod in ns: through the pod's bracket in runner mode.
+func (d *Driver) readPod(ctx context.Context, ns, name string) (*corev1.Pod, error) {
+	if v, ok := d.brackets.Load(name); ok {
+		return v.(*bracket).get(ctx, name)
+	}
+	return d.clientset.CoreV1().Pods(ns).Get(ctx, name, metav1.GetOptions{})
+}
+
 // get is the start wait's pod read under the bracket.
 func (b *bracket) get(ctx context.Context, name string) (*corev1.Pod, error) {
 	if now := b.d.now(); !b.bound && now.Sub(b.lastAt) >= b.cadence(now) {
@@ -333,7 +364,7 @@ func (b *bracket) get(ctx context.Context, name string) (*corev1.Pod, error) {
 		}
 		b.last, b.lastAt = m, now
 	}
-	pod, err := b.d.clientset.CoreV1().Pods(b.d.cfg.Namespace).Get(ctx, name, metav1.GetOptions{})
+	pod, err := b.d.clientset.CoreV1().Pods(b.ns).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -377,7 +408,7 @@ func (d *Driver) classifyProxy(pod *corev1.Pod) runner.ProxyObservation {
 	return runner.ProxyPending
 }
 
-// ObserveProxies is the runner's 30 s pod list (one call; the Role grants pods: list). It reports
+// ObserveProxies is the runner's 30 s pod list (one call per namespace; the Role grants pods: list). It reports
 // each asked run's proxy, records every listed pod's identity, and lists each node name a held run
 // uses, so a reuse is caught on the tick (owner #8). A run whose proxy pod is missing reports
 // NotFound, which records the obligation but is never completion evidence.
@@ -385,13 +416,15 @@ func (d *Driver) ObserveProxies(ctx context.Context, runIDs []uuid.UUID) (map[uu
 	if !d.runnerMode() {
 		return nil, runner.ErrEndUnsupported
 	}
-	pods, err := d.clientset.CoreV1().Pods(d.cfg.Namespace).List(ctx, metav1.ListOptions{LabelSelector: d.runnerSelector("")})
-	if err != nil {
-		return nil, fmt.Errorf("k8s: list runner pods: %w", err)
-	}
 	byName := map[string]*corev1.Pod{}
-	for i := range pods.Items {
-		byName[pods.Items[i].Name] = &pods.Items[i]
+	for _, ns := range d.cfg.Namespaces {
+		pods, err := d.clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: d.runnerSelector("")})
+		if err != nil {
+			return nil, fmt.Errorf("k8s: list runner pods: %w", d.inNamespace(ns, err))
+		}
+		for i := range pods.Items {
+			byName[pods.Items[i].Name] = &pods.Items[i]
+		}
 	}
 	out := make(map[uuid.UUID]runner.ProxyObservation, len(runIDs))
 	var errs []error

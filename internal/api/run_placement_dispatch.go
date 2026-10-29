@@ -92,6 +92,13 @@ func (s *Server) createSandboxAtTarget(ctx context.Context, run types.AgentRun, 
 			if err := prewrappedRunnerArch(spec.ImageArches, row.Arch); err != nil {
 				return runner.Sandbox{}, err
 			}
+			if row.OwnerKind == types.RunnerOwnerOrg {
+				ns, err := s.orgRunnerNamespace(ctx, run)
+				if err != nil {
+					return runner.Sandbox{}, err
+				}
+				spec.Namespace = ns
+			}
 		} else if len(spec.ImageArches) > 0 {
 			return runner.Sandbox{}, prewrappedRunnerArch(spec.ImageArches, "")
 		}
@@ -109,6 +116,36 @@ func (s *Server) createSandboxAtTarget(ctx context.Context, run types.AgentRun, 
 		s.stampServerRun(ctx, run, spec)
 	}
 	return s.cfg.Runner.CreateSandbox(ctx, spec)
+}
+
+// orgRunnerNamespace is the runs namespace the run's pool has its organization runner serve it in, read
+// from the (pool, runner) membership as it stands at dispatch ("" is the runner's default namespace). A
+// membership that is gone refuses the create: the run would otherwise land in a namespace nobody chose. So
+// does a namespace the runner, as it last advertised, does not serve (placement's servesRunsNamespace): a
+// membership removed and added again under another namespace would otherwise fail the run late, on the
+// runner. A runner whose facts are unknown (offline) is left to the create, which fails on it as offline.
+func (s *Server) orgRunnerNamespace(ctx context.Context, run types.AgentRun) (string, error) {
+	if run.RunnerPoolID == nil {
+		return "", nil
+	}
+	ps, ok := s.cfg.Store.(store.RunnerPoolStore)
+	if !ok {
+		return "", fmt.Errorf("%w: the run's pool membership cannot be read", runner.ErrExecutorUnavailable)
+	}
+	members, err := ps.ListRunnerPoolMembers(ctx, *run.RunnerPoolID)
+	if err != nil {
+		return "", fmt.Errorf("read the run's pool membership: %w", err)
+	}
+	for _, m := range members {
+		if m.RunnerID == nil || *m.RunnerID != *run.RunnerID {
+			continue
+		}
+		if facts, known := s.runnerFacts(*run.RunnerID); known && !(poolTarget{facts: facts, runsNamespace: m.RunsNamespace}).servesRunsNamespace() {
+			return "", fmt.Errorf("%w: the runner does not serve the runs namespace %q its pool membership names", runner.ErrExecutorUnavailable, m.RunsNamespace)
+		}
+		return m.RunsNamespace, nil
+	}
+	return "", fmt.Errorf("%w: the runner is no longer a member of the run's pool", runner.ErrExecutorUnavailable)
 }
 
 // prewrappedPlatformError refuses a prewrapped image where it cannot run; reason is its audit reason.

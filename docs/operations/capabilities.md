@@ -22,7 +22,7 @@ the ADMIN pre-authorized.
 | `agent` | exact `--agent` string | narrows | which agent/harness a member may launch (same seam). Deliberately NOT constrained to the harness catalog, at the gate or at the grant write: `WARDYN_AGENT_IMAGES` custom agents are supported, so a catalog check would make an operator's own entry unwriteable |
 | `workspace_provider` | exact git provider row id | narrows | which git provider row a member's repositories may come from; see [`workspace_provider`](#workspace_provider) below |
 | `model_provider` | exact model provider id | narrows | which model provider a person's run may use; see [`model_provider`](#model_provider) below |
-| `feature` | `ssh_key`, `api_token`, `custom_component`, `service_attach` or `self_host_runner` | narrows | whether a member may add an SSH key, mint an API token, define a custom component, enter the runs of a service identity they sponsor or mint a token for a runner of their own; see [`feature`](#feature) below |
+| `feature` | `ssh_key`, `api_token`, `custom_component`, `service_attach`, `self_host_runner` or `inbound` | narrows | whether a member may add an SSH key, mint an API token, define a custom component, enter the runs of a service identity they sponsor, mint a token for a runner of their own or declare an app other people and services can call; see [`feature`](#feature) below |
 | `policy` | stored policy uuid | narrows | which stored policy a member may select for their own run (`policy_id` on `POST /runs`/preflight, `denyUserRequest`, same seam). |
 | | | | Only the choice: the selected row is still bounded by the member's ceiling, and a run that names no policy is not gated. |
 | | | | Checked before the row is read, so an ungranted id is refused whether or not it exists |
@@ -243,6 +243,7 @@ the ADMIN pre-authorized.
   - See [Custom components](custom-components.md#custom-components).
 - `service_attach` gates a service identity's sponsor entering one of its runs (a terminal or a UI app); see [`service_attach`](#service_attach) below.
 - `self_host_runner` gates a person minting a registration token for a runner of their own; see [`self_host_runner`](#self_host_runner) below.
+- `inbound` gates declaring a UI app that named callers can reach through the gateway; see [`inbound`](#inbound) below.
 - Any other value is refused at write time (`400`), except an allow of a lowercase snake_case name: it is stored inert and grants nothing until a release ships that feature, so it can be staged before upgrading.
 #### `service_attach`
 
@@ -262,6 +263,19 @@ the ADMIN pre-authorized.
   - While the value is restricted, runners people own are claimed and no grant row names the value, setup status shows a "Self-hosted runner tokens" warning for admins with that body. A deny row naming the value also clears it: that is a choice to keep it closed.
 - Asked at `POST /me/runners/tokens` only (reason `capability_feature`, target `me.runners.tokens`). Existing runners, claims and the admin mint are never asked.
 - Admins are never asked, even with `WARDYN_GOVERN_ADMIN_RUNS` on: the admin mint lets them name themself.
+
+#### `inbound`
+
+- Off for everyone: migration `0239_inbound` restricts the value, so a `*` allow grants nobody.
+  - An allow that names `inbound` admits its subject: a person, a group, a user type, a service identity (a `user` grant naming `service:<name>`), or `all`.
+  - A deny wins.
+- Asked when a **request** declares an inbound app (`ui_apps[].inbound`), in its `inline_policy` or the keys of its `policy_overlay`.
+  - The doors are `POST /runs`, preflight and the policy preview, and they answer alike. A refusal is `capability_feature` with the target `runs.ui_apps`.
+  - A stored policy's or a ceiling's inbound apps are the administrator's choice, so a run that only inherits them is not asked.
+  - Operators are never asked.
+- A withdrawn grant refuses new runs and ends none already going.
+- It gates the declaration only. Calling an inbound app needs no grant: the callers a run names are the allow-list, and a profile's `deny_ui_apps` or `deny_interactive` removes the apps ([UI sandboxes](../UI-SANDBOXES.md#inbound-let-named-callers-reach-a-port)).
+- Minting the inbound token a caller uses is the `api_token` door above, not this value.
 
 ### `GET /permissions/explain`
 

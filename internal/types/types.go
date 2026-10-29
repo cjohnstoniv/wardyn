@@ -203,6 +203,9 @@ type AgentRun struct {
 	// Experience is the canonical run mode chosen at launch (0.9 New Run), frozen at create and never re-derived. Empty for a run from an older client or before 0.9;
 	// BackgroundOnly is the one predicate every interactive door reads. It is not Interactive, which is the legacy execution flag.
 	Experience RunExperience `json:"experience,omitempty"`
+	// Shape is the New Run shape the run was set up from, frozen at create: the request's own, else the one shape
+	// its experience, workload and tools fit. Empty when they fit more than one, for an older client, or before 0245.
+	Shape RunShape `json:"shape,omitempty"`
 	// WorkspacePath is the run's primary host directory, denormalized so the control plane can warn (never block) a second run on it.
 	WorkspacePath string `json:"workspace_path,omitempty"`
 	// WorkspaceID marks a governed scan run: the driver runs wardyn-scan instead of the agent, trusted (not sandbox input) to persist the profile.
@@ -265,6 +268,11 @@ type AgentRun struct {
 	RecordingDurationSec float64       `json:"recording_duration_sec,omitempty"`
 	DiskMiB              int           `json:"disk_mib,omitempty"`  // effective ephemeral disk cap MiB; 0 = no cap resolved
 	Attention            *RunAttention `json:"attention,omitempty"` // what this live run awaits and who can clear it; derived, only on view-opted-in read paths
+
+	// Service is the spec of a background run that is kept running, frozen at create with its defaults filled; nil for any other run.
+	Service *RunService `json:"service,omitempty"`
+	// ServiceStatus is the last health observation of that service, written by wardynd's sweep; absent until the first one.
+	ServiceStatus *RunServiceStatus `json:"service_status,omitempty"`
 
 	// HumanAuthor is the principal accountable for the run at create, written once: the service identity's sponsor
 	// at launch for a service identity's run, unchanged by a later sponsor change, and CreatedBy for any other run. A
@@ -481,6 +489,10 @@ type ApprovalRequest struct {
 	// Decidable is the list route's verdict on whether THIS caller may act on a PENDING row (mayDecide, the egress_host
 	// grant included), projected at response time and never stored. Nil on a row the verdict was not computed for.
 	Decidable *bool `json:"decidable,omitempty"`
+	// WallsBlock is true on a PENDING egress_domain row whose host the requesting run owner's own walls deny: no
+	// approver can admit it (personal_walls_host), so the console draws Approve disabled. Projected at response time
+	// and never stored; absent when the host is not denied or the walls could not be read.
+	WallsBlock bool `json:"walls_block,omitempty"`
 	// LastRejoinedAt is when a held request last re-entered the hold on this PENDING row (nil until
 	// then); approval.Hold measures a bounded hold from it when it is later than RequestedAt. Not on the wire.
 	LastRejoinedAt *time.Time `json:"-"`
@@ -602,7 +614,10 @@ type APIToken struct {
 	// ServiceIdentity names the service identity an admin linked this token to, set with Disposition on
 	// a token that has a move row (#1508); empty on any other token.
 	ServiceIdentity string `json:"service_identity,omitempty"`
-	Token           string `json:"token,omitempty"` // plaintext, create response ONLY
+	// Inbound marks a token of APITokenKindInbound: it calls the inbound ports that name its principal as a
+	// caller, through the app gateway, and authenticates nothing on the API. Read from Kind.
+	Inbound bool   `json:"inbound,omitempty"`
+	Token   string `json:"token,omitempty"` // plaintext, create response ONLY
 	// IdentityStampedAt is when Role and Groups were last stamped: at mint, then at each sign-in of
 	// the owner. Nil reads as stale under WARDYN_ROLE_STAMP_TTL. Never on the wire.
 	IdentityStampedAt *time.Time `json:"-"`
@@ -610,8 +625,9 @@ type APIToken struct {
 	// that existed their order once. 0 only for a token written by a replica that predates it, which a
 	// revocation cutoff orders on CreatedAt. Never on the wire.
 	RevSeq int64 `json:"-"`
-	// Kind is APITokenKindAPI for a personal token, or a CLI kind (cli_sign_in.go). Never on the wire:
-	// the name says which computer a CLI token belongs to.
+	// Kind is APITokenKindAPI for a personal token, APITokenKindInbound for an inbound one, or a CLI kind
+	// (cli_sign_in.go). Never on the wire (Inbound says the one kind a list needs): the name says which
+	// computer a CLI token belongs to.
 	Kind string `json:"-"`
 	// CLISessionID is the CLI session a CLI token belongs to; the token stops authenticating when the
 	// session ends. Nil on a personal token. Never on the wire.

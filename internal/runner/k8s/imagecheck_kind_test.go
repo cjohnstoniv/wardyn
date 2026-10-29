@@ -35,7 +35,7 @@ func liveImageCheckDriver(t *testing.T) (d *Driver, base, noRec string) {
 	if os.Getenv("WARDYN_TEST_K8S") != "1" || base == "" || noRec == "" {
 		t.Skip("WARDYN_TEST_K8S=1, WARDYN_TEST_PREWRAP_IMAGE and WARDYN_TEST_PREWRAP_NO_REC_IMAGE not set")
 	}
-	d, err := New(Config{Namespace: os.Getenv("WARDYN_K8S_NAMESPACE"), ProxyImage: os.Getenv("WARDYN_PROXY_IMAGE")})
+	d, err := New(Config{Namespaces: []string{os.Getenv("WARDYN_K8S_NAMESPACE")}, ProxyImage: os.Getenv("WARDYN_PROXY_IMAGE")})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestKindPrewrappedCheckControlPlaneKilled(t *testing.T) {
 	if err := child.Start(); err != nil {
 		t.Fatalf("start the child: %v", err)
 	}
-	ns := d.cfg.Namespace
+	ns := d.defaultNamespace()
 	waitFor(t, "the arm64 check pod", func() bool {
 		_, err := d.clientset.CoreV1().Pods(ns).Get(context.Background(), "wardyn-imagecheck-"+attempt.String()+"-arm64", metav1.GetOptions{})
 		return err == nil
@@ -106,11 +106,11 @@ func TestKindPrewrappedCheckControlPlaneKilled(t *testing.T) {
 func checkObjects(t *testing.T, d *Driver, attempt uuid.UUID) int {
 	t.Helper()
 	sel := metav1.ListOptions{LabelSelector: labelRun + "=" + attempt.String()}
-	pods, err := d.clientset.CoreV1().Pods(d.cfg.Namespace).List(context.Background(), sel)
+	pods, err := d.clientset.CoreV1().Pods(d.defaultNamespace()).List(context.Background(), sel)
 	if err != nil {
 		t.Fatalf("list pods: %v", err)
 	}
-	pols, err := d.clientset.NetworkingV1().NetworkPolicies(d.cfg.Namespace).List(context.Background(), sel)
+	pols, err := d.clientset.NetworkingV1().NetworkPolicies(d.defaultNamespace()).List(context.Background(), sel)
 	if err != nil {
 		t.Fatalf("list policies: %v", err)
 	}

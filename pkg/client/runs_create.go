@@ -267,7 +267,7 @@ type CreateRunRequest struct {
 	NoRepositoriesOrDrives bool `json:"no_repositories_or_drives,omitempty"`
 	// Shape is the New Run choice a run was set up from: agent_task,
 	// environment or application. Optional; the server checks it against
-	// experience, workload and tools and otherwise does not use it.
+	// experience, workload and tools, and the run keeps it (AgentRun.Shape).
 	Shape RunShape `json:"shape,omitempty"`
 	// EndsAfterSec ends the run this many seconds after it is created, 1 to
 	// 2147483647 (below 1 is a 400, run_end_after_too_small). An end past what the pool, the deployment and the person's
@@ -280,6 +280,13 @@ type CreateRunRequest struct {
 	// No end (allow_no_end with user_changes_limits); otherwise 403
 	// run_end_no_end_not_allowed or run_limits_gate_denied.
 	NoEnd bool `json:"no_end,omitempty"`
+	// Service keeps a background command running: the supervisor in the sandbox restarts it when it
+	// exits with an error and, with both a port and a health block, checks it; a port alone is not
+	// checked. Only with experience background and workload kind command on a container sandbox;
+	// anything else is 422 run_service_shape, and a VM machine_kind is 422 request_field_unavailable.
+	// The server fills the defaults (restart on_failure, a health check's interval 15 and
+	// failure_threshold 3) and stores the spec frozen on the run.
+	Service *types.RunService `json:"service,omitempty"`
 	// Preset launches the named launch preset (see Preset): the server
 	// expands it into the equivalent explicit request and runs the unchanged
 	// create path under the caller's own ceiling. Alongside it only Title,

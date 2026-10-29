@@ -190,7 +190,14 @@
 # docs/OPERATIONS.md=60527 adds 58 over 60469, measured (0.10 final W3 train): the 0236 migration note from TEARDOWN-STATUS (#3652) beside SANDBOX-GONE-LIVE's 0235 note; ours + theirs - base.
 # docs/OPERATIONS.md=60615 adds 88 over 60527, measured (0.10 final §3 pre-wrapped images): the Kubernetes day-2 pointer to the pre-wrapped image recipe.
 # docs/OPERATIONS.md=60642 adds 27 over 60615, measured (0.10 final §3 pre-wrapped images): the 0238 migration row.
-docs/OPERATIONS.md=60742 share=35
+# docs/OPERATIONS.md=60790 adds 48 over 60742, measured (rc.8 inbound): the 0239 migration row.
+# docs/OPERATIONS.md=60815 adds 25 over 60790, measured (rc.8 services): the 0240 migration row.
+# docs/OPERATIONS.md=60833 adds 43 over 60790, measured (rc.8 workloads): the 0241 migration row.
+# docs/OPERATIONS.md 60858 = 60815 + 43 (rc.8 workloads row on top of the services row).
+# docs/OPERATIONS.md=60885 adds 27 over 60858, measured (rc.8 runs namespace): the 0242 migration row.
+# docs/OPERATIONS.md=60909 adds 24 over 60885, measured (rc.8 run shape): the 0245 migration row.
+# docs/OPERATIONS.md=60947 adds 38 over 60909, measured (rc.8 E5): the Workloads index line and the pointer to the high-availability page.
+docs/OPERATIONS.md=60947 share=35
 # docs/OPERATIONS.md 57751 = ours 57562 + theirs 57690 - base 57501 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/OPERATIONS.md 57722 = ours + theirs - base at the 0.10 HYB-C merge of main onto VM-A, measured.
 # docs/OPERATIONS.md 55848 adds 132 over 55716: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).

@@ -135,6 +135,10 @@ var envDocShellOnly = map[string]bool{
 	// The harnesses image hands each agent of a background run with several its own
 	// prep mark (deploy/images/common/agent-run-set); set and read by shell only.
 	"WARDYN_TASK_PREPPED": true,
+	// The service supervisor's state-file path (deploy/images/common/agent-run-lib.sh
+	// service_state): a seam for scripts/test-service-supervisor.sh only. wardynd
+	// reads the default path over exec and never sets or reads this var.
+	"WARDYN_SERVICE_STATE_FILE": true,
 	// The store-mode and Transit compose overlays' host directory holding the
 	// Vault token (deploy/compose/docker-compose.{vault,transit}.yaml); Go reads
 	// the mounted file.

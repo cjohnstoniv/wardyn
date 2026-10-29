@@ -281,7 +281,25 @@
 # docs/sdk.md 22671 adds 11 over 22660, measured (#2967 DESK-LOCKS row 5): PutSiteConfigResult strips the recording block and reports RecordingIgnored.
 # docs/sdk.md 22680 adds 9 over 22671, measured: run_output_not_kept also answers an ended run whose runner captures no output and whose recording never arrived.
 # docs/sdk.md=22806 adds 90 over 22716, measured (0.10 final §3 pre-wrapped images): the three prewrapped_* reason rows.
-docs/sdk.md=22874 share=21 # +16 measured (0.10 final docs): secret_value_too_short on GET /internal/injection/{grantID}; -2 measured (#2956 r3: the host_marks row states outside per port and under allow-all); +10 measured (#2956 r2: the host_marks row names outside); +44 measured (0.10 final #2956 host marks: the host_marks row; the two mark meanings live in OPERATIONS.md); tightened from 21227 to the measured count at the 0.10 W4d merge; +27 (agent, ours + theirs - base); +9 (ui-plumbing, ours + theirs - base)
+# docs/sdk.md=22902 adds 28 over 22874, measured (rc.8 services): the run_service_shape row.
+# docs/sdk.md=23103 adds 201 over 22902, measured (rc.8 workloads): the /workloads and /workload-bindings reason rows.
+# docs/sdk.md 23071 = 22934 + 137 (rc.8 inbound gateway reasons and runner_offline).
+# docs/sdk.md 23272 = 23071 + 201, measured (rc.8 workloads on the wave).
+# docs/sdk.md 23338 = 23272 + 66, measured (rc.8 D1 inbound_needs_host_mode row on the wave).
+# docs/sdk.md 23767 adds 429 over 23338, measured (rc.8 E4, #2948): the Your walls section, Narrowing one run, and the walls reason rows.
+# docs/sdk.md 23382 = 23338 + 44, measured (rc.8 inbound docs): the inbound feature refusal, the deny_interactive application refusal and the gateway's role_stamp_stale.
+# docs/sdk.md 23811 = 23767 + 44, measured (rc.8 walls and inbound docs combined on the wave).
+# docs/sdk.md 23408 adds 70 over 23338, measured (rc.8 D2): the workload_pool_mismatch and workload_binding_inactive status reasons.
+# docs/sdk.md 23881 = 23811 + 70, measured (rc.8 walls, inbound docs and D2 combined on the wave).
+# docs/sdk.md=23895 adds 14 over 23881, measured (rc.8 run shape): the run keeps its shape.
+# docs/sdk.md 23928 = 23811 + 117, measured (rc.8 walls, inbound docs and D2 combined on the wave, and the crd review fixes).
+# docs/sdk.md 23942 measured after the crdfix merge onto the run-shape wave.
+# docs/sdk.md=23912 adds 17 over 23895, measured (rc.8 workload history): WorkloadHistory in the /workloads row.
+# docs/sdk.md 23963 measured after the workload-history caller sentence (a service token is refused).
+# docs/sdk.md 23960 adds 1 over 23959, measured (rc.8): workload_binding_pool_scope named in the bindings row's reason cell.
+# docs/sdk.md 23965 measured at the guards merge onto the wave (both sentences above).
+# docs/sdk.md 23974 measured (rc.8): workload_binding_inactive says a revoke, not a session-only sign-out, ends a binding.
+docs/sdk.md=23974 share=21
 # docs/sdk.md 20423 = ours 20195 + theirs 20288 - base 20060 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/sdk.md 20315 = ours + theirs - base at the 0.10 HYB-C merge of main onto VM-A, measured.
 # 0.10 HYB-C: docs/sdk.md 20343 adds 28 over 20315, measured: the placement_capability refusal of a linux_vm run with a folder on a runner that cannot share one.

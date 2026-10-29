@@ -21,13 +21,20 @@ import (
 // Stored-row verification on every new connection enforces the durable gate;
 // this method alone is intentionally not a substitute for that transaction.
 func (h *Hub) Revoke(ctx context.Context, id uuid.UUID) error {
-	return h.endWithControl(ctx, id, runnerwire.TypeRevoked, "runner_revoked", nil)
+	return h.endWithControl(ctx, id, runnerwire.TypeRevoked, "runner_revoked", nil, "")
 }
 
 // Goaway forces the next connection through full admission, for replica drain
 // or an administrative session reset. It does not revoke the registered key.
 func (h *Hub) Goaway(ctx context.Context, id uuid.UUID) error {
-	return h.endWithControl(ctx, id, runnerwire.TypeGoaway, "fresh_session_required", nil)
+	return h.endWithControl(ctx, id, runnerwire.TypeGoaway, "fresh_session_required", nil, "")
+}
+
+// GoawaySession is Goaway for one fresh session (the id Admission.BeginInventory was given): it ends id's
+// session only while it is still that one, so a caller that decided on an older session never ends the
+// session that replaced it, nor cancels the admission that may be bringing it up.
+func (h *Hub) GoawaySession(ctx context.Context, id uuid.UUID, session string) error {
+	return h.endWithControl(ctx, id, runnerwire.TypeGoaway, "fresh_session_required", nil, session)
 }
 
 // GoawayAll sends every session Goaway, as after runners are switched off.
@@ -67,8 +74,9 @@ func (h *Hub) Online(id uuid.UUID) bool {
 }
 
 // endWithControl ends id's session with a control frame. With only set, it ends the session only while it still
-// serves that peer: a caller that decided on an older session's state must not end the one that replaced it.
-func (h *Hub) endWithControl(ctx context.Context, id uuid.UUID, kind runnerwire.Type, reason string, only *runnerwire.Peer) error {
+// serves that peer, and with session set only while it is still that fresh session: a caller that decided on an
+// older session's state must not end the one that replaced it.
+func (h *Hub) endWithControl(ctx context.Context, id uuid.UUID, kind runnerwire.Type, reason string, only *runnerwire.Peer, session string) error {
 	h.mu.Lock()
 	s := h.sessions[id]
 	h.mu.Unlock()
@@ -76,7 +84,7 @@ func (h *Hub) endWithControl(ctx context.Context, id uuid.UUID, kind runnerwire.
 		return nil
 	}
 	if !s.mu.TryLock() {
-		if only == nil {
+		if only == nil && session == "" {
 			// An admission holds the slot, perhaps stalled on a durable call or a dead link: end it now rather
 			// than after its own timeouts.
 			s.activityPeer.Store(nil) // a pending revoke reads offline, as it did before an activity check could hold the slot
@@ -84,12 +92,12 @@ func (h *Hub) endWithControl(ctx context.Context, id uuid.UUID, kind runnerwire.
 				(*abort)()
 			}
 		}
-		// With only set, wait for the holder instead of cancelling it: it may be a reconnect replacing the
-		// session this call was made for, or an activity check, the resume timer or Close.
+		// Bound to a peer or session, wait for the holder instead of cancelling it: it may be a reconnect
+		// replacing the session this call was made for, or an activity check, the resume timer or Close.
 		s.mu.Lock()
 	}
 	defer s.mu.Unlock()
-	if s.peer == nil || (only != nil && s.peer != only) {
+	if s.peer == nil || (only != nil && s.peer != only) || (session != "" && s.id != session) {
 		return nil
 	}
 	s.readyID.Store(nil)

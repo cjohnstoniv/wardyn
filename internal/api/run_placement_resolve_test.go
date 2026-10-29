@@ -423,3 +423,34 @@ func TestOtherRunnersAreTheClassCapableOthers(t *testing.T) {
 		t.Fatalf("fallbacks for a CC2 run bound to %s = %v, want only %s", bound, got, able)
 	}
 }
+
+// A membership naming a runs namespace makes its runner eligible only when the runner advertises it; the
+// default namespace needs nothing, and an older runner (which advertises none) never takes a named one.
+// The refusal is the organization pool's "no eligible member".
+func TestPlacement_RunsNamespaceNeedsAnAdvertisement(t *testing.T) {
+	named := func(id, ns string, advertised ...string) poolTarget {
+		tg := target(id, false, true, 4000, 8192, types.CC1, types.CC2)
+		tg.runsNamespace, tg.facts.RunsNamespaces = ns, advertised
+		return tg
+	}
+	d := demand(types.CC1, "", 0, 0)
+	for _, tc := range []struct {
+		name string
+		t    poolTarget
+		want bool
+	}{
+		{"default namespace, advertised nothing", named("a", ""), true},
+		{"default namespace, advertised some", named("a", "", "wardyn-runs", "team-a"), true},
+		{"named, advertised", named("a", "team-a", "wardyn-runs", "team-a"), true},
+		{"named, advertised other namespaces", named("a", "team-a", "wardyn-runs", "team-b"), false},
+		{"named, an older runner advertising none", named("a", "team-a"), false},
+	} {
+		got, reason := eligibleTargets([]poolTarget{tc.t}, d)
+		if (len(got) == 1) != tc.want || (!tc.want && reason != placement.ReasonRunnerOffline) {
+			t.Errorf("%s: eligible %v, reason %q, want eligible=%v", tc.name, ids(got), reason, tc.want)
+		}
+	}
+	if r := targetRefusal(placement.ReasonRunnerOffline, "Cluster", types.RunnerPoolOrganization); r.body.Reason != string(runnerpool.ReasonNoEligibleMember) {
+		t.Errorf("the refusal for a namespace nobody serves = %+v, want no eligible member", r)
+	}
+}

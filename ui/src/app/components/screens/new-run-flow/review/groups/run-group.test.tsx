@@ -58,3 +58,26 @@ describe("Review: Run and timing", () => {
     expect(screen.queryByText(NR_REVIEW.TIMING_CHECKED, { exact: false })).not.toBeInTheDocument();
   });
 });
+
+describe("Review: Keep it running", () => {
+  const script = (service?: NewRunDraft["intent"]["service"], over: NewRunDraft["intent"] = {}): NewRunDraft => ({
+    ...initialDraft("alice"),
+    intent: { shape: "application", experience: "background", workload: { kind: "command", command: "./serve" }, service, ...over },
+  });
+
+  it("says the service on its own line, with its restart and its check", () => {
+    show(script({ restart: "on_failure", port: 8080, health: { path: "/healthz", interval_sec: 15, failure_threshold: 3 } }));
+    expect(screen.getByText("Service · restarts when it fails · checks port 8080 /healthz every 15 s")).toBeInTheDocument();
+    cleanup();
+    show(script({ restart: "never", port: 8080, health: { interval_sec: 30, failure_threshold: 3 } }));
+    expect(screen.getByText("Service · doesn't restart · checks port 8080 every 30 s")).toBeInTheDocument();
+  });
+
+  it("says nothing for a run with no service, or one that cannot carry it", () => {
+    show(script(undefined));
+    expect(screen.queryByText(/^Service ·/)).not.toBeInTheDocument();
+    cleanup();
+    show(script({ restart: "on_failure" }, { machine_kind: "linux_vm" }));
+    expect(screen.queryByText(/^Service ·/)).not.toBeInTheDocument();
+  });
+});

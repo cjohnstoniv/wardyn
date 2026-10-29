@@ -60,6 +60,9 @@ type policySourceRecord struct {
 	// Overlay is the keys a policy_overlay laid onto Spec, the default it
 	// started from (run_policy_overlay.go); never its values.
 	Overlay []string `json:"overlay,omitempty"`
+	// PersonalWalls is what the launching person's own walls narrowed, set only
+	// when they narrowed something (personal_walls.go).
+	PersonalWalls *wallsSourceRecord `json:"personal_walls,omitempty"`
 	// edits stays in memory: the person's provenance rows for this request.
 	edits *overrideEdits
 	// overlaid stays in memory: Spec with the overlay laid on, before the clamp.
@@ -192,7 +195,7 @@ func (s *Server) handleGetRunPolicy(w http.ResponseWriter, r *http.Request) {
 	ev.diskFilled, ev.diskBasis, ev.diskDefaultSource = envelope.DiskMiBFilled, envelope.DiskMiBBasis, envelope.DiskMiBDefaultSource
 	ev.bounded = create.Source != nil && create.Source.Bounded
 	if create.Source != nil {
-		ev.clamp, ev.overlay = create.ClampWarnings, create.Source.Overlay
+		ev.clamp, ev.overlay, ev.walls = create.ClampWarnings, create.Source.Overlay, create.Source.PersonalWalls
 	} else {
 		ev.legacyGitBroker = s.holdsGitHubGrant(ctx, run.ID)
 	}

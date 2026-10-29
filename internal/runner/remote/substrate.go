@@ -152,7 +152,8 @@ func (s *Substrate) Advertised() (runner.TargetFacts, bool) {
 	advertised := c.CPUMillisMax > 0 && c.MemoryMiBMax > 0
 	return runner.TargetFacts{Classes: slices.Clone(c.Support.Classes), CapacityAdvertised: advertised, CPUMillisMax: c.CPUMillisMax, MemoryMiBMax: c.MemoryMiBMax,
 		EphemeralDiskEnforcement: c.Support.EphemeralDiskEnforcement, KeepsEnded: !c.EndsUnkept, UserDrives: c.Support.UserDrives,
-		Records: c.Support.SessionRecording && c.Support.RecordPerRun, RecordsUnasked: c.Support.SessionRecording && !c.Support.RecordPerRun}, true
+		Records: c.Support.SessionRecording && c.Support.RecordPerRun, RecordsUnasked: c.Support.SessionRecording && !c.Support.RecordPerRun,
+		RunsNamespaces: slices.Clone(c.RunsNamespaces)}, true
 }
 
 // HandleEvent keeps the `caps` event and passes the rest to Options.OnEvent.
@@ -683,4 +684,14 @@ func (s *Substrate) EraseResident(ctx context.Context, runID uuid.UUID) error {
 	delete(s.resident, runID)
 	s.mu.Unlock()
 	return s.call(ctx, runnerwire.MethodEraseResident, runnerwire.EraseResidentArgs{RunID: runID}, nil)
+}
+
+// WorkloadStatus has the runner write one WardynWorkload custom resource's status, which it patches
+// into the resource's status subresource and nowhere else. A status outside the wire's bounds is
+// refused here and never sent.
+func (s *Substrate) WorkloadStatus(ctx context.Context, a runnerwire.WorkloadStatusArgs) error {
+	if err := a.Validate(); err != nil {
+		return err
+	}
+	return s.call(ctx, runnerwire.MethodWorkloadStatus, a, nil)
 }

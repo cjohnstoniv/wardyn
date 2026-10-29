@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -114,7 +115,7 @@ func TestRunnerPoolMethodsHitTheirRoutes(t *testing.T) {
 		{"DELETE", "/api/v1/me/runner-pools/" + pool.String(), func() error { return c.DeleteMyRunnerPool(ctx, pool) }},
 		{"PUT", "/api/v1/me/runner-pools/" + pool.String() + "/runners/" + runner.String(), func() error { _, err := c.AddMyRunnerToPool(ctx, pool, runner); return err }},
 		{"DELETE", "/api/v1/me/runner-pools/" + pool.String() + "/runners/" + runner.String(), func() error { return c.RemoveMyRunnerFromPool(ctx, pool, runner) }},
-		{"PUT", "/api/v1/runner-pools/" + pool.String() + "/runners/" + runner.String(), func() error { _, err := c.AddRunnerPoolRunner(ctx, pool, runner); return err }},
+		{"PUT", "/api/v1/runner-pools/" + pool.String() + "/runners/" + runner.String(), func() error { _, err := c.AddRunnerPoolRunner(ctx, pool, runner, ""); return err }},
 		{"DELETE", "/api/v1/runner-pools/" + pool.String() + "/runners/" + runner.String(), func() error { return c.RemoveRunnerPoolRunner(ctx, pool, runner) }},
 		{"GET", "/api/v1/runner-pool-defaults", func() error { _, err := c.GetOrgRunnerPoolDefaults(ctx); return err }},
 		{"PUT", "/api/v1/runner-pool-defaults", func() error { _, err := c.SetOrgRunnerPoolDefaults(ctx, client.RunnerPoolDefaults{}); return err }},
@@ -283,5 +284,27 @@ func TestOwnRunnerPoolFindsOrMakesTheCallersUserPool(t *testing.T) {
 	pools = append(pools, choice(other, client.RunnerPoolUser))
 	if _, _, err := c.OwnRunnerPool(ctx, "laptop"); err == nil || !strings.Contains(err.Error(), "2 of your pools") || created {
 		t.Fatalf("two own pools: err = %v created=%v, want a by-id refusal and nothing made", err, created)
+	}
+}
+
+// The runs namespace travels as the add's body, and an add naming none sends no body, as before.
+func TestAddRunnerPoolRunnerSendsTheRunsNamespace(t *testing.T) {
+	var body string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b := new(strings.Builder)
+		_, _ = io.Copy(b, r.Body)
+		body = b.String()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"pool_id":"` + uuid.Nil.String() + `","kind":"self_hosted","runs_namespace":"team-a"}`))
+	}))
+	defer srv.Close()
+	c := client.New(srv.URL, "t")
+	pool, runner := uuid.New(), uuid.New()
+	m, err := c.AddRunnerPoolRunner(context.Background(), pool, runner, "team-a")
+	if err != nil || body != `{"runs_namespace":"team-a"}` || m.RunsNamespace != "team-a" {
+		t.Errorf("add with a namespace = %+v, %v, sent %q", m, err, body)
+	}
+	if _, err := c.AddRunnerPoolRunner(context.Background(), pool, runner, ""); err != nil || body != "" {
+		t.Errorf("add without a namespace = %v, sent %q", err, body)
 	}
 }

@@ -362,7 +362,7 @@ resolves your drive the same way, in a dry run too:
 
 ## Your model connections
 
-- Add your own credential for a provider from Your account ▸ Your model
+- Add your own credential for a provider from Settings ▸ Your model
   connections in the console.
 - One row per provider your admin enabled for your
   agents, each with its own sign-in or key button.

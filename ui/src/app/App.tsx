@@ -129,6 +129,12 @@ const TemplatesScreen = React.lazy(() =>
     default: m.TemplatesScreen,
   })),
 );
+// The workloads Wardyn keeps running (0.10): /workloads in the User view, /admin/workloads in the Admin view.
+const WorkloadsScreen = React.lazy(() =>
+  import("./components/screens/workloads").then((m) => ({
+    default: m.WorkloadsScreen,
+  })),
+);
 const PermissionsScreen = React.lazy(() =>
   import("./components/screens/permissions").then((m) => ({
     default: m.PermissionsScreen,
@@ -192,6 +198,12 @@ const YourAccountScreen = React.lazy(() =>
 const CliSignInScreen = React.lazy(() =>
   import("./components/screens/cli-sign-in").then((m) => ({
     default: m.CliSignInScreen,
+  })),
+);
+// /open/{run}/{app}: the link people are given for an inbound app. Outside the setup gate, like /cli/sign-in.
+const OpenAppScreen = React.lazy(() =>
+  import("./components/screens/open-app").then((m) => ({
+    default: m.OpenAppScreen,
   })),
 );
 const WorkspacesScreen = React.lazy(() =>
@@ -872,6 +884,7 @@ export default function App() {
             element={<SetupRoute onDone={() => navigate("/runs")} status={setupStatus} />}
           />
           <Route path="/cli/sign-in" element={suspend(<CliSignInScreen />)} />
+          <Route path="/open/:run/:app" element={suspend(<OpenAppScreen />)} />
           <Route element={<RequireSetup status={setupStatus} />}>
             <Route
               path="/"
@@ -886,6 +899,7 @@ export default function App() {
             <Route path="/admin/runs/new" element={<Navigate to="/admin/runs" replace />} />
             <Route path="/admin/runs/:id" element={suspend(<RunDetailScreen />)} />
             <Route path="/admin/approvals" element={suspend(<ApprovalsScreen onChanged={refreshBadges} />)} />
+            <Route path="/admin/workloads" element={suspend(<WorkloadsScreen />)} />
             <Route path="/admin/people" element={suspend(<PeopleScreen />)} />
             <Route path="/admin/runners" element={suspend(<RunnersScreen />)} />
             <Route path="/admin/runners/pools/:id/edit" element={suspend(<PoolFormScreen scope="admin" />)} />
@@ -929,6 +943,7 @@ export default function App() {
               }
             />
             <Route path="/templates" element={suspend(<TemplatesScreen />)} />
+            <Route path="/workloads" element={suspend(<WorkloadsScreen />)} />
             <Route
               path="/approvals"
               element={

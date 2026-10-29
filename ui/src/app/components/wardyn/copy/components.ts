@@ -37,7 +37,7 @@ export const CUSTOM_COMPONENT = {
   KEEP: "Use it",
   KEEP_RUN: "For this run only",
   KEEP_SAVE: "Save to reuse",
-  KEEP_SAVE_HINT: "Saved under your name. You can edit or delete it under Your account.",
+  KEEP_SAVE_HINT: "Saved under your name. You can edit or delete it in Settings.",
 
   NAME: "Name",
   NAME_HINT_RUN: "Optional for this run only. It labels the row.",

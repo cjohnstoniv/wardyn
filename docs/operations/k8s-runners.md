@@ -87,7 +87,7 @@
    ```
 
 7. A second security operator, signed in as themselves (an API token cannot claim), finds the runner with `wardyn runner list --all` and claims it with `wardyn runner claim-org <runner-id> --fingerprint <fingerprint>` (`POST /api/v1/runners/{id}/claim-org`). An unclaimed runner expires after 24 hours.
-8. An admin adds the runner to an organisation pool with `wardyn runner pool add <pool> <runner>` (`PUT /api/v1/runner-pools/{pool}/runners/{runner}`). `wardyn runner pool remove`, or `DELETE` on the same path, takes it out. An organisation runner goes only into an organisation pool, and a runner serves one pool only.
+8. An admin adds the runner to an organisation pool with `wardyn runner pool add <pool> <runner>` (`PUT /api/v1/runner-pools/{pool}/runners/{runner}`). `wardyn runner pool remove`, or `DELETE` on the same path, takes it out. An organisation runner goes only into an organisation pool. It serves each runs namespace for one pool only: see [Several runs namespaces](#several-runs-namespaces).
 9. Confirm in *Admin → Runners* that the runner is Online, reports its architecture and shows the trust class "Organization cluster". Runnerd boots only on an `enforced` canary verdict, so a running pod has passed it.
 10. Delete the registration Secret. The chart mounts it optional, so restarts keep working.
 
@@ -103,6 +103,7 @@
 |---|---|
 | `org` | The organisation's public HTTPS URL (required) |
 | `runsNamespace` | The pre-existing runs namespace. Empty, or equal to the release namespace, fails the render (required) |
+| `extraRunsNamespaces` | More pre-existing runs namespaces beside `runsNamespace`, which stays the default: see [Several runs namespaces](#several-runs-namespaces). Each is unique and not the release namespace, or the render fails. Fit checks read the default quota only; tighter extra quotas refuse at pod create |
 | `sandbox.arch` | `amd64` or `arm64` (required): pinned as every run pod's `kubernetes.io/arch` selector |
 | `sandbox.maxPodLifetime` | Upper bound on both pods' `activeDeadlineSeconds`; default `168h` |
 | `registration.existingSecret` | The Secret holding the token under `token` (required) |
@@ -116,6 +117,7 @@
 | `egress.orgCIDRs`, `egress.extra`, `egress.hardDenyCIDRs` | The organisation egress rule, extra raw egress rules, and extra CIDRs every proxy denies |
 | `k8s.*` | Sandbox placement: `sandbox.nodeSelector`, `tolerations`, `affinity`, `priorityClassName`, labels, `runtimeClasses.CC2` and `CC3`, `imagePullSecret` |
 | `rbac.create` | `false` when a platform team applies the RBAC itself: see [RBAC order](#rbac-order) |
+| `workloads.namespaces` | Namespaces whose `WardynWorkload` resources runnerd watches (`WARDYN_RUNNERD_WORKLOAD_NAMESPACES`). Each gets a Role for `wardynworkloads` and `wardynworkloads/status`, which is patch-only. The CRD is applied by hand on an upgrade: see [the WardynWorkload resource](workloads.md#kubernetes-the-wardynworkload-resource) |
 
 - `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL` and `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY` have no values. The chart refuses `k8s.allowUnenforcedNetPol` and `k8s.ackAmbientDefaultDeny`, and runnerd refuses to boot with either variable set.
 - The chart passes flags and `WARDYN_RUNNERD_*` settings to runnerd; every one is listed in [ENV.md](../ENV.md).
@@ -131,7 +133,7 @@
 - Only a security operator changes a class: `wardyn runner trust <runner-id> <class> --reason <text>` (`PUT /api/v1/runners/{id}/trust`), or the trust section of *Admin → Runners*. It goes through the governance-change path and is audited `runner.trust.write`.
 - An organisation runner is always `org_cluster` and cannot be changed. The write moves a person's runner between `personal` and `managed_device` only.
 - A runner cannot raise its own class: the registration payload, capabilities and posture never feed the column.
-- Trusting `org_cluster` means trusting that cluster's administrators with the per-run and keystore Secrets, etcd backups and the per-run MITM key.
+- Trusting `org_cluster` means trusting that cluster's administrators with the per-run and keystore Secrets, etcd backups and the per-run MITM key, and to launch as any service identity bound to the runner's pools ([Workloads](workloads.md#bind-a-namespace)).
 - The delivery policy can differ per class (`by_trust`, falling back to the global row). A run is judged at the highest class among its eligible runners and bound to a runner of that class.
 - A downgrade does not pull values already delivered. A resident delivery or revive that finds the class changed is refused `runner_trust_changed`.
 - The CC3 floor is unchanged: no runner takes a resident credential for a CC3 run.
@@ -141,12 +143,13 @@
 | Object | Rule |
 |---|---|
 | Deployment | One replica, `Recreate`. Never raise the replicas: `serve.lock` keeps one writer |
-| RBAC, runs namespace | The control-plane chart's sandbox Role plus `pods: patch` (for the stop-proof finalizer). No `services`, no `watch` |
+| RBAC, each runs namespace | The control-plane chart's sandbox Role plus `pods: patch` (for the stop-proof finalizer). No `services`, no `watch` |
+| RBAC, each workload namespace | `wardynworkloads` `get`, `list` and `watch`, and `wardynworkloads/status` `patch`. No Secret, nothing cluster-wide |
 | RBAC, runner namespace | `secrets: create, get, delete, deletecollection` |
 | RBAC, cluster | `runtimeclasses: get` and `nodes: list` only |
 | Agent pod policy | Egress only to its proxy |
 | Proxy pod policy | Egress as before, plus runnerd on the relay and sink ports |
-| runnerd ingress | Only from proxy pods of the runs namespace, on the relay and sink ports |
+| runnerd ingress | Only from proxy pods of the runs namespaces, on the relay and sink ports |
 | runnerd egress | DNS, the apiserver, and the organisation: port `relay.servicePort` to `egress.orgCIDRs` |
 | Runs namespace | No default-deny policy: it would trip the canary |
 
@@ -168,6 +171,29 @@
 - A mixed cluster installs two releases. Each takes its own release name, registration Secret (a fresh token) and runs namespace.
 - A shared runs namespace cannot work: the foreign-object check refuses a namespace holding another runner's objects.
 - A `kubernetes.io/arch` in `k8s.sandbox.nodeSelector` of another architecture refuses boot. A node affinity that excludes the architecture is not checked: the pods stay `Pending` instead.
+
+## Several runs namespaces
+
+- One runner can place runs in several runs namespaces, so a pool for each team keeps its runs in the team's own namespace. The first namespace, `runsNamespace`, is the runner's default.
+- One runnerd reaches every namespace it lists. A team that needs hard separation from another keeps its own runner and runs namespace.
+
+1. Create each extra namespace as you created the first, dedicated to this runner.
+2. List it under `extraRunsNamespaces` and run `helm upgrade`. The chart gives each namespace the same Role, RoleBinding and ingress rule, and passes one `--runs-namespace` flag for each.
+3. Add the runner to each team's pool with that team's namespace: `wardyn runner pool add <pool> <runner> --runs-namespace team-a`. Leave the flag out for the runner's default namespace.
+
+| Rule | Result |
+|---|---|
+| The namespace is fixed when the runner joins the pool. To change it, remove the runner and add it again | A different namespace for a runner already in the pool is refused `runner_pool_member_mismatch` (`422`) |
+| A runner serves each named namespace for one pool | "This runner already serves {namespace} for another pool." |
+| A membership with no namespace uses the default and excludes every other pool | "This organization runner is already in another pool. Remove it from that pool first." |
+| A name that is not a namespace name: lowercase letters, digits and `-`, at most 63 characters | `400` |
+| A runner that does not advertise the namespace, such as one older than this release, is not eligible for it | The run is refused `runner_pool_no_eligible_member` |
+| A namespace the runner no longer lists | The create is refused at dispatch, and runnerd refuses it as `runs_namespace_not_served` |
+
+- Boot runs the access review, the foreign-object check and the egress canary for every listed namespace. A namespace holding another runner's objects, or one where the canary is not `enforced`, refuses boot.
+- Boot is also refused while a live run is recorded in a namespace the runner no longer lists, since runnerd could not stop its pods. List the namespace again until those runs end.
+- The pool's use policy decides who may use each namespace. With second-human governance on, removing the runner from a pool that carries a use policy is held for a super admin: see [Governance writes](governance-writes.md).
+- `runner_pool.runner.attach` and the run's placement record carry `runs_namespace`.
 
 ## Upgrade
 

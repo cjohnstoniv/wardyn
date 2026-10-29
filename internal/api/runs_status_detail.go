@@ -162,9 +162,11 @@ func (s *Server) runStatusDetailWriter(ctx context.Context, runID uuid.UUID) (on
 
 // projectStatusDetailFor is projectStatusDetail for the reader of r, the entry
 // every route serving a run uses: a failure hint quoting the run's recording
-// keeps its quote only for a reader who could open it (projectModelAccessQuote).
+// keeps its quote only for a reader who could open it (projectModelAccessQuote),
+// and a service's health no one has read lately is unknown (projectServiceHealth).
 func (s *Server) projectStatusDetailFor(r *http.Request, runs []types.AgentRun) {
 	projectStatusDetail(runs)
+	projectServiceHealth(runs, s.cfg.Now())
 	s.projectModelAccessQuote(r, runs)
 	if err := s.projectRunQueue(r.Context(), runs); err != nil {
 		slog.WarnContext(r.Context(), "wardynd: project run queue", slog.Any("err", err)) // the place is advisory: the run is served without it

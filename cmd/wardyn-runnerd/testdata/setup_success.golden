@@ -16,5 +16,5 @@ registered MEASURED
   limits: MEASURED
 Started the wardyn-runnerd user service. Logs: journalctl --user -u wardyn-runnerd
 To keep it running when you are logged out: loginctl enable-linger $USER
-Key fingerprint MEASURED. Claim this runner as its owner in the console (Your account → My runner), or run
+Key fingerprint MEASURED. Claim this runner as its owner in the console (Settings → My runner), or run
   WARDYN_TOKEN=<your personal API token> wardyn runner claim --pool <name> --default

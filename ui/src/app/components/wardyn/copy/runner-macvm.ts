@@ -88,9 +88,9 @@ export const MACVM_R = {
   /** MV-R46, failed: developer tools */
   R46: (error: string) => `Installing Apple's Command Line Tools in the base image failed: ${error}. macOS VMs on this Mac offer only Your own tools until it succeeds.`,
   /** MV-R47, per-run memory below the minimum */
-  R47: (n: string, m: string, runner: string) => `Per-run memory on this runner is ${n} GB; a macOS VM needs at least ${m} GB. Its owner raises it to ${m} GB or more in Your account → My runner, or with \`wardyn runner set ${runner} --per-run-memory ${m}\`.`,
+  R47: (n: string, m: string, runner: string) => `Per-run memory on this runner is ${n} GB; a macOS VM needs at least ${m} GB. Its owner raises it to ${m} GB or more in Settings → My runner, or with \`wardyn runner set ${runner} --per-run-memory ${m}\`.`,
   /** MV-R48, per-run CPU below the minimum */
-  R48: (n: string, m: string, runner: string) => `Per-run CPU on this runner is ${n} CPUs; a macOS VM needs at least ${m}. Its owner raises it to ${m} or more in Your account → My runner, or with \`wardyn runner set ${runner} --per-run-cpu ${m}\`.`,
+  R48: (n: string, m: string, runner: string) => `Per-run CPU on this runner is ${n} CPUs; a macOS VM needs at least ${m}. Its owner raises it to ${m} or more in Settings → My runner, or with \`wardyn runner set ${runner} --per-run-cpu ${m}\`.`,
   /** Not on a board: the approved ledger refusal (cmd/wardyn-runnerd macOSVMLedgerDamaged), worded here from reason ledger_damaged */
   LEDGER_DAMAGED: "This Mac's macOS VM ledger is missing or damaged. Reinstall the Wardyn runner package.",
   /** MV-R49, needs a logged-in session */

@@ -584,7 +584,7 @@ export function LiveApprovals({
               size="sm"
               variant="info"
               className="h-7 rounded-r-none border-r-0"
-              disabled={!canDecide(a) || busy === a.id}
+              disabled={!canDecide(a) || !!a.walls_block || busy === a.id}
               onClick={() => decide(a, true)}
             >
               {busy === a.id && decidingSpinner ? (
@@ -594,7 +594,7 @@ export function LiveApprovals({
               )}{" "}
               Approve
             </Button>
-            {scoped && (
+            {scoped && !a.walls_block && (
               <ScopeMenu
                 verb="approve"
                 hasWorkspace={hasWorkspace}

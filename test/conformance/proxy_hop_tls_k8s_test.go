@@ -49,7 +49,7 @@ func TestProxyHopTLSK8s(t *testing.T) {
 		ns = "default"
 	}
 	restCfg, cs := k8sTestClient(t)
-	sub, err := k8s.New(k8s.Config{Namespace: ns, ProxyImage: proxyImage})
+	sub, err := k8s.New(k8s.Config{Namespaces: []string{ns}, ProxyImage: proxyImage})
 	if err != nil {
 		t.Fatalf("k8s.New: %v (this cluster's CNI must enforce NetworkPolicy — see ci.yml's Calico step)", err)
 	}

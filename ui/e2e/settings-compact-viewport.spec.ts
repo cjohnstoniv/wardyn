@@ -90,7 +90,7 @@ test.describe("Settings and Your account fit their viewport budget collapsed (#1
     }
     // The two cards that only link elsewhere are rows with a link, never an accordion (#3048).
     for (const [title, href] of [["Workspace providers", "/admin/providers"], ["User drives", "/admin/drives"]]) {
-      await expect(page.getByRole("link", { name: new RegExp(`^${title}( |$)`) })).toHaveAttribute("href", new RegExp(`${href}$`));
+      await expect(page.getByRole("main").getByRole("link", { name: new RegExp(`^${title}( |$)`) })).toHaveAttribute("href", new RegExp(`${href}$`));
     }
 
     expect(await mainScrolls(page)).toBe(false);

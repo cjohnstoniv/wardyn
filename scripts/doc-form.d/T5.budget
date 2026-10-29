@@ -1,0 +1,7 @@
+# Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the measured prose words, so growth fails.
+# docs/EXTENDING.md 837 measured (rc.8 E5): the layers, the extension points, the closed sets' checklists, and where a service, inbound access and a workload plug in.
+docs/EXTENDING.md=837 share=3
+# docs/design/README.md 221 measured (rc.8 E5): the index of design notes and the rule for telling a current one from a record.
+docs/design/README.md=221 share=1
+# docs/operations/high-availability.md 549 measured (rc.8 E5): blockers B1 to B11, each with its state, and the verdict to keep one replica with registered runners.
+docs/operations/high-availability.md=549 share=6

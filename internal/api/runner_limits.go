@@ -145,11 +145,12 @@ func (s *Server) updateRunnerLimits(w http.ResponseWriter, r *http.Request, kind
 	// reconnect with no bound: end its session and the fresh one carries it. Only a changed pair does, so
 	// an update of the runs at once, the totals or the disk, or a repeat of the same limits, leaves the
 	// session (and its streams) alone. A runner on another replica is ended by that replica's stored-row
-	// recheck, and one offline reads the pair when it next connects.
+	// recheck or the notice below, and one offline reads the pair when it next connects.
 	if perRunPairChanged(before, row.Limits) {
 		if err := s.runnerHub(rs).Goaway(r.Context(), id); err != nil {
 			slog.WarnContext(r.Context(), "wardynd: a runner's new limits wait for its next session", slog.String("runner_id", id.String()), slog.Any("err", err))
 		}
+		s.announceRunnerGoaway(id)
 	}
 	if views, ok := s.runnerViews(w, r, rs, []types.Runner{row}, kind == types.RunnerOwnerOrg); ok {
 		writeJSON(w, http.StatusOK, views[0])

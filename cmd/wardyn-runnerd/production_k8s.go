@@ -43,7 +43,7 @@ func k8sRunnerHooks(ctx context.Context, identity runneridentity.Identity, state
 	if opts.proxyImage == "" {
 		return runnerRuntime{}, errors.New("runner serve requires --proxy-image")
 	}
-	if opts.runsNamespace == "" || opts.relayService == "" {
+	if len(opts.runsNamespaces) == 0 || opts.relayService == "" {
 		return runnerRuntime{}, errors.New("--substrate=k8s requires --runs-namespace and --relay-service")
 	}
 	if err := errors.Join(checkArch(opts.arch), checkMaxPodLifetime(opts.maxPodLifetime)); err != nil {
@@ -65,8 +65,8 @@ func k8sRunnerHooks(ctx context.Context, identity runneridentity.Identity, state
 		return runnerRuntime{}, fmt.Errorf("read runnerd's own namespace: %w", err)
 	}
 	ownNS := strings.TrimSpace(string(raw))
-	if ownNS == "" || ownNS == opts.runsNamespace {
-		return runnerRuntime{}, fmt.Errorf("--runs-namespace %q must be a dedicated namespace, not runnerd's own (%q)", opts.runsNamespace, ownNS)
+	if err := checkRunsNamespaces(opts.runsNamespaces, ownNS); err != nil {
+		return runnerRuntime{}, err
 	}
 	addrs, err := net.DefaultResolver.LookupHost(ctx, opts.relayService)
 	if err != nil || len(addrs) != 1 {
@@ -108,7 +108,7 @@ func k8sRunnerHooks(ctx context.Context, identity runneridentity.Identity, state
 		return runnerRuntime{}, errors.Join(fmt.Errorf("decision sink did not start: %w", err), relay.Close())
 	}
 	drv, err = k8s.NewRunner(substrate.Deps{ProxyImage: opts.proxyImage, ConfinementRuntimes: env.confinement, Record: record}, func(c *k8s.Config) {
-		c.Namespace = opts.runsNamespace
+		c.Namespaces = opts.runsNamespaces
 		c.RunnerID = runnerID
 		c.ControlPlaneRelay = relay.Ensure
 		c.RunnerdPeer = &k8s.RunnerdPeer{Namespace: ownNS, PodLabels: env.podSelector, RelayPort: env.relayPort, SinkPort: env.sink}
@@ -132,8 +132,17 @@ func k8sRunnerHooks(ctx context.Context, identity runneridentity.Identity, state
 		linuxVM = enableK8sLinuxVM(ctx, drv)
 	}
 	ks := keystore.NewK8s(drv.Clientset(), ownNS, runnerID)
+	// The WardynWorkload watcher: nil unless the chart lists workload namespaces (design T3 §2.5).
+	workloads, err := newClusterWorkloadWatcher(ctx, env.workloadNamespaces)
+	if err != nil {
+		return runnerRuntime{}, errors.Join(err, relay.Close(), sink.Close())
+	}
 	started := func(ctx context.Context, m *offline.Manager) error {
 		ev.m = m
+		// A live run in a namespace no longer listed refuses boot; the rest are mapped to theirs.
+		if err := drv.CheckRunNamespaces(ctx, m.EvidenceRunIDs()); err != nil {
+			return err
+		}
 		// Every fence, with its IP refusal, is in the relay before Online can set its peer (R4-M1).
 		if err := drv.ReplayFences(m.EvidenceRunIDs()); err != nil {
 			return err
@@ -154,20 +163,23 @@ func k8sRunnerHooks(ctx context.Context, identity runneridentity.Identity, state
 		return nil
 	}
 	rt, err := runnerRuntimeWith(ctx, identity, stateDir, drv, k8s.SandboxRef, relay, unknownCapacity, runtimeExtras{
-		keystore:  runneragent.Keystore{Set: ks.Set, Get: ks.Get, Delete: ks.Delete, DeleteAll: ks.DeleteAll, Precheck: ks.Precheck},
-		noPosture: true,
-		arch:      opts.arch,
-		options:   offline.Options{ProxySelfLapses: true, Tick: sink.Tick},
-		started:   started,
-		closeAlso: sink.Close,
-		linuxVM:   linuxVM,
-		report:    connectReport{log: opts.offline},
+		keystore:       runneragent.Keystore{Set: ks.Set, Get: ks.Get, Delete: ks.Delete, DeleteAll: ks.DeleteAll, Precheck: ks.Precheck},
+		noPosture:      true,
+		arch:           opts.arch,
+		options:        offline.Options{ProxySelfLapses: true, Tick: sink.Tick},
+		started:        started,
+		closeAlso:      sink.Close,
+		linuxVM:        linuxVM,
+		report:         connectReport{log: opts.offline},
+		runsNamespaces: opts.runsNamespaces,
+		workloadStatus: workloads.statusFunc(),
 	})
 	if err != nil {
 		return runnerRuntime{}, errors.Join(err, relay.Close(), sink.Close())
 	}
+	rt = workloads.attach(rt)
 	checks := errors.Join(
-		drv.CheckRunnerAccess(ctx, ownNS),
+		drv.CheckRunnerAccess(ctx, ownNS, env.workloadNamespaces...),
 		drv.CheckForeignObjects(ctx),
 		drv.CheckKubeletFloor(ctx, opts.arch),
 	)
@@ -179,7 +191,7 @@ func k8sRunnerHooks(ctx context.Context, identity runneridentity.Identity, state
 	if checks != nil {
 		return runnerRuntime{}, errors.Join(checks, rt.close())
 	}
-	slog.InfoContext(ctx, "k8s runner ready to connect", "runs_namespace", opts.runsNamespace, "relay", clusterIP, "listen", env.podIP)
+	slog.InfoContext(ctx, "k8s runner ready to connect", "runs_namespaces", opts.runsNamespaces, "relay", clusterIP, "listen", env.podIP)
 	return rt, nil
 }
 

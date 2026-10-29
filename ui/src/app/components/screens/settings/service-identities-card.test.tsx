@@ -59,6 +59,7 @@ beforeEach(() => {
     tok("a1", "nightly-runner", { last_used_at: aheadByHours(-1) }),
     tok("a2", "nightly-runner-old", { created_at: aheadByHours(-80 * 24), expires_at: aheadByHours(-48) }),
     tok("a3", "trial", { created_at: aheadByHours(-40 * 24), revoked_at: aheadByHours(-38 * 24) }),
+    tok("a4", "billing-callers", { inbound: true, created_at: aheadByHours(-2 * 24), expires_at: aheadByHours(88 * 24) }),
   ];
   route = (method, path) => {
     if (method === "GET" && path.startsWith("/api/v1/me/service-identities/ci-nightly/tokens")) return json(tokens);
@@ -130,7 +131,10 @@ describe("ServiceIdentitiesCard", () => {
     expect(within(table).getByText(T.EXPIRED_AT("2 days ago"))).toBeInTheDocument();
     expect(within(table).getByText(T.REVOKED_AT("38 days ago"))).toBeInTheDocument();
     expect(within(table).getAllByText(T.NEVER).length).toBeGreaterThan(0);
-    expect(within(table).getAllByRole("button", { name: /^Revoke / })).toHaveLength(1);
+    expect(within(table).getAllByRole("button", { name: /^Revoke / })).toHaveLength(2);
+    // Only the inbound token wears the tag.
+    expect(within(table).getAllByText(T.INBOUND_ONLY)).toHaveLength(1);
+    expect(within(within(table).getByText("billing-callers").closest("tr") as HTMLElement).getByText(T.INBOUND_ONLY)).toBeInTheDocument();
     await user.click(row("ci-nightly").getByRole("button", { name: T.HIDE_TOKENS_LABEL("ci-nightly") }));
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
   });

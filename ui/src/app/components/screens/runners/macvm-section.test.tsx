@@ -107,8 +107,8 @@ describe("M-R1 runner drawer section", () => {
   it("16: per-run size below the minimum, memory first and the CPU variant beneath", () => {
     const { container } = section(ready, { perRun: { cpu_millis: 2000, memory_mib: 6144, disk_mib: 0 } });
     expect(screen.getByText("Not offered")).toBeInTheDocument();
-    expect(container.textContent).toContain("Per-run memory on this runner is 6 GB; a macOS VM needs at least 8 GB. Its owner raises it to 8 GB or more in Your account → My runner, or with wardyn runner set mac-studio-07 --per-run-memory 8.");
-    expect(container.textContent).toContain("Per-run CPU on this runner is 2 CPUs; a macOS VM needs at least 4. Its owner raises it to 4 or more in Your account → My runner, or with wardyn runner set mac-studio-07 --per-run-cpu 4.");
+    expect(container.textContent).toContain("Per-run memory on this runner is 6 GB; a macOS VM needs at least 8 GB. Its owner raises it to 8 GB or more in Settings → My runner, or with wardyn runner set mac-studio-07 --per-run-memory 8.");
+    expect(container.textContent).toContain("Per-run CPU on this runner is 2 CPUs; a macOS VM needs at least 4. Its owner raises it to 4 or more in Settings → My runner, or with wardyn runner set mac-studio-07 --per-run-cpu 4.");
   });
   it("19 / R10: not offered words the ledger reason from the approved text, not the runner's sentence", () => {
     const { container } = section({ max: 0, reason: "ledger_damaged", refusal: "a sentence only the runner wrote", base: { state: "none" } });

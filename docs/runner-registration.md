@@ -50,7 +50,7 @@ From 0.9 the control plane places runs on a claimed runner through its owner's u
 2. On the runner host, run `wardyn-runnerd register --org https://wardyn.example.com --token-file ./registration-token --name my-laptop`. The runner generates its key locally and prints its fingerprint, what it measured and the limits it sent (see [Runner limits](#runner-limits)).
 3. Under that same owner's personal account, run `wardyn runner claim --url https://wardyn.example.com --pool NAME --default`. The CLI reads the local runner identity and confirms its fingerprint. An administrator's personal account can claim its own runner; administrator credentials cannot claim for another person.
 
-The claim runs with the person's own API token in `WARDYN_TOKEN`, or in *Your account → My runner* by pasting the fingerprint the runner printed. `--pool` puts the runner in your own pool of that name, made if you have none, and `--default` makes it your default; the console claim dialog has the same pool field and "Make it my default pool" box. A claimed runner in none of your pools runs nothing (`placement_unavailable`).
+The claim runs with the person's own API token in `WARDYN_TOKEN`, or in *Settings → My runner* by pasting the fingerprint the runner printed. `--pool` puts the runner in your own pool of that name, made if you have none, and `--default` makes it your default; the console claim dialog has the same pool field and "Make it my default pool" box. A claimed runner in none of your pools runs nothing (`placement_unavailable`).
 
 A refused claim is `403` `runner_claim_mismatch`. Once the owner matched, its message names the cause:
 
@@ -207,7 +207,7 @@ On a computer that is not a runner, download `wardyn-<os>-<arch>` alone.
 |---|---|
 | The person | `wardyn runner setup --pool Laptop --default`, after `wardyn login https://wardyn.example.com` ([`wardyn runner setup`](#wardyn-runner-setup)) |
 | The person, by hand | `WARDYN_TOKEN=<your personal API token> wardyn-runnerd setup --org https://wardyn.example.com --token-file ./registration-token --claim --pool Laptop --default` |
-| Device management (MDM) | Push the binary and run `wardyn-runnerd setup --org https://wardyn.example.com --token-file ./registration-token` without `--claim`. The person claims later in *Your account → My runner*, or with `wardyn runner claim --pool Laptop --default`. |
+| Device management (MDM) | Push the binary and run `wardyn-runnerd setup --org https://wardyn.example.com --token-file ./registration-token` without `--claim`. The person claims later in *Settings → My runner*, or with `wardyn runner claim --pool Laptop --default`. |
 
 1. Download the install from the table above, and verify it against the signed `SHA256SUMS` as described in [Verify the release assets](VERIFY.md#5-verify-the-release-assets), running `sha256sum -c --ignore-missing SHA256SUMS` since you hold one file.
 2. Save the registration token in a private file. Mint it with `wardyn runner token`, or ask an administrator.

@@ -39,6 +39,11 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- .Values.image.tag | default .Chart.AppVersion -}}
 {{- end -}}
 
+{{/* Every namespace runs are placed in, the default (runsNamespace) first, as a JSON list. */}}
+{{- define "runnerd.runsNamespaces" -}}
+{{- toJson (prepend (.Values.extraRunsNamespaces | default list) .Values.runsNamespace) -}}
+{{- end -}}
+
 {{- define "runnerd.validate" -}}
 {{- if not .Values.org -}}
 {{- fail "wardyn-runnerd: org is required (the organisation's public HTTPS URL)." -}}
@@ -48,6 +53,27 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 {{- if eq .Values.runsNamespace .Release.Namespace -}}
 {{- fail "wardyn-runnerd: runsNamespace must not be the release namespace: a run pod there could name runnerd's ServiceAccount." -}}
+{{- end -}}
+{{- $runs := include "runnerd.runsNamespaces" . | fromJsonArray -}}
+{{- range $i, $ns := $runs -}}
+{{- if not (and $ns (kindIs "string" $ns)) -}}
+{{- fail (printf "wardyn-runnerd: extraRunsNamespaces entry %v is not a namespace name." $ns) -}}
+{{- end -}}
+{{- if eq $ns $.Release.Namespace -}}
+{{- fail (printf "wardyn-runnerd: runs namespace %q must not be the release namespace: a run pod there could name runnerd's ServiceAccount." $ns) -}}
+{{- end -}}
+{{- end -}}
+{{- if ne (len $runs) (len (uniq $runs)) -}}
+{{- fail (printf "wardyn-runnerd: runsNamespace and extraRunsNamespaces must be unique, got %s." (join ", " $runs)) -}}
+{{- end -}}
+{{- $workloads := .Values.workloads.namespaces | default list -}}
+{{- range $ns := $workloads -}}
+{{- if not (and $ns (kindIs "string" $ns)) -}}
+{{- fail (printf "wardyn-runnerd: workloads.namespaces entry %v is not a namespace name." $ns) -}}
+{{- end -}}
+{{- end -}}
+{{- if ne (len $workloads) (len (uniq $workloads)) -}}
+{{- fail (printf "wardyn-runnerd: workloads.namespaces must be unique, got %s." (join ", " $workloads)) -}}
 {{- end -}}
 {{- if not (has .Values.sandbox.arch (list "amd64" "arm64")) -}}
 {{- fail "wardyn-runnerd: sandbox.arch must be amd64 or arm64; a mixed cluster installs one release per arch." -}}

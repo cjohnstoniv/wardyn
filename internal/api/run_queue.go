@@ -392,6 +392,7 @@ func (q queuedCreate) warnings(s *Server, r *http.Request, created types.AgentRu
 	warnings = append(warnings, s.repoSourceWarnings(ctx, created.ID, q.f.spec, q.req)...)
 	warnings = append(warnings, q.f.fitWarnings...)
 	warnings = append(warnings, q.f.end.warnings(created)...)
+	warnings = append(warnings, queuedServiceWarnings(created, q.f.ceiling.Limits.RunLimits, q.f.end)...)
 	warnings, _ = appendCredentialConfinementAdvisory(warnings, q.f.spec, q.f.enforced, q.f.modelCred.Kind)
 	return append(warnings, noModelAccessWarning(q.req, q.f.mpChoice)...)
 }

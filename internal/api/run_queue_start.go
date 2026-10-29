@@ -173,13 +173,21 @@ func (st *queuedStart) bind(a queueAuthority) error {
 	st.auth = a
 	st.base = a.context(st.daemon)
 	choice := contextChoice{RunIn: st.launch.RunIn, OwningUnits: st.launch.OwningUnits}
-	st.ctx = withPromotedStart(withCeilingMemo(withCapBatch(withContextChoice(a.context(st.prep), choice))), st.run.ID, st.run.RunnerID, st.run.RunnerPoolExecutor, st.launch.NoLocal)
+	st.ctx = withPromotedStart(bindAuthority(st.prep, a, choice), st.run.ID, st.run.RunnerID, st.run.RunnerPoolExecutor, st.launch.NoLocal)
 	r, err := http.NewRequestWithContext(st.ctx, http.MethodPost, "/api/v1/runs", nil)
 	if err != nil {
 		return err
 	}
 	st.r = r
 	return nil
+}
+
+// bindAuthority puts a on ctx with the memos a request carries, so a launch made without the owner's
+// session resolves the ceiling, the capability rows and the pool catalogue for a as a request of theirs
+// would. ctx must carry no other caller's identity. The queue start binds its stored authority with it,
+// and a workload launch acting as a service identity binds that identity's (serviceLaunchRequest).
+func bindAuthority(ctx context.Context, a queueAuthority, choice contextChoice) context.Context {
+	return withCeilingMemo(withCapBatch(withContextChoice(a.context(ctx), choice)))
 }
 
 // runQueuedStart is the table of section 7: the owner's standing, the profile, the doors, the policy,

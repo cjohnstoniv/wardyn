@@ -89,6 +89,19 @@ export const RUNS_FILTERS = {
   WORKSPACE_CHIP: (w: string) => `Workspace · ${w}`,
 } as const;
 
+// R17-N3: the shape segments above the filter bar, each with its count. The labels and the Services
+// empty state are the approved board's (owner change: "Environments", not "Developer sandboxes").
+// docs/design/runs-filters-canon.md freezes them.
+export const RUNS_SEGMENTS = {
+  LABEL: "Run shape",
+  ALL: "All",
+  AGENT_TASKS: "Agent tasks",
+  ENVIRONMENTS: "Environments",
+  APPS: "Apps & scripts",
+  SERVICES: "Services",
+  SERVICES_EMPTY: "No services yet. Start one with Keep it running on an Automation / script run.",
+} as const;
+
 // #3041, phone only: the search box keeps the row and everything else sits in
 // a bottom sheet. Strings are the approved R6 Run phone board's or derived from
 // it; docs/design/runs-filters-canon.md freezes them.

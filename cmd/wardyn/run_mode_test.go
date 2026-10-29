@@ -7,7 +7,9 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
@@ -27,6 +29,15 @@ func TestApplyRunModeFlags(t *testing.T) {
 				Tools:    []sdk.IncludedTool{{ID: "claude-code", Kind: sdk.IncludedToolHarness, ModelProvider: "bedrock-team"}}}, ""},
 		{"a background command", sdk.CreateRunRequest{}, runModeFlags{experience: "background", command: "make test"},
 			sdk.CreateRunRequest{ModeContract: sdk.RunModeContractV09, Experience: sdk.ExperienceBackground, Workload: &sdk.RunWorkload{Kind: sdk.WorkloadCommand, Command: "make test"}}, ""},
+		{"a service with a health check", sdk.CreateRunRequest{}, runModeFlags{experience: "background", command: "node app.js", service: true, restart: "never", port: 8080, healthPath: "/healthz", healthEvery: 20 * time.Second, healthFailures: 4},
+			sdk.CreateRunRequest{ModeContract: sdk.RunModeContractV09, Experience: sdk.ExperienceBackground, Workload: &sdk.RunWorkload{Kind: sdk.WorkloadCommand, Command: "node app.js"},
+				Service: &types.RunService{Restart: types.ServiceRestartNever, Port: 8080, Health: &types.ServiceHealth{Path: "/healthz", IntervalSec: 20, FailureThreshold: 4}}}, ""},
+		{"a bare service leaves every default to the server", sdk.CreateRunRequest{}, runModeFlags{experience: "background", command: "make serve", service: true, restart: "on-failure"},
+			sdk.CreateRunRequest{ModeContract: sdk.RunModeContractV09, Experience: sdk.ExperienceBackground, Workload: &sdk.RunWorkload{Kind: sdk.WorkloadCommand, Command: "make serve"},
+				Service: &types.RunService{Restart: types.ServiceRestartOnFailure}}, ""},
+		{"a service on a port with a TCP check", sdk.CreateRunRequest{}, runModeFlags{experience: "background", command: "make serve", service: true, port: 80, healthFailures: 2},
+			sdk.CreateRunRequest{ModeContract: sdk.RunModeContractV09, Experience: sdk.ExperienceBackground, Workload: &sdk.RunWorkload{Kind: sdk.WorkloadCommand, Command: "make serve"},
+				Service: &types.RunService{Port: 80, Health: &types.ServiceHealth{FailureThreshold: 2}}}, ""},
 		{"an interactive tool and its startup", sdk.CreateRunRequest{Agent: "claude-code"}, runModeFlags{experience: "interactive", startup: "harness:claude-code", startFolder: "image-default"},
 			sdk.CreateRunRequest{ModeContract: sdk.RunModeContractV09, Experience: sdk.ExperienceInteractive, Tools: []sdk.IncludedTool{{ID: "claude-code", Kind: sdk.IncludedToolHarness}},
 				Startup: &sdk.RunStartup{Kind: sdk.StartupHarness, Tool: "claude-code"}, StartFolder: &sdk.StartFolder{Kind: sdk.StartFolderImageDefault}}, ""},
@@ -53,6 +64,13 @@ func TestApplyRunModeFlags(t *testing.T) {
 		{"an interactive provider goes with --agent or in --tool", sdk.CreateRunRequest{ModelProvider: "bedrock-team"}, runModeFlags{experience: "interactive", tools: []string{"claude-code"}}, sdk.CreateRunRequest{}, "ID=MODEL_PROVIDER"},
 		{"a background command has no model provider", sdk.CreateRunRequest{ModelProvider: "bedrock-team"}, runModeFlags{experience: "background", command: "make"}, sdk.CreateRunRequest{}, "--model-provider"},
 		{"a background task names its provider with its agent", sdk.CreateRunRequest{Task: "fix", ModelProvider: "bedrock-team"}, runModeFlags{experience: "background"}, sdk.CreateRunRequest{}, "--model-provider"},
+		{"a service flag alone is refused: the mode is never inferred", sdk.CreateRunRequest{}, runModeFlags{service: true}, sdk.CreateRunRequest{}, "never inferred"},
+		{"a service needs a command", sdk.CreateRunRequest{Agent: "claude-code", Task: "t"}, runModeFlags{experience: "background", service: true}, sdk.CreateRunRequest{}, "add --command"},
+		{"a service flag needs --service", sdk.CreateRunRequest{}, runModeFlags{experience: "background", command: "make", port: 80}, sdk.CreateRunRequest{}, "add --service"},
+		{"a restart policy is closed", sdk.CreateRunRequest{}, runModeFlags{experience: "background", command: "make", service: true, restart: "always"}, sdk.CreateRunRequest{}, "on-failure or never"},
+		{"the health flags need a port", sdk.CreateRunRequest{}, runModeFlags{experience: "background", command: "make", service: true, healthPath: "/healthz"}, sdk.CreateRunRequest{}, "add --port"},
+		{"a health interval is whole seconds", sdk.CreateRunRequest{}, runModeFlags{experience: "background", command: "make", service: true, port: 80, healthEvery: 1500 * time.Millisecond}, sdk.CreateRunRequest{}, "whole number of seconds"},
+		{"an interactive run is not a service", sdk.CreateRunRequest{}, runModeFlags{experience: "interactive", service: true}, sdk.CreateRunRequest{}, "background run"},
 		{"a startup kind is closed", sdk.CreateRunRequest{}, runModeFlags{experience: "interactive", startup: "both:x"}, sdk.CreateRunRequest{}, "not none"},
 		{"a start folder needs an attachment", sdk.CreateRunRequest{}, runModeFlags{startFolder: ":src"}, sdk.CreateRunRequest{}, "ATTACHMENT"},
 	} {

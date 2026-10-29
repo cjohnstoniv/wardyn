@@ -60,7 +60,7 @@ func (d *Driver) CheckFit(ctx context.Context, res runner.Resources) (runner.Fit
 	fit := runner.Fit{Nodes: runner.ReadSkipped}
 
 	// A list, never a get: every quota that applies to a pod counts against it, and a get needs a name.
-	quotas, err := d.clientset.CoreV1().ResourceQuotas(d.cfg.Namespace).List(ctx, metav1.ListOptions{})
+	quotas, err := d.clientset.CoreV1().ResourceQuotas(d.defaultNamespace()).List(ctx, metav1.ListOptions{})
 	fit.Quotas = readState(err)
 	if err == nil {
 		fit.Quota = quotaFits(quotas.Items, pods)

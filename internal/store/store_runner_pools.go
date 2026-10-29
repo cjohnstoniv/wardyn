@@ -30,8 +30,8 @@ type RunnerPoolStore interface {
 	// every person's user pools too, for oversight.
 	ListRunnerPoolCatalogue(ctx context.Context, owner string, all bool) ([]RunnerPoolCatalogueRow, error)
 	GetRunnerPool(ctx context.Context, id uuid.UUID) (types.RunnerPool, error)
-	// ListRunnerPoolMembers is every member of a pool: only the admission fold reads it, and only through
-	// runnerpool.OwnRunnerCandidates.
+	// ListRunnerPoolMembers is every member of a pool: the admission fold reads it, through
+	// runnerpool.OwnRunnerCandidates and for an organization runner's runs namespace, and so does dispatch.
 	ListRunnerPoolMembers(ctx context.Context, id uuid.UUID) ([]types.RunnerPoolMember, error)
 	CreateRunnerPool(ctx context.Context, p types.RunnerPool, by string) (types.RunnerPool, error)
 	UpdateRunnerPool(ctx context.Context, id uuid.UUID, revision int64, name *string, state *types.RunnerPoolState, limits *types.RunnerPoolLimits, recording *types.RecordingRequirement) (types.RunnerPool, error)
@@ -86,12 +86,13 @@ const (
 
 // RunnerPoolCatalogueRow is one live pool with what the API needs to decide who may use it and
 // whether it can take a run right now: its use policy, its remote-hosted members (ExecutorIDs, their
-// ids), how many of the caller's own claimed runners it holds, and which of the caller's own runners
-// (in any state) are its members.
+// ids), its organization runners (OrgRunnerIDs, their ids as text, sorted), how many of the caller's own
+// claimed runners it holds, and which of the caller's own runners (in any state) are its members.
 type RunnerPoolCatalogueRow struct {
 	Pool         types.RunnerPool
 	Policy       *types.RunnerPoolUsePolicy
 	ExecutorIDs  []string
+	OrgRunnerIDs []string
 	OwnRunners   int
 	OwnRunnerIDs []uuid.UUID
 }
@@ -180,10 +181,10 @@ func (s PG) GetRunnerPool(ctx context.Context, id uuid.UUID) (types.RunnerPool, 
 
 func (s PG) ListRunnerPoolMembers(ctx context.Context, id uuid.UUID) ([]types.RunnerPoolMember, error) {
 	return collect(ctx, s.Pool, "list", "runner pool members",
-		`SELECT pool_id, kind, runner_id, COALESCE(remote_runner_id, ''), added_at FROM runner_pool_members WHERE pool_id = $1 ORDER BY runner_id, remote_runner_id`,
+		`SELECT pool_id, kind, runner_id, COALESCE(remote_runner_id, ''), runs_namespace, added_at FROM runner_pool_members WHERE pool_id = $1 ORDER BY runner_id, remote_runner_id`,
 		[]any{id}, func(row pgx.Row) (types.RunnerPoolMember, error) {
 			var m types.RunnerPoolMember
-			if err := row.Scan(&m.PoolID, &m.Kind, &m.RunnerID, &m.RemoteRunnerID, &m.AddedAt); err != nil {
+			if err := row.Scan(&m.PoolID, &m.Kind, &m.RunnerID, &m.RemoteRunnerID, &m.RunsNamespace, &m.AddedAt); err != nil {
 				return m, fmt.Errorf("store: scan runner pool member: %w", err)
 			}
 			return m, nil
@@ -199,6 +200,8 @@ func (s PG) ListRunnerPoolCatalogue(ctx context.Context, owner string, all bool)
 		       u.subjects, u.revision, u.updated_by, u.updated_at,
 		       COALESCE((SELECT array_agg(m.remote_runner_id ORDER BY m.remote_runner_id) FROM runner_pool_members m
 		                 WHERE m.pool_id = p.id AND m.remote_runner_id IS NOT NULL), '{}'),
+		       COALESCE((SELECT array_agg(m.runner_id::text ORDER BY m.runner_id::text) FROM runner_pool_members m JOIN runners r ON r.id = m.runner_id
+		                 WHERE m.pool_id = p.id AND r.owner_kind = 'org'), '{}'),
 		       (SELECT count(*) FROM runner_pool_members m JOIN runners r ON r.id = m.runner_id
 		         WHERE m.pool_id = p.id AND r.owner = $1 AND r.state = 'claimed'),
 		       COALESCE((SELECT array_agg(m.runner_id ORDER BY m.runner_id) FROM runner_pool_members m JOIN runners r ON r.id = m.runner_id
@@ -218,7 +221,7 @@ func (s PG) ListRunnerPoolCatalogue(ctx context.Context, owner string, all bool)
 		var polBy *string
 		var polAt *time.Time
 		if err := row.Scan(&r.Pool.ID, &r.Pool.Name, &scope, &r.Pool.Owner, &state, &r.Pool.Revision, &limits, &r.Pool.CreatedAt, &r.Pool.UpdatedAt, &recording,
-			&subjects, &polRev, &polBy, &polAt, &r.ExecutorIDs, &r.OwnRunners, &r.OwnRunnerIDs); err != nil {
+			&subjects, &polRev, &polBy, &polAt, &r.ExecutorIDs, &r.OrgRunnerIDs, &r.OwnRunners, &r.OwnRunnerIDs); err != nil {
 			return r, fmt.Errorf("store: scan runner pool catalogue: %w", err)
 		}
 		r.Pool.Scope, r.Pool.State, r.Pool.Recording = types.RunnerPoolScope(scope), types.RunnerPoolState(state), types.RecordingRequirement(recording)
@@ -365,6 +368,10 @@ func deleteRunnerPoolQ(ctx context.Context, q Querier, id uuid.UUID) (RunnerPool
 	if _, err := q.Exec(ctx, `DELETE FROM runner_pool_members WHERE pool_id = $1`, id); err != nil {
 		return out, err
 	}
+	// The pool row stays as a tombstone, so the cascade on its bindings does not fire.
+	if _, err := q.Exec(ctx, `DELETE FROM workload_bindings WHERE pool_id = $1`, id); err != nil {
+		return out, err
+	}
 	if err := clearOrgDefaultSlotsQ(ctx, q, id, &out); err != nil {
 		return out, err
 	}
@@ -378,7 +385,8 @@ func deleteRunnerPoolQ(ctx context.Context, q Querier, id uuid.UUID) (RunnerPool
 // as DeleteRunnerPool deletes one, and then every pool of theirs, the tombstones included, forgets them
 // (owner and created_by cleared). It holds the lock every create takes, so a pool the person creates
 // meanwhile is either deleted here or made after it. The person's stored preferences are deleted in the
-// same transaction. Returns the deletions, in pool id order.
+// same transaction, and so are their workloads; the owed ends of runs their workloads let go of forget
+// them. Returns the deletions, in pool id order.
 func (s PG) DeleteRunnerPoolsByOwner(ctx context.Context, owner string) ([]RunnerPoolDeletion, error) {
 	var out []RunnerPoolDeletion
 	err := s.inTx(ctx, func(q Querier) error {
@@ -410,7 +418,15 @@ func (s PG) DeleteRunnerPoolsByOwner(ctx context.Context, owner string) ([]Runne
 		if _, err = q.Exec(ctx, `DELETE FROM principal_prefs WHERE principal = $1`, owner); err != nil {
 			return err
 		}
-		_, err = q.Exec(ctx, `DELETE FROM ui_run_layouts WHERE principal = $1`, owner)
+		if _, err = q.Exec(ctx, `DELETE FROM ui_run_layouts WHERE principal = $1`, owner); err != nil {
+			return err
+		}
+		// So do the workloads they own. The runs those workloads let go of stay owed their end (erasure
+		// ends none of the person's runs), but no longer name them.
+		if _, err = q.Exec(ctx, `DELETE FROM workloads WHERE owner = $1`, owner); err != nil {
+			return err
+		}
+		_, err = q.Exec(ctx, `UPDATE workload_run_ends SET owner = '' WHERE owner = $1`, owner)
 		return err
 	})
 	return out, err

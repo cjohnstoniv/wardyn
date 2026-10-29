@@ -53,15 +53,8 @@ func runFileRequest(cmd *cobra.Command, c *sdk.Client, file, title, description 
 	if res.Document == nil || len(res.Diagnostics) > 0 {
 		return req, printTemplateImport(cmd.ErrOrStderr(), res)
 	}
-	intent := res.Document.Intent
-	overlay := intent.Raw("inline_policy")
-	intent.Unset("inline_policy")
-	if req, err = intent.Request(); err != nil {
-		return req, fmt.Errorf("read the run document: %w", err)
-	}
-	req.PolicyOverlay = overlay
-	if req.Experience != "" {
-		req.ModeContract = sdk.RunModeContractV09
+	if req, err = sdk.RunDocumentRequest(res.Document.Intent); err != nil {
+		return req, err
 	}
 	req.Title, req.Description = title, description
 	return req, nil

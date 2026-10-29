@@ -151,6 +151,10 @@ func (s *Server) queueRunnerTeardown(ctx context.Context, runnerID uuid.UUID, ki
 		// The action waits for the runner; its receipt is runner.action.apply or runner.action.refuse.
 		s.recordAudit(ctx, s.auditEvent(&a.RunID, types.ActorSystem, "wardynd", placement.ActionRunnerActionRequest,
 			a.ID.String(), "success", mustJSON(map[string]any{"action": a.Kind, "runner_id": runnerID})))
+		// The runner's session may be on another replica: end it there, so the fresh one reads the action.
+		// Only for a new one: the lease sweep re-asserts a kept run's stop every pass, and ending the
+		// session for an action already queued or answered would reset all its streams each time.
+		s.announceRunnerGoaway(runnerID)
 	}
 	return err
 }
@@ -208,6 +212,7 @@ func (s *Server) admitRunner(_ context.Context, rn types.Runner) (remote.Admissi
 			peer := ep.link.ReadyPeer()
 			sameSession := func() bool { return peer != nil && ep.link.ReadyPeer() == peer }
 			go s.sweepRunnerOrphansOnReady(s.cfg.BaseCtx, id, ep.sub, sameSession, readySweepRetries)
+			go s.pushRunnerWorkloadStatuses(s.cfg.BaseCtx, id)
 		},
 	}, nil
 }
@@ -254,6 +259,8 @@ func (s *Server) eventFromRunner(ctx context.Context, runnerID uuid.UUID, sessio
 		err = s.PostureFromRunner(ctx, runnerID, ev)
 	case runnerwire.EventResidentErase:
 		err = s.ResidentEraseFromRunner(ctx, runnerID, ev)
+	case runnerwire.EventWorkload:
+		err = s.WorkloadFromRunner(ctx, runnerID, ev)
 	case runnerwire.EventCaps:
 		s.capsFromRunner(ctx, runnerID, session, ev)
 	case runnerwire.EventWaiting:

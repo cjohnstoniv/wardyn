@@ -154,10 +154,10 @@ func (s *Server) componentSecretsOwned(r *http.Request, adm *componentAdmission,
 			}
 			continue
 		}
-		msg := fmt.Sprintf("components[%d]: %ssecrets[%d].secret_name: you have no secret named %q of your own. Store it under Your account first.",
+		msg := fmt.Sprintf("components[%d]: %ssecrets[%d].secret_name: you have no secret named %q of your own. Store it in Settings first.",
 			i, c.fieldPath(), si, sec.SecretName)
 		if !c.snapshot.SelfDefined {
-			msg = fmt.Sprintf("components[%d]: this component needs a secret of your own named %q. Store it under Your account first.", i, sec.SecretName)
+			msg = fmt.Sprintf("components[%d]: this component needs a secret of your own named %q. Store it in Settings first.", i, sec.SecretName)
 		}
 		return &componentRefusal{
 			refusal: runError(http.StatusUnprocessableEntity, reasonComponentSecretNotOwned, msg),
