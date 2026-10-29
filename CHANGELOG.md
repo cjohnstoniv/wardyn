@@ -24,6 +24,21 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `runner_health`, `launch_preset_version_floor`, `cli_sessions` and `governance_boundary`. If it turns on
   `WARDYN_MULTI_AGENT_TASKS`, grant it `SELECT, INSERT, UPDATE` on `run_harnesses` as well.
 
+### Added
+
+- Your walls: limits you set on every run you start, which only narrow what your organisation allows. Set them under
+  **Your account**, with `wardyn walls` (`wardyn walls set --file walls.yaml`, `wardyn walls clear`), or through
+  `GET`, `PUT` and `DELETE /api/v1/me/walls`. They name the sites a run may reach or never reach, what happens at a site
+  not listed, a barrier floor, the clipboard and file directions, and credentials kept out. They are private to you and
+  bind every run you start, a super admin's too. Your site list is not applied again at dispatch or revive, so the hosts
+  a run's own setup adds stay reachable; your denies, blocked directions and withheld credentials are, and at the mint
+  door. An egress approval for a host your walls deny is refused `personal_walls_host`. New reasons: `walls_invalid`,
+  `walls_need_person`, `walls_unavailable` and `personal_walls_host`; new audit actions `person.walls.set` and
+  `person.walls.delete`. See [Your walls](docs/POLICIES.md#your-walls).
+- `overrides.egress.allow_all_egress: false` is accepted on a run request, on any base policy, and turns open egress off
+  for that run; it reaches the base's listed hosts, the hosts you add and the hosts its own setup needs. New Run step 5
+  offers it as **Only the sites listed**. Before, `false` was refused.
+
 ### Fixed
 
 - A macOS guest now gets its address on a macOS VM's network. The relay answered ARP for every address, the guest's own

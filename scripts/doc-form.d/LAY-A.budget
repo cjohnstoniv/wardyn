@@ -10,4 +10,5 @@
 # docs/operations/boundary.md 1121 measured: withheld_grants lists stored rows, broker lanes their own list
 # docs/operations/boundary.md 1142 measured: break-glass only while the boundary bounds something; revive judges hosts only
 # docs/operations/boundary.md 1176 adds 34 over 1142, measured (0.10 W5-API-DESKTOP, #2967): the spec.desktop row and the unread seal's desktop
-docs/operations/boundary.md=1176 share=35
+# docs/operations/boundary.md 1241 adds 65 over 1176, measured (rc.8 E4, #2948): how a person's walls meet the run and the seal.
+docs/operations/boundary.md=1241 share=35

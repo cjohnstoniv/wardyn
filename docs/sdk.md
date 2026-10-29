@@ -441,6 +441,41 @@ A run can carry components that add destinations and secrets ([POLICIES.md](POLI
   - A fact never carries the name of a secret the organisation provides.
 - Create, preflight and preview refuse with the component reasons in [`Reason`](#reason-branch-on-this-never-on-errors-prose); a run is audited as `run.component.attach` and `run.component.refuse`.
 
+## Your walls
+
+A person's own walls are limits they set on every run they start; they only narrow ([POLICIES.md](POLICIES.md#your-walls) lists the knobs). The client wraps the three routes.
+
+| Method | Route | Answers |
+|---|---|---|
+| `GetMyWalls` | `GET /api/v1/me/walls` | `200` `{spec, updated_at?}`; `{spec: {}}` when none are set |
+| `PutMyWalls` | `PUT /api/v1/me/walls` | `{spec}` replaces the whole document. `200` `{spec, updated_at}`; an empty spec is no walls |
+| `ClearMyWalls` | `DELETE /api/v1/me/walls` | `204`; the stored document becomes `{}` |
+
+- The routes act for the signed-in person only. A personal API token, a CLI session or a delegation acts as that person; no principal is read from the path or the body.
+- The admin token, local mode and a service identity are refused `400` `walls_need_person`. A deployment whose store keeps no personal settings answers `501` `walls_unavailable`.
+- A body that names a wider value, a site that is not a DNS name or `*.` wildcard, or a list over its cap is `400` `walls_invalid`, naming the first path. A body with an unknown key is refused by the strict decode.
+- A write is audited as `person.walls.set` or `person.walls.delete`: the knobs named, the length of each list and the kinds kept out, never the lists.
+- `wardyn walls` prints your walls as YAML, `wardyn walls set --file walls.yaml` (`-` reads stdin) replaces them and `wardyn walls clear` removes them. The file holds the knobs at the top level, and one that names no limit is refused: use `clear`.
+- A run that your walls narrowed records `policy_source.personal_walls` on its `run.create` row, read back by `GET /runs/{id}/policy` as the cause `walls`.
+
+### Narrowing one run
+
+`overrides.egress.allow_all_egress: false` turns open egress off for one run, on any base: the default policy, a stored `policy_id`, a preset, a template or a run document.
+
+- The run then reaches the base's listed hosts, the hosts in `overrides.hosts.add_allowed` and the hosts its own setup needs. The base's own hosts stay read-only.
+- It is a narrowing, so it is always allowed and the ceiling has nothing to bound. On a base that already has open egress off it changes nothing.
+- Add `overrides.egress.first_use_approval: always_deny` for default-deny. `true` still requests every other public host and is bounded by the ceiling.
+- The client's `RunEgressOverrides.AllowAllEgress` is a `*bool`, and `Items()` reports `false` as the operation `narrow` and `true` as `set`.
+
+```yaml
+overrides:
+  egress:
+    allow_all_egress: false
+    first_use_approval: always_deny
+  hosts:
+    add_allowed: [api.example.com, pypi.org]
+```
+
 ## Run templates
 
 A template is a saved run setup, whole or partial, kept for yourself, published to the organisation or published to one group. It is content: a published template grants nothing.
@@ -802,9 +837,10 @@ start.
 | `approval_rule_not_applicable` | An `approval.policy.skip` reason, never sent to a client: no rule decides that approval. |
 | `boundary_host` | `POST /approvals/{id}/approve` (403): the Wardyn boundary is in `hard_limits` and denies the egress host, or does not allow it. |
 | `restriction_invalid` / `restriction_not_found` / `restriction_host` / `workspace_owning_unit_default` | The restriction routes, an egress approval, and `PUT /workspaces/{id}/owning-unit`. |
-| `walls_invalid` / `walls_need_person` / `walls_unavailable` / `personal_walls_host` | `/me/walls`: invalid walls (400), no signed-in person (400), no personal settings store (501); an egress approval of a host the run owner's walls deny (403). |
-| `credential_withheld` | `POST /internal/credentials/mint`, `GET /internal/injection/{grantID}` (403): the run's governance profile or the Wardyn boundary now withholds the grant or a host it reaches. |
-| `credential_withheld_unread` | `POST /internal/credentials/mint` (503): the run, its grants, its profile or the Wardyn boundary could not be read to check the grant; retry. |
+| `walls_invalid` / `walls_need_person` / `walls_unavailable` | `/me/walls` ([Your walls](#your-walls)): `400` walls that name a wider value, a bad site or a list over its cap; `400` a caller who is no signed-in person (the admin token, local mode, a service identity); `501` a store that keeps no personal settings. |
+| `personal_walls_host` | `POST /approvals/{id}/approve` (403): the run owner's walls deny the egress host. A host outside their list is not refused here; it follows their choice for a site that is not listed. |
+| `credential_withheld` | `POST /internal/credentials/mint`, `GET /internal/injection/{grantID}` (403): the run's governance profile, the Wardyn boundary or the run owner's walls now withhold the grant or a host it reaches. |
+| `credential_withheld_unread` | `POST /internal/credentials/mint` (503): the run, its grants, its profile, the Wardyn boundary or the run owner's walls could not be read to check the grant; retry. |
 | `break_glass_reason_required` | `POST /runs`, `/runs/preflight` and `/runs/policy-preview` with the admin token (400): the boundary is in `hard_limits`, bounds something, a unit with its own walls or a restriction exists, and the `X-Wardyn-Break-Glass-Reason` header is missing, too long or has control characters. |
 | `secret_name_invalid` / `secret_name_reserved` / `secret_owner_param_refused` / `secret_body_invalid` / `secret_value_too_short` / `secret_cap_reached` / `secret_not_found` | `PUT/DELETE /secrets/{name}` (and `/me/secrets/{name}`, `/shared-secrets/{name}`): the name fails the secret-name format or is reserved, `?owner=` was sent on a write, the body is malformed, the value is below the mask minimum, the owner already holds the maximum number of secrets, or (the admin-only `?owner=` delete arm) that owner holds no secret by that name. Also `GET /internal/injection/{grantID}` (424): a stored header credential under the minimum without its trailing line break. |
 | `people_store_unavailable` / `person_principal_invalid` / `person_principal_reserved` / `person_email_invalid` / `person_collision` / `person_email_taken` | `POST /people` (operator/security-tier only). |

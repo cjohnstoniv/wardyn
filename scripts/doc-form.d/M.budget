@@ -89,4 +89,6 @@ docs/UI-SANDBOXES.md=6627 share=35
 # docs/NEW-RUN.md 3072 = 3056 + 16, measured: a wait row for a required recording with no store
 # 0.9.4 W4-DOCS-1: docs/NEW-RUN.md 3073 adds 1 over 3072, measured: #2320: --max-wait among the run --file companion flags.
 # docs/NEW-RUN.md 3147 adds 74 over 3073 (0.10 FEAT-1APP-UI): the Application / server card, measured (#1994).
-docs/NEW-RUN.md=3163 share=35 # +16 measured (0.10 final docs): scheduling and Your computer described by their gates instead of Coming soon
+# docs/NEW-RUN.md 3163 adds 16 over 3147, measured (0.10 final docs): scheduling and Your computer described by their gates instead of Coming soon
+# docs/NEW-RUN.md 3273 adds 110 over 3163, measured (rc.8 E4, #2948): the Only the sites listed switch, the walls drop line and the walls warning.
+docs/NEW-RUN.md=3273 share=35

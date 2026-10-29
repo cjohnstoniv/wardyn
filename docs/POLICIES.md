@@ -534,6 +534,39 @@ What the check does and does not settle:
 - Whatever `approved_egress` already holds, from that button or from before this migration, is still unioned into a confined replay's allowlist.
 - An `egress:<host>` requirement row is kept safe by who may write it (the write-side authorization) and by its provenance (only `operator_set` rows are auto-added at launch), not by a clamp at fold time. With [`WARDYN_REQUIRE_OPERATOR_SET_EGRESS`](ENV.md#wardyn_require_operator_set_egress) set to `false`, the operator has chosen to drop the provenance gate, and no fold-time clamp replaces it.
 
+## Your walls
+
+- Your walls are limits you set on every run you start, which only narrow what your organisation allows. They are one private document per signed-in person; no one else reads or edits it, and no admin route reaches it.
+- Set them under **Your account** in the console, with `wardyn walls`, or through `/api/v1/me/walls` ([sdk.md](sdk.md#your-walls)). A save applies to runs you start from then on.
+- The admin token, local mode and a service identity are no person, so they have no walls (`400` `walls_need_person`) and none are applied to their runs.
+
+| Knob | Console | Effect on each run you start |
+|---|---|---|
+| `allowed_domains` | **Only these sites** | The run reaches only these sites and what its own setup needs: repositories, model and tools. `[]` leaves only the setup. Naming it turns `allow_all_egress` off |
+| `denied_domains` | **Never these sites** | Added to the run's deny list, which wins |
+| `allow_all_egress` | | `false` only. Turns open egress off |
+| `first_use_approval` | **When a site is not listed** | **Block it** (`always_deny`), **Block and ask for review** (`deny_with_review`) or **Hold for review** (`wait_for_review`). The stricter of the run's and yours stands |
+| `min_confinement_class` | **Barrier at least** | The run's floor is raised to at least `CC1` (Fence), `CC2` (Wall) or `CC3` (Vault) |
+| `desktop` | **Clipboard and files** | `paste_in`, `copy_out`, `upload` and `download` each take `blocked`. A direction you leave out stays as the run has it |
+| `withheld_grants` | **Credentials kept out** | The run is not given a grant of that `kind`, or of that `kind` and `scope` |
+
+- A knob you leave out is no limit. Every value only narrows: `allow_all_egress: true` and a direction set to anything but `blocked` are refused as `400` `walls_invalid`, naming the path.
+- A site is a DNS name or a `*.` wildcard, never an IP address, a port or a URL. A list holds at most 64 entries and `withheld_grants` at most 16.
+- In the console, choosing **Only these sites** also selects **Block it** for unlisted sites.
+
+### How your walls apply
+
+1. At create, on every base policy, the walls meet the run's policy just inside the Wardyn boundary's step. A super admin's own run is bound too.
+2. A host or credential they cut is dropped with the warning `your walls narrowed <knob>`. The run's policy record names the layer `personal` for each knob they decided, and the run's **Policy** tab heads those changes **Your walls**.
+3. At dispatch, at revive and at the credential mint door, your denies, your blocked directions and your withheld credentials are applied again. Your site list is not, so a host the run's own setup adds stays reachable.
+   - Loosening your walls after a run starts frees nothing for it. A deny, a blocked direction or a withheld credential added later binds it.
+4. An egress approval for a host your `denied_domains` cover is refused for every approver, `403` `personal_walls_host`: "Your walls block {host}. Change them on Your account." to you, and "{owner}'s walls block {host} for this run." to anyone else. A host outside your list follows your **When a site is not listed** choice.
+5. A mint of a credential you keep out is refused `403` `credential_withheld`.
+6. If your walls cannot be read, a create is refused `500`, the run is sealed to no egress and no credential, a mint is `503` `credential_withheld_unread` and an approval is `500`. A run is never started without them.
+
+- Unit and boundary locks do not apply to your walls, and your walls do not change unit limits or door switches. They have no GPU knob.
+- To narrow one run only, set `overrides.egress.allow_all_egress: false` beside `overrides.hosts.add_allowed` ([NEW-RUN.md](NEW-RUN.md#step-5-tools-and-access), [sdk.md](sdk.md#narrowing-one-run)).
+
 ## Approval decision scopes
 
 - An approve/deny decision on an `egress_domain` approval carries a **scope** — how far that one decision reaches.
