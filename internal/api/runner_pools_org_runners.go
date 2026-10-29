@@ -6,8 +6,10 @@ package api
 import (
 	"errors"
 	"net/http"
+	"slices"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
@@ -61,6 +63,9 @@ func (s *Server) handleAddRunnerPoolOrgRunner(w http.ResponseWriter, r *http.Req
 }
 
 // handleRemoveRunnerPoolOrgRunner takes an organization runner, in any state, out of an organization pool.
+// Taking one out of a pool that carries a use policy is held for a second human like a remote-hosted
+// runner's removal: otherwise one administrator could remove a team's runner so that no policy pool holds
+// it any more.
 func (s *Server) handleRemoveRunnerPoolOrgRunner(w http.ResponseWriter, r *http.Request) {
 	ps, ok := s.runnerPoolStore(w)
 	if !ok {
@@ -79,7 +84,23 @@ func (s *Server) handleRemoveRunnerPoolOrgRunner(w http.ResponseWriter, r *http.
 	if !ok {
 		return
 	}
-	removed, rev, err := ors.RemoveOrgRunnerFromPool(r.Context(), pool.ID, runnerID)
+	mode, governed, done := s.orgRunnerDetachGovernance(w, r, ps, pool.ID, runnerID)
+	if done {
+		return
+	}
+	removed, rev, err := ors.RemoveOrgRunnerFromPool(r.Context(), pool.ID, runnerID, !governed)
+	if errors.Is(err, store.ErrRunnerPoolGoverned) {
+		// A use policy was approved between the catalogue read and the locks: decide again on the
+		// catalogue as it now stands, which holds the removal for a second human.
+		if mode, governed, done = s.orgRunnerDetachGovernance(w, r, ps, pool.ID, runnerID); done {
+			return
+		}
+		removed, rev, err = ors.RemoveOrgRunnerFromPool(r.Context(), pool.ID, runnerID, !governed)
+		if errors.Is(err, store.ErrRunnerPoolGoverned) {
+			writePoolRefusal(w, runnerpool.Refusal{Reason: runnerpool.ReasonStale, Name: pool.Name})
+			return
+		}
+	}
 	if errors.Is(err, store.ErrNotFound) {
 		writePoolNotFound(w)
 		return
@@ -90,8 +111,33 @@ func (s *Server) handleRemoveRunnerPoolOrgRunner(w http.ResponseWriter, r *http.
 	}
 	if removed {
 		s.auditPool(r, auditPoolRunnerRemove, pool.ID.String(), orgRunnerMemberAudit(pool, runnerID.String(), rev))
+		if mode == govBypass {
+			s.recordGovernanceBypass(r, govKindRunnerPoolUsePolicy, pool.ID.String(), "success", nil)
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// orgRunnerDetachGovernance decides how taking organization runner runnerID out of the pool is written,
+// on the catalogue as it stands. governed: the pool has a use policy and holds the runner, so the write
+// mode was asked for. done: the answer is already written (the removal was held, or the mode refused).
+func (s *Server) orgRunnerDetachGovernance(w http.ResponseWriter, r *http.Request, ps store.RunnerPoolStore, poolID, runnerID uuid.UUID) (mode govWriteMode, governed, done bool) {
+	rows, ok := s.poolCatalogue(w, r, ps, false)
+	if !ok {
+		return govDirect, false, true
+	}
+	row, found := catalogueRow(rows, poolID)
+	if !found || row.Policy == nil || !slices.Contains(row.OrgRunnerIDs, runnerID.String()) {
+		return govDirect, false, false
+	}
+	if mode, ok = s.governanceWriteMode(w, r); !ok {
+		return mode, true, true
+	}
+	if mode == govQueue {
+		s.holdOrgRunnerDetach(w, r, row, runnerID.String())
+		return mode, true, true
+	}
+	return mode, true, false
 }
 
 func orgRunnerMemberAudit(pool types.RunnerPool, runnerID string, rev int64) map[string]any {
