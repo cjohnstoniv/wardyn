@@ -49,6 +49,23 @@ func TestW4CovDispatchCallsOnlyTheKindsHandlersInOrder(t *testing.T) {
 	}
 }
 
+func TestW4CovDispatchDeliversARunnerGoawayWithItsRunnerIDAndTime(t *testing.T) {
+	b := New(nil, "replica-a")
+	var heard Message
+	b.Handle(KindRunnerGoaway, func(m Message) { heard = m })
+	b.Handle(KindRunKill, func(m Message) { t.Errorf("the kill handler ran for %s", m.Kind) })
+
+	payload, err := json.Marshal(Message{Kind: KindRunnerGoaway, Run: w4CovRun, Origin: "replica-b", Data: json.RawMessage(`{"at":"2026-01-02T03:04:05Z"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.dispatch(context.Background(), string(payload))
+
+	if heard.Kind != KindRunnerGoaway || heard.Run != w4CovRun || string(heard.Data) != `{"at":"2026-01-02T03:04:05Z"}` {
+		t.Errorf("handler heard %+v", heard)
+	}
+}
+
 func TestW4CovDispatchDropsANoticeThatDoesNotParse(t *testing.T) {
 	b := New(nil, "replica-a")
 	b.Handle(KindRunKill, func(m Message) { t.Errorf("a handler ran for an unparseable notice: %+v", m) })

@@ -4,10 +4,11 @@
 package api
 
 // The notices this server sends and takes over livebus (ha-l2.4): a run's lifecycle events to
-// the other replicas' event rings, and a kill to the replica creating the run's sandbox. Both
-// are hints with a path that needs no notice (livebus's package comment): the events stream
-// re-reads the store every beat, and the dispatch's STARTING to RUNNING compare tears down a
-// sandbox whose run was killed meanwhile, which is all a lost kill notice costs.
+// the other replicas' event rings, a kill to the replica creating the run's sandbox, and a runner's
+// queued action to the replica holding its session. All are hints with a path that needs no notice
+// (livebus's package comment): the events stream re-reads the store every beat, the dispatch's
+// STARTING to RUNNING compare tears down a sandbox whose run was killed meanwhile, which is all a
+// lost kill notice costs, and a runner reads a queued action at its next reconnect.
 
 import (
 	"context"
@@ -18,6 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/livebus"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
@@ -48,6 +50,7 @@ func (s *Server) registerLiveBus() {
 	})
 	s.registerAttachLeaseNotices(b)
 	b.Handle(livebus.KindRecordingGap, s.onRecordingGapNotice)
+	b.Handle(livebus.KindRunnerGoaway, s.onRunnerGoawayNotice)
 }
 
 // publishNotice sends one notice on its own goroutine, so the caller (a state CAS, a kill) never
@@ -63,6 +66,45 @@ func (s *Server) publishNotice(kind string, run uuid.UUID, data any) {
 		if err := b.Publish(ctx, kind, run, data); err != nil {
 			slog.Warn("wardynd: a notice to the other replicas was not sent", slog.String("kind", kind),
 				slog.String("run_id", run.String()), slog.Any("err", err))
+		}
+	})
+}
+
+// runnerGoawayNotice is a KindRunnerGoaway's data: when the sender queued what the runner must read.
+type runnerGoawayNotice struct {
+	At time.Time `json:"at"`
+}
+
+// announceRunnerGoaway tells every replica that runnerID's session should end, so the fresh one reads
+// what was just queued for the runner. The replica holding the session may not be this one. A lost
+// notice costs the old behaviour: the runner reads the action at its next reconnect.
+func (s *Server) announceRunnerGoaway(runnerID uuid.UUID) {
+	s.publishNotice(livebus.KindRunnerGoaway, runnerID, runnerGoawayNotice{At: s.cfg.Now()})
+}
+
+// onRunnerGoawayNotice ends the runner's session if this replica holds one. A session that began after
+// the notice was sent read the queue after the action was in it, so a burst of queued actions makes the
+// runner reconnect once, not once per action. The times are two replicas' clocks, so skew can cost one
+// extra or one skipped GOAWAY, never a wrong delivery.
+func (s *Server) onRunnerGoawayNotice(m livebus.Message) {
+	var n runnerGoawayNotice
+	if unmarshalNotice(m, &n) != nil || n.At.IsZero() {
+		return
+	}
+	began, ok := s.runnerSessionBegan(m.Run)
+	if !ok || began.After(n.At) {
+		return
+	}
+	st, ok := s.cfg.Store.(store.RunnerStore)
+	if !ok {
+		return
+	}
+	// Off the listener's goroutine: ending a session may wait out a stalled link for a second.
+	s.goBackground(func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(s.cfg.BaseCtx), liveBusPublishTimeout)
+		defer cancel()
+		if err := s.runnerHub(st).Goaway(ctx, m.Run); err != nil {
+			slog.Warn("wardynd: a queued runner action waits for the runner's next session", slog.String("runner_id", m.Run.String()), slog.Any("err", err))
 		}
 	})
 }

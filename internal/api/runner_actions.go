@@ -152,6 +152,10 @@ func (s *Server) queueRunnerTeardown(ctx context.Context, runnerID uuid.UUID, ki
 		s.recordAudit(ctx, s.auditEvent(&a.RunID, types.ActorSystem, "wardynd", placement.ActionRunnerActionRequest,
 			a.ID.String(), "success", mustJSON(map[string]any{"action": a.Kind, "runner_id": runnerID})))
 	}
+	if err == nil {
+		// The runner's session may be on another replica: end it there, so the fresh one reads the action.
+		s.announceRunnerGoaway(runnerID)
+	}
 	return err
 }
 
