@@ -6,6 +6,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -96,6 +97,21 @@ func TestApplyPutsEachDocumentUnderItsOwnName(t *testing.T) {
 	}
 	if !strings.Contains(string(worker["intent"]), "triage the queue") {
 		t.Errorf("worker intent = %s", worker["intent"])
+	}
+}
+
+// TestApplyKeepsADateAsWritten: an unquoted date reaches the body as the string the file wrote, not
+// a time re-encoded as RFC 3339.
+func TestApplyKeepsADateAsWritten(t *testing.T) {
+	rig := newRouteRig(t, map[string]func(http.ResponseWriter, []byte){
+		putWeb: applied(sdk.WorkloadUnchanged, sdk.WorkloadLaunch{State: sdk.WorkloadNoLaunch}),
+	})
+	if _, err := rig.run(t, "apply", "-f", writeTemplateFile(t, "w.yaml", webYAML+"restart_key: 2020-01-02\n")); err != nil {
+		t.Fatal(err)
+	}
+	var web map[string]json.RawMessage
+	if got := rig.sent(putWeb); len(got) != 1 || json.Unmarshal([]byte(got[0]), &web) != nil || string(web["restart_key"]) != `"2020-01-02"` {
+		t.Fatalf("web PUTs = %q", got)
 	}
 }
 
@@ -263,6 +279,25 @@ func TestDiffExitCodes(t *testing.T) {
 	bad := newRouteRig(t, map[string]func(http.ResponseWriter, []byte){})
 	if _, err := bad.run(t, "diff", "-f", writeTemplateFile(t, "w.yaml", webYAML+"colour: red\n")); err == nil || exitCodeFor(err) != 2 {
 		t.Errorf("an unknown field = %v (exit %d), want exit 2", err, exitCodeFor(err))
+	}
+}
+
+// TestDiffWritesNumbersAsNumbers: a number in the intent reads as the number in both sides of the
+// diff, not as a quoted string.
+func TestDiffWritesNumbersAsNumbers(t *testing.T) {
+	src := func(sec int) string {
+		return strings.Replace(webYAML, "  no_repositories_or_drives: true\n", fmt.Sprintf("  no_repositories_or_drives: true\n  ends_after_sec: %d\n", sec), 1)
+	}
+	rig := newRouteRig(t, doorRoutes(t, map[string]func(http.ResponseWriter, []byte){getWeb: replyJSON(http.StatusOK, storedWeb(t, src(7200)))}))
+	out, err := rig.run(t, "diff", "-f", writeTemplateFile(t, "w.yaml", src(3600)))
+	var ee *exitError
+	if !errors.As(err, &ee) || ee.code != 1 {
+		t.Fatalf("err = %v, want exit 1", err)
+	}
+	for _, want := range []string{"-    ends_after_sec: 7200\n", "+    ends_after_sec: 3600\n"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
 	}
 }
 

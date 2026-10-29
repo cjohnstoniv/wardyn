@@ -41,8 +41,9 @@ func fileFlag(cmd *cobra.Command, file *string) {
 
 // readWorkloadDocs reads every document of file ('-' for stdin) as a workload. YAML is a JSON
 // superset, so one reader takes both; each document is converted to JSON for sdk.ParseWorkload,
-// which refuses a field it does not know. Empty documents between `---` marks are skipped, and
-// two documents of one name are refused: the second would silently win.
+// which refuses a field it does not know. A plain date (restart_key: 2026-10-29) stays the string
+// it was written as, not a time re-encoded as RFC 3339. Empty documents between `---` marks are
+// skipped, and two documents of one name are refused: the second would silently win.
 func readWorkloadDocs(cmd *cobra.Command, file string) ([]sdk.WorkloadDocument, error) {
 	var raw []byte
 	var err error
@@ -58,10 +59,15 @@ func readWorkloadDocs(cmd *cobra.Command, file string) ([]sdk.WorkloadDocument, 
 	seen := map[string]bool{}
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	for n := 1; ; n++ {
-		var v any
-		if err := dec.Decode(&v); errors.Is(err, io.EOF) {
+		var node yaml.Node
+		if err := dec.Decode(&node); errors.Is(err, io.EOF) {
 			break
 		} else if err != nil {
+			return nil, fmt.Errorf("document %d: parse (accepts JSON or YAML): %w", n, err)
+		}
+		datesAsWritten(&node)
+		var v any
+		if err := node.Decode(&v); err != nil {
 			return nil, fmt.Errorf("document %d: parse (accepts JSON or YAML): %w", n, err)
 		}
 		if v == nil {
@@ -85,6 +91,17 @@ func readWorkloadDocs(cmd *cobra.Command, file string) ([]sdk.WorkloadDocument, 
 		return nil, errors.New("the workload file holds no document")
 	}
 	return docs, nil
+}
+
+// datesAsWritten retags every plain scalar YAML resolves as a timestamp as a string, so it decodes
+// as the text it was written as.
+func datesAsWritten(n *yaml.Node) {
+	if n.Kind == yaml.ScalarNode && n.ShortTag() == "!!timestamp" {
+		n.Tag = "!!str"
+	}
+	for _, c := range n.Content {
+		datesAsWritten(c)
+	}
 }
 
 func workloadApplyCmd(client clientFn) *cobra.Command {
@@ -426,8 +443,26 @@ func workloadYAML(d sdk.WorkloadDocument) (string, error) {
 	if err := dec.Decode(&v); err != nil {
 		return "", err
 	}
-	out, err := yaml.Marshal(v)
+	out, err := yaml.Marshal(yamlNumbers(v))
 	return string(out), err
+}
+
+// yamlNumbers swaps each json.Number in v for a plain YAML scalar of its text: yaml.Marshal writes a
+// json.Number as the string it is, quoted.
+func yamlNumbers(v any) any {
+	switch t := v.(type) {
+	case json.Number:
+		return &yaml.Node{Kind: yaml.ScalarNode, Value: t.String()}
+	case map[string]any:
+		for k, e := range t {
+			t[k] = yamlNumbers(e)
+		}
+	case []any:
+		for i, e := range t {
+			t[i] = yamlNumbers(e)
+		}
+	}
+	return v
 }
 
 func splitLines(s string) []string {
