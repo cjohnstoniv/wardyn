@@ -185,7 +185,7 @@ func TestSetupByHandRefusedSignInSaysWhatToDo(t *testing.T) {
 	f.fb.Unsupported = errHostNoProvisioning
 	b.err = fmt.Errorf("%w (wardyn-admin): ssh: handshake failed: ssh: unable to authenticate", macvm.ErrSignInRefused)
 	_, err := macvm.Prepare(context.Background(), f.opts)
-	want := "the guest refused the sign-in as wardyn-admin with the one-time code: the account made in Setup Assistant must be named wardyn-admin and its password must be the one-time code. Discard this base and prepare again"
+	want := "the guest refused the sign-in as wardyn-admin with the one-time code: the account made in Setup Assistant must be named wardyn-admin and its password must be the one-time code. Run prepare again"
 	if err == nil || !strings.Contains(err.Error(), want) || strings.Contains(err.Error(), "ssh:") {
 		t.Fatalf("got %v, want the text %q", err, want)
 	}

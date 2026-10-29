@@ -303,6 +303,9 @@ func (s *session) codeReplaced(ctx context.Context) error {
 	clear(s.admin)
 	s.admin, s.next = s.next, nil
 	if err := s.connect(ctx); err != nil {
+		if errors.Is(err, ErrSignInRefused) { // a failed rotation, not a wrong account: keep the text, not the identity
+			err = errors.New(err.Error())
+		}
 		return &StepError{Step: "6 D1(c)", Command: "rotate-admin-password", Err: fmt.Errorf("the new password does not sign in: %w", err)}
 	}
 	if s.in.Replaced != nil {
