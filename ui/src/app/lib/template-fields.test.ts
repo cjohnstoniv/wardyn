@@ -131,7 +131,7 @@ describe("template field registry", () => {
     expect(templateFieldRule("shape")).toMatchObject({ part: "runner", omitted: "unset_optional" });
     expect(templateFieldRule("shape")?.pending).toBeFalsy();
     expect(templateCarriedFields()).toContain("shape");
-    const goShapes = new Set([...readFileSync(join(root, "pkg/client/runs_mode.go"), "utf8").matchAll(/\bRunShape\w+\s+RunShape = "([a-z_]+)"/g)].map((m) => m[1]));
+    const goShapes = new Set([...readFileSync(join(root, "internal/types/run_mode.go"), "utf8").matchAll(/\bRunShape\w+\s+RunShape = "([a-z_]+)"/g)].map((m) => m[1]));
     expect(new Set(RUN_SHAPES)).toEqual(goShapes);
   });
 

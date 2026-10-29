@@ -518,7 +518,7 @@ A `wardyn/v1` document with `kind: Run` is a draft of one run. Its `intent` hold
 
 `policy_overlay` carries a document's `intent.inline_policy`: the keys it names replace your default policy's (your governance ceiling, or the deployment default); the rest keep the default's values. Only the named keys are bounded by your ceiling: the default's operator mounts and grant pairings stay. Beside `policy_id` or `inline_policy` it is `400` `policy_overlay_conflict`; beside `preset`, `preset_field_not_per_launch`. A null or empty overlay, an unknown key, a wrongly typed value, an excluded field or a redaction placeholder is `400` `policy_overlay_invalid`, naming the first path. Edits beside a saved policy travel as `overrides`.
 
-`shape` (`agent_task`, `environment` or `application`) names the New Run choice a request was set up from. It is optional and needs `experience`; a value outside the three is `400` `run_mode_invalid`. The server checks it against the run and otherwise does not use it; a request that does not fit is `422` `run_shape_conflict` at create, preflight, preview and the import door.
+`shape` (`agent_task`, `environment` or `application`) names the New Run choice a request was set up from. It is optional and needs `experience`; a value outside the three is `400` `run_mode_invalid`. The server checks it against the run and keeps it on the run's `shape`, which is otherwise the one shape the run fits (empty when several fit); a request that does not fit is `422` `run_shape_conflict` at create, preflight, preview and the import door.
 
 | `shape` | Requires |
 |---|---|
