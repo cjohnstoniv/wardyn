@@ -37,6 +37,8 @@ type uiGatewayState struct {
 	uiReassert   map[string]time.Time
 	uiProxyOnce  sync.Once
 	uiProxy      *httputil.ReverseProxy
+	// uiInbound is the inbound arm's token sessions and per-run request buckets (uigateway_inbound.go).
+	uiInbound uiInboundState
 	// uiDesktop caches the desktop sessions their person closed and holds this process's live desktop
 	// streams, by uiReassertKey (uigateway_desktop.go). The Closed set itself is in the store.
 	uiDesktop uiDesktopSessions
