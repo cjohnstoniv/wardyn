@@ -170,7 +170,7 @@ func TestStepPlacementCapability_MacOSVMRecording(t *testing.T) {
 		s.cfg.RecordingStore = fsRecordingStore(t)
 		req := macReq(id)
 		f := &runFold{w: httptest.NewRecorder(), r: httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(capsCtx), req: &req, ceiling: profile}
-		if notice, refusal := s.macOSVMRecordingGate(capsCtx, f); notice != "" || refusal == nil || refusal.err == nil {
+		if notice, refusal := s.macOSVMRecordingGate(capsCtx, f.place, f.ceiling); notice != "" || refusal == nil || refusal.err == nil {
 			t.Fatalf("an unreadable site config = (%q, %+v); want a server error and no notice", notice, refusal)
 		}
 	})

@@ -123,7 +123,7 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 		return req, noCeiling, "", "", false
 	}
 	if msg := macOSBaseRequestRefusal(req); msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+		writeErrorReason(w, http.StatusBadRequest, reasonMacOSBaseInvalid, msg)
 		return req, noCeiling, "", "", false
 	}
 

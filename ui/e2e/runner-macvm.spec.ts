@@ -41,13 +41,14 @@ const RUNNERS = [
   }),
 ];
 
-async function openRunners(page: Page) {
+async function openRunners(page: Page, siteConfig: Record<string, unknown> = {}) {
   await page.route("**/api/v1/runners/settings", (route) => route.fulfill({ json: { enabled: true } }));
   await page.route("**/api/v1/runners/tokens**", (route) => route.fulfill({ json: [] }));
   await page.route("**/api/v1/remote-runners", (route) => route.fulfill({ json: [] }));
   await page.route(/\/api\/v1\/runners\?/, (route) => route.fulfill({ json: RUNNERS }));
   // The live site config is shared with the Settings spec, which sets a maximum on it: no maximum here unless a test says so.
-  await page.route("**/api/v1/site-config", (route) => route.fulfill({ json: {} }));
+  // One route only: the last route registered answers first, so a test's own route set before this one would never be read.
+  await page.route("**/api/v1/site-config", (route) => route.fulfill({ json: siteConfig }));
   await gotoConsole(page, "admin");
   await page.goto("/admin/runners");
 }
@@ -96,8 +97,7 @@ test.describe("Runner drawer: macOS virtual machines", () => {
   });
 
   test("a base older than the organisation's maximum is not offered, with its age and guest posture", async ({ page }) => {
-    await page.route("**/api/v1/site-config", (route) => route.fulfill({ json: { macos_vm: { max_base_age_days: 30 } } }));
-    await openRunners(page);
+    await openRunners(page, { macos_vm: { max_base_age_days: 30 } });
     const section = (await openDrawer(page, "mac-old")).locator("[data-macvm]");
     await expect(section.getByText(MACVM_P.P12, { exact: true })).toBeVisible();
     await expect(section.getByText(MACVM_R.R14, { exact: true })).toBeVisible();
@@ -107,8 +107,7 @@ test.describe("Runner drawer: macOS virtual machines", () => {
   });
 
   test("the card badge reads the same maximum: too old is not offered, the rest still are", async ({ page }) => {
-    await page.route("**/api/v1/site-config", (route) => route.fulfill({ json: { macos_vm: { max_base_age_days: 30 } } }));
-    await openRunners(page);
+    await openRunners(page, { macos_vm: { max_base_age_days: 30 } });
     await expect(card(page, "mac-old").getByText(MACVM_K.K03)).toBeVisible();
     await expect(card(page, "mac-preparing").getByText(MACVM_K.K02("42"))).toBeVisible();
   });
