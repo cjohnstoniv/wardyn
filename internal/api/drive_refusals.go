@@ -45,3 +45,13 @@ func driveTargetConflictMsg(a, b, target string) string {
 func driveShareBesideManagedMsg(share, managed string) string {
 	return fmt.Sprintf("%s is a shared drive and %s a managed one; a Kubernetes run mounts one kind or the other. Attach one of them.", share, managed)
 }
+
+// driveMacOSDockerVolumeMsg and driveMacOSClusterVolumeMsg refuse a drive that is a Docker or a cluster
+// volume on a macOS VM, which can't open either.
+func driveMacOSDockerVolumeMsg(name string) string {
+	return fmt.Sprintf("%s is a Docker volume, which a macOS VM can't open.", name)
+}
+
+func driveMacOSClusterVolumeMsg(name string) string {
+	return fmt.Sprintf("%s is a cluster volume, which a macOS VM can't open.", name)
+}

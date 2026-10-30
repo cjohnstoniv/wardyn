@@ -23,6 +23,9 @@ export const DRIVE_REFUSAL = {
   TARGET_CONFLICT: (a: string, b: string, target: string) => `${a} and ${b} both mount at ${target}. Attach one of them.`,
   SHARE_BESIDE_MANAGED: (share: string, managed: string) =>
     `${share} is a shared drive and ${managed} a managed one; a Kubernetes run mounts one kind or the other. Attach one of them.`,
+  // A macOS VM can't open a Docker volume or a cluster volume.
+  MACOS_DOCKER_VOLUME: (name: string) => `${name} is a Docker volume, which a macOS VM can't open.`,
+  MACOS_CLUSTER_VOLUME: (name: string) => `${name} is a cluster volume, which a macOS VM can't open.`,
   // Member drives: POST /me/drives and DELETE /me/drives/{id}. A quoted name is
   // Go's %q, which JSON.stringify matches for the names a drive can carry.
   MEMBER_REQUIRES_PERSON: () => "Sign in under your own account to create or delete a drive.",
@@ -54,6 +57,8 @@ export const DRIVE_REFUSAL_REASON = {
   BOUND_ELSEWHERE: "drive_not_in_pool",
   TARGET_CONFLICT: "drive_target_conflict",
   SHARE_BESIDE_MANAGED: "drive_share_beside_managed",
+  MACOS_DOCKER_VOLUME: "placement_capability",
+  MACOS_CLUSTER_VOLUME: "placement_capability",
   MEMBER_REQUIRES_PERSON: "member_drive_requires_person",
   MEMBER_DISABLED: "member_drives_disabled",
   MEMBER_DENIED_BY_UNIT: "member_drives_denied_by_unit",

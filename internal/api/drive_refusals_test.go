@@ -43,6 +43,8 @@ func TestDriveRefusalSentencesMatchGolden(t *testing.T) {
 		"BOUND_ELSEWHERE":      func(a []string) string { return driveBoundElsewhereMsg(a[0]) },
 		"TARGET_CONFLICT":      func(a []string) string { return driveTargetConflictMsg(a[0], a[1], a[2]) },
 		"SHARE_BESIDE_MANAGED": func(a []string) string { return driveShareBesideManagedMsg(a[0], a[1]) },
+		"MACOS_DOCKER_VOLUME":  func(a []string) string { return driveMacOSDockerVolumeMsg(a[0]) },
+		"MACOS_CLUSTER_VOLUME": func(a []string) string { return driveMacOSClusterVolumeMsg(a[0]) },
 
 		"MEMBER_REQUIRES_PERSON":           func([]string) string { return memberDriveRequiresPersonMsg() },
 		"MEMBER_DISABLED":                  func([]string) string { return memberDrivesDisabledMsg() },
