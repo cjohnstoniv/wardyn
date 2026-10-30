@@ -111,6 +111,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   recorded nothing in its place.
 - `wardyn-runnerd doctor` no longer pulls the proxy image if it is removed from the engine between its image check and
   its relay check. The relay check now fails on the missing image instead, as the page says doctor never pulls.
+- A Kubernetes run whose pinned proxy image is older than the runner now fails with the cause named: the proxy image is
+  older than this runner and refused a setting at config load, so have the organisation name this release's proxy
+  image, or run setup with `--proxy-image` set to it. It showed only a generic sidecar failure.
 
 ## [0.10.0-rc.8] — 2026-10-29
 
