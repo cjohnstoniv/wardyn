@@ -299,7 +299,8 @@
 # docs/sdk.md 23960 adds 1 over 23959, measured (rc.8): workload_binding_pool_scope named in the bindings row's reason cell.
 # docs/sdk.md 23965 measured at the guards merge onto the wave (both sentences above).
 # docs/sdk.md 23974 measured (rc.8): workload_binding_inactive says a revoke, not a session-only sign-out, ends a binding.
-docs/sdk.md=23974 share=21
+# docs/sdk.md 23997 adds 23 over 23974: the workload_binding_inactive row says a deleted binding and a restart's launch.reason carry it.
+docs/sdk.md=23997 share=21
 # docs/sdk.md 20423 = ours 20195 + theirs 20288 - base 20060 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/sdk.md 20315 = ours + theirs - base at the 0.10 HYB-C merge of main onto VM-A, measured.
 # 0.10 HYB-C: docs/sdk.md 20343 adds 28 over 20315, measured: the placement_capability refusal of a linux_vm run with a folder on a runner that cannot share one.

@@ -45,10 +45,12 @@ intent:
   experience: background
   workload: {kind: command, command: make serve}
   no_repositories_or_drives: true
+  inline_policy: {eligible_grants: []}
 ```
 
 - The server normalises the intent through the same door as `POST /templates/import`, so a YAML and a JSON copy of one spec store the same bytes.
 - The run is titled with the workload's name and carries its description.
+- The intent's `inline_policy` is laid onto the deployment default ([sdk.md](../sdk.md#run-documents)), so the stock default's `github_token` grant comes with it, and a local runner refuses that grant. Name `eligible_grants: []`, deliver `github_token` via the org in the delivery policy, or use a `policy_id` without org-held grants.
 - `wardyn apply` also reads a `wardyn.dev/v1alpha1` `WardynWorkload`: the fields above sit under `spec`, and the name is `metadata.name`. The namespace is ignored, and the workload is yours with source `api`.
 
 ## The CLI
@@ -106,6 +108,8 @@ intent:
 - The workload records `last_refusal` (`generation`, `reason`, `message`, `at`) until a launch succeeds. A `security_admin` reading another owner's workload gets the `reason` without the `message`. The audit row is `workload.launch_refused`.
 - Two applies that race leave one run: the launch that loses is ended with reason `workload_replaced`.
 - `workload restart` is recorded as `workload.restart`. Only the owner, the service identity's sponsor or a super admin may restart; a `security_admin` gets `404`, because a restart launches as the service. When it is not the owner's own request it launches only for a service identity whose sponsor's session is live; a person's workload then starts at their next apply.
+- A custom resource's workload restarts under the namespace binding that holds now. A binding deleted since, or one without authority, refuses it `workload_binding_inactive`: a `200` with that `launch.reason`, kept as `last_refusal`.
+- The daemon's 30-second sweep retries a launch whose claim lapsed, as the bound service under the same binding rule, at most once every 60 seconds. A refused launch waits for the resource's next report.
 - Deleting a workload removes the row, then ends its run with reason `workload_deleted`. The owner, the service identity's sponsor, a super admin or a `security_admin` may delete.
 - `GET /workloads/{name}/history[?owner=]` returns the workload's `workload.*` audit rows, newest first: `time`, `action` (`apply`, `launch`, `replace`, `launch_refused`, `restart` or `delete`), `generation`, `run_id`, `ended_run_id` and `reason`. The same callers read it as `GET /workloads/{name}`; a service identity's token does not. A name applied again after a delete shares the old history. The console's drawer lists it.
 

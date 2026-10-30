@@ -13,6 +13,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Changed
 
+- The workloads guide now explains that a workload's policy is laid onto the deployment default, and how to launch on a local runner.
 - Denying any Azure DevOps host now withdraws the person's Azure DevOps credential lane: its credentials and the hosts
   it added; hosts your policy allows itself stay reachable without the credential. This holds at dispatch and on a
   revive. A deny on `dev.azure.com` alone used to leave the person's credential on `<org>.visualstudio.com` and the
