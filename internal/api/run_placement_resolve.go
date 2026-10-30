@@ -68,6 +68,9 @@ type runPlacement struct {
 	// noLocal: the run waits on the pool's remote-hosted runners and the local-eligibility step refuses
 	// it on the person's own (stepLocalEligibility records it on a launch that waits).
 	noLocal bool
+	// mountRunner is the one runner the run's workspace folders are bound to (boundMountsRunner), nil for
+	// none; a launch that waits keeps it for the queue's verdict.
+	mountRunner *uuid.UUID
 }
 
 // placementInput is what the fold knows of the run when it resolves where it goes.
@@ -91,6 +94,9 @@ type placementInput struct {
 	// it; driveRunner is the one runner every drive is bound to (drivesBoundRunner), nil for none.
 	drives      bool
 	driveRunner *uuid.UUID
+	// mountRunner is the one runner the run's workspace folders are bound to (boundMountsRunner), nil for
+	// none: the run goes to that runner or nowhere.
+	mountRunner *uuid.UUID
 	// noLocal: a waiting run the local-eligibility step refused on the person's own runners
 	// (queuedLaunch.NoLocal); set by the queue's verdict and by a promoted run's start, never by a launch.
 	noLocal bool
@@ -293,7 +299,8 @@ func (s *Server) offerKinds(ctx context.Context, f placementInput, pool types.Ru
 // the drive step to refuse. A waiting run the local-eligibility step refused on the person's own runners
 // (noLocal) keeps only the remote-hosted kind the same way. A macOS VM run never keeps the remote-hosted
 // kind, so neither rule moves it off the person's own Macs. A kind the pool has no runner of is the kind
-// mismatch, and a pool whose every kind is denied is the deny sentence for the first of them.
+// mismatch, and a pool whose every kind is denied is the deny sentence for the first of them. A run whose
+// workspace folders are bound to one runner keeps that runner alone (boundFolderTargets).
 func (s *Server) kindTargets(ctx context.Context, f placementInput, pool types.RunnerPool, targets []poolTarget) (map[types.Placement][]poolTarget, *runRefusal) {
 	kinds := map[types.Placement][]poolTarget{}
 	for _, t := range targets {
@@ -323,6 +330,10 @@ func (s *Server) kindTargets(ctx context.Context, f placementInput, pool types.R
 	}
 	if len(kinds) == 0 {
 		return nil, s.placementDeniedRefusal(ctx, refused, f.ceiling)
+	}
+	// A run whose workspace folders are bound to one of the person's runners runs on that runner alone.
+	if f.mountRunner != nil {
+		return boundFolderTargets(f, kinds)
 	}
 	// A run whose every drive is bound to one of the person's own runners in this pool keeps that runner
 	// alone of their own (M10).

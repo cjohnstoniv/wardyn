@@ -110,6 +110,9 @@ type queuedLaunch struct {
 	// DriveRunner is the one runner every drive is bound to (drivesBoundRunner), nil for none: the
 	// verdict then keeps that runner of the person's own, as the start's fold does.
 	DriveRunner *uuid.UUID `json:"drive_runner,omitempty"`
+	// MountRunner is the one runner the run's workspace folders are bound to (boundMountsRunner), nil for
+	// none: the verdict then keeps that runner alone, as the start's fold does.
+	MountRunner *uuid.UUID `json:"mount_runner,omitempty"`
 	// NoLocal says the launch waits on the pool's remote-hosted runners and cannot run on the person's
 	// own (runPlacement.noLocal): the verdict and the start then keep it off them.
 	NoLocal bool `json:"no_local,omitempty"`
@@ -321,7 +324,7 @@ func (q queuedCreate) entry(s *Server, ctx context.Context, waitSec int) (store.
 		Repos: runRepos(types.AgentRun{Repo: q.req.Repo}, nil), LifetimeCapSec: q.f.end.capSec,
 		Resources: s.runFitSpec(q.f.spec, q.f.mainDrive).Resources, Unbound: q.f.place.unbound,
 		Barrier: q.f.enforced, Drives: mountsDrives(q.f.drives, q.f.keep), DriveRunner: drivesBoundRunner(q.f.drives, q.f.keep),
-		NoLocal: q.f.place.noLocal,
+		NoLocal: q.f.place.noLocal, MountRunner: q.f.place.mountRunner,
 	}
 	launch.Repos = append(launch.Repos, repoLocatorsOf(q.f.spec.WorkspaceRepos)...)
 	if q.f.ceiling.Unit != nil {

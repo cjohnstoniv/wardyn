@@ -51,11 +51,18 @@ func workspaceBody(t *testing.T, name string, srcs ...types.WorkspaceSource) str
 }
 
 // advertiseRunnerRoots registers a session for id whose caps advertise roots, the runner owner's
-// --drive-root, as a connected runner's caps event does.
+// --drive-root, as a connected runner's caps event does, from a runnerd that binds bound folders.
 func advertiseRunnerRoots(t *testing.T, s *Server, id uuid.UUID, roots ...string) {
+	t.Helper()
+	advertiseRunnerCaps(t, s, id, true, roots...)
+}
+
+// advertiseRunnerCaps is advertiseRunnerRoots with bound_folders as given: false is an older runnerd.
+func advertiseRunnerCaps(t *testing.T, s *Server, id uuid.UUID, boundFolders bool, roots ...string) {
 	t.Helper()
 	caps := laptopCaps(types.CC1, types.CC2)
 	caps.AllowedRoots = roots
+	caps.BoundFolders = boundFolders
 	data, err := json.Marshal(caps)
 	if err != nil {
 		t.Fatal(err)
@@ -212,16 +219,84 @@ func TestWorkspaceRead_ShowsRunnerState(t *testing.T) {
 	if len(got.Sources) != len(want) {
 		t.Fatalf("sources = %+v, want %d", got.Sources, len(want))
 	}
+	// runner_name is the bound runner's name, empty only when its row is gone.
+	wantName := map[string]string{boundLaptopRoot + "/revoked": "laptop", boundLaptopRoot + "/missing": ""}
 	for _, src := range got.Sources {
 		if src.RunnerState != want[src.Path] {
 			t.Errorf("%s: runner_state = %q, want %q", src.Path, src.RunnerState, want[src.Path])
 		}
+		if name, ok := wantName[src.Path]; ok && src.RunnerName != name {
+			t.Errorf("%s: runner_name = %q, want %q", src.Path, src.RunnerName, name)
+		}
 	}
 	stored, _ := st.GetWorkspace(context.Background(), id)
 	for _, src := range stored.Sources {
-		if src.RunnerState != "" {
-			t.Errorf("the stored row carries runner_state %q for %s; it is a read projection", src.RunnerState, src.Path)
+		if src.RunnerState != "" || src.RunnerName != "" {
+			t.Errorf("the stored row carries runner_state %q, runner_name %q for %s; they are a read projection", src.RunnerState, src.RunnerName, src.Path)
 		}
+	}
+}
+
+// runner_state and runner_name are read projections: a PUT that round-trips a read, or carries any value
+// for them, is neither refused for them nor changes anything by them.
+func TestWorkspaceUpdate_IgnoresRunnerStateInBody(t *testing.T) {
+	assertNoFolderOnThisHost(t)
+	srv, st, _ := ownerRunnerHarness(t, runner.UserMountPolicy{Roots: []string{boundLaptopRoot}})
+	mine := st.add(ownerMemberSub, types.RunnerOwnerPerson, types.RunnerClaimed)
+	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces", member, workspaceBody(t, "laptop-folder", boundSource(boundFolder, mine)))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create = %d %s", w.Code, w.Body.String())
+	}
+	var created types.Workspace
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	storedSources := func() string {
+		t.Helper()
+		ws, err := st.GetWorkspace(context.Background(), created.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := json.Marshal(ws.Sources)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	before := storedSources()
+
+	src := boundSource(boundFolder, mine)
+	src.RunnerState, src.RunnerName = types.WorkspaceSourceRunnerRevoked, "someone-else"
+	w = doSSO(t, srv, http.MethodPut, "/api/v1/workspaces/"+created.ID.String(), member, workspaceBody(t, "laptop-folder", src))
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT with runner_state %q = %d %s, want 200", src.RunnerState, w.Code, w.Body.String())
+	}
+	if after := storedSources(); after != before {
+		t.Errorf("stored sources after the PUT = %s, want them unchanged: %s", after, before)
+	}
+	if strings.Contains(before, "runner_state") || strings.Contains(before, "runner_name") {
+		t.Errorf("stored sources = %s, want no read projection persisted", before)
+	}
+}
+
+// A runner whose wardyn-runnerd does not say bound_folders is older than the checks that bind a bound
+// folder, so the folder is never verified on it and the run is refused, saying to update the runner.
+func TestRunCreate_RunnerBoundFolderNeedsBoundFoldersCap(t *testing.T) {
+	mine := uuid.New()
+	s := &Server{}
+	advertiseRunnerCaps(t, s, mine, false, boundLaptopRoot)
+	mounts := []runner.Mount{{Source: boundFolder, Target: composerWorkspaceTarget, ReadOnly: true, MemberAuthored: true, BoundRunner: mine.String()}}
+	if got := s.mountPathsOn(mine, mounts); got["SandboxSpec.Mounts[0]"] {
+		t.Errorf("mountPathsOn(a runner without bound_folders) = %v, want the folder unverified", got)
+	}
+	refusal := s.boundFolderPlacementRefusal(&mine, types.PlacementLocal, mounts)
+	if refusal == nil || refusal.body.Reason != string(placement.ReasonPlacementLocalPath) || !strings.Contains(refusal.body.Error, "update the runner") {
+		t.Errorf("placement on a runner without bound_folders = %+v, want %s saying to update the runner", refusal, placement.ReasonPlacementLocalPath)
+	}
+	advertiseRunnerCaps(t, s, mine, true, boundLaptopRoot)
+	if refusal := s.boundFolderPlacementRefusal(&mine, types.PlacementLocal, mounts); refusal != nil {
+		t.Errorf("placement on the updated runner = %+v, want none", refusal)
 	}
 }
 

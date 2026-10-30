@@ -505,6 +505,8 @@ const (
 	// `detail` names, the scan itself did not complete.
 	reasonSourceScanFailed   = "source_scan_failed"
 	reasonSourceScanNoRunner = "source_scan_no_runner"
+	// reasonSourceScanRunnerBound: the folder is bound to a runner, so Wardyn cannot read it here.
+	reasonSourceScanRunnerBound = "source_scan_runner_bound"
 )
 
 // POST /runs and POST /runs/preflight's policy resolution (inline_policy.go):

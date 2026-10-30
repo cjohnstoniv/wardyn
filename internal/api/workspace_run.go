@@ -63,6 +63,13 @@ var errWorkspaceSourceTarget = errors.New("invalid workspace source target")
 // the clone grants run AFTER it (credential_grants.run_id has an immediate FK
 // to agent_runs), which is why the grant half is split out.
 func wireWorkspaceSource(run *types.AgentRun, policy *types.RunPolicySpec, ws types.Workspace) (cloneURLs, ephemeralDirs []string, err error) {
+	// A session runs on Wardyn's own executor, which never binds a folder on a runner: refused before
+	// anything is wired (the record door refuses it first, writeSessionRunnerBoundRefusal).
+	for _, src := range ws.Sources {
+		if src.Type == types.WorkspaceSourceTypeLocalDir && src.RunnerID != nil {
+			return nil, nil, fmt.Errorf("workspace %s source %q: %s", ws.ID, src.Path, sessionRunnerBoundMsg)
+		}
+	}
 	for _, src := range ws.Sources {
 		// Re-validated above the switch, so it covers repo, local_dir and ephemeral
 		// alike, as seedRequestWorkspace does. A repo or local_dir target becomes a real

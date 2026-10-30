@@ -95,9 +95,18 @@ func buildRunMounts(policy types.RunPolicySpec, member userMountPosture) []runne
 			// owning workspace by — so a bind is member-authored here exactly when
 			// the run-create gate treated it as member-authored.
 			MemberAuthored: member.Sources[wm.Source],
+			BoundRunner:    boundRunnerOf(member, wm.Source),
 		})
 	}
 	return mounts
+}
+
+// boundRunnerOf is the runner member binds a folder at src to, "" for none.
+func boundRunnerOf(member userMountPosture, src string) string {
+	if rid, ok := member.Bound[src]; ok {
+		return rid.String()
+	}
+	return ""
 }
 
 // resolveRunUpstreamProxy resolves the operator-wide upstream/corp proxy

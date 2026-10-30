@@ -456,7 +456,7 @@ func (s *Server) upsertAndAttach(r *http.Request, srcs []types.WorkspaceSource, 
 		// address the read error left undecided.
 		hosts, _ := ado.forAddresses(locator)
 		row, err := s.cfg.Store.UpsertSource(ctx, types.Source{
-			ID: newID, Kind: kind, Locator: locator, Ref: ref,
+			ID: newID, Kind: kind, Locator: locator, Ref: ref, RunnerID: src.RunnerID,
 			Name: lastPathSegment(locator, hosts), Status: types.WorkspacePendingScan,
 			CreatedAt: now, UpdatedAt: now,
 		})
@@ -471,6 +471,7 @@ func (s *Server) upsertAndAttach(r *http.Request, srcs []types.WorkspaceSource, 
 			s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 				"source.write", row.ID.String(), "success", mustJSON(map[string]any{
 					"kind": string(row.Kind), "locator": redactRepoURL(row.Locator), "ref": row.Ref, "writable": src.Writable,
+					"runner_id": row.RunnerID,
 				})))
 		}
 		id := row.ID

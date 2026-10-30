@@ -12,6 +12,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
@@ -49,6 +50,31 @@ func parseWorkspaceSourceArg(s string) (sdk.WorkspaceSource, error) {
 	default:
 		return sdk.WorkspaceSource{}, fmt.Errorf("invalid --add %q: type must be dir, repo, or ephemeral", s)
 	}
+}
+
+// bindDirSources binds every dir folder of req to runner (--runner): each one is on that runner, which
+// checks it when a run starts. A legacy --kind local_dir source becomes the one composition source, as
+// the server would fold it, so it can carry the binding. The server answers whether the runner is the
+// caller's own.
+func bindDirSources(req *sdk.WorkspaceRequest, runner string) error {
+	id, err := uuid.Parse(runner)
+	if err != nil {
+		return fmt.Errorf("invalid --runner %q: want a runner id", runner)
+	}
+	if req.Kind == sdk.WorkspaceKindLocalDir && len(req.Sources) == 0 {
+		req.Sources = []sdk.WorkspaceSource{{Type: sdk.WorkspaceSourceTypeLocalDir, Path: strings.TrimSpace(req.Source), Target: req.DefaultTarget, Writable: req.Writable}}
+		req.Kind, req.Source, req.DefaultTarget, req.Writable = "", "", "", false
+	}
+	bound := false
+	for i := range req.Sources {
+		if req.Sources[i].Type == sdk.WorkspaceSourceTypeLocalDir {
+			req.Sources[i].RunnerID, bound = &id, true
+		}
+	}
+	if !bound {
+		return fmt.Errorf("--runner names the runner that holds this command's dir folders, and it adds none")
+	}
+	return nil
 }
 
 // firstWorkspaceSourceLabel is the human-meaningful value of one source: the
@@ -155,6 +181,7 @@ func workspaceCmd(client clientFn) *cobra.Command {
 	var createJSON bool
 	var addSources []string
 	var attachSources []string
+	var createRunner string
 	create := &cobra.Command{
 		Use:   "create --kind local_dir --source <path> [--add TYPE:VALUE[@TARGET] ...] [--attach SOURCE-ID[@TARGET][:ro|:rw] ...]",
 		Short: "Onboard a workspace (this is what clears the run-create onboarding gate)",
@@ -183,6 +210,11 @@ func workspaceCmd(client clientFn) *cobra.Command {
 					req.Name = firstWorkspaceSourceLabel(req.Sources[0])
 				}
 			}
+			if createRunner != "" {
+				if err := bindDirSources(&req, createRunner); err != nil {
+					return err
+				}
+			}
 			ws, err := client().CreateWorkspace(cmd.Context(), req)
 			if err != nil {
 				return err
@@ -202,6 +234,7 @@ func workspaceCmd(client clientFn) *cobra.Command {
 	create.Flags().BoolVar(&req.Writable, "writable", false, "mount READ-WRITE so a run attaching this source can PERSIST changes to the host directory (default read-only)")
 	create.Flags().StringArrayVar(&addSources, "add", nil, `add one composition source, repeatable: "dir:/host/path[@/target]", "repo:org/lib[@/target]", or "ephemeral:[@/target]" (mutually exclusive with --kind/--source/--ref/--target/--writable; no per-source --ref/--writable in this form)`)
 	create.Flags().StringArrayVar(&attachSources, "attach", nil, `attach one LIBRARY source by id, repeatable: "SOURCE-ID[@/target][:ro|:rw]" (ids from `+"`wardyn source list`"+`; default read-only, ":rw" opts a dir into read-write)`)
+	create.Flags().StringVar(&createRunner, "runner", "", "The id of one of your own runners that holds the folders. Every dir folder in this command is on it.")
 	create.Flags().BoolVar(&createJSON, "json", false, "emit the created workspace as JSON")
 
 	var listJSON bool
