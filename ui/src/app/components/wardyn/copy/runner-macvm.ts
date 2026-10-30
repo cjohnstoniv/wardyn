@@ -118,3 +118,45 @@ export const MACVM_K = {
   /** MV-K03, badge: not offered */
   K03: "macOS VMs · not offered",
 } as const;
+
+/** Guest posture and base age on the runner drawer (board J7, rc.9). The id in each comment is the copy sheet's. */
+export const MACVM_P = {
+  /** MAC-P01, sub-label */
+  P01: "Guest posture",
+  /** MAC-P02, fact label */
+  P02: "System Integrity Protection",
+  /** MAC-P03, fact label */
+  P03: "Gatekeeper",
+  /** MAC-P04, fact label */
+  P04: "Configuration profiles",
+  /** MAC-P05, fact label */
+  P05: "MDM enrolment",
+  /** MAC-P06, fact label */
+  P06: "Organisation CA",
+  /** MAC-P07, values: each is its own string */
+  P07_ON: "On",
+  P07_OFF: "Off",
+  P07_INSTALLED: (n: number) => `${n} installed`,
+  P07_NONE: "None",
+  P07_NOT_ENROLLED: "Not enrolled",
+  P07_ENROLLED: "Enrolled, configuration only",
+  P07_TRUSTED: "Trusted",
+  P07_NOT_TRUSTED: "Not trusted",
+  /** MAC-P08, hint */
+  P08: "Read from the base when it was last prepared or edited. To sign-ins that require a compliant device, the guest is an unmanaged device.",
+  /** MAC-P09, fact label */
+  P09: "Base age",
+  /** MAC-P10, value; one day reads "1 day ago" (MAC-P19's ruling) */
+  P10: (date: string, days: number) => `Prepared ${date} (${days === 1 ? "1 day" : `${days} days`} ago)`,
+  /** MAC-P11, beside the base age */
+  P11: (host: string, guest: string) => `This Mac runs macOS ${host}; the guest runs ${guest}.`,
+  /** MAC-P12, chip */
+  P12: "Base too old",
+  /** MAC-P13, the base is older than the organisation allows */
+  P13: (days: number, max: number) =>
+    `This base was prepared ${days === 1 ? "1 day" : `${days} days`} ago, and your organisation allows ${max}. Its owner runs \`wardyn-runnerd macos-vm prepare --new-image\` on the Mac.`,
+  /** MAC-E16, fact label */
+  E16: "Last edited",
+  /** MAC-E17, value */
+  E17: (date: string) => `${date}, on this Mac`,
+} as const;

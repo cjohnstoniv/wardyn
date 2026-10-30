@@ -134,6 +134,7 @@ export function macOSOfferOf(pool: PoolMacOSVM | undefined): MacOSOffer | undefi
   const refusals = pool.refusals ?? [];
   if (pool.runner && refusals.length === 1) return { ok: false, refusal: runnerRefusal(refusals[0]) };
   const notOffered = refusals.length === 0 || refusals.some((r) => r.why === "not_offered");
-  if (!notOffered && refusals[0].why === "base_too_old") return { ok: false, refusal: { why: "pool_base_too_old", max: refusals[0].need ?? 0 } };
+  const tooOld = refusals.find((r) => r.why === "base_too_old");
+  if (!notOffered && tooOld) return { ok: false, refusal: { why: "pool_base_too_old", max: tooOld.need ?? 0 } };
   return { ok: false, refusal: { why: notOffered ? "pool_not_offered" : "pool_cant_now" } };
 }

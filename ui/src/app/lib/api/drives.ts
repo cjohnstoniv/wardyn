@@ -21,8 +21,8 @@ import type { CapabilitySubjectType } from "../types";
 import type { GovernancePreviewInput } from "./governance";
 import { asJson, errText, HttpError, unwrapList, wfetch } from "./core";
 
-// types.DriveBackend — four backends, two per runner.
-export type DriveBackend = "docker_volume" | "host_path" | "k8s_pvc" | "k8s_pvc_static";
+// types.DriveBackend — five backends: two per Docker or cluster runner, and a disk kept on one Mac.
+export type DriveBackend = "docker_volume" | "host_path" | "k8s_pvc" | "k8s_pvc_static" | "mac_disk";
 // types.HomeTemplate. There is deliberately NO whole-email template: an address
 // carries an "@", which no directory segment (and no DNS-1123 label) can hold.
 export type HomeTemplate = "hash" | "sub" | "email_local";
@@ -245,7 +245,7 @@ export function teamGrantsKnown(d: UserDriveListItem, grants: UserDriveGrant[]):
 // NEVER stored, so it is not on the wire and the console derives it too. An
 // unknown backend reads as a share, the conservative half, exactly as Go does.
 export const isManagedBackend = (b: DriveBackend): boolean =>
-  b === "docker_volume" || b === "k8s_pvc";
+  b === "docker_volume" || b === "k8s_pvc" || b === "mac_disk";
 
 // DriveObjectNamedByWardyn, inverted for the UI: whether Wardyn MINTS this
 // backend's storage object name. host_path is the only backend on the other

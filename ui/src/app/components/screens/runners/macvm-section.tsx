@@ -10,7 +10,8 @@
 import * as React from "react";
 import type { MacVMCaps } from "../../../lib/types/runner-macvm";
 import type { RunnerAmounts } from "../../../lib/types/runners";
-import { MACVM_R } from "../../wardyn/copy/runner-macvm";
+import { NR_MACHINE } from "../../wardyn/copy/new-run/machine";
+import { MACVM_P, MACVM_R } from "../../wardyn/copy/runner-macvm";
 import { harnessDisplayNames } from "../../../lib/model-access";
 import { useShellSetupStatus } from "../../wardyn/model-access-context";
 import { DESKTOP } from "../../wardyn/copy/desktop";
@@ -19,7 +20,8 @@ import { RUNNER } from "../../wardyn/copy/runners";
 import { Mono } from "../../wardyn/code-block";
 import { Chip } from "../../wardyn/primitives";
 import { Hint } from "./resource-table";
-import { macVMBadge, refused, sizeShortfall } from "./macvm-view";
+import { shortDate } from "../../../lib/format";
+import { baseAgeOf, baseTooOld, editedAtText, macVMBadge, postureRows, refused, sizeShortfall } from "./macvm-view";
 
 /** A string with `code` spans, the way the boards set `wardyn-runnerd setup`. */
 export function MacVMText({ text }: { text: string }) {
@@ -30,8 +32,8 @@ export function MacVMText({ text }: { text: string }) {
   );
 }
 
-export function MacVMBadge({ caps, active, perRun }: { caps: MacVMCaps | undefined; active: number | undefined; perRun?: RunnerAmounts }) {
-  const badge = macVMBadge(caps, active, perRun);
+export function MacVMBadge({ caps, active, perRun, maxBaseAgeDays }: { caps: MacVMCaps | undefined; active: number | undefined; perRun?: RunnerAmounts; maxBaseAgeDays?: number }) {
+  const badge = macVMBadge(caps, active, perRun, maxBaseAgeDays);
   return badge ? <Chip tone={badge.tone}>{badge.text}</Chip> : null;
 }
 
@@ -50,6 +52,7 @@ function Facts({ caps, active }: { caps: MacVMCaps; active: number | undefined }
   }
   if (harnesses.length) rows.push([MACVM_R.R22, harnesses.map((h) => harnessDisplayNames(setup, [h])).join(", ")]);
   if (caps.desktop === "control") rows.push([MACVM_R.R23, MACVM_R.R24]);
+  if (caps.base.edited_at) rows.push([MACVM_P.E16, MACVM_P.E17(editedAtText(caps.base.edited_at))]);
   return (
     <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1">
       {rows.map(([label, value], i) => (
@@ -62,7 +65,39 @@ function Facts({ caps, active }: { caps: MacVMCaps; active: number | undefined }
   );
 }
 
-function Body({ caps, active, perRun, runner }: { caps: MacVMCaps; active: number | undefined; perRun?: RunnerAmounts; runner: string }) {
+/** The base's age, and beside it the Mac's own macOS against the guest's (MAC-P09 to P11). */
+function BaseAge({ age, host, guest }: { age: NonNullable<ReturnType<typeof baseAgeOf>>; host: string | undefined; guest: string | undefined }) {
+  return (
+    <dl className="mt-1 grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1">
+      <dt className="text-muted-foreground">{MACVM_P.P09}</dt>
+      <dd>
+        {MACVM_P.P10(shortDate(age.created), age.days)}
+        {host && guest && <span className="block text-meta text-muted-foreground">{MACVM_P.P11(host, guest)}</span>}
+      </dd>
+    </dl>
+  );
+}
+
+/** What the runner read of the guest in the base, as it was when the base was prepared or edited (MAC-P01 to P08). */
+function GuestPosture({ rows }: { rows: [string, string][] }) {
+  if (!rows.length) return null;
+  return (
+    <div data-guest-posture>
+      <h4 className="mt-2 text-meta font-medium text-foreground">{MACVM_P.P01}</h4>
+      <dl className="mt-1 grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1">
+        {rows.map(([label, value]) => (
+          <React.Fragment key={label}>
+            <dt className="text-muted-foreground">{label}</dt>
+            <dd>{value}</dd>
+          </React.Fragment>
+        ))}
+      </dl>
+      <Hint>{MACVM_P.P08}</Hint>
+    </div>
+  );
+}
+
+function Body({ caps, active, perRun, runner, hostOS, maxBaseAgeDays }: { caps: MacVMCaps; active: number | undefined; perRun?: RunnerAmounts; runner: string; hostOS?: string; maxBaseAgeDays?: number }) {
   const { state, progress, guest_os, error } = caps.base;
   const short = sizeShortfall(caps, perRun);
   if (state === "preparing") {
@@ -104,6 +139,37 @@ function Body({ caps, active, perRun, runner }: { caps: MacVMCaps; active: numbe
       </>
     );
   }
+  const age = baseAgeOf(caps.base, maxBaseAgeDays);
+  const ageLine = age && <BaseAge age={age} host={hostOS} guest={caps.base.guest?.os_version} />;
+  const posture = <GuestPosture rows={postureRows(caps.base.guest)} />;
+  // An organisation maximum the base is past: not offered, and the Mac's owner is told what to run. Age and posture still show.
+  if (age?.tooOld) {
+    return (
+      <>
+        <div className="flex flex-wrap items-center gap-2">
+          <Chip>{MACVM_R.R14}</Chip>
+          <Chip tone="danger">{MACVM_P.P12}</Chip>
+          {guest_os && <span className="text-muted-foreground">{MACVM_R.R06(guest_os)}</span>}
+        </div>
+        <p className="mt-1 text-foreground"><MacVMText text={MACVM_P.P13(age.days, age.max!)} /></p>
+        {ageLine}
+        {posture}
+      </>
+    );
+  }
+  // A maximum is set and the runner reports no age to hold to it (MAC-P16, the sentence New Run says too): not offered.
+  if (!age && baseTooOld(caps.base, maxBaseAgeDays)) {
+    return (
+      <>
+        <div className="flex flex-wrap items-center gap-2">
+          <Chip>{MACVM_R.R14}</Chip>
+          {guest_os && <span className="text-muted-foreground">{MACVM_R.R06(guest_os)}</span>}
+        </div>
+        <p className="mt-1 text-foreground">{NR_MACHINE.MACOS_BASE_NO_AGE(runner)}</p>
+        {posture}
+      </>
+    );
+  }
   const observe = caps.desktop === "observe";
   return (
     <>
@@ -113,6 +179,8 @@ function Body({ caps, active, perRun, runner }: { caps: MacVMCaps; active: numbe
         {guest_os && <span className="text-muted-foreground">{MACVM_R.R06(guest_os)}</span>}
       </div>
       {observe && <p className="mt-1 text-foreground">{MACVM_R.R40}</p>}
+      {ageLine}
+      {posture}
       <div className="mt-1"><Facts caps={caps} active={active} /></div>
       {!observe && <Hint>{MACVM_R.R25}</Hint>}
     </>
@@ -120,7 +188,17 @@ function Body({ caps, active, perRun, runner }: { caps: MacVMCaps; active: numbe
 }
 
 /** The drawer section. `mac` says the runner reports a macOS host: without caps that reads as off, and any other runner shows nothing. */
-export function MacVMSection({ caps, mac, active, perRun, runner }: { caps: MacVMCaps | undefined; mac: boolean; active?: number; perRun?: RunnerAmounts; runner: string }) {
+export function MacVMSection({ caps, mac, active, perRun, runner, hostOS, maxBaseAgeDays }: {
+  caps: MacVMCaps | undefined;
+  mac: boolean;
+  active?: number;
+  perRun?: RunnerAmounts;
+  runner: string;
+  /** The Mac's own macOS version, from its posture. */
+  hostOS?: string;
+  /** The organisation's maximum base age in days (site config macos_vm.max_base_age_days); absent or 0 is none. */
+  maxBaseAgeDays?: number;
+}) {
   if (!caps && !mac) return null;
   return (
     <section className="border-b border-border py-3" data-macvm>
@@ -130,7 +208,7 @@ export function MacVMSection({ caps, mac, active, perRun, runner }: { caps: MacV
       </div>
       <div className="space-y-0.5 text-body text-foreground">
         {caps ? (
-          <Body caps={caps} active={active} perRun={perRun} runner={runner} />
+          <Body caps={caps} active={active} perRun={perRun} runner={runner} hostOS={hostOS} maxBaseAgeDays={maxBaseAgeDays} />
         ) : (
           <>
             <Chip>{DESKTOP.statusOff}</Chip>

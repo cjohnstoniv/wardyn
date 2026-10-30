@@ -6,6 +6,7 @@
 // The pool list's `macos_vm` read as the offer the OS row and the harness list use (mock M-N1).
 import { describe, expect, it } from "vitest";
 import type { PoolMacOSVM, PoolMacOSVMRefusal } from "../../../../../lib/types/runner-pools";
+import { NR_MACHINE } from "../../../../wardyn/copy/new-run/machine";
 import { harnessRefusal, macOSOfferOf, refusalText } from "./macos-offer";
 
 const refusal = (over: Partial<PoolMacOSVMRefusal>): PoolMacOSVMRefusal => ({ runner: "mac-studio-07", why: "not_offered", detail: "", ...over });
@@ -44,6 +45,10 @@ describe("macOSOfferOf", () => {
     const old = (need: number) => [refusal({ why: "base_too_old", runner: "mac-1", have: 5, need }), refusal({ why: "at_limit", runner: "mac-2" })];
     expect(text({ offered: false, refusals: old(30) })).toBe("Every runner in this pool must have a macOS base prepared in the last 30 days, and at least one doesn't. Choose another pool, or ask the Mac's owner to prepare a new base.");
     expect(text({ offered: false, refusals: old(1) })).toContain("prepared in the last 1 day, and at least one doesn't.");
+  });
+  it("a base too old is read from whichever refusal carries it, not only the first", () => {
+    const pool: PoolMacOSVM = { offered: false, refusals: [refusal({ why: "at_limit", runner: "mac-2" }), refusal({ why: "base_too_old", runner: "mac-1", have: 41, need: 30 })] };
+    expect(text(pool)).toBe(NR_MACHINE.MACOS_BASE_TOO_OLD_POOL(30));
   });
   it("a Mac that refused itself shows the canon line for its reason, with the numbers, and never its own text", () => {
     const refused = (extra: Record<string, unknown>) => one({ why: "runner_refused" as PoolMacOSVMRefusal["why"], detail: "PLANTED runner text", ...extra } as Partial<PoolMacOSVMRefusal>);
