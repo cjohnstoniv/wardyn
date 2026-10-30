@@ -265,7 +265,14 @@ func TestRunAttach_CtxCancelRestoresTerminal(t *testing.T) {
 
 	// A real tty is not available under `go test`; inject a fake pair so the
 	// restore path is exercised regardless.
-	makeRawFn = func(int) (*term.State, error) { return &term.State{}, nil }
+	rawEntered := make(chan struct{}, 1)
+	makeRawFn = func(int) (*term.State, error) {
+		select {
+		case rawEntered <- struct{}{}:
+		default:
+		}
+		return &term.State{}, nil
+	}
 	restored := make(chan struct{}, 1)
 	restoreTerminalFn = func(int, *term.State) error {
 		select {
@@ -306,9 +313,14 @@ func TestRunAttach_CtxCancelRestoresTerminal(t *testing.T) {
 		done <- runAttach(ctx, &sdk.Client{BaseURL: srv.URL}, "run-1", attachOptions{})
 	}()
 
-	// Let the dial complete and the pump goroutines start, then cancel — the
-	// same transition signal.NotifyContext drives on TERM/HUP/INT.
-	time.Sleep(50 * time.Millisecond)
+	// Cancel once the session is live — the same transition signal.NotifyContext
+	// drives on TERM/HUP/INT. A cancel during the mint or dial is a clean detach
+	// that never enters raw mode, so a fixed sleep failed on a loaded runner.
+	select {
+	case <-rawEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("runAttach never entered raw mode")
+	}
 	cancel()
 
 	select {
