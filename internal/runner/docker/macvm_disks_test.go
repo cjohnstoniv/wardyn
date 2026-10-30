@@ -94,3 +94,31 @@ func TestReclaimMacDiskRemovesOnlyItsImage(t *testing.T) {
 		t.Fatalf("a name outside the drives folder: %v", err)
 	}
 }
+
+// A run whose disk drive another VM on this Mac holds is refused at its start: no helper starts, the
+// ledger holds nothing for it, and the run that holds the disk keeps its lock.
+func TestARunRefusedForAHeldDiskAttachesNothing(t *testing.T) {
+	r := newMacRig(t)
+	img, _ := r.c.Layout.DriveImage(testDiskObject)
+	unlock, err := macvm.LockDisk(img)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	spawned := 0
+	r.c.spawn = func(string) error { spawned++; return nil }
+	spec := macSpec()
+	spec.Drives = []types.DriveMount{testDiskDrive(runner.DriveTarget)}
+	if _, err := r.d.CreateSandbox(t.Context(), spec); err == nil || err.Error() != runner.MacVMDiskLocked("Notes") {
+		t.Fatalf("err = %v, want %q", err, runner.MacVMDiskLocked("Notes"))
+	}
+	if spawned != 0 || len(r.held(t)) != 0 {
+		t.Fatalf("the refused run started %d helpers and holds %d ledger entries", spawned, len(r.held(t)))
+	}
+	if again, err := macvm.LockDisk(img); !errors.Is(err, macvm.ErrDiskInUse) {
+		if again != nil {
+			again()
+		}
+		t.Fatalf("the holder lost the disk's lock: %v", err)
+	}
+}
