@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -326,6 +327,35 @@ func TestStage2ReplacesGuestAgent(t *testing.T) {
 	if res.AgentVersion != "0.10.1" || string(g.files["/usr/local/libexec/wardyn-guest-agent"]) != "new agent" {
 		t.Fatalf("agent not replaced: %+v", res)
 	}
+	// The same build is the run launcher: every run's workload starts through it.
+	if !res.AgentRun || string(g.files[guestagent.MacAgentRunPath]) != "new agent" {
+		t.Fatalf("no run launcher at %s: %+v", guestagent.MacAgentRunPath, res)
+	}
+}
+
+// A base whose record has no run launcher (an rc.8 base) wants a tools update even at the runner's own
+// agent build, so its runs can start.
+func TestNeedsToolsUpdateWithoutTheRunLauncher(t *testing.T) {
+	f, tf, _ := stage2Prep(t)
+	if _, err := macvm.Prepare(context.Background(), f.opts); err != nil {
+		t.Fatal(err)
+	}
+	base := f.opts.Layout.BaseDir(0)
+	if macvm.NeedsToolsUpdate(base, tf.tooling, "0.10.0", time.Now()) {
+		t.Fatal("a base with its launcher wants an update")
+	}
+	rec, err := macvm.ReadToolsRecord(base)
+	if err != nil || !rec.AgentRun {
+		t.Fatalf("record %+v %v", rec, err)
+	}
+	rec.AgentRun = false
+	b, _ := json.Marshal(rec)
+	if err := os.WriteFile(filepath.Join(base, macvm.ToolsRecordFile), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !macvm.NeedsToolsUpdate(base, tf.tooling, "0.10.0", time.Now()) {
+		t.Fatal("a base without the run launcher does not want an update")
+	}
 }
 
 func TestParseToolingRefusesLoosePins(t *testing.T) {
@@ -408,6 +438,12 @@ func TestShippedToolingMatchesCatalog(t *testing.T) {
 func stage2Prep(t *testing.T) (*prepFixture, *toolsFixture, *guest) {
 	t.Helper()
 	f, tf, g := newPrep(t), newTools(t), newGuest()
+	// Prepare pushes this helper's guest agent build, the one stage 1 installed.
+	bin := filepath.Join(t.TempDir(), "agent")
+	if err := os.WriteFile(bin, []byte("agent 0.10.0"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tf.opts.Agent = &macvm.AgentPin{Version: "0.10.0", Path: bin, Dest: "/usr/local/libexec/wardyn-guest-agent"}
 	var boots, stops atomic.Int64
 	f.opts.Stage2 = tf.stage(g, &boots, &stops)
 	return f, tf, g

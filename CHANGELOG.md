@@ -11,6 +11,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- macOS VMs: a run's workload now starts in the guest. Each base carries the standard launcher (task, command and
+  self-test modes). A run that asks for several agents, held tool approvals or a service is refused by the launcher
+  with a reason.
+
 ### Fixed
 
 - macOS VMs: the files a run's policy manages in the guest, such as a harness's managed settings and server list and

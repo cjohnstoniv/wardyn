@@ -26,6 +26,10 @@ import (
 )
 
 func main() {
+	// Stage 2 pushes this binary to /usr/local/bin/agent-run too: by that name it is the run launcher.
+	if filepath.Base(os.Args[0]) == filepath.Base(guestagent.MacAgentRunPath) {
+		os.Exit(guestagent.AgentRunMain(os.Args[1:]))
+	}
 	out := flag.String("out", "/var/run/wardyn-guest", "directory for detached execs' output (cleared at boot)")
 	plist := flag.String("plist", guestagent.MacAgentPlistPath, "this agent's LaunchDaemon plist, which tools mode may replace")
 	flag.Parse()

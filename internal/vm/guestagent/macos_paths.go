@@ -12,6 +12,9 @@ const (
 	MacAgentPlistPath = "/Library/LaunchDaemons/" + MacAgentLabel + ".plist"
 	// MacAgentBinaryPath is where stage 1 installs the agent's binary.
 	MacAgentBinaryPath = "/usr/local/libexec/wardyn-guest-agent"
+	// MacAgentRunPath is the run launcher every sandbox has (deploy/images/README.md): in a macOS guest,
+	// the agent's own binary, which stage 2 pushes here and which runs AgentRunMain by this name.
+	MacAgentRunPath = "/usr/local/bin/agent-run"
 )
 
 // Where a macOS guest's harnesses read the files a run's walls are made of. The runner's path table

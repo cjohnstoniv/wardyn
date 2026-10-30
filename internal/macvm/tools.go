@@ -168,6 +168,8 @@ type ToolsResult struct {
 	Withheld     map[string]error
 	CLT          bool
 	AgentVersion string // set when the guest agent was replaced
+	// AgentRun says the run launcher (guestagent.MacAgentRunPath, the agent's own binary) was pushed.
+	AgentRun bool
 	// Pins are the pins that installed and passed their version check; Tried
 	// are all the pins this run attempted.
 	Pins  map[string]PinRecord
@@ -279,19 +281,15 @@ func installTools(ctx context.Context, g ToolsGuest, o ToolsOptions) (ToolsResul
 		res.Tried[p.ID] = PinRecord{Version: p.Version, SHA256: p.SHA256}
 	}
 	if o.Agent != nil {
-		f, err := os.Open(o.Agent.Path)
-		if err != nil {
-			return res, fmt.Errorf("macvm: guest agent: %w", err)
-		}
-		fi, err := f.Stat()
-		if err == nil {
-			err = g.Push(ctx, o.Agent.Dest, 0o755, f, fi.Size())
-		}
-		_ = f.Close()
-		if err != nil {
+		if err := pushAgent(ctx, g, o.Agent.Path, o.Agent.Dest); err != nil {
 			return res, fmt.Errorf("macvm: replacing the guest agent: %w", err)
 		}
 		res.AgentVersion = o.Agent.Version
+		// The same binary is the run launcher by its name, so a run's agent-run is always this build's.
+		if err := pushAgent(ctx, g, o.Agent.Path, guestagent.MacAgentRunPath); err != nil {
+			return res, fmt.Errorf("macvm: installing the run launcher: %w", err)
+		}
+		res.AgentRun = true
 	}
 	var cltErr error
 	for attempt := 0; attempt < 2; attempt++ {
@@ -322,6 +320,20 @@ func installTools(ctx context.Context, g ToolsGuest, o ToolsOptions) (ToolsResul
 		res.Pins[p.ID] = res.Tried[p.ID]
 	}
 	return res, nil
+}
+
+// pushAgent pushes the guest agent's binary at path on the host to dest in the guest, root's and 0755.
+func pushAgent(ctx context.Context, g ToolsGuest, path, dest string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	return g.Push(ctx, dest, 0o755, f, fi.Size())
 }
 
 // installCLT installs the Command Line Tools through softwareupdate, the
@@ -570,6 +582,7 @@ type WithheldRecord struct {
 // with the reason, for the status the drawer reads.
 type ToolsRecord struct {
 	AgentVersion string                    `json:"agent_version,omitempty"`
+	AgentRun     bool                      `json:"agent_run,omitempty"`
 	Pins         map[string]PinRecord      `json:"pins"`
 	Withheld     map[string]WithheldRecord `json:"withheld,omitempty"`
 	Harnesses    []string                  `json:"harnesses"`
@@ -587,7 +600,7 @@ func ReadToolsRecord(baseDir string) (ToolsRecord, error) {
 }
 
 func writeToolsRecord(dir string, r ToolsResult, agentVersion string, at time.Time) error {
-	rec := ToolsRecord{AgentVersion: agentVersion, Pins: r.Pins, Harnesses: r.Harnesses, TriedAt: at.UTC()}
+	rec := ToolsRecord{AgentVersion: agentVersion, AgentRun: r.AgentRun, Pins: r.Pins, Harnesses: r.Harnesses, TriedAt: at.UTC()}
 	for id, err := range r.Withheld {
 		if rec.Withheld == nil {
 			rec.Withheld = map[string]WithheldRecord{}
@@ -598,7 +611,8 @@ func writeToolsRecord(dir string, r ToolsResult, agentVersion string, at time.Ti
 }
 
 // NeedsToolsUpdate says whether the base in baseDir lacks the pins in t or
-// the guest agent build agentVersion ("" skips the agent check). A harness
+// the guest agent build agentVersion, or its run launcher ("" skips both agent
+// checks: a base without the launcher cannot start a run). A harness
 // withheld at the current pin does not count for ToolsRetryAfter after the
 // attempt; a new pin counts at once.
 func NeedsToolsUpdate(baseDir string, t Tooling, agentVersion string, now time.Time) bool {
@@ -606,7 +620,7 @@ func NeedsToolsUpdate(baseDir string, t Tooling, agentVersion string, now time.T
 	if err != nil {
 		return true
 	}
-	if agentVersion != "" && rec.AgentVersion != agentVersion {
+	if agentVersion != "" && (rec.AgentVersion != agentVersion || !rec.AgentRun) {
 		return true
 	}
 	for _, p := range t.Harnesses {

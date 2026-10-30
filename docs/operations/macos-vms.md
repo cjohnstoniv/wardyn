@@ -14,7 +14,7 @@
 |---|---|
 | The machine | A macOS guest with the CPUs and memory the run was given, never more than the runner's per-run limits. It runs as the standard user `agent` |
 | The disk | A copy-on-write clone of the Mac's base image, made for the run and deleted when the run ends |
-| The agent | The Wardyn guest agent in the guest starts the harness and serves terminals. It dials out to the runner over a virtual socket; nothing connects in |
+| The agent | The Wardyn guest agent in the guest serves terminals and starts the run through the launcher, `/usr/local/bin/agent-run` ([What starts in a guest](#what-starts-in-a-guest)). It dials out to the runner over a virtual socket; nothing connects in |
 | Tools | Apple's Command Line Tools (git, clang, python3) and the pinned harness CLIs, installed once into the base. A Mac offers only the harnesses its base can run |
 | Network | One virtual NIC, wired to the run's own network relay and proxy in Docker. The guest has no other way out |
 | Open connections | The relay holds at most 1,024 per run on granted ports other than 80. One past that is refused and reported as `tunnel-limit`; the cap does not evict existing connections; lower process or container resource limits can bind first |
@@ -25,6 +25,21 @@
 - Not in this release: Linux VMs on a Mac, drives, reviving a stopped VM, and runner terminal recording. Each is refused with a reason.
 - macOS VMs need a pool where every runner offers them; a mixed pool refuses them. This matches Linux VMs.
 - A Kubernetes runner refuses the kind.
+
+## What starts in a guest
+
+- The launcher, `/usr/local/bin/agent-run`, is the guest agent's own binary, which stage 2 installs into the base. It keeps the contract the Linux images keep, so a run's workload starts the same way on every machine.
+- It runs as `agent`, after the run's files are in place: the harness's configuration, the run's repos (cloned through the run's proxy) and the starting folder.
+- Built and unit-tested; not yet run on a real Mac.
+
+| Run | What starts |
+|---|---|
+| Agent task | The run's harness on the task: Claude Code (`claude -p`) or Codex CLI (`codex exec`) |
+| Command | The command, as `/bin/sh -c`, with no harness |
+| Self-test | `agent-run --selftest` checks the guest can start the harness or a command, and writes nothing |
+| Refused | Tasks for several agents, held tool approvals, a service, a workspace scan, and an interactive agent session. The launcher exits 64 with the reason |
+
+- **Managed files.** The runner moves each file a run's policy manages to where macOS reads it: Claude Code's managed settings and MCP servers to `/Library/Application Support/ClaudeCode`, Codex's requirements to `/etc/codex`. Paths under `/home/agent` move to `/Users/agent`. A managed file with no macOS location stops the run's start with a reason.
 
 ## Before you start
 
