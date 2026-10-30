@@ -30,7 +30,7 @@ export function MacOSBasePicker({ offer, value, onChoose }: { offer: Extract<Mac
   return (
     <div className="flex flex-col gap-2">
       <span id={labelId} className="text-xs font-semibold">{MAC_BASES.B01}</span>
-      <Popover open={open} onOpenChange={setOpen}>
+      <Popover open={open} onOpenChange={(o) => { arrowing.current = false; setOpen(o); }}>
         <PopoverTrigger
           aria-labelledby={labelId}
           className="flex h-9 w-full items-center justify-between rounded-md border border-border bg-input-background px-3 text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring"
@@ -50,7 +50,7 @@ export function MacOSBasePicker({ offer, value, onChoose }: { offer: Extract<Mac
             {choices.map((c, i) => {
               const id = `${labelId}-${i}`;
               return (
-                <label key={c.name} onClick={() => { if (!c.reason && !arrowing.current) setOpen(false); }} className={`flex items-start gap-2.5 rounded-sm px-2 py-1.5 text-sm ${c.reason ? "cursor-not-allowed text-muted-foreground" : "cursor-pointer hover:bg-accent"}`}>
+                <label key={c.name} onClick={(e) => { if (!c.reason && !arrowing.current && (e.target as HTMLElement).closest('[role="radio"]')) setOpen(false); }} className={`flex items-start gap-2.5 rounded-sm px-2 py-1.5 text-sm ${c.reason ? "cursor-not-allowed text-muted-foreground" : "cursor-pointer hover:bg-accent"}`}>
                   <RadioGroupItem value={c.name} disabled={!!c.reason} onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.click(); }} aria-labelledby={`${id}-name`} aria-describedby={`${id}-why`} className="mt-0.5" />
                   <span className="flex min-w-0 flex-col">
                     <span id={`${id}-name`} className="font-medium">{c.name}</span>

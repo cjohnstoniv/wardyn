@@ -147,7 +147,7 @@ describe("picker · not allowed by the profile (J6 open, denied)", () => {
 });
 
 describe("picker · keyboard", () => {
-  it("an arrow key moves focus and does not pick or close; Space picks and closes", async () => {
+  it("an arrow key moves focus and selects, as a radio group does, without closing; Space closes", async () => {
     await show(MAC, offer([{ name: "xcode-16", state: "ready" }, { name: "lint", state: "ready" }]));
     await open();
     act(() => radio(MAC_BASES.B04).focus());

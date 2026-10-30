@@ -245,6 +245,7 @@ func TestMacOSBaseListingAgreesWithPlacement(t *testing.T) {
 	}{
 		{"an allowed base", member, profile(all...), false, map[string]bool{"xcode-16": false, "security-tools": false}},
 		{"a denied base", member, profile(types.MacOSStandardBase), false, map[string]bool{"xcode-16": true, "security-tools": true}},
+		// The narrowed ceiling keeps profile()'s Unit; with no Unit the helper would allow every base.
 		{"narrowed by a restriction", member, narrowed, false, map[string]bool{"xcode-16": false, "security-tools": true}},
 		{"Standard left off the list", member, profile("xcode-16"), true, map[string]bool{"xcode-16": false, "security-tools": true}},
 		{"an empty list", member, profile(), false, map[string]bool{"xcode-16": false, "security-tools": false}},
