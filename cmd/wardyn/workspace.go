@@ -52,11 +52,14 @@ func parseWorkspaceSourceArg(s string) (sdk.WorkspaceSource, error) {
 	}
 }
 
-// bindDirSources binds every dir folder of req to runner (--runner): each one is on that runner, which
-// checks it when a run starts. A legacy --kind local_dir source becomes the one composition source, as
+// bindDirSources binds every dir folder of req to runner (--runner, none when empty): each one is on that
+// runner, which checks it when a run starts. A legacy --kind local_dir source becomes the one composition source, as
 // the server would fold it, so it can carry the binding. The server answers whether the runner is the
 // caller's own.
 func bindDirSources(req *sdk.WorkspaceRequest, runner string) error {
+	if runner == "" {
+		return nil
+	}
 	id, err := uuid.Parse(runner)
 	if err != nil {
 		return fmt.Errorf("invalid --runner %q: want a runner id", runner)
@@ -211,10 +214,8 @@ func workspaceCmd(client clientFn) *cobra.Command {
 					req.Name = firstWorkspaceSourceLabel(req.Sources[0])
 				}
 			}
-			if createRunner != "" {
-				if err := bindDirSources(&req, createRunner); err != nil {
-					return err
-				}
+			if err := bindDirSources(&req, createRunner); err != nil {
+				return err
 			}
 			ws, err := client().CreateWorkspace(cmd.Context(), req)
 			if err != nil {

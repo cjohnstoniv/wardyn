@@ -57,6 +57,12 @@ func (s *Server) boundFolderOffItsRunner(ctx context.Context, run types.AgentRun
 	return false
 }
 
+// dispatchStartable is dispatchAdmitted and then boundFolderOffItsRunner: every refusal made before
+// anything is claimed or written.
+func (s *Server) dispatchStartable(ctx context.Context, run types.AgentRun, ceiling dispatchCeiling, p dispatchParams) bool {
+	return s.dispatchAdmitted(ctx, run, ceiling) && !s.boundFolderOffItsRunner(ctx, run, p)
+}
+
 // dispatchPlacementDenied fails, before anything is claimed or written, a run whose placement its
 // dispatch ceiling's deny_placements denies: a lane that did not pass the create doors, or a profile that
 // changed between create and dispatch.

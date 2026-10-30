@@ -220,6 +220,13 @@ func (s *Server) writeSessionRunnerBoundRefusal(w http.ResponseWriter, r *http.R
 	return false
 }
 
+// sessionWorkspaceOr404 is the workspace a record or verify session runs over: false once it has written
+// getWorkspaceOr404's answer or writeSessionRunnerBoundRefusal's.
+func (s *Server) sessionWorkspaceOr404(w http.ResponseWriter, r *http.Request, id uuid.UUID) (types.Workspace, bool) {
+	ws, ok := s.getWorkspaceOr404(w, r, id)
+	return ws, ok && !s.writeSessionRunnerBoundRefusal(w, r, ws)
+}
+
 // mountBinding is where a run's holders put path: the runner every one of them binds it to, or nil for
 // this host. ok is false when they disagree (bound and unbound, or two runners), and the path then has no
 // one place to run.

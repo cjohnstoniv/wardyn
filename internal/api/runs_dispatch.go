@@ -57,7 +57,7 @@ import (
 //
 //nolint:funlen // Deliberate: one linear provision → CAS → compensate sequence whose phase ORDER is the security contract (see above). Each phase already lives in its own helper; splitting the sequence would hide the ordering behind a call graph and make it unauditable in one scope. Low branching — passes gocyclo/gocognit, just long.
 func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling dispatchCeiling, p dispatchParams) {
-	if !s.dispatchAdmitted(ctx, run, ceiling) || s.boundFolderOffItsRunner(ctx, run, p) {
+	if !s.dispatchStartable(ctx, run, ceiling, p) {
 		return
 	}
 	// Only the values a phase below REBINDS get a local alias; everything else is

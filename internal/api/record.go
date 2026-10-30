@@ -337,8 +337,8 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 	if !decodeStrict(w, r, &req) {
 		return
 	}
-	ws, ok := s.getWorkspaceOr404(w, r, id)
-	if !ok || s.writeSessionRunnerBoundRefusal(w, r, ws) {
+	ws, ok := s.sessionWorkspaceOr404(w, r, id)
+	if !ok {
 		return
 	}
 
