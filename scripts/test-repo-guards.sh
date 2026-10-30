@@ -129,6 +129,10 @@ ok()  { echo "ok: $*"; }
 # and kind-acceptance-walks were exempt here until each had gone green on a real scheduled run
 # (39782025578) and green-by-tree.sh could watch a matrix job's legs (#3439). They are in
 # notify-new-lanes.needs and release.yml's watched= now (guard 13), and run under scope=candidate.
+# k6-workload-e2e (#3804) is in notify-new-lanes.needs and release.yml's watched= from day one, without
+# the green real scheduled run the rule above asks for: the 0.10.0 final is gated on it, so a train and a
+# release candidate must run it (scope=candidate, train-gate) before it has a scheduled green. A deliberate
+# exception to that convention, not a precedent.
 # provider-subscription-docker-pg (#677 T-17) went green on its first real
 # nightly run (workflow_dispatch, 2026-09-28, run 36393687863) and is now in
 # notify-new-lanes.needs + release.yml's watched= (guard 13) instead of here.

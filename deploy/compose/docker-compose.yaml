@@ -634,7 +634,7 @@ services:
       # the separation the gateway needs — but cookies are not port-scoped, so
       # on this stack the console's own cookies would be attached to relay
       # requests if the gateway did not strip every wardyn_* cookie inbound.
-      # It does (internal/api/uigateway.go, uiStripInbound).
+      # It does (internal/api/uigateway_cookies.go, uiStripInbound).
       - "127.0.0.1:${WARDYN_UI_SANDBOX_PORT:-8081}:8081"
     depends_on:
       postgres:

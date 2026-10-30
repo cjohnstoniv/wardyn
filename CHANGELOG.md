@@ -551,7 +551,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
-- macOS virtual machines (preview, off by default). A Mac on macOS 27 or later can run up to two macOS VM sandboxes,
+- macOS virtual machines (preview, off by default). A Mac on macOS 27 or later is built to run up to two macOS VM
+  sandboxes ([not yet tested on a real Mac](docs/operations/macos-vms.md#not-yet-tested-on-a-real-mac)),
   installed on that Mac from Apple's own restore image. Wardyn does not ship macOS. Turn it on with `WARDYN_MACOS_VMS`
   in the organisation and, on the Mac, `WARDYN_RUNNER_MACOS_VM=1`, the managed preference `MacOSVM` or
   `wardyn-runnerd setup --macos-vm on`. `wardyn-runnerd macos-vm prepare`, `status` (`--json` for one JSON object) and
