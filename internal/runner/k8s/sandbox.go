@@ -750,10 +750,23 @@ func proxyStartFailure(pod *corev1.Pod) error {
 		if cs.Name == proxyContainerName && t.ExitCode == proxyExitLapsed {
 			return proxyRenewFailure(t.Message)
 		}
+		if cs.Name == proxyContainerName {
+			if m := unknownProxyConfigField.FindStringSubmatch(t.Message); m != nil {
+				return fmt.Errorf("the proxy image is older than this runner (it refused setting %s): upgrade the organisation "+
+					"before its runners, or pin a proxy image at least as new as this runner; proxy container %s exited at config load (exit code %d, %s): %s",
+					m[1], cs.Name, t.ExitCode, t.Reason, t.Message)
+			}
+		}
 		return fmt.Errorf("proxy container %s exited before the proxy was ready (exit code %d, %s): %s", cs.Name, t.ExitCode, t.Reason, t.Message)
 	}
 	return nil
 }
+
+// unknownProxyConfigField reads the setting a proxy refused at config load from its termination
+// message (its log tail): the strict decode's `unknown field "x"`, with the quotes escaped inside a
+// log attribute. Reading it as "older proxy" assumes a release only ever adds proxy config fields.
+// It is the Docker runner's pattern (driver_proxy_revive.go), kept in step by hand.
+var unknownProxyConfigField = regexp.MustCompile(`unknown field \\?"([^"\\\n]{1,80})\\?"`)
 
 func protoPtr(p corev1.Protocol) *corev1.Protocol          { return &p }
 func intOrStrPtr(v intstr.IntOrString) *intstr.IntOrString { return &v }

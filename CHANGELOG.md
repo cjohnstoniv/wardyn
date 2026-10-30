@@ -16,6 +16,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A Linux VM sandbox's folder shares now refuse guest root. The share server maps only the agent user's ids, and guest
   uid 0 and gid 0 are forbidden in its id translation, so a write by root in the guest is refused rather than passed on
   to the host.
+- A Kubernetes run whose pinned proxy image is older than the runner now fails with the cause named: the proxy image is
+  older than this runner and refused a setting at config load, so upgrade the organisation before its runners or pin a
+  newer proxy image. It showed only a generic sidecar failure.
 
 ## [0.10.0-rc.8] — 2026-10-29
 
