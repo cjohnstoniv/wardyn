@@ -225,6 +225,23 @@ func withHolds(ctx context.Context, h *holds) context.Context {
 	return context.WithValue(ctx, holdsKey{}, h)
 }
 
+// WithoutCancelUnlessLost is ctx's values with none of its cancellation but
+// one: the loss of a Postgres lock ctx holds, which ends it with ErrLockLost as
+// its cause even when ctx ended first and so can no longer show the loss. Work
+// that must outlive its caller's deadline, yet never act once another replica
+// may hold the lock, runs on it. A ctx holding no lock, or only local ones
+// (which cannot be lost), gets plain context.WithoutCancel. release frees it.
+func WithoutCancelUnlessLost(ctx context.Context) (_ context.Context, release context.CancelFunc) {
+	out, cancel := context.WithCancelCause(context.WithoutCancel(ctx))
+	h := heldFrom(ctx)
+	if h == nil || h.conn == nil {
+		return out, func() { cancel(context.Canceled) }
+	}
+	lost := h.conn.lost
+	stop := context.AfterFunc(lost, func() { cancel(context.Cause(lost)) })
+	return out, func() { stop(); cancel(context.Canceled) }
+}
+
 // PGLocker is the Postgres-backed Locker.
 type PGLocker struct {
 	cfg *pgx.ConnConfig
@@ -255,6 +272,10 @@ type lockConn struct {
 	conn   *pgx.Conn
 	keys   []LockKey
 	closed bool
+	// lost ends, with ErrLockLost as its cause, once the watcher finds the
+	// session no longer holds what it took. A release never ends it.
+	lost context.Context
+	lose context.CancelCauseFunc
 }
 
 func (c *lockConn) close() {
@@ -423,6 +444,7 @@ func (l *PGLocker) lock(ctx context.Context, k LockKey, wait time.Duration, try 
 		return ctx, nil, false, fmt.Errorf("%w: connect: %w", ErrLockUnavailable, err)
 	}
 	lc := &lockConn{conn: conn}
+	lc.lost, lc.lose = context.WithCancelCause(context.Background())
 	lc.mu.Lock()
 	got, err := lc.take(dctx, k, try, budget)
 	if err == nil && got {
@@ -500,8 +522,8 @@ func (l *PGLocker) nest(ctx context.Context, h *holds, k LockKey, wait time.Dura
 	return withHolds(ctx, &holds{keys: append(slices.Clone(h.keys), k), conn: lc}), release, true, nil
 }
 
-// watch cancels the hold's context with ErrLockLost when the session stops
-// holding what it took. A statement already in flight on the connection (a
+// watch cancels the hold's context, and ends c.lost, with ErrLockLost when the
+// session stops holding what it took. A statement already in flight on the connection (a
 // nested lock waiting) is skipped: its own error reports a dead session, and
 // the next beat looks again.
 func (c *lockConn) watch(cancel context.CancelCauseFunc, stop <-chan struct{}, every time.Duration) {
@@ -525,7 +547,9 @@ func (c *lockConn) watch(cancel context.CancelCauseFunc, stop <-chan struct{}, e
 		bcancel()
 		c.mu.Unlock()
 		if err != nil {
-			cancel(fmt.Errorf("%w: %w", ErrLockLost, err))
+			lost := fmt.Errorf("%w: %w", ErrLockLost, err)
+			c.lose(lost)
+			cancel(lost)
 			return
 		}
 	}

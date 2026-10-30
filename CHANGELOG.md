@@ -17,6 +17,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   refuses with the retryable 503 `store_unavailable` instead of reading the credential as the organisation's. At
   dispatch the run fails as unreadable rather than refused. The store is read once per person per request, fault or
   not.
+- A run's end no longer loses its settlement when the sandbox stop overruns: the teardown-error audit, the output
+  finish, the workspace and record settlement and the cleared sandbox reference each get a budget of their own, so a
+  workspace scan is no longer left in `scanning`. A replica that loses the run's lock during that tail now stops it,
+  instead of running it beside the replica that took the lock and writing duplicate audit rows.
 
 ## [0.10.0-rc.8] — 2026-10-29
 

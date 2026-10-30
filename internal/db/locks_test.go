@@ -227,3 +227,48 @@ func TestLockRefused(t *testing.T) {
 		t.Error("an order violation, or nil, is not a refusal")
 	}
 }
+
+// A context derived to outlive its caller keeps one cancellation: the loss of
+// the Postgres lock the caller holds, even after the caller's own context
+// ended first and so can no longer show the loss (#3480). A local hold, which
+// cannot be lost, and no hold at all keep none.
+func TestWithoutCancelUnlessLost_EndsOnlyOnTheLockLoss(t *testing.T) {
+	lc := &lockConn{}
+	lc.lost, lc.lose = context.WithCancelCause(context.Background())
+	parent, cancelParent := context.WithCancel(context.Background())
+	held := withHolds(parent, &holds{keys: []LockKey{testKey(t, RunOpLockClass)}, conn: lc})
+	fenced, release := WithoutCancelUnlessLost(held)
+	defer release()
+	cancelParent()
+	if err := fenced.Err(); err != nil {
+		t.Fatalf("the caller's cancel reached the fenced context: %v", err)
+	}
+	if got := HeldLocks(fenced); len(got) != 1 {
+		t.Fatalf("the fenced context lost the caller's holds: %v", got)
+	}
+	lc.lose(ErrLockLost)
+	select {
+	case <-fenced.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the lock's loss did not end the fenced context")
+	}
+	if cause := context.Cause(fenced); !errors.Is(cause, ErrLockLost) {
+		t.Errorf("cause = %v, want ErrLockLost", cause)
+	}
+
+	for name, ctx := range map[string]context.Context{
+		"local hold": withHolds(context.Background(), &holds{keys: []LockKey{testKey(t, RunOpLockClass)}}),
+		"no hold":    context.Background(),
+	} {
+		c, cancel := context.WithCancel(ctx)
+		out, rel := WithoutCancelUnlessLost(c)
+		cancel()
+		if err := out.Err(); err != nil {
+			t.Errorf("%s: the caller's cancel reached the derived context: %v", name, err)
+		}
+		rel()
+		if out.Err() == nil {
+			t.Errorf("%s: release did not end the derived context", name)
+		}
+	}
+}

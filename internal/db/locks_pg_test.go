@@ -267,3 +267,43 @@ func TestPGLocker_LockHeldIsBoundedWhileANestedLockWaits(t *testing.T) {
 		t.Errorf("the nested lock, once the key was freed: %v", err)
 	}
 }
+
+// Work derived to outlive its caller's deadline still stops when the lock is
+// lost: the caller's context ended first, so its own cause never shows the
+// loss, yet the derived one ends with ErrLockLost (#3480).
+func TestPGLocker_LostConnectionEndsTheFencedContextAfterTheCallerEnded(t *testing.T) {
+	pool := pgPool(t)
+	l := NewPGLocker(pool, 2)
+	old := LockWatchInterval
+	LockWatchInterval = 20 * time.Millisecond
+	t.Cleanup(func() { LockWatchInterval = old })
+	ctx := context.Background()
+	k := testKey(t, RunOpLockClass)
+
+	hctx, release, err := l.Lock(ctx, k, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	caller, cancelCaller := context.WithCancel(hctx)
+	fenced, frelease := WithoutCancelUnlessLost(caller)
+	defer frelease()
+	cancelCaller()
+	if err := fenced.Err(); err != nil {
+		t.Fatalf("the caller's cancel reached the fenced context: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `SELECT pg_terminate_backend(pid) FROM pg_locks
+		WHERE locktype = 'advisory' AND objsubid = 2 AND classid::bigint = $1 AND objid::bigint = $2
+		AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`,
+		int64(uint32(k.Class)), int64(uint32(k.Obj))); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-fenced.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the fenced context was not ended after the lock's connection was lost")
+	}
+	if cause := context.Cause(fenced); !errors.Is(cause, ErrLockLost) {
+		t.Errorf("cause = %v, want ErrLockLost", cause)
+	}
+}
