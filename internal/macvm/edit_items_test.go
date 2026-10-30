@@ -136,9 +136,9 @@ func (e *editFix) again(t *testing.T) {
 
 const (
 	wifiPush  = "push /Library/Wardyn/stage/wifi/item.mobileconfig 600"
-	wifiCopy  = "/Users/wardyn-admin/Library/Wardyn/wifi.mobileconfig"
+	wifiCopy  = "/Users/wardyn-admin/Wardyn/wifi.mobileconfig"
 	wifiLine  = "While signed in as wardyn-admin, open " + wifiCopy + ", then review and install the staged profile in System Settings."
-	adminDir  = "/Users/wardyn-admin/Library/Wardyn"
+	adminDir  = "/Users/wardyn-admin/Wardyn"
 	stageWifi = "/Library/Wardyn/stage/wifi"
 )
 

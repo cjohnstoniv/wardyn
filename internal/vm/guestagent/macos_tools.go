@@ -704,7 +704,7 @@ func runAuthorizationDB(ctx context.Context, args []string, stdin []byte) ([]byt
 // MacAdminProfileDir is where edit-base gives wardyn-admin its own copy of each profile it staged for the
 // window, to open from the desktop session: wardyn-admin's alone (0700, its files 0600), removed by the
 // recheck.
-const MacAdminProfileDir = "/Users/" + MacAdminUser + "/Library/Wardyn"
+const MacAdminProfileDir = "/Users/" + MacAdminUser + "/Wardyn"
 
 // AdminProfile is wardyn-admin's copy of the profile item name; name is an ItemNamePattern name.
 func AdminProfile(name string) string { return MacAdminProfileDir + "/" + name + ".mobileconfig" }

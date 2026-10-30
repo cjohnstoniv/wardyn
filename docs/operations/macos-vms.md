@@ -257,7 +257,7 @@ The `ca` item trusts your organisation's root in the guest at prepare. It is sep
 ### Configuration profiles
 
 - macOS installs a profile only with a person's approval, or from MDM. Prepare stages each `profile` item and reads `profiles list` back: `staged` until it is approved, then `installed`.
-- Before its window opens, `edit-base` stages each profile still `staged` again from its file in the list. It copies each to `/Users/wardyn-admin/Library/Wardyn/<name>.mobileconfig`, readable by wardyn-admin only, and prints that path.
+- Before its window opens, `edit-base` stages each profile still `staged` again from its file in the list. It copies each to `/Users/wardyn-admin/Wardyn/<name>.mobileconfig`, readable by wardyn-admin only, and prints that path.
 - A profile whose file is not on the Mac, or that the list now pins differently, is not offered. `edit-base` logs the second by its path.
 - While signed in as wardyn-admin, open the copy, then review and install the profile in System Settings.
 - The recheck removes the copies, then the staged files, and checks each is gone before it reads the profiles back. A removal that fails discards the edit.
