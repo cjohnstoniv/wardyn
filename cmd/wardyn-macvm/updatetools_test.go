@@ -132,11 +132,11 @@ func TestUpdateToolsRecordsALeakedSlotWhenItsVMIsRefused(t *testing.T) {
 	layout := macvm.Layout{Root: filepath.Join(root, "vm")}
 	base := layout.BaseDir(0)
 	_ = os.MkdirAll(base, 0o700)
-	for n, b := range map[string]string{macvm.DiskFile: "d", macvm.AuxFile: "a", macvm.MachineIDFile: "base-id"} {
+	for n, b := range map[string]string{macvm.DiskFile: "d", macvm.AuxFile: "a", macvm.MachineIDFile: "base-id", macvm.PairKeyFile: "wardyn-test-pair-key-0123456789!"} {
 		_ = os.WriteFile(filepath.Join(base, n), []byte(b), 0o600)
 	}
 	_ = os.WriteFile(filepath.Join(base, macvm.ManifestFile),
-		[]byte(`{"format":1,"state":"ready","hardware_model":"aHc=","min_cpus":2,"min_memory_mib":4096,"desktop":"control","helper_version":"old","agent_version":"0.0.0-old"}`), 0o600)
+		[]byte(`{"format":2,"state":"ready","hardware_model":"aHc=","min_cpus":2,"min_memory_mib":4096,"desktop":"control","helper_version":"old","agent_version":"0.0.0-old"}`), 0o600)
 	d, _, _ := testDeps(&macvmtest.Engine{StartErr: macvm.ErrVMLimit})
 	var errb lockedBuf
 	d.stderr, d.powerSource = &errb, onAC{}
@@ -212,11 +212,11 @@ func updateToolsJob(t *testing.T, drift bool) {
 	layout := macvm.Layout{Root: filepath.Join(root, "vm")}
 	base := layout.BaseDir(0)
 	_ = os.MkdirAll(base, 0o700)
-	for n, b := range map[string]string{macvm.DiskFile: "d", macvm.AuxFile: "a", macvm.MachineIDFile: "base-id"} {
+	for n, b := range map[string]string{macvm.DiskFile: "d", macvm.AuxFile: "a", macvm.MachineIDFile: "base-id", macvm.PairKeyFile: "wardyn-test-pair-key-0123456789!"} {
 		_ = os.WriteFile(filepath.Join(base, n), []byte(b), 0o600)
 	}
 	_ = os.WriteFile(filepath.Join(base, macvm.ManifestFile),
-		[]byte(`{"format":1,"state":"ready","hardware_model":"aHc=","min_cpus":2,"min_memory_mib":4096,"desktop":"control","helper_version":"old","agent_version":"0.0.0-old"}`), 0o600)
+		[]byte(`{"format":2,"state":"ready","hardware_model":"aHc=","min_cpus":2,"min_memory_mib":4096,"desktop":"control","helper_version":"old","agent_version":"0.0.0-old"}`), 0o600)
 	if drift {
 		tooling, err := macvm.ShippedTooling()
 		if err != nil {
@@ -298,10 +298,10 @@ func updateToolsJob(t *testing.T, drift bool) {
 		_ = json.NewEncoder(w).Encode(guestagent.ToolsDial{Class: guestagent.DialConnected, Dials: 1})
 	})
 	go func() {
-		_ = guestagent.ServeVsock(ctx, func(context.Context) (net.Conn, error) { return m.DialGuest(macvm.ToolsPort) }, tools)
+		_ = guestagent.ServeVsock(ctx, func(context.Context) (net.Conn, error) { return m.DialAgent(macvm.ToolsPort) }, tools)
 	}()
 	go func() {
-		_ = guestagent.ServeVsock(ctx, func(context.Context) (net.Conn, error) { return m.DialGuest(macvm.AgentPort) }, control)
+		_ = guestagent.ServeVsock(ctx, func(context.Context) (net.Conn, error) { return m.DialAgent(macvm.AgentPort) }, control)
 	}()
 	if code := <-done; code != 0 {
 		t.Fatalf("update-tools exit %d: %s", code, errb.String())

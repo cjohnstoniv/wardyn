@@ -236,7 +236,7 @@ func TestPairerSendsTheChallengeFrame(t *testing.T) {
 	defer macvm.SetPairDeadline(time.Second)()
 	m, take, _ := pairVM(t, macvm.AgentPort)
 	frames := make([][]byte, 2)
-	var real net.Conn
+	var first, real net.Conn
 	for i := range frames {
 		c := rawDial(t, m, macvm.AgentPort)
 		_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
@@ -251,11 +251,15 @@ func TestPairerSendsTheChallengeFrame(t *testing.T) {
 		if _, err := c.Write(proof(pairKey, macvm.AgentPort, frames[i][8:])); err != nil {
 			t.Fatal(err)
 		}
+		if i == 0 {
+			first = c
+		}
 		real = c
 	}
 	if hmac.Equal(frames[0][8:], frames[1][8:]) {
 		t.Fatal("two connections got the same challenge")
 	}
+	closedWithin(t, hostClosed(first), 2*time.Second, "the older proven connection")
 	takesReal(t, take, real, 2*time.Second)
 }
 

@@ -198,6 +198,9 @@ const (
 	AuxFile       = "aux.img"
 	MachineIDFile = "machine-id"
 	ManifestFile  = "manifest.json"
+	// PairKeyFile is the base's pairing key: the host copy, 0600, of the 32 bytes stage 1 wrote root-only
+	// into the guest (guestagent.MacPairKeyPath). A clone of the base carries its own copy.
+	PairKeyFile   = "pair.key"
 	RunConfigFile = "run.json"
 	ControlSock   = "ctl.sock"
 	AgentSock     = "agent.sock"
@@ -231,8 +234,9 @@ const (
 	DesktopNone    = "none"
 )
 
-// BaseFormat is the base layout version this helper writes and accepts.
-const BaseFormat = 1
+// BaseFormat is the base layout version this helper writes and accepts. Format 2 bases hold a pairing
+// key; a format 1 base has none, and is prepared again.
+const BaseFormat = 2
 
 // Manifest describes a ready base image.
 type Manifest struct {

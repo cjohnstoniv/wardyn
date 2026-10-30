@@ -23,8 +23,9 @@ import (
 // comes before that echo. A session's bytes travel only inside data records, so nothing a session
 // carries can be taken for a hello or an echo.
 //
-// The nonce marks a session boundary and nothing more. A guest can echo whatever it reads, so
-// nothing on the host treats the echo as authentication or as a reason to trust the guest.
+// The nonce marks a session boundary and nothing more: it is not what authenticates the guest. The
+// helper's pairing does that (pair.go): before a connection can carry a hello, the guest has proved it
+// holds the base's pairing key, which only the guest agent can read.
 const (
 	nonceLen     = 16
 	helloLen     = 1 + nonceLen // helloVersion, then the nonce

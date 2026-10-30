@@ -24,7 +24,7 @@ import (
 // returns the viewer's side, its ServerInit read when accepted is true, and Screen Sharing's side.
 func openDesktop(t *testing.T, r *runRig, m *macvmtest.Machine, password string, accepted bool) (net.Conn, net.Conn) {
 	t.Helper()
-	guest, err := m.DialGuest(macvm.DesktopPort)
+	guest, err := m.DialAgent(macvm.DesktopPort)
 	if err != nil {
 		t.Fatal(err)
 	}

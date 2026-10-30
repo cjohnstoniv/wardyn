@@ -81,6 +81,8 @@ export const MACVM_R = {
   R41: "Open the macOS window on this Mac and turn on Screen Sharing control once. Until then, macOS VMs run without a desktop.",
   /** MV-R43, update needed */
   R43: "This Mac's runner was upgraded, so the macOS base's tools are being updated. It offers no macOS VMs until that finishes.",
+  /** MV-R43, update needed: the base's format is older than the runner's (failure "format"), so only a new prepare makes it usable */
+  R43_FORMAT: "This Mac's runner was upgraded and can't use the macOS base it has. Run `wardyn-runnerd macos-vm prepare` to prepare the base again. It offers no macOS VMs until then.",
   /** MV-R44, failed: install */
   R44: (error: string) => `Installing macOS failed: ${error}. The download is kept. Run \`wardyn-runnerd macos-vm prepare\` to install again.`,
   /** MV-R45, failed: download 3 times */

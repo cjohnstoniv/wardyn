@@ -115,7 +115,7 @@ func openWithBudget(t *testing.T, r *macLedgerRig) (*macOSVMs, macvm.Manifest) {
 	}
 	base := m.layout.BaseDir(0)
 	_ = os.MkdirAll(base, 0o700)
-	man := `{"format":1,"state":"ready","guest_os":"macOS 27.0","agent_version":"1.0.0","min_cpus":4,"min_memory_mib":4096,"harnesses":["none"]}`
+	man := `{"format":2,"state":"ready","guest_os":"macOS 27.0","agent_version":"1.0.0","min_cpus":4,"min_memory_mib":4096,"harnesses":["none"]}`
 	if err := os.WriteFile(filepath.Join(base, macvm.ManifestFile), []byte(man), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -279,6 +279,7 @@ func TestMacOSVMHandsTheJobItsNetwork(t *testing.T) {
 	for _, f := range []string{macvm.DiskFile, macvm.AuxFile} {
 		_ = os.WriteFile(filepath.Join(dir, f), nil, 0o600)
 	}
+	_ = os.WriteFile(filepath.Join(dir, macvm.PairKeyFile), []byte("wardyn-test-pair-key-0123456789!"), 0o600)
 	spec := macvm.MachineSpec{CPUs: 4, MemoryBytes: 8 << 30, MinCPUs: 2, MinMemoryBytes: 4 << 30, HardwareModel: []byte("hw"),
 		MachineIdentifier: []byte("id"), DiskPath: filepath.Join(dir, macvm.DiskFile), AuxPath: filepath.Join(dir, macvm.AuxFile)}
 	boot := macvm.Stage2BootConfig{Engine: eng, SockRoot: m.sockRoot, SockKey: macvm.JobSockKey(e.ID), SockFstat: macvmtest.SockFstat,

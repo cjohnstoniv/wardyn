@@ -411,7 +411,7 @@ func (m *macOSVMs) base() (macvm.Manifest, runnerwire.MacVMBase) {
 	b.BuildVersion = man.BuildVersion
 	switch {
 	case err == nil && man.Format != macvm.BaseFormat:
-		b.State = runnerwire.MacVMBaseUpdateNeeded
+		b.State, b.Failure = runnerwire.MacVMBaseUpdateNeeded, runnerwire.MacVMFailureFormat
 	case err == nil && man.State == macvm.BaseReady:
 		b.State = runnerwire.MacVMBaseReady
 		if cause := toolsFailure(m.layout.BaseDir(0)); cause != "" {

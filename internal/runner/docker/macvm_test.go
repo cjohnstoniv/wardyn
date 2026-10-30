@@ -243,7 +243,7 @@ func (r *macRig) helper(ctx context.Context, dir string) {
 			if len(ms) == 0 {
 				return nil, net.ErrClosed
 			}
-			return ms[len(ms)-1].DialGuest(macvm.AgentPort)
+			return ms[len(ms)-1].DialAgent(macvm.AgentPort)
 		}, mux)
 	}()
 }
@@ -254,7 +254,7 @@ func makeMacBase(t *testing.T, l macvm.Layout) {
 	if err := os.MkdirAll(base, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for name, body := range map[string]string{macvm.DiskFile: "base-disk", macvm.AuxFile: "base-aux", macvm.MachineIDFile: "base-machine-id"} {
+	for name, body := range map[string]string{macvm.DiskFile: "base-disk", macvm.AuxFile: "base-aux", macvm.MachineIDFile: "base-machine-id", macvm.PairKeyFile: "wardyn-test-pair-key-0123456789!"} {
 		if err := os.WriteFile(filepath.Join(base, name), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -265,7 +265,7 @@ func makeMacBase(t *testing.T, l macvm.Layout) {
 // writeMacManifest writes the base's manifest with the given desktop.
 func writeMacManifest(t *testing.T, l macvm.Layout, desktop string) {
 	t.Helper()
-	m := `{"format":1,"state":"ready","guest_os":"macOS 26.1","min_cpus":2,"min_memory_mib":4096,"hardware_model":"aHc=","desktop":"` + desktop + `","harnesses":["claude-code"]}`
+	m := `{"format":2,"state":"ready","guest_os":"macOS 26.1","min_cpus":2,"min_memory_mib":4096,"hardware_model":"aHc=","desktop":"` + desktop + `","harnesses":["claude-code"]}`
 	if err := os.WriteFile(filepath.Join(l.BaseDir(0), macvm.ManifestFile), []byte(m), 0o600); err != nil {
 		t.Fatal(err)
 	}

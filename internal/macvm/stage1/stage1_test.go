@@ -606,7 +606,7 @@ func TestBeforeOffTheGuestMustBeShownUp(t *testing.T) {
 // the code behind in a dropped array.
 func TestStdinIsSizedExactly(t *testing.T) {
 	agent := make([]byte, 5000)
-	s, err := newSession(macvm.BootstrapInput{Username: admin, Password: code, NewPassword: newPass}, agent)
+	s, err := newSession(macvm.BootstrapInput{Username: admin, Password: code, NewPassword: newPass, PairKey: pairKey}, agent)
 	if err != nil {
 		t.Fatal(err)
 	}

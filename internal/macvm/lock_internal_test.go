@@ -21,7 +21,7 @@ func gen(t *testing.T, dir, g string) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for n, c := range map[string]string{DiskFile: g + "-disk", AuxFile: g + "-aux", MachineIDFile: g + "-id"} {
+	for n, c := range map[string]string{DiskFile: g + "-disk", AuxFile: g + "-aux", MachineIDFile: g + "-id", PairKeyFile: "wardyn-test-pair-key-0123456789!"} {
 		if err := os.WriteFile(filepath.Join(dir, n), []byte(c), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -81,7 +81,7 @@ func TestCloneRacingTheExchangeSeesOneGeneration(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	for n, want := range map[string]string{DiskFile: "gen2-disk", AuxFile: "gen2-aux", MachineIDFile: "gen2-id"} {
+	for n, want := range map[string]string{DiskFile: "gen2-disk", AuxFile: "gen2-aux", MachineIDFile: "gen2-id", PairKeyFile: "wardyn-test-pair-key-0123456789!"} {
 		if got := readFile(t, filepath.Join(runDir, n)); got != want {
 			t.Errorf("%s = %q, want %q", n, got, want)
 		}
