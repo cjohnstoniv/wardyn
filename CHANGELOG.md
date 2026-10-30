@@ -135,6 +135,16 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - macOS VMs: the guest agent trusts the run's proxy certificate in the run's System keychain, for TLS only, before
   the run starts, so tools that use only the keychain trust it too. If macOS refuses, the run goes on and its audit
   says so.
+- macOS VMs: the runner setting `macos_vm_base_file` names a list of packages, apps and files, each pinned by its
+  SHA-256, that prepare and every tools update install into the base as admin. A changed list starts a tools update.
+- macOS VMs: configuration profiles in the install list are staged in the base, approved once in `edit-base`, and
+  read back as installed.
+- macOS VMs: an organisation CA in the install list is trusted in the base for SSL only, then verified. A CA macOS
+  will not trust without a person reads `not_trusted`; trust it by hand in `edit-base`.
+- macOS VMs: a package in the install list may take secret files, such as an EDR licence, removed after its install
+  and never logged or recorded.
+- macOS VMs: the runner reports the guest's posture (macOS version, SIP, Gatekeeper, profiles, MDM enrolment, the
+  organisation CA) beside the Mac's own.
 
 ### Fixed
 
