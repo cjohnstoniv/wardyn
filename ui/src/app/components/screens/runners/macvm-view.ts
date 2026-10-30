@@ -32,12 +32,12 @@ export function refused(caps: MacVMCaps): boolean {
 export type MacVMBadge = { tone: "neutral" | "warning" | "info"; text: string };
 
 /** The card badge: the count while it offers, "preparing" with the percent, "not offered" otherwise; none without caps. */
-export function macVMBadge(caps: MacVMCaps | undefined, active: number | undefined, perRun?: RunnerAmounts): MacVMBadge | null {
+export function macVMBadge(caps: MacVMCaps | undefined, active: number | undefined, perRun?: RunnerAmounts, maxBaseAgeDays?: number): MacVMBadge | null {
   if (!caps) return null;
   const { state, progress } = caps.base;
   if (state === "preparing") return { tone: "info", text: MACVM_K.K02(String(progress ?? 0)) };
   const short = sizeShortfall(caps, perRun);
-  if (refused(caps) || state !== "ready" || short.memory || short.cpu) return { tone: "neutral", text: MACVM_K.K03 };
+  if (refused(caps) || state !== "ready" || short.memory || short.cpu || baseTooOld(caps.base, maxBaseAgeDays)) return { tone: "neutral", text: MACVM_K.K03 };
   if (active === undefined) return null;
   return { tone: active >= caps.max ? "warning" : "neutral", text: MACVM_K.K01(String(active), String(caps.max)) };
 }
@@ -53,6 +53,10 @@ export function baseAgeOf(base: MacVMBase, maxDays: number | undefined, now = Da
   const max = maxDays && maxDays > 0 ? maxDays : undefined;
   return { created: base.created_at, days, max, tooOld: base.state === "ready" && max !== undefined && days > max };
 }
+
+/** Whether the organisation's maximum refuses this base: it is past it, or its runner reports no age to hold to it (MAC-P12, P16). */
+export const baseTooOld = (base: MacVMBase, maxDays: number | undefined, now = Date.now()): boolean =>
+  base.state === "ready" && !!maxDays && maxDays > 0 && (baseAgeOf(base, maxDays, now)?.tooOld ?? true);
 
 /** "3 Nov, 14:20": the day and the time the base was last edited. */
 export const editedAtText = (iso: string): string =>

@@ -104,6 +104,13 @@ test.describe("Runner drawer: macOS virtual machines", () => {
     await expect(section.getByText(MACVM_R.R25)).toHaveCount(0);
   });
 
+  test("the card badge reads the same maximum: too old is not offered, the rest still are", async ({ page }) => {
+    await page.route("**/api/v1/site-config", (route) => route.fulfill({ json: { macos_vm: { max_base_age_days: 30 } } }));
+    await openRunners(page);
+    await expect(card(page, "mac-old").getByText(MACVM_K.K03)).toBeVisible();
+    await expect(card(page, "mac-preparing").getByText(MACVM_K.K02("42"))).toBeVisible();
+  });
+
   test("a runner that sends no macOS VM caps has no section", async ({ page }) => {
     await openRunners(page);
     const drawer = await openDrawer(page, "linux-box");

@@ -10,6 +10,7 @@
 import * as React from "react";
 import type { MacVMCaps } from "../../../lib/types/runner-macvm";
 import type { RunnerAmounts } from "../../../lib/types/runners";
+import { NR_MACHINE } from "../../wardyn/copy/new-run/machine";
 import { MACVM_P, MACVM_R } from "../../wardyn/copy/runner-macvm";
 import { harnessDisplayNames } from "../../../lib/model-access";
 import { useShellSetupStatus } from "../../wardyn/model-access-context";
@@ -20,7 +21,7 @@ import { Mono } from "../../wardyn/code-block";
 import { Chip } from "../../wardyn/primitives";
 import { Hint } from "./resource-table";
 import { shortDate } from "../../../lib/format";
-import { baseAgeOf, editedAtText, macVMBadge, postureRows, refused, sizeShortfall } from "./macvm-view";
+import { baseAgeOf, baseTooOld, editedAtText, macVMBadge, postureRows, refused, sizeShortfall } from "./macvm-view";
 
 /** A string with `code` spans, the way the boards set `wardyn-runnerd setup`. */
 export function MacVMText({ text }: { text: string }) {
@@ -31,8 +32,8 @@ export function MacVMText({ text }: { text: string }) {
   );
 }
 
-export function MacVMBadge({ caps, active, perRun }: { caps: MacVMCaps | undefined; active: number | undefined; perRun?: RunnerAmounts }) {
-  const badge = macVMBadge(caps, active, perRun);
+export function MacVMBadge({ caps, active, perRun, maxBaseAgeDays }: { caps: MacVMCaps | undefined; active: number | undefined; perRun?: RunnerAmounts; maxBaseAgeDays?: number }) {
+  const badge = macVMBadge(caps, active, perRun, maxBaseAgeDays);
   return badge ? <Chip tone={badge.tone}>{badge.text}</Chip> : null;
 }
 
@@ -152,6 +153,19 @@ function Body({ caps, active, perRun, runner, hostOS, maxBaseAgeDays }: { caps: 
         </div>
         <p className="mt-1 text-foreground"><MacVMText text={MACVM_P.P13(age.days, age.max!)} /></p>
         {ageLine}
+        {posture}
+      </>
+    );
+  }
+  // A maximum is set and the runner reports no age to hold to it (MAC-P16, the sentence New Run says too): not offered.
+  if (!age && baseTooOld(caps.base, maxBaseAgeDays)) {
+    return (
+      <>
+        <div className="flex flex-wrap items-center gap-2">
+          <Chip>{MACVM_R.R14}</Chip>
+          {guest_os && <span className="text-muted-foreground">{MACVM_R.R06(guest_os)}</span>}
+        </div>
+        <p className="mt-1 text-foreground">{NR_MACHINE.MACOS_BASE_NO_AGE(runner)}</p>
         {posture}
       </>
     );

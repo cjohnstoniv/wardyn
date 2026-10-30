@@ -45,6 +45,8 @@ describe("admin drive list, a disk kept on a Mac", () => {
     expect(headers).toContain(MAC_DRIVES.D09);
     expect(headers).not.toContain(DRIVES.COL_BACKEND);
     expect(within(disk).getByText(MAC_DRIVES.D16)).toBeInTheDocument();
+    // Wardyn allocates the disk, so it reads as managed, as the server's Kind() says.
+    expect(within(disk).getByText(DRIVES.KIND_MANAGED)).toBeInTheDocument();
     expect(await within(disk).findByText("mac-studio-07")).toBeInTheDocument();
     // A drive kept elsewhere has nothing in the Mac column, and keeps its wire name.
     const other = screen.getByText("Corporate homes").closest("tr")!;

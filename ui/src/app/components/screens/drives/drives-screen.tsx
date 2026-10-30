@@ -304,16 +304,10 @@ export function DrivesScreen() {
                                 WHO-over-WHAT two-glyph rule, applied to an
                                 object instead of an actor. */}
                             <span className="flex flex-wrap items-center gap-2">
-                              {d.backend === "mac_disk" ? (
-                                <Chip tone="neutral">{MAC_DRIVES.D16}</Chip>
-                              ) : (
-                                <>
-                                  <Chip tone="neutral">
-                                    {isManagedBackend(d.backend) ? DRIVES.KIND_MANAGED : DRIVES.KIND_SHARE}
-                                  </Chip>
-                                  <Mono>{d.backend}</Mono>
-                                </>
-                              )}
+                              <Chip tone="neutral">
+                                {isManagedBackend(d.backend) ? DRIVES.KIND_MANAGED : DRIVES.KIND_SHARE}
+                              </Chip>
+                              {d.backend === "mac_disk" ? <Chip tone="neutral">{MAC_DRIVES.D16}</Chip> : <Mono>{d.backend}</Mono>}
                               {team && d.single_host && <Chip tone="warning">{DRIVES.TEAM_ONE_HOST_CHIP}</Chip>}
                             </span>
                           </TableCell>

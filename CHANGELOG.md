@@ -19,7 +19,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   [Editing a base](docs/operations/macos-vms.md#editing-a-base).
 - The console shows a disk drive's Mac in New Run and the admin drive list, and says how a disk drive's delete ended. A
   Mac's runner drawer now shows its macOS base's guest posture, age and last edit, and marks a base past the
-  organisation's maximum age as not offered.
+  organisation's maximum age as not offered, as does its card in the runner list. An admin sets that maximum in Settings,
+  under macOS virtual machines, as the oldest macOS base in days; empty is no maximum.
 
 ### Changed
 

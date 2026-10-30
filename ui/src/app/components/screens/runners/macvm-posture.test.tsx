@@ -12,19 +12,14 @@ import { aheadByHours } from "../../../lib/test-clock";
 import type { MacVMCaps, MacVMGuest } from "../../../lib/types/runner-macvm";
 import type { RunnerView } from "../../../lib/types/runners";
 import type { SetupStatus } from "../../../lib/types/setup";
-import { MACVM_P, MACVM_R } from "../../wardyn/copy/runner-macvm";
+import { NR_MACHINE } from "../../wardyn/copy/new-run/machine";
+import { MACVM_K, MACVM_P, MACVM_R } from "../../wardyn/copy/runner-macvm";
 import { ModelAccessProvider } from "../../wardyn/model-access-context";
 import { MacVMSection } from "./macvm-section";
-import { RunnerDrawer } from "./runner-drawer";
-import { baseAgeOf, editedAtText, postureRows } from "./macvm-view";
+import { RunnerCard, type FleetRunner } from "./runner-card";
+import { baseAgeOf, baseTooOld, editedAtText, macVMBadge, postureRows } from "./macvm-view";
 
-const getSiteConfig = vi.fn();
-vi.mock("../../../lib/api/health", () => ({ health: { getSiteConfig: () => getSiteConfig() } }));
-
-afterEach(() => {
-  cleanup();
-  getSiteConfig.mockReset();
-});
+afterEach(cleanup);
 
 const guest: MacVMGuest = { os_version: "26.6.2", sip: "on", gatekeeper: "on", profiles: 2, mdm: "not_enrolled", org_ca: "trusted" };
 const ready = (base: Partial<MacVMCaps["base"]> = {}): MacVMCaps => ({
@@ -98,11 +93,11 @@ describe("J7 base older than the maximum", () => {
     expect(sec().queryByText(MACVM_P.P12)).not.toBeInTheDocument();
   });
   it("counts whole days as the organisation does", () => {
-    const now = Date.parse("2026-10-30T12:00:00Z");
-    const at = (iso: string, max: number) => baseAgeOf({ state: "ready", created_at: iso }, max, now);
-    expect(at("2026-09-30T13:00:00Z", 30)).toMatchObject({ days: 29, tooOld: false });
-    expect(at("2026-09-29T11:00:00Z", 30)).toMatchObject({ days: 31, tooOld: true });
-    expect(at("2026-09-29T11:00:00Z", 0)).toMatchObject({ max: undefined, tooOld: false });
+    const now = Date.now();
+    const at = (hoursAgo: number, max: number) => baseAgeOf({ state: "ready", created_at: aheadByHours(-hoursAgo) }, max, now);
+    expect(at(29 * 24 + 23, 30)).toMatchObject({ days: 29, tooOld: false });
+    expect(at(31 * 24 + 1, 30)).toMatchObject({ days: 31, tooOld: true });
+    expect(at(31 * 24 + 1, 0)).toMatchObject({ max: undefined, tooOld: false });
     expect(baseAgeOf({ state: "ready" }, 30, now)).toBeUndefined();
   });
 });
@@ -127,32 +122,52 @@ describe("postureRows", () => {
   });
 });
 
-describe("the drawer reads the organisation's maximum and the Mac's own macOS", () => {
+describe("a base with no age while the organisation sets a maximum (MAC-P16)", () => {
+  it("the drawer says the runner reports no age, is not offered, and shows no Base too old", () => {
+    section(ready({ created_at: undefined }), { maxBaseAgeDays: 30 });
+    const s = sec();
+    expect(s.getByText(MACVM_R.R14)).toBeInTheDocument();
+    expect(s.getByText(NR_MACHINE.MACOS_BASE_NO_AGE("mac-studio-07"))).toBeInTheDocument();
+    expect(s.queryByText(MACVM_P.P12)).not.toBeInTheDocument();
+    expect(s.queryByText(MACVM_R.R25)).not.toBeInTheDocument();
+  });
+  it("without a maximum an unreported age is nothing to say", () => {
+    section(ready({ created_at: undefined }));
+    expect(sec().queryByText(MACVM_R.R14)).not.toBeInTheDocument();
+  });
+});
+
+describe("the runner card badge reads the same maximum as the drawer", () => {
   const none = { runs: 0, cpu_millis: 0, memory_mib: 0, disk_mib: 0 };
   const runner = (macos_vm: MacVMCaps): RunnerView => ({
     id: "r-mac", name: "mac-studio-07", state: "claimed", owner: "dana@example.com", owner_kind: "person", trust_class: "managed_device", online: true,
     key_fingerprint: "SHA256:fp", key_fingerprint_abbreviated: false, created_at: aheadByHours(-72), claimed_at: aheadByHours(-71), kind: "self_hosted",
     posture: { mdm_managed: true, disk_encrypted: true, os: "darwin", os_version: "26.7", evidence: "mdm_file" },
     limits: { runs_at_once: 2, total: { cpu_millis: 8000, memory_mib: 20480, disk_mib: 0 }, per_run: { cpu_millis: 4000, memory_mib: 8192, disk_mib: 0 } },
-    usage: { online: true, in_use: { runs: 0, cpu_millis: 0, memory_mib: 0, disk_mib: 0 }, available: none, disk_capped: true },
+    usage: { online: true, in_use: { runs: 0, cpu_millis: 0, memory_mib: 0, disk_mib: 0, macos_vm_runs: 0 }, available: none, disk_capped: true },
     pools: [], macos_vm,
   });
-  const drawer = (r: RunnerView) =>
-    render(
-      <ModelAccessProvider status={status} onRefresh={() => {}}>
-        <RunnerDrawer runner={r} onClose={vi.fn()} onChanged={vi.fn()} onOpenPool={vi.fn()} />
-      </ModelAccessProvider>,
-    );
-  it("a base past the site maximum reads Base too old once the site config arrives", async () => {
-    getSiteConfig.mockResolvedValue({ macos_vm: { max_base_age_days: 30 } });
-    drawer(runner(ready({ created_at: aheadByHours(-41 * 24) })));
-    expect(await screen.findByText(MACVM_P.P12)).toBeInTheDocument();
-    expect(screen.getByText(MACVM_P.P11("26.7", "26.6.2"))).toBeInTheDocument();
+  const card = (r: RunnerView, maxBaseAgeDays?: number) => {
+    const f: FleetRunner = { kind: "self_hosted", id: r.id, name: r.name, runner: r };
+    return render(<RunnerCard f={f} onOpen={vi.fn()} onOpenPool={vi.fn()} maxBaseAgeDays={maxBaseAgeDays} />);
+  };
+  it("a base past the maximum reads not offered", () => {
+    card(runner(ready({ created_at: aheadByHours(-41 * 24) })), 30);
+    expect(screen.getByText(MACVM_K.K03)).toBeInTheDocument();
   });
-  it("a site config that cannot be read sets no maximum", async () => {
-    getSiteConfig.mockRejectedValue(new Error("403"));
-    drawer(runner(ready({ created_at: aheadByHours(-41 * 24) })));
-    expect(await screen.findByText(MACVM_P.P09)).toBeInTheDocument();
-    expect(screen.queryByText(MACVM_P.P12)).not.toBeInTheDocument();
+  it("a base with no age reads not offered while a maximum is set", () => {
+    card(runner(ready({ created_at: undefined })), 30);
+    expect(screen.getByText(MACVM_K.K03)).toBeInTheDocument();
+  });
+  it("a base within the maximum, or any base with no maximum, reads the count", () => {
+    card(runner(ready({ created_at: aheadByHours(-6 * 24) })), 30);
+    expect(screen.getByText(MACVM_K.K01("0", "2"))).toBeInTheDocument();
+    cleanup();
+    card(runner(ready({ created_at: aheadByHours(-90 * 24) })));
+    expect(screen.getByText(MACVM_K.K01("0", "2"))).toBeInTheDocument();
+  });
+  it("baseTooOld holds a base only while it is ready", () => {
+    expect(baseTooOld({ state: "preparing" }, 30)).toBe(false);
+    expect(macVMBadge(ready({ created_at: aheadByHours(-41 * 24) }), 0, undefined, 30)?.text).toBe(MACVM_K.K03);
   });
 });

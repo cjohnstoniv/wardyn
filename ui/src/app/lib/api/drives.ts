@@ -245,7 +245,7 @@ export function teamGrantsKnown(d: UserDriveListItem, grants: UserDriveGrant[]):
 // NEVER stored, so it is not on the wire and the console derives it too. An
 // unknown backend reads as a share, the conservative half, exactly as Go does.
 export const isManagedBackend = (b: DriveBackend): boolean =>
-  b === "docker_volume" || b === "k8s_pvc";
+  b === "docker_volume" || b === "k8s_pvc" || b === "mac_disk";
 
 // DriveObjectNamedByWardyn, inverted for the UI: whether Wardyn MINTS this
 // backend's storage object name. host_path is the only backend on the other
