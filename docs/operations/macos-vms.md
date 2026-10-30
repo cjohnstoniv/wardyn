@@ -299,6 +299,7 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
   - Never while a run on that base lives. The output is `derive-base.log` in the VM directory.
   - A rebuild that fails is not retried until Standard or the list changes again. The base is not offered meanwhile.
 - **Picking one.** A run picks a base with `macos_base` on create: `Standard` (the default) or a base's name. The run's `vm_machine` records it.
+- A run on another base records Standard's last edit.
 
 | Refusal | When |
 |---|---|
