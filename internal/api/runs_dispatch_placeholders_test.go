@@ -252,7 +252,7 @@ func TestSecretPlaceholders_DuplicateFileUsesTheDeliveringGrant(t *testing.T) {
 			srv.cfg.FileSecretPlaceholders = true
 			dispatchOf(srv, run, types.RunPolicySpec{AllowedDomains: []string{hostA, hostB}, EligibleGrants: tc.grants})
 			if rn.createCalls != 1 {
-				t.Fatalf("the sandbox was not created; events: %s", auditDump(audit.events, run.ID))
+				t.Fatalf("the sandbox was not created; events: %s", auditDump(audit.snapshot(), run.ID))
 			}
 			ph := agentFile(rn.lastSpec, "api-token")
 			i := slices.IndexFunc(rn.lastSpec.ProxyConfig.Injection, func(in runner.InjectionGrant) bool { return in.Rule.Placeholder == ph })

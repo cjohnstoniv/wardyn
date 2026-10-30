@@ -76,11 +76,15 @@ func reassertProxyCeiling(run types.AgentRun, cfg *proxy.Config, c ownerCeiling,
 	}
 	adoLane := adoLaneWithheld(w, cfg.ADOGrant, rules...)
 	if adoLane && cfg.ADOGrant != nil {
-		for _, e := range adoLaneAllowEntries(cfg.ADOGrant) {
-			if i := slices.IndexFunc(cfg.Policy.AllowedDomains, func(d string) bool { return strings.EqualFold(d, e) }); i >= 0 {
-				cfg.Policy.AllowedDomains = slices.Delete(cfg.Policy.AllowedDomains, i, i+1)
+		lane := adoLaneAllowEntries(cfg.ADOGrant)
+		cfg.Policy.AllowedDomains = slices.DeleteFunc(cfg.Policy.AllowedDomains, func(d string) bool {
+			i := slices.IndexFunc(lane, func(e string) bool { return strings.EqualFold(e, d) })
+			if i < 0 {
+				return false
 			}
-		}
+			lane = slices.Delete(lane, i, i+1) // each lane entry takes one copy
+			return true
+		})
 		cfg.ADOGrant = nil
 	}
 	if adoLane {

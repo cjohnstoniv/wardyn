@@ -833,7 +833,7 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 	providerHosts, err := s.modelProviderRowHostSet(r.Context())
 	if err != nil {
 		slog.ErrorContext(r.Context(), "api: get site config for record promote", slog.Any("err", err))
-		writeError(w, http.StatusServiceUnavailable, "Wardyn couldn't read its model providers just now, so nothing was promoted. Try again in a moment.")
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonRosterUnreadable, "Wardyn couldn't read its model providers just now, so nothing was promoted. Try again in a moment.")
 		return
 	}
 	promotable, reject := s.promotableRecordHosts(r, ws, taskKey, res, providerHosts)
