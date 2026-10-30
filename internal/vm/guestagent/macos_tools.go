@@ -144,7 +144,7 @@ func ToolsExecAllowed(argv []string, binDir string) error {
 	if len(argv) == 0 {
 		return fmt.Errorf("%w: an exec needs argv", ErrToolsRefused)
 	}
-	if itemArgvAllowed(argv) {
+	if itemArgvAllowed(argv) || adminProfileArgvAllowed(argv) {
 		return nil
 	}
 	name := argv[0]
@@ -699,4 +699,42 @@ func runAuthorizationDB(ctx context.Context, args []string, stdin []byte) ([]byt
 		return nil, fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.b.String()))
 	}
 	return out, nil
+}
+
+// MacAdminProfileDir is where edit-base gives wardyn-admin its own copy of each profile it staged for the
+// window, to open from the desktop session: wardyn-admin's alone (0700, its files 0600), removed by the
+// recheck.
+const MacAdminProfileDir = "/Users/" + MacAdminUser + "/Wardyn"
+
+// AdminProfile is wardyn-admin's copy of the profile item name; name is an ItemNamePattern name.
+func AdminProfile(name string) string { return MacAdminProfileDir + "/" + name + ".mobileconfig" }
+
+// isAdminProfile says whether p is wardyn-admin's copy of a profile item with a valid name.
+func isAdminProfile(p string) bool {
+	name, ok := strings.CutSuffix(strings.TrimPrefix(p, MacAdminProfileDir+"/"), ".mobileconfig")
+	return ok && ItemNamePattern.MatchString(name) && p == AdminProfile(name)
+}
+
+// adminProfileArgvAllowed says whether argv is one of edit-base's forms for wardyn-admin's copies, D being
+// MacAdminProfileDir and S MacItemStageDir:
+//
+//	/bin/rm -rf D
+//	/bin/mkdir -m 0700 D                              no -p: D must not be there already
+//	/usr/bin/ditto S/<name>/item.mobileconfig D/<name>.mobileconfig
+//	/usr/sbin/chown -h wardyn-admin D|D/<name>.mobileconfig
+//	/usr/bin/stat D|S/<name>                          a removal's check, which must fail
+func adminProfileArgvAllowed(argv []string) bool {
+	switch {
+	case len(argv) == 3 && argv[0] == "/bin/rm" && argv[1] == "-rf":
+		return argv[2] == MacAdminProfileDir
+	case len(argv) == 4 && argv[0] == "/bin/mkdir" && argv[1] == "-m" && argv[2] == "0700":
+		return argv[3] == MacAdminProfileDir
+	case len(argv) == 3 && argv[0] == "/usr/bin/ditto":
+		return isItemFile(argv[1], ItemProfile) && argv[2] == AdminProfile(filepath.Base(filepath.Dir(argv[1])))
+	case len(argv) == 4 && argv[0] == "/usr/sbin/chown" && argv[1] == "-h" && argv[2] == MacAdminUser:
+		return argv[3] == MacAdminProfileDir || isAdminProfile(argv[3])
+	case len(argv) == 2 && argv[0] == "/usr/bin/stat":
+		return argv[1] == MacAdminProfileDir || isItemDir(argv[1])
+	}
+	return false
 }
