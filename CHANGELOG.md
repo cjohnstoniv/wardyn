@@ -314,9 +314,19 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   first shipped (#3404).
 - On a run's Agents panel, an agent whose state has not arrived yet is now shown without a status badge, not as
   Running.
+- A member's workspace folder that exists only on their own Mac or Linux computer can now be used there: a `local_dir`
+  source names one of the person's runners (`runner_id`, or `wardyn workspace create --runner`). Wardyn checks the
+  path's form when the workspace is saved and when a run starts, and places the run only on that runner, which checks
+  that the folder exists, resolves links, and holds it to the member's workspace roots, its own `--drive-root`, the
+  credential-path list and the writable roots before it binds or shares it. When that runner is later revoked or
+  removed, or the workspace passes to someone else, a run with the folder is refused by name
+  (`workspace_source_runner_unavailable`). Previously such a folder was refused when the workspace was saved, and no
+  workspace folder could run on a person's own runner (`placement_local_path`).
 
 ### Security
 
+- `WARDYN_USER_WRITABLE_DENY` now matches a member's writable folder in any letter case, so an entry naming `.ssh`
+  also refuses a path that spells it `.SSH`, as a case-insensitive disk resolves both to one folder.
 - An upgraded connection an inbound token opened, a WebSocket say, is now re-checked every 15 seconds and closed at
   most 45 seconds after the last check that confirmed its token (30 seconds unconfirmed, plus one re-check), even
   while a check is still waiting on a store that does not answer. A hung check used to hold the connection open for good, and a store that kept
@@ -328,6 +338,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Migration `0246_user_drives_mac_disk` admits `mac_disk` in `user_drives.backend`'s CHECK and in the member-drive
   rule, and adds `user_drives.home_runner_id`, the Mac a disk drive is kept on. It changes no row and adds no grant.
   A downgrade with a disk drive present is unsupported.
+- Migration `0247_sources_runner_id` adds `sources.runner_id`, the runner a library folder is bound to, and makes it
+  part of a library source's identity. It changes no row and adds no grant. A downgrade with a bound folder present is
+  unsupported.
+- Runner owners: a workspace folder bound to your runner mounts only from inside its `--drive-root`, and only on a
+  runner updated to this release, which says `bound_folders` in its capabilities. A run with such a folder is refused
+  on an older runner (`placement_local_path`) until it is updated.
 
 ## [0.10.0-rc.8] — 2026-10-29
 

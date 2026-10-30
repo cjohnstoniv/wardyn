@@ -1040,6 +1040,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - And never if it is or traverses a credential dotfile path (`.ssh`, `.aws`, `.azure`, `.claude`, `.wardyn`, `.gnupg`, `.docker`, `.kube`, `.config/gh`, `.config/gcloud`, `.netrc`, `.git-credentials`, `.git/config`, `Library/Keychains`), even when a root is too wide.
 - The same list covers `.codex`, `.gemini`, `.npmrc` and `.pypirc`.
 - Checked at onboarding, again at run-create on the resolved spec, and a **third** time in the docker driver immediately before the bind.
+- A source bound to one of the member's own runners (`runner_id`) is not on this host, so onboarding and run-create check its text alone; that runner checks the real path before the bind, against the same roots and against its own `--drive-root`. Only a runner whose capabilities say `bound_folders` is sent one; on an older runner the run is refused `placement_local_path` until the runner is updated.
 - Unset (the default) fails closed: a member can still onboard repos and use operator-owned workspaces.
 - Use a dedicated projects directory — **never `$HOME` or `/`**; boot WARNs about `/` and the daemon's `$HOME`, not a person's, but permits
 - And never a tree `WARDYN_USER_DRIVE_HOST_ROOTS` names (see that row: the overlap lets a member bind a whole share one person's home at a time was the point of, and boot WARNs about the pair).

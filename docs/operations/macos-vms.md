@@ -493,6 +493,7 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 - Shared into the guest at `/Users/agent/…` (a workspace's `/home/agent/…` path), with the same rules and read-only or writable choice as a container.
 - A folder macOS protects (Desktop, Documents, Downloads, iCloud Drive, removable volumes) needs the runner allowed under Privacy & Security → Files and Folders first.
 - A whole home folder, /Users or /private/var can't be shared, because each holds files Wardyn protects; share a project folder inside it.
+- A workspace folder on this Mac is bound to its runner ([A workspace folder on your runner](hybrid-laptops.md#a-workspace-folder-on-your-runner)). The runner shares only a folder bound to it, inside its `--drive-root`, and a writable one only inside the writable roots.
 
 ### Drives
 
