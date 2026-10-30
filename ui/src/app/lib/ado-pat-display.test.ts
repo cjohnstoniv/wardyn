@@ -102,12 +102,13 @@ describe("patCardView: a row that creates a token per run (states 4, 8b, 9)", ()
       expect(v.action).toBe("connect");
     }
   });
-  it("permissions missing is the admin's to fix: the member sentence, nothing to press", () => {
+  it("permissions missing: the administrator's sentence, and Connect to sign in again once they are granted", () => {
     const v = patCardView(access({ ...minted, state: "expired_signin", cause: "permissions_missing", source: "org" }), "Azure DevOps")!;
     const needsApp = patCardView(access({ ...minted, state: "expired_signin", cause: "ado_pat_needs_console_app", source: "org" }), "Azure DevOps")!;
     expect(v.chip).toEqual({ label: "Not connected", tone: "neutral" });
     expect(v.body).toEqual(needsApp.body);
-    expect(v.action).toBeNull();
+    expect(v.action).toBe("connect");
+    expect(needsApp.action).toBeNull();
   });
   it("blocked by the organisation (the blocked cause) names the fix and offers nothing to press", () => {
     const v = patCardView(access({ ...minted, state: "expired_signin", cause: "blocked" }), "Azure DevOps")!;

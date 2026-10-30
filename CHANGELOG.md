@@ -24,6 +24,22 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The error body of a `capability_feature` refusal now carries `feature`, the feature it names (such as `inbound` or
   `custom_component`), and the New Run page reads it to tell an inbound-app refusal from the other feature refusals.
   It used to match the wording of the message, so rewording the message would have turned the notice off (#3769).
+- Retrying an AWS model sign-in no longer shows the new sandbox as waiting for AWS before it has shown a code. While
+  the retry launched, the old sandbox, still stopping, could put its device code on screen and move the new run's
+  progress to the waiting step (#3407).
+- Setup's Egress redirection step no longer records a redirect test for a target that is no longer configured. A test
+  still running when its redirect was saved with a new To used to land as the redirect's verdict and could open the
+  corporate-network gate; it is now dropped, and a test of an unchanged redirect still counts (#3517).
+- When a person's Azure DevOps sign-in lacks the permissions Wardyn needs to create tokens, Settings and Getting started
+  now agree: both say the administrator needs to finish setting up Azure DevOps, and both keep Connect, so the person
+  can sign in again once the permissions are granted. Settings offered no Connect, and Getting started left out the
+  administrator step (#3520).
+- Settings → Signed-in CLIs now says a file-stored sign-in ends after 7 days at most. It used to say 7 days for every
+  such session, though a shorter configured session lifetime ends it sooner; the Ends column shows the real expiry
+  (#3402, #3813).
+- Saving Settings → Runner credentials no longer fails with a 422 when the stored policy holds an older row with an
+  empty posture requirement, such as Git tokens stored on the runner with `require_posture: {}`. Rows you did not
+  edit now go back exactly as stored (#3502, #3816).
 - An open UI app, desktop or terminal session now ends at its next re-check once the run's governance profile is
   edited to refuse a new one: `deny_ui_apps` ends an app or desktop session, and `deny_interactive` a desktop or a
   terminal. They used to stay open until they closed or reached their time limit (#3398).
