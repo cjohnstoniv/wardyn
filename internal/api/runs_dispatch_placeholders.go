@@ -154,21 +154,15 @@ func (s *Server) placeEnvSecrets(ctx context.Context, run types.AgentRun, policy
 }
 
 // placeFileSecrets is WARDYN_FILE_SECRET_PLACEHOLDERS: placeEnvSecrets for
-// the file_secret grants whose file resolveFileSecretValues delivered.
-func (s *Server) placeFileSecrets(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec, rows []types.CredentialGrant,
+// the files resolveFileSecretValues delivered, each from by[i], the grant that
+// delivered files[i]: never another grant naming the same file.
+func (s *Server) placeFileSecrets(ctx context.Context, run types.AgentRun, by []types.GrantSpec, rows []types.CredentialGrant,
 	files []runner.ManagedFile, spec *runner.SandboxSpec) {
 	allowed := proxy.CompilePolicy(spec.ProxyConfig.Policy).AllowedExactHost
-	for _, g := range policy.EligibleGrants {
-		if g.Kind != types.GrantFileSecret {
-			continue
-		}
-		file, secretName, err := fileSecretScopeFields(g.Scope)
+	for i, g := range by {
+		_, secretName, err := fileSecretScopeFields(g.Scope)
 		host, herr := secretScopeHost(g.Scope)
 		if _, resident := residentGrantRow(rows, g); err != nil || herr != nil || host == "" || resident {
-			continue
-		}
-		i := slices.IndexFunc(files, func(f runner.ManagedFile) bool { return f.Path == runner.ComponentSecretDir+"/"+file })
-		if i < 0 {
 			continue
 		}
 		ph, inj, h, why := s.authorSecretPlaceholder(ctx, run, g, host, secretName, string(files[i].Content), allowed, spec.ProxyConfig.Injection, false)

@@ -19,6 +19,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- With `WARDYN_FILE_SECRET_PLACEHOLDERS` on, a file named by two `file_secret` grants now holds the placeholder of the
+  grant that delivered it. A later grant's placeholder replaced it, so requests to the delivering grant's host lost
+  their credential.
 - Promoting a recording's hosts into a workspace's egress no longer promotes a model provider's host when the site
   configuration can't be read. The promote now writes nothing and answers `503`, to retry; the provider hosts are read
   once, for both the filter and the hosts a request names.
