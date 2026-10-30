@@ -44,7 +44,7 @@ func goldenCaps() MacVMCaps {
 // A fully filled MacVMCaps survives a round trip, and its JSON keys are exactly the names the console
 // reads.
 func TestMacVMCapsStatusFieldsRoundTrip(t *testing.T) {
-	c := MacVMCaps{Max: 1, MinCPUs: 4, MinMemoryMiB: 8192, Harnesses: []string{"h"}, Desktop: MacVMDesktopObserve, SignIns: true,
+	c := MacVMCaps{Max: 1, MinCPUs: 4, MinMemoryMiB: 8192, Harnesses: []string{"h"}, Desktop: MacVMDesktopObserve, SignIns: true, Folders: true, Drives: true,
 		Refusal: "r", Reason: MacVMReasonLowMemory, NoSession: true, HostOSVersion: "26.4", HostReason: MacVMHostHelperBuild,
 		FreeGB: 3, NeedGB: 9,
 		Base: MacVMBase{State: MacVMBasePreparing, GuestOS: "g", Progress: 5, Error: "e", Step: MacVMStepDownload, StepPercent: 40,
@@ -71,7 +71,7 @@ func TestMacVMCapsStatusFieldsRoundTrip(t *testing.T) {
 		slices.Sort(out)
 		return out
 	}
-	wantTop := []string{"base", "desktop", "free_gb", "harnesses", "host_os_version", "host_reason", "max", "min_cpus", "min_memory_mib",
+	wantTop := []string{"base", "desktop", "drives", "folders", "free_gb", "harnesses", "host_os_version", "host_reason", "max", "min_cpus", "min_memory_mib",
 		"need_gb", "no_session", "reason", "refusal", "sign_ins"}
 	wantBase := []string{"bytes_per_sec", "download_bytes", "error", "failure", "guest_os", "image_version", "progress", "state", "step",
 		"step_percent", "wait"}

@@ -257,8 +257,11 @@ type MacVMCaps struct {
 	SignIns bool `json:"sign_ins,omitempty"`
 	// Folders says the runner shares a run's folders into its macOS VM. A runner without it is never
 	// sent a macOS VM run with a mount.
-	Folders bool      `json:"folders,omitempty"`
-	Base    MacVMBase `json:"base"`
+	Folders bool `json:"folders,omitempty"`
+	// Drives says the runner carries a run's admin and team drives (a host folder as a second place)
+	// into its macOS VM as shared folders. A runner without it is never sent a macOS VM run with a drive.
+	Drives bool      `json:"drives,omitempty"`
+	Base   MacVMBase `json:"base"`
 	// Refusal is, in words, why the runner offers no macOS VM; empty when it offers them.
 	Refusal string `json:"refusal,omitempty"`
 	// Reason is why the runner offers no macOS VM, or can't start or prepare one now: MacVMReason*, the
