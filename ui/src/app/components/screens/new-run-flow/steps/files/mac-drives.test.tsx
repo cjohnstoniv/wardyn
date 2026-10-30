@@ -23,7 +23,7 @@ import type { RunIntent } from "../../draft/run-intent";
 import { NewRunDraftProvider, useNewRunDispatch } from "../../new-run-route";
 import { MacOSOfferContext, type MacOSOffer } from "../run/macos-offer";
 import { AnnounceContext } from "../step-shell";
-import { guestPath } from "./file-items";
+import { driveMeta, guestPath } from "./file-items";
 import { FilesRoute } from "./files-route";
 
 const wfetchMock = vi.fn();
@@ -347,6 +347,11 @@ describe("a drive's size and enforcement on its Add-dialog row (board J4-a-add)"
   it("a drive with no size has no meta line", async () => {
     await openChoose();
     expect(within(radio(DISK.name).closest("label")!).queryByTestId("nr-drive-meta")).toBeNull();
+  });
+  it("says a size is not enforced once: a kept work folder's own chip already says it", () => {
+    const loose = { ...HOMEY, size_mib: 65536, enforcement: "none" as const };
+    expect(driveMeta(loose)).toBe(`64 GiB · ${NR_FILES.NOT_ENFORCED}`);
+    expect(driveMeta({ ...loose, kept_from_run: "run-1" })).toBe("64 GiB");
   });
 });
 
